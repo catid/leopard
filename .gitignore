@@ -1,0 +1,14 @@
+*.suo
+msvc/LHC_RS.VC.db
+*.opendb
+msvc/LHC_RS.vcxproj.user
+*.log
+*.obj
+*.tlog
+*.idb
+*.pdb
+*.exe
+*.ilk
+*.iobj
+*.ipdb
+*.vspx

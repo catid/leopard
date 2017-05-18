@@ -1,0 +1,76 @@
+static inline void FWHT_4(GFSymbol* data)
+{
+#if 1
+    GFSymbol t0 = data[0];
+    GFSymbol t1 = data[1];
+    GFSymbol t2 = data[2];
+    GFSymbol t3 = data[3];
+    FWHT_2(t0, t1);
+    FWHT_2(t2, t3);
+    FWHT_2(t0, t2);
+    FWHT_2(t1, t3);
+    data[0] = t0;
+    data[1] = t1;
+    data[2] = t2;
+    data[3] = t3;
+#else
+    LHC_M128 * LHC_RESTRICT data64 = reinterpret_cast<LHC_M128 *>(data);
+
+    const LHC_M128 mask = _mm_set_epi32(0xffff, 0xffff, 0xffff, 0xffff);
+
+    // Load 8 bytes of data into low half of register
+    // input = { t0 t1 t2 t3 0 0 0 0 }
+    LHC_M128 input = _mm_loadl_epi64(data64);
+
+    // FWHT_2(t0, t1); FWHT_2(t2, t3);
+
+    // t0t2 = { t0 0 t2 0 0 0 0 0 }
+    LHC_M128 t0t2 = _mm_and_si128(input, mask);
+
+    // t1t3 = { t1 0 t3 0 0 0 0 0 }
+    input = _mm_srli_epi32(input, 16);
+
+    // {input, sum} = {t0t2 - t1t3, t0t2 - t1t3}
+    LHC_M128 sum = _mm_add_epi32(t0t2, input);
+    input = _mm_sub_epi32(t0t2, input);
+
+    if (CpuHasSSSE3)
+    {
+        // Reduce to 16-bit values
+        // input = { t0 + t1, t2 + t3, 0, 0, t0 - t1, t2 - t3, 0, 0 }
+        // input = { t0, t2, 0, 0, t1, t3, 0, 0 }
+        input = _mm_hadd_epi16(sum, input);
+
+        // FWHT_2(t0, t2); FWHT_2(t1, t3);
+
+        // Spread the values out
+        // input = { t0, 0, t2, 0, t1, 0, t3, 0 }
+        input = _mm_shufflelo_epi16(input, _MM_SHUFFLE(3, 1, 2, 0));
+        input = _mm_shufflehi_epi16(input, _MM_SHUFFLE(3, 1, 2, 0));
+
+        // Compute 32-bit sums with overflows
+        // sum = { t0 + t2, t1 + t3, undef, undef } (32-bit overflows)
+        sum = _mm_hadd_epi32(input, input);
+
+        // Compute 32-bit difs with overflows
+        // input = { t0 - t2, t1 - t3, undef, undef } (32-bit overflows)
+        input = _mm_hsub_epi32(input, input);
+
+        // Reduce to 16-bit values
+        // input = { t0 + t2, t1 + t3, t0 + t2, t1 + t3, t0 - t2, t1 - t3, t0 - t2, t1 - t3 } (16-bit reduced)
+        input = _mm_hadd_epi16(sum, input);
+
+        // input = { t0 + t2, t1 + t3, t0 - t2, t1 - t3, undef, undef, undef, undef }
+        input = _mm_shuffle_epi32(input, _MM_SHUFFLE(3, 1, 2, 0));
+
+        // Store 8 bytes of data
+        _mm_storel_epi64(data64, input);
+    }
+    else
+    {
+        LHC_DEBUG_BREAK; // FIXME
+
+        // FWHT_2(t0, t2); FWHT_2(t1, t3);
+    }
+#endif
+}
