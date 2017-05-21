@@ -250,19 +250,19 @@ static LHC_FORCE_INLINE void SIMDSafeFree(void* ptr)
 //------------------------------------------------------------------------------
 // Field
 
-#if 0
+#if 1
 typedef uint8_t GFSymbol;
 static const unsigned kGFBits = 8;
 static const unsigned kGFPolynomial = 0x11D;
-GFSymbol kGFCantorBasis[kGFBits] = {
-    1, 214, 152, 146, 86, 200, 88, 230
+GFSymbol kGFBasis[kGFBits] = {
+    1, 214, 152, 146, 86, 200, 88, 230 // Cantor basis
 };
 #else
 typedef uint16_t GFSymbol;
 static const unsigned kGFBits = 16;
 static const unsigned kGFPolynomial = 0x1002D;
-GFSymbol kGFCantorBasis[kGFBits] = {
-    0x0001, 0xACCA, 0x3C0E, 0x163E,
+GFSymbol kGFBasis[kGFBits] = {
+    0x0001, 0xACCA, 0x3C0E, 0x163E, // Cantor basis
     0xC582, 0xED2E, 0x914C, 0x4012,
     0x6C98, 0x10D8, 0x6A72, 0xB900,
     0xFDB8, 0xFB34, 0xFF38, 0x991E
@@ -270,7 +270,7 @@ GFSymbol kGFCantorBasis[kGFBits] = {
 #endif
 
 /*
-    Cantor Basis introduced by the paper:
+    Cantor Basis introduced by:
     D. G. Cantor, "On arithmetical algorithms over finite fields",
     Journal of Combinatorial Theory, Series A, vol. 50, no. 2, pp. 285-300, 1989.
 */
@@ -284,24 +284,22 @@ static GFSymbol GFExp[kFieldSize];
 // Initialize GFLog[], GFExp[]
 static void InitField()
 {
-    // Use GFExp temporarily to store the monomial basis logarithm table
-    GFSymbol* MonoLog = GFExp;
     unsigned state = 1;
     for (unsigned i = 0; i < kFieldModulus; ++i)
     {
-        MonoLog[state] = static_cast<GFSymbol>(i);
+        GFExp[state] = static_cast<GFSymbol>(i);
         state <<= 1;
         if (state >= kFieldSize)
             state ^= kGFPolynomial;
     }
-    MonoLog[0] = kFieldModulus;
+    GFExp[0] = kFieldModulus;
 
-    // Conversion to polynomial basis:
+    // Conversion to chosen basis:
 
     GFLog[0] = 0;
     for (unsigned i = 0; i < kGFBits; ++i)
     {
-        const GFSymbol basis = kGFCantorBasis[i];
+        const GFSymbol basis = kGFBasis[i];
         const unsigned width = (unsigned)(1UL << i);
 
         for (unsigned j = 0; j < width; ++j)
@@ -309,7 +307,7 @@ static void InitField()
     }
 
     for (unsigned i = 0; i < kFieldSize; ++i)
-        GFLog[i] = MonoLog[GFLog[i]];
+        GFLog[i] = GFExp[GFLog[i]];
 
     for (unsigned i = 0; i < kFieldSize; ++i)
         GFExp[GFLog[i]] = i;
@@ -350,14 +348,35 @@ static void muladd_mem(GFSymbol * LHC_RESTRICT vx, const GFSymbol * LHC_RESTRICT
         if (a == 0)
             continue;
 
-        /*
-            This function consumes all the runtime.
+        GFSymbol sum1 = static_cast<GFSymbol>(AddModQ(GFLog[a & 0x0f], z));
+        GFSymbol value1 = GFExp[sum1];
+        if ((a & 0x0f) == 0)
+        {
+            value1 = 0;
+        }
+        GFSymbol sum2 = static_cast<GFSymbol>(AddModQ(GFLog[a & 0xf0], z));
+        GFSymbol value2 = GFExp[sum2];
+        if ((a & 0xf0) == 0)
+        {
+            value2 = 0;
+        }
+        GFSymbol sum3 = static_cast<GFSymbol>(AddModQ(GFLog[a & 0x0f00], z));
+        GFSymbol value3 = GFExp[sum3];
+        if ((a & 0x0f00) == 0)
+        {
+            value3 = 0;
+        }
+        GFSymbol sum4 = static_cast<GFSymbol>(AddModQ(GFLog[a & 0xf000], z));
+        GFSymbol value4 = GFExp[sum4];
+        if ((a & 0xf000) == 0)
+        {
+            value4 = 0;
+        }
 
-            I have no idea how to speed this up because the GFLog and GFExp do not have any structure.
-        */
-        const GFSymbol sum = static_cast<GFSymbol>(AddModQ(GFLog[a], z));
-
-        vx[i] ^= GFExp[sum];
+        vx[i] ^= value1;
+        vx[i] ^= value2;
+        vx[i] ^= value3;
+        vx[i] ^= value4;
     }
 }
 
