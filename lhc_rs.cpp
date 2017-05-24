@@ -12,6 +12,50 @@
 #include <stdlib.h>
 
 
+/*
+    TODO:
+    + Write C API and unit tester
+        + Limit input to multiples of 64 bytes
+    + Replace GFSymbol with a file data pointer
+    + New 16-bit Muladd inner loops
+        + Class to contain the (large) muladd tables
+    + Preliminary benchmarks for large data!
+    + New 8-bit Muladd inner loops
+    + Benchmarks for smaller data!
+    + Refactor software
+        + Pick a name for the software better than LHC_RS
+        + I think it should be split up into several C++ modules
+    + Write detailed comments for all the routines
+    + Look into getting EncodeL working so we can support smaller data (Ask Lin)
+    + Look into using k instead of k2 to speed up decoder (Ask Lin)
+    + Avoid performing FFT/IFFT intermediate calculations we're not going to use
+    + Benchmarks, fun!
+    + Add multi-threading to split up long parallelizable calculations
+    + Final benchmarks!
+    + Finish up documentation
+    + Release version 1
+
+
+    Muladd implementation notes:
+
+    Specialize for 1-3 rows at a time since often times we're multiplying by
+    the same (skew) value repeatedly, as the ISA-L library does here:
+
+    https://github.com/01org/isa-l/blob/master/erasure_code/gf_3vect_mad_avx.asm#L258
+
+    Except we should be doing it for 16-bit Galois Field.
+    To implement that use the ALTMAP trick from Jerasure:
+
+    http://lab.jerasure.org/jerasure/gf-complete/blob/master/src/gf_w16.c#L1140
+
+    Except we should also support AVX2 since that is a 40% perf boost, so put
+    the high and low bytes 32 bytes instead of 16 bytes apart.
+
+    Also I think we should go ahead and precompute the multiply tables since
+    it avoids a bunch of memory lookups for each muladd, and only costs 8 MB.
+*/
+
+
 //------------------------------------------------------------------------------
 // Debug
 
@@ -250,7 +294,9 @@ static LHC_FORCE_INLINE void SIMDSafeFree(void* ptr)
 //------------------------------------------------------------------------------
 // Field
 
-#if 1
+//#define LHC_SHORT_FIELD
+
+#ifdef LHC_SHORT_FIELD
 typedef uint8_t GFSymbol;
 static const unsigned kGFBits = 8;
 static const unsigned kGFPolynomial = 0x11D;
@@ -390,6 +436,7 @@ static GFSymbol mulE(GFSymbol a, GFSymbol b)
     return GFExp[sum];
 }
 
+
 //------------------------------------------------------------------------------
 // Fast Walsh-Hadamard Transform (FWHT) Mod Q
 //
@@ -398,34 +445,54 @@ static GFSymbol mulE(GFSymbol a, GFSymbol b)
 // Define this to enable the optimized version of FWHT()
 #define LHC_FWHT_OPTIMIZED
 
+typedef GFSymbol fwht_t;
+
+// {a, b} = {a + b, a - b} (Mod Q)
+static LHC_FORCE_INLINE void FWHT_2(fwht_t& LHC_RESTRICT a, fwht_t& LHC_RESTRICT b)
+{
+    const fwht_t sum = AddModQ(a, b);
+    const fwht_t dif = SubModQ(a, b);
+    a = sum;
+    b = dif;
+}
+
+/*
+    FWHT is a minor slice of the runtime and does not grow with data size,
+    but I did attempt a few additional optimizations that failed:
+
+    I've attempted to vectorize (with partial reductions) FWHT_4(data, s),
+    which is 70% of the algorithm, but it was slower.  Left in _attic_.
+
+    I've attempted to avoid reductions in all or parts of the FWHT.
+    The final modular reduction ends up being slower than the savings.
+    Specifically I tried doing it for the whole FWHT and also I tried
+    doing it just for the FWHT_2 loop in the main routine, but both
+    approaches are slower than partial reductions.
+
+    Replacing word reads with wider reads does speed up the operation, but
+    at too high a complexity cost relative to minor perf improvement.
+*/
+
 #ifndef LHC_FWHT_OPTIMIZED
 
 // Reference implementation
-static void FWHT(GFSymbol* data, const unsigned bits)
+static void FWHT(fwht_t* data, const unsigned bits)
 {
     const unsigned size = (unsigned)(1UL << bits);
     for (unsigned width = 1; width < size; width <<= 1)
         for (unsigned i = 0; i < size; i += (width << 1))
             for (unsigned j = i; j < (width + i); ++j)
-                CrossAddSubModQ(data[j], data[j + width]);
+                FWHT_2(data[j], data[j + width]);
 }
 
 #else
 
-// {a, b} = {a + b, a - b} (mod Q)
-static inline void FWHT_2(GFSymbol& a, GFSymbol& b)
+static LHC_FORCE_INLINE void FWHT_4(fwht_t* data)
 {
-    const GFSymbol dif = SubModQ(a, b);
-    const GFSymbol sum = AddModQ(a, b);
-    a = sum, b = dif;
-}
-
-static inline void FWHT_4(GFSymbol* data)
-{
-    GFSymbol t0 = data[0];
-    GFSymbol t1 = data[1];
-    GFSymbol t2 = data[2];
-    GFSymbol t3 = data[3];
+    fwht_t t0 = data[0];
+    fwht_t t1 = data[1];
+    fwht_t t2 = data[2];
+    fwht_t t3 = data[3];
     FWHT_2(t0, t1);
     FWHT_2(t2, t3);
     FWHT_2(t0, t2);
@@ -436,13 +503,13 @@ static inline void FWHT_4(GFSymbol* data)
     data[3] = t3;
 }
 
-static inline void FWHT_4(GFSymbol* data, unsigned s)
+static LHC_FORCE_INLINE void FWHT_4(fwht_t* data, unsigned s)
 {
     unsigned x = 0;
-    GFSymbol t0 = data[x];  x += s;
-    GFSymbol t1 = data[x];  x += s;
-    GFSymbol t2 = data[x];  x += s;
-    GFSymbol t3 = data[x];
+    fwht_t t0 = data[x];  x += s;
+    fwht_t t1 = data[x];  x += s;
+    fwht_t t2 = data[x];  x += s;
+    fwht_t t3 = data[x];
     FWHT_2(t0, t1);
     FWHT_2(t2, t3);
     FWHT_2(t0, t2);
@@ -454,16 +521,16 @@ static inline void FWHT_4(GFSymbol* data, unsigned s)
     data[y] = t3;
 }
 
-static inline void FWHT_8(GFSymbol* data)
+static inline void FWHT_8(fwht_t* data)
 {
-    GFSymbol t0 = data[0];
-    GFSymbol t1 = data[1];
-    GFSymbol t2 = data[2];
-    GFSymbol t3 = data[3];
-    GFSymbol t4 = data[4];
-    GFSymbol t5 = data[5];
-    GFSymbol t6 = data[6];
-    GFSymbol t7 = data[7];
+    fwht_t t0 = data[0];
+    fwht_t t1 = data[1];
+    fwht_t t2 = data[2];
+    fwht_t t3 = data[3];
+    fwht_t t4 = data[4];
+    fwht_t t5 = data[5];
+    fwht_t t6 = data[6];
+    fwht_t t7 = data[7];
     FWHT_2(t0, t1);
     FWHT_2(t2, t3);
     FWHT_2(t4, t5);
@@ -486,24 +553,24 @@ static inline void FWHT_8(GFSymbol* data)
     data[7] = t7;
 }
 
-static inline void FWHT_16(GFSymbol* data)
+static inline void FWHT_16(fwht_t* data)
 {
-    GFSymbol t0 = data[0];
-    GFSymbol t1 = data[1];
-    GFSymbol t2 = data[2];
-    GFSymbol t3 = data[3];
-    GFSymbol t4 = data[4];
-    GFSymbol t5 = data[5];
-    GFSymbol t6 = data[6];
-    GFSymbol t7 = data[7];
-    GFSymbol t8 = data[8];
-    GFSymbol t9 = data[9];
-    GFSymbol t10 = data[10];
-    GFSymbol t11 = data[11];
-    GFSymbol t12 = data[12];
-    GFSymbol t13 = data[13];
-    GFSymbol t14 = data[14];
-    GFSymbol t15 = data[15];
+    fwht_t t0 = data[0];
+    fwht_t t1 = data[1];
+    fwht_t t2 = data[2];
+    fwht_t t3 = data[3];
+    fwht_t t4 = data[4];
+    fwht_t t5 = data[5];
+    fwht_t t6 = data[6];
+    fwht_t t7 = data[7];
+    fwht_t t8 = data[8];
+    fwht_t t9 = data[9];
+    fwht_t t10 = data[10];
+    fwht_t t11 = data[11];
+    fwht_t t12 = data[12];
+    fwht_t t13 = data[13];
+    fwht_t t14 = data[14];
+    fwht_t t15 = data[15];
     FWHT_2(t0, t1);
     FWHT_2(t2, t3);
     FWHT_2(t4, t5);
@@ -554,7 +621,7 @@ static inline void FWHT_16(GFSymbol* data)
     data[15] = t15;
 }
 
-void FWHT_SmallData(GFSymbol* data, unsigned ldn)
+static void FWHT_SmallData(fwht_t* data, unsigned ldn)
 {
     const unsigned n = (1UL << ldn);
 
@@ -586,8 +653,8 @@ void FWHT_SmallData(GFSymbol* data, unsigned ldn)
     }
 }
 
-// Decimation in time version of the transform
-static void FWHT(GFSymbol* data, const unsigned ldn)
+// Decimation in time (DIT) version
+static void FWHT(fwht_t* data, const unsigned ldn)
 {
     if (ldn <= 13)
     {
@@ -602,10 +669,9 @@ static void FWHT(GFSymbol* data, const unsigned ldn)
     for (unsigned ldm = 5; ldm < ldn; ++ldm)
         FWHT(data + (unsigned)(1UL << ldm), ldm);
 
-    for (unsigned ldm = 1; ldm <= ldn; ++ldm)
+    for (unsigned ldm = 0; ldm < ldn; ++ldm)
     {
-        const unsigned m = (1UL << ldm);
-        const unsigned mh = (m >> 1);
+        const unsigned mh = (1UL << ldm);
         for (unsigned t1 = 0, t2 = mh; t1 < mh; ++t1, ++t2)
             FWHT_2(data[t1], data[t2]);
     }
@@ -866,12 +932,12 @@ static void FLT(GFSymbol* data, const unsigned size, const unsigned index)
 // FFT Initialization
 
 static GFSymbol B[kFieldSize >> 1];     // factors used in formal derivative
-static GFSymbol log_walsh[kFieldSize];  // factors used in the evaluation of the error locator polynomial
+static fwht_t log_walsh[kFieldSize];  // factors used in the evaluation of the error locator polynomial
 
 // Initialize skewVec[], B[], log_walsh[]
 static void InitFieldOperations()
 {
-	GFSymbol temp[kGFBits - 1];
+    GFSymbol temp[kGFBits - 1];
 
     for (unsigned i = 1; i < kGFBits; ++i)
         temp[i - 1] = (GFSymbol)((unsigned)1 << i);
@@ -904,7 +970,7 @@ static void InitFieldOperations()
     for (unsigned i = 1; i < (kGFBits - 1); ++i)
         temp[i] = (kFieldModulus - temp[i] + temp[i - 1]) % kFieldModulus;
 
-	B[0] = 0;
+    B[0] = 0;
     for (unsigned i = 0; i < (kGFBits - 1); ++i)
     {
         const unsigned depart = ((unsigned)1 << i);
@@ -916,7 +982,7 @@ static void InitFieldOperations()
     for (unsigned i = 0; i < kFieldSize; ++i)
         log_walsh[i] = GFLog[i];
 
-	log_walsh[0] = 0;
+    log_walsh[0] = 0;
 
     FWHT(log_walsh, kGFBits);
 }
@@ -928,9 +994,9 @@ static void InitFieldOperations()
 // Encoding alg for k/n<0.5: message is a power of two
 static void encodeL(GFSymbol* data, const unsigned k, GFSymbol* codeword)
 {
-	memcpy(codeword, data, sizeof(GFSymbol) * k);
+    memcpy(codeword, data, sizeof(GFSymbol) * k);
 
-	IFLT(codeword, k, 0);
+    IFLT(codeword, k, 0);
 
     for (unsigned i = k; i < kFieldSize; i += k)
     {
@@ -946,7 +1012,7 @@ static void encodeL(GFSymbol* data, const unsigned k, GFSymbol* codeword)
 // data: message array. parity: parity array. mem: buffer(size>= n-k)
 static void encodeH(const GFSymbol* data, const unsigned k, GFSymbol* parity, GFSymbol* mem)
 {
-	const unsigned t = kFieldSize - k;
+    const unsigned t = kFieldSize - k;
 
     memset(parity, 0, sizeof(GFSymbol) * t);
 
@@ -966,9 +1032,9 @@ static void encodeH(const GFSymbol* data, const unsigned k, GFSymbol* parity, GF
 //------------------------------------------------------------------------------
 // Decoder
 
-static void decode(GFSymbol* codeword, const bool* erasure)
+static void decode(GFSymbol* codeword, unsigned k, const bool* erasure)
 {
-    GFSymbol log_walsh2[kFieldSize];
+    fwht_t log_walsh2[kFieldSize];
 
     // Compute the evaluations of the error locator polynomial
     for (unsigned i = 0; i < kFieldSize; ++i)
@@ -977,30 +1043,36 @@ static void decode(GFSymbol* codeword, const bool* erasure)
     FWHT(log_walsh2, kGFBits);
 
     for (unsigned i = 0; i < kFieldSize; ++i)
-        log_walsh2[i] = ((unsigned)log_walsh2[i] * log_walsh[i]) % kFieldModulus;
+        log_walsh2[i] = ((unsigned)log_walsh2[i] * (unsigned)log_walsh[i]) % kFieldModulus;
 
     FWHT(log_walsh2, kGFBits);
 
-    for (unsigned i = 0; i < kFieldSize; ++i)
-        if (erasure[i])
-            log_walsh2[i] = kFieldModulus - log_walsh2[i];
-
     // k2 can be replaced with k
-	const unsigned k2 = kFieldSize;
+    const unsigned k2 = kFieldSize;
+    //const unsigned k2 = k; // cannot actually be replaced with k.  what else need to change?
 
     for (unsigned i = 0; i < kFieldSize; ++i)
-        codeword[i] = erasure[i] ? 0 : mulE(codeword[i], log_walsh2[i]);
+    {
+        if (erasure[i])
+        {
+            codeword[i] = 0;
+        }
+        else
+        {
+            codeword[i] = mulE(codeword[i], log_walsh2[i]);
+        }
+    }
 
     IFLT(codeword, kFieldSize, 0);
 
     // formal derivative
     for (unsigned i = 0; i < kFieldSize; i += 2)
     {
-		codeword[i] = mulE(codeword[i], kFieldModulus - B[i >> 1]);
-		codeword[i + 1] = mulE(codeword[i + 1], kFieldModulus - B[i >> 1]);
-	}
+        codeword[i] = mulE(codeword[i], kFieldModulus - B[i >> 1]);
+        codeword[i + 1] = mulE(codeword[i + 1], kFieldModulus - B[i >> 1]);
+    }
 
-	formal_derivative(codeword, k2);
+    formal_derivative(codeword, k2);
 
     for (unsigned i = 0; i < k2; i += 2)
     {
@@ -1008,41 +1080,48 @@ static void decode(GFSymbol* codeword, const bool* erasure)
         codeword[i + 1] = mulE(codeword[i + 1], B[i >> 1]);
     }
 
-	FLT(codeword, k2, 0);
+    FLT(codeword, k2, 0);
 
     for (unsigned i = 0; i < k2; ++i)
-        codeword[i] = erasure[i] ? mulE(codeword[i], log_walsh2[i]) : 0;
+    {
+        if (erasure[i])
+        {
+            codeword[i] = mulE(codeword[i], kFieldModulus - log_walsh2[i]);
+        }
+    }
 }
 
 
 //------------------------------------------------------------------------------
 // Test Application
 
-void test(unsigned k)
+void test(unsigned k, unsigned seed)
 {
-	//-----------Generating message----------
+    srand(seed);
+
+    //-----------Generating message----------
 
     // Message array
-	GFSymbol data[kFieldSize] = {0};
+    GFSymbol data[kFieldSize] = {0};
 
     // Filled with random numbers
     for (unsigned i = kFieldSize - k; i < kFieldSize; ++i)
         data[i] = (GFSymbol)rand();
 
 
-	//---------encoding----------
+    //---------encoding----------
 
-	GFSymbol codeword[kFieldSize];
-	encodeH(&data[kFieldSize - k], k, data, codeword);
-	//encodeL(data, k, codeword);
+    GFSymbol codeword[kFieldSize];
+    encodeH(&data[kFieldSize - k], k, data, codeword);
+    //encodeL(data, k, codeword); // does not seem to work with any input?  what else needs to change?
 
-	memcpy(codeword, data, sizeof(GFSymbol) * kFieldSize);
+    memcpy(codeword, data, sizeof(GFSymbol) * kFieldSize);
 
 
-	//--------erasure simulation---------
+    //--------erasure simulation---------
 
     // Array indicating erasures
-	bool erasure[kFieldSize] = {
+    bool erasure[kFieldSize] = {
         false
     };
 
@@ -1068,8 +1147,8 @@ void test(unsigned k)
             codeword[i] = 0;
 
 
-	//---------main processing----------
-    decode(codeword, erasure);
+    //---------main processing----------
+    decode(codeword, k, erasure);
 
     // Check the correctness of the result
     for (unsigned i = 0; i < kFieldSize; ++i)
@@ -1078,13 +1157,14 @@ void test(unsigned k)
         {
             if (data[i] != codeword[i])
             {
-                printf("Decoding Error!\n");
+                printf("Decoding Error with seed = %d!\n", seed);
+                LHC_DEBUG_BREAK;
                 return;
             }
         }
     }
 
-    printf("Decoding is successful!\n");
+    //printf("Decoding is successful!\n");
 }
 
 
@@ -1093,8 +1173,6 @@ void test(unsigned k)
 
 int main(int argc, char **argv)
 {
-    srand((unsigned)time(NULL));
-
     // Initialize architecture-specific code
     lhc_architecture_init();
 
@@ -1104,10 +1182,17 @@ int main(int argc, char **argv)
     // Compute factors used in erasure decoder
     InitFieldOperations();
 
+    unsigned seed = (unsigned)time(NULL);
     for (;;)
     {
         // test(int k), k: message size
-        test(kFieldSize / 2);
+        /*
+            EncodeH works for kFieldSize / 2 and kFieldSize * 3 / 4, etc,
+            s.t. the number of recovery pieces is a power of two
+        */
+        test(kFieldSize / 2, seed);
+
+        ++seed;
     }
 
     return 0;
