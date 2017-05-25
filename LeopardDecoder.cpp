@@ -1,8 +1,29 @@
 /*
-    S.-J. Lin,  T. Y. Al-Naffouri, Y. S. Han, and W.-H. Chung,
-    "Novel Polynomial Basis with Fast Fourier Transform and Its Application to Reed-Solomon Erasure Codes"
-    IEEE Trans. on Information Theory, pp. 6284-6299, November, 2016.
-    http://ct.ee.ntust.edu.tw/it2016-2.pdf
+    Copyright (c) 2017 Christopher A. Taylor.  All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are met:
+
+    * Redistributions of source code must retain the above copyright notice,
+      this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright notice,
+      this list of conditions and the following disclaimer in the documentation
+      and/or other materials provided with the distribution.
+    * Neither the name of LHC-RS nor the names of its contributors may be
+      used to endorse or promote products derived from this software without
+      specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+    AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+    ARE DISCLAIMED.  IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+    LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+    CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+    SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+    INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+    CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+    ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+    POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include <string.h>
@@ -23,7 +44,7 @@
     + New 8-bit Muladd inner loops
     + Benchmarks for smaller data!
     + Refactor software
-        + Pick a name for the software better than LHC_RS
+        + Pick a name for the software better than LEO_RS
         + I think it should be split up into several C++ modules
     + Write detailed comments for all the routines
     + Look into getting EncodeL working so we can support smaller data (Ask Lin)
@@ -60,19 +81,19 @@
 // Debug
 
 // Some bugs only repro in release mode, so this can be helpful
-//#define LHC_DEBUG_IN_RELEASE
+//#define LEO_DEBUG_IN_RELEASE
 
-#if defined(_DEBUG) || defined(DEBUG) || defined(LHC_DEBUG_IN_RELEASE)
-    #define LHC_DEBUG
+#if defined(_DEBUG) || defined(DEBUG) || defined(LEO_DEBUG_IN_RELEASE)
+    #define LEO_DEBUG
     #ifdef _WIN32
-        #define LHC_DEBUG_BREAK __debugbreak()
+        #define LEO_DEBUG_BREAK __debugbreak()
     #else
-        #define LHC_DEBUG_BREAK __builtin_trap()
+        #define LEO_DEBUG_BREAK __builtin_trap()
     #endif
-    #define LHC_DEBUG_ASSERT(cond) { if (!(cond)) { LHC_DEBUG_BREAK; } }
+    #define LEO_DEBUG_ASSERT(cond) { if (!(cond)) { LEO_DEBUG_BREAK; } }
 #else
-    #define LHC_DEBUG_BREAK ;
-    #define LHC_DEBUG_ASSERT(cond) ;
+    #define LEO_DEBUG_BREAK ;
+    #define LEO_DEBUG_ASSERT(cond) ;
 #endif
 
 
@@ -80,67 +101,67 @@
 // Platform/Architecture
 
 #if defined(ANDROID) || defined(IOS)
-    #define LHC_TARGET_MOBILE
+    #define LEO_TARGET_MOBILE
 #endif // ANDROID
 
 #if defined(__AVX2__) || (defined (_MSC_VER) && _MSC_VER >= 1900)
-    #define LHC_TRY_AVX2 /* 256-bit */
+    #define LEO_TRY_AVX2 /* 256-bit */
     #include <immintrin.h>
-    #define LHC_ALIGN_BYTES 32
+    #define LEO_ALIGN_BYTES 32
 #else // __AVX2__
-    #define LHC_ALIGN_BYTES 16
+    #define LEO_ALIGN_BYTES 16
 #endif // __AVX2__
 
-#if !defined(LHC_TARGET_MOBILE)
+#if !defined(LEO_TARGET_MOBILE)
     // Note: MSVC currently only supports SSSE3 but not AVX2
     #include <tmmintrin.h> // SSSE3: _mm_shuffle_epi8
     #include <emmintrin.h> // SSE2
-#endif // LHC_TARGET_MOBILE
+#endif // LEO_TARGET_MOBILE
 
 #if defined(HAVE_ARM_NEON_H)
     #include <arm_neon.h>
 #endif // HAVE_ARM_NEON_H
 
-#if defined(LHC_TARGET_MOBILE)
+#if defined(LEO_TARGET_MOBILE)
 
-    #define LHC_ALIGNED_ACCESSES /* Inputs must be aligned to LHC_ALIGN_BYTES */
+    #define LEO_ALIGNED_ACCESSES /* Inputs must be aligned to LEO_ALIGN_BYTES */
 
 # if defined(HAVE_ARM_NEON_H)
     // Compiler-specific 128-bit SIMD register keyword
-    #define LHC_M128 uint8x16_t
-    #define LHC_TRY_NEON
+    #define LEO_M128 uint8x16_t
+    #define LEO_TRY_NEON
 #else
-    #define LHC_M128 uint64_t
+    #define LEO_M128 uint64_t
 # endif
 
-#else // LHC_TARGET_MOBILE
+#else // LEO_TARGET_MOBILE
 
     // Compiler-specific 128-bit SIMD register keyword
-    #define LHC_M128 __m128i
+    #define LEO_M128 __m128i
 
-#endif // LHC_TARGET_MOBILE
+#endif // LEO_TARGET_MOBILE
 
-#ifdef LHC_TRY_AVX2
+#ifdef LEO_TRY_AVX2
     // Compiler-specific 256-bit SIMD register keyword
-    #define LHC_M256 __m256i
+    #define LEO_M256 __m256i
 #endif
 
 // Compiler-specific C++11 restrict keyword
-#define LHC_RESTRICT __restrict
+#define LEO_RESTRICT __restrict
 
 // Compiler-specific force inline keyword
 #ifdef _MSC_VER
-    #define LHC_FORCE_INLINE inline __forceinline
+    #define LEO_FORCE_INLINE inline __forceinline
 #else
-    #define LHC_FORCE_INLINE inline __attribute__((always_inline))
+    #define LEO_FORCE_INLINE inline __attribute__((always_inline))
 #endif
 
 // Compiler-specific alignment keyword
 // Note: Alignment only matters for ARM NEON where it should be 16
 #ifdef _MSC_VER
-    #define LHC_ALIGNED __declspec(align(LHC_ALIGN_BYTES))
+    #define LEO_ALIGNED __declspec(align(LEO_ALIGN_BYTES))
 #else // _MSC_VER
-    #define LHC_ALIGNED __attribute__((aligned(LHC_ALIGN_BYTES)))
+    #define LEO_ALIGNED __attribute__((aligned(LEO_ALIGN_BYTES)))
 #endif // _MSC_VER
 
 
@@ -154,7 +175,7 @@
     #include <cpu-features.h>
 #endif
 
-#if defined(LHC_TRY_NEON)
+#if defined(LEO_TRY_NEON)
 # if defined(IOS) && defined(__ARM_NEON__)
         // Requires iPhone 5S or newer
         static const bool CpuHasNeon = true;
@@ -167,14 +188,14 @@
 #endif
 
 
-#if !defined(LHC_TARGET_MOBILE)
+#if !defined(LEO_TARGET_MOBILE)
 
 #ifdef _MSC_VER
     #include <intrin.h> // __cpuid
     #pragma warning(disable: 4752) // found Intel(R) Advanced Vector Extensions; consider using /arch:AVX
 #endif
 
-#ifdef LHC_TRY_AVX2
+#ifdef LEO_TRY_AVX2
 static bool CpuHasAVX2 = false;
 #endif
 static bool CpuHasSSSE3 = false;
@@ -219,12 +240,12 @@ static void _cpuid(unsigned int cpu_info[4U], const unsigned int cpu_info_type)
 #endif
 }
 
-#endif // defined(LHC_TARGET_MOBILE)
+#endif // defined(LEO_TARGET_MOBILE)
 
 
-static void lhc_architecture_init()
+static void leo_architecture_init()
 {
-#if defined(LHC_TRY_NEON) && defined(HAVE_ANDROID_GETCPUFEATURES)
+#if defined(LEO_TRY_NEON) && defined(HAVE_ANDROID_GETCPUFEATURES)
     AndroidCpuFamily family = android_getCpuFamily();
     if (family == ANDROID_CPU_FAMILY_ARM)
     {
@@ -239,32 +260,32 @@ static void lhc_architecture_init()
     }
 #endif
 
-#if !defined(LHC_TARGET_MOBILE)
+#if !defined(LEO_TARGET_MOBILE)
     unsigned int cpu_info[4];
 
     _cpuid(cpu_info, 1);
     CpuHasSSSE3 = ((cpu_info[2] & CPUID_ECX_SSSE3) != 0);
 
-#if defined(LHC_TRY_AVX2)
+#if defined(LEO_TRY_AVX2)
     _cpuid(cpu_info, 7);
     CpuHasAVX2 = ((cpu_info[1] & CPUID_EBX_AVX2) != 0);
-#endif // LHC_TRY_AVX2
+#endif // LEO_TRY_AVX2
 
-#endif // LHC_TARGET_MOBILE
+#endif // LEO_TARGET_MOBILE
 }
 
 
 //------------------------------------------------------------------------------
 // SIMD-Safe Aligned Memory Allocations
 
-static const unsigned kAlignmentBytes = LHC_ALIGN_BYTES;
+static const unsigned kAlignmentBytes = LEO_ALIGN_BYTES;
 
-LHC_FORCE_INLINE unsigned NextAlignedOffset(unsigned offset)
+LEO_FORCE_INLINE unsigned NextAlignedOffset(unsigned offset)
 {
     return (offset + kAlignmentBytes - 1) & ~(kAlignmentBytes - 1);
 }
 
-static LHC_FORCE_INLINE uint8_t* SIMDSafeAllocate(size_t size)
+static LEO_FORCE_INLINE uint8_t* SIMDSafeAllocate(size_t size)
 {
     uint8_t* data = (uint8_t*)calloc(1, kAlignmentBytes + size);
     if (!data)
@@ -275,7 +296,7 @@ static LHC_FORCE_INLINE uint8_t* SIMDSafeAllocate(size_t size)
     return data;
 }
 
-static LHC_FORCE_INLINE void SIMDSafeFree(void* ptr)
+static LEO_FORCE_INLINE void SIMDSafeFree(void* ptr)
 {
     if (!ptr)
         return;
@@ -283,7 +304,7 @@ static LHC_FORCE_INLINE void SIMDSafeFree(void* ptr)
     unsigned offset = data[-1];
     if (offset >= kAlignmentBytes)
     {
-        LHC_DEBUG_BREAK; // Should never happen
+        LEO_DEBUG_BREAK; // Should never happen
         return;
     }
     data -= kAlignmentBytes - offset;
@@ -294,9 +315,9 @@ static LHC_FORCE_INLINE void SIMDSafeFree(void* ptr)
 //------------------------------------------------------------------------------
 // Field
 
-//#define LHC_SHORT_FIELD
+//#define LEO_SHORT_FIELD
 
-#ifdef LHC_SHORT_FIELD
+#ifdef LEO_SHORT_FIELD
 typedef uint8_t GFSymbol;
 static const unsigned kGFBits = 8;
 static const unsigned kGFPolynomial = 0x11D;
@@ -386,7 +407,7 @@ static inline GFSymbol SubModQ(GFSymbol a, GFSymbol b)
 }
 
 // vx[] += vy[] * z
-static void muladd_mem(GFSymbol * LHC_RESTRICT vx, const GFSymbol * LHC_RESTRICT vy, GFSymbol z, unsigned symbolCount)
+static void muladd_mem(GFSymbol * LEO_RESTRICT vx, const GFSymbol * LEO_RESTRICT vy, GFSymbol z, unsigned symbolCount)
 {
     for (unsigned i = 0; i < symbolCount; ++i)
     {
@@ -443,12 +464,12 @@ static GFSymbol mulE(GFSymbol a, GFSymbol b)
 // Q is the maximum symbol value, e.g. 255 or 65535.
 
 // Define this to enable the optimized version of FWHT()
-#define LHC_FWHT_OPTIMIZED
+#define LEO_FWHT_OPTIMIZED
 
 typedef GFSymbol fwht_t;
 
 // {a, b} = {a + b, a - b} (Mod Q)
-static LHC_FORCE_INLINE void FWHT_2(fwht_t& LHC_RESTRICT a, fwht_t& LHC_RESTRICT b)
+static LEO_FORCE_INLINE void FWHT_2(fwht_t& LEO_RESTRICT a, fwht_t& LEO_RESTRICT b)
 {
     const fwht_t sum = AddModQ(a, b);
     const fwht_t dif = SubModQ(a, b);
@@ -473,7 +494,7 @@ static LHC_FORCE_INLINE void FWHT_2(fwht_t& LHC_RESTRICT a, fwht_t& LHC_RESTRICT
     at too high a complexity cost relative to minor perf improvement.
 */
 
-#ifndef LHC_FWHT_OPTIMIZED
+#ifndef LEO_FWHT_OPTIMIZED
 
 // Reference implementation
 static void FWHT(fwht_t* data, const unsigned bits)
@@ -487,7 +508,7 @@ static void FWHT(fwht_t* data, const unsigned bits)
 
 #else
 
-static LHC_FORCE_INLINE void FWHT_4(fwht_t* data)
+static LEO_FORCE_INLINE void FWHT_4(fwht_t* data)
 {
     fwht_t t0 = data[0];
     fwht_t t1 = data[1];
@@ -503,7 +524,7 @@ static LHC_FORCE_INLINE void FWHT_4(fwht_t* data)
     data[3] = t3;
 }
 
-static LHC_FORCE_INLINE void FWHT_4(fwht_t* data, unsigned s)
+static LEO_FORCE_INLINE void FWHT_4(fwht_t* data, unsigned s)
 {
     unsigned x = 0;
     fwht_t t0 = data[x];  x += s;
@@ -683,26 +704,26 @@ static void FWHT(fwht_t* data, const unsigned ldn)
 //------------------------------------------------------------------------------
 // Memory Buffer XOR
 
-static void xor_mem(void * LHC_RESTRICT vx, const void * LHC_RESTRICT vy, unsigned bytes)
+static void xor_mem(void * LEO_RESTRICT vx, const void * LEO_RESTRICT vy, unsigned bytes)
 {
-    LHC_M128 * LHC_RESTRICT x16 = reinterpret_cast<LHC_M128 *>(vx);
-    const LHC_M128 * LHC_RESTRICT y16 = reinterpret_cast<const LHC_M128 *>(vy);
+    LEO_M128 * LEO_RESTRICT x16 = reinterpret_cast<LEO_M128 *>(vx);
+    const LEO_M128 * LEO_RESTRICT y16 = reinterpret_cast<const LEO_M128 *>(vy);
 
-#if defined(LHC_TARGET_MOBILE)
-# if defined(LHC_TRY_NEON)
+#if defined(LEO_TARGET_MOBILE)
+# if defined(LEO_TRY_NEON)
     // Handle multiples of 64 bytes
     if (CpuHasNeon)
     {
         while (bytes >= 64)
         {
-            LHC_M128 x0 = vld1q_u8(x16);
-            LHC_M128 x1 = vld1q_u8(x16 + 1);
-            LHC_M128 x2 = vld1q_u8(x16 + 2);
-            LHC_M128 x3 = vld1q_u8(x16 + 3);
-            LHC_M128 y0 = vld1q_u8(y16);
-            LHC_M128 y1 = vld1q_u8(y16 + 1);
-            LHC_M128 y2 = vld1q_u8(y16 + 2);
-            LHC_M128 y3 = vld1q_u8(y16 + 3);
+            LEO_M128 x0 = vld1q_u8(x16);
+            LEO_M128 x1 = vld1q_u8(x16 + 1);
+            LEO_M128 x2 = vld1q_u8(x16 + 2);
+            LEO_M128 x3 = vld1q_u8(x16 + 3);
+            LEO_M128 y0 = vld1q_u8(y16);
+            LEO_M128 y1 = vld1q_u8(y16 + 1);
+            LEO_M128 y2 = vld1q_u8(y16 + 2);
+            LEO_M128 y3 = vld1q_u8(y16 + 3);
 
             vst1q_u8(x16,     veorq_u8(x0, y0));
             vst1q_u8(x16 + 1, veorq_u8(x1, y1));
@@ -715,8 +736,8 @@ static void xor_mem(void * LHC_RESTRICT vx, const void * LHC_RESTRICT vy, unsign
         // Handle multiples of 16 bytes
         while (bytes >= 16)
         {
-            LHC_M128 x0 = vld1q_u8(x16);
-            LHC_M128 y0 = vld1q_u8(y16);
+            LEO_M128 x0 = vld1q_u8(x16);
+            LEO_M128 y0 = vld1q_u8(y16);
 
             vst1q_u8(x16, veorq_u8(x0, y0));
 
@@ -724,38 +745,38 @@ static void xor_mem(void * LHC_RESTRICT vx, const void * LHC_RESTRICT vy, unsign
         }
     }
     else
-# endif // LHC_TRY_NEON
+# endif // LEO_TRY_NEON
     {
-        uint64_t * LHC_RESTRICT x8 = reinterpret_cast<uint64_t *>(x16);
-        const uint64_t * LHC_RESTRICT y8 = reinterpret_cast<const uint64_t *>(y16);
+        uint64_t * LEO_RESTRICT x8 = reinterpret_cast<uint64_t *>(x16);
+        const uint64_t * LEO_RESTRICT y8 = reinterpret_cast<const uint64_t *>(y16);
 
         const unsigned count = (unsigned)bytes / 8;
         for (unsigned ii = 0; ii < count; ++ii)
             x8[ii] ^= y8[ii];
 
-        x16 = reinterpret_cast<LHC_M128 *>(x8 + count);
-        y16 = reinterpret_cast<const LHC_M128 *>(y8 + count);
+        x16 = reinterpret_cast<LEO_M128 *>(x8 + count);
+        y16 = reinterpret_cast<const LEO_M128 *>(y8 + count);
     }
-#else // LHC_TARGET_MOBILE
-# if defined(LHC_TRY_AVX2)
+#else // LEO_TARGET_MOBILE
+# if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
     {
-        LHC_M256 * LHC_RESTRICT x32 = reinterpret_cast<LHC_M256 *>(x16);
-        const LHC_M256 * LHC_RESTRICT y32 = reinterpret_cast<const LHC_M256 *>(y16);
+        LEO_M256 * LEO_RESTRICT x32 = reinterpret_cast<LEO_M256 *>(x16);
+        const LEO_M256 * LEO_RESTRICT y32 = reinterpret_cast<const LEO_M256 *>(y16);
 
         while (bytes >= 128)
         {
-            LHC_M256 x0 = _mm256_loadu_si256(x32);
-            LHC_M256 y0 = _mm256_loadu_si256(y32);
+            LEO_M256 x0 = _mm256_loadu_si256(x32);
+            LEO_M256 y0 = _mm256_loadu_si256(y32);
             x0 = _mm256_xor_si256(x0, y0);
-            LHC_M256 x1 = _mm256_loadu_si256(x32 + 1);
-            LHC_M256 y1 = _mm256_loadu_si256(y32 + 1);
+            LEO_M256 x1 = _mm256_loadu_si256(x32 + 1);
+            LEO_M256 y1 = _mm256_loadu_si256(y32 + 1);
             x1 = _mm256_xor_si256(x1, y1);
-            LHC_M256 x2 = _mm256_loadu_si256(x32 + 2);
-            LHC_M256 y2 = _mm256_loadu_si256(y32 + 2);
+            LEO_M256 x2 = _mm256_loadu_si256(x32 + 2);
+            LEO_M256 y2 = _mm256_loadu_si256(y32 + 2);
             x2 = _mm256_xor_si256(x2, y2);
-            LHC_M256 x3 = _mm256_loadu_si256(x32 + 3);
-            LHC_M256 y3 = _mm256_loadu_si256(y32 + 3);
+            LEO_M256 x3 = _mm256_loadu_si256(x32 + 3);
+            LEO_M256 y3 = _mm256_loadu_si256(y32 + 3);
             x3 = _mm256_xor_si256(x3, y3);
 
             _mm256_storeu_si256(x32, x0);
@@ -778,25 +799,25 @@ static void xor_mem(void * LHC_RESTRICT vx, const void * LHC_RESTRICT vy, unsign
             bytes -= 32, ++x32, ++y32;
         }
 
-        x16 = reinterpret_cast<LHC_M128 *>(x32);
-        y16 = reinterpret_cast<const LHC_M128 *>(y32);
+        x16 = reinterpret_cast<LEO_M128 *>(x32);
+        y16 = reinterpret_cast<const LEO_M128 *>(y32);
     }
     else
-# endif // LHC_TRY_AVX2
+# endif // LEO_TRY_AVX2
     {
         while (bytes >= 64)
         {
-            LHC_M128 x0 = _mm_loadu_si128(x16);
-            LHC_M128 y0 = _mm_loadu_si128(y16);
+            LEO_M128 x0 = _mm_loadu_si128(x16);
+            LEO_M128 y0 = _mm_loadu_si128(y16);
             x0 = _mm_xor_si128(x0, y0);
-            LHC_M128 x1 = _mm_loadu_si128(x16 + 1);
-            LHC_M128 y1 = _mm_loadu_si128(y16 + 1);
+            LEO_M128 x1 = _mm_loadu_si128(x16 + 1);
+            LEO_M128 y1 = _mm_loadu_si128(y16 + 1);
             x1 = _mm_xor_si128(x1, y1);
-            LHC_M128 x2 = _mm_loadu_si128(x16 + 2);
-            LHC_M128 y2 = _mm_loadu_si128(y16 + 2);
+            LEO_M128 x2 = _mm_loadu_si128(x16 + 2);
+            LEO_M128 y2 = _mm_loadu_si128(y16 + 2);
             x2 = _mm_xor_si128(x2, y2);
-            LHC_M128 x3 = _mm_loadu_si128(x16 + 3);
-            LHC_M128 y3 = _mm_loadu_si128(y16 + 3);
+            LEO_M128 x3 = _mm_loadu_si128(x16 + 3);
+            LEO_M128 y3 = _mm_loadu_si128(y16 + 3);
             x3 = _mm_xor_si128(x3, y3);
 
             _mm_storeu_si128(x16, x0);
@@ -807,7 +828,7 @@ static void xor_mem(void * LHC_RESTRICT vx, const void * LHC_RESTRICT vy, unsign
             bytes -= 64, x16 += 4, y16 += 4;
         }
     }
-#endif // LHC_TARGET_MOBILE
+#endif // LEO_TARGET_MOBILE
 
     // Handle multiples of 16 bytes
     while (bytes >= 16)
@@ -821,15 +842,15 @@ static void xor_mem(void * LHC_RESTRICT vx, const void * LHC_RESTRICT vy, unsign
         bytes -= 16, ++x16, ++y16;
     }
 
-    uint8_t * LHC_RESTRICT x1 = reinterpret_cast<uint8_t *>(x16);
-    const uint8_t * LHC_RESTRICT y1 = reinterpret_cast<const uint8_t *>(y16);
+    uint8_t * LEO_RESTRICT x1 = reinterpret_cast<uint8_t *>(x16);
+    const uint8_t * LEO_RESTRICT y1 = reinterpret_cast<const uint8_t *>(y16);
 
     // Handle a block of 8 bytes
     const unsigned eight = bytes & 8;
     if (eight)
     {
-        uint64_t * LHC_RESTRICT x8 = reinterpret_cast<uint64_t *>(x1);
-        const uint64_t * LHC_RESTRICT y8 = reinterpret_cast<const uint64_t *>(y1);
+        uint64_t * LEO_RESTRICT x8 = reinterpret_cast<uint64_t *>(x1);
+        const uint64_t * LEO_RESTRICT y8 = reinterpret_cast<const uint64_t *>(y1);
         *x8 ^= *y8;
     }
 
@@ -837,8 +858,8 @@ static void xor_mem(void * LHC_RESTRICT vx, const void * LHC_RESTRICT vy, unsign
     const unsigned four = bytes & 4;
     if (four)
     {
-        uint32_t * LHC_RESTRICT x4 = reinterpret_cast<uint32_t *>(x1 + eight);
-        const uint32_t * LHC_RESTRICT y4 = reinterpret_cast<const uint32_t *>(y1 + eight);
+        uint32_t * LEO_RESTRICT x4 = reinterpret_cast<uint32_t *>(x1 + eight);
+        const uint32_t * LEO_RESTRICT y4 = reinterpret_cast<const uint32_t *>(y1 + eight);
         *x4 ^= *y4;
     }
 
@@ -1158,7 +1179,7 @@ void test(unsigned k, unsigned seed)
             if (data[i] != codeword[i])
             {
                 printf("Decoding Error with seed = %d!\n", seed);
-                LHC_DEBUG_BREAK;
+                LEO_DEBUG_BREAK;
                 return;
             }
         }
@@ -1174,7 +1195,7 @@ void test(unsigned k, unsigned seed)
 int main(int argc, char **argv)
 {
     // Initialize architecture-specific code
-    lhc_architecture_init();
+    leo_architecture_init();
 
     // Fill GFLog table and GFExp table
     InitField();
