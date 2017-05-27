@@ -27,8 +27,8 @@
 */
 
 #include "leopard.h"
-#include "FecalEncoder.h"
-#include "FecalDecoder.h"
+#include "LeopardFF8.h"
+#include "LeopardFF16.h"
 
 extern "C" {
 
@@ -38,134 +38,152 @@ extern "C" {
 
 static bool m_Initialized = false;
 
-FECAL_EXPORT int fecal_init_(int version)
+LEO_EXPORT int leo_init_(int version)
 {
-    if (version != FECAL_VERSION)
-        return Fecal_InvalidInput;
+    if (version != LEO_VERSION)
+        return Leopard_InvalidInput;
 
-    if (0 != gf256_init())
-        return Fecal_Platform;
+    if (!leopard::ff8::Initialize())
+        return Leopard_Platform;
+
+    if (!leopard::ff16::Initialize())
+        return Leopard_Platform;
 
     m_Initialized = true;
-    return Fecal_Success;
+    return Leopard_Success;
 }
 
 
 //------------------------------------------------------------------------------
 // Encoder API
 
-FECAL_EXPORT FecalEncoder fecal_encoder_create(unsigned input_count, void* const * const input_data, uint64_t total_bytes)
+LEO_EXPORT unsigned leo_encode_work_count(
+    unsigned original_count,
+    unsigned recovery_count)
 {
-    if (input_count <= 0 || !input_data || total_bytes < input_count)
-    {
-        FECAL_DEBUG_BREAK; // Invalid input
-        return nullptr;
-    }
-
-    FECAL_DEBUG_ASSERT(m_Initialized); // Must call fecal_init() first
-    if (!m_Initialized)
-        return nullptr;
-
-    fecal::Encoder* encoder = new(std::nothrow) fecal::Encoder;
-    if (!encoder)
-    {
-        FECAL_DEBUG_BREAK; // Out of memory
-        return nullptr;
-    }
-
-    if (Fecal_Success != encoder->Initialize(input_count, input_data, total_bytes))
-    {
-        delete encoder;
-        return nullptr;
-    }
-
-    return reinterpret_cast<FecalEncoder>( encoder );
+    return leopard::NextPow2(recovery_count) * 2;
 }
 
-FECAL_EXPORT int fecal_encode(FecalEncoder encoder_v, FecalSymbol* symbol)
+LEO_EXPORT LeopardResult leo_encode(
+    uint64_t buffer_bytes,              // Number of bytes in each data buffer
+    unsigned original_count,            // Number of original_data[] buffer pointers
+    unsigned recovery_count,            // Number of recovery_data[] buffer pointers
+    unsigned work_count,                // Number of work_data[] buffer pointers, from leo_encode_work_count()
+    void* const * const original_data,  // Array of pointers to original data buffers
+    void** work_data,                   // Array of work buffers
+    unsigned flags)                     // Operation flags
 {
-    fecal::Encoder* encoder = reinterpret_cast<fecal::Encoder*>( encoder_v );
-    if (!encoder || !symbol)
-        return Fecal_InvalidInput;
+    if (buffer_bytes <= 0 || buffer_bytes % 64 != 0)
+        return Leopard_InvalidSize;
 
-    return encoder->Encode(*symbol);
-}
+    if (recovery_count <= 0 || recovery_count > original_count)
+        return Leopard_InvalidCounts;
 
-FECAL_EXPORT void fecal_free(void* codec_v)
-{
-    if (codec_v)
+    if (!original_data || !work_data)
+        return Leopard_InvalidInput;
+
+    const unsigned m = leopard::NextPow2(recovery_count);
+    const unsigned n = leopard::NextPow2(m + original_count);
+
+    if (work_count != m * 2)
+        return Leopard_InvalidCounts;
+
+    const bool mt = (flags & LeopardFlags_Multithreaded) != 0;
+
+    if (n <= leopard::ff8::kOrder)
     {
-        fecal::ICodec* icodec = reinterpret_cast<fecal::ICodec*>( codec_v );
-        delete icodec;
+        leopard::ff8::Encode(
+            buffer_bytes,
+            original_count,
+            recovery_count,
+            m,
+            original_data,
+            work_data);
     }
+    else if (n <= leopard::ff16::kOrder)
+    {
+        leopard::ff16::Encode(
+            buffer_bytes,
+            original_count,
+            recovery_count,
+            m,
+            original_data,
+            work_data);
+    }
+    else
+        return Leopard_TooMuchData;
+
+    return Leopard_Success;
 }
 
 
 //------------------------------------------------------------------------------
 // Decoder API
 
-FECAL_EXPORT FecalDecoder fecal_decoder_create(unsigned input_count, uint64_t total_bytes)
+LEO_EXPORT unsigned leo_decode_work_count(
+    unsigned original_count,
+    unsigned recovery_count)
 {
-    if (input_count <= 0 || total_bytes < input_count)
+    const unsigned m = leopard::NextPow2(recovery_count);
+    const unsigned n = leopard::NextPow2(m + original_count);
+    return n;
+}
+
+LEO_EXPORT LeopardResult leo_decode(
+    uint64_t buffer_bytes,              // Number of bytes in each data buffer
+    unsigned original_count,            // Number of original_data[] buffer pointers
+    unsigned recovery_count,            // Number of recovery_data[] buffer pointers
+    unsigned work_count,                // Number of buffer pointers in work_data[]
+    void* const * const original_data,  // Array of original data buffers
+    void* const * const recovery_data,  // Array of recovery data buffers
+    void** work_data,                   // Array of work data buffers
+    unsigned flags)                     // Operation flags
+{
+    if (buffer_bytes <= 0 || buffer_bytes % 64 != 0)
+        return Leopard_InvalidSize;
+
+    if (recovery_count <= 0 || recovery_count > original_count)
+        return Leopard_InvalidCounts;
+
+    if (!original_data || !recovery_data || !work_data)
+        return Leopard_InvalidInput;
+
+    const unsigned m = leopard::NextPow2(recovery_count);
+    const unsigned n = leopard::NextPow2(m + original_count);
+
+    if (work_count != n)
+        return Leopard_InvalidCounts;
+
+    const bool mt = (flags & LeopardFlags_Multithreaded) != 0;
+
+    if (n <= leopard::ff8::kOrder)
     {
-        FECAL_DEBUG_BREAK; // Invalid input
-        return nullptr;
+        leopard::ff8::Decode(
+            buffer_bytes,
+            original_count,
+            recovery_count,
+            m,
+            n,
+            original_data,
+            recovery_data,
+            work_data);
     }
-
-    FECAL_DEBUG_ASSERT(m_Initialized); // Must call fecal_init() first
-    if (!m_Initialized)
-        return nullptr;
-
-    fecal::Decoder* decoder = new(std::nothrow) fecal::Decoder;
-    if (!decoder)
+    else if (n <= leopard::ff16::kOrder)
     {
-        FECAL_DEBUG_BREAK; // Out of memory
-        return nullptr;
+        leopard::ff16::Decode(
+            buffer_bytes,
+            original_count,
+            recovery_count,
+            m,
+            n,
+            original_data,
+            recovery_data,
+            work_data);
     }
+    else
+        return Leopard_TooMuchData;
 
-    if (Fecal_Success != decoder->Initialize(input_count, total_bytes))
-    {
-        delete decoder;
-        return nullptr;
-    }
-
-    return reinterpret_cast<FecalDecoder>( decoder );
-}
-
-FECAL_EXPORT int fecal_decoder_add_original(FecalDecoder decoder_v, const FecalSymbol* symbol)
-{
-    fecal::Decoder* decoder = reinterpret_cast<fecal::Decoder*>( decoder_v );
-    if (!decoder || !symbol)
-        return Fecal_InvalidInput;
-
-    return decoder->AddOriginal(*symbol);
-}
-
-FECAL_EXPORT int fecal_decoder_add_recovery(FecalDecoder decoder_v, const FecalSymbol* symbol)
-{
-    fecal::Decoder* decoder = reinterpret_cast<fecal::Decoder*>( decoder_v );
-    if (!decoder || !symbol)
-        return Fecal_InvalidInput;
-
-    return decoder->AddRecovery(*symbol);
-}
-
-FECAL_EXPORT int fecal_decode(FecalDecoder decoder_v, RecoveredSymbols* symbols)
-{
-    fecal::Decoder* decoder = reinterpret_cast<fecal::Decoder*>( decoder_v );
-    if (!decoder || !symbols)
-        return Fecal_InvalidInput;
-
-    return decoder->Decode(*symbols);
-}
-
-FECAL_EXPORT int fecal_decoder_get(FecalDecoder decoder_v, unsigned input_index, FecalSymbol* symbol)
-{
-    fecal::Decoder* decoder = reinterpret_cast<fecal::Decoder*>( decoder_v );
-    if (!decoder || !symbol)
-        return Fecal_InvalidInput;
-
-    return decoder->GetOriginal(input_index, *symbol);
+    return Leopard_Success;
 }
 
 

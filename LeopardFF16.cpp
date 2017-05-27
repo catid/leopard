@@ -9,7 +9,7 @@
     * Redistributions in binary form must reproduce the above copyright notice,
       this list of conditions and the following disclaimer in the documentation
       and/or other materials provided with the distribution.
-    * Neither the name of LHC-RS nor the names of its contributors may be
+    * Neither the name of Leopard-RS nor the names of its contributors may be
       used to endorse or promote products derived from this software without
       specific prior written permission.
 
@@ -26,494 +26,75 @@
     POSSIBILITY OF SUCH DAMAGE.
 */
 
+#include "LeopardFF16.h"
 #include <string.h>
-#include <time.h>
-#include <stdio.h>
-#include <stdint.h>
-#include <stdlib.h>
 
+// Define this to enable the optimized version of FWHT()
+#define LEO_FF16_FWHT_OPTIMIZED
 
-/*
-    TODO:
-    + Write C API and unit tester
-        + Limit input to multiples of 64 bytes
-    + Replace GFSymbol with a file data pointer
-    + New 16-bit Muladd inner loops
-        + Class to contain the (large) muladd tables
-    + Preliminary benchmarks for large data!
-    + New 8-bit Muladd inner loops
-    + Benchmarks for smaller data!
-    + Refactor software
-        + Pick a name for the software better than LEO_RS
-        + I think it should be split up into several C++ modules
-    + Write detailed comments for all the routines
-    + Look into getting EncodeL working so we can support smaller data (Ask Lin)
-    + Look into using k instead of k2 to speed up decoder (Ask Lin)
-    + Avoid performing FFT/IFFT intermediate calculations we're not going to use
-    + Benchmarks, fun!
-    + Add multi-threading to split up long parallelizable calculations
-    + Final benchmarks!
-    + Finish up documentation
-    + Release version 1
-
-
-    Muladd implementation notes:
-
-    Specialize for 1-3 rows at a time since often times we're multiplying by
-    the same (skew) value repeatedly, as the ISA-L library does here:
-
-    https://github.com/01org/isa-l/blob/master/erasure_code/gf_3vect_mad_avx.asm#L258
-
-    Except we should be doing it for 16-bit Galois Field.
-    To implement that use the ALTMAP trick from Jerasure:
-
-    http://lab.jerasure.org/jerasure/gf-complete/blob/master/src/gf_w16.c#L1140
-
-    Except we should also support AVX2 since that is a 40% perf boost, so put
-    the high and low bytes 32 bytes instead of 16 bytes apart.
-
-    Also I think we should go ahead and precompute the multiply tables since
-    it avoids a bunch of memory lookups for each muladd, and only costs 8 MB.
-*/
+namespace leopard { namespace ff16 {
 
 
 //------------------------------------------------------------------------------
-// Debug
+// Datatypes and Constants
 
-// Some bugs only repro in release mode, so this can be helpful
-//#define LEO_DEBUG_IN_RELEASE
+// Modulus for field operations
+static const ffe_t kModulus = 65535;
 
-#if defined(_DEBUG) || defined(DEBUG) || defined(LEO_DEBUG_IN_RELEASE)
-    #define LEO_DEBUG
-    #ifdef _WIN32
-        #define LEO_DEBUG_BREAK __debugbreak()
-    #else
-        #define LEO_DEBUG_BREAK __builtin_trap()
-    #endif
-    #define LEO_DEBUG_ASSERT(cond) { if (!(cond)) { LEO_DEBUG_BREAK; } }
-#else
-    #define LEO_DEBUG_BREAK ;
-    #define LEO_DEBUG_ASSERT(cond) ;
-#endif
+// LFSR Polynomial that generates the field elements
+static const unsigned kPolynomial = 0x1002D;
 
-
-//------------------------------------------------------------------------------
-// Platform/Architecture
-
-#if defined(ANDROID) || defined(IOS)
-    #define LEO_TARGET_MOBILE
-#endif // ANDROID
-
-#if defined(__AVX2__) || (defined (_MSC_VER) && _MSC_VER >= 1900)
-    #define LEO_TRY_AVX2 /* 256-bit */
-    #include <immintrin.h>
-    #define LEO_ALIGN_BYTES 32
-#else // __AVX2__
-    #define LEO_ALIGN_BYTES 16
-#endif // __AVX2__
-
-#if !defined(LEO_TARGET_MOBILE)
-    // Note: MSVC currently only supports SSSE3 but not AVX2
-    #include <tmmintrin.h> // SSSE3: _mm_shuffle_epi8
-    #include <emmintrin.h> // SSE2
-#endif // LEO_TARGET_MOBILE
-
-#if defined(HAVE_ARM_NEON_H)
-    #include <arm_neon.h>
-#endif // HAVE_ARM_NEON_H
-
-#if defined(LEO_TARGET_MOBILE)
-
-    #define LEO_ALIGNED_ACCESSES /* Inputs must be aligned to LEO_ALIGN_BYTES */
-
-# if defined(HAVE_ARM_NEON_H)
-    // Compiler-specific 128-bit SIMD register keyword
-    #define LEO_M128 uint8x16_t
-    #define LEO_TRY_NEON
-#else
-    #define LEO_M128 uint64_t
-# endif
-
-#else // LEO_TARGET_MOBILE
-
-    // Compiler-specific 128-bit SIMD register keyword
-    #define LEO_M128 __m128i
-
-#endif // LEO_TARGET_MOBILE
-
-#ifdef LEO_TRY_AVX2
-    // Compiler-specific 256-bit SIMD register keyword
-    #define LEO_M256 __m256i
-#endif
-
-// Compiler-specific C++11 restrict keyword
-#define LEO_RESTRICT __restrict
-
-// Compiler-specific force inline keyword
-#ifdef _MSC_VER
-    #define LEO_FORCE_INLINE inline __forceinline
-#else
-    #define LEO_FORCE_INLINE inline __attribute__((always_inline))
-#endif
-
-// Compiler-specific alignment keyword
-// Note: Alignment only matters for ARM NEON where it should be 16
-#ifdef _MSC_VER
-    #define LEO_ALIGNED __declspec(align(LEO_ALIGN_BYTES))
-#else // _MSC_VER
-    #define LEO_ALIGNED __attribute__((aligned(LEO_ALIGN_BYTES)))
-#endif // _MSC_VER
-
-
-//------------------------------------------------------------------------------
-// Runtime CPU Architecture Check
-//
-// Feature checks stolen shamelessly from
-// https://github.com/jedisct1/libsodium/blob/master/src/libsodium/sodium/runtime.c
-
-#if defined(HAVE_ANDROID_GETCPUFEATURES)
-    #include <cpu-features.h>
-#endif
-
-#if defined(LEO_TRY_NEON)
-# if defined(IOS) && defined(__ARM_NEON__)
-        // Requires iPhone 5S or newer
-        static const bool CpuHasNeon = true;
-        static const bool CpuHasNeon64 = true;
-# else
-        // Remember to add LOCAL_STATIC_LIBRARIES := cpufeatures
-        static bool CpuHasNeon = false; // V6 / V7
-        static bool CpuHasNeon64 = false; // 64-bit
-# endif
-#endif
-
-
-#if !defined(LEO_TARGET_MOBILE)
-
-#ifdef _MSC_VER
-    #include <intrin.h> // __cpuid
-    #pragma warning(disable: 4752) // found Intel(R) Advanced Vector Extensions; consider using /arch:AVX
-#endif
-
-#ifdef LEO_TRY_AVX2
-static bool CpuHasAVX2 = false;
-#endif
-static bool CpuHasSSSE3 = false;
-
-#define CPUID_EBX_AVX2    0x00000020
-#define CPUID_ECX_SSSE3   0x00000200
-
-static void _cpuid(unsigned int cpu_info[4U], const unsigned int cpu_info_type)
-{
-#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_AMD64) || defined(_M_IX86))
-    __cpuid((int *) cpu_info, cpu_info_type);
-#else //if defined(HAVE_CPUID)
-    cpu_info[0] = cpu_info[1] = cpu_info[2] = cpu_info[3] = 0;
-# ifdef __i386__
-    __asm__ __volatile__ ("pushfl; pushfl; "
-                          "popl %0; "
-                          "movl %0, %1; xorl %2, %0; "
-                          "pushl %0; "
-                          "popfl; pushfl; popl %0; popfl" :
-                          "=&r" (cpu_info[0]), "=&r" (cpu_info[1]) :
-                          "i" (0x200000));
-    if (((cpu_info[0] ^ cpu_info[1]) & 0x200000) == 0) {
-        return; /* LCOV_EXCL_LINE */
-    }
-# endif
-# ifdef __i386__
-    __asm__ __volatile__ ("xchgl %%ebx, %k1; cpuid; xchgl %%ebx, %k1" :
-                          "=a" (cpu_info[0]), "=&r" (cpu_info[1]),
-                          "=c" (cpu_info[2]), "=d" (cpu_info[3]) :
-                          "0" (cpu_info_type), "2" (0U));
-# elif defined(__x86_64__)
-    __asm__ __volatile__ ("xchgq %%rbx, %q1; cpuid; xchgq %%rbx, %q1" :
-                          "=a" (cpu_info[0]), "=&r" (cpu_info[1]),
-                          "=c" (cpu_info[2]), "=d" (cpu_info[3]) :
-                          "0" (cpu_info_type), "2" (0U));
-# else
-    __asm__ __volatile__ ("cpuid" :
-                          "=a" (cpu_info[0]), "=b" (cpu_info[1]),
-                          "=c" (cpu_info[2]), "=d" (cpu_info[3]) :
-                          "0" (cpu_info_type), "2" (0U));
-# endif
-#endif
-}
-
-#endif // defined(LEO_TARGET_MOBILE)
-
-
-static void leo_architecture_init()
-{
-#if defined(LEO_TRY_NEON) && defined(HAVE_ANDROID_GETCPUFEATURES)
-    AndroidCpuFamily family = android_getCpuFamily();
-    if (family == ANDROID_CPU_FAMILY_ARM)
-    {
-        if (android_getCpuFeatures() & ANDROID_CPU_ARM_FEATURE_NEON)
-            CpuHasNeon = true;
-    }
-    else if (family == ANDROID_CPU_FAMILY_ARM64)
-    {
-        CpuHasNeon = true;
-        if (android_getCpuFeatures() & ANDROID_CPU_ARM64_FEATURE_ASIMD)
-            CpuHasNeon64 = true;
-    }
-#endif
-
-#if !defined(LEO_TARGET_MOBILE)
-    unsigned int cpu_info[4];
-
-    _cpuid(cpu_info, 1);
-    CpuHasSSSE3 = ((cpu_info[2] & CPUID_ECX_SSSE3) != 0);
-
-#if defined(LEO_TRY_AVX2)
-    _cpuid(cpu_info, 7);
-    CpuHasAVX2 = ((cpu_info[1] & CPUID_EBX_AVX2) != 0);
-#endif // LEO_TRY_AVX2
-
-#endif // LEO_TARGET_MOBILE
-}
-
-
-//------------------------------------------------------------------------------
-// SIMD-Safe Aligned Memory Allocations
-
-static const unsigned kAlignmentBytes = LEO_ALIGN_BYTES;
-
-LEO_FORCE_INLINE unsigned NextAlignedOffset(unsigned offset)
-{
-    return (offset + kAlignmentBytes - 1) & ~(kAlignmentBytes - 1);
-}
-
-static LEO_FORCE_INLINE uint8_t* SIMDSafeAllocate(size_t size)
-{
-    uint8_t* data = (uint8_t*)calloc(1, kAlignmentBytes + size);
-    if (!data)
-        return nullptr;
-    unsigned offset = (unsigned)((uintptr_t)data % kAlignmentBytes);
-    data += kAlignmentBytes - offset;
-    data[-1] = (uint8_t)offset;
-    return data;
-}
-
-static LEO_FORCE_INLINE void SIMDSafeFree(void* ptr)
-{
-    if (!ptr)
-        return;
-    uint8_t* data = (uint8_t*)ptr;
-    unsigned offset = data[-1];
-    if (offset >= kAlignmentBytes)
-    {
-        LEO_DEBUG_BREAK; // Should never happen
-        return;
-    }
-    data -= kAlignmentBytes - offset;
-    free(data);
-}
-
-
-//------------------------------------------------------------------------------
-// Field
-
-//#define LEO_SHORT_FIELD
-
-#ifdef LEO_SHORT_FIELD
-typedef uint8_t GFSymbol;
-static const unsigned kGFBits = 8;
-static const unsigned kGFPolynomial = 0x11D;
-GFSymbol kGFBasis[kGFBits] = {
-    1, 214, 152, 146, 86, 200, 88, 230 // Cantor basis
-};
-#else
-typedef uint16_t GFSymbol;
-static const unsigned kGFBits = 16;
-static const unsigned kGFPolynomial = 0x1002D;
-GFSymbol kGFBasis[kGFBits] = {
+// Basis used for generating logarithm tables
+static const ffe_t kBasis[kBits] = {
     0x0001, 0xACCA, 0x3C0E, 0x163E, // Cantor basis
     0xC582, 0xED2E, 0x914C, 0x4012,
     0x6C98, 0x10D8, 0x6A72, 0xB900,
     0xFDB8, 0xFB34, 0xFF38, 0x991E
 };
-#endif
-
-/*
-    Cantor Basis introduced by:
-    D. G. Cantor, "On arithmetical algorithms over finite fields",
-    Journal of Combinatorial Theory, Series A, vol. 50, no. 2, pp. 285-300, 1989.
-*/
-
-static const unsigned kFieldSize = (unsigned)1 << kGFBits; //Field size
-static const unsigned kFieldModulus = kFieldSize - 1;
-
-static GFSymbol GFLog[kFieldSize];
-static GFSymbol GFExp[kFieldSize];
-
-// Initialize GFLog[], GFExp[]
-static void InitField()
-{
-    unsigned state = 1;
-    for (unsigned i = 0; i < kFieldModulus; ++i)
-    {
-        GFExp[state] = static_cast<GFSymbol>(i);
-        state <<= 1;
-        if (state >= kFieldSize)
-            state ^= kGFPolynomial;
-    }
-    GFExp[0] = kFieldModulus;
-
-    // Conversion to chosen basis:
-
-    GFLog[0] = 0;
-    for (unsigned i = 0; i < kGFBits; ++i)
-    {
-        const GFSymbol basis = kGFBasis[i];
-        const unsigned width = (unsigned)(1UL << i);
-
-        for (unsigned j = 0; j < width; ++j)
-            GFLog[j + width] = GFLog[j] ^ basis;
-    }
-
-    for (unsigned i = 0; i < kFieldSize; ++i)
-        GFLog[i] = GFExp[GFLog[i]];
-
-    for (unsigned i = 0; i < kFieldSize; ++i)
-        GFExp[GFLog[i]] = i;
-
-    GFExp[kFieldModulus] = GFExp[0];
-}
 
 
 //------------------------------------------------------------------------------
-// Mod Q Field Operations
-//
-// Q is the maximum symbol value, e.g. 255 or 65535.
+// Field Operations
 
-// z = x + y (mod Q)
-static inline GFSymbol AddModQ(GFSymbol a, GFSymbol b)
+// z = x + y (mod kModulus)
+static inline ffe_t AddMod(const ffe_t a, const ffe_t b)
 {
     const unsigned sum = (unsigned)a + b;
 
-    // Partial reduction step, allowing for Q to be returned
-    return static_cast<GFSymbol>(sum + (sum >> kGFBits));
+    // Partial reduction step, allowing for kModulus to be returned
+    return static_cast<ffe_t>(sum + (sum >> kBits));
 }
 
-// z = x - y (mod Q)
-static inline GFSymbol SubModQ(GFSymbol a, GFSymbol b)
+// z = x - y (mod kModulus)
+static inline ffe_t SubMod(const ffe_t a, const ffe_t b)
 {
     const unsigned dif = (unsigned)a - b;
 
-    // Partial reduction step, allowing for Q to be returned
-    return static_cast<GFSymbol>(dif + (dif >> kGFBits));
-}
-
-// vx[] += vy[] * z
-static void muladd_mem(GFSymbol * LEO_RESTRICT vx, const GFSymbol * LEO_RESTRICT vy, GFSymbol z, unsigned symbolCount)
-{
-    for (unsigned i = 0; i < symbolCount; ++i)
-    {
-        const GFSymbol a = vy[i];
-        if (a == 0)
-            continue;
-
-        GFSymbol sum1 = static_cast<GFSymbol>(AddModQ(GFLog[a & 0x0f], z));
-        GFSymbol value1 = GFExp[sum1];
-        if ((a & 0x0f) == 0)
-        {
-            value1 = 0;
-        }
-        GFSymbol sum2 = static_cast<GFSymbol>(AddModQ(GFLog[a & 0xf0], z));
-        GFSymbol value2 = GFExp[sum2];
-        if ((a & 0xf0) == 0)
-        {
-            value2 = 0;
-        }
-        GFSymbol sum3 = static_cast<GFSymbol>(AddModQ(GFLog[a & 0x0f00], z));
-        GFSymbol value3 = GFExp[sum3];
-        if ((a & 0x0f00) == 0)
-        {
-            value3 = 0;
-        }
-        GFSymbol sum4 = static_cast<GFSymbol>(AddModQ(GFLog[a & 0xf000], z));
-        GFSymbol value4 = GFExp[sum4];
-        if ((a & 0xf000) == 0)
-        {
-            value4 = 0;
-        }
-
-        vx[i] ^= value1;
-        vx[i] ^= value2;
-        vx[i] ^= value3;
-        vx[i] ^= value4;
-    }
-}
-
-// return a*GFExp[b] over GF(2^r)
-static GFSymbol mulE(GFSymbol a, GFSymbol b)
-{
-    if (a == 0)
-        return 0;
-
-    const GFSymbol sum = static_cast<GFSymbol>(AddModQ(GFLog[a], b));
-    return GFExp[sum];
+    // Partial reduction step, allowing for kModulus to be returned
+    return static_cast<ffe_t>(dif + (dif >> kBits));
 }
 
 
 //------------------------------------------------------------------------------
-// Fast Walsh-Hadamard Transform (FWHT) Mod Q
-//
-// Q is the maximum symbol value, e.g. 255 or 65535.
+// Fast Walsh-Hadamard Transform (FWHT) (mod kModulus)
 
-// Define this to enable the optimized version of FWHT()
-#define LEO_FWHT_OPTIMIZED
-
-typedef GFSymbol fwht_t;
+#if defined(LEO_FF16_FWHT_OPTIMIZED)
 
 // {a, b} = {a + b, a - b} (Mod Q)
-static LEO_FORCE_INLINE void FWHT_2(fwht_t& LEO_RESTRICT a, fwht_t& LEO_RESTRICT b)
+static LEO_FORCE_INLINE void FWHT_2(ffe_t& LEO_RESTRICT a, ffe_t& LEO_RESTRICT b)
 {
-    const fwht_t sum = AddModQ(a, b);
-    const fwht_t dif = SubModQ(a, b);
+    const ffe_t sum = AddMod(a, b);
+    const ffe_t dif = SubMod(a, b);
     a = sum;
     b = dif;
 }
 
-/*
-    FWHT is a minor slice of the runtime and does not grow with data size,
-    but I did attempt a few additional optimizations that failed:
-
-    I've attempted to vectorize (with partial reductions) FWHT_4(data, s),
-    which is 70% of the algorithm, but it was slower.  Left in _attic_.
-
-    I've attempted to avoid reductions in all or parts of the FWHT.
-    The final modular reduction ends up being slower than the savings.
-    Specifically I tried doing it for the whole FWHT and also I tried
-    doing it just for the FWHT_2 loop in the main routine, but both
-    approaches are slower than partial reductions.
-
-    Replacing word reads with wider reads does speed up the operation, but
-    at too high a complexity cost relative to minor perf improvement.
-*/
-
-#ifndef LEO_FWHT_OPTIMIZED
-
-// Reference implementation
-static void FWHT(fwht_t* data, const unsigned bits)
+static LEO_FORCE_INLINE void FWHT_4(ffe_t* data)
 {
-    const unsigned size = (unsigned)(1UL << bits);
-    for (unsigned width = 1; width < size; width <<= 1)
-        for (unsigned i = 0; i < size; i += (width << 1))
-            for (unsigned j = i; j < (width + i); ++j)
-                FWHT_2(data[j], data[j + width]);
-}
-
-#else
-
-static LEO_FORCE_INLINE void FWHT_4(fwht_t* data)
-{
-    fwht_t t0 = data[0];
-    fwht_t t1 = data[1];
-    fwht_t t2 = data[2];
-    fwht_t t3 = data[3];
+    ffe_t t0 = data[0];
+    ffe_t t1 = data[1];
+    ffe_t t2 = data[2];
+    ffe_t t3 = data[3];
     FWHT_2(t0, t1);
     FWHT_2(t2, t3);
     FWHT_2(t0, t2);
@@ -524,13 +105,13 @@ static LEO_FORCE_INLINE void FWHT_4(fwht_t* data)
     data[3] = t3;
 }
 
-static LEO_FORCE_INLINE void FWHT_4(fwht_t* data, unsigned s)
+static LEO_FORCE_INLINE void FWHT_4(ffe_t* data, unsigned s)
 {
     unsigned x = 0;
-    fwht_t t0 = data[x];  x += s;
-    fwht_t t1 = data[x];  x += s;
-    fwht_t t2 = data[x];  x += s;
-    fwht_t t3 = data[x];
+    ffe_t t0 = data[x];  x += s;
+    ffe_t t1 = data[x];  x += s;
+    ffe_t t2 = data[x];  x += s;
+    ffe_t t3 = data[x];
     FWHT_2(t0, t1);
     FWHT_2(t2, t3);
     FWHT_2(t0, t2);
@@ -542,16 +123,16 @@ static LEO_FORCE_INLINE void FWHT_4(fwht_t* data, unsigned s)
     data[y] = t3;
 }
 
-static inline void FWHT_8(fwht_t* data)
+static inline void FWHT_8(ffe_t* data)
 {
-    fwht_t t0 = data[0];
-    fwht_t t1 = data[1];
-    fwht_t t2 = data[2];
-    fwht_t t3 = data[3];
-    fwht_t t4 = data[4];
-    fwht_t t5 = data[5];
-    fwht_t t6 = data[6];
-    fwht_t t7 = data[7];
+    ffe_t t0 = data[0];
+    ffe_t t1 = data[1];
+    ffe_t t2 = data[2];
+    ffe_t t3 = data[3];
+    ffe_t t4 = data[4];
+    ffe_t t5 = data[5];
+    ffe_t t6 = data[6];
+    ffe_t t7 = data[7];
     FWHT_2(t0, t1);
     FWHT_2(t2, t3);
     FWHT_2(t4, t5);
@@ -574,24 +155,24 @@ static inline void FWHT_8(fwht_t* data)
     data[7] = t7;
 }
 
-static inline void FWHT_16(fwht_t* data)
+static inline void FWHT_16(ffe_t* data)
 {
-    fwht_t t0 = data[0];
-    fwht_t t1 = data[1];
-    fwht_t t2 = data[2];
-    fwht_t t3 = data[3];
-    fwht_t t4 = data[4];
-    fwht_t t5 = data[5];
-    fwht_t t6 = data[6];
-    fwht_t t7 = data[7];
-    fwht_t t8 = data[8];
-    fwht_t t9 = data[9];
-    fwht_t t10 = data[10];
-    fwht_t t11 = data[11];
-    fwht_t t12 = data[12];
-    fwht_t t13 = data[13];
-    fwht_t t14 = data[14];
-    fwht_t t15 = data[15];
+    ffe_t t0 = data[0];
+    ffe_t t1 = data[1];
+    ffe_t t2 = data[2];
+    ffe_t t3 = data[3];
+    ffe_t t4 = data[4];
+    ffe_t t5 = data[5];
+    ffe_t t6 = data[6];
+    ffe_t t7 = data[7];
+    ffe_t t8 = data[8];
+    ffe_t t9 = data[9];
+    ffe_t t10 = data[10];
+    ffe_t t11 = data[11];
+    ffe_t t12 = data[12];
+    ffe_t t13 = data[13];
+    ffe_t t14 = data[14];
+    ffe_t t15 = data[15];
     FWHT_2(t0, t1);
     FWHT_2(t2, t3);
     FWHT_2(t4, t5);
@@ -642,7 +223,7 @@ static inline void FWHT_16(fwht_t* data)
     data[15] = t15;
 }
 
-static void FWHT_SmallData(fwht_t* data, unsigned ldn)
+static void FWHT_SmallData(ffe_t* data, unsigned ldn)
 {
     const unsigned n = (1UL << ldn);
 
@@ -675,7 +256,7 @@ static void FWHT_SmallData(fwht_t* data, unsigned ldn)
 }
 
 // Decimation in time (DIT) version
-static void FWHT(fwht_t* data, const unsigned ldn)
+static void FWHT(ffe_t* data, const unsigned ldn)
 {
     if (ldn <= 13)
     {
@@ -698,523 +279,774 @@ static void FWHT(fwht_t* data, const unsigned ldn)
     }
 }
 
-#endif
+#else // LEO_FF16_FWHT_OPTIMIZED
+
+// Reference implementation
+void FWHT(ffe_t* data, const unsigned bits)
+{
+    const unsigned size = (unsigned)(1UL << bits);
+    for (unsigned width = 1; width < size; width <<= 1)
+        for (unsigned i = 0; i < size; i += (width << 1))
+            for (unsigned j = i; j < (width + i); ++j)
+                FWHT_2(data[j], data[j + width]);
+}
+
+#endif // LEO_FF16_FWHT_OPTIMIZED
+
+// Transform specialized for the finite field order
+void FWHT(ffe_t data[kOrder])
+{
+    FWHT(data, kBits);
+}
 
 
 //------------------------------------------------------------------------------
-// Memory Buffer XOR
+// Logarithm Tables
 
-static void xor_mem(void * LEO_RESTRICT vx, const void * LEO_RESTRICT vy, unsigned bytes)
+static ffe_t LogLUT[kOrder];
+static ffe_t ExpLUT[kOrder];
+
+
+// Initialize LogLUT[], ExpLUT[]
+static void InitializeLogarithmTables()
 {
-    LEO_M128 * LEO_RESTRICT x16 = reinterpret_cast<LEO_M128 *>(vx);
-    const LEO_M128 * LEO_RESTRICT y16 = reinterpret_cast<const LEO_M128 *>(vy);
+    // LFSR table generation:
 
-#if defined(LEO_TARGET_MOBILE)
-# if defined(LEO_TRY_NEON)
-    // Handle multiples of 64 bytes
-    if (CpuHasNeon)
+    unsigned state = 1;
+    for (unsigned i = 0; i < kModulus; ++i)
     {
-        while (bytes >= 64)
+        ExpLUT[state] = static_cast<ffe_t>(i);
+        state <<= 1;
+        if (state >= kOrder)
+            state ^= kPolynomial;
+    }
+    ExpLUT[0] = kModulus;
+
+    // Conversion to chosen basis:
+
+    LogLUT[0] = 0;
+    for (unsigned i = 0; i < kBits; ++i)
+    {
+        const ffe_t basis = kBasis[i];
+        const unsigned width = static_cast<unsigned>(1UL << i);
+
+        for (unsigned j = 0; j < width; ++j)
+            LogLUT[j + width] = LogLUT[j] ^ basis;
+    }
+
+    for (unsigned i = 0; i < kOrder; ++i)
+        LogLUT[i] = ExpLUT[LogLUT[i]];
+
+    for (unsigned i = 0; i < kOrder; ++i)
+        ExpLUT[LogLUT[i]] = i;
+
+    ExpLUT[kModulus] = ExpLUT[0];
+}
+
+//------------------------------------------------------------------------------
+// Multiplies
+
+/*
+    Muladd implementation notes:
+
+    Specialize for 1-3 rows at a time since often times we're multiplying by
+    the same (skew) value repeatedly, as the ISA-L library does here:
+
+    https://github.com/01org/isa-l/blob/master/erasure_code/gf_3vect_mad_avx.asm#L258
+
+    Except we should be doing it for 16-bit Galois Field.
+    To implement that use the ALTMAP trick from Jerasure:
+
+    http://lab.jerasure.org/jerasure/gf-complete/blob/master/src/gf_w16.c#L1140
+
+    Except we should also support AVX2 since that is a 40% perf boost, so put
+    the high and low bytes 32 bytes instead of 16 bytes apart.
+
+    Also I think we should go ahead and precompute the multiply tables since
+    it avoids a bunch of memory lookups for each muladd, and only costs 8 MB.
+*/
+
+// We require memory to be aligned since the SIMD instructions benefit from
+// or require aligned accesses to the table data.
+struct {
+    LEO_ALIGNED LEO_M128 LUT[65536][4];
+} static Multiply128LUT;
+#if defined(LEO_TRY_AVX2)
+struct {
+    LEO_ALIGNED LEO_M256 LUT[65536][4];
+} static Multiply256LUT;
+#endif // LEO_TRY_AVX2
+
+// Returns a * b
+static ffe_t FFEMultiply(ffe_t a, ffe_t b)
+{
+    if (a == 0 || b == 0)
+        return 0;
+    return ExpLUT[AddMod(LogLUT[a], LogLUT[b])];
+}
+
+// Returns a * Log(b)
+static ffe_t FFEMultiplyLog(ffe_t a, ffe_t log_b)
+{
+    if (a == 0)
+        return 0;
+    return ExpLUT[AddMod(LogLUT[a], b)];
+}
+
+bool InitializeMultiplyTables()
+{
+    for (int y = 0; y < 256; ++y)
+    {
+        uint8_t lo[16], hi[16];
+        for (unsigned char x = 0; x < 16; ++x)
         {
-            LEO_M128 x0 = vld1q_u8(x16);
-            LEO_M128 x1 = vld1q_u8(x16 + 1);
-            LEO_M128 x2 = vld1q_u8(x16 + 2);
-            LEO_M128 x3 = vld1q_u8(x16 + 3);
-            LEO_M128 y0 = vld1q_u8(y16);
-            LEO_M128 y1 = vld1q_u8(y16 + 1);
-            LEO_M128 y2 = vld1q_u8(y16 + 2);
-            LEO_M128 y3 = vld1q_u8(y16 + 3);
-
-            vst1q_u8(x16,     veorq_u8(x0, y0));
-            vst1q_u8(x16 + 1, veorq_u8(x1, y1));
-            vst1q_u8(x16 + 2, veorq_u8(x2, y2));
-            vst1q_u8(x16 + 3, veorq_u8(x3, y3));
-
-            bytes -= 64, x16 += 4, y16 += 4;
+            lo[x] = FFEMultiply(x,      static_cast<uint8_t>(y));
+            hi[x] = FFEMultiply(x << 4, static_cast<uint8_t>(y));
         }
 
-        // Handle multiples of 16 bytes
-        while (bytes >= 16)
+        const LEO_M128 table_lo = _mm_loadu_si128((LEO_M128*)lo);
+        const LEO_M128 table_hi = _mm_loadu_si128((LEO_M128*)hi);
+
+        _mm_storeu_si128(Multiply128LUT.Lo + y, table_lo);
+        _mm_storeu_si128(Multiply128LUT.Hi + y, table_hi);
+
+#if defined(LEO_TRY_AVX2)
+        if (CpuHasAVX2)
         {
-            LEO_M128 x0 = vld1q_u8(x16);
-            LEO_M128 y0 = vld1q_u8(y16);
-
-            vst1q_u8(x16, veorq_u8(x0, y0));
-
-            bytes -= 16, ++x16, ++y16;
+            _mm256_storeu_si256(Multiply256LUT.Lo + y,
+                _mm256_broadcastsi128_si256(table_lo));
+            _mm256_storeu_si256(Multiply256LUT.Hi + y,
+                _mm256_broadcastsi128_si256(table_hi));
         }
+#endif // LEO_TRY_AVX2
     }
-    else
-# endif // LEO_TRY_NEON
+
+    return true;
+}
+
+// vx[] = vy[] * m
+void mul_mem_set(
+    void * LEO_RESTRICT vx, const void * LEO_RESTRICT vy,
+    ffe_t m, uint64_t bytes)
+{
+    if (m <= 1)
     {
-        uint64_t * LEO_RESTRICT x8 = reinterpret_cast<uint64_t *>(x16);
-        const uint64_t * LEO_RESTRICT y8 = reinterpret_cast<const uint64_t *>(y16);
-
-        const unsigned count = (unsigned)bytes / 8;
-        for (unsigned ii = 0; ii < count; ++ii)
-            x8[ii] ^= y8[ii];
-
-        x16 = reinterpret_cast<LEO_M128 *>(x8 + count);
-        y16 = reinterpret_cast<const LEO_M128 *>(y8 + count);
+        if (m == 1)
+            memcpy(vx, vy, bytes);
+        else
+            memset(vx, 0, bytes);
+        return;
     }
-#else // LEO_TARGET_MOBILE
-# if defined(LEO_TRY_AVX2)
+
+#if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
     {
-        LEO_M256 * LEO_RESTRICT x32 = reinterpret_cast<LEO_M256 *>(x16);
-        const LEO_M256 * LEO_RESTRICT y32 = reinterpret_cast<const LEO_M256 *>(y16);
+        const LEO_M256 table_lo_y = _mm256_loadu_si256(Multiply256LUT.Lo + m);
+        const LEO_M256 table_hi_y = _mm256_loadu_si256(Multiply256LUT.Hi + m);
 
-        while (bytes >= 128)
+        const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
+
+        LEO_M256 * LEO_RESTRICT z32 = reinterpret_cast<LEO_M256 *>(vx);
+        const LEO_M256 * LEO_RESTRICT x32 = reinterpret_cast<const LEO_M256 *>(vy);
+
+        const unsigned count = bytes / 64;
+        for (unsigned i = 0; i < count; ++i)
         {
-            LEO_M256 x0 = _mm256_loadu_si256(x32);
-            LEO_M256 y0 = _mm256_loadu_si256(y32);
-            x0 = _mm256_xor_si256(x0, y0);
-            LEO_M256 x1 = _mm256_loadu_si256(x32 + 1);
-            LEO_M256 y1 = _mm256_loadu_si256(y32 + 1);
-            x1 = _mm256_xor_si256(x1, y1);
-            LEO_M256 x2 = _mm256_loadu_si256(x32 + 2);
-            LEO_M256 y2 = _mm256_loadu_si256(y32 + 2);
-            x2 = _mm256_xor_si256(x2, y2);
-            LEO_M256 x3 = _mm256_loadu_si256(x32 + 3);
-            LEO_M256 y3 = _mm256_loadu_si256(y32 + 3);
-            x3 = _mm256_xor_si256(x3, y3);
+            LEO_M256 x0 = _mm256_loadu_si256(x32 + i * 2);
+            LEO_M256 l0 = _mm256_and_si256(x0, clr_mask);
+            x0 = _mm256_srli_epi64(x0, 4);
+            LEO_M256 h0 = _mm256_and_si256(x0, clr_mask);
+            l0 = _mm256_shuffle_epi8(table_lo_y, l0);
+            h0 = _mm256_shuffle_epi8(table_hi_y, h0);
+            _mm256_storeu_si256(z32 + i * 2, _mm256_xor_si256(l0, h0));
 
-            _mm256_storeu_si256(x32, x0);
-            _mm256_storeu_si256(x32 + 1, x1);
-            _mm256_storeu_si256(x32 + 2, x2);
-            _mm256_storeu_si256(x32 + 3, x3);
-
-            bytes -= 128, x32 += 4, y32 += 4;
+            LEO_M256 x1 = _mm256_loadu_si256(x32 + i * 2 + 1);
+            LEO_M256 l1 = _mm256_and_si256(x1, clr_mask);
+            x1 = _mm256_srli_epi64(x1, 4);
+            LEO_M256 h1 = _mm256_and_si256(x1, clr_mask);
+            l1 = _mm256_shuffle_epi8(table_lo_y, l1);
+            h1 = _mm256_shuffle_epi8(table_hi_y, h1);
+            _mm256_storeu_si256(z32 + i * 2 + 1, _mm256_xor_si256(l1, h1));
         }
+        return;
+    }
+#endif // LEO_TRY_AVX2
 
-        // Handle multiples of 32 bytes
-        while (bytes >= 32)
+    const LEO_M128 table_lo_y = _mm_loadu_si128(Multiply128LUT.Lo + m);
+    const LEO_M128 table_hi_y = _mm_loadu_si128(Multiply128LUT.Hi + m);
+
+    const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
+
+    LEO_M128 * LEO_RESTRICT       x16 = reinterpret_cast<LEO_M128 *>      (vx);
+    const LEO_M128 * LEO_RESTRICT y16 = reinterpret_cast<const LEO_M128 *>(vy);
+
+    do
+    {
+        LEO_M128 x3 = _mm_loadu_si128(y16 + 3);
+        LEO_M128 l3 = _mm_and_si128(x3, clr_mask);
+        x3 = _mm_srli_epi64(x3, 4);
+        LEO_M128 h3 = _mm_and_si128(x3, clr_mask);
+        l3 = _mm_shuffle_epi8(table_lo_y, l3);
+        h3 = _mm_shuffle_epi8(table_hi_y, h3);
+
+        LEO_M128 x2 = _mm_loadu_si128(y16 + 2);
+        LEO_M128 l2 = _mm_and_si128(x2, clr_mask);
+        x2 = _mm_srli_epi64(x2, 4);
+        LEO_M128 h2 = _mm_and_si128(x2, clr_mask);
+        l2 = _mm_shuffle_epi8(table_lo_y, l2);
+        h2 = _mm_shuffle_epi8(table_hi_y, h2);
+
+        LEO_M128 x1 = _mm_loadu_si128(y16 + 1);
+        LEO_M128 l1 = _mm_and_si128(x1, clr_mask);
+        x1 = _mm_srli_epi64(x1, 4);
+        LEO_M128 h1 = _mm_and_si128(x1, clr_mask);
+        l1 = _mm_shuffle_epi8(table_lo_y, l1);
+        h1 = _mm_shuffle_epi8(table_hi_y, h1);
+
+        LEO_M128 x0 = _mm_loadu_si128(y16);
+        LEO_M128 l0 = _mm_and_si128(x0, clr_mask);
+        x0 = _mm_srli_epi64(x0, 4);
+        LEO_M128 h0 = _mm_and_si128(x0, clr_mask);
+        l0 = _mm_shuffle_epi8(table_lo_y, l0);
+        h0 = _mm_shuffle_epi8(table_hi_y, h0);
+
+        _mm_storeu_si128(x16 + 3, _mm_xor_si128(l3, h3));
+        _mm_storeu_si128(x16 + 2, _mm_xor_si128(l2, h2));
+        _mm_storeu_si128(x16 + 1, _mm_xor_si128(l1, h1));
+        _mm_storeu_si128(x16,     _mm_xor_si128(l0, h0));
+
+        x16 += 4, y16 += 4;
+        bytes -= 64;
+    } while (bytes > 0);
+}
+
+// vx0[] *= m, vx1[] *= m
+void mul_mem2_inplace(
+    void * LEO_RESTRICT vx_0,
+    void * LEO_RESTRICT vx_1,
+    ffe_t m, uint64_t bytes)
+{
+    if (m <= 1)
+    {
+        if (m == 0)
         {
-            // x[i] = x[i] xor y[i]
-            _mm256_storeu_si256(x32,
-                _mm256_xor_si256(
-                    _mm256_loadu_si256(x32),
-                    _mm256_loadu_si256(y32)));
-
-            bytes -= 32, ++x32, ++y32;
+            memset(vx_0, 0, bytes);
+            memset(vx_1, 0, bytes);
         }
-
-        x16 = reinterpret_cast<LEO_M128 *>(x32);
-        y16 = reinterpret_cast<const LEO_M128 *>(y32);
+        return;
     }
-    else
-# endif // LEO_TRY_AVX2
+
+#if defined(LEO_TRY_AVX2)
+    if (CpuHasAVX2)
     {
-        while (bytes >= 64)
+        const LEO_M256 table_lo_y = _mm256_loadu_si256(Multiply256LUT.Lo + m);
+        const LEO_M256 table_hi_y = _mm256_loadu_si256(Multiply256LUT.Hi + m);
+
+        const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
+
+        LEO_M256 * LEO_RESTRICT x32_0 = reinterpret_cast<LEO_M256 *>(vx_0);
+        LEO_M256 * LEO_RESTRICT x32_1 = reinterpret_cast<LEO_M256 *>(vx_1);
+
+        do
         {
-            LEO_M128 x0 = _mm_loadu_si128(x16);
-            LEO_M128 y0 = _mm_loadu_si128(y16);
-            x0 = _mm_xor_si128(x0, y0);
-            LEO_M128 x1 = _mm_loadu_si128(x16 + 1);
-            LEO_M128 y1 = _mm_loadu_si128(y16 + 1);
-            x1 = _mm_xor_si128(x1, y1);
-            LEO_M128 x2 = _mm_loadu_si128(x16 + 2);
-            LEO_M128 y2 = _mm_loadu_si128(y16 + 2);
-            x2 = _mm_xor_si128(x2, y2);
-            LEO_M128 x3 = _mm_loadu_si128(x16 + 3);
-            LEO_M128 y3 = _mm_loadu_si128(y16 + 3);
-            x3 = _mm_xor_si128(x3, y3);
+            LEO_M256 x0_0 = _mm256_loadu_si256(x32_0 + 1);
+            LEO_M256 l0_0 = _mm256_and_si256(x0_0, clr_mask);
+            x0_0 = _mm256_srli_epi64(x0_0, 4);
+            LEO_M256 h0_0 = _mm256_and_si256(x0_0, clr_mask);
+            l0_0 = _mm256_shuffle_epi8(table_lo_y, l0_0);
+            h0_0 = _mm256_shuffle_epi8(table_hi_y, h0_0);
+            l0_0 = _mm256_xor_si256(l0_0, h0_0);
 
-            _mm_storeu_si128(x16, x0);
-            _mm_storeu_si128(x16 + 1, x1);
-            _mm_storeu_si128(x16 + 2, x2);
-            _mm_storeu_si128(x16 + 3, x3);
+            LEO_M256 x1_0 = _mm256_loadu_si256(x32_0);
+            LEO_M256 l1_0 = _mm256_and_si256(x1_0, clr_mask);
+            x1_0 = _mm256_srli_epi64(x1_0, 4);
+            LEO_M256 h1_0 = _mm256_and_si256(x1_0, clr_mask);
+            l1_0 = _mm256_shuffle_epi8(table_lo_y, l1_0);
+            h1_0 = _mm256_shuffle_epi8(table_hi_y, h1_0);
+            l1_0 = _mm256_xor_si256(l1_0, h1_0);
 
-            bytes -= 64, x16 += 4, y16 += 4;
-        }
+            LEO_M256 x0_1 = _mm256_loadu_si256(x32_1 + 1);
+            LEO_M256 l0_1 = _mm256_and_si256(x0_1, clr_mask);
+            x0_1 = _mm256_srli_epi64(x0_1, 4);
+            LEO_M256 h0_1 = _mm256_and_si256(x0_1, clr_mask);
+            l0_1 = _mm256_shuffle_epi8(table_lo_y, l0_1);
+            h0_1 = _mm256_shuffle_epi8(table_hi_y, h0_1);
+            l0_1 = _mm256_xor_si256(l0_1, h0_1);
+
+            LEO_M256 x1_1 = _mm256_loadu_si256(x32_1);
+            LEO_M256 l1_1 = _mm256_and_si256(x1_1, clr_mask);
+            x1_1 = _mm256_srli_epi64(x1_1, 4);
+            LEO_M256 h1_1 = _mm256_and_si256(x1_1, clr_mask);
+            l1_1 = _mm256_shuffle_epi8(table_lo_y, l1_1);
+            h1_1 = _mm256_shuffle_epi8(table_hi_y, h1_1);
+            l1_1 = _mm256_xor_si256(l1_1, h1_1);
+
+            _mm256_storeu_si256(x32_0 + 1, l0_0);
+            _mm256_storeu_si256(x32_0, l1_0);
+            _mm256_storeu_si256(x32_1 + 1, l0_1);
+            _mm256_storeu_si256(x32_1, l1_1);
+
+            x32_0 += 2;
+            x32_1 += 2;
+            bytes -= 64;
+        } while (bytes > 0);
+        return;
     }
-#endif // LEO_TARGET_MOBILE
+#endif // LEO_TRY_AVX2
 
-    // Handle multiples of 16 bytes
-    while (bytes >= 16)
+    const LEO_M128 table_lo_y = _mm_loadu_si128(Multiply128LUT.Lo + m);
+    const LEO_M128 table_hi_y = _mm_loadu_si128(Multiply128LUT.Hi + m);
+
+    const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
+
+    LEO_M128 * LEO_RESTRICT x16_0 = reinterpret_cast<LEO_M128 *>(vx_0);
+    LEO_M128 * LEO_RESTRICT x16_1 = reinterpret_cast<LEO_M128 *>(vx_1);
+
+    do
     {
-        // x[i] = x[i] xor y[i]
-        _mm_storeu_si128(x16,
-            _mm_xor_si128(
-                _mm_loadu_si128(x16),
-                _mm_loadu_si128(y16)));
+        LEO_M128 x3 = _mm_loadu_si128(x16_0 + 3);
+        LEO_M128 l3 = _mm_and_si128(x3, clr_mask);
+        x3 = _mm_srli_epi64(x3, 4);
+        LEO_M128 h3 = _mm_and_si128(x3, clr_mask);
+        l3 = _mm_shuffle_epi8(table_lo_y, l3);
+        h3 = _mm_shuffle_epi8(table_hi_y, h3);
 
-        bytes -= 16, ++x16, ++y16;
-    }
+        LEO_M128 x2 = _mm_loadu_si128(x16_0 + 2);
+        LEO_M128 l2 = _mm_and_si128(x2, clr_mask);
+        x2 = _mm_srli_epi64(x2, 4);
+        LEO_M128 h2 = _mm_and_si128(x2, clr_mask);
+        l2 = _mm_shuffle_epi8(table_lo_y, l2);
+        h2 = _mm_shuffle_epi8(table_hi_y, h2);
 
-    uint8_t * LEO_RESTRICT x1 = reinterpret_cast<uint8_t *>(x16);
-    const uint8_t * LEO_RESTRICT y1 = reinterpret_cast<const uint8_t *>(y16);
+        LEO_M128 x1 = _mm_loadu_si128(x16_0 + 1);
+        LEO_M128 l1 = _mm_and_si128(x1, clr_mask);
+        x1 = _mm_srli_epi64(x1, 4);
+        LEO_M128 h1 = _mm_and_si128(x1, clr_mask);
+        l1 = _mm_shuffle_epi8(table_lo_y, l1);
+        h1 = _mm_shuffle_epi8(table_hi_y, h1);
 
-    // Handle a block of 8 bytes
-    const unsigned eight = bytes & 8;
-    if (eight)
-    {
-        uint64_t * LEO_RESTRICT x8 = reinterpret_cast<uint64_t *>(x1);
-        const uint64_t * LEO_RESTRICT y8 = reinterpret_cast<const uint64_t *>(y1);
-        *x8 ^= *y8;
-    }
+        LEO_M128 x0 = _mm_loadu_si128(x16_0);
+        LEO_M128 l0 = _mm_and_si128(x0, clr_mask);
+        x0 = _mm_srli_epi64(x0, 4);
+        LEO_M128 h0 = _mm_and_si128(x0, clr_mask);
+        l0 = _mm_shuffle_epi8(table_lo_y, l0);
+        h0 = _mm_shuffle_epi8(table_hi_y, h0);
 
-    // Handle a block of 4 bytes
-    const unsigned four = bytes & 4;
-    if (four)
-    {
-        uint32_t * LEO_RESTRICT x4 = reinterpret_cast<uint32_t *>(x1 + eight);
-        const uint32_t * LEO_RESTRICT y4 = reinterpret_cast<const uint32_t *>(y1 + eight);
-        *x4 ^= *y4;
-    }
+        _mm_storeu_si128(x16_0 + 3, _mm_xor_si128(l3, h3));
+        _mm_storeu_si128(x16_0 + 2, _mm_xor_si128(l2, h2));
+        _mm_storeu_si128(x16_0 + 1, _mm_xor_si128(l1, h1));
+        _mm_storeu_si128(x16_0,     _mm_xor_si128(l0, h0));
 
-    // Handle final bytes
-    const unsigned offset = eight + four;
-    switch (bytes & 3)
-    {
-    case 3: x1[offset + 2] ^= y1[offset + 2];
-    case 2: x1[offset + 1] ^= y1[offset + 1];
-    case 1: x1[offset] ^= y1[offset];
-    default:
-        break;
-    }
+        // FIXME: Add second one here
+
+        x16_0 += 4;
+        x16_1 += 4;
+        bytes -= 64;
+    } while (bytes > 0);
 }
 
 
 //------------------------------------------------------------------------------
-// Formal Derivative
+// FFT Operations
 
-// Formal derivative of polynomial in the new basis
-static void formal_derivative(GFSymbol* cos, const unsigned size)
+// x[] ^= y[] * m, y[] ^= x[]
+void fft_butterfly(
+    void * LEO_RESTRICT x, void * LEO_RESTRICT y,
+    ffe_t m, uint64_t bytes)
 {
-    for (unsigned i = 1; i < size; ++i)
-    {
-        const unsigned leng = ((i ^ (i - 1)) + 1) >> 1;
 
-        // If a large number of values are being XORed:
-        if (leng >= 8)
-            xor_mem(cos + i - leng, cos + i, leng * sizeof(GFSymbol));
-        else
-            for (unsigned j = i - leng; j < i; j++)
-                cos[j] ^= cos[j + leng];
-    }
+}
 
-    for (unsigned i = size; i < kFieldSize; i <<= 1)
-        xor_mem(cos, cos + i, size * sizeof(GFSymbol));
+// For i = {0, 1}: x_i[] ^= y_i[] * m, y_i[] ^= x_i[]
+void fft_butterfly2(
+    void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
+    void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
+    ffe_t m, uint64_t bytes)
+{
+
+}
+
+// For i = {0, 1, 2}: x_i[] ^= y_i[] * m, y_i[] ^= x_i[]
+void fft_butterfly3(
+    void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
+    void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
+    void * LEO_RESTRICT x_2, void * LEO_RESTRICT y_2,
+    ffe_t m, uint64_t bytes)
+{
+
 }
 
 
 //------------------------------------------------------------------------------
-// Fast Fourier Transform
+// IFFT Operations
 
-static GFSymbol skewVec[kFieldModulus]; // twisted factors used in FFT
-
-// IFFT in the proposed basis
-static void IFLT(GFSymbol* data, const unsigned size, const unsigned index)
+// y[] ^= x[], x[] ^= y[] * m
+void ifft_butterfly(
+    void * LEO_RESTRICT x, void * LEO_RESTRICT y,
+    ffe_t m, uint64_t bytes)
 {
-    for (unsigned depart_no = 1; depart_no < size; depart_no <<= 1)
-    {
-        for (unsigned j = depart_no; j < size; j += (depart_no << 1))
-        {
-            // If a large number of values are being XORed:
-            if (depart_no >= 8)
-                xor_mem(data + j, data + j - depart_no, depart_no * sizeof(GFSymbol));
-            else
-                for (unsigned i = j - depart_no; i < j; ++i)
-                    data[i + depart_no] ^= data[i];
 
-            const GFSymbol skew = skewVec[j + index - 1];
-
-            if (skew != kFieldModulus)
-                muladd_mem(data + j - depart_no, data + j, skew, depart_no);
-        }
-    }
 }
 
-// FFT in the proposed basis
-static void FLT(GFSymbol* data, const unsigned size, const unsigned index)
+// For i = {0, 1}: y_i[] ^= x_i[], x_i[] ^= y_i[] * m
+void ifft_butterfly2(
+    void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
+    void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
+    ffe_t m, uint64_t bytes)
 {
-    for (unsigned depart_no = (size >> 1); depart_no > 0; depart_no >>= 1)
-    {
-        for (unsigned j = depart_no; j < size; j += (depart_no << 1))
-        {
-            const GFSymbol skew = skewVec[j + index - 1];
 
-            if (skew != kFieldModulus)
-                muladd_mem(data + j - depart_no, data + j, skew, depart_no);
+}
 
-            // If a large number of values are being XORed:
-            if (depart_no >= 8)
-                xor_mem(data + j, data + j - depart_no, depart_no * sizeof(GFSymbol));
-            else
-                for (unsigned i = j - depart_no; i < j; ++i)
-                    data[i + depart_no] ^= data[i];
-        }
-    }
+// For i = {0, 1, 2}: y_i[] ^= x_i[], x_i[] ^= y_i[] * m
+void ifft_butterfly3(
+    void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
+    void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
+    void * LEO_RESTRICT x_2, void * LEO_RESTRICT y_2,
+    ffe_t m, uint64_t bytes)
+{
+
 }
 
 
 //------------------------------------------------------------------------------
-// FFT Initialization
+// FFT
 
-static GFSymbol B[kFieldSize >> 1];     // factors used in formal derivative
-static fwht_t log_walsh[kFieldSize];  // factors used in the evaluation of the error locator polynomial
+static ffe_t FFTSkew[kFieldModulus]; // twisted factors used in FFT
+static ffe_t LogWalsh[kOrder]; // factors used in the evaluation of the error locator polynomial
 
-// Initialize skewVec[], B[], log_walsh[]
-static void InitFieldOperations()
+void FFTInitialize()
 {
-    GFSymbol temp[kGFBits - 1];
+    ffe_t temp[kBits - 1];
 
-    for (unsigned i = 1; i < kGFBits; ++i)
-        temp[i - 1] = (GFSymbol)((unsigned)1 << i);
+    for (unsigned i = 1; i < kBits; ++i)
+        temp[i - 1] = (ffe_t)((unsigned)1 << i);
 
-    for (unsigned m = 0; m < (kGFBits - 1); ++m)
+    for (unsigned m = 0; m < (kBits - 1); ++m)
     {
         const unsigned step = (unsigned)1 << (m + 1);
 
-        skewVec[((unsigned)1 << m) - 1] = 0;
+        FFTSkew[((unsigned)1 << m) - 1] = 0;
 
-        for (unsigned i = m; i < (kGFBits - 1); ++i)
+        for (unsigned i = m; i < (kBits - 1); ++i)
         {
             const unsigned s = ((unsigned)1 << (i + 1));
 
             for (unsigned j = ((unsigned)1 << m) - 1; j < s; j += step)
-                skewVec[j + s] = skewVec[j] ^ temp[i];
+                FFTSkew[j + s] = FFTSkew[j] ^ temp[i];
         }
 
-        temp[m] = kFieldModulus - GFLog[mulE(temp[m], GFLog[temp[m] ^ 1])];
+        // TBD: This can be cleaned up
+        temp[m] = kFieldModulus - LogLUT[FFEMultiply(temp[m], temp[m] ^ 1)];
 
-        for (unsigned i = m + 1; i < (kGFBits - 1); ++i)
-            temp[i] = mulE(temp[i], (GFLog[temp[i] ^ 1] + temp[m]) % kFieldModulus);
+        for (unsigned i = m + 1; i < (kBits - 1); ++i)
+            temp[i] = FFEMultiplyLog(temp[i], (LogLUT[temp[i] ^ 1] + temp[m]) % kFieldModulus);
     }
 
-    for (unsigned i = 0; i < kFieldSize; ++i)
-        skewVec[i] = GFLog[skewVec[i]];
+    for (unsigned i = 0; i < kOrder; ++i)
+        FFTSkew[i] = LogLUT[FFTSkew[i]];
 
     temp[0] = kFieldModulus - temp[0];
 
-    for (unsigned i = 1; i < (kGFBits - 1); ++i)
+    for (unsigned i = 1; i < (kBits - 1); ++i)
         temp[i] = (kFieldModulus - temp[i] + temp[i - 1]) % kFieldModulus;
 
-    B[0] = 0;
-    for (unsigned i = 0; i < (kGFBits - 1); ++i)
-    {
-        const unsigned depart = ((unsigned)1 << i);
+    for (unsigned i = 0; i < kOrder; ++i)
+        LogWalsh[i] = LogLUT[i];
 
-        for (unsigned j = 0; j < depart; ++j)
-            B[j + depart] = (B[j] + temp[i]) % kFieldModulus;
-    }
+    LogWalsh[0] = 0;
 
-    for (unsigned i = 0; i < kFieldSize; ++i)
-        log_walsh[i] = GFLog[i];
-
-    log_walsh[0] = 0;
-
-    FWHT(log_walsh, kGFBits);
+    FWHT(LogWalsh, kBits);
 }
 
 
 //------------------------------------------------------------------------------
-// Encoder
+// Encode
 
-// Encoding alg for k/n<0.5: message is a power of two
-static void encodeL(GFSymbol* data, const unsigned k, GFSymbol* codeword)
+void Encode(
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned m,
+    void* const * const data,
+    void** work)
 {
-    memcpy(codeword, data, sizeof(GFSymbol) * k);
+    // work <- data
 
-    IFLT(codeword, k, 0);
+    // FIXME: Unroll first loop to eliminate this
+    for (unsigned i = 0; i < m; ++i)
+        memcpy(work[i], data[i], buffer_bytes);
 
-    for (unsigned i = k; i < kFieldSize; i += k)
+    // work <- IFFT(data, m, m)
+
+    for (unsigned width = 1; width < m; width <<= 1)
     {
-        memcpy(&codeword[i], codeword, sizeof(GFSymbol) * k);
-
-        FLT(&codeword[i], k, i);
-    }
-
-    memcpy(codeword, data, sizeof(GFSymbol) * k);
-}
-
-// Encoding alg for k/n>0.5: parity is a power of two.
-// data: message array. parity: parity array. mem: buffer(size>= n-k)
-static void encodeH(const GFSymbol* data, const unsigned k, GFSymbol* parity, GFSymbol* mem)
-{
-    const unsigned t = kFieldSize - k;
-
-    memset(parity, 0, sizeof(GFSymbol) * t);
-
-    for (unsigned i = t; i < kFieldSize; i += t)
-    {
-        memcpy(mem, &data[i - t], sizeof(GFSymbol) * t);
-
-        IFLT(mem, t, i);
-
-        xor_mem(parity, mem, t * sizeof(GFSymbol));
-    }
-
-    FLT(parity, t, 0);
-}
-
-
-//------------------------------------------------------------------------------
-// Decoder
-
-static void decode(GFSymbol* codeword, unsigned k, const bool* erasure)
-{
-    fwht_t log_walsh2[kFieldSize];
-
-    // Compute the evaluations of the error locator polynomial
-    for (unsigned i = 0; i < kFieldSize; ++i)
-        log_walsh2[i] = erasure[i] ? 1 : 0;
-
-    FWHT(log_walsh2, kGFBits);
-
-    for (unsigned i = 0; i < kFieldSize; ++i)
-        log_walsh2[i] = ((unsigned)log_walsh2[i] * (unsigned)log_walsh[i]) % kFieldModulus;
-
-    FWHT(log_walsh2, kGFBits);
-
-    // k2 can be replaced with k
-    const unsigned k2 = kFieldSize;
-    //const unsigned k2 = k; // cannot actually be replaced with k.  what else need to change?
-
-    for (unsigned i = 0; i < kFieldSize; ++i)
-    {
-        if (erasure[i])
+        for (unsigned j = width; j < m; j += (width << 1))
         {
-            codeword[i] = 0;
-        }
-        else
-        {
-            codeword[i] = mulE(codeword[i], log_walsh2[i]);
-        }
-    }
+            const ffe_t skew = FFTSkew[j + m - 1];
 
-    IFLT(codeword, kFieldSize, 0);
-
-    // formal derivative
-    for (unsigned i = 0; i < kFieldSize; i += 2)
-    {
-        codeword[i] = mulE(codeword[i], kFieldModulus - B[i >> 1]);
-        codeword[i + 1] = mulE(codeword[i + 1], kFieldModulus - B[i >> 1]);
-    }
-
-    formal_derivative(codeword, k2);
-
-    for (unsigned i = 0; i < k2; i += 2)
-    {
-        codeword[i] = mulE(codeword[i], B[i >> 1]);
-        codeword[i + 1] = mulE(codeword[i + 1], B[i >> 1]);
-    }
-
-    FLT(codeword, k2, 0);
-
-    for (unsigned i = 0; i < k2; ++i)
-    {
-        if (erasure[i])
-        {
-            codeword[i] = mulE(codeword[i], kFieldModulus - log_walsh2[i]);
-        }
-    }
-}
-
-
-//------------------------------------------------------------------------------
-// Test Application
-
-void test(unsigned k, unsigned seed)
-{
-    srand(seed);
-
-    //-----------Generating message----------
-
-    // Message array
-    GFSymbol data[kFieldSize] = {0};
-
-    // Filled with random numbers
-    for (unsigned i = kFieldSize - k; i < kFieldSize; ++i)
-        data[i] = (GFSymbol)rand();
-
-
-    //---------encoding----------
-
-    GFSymbol codeword[kFieldSize];
-    encodeH(&data[kFieldSize - k], k, data, codeword);
-    //encodeL(data, k, codeword); // does not seem to work with any input?  what else needs to change?
-
-    memcpy(codeword, data, sizeof(GFSymbol) * kFieldSize);
-
-
-    //--------erasure simulation---------
-
-    // Array indicating erasures
-    bool erasure[kFieldSize] = {
-        false
-    };
-
-    for (unsigned i = k; i < kFieldSize; ++i)
-        erasure[i] = true;
-
-    // permuting the erasure array
-    for (unsigned i = kFieldSize - 1; i > 0; --i)
-    {
-        unsigned pos = rand() % (i + 1);
-
-        if (i != pos)
-        {
-            bool tmp = erasure[i];
-            erasure[i] = erasure[pos];
-            erasure[pos] = tmp;
-        }
-    }
-
-    // erasure codeword symbols
-    for (unsigned i = 0; i < kFieldSize; ++i)
-        if (erasure[i])
-            codeword[i] = 0;
-
-
-    //---------main processing----------
-    decode(codeword, k, erasure);
-
-    // Check the correctness of the result
-    for (unsigned i = 0; i < kFieldSize; ++i)
-    {
-        if (erasure[i] == 1)
-        {
-            if (data[i] != codeword[i])
+            if (skew != kFieldModulus)
             {
-                printf("Decoding Error with seed = %d!\n", seed);
-                LEO_DEBUG_BREAK;
-                return;
+                for (unsigned i = j - width; i < j; ++i)
+                    ifft_butterfly(work[i], work[i + width], skew, buffer_bytes);
+            }
+            else
+            {
+                for (unsigned i = j - width; i < j; ++i)
+                    xor_mem(work[i + width], work[i], buffer_bytes);
             }
         }
     }
 
-    //printf("Decoding is successful!\n");
+    for (unsigned i = m; i + m <= original_count; i += m)
+    {
+        // temp <- data + i
+
+        void** temp = work + m;
+
+        // FIXME: Unroll first loop to eliminate this
+        for (unsigned j = 0; j < m; ++j)
+            memcpy(temp[j], data[j], buffer_bytes);
+
+        // temp <- IFFT(temp, m, m + i)
+
+        for (unsigned width = 1; width < m; width <<= 1)
+        {
+            for (unsigned j = width; j < m; j += (width << 1))
+            {
+                const ffe_t skew = FFTSkew[j + m + i - 1];
+
+                if (skew != kFieldModulus)
+                {
+                    for (unsigned k = j - width; k < j; ++k)
+                        ifft_butterfly(temp[k], temp[k + width], skew, buffer_bytes);
+                }
+                else
+                {
+                    for (unsigned k = j - width; k < j; ++k)
+                        xor_mem(temp[k + width], temp[k], buffer_bytes);
+                }
+            }
+        }
+
+        // work <- work XOR temp
+
+        // FIXME: Unroll last loop to eliminate this
+        for (unsigned j = 0; j < m; ++j)
+            xor_mem(work[j], temp[j], buffer_bytes);
+    }
+
+    const unsigned last_count = original_count % m;
+    if (last_count != 0)
+    {
+        const unsigned i = original_count - last_count;
+
+        // temp <- data + i
+
+        void** temp = work + m;
+
+        for (unsigned j = 0; j < last_count; ++j)
+            memcpy(temp[j], data[j], buffer_bytes);
+        for (unsigned j = last_count; j < m; ++j)
+            memset(temp[j], 0, buffer_bytes);
+
+        // temp <- IFFT(temp, m, m + i)
+
+        for (unsigned width = 1, shift = 1; width < m; width <<= 1, ++shift)
+        {
+            // Calculate stop considering that the right is all zeroes
+            const unsigned stop = ((last_count + width - 1) >> shift) << shift;
+
+            for (unsigned j = width; j < stop; j += (width << 1))
+            {
+                const ffe_t skew = FFTSkew[j + m + i - 1];
+
+                if (skew != kFieldModulus)
+                {
+                    for (unsigned k = j - width; k < j; ++k)
+                        ifft_butterfly(temp[k], temp[k + width], skew, buffer_bytes);
+                }
+                else
+                {
+                    for (unsigned k = j - width; k < j; ++k)
+                        xor_mem(temp[k + width], temp[k], buffer_bytes);
+                }
+            }
+        }
+
+        // work <- work XOR temp
+
+        // FIXME: Unroll last loop to eliminate this
+        for (unsigned j = 0; j < m; ++j)
+            xor_mem(work[j], temp[j], buffer_bytes);
+    }
+
+    // work <- FFT(work, m, 0)
+
+    for (unsigned width = (m >> 1); width > 0; width >>= 1)
+    {
+        const ffe_t* skewLUT = FFTSkew + width - 1;
+        const unsigned range = width << 1;
+
+        for (unsigned j = 0; j < m; j += range)
+        {
+            const ffe_t skew = skewLUT[j];
+
+            if (skew != kFieldModulus)
+            {
+                for (unsigned k = j, count = j + width; k < count; ++k)
+                    fft_butterfly(data[k], data[k + width], skew, buffer_bytes);
+            }
+            else
+            {
+                for (unsigned k = j, count = j + width; k < count; ++k)
+                    xor_mem(work[k + width], work[k], buffer_bytes);
+            }
+        }
+    }
 }
 
 
 //------------------------------------------------------------------------------
-// Entrypoint
+// Decode
 
-int main(int argc, char **argv)
+void Decode(
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned m, // NextPow2(recovery_count)
+    unsigned n, // NextPow2(m + original_count) = work_count
+    void* const * const original, // original_count entries
+    void* const * const recovery, // recovery_count entries
+    void** work) // n entries
 {
-    // Initialize architecture-specific code
-    leo_architecture_init();
+    // Fill in error locations
 
-    // Fill GFLog table and GFExp table
-    InitField();
+    ffe_t ErrorLocations[kOrder];
+    for (unsigned i = 0; i < recovery_count; ++i)
+        ErrorLocations[i] = recovery[i] ? 0 : 1;
+    for (unsigned i = recovery_count; i < m; ++i)
+        ErrorLocations[i] = 1;
+    for (unsigned i = 0; i < original_count; ++i)
+        ErrorLocations[i + m] = original[i] ? 0 : 1;
+    memset(ErrorLocations + m + original_count, 0, (n - original_count - m) * sizeof(ffe_t));
 
-    // Compute factors used in erasure decoder
-    InitFieldOperations();
+    // Evaluate error locator polynomial
 
-    unsigned seed = (unsigned)time(NULL);
-    for (;;)
+    FWHT(ErrorLocations, kBits);
+
+    for (unsigned i = 0; i < kOrder; ++i)
+        ErrorLocations[i] = ((unsigned)ErrorLocations[i] * (unsigned)LogWalsh[i]) % kFieldModulus;
+
+    FWHT(ErrorLocations, kBits);
+
+    // work <- recovery data
+
+    for (unsigned i = 0; i < recovery_count; ++i)
     {
-        // test(int k), k: message size
-        /*
-            EncodeH works for kFieldSize / 2 and kFieldSize * 3 / 4, etc,
-            s.t. the number of recovery pieces is a power of two
-        */
-        test(kFieldSize / 2, seed);
+        if (recovery[i])
+            mul_mem_set(work[i], recovery[i], ErrorLocations[i], buffer_bytes);
+        else
+            memset(work[i], 0, buffer_bytes);
+    }
+    for (unsigned i = recovery_count; i < m; ++i)
+        memset(work[i], 0, buffer_bytes);
 
-        ++seed;
+    // work <- original data
+
+    for (unsigned i = 0; i < original_count; ++i)
+    {
+        if (original[i])
+            mul_mem_set(work[m + i], original[i], ErrorLocations[m + i], buffer_bytes);
+        else
+            memset(work[m + i], 0, buffer_bytes);
+    }
+    for (unsigned i = m + original_count; i < n; ++i)
+        memset(work[i], 0, buffer_bytes);
+
+    // work <- IFFT(work, n, 0)
+
+    for (unsigned width = 1; width < n; width <<= 1)
+    {
+        for (unsigned j = width; j < n; j += (width << 1))
+        {
+            const ffe_t skew = FFTSkew[j - 1];
+
+            if (skew != kFieldModulus)
+            {
+                for (unsigned i = j - width; i < j; ++i)
+                    ifft_butterfly(work[i], work[i + width], skew, buffer_bytes);
+            }
+            else
+            {
+                for (unsigned i = j - width; i < j; ++i)
+                    xor_mem(work[i + width], work[i], buffer_bytes);
+            }
+        }
     }
 
-    return 0;
+    // work <- FormalDerivative(work, n)
+
+    for (unsigned i = 1; i < n; ++i)
+    {
+        const unsigned width = ((i ^ (i - 1)) + 1) >> 1;
+
+        // If a large number of values are being XORed:
+        for (unsigned j = i - width; j < i; ++j)
+            xor_mem(work[j], work[j + width], buffer_bytes);
+    }
+
+    // work <- FFT(work, n, 0) truncated to m + original_count
+
+    const unsigned output_count = m + original_count;
+    for (unsigned width = (n >> 1); width > 0; width >>= 1)
+    {
+        const ffe_t* skewLUT = FFTSkew + width - 1;
+        const unsigned range = width << 1;
+
+        for (unsigned j = (m < range) ? 0 : m; j < output_count; j += range)
+        {
+            const ffe_t skew = skewLUT[j];
+
+            if (skew != kFieldModulus)
+            {
+                for (unsigned i = j; i < j + width; ++i)
+                    fft_butterfly(work[i], work[i + width], skew, buffer_bytes);
+            }
+            else
+            {
+                for (unsigned i = j; i < j + width; ++i)
+                    xor_mem(work[i + width], work[i], buffer_bytes);
+            }
+        }
+    }
+
+    // Reveal erasures
+
+    for (unsigned i = 0; i < original_count; ++i)
+        if (!original[i])
+            mul_mem_set(work[i], work[i + m], kFieldModulus - ErrorLocations[i], buffer_bytes);
 }
+
+
+//------------------------------------------------------------------------------
+// API
+
+static bool IsInitialized = false;
+
+bool Initialize()
+{
+    if (IsInitialized)
+        return true;
+
+    if (!CpuHasSSSE3)
+        return false;
+
+    InitializeLogarithmTables();
+    FFTInitialize();
+
+    IsInitialized = true;
+    return true;
+}
+
+
+}} // namespace leopard::ff16

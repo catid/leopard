@@ -59,6 +59,7 @@
 # endif
 #endif
 
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -90,14 +91,13 @@ typedef enum LeopardResultT
     Leopard_Success           =  0, // Operation succeeded
 
     Leopard_TooMuchData       = -1, // Buffer counts are too high
-    Leopard_InvalidBlockSize  = -2, // Buffer size must be a multiple of 64 bytes
-    Leopard_InvalidInput      = -3, // A function parameter was invalid
-    Leopard_Platform          = -4, // Platform is unsupported
-    Leopard_OutOfMemory       = -5, // Out of memory error occurred
-    Leopard_Unexpected        = -6, // Unexpected error - Software bug?
+    Leopard_InvalidSize       = -2, // Buffer size must be a multiple of 64 bytes
+    Leopard_InvalidCounts     = -3, // Invalid counts provided
+    Leopard_InvalidInput      = -4, // A function parameter was invalid
+    Leopard_Platform          = -5, // Platform is unsupported
 } LeopardResult;
 
-// Results
+// Flags
 typedef enum LeopardFlagsT
 {
     LeopardFlags_Defaults      = 0, // Default settings
@@ -119,7 +119,6 @@ typedef enum LeopardFlagsT
 	Returns the work_count value to pass into leo_encode().
     Returns 0 on invalid input.
 */
-
 LEO_EXPORT unsigned leo_encode_work_count(
     unsigned original_count,
     unsigned recovery_count);
@@ -138,6 +137,8 @@ LEO_EXPORT unsigned leo_encode_work_count(
     flags:          Flags for encoding e.g. LeopardFlag_Multithreaded
 
     The sum of original_count + recovery_count must not exceed 65536.
+    The recovery_count <= original_count.
+
     The buffer_bytes must be a multiple of 64.
     Each buffer should have the same number of bytes.
     Even the last piece must be rounded up to the block size.
@@ -153,15 +154,11 @@ LEO_EXPORT unsigned leo_encode_work_count(
             ((uint64_t)total_bytes + original_count - 1) / original_count);
 
     Returns Leopard_Success on success.
-    The first set of recovery_count buffers in work_data will be the result.
-
-    Returns Leopard_TooMuchData if the data is too large.
-    Returns Leopard_InvalidBlockSize if the data is the wrong size.
-    Returns Leopard_InvalidInput on invalid input.
+    * The first set of recovery_count buffers in work_data will be the result.
     Returns other values on errors.
 */
 LEO_EXPORT LeopardResult leo_encode(
-    unsigned buffer_bytes,              // Number of bytes in each data buffer
+    uint64_t buffer_bytes,              // Number of bytes in each data buffer
     unsigned original_count,            // Number of original_data[] buffer pointers
     unsigned recovery_count,            // Number of recovery_data[] buffer pointers
     unsigned work_count,                // Number of work_data[] buffer pointers, from leo_encode_work_count()
@@ -183,7 +180,6 @@ LEO_EXPORT LeopardResult leo_encode(
 	Returns the work_count value to pass into leo_encode().
     Returns 0 on invalid input.
 */
-
 LEO_EXPORT unsigned leo_decode_work_count(
     unsigned original_count,
     unsigned recovery_count);
@@ -211,7 +207,7 @@ LEO_EXPORT unsigned leo_decode_work_count(
     Returns other values on errors.
 */
 LEO_EXPORT LeopardResult leo_decode(
-    unsigned buffer_bytes,              // Number of bytes in each data buffer
+    uint64_t buffer_bytes,              // Number of bytes in each data buffer
     unsigned original_count,            // Number of original_data[] buffer pointers
     unsigned recovery_count,            // Number of recovery_data[] buffer pointers
     unsigned work_count,                // Number of buffer pointers in work_data[]

@@ -9,7 +9,7 @@
     * Redistributions in binary form must reproduce the above copyright notice,
       this list of conditions and the following disclaimer in the documentation
       and/or other materials provided with the distribution.
-    * Neither the name of LHC-RS nor the names of its contributors may be
+    * Neither the name of Leopard-RS nor the names of its contributors may be
       used to endorse or promote products derived from this software without
       specific prior written permission.
 
@@ -27,12 +27,19 @@
 */
 
 #include "LeopardFF8.h"
+#include <string.h>
+
+// Define this to enable the optimized version of FWHT()
+#define LEO_FF8_FWHT_OPTIMIZED
 
 namespace leopard { namespace ff8 {
 
 
 //------------------------------------------------------------------------------
 // Datatypes and Constants
+
+// Modulus for field operations
+static const ffe_t kModulus = 255;
 
 // LFSR Polynomial that generates the field elements
 static const unsigned kPolynomial = 0x11D;
@@ -46,9 +53,6 @@ static const ffe_t kBasis[kBits] = {
 
 //------------------------------------------------------------------------------
 // Field Operations
-
-// Modulus for field operations
-static const ffe_t kModulus = 255;
 
 // z = x + y (mod kModulus)
 static inline ffe_t AddMod(const ffe_t a, const ffe_t b)
@@ -66,50 +70,6 @@ static inline ffe_t SubMod(const ffe_t a, const ffe_t b)
 
     // Partial reduction step, allowing for kModulus to be returned
     return static_cast<ffe_t>(dif + (dif >> kBits));
-}
-
-
-//------------------------------------------------------------------------------
-// Logarithm Tables
-
-static ffe_t LogLUT[kOrder];
-static ffe_t ExpLUT[kOrder];
-
-
-// Initialize LogLUT[], ExpLUT[]
-static void InitializeLogarithmTables()
-{
-    // LFSR table generation:
-
-    unsigned state = 1;
-    for (unsigned i = 0; i < kModulus; ++i)
-    {
-        ExpLUT[state] = static_cast<ffe_t>(i);
-        state <<= 1;
-        if (state >= kOrder)
-            state ^= kPolynomial;
-    }
-    ExpLUT[0] = kModulus;
-
-    // Conversion to chosen basis:
-
-    LogLUT[0] = 0;
-    for (unsigned i = 0; i < kBits; ++i)
-    {
-        const ffe_t basis = kBasis[i];
-        const unsigned width = static_cast<unsigned>(1UL << i);
-
-        for (unsigned j = 0; j < width; ++j)
-            LogLUT[j + width] = LogLUT[j] ^ basis;
-    }
-
-    for (unsigned i = 0; i < kOrder; ++i)
-        LogLUT[i] = ExpLUT[LogLUT[i]];
-
-    for (unsigned i = 0; i < kOrder; ++i)
-        ExpLUT[LogLUT[i]] = i;
-
-    ExpLUT[kModulus] = ExpLUT[0];
 }
 
 
@@ -248,234 +208,47 @@ void FWHT(ffe_t data[kOrder])
 
 
 //------------------------------------------------------------------------------
-// XOR Memory
+// Logarithm Tables
 
-void xor_mem(
-    void * LEO_RESTRICT vx, const void * LEO_RESTRICT vy,
-    unsigned bytes)
+static ffe_t LogLUT[kOrder];
+static ffe_t ExpLUT[kOrder];
+
+
+// Initialize LogLUT[], ExpLUT[]
+static void InitializeLogarithmTables()
 {
-#if defined(LEO_TRY_AVX2)
-    if (CpuHasAVX2)
-    {
-        LEO_M256 * LEO_RESTRICT x32 = reinterpret_cast<LEO_M256 *>(vx);
-        const LEO_M256 * LEO_RESTRICT y32 = reinterpret_cast<const LEO_M256 *>(vy);
-        do
-        {
-            const LEO_M256 x0 = _mm256_xor_si256(_mm256_loadu_si256(x32), _mm256_loadu_si256(y32));
-            const LEO_M256 x1 = _mm256_xor_si256(_mm256_loadu_si256(x32 + 1), _mm256_loadu_si256(y32 + 1));
-            const LEO_M256 x2 = _mm256_xor_si256(_mm256_loadu_si256(x32 + 2), _mm256_loadu_si256(y32 + 2));
-            const LEO_M256 x3 = _mm256_xor_si256(_mm256_loadu_si256(x32 + 3), _mm256_loadu_si256(y32 + 3));
-            _mm256_storeu_si256(x32, x0);
-            _mm256_storeu_si256(x32 + 1, x1);
-            _mm256_storeu_si256(x32 + 2, x2);
-            _mm256_storeu_si256(x32 + 3, x3);
-            bytes -= 128, x32 += 4, y32 += 4;
-        } while (bytes >= 128);
-        if (bytes > 0)
-        {
-            const LEO_M256 x0 = _mm256_xor_si256(_mm256_loadu_si256(x32), _mm256_loadu_si256(y32));
-            const LEO_M256 x1 = _mm256_xor_si256(_mm256_loadu_si256(x32 + 1), _mm256_loadu_si256(y32 + 1));
-            _mm256_storeu_si256(x32, x0);
-            _mm256_storeu_si256(x32 + 1, x1);
-        }
-        return;
-    }
-#endif // LEO_TRY_AVX2
-    LEO_M128 * LEO_RESTRICT x16 = reinterpret_cast<LEO_M128 *>(vx);
-    const LEO_M128 * LEO_RESTRICT y16 = reinterpret_cast<const LEO_M128 *>(vy);
-    do
-    {
-        const LEO_M128 x0 = _mm_xor_si128(_mm_loadu_si128(x16), _mm_loadu_si128(y16));
-        const LEO_M128 x1 = _mm_xor_si128(_mm_loadu_si128(x16 + 1), _mm_loadu_si128(y16 + 1));
-        const LEO_M128 x2 = _mm_xor_si128(_mm_loadu_si128(x16 + 2), _mm_loadu_si128(y16 + 2));
-        const LEO_M128 x3 = _mm_xor_si128(_mm_loadu_si128(x16 + 3), _mm_loadu_si128(y16 + 3));
-        _mm_storeu_si128(x16, x0);
-        _mm_storeu_si128(x16 + 1, x1);
-        _mm_storeu_si128(x16 + 2, x2);
-        _mm_storeu_si128(x16 + 3, x3);
-        bytes -= 64, x16 += 4, y16 += 4;
-    } while (bytes > 0);
-}
+    // LFSR table generation:
 
-void xor_mem2(
-    void * LEO_RESTRICT vx_0, const void * LEO_RESTRICT vy_0,
-    void * LEO_RESTRICT vx_1, const void * LEO_RESTRICT vy_1,
-    unsigned bytes)
-{
-#if defined(LEO_TRY_AVX2)
-    if (CpuHasAVX2)
+    unsigned state = 1;
+    for (unsigned i = 0; i < kModulus; ++i)
     {
-        LEO_M256 * LEO_RESTRICT       x32_0 = reinterpret_cast<LEO_M256 *>      (vx_0);
-        const LEO_M256 * LEO_RESTRICT y32_0 = reinterpret_cast<const LEO_M256 *>(vy_0);
-        LEO_M256 * LEO_RESTRICT       x32_1 = reinterpret_cast<LEO_M256 *>      (vx_1);
-        const LEO_M256 * LEO_RESTRICT y32_1 = reinterpret_cast<const LEO_M256 *>(vy_1);
-        do
-        {
-            const LEO_M256 x0_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0),     _mm256_loadu_si256(y32_0));
-            const LEO_M256 x1_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0 + 1), _mm256_loadu_si256(y32_0 + 1));
-            const LEO_M256 x2_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0 + 2), _mm256_loadu_si256(y32_0 + 2));
-            const LEO_M256 x3_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0 + 3), _mm256_loadu_si256(y32_0 + 3));
-            const LEO_M256 x0_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1),     _mm256_loadu_si256(y32_1));
-            const LEO_M256 x1_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1 + 1), _mm256_loadu_si256(y32_1 + 1));
-            const LEO_M256 x2_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1 + 2), _mm256_loadu_si256(y32_1 + 2));
-            const LEO_M256 x3_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1 + 3), _mm256_loadu_si256(y32_1 + 3));
-            _mm256_storeu_si256(x32_0,     x0_0);
-            _mm256_storeu_si256(x32_0 + 1, x1_0);
-            _mm256_storeu_si256(x32_0 + 2, x2_0);
-            _mm256_storeu_si256(x32_0 + 3, x3_0);
-            _mm256_storeu_si256(x32_1,     x0_1);
-            _mm256_storeu_si256(x32_1 + 1, x1_1);
-            _mm256_storeu_si256(x32_1 + 2, x2_1);
-            _mm256_storeu_si256(x32_1 + 3, x3_1);
-            x32_0 += 4, y32_0 += 4;
-            x32_1 += 4, y32_1 += 4;
-            bytes -= 128;
-        } while (bytes >= 128);
-        if (bytes > 0)
-        {
-            const LEO_M256 x0_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0),     _mm256_loadu_si256(y32_0));
-            const LEO_M256 x1_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0 + 1), _mm256_loadu_si256(y32_0 + 1));
-            const LEO_M256 x0_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1),     _mm256_loadu_si256(y32_1));
-            const LEO_M256 x1_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1 + 1), _mm256_loadu_si256(y32_1 + 1));
-            _mm256_storeu_si256(x32_0,     x0_0);
-            _mm256_storeu_si256(x32_0 + 1, x1_0);
-            _mm256_storeu_si256(x32_1,     x0_1);
-            _mm256_storeu_si256(x32_1 + 1, x1_1);
-        }
-        return;
+        ExpLUT[state] = static_cast<ffe_t>(i);
+        state <<= 1;
+        if (state >= kOrder)
+            state ^= kPolynomial;
     }
-#endif // LEO_TRY_AVX2
-    LEO_M128 * LEO_RESTRICT       x16_0 = reinterpret_cast<LEO_M128 *>      (vx_0);
-    const LEO_M128 * LEO_RESTRICT y16_0 = reinterpret_cast<const LEO_M128 *>(vy_0);
-    LEO_M128 * LEO_RESTRICT       x16_1 = reinterpret_cast<LEO_M128 *>      (vx_1);
-    const LEO_M128 * LEO_RESTRICT y16_1 = reinterpret_cast<const LEO_M128 *>(vy_1);
-    do
-    {
-        const LEO_M128 x0_0 = _mm_xor_si128(_mm_loadu_si128(x16_0),     _mm_loadu_si128(y16_0));
-        const LEO_M128 x1_0 = _mm_xor_si128(_mm_loadu_si128(x16_0 + 1), _mm_loadu_si128(y16_0 + 1));
-        const LEO_M128 x2_0 = _mm_xor_si128(_mm_loadu_si128(x16_0 + 2), _mm_loadu_si128(y16_0 + 2));
-        const LEO_M128 x3_0 = _mm_xor_si128(_mm_loadu_si128(x16_0 + 3), _mm_loadu_si128(y16_0 + 3));
-        const LEO_M128 x0_1 = _mm_xor_si128(_mm_loadu_si128(x16_1),     _mm_loadu_si128(y16_1));
-        const LEO_M128 x1_1 = _mm_xor_si128(_mm_loadu_si128(x16_1 + 1), _mm_loadu_si128(y16_1 + 1));
-        const LEO_M128 x2_1 = _mm_xor_si128(_mm_loadu_si128(x16_1 + 2), _mm_loadu_si128(y16_1 + 2));
-        const LEO_M128 x3_1 = _mm_xor_si128(_mm_loadu_si128(x16_1 + 3), _mm_loadu_si128(y16_1 + 3));
-        _mm_storeu_si128(x16_0,     x0_0);
-        _mm_storeu_si128(x16_0 + 1, x1_0);
-        _mm_storeu_si128(x16_0 + 2, x2_0);
-        _mm_storeu_si128(x16_0 + 3, x3_0);
-        _mm_storeu_si128(x16_1,     x0_1);
-        _mm_storeu_si128(x16_1 + 1, x1_1);
-        _mm_storeu_si128(x16_1 + 2, x2_1);
-        _mm_storeu_si128(x16_1 + 3, x3_1);
-        x16_0 += 4, y16_0 += 4;
-        x16_1 += 4, y16_1 += 4;
-        bytes -= 64;
-    } while (bytes > 0);
-}
+    ExpLUT[0] = kModulus;
 
-void xor_mem3(
-    void * LEO_RESTRICT vx_0, const void * LEO_RESTRICT vy_0,
-    void * LEO_RESTRICT vx_1, const void * LEO_RESTRICT vy_1,
-    void * LEO_RESTRICT vx_2, const void * LEO_RESTRICT vy_2,
-    unsigned bytes)
-{
-#if defined(LEO_TRY_AVX2)
-    if (CpuHasAVX2)
+    // Conversion to chosen basis:
+
+    LogLUT[0] = 0;
+    for (unsigned i = 0; i < kBits; ++i)
     {
-        LEO_M256 * LEO_RESTRICT       x32_0 = reinterpret_cast<LEO_M256 *>      (vx_0);
-        const LEO_M256 * LEO_RESTRICT y32_0 = reinterpret_cast<const LEO_M256 *>(vy_0);
-        LEO_M256 * LEO_RESTRICT       x32_1 = reinterpret_cast<LEO_M256 *>      (vx_1);
-        const LEO_M256 * LEO_RESTRICT y32_1 = reinterpret_cast<const LEO_M256 *>(vy_1);
-        LEO_M256 * LEO_RESTRICT       x32_2 = reinterpret_cast<LEO_M256 *>      (vx_2);
-        const LEO_M256 * LEO_RESTRICT y32_2 = reinterpret_cast<const LEO_M256 *>(vy_2);
-        do
-        {
-            const LEO_M256 x0_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0),     _mm256_loadu_si256(y32_0));
-            const LEO_M256 x1_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0 + 1), _mm256_loadu_si256(y32_0 + 1));
-            const LEO_M256 x2_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0 + 2), _mm256_loadu_si256(y32_0 + 2));
-            const LEO_M256 x3_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0 + 3), _mm256_loadu_si256(y32_0 + 3));
-            const LEO_M256 x0_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1),     _mm256_loadu_si256(y32_1));
-            const LEO_M256 x1_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1 + 1), _mm256_loadu_si256(y32_1 + 1));
-            const LEO_M256 x2_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1 + 2), _mm256_loadu_si256(y32_1 + 2));
-            const LEO_M256 x3_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1 + 3), _mm256_loadu_si256(y32_1 + 3));
-            const LEO_M256 x0_2 = _mm256_xor_si256(_mm256_loadu_si256(x32_2),     _mm256_loadu_si256(y32_2));
-            const LEO_M256 x1_2 = _mm256_xor_si256(_mm256_loadu_si256(x32_2 + 1), _mm256_loadu_si256(y32_2 + 1));
-            const LEO_M256 x2_2 = _mm256_xor_si256(_mm256_loadu_si256(x32_2 + 2), _mm256_loadu_si256(y32_2 + 2));
-            const LEO_M256 x3_2 = _mm256_xor_si256(_mm256_loadu_si256(x32_2 + 3), _mm256_loadu_si256(y32_2 + 3));
-            _mm256_storeu_si256(x32_0,     x0_0);
-            _mm256_storeu_si256(x32_0 + 1, x1_0);
-            _mm256_storeu_si256(x32_0 + 2, x2_0);
-            _mm256_storeu_si256(x32_0 + 3, x3_0);
-            _mm256_storeu_si256(x32_1,     x0_1);
-            _mm256_storeu_si256(x32_1 + 1, x1_1);
-            _mm256_storeu_si256(x32_1 + 2, x2_1);
-            _mm256_storeu_si256(x32_1 + 3, x3_1);
-            _mm256_storeu_si256(x32_2,     x0_2);
-            _mm256_storeu_si256(x32_2 + 1, x1_2);
-            _mm256_storeu_si256(x32_2 + 2, x2_2);
-            _mm256_storeu_si256(x32_2 + 3, x3_2);
-            x32_0 += 4, y32_0 += 4;
-            x32_1 += 4, y32_1 += 4;
-            x32_2 += 4, y32_2 += 4;
-            bytes -= 128;
-        } while (bytes >= 128);
-        if (bytes > 0)
-        {
-            const LEO_M256 x0_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0),     _mm256_loadu_si256(y32_0));
-            const LEO_M256 x1_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0 + 1), _mm256_loadu_si256(y32_0 + 1));
-            const LEO_M256 x0_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1),     _mm256_loadu_si256(y32_1));
-            const LEO_M256 x1_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1 + 1), _mm256_loadu_si256(y32_1 + 1));
-            const LEO_M256 x0_2 = _mm256_xor_si256(_mm256_loadu_si256(x32_2),     _mm256_loadu_si256(y32_2));
-            const LEO_M256 x1_2 = _mm256_xor_si256(_mm256_loadu_si256(x32_2 + 1), _mm256_loadu_si256(y32_2 + 1));
-            _mm256_storeu_si256(x32_0,     x0_0);
-            _mm256_storeu_si256(x32_0 + 1, x1_0);
-            _mm256_storeu_si256(x32_1,     x0_1);
-            _mm256_storeu_si256(x32_1 + 1, x1_1);
-            _mm256_storeu_si256(x32_2,     x0_2);
-            _mm256_storeu_si256(x32_2 + 1, x1_2);
-        }
-        return;
+        const ffe_t basis = kBasis[i];
+        const unsigned width = static_cast<unsigned>(1UL << i);
+
+        for (unsigned j = 0; j < width; ++j)
+            LogLUT[j + width] = LogLUT[j] ^ basis;
     }
-#endif // LEO_TRY_AVX2
-    LEO_M128 * LEO_RESTRICT       x16_0 = reinterpret_cast<LEO_M128 *>      (vx_0);
-    const LEO_M128 * LEO_RESTRICT y16_0 = reinterpret_cast<const LEO_M128 *>(vy_0);
-    LEO_M128 * LEO_RESTRICT       x16_1 = reinterpret_cast<LEO_M128 *>      (vx_1);
-    const LEO_M128 * LEO_RESTRICT y16_1 = reinterpret_cast<const LEO_M128 *>(vy_1);
-    LEO_M128 * LEO_RESTRICT       x16_2 = reinterpret_cast<LEO_M128 *>      (vx_2);
-    const LEO_M128 * LEO_RESTRICT y16_2 = reinterpret_cast<const LEO_M128 *>(vy_2);
-    do
-    {
-        const LEO_M128 x0_0 = _mm_xor_si128(_mm_loadu_si128(x16_0),     _mm_loadu_si128(y16_0));
-        const LEO_M128 x1_0 = _mm_xor_si128(_mm_loadu_si128(x16_0 + 1), _mm_loadu_si128(y16_0 + 1));
-        const LEO_M128 x2_0 = _mm_xor_si128(_mm_loadu_si128(x16_0 + 2), _mm_loadu_si128(y16_0 + 2));
-        const LEO_M128 x3_0 = _mm_xor_si128(_mm_loadu_si128(x16_0 + 3), _mm_loadu_si128(y16_0 + 3));
-        const LEO_M128 x0_1 = _mm_xor_si128(_mm_loadu_si128(x16_1),     _mm_loadu_si128(y16_1));
-        const LEO_M128 x1_1 = _mm_xor_si128(_mm_loadu_si128(x16_1 + 1), _mm_loadu_si128(y16_1 + 1));
-        const LEO_M128 x2_1 = _mm_xor_si128(_mm_loadu_si128(x16_1 + 2), _mm_loadu_si128(y16_1 + 2));
-        const LEO_M128 x3_1 = _mm_xor_si128(_mm_loadu_si128(x16_1 + 3), _mm_loadu_si128(y16_1 + 3));
-        const LEO_M128 x0_2 = _mm_xor_si128(_mm_loadu_si128(x16_2),     _mm_loadu_si128(y16_2));
-        const LEO_M128 x1_2 = _mm_xor_si128(_mm_loadu_si128(x16_2 + 1), _mm_loadu_si128(y16_2 + 1));
-        const LEO_M128 x2_2 = _mm_xor_si128(_mm_loadu_si128(x16_2 + 2), _mm_loadu_si128(y16_2 + 2));
-        const LEO_M128 x3_2 = _mm_xor_si128(_mm_loadu_si128(x16_2 + 3), _mm_loadu_si128(y16_2 + 3));
-        _mm_storeu_si128(x16_0,     x0_0);
-        _mm_storeu_si128(x16_0 + 1, x1_0);
-        _mm_storeu_si128(x16_0 + 2, x2_0);
-        _mm_storeu_si128(x16_0 + 3, x3_0);
-        _mm_storeu_si128(x16_1,     x0_1);
-        _mm_storeu_si128(x16_1 + 1, x1_1);
-        _mm_storeu_si128(x16_1 + 2, x2_1);
-        _mm_storeu_si128(x16_1 + 3, x3_1);
-        _mm_storeu_si128(x16_2,     x0_2);
-        _mm_storeu_si128(x16_2 + 1, x1_2);
-        _mm_storeu_si128(x16_2 + 2, x2_2);
-        _mm_storeu_si128(x16_2 + 3, x3_2);
-        x16_0 += 4, y16_0 += 4;
-        x16_1 += 4, y16_1 += 4;
-        x16_2 += 4, y16_2 += 4;
-        bytes -= 64;
-    } while (bytes > 0);
-}
 
+    for (unsigned i = 0; i < kOrder; ++i)
+        LogLUT[i] = ExpLUT[LogLUT[i]];
+
+    for (unsigned i = 0; i < kOrder; ++i)
+        ExpLUT[LogLUT[i]] = i;
+
+    ExpLUT[kModulus] = ExpLUT[0];
+}
 
 //------------------------------------------------------------------------------
 // Multiplies
@@ -485,12 +258,12 @@ void xor_mem3(
 struct {
     LEO_ALIGNED LEO_M128 Lo[256];
     LEO_ALIGNED LEO_M128 Hi[256];
-} Multiply128LUT;
+} static Multiply128LUT;
 #if defined(LEO_TRY_AVX2)
 struct {
     LEO_ALIGNED LEO_M256 Lo[256];
     LEO_ALIGNED LEO_M256 Hi[256];
-} Multiply256LUT;
+} static Multiply256LUT;
 #endif // LEO_TRY_AVX2
 
 // Returns a * b
@@ -501,14 +274,19 @@ static ffe_t FFEMultiply(ffe_t a, ffe_t b)
     return ExpLUT[AddMod(LogLUT[a], LogLUT[b])];
 }
 
+// Returns a * Log(b)
+static ffe_t FFEMultiplyLog(ffe_t a, ffe_t log_b)
+{
+    if (a == 0)
+        return 0;
+    return ExpLUT[AddMod(LogLUT[a], b)];
+}
+
 bool InitializeMultiplyTables()
 {
-    // Reuse aligned self test buffers to load table data
-    uint8_t* lo = m_SelfTestBuffers.A;
-    uint8_t* hi = m_SelfTestBuffers.B;
-
     for (int y = 0; y < 256; ++y)
     {
+        uint8_t lo[16], hi[16];
         for (unsigned char x = 0; x < 16; ++x)
         {
             lo[x] = FFEMultiply(x,      static_cast<uint8_t>(y));
@@ -517,15 +295,17 @@ bool InitializeMultiplyTables()
 
         const LEO_M128 table_lo = _mm_loadu_si128((LEO_M128*)lo);
         const LEO_M128 table_hi = _mm_loadu_si128((LEO_M128*)hi);
+
         _mm_storeu_si128(Multiply128LUT.Lo + y, table_lo);
         _mm_storeu_si128(Multiply128LUT.Hi + y, table_hi);
+
 #if defined(LEO_TRY_AVX2)
         if (CpuHasAVX2)
         {
-            const LEO_M256 table_lo2 = _mm256_broadcastsi128_si256(table_lo);
-            const LEO_M256 table_hi2 = _mm256_broadcastsi128_si256(table_hi);
-            _mm256_storeu_si256(Multiply256LUT.Lo + y, table_lo2);
-            _mm256_storeu_si256(Multiply256LUT.Hi + y, table_hi2);
+            _mm256_storeu_si256(Multiply256LUT.Lo + y,
+                _mm256_broadcastsi128_si256(table_lo));
+            _mm256_storeu_si256(Multiply256LUT.Hi + y,
+                _mm256_broadcastsi128_si256(table_hi));
         }
 #endif // LEO_TRY_AVX2
     }
@@ -536,7 +316,7 @@ bool InitializeMultiplyTables()
 // vx[] = vy[] * m
 void mul_mem_set(
     void * LEO_RESTRICT vx, const void * LEO_RESTRICT vy,
-    ffe_t m, unsigned bytes)
+    ffe_t m, uint64_t bytes)
 {
     if (m <= 1)
     {
@@ -633,7 +413,7 @@ void mul_mem_set(
 void mul_mem2_inplace(
     void * LEO_RESTRICT vx_0,
     void * LEO_RESTRICT vx_1,
-    ffe_t m, unsigned bytes)
+    ffe_t m, uint64_t bytes)
 {
     if (m <= 1)
     {
@@ -759,28 +539,28 @@ void mul_mem2_inplace(
 // FFT Operations
 
 // x[] ^= y[] * m, y[] ^= x[]
-void mul_fft(
+void fft_butterfly(
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
-    ffe_t m, unsigned bytes)
+    ffe_t m, uint64_t bytes)
 {
 
 }
 
 // For i = {0, 1}: x_i[] ^= y_i[] * m, y_i[] ^= x_i[]
-void mul_fft2(
+void fft_butterfly2(
     void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
     void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
-    ffe_t m, unsigned bytes)
+    ffe_t m, uint64_t bytes)
 {
 
 }
 
 // For i = {0, 1, 2}: x_i[] ^= y_i[] * m, y_i[] ^= x_i[]
-void mul_fft3(
+void fft_butterfly3(
     void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
     void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
     void * LEO_RESTRICT x_2, void * LEO_RESTRICT y_2,
-    ffe_t m, unsigned bytes)
+    ffe_t m, uint64_t bytes)
 {
 
 }
@@ -790,30 +570,345 @@ void mul_fft3(
 // IFFT Operations
 
 // y[] ^= x[], x[] ^= y[] * m
-void mul_ifft(
+void ifft_butterfly(
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
-    ffe_t m, unsigned bytes)
+    ffe_t m, uint64_t bytes)
 {
 
 }
 
 // For i = {0, 1}: y_i[] ^= x_i[], x_i[] ^= y_i[] * m
-void mul_ifft2(
+void ifft_butterfly2(
     void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
     void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
-    ffe_t m, unsigned bytes)
+    ffe_t m, uint64_t bytes)
 {
 
 }
 
 // For i = {0, 1, 2}: y_i[] ^= x_i[], x_i[] ^= y_i[] * m
-void mul_ifft3(
+void ifft_butterfly3(
     void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
     void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
     void * LEO_RESTRICT x_2, void * LEO_RESTRICT y_2,
-    ffe_t m, unsigned bytes)
+    ffe_t m, uint64_t bytes)
 {
 
+}
+
+
+//------------------------------------------------------------------------------
+// FFT
+
+static ffe_t FFTSkew[kFieldModulus]; // twisted factors used in FFT
+static ffe_t LogWalsh[kOrder]; // factors used in the evaluation of the error locator polynomial
+
+void FFTInitialize()
+{
+    ffe_t temp[kBits - 1];
+
+    for (unsigned i = 1; i < kBits; ++i)
+        temp[i - 1] = (ffe_t)((unsigned)1 << i);
+
+    for (unsigned m = 0; m < (kBits - 1); ++m)
+    {
+        const unsigned step = (unsigned)1 << (m + 1);
+
+        FFTSkew[((unsigned)1 << m) - 1] = 0;
+
+        for (unsigned i = m; i < (kBits - 1); ++i)
+        {
+            const unsigned s = ((unsigned)1 << (i + 1));
+
+            for (unsigned j = ((unsigned)1 << m) - 1; j < s; j += step)
+                FFTSkew[j + s] = FFTSkew[j] ^ temp[i];
+        }
+
+        // TBD: This can be cleaned up
+        temp[m] = kFieldModulus - LogLUT[FFEMultiply(temp[m], temp[m] ^ 1)];
+
+        for (unsigned i = m + 1; i < (kBits - 1); ++i)
+            temp[i] = FFEMultiplyLog(temp[i], (LogLUT[temp[i] ^ 1] + temp[m]) % kFieldModulus);
+    }
+
+    for (unsigned i = 0; i < kOrder; ++i)
+        FFTSkew[i] = LogLUT[FFTSkew[i]];
+
+    // Precalculate FWHT(Log[i]):
+
+    for (unsigned i = 0; i < kOrder; ++i)
+        LogWalsh[i] = LogLUT[i];
+    LogWalsh[0] = 0;
+    FWHT(LogWalsh, kBits);
+}
+
+
+//------------------------------------------------------------------------------
+// Encode
+
+void Encode(
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned m,
+    void* const * const data,
+    void** work)
+{
+    // work <- data
+
+    // FIXME: Unroll first loop to eliminate this
+    for (unsigned i = 0; i < m; ++i)
+        memcpy(work[i], data[i], buffer_bytes);
+
+    // work <- IFFT(data, m, m)
+
+    for (unsigned width = 1; width < m; width <<= 1)
+    {
+        for (unsigned j = width; j < m; j += (width << 1))
+        {
+            const ffe_t skew = FFTSkew[j + m - 1];
+
+            if (skew != kFieldModulus)
+            {
+                for (unsigned i = j - width; i < j; ++i)
+                    ifft_butterfly(work[i], work[i + width], skew, buffer_bytes);
+            }
+            else
+            {
+                for (unsigned i = j - width; i < j; ++i)
+                    xor_mem(work[i + width], work[i], buffer_bytes);
+            }
+        }
+    }
+
+    for (unsigned i = m; i + m <= original_count; i += m)
+    {
+        // temp <- data + i
+
+        void** temp = work + m;
+
+        // FIXME: Unroll first loop to eliminate this
+        for (unsigned j = 0; j < m; ++j)
+            memcpy(temp[j], data[j], buffer_bytes);
+
+        // temp <- IFFT(temp, m, m + i)
+
+        for (unsigned width = 1; width < m; width <<= 1)
+        {
+            for (unsigned j = width; j < m; j += (width << 1))
+            {
+                const ffe_t skew = FFTSkew[j + m + i - 1];
+
+                if (skew != kFieldModulus)
+                {
+                    for (unsigned k = j - width; k < j; ++k)
+                        ifft_butterfly(temp[k], temp[k + width], skew, buffer_bytes);
+                }
+                else
+                {
+                    for (unsigned k = j - width; k < j; ++k)
+                        xor_mem(temp[k + width], temp[k], buffer_bytes);
+                }
+            }
+        }
+
+        // work <- work XOR temp
+
+        // FIXME: Unroll last loop to eliminate this
+        for (unsigned j = 0; j < m; ++j)
+            xor_mem(work[j], temp[j], buffer_bytes);
+    }
+
+    const unsigned last_count = original_count % m;
+    if (last_count != 0)
+    {
+        const unsigned i = original_count - last_count;
+
+        // temp <- data + i
+
+        void** temp = work + m;
+
+        for (unsigned j = 0; j < last_count; ++j)
+            memcpy(temp[j], data[j], buffer_bytes);
+        for (unsigned j = last_count; j < m; ++j)
+            memset(temp[j], 0, buffer_bytes);
+
+        // temp <- IFFT(temp, m, m + i)
+
+        for (unsigned width = 1, shift = 1; width < m; width <<= 1, ++shift)
+        {
+            // Calculate stop considering that the right is all zeroes
+            const unsigned stop = ((last_count + width - 1) >> shift) << shift;
+
+            for (unsigned j = width; j < stop; j += (width << 1))
+            {
+                const ffe_t skew = FFTSkew[j + m + i - 1];
+
+                if (skew != kFieldModulus)
+                {
+                    for (unsigned k = j - width; k < j; ++k)
+                        ifft_butterfly(temp[k], temp[k + width], skew, buffer_bytes);
+                }
+                else
+                {
+                    for (unsigned k = j - width; k < j; ++k)
+                        xor_mem(temp[k + width], temp[k], buffer_bytes);
+                }
+            }
+        }
+
+        // work <- work XOR temp
+
+        // FIXME: Unroll last loop to eliminate this
+        for (unsigned j = 0; j < m; ++j)
+            xor_mem(work[j], temp[j], buffer_bytes);
+    }
+
+    // work <- FFT(work, m, 0)
+
+    for (unsigned width = (m >> 1); width > 0; width >>= 1)
+    {
+        const ffe_t* skewLUT = FFTSkew + width - 1;
+        const unsigned range = width << 1;
+
+        for (unsigned j = 0; j < m; j += range)
+        {
+            const ffe_t skew = skewLUT[j];
+
+            if (skew != kFieldModulus)
+            {
+                for (unsigned k = j, count = j + width; k < count; ++k)
+                    fft_butterfly(data[k], data[k + width], skew, buffer_bytes);
+            }
+            else
+            {
+                for (unsigned k = j, count = j + width; k < count; ++k)
+                    xor_mem(work[k + width], work[k], buffer_bytes);
+            }
+        }
+    }
+}
+
+
+//------------------------------------------------------------------------------
+// Decode
+
+void Decode(
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned m, // NextPow2(recovery_count)
+    unsigned n, // NextPow2(m + original_count) = work_count
+    void* const * const original, // original_count entries
+    void* const * const recovery, // recovery_count entries
+    void** work) // n entries
+{
+    // Fill in error locations
+
+    ffe_t ErrorLocations[kOrder];
+    for (unsigned i = 0; i < recovery_count; ++i)
+        ErrorLocations[i] = recovery[i] ? 0 : 1;
+    for (unsigned i = recovery_count; i < m; ++i)
+        ErrorLocations[i] = 1;
+    for (unsigned i = 0; i < original_count; ++i)
+        ErrorLocations[i + m] = original[i] ? 0 : 1;
+    memset(ErrorLocations + m + original_count, 0, (n - original_count - m) * sizeof(ffe_t));
+
+    // Evaluate error locator polynomial
+
+    FWHT(ErrorLocations, kBits);
+
+    for (unsigned i = 0; i < kOrder; ++i)
+        ErrorLocations[i] = ((unsigned)ErrorLocations[i] * (unsigned)LogWalsh[i]) % kFieldModulus;
+
+    FWHT(ErrorLocations, kBits);
+
+    // work <- recovery data
+
+    for (unsigned i = 0; i < recovery_count; ++i)
+    {
+        if (recovery[i])
+            mul_mem_set(work[i], recovery[i], ErrorLocations[i], buffer_bytes);
+        else
+            memset(work[i], 0, buffer_bytes);
+    }
+    for (unsigned i = recovery_count; i < m; ++i)
+        memset(work[i], 0, buffer_bytes);
+
+    // work <- original data
+
+    for (unsigned i = 0; i < original_count; ++i)
+    {
+        if (original[i])
+            mul_mem_set(work[m + i], original[i], ErrorLocations[m + i], buffer_bytes);
+        else
+            memset(work[m + i], 0, buffer_bytes);
+    }
+    for (unsigned i = m + original_count; i < n; ++i)
+        memset(work[i], 0, buffer_bytes);
+
+    // work <- IFFT(work, n, 0)
+
+    for (unsigned width = 1; width < n; width <<= 1)
+    {
+        for (unsigned j = width; j < n; j += (width << 1))
+        {
+            const ffe_t skew = FFTSkew[j - 1];
+
+            if (skew != kFieldModulus)
+            {
+                for (unsigned i = j - width; i < j; ++i)
+                    ifft_butterfly(work[i], work[i + width], skew, buffer_bytes);
+            }
+            else
+            {
+                for (unsigned i = j - width; i < j; ++i)
+                    xor_mem(work[i + width], work[i], buffer_bytes);
+            }
+        }
+    }
+
+    // work <- FormalDerivative(work, n)
+
+    for (unsigned i = 1; i < n; ++i)
+    {
+        const unsigned width = ((i ^ (i - 1)) + 1) >> 1;
+
+        // If a large number of values are being XORed:
+        for (unsigned j = i - width; j < i; ++j)
+            xor_mem(work[j], work[j + width], buffer_bytes);
+    }
+
+    // work <- FFT(work, n, 0) truncated to m + original_count
+
+    const unsigned output_count = m + original_count;
+    for (unsigned width = (n >> 1); width > 0; width >>= 1)
+    {
+        const ffe_t* skewLUT = FFTSkew + width - 1;
+        const unsigned range = width << 1;
+
+        for (unsigned j = (m < range) ? 0 : m; j < output_count; j += range)
+        {
+            const ffe_t skew = skewLUT[j];
+
+            if (skew != kFieldModulus)
+            {
+                for (unsigned i = j; i < j + width; ++i)
+                    fft_butterfly(work[i], work[i + width], skew, buffer_bytes);
+            }
+            else
+            {
+                for (unsigned i = j; i < j + width; ++i)
+                    xor_mem(work[i + width], work[i], buffer_bytes);
+            }
+        }
+    }
+
+    // Reveal erasures
+
+    for (unsigned i = 0; i < original_count; ++i)
+        if (!original[i])
+            mul_mem_set(work[i], work[i + m], kFieldModulus - ErrorLocations[i], buffer_bytes);
 }
 
 
@@ -831,6 +926,7 @@ bool Initialize()
         return false;
 
     InitializeLogarithmTables();
+    FFTInitialize();
 
     IsInitialized = true;
     return true;

@@ -30,42 +30,20 @@
 
 /*
     TODO:
-    + Refactor software
-        + I think it should be split up into several C++ modules
-    + Replace GFSymbol with a file data pointer
-    + New 16-bit Muladd inner loops
-        + Class to contain the (large) muladd tables
-    + Preliminary benchmarks for large data!
     + New 8-bit Muladd inner loops
-    + Benchmarks for smaller data!
-    + Write detailed comments for all the routines
-    + Look into getting EncodeL working so we can support smaller data (Ask Lin)
-    + Look into using k instead of k2 to speed up decoder (Ask Lin)
-    + Avoid performing FFT/IFFT intermediate calculations we're not going to use
-    + Benchmarks, fun!
+        + Benchmarks for smaller data!
+    + New 16-bit Muladd inner loops
+        + Benchmarks for large data!
+    + Use parallel row ops
     + Add multi-threading to split up long parallelizable calculations
-    + Final benchmarks!
-    + Finish up documentation
+        + Write detailed comments for all the routines
+        + Final benchmarks!
     + Release version 1
+        + Finish up documentation
 
-
-    Muladd implementation notes:
-
-    Specialize for 1-3 rows at a time since often times we're multiplying by
-    the same (skew) value repeatedly, as the ISA-L library does here:
-
-    https://github.com/01org/isa-l/blob/master/erasure_code/gf_3vect_mad_avx.asm#L258
-
-    Except we should be doing it for 16-bit Galois Field.
-    To implement that use the ALTMAP trick from Jerasure:
-
-    http://lab.jerasure.org/jerasure/gf-complete/blob/master/src/gf_w16.c#L1140
-
-    Except we should also support AVX2 since that is a 40% perf boost, so put
-    the high and low bytes 32 bytes instead of 16 bytes apart.
-
-    Also I think we should go ahead and precompute the multiply tables since
-    it avoids a bunch of memory lookups for each muladd, and only costs 8 MB.
+    TBD:
+    + Look into getting EncodeL working so we can support smaller data (Ask Lin)
+    + Look into using FFT_m instead of FFT_n for decoder
 */
 
 #include <stdint.h>
@@ -189,6 +167,59 @@ extern bool CpuHasAVX2;
 // Does CPU support SSSE3?
 extern bool CpuHasSSSE3;
 #endif // LEO_TARGET_MOBILE
+
+
+//------------------------------------------------------------------------------
+// Portable Intrinsics
+
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
+
+// Returns highest bit index 0..31 where the first non-zero bit is found
+// Precondition: x != 0
+LEO_FORCE_INLINE unsigned LastNonzeroBit32(unsigned x)
+{
+#ifdef _MSC_VER
+    unsigned long index;
+    // Note: Ignoring result because x != 0
+    _BitScanReverse(&index, (uint32_t)x);
+    return (unsigned)index;
+#else
+    // Note: Ignoring return value of 0 because x != 0
+    return 31 - (unsigned)__builtin_clzl(x);
+#endif
+}
+
+// Returns next power of two at or above given value
+LEO_FORCE_INLINE unsigned NextPow2(unsigned n)
+{
+    return 2UL << LastNonzeroBit32(n - 1);
+}
+
+
+//------------------------------------------------------------------------------
+// XOR Memory
+//
+// This works for both 8-bit and 16-bit finite fields
+
+// x[] ^= y[]
+void xor_mem(
+    void * LEO_RESTRICT x, const void * LEO_RESTRICT y,
+    unsigned bytes);
+
+// For i = {0, 1}: x_i[] ^= x_i[]
+void xor_mem2(
+    void * LEO_RESTRICT x_0, const void * LEO_RESTRICT y_0,
+    void * LEO_RESTRICT x_1, const void * LEO_RESTRICT y_1,
+    unsigned bytes);
+
+// For i = {0, 1, 2}: x_i[] ^= x_i[]
+void xor_mem3(
+    void * LEO_RESTRICT x_0, const void * LEO_RESTRICT y_0,
+    void * LEO_RESTRICT x_1, const void * LEO_RESTRICT y_1,
+    void * LEO_RESTRICT x_2, const void * LEO_RESTRICT y_2,
+    unsigned bytes);
 
 
 } // namespace leopard

@@ -1,11 +1,13 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 15
-VisualStudioVersion = 15.0.26127.3
+# Visual Studio 14
+VisualStudioVersion = 14.0.25420.1
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Leopard", "Leopard.vcxproj", "{32176592-2F30-4BD5-B645-EB11C8D3453E}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "LeopardBenchmark", "..\tests\proj\Benchmark.vcxproj", "{97FCA15F-EAF3-4F1A-AFF8-83E693DA9D45}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "LeopardExperiments", "..\tests\proj\Experiments.vcxproj", "{97FCA15F-EAF3-4F1A-AFF8-83E693DA9D65}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -31,6 +33,14 @@ Global
 		{97FCA15F-EAF3-4F1A-AFF8-83E693DA9D45}.Release|Win32.Build.0 = Release|Win32
 		{97FCA15F-EAF3-4F1A-AFF8-83E693DA9D45}.Release|x64.ActiveCfg = Release|x64
 		{97FCA15F-EAF3-4F1A-AFF8-83E693DA9D45}.Release|x64.Build.0 = Release|x64
+		{97FCA15F-EAF3-4F1A-AFF8-83E693DA9D65}.Debug|Win32.ActiveCfg = Debug|Win32
+		{97FCA15F-EAF3-4F1A-AFF8-83E693DA9D65}.Debug|Win32.Build.0 = Debug|Win32
+		{97FCA15F-EAF3-4F1A-AFF8-83E693DA9D65}.Debug|x64.ActiveCfg = Debug|x64
+		{97FCA15F-EAF3-4F1A-AFF8-83E693DA9D65}.Debug|x64.Build.0 = Debug|x64
+		{97FCA15F-EAF3-4F1A-AFF8-83E693DA9D65}.Release|Win32.ActiveCfg = Release|Win32
+		{97FCA15F-EAF3-4F1A-AFF8-83E693DA9D65}.Release|Win32.Build.0 = Release|Win32
+		{97FCA15F-EAF3-4F1A-AFF8-83E693DA9D65}.Release|x64.ActiveCfg = Release|x64
+		{97FCA15F-EAF3-4F1A-AFF8-83E693DA9D65}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

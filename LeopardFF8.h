@@ -56,9 +56,6 @@ static const unsigned kOrder = 256;
 //------------------------------------------------------------------------------
 // Fast Walsh-Hadamard Transform (FWHT) (mod kModulus)
 
-// Define this to enable the optimized version of FWHT()
-#define LEO_FF8_FWHT_OPTIMIZED
-
 // Transform for a variable number of bits (up to kOrder)
 void FWHT(ffe_t* data, const unsigned bits);
 
@@ -67,84 +64,88 @@ void FWHT(ffe_t data[kOrder]);
 
 
 //------------------------------------------------------------------------------
-// XOR Memory
-
-// x[] ^= y[]
-void xor_mem(
-    void * LEO_RESTRICT x, const void * LEO_RESTRICT y,
-    unsigned bytes);
-
-// For i = {0, 1}: x_i[] ^= x_i[]
-void xor_mem2(
-    void * LEO_RESTRICT x_0, const void * LEO_RESTRICT y_0,
-    void * LEO_RESTRICT x_1, const void * LEO_RESTRICT y_1,
-    unsigned bytes);
-
-// For i = {0, 1, 2}: x_i[] ^= x_i[]
-void xor_mem3(
-    void * LEO_RESTRICT x_0, const void * LEO_RESTRICT y_0,
-    void * LEO_RESTRICT x_1, const void * LEO_RESTRICT y_1,
-    void * LEO_RESTRICT x_2, const void * LEO_RESTRICT y_2,
-    unsigned bytes);
-
-
-//------------------------------------------------------------------------------
 // Multiplies
 
 // x[] = y[] * m
 void mul_mem_set(
     void * LEO_RESTRICT x, const void * LEO_RESTRICT y,
-    ffe_t m, unsigned bytes);
+    ffe_t m, uint64_t bytes);
 
 // For i = {0, 1}: x_i[] *= m
 void mul_mem2_inplace(
     void * LEO_RESTRICT x_0,
     void * LEO_RESTRICT x_1,
-    ffe_t m, unsigned bytes);
+    ffe_t m, uint64_t bytes);
 
 
 //------------------------------------------------------------------------------
 // FFT Operations
 
 // x[] ^= y[] * m, y[] ^= x[]
-void mul_fft(
+void fft_butterfly(
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
-    ffe_t m, unsigned bytes);
+    ffe_t m, uint64_t bytes);
 
 // For i = {0, 1}: x_i[] ^= y_i[] * m, y_i[] ^= x_i[]
-void mul_fft2(
+void fft_butterfly2(
     void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
     void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
-    ffe_t m, unsigned bytes);
+    ffe_t m, uint64_t bytes);
 
 // For i = {0, 1, 2}: x_i[] ^= y_i[] * m, y_i[] ^= x_i[]
-void mul_fft3(
+void fft_butterfly3(
     void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
     void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
     void * LEO_RESTRICT x_2, void * LEO_RESTRICT y_2,
-    ffe_t m, unsigned bytes);
+    ffe_t m, uint64_t bytes);
 
 
 //------------------------------------------------------------------------------
 // IFFT Operations
 
 // y[] ^= x[], x[] ^= y[] * m
-void mul_ifft(
+void ifft_butterfly(
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
-    ffe_t m, unsigned bytes);
+    ffe_t m, uint64_t bytes);
 
 // For i = {0, 1}: y_i[] ^= x_i[], x_i[] ^= y_i[] * m
-void mul_ifft2(
+void ifft_butterfly2(
     void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
     void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
-    ffe_t m, unsigned bytes);
+    ffe_t m, uint64_t bytes);
 
 // For i = {0, 1, 2}: y_i[] ^= x_i[], x_i[] ^= y_i[] * m
-void mul_ifft3(
+void ifft_butterfly3(
     void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
     void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
     void * LEO_RESTRICT x_2, void * LEO_RESTRICT y_2,
-    ffe_t m, unsigned bytes);
+    ffe_t m, uint64_t bytes);
+
+
+//------------------------------------------------------------------------------
+// Encode
+
+void Encode(
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned m, // = NextPow2(recovery_count) * 2 = work_count
+    void* const * const data,
+    void** work); // Size of GetEncodeWorkCount()
+
+
+//------------------------------------------------------------------------------
+// Decode
+
+void Decode(
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned m, // = NextPow2(recovery_count)
+    unsigned n, // = NextPow2(m + original_count) = work_count
+    void* const * const original, // original_count entries
+    void* const * const recovery, // recovery_count entries
+    void** work); // n entries
 
 
 //------------------------------------------------------------------------------

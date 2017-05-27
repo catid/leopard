@@ -19,9 +19,9 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{97FCA15F-EAF3-4F1A-AFF8-83E693DA9D45}</ProjectGuid>
+    <ProjectGuid>{97FCA15F-EAF3-4F1A-AFF8-83E693DA9D65}</ProjectGuid>
     <RootNamespace>Leopard</RootNamespace>
-    <ProjectName>LeopardBenchmark</ProjectName>
+    <ProjectName>LeopardExperiments</ProjectName>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
@@ -171,12 +171,9 @@
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="..\benchmark.cpp" />
+    <ClCompile Include="..\experiments.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\proj\Leopard.vcxproj">
-      <Project>{32176592-2f30-4bd5-b645-eb11c8d3453e}</Project>
-    </ProjectReference>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
