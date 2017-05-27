@@ -144,7 +144,7 @@ void InitializeCPUArch()
 
 void xor_mem(
     void * LEO_RESTRICT vx, const void * LEO_RESTRICT vy,
-    unsigned bytes)
+    uint64_t bytes)
 {
 #if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
@@ -189,88 +189,15 @@ void xor_mem(
     } while (bytes > 0);
 }
 
-void xor_mem2(
-    void * LEO_RESTRICT vx_0, const void * LEO_RESTRICT vy_0,
-    void * LEO_RESTRICT vx_1, const void * LEO_RESTRICT vy_1,
-    unsigned bytes)
-{
-#if defined(LEO_TRY_AVX2)
-    if (CpuHasAVX2)
-    {
-        LEO_M256 * LEO_RESTRICT       x32_0 = reinterpret_cast<LEO_M256 *>      (vx_0);
-        const LEO_M256 * LEO_RESTRICT y32_0 = reinterpret_cast<const LEO_M256 *>(vy_0);
-        LEO_M256 * LEO_RESTRICT       x32_1 = reinterpret_cast<LEO_M256 *>      (vx_1);
-        const LEO_M256 * LEO_RESTRICT y32_1 = reinterpret_cast<const LEO_M256 *>(vy_1);
-        do
-        {
-            const LEO_M256 x0_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0),     _mm256_loadu_si256(y32_0));
-            const LEO_M256 x1_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0 + 1), _mm256_loadu_si256(y32_0 + 1));
-            const LEO_M256 x2_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0 + 2), _mm256_loadu_si256(y32_0 + 2));
-            const LEO_M256 x3_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0 + 3), _mm256_loadu_si256(y32_0 + 3));
-            const LEO_M256 x0_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1),     _mm256_loadu_si256(y32_1));
-            const LEO_M256 x1_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1 + 1), _mm256_loadu_si256(y32_1 + 1));
-            const LEO_M256 x2_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1 + 2), _mm256_loadu_si256(y32_1 + 2));
-            const LEO_M256 x3_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1 + 3), _mm256_loadu_si256(y32_1 + 3));
-            _mm256_storeu_si256(x32_0,     x0_0);
-            _mm256_storeu_si256(x32_0 + 1, x1_0);
-            _mm256_storeu_si256(x32_0 + 2, x2_0);
-            _mm256_storeu_si256(x32_0 + 3, x3_0);
-            _mm256_storeu_si256(x32_1,     x0_1);
-            _mm256_storeu_si256(x32_1 + 1, x1_1);
-            _mm256_storeu_si256(x32_1 + 2, x2_1);
-            _mm256_storeu_si256(x32_1 + 3, x3_1);
-            x32_0 += 4, y32_0 += 4;
-            x32_1 += 4, y32_1 += 4;
-            bytes -= 128;
-        } while (bytes >= 128);
-        if (bytes > 0)
-        {
-            const LEO_M256 x0_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0),     _mm256_loadu_si256(y32_0));
-            const LEO_M256 x1_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0 + 1), _mm256_loadu_si256(y32_0 + 1));
-            const LEO_M256 x0_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1),     _mm256_loadu_si256(y32_1));
-            const LEO_M256 x1_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1 + 1), _mm256_loadu_si256(y32_1 + 1));
-            _mm256_storeu_si256(x32_0,     x0_0);
-            _mm256_storeu_si256(x32_0 + 1, x1_0);
-            _mm256_storeu_si256(x32_1,     x0_1);
-            _mm256_storeu_si256(x32_1 + 1, x1_1);
-        }
-        return;
-    }
-#endif // LEO_TRY_AVX2
-    LEO_M128 * LEO_RESTRICT       x16_0 = reinterpret_cast<LEO_M128 *>      (vx_0);
-    const LEO_M128 * LEO_RESTRICT y16_0 = reinterpret_cast<const LEO_M128 *>(vy_0);
-    LEO_M128 * LEO_RESTRICT       x16_1 = reinterpret_cast<LEO_M128 *>      (vx_1);
-    const LEO_M128 * LEO_RESTRICT y16_1 = reinterpret_cast<const LEO_M128 *>(vy_1);
-    do
-    {
-        const LEO_M128 x0_0 = _mm_xor_si128(_mm_loadu_si128(x16_0),     _mm_loadu_si128(y16_0));
-        const LEO_M128 x1_0 = _mm_xor_si128(_mm_loadu_si128(x16_0 + 1), _mm_loadu_si128(y16_0 + 1));
-        const LEO_M128 x2_0 = _mm_xor_si128(_mm_loadu_si128(x16_0 + 2), _mm_loadu_si128(y16_0 + 2));
-        const LEO_M128 x3_0 = _mm_xor_si128(_mm_loadu_si128(x16_0 + 3), _mm_loadu_si128(y16_0 + 3));
-        const LEO_M128 x0_1 = _mm_xor_si128(_mm_loadu_si128(x16_1),     _mm_loadu_si128(y16_1));
-        const LEO_M128 x1_1 = _mm_xor_si128(_mm_loadu_si128(x16_1 + 1), _mm_loadu_si128(y16_1 + 1));
-        const LEO_M128 x2_1 = _mm_xor_si128(_mm_loadu_si128(x16_1 + 2), _mm_loadu_si128(y16_1 + 2));
-        const LEO_M128 x3_1 = _mm_xor_si128(_mm_loadu_si128(x16_1 + 3), _mm_loadu_si128(y16_1 + 3));
-        _mm_storeu_si128(x16_0,     x0_0);
-        _mm_storeu_si128(x16_0 + 1, x1_0);
-        _mm_storeu_si128(x16_0 + 2, x2_0);
-        _mm_storeu_si128(x16_0 + 3, x3_0);
-        _mm_storeu_si128(x16_1,     x0_1);
-        _mm_storeu_si128(x16_1 + 1, x1_1);
-        _mm_storeu_si128(x16_1 + 2, x2_1);
-        _mm_storeu_si128(x16_1 + 3, x3_1);
-        x16_0 += 4, y16_0 += 4;
-        x16_1 += 4, y16_1 += 4;
-        bytes -= 64;
-    } while (bytes > 0);
-}
-
-void xor_mem3(
+void xor_mem4(
     void * LEO_RESTRICT vx_0, const void * LEO_RESTRICT vy_0,
     void * LEO_RESTRICT vx_1, const void * LEO_RESTRICT vy_1,
     void * LEO_RESTRICT vx_2, const void * LEO_RESTRICT vy_2,
-    unsigned bytes)
+    void * LEO_RESTRICT vx_3, const void * LEO_RESTRICT vy_3,
+    uint64_t bytes)
 {
+    // FIXME: Add args
+
 #if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
     {

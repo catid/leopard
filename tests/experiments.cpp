@@ -98,7 +98,7 @@ ffe_t kGFBasis[kGFBits] = {
 */
 
 static const unsigned kFieldSize = (unsigned)1 << kGFBits; //Field size
-static const unsigned kFieldModulus = kFieldSize - 1;
+static const unsigned kModulus = kFieldSize - 1;
 
 static ffe_t GFLog[kFieldSize];
 static ffe_t GFExp[kFieldSize];
@@ -107,14 +107,14 @@ static ffe_t GFExp[kFieldSize];
 static void InitField()
 {
     unsigned state = 1;
-    for (unsigned i = 0; i < kFieldModulus; ++i)
+    for (unsigned i = 0; i < kModulus; ++i)
     {
         GFExp[state] = static_cast<ffe_t>(i);
         state <<= 1;
         if (state >= kFieldSize)
             state ^= kGFPolynomial;
     }
-    GFExp[0] = kFieldModulus;
+    GFExp[0] = kModulus;
 
     // Conversion to chosen basis:
 
@@ -134,7 +134,7 @@ static void InitField()
     for (unsigned i = 0; i < kFieldSize; ++i)
         GFExp[GFLog[i]] = i;
 
-    GFExp[kFieldModulus] = GFExp[0];
+    GFExp[kModulus] = GFExp[0];
 }
 
 
@@ -239,7 +239,7 @@ static void formal_derivative(ffe_t* cos, const unsigned size)
 //------------------------------------------------------------------------------
 // Fast Fourier Transform
 
-static ffe_t skewVec[kFieldModulus]; // twisted factors used in FFT
+static ffe_t skewVec[kModulus]; // twisted factors used in FFT
 
 static LEO_FORCE_INLINE void ifft_butterfly(ffe_t& a, ffe_t& b, ffe_t skew)
 {
@@ -256,7 +256,7 @@ static void IFLT(ffe_t* data, const unsigned size, const unsigned index)
         {
             const ffe_t skew = skewVec[j + index - 1];
 
-            if (skew != kFieldModulus)
+            if (skew != kModulus)
             {
                 for (unsigned i = j - width; i < j; ++i)
                     ifft_butterfly(data[i], data[i + width], skew);
@@ -287,7 +287,7 @@ static void FLT(ffe_t* data, const unsigned size, const unsigned skewIndex, cons
         {
             const ffe_t skew = skewLUT[j];
 
-            if (skew != kFieldModulus)
+            if (skew != kModulus)
             {
                 for (unsigned i = j; i < j + width; ++i)
                     fft_butterfly(data[i], data[i + width], skew);
@@ -330,20 +330,20 @@ static void InitFieldOperations()
                 skewVec[j + s] = skewVec[j] ^ temp[i];
         }
 
-        temp[m] = kFieldModulus - GFLog[mulE(temp[m], GFLog[temp[m] ^ 1])];
+        temp[m] = kModulus - GFLog[mulE(temp[m], GFLog[temp[m] ^ 1])];
 
         for (unsigned i = m + 1; i < (kGFBits - 1); ++i)
-            temp[i] = mulE(temp[i], (GFLog[temp[i] ^ 1] + temp[m]) % kFieldModulus);
+            temp[i] = mulE(temp[i], (GFLog[temp[i] ^ 1] + temp[m]) % kModulus);
     }
 
     for (unsigned i = 0; i < kFieldSize; ++i)
         skewVec[i] = GFLog[skewVec[i]];
 
 #if 0
-    temp[0] = kFieldModulus - temp[0];
+    temp[0] = kModulus - temp[0];
 
     for (unsigned i = 1; i < (kGFBits - 1); ++i)
-        temp[i] = (kFieldModulus - temp[i] + temp[i - 1]) % kFieldModulus;
+        temp[i] = (kModulus - temp[i] + temp[i - 1]) % kModulus;
 
     B[0] = 0;
     for (unsigned i = 0; i < (kGFBits - 1); ++i)
@@ -351,7 +351,7 @@ static void InitFieldOperations()
         const unsigned depart = ((unsigned)1 << i);
 
         for (unsigned j = 0; j < depart; ++j)
-            B[j + depart] = (B[j] + temp[i]) % kFieldModulus;
+            B[j + depart] = (B[j] + temp[i]) % kModulus;
     }
 #endif
 
@@ -419,7 +419,7 @@ static void decode(ffe_t* codeword, const unsigned m, const unsigned original_co
     FWHT(log_walsh2, kGFBits);
 
     for (unsigned i = 0; i < kFieldSize; ++i)
-        log_walsh2[i] = ((unsigned)log_walsh2[i] * (unsigned)log_walsh[i]) % kFieldModulus;
+        log_walsh2[i] = ((unsigned)log_walsh2[i] * (unsigned)log_walsh[i]) % kModulus;
 
     FWHT(log_walsh2, kGFBits);
 
@@ -449,8 +449,8 @@ static void decode(ffe_t* codeword, const unsigned m, const unsigned original_co
     // Note: Preserves zeroes on the right
     for (unsigned i = 0; i < m + original_count; i += 2)
     {
-        codeword[i] = mulE(codeword[i], kFieldModulus - B[i >> 1]);
-        codeword[i + 1] = mulE(codeword[i + 1], kFieldModulus - B[i >> 1]);
+        codeword[i] = mulE(codeword[i], kModulus - B[i >> 1]);
+        codeword[i + 1] = mulE(codeword[i + 1], kModulus - B[i >> 1]);
     }
 #endif
 
@@ -471,7 +471,7 @@ static void decode(ffe_t* codeword, const unsigned m, const unsigned original_co
     {
         if (erasure[i])
         {
-            codeword[i] = mulE(codeword[i], kFieldModulus - log_walsh2[i]);
+            codeword[i] = mulE(codeword[i], kModulus - log_walsh2[i]);
         }
     }
 }

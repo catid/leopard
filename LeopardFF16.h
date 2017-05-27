@@ -73,12 +73,6 @@ void mul_mem_set(
     void * LEO_RESTRICT x, const void * LEO_RESTRICT y,
     ffe_t m, uint64_t bytes);
 
-// For i = {0, 1}: x_i[] *= m
-void mul_mem2_inplace(
-    void * LEO_RESTRICT x_0,
-    void * LEO_RESTRICT x_1,
-    ffe_t m, uint64_t bytes);
-
 
 //------------------------------------------------------------------------------
 // FFT Operations
@@ -88,17 +82,12 @@ void fft_butterfly(
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
     ffe_t m, uint64_t bytes);
 
-// For i = {0, 1}: x_i[] ^= y_i[] * m, y_i[] ^= x_i[]
-void fft_butterfly2(
-    void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
-    void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
-    ffe_t m, uint64_t bytes);
-
-// For i = {0, 1, 2}: x_i[] ^= y_i[] * m, y_i[] ^= x_i[]
-void fft_butterfly3(
+// For i = {0, 1, 2, 3}: x_i[] ^= y_i[] * m, y_i[] ^= x_i[]
+void fft_butterfly4(
     void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
     void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
     void * LEO_RESTRICT x_2, void * LEO_RESTRICT y_2,
+    void * LEO_RESTRICT x_3, void * LEO_RESTRICT y_3,
     ffe_t m, uint64_t bytes);
 
 
@@ -110,17 +99,12 @@ void ifft_butterfly(
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
     ffe_t m, uint64_t bytes);
 
-// For i = {0, 1}: y_i[] ^= x_i[], x_i[] ^= y_i[] * m
-void ifft_butterfly2(
-    void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
-    void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
-    ffe_t m, uint64_t bytes);
-
-// For i = {0, 1, 2}: y_i[] ^= x_i[], x_i[] ^= y_i[] * m
-void ifft_butterfly3(
+// For i = {0, 1, 2, 3}: y_i[] ^= x_i[], x_i[] ^= y_i[] * m
+void ifft_butterfly4(
     void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
     void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
     void * LEO_RESTRICT x_2, void * LEO_RESTRICT y_2,
+    void * LEO_RESTRICT x_3, void * LEO_RESTRICT y_3,
     ffe_t m, uint64_t bytes);
 
 

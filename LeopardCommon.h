@@ -208,20 +208,15 @@ LEO_FORCE_INLINE unsigned NextPow2(unsigned n)
 // x[] ^= y[]
 void xor_mem(
     void * LEO_RESTRICT x, const void * LEO_RESTRICT y,
-    unsigned bytes);
+    uint64_t bytes);
 
-// For i = {0, 1}: x_i[] ^= x_i[]
-void xor_mem2(
-    void * LEO_RESTRICT x_0, const void * LEO_RESTRICT y_0,
-    void * LEO_RESTRICT x_1, const void * LEO_RESTRICT y_1,
-    unsigned bytes);
-
-// For i = {0, 1, 2}: x_i[] ^= x_i[]
-void xor_mem3(
+// For i = {0, 1, 2, 3}: x_i[] ^= x_i[]
+void xor_mem4(
     void * LEO_RESTRICT x_0, const void * LEO_RESTRICT y_0,
     void * LEO_RESTRICT x_1, const void * LEO_RESTRICT y_1,
     void * LEO_RESTRICT x_2, const void * LEO_RESTRICT y_2,
-    unsigned bytes);
+    void * LEO_RESTRICT x_3, const void * LEO_RESTRICT y_3,
+    uint64_t bytes);
 
 
 } // namespace leopard
