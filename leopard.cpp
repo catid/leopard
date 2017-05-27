@@ -27,8 +27,13 @@
 */
 
 #include "leopard.h"
-#include "LeopardFF8.h"
-#include "LeopardFF16.h"
+
+#ifdef LEO_HAS_FF8
+    #include "LeopardFF8.h"
+#endif // LEO_HAS_FF8
+#ifdef LEO_HAS_FF16
+    #include "LeopardFF16.h"
+#endif // LEO_HAS_FF16
 
 extern "C" {
 
@@ -43,11 +48,15 @@ LEO_EXPORT int leo_init_(int version)
     if (version != LEO_VERSION)
         return Leopard_InvalidInput;
 
+#ifdef LEO_HAS_FF8
     if (!leopard::ff8::Initialize())
         return Leopard_Platform;
+#endif // LEO_HAS_FF8
 
+#ifdef LEO_HAS_FF16
     if (!leopard::ff16::Initialize())
         return Leopard_Platform;
+#endif // LEO_HAS_FF16
 
     m_Initialized = true;
     return Leopard_Success;
@@ -90,6 +99,7 @@ LEO_EXPORT LeopardResult leo_encode(
 
     const bool mt = (flags & LeopardFlags_Multithreaded) != 0;
 
+#ifdef LEO_HAS_FF8
     if (n <= leopard::ff8::kOrder)
     {
         leopard::ff8::Encode(
@@ -100,7 +110,10 @@ LEO_EXPORT LeopardResult leo_encode(
             original_data,
             work_data);
     }
-    else if (n <= leopard::ff16::kOrder)
+    else
+#endif // LEO_HAS_FF8
+#ifdef LEO_HAS_FF16
+    if (n <= leopard::ff16::kOrder)
     {
         leopard::ff16::Encode(
             buffer_bytes,
@@ -111,6 +124,7 @@ LEO_EXPORT LeopardResult leo_encode(
             work_data);
     }
     else
+#endif // LEO_HAS_FF16
         return Leopard_TooMuchData;
 
     return Leopard_Success;
@@ -156,6 +170,7 @@ LEO_EXPORT LeopardResult leo_decode(
 
     const bool mt = (flags & LeopardFlags_Multithreaded) != 0;
 
+#ifdef LEO_HAS_FF8
     if (n <= leopard::ff8::kOrder)
     {
         leopard::ff8::Decode(
@@ -168,7 +183,10 @@ LEO_EXPORT LeopardResult leo_decode(
             recovery_data,
             work_data);
     }
-    else if (n <= leopard::ff16::kOrder)
+    else
+#endif // LEO_HAS_FF8
+#ifdef LEO_HAS_FF16
+    if (n <= leopard::ff16::kOrder)
     {
         leopard::ff16::Decode(
             buffer_bytes,
@@ -181,6 +199,7 @@ LEO_EXPORT LeopardResult leo_decode(
             work_data);
     }
     else
+#endif // LEO_HAS_FF16
         return Leopard_TooMuchData;
 
     return Leopard_Success;

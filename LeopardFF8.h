@@ -30,6 +30,8 @@
 
 #include "LeopardCommon.h"
 
+#ifdef LEO_HAS_FF8
+
 /*
     8-bit Finite Field Math
 
@@ -156,3 +158,5 @@ bool Initialize();
 
 
 }} // namespace leopard::ff8
+
+#endif // LEO_HAS_FF8

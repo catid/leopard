@@ -27,6 +27,9 @@
 */
 
 #include "LeopardFF8.h"
+
+#ifdef LEO_HAS_FF8
+
 #include <string.h>
 
 // Define this to enable the optimized version of FWHT()
@@ -934,3 +937,5 @@ bool Initialize()
 
 
 }} // namespace leopard::ff8
+
+#endif // LEO_HAS_FF8

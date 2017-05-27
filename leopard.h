@@ -41,6 +41,10 @@
 // Library version
 #define LEO_VERSION 1
 
+// Enable 8-bit or 16-bit fields
+#define LEO_HAS_FF8
+//#define LEO_HAS_FF16
+
 // Tweak if the functions are exported or statically linked
 //#define LEO_DLL /* Defined when building/linking as DLL */
 //#define LEO_BUILDING /* Defined by the library makefile */

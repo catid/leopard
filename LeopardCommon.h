@@ -46,6 +46,8 @@
     + Look into using FFT_m instead of FFT_n for decoder
 */
 
+#include "leopard.h"
+
 #include <stdint.h>
 
 
@@ -71,6 +73,10 @@
 
 //------------------------------------------------------------------------------
 // Platform/Architecture
+
+#ifdef _MSC_VER
+    #include <intrin.h>
+#endif
 
 #if defined(ANDROID) || defined(IOS)
     #define LEO_TARGET_MOBILE
@@ -171,10 +177,6 @@ extern bool CpuHasSSSE3;
 
 //------------------------------------------------------------------------------
 // Portable Intrinsics
-
-#ifdef _MSC_VER
-#include <intrin.h>
-#endif
 
 // Returns highest bit index 0..31 where the first non-zero bit is found
 // Precondition: x != 0

@@ -21,10 +21,10 @@
     <ClInclude Include="..\LeopardCommon.h">
       <Filter>Source Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\LeopardFF16.h">
+    <ClInclude Include="..\LeopardFF8.h">
       <Filter>Source Files</Filter>
     </ClInclude>
-    <ClInclude Include="..\LeopardFF8.h">
+    <ClInclude Include="..\LeopardFF16.h">
       <Filter>Source Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -35,10 +35,10 @@
     <ClCompile Include="..\LeopardCommon.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\LeopardFF16.cpp">
+    <ClCompile Include="..\LeopardFF8.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\LeopardFF8.cpp">
+    <ClCompile Include="..\LeopardFF16.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
