@@ -151,7 +151,7 @@ void xor_mem(
     {
         LEO_M256 * LEO_RESTRICT x32 = reinterpret_cast<LEO_M256 *>(vx);
         const LEO_M256 * LEO_RESTRICT y32 = reinterpret_cast<const LEO_M256 *>(vy);
-        do
+        while (bytes >= 128)
         {
             const LEO_M256 x0 = _mm256_xor_si256(_mm256_loadu_si256(x32),     _mm256_loadu_si256(y32));
             const LEO_M256 x1 = _mm256_xor_si256(_mm256_loadu_si256(x32 + 1), _mm256_loadu_si256(y32 + 1));
@@ -161,8 +161,9 @@ void xor_mem(
             _mm256_storeu_si256(x32 + 1, x1);
             _mm256_storeu_si256(x32 + 2, x2);
             _mm256_storeu_si256(x32 + 3, x3);
-            bytes -= 128, x32 += 4, y32 += 4;
-        } while (bytes >= 128);
+            x32 += 4, y32 += 4;
+            bytes -= 128;
+        };
         if (bytes > 0)
         {
             const LEO_M256 x0 = _mm256_xor_si256(_mm256_loadu_si256(x32),     _mm256_loadu_si256(y32));
@@ -185,7 +186,8 @@ void xor_mem(
         _mm_storeu_si128(x16 + 1, x1);
         _mm_storeu_si128(x16 + 2, x2);
         _mm_storeu_si128(x16 + 3, x3);
-        bytes -= 64, x16 += 4, y16 += 4;
+        x16 += 4, y16 += 4;
+        bytes -= 64;
     } while (bytes > 0);
 }
 
@@ -196,8 +198,6 @@ void xor_mem4(
     void * LEO_RESTRICT vx_3, const void * LEO_RESTRICT vy_3,
     uint64_t bytes)
 {
-    // FIXME: Add args
-
 #if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
     {
@@ -207,51 +207,66 @@ void xor_mem4(
         const LEO_M256 * LEO_RESTRICT y32_1 = reinterpret_cast<const LEO_M256 *>(vy_1);
         LEO_M256 * LEO_RESTRICT       x32_2 = reinterpret_cast<LEO_M256 *>      (vx_2);
         const LEO_M256 * LEO_RESTRICT y32_2 = reinterpret_cast<const LEO_M256 *>(vy_2);
-        do
+        LEO_M256 * LEO_RESTRICT       x32_3 = reinterpret_cast<LEO_M256 *>      (vx_3);
+        const LEO_M256 * LEO_RESTRICT y32_3 = reinterpret_cast<const LEO_M256 *>(vy_3);
+        while (bytes >= 128)
         {
             const LEO_M256 x0_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0),     _mm256_loadu_si256(y32_0));
             const LEO_M256 x1_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0 + 1), _mm256_loadu_si256(y32_0 + 1));
             const LEO_M256 x2_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0 + 2), _mm256_loadu_si256(y32_0 + 2));
             const LEO_M256 x3_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0 + 3), _mm256_loadu_si256(y32_0 + 3));
+            _mm256_storeu_si256(x32_0, x0_0);
+            _mm256_storeu_si256(x32_0 + 1, x1_0);
+            _mm256_storeu_si256(x32_0 + 2, x2_0);
+            _mm256_storeu_si256(x32_0 + 3, x3_0);
+            x32_0 += 4, y32_0 += 4;
             const LEO_M256 x0_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1),     _mm256_loadu_si256(y32_1));
             const LEO_M256 x1_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1 + 1), _mm256_loadu_si256(y32_1 + 1));
             const LEO_M256 x2_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1 + 2), _mm256_loadu_si256(y32_1 + 2));
             const LEO_M256 x3_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1 + 3), _mm256_loadu_si256(y32_1 + 3));
+            _mm256_storeu_si256(x32_1, x0_1);
+            _mm256_storeu_si256(x32_1 + 1, x1_1);
+            _mm256_storeu_si256(x32_1 + 2, x2_1);
+            _mm256_storeu_si256(x32_1 + 3, x3_1);
+            x32_1 += 4, y32_1 += 4;
             const LEO_M256 x0_2 = _mm256_xor_si256(_mm256_loadu_si256(x32_2),     _mm256_loadu_si256(y32_2));
             const LEO_M256 x1_2 = _mm256_xor_si256(_mm256_loadu_si256(x32_2 + 1), _mm256_loadu_si256(y32_2 + 1));
             const LEO_M256 x2_2 = _mm256_xor_si256(_mm256_loadu_si256(x32_2 + 2), _mm256_loadu_si256(y32_2 + 2));
             const LEO_M256 x3_2 = _mm256_xor_si256(_mm256_loadu_si256(x32_2 + 3), _mm256_loadu_si256(y32_2 + 3));
-            _mm256_storeu_si256(x32_0,     x0_0);
-            _mm256_storeu_si256(x32_0 + 1, x1_0);
-            _mm256_storeu_si256(x32_0 + 2, x2_0);
-            _mm256_storeu_si256(x32_0 + 3, x3_0);
-            _mm256_storeu_si256(x32_1,     x0_1);
-            _mm256_storeu_si256(x32_1 + 1, x1_1);
-            _mm256_storeu_si256(x32_1 + 2, x2_1);
-            _mm256_storeu_si256(x32_1 + 3, x3_1);
-            _mm256_storeu_si256(x32_2,     x0_2);
+            _mm256_storeu_si256(x32_2, x0_2);
             _mm256_storeu_si256(x32_2 + 1, x1_2);
             _mm256_storeu_si256(x32_2 + 2, x2_2);
             _mm256_storeu_si256(x32_2 + 3, x3_2);
-            x32_0 += 4, y32_0 += 4;
-            x32_1 += 4, y32_1 += 4;
             x32_2 += 4, y32_2 += 4;
+            const LEO_M256 x0_3 = _mm256_xor_si256(_mm256_loadu_si256(x32_3),     _mm256_loadu_si256(y32_3));
+            const LEO_M256 x1_3 = _mm256_xor_si256(_mm256_loadu_si256(x32_3 + 1), _mm256_loadu_si256(y32_3 + 1));
+            const LEO_M256 x2_3 = _mm256_xor_si256(_mm256_loadu_si256(x32_3 + 2), _mm256_loadu_si256(y32_3 + 2));
+            const LEO_M256 x3_3 = _mm256_xor_si256(_mm256_loadu_si256(x32_3 + 3), _mm256_loadu_si256(y32_3 + 3));
+            _mm256_storeu_si256(x32_3,     x0_3);
+            _mm256_storeu_si256(x32_3 + 1, x1_3);
+            _mm256_storeu_si256(x32_3 + 2, x2_3);
+            _mm256_storeu_si256(x32_3 + 3, x3_3);
+            x32_3 += 4, y32_3 += 4;
             bytes -= 128;
-        } while (bytes >= 128);
+        }
         if (bytes > 0)
         {
             const LEO_M256 x0_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0),     _mm256_loadu_si256(y32_0));
             const LEO_M256 x1_0 = _mm256_xor_si256(_mm256_loadu_si256(x32_0 + 1), _mm256_loadu_si256(y32_0 + 1));
             const LEO_M256 x0_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1),     _mm256_loadu_si256(y32_1));
             const LEO_M256 x1_1 = _mm256_xor_si256(_mm256_loadu_si256(x32_1 + 1), _mm256_loadu_si256(y32_1 + 1));
+            _mm256_storeu_si256(x32_0, x0_0);
+            _mm256_storeu_si256(x32_0 + 1, x1_0);
+            _mm256_storeu_si256(x32_1, x0_1);
+            _mm256_storeu_si256(x32_1 + 1, x1_1);
             const LEO_M256 x0_2 = _mm256_xor_si256(_mm256_loadu_si256(x32_2),     _mm256_loadu_si256(y32_2));
             const LEO_M256 x1_2 = _mm256_xor_si256(_mm256_loadu_si256(x32_2 + 1), _mm256_loadu_si256(y32_2 + 1));
-            _mm256_storeu_si256(x32_0,     x0_0);
-            _mm256_storeu_si256(x32_0 + 1, x1_0);
-            _mm256_storeu_si256(x32_1,     x0_1);
-            _mm256_storeu_si256(x32_1 + 1, x1_1);
+            const LEO_M256 x0_3 = _mm256_xor_si256(_mm256_loadu_si256(x32_3),     _mm256_loadu_si256(y32_3));
+            const LEO_M256 x1_3 = _mm256_xor_si256(_mm256_loadu_si256(x32_3 + 1), _mm256_loadu_si256(y32_3 + 1));
             _mm256_storeu_si256(x32_2,     x0_2);
             _mm256_storeu_si256(x32_2 + 1, x1_2);
+            _mm256_storeu_si256(x32_3,     x0_3);
+            _mm256_storeu_si256(x32_3 + 1, x1_3);
         }
         return;
     }
@@ -262,35 +277,46 @@ void xor_mem4(
     const LEO_M128 * LEO_RESTRICT y16_1 = reinterpret_cast<const LEO_M128 *>(vy_1);
     LEO_M128 * LEO_RESTRICT       x16_2 = reinterpret_cast<LEO_M128 *>      (vx_2);
     const LEO_M128 * LEO_RESTRICT y16_2 = reinterpret_cast<const LEO_M128 *>(vy_2);
+    LEO_M128 * LEO_RESTRICT       x16_3 = reinterpret_cast<LEO_M128 *>      (vx_3);
+    const LEO_M128 * LEO_RESTRICT y16_3 = reinterpret_cast<const LEO_M128 *>(vy_3);
     do
     {
         const LEO_M128 x0_0 = _mm_xor_si128(_mm_loadu_si128(x16_0),     _mm_loadu_si128(y16_0));
         const LEO_M128 x1_0 = _mm_xor_si128(_mm_loadu_si128(x16_0 + 1), _mm_loadu_si128(y16_0 + 1));
         const LEO_M128 x2_0 = _mm_xor_si128(_mm_loadu_si128(x16_0 + 2), _mm_loadu_si128(y16_0 + 2));
         const LEO_M128 x3_0 = _mm_xor_si128(_mm_loadu_si128(x16_0 + 3), _mm_loadu_si128(y16_0 + 3));
+        _mm_storeu_si128(x16_0, x0_0);
+        _mm_storeu_si128(x16_0 + 1, x1_0);
+        _mm_storeu_si128(x16_0 + 2, x2_0);
+        _mm_storeu_si128(x16_0 + 3, x3_0);
+        x16_0 += 4, y16_0 += 4;
         const LEO_M128 x0_1 = _mm_xor_si128(_mm_loadu_si128(x16_1),     _mm_loadu_si128(y16_1));
         const LEO_M128 x1_1 = _mm_xor_si128(_mm_loadu_si128(x16_1 + 1), _mm_loadu_si128(y16_1 + 1));
         const LEO_M128 x2_1 = _mm_xor_si128(_mm_loadu_si128(x16_1 + 2), _mm_loadu_si128(y16_1 + 2));
         const LEO_M128 x3_1 = _mm_xor_si128(_mm_loadu_si128(x16_1 + 3), _mm_loadu_si128(y16_1 + 3));
+        _mm_storeu_si128(x16_1, x0_1);
+        _mm_storeu_si128(x16_1 + 1, x1_1);
+        _mm_storeu_si128(x16_1 + 2, x2_1);
+        _mm_storeu_si128(x16_1 + 3, x3_1);
+        x16_1 += 4, y16_1 += 4;
         const LEO_M128 x0_2 = _mm_xor_si128(_mm_loadu_si128(x16_2),     _mm_loadu_si128(y16_2));
         const LEO_M128 x1_2 = _mm_xor_si128(_mm_loadu_si128(x16_2 + 1), _mm_loadu_si128(y16_2 + 1));
         const LEO_M128 x2_2 = _mm_xor_si128(_mm_loadu_si128(x16_2 + 2), _mm_loadu_si128(y16_2 + 2));
         const LEO_M128 x3_2 = _mm_xor_si128(_mm_loadu_si128(x16_2 + 3), _mm_loadu_si128(y16_2 + 3));
-        _mm_storeu_si128(x16_0,     x0_0);
-        _mm_storeu_si128(x16_0 + 1, x1_0);
-        _mm_storeu_si128(x16_0 + 2, x2_0);
-        _mm_storeu_si128(x16_0 + 3, x3_0);
-        _mm_storeu_si128(x16_1,     x0_1);
-        _mm_storeu_si128(x16_1 + 1, x1_1);
-        _mm_storeu_si128(x16_1 + 2, x2_1);
-        _mm_storeu_si128(x16_1 + 3, x3_1);
-        _mm_storeu_si128(x16_2,     x0_2);
+        _mm_storeu_si128(x16_2, x0_2);
         _mm_storeu_si128(x16_2 + 1, x1_2);
         _mm_storeu_si128(x16_2 + 2, x2_2);
         _mm_storeu_si128(x16_2 + 3, x3_2);
-        x16_0 += 4, y16_0 += 4;
-        x16_1 += 4, y16_1 += 4;
         x16_2 += 4, y16_2 += 4;
+        const LEO_M128 x0_3 = _mm_xor_si128(_mm_loadu_si128(x16_3),     _mm_loadu_si128(y16_3));
+        const LEO_M128 x1_3 = _mm_xor_si128(_mm_loadu_si128(x16_3 + 1), _mm_loadu_si128(y16_3 + 1));
+        const LEO_M128 x2_3 = _mm_xor_si128(_mm_loadu_si128(x16_3 + 2), _mm_loadu_si128(y16_3 + 2));
+        const LEO_M128 x3_3 = _mm_xor_si128(_mm_loadu_si128(x16_3 + 3), _mm_loadu_si128(y16_3 + 3));
+        _mm_storeu_si128(x16_3,     x0_3);
+        _mm_storeu_si128(x16_3 + 1, x1_3);
+        _mm_storeu_si128(x16_3 + 2, x2_3);
+        _mm_storeu_si128(x16_3 + 3, x3_3);
+        x16_3 += 4, y16_3 += 4;
         bytes -= 64;
     } while (bytes > 0);
 }

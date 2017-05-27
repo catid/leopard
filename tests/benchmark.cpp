@@ -27,6 +27,8 @@
 */
 
 #include "../LeopardCommon.h"
+#include "../LeopardFF8.h"
+#include "../LeopardFF16.h"
 #include "../leopard.h"
 
 #include <memory>
@@ -238,7 +240,7 @@ public:
     }
     void Print(unsigned trials)
     {
-        cout << FunctionName << " called " << Invokations / (float)trials << " times per trial (avg).  " << TotalUsec / (double)Invokations << " usec avg for all invokations.  " << TotalUsec / (float)trials << " usec (avg) of " << trials << " trials" << endl;
+        cout << FunctionName << " called " << Invokations / (float)trials << " times per trial. " << TotalUsec / (double)Invokations << " usec avg. " << TotalUsec / (float)trials << " usec for each of " << trials << " trials" << endl;
     }
 
     uint64_t t0 = 0;
@@ -527,6 +529,197 @@ static void BasicTest(const TestParameters& params)
 
 
 //------------------------------------------------------------------------------
+// Parallel XOR Benchmark
+
+// Demonstrate about 10% performance boost by doing parallel rows for XORs
+void ParallelXORBenchmark()
+{
+    FunctionTimer t_1("xor_mem");
+    FunctionTimer t_4("xor_mem4");
+
+    static const unsigned buffer_bytes = 4096;
+    static const unsigned buffer_count = 1024;
+
+    uint8_t* buffers_x[buffer_count] = {};
+    uint8_t* buffers_y[buffer_count] = {};
+
+    for (unsigned i = 0; i < buffer_count; ++i)
+    {
+        buffers_x[i] = SIMDSafeAllocate(buffer_bytes);
+        buffers_y[i] = SIMDSafeAllocate(buffer_bytes);
+    }
+
+    static const unsigned iteration_count = 1000;
+
+    for (unsigned i = 0; i < iteration_count; ++i)
+    {
+        t_1.BeginCall();
+        for (unsigned j = 0; j < buffer_count; ++j)
+            leopard::xor_mem(
+                buffers_x[j], buffers_y[j],
+                buffer_bytes);
+        t_1.EndCall();
+    }
+
+    for (unsigned i = 0; i < iteration_count; ++i)
+    {
+        t_4.BeginCall();
+        for (unsigned j = 0; j < buffer_count; j += 4)
+            leopard::xor_mem4(
+                buffers_x[j], buffers_y[j],
+                buffers_x[j + 1], buffers_y[j + 1],
+                buffers_x[j + 2], buffers_y[j + 2],
+                buffers_x[j + 3], buffers_y[j + 3],
+                buffer_bytes);
+        t_4.EndCall();
+    }
+
+    for (unsigned i = 0; i < buffer_count; ++i)
+    {
+        SIMDSafeFree(buffers_x[i]);
+        SIMDSafeFree(buffers_y[i]);
+    }
+
+    t_1.Print(iteration_count);
+    t_4.Print(iteration_count);
+}
+
+
+//------------------------------------------------------------------------------
+// Parallel Butterfly8 Benchmark
+
+#ifdef LEO_HAS_FF8
+
+// Demonstrate performance boost by doing parallel rows for Butterfly8s
+void ParallelButterfly8Benchmark()
+{
+    FunctionTimer t_1("8-bit fft_butterfly");
+    FunctionTimer t_4("8-bit fft_butterfly4");
+
+    static const unsigned buffer_bytes = 4096;
+    static const unsigned buffer_count = 1024;
+
+    uint8_t* buffers_x[buffer_count] = {};
+    uint8_t* buffers_y[buffer_count] = {};
+
+    for (unsigned i = 0; i < buffer_count; ++i)
+    {
+        buffers_x[i] = SIMDSafeAllocate(buffer_bytes);
+        buffers_y[i] = SIMDSafeAllocate(buffer_bytes);
+    }
+
+    static const unsigned iteration_count = 1000;
+
+    for (unsigned i = 0; i < iteration_count; ++i)
+    {
+        leopard::ff8::ffe_t m = (leopard::ff8::ffe_t)(i + 2);
+
+        t_1.BeginCall();
+        for (unsigned j = 0; j < buffer_count; ++j)
+            leopard::ff8::fft_butterfly(
+                buffers_x[j], buffers_y[j],
+                m,
+                buffer_bytes);
+        t_1.EndCall();
+    }
+
+    for (unsigned i = 0; i < iteration_count; ++i)
+    {
+        leopard::ff8::ffe_t m = (leopard::ff8::ffe_t)(i + 2);
+
+        t_4.BeginCall();
+        for (unsigned j = 0; j < buffer_count; j += 4)
+            leopard::ff8::fft_butterfly4(
+                buffers_x[j], buffers_y[j],
+                buffers_x[j + 1], buffers_y[j + 1],
+                buffers_x[j + 2], buffers_y[j + 2],
+                buffers_x[j + 3], buffers_y[j + 3],
+                m,
+                buffer_bytes);
+        t_4.EndCall();
+    }
+
+    for (unsigned i = 0; i < buffer_count; ++i)
+    {
+        SIMDSafeFree(buffers_x[i]);
+        SIMDSafeFree(buffers_y[i]);
+    }
+
+    t_1.Print(iteration_count);
+    t_4.Print(iteration_count);
+}
+
+#endif // LEO_HAS_FF8
+
+
+//------------------------------------------------------------------------------
+// Parallel Butterfly16 Benchmark
+
+#ifdef LEO_HAS_FF16
+
+// Demonstrate performance boost by doing parallel rows for Butterfly16s
+void ParallelButterfly16Benchmark()
+{
+    FunctionTimer t_1("16-bit fft_butterfly");
+    FunctionTimer t_4("16-bit fft_butterfly4");
+
+    static const unsigned buffer_bytes = 4096;
+    static const unsigned buffer_count = 1024;
+
+    uint8_t* buffers_x[buffer_count] = {};
+    uint8_t* buffers_y[buffer_count] = {};
+
+    for (unsigned i = 0; i < buffer_count; ++i)
+    {
+        buffers_x[i] = SIMDSafeAllocate(buffer_bytes);
+        buffers_y[i] = SIMDSafeAllocate(buffer_bytes);
+    }
+
+    static const unsigned iteration_count = 100;
+
+    for (unsigned i = 0; i < iteration_count; ++i)
+    {
+        leopard::ff16::ffe_t m = (leopard::ff16::ffe_t)(i + 2);
+
+        t_1.BeginCall();
+        for (unsigned j = 0; j < buffer_count; ++j)
+            leopard::ff16::fft_butterfly(
+                buffers_x[j], buffers_y[j],
+                m,
+                buffer_bytes);
+        t_1.EndCall();
+    }
+
+    for (unsigned i = 0; i < iteration_count; ++i)
+    {
+        leopard::ff16::ffe_t m = (leopard::ff16::ffe_t)(i + 2);
+
+        t_4.BeginCall();
+        for (unsigned j = 0; j < buffer_count; j += 4)
+            leopard::ff16::fft_butterfly4(
+                buffers_x[j], buffers_y[j],
+                buffers_x[j + 1], buffers_y[j + 1],
+                buffers_x[j + 2], buffers_y[j + 2],
+                buffers_x[j + 3], buffers_y[j + 3],
+                m,
+                buffer_bytes);
+        t_4.EndCall();
+    }
+
+    for (unsigned i = 0; i < buffer_count; ++i)
+    {
+        SIMDSafeFree(buffers_x[i]);
+        SIMDSafeFree(buffers_y[i]);
+    }
+
+    t_1.Print(iteration_count);
+    t_4.Print(iteration_count);
+}
+
+#endif // LEO_HAS_FF8
+
+
+//------------------------------------------------------------------------------
 // Entrypoint
 
 int main(int argc, char **argv)
@@ -543,6 +736,14 @@ int main(int argc, char **argv)
     }
     t_leo_init.EndCall();
     t_leo_init.Print(1);
+
+    ParallelXORBenchmark();
+#ifdef LEO_HAS_FF8
+    ParallelButterfly8Benchmark();
+#endif // LEO_HAS_FF8
+#ifdef LEO_HAS_FF16
+    ParallelButterfly16Benchmark();
+#endif // LEO_HAS_FF16
 
     TestParameters params;
 

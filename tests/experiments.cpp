@@ -33,6 +33,11 @@
 #include <stdlib.h>
 
 
+//#define LEO_SHORT_FIELD
+//#define LEO_EXPERIMENT_EXTRA_XOR
+//#define LEO_EXPERIMENT_EXTRA_MULS
+#define LEO_EXPERIMENT_CANTOR_BASIS
+
 //------------------------------------------------------------------------------
 // Debug
 
@@ -70,24 +75,33 @@
 //------------------------------------------------------------------------------
 // Field
 
-//#define LEO_SHORT_FIELD
-
 #ifdef LEO_SHORT_FIELD
 typedef uint8_t ffe_t;
 static const unsigned kGFBits = 8;
 static const unsigned kGFPolynomial = 0x11D;
 ffe_t kGFBasis[kGFBits] = {
+#ifdef LEO_EXPERIMENT_CANTOR_BASIS
     1, 214, 152, 146, 86, 200, 88, 230 // Cantor basis
+#else
+    1, 2, 4, 8, 16, 32, 64, 128 // Monomial basis
+#endif
 };
 #else
 typedef uint16_t ffe_t;
 static const unsigned kGFBits = 16;
 static const unsigned kGFPolynomial = 0x1002D;
 ffe_t kGFBasis[kGFBits] = {
+#ifdef LEO_EXPERIMENT_CANTOR_BASIS
     0x0001, 0xACCA, 0x3C0E, 0x163E, // Cantor basis
     0xC582, 0xED2E, 0x914C, 0x4012,
     0x6C98, 0x10D8, 0x6A72, 0xB900,
     0xFDB8, 0xFB34, 0xFF38, 0x991E
+#else
+    1, 2, 4, 8, // Monomial basis
+    16, 32, 64, 128,
+    256, 512, 1024, 2048,
+    4096, 8192, 16384, 32768
+#endif
 };
 #endif
 
@@ -223,7 +237,7 @@ static void formal_derivative(ffe_t* cos, const unsigned size)
     }
 
     // Doesn't seem to be needed
-#if 0
+#ifdef LEO_EXPERIMENT_EXTRA_XOR
     /*
         Same here - Zeroes on the right are preserved
     */
@@ -305,7 +319,9 @@ static void FLT(ffe_t* data, const unsigned size, const unsigned skewIndex, cons
 //------------------------------------------------------------------------------
 // FFT Initialization
 
-//static ffe_t B[kFieldSize >> 1];     // factors used in formal derivative
+#ifdef LEO_EXPERIMENT_EXTRA_MULS
+static ffe_t B[kFieldSize >> 1];     // factors used in formal derivative
+#endif
 static fwht_t log_walsh[kFieldSize];  // factors used in the evaluation of the error locator polynomial
 
 // Initialize skewVec[], B[], log_walsh[]
@@ -339,7 +355,7 @@ static void InitFieldOperations()
     for (unsigned i = 0; i < kFieldSize; ++i)
         skewVec[i] = GFLog[skewVec[i]];
 
-#if 0
+#ifdef LEO_EXPERIMENT_EXTRA_MULS
     temp[0] = kModulus - temp[0];
 
     for (unsigned i = 1; i < (kGFBits - 1); ++i)
@@ -444,7 +460,7 @@ static void decode(ffe_t* codeword, const unsigned m, const unsigned original_co
     IFLT(codeword, n, 0);
 
     // Note: This is not needed to recover successfully...
-#if 0
+#ifdef LEO_EXPERIMENT_EXTRA_MULS
     // formal derivative
     // Note: Preserves zeroes on the right
     for (unsigned i = 0; i < m + original_count; i += 2)
@@ -456,7 +472,7 @@ static void decode(ffe_t* codeword, const unsigned m, const unsigned original_co
 
     formal_derivative(codeword, n);
 
-#if 0
+#ifdef LEO_EXPERIMENT_EXTRA_MULS
     // Note: Preserves zeroes on the right
     for (unsigned i = 0; i < m + original_count; i += 2)
     {
@@ -598,7 +614,7 @@ int main(int argc, char **argv)
     {
 #ifdef LEO_SHORT_FIELD
         const unsigned input_count = 100;
-        const unsigned recovery_count = 20;
+        const unsigned recovery_count = 10;
 #else // LEO_SHORT_FIELD
         const unsigned input_count = 10000;
         const unsigned recovery_count = 2000;

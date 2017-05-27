@@ -48,6 +48,8 @@ LEO_EXPORT int leo_init_(int version)
     if (version != LEO_VERSION)
         return Leopard_InvalidInput;
 
+    leopard::InitializeCPUArch();
+
 #ifdef LEO_HAS_FF8
     if (!leopard::ff8::Initialize())
         return Leopard_Platform;

@@ -55,6 +55,9 @@ static const ffe_t kBasis[kBits] = {
     0xFDB8, 0xFB34, 0xFF38, 0x991E
 };
 
+// Using the Cantor basis here enables us to avoid a lot of extra calculations
+// when applying the formal derivative in decoding.
+
 
 //------------------------------------------------------------------------------
 // Field Operations

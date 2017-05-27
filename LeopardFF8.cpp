@@ -50,8 +50,10 @@ static const unsigned kPolynomial = 0x11D;
 // Basis used for generating logarithm tables
 static const ffe_t kBasis[kBits] = {
     1, 214, 152, 146, 86, 200, 88, 230 // Cantor basis
-    // 1, 2, 4, 8, 16, 32, 64, 128 // Monomial basis
 };
+
+// Using the Cantor basis here enables us to avoid a lot of extra calculations
+// when applying the formal derivative in decoding.
 
 
 //------------------------------------------------------------------------------
