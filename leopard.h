@@ -32,10 +32,16 @@
 /*
     Leopard-RS: Reed-Solomon Error Correction Coding for Extremely Large Data
 
-    S.-J. Lin, T. Y. Al-Naffouri, Y. S. Han, and W.-H. Chung,
+
+    References:
+
+    {1} S.-J. Lin, T. Y. Al-Naffouri, Y. S. Han, and W.-H. Chung,
     "Novel Polynomial Basis with Fast Fourier Transform and Its Application to Reed-Solomon Erasure Codes"
     IEEE Trans. on Information Theory, pp. 6284-6299, November, 2016.
     http://ct.ee.ntust.edu.tw/it2016-2.pdf
+
+    {2} D. G. Cantor, "On arithmetical algorithms over finite fields",
+    Journal of Combinatorial Theory, Series A, vol. 50, no. 2, pp. 285-300, 1989.
 */
 
 // Library version
@@ -99,6 +105,7 @@ typedef enum LeopardResultT
     Leopard_InvalidCounts     = -3, // Invalid counts provided
     Leopard_InvalidInput      = -4, // A function parameter was invalid
     Leopard_Platform          = -5, // Platform is unsupported
+    Leopard_CallInitialize    = -6, // Call leo_init() first
 } LeopardResult;
 
 // Flags

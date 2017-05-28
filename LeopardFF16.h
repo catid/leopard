@@ -54,6 +54,12 @@ static const unsigned kBits = 16;
 // Finite field order: Number of elements in the field
 static const unsigned kOrder = 65536;
 
+// Modulus for field operations
+static const ffe_t kModulus = 65535;
+
+// LFSR Polynomial that generates the field elements
+static const unsigned kPolynomial = 0x1002D;
+
 
 //------------------------------------------------------------------------------
 // Fast Walsh-Hadamard Transform (FWHT) (mod kModulus)

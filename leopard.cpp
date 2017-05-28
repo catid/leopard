@@ -93,6 +93,9 @@ LEO_EXPORT LeopardResult leo_encode(
     if (!original_data || !work_data)
         return Leopard_InvalidInput;
 
+    if (!m_Initialized)
+        return Leopard_CallInitialize;
+
     const unsigned m = leopard::NextPow2(recovery_count);
     const unsigned n = leopard::NextPow2(m + original_count);
 
@@ -163,6 +166,9 @@ LEO_EXPORT LeopardResult leo_decode(
 
     if (!original_data || !recovery_data || !work_data)
         return Leopard_InvalidInput;
+
+    if (!m_Initialized)
+        return Leopard_CallInitialize;
 
     const unsigned m = leopard::NextPow2(recovery_count);
     const unsigned n = leopard::NextPow2(m + original_count);

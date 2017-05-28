@@ -38,12 +38,6 @@ namespace leopard { namespace ff16 {
 //------------------------------------------------------------------------------
 // Datatypes and Constants
 
-// Modulus for field operations
-static const ffe_t kModulus = 65535;
-
-// LFSR Polynomial that generates the field elements
-static const unsigned kPolynomial = 0x1002D;
-
 // Basis used for generating logarithm tables
 static const ffe_t kCantorBasis[kBits] = {
     0x0001, 0xACCA, 0x3C0E, 0x163E,
@@ -634,7 +628,7 @@ void Encode(
 {
     // work <- data
 
-    // FIXME: Unroll first loop to eliminate this
+    // TBD: Unroll first loop to eliminate this
     for (unsigned i = 0; i < m; ++i)
         memcpy(work[i], data[i], buffer_bytes);
 
@@ -665,7 +659,7 @@ void Encode(
 
         void** temp = work + m;
 
-        // FIXME: Unroll first loop to eliminate this
+        // TBD: Unroll first loop to eliminate this
         for (unsigned j = 0; j < m; ++j)
             memcpy(temp[j], data[j], buffer_bytes);
 
@@ -692,7 +686,7 @@ void Encode(
 
         // work <- work XOR temp
 
-        // FIXME: Unroll last loop to eliminate this
+        // TBD: Unroll last loop to eliminate this
         for (unsigned j = 0; j < m; ++j)
             xor_mem(work[j], temp[j], buffer_bytes);
     }
@@ -737,7 +731,7 @@ void Encode(
 
         // work <- work XOR temp
 
-        // FIXME: Unroll last loop to eliminate this
+        // TBD: Unroll last loop to eliminate this
         for (unsigned j = 0; j < m; ++j)
             xor_mem(work[j], temp[j], buffer_bytes);
     }

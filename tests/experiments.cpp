@@ -105,12 +105,6 @@ ffe_t kGFBasis[kGFBits] = {
 };
 #endif
 
-/*
-    Cantor Basis introduced by:
-    D. G. Cantor, "On arithmetical algorithms over finite fields",
-    Journal of Combinatorial Theory, Series A, vol. 50, no. 2, pp. 285-300, 1989.
-*/
-
 static const unsigned kFieldSize = (unsigned)1 << kGFBits; //Field size
 static const unsigned kModulus = kFieldSize - 1;
 

@@ -38,18 +38,12 @@ namespace leopard { namespace ff8 {
 //------------------------------------------------------------------------------
 // Datatypes and Constants
 
-// Modulus for field operations
-static const ffe_t kModulus = 255;
-
-// LFSR Polynomial that generates the field elements
-static const unsigned kPolynomial = 0x11D;
-
 // Basis used for generating logarithm tables
 static const ffe_t kCantorBasis[kBits] = {
     1, 214, 152, 146, 86, 200, 88, 230
 };
 
-// Using the Cantor basis here enables us to avoid a lot of extra calculations
+// Using the Cantor basis {2} here enables us to avoid a lot of extra calculations
 // when applying the formal derivative in decoding.
 
 
@@ -59,7 +53,7 @@ static const ffe_t kCantorBasis[kBits] = {
 // z = x + y (mod kModulus)
 static inline ffe_t AddMod(const ffe_t a, const ffe_t b)
 {
-    const unsigned sum = (unsigned)a + b;
+    const unsigned sum = static_cast<unsigned>(a) + b;
 
     // Partial reduction step, allowing for kModulus to be returned
     return static_cast<ffe_t>(sum + (sum >> kBits));
@@ -68,7 +62,7 @@ static inline ffe_t AddMod(const ffe_t a, const ffe_t b)
 // z = x - y (mod kModulus)
 static inline ffe_t SubMod(const ffe_t a, const ffe_t b)
 {
-    const unsigned dif = (unsigned)a - b;
+    const unsigned dif = static_cast<unsigned>(a) - b;
 
     // Partial reduction step, allowing for kModulus to be returned
     return static_cast<ffe_t>(dif + (dif >> kBits));
@@ -123,7 +117,7 @@ static LEO_FORCE_INLINE void FWHT_4(ffe_t* data, unsigned s)
     data[y] = t3;
 }
 
-static inline void FWHT_8(ffe_t* data)
+static void FWHT_8(ffe_t* data)
 {
     ffe_t t0 = data[0];
     ffe_t t1 = data[1];
@@ -156,9 +150,9 @@ static inline void FWHT_8(ffe_t* data)
 }
 
 // Decimation in time (DIT) version
-static void FWHT(ffe_t* data, const unsigned ldn)
+static void FWHT(ffe_t* data, const unsigned bits)
 {
-    const unsigned n = (1UL << ldn);
+    const unsigned n = (1UL << bits);
 
     if (n <= 2)
     {
@@ -167,16 +161,16 @@ static void FWHT(ffe_t* data, const unsigned ldn)
         return;
     }
 
-    for (unsigned ldm = ldn; ldm > 3; ldm -= 2)
+    for (unsigned i = bits; i > 3; i -= 2)
     {
-        unsigned m = (1UL << ldm);
+        unsigned m = (1UL << i);
         unsigned m4 = (m >> 2);
         for (unsigned r = 0; r < n; r += m)
             for (unsigned j = 0; j < m4; j++)
                 FWHT_4(data + j + r, m4);
     }
 
-    if (ldn & 1)
+    if (bits & 1)
     {
         for (unsigned i0 = 0; i0 < n; i0 += 8)
             FWHT_8(data + i0);
@@ -231,7 +225,7 @@ static void InitializeLogarithmTables()
     }
     ExpLUT[0] = kModulus;
 
-    // Conversion to Cantor basis:
+    // Conversion to Cantor basis {2}:
 
     LogLUT[0] = 0;
     for (unsigned i = 0; i < kBits; ++i)
@@ -246,9 +240,12 @@ static void InitializeLogarithmTables()
     for (unsigned i = 0; i < kOrder; ++i)
         LogLUT[i] = ExpLUT[LogLUT[i]];
 
+    // Generate Exp table from Log table:
+
     for (unsigned i = 0; i < kOrder; ++i)
         ExpLUT[LogLUT[i]] = i;
 
+    // Note: Handles modulus wrap around with LUT
     ExpLUT[kModulus] = ExpLUT[0];
 }
 
@@ -271,6 +268,14 @@ struct {
 // Returns a * Log(b)
 static ffe_t MultiplyLog(ffe_t a, ffe_t log_b)
 {
+    /*
+        Note that this operation is not a normal multiplication in a finite
+        field because the right operand is already a logarithm.  This is done
+        because it moves K table lookups from the Decode() method into the
+        initialization step that is less performance critical.  The LogWalsh[]
+        table below contains precalculated logarithms so it is easier to do
+        all the other multiplies in that form as well.
+    */
     if (a == 0)
         return 0;
     return ExpLUT[AddMod(LogLUT[a], log_b)];
@@ -737,6 +742,8 @@ static void FFTInitialize()
 {
     ffe_t temp[kBits - 1];
 
+    // Generate FFT skew vector {1}:
+
     for (unsigned i = 1; i < kBits; ++i)
         temp[i - 1] = static_cast<ffe_t>(1UL << i);
 
@@ -779,9 +786,9 @@ void VectorFFTButterfly(
     unsigned count,
     void** x,
     void** y,
-    const ffe_t skew)
+    const ffe_t log_m)
 {
-    if (skew == kModulus)
+    if (log_m == kModulus)
     {
         VectorXOR(bytes, count, y, x);
         return;
@@ -795,14 +802,14 @@ void VectorFFTButterfly(
             x[1], y[1],
             x[2], y[2],
             x[3], y[3],
-            skew, bytes);
+            log_m, bytes);
         x += 4, y += 4;
         count -= 4;
     }
 #endif // LEO_USE_VECTOR4_OPT
 
     for (unsigned i = 0; i < count; ++i)
-        fft_butterfly(x[i], y[i], skew, bytes);
+        fft_butterfly(x[i], y[i], log_m, bytes);
 }
 
 void VectorIFFTButterfly(
@@ -810,9 +817,9 @@ void VectorIFFTButterfly(
     unsigned count,
     void** x,
     void** y,
-    const ffe_t skew)
+    const ffe_t log_m)
 {
-    if (skew == kModulus)
+    if (log_m == kModulus)
     {
         VectorXOR(bytes, count, y, x);
         return;
@@ -826,14 +833,14 @@ void VectorIFFTButterfly(
             x[1], y[1],
             x[2], y[2],
             x[3], y[3],
-            skew, bytes);
+            log_m, bytes);
         x += 4, y += 4;
         count -= 4;
     }
 #endif // LEO_USE_VECTOR4_OPT
 
     for (unsigned i = 0; i < count; ++i)
-        ifft_butterfly(x[i], y[i], skew, bytes);
+        ifft_butterfly(x[i], y[i], log_m, bytes);
 }
 
 
@@ -850,7 +857,7 @@ void Encode(
 {
     // work <- data
 
-    // FIXME: Unroll first loop to eliminate this
+    // TBD: Unroll first loop to eliminate this
     unsigned first_end = m;
     if (original_count < m)
     {
@@ -893,7 +900,7 @@ void Encode(
         data += m;
         void** temp = work + m;
 
-        // FIXME: Unroll first loop to eliminate this
+        // TBD: Unroll first loop to eliminate this
         for (unsigned j = 0; j < m; ++j)
             memcpy(temp[j], data[j], buffer_bytes);
 
@@ -916,7 +923,7 @@ void Encode(
 
         // work <- work XOR temp
 
-        // FIXME: Unroll last loop to eliminate this
+        // TBD: Unroll last loop to eliminate this
         VectorXOR(
             buffer_bytes,
             m,
@@ -965,7 +972,7 @@ void Encode(
 
         // work <- work XOR temp
 
-        // FIXME: Unroll last loop to eliminate this
+        // TBD: Unroll last loop to eliminate this
         VectorXOR(
             buffer_bytes,
             m,

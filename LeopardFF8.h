@@ -54,6 +54,12 @@ static const unsigned kBits = 8;
 // Finite field order: Number of elements in the field
 static const unsigned kOrder = 256;
 
+// Modulus for field operations
+static const ffe_t kModulus = 255;
+
+// LFSR Polynomial that generates the field elements
+static const unsigned kPolynomial = 0x11D;
+
 
 //------------------------------------------------------------------------------
 // Fast Walsh-Hadamard Transform (FWHT) (mod kModulus)
@@ -78,8 +84,9 @@ void mul_mem(
 // FFT Operations
 
 /*
-    if (log_m != kModulus)
-        x[] ^= exp(log(y[]) + log_m)
+    Precondition: log_m != kModulus
+
+    x[] ^= exp(log(y[]) + log_m)
     y[] ^= x[]
 */
 void fft_butterfly(
@@ -103,9 +110,10 @@ void fft_butterfly4(
 // IFFT Operations
 
 /*
+    Precondition: log_m != kModulus
+
     y[] ^= x[]
-    if (log_m != kModulus)
-        x[] ^= exp(log(y[]) + log_m)
+    x[] ^= exp(log(y[]) + log_m)
 */
 void ifft_butterfly(
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
@@ -127,19 +135,29 @@ void ifft_butterfly4(
 //------------------------------------------------------------------------------
 // FFT
 
+/*
+    if (log_m != kModulus)
+        x[] ^= exp(log(y[]) + log_m)
+    y[] ^= x[]
+*/
 void VectorFFTButterfly(
     const uint64_t bytes,
     unsigned count,
     void** x,
     void** y,
-    const ffe_t skew);
+    const ffe_t log_m);
 
+/*
+    y[] ^= x[]
+    if (log_m != kModulus)
+        x[] ^= exp(log(y[]) + log_m)
+*/
 void VectorIFFTButterfly(
     const uint64_t bytes,
     unsigned count,
     void** x,
     void** y,
-    const ffe_t skew);
+    const ffe_t log_m);
 
 
 //------------------------------------------------------------------------------
