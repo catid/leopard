@@ -506,7 +506,7 @@ static void BasicTest(const TestParameters& params)
             return;
         }
 
-#if 0
+#if 1
         for (unsigned i = 0; i < params.original_count; ++i)
         {
             if (!original_data[i])
@@ -758,6 +758,7 @@ int main(int argc, char **argv)
     t_leo_init.EndCall();
     t_leo_init.Print(1);
 
+#if 0
     ParallelXORBenchmark();
 #ifdef LEO_HAS_FF8
     ParallelButterfly8Benchmark();
@@ -765,6 +766,7 @@ int main(int argc, char **argv)
 #ifdef LEO_HAS_FF16
     ParallelButterfly16Benchmark();
 #endif // LEO_HAS_FF16
+#endif
 
     TestParameters params;
 

@@ -280,7 +280,7 @@ static ffe_t FFEMultiplyLog(ffe_t a, ffe_t log_b)
 }
 
 
-bool InitializeMultiplyTables()
+void InitializeMultiplyTables()
 {
     for (int log_y = 0; log_y < 256; ++log_y)
     {
@@ -307,8 +307,6 @@ bool InitializeMultiplyTables()
         }
 #endif // LEO_TRY_AVX2
     }
-
-    return true;
 }
 
 
@@ -332,9 +330,9 @@ void mul_mem(
 #define LEO_MUL_256(x_ptr, y_ptr) { \
             LEO_M256 data = _mm256_loadu_si256(y_ptr); \
             LEO_M256 lo = _mm256_and_si256(data, clr_mask); \
+            lo = _mm256_shuffle_epi8(table_lo_y, lo); \
             LEO_M256 hi = _mm256_srli_epi64(data, 4); \
             hi = _mm256_and_si256(hi, clr_mask); \
-            lo = _mm256_shuffle_epi8(table_lo_y, lo); \
             hi = _mm256_shuffle_epi8(table_hi_y, hi); \
             _mm256_storeu_si256(x_ptr, _mm256_xor_si256(lo, hi)); }
 
@@ -1190,6 +1188,7 @@ bool Initialize()
         return false;
 
     InitializeLogarithmTables();
+    InitializeMultiplyTables();
     FFTInitialize();
 
     IsInitialized = true;
