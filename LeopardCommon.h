@@ -60,6 +60,9 @@
 // Define this to enable the optimized version of FWHT()
 //#define LEO_FWHT_OPT
 
+// Avoid scheduling reduced FFT operations that are unneeded
+//#define LEO_SCHEDULE_OPT
+
 
 //------------------------------------------------------------------------------
 // Debug

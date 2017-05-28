@@ -868,7 +868,11 @@ void Encode(
         const unsigned range = width << 1;
         const ffe_t* skewLUT = FFTSkew + m - 1;
 
+#ifdef LEO_SCHEDULE_OPT
         for (unsigned j = width; j < first_end; j += range)
+#else
+        for (unsigned j = width; j < m; j += range)
+#endif
         {
             VectorIFFTButterfly(
                 buffer_bytes,
@@ -938,11 +942,15 @@ void Encode(
         for (unsigned width = 1, shift = 1; width < m; width <<= 1, ++shift)
         {
             // Calculate stop considering that the right is all zeroes
-            const unsigned stop = ((last_count + width - 1) >> shift) << shift;
             const unsigned range = width << 1;
             const ffe_t* skewLUT = FFTSkew + m + i - 1;
 
+#ifdef LEO_SCHEDULE_OPT
+            const unsigned stop = ((last_count + width - 1) >> shift) << shift;
             for (unsigned j = width; j < stop; j += range)
+#else
+            for (unsigned j = width; j < m; j += range)
+#endif
             {
                 VectorIFFTButterfly(
                     buffer_bytes,
@@ -971,7 +979,11 @@ skip_body:
         const ffe_t* skewLUT = FFTSkew + width - 1;
         const unsigned range = width << 1;
 
+#ifdef LEO_SCHEDULE_OPT
         for (unsigned j = 0; j < recovery_count; j += range)
+#else
+        for (unsigned j = 0; j < m; j += range)
+#endif
         {
             VectorFFTButterfly(
                 buffer_bytes,
@@ -987,6 +999,8 @@ skip_body:
 //------------------------------------------------------------------------------
 // ErrorBitfield
 
+#ifdef LEO_SCHEDULE_OPT
+
 // Used in decoding to decide which final FFT operations to perform
 class ErrorBitfield
 {
@@ -1001,7 +1015,7 @@ public:
 
     void Prepare();
 
-    LEO_FORCE_INLINE bool IsNeeded(unsigned mip_level, unsigned bit)
+    LEO_FORCE_INLINE bool IsNeeded(unsigned mip_level, unsigned bit) const
     {
         if (mip_level >= 8)
             return true;
@@ -1048,6 +1062,8 @@ void ErrorBitfield::Prepare()
         Words[6][i] = Words[6][i + 1] = Words[5][i] | Words[5][i + 1];
 }
 
+#endif // LEO_SCHEDULE_OPT
+
 
 //------------------------------------------------------------------------------
 // Decode
@@ -1064,7 +1080,9 @@ void Decode(
 {
     // Fill in error locations
 
+#ifdef LEO_SCHEDULE_OPT
     ErrorBitfield ErrorBits;
+#endif // LEO_SCHEDULE_OPT
 
     ffe_t ErrorLocations[kOrder];
     for (unsigned i = 0; i < recovery_count; ++i)
@@ -1080,11 +1098,15 @@ void Decode(
         if (!original[i])
         {
             ErrorLocations[i + m] = 1;
+#ifdef LEO_SCHEDULE_OPT
             ErrorBits.Set(i + m);
+#endif // LEO_SCHEDULE_OPT
         }
     }
 
+#ifdef LEO_SCHEDULE_OPT
     ErrorBits.Prepare();
+#endif // LEO_SCHEDULE_OPT
 
     // Evaluate error locator polynomial
 
@@ -1127,7 +1149,11 @@ void Decode(
     {
         const unsigned range = width << 1;
 
+#ifdef LEO_SCHEDULE_OPT
         for (unsigned j = width; j < input_count; j += range)
+#else
+        for (unsigned j = width; j < n; j += range)
+#endif
         {
             VectorIFFTButterfly(
                 buffer_bytes,
@@ -1159,10 +1185,16 @@ void Decode(
         const ffe_t* skewLUT = FFTSkew + width - 1;
         const unsigned range = width << 1;
 
+#ifdef LEO_SCHEDULE_OPT
         for (unsigned j = (m < range) ? 0 : m; j < output_count; j += range)
+#else
+        for (unsigned j = 0; j < n; j += range)
+#endif
         {
+#ifdef LEO_SCHEDULE_OPT
             if (!ErrorBits.IsNeeded(mip_level, j))
                 continue;
+#endif // LEO_SCHEDULE_OPT
 
             VectorFFTButterfly(
                 buffer_bytes,
@@ -1177,7 +1209,7 @@ void Decode(
 
     for (unsigned i = 0; i < original_count; ++i)
         if (!original[i])
-            mul_mem(work[i], work[i + m], kModulus - ErrorLocations[i], buffer_bytes);
+            mul_mem(work[i], work[i + m], kModulus - ErrorLocations[i + m], buffer_bytes);
 }
 
 
