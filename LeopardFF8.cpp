@@ -48,8 +48,8 @@ static const ffe_t kModulus = 255;
 static const unsigned kPolynomial = 0x11D;
 
 // Basis used for generating logarithm tables
-static const ffe_t kBasis[kBits] = {
-    1, 214, 152, 146, 86, 200, 88, 230 // Cantor basis
+static const ffe_t kCantorBasis[kBits] = {
+    1, 214, 152, 146, 86, 200, 88, 230
 };
 
 // Using the Cantor basis here enables us to avoid a lot of extra calculations
@@ -234,12 +234,12 @@ static void InitializeLogarithmTables()
     }
     ExpLUT[0] = kModulus;
 
-    // Conversion to chosen basis:
+    // Conversion to Cantor basis:
 
     LogLUT[0] = 0;
     for (unsigned i = 0; i < kBits; ++i)
     {
-        const ffe_t basis = kBasis[i];
+        const ffe_t basis = kCantorBasis[i];
         const unsigned width = static_cast<unsigned>(1UL << i);
 
         for (unsigned j = 0; j < width; ++j)
@@ -271,14 +271,6 @@ struct {
 } static Multiply256LUT;
 #endif // LEO_TRY_AVX2
 
-// Returns a * b
-static ffe_t FFEMultiply(ffe_t a, ffe_t b)
-{
-    if (a == 0 || b == 0)
-        return 0;
-    return ExpLUT[AddMod(LogLUT[a], LogLUT[b])];
-}
-
 // Returns a * Log(b)
 static ffe_t FFEMultiplyLog(ffe_t a, ffe_t log_b)
 {
@@ -287,29 +279,30 @@ static ffe_t FFEMultiplyLog(ffe_t a, ffe_t log_b)
     return ExpLUT[AddMod(LogLUT[a], log_b)];
 }
 
+
 bool InitializeMultiplyTables()
 {
-    for (int y = 0; y < 256; ++y)
+    for (int log_y = 0; log_y < 256; ++log_y)
     {
         uint8_t lo[16], hi[16];
         for (unsigned char x = 0; x < 16; ++x)
         {
-            lo[x] = FFEMultiply(x,      static_cast<uint8_t>(y));
-            hi[x] = FFEMultiply(x << 4, static_cast<uint8_t>(y));
+            lo[x] = FFEMultiplyLog(x, static_cast<uint8_t>(log_y));
+            hi[x] = FFEMultiplyLog(x << 4, static_cast<uint8_t>(log_y));
         }
 
         const LEO_M128 table_lo = _mm_loadu_si128((LEO_M128*)lo);
         const LEO_M128 table_hi = _mm_loadu_si128((LEO_M128*)hi);
 
-        _mm_storeu_si128(Multiply128LUT.Lo + y, table_lo);
-        _mm_storeu_si128(Multiply128LUT.Hi + y, table_hi);
+        _mm_storeu_si128(Multiply128LUT.Lo + log_y, table_lo);
+        _mm_storeu_si128(Multiply128LUT.Hi + log_y, table_hi);
 
 #if defined(LEO_TRY_AVX2)
         if (CpuHasAVX2)
         {
-            _mm256_storeu_si256(Multiply256LUT.Lo + y,
+            _mm256_storeu_si256(Multiply256LUT.Lo + log_y,
                 _mm256_broadcastsi128_si256(table_lo));
-            _mm256_storeu_si256(Multiply256LUT.Hi + y,
+            _mm256_storeu_si256(Multiply256LUT.Hi + log_y,
                 _mm256_broadcastsi128_si256(table_hi));
         }
 #endif // LEO_TRY_AVX2
@@ -318,51 +311,37 @@ bool InitializeMultiplyTables()
     return true;
 }
 
-// vx[] = vy[] * m
-void mul_mem_set(
-    void * LEO_RESTRICT vx, const void * LEO_RESTRICT vy,
-    ffe_t m, uint64_t bytes)
-{
-    if (m <= 1)
-    {
-        if (m == 1)
-            memcpy(vx, vy, bytes);
-        else
-            memset(vx, 0, bytes);
-        return;
-    }
 
+void mul_mem(
+    void * LEO_RESTRICT x, const void * LEO_RESTRICT y,
+    ffe_t log_m, uint64_t bytes)
+{
 #if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
     {
-        const LEO_M256 table_lo_y = _mm256_loadu_si256(Multiply256LUT.Lo + m);
-        const LEO_M256 table_hi_y = _mm256_loadu_si256(Multiply256LUT.Hi + m);
+        const LEO_M256 table_lo_y = _mm256_loadu_si256(Multiply256LUT.Lo + log_m);
+        const LEO_M256 table_hi_y = _mm256_loadu_si256(Multiply256LUT.Hi + log_m);
 
         const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
 
-        LEO_M256 * LEO_RESTRICT z32 = reinterpret_cast<LEO_M256 *>(vx);
-        const LEO_M256 * LEO_RESTRICT x32 = reinterpret_cast<const LEO_M256 *>(vy);
+        LEO_M256 * LEO_RESTRICT x32 = reinterpret_cast<LEO_M256 *>(x);
+        const LEO_M256 * LEO_RESTRICT y32 = reinterpret_cast<const LEO_M256 *>(y);
 
         do
         {
-            LEO_M256 x0 = _mm256_loadu_si256(x32);
-            LEO_M256 l0 = _mm256_and_si256(x0, clr_mask);
-            x0 = _mm256_srli_epi64(x0, 4);
-            LEO_M256 h0 = _mm256_and_si256(x0, clr_mask);
-            l0 = _mm256_shuffle_epi8(table_lo_y, l0);
-            h0 = _mm256_shuffle_epi8(table_hi_y, h0);
-            _mm256_storeu_si256(z32, _mm256_xor_si256(l0, h0));
+#define LEO_MUL_256(x_ptr, y_ptr) { \
+            LEO_M256 data = _mm256_loadu_si256(y_ptr); \
+            LEO_M256 lo = _mm256_and_si256(data, clr_mask); \
+            LEO_M256 hi = _mm256_srli_epi64(data, 4); \
+            hi = _mm256_and_si256(hi, clr_mask); \
+            lo = _mm256_shuffle_epi8(table_lo_y, lo); \
+            hi = _mm256_shuffle_epi8(table_hi_y, hi); \
+            _mm256_storeu_si256(x_ptr, _mm256_xor_si256(lo, hi)); }
 
-            LEO_M256 x1 = _mm256_loadu_si256(x32 + 1);
-            LEO_M256 l1 = _mm256_and_si256(x1, clr_mask);
-            x1 = _mm256_srli_epi64(x1, 4);
-            LEO_M256 h1 = _mm256_and_si256(x1, clr_mask);
-            l1 = _mm256_shuffle_epi8(table_lo_y, l1);
-            h1 = _mm256_shuffle_epi8(table_hi_y, h1);
-            _mm256_storeu_si256(z32 + 1, _mm256_xor_si256(l1, h1));
+            LEO_MUL_256(x32 + 1, y32 + 1);
+            LEO_MUL_256(x32, y32);
+            y32 += 2, x32 += 2;
 
-            x32 += 2;
-            z32 += 2;
             bytes -= 64;
         } while (bytes > 0);
 
@@ -370,50 +349,31 @@ void mul_mem_set(
     }
 #endif // LEO_TRY_AVX2
 
-    const LEO_M128 table_lo_y = _mm_loadu_si128(Multiply128LUT.Lo + m);
-    const LEO_M128 table_hi_y = _mm_loadu_si128(Multiply128LUT.Hi + m);
+    const LEO_M128 table_lo_y = _mm_loadu_si128(Multiply128LUT.Lo + log_m);
+    const LEO_M128 table_hi_y = _mm_loadu_si128(Multiply128LUT.Hi + log_m);
 
     const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
 
-    LEO_M128 * LEO_RESTRICT       x16 = reinterpret_cast<LEO_M128 *>      (vx);
-    const LEO_M128 * LEO_RESTRICT y16 = reinterpret_cast<const LEO_M128 *>(vy);
+    LEO_M128 * LEO_RESTRICT x16 = reinterpret_cast<LEO_M128 *>(x);
+    const LEO_M128 * LEO_RESTRICT y16 = reinterpret_cast<const LEO_M128 *>(y);
 
     do
     {
-        LEO_M128 x3 = _mm_loadu_si128(y16 + 3);
-        LEO_M128 l3 = _mm_and_si128(x3, clr_mask);
-        x3 = _mm_srli_epi64(x3, 4);
-        LEO_M128 h3 = _mm_and_si128(x3, clr_mask);
-        l3 = _mm_shuffle_epi8(table_lo_y, l3);
-        h3 = _mm_shuffle_epi8(table_hi_y, h3);
+#define LEO_MUL_128(x_ptr, y_ptr) { \
+        LEO_M128 data = _mm_loadu_si128(y_ptr); \
+        LEO_M128 lo = _mm_and_si128(data, clr_mask); \
+        lo = _mm_shuffle_epi8(table_lo_y, lo); \
+        LEO_M128 hi = _mm_srli_epi64(data, 4); \
+        hi = _mm_and_si128(hi, clr_mask); \
+        hi = _mm_shuffle_epi8(table_hi_y, hi); \
+        _mm_storeu_si128(x_ptr, _mm_xor_si128(lo, hi)); }
 
-        LEO_M128 x2 = _mm_loadu_si128(y16 + 2);
-        LEO_M128 l2 = _mm_and_si128(x2, clr_mask);
-        x2 = _mm_srli_epi64(x2, 4);
-        LEO_M128 h2 = _mm_and_si128(x2, clr_mask);
-        l2 = _mm_shuffle_epi8(table_lo_y, l2);
-        h2 = _mm_shuffle_epi8(table_hi_y, h2);
-
-        LEO_M128 x1 = _mm_loadu_si128(y16 + 1);
-        LEO_M128 l1 = _mm_and_si128(x1, clr_mask);
-        x1 = _mm_srli_epi64(x1, 4);
-        LEO_M128 h1 = _mm_and_si128(x1, clr_mask);
-        l1 = _mm_shuffle_epi8(table_lo_y, l1);
-        h1 = _mm_shuffle_epi8(table_hi_y, h1);
-
-        LEO_M128 x0 = _mm_loadu_si128(y16);
-        LEO_M128 l0 = _mm_and_si128(x0, clr_mask);
-        x0 = _mm_srli_epi64(x0, 4);
-        LEO_M128 h0 = _mm_and_si128(x0, clr_mask);
-        l0 = _mm_shuffle_epi8(table_lo_y, l0);
-        h0 = _mm_shuffle_epi8(table_hi_y, h0);
-
-        _mm_storeu_si128(x16 + 3, _mm_xor_si128(l3, h3));
-        _mm_storeu_si128(x16 + 2, _mm_xor_si128(l2, h2));
-        _mm_storeu_si128(x16 + 1, _mm_xor_si128(l1, h1));
-        _mm_storeu_si128(x16,     _mm_xor_si128(l0, h0));
-
+        LEO_MUL_128(x16 + 3, y16 + 3);
+        LEO_MUL_128(x16 + 2, y16 + 2);
+        LEO_MUL_128(x16 + 1, y16 + 1);
+        LEO_MUL_128(x16, y16);
         x16 += 4, y16 += 4;
+
         bytes -= 64;
     } while (bytes > 0);
 }
@@ -422,46 +382,378 @@ void mul_mem_set(
 //------------------------------------------------------------------------------
 // FFT Operations
 
-// x[] ^= y[] * m, y[] ^= x[]
 void fft_butterfly(
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
-    ffe_t m, uint64_t bytes)
+    ffe_t log_m, uint64_t bytes)
 {
+    if (log_m == kModulus)
+    {
+        xor_mem(y, x, bytes);
+        return;
+    }
 
+#if defined(LEO_TRY_AVX2)
+    if (CpuHasAVX2)
+    {
+        const LEO_M256 table_lo_y = _mm256_loadu_si256(Multiply256LUT.Lo + log_m);
+        const LEO_M256 table_hi_y = _mm256_loadu_si256(Multiply256LUT.Hi + log_m);
+
+        const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
+
+        LEO_M256 * LEO_RESTRICT x32 = reinterpret_cast<LEO_M256 *>(x);
+        LEO_M256 * LEO_RESTRICT y32 = reinterpret_cast<LEO_M256 *>(y);
+
+        do
+        {
+#define LEO_FFTB_256(x_ptr, y_ptr) { \
+            LEO_M256 y_data = _mm256_loadu_si256(y_ptr); \
+            LEO_M256 lo = _mm256_and_si256(y_data, clr_mask); \
+            lo = _mm256_shuffle_epi8(table_lo_y, lo); \
+            LEO_M256 hi = _mm256_srli_epi64(y_data, 4); \
+            hi = _mm256_and_si256(hi, clr_mask); \
+            hi = _mm256_shuffle_epi8(table_hi_y, hi); \
+            LEO_M256 x_data = _mm256_loadu_si256(x_ptr); \
+            x_data = _mm256_xor_si256(x_data, _mm256_xor_si256(lo, hi)); \
+            y_data = _mm256_xor_si256(y_data, x_data); \
+            _mm256_storeu_si256(x_ptr, x_data); \
+            _mm256_storeu_si256(y_ptr, y_data); }
+
+            LEO_FFTB_256(x32 + 1, y32 + 1);
+            LEO_FFTB_256(x32, y32);
+            y32 += 2, x32 += 2;
+
+            bytes -= 64;
+        } while (bytes > 0);
+
+        return;
+    }
+#endif // LEO_TRY_AVX2
+
+    const LEO_M128 table_lo_y = _mm_loadu_si128(Multiply128LUT.Lo + log_m);
+    const LEO_M128 table_hi_y = _mm_loadu_si128(Multiply128LUT.Hi + log_m);
+
+    const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
+
+    LEO_M128 * LEO_RESTRICT x16 = reinterpret_cast<LEO_M128 *>(x);
+    LEO_M128 * LEO_RESTRICT y16 = reinterpret_cast<LEO_M128 *>(y);
+
+    do
+    {
+#define LEO_FFTB_128(x_ptr, y_ptr) { \
+        LEO_M128 y_data = _mm_loadu_si128(y_ptr); \
+        LEO_M128 lo = _mm_and_si128(y_data, clr_mask); \
+        lo = _mm_shuffle_epi8(table_lo_y, lo); \
+        LEO_M128 hi = _mm_srli_epi64(y_data, 4); \
+        hi = _mm_and_si128(hi, clr_mask); \
+        hi = _mm_shuffle_epi8(table_hi_y, hi); \
+        LEO_M128 x_data = _mm_loadu_si128(x_ptr); \
+        x_data = _mm_xor_si128(x_data, _mm_xor_si128(lo, hi)); \
+        y_data = _mm_xor_si128(y_data, x_data); \
+        _mm_storeu_si128(x_ptr, x_data); \
+        _mm_storeu_si128(y_ptr, y_data); }
+
+        LEO_FFTB_128(x16 + 3, y16 + 3);
+        LEO_FFTB_128(x16 + 2, y16 + 2);
+        LEO_FFTB_128(x16 + 1, y16 + 1);
+        LEO_FFTB_128(x16, y16);
+        x16 += 4, y16 += 4;
+
+        bytes -= 64;
+    } while (bytes > 0);
 }
 
-// For i = {0, 1, 2, 3}: x_i[] ^= y_i[] * m, y_i[] ^= x_i[]
+
 void fft_butterfly4(
     void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
     void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
     void * LEO_RESTRICT x_2, void * LEO_RESTRICT y_2,
     void * LEO_RESTRICT x_3, void * LEO_RESTRICT y_3,
-    ffe_t m, uint64_t bytes)
+    ffe_t log_m, uint64_t bytes)
 {
+    if (log_m == kModulus)
+    {
+        xor_mem4(
+            y_0, x_0,
+            y_1, x_1,
+            y_2, x_2,
+            y_3, x_3,
+            bytes);
+        return;
+    }
 
+#if defined(LEO_TRY_AVX2)
+    if (CpuHasAVX2)
+    {
+        const LEO_M256 table_lo_y = _mm256_loadu_si256(Multiply256LUT.Lo + log_m);
+        const LEO_M256 table_hi_y = _mm256_loadu_si256(Multiply256LUT.Hi + log_m);
+
+        const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
+
+        LEO_M256 * LEO_RESTRICT x32_0 = reinterpret_cast<LEO_M256 *>(x_0);
+        LEO_M256 * LEO_RESTRICT y32_0 = reinterpret_cast<LEO_M256 *>(y_0);
+        LEO_M256 * LEO_RESTRICT x32_1 = reinterpret_cast<LEO_M256 *>(x_1);
+        LEO_M256 * LEO_RESTRICT y32_1 = reinterpret_cast<LEO_M256 *>(y_1);
+        LEO_M256 * LEO_RESTRICT x32_2 = reinterpret_cast<LEO_M256 *>(x_2);
+        LEO_M256 * LEO_RESTRICT y32_2 = reinterpret_cast<LEO_M256 *>(y_2);
+        LEO_M256 * LEO_RESTRICT x32_3 = reinterpret_cast<LEO_M256 *>(x_3);
+        LEO_M256 * LEO_RESTRICT y32_3 = reinterpret_cast<LEO_M256 *>(y_3);
+
+        do
+        {
+            LEO_FFTB_256(x32_0 + 1, y32_0 + 1);
+            LEO_FFTB_256(x32_0, y32_0);
+            y32_0 += 2, x32_0 += 2;
+
+            LEO_FFTB_256(x32_1 + 1, y32_1 + 1);
+            LEO_FFTB_256(x32_1, y32_1);
+            y32_1 += 2, x32_1 += 2;
+
+            LEO_FFTB_256(x32_2 + 1, y32_2 + 1);
+            LEO_FFTB_256(x32_2, y32_2);
+            y32_2 += 2, x32_2 += 2;
+
+            LEO_FFTB_256(x32_3 + 1, y32_3 + 1);
+            LEO_FFTB_256(x32_3, y32_3);
+            y32_3 += 2, x32_3 += 2;
+
+            bytes -= 64;
+        } while (bytes > 0);
+
+        return;
+    }
+#endif // LEO_TRY_AVX2
+
+    const LEO_M128 table_lo_y = _mm_loadu_si128(Multiply128LUT.Lo + log_m);
+    const LEO_M128 table_hi_y = _mm_loadu_si128(Multiply128LUT.Hi + log_m);
+
+    const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
+
+    LEO_M128 * LEO_RESTRICT x16_0 = reinterpret_cast<LEO_M128 *>(x_0);
+    LEO_M128 * LEO_RESTRICT y16_0 = reinterpret_cast<LEO_M128 *>(y_0);
+    LEO_M128 * LEO_RESTRICT x16_1 = reinterpret_cast<LEO_M128 *>(x_1);
+    LEO_M128 * LEO_RESTRICT y16_1 = reinterpret_cast<LEO_M128 *>(y_1);
+    LEO_M128 * LEO_RESTRICT x16_2 = reinterpret_cast<LEO_M128 *>(x_2);
+    LEO_M128 * LEO_RESTRICT y16_2 = reinterpret_cast<LEO_M128 *>(y_2);
+    LEO_M128 * LEO_RESTRICT x16_3 = reinterpret_cast<LEO_M128 *>(x_3);
+    LEO_M128 * LEO_RESTRICT y16_3 = reinterpret_cast<LEO_M128 *>(y_3);
+
+    do
+    {
+        LEO_FFTB_128(x16_0 + 3, y16_0 + 3);
+        LEO_FFTB_128(x16_0 + 2, y16_0 + 2);
+        LEO_FFTB_128(x16_0 + 1, y16_0 + 1);
+        LEO_FFTB_128(x16_0, y16_0);
+        x16_0 += 4, y16_0 += 4;
+
+        LEO_FFTB_128(x16_1 + 3, y16_1 + 3);
+        LEO_FFTB_128(x16_1 + 2, y16_1 + 2);
+        LEO_FFTB_128(x16_1 + 1, y16_1 + 1);
+        LEO_FFTB_128(x16_1, y16_1);
+        x16_1 += 4, y16_1 += 4;
+
+        LEO_FFTB_128(x16_2 + 3, y16_2 + 3);
+        LEO_FFTB_128(x16_2 + 2, y16_2 + 2);
+        LEO_FFTB_128(x16_2 + 1, y16_2 + 1);
+        LEO_FFTB_128(x16_2, y16_2);
+        x16_2 += 4, y16_2 += 4;
+
+        LEO_FFTB_128(x16_3 + 3, y16_3 + 3);
+        LEO_FFTB_128(x16_3 + 2, y16_3 + 2);
+        LEO_FFTB_128(x16_3 + 1, y16_3 + 1);
+        LEO_FFTB_128(x16_3, y16_3);
+        x16_3 += 4, y16_3 += 4;
+
+        bytes -= 64;
+    } while (bytes > 0);
 }
 
 
 //------------------------------------------------------------------------------
 // IFFT Operations
 
-// y[] ^= x[], x[] ^= y[] * m
 void ifft_butterfly(
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
-    ffe_t m, uint64_t bytes)
+    ffe_t log_m, uint64_t bytes)
 {
+    if (log_m == kModulus)
+    {
+        xor_mem(y, x, bytes);
+        return;
+    }
 
+#if defined(LEO_TRY_AVX2)
+    if (CpuHasAVX2)
+    {
+        const LEO_M256 table_lo_y = _mm256_loadu_si256(Multiply256LUT.Lo + log_m);
+        const LEO_M256 table_hi_y = _mm256_loadu_si256(Multiply256LUT.Hi + log_m);
+
+        const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
+
+        LEO_M256 * LEO_RESTRICT x32 = reinterpret_cast<LEO_M256 *>(x);
+        LEO_M256 * LEO_RESTRICT y32 = reinterpret_cast<LEO_M256 *>(y);
+
+        do
+        {
+#define LEO_IFFTB_256(x_ptr, y_ptr) { \
+            LEO_M256 x_data = _mm256_loadu_si256(x_ptr); \
+            LEO_M256 y_data = _mm256_loadu_si256(y_ptr); \
+            y_data = _mm256_xor_si256(y_data, x_data); \
+            _mm256_storeu_si256(y_ptr, y_data); \
+            LEO_M256 lo = _mm256_and_si256(y_data, clr_mask); \
+            lo = _mm256_shuffle_epi8(table_lo_y, lo); \
+            LEO_M256 hi = _mm256_srli_epi64(y_data, 4); \
+            hi = _mm256_and_si256(hi, clr_mask); \
+            hi = _mm256_shuffle_epi8(table_hi_y, hi); \
+            x_data = _mm256_xor_si256(x_data, _mm256_xor_si256(lo, hi)); \
+            _mm256_storeu_si256(x_ptr, x_data); }
+
+            LEO_IFFTB_256(x32 + 1, y32 + 1);
+            LEO_IFFTB_256(x32, y32);
+            y32 += 2, x32 += 2;
+
+            bytes -= 64;
+        } while (bytes > 0);
+
+        return;
+    }
+#endif // LEO_TRY_AVX2
+
+    const LEO_M128 table_lo_y = _mm_loadu_si128(Multiply128LUT.Lo + log_m);
+    const LEO_M128 table_hi_y = _mm_loadu_si128(Multiply128LUT.Hi + log_m);
+
+    const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
+
+    LEO_M128 * LEO_RESTRICT x16 = reinterpret_cast<LEO_M128 *>(x);
+    LEO_M128 * LEO_RESTRICT y16 = reinterpret_cast<LEO_M128 *>(y);
+
+    do
+    {
+#define LEO_IFFTB_128(x_ptr, y_ptr) { \
+        LEO_M128 x_data = _mm_loadu_si128(x_ptr); \
+        LEO_M128 y_data = _mm_loadu_si128(y_ptr); \
+        y_data = _mm_xor_si128(y_data, x_data); \
+        _mm_storeu_si128(y_ptr, y_data); \
+        LEO_M128 lo = _mm_and_si128(y_data, clr_mask); \
+        lo = _mm_shuffle_epi8(table_lo_y, lo); \
+        LEO_M128 hi = _mm_srli_epi64(y_data, 4); \
+        hi = _mm_and_si128(hi, clr_mask); \
+        hi = _mm_shuffle_epi8(table_hi_y, hi); \
+        x_data = _mm_xor_si128(x_data, _mm_xor_si128(lo, hi)); \
+        _mm_storeu_si128(x_ptr, x_data); }
+
+        LEO_IFFTB_128(x16 + 3, y16 + 3);
+        LEO_IFFTB_128(x16 + 2, y16 + 2);
+        LEO_IFFTB_128(x16 + 1, y16 + 1);
+        LEO_IFFTB_128(x16, y16);
+        x16 += 4, y16 += 4;
+
+        bytes -= 64;
+    } while (bytes > 0);
 }
 
-// For i = {0, 1, 2, 3}: y_i[] ^= x_i[], x_i[] ^= y_i[] * m
+
 void ifft_butterfly4(
     void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
     void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
     void * LEO_RESTRICT x_2, void * LEO_RESTRICT y_2,
     void * LEO_RESTRICT x_3, void * LEO_RESTRICT y_3,
-    ffe_t m, uint64_t bytes)
+    ffe_t log_m, uint64_t bytes)
 {
+    if (log_m == kModulus)
+    {
+        xor_mem4(
+            y_0, x_0,
+            y_1, x_1,
+            y_2, x_2,
+            y_3, x_3,
+            bytes);
+        return;
+    }
 
+#if defined(LEO_TRY_AVX2)
+    if (CpuHasAVX2)
+    {
+        const LEO_M256 table_lo_y = _mm256_loadu_si256(Multiply256LUT.Lo + log_m);
+        const LEO_M256 table_hi_y = _mm256_loadu_si256(Multiply256LUT.Hi + log_m);
+
+        const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
+
+        LEO_M256 * LEO_RESTRICT x32_0 = reinterpret_cast<LEO_M256 *>(x_0);
+        LEO_M256 * LEO_RESTRICT y32_0 = reinterpret_cast<LEO_M256 *>(y_0);
+        LEO_M256 * LEO_RESTRICT x32_1 = reinterpret_cast<LEO_M256 *>(x_1);
+        LEO_M256 * LEO_RESTRICT y32_1 = reinterpret_cast<LEO_M256 *>(y_1);
+        LEO_M256 * LEO_RESTRICT x32_2 = reinterpret_cast<LEO_M256 *>(x_2);
+        LEO_M256 * LEO_RESTRICT y32_2 = reinterpret_cast<LEO_M256 *>(y_2);
+        LEO_M256 * LEO_RESTRICT x32_3 = reinterpret_cast<LEO_M256 *>(x_3);
+        LEO_M256 * LEO_RESTRICT y32_3 = reinterpret_cast<LEO_M256 *>(y_3);
+
+        do
+        {
+            LEO_IFFTB_256(x32_0 + 1, y32_0 + 1);
+            LEO_IFFTB_256(x32_0, y32_0);
+            y32_0 += 2, x32_0 += 2;
+
+            LEO_IFFTB_256(x32_1 + 1, y32_1 + 1);
+            LEO_IFFTB_256(x32_1, y32_1);
+            y32_1 += 2, x32_1 += 2;
+
+            LEO_IFFTB_256(x32_2 + 1, y32_2 + 1);
+            LEO_IFFTB_256(x32_2, y32_2);
+            y32_2 += 2, x32_2 += 2;
+
+            LEO_IFFTB_256(x32_3 + 1, y32_3 + 1);
+            LEO_IFFTB_256(x32_3, y32_3);
+            y32_3 += 2, x32_3 += 2;
+
+            bytes -= 64;
+        } while (bytes > 0);
+
+        return;
+    }
+#endif // LEO_TRY_AVX2
+
+    const LEO_M128 table_lo_y = _mm_loadu_si128(Multiply128LUT.Lo + log_m);
+    const LEO_M128 table_hi_y = _mm_loadu_si128(Multiply128LUT.Hi + log_m);
+
+    const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
+
+    LEO_M128 * LEO_RESTRICT x16_0 = reinterpret_cast<LEO_M128 *>(x_0);
+    LEO_M128 * LEO_RESTRICT y16_0 = reinterpret_cast<LEO_M128 *>(y_0);
+    LEO_M128 * LEO_RESTRICT x16_1 = reinterpret_cast<LEO_M128 *>(x_1);
+    LEO_M128 * LEO_RESTRICT y16_1 = reinterpret_cast<LEO_M128 *>(y_1);
+    LEO_M128 * LEO_RESTRICT x16_2 = reinterpret_cast<LEO_M128 *>(x_2);
+    LEO_M128 * LEO_RESTRICT y16_2 = reinterpret_cast<LEO_M128 *>(y_2);
+    LEO_M128 * LEO_RESTRICT x16_3 = reinterpret_cast<LEO_M128 *>(x_3);
+    LEO_M128 * LEO_RESTRICT y16_3 = reinterpret_cast<LEO_M128 *>(y_3);
+
+    do
+    {
+        LEO_IFFTB_128(x16_0 + 3, y16_0 + 3);
+        LEO_IFFTB_128(x16_0 + 2, y16_0 + 2);
+        LEO_IFFTB_128(x16_0 + 1, y16_0 + 1);
+        LEO_IFFTB_128(x16_0, y16_0);
+        x16_0 += 4, y16_0 += 4;
+
+        LEO_IFFTB_128(x16_1 + 3, y16_1 + 3);
+        LEO_IFFTB_128(x16_1 + 2, y16_1 + 2);
+        LEO_IFFTB_128(x16_1 + 1, y16_1 + 1);
+        LEO_IFFTB_128(x16_1, y16_1);
+        x16_1 += 4, y16_1 += 4;
+
+        LEO_IFFTB_128(x16_2 + 3, y16_2 + 3);
+        LEO_IFFTB_128(x16_2 + 2, y16_2 + 2);
+        LEO_IFFTB_128(x16_2 + 1, y16_2 + 1);
+        LEO_IFFTB_128(x16_2, y16_2);
+        x16_2 += 4, y16_2 += 4;
+
+        LEO_IFFTB_128(x16_3 + 3, y16_3 + 3);
+        LEO_IFFTB_128(x16_3 + 2, y16_3 + 2);
+        LEO_IFFTB_128(x16_3 + 1, y16_3 + 1);
+        LEO_IFFTB_128(x16_3, y16_3);
+        x16_3 += 4, y16_3 += 4;
+
+        bytes -= 64;
+    } while (bytes > 0);
 }
 
 
@@ -476,27 +768,29 @@ void FFTInitialize()
     ffe_t temp[kBits - 1];
 
     for (unsigned i = 1; i < kBits; ++i)
-        temp[i - 1] = (ffe_t)((unsigned)1 << i);
+        temp[i - 1] = static_cast<ffe_t>(1UL << i);
 
     for (unsigned m = 0; m < (kBits - 1); ++m)
     {
-        const unsigned step = (unsigned)1 << (m + 1);
+        const unsigned step = 1UL << (m + 1);
 
-        FFTSkew[((unsigned)1 << m) - 1] = 0;
+        FFTSkew[(1UL << m) - 1] = 0;
 
         for (unsigned i = m; i < (kBits - 1); ++i)
         {
-            const unsigned s = ((unsigned)1 << (i + 1));
+            const unsigned s = (1UL << (i + 1));
 
-            for (unsigned j = ((unsigned)1 << m) - 1; j < s; j += step)
+            for (unsigned j = (1UL << m) - 1; j < s; j += step)
                 FFTSkew[j + s] = FFTSkew[j] ^ temp[i];
         }
 
-        // TBD: This can be cleaned up
-        temp[m] = kModulus - LogLUT[FFEMultiply(temp[m], temp[m] ^ 1)];
+        temp[m] = kModulus - LogLUT[FFEMultiplyLog(temp[m], LogLUT[temp[m] ^ 1])];
 
         for (unsigned i = m + 1; i < (kBits - 1); ++i)
-            temp[i] = FFEMultiplyLog(temp[i], (LogLUT[temp[i] ^ 1] + temp[m]) % kModulus);
+        {
+            const ffe_t sum = AddMod(LogLUT[temp[i] ^ 1], temp[m]);
+            temp[i] = FFEMultiplyLog(temp[i], sum);
+        }
     }
 
     for (unsigned i = 0; i < kOrder; ++i)
@@ -572,16 +866,8 @@ void Encode(
             {
                 const ffe_t skew = skewLUT[j];
 
-                if (skew != kModulus)
-                {
-                    for (unsigned k = j - width; k < j; ++k)
-                        ifft_butterfly(temp[k], temp[k + width], skew, buffer_bytes);
-                }
-                else
-                {
-                    for (unsigned k = j - width; k < j; ++k)
-                        xor_mem(temp[k + width], temp[k], buffer_bytes);
-                }
+                for (unsigned k = j - width; k < j; ++k)
+                    ifft_butterfly(temp[k], temp[k + width], skew, buffer_bytes);
             }
         }
 
@@ -619,16 +905,8 @@ void Encode(
             {
                 const ffe_t skew = skewLUT[j];
 
-                if (skew != kModulus)
-                {
-                    for (unsigned k = j - width; k < j; ++k)
-                        ifft_butterfly(temp[k], temp[k + width], skew, buffer_bytes);
-                }
-                else
-                {
-                    for (unsigned k = j - width; k < j; ++k)
-                        xor_mem(temp[k + width], temp[k], buffer_bytes);
-                }
+                for (unsigned k = j - width; k < j; ++k)
+                    ifft_butterfly(temp[k], temp[k + width], skew, buffer_bytes);
             }
         }
 
@@ -650,16 +928,8 @@ void Encode(
         {
             const ffe_t skew = skewLUT[j];
 
-            if (skew != kModulus)
-            {
-                for (unsigned k = j, count = j + width; k < count; ++k)
-                    fft_butterfly(data[k], data[k + width], skew, buffer_bytes);
-            }
-            else
-            {
-                for (unsigned k = j, count = j + width; k < count; ++k)
-                    xor_mem(work[k + width], work[k], buffer_bytes);
-            }
+            for (unsigned k = j, count = j + width; k < count; ++k)
+                fft_butterfly(data[k], data[k + width], skew, buffer_bytes);
         }
     }
 }
@@ -703,7 +973,7 @@ void Decode(
     for (unsigned i = 0; i < recovery_count; ++i)
     {
         if (recovery[i])
-            mul_mem_set(work[i], recovery[i], ErrorLocations[i], buffer_bytes);
+            mul_mem(work[i], recovery[i], ErrorLocations[i], buffer_bytes);
         else
             memset(work[i], 0, buffer_bytes);
     }
@@ -715,7 +985,7 @@ void Decode(
     for (unsigned i = 0; i < original_count; ++i)
     {
         if (original[i])
-            mul_mem_set(work[m + i], original[i], ErrorLocations[m + i], buffer_bytes);
+            mul_mem(work[m + i], original[i], ErrorLocations[m + i], buffer_bytes);
         else
             memset(work[m + i], 0, buffer_bytes);
     }
@@ -732,16 +1002,8 @@ void Decode(
         {
             const ffe_t skew = FFTSkew[j - 1];
 
-            if (skew != kModulus)
-            {
-                for (unsigned i = j - width; i < j; ++i)
-                    ifft_butterfly(work[i], work[i + width], skew, buffer_bytes);
-            }
-            else
-            {
-                for (unsigned i = j - width; i < j; ++i)
-                    xor_mem(work[i + width], work[i], buffer_bytes);
-            }
+            for (unsigned i = j - width; i < j; ++i)
+                ifft_butterfly(work[i], work[i + width], skew, buffer_bytes);
         }
     }
 
@@ -785,7 +1047,7 @@ void Decode(
 
     for (unsigned i = 0; i < original_count; ++i)
         if (!original[i])
-            mul_mem_set(work[i], work[i + m], kModulus - ErrorLocations[i], buffer_bytes);
+            mul_mem(work[i], work[i + m], kModulus - ErrorLocations[i], buffer_bytes);
 }
 
 

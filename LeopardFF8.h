@@ -68,44 +68,52 @@ void FWHT(ffe_t data[kOrder]);
 //------------------------------------------------------------------------------
 // Multiplies
 
-// x[] = y[] * m
-void mul_mem_set(
+// x[] = exp(log(y[]) + log_m)
+void mul_mem(
     void * LEO_RESTRICT x, const void * LEO_RESTRICT y,
-    ffe_t m, uint64_t bytes);
+    ffe_t log_m, uint64_t bytes);
 
 
 //------------------------------------------------------------------------------
 // FFT Operations
 
-// x[] ^= y[] * m, y[] ^= x[]
+/*
+    if (log_m != kModulus)
+        x[] ^= exp(log(y[]) + log_m)
+    y[] ^= x[]
+*/
 void fft_butterfly(
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
-    ffe_t m, uint64_t bytes);
+    ffe_t log_m, uint64_t bytes);
 
-// For i = {0, 1, 2, 3}: x_i[] ^= y_i[] * m, y_i[] ^= x_i[]
+// Unroll 4 rows at a time
 void fft_butterfly4(
     void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
     void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
     void * LEO_RESTRICT x_2, void * LEO_RESTRICT y_2,
     void * LEO_RESTRICT x_3, void * LEO_RESTRICT y_3,
-    ffe_t m, uint64_t bytes);
+    ffe_t log_m, uint64_t bytes);
 
 
 //------------------------------------------------------------------------------
 // IFFT Operations
 
-// y[] ^= x[], x[] ^= y[] * m
+/*
+    y[] ^= x[]
+    if (log_m != kModulus)
+        x[] ^= exp(log(y[]) + log_m)
+*/
 void ifft_butterfly(
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
-    ffe_t m, uint64_t bytes);
+    ffe_t log_m, uint64_t bytes);
 
-// For i = {0, 1, 2, 3}: y_i[] ^= x_i[], x_i[] ^= y_i[] * m
+// Unroll 4 rows at a time
 void ifft_butterfly4(
     void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
     void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
     void * LEO_RESTRICT x_2, void * LEO_RESTRICT y_2,
     void * LEO_RESTRICT x_3, void * LEO_RESTRICT y_3,
-    ffe_t m, uint64_t bytes);
+    ffe_t log_m, uint64_t bytes);
 
 
 //------------------------------------------------------------------------------

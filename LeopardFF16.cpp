@@ -48,8 +48,8 @@ static const ffe_t kModulus = 65535;
 static const unsigned kPolynomial = 0x1002D;
 
 // Basis used for generating logarithm tables
-static const ffe_t kBasis[kBits] = {
-    0x0001, 0xACCA, 0x3C0E, 0x163E, // Cantor basis
+static const ffe_t kCantorBasis[kBits] = {
+    0x0001, 0xACCA, 0x3C0E, 0x163E,
     0xC582, 0xED2E, 0x914C, 0x4012,
     0x6C98, 0x10D8, 0x6A72, 0xB900,
     0xFDB8, 0xFB34, 0xFF38, 0x991E
@@ -328,12 +328,12 @@ static void InitializeLogarithmTables()
     }
     ExpLUT[0] = kModulus;
 
-    // Conversion to chosen basis:
+    // Conversion to Cantor basis:
 
     LogLUT[0] = 0;
     for (unsigned i = 0; i < kBits; ++i)
     {
-        const ffe_t basis = kBasis[i];
+        const ffe_t basis = kCantorBasis[i];
         const unsigned width = static_cast<unsigned>(1UL << i);
 
         for (unsigned j = 0; j < width; ++j)

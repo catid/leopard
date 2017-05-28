@@ -33,7 +33,7 @@
 #include <stdlib.h>
 
 
-//#define LEO_SHORT_FIELD
+#define LEO_SHORT_FIELD
 //#define LEO_EXPERIMENT_EXTRA_XOR
 //#define LEO_EXPERIMENT_EXTRA_MULS
 #define LEO_EXPERIMENT_CANTOR_BASIS
@@ -180,6 +180,8 @@ static ffe_t mulE(ffe_t a, ffe_t b)
 {
     if (a == 0)
         return 0;
+//    if (b == 0)
+//        return a;
 
     const ffe_t sum = static_cast<ffe_t>(AddModQ(GFLog[a], b));
     return GFExp[sum];
@@ -258,7 +260,8 @@ static ffe_t skewVec[kModulus]; // twisted factors used in FFT
 static LEO_FORCE_INLINE void ifft_butterfly(ffe_t& a, ffe_t& b, ffe_t skew)
 {
     b ^= a;
-    a ^= mulE(b, skew);
+    if (skew != kModulus)
+        a ^= mulE(b, skew);
 }
 
 // IFFT in the proposed basis
@@ -270,23 +273,16 @@ static void IFLT(ffe_t* data, const unsigned size, const unsigned index)
         {
             const ffe_t skew = skewVec[j + index - 1];
 
-            if (skew != kModulus)
-            {
-                for (unsigned i = j - width; i < j; ++i)
-                    ifft_butterfly(data[i], data[i + width], skew);
-            }
-            else
-            {
-                for (unsigned i = j - width; i < j; ++i)
-                    data[i + width] ^= data[i];
-            }
+            for (unsigned i = j - width; i < j; ++i)
+                ifft_butterfly(data[i], data[i + width], skew);
         }
     }
 }
 
 static LEO_FORCE_INLINE void fft_butterfly(ffe_t& a, ffe_t& b, ffe_t skew)
 {
-    a ^= mulE(b, skew);
+    if (skew != kModulus)
+        a ^= mulE(b, skew);
     b ^= a;
 }
 
@@ -301,16 +297,8 @@ static void FLT(ffe_t* data, const unsigned size, const unsigned skewIndex, cons
         {
             const ffe_t skew = skewLUT[j];
 
-            if (skew != kModulus)
-            {
-                for (unsigned i = j; i < j + width; ++i)
-                    fft_butterfly(data[i], data[i + width], skew);
-            }
-            else
-            {
-                for (unsigned i = j; i < j + width; ++i)
-                    data[i + width] ^= data[i];
-            }
+            for (unsigned i = j; i < j + width; ++i)
+                fft_butterfly(data[i], data[i + width], skew);
         }
     }
 }
@@ -349,7 +337,10 @@ static void InitFieldOperations()
         temp[m] = kModulus - GFLog[mulE(temp[m], GFLog[temp[m] ^ 1])];
 
         for (unsigned i = m + 1; i < (kGFBits - 1); ++i)
-            temp[i] = mulE(temp[i], (GFLog[temp[i] ^ 1] + temp[m]) % kModulus);
+        {
+            const ffe_t sum = AddModQ(GFLog[temp[i] ^ 1], temp[m]);
+            temp[i] = mulE(temp[i], sum);
+        }
     }
 
     for (unsigned i = 0; i < kFieldSize; ++i)

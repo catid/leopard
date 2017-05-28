@@ -385,8 +385,13 @@ static LEO_FORCE_INLINE void SIMDSafeFree(void* ptr)
 
 struct TestParameters
 {
-    unsigned original_count = 200; // under 65536
+#ifdef LEO_HAS_FF16
+    unsigned original_count = 1000; // under 65536
     unsigned recovery_count = 100; // under 65536 - original_count
+#else
+    unsigned original_count = 200; // under 65536
+    unsigned recovery_count = 20; // under 65536 - original_count
+#endif
     unsigned buffer_bytes = 64000; // multiple of 64 bytes
     unsigned loss_count = 20; // some fraction of original_count
     unsigned seed = 0;
