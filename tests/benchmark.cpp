@@ -389,7 +389,7 @@ struct TestParameters
     unsigned original_count = 1000; // under 65536
     unsigned recovery_count = 100; // under 65536 - original_count
 #else
-    unsigned original_count = 200; // under 65536
+    unsigned original_count = 100; // under 65536
     unsigned recovery_count = 10; // under 65536 - original_count
 #endif
     unsigned buffer_bytes = 64000; // multiple of 64 bytes
@@ -511,7 +511,6 @@ static void BasicTest(const TestParameters& params)
         {
             if (!original_data[i])
             {
-                cout << "Checking " << i << endl;
                 if (!CheckPacket(decode_work_data[i], params.buffer_bytes))
                 {
                     cout << "Error: Data was corrupted" << endl;

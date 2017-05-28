@@ -554,6 +554,7 @@ void test(unsigned original_count, unsigned recovery_count, unsigned seed)
     for (unsigned i = m; i < m + recovery_count; ++i)
         erasure[i] = true;
 
+#if 0
     // permuting the erasure array
     for (unsigned i = m + original_count - 1; i > 0; --i)
     {
@@ -566,6 +567,7 @@ void test(unsigned original_count, unsigned recovery_count, unsigned seed)
             erasure[pos] = tmp;
         }
     }
+#endif
 
 
     //---------main processing----------
@@ -604,8 +606,8 @@ int main(int argc, char **argv)
     for (;;)
     {
 #ifdef LEO_SHORT_FIELD
-        const unsigned input_count = 100;
-        const unsigned recovery_count = 10;
+        const unsigned input_count = 128;
+        const unsigned recovery_count = 128;
 #else // LEO_SHORT_FIELD
         const unsigned input_count = 10000;
         const unsigned recovery_count = 2000;

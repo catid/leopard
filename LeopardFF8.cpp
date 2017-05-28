@@ -845,7 +845,7 @@ void Encode(
     unsigned original_count,
     unsigned recovery_count,
     unsigned m,
-    void* const * const data,
+    void* const * data,
     void** work)
 {
     // work <- data
@@ -890,6 +890,7 @@ void Encode(
     {
         // temp <- data + i
 
+        data += m;
         void** temp = work + m;
 
         // FIXME: Unroll first loop to eliminate this
@@ -930,6 +931,7 @@ void Encode(
 
         // temp <- data + i
 
+        data += m;
         void** temp = work + m;
 
         for (unsigned j = 0; j < last_count; ++j)
@@ -971,8 +973,9 @@ void Encode(
             temp);
     }
 
-    // work <- FFT(work, m, 0)
 skip_body:
+
+    // work <- FFT(work, m, 0)
 
     for (unsigned width = (m >> 1); width > 0; width >>= 1)
     {
@@ -1201,7 +1204,7 @@ void Decode(
                 width,
                 work + j,
                 work + j + width,
-                FFTSkew[j]);
+                skewLUT[j]);
         }
     }
 
