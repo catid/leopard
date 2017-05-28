@@ -833,16 +833,8 @@ void Encode(
         {
             const ffe_t skew = skewLUT[j];
 
-            if (skew != kModulus)
-            {
-                for (unsigned i = j - width; i < j; ++i)
-                    ifft_butterfly(work[i], work[i + width], skew, buffer_bytes);
-            }
-            else
-            {
-                for (unsigned i = j - width; i < j; ++i)
-                    xor_mem(work[i + width], work[i], buffer_bytes);
-            }
+            for (unsigned i = j - width; i < j; ++i)
+                ifft_butterfly(work[i], work[i + width], skew, buffer_bytes);
         }
     }
 
@@ -1030,16 +1022,8 @@ void Decode(
         {
             const ffe_t skew = skewLUT[j];
 
-            if (skew != kModulus)
-            {
-                for (unsigned i = j, count = j + width; i < count; ++i)
-                    fft_butterfly(work[i], work[i + width], skew, buffer_bytes);
-            }
-            else
-            {
-                for (unsigned i = j, count = j + width; i < count; ++i)
-                    xor_mem(work[i + width], work[i], buffer_bytes);
-            }
+            for (unsigned i = j, count = j + width; i < count; ++i)
+                fft_butterfly(work[i], work[i + width], skew, buffer_bytes);
         }
     }
 
