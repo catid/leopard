@@ -52,6 +52,16 @@
 
 
 //------------------------------------------------------------------------------
+// Constants
+
+// Unroll inner loops 4 times
+//#define LEO_USE_VECTOR4_OPT
+
+// Define this to enable the optimized version of FWHT()
+//#define LEO_FWHT_OPT
+
+
+//------------------------------------------------------------------------------
 // Debug
 
 // Some bugs only repro in release mode, so this can be helpful
@@ -152,26 +162,27 @@ namespace leopard {
 // Initialize CPU architecture flags
 void InitializeCPUArch();
 
+
 #if defined(LEO_TRY_NEON)
 # if defined(IOS) && defined(__ARM_NEON__)
-// Does device support NEON?
-static const bool CpuHasNeon = true;
-static const bool CpuHasNeon64 = true;
+    // Does device support NEON?
+    static const bool CpuHasNeon = true;
+    static const bool CpuHasNeon64 = true;
 # else
-// Does device support NEON?
-// Remember to add LOCAL_STATIC_LIBRARIES := cpufeatures
-extern bool CpuHasNeon; // V6 / V7
-extern bool CpuHasNeon64; // 64-bit
+    // Does device support NEON?
+    // Remember to add LOCAL_STATIC_LIBRARIES := cpufeatures
+    extern bool CpuHasNeon; // V6 / V7
+    extern bool CpuHasNeon64; // 64-bit
 # endif
 #endif
 
 #if !defined(LEO_TARGET_MOBILE)
 # if defined(LEO_TRY_AVX2)
-// Does CPU support AVX2?
-extern bool CpuHasAVX2;
+    // Does CPU support AVX2?
+    extern bool CpuHasAVX2;
 # endif
-// Does CPU support SSSE3?
-extern bool CpuHasSSSE3;
+    // Does CPU support SSSE3?
+    extern bool CpuHasSSSE3;
 #endif // LEO_TARGET_MOBILE
 
 
@@ -210,6 +221,8 @@ void xor_mem(
     void * LEO_RESTRICT x, const void * LEO_RESTRICT y,
     uint64_t bytes);
 
+#ifdef LEO_USE_VECTOR4_OPT
+
 // For i = {0, 1, 2, 3}: x_i[] ^= x_i[]
 void xor_mem4(
     void * LEO_RESTRICT x_0, const void * LEO_RESTRICT y_0,
@@ -217,6 +230,8 @@ void xor_mem4(
     void * LEO_RESTRICT x_2, const void * LEO_RESTRICT y_2,
     void * LEO_RESTRICT x_3, const void * LEO_RESTRICT y_3,
     uint64_t bytes);
+
+#endif // LEO_USE_VECTOR4_OPT
 
 // x[] ^= y[]
 void VectorXOR(

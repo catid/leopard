@@ -32,9 +32,6 @@
 
 #include <string.h>
 
-// Define this to enable the optimized version of FWHT()
-#define LEO_FF8_FWHT_OPTIMIZED
-
 namespace leopard { namespace ff8 {
 
 
@@ -81,8 +78,6 @@ static inline ffe_t SubMod(const ffe_t a, const ffe_t b)
 //------------------------------------------------------------------------------
 // Fast Walsh-Hadamard Transform (FWHT) (mod kModulus)
 
-#if defined(LEO_FF8_FWHT_OPTIMIZED)
-
 // {a, b} = {a + b, a - b} (Mod Q)
 static LEO_FORCE_INLINE void FWHT_2(ffe_t& LEO_RESTRICT a, ffe_t& LEO_RESTRICT b)
 {
@@ -91,6 +86,8 @@ static LEO_FORCE_INLINE void FWHT_2(ffe_t& LEO_RESTRICT a, ffe_t& LEO_RESTRICT b
     a = sum;
     b = dif;
 }
+
+#if defined(LEO_FWHT_OPT)
 
 static LEO_FORCE_INLINE void FWHT_4(ffe_t* data)
 {
@@ -191,7 +188,7 @@ static void FWHT(ffe_t* data, const unsigned ldn)
     }
 }
 
-#else // LEO_FF8_FWHT_OPTIMIZED
+#else // LEO_FWHT_OPT
 
 // Reference implementation
 void FWHT(ffe_t* data, const unsigned bits)
@@ -203,7 +200,7 @@ void FWHT(ffe_t* data, const unsigned bits)
                 FWHT_2(data[j], data[j + width]);
 }
 
-#endif // LEO_FF8_FWHT_OPTIMIZED
+#endif // LEO_FWHT_OPT
 
 // Transform specialized for the finite field order
 void FWHT(ffe_t data[kOrder])
@@ -272,7 +269,7 @@ struct {
 #endif // LEO_TRY_AVX2
 
 // Returns a * Log(b)
-static ffe_t FFEMultiplyLog(ffe_t a, ffe_t log_b)
+static ffe_t MultiplyLog(ffe_t a, ffe_t log_b)
 {
     if (a == 0)
         return 0;
@@ -285,10 +282,10 @@ void InitializeMultiplyTables()
     for (int log_y = 0; log_y < 256; ++log_y)
     {
         uint8_t lo[16], hi[16];
-        for (unsigned char x = 0; x < 16; ++x)
+        for (uint8_t x = 0; x < 16; ++x)
         {
-            lo[x] = FFEMultiplyLog(x, static_cast<uint8_t>(log_y));
-            hi[x] = FFEMultiplyLog(x << 4, static_cast<uint8_t>(log_y));
+            lo[x] = MultiplyLog(x, static_cast<uint8_t>(log_y));
+            hi[x] = MultiplyLog(x << 4, static_cast<uint8_t>(log_y));
         }
 
         const LEO_M128 table_lo = _mm_loadu_si128((LEO_M128*)lo);
@@ -454,6 +451,7 @@ void fft_butterfly(
     } while (bytes > 0);
 }
 
+#ifdef LEO_USE_VECTOR4_OPT
 
 void fft_butterfly4(
     void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
@@ -548,6 +546,8 @@ void fft_butterfly4(
     } while (bytes > 0);
 }
 
+#endif // LEO_USE_VECTOR4_OPT
+
 
 //------------------------------------------------------------------------------
 // IFFT Operations
@@ -626,6 +626,7 @@ void ifft_butterfly(
     } while (bytes > 0);
 }
 
+#ifdef LEO_USE_VECTOR4_OPT
 
 void ifft_butterfly4(
     void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
@@ -720,6 +721,8 @@ void ifft_butterfly4(
     } while (bytes > 0);
 }
 
+#endif // LEO_USE_VECTOR4_OPT
+
 
 //------------------------------------------------------------------------------
 // FFT
@@ -751,12 +754,12 @@ static void FFTInitialize()
                 FFTSkew[j + s] = FFTSkew[j] ^ temp[i];
         }
 
-        temp[m] = kModulus - LogLUT[FFEMultiplyLog(temp[m], LogLUT[temp[m] ^ 1])];
+        temp[m] = kModulus - LogLUT[MultiplyLog(temp[m], LogLUT[temp[m] ^ 1])];
 
         for (unsigned i = m + 1; i < (kBits - 1); ++i)
         {
             const ffe_t sum = AddMod(LogLUT[temp[i] ^ 1], temp[m]);
-            temp[i] = FFEMultiplyLog(temp[i], sum);
+            temp[i] = MultiplyLog(temp[i], sum);
         }
     }
 
@@ -780,10 +783,11 @@ void VectorFFTButterfly(
 {
     if (skew == kModulus)
     {
-        VectorXOR(bytes, count, x, y);
+        VectorXOR(bytes, count, y, x);
         return;
     }
 
+#ifdef LEO_USE_VECTOR4_OPT
     while (count >= 4)
     {
         fft_butterfly4(
@@ -795,6 +799,7 @@ void VectorFFTButterfly(
         x += 4, y += 4;
         count -= 4;
     }
+#endif // LEO_USE_VECTOR4_OPT
 
     for (unsigned i = 0; i < count; ++i)
         fft_butterfly(x[i], y[i], skew, bytes);
@@ -809,10 +814,11 @@ void VectorIFFTButterfly(
 {
     if (skew == kModulus)
     {
-        VectorXOR(bytes, count, x, y);
+        VectorXOR(bytes, count, y, x);
         return;
     }
 
+#ifdef LEO_USE_VECTOR4_OPT
     while (count >= 4)
     {
         ifft_butterfly4(
@@ -824,6 +830,7 @@ void VectorIFFTButterfly(
         x += 4, y += 4;
         count -= 4;
     }
+#endif // LEO_USE_VECTOR4_OPT
 
     for (unsigned i = 0; i < count; ++i)
         ifft_butterfly(x[i], y[i], skew, bytes);

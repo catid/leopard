@@ -86,6 +86,8 @@ void fft_butterfly(
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
     ffe_t log_m, uint64_t bytes);
 
+#ifdef LEO_USE_VECTOR4_OPT
+
 // Unroll 4 rows at a time
 void fft_butterfly4(
     void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
@@ -93,6 +95,8 @@ void fft_butterfly4(
     void * LEO_RESTRICT x_2, void * LEO_RESTRICT y_2,
     void * LEO_RESTRICT x_3, void * LEO_RESTRICT y_3,
     ffe_t log_m, uint64_t bytes);
+
+#endif // LEO_USE_VECTOR4_OPT
 
 
 //------------------------------------------------------------------------------
@@ -107,6 +111,8 @@ void ifft_butterfly(
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
     ffe_t log_m, uint64_t bytes);
 
+#ifdef LEO_USE_VECTOR4_OPT
+
 // Unroll 4 rows at a time
 void ifft_butterfly4(
     void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
@@ -114,6 +120,12 @@ void ifft_butterfly4(
     void * LEO_RESTRICT x_2, void * LEO_RESTRICT y_2,
     void * LEO_RESTRICT x_3, void * LEO_RESTRICT y_3,
     ffe_t log_m, uint64_t bytes);
+
+#endif // LEO_USE_VECTOR4_OPT
+
+
+//------------------------------------------------------------------------------
+// FFT
 
 void VectorFFTButterfly(
     const uint64_t bytes,

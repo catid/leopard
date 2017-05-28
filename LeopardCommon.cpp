@@ -43,11 +43,11 @@ namespace leopard {
 
 #if defined(LEO_TRY_NEON)
 # if defined(IOS) && defined(__ARM_NEON__)
-// Requires iPhone 5S or newer
+    // Requires iPhone 5S or newer
 # else
-// Remember to add LOCAL_STATIC_LIBRARIES := cpufeatures
-bool CpuHasNeon = false; // V6 / V7
-bool CpuHasNeon64 = false; // 64-bit
+    // Remember to add LOCAL_STATIC_LIBRARIES := cpufeatures
+    bool CpuHasNeon = false; // V6 / V7
+    bool CpuHasNeon64 = false; // 64-bit
 # endif
 #endif
 
@@ -60,8 +60,9 @@ bool CpuHasNeon64 = false; // 64-bit
 #endif
 
 #ifdef LEO_TRY_AVX2
-bool CpuHasAVX2 = false;
+    bool CpuHasAVX2 = false;
 #endif
+
 bool CpuHasSSSE3 = false;
 
 #define CPUID_EBX_AVX2    0x00000020
@@ -190,6 +191,8 @@ void xor_mem(
         bytes -= 64;
     } while (bytes > 0);
 }
+
+#ifdef LEO_USE_VECTOR4_OPT
 
 void xor_mem4(
     void * LEO_RESTRICT vx_0, const void * LEO_RESTRICT vy_0,
@@ -321,12 +324,15 @@ void xor_mem4(
     } while (bytes > 0);
 }
 
+#endif // LEO_USE_VECTOR4_OPT
+
 void VectorXOR(
     const uint64_t bytes,
     unsigned count,
     void** x,
     void** y)
 {
+#ifdef LEO_USE_VECTOR4_OPT
     while (count >= 4)
     {
         xor_mem4(
@@ -338,9 +344,10 @@ void VectorXOR(
         x += 4, y += 4;
         count -= 4;
     }
+#endif // LEO_USE_VECTOR4_OPT
 
     for (unsigned i = 0; i < count; ++i)
-        xor_mem(y[i], x[i], bytes);
+        xor_mem(x[i], y[i], bytes);
 }
 
 

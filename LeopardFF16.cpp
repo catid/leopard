@@ -32,9 +32,6 @@
 
 #include <string.h>
 
-// Define this to enable the optimized version of FWHT()
-#define LEO_FF16_FWHT_OPTIMIZED
-
 namespace leopard { namespace ff16 {
 
 
@@ -84,7 +81,7 @@ static inline ffe_t SubMod(const ffe_t a, const ffe_t b)
 //------------------------------------------------------------------------------
 // Fast Walsh-Hadamard Transform (FWHT) (mod kModulus)
 
-#if defined(LEO_FF16_FWHT_OPTIMIZED)
+#if defined(LEO_FWHT_OPT)
 
 // {a, b} = {a + b, a - b} (Mod Q)
 static LEO_FORCE_INLINE void FWHT_2(ffe_t& LEO_RESTRICT a, ffe_t& LEO_RESTRICT b)
@@ -285,7 +282,7 @@ static void FWHT(ffe_t* data, const unsigned ldn)
     }
 }
 
-#else // LEO_FF16_FWHT_OPTIMIZED
+#else // LEO_FWHT_OPT
 
 // Reference implementation
 void FWHT(ffe_t* data, const unsigned bits)
@@ -297,7 +294,7 @@ void FWHT(ffe_t* data, const unsigned bits)
                 FWHT_2(data[j], data[j + width]);
 }
 
-#endif // LEO_FF16_FWHT_OPTIMIZED
+#endif // LEO_FWHT_OPT
 
 // Transform specialized for the finite field order
 void FWHT(ffe_t data[kOrder])

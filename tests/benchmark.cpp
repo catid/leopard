@@ -552,6 +552,8 @@ static void BasicTest(const TestParameters& params)
 //------------------------------------------------------------------------------
 // Parallel XOR Benchmark
 
+#ifdef LEO_USE_VECTOR4_OPT
+
 // Demonstrate about 10% performance boost by doing parallel rows for XORs
 void ParallelXORBenchmark()
 {
@@ -605,11 +607,15 @@ void ParallelXORBenchmark()
     t_4.Print(iteration_count);
 }
 
+#endif // LEO_USE_VECTOR4_OPT
+
 
 //------------------------------------------------------------------------------
 // Parallel Butterfly8 Benchmark
 
 #ifdef LEO_HAS_FF8
+
+#ifdef LEO_USE_VECTOR4_OPT
 
 // Demonstrate performance boost by doing parallel rows for Butterfly8s
 void ParallelButterfly8Benchmark()
@@ -670,6 +676,8 @@ void ParallelButterfly8Benchmark()
     t_4.Print(iteration_count);
 }
 
+#endif // LEO_USE_VECTOR4_OPT
+
 #endif // LEO_HAS_FF8
 
 
@@ -677,6 +685,8 @@ void ParallelButterfly8Benchmark()
 // Parallel Butterfly16 Benchmark
 
 #ifdef LEO_HAS_FF16
+
+#ifdef LEO_USE_VECTOR4_OPT
 
 // Demonstrate performance boost by doing parallel rows for Butterfly16s
 void ParallelButterfly16Benchmark()
@@ -736,6 +746,8 @@ void ParallelButterfly16Benchmark()
     t_1.Print(iteration_count);
     t_4.Print(iteration_count);
 }
+
+#endif // LEO_USE_VECTOR4_OPT
 
 #endif // LEO_HAS_FF8
 
