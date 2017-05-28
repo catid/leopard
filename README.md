@@ -92,13 +92,13 @@ Leopard Decoder(8.192 MB in 128 pieces, 128 losses): Input=482.53 MB/s, Output=4
 
 For 128 data pieces of input and 128 data pieces of redundancy:
 
-Fastest to encode: Leopard (1.2 GB/s)
-Distant second-place: WH256 (660 MB/s), FEC-AL (515 MB/s)
-Slowest encoders: Longhair, CM256
++ Fastest to encode: Leopard (1.2 GB/s)
++ Distant second-place: WH256 (660 MB/s), FEC-AL (515 MB/s)
++ Slowest encoders: Longhair, CM256
 
-Fastest to decode: WH256 (830 MB/s)
-Distant second-place: Leopard (482 MB/s)
-Slowest decoders: FEC-AL, CM256, Longhair
++ Fastest to decode: WH256 (830 MB/s)
++ Distant second-place: Leopard (482 MB/s)
++ Slowest decoders: FEC-AL, CM256, Longhair
 
 There are a lot of variables that affect when each of these libraries should be used.
 Each one is ideal in a different situation, and no one library can be called the best overall.
@@ -324,8 +324,8 @@ Some papers are mirrored in the /docs/ folder.
 
 Inspired by discussion with:
 
-Sian-Jhen Lin <sjhenglin@gmail.com> : Author of {1} {3}, basis for Leopard
-Bulat Ziganshin <bulat.ziganshin@gmail.com> : Author of FastECC
-Yutaka Sawada <tenfon@outlook.jp> : Author of MultiPar
++ Sian-Jhen Lin <sjhenglin@gmail.com> : Author of {1} {3}, basis for Leopard
++ Bulat Ziganshin <bulat.ziganshin@gmail.com> : Author of FastECC
++ Yutaka Sawada <tenfon@outlook.jp> : Author of MultiPar
 
 This software was written entirely by myself ( Christopher A. Taylor mrcatid@gmail.com ). If you find it useful and would like to buy me a coffee, consider tipping.
