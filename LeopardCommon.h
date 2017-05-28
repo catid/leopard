@@ -30,11 +30,9 @@
 
 /*
     TODO:
-    + New 8-bit Muladd inner loops
-        + Benchmarks for smaller data!
+    + Fixes for all different input sizes
     + New 16-bit Muladd inner loops
         + Benchmarks for large data!
-    + Use parallel row ops
     + Add multi-threading to split up long parallelizable calculations
         + Write detailed comments for all the routines
         + Final benchmarks!
@@ -55,13 +53,13 @@
 // Constants
 
 // Unroll inner loops 4 times
-//#define LEO_USE_VECTOR4_OPT
+#define LEO_USE_VECTOR4_OPT
 
 // Define this to enable the optimized version of FWHT()
-//#define LEO_FWHT_OPT
+#define LEO_FWHT_OPT
 
 // Avoid scheduling reduced FFT operations that are unneeded
-//#define LEO_SCHEDULE_OPT
+#define LEO_SCHEDULE_OPT
 
 
 //------------------------------------------------------------------------------
