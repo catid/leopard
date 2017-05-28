@@ -29,19 +29,116 @@
 #pragma once
 
 /*
-    TODO:
-    + Fixes for all different input sizes
-    + New 16-bit Muladd inner loops
-        + Benchmarks for large data!
-    + Add multi-threading to split up long parallelizable calculations
-        + Write detailed comments for all the routines
-        + Final benchmarks!
-    + Release version 1
-        + Finish up documentation
+    FFT Data Layout:
 
-    TBD:
-    + Look into getting EncodeL working so we can support smaller data (Ask Lin)
-    + Look into using FFT_m instead of FFT_n for decoder
+    We pack the data into memory in this order:
+
+    [Recovery Data (Power of Two = M)] [Original Data] [Zero Padding out to 65536]
+
+    For encoding, the placement is implied instead of actual memory layout.
+    For decoding, the layout is explicitly used.
+*/
+
+/*
+    Encoder algorithm:
+
+    The encoder is described in {3}.  Operations are done O(K Log M),
+    where K is the original data size, and M is up to twice the
+    size of the recovery set.
+
+    Roughly in brief:
+
+        Recovery = FFT( IFFT(Data_0) xor IFFT(Data_1) xor ... )
+
+    It walks the original data M chunks at a time performing the IFFT.
+    Each IFFT intermediate result is XORed together into the first M chunks of
+    the data layout.  Finally the FFT is performed.
+
+    Encoder optimizations:
+    * The first IFFT can be performed directly in the first M chunks.
+    * The zero padding can be skipped while performing the final IFFT.
+    Unrolling is used in the code to accomplish both these optimizations.
+    * The final FFT can be truncated also if recovery set is not a power of 2.
+    It is easy to truncate the FFT by ending the inner loop early.
+*/
+
+/*
+    Decoder algorithm:
+
+    The decoder is described in {1}.  Operations are done O(N Log N), where N is up
+    to twice the size of the original data as described below.
+
+    Roughly in brief:
+
+        Original = -ErrLocator * FFT( Derivative( IFFT( ErrLocator * ReceivedData ) ) )
+
+
+    Precalculations:
+    ---------------
+
+    At startup initialization, FFTInitialize() precalculates FWT(L) as
+    described by equation (92) in {1}, where L = Log[i] for i = 0..Order,
+    Order = 256 or 65536 for FF8/16.  This is stored in the LogWalsh vector.
+
+    It also precalculates the FFT skew factors (s_i) as described by
+    equation (28).  This is stored in the FFTSkew vector.
+
+    For memory workspace N data chunks are needed, where N is a power of two
+    at or above M + K.  K is the original data size and M is the next power
+    of two above the recovery data size.  For example for K = 200 pieces of
+    data and 10% redundancy, there are 20 redundant pieces, which rounds up
+    to 32 = M.  M + K = 232 pieces, so N rounds up to 256.
+
+
+    Online calculations:
+    -------------------
+
+    At runtime, the error locator polynomial is evaluated using the
+    Fast Walsh-Hadamard transform as described in {1} equation (92).
+
+    At runtime the data is explicit laid out in workspace memory like this:
+    [Recovery Data (Power of Two = M)] [Original Data (K)] [Zero Padding out to N]
+
+    Data that was lost is replaced with zeroes.
+    Data that was received, including recovery data, is multiplied by the error
+    locator polynomial as it is copied into the workspace.
+
+    The IFFT is applied to the entire workspace of N chunks.
+    Since the IFFT starts with pairs of inputs and doubles in width at each
+    iteration, the IFFT is optimized by skipping zero padding at the end until
+    it starts mixing with non-zero data.
+
+    The formal derivative is applied to the entire workspace of N chunks.
+
+    The FFT is applied to the entire workspace of N chunks.
+    The FFT is optimized by only performing intermediate calculations required
+    to recover lost data.  Since it starts wide and ends up working on adjacent
+    pairs, at some point the intermediate results are not needed for data that
+    will not be read by the application.  This optimization is implemented by
+    the ErrorBitfield class.
+
+    Finally, only recovered data is multiplied by the negative of the
+    error locator polynomial as it is copied into the front of the
+    workspace for the application to retrieve.
+
+
+    Future directions:
+    -----------------
+
+    Note that a faster decoder is described in {3} that is O(K Log M) instead,
+    which should be 2x faster than the current one.  However I do not fully
+    understand how to implement it for this field and could use some help.
+*/
+
+/*
+    Finite field arithmetic optimizations:
+
+    For faster finite field multiplication, large tables are precomputed and
+    applied during encoding/decoding on 64 bytes of data at a time using
+    SSSE3 or AVX2 vector instructions and the ALTMAP approach from Jerasure.
+
+    Addition in this finite field is XOR, and a vectorized memory XOR routine
+    is also used.
 */
 
 #include "leopard.h"

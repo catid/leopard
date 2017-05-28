@@ -778,6 +778,7 @@ static void FFTInitialize()
     for (unsigned i = 0; i < kOrder; ++i)
         LogWalsh[i] = LogLUT[i];
     LogWalsh[0] = 0;
+
     FWHT(LogWalsh, kBits);
 }
 
@@ -845,9 +846,9 @@ void VectorIFFTButterfly(
 
 
 //------------------------------------------------------------------------------
-// Encode
+// Reed-Solomon Encode
 
-void Encode(
+void ReedSolomonEncode(
     uint64_t buffer_bytes,
     unsigned original_count,
     unsigned recovery_count,
@@ -1076,9 +1077,9 @@ void ErrorBitfield::Prepare()
 
 
 //------------------------------------------------------------------------------
-// Decode
+// Reed-Solomon Decode
 
-void Decode(
+void ReedSolomonDecode(
     uint64_t buffer_bytes,
     unsigned original_count,
     unsigned recovery_count,

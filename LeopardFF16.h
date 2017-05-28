@@ -37,6 +37,8 @@
 
     This finite field contains 65536 elements and so each element is one byte.
     This library is designed for data that is a multiple of 64 bytes in size.
+
+    Algorithms are described in LeopardCommon.h
 */
 
 namespace leopard { namespace ff16 {
@@ -115,9 +117,9 @@ void ifft_butterfly4(
 
 
 //------------------------------------------------------------------------------
-// Encode
+// Reed-Solomon Encode
 
-void Encode(
+void ReedSolomonEncode(
     uint64_t buffer_bytes,
     unsigned original_count,
     unsigned recovery_count,
@@ -127,9 +129,9 @@ void Encode(
 
 
 //------------------------------------------------------------------------------
-// Decode
+// Reed-Solomon Decode
 
-void Decode(
+void ReedSolomonDecode(
     uint64_t buffer_bytes,
     unsigned original_count,
     unsigned recovery_count,

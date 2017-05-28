@@ -107,7 +107,7 @@ LEO_EXPORT LeopardResult leo_encode(
 #ifdef LEO_HAS_FF8
     if (n <= leopard::ff8::kOrder)
     {
-        leopard::ff8::Encode(
+        leopard::ff8::ReedSolomonEncode(
             buffer_bytes,
             original_count,
             recovery_count,
@@ -120,7 +120,7 @@ LEO_EXPORT LeopardResult leo_encode(
 #ifdef LEO_HAS_FF16
     if (n <= leopard::ff16::kOrder)
     {
-        leopard::ff16::Encode(
+        leopard::ff16::ReedSolomonEncode(
             buffer_bytes,
             original_count,
             recovery_count,
@@ -181,7 +181,7 @@ LEO_EXPORT LeopardResult leo_decode(
 #ifdef LEO_HAS_FF8
     if (n <= leopard::ff8::kOrder)
     {
-        leopard::ff8::Decode(
+        leopard::ff8::ReedSolomonDecode(
             buffer_bytes,
             original_count,
             recovery_count,
@@ -196,7 +196,7 @@ LEO_EXPORT LeopardResult leo_decode(
 #ifdef LEO_HAS_FF16
     if (n <= leopard::ff16::kOrder)
     {
-        leopard::ff16::Decode(
+        leopard::ff16::ReedSolomonDecode(
             buffer_bytes,
             original_count,
             recovery_count,

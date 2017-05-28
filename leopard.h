@@ -30,8 +30,18 @@
 #define CAT_LEOPARD_RS_H
 
 /*
-    Leopard-RS: Reed-Solomon Error Correction Coding for Extremely Large Data
+    Leopard-RS: Reed-Solomon Error Correction Codes for Large Data in C
 
+    WORK IN PROGRESS - NON FUNCTIONAL
+
+    Algorithms are described in LeopardCommon.h
+
+
+    Inspired by discussion with:
+
+    Sian-Jhen Lin <sjhenglin@gmail.com> : Author of {1} {3}, basis for Leopard
+    Bulat Ziganshin <bulat.ziganshin@gmail.com> : Author of FastECC
+    Yutaka Sawada <tenfon@outlook.jp> : Author of MultiPar
 
     References:
 
@@ -42,6 +52,26 @@
 
     {2} D. G. Cantor, "On arithmetical algorithms over finite fields",
     Journal of Combinatorial Theory, Series A, vol. 50, no. 2, pp. 285-300, 1989.
+
+    {3} Sian-Jheng Lin, Wei-Ho Chung, “An Efficient (n, k) Information
+    Dispersal Algorithm for High Code Rate System over Fermat Fields,”
+    IEEE Commun. Lett., vol.16, no.12, pp. 2036-2039, Dec. 2012.
+*/
+
+/*
+    TODO:
+    + Fixes for all different input sizes
+    + New 16-bit Muladd inner loops
+        + Benchmarks for large data!
+    + Add multi-threading to split up long parallelizable calculations
+        + Write detailed comments for all the routines
+        + Final benchmarks!
+    + Release version 1
+        + Finish up documentation
+
+    TBD:
+    + Look into getting EncodeL working so we can support smaller data (Ask Lin)
+    + Look into using FFT_m instead of FFT_n for decoder
 */
 
 // Library version
