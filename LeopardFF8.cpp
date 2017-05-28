@@ -1017,17 +1017,17 @@ void ErrorBitfield::Prepare()
     // First mip level is for final layer of FFT: pairs of data
     for (unsigned i = 0; i < kWords; ++i)
     {
-        uint64_t w = Words[0][i];
-        const uint64_t hi2lo = w | ((w & kHiMasks[0]) >> 1);
-        const uint64_t lo2hi = ((w & (kHiMasks[0] >> 1)) << 1);
-        Words[0][i] = hi2lo | lo2hi;
+        const uint64_t w0 = Words[0][i];
+        const uint64_t hi2lo0 = w0 | ((w0 & kHiMasks[0]) >> 1);
+        const uint64_t lo2hi0 = ((w0 & (kHiMasks[0] >> 1)) << 1);
+        Words[0][i] = hi2lo0 | lo2hi0;
 
         for (unsigned j = 1, bits = 2; j < 5; ++j, bits <<= 1)
         {
-            uint64_t w = Words[j - 1][i];
-            const uint64_t hi2lo = w | ((w & kHiMasks[j]) >> bits);
-            const uint64_t lo2hi = ((w & (kHiMasks[j] >> bits)) << bits);
-            Words[j][i] = hi2lo | lo2hi;
+            const uint64_t w_j = Words[j - 1][i];
+            const uint64_t hi2lo_j = w_j | ((w_j & kHiMasks[j]) >> bits);
+            const uint64_t lo2hi_j = ((w_j & (kHiMasks[j] >> bits)) << bits);
+            Words[j][i] = hi2lo_j | lo2hi_j;
         }
     }
 
