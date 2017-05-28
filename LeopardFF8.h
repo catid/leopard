@@ -115,6 +115,20 @@ void ifft_butterfly4(
     void * LEO_RESTRICT x_3, void * LEO_RESTRICT y_3,
     ffe_t log_m, uint64_t bytes);
 
+void VectorFFTButterfly(
+    const uint64_t bytes,
+    unsigned count,
+    void** x,
+    void** y,
+    const ffe_t skew);
+
+void VectorIFFTButterfly(
+    const uint64_t bytes,
+    unsigned count,
+    void** x,
+    void** y,
+    const ffe_t skew);
+
 
 //------------------------------------------------------------------------------
 // Encode

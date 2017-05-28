@@ -218,5 +218,12 @@ void xor_mem4(
     void * LEO_RESTRICT x_3, const void * LEO_RESTRICT y_3,
     uint64_t bytes);
 
+// x[] ^= y[]
+void VectorXOR(
+    const uint64_t bytes,
+    unsigned count,
+    void** x,
+    void** y);
+
 
 } // namespace leopard

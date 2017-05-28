@@ -321,5 +321,27 @@ void xor_mem4(
     } while (bytes > 0);
 }
 
+void VectorXOR(
+    const uint64_t bytes,
+    unsigned count,
+    void** x,
+    void** y)
+{
+    while (count >= 4)
+    {
+        xor_mem4(
+            y[0], x[0],
+            y[1], x[1],
+            y[2], x[2],
+            y[3], x[3],
+            bytes);
+        x += 4, y += 4;
+        count -= 4;
+    }
+
+    for (unsigned i = 0; i < count; ++i)
+        xor_mem(y[i], x[i], bytes);
+}
+
 
 } // namespace leopard

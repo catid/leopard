@@ -386,12 +386,6 @@ void fft_butterfly(
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
     ffe_t log_m, uint64_t bytes)
 {
-    if (log_m == kModulus)
-    {
-        xor_mem(y, x, bytes);
-        return;
-    }
-
 #if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
     {
@@ -470,17 +464,6 @@ void fft_butterfly4(
     void * LEO_RESTRICT x_3, void * LEO_RESTRICT y_3,
     ffe_t log_m, uint64_t bytes)
 {
-    if (log_m == kModulus)
-    {
-        xor_mem4(
-            y_0, x_0,
-            y_1, x_1,
-            y_2, x_2,
-            y_3, x_3,
-            bytes);
-        return;
-    }
-
 #if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
     {
@@ -575,12 +558,6 @@ void ifft_butterfly(
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
     ffe_t log_m, uint64_t bytes)
 {
-    if (log_m == kModulus)
-    {
-        xor_mem(y, x, bytes);
-        return;
-    }
-
 #if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
     {
@@ -659,17 +636,6 @@ void ifft_butterfly4(
     void * LEO_RESTRICT x_3, void * LEO_RESTRICT y_3,
     ffe_t log_m, uint64_t bytes)
 {
-    if (log_m == kModulus)
-    {
-        xor_mem4(
-            y_0, x_0,
-            y_1, x_1,
-            y_2, x_2,
-            y_3, x_3,
-            bytes);
-        return;
-    }
-
 #if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
     {
@@ -760,10 +726,13 @@ void ifft_butterfly4(
 //------------------------------------------------------------------------------
 // FFT
 
-static ffe_t FFTSkew[kModulus]; // twisted factors used in FFT
-static ffe_t LogWalsh[kOrder]; // factors used in the evaluation of the error locator polynomial
+// Twisted factors used in FFT
+static ffe_t FFTSkew[kModulus];
 
-void FFTInitialize()
+// Factors used in the evaluation of the error locator polynomial
+static ffe_t LogWalsh[kOrder];
+
+static void FFTInitialize()
 {
     ffe_t temp[kBits - 1];
 
@@ -804,6 +773,64 @@ void FFTInitialize()
     FWHT(LogWalsh, kBits);
 }
 
+void VectorFFTButterfly(
+    const uint64_t bytes,
+    unsigned count,
+    void** x,
+    void** y,
+    const ffe_t skew)
+{
+    if (skew == kModulus)
+    {
+        VectorXOR(bytes, count, x, y);
+        return;
+    }
+
+    while (count >= 4)
+    {
+        fft_butterfly4(
+            x[0], y[0],
+            x[1], y[1],
+            x[2], y[2],
+            x[3], y[3],
+            skew, bytes);
+        x += 4, y += 4;
+        count -= 4;
+    }
+
+    for (unsigned i = 0; i < count; ++i)
+        fft_butterfly(x[i], y[i], skew, bytes);
+}
+
+void VectorIFFTButterfly(
+    const uint64_t bytes,
+    unsigned count,
+    void** x,
+    void** y,
+    const ffe_t skew)
+{
+    if (skew == kModulus)
+    {
+        VectorXOR(bytes, count, x, y);
+        return;
+    }
+
+    while (count >= 4)
+    {
+        ifft_butterfly4(
+            x[0], y[0],
+            x[1], y[1],
+            x[2], y[2],
+            x[3], y[3],
+            skew, bytes);
+        x += 4, y += 4;
+        count -= 4;
+    }
+
+    for (unsigned i = 0; i < count; ++i)
+        ifft_butterfly(x[i], y[i], skew, bytes);
+}
+
 
 //------------------------------------------------------------------------------
 // Encode
@@ -831,10 +858,12 @@ void Encode(
 
         for (unsigned j = width; j < m; j += range)
         {
-            const ffe_t skew = skewLUT[j];
-
-            for (unsigned i = j - width; i < j; ++i)
-                ifft_butterfly(work[i], work[i + width], skew, buffer_bytes);
+            VectorIFFTButterfly(
+                buffer_bytes,
+                width,
+                work + j - width,
+                work + j,
+                skewLUT[j]);
         }
     }
 
@@ -856,18 +885,23 @@ void Encode(
         {
             for (unsigned j = width; j < m; j += (width << 1))
             {
-                const ffe_t skew = skewLUT[j];
-
-                for (unsigned k = j - width; k < j; ++k)
-                    ifft_butterfly(temp[k], temp[k + width], skew, buffer_bytes);
+                VectorIFFTButterfly(
+                    buffer_bytes,
+                    width,
+                    temp + j - width,
+                    temp + j,
+                    skewLUT[j]);
             }
         }
 
         // work <- work XOR temp
 
         // FIXME: Unroll last loop to eliminate this
-        for (unsigned j = 0; j < m; ++j)
-            xor_mem(work[j], temp[j], buffer_bytes);
+        VectorXOR(
+            buffer_bytes,
+            m,
+            work,
+            temp);
     }
 
     const unsigned last_count = original_count % m;
@@ -895,18 +929,23 @@ void Encode(
 
             for (unsigned j = width; j < stop; j += range)
             {
-                const ffe_t skew = skewLUT[j];
-
-                for (unsigned k = j - width; k < j; ++k)
-                    ifft_butterfly(temp[k], temp[k + width], skew, buffer_bytes);
+                VectorIFFTButterfly(
+                    buffer_bytes,
+                    width,
+                    temp + j - width,
+                    temp + j,
+                    skewLUT[j]);
             }
         }
 
         // work <- work XOR temp
 
         // FIXME: Unroll last loop to eliminate this
-        for (unsigned j = 0; j < m; ++j)
-            xor_mem(work[j], temp[j], buffer_bytes);
+        VectorXOR(
+            buffer_bytes,
+            m,
+            work,
+            temp);
     }
 
     // work <- FFT(work, m, 0)
@@ -916,12 +955,14 @@ void Encode(
         const ffe_t* skewLUT = FFTSkew + width - 1;
         const unsigned range = width << 1;
 
-        for (unsigned j = 0; j < m; j += range)
+        for (unsigned j = 0; j < recovery_count; j += range)
         {
-            const ffe_t skew = skewLUT[j];
-
-            for (unsigned k = j, count = j + width; k < count; ++k)
-                fft_butterfly(data[k], data[k + width], skew, buffer_bytes);
+            VectorFFTButterfly(
+                buffer_bytes,
+                width,
+                work + j,
+                work + j + width,
+                skewLUT[j]);
         }
     }
 }
@@ -986,16 +1027,19 @@ void Decode(
 
     // work <- IFFT(work, n, 0)
 
+    const unsigned input_count = m + original_count;
     for (unsigned width = 1; width < n; width <<= 1)
     {
         const unsigned range = width << 1;
 
-        for (unsigned j = width; j < n; j += range)
+        for (unsigned j = width; j < input_count; j += range)
         {
-            const ffe_t skew = FFTSkew[j - 1];
-
-            for (unsigned i = j - width; i < j; ++i)
-                ifft_butterfly(work[i], work[i + width], skew, buffer_bytes);
+            VectorIFFTButterfly(
+                buffer_bytes,
+                width,
+                work + j - width,
+                work + j,
+                FFTSkew[j - 1]);
         }
     }
 
@@ -1005,9 +1049,11 @@ void Decode(
     {
         const unsigned width = ((i ^ (i - 1)) + 1) >> 1;
 
-        // If a large number of values are being XORed:
-        for (unsigned j = i - width; j < i; ++j)
-            xor_mem(work[j], work[j + width], buffer_bytes);
+        VectorXOR(
+            buffer_bytes,
+            width,
+            work + i - width,
+            work + i);
     }
 
     // work <- FFT(work, n, 0) truncated to m + original_count
@@ -1018,12 +1064,16 @@ void Decode(
         const ffe_t* skewLUT = FFTSkew + width - 1;
         const unsigned range = width << 1;
 
+        // FIXME: Generate mipmaps here
+
         for (unsigned j = (m < range) ? 0 : m; j < output_count; j += range)
         {
-            const ffe_t skew = skewLUT[j];
-
-            for (unsigned i = j, count = j + width; i < count; ++i)
-                fft_butterfly(work[i], work[i + width], skew, buffer_bytes);
+            VectorFFTButterfly(
+                buffer_bytes,
+                width,
+                work + j,
+                work + j + width,
+                FFTSkew[j]);
         }
     }
 
