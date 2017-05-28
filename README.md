@@ -1,6 +1,8 @@
 # Leopard-RS
 ## Leopard Reed-Solomon Error Correction Codes in C
 
+#### This software is still under active development.  It may or may not work right now.  I'm trying to get it done ASAP.  Current latest result is that K=128 code rate 1/2 is working and benchmarks are posted here: [http://catid.mechafetus.com/news/news.php?view=399](http://catid.mechafetus.com/news/news.php?view=399)
+
 Leopard-RS is a portable, fast library for Forward Error Correction.
 From a block of equally sized original data pieces, it generates recovery
 symbols that can be used to recover lost original data.
