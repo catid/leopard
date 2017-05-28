@@ -846,17 +846,20 @@ void Encode(
     // work <- data
 
     // FIXME: Unroll first loop to eliminate this
-    for (unsigned i = 0; i < m; ++i)
+    for (unsigned i = 0; i < original_count; ++i)
         memcpy(work[i], data[i], buffer_bytes);
+    for (unsigned i = original_count; i < m; ++i)
+        memset(work[i], 0, buffer_bytes);
 
     // work <- IFFT(data, m, m)
 
+    const unsigned first_end = (original_count < m) ? original_count : m;
     for (unsigned width = 1; width < m; width <<= 1)
     {
         const unsigned range = width << 1;
         const ffe_t* skewLUT = FFTSkew + m - 1;
 
-        for (unsigned j = width; j < m; j += range)
+        for (unsigned j = width; j < first_end; j += range)
         {
             VectorIFFTButterfly(
                 buffer_bytes,
@@ -866,6 +869,9 @@ void Encode(
                 skewLUT[j]);
         }
     }
+
+    if (m >= original_count)
+        goto skip_body;
 
     for (unsigned i = m; i + m <= original_count; i += m)
     {
@@ -949,6 +955,7 @@ void Encode(
     }
 
     // work <- FFT(work, m, 0)
+skip_body:
 
     for (unsigned width = (m >> 1); width > 0; width >>= 1)
     {
