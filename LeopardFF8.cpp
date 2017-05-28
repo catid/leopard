@@ -980,6 +980,71 @@ skip_body:
 
 
 //------------------------------------------------------------------------------
+// ErrorBitfield
+
+// Used in decoding to decide which final FFT operations to perform
+class ErrorBitfield
+{
+    static const unsigned kWords = kOrder / 64;
+    uint64_t Words[7][kWords] = {};
+
+public:
+    LEO_FORCE_INLINE void Set(unsigned i)
+    {
+        Words[0][i / 64] |= (uint64_t)1 << (i % 64);
+    }
+
+    void Prepare();
+
+    LEO_FORCE_INLINE bool IsNeeded(unsigned mip_level, unsigned bit)
+    {
+        if (mip_level >= 8)
+            return true;
+        return 0 != (Words[mip_level - 1][bit / 64] & ((uint64_t)1 << (bit % 64)));
+    }
+};
+
+static const uint64_t kHiMasks[5] = {
+    0xAAAAAAAAAAAAAAAAULL,
+    0xCCCCCCCCCCCCCCCCULL,
+    0xF0F0F0F0F0F0F0F0ULL,
+    0xFF00FF00FF00FF00ULL,
+    0xFFFF0000FFFF0000ULL,
+};
+
+void ErrorBitfield::Prepare()
+{
+    // First mip level is for final layer of FFT: pairs of data
+    for (unsigned i = 0; i < kWords; ++i)
+    {
+        uint64_t w = Words[0][i];
+        const uint64_t hi2lo = w | ((w & kHiMasks[0]) >> 1);
+        const uint64_t lo2hi = ((w & (kHiMasks[0] >> 1)) << 1);
+        Words[0][i] = hi2lo | lo2hi;
+
+        for (unsigned j = 1, bits = 2; j < 5; ++j, bits <<= 1)
+        {
+            uint64_t w = Words[j - 1][i];
+            const uint64_t hi2lo = w | ((w & kHiMasks[j]) >> bits);
+            const uint64_t lo2hi = ((w & (kHiMasks[j] >> bits)) << bits);
+            Words[j][i] = hi2lo | lo2hi;
+        }
+    }
+
+    for (unsigned i = 0; i < kWords; ++i)
+    {
+        uint64_t w = Words[4][i];
+        w |= w >> 32;
+        w |= w << 32;
+        Words[5][i] = w;
+    }
+
+    for (unsigned i = 0; i < kWords; i += 2)
+        Words[6][i] = Words[6][i + 1] = Words[5][i] | Words[5][i + 1];
+}
+
+
+//------------------------------------------------------------------------------
 // Decode
 
 void Decode(
@@ -994,14 +1059,27 @@ void Decode(
 {
     // Fill in error locations
 
+    ErrorBitfield ErrorBits;
+
     ffe_t ErrorLocations[kOrder];
     for (unsigned i = 0; i < recovery_count; ++i)
         ErrorLocations[i] = recovery[i] ? 0 : 1;
     for (unsigned i = recovery_count; i < m; ++i)
         ErrorLocations[i] = 1;
+
+    // Clear the remainder in bulk
+    memset(ErrorLocations + m, 0, (n - m) * sizeof(ffe_t));
+
     for (unsigned i = 0; i < original_count; ++i)
-        ErrorLocations[i + m] = original[i] ? 0 : 1;
-    memset(ErrorLocations + m + original_count, 0, (n - original_count - m) * sizeof(ffe_t));
+    {
+        if (!original[i])
+        {
+            ErrorLocations[i + m] = 1;
+            ErrorBits.Set(i + m);
+        }
+    }
+
+    ErrorBits.Prepare();
 
     // Evaluate error locator polynomial
 
@@ -1039,7 +1117,8 @@ void Decode(
     // work <- IFFT(work, n, 0)
 
     const unsigned input_count = m + original_count;
-    for (unsigned width = 1; width < n; width <<= 1)
+    unsigned mip_level = 0;
+    for (unsigned width = 1; width < n; width <<= 1, ++mip_level)
     {
         const unsigned range = width << 1;
 
@@ -1070,15 +1149,16 @@ void Decode(
     // work <- FFT(work, n, 0) truncated to m + original_count
 
     const unsigned output_count = m + original_count;
-    for (unsigned width = (n >> 1); width > 0; width >>= 1)
+    for (unsigned width = (n >> 1); width > 0; width >>= 1, --mip_level)
     {
         const ffe_t* skewLUT = FFTSkew + width - 1;
         const unsigned range = width << 1;
 
-        // FIXME: Generate mipmaps here
-
         for (unsigned j = (m < range) ? 0 : m; j < output_count; j += range)
         {
+            if (!ErrorBits.IsNeeded(mip_level, j))
+                continue;
+
             VectorFFTButterfly(
                 buffer_bytes,
                 width,
