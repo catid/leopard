@@ -846,14 +846,18 @@ void Encode(
     // work <- data
 
     // FIXME: Unroll first loop to eliminate this
-    for (unsigned i = 0; i < original_count; ++i)
+    unsigned first_end = m;
+    if (original_count < m)
+    {
+        first_end = original_count;
+        for (unsigned i = original_count; i < m; ++i)
+            memset(work[i], 0, buffer_bytes);
+    }
+    for (unsigned i = 0; i < first_end; ++i)
         memcpy(work[i], data[i], buffer_bytes);
-    for (unsigned i = original_count; i < m; ++i)
-        memset(work[i], 0, buffer_bytes);
 
     // work <- IFFT(data, m, m)
 
-    const unsigned first_end = (original_count < m) ? original_count : m;
     for (unsigned width = 1; width < m; width <<= 1)
     {
         const unsigned range = width << 1;
