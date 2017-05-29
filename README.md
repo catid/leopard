@@ -1,7 +1,8 @@
 # Leopard-RS
 ## Reed-Solomon Error Correction Codes for Large Data in C
 
-#### This software is still under active development.  It may or may not work right now.  I'm trying to get it done ASAP.  Current latest result is that K=128 code rate 1/2 is working and benchmarks are posted here: [http://catid.mechafetus.com/news/news.php?view=399](http://catid.mechafetus.com/news/news.php?view=399)
+#### Update: Data up to 256 pieces is working!
+#### Implementing 16-bit finite fields to enable data up to 65536 pieces next.
 
 Leopard-RS is a fast library for Forward Error Correction.
 From a block of equally sized original data pieces, it generates recovery
@@ -18,7 +19,14 @@ It sets new speed records for MDS encoding and decoding of large data,
 achieving over 1.2 GB/s to encode with the AVX2 instruction set on a single core.
 
 There is another library `FastECC` by Bulat-Ziganshin that should have similar performance:
-[https://github.com/Bulat-Ziganshin/FastECC](https://github.com/Bulat-Ziganshin/FastECC)
+[https://github.com/Bulat-Ziganshin/FastECC](https://github.com/Bulat-Ziganshin/FastECC).
+Both libraries implement the same high-level algorithm in {3}, while Leopard implements the
+newer polynomial basis GF(2^r) approach outlined in {1}, and FastECC uses complex finite fields
+modulo special primes.  There are trade-offs that may make either approach preferable based
+on the application:
++ Older processors do not support SSSE3 and FastECC supports these processors better.
++ FastECC supports data sets above 64,000 pieces as it uses 32-bit finite field math.  
++ Leopard does not require expanding the input or output data to make it fit in the field, so it can be more space efficient.
 
 Example applications are data recovery software and data center replication.
 
