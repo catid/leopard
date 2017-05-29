@@ -258,7 +258,9 @@ At runtime, the error locator polynomial is evaluated using the
 Fast Walsh-Hadamard transform as described in {1} equation (92).
 
 At runtime the data is explicit laid out in workspace memory like this:
+~~~
 [Recovery Data (Power of Two = M)] [Original Data (K)] [Zero Padding out to N]
+~~~
 
 Data that was lost is replaced with zeroes.
 Data that was received, including recovery data, is multiplied by the error
