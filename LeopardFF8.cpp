@@ -253,20 +253,17 @@ static void InitializeLogarithmTables()
     ExpLUT[kModulus] = ExpLUT[0];
 }
 
+
 //------------------------------------------------------------------------------
 // Multiplies
 
-// We require memory to be aligned since the SIMD instructions benefit from
-// or require aligned accesses to the table data.
 struct {
-    LEO_ALIGNED LEO_M128 Lo[256];
-    LEO_ALIGNED LEO_M128 Hi[256];
-} static Multiply128LUT;
+    LEO_ALIGNED LEO_M128 Value[kBits / 4];
+} static Multiply128LUT[kOrder];
 #if defined(LEO_TRY_AVX2)
 struct {
-    LEO_ALIGNED LEO_M256 Lo[256];
-    LEO_ALIGNED LEO_M256 Hi[256];
-} static Multiply256LUT;
+    LEO_ALIGNED LEO_M256 Value[kBits / 4];
+} static Multiply256LUT[kOrder];
 #endif // LEO_TRY_AVX2
 
 // Returns a * Log(b)
@@ -285,33 +282,33 @@ static ffe_t MultiplyLog(ffe_t a, ffe_t log_b)
     return ExpLUT[AddMod(LogLUT[a], log_b)];
 }
 
-
 void InitializeMultiplyTables()
 {
-    for (int log_y = 0; log_y < 256; ++log_y)
+    // For each value we could multiply by:
+    for (unsigned log_m = 0; log_m < kOrder; ++log_m)
     {
-        uint8_t lo[16], hi[16];
-        for (uint8_t x = 0; x < 16; ++x)
+        // For each 4 bits of the finite field width in bits:
+        for (unsigned i = 0, shift = 0; i < kBits / 4; ++i, shift += 4)
         {
-            lo[x] = MultiplyLog(x, static_cast<uint8_t>(log_y));
-            hi[x] = MultiplyLog(x << 4, static_cast<uint8_t>(log_y));
-        }
+            // Construct 16 entry LUT for PSHUFB
+            ffe_t lut[16];
+            for (uint8_t x = 0; x < 16; ++x)
+                lut[x] = MultiplyLog(x << shift, static_cast<ffe_t>(log_m));
 
-        const LEO_M128 table_lo = _mm_loadu_si128((LEO_M128*)lo);
-        const LEO_M128 table_hi = _mm_loadu_si128((LEO_M128*)hi);
+            // Store in 128-bit wide table
+            const LEO_M128 *v_ptr = reinterpret_cast<const LEO_M128 *>(&lut[0]);
+            const LEO_M128 value = _mm_loadu_si128(v_ptr);
+            _mm_storeu_si128(&Multiply128LUT[log_m].Value[i], value);
 
-        _mm_storeu_si128(Multiply128LUT.Lo + log_y, table_lo);
-        _mm_storeu_si128(Multiply128LUT.Hi + log_y, table_hi);
-
+            // Store in 256-bit wide table
 #if defined(LEO_TRY_AVX2)
-        if (CpuHasAVX2)
-        {
-            _mm256_storeu_si256(Multiply256LUT.Lo + log_y,
-                _mm256_broadcastsi128_si256(table_lo));
-            _mm256_storeu_si256(Multiply256LUT.Hi + log_y,
-                _mm256_broadcastsi128_si256(table_hi));
-        }
+            if (CpuHasAVX2)
+            {
+                _mm256_storeu_si256(&Multiply256LUT[log_m].Value[i],
+                    _mm256_broadcastsi128_si256(value));
+            }
 #endif // LEO_TRY_AVX2
+        }
     }
 }
 
@@ -323,8 +320,8 @@ void mul_mem(
 #if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
     {
-        const LEO_M256 table_lo_y = _mm256_loadu_si256(Multiply256LUT.Lo + log_m);
-        const LEO_M256 table_hi_y = _mm256_loadu_si256(Multiply256LUT.Hi + log_m);
+        const LEO_M256 table_lo_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[0]);
+        const LEO_M256 table_hi_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[1]);
 
         const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
 
@@ -353,8 +350,8 @@ void mul_mem(
     }
 #endif // LEO_TRY_AVX2
 
-    const LEO_M128 table_lo_y = _mm_loadu_si128(Multiply128LUT.Lo + log_m);
-    const LEO_M128 table_hi_y = _mm_loadu_si128(Multiply128LUT.Hi + log_m);
+    const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
+    const LEO_M128 table_hi_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[1]);
 
     const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
 
@@ -393,8 +390,8 @@ void fft_butterfly(
 #if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
     {
-        const LEO_M256 table_lo_y = _mm256_loadu_si256(Multiply256LUT.Lo + log_m);
-        const LEO_M256 table_hi_y = _mm256_loadu_si256(Multiply256LUT.Hi + log_m);
+        const LEO_M256 table_lo_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[0]);
+        const LEO_M256 table_hi_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[1]);
 
         const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
 
@@ -427,8 +424,8 @@ void fft_butterfly(
     }
 #endif // LEO_TRY_AVX2
 
-    const LEO_M128 table_lo_y = _mm_loadu_si128(Multiply128LUT.Lo + log_m);
-    const LEO_M128 table_hi_y = _mm_loadu_si128(Multiply128LUT.Hi + log_m);
+    const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
+    const LEO_M128 table_hi_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[1]);
 
     const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
 
@@ -472,8 +469,8 @@ void fft_butterfly4(
 #if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
     {
-        const LEO_M256 table_lo_y = _mm256_loadu_si256(Multiply256LUT.Lo + log_m);
-        const LEO_M256 table_hi_y = _mm256_loadu_si256(Multiply256LUT.Hi + log_m);
+        const LEO_M256 table_lo_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[0]);
+        const LEO_M256 table_hi_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[1]);
 
         const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
 
@@ -511,8 +508,8 @@ void fft_butterfly4(
     }
 #endif // LEO_TRY_AVX2
 
-    const LEO_M128 table_lo_y = _mm_loadu_si128(Multiply128LUT.Lo + log_m);
-    const LEO_M128 table_hi_y = _mm_loadu_si128(Multiply128LUT.Hi + log_m);
+    const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
+    const LEO_M128 table_hi_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[1]);
 
     const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
 
@@ -568,8 +565,8 @@ void ifft_butterfly(
 #if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
     {
-        const LEO_M256 table_lo_y = _mm256_loadu_si256(Multiply256LUT.Lo + log_m);
-        const LEO_M256 table_hi_y = _mm256_loadu_si256(Multiply256LUT.Hi + log_m);
+        const LEO_M256 table_lo_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[0]);
+        const LEO_M256 table_hi_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[1]);
 
         const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
 
@@ -602,8 +599,8 @@ void ifft_butterfly(
     }
 #endif // LEO_TRY_AVX2
 
-    const LEO_M128 table_lo_y = _mm_loadu_si128(Multiply128LUT.Lo + log_m);
-    const LEO_M128 table_hi_y = _mm_loadu_si128(Multiply128LUT.Hi + log_m);
+    const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
+    const LEO_M128 table_hi_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[1]);
 
     const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
 
@@ -647,8 +644,8 @@ void ifft_butterfly4(
 #if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
     {
-        const LEO_M256 table_lo_y = _mm256_loadu_si256(Multiply256LUT.Lo + log_m);
-        const LEO_M256 table_hi_y = _mm256_loadu_si256(Multiply256LUT.Hi + log_m);
+        const LEO_M256 table_lo_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[0]);
+        const LEO_M256 table_hi_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[1]);
 
         const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
 
@@ -686,8 +683,8 @@ void ifft_butterfly4(
     }
 #endif // LEO_TRY_AVX2
 
-    const LEO_M128 table_lo_y = _mm_loadu_si128(Multiply128LUT.Lo + log_m);
-    const LEO_M128 table_hi_y = _mm_loadu_si128(Multiply128LUT.Hi + log_m);
+    const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
+    const LEO_M128 table_hi_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[1]);
 
     const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
 
