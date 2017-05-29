@@ -24,7 +24,7 @@ newer polynomial basis GF(2^r) approach outlined in {1}, and FastECC uses comple
 modulo special primes.  There are trade-offs that may make either approach preferable based
 on the application:
 + Older processors do not support SSSE3 and FastECC supports these processors better.
-+ FastECC supports data sets above 64,000 pieces as it uses 32-bit finite field math.  
++ FastECC supports data sets above 65,536 pieces as it uses 32-bit finite field math.  
 + Leopard does not require expanding the input or output data to make it fit in the field, so it can be more space efficient.
 
 Example applications are data recovery software and data center replication.
