@@ -964,7 +964,7 @@ void ReedSolomonEncode(
             const unsigned range = width << 1;
 
 #ifdef LEO_SCHEDULE_OPT
-            const unsigned stop = ((last_count + width - 1) >> shift) << shift;
+            const unsigned stop = ((last_count + range - 1) >> shift) << shift;
             for (unsigned j = width; j < stop; j += range)
 #else
             for (unsigned j = width; j < m; j += range)

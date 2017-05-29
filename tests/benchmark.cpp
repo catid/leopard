@@ -46,10 +46,10 @@ struct TestParameters
     unsigned recovery_count = 100; // under 65536 - original_count
 #else
     unsigned original_count = 3; // under 65536
-    unsigned recovery_count = 2; // under 65536 - original_count
+    unsigned recovery_count = 3; // under 65536 - original_count
 #endif
     unsigned buffer_bytes = 64000; // multiple of 64 bytes
-    unsigned loss_count = 2; // some fraction of original_count
+    unsigned loss_count = 3; // some fraction of original_count
     unsigned seed = 0;
     bool multithreaded = true;
 };
