@@ -66,8 +66,8 @@ For full documentation please read `leopard.h`.
 On my laptop:
 
 ```
-Leopard Encoder(8.192 MB in 128 pieces, 128 losses): Input=1242.62 MB/s, Output=1242.62 MB/s
-Leopard Decoder(8.192 MB in 128 pieces, 128 losses): Input=482.53 MB/s, Output=482.53 MB/s
+Leopard Encoder(8.192 MB in 128 pieces, 20 losses): Input=1294.3 MB/s, Output=1294.3 MB/s
+Leopard Decoder(8.192 MB in 128 pieces, 20 losses): Input=526.698 MB/s, Output=82.2966 MB/s
 ```
 
 
@@ -100,12 +100,12 @@ Leopard Decoder(8.192 MB in 128 pieces, 128 losses): Input=482.53 MB/s, Output=4
 
 For 128 data pieces of input and 128 data pieces of redundancy:
 
-+ Fastest to encode: Leopard (1.2 GB/s)
++ Fastest to encode: Leopard (1.29 GB/s)
 + Distant second-place: WH256 (660 MB/s), FEC-AL (515 MB/s)
 + Slowest encoders: Longhair, CM256
 
 + Fastest to decode: WH256 (830 MB/s)
-+ Distant second-place: Leopard (482 MB/s)
++ Distant second-place: Leopard (526 MB/s)
 + Slowest decoders: FEC-AL, CM256, Longhair
 
 There are a lot of variables that affect when each of these libraries should be used.
