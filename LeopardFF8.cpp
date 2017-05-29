@@ -1162,11 +1162,7 @@ void ReedSolomonDecode(
     {
         const unsigned range = width << 1;
 
-#ifdef LEO_SCHEDULE_OPT
-        for (unsigned j = width; j < input_count; j += range)
-#else
         for (unsigned j = width; j < n; j += range)
-#endif
         {
             VectorIFFTButterfly(
                 buffer_bytes,

@@ -35,6 +35,8 @@
     #include "LeopardFF16.h"
 #endif // LEO_HAS_FF16
 
+#include <string.h>
+
 extern "C" {
 
 
@@ -64,6 +66,25 @@ LEO_EXPORT int leo_init_(int version)
     return Leopard_Success;
 }
 
+//------------------------------------------------------------------------------
+// Result
+
+LEO_EXPORT const char* leo_result_string(LeopardResult result)
+{
+    switch (result)
+    {
+    case Leopard_Success: return "Operation succeeded";
+    case Leopard_NeedMoreData: return "Not enough recovery data received";
+    case Leopard_TooMuchData: return "Buffer counts are too high";
+    case Leopard_InvalidSize: return "Buffer size must be a multiple of 64 bytes";
+    case Leopard_InvalidCounts: return "Invalid counts provided";
+    case Leopard_InvalidInput: return "A function parameter was invalid";
+    case Leopard_Platform: return "Platform is unsupported";
+    case Leopard_CallInitialize: return "Call leo_init() first";
+    }
+    return "Unknown";
+}
+
 
 //------------------------------------------------------------------------------
 // Encoder API
@@ -72,7 +93,29 @@ LEO_EXPORT unsigned leo_encode_work_count(
     unsigned original_count,
     unsigned recovery_count)
 {
+    if (original_count == 1)
+        return recovery_count;
+    if (recovery_count == 1)
+        return 1;
     return leopard::NextPow2(recovery_count) * 2;
+}
+
+// recovery_data = parity of original_data (xor sum)
+static void EncodeM1(
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    void* const * const original_data,
+    void* recovery_data)
+{
+    memcpy(recovery_data, original_data[0], buffer_bytes);
+
+    leopard::XORSummer summer;
+    summer.Initialize(recovery_data, buffer_bytes);
+
+    for (unsigned i = 1; i < original_count; ++i)
+        summer.Add(original_data[i]);
+
+    summer.Finalize();
 }
 
 LEO_EXPORT LeopardResult leo_encode(
@@ -95,6 +138,21 @@ LEO_EXPORT LeopardResult leo_encode(
 
     if (!m_Initialized)
         return Leopard_CallInitialize;
+
+    // Handle k = 1 case
+    if (original_count == 1)
+    {
+        for (unsigned i = 0; i < recovery_count; ++i)
+            memcpy(work_data[i], original_data[i], buffer_bytes);
+        return Leopard_Success;
+    }
+
+    // Handle m = 1 case
+    if (recovery_count == 1)
+    {
+        EncodeM1(buffer_bytes, original_count, original_data, work_data[0]);
+        return Leopard_Success;
+    }
 
     const unsigned m = leopard::NextPow2(recovery_count);
     const unsigned n = leopard::NextPow2(m + original_count);
@@ -143,9 +201,30 @@ LEO_EXPORT unsigned leo_decode_work_count(
     unsigned original_count,
     unsigned recovery_count)
 {
+    if (original_count == 1 || recovery_count == 1)
+        return original_count;
     const unsigned m = leopard::NextPow2(recovery_count);
     const unsigned n = leopard::NextPow2(m + original_count);
     return n;
+}
+
+static void DecodeM1(
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    void* const * const original_data,
+    const void* recovery_data,
+    void* work_data)
+{
+    memcpy(work_data, recovery_data, buffer_bytes);
+
+    leopard::XORSummer summer;
+    summer.Initialize(work_data, buffer_bytes);
+
+    for (unsigned i = 0; i < original_count; ++i)
+        if (original_data[i])
+            summer.Add(original_data[i]);
+
+    summer.Finalize();
 }
 
 LEO_EXPORT LeopardResult leo_decode(
@@ -169,6 +248,44 @@ LEO_EXPORT LeopardResult leo_decode(
 
     if (!m_Initialized)
         return Leopard_CallInitialize;
+
+    // Check if not enough recovery data arrived
+    unsigned original_loss_count = 0;
+    unsigned original_loss_index = 0;
+    for (unsigned i = 0; i < original_count; ++i)
+    {
+        if (!original_data[i])
+        {
+            ++original_loss_count;
+            original_loss_index = i;
+        }
+    }
+    unsigned recovery_got_count = 0;
+    unsigned recovery_last_i = 0;
+    for (unsigned i = 0; i < recovery_count; ++i)
+    {
+        if (recovery_data[i])
+        {
+            ++recovery_got_count;
+            recovery_last_i = i;
+        }
+    }
+    if (recovery_got_count < original_loss_count)
+        return Leopard_NeedMoreData;
+
+    // Handle k = 1 case
+    if (original_count == 1)
+    {
+        memcpy(work_data[0], recovery_data[recovery_last_i], buffer_bytes);
+        return Leopard_Success;
+    }
+
+    // Handle m = 1 case
+    if (recovery_count == 1)
+    {
+        DecodeM1(buffer_bytes, original_count, original_data, recovery_data[0], work_data[original_loss_index]);
+        return Leopard_Success;
+    }
 
     const unsigned m = leopard::NextPow2(recovery_count);
     const unsigned n = leopard::NextPow2(m + original_count);

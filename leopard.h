@@ -130,13 +130,17 @@ typedef enum LeopardResultT
 {
     Leopard_Success           =  0, // Operation succeeded
 
-    Leopard_TooMuchData       = -1, // Buffer counts are too high
-    Leopard_InvalidSize       = -2, // Buffer size must be a multiple of 64 bytes
-    Leopard_InvalidCounts     = -3, // Invalid counts provided
-    Leopard_InvalidInput      = -4, // A function parameter was invalid
-    Leopard_Platform          = -5, // Platform is unsupported
-    Leopard_CallInitialize    = -6, // Call leo_init() first
+    Leopard_NeedMoreData      = -1, // Not enough recovery data received
+    Leopard_TooMuchData       = -2, // Buffer counts are too high
+    Leopard_InvalidSize       = -3, // Buffer size must be a multiple of 64 bytes
+    Leopard_InvalidCounts     = -4, // Invalid counts provided
+    Leopard_InvalidInput      = -5, // A function parameter was invalid
+    Leopard_Platform          = -6, // Platform is unsupported
+    Leopard_CallInitialize    = -7, // Call leo_init() first
 } LeopardResult;
+
+// Convert Leopard result to string
+LEO_EXPORT const char* leo_result_string(LeopardResult result);
 
 // Flags
 typedef enum LeopardFlagsT

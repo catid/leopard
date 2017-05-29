@@ -38,7 +38,21 @@
 using namespace std;
 
 //#define TEST_DATA_ALL_SAME
-//#define TEST_LOSE_FIRST_K_PACKETS
+
+struct TestParameters
+{
+#ifdef LEO_HAS_FF16
+    unsigned original_count = 1000; // under 65536
+    unsigned recovery_count = 100; // under 65536 - original_count
+#else
+    unsigned original_count = 3; // under 65536
+    unsigned recovery_count = 1; // under 65536 - original_count
+#endif
+    unsigned buffer_bytes = 64000; // multiple of 64 bytes
+    unsigned loss_count = 16; // some fraction of original_count
+    unsigned seed = 0;
+    bool multithreaded = true;
+};
 
 
 //------------------------------------------------------------------------------
@@ -383,21 +397,6 @@ static LEO_FORCE_INLINE void SIMDSafeFree(void* ptr)
 //------------------------------------------------------------------------------
 // Tests
 
-struct TestParameters
-{
-#ifdef LEO_HAS_FF16
-    unsigned original_count = 1000; // under 65536
-    unsigned recovery_count = 100; // under 65536 - original_count
-#else
-    unsigned original_count = 32; // under 65536
-    unsigned recovery_count = 16; // under 65536 - original_count
-#endif
-    unsigned buffer_bytes = 64000; // multiple of 64 bytes
-    unsigned loss_count = 16; // some fraction of original_count
-    unsigned seed = 0;
-    bool multithreaded = true;
-};
-
 static void BasicTest(const TestParameters& params)
 {
     static const unsigned kTrials = 10;
@@ -454,7 +453,7 @@ static void BasicTest(const TestParameters& params)
 
         if (encodeResult != Leopard_Success)
         {
-            cout << "Error: Leopard encode failed with result=" << encodeResult << endl;
+            cout << "Error: Leopard encode failed with result=" << encodeResult << ": " << leo_result_string(encodeResult) << endl;
             LEO_DEBUG_BREAK;
             return;
         }
@@ -501,7 +500,7 @@ static void BasicTest(const TestParameters& params)
 
         if (decodeResult != Leopard_Success)
         {
-            cout << "Error: Leopard decode failed with result=" << decodeResult << endl;
+            cout << "Error: Leopard decode failed with result=" << decodeResult << ": " << leo_result_string(decodeResult) << endl;
             LEO_DEBUG_BREAK;
             return;
         }
@@ -798,6 +797,20 @@ int main(int argc, char **argv)
     cout << "Parameters: [original count=" << params.original_count << "] [recovery count=" << params.recovery_count << "] [buffer bytes=" << params.buffer_bytes << "] [loss count=" << params.loss_count << "] [random seed=" << params.seed << "]" << endl;
 
     BasicTest(params);
+
+    for (unsigned original_count = 1; original_count <= 256; ++original_count)
+    {
+        for (unsigned recovery_count = 1; recovery_count <= original_count; ++recovery_count)
+        {
+            params.original_count = original_count;
+            params.recovery_count = recovery_count;
+            params.loss_count = recovery_count;
+
+            cout << "Parameters: [original count=" << params.original_count << "] [recovery count=" << params.recovery_count << "] [buffer bytes=" << params.buffer_bytes << "] [loss count=" << params.loss_count << "] [random seed=" << params.seed << "]" << endl;
+
+            BasicTest(params);
+        }
+    }
 
     getchar();
 

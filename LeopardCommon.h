@@ -158,6 +158,9 @@
 // Avoid scheduling reduced FFT operations that are unneeded
 #define LEO_SCHEDULE_OPT
 
+// Optimize M=1 case
+#define LEO_M1_OPT
+
 
 //------------------------------------------------------------------------------
 // Debug
@@ -319,6 +322,13 @@ void xor_mem(
     void * LEO_RESTRICT x, const void * LEO_RESTRICT y,
     uint64_t bytes);
 
+// x[] ^= y[] ^ z[]
+void xor_mem_2to1(
+    void * LEO_RESTRICT x,
+    const void * LEO_RESTRICT y,
+    const void * LEO_RESTRICT z,
+    uint64_t bytes);
+
 #ifdef LEO_USE_VECTOR4_OPT
 
 // For i = {0, 1, 2, 3}: x_i[] ^= x_i[]
@@ -337,6 +347,52 @@ void VectorXOR(
     unsigned count,
     void** x,
     void** y);
+
+
+//------------------------------------------------------------------------------
+// XORSummer
+
+class XORSummer
+{
+public:
+    // Set the addition destination and byte count
+    LEO_FORCE_INLINE void Initialize(void* dest, uint64_t bytes)
+    {
+        DestBuffer = dest;
+        Bytes = bytes;
+        Waiting = nullptr;
+    }
+
+    // Accumulate some source data
+    LEO_FORCE_INLINE void Add(const void* src)
+    {
+#ifdef LEO_M1_OPT
+        if (Waiting)
+        {
+            xor_mem_2to1(DestBuffer, src, Waiting, Bytes);
+            Waiting = nullptr;
+        }
+        else
+            Waiting = src;
+#else // LEO_M1_OPT
+        xor_mem(DestBuffer, src, Bytes);
+#endif // LEO_M1_OPT
+    }
+
+    // Finalize in the destination buffer
+    LEO_FORCE_INLINE void Finalize()
+    {
+#ifdef LEO_M1_OPT
+        if (Waiting)
+            xor_mem(DestBuffer, Waiting, Bytes);
+#endif // LEO_M1_OPT
+    }
+
+protected:
+    void* DestBuffer;
+    uint64_t Bytes;
+    const void* Waiting;
+};
 
 
 } // namespace leopard
