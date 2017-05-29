@@ -45,11 +45,11 @@ struct TestParameters
     unsigned original_count = 1000; // under 65536
     unsigned recovery_count = 100; // under 65536 - original_count
 #else
-    unsigned original_count = 3; // under 65536
-    unsigned recovery_count = 3; // under 65536 - original_count
+    unsigned original_count = 200; // under 65536
+    unsigned recovery_count = 20; // under 65536 - original_count
 #endif
     unsigned buffer_bytes = 64000; // multiple of 64 bytes
-    unsigned loss_count = 3; // some fraction of original_count
+    unsigned loss_count = 20; // some fraction of original_count
     unsigned seed = 0;
     bool multithreaded = true;
 };
@@ -453,6 +453,11 @@ static bool BasicTest(const TestParameters& params)
 
         if (encodeResult != Leopard_Success)
         {
+            if (encodeResult == Leopard_TooMuchData)
+            {
+                cout << "Skipping this test: Parameters are unsupported by the codec" << endl;
+                return true;
+            }
             cout << "Error: Leopard encode failed with result=" << encodeResult << ": " << leo_result_string(encodeResult) << endl;
             LEO_DEBUG_BREAK;
             return false;

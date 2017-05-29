@@ -30,9 +30,8 @@
 #define CAT_LEOPARD_RS_H
 
 /*
-    Leopard-RS: Reed-Solomon Error Correction Codes for Large Data in C
-
-    WORK IN PROGRESS - NON FUNCTIONAL
+    Leopard-RS
+    MDS Reed-Solomon Error Correction Codes for Large Data in C
 
     Algorithms are described in LeopardCommon.h
 
@@ -60,11 +59,9 @@
 
 /*
     TODO:
-    + Fixes for all different input sizes
     + New 16-bit Muladd inner loops
         + Benchmarks for large data!
     + Add multi-threading to split up long parallelizable calculations
-        + Write detailed comments for all the routines
         + Final benchmarks!
     + Release version 1
         + Finish up documentation
