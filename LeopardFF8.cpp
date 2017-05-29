@@ -875,23 +875,22 @@ void ReedSolomonEncode(
 
     // work <- IFFT(data, m, m)
 
-    const ffe_t* skewLUT = FFTSkew + m - 1;
-
     for (unsigned width = 1; width < m; width <<= 1)
     {
         const unsigned range = width << 1;
+        const ffe_t* skewLUT = FFTSkew + width + m - 1;
 
 #ifdef LEO_SCHEDULE_OPT
-        for (unsigned j = width; j < first_end; j += range)
+        for (unsigned j = 0; j < first_end; j += range)
 #else
-        for (unsigned j = width; j < m; j += range)
+        for (unsigned j = 0; j < m; j += range)
 #endif
         {
             VectorIFFTButterfly(
                 buffer_bytes,
                 width,
-                work + j - width,
                 work + j,
+                work + j + width,
                 skewLUT[j]);
         }
     }
@@ -956,25 +955,24 @@ void ReedSolomonEncode(
 
         // temp <- IFFT(temp, m, m + i)
 
-        const ffe_t* skewLUT = FFTSkew + m + i - 1;
-
         for (unsigned width = 1, shift = 1; width < m; width <<= 1, ++shift)
         {
-            // Calculate stop considering that the right is all zeroes
             const unsigned range = width << 1;
+            const ffe_t* skewLUT = FFTSkew + width + m + i - 1;
 
 #ifdef LEO_SCHEDULE_OPT
+            // Calculate stop considering that the right is all zeroes
             const unsigned stop = ((last_count + range - 1) >> shift) << shift;
-            for (unsigned j = width; j < stop; j += range)
+            for (unsigned j = 0; j < stop; j += range)
 #else
-            for (unsigned j = width; j < m; j += range)
+            for (unsigned j = 0; j < m; j += range)
 #endif
             {
                 VectorIFFTButterfly(
                     buffer_bytes,
                     width,
-                    temp + j - width,
                     temp + j,
+                    temp + j + width,
                     skewLUT[j]);
             }
         }

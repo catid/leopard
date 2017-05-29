@@ -397,7 +397,7 @@ static LEO_FORCE_INLINE void SIMDSafeFree(void* ptr)
 //------------------------------------------------------------------------------
 // Tests
 
-static void BasicTest(const TestParameters& params)
+static bool BasicTest(const TestParameters& params)
 {
     static const unsigned kTrials = 10;
 
@@ -455,7 +455,7 @@ static void BasicTest(const TestParameters& params)
         {
             cout << "Error: Leopard encode failed with result=" << encodeResult << ": " << leo_result_string(encodeResult) << endl;
             LEO_DEBUG_BREAK;
-            return;
+            return false;
         }
 
         // Lose random original data:
@@ -502,10 +502,9 @@ static void BasicTest(const TestParameters& params)
         {
             cout << "Error: Leopard decode failed with result=" << decodeResult << ": " << leo_result_string(decodeResult) << endl;
             LEO_DEBUG_BREAK;
-            return;
+            return false;
         }
 
-#if 1
         for (unsigned i = 0; i < params.original_count; ++i)
         {
             if (!original_data[i])
@@ -514,11 +513,10 @@ static void BasicTest(const TestParameters& params)
                 {
                     cout << "Error: Data was corrupted" << endl;
                     LEO_DEBUG_BREAK;
-                    return;
+                    return false;
                 }
             }
         }
-#endif
 
         // Free memory:
 
@@ -544,6 +542,8 @@ static void BasicTest(const TestParameters& params)
 
     cout << "Leopard Encoder(" << total_bytes / 1000000.f << " MB in " << params.original_count << " pieces, " << params.loss_count << " losses): Input=" << encode_input_MBPS << " MB/s, Output=" << encode_output_MBPS << " MB/s" << endl;
     cout << "Leopard Decoder(" << total_bytes / 1000000.f << " MB in " << params.original_count << " pieces, " << params.loss_count << " losses): Input=" << decode_input_MBPS << " MB/s, Output=" << decode_output_MBPS << " MB/s" << endl << endl;
+
+    return true;
 }
 
 
@@ -796,7 +796,8 @@ int main(int argc, char **argv)
 
     cout << "Parameters: [original count=" << params.original_count << "] [recovery count=" << params.recovery_count << "] [buffer bytes=" << params.buffer_bytes << "] [loss count=" << params.loss_count << "] [random seed=" << params.seed << "]" << endl;
 
-    BasicTest(params);
+    if (!BasicTest(params))
+        goto Failed;
 
     for (unsigned original_count = 1; original_count <= 256; ++original_count)
     {
@@ -808,10 +809,12 @@ int main(int argc, char **argv)
 
             cout << "Parameters: [original count=" << params.original_count << "] [recovery count=" << params.recovery_count << "] [buffer bytes=" << params.buffer_bytes << "] [loss count=" << params.loss_count << "] [random seed=" << params.seed << "]" << endl;
 
-            BasicTest(params);
+            if (!BasicTest(params))
+                goto Failed;
         }
     }
 
+Failed:
     getchar();
 
     return 0;
