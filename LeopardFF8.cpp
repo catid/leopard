@@ -32,6 +32,10 @@
 
 #include <string.h>
 
+#ifdef _MSC_VER
+    #pragma warning(disable: 4752) // found Intel(R) Advanced Vector Extensions; consider using /arch:AVX
+#endif
+
 namespace leopard { namespace ff8 {
 
 

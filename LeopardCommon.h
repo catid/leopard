@@ -322,12 +322,16 @@ void xor_mem(
     void * LEO_RESTRICT x, const void * LEO_RESTRICT y,
     uint64_t bytes);
 
+#ifdef LEO_M1_OPT
+
 // x[] ^= y[] ^ z[]
 void xor_mem_2to1(
     void * LEO_RESTRICT x,
     const void * LEO_RESTRICT y,
     const void * LEO_RESTRICT z,
     uint64_t bytes);
+
+#endif // LEO_M1_OPT
 
 #ifdef LEO_USE_VECTOR4_OPT
 

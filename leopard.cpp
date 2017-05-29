@@ -150,7 +150,11 @@ LEO_EXPORT LeopardResult leo_encode(
     // Handle m = 1 case
     if (recovery_count == 1)
     {
-        EncodeM1(buffer_bytes, original_count, original_data, work_data[0]);
+        EncodeM1(
+            buffer_bytes,
+            original_count,
+            original_data,
+            work_data[0]);
         return Leopard_Success;
     }
 
@@ -251,23 +255,23 @@ LEO_EXPORT LeopardResult leo_decode(
 
     // Check if not enough recovery data arrived
     unsigned original_loss_count = 0;
-    unsigned original_loss_index = 0;
+    unsigned original_loss_i = 0;
     for (unsigned i = 0; i < original_count; ++i)
     {
         if (!original_data[i])
         {
             ++original_loss_count;
-            original_loss_index = i;
+            original_loss_i = i;
         }
     }
     unsigned recovery_got_count = 0;
-    unsigned recovery_last_i = 0;
+    unsigned recovery_got_i = 0;
     for (unsigned i = 0; i < recovery_count; ++i)
     {
         if (recovery_data[i])
         {
             ++recovery_got_count;
-            recovery_last_i = i;
+            recovery_got_i = i;
         }
     }
     if (recovery_got_count < original_loss_count)
@@ -276,14 +280,19 @@ LEO_EXPORT LeopardResult leo_decode(
     // Handle k = 1 case
     if (original_count == 1)
     {
-        memcpy(work_data[0], recovery_data[recovery_last_i], buffer_bytes);
+        memcpy(work_data[0], recovery_data[recovery_got_i], buffer_bytes);
         return Leopard_Success;
     }
 
     // Handle m = 1 case
     if (recovery_count == 1)
     {
-        DecodeM1(buffer_bytes, original_count, original_data, recovery_data[0], work_data[original_loss_index]);
+        DecodeM1(
+            buffer_bytes,
+            original_count,
+            original_data,
+            recovery_data[0],
+            work_data[original_loss_i]);
         return Leopard_Success;
     }
 

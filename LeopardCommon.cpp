@@ -192,6 +192,8 @@ void xor_mem(
     } while (bytes > 0);
 }
 
+#ifdef LEO_M1_OPT
+
 void xor_mem_2to1(
     void * LEO_RESTRICT x,
     const void * LEO_RESTRICT y,
@@ -254,6 +256,8 @@ void xor_mem_2to1(
         bytes -= 64;
     } while (bytes > 0);
 }
+
+#endif // LEO_M1_OPT
 
 #ifdef LEO_USE_VECTOR4_OPT
 
