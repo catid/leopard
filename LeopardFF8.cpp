@@ -871,10 +871,11 @@ void ReedSolomonEncode(
 
     // work <- IFFT(data, m, m)
 
+    const ffe_t* skewLUT = FFTSkew + m - 1;
+
     for (unsigned width = 1; width < m; width <<= 1)
     {
         const unsigned range = width << 1;
-        const ffe_t* skewLUT = FFTSkew + m - 1;
 
 #ifdef LEO_SCHEDULE_OPT
         for (unsigned j = width; j < first_end; j += range)
@@ -911,7 +912,9 @@ void ReedSolomonEncode(
 
         for (unsigned width = 1; width < m; width <<= 1)
         {
-            for (unsigned j = width; j < m; j += (width << 1))
+            const unsigned range = width << 1;
+
+            for (unsigned j = width; j < m; j += range)
             {
                 VectorIFFTButterfly(
                     buffer_bytes,
@@ -949,11 +952,12 @@ void ReedSolomonEncode(
 
         // temp <- IFFT(temp, m, m + i)
 
+        const ffe_t* skewLUT = FFTSkew + m + i - 1;
+
         for (unsigned width = 1, shift = 1; width < m; width <<= 1, ++shift)
         {
             // Calculate stop considering that the right is all zeroes
             const unsigned range = width << 1;
-            const ffe_t* skewLUT = FFTSkew + m + i - 1;
 
 #ifdef LEO_SCHEDULE_OPT
             const unsigned stop = ((last_count + width - 1) >> shift) << shift;
@@ -1095,15 +1099,12 @@ void ReedSolomonDecode(
     ErrorBitfield ErrorBits;
 #endif // LEO_SCHEDULE_OPT
 
-    ffe_t ErrorLocations[kOrder];
+    ffe_t ErrorLocations[kOrder] = {};
     for (unsigned i = 0; i < recovery_count; ++i)
-        ErrorLocations[i] = recovery[i] ? 0 : 1;
+        if (!recovery[i])
+            ErrorLocations[i] = 1;
     for (unsigned i = recovery_count; i < m; ++i)
         ErrorLocations[i] = 1;
-
-    // Clear the remainder in bulk
-    memset(ErrorLocations + m, 0, (n - m) * sizeof(ffe_t));
-
     for (unsigned i = 0; i < original_count; ++i)
     {
         if (!original[i])
@@ -1156,6 +1157,7 @@ void ReedSolomonDecode(
 
     const unsigned input_count = m + original_count;
     unsigned mip_level = 0;
+
     for (unsigned width = 1; width < n; width <<= 1, ++mip_level)
     {
         const unsigned range = width << 1;

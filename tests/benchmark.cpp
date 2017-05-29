@@ -389,11 +389,11 @@ struct TestParameters
     unsigned original_count = 1000; // under 65536
     unsigned recovery_count = 100; // under 65536 - original_count
 #else
-    unsigned original_count = 128; // under 65536
-    unsigned recovery_count = 128; // under 65536 - original_count
+    unsigned original_count = 32; // under 65536
+    unsigned recovery_count = 16; // under 65536 - original_count
 #endif
     unsigned buffer_bytes = 64000; // multiple of 64 bytes
-    unsigned loss_count = 128; // some fraction of original_count
+    unsigned loss_count = 16; // some fraction of original_count
     unsigned seed = 0;
     bool multithreaded = true;
 };
@@ -791,6 +791,9 @@ int main(int argc, char **argv)
         params.loss_count = atoi(argv[4]);
     if (argc >= 6)
         params.multithreaded = (atoi(argv[5]) != 0);
+
+    if (params.loss_count > params.recovery_count)
+        params.loss_count = params.recovery_count;
 
     cout << "Parameters: [original count=" << params.original_count << "] [recovery count=" << params.recovery_count << "] [buffer bytes=" << params.buffer_bytes << "] [loss count=" << params.loss_count << "] [random seed=" << params.seed << "]" << endl;
 

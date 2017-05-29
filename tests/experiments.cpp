@@ -600,8 +600,8 @@ int main(int argc, char **argv)
     for (;;)
     {
 #ifdef LEO_SHORT_FIELD
-        const unsigned input_count = 128;
-        const unsigned recovery_count = 128;
+        const unsigned input_count = 32;
+        const unsigned recovery_count = 16;
 #else // LEO_SHORT_FIELD
         const unsigned input_count = 10000;
         const unsigned recovery_count = 2000;
