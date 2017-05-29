@@ -1,8 +1,7 @@
 # Leopard-RS
 ## MDS Reed-Solomon Error Correction Codes for Large Data in C
 
-#### Update: Data up to 256 pieces is working!
-#### Implementing 16-bit finite fields to enable data up to 65536 pieces next.
+#### Update: Data up to 256 pieces is working!  Next: Implementing 16-bit finite fields to enable data up to 65536 pieces.
 
 Leopard-RS is a fast library for Forward Error Correction.
 From a block of equally sized original data pieces, it generates recovery
@@ -93,9 +92,6 @@ WH256 wirehair_decode(N = 128) average overhead = 0.025 blocks, average reconstr
 
 FEC-AL Encoder(8.192 MB in 128 pieces, 128 losses): Input=518.545 MB/s, Output=518.545 MB/s, (Encode create: 3762.73 MB/s)
 FEC-AL Decoder(8.192 MB in 128 pieces, 128 losses): Input=121.093 MB/s, Output=121.093 MB/s, (Overhead = 0 pieces)
-
-Leopard Encoder(8.192 MB in 128 pieces, 128 losses): Input=1242.62 MB/s, Output=1242.62 MB/s
-Leopard Decoder(8.192 MB in 128 pieces, 128 losses): Input=482.53 MB/s, Output=482.53 MB/s
 ```
 
 For 128 data pieces of input and 128 data pieces of redundancy:
