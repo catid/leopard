@@ -1,8 +1,7 @@
 # Leopard-RS
 ## MDS Reed-Solomon Error Correction Codes for Large Data in C
 
-#### Update: Data up to 256 pieces is working!
-#### Implementing 16-bit finite fields to enable data up to 65536 pieces next.
+#### Update: Data up to 256 pieces is working!  Next: Implementing 16-bit finite fields to enable data up to 65536 pieces.
 
 Leopard-RS is a fast library for Forward Error Correction.
 From a block of equally sized original data pieces, it generates recovery
@@ -25,7 +24,7 @@ newer polynomial basis GF(2^r) approach outlined in {1}, and FastECC uses comple
 modulo special primes.  There are trade-offs that may make either approach preferable based
 on the application:
 + Older processors do not support SSSE3 and FastECC supports these processors better.
-+ FastECC supports data sets above 64,000 pieces as it uses 32-bit finite field math.  
++ FastECC supports data sets above 65,536 pieces as it uses 32-bit finite field math.  
 + Leopard does not require expanding the input or output data to make it fit in the field, so it can be more space efficient.
 
 Example applications are data recovery software and data center replication.
@@ -66,8 +65,8 @@ For full documentation please read `leopard.h`.
 On my laptop:
 
 ```
-Leopard Encoder(8.192 MB in 128 pieces, 128 losses): Input=1242.62 MB/s, Output=1242.62 MB/s
-Leopard Decoder(8.192 MB in 128 pieces, 128 losses): Input=482.53 MB/s, Output=482.53 MB/s
+Leopard Encoder(8.192 MB in 128 pieces, 128 losses): Input=1266.13 MB/s, Output=1266.13 MB/s
+Leopard Decoder(8.192 MB in 128 pieces, 128 losses): Input=482.243 MB/s, Output=482.243 MB/s
 ```
 
 
@@ -93,19 +92,16 @@ WH256 wirehair_decode(N = 128) average overhead = 0.025 blocks, average reconstr
 
 FEC-AL Encoder(8.192 MB in 128 pieces, 128 losses): Input=518.545 MB/s, Output=518.545 MB/s, (Encode create: 3762.73 MB/s)
 FEC-AL Decoder(8.192 MB in 128 pieces, 128 losses): Input=121.093 MB/s, Output=121.093 MB/s, (Overhead = 0 pieces)
-
-Leopard Encoder(8.192 MB in 128 pieces, 128 losses): Input=1242.62 MB/s, Output=1242.62 MB/s
-Leopard Decoder(8.192 MB in 128 pieces, 128 losses): Input=482.53 MB/s, Output=482.53 MB/s
 ```
 
 For 128 data pieces of input and 128 data pieces of redundancy:
 
-+ Fastest to encode: Leopard (1.2 GB/s)
++ Fastest to encode: Leopard (1.26 GB/s)
 + Distant second-place: WH256 (660 MB/s), FEC-AL (515 MB/s)
 + Slowest encoders: Longhair, CM256
 
 + Fastest to decode: WH256 (830 MB/s)
-+ Distant second-place: Leopard (482 MB/s)
++ Distant second-place: Leopard (480 MB/s)
 + Slowest decoders: FEC-AL, CM256, Longhair
 
 There are a lot of variables that affect when each of these libraries should be used.
@@ -262,7 +258,9 @@ At runtime, the error locator polynomial is evaluated using the
 Fast Walsh-Hadamard transform as described in {1} equation (92).
 
 At runtime the data is explicit laid out in workspace memory like this:
+~~~
 [Recovery Data (Power of Two = M)] [Original Data (K)] [Zero Padding out to N]
+~~~
 
 Data that was lost is replaced with zeroes.
 Data that was received, including recovery data, is multiplied by the error
