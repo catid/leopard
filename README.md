@@ -1,5 +1,5 @@
 # Leopard-RS
-## Reed-Solomon Error Correction Codes for Large Data in C
+## MDS Reed-Solomon Error Correction Codes for Large Data in C
 
 #### Update: Data up to 256 pieces is working!
 #### Implementing 16-bit finite fields to enable data up to 65536 pieces next.
