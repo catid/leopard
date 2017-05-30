@@ -636,8 +636,7 @@ void fft_butterfly4(
 #if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
     {
-        const LEO_M256 table_lo_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[0]);
-        const LEO_M256 table_hi_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[1]);
+        LEO_MUL_TABLES_256();
 
         const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
 
@@ -652,19 +651,15 @@ void fft_butterfly4(
 
         do
         {
-            LEO_FFTB_256(x32_0 + 1, y32_0 + 1);
             LEO_FFTB_256(x32_0, y32_0);
             y32_0 += 2, x32_0 += 2;
 
-            LEO_FFTB_256(x32_1 + 1, y32_1 + 1);
             LEO_FFTB_256(x32_1, y32_1);
             y32_1 += 2, x32_1 += 2;
 
-            LEO_FFTB_256(x32_2 + 1, y32_2 + 1);
             LEO_FFTB_256(x32_2, y32_2);
             y32_2 += 2, x32_2 += 2;
 
-            LEO_FFTB_256(x32_3 + 1, y32_3 + 1);
             LEO_FFTB_256(x32_3, y32_3);
             y32_3 += 2, x32_3 += 2;
 
@@ -690,26 +685,18 @@ void fft_butterfly4(
 
     do
     {
-        LEO_FFTB_128(x16_0 + 3, y16_0 + 3);
-        LEO_FFTB_128(x16_0 + 2, y16_0 + 2);
         LEO_FFTB_128(x16_0 + 1, y16_0 + 1);
         LEO_FFTB_128(x16_0, y16_0);
         x16_0 += 4, y16_0 += 4;
 
-        LEO_FFTB_128(x16_1 + 3, y16_1 + 3);
-        LEO_FFTB_128(x16_1 + 2, y16_1 + 2);
         LEO_FFTB_128(x16_1 + 1, y16_1 + 1);
         LEO_FFTB_128(x16_1, y16_1);
         x16_1 += 4, y16_1 += 4;
 
-        LEO_FFTB_128(x16_2 + 3, y16_2 + 3);
-        LEO_FFTB_128(x16_2 + 2, y16_2 + 2);
         LEO_FFTB_128(x16_2 + 1, y16_2 + 1);
         LEO_FFTB_128(x16_2, y16_2);
         x16_2 += 4, y16_2 += 4;
 
-        LEO_FFTB_128(x16_3 + 3, y16_3 + 3);
-        LEO_FFTB_128(x16_3 + 2, y16_3 + 2);
         LEO_FFTB_128(x16_3 + 1, y16_3 + 1);
         LEO_FFTB_128(x16_3, y16_3);
         x16_3 += 4, y16_3 += 4;
@@ -835,8 +822,7 @@ void ifft_butterfly4(
 #if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
     {
-        const LEO_M256 table_lo_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[0]);
-        const LEO_M256 table_hi_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[1]);
+        LEO_MUL_TABLES_256();
 
         const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
 
@@ -851,19 +837,15 @@ void ifft_butterfly4(
 
         do
         {
-            LEO_IFFTB_256(x32_0 + 1, y32_0 + 1);
             LEO_IFFTB_256(x32_0, y32_0);
             y32_0 += 2, x32_0 += 2;
 
-            LEO_IFFTB_256(x32_1 + 1, y32_1 + 1);
             LEO_IFFTB_256(x32_1, y32_1);
             y32_1 += 2, x32_1 += 2;
 
-            LEO_IFFTB_256(x32_2 + 1, y32_2 + 1);
             LEO_IFFTB_256(x32_2, y32_2);
             y32_2 += 2, x32_2 += 2;
 
-            LEO_IFFTB_256(x32_3 + 1, y32_3 + 1);
             LEO_IFFTB_256(x32_3, y32_3);
             y32_3 += 2, x32_3 += 2;
 
@@ -874,8 +856,7 @@ void ifft_butterfly4(
     }
 #endif // LEO_TRY_AVX2
 
-    const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
-    const LEO_M128 table_hi_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[1]);
+    LEO_MUL_TABLES_128();
 
     const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
 
@@ -890,26 +871,18 @@ void ifft_butterfly4(
 
     do
     {
-        LEO_IFFTB_128(x16_0 + 3, y16_0 + 3);
-        LEO_IFFTB_128(x16_0 + 2, y16_0 + 2);
         LEO_IFFTB_128(x16_0 + 1, y16_0 + 1);
         LEO_IFFTB_128(x16_0, y16_0);
         x16_0 += 4, y16_0 += 4;
 
-        LEO_IFFTB_128(x16_1 + 3, y16_1 + 3);
-        LEO_IFFTB_128(x16_1 + 2, y16_1 + 2);
         LEO_IFFTB_128(x16_1 + 1, y16_1 + 1);
         LEO_IFFTB_128(x16_1, y16_1);
         x16_1 += 4, y16_1 += 4;
 
-        LEO_IFFTB_128(x16_2 + 3, y16_2 + 3);
-        LEO_IFFTB_128(x16_2 + 2, y16_2 + 2);
         LEO_IFFTB_128(x16_2 + 1, y16_2 + 1);
         LEO_IFFTB_128(x16_2, y16_2);
         x16_2 += 4, y16_2 += 4;
 
-        LEO_IFFTB_128(x16_3 + 3, y16_3 + 3);
-        LEO_IFFTB_128(x16_3 + 2, y16_3 + 2);
         LEO_IFFTB_128(x16_3 + 1, y16_3 + 1);
         LEO_IFFTB_128(x16_3, y16_3);
         x16_3 += 4, y16_3 += 4;

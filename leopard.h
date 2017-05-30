@@ -64,13 +64,15 @@
 
 /*
     TODO:
-    + Benchmarks for large data!
     + Add multi-threading to split up long parallelizable calculations
         + Final benchmarks!
     + Release version 1
         + Finish up documentation
 
     TBD:
+    + Look into 12-bit fields as a performance optimization
+    + Look into shortening the FWHT() since it takes a lot of decoder runtime
+    + Unroll first/final butterflies to avoid extra copies/xors in encoder
     + Look into getting EncodeL working so we can support smaller data (Ask Lin)
     + Look into using FFT_m instead of FFT_n for decoder
 */

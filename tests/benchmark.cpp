@@ -42,14 +42,14 @@ using namespace std;
 struct TestParameters
 {
 #ifdef LEO_HAS_FF16
-    unsigned original_count = 677; // under 65536
-    unsigned recovery_count = 487; // under 65536 - original_count
+    unsigned original_count = 1000; // under 65536
+    unsigned recovery_count = 200; // under 65536 - original_count
 #else
     unsigned original_count = 128; // under 65536
     unsigned recovery_count = 128; // under 65536 - original_count
 #endif
     unsigned buffer_bytes = 2560; // multiple of 64 bytes
-    unsigned loss_count = 2; // some fraction of original_count
+    unsigned loss_count = 500; // some fraction of original_count
     unsigned seed = 2;
     bool multithreaded = true;
 };
@@ -807,10 +807,13 @@ int main(int argc, char **argv)
     if (!BasicTest(params))
         goto Failed;
 
+
+    static const unsigned kMaxRandomData = 32768;
+
     prng.Seed(params.seed, 8);
     for (;; ++params.seed)
     {
-        params.original_count = prng.Next() % 32768;
+        params.original_count = prng.Next() % kMaxRandomData;
         params.recovery_count = prng.Next() % params.original_count + 1;
         params.loss_count = prng.Next() % params.recovery_count + 1;
 
