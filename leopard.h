@@ -31,7 +31,7 @@
 
 /*
     Leopard-RS
-    MDS Reed-Solomon Error Correction Codes for Large Data in C
+    MDS Reed-Solomon Erasure Correction Codes for Large Data in C
 
     Algorithms are described in LeopardCommon.h
 

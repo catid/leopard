@@ -31,12 +31,17 @@
 /*
     TODO:
 
-    + Multithreading
     + Look into 12-bit fields as a performance optimization
-    + Look into shortening the FWHT() since it takes a lot of decoder runtime
     + Unroll first/final butterflies to avoid extra copies/xors in encoder
-    + Look into getting EncodeL working so we can support smaller data
-    + Implement the faster decoder algorithm from {3}
+    + Skip a lot of the initial FWHT() layers that are just operating on zeroes
+    + Skip a lot of the final FWHT() layers that are not needed for calculation
+    + For the actual FFT(), I should be unrolling the bottom two layers
+        and performing them in a specialized function that does 2 <=> 2 and
+        then 1<=>1, 1<=>1 operations in local registers/cache
+    + Multithreading
+    + Evaluate the error locator polynomial based on fast polynomial interpolations in O(k log^2 k)
+    + Look into getting EncodeL working so we can support larger recovery sets
+    + Implement the decoder algorithm from {3} based on the Forney algorithm
 */
 
 /*
@@ -131,14 +136,6 @@
     Finally, only recovered data is multiplied by the negative of the
     error locator polynomial as it is copied into the front of the
     workspace for the application to retrieve.
-
-
-    Future directions:
-    -----------------
-
-    Note that a faster decoder is described in {3} that is O(K Log M) instead,
-    which should be 2x faster than the current one.  However I do not fully
-    understand how to implement it for this field and could use some help.
 */
 
 /*
