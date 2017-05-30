@@ -1,5 +1,5 @@
 # Leopard-RS
-## MDS Reed-Solomon Error Correction Codes for Large Data in C
+## MDS Reed-Solomon Erasure Correction Codes for Large Data in C
 
 Leopard-RS is a fast library for Forward Error Correction.
 From a block of equally sized original data pieces, it generates recovery
