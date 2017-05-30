@@ -445,7 +445,7 @@ void mul_mem(
         do
         {
 #define LEO_MUL_256(x_ptr, y_ptr) { \
-	        const LEO_M256 A_lo = _mm256_loadu_si256(y_ptr); \
+            const LEO_M256 A_lo = _mm256_loadu_si256(y_ptr); \
             const LEO_M256 A_hi = _mm256_loadu_si256(y_ptr + 1); \
             LEO_M256 data_0 = _mm256_and_si256(A_lo, clr_mask); \
             LEO_M256 data_1 = _mm256_srli_epi64(A_lo, 4); \
@@ -494,7 +494,7 @@ void mul_mem(
     do
     {
 #define LEO_MUL_128(x_ptr, y_ptr) { \
-	        const LEO_M128 A_lo = _mm_loadu_si128(y_ptr); \
+            const LEO_M128 A_lo = _mm_loadu_si128(y_ptr); \
             const LEO_M128 A_hi = _mm_loadu_si128(y_ptr + 2); \
             LEO_M128 data_0 = _mm_and_si128(A_lo, clr_mask); \
             LEO_M128 data_1 = _mm_srli_epi64(A_lo, 4); \
@@ -542,7 +542,7 @@ void fft_butterfly(
         do
         {
 #define LEO_FFTB_256(x_ptr, y_ptr) { \
-	        LEO_M256 y_lo = _mm256_loadu_si256(y_ptr); \
+            LEO_M256 y_lo = _mm256_loadu_si256(y_ptr); \
             LEO_M256 data_0 = _mm256_and_si256(y_lo, clr_mask); \
             LEO_M256 data_1 = _mm256_srli_epi64(y_lo, 4); \
             data_1 = _mm256_and_si256(data_1, clr_mask); \
@@ -558,7 +558,7 @@ void fft_butterfly(
             prod_lo = _mm256_xor_si256(prod_lo, _mm256_shuffle_epi8(T3_lo, data_1)); \
             prod_hi = _mm256_xor_si256(prod_hi, _mm256_shuffle_epi8(T2_hi, data_0)); \
             prod_hi = _mm256_xor_si256(prod_hi, _mm256_shuffle_epi8(T3_hi, data_1)); \
-	        LEO_M256 x_lo = _mm256_loadu_si256(x_ptr); \
+            LEO_M256 x_lo = _mm256_loadu_si256(x_ptr); \
             LEO_M256 x_hi = _mm256_loadu_si256(x_ptr + 1); \
             x_lo = _mm256_xor_si256(prod_lo, x_lo); \
             _mm256_storeu_si256(x_ptr, x_lo); \
@@ -589,7 +589,7 @@ void fft_butterfly(
     do
     {
 #define LEO_FFTB_128(x_ptr, y_ptr) { \
-	        LEO_M128 y_lo = _mm_loadu_si128(y_ptr); \
+            LEO_M128 y_lo = _mm_loadu_si128(y_ptr); \
             LEO_M128 data_0 = _mm_and_si128(y_lo, clr_mask); \
             LEO_M128 data_1 = _mm_srli_epi64(y_lo, 4); \
             data_1 = _mm_and_si128(data_1, clr_mask); \
@@ -605,7 +605,7 @@ void fft_butterfly(
             prod_lo = _mm_xor_si128(prod_lo, _mm_shuffle_epi8(T3_lo, data_1)); \
             prod_hi = _mm_xor_si128(prod_hi, _mm_shuffle_epi8(T2_hi, data_0)); \
             prod_hi = _mm_xor_si128(prod_hi, _mm_shuffle_epi8(T3_hi, data_1)); \
-	        LEO_M128 x_lo = _mm_loadu_si128(x_ptr); \
+            LEO_M128 x_lo = _mm_loadu_si128(x_ptr); \
             LEO_M128 x_hi = _mm_loadu_si128(x_ptr + 2); \
             x_lo = _mm_xor_si128(prod_lo, x_lo); \
             _mm_storeu_si128(x_ptr, x_lo); \
@@ -728,8 +728,8 @@ void ifft_butterfly(
         do
         {
 #define LEO_IFFTB_256(x_ptr, y_ptr) { \
-	        LEO_M256 x_lo = _mm256_loadu_si256(x_ptr); \
-	        LEO_M256 y_lo = _mm256_loadu_si256(y_ptr); \
+            LEO_M256 x_lo = _mm256_loadu_si256(x_ptr); \
+            LEO_M256 y_lo = _mm256_loadu_si256(y_ptr); \
             y_lo = _mm256_xor_si256(y_lo, x_lo); \
             _mm256_storeu_si256(y_ptr, y_lo); \
             LEO_M256 data_0 = _mm256_and_si256(y_lo, clr_mask); \
@@ -775,8 +775,8 @@ void ifft_butterfly(
     do
     {
 #define LEO_IFFTB_128(x_ptr, y_ptr) { \
-	        LEO_M128 x_lo = _mm_loadu_si128(x_ptr); \
-	        LEO_M128 y_lo = _mm_loadu_si128(y_ptr); \
+            LEO_M128 x_lo = _mm_loadu_si128(x_ptr); \
+            LEO_M128 y_lo = _mm_loadu_si128(y_ptr); \
             y_lo = _mm_xor_si128(y_lo, x_lo); \
             _mm_storeu_si128(y_ptr, y_lo); \
             LEO_M128 data_0 = _mm_and_si128(y_lo, clr_mask); \

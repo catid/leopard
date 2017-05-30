@@ -29,6 +29,17 @@
 #pragma once
 
 /*
+    TODO:
+
+    + Multithreading
+    + Look into 12-bit fields as a performance optimization
+    + Look into shortening the FWHT() since it takes a lot of decoder runtime
+    + Unroll first/final butterflies to avoid extra copies/xors in encoder
+    + Look into getting EncodeL working so we can support smaller data
+    + Implement the faster decoder algorithm from {3}
+*/
+
+/*
     FFT Data Layout:
 
     We pack the data into memory in this order:

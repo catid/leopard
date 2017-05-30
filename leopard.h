@@ -47,7 +47,7 @@
 
     {1} S.-J. Lin, T. Y. Al-Naffouri, Y. S. Han, and W.-H. Chung,
     "Novel Polynomial Basis with Fast Fourier Transform
-	and Its Application to Reed-Solomon Erasure Codes"
+    and Its Application to Reed-Solomon Erasure Codes"
     IEEE Trans. on Information Theory, pp. 6284-6299, November, 2016.
 
     {2} D. G. Cantor, "On arithmetical algorithms over finite fields",
@@ -58,23 +58,8 @@
     IEEE Commun. Lett., vol.16, no.12, pp. 2036-2039, Dec. 2012.
 
     {4} Plank, J. S., Greenan, K. M., Miller, E. L., "Screaming fast Galois Field
-	arithmetic using Intel SIMD instructions."  In: FAST-2013: 11th Usenix
-	Conference on File and Storage Technologies, San Jose, 2013
-*/
-
-/*
-    TODO:
-    + Add multi-threading to split up long parallelizable calculations
-        + Final benchmarks!
-    + Release version 1
-        + Finish up documentation
-
-    TBD:
-    + Look into 12-bit fields as a performance optimization
-    + Look into shortening the FWHT() since it takes a lot of decoder runtime
-    + Unroll first/final butterflies to avoid extra copies/xors in encoder
-    + Look into getting EncodeL working so we can support smaller data (Ask Lin)
-    + Look into using FFT_m instead of FFT_n for decoder
+    arithmetic using Intel SIMD instructions."  In: FAST-2013: 11th Usenix
+    Conference on File and Storage Technologies, San Jose, 2013
 */
 
 // Library version
@@ -160,11 +145,11 @@ typedef enum LeopardFlagsT
 /*
     leo_encode_work_count()
 
-	Calculate the number of work_data buffers to provide to leo_encode().
+    Calculate the number of work_data buffers to provide to leo_encode().
 
     The sum of original_count + recovery_count must not exceed 65536.
 
-	Returns the work_count value to pass into leo_encode().
+    Returns the work_count value to pass into leo_encode().
     Returns 0 on invalid input.
 */
 LEO_EXPORT unsigned leo_encode_work_count(
@@ -221,11 +206,11 @@ LEO_EXPORT LeopardResult leo_encode(
 /*
     leo_decode_work_count()
 
-	Calculate the number of work_data buffers to provide to leo_decode().
+    Calculate the number of work_data buffers to provide to leo_decode().
 
     The sum of original_count + recovery_count must not exceed 65536.
 
-	Returns the work_count value to pass into leo_encode().
+    Returns the work_count value to pass into leo_encode().
     Returns 0 on invalid input.
 */
 LEO_EXPORT unsigned leo_decode_work_count(
