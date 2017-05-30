@@ -75,8 +75,6 @@ static inline ffe_t SubMod(const ffe_t a, const ffe_t b)
 //------------------------------------------------------------------------------
 // Fast Walsh-Hadamard Transform (FWHT) (mod kModulus)
 
-#if defined(LEO_FWHT_OPT)
-
 // {a, b} = {a + b, a - b} (Mod Q)
 static LEO_FORCE_INLINE void FWHT_2(ffe_t& LEO_RESTRICT a, ffe_t& LEO_RESTRICT b)
 {
@@ -85,6 +83,8 @@ static LEO_FORCE_INLINE void FWHT_2(ffe_t& LEO_RESTRICT a, ffe_t& LEO_RESTRICT b
     a = sum;
     b = dif;
 }
+
+#if defined(LEO_FWHT_OPT)
 
 static LEO_FORCE_INLINE void FWHT_4(ffe_t* data)
 {
@@ -304,6 +304,23 @@ static ffe_t LogLUT[kOrder];
 static ffe_t ExpLUT[kOrder];
 
 
+// Returns a * Log(b)
+static ffe_t MultiplyLog(ffe_t a, ffe_t log_b)
+{
+    /*
+        Note that this operation is not a normal multiplication in a finite
+        field because the right operand is already a logarithm.  This is done
+        because it moves K table lookups from the Decode() method into the
+        initialization step that is less performance critical.  The LogWalsh[]
+        table below contains precalculated logarithms so it is easier to do
+        all the other multiplies in that form as well.
+    */
+    if (a == 0)
+        return 0;
+    return ExpLUT[AddMod(LogLUT[a], log_b)];
+}
+
+
 // Initialize LogLUT[], ExpLUT[]
 static void InitializeLogarithmTables()
 {
@@ -344,63 +361,59 @@ static void InitializeLogarithmTables()
 //------------------------------------------------------------------------------
 // Multiplies
 
+/*
+    The multiplication algorithm used follows the approach outlined in {4}.
+    Specifically section 7 outlines the algorithm used here for 16-bit fields.
+    I use the ALTMAP memory layout since I do not need to convert in/out of it.
+*/
+
 struct {
-    LEO_ALIGNED LEO_M128 Value[kBits / 4];
+    LEO_ALIGNED LEO_M128 Lo[4];
+    LEO_ALIGNED LEO_M128 Hi[4];
 } static Multiply128LUT[kOrder];
 #if defined(LEO_TRY_AVX2)
 struct {
-    LEO_ALIGNED LEO_M256 Value[kBits / 4];
+    LEO_ALIGNED LEO_M256 Lo[4];
+    LEO_ALIGNED LEO_M256 Hi[4];
 } static Multiply256LUT[kOrder];
 #endif // LEO_TRY_AVX2
-
-// Returns a * Log(b)
-static ffe_t MultiplyLog(ffe_t a, ffe_t log_b)
-{
-    /*
-        Note that this operation is not a normal multiplication in a finite
-        field because the right operand is already a logarithm.  This is done
-        because it moves K table lookups from the Decode() method into the
-        initialization step that is less performance critical.  The LogWalsh[]
-        table below contains precalculated logarithms so it is easier to do
-        all the other multiplies in that form as well.
-    */
-    if (a == 0)
-        return 0;
-    return ExpLUT[AddMod(LogLUT[a], log_b)];
-}
 
 
 void InitializeMultiplyTables()
 {
+    // For each value we could multiply by:
     for (unsigned log_m = 0; log_m < kOrder; ++log_m)
     {
-        uint8_t table0[16], table1[16], table2[16], table3[16];
-
-        for (uint8_t x = 0; x < 16; ++x)
+        // For each 4 bits of the finite field width in bits:
+        for (unsigned i = 0, shift = 0; i < 4; ++i, shift += 4)
         {
-            table0[x] = MultiplyLog(x, static_cast<ffe_t>(log_m));
-            table1[x] = MultiplyLog(x << 4, static_cast<ffe_t>(log_m));
-            table2[x] = MultiplyLog(x << 8, static_cast<ffe_t>(log_m));
-            table3[x] = MultiplyLog(x << 12, static_cast<ffe_t>(log_m));
-        }
+            // Construct 16 entry LUT for PSHUFB
+            uint8_t prod_lo[16], prod_hi[16];
+            for (ffe_t x = 0; x < 16; ++x)
+            {
+                const ffe_t prod = MultiplyLog(x << shift, static_cast<ffe_t>(log_m));
+                prod_lo[x] = static_cast<uint8_t>(prod);
+                prod_hi[x] = static_cast<uint8_t>(prod >> 8);
+            }
 
-        const LEO_M128 value0 = _mm_loadu_si128((LEO_M128*)table0);
-        const LEO_M128 value1 = _mm_loadu_si128((LEO_M128*)table1);
-        const LEO_M128 value2 = _mm_loadu_si128((LEO_M128*)table2);
-        const LEO_M128 value3 = _mm_loadu_si128((LEO_M128*)table3);
+            const LEO_M128 value_lo = _mm_loadu_si128((LEO_M128*)prod_lo);
+            const LEO_M128 value_hi = _mm_loadu_si128((LEO_M128*)prod_hi);
 
-        _mm_storeu_si128(&Multiply128LUT[log_m].Value[0], value0);
-        _mm_storeu_si128(&Multiply128LUT[log_m].Value[1], value1);
+            // Store in 128-bit wide table
+            _mm_storeu_si128(&Multiply128LUT[log_m].Lo[i], value_lo);
+            _mm_storeu_si128(&Multiply128LUT[log_m].Hi[i], value_hi);
 
+            // Store in 256-bit wide table
 #if defined(LEO_TRY_AVX2)
-        if (CpuHasAVX2)
-        {
-            _mm256_storeu_si256(&Multiply256LUT[log_m].Value[0],
-                _mm256_broadcastsi128_si256(table_lo));
-            _mm256_storeu_si256(&Multiply256LUT[log_m].Value[1],
-                _mm256_broadcastsi128_si256(table_hi));
-        }
+            if (CpuHasAVX2)
+            {
+                _mm256_storeu_si256(&Multiply256LUT[log_m].Lo[i],
+                    _mm256_broadcastsi128_si256(value_lo));
+                _mm256_storeu_si256(&Multiply256LUT[log_m].Hi[i],
+                    _mm256_broadcastsi128_si256(value_hi));
+            }
 #endif // LEO_TRY_AVX2
+        }
     }
 }
 
@@ -412,8 +425,17 @@ void mul_mem(
 #if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
     {
-        const LEO_M256 table_lo_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[0]);
-        const LEO_M256 table_hi_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[1]);
+#define LEO_MUL_TABLES_256() \
+        const LEO_M256 T0_lo = _mm256_loadu_si256(&Multiply256LUT[log_m].Lo[0]); \
+        const LEO_M256 T1_lo = _mm256_loadu_si256(&Multiply256LUT[log_m].Lo[1]); \
+        const LEO_M256 T2_lo = _mm256_loadu_si256(&Multiply256LUT[log_m].Lo[2]); \
+        const LEO_M256 T3_lo = _mm256_loadu_si256(&Multiply256LUT[log_m].Lo[3]); \
+        const LEO_M256 T0_hi = _mm256_loadu_si256(&Multiply256LUT[log_m].Hi[0]); \
+        const LEO_M256 T1_hi = _mm256_loadu_si256(&Multiply256LUT[log_m].Hi[1]); \
+        const LEO_M256 T2_hi = _mm256_loadu_si256(&Multiply256LUT[log_m].Hi[2]); \
+        const LEO_M256 T3_hi = _mm256_loadu_si256(&Multiply256LUT[log_m].Hi[3]);
+
+        LEO_MUL_TABLES_256();
 
         const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
 
@@ -423,15 +445,25 @@ void mul_mem(
         do
         {
 #define LEO_MUL_256(x_ptr, y_ptr) { \
-            LEO_M256 data = _mm256_loadu_si256(y_ptr); \
-            LEO_M256 lo = _mm256_and_si256(data, clr_mask); \
-            lo = _mm256_shuffle_epi8(table_lo_y, lo); \
-            LEO_M256 hi = _mm256_srli_epi64(data, 4); \
-            hi = _mm256_and_si256(hi, clr_mask); \
-            hi = _mm256_shuffle_epi8(table_hi_y, hi); \
-            _mm256_storeu_si256(x_ptr, _mm256_xor_si256(lo, hi)); }
+	        const LEO_M256 A_lo = _mm256_loadu_si256(y_ptr); \
+            const LEO_M256 A_hi = _mm256_loadu_si256(y_ptr + 1); \
+            LEO_M256 data_0 = _mm256_and_si256(A_lo, clr_mask); \
+            LEO_M256 data_1 = _mm256_srli_epi64(A_lo, 4); \
+            data_1 = _mm256_and_si256(data_1, clr_mask); \
+            LEO_M256 data_2 = _mm256_and_si256(A_hi, clr_mask); \
+            LEO_M256 data_3 = _mm256_srli_epi64(A_hi, 4); \
+            data_3 = _mm256_and_si256(data_3, clr_mask); \
+            LEO_M256 output_lo = _mm256_shuffle_epi8(T0_lo, data_0); \
+            output_lo = _mm256_xor_si256(output_lo, _mm256_shuffle_epi8(T1_lo, data_1)); \
+            output_lo = _mm256_xor_si256(output_lo, _mm256_shuffle_epi8(T2_lo, data_2)); \
+            output_lo = _mm256_xor_si256(output_lo, _mm256_shuffle_epi8(T3_lo, data_3)); \
+            LEO_M256 output_hi = _mm256_shuffle_epi8(T0_hi, data_0); \
+            output_hi = _mm256_xor_si256(output_hi, _mm256_shuffle_epi8(T1_hi, data_1)); \
+            output_hi = _mm256_xor_si256(output_hi, _mm256_shuffle_epi8(T2_hi, data_2)); \
+            output_hi = _mm256_xor_si256(output_hi, _mm256_shuffle_epi8(T3_hi, data_3)); \
+            _mm256_storeu_si256(x_ptr, output_lo); \
+            _mm256_storeu_si256(x_ptr + 1, output_hi); }
 
-            LEO_MUL_256(x32 + 1, y32 + 1);
             LEO_MUL_256(x32, y32);
             y32 += 2, x32 += 2;
 
@@ -442,8 +474,17 @@ void mul_mem(
     }
 #endif // LEO_TRY_AVX2
 
-    const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
-    const LEO_M128 table_hi_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[1]);
+#define LEO_MUL_TABLES_128() \
+    const LEO_M128 T0_lo = _mm_loadu_si128(&Multiply128LUT[log_m].Lo[0]); \
+    const LEO_M128 T1_lo = _mm_loadu_si128(&Multiply128LUT[log_m].Lo[1]); \
+    const LEO_M128 T2_lo = _mm_loadu_si128(&Multiply128LUT[log_m].Lo[2]); \
+    const LEO_M128 T3_lo = _mm_loadu_si128(&Multiply128LUT[log_m].Lo[3]); \
+    const LEO_M128 T0_hi = _mm_loadu_si128(&Multiply128LUT[log_m].Hi[0]); \
+    const LEO_M128 T1_hi = _mm_loadu_si128(&Multiply128LUT[log_m].Hi[1]); \
+    const LEO_M128 T2_hi = _mm_loadu_si128(&Multiply128LUT[log_m].Hi[2]); \
+    const LEO_M128 T3_hi = _mm_loadu_si128(&Multiply128LUT[log_m].Hi[3]);
+
+    LEO_MUL_TABLES_128();
 
     const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
 
@@ -453,16 +494,25 @@ void mul_mem(
     do
     {
 #define LEO_MUL_128(x_ptr, y_ptr) { \
-        LEO_M128 data = _mm_loadu_si128(y_ptr); \
-        LEO_M128 lo = _mm_and_si128(data, clr_mask); \
-        lo = _mm_shuffle_epi8(table_lo_y, lo); \
-        LEO_M128 hi = _mm_srli_epi64(data, 4); \
-        hi = _mm_and_si128(hi, clr_mask); \
-        hi = _mm_shuffle_epi8(table_hi_y, hi); \
-        _mm_storeu_si128(x_ptr, _mm_xor_si128(lo, hi)); }
+	        const LEO_M128 A_lo = _mm_loadu_si128(y_ptr); \
+            const LEO_M128 A_hi = _mm_loadu_si128(y_ptr + 2); \
+            LEO_M128 data_0 = _mm_and_si128(A_lo, clr_mask); \
+            LEO_M128 data_1 = _mm_srli_epi64(A_lo, 4); \
+            data_1 = _mm_and_si128(data_1, clr_mask); \
+            LEO_M128 data_2 = _mm_and_si128(A_hi, clr_mask); \
+            LEO_M128 data_3 = _mm_srli_epi64(A_hi, 4); \
+            data_3 = _mm_and_si128(data_3, clr_mask); \
+            LEO_M128 output_lo = _mm_shuffle_epi8(T0_lo, data_0); \
+            output_lo = _mm_xor_si128(output_lo, _mm_shuffle_epi8(T1_lo, data_1)); \
+            output_lo = _mm_xor_si128(output_lo, _mm_shuffle_epi8(T2_lo, data_2)); \
+            output_lo = _mm_xor_si128(output_lo, _mm_shuffle_epi8(T3_lo, data_3)); \
+            LEO_M128 output_hi = _mm_shuffle_epi8(T0_hi, data_0); \
+            output_hi = _mm_xor_si128(output_hi, _mm_shuffle_epi8(T1_hi, data_1)); \
+            output_hi = _mm_xor_si128(output_hi, _mm_shuffle_epi8(T2_hi, data_2)); \
+            output_hi = _mm_xor_si128(output_hi, _mm_shuffle_epi8(T3_hi, data_3)); \
+            _mm_storeu_si128(x_ptr, output_lo); \
+            _mm_storeu_si128(x_ptr + 2, output_hi); }
 
-        LEO_MUL_128(x16 + 3, y16 + 3);
-        LEO_MUL_128(x16 + 2, y16 + 2);
         LEO_MUL_128(x16 + 1, y16 + 1);
         LEO_MUL_128(x16, y16);
         x16 += 4, y16 += 4;
@@ -482,8 +532,7 @@ void fft_butterfly(
 #if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
     {
-        const LEO_M256 table_lo_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[0]);
-        const LEO_M256 table_hi_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[1]);
+        LEO_MUL_TABLES_256();
 
         const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
 
@@ -493,19 +542,33 @@ void fft_butterfly(
         do
         {
 #define LEO_FFTB_256(x_ptr, y_ptr) { \
-            LEO_M256 y_data = _mm256_loadu_si256(y_ptr); \
-            LEO_M256 lo = _mm256_and_si256(y_data, clr_mask); \
-            lo = _mm256_shuffle_epi8(table_lo_y, lo); \
-            LEO_M256 hi = _mm256_srli_epi64(y_data, 4); \
-            hi = _mm256_and_si256(hi, clr_mask); \
-            hi = _mm256_shuffle_epi8(table_hi_y, hi); \
-            LEO_M256 x_data = _mm256_loadu_si256(x_ptr); \
-            x_data = _mm256_xor_si256(x_data, _mm256_xor_si256(lo, hi)); \
-            y_data = _mm256_xor_si256(y_data, x_data); \
-            _mm256_storeu_si256(x_ptr, x_data); \
-            _mm256_storeu_si256(y_ptr, y_data); }
+	        LEO_M256 y_lo = _mm256_loadu_si256(y_ptr); \
+            LEO_M256 data_0 = _mm256_and_si256(y_lo, clr_mask); \
+            LEO_M256 data_1 = _mm256_srli_epi64(y_lo, 4); \
+            data_1 = _mm256_and_si256(data_1, clr_mask); \
+            LEO_M256 prod_lo = _mm256_shuffle_epi8(T0_lo, data_0); \
+            prod_lo = _mm256_xor_si256(prod_lo, _mm256_shuffle_epi8(T1_lo, data_1)); \
+            LEO_M256 prod_hi = _mm256_shuffle_epi8(T0_hi, data_0); \
+            prod_hi = _mm256_xor_si256(prod_hi, _mm256_shuffle_epi8(T1_hi, data_1)); \
+            LEO_M256 y_hi = _mm256_loadu_si256(y_ptr + 1); \
+            data_0 = _mm256_and_si256(y_hi, clr_mask); \
+            data_1 = _mm256_srli_epi64(y_hi, 4); \
+            data_1 = _mm256_and_si256(data_1, clr_mask); \
+            prod_lo = _mm256_xor_si256(prod_lo, _mm256_shuffle_epi8(T2_lo, data_0)); \
+            prod_lo = _mm256_xor_si256(prod_lo, _mm256_shuffle_epi8(T3_lo, data_1)); \
+            prod_hi = _mm256_xor_si256(prod_hi, _mm256_shuffle_epi8(T2_hi, data_0)); \
+            prod_hi = _mm256_xor_si256(prod_hi, _mm256_shuffle_epi8(T3_hi, data_1)); \
+	        LEO_M256 x_lo = _mm256_loadu_si256(x_ptr); \
+            LEO_M256 x_hi = _mm256_loadu_si256(x_ptr + 1); \
+            x_lo = _mm256_xor_si256(prod_lo, x_lo); \
+            _mm256_storeu_si256(x_ptr, x_lo); \
+            x_hi = _mm256_xor_si256(prod_hi, x_hi); \
+            _mm256_storeu_si256(x_ptr + 1, x_hi); \
+            y_lo = _mm256_xor_si256(y_lo, x_lo); \
+            _mm256_storeu_si256(y_ptr, y_lo); \
+            y_hi = _mm256_xor_si256(y_hi, x_hi); \
+            _mm256_storeu_si256(y_ptr + 1, y_hi); }
 
-            LEO_FFTB_256(x32 + 1, y32 + 1);
             LEO_FFTB_256(x32, y32);
             y32 += 2, x32 += 2;
 
@@ -516,8 +579,7 @@ void fft_butterfly(
     }
 #endif // LEO_TRY_AVX2
 
-    const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
-    const LEO_M128 table_hi_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[1]);
+    LEO_MUL_TABLES_128();
 
     const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
 
@@ -527,20 +589,33 @@ void fft_butterfly(
     do
     {
 #define LEO_FFTB_128(x_ptr, y_ptr) { \
-        LEO_M128 y_data = _mm_loadu_si128(y_ptr); \
-        LEO_M128 lo = _mm_and_si128(y_data, clr_mask); \
-        lo = _mm_shuffle_epi8(table_lo_y, lo); \
-        LEO_M128 hi = _mm_srli_epi64(y_data, 4); \
-        hi = _mm_and_si128(hi, clr_mask); \
-        hi = _mm_shuffle_epi8(table_hi_y, hi); \
-        LEO_M128 x_data = _mm_loadu_si128(x_ptr); \
-        x_data = _mm_xor_si128(x_data, _mm_xor_si128(lo, hi)); \
-        y_data = _mm_xor_si128(y_data, x_data); \
-        _mm_storeu_si128(x_ptr, x_data); \
-        _mm_storeu_si128(y_ptr, y_data); }
+	        LEO_M128 y_lo = _mm_loadu_si128(y_ptr); \
+            LEO_M128 data_0 = _mm_and_si128(y_lo, clr_mask); \
+            LEO_M128 data_1 = _mm_srli_epi64(y_lo, 4); \
+            data_1 = _mm_and_si128(data_1, clr_mask); \
+            LEO_M128 prod_lo = _mm_shuffle_epi8(T0_lo, data_0); \
+            prod_lo = _mm_xor_si128(prod_lo, _mm_shuffle_epi8(T1_lo, data_1)); \
+            LEO_M128 prod_hi = _mm_shuffle_epi8(T0_hi, data_0); \
+            prod_hi = _mm_xor_si128(prod_hi, _mm_shuffle_epi8(T1_hi, data_1)); \
+            LEO_M128 y_hi = _mm_loadu_si128(y_ptr + 2); \
+            data_0 = _mm_and_si128(y_hi, clr_mask); \
+            data_1 = _mm_srli_epi64(y_hi, 4); \
+            data_1 = _mm_and_si128(data_1, clr_mask); \
+            prod_lo = _mm_xor_si128(prod_lo, _mm_shuffle_epi8(T2_lo, data_0)); \
+            prod_lo = _mm_xor_si128(prod_lo, _mm_shuffle_epi8(T3_lo, data_1)); \
+            prod_hi = _mm_xor_si128(prod_hi, _mm_shuffle_epi8(T2_hi, data_0)); \
+            prod_hi = _mm_xor_si128(prod_hi, _mm_shuffle_epi8(T3_hi, data_1)); \
+	        LEO_M128 x_lo = _mm_loadu_si128(x_ptr); \
+            LEO_M128 x_hi = _mm_loadu_si128(x_ptr + 2); \
+            x_lo = _mm_xor_si128(prod_lo, x_lo); \
+            _mm_storeu_si128(x_ptr, x_lo); \
+            x_hi = _mm_xor_si128(prod_hi, x_hi); \
+            _mm_storeu_si128(x_ptr + 2, x_hi); \
+            y_lo = _mm_xor_si128(y_lo, x_lo); \
+            _mm_storeu_si128(y_ptr, y_lo); \
+            y_hi = _mm_xor_si128(y_hi, x_hi); \
+            _mm_storeu_si128(y_ptr + 2, y_hi); }
 
-        LEO_FFTB_128(x16 + 3, y16 + 3);
-        LEO_FFTB_128(x16 + 2, y16 + 2);
         LEO_FFTB_128(x16 + 1, y16 + 1);
         LEO_FFTB_128(x16, y16);
         x16 += 4, y16 += 4;
@@ -600,8 +675,7 @@ void fft_butterfly4(
     }
 #endif // LEO_TRY_AVX2
 
-    const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
-    const LEO_M128 table_hi_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[1]);
+    LEO_MUL_TABLES_128();
 
     const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
 
@@ -657,8 +731,7 @@ void ifft_butterfly(
 #if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
     {
-        const LEO_M256 table_lo_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[0]);
-        const LEO_M256 table_hi_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[1]);
+        LEO_MUL_TABLES_256();
 
         const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
 
@@ -668,19 +741,33 @@ void ifft_butterfly(
         do
         {
 #define LEO_IFFTB_256(x_ptr, y_ptr) { \
-            LEO_M256 x_data = _mm256_loadu_si256(x_ptr); \
-            LEO_M256 y_data = _mm256_loadu_si256(y_ptr); \
-            y_data = _mm256_xor_si256(y_data, x_data); \
-            _mm256_storeu_si256(y_ptr, y_data); \
-            LEO_M256 lo = _mm256_and_si256(y_data, clr_mask); \
-            lo = _mm256_shuffle_epi8(table_lo_y, lo); \
-            LEO_M256 hi = _mm256_srli_epi64(y_data, 4); \
-            hi = _mm256_and_si256(hi, clr_mask); \
-            hi = _mm256_shuffle_epi8(table_hi_y, hi); \
-            x_data = _mm256_xor_si256(x_data, _mm256_xor_si256(lo, hi)); \
-            _mm256_storeu_si256(x_ptr, x_data); }
+	        LEO_M256 x_lo = _mm256_loadu_si256(x_ptr); \
+	        LEO_M256 y_lo = _mm256_loadu_si256(y_ptr); \
+            y_lo = _mm256_xor_si256(y_lo, x_lo); \
+            _mm256_storeu_si256(y_ptr, y_lo); \
+            LEO_M256 data_0 = _mm256_and_si256(y_lo, clr_mask); \
+            LEO_M256 data_1 = _mm256_srli_epi64(y_lo, 4); \
+            data_1 = _mm256_and_si256(data_1, clr_mask); \
+            LEO_M256 prod_lo = _mm256_shuffle_epi8(T0_lo, data_0); \
+            prod_lo = _mm256_xor_si256(prod_lo, _mm256_shuffle_epi8(T1_lo, data_1)); \
+            LEO_M256 prod_hi = _mm256_shuffle_epi8(T0_hi, data_0); \
+            prod_hi = _mm256_xor_si256(prod_hi, _mm256_shuffle_epi8(T1_hi, data_1)); \
+            LEO_M256 x_hi = _mm256_loadu_si256(x_ptr + 1); \
+            LEO_M256 y_hi = _mm256_loadu_si256(y_ptr + 1); \
+            y_hi = _mm256_xor_si256(y_hi, x_hi); \
+            _mm256_storeu_si256(y_ptr + 1, y_hi); \
+            data_0 = _mm256_and_si256(y_hi, clr_mask); \
+            data_1 = _mm256_srli_epi64(y_hi, 4); \
+            data_1 = _mm256_and_si256(data_1, clr_mask); \
+            prod_lo = _mm256_xor_si256(prod_lo, _mm256_shuffle_epi8(T2_lo, data_0)); \
+            prod_lo = _mm256_xor_si256(prod_lo, _mm256_shuffle_epi8(T3_lo, data_1)); \
+            prod_hi = _mm256_xor_si256(prod_hi, _mm256_shuffle_epi8(T2_hi, data_0)); \
+            prod_hi = _mm256_xor_si256(prod_hi, _mm256_shuffle_epi8(T3_hi, data_1)); \
+            x_lo = _mm256_xor_si256(prod_lo, x_lo); \
+            _mm256_storeu_si256(x_ptr, x_lo); \
+            x_hi = _mm256_xor_si256(prod_hi, x_hi); \
+            _mm256_storeu_si256(x_ptr + 1, x_hi); }
 
-            LEO_IFFTB_256(x32 + 1, y32 + 1);
             LEO_IFFTB_256(x32, y32);
             y32 += 2, x32 += 2;
 
@@ -691,8 +778,7 @@ void ifft_butterfly(
     }
 #endif // LEO_TRY_AVX2
 
-    const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
-    const LEO_M128 table_hi_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[1]);
+    LEO_MUL_TABLES_128();
 
     const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
 
@@ -702,20 +788,33 @@ void ifft_butterfly(
     do
     {
 #define LEO_IFFTB_128(x_ptr, y_ptr) { \
-        LEO_M128 x_data = _mm_loadu_si128(x_ptr); \
-        LEO_M128 y_data = _mm_loadu_si128(y_ptr); \
-        y_data = _mm_xor_si128(y_data, x_data); \
-        _mm_storeu_si128(y_ptr, y_data); \
-        LEO_M128 lo = _mm_and_si128(y_data, clr_mask); \
-        lo = _mm_shuffle_epi8(table_lo_y, lo); \
-        LEO_M128 hi = _mm_srli_epi64(y_data, 4); \
-        hi = _mm_and_si128(hi, clr_mask); \
-        hi = _mm_shuffle_epi8(table_hi_y, hi); \
-        x_data = _mm_xor_si128(x_data, _mm_xor_si128(lo, hi)); \
-        _mm_storeu_si128(x_ptr, x_data); }
+	        LEO_M128 x_lo = _mm_loadu_si128(x_ptr); \
+	        LEO_M128 y_lo = _mm_loadu_si128(y_ptr); \
+            y_lo = _mm_xor_si128(y_lo, x_lo); \
+            _mm_storeu_si128(y_ptr, y_lo); \
+            LEO_M128 data_0 = _mm_and_si128(y_lo, clr_mask); \
+            LEO_M128 data_1 = _mm_srli_epi64(y_lo, 4); \
+            data_1 = _mm_and_si128(data_1, clr_mask); \
+            LEO_M128 prod_lo = _mm_shuffle_epi8(T0_lo, data_0); \
+            prod_lo = _mm_xor_si128(prod_lo, _mm_shuffle_epi8(T1_lo, data_1)); \
+            LEO_M128 prod_hi = _mm_shuffle_epi8(T0_hi, data_0); \
+            prod_hi = _mm_xor_si128(prod_hi, _mm_shuffle_epi8(T1_hi, data_1)); \
+            LEO_M128 x_hi = _mm_loadu_si128(x_ptr + 2); \
+            LEO_M128 y_hi = _mm_loadu_si128(y_ptr + 2); \
+            y_hi = _mm_xor_si128(y_hi, x_hi); \
+            _mm_storeu_si128(y_ptr + 2, y_hi); \
+            data_0 = _mm_and_si128(y_hi, clr_mask); \
+            data_1 = _mm_srli_epi64(y_hi, 4); \
+            data_1 = _mm_and_si128(data_1, clr_mask); \
+            prod_lo = _mm_xor_si128(prod_lo, _mm_shuffle_epi8(T2_lo, data_0)); \
+            prod_lo = _mm_xor_si128(prod_lo, _mm_shuffle_epi8(T3_lo, data_1)); \
+            prod_hi = _mm_xor_si128(prod_hi, _mm_shuffle_epi8(T2_hi, data_0)); \
+            prod_hi = _mm_xor_si128(prod_hi, _mm_shuffle_epi8(T3_hi, data_1)); \
+            x_lo = _mm_xor_si128(prod_lo, x_lo); \
+            _mm_storeu_si128(x_ptr, x_lo); \
+            x_hi = _mm_xor_si128(prod_hi, x_hi); \
+            _mm_storeu_si128(x_ptr + 2, x_hi); }
 
-        LEO_IFFTB_128(x16 + 3, y16 + 3);
-        LEO_IFFTB_128(x16 + 2, y16 + 2);
         LEO_IFFTB_128(x16 + 1, y16 + 1);
         LEO_IFFTB_128(x16, y16);
         x16 += 4, y16 += 4;
@@ -1105,13 +1204,21 @@ skip_body:
 //------------------------------------------------------------------------------
 // ErrorBitfield
 
-#ifdef LEO_SCHEDULE_OPT
+#ifdef LEO_ERROR_BITFIELD_OPT
 
 // Used in decoding to decide which final FFT operations to perform
 class ErrorBitfield
 {
+    static const unsigned kWordMips = 5;
     static const unsigned kWords = kOrder / 64;
-    uint64_t Words[7][kWords] = {};
+    uint64_t Words[kWordMips][kWords] = {};
+
+    static const unsigned kBigMips = 5;
+    static const unsigned kBigWords = (kWords + 63) / 64;
+    uint64_t BigWords[kBigMips][kBigWords] = {};
+
+    static const unsigned kBiggestMips = 5;
+    uint64_t BiggestWords[kBiggestMips] = {};
 
 public:
     LEO_FORCE_INLINE void Set(unsigned i)
@@ -1123,8 +1230,18 @@ public:
 
     LEO_FORCE_INLINE bool IsNeeded(unsigned mip_level, unsigned bit) const
     {
-        if (mip_level >= 8)
+        if (mip_level >= 16)
             return true;
+        if (mip_level >= 11)
+        {
+            bit /= 4096;
+            return 0 != (BiggestWords[mip_level - 11] & ((uint64_t)1 << bit));
+        }
+        if (mip_level >= 6)
+        {
+            bit /= 64;
+            return 0 != (BigWords[mip_level - 6][bit / 64] & ((uint64_t)1 << (bit % 64)));
+        }
         return 0 != (Words[mip_level - 1][bit / 64] & ((uint64_t)1 << (bit % 64)));
     }
 };
@@ -1142,33 +1259,57 @@ void ErrorBitfield::Prepare()
     // First mip level is for final layer of FFT: pairs of data
     for (unsigned i = 0; i < kWords; ++i)
     {
-        const uint64_t w0 = Words[0][i];
-        const uint64_t hi2lo0 = w0 | ((w0 & kHiMasks[0]) >> 1);
-        const uint64_t lo2hi0 = ((w0 & (kHiMasks[0] >> 1)) << 1);
-        Words[0][i] = hi2lo0 | lo2hi0;
+        uint64_t w_i = Words[0][i];
+        const uint64_t hi2lo0 = w_i | ((w_i & kHiMasks[0]) >> 1);
+        const uint64_t lo2hi0 = ((w_i & (kHiMasks[0] >> 1)) << 1);
+        Words[0][i] = w_i = hi2lo0 | lo2hi0;
 
-        for (unsigned j = 1, bits = 2; j < 5; ++j, bits <<= 1)
+        for (unsigned j = 1, bits = 2; j < kWordMips; ++j, bits <<= 1)
         {
-            const uint64_t w_j = Words[j - 1][i];
-            const uint64_t hi2lo_j = w_j | ((w_j & kHiMasks[j]) >> bits);
-            const uint64_t lo2hi_j = ((w_j & (kHiMasks[j] >> bits)) << bits);
-            Words[j][i] = hi2lo_j | lo2hi_j;
+            const uint64_t hi2lo_j = w_i | ((w_i & kHiMasks[j]) >> bits);
+            const uint64_t lo2hi_j = ((w_i & (kHiMasks[j] >> bits)) << bits);
+            Words[j][i] = w_i = hi2lo_j | lo2hi_j;
         }
     }
 
-    for (unsigned i = 0; i < kWords; ++i)
+    for (unsigned i = 0; i < kBigWords; ++i)
     {
-        uint64_t w = Words[4][i];
-        w |= w >> 32;
-        w |= w << 32;
-        Words[5][i] = w;
+        uint64_t w_i = 0;
+        uint64_t bit = 1;
+        const uint64_t* src = &Words[4][i * 64];
+        for (unsigned j = 0; j < 64; ++j, bit <<= 1)
+        {
+            const uint64_t w = src[j];
+            w_i |= (w | (w >> 32) | (w << 32)) & bit;
+        }
+        BigWords[0][i] = w_i;
+
+        for (unsigned j = 1, bits = 1; j < kBigMips; ++j, bits <<= 1)
+        {
+            const uint64_t hi2lo_j = w_i | ((w_i & kHiMasks[j - 1]) >> bits);
+            const uint64_t lo2hi_j = ((w_i & (kHiMasks[j - 1] >> bits)) << bits);
+            BigWords[j][i] = w_i = hi2lo_j | lo2hi_j;
+        }
     }
 
-    for (unsigned i = 0; i < kWords; i += 2)
-        Words[6][i] = Words[6][i + 1] = Words[5][i] | Words[5][i + 1];
+    uint64_t w_i = 0;
+    uint64_t bit = 1;
+    for (unsigned j = 0; j < kBigWords; ++j, bit <<= 1)
+    {
+        const uint64_t w = BigWords[kBigMips - 1][j];
+        w_i |= (w | (w >> 32) | (w << 32)) & bit;
+    }
+    BiggestWords[0] = w_i;
+
+    for (unsigned j = 1, bits = 1; j < kBiggestMips; ++j, bits <<= 1)
+    {
+        const uint64_t hi2lo_j = w_i | ((w_i & kHiMasks[j - 1]) >> bits);
+        const uint64_t lo2hi_j = ((w_i & (kHiMasks[j - 1] >> bits)) << bits);
+        BiggestWords[j] = w_i = hi2lo_j | lo2hi_j;
+    }
 }
 
-#endif // LEO_SCHEDULE_OPT
+#endif // LEO_ERROR_BITFIELD_OPT
 
 
 //------------------------------------------------------------------------------
@@ -1186,9 +1327,9 @@ void ReedSolomonDecode(
 {
     // Fill in error locations
 
-#ifdef LEO_SCHEDULE_OPT
+#ifdef LEO_ERROR_BITFIELD_OPT
     ErrorBitfield ErrorBits;
-#endif // LEO_SCHEDULE_OPT
+#endif // LEO_ERROR_BITFIELD_OPT
 
     ffe_t ErrorLocations[kOrder] = {};
     for (unsigned i = 0; i < recovery_count; ++i)
@@ -1201,15 +1342,15 @@ void ReedSolomonDecode(
         if (!original[i])
         {
             ErrorLocations[i + m] = 1;
-#ifdef LEO_SCHEDULE_OPT
+#ifdef LEO_ERROR_BITFIELD_OPT
             ErrorBits.Set(i + m);
-#endif // LEO_SCHEDULE_OPT
+#endif // LEO_ERROR_BITFIELD_OPT
         }
     }
 
-#ifdef LEO_SCHEDULE_OPT
+#ifdef LEO_ERROR_BITFIELD_OPT
     ErrorBits.Prepare();
-#endif // LEO_SCHEDULE_OPT
+#endif // LEO_ERROR_BITFIELD_OPT
 
     // Evaluate error locator polynomial
 
@@ -1291,10 +1432,10 @@ void ReedSolomonDecode(
         for (unsigned j = 0; j < n; j += range)
 #endif
         {
-#ifdef LEO_SCHEDULE_OPT
+#ifdef LEO_ERROR_BITFIELD_OPT
             if (!ErrorBits.IsNeeded(mip_level, j))
                 continue;
-#endif // LEO_SCHEDULE_OPT
+#endif // LEO_ERROR_BITFIELD_OPT
 
             VectorFFTButterfly(
                 buffer_bytes,

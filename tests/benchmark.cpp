@@ -42,15 +42,15 @@ using namespace std;
 struct TestParameters
 {
 #ifdef LEO_HAS_FF16
-    unsigned original_count = 1000; // under 65536
-    unsigned recovery_count = 100; // under 65536 - original_count
+    unsigned original_count = 677; // under 65536
+    unsigned recovery_count = 487; // under 65536 - original_count
 #else
     unsigned original_count = 128; // under 65536
     unsigned recovery_count = 128; // under 65536 - original_count
 #endif
-    unsigned buffer_bytes = 64000; // multiple of 64 bytes
-    unsigned loss_count = 128; // some fraction of original_count
-    unsigned seed = 0;
+    unsigned buffer_bytes = 640; // multiple of 64 bytes
+    unsigned loss_count = 2; // some fraction of original_count
+    unsigned seed = 2;
     bool multithreaded = true;
 };
 
@@ -535,10 +535,12 @@ static bool BasicTest(const TestParameters& params)
         t_mem_free.EndCall();
     }
 
+#if 0
     t_mem_alloc.Print(kTrials);
     t_leo_encode.Print(kTrials);
     t_leo_decode.Print(kTrials);
     t_mem_free.Print(kTrials);
+#endif
 
     float encode_input_MBPS = total_bytes * kTrials / (float)(t_leo_encode.TotalUsec);
     float encode_output_MBPS = params.buffer_bytes * (uint64_t)params.recovery_count * kTrials / (float)(t_leo_encode.TotalUsec);
@@ -784,6 +786,7 @@ int main(int argc, char **argv)
 #endif
 
     TestParameters params;
+    PCGRandom prng;
 
     if (argc >= 2)
         params.original_count = atoi(argv[1]);
@@ -804,6 +807,20 @@ int main(int argc, char **argv)
     if (!BasicTest(params))
         goto Failed;
 
+    prng.Seed(params.seed, 7);
+    for (;; ++params.seed)
+    {
+        params.original_count = prng.Next() % 32768;
+        params.recovery_count = prng.Next() % params.original_count + 1;
+        params.loss_count = prng.Next() % params.recovery_count + 1;
+
+        cout << "Parameters: [original count=" << params.original_count << "] [recovery count=" << params.recovery_count << "] [buffer bytes=" << params.buffer_bytes << "] [loss count=" << params.loss_count << "] [random seed=" << params.seed << "]" << endl;
+
+        if (!BasicTest(params))
+            goto Failed;
+    }
+
+#ifdef LEO_BENCH_ALL_256_PARAMS
     for (unsigned original_count = 1; original_count <= 256; ++original_count)
     {
         for (unsigned recovery_count = 1; recovery_count <= original_count; ++recovery_count)
@@ -818,6 +835,7 @@ int main(int argc, char **argv)
                 goto Failed;
         }
     }
+#endif
 
 Failed:
     getchar();

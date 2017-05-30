@@ -308,7 +308,8 @@ This library implements an MDS erasure code introduced in this paper:
 
 ~~~
     {1} S.-J. Lin, T. Y. Al-Naffouri, Y. S. Han, and W.-H. Chung,
-    "Novel Polynomial Basis with Fast Fourier Transform and Its Application to Reed-Solomon Erasure Codes"
+    "Novel Polynomial Basis with Fast Fourier Transform
+	and Its Application to Reed-Solomon Erasure Codes"
     IEEE Trans. on Information Theory, pp. 6284-6299, November, 2016.
 ~~~
 
@@ -318,9 +319,15 @@ This library implements an MDS erasure code introduced in this paper:
 ~~~
 
 ~~~
-    {3} Sian-Jheng Lin, Wei-Ho Chung, “An Efficient (n, k) Information
-    Dispersal Algorithm for High Code Rate System over Fermat Fields,”
+    {3} Sian-Jheng Lin, Wei-Ho Chung, "An Efficient (n, k) Information
+    Dispersal Algorithm for High Code Rate System over Fermat Fields,"
     IEEE Commun. Lett., vol.16, no.12, pp. 2036-2039, Dec. 2012.
+~~~
+
+~~~
+	{4} Plank, J. S., Greenan, K. M., Miller, E. L., "Screaming fast Galois Field
+	arithmetic using Intel SIMD instructions."  In: FAST-2013: 11th Usenix
+	Conference on File and Storage Technologies, San Jose, 2013
 ~~~
 	
 Some papers are mirrored in the /docs/ folder.

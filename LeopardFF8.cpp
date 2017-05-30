@@ -214,6 +214,23 @@ static ffe_t LogLUT[kOrder];
 static ffe_t ExpLUT[kOrder];
 
 
+// Returns a * Log(b)
+static ffe_t MultiplyLog(ffe_t a, ffe_t log_b)
+{
+    /*
+        Note that this operation is not a normal multiplication in a finite
+        field because the right operand is already a logarithm.  This is done
+        because it moves K table lookups from the Decode() method into the
+        initialization step that is less performance critical.  The LogWalsh[]
+        table below contains precalculated logarithms so it is easier to do
+        all the other multiplies in that form as well.
+    */
+    if (a == 0)
+        return 0;
+    return ExpLUT[AddMod(LogLUT[a], log_b)];
+}
+
+
 // Initialize LogLUT[], ExpLUT[]
 static void InitializeLogarithmTables()
 {
@@ -257,30 +274,20 @@ static void InitializeLogarithmTables()
 //------------------------------------------------------------------------------
 // Multiplies
 
+/*
+    The multiplication algorithm used follows the approach outlined in {4}.
+    Specifically section 6 outlines the algorithm used here for 8-bit fields.
+*/
+
 struct {
-    LEO_ALIGNED LEO_M128 Value[kBits / 4];
+    LEO_ALIGNED LEO_M128 Value[2];
 } static Multiply128LUT[kOrder];
 #if defined(LEO_TRY_AVX2)
 struct {
-    LEO_ALIGNED LEO_M256 Value[kBits / 4];
+    LEO_ALIGNED LEO_M256 Value[2];
 } static Multiply256LUT[kOrder];
 #endif // LEO_TRY_AVX2
 
-// Returns a * Log(b)
-static ffe_t MultiplyLog(ffe_t a, ffe_t log_b)
-{
-    /*
-        Note that this operation is not a normal multiplication in a finite
-        field because the right operand is already a logarithm.  This is done
-        because it moves K table lookups from the Decode() method into the
-        initialization step that is less performance critical.  The LogWalsh[]
-        table below contains precalculated logarithms so it is easier to do
-        all the other multiplies in that form as well.
-    */
-    if (a == 0)
-        return 0;
-    return ExpLUT[AddMod(LogLUT[a], log_b)];
-}
 
 void InitializeMultiplyTables()
 {
@@ -288,11 +295,11 @@ void InitializeMultiplyTables()
     for (unsigned log_m = 0; log_m < kOrder; ++log_m)
     {
         // For each 4 bits of the finite field width in bits:
-        for (unsigned i = 0, shift = 0; i < kBits / 4; ++i, shift += 4)
+        for (unsigned i = 0, shift = 0; i < 2; ++i, shift += 4)
         {
             // Construct 16 entry LUT for PSHUFB
-            ffe_t lut[16];
-            for (uint8_t x = 0; x < 16; ++x)
+            uint8_t lut[16];
+            for (ffe_t x = 0; x < 16; ++x)
                 lut[x] = MultiplyLog(x << shift, static_cast<ffe_t>(log_m));
 
             // Store in 128-bit wide table
@@ -1013,7 +1020,7 @@ skip_body:
 //------------------------------------------------------------------------------
 // ErrorBitfield
 
-#ifdef LEO_SCHEDULE_OPT
+#ifdef LEO_ERROR_BITFIELD_OPT
 
 // Used in decoding to decide which final FFT operations to perform
 class ErrorBitfield
@@ -1050,17 +1057,16 @@ void ErrorBitfield::Prepare()
     // First mip level is for final layer of FFT: pairs of data
     for (unsigned i = 0; i < kWords; ++i)
     {
-        const uint64_t w0 = Words[0][i];
-        const uint64_t hi2lo0 = w0 | ((w0 & kHiMasks[0]) >> 1);
-        const uint64_t lo2hi0 = ((w0 & (kHiMasks[0] >> 1)) << 1);
-        Words[0][i] = hi2lo0 | lo2hi0;
+        uint64_t w_i = Words[0][i];
+        const uint64_t hi2lo0 = w_i | ((w_i & kHiMasks[0]) >> 1);
+        const uint64_t lo2hi0 = ((w_i & (kHiMasks[0] >> 1)) << 1);
+        Words[0][i] = w_i = hi2lo0 | lo2hi0;
 
         for (unsigned j = 1, bits = 2; j < 5; ++j, bits <<= 1)
         {
-            const uint64_t w_j = Words[j - 1][i];
-            const uint64_t hi2lo_j = w_j | ((w_j & kHiMasks[j]) >> bits);
-            const uint64_t lo2hi_j = ((w_j & (kHiMasks[j] >> bits)) << bits);
-            Words[j][i] = hi2lo_j | lo2hi_j;
+            const uint64_t hi2lo_j = w_i | ((w_i & kHiMasks[j]) >> bits);
+            const uint64_t lo2hi_j = ((w_i & (kHiMasks[j] >> bits)) << bits);
+            Words[j][i] = w_i = hi2lo_j | lo2hi_j;
         }
     }
 
@@ -1076,7 +1082,7 @@ void ErrorBitfield::Prepare()
         Words[6][i] = Words[6][i + 1] = Words[5][i] | Words[5][i + 1];
 }
 
-#endif // LEO_SCHEDULE_OPT
+#endif // LEO_ERROR_BITFIELD_OPT
 
 
 //------------------------------------------------------------------------------
@@ -1094,9 +1100,9 @@ void ReedSolomonDecode(
 {
     // Fill in error locations
 
-#ifdef LEO_SCHEDULE_OPT
+#ifdef LEO_ERROR_BITFIELD_OPT
     ErrorBitfield ErrorBits;
-#endif // LEO_SCHEDULE_OPT
+#endif // LEO_ERROR_BITFIELD_OPT
 
     ffe_t ErrorLocations[kOrder] = {};
     for (unsigned i = 0; i < recovery_count; ++i)
@@ -1109,15 +1115,15 @@ void ReedSolomonDecode(
         if (!original[i])
         {
             ErrorLocations[i + m] = 1;
-#ifdef LEO_SCHEDULE_OPT
+#ifdef LEO_ERROR_BITFIELD_OPT
             ErrorBits.Set(i + m);
-#endif // LEO_SCHEDULE_OPT
+#endif // LEO_ERROR_BITFIELD_OPT
         }
     }
 
-#ifdef LEO_SCHEDULE_OPT
+#ifdef LEO_ERROR_BITFIELD_OPT
     ErrorBits.Prepare();
-#endif // LEO_SCHEDULE_OPT
+#endif // LEO_ERROR_BITFIELD_OPT
 
     // Evaluate error locator polynomial
 
@@ -1199,10 +1205,10 @@ void ReedSolomonDecode(
         for (unsigned j = 0; j < n; j += range)
 #endif
         {
-#ifdef LEO_SCHEDULE_OPT
+#ifdef LEO_ERROR_BITFIELD_OPT
             if (!ErrorBits.IsNeeded(mip_level, j))
                 continue;
-#endif // LEO_SCHEDULE_OPT
+#endif // LEO_ERROR_BITFIELD_OPT
 
             VectorFFTButterfly(
                 buffer_bytes,

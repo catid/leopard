@@ -33,7 +33,7 @@
 #include <stdlib.h>
 
 
-#define LEO_SHORT_FIELD
+//#define LEO_SHORT_FIELD
 //#define LEO_EXPERIMENT_EXTRA_XOR
 //#define LEO_EXPERIMENT_EXTRA_MULS
 #define LEO_EXPERIMENT_CANTOR_BASIS
@@ -603,8 +603,8 @@ int main(int argc, char **argv)
         const unsigned input_count = 32;
         const unsigned recovery_count = 16;
 #else // LEO_SHORT_FIELD
-        const unsigned input_count = 10000;
-        const unsigned recovery_count = 2000;
+        const unsigned input_count = 32768;
+        const unsigned recovery_count = 32768;
 #endif // LEO_SHORT_FIELD
 
         test(input_count, recovery_count, seed);

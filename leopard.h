@@ -42,25 +42,29 @@
     Bulat Ziganshin <bulat.ziganshin@gmail.com> : Author of FastECC
     Yutaka Sawada <tenfon@outlook.jp> : Author of MultiPar
 
+
     References:
 
     {1} S.-J. Lin, T. Y. Al-Naffouri, Y. S. Han, and W.-H. Chung,
-    "Novel Polynomial Basis with Fast Fourier Transform and Its Application to Reed-Solomon Erasure Codes"
+    "Novel Polynomial Basis with Fast Fourier Transform
+	and Its Application to Reed-Solomon Erasure Codes"
     IEEE Trans. on Information Theory, pp. 6284-6299, November, 2016.
-    http://ct.ee.ntust.edu.tw/it2016-2.pdf
 
     {2} D. G. Cantor, "On arithmetical algorithms over finite fields",
     Journal of Combinatorial Theory, Series A, vol. 50, no. 2, pp. 285-300, 1989.
 
-    {3} Sian-Jheng Lin, Wei-Ho Chung, “An Efficient (n, k) Information
-    Dispersal Algorithm for High Code Rate System over Fermat Fields,”
+    {3} Sian-Jheng Lin, Wei-Ho Chung, "An Efficient (n, k) Information
+    Dispersal Algorithm for High Code Rate System over Fermat Fields,"
     IEEE Commun. Lett., vol.16, no.12, pp. 2036-2039, Dec. 2012.
+
+    {4} Plank, J. S., Greenan, K. M., Miller, E. L., "Screaming fast Galois Field
+	arithmetic using Intel SIMD instructions."  In: FAST-2013: 11th Usenix
+	Conference on File and Storage Technologies, San Jose, 2013
 */
 
 /*
     TODO:
-    + New 16-bit Muladd inner loops
-        + Benchmarks for large data!
+    + Benchmarks for large data!
     + Add multi-threading to split up long parallelizable calculations
         + Final benchmarks!
     + Release version 1
@@ -76,7 +80,7 @@
 
 // Enable 8-bit or 16-bit fields
 #define LEO_HAS_FF8
-//#define LEO_HAS_FF16
+#define LEO_HAS_FF16
 
 // Tweak if the functions are exported or statically linked
 //#define LEO_DLL /* Defined when building/linking as DLL */

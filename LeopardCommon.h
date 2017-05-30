@@ -150,13 +150,16 @@
 // Constants
 
 // Unroll inner loops 4 times
-#define LEO_USE_VECTOR4_OPT
+//#define LEO_USE_VECTOR4_OPT
 
 // Define this to enable the optimized version of FWHT()
 #define LEO_FWHT_OPT
 
 // Avoid scheduling reduced FFT operations that are unneeded
 #define LEO_SCHEDULE_OPT
+
+// Avoid calculating final FFT values in decoder using bitfield
+//#define LEO_ERROR_BITFIELD_OPT
 
 // Optimize M=1 case
 #define LEO_M1_OPT
