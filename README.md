@@ -162,13 +162,6 @@ error locator polynomial as it is copied into the front of the
 workspace for the application to retrieve.
 
 
-#### Future directions:
-
-Note that a faster decoder is described in {3} that is O(K Log M) instead,
-which should be 2x faster than the current one.  However I do not fully
-understand how to implement it for this field and could use some help.
-
-
 #### Finite field arithmetic optimizations:
 
 For faster finite field multiplication, large tables are precomputed and
