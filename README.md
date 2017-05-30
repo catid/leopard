@@ -1,8 +1,6 @@
 # Leopard-RS
 ## MDS Reed-Solomon Error Correction Codes for Large Data in C
 
-#### Update: Data up to 256 pieces is working!  Next: Implementing 16-bit finite fields to enable data up to 65536 pieces.
-
 Leopard-RS is a fast library for Forward Error Correction.
 From a block of equally sized original data pieces, it generates recovery
 symbols that can be used to recover lost original data.
@@ -325,9 +323,9 @@ This library implements an MDS erasure code introduced in this paper:
 ~~~
 
 ~~~
-	{4} Plank, J. S., Greenan, K. M., Miller, E. L., "Screaming fast Galois Field
-	arithmetic using Intel SIMD instructions."  In: FAST-2013: 11th Usenix
-	Conference on File and Storage Technologies, San Jose, 2013
+    {4} Plank, J. S., Greenan, K. M., Miller, E. L., "Screaming fast Galois Field
+    arithmetic using Intel SIMD instructions."  In: FAST-2013: 11th Usenix
+    Conference on File and Storage Technologies, San Jose, 2013
 ~~~
 	
 Some papers are mirrored in the /docs/ folder.
@@ -341,4 +339,4 @@ Inspired by discussion with:
 + Bulat Ziganshin <bulat.ziganshin@gmail.com> : Author of FastECC
 + Yutaka Sawada <tenfon@outlook.jp> : Author of MultiPar
 
-This software was written entirely by myself ( Christopher A. Taylor mrcatid@gmail.com ). If you find it useful and would like to buy me a coffee, consider tipping.
+Software by Christopher A. Taylor <mrcatid@gmail.com>
