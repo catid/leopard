@@ -48,7 +48,7 @@ struct TestParameters
     unsigned original_count = 128; // under 65536
     unsigned recovery_count = 128; // under 65536 - original_count
 #endif
-    unsigned buffer_bytes = 640; // multiple of 64 bytes
+    unsigned buffer_bytes = 2560; // multiple of 64 bytes
     unsigned loss_count = 2; // some fraction of original_count
     unsigned seed = 2;
     bool multithreaded = true;
@@ -399,7 +399,7 @@ static LEO_FORCE_INLINE void SIMDSafeFree(void* ptr)
 
 static bool BasicTest(const TestParameters& params)
 {
-    static const unsigned kTrials = 10;
+    const unsigned kTrials = params.original_count > 8000 ? 1 : 10;
 
     std::vector<uint8_t*> original_data(params.original_count);
 
@@ -807,7 +807,7 @@ int main(int argc, char **argv)
     if (!BasicTest(params))
         goto Failed;
 
-    prng.Seed(params.seed, 7);
+    prng.Seed(params.seed, 8);
     for (;; ++params.seed)
     {
         params.original_count = prng.Next() % 32768;

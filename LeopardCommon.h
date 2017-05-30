@@ -159,7 +159,7 @@
 #define LEO_SCHEDULE_OPT
 
 // Avoid calculating final FFT values in decoder using bitfield
-//#define LEO_ERROR_BITFIELD_OPT
+#define LEO_ERROR_BITFIELD_OPT
 
 // Optimize M=1 case
 #define LEO_M1_OPT

@@ -1213,11 +1213,11 @@ class ErrorBitfield
     static const unsigned kWords = kOrder / 64;
     uint64_t Words[kWordMips][kWords] = {};
 
-    static const unsigned kBigMips = 5;
+    static const unsigned kBigMips = 6;
     static const unsigned kBigWords = (kWords + 63) / 64;
     uint64_t BigWords[kBigMips][kBigWords] = {};
 
-    static const unsigned kBiggestMips = 5;
+    static const unsigned kBiggestMips = 4;
     uint64_t BiggestWords[kBiggestMips] = {};
 
 public:
@@ -1232,10 +1232,10 @@ public:
     {
         if (mip_level >= 16)
             return true;
-        if (mip_level >= 11)
+        if (mip_level >= 12)
         {
             bit /= 4096;
-            return 0 != (BiggestWords[mip_level - 11] & ((uint64_t)1 << bit));
+            return 0 != (BiggestWords[mip_level - 12] & ((uint64_t)1 << bit));
         }
         if (mip_level >= 6)
         {
@@ -1276,7 +1276,7 @@ void ErrorBitfield::Prepare()
     {
         uint64_t w_i = 0;
         uint64_t bit = 1;
-        const uint64_t* src = &Words[4][i * 64];
+        const uint64_t* src = &Words[kWordMips - 1][i * 64];
         for (unsigned j = 0; j < 64; ++j, bit <<= 1)
         {
             const uint64_t w = src[j];
@@ -1294,9 +1294,10 @@ void ErrorBitfield::Prepare()
 
     uint64_t w_i = 0;
     uint64_t bit = 1;
+    const uint64_t* src = &BigWords[kBigMips - 1][0];
     for (unsigned j = 0; j < kBigWords; ++j, bit <<= 1)
     {
-        const uint64_t w = BigWords[kBigMips - 1][j];
+        const uint64_t w = src[j];
         w_i |= (w | (w >> 32) | (w << 32)) & bit;
     }
     BiggestWords[0] = w_i;
