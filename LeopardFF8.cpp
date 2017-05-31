@@ -1345,23 +1345,14 @@ void ReedSolomonDecode(
 
     // work <- IFFT(work, n, 0)
 
-    const unsigned input_count = m + original_count;
-    unsigned mip_level = 0;
-
-    for (unsigned width = 1; width < n; width <<= 1, ++mip_level)
-    {
-        const unsigned range = width << 1;
-
-        for (unsigned j = width; j < n; j += range)
-        {
-            VectorIFFTButterfly(
-                buffer_bytes,
-                width,
-                work + j - width,
-                work + j,
-                FFTSkew[j - 1]);
-        }
-    }
+    IFFT_DIT(
+        buffer_bytes,
+        nullptr,
+        n,
+        work,
+        nullptr,
+        n,
+        FFTSkew - 1);
 
     // work <- FormalDerivative(work, n)
 
@@ -1378,6 +1369,7 @@ void ReedSolomonDecode(
 
     // work <- FFT(work, n, 0) truncated to m + original_count
 
+    unsigned mip_level = LastNonzeroBit32(n);
     const unsigned output_count = m + original_count;
     for (unsigned width = (n >> 1); width > 0; width >>= 1, --mip_level)
     {
