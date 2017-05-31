@@ -364,7 +364,7 @@ static void InitializeLogarithmTables()
 /*
     The multiplication algorithm used follows the approach outlined in {4}.
     Specifically section 7 outlines the algorithm used here for 16-bit fields.
-    I use the ALTMAP memory layout since I do not need to convert in/out of it.
+    The ALTMAP memory layout is used since there is no need to convert in/out.
 */
 
 struct {
@@ -903,6 +903,7 @@ static ffe_t FFTSkew[kModulus];
 // Factors used in the evaluation of the error locator polynomial
 static ffe_t LogWalsh[kOrder];
 
+
 static void FFTInitialize()
 {
     ffe_t temp[kBits - 1];
@@ -1328,12 +1329,12 @@ void ReedSolomonDecode(
 
     // Evaluate error locator polynomial
 
-    FWHT(ErrorLocations, kBits);
+    FWHT(ErrorLocations);
 
     for (unsigned i = 0; i < kOrder; ++i)
         ErrorLocations[i] = ((unsigned)ErrorLocations[i] * (unsigned)LogWalsh[i]) % kModulus;
 
-    FWHT(ErrorLocations, kBits);
+    FWHT(ErrorLocations);
 
     // work <- recovery data
 

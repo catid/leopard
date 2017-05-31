@@ -34,7 +34,6 @@
     + Look into 12-bit fields as a performance optimization
     + Unroll first/final butterflies to avoid extra copies/xors in encoder
     + Skip a lot of the initial FWHT() layers that are just operating on zeroes
-    + Skip a lot of the final FWHT() layers that are not needed for calculation
     + For the actual FFT(), I should be unrolling the bottom two layers
         and performing them in a specialized function that does 2 <=> 2 and
         then 1<=>1, 1<=>1 operations in local registers/cache
@@ -160,7 +159,7 @@
 // Define this to enable the optimized version of FWHT()
 #define LEO_FWHT_OPT
 
-// Avoid scheduling reduced FFT operations that are unneeded
+// Avoid scheduling FFT operations that are unused
 #define LEO_SCHEDULE_OPT
 
 // Avoid calculating final FFT values in decoder using bitfield

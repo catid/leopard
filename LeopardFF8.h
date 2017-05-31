@@ -135,34 +135,6 @@ void ifft_butterfly4(
 
 
 //------------------------------------------------------------------------------
-// FFT
-
-/*
-    if (log_m != kModulus)
-        x[] ^= exp(log(y[]) + log_m)
-    y[] ^= x[]
-*/
-void VectorFFTButterfly(
-    const uint64_t bytes,
-    unsigned count,
-    void** x,
-    void** y,
-    const ffe_t log_m);
-
-/*
-    y[] ^= x[]
-    if (log_m != kModulus)
-        x[] ^= exp(log(y[]) + log_m)
-*/
-void VectorIFFTButterfly(
-    const uint64_t bytes,
-    unsigned count,
-    void** x,
-    void** y,
-    const ffe_t log_m);
-
-
-//------------------------------------------------------------------------------
 // Reed-Solomon Encode
 
 void ReedSolomonEncode(
