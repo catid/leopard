@@ -31,13 +31,16 @@
 /*
     TODO:
 
-    + Look into 12-bit fields as a performance optimization
+    Short-term:
+    + FF8 decoder needs DIT FFT optimization
+    + Port DIT FFT code to FF16
     + Unroll first/final butterflies to avoid extra copies/xors in encoder
-    + Skip a lot of the initial FWHT() layers that are just operating on zeroes
-    + For the actual FFT(), I should be unrolling the bottom two layers
-        and performing them in a specialized function that does 2 <=> 2 and
-        then 1<=>1, 1<=>1 operations in local registers/cache
     + Multithreading
+
+    Mid-term:
+    + Look into 12-bit fields as a performance optimization
+
+    Long-term:
     + Evaluate the error locator polynomial based on fast polynomial interpolations in O(k log^2 k)
     + Look into getting EncodeL working so we can support larger recovery sets
     + Implement the decoder algorithm from {3} based on the Forney algorithm

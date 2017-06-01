@@ -1544,7 +1544,7 @@ void ReedSolomonDecode(
     IFFT_DIT(
         buffer_bytes,
         nullptr,
-        n,
+        m + original_count,
         work,
         nullptr,
         n,
