@@ -1,18 +1,18 @@
 # Benchmarks:
 
-On my (few year old) laptop:
+On my (few year old) laptop using AVX2 instruction set.  I'm not being very rigorous here.  The point is that it's really fast.
 
 Some example performance measurements:
 
 ```
-Leopard Encoder(0.256 MB in 100 pieces, 10 losses): Input=4990.25 MB/s, Output=499.025 MB/s
-Leopard Decoder(0.256 MB in 100 pieces, 10 losses): Input=1407.37 MB/s, Output=140.737 MB/s
+Leopard Encoder(0.256 MB in 100 pieces, 10 losses): Input=5333.33 MB/s, Output=533.333 MB/s
+Leopard Decoder(0.256 MB in 100 pieces, 10 losses): Input=1695.36 MB/s, Output=169.536 MB/s
 
-Leopard Encoder(0.256 MB in 100 pieces, 20 losses): Input=3560.5 MB/s, Output=712.1 MB/s
-Leopard Decoder(0.256 MB in 100 pieces, 20 losses): Input=632.88 MB/s, Output=126.576 MB/s
+Leopard Encoder(0.256 MB in 100 pieces, 20 losses): Input=3878.79 MB/s, Output=775.758 MB/s
+Leopard Decoder(0.256 MB in 100 pieces, 20 losses): Input=833.876 MB/s, Output=166.775 MB/s
 
-Leopard Encoder(8.192 MB in 128 pieces, 128 losses): Input=1266.13 MB/s, Output=1266.13 MB/s
-Leopard Decoder(8.192 MB in 128 pieces, 128 losses): Input=482.243 MB/s, Output=482.243 MB/s
+Leopard Encoder(8.192 MB in 128 pieces, 128 losses): Input=1964.98 MB/s, Output=1964.98 MB/s
+Leopard Decoder(8.192 MB in 128 pieces, 128 losses): Input=600.542 MB/s, Output=600.542 MB/s
 
 Leopard Encoder(2.56 MB in 1000 pieces, 200 losses): Input=1942.34 MB/s, Output=388.467 MB/s
 Leopard Decoder(2.56 MB in 1000 pieces, 200 losses): Input=367.109 MB/s, Output=73.4219 MB/s
@@ -41,6 +41,9 @@ The results are all from libraries I've written over the past few years.  They a
 ```
 For 64KB data chunks:
 
+Leopard Encoder(8.192 MB in 128 pieces, 128 losses): Input=1964.98 MB/s, Output=1964.98 MB/s
+Leopard Decoder(8.192 MB in 128 pieces, 128 losses): Input=600.542 MB/s, Output=600.542 MB/s
+
 CM256 Encoder: 64000 bytes k = 128 m = 128 : 82194.7 usec, 99.6658 MBps
 CM256 Decoder: 64000 bytes k = 128 m = 128 : 78279.5 usec, 104.651 MBps
 
@@ -56,12 +59,12 @@ FEC-AL Decoder(8.192 MB in 128 pieces, 128 losses): Input=121.093 MB/s, Output=1
 
 For 128 data pieces of input and 128 data pieces of redundancy:
 
-+ Fastest to encode: Leopard (1.26 GB/s)
++ Fastest to encode: Leopard (1.96 GB/s)
 + Distant second-place: WH256 (660 MB/s), FEC-AL (515 MB/s)
 + Slowest encoders: Longhair, CM256
 
 + Fastest to decode: WH256 (830 MB/s)
-+ Distant second-place: Leopard (480 MB/s)
++ Distant second-place: Leopard (600 MB/s)
 + Slowest decoders: FEC-AL, CM256, Longhair
 
 There are a lot of variables that affect when each of these libraries should be used.
@@ -136,8 +139,8 @@ http://github.com/catid/siamese
 
 ##### Leopard-RS *new*: O(K Log M) FFT MDS Reed-Solomon codec
 
-Encodes at 1.2 GB/s, and decodes at 480 MB/s for this case.
-12x faster than existing MDS approaches to encode, and almost 5x faster to decode.
+Encodes at 2 GB/s, and decodes at 600 MB/s for this case.
+20x faster than existing MDS approaches to encode, and 6x faster to decode.
 This uses a recent result from 2014 introducing a novel polynomial basis permitting FFT over fast Galois fields.
 This is an MDS Reed-Solomon similar to Jerasure, Zfec, ISA-L, etc, but much faster.
 It requires SSSE3 or newer Intel instruction sets for this speed.  Otherwise it runs much slower.
