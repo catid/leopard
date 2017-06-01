@@ -61,7 +61,7 @@ For full documentation please read `leopard.h`.
 #### Benchmarks:
 
 Benchmark results are available here:
-[https://raw.githubusercontent.com/catid/leopard/master/Benchmarks.md](https://raw.githubusercontent.com/catid/leopard/master/Benchmarks.md)
+[https://github.com/catid/leopard/blob/master/Benchmarks.md](https://github.com/catid/leopard/blob/master/Benchmarks.md)
 
 
 #### FFT Data Layout:
