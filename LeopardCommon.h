@@ -171,6 +171,9 @@
 // Unroll inner loops 4 times
 #define LEO_USE_VECTOR4_OPT
 
+// Interleave butterfly operations between layer pairs in FFT
+#define LEO_INTERLEAVE_BUTTERFLY4_OPT
+
 
 //------------------------------------------------------------------------------
 // Debug

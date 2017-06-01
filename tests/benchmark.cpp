@@ -42,8 +42,8 @@ using namespace std;
 struct TestParameters
 {
 #ifdef LEO_HAS_FF16
-    unsigned original_count = 100; // under 65536
-    unsigned recovery_count = 20; // under 65536 - original_count
+    unsigned original_count = 1000; // under 65536
+    unsigned recovery_count = 200; // under 65536 - original_count
 #else
     unsigned original_count = 128; // under 65536
     unsigned recovery_count = 128; // under 65536 - original_count
@@ -395,11 +395,11 @@ static LEO_FORCE_INLINE void SIMDSafeFree(void* ptr)
 
 
 //------------------------------------------------------------------------------
-// Tests
+// Benchmark
 
-static bool BasicTest(const TestParameters& params)
+static bool Benchmark(const TestParameters& params)
 {
-    const unsigned kTrials = params.original_count > 8000 ? 1 : 100;
+    const unsigned kTrials = params.original_count > 8000 ? 1 : 1;
 
     std::vector<uint8_t*> original_data(params.original_count);
 
@@ -555,209 +555,6 @@ static bool BasicTest(const TestParameters& params)
 
 
 //------------------------------------------------------------------------------
-// Parallel XOR Benchmark
-
-#ifdef LEO_USE_VECTOR4_OPT
-
-// Demonstrate about 10% performance boost by doing parallel rows for XORs
-void ParallelXORBenchmark()
-{
-    FunctionTimer t_1("xor_mem");
-    FunctionTimer t_4("xor_mem4");
-
-    static const unsigned buffer_bytes = 4096;
-    static const unsigned buffer_count = 1024;
-
-    uint8_t* buffers_x[buffer_count] = {};
-    uint8_t* buffers_y[buffer_count] = {};
-
-    for (unsigned i = 0; i < buffer_count; ++i)
-    {
-        buffers_x[i] = SIMDSafeAllocate(buffer_bytes);
-        buffers_y[i] = SIMDSafeAllocate(buffer_bytes);
-    }
-
-    static const unsigned iteration_count = 1000;
-
-    for (unsigned i = 0; i < iteration_count; ++i)
-    {
-        t_1.BeginCall();
-        for (unsigned j = 0; j < buffer_count; ++j)
-            leopard::xor_mem(
-                buffers_x[j], buffers_y[j],
-                buffer_bytes);
-        t_1.EndCall();
-    }
-
-    for (unsigned i = 0; i < iteration_count; ++i)
-    {
-        t_4.BeginCall();
-        for (unsigned j = 0; j < buffer_count; j += 4)
-            leopard::xor_mem4(
-                buffers_x[j], buffers_y[j],
-                buffers_x[j + 1], buffers_y[j + 1],
-                buffers_x[j + 2], buffers_y[j + 2],
-                buffers_x[j + 3], buffers_y[j + 3],
-                buffer_bytes);
-        t_4.EndCall();
-    }
-
-    for (unsigned i = 0; i < buffer_count; ++i)
-    {
-        SIMDSafeFree(buffers_x[i]);
-        SIMDSafeFree(buffers_y[i]);
-    }
-
-    t_1.Print(iteration_count);
-    t_4.Print(iteration_count);
-}
-
-#endif // LEO_USE_VECTOR4_OPT
-
-
-//------------------------------------------------------------------------------
-// Parallel Butterfly8 Benchmark
-
-#ifdef LEO_HAS_FF8
-
-#ifdef LEO_USE_VECTOR4_OPT
-
-// Demonstrate performance boost by doing parallel rows for Butterfly8s
-void ParallelButterfly8Benchmark()
-{
-    FunctionTimer t_1("8-bit fft_butterfly");
-    FunctionTimer t_4("8-bit fft_butterfly4");
-
-    static const unsigned buffer_bytes = 4096;
-    static const unsigned buffer_count = 1024;
-
-    uint8_t* buffers_x[buffer_count] = {};
-    uint8_t* buffers_y[buffer_count] = {};
-
-    for (unsigned i = 0; i < buffer_count; ++i)
-    {
-        buffers_x[i] = SIMDSafeAllocate(buffer_bytes);
-        buffers_y[i] = SIMDSafeAllocate(buffer_bytes);
-    }
-
-    static const unsigned iteration_count = 1000;
-
-    for (unsigned i = 0; i < iteration_count; ++i)
-    {
-        leopard::ff8::ffe_t m = (leopard::ff8::ffe_t)(i + 2);
-
-        t_1.BeginCall();
-        for (unsigned j = 0; j < buffer_count; ++j)
-            leopard::ff8::fft_butterfly(
-                buffers_x[j], buffers_y[j],
-                m,
-                buffer_bytes);
-        t_1.EndCall();
-    }
-
-    for (unsigned i = 0; i < iteration_count; ++i)
-    {
-        leopard::ff8::ffe_t m = (leopard::ff8::ffe_t)(i + 2);
-
-        t_4.BeginCall();
-        for (unsigned j = 0; j < buffer_count; j += 4)
-            leopard::ff8::fft_butterfly4(
-                buffers_x[j], buffers_y[j],
-                buffers_x[j + 1], buffers_y[j + 1],
-                buffers_x[j + 2], buffers_y[j + 2],
-                buffers_x[j + 3], buffers_y[j + 3],
-                m,
-                buffer_bytes);
-        t_4.EndCall();
-    }
-
-    for (unsigned i = 0; i < buffer_count; ++i)
-    {
-        SIMDSafeFree(buffers_x[i]);
-        SIMDSafeFree(buffers_y[i]);
-    }
-
-    t_1.Print(iteration_count);
-    t_4.Print(iteration_count);
-}
-
-#endif // LEO_USE_VECTOR4_OPT
-
-#endif // LEO_HAS_FF8
-
-
-//------------------------------------------------------------------------------
-// Parallel Butterfly16 Benchmark
-
-#ifdef LEO_HAS_FF16
-
-#ifdef LEO_USE_VECTOR4_OPT
-
-// Demonstrate performance boost by doing parallel rows for Butterfly16s
-void ParallelButterfly16Benchmark()
-{
-    FunctionTimer t_1("16-bit fft_butterfly");
-    FunctionTimer t_4("16-bit fft_butterfly4");
-
-    static const unsigned buffer_bytes = 4096;
-    static const unsigned buffer_count = 1024;
-
-    uint8_t* buffers_x[buffer_count] = {};
-    uint8_t* buffers_y[buffer_count] = {};
-
-    for (unsigned i = 0; i < buffer_count; ++i)
-    {
-        buffers_x[i] = SIMDSafeAllocate(buffer_bytes);
-        buffers_y[i] = SIMDSafeAllocate(buffer_bytes);
-    }
-
-    static const unsigned iteration_count = 100;
-
-    for (unsigned i = 0; i < iteration_count; ++i)
-    {
-        leopard::ff16::ffe_t m = (leopard::ff16::ffe_t)(i + 2);
-
-        t_1.BeginCall();
-        for (unsigned j = 0; j < buffer_count; ++j)
-            leopard::ff16::fft_butterfly(
-                buffers_x[j], buffers_y[j],
-                m,
-                buffer_bytes);
-        t_1.EndCall();
-    }
-
-    for (unsigned i = 0; i < iteration_count; ++i)
-    {
-        leopard::ff16::ffe_t m = (leopard::ff16::ffe_t)(i + 2);
-
-        t_4.BeginCall();
-        for (unsigned j = 0; j < buffer_count; j += 4)
-            leopard::ff16::fft_butterfly4(
-                buffers_x[j], buffers_y[j],
-                buffers_x[j + 1], buffers_y[j + 1],
-                buffers_x[j + 2], buffers_y[j + 2],
-                buffers_x[j + 3], buffers_y[j + 3],
-                m,
-                buffer_bytes);
-        t_4.EndCall();
-    }
-
-    for (unsigned i = 0; i < buffer_count; ++i)
-    {
-        SIMDSafeFree(buffers_x[i]);
-        SIMDSafeFree(buffers_y[i]);
-    }
-
-    t_1.Print(iteration_count);
-    t_4.Print(iteration_count);
-}
-
-#endif // LEO_USE_VECTOR4_OPT
-
-#endif // LEO_HAS_FF8
-
-
-//------------------------------------------------------------------------------
 // Entrypoint
 
 int main(int argc, char **argv)
@@ -774,16 +571,6 @@ int main(int argc, char **argv)
     }
     t_leo_init.EndCall();
     t_leo_init.Print(1);
-
-#if 0
-    ParallelXORBenchmark();
-#ifdef LEO_HAS_FF8
-    ParallelButterfly8Benchmark();
-#endif // LEO_HAS_FF8
-#ifdef LEO_HAS_FF16
-    ParallelButterfly16Benchmark();
-#endif // LEO_HAS_FF16
-#endif
 
     TestParameters params;
     PCGRandom prng;
@@ -804,11 +591,11 @@ int main(int argc, char **argv)
 
     cout << "Parameters: [original count=" << params.original_count << "] [recovery count=" << params.recovery_count << "] [buffer bytes=" << params.buffer_bytes << "] [loss count=" << params.loss_count << "] [random seed=" << params.seed << "]" << endl;
 
-    if (!BasicTest(params))
+    if (!Benchmark(params))
         goto Failed;
 
-#if 0
-    static const unsigned kMaxRandomData = 128;
+#if 1
+    static const unsigned kMaxRandomData = 32768;
 
     prng.Seed(params.seed, 8);
     for (;; ++params.seed)
@@ -819,7 +606,7 @@ int main(int argc, char **argv)
 
         cout << "Parameters: [original count=" << params.original_count << "] [recovery count=" << params.recovery_count << "] [buffer bytes=" << params.buffer_bytes << "] [loss count=" << params.loss_count << "] [random seed=" << params.seed << "]" << endl;
 
-        if (!BasicTest(params))
+        if (!Benchmark(params))
             goto Failed;
     }
 #endif
@@ -835,7 +622,7 @@ int main(int argc, char **argv)
 
             cout << "Parameters: [original count=" << params.original_count << "] [recovery count=" << params.recovery_count << "] [buffer bytes=" << params.buffer_bytes << "] [loss count=" << params.loss_count << "] [random seed=" << params.seed << "]" << endl;
 
-            if (!BasicTest(params))
+            if (!Benchmark(params))
                 goto Failed;
         }
     }

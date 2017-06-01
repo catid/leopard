@@ -66,17 +66,16 @@ static const unsigned kPolynomial = 0x11D;
 //------------------------------------------------------------------------------
 // Fast Walsh-Hadamard Transform (FWHT) (mod kModulus)
 
-// Transform for a variable number of bits (up to kOrder)
-void FWHT(ffe_t* data, const unsigned bits);
-
-// Transform specialized for the finite field order
-void FWHT(ffe_t data[kOrder]);
+// Transform for a variable number of elements
+// m_truncated: Number of elements that are non-zero at the front of data
+void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated);
 
 
 //------------------------------------------------------------------------------
 // Multiplies
 
 // x[] = exp(log(y[]) + log_m)
+// mul_mem
 void mul_mem(
     void * LEO_RESTRICT x, const void * LEO_RESTRICT y,
     ffe_t log_m, uint64_t bytes);
@@ -120,18 +119,6 @@ void fft_butterfly4(
 void ifft_butterfly(
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
     ffe_t log_m, uint64_t bytes);
-
-#ifdef LEO_USE_VECTOR4_OPT
-
-// Unroll 4 rows at a time
-void ifft_butterfly4(
-    void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
-    void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
-    void * LEO_RESTRICT x_2, void * LEO_RESTRICT y_2,
-    void * LEO_RESTRICT x_3, void * LEO_RESTRICT y_3,
-    ffe_t log_m, uint64_t bytes);
-
-#endif // LEO_USE_VECTOR4_OPT
 
 
 //------------------------------------------------------------------------------
