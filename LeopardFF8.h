@@ -68,7 +68,7 @@ static const unsigned kPolynomial = 0x11D;
 
 // Transform for a variable number of elements
 // m_truncated: Number of elements that are non-zero at the front of data
-void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated);
+//void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated);
 
 
 //------------------------------------------------------------------------------

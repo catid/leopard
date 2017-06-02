@@ -936,7 +936,7 @@ static void FFTInitialize()
         }
     }
 
-    for (unsigned i = 0; i < kOrder; ++i)
+    for (unsigned i = 0; i < kModulus; ++i)
         FFTSkew[i] = LogLUT[FFTSkew[i]];
 
     // Precalculate FWHT(Log[i]):
@@ -1057,6 +1057,7 @@ void ReedSolomonEncode(
         }
     }
 
+    const unsigned last_count = original_count % m;
     if (m >= original_count)
         goto skip_body;
 
@@ -1100,7 +1101,6 @@ void ReedSolomonEncode(
             temp);
     }
 
-    const unsigned last_count = original_count % m;
     if (last_count != 0)
     {
         const unsigned i = original_count - last_count;

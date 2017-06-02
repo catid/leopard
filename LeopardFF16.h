@@ -67,7 +67,7 @@ static const unsigned kPolynomial = 0x1002D;
 // Fast Walsh-Hadamard Transform (FWHT) (mod kModulus)
 
 // Transform for a variable number of bits (up to kOrder)
-void FWHT(ffe_t* data, const unsigned bits);
+//void FWHT(ffe_t* data, const unsigned bits);
 
 // Transform specialized for the finite field order
 void FWHT(ffe_t data[kOrder]);
