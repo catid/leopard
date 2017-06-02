@@ -814,7 +814,7 @@ static void IFFT_DIT4(
 
 void IFFT_DIT(
     const uint64_t bytes,
-    void* const* data,
+    const void* const* data,
     const unsigned m_truncated,
     void** work,
     void** xor_result,
@@ -1405,7 +1405,7 @@ void ReedSolomonEncode(
     unsigned original_count,
     unsigned recovery_count,
     unsigned m,
-    void* const* data,
+    const void* const* data,
     void** work)
 {
     // work <- IFFT(data, m, m)
@@ -1552,8 +1552,8 @@ void ReedSolomonDecode(
     unsigned recovery_count,
     unsigned m, // NextPow2(recovery_count)
     unsigned n, // NextPow2(m + original_count) = work_count
-    void* const * const original, // original_count entries
-    void* const * const recovery, // recovery_count entries
+    const void* const * const original, // original_count entries
+    const void* const * const recovery, // recovery_count entries
     void** work) // n entries
 {
     // Fill in error locations
