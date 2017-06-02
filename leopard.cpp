@@ -27,6 +27,7 @@
 */
 
 #include "leopard.h"
+#include "LeopardCommon.h"
 
 #ifdef LEO_HAS_FF8
     #include "LeopardFF8.h"

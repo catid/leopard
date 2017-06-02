@@ -228,11 +228,36 @@ struct {
 } static Multiply256LUT[kOrder];
 #endif // LEO_TRY_AVX2
 
+static ffe_t Multiply8LUT[256 * 256];
+
 
 void InitializeMultiplyTables()
 {
     if (!CpuHasSSSE3)
+    {
+        for (unsigned x = 0; x < 256; ++x)
+        {
+            ffe_t* lut = Multiply8LUT + x;
+
+            if (x == 0)
+            {
+                for (unsigned log_y = 0; log_y < 256; ++log_y, lut += 256)
+                    lut[log_y] = 0;
+            }
+            else
+            {
+                const ffe_t log_x = LogLUT[x];
+
+                for (unsigned log_y = 0; log_y < 256; ++log_y, lut += 256)
+                {
+                    const ffe_t prod = ExpLUT[AddMod(log_x, log_y)];
+                    *lut = prod;
+                }
+            }
+        }
+
         return;
+    }
 
     // For each value we could multiply by:
     for (unsigned log_m = 0; log_m < kOrder; ++log_m)
@@ -334,16 +359,16 @@ void mul_mem(
     }
 
     // Reference version:
+    const ffe_t* LEO_RESTRICT lut = Multiply8LUT + log_m * 256;
     ffe_t * LEO_RESTRICT x1 = reinterpret_cast<ffe_t *>(x);
     const ffe_t * LEO_RESTRICT y1 = reinterpret_cast<const ffe_t *>(y);
 
     do
     {
         for (unsigned j = 0; j < 64; ++j)
-            x1[j] = MultiplyLog(y1[j], log_m);
+            x1[j] = lut[y1[j]];
 
-        x1 += 64;
-        y1 += 64;
+        x1 += 64, y1 += 64;
         bytes -= 64;
     } while (bytes > 0);
 }
@@ -567,25 +592,47 @@ void ifft_butterfly(
     }
 
     // Reference version:
+    const ffe_t* LEO_RESTRICT lut = Multiply8LUT + log_m * 256;
+
+    xor_mem(y, x, bytes);
+
+#ifdef LEO_TARGET_MOBILE
     ffe_t * LEO_RESTRICT x1 = reinterpret_cast<ffe_t *>(x);
     ffe_t * LEO_RESTRICT y1 = reinterpret_cast<ffe_t *>(y);
 
     do
     {
         for (unsigned j = 0; j < 64; ++j)
-        {
-            ffe_t x_0 = x1[j];
-            ffe_t y_0 = y1[j];
-            y_0 ^= x_0;
-            x_0 ^= MultiplyLog(y_0, log_m);
-            x1[j] = x_0;
-            y1[j] = y_0;
-        }
+            x1[j] ^= lut[y1[j]];
 
-        x1 += 64;
-        y1 += 64;
+        x1 += 64, y1 += 64;
         bytes -= 64;
     } while (bytes > 0);
+#else
+    uint64_t * LEO_RESTRICT x8 = reinterpret_cast<uint64_t *>(x);
+    ffe_t * LEO_RESTRICT y1 = reinterpret_cast<ffe_t *>(y);
+
+    do
+    {
+        for (unsigned j = 0; j < 8; ++j)
+        {
+            uint64_t x_0 = x8[j];
+            x_0 ^= (uint64_t)lut[y1[0]];
+            x_0 ^= (uint64_t)lut[y1[1]] << 8;
+            x_0 ^= (uint64_t)lut[y1[2]] << 16;
+            x_0 ^= (uint64_t)lut[y1[3]] << 24;
+            x_0 ^= (uint64_t)lut[y1[4]] << 32;
+            x_0 ^= (uint64_t)lut[y1[5]] << 40;
+            x_0 ^= (uint64_t)lut[y1[6]] << 48;
+            x_0 ^= (uint64_t)lut[y1[7]] << 56;
+            x8[j] = x_0;
+            y1 += 8;
+        }
+
+        x8 += 8;
+        bytes -= 64;
+    } while (bytes > 0);
+#endif
 }
 
 // 4-way butterfly
@@ -783,6 +830,10 @@ void IFFT_DIT(
             memset(work[i], 0, bytes);
     }
 
+    // I tried splitting up the first few layers into L3-cache sized blocks but
+    // found that it only provides about 5% performance boost, which is not
+    // worth the extra complexity.
+
     // Decimation in time: Unroll 2 layers at a time
     unsigned dist = 1, dist4 = 4;
     for (; dist4 <= m; dist = dist4, dist4 <<= 2)
@@ -974,6 +1025,9 @@ void fft_butterfly(
     }
 
     // Reference version:
+    const ffe_t* LEO_RESTRICT lut = Multiply8LUT + log_m * 256;
+
+#ifdef LEO_TARGET_MOBILE
     ffe_t * LEO_RESTRICT x1 = reinterpret_cast<ffe_t *>(x);
     ffe_t * LEO_RESTRICT y1 = reinterpret_cast<ffe_t *>(y);
 
@@ -983,15 +1037,40 @@ void fft_butterfly(
         {
             ffe_t x_0 = x1[j];
             ffe_t y_0 = y1[j];
-            x_0 ^= MultiplyLog(y_0, log_m);
+            x_0 ^= lut[y_0];
             x1[j] = x_0;
             y1[j] = y_0 ^ x_0;
         }
 
-        x1 += 64;
-        y1 += 64;
+        x1 += 64, y1 += 64;
         bytes -= 64;
     } while (bytes > 0);
+#else
+    uint64_t * LEO_RESTRICT x8 = reinterpret_cast<uint64_t *>(x);
+    uint64_t * LEO_RESTRICT y8 = reinterpret_cast<uint64_t *>(y);
+    ffe_t * LEO_RESTRICT y1 = reinterpret_cast<ffe_t *>(y);
+
+    do
+    {
+        for (unsigned j = 0; j < 8; ++j)
+        {
+            uint64_t x_0 = x8[j], y_0 = y8[j];
+            x_0 ^= (uint64_t)lut[y1[0]];
+            x_0 ^= (uint64_t)lut[y1[1]] << 8;
+            x_0 ^= (uint64_t)lut[y1[2]] << 16;
+            x_0 ^= (uint64_t)lut[y1[3]] << 24;
+            x_0 ^= (uint64_t)lut[y1[4]] << 32;
+            x_0 ^= (uint64_t)lut[y1[5]] << 40;
+            x_0 ^= (uint64_t)lut[y1[6]] << 48;
+            x_0 ^= (uint64_t)lut[y1[7]] << 56;
+            x8[j] = x_0, y8[j] = y_0 ^ x_0;
+            y1 += 8;
+        }
+
+        x8 += 8, y8 += 8;
+        bytes -= 64;
+    } while (bytes > 0);
+#endif
 }
 
 #ifdef LEO_USE_VECTOR4_OPT
@@ -1153,8 +1232,8 @@ static void FFT_DIT4(
 
             _mm256_storeu_si256(work0, work0_reg);
             _mm256_storeu_si256(work1, work1_reg);
+            work0++, work1++;
 
-            // First layer:
             if (log_m23 != kModulus)
             {
                 LEO_FFTB4_256(work2_reg, work3_reg, t23_lo, t23_hi);
@@ -1163,8 +1242,7 @@ static void FFT_DIT4(
 
             _mm256_storeu_si256(work2, work2_reg);
             _mm256_storeu_si256(work3, work3_reg);
-
-            work0++, work1++, work2++, work3++;
+            work2++, work3++;
 
             bytes -= 32;
         } while (bytes > 0);
@@ -1221,8 +1299,8 @@ static void FFT_DIT4(
 
             _mm_storeu_si128(work0, work0_reg);
             _mm_storeu_si128(work1, work1_reg);
+            work0++, work1++;
 
-            // First layer:
             if (log_m23 != kModulus)
             {
                 LEO_FFTB4_128(work2_reg, work3_reg, t23_lo, t23_hi);
@@ -1231,8 +1309,7 @@ static void FFT_DIT4(
 
             _mm_storeu_si128(work2, work2_reg);
             _mm_storeu_si128(work3, work3_reg);
-
-            work0++, work1++, work2++, work3++;
+            work2++, work3++;
 
             bytes -= 16;
         } while (bytes > 0);

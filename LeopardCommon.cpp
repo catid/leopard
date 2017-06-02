@@ -175,6 +175,7 @@ void xor_mem(
         return;
     }
 #endif // LEO_TRY_AVX2
+
     LEO_M128 * LEO_RESTRICT x16 = reinterpret_cast<LEO_M128 *>(vx);
     const LEO_M128 * LEO_RESTRICT y16 = reinterpret_cast<const LEO_M128 *>(vy);
     do
@@ -223,6 +224,7 @@ void xor_mem_2to1(
             x32 += 4, y32 += 4, z32 += 4;
             bytes -= 128;
         };
+
         if (bytes > 0)
         {
             LEO_M256 x0 = _mm256_xor_si256(_mm256_loadu_si256(x32),     _mm256_loadu_si256(y32));
@@ -232,9 +234,11 @@ void xor_mem_2to1(
             _mm256_storeu_si256(x32, x0);
             _mm256_storeu_si256(x32 + 1, x1);
         }
+
         return;
     }
 #endif // LEO_TRY_AVX2
+
     LEO_M128 * LEO_RESTRICT x16 = reinterpret_cast<LEO_M128 *>(x);
     const LEO_M128 * LEO_RESTRICT y16 = reinterpret_cast<const LEO_M128 *>(y);
     const LEO_M128 * LEO_RESTRICT z16 = reinterpret_cast<const LEO_M128 *>(z);
