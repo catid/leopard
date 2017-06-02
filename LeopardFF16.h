@@ -67,7 +67,7 @@ static const unsigned kPolynomial = 0x1002D;
 // Fast Walsh-Hadamard Transform (FWHT) (mod kModulus)
 
 // Transform for a variable number of bits (up to kOrder)
-void FWHT(ffe_t* data, const unsigned bits);
+//void FWHT(ffe_t* data, const unsigned bits);
 
 // Transform specialized for the finite field order
 void FWHT(ffe_t data[kOrder]);
@@ -170,7 +170,7 @@ void ReedSolomonEncode(
     unsigned original_count,
     unsigned recovery_count,
     unsigned m, // = NextPow2(recovery_count) * 2 = work_count
-    void* const * const data,
+    const void* const * const data,
     void** work); // Size of GetEncodeWorkCount()
 
 
@@ -183,8 +183,8 @@ void ReedSolomonDecode(
     unsigned recovery_count,
     unsigned m, // = NextPow2(recovery_count)
     unsigned n, // = NextPow2(m + original_count) = work_count
-    void* const * const original, // original_count entries
-    void* const * const recovery, // recovery_count entries
+    const void* const * const original, // original_count entries
+    const void* const * const recovery, // recovery_count entries
     void** work); // n entries
 
 

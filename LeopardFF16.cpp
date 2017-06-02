@@ -936,7 +936,7 @@ static void FFTInitialize()
         }
     }
 
-    for (unsigned i = 0; i < kOrder; ++i)
+    for (unsigned i = 0; i < kModulus; ++i)
         FFTSkew[i] = LogLUT[FFTSkew[i]];
 
     // Precalculate FWHT(Log[i]):
@@ -1019,7 +1019,7 @@ void ReedSolomonEncode(
     unsigned original_count,
     unsigned recovery_count,
     unsigned m,
-    void* const * data,
+    const void* const * data,
     void** work)
 {
     // work <- data
@@ -1057,6 +1057,7 @@ void ReedSolomonEncode(
         }
     }
 
+    const unsigned last_count = original_count % m;
     if (m >= original_count)
         goto skip_body;
 
@@ -1100,7 +1101,6 @@ void ReedSolomonEncode(
             temp);
     }
 
-    const unsigned last_count = original_count % m;
     if (last_count != 0)
     {
         const unsigned i = original_count - last_count;
@@ -1296,8 +1296,8 @@ void ReedSolomonDecode(
     unsigned recovery_count,
     unsigned m, // NextPow2(recovery_count)
     unsigned n, // NextPow2(m + original_count) = work_count
-    void* const * const original, // original_count entries
-    void* const * const recovery, // recovery_count entries
+    const void* const * const original, // original_count entries
+    const void* const * const recovery, // recovery_count entries
     void** work) // n entries
 {
     // Fill in error locations
