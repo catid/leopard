@@ -321,7 +321,8 @@ LEO_FORCE_INLINE unsigned LastNonzeroBit32(unsigned x)
     return (unsigned)index;
 #else
     // Note: Ignoring return value of 0 because x != 0
-    return 31 - (unsigned)__builtin_clzl(x);
+    static_assert(sizeof(unsigned) == 4, "Assuming 32 bit unsigneds in LastNonzeroBit32");
+    return 31 - (unsigned)__builtin_clz(x);
 #endif
 }
 
