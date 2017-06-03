@@ -815,9 +815,7 @@ static void IFFT_DIT(
             const ffe_t log_m02 = skewLUT[r + dist * 2];
 
             // For each set of dist elements:
-            unsigned i_end = r + dist;
-            if (i_end >= m_truncated)
-                i_end = m_truncated;
+            const unsigned i_end = r + dist;
             for (unsigned i = r; i < i_end; ++i)
             {
                 IFFT_DIT4(
@@ -1235,9 +1233,7 @@ static void FFT_DIT(
             const ffe_t log_m02 = skewLUT[r + dist * 2];
 
             // For each set of dist elements:
-            unsigned i_end = r + dist;
-            if (i_end >= m_truncated)
-                i_end = m_truncated;
+            const unsigned i_end = r + dist;
             for (unsigned i = r; i < i_end; ++i)
             {
                 FFT_DIT4(
