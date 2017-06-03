@@ -1,7 +1,7 @@
 # Leopard-RS
 ## MDS Reed-Solomon Erasure Correction Codes for Large Data in C
 
-Leopard-RS is a fast library for Forward Error Correction.
+Leopard-RS is a fast library for Erasure Correction Coding.
 From a block of equally sized original data pieces, it generates recovery
 symbols that can be used to recover lost original data.
 
@@ -99,6 +99,7 @@ Encoder optimizations:
 Unrolling is used in the code to accomplish both these optimizations.
 * The final FFT can be truncated also if recovery set is not a power of 2.
 It is easy to truncate the FFT by ending the inner loop early.
+* The decimation-in-time (DIT) FFT is employed to calculate two layers at a time, rather than writing each layer out and reading it back in for the next layer of the FFT.
 
 
 #### Decoder algorithm:
@@ -212,3 +213,5 @@ Inspired by discussion with:
 + Yutaka Sawada <tenfon@outlook.jp> : Author of MultiPar
 
 Software by Christopher A. Taylor <mrcatid@gmail.com>
+
+Please reach out if you need support or would like to collaborate on a project.
