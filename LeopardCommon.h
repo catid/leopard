@@ -32,7 +32,6 @@
     TODO:
 
     Short-term:
-    + FF8 decoder needs DIT FFT optimization
     + Port DIT FFT code to FF16
     + Unroll first/final butterflies to avoid extra copies/xors in encoder
     + Multithreading

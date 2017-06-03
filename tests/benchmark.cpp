@@ -48,7 +48,7 @@ struct TestParameters
     unsigned original_count = 128; // under 65536
     unsigned recovery_count = 128; // under 65536 - original_count
 #endif
-    unsigned buffer_bytes = 64; // multiple of 64 bytes
+    unsigned buffer_bytes = 64000; // multiple of 64 bytes
     unsigned loss_count = 32768; // some fraction of original_count
     unsigned seed = 2;
     bool multithreaded = true;
@@ -240,9 +240,15 @@ public:
     void EndCall()
     {
         LEO_DEBUG_ASSERT(t0 != 0);
-        uint64_t t1 = GetTimeUsec();
-        ++Invokations;
-        TotalUsec += t1 - t0;
+        const uint64_t t1 = GetTimeUsec();
+        const uint64_t delta = t1 - t0;
+        if (++Invokations == 1)
+            MaxCallUsec = MinCallUsec = delta;
+        else if (MaxCallUsec < delta)
+            MaxCallUsec = delta;
+        else if (MinCallUsec > delta)
+            MinCallUsec = delta;
+        TotalUsec += delta;
         t0 = 0;
     }
     void Reset()
@@ -260,6 +266,8 @@ public:
     uint64_t t0 = 0;
     uint64_t Invokations = 0;
     uint64_t TotalUsec = 0;
+    uint64_t MaxCallUsec = 0;
+    uint64_t MinCallUsec = 0;
     std::string FunctionName;
 };
 
@@ -542,10 +550,10 @@ static bool Benchmark(const TestParameters& params)
     t_mem_free.Print(kTrials);
 #endif
 
-    float encode_input_MBPS = total_bytes * kTrials / (float)(t_leo_encode.TotalUsec);
-    float encode_output_MBPS = params.buffer_bytes * (uint64_t)params.recovery_count * kTrials / (float)(t_leo_encode.TotalUsec);
-    float decode_input_MBPS = total_bytes * kTrials / (float)(t_leo_decode.TotalUsec);
-    float decode_output_MBPS = params.buffer_bytes * (uint64_t)params.loss_count * kTrials / (float)(t_leo_decode.TotalUsec);
+    float encode_input_MBPS = total_bytes / (float)(t_leo_encode.MinCallUsec);
+    float encode_output_MBPS = params.buffer_bytes * (uint64_t)params.recovery_count / (float)(t_leo_encode.MinCallUsec);
+    float decode_input_MBPS = total_bytes / (float)(t_leo_decode.MinCallUsec);
+    float decode_output_MBPS = params.buffer_bytes * (uint64_t)params.loss_count / (float)(t_leo_decode.MinCallUsec);
 
     cout << "Leopard Encoder(" << total_bytes / 1000000.f << " MB in " << params.original_count << " pieces, " << params.loss_count << " losses): Input=" << encode_input_MBPS << " MB/s, Output=" << encode_output_MBPS << " MB/s" << endl;
     cout << "Leopard Decoder(" << total_bytes / 1000000.f << " MB in " << params.original_count << " pieces, " << params.loss_count << " losses): Input=" << decode_input_MBPS << " MB/s, Output=" << decode_output_MBPS << " MB/s" << endl << endl;

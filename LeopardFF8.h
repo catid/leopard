@@ -64,94 +64,28 @@ static const unsigned kPolynomial = 0x11D;
 
 
 //------------------------------------------------------------------------------
-// Fast Walsh-Hadamard Transform (FWHT) (mod kModulus)
+// API
 
-// Transform for a variable number of elements
-// m_truncated: Number of elements that are non-zero at the front of data
-//void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated);
-
-
-//------------------------------------------------------------------------------
-// Multiplies
-
-// x[] = exp(log(y[]) + log_m)
-// mul_mem
-void mul_mem(
-    void * LEO_RESTRICT x, const void * LEO_RESTRICT y,
-    ffe_t log_m, uint64_t bytes);
-
-
-//------------------------------------------------------------------------------
-// FFT Operations
-
-/*
-    Precondition: log_m != kModulus
-
-    x[] ^= exp(log(y[]) + log_m)
-    y[] ^= x[]
-*/
-void fft_butterfly(
-    void * LEO_RESTRICT x, void * LEO_RESTRICT y,
-    ffe_t log_m, uint64_t bytes);
-
-#ifdef LEO_USE_VECTOR4_OPT
-
-// Unroll 4 rows at a time
-void fft_butterfly4(
-    void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
-    void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
-    void * LEO_RESTRICT x_2, void * LEO_RESTRICT y_2,
-    void * LEO_RESTRICT x_3, void * LEO_RESTRICT y_3,
-    ffe_t log_m, uint64_t bytes);
-
-#endif // LEO_USE_VECTOR4_OPT
-
-
-//------------------------------------------------------------------------------
-// IFFT Operations
-
-/*
-    Precondition: log_m != kModulus
-
-    y[] ^= x[]
-    x[] ^= exp(log(y[]) + log_m)
-*/
-void ifft_butterfly(
-    void * LEO_RESTRICT x, void * LEO_RESTRICT y,
-    ffe_t log_m, uint64_t bytes);
-
-
-//------------------------------------------------------------------------------
-// Reed-Solomon Encode
+// Returns false if the self-test fails
+bool Initialize();
 
 void ReedSolomonEncode(
     uint64_t buffer_bytes,
     unsigned original_count,
     unsigned recovery_count,
-    unsigned m, // = NextPow2(recovery_count) * 2 = work_count
+    unsigned m, // = NextPow2(recovery_count)
     const void* const * const data,
-    void** work); // Size of GetEncodeWorkCount()
-
-
-//------------------------------------------------------------------------------
-// Reed-Solomon Decode
+    void** work); // m * 2 elements
 
 void ReedSolomonDecode(
     uint64_t buffer_bytes,
     unsigned original_count,
     unsigned recovery_count,
     unsigned m, // = NextPow2(recovery_count)
-    unsigned n, // = NextPow2(m + original_count) = work_count
+    unsigned n, // = NextPow2(m + original_count)
     const void* const * const original, // original_count entries
     const void* const * const recovery, // recovery_count entries
-    void** work); // n entries
-
-
-//------------------------------------------------------------------------------
-// API
-
-// Returns false if the self-test fails
-bool Initialize();
+    void** work); // n elements
 
 
 }} // namespace leopard::ff8

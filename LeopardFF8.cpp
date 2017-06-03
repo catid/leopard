@@ -134,7 +134,7 @@ static void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated)
 #else // LEO_FWHT_OPT
 
 // Reference implementation
-void FWHT(ffe_t* data, const unsigned bits)
+static void FWHT(ffe_t* data, const unsigned bits)
 {
     const unsigned size = (unsigned)(1UL << bits);
     for (unsigned width = 1; width < size; width <<= 1)
@@ -233,7 +233,7 @@ struct {
 static ffe_t Multiply8LUT[256 * 256] = {};
 
 
-void InitializeMultiplyTables()
+static void InitializeMultiplyTables()
 {
     // If we cannot use the PSHUFB instruction, generate Multiply8LUT:
     if (!CpuHasSSSE3)
@@ -288,7 +288,7 @@ void InitializeMultiplyTables()
 }
 
 
-void mul_mem(
+static void mul_mem(
     void * LEO_RESTRICT x, const void * LEO_RESTRICT y,
     ffe_t log_m, uint64_t bytes)
 {
@@ -482,7 +482,7 @@ static void FFTInitialize()
         {1-5, 1'-5', 1-1', 5-5'},
 */
 
-void ifft_butterfly(
+static void ifft_butterfly(
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
     ffe_t log_m, uint64_t bytes)
 {
@@ -781,7 +781,7 @@ static void IFFT_DIT4(
     }
 }
 
-void IFFT_DIT(
+static void IFFT_DIT(
     const uint64_t bytes,
     const void* const* data,
     const unsigned m_truncated,
@@ -815,7 +815,10 @@ void IFFT_DIT(
             const ffe_t log_m02 = skewLUT[r + dist * 2];
 
             // For each set of dist elements:
-            for (unsigned i = r; i < r + dist; ++i)
+            unsigned i_end = r + dist;
+            if (i_end >= m_truncated)
+                i_end = m_truncated;
+            for (unsigned i = r; i < i_end; ++i)
             {
                 IFFT_DIT4(
                     bytes,
@@ -915,7 +918,7 @@ void IFFT_DIT(
         {4-6, 5-7, 4-5, 6-7},
 */
 
-void fft_butterfly(
+static void fft_butterfly(
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
     ffe_t log_m, uint64_t bytes)
 {
@@ -1212,7 +1215,8 @@ static void FFT_DIT4(
         fft_butterfly(work[dist * 2], work[dist * 3], log_m23, bytes);
 }
 
-void FFT_DIT(
+
+static void FFT_DIT(
     const uint64_t bytes,
     void** work,
     const unsigned m_truncated,
@@ -1231,7 +1235,10 @@ void FFT_DIT(
             const ffe_t log_m02 = skewLUT[r + dist * 2];
 
             // For each set of dist elements:
-            for (unsigned i = r; i < r + dist; ++i)
+            unsigned i_end = r + dist;
+            if (i_end >= m_truncated)
+                i_end = m_truncated;
+            for (unsigned i = r; i < i_end; ++i)
             {
                 FFT_DIT4(
                     bytes,

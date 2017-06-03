@@ -64,54 +64,10 @@ static const unsigned kPolynomial = 0x1002D;
 
 
 //------------------------------------------------------------------------------
-// Fast Walsh-Hadamard Transform (FWHT) (mod kModulus)
+// API
 
-// Transform for a variable number of bits (up to kOrder)
-//void FWHT(ffe_t* data, const unsigned bits);
-
-// Transform specialized for the finite field order
-void FWHT(ffe_t data[kOrder]);
-
-
-//------------------------------------------------------------------------------
-// Multiplies
-
-// x[] = exp(log(y[]) + log_m)
-void mul_mem(
-    void * LEO_RESTRICT x, const void * LEO_RESTRICT y,
-    ffe_t log_m, uint64_t bytes);
-
-
-//------------------------------------------------------------------------------
-// FFT Operations
-
-/*
-    Precondition: log_m != kModulus
-
-    x[] ^= exp(log(y[]) + log_m)
-    y[] ^= x[]
-*/
-void fft_butterfly(
-    void * LEO_RESTRICT x, void * LEO_RESTRICT y,
-    ffe_t log_m, uint64_t bytes);
-
-
-//------------------------------------------------------------------------------
-// IFFT Operations
-
-/*
-    Precondition: log_m != kModulus
-
-    y[] ^= x[]
-    x[] ^= exp(log(y[]) + log_m)
-*/
-void ifft_butterfly(
-    void * LEO_RESTRICT x, void * LEO_RESTRICT y,
-    ffe_t log_m, uint64_t bytes);
-
-
-//------------------------------------------------------------------------------
-// Reed-Solomon Encode
+// Returns false if the self-test fails
+bool Initialize();
 
 void ReedSolomonEncode(
     uint64_t buffer_bytes,
@@ -120,10 +76,6 @@ void ReedSolomonEncode(
     unsigned m, // = NextPow2(recovery_count) * 2 = work_count
     const void* const * const data,
     void** work); // Size of GetEncodeWorkCount()
-
-
-//------------------------------------------------------------------------------
-// Reed-Solomon Decode
 
 void ReedSolomonDecode(
     uint64_t buffer_bytes,
@@ -134,13 +86,6 @@ void ReedSolomonDecode(
     const void* const * const original, // original_count entries
     const void* const * const recovery, // recovery_count entries
     void** work); // n entries
-
-
-//------------------------------------------------------------------------------
-// API
-
-// Returns false if the self-test fails
-bool Initialize();
 
 
 }} // namespace leopard::ff16
