@@ -199,20 +199,38 @@ static void InitializeLogarithmTables()
     The ALTMAP memory layout is used since there is no need to convert in/out.
 */
 
-struct {
-    LEO_ALIGNED LEO_M128 Lo[4];
-    LEO_ALIGNED LEO_M128 Hi[4];
-} static Multiply128LUT[kOrder];
+struct Multiply128LUT_t
+{
+    LEO_M128 Lo[4];
+    LEO_M128 Hi[4];
+};
+
+static const Multiply128LUT_t* Multiply128LUT = nullptr;
+
 #if defined(LEO_TRY_AVX2)
-struct {
-    LEO_ALIGNED LEO_M256 Lo[4];
-    LEO_ALIGNED LEO_M256 Hi[4];
-} static Multiply256LUT[kOrder];
+
+struct Multiply256LUT_t
+{
+    LEO_M256 Lo[4];
+    LEO_M256 Hi[4];
+};
+
+static const Multiply256LUT_t* Multiply256LUT = nullptr;
+
 #endif // LEO_TRY_AVX2
 
 
 void InitializeMultiplyTables()
 {
+    // If we cannot use the PSHUFB instruction, generate Multiply8LUT:
+    if (!CpuHasSSSE3)
+        return;
+
+    if (CpuHasAVX2)
+        Multiply256LUT = reinterpret_cast<const Multiply256LUT_t*>(SIMDSafeAllocate(sizeof(Multiply256LUT_t) * kOrder));
+    else
+        Multiply128LUT = reinterpret_cast<const Multiply128LUT_t*>(SIMDSafeAllocate(sizeof(Multiply128LUT_t) * kOrder));
+
     // For each value we could multiply by:
     for (unsigned log_m = 0; log_m < kOrder; ++log_m)
     {
@@ -232,16 +250,19 @@ void InitializeMultiplyTables()
             const LEO_M128 value_hi = _mm_loadu_si128((LEO_M128*)prod_hi);
 
             // Store in 128-bit wide table
-            _mm_storeu_si128(&Multiply128LUT[log_m].Lo[i], value_lo);
-            _mm_storeu_si128(&Multiply128LUT[log_m].Hi[i], value_hi);
+            if (!CpuHasAVX2)
+            {
+                _mm_storeu_si128((LEO_M128*)&Multiply128LUT[log_m].Lo[i], value_lo);
+                _mm_storeu_si128((LEO_M128*)&Multiply128LUT[log_m].Hi[i], value_hi);
+            }
 
             // Store in 256-bit wide table
 #if defined(LEO_TRY_AVX2)
             if (CpuHasAVX2)
             {
-                _mm256_storeu_si256(&Multiply256LUT[log_m].Lo[i],
+                _mm256_storeu_si256((LEO_M256*)&Multiply256LUT[log_m].Lo[i],
                     _mm256_broadcastsi128_si256(value_lo));
-                _mm256_storeu_si256(&Multiply256LUT[log_m].Hi[i],
+                _mm256_storeu_si256((LEO_M256*)&Multiply256LUT[log_m].Hi[i],
                     _mm256_broadcastsi128_si256(value_hi));
             }
 #endif // LEO_TRY_AVX2

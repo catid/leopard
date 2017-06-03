@@ -157,6 +157,7 @@
 #include "leopard.h"
 
 #include <stdint.h>
+#include <malloc.h>
 
 
 //------------------------------------------------------------------------------
@@ -419,6 +420,43 @@ protected:
     void* DestBuffer;
     const void* Waiting;
 };
+
+
+//------------------------------------------------------------------------------
+// SIMD-Safe Aligned Memory Allocations
+
+static const unsigned kAlignmentBytes = LEO_ALIGN_BYTES;
+
+LEO_FORCE_INLINE unsigned NextAlignedOffset(unsigned offset)
+{
+    return (offset + kAlignmentBytes - 1) & ~(kAlignmentBytes - 1);
+}
+
+static LEO_FORCE_INLINE uint8_t* SIMDSafeAllocate(size_t size)
+{
+    uint8_t* data = (uint8_t*)calloc(1, kAlignmentBytes + size);
+    if (!data)
+        return nullptr;
+    unsigned offset = (unsigned)((uintptr_t)data % kAlignmentBytes);
+    data += kAlignmentBytes - offset;
+    data[-1] = (uint8_t)offset;
+    return data;
+}
+
+static LEO_FORCE_INLINE void SIMDSafeFree(void* ptr)
+{
+    if (!ptr)
+        return;
+    uint8_t* data = (uint8_t*)ptr;
+    unsigned offset = data[-1];
+    if (offset >= kAlignmentBytes)
+    {
+        LEO_DEBUG_BREAK; // Should never happen
+        return;
+    }
+    data -= kAlignmentBytes - offset;
+    free(data);
+}
 
 
 } // namespace leopard

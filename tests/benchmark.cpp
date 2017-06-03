@@ -366,43 +366,6 @@ static void ShuffleDeck16(PCGRandom &prng, uint16_t * LEO_RESTRICT deck, uint32_
 
 
 //------------------------------------------------------------------------------
-// SIMD-Safe Aligned Memory Allocations
-
-static const unsigned kAlignmentBytes = LEO_ALIGN_BYTES;
-
-LEO_FORCE_INLINE unsigned NextAlignedOffset(unsigned offset)
-{
-    return (offset + kAlignmentBytes - 1) & ~(kAlignmentBytes - 1);
-}
-
-static LEO_FORCE_INLINE uint8_t* SIMDSafeAllocate(size_t size)
-{
-    uint8_t* data = (uint8_t*)calloc(1, kAlignmentBytes + size);
-    if (!data)
-        return nullptr;
-    unsigned offset = (unsigned)((uintptr_t)data % kAlignmentBytes);
-    data += kAlignmentBytes - offset;
-    data[-1] = (uint8_t)offset;
-    return data;
-}
-
-static LEO_FORCE_INLINE void SIMDSafeFree(void* ptr)
-{
-    if (!ptr)
-        return;
-    uint8_t* data = (uint8_t*)ptr;
-    unsigned offset = data[-1];
-    if (offset >= kAlignmentBytes)
-    {
-        LEO_DEBUG_BREAK; // Should never happen
-        return;
-    }
-    data -= kAlignmentBytes - offset;
-    free(data);
-}
-
-
-//------------------------------------------------------------------------------
 // Benchmark
 
 static bool Benchmark(const TestParameters& params)
@@ -430,11 +393,11 @@ static bool Benchmark(const TestParameters& params)
 
         t_mem_alloc.BeginCall();
         for (unsigned i = 0, count = params.original_count; i < count; ++i)
-            original_data[i] = SIMDSafeAllocate(params.buffer_bytes);
+            original_data[i] = leopard::SIMDSafeAllocate(params.buffer_bytes);
         for (unsigned i = 0, count = encode_work_count; i < count; ++i)
-            encode_work_data[i] = SIMDSafeAllocate(params.buffer_bytes);
+            encode_work_data[i] = leopard::SIMDSafeAllocate(params.buffer_bytes);
         for (unsigned i = 0, count = decode_work_count; i < count; ++i)
-            decode_work_data[i] = SIMDSafeAllocate(params.buffer_bytes);
+            decode_work_data[i] = leopard::SIMDSafeAllocate(params.buffer_bytes);
         t_mem_alloc.EndCall();
 
         // Generate data:
@@ -479,7 +442,7 @@ static bool Benchmark(const TestParameters& params)
         for (unsigned i = 0, count = params.loss_count; i < count; ++i)
         {
             const unsigned loss_index = original_losses[i];
-            SIMDSafeFree(original_data[loss_index]);
+            leopard::SIMDSafeFree(original_data[loss_index]);
             original_data[loss_index] = nullptr;
         }
 
@@ -493,7 +456,7 @@ static bool Benchmark(const TestParameters& params)
         for (unsigned i = 0, count = recovery_loss_count; i < count; ++i)
         {
             const unsigned loss_index = recovery_losses[i];
-            SIMDSafeFree(encode_work_data[loss_index]);
+            leopard::SIMDSafeFree(encode_work_data[loss_index]);
             encode_work_data[loss_index] = nullptr;
         }
 
@@ -535,11 +498,11 @@ static bool Benchmark(const TestParameters& params)
 
         t_mem_free.BeginCall();
         for (unsigned i = 0, count = params.original_count; i < count; ++i)
-            SIMDSafeFree(original_data[i]);
+            leopard::SIMDSafeFree(original_data[i]);
         for (unsigned i = 0, count = encode_work_count; i < count; ++i)
-            SIMDSafeFree(encode_work_data[i]);
+            leopard::SIMDSafeFree(encode_work_data[i]);
         for (unsigned i = 0, count = decode_work_count; i < count; ++i)
-            SIMDSafeFree(decode_work_data[i]);
+            leopard::SIMDSafeFree(decode_work_data[i]);
         t_mem_free.EndCall();
     }
 

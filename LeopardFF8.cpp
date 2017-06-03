@@ -202,19 +202,27 @@ static void InitializeLogarithmTables()
     Specifically section 6 outlines the algorithm used here for 8-bit fields.
 */
 
-struct {
-    LEO_ALIGNED LEO_M128 Value[2];
-} static Multiply128LUT[kOrder];
+struct Multiply128LUT_t
+{
+    LEO_M128 Value[2];
+};
+
+static const Multiply128LUT_t* Multiply128LUT = nullptr;
 
 #if defined(LEO_TRY_AVX2)
-struct {
-    LEO_ALIGNED LEO_M256 Value[2];
-} static Multiply256LUT[kOrder];
+
+struct Multiply256LUT_t
+{
+    LEO_M256 Value[2];
+};
+
+static const Multiply256LUT_t* Multiply256LUT = nullptr;
+
 #endif // LEO_TRY_AVX2
 
 // Stores the product of x * y at offset x + y * 256
 // Repeated accesses from the same y value are faster
-static ffe_t Multiply8LUT[256 * 256] = {};
+static const ffe_t* Multiply8LUT = nullptr;
 
 
 static void InitializeMultiplyTables()
@@ -222,26 +230,37 @@ static void InitializeMultiplyTables()
     // If we cannot use the PSHUFB instruction, generate Multiply8LUT:
     if (!CpuHasSSSE3)
     {
+        Multiply8LUT = new ffe_t[256 * 256];
+
         // For each left-multiplicand:
         for (unsigned x = 0; x < 256; ++x)
         {
-            ffe_t* lut = Multiply8LUT + x;
+            ffe_t* lut = (ffe_t*)Multiply8LUT + x;
 
-            // Note: Table is already zeroed out so we can skip the zeroes
             if (x == 0)
-                continue;
-
-            const ffe_t log_x = LogLUT[x];
-
-            for (unsigned log_y = 0; log_y < 256; ++log_y, lut += 256)
             {
-                const ffe_t prod = ExpLUT[AddMod(log_x, log_y)];
-                *lut = prod;
+                for (unsigned log_y = 0; log_y < 256; ++log_y, lut += 256)
+                    *lut = 0;
+            }
+            else
+            {
+                const ffe_t log_x = LogLUT[x];
+
+                for (unsigned log_y = 0; log_y < 256; ++log_y, lut += 256)
+                {
+                    const ffe_t prod = ExpLUT[AddMod(log_x, log_y)];
+                    *lut = prod;
+                }
             }
         }
 
         return;
     }
+
+    if (CpuHasAVX2)
+        Multiply256LUT = reinterpret_cast<const Multiply256LUT_t*>(SIMDSafeAllocate(sizeof(Multiply256LUT_t) * kOrder));
+    else
+        Multiply128LUT = reinterpret_cast<const Multiply128LUT_t*>(SIMDSafeAllocate(sizeof(Multiply128LUT_t) * kOrder));
 
     // For each value we could multiply by:
     for (unsigned log_m = 0; log_m < kOrder; ++log_m)
@@ -254,16 +273,18 @@ static void InitializeMultiplyTables()
             for (ffe_t x = 0; x < 16; ++x)
                 lut[x] = MultiplyLog(x << shift, static_cast<ffe_t>(log_m));
 
-            // Store in 128-bit wide table
             const LEO_M128 *v_ptr = reinterpret_cast<const LEO_M128 *>(&lut[0]);
             const LEO_M128 value = _mm_loadu_si128(v_ptr);
-            _mm_storeu_si128(&Multiply128LUT[log_m].Value[i], value);
+
+            // Store in 128-bit wide table
+            if (!CpuHasAVX2)
+                _mm_storeu_si128((LEO_M128*)&Multiply128LUT[log_m].Value[i], value);
 
             // Store in 256-bit wide table
 #if defined(LEO_TRY_AVX2)
             if (CpuHasAVX2)
             {
-                _mm256_storeu_si256(&Multiply256LUT[log_m].Value[i],
+                _mm256_storeu_si256((LEO_M256*)&Multiply256LUT[log_m].Value[i],
                     _mm256_broadcastsi128_si256(value));
             }
 #endif // LEO_TRY_AVX2
