@@ -111,12 +111,12 @@ static void EncodeM1(
     memcpy(recovery_data, original_data[0], buffer_bytes);
 
     leopard::XORSummer summer;
-    summer.Initialize(recovery_data, buffer_bytes);
+    summer.Initialize(recovery_data);
 
     for (unsigned i = 1; i < original_count; ++i)
-        summer.Add(original_data[i]);
+        summer.Add(original_data[i], buffer_bytes);
 
-    summer.Finalize();
+    summer.Finalize(buffer_bytes);
 }
 
 LEO_EXPORT LeopardResult leo_encode(
@@ -223,13 +223,13 @@ static void DecodeM1(
     memcpy(work_data, recovery_data, buffer_bytes);
 
     leopard::XORSummer summer;
-    summer.Initialize(work_data, buffer_bytes);
+    summer.Initialize(work_data);
 
     for (unsigned i = 0; i < original_count; ++i)
         if (original_data[i])
-            summer.Add(original_data[i]);
+            summer.Add(original_data[i], buffer_bytes);
 
-    summer.Finalize();
+    summer.Finalize(buffer_bytes);
 }
 
 LEO_EXPORT LeopardResult leo_decode(

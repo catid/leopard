@@ -77,6 +77,9 @@
     Unrolling is used in the code to accomplish both these optimizations.
     * The final FFT can be truncated also if recovery set is not a power of 2.
     It is easy to truncate the FFT by ending the inner loop early.
+    * The FFT operations can be unrolled two layers at a time so that instead
+    of writing the result of the first layer out and reading it back in for
+    the second layer, those interactions can happen in registers immediately.
 */
 
 /*
@@ -126,6 +129,7 @@
     it starts mixing with non-zero data.
 
     The formal derivative is applied to the entire workspace of N chunks.
+    This is a massive XOR loop that runs 4 columns in parallel for speed.
 
     The FFT is applied to the entire workspace of N chunks.
     The FFT is optimized by only performing intermediate calculations required
@@ -165,20 +169,23 @@
 // Define this to enable the optimized version of FWHT()
 #define LEO_FWHT_OPT
 
-// Avoid scheduling FFT operations that are unused
-#define LEO_SCHEDULE_OPT
-
 // Avoid calculating final FFT values in decoder using bitfield
 #define LEO_ERROR_BITFIELD_OPT
 
 // Optimize M=1 case
 #define LEO_M1_OPT
 
+// Interleave butterfly operations between layer pairs in FFT
+#define LEO_INTERLEAVE_BUTTERFLY4_OPT
+
+
+// FIXME: Remove these when FF16 is done
+
 // Unroll inner loops 4 times
 #define LEO_USE_VECTOR4_OPT
 
-// Interleave butterfly operations between layer pairs in FFT
-#define LEO_INTERLEAVE_BUTTERFLY4_OPT
+// Avoid scheduling FFT operations that are unused
+#define LEO_SCHEDULE_OPT
 
 
 //------------------------------------------------------------------------------
@@ -380,41 +387,39 @@ class XORSummer
 {
 public:
     // Set the addition destination and byte count
-    LEO_FORCE_INLINE void Initialize(void* dest, uint64_t bytes)
+    LEO_FORCE_INLINE void Initialize(void* dest)
     {
         DestBuffer = dest;
-        Bytes = bytes;
         Waiting = nullptr;
     }
 
     // Accumulate some source data
-    LEO_FORCE_INLINE void Add(const void* src)
+    LEO_FORCE_INLINE void Add(const void* src, const uint64_t bytes)
     {
 #ifdef LEO_M1_OPT
         if (Waiting)
         {
-            xor_mem_2to1(DestBuffer, src, Waiting, Bytes);
+            xor_mem_2to1(DestBuffer, src, Waiting, bytes);
             Waiting = nullptr;
         }
         else
             Waiting = src;
 #else // LEO_M1_OPT
-        xor_mem(DestBuffer, src, Bytes);
+        xor_mem(DestBuffer, src, bytes);
 #endif // LEO_M1_OPT
     }
 
     // Finalize in the destination buffer
-    LEO_FORCE_INLINE void Finalize()
+    LEO_FORCE_INLINE void Finalize(const uint64_t bytes)
     {
 #ifdef LEO_M1_OPT
         if (Waiting)
-            xor_mem(DestBuffer, Waiting, Bytes);
+            xor_mem(DestBuffer, Waiting, bytes);
 #endif // LEO_M1_OPT
     }
 
 protected:
     void* DestBuffer;
-    uint64_t Bytes;
     const void* Waiting;
 };
 
