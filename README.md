@@ -99,6 +99,7 @@ Encoder optimizations:
 Unrolling is used in the code to accomplish both these optimizations.
 * The final FFT can be truncated also if recovery set is not a power of 2.
 It is easy to truncate the FFT by ending the inner loop early.
+* The decimation-in-time (DIT) FFT is employed to calculate two layers at a time, rather than writing each layer out and reading it back in for the next layer of the FFT.
 
 
 #### Decoder algorithm:
