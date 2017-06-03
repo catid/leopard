@@ -42,13 +42,13 @@ using namespace std;
 struct TestParameters
 {
 #ifdef LEO_HAS_FF16
-    unsigned original_count = 100; // under 65536
-    unsigned recovery_count = 20; // under 65536 - original_count
+    unsigned original_count = 128; // under 65536
+    unsigned recovery_count = 128; // under 65536 - original_count
 #else
     unsigned original_count = 128; // under 65536
     unsigned recovery_count = 128; // under 65536 - original_count
 #endif
-    unsigned buffer_bytes = 64000; // multiple of 64 bytes
+    unsigned buffer_bytes = 64; // multiple of 64 bytes
     unsigned loss_count = 32768; // some fraction of original_count
     unsigned seed = 2;
     bool multithreaded = true;
@@ -399,7 +399,7 @@ static LEO_FORCE_INLINE void SIMDSafeFree(void* ptr)
 
 static bool Benchmark(const TestParameters& params)
 {
-    const unsigned kTrials = params.original_count > 8000 ? 1 : 1;
+    const unsigned kTrials = params.original_count > 8000 ? 1 : 16;
 
     std::vector<uint8_t*> original_data(params.original_count);
 
@@ -594,7 +594,7 @@ int main(int argc, char **argv)
     if (!Benchmark(params))
         goto Failed;
 
-#if 1
+#if 0
     static const unsigned kMaxRandomData = 32768;
 
     prng.Seed(params.seed, 8);

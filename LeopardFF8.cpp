@@ -228,31 +228,31 @@ struct {
 } static Multiply256LUT[kOrder];
 #endif // LEO_TRY_AVX2
 
-static ffe_t Multiply8LUT[256 * 256];
+// Stores the product of x * y at offset x + y * 256
+// Repeated accesses from the same y value are faster
+static ffe_t Multiply8LUT[256 * 256] = {};
 
 
 void InitializeMultiplyTables()
 {
+    // If we cannot use the PSHUFB instruction, generate Multiply8LUT:
     if (!CpuHasSSSE3)
     {
+        // For each left-multiplicand:
         for (unsigned x = 0; x < 256; ++x)
         {
             ffe_t* lut = Multiply8LUT + x;
 
+            // Note: Table is already zeroed out so we can skip the zeroes
             if (x == 0)
-            {
-                for (unsigned log_y = 0; log_y < 256; ++log_y, lut += 256)
-                    lut[log_y] = 0;
-            }
-            else
-            {
-                const ffe_t log_x = LogLUT[x];
+                continue;
 
-                for (unsigned log_y = 0; log_y < 256; ++log_y, lut += 256)
-                {
-                    const ffe_t prod = ExpLUT[AddMod(log_x, log_y)];
-                    *lut = prod;
-                }
+            const ffe_t log_x = LogLUT[x];
+
+            for (unsigned log_y = 0; log_y < 256; ++log_y, lut += 256)
+            {
+                const ffe_t prod = ExpLUT[AddMod(log_x, log_y)];
+                *lut = prod;
             }
         }
 
@@ -426,37 +426,6 @@ static void FFTInitialize()
     LogWalsh[0] = 0;
 
     FWHT(LogWalsh, kOrder, kOrder);
-}
-
-void VectorFFTButterfly(
-    const uint64_t bytes,
-    unsigned count,
-    void** x,
-    void** y,
-    const ffe_t log_m)
-{
-    if (log_m == kModulus)
-    {
-        VectorXOR(bytes, count, y, x);
-        return;
-    }
-
-#ifdef LEO_USE_VECTOR4_OPT
-    while (count >= 4)
-    {
-        fft_butterfly4(
-            x[0], y[0],
-            x[1], y[1],
-            x[2], y[2],
-            x[3], y[3],
-            log_m, bytes);
-        x += 4, y += 4;
-        count -= 4;
-    }
-#endif // LEO_USE_VECTOR4_OPT
-
-    for (unsigned i = 0; i < count; ++i)
-        fft_butterfly(x[i], y[i], log_m, bytes);
 }
 
 /*
@@ -1073,106 +1042,6 @@ void fft_butterfly(
 #endif
 }
 
-#ifdef LEO_USE_VECTOR4_OPT
-
-void fft_butterfly4(
-    void * LEO_RESTRICT x_0, void * LEO_RESTRICT y_0,
-    void * LEO_RESTRICT x_1, void * LEO_RESTRICT y_1,
-    void * LEO_RESTRICT x_2, void * LEO_RESTRICT y_2,
-    void * LEO_RESTRICT x_3, void * LEO_RESTRICT y_3,
-    ffe_t log_m, uint64_t bytes)
-{
-#if defined(LEO_TRY_AVX2)
-    if (CpuHasAVX2)
-    {
-        const LEO_M256 table_lo_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[0]);
-        const LEO_M256 table_hi_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[1]);
-
-        const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
-
-        LEO_M256 * LEO_RESTRICT x32_0 = reinterpret_cast<LEO_M256 *>(x_0);
-        LEO_M256 * LEO_RESTRICT y32_0 = reinterpret_cast<LEO_M256 *>(y_0);
-        LEO_M256 * LEO_RESTRICT x32_1 = reinterpret_cast<LEO_M256 *>(x_1);
-        LEO_M256 * LEO_RESTRICT y32_1 = reinterpret_cast<LEO_M256 *>(y_1);
-        LEO_M256 * LEO_RESTRICT x32_2 = reinterpret_cast<LEO_M256 *>(x_2);
-        LEO_M256 * LEO_RESTRICT y32_2 = reinterpret_cast<LEO_M256 *>(y_2);
-        LEO_M256 * LEO_RESTRICT x32_3 = reinterpret_cast<LEO_M256 *>(x_3);
-        LEO_M256 * LEO_RESTRICT y32_3 = reinterpret_cast<LEO_M256 *>(y_3);
-
-        do
-        {
-            LEO_FFTB_256(x32_0 + 1, y32_0 + 1);
-            LEO_FFTB_256(x32_0, y32_0);
-            y32_0 += 2, x32_0 += 2;
-
-            LEO_FFTB_256(x32_1 + 1, y32_1 + 1);
-            LEO_FFTB_256(x32_1, y32_1);
-            y32_1 += 2, x32_1 += 2;
-
-            LEO_FFTB_256(x32_2 + 1, y32_2 + 1);
-            LEO_FFTB_256(x32_2, y32_2);
-            y32_2 += 2, x32_2 += 2;
-
-            LEO_FFTB_256(x32_3 + 1, y32_3 + 1);
-            LEO_FFTB_256(x32_3, y32_3);
-            y32_3 += 2, x32_3 += 2;
-
-            bytes -= 64;
-        } while (bytes > 0);
-
-        return;
-    }
-#endif // LEO_TRY_AVX2
-
-    if (CpuHasSSSE3)
-    {
-        const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
-        const LEO_M128 table_hi_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[1]);
-
-        const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
-
-        LEO_M128 * LEO_RESTRICT x16_0 = reinterpret_cast<LEO_M128 *>(x_0);
-        LEO_M128 * LEO_RESTRICT y16_0 = reinterpret_cast<LEO_M128 *>(y_0);
-        LEO_M128 * LEO_RESTRICT x16_1 = reinterpret_cast<LEO_M128 *>(x_1);
-        LEO_M128 * LEO_RESTRICT y16_1 = reinterpret_cast<LEO_M128 *>(y_1);
-        LEO_M128 * LEO_RESTRICT x16_2 = reinterpret_cast<LEO_M128 *>(x_2);
-        LEO_M128 * LEO_RESTRICT y16_2 = reinterpret_cast<LEO_M128 *>(y_2);
-        LEO_M128 * LEO_RESTRICT x16_3 = reinterpret_cast<LEO_M128 *>(x_3);
-        LEO_M128 * LEO_RESTRICT y16_3 = reinterpret_cast<LEO_M128 *>(y_3);
-
-        do
-        {
-            LEO_FFTB_128(x16_0 + 3, y16_0 + 3);
-            LEO_FFTB_128(x16_0 + 2, y16_0 + 2);
-            LEO_FFTB_128(x16_0 + 1, y16_0 + 1);
-            LEO_FFTB_128(x16_0, y16_0);
-            x16_0 += 4, y16_0 += 4;
-
-            LEO_FFTB_128(x16_1 + 3, y16_1 + 3);
-            LEO_FFTB_128(x16_1 + 2, y16_1 + 2);
-            LEO_FFTB_128(x16_1 + 1, y16_1 + 1);
-            LEO_FFTB_128(x16_1, y16_1);
-            x16_1 += 4, y16_1 += 4;
-
-            LEO_FFTB_128(x16_2 + 3, y16_2 + 3);
-            LEO_FFTB_128(x16_2 + 2, y16_2 + 2);
-            LEO_FFTB_128(x16_2 + 1, y16_2 + 1);
-            LEO_FFTB_128(x16_2, y16_2);
-            x16_2 += 4, y16_2 += 4;
-
-            LEO_FFTB_128(x16_3 + 3, y16_3 + 3);
-            LEO_FFTB_128(x16_3 + 2, y16_3 + 2);
-            LEO_FFTB_128(x16_3 + 1, y16_3 + 1);
-            LEO_FFTB_128(x16_3, y16_3);
-            x16_3 += 4, y16_3 += 4;
-
-            bytes -= 64;
-        } while (bytes > 0);
-    }
-}
-
-#endif // LEO_USE_VECTOR4_OPT
-
 static void FFT_DIT4(
     uint64_t bytes,
     void** work,
@@ -1540,6 +1409,66 @@ void ErrorBitfield::Prepare()
         Words[6][i] = Words[6][i + 1] = Words[5][i] | Words[5][i + 1];
 }
 
+
+static void FFT_DIT_ErrorBits(
+    const uint64_t bytes,
+    void** work,
+    const unsigned n_truncated,
+    const unsigned n,
+    const ffe_t* skewLUT,
+    const ErrorBitfield& error_bits)
+{
+    unsigned mip_level = LastNonzeroBit32(n);
+
+    // Decimation in time: Unroll 2 layers at a time
+    unsigned dist4 = n, dist = n >> 2;
+    for (; dist != 0; dist4 = dist, dist >>= 2, mip_level -=2)
+    {
+        // For each set of dist*4 elements:
+        for (unsigned r = 0; r < n_truncated; r += dist4)
+        {
+            if (!error_bits.IsNeeded(mip_level, r))
+                continue;
+
+            const ffe_t log_m01 = skewLUT[r + dist];
+            const ffe_t log_m23 = skewLUT[r + dist * 3];
+            const ffe_t log_m02 = skewLUT[r + dist * 2];
+
+            // For each set of dist elements:
+            for (unsigned i = r; i < r + dist; ++i)
+            {
+                FFT_DIT4(
+                    bytes,
+                    work + i,
+                    dist,
+                    log_m01,
+                    log_m23,
+                    log_m02);
+            }
+        }
+    }
+
+    // If there is one layer left:
+    if (dist4 == 2)
+    {
+        for (unsigned r = 0; r < n_truncated; r += 2)
+        {
+            const ffe_t log_m = skewLUT[r + 1];
+
+            if (log_m == kModulus)
+                xor_mem(work[r + 1], work[r], bytes);
+            else
+            {
+                fft_butterfly(
+                    work[r],
+                    work[r + 1],
+                    log_m,
+                    bytes);
+            }
+        }
+    }
+}
+
 #endif // LEO_ERROR_BITFIELD_OPT
 
 
@@ -1559,7 +1488,7 @@ void ReedSolomonDecode(
     // Fill in error locations
 
 #ifdef LEO_ERROR_BITFIELD_OPT
-    ErrorBitfield ErrorBits;
+    ErrorBitfield error_bits;
 #endif // LEO_ERROR_BITFIELD_OPT
 
     ffe_t ErrorLocations[kOrder] = {};
@@ -1574,13 +1503,13 @@ void ReedSolomonDecode(
         {
             ErrorLocations[i + m] = 1;
 #ifdef LEO_ERROR_BITFIELD_OPT
-            ErrorBits.Set(i + m);
+            error_bits.Set(i + m);
 #endif // LEO_ERROR_BITFIELD_OPT
         }
     }
 
 #ifdef LEO_ERROR_BITFIELD_OPT
-    ErrorBits.Prepare();
+    error_bits.Prepare();
 #endif // LEO_ERROR_BITFIELD_OPT
 
     // Evaluate error locator polynomial
@@ -1642,32 +1571,13 @@ void ReedSolomonDecode(
 
     // work <- FFT(work, n, 0) truncated to m + original_count
 
-    unsigned mip_level = LastNonzeroBit32(n);
     const unsigned output_count = m + original_count;
-    for (unsigned width = (n >> 1); width > 0; width >>= 1, --mip_level)
-    {
-        const ffe_t* skewLUT = FFTSkew + width - 1;
-        const unsigned range = width << 1;
 
-#ifdef LEO_SCHEDULE_OPT
-        for (unsigned j = (m < range) ? 0 : m; j < output_count; j += range)
-#else
-        for (unsigned j = 0; j < n; j += range)
-#endif
-        {
 #ifdef LEO_ERROR_BITFIELD_OPT
-            if (!ErrorBits.IsNeeded(mip_level, j))
-                continue;
-#endif // LEO_ERROR_BITFIELD_OPT
-
-            VectorFFTButterfly(
-                buffer_bytes,
-                width,
-                work + j,
-                work + j + width,
-                skewLUT[j]);
-        }
-    }
+    FFT_DIT_ErrorBits(buffer_bytes, work, output_count, n, FFTSkew - 1, error_bits);
+#else
+    FFT_DIT(buffer_bytes, work, output_count, n, FFTSkew - 1);
+#endif
 
     // Reveal erasures
 
