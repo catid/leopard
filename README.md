@@ -1,7 +1,7 @@
 # Leopard-RS
 ## MDS Reed-Solomon Erasure Correction Codes for Large Data in C
 
-Leopard-RS is a fast library for Forward Error Correction.
+Leopard-RS is a fast library for Erasure Correction Coding.
 From a block of equally sized original data pieces, it generates recovery
 symbols that can be used to recover lost original data.
 
@@ -212,3 +212,5 @@ Inspired by discussion with:
 + Yutaka Sawada <tenfon@outlook.jp> : Author of MultiPar
 
 Software by Christopher A. Taylor <mrcatid@gmail.com>
+
+Please reach out if you need support or would like to collaborate on a project.
