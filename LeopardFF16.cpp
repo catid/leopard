@@ -84,216 +84,48 @@ static LEO_FORCE_INLINE void FWHT_2(ffe_t& LEO_RESTRICT a, ffe_t& LEO_RESTRICT b
     b = dif;
 }
 
-#if defined(LEO_FWHT_OPT)
-
-static LEO_FORCE_INLINE void FWHT_4(ffe_t* data)
-{
-    ffe_t t0 = data[0];
-    ffe_t t1 = data[1];
-    ffe_t t2 = data[2];
-    ffe_t t3 = data[3];
-    FWHT_2(t0, t1);
-    FWHT_2(t2, t3);
-    FWHT_2(t0, t2);
-    FWHT_2(t1, t3);
-    data[0] = t0;
-    data[1] = t1;
-    data[2] = t2;
-    data[3] = t3;
-}
-
 static LEO_FORCE_INLINE void FWHT_4(ffe_t* data, unsigned s)
 {
-    unsigned x = 0;
-    ffe_t t0 = data[x];  x += s;
-    ffe_t t1 = data[x];  x += s;
-    ffe_t t2 = data[x];  x += s;
-    ffe_t t3 = data[x];
-    FWHT_2(t0, t1);
-    FWHT_2(t2, t3);
-    FWHT_2(t0, t2);
-    FWHT_2(t1, t3);
-    unsigned y = 0;
-    data[y] = t0;  y += s;
-    data[y] = t1;  y += s;
-    data[y] = t2;  y += s;
-    data[y] = t3;
-}
+    const unsigned s2 = s << 1;
 
-static inline void FWHT_8(ffe_t* data)
-{
     ffe_t t0 = data[0];
-    ffe_t t1 = data[1];
-    ffe_t t2 = data[2];
-    ffe_t t3 = data[3];
-    ffe_t t4 = data[4];
-    ffe_t t5 = data[5];
-    ffe_t t6 = data[6];
-    ffe_t t7 = data[7];
+    ffe_t t1 = data[s];
+    ffe_t t2 = data[s2];
+    ffe_t t3 = data[s2 + s];
+
     FWHT_2(t0, t1);
     FWHT_2(t2, t3);
-    FWHT_2(t4, t5);
-    FWHT_2(t6, t7);
     FWHT_2(t0, t2);
     FWHT_2(t1, t3);
-    FWHT_2(t4, t6);
-    FWHT_2(t5, t7);
-    FWHT_2(t0, t4);
-    FWHT_2(t1, t5);
-    FWHT_2(t2, t6);
-    FWHT_2(t3, t7);
+
     data[0] = t0;
-    data[1] = t1;
-    data[2] = t2;
-    data[3] = t3;
-    data[4] = t4;
-    data[5] = t5;
-    data[6] = t6;
-    data[7] = t7;
+    data[s] = t1;
+    data[s2] = t2;
+    data[s2 + s] = t3;
 }
 
-static inline void FWHT_16(ffe_t* data)
+// Decimation in time (DIT) Fast Walsh-Hadamard Transform
+// Unrolls pairs of layers to perform cross-layer operations in registers
+// m_truncated: Number of elements that are non-zero at the front of data
+static void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated)
 {
-    ffe_t t0 = data[0];
-    ffe_t t1 = data[1];
-    ffe_t t2 = data[2];
-    ffe_t t3 = data[3];
-    ffe_t t4 = data[4];
-    ffe_t t5 = data[5];
-    ffe_t t6 = data[6];
-    ffe_t t7 = data[7];
-    ffe_t t8 = data[8];
-    ffe_t t9 = data[9];
-    ffe_t t10 = data[10];
-    ffe_t t11 = data[11];
-    ffe_t t12 = data[12];
-    ffe_t t13 = data[13];
-    ffe_t t14 = data[14];
-    ffe_t t15 = data[15];
-    FWHT_2(t0, t1);
-    FWHT_2(t2, t3);
-    FWHT_2(t4, t5);
-    FWHT_2(t6, t7);
-    FWHT_2(t8, t9);
-    FWHT_2(t10, t11);
-    FWHT_2(t12, t13);
-    FWHT_2(t14, t15);
-    FWHT_2(t0, t2);
-    FWHT_2(t1, t3);
-    FWHT_2(t4, t6);
-    FWHT_2(t5, t7);
-    FWHT_2(t8, t10);
-    FWHT_2(t9, t11);
-    FWHT_2(t12, t14);
-    FWHT_2(t13, t15);
-    FWHT_2(t0, t4);
-    FWHT_2(t1, t5);
-    FWHT_2(t2, t6);
-    FWHT_2(t3, t7);
-    FWHT_2(t8, t12);
-    FWHT_2(t9, t13);
-    FWHT_2(t10, t14);
-    FWHT_2(t11, t15);
-    FWHT_2(t0, t8);
-    FWHT_2(t1, t9);
-    FWHT_2(t2, t10);
-    FWHT_2(t3, t11);
-    FWHT_2(t4, t12);
-    FWHT_2(t5, t13);
-    FWHT_2(t6, t14);
-    FWHT_2(t7, t15);
-    data[0] = t0;
-    data[1] = t1;
-    data[2] = t2;
-    data[3] = t3;
-    data[4] = t4;
-    data[5] = t5;
-    data[6] = t6;
-    data[7] = t7;
-    data[8] = t8;
-    data[9] = t9;
-    data[10] = t10;
-    data[11] = t11;
-    data[12] = t12;
-    data[13] = t13;
-    data[14] = t14;
-    data[15] = t15;
-}
-
-static void FWHT_SmallData(ffe_t* data, unsigned bits)
-{
-    const unsigned n = (1UL << bits);
-
-    if (n <= 2)
+    // Decimation in time: Unroll 2 layers at a time
+    unsigned dist = 1, dist4 = 4;
+    for (; dist4 <= m; dist = dist4, dist4 <<= 2)
     {
-        if (n == 2)
-            FWHT_2(data[0], data[1]);
-        return;
+        // For each set of dist*4 elements:
+        for (unsigned r = 0; r < m_truncated; r += dist4)
+        {
+            // For each set of dist elements:
+            for (unsigned i = r; i < r + dist; ++i)
+                FWHT_4(data + i, dist);
+        }
     }
 
-    for (unsigned i = bits; i > 3; i -= 2)
-    {
-        unsigned m = (1UL << i);
-        unsigned m4 = (m >> 2);
-        for (unsigned r = 0; r < n; r += m)
-            for (unsigned j = 0; j < m4; j++)
-                FWHT_4(data + j + r, m4);
-    }
-
-    if (bits & 1)
-    {
-        for (unsigned i0 = 0; i0 < n; i0 += 8)
-            FWHT_8(data + i0);
-    }
-    else
-    {
-        for (unsigned i0 = 0; i0 < n; i0 += 4)
-            FWHT_4(data + i0);
-    }
-}
-
-// Decimation in time (DIT) version
-static void FWHT(ffe_t* data, const unsigned bits)
-{
-    if (bits <= 13)
-    {
-        FWHT_SmallData(data, bits);
-        return;
-    }
-
-    FWHT_2(data[2], data[3]);
-    FWHT_4(data + 4);
-    FWHT_8(data + 8);
-    FWHT_16(data + 16);
-    for (unsigned i = 5; i < bits; ++i)
-        FWHT(data + (unsigned)(1UL << i), i);
-
-    for (unsigned i = 0; i < bits; ++i)
-    {
-        const unsigned mh = (1UL << i);
-        for (unsigned t1 = 0, t2 = mh; t1 < mh; ++t1, ++t2)
-            FWHT_2(data[t1], data[t2]);
-    }
-}
-
-#else // LEO_FWHT_OPT
-
-// Reference implementation
-void FWHT(ffe_t* data, const unsigned bits)
-{
-    const unsigned size = (unsigned)(1UL << bits);
-    for (unsigned width = 1; width < size; width <<= 1)
-        for (unsigned i = 0; i < size; i += (width << 1))
-            for (unsigned j = i; j < (width + i); ++j)
-                FWHT_2(data[j], data[j + width]);
-}
-
-#endif // LEO_FWHT_OPT
-
-// Transform specialized for the finite field order
-void FWHT(ffe_t data[kOrder])
-{
-    FWHT(data, kBits);
+    // If there is one layer left:
+    if (dist < m)
+        for (unsigned i = 0; i < dist; ++i)
+            FWHT_2(data[i], data[i + dist]);
 }
 
 
@@ -945,7 +777,7 @@ static void FFTInitialize()
         LogWalsh[i] = LogLUT[i];
     LogWalsh[0] = 0;
 
-    FWHT(LogWalsh, kBits);
+    FWHT(LogWalsh, kOrder, kOrder);
 }
 
 void VectorFFTButterfly(
@@ -1329,12 +1161,12 @@ void ReedSolomonDecode(
 
     // Evaluate error locator polynomial
 
-    FWHT(ErrorLocations);
+    FWHT(ErrorLocations, kOrder, m + original_count);
 
     for (unsigned i = 0; i < kOrder; ++i)
         ErrorLocations[i] = ((unsigned)ErrorLocations[i] * (unsigned)LogWalsh[i]) % kModulus;
 
-    FWHT(ErrorLocations);
+    FWHT(ErrorLocations, kOrder, kOrder);
 
     // work <- recovery data
 

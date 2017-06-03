@@ -85,8 +85,6 @@ static LEO_FORCE_INLINE void FWHT_2(ffe_t& LEO_RESTRICT a, ffe_t& LEO_RESTRICT b
     b = dif;
 }
 
-#if defined(LEO_FWHT_OPT)
-
 static LEO_FORCE_INLINE void FWHT_4(ffe_t* data, unsigned s)
 {
     const unsigned s2 = s << 1;
@@ -130,20 +128,6 @@ static void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated)
         for (unsigned i = 0; i < dist; ++i)
             FWHT_2(data[i], data[i + dist]);
 }
-
-#else // LEO_FWHT_OPT
-
-// Reference implementation
-static void FWHT(ffe_t* data, const unsigned bits)
-{
-    const unsigned size = (unsigned)(1UL << bits);
-    for (unsigned width = 1; width < size; width <<= 1)
-        for (unsigned i = 0; i < size; i += (width << 1))
-            for (unsigned j = i; j < (width + i); ++j)
-                FWHT_2(data[j], data[j + width]);
-}
-
-#endif // LEO_FWHT_OPT
 
 
 //------------------------------------------------------------------------------

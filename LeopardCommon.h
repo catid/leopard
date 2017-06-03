@@ -166,9 +166,6 @@
 #define LEO_HAS_FF8
 #define LEO_HAS_FF16
 
-// Define this to enable the optimized version of FWHT()
-#define LEO_FWHT_OPT
-
 // Avoid calculating final FFT values in decoder using bitfield
 #define LEO_ERROR_BITFIELD_OPT
 
