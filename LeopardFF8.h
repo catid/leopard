@@ -68,7 +68,7 @@ static const unsigned kPolynomial = 0x11D;
 
 // Transform for a variable number of elements
 // m_truncated: Number of elements that are non-zero at the front of data
-void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated);
+//void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated);
 
 
 //------------------------------------------------------------------------------
@@ -129,7 +129,7 @@ void ReedSolomonEncode(
     unsigned original_count,
     unsigned recovery_count,
     unsigned m, // = NextPow2(recovery_count) * 2 = work_count
-    void* const * const data,
+    const void* const * const data,
     void** work); // Size of GetEncodeWorkCount()
 
 
@@ -142,8 +142,8 @@ void ReedSolomonDecode(
     unsigned recovery_count,
     unsigned m, // = NextPow2(recovery_count)
     unsigned n, // = NextPow2(m + original_count) = work_count
-    void* const * const original, // original_count entries
-    void* const * const recovery, // recovery_count entries
+    const void* const * const original, // original_count entries
+    const void* const * const recovery, // recovery_count entries
     void** work); // n entries
 
 

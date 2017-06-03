@@ -105,7 +105,7 @@ LEO_EXPORT unsigned leo_encode_work_count(
 static void EncodeM1(
     uint64_t buffer_bytes,
     unsigned original_count,
-    void* const * const original_data,
+    const void* const * const original_data,
     void* recovery_data)
 {
     memcpy(recovery_data, original_data[0], buffer_bytes);
@@ -120,13 +120,13 @@ static void EncodeM1(
 }
 
 LEO_EXPORT LeopardResult leo_encode(
-    uint64_t buffer_bytes,              // Number of bytes in each data buffer
-    unsigned original_count,            // Number of original_data[] buffer pointers
-    unsigned recovery_count,            // Number of recovery_data[] buffer pointers
-    unsigned work_count,                // Number of work_data[] buffer pointers, from leo_encode_work_count()
-    void* const * const original_data,  // Array of pointers to original data buffers
-    void** work_data,                   // Array of work buffers
-    unsigned flags)                     // Operation flags
+    uint64_t buffer_bytes,                    // Number of bytes in each data buffer
+    unsigned original_count,                  // Number of original_data[] buffer pointers
+    unsigned recovery_count,                  // Number of recovery_data[] buffer pointers
+    unsigned work_count,                      // Number of work_data[] buffer pointers, from leo_encode_work_count()
+    const void* const * const original_data,  // Array of pointers to original data buffers
+    void** work_data,                         // Array of work buffers
+    unsigned flags)                           // Operation flags
 {
     if (buffer_bytes <= 0 || buffer_bytes % 64 != 0)
         return Leopard_InvalidSize;
@@ -216,7 +216,7 @@ LEO_EXPORT unsigned leo_decode_work_count(
 static void DecodeM1(
     uint64_t buffer_bytes,
     unsigned original_count,
-    void* const * const original_data,
+    const void* const * original_data,
     const void* recovery_data,
     void* work_data)
 {
@@ -233,14 +233,14 @@ static void DecodeM1(
 }
 
 LEO_EXPORT LeopardResult leo_decode(
-    uint64_t buffer_bytes,              // Number of bytes in each data buffer
-    unsigned original_count,            // Number of original_data[] buffer pointers
-    unsigned recovery_count,            // Number of recovery_data[] buffer pointers
-    unsigned work_count,                // Number of buffer pointers in work_data[]
-    void* const * const original_data,  // Array of original data buffers
-    void* const * const recovery_data,  // Array of recovery data buffers
-    void** work_data,                   // Array of work data buffers
-    unsigned flags)                     // Operation flags
+    uint64_t buffer_bytes,                    // Number of bytes in each data buffer
+    unsigned original_count,                  // Number of original_data[] buffer pointers
+    unsigned recovery_count,                  // Number of recovery_data[] buffer pointers
+    unsigned work_count,                      // Number of buffer pointers in work_data[]
+    const void* const * const original_data,  // Array of original data buffers
+    const void* const * const recovery_data,  // Array of recovery data buffers
+    void** work_data,                         // Array of work data buffers
+    unsigned flags)                           // Operation flags
 {
     if (buffer_bytes <= 0 || buffer_bytes % 64 != 0)
         return Leopard_InvalidSize;
