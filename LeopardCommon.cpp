@@ -136,6 +136,13 @@ void InitializeCPUArch()
     CpuHasAVX2 = ((cpu_info[1] & CPUID_EBX_AVX2) != 0);
 #endif // LEO_TRY_AVX2
 
+#ifndef LEO_USE_SSSE3_OPT
+    CpuHasAVX2 = false;
+#endif // LEO_USE_SSSE3_OPT
+#ifndef LEO_USE_AVX2_OPT
+    CpuHasSSSE3 = false;
+#endif // LEO_USE_AVX2_OPT
+
 #endif // LEO_TARGET_MOBILE
 }
 

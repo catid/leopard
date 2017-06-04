@@ -32,6 +32,10 @@
 
 #include <string.h>
 
+#ifdef _MSC_VER
+    #pragma warning(disable: 4752) // found Intel(R) Advanced Vector Extensions; consider using /arch:AVX
+#endif
+
 namespace leopard { namespace ff16 {
 
 
@@ -871,6 +875,9 @@ static void IFFT_DIT(
     // If there is one layer left:
     if (dist < m)
     {
+        // Assuming that dist = m / 2
+        LEO_DEBUG_ASSERT(dist * 2 == m);
+
         const ffe_t log_m = skewLUT[dist];
 
         if (log_m == kModulus)
