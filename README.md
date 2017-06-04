@@ -60,7 +60,7 @@ For full documentation please read `leopard.h`.
 
 #### Benchmarks:
 
-On the the MacBook Pro "Core i7" 2.8 15-Inch (Dual Graphics/Force Touch - Mid-2015 Retina Display) features a 22 nm "Haswell/Crystalwell" 2.8 GHz Intel "Core i7" processor (4980HQ), compiled with Visual Studio 2017 RC:
+On the the MacBook Pro 15-Inch (Mid-2015) featuring a 22 nm "Haswell/Crystalwell" 2.8 GHz Intel Core i7-4980HQ processor, compiled with Visual Studio 2017 RC:
 
 ~~~
 Leopard Encoder(8.192 MB in 128 pieces, 128 losses): Input=2102.67 MB/s, Output=2102.67 MB/s
