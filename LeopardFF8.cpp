@@ -617,6 +617,135 @@ static void IFFT_DIT2(
 #endif
 }
 
+// {x_out, y_out} ^= IFFT_DIT2( {x_in, y_in} )
+static void IFFT_DIT2_xor(
+    void * LEO_RESTRICT x_in, void * LEO_RESTRICT y_in,
+    void * LEO_RESTRICT x_out, void * LEO_RESTRICT y_out,
+    const ffe_t log_m, uint64_t bytes)
+{
+#if defined(LEO_TRY_AVX2)
+    if (CpuHasAVX2)
+    {
+        const LEO_M256 table_lo_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[0]);
+        const LEO_M256 table_hi_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[1]);
+
+        const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
+
+        const LEO_M256 * LEO_RESTRICT x32_in = reinterpret_cast<const LEO_M256 *>(x_in);
+        const LEO_M256 * LEO_RESTRICT y32_in = reinterpret_cast<const LEO_M256 *>(y_in);
+        LEO_M256 * LEO_RESTRICT x32_out = reinterpret_cast<LEO_M256 *>(x_out);
+        LEO_M256 * LEO_RESTRICT y32_out = reinterpret_cast<LEO_M256 *>(y_out);
+
+        do
+        {
+#define LEO_IFFTB_256_XOR(x_ptr_in, y_ptr_in, x_ptr_out, y_ptr_out) { \
+            LEO_M256 x_data_out = _mm256_loadu_si256(x_ptr_out); \
+            LEO_M256 y_data_out = _mm256_loadu_si256(y_ptr_out); \
+            LEO_M256 x_data_in = _mm256_loadu_si256(x_ptr_in); \
+            LEO_M256 y_data_in = _mm256_loadu_si256(y_ptr_in); \
+            y_data_in = _mm256_xor_si256(y_data_in, x_data_in); \
+            y_data_out = _mm256_xor_si256(y_data_out, y_data_in); \
+            _mm256_storeu_si256(y_ptr_out, y_data_out); \
+            LEO_MULADD_256(x_data_in, y_data_in, table_lo_y, table_hi_y); \
+            x_data_out = _mm256_xor_si256(x_data_out, x_data_in); \
+            _mm256_storeu_si256(x_ptr_out, x_data_out); }
+
+            LEO_IFFTB_256_XOR(x32_in + 1, y32_in + 1, x32_out + 1, y32_out + 1);
+            LEO_IFFTB_256_XOR(x32_in, y32_in, x32_out, y32_out);
+            y32_in += 2, x32_in += 2, y32_out += 2, x32_out += 2;
+
+            bytes -= 64;
+        } while (bytes > 0);
+
+        return;
+    }
+#endif // LEO_TRY_AVX2
+
+    if (CpuHasSSSE3)
+    {
+        const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
+        const LEO_M128 table_hi_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[1]);
+
+        const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
+
+        const LEO_M128 * LEO_RESTRICT x16_in = reinterpret_cast<const LEO_M128 *>(x_in);
+        const LEO_M128 * LEO_RESTRICT y16_in = reinterpret_cast<const LEO_M128 *>(y_in);
+        LEO_M128 * LEO_RESTRICT x16_out = reinterpret_cast<LEO_M128 *>(x_out);
+        LEO_M128 * LEO_RESTRICT y16_out = reinterpret_cast<LEO_M128 *>(y_out);
+
+        do
+        {
+#define LEO_IFFTB_128_XOR(x_ptr_in, y_ptr_in, x_ptr_out, y_ptr_out) { \
+            LEO_M128 x_data_out = _mm_loadu_si128(x_ptr_out); \
+            LEO_M128 y_data_out = _mm_loadu_si128(y_ptr_out); \
+            LEO_M128 x_data_in = _mm_loadu_si128(x_ptr_in); \
+            LEO_M128 y_data_in = _mm_loadu_si128(y_ptr_in); \
+            y_data_in = _mm_xor_si128(y_data_in, x_data_in); \
+            y_data_out = _mm_xor_si128(y_data_out, y_data_in); \
+            _mm_storeu_si128(y_ptr_out, y_data_out); \
+            LEO_MULADD_128(x_data_in, y_data_in, table_lo_y, table_hi_y); \
+            x_data_out = _mm_xor_si128(x_data_out, x_data_in); \
+            _mm_storeu_si128(x_ptr_out, x_data_out); }
+
+            LEO_IFFTB_128_XOR(x16_in + 3, y16_in + 3, x16_out + 3, y16_out + 3);
+            LEO_IFFTB_128_XOR(x16_in + 2, y16_in + 2, x16_out + 2, y16_out + 2);
+            LEO_IFFTB_128_XOR(x16_in + 1, y16_in + 1, x16_out + 1, y16_out + 1);
+            LEO_IFFTB_128_XOR(x16_in, y16_in, x16_out, y16_out);
+            y16_in += 4, x16_in += 4, y16_out += 4, x16_out += 4;
+
+            bytes -= 64;
+        } while (bytes > 0);
+
+        return;
+    }
+
+    // Reference version:
+    const ffe_t* LEO_RESTRICT lut = Multiply8LUT + log_m * 256;
+
+    xor_mem(y_in, x_in, bytes);
+
+#ifdef LEO_TARGET_MOBILE
+    ffe_t * LEO_RESTRICT x1 = reinterpret_cast<ffe_t *>(x_in);
+    ffe_t * LEO_RESTRICT y1 = reinterpret_cast<ffe_t *>(y_in);
+
+    do
+    {
+        for (unsigned j = 0; j < 64; ++j)
+            x1[j] ^= lut[y1[j]];
+
+        x1 += 64, y1 += 64;
+        bytes -= 64;
+    } while (bytes > 0);
+#else
+    uint64_t * LEO_RESTRICT x8 = reinterpret_cast<uint64_t *>(x_in);
+    ffe_t * LEO_RESTRICT y1 = reinterpret_cast<ffe_t *>(y_in);
+
+    do
+    {
+        for (unsigned j = 0; j < 8; ++j)
+        {
+            uint64_t x_0 = x8[j];
+            x_0 ^= (uint64_t)lut[y1[0]];
+            x_0 ^= (uint64_t)lut[y1[1]] << 8;
+            x_0 ^= (uint64_t)lut[y1[2]] << 16;
+            x_0 ^= (uint64_t)lut[y1[3]] << 24;
+            x_0 ^= (uint64_t)lut[y1[4]] << 32;
+            x_0 ^= (uint64_t)lut[y1[5]] << 40;
+            x_0 ^= (uint64_t)lut[y1[6]] << 48;
+            x_0 ^= (uint64_t)lut[y1[7]] << 56;
+            x8[j] = x_0;
+            y1 += 8;
+        }
+
+        x8 += 8;
+        bytes -= 64;
+    } while (bytes > 0);
+#endif
+
+    xor_mem(y_out, y_in, bytes);
+    xor_mem(x_out, x_in, bytes);
+}
+
 // 4-way butterfly
 static void IFFT_DIT4(
     uint64_t bytes,
@@ -677,7 +806,6 @@ static void IFFT_DIT4(
             _mm256_storeu_si256(work1, work1_reg);
             _mm256_storeu_si256(work2, work2_reg);
             _mm256_storeu_si256(work3, work3_reg);
-
             work0++, work1++, work2++, work3++;
 
             bytes -= 32;
@@ -735,7 +863,6 @@ static void IFFT_DIT4(
             _mm_storeu_si128(work1, work1_reg);
             _mm_storeu_si128(work2, work2_reg);
             _mm_storeu_si128(work3, work3_reg);
-
             work0++, work1++, work2++, work3++;
 
             bytes -= 16;
@@ -828,27 +955,49 @@ static void IFFT_DIT(
     // If there is one layer left:
     if (dist < m)
     {
+        // Assuming that dist = m / 2
+        LEO_DEBUG_ASSERT(dist * 2 == m);
+
         const ffe_t log_m = skewLUT[dist];
 
-        if (log_m == kModulus)
-            VectorXOR(bytes, dist, work + dist, work);
+        if (xor_result)
+        {
+            if (log_m == kModulus)
+            {
+                for (unsigned i = 0; i < dist; ++i)
+                    xor_mem_2to1(xor_result[i], work[i], work[i + dist], bytes);
+            }
+            else
+            {
+                for (unsigned i = 0; i < dist; ++i)
+                {
+                    IFFT_DIT2_xor(
+                        work[i],
+                        work[i + dist],
+                        xor_result[i],
+                        xor_result[i + dist],
+                        log_m,
+                        bytes);
+                }
+            }
+        }
         else
         {
-            for (unsigned i = 0; i < dist; ++i)
+            if (log_m == kModulus)
+                VectorXOR(bytes, dist, work + dist, work);
+            else
             {
-                IFFT_DIT2(
-                    work[i],
-                    work[i + dist],
-                    log_m,
-                    bytes);
+                for (unsigned i = 0; i < dist; ++i)
+                {
+                    IFFT_DIT2(
+                        work[i],
+                        work[i + dist],
+                        log_m,
+                        bytes);
+                }
             }
         }
     }
-
-    // FIXME: Roll into last layer
-    if (xor_result)
-        for (unsigned i = 0; i < m; ++i)
-            xor_mem(xor_result[i], work[i], bytes);
 }
 
 /*
