@@ -32,8 +32,8 @@
     TODO:
 
     Short-term:
-    + Port DIT FFT code to FF16
-    + Unroll first/final butterflies to avoid extra copies/xors in encoder
+    + Unroll first/final butterflies to avoid extra copies/xors in encoder (17% of encode time)
+    + Add compile-time selectable XOR-only rowops instead of MULADD
     + Multithreading
 
     Mid-term:
