@@ -60,7 +60,22 @@ For full documentation please read `leopard.h`.
 
 #### Benchmarks:
 
-Benchmark results are available here:
+On the the MacBook Pro "Core i7" 2.8 15-Inch (Dual Graphics/Force Touch - Mid-2015 Retina Display) features a 22 nm "Haswell/Crystalwell" 2.8 GHz Intel "Core i7" processor (4980HQ), compiled with Visual Studio 2017 RC:
+
+~~~
+Leopard Encoder(8.192 MB in 128 pieces, 128 losses): Input=2102.67 MB/s, Output=2102.67 MB/s
+Leopard Decoder(8.192 MB in 128 pieces, 128 losses): Input=686.212 MB/s, Output=686.212 MB/s
+
+Leopard Encoder(64 MB in 1000 pieces, 200 losses): Input=2194.94 MB/s, Output=438.988 MB/s
+Leopard Decoder(64 MB in 1000 pieces, 200 losses): Input=455.633 MB/s, Output=91.1265 MB/s
+
+Leopard Encoder(2097.15 MB in 32768 pieces, 32768 losses): Input=451.168 MB/s, Output=451.168 MB/s
+Leopard Decoder(2097.15 MB in 32768 pieces, 32768 losses): Input=190.471 MB/s, Output=190.471 MB/s
+~~~
+
+2 GB of 64 KB pieces encoded in 4.6 seconds, and worst-case recovery in 11 seconds.
+
+More benchmark results are available here:
 [https://github.com/catid/leopard/blob/master/Benchmarks.md](https://github.com/catid/leopard/blob/master/Benchmarks.md)
 
 
