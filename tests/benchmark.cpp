@@ -42,8 +42,8 @@ using namespace std;
 struct TestParameters
 {
 #ifdef LEO_HAS_FF16
-    unsigned original_count = 1000; // under 65536
-    unsigned recovery_count = 200; // under 65536 - original_count
+    unsigned original_count = 32768; // under 65536
+    unsigned recovery_count = 32768; // under 65536 - original_count
 #else
     unsigned original_count = 128; // under 65536
     unsigned recovery_count = 128; // under 65536 - original_count
@@ -565,7 +565,7 @@ int main(int argc, char **argv)
     if (!Benchmark(params))
         goto Failed;
 
-#if 0
+#if 1
     static const unsigned kMaxRandomData = 32768;
 
     prng.Seed(params.seed, 8);
@@ -582,7 +582,7 @@ int main(int argc, char **argv)
     }
 #endif
 
-#if 1
+#if 0
     for (unsigned original_count = 1; original_count <= 256; ++original_count)
     {
         for (unsigned recovery_count = 1; recovery_count <= original_count; ++recovery_count)

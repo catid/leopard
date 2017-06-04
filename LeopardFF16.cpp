@@ -734,50 +734,54 @@ static void IFFT_DIT4(
 
         do
         {
-            LEO_M128 work_reg_lo_0 = _mm_loadu_si128(work0);
-            LEO_M128 work_reg_hi_0 = _mm_loadu_si128(work0 + 1);
-            LEO_M128 work_reg_lo_1 = _mm_loadu_si128(work1);
-            LEO_M128 work_reg_hi_1 = _mm_loadu_si128(work1 + 1);
-
-            // First layer:
-            work_reg_lo_1 = _mm_xor_si128(work_reg_lo_0, work_reg_lo_1);
-            work_reg_hi_1 = _mm_xor_si128(work_reg_hi_0, work_reg_hi_1);
-            if (log_m01 != kModulus)
-                LEO_MULADD_128(0, 1, 01);
-
-            LEO_M128 work_reg_lo_2 = _mm_loadu_si128(work2);
-            LEO_M128 work_reg_hi_2 = _mm_loadu_si128(work2 + 1);
-            LEO_M128 work_reg_lo_3 = _mm_loadu_si128(work3);
-            LEO_M128 work_reg_hi_3 = _mm_loadu_si128(work3 + 1);
-
-            work_reg_lo_3 = _mm_xor_si128(work_reg_lo_2, work_reg_lo_3);
-            work_reg_hi_3 = _mm_xor_si128(work_reg_hi_2, work_reg_hi_3);
-            if (log_m23 != kModulus)
-                LEO_MULADD_128(2, 3, 23);
-
-            // Second layer:
-            work_reg_lo_2 = _mm_xor_si128(work_reg_lo_0, work_reg_lo_2);
-            work_reg_hi_2 = _mm_xor_si128(work_reg_hi_0, work_reg_hi_2);
-            work_reg_lo_3 = _mm_xor_si128(work_reg_lo_1, work_reg_lo_3);
-            work_reg_hi_3 = _mm_xor_si128(work_reg_hi_1, work_reg_hi_3);
-            if (log_m02 != kModulus)
+            for (unsigned i = 0; i < 2; ++i)
             {
-                LEO_MULADD_128(0, 2, 02);
-                LEO_MULADD_128(1, 3, 02);
+                LEO_M128 work_reg_lo_0 = _mm_loadu_si128(work0);
+                LEO_M128 work_reg_hi_0 = _mm_loadu_si128(work0 + 2);
+                LEO_M128 work_reg_lo_1 = _mm_loadu_si128(work1);
+                LEO_M128 work_reg_hi_1 = _mm_loadu_si128(work1 + 2);
+
+                // First layer:
+                work_reg_lo_1 = _mm_xor_si128(work_reg_lo_0, work_reg_lo_1);
+                work_reg_hi_1 = _mm_xor_si128(work_reg_hi_0, work_reg_hi_1);
+                if (log_m01 != kModulus)
+                    LEO_MULADD_128(0, 1, 01);
+
+                LEO_M128 work_reg_lo_2 = _mm_loadu_si128(work2);
+                LEO_M128 work_reg_hi_2 = _mm_loadu_si128(work2 + 2);
+                LEO_M128 work_reg_lo_3 = _mm_loadu_si128(work3);
+                LEO_M128 work_reg_hi_3 = _mm_loadu_si128(work3 + 2);
+
+                work_reg_lo_3 = _mm_xor_si128(work_reg_lo_2, work_reg_lo_3);
+                work_reg_hi_3 = _mm_xor_si128(work_reg_hi_2, work_reg_hi_3);
+                if (log_m23 != kModulus)
+                    LEO_MULADD_128(2, 3, 23);
+
+                // Second layer:
+                work_reg_lo_2 = _mm_xor_si128(work_reg_lo_0, work_reg_lo_2);
+                work_reg_hi_2 = _mm_xor_si128(work_reg_hi_0, work_reg_hi_2);
+                work_reg_lo_3 = _mm_xor_si128(work_reg_lo_1, work_reg_lo_3);
+                work_reg_hi_3 = _mm_xor_si128(work_reg_hi_1, work_reg_hi_3);
+                if (log_m02 != kModulus)
+                {
+                    LEO_MULADD_128(0, 2, 02);
+                    LEO_MULADD_128(1, 3, 02);
+                }
+
+                _mm_storeu_si128(work0, work_reg_lo_0);
+                _mm_storeu_si128(work0 + 2, work_reg_hi_0);
+                _mm_storeu_si128(work1, work_reg_lo_1);
+                _mm_storeu_si128(work1 + 2, work_reg_hi_1);
+                _mm_storeu_si128(work2, work_reg_lo_2);
+                _mm_storeu_si128(work2 + 2, work_reg_hi_2);
+                _mm_storeu_si128(work3, work_reg_lo_3);
+                _mm_storeu_si128(work3 + 2, work_reg_hi_3);
+
+                work0++, work1++, work2++, work3++;
             }
 
-            _mm_storeu_si128(work0, work_reg_lo_0);
-            _mm_storeu_si128(work0 + 1, work_reg_hi_0);
-            _mm_storeu_si128(work1, work_reg_lo_1);
-            _mm_storeu_si128(work1 + 1, work_reg_hi_1);
-            _mm_storeu_si128(work2, work_reg_lo_2);
-            _mm_storeu_si128(work2 + 1, work_reg_hi_2);
-            _mm_storeu_si128(work3, work_reg_lo_3);
-            _mm_storeu_si128(work3 + 1, work_reg_hi_3);
-
             work0 += 2, work1 += 2, work2 += 2, work3 += 2;
-
-            bytes -= 32;
+            bytes -= 64;
         } while (bytes > 0);
 
         return;
@@ -1136,50 +1140,54 @@ static void FFT_DIT4(
 
         do
         {
-            LEO_M128 work_reg_lo_0 = _mm_loadu_si128(work0);
-            LEO_M128 work_reg_hi_0 = _mm_loadu_si128(work0 + 1);
-            LEO_M128 work_reg_lo_1 = _mm_loadu_si128(work1);
-            LEO_M128 work_reg_hi_1 = _mm_loadu_si128(work1 + 1);
-            LEO_M128 work_reg_lo_2 = _mm_loadu_si128(work2);
-            LEO_M128 work_reg_hi_2 = _mm_loadu_si128(work2 + 1);
-            LEO_M128 work_reg_lo_3 = _mm_loadu_si128(work3);
-            LEO_M128 work_reg_hi_3 = _mm_loadu_si128(work3 + 1);
-
-            // First layer:
-            if (log_m02 != kModulus)
+            for (unsigned i = 0; i < 2; ++i)
             {
-                LEO_MULADD_128(0, 2, 02);
-                LEO_MULADD_128(1, 3, 02);
+                LEO_M128 work_reg_lo_0 = _mm_loadu_si128(work0);
+                LEO_M128 work_reg_hi_0 = _mm_loadu_si128(work0 + 2);
+                LEO_M128 work_reg_lo_1 = _mm_loadu_si128(work1);
+                LEO_M128 work_reg_hi_1 = _mm_loadu_si128(work1 + 2);
+                LEO_M128 work_reg_lo_2 = _mm_loadu_si128(work2);
+                LEO_M128 work_reg_hi_2 = _mm_loadu_si128(work2 + 2);
+                LEO_M128 work_reg_lo_3 = _mm_loadu_si128(work3);
+                LEO_M128 work_reg_hi_3 = _mm_loadu_si128(work3 + 2);
+
+                // First layer:
+                if (log_m02 != kModulus)
+                {
+                    LEO_MULADD_128(0, 2, 02);
+                    LEO_MULADD_128(1, 3, 02);
+                }
+                work_reg_lo_2 = _mm_xor_si128(work_reg_lo_0, work_reg_lo_2);
+                work_reg_hi_2 = _mm_xor_si128(work_reg_hi_0, work_reg_hi_2);
+                work_reg_lo_3 = _mm_xor_si128(work_reg_lo_1, work_reg_lo_3);
+                work_reg_hi_3 = _mm_xor_si128(work_reg_hi_1, work_reg_hi_3);
+
+                // Second layer:
+                if (log_m01 != kModulus)
+                    LEO_MULADD_128(0, 1, 01);
+                work_reg_lo_1 = _mm_xor_si128(work_reg_lo_0, work_reg_lo_1);
+                work_reg_hi_1 = _mm_xor_si128(work_reg_hi_0, work_reg_hi_1);
+
+                _mm_storeu_si128(work0, work_reg_lo_0);
+                _mm_storeu_si128(work0 + 2, work_reg_hi_0);
+                _mm_storeu_si128(work1, work_reg_lo_1);
+                _mm_storeu_si128(work1 + 2, work_reg_hi_1);
+
+                if (log_m23 != kModulus)
+                    LEO_MULADD_128(2, 3, 23);
+                work_reg_lo_3 = _mm_xor_si128(work_reg_lo_2, work_reg_lo_3);
+                work_reg_hi_3 = _mm_xor_si128(work_reg_hi_2, work_reg_hi_3);
+
+                _mm_storeu_si128(work2, work_reg_lo_2);
+                _mm_storeu_si128(work2 + 2, work_reg_hi_2);
+                _mm_storeu_si128(work3, work_reg_lo_3);
+                _mm_storeu_si128(work3 + 2, work_reg_hi_3);
+
+                work0++, work1++, work2++, work3++;
             }
-            work_reg_lo_2 = _mm_xor_si128(work_reg_lo_0, work_reg_lo_2);
-            work_reg_hi_2 = _mm_xor_si128(work_reg_hi_0, work_reg_hi_2);
-            work_reg_lo_3 = _mm_xor_si128(work_reg_lo_1, work_reg_lo_3);
-            work_reg_hi_3 = _mm_xor_si128(work_reg_hi_1, work_reg_hi_3);
-
-            // Second layer:
-            if (log_m01 != kModulus)
-                LEO_MULADD_128(0, 1, 01);
-            work_reg_lo_1 = _mm_xor_si128(work_reg_lo_0, work_reg_lo_1);
-            work_reg_hi_1 = _mm_xor_si128(work_reg_hi_0, work_reg_hi_1);
-
-            _mm_storeu_si128(work0, work_reg_lo_0);
-            _mm_storeu_si128(work0 + 1, work_reg_hi_0);
-            _mm_storeu_si128(work1, work_reg_lo_1);
-            _mm_storeu_si128(work1 + 1, work_reg_hi_1);
-
-            if (log_m23 != kModulus)
-                LEO_MULADD_128(2, 3, 23);
-            work_reg_lo_3 = _mm_xor_si128(work_reg_lo_2, work_reg_lo_3);
-            work_reg_hi_3 = _mm_xor_si128(work_reg_hi_2, work_reg_hi_3);
-
-            _mm_storeu_si128(work2, work_reg_lo_2);
-            _mm_storeu_si128(work2 + 1, work_reg_hi_2);
-            _mm_storeu_si128(work3, work_reg_lo_3);
-            _mm_storeu_si128(work3 + 1, work_reg_hi_3);
 
             work0 += 2, work1 += 2, work2 += 2, work3 += 2;
-
-            bytes -= 32;
+            bytes -= 64;
         } while (bytes > 0);
 
         return;
