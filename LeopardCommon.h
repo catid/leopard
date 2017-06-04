@@ -170,14 +170,14 @@
 // Avoid calculating final FFT values in decoder using bitfield
 #define LEO_ERROR_BITFIELD_OPT
 
+// Interleave butterfly operations between layer pairs in FFT
+#define LEO_INTERLEAVE_BUTTERFLY4_OPT
+
 // Optimize M=1 case
 #define LEO_M1_OPT
 
 // Unroll inner loops 4 times
 #define LEO_USE_VECTOR4_OPT
-
-// Interleave butterfly operations between layer pairs in FFT
-//#define LEO_INTERLEAVE_BUTTERFLY4_OPT
 
 
 //------------------------------------------------------------------------------

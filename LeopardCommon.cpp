@@ -135,6 +135,7 @@ void InitializeCPUArch()
     _cpuid(cpu_info, 7);
     CpuHasAVX2 = ((cpu_info[1] & CPUID_EBX_AVX2) != 0);
 #endif // LEO_TRY_AVX2
+    //CpuHasAVX2 = false;
 
 #endif // LEO_TARGET_MOBILE
 }

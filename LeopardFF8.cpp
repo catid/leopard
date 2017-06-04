@@ -209,6 +209,15 @@ struct Multiply128LUT_t
 
 static const Multiply128LUT_t* Multiply128LUT = nullptr;
 
+// 128-bit x_reg ^= y_reg * log_m
+#define LEO_MULADD_128(x_reg, y_reg, table_lo, table_hi) { \
+                LEO_M128 lo = _mm_and_si128(y_reg, clr_mask); \
+                lo = _mm_shuffle_epi8(table_lo, lo); \
+                LEO_M128 hi = _mm_srli_epi64(y_reg, 4); \
+                hi = _mm_and_si128(hi, clr_mask); \
+                hi = _mm_shuffle_epi8(table_hi, hi); \
+                x_reg = _mm_xor_si128(x_reg, _mm_xor_si128(lo, hi)); }
+
 #if defined(LEO_TRY_AVX2)
 
 struct Multiply256LUT_t
@@ -217,6 +226,15 @@ struct Multiply256LUT_t
 };
 
 static const Multiply256LUT_t* Multiply256LUT = nullptr;
+
+// 256-bit x_reg ^= y_reg * log_m
+#define LEO_MULADD_256(x_reg, y_reg, table_lo, table_hi) { \
+                LEO_M256 lo = _mm256_and_si256(y_reg, clr_mask); \
+                lo = _mm256_shuffle_epi8(table_lo, lo); \
+                LEO_M256 hi = _mm256_srli_epi64(y_reg, 4); \
+                hi = _mm256_and_si256(hi, clr_mask); \
+                hi = _mm256_shuffle_epi8(table_hi, hi); \
+                x_reg = _mm256_xor_si256(x_reg, _mm256_xor_si256(lo, hi)); }
 
 #endif // LEO_TRY_AVX2
 
@@ -443,9 +461,9 @@ static void FFTInitialize()
 
     The ifft_butterfly(x, y) operation:
 
+        y[] ^= x[]
         if (log_m != kModulus)
             x[] ^= exp(log(y[]) + log_m)
-        y[] ^= x[]
 
     Layer 0:
         0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7
@@ -509,12 +527,7 @@ static void IFFT_DIT2(
             LEO_M256 y_data = _mm256_loadu_si256(y_ptr); \
             y_data = _mm256_xor_si256(y_data, x_data); \
             _mm256_storeu_si256(y_ptr, y_data); \
-            LEO_M256 lo = _mm256_and_si256(y_data, clr_mask); \
-            lo = _mm256_shuffle_epi8(table_lo_y, lo); \
-            LEO_M256 hi = _mm256_srli_epi64(y_data, 4); \
-            hi = _mm256_and_si256(hi, clr_mask); \
-            hi = _mm256_shuffle_epi8(table_hi_y, hi); \
-            x_data = _mm256_xor_si256(x_data, _mm256_xor_si256(lo, hi)); \
+            LEO_MULADD_256(x_data, y_data, table_lo_y, table_hi_y); \
             _mm256_storeu_si256(x_ptr, x_data); }
 
             LEO_IFFTB_256(x32 + 1, y32 + 1);
@@ -545,12 +558,7 @@ static void IFFT_DIT2(
             LEO_M128 y_data = _mm_loadu_si128(y_ptr); \
             y_data = _mm_xor_si128(y_data, x_data); \
             _mm_storeu_si128(y_ptr, y_data); \
-            LEO_M128 lo = _mm_and_si128(y_data, clr_mask); \
-            lo = _mm_shuffle_epi8(table_lo_y, lo); \
-            LEO_M128 hi = _mm_srli_epi64(y_data, 4); \
-            hi = _mm_and_si128(hi, clr_mask); \
-            hi = _mm_shuffle_epi8(table_hi_y, hi); \
-            x_data = _mm_xor_si128(x_data, _mm_xor_si128(lo, hi)); \
+            LEO_MULADD_128(x_data, y_data, table_lo_y, table_hi_y); \
             _mm_storeu_si128(x_ptr, x_data); }
 
             LEO_IFFTB_128(x16 + 3, y16 + 3);
@@ -640,23 +648,13 @@ static void IFFT_DIT4(
 
         do
         {
-#define LEO_IFFTB4_256(x_reg, y_reg, table_lo, table_hi) { \
-                LEO_M256 lo = _mm256_and_si256(y_reg, clr_mask); \
-                lo = _mm256_shuffle_epi8(table_lo, lo); \
-                LEO_M256 hi = _mm256_srli_epi64(y_reg, 4); \
-                hi = _mm256_and_si256(hi, clr_mask); \
-                hi = _mm256_shuffle_epi8(table_hi, hi); \
-                x_reg = _mm256_xor_si256(x_reg, _mm256_xor_si256(lo, hi)); }
-
             LEO_M256 work0_reg = _mm256_loadu_si256(work0);
             LEO_M256 work1_reg = _mm256_loadu_si256(work1);
 
             // First layer:
             work1_reg = _mm256_xor_si256(work0_reg, work1_reg);
             if (log_m01 != kModulus)
-            {
-                LEO_IFFTB4_256(work0_reg, work1_reg, t01_lo, t01_hi);
-            }
+                LEO_MULADD_256(work0_reg, work1_reg, t01_lo, t01_hi);
 
             LEO_M256 work2_reg = _mm256_loadu_si256(work2);
             LEO_M256 work3_reg = _mm256_loadu_si256(work3);
@@ -664,17 +662,15 @@ static void IFFT_DIT4(
             // First layer:
             work3_reg = _mm256_xor_si256(work2_reg, work3_reg);
             if (log_m23 != kModulus)
-            {
-                LEO_IFFTB4_256(work2_reg, work3_reg, t23_lo, t23_hi);
-            }
+                LEO_MULADD_256(work2_reg, work3_reg, t23_lo, t23_hi);
 
             // Second layer:
             work2_reg = _mm256_xor_si256(work0_reg, work2_reg);
             work3_reg = _mm256_xor_si256(work1_reg, work3_reg);
             if (log_m02 != kModulus)
             {
-                LEO_IFFTB4_256(work0_reg, work2_reg, t02_lo, t02_hi);
-                LEO_IFFTB4_256(work1_reg, work3_reg, t02_lo, t02_hi);
+                LEO_MULADD_256(work0_reg, work2_reg, t02_lo, t02_hi);
+                LEO_MULADD_256(work1_reg, work3_reg, t02_lo, t02_hi);
             }
 
             _mm256_storeu_si256(work0, work0_reg);
@@ -710,23 +706,13 @@ static void IFFT_DIT4(
 
         do
         {
-#define LEO_IFFTB4_128(x_reg, y_reg, table_lo, table_hi) { \
-                LEO_M128 lo = _mm_and_si128(y_reg, clr_mask); \
-                lo = _mm_shuffle_epi8(table_lo, lo); \
-                LEO_M128 hi = _mm_srli_epi64(y_reg, 4); \
-                hi = _mm_and_si128(hi, clr_mask); \
-                hi = _mm_shuffle_epi8(table_hi, hi); \
-                x_reg = _mm_xor_si128(x_reg, _mm_xor_si128(lo, hi)); }
-
             LEO_M128 work0_reg = _mm_loadu_si128(work0);
             LEO_M128 work1_reg = _mm_loadu_si128(work1);
 
             // First layer:
             work1_reg = _mm_xor_si128(work0_reg, work1_reg);
             if (log_m01 != kModulus)
-            {
-                LEO_IFFTB4_128(work0_reg, work1_reg, t01_lo, t01_hi);
-            }
+                LEO_MULADD_128(work0_reg, work1_reg, t01_lo, t01_hi);
 
             LEO_M128 work2_reg = _mm_loadu_si128(work2);
             LEO_M128 work3_reg = _mm_loadu_si128(work3);
@@ -734,17 +720,15 @@ static void IFFT_DIT4(
             // First layer:
             work3_reg = _mm_xor_si128(work2_reg, work3_reg);
             if (log_m23 != kModulus)
-            {
-                LEO_IFFTB4_128(work2_reg, work3_reg, t23_lo, t23_hi);
-            }
+                LEO_MULADD_128(work2_reg, work3_reg, t23_lo, t23_hi);
 
             // Second layer:
             work2_reg = _mm_xor_si128(work0_reg, work2_reg);
             work3_reg = _mm_xor_si128(work1_reg, work3_reg);
             if (log_m02 != kModulus)
             {
-                LEO_IFFTB4_128(work0_reg, work2_reg, t02_lo, t02_hi);
-                LEO_IFFTB4_128(work1_reg, work3_reg, t02_lo, t02_hi);
+                LEO_MULADD_128(work0_reg, work2_reg, t02_lo, t02_hi);
+                LEO_MULADD_128(work1_reg, work3_reg, t02_lo, t02_hi);
             }
 
             _mm_storeu_si128(work0, work0_reg);
@@ -877,9 +861,9 @@ static void IFFT_DIT(
 
     The fft_butterfly(x, y) operation:
 
-        y[] ^= x[]
         if (log_m != kModulus)
             x[] ^= exp(log(y[]) + log_m)
+        y[] ^= x[]
 
     Layer 0:
         0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7
@@ -940,13 +924,8 @@ static void FFT_DIT2(
         {
 #define LEO_FFTB_256(x_ptr, y_ptr) { \
             LEO_M256 y_data = _mm256_loadu_si256(y_ptr); \
-            LEO_M256 lo = _mm256_and_si256(y_data, clr_mask); \
-            lo = _mm256_shuffle_epi8(table_lo_y, lo); \
-            LEO_M256 hi = _mm256_srli_epi64(y_data, 4); \
-            hi = _mm256_and_si256(hi, clr_mask); \
-            hi = _mm256_shuffle_epi8(table_hi_y, hi); \
             LEO_M256 x_data = _mm256_loadu_si256(x_ptr); \
-            x_data = _mm256_xor_si256(x_data, _mm256_xor_si256(lo, hi)); \
+            LEO_MULADD_256(x_data, y_data, table_lo_y, table_hi_y); \
             y_data = _mm256_xor_si256(y_data, x_data); \
             _mm256_storeu_si256(x_ptr, x_data); \
             _mm256_storeu_si256(y_ptr, y_data); }
@@ -976,13 +955,8 @@ static void FFT_DIT2(
         {
 #define LEO_FFTB_128(x_ptr, y_ptr) { \
             LEO_M128 y_data = _mm_loadu_si128(y_ptr); \
-            LEO_M128 lo = _mm_and_si128(y_data, clr_mask); \
-            lo = _mm_shuffle_epi8(table_lo_y, lo); \
-            LEO_M128 hi = _mm_srli_epi64(y_data, 4); \
-            hi = _mm_and_si128(hi, clr_mask); \
-            hi = _mm_shuffle_epi8(table_hi_y, hi); \
             LEO_M128 x_data = _mm_loadu_si128(x_ptr); \
-            x_data = _mm_xor_si128(x_data, _mm_xor_si128(lo, hi)); \
+            LEO_MULADD_128(x_data, y_data, table_lo_y, table_hi_y); \
             y_data = _mm_xor_si128(y_data, x_data); \
             _mm_storeu_si128(x_ptr, x_data); \
             _mm_storeu_si128(y_ptr, y_data); }
@@ -1076,14 +1050,6 @@ static void FFT_DIT4(
 
         do
         {
-#define LEO_FFTB4_256(x_reg, y_reg, table_lo, table_hi) { \
-                LEO_M256 lo = _mm256_and_si256(y_reg, clr_mask); \
-                lo = _mm256_shuffle_epi8(table_lo, lo); \
-                LEO_M256 hi = _mm256_srli_epi64(y_reg, 4); \
-                hi = _mm256_and_si256(hi, clr_mask); \
-                hi = _mm256_shuffle_epi8(table_hi, hi); \
-                x_reg = _mm256_xor_si256(x_reg, _mm256_xor_si256(lo, hi)); }
-
             LEO_M256 work0_reg = _mm256_loadu_si256(work0);
             LEO_M256 work2_reg = _mm256_loadu_si256(work2);
             LEO_M256 work1_reg = _mm256_loadu_si256(work1);
@@ -1092,17 +1058,15 @@ static void FFT_DIT4(
             // First layer:
             if (log_m02 != kModulus)
             {
-                LEO_FFTB4_256(work0_reg, work2_reg, t02_lo, t02_hi);
-                LEO_FFTB4_256(work1_reg, work3_reg, t02_lo, t02_hi);
+                LEO_MULADD_256(work0_reg, work2_reg, t02_lo, t02_hi);
+                LEO_MULADD_256(work1_reg, work3_reg, t02_lo, t02_hi);
             }
             work2_reg = _mm256_xor_si256(work0_reg, work2_reg);
             work3_reg = _mm256_xor_si256(work1_reg, work3_reg);
 
             // Second layer:
             if (log_m01 != kModulus)
-            {
-                LEO_FFTB4_256(work0_reg, work1_reg, t01_lo, t01_hi);
-            }
+                LEO_MULADD_256(work0_reg, work1_reg, t01_lo, t01_hi);
             work1_reg = _mm256_xor_si256(work0_reg, work1_reg);
 
             _mm256_storeu_si256(work0, work0_reg);
@@ -1110,9 +1074,7 @@ static void FFT_DIT4(
             work0++, work1++;
 
             if (log_m23 != kModulus)
-            {
-                LEO_FFTB4_256(work2_reg, work3_reg, t23_lo, t23_hi);
-            }
+                LEO_MULADD_256(work2_reg, work3_reg, t23_lo, t23_hi);
             work3_reg = _mm256_xor_si256(work2_reg, work3_reg);
 
             _mm256_storeu_si256(work2, work2_reg);
@@ -1143,14 +1105,6 @@ static void FFT_DIT4(
 
         do
         {
-#define LEO_FFTB4_128(x_reg, y_reg, table_lo, table_hi) { \
-                LEO_M128 lo = _mm_and_si128(y_reg, clr_mask); \
-                lo = _mm_shuffle_epi8(table_lo, lo); \
-                LEO_M128 hi = _mm_srli_epi64(y_reg, 4); \
-                hi = _mm_and_si128(hi, clr_mask); \
-                hi = _mm_shuffle_epi8(table_hi, hi); \
-                x_reg = _mm_xor_si128(x_reg, _mm_xor_si128(lo, hi)); }
-
             LEO_M128 work0_reg = _mm_loadu_si128(work0);
             LEO_M128 work2_reg = _mm_loadu_si128(work2);
             LEO_M128 work1_reg = _mm_loadu_si128(work1);
@@ -1159,17 +1113,15 @@ static void FFT_DIT4(
             // First layer:
             if (log_m02 != kModulus)
             {
-                LEO_FFTB4_128(work0_reg, work2_reg, t02_lo, t02_hi);
-                LEO_FFTB4_128(work1_reg, work3_reg, t02_lo, t02_hi);
+                LEO_MULADD_128(work0_reg, work2_reg, t02_lo, t02_hi);
+                LEO_MULADD_128(work1_reg, work3_reg, t02_lo, t02_hi);
             }
             work2_reg = _mm_xor_si128(work0_reg, work2_reg);
             work3_reg = _mm_xor_si128(work1_reg, work3_reg);
 
             // Second layer:
             if (log_m01 != kModulus)
-            {
-                LEO_FFTB4_128(work0_reg, work1_reg, t01_lo, t01_hi);
-            }
+                LEO_MULADD_128(work0_reg, work1_reg, t01_lo, t01_hi);
             work1_reg = _mm_xor_si128(work0_reg, work1_reg);
 
             _mm_storeu_si128(work0, work0_reg);
@@ -1177,9 +1129,7 @@ static void FFT_DIT4(
             work0++, work1++;
 
             if (log_m23 != kModulus)
-            {
-                LEO_FFTB4_128(work2_reg, work3_reg, t23_lo, t23_hi);
-            }
+                LEO_MULADD_128(work2_reg, work3_reg, t23_lo, t23_hi);
             work3_reg = _mm_xor_si128(work2_reg, work3_reg);
 
             _mm_storeu_si128(work2, work2_reg);
