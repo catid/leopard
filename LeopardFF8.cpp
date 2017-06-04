@@ -704,9 +704,11 @@ static void IFFT_DIT2_xor(
 
     xor_mem(y_in, x_in, bytes);
 
+    unsigned count = bytes;
+    ffe_t * LEO_RESTRICT y1 = reinterpret_cast<ffe_t *>(y_in);
+
 #ifdef LEO_TARGET_MOBILE
     ffe_t * LEO_RESTRICT x1 = reinterpret_cast<ffe_t *>(x_in);
-    ffe_t * LEO_RESTRICT y1 = reinterpret_cast<ffe_t *>(y_in);
 
     do
     {
@@ -714,11 +716,10 @@ static void IFFT_DIT2_xor(
             x1[j] ^= lut[y1[j]];
 
         x1 += 64, y1 += 64;
-        bytes -= 64;
-    } while (bytes > 0);
+        count -= 64;
+    } while (count > 0);
 #else
     uint64_t * LEO_RESTRICT x8 = reinterpret_cast<uint64_t *>(x_in);
-    ffe_t * LEO_RESTRICT y1 = reinterpret_cast<ffe_t *>(y_in);
 
     do
     {
@@ -738,8 +739,8 @@ static void IFFT_DIT2_xor(
         }
 
         x8 += 8;
-        bytes -= 64;
-    } while (bytes > 0);
+        count -= 64;
+    } while (count > 0);
 #endif
 
     xor_mem(y_out, y_in, bytes);
@@ -777,10 +778,10 @@ static void IFFT_DIT4(
 
         do
         {
+            // First layer:
             LEO_M256 work0_reg = _mm256_loadu_si256(work0);
             LEO_M256 work1_reg = _mm256_loadu_si256(work1);
 
-            // First layer:
             work1_reg = _mm256_xor_si256(work0_reg, work1_reg);
             if (log_m01 != kModulus)
                 LEO_MULADD_256(work0_reg, work1_reg, t01_lo, t01_hi);
@@ -788,7 +789,6 @@ static void IFFT_DIT4(
             LEO_M256 work2_reg = _mm256_loadu_si256(work2);
             LEO_M256 work3_reg = _mm256_loadu_si256(work3);
 
-            // First layer:
             work3_reg = _mm256_xor_si256(work2_reg, work3_reg);
             if (log_m23 != kModulus)
                 LEO_MULADD_256(work2_reg, work3_reg, t23_lo, t23_hi);
@@ -834,10 +834,10 @@ static void IFFT_DIT4(
 
         do
         {
+            // First layer:
             LEO_M128 work0_reg = _mm_loadu_si128(work0);
             LEO_M128 work1_reg = _mm_loadu_si128(work1);
 
-            // First layer:
             work1_reg = _mm_xor_si128(work0_reg, work1_reg);
             if (log_m01 != kModulus)
                 LEO_MULADD_128(work0_reg, work1_reg, t01_lo, t01_hi);
@@ -845,7 +845,6 @@ static void IFFT_DIT4(
             LEO_M128 work2_reg = _mm_loadu_si128(work2);
             LEO_M128 work3_reg = _mm_loadu_si128(work3);
 
-            // First layer:
             work3_reg = _mm_xor_si128(work2_reg, work3_reg);
             if (log_m23 != kModulus)
                 LEO_MULADD_128(work2_reg, work3_reg, t23_lo, t23_hi);
@@ -897,6 +896,183 @@ static void IFFT_DIT4(
     }
 }
 
+// xor_result ^= IFFT_DIT4(work)
+static void IFFT_DIT4_xor(
+    uint64_t bytes,
+    void** work_in,
+    void** xor_out,
+    unsigned dist,
+    const ffe_t log_m01,
+    const ffe_t log_m23,
+    const ffe_t log_m02)
+{
+#ifdef LEO_INTERLEAVE_BUTTERFLY4_OPT
+
+#if defined(LEO_TRY_AVX2)
+
+    if (CpuHasAVX2)
+    {
+        const LEO_M256 t01_lo = _mm256_loadu_si256(&Multiply256LUT[log_m01].Value[0]);
+        const LEO_M256 t01_hi = _mm256_loadu_si256(&Multiply256LUT[log_m01].Value[1]);
+        const LEO_M256 t23_lo = _mm256_loadu_si256(&Multiply256LUT[log_m23].Value[0]);
+        const LEO_M256 t23_hi = _mm256_loadu_si256(&Multiply256LUT[log_m23].Value[1]);
+        const LEO_M256 t02_lo = _mm256_loadu_si256(&Multiply256LUT[log_m02].Value[0]);
+        const LEO_M256 t02_hi = _mm256_loadu_si256(&Multiply256LUT[log_m02].Value[1]);
+
+        const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
+
+        const LEO_M256 * LEO_RESTRICT work0 = reinterpret_cast<const LEO_M256 *>(work_in[0]);
+        const LEO_M256 * LEO_RESTRICT work1 = reinterpret_cast<const LEO_M256 *>(work_in[dist]);
+        const LEO_M256 * LEO_RESTRICT work2 = reinterpret_cast<const LEO_M256 *>(work_in[dist * 2]);
+        const LEO_M256 * LEO_RESTRICT work3 = reinterpret_cast<const LEO_M256 *>(work_in[dist * 3]);
+        LEO_M256 * LEO_RESTRICT xor0 = reinterpret_cast<LEO_M256 *>(xor_out[0]);
+        LEO_M256 * LEO_RESTRICT xor1 = reinterpret_cast<LEO_M256 *>(xor_out[dist]);
+        LEO_M256 * LEO_RESTRICT xor2 = reinterpret_cast<LEO_M256 *>(xor_out[dist * 2]);
+        LEO_M256 * LEO_RESTRICT xor3 = reinterpret_cast<LEO_M256 *>(xor_out[dist * 3]);
+
+        do
+        {
+            // First layer:
+            LEO_M256 work0_reg = _mm256_loadu_si256(work0);
+            LEO_M256 work1_reg = _mm256_loadu_si256(work1);
+            work0++, work1++;
+
+            work1_reg = _mm256_xor_si256(work0_reg, work1_reg);
+            if (log_m01 != kModulus)
+                LEO_MULADD_256(work0_reg, work1_reg, t01_lo, t01_hi);
+
+            LEO_M256 work2_reg = _mm256_loadu_si256(work2);
+            LEO_M256 work3_reg = _mm256_loadu_si256(work3);
+            work2++, work3++;
+
+            work3_reg = _mm256_xor_si256(work2_reg, work3_reg);
+            if (log_m23 != kModulus)
+                LEO_MULADD_256(work2_reg, work3_reg, t23_lo, t23_hi);
+
+            // Second layer:
+            work2_reg = _mm256_xor_si256(work0_reg, work2_reg);
+            work3_reg = _mm256_xor_si256(work1_reg, work3_reg);
+            if (log_m02 != kModulus)
+            {
+                LEO_MULADD_256(work0_reg, work2_reg, t02_lo, t02_hi);
+                LEO_MULADD_256(work1_reg, work3_reg, t02_lo, t02_hi);
+            }
+
+            work0_reg = _mm256_xor_si256(work0_reg, _mm256_loadu_si256(xor0));
+            work1_reg = _mm256_xor_si256(work1_reg, _mm256_loadu_si256(xor1));
+            work2_reg = _mm256_xor_si256(work2_reg, _mm256_loadu_si256(xor2));
+            work3_reg = _mm256_xor_si256(work3_reg, _mm256_loadu_si256(xor3));
+
+            _mm256_storeu_si256(xor0, work0_reg);
+            _mm256_storeu_si256(xor1, work1_reg);
+            _mm256_storeu_si256(xor2, work2_reg);
+            _mm256_storeu_si256(xor3, work3_reg);
+            xor0++, xor1++, xor2++, xor3++;
+
+            bytes -= 32;
+        } while (bytes > 0);
+
+        return;
+    }
+
+#endif // LEO_TRY_AVX2
+
+    if (CpuHasSSSE3)
+    {
+        const LEO_M128 t01_lo = _mm_loadu_si128(&Multiply128LUT[log_m01].Value[0]);
+        const LEO_M128 t01_hi = _mm_loadu_si128(&Multiply128LUT[log_m01].Value[1]);
+        const LEO_M128 t23_lo = _mm_loadu_si128(&Multiply128LUT[log_m23].Value[0]);
+        const LEO_M128 t23_hi = _mm_loadu_si128(&Multiply128LUT[log_m23].Value[1]);
+        const LEO_M128 t02_lo = _mm_loadu_si128(&Multiply128LUT[log_m02].Value[0]);
+        const LEO_M128 t02_hi = _mm_loadu_si128(&Multiply128LUT[log_m02].Value[1]);
+
+        const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
+
+        const LEO_M128 * LEO_RESTRICT work0 = reinterpret_cast<const LEO_M128 *>(work_in[0]);
+        const LEO_M128 * LEO_RESTRICT work1 = reinterpret_cast<const LEO_M128 *>(work_in[dist]);
+        const LEO_M128 * LEO_RESTRICT work2 = reinterpret_cast<const LEO_M128 *>(work_in[dist * 2]);
+        const LEO_M128 * LEO_RESTRICT work3 = reinterpret_cast<const LEO_M128 *>(work_in[dist * 3]);
+        LEO_M128 * LEO_RESTRICT xor0 = reinterpret_cast<LEO_M128 *>(xor_out[0]);
+        LEO_M128 * LEO_RESTRICT xor1 = reinterpret_cast<LEO_M128 *>(xor_out[dist]);
+        LEO_M128 * LEO_RESTRICT xor2 = reinterpret_cast<LEO_M128 *>(xor_out[dist * 2]);
+        LEO_M128 * LEO_RESTRICT xor3 = reinterpret_cast<LEO_M128 *>(xor_out[dist * 3]);
+
+        do
+        {
+            // First layer:
+            LEO_M128 work0_reg = _mm_loadu_si128(work0);
+            LEO_M128 work1_reg = _mm_loadu_si128(work1);
+            work0++, work1++;
+
+            work1_reg = _mm_xor_si128(work0_reg, work1_reg);
+            if (log_m01 != kModulus)
+                LEO_MULADD_128(work0_reg, work1_reg, t01_lo, t01_hi);
+
+            LEO_M128 work2_reg = _mm_loadu_si128(work2);
+            LEO_M128 work3_reg = _mm_loadu_si128(work3);
+            work2++, work3++;
+
+            work3_reg = _mm_xor_si128(work2_reg, work3_reg);
+            if (log_m23 != kModulus)
+                LEO_MULADD_128(work2_reg, work3_reg, t23_lo, t23_hi);
+
+            // Second layer:
+            work2_reg = _mm_xor_si128(work0_reg, work2_reg);
+            work3_reg = _mm_xor_si128(work1_reg, work3_reg);
+            if (log_m02 != kModulus)
+            {
+                LEO_MULADD_128(work0_reg, work2_reg, t02_lo, t02_hi);
+                LEO_MULADD_128(work1_reg, work3_reg, t02_lo, t02_hi);
+            }
+
+            work0_reg = _mm_xor_si128(work0_reg, _mm_loadu_si128(xor0));
+            work1_reg = _mm_xor_si128(work1_reg, _mm_loadu_si128(xor1));
+            work2_reg = _mm_xor_si128(work2_reg, _mm_loadu_si128(xor2));
+            work3_reg = _mm_xor_si128(work3_reg, _mm_loadu_si128(xor3));
+
+            _mm_storeu_si128(xor0, work0_reg);
+            _mm_storeu_si128(xor1, work1_reg);
+            _mm_storeu_si128(xor2, work2_reg);
+            _mm_storeu_si128(xor3, work3_reg);
+            xor0++, xor1++, xor2++, xor3++;
+
+            bytes -= 16;
+        } while (bytes > 0);
+
+        return;
+    }
+
+#endif // LEO_INTERLEAVE_BUTTERFLY4_OPT
+
+    // First layer:
+    if (log_m01 == kModulus)
+        xor_mem(work_in[dist], work_in[0], bytes);
+    else
+        IFFT_DIT2(work_in[0], work_in[dist], log_m01, bytes);
+
+    if (log_m23 == kModulus)
+        xor_mem(work_in[dist * 3], work_in[dist * 2], bytes);
+    else
+        IFFT_DIT2(work_in[dist * 2], work_in[dist * 3], log_m23, bytes);
+
+    // Second layer:
+    if (log_m02 == kModulus)
+    {
+        xor_mem(work_in[dist * 2], work_in[0], bytes);
+        xor_mem(work_in[dist * 3], work_in[dist], bytes);
+    }
+    else
+    {
+        IFFT_DIT2(work_in[0], work_in[dist * 2], log_m02, bytes);
+        IFFT_DIT2(work_in[dist], work_in[dist * 3], log_m02, bytes);
+    }
+
+    xor_mem(xor_out[0], work_in[0], bytes);
+    xor_mem(xor_out[dist], work_in[dist], bytes);
+    xor_mem(xor_out[dist * 2], work_in[dist * 2], bytes);
+    xor_mem(xor_out[dist * 3], work_in[dist * 3], bytes);
+}
+
 static void IFFT_DIT(
     const uint64_t bytes,
     const void* const* data,
@@ -930,17 +1106,36 @@ static void IFFT_DIT(
             const ffe_t log_m23 = skewLUT[r + dist * 3];
             const ffe_t log_m02 = skewLUT[r + dist * 2];
 
-            // For each set of dist elements:
             const unsigned i_end = r + dist;
-            for (unsigned i = r; i < i_end; ++i)
+
+            if (dist4 == m && xor_result)
             {
-                IFFT_DIT4(
-                    bytes,
-                    work + i,
-                    dist,
-                    log_m01,
-                    log_m23,
-                    log_m02);
+                // For each set of dist elements:
+                for (unsigned i = r; i < i_end; ++i)
+                {
+                    IFFT_DIT4_xor(
+                        bytes,
+                        work + i,
+                        xor_result + i,
+                        dist,
+                        log_m01,
+                        log_m23,
+                        log_m02);
+                }
+            }
+            else
+            {
+                // For each set of dist elements:
+                for (unsigned i = r; i < i_end; ++i)
+                {
+                    IFFT_DIT4(
+                        bytes,
+                        work + i,
+                        dist,
+                        log_m01,
+                        log_m23,
+                        log_m02);
+                }
             }
         }
 

@@ -165,7 +165,7 @@
 
 // Enable 8-bit or 16-bit fields
 #define LEO_HAS_FF8
-//#define LEO_HAS_FF16
+#define LEO_HAS_FF16
 
 // Enable using SIMD instructions
 #define LEO_USE_SSSE3_OPT

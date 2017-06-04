@@ -45,14 +45,17 @@ struct TestParameters
     unsigned original_count = 100; // under 65536
     unsigned recovery_count = 20; // under 65536 - original_count
 #else
-    unsigned original_count = 128; // under 65536
-    unsigned recovery_count = 128; // under 65536 - original_count
+    unsigned original_count = 100; // under 65536
+    unsigned recovery_count = 20; // under 65536 - original_count
 #endif
     unsigned buffer_bytes = 64000; // multiple of 64 bytes
     unsigned loss_count = 32768; // some fraction of original_count
     unsigned seed = 2;
     bool multithreaded = true;
 };
+
+static const unsigned kLargeTrialCount = 1;
+static const unsigned kSmallTrialCount = 100;
 
 
 //------------------------------------------------------------------------------
@@ -370,7 +373,7 @@ static void ShuffleDeck16(PCGRandom &prng, uint16_t * LEO_RESTRICT deck, uint32_
 
 static bool Benchmark(const TestParameters& params)
 {
-    const unsigned kTrials = params.original_count > 8000 ? 1 : 100;
+    const unsigned kTrials = params.original_count > 4000 ? kLargeTrialCount : kSmallTrialCount;
 
     std::vector<uint8_t*> original_data(params.original_count);
 
@@ -565,7 +568,7 @@ int main(int argc, char **argv)
     if (!Benchmark(params))
         goto Failed;
 
-#if 1
+#if 0
     static const unsigned kMaxRandomData = 32768;
 
     prng.Seed(params.seed, 8);
@@ -582,7 +585,7 @@ int main(int argc, char **argv)
     }
 #endif
 
-#if 0
+#if 1
     for (unsigned original_count = 1; original_count <= 256; ++original_count)
     {
         for (unsigned recovery_count = 1; recovery_count <= original_count; ++recovery_count)
@@ -600,6 +603,7 @@ int main(int argc, char **argv)
 #endif
 
 Failed:
+    cout << "Tests completed." << endl;
     getchar();
 
     return 0;
