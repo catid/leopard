@@ -487,7 +487,7 @@ static void FFTInitialize()
         {1-5, 1'-5', 1-1', 5-5'},
 */
 
-static void ifft_butterfly(
+static void IFFT_DIT2(
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
     ffe_t log_m, uint64_t bytes)
 {
@@ -766,12 +766,12 @@ static void IFFT_DIT4(
     if (log_m01 == kModulus)
         xor_mem(work[dist], work[0], bytes);
     else
-        ifft_butterfly(work[0], work[dist], log_m01, bytes);
+        IFFT_DIT2(work[0], work[dist], log_m01, bytes);
 
     if (log_m23 == kModulus)
         xor_mem(work[dist * 3], work[dist * 2], bytes);
     else
-        ifft_butterfly(work[dist * 2], work[dist * 3], log_m23, bytes);
+        IFFT_DIT2(work[dist * 2], work[dist * 3], log_m23, bytes);
 
     // Second layer:
     if (log_m02 == kModulus)
@@ -781,8 +781,8 @@ static void IFFT_DIT4(
     }
     else
     {
-        ifft_butterfly(work[0], work[dist * 2], log_m02, bytes);
-        ifft_butterfly(work[dist], work[dist * 3], log_m02, bytes);
+        IFFT_DIT2(work[0], work[dist * 2], log_m02, bytes);
+        IFFT_DIT2(work[dist], work[dist * 3], log_m02, bytes);
     }
 }
 
@@ -852,7 +852,7 @@ static void IFFT_DIT(
         {
             for (unsigned i = 0; i < dist; ++i)
             {
-                ifft_butterfly(
+                IFFT_DIT2(
                     work[i],
                     work[i + dist],
                     log_m,
@@ -921,7 +921,7 @@ static void IFFT_DIT(
         {4-6, 5-7, 4-5, 6-7},
 */
 
-static void fft_butterfly(
+static void FFT_DIT2(
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
     ffe_t log_m, uint64_t bytes)
 {
@@ -1202,20 +1202,20 @@ static void FFT_DIT4(
     }
     else
     {
-        fft_butterfly(work[0], work[dist * 2], log_m02, bytes);
-        fft_butterfly(work[dist], work[dist * 3], log_m02, bytes);
+        FFT_DIT2(work[0], work[dist * 2], log_m02, bytes);
+        FFT_DIT2(work[dist], work[dist * 3], log_m02, bytes);
     }
 
     // Second layer:
     if (log_m01 == kModulus)
         xor_mem(work[dist], work[0], bytes);
     else
-        fft_butterfly(work[0], work[dist], log_m01, bytes);
+        FFT_DIT2(work[0], work[dist], log_m01, bytes);
 
     if (log_m23 == kModulus)
         xor_mem(work[dist * 3], work[dist * 2], bytes);
     else
-        fft_butterfly(work[dist * 2], work[dist * 3], log_m23, bytes);
+        FFT_DIT2(work[dist * 2], work[dist * 3], log_m23, bytes);
 }
 
 
@@ -1263,7 +1263,7 @@ static void FFT_DIT(
                 xor_mem(work[r + 1], work[r], bytes);
             else
             {
-                fft_butterfly(
+                FFT_DIT2(
                     work[r],
                     work[r + 1],
                     log_m,
@@ -1467,7 +1467,7 @@ static void FFT_DIT_ErrorBits(
                 xor_mem(work[r + 1], work[r], bytes);
             else
             {
-                fft_butterfly(
+                FFT_DIT2(
                     work[r],
                     work[r + 1],
                     log_m,
@@ -1499,17 +1499,17 @@ void ReedSolomonDecode(
     ErrorBitfield error_bits;
 #endif // LEO_ERROR_BITFIELD_OPT
 
-    ffe_t ErrorLocations[kOrder] = {};
+    ffe_t error_locations[kOrder] = {};
     for (unsigned i = 0; i < recovery_count; ++i)
         if (!recovery[i])
-            ErrorLocations[i] = 1;
+            error_locations[i] = 1;
     for (unsigned i = recovery_count; i < m; ++i)
-        ErrorLocations[i] = 1;
+        error_locations[i] = 1;
     for (unsigned i = 0; i < original_count; ++i)
     {
         if (!original[i])
         {
-            ErrorLocations[i + m] = 1;
+            error_locations[i + m] = 1;
 #ifdef LEO_ERROR_BITFIELD_OPT
             error_bits.Set(i + m);
 #endif // LEO_ERROR_BITFIELD_OPT
@@ -1522,19 +1522,19 @@ void ReedSolomonDecode(
 
     // Evaluate error locator polynomial
 
-    FWHT(ErrorLocations, kOrder, m + original_count);
+    FWHT(error_locations, kOrder, m + original_count);
 
     for (unsigned i = 0; i < kOrder; ++i)
-        ErrorLocations[i] = ((unsigned)ErrorLocations[i] * (unsigned)LogWalsh[i]) % kModulus;
+        error_locations[i] = ((unsigned)error_locations[i] * (unsigned)LogWalsh[i]) % kModulus;
 
-    FWHT(ErrorLocations, kOrder, kOrder);
+    FWHT(error_locations, kOrder, kOrder);
 
     // work <- recovery data
 
     for (unsigned i = 0; i < recovery_count; ++i)
     {
         if (recovery[i])
-            mul_mem(work[i], recovery[i], ErrorLocations[i], buffer_bytes);
+            mul_mem(work[i], recovery[i], error_locations[i], buffer_bytes);
         else
             memset(work[i], 0, buffer_bytes);
     }
@@ -1546,7 +1546,7 @@ void ReedSolomonDecode(
     for (unsigned i = 0; i < original_count; ++i)
     {
         if (original[i])
-            mul_mem(work[m + i], original[i], ErrorLocations[m + i], buffer_bytes);
+            mul_mem(work[m + i], original[i], error_locations[m + i], buffer_bytes);
         else
             memset(work[m + i], 0, buffer_bytes);
     }
@@ -1591,7 +1591,7 @@ void ReedSolomonDecode(
 
     for (unsigned i = 0; i < original_count; ++i)
         if (!original[i])
-            mul_mem(work[i], work[i + m], kModulus - ErrorLocations[i + m], buffer_bytes);
+            mul_mem(work[i], work[i + m], kModulus - error_locations[i + m], buffer_bytes);
 }
 
 

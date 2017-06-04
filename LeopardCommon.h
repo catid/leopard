@@ -173,17 +173,11 @@
 // Optimize M=1 case
 #define LEO_M1_OPT
 
-// Interleave butterfly operations between layer pairs in FFT
-#define LEO_INTERLEAVE_BUTTERFLY4_OPT
-
-
-// FIXME: Remove these when FF16 is done
-
 // Unroll inner loops 4 times
 #define LEO_USE_VECTOR4_OPT
 
-// Avoid scheduling FFT operations that are unused
-#define LEO_SCHEDULE_OPT
+// Interleave butterfly operations between layer pairs in FFT
+//#define LEO_INTERLEAVE_BUTTERFLY4_OPT
 
 
 //------------------------------------------------------------------------------
