@@ -538,10 +538,7 @@ static void IFFT_DIT2(
             y_hi = _mm256_xor_si256(y_hi, x_hi); \
             _mm256_storeu_si256(y_ptr, y_lo); \
             _mm256_storeu_si256(y_ptr + 1, y_hi); \
-            LEO_M256 prod_lo, prod_hi; \
-            LEO_MUL_256(y_lo, y_hi, 0); \
-            x_lo = _mm256_xor_si256(prod_lo, x_lo); \
-            x_hi = _mm256_xor_si256(prod_hi, x_hi); \
+            LEO_MULADD_256(x_lo, x_hi, y_lo, y_hi, 0); \
             _mm256_storeu_si256(x_ptr, x_lo); \
             _mm256_storeu_si256(x_ptr + 1, x_hi); }
 
@@ -573,10 +570,7 @@ static void IFFT_DIT2(
             y_hi = _mm_xor_si128(y_hi, x_hi); \
             _mm_storeu_si128(y_ptr, y_lo); \
             _mm_storeu_si128(y_ptr + 2, y_hi); \
-            LEO_M128 prod_lo, prod_hi; \
-            LEO_MUL_128(y_lo, y_hi, 0); \
-            x_lo = _mm_xor_si128(prod_lo, x_lo); \
-            x_hi = _mm_xor_si128(prod_hi, x_hi); \
+            LEO_MULADD_128(x_lo, x_hi, y_lo, y_hi, 0); \
             _mm_storeu_si128(x_ptr, x_lo); \
             _mm_storeu_si128(x_ptr + 2, x_hi); }
 
@@ -980,10 +974,7 @@ static void FFT_DIT2(
             LEO_M256 x_hi = _mm256_loadu_si256(x_ptr + 1); \
             LEO_M256 y_lo = _mm256_loadu_si256(y_ptr); \
             LEO_M256 y_hi = _mm256_loadu_si256(y_ptr + 1); \
-            LEO_M256 prod_lo, prod_hi; \
-            LEO_MUL_256(y_lo, y_hi, 0); \
-            x_lo = _mm256_xor_si256(prod_lo, x_lo); \
-            x_hi = _mm256_xor_si256(prod_hi, x_hi); \
+            LEO_MULADD_256(x_lo, x_hi, y_lo, y_hi, 0); \
             _mm256_storeu_si256(x_ptr, x_lo); \
             _mm256_storeu_si256(x_ptr + 1, x_hi); \
             y_lo = _mm256_xor_si256(y_lo, x_lo); \
@@ -1015,10 +1006,7 @@ static void FFT_DIT2(
             LEO_M128 x_hi = _mm_loadu_si128(x_ptr + 2); \
             LEO_M128 y_lo = _mm_loadu_si128(y_ptr); \
             LEO_M128 y_hi = _mm_loadu_si128(y_ptr + 2); \
-            LEO_M128 prod_lo, prod_hi; \
-            LEO_MUL_128(y_lo, y_hi, 0); \
-            x_lo = _mm_xor_si128(prod_lo, x_lo); \
-            x_hi = _mm_xor_si128(prod_hi, x_hi); \
+            LEO_MULADD_128(x_lo, x_hi, y_lo, y_hi, 0); \
             _mm_storeu_si128(x_ptr, x_lo); \
             _mm_storeu_si128(x_ptr + 2, x_hi); \
             y_lo = _mm_xor_si128(y_lo, x_lo); \
