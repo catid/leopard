@@ -15,16 +15,6 @@ fastest finite fields (8-bit or 16-bit Galois fields with Cantor basis {2}).
 It sets new speed records for MDS encoding and decoding of large data,
 achieving over 1.2 GB/s to encode with the AVX2 instruction set on a single core.
 
-There is another library `FastECC` by Bulat-Ziganshin that should have similar performance:
-[https://github.com/Bulat-Ziganshin/FastECC](https://github.com/Bulat-Ziganshin/FastECC).
-Both libraries implement the same high-level algorithm in {3}, while Leopard implements the
-newer polynomial basis GF(2^r) approach outlined in {1}, and FastECC uses complex finite fields
-modulo special primes.  There are trade-offs that may make either approach preferable based
-on the application:
-+ Older processors do not support SSSE3 and FastECC supports these processors better.
-+ FastECC supports data sets above 65,536 pieces as it uses 32-bit finite field math.  
-+ Leopard does not require expanding the input or output data to make it fit in the field, so it can be more space efficient.
-
 Example applications are data recovery software and data center replication.
 
 
@@ -77,6 +67,19 @@ Leopard Decoder(2097.15 MB in 32768 pieces, 32768 losses): Input=190.471 MB/s, O
 
 More benchmark results are available here:
 [https://github.com/catid/leopard/blob/master/Benchmarks.md](https://github.com/catid/leopard/blob/master/Benchmarks.md)
+
+
+#### Comparisons:
+
+There is another library `FastECC` by Bulat-Ziganshin that should have similar performance:
+[https://github.com/Bulat-Ziganshin/FastECC](https://github.com/Bulat-Ziganshin/FastECC).
+Both libraries implement the same high-level algorithm in {3}, while Leopard implements the
+newer polynomial basis GF(2^r) approach outlined in {1}, and FastECC uses complex finite fields
+modulo special primes.  There are trade-offs that may make either approach preferable based
+on the application:
++ Older processors do not support SSSE3 and FastECC supports these processors better.
++ FastECC supports data sets above 65,536 pieces as it uses 32-bit finite field math.  
++ Leopard does not require expanding the input or output data to make it fit in the field, so it can be more space efficient.
 
 
 #### FFT Data Layout:
