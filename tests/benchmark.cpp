@@ -42,8 +42,8 @@ using namespace std;
 struct TestParameters
 {
 #ifdef LEO_HAS_FF16
-    unsigned original_count = 100; // under 65536
-    unsigned recovery_count = 20; // under 65536 - original_count
+    unsigned original_count = 1000; // under 65536
+    unsigned recovery_count = 200; // under 65536 - original_count
 #else
     unsigned original_count = 100; // under 65536
     unsigned recovery_count = 20; // under 65536 - original_count
@@ -55,7 +55,7 @@ struct TestParameters
 };
 
 static const unsigned kLargeTrialCount = 1;
-static const unsigned kSmallTrialCount = 100;
+static const unsigned kSmallTrialCount = 10;
 
 
 //------------------------------------------------------------------------------
