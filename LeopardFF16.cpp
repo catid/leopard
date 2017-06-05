@@ -911,6 +911,8 @@ static void IFFT_DIT_Decoder_MT(
     unsigned dist = 1, dist4 = 4;
     for (; dist4 <= m; dist = dist4, dist4 <<= 2)
     {
+        workBundle.Increment();
+
         // For each set of dist*4 elements:
         for (unsigned r = 0; r < m_truncated; r += dist4)
         {
@@ -923,6 +925,7 @@ static void IFFT_DIT_Decoder_MT(
             for (unsigned i = r; i < i_end; ++i)
             {
                 void** work_i = work + i;
+                workBundle.Increment();
                 PoolInstance->Dispatch([log_m01, log_m02, log_m23, bytes, work_i, dist, &workBundle]() {
                     IFFT_DIT4(
                         bytes,
@@ -933,17 +936,19 @@ static void IFFT_DIT_Decoder_MT(
                         log_m02);
                     workBundle.OperationComplete();
                 });
-                workBundle.Increment();
             }
         }
 
         PoolInstance->Run();
+        workBundle.OperationComplete();
         workBundle.Join();
     }
 
     // If there is one layer left:
     if (dist < m)
     {
+        workBundle.Increment();
+
         // Assuming that dist = m / 2
         LEO_DEBUG_ASSERT(dist * 2 == m);
 
@@ -953,17 +958,18 @@ static void IFFT_DIT_Decoder_MT(
         {
             for (unsigned i = 0; i < dist; ++i)
             {
+                workBundle.Increment();
                 PoolInstance->Dispatch([work, i, dist, bytes, &workBundle]() {
                     xor_mem(work[i + dist], work[i], bytes);
                     workBundle.OperationComplete();
                 });
-                workBundle.Increment();
             }
         }
         else
         {
             for (unsigned i = 0; i < dist; ++i)
             {
+                workBundle.Increment();
                 PoolInstance->Dispatch([work, i, dist, log_m, bytes, &workBundle]() {
                     IFFT_DIT2(
                         work[i],
@@ -972,11 +978,11 @@ static void IFFT_DIT_Decoder_MT(
                         bytes);
                     workBundle.OperationComplete();
                 });
-                workBundle.Increment();
             }
         }
 
         PoolInstance->Run();
+        workBundle.OperationComplete();
         workBundle.Join();
     }
 }
@@ -1602,6 +1608,8 @@ static void FFT_DIT_ErrorBits_MT(
     unsigned dist4 = n, dist = n >> 2;
     for (; dist != 0; dist4 = dist, dist >>= 2, mip_level -=2)
     {
+        workBundle.Increment();
+
         // For each set of dist*4 elements:
         for (unsigned r = 0; r < n_truncated; r += dist4)
         {
@@ -1617,6 +1625,7 @@ static void FFT_DIT_ErrorBits_MT(
             {
                 void** work_i = work + i;
 
+                workBundle.Increment();
                 PoolInstance->Dispatch([bytes, &workBundle, work_i, dist, log_m01, log_m02, log_m23]() {
                     FFT_DIT4(
                         bytes,
@@ -1627,19 +1636,22 @@ static void FFT_DIT_ErrorBits_MT(
                         log_m02);
                     workBundle.OperationComplete();
                 });
-                workBundle.Increment();
             }
         }
 
         PoolInstance->Run();
+        workBundle.OperationComplete();
         workBundle.Join();
     }
 
     // If there is one layer left:
     if (dist4 == 2)
     {
+        workBundle.Increment();
+
         for (unsigned r = 0; r < n_truncated; r += 2)
         {
+            workBundle.Increment();
             PoolInstance->Dispatch([bytes, &workBundle, skewLUT, work, r]() {
                 const ffe_t log_m = skewLUT[r + 1];
 
@@ -1655,10 +1667,10 @@ static void FFT_DIT_ErrorBits_MT(
                 }
                 workBundle.OperationComplete();
             });
-            workBundle.Increment();
         }
 
         PoolInstance->Run();
+        workBundle.OperationComplete();
         workBundle.Join();
     }
 }
@@ -1779,17 +1791,19 @@ void ReedSolomonDecode(
             else
             {
                 WorkBundle workBundle;
+                workBundle.Increment();
 
                 for (unsigned j = i - width; j < i; ++j)
                 {
+                    workBundle.Increment();
                     PoolInstance->Dispatch([work, j, width, &workBundle, buffer_bytes]() {
                         xor_mem(work[j], work[j + width], buffer_bytes);
                         workBundle.OperationComplete();
                     });
-                    workBundle.Increment();
                 }
 
                 PoolInstance->Run();
+                workBundle.OperationComplete();
                 workBundle.Join();
             }
         }
