@@ -32,11 +32,10 @@
     TODO:
 
     Short-term:
-    + Unroll first/final butterflies to avoid extra copies/xors in encoder (17% of encode time)
-    + Add compile-time selectable XOR-only rowops instead of MULADD
     + Multithreading
 
     Mid-term:
+    + Add compile-time selectable XOR-only rowops instead of MULADD
     + Look into 12-bit fields as a performance optimization
 
     Long-term:

@@ -832,11 +832,10 @@ static void IFFT_DIT_Encoder(
         }
     }
 
+    // I tried unrolling this but it does not provide more than 5% performance
+    // improvement for 16-bit finite fields, so it's not worth the complexity.
     if (xor_result)
-    {
-        for (unsigned i = 0; i < m; ++i)
-            xor_mem(xor_result[i], work[i], bytes);
-    }
+        VectorXOR(bytes, m, xor_result, work);
 }
 
 
