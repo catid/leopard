@@ -905,13 +905,11 @@ static void IFFT_DIT_Decoder_MT(
     const unsigned m,
     const ffe_t* skewLUT)
 {
-    WorkBundle workBundle;
-
     // Decimation in time: Unroll 2 layers at a time
     unsigned dist = 1, dist4 = 4;
     for (; dist4 <= m; dist = dist4, dist4 <<= 2)
     {
-        workBundle.Increment();
+        WorkBundle* workBundle = PoolInstance->GetBundle();
 
         // For each set of dist*4 elements:
         for (unsigned r = 0; r < m_truncated; r += dist4)
@@ -925,8 +923,7 @@ static void IFFT_DIT_Decoder_MT(
             for (unsigned i = r; i < i_end; ++i)
             {
                 void** work_i = work + i;
-                workBundle.Increment();
-                PoolInstance->Dispatch([log_m01, log_m02, log_m23, bytes, work_i, dist, &workBundle]() {
+                workBundle->Dispatch([log_m01, log_m02, log_m23, bytes, work_i, dist, &workBundle]() {
                     IFFT_DIT4(
                         bytes,
                         work_i,
@@ -934,20 +931,17 @@ static void IFFT_DIT_Decoder_MT(
                         log_m01,
                         log_m23,
                         log_m02);
-                    workBundle.OperationComplete();
                 });
             }
         }
 
-        PoolInstance->Run();
-        workBundle.OperationComplete();
-        workBundle.Join();
+        workBundle->Complete();
     }
 
     // If there is one layer left:
     if (dist < m)
     {
-        workBundle.Increment();
+        WorkBundle* workBundle = PoolInstance->GetBundle();
 
         // Assuming that dist = m / 2
         LEO_DEBUG_ASSERT(dist * 2 == m);
@@ -958,10 +952,8 @@ static void IFFT_DIT_Decoder_MT(
         {
             for (unsigned i = 0; i < dist; ++i)
             {
-                workBundle.Increment();
-                PoolInstance->Dispatch([work, i, dist, bytes, &workBundle]() {
+                workBundle->Dispatch([work, i, dist, bytes, &workBundle]() {
                     xor_mem(work[i + dist], work[i], bytes);
-                    workBundle.OperationComplete();
                 });
             }
         }
@@ -969,21 +961,17 @@ static void IFFT_DIT_Decoder_MT(
         {
             for (unsigned i = 0; i < dist; ++i)
             {
-                workBundle.Increment();
-                PoolInstance->Dispatch([work, i, dist, log_m, bytes, &workBundle]() {
+                workBundle->Dispatch([work, i, dist, log_m, bytes, &workBundle]() {
                     IFFT_DIT2(
                         work[i],
                         work[i + dist],
                         log_m,
                         bytes);
-                    workBundle.OperationComplete();
                 });
             }
         }
 
-        PoolInstance->Run();
-        workBundle.OperationComplete();
-        workBundle.Join();
+        workBundle->Complete();
     }
 }
 
@@ -1601,14 +1589,13 @@ static void FFT_DIT_ErrorBits_MT(
     const ffe_t* skewLUT,
     const ErrorBitfield& error_bits)
 {
-    WorkBundle workBundle;
     unsigned mip_level = LastNonzeroBit32(n);
 
     // Decimation in time: Unroll 2 layers at a time
     unsigned dist4 = n, dist = n >> 2;
     for (; dist != 0; dist4 = dist, dist >>= 2, mip_level -=2)
     {
-        workBundle.Increment();
+        WorkBundle* workBundle = PoolInstance->GetBundle();
 
         // For each set of dist*4 elements:
         for (unsigned r = 0; r < n_truncated; r += dist4)
@@ -1625,8 +1612,7 @@ static void FFT_DIT_ErrorBits_MT(
             {
                 void** work_i = work + i;
 
-                workBundle.Increment();
-                PoolInstance->Dispatch([bytes, &workBundle, work_i, dist, log_m01, log_m02, log_m23]() {
+                workBundle->Dispatch([bytes, &workBundle, work_i, dist, log_m01, log_m02, log_m23]() {
                     FFT_DIT4(
                         bytes,
                         work_i,
@@ -1634,25 +1620,21 @@ static void FFT_DIT_ErrorBits_MT(
                         log_m01,
                         log_m23,
                         log_m02);
-                    workBundle.OperationComplete();
                 });
             }
         }
 
-        PoolInstance->Run();
-        workBundle.OperationComplete();
-        workBundle.Join();
+        workBundle->Complete();
     }
 
     // If there is one layer left:
     if (dist4 == 2)
     {
-        workBundle.Increment();
+        WorkBundle* workBundle = PoolInstance->GetBundle();
 
         for (unsigned r = 0; r < n_truncated; r += 2)
         {
-            workBundle.Increment();
-            PoolInstance->Dispatch([bytes, &workBundle, skewLUT, work, r]() {
+            workBundle->Dispatch([bytes, &workBundle, skewLUT, work, r]() {
                 const ffe_t log_m = skewLUT[r + 1];
 
                 if (log_m == kModulus)
@@ -1665,13 +1647,10 @@ static void FFT_DIT_ErrorBits_MT(
                         log_m,
                         bytes);
                 }
-                workBundle.OperationComplete();
             });
         }
 
-        PoolInstance->Run();
-        workBundle.OperationComplete();
-        workBundle.Join();
+        workBundle->Complete();
     }
 }
 
@@ -1790,21 +1769,16 @@ void ReedSolomonDecode(
             }
             else
             {
-                WorkBundle workBundle;
-                workBundle.Increment();
+                WorkBundle* workBundle = PoolInstance->GetBundle();
 
                 for (unsigned j = i - width; j < i; ++j)
                 {
-                    workBundle.Increment();
-                    PoolInstance->Dispatch([work, j, width, &workBundle, buffer_bytes]() {
+                    workBundle->Dispatch([work, j, width, &workBundle, buffer_bytes]() {
                         xor_mem(work[j], work[j + width], buffer_bytes);
-                        workBundle.OperationComplete();
                     });
                 }
 
-                PoolInstance->Run();
-                workBundle.OperationComplete();
-                workBundle.Join();
+                workBundle->Complete();
             }
         }
     }

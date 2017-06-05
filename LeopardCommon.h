@@ -586,11 +586,30 @@ protected:
 //------------------------------------------------------------------------------
 // WorkBundle
 
+typedef std::function<void()> WorkerCallT;
+class WorkerPool;
+extern WorkerPool* PoolInstance;
+
 class WorkBundle
 {
+    friend class WorkerPool;
+
 public:
     WorkBundle();
     ~WorkBundle();
+
+    void Dispatch(const WorkerCallT& call);
+    void Complete();
+
+protected:
+    std::atomic<unsigned> WorkCount;
+
+#ifdef _WIN32
+    HANDLE hEvent = nullptr;
+#else
+    // FIXME: Port to other platforms
+#endif
+
 
     LEO_FORCE_INLINE void Increment()
     {
@@ -603,15 +622,6 @@ public:
     }
     void Join();
 
-protected:
-    std::atomic<unsigned> WorkCount;
-
-#ifdef _WIN32
-    HANDLE hEvent = nullptr;
-#else
-    // FIXME: Port to other platforms
-#endif
-
     void OnAllOperationsCompleted();
 };
 
@@ -619,30 +629,81 @@ protected:
 //------------------------------------------------------------------------------
 // WorkerPool
 
-typedef std::function<void()> WorkerCallT;
-
 class WorkerPool
 {
     friend class WorkerThread;
+    friend class WorkBundle;
 
 public:
     WorkerPool();
     void Stop();
 
-    void Dispatch(WorkerCallT call);
-    void Run();
+    WorkBundle* GetBundle()
+    {
+        WorkBundle* back;
+        {
+            Locker locker(BundleLock);
+
+            if (FreeBundles.empty())
+            {
+                locker.Clear();
+                back = new WorkBundle;
+            }
+            else
+            {
+                back = FreeBundles.back();
+                FreeBundles.pop_back();
+            }
+        }
+        back->Increment();
+        return back;
+    }
+
+    void FreeBundle(WorkBundle* bundle)
+    {
+        Locker locker(BundleLock);
+        FreeBundles.push_back(bundle);
+    }
 
 protected:
+    void Dispatch(WorkBundle* bundle, const WorkerCallT& call);
+    void Run();
+
     void DrainWorkQueue();
 
     mutable Lock QueueLock;
+
     WorkerThread* Workers = nullptr;
     unsigned WorkerCount = 0;
-    std::vector<WorkerCallT> WorkQueue;
+
+    struct QueueItem
+    {
+        WorkerCallT Call;
+        WorkBundle* Bundle;
+    };
+
+    std::vector<QueueItem> WorkQueue;
     unsigned Remaining;
+
+    mutable Lock BundleLock;
+    // TBD: Free this memory on shutdown?
+    std::vector<WorkBundle*> FreeBundles;
 };
 
-extern WorkerPool* PoolInstance;
+
+inline void WorkBundle::Dispatch(const WorkerCallT& call)
+{
+    Increment();
+    PoolInstance->Dispatch(this, call);
+}
+
+inline void WorkBundle::Complete()
+{
+    PoolInstance->Run();
+    OperationComplete();
+    Join();
+    PoolInstance->FreeBundle(this);
+}
 
 #endif // LEO_ENABLE_MULTITHREADING_OPT
 

@@ -587,11 +587,12 @@ void WorkerPool::Stop()
     WorkerCount = 0;
 }
 
-void WorkerPool::Dispatch(WorkerCallT call)
+void WorkerPool::Dispatch(WorkBundle* bundle, const WorkerCallT& call)
 {
     Locker locker(QueueLock);
     WorkQueue.resize(++Remaining);
-    WorkQueue[Remaining - 1] = call;
+    WorkQueue[Remaining - 1].Call = call;
+    WorkQueue[Remaining - 1].Bundle = bundle;
 }
 
 void WorkerPool::Run()
@@ -607,14 +608,15 @@ void WorkerPool::DrainWorkQueue()
 {
     for (;;)
     {
-        WorkerCallT call;
+        QueueItem item;
         {
             Locker locker(QueueLock);
             if (Remaining <= 0)
                 return;
-            call = WorkQueue[--Remaining];
+            item = WorkQueue[--Remaining];
         }
-        call();
+        item.Call();
+        item.Bundle->OperationComplete();
     }
 }
 
