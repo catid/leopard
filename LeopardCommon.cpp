@@ -436,9 +436,11 @@ void VectorXOR(
 //------------------------------------------------------------------------------
 // WorkerThread
 
-void WorkerThread::Start()
+void WorkerThread::Start(unsigned cpu_affinity)
 {
     Stop();
+
+    CPUAffinity = cpu_affinity;
 
 #ifdef _WIN32
     hEvent = ::CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -485,8 +487,26 @@ void WorkerThread::Wake()
 #endif
 }
 
+static bool SetCurrentThreadAffinity(unsigned processorIndex)
+{
+#ifdef _WIN32
+    return 0 != ::SetThreadAffinityMask(
+        ::GetCurrentThread(), (DWORD_PTR)1 << (processorIndex & 63));
+#elif !defined(ANDROID)
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(processorIndex, &cpuset);
+    return 0 == pthread_setaffinity_np(pthread_self(),
+        sizeof(cpu_set_t), &cpuset);
+#else
+    return true; // FIXME: Unused on Android anyway
+#endif
+}
+
 void WorkerThread::Loop()
 {
+    SetCurrentThreadAffinity(CPUAffinity);
+
     for (;;)
     {
         if (Terminated)
@@ -572,7 +592,7 @@ WorkerPool::WorkerPool()
 
         Workers = new WorkerThread[WorkerCount];
         for (unsigned i = 0; i < WorkerCount; ++i)
-            Workers[i].Start();
+            Workers[i].Start(i);
 
         std::atexit(AtExitWrapper);
     }
@@ -597,8 +617,17 @@ void WorkerPool::Dispatch(WorkBundle* bundle, const WorkerCallT& call)
 
 void WorkerPool::Run()
 {
+    unsigned remaining;
+    {
+        Locker locker(QueueLock);
+        remaining = Remaining;
+    }
+    unsigned count = WorkerCount;
+    if (count > remaining)
+        count = remaining;
+
     // Wake all the workers
-    for (unsigned i = 0, count = WorkerCount; i < count; ++i)
+    for (unsigned i = 0; i < count; ++i)
         Workers[i].Wake();
 
     DrainWorkQueue();

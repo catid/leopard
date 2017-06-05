@@ -557,17 +557,20 @@ private:
 class WorkerThread
 {
 public:
-    WorkerThread() {}
+    WorkerThread()
+    {
+    }
     ~WorkerThread()
     {
         Stop();
     }
 
-    void Start();
+    void Start(unsigned cpu_affinity);
     void Stop();
     void Wake();
 
 protected:
+    unsigned CPUAffinity = 0;
     std::atomic_bool Terminated = false;
     std::unique_ptr<std::thread> Thread;
 
