@@ -55,7 +55,7 @@ struct TestParameters
 };
 
 static const unsigned kLargeTrialCount = 1;
-static const unsigned kSmallTrialCount = 10;
+static const unsigned kSmallTrialCount = 1;
 
 
 //------------------------------------------------------------------------------
@@ -568,7 +568,7 @@ int main(int argc, char **argv)
     if (!Benchmark(params))
         goto Failed;
 
-#if 0
+#if 1
     static const unsigned kMaxRandomData = 32768;
 
     prng.Seed(params.seed, 8);
