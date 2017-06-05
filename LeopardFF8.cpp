@@ -1641,7 +1641,8 @@ void ReedSolomonEncode(
     unsigned recovery_count,
     unsigned m,
     const void* const* data,
-    void** work)
+    void** work,
+    bool multithreaded)
 {
     // work <- IFFT(data, m, m)
 
@@ -1849,7 +1850,8 @@ void ReedSolomonDecode(
     unsigned n, // NextPow2(m + original_count) = work_count
     const void* const * const original, // original_count entries
     const void* const * const recovery, // recovery_count entries
-    void** work) // n entries
+    void** work, // n entries
+    bool multithreaded)
 {
     // Fill in error locations
 

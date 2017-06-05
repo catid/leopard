@@ -897,6 +897,90 @@ static void IFFT_DIT_Decoder(
     }
 }
 
+// Multithreaded decoder version
+static void IFFT_DIT_Decoder_MT(
+    const uint64_t bytes,
+    const unsigned m_truncated,
+    void** work,
+    const unsigned m,
+    const ffe_t* skewLUT)
+{
+    WorkBundle workBundle;
+
+    // Decimation in time: Unroll 2 layers at a time
+    unsigned dist = 1, dist4 = 4;
+    for (; dist4 <= m; dist = dist4, dist4 <<= 2)
+    {
+        // For each set of dist*4 elements:
+        for (unsigned r = 0; r < m_truncated; r += dist4)
+        {
+            const unsigned i_end = r + dist;
+            const ffe_t log_m01 = skewLUT[i_end];
+            const ffe_t log_m02 = skewLUT[i_end + dist];
+            const ffe_t log_m23 = skewLUT[i_end + dist * 2];
+
+            // For each set of dist elements:
+            for (unsigned i = r; i < i_end; ++i)
+            {
+                void** work_i = work + i;
+                PoolInstance->Dispatch([log_m01, log_m02, log_m23, bytes, work_i, dist, &workBundle]() {
+                    IFFT_DIT4(
+                        bytes,
+                        work_i,
+                        dist,
+                        log_m01,
+                        log_m23,
+                        log_m02);
+                    workBundle.OperationComplete();
+                });
+                workBundle.Increment();
+            }
+        }
+
+        PoolInstance->Run();
+        workBundle.Join();
+    }
+
+    // If there is one layer left:
+    if (dist < m)
+    {
+        // Assuming that dist = m / 2
+        LEO_DEBUG_ASSERT(dist * 2 == m);
+
+        const ffe_t log_m = skewLUT[dist];
+
+        if (log_m == kModulus)
+        {
+            for (unsigned i = 0; i < dist; ++i)
+            {
+                PoolInstance->Dispatch([work, i, dist, bytes, &workBundle]() {
+                    xor_mem(work[i + dist], work[i], bytes);
+                    workBundle.OperationComplete();
+                });
+                workBundle.Increment();
+            }
+        }
+        else
+        {
+            for (unsigned i = 0; i < dist; ++i)
+            {
+                PoolInstance->Dispatch([work, i, dist, log_m, bytes, &workBundle]() {
+                    IFFT_DIT2(
+                        work[i],
+                        work[i + dist],
+                        log_m,
+                        bytes);
+                    workBundle.OperationComplete();
+                });
+                workBundle.Increment();
+            }
+        }
+
+        PoolInstance->Run();
+        workBundle.Join();
+    }
+}
+
 /*
     Decimation in time FFT:
 
@@ -1208,6 +1292,9 @@ static void FFT_DIT(
     unsigned dist4 = m, dist = m >> 2;
     for (; dist != 0; dist4 = dist, dist >>= 2)
     {
+        const unsigned thread_u = m_truncated / dist4;
+        const unsigned thread_v = dist;
+
         // For each set of dist*4 elements:
         for (unsigned r = 0; r < m_truncated; r += dist4)
         {
@@ -1261,7 +1348,8 @@ void ReedSolomonEncode(
     unsigned recovery_count,
     unsigned m,
     const void* const * data,
-    void** work)
+    void** work,
+    bool multithreaded)
 {
     // work <- IFFT(data, m, m)
 
@@ -1499,6 +1587,82 @@ static void FFT_DIT_ErrorBits(
     }
 }
 
+static void FFT_DIT_ErrorBits_MT(
+    const uint64_t bytes,
+    void** work,
+    const unsigned n_truncated,
+    const unsigned n,
+    const ffe_t* skewLUT,
+    const ErrorBitfield& error_bits)
+{
+    WorkBundle workBundle;
+    unsigned mip_level = LastNonzeroBit32(n);
+
+    // Decimation in time: Unroll 2 layers at a time
+    unsigned dist4 = n, dist = n >> 2;
+    for (; dist != 0; dist4 = dist, dist >>= 2, mip_level -=2)
+    {
+        // For each set of dist*4 elements:
+        for (unsigned r = 0; r < n_truncated; r += dist4)
+        {
+            if (!error_bits.IsNeeded(mip_level, r))
+                continue;
+
+            const ffe_t log_m01 = skewLUT[r + dist];
+            const ffe_t log_m23 = skewLUT[r + dist * 3];
+            const ffe_t log_m02 = skewLUT[r + dist * 2];
+
+            // For each set of dist elements:
+            for (unsigned i = r; i < r + dist; ++i)
+            {
+                void** work_i = work + i;
+
+                PoolInstance->Dispatch([bytes, &workBundle, work_i, dist, log_m01, log_m02, log_m23]() {
+                    FFT_DIT4(
+                        bytes,
+                        work_i,
+                        dist,
+                        log_m01,
+                        log_m23,
+                        log_m02);
+                    workBundle.OperationComplete();
+                });
+                workBundle.Increment();
+            }
+        }
+
+        PoolInstance->Run();
+        workBundle.Join();
+    }
+
+    // If there is one layer left:
+    if (dist4 == 2)
+    {
+        for (unsigned r = 0; r < n_truncated; r += 2)
+        {
+            PoolInstance->Dispatch([bytes, &workBundle, skewLUT, work, r]() {
+                const ffe_t log_m = skewLUT[r + 1];
+
+                if (log_m == kModulus)
+                    xor_mem(work[r + 1], work[r], bytes);
+                else
+                {
+                    FFT_DIT2(
+                        work[r],
+                        work[r + 1],
+                        log_m,
+                        bytes);
+                }
+                workBundle.OperationComplete();
+            });
+            workBundle.Increment();
+        }
+
+        PoolInstance->Run();
+        workBundle.Join();
+    }
+}
+
 #endif // LEO_ERROR_BITFIELD_OPT
 
 
@@ -1513,8 +1677,11 @@ void ReedSolomonDecode(
     unsigned n, // NextPow2(m + original_count) = work_count
     const void* const * const original, // original_count entries
     const void* const * const recovery, // recovery_count entries
-    void** work) // n entries
+    void** work, // n entries
+    bool multithreaded)
 {
+    if (multithreaded && n * buffer_bytes < 512000)
+        multithreaded = false;
     // Fill in error locations
 
 #ifdef LEO_ERROR_BITFIELD_OPT
@@ -1577,24 +1744,68 @@ void ReedSolomonDecode(
 
     // work <- IFFT(work, n, 0)
 
-    IFFT_DIT_Decoder(
-        buffer_bytes,
-        m + original_count,
-        work,
-        n,
-        FFTSkew - 1);
+    if (multithreaded)
+    {
+        IFFT_DIT_Decoder_MT(
+            buffer_bytes,
+            m + original_count,
+            work,
+            n,
+            FFTSkew - 1);
+    }
+    else
+    {
+        IFFT_DIT_Decoder(
+            buffer_bytes,
+            m + original_count,
+            work,
+            n,
+            FFTSkew - 1);
+    }
 
     // work <- FormalDerivative(work, n)
 
-    for (unsigned i = 1; i < n; ++i)
+    if (multithreaded)
     {
-        const unsigned width = ((i ^ (i - 1)) + 1) >> 1;
+        for (unsigned i = 1; i < n; ++i)
+        {
+            const unsigned width = ((i ^ (i - 1)) + 1) >> 1;
 
-        VectorXOR(
-            buffer_bytes,
-            width,
-            work + i - width,
-            work + i);
+            if (width <= 4)
+            {
+                for (unsigned j = i - width; j < i; ++j)
+                    xor_mem(work[j], work[j + width], buffer_bytes);
+            }
+            else
+            {
+                WorkBundle workBundle;
+
+                for (unsigned j = i - width; j < i; ++j)
+                {
+                    PoolInstance->Dispatch([work, j, width, &workBundle, buffer_bytes]() {
+                        xor_mem(work[j], work[j + width], buffer_bytes);
+                        workBundle.OperationComplete();
+                    });
+                    workBundle.Increment();
+                }
+
+                PoolInstance->Run();
+                workBundle.Join();
+            }
+        }
+    }
+    else
+    {
+        for (unsigned i = 1; i < n; ++i)
+        {
+            const unsigned width = ((i ^ (i - 1)) + 1) >> 1;
+
+            VectorXOR(
+                buffer_bytes,
+                width,
+                work + i - width,
+                work + i);
+        }
     }
 
     // work <- FFT(work, n, 0) truncated to m + original_count
@@ -1602,7 +1813,14 @@ void ReedSolomonDecode(
     const unsigned output_count = m + original_count;
 
 #ifdef LEO_ERROR_BITFIELD_OPT
-    FFT_DIT_ErrorBits(buffer_bytes, work, output_count, n, FFTSkew - 1, error_bits);
+    if (multithreaded)
+    {
+        FFT_DIT_ErrorBits_MT(buffer_bytes, work, output_count, n, FFTSkew - 1, error_bits);
+    }
+    else
+    {
+        FFT_DIT_ErrorBits(buffer_bytes, work, output_count, n, FFTSkew - 1, error_bits);
+    }
 #else
     FFT_DIT(buffer_bytes, work, output_count, n, FFTSkew - 1);
 #endif

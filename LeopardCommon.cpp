@@ -28,6 +28,8 @@
 
 #include "LeopardCommon.h"
 
+#include <thread>
+
 namespace leopard {
 
 
@@ -427,6 +429,197 @@ void VectorXOR(
     for (unsigned i = 0; i < count; ++i)
         xor_mem(x[i], y[i], bytes);
 }
+
+
+#ifdef LEO_ENABLE_MULTITHREADING_OPT
+
+//------------------------------------------------------------------------------
+// WorkerThread
+
+void WorkerThread::Start()
+{
+    Stop();
+
+#ifdef _WIN32
+    hEvent = ::CreateEventW(nullptr, FALSE, FALSE, nullptr);
+#endif
+
+    Terminated = false;
+    Thread = std::make_unique<std::thread>(&WorkerThread::Loop, this);
+}
+
+void WorkerThread::Stop()
+{
+    if (Thread)
+    {
+        Terminated = true;
+#ifdef _WIN32
+        ::SetEvent(hEvent);
+#endif
+
+        try
+        {
+            Thread->join();
+        }
+        catch (std::system_error& /*err*/)
+        {
+        }
+        Thread = nullptr;
+    }
+
+#ifdef _WIN32
+    if (hEvent != nullptr)
+    {
+        ::CloseHandle(hEvent);
+        hEvent = nullptr;
+    }
+#endif
+}
+
+void WorkerThread::Wake()
+{
+#ifdef _WIN32
+    ::SetEvent(hEvent);
+#else
+    // FIXME: Port to other platforms
+#endif
+}
+
+void WorkerThread::Loop()
+{
+    for (;;)
+    {
+        if (Terminated)
+            break;
+
+#ifdef _WIN32
+        const DWORD result = ::WaitForSingleObject(hEvent, INFINITE);
+
+        if (result != WAIT_OBJECT_0 || Terminated)
+            break;
+#else
+        // FIXME: Port to other platforms
+#endif
+
+        PoolInstance->DrainWorkQueue();
+    }
+}
+
+
+//------------------------------------------------------------------------------
+// WorkBundle
+
+WorkBundle::WorkBundle()
+{
+#ifdef _WIN32
+    hEvent = ::CreateEventW(nullptr, FALSE, FALSE, nullptr);
+#else
+    // FIXME: Port to other platforms
+#endif
+}
+
+WorkBundle::~WorkBundle()
+{
+#ifdef _WIN32
+    if (hEvent != nullptr)
+    {
+        ::CloseHandle(hEvent);
+        hEvent = nullptr;
+    }
+#else
+    // FIXME: Port to other platforms
+#endif
+}
+
+void WorkBundle::OnAllOperationsCompleted()
+{
+#ifdef _WIN32
+    ::SetEvent(hEvent);
+#else
+    // FIXME: Port to other platforms
+#endif
+}
+
+void WorkBundle::Join()
+{
+#ifdef _WIN32
+    ::WaitForSingleObject(hEvent, INFINITE);
+#else
+    // FIXME: Port to other platforms
+#endif
+}
+
+
+//------------------------------------------------------------------------------
+// WorkerPool
+
+WorkerPool* PoolInstance = nullptr;
+
+extern "C" void AtExitWrapper()
+{
+    if (PoolInstance)
+        PoolInstance->Stop();
+}
+
+WorkerPool::WorkerPool()
+{
+    WorkerCount = 0;
+
+    unsigned num_cpus = std::thread::hardware_concurrency();
+    if (num_cpus > 1)
+    {
+        WorkerCount = num_cpus - 1;
+
+        Workers = new WorkerThread[WorkerCount];
+        for (unsigned i = 0; i < WorkerCount; ++i)
+            Workers[i].Start();
+
+        std::atexit(AtExitWrapper);
+    }
+}
+
+void WorkerPool::Stop()
+{
+    Locker locker(QueueLock);
+
+    delete[] Workers;
+    Workers = nullptr;
+    WorkerCount = 0;
+}
+
+void WorkerPool::Dispatch(WorkerCallT call)
+{
+    Locker locker(QueueLock);
+    WorkQueue.resize(++Remaining);
+    WorkQueue[Remaining - 1] = call;
+}
+
+void WorkerPool::Run()
+{
+    // Wake all the workers
+    for (unsigned i = 0, count = WorkerCount; i < count; ++i)
+        Workers[i].Wake();
+
+    DrainWorkQueue();
+}
+
+void WorkerPool::DrainWorkQueue()
+{
+    for (;;)
+    {
+        WorkerCallT call;
+        {
+            Locker locker(QueueLock);
+            if (Remaining <= 0)
+                return;
+            call = WorkQueue[--Remaining];
+        }
+        call();
+    }
+}
+
+
+#endif // LEO_ENABLE_MULTITHREADING_OPT
 
 
 } // namespace leopard

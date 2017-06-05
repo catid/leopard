@@ -31,9 +31,6 @@
 /*
     TODO:
 
-    Short-term:
-    + Multithreading
-
     Mid-term:
     + Add compile-time selectable XOR-only rowops instead of MULADD
     + Look into 12-bit fields as a performance optimization
@@ -157,6 +154,11 @@
 
 #include <stdint.h>
 #include <malloc.h>
+#include <vector>
+#include <atomic>
+#include <memory>
+#include <mutex>
+#include <condition_variable>
 
 
 //------------------------------------------------------------------------------
@@ -182,6 +184,11 @@
 // Unroll inner loops 4 times
 #define LEO_USE_VECTOR4_OPT
 
+// Enable multithreading optimization when requested
+#ifdef _MSC_VER
+    #define LEO_ENABLE_MULTITHREADING_OPT
+#endif
+
 
 //------------------------------------------------------------------------------
 // Debug
@@ -200,6 +207,32 @@
 #else
     #define LEO_DEBUG_BREAK ;
     #define LEO_DEBUG_ASSERT(cond) ;
+#endif
+
+
+//------------------------------------------------------------------------------
+// Windows Header
+
+#ifdef _WIN32
+    #define WIN32_LEAN_AND_MEAN
+
+    #ifndef _WINSOCKAPI_
+        #define DID_DEFINE_WINSOCKAPI
+        #define _WINSOCKAPI_
+    #endif
+    #ifndef NOMINMAX
+        #define NOMINMAX
+    #endif
+    #ifndef _WIN32_WINNT
+        #define _WIN32_WINNT 0x0601 /* Windows 7+ */
+    #endif
+
+    #include <windows.h>
+#endif
+
+#ifdef DID_DEFINE_WINSOCKAPI
+    #undef _WINSOCKAPI_
+    #undef DID_DEFINE_WINSOCKAPI
 #endif
 
 
@@ -454,6 +487,164 @@ static LEO_FORCE_INLINE void SIMDSafeFree(void* ptr)
     data -= kAlignmentBytes - offset;
     free(data);
 }
+
+
+//------------------------------------------------------------------------------
+// Mutex
+
+#ifdef _WIN32
+
+struct Lock
+{
+    CRITICAL_SECTION cs;
+
+    Lock() { ::InitializeCriticalSectionAndSpinCount(&cs, 1000); }
+    ~Lock() { ::DeleteCriticalSection(&cs); }
+    bool TryEnter() { return ::TryEnterCriticalSection(&cs) != FALSE; }
+    void Enter() { ::EnterCriticalSection(&cs); }
+    void Leave() { ::LeaveCriticalSection(&cs); }
+};
+
+#else
+
+struct Lock
+{
+    std::recursive_mutex cs;
+
+    bool TryEnter() { return cs.try_lock(); }
+    void Enter() { cs.lock(); }
+    void Leave() { cs.unlock(); }
+};
+
+#endif
+
+class Locker
+{
+public:
+    Locker(Lock& lock) {
+        TheLock = &lock;
+        if (TheLock)
+            TheLock->Enter();
+    }
+    ~Locker() { Clear(); }
+    bool TrySet(Lock& lock) {
+        Clear();
+        if (!lock.TryEnter())
+            return false;
+        TheLock = &lock;
+        return true;
+    }
+    void Set(Lock& lock) {
+        Clear();
+        lock.Enter();
+        TheLock = &lock;
+    }
+    void Clear() {
+        if (TheLock)
+            TheLock->Leave();
+        TheLock = nullptr;
+    }
+private:
+    Lock* TheLock;
+};
+
+
+#ifdef LEO_ENABLE_MULTITHREADING_OPT
+
+//------------------------------------------------------------------------------
+// WorkerThread
+
+class WorkerThread
+{
+public:
+    WorkerThread() {}
+    ~WorkerThread()
+    {
+        Stop();
+    }
+
+    void Start();
+    void Stop();
+    void Wake();
+
+protected:
+    std::atomic_bool Terminated = false;
+    std::unique_ptr<std::thread> Thread;
+
+#ifdef _WIN32
+    HANDLE hEvent = nullptr;
+#else
+    // FIXME: Port to other platforms
+    mutable std::mutex QueueLock;
+    std::condition_variable QueueCondition;
+#endif
+
+    void Loop();
+};
+
+
+//------------------------------------------------------------------------------
+// WorkBundle
+
+class WorkBundle
+{
+public:
+    WorkBundle();
+    ~WorkBundle();
+
+    LEO_FORCE_INLINE void Increment()
+    {
+        ++WorkCount;
+    }
+    LEO_FORCE_INLINE void OperationComplete()
+    {
+        if (--WorkCount == 0)
+            OnAllOperationsCompleted();
+    }
+    void Join();
+
+protected:
+    std::atomic<unsigned> WorkCount;
+
+#ifdef _WIN32
+    HANDLE hEvent = nullptr;
+#else
+    // FIXME: Port to other platforms
+#endif
+
+    void OnAllOperationsCompleted();
+};
+
+
+//------------------------------------------------------------------------------
+// WorkerPool
+
+typedef std::function<void()> WorkerCallT;
+
+class WorkerPool
+{
+    friend class WorkerThread;
+
+public:
+    WorkerPool();
+    void Stop();
+
+    void Dispatch(WorkerCallT call);
+    void Run();
+
+protected:
+    void DrainWorkQueue();
+
+    mutable Lock QueueLock;
+    WorkerThread* Workers = nullptr;
+    unsigned WorkerCount = 0;
+    std::vector<WorkerCallT> WorkQueue;
+    unsigned Remaining;
+};
+
+extern WorkerPool* PoolInstance;
+
+#endif // LEO_ENABLE_MULTITHREADING_OPT
 
 
 } // namespace leopard

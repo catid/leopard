@@ -63,6 +63,12 @@ LEO_EXPORT int leo_init_(int version)
         return Leopard_Platform;
 #endif // LEO_HAS_FF16
 
+#ifdef LEO_ENABLE_MULTITHREADING_OPT
+    // Start worker threads spinning
+    leopard::PoolInstance = new leopard::WorkerPool;
+#endif // LEO_ENABLE_MULTITHREADING_OPT
+
+
     m_Initialized = true;
     return Leopard_Success;
 }
@@ -176,7 +182,8 @@ LEO_EXPORT LeopardResult leo_encode(
             recovery_count,
             m,
             original_data,
-            work_data);
+            work_data,
+            mt);
     }
     else
 #endif // LEO_HAS_FF8
@@ -189,7 +196,8 @@ LEO_EXPORT LeopardResult leo_encode(
             recovery_count,
             m,
             original_data,
-            work_data);
+            work_data,
+            mt);
     }
     else
 #endif // LEO_HAS_FF16
@@ -316,7 +324,8 @@ LEO_EXPORT LeopardResult leo_decode(
             n,
             original_data,
             recovery_data,
-            work_data);
+            work_data,
+            mt);
     }
     else
 #endif // LEO_HAS_FF8
@@ -331,7 +340,8 @@ LEO_EXPORT LeopardResult leo_decode(
             n,
             original_data,
             recovery_data,
-            work_data);
+            work_data,
+            mt);
     }
     else
 #endif // LEO_HAS_FF16

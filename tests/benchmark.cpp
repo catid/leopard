@@ -51,11 +51,11 @@ struct TestParameters
     unsigned buffer_bytes = 64000; // multiple of 64 bytes
     unsigned loss_count = 32768; // some fraction of original_count
     unsigned seed = 2;
-    bool multithreaded = true;
+    bool multithreaded = false;
 };
 
 static const unsigned kLargeTrialCount = 1;
-static const unsigned kSmallTrialCount = 1;
+static const unsigned kSmallTrialCount = 4;
 
 
 //------------------------------------------------------------------------------
