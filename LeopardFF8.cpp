@@ -704,7 +704,7 @@ static void IFFT_DIT2_xor(
 
     xor_mem(y_in, x_in, bytes);
 
-    unsigned count = bytes;
+    uint64_t count = bytes;
     ffe_t * LEO_RESTRICT y1 = reinterpret_cast<ffe_t *>(y_in);
 
 #ifdef LEO_TARGET_MOBILE
@@ -1082,7 +1082,9 @@ static void IFFT_DIT(
     const unsigned m,
     const ffe_t* skewLUT)
 {
-    // FIXME: Roll into first layer
+    // I tried rolling the memcpy/memset into the first layer of the FFT and
+    // found that it only yields a 4% performance improvement, which is not
+    // worth the extra complexity.
     if (data)
     {
         for (unsigned i = 0; i < m_truncated; ++i)
