@@ -641,6 +641,11 @@ public:
     WorkerPool();
     void Stop();
 
+    unsigned GetParallelism() const
+    {
+        return WorkerCount + 1;
+    }
+
     WorkBundle* GetBundle()
     {
         WorkBundle* back;
@@ -702,9 +707,12 @@ inline void WorkBundle::Dispatch(const WorkerCallT& call)
 
 inline void WorkBundle::Complete()
 {
-    PoolInstance->Run();
-    OperationComplete();
-    Join();
+    if (WorkCount > 0)
+    {
+        PoolInstance->Run();
+        OperationComplete();
+        Join();
+    }
     PoolInstance->FreeBundle(this);
 }
 
