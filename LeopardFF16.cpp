@@ -122,7 +122,6 @@ static void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated)
         for (int r = 0; r < m_truncated; r += dist4)
         {
             // For each set of dist elements:
-#pragma omp parallel for
             for (int i = r; i < r + dist; ++i)
                 FWHT_4(data + i, dist);
         }
@@ -1617,11 +1616,22 @@ void ReedSolomonDecode(
     {
         const unsigned width = ((i ^ (i - 1)) + 1) >> 1;
 
-        VectorXOR(
-            buffer_bytes,
-            width,
-            work + i - width,
-            work + i);
+        if (width < 8)
+        {
+            VectorXOR(
+                buffer_bytes,
+                width,
+                work + i - width,
+                work + i);
+        }
+        else
+        {
+            VectorXOR_Threads(
+                buffer_bytes,
+                width,
+                work + i - width,
+                work + i);
+        }
     }
 
     // work <- FFT(work, n, 0) truncated to m + original_count
