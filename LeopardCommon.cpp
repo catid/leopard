@@ -406,6 +406,36 @@ void xor_mem4(
 
 #endif // LEO_USE_VECTOR4_OPT
 
+void VectorXOR_Threads(
+    const uint64_t bytes,
+    unsigned count,
+    void** x,
+    void** y)
+{
+#ifdef LEO_USE_VECTOR4_OPT
+    if (count >= 4)
+    {
+        int i_end = count - 4;
+#pragma omp parallel for
+        for (int i = 0; i <= i_end; i += 4)
+        {
+            xor_mem4(
+                x[i + 0], y[i + 0],
+                x[i + 1], y[i + 1],
+                x[i + 2], y[i + 2],
+                x[i + 3], y[i + 3],
+                bytes);
+        }
+        count %= 4;
+        i_end -= count;
+        x += i_end;
+        y += i_end;
+    }
+#endif // LEO_USE_VECTOR4_OPT
+
+    for (unsigned i = 0; i < count; ++i)
+        xor_mem(x[i], y[i], bytes);
+}
 void VectorXOR(
     const uint64_t bytes,
     unsigned count,
@@ -413,244 +443,28 @@ void VectorXOR(
     void** y)
 {
 #ifdef LEO_USE_VECTOR4_OPT
-    while (count >= 4)
+    if (count >= 4)
     {
-        xor_mem4(
-            x[0], y[0],
-            x[1], y[1],
-            x[2], y[2],
-            x[3], y[3],
-            bytes);
-        x += 4, y += 4;
-        count -= 4;
+        int i_end = count - 4;
+        for (int i = 0; i <= i_end; i += 4)
+        {
+            xor_mem4(
+                x[i + 0], y[i + 0],
+                x[i + 1], y[i + 1],
+                x[i + 2], y[i + 2],
+                x[i + 3], y[i + 3],
+                bytes);
+        }
+        count %= 4;
+        i_end -= count;
+        x += i_end;
+        y += i_end;
     }
 #endif // LEO_USE_VECTOR4_OPT
 
     for (unsigned i = 0; i < count; ++i)
         xor_mem(x[i], y[i], bytes);
 }
-
-
-#ifdef LEO_ENABLE_MULTITHREADING_OPT
-
-//------------------------------------------------------------------------------
-// WorkerThread
-
-void WorkerThread::Start(unsigned cpu_affinity)
-{
-    Stop();
-
-    CPUAffinity = cpu_affinity;
-
-#ifdef _WIN32
-    hEvent = ::CreateEventW(nullptr, FALSE, FALSE, nullptr);
-#endif
-
-    Terminated = false;
-    Thread = std::make_unique<std::thread>(&WorkerThread::Loop, this);
-}
-
-void WorkerThread::Stop()
-{
-    if (Thread)
-    {
-        Terminated = true;
-#ifdef _WIN32
-        ::SetEvent(hEvent);
-#endif
-
-        try
-        {
-            Thread->join();
-        }
-        catch (std::system_error& /*err*/)
-        {
-        }
-        Thread = nullptr;
-    }
-
-#ifdef _WIN32
-    if (hEvent != nullptr)
-    {
-        ::CloseHandle(hEvent);
-        hEvent = nullptr;
-    }
-#endif
-}
-
-void WorkerThread::Wake()
-{
-#ifdef _WIN32
-    ::SetEvent(hEvent);
-#else
-    // FIXME: Port to other platforms
-#endif
-}
-
-static bool SetCurrentThreadAffinity(unsigned processorIndex)
-{
-#ifdef _WIN32
-    return 0 != ::SetThreadAffinityMask(
-        ::GetCurrentThread(), (DWORD_PTR)1 << (processorIndex & 63));
-#elif !defined(ANDROID)
-    cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
-    CPU_SET(processorIndex, &cpuset);
-    return 0 == pthread_setaffinity_np(pthread_self(),
-        sizeof(cpu_set_t), &cpuset);
-#else
-    return true; // FIXME: Unused on Android anyway
-#endif
-}
-
-void WorkerThread::Loop()
-{
-    SetCurrentThreadAffinity(CPUAffinity);
-
-    for (;;)
-    {
-        if (Terminated)
-            break;
-
-#ifdef _WIN32
-        const DWORD result = ::WaitForSingleObject(hEvent, INFINITE);
-
-        if (result != WAIT_OBJECT_0 || Terminated)
-            break;
-#else
-        // FIXME: Port to other platforms
-#endif
-
-        PoolInstance->DrainWorkQueue();
-    }
-}
-
-
-//------------------------------------------------------------------------------
-// WorkBundle
-
-WorkBundle::WorkBundle()
-{
-#ifdef _WIN32
-    hEvent = ::CreateEventW(nullptr, FALSE, FALSE, nullptr);
-#else
-    // FIXME: Port to other platforms
-#endif
-}
-
-WorkBundle::~WorkBundle()
-{
-#ifdef _WIN32
-    if (hEvent != nullptr)
-    {
-        ::CloseHandle(hEvent);
-        hEvent = nullptr;
-    }
-#else
-    // FIXME: Port to other platforms
-#endif
-}
-
-void WorkBundle::OnAllOperationsCompleted()
-{
-#ifdef _WIN32
-    ::SetEvent(hEvent);
-#else
-    // FIXME: Port to other platforms
-#endif
-}
-
-void WorkBundle::Join()
-{
-#ifdef _WIN32
-    ::WaitForSingleObject(hEvent, INFINITE);
-#else
-    // FIXME: Port to other platforms
-#endif
-}
-
-
-//------------------------------------------------------------------------------
-// WorkerPool
-
-WorkerPool* PoolInstance = nullptr;
-
-extern "C" void AtExitWrapper()
-{
-    if (PoolInstance)
-        PoolInstance->Stop();
-}
-
-WorkerPool::WorkerPool()
-{
-    WorkerCount = 0;
-
-    unsigned num_cpus = std::thread::hardware_concurrency();
-    if (num_cpus > 1)
-    {
-        WorkerCount = num_cpus - 1;
-
-        Workers = new WorkerThread[WorkerCount];
-        for (unsigned i = 0; i < WorkerCount; ++i)
-            Workers[i].Start(i);
-
-        std::atexit(AtExitWrapper);
-    }
-}
-
-void WorkerPool::Stop()
-{
-    Locker locker(QueueLock);
-
-    delete[] Workers;
-    Workers = nullptr;
-    WorkerCount = 0;
-}
-
-void WorkerPool::Dispatch(WorkBundle* bundle, const WorkerCallT& call)
-{
-    Locker locker(QueueLock);
-    WorkQueue.resize(++Remaining);
-    WorkQueue[Remaining - 1].Call = call;
-    WorkQueue[Remaining - 1].Bundle = bundle;
-}
-
-void WorkerPool::Run()
-{
-    unsigned remaining;
-    {
-        Locker locker(QueueLock);
-        remaining = Remaining;
-    }
-    unsigned count = WorkerCount;
-    if (count > remaining)
-        count = remaining;
-
-    // Wake all the workers
-    for (unsigned i = 0; i < count; ++i)
-        Workers[i].Wake();
-
-    DrainWorkQueue();
-}
-
-void WorkerPool::DrainWorkQueue()
-{
-    for (;;)
-    {
-        QueueItem item;
-        {
-            Locker locker(QueueLock);
-            if (Remaining <= 0)
-                return;
-            item = WorkQueue[--Remaining];
-        }
-        item.Call();
-        item.Bundle->OperationComplete();
-    }
-}
-
-
-#endif // LEO_ENABLE_MULTITHREADING_OPT
 
 
 } // namespace leopard

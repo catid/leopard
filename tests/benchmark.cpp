@@ -43,19 +43,18 @@ struct TestParameters
 {
 #ifdef LEO_HAS_FF16
     unsigned original_count = 1000; // under 65536
-    unsigned recovery_count = 200; // under 65536 - original_count
+    unsigned recovery_count = 100; // under 65536 - original_count
 #else
     unsigned original_count = 100; // under 65536
-    unsigned recovery_count = 20; // under 65536 - original_count
+    unsigned recovery_count = 10; // under 65536 - original_count
 #endif
-    unsigned buffer_bytes = 6400; // multiple of 64 bytes
+    unsigned buffer_bytes = 1344; // multiple of 64 bytes
     unsigned loss_count = 32768; // some fraction of original_count
     unsigned seed = 2;
-    bool multithreaded = true;
 };
 
 static const unsigned kLargeTrialCount = 1;
-static const unsigned kSmallTrialCount = 10;
+static const unsigned kSmallTrialCount = 300;
 
 
 //------------------------------------------------------------------------------
@@ -420,8 +419,7 @@ static bool Benchmark(const TestParameters& params)
             params.recovery_count,
             encode_work_count,
             (void**)&original_data[0],
-            (void**)&encode_work_data[0], // recovery data written here
-            params.multithreaded ? LeopardFlags_Multithreaded : LeopardFlags_Defaults
+            (void**)&encode_work_data[0] // recovery data written here
         );
         t_leo_encode.EndCall();
 
@@ -473,8 +471,7 @@ static bool Benchmark(const TestParameters& params)
             decode_work_count,
             (void**)&original_data[0],
             (void**)&encode_work_data[0],
-            (void**)&decode_work_data[0],
-            params.multithreaded ? LeopardFlags_Multithreaded : LeopardFlags_Defaults);
+            (void**)&decode_work_data[0]);
         t_leo_decode.EndCall();
 
         if (decodeResult != Leopard_Success)
@@ -529,108 +526,6 @@ static bool Benchmark(const TestParameters& params)
 
 
 //------------------------------------------------------------------------------
-// Multithreading Tests
-
-#ifdef LEO_ENABLE_MULTITHREADING_OPT
-
-void MultithreadingTests()
-{
-    static const unsigned kBytes = 100;
-    static const unsigned N = 10000;
-    std::vector<uint8_t*> Buffers(N * 2);
-
-    for (unsigned i = 0; i < N * 2; ++i)
-        Buffers[i] = leopard::SIMDSafeAllocate(kBytes);
-
-    {
-        for (unsigned j = 1; j <= 16; ++j)
-        {
-            FunctionTimer trialTimer("trial");
-
-            for (unsigned t = 0; t < 40; ++t)
-            {
-                trialTimer.BeginCall();
-
-                leopard::WorkBundle* bundle = leopard::PoolInstance->GetBundle();
-
-                const unsigned split_j = N / j;
-
-                for (unsigned k = 0; k < N; k += split_j)
-                {
-                    bundle->Dispatch([split_j, k, &Buffers]() {
-                        for (unsigned m = k; m < N && m < (k + split_j); ++m)
-                        {
-                            leopard::xor_mem(Buffers[m + N], Buffers[m], kBytes);
-                        }
-                    });
-                }
-
-                bundle->Complete();
-
-                trialTimer.EndCall();
-            }
-
-            float mbps = N * (uint64_t)kBytes / (float)(trialTimer.MinCallUsec);
-            cout << "mem_xor(" << N * (uint64_t)kBytes / 1000000.f << " MB) across " << j << " work-thread items: " << mbps << " MB/s" << endl;
-        }
-        for (unsigned j = 32; j <= N / 2; j *= 2)
-        {
-            FunctionTimer trialTimer("trial");
-
-            for (unsigned t = 0; t < 40; ++t)
-            {
-                trialTimer.BeginCall();
-
-                leopard::WorkBundle* bundle = leopard::PoolInstance->GetBundle();
-
-                const unsigned split_j = N / j;
-
-                for (unsigned k = 0; k < N; k += split_j)
-                {
-                    bundle->Dispatch([split_j, k, &Buffers]() {
-                        for (unsigned m = k; m < N && m < (k + split_j); ++m)
-                        {
-                            leopard::xor_mem(Buffers[m + N], Buffers[m], kBytes);
-                        }
-                    });
-                }
-
-                bundle->Complete();
-
-                trialTimer.EndCall();
-            }
-
-            float mbps = N * (uint64_t)kBytes / (float)(trialTimer.MinCallUsec);
-            cout << "mem_xor(" << N * (uint64_t)kBytes / 1000000.f << " MB) across " << j << " work-thread items: " << mbps << " MB/s" << endl;
-        }
-        {
-            FunctionTimer trialTimer("trial");
-
-            for (unsigned t = 0; t < 40; ++t)
-            {
-                trialTimer.BeginCall();
-
-                for (unsigned k = 0; k < N; ++k)
-                {
-                    leopard::xor_mem(Buffers[k + N], Buffers[k], kBytes);
-                }
-
-                trialTimer.EndCall();
-            }
-
-            float mbps = N * (uint64_t)kBytes / (float)(trialTimer.MinCallUsec);
-            cout << "mem_xor(" << N * (uint64_t)kBytes / 1000000.f << " MB) single-threaded: " << mbps << " MB/s" << endl;
-        }
-    }
-
-    for (unsigned i = 0; i < N * 2; ++i)
-        leopard::SIMDSafeFree(Buffers[i]);
-}
-
-#endif // LEO_ENABLE_MULTITHREADING_OPT
-
-
-//------------------------------------------------------------------------------
 // Entrypoint
 
 int main(int argc, char **argv)
@@ -659,29 +554,14 @@ int main(int argc, char **argv)
         params.buffer_bytes = atoi(argv[3]);
     if (argc >= 5)
         params.loss_count = atoi(argv[4]);
-    if (argc >= 6)
-        params.multithreaded = (atoi(argv[5]) != 0);
 
     if (params.loss_count > params.recovery_count)
         params.loss_count = params.recovery_count;
 
-    params.multithreaded = false;
-
-    cout << "Parameters: [original count=" << params.original_count << "] [recovery count=" << params.recovery_count << "] [buffer bytes=" << params.buffer_bytes << "] [loss count=" << params.loss_count << "] [random seed=" << params.seed << "] (multi-threading OFF)" << endl;
+    cout << "Parameters: [original count=" << params.original_count << "] [recovery count=" << params.recovery_count << "] [buffer bytes=" << params.buffer_bytes << "] [loss count=" << params.loss_count << "] [random seed=" << params.seed << "]" << endl;
 
     if (!Benchmark(params))
         goto Failed;
-
-    params.multithreaded = true;
-
-    cout << "Parameters: [original count=" << params.original_count << "] [recovery count=" << params.recovery_count << "] [buffer bytes=" << params.buffer_bytes << "] [loss count=" << params.loss_count << "] [random seed=" << params.seed << "] (multi-threading ON)" << endl;
-
-    if (!Benchmark(params))
-        goto Failed;
-
-#ifdef LEO_ENABLE_MULTITHREADING_OPT
-    MultithreadingTests();
-#endif
 
 #if 1
     static const unsigned kMaxRandomData = 32768;
@@ -689,7 +569,7 @@ int main(int argc, char **argv)
     prng.Seed(params.seed, 8);
     for (;; ++params.seed)
     {
-        params.original_count = prng.Next() % kMaxRandomData;
+        params.original_count = prng.Next() % kMaxRandomData + 1;
         params.recovery_count = prng.Next() % params.original_count + 1;
         params.loss_count = prng.Next() % params.recovery_count + 1;
 

@@ -118,17 +118,20 @@ static void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated)
     for (; dist4 <= m; dist = dist4, dist4 <<= 2)
     {
         // For each set of dist*4 elements:
-        for (unsigned r = 0; r < m_truncated; r += dist4)
+#pragma omp parallel for
+        for (int r = 0; r < m_truncated; r += dist4)
         {
             // For each set of dist elements:
-            for (unsigned i = r; i < r + dist; ++i)
+#pragma omp parallel for
+            for (int i = r; i < r + dist; ++i)
                 FWHT_4(data + i, dist);
         }
     }
 
     // If there is one layer left:
     if (dist < m)
-        for (unsigned i = 0; i < dist; ++i)
+#pragma omp parallel for
+        for (int i = 0; i < dist; ++i)
             FWHT_2(data[i], data[i + dist]);
 }
 
@@ -305,7 +308,8 @@ static void InitializeMultiplyTables()
         Multiply128LUT = reinterpret_cast<const Multiply128LUT_t*>(SIMDSafeAllocate(sizeof(Multiply128LUT_t) * kOrder));
 
     // For each value we could multiply by:
-    for (unsigned log_m = 0; log_m < kOrder; ++log_m)
+#pragma omp parallel for
+    for (int log_m = 0; log_m < kOrder; ++log_m)
     {
         // For each 4 bits of the finite field width in bits:
         for (unsigned i = 0, shift = 0; i < 4; ++i, shift += 4)
@@ -770,9 +774,11 @@ static void IFFT_DIT_Encoder(
     // I tried rolling the memcpy/memset into the first layer of the FFT and
     // found that it only yields a 4% performance improvement, which is not
     // worth the extra complexity.
-    for (unsigned i = 0; i < m_truncated; ++i)
+#pragma omp parallel for
+    for (int i = 0; i < m_truncated; ++i)
         memcpy(work[i], data[i], bytes);
-    for (unsigned i = m_truncated; i < m; ++i)
+#pragma omp parallel for
+    for (int i = m_truncated; i < m; ++i)
         memset(work[i], 0, bytes);
 
     // I tried splitting up the first few layers into L3-cache sized blocks but
@@ -784,7 +790,8 @@ static void IFFT_DIT_Encoder(
     for (; dist4 <= m; dist = dist4, dist4 <<= 2)
     {
         // For each set of dist*4 elements:
-        for (unsigned r = 0; r < m_truncated; r += dist4)
+#pragma omp parallel for
+        for (int r = 0; r < m_truncated; r += dist4)
         {
             const unsigned i_end = r + dist;
             const ffe_t log_m01 = skewLUT[i_end];
@@ -792,7 +799,7 @@ static void IFFT_DIT_Encoder(
             const ffe_t log_m23 = skewLUT[i_end + dist * 2];
 
             // For each set of dist elements:
-            for (unsigned i = r; i < i_end; ++i)
+            for (int i = r; i < i_end; ++i)
             {
                 IFFT_DIT4(
                     bytes,
@@ -818,10 +825,11 @@ static void IFFT_DIT_Encoder(
         const ffe_t log_m = skewLUT[dist];
 
         if (log_m == kModulus)
-            VectorXOR(bytes, dist, work + dist, work);
+            VectorXOR_Threads(bytes, dist, work + dist, work);
         else
         {
-            for (unsigned i = 0; i < dist; ++i)
+#pragma omp parallel for
+            for (int i = 0; i < dist; ++i)
             {
                 IFFT_DIT2(
                     work[i],
@@ -835,7 +843,7 @@ static void IFFT_DIT_Encoder(
     // I tried unrolling this but it does not provide more than 5% performance
     // improvement for 16-bit finite fields, so it's not worth the complexity.
     if (xor_result)
-        VectorXOR(bytes, m, xor_result, work);
+        VectorXOR_Threads(bytes, m, xor_result, work);
 }
 
 
@@ -852,7 +860,8 @@ static void IFFT_DIT_Decoder(
     for (; dist4 <= m; dist = dist4, dist4 <<= 2)
     {
         // For each set of dist*4 elements:
-        for (unsigned r = 0; r < m_truncated; r += dist4)
+#pragma omp parallel for
+        for (int r = 0; r < m_truncated; r += dist4)
         {
             const unsigned i_end = r + dist;
             const ffe_t log_m01 = skewLUT[i_end];
@@ -860,7 +869,7 @@ static void IFFT_DIT_Decoder(
             const ffe_t log_m23 = skewLUT[i_end + dist * 2];
 
             // For each set of dist elements:
-            for (unsigned i = r; i < i_end; ++i)
+            for (int i = r; i < i_end; ++i)
             {
                 IFFT_DIT4(
                     bytes,
@@ -882,10 +891,11 @@ static void IFFT_DIT_Decoder(
         const ffe_t log_m = skewLUT[dist];
 
         if (log_m == kModulus)
-            VectorXOR(bytes, dist, work + dist, work);
+            VectorXOR_Threads(bytes, dist, work + dist, work);
         else
         {
-            for (unsigned i = 0; i < dist; ++i)
+#pragma omp parallel for
+            for (int i = 0; i < dist; ++i)
             {
                 IFFT_DIT2(
                     work[i],
@@ -896,155 +906,6 @@ static void IFFT_DIT_Decoder(
         }
     }
 }
-
-#ifdef LEO_ENABLE_MULTITHREADING_OPT
-
-// Multithreaded decoder version
-static void IFFT_DIT_Decoder_MT(
-    const uint64_t bytes,
-    const unsigned m_truncated,
-    void** work,
-    const unsigned m,
-    const ffe_t* skewLUT)
-{
-    unsigned bundle_min = (unsigned)(8000 / bytes);
-    if (bundle_min < 1)
-        bundle_min = 1;
-    const unsigned parallel_max = PoolInstance->GetParallelism();
-
-    // Decimation in time: Unroll 2 layers at a time
-    unsigned dist = 1, dist4 = 4;
-    for (; dist4 <= m; dist = dist4, dist4 <<= 2)
-    {
-        WorkBundle* workBundle = PoolInstance->GetBundle();
-
-        if (m_truncated <= dist4)
-        {
-            unsigned bundle_count = dist / parallel_max;
-            if (bundle_count < bundle_min)
-                bundle_count = bundle_min;
-
-            // For each set of dist*4 elements:
-            const unsigned i_end = dist;
-            const ffe_t log_m01 = skewLUT[i_end];
-            const ffe_t log_m02 = skewLUT[i_end + dist];
-            const ffe_t log_m23 = skewLUT[i_end + dist * 2];
-
-            // For each set of dist elements:
-            for (unsigned i = 0; i < i_end; i += bundle_count)
-            {
-                workBundle->Dispatch([log_m01, log_m02, log_m23, bytes, work, bundle_count, i, i_end, dist]() {
-                    unsigned j_end = i + bundle_count;
-                    if (j_end > i_end)
-                        j_end = i_end;
-                    for (unsigned j = i; j < j_end; ++j)
-                    {
-                        IFFT_DIT4(
-                            bytes,
-                            work + j,
-                            dist,
-                            log_m01,
-                            log_m23,
-                            log_m02);
-                    }
-                });
-            }
-        }
-        else
-        {
-            unsigned bundle_count = (m_truncated / dist) / parallel_max;
-            if (bundle_count < bundle_min)
-                bundle_count = bundle_min;
-            bundle_count /= 4;
-            if (bundle_count < 1)
-                bundle_count = 1;
-            const unsigned dist4_bundle_count = dist4 * bundle_count;
-
-            for (unsigned r = 0; r < m_truncated; r += dist4_bundle_count)
-            {
-                workBundle->Dispatch([bytes, work, skewLUT, dist4, m_truncated, r, dist4_bundle_count, dist]() {
-                    unsigned s_end = r + dist4_bundle_count;
-                    if (s_end > m_truncated)
-                        s_end = m_truncated;
-                    // For each set of dist*4 elements:
-                    for (unsigned s = r; s < s_end; s += dist4)
-                    {
-                        const unsigned i_end = s + dist;
-                        const ffe_t log_m01 = skewLUT[i_end];
-                        const ffe_t log_m02 = skewLUT[i_end + dist];
-                        const ffe_t log_m23 = skewLUT[i_end + dist * 2];
-
-                        // For each set of dist elements:
-                        for (unsigned i = s; i < i_end; ++i)
-                        {
-                            IFFT_DIT4(
-                                bytes,
-                                work + i,
-                                dist,
-                                log_m01,
-                                log_m23,
-                                log_m02);
-                        }
-                    }
-                });
-            }
-        }
-
-        workBundle->Complete();
-    }
-
-    // If there is one layer left:
-    if (dist < m)
-    {
-        WorkBundle* workBundle = PoolInstance->GetBundle();
-
-        // Assuming that dist = m / 2
-        LEO_DEBUG_ASSERT(dist * 2 == m);
-
-        const ffe_t log_m = skewLUT[dist];
-
-        unsigned bundle_count = dist / parallel_max;
-        if (bundle_count < bundle_min)
-            bundle_count = bundle_min;
-
-        if (log_m == kModulus)
-        {
-            for (unsigned i = 0; i < dist; i += bundle_count)
-            {
-                workBundle->Dispatch([work, i, dist, bundle_count, bytes]() {
-                    unsigned j_end = i + bundle_count;
-                    if (j_end > dist)
-                        j_end = dist;
-                    for (unsigned j = i; j < j_end; ++j)
-                        xor_mem(work[j + dist], work[j], bytes);
-                });
-            }
-        }
-        else
-        {
-            for (unsigned i = 0; i < dist; i += bundle_count)
-            {
-                workBundle->Dispatch([work, i, dist, log_m, bytes, bundle_count]() {
-                    unsigned j_end = i + bundle_count;
-                    if (j_end > dist)
-                        j_end = dist;
-                    for (unsigned j = i; j < j_end; ++j)
-                    {
-                        IFFT_DIT2(
-                            work[j],
-                            work[j + dist],
-                            log_m,
-                            bytes);
-                    }
-                });
-            }
-        }
-
-        workBundle->Complete();
-    }
-}
-
-#endif // LEO_ENABLE_MULTITHREADING_OPT
 
 /*
     Decimation in time FFT:
@@ -1361,7 +1222,8 @@ static void FFT_DIT(
         const unsigned thread_v = dist;
 
         // For each set of dist*4 elements:
-        for (unsigned r = 0; r < m_truncated; r += dist4)
+#pragma omp parallel for
+        for (int r = 0; r < m_truncated; r += dist4)
         {
             const unsigned i_end = r + dist;
             const ffe_t log_m01 = skewLUT[i_end];
@@ -1369,7 +1231,7 @@ static void FFT_DIT(
             const ffe_t log_m23 = skewLUT[i_end + dist * 2];
 
             // For each set of dist elements:
-            for (unsigned i = r; i < i_end; ++i)
+            for (int i = r; i < i_end; ++i)
             {
                 FFT_DIT4(
                     bytes,
@@ -1385,7 +1247,8 @@ static void FFT_DIT(
     // If there is one layer left:
     if (dist4 == 2)
     {
-        for (unsigned r = 0; r < m_truncated; r += 2)
+#pragma omp parallel for
+        for (int r = 0; r < m_truncated; r += 2)
         {
             const ffe_t log_m = skewLUT[r + 1];
 
@@ -1413,8 +1276,7 @@ void ReedSolomonEncode(
     unsigned recovery_count,
     unsigned m,
     const void* const * data,
-    void** work,
-    bool multithreaded)
+    void** work)
 {
     // work <- IFFT(data, m, m)
 
@@ -1608,17 +1470,20 @@ static void FFT_DIT_ErrorBits(
     for (; dist != 0; dist4 = dist, dist >>= 2, mip_level -=2)
     {
         // For each set of dist*4 elements:
-        for (unsigned r = 0; r < n_truncated; r += dist4)
+#pragma omp parallel for
+        for (int r = 0; r < n_truncated; r += dist4)
         {
             if (!error_bits.IsNeeded(mip_level, r))
                 continue;
 
-            const ffe_t log_m01 = skewLUT[r + dist];
-            const ffe_t log_m23 = skewLUT[r + dist * 3];
-            const ffe_t log_m02 = skewLUT[r + dist * 2];
+            const unsigned i_end = r + dist;
+            const ffe_t log_m01 = skewLUT[i_end];
+            const ffe_t log_m02 = skewLUT[i_end + dist];
+            const ffe_t log_m23 = skewLUT[i_end + dist * 2];
 
             // For each set of dist elements:
-            for (unsigned i = r; i < r + dist; ++i)
+#pragma omp parallel for
+            for (int i = r; i < i_end; ++i)
             {
                 FFT_DIT4(
                     bytes,
@@ -1634,8 +1499,12 @@ static void FFT_DIT_ErrorBits(
     // If there is one layer left:
     if (dist4 == 2)
     {
-        for (unsigned r = 0; r < n_truncated; r += 2)
+#pragma omp parallel for
+        for (int r = 0; r < n_truncated; r += 2)
         {
+            if (!error_bits.IsNeeded(mip_level, r))
+                continue;
+
             const ffe_t log_m = skewLUT[r + 1];
 
             if (log_m == kModulus)
@@ -1652,148 +1521,6 @@ static void FFT_DIT_ErrorBits(
     }
 }
 
-#ifdef LEO_ENABLE_MULTITHREADING_OPT
-
-static void FFT_DIT_ErrorBits_MT(
-    const uint64_t bytes,
-    void** work,
-    const unsigned n_truncated,
-    const unsigned n,
-    const ffe_t* skewLUT,
-    const ErrorBitfield& error_bits)
-{
-    unsigned bundle_min = (unsigned)(8000 / bytes);
-    if (bundle_min < 1)
-        bundle_min = 1;
-    const unsigned parallel_max = PoolInstance->GetParallelism();
-
-    unsigned mip_level = LastNonzeroBit32(n);
-
-    // Decimation in time: Unroll 2 layers at a time
-    unsigned dist4 = n, dist = n >> 2;
-    for (; dist != 0; dist4 = dist, dist >>= 2, mip_level -=2)
-    {
-        WorkBundle* workBundle = PoolInstance->GetBundle();
-
-        if (n_truncated <= dist4)
-        {
-            if (error_bits.IsNeeded(mip_level, 0))
-            {
-                unsigned bundle_size = dist / parallel_max;
-                if (bundle_size < bundle_min)
-                    bundle_size = bundle_min;
-
-                const unsigned i_end = dist;
-                const ffe_t log_m01 = skewLUT[i_end];
-                const ffe_t log_m02 = skewLUT[i_end + dist];
-                const ffe_t log_m23 = skewLUT[i_end + dist * 2];
-
-                // For each set of dist elements:
-                for (unsigned i = 0; i < i_end; i += bundle_size)
-                {
-                    workBundle->Dispatch([log_m01, log_m02, log_m23, bytes, work, bundle_size, i, i_end, dist]() {
-                        unsigned j_end = i + bundle_size;
-                        if (j_end > i_end)
-                            j_end = i_end;
-                        for (unsigned j = i; j < j_end; ++j)
-                        {
-                            FFT_DIT4(
-                                bytes,
-                                work + j,
-                                dist,
-                                log_m01,
-                                log_m23,
-                                log_m02);
-                        }
-                    });
-                }
-            }
-        }
-        else
-        {
-            unsigned bundle_count = (n_truncated / dist) / parallel_max;
-            if (bundle_count < bundle_min)
-                bundle_count = bundle_min;
-            bundle_count /= 4;
-            if (bundle_count < 1)
-                bundle_count = 1;
-            const unsigned dist4_bundle_count = dist4 * bundle_count;
-
-            // For each set of dist*4 elements:
-            for (unsigned r = 0; r < n_truncated; r += dist4_bundle_count)
-            {
-                workBundle->Dispatch([bytes, work, skewLUT, &error_bits, mip_level, dist4, n_truncated, r, dist4_bundle_count, dist]() {
-                    unsigned s_end = r + dist4_bundle_count;
-                    if (s_end > n_truncated)
-                        s_end = n_truncated;
-                    for (unsigned s = r; s < s_end; s += dist4)
-                    {
-                        if (!error_bits.IsNeeded(mip_level, s))
-                            continue;
-
-                        const unsigned i_end = s + dist;
-                        const ffe_t log_m01 = skewLUT[i_end];
-                        const ffe_t log_m02 = skewLUT[i_end + dist];
-                        const ffe_t log_m23 = skewLUT[i_end + dist * 2];
-
-                        // For each set of dist elements:
-                        for (unsigned i = s; i < i_end; ++i)
-                        {
-                            FFT_DIT4(
-                                bytes,
-                                work + i,
-                                dist,
-                                log_m01,
-                                log_m23,
-                                log_m02);
-                        }
-                    }
-                });
-            }
-        }
-
-        workBundle->Complete();
-    }
-
-    // If there is one layer left:
-    if (dist4 == 2)
-    {
-        WorkBundle* workBundle = PoolInstance->GetBundle();
-
-        unsigned bundle_count = (n_truncated / 2) / parallel_max;
-        if (bundle_count < bundle_min)
-            bundle_count = bundle_min;
-
-        for (unsigned s = 0; s < n_truncated; s += 2 * bundle_count)
-        {
-            workBundle->Dispatch([bytes, skewLUT, work, s, n_truncated, bundle_count]() {
-                unsigned r_end = s + 2 * bundle_count;
-                if (r_end > n_truncated)
-                    r_end = n_truncated;
-                for (unsigned r = s; r < r_end; r += 2)
-                {
-                    const ffe_t log_m = skewLUT[r + 1];
-
-                    if (log_m == kModulus)
-                        xor_mem(work[r + 1], work[r], bytes);
-                    else
-                    {
-                        FFT_DIT2(
-                            work[r],
-                            work[r + 1],
-                            log_m,
-                            bytes);
-                    }
-                }
-            });
-        }
-
-        workBundle->Complete();
-    }
-}
-
-#endif // LEO_ENABLE_MULTITHREADING_OPT
-
 #endif // LEO_ERROR_BITFIELD_OPT
 
 
@@ -1808,11 +1535,8 @@ void ReedSolomonDecode(
     unsigned n, // NextPow2(m + original_count) = work_count
     const void* const * const original, // original_count entries
     const void* const * const recovery, // recovery_count entries
-    void** work, // n entries
-    bool multithreaded)
+    void** work) // n entries
 {
-    if (multithreaded && n * buffer_bytes < 512000)
-        multithreaded = false;
     // Fill in error locations
 
 #ifdef LEO_ERROR_BITFIELD_OPT
@@ -1820,10 +1544,10 @@ void ReedSolomonDecode(
 #endif // LEO_ERROR_BITFIELD_OPT
 
     ffe_t error_locations[kOrder] = {};
-    for (unsigned i = 0; i < recovery_count; ++i)
+    for (int i = 0; i < recovery_count; ++i)
         if (!recovery[i])
             error_locations[i] = 1;
-    for (unsigned i = recovery_count; i < m; ++i)
+    for (int i = recovery_count; i < m; ++i)
         error_locations[i] = 1;
     for (unsigned i = 0; i < original_count; ++i)
     {
@@ -1844,180 +1568,60 @@ void ReedSolomonDecode(
 
     FWHT(error_locations, kOrder, m + original_count);
 
-    for (unsigned i = 0; i < kOrder; ++i)
+#pragma omp parallel for
+    for (int i = 0; i < kOrder; ++i)
         error_locations[i] = ((unsigned)error_locations[i] * (unsigned)LogWalsh[i]) % kModulus;
 
     FWHT(error_locations, kOrder, kOrder);
 
-#ifdef LEO_ENABLE_MULTITHREADING_OPT
-    if (multithreaded)
+    // work <- recovery data
+
+#pragma omp parallel for
+    for (int i = 0; i < recovery_count; ++i)
     {
-        unsigned bundle_min = (unsigned)(64000 / buffer_bytes);
-        if (bundle_min < 1)
-            bundle_min = 1;
-        const unsigned parallel_max = PoolInstance->GetParallelism();
-        unsigned bundle_size = recovery_count / parallel_max;
-        if (bundle_size < bundle_min)
-            bundle_size = bundle_min;
-
-        WorkBundle* workBundle = PoolInstance->GetBundle();
-
-        // work <- recovery data
-
-        for (unsigned i = 0; i < recovery_count; i += bundle_size)
-        {
-            workBundle->Dispatch([i, recovery_count, recovery, &error_locations, bundle_size, work, buffer_bytes]() {
-                unsigned j_end = i + bundle_size;
-                if (j_end > recovery_count)
-                    j_end = recovery_count;
-                for (unsigned j = i; j < j_end; ++j)
-                {
-                    if (recovery[j])
-                        mul_mem(work[j], recovery[j], error_locations[j], buffer_bytes);
-                    else
-                        memset(work[j], 0, buffer_bytes);
-                }
-            });
-        }
-        workBundle->Dispatch([recovery_count, m, buffer_bytes, work]() {
-            for (unsigned i = recovery_count; i < m; ++i)
-                memset(work[i], 0, buffer_bytes);
-        });
-
-        // work <- original data
-
-        bundle_size = original_count / parallel_max;
-        if (bundle_size < bundle_min)
-            bundle_size = bundle_min;
-
-        for (unsigned i = 0; i < original_count; i += bundle_size)
-        {
-            workBundle->Dispatch([i, original_count, original, &error_locations, m, bundle_size, work, buffer_bytes]() {
-                unsigned j_end = i + bundle_size;
-                if (j_end > original_count)
-                    j_end = original_count;
-                for (unsigned j = i; j < j_end; ++j)
-                {
-                    if (original[j])
-                        mul_mem(work[m + j], original[j], error_locations[m + j], buffer_bytes);
-                    else
-                        memset(work[m + j], 0, buffer_bytes);
-                }
-            });
-        }
-        workBundle->Dispatch([original_count, m, n, buffer_bytes, work]() {
-            for (unsigned i = m + original_count; i < n; ++i)
-                memset(work[i], 0, buffer_bytes);
-        });
-
-        workBundle->Complete();
-    }
-    else
-#endif // LEO_ENABLE_MULTITHREADING_OPT
-    {
-        // work <- recovery data
-
-        for (unsigned i = 0; i < recovery_count; ++i)
-        {
-            if (recovery[i])
-                mul_mem(work[i], recovery[i], error_locations[i], buffer_bytes);
-            else
-                memset(work[i], 0, buffer_bytes);
-        }
-        for (unsigned i = recovery_count; i < m; ++i)
-            memset(work[i], 0, buffer_bytes);
-
-        // work <- original data
-
-        for (unsigned i = 0; i < original_count; ++i)
-        {
-            if (original[i])
-                mul_mem(work[m + i], original[i], error_locations[m + i], buffer_bytes);
-            else
-                memset(work[m + i], 0, buffer_bytes);
-        }
-        for (unsigned i = m + original_count; i < n; ++i)
+        if (recovery[i])
+            mul_mem(work[i], recovery[i], error_locations[i], buffer_bytes);
+        else
             memset(work[i], 0, buffer_bytes);
     }
+#pragma omp parallel for
+    for (int i = recovery_count; i < m; ++i)
+        memset(work[i], 0, buffer_bytes);
+
+    // work <- original data
+
+#pragma omp parallel for
+    for (int i = 0; i < original_count; ++i)
+    {
+        if (original[i])
+            mul_mem(work[m + i], original[i], error_locations[m + i], buffer_bytes);
+        else
+            memset(work[m + i], 0, buffer_bytes);
+    }
+#pragma omp parallel for
+    for (int i = m + original_count; i < n; ++i)
+        memset(work[i], 0, buffer_bytes);
 
     // work <- IFFT(work, n, 0)
 
-#ifdef LEO_ENABLE_MULTITHREADING_OPT
-    if (multithreaded)
-    {
-        IFFT_DIT_Decoder_MT(
-            buffer_bytes,
-            m + original_count,
-            work,
-            n,
-            FFTSkew - 1);
-    }
-    else
-#endif // LEO_ENABLE_MULTITHREADING_OPT
-    {
-        IFFT_DIT_Decoder(
-            buffer_bytes,
-            m + original_count,
-            work,
-            n,
-            FFTSkew - 1);
-    }
+    IFFT_DIT_Decoder(
+        buffer_bytes,
+        m + original_count,
+        work,
+        n,
+        FFTSkew - 1);
 
     // work <- FormalDerivative(work, n)
 
-#ifdef LEO_ENABLE_MULTITHREADING_OPT
-    if (multithreaded)
+    for (unsigned i = 1; i < n; ++i)
     {
-        unsigned bundle_min = (unsigned)(64000 / buffer_bytes);
-        if (bundle_min < 1)
-            bundle_min = 1;
-        const unsigned parallel_max = PoolInstance->GetParallelism();
+        const unsigned width = ((i ^ (i - 1)) + 1) >> 1;
 
-        for (unsigned i = 1; i < n; ++i)
-        {
-            const unsigned width = ((i ^ (i - 1)) + 1) >> 1;
-
-            if (width <= 2 + bundle_min)
-            {
-                for (unsigned j = i - width; j < i; ++j)
-                    xor_mem(work[j], work[j + width], buffer_bytes);
-            }
-            else
-            {
-                unsigned bundle_size = width / parallel_max;
-                if (bundle_size < bundle_min)
-                    bundle_size = bundle_min;
-
-                WorkBundle* workBundle = PoolInstance->GetBundle();
-
-                for (unsigned j = i - width; j < i; j += bundle_size)
-                {
-                    workBundle->Dispatch([work, i, j, width, bundle_size, buffer_bytes]() {
-                        unsigned k_end = j + bundle_size;
-                        if (k_end > i)
-                            k_end = i;
-                        for (unsigned k = j; k < k_end; ++k)
-                            xor_mem(work[k], work[k + width], buffer_bytes);
-                    });
-                }
-
-                workBundle->Complete();
-            }
-        }
-    }
-    else
-#endif // LEO_ENABLE_MULTITHREADING_OPT
-    {
-        for (unsigned i = 1; i < n; ++i)
-        {
-            const unsigned width = ((i ^ (i - 1)) + 1) >> 1;
-
-            VectorXOR(
-                buffer_bytes,
-                width,
-                work + i - width,
-                work + i);
-        }
+        VectorXOR(
+            buffer_bytes,
+            width,
+            work + i - width,
+            work + i);
     }
 
     // work <- FFT(work, n, 0) truncated to m + original_count
@@ -2025,23 +1629,14 @@ void ReedSolomonDecode(
     const unsigned output_count = m + original_count;
 
 #ifdef LEO_ERROR_BITFIELD_OPT
-#ifdef LEO_ENABLE_MULTITHREADING_OPT
-    if (multithreaded)
-    {
-        FFT_DIT_ErrorBits_MT(buffer_bytes, work, output_count, n, FFTSkew - 1, error_bits);
-    }
-    else
-#endif // LEO_ENABLE_MULTITHREADING_OPT
-    {
-        FFT_DIT_ErrorBits(buffer_bytes, work, output_count, n, FFTSkew - 1, error_bits);
-    }
+    FFT_DIT_ErrorBits(buffer_bytes, work, output_count, n, FFTSkew - 1, error_bits);
 #else
     FFT_DIT(buffer_bytes, work, output_count, n, FFTSkew - 1);
 #endif
 
     // Reveal erasures
 
-    for (unsigned i = 0; i < original_count; ++i)
+    for (int i = 0; i < original_count; ++i)
         if (!original[i])
             mul_mem(work[i], work[i + m], kModulus - error_locations[i + m], buffer_bytes);
 }

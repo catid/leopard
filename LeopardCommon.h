@@ -184,11 +184,6 @@
 // Unroll inner loops 4 times
 #define LEO_USE_VECTOR4_OPT
 
-// Enable multithreading optimization when requested
-#ifdef _MSC_VER
-    #define LEO_ENABLE_MULTITHREADING_OPT
-#endif
-
 
 //------------------------------------------------------------------------------
 // Debug
@@ -407,6 +402,13 @@ void VectorXOR(
     void** x,
     void** y);
 
+// x[] ^= y[] (Multithreaded)
+void VectorXOR_Threads(
+    const uint64_t bytes,
+    unsigned count,
+    void** x,
+    void** y);
+
 
 //------------------------------------------------------------------------------
 // XORSummer
@@ -457,11 +459,6 @@ protected:
 
 static const unsigned kAlignmentBytes = LEO_ALIGN_BYTES;
 
-LEO_FORCE_INLINE unsigned NextAlignedOffset(unsigned offset)
-{
-    return (offset + kAlignmentBytes - 1) & ~(kAlignmentBytes - 1);
-}
-
 static LEO_FORCE_INLINE uint8_t* SIMDSafeAllocate(size_t size)
 {
     uint8_t* data = (uint8_t*)calloc(1, kAlignmentBytes + size);
@@ -487,236 +484,6 @@ static LEO_FORCE_INLINE void SIMDSafeFree(void* ptr)
     data -= kAlignmentBytes - offset;
     free(data);
 }
-
-
-//------------------------------------------------------------------------------
-// Mutex
-
-#ifdef _WIN32
-
-struct Lock
-{
-    CRITICAL_SECTION cs;
-
-    Lock() { ::InitializeCriticalSectionAndSpinCount(&cs, 1000); }
-    ~Lock() { ::DeleteCriticalSection(&cs); }
-    bool TryEnter() { return ::TryEnterCriticalSection(&cs) != FALSE; }
-    void Enter() { ::EnterCriticalSection(&cs); }
-    void Leave() { ::LeaveCriticalSection(&cs); }
-};
-
-#else
-
-struct Lock
-{
-    std::recursive_mutex cs;
-
-    bool TryEnter() { return cs.try_lock(); }
-    void Enter() { cs.lock(); }
-    void Leave() { cs.unlock(); }
-};
-
-#endif
-
-class Locker
-{
-public:
-    Locker(Lock& lock) {
-        TheLock = &lock;
-        if (TheLock)
-            TheLock->Enter();
-    }
-    ~Locker() { Clear(); }
-    bool TrySet(Lock& lock) {
-        Clear();
-        if (!lock.TryEnter())
-            return false;
-        TheLock = &lock;
-        return true;
-    }
-    void Set(Lock& lock) {
-        Clear();
-        lock.Enter();
-        TheLock = &lock;
-    }
-    void Clear() {
-        if (TheLock)
-            TheLock->Leave();
-        TheLock = nullptr;
-    }
-private:
-    Lock* TheLock;
-};
-
-
-#ifdef LEO_ENABLE_MULTITHREADING_OPT
-
-//------------------------------------------------------------------------------
-// WorkerThread
-
-class WorkerThread
-{
-public:
-    WorkerThread()
-    {
-    }
-    ~WorkerThread()
-    {
-        Stop();
-    }
-
-    void Start(unsigned cpu_affinity);
-    void Stop();
-    void Wake();
-
-protected:
-    unsigned CPUAffinity = 0;
-    std::atomic_bool Terminated = false;
-    std::unique_ptr<std::thread> Thread;
-
-#ifdef _WIN32
-    HANDLE hEvent = nullptr;
-#else
-    // FIXME: Port to other platforms
-    mutable std::mutex QueueLock;
-    std::condition_variable QueueCondition;
-#endif
-
-    void Loop();
-};
-
-
-//------------------------------------------------------------------------------
-// WorkBundle
-
-typedef std::function<void()> WorkerCallT;
-class WorkerPool;
-extern WorkerPool* PoolInstance;
-
-class WorkBundle
-{
-    friend class WorkerPool;
-
-public:
-    WorkBundle();
-    ~WorkBundle();
-
-    void Dispatch(const WorkerCallT& call);
-    void Complete();
-
-protected:
-    std::atomic<unsigned> WorkCount;
-
-#ifdef _WIN32
-    HANDLE hEvent = nullptr;
-#else
-    // FIXME: Port to other platforms
-#endif
-
-
-    LEO_FORCE_INLINE void Increment()
-    {
-        ++WorkCount;
-    }
-    LEO_FORCE_INLINE void OperationComplete()
-    {
-        if (--WorkCount == 0)
-            OnAllOperationsCompleted();
-    }
-    void Join();
-
-    void OnAllOperationsCompleted();
-};
-
-
-//------------------------------------------------------------------------------
-// WorkerPool
-
-class WorkerPool
-{
-    friend class WorkerThread;
-    friend class WorkBundle;
-
-public:
-    WorkerPool();
-    void Stop();
-
-    unsigned GetParallelism() const
-    {
-        return WorkerCount + 1;
-    }
-
-    WorkBundle* GetBundle()
-    {
-        WorkBundle* back;
-        {
-            Locker locker(BundleLock);
-
-            if (FreeBundles.empty())
-            {
-                locker.Clear();
-                back = new WorkBundle;
-            }
-            else
-            {
-                back = FreeBundles.back();
-                FreeBundles.pop_back();
-            }
-        }
-        back->Increment();
-        return back;
-    }
-
-    void FreeBundle(WorkBundle* bundle)
-    {
-        Locker locker(BundleLock);
-        FreeBundles.push_back(bundle);
-    }
-
-protected:
-    void Dispatch(WorkBundle* bundle, const WorkerCallT& call);
-    void Run();
-
-    void DrainWorkQueue();
-
-    mutable Lock QueueLock;
-
-    WorkerThread* Workers = nullptr;
-    unsigned WorkerCount = 0;
-
-    struct QueueItem
-    {
-        WorkerCallT Call;
-        WorkBundle* Bundle;
-    };
-
-    std::vector<QueueItem> WorkQueue;
-    unsigned Remaining;
-
-    mutable Lock BundleLock;
-    // TBD: Free this memory on shutdown?
-    std::vector<WorkBundle*> FreeBundles;
-};
-
-
-inline void WorkBundle::Dispatch(const WorkerCallT& call)
-{
-    Increment();
-    PoolInstance->Dispatch(this, call);
-}
-
-inline void WorkBundle::Complete()
-{
-    if (WorkCount > 0)
-    {
-        PoolInstance->Run();
-        OperationComplete();
-        Join();
-    }
-    PoolInstance->FreeBundle(this);
-}
-
-#endif // LEO_ENABLE_MULTITHREADING_OPT
 
 
 } // namespace leopard

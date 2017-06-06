@@ -63,11 +63,6 @@ LEO_EXPORT int leo_init_(int version)
         return Leopard_Platform;
 #endif // LEO_HAS_FF16
 
-#ifdef LEO_ENABLE_MULTITHREADING_OPT
-    // Start worker threads spinning
-    leopard::PoolInstance = new leopard::WorkerPool;
-#endif // LEO_ENABLE_MULTITHREADING_OPT
-
 
     m_Initialized = true;
     return Leopard_Success;
@@ -131,8 +126,7 @@ LEO_EXPORT LeopardResult leo_encode(
     unsigned recovery_count,                  // Number of recovery_data[] buffer pointers
     unsigned work_count,                      // Number of work_data[] buffer pointers, from leo_encode_work_count()
     const void* const * const original_data,  // Array of pointers to original data buffers
-    void** work_data,                         // Array of work buffers
-    unsigned flags)                           // Operation flags
+    void** work_data)                         // Array of work buffers
 {
     if (buffer_bytes <= 0 || buffer_bytes % 64 != 0)
         return Leopard_InvalidSize;
@@ -171,8 +165,6 @@ LEO_EXPORT LeopardResult leo_encode(
     if (work_count != m * 2)
         return Leopard_InvalidCounts;
 
-    const bool mt = (flags & LeopardFlags_Multithreaded) != 0;
-
 #ifdef LEO_HAS_FF8
     if (n <= leopard::ff8::kOrder)
     {
@@ -182,8 +174,7 @@ LEO_EXPORT LeopardResult leo_encode(
             recovery_count,
             m,
             original_data,
-            work_data,
-            mt);
+            work_data);
     }
     else
 #endif // LEO_HAS_FF8
@@ -196,8 +187,7 @@ LEO_EXPORT LeopardResult leo_encode(
             recovery_count,
             m,
             original_data,
-            work_data,
-            mt);
+            work_data);
     }
     else
 #endif // LEO_HAS_FF16
@@ -247,8 +237,7 @@ LEO_EXPORT LeopardResult leo_decode(
     unsigned work_count,                      // Number of buffer pointers in work_data[]
     const void* const * const original_data,  // Array of original data buffers
     const void* const * const recovery_data,  // Array of recovery data buffers
-    void** work_data,                         // Array of work data buffers
-    unsigned flags)                           // Operation flags
+    void** work_data)                         // Array of work data buffers
 {
     if (buffer_bytes <= 0 || buffer_bytes % 64 != 0)
         return Leopard_InvalidSize;
@@ -311,8 +300,6 @@ LEO_EXPORT LeopardResult leo_decode(
     if (work_count != n)
         return Leopard_InvalidCounts;
 
-    const bool mt = (flags & LeopardFlags_Multithreaded) != 0;
-
 #ifdef LEO_HAS_FF8
     if (n <= leopard::ff8::kOrder)
     {
@@ -324,8 +311,7 @@ LEO_EXPORT LeopardResult leo_decode(
             n,
             original_data,
             recovery_data,
-            work_data,
-            mt);
+            work_data);
     }
     else
 #endif // LEO_HAS_FF8
@@ -340,8 +326,7 @@ LEO_EXPORT LeopardResult leo_decode(
             n,
             original_data,
             recovery_data,
-            work_data,
-            mt);
+            work_data);
     }
     else
 #endif // LEO_HAS_FF16

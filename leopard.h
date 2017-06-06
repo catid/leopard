@@ -63,7 +63,7 @@
 */
 
 // Library version
-#define LEO_VERSION 1
+#define LEO_VERSION 2
 
 // Tweak if the functions are exported or statically linked
 //#define LEO_DLL /* Defined when building/linking as DLL */
@@ -126,14 +126,6 @@ typedef enum LeopardResultT
 // Convert Leopard result to string
 LEO_EXPORT const char* leo_result_string(LeopardResult result);
 
-// Flags
-typedef enum LeopardFlagsT
-{
-    LeopardFlags_Defaults      = 0, // Default settings
-
-    LeopardFlags_Multithreaded = 1, // Enable multiple threads
-} LeopardFlags;
-
 
 //------------------------------------------------------------------------------
 // Encoder API
@@ -163,7 +155,6 @@ LEO_EXPORT unsigned leo_encode_work_count(
     original_data:  Array of pointers to original data buffers.
     work_count:     Number of work_data[] buffers, from leo_encode_work_count().
     work_data:      Array of pointers to work data buffers.
-    flags:          Flags for encoding e.g. LeopardFlag_Multithreaded
 
     The sum of original_count + recovery_count must not exceed 65536.
     The recovery_count <= original_count.
@@ -192,8 +183,7 @@ LEO_EXPORT LeopardResult leo_encode(
     unsigned recovery_count,                  // Number of recovery_data[] buffer pointers
     unsigned work_count,                      // Number of work_data[] buffer pointers, from leo_encode_work_count()
     const void* const * const original_data,  // Array of pointers to original data buffers
-    void** work_data,                         // Array of work buffers
-    unsigned flags);                          // Operation flags
+    void** work_data);                        // Array of work buffers
 
 
 //------------------------------------------------------------------------------
@@ -225,7 +215,6 @@ LEO_EXPORT unsigned leo_decode_work_count(
     recovery_data:  Array of pointers to recovery data buffers.
     work_count:     Number of work_data[] buffers, from leo_decode_work_count().
     work_data:      Array of pointers to recovery data buffers.
-    flags:          Flags for encoding e.g. LeopardFlag_Multithreaded
 
     Lost original/recovery data should be set to NULL.
 
@@ -242,8 +231,7 @@ LEO_EXPORT LeopardResult leo_decode(
     unsigned work_count,                      // Number of buffer pointers in work_data[]
     const void* const * const original_data,  // Array of original data buffers
     const void* const * const recovery_data,  // Array of recovery data buffers
-    void** work_data,                         // Array of work data buffers
-    unsigned flags);                          // Operation flags
+    void** work_data);                        // Array of work data buffers
 
 
 #ifdef __cplusplus

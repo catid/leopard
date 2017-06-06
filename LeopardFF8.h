@@ -75,8 +75,7 @@ void ReedSolomonEncode(
     unsigned recovery_count,
     unsigned m, // = NextPow2(recovery_count)
     const void* const * const data,
-    void** work, // m * 2 elements
-    bool multithreaded);
+    void** work); // m * 2 elements
 
 void ReedSolomonDecode(
     uint64_t buffer_bytes,
@@ -84,10 +83,9 @@ void ReedSolomonDecode(
     unsigned recovery_count,
     unsigned m, // = NextPow2(recovery_count)
     unsigned n, // = NextPow2(m + original_count)
-    const void* const * const original, // original_count entries
-    const void* const * const recovery, // recovery_count entries
-    void** work, // n elements
-    bool multithreaded);
+    const void* const * const original, // original_count elements
+    const void* const * const recovery, // recovery_count elements
+    void** work); // n elements
 
 
 }} // namespace leopard::ff8

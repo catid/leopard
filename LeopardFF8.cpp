@@ -1641,8 +1641,7 @@ void ReedSolomonEncode(
     unsigned recovery_count,
     unsigned m,
     const void* const* data,
-    void** work,
-    bool multithreaded)
+    void** work)
 {
     // work <- IFFT(data, m, m)
 
@@ -1820,6 +1819,9 @@ static void FFT_DIT_ErrorBits(
     {
         for (unsigned r = 0; r < n_truncated; r += 2)
         {
+            if (!error_bits.IsNeeded(mip_level, r))
+                continue;
+
             const ffe_t log_m = skewLUT[r + 1];
 
             if (log_m == kModulus)
@@ -1850,8 +1852,7 @@ void ReedSolomonDecode(
     unsigned n, // NextPow2(m + original_count) = work_count
     const void* const * const original, // original_count entries
     const void* const * const recovery, // recovery_count entries
-    void** work, // n entries
-    bool multithreaded)
+    void** work) // n entries
 {
     // Fill in error locations
 
