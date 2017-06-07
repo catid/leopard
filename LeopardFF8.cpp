@@ -243,6 +243,99 @@ static const Multiply256LUT_t* Multiply256LUT = nullptr;
 static const ffe_t* Multiply8LUT = nullptr;
 
 
+// Reference version of muladd: x[] ^= y[] * log_m
+static LEO_FORCE_INLINE void RefMulAdd(
+    void* LEO_RESTRICT x,
+    const void* LEO_RESTRICT y,
+    ffe_t log_m,
+    uint64_t bytes)
+{
+    const ffe_t* LEO_RESTRICT lut = Multiply8LUT + (unsigned)log_m * 256;
+    const ffe_t * LEO_RESTRICT y1 = reinterpret_cast<const ffe_t *>(y);
+
+#ifdef LEO_TARGET_MOBILE
+    ffe_t * LEO_RESTRICT x1 = reinterpret_cast<ffe_t *>(x);
+
+    do
+    {
+        for (unsigned j = 0; j < 64; ++j)
+            x1[j] ^= lut[y1[j]];
+
+        x1 += 64, y1 += 64;
+        bytes -= 64;
+} while (bytes > 0);
+#else
+    uint64_t * LEO_RESTRICT x8 = reinterpret_cast<uint64_t *>(x);
+
+    do
+    {
+        for (unsigned j = 0; j < 8; ++j)
+        {
+            uint64_t x_0 = x8[j];
+            x_0 ^= (uint64_t)lut[y1[0]];
+            x_0 ^= (uint64_t)lut[y1[1]] << 8;
+            x_0 ^= (uint64_t)lut[y1[2]] << 16;
+            x_0 ^= (uint64_t)lut[y1[3]] << 24;
+            x_0 ^= (uint64_t)lut[y1[4]] << 32;
+            x_0 ^= (uint64_t)lut[y1[5]] << 40;
+            x_0 ^= (uint64_t)lut[y1[6]] << 48;
+            x_0 ^= (uint64_t)lut[y1[7]] << 56;
+            x8[j] = x_0;
+            y1 += 8;
+        }
+
+        x8 += 8;
+        bytes -= 64;
+    } while (bytes > 0);
+#endif
+}
+
+// Reference version of mul: x[] = y[] * log_m
+static LEO_FORCE_INLINE void RefMul(
+    void* LEO_RESTRICT x,
+    const void* LEO_RESTRICT y,
+    ffe_t log_m,
+    uint64_t bytes)
+{
+    const ffe_t* LEO_RESTRICT lut = Multiply8LUT + (unsigned)log_m * 256;
+    const ffe_t * LEO_RESTRICT y1 = reinterpret_cast<const ffe_t *>(y);
+
+#ifdef LEO_TARGET_MOBILE
+    ffe_t * LEO_RESTRICT x1 = reinterpret_cast<ffe_t *>(x);
+
+    do
+    {
+        for (unsigned j = 0; j < 64; ++j)
+            x1[j] ^= lut[y1[j]];
+
+        x1 += 64, y1 += 64;
+        bytes -= 64;
+    } while (bytes > 0);
+#else
+    uint64_t * LEO_RESTRICT x8 = reinterpret_cast<uint64_t *>(x);
+
+    do
+    {
+        for (unsigned j = 0; j < 8; ++j)
+        {
+            uint64_t x_0 = (uint64_t)lut[y1[0]];
+            x_0 ^= (uint64_t)lut[y1[1]] << 8;
+            x_0 ^= (uint64_t)lut[y1[2]] << 16;
+            x_0 ^= (uint64_t)lut[y1[3]] << 24;
+            x_0 ^= (uint64_t)lut[y1[4]] << 32;
+            x_0 ^= (uint64_t)lut[y1[5]] << 40;
+            x_0 ^= (uint64_t)lut[y1[6]] << 48;
+            x_0 ^= (uint64_t)lut[y1[7]] << 56;
+            x8[j] = x_0;
+            y1 += 8;
+        }
+
+        x8 += 8;
+        bytes -= 64;
+    } while (bytes > 0);
+#endif
+}
+
 static void InitializeMultiplyTables()
 {
     // If we cannot use the PSHUFB instruction, generate Multiply8LUT:
@@ -382,18 +475,7 @@ static void mul_mem(
     }
 
     // Reference version:
-    const ffe_t* LEO_RESTRICT lut = Multiply8LUT + log_m * 256;
-    ffe_t * LEO_RESTRICT x1 = reinterpret_cast<ffe_t *>(x);
-    const ffe_t * LEO_RESTRICT y1 = reinterpret_cast<const ffe_t *>(y);
-
-    do
-    {
-        for (unsigned j = 0; j < 64; ++j)
-            x1[j] = lut[y1[j]];
-
-        x1 += 64, y1 += 64;
-        bytes -= 64;
-    } while (bytes > 0);
+    RefMul(x, y, log_m, bytes);
 }
 
 
@@ -575,47 +657,8 @@ static void IFFT_DIT2(
     }
 
     // Reference version:
-    const ffe_t* LEO_RESTRICT lut = Multiply8LUT + log_m * 256;
-
     xor_mem(y, x, bytes);
-
-#ifdef LEO_TARGET_MOBILE
-    ffe_t * LEO_RESTRICT x1 = reinterpret_cast<ffe_t *>(x);
-    ffe_t * LEO_RESTRICT y1 = reinterpret_cast<ffe_t *>(y);
-
-    do
-    {
-        for (unsigned j = 0; j < 64; ++j)
-            x1[j] ^= lut[y1[j]];
-
-        x1 += 64, y1 += 64;
-        bytes -= 64;
-    } while (bytes > 0);
-#else
-    uint64_t * LEO_RESTRICT x8 = reinterpret_cast<uint64_t *>(x);
-    ffe_t * LEO_RESTRICT y1 = reinterpret_cast<ffe_t *>(y);
-
-    do
-    {
-        for (unsigned j = 0; j < 8; ++j)
-        {
-            uint64_t x_0 = x8[j];
-            x_0 ^= (uint64_t)lut[y1[0]];
-            x_0 ^= (uint64_t)lut[y1[1]] << 8;
-            x_0 ^= (uint64_t)lut[y1[2]] << 16;
-            x_0 ^= (uint64_t)lut[y1[3]] << 24;
-            x_0 ^= (uint64_t)lut[y1[4]] << 32;
-            x_0 ^= (uint64_t)lut[y1[5]] << 40;
-            x_0 ^= (uint64_t)lut[y1[6]] << 48;
-            x_0 ^= (uint64_t)lut[y1[7]] << 56;
-            x8[j] = x_0;
-            y1 += 8;
-        }
-
-        x8 += 8;
-        bytes -= 64;
-    } while (bytes > 0);
-#endif
+    RefMulAdd(x, y, log_m, bytes);
 }
 
 
@@ -852,49 +895,8 @@ static void IFFT_DIT2_xor(
     }
 
     // Reference version:
-    const ffe_t* LEO_RESTRICT lut = Multiply8LUT + log_m * 256;
-
     xor_mem(y_in, x_in, bytes);
-
-    uint64_t count = bytes;
-    ffe_t * LEO_RESTRICT y1 = reinterpret_cast<ffe_t *>(y_in);
-
-#ifdef LEO_TARGET_MOBILE
-    ffe_t * LEO_RESTRICT x1 = reinterpret_cast<ffe_t *>(x_in);
-
-    do
-    {
-        for (unsigned j = 0; j < 64; ++j)
-            x1[j] ^= lut[y1[j]];
-
-        x1 += 64, y1 += 64;
-        count -= 64;
-    } while (count > 0);
-#else
-    uint64_t * LEO_RESTRICT x8 = reinterpret_cast<uint64_t *>(x_in);
-
-    do
-    {
-        for (unsigned j = 0; j < 8; ++j)
-        {
-            uint64_t x_0 = x8[j];
-            x_0 ^= (uint64_t)lut[y1[0]];
-            x_0 ^= (uint64_t)lut[y1[1]] << 8;
-            x_0 ^= (uint64_t)lut[y1[2]] << 16;
-            x_0 ^= (uint64_t)lut[y1[3]] << 24;
-            x_0 ^= (uint64_t)lut[y1[4]] << 32;
-            x_0 ^= (uint64_t)lut[y1[5]] << 40;
-            x_0 ^= (uint64_t)lut[y1[6]] << 48;
-            x_0 ^= (uint64_t)lut[y1[7]] << 56;
-            x8[j] = x_0;
-            y1 += 8;
-        }
-
-        x8 += 8;
-        count -= 64;
-    } while (count > 0);
-#endif
-
+    RefMulAdd(x_in, y_in, log_m, bytes);
     xor_mem(y_out, y_in, bytes);
     xor_mem(x_out, x_in, bytes);
 }
@@ -1379,52 +1381,8 @@ static void FFT_DIT2(
     }
 
     // Reference version:
-    const ffe_t* LEO_RESTRICT lut = Multiply8LUT + log_m * 256;
-
-#ifdef LEO_TARGET_MOBILE
-    ffe_t * LEO_RESTRICT x1 = reinterpret_cast<ffe_t *>(x);
-    ffe_t * LEO_RESTRICT y1 = reinterpret_cast<ffe_t *>(y);
-
-    do
-    {
-        for (unsigned j = 0; j < 64; ++j)
-        {
-            ffe_t x_0 = x1[j];
-            ffe_t y_0 = y1[j];
-            x_0 ^= lut[y_0];
-            x1[j] = x_0;
-            y1[j] = y_0 ^ x_0;
-        }
-
-        x1 += 64, y1 += 64;
-        bytes -= 64;
-    } while (bytes > 0);
-#else
-    uint64_t * LEO_RESTRICT x8 = reinterpret_cast<uint64_t *>(x);
-    uint64_t * LEO_RESTRICT y8 = reinterpret_cast<uint64_t *>(y);
-    ffe_t * LEO_RESTRICT y1 = reinterpret_cast<ffe_t *>(y);
-
-    do
-    {
-        for (unsigned j = 0; j < 8; ++j)
-        {
-            uint64_t x_0 = x8[j], y_0 = y8[j];
-            x_0 ^= (uint64_t)lut[y1[0]];
-            x_0 ^= (uint64_t)lut[y1[1]] << 8;
-            x_0 ^= (uint64_t)lut[y1[2]] << 16;
-            x_0 ^= (uint64_t)lut[y1[3]] << 24;
-            x_0 ^= (uint64_t)lut[y1[4]] << 32;
-            x_0 ^= (uint64_t)lut[y1[5]] << 40;
-            x_0 ^= (uint64_t)lut[y1[6]] << 48;
-            x_0 ^= (uint64_t)lut[y1[7]] << 56;
-            x8[j] = x_0, y8[j] = y_0 ^ x_0;
-            y1 += 8;
-        }
-
-        x8 += 8, y8 += 8;
-        bytes -= 64;
-    } while (bytes > 0);
-#endif
+    RefMulAdd(x, y, log_m, bytes);
+    xor_mem(y, x, bytes);
 }
 
 

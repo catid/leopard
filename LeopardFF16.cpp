@@ -119,10 +119,11 @@ static void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated)
     {
         // For each set of dist*4 elements:
 #pragma omp parallel for
-        for (int r = 0; r < m_truncated; r += dist4)
+        for (int r = 0; r < (int)m_truncated; r += dist4)
         {
             // For each set of dist elements:
-            for (int i = r; i < r + dist; ++i)
+            const int i_end = r + dist;
+            for (int i = r; i < i_end; ++i)
                 FWHT_4(data + i, dist);
         }
     }
@@ -130,7 +131,7 @@ static void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated)
     // If there is one layer left:
     if (dist < m)
 #pragma omp parallel for
-        for (int i = 0; i < dist; ++i)
+        for (int i = 0; i < (int)dist; ++i)
             FWHT_2(data[i], data[i + dist]);
 }
 
@@ -294,12 +295,110 @@ static const Multiply256LUT_t* Multiply256LUT = nullptr;
 
 #endif // LEO_TRY_AVX2
 
+// Stores the partial products of x * y at offset x + y * 65536
+// Repeated accesses from the same y value are faster
+struct Product16Table
+{
+    ffe_t LUT[4 * 16];
+};
+static const Product16Table* Multiply16LUT = nullptr;
+
+
+// Reference version of muladd: x[] ^= y[] * log_m
+static LEO_FORCE_INLINE void RefMulAdd(
+    void* LEO_RESTRICT x,
+    const void* LEO_RESTRICT y,
+    ffe_t log_m,
+    uint64_t bytes)
+{
+    const ffe_t* LEO_RESTRICT lut = Multiply16LUT[log_m].LUT;
+    const uint8_t * LEO_RESTRICT y1 = reinterpret_cast<const uint8_t *>(y);
+    uint8_t * LEO_RESTRICT x1 = reinterpret_cast<uint8_t *>(x);
+
+    do
+    {
+        for (unsigned i = 0; i < 32; ++i)
+        {
+            const unsigned lo = y1[i];
+            const unsigned hi = y1[i + 32];
+
+            const ffe_t prod = \
+                lut[(lo & 15)] ^ \
+                lut[(lo >> 4) + 16] ^ \
+                lut[(hi & 15) + 32] ^ \
+                lut[(hi >> 4) + 48];
+
+            x1[i] ^= (uint8_t)prod;
+            x1[i + 32] ^= (uint8_t)(prod >> 8);
+        }
+
+        x1 += 64, y1 += 64;
+        bytes -= 64;
+    } while (bytes > 0);
+
+}
+
+// Reference version of mul: x[] = y[] * log_m
+static LEO_FORCE_INLINE void RefMul(
+    void* LEO_RESTRICT x,
+    const void* LEO_RESTRICT y,
+    ffe_t log_m,
+    uint64_t bytes)
+{
+    const ffe_t* LEO_RESTRICT lut = Multiply16LUT[log_m].LUT;
+    const uint8_t * LEO_RESTRICT y1 = reinterpret_cast<const uint8_t *>(y);
+    uint8_t * LEO_RESTRICT x1 = reinterpret_cast<uint8_t *>(x);
+
+    do
+    {
+        for (unsigned i = 0; i < 32; ++i)
+        {
+            const unsigned lo = y1[i];
+            const unsigned hi = y1[i + 32];
+
+            const ffe_t prod = \
+                lut[(lo & 15)] ^ \
+                lut[(lo >> 4) + 16] ^ \
+                lut[(hi & 15) + 32] ^ \
+                lut[(hi >> 4) + 48];
+
+            x1[i] = (uint8_t)prod;
+            x1[i + 32] = (uint8_t)(prod >> 8);
+        }
+
+        x1 += 64, y1 += 64;
+        bytes -= 64;
+    } while (bytes > 0);
+}
+
 
 static void InitializeMultiplyTables()
 {
     // If we cannot use the PSHUFB instruction, generate Multiply8LUT:
     if (!CpuHasSSSE3)
+    {
+        Multiply16LUT = new Product16Table[65536];
+
+        // For each log_m multiplicand:
+#pragma omp parallel for
+        for (int log_m = 0; log_m < kOrder; ++log_m)
+        {
+            const Product16Table& lut = Multiply16LUT[log_m];
+
+            for (unsigned nibble = 0, shift = 0; nibble < 4; ++nibble, shift += 4)
+            {
+                ffe_t* nibble_lut = (ffe_t*)&lut.LUT[nibble * 16];
+
+                for (unsigned x_nibble = 0; x_nibble < 16; ++x_nibble)
+                {
+                    const ffe_t prod = MultiplyLog(x_nibble << shift, static_cast<ffe_t>(log_m));
+                    nibble_lut[x_nibble] = prod;
+                }
+            }
+        }
+
         return;
+    }
 
     if (CpuHasAVX2)
         Multiply256LUT = reinterpret_cast<const Multiply256LUT_t*>(SIMDSafeAllocate(sizeof(Multiply256LUT_t) * kOrder));
@@ -381,29 +480,36 @@ static void mul_mem(
     }
 #endif // LEO_TRY_AVX2
 
-    LEO_MUL_TABLES_128(0, log_m);
-
-    const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
-
-    LEO_M128 * LEO_RESTRICT x16 = reinterpret_cast<LEO_M128 *>(x);
-    const LEO_M128 * LEO_RESTRICT y16 = reinterpret_cast<const LEO_M128 *>(y);
-
-    do
+    if (CpuHasSSSE3)
     {
+        LEO_MUL_TABLES_128(0, log_m);
+
+        const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
+
+        LEO_M128 * LEO_RESTRICT x16 = reinterpret_cast<LEO_M128 *>(x);
+        const LEO_M128 * LEO_RESTRICT y16 = reinterpret_cast<const LEO_M128 *>(y);
+
+        do
+        {
 #define LEO_MUL_128_LS(x_ptr, y_ptr) { \
-            const LEO_M128 data_lo = _mm_loadu_si128(y_ptr); \
-            const LEO_M128 data_hi = _mm_loadu_si128(y_ptr + 2); \
-            LEO_M128 prod_lo, prod_hi; \
-            LEO_MUL_128(data_lo, data_hi, 0); \
-            _mm_storeu_si128(x_ptr, prod_lo); \
-            _mm_storeu_si128(x_ptr + 2, prod_hi); }
+                const LEO_M128 data_lo = _mm_loadu_si128(y_ptr); \
+                const LEO_M128 data_hi = _mm_loadu_si128(y_ptr + 2); \
+                LEO_M128 prod_lo, prod_hi; \
+                LEO_MUL_128(data_lo, data_hi, 0); \
+                _mm_storeu_si128(x_ptr, prod_lo); \
+                _mm_storeu_si128(x_ptr + 2, prod_hi); }
 
-        LEO_MUL_128_LS(x16 + 1, y16 + 1);
-        LEO_MUL_128_LS(x16, y16);
-        x16 += 4, y16 += 4;
+            LEO_MUL_128_LS(x16 + 1, y16 + 1);
+            LEO_MUL_128_LS(x16, y16);
+            x16 += 4, y16 += 4;
 
-        bytes -= 64;
-    } while (bytes > 0);
+            bytes -= 64;
+        } while (bytes > 0);
+
+        return;
+    }
+
+    RefMul(x, y, log_m, bytes);
 }
 
 
@@ -555,34 +661,43 @@ static void IFFT_DIT2(
     }
 #endif // LEO_TRY_AVX2
 
-    LEO_MUL_TABLES_128(0, log_m);
-
-    const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
-
-    LEO_M128 * LEO_RESTRICT x16 = reinterpret_cast<LEO_M128 *>(x);
-    LEO_M128 * LEO_RESTRICT y16 = reinterpret_cast<LEO_M128 *>(y);
-
-    do
+    if (CpuHasSSSE3)
     {
+        LEO_MUL_TABLES_128(0, log_m);
+
+        const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
+
+        LEO_M128 * LEO_RESTRICT x16 = reinterpret_cast<LEO_M128 *>(x);
+        LEO_M128 * LEO_RESTRICT y16 = reinterpret_cast<LEO_M128 *>(y);
+
+        do
+        {
 #define LEO_IFFTB_128(x_ptr, y_ptr) { \
-            LEO_M128 x_lo = _mm_loadu_si128(x_ptr); \
-            LEO_M128 x_hi = _mm_loadu_si128(x_ptr + 2); \
-            LEO_M128 y_lo = _mm_loadu_si128(y_ptr); \
-            LEO_M128 y_hi = _mm_loadu_si128(y_ptr + 2); \
-            y_lo = _mm_xor_si128(y_lo, x_lo); \
-            y_hi = _mm_xor_si128(y_hi, x_hi); \
-            _mm_storeu_si128(y_ptr, y_lo); \
-            _mm_storeu_si128(y_ptr + 2, y_hi); \
-            LEO_MULADD_128(x_lo, x_hi, y_lo, y_hi, 0); \
-            _mm_storeu_si128(x_ptr, x_lo); \
-            _mm_storeu_si128(x_ptr + 2, x_hi); }
+                LEO_M128 x_lo = _mm_loadu_si128(x_ptr); \
+                LEO_M128 x_hi = _mm_loadu_si128(x_ptr + 2); \
+                LEO_M128 y_lo = _mm_loadu_si128(y_ptr); \
+                LEO_M128 y_hi = _mm_loadu_si128(y_ptr + 2); \
+                y_lo = _mm_xor_si128(y_lo, x_lo); \
+                y_hi = _mm_xor_si128(y_hi, x_hi); \
+                _mm_storeu_si128(y_ptr, y_lo); \
+                _mm_storeu_si128(y_ptr + 2, y_hi); \
+                LEO_MULADD_128(x_lo, x_hi, y_lo, y_hi, 0); \
+                _mm_storeu_si128(x_ptr, x_lo); \
+                _mm_storeu_si128(x_ptr + 2, x_hi); }
 
-        LEO_IFFTB_128(x16 + 1, y16 + 1);
-        LEO_IFFTB_128(x16, y16);
-        x16 += 4, y16 += 4;
+            LEO_IFFTB_128(x16 + 1, y16 + 1);
+            LEO_IFFTB_128(x16, y16);
+            x16 += 4, y16 += 4;
 
-        bytes -= 64;
-    } while (bytes > 0);
+            bytes -= 64;
+        } while (bytes > 0);
+
+        return;
+    }
+
+    // Reference version:
+    xor_mem(y, x, bytes);
+    RefMulAdd(x, y, log_m, bytes);
 }
 
 
@@ -774,10 +889,10 @@ static void IFFT_DIT_Encoder(
     // found that it only yields a 4% performance improvement, which is not
     // worth the extra complexity.
 #pragma omp parallel for
-    for (int i = 0; i < m_truncated; ++i)
+    for (int i = 0; i < (int)m_truncated; ++i)
         memcpy(work[i], data[i], bytes);
 #pragma omp parallel for
-    for (int i = m_truncated; i < m; ++i)
+    for (int i = m_truncated; i < (int)m; ++i)
         memset(work[i], 0, bytes);
 
     // I tried splitting up the first few layers into L3-cache sized blocks but
@@ -790,7 +905,7 @@ static void IFFT_DIT_Encoder(
     {
         // For each set of dist*4 elements:
 #pragma omp parallel for
-        for (int r = 0; r < m_truncated; r += dist4)
+        for (int r = 0; r < (int)m_truncated; r += dist4)
         {
             const unsigned i_end = r + dist;
             const ffe_t log_m01 = skewLUT[i_end];
@@ -798,7 +913,7 @@ static void IFFT_DIT_Encoder(
             const ffe_t log_m23 = skewLUT[i_end + dist * 2];
 
             // For each set of dist elements:
-            for (int i = r; i < i_end; ++i)
+            for (int i = r; i < (int)i_end; ++i)
             {
                 IFFT_DIT4(
                     bytes,
@@ -828,7 +943,7 @@ static void IFFT_DIT_Encoder(
         else
         {
 #pragma omp parallel for
-            for (int i = 0; i < dist; ++i)
+            for (int i = 0; i < (int)dist; ++i)
             {
                 IFFT_DIT2(
                     work[i],
@@ -860,7 +975,7 @@ static void IFFT_DIT_Decoder(
     {
         // For each set of dist*4 elements:
 #pragma omp parallel for
-        for (int r = 0; r < m_truncated; r += dist4)
+        for (int r = 0; r < (int)m_truncated; r += dist4)
         {
             const unsigned i_end = r + dist;
             const ffe_t log_m01 = skewLUT[i_end];
@@ -868,7 +983,7 @@ static void IFFT_DIT_Decoder(
             const ffe_t log_m23 = skewLUT[i_end + dist * 2];
 
             // For each set of dist elements:
-            for (int i = r; i < i_end; ++i)
+            for (int i = r; i < (int)i_end; ++i)
             {
                 IFFT_DIT4(
                     bytes,
@@ -894,7 +1009,7 @@ static void IFFT_DIT_Decoder(
         else
         {
 #pragma omp parallel for
-            for (int i = 0; i < dist; ++i)
+            for (int i = 0; i < (int)dist; ++i)
             {
                 IFFT_DIT2(
                     work[i],
@@ -1000,34 +1115,43 @@ static void FFT_DIT2(
     }
 #endif // LEO_TRY_AVX2
 
-    LEO_MUL_TABLES_128(0, log_m);
-
-    const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
-
-    LEO_M128 * LEO_RESTRICT x16 = reinterpret_cast<LEO_M128 *>(x);
-    LEO_M128 * LEO_RESTRICT y16 = reinterpret_cast<LEO_M128 *>(y);
-
-    do
+    if (CpuHasSSSE3)
     {
+        LEO_MUL_TABLES_128(0, log_m);
+
+        const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
+
+        LEO_M128 * LEO_RESTRICT x16 = reinterpret_cast<LEO_M128 *>(x);
+        LEO_M128 * LEO_RESTRICT y16 = reinterpret_cast<LEO_M128 *>(y);
+
+        do
+        {
 #define LEO_FFTB_128(x_ptr, y_ptr) { \
-            LEO_M128 x_lo = _mm_loadu_si128(x_ptr); \
-            LEO_M128 x_hi = _mm_loadu_si128(x_ptr + 2); \
-            LEO_M128 y_lo = _mm_loadu_si128(y_ptr); \
-            LEO_M128 y_hi = _mm_loadu_si128(y_ptr + 2); \
-            LEO_MULADD_128(x_lo, x_hi, y_lo, y_hi, 0); \
-            _mm_storeu_si128(x_ptr, x_lo); \
-            _mm_storeu_si128(x_ptr + 2, x_hi); \
-            y_lo = _mm_xor_si128(y_lo, x_lo); \
-            y_hi = _mm_xor_si128(y_hi, x_hi); \
-            _mm_storeu_si128(y_ptr, y_lo); \
-            _mm_storeu_si128(y_ptr + 2, y_hi); }
+                LEO_M128 x_lo = _mm_loadu_si128(x_ptr); \
+                LEO_M128 x_hi = _mm_loadu_si128(x_ptr + 2); \
+                LEO_M128 y_lo = _mm_loadu_si128(y_ptr); \
+                LEO_M128 y_hi = _mm_loadu_si128(y_ptr + 2); \
+                LEO_MULADD_128(x_lo, x_hi, y_lo, y_hi, 0); \
+                _mm_storeu_si128(x_ptr, x_lo); \
+                _mm_storeu_si128(x_ptr + 2, x_hi); \
+                y_lo = _mm_xor_si128(y_lo, x_lo); \
+                y_hi = _mm_xor_si128(y_hi, x_hi); \
+                _mm_storeu_si128(y_ptr, y_lo); \
+                _mm_storeu_si128(y_ptr + 2, y_hi); }
 
-        LEO_FFTB_128(x16 + 1, y16 + 1);
-        LEO_FFTB_128(x16, y16);
-        x16 += 4, y16 += 4;
+            LEO_FFTB_128(x16 + 1, y16 + 1);
+            LEO_FFTB_128(x16, y16);
+            x16 += 4, y16 += 4;
 
-        bytes -= 64;
-    } while (bytes > 0);
+            bytes -= 64;
+        } while (bytes > 0);
+
+        return;
+    }
+
+    // Reference version:
+    RefMulAdd(x, y, log_m, bytes);
+    xor_mem(y, x, bytes);
 }
 
 
@@ -1222,7 +1346,7 @@ static void FFT_DIT(
 
         // For each set of dist*4 elements:
 #pragma omp parallel for
-        for (int r = 0; r < m_truncated; r += dist4)
+        for (int r = 0; r < (int)m_truncated; r += dist4)
         {
             const unsigned i_end = r + dist;
             const ffe_t log_m01 = skewLUT[i_end];
@@ -1230,7 +1354,7 @@ static void FFT_DIT(
             const ffe_t log_m23 = skewLUT[i_end + dist * 2];
 
             // For each set of dist elements:
-            for (int i = r; i < i_end; ++i)
+            for (int i = r; i < (int)i_end; ++i)
             {
                 FFT_DIT4(
                     bytes,
@@ -1247,7 +1371,7 @@ static void FFT_DIT(
     if (dist4 == 2)
     {
 #pragma omp parallel for
-        for (int r = 0; r < m_truncated; r += 2)
+        for (int r = 0; r < (int)m_truncated; r += 2)
         {
             const ffe_t log_m = skewLUT[r + 1];
 
@@ -1470,7 +1594,7 @@ static void FFT_DIT_ErrorBits(
     {
         // For each set of dist*4 elements:
 #pragma omp parallel for
-        for (int r = 0; r < n_truncated; r += dist4)
+        for (int r = 0; r < (int)n_truncated; r += dist4)
         {
             if (!error_bits.IsNeeded(mip_level, r))
                 continue;
@@ -1482,7 +1606,7 @@ static void FFT_DIT_ErrorBits(
 
             // For each set of dist elements:
 #pragma omp parallel for
-            for (int i = r; i < i_end; ++i)
+            for (int i = r; i < (int)i_end; ++i)
             {
                 FFT_DIT4(
                     bytes,
@@ -1499,7 +1623,7 @@ static void FFT_DIT_ErrorBits(
     if (dist4 == 2)
     {
 #pragma omp parallel for
-        for (int r = 0; r < n_truncated; r += 2)
+        for (int r = 0; r < (int)n_truncated; r += 2)
         {
             if (!error_bits.IsNeeded(mip_level, r))
                 continue;
@@ -1543,10 +1667,10 @@ void ReedSolomonDecode(
 #endif // LEO_ERROR_BITFIELD_OPT
 
     ffe_t error_locations[kOrder] = {};
-    for (int i = 0; i < recovery_count; ++i)
+    for (unsigned i = 0; i < recovery_count; ++i)
         if (!recovery[i])
             error_locations[i] = 1;
-    for (int i = recovery_count; i < m; ++i)
+    for (unsigned i = recovery_count; i < m; ++i)
         error_locations[i] = 1;
     for (unsigned i = 0; i < original_count; ++i)
     {
@@ -1576,7 +1700,7 @@ void ReedSolomonDecode(
     // work <- recovery data
 
 #pragma omp parallel for
-    for (int i = 0; i < recovery_count; ++i)
+    for (int i = 0; i < (int)recovery_count; ++i)
     {
         if (recovery[i])
             mul_mem(work[i], recovery[i], error_locations[i], buffer_bytes);
@@ -1584,13 +1708,13 @@ void ReedSolomonDecode(
             memset(work[i], 0, buffer_bytes);
     }
 #pragma omp parallel for
-    for (int i = recovery_count; i < m; ++i)
+    for (int i = recovery_count; i < (int)m; ++i)
         memset(work[i], 0, buffer_bytes);
 
     // work <- original data
 
 #pragma omp parallel for
-    for (int i = 0; i < original_count; ++i)
+    for (int i = 0; i < (int)original_count; ++i)
     {
         if (original[i])
             mul_mem(work[m + i], original[i], error_locations[m + i], buffer_bytes);
@@ -1598,7 +1722,7 @@ void ReedSolomonDecode(
             memset(work[m + i], 0, buffer_bytes);
     }
 #pragma omp parallel for
-    for (int i = m + original_count; i < n; ++i)
+    for (int i = m + original_count; i < (int)n; ++i)
         memset(work[i], 0, buffer_bytes);
 
     // work <- IFFT(work, n, 0)
@@ -1646,7 +1770,7 @@ void ReedSolomonDecode(
 
     // Reveal erasures
 
-    for (int i = 0; i < original_count; ++i)
+    for (unsigned i = 0; i < original_count; ++i)
         if (!original[i])
             mul_mem(work[i], work[i + m], kModulus - error_locations[i + m], buffer_bytes);
 }
@@ -1661,9 +1785,6 @@ bool Initialize()
 {
     if (IsInitialized)
         return true;
-
-    if (!CpuHasSSSE3)
-        return false;
 
     InitializeLogarithmTables();
     InitializeMultiplyTables();

@@ -48,13 +48,13 @@ struct TestParameters
     unsigned original_count = 100; // under 65536
     unsigned recovery_count = 10; // under 65536 - original_count
 #endif
-    unsigned buffer_bytes = 1344; // multiple of 64 bytes
+    unsigned buffer_bytes = 64000; // multiple of 64 bytes
     unsigned loss_count = 32768; // some fraction of original_count
     unsigned seed = 2;
 };
 
 static const unsigned kLargeTrialCount = 1;
-static const unsigned kSmallTrialCount = 300;
+static const unsigned kSmallTrialCount = 1;
 
 
 //------------------------------------------------------------------------------
@@ -564,19 +564,34 @@ int main(int argc, char **argv)
         goto Failed;
 
 #if 1
-    static const unsigned kMaxRandomData = 32768;
+    static const unsigned kMaxLargeRandomData = 32768;
+    static const unsigned kMaxSmallRandomData = 128;
 
     prng.Seed(params.seed, 8);
     for (;; ++params.seed)
     {
-        params.original_count = prng.Next() % kMaxRandomData + 1;
-        params.recovery_count = prng.Next() % params.original_count + 1;
-        params.loss_count = prng.Next() % params.recovery_count + 1;
+        // Large:
+        {
+            params.original_count = prng.Next() % kMaxLargeRandomData + 1;
+            params.recovery_count = prng.Next() % params.original_count + 1;
+            params.loss_count = prng.Next() % params.recovery_count + 1;
 
-        cout << "Parameters: [original count=" << params.original_count << "] [recovery count=" << params.recovery_count << "] [buffer bytes=" << params.buffer_bytes << "] [loss count=" << params.loss_count << "] [random seed=" << params.seed << "]" << endl;
+            cout << "Parameters: [original count=" << params.original_count << "] [recovery count=" << params.recovery_count << "] [buffer bytes=" << params.buffer_bytes << "] [loss count=" << params.loss_count << "] [random seed=" << params.seed << "]" << endl;
 
-        if (!Benchmark(params))
-            goto Failed;
+            if (!Benchmark(params))
+                goto Failed;
+        }
+        // Small:
+        {
+            params.original_count = prng.Next() % kMaxSmallRandomData + 1;
+            params.recovery_count = prng.Next() % params.original_count + 1;
+            params.loss_count = prng.Next() % params.recovery_count + 1;
+
+            cout << "Parameters: [original count=" << params.original_count << "] [recovery count=" << params.recovery_count << "] [buffer bytes=" << params.buffer_bytes << "] [loss count=" << params.loss_count << "] [random seed=" << params.seed << "]" << endl;
+
+            if (!Benchmark(params))
+                goto Failed;
+        }
     }
 #endif
 
