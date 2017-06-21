@@ -29,6 +29,9 @@ set(CMAKE_CXX_FLAGS "-Wall -Wextra")
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 
+#Use this version instead for OpenMP:
+#set(CMAKE_CXX_FLAGS_RELEASE "-O3 -fopenmp")
+
 add_library(libleopard STATIC ${LIB_SOURCE_FILES})
 
 add_executable(bench_leopard ${BENCH_SOURCE_FILES})
