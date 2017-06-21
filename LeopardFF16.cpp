@@ -381,7 +381,7 @@ static void InitializeMultiplyTables()
 
         // For each log_m multiplicand:
 #pragma omp parallel for
-        for (int log_m = 0; log_m < kOrder; ++log_m)
+        for (int log_m = 0; log_m < (int)kOrder; ++log_m)
         {
             const Product16Table& lut = Multiply16LUT[log_m];
 
@@ -400,14 +400,16 @@ static void InitializeMultiplyTables()
         return;
     }
 
+#if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
         Multiply256LUT = reinterpret_cast<const Multiply256LUT_t*>(SIMDSafeAllocate(sizeof(Multiply256LUT_t) * kOrder));
     else
+#endif // LEO_TRY_AVX2
         Multiply128LUT = reinterpret_cast<const Multiply128LUT_t*>(SIMDSafeAllocate(sizeof(Multiply128LUT_t) * kOrder));
 
     // For each value we could multiply by:
 #pragma omp parallel for
-    for (int log_m = 0; log_m < kOrder; ++log_m)
+    for (int log_m = 0; log_m < (int)kOrder; ++log_m)
     {
         // For each 4 bits of the finite field width in bits:
         for (unsigned i = 0, shift = 0; i < 4; ++i, shift += 4)
@@ -425,7 +427,9 @@ static void InitializeMultiplyTables()
             const LEO_M128 value_hi = _mm_loadu_si128((LEO_M128*)prod_hi);
 
             // Store in 128-bit wide table
+#if defined(LEO_TRY_AVX2)
             if (!CpuHasAVX2)
+#endif // LEO_TRY_AVX2
             {
                 _mm_storeu_si128((LEO_M128*)&Multiply128LUT[log_m].Lo[i], value_lo);
                 _mm_storeu_si128((LEO_M128*)&Multiply128LUT[log_m].Hi[i], value_hi);
@@ -1341,9 +1345,6 @@ static void FFT_DIT(
     unsigned dist4 = m, dist = m >> 2;
     for (; dist != 0; dist4 = dist, dist >>= 2)
     {
-        const unsigned thread_u = m_truncated / dist4;
-        const unsigned thread_v = dist;
-
         // For each set of dist*4 elements:
 #pragma omp parallel for
         for (int r = 0; r < (int)m_truncated; r += dist4)
@@ -1439,8 +1440,6 @@ void ReedSolomonEncode(
     // Handle final partial set of m pieces:
     if (last_count != 0)
     {
-        const unsigned i = original_count - last_count;
-
         data += m;
         skewLUT += m;
 
@@ -1692,7 +1691,7 @@ void ReedSolomonDecode(
     FWHT(error_locations, kOrder, m + original_count);
 
 #pragma omp parallel for
-    for (int i = 0; i < kOrder; ++i)
+    for (int i = 0; i < (int)kOrder; ++i)
         error_locations[i] = ((unsigned)error_locations[i] * (unsigned)LogWalsh[i]) % kModulus;
 
     FWHT(error_locations, kOrder, kOrder);

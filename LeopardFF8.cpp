@@ -368,9 +368,11 @@ static void InitializeMultiplyTables()
         return;
     }
 
+#ifdef LEO_TRY_AVX2
     if (CpuHasAVX2)
         Multiply256LUT = reinterpret_cast<const Multiply256LUT_t*>(SIMDSafeAllocate(sizeof(Multiply256LUT_t) * kOrder));
     else
+#endif // LEO_TRY_AVX2
         Multiply128LUT = reinterpret_cast<const Multiply128LUT_t*>(SIMDSafeAllocate(sizeof(Multiply128LUT_t) * kOrder));
 
     // For each value we could multiply by:
@@ -388,7 +390,9 @@ static void InitializeMultiplyTables()
             const LEO_M128 value = _mm_loadu_si128(v_ptr);
 
             // Store in 128-bit wide table
+#if defined(LEO_TRY_AVX2)
             if (!CpuHasAVX2)
+#endif // LEO_TRY_AVX2
                 _mm_storeu_si128((LEO_M128*)&Multiply128LUT[log_m].Value[i], value);
 
             // Store in 256-bit wide table
@@ -1397,6 +1401,7 @@ static void FFT_DIT4(
 {
 #ifdef LEO_INTERLEAVE_BUTTERFLY4_OPT
 
+#if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
     {
         const LEO_M256 t01_lo = _mm256_loadu_si256(&Multiply256LUT[log_m01].Value[0]);
@@ -1451,6 +1456,7 @@ static void FFT_DIT4(
 
         return;
     }
+#endif // LEO_TRY_AVX2
 
     if (CpuHasSSSE3)
     {
@@ -1639,8 +1645,6 @@ void ReedSolomonEncode(
     // Handle final partial set of m pieces:
     if (last_count != 0)
     {
-        const unsigned i = original_count - last_count;
-
         data += m;
         skewLUT += m;
 

@@ -153,7 +153,9 @@
 #include "leopard.h"
 
 #include <stdint.h>
+#ifdef _WIN32
 #include <malloc.h>
+#endif //_WIN32
 #include <vector>
 #include <atomic>
 #include <memory>

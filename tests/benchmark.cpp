@@ -91,13 +91,18 @@ static bool SetCurrentThreadPriority()
 #ifdef _WIN32
     return 0 != ::SetThreadPriority(::GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
 #else
-    return -1 != nice(2);
+    // setpriority on mac os x
+    return true;
 #endif
 }
 
 
 //------------------------------------------------------------------------------
 // Timing
+
+#ifndef _WIN32
+#include <sys/time.h>
+#endif
 
 static uint64_t GetTimeUsec()
 {
