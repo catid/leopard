@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.7)
 project(leopard)
 
+include(CMakeDependentOption)
+
 set(CMAKE_CONFIGURATION_TYPES "Debug;Release" CACHE STRING "" FORCE)
 
 set(CMAKE_CXX_STANDARD 11)
@@ -29,8 +31,15 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}  -Wall -Wextra")
 set(CMAKE_CXX_FLAGS_DEBUG "-g -O0")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3")
 
-#Use this version instead for OpenMP:
-#set(CMAKE_CXX_FLAGS_RELEASE "-O3 -fopenmp")
+find_package(OpenMP)
+cmake_dependent_option(ENABLE_OPENMP "Enable OpenMP support" ON "OPENMP_FOUND" OFF)
+if(ENABLE_OPENMP)
+  if(NOT OPENMP_FOUND)
+    message(FATAL_ERROR "OpenMP support requested, but could not be found")
+  endif(NOT OPENMP_FOUND)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
+endif(ENABLE_OPENMP)
 
 add_library(libleopard STATIC ${LIB_SOURCE_FILES})
 
