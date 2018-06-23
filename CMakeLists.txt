@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.7)
 project(leopard)
 
 include(CMakeDependentOption)
+include(CheckCXXCompilerFlag)
 
 set(CMAKE_CONFIGURATION_TYPES "Debug;Release" CACHE STRING "" FORCE)
 
@@ -27,9 +28,36 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}  -Wall -Wextra")
-set(CMAKE_CXX_FLAGS_DEBUG "-g -O0")
-set(CMAKE_CXX_FLAGS_RELEASE "-O3")
+check_cxx_compiler_flag("-G" CXX_FLAG_g)
+check_cxx_compiler_flag("-O0" CXX_FLAG_O0)
+check_cxx_compiler_flag("-O3" CXX_FLAG_O3)
+check_cxx_compiler_flag("-Wall" CXX_FLAG_Wall)
+check_cxx_compiler_flag("-Wextra" CXX_FLAG_Wextra)
+
+if(CXX_FLAG_g)
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g")
+    set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -g")
+endif(CXX_FLAG_g)
+
+if(CXX_FLAG_O0)
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0")
+    set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -O0")
+endif(CXX_FLAG_O0)
+
+if(CXX_FLAG_O3)
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_DEBUG} -O3")
+    set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS_DEBUG} -O3")
+endif(CXX_FLAG_O3)
+
+if(CXX_FLAG_Wall)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O0")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O0")
+endif(CXX_FLAG_Wall)
+
+if(CXX_FLAG_Wextra)
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wextra")
+endif(CXX_FLAG_Wextra)
 
 find_package(OpenMP)
 cmake_dependent_option(ENABLE_OPENMP "Enable OpenMP support" ON "OPENMP_FOUND" OFF)
