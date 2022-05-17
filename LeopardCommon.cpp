@@ -107,6 +107,8 @@ static void _cpuid(unsigned int cpu_info[4U], const unsigned int cpu_info_type)
 #endif
 }
 
+#elif defined(LEO_USE_SSE2NEON)
+bool CpuHasSSSE3 = true;
 #endif // defined(LEO_TARGET_MOBILE)
 
 

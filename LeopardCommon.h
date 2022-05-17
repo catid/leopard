@@ -186,6 +186,11 @@
 // Unroll inner loops 4 times
 #define LEO_USE_VECTOR4_OPT
 
+// MacOS M1
+#if defined(__aarch64__)
+  #define LEO_USE_SSE2NEON
+  #define LEO_TARGET_MOBILE
+#endif
 
 //------------------------------------------------------------------------------
 // Debug
@@ -256,6 +261,8 @@
     // Note: MSVC currently only supports SSSE3 but not AVX2
     #include <tmmintrin.h> // SSSE3: _mm_shuffle_epi8
     #include <emmintrin.h> // SSE2
+#elif defined(LEO_USE_SSE2NEON)
+    #include "sse2neon/sse2neon.h"
 #endif // LEO_TARGET_MOBILE
 
 #if defined(HAVE_ARM_NEON_H)
@@ -270,6 +277,8 @@
     // Compiler-specific 128-bit SIMD register keyword
     #define LEO_M128 uint8x16_t
     #define LEO_TRY_NEON
+#elif defined(LEO_USE_SSE2NEON)
+    #define LEO_M128 __m128i
 #else
     #define LEO_M128 uint64_t
 # endif
@@ -334,6 +343,8 @@ void InitializeCPUArch();
     extern bool CpuHasAVX2;
 # endif
     // Does CPU support SSSE3?
+    extern bool CpuHasSSSE3;
+#elif defined(LEO_USE_SSE2NEON)
     extern bool CpuHasSSSE3;
 #endif // LEO_TARGET_MOBILE
 
