@@ -281,9 +281,17 @@ LEO_EXPORT LeopardResult leo_decode(
         memcpy(work_data[0], recovery_data[recovery_got_i], buffer_bytes);
         return Leopard_Success;
     }
+    
+    // Handle case original_loss_count = 0
+    if (original_loss_count = 0)
+    {
+        for(unsigned i = 0; i < original_count; i++)
+            memcpy(work_data[i], original_data[i], buffer_bytes);
+        return Leopard_Success;
+    }
 
     // Handle m = 1 case
-    if (recovery_count == 1 && original_loss_count == 1)
+    if (recovery_count == 1 && recovery_got_count == 1)
     {
         DecodeM1(
             buffer_bytes,
