@@ -291,7 +291,7 @@ LEO_EXPORT LeopardResult leo_decode(
     }
 
     // Handle m = 1 case
-    if (recovery_count == 1 && recovery_got_count == 1)
+    if (recovery_count == 1)
     {
         DecodeM1(
             buffer_bytes,
