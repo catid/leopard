@@ -283,7 +283,7 @@ LEO_EXPORT LeopardResult leo_decode(
     }
     
     // Handle case original_loss_count = 0
-    if (original_loss_count = 0)
+    if (original_loss_count == 0)
     {
         for(unsigned i = 0; i < original_count; i++)
             memcpy(work_data[i], original_data[i], buffer_bytes);
