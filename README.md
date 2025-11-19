@@ -191,6 +191,16 @@ Addition in this finite field is XOR, and a vectorized memory XOR routine
 is also used.
 
 
+#### Portable builds
+
+By default if your compiler supports native CPU architecture optimization, leopard will be compiled to use the available instruction sets. This is great for performance but not portability. If you're building leopard as part of a continuous-integration pipeline, the CPU architecture of the build systems will influence the instructions used in the output binary. This can result in binaries that contain illegal instructions when running on user CPUs. (SIGILL: Illegal operation.)
+
+To prevent this, you can set the `LEOPARD_PORTABLE_BUILD_TARGET` cmake option to define the target architecture you want to build for.
+For example: `cmake . -B build -G"MSYS Makefiles" -DLEOPARD_PORTABLE_BUILD_TARGET=x86-64-v3`
+
+This allows you to build binaries that can run on any CPU that supports the selected instruction sets. Warning: Leopard relies on several instruction sets, and therefore cannot be built targetting any and all architectures your compiler may support.
+
+
 #### References:
 
 This library implements an MDS erasure code introduced in this paper:
