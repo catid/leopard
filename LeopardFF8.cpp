@@ -1668,7 +1668,7 @@ skip_body:
         work,
         recovery_count,
         m,
-        FFTSkew - 1);
+        (ffe_t*)FFTSkew - 1);
 }
 
 
@@ -1883,7 +1883,7 @@ void ReedSolomonDecode(
         m + original_count,
         work,
         n,
-        FFTSkew - 1);
+        (ffe_t*)FFTSkew - 1);
 
     // work <- FormalDerivative(work, n)
 
@@ -1903,9 +1903,9 @@ void ReedSolomonDecode(
     const unsigned output_count = m + original_count;
 
 #ifdef LEO_ERROR_BITFIELD_OPT
-    FFT_DIT_ErrorBits(buffer_bytes, work, output_count, n, FFTSkew - 1, error_bits);
+    FFT_DIT_ErrorBits(buffer_bytes, work, output_count, n, (ffe_t*)FFTSkew - 1, error_bits);
 #else
-    FFT_DIT(buffer_bytes, work, output_count, n, FFTSkew - 1);
+    FFT_DIT(buffer_bytes, work, output_count, n, (ffe_t*)FFTSkew - 1);
 #endif
 
     // Reveal erasures
