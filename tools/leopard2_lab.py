@@ -317,6 +317,11 @@ def _digest(value):
     return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
 
 
+def _new_run_epoch():
+    """Return an opaque identity shared by results from one runner call."""
+    return hashlib.sha256(os.urandom(32)).hexdigest()
+
+
 def _file_identity(path):
     """Return a content identity for an executable, independent of mtime."""
     resolved = Path(path).resolve()
@@ -588,6 +593,11 @@ def build_manifest(spec, root=None, workers=None, base_seed=None):
         cpu_group = raw.get("cpu_group")
         if cpu_group is not None and (not isinstance(cpu_group, str) or not cpu_group):
             raise LabError("job {} cpu_group must be a non-empty string".format(job_id))
+        resume_group = raw.get("resume_group")
+        if resume_group is not None and (
+                not isinstance(resume_group, str) or not resume_group):
+            raise LabError(
+                "job {} resume_group must be a non-empty string".format(job_id))
         if "cpu_set" in raw:
             raw_cpu_set = raw["cpu_set"]
             cpu_set = parse_cpu_list(raw_cpu_set) if isinstance(raw_cpu_set, str) else raw_cpu_set
@@ -650,6 +660,8 @@ def build_manifest(spec, root=None, workers=None, base_seed=None):
         }
         if raw.get("cpu_group") is not None:
             job["cpu_group"] = raw["cpu_group"]
+        if resume_group is not None:
+            job["resume_group"] = resume_group
         if benchmark_cell is not None:
             job["benchmark_cell"] = _json_copy(benchmark_cell)
         job["job_digest"] = _digest(job)
@@ -721,6 +733,11 @@ def validate_manifest(manifest):
                 not isinstance(executable.get("size_bytes"), int) or
                 executable["size_bytes"] < 0):
             raise LabError("job {} has an invalid executable identity".format(job["id"]))
+        resume_group = job.get("resume_group")
+        if resume_group is not None and (
+                not isinstance(resume_group, str) or not resume_group):
+            raise LabError(
+                "job {} has an invalid resume group".format(job["id"]))
     if ids != sorted(ids) or len(ids) != len(set(ids)):
         raise LabError("manifest jobs must have unique ids in sorted order")
     return manifest
@@ -747,6 +764,39 @@ def _read_completed_result(output_dir, job, rerun_failed):
     return result
 
 
+def _resume_candidates(manifest, output_dir, rerun_failed):
+    """Return resumable terminal results, enforcing atomic resume groups.
+
+    Jobs without ``resume_group`` retain the historical job-granular behavior.
+    A grouped job is resumable only when every manifest member of that group
+    has a valid terminal result carrying the same run epoch.  Otherwise every
+    member is scheduled again, preventing a timing comparison from combining
+    observations made by separate runner invocations.
+    """
+    candidates = {
+        job["id"]: _read_completed_result(output_dir, job, rerun_failed)
+        for job in manifest["jobs"]
+    }
+    groups = {}
+    for job in manifest["jobs"]:
+        resume_group = job.get("resume_group")
+        if resume_group is not None:
+            groups.setdefault(resume_group, []).append(job)
+    for members in groups.values():
+        results = [candidates[job["id"]] for job in members]
+        epochs = {
+            result.get("run_epoch") for result in results
+            if result is not None
+        }
+        if (any(result is None for result in results) or len(epochs) != 1 or
+                not all(isinstance(epoch, str) and
+                        re.match(r"^[0-9a-f]{64}$", epoch)
+                        for epoch in epochs)):
+            for job in members:
+                candidates[job["id"]] = None
+    return candidates
+
+
 def _validate_terminal_result(result_path, result, job):
     unsigned = dict(result)
     expected_result_digest = unsigned.pop("result_digest", None)
@@ -754,6 +804,14 @@ def _validate_terminal_result(result_path, result, job):
         raise LabError("terminal result digest is invalid for job {}".format(job["id"]))
     if result.get("job_id") != job["id"] or result.get("cpu_set") != job["cpu_set"]:
         raise LabError("terminal result identity is invalid for job {}".format(job["id"]))
+    run_epoch = result.get("run_epoch")
+    if run_epoch is not None and (
+            not isinstance(run_epoch, str) or
+            not re.match(r"^[0-9a-f]{64}$", run_epoch)):
+        raise LabError("terminal result run epoch is invalid for job {}".format(job["id"]))
+    if job.get("resume_group") is not None and run_epoch is None:
+        raise LabError("terminal result run epoch is missing for grouped job {}".format(
+            job["id"]))
     outputs = result.get("outputs")
     if not isinstance(outputs, dict):
         raise LabError("terminal result output identities are missing for job {}".format(job["id"]))
@@ -804,7 +862,9 @@ def _child_setup(cpu_set, memory_mb):
         resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
 
 
-def _base_result(job, command, duration_seconds, outcome, exit_code=None, detail=None):
+def _base_result(
+        job, command, duration_seconds, outcome, exit_code=None, detail=None,
+        run_epoch=None):
     result = {
         "schema": RESULT_SCHEMA,
         "state": "complete",
@@ -822,6 +882,8 @@ def _base_result(job, command, duration_seconds, outcome, exit_code=None, detail
         "stdout": "stdout.txt",
         "stderr": "stderr.txt",
     }
+    if run_epoch is not None:
+        result["run_epoch"] = run_epoch
     if detail:
         result["detail"] = detail
     return result
@@ -847,7 +909,7 @@ def _job_executable_matches(job):
             current["size_bytes"] == expected["size_bytes"])
 
 
-def _launch_job(job, manifest_root, output_dir):
+def _launch_job(job, manifest_root, output_dir, run_epoch):
     job_dir = _job_directory(output_dir, job["id"])
     job_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = job_dir / "stdout.txt"
@@ -876,7 +938,9 @@ def _launch_job(job, manifest_root, output_dir):
     except BaseException as error:
         stdout_handle.close()
         stderr_handle.close()
-        result = _base_result(job, command, time.monotonic() - started, "launch_error", detail=str(error))
+        result = _base_result(
+            job, command, time.monotonic() - started, "launch_error",
+            detail=str(error), run_epoch=run_epoch)
         _write_terminal_result(job_dir, result)
         return None, result
     active = {
@@ -888,6 +952,7 @@ def _launch_job(job, manifest_root, output_dir):
         "stderr_handle": stderr_handle,
         "timed_out": False,
         "terminate_started": None,
+        "run_epoch": run_epoch,
     }
     return active, None
 
@@ -932,7 +997,8 @@ def _finish_active(active, output_dir, forced_outcome=None, detail=None):
         detail = executable_detail if detail is None else detail + "; " + executable_detail
     result = _base_result(
         active["job"], active["command"], time.monotonic() - active["started"],
-        outcome, exit_code=exit_code, detail=detail)
+        outcome, exit_code=exit_code, detail=detail,
+        run_epoch=active["run_epoch"])
     result_path = _job_directory(output_dir, active["job"]["id"]) / "result.json"
     return _write_terminal_result(result_path.parent, result)
 
@@ -1001,13 +1067,14 @@ def _manifest_memory_budget_mb(manifest):
     return int((capacity // (1024 * 1024)) * 0.80)
 
 
-def _record_unavailable(job, output_dir, reason):
+def _record_unavailable(job, output_dir, reason, run_epoch):
     job_dir = _job_directory(output_dir, job["id"])
     job_dir.mkdir(parents=True, exist_ok=True)
     (job_dir / "stdout.txt").write_text("", encoding="utf-8")
     (job_dir / "stderr.txt").write_text(reason + "\n", encoding="utf-8")
     result = _base_result(
-        job, _expanded_command(job), 0.0, "unavailable", detail=reason)
+        job, _expanded_command(job), 0.0, "unavailable", detail=reason,
+        run_epoch=run_epoch)
     return _write_terminal_result(job_dir, result)
 
 
@@ -1019,9 +1086,10 @@ def _dry_run_plan(manifest, output_dir, rerun_failed, workers=None):
     if worker_count > 128:
         raise LabError("workers may not exceed 128")
     memory_budget_mb = _manifest_memory_budget_mb(manifest)
+    candidates = _resume_candidates(manifest, output_dir, rerun_failed)
     planned = []
     for job in manifest["jobs"]:
-        completed = _read_completed_result(output_dir, job, rerun_failed)
+        completed = candidates[job["id"]]
         unavailable_reason = None if completed else _memory_unavailable_reason(
             job, memory_budget_mb)
         planned.append({
@@ -1058,14 +1126,16 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
     output_dir = Path(output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     _atomic_write_json(output_dir / "manifest.json", manifest)
+    run_epoch = _new_run_epoch()
 
     results = {}
     pending = []
     resumed = 0
     preflight_unavailable = 0
     memory_budget_mb = _manifest_memory_budget_mb(manifest)
+    candidates = _resume_candidates(manifest, output_dir, rerun_failed)
     for job in manifest["jobs"]:
-        completed = _read_completed_result(output_dir, job, rerun_failed)
+        completed = candidates[job["id"]]
         if completed is not None:
             results[job["id"]] = completed
             resumed += 1
@@ -1073,7 +1143,7 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
             unavailable_reason = _memory_unavailable_reason(job, memory_budget_mb)
             if unavailable_reason:
                 results[job["id"]] = _record_unavailable(
-                    job, output_dir, unavailable_reason)
+                    job, output_dir, unavailable_reason, run_epoch)
                 preflight_unavailable += 1
             else:
                 pending.append(job)
@@ -1093,7 +1163,8 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
                             job, active, allow_cpu_overlap, memory_budget_mb):
                         continue
                     pending.pop(index)
-                    launched, launch_result = _launch_job(job, manifest["root"], output_dir)
+                    launched, launch_result = _launch_job(
+                        job, manifest["root"], output_dir, run_epoch)
                     if launched is not None:
                         active.append(launched)
                     else:
@@ -1311,6 +1382,102 @@ def self_test():
         })
         if grouped_manifest["jobs"][0]["cpu_set"] != grouped_manifest["jobs"][1]["cpu_set"]:
             raise LabError("self-test: CPU assignment group did not preserve pair affinity")
+
+        atomic_manifest = build_manifest({
+            "root": str(root),
+            "workers": 1,
+            "defaults": {"memory_mb": 0, "cpu_count": 1},
+            "jobs": [
+                {"id": "atomic-a", "command": [python, "-c", "print('a')"],
+                 "cpu_group": "atomic", "resume_group": "atomic"},
+                {"id": "atomic-b", "command": [python, "-c", "print('b')"],
+                 "cpu_group": "atomic", "resume_group": "atomic"},
+            ],
+        })
+        if any(job.get("resume_group") != "atomic"
+               for job in atomic_manifest["jobs"]):
+            raise LabError("self-test: resume group was not signed into the manifest")
+        atomic_output = root / "atomic-results"
+        atomic_first = run_manifest(atomic_manifest, atomic_output, quiet=True)
+        if atomic_first["executed"] != 2 or atomic_first["resumed"] != 0:
+            raise LabError("self-test: atomic group did not execute initially")
+
+        def atomic_results():
+            return {
+                job["id"]: _load_json(
+                    _job_directory(atomic_output, job["id"]) / "result.json")
+                for job in atomic_manifest["jobs"]
+            }
+
+        first_atomic_results = atomic_results()
+        first_epochs = {
+            result.get("run_epoch") for result in first_atomic_results.values()}
+        if (len(first_epochs) != 1 or
+                not all(re.match(r"^[0-9a-f]{64}$", epoch or "")
+                        for epoch in first_epochs)):
+            raise LabError("self-test: atomic group did not share a valid run epoch")
+        first_atomic_bytes = {
+            job_id: (_job_directory(atomic_output, job_id) / "result.json").read_bytes()
+            for job_id in first_atomic_results}
+        atomic_second = run_manifest(atomic_manifest, atomic_output, quiet=True)
+        if atomic_second["resumed"] != 2 or atomic_second["executed"] != 0:
+            raise LabError("self-test: homogeneous atomic group was not resumed")
+        if first_atomic_bytes != {
+                job_id: (_job_directory(atomic_output, job_id) / "result.json").read_bytes()
+                for job_id in first_atomic_results}:
+            raise LabError("self-test: atomic resume rewrote homogeneous results")
+
+        missing_atomic_job = atomic_manifest["jobs"][0]["id"]
+        shutil.rmtree(str(_job_directory(atomic_output, missing_atomic_job)))
+        atomic_plan = _dry_run_plan(
+            atomic_manifest, atomic_output, rerun_failed=False)
+        if any(job["action"] != "run" for job in atomic_plan["jobs"]):
+            raise LabError("self-test: partial atomic group was not wholly rescheduled")
+        atomic_third = run_manifest(atomic_manifest, atomic_output, quiet=True)
+        if atomic_third["resumed"] != 0 or atomic_third["executed"] != 2:
+            raise LabError("self-test: partial atomic group did not rerun every member")
+        third_atomic_results = atomic_results()
+        third_epochs = {
+            result.get("run_epoch") for result in third_atomic_results.values()}
+        if len(third_epochs) != 1 or third_epochs == first_epochs:
+            raise LabError("self-test: atomic rerun did not establish a new shared epoch")
+
+        mixed_job = atomic_manifest["jobs"][0]
+        mixed_path = _job_directory(atomic_output, mixed_job["id"]) / "result.json"
+        mixed_result = _load_json(mixed_path)
+        mixed_result["run_epoch"] = "f" * 64
+        mixed_unsigned = dict(mixed_result)
+        mixed_unsigned.pop("result_digest", None)
+        mixed_result["result_digest"] = _digest(mixed_unsigned)
+        _atomic_write_json(mixed_path, mixed_result)
+        mixed_plan = _dry_run_plan(
+            atomic_manifest, atomic_output, rerun_failed=False)
+        if any(job["action"] != "run" for job in mixed_plan["jobs"]):
+            raise LabError("self-test: mixed-epoch atomic group was not wholly rescheduled")
+        atomic_fourth = run_manifest(atomic_manifest, atomic_output, quiet=True)
+        if atomic_fourth["resumed"] != 0 or atomic_fourth["executed"] != 2:
+            raise LabError("self-test: mixed-epoch group did not rerun every member")
+        if len({result.get("run_epoch")
+                for result in atomic_results().values()}) != 1:
+            raise LabError("self-test: mixed-epoch rerun did not restore one epoch")
+
+        granular_manifest = build_manifest({
+            "root": str(root),
+            "workers": 1,
+            "defaults": {"memory_mb": 0, "cpu_count": 1},
+            "jobs": [
+                {"id": "granular-a", "command": [python, "-c", "print('a')"]},
+                {"id": "granular-b", "command": [python, "-c", "print('b')"]},
+            ],
+        })
+        granular_output = root / "granular-results"
+        run_manifest(granular_manifest, granular_output, quiet=True)
+        shutil.rmtree(str(_job_directory(granular_output, "granular-a")))
+        granular_second = run_manifest(
+            granular_manifest, granular_output, quiet=True)
+        if granular_second["resumed"] != 1 or granular_second["executed"] != 1:
+            raise LabError("self-test: ungrouped resume stopped being job-granular")
+
         output_dir = root / "results"
         first_summary = run_manifest(first_manifest, output_dir, progress_seconds=0.05, quiet=True)
         expected = {"success": 2, "failed": 1, "timeout": 1, "missing": 0}

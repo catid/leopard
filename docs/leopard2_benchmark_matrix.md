@@ -11,24 +11,35 @@ failure logs, and deterministic merging.
 
 ## Presets
 
-- `smoke` has six jobs for one low- and one high-rate cell: automatic,
-  forced-specialized, and forced-generic for each. It validates the pipeline,
-  not performance.
-- `checkpoint` has 63 jobs intended for isolated execution: low `(16,240)`,
+- `smoke` has ten jobs for one low- and one high-rate cell. Each cell runs the
+  counterbalanced forced-path repetitions plus one automatic row described
+  below. It validates the pipeline, not performance.
+- `checkpoint` has 99 jobs intended for isolated execution: low `(16,240)`,
   balanced `(128,128)`, and
   high `(240,16)`; 4 KiB, 64 KiB, and 1 MiB shards; zero, one, and eight losses;
-  automatic no-loss rows and all three request modes for nonzero loss. It is
+  automatic no-loss rows and counterbalanced nonzero-loss comparisons. It is
   the intended bounded local comparison when it is run with the isolation rules
   below. Merely completing this preset is not evidence that the host was
   isolated.
-- `balanced-crossover` has 216 jobs for `(128,128)` high profile, 256 B through
-  64 KiB, and one through 128 missing originals, with all three request modes.
+- `balanced-crossover` has 360 jobs for `(128,128)` high profile, 256 B through
+  64 KiB, and one through 128 missing originals, with counterbalanced forced
+  comparisons and one automatic row per logical cell.
   It is a focused dispatcher diagnostic; its existence is not evidence for a
   threshold.
-- `required` currently has 2,483 jobs spanning the listed CPU base count groups, ten
-  shard sizes from 64 B through 16 MiB, all required loss classes,
-  forced-specialized/forced-generic pairs for nonzero loss, automatic no-loss
-  rows, reuse/batch samples, and automatic 1-to-128-thread scaling samples.
+- `required` has exactly 7,134 jobs: 6,870 main count/size/loss/mode rows,
+  240 reuse/batch rows, and 24 thread-scaling rows. It spans the listed CPU
+  base count groups, ten shard sizes from 64 B through 16 MiB, all required
+  loss classes, counterbalanced forced paths plus one automatic row for every
+  nonzero loss, automatic no-loss rows, a full reuse-by-batch grid, and
+  automatic 1-to-128-thread scaling samples.
+  The larger GF16 low-rate analogues are `(512,1536)`, `(1600,2496)`, and
+  `(2032,2064)`. Their low-profile padded sides are 512, 2048, and 2048; their
+  parents are 2048, 8192, and 8192 coordinates respectively.
+  Reuse and batch vary independently over `{1,8,64,1024}` for each checkpoint
+  low/balanced/high case. Batch 1 and 8 use 64 KiB shards, batch 64 uses 4 KiB,
+  and batch 1024 uses 256 B, bounding allocation while retaining a full 4x4
+  grid. All five scheduled rows are present for each of those 48 logical
+  cells, so this portion can take a long time even on a fast host.
   Every thread count for a rate case performs the same fixed work: batch 128,
   reuse 8, 4 KiB shards, and eight losses.
   It is designed for resumable execution across appropriate hosts. Cells whose
@@ -40,9 +51,32 @@ failure logs, and deterministic merging.
   physical/cgroup capacity. Preflight-unavailable cells are counted separately,
   not as executed processes.
 
-Automatic, forced-specialized, and forced-generic members use the same
-deterministic benchmark seed and a shared CPU-assignment group, so non-pinned
-manifest generation does not accidentally rotate them onto different cores.
+For a nonzero-loss logical cell, `A` means forced-specialized and `B` means
+forced-generic. Lexicographically sorted job IDs encode the exact slots:
+
+    order-ab.slot00-forced-specialized
+    order-ab.slot01-forced-generic
+    order-ab.slot02-automatic
+    order-ba.slot00-forced-generic
+    order-ba.slot01-forced-specialized
+
+Thus a serial runner executes adjacent `S/G/automatic` followed by `G/S`; the
+automatic observation exists once and belongs to the AB comparison. AB and BA
+use the same deterministic benchmark seed and shared CPU-assignment group.
+Collection separates the two order trials while retaining that shared affinity.
+The five rows also share a signed `resume_group`. Every terminal result records
+an opaque `run_epoch` identifying one lab-runner invocation. A group resumes
+only when all five results are complete and carry the same epoch; a missing row
+or mixed epochs reschedule all five rows. This preserves the temporal meaning
+of AB/BA after interruption while retaining resumability at logical-cell
+boundaries. Jobs without `resume_group` retain the lab runner's ordinary
+job-granular resume behavior.
+For authoritative timing, generate with `--workers 1 --pinned-cpu <allowed-cpu>`
+and also run the lab with `--workers 1`. Multiple workers preserve the repeated
+trials but do not preserve their temporal ordering. The pinned CPU must be an
+allowed physical CPU selected from the process affinity mask, and host isolation
+must still be verified externally.
+
 The collector's primary comparison is between the two forced, therefore known,
 paths. A reported `forced_specialized_speedup_vs_forced_generic` is
 `forced-generic median / forced-specialized median`.
@@ -59,8 +93,11 @@ successful members of a scheduled group emit different identities, collection
 fails instead of silently treating them as unrelated cells. Duplicate members
 are errors, as are non-finite or non-positive timing, stale result or manifest
 digests, failed round trips, unknown schemas, and missing result files.
+The larger low-rate analogue rows additionally require resolved GF16 with
+`(padded_side,parent_count)` equal to `(512,2048)`, `(2048,8192)`, and
+`(2048,8192)` respectively; collection rejects a different resolution.
 
-The lab manifest v2 copies the generator's source schema, digest, and metadata.
+The lab manifest v2 copies the generator's v3 source schema, digest, and metadata.
 Each job records the resolved executable path, size, and content SHA-256 inside
 its job digest. The runner verifies that identity at campaign start,
 immediately before each launch, and after execution. Terminal results hash
@@ -68,18 +105,8 @@ stdout and stderr and carry their own result digest; resume, merge, and collect
 all reject mutated evidence. Each matrix job also carries an expected-cell
 object in its job digest, and collection compares every emitted request
 parameter with it before pairing; the collector requires the complete expected
-field set. Regenerate older v1 manifests; they cannot establish these identities
-and are intentionally not accepted by this collector.
-
-## Known matrix follow-up
-
-The exact 2,483-row `required` preset is a reproducible CPU checkpoint, not yet
-the final Definition-of-Done matrix. Bead `leopard-79h.16.1` owns the follow-up:
-add larger GF16 low-rate analogues; explicit reuse 1/one-stripe-per-plan plus
-8/64/1024 reuse with batch varied independently; automatic nonzero-loss
-dispatcher rows; and counterbalanced forced-path order (or repeated AB/BA
-runs). Its new exact cardinality and independently enumerated dimension set
-must replace 2,483; the current count is not a compatibility constraint.
+field set. Regenerate older v1/v2 benchmark specifications; they do not define
+trial/order semantics and are intentionally not accepted by this v3 collector.
 
 ## Reproduction
 
@@ -120,33 +147,43 @@ affinity mask; CPU 0 below is an example, not a portable assumption.
         --results-dir results/leopard2/benchmark-checkpoint/run \
         --output results/leopard2/benchmark-checkpoint/collected.json
 
-Rerunning the lab command resumes completed jobs whose job digest still matches,
-including the executable content identity.
+Rerunning the lab command resumes completed logical cells whose job digests and
+executable content identities still match and whose terminal results share one
+run epoch. If any counterbalanced row is absent or comes from another runner
+invocation, the entire five-row cell is rerun. Existing result files are
+overwritten only for that incomplete or mixed-epoch cell.
 Use `--rerun-failed` only after retaining and understanding the original stderr.
 
-Generate the larger portable specification with:
+Generate the larger required specification with an allowed pinned CPU:
 
     python3 tools/leopard2_benchmark_matrix.py generate \
         --benchmark "$PWD/build/release/bench_leopard2" \
-        --preset required --workers 1 \
+        --preset required --workers 1 --pinned-cpu 0 \
         --output results/leopard2/benchmark-required/spec.json
 
 The target host builds its own manifest so its allowed CPU set and topology are
-recorded. Thread counts 64 and 128 intentionally require a host exposing those
-CPUs. This 32-CPU, single-NUMA-node host cannot provide that evidence.
+recorded. `--pinned-cpu` pins every single-thread comparison, including both
+AB/BA repetitions, while the multi-thread scaling rows retain their requested
+topology-aware CPU counts. Thread counts 64 and 128 intentionally require a
+host exposing those CPUs. A smaller host cannot provide that evidence.
 
 ## Validation
 
-The permanent self-test checks deterministic generation, the exact 63-, 216-,
-and 2,483-job preset cardinalities, fixed-work thread scaling, uncapped large
-memory estimates and unavailable preflight, executable content identity,
+The permanent self-test checks deterministic generation; the exact 99-, 360-,
+and 7,134-job preset cardinalities; an independently enumerated 7,134-signature
+dimension/mode `Counter`; exact lexicographic AB/BA slots; one automatic row;
+shared seeds, CPU groups, and pinned CPUs; the three GF16 parent expectations;
+the full independent 4x4 reuse/batch grid; fixed-work thread scaling; uncapped
+large memory estimates and unavailable preflight; executable content identity,
 source-metadata preservation, current cgroup v1/v2 limiting-ancestor discovery,
-three-mode seed/CPU grouping, forced-path and dispatcher-check calculations.
+group-atomic partial/mixed-epoch resume with ungrouped job-granular fallback,
+and forced-path and dispatcher-check calculations over the complete five-row
+AB/BA fixture.
 Negative cases exercise bad benchmark schemas,
 stale manifest, job, result, and output identities, delayed executable
 replacement, request-parameter mismatches, failed round trips, duplicate pair
-members, scheduled-pair identity drift, incomplete expected cells, and zero and
-non-finite timing. It runs through CTest as
+members, scheduled-pair identity drift, incomplete expected cells, mixed run
+epochs, and zero and non-finite timing. It runs through CTest as
 `leopard2_benchmark_matrix_self_test`.
 
 The benchmark executable separately records codec and decode-plan setup,

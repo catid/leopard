@@ -13,18 +13,30 @@ import hashlib
 import json
 import math
 import os
+import re
 import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
 
-SCHEMA = "leopard2-benchmark-matrix/v2"
-SPEC_SCHEMA = "leopard2-benchmark-spec/v2"
+SCHEMA = "leopard2-benchmark-matrix/v3"
+SPEC_SCHEMA = "leopard2-benchmark-spec/v3"
 LAB_MANIFEST_SCHEMA = "leopard2-lab-manifest/v2"
 MODE_AUTOMATIC = "automatic"
 MODE_FORCED_SPECIALIZED = "forced-specialized"
 MODE_FORCED_GENERIC = "forced-generic"
+ORDER_SINGLE = "single"
+ORDER_AB = "ab"
+ORDER_BA = "ba"
+ORDER_LAYOUT = {
+    ORDER_SINGLE: (MODE_AUTOMATIC,),
+    # A is the specialized decoder and B is the generic decoder.  Automatic
+    # follows the first pair so every nonzero-loss cell has one dispatcher
+    # observation without changing the forced-path counterbalance.
+    ORDER_AB: (MODE_FORCED_SPECIALIZED, MODE_FORCED_GENERIC, MODE_AUTOMATIC),
+    ORDER_BA: (MODE_FORCED_GENERIC, MODE_FORCED_SPECIALIZED),
+}
 EXPECTED_CELL_FIELDS = (
     "K",
     "R",
@@ -52,6 +64,14 @@ RATE_CASES = {
         (100, 156, "low"),
         (127, 129, "low"),
     ),
+    # Larger analogues of the 1:3, 100:156, and 127:129 GF8 low-rate cells.
+    # Their low-profile parents are 2048 or 8192 coordinates, so AUTO must
+    # resolve them to GF16 rather than accidentally reusing a GF8-only case.
+    "low-gf16": (
+        (512, 1536, "low"),
+        (1600, 2496, "low"),
+        (2032, 2064, "low"),
+    ),
     "balanced": ((128, 128, "high"), (128, 128, "low"), (256, 256, "high")),
     "high": (
         (192, 64, "high"),
@@ -67,6 +87,11 @@ RATE_CASES = {
         (200, 50, "high"),
         (225, 30, "high"),
     ),
+}
+GF16_LOW_RESOLUTION = {
+    (512, 1536): (512, 2048),
+    (1600, 2496): (2048, 8192),
+    (2032, 2064): (2048, 8192),
 }
 
 FULL_SHARD_BYTES = (
@@ -147,6 +172,62 @@ def memory_limit_mb(k: int, r: int, shard_bytes: int, batch: int) -> int:
     return max(2048, (estimate + (1 << 20) - 1) >> 20)
 
 
+def _ordered_runs(losses: int) -> Tuple[Tuple[str, int, str], ...]:
+    if losses == 0:
+        return ((ORDER_SINGLE, 0, MODE_AUTOMATIC),)
+    return tuple(
+        (trial, sequence, mode)
+        for trial in (ORDER_AB, ORDER_BA)
+        for sequence, mode in enumerate(ORDER_LAYOUT[trial]))
+
+
+def _parse_ordered_job_id(job_id: str) -> Tuple[str, int, str]:
+    match = re.search(
+        r"\.order-(single|ab|ba)\.slot([0-9]{2})-([a-z-]+)$", job_id)
+    if match is None:
+        raise MatrixError(f"job {job_id} has no valid counterbalance suffix")
+    trial, sequence_text, mode = match.groups()
+    sequence = int(sequence_text)
+    layout = ORDER_LAYOUT[trial]
+    if sequence >= len(layout) or layout[sequence] != mode:
+        raise MatrixError(
+            f"job {job_id} has an invalid {trial.upper()} mode sequence")
+    return trial, sequence, mode
+
+
+def _mode_from_cell(cell: Mapping[str, object]) -> str:
+    force_generic = cell.get("force_generic_decode")
+    force_specialized = cell.get("force_specialized_decode")
+    if not isinstance(force_generic, bool) or not isinstance(force_specialized, bool):
+        raise MatrixError("expected cell has invalid decoder policy flags")
+    if force_generic and force_specialized:
+        raise MatrixError("expected cell forces two decoder policies")
+    if force_generic:
+        return MODE_FORCED_GENERIC
+    if force_specialized:
+        return MODE_FORCED_SPECIALIZED
+    return MODE_AUTOMATIC
+
+
+def _validate_profile_resolution(
+    job_id: str, cell: Mapping[str, object], benchmark: Mapping[str, object],
+) -> None:
+    if not job_id.startswith("low-gf16."):
+        return
+    counts = (cell.get("K"), cell.get("R"))
+    expectation = GF16_LOW_RESOLUTION.get(counts)
+    if expectation is None:
+        raise MatrixError(f"job {job_id} is not a declared GF16 low-rate analogue")
+    padded_side, parent_count = expectation
+    resolved = benchmark["resolved"]
+    if (resolved.get("profile") != "low_v1" or
+            resolved.get("field") != "gf16" or
+            resolved.get("padded_side") != padded_side or
+            resolved.get("parent_count") != parent_count):
+        raise MatrixError(
+            f"job {job_id} did not resolve to its declared GF16 low parent")
+
+
 def _job(
     benchmark: str,
     category: str,
@@ -159,21 +240,32 @@ def _job(
     reuse: int,
     threads: int,
     mode: str,
+    order_trial: str,
+    order_sequence: int,
     iterations: int,
     warmup: int,
 ) -> Dict[str, object]:
     if mode not in (MODE_AUTOMATIC, MODE_FORCED_SPECIALIZED, MODE_FORCED_GENERIC):
         raise MatrixError(f"invalid decoder request mode: {mode}")
+    layout = ORDER_LAYOUT.get(order_trial)
+    if (layout is None or order_sequence < 0 or order_sequence >= len(layout) or
+            layout[order_sequence] != mode):
+        raise MatrixError("decoder mode does not match its counterbalance position")
     job_id = (
         f"{category}.k{k}.r{r}.{profile}.b{shard_bytes}.l{losses}."
-        f"batch{batch}.reuse{reuse}.t{threads}.{mode}"
+        f"batch{batch}.reuse{reuse}.t{threads}.order-{order_trial}."
+        f"slot{order_sequence:02d}-{mode}"
     )
-    pair_identity = (
+    # All AB/BA repetitions of one cell intentionally share both the random
+    # missing pattern and lab CPU-assignment group.  Collection splits the
+    # shared scheduling group by the order suffix, so repeated modes do not
+    # collide while both repetitions still run on the same assigned CPU set.
+    cell_identity = (
         f"{category}|{k}|{r}|{profile}|{shard_bytes}|{losses}|"
         f"{batch}|{reuse}|{threads}"
     ).encode("ascii")
-    pair_seed = int.from_bytes(hashlib.sha256(pair_identity).digest()[:4], "big")
-    cpu_group = "pair-" + hashlib.sha256(pair_identity).hexdigest()
+    pair_seed = int.from_bytes(hashlib.sha256(cell_identity).digest()[:4], "big")
+    cpu_group = "pair-" + hashlib.sha256(cell_identity).hexdigest()
     command = [
         benchmark,
         "--k",
@@ -238,6 +330,10 @@ def _job(
         "command": command,
         "cpu_count": threads,
         "cpu_group": cpu_group,
+        # Counterbalanced observations are one atomic evidence unit.  The lab
+        # runner resumes the whole logical cell only when all members were
+        # completed by the same runner invocation.
+        "resume_group": cpu_group,
         "benchmark_cell": benchmark_cell,
         "memory_mb": memory_mb,
         "minimum_memory_mb": memory_mb,
@@ -249,6 +345,123 @@ def _checkpoint_cells() -> Iterable[Tuple[str, int, int, str]]:
     yield "low", 16, 240, "low"
     yield "balanced", 128, 128, "high"
     yield "high", 240, 16, "high"
+
+
+def _dimension_signature(job: Mapping[str, object]) -> Tuple[object, ...]:
+    job_id = job.get("id")
+    cell = job.get("benchmark_cell")
+    if not isinstance(job_id, str) or ".k" not in job_id:
+        raise MatrixError("matrix job is missing its category prefix")
+    if not isinstance(cell, dict) or set(cell) != set(EXPECTED_CELL_FIELDS):
+        raise MatrixError(f"job {job_id} has an incomplete expected cell")
+    trial, sequence, declared_mode = _parse_ordered_job_id(job_id)
+    mode = _mode_from_cell(cell)
+    if mode != declared_mode:
+        raise MatrixError(f"job {job_id} suffix disagrees with its expected cell")
+    return (
+        job_id.split(".k", 1)[0],
+        cell["K"], cell["R"], cell["requested_profile"],
+        cell["requested_field"], cell["requested_backend"],
+        cell["shard_bytes"], cell["loss_count"], cell["batch"],
+        cell["reuse"], cell["iterations"], cell["warmup"],
+        cell["thread_count"], trial, sequence, mode,
+    )
+
+
+def _expected_required_dimensions(
+    iterations: int, warmup: int,
+) -> Counter[Tuple[object, ...]]:
+    """Independently enumerate the required preset's exact dimension set.
+
+    This intentionally does not call RATE_CASES, loss_counts, _ordered_runs,
+    _job, or the production shard-size selector.  It is a compact oracle that
+    catches missing dimensions and same-cardinality mode/order swaps.
+    """
+    expected_rates = {
+        "balanced": ((128, 128, "high"), (128, 128, "low"),
+                     (256, 256, "high")),
+        "high": ((192, 64, "high"), (224, 32, "high"),
+                 (240, 16, "high"), (248, 8, "high"),
+                 (1000, 200, "high"), (4096, 512, "high")),
+        "low": ((8, 248, "low"), (16, 240, "low"),
+                (32, 224, "low"), (64, 192, "low"),
+                (100, 156, "low"), (127, 129, "low")),
+        "low-gf16": ((512, 1536, "low"), (1600, 2496, "low"),
+                     (2032, 2064, "low")),
+        "padding": ((129, 1, "high"), (129, 100, "high"),
+                    (200, 50, "high"), (225, 30, "high")),
+    }
+    shard_sizes = (64, 256, 1024, 4096, 16384, 65536, 262144,
+                   1048576, 4194304, 16777216)
+    nonzero_layout = (
+        (ORDER_AB, 0, MODE_FORCED_SPECIALIZED),
+        (ORDER_AB, 1, MODE_FORCED_GENERIC),
+        (ORDER_AB, 2, MODE_AUTOMATIC),
+        (ORDER_BA, 0, MODE_FORCED_GENERIC),
+        (ORDER_BA, 1, MODE_FORCED_SPECIALIZED),
+    )
+    profile_name = {
+        "high": "legacy_high_v1",
+        "low": "low_v1",
+    }
+    rows: List[Tuple[object, ...]] = []
+
+    def add(
+        category: str, k: int, r: int, profile: str, shard_bytes: int,
+        losses: int, batch: int, reuse: int, threads: int,
+        trial: str, sequence: int, mode: str,
+    ) -> None:
+        rows.append((
+            category, k, r, profile_name[profile], "auto", "auto",
+            shard_bytes, losses, batch, reuse, iterations, warmup, threads,
+            trial, sequence, mode,
+        ))
+
+    for category in sorted(expected_rates):
+        for k, r, profile in expected_rates[category]:
+            maximum = min(k, r)
+            losses = tuple(sorted({
+                value for value in (0, 1, 2, 4, 8, r // 4, r // 2, maximum)
+                if 0 <= value <= maximum
+            }))
+            for shard_bytes in shard_sizes:
+                for loss_count in losses:
+                    layout = ((ORDER_SINGLE, 0, MODE_AUTOMATIC),
+                              ) if loss_count == 0 else nonzero_layout
+                    for trial, sequence, mode in layout:
+                        add(category, k, r, profile, shard_bytes, loss_count,
+                            1, 8, 1, trial, sequence, mode)
+
+    checkpoint = (
+        ("low", 16, 240, "low"),
+        ("balanced", 128, 128, "high"),
+        ("high", 240, 16, "high"),
+    )
+    batch_sizes = ((1, 65536), (8, 65536), (64, 4096), (1024, 256))
+    for category, k, r, profile in checkpoint:
+        for batch, shard_bytes in batch_sizes:
+            for reuse in (1, 8, 64, 1024):
+                for trial, sequence, mode in nonzero_layout:
+                    add(category + "-reuse", k, r, profile, shard_bytes, 8,
+                        batch, reuse, 1, trial, sequence, mode)
+        for threads in (1, 2, 4, 8, 16, 32, 64, 128):
+            add(category + "-scaling", k, r, profile, 4096, 8, 128, 8,
+                threads, ORDER_SINGLE, 0, MODE_AUTOMATIC)
+    return Counter(rows)
+
+
+def _validate_required_dimensions(
+    jobs: Sequence[Mapping[str, object]], iterations: int, warmup: int,
+) -> None:
+    actual = Counter(_dimension_signature(job) for job in jobs)
+    expected = _expected_required_dimensions(iterations, warmup)
+    if actual == expected:
+        return
+    missing = list((expected - actual).elements())[:3]
+    extra = list((actual - expected).elements())[:3]
+    raise MatrixError(
+        "required dimension/mode set differs from its independent oracle; "
+        f"missing={missing!r}, extra={extra!r}")
 
 
 def make_spec(
@@ -268,72 +481,79 @@ def make_spec(
             ("high", 240, 16, "high", 4096, 1),
         )
         for category, k, r, profile, shard_bytes, losses in cells:
-            for mode in (MODE_AUTOMATIC, MODE_FORCED_SPECIALIZED, MODE_FORCED_GENERIC):
+            for order_trial, order_sequence, mode in _ordered_runs(losses):
                 jobs.append(_job(
                     benchmark, category, k, r, profile, shard_bytes, losses,
-                    1, 2, 1, mode, iterations, warmup))
+                    1, 2, 1, mode, order_trial, order_sequence,
+                    iterations, warmup))
     elif preset == "checkpoint":
         for category, k, r, profile in _checkpoint_cells():
             for shard_bytes in (4096, 65536, 1048576):
                 for losses in (0, 1, min(8, k, r)):
-                    modes = ((MODE_AUTOMATIC,) if losses == 0 else
-                             (MODE_AUTOMATIC, MODE_FORCED_SPECIALIZED,
-                              MODE_FORCED_GENERIC))
-                    for mode in modes:
+                    for order_trial, order_sequence, mode in _ordered_runs(losses):
                         jobs.append(_job(
                             benchmark, category, k, r, profile, shard_bytes,
-                            losses, 1, 8, 1, mode, iterations, warmup))
+                            losses, 1, 8, 1, mode, order_trial,
+                            order_sequence, iterations, warmup))
     elif preset == "balanced-crossover":
         for shard_bytes in (256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536):
             for losses in (1, 2, 4, 8, 16, 32, 64, 128):
-                for mode in (MODE_AUTOMATIC, MODE_FORCED_SPECIALIZED,
-                             MODE_FORCED_GENERIC):
+                for order_trial, order_sequence, mode in _ordered_runs(losses):
                     jobs.append(_job(
                         benchmark, "balanced-crossover", 128, 128, "high",
                         shard_bytes, losses, 1, 16, 1, mode,
-                        iterations, warmup))
+                        order_trial, order_sequence, iterations, warmup))
     elif preset == "required":
         for category in sorted(RATE_CASES):
             for k, r, profile in RATE_CASES[category]:
                 for shard_bytes in FULL_SHARD_BYTES:
                     for losses in loss_counts(k, r):
-                        modes = ((MODE_FORCED_SPECIALIZED, MODE_FORCED_GENERIC)
-                                 if losses else (MODE_AUTOMATIC,))
-                        for mode in modes:
+                        for order_trial, order_sequence, mode in _ordered_runs(losses):
                             jobs.append(_job(
                                 benchmark, category, k, r, profile, shard_bytes,
-                                losses, 1, 8, 1, mode, iterations, warmup))
+                                losses, 1, 8, 1, mode, order_trial,
+                                order_sequence, iterations, warmup))
         # Reuse/batch and thread scaling are separate from the count/size/loss
         # Cartesian product to avoid impossible multi-terabyte allocations.
         for category, k, r, profile in _checkpoint_cells():
-            for batch, reuse in ((8, 8), (64, 64), (1024, 1024)):
-                shard_bytes = 65536 if batch <= 8 else (4096 if batch <= 64 else 256)
-                jobs.append(_job(
-                    benchmark, category + "-reuse", k, r, profile,
-                    shard_bytes, min(8, k, r), batch, reuse, 1,
-                    MODE_AUTOMATIC,
-                    iterations, warmup))
+            for batch in (1, 8, 64, 1024):
+                # Bound each batch to roughly the same public byte footprint;
+                # reuse then varies independently without changing allocation.
+                shard_bytes = (65536 if batch <= 8 else
+                               (4096 if batch == 64 else 256))
+                for reuse in (1, 8, 64, 1024):
+                    for order_trial, order_sequence, mode in _ordered_runs(
+                            min(8, k, r)):
+                        jobs.append(_job(
+                            benchmark, category + "-reuse", k, r, profile,
+                            shard_bytes, min(8, k, r), batch, reuse, 1,
+                            mode, order_trial, order_sequence,
+                            iterations, warmup))
             for threads in (1, 2, 4, 8, 16, 32, 64, 128):
                 jobs.append(_job(
                     benchmark, category + "-scaling", k, r, profile,
                     4096, min(8, k, r), 128, 8, threads,
-                    MODE_AUTOMATIC, iterations, warmup))
+                    MODE_AUTOMATIC, ORDER_SINGLE, 0, iterations, warmup))
     else:
         raise MatrixError(f"unknown preset: {preset}")
 
     if pinned_cpu is not None:
         if pinned_cpu < 0:
             raise MatrixError("pinned CPU must be non-negative")
-        if any(int(job["cpu_count"]) != 1 for job in jobs):
-            raise MatrixError("--pinned-cpu is only valid for all-single-thread presets")
         for job in jobs:
-            job.pop("cpu_count")
-            job["cpu_set"] = [pinned_cpu]
+            # Pin every single-thread comparison cell.  Mixed presets retain
+            # normal topology-aware CPU groups for their multi-thread scaling
+            # rows, which cannot be represented by one pinned CPU.
+            if int(job["cpu_count"]) == 1:
+                job.pop("cpu_count")
+                job["cpu_set"] = [pinned_cpu]
 
     ids = [str(job["id"]) for job in jobs]
     if len(ids) != len(set(ids)):
         duplicates = sorted(key for key, count in Counter(ids).items() if count > 1)
         raise MatrixError("duplicate job ids: " + ", ".join(duplicates))
+    if preset == "required":
+        _validate_required_dimensions(jobs, iterations, warmup)
     spec = {
         "schema": SPEC_SCHEMA,
         "root": str(Path.cwd().resolve()),
@@ -348,6 +568,10 @@ def make_spec(
             "preset": preset,
             "serial_timing_jobs": workers == 1,
             "isolation_status": "not-established-by-generator",
+            "counterbalance": (
+                "A=forced-specialized,B=forced-generic; "
+                "AB=S/G/automatic then BA=G/S"),
+            "counterbalance_temporal_order_requires_workers": 1,
             "benchmark": benchmark,
             "pinned_cpu": pinned_cpu,
         },
@@ -458,11 +682,19 @@ def _validate_manifest(value: object) -> dict:
             raise MatrixError(f"job {job['id']} digest does not match its contents")
         if not isinstance(job.get("cpu_group"), str) or not job["cpu_group"]:
             raise MatrixError(f"job {job['id']} is missing its scheduled pair group")
+        if (not isinstance(job.get("resume_group"), str) or
+                job["resume_group"] != job["cpu_group"]):
+            raise MatrixError(
+                f"job {job['id']} is missing its atomic resume group")
         expected_cell = job.get("benchmark_cell")
         if (not isinstance(expected_cell, dict) or
                 set(expected_cell) != set(EXPECTED_CELL_FIELDS)):
             raise MatrixError(
                 f"job {job['id']} expected benchmark cell has the wrong fields")
+        _, _, declared_mode = _parse_ordered_job_id(job["id"])
+        if declared_mode != _mode_from_cell(expected_cell):
+            raise MatrixError(
+                f"job {job['id']} counterbalance suffix disagrees with its cell")
     return value
 
 
@@ -505,6 +737,12 @@ def collect(manifest_path: Path, results_dir: Path) -> dict:
             raise MatrixError(f"job {job_id} result CPU set differs from its manifest")
         outcome = str(lab_result.get("outcome"))
         outcomes[outcome] += 1
+        run_epoch = lab_result.get("run_epoch")
+        if (not isinstance(run_epoch, str) or len(run_epoch) != 64 or
+                any(character not in "0123456789abcdef"
+                    for character in run_epoch)):
+            raise MatrixError(f"job {job_id} has no valid run epoch")
+        order_trial, order_sequence, _ = _parse_ordered_job_id(job_id)
         record = {
             "job_id": job_id,
             "outcome": outcome,
@@ -513,6 +751,10 @@ def collect(manifest_path: Path, results_dir: Path) -> dict:
             "duration_seconds": lab_result.get("duration_seconds"),
             "executable": executable,
             "cpu_group": job["cpu_group"],
+            "resume_group": job["resume_group"],
+            "run_epoch": run_epoch,
+            "order_trial": order_trial,
+            "order_sequence": order_sequence,
         }
         if outcome == "success":
             benchmark = _validate_benchmark(load_json(job_dir / "stdout.txt"), job_id)
@@ -527,12 +769,24 @@ def collect(manifest_path: Path, results_dir: Path) -> dict:
                 raise MatrixError(
                     f"job {job_id} benchmark parameters differ from its manifest: "
                     + ", ".join(mismatches))
+            _validate_profile_resolution(job_id, expected_cell, benchmark)
             record["benchmark"] = benchmark
             record["build_digest"] = digest(benchmark["build"])
         else:
             record["stderr"] = (job_dir / "stderr.txt").read_text(
                 encoding="utf-8", errors="replace")[-4096:]
         records.append(record)
+
+    group_epochs: Dict[str, set[str]] = {}
+    for record in records:
+        group_epochs.setdefault(record["resume_group"], set()).add(
+            record["run_epoch"])
+    mixed_groups = sorted(
+        group for group, epochs in group_epochs.items() if len(epochs) != 1)
+    if mixed_groups:
+        raise MatrixError(
+            "logical resume groups contain mixed run epochs: " +
+            ", ".join(mixed_groups[:3]))
 
     pair_map: Dict[str, Dict[str, dict]] = {}
     pair_parameters: Dict[str, dict] = {}
@@ -566,8 +820,13 @@ def collect(manifest_path: Path, results_dir: Path) -> dict:
             "binary_sha256": record["executable"]["sha256"],
             "build_digest": record["build_digest"],
             "cpu_set": record["cpu_set"],
+            "resume_group": record["resume_group"],
+            "run_epoch": record["run_epoch"],
+            "order_trial": record["order_trial"],
         }
-        key = record["cpu_group"]
+        # AB and BA deliberately share one cpu_group so the lab assigns the
+        # same CPU set.  They remain distinct comparison repetitions here.
+        key = record["cpu_group"] + "|order-" + record["order_trial"]
         if parameters["force_generic_decode"]:
             mode = MODE_FORCED_GENERIC
         elif parameters["force_specialized_decode"]:
@@ -605,6 +864,7 @@ def collect(manifest_path: Path, results_dir: Path) -> dict:
             forced_generic.get("median_us_per_batch_call"),
             f"job {pair[MODE_FORCED_GENERIC]['job_id']} decode median")
         comparisons.append({
+            "order_trial": pair_parameters[key]["order_trial"],
             "parameters": pair_parameters[key],
             "forced_specialized_job": pair[MODE_FORCED_SPECIALIZED]["job_id"],
             "forced_generic_job": pair[MODE_FORCED_GENERIC]["job_id"],
@@ -624,6 +884,7 @@ def collect(manifest_path: Path, results_dir: Path) -> dict:
                                 else MODE_FORCED_GENERIC)
             best_forced_us = min(forced_specialized_us, forced_generic_us)
             dispatcher_checks.append({
+                "order_trial": pair_parameters[key]["order_trial"],
                 "parameters": pair_parameters[key],
                 "automatic_job": pair[MODE_AUTOMATIC]["job_id"],
                 "forced_specialized_job": pair[MODE_FORCED_SPECIALIZED]["job_id"],
@@ -653,22 +914,48 @@ def collect(manifest_path: Path, results_dir: Path) -> dict:
 def self_test() -> None:
     smoke = make_spec("/tmp/bench_leopard2", "smoke", 1, 3, 1)
     smoke_groups = Counter(str(job.get("cpu_group")) for job in smoke["jobs"])
-    if sorted(smoke_groups.values()) != [3, 3]:
+    if sorted(smoke_groups.values()) != [5, 5]:
         raise MatrixError("paired jobs do not share stable CPU-assignment groups")
+    counterbalanced = (
+        (ORDER_AB, 0, MODE_FORCED_SPECIALIZED),
+        (ORDER_AB, 1, MODE_FORCED_GENERIC),
+        (ORDER_AB, 2, MODE_AUTOMATIC),
+        (ORDER_BA, 0, MODE_FORCED_GENERIC),
+        (ORDER_BA, 1, MODE_FORCED_SPECIALIZED),
+    )
+    for cpu_group in smoke_groups:
+        members = [job for job in smoke["jobs"] if job["cpu_group"] == cpu_group]
+        if tuple(_parse_ordered_job_id(str(job["id"])) for job in members) != counterbalanced:
+            raise MatrixError("sorted smoke jobs do not execute adjacent S/G/A then G/S")
+        positions = [smoke["jobs"].index(job) for job in members]
+        if positions != list(range(min(positions), max(positions) + 1)):
+            raise MatrixError("counterbalanced members are not lexicographically adjacent")
+        if len({job["benchmark_cell"]["seed"] for job in members}) != 1:
+            raise MatrixError("AB/BA members do not share a deterministic seed")
     first = make_spec("/tmp/bench_leopard2", "checkpoint", 1, 3, 1)
     second = make_spec("/tmp/bench_leopard2", "checkpoint", 1, 3, 1)
     if canonical_bytes(first) != canonical_bytes(second):
         raise MatrixError("spec generation is not deterministic")
-    if len(first["jobs"]) != 63:
+    if len(first["jobs"]) != 99:
         raise MatrixError("checkpoint job-count invariant failed")
     pinned = make_spec("/tmp/bench_leopard2", "checkpoint", 1, 3, 1, 7)
     if any(job.get("cpu_set") != [7] or "cpu_count" in job for job in pinned["jobs"]):
         raise MatrixError("pinned checkpoint invariant failed")
     required = make_spec("/tmp/bench_leopard2", "required", 1, 3, 1)
-    if len(required["jobs"]) != 2483:
+    if len(required["jobs"]) != 7134:
         raise MatrixError("required preset job-count invariant failed")
+    pinned_required = make_spec(
+        "/tmp/bench_leopard2", "required", 1, 3, 1, 7)
+    for job in pinned_required["jobs"]:
+        threads = int(job["benchmark_cell"]["thread_count"])
+        if threads == 1:
+            if job.get("cpu_set") != [7] or "cpu_count" in job:
+                raise MatrixError("single-thread required comparison was not pinned")
+        elif job.get("cpu_count") != threads or "cpu_set" in job:
+            raise MatrixError("multi-thread required scaling row was incorrectly pinned")
+    del pinned_required
     crossover = make_spec("/tmp/bench_leopard2", "balanced-crossover", 1, 3, 1, 7)
-    if len(crossover["jobs"]) != 216:
+    if len(crossover["jobs"]) != 360:
         raise MatrixError("balanced crossover job-count invariant failed")
     for k, r in ((1, 1), (8, 248), (240, 16)):
         losses = loss_counts(k, r)
@@ -693,12 +980,97 @@ def self_test() -> None:
     if scaling_work != {("4096", "8", "128", "8")}:
         raise MatrixError("thread scaling changes the amount of measured work")
 
+    reuse_jobs = [job for job in required["jobs"] if "-reuse.k" in str(job["id"])]
+    if len(reuse_jobs) != 240:
+        raise MatrixError("reuse/batch job-count invariant failed")
+    for category in ("low-reuse", "balanced-reuse", "high-reuse"):
+        logical = {
+            (job["benchmark_cell"]["batch"], job["benchmark_cell"]["reuse"],
+             job["benchmark_cell"]["shard_bytes"])
+            for job in reuse_jobs if str(job["id"]).startswith(category + ".")
+        }
+        expected_logical = {
+            (batch, reuse, shard_bytes)
+            for batch, shard_bytes in ((1, 65536), (8, 65536),
+                                       (64, 4096), (1024, 256))
+            for reuse in (1, 8, 64, 1024)
+        }
+        if logical != expected_logical:
+            raise MatrixError(f"{category} does not independently vary reuse and batch")
+
+    gf16_cases = {
+        (job["benchmark_cell"]["K"], job["benchmark_cell"]["R"])
+        for job in required["jobs"]
+        if str(job["id"]).startswith("low-gf16.")
+    }
+    if gf16_cases != {(512, 1536), (1600, 2496), (2032, 2064)}:
+        raise MatrixError("larger GF16 low-rate analogues are incomplete")
+    expected_resolutions = {
+        (512, 1536): (512, 2048),
+        (1600, 2496): (2048, 8192),
+        (2032, 2064): (2048, 8192),
+    }
+    if GF16_LOW_RESOLUTION != expected_resolutions:
+        raise MatrixError("GF16 low-rate resolved-parent table changed unexpectedly")
+    for (k, r), (expected_padded, expected_parent) in expected_resolutions.items():
+        padded = 1 << (k - 1).bit_length()
+        parent = 1 << (padded + r - 1).bit_length()
+        if (padded != expected_padded or parent != expected_parent or
+                parent <= 256):
+            raise MatrixError("GF16 analogue parent-size expectation is wrong")
+        _validate_profile_resolution(
+            f"low-gf16.k{k}.r{r}.fixture", {"K": k, "R": r},
+            {"resolved": {
+                "profile": "low_v1", "field": "gf16",
+                "padded_side": padded, "parent_count": parent}})
+
+    # Every comparable nonzero cell has exactly one automatic observation and
+    # two counterbalanced forced repetitions, all contiguous in sorted order.
+    required_groups: Dict[str, List[Dict[str, object]]] = {}
+    for job in required["jobs"]:
+        if "-scaling.k" in str(job["id"]):
+            continue
+        required_groups.setdefault(str(job["cpu_group"]), []).append(job)
+    for members in required_groups.values():
+        losses = int(members[0]["benchmark_cell"]["loss_count"])
+        parsed = tuple(_parse_ordered_job_id(str(job["id"])) for job in members)
+        expected_order = ((ORDER_SINGLE, 0, MODE_AUTOMATIC),
+                          ) if losses == 0 else counterbalanced
+        if parsed != expected_order:
+            raise MatrixError("required cell has incomplete or swapped mode/order coverage")
+        positions = [required["jobs"].index(job) for job in members]
+        if positions != list(range(min(positions), max(positions) + 1)):
+            raise MatrixError("required counterbalance group is not adjacent")
+        if len({job["benchmark_cell"]["seed"] for job in members}) != 1:
+            raise MatrixError("required AB/BA trial seeds differ")
+
     def expect_error(label: str, callback) -> None:
         try:
             callback()
         except MatrixError:
             return
         raise MatrixError(f"negative collector test did not reject {label}")
+
+    wrong_dimension = json.loads(json.dumps(required["jobs"]))
+    wrong_dimension[0]["benchmark_cell"]["shard_bytes"] = 65
+    expect_error(
+        "same-cardinality required dimension substitution",
+        lambda: _validate_required_dimensions(wrong_dimension, 3, 1))
+    expect_error(
+        "swapped AB slot",
+        lambda: _parse_ordered_job_id(
+            "cell.k1.r1.high.b64.l1.batch1.reuse1.t1."
+            "order-ab.slot00-forced-generic"))
+    expect_error(
+        "missing counterbalance suffix",
+        lambda: _parse_ordered_job_id("cell.k1.r1.high.forced-generic"))
+    expect_error(
+        "wrong GF16 resolved parent",
+        lambda: _validate_profile_resolution(
+            "low-gf16.k512.r1536.fixture", {"K": 512, "R": 1536},
+            {"resolved": {
+                "profile": "low_v1", "field": "gf16",
+                "padded_side": 512, "parent_count": 4096}}))
 
     with tempfile.TemporaryDirectory(prefix="leopard2-benchmark-matrix-") as directory:
         root = Path(directory)
@@ -711,20 +1083,26 @@ def self_test() -> None:
             lab_results = {}
             benchmarks = {}
             modes = [
-                (MODE_AUTOMATIC, 12.0),
-                (MODE_FORCED_SPECIALIZED, 10.0),
-                (MODE_FORCED_GENERIC, 20.0),
+                (MODE_FORCED_SPECIALIZED, 10.0, ORDER_AB, 0, "pair"),
+                (MODE_FORCED_GENERIC, 20.0, ORDER_AB, 1, "pair"),
+                (MODE_AUTOMATIC, 12.0, ORDER_AB, 2, "pair"),
+                (MODE_FORCED_GENERIC, 22.0, ORDER_BA, 0, "pair"),
+                (MODE_FORCED_SPECIALIZED, 11.0, ORDER_BA, 1, "pair"),
             ]
             if duplicate:
-                modes.append((MODE_FORCED_SPECIALIZED, 11.0))
-            for ordinal, (mode, median) in enumerate(modes):
+                modes.append((
+                    MODE_FORCED_SPECIALIZED, 11.0, ORDER_AB, 0,
+                    "duplicate"))
+            for mode, median, trial, sequence, id_prefix in modes:
                 forced_generic = mode == MODE_FORCED_GENERIC
                 forced_specialized = mode == MODE_FORCED_SPECIALIZED
-                job_id = f"pair.{mode}.{ordinal}"
+                job_id = (
+                    f"{id_prefix}.order-{trial}.slot{sequence:02d}-{mode}")
                 job = {
                     "id": job_id,
                     "cpu_set": [7],
                     "cpu_group": "self-test-pair",
+                    "resume_group": "self-test-pair",
                     "executable": executable,
                     "command": (["/tmp/bench_leopard2", "--force-generic"]
                                 if forced_generic else
@@ -742,6 +1120,7 @@ def self_test() -> None:
                     "exit_code": 0,
                     "cpu_set": [7],
                     "duration_seconds": 0.1,
+                    "run_epoch": "a" * 64,
                 }
                 benchmarks[job_id] = {
                     "schema": "leopard2-benchmark-v1",
@@ -804,14 +1183,24 @@ def self_test() -> None:
 
         manifest_path, results_path = write_fixture("valid")
         collected = collect(manifest_path, results_path)
-        if (collected["record_count"] != 3 or collected["comparison_count"] != 1 or
+        if (collected["record_count"] != 5 or collected["comparison_count"] != 2 or
                 collected["dispatcher_check_count"] != 1 or
-                collected["comparisons"][0][
-                    "forced_specialized_speedup_vs_forced_generic"] != 2.0 or
+                [comparison["order_trial"]
+                 for comparison in collected["comparisons"]] != [ORDER_AB, ORDER_BA] or
+                any(comparison["forced_specialized_speedup_vs_forced_generic"] != 2.0
+                    for comparison in collected["comparisons"]) or
                 collected["dispatcher_checks"][0][
                     "automatic_ratio_to_best_forced"] != 1.2 or
                 collected["source_spec"]["metadata"]["preset"] != "self-test"):
             raise MatrixError("collector pairing invariant failed")
+
+        mixed_epoch = write_fixture(
+            "mixed-run-epoch",
+            lambda manifest, results, benchmarks: results[
+                sorted(results)[0]].update(run_epoch="b" * 64))
+        expect_error(
+            "mixed logical-group run epochs",
+            lambda: collect(*mixed_epoch))
 
         bad_schema = write_fixture(
             "bad-schema",
@@ -920,6 +1309,8 @@ def self_test() -> None:
         "balanced_crossover_jobs": len(crossover["jobs"]),
         "checkpoint_jobs": len(first["jobs"]),
         "required_jobs": len(required["jobs"]),
+        "required_dimension_signatures": len(
+            _expected_required_dimensions(3, 1)),
         "status": "PASS",
     }, sort_keys=True))
 
