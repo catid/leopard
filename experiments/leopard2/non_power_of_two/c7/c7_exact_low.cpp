@@ -757,6 +757,8 @@ struct Correctness
     uint64_t atomic_rejection_bytes_checked;
     uint64_t read_only_input_alias_calls;
     uint64_t read_only_input_alias_symbol_comparisons;
+    uint64_t decode_read_only_input_alias_calls;
+    uint64_t decode_read_only_input_alias_symbol_comparisons;
     uint64_t hot_path_allocations;
     uint64_t digest;
 };
@@ -967,6 +969,44 @@ static void ValidateCase(
                 ++result.encode_symbol_comparisons;
             }
             result.digest = Fnv(result.digest, &parity[recovery][1], bytes);
+        }
+
+        // A constant-zero codeword gives every received shard identical bytes,
+        // so all surviving-original and parity inputs can validly share one
+        // read-only buffer.  Exercise that strongest input/input alias case
+        // while restoring one original into separate guarded storage.
+        {
+            const std::vector<unsigned> missing(1, 0);
+            const ExactDecodePlan<Ops> alias_plan(
+                codec, missing, all_parity_present);
+            std::vector<uint8_t> shared_input(bytes + 2, 0);
+            shared_input.front() = 0x71;
+            shared_input.back() = 0x71;
+            std::vector<const void*> aliased_original(
+                k, static_cast<const void*>(&shared_input[1]));
+            std::vector<const void*> aliased_parity(
+                r, static_cast<const void*>(&shared_input[1]));
+            aliased_original[0] = NULL;
+            std::vector<uint8_t> restored_alias(bytes + 2, 0x4d);
+            std::vector<void*> restored_alias_ptr(k, NULL);
+            restored_alias_ptr[0] = &restored_alias[1];
+
+            C7TrackedAllocations = 0;
+            C7TrackAllocations = true;
+            alias_plan.Execute(bytes, &aliased_original[0],
+                               &aliased_parity[0], &restored_alias_ptr[0]);
+            C7TrackAllocations = false;
+            result.hot_path_allocations += C7TrackedAllocations;
+            ++result.decode_read_only_input_alias_calls;
+            if (shared_input.front() != 0x71 || shared_input.back() != 0x71 ||
+                restored_alias.front() != 0x4d || restored_alias.back() != 0x4d)
+                Fail("decode input alias execution changed a guard");
+            for (size_t byte = 1; byte + 1 < restored_alias.size(); ++byte)
+            {
+                if (restored_alias[byte] != 0)
+                    Fail("decode input alias execution restored nonzero data");
+            }
+            result.decode_read_only_input_alias_symbol_comparisons += symbols;
         }
 
         // Requested parity subset: null outputs remain untouched and selected
@@ -1640,6 +1680,11 @@ static void WriteJson(
            << correctness.read_only_input_alias_calls << ",\n"
            << "    \"read_only_input_alias_symbol_comparisons\":"
            << correctness.read_only_input_alias_symbol_comparisons << ",\n"
+           << "    \"decode_read_only_input_alias_calls\":"
+           << correctness.decode_read_only_input_alias_calls << ",\n"
+           << "    \"decode_read_only_input_alias_symbol_comparisons\":"
+           << correctness.decode_read_only_input_alias_symbol_comparisons
+           << ",\n"
            << "    \"hot_path_allocations\":"
            << correctness.hot_path_allocations << ",\n"
            << "    \"digest_fnv64\":\"0x" << std::hex
