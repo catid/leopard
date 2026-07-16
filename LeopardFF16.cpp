@@ -207,6 +207,7 @@ static void InitializeLogarithmTables()
     The ALTMAP memory layout is used since there is no need to convert in/out.
 */
 
+#if defined(LEO_TRY_SSSE3)
 struct Multiply128LUT_t
 {
     LEO_M128 Lo[4];
@@ -295,43 +296,17 @@ static const Multiply256LUT_t* Multiply256LUT = nullptr;
             x_hi = _mm256_xor_si256(x_hi, prod_hi); }
 
 #endif // LEO_TRY_AVX2
-
-// Stores the partial products of x * y at offset x + y * 65536
-// Repeated accesses from the same y value are faster
-struct Product16Table
-{
-    ffe_t LUT[4 * 16];
-};
-static const Product16Table* Multiply16LUT = nullptr;
-
+#endif // LEO_TRY_SSSE3
 
 static void InitializeMultiplyTables()
 {
-    // If we cannot use the PSHUFB instruction, generate Multiply8LUT:
+#if !defined(LEO_TRY_SSSE3)
+    // Portable CMake builds use the selected backend's process-lifetime FF16
+    // table.  The former 8-MiB legacy scalar table was write-only.
+    return;
+#else
     if (!CpuHasSSSE3)
-    {
-        Multiply16LUT = new Product16Table[65536];
-
-        // For each log_m multiplicand:
-#pragma omp parallel for
-        for (int log_m = 0; log_m < (int)kOrder; ++log_m)
-        {
-            const Product16Table& lut = Multiply16LUT[log_m];
-
-            for (unsigned nibble = 0, shift = 0; nibble < 4; ++nibble, shift += 4)
-            {
-                ffe_t* nibble_lut = (ffe_t*)&lut.LUT[nibble * 16];
-
-                for (unsigned x_nibble = 0; x_nibble < 16; ++x_nibble)
-                {
-                    const ffe_t prod = MultiplyLog(x_nibble << shift, static_cast<ffe_t>(log_m));
-                    nibble_lut[x_nibble] = prod;
-                }
-            }
-        }
-
         return;
-    }
 
 #if defined(LEO_TRY_AVX2)
     if (CpuHasAVX2)
@@ -380,6 +355,7 @@ static void InitializeMultiplyTables()
 #endif // LEO_TRY_AVX2
         }
     }
+#endif // LEO_TRY_SSSE3
 }
 
 

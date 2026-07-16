@@ -203,6 +203,7 @@ static void InitializeLogarithmTables()
     Specifically section 6 outlines the algorithm used here for 8-bit fields.
 */
 
+#if defined(LEO_TRY_SSSE3)
 struct Multiply128LUT_t
 {
     LEO_M128 Value[2];
@@ -238,43 +239,19 @@ static const Multiply256LUT_t* Multiply256LUT = nullptr;
                 x_reg = _mm256_xor_si256(x_reg, _mm256_xor_si256(lo, hi)); }
 
 #endif // LEO_TRY_AVX2
-
-// Stores the product of x * y at offset x + y * 256
-// Repeated accesses from the same y value are faster
-static const ffe_t* Multiply8LUT = nullptr;
-
+#endif // LEO_TRY_SSSE3
 
 static void InitializeMultiplyTables()
 {
-    // If we cannot use the PSHUFB instruction, generate Multiply8LUT:
+#if !defined(LEO_TRY_SSSE3)
+    // Portable CMake builds route scalar multiplication through the immutable
+    // backend ops table.  The former 64-KiB legacy scalar table had no reader.
+    return;
+#else
+    // Whole-translation-unit diagnostic/legacy SIMD builds retain their
+    // existing nibble tables.  A CPU without PSHUFB falls through to ops.
     if (!CpuHasSSSE3)
-    {
-        Multiply8LUT = new ffe_t[256 * 256];
-
-        // For each left-multiplicand:
-        for (unsigned x = 0; x < 256; ++x)
-        {
-            ffe_t* lut = (ffe_t*)Multiply8LUT + x;
-
-            if (x == 0)
-            {
-                for (unsigned log_y = 0; log_y < 256; ++log_y, lut += 256)
-                    *lut = 0;
-            }
-            else
-            {
-                const ffe_t log_x = LogLUT[x];
-
-                for (unsigned log_y = 0; log_y < 256; ++log_y, lut += 256)
-                {
-                    const ffe_t prod = ExpLUT[AddMod(log_x, log_y)];
-                    *lut = prod;
-                }
-            }
-        }
-
         return;
-    }
 
 #ifdef LEO_TRY_AVX2
     if (CpuHasAVX2)
@@ -313,6 +290,7 @@ static void InitializeMultiplyTables()
 #endif // LEO_TRY_AVX2
         }
     }
+#endif // LEO_TRY_SSSE3
 }
 
 
