@@ -3027,8 +3027,8 @@ def fake_checkpoint(correctness: Mapping[str, Any]) -> dict[str, Any]:
     return checkpoint
 
 
-def fake_correctness_artifact() -> dict[str, Any]:
-    cells = correctness_cells(16)
+def fake_correctness_artifact(count: int = 16) -> dict[str, Any]:
+    cells = correctness_cells(count)
     results = [{
         "case_index": index, "cell": cell, "executable_sha256": "2" * 64,
         "document": fake_isal_result(cell, iterations=3, warmup=0),

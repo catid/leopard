@@ -254,7 +254,8 @@ From a Leopard topic-branch checkout:
     python3 tools/leopard2_external_comparison.py isa-l-checkpoint \
         experiments/leopard2/isal_compare/checkpoint_result.json \
         --correctness-artifact \
-            experiments/leopard2/isal_compare/correctness_result.json
+            experiments/leopard2/isal_compare/correctness_result.json \
+        --cache .research/leopard2
 
 `bootstrap` is capped at eight build jobs. The pinned `run` command is Linux-only;
 the parser/self-test and artifact policy remain usable elsewhere. The
@@ -268,7 +269,11 @@ do not treat recorded tool/link/runtime labels as independently trusted. The
 strict flag is the local evidence-audit mode: it requires the bootstrap cache,
 reconstructs that cache's live build provenance, exact-compares the complete
 build identity, and requires current `HEAD` and its build inputs to be clean and
-equal to the benchmark-source commit. Do not run the timing command
+equal to the benchmark-source commit. The external `isa-l-checkpoint` audit
+also requires `--cache`, reconstructs the same trusted provenance, enforces the
+exact 128-case gate, and reports a trusted-cache verification status; it cannot
+upgrade a portable-only or self-consistently relabeled artifact to verified.
+Do not run the timing command
 concurrently with any other cache- or memory-sensitive job.
 
 ## Scope limits

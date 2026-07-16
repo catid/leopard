@@ -272,9 +272,12 @@ reports aggregate `adapter-available-unmeasured`/`adapter-required`/`excluded`,
 reason, and qualification counts. The internal per-cell classifier records the resolved Leopard2
 profile/field/parent, the provider field, whether wire compatibility exists
 (currently false for every external provider), and the reasons or
-qualifications. Its `isa-l-checkpoint` command independently invokes the
-fail-closed bounded-artifact validator; the matrix audit itself still contains
-no timing measurements. On the 7,134-job required matrix, the audit classifies
+qualifications. Its `isa-l-checkpoint` command requires the bootstrap cache,
+reconstructs and rehashes the complete trusted build provenance, and invokes
+the fail-closed bounded-artifact validator with the exact 128-case correctness
+artifact. It will not label a merely portable/self-consistent tool, link, or
+runtime relabel as verified. The matrix audit itself still contains no timing
+measurements. On the 7,134-job required matrix, the audit classifies
 5,003 ISA-L rows as supported by the default-off adapter but explicitly
 unmeasured, retains 21 multicore adapter gaps,
 and excludes 2,110 whose `K+R` exceeds GF(256); all 7,134 required GF8/GF16
