@@ -6,15 +6,20 @@
   "timing_scope":"non-authoritative-smoke",
   "requested_backend":"auto",
   "runtime_backend":"avx2",
-  "source_sha256":"37b812e9e5b9b49cc1451c1b866efd6b0553430d88f0613f01e623afea02e7f1",
-  "core_git_sha":"48803c06fbd7a6802b4438af60e3104895938c9d",
-  "library_sha256":"78315a54872a5ae8ebd9f264ff6faedab2777363a5d7ba1e8062ae28113e0006",
+  "affinity":[0],
+  "omp_num_threads":"1",
+  "omp_dynamic":"FALSE",
+  "source_sha256":"c2edae60a9d9b57826a0206532e0437a4f3fbe07d8d3978045ca75a78f92f604",
+  "core_git_sha":"bf916e00df37e85faf7ae69b633eb282ac40aab3",
+  "library_sha256":"c9dba912cbeb7c3115f7d2df8dd83fb0636e8ecbe420aa137c359a6480b5b172",
   "sanitizer":"none",
+  "sanitizer_features":{"address":false,"undefined":false},
   "allocation_tracking":"global-new",
   "correctness":{
     "gf8_cases":9,
     "gf16_cases":5,
     "coefficients":118717,
+    "gf16_vandermonde_coefficients":1500,
     "encode_executions":117,
     "encode_symbol_comparisons":1030423,
     "subset_encode_executions":117,
@@ -26,12 +31,19 @@
     "no_loss_null_calls":14,
     "parity_rebuilds":403,
     "odd_gf16_rejections":10,
-    "overlap_rejections":28,
+    "overlap_rejections":59,
+    "parity_output_overlap_rejections":13,
+    "restored_output_overlap_rejections":12,
+    "restored_input_overlap_rejections":20,
+    "selected_parity_null_rejections":14,
+    "survivor_null_rejections":6,
+    "atomic_rejection_bytes_checked":61570,
     "read_only_input_alias_calls":13,
+    "read_only_input_alias_symbol_comparisons":2139,
     "hot_path_allocations":0,
     "digest_fnv64":"0xec4179e9f2776a58"
   },
   "benchmarks":[
-    {"K":3,"R":253,"bytes":64,"batch":8,"losses":3,"exact_field":1,"padded_field":2,"exact_coefficients":759,"exact_decode_terms":9,"padded_encode_scratch":6720,"padded_decode_scratch":4160,"exact_setup":{"median_us":3.0099999999999998,"mad_us":0.0099999999999997868},"padded_setup":{"median_us":73.131,"mad_us":0.040999999999996817},"exact_encode":{"median_us":133.96199999999999,"mad_us":0.23000000000001819},"padded_encode":{"median_us":185.102,"mad_us":1.5200000000000102},"exact_decode_setup":{"median_us":0.27000000000000002,"mad_us":0.030000000000000027},"padded_decode_setup":{"median_us":0.56999999999999995,"mad_us":0.0099999999999998979},"exact_decode":{"median_us":2.98,"mad_us":0},"padded_decode":{"median_us":11.15,"mad_us":0.049999999999998934},"exact_encode_samples_us":[133.36099999999999,134.19200000000001,133.89099999999999,133.96199999999999,135.36099999999999,133.99199999999999,133.691],"padded_encode_samples_us":[185.102,186.38200000000001,186.97200000000001,183.94200000000001,186.62200000000001,176.91200000000001,178.512],"exact_decode_samples_us":[3,2.98,2.98,2.9900000000000002,2.98,2.98,3],"padded_decode_samples_us":[11.26,11.199999999999999,10.869999999999999,11.15,11,11.199999999999999,11.140000000000001]}
+    {"K":3,"R":253,"bytes":64,"batch":8,"losses":3,"exact_field":1,"padded_field":2,"exact_coefficients":759,"exact_decode_terms":9,"padded_encode_scratch":6720,"padded_decode_scratch":4160,"exact_setup":{"median_us":2.9300000000000002,"mad_us":0.020000000000000018},"padded_setup":{"median_us":73.540999999999997,"mad_us":0.090999999999993975},"exact_encode":{"median_us":138.08199999999999,"mad_us":0.31100000000000705},"padded_encode":{"median_us":195.702,"mad_us":0.46000000000000796},"exact_decode_setup":{"median_us":0.33000000000000002,"mad_us":0.040000000000000036},"padded_decode_setup":{"median_us":0.51000000000000001,"mad_us":0.010000000000000009},"exact_decode":{"median_us":3.1909999999999998,"mad_us":0.0090000000000003411},"padded_decode":{"median_us":11.369999999999999,"mad_us":0.0099999999999997868},"exact_setup_samples_us":[3.9300000000000002,2.9500000000000002,2.9300000000000002,2.9199999999999999,2.9100000000000001,2.9100000000000001,2.9300000000000002],"padded_setup_samples_us":[75.811000000000007,73.671000000000006,73.540999999999997,73.491,73.450000000000003,76.040999999999997,73.471000000000004],"exact_decode_setup_samples_us":[0.76000000000000001,0.42999999999999999,0.29999999999999999,0.33000000000000002,0.28999999999999998,0.41999999999999998,0.29999999999999999],"padded_decode_setup_samples_us":[1,0.58999999999999997,0.51000000000000001,0.51000000000000001,0.53000000000000003,0.51000000000000001,0.5],"exact_encode_samples_us":[138.90199999999999,138.81100000000001,141.34100000000001,138.08199999999999,138.071,137.77099999999999,137.80199999999999],"padded_encode_samples_us":[195.952,196.422,195.702,195.24199999999999,197.30199999999999,195.422,195.05199999999999],"exact_decode_samples_us":[3.2000000000000002,3.1909999999999998,3.2000000000000002,3.1899999999999999,3.2000000000000002,3.1800000000000002,3.1899999999999999],"padded_decode_samples_us":[11.44,11.369999999999999,11.369999999999999,11.34,11.371,11.359999999999999,11.33]}
   ]
 }

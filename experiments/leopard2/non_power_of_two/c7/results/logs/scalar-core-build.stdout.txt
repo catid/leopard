@@ -1,0 +1,15 @@
+[  8%] Building CXX object CMakeFiles/leopard2_backend_ssse3.dir/Leopard2BackendSSSE3.cpp.o
+[ 16%] Building CXX object CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o
+[ 16%] Built target leopard2_backend_ssse3
+[ 16%] Built target leopard2_backend_avx2
+[ 25%] Building CXX object CMakeFiles/libleopard.dir/leopard2.cpp.o
+[ 33%] Building CXX object CMakeFiles/libleopard.dir/Leopard2BackendScalar.cpp.o
+[ 41%] Building CXX object CMakeFiles/libleopard.dir/Leopard2Backend.cpp.o
+[ 50%] Building CXX object CMakeFiles/libleopard.dir/leopard.cpp.o
+[ 58%] Building CXX object CMakeFiles/libleopard.dir/Leopard2CpuFeatures.cpp.o
+[ 66%] Building CXX object CMakeFiles/libleopard.dir/Leopard2Plan.cpp.o
+[ 75%] Building CXX object CMakeFiles/libleopard.dir/LeopardCommon.cpp.o
+[ 83%] Building CXX object CMakeFiles/libleopard.dir/LeopardFF16.cpp.o
+[ 91%] Building CXX object CMakeFiles/libleopard.dir/LeopardFF8.cpp.o
+[100%] Linking CXX static library liblibleopard.a
+[100%] Built target libleopard
