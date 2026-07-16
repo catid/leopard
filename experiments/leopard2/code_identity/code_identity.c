@@ -193,7 +193,8 @@ leo2_code_id_status leo2_code_identity_validate(
             return LEO2_CODE_ID_INVALID_IDENTITY;
         }
         if (identity->profile == LEO2_CODE_ID_PROFILE_EXACT_LOW &&
-            (item->type == LEO2_CODE_ID_META_SHORTENING_SET_SHA256 ||
+            (item->type == LEO2_CODE_ID_META_COORDINATE_SET_SHA256 ||
+             item->type == LEO2_CODE_ID_META_SHORTENING_SET_SHA256 ||
              item->type == LEO2_CODE_ID_META_PUNCTURING_SET_SHA256)) {
             return LEO2_CODE_ID_INVALID_IDENTITY;
         }
@@ -274,7 +275,8 @@ leo2_code_id_status leo2_code_identity_add_metadata(
         return LEO2_CODE_ID_INVALID_IDENTITY;
     }
     if (identity->profile == LEO2_CODE_ID_PROFILE_EXACT_LOW &&
-        (type == LEO2_CODE_ID_META_SHORTENING_SET_SHA256 ||
+        (type == LEO2_CODE_ID_META_COORDINATE_SET_SHA256 ||
+         type == LEO2_CODE_ID_META_SHORTENING_SET_SHA256 ||
          type == LEO2_CODE_ID_META_PUNCTURING_SET_SHA256)) {
         return LEO2_CODE_ID_INVALID_IDENTITY;
     }

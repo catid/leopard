@@ -1,6 +1,8 @@
 # Leopard2 serialized code-identity experiment
 
-Status: Experiment W reference proposal, not public API or frozen wire format.
+Status: Experiment W reference proposal, not public API or a frozen production
+wire contract.  Family 3/version 1/map 1 nevertheless freezes the experimental
+C7 exact-low mathematics so retained research artifacts cannot reinterpret it.
 Bead: `leopard-79h.18.23`.  Validation date: 2026-07-16 UTC.
 
 The reference implementation is
@@ -48,7 +50,10 @@ is rejected.  Field family 1 is legacy GF8 and field family 2 is legacy GF16,
 both with field-representation version 1.  Coordinate-map version 1 means the
 exact maps in `docs/leopard2_math_and_sources.md` and the C7 addendum.  Redundant
 `N` and padded-side values are intentional: readers recompute them and reject
-an identity whose claimed values do not match its profile.
+an identity whose claimed values do not match its profile.  Because map 1
+already determines every coordinate and has no shortened or punctured set,
+family 3 rejects coordinate-, shortening-, and puncturing-set digest TLVs as
+redundant noncanonical spellings, regardless of digest contents.
 
 Each metadata record is a 16-bit type, 16-bit value length, then the value.  TLVs
 must be strictly increasing by type and base types must be unique.  Type zero is
@@ -128,14 +133,15 @@ reports the exact required buffer size and undersized output fails before any
 write.  Counts, TLV values, TLV count, and complete identifiers retain the same
 4096-byte, 64-entry, and 65535-byte bounds as the Python reference.
 
-`test_code_identity_c.c` contains 211 direct C checks and also provides a test-
+`test_code_identity_c.c` contains 217 direct C checks and also provides a test-
 only line protocol.  `test_code_identity_c.py` compiles it with strict C99 GCC
 warnings and compares both C serialization and C deserialization with the
 Python implementation.  The deterministic differential matrix covers all 5
 golden vectors, 6,085 valid profile/field/count combinations, 66 zero, field-
 boundary, and `UINT32_MAX` count cases, 4,162 metadata count/length cases, one
-exact 65,535-byte valid identifier, one 65,536-byte rejection, 81 explicitly
-malformed identifiers, and 20,000 deterministic mutated inputs.
+exact 65,535-byte valid identifier, one 65,536-byte rejection, 87 explicitly
+malformed identifiers (including six exact-low redundant-digest encodings),
+and 20,000 deterministic mutated inputs.
 Of the mutations, 1,384 remain valid canonical identities; both implementations
 accept and reserialize those exact bytes, while both reject the other 18,616.
 The same complete matrix passes under combined GCC AddressSanitizer and

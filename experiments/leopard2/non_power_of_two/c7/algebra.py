@@ -504,7 +504,8 @@ def sampled_large_fields() -> dict[str, object]:
     cases = (
         (GF8, 3, 253), (GF8, 7, 249), (GF8, 16, 240),
         (GF8, 64, 192), (GF8, 127, 129), (GF8, 248, 8),
-        (GF16, 129, 100), (GF16, 256, 64), (GF16, 1000, 17),
+        (GF16, 3, 500), (GF16, 129, 100), (GF16, 256, 64),
+        (GF16, 1000, 17),
     )
     records = []
     coefficient_checks = 0
@@ -523,7 +524,8 @@ def sampled_large_fields() -> dict[str, object]:
         coefficient_checks += k * r
         oracle_rows = 0
         if k <= 64:
-            sample_parity = parity[:min(r, 8)]
+            oracle_count = r if field is GF16 and k == 3 and r == 500 else min(r, 8)
+            sample_parity = parity[:oracle_count]
             oracle = vandermonde_rows(field, systematic, sample_parity)
             if tuple(rows[:len(sample_parity)]) != oracle:
                 raise AssertionError("large-field Vandermonde mismatch")
