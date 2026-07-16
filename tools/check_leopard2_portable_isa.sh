@@ -36,7 +36,7 @@ forbidden_mnemonics='^(addsubp[ds]|haddp[ds]|hsubp[ds]|lddqu|movddup|movshdup|mo
 # kernel starts using another AVX/AVX2 mnemonic, reviewers must add that
 # mnemonic after checking its architectural feature contract.  A broad `v*'
 # exemption would silently admit instructions whose CPUID bits are not probed.
-allowed_avx2_vex_mnemonics='^(vbroadcasti128|vmovdqa|vmovdqu|vmovq|vmovups|vpand|vpbroadcastb|vpbroadcastq|vpshufb|vpsrlq|vpxor|vxorps|vzeroupper)$'
+allowed_avx2_vex_mnemonics='^(vbroadcasti128|vinserti128|vmovd|vmovdqa|vmovdqu|vmovq|vmovups|vpand|vpbroadcastb|vpbroadcastq|vpinsrb|vpshufb|vpsrlq|vpunpckldq|vpunpcklqdq|vpunpcklwd|vpxor|vxorps|vzeroupper)$'
 
 # Reject target-raising options in Make, Ninja, or compilation-database
 # metadata.  -mno-* and the x86-64 SSE2 baseline remain allowed.  All -march
