@@ -7,6 +7,19 @@ run `bd version`; do not use a legacy 0.x binary against this repository. If
 `type -a bd` reports more than one installation, explicitly select the 1.x
 binary before running any Beads command.
 
+On a fresh clone, restore the issue database from the pushed Dolt history before
+claiming work:
+
+```bash
+chmod 700 .beads
+bd bootstrap --yes
+bd prime
+```
+
+If bootstrap cannot authenticate, follow the forwarded-SSH-agent procedure
+below and retry. The tracked `.beads/issues.jsonl` is a portable checkpoint and
+interchange copy; `bd bootstrap` is the preferred history-preserving restore.
+
 ## Branch and durability policy
 
 - Do implementation work on a dedicated topic branch, never directly on `main` or
