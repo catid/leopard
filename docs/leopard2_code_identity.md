@@ -86,6 +86,11 @@ Run:
 
     cd experiments/leopard2/code_identity
     PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_code_identity.py
+    PYTHONDONTWRITEBYTECODE=1 python3 test_code_identity_c.py --cc gcc
+    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+      UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+      PYTHONDONTWRITEBYTECODE=1 python3 test_code_identity_c.py \
+        --cc gcc --sanitizers
 
 The suite checks golden bytes and hashes, 3,952 profile/field/count boundary
 round trips, 4,162 metadata count/length round trips, every truncation, trailing
@@ -94,11 +99,38 @@ unknown critical extensions, malformed digest TLVs, ordering/duplicate rules,
 and 20,000 deterministic mutation cases.  Unknown noncritical data is explicitly
 round-tripped.  The test has no third-party dependencies.
 
-Promotion requires independent C and Python implementations to match every
-golden vector, public malformed-input fuzzing under sanitizers, a frozen exact
-profile decision, and an API/storage use case that justifies committing a public
-wire contract.  Kill or revise this proposal if the fixed header cannot represent
-a frozen profile without profile-specific interpretation, forward-compatible
-parsing becomes ambiguous, or the envelope adds material operational complexity
-without preventing real profile mismatches.  Until those gates pass, this code
-remains isolated experimental evidence.
+The independent C99 implementation is `code_identity.c` with its deliberately
+experimental header `code_identity.h`.  It is not included by the root CMake
+build, installed, or exposed through the Leopard public ABI.  It parses metadata
+as borrowed views into caller-owned input and serializes into caller-owned
+storage; the implementation performs no allocation.  Borrowed input and metadata
+storage must not overlap the destination objects.  The size-query operation
+reports the exact required buffer size and undersized output fails before any
+write.  Counts, TLV values, TLV count, and complete identifiers retain the same
+4096-byte, 64-entry, and 65535-byte bounds as the Python reference.
+
+`test_code_identity_c.c` contains 146 direct C checks and also provides a test-
+only line protocol.  `test_code_identity_c.py` compiles it with strict C99 GCC
+warnings and compares both C serialization and C deserialization with the
+Python implementation.  The deterministic differential matrix covers all 3
+golden vectors, 3,952 valid profile/field/count combinations, 44 zero, field-
+boundary, and `UINT32_MAX` count cases, 4,162 metadata count/length cases, one
+exact 65,535-byte valid identifier, one 65,536-byte rejection, 70 explicitly
+malformed identifiers, and 20,000 deterministic mutated inputs.
+Of the mutations, 1,384 remain valid canonical identities; both implementations
+accept and reserialize those exact bytes, while both reject the other 18,616.
+The same complete matrix passes under combined GCC AddressSanitizer and
+UndefinedBehaviorSanitizer.  Sanitized truncation tests use exact-size backing
+allocations, so an out-of-bounds parser read cannot hide inside a larger test
+buffer.  The harness compiles into an automatically removed temporary directory
+and leaves no generated binary or Python bytecode in the source tree.
+
+The independent-implementation and deterministic sanitized differential gates
+are now satisfied.  Promotion still requires a sustained coverage-guided C API
+fuzzing campaign, a frozen exact-profile decision, cross-endian or emulated-
+endian validation, and a concrete API/storage use case that justifies committing
+a public wire contract.  Kill or revise this proposal if the fixed header cannot
+represent a frozen profile without profile-specific interpretation, forward-
+compatible parsing becomes ambiguous, or the envelope adds material operational
+complexity without preventing real profile mismatches.  Until those gates pass,
+this code remains isolated experimental evidence rather than public ABI.
