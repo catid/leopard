@@ -245,7 +245,13 @@ closure, run environment, child affinity, and artifact hashes.  The checker
 parses those logs rather than accepting a success label.  Full `nm` scans prove
 320 ASan and 54 UBSan references in the harness executable and 306 ASan and 86
 UBSan references across all 11 named core-archive members; normal builds must
-contain none.
+contain none.  When matching binaries are locally available, the checker reruns
+the exact `nm --print-file-name` scans and byte-compares the filtered output.
+Finally, validator source freezes the complete 65-file retained results tree
+with SHA-256 `296125189abee1ac016c293f540ad9961cb29e95f2e5203eabed6485231138fd`.
+That digest covers sorted canonical `SHA256  ./relative/path` lines, so the
+manifest itself, every result, raw log, scan, and algebra artifact, and the
+exact path set cannot be rebound without a reviewed validator-source change.
 
 The Experiment-W Python suite passes 12 tests.  The strict C99 implementation
 passes 217 direct checks and the differential matrix covers 5 golden vectors,
