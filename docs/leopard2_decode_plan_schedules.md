@@ -133,9 +133,9 @@ The validation build and test commands are:
 
 The forced-backend matrix also runs this schedule test under AUTO, scalar,
 SSSE3, and AVX2. All four variants passed with identical normalized output in
-the final run. Its source fingerprint was
-`052487dffcad285fab43dbe3c1b57b2e2f39ff83dfbeb4f941cec5f1723bc214`;
+the final run against exact commit `34885f3`. Its source fingerprint was
+`897abd42e29254e7cffc0b3480b1c1906f785b2e1e11f54da3fdda5ff9887759`;
 the merged `matrix.json` SHA-256 was
-`b463b1a95cf1f04b4382f0ae24c5cec06b87c7b8d21b8a69ad2f62f44fdbe764`.
+`9d9817c7f7f40a1c1caa76d633b1712dcba1ac3008c68891c90eddc910ebc136`.
 The matrix fingerprints `Leopard2Plan.cpp`, `Leopard2Plan.h`, and the schedule
 test itself so resume cannot accept an artifact that predates this code.
