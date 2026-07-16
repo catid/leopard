@@ -62,6 +62,7 @@ REQUIRED_BUILD_INPUTS = {
     "Leopard2Plan.cpp", "Leopard2Plan.h", "LeopardCommon.cpp", "LeopardCommon.h",
     "LeopardFF8.cpp", "LeopardFF8.h", "LeopardFF16.cpp", "LeopardFF16.h",
     "bench/leopard2/benchmark.cpp",
+    "tests/benchmark.cpp", "tests/experiments.cpp",
     "experiments/leopard2/isal_compare/CMakeLists.txt",
     "experiments/leopard2/isal_compare/isal_benchmark.cpp",
     "experiments/leopard2/isal_compare/NOTICE",
@@ -186,6 +187,8 @@ def _is_build_input(relative: str) -> bool:
     return relative in (
         "tools/leopard2_external_comparison.py",
         "tools/leopard2_isal_compare.py",
+        "tests/benchmark.cpp",
+        "tests/experiments.cpp",
     )
 
 
