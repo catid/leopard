@@ -1,0 +1,17 @@
+function,code_bytes,instructions,vector_stack_refs
+Avx2Codec,1453,290,14
+Avx2Copy,57,17,0
+Avx2Mul,275,65,0
+Avx2Radix4,436,94,1
+Avx2Radix8,946,187,4
+Avx2Xor,66,20,0
+Avx512BWCodec,1497,278,4
+Avx512BWMul,286,63,0
+Avx512BWRadix4,500,91,1
+Avx512BWRadix8,1045,172,1
+Avx512Copy,61,17,0
+Avx512VBMICodec,1594,290,4
+Avx512VBMIMul,318,68,0
+Avx512VBMIRadix4,572,96,1
+Avx512VBMIRadix8,1255,191,1
+Avx512Xor,72,19,0

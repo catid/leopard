@@ -1,0 +1,5 @@
+scaling_driver=amd-pstate-epp
+scaling_governor=powersave
+cpuinfo_min_freq=600000
+cpuinfo_max_freq=5752000
+perf_event_paranoid=4
