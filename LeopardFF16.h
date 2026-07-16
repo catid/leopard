@@ -29,6 +29,7 @@
 #pragma once
 
 #include "LeopardCommon.h"
+#include "Leopard2Plan.h"
 
 #ifdef LEO_HAS_FF16
 
@@ -150,6 +151,19 @@ void ReedSolomonDecodePrepared(
     const ffe_t* locator_logs, // n elements
     void** work); // n elements
 
+// Allocation-free execution companion for an immutable Leopard2 decode plan.
+// All pattern-dependent traversal and prefix values are prepared by the plan.
+void ReedSolomonDecodePlanned(
+    uint64_t buffer_bytes,
+    unsigned n,
+    const void* const * const coordinate_data, // n elements
+    unsigned input_count,
+    const uint32_t* requested_coordinates,
+    unsigned requested_count,
+    const leopard2_internal::OutputDependencyView& output_dependencies,
+    const ffe_t* locator_logs, // n elements
+    void** work); // n elements
+
 // Precompute the active-parent fixed factors used by the IT2026 specialized
 // low/high original-recovery decoders.
 void PrepareLowDecode(
@@ -197,12 +211,38 @@ void ReedSolomonDecodeLowPrepared(
     const ffe_t* block_factors,
     void** work);
 
+void ReedSolomonDecodeLowPlanned(
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned p,
+    const void* const * const coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    unsigned requested_count,
+    const leopard2_internal::OutputDependencyView& output_dependencies,
+    const ffe_t* locator_logs,
+    const ffe_t* block_factors,
+    void** work);
+
 void ReedSolomonDecodeHighPrepared(
     uint64_t buffer_bytes,
     unsigned n,
     unsigned t,
     const void* const * const coordinate_data,
     const uint8_t* requested_outputs,
+    const ffe_t* locator_logs,
+    const ffe_t* output_factors,
+    void** work);
+
+void ReedSolomonDecodeHighPlanned(
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned t,
+    const void* const * const coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    const leopard2_internal::DecodeOutputBlock* output_blocks,
+    unsigned output_block_count,
     const ffe_t* locator_logs,
     const ffe_t* output_factors,
     void** work);

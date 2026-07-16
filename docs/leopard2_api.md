@@ -58,6 +58,13 @@ the codec profile.  Locator construction, profile normalization, pruning inputs,
 and output selection depend only on the erasure pattern and are performed during
 plan creation; execution is the byte-heavy reusable step.
 
+The plan stores a compact fused-transform output bitmap, generic and per-block
+input prefixes, sorted requested coordinates, and sparse high-rate output-block
+descriptors. It neither rebuilds the former field-sized error bitfield nor
+scans shard pointers for transform prefixes during execution. See
+`leopard2_decode_plan_schedules.md` for representation, bounds, differential
+tests, and pinned measurements.
+
 The plan uses exactly `K` received public coordinates.  It keeps every surviving
 systematic shard, then keeps the lowest-index received parity shards needed to
 reach `K`; any surplus received parity is treated as a deterministic virtual

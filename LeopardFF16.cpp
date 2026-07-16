@@ -1804,13 +1804,14 @@ void ErrorBitfield::Prepare()
 }
 
 
+template<class OutputDependencies>
 static void FFT_DIT_ErrorBits(
     const uint64_t bytes,
     void** work,
     const unsigned n_truncated,
     const unsigned n,
     const ffe_t* skewLUT,
-    const ErrorBitfield& error_bits)
+    const OutputDependencies& error_bits)
 {
     unsigned mip_level = LastNonzeroBit32(n);
 
@@ -2074,6 +2075,53 @@ void ReedSolomonDecodePrepared(
 }
 
 
+void ReedSolomonDecodePlanned(
+    uint64_t buffer_bytes,
+    unsigned n,
+    const void* const* coordinate_data,
+    unsigned input_count,
+    const uint32_t* requested_coordinates,
+    unsigned requested_count,
+    const leopard2_internal::OutputDependencyView& output_dependencies,
+    const ffe_t* locator_logs,
+    void** work)
+{
+    LEO_DEBUG_ASSERT(n >= 2 && n <= kOrder);
+    LEO_DEBUG_ASSERT(input_count <= n);
+
+#pragma omp parallel for
+    for (int i = 0; i < (int)n; ++i)
+    {
+        if (coordinate_data[i])
+            mul_mem(work[i], coordinate_data[i], locator_logs[i], buffer_bytes);
+        else
+            memset(work[i], 0, buffer_bytes);
+    }
+
+    if (input_count != 0)
+        IFFT_DIT_Decoder(buffer_bytes, input_count, work, n, FFTSkewStorage);
+
+    AddFormalDerivative(buffer_bytes, n, work);
+
+#ifdef LEO_ERROR_BITFIELD_OPT
+    FFT_DIT_ErrorBits(
+        buffer_bytes, work, n, n, FFTSkewStorage, output_dependencies);
+#else
+    (void)output_dependencies;
+    FFT_DIT(buffer_bytes, work, n, n, FFTSkewStorage);
+#endif
+
+#pragma omp parallel for
+    for (int i = 0; i < (int)requested_count; ++i)
+    {
+        const uint32_t coordinate = requested_coordinates[i];
+        LEO_DEBUG_ASSERT(coordinate < n);
+        mul_mem_inplace(
+            work[coordinate], kModulus - locator_logs[coordinate], buffer_bytes);
+    }
+}
+
+
 static ffe_t SubspaceDerivativeLog(unsigned size)
 {
     ffe_t result = 0;
@@ -2307,6 +2355,78 @@ void ReedSolomonDecodeLowPrepared(
 }
 
 
+void ReedSolomonDecodeLowPlanned(
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned p,
+    const void* const* coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    unsigned requested_count,
+    const leopard2_internal::OutputDependencyView& output_dependencies,
+    const ffe_t* locator_logs,
+    const ffe_t* block_factors,
+    void** work)
+{
+    LEO_DEBUG_ASSERT(p >= 2 && p <= n && n <= kOrder);
+
+#pragma omp parallel for
+    for (int i = 0; i < (int)n; ++i)
+    {
+        if (coordinate_data[i])
+            mul_mem(work[i], coordinate_data[i], locator_logs[i], buffer_bytes);
+        else
+            memset(work[i], 0, buffer_bytes);
+    }
+
+    const unsigned block_count = n / p;
+    for (unsigned block = 0; block < block_count; ++block)
+    {
+        const unsigned input_count = block_input_counts[block];
+        LEO_DEBUG_ASSERT(input_count <= p);
+        if (input_count != 0)
+        {
+            const unsigned offset = block * p;
+            IFFT_DIT_Decoder(
+                buffer_bytes, input_count, work + offset, p,
+                FFTSkewStorage + offset);
+        }
+    }
+
+    AddFormalDerivative(buffer_bytes, p, work);
+
+    for (unsigned block = 1; block < block_count; ++block)
+    {
+        if (block_input_counts[block] == 0)
+            continue;
+        const unsigned offset = block * p;
+#pragma omp parallel for
+        for (int i = 0; i < (int)p; ++i)
+        {
+            mul_mem_inplace(work[offset + i], block_factors[block - 1], buffer_bytes);
+            xor_mem(work[i], work[offset + i], buffer_bytes);
+        }
+    }
+
+#ifdef LEO_ERROR_BITFIELD_OPT
+    FFT_DIT_ErrorBits(
+        buffer_bytes, work, p, p, FFTSkewStorage, output_dependencies);
+#else
+    (void)output_dependencies;
+    FFT_DIT(buffer_bytes, work, p, p, FFTSkewStorage);
+#endif
+
+#pragma omp parallel for
+    for (int i = 0; i < (int)requested_count; ++i)
+    {
+        const uint32_t coordinate = requested_coordinates[i];
+        LEO_DEBUG_ASSERT(coordinate < p);
+        mul_mem_inplace(
+            work[coordinate], kModulus - locator_logs[coordinate], buffer_bytes);
+    }
+}
+
+
 void ReedSolomonDecodeHighPrepared(
     uint64_t buffer_bytes,
     unsigned n,
@@ -2384,6 +2504,94 @@ void ReedSolomonDecodeHighPrepared(
                     output_factors[coordinate], locator_logs[coordinate]);
                 mul_mem_inplace(work[coordinate], reveal_log, buffer_bytes);
             }
+        }
+    }
+}
+
+
+void ReedSolomonDecodeHighPlanned(
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned t,
+    const void* const* coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    const leopard2_internal::DecodeOutputBlock* output_blocks,
+    unsigned output_block_count,
+    const ffe_t* locator_logs,
+    const ffe_t* output_factors,
+    void** work)
+{
+    LEO_DEBUG_ASSERT(t >= 2 && t < n && n <= kOrder);
+
+#pragma omp parallel for
+    for (int i = 0; i < (int)n; ++i)
+    {
+        if (coordinate_data[i])
+            memcpy(work[i], coordinate_data[i], buffer_bytes);
+        else
+            memset(work[i], 0, buffer_bytes);
+    }
+
+    const unsigned block_count = n / t;
+    for (unsigned block = 0; block < block_count; ++block)
+    {
+        const unsigned offset = block * t;
+        const unsigned input_count = block_input_counts[block];
+        LEO_DEBUG_ASSERT(input_count <= t);
+        if (input_count != 0)
+        {
+            IFFT_DIT_Decoder(
+                buffer_bytes, input_count, work + offset, t,
+                FFTSkewStorage + offset);
+        }
+        if (block != 0 && input_count != 0)
+        {
+            if (t < 8)
+                VectorXOR(buffer_bytes, t, work, work + offset);
+            else
+                VectorXOR_Threads(buffer_bytes, t, work, work + offset);
+        }
+    }
+
+    FFT_DIT(buffer_bytes, work, t, t, FFTSkewStorage);
+#pragma omp parallel for
+    for (int i = 0; i < (int)t; ++i)
+    {
+        if (coordinate_data[i])
+            mul_mem_inplace(work[i], locator_logs[i], buffer_bytes);
+        else
+            memset(work[i], 0, buffer_bytes);
+    }
+    IFFT_DIT_Decoder(buffer_bytes, t, work, t, FFTSkewStorage);
+
+    for (unsigned output_block = 0;
+         output_block < output_block_count;
+         ++output_block)
+    {
+        const leopard2_internal::DecodeOutputBlock& descriptor =
+            output_blocks[output_block];
+        LEO_DEBUG_ASSERT(descriptor.block > 0 && descriptor.block < block_count);
+        LEO_DEBUG_ASSERT(descriptor.requested_prefix > 0 &&
+            descriptor.requested_prefix <= t);
+        LEO_DEBUG_ASSERT(descriptor.requested_begin < descriptor.requested_end);
+        const unsigned offset = descriptor.block * t;
+#pragma omp parallel for
+        for (int i = 0; i < (int)t; ++i)
+            memcpy(work[offset + i], work[i], buffer_bytes);
+        FFT_DIT(
+            buffer_bytes, work + offset, descriptor.requested_prefix, t,
+            FFTSkewStorage + offset);
+#pragma omp parallel for
+        for (int i = (int)descriptor.requested_begin;
+             i < (int)descriptor.requested_end;
+             ++i)
+        {
+            const uint32_t coordinate = requested_coordinates[i];
+            LEO_DEBUG_ASSERT(coordinate >= offset && coordinate < offset + t);
+            const ffe_t reveal_log = SubMod(
+                output_factors[coordinate], locator_logs[coordinate]);
+            mul_mem_inplace(work[coordinate], reveal_log, buffer_bytes);
         }
     }
 }

@@ -15,6 +15,8 @@ set(LIB_SOURCE_FILES
         leopard.h
         leopard2.cpp
         leopard2.h
+        Leopard2Plan.cpp
+        Leopard2Plan.h
         LeopardCommon.cpp
         LeopardCommon.h
         LeopardFF16.cpp
@@ -335,6 +337,14 @@ if(LEO2_BUILD_TESTS)
     add_executable(leopard2_locator_test tests/leopard2/test_locator.cpp)
     target_link_libraries(leopard2_locator_test libleopard)
     add_test(NAME leopard2_locator COMMAND leopard2_locator_test)
+
+    add_executable(leopard2_decode_plan_schedule_test
+        tests/leopard2/test_decode_plan_schedule.cpp)
+    target_link_libraries(leopard2_decode_plan_schedule_test libleopard)
+    add_test(NAME leopard2_decode_plan_schedule
+        COMMAND leopard2_decode_plan_schedule_test)
+    set_tests_properties(leopard2_decode_plan_schedule PROPERTIES
+        ENVIRONMENT "OMP_NUM_THREADS=1")
 
     add_executable(leopard2_gf16_tails_test
         tests/leopard2/direct_oracle.cpp

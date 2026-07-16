@@ -95,12 +95,20 @@ struct leo2_decode_plan
     std::vector<uint8_t> original_present;
     std::vector<uint8_t> recovery_present;
     std::vector<uint8_t> coordinate_erased;
-    std::vector<uint8_t> requested;
     std::vector<uint8_t> locator8;
     std::vector<uint16_t> locator16;
     std::vector<uint32_t> missing_originals;
+    // Sorted parent coordinates restored by this plan.  The compact transform
+    // schedules below are derived once from this immutable list.
+    std::vector<uint32_t> requested_coordinates;
+    std::vector<uint64_t> generic_output_dependencies;
+    std::vector<uint64_t> specialized_output_dependencies;
+    std::vector<uint16_t> block_input_counts;
+    std::vector<leopard2_internal::DecodeOutputBlock> high_output_blocks;
     std::vector<size_t> direct_term_offsets;
     std::vector<leo2_direct_repair_term> direct_terms;
+    uint32_t generic_input_count;
+    uint32_t direct_copy_recovery;
     uint32_t missing_original_count;
     bool no_op;
     bool direct_xor;
@@ -430,6 +438,120 @@ static uint32_t CoordinateForRecovery(const leo2_codec* codec, uint32_t index)
     return codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1
         ? index
         : codec->padded_side + index;
+}
+
+static bool PreparePlanExecutionMetadata(leo2_decode_plan* plan)
+{
+    const leo2_codec* codec = plan->codec;
+    const bool force_generic =
+        (codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) != 0;
+    const bool force_specialized =
+        (codec->flags & LEO2_CODEC_FORCE_SPECIALIZED_DECODE) != 0;
+    // AUTO owns both immutable paths because dispatch may depend on shard
+    // bytes, backend, or a future offline table.  A forced diagnostic path
+    // pays only for the metadata it can execute.
+    const bool needs_generic = !force_specialized;
+    const bool needs_specialized = !force_generic;
+
+    if (plan->requested_coordinates.empty())
+        return false;
+    for (size_t i = 1; i < plan->requested_coordinates.size(); ++i)
+        if (plan->requested_coordinates[i - 1] >= plan->requested_coordinates[i])
+            return false;
+
+    plan->generic_input_count = 0;
+    if (needs_specialized)
+    {
+        // A nontrivial parent has at least two blocks, so P/T <= 32768 and a
+        // 16-bit prefix stores every possible local count exactly.
+        if (codec->padded_side < 2 || codec->padded_side > 32768 ||
+            codec->parent_count % codec->padded_side != 0)
+            return false;
+        plan->block_input_counts.assign(
+            codec->parent_count / codec->padded_side, 0);
+    }
+
+    const auto observe_selected_coordinate = [&](uint32_t coordinate) {
+        if (needs_generic && coordinate + 1 > plan->generic_input_count)
+            plan->generic_input_count = coordinate + 1;
+        if (needs_specialized)
+        {
+            const uint32_t block = coordinate / codec->padded_side;
+            const uint32_t local_prefix = coordinate % codec->padded_side + 1;
+            uint16_t& prefix = plan->block_input_counts[block];
+            if (local_prefix > prefix)
+                prefix = static_cast<uint16_t>(local_prefix);
+        }
+    };
+
+    // These are the only coordinates staged by execution.  Shortened zeros
+    // are absent from the public loops, while punctured and surplus received
+    // coordinates are excluded by coordinate_erased.
+    for (uint32_t i = 0; i < codec->original_count; ++i)
+    {
+        const uint32_t coordinate = CoordinateForOriginal(codec, i);
+        if (plan->original_present[i] && !plan->coordinate_erased[coordinate])
+            observe_selected_coordinate(coordinate);
+    }
+    for (uint32_t i = 0; i < codec->recovery_count; ++i)
+    {
+        const uint32_t coordinate = CoordinateForRecovery(codec, i);
+        if (plan->recovery_present[i] && !plan->coordinate_erased[coordinate])
+            observe_selected_coordinate(coordinate);
+    }
+
+    if (needs_generic)
+    {
+        plan->generic_output_dependencies.resize(
+            leopard2_internal::OutputDependencyWordCount(codec->parent_count));
+        if (!leopard2_internal::BuildOutputDependencies(
+                codec->parent_count, plan->requested_coordinates.data(),
+                plan->requested_coordinates.size(),
+                plan->generic_output_dependencies.data(),
+                plan->generic_output_dependencies.size()))
+            return false;
+    }
+
+    if (needs_specialized && codec->profile == LEO2_PROFILE_LOW_V1)
+    {
+        plan->specialized_output_dependencies.resize(
+            leopard2_internal::OutputDependencyWordCount(codec->padded_side));
+        if (!leopard2_internal::BuildOutputDependencies(
+                codec->padded_side, plan->requested_coordinates.data(),
+                plan->requested_coordinates.size(),
+                plan->specialized_output_dependencies.data(),
+                plan->specialized_output_dependencies.size()))
+            return false;
+    }
+    else if (needs_specialized)
+    {
+        size_t begin = 0;
+        while (begin < plan->requested_coordinates.size())
+        {
+            const uint32_t coordinate = plan->requested_coordinates[begin];
+            const uint32_t block = coordinate / codec->padded_side;
+            if (block == 0)
+                return false;
+            size_t end = begin + 1;
+            uint32_t requested_prefix = coordinate % codec->padded_side + 1;
+            while (end < plan->requested_coordinates.size() &&
+                   plan->requested_coordinates[end] / codec->padded_side == block)
+            {
+                requested_prefix =
+                    plan->requested_coordinates[end] % codec->padded_side + 1;
+                ++end;
+            }
+            leopard2_internal::DecodeOutputBlock descriptor = {
+                block,
+                requested_prefix,
+                static_cast<uint32_t>(begin),
+                static_cast<uint32_t>(end)
+            };
+            plan->high_output_blocks.push_back(descriptor);
+            begin = end;
+        }
+    }
+    return true;
 }
 
 struct DirectField8
@@ -1716,7 +1838,8 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
         plan->original_present.assign(original_present, original_present + codec->original_count);
         plan->recovery_present.assign(recovery_present, recovery_present + codec->recovery_count);
         plan->coordinate_erased = codec->permanent_erased;
-        plan->requested.assign(codec->parent_count, 0);
+        plan->generic_input_count = 0;
+        plan->direct_copy_recovery = std::numeric_limits<uint32_t>::max();
         plan->missing_original_count = missing_original_count;
         plan->no_op = missing_original_count == 0;
         plan->direct_xor = codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
@@ -1732,7 +1855,7 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
                 plan->missing_originals.push_back(i);
                 const uint32_t coordinate = CoordinateForOriginal(codec, i);
                 plan->coordinate_erased[coordinate] = 1;
-                plan->requested[coordinate] = 1;
+                plan->requested_coordinates.push_back(coordinate);
             }
         }
         for (uint32_t i = 0; i < codec->recovery_count; ++i)
@@ -1764,6 +1887,25 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
             return LEO2_NEED_MORE_DATA;
         }
 
+        if (plan->direct_copy)
+        {
+            for (uint32_t i = 0; i < codec->recovery_count; ++i)
+            {
+                const uint32_t coordinate = CoordinateForRecovery(codec, i);
+                if (recovery_present[i] && !plan->coordinate_erased[coordinate])
+                {
+                    plan->direct_copy_recovery = i;
+                    break;
+                }
+            }
+            if (plan->direct_copy_recovery ==
+                std::numeric_limits<uint32_t>::max())
+            {
+                delete plan;
+                return LEO2_INTERNAL_ERROR;
+            }
+        }
+
         if (!plan->no_op && !plan->direct_xor && !plan->direct_copy &&
             missing_original_count <= kDirectMaxLosses)
         {
@@ -1784,6 +1926,11 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
         if (!plan->no_op && !plan->direct_xor && !plan->direct_copy &&
             !plan->direct_repair)
         {
+            if (!PreparePlanExecutionMetadata(plan))
+            {
+                delete plan;
+                return LEO2_INTERNAL_ERROR;
+            }
             if (codec->field == LEO2_FIELD_GF8)
             {
                 plan->locator8.resize(codec->parent_count);
@@ -1887,21 +2034,18 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
     const leo2_codec* codec = plan->codec;
     if (plan->direct_copy)
     {
-        for (uint32_t i = 0; i < codec->recovery_count; ++i)
-            if (recovery[i])
-            {
-                memcpy(restored_original[0], recovery[i], static_cast<size_t>(shard_bytes));
-                return LEO2_SUCCESS;
-            }
-        return LEO2_NEED_MORE_DATA;
+        const uint32_t recovery_index = plan->direct_copy_recovery;
+        if (recovery_index >= codec->recovery_count || !recovery[recovery_index])
+            return LEO2_INTERNAL_ERROR;
+        memcpy(restored_original[plan->missing_originals[0]],
+            recovery[recovery_index], static_cast<size_t>(shard_bytes));
+        return LEO2_SUCCESS;
     }
     if (plan->direct_xor)
     {
-        uint32_t missing = 0;
-        while (missing < codec->original_count && original[missing])
-            ++missing;
-        if (missing == codec->original_count || !recovery[0])
-            return LEO2_NEED_MORE_DATA;
+        const uint32_t missing = plan->missing_originals[0];
+        if (missing >= codec->original_count || !recovery[0])
+            return LEO2_INTERNAL_ERROR;
         uint8_t* output = static_cast<uint8_t*>(restored_original[missing]);
         memcpy(output, recovery[0], static_cast<size_t>(shard_bytes));
         for (uint32_t i = 0; i < codec->original_count; ++i)
@@ -1972,42 +2116,86 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
         (codec->flags & LEO2_CODEC_FORCE_SPECIALIZED_DECODE) != 0;
     const bool use_generic = force_generic ||
         (!force_specialized && measured_balanced_full_recovery);
+    const uint32_t* const requested_coordinates =
+        plan->requested_coordinates.data();
+    const unsigned requested_count =
+        static_cast<unsigned>(plan->requested_coordinates.size());
     if (codec->field == LEO2_FIELD_GF8)
     {
         if (use_generic)
-            leopard::ff8::ReedSolomonDecodePrepared(
-                rounded, codec->parent_count, coordinate_input, &plan->requested[0],
-                &plan->locator8[0], work);
+        {
+            const leopard2_internal::OutputDependencyView dependencies =
+                leopard2_internal::MakeOutputDependencyView(
+                    codec->parent_count, plan->generic_output_dependencies.data(),
+                    plan->generic_output_dependencies.size());
+            leopard::ff8::ReedSolomonDecodePlanned(
+                rounded, codec->parent_count, coordinate_input,
+                plan->generic_input_count, requested_coordinates,
+                requested_count, dependencies, &plan->locator8[0], work);
+        }
         else if (codec->profile == LEO2_PROFILE_LOW_V1)
-            leopard::ff8::ReedSolomonDecodeLowPrepared(
-                rounded, codec->parent_count, codec->padded_side, coordinate_input,
-                &plan->requested[0], &plan->locator8[0], &codec->fixed_factors8[0], work);
+        {
+            const leopard2_internal::OutputDependencyView dependencies =
+                leopard2_internal::MakeOutputDependencyView(
+                    codec->padded_side,
+                    plan->specialized_output_dependencies.data(),
+                    plan->specialized_output_dependencies.size());
+            leopard::ff8::ReedSolomonDecodeLowPlanned(
+                rounded, codec->parent_count, codec->padded_side,
+                coordinate_input, plan->block_input_counts.data(),
+                requested_coordinates, requested_count, dependencies,
+                &plan->locator8[0], &codec->fixed_factors8[0], work);
+        }
         else
-            leopard::ff8::ReedSolomonDecodeHighPrepared(
-                rounded, codec->parent_count, codec->padded_side, coordinate_input,
-                &plan->requested[0], &plan->locator8[0], &codec->fixed_factors8[0], work);
+            leopard::ff8::ReedSolomonDecodeHighPlanned(
+                rounded, codec->parent_count, codec->padded_side,
+                coordinate_input, plan->block_input_counts.data(),
+                requested_coordinates, plan->high_output_blocks.data(),
+                static_cast<unsigned>(plan->high_output_blocks.size()),
+                &plan->locator8[0], &codec->fixed_factors8[0], work);
     }
     else
     {
         if (use_generic)
-            leopard::ff16::ReedSolomonDecodePrepared(
-                rounded, codec->parent_count, coordinate_input, &plan->requested[0],
-                &plan->locator16[0], work);
+        {
+            const leopard2_internal::OutputDependencyView dependencies =
+                leopard2_internal::MakeOutputDependencyView(
+                    codec->parent_count, plan->generic_output_dependencies.data(),
+                    plan->generic_output_dependencies.size());
+            leopard::ff16::ReedSolomonDecodePlanned(
+                rounded, codec->parent_count, coordinate_input,
+                plan->generic_input_count, requested_coordinates,
+                requested_count, dependencies, &plan->locator16[0], work);
+        }
         else if (codec->profile == LEO2_PROFILE_LOW_V1)
-            leopard::ff16::ReedSolomonDecodeLowPrepared(
-                rounded, codec->parent_count, codec->padded_side, coordinate_input,
-                &plan->requested[0], &plan->locator16[0], &codec->fixed_factors16[0], work);
+        {
+            const leopard2_internal::OutputDependencyView dependencies =
+                leopard2_internal::MakeOutputDependencyView(
+                    codec->padded_side,
+                    plan->specialized_output_dependencies.data(),
+                    plan->specialized_output_dependencies.size());
+            leopard::ff16::ReedSolomonDecodeLowPlanned(
+                rounded, codec->parent_count, codec->padded_side,
+                coordinate_input, plan->block_input_counts.data(),
+                requested_coordinates, requested_count, dependencies,
+                &plan->locator16[0], &codec->fixed_factors16[0], work);
+        }
         else
-            leopard::ff16::ReedSolomonDecodeHighPrepared(
-                rounded, codec->parent_count, codec->padded_side, coordinate_input,
-                &plan->requested[0], &plan->locator16[0], &codec->fixed_factors16[0], work);
+            leopard::ff16::ReedSolomonDecodeHighPlanned(
+                rounded, codec->parent_count, codec->padded_side,
+                coordinate_input, plan->block_input_counts.data(),
+                requested_coordinates, plan->high_output_blocks.data(),
+                static_cast<unsigned>(plan->high_output_blocks.size()),
+                &plan->locator16[0], &codec->fixed_factors16[0], work);
     }
 
-    for (uint32_t i = 0; i < codec->original_count; ++i)
-        if (!original[i])
-            GatherShardFromKernel(codec, restored_original[i],
-                work[CoordinateForOriginal(codec, i)],
+    for (size_t i = 0; i < plan->missing_originals.size(); ++i)
+    {
+        const uint32_t original_index = plan->missing_originals[i];
+        GatherShardFromKernel(codec, restored_original[original_index],
+                work[CoordinateForOriginal(codec, original_index)],
                 static_cast<size_t>(shard_bytes));
+    }
     return LEO2_SUCCESS;
 }
 

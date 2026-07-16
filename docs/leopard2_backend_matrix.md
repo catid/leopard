@@ -36,7 +36,9 @@ isolated build per variant.
 It builds and runs the frozen legacy golden vectors, the public API suite, a
 fixed-seed random smoke suite, the independent production-constant and bare-LCH
 differential, and the direct-generator transform differential. The `auto` and
-`scalar` builds also run the static portable-ISA archive gate. The `auto` build
+`scalar` builds also run the static portable-ISA archive gate. The matrix also
+compares the reusable decode-plan schedule differential, allocation, and
+concurrency test across all executable backends. The `auto` build
 runs `leopard2_cuda_optional`, proving that a normal build does not need a CUDA
 compiler or toolkit. Each forced build also makes the public API suite assert
 that runtime backend introspection reports the requested scalar, SSSE3, or
