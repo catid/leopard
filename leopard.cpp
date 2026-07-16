@@ -28,6 +28,7 @@
 
 #include "leopard.h"
 #include "LeopardCommon.h"
+#include "Leopard2Backend.h"
 
 #ifdef LEO_HAS_FF8
     #include "LeopardFF8.h"
@@ -62,6 +63,13 @@ LEO_EXPORT int leo_init_(int version)
     if (!leopard::ff16::Initialize())
         return Leopard_Platform;
 #endif // LEO_HAS_FF16
+
+    leopard::backend::InitializeArgs backend_args = {
+        leopard::ff8::MultiplyLogElement,
+        leopard::ff16::MultiplyLogElement
+    };
+    if (!leopard::backend::Initialize(backend_args))
+        return Leopard_Platform;
 
 
     m_Initialized = true;

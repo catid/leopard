@@ -15,6 +15,10 @@ set(LIB_SOURCE_FILES
         leopard.h
         leopard2.cpp
         leopard2.h
+        Leopard2Backend.cpp
+        Leopard2Backend.h
+        Leopard2BackendScalar.cpp
+        Leopard2CpuFeatures.cpp
         Leopard2Direct.h
         Leopard2Plan.cpp
         Leopard2Plan.h
@@ -154,11 +158,82 @@ if(ENABLE_OPENMP)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
 endif(ENABLE_OPENMP)
 
+set(LEO2_X86_TARGET OFF)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|i.86)$")
+    set(LEO2_X86_TARGET ON)
+endif()
+
 add_library(libleopard STATIC ${LIB_SOURCE_FILES})
+if(LEO2_X86_TARGET)
+    target_compile_definitions(libleopard PRIVATE
+        LEO2_DISABLE_SSSE3_CODEGEN=1
+        LEO2_DISABLE_AVX2_CODEGEN=1)
+endif()
 target_include_directories(libleopard PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(libleopard PUBLIC Threads::Threads)
+
+# Optional x86 kernels are compiled in dedicated object libraries.  Nothing in
+# libleopard's baseline translation units is built above the x86-64 SSE2 floor;
+# runtime feature checks select one immutable ops table after startup KATs.
+set(LEO2_HAVE_SSSE3_BACKEND OFF)
+set(LEO2_HAVE_AVX2_BACKEND OFF)
+if(LEO2_X86_TARGET)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+        check_cxx_compiler_flag("-mssse3" LEO2_FLAG_MSSSE3)
+        check_cxx_compiler_flag("-mno-avx" LEO2_FLAG_MNO_AVX)
+        if(LEO2_FLAG_MSSSE3 AND LEO2_FLAG_MNO_AVX)
+            add_library(leopard2_backend_ssse3 OBJECT
+                Leopard2BackendSSSE3.cpp)
+            target_include_directories(leopard2_backend_ssse3 PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR})
+            target_compile_options(leopard2_backend_ssse3 PRIVATE
+                -mssse3 -mno-avx)
+            set(LEO2_HAVE_SSSE3_BACKEND ON)
+        endif()
+
+        check_cxx_compiler_flag("-mavx2" LEO2_FLAG_MAVX2)
+        check_cxx_compiler_flag("-mno-avx512f" LEO2_FLAG_MNO_AVX512F)
+        if(LEO2_FLAG_MAVX2 AND LEO2_FLAG_MNO_AVX512F)
+            add_library(leopard2_backend_avx2 OBJECT
+                Leopard2BackendAVX2.cpp)
+            target_include_directories(leopard2_backend_avx2 PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR})
+            target_compile_options(leopard2_backend_avx2 PRIVATE
+                -mavx2 -mno-avx512f)
+            set(LEO2_HAVE_AVX2_BACKEND ON)
+        endif()
+    elseif(MSVC)
+        # x64 MSVC accepts SSSE3 intrinsics without raising other translation
+        # units.  AVX2 remains isolated behind /arch:AVX2.
+        add_library(leopard2_backend_ssse3 OBJECT
+            Leopard2BackendSSSE3.cpp)
+        target_include_directories(leopard2_backend_ssse3 PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR})
+        set(LEO2_HAVE_SSSE3_BACKEND ON)
+        check_cxx_compiler_flag("/arch:AVX2" LEO2_FLAG_ARCH_AVX2)
+        if(LEO2_FLAG_ARCH_AVX2)
+            add_library(leopard2_backend_avx2 OBJECT
+                Leopard2BackendAVX2.cpp)
+            target_include_directories(leopard2_backend_avx2 PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR})
+            target_compile_options(leopard2_backend_avx2 PRIVATE /arch:AVX2)
+            set(LEO2_HAVE_AVX2_BACKEND ON)
+        endif()
+    endif()
+endif()
+
+if(LEO2_HAVE_SSSE3_BACKEND)
+    target_sources(libleopard PRIVATE
+        $<TARGET_OBJECTS:leopard2_backend_ssse3>)
+    target_compile_definitions(libleopard PRIVATE LEO2_HAVE_SSSE3_BACKEND=1)
+endif()
+if(LEO2_HAVE_AVX2_BACKEND)
+    target_sources(libleopard PRIVATE
+        $<TARGET_OBJECTS:leopard2_backend_avx2>)
+    target_compile_definitions(libleopard PRIVATE LEO2_HAVE_AVX2_BACKEND=1)
+endif()
 if(ENABLE_OPENMP)
     if(TARGET OpenMP::OpenMP_CXX)
         target_link_libraries(libleopard PUBLIC OpenMP::OpenMP_CXX)
@@ -200,7 +275,7 @@ function(leo2_apply_backend_variant target_name)
         return()
     endif()
 
-    if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|i.86)$")
+    if(NOT LEO2_X86_TARGET)
         message(FATAL_ERROR
             "LEO2_BACKEND_VARIANT=${LEO2_BACKEND_VARIANT} is unavailable on "
             "processor '${CMAKE_SYSTEM_PROCESSOR}'; use auto")
@@ -208,56 +283,21 @@ function(leo2_apply_backend_variant target_name)
 
     if(LEO2_BACKEND_VARIANT STREQUAL "scalar")
         target_compile_definitions(${target_name} PRIVATE
-            LEO2_BACKEND_FORCE_SCALAR=1
-            LEO2_DISABLE_SSSE3_CODEGEN=1
-            LEO2_DISABLE_AVX2_CODEGEN=1)
+            LEO2_BACKEND_FORCE_SCALAR=1)
     elseif(LEO2_BACKEND_VARIANT STREQUAL "ssse3")
+        if(NOT LEO2_HAVE_SSSE3_BACKEND)
+            message(FATAL_ERROR
+                "LEO2_BACKEND_VARIANT=ssse3 is unavailable for this compiler")
+        endif()
         target_compile_definitions(${target_name} PRIVATE
-            LEO2_BACKEND_FORCE_SSSE3=1
-            LEO2_DISABLE_AVX2_CODEGEN=1)
+            LEO2_BACKEND_FORCE_SSSE3=1)
     elseif(LEO2_BACKEND_VARIANT STREQUAL "avx2")
+        if(NOT LEO2_HAVE_AVX2_BACKEND)
+            message(FATAL_ERROR
+                "LEO2_BACKEND_VARIANT=avx2 is unavailable for this compiler")
+        endif()
         target_compile_definitions(${target_name} PRIVATE
             LEO2_BACKEND_FORCE_AVX2=1)
-    endif()
-
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
-        if(LEO2_BACKEND_VARIANT STREQUAL "ssse3")
-            check_cxx_compiler_flag("-mssse3" LEO2_FLAG_MSSSE3)
-            check_cxx_compiler_flag("-mno-avx" LEO2_FLAG_MNO_AVX)
-            if(NOT LEO2_FLAG_MSSSE3 OR NOT LEO2_FLAG_MNO_AVX)
-                message(FATAL_ERROR
-                    "LEO2_BACKEND_VARIANT=${LEO2_BACKEND_VARIANT} is unavailable: "
-                    "the compiler must support -mssse3 and -mno-avx")
-            endif()
-            # This is an explicit diagnostic archive, not a portable runtime-
-            # dispatched package.  The default auto and scalar variants never
-            # add this target-wide ISA flag.
-            target_compile_options(${target_name} PRIVATE -mssse3 -mno-avx)
-        elseif(LEO2_BACKEND_VARIANT STREQUAL "avx2")
-            check_cxx_compiler_flag("-mavx2" LEO2_FLAG_MAVX2)
-            check_cxx_compiler_flag("-mno-avx512f" LEO2_FLAG_MNO_AVX512F)
-            if(NOT LEO2_FLAG_MAVX2 OR NOT LEO2_FLAG_MNO_AVX512F)
-                message(FATAL_ERROR
-                    "LEO2_BACKEND_VARIANT=avx2 is unavailable: the compiler "
-                    "must support -mavx2 and -mno-avx512f")
-            endif()
-            target_compile_options(${target_name} PRIVATE
-                -mavx2 -mno-avx512f)
-        endif()
-    elseif(MSVC)
-        if(LEO2_BACKEND_VARIANT STREQUAL "avx2")
-            check_cxx_compiler_flag("/arch:AVX2" LEO2_FLAG_ARCH_AVX2)
-            if(NOT LEO2_FLAG_ARCH_AVX2)
-                message(FATAL_ERROR
-                    "LEO2_BACKEND_VARIANT=avx2 is unavailable: the compiler "
-                    "does not support /arch:AVX2")
-            endif()
-            target_compile_options(${target_name} PRIVATE /arch:AVX2)
-        endif()
-    else()
-        message(FATAL_ERROR
-            "LEO2_BACKEND_VARIANT=${LEO2_BACKEND_VARIANT} is unavailable for "
-            "compiler '${CMAKE_CXX_COMPILER_ID}'")
     endif()
 endfunction()
 
@@ -285,9 +325,7 @@ if(LEO2_BUILD_TESTS)
         target_link_libraries(bench_leopard2_direct_encode libleopard)
     endif()
 
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$" AND
-        (LEO2_BACKEND_VARIANT STREQUAL "auto" OR
-        LEO2_BACKEND_VARIANT STREQUAL "scalar"))
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
         find_program(LEO2_OBJDUMP_EXECUTABLE NAMES objdump llvm-objdump)
         find_program(LEO2_SH_EXECUTABLE NAMES sh)
         if(LEO2_OBJDUMP_EXECUTABLE AND LEO2_SH_EXECUTABLE)
@@ -311,6 +349,13 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/test_direct_oracle.cpp)
     target_include_directories(leopard2_direct_oracle_test PRIVATE tests/leopard2)
     add_test(NAME leopard2_direct_oracle COMMAND leopard2_direct_oracle_test)
+
+    add_executable(leopard2_backend_ops_test
+        tests/leopard2/test_backend_ops.cpp)
+    target_link_libraries(leopard2_backend_ops_test libleopard)
+    add_test(NAME leopard2_backend_ops COMMAND leopard2_backend_ops_test)
+    set_tests_properties(leopard2_backend_ops PROPERTIES
+        ENVIRONMENT "OMP_NUM_THREADS=1")
 
     add_executable(leopard2_direct_encode_test
         tests/leopard2/direct_oracle.cpp
@@ -553,14 +598,49 @@ if(LEO2_BUILD_FUZZERS)
     # the codec itself invisible to ASan, UBSan, and coverage-guided mutation;
     # applying them to libleopard would in turn break ordinary targets that
     # link the uninstrumented sanitizer runtime.
+    set(LEO2_FUZZ_SANITIZER_FLAGS
+        -fsanitize=fuzzer,address,undefined
+        -fno-omit-frame-pointer)
     add_executable(leopard2_api_fuzzer
         tests/leopard2/fuzz_api.cpp
         ${LIB_SOURCE_FILES})
     target_include_directories(leopard2_api_fuzzer PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_options(leopard2_api_fuzzer PRIVATE
-        -fsanitize=fuzzer,address,undefined
-        -fno-omit-frame-pointer)
+        ${LEO2_FUZZ_SANITIZER_FLAGS})
+    if(LEO2_X86_TARGET)
+        target_compile_definitions(leopard2_api_fuzzer PRIVATE
+            LEO2_DISABLE_SSSE3_CODEGEN=1
+            LEO2_DISABLE_AVX2_CODEGEN=1)
+    endif()
+
+    # Do not silently turn a forced fuzzer into a scalar-only build.  Compile
+    # sanitizer-instrumented copies of the same isolated backend members so
+    # coverage, ASan, and UBSan include the fixed-kernel boundary too.
+    if(LEO2_HAVE_SSSE3_BACKEND)
+        add_library(leopard2_backend_ssse3_fuzz OBJECT
+            Leopard2BackendSSSE3.cpp)
+        target_include_directories(leopard2_backend_ssse3_fuzz PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR})
+        target_compile_options(leopard2_backend_ssse3_fuzz PRIVATE
+            ${LEO2_FUZZ_SANITIZER_FLAGS} -mssse3 -mno-avx)
+        target_sources(leopard2_api_fuzzer PRIVATE
+            $<TARGET_OBJECTS:leopard2_backend_ssse3_fuzz>)
+        target_compile_definitions(leopard2_api_fuzzer PRIVATE
+            LEO2_HAVE_SSSE3_BACKEND=1)
+    endif()
+    if(LEO2_HAVE_AVX2_BACKEND)
+        add_library(leopard2_backend_avx2_fuzz OBJECT
+            Leopard2BackendAVX2.cpp)
+        target_include_directories(leopard2_backend_avx2_fuzz PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR})
+        target_compile_options(leopard2_backend_avx2_fuzz PRIVATE
+            ${LEO2_FUZZ_SANITIZER_FLAGS} -mavx2 -mno-avx512f)
+        target_sources(leopard2_api_fuzzer PRIVATE
+            $<TARGET_OBJECTS:leopard2_backend_avx2_fuzz>)
+        target_compile_definitions(leopard2_api_fuzzer PRIVATE
+            LEO2_HAVE_AVX2_BACKEND=1)
+    endif()
     set_property(TARGET leopard2_api_fuzzer APPEND_STRING PROPERTY
         LINK_FLAGS " -fsanitize=fuzzer,address,undefined")
     target_link_libraries(leopard2_api_fuzzer Threads::Threads)

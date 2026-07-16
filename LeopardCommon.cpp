@@ -27,6 +27,7 @@
 */
 
 #include "LeopardCommon.h"
+#include "Leopard2Backend.h"
 
 #include <thread>
 
@@ -194,7 +195,7 @@ void InitializeCPUArch()
 //------------------------------------------------------------------------------
 // XOR Memory
 
-void xor_mem(
+void xor_mem_baseline(
     void * LEO_RESTRICT vx, const void * LEO_RESTRICT vy,
     uint64_t bytes)
 {
@@ -227,21 +228,52 @@ void xor_mem(
     }
 #endif // LEO_TRY_AVX2
 
-    LEO_M128 * LEO_RESTRICT x16 = reinterpret_cast<LEO_M128 *>(vx);
-    const LEO_M128 * LEO_RESTRICT y16 = reinterpret_cast<const LEO_M128 *>(vy);
-    do
+    uint8_t* LEO_RESTRICT x_bytes = reinterpret_cast<uint8_t*>(vx);
+    const uint8_t* LEO_RESTRICT y_bytes = reinterpret_cast<const uint8_t*>(vy);
+    while (bytes >= 64)
     {
-        const LEO_M128 x0 = _mm_xor_si128(_mm_loadu_si128(x16),     _mm_loadu_si128(y16));
-        const LEO_M128 x1 = _mm_xor_si128(_mm_loadu_si128(x16 + 1), _mm_loadu_si128(y16 + 1));
-        const LEO_M128 x2 = _mm_xor_si128(_mm_loadu_si128(x16 + 2), _mm_loadu_si128(y16 + 2));
-        const LEO_M128 x3 = _mm_xor_si128(_mm_loadu_si128(x16 + 3), _mm_loadu_si128(y16 + 3));
-        _mm_storeu_si128(x16, x0);
-        _mm_storeu_si128(x16 + 1, x1);
-        _mm_storeu_si128(x16 + 2, x2);
-        _mm_storeu_si128(x16 + 3, x3);
-        x16 += 4, y16 += 4;
+        const LEO_M128 x0 = _mm_xor_si128(
+            _mm_loadu_si128(reinterpret_cast<const LEO_M128*>(x_bytes)),
+            _mm_loadu_si128(reinterpret_cast<const LEO_M128*>(y_bytes)));
+        const LEO_M128 x1 = _mm_xor_si128(
+            _mm_loadu_si128(reinterpret_cast<const LEO_M128*>(x_bytes + 16)),
+            _mm_loadu_si128(reinterpret_cast<const LEO_M128*>(y_bytes + 16)));
+        const LEO_M128 x2 = _mm_xor_si128(
+            _mm_loadu_si128(reinterpret_cast<const LEO_M128*>(x_bytes + 32)),
+            _mm_loadu_si128(reinterpret_cast<const LEO_M128*>(y_bytes + 32)));
+        const LEO_M128 x3 = _mm_xor_si128(
+            _mm_loadu_si128(reinterpret_cast<const LEO_M128*>(x_bytes + 48)),
+            _mm_loadu_si128(reinterpret_cast<const LEO_M128*>(y_bytes + 48)));
+        _mm_storeu_si128(reinterpret_cast<LEO_M128*>(x_bytes), x0);
+        _mm_storeu_si128(reinterpret_cast<LEO_M128*>(x_bytes + 16), x1);
+        _mm_storeu_si128(reinterpret_cast<LEO_M128*>(x_bytes + 32), x2);
+        _mm_storeu_si128(reinterpret_cast<LEO_M128*>(x_bytes + 48), x3);
+        x_bytes += 64;
+        y_bytes += 64;
         bytes -= 64;
-    } while (bytes > 0);
+    }
+    while (bytes >= 16)
+    {
+        const LEO_M128 result = _mm_xor_si128(
+            _mm_loadu_si128(reinterpret_cast<const LEO_M128*>(x_bytes)),
+            _mm_loadu_si128(reinterpret_cast<const LEO_M128*>(y_bytes)));
+        _mm_storeu_si128(reinterpret_cast<LEO_M128*>(x_bytes), result);
+        x_bytes += 16;
+        y_bytes += 16;
+        bytes -= 16;
+    }
+    while (bytes-- != 0)
+        *x_bytes++ ^= *y_bytes++;
+}
+
+void xor_mem(
+    void * LEO_RESTRICT vx, const void * LEO_RESTRICT vy,
+    uint64_t bytes)
+{
+    if (backend::SelectedBackend() != LEO2_BACKEND_AUTO)
+        backend::GetOps().xor_memory(vx, vy, bytes);
+    else
+        xor_mem_baseline(vx, vy, bytes);
 }
 
 #ifdef LEO_M1_OPT

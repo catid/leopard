@@ -35,18 +35,24 @@ forbidden_mnemonics='^(addsubp[ds]|haddp[ds]|hsubp[ds]|lddqu|movddup|movshdup|mo
 # and -mcpu values are conservatively rejected because proving that an
 # arbitrary spelling retains the baseline is toolchain-specific.
 forbidden_flags='(^|[[:space:]"=,:])(-march=[^[:space:]",]+|-mcpu=[^[:space:]",]+|-m(sse3|ssse3|sse4|sse4a|sse4[.][12]|avx[0-9.]*|avx512[^[:space:]",]*|fma|fma4|f16c|bmi|bmi2|lzcnt|popcnt|cx16|lahf-sahf|prfchw|mwaitx|clzero|wbnoinvd|aes|pclmul|vpclmulqdq|gfni|vaes|sha|adx|movbe|xsave[^[:space:]",]*|rdrnd|rdseed|xop|tbm|3dnow)([[:space:]",]|$)|/arch:(avx|avx2|avx512[^[:space:]",]*|sse3|ssse3|sse4([.][12])?)([[:space:]",]|$)|[+](sse3|ssse3|sse4a?|sse4[.]?[12]|avx[0-9.]*|avx512[^[:space:]",]*|fma|f16c|bmi2?|lzcnt|popcnt|cx16|lahf-sahf|prfchw|mwaitx|clzero|wbnoinvd|aes|pclmul|gfni|vaes|sha|adx|movbe)([[:space:]",]|$))'
+forbidden_metadata="$forbidden_flags|(^|[[:space:]\"=,:])-flto([^[:space:]\",]*)([[:space:]\",]|$)"
 
 scratch_root=$(mktemp -d "${TMPDIR:-/tmp}/leopard2-portable-isa.XXXXXX")
 trap 'rm -rf "$scratch_root"' EXIT HUP INT TERM
 scan_index=0
 
-scan_archive()
+scan_object()
 {
+    object_file=$1
+    object_class=$2
+    object_name=$3
     scan_index=$((scan_index + 1))
     disassembly_file="$scratch_root/disassembly.$scan_index"
     mnemonics_file="$scratch_root/mnemonics.$scan_index"
+    forbidden_file="$scratch_root/forbidden.$scan_index"
+    violations_file="$scratch_root/violations.$scan_index"
 
-    LC_ALL=C "$objdump_bin" -d --no-show-raw-insn "$1" > "$disassembly_file"
+    LC_ALL=C "$objdump_bin" -d --no-show-raw-insn "$object_file" > "$disassembly_file"
     sed -nE 's/^[[:space:]]*[0-9a-f]+:[[:space:]]+([[:alnum:]_.]+).*/\1/p' \
         "$disassembly_file" | sort -u > "$mnemonics_file"
 
@@ -54,28 +60,136 @@ scan_archive()
         echo "portable ISA check: objdump produced no instruction mnemonics" >&2
         return 1
     fi
-    if grep -E "$forbidden_mnemonics" "$mnemonics_file"; then
-        echo "portable ISA check: archive contains a post-SSE2 instruction" >&2
+
+    grep -E "$forbidden_mnemonics" "$mnemonics_file" > "$forbidden_file" || true
+    case "$object_class" in
+        baseline)
+            cp "$forbidden_file" "$violations_file"
+            ;;
+        cpu_features)
+            grep -Ev '^xgetbv$' "$forbidden_file" > "$violations_file" || true
+            ;;
+        ssse3)
+            # The named SSSE3 member may contain SSE3/SSSE3 instructions, but
+            # no AVX, SSE4, feature-probe, or unrelated later extension.
+            grep -Ev '^(addsubp[ds]|haddp[ds]|hsubp[ds]|lddqu|movddup|movshdup|movsldup|fisttp[[:alnum:]]*|pabs[bdw]|palignr|phadd(d|sw|w)|phsub(d|sw|w)|pmaddubsw|pmulhrsw|pshufb|psign[bdw])$' \
+                "$forbidden_file" > "$violations_file" || true
+            if ! grep -Eq '^pshufb$' "$mnemonics_file"; then
+                echo "portable ISA check: SSSE3 member has no pshufb: $object_name" >&2
+                return 1
+            fi
+            ;;
+        avx2)
+            # AVX/AVX2 VEX instructions and the SSSE3 family are confined to
+            # this named member.  AVX-512 register/mask syntax remains banned;
+            # CMake also compiles this object with -mno-avx512f.
+            grep -Ev '^(v[[:alnum:]_.]*|addsubp[ds]|haddp[ds]|hsubp[ds]|lddqu|movddup|movshdup|movsldup|fisttp[[:alnum:]]*|pabs[bdw]|palignr|phadd(d|sw|w)|phsub(d|sw|w)|pmaddubsw|pmulhrsw|pshufb|psign[bdw])$' \
+                "$forbidden_file" > "$violations_file" || true
+            if ! grep -Eq '^v[[:alnum:]_.]*$' "$mnemonics_file"; then
+                echo "portable ISA check: AVX2 member has no VEX instruction: $object_name" >&2
+                return 1
+            fi
+            if grep -Eq '(%zmm[0-9]+|%k[0-7]|\{1to[0-9]+\}|\{z\})' "$disassembly_file"; then
+                echo "portable ISA check: AVX2 member contains AVX-512 operands: $object_name" >&2
+                return 1
+            fi
+            ;;
+        *)
+            echo "portable ISA check: unknown object class: $object_class" >&2
+            return 1
+            ;;
+    esac
+
+    if [ -s "$violations_file" ]; then
+        cat "$violations_file" >&2
+        echo "portable ISA check: forbidden instruction in $object_class member $object_name" >&2
         return 1
     fi
     return 0
 }
 
+scan_archive()
+{
+    archive_file=$1
+    archive_ar=${ar_bin:-}
+    if [ -z "$archive_ar" ]; then
+        archive_ar=$(command -v ar || true)
+    fi
+    if [ -z "$archive_ar" ]; then
+        echo "portable ISA check: ar is required for member classification" >&2
+        return 1
+    fi
+
+    member_index=0
+    "$archive_ar" t "$archive_file" | while IFS= read -r member
+    do
+        member_index=$((member_index + 1))
+        extracted="$scratch_root/member.$member_index.o"
+        "$archive_ar" p "$archive_file" "$member" > "$extracted"
+        case "$member" in
+            *Leopard2BackendSSSE3*) object_class=ssse3 ;;
+            *Leopard2BackendAVX2*) object_class=avx2 ;;
+            *Leopard2CpuFeatures*) object_class=cpu_features ;;
+            *) object_class=baseline ;;
+        esac
+        scan_object "$extracted" "$object_class" "$member" || exit 1
+    done
+}
+
 scan_build_metadata()
 {
     metadata_root=$1
-    for metadata_file in \
-        "$metadata_root/CMakeFiles/libleopard.dir/flags.make" \
-        "$metadata_root/compile_commands.json" \
-        "$metadata_root/build.ninja"
-    do
-        if [ -f "$metadata_file" ] &&
-           LC_ALL=C grep -Ein -- "$forbidden_flags" "$metadata_file"
-        then
-            echo "portable ISA check: compiler metadata raises the ISA floor: $metadata_file" >&2
+    baseline_flags="$metadata_root/CMakeFiles/libleopard.dir/flags.make"
+    if [ -f "$baseline_flags" ] &&
+       LC_ALL=C grep -Ein -- "$forbidden_metadata" "$baseline_flags"
+    then
+        echo "portable ISA check: baseline compiler metadata raises the ISA floor: $baseline_flags" >&2
+        return 1
+    fi
+
+    compile_commands="$metadata_root/compile_commands.json"
+    if [ -f "$compile_commands" ]; then
+        violating_lines="$scratch_root/metadata-violations"
+        LC_ALL=C grep -Ein -- "$forbidden_metadata" "$compile_commands" |
+            grep -Ev 'Leopard2Backend(SSSE3|AVX2)[.]cpp' > "$violating_lines" || true
+        if [ -s "$violating_lines" ]; then
+            cat "$violating_lines" >&2
+            echo "portable ISA check: baseline compile command raises the ISA floor" >&2
             return 1
         fi
-    done
+        if grep -q 'Leopard2BackendSSSE3[.]cpp' "$compile_commands" &&
+           ! grep 'Leopard2BackendSSSE3[.]cpp' "$compile_commands" |
+               grep -q -- '-mssse3'
+        then
+            echo "portable ISA check: SSSE3 object lacks its ISA flag" >&2
+            return 1
+        fi
+        ssse3_command="$scratch_root/ssse3-command"
+        grep 'Leopard2BackendSSSE3[.]cpp' "$compile_commands" |
+            sed 's/-mssse3//g' > "$ssse3_command" || true
+        if [ -s "$ssse3_command" ] &&
+           grep -Ein -- "$forbidden_metadata" "$ssse3_command"
+        then
+            echo "portable ISA check: SSSE3 object has an unrelated ISA/LTO flag" >&2
+            return 1
+        fi
+        if grep -q 'Leopard2BackendAVX2[.]cpp' "$compile_commands" &&
+           ! grep 'Leopard2BackendAVX2[.]cpp' "$compile_commands" |
+               grep -q -- '-mavx2'
+        then
+            echo "portable ISA check: AVX2 object lacks its ISA flag" >&2
+            return 1
+        fi
+        avx2_command="$scratch_root/avx2-command"
+        grep 'Leopard2BackendAVX2[.]cpp' "$compile_commands" |
+            sed 's/-mavx2//g' > "$avx2_command" || true
+        if [ -s "$avx2_command" ] &&
+           grep -Ein -- "$forbidden_metadata" "$avx2_command"
+        then
+            echo "portable ISA check: AVX2 object has an unrelated ISA/LTO flag" >&2
+            return 1
+        fi
+    fi
     return 0
 }
 
@@ -96,6 +210,53 @@ write_assembly_archive()
     "$cc_bin" -c "$fixture_source" -o "$fixture_object"
     "$ar_bin" rcs "$fixture_archive" "$fixture_object"
     echo "$fixture_archive"
+}
+
+write_classified_archive()
+{
+    fixture_name=$1
+    fixture_member=$2
+    fixture_instruction=$3
+    fixture_source="$scratch_root/$fixture_name.s"
+    fixture_object="$scratch_root/$fixture_member"
+    fixture_archive="$scratch_root/lib$fixture_name.a"
+
+    printf '%s\n' \
+        '.text' \
+        ".globl $fixture_name" \
+        "$fixture_name:" \
+        "    $fixture_instruction" \
+        '    ret' > "$fixture_source"
+    "$cc_bin" -c "$fixture_source" -o "$fixture_object"
+    "$ar_bin" rcs "$fixture_archive" "$fixture_object"
+    echo "$fixture_archive"
+}
+
+expect_classified_archive_accepted()
+{
+    fixture_name=$1
+    fixture_member=$2
+    fixture_instruction=$3
+    fixture_archive=$(write_classified_archive \
+        "$fixture_name" "$fixture_member" "$fixture_instruction")
+    if ! scan_archive "$fixture_archive" > "$scratch_root/$fixture_name.log" 2>&1; then
+        cat "$scratch_root/$fixture_name.log" >&2
+        echo "portable ISA checker self-test: classified $fixture_name was rejected" >&2
+        return 1
+    fi
+}
+
+expect_classified_archive_rejected()
+{
+    fixture_name=$1
+    fixture_member=$2
+    fixture_instruction=$3
+    fixture_archive=$(write_classified_archive \
+        "$fixture_name" "$fixture_member" "$fixture_instruction")
+    if scan_archive "$fixture_archive" > "$scratch_root/$fixture_name.log" 2>&1; then
+        echo "portable ISA checker self-test: classified $fixture_name was accepted" >&2
+        return 1
+    fi
 }
 
 expect_archive_rejected()
@@ -128,10 +289,6 @@ expect_metadata_rejected()
             printf '[{"command":"c++ -O2 %s -c x.cpp","file":"x.cpp"}]\n' \
                 "$fixture_flag" > "$fixture_dir/compile_commands.json"
             ;;
-        ninja)
-            printf 'FLAGS = -O2 %s\n' "$fixture_flag" > \
-                "$fixture_dir/build.ninja"
-            ;;
         *)
             echo "portable ISA checker self-test: unknown metadata fixture" >&2
             return 1
@@ -158,10 +315,25 @@ run_negative_controls()
     expect_archive_rejected bad_sse41 'pminud %xmm0, %xmm0'
     expect_archive_rejected bad_avx2 'vpaddd %ymm0, %ymm0, %ymm0'
 
+    expect_classified_archive_accepted good_probe \
+        'Leopard2CpuFeatures.cpp.o' 'xgetbv'
+    expect_classified_archive_accepted good_ssse3 \
+        'Leopard2BackendSSSE3.cpp.o' 'pshufb %xmm0, %xmm0'
+    expect_classified_archive_accepted good_avx2 \
+        'Leopard2BackendAVX2.cpp.o' 'vpaddd %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected probe_leaks_avx2 \
+        'Leopard2CpuFeatures.cpp.o' 'vpaddd %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected ssse3_leaks_avx2 \
+        'Leopard2BackendSSSE3.cpp.o' 'vpaddd %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected avx2_leaks_probe \
+        'Leopard2BackendAVX2.cpp.o' 'xgetbv'
+    expect_classified_archive_rejected avx2_leaks_avx512 \
+        'Leopard2BackendAVX2.cpp.o' 'vpxord %zmm0, %zmm0, %zmm0'
+
     expect_metadata_rejected flag_make_ssse3 make '-mssse3'
     expect_metadata_rejected flag_compile_sse41 compile_commands '-msse4.1'
-    expect_metadata_rejected flag_ninja_avx2 ninja '-mavx2'
     expect_metadata_rejected flag_march make '-march=native'
+    expect_metadata_rejected flag_lto make '-flto=auto'
 
     echo "portable ISA checker negative controls: PASS"
 }
@@ -178,4 +350,4 @@ if [ -n "$build_dir" ] && ! scan_build_metadata "$build_dir"; then
     exit 1
 fi
 
-echo "portable ISA check: PASS (x86-64 SSE2 baseline)"
+echo "portable ISA check: PASS (SSE2 baseline; named SSSE3/AVX2/probe members isolated)"

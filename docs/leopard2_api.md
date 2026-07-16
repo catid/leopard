@@ -176,8 +176,9 @@ The context `backend` option is an exact capability constraint in API V2.
 `AUTO` accepts the library's qualified runtime backend.  An explicit value must
 equal that backend or context creation returns `LEO2_UNSUPPORTED`; it does not
 currently downgrade execution to a lower backend.  Per-context lower-backend
-selection remains part of the production backend-isolation work, while the
-diagnostic build variants provide deterministic scalar/SSSE3/AVX2 test builds.
+selection remains future work. The production `AUTO` binary uses isolated
+runtime-dispatched scalar/SSSE3/AVX2 fixed-multiplier and XOR kernels, while
+diagnostic variants force one of those same ops tables for deterministic tests.
 
 Only one batch call at a time uses a given context pool.  Concurrent batch calls
 sharing that context are serialized at the scheduler, while calls using separate

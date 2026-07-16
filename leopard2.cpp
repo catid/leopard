@@ -29,6 +29,7 @@
 #include "leopard2.h"
 
 #include "LeopardCommon.h"
+#include "Leopard2Backend.h"
 #include "LeopardFF8.h"
 #include "LeopardFF16.h"
 #include "Leopard2Dispatch.h"
@@ -987,19 +988,7 @@ static bool PrepareDirectRepairTerms(
 
 static leo2_backend RuntimeBackend()
 {
-#if defined(LEO_TRY_NEON)
-    if (leopard::CpuHasNeon)
-        return LEO2_BACKEND_NEON;
-#endif
-#if defined(LEO_TRY_AVX2)
-    if (leopard::CpuHasAVX2)
-        return LEO2_BACKEND_AVX2;
-#endif
-#if !defined(LEO_TARGET_MOBILE) || defined(LEO_USE_SSE2NEON)
-    if (leopard::CpuHasSSSE3)
-        return LEO2_BACKEND_SSSE3;
-#endif
-    return LEO2_BACKEND_SCALAR;
+    return leopard::backend::SelectedBackend();
 }
 
 static leo2_result EnsureInitialized()

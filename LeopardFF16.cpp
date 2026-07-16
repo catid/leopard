@@ -27,6 +27,7 @@
 */
 
 #include "LeopardFF16.h"
+#include "Leopard2Backend.h"
 
 #ifdef LEO_HAS_FF16
 
@@ -515,7 +516,10 @@ static void mul_mem(
     }
 #endif // LEO_TRY_SSSE3
 
-    RefMul(x, y, log_m, bytes);
+    if (backend::SelectedBackend() == LEO2_BACKEND_AUTO)
+        RefMul(x, y, log_m, bytes);
+    else
+        backend::GetOps().ff16_multiply(x, y, log_m, bytes);
 }
 
 // x[] ^= y[] * log_m for complete 64-byte ALTMAP tiles.
@@ -574,7 +578,10 @@ static void muladd_mem(
     }
 #endif // LEO_TRY_SSSE3
 
-    RefMulAdd(x, y, log_m, bytes);
+    if (backend::SelectedBackend() == LEO2_BACKEND_AUTO)
+        RefMulAdd(x, y, log_m, bytes);
+    else
+        backend::GetOps().ff16_multiply_add(x, y, log_m, bytes);
 }
 
 
@@ -599,6 +606,12 @@ ffe_t ElementLog(ffe_t value)
 {
     LEO_DEBUG_ASSERT(value != 0);
     return LogLUT[value];
+}
+
+
+ffe_t MultiplyLogElement(ffe_t value, ffe_t multiplier_log)
+{
+    return MultiplyLog(value, multiplier_log);
 }
 
 
@@ -858,7 +871,7 @@ static void IFFT_DIT2(
 
     // Reference version:
     xor_mem(y, x, bytes);
-    RefMulAdd(x, y, log_m, bytes);
+    muladd_mem(x, y, log_m, bytes);
 }
 
 
@@ -1315,7 +1328,7 @@ static void FFT_DIT2(
 #endif // LEO_TRY_SSSE3
 
     // Reference version:
-    RefMulAdd(x, y, log_m, bytes);
+    muladd_mem(x, y, log_m, bytes);
     xor_mem(y, x, bytes);
 }
 

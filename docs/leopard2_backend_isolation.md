@@ -1,47 +1,43 @@
 # Leopard2 backend isolation checkpoint
 
-Status: bounded production-safety checkpoint; the SIMD/backend Bead remains
-open.  This checkpoint deliberately chooses a portable default over silently
-shipping a host-specific archive.
+Status: first production runtime-dispatch checkpoint complete; the SIMD/backend
+Bead remains open for fused butterflies, native NEON, and platform gates.
 
 ## Default contract
 
-The CMake build no longer probes for or appends `-march=native`.  On x86-64,
-the default `LEO2_BACKEND_VARIANT=auto` archive is compiled at the platform
-SSE2 baseline.  Its fixed-multiplier path is scalar and its XOR path may use
-baseline SSE2.  SSSE3 and AVX2 are not compiled into that archive unless the
-caller explicitly supplies an ISA compilation boundary.
+The CMake build does not append `-march=native`. On x86-64, baseline control,
+field, API, and scheduler translation units remain at the platform SSE2 floor.
+Three private fixed-kernel implementations are separate translation units:
+scalar, SSSE3 (`-mssse3 -mno-avx`), and AVX2 (`-mavx2 -mno-avx512f`). The
+feature probe is a fourth named member and is the only member allowed to
+contain XGETBV.
 
-The existing `ssse3` and `avx2` CMake variants remain diagnostic, opt-in
-whole-archive builds.  They are useful for correctness and performance
-comparison, but are not portable binaries and must not be redistributed as if
-they were runtime-dispatched.  The production follow-up is to move these
-kernels into ISA-specific translation units or target functions, leaving all
-public API, initialization, and dispatch control flow at the platform baseline.
+`LEO2_BACKEND_VARIANT=auto` is now a production runtime-dispatched archive.
+It selects AVX2, then SSSE3, then scalar according to the guarded feature probe.
+The diagnostic `scalar`, `ssse3`, and `avx2` variants force selection of the
+same isolated ops tables and fail initialization rather than substituting a
+different backend. Backend choice changes kernels only, never wire identity.
 
-The default archive is checked by
-`tools/check_leopard2_portable_isa.sh`.  The check rejects project-supplied
-ISA-raising compiler flags found in Make flags, `compile_commands.json`, or
-Ninja metadata, and disassembles every object in the archive. Its mnemonic
-denylist covers SSE3, SSSE3, SSE4, AVX-family, BMI, LZCNT, POPCNT, CX16, ADX,
-AES, SHA, carryless multiplication, XGETBV/XSAVE, and other common post-SSE2
-compiler targets. Real synthetic archives exercise SSSE3, SSE4.1, and AVX2
-negative controls; separate fixtures exercise all three supported metadata
-formats and `-march=native`.
+Every variant archive is checked by `tools/check_leopard2_portable_isa.sh`.
+The checker extracts and classifies each member. Baseline members reject
+post-SSE2 instructions; the feature member permits XGETBV only; the SSSE3
+member permits SSE3/SSSE3 but not AVX/SSE4; and the AVX2 member permits VEX
+instructions while rejecting AVX-512 registers/masks and feature-probe
+instructions. Metadata rejects target-raising flags outside the named objects,
+unrelated flags inside them, all `-march`/`-mcpu`, and LTO leakage.
 
 The denylist is deliberately conservative, not a proof about every future x86
 instruction spelling. It matches only disassembled mnemonic fields, avoiding
 symbol/operand false positives, and rejects every `-march` or `-mcpu` value
 rather than guessing whether a toolchain treats it as baseline-compatible.
-CTest registers the gate for default and scalar x86-64 builds only when both
+CTest registers the gate for every x86-64 variant when both
 `objdump`/`llvm-objdump` and a POSIX `sh` are available. The backend matrix
 treats a missing or unexecuted gate as a failure rather than accepting CTest's
 successful "No tests were found" status.
 
 ## Runtime probing correction
 
-AVX2 diagnostic builds now require all of the following before setting
-`CpuHasAVX2`:
+AVX2 selection requires all of the following:
 
 1. CPUID maximum basic leaf is at least 7.
 2. CPUID leaf 1 reports AVX and OSXSAVE.
@@ -49,16 +45,43 @@ AVX2 diagnostic builds now require all of the following before setting
 4. CPUID leaf 7 subleaf 0 reports AVX2.
 
 XGETBV is therefore never executed on a CPU or OS that did not advertise the
-required contract. The portable default does not compile XGETBV at all. In
-particular, MSVC's general intrinsic availability no longer enables SSSE3 or
-AVX2 in `auto`: only explicitly forced MSVC diagnostic variants enable those
-paths. A preprocessing-only `_MSC_VER=1930` simulation produced no optional
-`LEO_TRY_*` macro for `auto` or `scalar`, `LEO_TRY_SSSE3` for forced SSSE3, and
-both optional macros for forced AVX2. No MSVC or clang-cl toolchain was
-available on the evidence host, so this simulation and source review still
-need native Windows build and runtime evidence.
+required contract, and it is compiled only in the feature-probe member. Pure
+classifier tests cover absent leaves, missing AVX/OSXSAVE, missing XMM/YMM
+state, and the complete contract. No MSVC or clang-cl toolchain was available
+on the evidence host, so native Windows build and runtime evidence remains open.
 
 ## Correctness and safety evidence
+
+Runtime-dispatch checkpoint evidence on 2026-07-16 with GCC 13.3.0 on the
+32-CPU allowed set:
+
+- strict Release `-Wall -Wextra -Wpedantic -Werror`: 29/29 CTests passed;
+- ASan plus UBSan: 29/29 CTests passed with leak and halt-on-error enabled;
+- TSan, run with ASLR disabled for this host's runtime limitation: the
+  16-thread fixed-kernel gate (1,024 executions) and the existing four-profile
+  concurrent encoder gate (528 executions) passed without a report;
+- four concurrent forced variants (`auto,scalar,ssse3,avx2`) passed 19 common
+  deterministic tests each with no output mismatch; all four passed archive
+  classification, and `auto` also passed optional-CUDA isolation. Source
+  fingerprint: `42c4a1700dde44e25748e9f1135e3b27e608285b9c41c396b46a9c05acdb75b5`;
+  merged matrix SHA-256:
+  `003af6f7e03cb8c958e7d280c11350b408a59975d4e54891ed5b0b00e9a8ecaa`;
+- startup KATs cover all 256 GF8 multiplier logs and all 256 byte values,
+  multiply and multiply-add, unaligned buffers and tails; GF16 covers complete
+  ALTMAP tiles plus compact tails and boundary logs; Common XOR covers zero
+  through 257 bytes;
+- the pure CPUID/XCR0 classifier and public ops-derived backend introspection
+  passed; `auto` selected AVX2 on the evidence host;
+- Clang 18 built sanitizer-instrumented libFuzzer copies for all four backend
+  variants; 256 deterministic smoke executions per variant completed under
+  ASan/UBSan, and coverage confirmed execution inside the selected isolated
+  scalar, SSSE3, or AVX2 boundary;
+- AArch64/SSE2NEON compile-only preservation passed at submodule commit
+  `cad518a93b326f0f644b7972d488d04eaa2b0475`. This is not a native-NEON
+  runtime or performance claim.
+
+The preceding portable-safety checkpoint evidence is retained below for the
+before/after record:
 
 Evidence collected on 2026-07-16 with GCC 13.3.0 on an AMD Ryzen 9 9950X3D
 (32 allowed logical CPUs, 16 physical cores, one NUMA node):
@@ -98,41 +121,53 @@ An additional strict build with OpenMP disabled stopped on the existing
 unguarded `#pragma omp` directives under `-Werror=unknown-pragmas`; this is a
 configuration-warning limitation, not a failed codec test.
 
-## Measured performance cost
+## Measured performance checkpoint
 
-The safety fallback is not a performance endpoint.  The table below reports
-single-thread medians from CPU 16, with its sibling idle, `OMP_NUM_THREADS=1`,
-9 measured samples, 3 warmups, and reuse 8.  GB/s is aggregate input for encode
-and offered received input for decode.
+The table below reports the first isolated fixed-kernel tier, not the eventual
+SIMD endpoint. Measurements were pinned to allowed CPU 15 with no simultaneous
+benchmark, one thread, 7 measured samples, 3 warmups, and reuse 8. GB/s is
+aggregate input for encode and offered received input for decode. The forced
+variants select the same ops tables used by `auto`; `auto` selected AVX2 on the
+evidence host. The scalar and SSSE3 rows are forced-variant measurements; the
+AVX2 rows are measurements of the production `auto` build after it reported
+AVX2, not of the forced AVX2 diagnostic build.
 
 | Case | Backend | Encode GB/s | Decode GB/s |
 | --- | ---: | ---: | ---: |
-| high GF8 K=240 R=16, 64 KiB, L=4 | scalar default | 3.005 | 2.395 |
-| high GF8 K=240 R=16, 64 KiB, L=4 | SSSE3 opt-in | 11.955 | 8.151 |
-| high GF8 K=240 R=16, 64 KiB, L=4 | AVX2 opt-in | 20.657 | 13.047 |
-| low GF8 K=32 R=224, 64 KiB, L=16 | scalar default | 0.336 | 2.780 |
-| low GF8 K=32 R=224, 64 KiB, L=16 | SSSE3 opt-in | 1.217 | 9.727 |
-| low GF8 K=32 R=224, 64 KiB, L=16 | AVX2 opt-in | 1.924 | 15.476 |
-| high GF16 K=1000 R=200, 16 KiB, L=8 | scalar default | 0.530 | 0.329 |
-| high GF16 K=1000 R=200, 16 KiB, L=8 | SSSE3 opt-in | 3.536 | 2.075 |
-| high GF16 K=1000 R=200, 16 KiB, L=8 | AVX2 opt-in | 6.591 | 3.861 |
+| high GF8 K=240 R=16, 64 KiB, L=4 | scalar | 3.036 | 2.365 |
+| high GF8 K=240 R=16, 64 KiB, L=4 | SSSE3 | 8.252 | 5.468 |
+| high GF8 K=240 R=16, 64 KiB, L=4 | AVX2 (`auto`) | 13.534 | 7.784 |
+| low GF8 K=32 R=224, 64 KiB, L=16 | scalar | 0.338 | 6.338 |
+| low GF8 K=32 R=224, 64 KiB, L=16 | SSSE3 | 0.964 | 16.396 |
+| low GF8 K=32 R=224, 64 KiB, L=16 | AVX2 (`auto`) | 1.685 | 20.623 |
+| high GF16 K=1000 R=200, 16 KiB, L=8 | scalar | 0.423 | 0.256 |
+| high GF16 K=1000 R=200, 16 KiB, L=8 | SSSE3 | 3.223 | 1.746 |
+| high GF16 K=1000 R=200, 16 KiB, L=8 | AVX2 (`auto`) | 6.047 | 2.841 |
 
-Relative to the AVX2 diagnostic build, the portable scalar default is about
-82-92% slower in these cells.  That regression is the reason this is only a
-safety checkpoint and the SIMD/backend Bead remains open; silently retaining a
-host-only default would instead risk illegal instructions before dispatch.
+The isolated AVX2 fixed-multiply/multiply-add and XOR tier materially recovers
+the portable fallback cost without raising the archive ISA floor. It does not
+yet recover the earlier whole-translation-unit diagnostic ceiling in every
+cell because two-way butterflies, IFFT-XOR butterflies, and fused-four
+butterflies still execute their baseline implementations. Those kernels are
+the next extraction target. The scalar GF8 packing correction made during this
+checkpoint restored the previous scalar encode range instead of accepting a
+table-dispatch regression.
 
 ## Remaining production gates
 
-- Isolate SSSE3 and AVX2 kernels in ISA-specific translation units or target
-  functions and connect them to baseline runtime dispatch.
-- Keep backend self-tests and deterministic wire-output comparisons at each
-  isolated boundary.
-- Re-run strict, sanitizer, fuzz, old/new compatibility, and end-to-end
-  performance matrices after isolation; recover the measured SIMD throughput
-  without raising the archive-wide ISA floor.
-- Implement and test native NEON separately.  The existing SSE2NEON path is a
-  translation layer and this checkpoint makes no native-NEON performance claim.
+- Extract the two-way, IFFT-XOR, and fused-four/radix butterfly families into
+  the same private ops boundary and remeasure the whole-codec ceiling.
+- Implement and test native NEON separately. The AArch64 evidence above is a
+  compile-only preservation gate for the existing SSE2NEON translation path,
+  not a native-NEON runtime or performance claim.
+- Add native MSVC and clang-cl build/runtime evidence; neither toolchain was
+  available on the checkpoint host.
+- Add allocation-failure injection for backend table construction and remove
+  the transitional duplicate legacy scalar multiplication tables once every
+  legacy pre-publication caller has moved behind the ops boundary.
+- Keep startup self-tests, static member classification, deterministic wire
+  comparisons, sanitizers, and pinned performance cells as gates for each new
+  isolated kernel family.
 - Treat AVX-512, GFNI, SVE/SVE2, and other experimental kernels as later
   evidence-gated work rather than extending the default ISA contract.
 
@@ -173,6 +208,8 @@ Compile-only AArch64/SSE2NEON preservation check:
 
     git submodule update --init --depth 1 sse2neon
     cmake -S . -B build/review-portable-aarch64 -G Ninja \
+      -DCMAKE_SYSTEM_NAME=Linux \
+      -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
       -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
       -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \

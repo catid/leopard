@@ -24,6 +24,7 @@ from pathlib import Path
 SCHEMA = "leopard2-backend-matrix/v1"
 VARIANTS = ("auto", "scalar", "ssse3", "avx2")
 COMPARE_TESTS = (
+    "backend_ops",
     "legacy_golden",
     "api",
     "public_api_contract",
@@ -46,6 +47,12 @@ SOURCE_FILES = (
     "CMakeLists.txt",
     "LeopardCommon.cpp",
     "LeopardCommon.h",
+    "Leopard2Backend.cpp",
+    "Leopard2Backend.h",
+    "Leopard2BackendScalar.cpp",
+    "Leopard2BackendSSSE3.cpp",
+    "Leopard2BackendAVX2.cpp",
+    "Leopard2CpuFeatures.cpp",
     "LeopardFF8.cpp",
     "LeopardFF8.h",
     "LeopardFF16.cpp",
@@ -59,6 +66,7 @@ SOURCE_FILES = (
     "leopard2.cpp",
     "leopard2.h",
     "tests/leopard2/test_legacy_golden.cpp",
+    "tests/leopard2/test_backend_ops.cpp",
     "tests/leopard2/legacy_golden_vectors.h",
     "tests/leopard2/test_api.cpp",
     "tests/leopard2/test_public_api_contract.cpp",
@@ -398,7 +406,7 @@ def run_variant(context, variant, index):
         return base
 
     targets = [
-        "leopard2_legacy_golden_test", "leopard2_api_test",
+        "leopard2_backend_ops_test", "leopard2_legacy_golden_test", "leopard2_api_test",
         "leopard2_public_api_contract_test",
         "leopard2_random_test", "leopard2_active_lch_test",
         "leopard2_gf16_padded_odd_test",
@@ -428,6 +436,7 @@ def run_variant(context, variant, index):
         return base
 
     test_specs = {
+        "backend_ops": ("leopard2_backend_ops_test", []),
         "legacy_golden": ("leopard2_legacy_golden_test", []),
         "api": ("leopard2_api_test", []),
         "public_api_contract": ("leopard2_public_api_contract_test", []),
@@ -479,7 +488,7 @@ def run_variant(context, variant, index):
             atomic_write_json(result_path, base)
             return base
 
-    if variant in ("auto", "scalar"):
+    if variant in VARIANTS:
         portable_command = [
             context["ctest"], "--test-dir", build, "-C", "Release",
             "-R", "^leopard2_portable_isa$", "--output-on-failure",

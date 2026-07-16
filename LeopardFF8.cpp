@@ -27,6 +27,7 @@
 */
 
 #include "LeopardFF8.h"
+#include "Leopard2Backend.h"
 
 #ifdef LEO_HAS_FF8
 
@@ -481,8 +482,13 @@ static void mul_mem(
     }
 #endif // LEO_TRY_SSSE3
 
-    // Reference version:
-    RefMul(x, y, log_m, bytes);
+    // Before backend publication (during field setup), retain the independent
+    // scalar implementation.  Production execution is routed through the
+    // immutable ISA-isolated ops table.
+    if (backend::SelectedBackend() == LEO2_BACKEND_AUTO)
+        RefMul(x, y, log_m, bytes);
+    else
+        backend::GetOps().ff8_multiply(x, y, log_m, bytes);
 }
 
 // x[] ^= y[] * log_m for complete SIMD tiles.
@@ -541,7 +547,10 @@ static void muladd_mem(
     }
 #endif // LEO_TRY_SSSE3
 
-    RefMulAdd(x, y, log_m, bytes);
+    if (backend::SelectedBackend() == LEO2_BACKEND_AUTO)
+        RefMulAdd(x, y, log_m, bytes);
+    else
+        backend::GetOps().ff8_multiply_add(x, y, log_m, bytes);
 }
 
 
@@ -566,6 +575,12 @@ ffe_t ElementLog(ffe_t value)
 {
     LEO_DEBUG_ASSERT(value != 0);
     return LogLUT[value];
+}
+
+
+ffe_t MultiplyLogElement(ffe_t value, ffe_t multiplier_log)
+{
+    return MultiplyLog(value, multiplier_log);
 }
 
 
@@ -808,7 +823,7 @@ static void IFFT_DIT2(
 
     // Reference version:
     xor_mem(y, x, bytes);
-    RefMulAdd(x, y, log_m, bytes);
+    muladd_mem(x, y, log_m, bytes);
 }
 
 
@@ -1050,7 +1065,7 @@ static void IFFT_DIT2_xor(
 
     // Reference version:
     xor_mem(y_in, x_in, bytes);
-    RefMulAdd(x_in, y_in, log_m, bytes);
+    muladd_mem(x_in, y_in, log_m, bytes);
     xor_mem(y_out, y_in, bytes);
     xor_mem(x_out, x_in, bytes);
 }
@@ -1539,7 +1554,7 @@ static void FFT_DIT2(
 #endif // LEO_TRY_SSSE3
 
     // Reference version:
-    RefMulAdd(x, y, log_m, bytes);
+    muladd_mem(x, y, log_m, bytes);
     xor_mem(y, x, bytes);
 }
 
