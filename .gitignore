@@ -23,3 +23,5 @@ msvc/LHC_RS.vcxproj.user
 /.research/
 /build/
 /results/
+__pycache__/
+*.pyc
