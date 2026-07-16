@@ -7,7 +7,6 @@ import argparse
 import base64
 import binascii
 import copy
-import fcntl
 import hashlib
 import json
 import math
@@ -23,6 +22,11 @@ import tempfile
 import time
 from pathlib import Path
 
+try:
+    import fcntl
+except ImportError:  # Verification remains usable on non-POSIX hosts.
+    fcntl = None
+
 
 SCHEMA = "leopard2-backend-butterfly-abba/v3"
 RAW_SCHEMA = "leopard2-backend-butterfly-raw/v1"
@@ -32,15 +36,19 @@ SEQUENCES = (("A1", "baseline"), ("B1", "candidate"),
 ROUNDS = (1, 2, 3)
 TARGET_THRESHOLD = 5.0
 NEIGHBOR_FLOOR = -2.0
+INVOCATION_SAMPLES = 7
+# One-sided 95% Student-t critical value with three ABBA rounds (df=2).
+ONE_SIDED_T95_DF2 = 2.9199855803537256
+FRESH_BUILD_ENVIRONMENT = {
+    "LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"}
 
 
 def cell(name, k, r, profile, field, byte_count, loss, kind):
     resolved_profile = "legacy_high_v1" if profile == "high" else "low_v1"
-    padded_side = 16 if name.startswith("high-gf8") else 32
-    parent = 256
-    if field == "gf16":
-        padded_side = 256 if profile == "high" else 128
-        parent = 2048
+    active_side = r if profile == "high" else k
+    padded_side = 1 << max(0, (active_side - 1).bit_length())
+    parent_input = k + padded_side if profile == "high" else padded_side + r
+    parent = 1 << max(0, (parent_input - 1).bit_length())
     rounded = (byte_count + 63) & ~63
     return {
         "name": name,
@@ -80,6 +88,16 @@ CELLS = (
     cell("low-gf16-tail", 128, 1024, "low", "gf16", 66, 16, "neighbor"),
     cell("low-gf16-1k", 128, 1024, "low", "gf16", 1024, 16, "neighbor"),
     cell("low-gf16", 128, 1024, "low", "gf16", 16384, 16, "target"),
+    # Balanced-rate neighbors exercise the same kernels without extrapolating
+    # the high/low-rate target result across a qualitatively different shape.
+    cell("balanced-gf8", 128, 128, "high", "gf8", 65536, 8, "neighbor"),
+    cell("balanced-gf16", 512, 512, "high", "gf16", 16384, 8, "neighbor"),
+    # A second decode-loss geometry prevents a single erasure count from
+    # becoming the accidental promotion oracle for each production regime.
+    cell("high-gf8-loss1", 240, 16, "high", "gf8", 65536, 1, "neighbor"),
+    cell("low-gf8-loss1", 32, 224, "low", "gf8", 65536, 1, "neighbor"),
+    cell("high-gf16-loss1", 1000, 200, "high", "gf16", 16384, 1, "neighbor"),
+    cell("low-gf16-loss1", 128, 1024, "low", "gf16", 16384, 1, "neighbor"),
 )
 
 BUILD_TRANSLATION_UNITS = (
@@ -149,6 +167,8 @@ MATRIX_SOURCE_FILES = (
     "tests/leopard2/test_direct_repair.cpp",
     "tests/leopard2/fuzz_api.cpp",
     "tests/leopard2/fuzz_replay.cpp",
+    "tests/cmake/test_cuda_optional.cmake",
+    "cmake/leopardConfig.cmake.in",
     "tools/check_leopard2_portable_isa.sh",
     "tools/leopard2_backend_matrix.py",
 )
@@ -166,9 +186,16 @@ MATRIX_COMPARE_TESTS = (
 
 CONFIGURATION_KEYS = (
     "CMAKE_BUILD_TYPE",
+    "CMAKE_C_FLAGS",
+    "CMAKE_C_FLAGS_RELEASE",
     "CMAKE_CXX_FLAGS",
     "CMAKE_CXX_FLAGS_RELEASE",
+    "CMAKE_EXE_LINKER_FLAGS",
+    "CMAKE_EXE_LINKER_FLAGS_RELEASE",
+    "CMAKE_STATIC_LINKER_FLAGS",
+    "CMAKE_STATIC_LINKER_FLAGS_RELEASE",
     "CMAKE_GENERATOR",
+    "ENABLE_OPENMP",
     "LEO2_BACKEND_VARIANT",
     "LEO2_BUILD_BENCHMARKS",
     "LEO2_BUILD_FUZZERS",
@@ -178,11 +205,26 @@ CONFIGURATION_KEYS = (
 
 TOOL_CACHE_KEYS = (
     ("cmake", "CMAKE_COMMAND"),
+    ("cc", "CMAKE_C_COMPILER"),
     ("cxx", "CMAKE_CXX_COMPILER"),
+    ("ar", "CMAKE_AR"),
+    ("ranlib", "CMAKE_RANLIB"),
     ("cxx_ar", "CMAKE_CXX_COMPILER_AR"),
     ("cxx_ranlib", "CMAKE_CXX_COMPILER_RANLIB"),
     ("linker", "CMAKE_LINKER"),
     ("make", "CMAKE_MAKE_PROGRAM"),
+)
+
+CONFIGURED_TRANSLATION_UNITS = BUILD_TRANSLATION_UNITS + (
+    "tests/benchmark.cpp",
+    "tests/experiments.cpp",
+)
+
+RELEVANT_TARGETS = (
+    "libleopard",
+    "leopard2_backend_ssse3",
+    "leopard2_backend_avx2",
+    "bench_leopard2",
 )
 
 POWER_STATE_FILES = (
@@ -514,7 +556,9 @@ def validate_metric(metric, label, rate_keys):
     for key in rate_keys:
         require(finite_number(metric[key], label + " " + key) > 0.0,
                 label + " nonpositive rate")
-    return values["median_us_per_batch_call"]
+    return {key: values[key] for key in (
+        "minimum_us_per_batch_call", "median_us_per_batch_call",
+        "maximum_us_per_batch_call", "mad_us_per_batch_call")}
 
 
 def validate_setup_metric(metric, label):
@@ -662,6 +706,68 @@ def check_raw(raw, item, label, missing_indices=None):
     return encode, decode, missing, build
 
 
+def invocation_log_standard_error(metric):
+    """Conservative robust log-scale SE from one seven-sample invocation.
+
+    The benchmark does not retain the seven underlying samples in v3, so this
+    deliberately uses both the reported MAD and full min/max span.  It is not a
+    claim that the original samples can be reconstructed.
+    """
+    median = metric["median_us_per_batch_call"]
+    mad = metric["mad_us_per_batch_call"]
+    span = (metric["maximum_us_per_batch_call"] -
+            metric["minimum_us_per_batch_call"])
+    mad_se = 1.4826 * mad / (math.sqrt(INVOCATION_SAMPLES) * median)
+    span_se = span / (2.0 * math.sqrt(INVOCATION_SAMPLES) * median)
+    return max(mad_se, span_se)
+
+
+def paired_abba_statistics(entries, raw_by_name, item, metric_index):
+    invocation = {}
+    for entry in entries:
+        if entry["cell"] == item["name"]:
+            invocation[(entry["round"], entry["sequence"])] = \
+                raw_by_name[entry["name"]][metric_index]
+    expected = {(round_number, sequence) for round_number in ROUNDS
+                for sequence, _ in SEQUENCES}
+    require(set(invocation) == expected,
+            item["name"] + " paired ABBA invocation geometry")
+
+    round_logs = []
+    round_within_variances = []
+    round_speedups = []
+    for round_number in ROUNDS:
+        a1 = invocation[(round_number, "A1")]
+        b1 = invocation[(round_number, "B1")]
+        b2 = invocation[(round_number, "B2")]
+        a2 = invocation[(round_number, "A2")]
+        log_ratio = 0.5 * (
+            math.log(a1["median_us_per_batch_call"]) +
+            math.log(a2["median_us_per_batch_call"]) -
+            math.log(b1["median_us_per_batch_call"]) -
+            math.log(b2["median_us_per_batch_call"]))
+        round_logs.append(log_ratio)
+        round_speedups.append((math.exp(log_ratio) - 1.0) * 100.0)
+        # Each round is the difference of two two-invocation log means.
+        round_within_variances.append(sum(
+            invocation_log_standard_error(value) ** 2
+            for value in (a1, a2, b1, b2)) / 4.0)
+
+    mean_log = statistics.mean(round_logs)
+    between_mean_variance = statistics.variance(round_logs) / len(round_logs)
+    within_mean_variance = sum(round_within_variances) / len(round_logs) ** 2
+    standard_error = math.sqrt(between_mean_variance + within_mean_variance)
+    lower_log = mean_log - ONE_SIDED_T95_DF2 * standard_error
+    return {
+        "method": "paired ABBA log-ratio; one-sided 95% t lower bound, df=2",
+        "round_speedup_percent": round_speedups,
+        "speedup_percent": (math.exp(mean_log) - 1.0) * 100.0,
+        "lower_confidence_speedup_percent": (math.exp(lower_log) - 1.0) * 100.0,
+        "log_standard_error": standard_error,
+        "confidence_level": 0.95,
+    }
+
+
 def summarize(entries, raw_by_name):
     summary = []
     for item in CELLS:
@@ -678,27 +784,29 @@ def summarize(entries, raw_by_name):
             },
         }
         for metric_index, metric_name in ((0, "encode"), (1, "decode")):
-            medians = {}
             result = {}
             for build in ("baseline", "candidate"):
-                values = [raw_by_name[entry["name"]][metric_index]
+                metrics = [raw_by_name[entry["name"]][metric_index]
                           for entry in entries
                           if entry["cell"] == item["name"] and
                           entry["build"] == build]
-                require(len(values) == 6,
+                require(len(metrics) == 6,
                         "{} {} {} requires six invocations".format(
                             item["name"], metric_name, build))
+                values = [value["median_us_per_batch_call"] for value in metrics]
                 median = statistics.median(values)
                 mad = statistics.median(abs(value - median) for value in values)
-                medians[build] = median
                 result[build + "_median_us"] = median
                 result[build + "_mad_us"] = mad
                 result[build + "_minimum_us"] = min(values)
                 result[build + "_maximum_us"] = max(values)
-            speedup = (medians["baseline"] / medians["candidate"] - 1.0) * 100.0
-            result["speedup_percent"] = speedup
+            paired = paired_abba_statistics(
+                entries, raw_by_name, item, metric_index)
+            result.update(paired)
             result["minimum_speedup_percent"] = item["minimum_speedup_percent"]
-            result["accepted"] = speedup >= item["minimum_speedup_percent"]
+            result["accepted"] = (
+                paired["lower_confidence_speedup_percent"] >=
+                item["minimum_speedup_percent"])
             cell_result[metric_name] = result
         summary.append(cell_result)
     return summary
@@ -832,9 +940,7 @@ def normalized_compile_entry(entry, source_root, build_root, tool_paths):
     try:
         relative = source.relative_to(source_root.resolve()).as_posix()
     except ValueError:
-        return None, None
-    if relative not in BUILD_TRANSLATION_UNITS:
-        return relative, None
+        raise EvidenceError("compile source escapes declared source root: " + str(source))
     require(source.is_file(), "compile source is missing: " + relative)
     directory = Path(entry.get("directory", build_root)).resolve()
     require(relative_to(directory, build_root) is not None,
@@ -925,11 +1031,159 @@ def dependency_closure(compile_entries, source_root, build_root):
     }
 
 
-def clean_rebuild(source_root, cmake_cache, jobs):
+def command_evidence(argv, cwd, label, logical_argv, environment=None):
+    completed = subprocess.run(
+        [str(value) for value in argv], cwd=str(cwd), stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, check=False, env=environment)
+    require(completed.returncode == 0,
+            "{} failed rc={}: {}".format(
+                label, completed.returncode,
+                completed.stderr.decode("utf-8", "replace").strip()))
+    return {
+        "argv": logical_argv,
+        "command_sha256": sha256_bytes(canonical_bytes(logical_argv)),
+        "stdout_sha256": sha256_bytes(completed.stdout),
+        "stderr_sha256": sha256_bytes(completed.stderr),
+        "returncode": completed.returncode,
+    }
+
+
+def file_api_targets(source_root, build_root):
+    reply = build_root / ".cmake/api/v1/reply"
+    indexes = sorted(reply.glob("index-*.json"))
+    require(len(indexes) == 1, "CMake File API must produce exactly one index")
+    index = read_json(indexes[0], "CMake File API index")
+    response = index.get("reply", {}).get("codemodel-v2")
+    require(isinstance(response, dict) and isinstance(response.get("jsonFile"), str),
+            "CMake File API omits codemodel-v2")
+    codemodel_path = reply / response["jsonFile"]
+    codemodel = read_json(codemodel_path, "CMake File API codemodel")
+    configurations = codemodel.get("configurations")
+    require(isinstance(configurations, list) and len(configurations) == 1,
+            "evidence build requires one CMake configuration")
+    target_refs = configurations[0].get("targets")
+    require(isinstance(target_refs, list), "CMake codemodel target list")
+    id_to_name = {value.get("id"): value.get("name") for value in target_refs}
+    documents = {}
+    for reference in target_refs:
+        name = reference.get("name")
+        filename = reference.get("jsonFile")
+        require(isinstance(name, str) and name and isinstance(filename, str),
+                "malformed CMake target reference")
+        require(name not in documents, "duplicate CMake target: " + name)
+        documents[name] = read_json(reply / filename, "CMake target " + name)
+    require(set(RELEVANT_TARGETS) <= set(documents),
+            "CMake target graph omits evidence target")
+
+    configured_units = set()
+    for document in documents.values():
+        for source in document.get("sources", []):
+            if "compileGroupIndex" not in source:
+                continue
+            path = Path(source["path"])
+            if not path.is_absolute():
+                path = source_root / path
+            require(relative_to(path, source_root) is not None,
+                    "configured translation unit escapes source root: " + str(path))
+            configured_units.add(path.resolve().relative_to(source_root).as_posix())
+    require(configured_units == set(CONFIGURED_TRANSLATION_UNITS),
+            "configured translation-unit set mismatch: missing={} extra={}".format(
+                sorted(set(CONFIGURED_TRANSLATION_UNITS) - configured_units),
+                sorted(configured_units - set(CONFIGURED_TRANSLATION_UNITS))))
+
+    targets = {}
+    artifact_paths = {}
+    relevant_units = set()
+    for name in RELEVANT_TARGETS:
+        document = documents[name]
+        artifacts = document.get("artifacts", [])
+        require(isinstance(artifacts, list) and len(artifacts) == 1,
+                "evidence target must have exactly one artifact: " + name)
+        artifact = Path(artifacts[0].get("path", ""))
+        if not artifact.is_absolute():
+            artifact = build_root / artifact
+        artifact = artifact.resolve()
+        require(relative_to(artifact, build_root) is not None,
+                "target artifact escapes fresh build: " + name)
+        artifact_paths[name] = artifact
+        sources = []
+        for source in document.get("sources", []):
+            path = Path(source["path"])
+            if not path.is_absolute():
+                path = (source_root if not str(path).startswith("CMakeFiles/")
+                        else build_root) / path
+            tag = tagged_path(path, source_root, build_root)
+            compiled = "compileGroupIndex" in source
+            sources.append({"path": tag, "compiled": compiled})
+            if compiled:
+                require(tag.startswith("@source/"),
+                        "relevant compiled source is not Git-backed: " + tag)
+                relevant_units.add(tag[len("@source/"):])
+        dependencies = [id_to_name.get(value.get("id"))
+                        for value in document.get("dependencies", [])]
+        require(all(isinstance(value, str) and value for value in dependencies),
+                "unresolved CMake target dependency: " + name)
+        dependencies.sort()
+        link = document.get("link")
+        normalized_link = None
+        if link is not None:
+            fragments = link.get("commandFragments")
+            require(isinstance(fragments, list), "CMake link fragments: " + name)
+            normalized_fragments = []
+            for value in fragments:
+                role = value.get("role")
+                fragment = str(value.get("fragment", ""))
+                if role == "libraries":
+                    tokens = shlex.split(fragment)
+                    require(len(tokens) == 1,
+                            "CMake library fragment must be one path: " + name)
+                    fragment = tagged_path(resolve_recipe_path(
+                        tokens[0], build_root), source_root, build_root)
+                else:
+                    fragment = normalize_command(
+                        [fragment], source_root, build_root, {})[0]
+                normalized_fragments.append({"role": role,
+                                             "fragment": fragment})
+            normalized_link = {
+                "language": link.get("language"),
+                "fragments": normalized_fragments,
+            }
+        targets[name] = {
+            "type": document.get("type"),
+            "artifact": tagged_path(artifact, source_root, build_root),
+            "dependencies": dependencies,
+            "sources": sorted(sources, key=lambda value: (
+                value["path"], value["compiled"])),
+            "link": normalized_link,
+        }
+    require(relevant_units == set(BUILD_TRANSLATION_UNITS),
+            "evidence target translation-unit closure mismatch")
+    require(targets["bench_leopard2"]["type"] == "EXECUTABLE" and
+            targets["bench_leopard2"]["dependencies"] == ["libleopard"],
+            "benchmark target dependency identity")
+    require(targets["libleopard"]["type"] == "STATIC_LIBRARY" and
+            targets["libleopard"]["dependencies"] ==
+            ["leopard2_backend_avx2", "leopard2_backend_ssse3"],
+            "library target dependency identity")
+    require(all(targets[name]["type"] == "OBJECT_LIBRARY" and
+                targets[name]["dependencies"] == []
+                for name in ("leopard2_backend_ssse3", "leopard2_backend_avx2")),
+            "backend object-target identity")
+    record = {
+        "configured_translation_units": sorted(configured_units),
+        "targets": targets,
+        "index_sha256": sha256_file(indexes[0]),
+        "codemodel_sha256": sha256_file(codemodel_path),
+    }
+    record["digest"] = sha256_bytes(canonical_bytes(record))
+    return artifact_paths, record
+
+
+def fresh_rebuild(source_root, template_cache, fresh_root, jobs):
     source_root = Path(source_root).resolve()
-    cmake_cache = Path(cmake_cache).resolve()
-    build_root = cmake_cache.parent
-    values = cache_values(cmake_cache)
+    template_cache = Path(template_cache).resolve()
+    build_root = Path(fresh_root).resolve()
+    values = cache_values(template_cache)
     require(Path(values.get("CMAKE_HOME_DIRECTORY", "")).resolve() == source_root,
             "CMake cache/source-root mismatch")
     require(values.get("CMAKE_BUILD_TYPE") == "Release",
@@ -938,54 +1192,94 @@ def clean_rebuild(source_root, cmake_cache, jobs):
             "evidence build omits benchmarks")
     require(values.get("CMAKE_EXPORT_COMPILE_COMMANDS") in ("ON", "1", "TRUE"),
             "evidence build omits compile commands")
+    require(values.get("LEO2_BUILD_TESTS") in ("OFF", "0", "FALSE", ""),
+            "evidence build must disable test hooks")
+    require(values.get("LEO2_BUILD_FUZZERS") in ("OFF", "0", "FALSE", ""),
+            "evidence build must disable fuzzers")
     require(isinstance(jobs, int) and 1 <= jobs <= 128,
             "build jobs must be in [1,128]")
     cmake_value = values.get("CMAKE_COMMAND")
     require(cmake_value, "CMake cache omits CMAKE_COMMAND")
     cmake = Path(cmake_value).resolve()
     require(cmake.is_file(), "cached CMake executable is missing")
-    argv = [str(cmake), "--build", str(build_root), "--clean-first",
-            "--parallel", str(jobs), "--target", "libleopard", "bench_leopard2"]
-    completed = subprocess.run(
-        argv, cwd=str(build_root), stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, check=False)
-    require(completed.returncode == 0,
-            "clean evidence rebuild failed rc={}: {}".format(
-                completed.returncode,
-                completed.stderr.decode("utf-8", "replace").strip()))
+    require(not build_root.exists(), "fresh build root already exists")
+    query = build_root / ".cmake/api/v1/query"
+    query.mkdir(parents=True)
+    (query / "codemodel-v2").write_bytes(b"")
+    generator = values.get("CMAKE_GENERATOR")
+    require(generator, "template cache omits CMake generator")
+    configure = [str(cmake), "-S", str(source_root), "-B", str(build_root),
+                 "-G", generator]
+    for key in CONFIGURATION_KEYS:
+        if key == "CMAKE_GENERATOR":
+            continue
+        require(key in values, "template cache omits configuration key: " + key)
+        configure.append("-D{}={}".format(key, values[key]))
+    configure.extend([
+        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+        "-DCMAKE_C_COMPILER={}".format(values.get("CMAKE_C_COMPILER", "")),
+        "-DCMAKE_CXX_COMPILER={}".format(values.get("CMAKE_CXX_COMPILER", "")),
+        "-DCMAKE_AR={}".format(values.get("CMAKE_AR", "")),
+        "-DCMAKE_RANLIB={}".format(values.get("CMAKE_RANLIB", "")),
+        "-DCMAKE_MAKE_PROGRAM={}".format(values.get("CMAKE_MAKE_PROGRAM", "")),
+    ])
+    logical_configure = normalize_command(
+        configure, source_root, build_root, {"cmake": cmake})
+    logical_configure[0] = "@tool/cmake"
+    configure_record = command_evidence(
+        configure, source_root, "fresh CMake configure", logical_configure,
+        FRESH_BUILD_ENVIRONMENT)
+    artifacts, target_graph = file_api_targets(source_root, build_root)
+    argv = [str(cmake), "--build", str(build_root), "--parallel", str(jobs),
+            "--target", "libleopard", "bench_leopard2"]
+    logical_argv = ["@tool/cmake", "--build", "@build", "--parallel",
+                    str(jobs), "--target", "libleopard", "bench_leopard2"]
+    build_record = command_evidence(
+        argv, build_root, "fresh evidence build", logical_argv,
+        FRESH_BUILD_ENVIRONMENT)
     version = command_output([str(cmake), "--version"], cmake.parent,
                              "cmake --version").decode("utf-8", "replace")
-    logical_argv = ["@cmake", "--build", "@build", "--clean-first",
-                    "--parallel", str(jobs), "--target",
-                    "libleopard", "bench_leopard2"]
-    return {
-        "argv": logical_argv,
-        "command_sha256": sha256_bytes(canonical_bytes(logical_argv)),
+    rebuild = {
+        "isolation": "new-empty-shadow-build",
+        "environment": FRESH_BUILD_ENVIRONMENT,
+        "configure": configure_record,
+        "build": build_record,
         "cmake_binary_sha256": sha256_file(cmake),
         "cmake_version": version,
         "cmake_version_sha256": sha256_bytes(version.encode("utf-8")),
-        "stdout_sha256": sha256_bytes(completed.stdout),
-        "stderr_sha256": sha256_bytes(completed.stderr),
-        "returncode": completed.returncode,
+    }
+    return {
+        "build_root": build_root,
+        "compile_commands": build_root / "compile_commands.json",
+        "cmake_cache": build_root / "CMakeCache.txt",
+        "library": artifacts["libleopard"],
+        "binary": artifacts["bench_leopard2"],
+        "target_graph": target_graph,
+        "rebuild": rebuild,
     }
 
 
 def self_test_rebuild_record(jobs, cmake_path):
-    logical_argv = ["@cmake", "--build", "@build", "--clean-first",
-                    "--parallel", str(jobs), "--target",
-                    "libleopard", "bench_leopard2"]
+    configure_argv = ["@tool/cmake", "-S", "@source", "-B", "@build"]
+    build_argv = ["@tool/cmake", "--build", "@build", "--parallel",
+                  str(jobs), "--target", "libleopard", "bench_leopard2"]
     _, cmake = executable_identity(cmake_path, "cmake", "CMAKE_COMMAND")
     version = cmake["version"]
     empty_digest = sha256_bytes(b"")
+    def record(argv):
+        return {"argv": argv,
+                "command_sha256": sha256_bytes(canonical_bytes(argv)),
+                "stdout_sha256": empty_digest,
+                "stderr_sha256": empty_digest,
+                "returncode": 0}
     return {
-        "argv": logical_argv,
-        "command_sha256": sha256_bytes(canonical_bytes(logical_argv)),
+        "isolation": "new-empty-shadow-build",
+        "environment": FRESH_BUILD_ENVIRONMENT,
+        "configure": record(configure_argv),
+        "build": record(build_argv),
         "cmake_binary_sha256": cmake["binary_sha256"],
         "cmake_version": version,
         "cmake_version_sha256": sha256_bytes(version.encode("utf-8")),
-        "stdout_sha256": empty_digest,
-        "stderr_sha256": empty_digest,
-        "returncode": 0,
     }
 
 
@@ -1013,13 +1307,147 @@ def normalized_configuration(values, source_root, build_root, tool_paths):
             "evidence build must use runtime backend dispatch")
     require(configuration["LEO2_BUILD_BENCHMARKS"] in ("ON", "1", "TRUE"),
             "evidence build omits benchmarks")
+    require(configuration["LEO2_BUILD_TESTS"] in ("OFF", "0", "FALSE", "") and
+            configuration["LEO2_BUILD_FUZZERS"] in ("OFF", "0", "FALSE", ""),
+            "evidence build must not contain tests/fuzzers or test hooks")
     require(configuration["LEO2_ENABLE_CUDA"] in ("OFF", "0", "FALSE", ""),
             "butterfly evidence must not include optional CUDA")
     return configuration
 
 
+def resolve_recipe_path(value, directory):
+    path = Path(value)
+    if not path.is_absolute():
+        path = directory / path
+    return path.resolve()
+
+
+def literal_link_recipes(source_root, build_root, tool_paths, compile_entries,
+                         library, binary):
+    library_recipe_path = build_root / "CMakeFiles/libleopard.dir/link.txt"
+    benchmark_recipe_path = build_root / "CMakeFiles/bench_leopard2.dir/link.txt"
+    require(library_recipe_path.is_file() and benchmark_recipe_path.is_file(),
+            "evidence collection requires CMake literal link.txt recipes")
+    library_lines = [shlex.split(value) for value in
+                     library_recipe_path.read_text(encoding="utf-8").splitlines()
+                     if value.strip()]
+    benchmark_lines = [shlex.split(value) for value in
+                       benchmark_recipe_path.read_text(encoding="utf-8").splitlines()
+                       if value.strip()]
+    require(len(library_lines) == 2 and len(benchmark_lines) == 1,
+            "unexpected CMake archive/link recipe shape")
+    archive, index = library_lines
+    require(command_executable(archive[0], build_root) == tool_paths["ar"] and
+            len(archive) >= 4 and archive[1] in ("qc", "rc", "rcs"),
+            "static-library recipe does not use captured CMAKE_AR")
+    require(resolve_recipe_path(archive[2], build_root) == library,
+            "static-library recipe output is not target artifact")
+    expected_objects = {
+        value[1].resolve() for relative, value in compile_entries.items()
+        if relative != "bench/leopard2/benchmark.cpp"
+    }
+    recipe_objects = {resolve_recipe_path(value, build_root)
+                      for value in archive[3:]}
+    require(len(recipe_objects) == len(archive[3:]) and
+            recipe_objects == expected_objects,
+            "static-library recipe object set mismatch")
+    require(len(index) == 2 and
+            command_executable(index[0], build_root) == tool_paths["ranlib"] and
+            resolve_recipe_path(index[1], build_root) == library,
+            "static-library index recipe does not use captured CMAKE_RANLIB")
+
+    link = benchmark_lines[0]
+    require(command_executable(link[0], build_root) == tool_paths["cxx"],
+            "benchmark link recipe does not use captured C++ driver")
+    require(all(not value.startswith("@") and ",@" not in value for value in link),
+            "response-file link recipes are not accepted")
+    require(command_output_path(link, build_root) == binary,
+            "benchmark recipe output is not target artifact")
+    benchmark_object = compile_entries["bench/leopard2/benchmark.cpp"][1].resolve()
+    resolved_file_inputs = []
+    external_inputs = []
+    output_indices = set()
+    for index_value, value in enumerate(link):
+        if value == "-o" and index_value + 1 < len(link):
+            output_indices.add(index_value + 1)
+        elif value.startswith("-o") and len(value) > 2:
+            output_indices.add(index_value)
+    for index_value, value in enumerate(link[1:], 1):
+        if index_value in output_indices or value.startswith("-"):
+            continue
+        path = resolve_recipe_path(value, build_root)
+        if not path.is_file():
+            continue
+        resolved_file_inputs.append(path)
+        if relative_to(path, build_root) is None:
+            require(relative_to(path, source_root) is None,
+                    "benchmark links a source-tree file directly")
+            external_inputs.append({"path": tagged_path(path, source_root, build_root),
+                                    "sha256": sha256_file(path)})
+    require(resolved_file_inputs.count(benchmark_object) == 1 and
+            resolved_file_inputs.count(library) == 1,
+            "benchmark link inputs omit or duplicate target object/archive")
+    build_inputs = {path for path in resolved_file_inputs
+                    if relative_to(path, build_root) is not None}
+    require(build_inputs == {benchmark_object, library},
+            "benchmark link recipe contains an unexpected build input")
+
+    def normalized_recipe(line, logical_tool):
+        result = list(line)
+        result[0] = "@tool/" + logical_tool
+        for index_value, value in enumerate(result[1:], 1):
+            if value.startswith("-"):
+                continue
+            candidate = resolve_recipe_path(value, build_root)
+            if candidate.exists() or (index_value > 0 and
+                                      result[index_value - 1] == "-o"):
+                result[index_value] = tagged_path(
+                    candidate, source_root, build_root)
+        return result
+
+    recipes = {
+        "library": [normalized_recipe(library_lines[0], "ar"),
+                    normalized_recipe(library_lines[1], "ranlib")],
+        "benchmark": [normalized_recipe(link, "cxx")],
+        "external_link_inputs": sorted(
+            external_inputs, key=lambda value: value["path"]),
+        "library_recipe_sha256": sha256_file(library_recipe_path),
+        "benchmark_recipe_sha256": sha256_file(benchmark_recipe_path),
+    }
+    recipes["digest"] = sha256_bytes(canonical_bytes(recipes))
+    return recipes, expected_objects
+
+
+def archive_manifest(library, ar_tool, expected_objects):
+    listing = command_output([str(ar_tool), "t", str(library)], library.parent,
+                             "archive member listing").decode("utf-8").splitlines()
+    require(listing and len(listing) == len(set(listing)),
+            "archive is empty or has duplicate member names")
+    expected_by_name = {}
+    for path in expected_objects:
+        require(path.name not in expected_by_name,
+                "expected archive objects have duplicate basenames")
+        expected_by_name[path.name] = path
+    require(set(listing) == set(expected_by_name),
+            "archive member set differs from target object recipe")
+    members = []
+    for name in listing:
+        raw = command_output([str(ar_tool), "p", str(library), name],
+                             library.parent, "archive member extraction")
+        object_path = expected_by_name[name]
+        require(sha256_bytes(raw) == sha256_file(object_path),
+                "archive member differs from freshly built object: " + name)
+        members.append({"name": name,
+                        "object": "@build/" +
+                        object_path.relative_to(library.parent).as_posix(),
+                        "sha256": sha256_bytes(raw)})
+    result = {"members": members, "member_count": len(members)}
+    result["digest"] = sha256_bytes(canonical_bytes(result))
+    return result
+
+
 def build_record(source_root, source_identity, compile_commands, cmake_cache,
-                 library, binary, rebuild):
+                 library, binary, rebuild, target_graph):
     source_root = Path(source_root).resolve()
     compile_commands = Path(compile_commands).resolve()
     cmake_cache = Path(cmake_cache).resolve()
@@ -1041,20 +1469,28 @@ def build_record(source_root, source_identity, compile_commands, cmake_cache,
     require(Path(values.get("CMAKE_HOME_DIRECTORY", "")).resolve() == source_root,
             "CMake cache/source-root mismatch")
     tool_paths, tools = cache_tools(cmake_cache)
-    by_file = {}
+    all_by_file = {}
     for entry in document:
         relative, normalized = normalized_compile_entry(
             entry, source_root, build_root, tool_paths)
-        if relative in BUILD_TRANSLATION_UNITS:
-            require(relative not in by_file,
-                    "duplicate compile command for " + relative)
-            by_file[relative] = normalized
+        require(relative not in all_by_file,
+                "duplicate compile command for " + relative)
+        all_by_file[relative] = normalized
+    require(set(all_by_file) == set(CONFIGURED_TRANSLATION_UNITS),
+            "configured compile-command set mismatch: missing={} extra={}".format(
+                sorted(set(CONFIGURED_TRANSLATION_UNITS) - set(all_by_file)),
+                sorted(set(all_by_file) - set(CONFIGURED_TRANSLATION_UNITS))))
+    by_file = {relative: all_by_file[relative]
+               for relative in BUILD_TRANSLATION_UNITS}
     require(set(by_file) == set(BUILD_TRANSLATION_UNITS),
             "compile command translation-unit set mismatch: missing={} extra={}".format(
                 sorted(set(BUILD_TRANSLATION_UNITS) - set(by_file)),
                 sorted(set(by_file) - set(BUILD_TRANSLATION_UNITS))))
     commands = {relative: by_file[relative][0]
                 for relative in sorted(by_file)}
+    recipes, expected_objects = literal_link_recipes(
+        source_root, build_root, tool_paths, by_file, library, binary)
+    archive = archive_manifest(library, tool_paths["ar"], expected_objects)
     record = {
         "source": source_identity,
         "configuration": normalized_configuration(
@@ -1065,8 +1501,12 @@ def build_record(source_root, source_identity, compile_commands, cmake_cache,
         },
         "tools": tools,
         "translation_units": commands,
+        "configured_translation_units": sorted(all_by_file),
         "dependency_closure": dependency_closure(
             by_file, source_root, build_root),
+        "target_graph": target_graph,
+        "link_recipes": recipes,
+        "archive": archive,
         "rebuild": rebuild,
         "artifacts": {
             "library_sha256": sha256_file(library),
@@ -1080,8 +1520,9 @@ def build_record(source_root, source_identity, compile_commands, cmake_cache,
 def validate_build_record(record, repo):
     expected_keys = {
         "source", "configuration", "build_input_files", "tools",
-        "translation_units",
-        "dependency_closure", "rebuild", "artifacts", "digest",
+        "translation_units", "configured_translation_units",
+        "dependency_closure", "target_graph", "link_recipes", "archive",
+        "rebuild", "artifacts", "digest",
     }
     require(set(record) == expected_keys, "build record keys")
     payload = dict(record)
@@ -1101,6 +1542,8 @@ def validate_build_record(record, repo):
             configuration["CMAKE_BUILD_TYPE"] == "Release" and
             configuration["LEO2_BACKEND_VARIANT"] == "auto" and
             configuration["LEO2_BUILD_BENCHMARKS"] in ("ON", "1", "TRUE") and
+            configuration["LEO2_BUILD_TESTS"] in ("OFF", "0", "FALSE", "") and
+            configuration["LEO2_BUILD_FUZZERS"] in ("OFF", "0", "FALSE", "") and
             configuration["LEO2_ENABLE_CUDA"] in ("OFF", "0", "FALSE", ""),
             "configuration identity")
     require(set(record["build_input_files"]) == {
@@ -1143,6 +1586,9 @@ def validate_build_record(record, repo):
         command_digest = payload.pop("command_sha256")
         require(sha256_bytes(canonical_bytes(payload)) == command_digest,
                 "translation-unit command digest: " + relative)
+    require(record["configured_translation_units"] ==
+            sorted(CONFIGURED_TRANSLATION_UNITS),
+            "configured translation-unit closure")
     require(set(record["artifacts"]) == {
         "library_sha256", "benchmark_sha256"}, "build artifact key set")
     closure = record["dependency_closure"]
@@ -1198,20 +1644,137 @@ def validate_build_record(record, repo):
     require(isinstance(closure["source_file_count"], int) and
             len(BUILD_TRANSLATION_UNITS) <= closure["source_file_count"] <=
             closure["file_count"], "dependency-closure source count")
+
+    target_graph = record["target_graph"]
+    require(set(target_graph) == {"configured_translation_units", "targets",
+                                 "index_sha256", "codemodel_sha256", "digest"},
+            "target graph key set")
+    graph_payload = dict(target_graph)
+    graph_digest = graph_payload.pop("digest")
+    require(sha256_bytes(canonical_bytes(graph_payload)) == graph_digest and
+            target_graph["configured_translation_units"] ==
+            sorted(CONFIGURED_TRANSLATION_UNITS) and
+            set(target_graph["targets"]) == set(RELEVANT_TARGETS),
+            "target graph identity")
+    targets = target_graph["targets"]
+    require(targets["bench_leopard2"]["type"] == "EXECUTABLE" and
+            targets["bench_leopard2"]["artifact"] == "@build/bench_leopard2" and
+            targets["bench_leopard2"]["dependencies"] == ["libleopard"] and
+            targets["libleopard"]["type"] == "STATIC_LIBRARY" and
+            targets["libleopard"]["artifact"] == "@build/liblibleopard.a" and
+            targets["libleopard"]["dependencies"] ==
+            ["leopard2_backend_avx2", "leopard2_backend_ssse3"],
+            "target dependency graph")
+    compiled_target_sources = set()
+    for name, target in targets.items():
+        require(set(target) == {"type", "artifact", "dependencies", "sources",
+                               "link"} and
+                target["artifact"].startswith("@build/") and
+                isinstance(target["sources"], list),
+                "target record: " + name)
+        for source in target["sources"]:
+            require(set(source) == {"path", "compiled"} and
+                    isinstance(source["compiled"], bool),
+                    "target source record: " + name)
+            if source["compiled"]:
+                require(source["path"].startswith("@source/"),
+                        "compiled target source is not Git-backed")
+                compiled_target_sources.add(source["path"][len("@source/"):])
+    require(compiled_target_sources == set(BUILD_TRANSLATION_UNITS),
+            "target compiled-source closure")
+
+    recipes = record["link_recipes"]
+    require(set(recipes) == {"library", "benchmark", "external_link_inputs",
+                            "library_recipe_sha256", "benchmark_recipe_sha256",
+                            "digest"}, "link recipe key set")
+    recipe_payload = dict(recipes)
+    recipe_digest = recipe_payload.pop("digest")
+    require(sha256_bytes(canonical_bytes(recipe_payload)) == recipe_digest and
+            len(recipes["library"]) == 2 and len(recipes["benchmark"]) == 1 and
+            recipes["library"][0][0] == "@tool/ar" and
+            recipes["library"][1][0] == "@tool/ranlib" and
+            recipes["benchmark"][0][0] == "@tool/cxx",
+            "literal archive/link recipe identity")
+    library_command = recipes["library"][0]
+    require(len(library_command) >= 4 and library_command[1] in ("qc", "rc", "rcs") and
+            library_command[2] == "@build/liblibleopard.a",
+            "literal archive output recipe")
+    expected_library_objects = {
+        entry["output"] for relative, entry in units.items()
+        if relative != "bench/leopard2/benchmark.cpp"}
+    require(len(library_command[3:]) == len(set(library_command[3:])) and
+            set(library_command[3:]) == expected_library_objects and
+            recipes["library"][1] ==
+            ["@tool/ranlib", "@build/liblibleopard.a"],
+            "literal archive object/index closure")
+    benchmark_command = recipes["benchmark"][0]
+    expected_benchmark_object = units[
+        "bench/leopard2/benchmark.cpp"]["output"]
+    require(benchmark_command.count(expected_benchmark_object) == 1 and
+            benchmark_command.count("@build/liblibleopard.a") == 1 and
+            benchmark_command.count("@build/bench_leopard2") == 1,
+            "literal benchmark target input/output closure")
+    allowed_build_tokens = {expected_benchmark_object,
+                            "@build/liblibleopard.a", "@build/bench_leopard2"}
+    require(all(not token.startswith("@build/") or token in allowed_build_tokens
+                for token in benchmark_command),
+            "literal benchmark recipe has an unexpected build input")
+    for external in recipes["external_link_inputs"]:
+        require(set(external) == {"path", "sha256"} and
+                external["path"].startswith("@external/") and
+                re.fullmatch(r"[0-9a-f]{64}", external["sha256"]) is not None,
+                "external link input identity")
+    file_api_libraries = [
+        value["fragment"]
+        for value in targets["bench_leopard2"]["link"]["fragments"]
+        if value["role"] == "libraries"]
+    require(file_api_libraries.count("@build/liblibleopard.a") == 1,
+            "CMake File API benchmark library target binding")
+    expected_external_links = sorted(
+        value for value in file_api_libraries if value.startswith("@external/"))
+    require(expected_external_links == sorted(
+        value["path"] for value in recipes["external_link_inputs"]),
+        "literal link external inputs differ from CMake target metadata")
+
+    archive = record["archive"]
+    require(set(archive) == {"members", "member_count", "digest"},
+            "archive manifest key set")
+    archive_payload = dict(archive)
+    archive_digest = archive_payload.pop("digest")
+    require(sha256_bytes(canonical_bytes(archive_payload)) == archive_digest and
+            archive["member_count"] == len(archive["members"]) ==
+            len(BUILD_TRANSLATION_UNITS) - 1,
+            "archive manifest identity")
+    member_names = []
+    for member in archive["members"]:
+        require(set(member) == {"name", "object", "sha256"} and
+                member["object"].startswith("@build/") and
+                re.fullmatch(r"[0-9a-f]{64}", member["sha256"]) is not None,
+                "archive member identity")
+        member_names.append(member["name"])
+    require(len(member_names) == len(set(member_names)),
+            "duplicate archive member identity")
     rebuild = record["rebuild"]
-    require(set(rebuild) == {
-        "argv", "command_sha256", "cmake_binary_sha256",
-        "cmake_version", "cmake_version_sha256", "stdout_sha256",
-        "stderr_sha256", "returncode"}, "rebuild key set")
-    require(rebuild["returncode"] == 0, "rebuild return code")
-    require(isinstance(rebuild["argv"], list) and len(rebuild["argv"]) == 9 and
-            rebuild["argv"][:5] == ["@cmake", "--build", "@build",
-                                           "--clean-first", "--parallel"] and
-            rebuild["argv"][6:] == ["--target", "libleopard", "bench_leopard2"] and
-            rebuild["argv"][5].isdigit() and 1 <= int(rebuild["argv"][5]) <= 128,
-            "rebuild command identity")
-    require(sha256_bytes(canonical_bytes(rebuild["argv"])) ==
-            rebuild["command_sha256"], "rebuild command digest")
+    require(set(rebuild) == {"isolation", "environment", "configure", "build",
+                            "cmake_binary_sha256", "cmake_version",
+                            "cmake_version_sha256"} and
+            rebuild["isolation"] == "new-empty-shadow-build",
+            "rebuild key/isolation identity")
+    require(rebuild["environment"] == FRESH_BUILD_ENVIRONMENT,
+            "fresh build environment identity")
+    for phase in ("configure", "build"):
+        command = rebuild[phase]
+        require(set(command) == {"argv", "command_sha256", "stdout_sha256",
+                                "stderr_sha256", "returncode"} and
+                command["returncode"] == 0 and
+                sha256_bytes(canonical_bytes(command["argv"])) ==
+                command["command_sha256"],
+                "rebuild {} command identity".format(phase))
+    build_argv = rebuild["build"]["argv"]
+    require(build_argv[:4] == ["@tool/cmake", "--build", "@build", "--parallel"] and
+            build_argv[5:] == ["--target", "libleopard", "bench_leopard2"] and
+            build_argv[4].isdigit() and 1 <= int(build_argv[4]) <= 128,
+            "fresh build argv")
     require(sha256_bytes(rebuild["cmake_version"].encode("utf-8")) ==
             rebuild["cmake_version_sha256"], "CMake version digest")
     require(rebuild["cmake_binary_sha256"] ==
@@ -1223,10 +1786,16 @@ def validate_build_record(record, repo):
             record["build_input_files"].get("CMakeCache.txt"),
             record["artifacts"].get("library_sha256"),
             record["artifacts"].get("benchmark_sha256"),
-            closure.get("manifest_sha256"), rebuild.get("command_sha256"),
+            closure.get("manifest_sha256"), target_graph.get("digest"),
+            recipes.get("digest"), archive.get("digest"),
+            rebuild["configure"].get("command_sha256"),
+            rebuild["build"].get("command_sha256"),
             rebuild.get("cmake_binary_sha256"),
             rebuild.get("cmake_version_sha256"),
-            rebuild.get("stdout_sha256"), rebuild.get("stderr_sha256")]:
+            rebuild["configure"].get("stdout_sha256"),
+            rebuild["configure"].get("stderr_sha256"),
+            rebuild["build"].get("stdout_sha256"),
+            rebuild["build"].get("stderr_sha256")]:
         require(re.fullmatch(r"[0-9a-f]{64}", value or "") is not None,
                 "build record SHA-256 format")
 
@@ -1242,7 +1811,6 @@ def validate_matrix_document(document, repo, candidate_commit):
     require(document.get("status") == "passed", "matrix status")
     require(document.get("source_changed_during_run") is False,
             "matrix source changed during run")
-    require(document.get("mismatches") == [], "matrix mismatches")
     fingerprint = document.get("source_fingerprint", {})
     files = fingerprint.get("files")
     require(isinstance(files, dict), "matrix source files")
@@ -1256,8 +1824,11 @@ def validate_matrix_document(document, repo, candidate_commit):
     require(sha256_bytes(canonical_bytes(files)) == fingerprint.get("digest"),
             "matrix source aggregate digest")
     compiler = document["compiler"]
-    require(set(compiler) == {"executable", "version", "version_sha256"} and
+    require(set(compiler) == {"executable", "binary_sha256", "version",
+                             "version_sha256"} and
             isinstance(compiler["executable"], str) and compiler["executable"] and
+            re.fullmatch(r"[0-9a-f]{64}",
+                         compiler["binary_sha256"]) is not None and
             sha256_bytes(compiler["version"].encode("utf-8")) ==
             compiler["version_sha256"], "matrix compiler identity")
     require(all(isinstance(document[key], int) and document[key] > 0
@@ -1274,11 +1845,73 @@ def validate_matrix_document(document, repo, candidate_commit):
     variant_names = [value.get("variant") for value in variants]
     require(sorted(variant_names) == ["auto", "avx2", "scalar", "ssse3"],
             "matrix must contain exactly auto/scalar/ssse3/avx2")
+    by_variant = {value.get("variant"): value for value in variants}
     for value in variants:
+        variant = value.get("variant")
+        expected_variant_keys = {
+            "configuration_id", "resumed", "schema", "source_fingerprint",
+            "variant", "fresh_build", "commands", "expected_runtime_backend",
+            "pin_cpu", "reason", "selected_cache_variant", "status", "tests",
+            "build_environment", "build_identity",
+        }
+        require(set(value) == expected_variant_keys,
+                "matrix variant key set: " + str(variant))
         require(value.get("schema") == "leopard2-backend-matrix/v1" and
                 value.get("status") == "passed" and
-                value.get("selected_cache_variant") == value.get("variant"),
+                value.get("selected_cache_variant") == variant and
+                value.get("reason") == "" and
+                isinstance(value.get("resumed"), bool) and
+                isinstance(value.get("pin_cpu"), int) and
+                isinstance(value.get("commands"), list) and value["commands"],
                 "matrix variant failed or misconfigured")
+        require(value.get("expected_runtime_backend") ==
+                (None if variant == "auto" else variant),
+                "matrix expected runtime backend: " + str(variant))
+        fresh = value.get("fresh_build")
+        require(isinstance(fresh, dict) and set(fresh) == {
+                    "configured_from_empty", "identity_sha256"} and
+                fresh["configured_from_empty"] is True and
+                re.fullmatch(r"[0-9a-f]{64}",
+                             fresh.get("identity_sha256", "")) is not None,
+                "matrix fresh-build identity: " + str(variant))
+        expected_environment = {
+            "LANG": "C", "LC_ALL": "C", "OMP_DYNAMIC": "FALSE",
+            "OMP_NUM_THREADS": "1", "PATH": "/usr/bin:/bin"}
+        if variant != "auto":
+            expected_environment["LEO2_EXPECT_BACKEND"] = variant
+        require(value.get("build_environment") == expected_environment,
+                "matrix build/test environment: " + str(variant))
+        identity = value.get("build_identity")
+        require(isinstance(identity, dict) and set(identity) == {
+                    "cache", "cache_sha256", "compile_commands",
+                    "compile_commands_sha256", "tools", "digest"} and
+                sha256_bytes(canonical_bytes(identity["cache"])) ==
+                identity["cache_sha256"] and
+                sha256_bytes(canonical_bytes(identity["compile_commands"])) ==
+                identity["compile_commands_sha256"],
+                "matrix exact build identity: " + str(variant))
+        identity_payload = dict(identity)
+        identity_digest = identity_payload.pop("digest")
+        require(sha256_bytes(canonical_bytes(identity_payload)) == identity_digest,
+                "matrix build identity digest: " + str(variant))
+        cache = identity["cache"]
+        require(cache.get("CMAKE_BUILD_TYPE") == "Release" and
+                cache.get("LEO2_BACKEND_VARIANT") == variant and
+                cache.get("LEO2_BUILD_TESTS") in ("ON", "1", "TRUE") and
+                cache.get("LEO2_BUILD_BENCHMARKS") in ("OFF", "0", "FALSE", "") and
+                cache.get("LEO2_BUILD_FUZZERS") in ("OFF", "0", "FALSE", "") and
+                cache.get("LEO2_ENABLE_CUDA") in ("OFF", "0", "FALSE", "") and
+                isinstance(identity["compile_commands"], list) and
+                identity["compile_commands"],
+                "matrix normalized CMake identity: " + str(variant))
+        tools = identity["tools"]
+        require(set(tools) == {"cmake", "ctest", "cxx"},
+                "matrix build tool identity set")
+        for tool in tools.values():
+            require(set(tool) == {"basename", "binary_sha256", "version_sha256"} and
+                    all(re.fullmatch(r"[0-9a-f]{64}", tool[key]) is not None
+                        for key in ("binary_sha256", "version_sha256")),
+                    "matrix build tool identity")
         require(value.get("source_fingerprint") == fingerprint["digest"],
                 "matrix variant source mismatch")
         tests = value.get("tests")
@@ -1296,6 +1929,49 @@ def validate_matrix_document(document, repo, candidate_commit):
                                  test.get("stderr_sha256", "")) is not None,
                     "matrix test failed: {} {}".format(
                         value.get("variant"), test_name))
+            if test_name in ("portable_isa", "cuda_optional"):
+                require(test.get("ctest_executed") is True,
+                        "matrix named CTest was not executed: {} {}".format(
+                            variant, test_name))
+            else:
+                require(re.fullmatch(r"[0-9a-f]{64}",
+                                     test.get("executable_sha256", "")) is not None,
+                        "matrix executable identity: {} {}".format(
+                            variant, test_name))
+
+    recomputed_mismatches = []
+    auto_tests = by_variant["auto"]["tests"]
+    for variant in sorted(set(by_variant) - {"auto"}):
+        for test_name in MATRIX_COMPARE_TESTS:
+            for stream in ("stdout", "stderr"):
+                key = stream + "_sha256"
+                expected_digest = auto_tests[test_name][key]
+                actual_digest = by_variant[variant]["tests"][test_name][key]
+                if actual_digest != expected_digest:
+                    recomputed_mismatches.append({
+                        "actual": actual_digest, "expected": expected_digest,
+                        "stream": stream, "test": test_name,
+                        "variant": variant,
+                    })
+    require(document.get("mismatches") == recomputed_mismatches,
+            "matrix mismatch set does not replay from test hashes")
+    require(recomputed_mismatches == [], "matrix backend outputs differ")
+
+
+def validate_declared_template_paths(args, build):
+    cache = Path(getattr(args, build + "_cmake_cache")).resolve()
+    root = cache.parent
+    expected = {
+        build + "_compile_commands": root / "compile_commands.json",
+        build + "_library": root / "liblibleopard.a",
+        build: root / "bench_leopard2",
+    }
+    for attribute, expected_path in expected.items():
+        supplied = Path(getattr(args, attribute)).resolve()
+        require(supplied == expected_path.resolve(),
+                "{} path substitution: expected canonical target path {}".format(
+                    attribute, expected_path))
+        require(supplied.is_file(), attribute + " template artifact is missing")
 
 
 def matrix_record(path, repo, candidate_commit):
@@ -1311,6 +1987,8 @@ def matrix_record(path, repo, candidate_commit):
 
 
 def reservation_record(path, cpu, sibling):
+    require(fcntl is not None,
+            "evidence collection requires Linux/POSIX fcntl file locking")
     path = Path(path).resolve()
     require(path.is_file(), "reservation file missing")
     handle = path.open("r+")
@@ -1498,7 +2176,7 @@ def validate_manifest(manifest_path, repo, raw_bundle_path=None,
     if raw_bundle_path is None:
         raw_bundle_path = manifest_path.parent / manifest["raw_bundle_file"]
     raw_bundle_path = Path(raw_bundle_path)
-    require(raw_bundle_path.is_file(), "portable raw evidence bundle missing")
+    require(raw_bundle_path.is_file(), "adjacent raw evidence bundle missing")
     raw_bundle_bytes = raw_bundle_path.read_bytes()
     require(sha256_bytes(raw_bundle_bytes) == manifest["raw_bundle_sha256"],
             "raw bundle digest mismatch")
@@ -1619,22 +2297,33 @@ def run_campaign(args, repo, allow_dirty=False, self_test=False):
     git_records = {
         build: git_record(source_roots[build], commits[build], not allow_dirty)
         for build in ("baseline", "candidate")}
-    binaries = {"baseline": Path(args.baseline).resolve(),
-                "candidate": Path(args.candidate).resolve()}
+    for build in ("baseline", "candidate"):
+        validate_declared_template_paths(args, build)
+    shadow_context = tempfile.TemporaryDirectory(
+        prefix="leo2-butterfly-fresh-builds-")
+    shadow_root = Path(shadow_context.name)
     if self_test:
-        rebuilds = {
-            build: self_test_rebuild_record(
-                args.build_jobs,
-                cache_values(getattr(args, build + "_cmake_cache"))["CMAKE_COMMAND"])
-            for build in ("baseline", "candidate")}
+        isolated = {}
+        for build in ("baseline", "candidate"):
+            artifacts = getattr(args, build + "_self_test_artifacts")
+            isolated[build] = {
+                "compile_commands": Path(getattr(args, build + "_compile_commands")),
+                "cmake_cache": Path(getattr(args, build + "_cmake_cache")),
+                "library": Path(getattr(args, build + "_library")),
+                "binary": Path(getattr(args, build)),
+                "target_graph": artifacts,
+                "rebuild": self_test_rebuild_record(
+                    args.build_jobs,
+                    cache_values(getattr(args, build + "_cmake_cache"))["CMAKE_COMMAND"]),
+            }
     else:
-        rebuilds = {
-            "baseline": clean_rebuild(
+        isolated = {
+            "baseline": fresh_rebuild(
                 source_roots["baseline"], args.baseline_cmake_cache,
-                args.build_jobs),
-            "candidate": clean_rebuild(
+                shadow_root / "baseline", args.build_jobs),
+            "candidate": fresh_rebuild(
                 source_roots["candidate"], args.candidate_cmake_cache,
-                args.build_jobs),
+                shadow_root / "candidate", args.build_jobs),
         }
         # A clean build must not have changed either declared source tree.
         for build in ("baseline", "candidate"):
@@ -1643,15 +2332,19 @@ def run_campaign(args, repo, allow_dirty=False, self_test=False):
     builds = {
         "baseline": build_record(
             source_roots["baseline"], git_records["baseline"],
-            args.baseline_compile_commands,
-            args.baseline_cmake_cache, args.baseline_library,
-            binaries["baseline"], rebuilds["baseline"]),
+            isolated["baseline"]["compile_commands"],
+            isolated["baseline"]["cmake_cache"], isolated["baseline"]["library"],
+            isolated["baseline"]["binary"], isolated["baseline"]["rebuild"],
+            isolated["baseline"]["target_graph"]),
         "candidate": build_record(
             source_roots["candidate"], git_records["candidate"],
-            args.candidate_compile_commands,
-            args.candidate_cmake_cache, args.candidate_library,
-            binaries["candidate"], rebuilds["candidate"]),
+            isolated["candidate"]["compile_commands"],
+            isolated["candidate"]["cmake_cache"], isolated["candidate"]["library"],
+            isolated["candidate"]["binary"], isolated["candidate"]["rebuild"],
+            isolated["candidate"]["target_graph"]),
     }
+    binaries = {build: isolated[build]["binary"].resolve()
+                for build in ("baseline", "candidate")}
     matrix_raw, matrix_info = matrix_record(
         args.matrix, repo, commits["candidate"])
     initial_affinity = sorted(os.sched_getaffinity(0))
@@ -1754,9 +2447,10 @@ def run_campaign(args, repo, allow_dirty=False, self_test=False):
         }
         raw_bundle_path = output_directory / "abba_raw.json"
         atomic_json(raw_bundle_path, bundle)
+        summary = summarize(entries, raw_by_name)
         manifest = {
             "schema": SCHEMA,
-            "status": "passed",
+            "status": "pending",
             "provenance": {
                 "runner_sha256": sha256_file(Path(__file__).resolve()),
                 "git": git_records,
@@ -1779,16 +2473,37 @@ def run_campaign(args, repo, allow_dirty=False, self_test=False):
             "raw_bundle_file": raw_bundle_path.name,
             "raw_bundle_sha256": sha256_file(raw_bundle_path),
             "raw_evidence_sha256": stable_raw_digest(entries),
-            "summary": summarize(entries, raw_by_name),
+            "summary": summary,
         }
         manifest_path = output_directory / "abba_manifest.json"
-        atomic_json(manifest_path, manifest)
-        validate_manifest(
-            manifest_path, repo, raw_bundle_path, binaries, args.matrix,
-            allow_self_test=self_test)
+        if not all(value[metric]["accepted"] for value in summary
+                   for metric in ("encode", "decode")):
+            manifest["status"] = "failed"
+            atomic_json(manifest_path, manifest)
+            raise EvidenceError(
+                "campaign performance failed its paired confidence bound; "
+                "a failed manifest was retained")
+        validation_path = output_directory / ".abba_manifest.validation.json"
+        manifest["status"] = "passed"
+        atomic_json(validation_path, manifest)
+        try:
+            validate_manifest(
+                validation_path, repo, raw_bundle_path, binaries, args.matrix,
+                allow_self_test=self_test)
+        except BaseException:
+            manifest["status"] = "failed"
+            atomic_json(manifest_path, manifest)
+            try:
+                validation_path.unlink()
+            except OSError:
+                pass
+            raise
+        os.replace(str(validation_path), str(manifest_path))
         return manifest
     finally:
         reservation_handle.close()
+        os.sched_setaffinity(0, set(initial_affinity))
+        shadow_context.cleanup()
 
 
 def git_file_hashes(repo, commit, relatives):
@@ -1814,8 +2529,10 @@ def setup(value):
  return {'minimum_us':value*.98,'median_us':value,'maximum_us':value*1.02,'mad_us':value*.01}
 resolved_profile='legacy_high_v1' if profile=='high' else 'low_v1'
 legacy_comparison='matched' if profile=='high' and byte_count%%64==0 else None
-parent=256 if field=='gf8' else 2048
-padded=16 if profile=='high' and field=='gf8' else 32 if field=='gf8' else 256 if profile=='high' else 128
+active=r if profile=='high' else k
+padded=1<<(active-1).bit_length()
+parent_input=k+padded if profile=='high' else padded+r
+parent=1<<(parent_input-1).bit_length()
 encode=rated(base*factor,'input_GB_per_s','parity_output_GB_per_s')
 decode=rated(base*2*factor,'offered_received_GB_per_s','repaired_output_GB_per_s')
 legacy_reason=None if legacy_comparison else ('old Leopard only defines the legacy high wire profile' if profile!='high' else 'old Leopard requires shard bytes divisible by 64')
@@ -1828,9 +2545,14 @@ print(json.dumps(out,sort_keys=True,allow_nan=False))
 
 def write_self_test_build_files(root, source_root, binary):
     compiler = Path(shutil.which("c++") or "/usr/bin/c++").resolve()
+    cc = Path(shutil.which("cc") or "/usr/bin/cc").resolve()
+    ar = Path(shutil.which("ar") or "/usr/bin/ar").resolve()
+    ranlib = Path(shutil.which("ranlib") or "/usr/bin/ranlib").resolve()
     compile_commands = []
-    for index, relative in enumerate(BUILD_TRANSLATION_UNITS):
-        output = root / (binary.name + "-{}.o".format(index))
+    outputs = {}
+    for index, relative in enumerate(CONFIGURED_TRANSLATION_UNITS):
+        output = root / ("unit-{}.o".format(index))
+        outputs[relative] = output
         output.write_bytes((relative + " object").encode("utf-8"))
         Path(str(output) + ".d").write_text(
             "{}: {}\n".format(output, source_root / relative),
@@ -1843,12 +2565,15 @@ def write_self_test_build_files(root, source_root, binary):
                 shlex.quote(str(source_root / relative)),
                 shlex.quote(str(output))),
         })
-    compile_path = root / (binary.name + "-compile_commands.json")
+    compile_path = root / "compile_commands.json"
     atomic_json(compile_path, compile_commands)
-    cache = root / (binary.name + "-CMakeCache.txt")
+    cache = root / "CMakeCache.txt"
     tool_values = {
         "CMAKE_COMMAND:INTERNAL": Path(shutil.which("cmake") or "/usr/bin/cmake").resolve(),
+        "CMAKE_C_COMPILER:FILEPATH": cc,
         "CMAKE_CXX_COMPILER:FILEPATH": compiler,
+        "CMAKE_AR:FILEPATH": ar,
+        "CMAKE_RANLIB:FILEPATH": ranlib,
         "CMAKE_CXX_COMPILER_AR:FILEPATH": Path(
             shutil.which("gcc-ar") or shutil.which("ar")).resolve(),
         "CMAKE_CXX_COMPILER_RANLIB:FILEPATH": Path(
@@ -1862,21 +2587,78 @@ def write_self_test_build_files(root, source_root, binary):
     cache_lines.extend([
         "CMAKE_BUILD_TYPE:STRING=Release",
         "CMAKE_CACHEFILE_DIR:INTERNAL={}".format(root),
+        "CMAKE_C_FLAGS:STRING=",
+        "CMAKE_C_FLAGS_RELEASE:STRING=-O3 -DNDEBUG",
         "CMAKE_CXX_FLAGS:STRING=",
         "CMAKE_CXX_FLAGS_RELEASE:STRING=-O3 -DNDEBUG",
+        "CMAKE_EXE_LINKER_FLAGS:STRING=",
+        "CMAKE_EXE_LINKER_FLAGS_RELEASE:STRING=",
+        "CMAKE_STATIC_LINKER_FLAGS:STRING=",
+        "CMAKE_STATIC_LINKER_FLAGS_RELEASE:STRING=",
         "CMAKE_EXPORT_COMPILE_COMMANDS:BOOL=ON",
         "CMAKE_GENERATOR:INTERNAL=Unix Makefiles",
         "CMAKE_HOME_DIRECTORY:INTERNAL={}".format(source_root),
+        "ENABLE_OPENMP:BOOL=ON",
         "LEO2_BACKEND_VARIANT:STRING=auto",
         "LEO2_BUILD_BENCHMARKS:BOOL=ON",
         "LEO2_BUILD_FUZZERS:BOOL=OFF",
-        "LEO2_BUILD_TESTS:BOOL=ON",
+        "LEO2_BUILD_TESTS:BOOL=OFF",
         "LEO2_ENABLE_CUDA:BOOL=OFF",
     ])
     cache.write_text("\n".join(cache_lines) + "\n", encoding="utf-8")
-    library = root / (binary.name + "-lib.a")
-    library.write_bytes((binary.name + " library").encode("ascii"))
-    return compile_path, cache, library
+    library = root / "liblibleopard.a"
+    archive_objects = [outputs[value] for value in BUILD_TRANSLATION_UNITS
+                       if value != "bench/leopard2/benchmark.cpp"]
+    command_output([str(ar), "rcs", str(library)] +
+                   [str(value) for value in archive_objects], root,
+                   "self-test archive")
+    library_link = root / "CMakeFiles/libleopard.dir/link.txt"
+    benchmark_link = root / "CMakeFiles/bench_leopard2.dir/link.txt"
+    library_link.parent.mkdir(parents=True)
+    benchmark_link.parent.mkdir(parents=True)
+    library_link.write_text(
+        "{} qc {} {}\n{} {}\n".format(
+            shlex.quote(str(ar)), shlex.quote(str(library)),
+            " ".join(shlex.quote(str(value)) for value in archive_objects),
+            shlex.quote(str(ranlib)), shlex.quote(str(library))),
+        encoding="utf-8")
+    benchmark_link.write_text(
+        "{} {} -o {} {}\n".format(
+            shlex.quote(str(compiler)),
+            shlex.quote(str(outputs["bench/leopard2/benchmark.cpp"])),
+            shlex.quote(str(binary)), shlex.quote(str(library))),
+        encoding="utf-8")
+
+    core = set(BUILD_TRANSLATION_UNITS) - {
+        "Leopard2BackendSSSE3.cpp", "Leopard2BackendAVX2.cpp",
+        "bench/leopard2/benchmark.cpp"}
+    def target(target_type, artifact, dependencies, compiled):
+        return {"type": target_type, "artifact": "@build/" + artifact.name,
+                "dependencies": dependencies,
+                "sources": [{"path": "@source/" + value, "compiled": True}
+                            for value in sorted(compiled)],
+                "link": None}
+    targets = {
+        "libleopard": target("STATIC_LIBRARY", library,
+                             ["leopard2_backend_avx2", "leopard2_backend_ssse3"], core),
+        "leopard2_backend_ssse3": target(
+            "OBJECT_LIBRARY", outputs["Leopard2BackendSSSE3.cpp"], [],
+            {"Leopard2BackendSSSE3.cpp"}),
+        "leopard2_backend_avx2": target(
+            "OBJECT_LIBRARY", outputs["Leopard2BackendAVX2.cpp"], [],
+            {"Leopard2BackendAVX2.cpp"}),
+        "bench_leopard2": target("EXECUTABLE", binary, ["libleopard"],
+                                  {"bench/leopard2/benchmark.cpp"}),
+    }
+    targets["bench_leopard2"]["link"] = {
+        "language": "CXX",
+        "fragments": [{"role": "libraries",
+                       "fragment": "@build/liblibleopard.a"}]}
+    graph = {"configured_translation_units": sorted(CONFIGURED_TRANSLATION_UNITS),
+             "targets": targets, "index_sha256": sha256_bytes(b"index"),
+             "codemodel_sha256": sha256_bytes(b"codemodel")}
+    graph["digest"] = sha256_bytes(canonical_bytes(graph))
+    return compile_path, cache, library, graph
 
 
 def coordinated_manifest_mutation(source_manifest, source_bundle, root, mutate):
@@ -1909,6 +2691,26 @@ def rehash_dependency_closure(closure):
         item["path"].startswith("@source/") for item in closure["manifest"])
     closure["manifest_sha256"] = sha256_bytes(
         canonical_bytes(closure["manifest"]))
+
+
+def rehash_nested_record(record):
+    payload = dict(record)
+    payload.pop("digest", None)
+    record["digest"] = sha256_bytes(canonical_bytes(payload))
+
+
+def recompute_self_test_summary(manifest, bundle):
+    raw_by_name = {}
+    entries = {value["name"]: value for value in manifest["entries"]}
+    missing_by_cell = {}
+    for name, item, _, _, _ in expected_jobs():
+        stdout, _ = decode_raw_record(bundle["raw"][name], name)
+        parsed = check_raw(
+            parse_json_bytes(stdout, "self-test summary " + name), item, name,
+            missing_by_cell.get(item["name"]))
+        missing_by_cell.setdefault(item["name"], parsed[2])
+        raw_by_name[name] = parsed[:2]
+    manifest["summary"] = summarize(list(entries.values()), raw_by_name)
 
 
 def mutate_raw_stdout(manifest, bundle, name, callback):
@@ -1966,12 +2768,18 @@ def self_test(repo):
         ["git", "rev-parse", "HEAD"], repo, "self-test HEAD").decode("ascii").strip()
     with tempfile.TemporaryDirectory(prefix="leo2-butterfly-runner-") as temporary:
         root = Path(temporary)
-        baseline = root / "baseline.py"
-        candidate = root / "candidate.py"
+        baseline_root = root / "baseline-build"
+        candidate_root = root / "candidate-build"
+        baseline_root.mkdir()
+        candidate_root.mkdir()
+        baseline = baseline_root / "bench_leopard2"
+        candidate = candidate_root / "bench_leopard2"
         write_mock(baseline, 1.0)
         write_mock(candidate, 0.8)
-        baseline_build = write_self_test_build_files(root, repo, baseline)
-        candidate_build = write_self_test_build_files(root, repo, candidate)
+        baseline_build = write_self_test_build_files(
+            baseline_root, repo, baseline)
+        candidate_build = write_self_test_build_files(
+            candidate_root, repo, candidate)
         fingerprint = git_file_hashes(repo, commit, MATRIX_SOURCE_FILES)
         empty_digest = sha256_bytes(b"")
         variants = []
@@ -1979,14 +2787,51 @@ def self_test(repo):
             test_names = set(MATRIX_COMPARE_TESTS) | {"portable_isa"}
             if value == "auto":
                 test_names.add("cuda_optional")
-            tests = {name: {"returncode": 0, "timed_out": False,
-                            "stdout_sha256": empty_digest,
-                            "stderr_sha256": empty_digest}
-                     for name in sorted(test_names)}
+            tests = {}
+            for name in sorted(test_names):
+                test = {"returncode": 0, "timed_out": False,
+                        "stdout_sha256": empty_digest,
+                        "stderr_sha256": empty_digest}
+                if name in ("portable_isa", "cuda_optional"):
+                    test["ctest_executed"] = True
+                else:
+                    test["executable_sha256"] = empty_digest
+                tests[name] = test
+            build_environment = {
+                "LANG": "C", "LC_ALL": "C", "OMP_DYNAMIC": "FALSE",
+                "OMP_NUM_THREADS": "1", "PATH": "/usr/bin:/bin"}
+            if value != "auto":
+                build_environment["LEO2_EXPECT_BACKEND"] = value
+            build_identity = {
+                "cache": {"CMAKE_BUILD_TYPE": "Release",
+                          "LEO2_BACKEND_VARIANT": value,
+                          "LEO2_BUILD_TESTS": "ON",
+                          "LEO2_BUILD_BENCHMARKS": "OFF",
+                          "LEO2_BUILD_FUZZERS": "OFF",
+                          "LEO2_ENABLE_CUDA": "OFF"},
+                "compile_commands": [{"file": "leopard2.cpp",
+                                      "command": "@tool/cxx -c @source/leopard2.cpp"}],
+                "tools": {name: {"basename": name,
+                                 "binary_sha256": empty_digest,
+                                 "version_sha256": empty_digest}
+                          for name in ("cmake", "ctest", "cxx")},
+            }
+            build_identity["cache_sha256"] = sha256_bytes(
+                canonical_bytes(build_identity["cache"]))
+            build_identity["compile_commands_sha256"] = sha256_bytes(
+                canonical_bytes(build_identity["compile_commands"]))
+            build_identity["digest"] = sha256_bytes(canonical_bytes(build_identity))
             variants.append({
-                "variant": value, "status": "passed",
+                "configuration_id": empty_digest, "resumed": False,
+                "variant": value, "status": "passed", "reason": "",
                 "schema": "leopard2-backend-matrix/v1",
                 "selected_cache_variant": value,
+                "expected_runtime_backend": None if value == "auto" else value,
+                "pin_cpu": cpu, "commands": [{"returncode": 0}],
+                "build_environment": build_environment,
+                "build_identity": build_identity,
+                "fresh_build": {"configured_from_empty": True,
+                                "identity_sha256": empty_digest},
                 "source_fingerprint": fingerprint["digest"],
                 "tests": tests,
             })
@@ -1997,6 +2842,7 @@ def self_test(repo):
         compiler_version = self_compiler["version"].strip()
         atomic_json(matrix, {
             "compiler": {"executable": self_compiler_path,
+                         "binary_sha256": self_compiler["binary_sha256"],
                          "version": compiler_version,
                          "version_sha256": sha256_bytes(
                              compiler_version.encode("utf-8"))},
@@ -2029,7 +2875,30 @@ def self_test(repo):
             matrix=matrix, output=output, cpu=cpu, reserved_sibling=sibling,
             reservation_file=reservation, build_jobs=1, timeout=30,
         )
+        args.baseline_self_test_artifacts = baseline_build[3]
+        args.candidate_self_test_artifacts = candidate_build[3]
         run_campaign(args, repo, allow_dirty=True, self_test=True)
+
+        slow_root = root / "slow-candidate-build"
+        slow_root.mkdir()
+        slow_candidate = slow_root / "bench_leopard2"
+        write_mock(slow_candidate, 1.25)
+        slow_build = write_self_test_build_files(slow_root, repo, slow_candidate)
+        slow_args = copy.copy(args)
+        slow_args.candidate = slow_candidate
+        slow_args.candidate_compile_commands = slow_build[0]
+        slow_args.candidate_cmake_cache = slow_build[1]
+        slow_args.candidate_library = slow_build[2]
+        slow_args.candidate_self_test_artifacts = slow_build[3]
+        slow_args.output = root / "failed-performance-evidence"
+        expect_failure(lambda: run_campaign(
+            slow_args, repo, allow_dirty=True, self_test=True),
+            "negative-performance campaign")
+        failed_manifest = read_json(
+            slow_args.output / "abba_manifest.json",
+            "negative-performance manifest")
+        require(failed_manifest.get("status") == "failed",
+                "negative-performance campaign published a passed manifest")
         manifest_path = output / "abba_manifest.json"
         bundle_path = output / "abba_raw.json"
         manifest = read_json(manifest_path, "self-test manifest")
@@ -2101,6 +2970,64 @@ def self_test(repo):
             rehash_build_record(build)
         mutations.append(("coordinated configuration", mutate_configuration))
 
+        def mutate_test_hooks(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+            build["configuration"]["LEO2_BUILD_TESTS"] = "ON"
+            rehash_build_record(build)
+        mutations.append(("test-hook build configuration", mutate_test_hooks))
+
+        def mutate_target_artifact(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+            graph = build["target_graph"]
+            graph["targets"]["bench_leopard2"]["artifact"] = \
+                "@build/copied-bench_leopard2"
+            rehash_nested_record(graph)
+            rehash_build_record(build)
+        mutations.append(("target artifact path substitution", mutate_target_artifact))
+
+        def mutate_extra_translation_unit(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+            build["configured_translation_units"].append("injected.cpp")
+            build["configured_translation_units"].sort()
+            rehash_build_record(build)
+        mutations.append(("extra configured translation unit", mutate_extra_translation_unit))
+
+        def mutate_archive_member(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+            archive = build["archive"]
+            archive["members"].append({"name": "injected.o",
+                                       "object": "@build/injected.o",
+                                       "sha256": "1" * 64})
+            archive["member_count"] += 1
+            rehash_nested_record(archive)
+            rehash_build_record(build)
+        mutations.append(("extra archive member", mutate_archive_member))
+
+        def mutate_link_recipe(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+            recipes = build["link_recipes"]
+            recipes["benchmark"][0].append("@build/injected.o")
+            rehash_nested_record(recipes)
+            rehash_build_record(build)
+        mutations.append(("extra benchmark link input", mutate_link_recipe))
+
+        def mutate_archive_tool(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+            recipes = build["link_recipes"]
+            recipes["library"][0][0] = "@tool/cxx_ar"
+            rehash_nested_record(recipes)
+            rehash_build_record(build)
+        mutations.append(("archive recipe tool substitution", mutate_archive_tool))
+
+        def mutate_rebuild_target(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+            command = build["rebuild"]["build"]
+            command["argv"][-1] = "copied_benchmark"
+            command["command_sha256"] = sha256_bytes(
+                canonical_bytes(command["argv"]))
+            rehash_build_record(build)
+        mutations.append(("fresh rebuild target substitution", mutate_rebuild_target))
+
         mutations.append(("git commit", lambda m, b:
                           m["provenance"]["git"]["baseline"].__setitem__(
                               "commit", "f" * 40)))
@@ -2121,6 +3048,62 @@ def self_test(repo):
                 document["variants"][0]["tests"]["backend_ops"]["returncode"] = 1
             mutate_embedded_matrix(m, b, callback)
         mutations.append(("coordinated matrix test", mutate_matrix_test))
+
+        def mutate_matrix_output_mismatch(m, b):
+            def callback(document):
+                scalar = next(value for value in document["variants"]
+                              if value["variant"] == "scalar")
+                scalar["tests"]["backend_ops"]["stdout_sha256"] = "2" * 64
+            mutate_embedded_matrix(m, b, callback)
+        mutations.append(("unreported backend output mismatch",
+                          mutate_matrix_output_mismatch))
+
+        def mutate_matrix_runtime_backend(m, b):
+            def callback(document):
+                scalar = next(value for value in document["variants"]
+                              if value["variant"] == "scalar")
+                scalar["expected_runtime_backend"] = "avx2"
+            mutate_embedded_matrix(m, b, callback)
+        mutations.append(("forced runtime backend identity",
+                          mutate_matrix_runtime_backend))
+
+        def mutate_cuda_not_executed(m, b):
+            def callback(document):
+                auto = next(value for value in document["variants"]
+                            if value["variant"] == "auto")
+                auto["tests"]["cuda_optional"]["ctest_executed"] = False
+            mutate_embedded_matrix(m, b, callback)
+        mutations.append(("CUDA optional CTest execution", mutate_cuda_not_executed))
+
+        def mutate_cuda_source_binding(m, b):
+            def callback(document):
+                files = document["source_fingerprint"]["files"]
+                files.pop("tests/cmake/test_cuda_optional.cmake")
+                digest = sha256_bytes(canonical_bytes(files))
+                document["source_fingerprint"]["digest"] = digest
+                for variant in document["variants"]:
+                    variant["source_fingerprint"] = digest
+            mutate_embedded_matrix(m, b, callback)
+        mutations.append(("CUDA optional source closure", mutate_cuda_source_binding))
+
+        def mutate_matrix_environment(m, b):
+            def callback(document):
+                document["variants"][0]["build_environment"]["LD_PRELOAD"] = \
+                    "/tmp/injected.so"
+            mutate_embedded_matrix(m, b, callback)
+        mutations.append(("matrix ambient environment injection",
+                          mutate_matrix_environment))
+
+        def mutate_matrix_build_identity(m, b):
+            def callback(document):
+                identity = document["variants"][0]["build_identity"]
+                identity["cache"]["CMAKE_CXX_FLAGS_RELEASE"] = "-O0"
+                identity["cache_sha256"] = sha256_bytes(
+                    canonical_bytes(identity["cache"]))
+                rehash_nested_record(identity)
+            mutate_embedded_matrix(m, b, callback)
+        mutations.append(("matrix coordinated build identity",
+                          mutate_matrix_build_identity))
 
         first_name = manifest["entries"][0]["name"]
         def mutate_profile(m, b):
@@ -2156,6 +3139,25 @@ def self_test(repo):
                           m["campaign"].__setitem__(
                               "target_threshold_percent", -99.0)))
 
+        def mutate_high_variance(m, b):
+            prefix = "high-gf8-r"
+            for entry in m["entries"]:
+                if (entry["name"].startswith(prefix) and
+                        entry["build"] == "candidate"):
+                    def widen(raw):
+                        for metric_name in ("encode_execution", "decode_execution"):
+                            metric = raw["metrics"][metric_name]
+                            median = metric["median_us_per_batch_call"]
+                            metric["minimum_us_per_batch_call"] = median * 0.1
+                            metric["maximum_us_per_batch_call"] = median * 1.9
+                            metric["mad_us_per_batch_call"] = median * 0.9
+                    mutate_raw_stdout(m, b, entry["name"], widen)
+            recompute_self_test_summary(m, b)
+            require(not next(value for value in m["summary"]
+                             if value["name"] == "high-gf8")["encode"]["accepted"],
+                    "high-variance fixture unexpectedly passed confidence gate")
+        mutations.append(("paired ABBA high-variance overlap", mutate_high_variance))
+
         for index, (label, mutation) in enumerate(mutations):
             mutated = root / ("mutation-{}".format(index))
             mutated.mkdir()
@@ -2163,20 +3165,66 @@ def self_test(repo):
                 manifest, bundle, mutated, mutation)
             expect_failure(lambda mp=mp, bp=bp: validate(mp, bp), label)
 
+        substituted = copy.copy(args)
+        copied_binary = candidate_root / "copied-bench_leopard2"
+        shutil.copy2(str(candidate), str(copied_binary))
+        substituted.candidate = copied_binary
+        expect_failure(lambda: validate_declared_template_paths(
+            substituted, "candidate"), "caller binary path substitution")
+
+        injected_object = candidate_root / "injected.o"
+        injected_object.write_bytes(b"injected archive object")
+        injected_archive = candidate_root / "injected-liblibleopard.a"
+        shutil.copy2(str(candidate_build[2]), str(injected_archive))
+        ar_tool = Path(cache_values(candidate_build[1])["CMAKE_AR"])
+        command_output([str(ar_tool), "q", str(injected_archive),
+                        str(injected_object)], candidate_root,
+                       "self-test archive injection")
+        compile_document = read_json(candidate_build[0], "self-test compile commands")
+        tool_paths, _ = cache_tools(candidate_build[1])
+        compiled = {}
+        for entry in compile_document:
+            relative, normalized = normalized_compile_entry(
+                entry, repo, candidate_root, tool_paths)
+            if relative in BUILD_TRANSLATION_UNITS:
+                compiled[relative] = normalized
+        expected_objects = {value[1] for relative, value in compiled.items()
+                            if relative != "bench/leopard2/benchmark.cpp"}
+        expect_failure(lambda: archive_manifest(
+            injected_archive, ar_tool, expected_objects),
+            "physical extra archive member")
+
+        outside = candidate_root / "injected.cpp"
+        outside.write_text("int injected;\n", encoding="utf-8")
+        injected_compile = candidate_root / "compile_commands.injected.json"
+        compile_document.append({
+            "directory": str(candidate_root), "file": str(outside),
+            "command": "{} -c {} -o {}".format(
+                shlex.quote(str(tool_paths["cxx"])), shlex.quote(str(outside)),
+                shlex.quote(str(candidate_root / "injected-extra.o"))),
+        })
+        atomic_json(injected_compile, compile_document)
+        expect_failure(lambda: build_record(
+            repo, manifest["provenance"]["git"]["candidate"],
+            injected_compile, candidate_build[1], candidate_build[2], candidate,
+            self_test_rebuild_record(1, cache_values(candidate_build[1])[
+                "CMAKE_COMMAND"]), candidate_build[3]),
+            "physical extra compile translation unit")
+
         missing = root / "missing-bundle"
         missing.mkdir()
         missing_manifest = missing / "abba_manifest.json"
         atomic_json(missing_manifest, manifest)
         expect_failure(lambda: validate(missing_manifest, missing / "absent.json"),
-                       "missing portable raw bundle")
+                       "missing adjacent raw bundle")
 
         noncanonical = root / "noncanonical-reservation.json"
         noncanonical.write_text(json.dumps(reservation_document, indent=2) + "\n",
                                 encoding="utf-8")
         expect_failure(lambda: reservation_record(noncanonical, cpu, sibling),
                        "noncanonical reservation")
-        mutation_count = len(mutations) + 2
-    print("butterfly ABBA v3 self-test passed: portable replay + {} adversarial mutations".format(
+        mutation_count = len(mutations) + 6
+    print("butterfly ABBA v3 self-test passed: path-independent replay + {} adversarial mutations".format(
         mutation_count))
 
 
@@ -2229,7 +3277,7 @@ def main():
                 supplied = {"baseline": args.baseline, "candidate": args.candidate}
             validate_manifest(args.manifest, repo, args.raw_bundle,
                               supplied, args.matrix)
-            print("butterfly ABBA v3 portable evidence replay passed")
+            print("butterfly ABBA v3 path-independent evidence replay passed")
         elif args.command == "self-test":
             self_test(repo)
         else:

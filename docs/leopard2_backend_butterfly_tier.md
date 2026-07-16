@@ -41,19 +41,19 @@ logarithm values and lengths around 16/32/64-byte vector boundaries through
 521 bytes. GF16 covers boundary logs, full ALTMAP tiles, and compact tails
 through 194 bytes. The accumulating input buffers are checked for immutability.
 
-Evidence collected on the 2026-07-16 x86 host:
+Pre-v3 implementation evidence collected earlier on the 2026-07-16 x86 host
+(these counts and hashes describe that checkpoint, not the final widened gate):
 
 - strict GCC 13.3 `-Wall -Wextra -Wpedantic -Werror`: 32/32 CTests passed;
 - ASan plus UBSan, halt-on-error with leak detection: 32/32 passed;
 - TSan under disabled ASLR: the 16-thread immutable-backend test completed
   1,024 executions and the four-profile encoder test completed 528 executions
   with no report;
-- four forced variants (`auto,scalar,ssse3,avx2`) passed all 19 deterministic
-  comparison tests, startup KATs, archive classification, and output matching;
-  source fingerprint
-  `ba4f96d2f38b79f76dc2ce8e4a81a5ab4670904c2945ba529132f42d0b6e2678`,
-  merged matrix SHA-256
-  `9594c8d4921ca472df1fec219753d4c2d5d5fd9717aec6647550bc0c8de18937`;
+- an older four-variant matrix passed the then-current comparison set. The
+  final gate is now 24 deterministic comparisons per backend plus four
+  portable-ISA CTests and the default build's CUDA-optional CTest: 101 named
+  executions total. Its final fingerprint and merged SHA-256 must come from a
+  fresh run and must not reuse obsolete pre-widening values;
 - the portable archive checker passed for Release and sanitizer builds. The
   sanitizer build exposed VEX `vmovd`; the exact move is now allowed because
   the existing runtime contract already proves AVX and OS-managed XMM/YMM
@@ -109,22 +109,48 @@ gate.
 
 ## Fail-closed v3 evidence gate
 
-The v3 runner retains an adjacent portable raw bundle for all 192 invocations:
-16 cells (GF8/GF16, high/low, 64 bytes, compact tails, 1 KiB, and the target
-large size), three A-B-B-A rounds, and both encode/decode metrics. Target cells
-must improve by at least 5%; every tiny and tail neighbor must remain within 2%
-of baseline. High-profile compact tails correctly report no old-API comparison,
-because the old API accepts only byte counts divisible by 64.
+The v3 runner retains an adjacent raw bundle for all 264 invocations: 22 cells,
+three A-B-B-A rounds, and both encode/decode metrics. The matrix includes GF8
+and GF16 high/low targets; 64-byte, compact-tail, and 1 KiB neighbors; balanced
+GF8/GF16 neighbors; and a second one-loss decode geometry for every high/low
+field regime. High-profile compact tails correctly report no old-API
+comparison, because the old API accepts only byte counts divisible by 64.
 
-Before timing, the runner performs a clean rebuild of each declared Git tree.
-It retains normalized compile commands for exactly the library and benchmark
-translation units, the full dependency manifest and per-unit edges, relevant
-CMake configuration, compiler/CMake/archive/link tool identities, rebuild
-recipe, and artifact hashes. Portable replay checks every source dependency
-against the declared Git commit, binds the candidate to the exact four-backend
-correctness matrix, reconstructs every statistic from raw stdout, and rejects
+Promotion uses a paired log-ratio for each A-B-B-A round. It reports the three
+round estimates and applies a one-sided 95% Student-t lower bound with two
+degrees of freedom. The uncertainty combines between-round variation with a
+conservative within-invocation estimate derived from each invocation's
+reported median, MAD, minimum, and maximum. The seven underlying samples are
+not retained or reconstructed. A target's lower bound must be at least 5%; a
+neighbor's lower bound must be at least -2%. High-variance or overlapping
+results fail even when their ratio of aggregate medians looks favorable.
+
+Before timing, the runner configures each declared Git tree into a new, empty,
+isolated shadow build. The caller-supplied executable/archive paths are strict
+compatibility assertions and are never selected for timing. CMake File API
+metadata derives the `libleopard` and `bench_leopard2` target artifacts and the
+complete target dependency/source graph. Collection rejects every unexpected
+configured translation unit. It captures literal CMake archive/link recipes,
+verifies that they use the actual `CMAKE_AR`, `CMAKE_RANLIB`, and C++ link
+driver, checks the exact archive member/object set byte-for-byte, and rejects
+unexpected benchmark link inputs.
+
+The record also retains normalized compile commands for exactly the target
+closure, the full dependency manifest and per-unit edges, relevant compile and
+link configuration (including OpenMP), compiler/CMake/tool identities, fresh
+configure/build recipes, and artifact hashes. Tests, fuzzers, CUDA, and test
+hooks are required off in both performance builds. Evidence is published with
+`status: passed` only after confidence thresholds and replay both succeed;
+failed performance leaves a `status: failed` manifest. Replay checks every
+source dependency against the declared Git commit, binds the candidate to the
+exact four-backend correctness matrix, reconstructs every campaign statistic
+from raw stdout, and rejects
 noncanonical or inconsistent reservation, topology, command, and campaign
-records. It also retains the CPU vendor/model/family/stepping/microcode,
+records. The prerequisite backend matrix likewise starts every non-resumed
+variant from an empty directory, uses an allowlisted environment, proves that
+both named CTests actually executed, recomputes all cross-backend stdout/stderr
+mismatches, and retains normalized cache/compile/tool identities. It also
+retains the CPU vendor/model/family/stepping/microcode,
 kernel/uname identity, scaling driver/governor/EPP, readable min/max frequency
 bounds, pstate/boost/turbo attributes (explicitly null when unavailable), and
 labelled pre/post current-frequency snapshots. The reservation file itself
@@ -163,9 +189,14 @@ without a trailing newline:
     python3 -c 'import json,sys; sys.stdout.write(json.dumps({"benchmark_cpu":15,"nonce":"replace-with-unique-nonce","owner":"coordinator identity","reserved_sibling":31,"schema":"leopard2-cpu-reservation/v1","status":"held"},sort_keys=True,separators=(",",":")))' \
       > build/leopard2-butterfly-reservation.json
 
-The full runner requires clean baseline and candidate worktrees plus matching
-Release build trees configured with benchmarks enabled, tests/fuzzers/CUDA
-disabled, and compile-command export enabled. A repository-relative example is:
+Collection is currently Linux/GNU-family only: it requires scheduler affinity,
+`/proc` and `/sys`, POSIX file locking, GNU-style dependency files, and CMake's
+Unix Makefiles `link.txt` recipes. Verification is path-independent across
+Linux checkouts and does not need the original build directories. The full
+runner requires clean baseline and candidate worktrees plus matching Unix
+Makefiles Release template build trees configured with benchmarks enabled,
+tests/fuzzers/CUDA disabled, and compile-command export enabled. The runner
+then creates its own fresh shadow builds. A repository-relative example is:
 
     python3 experiments/leopard2/backend_butterfly/run_abba.py run \
       --baseline ../leopard-butterfly-baseline/build/evidence-release/bench_leopard2 \
@@ -186,8 +217,8 @@ disabled, and compile-command export enabled. A repository-relative example is:
       --cpu 15 --reserved-sibling 31 --build-jobs 8
 
 Run that command only while the coordinator has reserved the physical core and
-kept its sibling idle. Recheck the retained evidence on a fresh checkout with
-repository-relative paths; binaries and the standalone matrix are optional
+kept its sibling idle. Recheck the retained evidence on a fresh Linux checkout
+with repository-relative paths; binaries and the standalone matrix are optional
 extra checks because both are already hash-bound and the matrix is embedded:
 
     python3 experiments/leopard2/backend_butterfly/run_abba.py verify \

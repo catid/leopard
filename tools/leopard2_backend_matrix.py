@@ -49,6 +49,13 @@ COMPARE_TESTS = (
     "transform_differential",
     "fuzz_smoke",
 )
+BUILD_CACHE_KEYS = (
+    "CMAKE_BUILD_TYPE", "CMAKE_CXX_FLAGS", "CMAKE_CXX_FLAGS_RELEASE",
+    "CMAKE_EXE_LINKER_FLAGS", "CMAKE_EXE_LINKER_FLAGS_RELEASE",
+    "CMAKE_STATIC_LINKER_FLAGS", "CMAKE_STATIC_LINKER_FLAGS_RELEASE",
+    "ENABLE_OPENMP", "LEO2_BACKEND_VARIANT", "LEO2_BUILD_TESTS",
+    "LEO2_BUILD_BENCHMARKS", "LEO2_BUILD_FUZZERS", "LEO2_ENABLE_CUDA",
+)
 SOURCE_FILES = (
     "CMakeLists.txt",
     "LeopardCommon.cpp",
@@ -101,6 +108,8 @@ SOURCE_FILES = (
     "tests/leopard2/test_direct_repair.cpp",
     "tests/leopard2/fuzz_api.cpp",
     "tests/leopard2/fuzz_replay.cpp",
+    "tests/cmake/test_cuda_optional.cmake",
+    "cmake/leopardConfig.cmake.in",
     "tools/check_leopard2_portable_isa.sh",
     "tools/leopard2_backend_matrix.py",
 )
@@ -128,9 +137,17 @@ def normalized_output(value):
     return value.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
 
 
-def portable_ctest_executed(stdout, stderr=b""):
+def named_ctest_executed(stdout, test_name, stderr=b""):
     output = normalized_output(stdout + stderr)
-    return b"Test #" in output and b"leopard2_portable_isa" in output
+    return b"Test #" in output and test_name.encode("ascii") in output
+
+
+def portable_ctest_executed(stdout, stderr=b""):
+    return named_ctest_executed(stdout, "leopard2_portable_isa", stderr)
+
+
+def cuda_ctest_executed(stdout, stderr=b""):
+    return named_ctest_executed(stdout, "leopard2_cuda_optional", stderr)
 
 
 def atomic_write_json(path, value):
@@ -220,6 +237,7 @@ def compiler_identity(compiler):
         raise MatrixError("cannot query compiler {}: {}".format(resolved, output))
     return {
         "executable": str(Path(resolved).resolve()),
+        "binary_sha256": digest_bytes(Path(resolved).read_bytes()),
         "version": output,
         "version_sha256": digest_bytes(output.encode("utf-8")),
     }
@@ -341,11 +359,108 @@ def run_command(label, argv, cwd, log_dir, timeout, environment=None, hash_outpu
     return record
 
 
+def prepare_fresh_directory(path):
+    path = Path(path)
+    if path.exists():
+        if path.is_symlink() or not path.is_dir():
+            raise MatrixError("refusing non-directory build path: {}".format(path))
+        shutil.rmtree(str(path))
+    path.mkdir(parents=True, exist_ok=False)
+    return True
+
+
+def parse_cache(path):
+    values = {}
+    for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("//") or line.startswith("#") or "=" not in line:
+            continue
+        key_type, value = line.split("=", 1)
+        key = key_type.split(":", 1)[0]
+        values[key] = value
+    return values
+
+
+def normalized_build_identity(build, source, compiler, cmake, ctest):
+    cache_path = build / "CMakeCache.txt"
+    compile_path = build / "compile_commands.json"
+    if not cache_path.is_file() or not compile_path.is_file():
+        raise MatrixError("fresh build omitted cache or compile commands")
+    cache = parse_cache(cache_path)
+    normalized_cache = {}
+    for key in BUILD_CACHE_KEYS:
+        if key not in cache:
+            raise MatrixError("fresh cache omits {}".format(key))
+        normalized_cache[key] = cache[key]
+    commands = json.loads(compile_path.read_text(encoding="utf-8"))
+    if not isinstance(commands, list) or not commands:
+        raise MatrixError("compile_commands.json is empty or malformed")
+    normalized_commands = []
+    seen = set()
+    replacements = ((str(source.resolve()), "@source"),
+                    (str(build.resolve()), "@build"),
+                    (compiler["executable"], "@tool/cxx"))
+    for entry in commands:
+        path = Path(entry.get("file", ""))
+        if not path.is_absolute():
+            path = Path(entry.get("directory", build)) / path
+        path = path.resolve()
+        try:
+            relative = path.relative_to(source.resolve()).as_posix()
+        except ValueError:
+            raise MatrixError("compile source escapes source root: {}".format(path))
+        raw = entry.get("arguments")
+        if raw is None:
+            raw = entry.get("command", "")
+        text_value = json.dumps(raw, sort_keys=True) if isinstance(raw, list) else str(raw)
+        for actual, logical in replacements:
+            text_value = text_value.replace(actual, logical)
+        identity = (relative, text_value)
+        if identity in seen:
+            raise MatrixError("duplicate compile command: {}".format(relative))
+        seen.add(identity)
+        normalized_commands.append({"file": relative, "command": text_value})
+    normalized_commands.sort(key=lambda value: (value["file"], value["command"]))
+
+    def identity(path, name):
+        resolved = Path(path).resolve()
+        completed = subprocess.run(
+            [str(resolved), "--version"], stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE)
+        raw = normalized_output(completed.stdout + completed.stderr)
+        if completed.returncode != 0 or not raw:
+            raise MatrixError("cannot identify {}".format(name))
+        return {"basename": resolved.name,
+                "binary_sha256": digest_bytes(resolved.read_bytes()),
+                "version_sha256": digest_bytes(raw)}
+
+    result = {
+        "cache": normalized_cache,
+        "cache_sha256": digest_value(normalized_cache),
+        "compile_commands": normalized_commands,
+        "compile_commands_sha256": digest_value(normalized_commands),
+        "tools": {
+            "cmake": identity(cmake, "cmake"),
+            "ctest": identity(ctest, "ctest"),
+            "cxx": {"basename": Path(compiler["executable"]).name,
+                    "binary_sha256": compiler["binary_sha256"],
+                    "version_sha256": compiler["version_sha256"]},
+        },
+    }
+    result["digest"] = digest_value(result)
+    return result
+
+
 def run_variant(context, variant, index):
     result_dir = context["result_dir"] / variant
     result_path = context["result_dir"] / (variant + ".json")
     build = context["build_root"] / variant
     available, reason = availability(variant, context["machine"], context["compiler"])
+    environment = {
+        "LANG": "C", "LC_ALL": "C", "OMP_DYNAMIC": "FALSE",
+        "OMP_NUM_THREADS": "1", "PATH": "/usr/bin:/bin",
+    }
+    if variant != "auto":
+        environment["LEO2_EXPECT_BACKEND"] = variant
     identity_input = {
         "compiler": context["compiler"],
         "generator": context["generator"],
@@ -353,6 +468,7 @@ def run_variant(context, variant, index):
         "machine": context["machine"],
         "source": context["source_fingerprint"],
         "variant": variant,
+        "environment": environment,
     }
     configuration_id = digest_value(identity_input)
 
@@ -377,20 +493,20 @@ def run_variant(context, variant, index):
         atomic_write_json(result_path, base)
         return base
 
-    build.mkdir(parents=True, exist_ok=True)
-    result_dir.mkdir(parents=True, exist_ok=True)
+    # A source fingerprint is not enough if an older build tree can retain an
+    # object whose mtime is newer than the checkout.  Every non-resumed run is
+    # therefore configured from an actually empty per-variant directory.
+    prepare_fresh_directory(build)
+    if result_dir.exists():
+        shutil.rmtree(str(result_dir))
+    result_dir.mkdir(parents=True, exist_ok=False)
     commands = []
-    environment = os.environ.copy()
-    environment["CMAKE_BUILD_PARALLEL_LEVEL"] = str(context["jobs_per_variant"])
-    environment["OMP_NUM_THREADS"] = "1"
-    if variant == "auto":
-        environment.pop("LEO2_EXPECT_BACKEND", None)
-    else:
-        environment["LEO2_EXPECT_BACKEND"] = variant
+    base["build_environment"] = dict(environment)
     configure = [
         context["cmake"], "-S", context["source"], "-B", build,
         "-G", context["generator"],
         "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
         "-DCMAKE_CXX_COMPILER={}".format(context["compiler"]["executable"]),
         "-DLEO2_BACKEND_VARIANT={}".format(variant),
         "-DLEO2_BUILD_TESTS=ON",
@@ -398,6 +514,14 @@ def run_variant(context, variant, index):
         "-DLEO2_BUILD_FUZZERS=OFF",
         "-DLEO2_ENABLE_CUDA=OFF",
     ]
+    base["fresh_build"] = {
+        "configured_from_empty": True,
+        "identity_sha256": digest_value({
+            "configuration_id": configuration_id,
+            "configure_argv": [str(value) for value in configure],
+            "environment": environment,
+        }),
+    }
     command = run_command(
         "configure", configure, context["source"], result_dir,
         context["timeout"], environment
@@ -407,6 +531,10 @@ def run_variant(context, variant, index):
         base.update({"commands": commands, "reason": "configure failed", "status": "failed", "tests": {}})
         atomic_write_json(result_path, base)
         return base
+
+    base["build_identity"] = normalized_build_identity(
+        build, context["source"], context["compiler"],
+        context["cmake"], context["ctest"])
 
     selected = read_cache_variant(build)
     if selected != variant:
@@ -526,6 +654,7 @@ def run_variant(context, variant, index):
             (result_dir / command["stdout_log"]).read_bytes(),
             (result_dir / command["stderr_log"]).read_bytes(),
         )
+        command["ctest_executed"] = portable_was_run
         if command["returncode"] != 0 or not portable_was_run:
             if command["returncode"] == 0:
                 reason = (
@@ -556,11 +685,19 @@ def run_variant(context, variant, index):
         )
         tests["cuda_optional"] = command
         commands.append(command)
-        if command["returncode"] != 0:
+        cuda_was_run = cuda_ctest_executed(
+            (result_dir / command["stdout_log"]).read_bytes(),
+            (result_dir / command["stderr_log"]).read_bytes(),
+        )
+        command["ctest_executed"] = cuda_was_run
+        if command["returncode"] != 0 or not cuda_was_run:
             base.update({
                 "commands": commands,
                 "pin_cpu": pin_cpu,
-                "reason": "optional-CUDA test failed",
+                "reason": (
+                    "optional-CUDA test failed" if command["returncode"] != 0
+                    else "optional-CUDA test was not registered or executed"
+                ),
                 "selected_cache_variant": selected,
                 "status": "failed",
                 "tests": tests,
@@ -704,6 +841,10 @@ def self_test():
         b"1/1 Test #1: leopard2_portable_isa ... Passed\n"
     )
     assert not portable_ctest_executed(b"No tests were found!!!\n")
+    assert cuda_ctest_executed(
+        b"1/1 Test #2: leopard2_cuda_optional ... Passed\n"
+    )
+    assert not cuda_ctest_executed(b"No tests were found!!!\n")
     assert digest_value({"b": 2, "a": 1}) == digest_value({"a": 1, "b": 2})
     assert variant_flags("scalar") == []
     assert variant_flags("ssse3") == ["-mssse3", "-mno-avx"]
@@ -717,6 +858,11 @@ def self_test():
         value = {"z": [3, 2, 1], "a": "stable"}
         atomic_write_json(path, value)
         assert json.loads(path.read_text(encoding="utf-8")) == value
+        stale = Path(directory) / "stale-build"
+        stale.mkdir()
+        (stale / "copied-object.o").write_bytes(b"stale")
+        assert prepare_fresh_directory(stale)
+        assert list(stale.iterdir()) == []
         timeout_record = run_command(
             "timeout", [sys.executable, "-c", "import time; time.sleep(1)"],
             directory, Path(directory), 0.01
