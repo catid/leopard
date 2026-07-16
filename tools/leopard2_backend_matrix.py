@@ -27,6 +27,7 @@ COMPARE_TESTS = (
     "legacy_golden",
     "api",
     "random",
+    "active_lch",
     "transform_differential",
 )
 SOURCE_FILES = (
@@ -47,6 +48,7 @@ SOURCE_FILES = (
     "tests/leopard2/test_api.cpp",
     "tests/leopard2/test_random.cpp",
     "tests/leopard2/test_boundaries.cpp",
+    "tests/leopard2/test_active_lch.cpp",
     "tests/leopard2/test_transform_differential.cpp",
     "tests/leopard2/direct_oracle.cpp",
     "tests/leopard2/direct_oracle.h",
@@ -362,7 +364,8 @@ def run_variant(context, variant, index):
 
     targets = [
         "leopard2_legacy_golden_test", "leopard2_api_test",
-        "leopard2_random_test", "leopard2_transform_differential_test",
+        "leopard2_random_test", "leopard2_active_lch_test",
+        "leopard2_transform_differential_test",
     ]
     build_command = [
         context["cmake"], "--build", build, "--config", "Release",
@@ -384,6 +387,7 @@ def run_variant(context, variant, index):
         "random": ("leopard2_random_test", [
             "--seed", "0x4c656f7061726432", "--cases", "64", "--threads", "1"
         ]),
+        "active_lch": ("leopard2_active_lch_test", []),
         "transform_differential": ("leopard2_transform_differential_test", []),
     }
     tests = {}

@@ -28,8 +28,9 @@ Run the standard-library-only matrix from the repository root:
 The runner detects the process affinity instead of assuming CPU numbers,
 checks host and compiler support, and creates one isolated build per variant.
 It builds and runs the frozen legacy golden vectors, the public API suite, a
-fixed-seed random smoke suite, and the independent direct-generator transform
-differential. The `auto` build also runs
+fixed-seed random smoke suite, the independent production-constant and bare-LCH
+differential, and the direct-generator transform differential. The `auto` build
+also runs
 `leopard2_cuda_optional`, proving that a normal build does not need a CUDA
 compiler or toolkit. Each forced build also makes the public API suite assert
 that runtime backend introspection reports the requested scalar, SSSE3, or

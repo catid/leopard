@@ -653,8 +653,17 @@ void MultiplyAddBytes(
 //------------------------------------------------------------------------------
 // FFT
 
-// Twisted factors used in FFT
-static ffe_t FFTSkew[kModulus];
+// Twisted factors used in FFT.  The transform kernels conventionally bias the
+// pointer by one so that logical factor i is addressed as skewLUT[i + 1].
+// Keep a real sentinel element before the logical table.  The transform base is
+// passed as FFTSkewStorage directly; the historical one-before-begin pointer is
+// never formed, and the sentinel itself is never consumed as a multiplier.
+static ffe_t FFTSkewStorage[kOrder];
+static ffe_t* const FFTSkew = FFTSkewStorage + 1;
+
+// log(s_j(v_j)) for the normalized LCH basis.  General p_i values are the
+// sum of the entries selected by the bits of i.
+static ffe_t LchBasisNormalizerLog[kBits];
 
 // Factors used in the evaluation of the error locator polynomial
 static ffe_t LogWalsh[kOrder];
@@ -694,6 +703,15 @@ static void FFTInitialize()
 
     for (unsigned i = 0; i < kModulus; ++i)
         FFTSkew[i] = LogLUT[FFTSkew[i]];
+
+    for (unsigned bit = 0; bit < kBits; ++bit)
+    {
+        const unsigned width = 1UL << bit;
+        ffe_t factor_log = 0;
+        for (unsigned i = 0; i < width; ++i)
+            factor_log = AddMod(factor_log, LogLUT[width ^ i]);
+        LchBasisNormalizerLog[bit] = factor_log;
+    }
 
     // Precalculate FWHT(Log[i]):
 
@@ -1537,7 +1555,7 @@ void ReedSolomonEncode(
 {
     // work <- IFFT(data, m, m)
 
-    const ffe_t* skewLUT = FFTSkew + m - 1;
+    const ffe_t* skewLUT = FFTSkewStorage + m;
 
     IFFT_DIT_Encoder(
         buffer_bytes,
@@ -1596,7 +1614,7 @@ skip_body:
         work,
         recovery_count,
         m,
-        FFTSkew - 1);
+        FFTSkewStorage);
 }
 
 
@@ -1622,7 +1640,7 @@ void ReedSolomonEncodeLow(
         work,
         nullptr,
         p,
-        FFTSkew - 1);
+        FFTSkewStorage);
 
     // Evaluate the coefficient block on each requested parity coset.  The
     // coefficient copy keeps work[0..p-1] reusable across all parity blocks.
@@ -1651,7 +1669,7 @@ void ReedSolomonEncodeLow(
             work + p,
             requested_count,
             p,
-            FFTSkew + p + recovery_offset - 1);
+            FFTSkewStorage + p + recovery_offset);
 
 #pragma omp parallel for
         for (int i = 0; i < (int)requested_count; ++i)
@@ -1974,6 +1992,26 @@ static void mul_mem_inplace(void* data, ffe_t log_m, uint64_t bytes)
 }
 
 
+static void AddFormalDerivative(
+    uint64_t buffer_bytes,
+    unsigned n,
+    void** work)
+{
+    // In the normalized LCH basis this triangular XOR adds f' to f.  The
+    // decoder evaluates the result only at locator roots, where f is zero, so
+    // f + f' and the formal derivative have the same requested values.
+    for (unsigned i = 1; i < n; ++i)
+    {
+        const unsigned width = ((i ^ (i - 1)) + 1) >> 1;
+
+        if (width < 8)
+            VectorXOR(buffer_bytes, width, work + i - width, work + i);
+        else
+            VectorXOR_Threads(buffer_bytes, width, work + i - width, work + i);
+    }
+}
+
+
 void ReedSolomonDecodePrepared(
     uint64_t buffer_bytes,
     unsigned n,
@@ -2005,23 +2043,14 @@ void ReedSolomonDecodePrepared(
             memset(work[i], 0, buffer_bytes);
     }
 
-    IFFT_DIT_Decoder(buffer_bytes, input_count, work, n, FFTSkew - 1);
+    IFFT_DIT_Decoder(buffer_bytes, input_count, work, n, FFTSkewStorage);
 
-    // Formal derivative in the normalized LCH basis.
-    for (unsigned i = 1; i < n; ++i)
-    {
-        const unsigned width = ((i ^ (i - 1)) + 1) >> 1;
-
-        if (width < 8)
-            VectorXOR(buffer_bytes, width, work + i - width, work + i);
-        else
-            VectorXOR_Threads(buffer_bytes, width, work + i - width, work + i);
-    }
+    AddFormalDerivative(buffer_bytes, n, work);
 
 #ifdef LEO_ERROR_BITFIELD_OPT
-    FFT_DIT_ErrorBits(buffer_bytes, work, n, n, FFTSkew - 1, error_bits);
+    FFT_DIT_ErrorBits(buffer_bytes, work, n, n, FFTSkewStorage, error_bits);
 #else
-    FFT_DIT(buffer_bytes, work, n, n, FFTSkew - 1);
+    FFT_DIT(buffer_bytes, work, n, n, FFTSkewStorage);
 #endif // LEO_ERROR_BITFIELD_OPT
 
 #pragma omp parallel for
@@ -2033,6 +2062,37 @@ void ReedSolomonDecodePrepared(
 }
 
 
+static ffe_t SubspaceDerivativeLog(unsigned size)
+{
+    ffe_t result = 0;
+    for (unsigned i = 1; i < size; ++i)
+        result = AddMod(result, LogLUT[i]);
+    return result;
+}
+
+
+static ffe_t SubspaceAtLog(unsigned size, unsigned shift)
+{
+    ffe_t result = 0;
+    for (unsigned i = 0; i < size; ++i)
+        result = AddMod(result, LogLUT[shift ^ i]);
+    return result;
+}
+
+
+static ffe_t LchNormalizerLog(unsigned index)
+{
+    ffe_t result = 0;
+    for (unsigned bit = 0; bit < kBits; ++bit)
+    {
+        if ((index & (1UL << bit)) == 0)
+            continue;
+        result = AddMod(result, LchBasisNormalizerLog[bit]);
+    }
+    return result;
+}
+
+
 void PrepareLowDecode(
     unsigned n,
     unsigned p,
@@ -2040,17 +2100,13 @@ void PrepareLowDecode(
 {
     LEO_DEBUG_ASSERT(p >= 2 && p <= n && n <= kOrder);
 
-    ffe_t numerator_log = 0;
-    for (unsigned i = 1; i < p; ++i)
-        numerator_log = AddMod(numerator_log, LogLUT[i]);
+    const ffe_t numerator_log = SubspaceDerivativeLog(p);
 
     const unsigned block_count = n / p;
     for (unsigned block = 1; block < block_count; ++block)
     {
         const unsigned shift = block * p;
-        ffe_t denominator_log = 0;
-        for (unsigned i = 0; i < p; ++i)
-            denominator_log = AddMod(denominator_log, LogLUT[shift ^ i]);
+        const ffe_t denominator_log = SubspaceAtLog(p, shift);
         block_factors[block - 1] = SubMod(numerator_log, denominator_log);
     }
 }
@@ -2065,24 +2121,17 @@ void PrepareHighDecode(
 
     // c_n = product(V_n \ {0}).  R10's full-field form silently has c_m=1;
     // retaining this numerator is required for an active parent in GF16.
-    ffe_t active_derivative_log = 0;
-    for (unsigned i = 1; i < n; ++i)
-        active_derivative_log = AddMod(active_derivative_log, LogLUT[i]);
+    const ffe_t active_derivative_log = SubspaceDerivativeLog(n);
 
     // p_(N-T) from the normalized LCH basis.
-    ffe_t normalization_log = 0;
-    for (unsigned width = t; width < n; width <<= 1)
-        for (unsigned i = 0; i < width; ++i)
-            normalization_log = AddMod(normalization_log, LogLUT[width ^ i]);
+    const ffe_t normalization_log = LchNormalizerLog(n - t);
 
     const unsigned block_count = n / t;
 #pragma omp parallel for
     for (int block = 1; block < (int)block_count; ++block)
     {
         const unsigned coordinate = (unsigned)block * t;
-        ffe_t subspace_log = 0;
-        for (unsigned i = 0; i < t; ++i)
-            subspace_log = AddMod(subspace_log, LogLUT[coordinate ^ i]);
+        const ffe_t subspace_log = SubspaceAtLog(t, coordinate);
         const ffe_t factor = SubMod(
             active_derivative_log,
             AddMod(normalization_log, subspace_log));
@@ -2090,6 +2139,89 @@ void PrepareHighDecode(
             output_factors[coordinate + i] = factor;
     }
 }
+
+
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+
+static ffe_t NonzeroElementFromLog(ffe_t value_log)
+{
+    return ExpLUT[value_log];
+}
+
+
+ffe_t TestOnlyFFTMultiplier(unsigned logical_index)
+{
+    LEO_DEBUG_ASSERT(logical_index < kModulus);
+    const ffe_t multiplier_log = FFTSkew[logical_index];
+    return multiplier_log == kModulus ? 0 : ExpLUT[multiplier_log];
+}
+
+
+ffe_t TestOnlySubspaceDerivative(unsigned size)
+{
+    LEO_DEBUG_ASSERT(size >= 1 && size <= kOrder);
+    return NonzeroElementFromLog(SubspaceDerivativeLog(size));
+}
+
+
+ffe_t TestOnlySubspaceAt(unsigned size, unsigned shift)
+{
+    LEO_DEBUG_ASSERT(size >= 1 && size <= kOrder);
+    LEO_DEBUG_ASSERT((shift & (size - 1)) == 0 && shift + size <= kOrder);
+    if (shift < size)
+        return 0;
+    return NonzeroElementFromLog(SubspaceAtLog(size, shift));
+}
+
+
+ffe_t TestOnlyLchNormalizer(unsigned index)
+{
+    LEO_DEBUG_ASSERT(index < kOrder);
+    return NonzeroElementFromLog(LchNormalizerLog(index));
+}
+
+
+void TestOnlyLchForward(
+    uint64_t buffer_bytes,
+    unsigned size,
+    unsigned shift,
+    unsigned requested_output_count,
+    void** work)
+{
+    LEO_DEBUG_ASSERT(size >= 1 && size <= kOrder);
+    LEO_DEBUG_ASSERT((size & (size - 1)) == 0);
+    LEO_DEBUG_ASSERT((shift & (size - 1)) == 0 && shift + size <= kOrder);
+    LEO_DEBUG_ASSERT(requested_output_count <= size);
+    FFT_DIT(buffer_bytes, work, requested_output_count, size,
+        FFTSkewStorage + shift);
+}
+
+
+void TestOnlyLchInverse(
+    uint64_t buffer_bytes,
+    unsigned size,
+    unsigned shift,
+    unsigned known_input_count,
+    void** work)
+{
+    LEO_DEBUG_ASSERT(size >= 1 && size <= kOrder);
+    LEO_DEBUG_ASSERT((size & (size - 1)) == 0);
+    LEO_DEBUG_ASSERT((shift & (size - 1)) == 0 && shift + size <= kOrder);
+    LEO_DEBUG_ASSERT(known_input_count <= size);
+    IFFT_DIT_Decoder(buffer_bytes, known_input_count, work, size,
+        FFTSkewStorage + shift);
+}
+
+
+void TestOnlyAddFormalDerivative(
+    uint64_t buffer_bytes,
+    unsigned size,
+    void** work)
+{
+    AddFormalDerivative(buffer_bytes, size, work);
+}
+
+#endif // LEO2_ENABLE_TEST_HOOKS
 
 
 void ReedSolomonDecodeLowPrepared(
@@ -2129,20 +2261,14 @@ void ReedSolomonDecodeLowPrepared(
         while (input_count > 0 && !coordinate_data[offset + input_count - 1])
             --input_count;
         IFFT_DIT_Decoder(
-            buffer_bytes, input_count, work + offset, p, FFTSkew + offset - 1);
+            buffer_bytes, input_count, work + offset, p,
+            FFTSkewStorage + offset);
     }
 
     // R10 Corollary 1 derivative term.  The omitted scalar-sum contribution
     // is f-hat^(0), which vanishes at every requested erasure because
     // f(e) * Lambda(e) = 0; leaving slot zero unchanged is therefore exact.
-    for (unsigned i = 1; i < p; ++i)
-    {
-        const unsigned width = ((i ^ (i - 1)) + 1) >> 1;
-        if (width < 8)
-            VectorXOR(buffer_bytes, width, work + i - width, work + i);
-        else
-            VectorXOR_Threads(buffer_bytes, width, work + i - width, work + i);
-    }
+    AddFormalDerivative(buffer_bytes, p, work);
 
     // Weighted block reduction by c_k / s_k(omega_(block*P)).
     for (unsigned block = 1; block < block_count; ++block)
@@ -2157,9 +2283,9 @@ void ReedSolomonDecodeLowPrepared(
     }
 
 #ifdef LEO_ERROR_BITFIELD_OPT
-    FFT_DIT_ErrorBits(buffer_bytes, work, p, p, FFTSkew - 1, error_bits);
+    FFT_DIT_ErrorBits(buffer_bytes, work, p, p, FFTSkewStorage, error_bits);
 #else
-    FFT_DIT(buffer_bytes, work, p, p, FFTSkew - 1);
+    FFT_DIT(buffer_bytes, work, p, p, FFTSkewStorage);
 #endif
 
 #pragma omp parallel for
@@ -2198,7 +2324,8 @@ void ReedSolomonDecodeHighPrepared(
         while (input_count > 0 && !coordinate_data[offset + input_count - 1])
             --input_count;
         IFFT_DIT_Decoder(
-            buffer_bytes, input_count, work + offset, t, FFTSkew + offset - 1);
+            buffer_bytes, input_count, work + offset, t,
+            FFTSkewStorage + offset);
         if (block != 0)
         {
             if (t < 8)
@@ -2209,7 +2336,7 @@ void ReedSolomonDecodeHighPrepared(
     }
 
     // h on V_t, then z = h * Lambda on V_t.
-    FFT_DIT(buffer_bytes, work, t, t, FFTSkew - 1);
+    FFT_DIT(buffer_bytes, work, t, t, FFTSkewStorage);
 #pragma omp parallel for
     for (int i = 0; i < (int)t; ++i)
     {
@@ -2218,7 +2345,7 @@ void ReedSolomonDecodeHighPrepared(
         else
             memset(work[i], 0, buffer_bytes);
     }
-    IFFT_DIT_Decoder(buffer_bytes, t, work, t, FFTSkew - 1);
+    IFFT_DIT_Decoder(buffer_bytes, t, work, t, FFTSkewStorage);
 
     // Evaluate z only on message blocks that contain a requested original.
     for (unsigned block = 1; block < block_count; ++block)
@@ -2233,7 +2360,8 @@ void ReedSolomonDecodeHighPrepared(
         for (int i = 0; i < (int)t; ++i)
             memcpy(work[offset + i], work[i], buffer_bytes);
         FFT_DIT(
-            buffer_bytes, work + offset, requested_count, t, FFTSkew + offset - 1);
+            buffer_bytes, work + offset, requested_count, t,
+            FFTSkewStorage + offset);
 #pragma omp parallel for
         for (int i = 0; i < (int)requested_count; ++i)
         {
@@ -2330,7 +2458,7 @@ void ReedSolomonDecode(
         m + original_count,
         work,
         n,
-        FFTSkew - 1);
+        FFTSkewStorage);
 
     // work <- FormalDerivative(work, n)
 
@@ -2361,9 +2489,10 @@ void ReedSolomonDecode(
     const unsigned output_count = m + original_count;
 
 #ifdef LEO_ERROR_BITFIELD_OPT
-    FFT_DIT_ErrorBits(buffer_bytes, work, output_count, n, FFTSkew - 1, error_bits);
+    FFT_DIT_ErrorBits(
+        buffer_bytes, work, output_count, n, FFTSkewStorage, error_bits);
 #else
-    FFT_DIT(buffer_bytes, work, output_count, n, FFTSkew - 1);
+    FFT_DIT(buffer_bytes, work, output_count, n, FFTSkewStorage);
 #endif
 
     // Reveal erasures

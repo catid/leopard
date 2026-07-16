@@ -162,6 +162,31 @@ void PrepareHighDecode(
     unsigned t,
     ffe_t* output_factors); // n elements; t..n-1 are initialized
 
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+// Internal test-only access to the exact production LCH kernels and constants.
+// These are deliberately absent from leopard2.h and from non-test builds.
+ffe_t TestOnlyFFTMultiplier(unsigned logical_index);
+ffe_t TestOnlySubspaceDerivative(unsigned size);
+ffe_t TestOnlySubspaceAt(unsigned size, unsigned shift);
+ffe_t TestOnlyLchNormalizer(unsigned index);
+void TestOnlyLchForward(
+    uint64_t buffer_bytes,
+    unsigned size,
+    unsigned shift,
+    unsigned requested_output_count,
+    void** work);
+void TestOnlyLchInverse(
+    uint64_t buffer_bytes,
+    unsigned size,
+    unsigned shift,
+    unsigned known_input_count,
+    void** work);
+void TestOnlyAddFormalDerivative(
+    uint64_t buffer_bytes,
+    unsigned size,
+    void** work);
+#endif
+
 void ReedSolomonDecodeLowPrepared(
     uint64_t buffer_bytes,
     unsigned n,
