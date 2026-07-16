@@ -26,7 +26,7 @@
       "build_stdout": {
         "bytes": 10680,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-core-build.stdout.txt",
-        "sha256": "47a0cc13e6f241981935c813dc90e64a8af18747230a9b2b2463d0e1dbca58db"
+        "sha256": "f19ed56a213c18311d6ecba2ec8fb2be9f7ef2939b98e2431b070499278ad219"
       },
       "c_compiler": {
         "path": "/usr/bin/x86_64-linux-gnu-gcc-13",
@@ -60,7 +60,7 @@
         "-Werror",
         "-I.",
         "-DLEO2_C7_SOURCE_SHA256=\"c2edae60a9d9b57826a0206532e0437a4f3fbe07d8d3978045ca75a78f92f604\"",
-        "-DLEO2_C7_CORE_GIT_SHA=\"e03aa38bfd648a2ab18ce63795a6a8342173abed\"",
+        "-DLEO2_C7_CORE_GIT_SHA=\"09e1ccec9dfc84a33db965cbccea1f375fb9ff39\"",
         "-DLEO2_C7_LIBRARY_SHA256=\"5c1ee539b3eeadf926ed21281468617ba43e56e76ba65e46e8337e69d7b1e85f\"",
         "-O2",
         "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp",
@@ -73,7 +73,7 @@
       "compile_stderr": {
         "bytes": 8990,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-compile.stderr.txt",
-        "sha256": "991ed31b7f60405ad92063d8003fa7f53047dbd6191ae46603d2a4842d84f4d0"
+        "sha256": "4478535f7b71e0a266db1b7c59d8d2e687db73d9e24a6484741152b075c38bd9"
       },
       "compile_stdout": {
         "bytes": 38,
@@ -121,7 +121,7 @@
       "executable": {
         "bytes": 2844712,
         "path": "build/c7-matrix/c7-scalar",
-        "sha256": "f86ec73377c4ef49d908abc6069d20023146640a9443007754bd71a052054468"
+        "sha256": "1a60e03641679e603db0614d4ecc566efbaf6915d4a174c0377cd55cbd5c3c42"
       },
       "gmake": {
         "path": "/usr/bin/gmake",
@@ -369,7 +369,7 @@
       "build_stdout": {
         "bytes": 10638,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-core-build.stdout.txt",
-        "sha256": "9c59e2c75cd6e4b547dbc7ee0dab90d8b3f3cc4601af551e59c2c48989b4851f"
+        "sha256": "375361a31660c0fa34a1b057f8bff5fbc9476ec7866c6cc8f9b6b8f95f41e753"
       },
       "c_compiler": {
         "path": "/usr/bin/x86_64-linux-gnu-gcc-13",
@@ -403,7 +403,7 @@
         "-Werror",
         "-I.",
         "-DLEO2_C7_SOURCE_SHA256=\"c2edae60a9d9b57826a0206532e0437a4f3fbe07d8d3978045ca75a78f92f604\"",
-        "-DLEO2_C7_CORE_GIT_SHA=\"e03aa38bfd648a2ab18ce63795a6a8342173abed\"",
+        "-DLEO2_C7_CORE_GIT_SHA=\"09e1ccec9dfc84a33db965cbccea1f375fb9ff39\"",
         "-DLEO2_C7_LIBRARY_SHA256=\"236d4ff8c7dce9efb95620a86a7476cf574ad8ec90b1e7bf781f9faf308ba264\"",
         "-O2",
         "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp",
@@ -416,7 +416,7 @@
       "compile_stderr": {
         "bytes": 8977,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-compile.stderr.txt",
-        "sha256": "09183e9d4a2316106bdead9f2e19379865ccca9a949bc5502b3e68181febfc50"
+        "sha256": "4d531c6191169697ac207489cd898175e43e93b3fcea0e7d5ab0c4976d24a63a"
       },
       "compile_stdout": {
         "bytes": 38,
@@ -464,7 +464,7 @@
       "executable": {
         "bytes": 2872152,
         "path": "build/c7-matrix/c7-ssse3",
-        "sha256": "7d8a7e78e9e64376b354dcd77be87a31f89ab21aeb86e3d56ca772a9b11c1cd9"
+        "sha256": "56aaf48f7732c298b68ada047f3766f828da1cf9e4e98c23f548a0e41cad4916"
       },
       "gmake": {
         "path": "/usr/bin/gmake",
@@ -712,7 +712,7 @@
       "build_stdout": {
         "bytes": 10596,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-core-build.stdout.txt",
-        "sha256": "910652e6377d9de7a9f7233f5bb67a086aaabb7e914444915566667ea81dc9f0"
+        "sha256": "eaab19b90f4847c27ea5fd86306e1e2b6c9cf83fe702e5c8de24e65b0c458ae4"
       },
       "c_compiler": {
         "path": "/usr/bin/x86_64-linux-gnu-gcc-13",
@@ -746,7 +746,7 @@
         "-Werror",
         "-I.",
         "-DLEO2_C7_SOURCE_SHA256=\"c2edae60a9d9b57826a0206532e0437a4f3fbe07d8d3978045ca75a78f92f604\"",
-        "-DLEO2_C7_CORE_GIT_SHA=\"e03aa38bfd648a2ab18ce63795a6a8342173abed\"",
+        "-DLEO2_C7_CORE_GIT_SHA=\"09e1ccec9dfc84a33db965cbccea1f375fb9ff39\"",
         "-DLEO2_C7_LIBRARY_SHA256=\"f88033e153e52b0cbed54c2adeabb1e5a17c66493c049155eea6ed5012d89799\"",
         "-O2",
         "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp",
@@ -759,7 +759,7 @@
       "compile_stderr": {
         "bytes": 8964,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-compile.stderr.txt",
-        "sha256": "7fbdb9eda7738bc79b419e7a00a1eb27bdaaba178e19cc037cc23cfd786e59b9"
+        "sha256": "b90d4f61a3269b25ac99fb680c1180428fb359c0be6c3cb1d604c80c12b89d4f"
       },
       "compile_stdout": {
         "bytes": 38,
@@ -807,7 +807,7 @@
       "executable": {
         "bytes": 2859256,
         "path": "build/c7-matrix/c7-avx2",
-        "sha256": "f68dc3c87d61b0f6ae6d1b7906e6514275ebae8b69c81d46a51d5eb6b97e70e6"
+        "sha256": "e76a69ecc1042754766e8b490b263e70fe723c702192f87a5b0ece778c810d1b"
       },
       "gmake": {
         "path": "/usr/bin/gmake",
@@ -1055,7 +1055,7 @@
       "build_stdout": {
         "bytes": 10344,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-core-build.stdout.txt",
-        "sha256": "f9dde033f71f58b89acba783380330923680d5d33bd81e4df69ad7f1ae753423"
+        "sha256": "0a4ae138371ee54548ad71fb6752da471fa8cd399dddc8769c633e1ae0c186d2"
       },
       "c_compiler": {
         "path": "/usr/bin/x86_64-linux-gnu-gcc-13",
@@ -1089,7 +1089,7 @@
         "-Werror",
         "-I.",
         "-DLEO2_C7_SOURCE_SHA256=\"c2edae60a9d9b57826a0206532e0437a4f3fbe07d8d3978045ca75a78f92f604\"",
-        "-DLEO2_C7_CORE_GIT_SHA=\"e03aa38bfd648a2ab18ce63795a6a8342173abed\"",
+        "-DLEO2_C7_CORE_GIT_SHA=\"09e1ccec9dfc84a33db965cbccea1f375fb9ff39\"",
         "-DLEO2_C7_LIBRARY_SHA256=\"c9dba912cbeb7c3115f7d2df8dd83fb0636e8ecbe420aa137c359a6480b5b172\"",
         "-O2",
         "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp",
@@ -1102,7 +1102,7 @@
       "compile_stderr": {
         "bytes": 8964,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-compile.stderr.txt",
-        "sha256": "66299d447efdb5d02f19e03d33cbddfe37fabe5ac6c745f6c218c0c52c9ae3db"
+        "sha256": "6da53d4dea33e25421d42ffeca84bc0f2a9c704747b8a93b3ac8d9580cc2ded8"
       },
       "compile_stdout": {
         "bytes": 38,
@@ -1150,7 +1150,7 @@
       "executable": {
         "bytes": 2914392,
         "path": "build/c7-matrix/c7-auto",
-        "sha256": "f8e6158779a158def906db64b3833205ac5ab4cc3842236ea9e425261b872247"
+        "sha256": "e71ca48a24a7841ed1da7d05413f695c2886ab678a3f440c9e1ee2864246ffe0"
       },
       "gmake": {
         "path": "/usr/bin/gmake",
@@ -1398,7 +1398,7 @@
       "build_stdout": {
         "bytes": 10740,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-core-build.stdout.txt",
-        "sha256": "0946883fd2ca8839038a57712e343f8adceeaa070d30be406a34ce23482e14a3"
+        "sha256": "327f66269c629956afd1ff1e0a6e064e301bc3a736d94512332ee4e3bf8c0f3f"
       },
       "c_compiler": {
         "path": "/usr/bin/clang-18",
@@ -1432,7 +1432,7 @@
         "-Werror",
         "-I.",
         "-DLEO2_C7_SOURCE_SHA256=\"c2edae60a9d9b57826a0206532e0437a4f3fbe07d8d3978045ca75a78f92f604\"",
-        "-DLEO2_C7_CORE_GIT_SHA=\"e03aa38bfd648a2ab18ce63795a6a8342173abed\"",
+        "-DLEO2_C7_CORE_GIT_SHA=\"09e1ccec9dfc84a33db965cbccea1f375fb9ff39\"",
         "-DLEO2_C7_LIBRARY_SHA256=\"6d04cea8448e45940dca73fde54b1cf949e5bfbe4ae0eebce31589a1774cdc42\"",
         "-O1",
         "-fsanitize=address,undefined",
@@ -1449,7 +1449,7 @@
       "compile_stderr": {
         "bytes": 5012,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-compile.stderr.txt",
-        "sha256": "1ff8256fc7b5f6b2e7b65afdd402ee0583bb1a4ab2c79824a6f5f9a4b2e297cf"
+        "sha256": "c999b48eb26287e905aa300d05876ac2a22554d96dedaef23fc7df50dffc4e2d"
       },
       "compile_stdout": {
         "bytes": 38,
@@ -1490,7 +1490,7 @@
       "configure_stdout": {
         "bytes": 1662,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-configure.stdout.txt",
-        "sha256": "214060611c685eb004146603e41f5b2b26f4d990779364d5226de6084f9369f5"
+        "sha256": "34cda1c924aa68e8dfdff50b890622f980398035962d2d35d95c86f48854b31f"
       },
       "cxx_compiler": {
         "path": "/usr/bin/clang++-18",
@@ -1500,7 +1500,7 @@
       "executable": {
         "bytes": 5075272,
         "path": "build/c7-matrix/c7-asan-ubsan",
-        "sha256": "35ab2ab16d840d6daec4ed21931a464f07b15cf4454fbc2cc626dc43412c5983"
+        "sha256": "d4677e30147b0e42cd5495d16713d66797af92d778b99577ccde6644717fd169"
       },
       "gmake": {
         "path": "/usr/bin/gmake",
@@ -1723,7 +1723,7 @@
       }
     }
   ],
-  "core_git_sha": "e03aa38bfd648a2ab18ce63795a6a8342173abed",
+  "core_git_sha": "09e1ccec9dfc84a33db965cbccea1f375fb9ff39",
   "runner": {
     "bytes": 21866,
     "path": "experiments/leopard2/non_power_of_two/c7/run_matrix.py",
@@ -1756,7 +1756,7 @@
       "result": {
         "bytes": 1701,
         "path": "experiments/leopard2/non_power_of_two/c7/results/scalar.json",
-        "sha256": "50fdec6bc2998c7a7995f6793d4efa2d68f67bf74398dc4517a0e8d3c88a4e50"
+        "sha256": "5349fa4496a5be1d60c5baca9fb8fd6fbb8d6b02659dec162706385535bf97b1"
       },
       "stderr": {
         "bytes": 0,
@@ -1795,7 +1795,7 @@
       "result": {
         "bytes": 1699,
         "path": "experiments/leopard2/non_power_of_two/c7/results/ssse3.json",
-        "sha256": "db88c86c0c9b353db7ea7d2eaf8de9ae58fa5f50e72467a42e17b2f2fc579b0c"
+        "sha256": "6a5369c897ea787db646de6823c16f03e48d91fa3056ba2e742ee306b3931e09"
       },
       "stderr": {
         "bytes": 0,
@@ -1834,7 +1834,7 @@
       "result": {
         "bytes": 1697,
         "path": "experiments/leopard2/non_power_of_two/c7/results/avx2.json",
-        "sha256": "a5b20c6fc7c0efc297044f32785f479d18a11523acf3ed10d1ae047410477286"
+        "sha256": "641bd6e640f860cfdb50c7b78dca9149808680cb511e6c11934cc6b1014d7112"
       },
       "stderr": {
         "bytes": 0,
@@ -1873,7 +1873,7 @@
       "result": {
         "bytes": 1697,
         "path": "experiments/leopard2/non_power_of_two/c7/results/auto.json",
-        "sha256": "95e4c852395f751cf358192d24c4b601ecc3b4226ef1067849ce34e1124603f6"
+        "sha256": "0fdfc26b4cacf5347d0123fac5235cb4a63d873e0c9039a9b5f17b4b965db630"
       },
       "stderr": {
         "bytes": 0,
@@ -1914,7 +1914,7 @@
       "result": {
         "bytes": 1713,
         "path": "experiments/leopard2/non_power_of_two/c7/results/asan-ubsan.json",
-        "sha256": "ed88bffef7eae7ab5d969f2e88dbed805fb770d48e76bcaef9028e93b00a3930"
+        "sha256": "a99e04b1ffef38e1f629061021e83dd67426aa5e66e33ea5b26038c35f5f77ba"
       },
       "stderr": {
         "bytes": 0,
@@ -1951,9 +1951,9 @@
       ],
       "requested_cpu": 0,
       "result": {
-        "bytes": 3728,
+        "bytes": 3696,
         "path": "experiments/leopard2/non_power_of_two/c7/results/smoke-nonauthoritative.json",
-        "sha256": "6b168f53e1e0379525288b3b8061a71c4e55a09f3ffc27a7ffb580e9a1238936"
+        "sha256": "0a0da58f3abcbaa75701731e2b030342a017b8cf767f53b051a6f776705b6b6c"
       },
       "stderr": {
         "bytes": 17,
