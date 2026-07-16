@@ -241,3 +241,32 @@ sizes must be explicit exclusions rather than silently adjusted cells. The
 current committed matrix has no external-library adapters, so it makes no
 cross-library throughput claim. That remaining work keeps the benchmark-harness
 Bead open.
+
+`tools/leopard2_external_comparison.py` makes that boundary machine-readable.
+For every signed matrix job it reports `adapter-required` or `excluded`, the
+resolved Leopard2 profile/field/parent, whether wire compatibility exists
+(currently false for every external provider), exact source commit and license,
+and the reasons or qualifications. On the 7,134-job required matrix, the audit
+classifies 5,024 ISA-L rows as public-workload candidates and excludes 2,110
+whose `K+R` exceeds GF(256); all 7,134 even-byte GF8/GF16 rows are Jerasure
+adapter candidates. ISA-L remains eligible for `K+R<=256` when Leopard2's
+dyadic parent inflation selects GF16, but the report requires that field
+advantage to be disclosed. FastECC is excluded from all current rows because
+its prime-field NTT stores wider parity sectors than source sectors, and
+ECC-Benchmark is excluded as an independent provider because it is a historical
+harness with different timing/loss semantics. Eligible means only that a future
+reviewed adapter can run the same public workload; it is explicitly not a
+measurement.
+
+Reproduce the policy and optional source-cache checks with:
+
+    python3 tools/leopard2_external_comparison.py self-test
+    python3 tools/leopard2_external_comparison.py matrix --preset required
+    python3 tools/leopard2_external_comparison.py cache \
+        --path .research/leopard2
+
+The cache check performed on 2026-07-16 verified all four recorded commits.
+This host lacks NASM for the current optimized ISA-L x86-64 build and lacks the
+GF-Complete package required by Jerasure 2.0. These are recorded host/toolchain
+gaps, not favorable fairness exclusions; the eligible rows remain open for
+adapters on a suitable build host.

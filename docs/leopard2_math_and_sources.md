@@ -453,6 +453,22 @@ polynomial `0x11d`, Cantor basis, and high/low coordinate conventions match the
 corresponding mathematical layouts, but its default benchmark selects Algorithm 1
 and disables checking.  No XDRS source is copied into Leopard2.
 
+Comparison repositories were refreshed into the ignored research cache on
+2026-07-16. No third-party source is committed:
+
+| Ref | Commit | License observed in checkout |
+| --- | --- | --- |
+| R04 ISA-L | `e8cc5e87fc64b4da434f32bc1fa18184622a4998` | BSD-3-Clause |
+| R05 Jerasure | `de1739cc8483696506829b52e7fda4f6bb195e6a` | BSD-3-Clause |
+| R06 FastECC | `b8ca7db6bf5556185c96009b161e8aec82af734e` | Apache-2.0 |
+| R07 ECC-Benchmark | `c43d4290f8525351821f7b04791cee3bdfbaccdd` | MIT |
+
+`tools/leopard2_external_comparison.py cache` verifies these identities when
+the optional cache is present. The current x86-64 host has neither NASM (which
+current ISA-L requires for its optimized build) nor an installed GF-Complete
+package (which Jerasure 2.0 requires). Those host facts are not mathematical
+exclusions and do not turn an unmeasured cell into a benchmark result.
+
 R14 and R18 were available only through their publisher landing pages in this
 pass.  They are inputs to later exact-size experiments, not to the initial
 production implementation.
