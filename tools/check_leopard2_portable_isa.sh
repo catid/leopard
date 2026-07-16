@@ -4,20 +4,35 @@ set -eu
 
 usage()
 {
-    echo "usage: $0 OBJDUMP STATIC_ARCHIVE [BUILD_DIRECTORY [CC AR]]" >&2
+    echo "usage: $0 OBJDUMP STATIC_ARCHIVE [BUILD_DIRECTORY [EXPECTED_CLASSES] | [BUILD_DIRECTORY CC AR [EXPECTED_CLASSES]]]" >&2
     exit 2
 }
 
 case "$#" in
-    2|3|5) ;;
+    2|3|4|5|6) ;;
     *) usage ;;
 esac
 
 objdump_bin=$1
 archive=$2
 build_dir=${3:-}
-cc_bin=${4:-}
-ar_bin=${5:-}
+cc_bin=
+ar_bin=
+expected_classes=
+case "$#" in
+    4)
+        expected_classes=$4
+        ;;
+    5)
+        cc_bin=$4
+        ar_bin=$5
+        ;;
+    6)
+        cc_bin=$4
+        ar_bin=$5
+        expected_classes=$6
+        ;;
+esac
 
 if [ ! -f "$archive" ]; then
     echo "portable ISA check: archive not found: $archive" >&2
@@ -128,10 +143,49 @@ scan_object()
     return 0
 }
 
+require_expected_members()
+{
+    members_file=$1
+    expected=$2
+    old_ifs=$IFS
+    IFS=,
+    set -- $expected
+    IFS=$old_ifs
+    for object_class in "$@"
+    do
+        case "$object_class" in
+            cpu_features) expected_member=Leopard2CpuFeatures.cpp.o ;;
+            ssse3) expected_member=Leopard2BackendSSSE3.cpp.o ;;
+            avx2) expected_member=Leopard2BackendAVX2.cpp.o ;;
+            '') continue ;;
+            *)
+                echo "portable ISA check: unknown expected class: $object_class" >&2
+                return 1
+                ;;
+        esac
+        member_count=$(awk -v expected="$expected_member" '
+            BEGIN {
+                expected_obj = expected
+                sub(/[.]o$/, ".obj", expected_obj)
+            }
+            $0 == expected || $0 == expected_obj {
+                ++count
+            }
+            END { print count + 0 }
+        ' "$members_file")
+        if [ "$member_count" -ne 1 ]; then
+            echo "portable ISA check: expected exactly one $object_class member, found $member_count" >&2
+            return 1
+        fi
+    done
+    return 0
+}
+
 scan_archive()
 {
     archive_file=$1
-    archive_ar=${ar_bin:-}
+    archive_ar=${2:-${ar_bin:-}}
+    expected=${3:-}
     if [ -z "$archive_ar" ]; then
         archive_ar=$(command -v ar || true)
     fi
@@ -140,12 +194,36 @@ scan_archive()
         return 1
     fi
 
+    members_file="$scratch_root/members.$scan_index"
+    scan_index=$((scan_index + 1))
+    if ! "$archive_ar" t "$archive_file" > "$members_file"; then
+        echo "portable ISA check: failed to list archive members: $archive_file" >&2
+        return 1
+    fi
+    if [ ! -s "$members_file" ]; then
+        echo "portable ISA check: archive contains no members: $archive_file" >&2
+        return 1
+    fi
+    duplicate_members="$scratch_root/duplicate-members.$scan_index"
+    LC_ALL=C sort "$members_file" | uniq -d > "$duplicate_members"
+    if [ -s "$duplicate_members" ]; then
+        cat "$duplicate_members" >&2
+        echo "portable ISA check: duplicate archive member name" >&2
+        return 1
+    fi
+    if [ -n "$expected" ] && ! require_expected_members "$members_file" "$expected"; then
+        return 1
+    fi
+
     member_index=0
-    "$archive_ar" t "$archive_file" | while IFS= read -r member
+    while IFS= read -r member
     do
         member_index=$((member_index + 1))
         extracted="$scratch_root/member.$member_index.o"
-        "$archive_ar" p "$archive_file" "$member" > "$extracted"
+        if ! "$archive_ar" p "$archive_file" "$member" > "$extracted"; then
+            echo "portable ISA check: failed to extract archive member: $member" >&2
+            return 1
+        fi
         case "$member" in
             Leopard2BackendSSSE3.cpp.o|Leopard2BackendSSSE3.cpp.obj)
                 object_class=ssse3 ;;
@@ -155,8 +233,8 @@ scan_archive()
                 object_class=cpu_features ;;
             *) object_class=baseline ;;
         esac
-        scan_object "$extracted" "$object_class" "$member" || exit 1
-    done
+        scan_object "$extracted" "$object_class" "$member" || return 1
+    done < "$members_file"
 }
 
 scan_build_metadata()
@@ -255,6 +333,36 @@ write_classified_archive()
     echo "$fixture_archive"
 }
 
+write_duplicate_classified_archive()
+{
+    fixture_name=$1
+    fixture_member=$2
+    first_instruction=$3
+    second_instruction=$4
+    first_dir="$scratch_root/$fixture_name-first"
+    second_dir="$scratch_root/$fixture_name-second"
+    fixture_archive="$scratch_root/lib$fixture_name.a"
+    mkdir -p "$first_dir" "$second_dir"
+
+    printf '%s\n' \
+        '.text' \
+        ".globl ${fixture_name}_first" \
+        "${fixture_name}_first:" \
+        "    $first_instruction" \
+        '    ret' > "$first_dir/$fixture_name.s"
+    printf '%s\n' \
+        '.text' \
+        ".globl ${fixture_name}_second" \
+        "${fixture_name}_second:" \
+        "    $second_instruction" \
+        '    ret' > "$second_dir/$fixture_name.s"
+    "$cc_bin" -c "$first_dir/$fixture_name.s" -o "$first_dir/$fixture_member"
+    "$cc_bin" -c "$second_dir/$fixture_name.s" -o "$second_dir/$fixture_member"
+    (cd "$first_dir" && "$ar_bin" qc "$fixture_archive" "$fixture_member")
+    (cd "$second_dir" && "$ar_bin" q "$fixture_archive" "$fixture_member")
+    echo "$fixture_archive"
+}
+
 expect_classified_archive_accepted()
 {
     fixture_name=$1
@@ -293,6 +401,66 @@ expect_archive_rejected()
         return 1
     fi
     return 0
+}
+
+expect_duplicate_archive_rejected()
+{
+    fixture_name=$1
+    fixture_member=$2
+    first_instruction=$3
+    second_instruction=$4
+    fixture_archive=$(write_duplicate_classified_archive \
+        "$fixture_name" "$fixture_member" "$first_instruction" "$second_instruction")
+    fixture_log="$scratch_root/$fixture_name.log"
+    if scan_archive "$fixture_archive" "$ar_bin" > "$fixture_log" 2>&1; then
+        echo "portable ISA checker self-test: duplicate-member archive was accepted" >&2
+        return 1
+    fi
+    if ! grep -q 'duplicate archive member name' "$fixture_log"; then
+        cat "$fixture_log" >&2
+        echo "portable ISA checker self-test: duplicate-member rejection reason missing" >&2
+        return 1
+    fi
+}
+
+expect_missing_expected_member_rejected()
+{
+    fixture_archive=$(write_classified_archive missing_expected_avx2 \
+        'Leopard2BackendAVX2.cpp.o' 'vpxor %ymm0, %ymm0, %ymm0')
+    fixture_log="$scratch_root/missing-expected-member.log"
+    if scan_archive "$fixture_archive" "$ar_bin" \
+        'cpu_features,avx2' > "$fixture_log" 2>&1
+    then
+        echo "portable ISA checker self-test: missing expected member was accepted" >&2
+        return 1
+    fi
+    if ! grep -q 'expected exactly one cpu_features member, found 0' "$fixture_log"; then
+        cat "$fixture_log" >&2
+        echo "portable ISA checker self-test: missing-member rejection reason missing" >&2
+        return 1
+    fi
+}
+
+expect_listing_failure_rejected()
+{
+    fixture_archive=$(write_assembly_archive listing_failure_archive \
+        'pxor %xmm0, %xmm0')
+    failing_ar="$scratch_root/failing-ar.sh"
+    printf '%s\n' \
+        '#!/bin/sh' \
+        'if [ "$1" = t ]; then exit 17; fi' \
+        "exec \"$ar_bin\" \"\$@\"" > "$failing_ar"
+    chmod +x "$failing_ar"
+    fixture_log="$scratch_root/listing-failure.log"
+    if scan_archive "$fixture_archive" "$failing_ar" > "$fixture_log" 2>&1; then
+        echo "portable ISA checker self-test: archive listing failure was accepted" >&2
+        return 1
+    fi
+    if ! grep -q 'failed to list archive members' "$fixture_log"; then
+        cat "$fixture_log" >&2
+        echo "portable ISA checker self-test: listing-failure rejection reason missing" >&2
+        return 1
+    fi
 }
 
 expect_metadata_rejected()
@@ -371,6 +539,12 @@ run_negative_controls()
         'NotLeopard2BackendAVX2.cpp.o' 'vpaddd %ymm0, %ymm0, %ymm0'
     expect_classified_archive_rejected lookalike_probe_member \
         'NotLeopard2CpuFeatures.cpp.o' 'xgetbv'
+    expect_duplicate_archive_rejected duplicate_avx2_member \
+        'Leopard2BackendAVX2.cpp.o' \
+        'vpxor %ymm0, %ymm0, %ymm0' \
+        'vfmadd132ps %ymm0, %ymm0, %ymm0'
+    expect_missing_expected_member_rejected
+    expect_listing_failure_rejected
 
     expect_metadata_rejected flag_make_ssse3 make '-mssse3'
     expect_metadata_rejected flag_compile_sse41 compile_commands '-msse4.1'
@@ -384,7 +558,7 @@ if [ -n "$cc_bin" ] && [ -n "$ar_bin" ]; then
     run_negative_controls
 fi
 
-if ! scan_archive "$archive"; then
+if ! scan_archive "$archive" "${ar_bin:-}" "$expected_classes"; then
     exit 1
 fi
 

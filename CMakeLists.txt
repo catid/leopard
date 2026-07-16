@@ -334,13 +334,23 @@ if(LEO2_BUILD_TESTS)
                 list(APPEND LEO2_PORTABLE_ISA_SELF_TEST_ARGS
                     "${CMAKE_C_COMPILER}" "${CMAKE_AR}")
             endif()
+            set(LEO2_PORTABLE_ISA_EXPECTED_CLASSES cpu_features)
+            if(LEO2_HAVE_SSSE3_BACKEND)
+                list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES ssse3)
+            endif()
+            if(LEO2_HAVE_AVX2_BACKEND)
+                list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES avx2)
+            endif()
+            string(REPLACE ";" "," LEO2_PORTABLE_ISA_EXPECTED_CLASSES_ARG
+                "${LEO2_PORTABLE_ISA_EXPECTED_CLASSES}")
             add_test(NAME leopard2_portable_isa
                 COMMAND "${LEO2_SH_EXECUTABLE}"
                     "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_leopard2_portable_isa.sh"
                     "${LEO2_OBJDUMP_EXECUTABLE}"
                     "$<TARGET_FILE:libleopard>"
                     "${CMAKE_CURRENT_BINARY_DIR}"
-                    ${LEO2_PORTABLE_ISA_SELF_TEST_ARGS})
+                    ${LEO2_PORTABLE_ISA_SELF_TEST_ARGS}
+                    "${LEO2_PORTABLE_ISA_EXPECTED_CLASSES_ARG}")
         endif()
     endif()
 
