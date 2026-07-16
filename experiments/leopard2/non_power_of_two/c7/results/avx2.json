@@ -1,0 +1,36 @@
+{
+  "schema":"leopard2-c7-exact-low/v1",
+  "status":"pass",
+  "profile":{"family":3,"version":1,"coordinate_map":1,"systematic":"0..K-1","parity":"K..K+R-1","production_enabled":false},
+  "production_constructor_rejected":true,
+  "timing_scope":"none-correctness-only",
+  "requested_backend":"avx2",
+  "runtime_backend":"avx2",
+  "source_sha256":"37b812e9e5b9b49cc1451c1b866efd6b0553430d88f0613f01e623afea02e7f1",
+  "core_git_sha":"48803c06fbd7a6802b4438af60e3104895938c9d",
+  "library_sha256":"69c195f4b6e6ce6a7713fed29e17f7171cb6f2e17783e8a3feb48b2fb3fcf925",
+  "sanitizer":"none",
+  "allocation_tracking":"global-new",
+  "correctness":{
+    "gf8_cases":9,
+    "gf16_cases":5,
+    "coefficients":118717,
+    "encode_executions":117,
+    "encode_symbol_comparisons":1030423,
+    "subset_encode_executions":117,
+    "decode_plans":403,
+    "decode_executions":403,
+    "decode_symbol_comparisons":272487,
+    "maximum_loss_plans":117,
+    "unavailable_parity_plans":175,
+    "no_loss_null_calls":14,
+    "parity_rebuilds":403,
+    "odd_gf16_rejections":10,
+    "overlap_rejections":28,
+    "read_only_input_alias_calls":13,
+    "hot_path_allocations":0,
+    "digest_fnv64":"0xec4179e9f2776a58"
+  },
+  "benchmarks":[
+  ]
+}
