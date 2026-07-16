@@ -118,9 +118,17 @@ typedef enum leo2_backend {
 
     thread_count selects the persistent context pool used by batch entry points;
     the calling thread participates and no worker is created per batch call.
-    backend is currently an exact capability constraint: AUTO accepts the
-    library's qualified runtime backend; any other value must equal it or
-    creation returns LEO2_UNSUPPORTED.  It does not select a lower backend.
+    backend selects an immutable execution table for this context.  AUTO uses
+    the fastest startup-qualified runtime backend.  On production x86 builds,
+    SCALAR, SSSE3, and AVX2 may explicitly select any compiled, host-qualified
+    table at or below AUTO.  A lower table is allocated and known-answer-tested
+    on its first explicit context request.  Results are cached: unavailable
+    ISAs return LEO2_UNSUPPORTED, allocation failure returns
+    LEO2_OUT_OF_MEMORY, and known-answer-test failure returns
+    LEO2_INTERNAL_ERROR.
+    Independent contexts may select different tables concurrently without
+    changing the wire profile or process-global legacy leo_* selection.  NEON
+    remains an exact request for the existing active ARM path.
 */
 typedef struct leo2_context_options {
     size_t struct_size;
@@ -168,7 +176,8 @@ typedef struct leo2_decode_batch_item {
     size_t scratch_bytes;
 } leo2_decode_batch_item;
 
-LEO2_EXPORT const char* leo2_result_string(leo2_result result);
+/* Accepts any integer so diagnostics remain defined for unknown future codes. */
+LEO2_EXPORT const char* leo2_result_string(int result);
 
 /*
     Successful setup returns immutable objects.  A context must outlive all of

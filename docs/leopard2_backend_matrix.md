@@ -47,9 +47,10 @@ AVX2 backend; matching output alone cannot conceal a failed force control.
 If CMake did not register or execute the portable-ISA gate (for example because
 `objdump` or a POSIX `sh` is unavailable), the matrix fails with an actionable
 reason; it does not accept CTest's zero exit status for an empty selection.
-Test processes are pinned to distinct allowed CPUs and
-use one OpenMP worker; the isolated builds run concurrently and divide up to
-128 build jobs between them. The heavier boundary differential remains a
+Test processes are pinned to distinct allowed CPUs and normally use one OpenMP
+worker.  The context-backend isolation test deliberately uses four workers to
+exercise explicit ops-table propagation inside transforms.  The isolated
+builds run concurrently and divide up to 128 build jobs between them. The heavier boundary differential remains a
 normal CTest target (`leopard2_boundaries`) and can use the full test affinity.
 
 Results are written under `results/leopard2/backend-matrix/`, with full command

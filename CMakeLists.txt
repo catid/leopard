@@ -195,6 +195,8 @@ if(LEO2_X86_TARGET)
 
         check_cxx_compiler_flag("-mavx2" LEO2_FLAG_MAVX2)
         check_cxx_compiler_flag("-mno-avx512f" LEO2_FLAG_MNO_AVX512F)
+        check_cxx_compiler_flag("-falign-functions=64"
+            LEO2_FLAG_FALIGN_FUNCTIONS_64)
         if(LEO2_FLAG_MAVX2 AND LEO2_FLAG_MNO_AVX512F)
             add_library(leopard2_backend_avx2 OBJECT
                 Leopard2BackendAVX2.cpp)
@@ -202,6 +204,10 @@ if(LEO2_X86_TARGET)
                 ${CMAKE_CURRENT_SOURCE_DIR})
             target_compile_options(leopard2_backend_avx2 PRIVATE
                 -mavx2 -mno-avx512f)
+            if(LEO2_FLAG_FALIGN_FUNCTIONS_64)
+                target_compile_options(leopard2_backend_avx2 PRIVATE
+                    -falign-functions=64)
+            endif()
             set(LEO2_HAVE_AVX2_BACKEND ON)
         endif()
     elseif(MSVC)
@@ -366,6 +372,16 @@ if(LEO2_BUILD_TESTS)
     add_test(NAME leopard2_backend_ops COMMAND leopard2_backend_ops_test)
     set_tests_properties(leopard2_backend_ops PROPERTIES
         ENVIRONMENT "OMP_NUM_THREADS=1")
+
+    add_executable(leopard2_context_backends_test
+        tests/leopard2/test_context_backends.cpp)
+    target_compile_definitions(leopard2_context_backends_test PRIVATE
+        LEO2_ENABLE_TEST_HOOKS=1)
+    target_link_libraries(leopard2_context_backends_test libleopard)
+    add_test(NAME leopard2_context_backends
+        COMMAND leopard2_context_backends_test)
+    set_tests_properties(leopard2_context_backends PROPERTIES
+        ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=4")
 
     add_executable(leopard2_direct_encode_test
         tests/leopard2/direct_oracle.cpp

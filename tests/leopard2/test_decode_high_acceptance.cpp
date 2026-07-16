@@ -745,7 +745,7 @@ void test_concurrent_reuse(leo2_context* context, Counts* counts)
     for (unsigned thread_index = 0; thread_index < thread_count; ++thread_index)
     {
         ConcurrentStripe* stripe = stripes[thread_index].get();
-        threads.push_back(std::thread([plan, stripe, bytes, repeats, &failures]() {
+        threads.push_back(std::thread([plan, stripe, &failures]() {
             for (unsigned repeat = 0; repeat < repeats; ++repeat)
             {
                 const leo2_result result = leo2_decode_plan_execute(plan, bytes,

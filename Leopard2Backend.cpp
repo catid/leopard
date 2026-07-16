@@ -6,10 +6,22 @@
 #include "Leopard2Backend.h"
 
 #include <cstring>
+#include <mutex>
 
 namespace leopard { namespace backend {
 
 static const Ops* SelectedOps = NULL;
+static const Ops* QualifiedOps[LEO2_BACKEND_NEON + 1] = {};
+enum QualificationState
+{
+    QualificationUnattempted,
+    QualificationPassed,
+    QualificationFailed
+};
+static QualificationState QualificationStates[LEO2_BACKEND_NEON + 1] = {};
+static QualificationStatus QualificationFailures[LEO2_BACKEND_NEON + 1] = {};
+static InitializeArgs SavedInitializeArgs = { NULL, NULL };
+static uint32_t QualifiableBackendMask = 0;
 static bool SelfTestPassed = false;
 
 static bool TestFF8(const Ops& ops, FF8MultiplyLog reference)
@@ -401,6 +413,23 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         TestFF16Butterflies(ops, args.ff16_multiply_log) && TestXor(ops);
 }
 
+static std::mutex& GetQualificationMutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
+static bool RegisterQualifiedOps(
+    leo2_backend expected_kind,
+    const Ops* ops,
+    const InitializeArgs& args)
+{
+    if (!ops || ops->kind != expected_kind || !TestOps(*ops, args))
+        return false;
+    QualifiedOps[expected_kind] = ops;
+    return true;
+}
+
 bool Initialize(const InitializeArgs& args)
 {
     if (SelectedOps)
@@ -408,43 +437,157 @@ bool Initialize(const InitializeArgs& args)
 
     const X86Features features = DetectX86Features();
     (void)features;
-    const Ops* candidate = NULL;
+    leo2_backend selected_kind = LEO2_BACKEND_SCALAR;
 
 #if defined(LEO2_BACKEND_FORCE_SCALAR)
-    candidate = InitializeScalar(args);
+    selected_kind = LEO2_BACKEND_SCALAR;
 #elif defined(LEO2_BACKEND_FORCE_SSSE3)
 # if defined(LEO2_HAVE_SSSE3_BACKEND)
-    if (features.ssse3)
-        candidate = InitializeSSSE3(args);
+    if (!features.ssse3)
+        return false;
+    selected_kind = LEO2_BACKEND_SSSE3;
+# else
+    return false;
 # endif
 #elif defined(LEO2_BACKEND_FORCE_AVX2)
 # if defined(LEO2_HAVE_AVX2_BACKEND)
-    if (features.avx2)
-        candidate = InitializeAVX2(args);
+    if (!features.avx2)
+        return false;
+    selected_kind = LEO2_BACKEND_AVX2;
+# else
+    return false;
 # endif
 #else
 # if defined(LEO2_HAVE_AVX2_BACKEND)
     if (features.avx2)
-        candidate = InitializeAVX2(args);
+        selected_kind = LEO2_BACKEND_AVX2;
 # endif
 # if defined(LEO2_HAVE_SSSE3_BACKEND)
-    if (!candidate && features.ssse3)
-        candidate = InitializeSSSE3(args);
+    if (selected_kind == LEO2_BACKEND_SCALAR && features.ssse3)
+        selected_kind = LEO2_BACKEND_SSSE3;
 # endif
-    if (!candidate)
-        candidate = InitializeScalar(args);
 #endif
 
-    if (!candidate || !TestOps(*candidate, args))
+    // The selected process default is mandatory.  Lower tables are initialized
+    // lazily by an explicit context request, so legacy/AUTO-only applications
+    // do not pay their allocation and table-generation costs.
+    const Ops* selected_ops = NULL;
+    if (selected_kind == LEO2_BACKEND_SCALAR)
+        selected_ops = InitializeScalar(args);
+
+#if defined(LEO2_HAVE_SSSE3_BACKEND)
+    if (selected_kind == LEO2_BACKEND_SSSE3)
+        selected_ops = InitializeSSSE3(args);
+#endif
+
+#if defined(LEO2_HAVE_AVX2_BACKEND)
+    if (selected_kind == LEO2_BACKEND_AVX2)
+        selected_ops = InitializeAVX2(args);
+#endif
+
+    if (!RegisterQualifiedOps(selected_kind, selected_ops, args))
         return false;
-    SelfTestPassed = true;
-    SelectedOps = candidate;
+
+    uint32_t qualifiable_mask = 1U << LEO2_BACKEND_SCALAR;
+#if defined(LEO2_HAVE_SSSE3_BACKEND)
+    if (features.ssse3 && selected_kind >= LEO2_BACKEND_SSSE3)
+        qualifiable_mask |= 1U << LEO2_BACKEND_SSSE3;
+#endif
+#if defined(LEO2_HAVE_AVX2_BACKEND)
+    if (features.avx2 && selected_kind >= LEO2_BACKEND_AVX2)
+        qualifiable_mask |= 1U << LEO2_BACKEND_AVX2;
+#endif
+
+    {
+        std::lock_guard<std::mutex> lock(GetQualificationMutex());
+        SavedInitializeArgs = args;
+        QualifiableBackendMask = qualifiable_mask;
+        QualificationStates[selected_kind] = QualificationPassed;
+        SelfTestPassed = true;
+        SelectedOps = QualifiedOps[selected_kind];
+    }
     return true;
 }
 
 const Ops& GetOps()
 {
     return *SelectedOps;
+}
+
+const Ops& GetDefaultOps()
+{
+    return *SelectedOps;
+}
+
+const Ops* GetQualifiedOps(
+    leo2_backend requested,
+    QualificationStatus* status)
+{
+    if (status)
+        *status = QualificationAvailable;
+    if (requested == LEO2_BACKEND_AUTO)
+        return SelectedOps;
+    const unsigned index = static_cast<unsigned>(requested);
+    if (index > static_cast<unsigned>(LEO2_BACKEND_NEON))
+    {
+        if (status)
+            *status = QualificationUnavailable;
+        return NULL;
+    }
+
+    std::lock_guard<std::mutex> lock(GetQualificationMutex());
+    if ((QualifiableBackendMask & (1U << index)) == 0)
+    {
+        if (status)
+            *status = QualificationUnavailable;
+        return NULL;
+    }
+    if (QualificationStates[index] == QualificationPassed)
+        return QualifiedOps[index];
+    if (QualificationStates[index] == QualificationFailed)
+    {
+        if (status)
+            *status = QualificationFailures[index];
+        return NULL;
+    }
+
+    const Ops* candidate = NULL;
+    switch (requested)
+    {
+    case LEO2_BACKEND_SCALAR:
+        candidate = InitializeScalar(SavedInitializeArgs);
+        break;
+#if defined(LEO2_HAVE_SSSE3_BACKEND)
+    case LEO2_BACKEND_SSSE3:
+        candidate = InitializeSSSE3(SavedInitializeArgs);
+        break;
+#endif
+#if defined(LEO2_HAVE_AVX2_BACKEND)
+    case LEO2_BACKEND_AVX2:
+        candidate = InitializeAVX2(SavedInitializeArgs);
+        break;
+#endif
+    default:
+        break;
+    }
+    if (!candidate)
+    {
+        QualificationStates[index] = QualificationFailed;
+        QualificationFailures[index] = QualificationOutOfMemory;
+        if (status)
+            *status = QualificationOutOfMemory;
+        return NULL;
+    }
+    if (!RegisterQualifiedOps(requested, candidate, SavedInitializeArgs))
+    {
+        QualificationStates[index] = QualificationFailed;
+        QualificationFailures[index] = QualificationSelfTestFailed;
+        if (status)
+            *status = QualificationSelfTestFailed;
+        return NULL;
+    }
+    QualificationStates[index] = QualificationPassed;
+    return QualifiedOps[index];
 }
 
 leo2_backend SelectedBackend()

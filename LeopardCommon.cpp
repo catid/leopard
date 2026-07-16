@@ -291,9 +291,17 @@ void xor_mem(
     uint64_t bytes)
 {
     if (backend::SelectedBackend() != LEO2_BACKEND_AUTO)
-        backend::GetOps().xor_memory(vx, vy, bytes);
+        backend::GetDefaultOps().xor_memory(vx, vy, bytes);
     else
         xor_mem_baseline(vx, vy, bytes);
+}
+
+void xor_mem(
+    const backend::Ops& ops,
+    void * LEO_RESTRICT vx, const void * LEO_RESTRICT vy,
+    uint64_t bytes)
+{
+    ops.xor_memory(vx, vy, bytes);
 }
 
 #ifdef LEO_M1_OPT
@@ -362,6 +370,25 @@ void xor_mem_2to1(
         x16 += 4, y16 += 4, z16 += 4;
         bytes -= 64;
     } while (bytes > 0);
+}
+
+void xor_mem_2to1(
+    const backend::Ops& ops,
+    void * LEO_RESTRICT x,
+    const void * LEO_RESTRICT y,
+    const void * LEO_RESTRICT z,
+    uint64_t bytes)
+{
+    // Preserve the fused one-pass legacy path for AUTO/process-default calls.
+    // An explicitly lower (or test-tracing) table must remain authoritative,
+    // even though that requires two XOR passes until Ops grows a fused slot.
+    if (&ops == &backend::GetDefaultOps())
+        xor_mem_2to1(x, y, z, bytes);
+    else
+    {
+        ops.xor_memory(x, y, bytes);
+        ops.xor_memory(x, z, bytes);
+    }
 }
 
 #endif // LEO_M1_OPT
@@ -506,6 +533,16 @@ void VectorXOR_Threads(
     void** x,
     void** y)
 {
+    VectorXOR_Threads(backend::GetDefaultOps(), bytes, count, x, y);
+}
+
+void VectorXOR_Threads(
+    const backend::Ops& ops,
+    const uint64_t bytes,
+    unsigned count,
+    void** x,
+    void** y)
+{
 #ifdef LEO_USE_VECTOR4_OPT
     if (count >= 4)
     {
@@ -528,9 +565,20 @@ void VectorXOR_Threads(
 #endif // LEO_USE_VECTOR4_OPT
 
     for (unsigned i = 0; i < count; ++i)
-        xor_mem(x[i], y[i], bytes);
+        xor_mem(ops, x[i], y[i], bytes);
 }
+
 void VectorXOR(
+    const uint64_t bytes,
+    unsigned count,
+    void** x,
+    void** y)
+{
+    VectorXOR(backend::GetDefaultOps(), bytes, count, x, y);
+}
+
+void VectorXOR(
+    const backend::Ops& ops,
     const uint64_t bytes,
     unsigned count,
     void** x,
@@ -557,7 +605,7 @@ void VectorXOR(
 #endif // LEO_USE_VECTOR4_OPT
 
     for (unsigned i = 0; i < count; ++i)
-        xor_mem(x[i], y[i], bytes);
+        xor_mem(ops, x[i], y[i], bytes);
 }
 
 

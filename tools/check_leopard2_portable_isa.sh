@@ -51,7 +51,7 @@ forbidden_mnemonics='^(addsubp[ds]|haddp[ds]|hsubp[ds]|lddqu|movddup|movshdup|mo
 # kernel starts using another AVX/AVX2 mnemonic, reviewers must add that
 # mnemonic after checking its architectural feature contract.  A broad `v*'
 # exemption would silently admit instructions whose CPUID bits are not probed.
-allowed_avx2_vex_mnemonics='^(vbroadcasti128|vinserti128|vmovd|vmovdqa|vmovdqu|vmovq|vmovups|vpand|vpbroadcastb|vpbroadcastq|vpinsrb|vpshufb|vpsrlq|vpunpckldq|vpunpcklqdq|vpunpcklwd|vpxor|vxorps|vzeroupper)$'
+allowed_avx2_vex_mnemonics='^(vbroadcastf128|vbroadcasti128|vinserti128|vmovd|vmovdqa|vmovdqu|vmovq|vmovups|vpand|vpbroadcastb|vpbroadcastq|vpinsrb|vpshufb|vpsrlq|vpunpckldq|vpunpcklqdq|vpunpcklwd|vpxor|vxorps|vzeroupper)$'
 
 # Reject target-raising options in Make, Ninja, or compilation-database
 # metadata.  -mno-* and the x86-64 SSE2 baseline remain allowed.  All -march
@@ -517,6 +517,11 @@ run_negative_controls()
     # probe, so admit this exact move while retaining the fail-closed v* list.
     expect_classified_archive_accepted good_avx_move \
         'Leopard2BackendAVX2.cpp.o' 'vmovd %eax, %xmm0'
+    # Clang spells a 128-bit integer-table broadcast as the AVX
+    # VBROADCASTF128 encoding; the operation is bitwise and AVX is already
+    # established together with OS-managed YMM state by the AVX2 probe.
+    expect_classified_archive_accepted good_avx_broadcast \
+        'Leopard2BackendAVX2.cpp.o' 'vbroadcastf128 (%rax), %ymm0'
     expect_classified_archive_rejected avx2_leaks_fma \
         'Leopard2BackendAVX2.cpp.o' \
         'vfmadd132ps %ymm0, %ymm0, %ymm0'

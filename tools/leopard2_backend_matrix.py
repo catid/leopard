@@ -28,6 +28,7 @@ VARIANTS = ("auto", "scalar", "ssse3", "avx2")
 COMPARE_TESTS = (
     "direct_oracle",
     "backend_ops",
+    "context_backends",
     "legacy_golden",
     "api",
     "public_api_contract",
@@ -81,6 +82,7 @@ EXPECTED_COMPILE_SOURCE_COUNTS = {
     "tests/leopard2/test_api.cpp": 1,
     "tests/leopard2/test_arbitrary_counts_acceptance.cpp": 1,
     "tests/leopard2/test_backend_ops.cpp": 1,
+    "tests/leopard2/test_context_backends.cpp": 1,
     "tests/leopard2/test_boundaries.cpp": 1,
     "tests/leopard2/test_codec_options_abi.c": 1,
     "tests/leopard2/test_decode_high_acceptance.cpp": 1,
@@ -125,6 +127,7 @@ SOURCE_FILES = (
     "leopard2.h",
     "tests/leopard2/test_legacy_golden.cpp",
     "tests/leopard2/test_backend_ops.cpp",
+    "tests/leopard2/test_context_backends.cpp",
     "tests/leopard2/legacy_golden_vectors.h",
     "tests/leopard2/test_api.cpp",
     "tests/leopard2/test_public_api_contract.cpp",
@@ -640,7 +643,8 @@ def run_variant(context, variant, index):
 
     targets = [
         "leopard2_direct_oracle_test",
-        "leopard2_backend_ops_test", "leopard2_legacy_golden_test", "leopard2_api_test",
+        "leopard2_backend_ops_test", "leopard2_context_backends_test",
+        "leopard2_legacy_golden_test", "leopard2_api_test",
         "leopard2_public_api_contract_test",
         "leopard2_random_test", "leopard2_locator_test",
         "leopard2_active_lch_test", "leopard2_gf16_tails_test",
@@ -675,6 +679,7 @@ def run_variant(context, variant, index):
     test_specs = {
         "direct_oracle": ("leopard2_direct_oracle_test", []),
         "backend_ops": ("leopard2_backend_ops_test", []),
+        "context_backends": ("leopard2_context_backends_test", []),
         "legacy_golden": ("leopard2_legacy_golden_test", []),
         "api": ("leopard2_api_test", []),
         "public_api_contract": ("leopard2_public_api_contract_test", []),
@@ -712,9 +717,14 @@ def run_variant(context, variant, index):
         argv = [str(executable)] + arguments
         if context["taskset"]:
             argv = [context["taskset"], "-c", str(pin_cpu)] + argv
+        test_environment = environment
+        if name == "context_backends":
+            test_environment = dict(environment)
+            test_environment["OMP_DYNAMIC"] = "FALSE"
+            test_environment["OMP_NUM_THREADS"] = "4"
         command = run_command(
             "test_" + name, argv, context["source"], result_dir,
-            context["timeout"], environment, hash_output=True
+            context["timeout"], test_environment, hash_output=True
         )
         command["executable_sha256"] = digest_bytes(executable.read_bytes())
         base["build_identity"]["test_executables"][name] = {

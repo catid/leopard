@@ -244,100 +244,6 @@ static const Multiply256LUT_t* Multiply256LUT = nullptr;
 static const ffe_t* Multiply8LUT = nullptr;
 
 
-// Reference version of muladd: x[] ^= y[] * log_m
-static LEO_FORCE_INLINE void RefMulAdd(
-    void* LEO_RESTRICT x,
-    const void* LEO_RESTRICT y,
-    ffe_t log_m,
-    uint64_t bytes)
-{
-    const ffe_t* LEO_RESTRICT lut = Multiply8LUT + (unsigned)log_m * 256;
-    const ffe_t * LEO_RESTRICT y1 = reinterpret_cast<const ffe_t *>(y);
-
-#ifdef LEO_TARGET_MOBILE
-    ffe_t * LEO_RESTRICT x1 = reinterpret_cast<ffe_t *>(x);
-
-    do
-    {
-        for (unsigned j = 0; j < 64; ++j)
-            x1[j] ^= lut[y1[j]];
-
-        x1 += 64, y1 += 64;
-        bytes -= 64;
-} while (bytes > 0);
-#else
-    uint8_t * LEO_RESTRICT x1 = reinterpret_cast<uint8_t *>(x);
-
-    do
-    {
-        for (unsigned j = 0; j < 8; ++j)
-        {
-            uint64_t x_0;
-            memcpy(&x_0, x1 + j * sizeof(x_0), sizeof(x_0));
-            x_0 ^= (uint64_t)lut[y1[0]];
-            x_0 ^= (uint64_t)lut[y1[1]] << 8;
-            x_0 ^= (uint64_t)lut[y1[2]] << 16;
-            x_0 ^= (uint64_t)lut[y1[3]] << 24;
-            x_0 ^= (uint64_t)lut[y1[4]] << 32;
-            x_0 ^= (uint64_t)lut[y1[5]] << 40;
-            x_0 ^= (uint64_t)lut[y1[6]] << 48;
-            x_0 ^= (uint64_t)lut[y1[7]] << 56;
-            memcpy(x1 + j * sizeof(x_0), &x_0, sizeof(x_0));
-            y1 += 8;
-        }
-
-        x1 += 64;
-        bytes -= 64;
-    } while (bytes > 0);
-#endif
-}
-
-// Reference version of mul: x[] = y[] * log_m
-static LEO_FORCE_INLINE void RefMul(
-    void* LEO_RESTRICT x,
-    const void* LEO_RESTRICT y,
-    ffe_t log_m,
-    uint64_t bytes)
-{
-    const ffe_t* LEO_RESTRICT lut = Multiply8LUT + (unsigned)log_m * 256;
-    const ffe_t * LEO_RESTRICT y1 = reinterpret_cast<const ffe_t *>(y);
-
-#ifdef LEO_TARGET_MOBILE
-    ffe_t * LEO_RESTRICT x1 = reinterpret_cast<ffe_t *>(x);
-
-    do
-    {
-        for (unsigned j = 0; j < 64; ++j)
-            x1[j] ^= lut[y1[j]];
-
-        x1 += 64, y1 += 64;
-        bytes -= 64;
-    } while (bytes > 0);
-#else
-    uint8_t * LEO_RESTRICT x1 = reinterpret_cast<uint8_t *>(x);
-
-    do
-    {
-        for (unsigned j = 0; j < 8; ++j)
-        {
-            uint64_t x_0 = (uint64_t)lut[y1[0]];
-            x_0 ^= (uint64_t)lut[y1[1]] << 8;
-            x_0 ^= (uint64_t)lut[y1[2]] << 16;
-            x_0 ^= (uint64_t)lut[y1[3]] << 24;
-            x_0 ^= (uint64_t)lut[y1[4]] << 32;
-            x_0 ^= (uint64_t)lut[y1[5]] << 40;
-            x_0 ^= (uint64_t)lut[y1[6]] << 48;
-            x_0 ^= (uint64_t)lut[y1[7]] << 56;
-            memcpy(x1 + j * sizeof(x_0), &x_0, sizeof(x_0));
-            y1 += 8;
-        }
-
-        x1 += 64;
-        bytes -= 64;
-    } while (bytes > 0);
-#endif
-}
-
 static void InitializeMultiplyTables()
 {
     // If we cannot use the PSHUFB instruction, generate Multiply8LUT:
@@ -411,6 +317,7 @@ static void InitializeMultiplyTables()
 
 
 static void mul_mem(
+    const backend::Ops& ops,
     void * LEO_RESTRICT x, const void * LEO_RESTRICT y,
     ffe_t log_m, uint64_t bytes)
 {
@@ -482,17 +389,12 @@ static void mul_mem(
     }
 #endif // LEO_TRY_SSSE3
 
-    // Before backend publication (during field setup), retain the independent
-    // scalar implementation.  Production execution is routed through the
-    // immutable ISA-isolated ops table.
-    if (backend::SelectedBackend() == LEO2_BACKEND_AUTO)
-        RefMul(x, y, log_m, bytes);
-    else
-        backend::GetOps().ff8_multiply(x, y, log_m, bytes);
+    ops.ff8_multiply(x, y, log_m, bytes);
 }
 
 // x[] ^= y[] * log_m for complete SIMD tiles.
 static void muladd_mem(
+    const backend::Ops& ops,
     void * LEO_RESTRICT x, const void * LEO_RESTRICT y,
     ffe_t log_m, uint64_t bytes)
 {
@@ -547,10 +449,7 @@ static void muladd_mem(
     }
 #endif // LEO_TRY_SSSE3
 
-    if (backend::SelectedBackend() == LEO2_BACKEND_AUTO)
-        RefMulAdd(x, y, log_m, bytes);
-    else
-        backend::GetOps().ff8_multiply_add(x, y, log_m, bytes);
+    ops.ff8_multiply_add(x, y, log_m, bytes);
 }
 
 
@@ -585,6 +484,7 @@ ffe_t MultiplyLogElement(ffe_t value, ffe_t multiplier_log)
 
 
 void MultiplyBytes(
+    const backend::Ops& ops,
     void* destination,
     const void* source,
     ffe_t multiplier_log,
@@ -599,12 +499,44 @@ void MultiplyBytes(
         // this direct-repair helper for arbitrary caller output buffers.
         memset(destination, 0, static_cast<size_t>(complete));
 #endif
-        mul_mem(destination, source, multiplier_log, complete);
+        mul_mem(ops, destination, source, multiplier_log, complete);
     }
-    uint8_t* output = reinterpret_cast<uint8_t*>(destination);
-    const uint8_t* input = reinterpret_cast<const uint8_t*>(source);
-    for (uint64_t i = complete; i < byte_count; ++i)
-        output[i] = MultiplyLog(input[i], multiplier_log);
+    const uint64_t residual = byte_count - complete;
+    if (residual != 0)
+        ops.ff8_multiply(
+            static_cast<uint8_t*>(destination) + complete,
+            static_cast<const uint8_t*>(source) + complete,
+            multiplier_log, residual);
+}
+
+
+void MultiplyBytes(
+    void* destination,
+    const void* source,
+    ffe_t multiplier_log,
+    uint64_t byte_count)
+{
+    MultiplyBytes(
+        backend::GetDefaultOps(), destination, source, multiplier_log, byte_count);
+}
+
+
+void MultiplyAddBytes(
+    const backend::Ops& ops,
+    void* destination,
+    const void* source,
+    ffe_t multiplier_log,
+    uint64_t byte_count)
+{
+    const uint64_t complete = byte_count & ~static_cast<uint64_t>(63);
+    if (complete != 0)
+        muladd_mem(ops, destination, source, multiplier_log, complete);
+    const uint64_t residual = byte_count - complete;
+    if (residual != 0)
+        ops.ff8_multiply_add(
+            static_cast<uint8_t*>(destination) + complete,
+            static_cast<const uint8_t*>(source) + complete,
+            multiplier_log, residual);
 }
 
 
@@ -614,13 +546,8 @@ void MultiplyAddBytes(
     ffe_t multiplier_log,
     uint64_t byte_count)
 {
-    const uint64_t complete = byte_count & ~static_cast<uint64_t>(63);
-    if (complete != 0)
-        muladd_mem(destination, source, multiplier_log, complete);
-    uint8_t* output = reinterpret_cast<uint8_t*>(destination);
-    const uint8_t* input = reinterpret_cast<const uint8_t*>(source);
-    for (uint64_t i = complete; i < byte_count; ++i)
-        output[i] ^= MultiplyLog(input[i], multiplier_log);
+    MultiplyAddBytes(
+        backend::GetDefaultOps(), destination, source, multiplier_log, byte_count);
 }
 
 
@@ -752,6 +679,7 @@ static void FFTInitialize()
 
 // 2-way butterfly
 static void IFFT_DIT2(
+    const backend::Ops& ops,
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
     ffe_t log_m, uint64_t bytes)
 {
@@ -821,12 +749,13 @@ static void IFFT_DIT2(
     }
 #endif // LEO_TRY_SSSE3
 
-    backend::GetOps().ff8_ifft_butterfly2(x, y, log_m, bytes);
+    ops.ff8_ifft_butterfly2(x, y, log_m, bytes);
 }
 
 
 // 4-way butterfly
 static void IFFT_DIT4(
+    const backend::Ops& ops,
     uint64_t bytes,
     void** work,
     unsigned dist,
@@ -954,31 +883,32 @@ static void IFFT_DIT4(
 
     // First layer:
     if (log_m01 == kModulus)
-        xor_mem(work[dist], work[0], bytes);
+        xor_mem(ops, work[dist], work[0], bytes);
     else
-        IFFT_DIT2(work[0], work[dist], log_m01, bytes);
+        IFFT_DIT2(ops, work[0], work[dist], log_m01, bytes);
 
     if (log_m23 == kModulus)
-        xor_mem(work[dist * 3], work[dist * 2], bytes);
+        xor_mem(ops, work[dist * 3], work[dist * 2], bytes);
     else
-        IFFT_DIT2(work[dist * 2], work[dist * 3], log_m23, bytes);
+        IFFT_DIT2(ops, work[dist * 2], work[dist * 3], log_m23, bytes);
 
     // Second layer:
     if (log_m02 == kModulus)
     {
-        xor_mem(work[dist * 2], work[0], bytes);
-        xor_mem(work[dist * 3], work[dist], bytes);
+        xor_mem(ops, work[dist * 2], work[0], bytes);
+        xor_mem(ops, work[dist * 3], work[dist], bytes);
     }
     else
     {
-        IFFT_DIT2(work[0], work[dist * 2], log_m02, bytes);
-        IFFT_DIT2(work[dist], work[dist * 3], log_m02, bytes);
+        IFFT_DIT2(ops, work[0], work[dist * 2], log_m02, bytes);
+        IFFT_DIT2(ops, work[dist], work[dist * 3], log_m02, bytes);
     }
 }
 
 
 // {x_out, y_out} ^= IFFT_DIT2( {x_in, y_in} )
 static void IFFT_DIT2_xor(
+    const backend::Ops& ops,
     void * LEO_RESTRICT x_in, void * LEO_RESTRICT y_in,
     void * LEO_RESTRICT x_out, void * LEO_RESTRICT y_out,
     const ffe_t log_m, uint64_t bytes)
@@ -1061,13 +991,14 @@ static void IFFT_DIT2_xor(
     }
 #endif // LEO_TRY_SSSE3
 
-    backend::GetOps().ff8_ifft_butterfly2_xor(
+    ops.ff8_ifft_butterfly2_xor(
         x_in, y_in, x_out, y_out, log_m, bytes);
 }
 
 
 // xor_result ^= IFFT_DIT4(work)
 static void IFFT_DIT4_xor(
+    const backend::Ops& ops,
     uint64_t bytes,
     void** work_in,
     void** xor_out,
@@ -1218,36 +1149,37 @@ static void IFFT_DIT4_xor(
 
     // First layer:
     if (log_m01 == kModulus)
-        xor_mem(work_in[dist], work_in[0], bytes);
+        xor_mem(ops, work_in[dist], work_in[0], bytes);
     else
-        IFFT_DIT2(work_in[0], work_in[dist], log_m01, bytes);
+        IFFT_DIT2(ops, work_in[0], work_in[dist], log_m01, bytes);
 
     if (log_m23 == kModulus)
-        xor_mem(work_in[dist * 3], work_in[dist * 2], bytes);
+        xor_mem(ops, work_in[dist * 3], work_in[dist * 2], bytes);
     else
-        IFFT_DIT2(work_in[dist * 2], work_in[dist * 3], log_m23, bytes);
+        IFFT_DIT2(ops, work_in[dist * 2], work_in[dist * 3], log_m23, bytes);
 
     // Second layer:
     if (log_m02 == kModulus)
     {
-        xor_mem(work_in[dist * 2], work_in[0], bytes);
-        xor_mem(work_in[dist * 3], work_in[dist], bytes);
+        xor_mem(ops, work_in[dist * 2], work_in[0], bytes);
+        xor_mem(ops, work_in[dist * 3], work_in[dist], bytes);
     }
     else
     {
-        IFFT_DIT2(work_in[0], work_in[dist * 2], log_m02, bytes);
-        IFFT_DIT2(work_in[dist], work_in[dist * 3], log_m02, bytes);
+        IFFT_DIT2(ops, work_in[0], work_in[dist * 2], log_m02, bytes);
+        IFFT_DIT2(ops, work_in[dist], work_in[dist * 3], log_m02, bytes);
     }
 
-    xor_mem(xor_out[0], work_in[0], bytes);
-    xor_mem(xor_out[dist], work_in[dist], bytes);
-    xor_mem(xor_out[dist * 2], work_in[dist * 2], bytes);
-    xor_mem(xor_out[dist * 3], work_in[dist * 3], bytes);
+    xor_mem(ops, xor_out[0], work_in[0], bytes);
+    xor_mem(ops, xor_out[dist], work_in[dist], bytes);
+    xor_mem(ops, xor_out[dist * 2], work_in[dist * 2], bytes);
+    xor_mem(ops, xor_out[dist * 3], work_in[dist * 3], bytes);
 }
 
 
 // Unrolled IFFT for encoder
 static void IFFT_DIT_Encoder(
+    const backend::Ops& ops,
     const uint64_t bytes,
     const void* const* data,
     const unsigned m_truncated,
@@ -1286,6 +1218,7 @@ static void IFFT_DIT_Encoder(
                 for (unsigned i = r; i < i_end; ++i)
                 {
                     IFFT_DIT4_xor(
+                        ops,
                         bytes,
                         work + i,
                         xor_result + i,
@@ -1301,6 +1234,7 @@ static void IFFT_DIT_Encoder(
                 for (unsigned i = r; i < i_end; ++i)
                 {
                     IFFT_DIT4(
+                        ops,
                         bytes,
                         work + i,
                         dist,
@@ -1329,13 +1263,15 @@ static void IFFT_DIT_Encoder(
             if (log_m == kModulus)
             {
                 for (unsigned i = 0; i < dist; ++i)
-                    xor_mem_2to1(xor_result[i], work[i], work[i + dist], bytes);
+                    xor_mem_2to1(
+                        ops, xor_result[i], work[i], work[i + dist], bytes);
             }
             else
             {
                 for (unsigned i = 0; i < dist; ++i)
                 {
                     IFFT_DIT2_xor(
+                        ops,
                         work[i],
                         work[i + dist],
                         xor_result[i],
@@ -1348,12 +1284,13 @@ static void IFFT_DIT_Encoder(
         else
         {
             if (log_m == kModulus)
-                VectorXOR(bytes, dist, work + dist, work);
+                VectorXOR(ops, bytes, dist, work + dist, work);
             else
             {
                 for (unsigned i = 0; i < dist; ++i)
                 {
                     IFFT_DIT2(
+                        ops,
                         work[i],
                         work[i + dist],
                         log_m,
@@ -1367,6 +1304,7 @@ static void IFFT_DIT_Encoder(
 
 // Basic no-frills version for decoder
 static void IFFT_DIT_Decoder(
+    const backend::Ops& ops,
     const uint64_t bytes,
     const unsigned m_truncated,
     void** work,
@@ -1389,6 +1327,7 @@ static void IFFT_DIT_Decoder(
             for (unsigned i = r; i < i_end; ++i)
             {
                 IFFT_DIT4(
+                    ops,
                     bytes,
                     work + i,
                     dist,
@@ -1408,12 +1347,13 @@ static void IFFT_DIT_Decoder(
         const ffe_t log_m = skewLUT[dist];
 
         if (log_m == kModulus)
-            VectorXOR(bytes, dist, work + dist, work);
+            VectorXOR(ops, bytes, dist, work + dist, work);
         else
         {
             for (unsigned i = 0; i < dist; ++i)
             {
                 IFFT_DIT2(
+                    ops,
                     work[i],
                     work[i + dist],
                     log_m,
@@ -1479,6 +1419,7 @@ static void IFFT_DIT_Decoder(
 
 // 2-way butterfly
 static void FFT_DIT2(
+    const backend::Ops& ops,
     void * LEO_RESTRICT x, void * LEO_RESTRICT y,
     ffe_t log_m, uint64_t bytes)
 {
@@ -1548,12 +1489,13 @@ static void FFT_DIT2(
     }
 #endif // LEO_TRY_SSSE3
 
-    backend::GetOps().ff8_fft_butterfly2(x, y, log_m, bytes);
+    ops.ff8_fft_butterfly2(x, y, log_m, bytes);
 }
 
 
 // 4-way butterfly
 static void FFT_DIT4(
+    const backend::Ops& ops,
     uint64_t bytes,
     void** work,
     unsigned dist,
@@ -1682,30 +1624,31 @@ static void FFT_DIT4(
     // First layer:
     if (log_m02 == kModulus)
     {
-        xor_mem(work[dist * 2], work[0], bytes);
-        xor_mem(work[dist * 3], work[dist], bytes);
+        xor_mem(ops, work[dist * 2], work[0], bytes);
+        xor_mem(ops, work[dist * 3], work[dist], bytes);
     }
     else
     {
-        FFT_DIT2(work[0], work[dist * 2], log_m02, bytes);
-        FFT_DIT2(work[dist], work[dist * 3], log_m02, bytes);
+        FFT_DIT2(ops, work[0], work[dist * 2], log_m02, bytes);
+        FFT_DIT2(ops, work[dist], work[dist * 3], log_m02, bytes);
     }
 
     // Second layer:
     if (log_m01 == kModulus)
-        xor_mem(work[dist], work[0], bytes);
+        xor_mem(ops, work[dist], work[0], bytes);
     else
-        FFT_DIT2(work[0], work[dist], log_m01, bytes);
+        FFT_DIT2(ops, work[0], work[dist], log_m01, bytes);
 
     if (log_m23 == kModulus)
-        xor_mem(work[dist * 3], work[dist * 2], bytes);
+        xor_mem(ops, work[dist * 3], work[dist * 2], bytes);
     else
-        FFT_DIT2(work[dist * 2], work[dist * 3], log_m23, bytes);
+        FFT_DIT2(ops, work[dist * 2], work[dist * 3], log_m23, bytes);
 }
 
 
 // In-place FFT for encoder and decoder
 static void FFT_DIT(
+    const backend::Ops& ops,
     const uint64_t bytes,
     void** work,
     const unsigned m_truncated,
@@ -1728,6 +1671,7 @@ static void FFT_DIT(
             for (unsigned i = r; i < i_end; ++i)
             {
                 FFT_DIT4(
+                    ops,
                     bytes,
                     work + i,
                     dist,
@@ -1746,10 +1690,11 @@ static void FFT_DIT(
             const ffe_t log_m = skewLUT[r + 1];
 
             if (log_m == kModulus)
-                xor_mem(work[r + 1], work[r], bytes);
+                xor_mem(ops, work[r + 1], work[r], bytes);
             else
             {
                 FFT_DIT2(
+                    ops,
                     work[r],
                     work[r + 1],
                     log_m,
@@ -1764,6 +1709,7 @@ static void FFT_DIT(
 // Reed-Solomon Encode
 
 void ReedSolomonEncode(
+    const backend::Ops& ops,
     uint64_t buffer_bytes,
     unsigned original_count,
     unsigned recovery_count,
@@ -1776,6 +1722,7 @@ void ReedSolomonEncode(
     const ffe_t* skewLUT = FFTSkewStorage + m;
 
     IFFT_DIT_Encoder(
+        ops,
         buffer_bytes,
         data,
         original_count < m ? original_count : m,
@@ -1797,6 +1744,7 @@ void ReedSolomonEncode(
         // work <- work xor IFFT(data + i, m, m + i)
 
         IFFT_DIT_Encoder(
+            ops,
             buffer_bytes,
             data, // data source
             m,
@@ -1815,6 +1763,7 @@ void ReedSolomonEncode(
         // work <- work xor IFFT(data + i, m, m + i)
 
         IFFT_DIT_Encoder(
+            ops,
             buffer_bytes,
             data, // data source
             last_count,
@@ -1828,6 +1777,7 @@ skip_body:
 
     // work <- FFT(work, m, 0)
     FFT_DIT(
+        ops,
         buffer_bytes,
         work,
         recovery_count,
@@ -1836,7 +1786,22 @@ skip_body:
 }
 
 
+void ReedSolomonEncode(
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned m,
+    const void* const* data,
+    void** work)
+{
+    ReedSolomonEncode(
+        backend::GetDefaultOps(), buffer_bytes, original_count, recovery_count,
+        m, data, work);
+}
+
+
 void ReedSolomonEncodeLow(
+    const backend::Ops& ops,
     uint64_t buffer_bytes,
     unsigned original_count,
     unsigned recovery_count,
@@ -1852,6 +1817,7 @@ void ReedSolomonEncodeLow(
     // Interpolate the systematic prefix.  Coordinates original_count..p-1
     // are shortened and therefore supplied to the transform as known zeroes.
     IFFT_DIT_Encoder(
+        ops,
         buffer_bytes,
         data,
         original_count,
@@ -1882,6 +1848,7 @@ void ReedSolomonEncodeLow(
             memcpy(work[p + i], work[i], buffer_bytes);
 
         FFT_DIT(
+            ops,
             buffer_bytes,
             work + p,
             requested_count,
@@ -1895,6 +1862,21 @@ void ReedSolomonEncodeLow(
                 memcpy(output, work[p + i], buffer_bytes);
         }
     }
+}
+
+
+void ReedSolomonEncodeLow(
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned p,
+    const void* const* data,
+    void* const* recovery,
+    void** work)
+{
+    ReedSolomonEncodeLow(
+        backend::GetDefaultOps(), buffer_bytes, original_count, recovery_count,
+        p, data, recovery, work);
 }
 
 
@@ -1966,6 +1948,7 @@ void ErrorBitfield::Prepare()
 
 template<class OutputDependencies>
 static void FFT_DIT_ErrorBits(
+    const backend::Ops& ops,
     const uint64_t bytes,
     void** work,
     const unsigned n_truncated,
@@ -1993,6 +1976,7 @@ static void FFT_DIT_ErrorBits(
             for (unsigned i = r; i < r + dist; ++i)
             {
                 FFT_DIT4(
+                    ops,
                     bytes,
                     work + i,
                     dist,
@@ -2014,10 +1998,11 @@ static void FFT_DIT_ErrorBits(
             const ffe_t log_m = skewLUT[r + 1];
 
             if (log_m == kModulus)
-                xor_mem(work[r + 1], work[r], bytes);
+                xor_mem(ops, work[r + 1], work[r], bytes);
             else
             {
                 FFT_DIT2(
+                    ops,
                     work[r],
                     work[r + 1],
                     log_m,
@@ -2147,7 +2132,11 @@ void PrepareDecodeWithPermanent(
 
 // mul_mem() uses restrict-qualified input and output pointers.  Keep its
 // contract intact while revealing a result in its existing coordinate slot.
-static void mul_mem_inplace(void* data, ffe_t log_m, uint64_t bytes)
+static void mul_mem_inplace(
+    const backend::Ops& ops,
+    void* data,
+    ffe_t log_m,
+    uint64_t bytes)
 {
     alignas(64) uint8_t source[64];
     uint8_t* output = reinterpret_cast<uint8_t*>(data);
@@ -2155,12 +2144,13 @@ static void mul_mem_inplace(void* data, ffe_t log_m, uint64_t bytes)
     for (uint64_t offset = 0; offset < bytes; offset += sizeof(source))
     {
         memcpy(source, output + offset, sizeof(source));
-        mul_mem(output + offset, source, log_m, sizeof(source));
+        mul_mem(ops, output + offset, source, log_m, sizeof(source));
     }
 }
 
 
 static void AddFormalDerivative(
+    const backend::Ops& ops,
     uint64_t buffer_bytes,
     unsigned n,
     void** work)
@@ -2171,12 +2161,13 @@ static void AddFormalDerivative(
     for (unsigned i = 1; i < n; ++i)
     {
         const unsigned width = ((i ^ (i - 1)) + 1) >> 1;
-        VectorXOR(buffer_bytes, width, work + i - width, work + i);
+        VectorXOR(ops, buffer_bytes, width, work + i - width, work + i);
     }
 }
 
 
 void ReedSolomonDecodePrepared(
+    const backend::Ops& ops,
     uint64_t buffer_bytes,
     unsigned n,
     const void* const* coordinate_data,
@@ -2201,30 +2192,48 @@ void ReedSolomonDecodePrepared(
     for (unsigned i = 0; i < n; ++i)
     {
         if (coordinate_data[i])
-            mul_mem(work[i], coordinate_data[i], locator_logs[i], buffer_bytes);
+            mul_mem(
+                ops, work[i], coordinate_data[i], locator_logs[i], buffer_bytes);
         else
             memset(work[i], 0, buffer_bytes);
     }
 
-    IFFT_DIT_Decoder(buffer_bytes, input_count, work, n, FFTSkewStorage);
+    IFFT_DIT_Decoder(ops, buffer_bytes, input_count, work, n, FFTSkewStorage);
 
-    AddFormalDerivative(buffer_bytes, n, work);
+    AddFormalDerivative(ops, buffer_bytes, n, work);
 
 #ifdef LEO_ERROR_BITFIELD_OPT
-    FFT_DIT_ErrorBits(buffer_bytes, work, n, n, FFTSkewStorage, error_bits);
+    FFT_DIT_ErrorBits(
+        ops, buffer_bytes, work, n, n, FFTSkewStorage, error_bits);
 #else
-    FFT_DIT(buffer_bytes, work, n, n, FFTSkewStorage);
+    FFT_DIT(ops, buffer_bytes, work, n, n, FFTSkewStorage);
 #endif // LEO_ERROR_BITFIELD_OPT
 
     for (unsigned i = 0; i < n; ++i)
     {
         if (requested_outputs[i])
-            mul_mem_inplace(work[i], kModulus - locator_logs[i], buffer_bytes);
+            mul_mem_inplace(
+                ops, work[i], kModulus - locator_logs[i], buffer_bytes);
     }
 }
 
 
+void ReedSolomonDecodePrepared(
+    uint64_t buffer_bytes,
+    unsigned n,
+    const void* const* coordinate_data,
+    const uint8_t* requested_outputs,
+    const ffe_t* locator_logs,
+    void** work)
+{
+    ReedSolomonDecodePrepared(
+        backend::GetDefaultOps(), buffer_bytes, n, coordinate_data,
+        requested_outputs, locator_logs, work);
+}
+
+
 void ReedSolomonDecodePlanned(
+    const backend::Ops& ops,
     uint64_t buffer_bytes,
     unsigned n,
     const void* const* coordinate_data,
@@ -2241,22 +2250,24 @@ void ReedSolomonDecodePlanned(
     for (unsigned i = 0; i < n; ++i)
     {
         if (coordinate_data[i])
-            mul_mem(work[i], coordinate_data[i], locator_logs[i], buffer_bytes);
+            mul_mem(
+                ops, work[i], coordinate_data[i], locator_logs[i], buffer_bytes);
         else
             memset(work[i], 0, buffer_bytes);
     }
 
     if (input_count != 0)
-        IFFT_DIT_Decoder(buffer_bytes, input_count, work, n, FFTSkewStorage);
+        IFFT_DIT_Decoder(
+            ops, buffer_bytes, input_count, work, n, FFTSkewStorage);
 
-    AddFormalDerivative(buffer_bytes, n, work);
+    AddFormalDerivative(ops, buffer_bytes, n, work);
 
 #ifdef LEO_ERROR_BITFIELD_OPT
     FFT_DIT_ErrorBits(
-        buffer_bytes, work, n, n, FFTSkewStorage, output_dependencies);
+        ops, buffer_bytes, work, n, n, FFTSkewStorage, output_dependencies);
 #else
     (void)output_dependencies;
-    FFT_DIT(buffer_bytes, work, n, n, FFTSkewStorage);
+    FFT_DIT(ops, buffer_bytes, work, n, n, FFTSkewStorage);
 #endif
 
     for (unsigned i = 0; i < requested_count; ++i)
@@ -2264,8 +2275,27 @@ void ReedSolomonDecodePlanned(
         const uint32_t coordinate = requested_coordinates[i];
         LEO_DEBUG_ASSERT(coordinate < n);
         mul_mem_inplace(
-            work[coordinate], kModulus - locator_logs[coordinate], buffer_bytes);
+            ops, work[coordinate], kModulus - locator_logs[coordinate],
+            buffer_bytes);
     }
+}
+
+
+void ReedSolomonDecodePlanned(
+    uint64_t buffer_bytes,
+    unsigned n,
+    const void* const* coordinate_data,
+    unsigned input_count,
+    const uint32_t* requested_coordinates,
+    unsigned requested_count,
+    const leopard2_internal::OutputDependencyView& output_dependencies,
+    const ffe_t* locator_logs,
+    void** work)
+{
+    ReedSolomonDecodePlanned(
+        backend::GetDefaultOps(), buffer_bytes, n, coordinate_data, input_count,
+        requested_coordinates, requested_count, output_dependencies,
+        locator_logs, work);
 }
 
 
@@ -2388,6 +2418,7 @@ ffe_t TestOnlyLchNormalizer(unsigned index)
 
 
 void TestOnlyLchForward(
+    const backend::Ops& ops,
     uint64_t buffer_bytes,
     unsigned size,
     unsigned shift,
@@ -2398,7 +2429,37 @@ void TestOnlyLchForward(
     LEO_DEBUG_ASSERT((size & (size - 1)) == 0);
     LEO_DEBUG_ASSERT((shift & (size - 1)) == 0 && shift + size <= kOrder);
     LEO_DEBUG_ASSERT(requested_output_count <= size);
-    FFT_DIT(buffer_bytes, work, requested_output_count, size,
+    FFT_DIT(ops, buffer_bytes, work, requested_output_count, size,
+        FFTSkewStorage + shift);
+}
+
+
+void TestOnlyLchForward(
+    uint64_t buffer_bytes,
+    unsigned size,
+    unsigned shift,
+    unsigned requested_output_count,
+    void** work)
+{
+    TestOnlyLchForward(
+        backend::GetDefaultOps(), buffer_bytes, size, shift,
+        requested_output_count, work);
+}
+
+
+void TestOnlyLchInverse(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned size,
+    unsigned shift,
+    unsigned known_input_count,
+    void** work)
+{
+    LEO_DEBUG_ASSERT(size >= 1 && size <= kOrder);
+    LEO_DEBUG_ASSERT((size & (size - 1)) == 0);
+    LEO_DEBUG_ASSERT((shift & (size - 1)) == 0 && shift + size <= kOrder);
+    LEO_DEBUG_ASSERT(known_input_count <= size);
+    IFFT_DIT_Decoder(ops, buffer_bytes, known_input_count, work, size,
         FFTSkewStorage + shift);
 }
 
@@ -2410,12 +2471,19 @@ void TestOnlyLchInverse(
     unsigned known_input_count,
     void** work)
 {
-    LEO_DEBUG_ASSERT(size >= 1 && size <= kOrder);
-    LEO_DEBUG_ASSERT((size & (size - 1)) == 0);
-    LEO_DEBUG_ASSERT((shift & (size - 1)) == 0 && shift + size <= kOrder);
-    LEO_DEBUG_ASSERT(known_input_count <= size);
-    IFFT_DIT_Decoder(buffer_bytes, known_input_count, work, size,
-        FFTSkewStorage + shift);
+    TestOnlyLchInverse(
+        backend::GetDefaultOps(), buffer_bytes, size, shift,
+        known_input_count, work);
+}
+
+
+void TestOnlyAddFormalDerivative(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned size,
+    void** work)
+{
+    AddFormalDerivative(ops, buffer_bytes, size, work);
 }
 
 
@@ -2424,13 +2492,15 @@ void TestOnlyAddFormalDerivative(
     unsigned size,
     void** work)
 {
-    AddFormalDerivative(buffer_bytes, size, work);
+    TestOnlyAddFormalDerivative(
+        backend::GetDefaultOps(), buffer_bytes, size, work);
 }
 
 #endif // LEO2_ENABLE_TEST_HOOKS
 
 
 void ReedSolomonDecodeLowPrepared(
+    const backend::Ops& ops,
     uint64_t buffer_bytes,
     unsigned n,
     unsigned p,
@@ -2453,7 +2523,8 @@ void ReedSolomonDecodeLowPrepared(
     for (unsigned i = 0; i < n; ++i)
     {
         if (coordinate_data[i])
-            mul_mem(work[i], coordinate_data[i], locator_logs[i], buffer_bytes);
+            mul_mem(
+                ops, work[i], coordinate_data[i], locator_logs[i], buffer_bytes);
         else
             memset(work[i], 0, buffer_bytes);
     }
@@ -2466,14 +2537,14 @@ void ReedSolomonDecodeLowPrepared(
         while (input_count > 0 && !coordinate_data[offset + input_count - 1])
             --input_count;
         IFFT_DIT_Decoder(
-            buffer_bytes, input_count, work + offset, p,
+            ops, buffer_bytes, input_count, work + offset, p,
             FFTSkewStorage + offset);
     }
 
     // R10 Corollary 1 derivative term.  The omitted scalar-sum contribution
     // is f-hat^(0), which vanishes at every requested erasure because
     // f(e) * Lambda(e) = 0; leaving slot zero unchanged is therefore exact.
-    AddFormalDerivative(buffer_bytes, p, work);
+    AddFormalDerivative(ops, buffer_bytes, p, work);
 
     // Weighted block reduction by c_k / s_k(omega_(block*P)).
     for (unsigned block = 1; block < block_count; ++block)
@@ -2481,24 +2552,44 @@ void ReedSolomonDecodeLowPrepared(
         const unsigned offset = block * p;
         for (unsigned i = 0; i < p; ++i)
         {
-            mul_mem_inplace(work[offset + i], block_factors[block - 1], buffer_bytes);
-            xor_mem(work[i], work[offset + i], buffer_bytes);
+            mul_mem_inplace(
+                ops, work[offset + i], block_factors[block - 1], buffer_bytes);
+            xor_mem(ops, work[i], work[offset + i], buffer_bytes);
         }
     }
 
 #ifdef LEO_ERROR_BITFIELD_OPT
-    FFT_DIT_ErrorBits(buffer_bytes, work, p, p, FFTSkewStorage, error_bits);
+    FFT_DIT_ErrorBits(
+        ops, buffer_bytes, work, p, p, FFTSkewStorage, error_bits);
 #else
-    FFT_DIT(buffer_bytes, work, p, p, FFTSkewStorage);
+    FFT_DIT(ops, buffer_bytes, work, p, p, FFTSkewStorage);
 #endif
 
     for (unsigned i = 0; i < p; ++i)
         if (requested_outputs[i])
-            mul_mem_inplace(work[i], kModulus - locator_logs[i], buffer_bytes);
+            mul_mem_inplace(
+                ops, work[i], kModulus - locator_logs[i], buffer_bytes);
+}
+
+
+void ReedSolomonDecodeLowPrepared(
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned p,
+    const void* const* coordinate_data,
+    const uint8_t* requested_outputs,
+    const ffe_t* locator_logs,
+    const ffe_t* block_factors,
+    void** work)
+{
+    ReedSolomonDecodeLowPrepared(
+        backend::GetDefaultOps(), buffer_bytes, n, p, coordinate_data,
+        requested_outputs, locator_logs, block_factors, work);
 }
 
 
 void ReedSolomonDecodeLowPlanned(
+    const backend::Ops& ops,
     uint64_t buffer_bytes,
     unsigned n,
     unsigned p,
@@ -2516,7 +2607,8 @@ void ReedSolomonDecodeLowPlanned(
     for (unsigned i = 0; i < n; ++i)
     {
         if (coordinate_data[i])
-            mul_mem(work[i], coordinate_data[i], locator_logs[i], buffer_bytes);
+            mul_mem(
+                ops, work[i], coordinate_data[i], locator_logs[i], buffer_bytes);
         else
             memset(work[i], 0, buffer_bytes);
     }
@@ -2530,12 +2622,12 @@ void ReedSolomonDecodeLowPlanned(
         {
             const unsigned offset = block * p;
             IFFT_DIT_Decoder(
-                buffer_bytes, input_count, work + offset, p,
+                ops, buffer_bytes, input_count, work + offset, p,
                 FFTSkewStorage + offset);
         }
     }
 
-    AddFormalDerivative(buffer_bytes, p, work);
+    AddFormalDerivative(ops, buffer_bytes, p, work);
 
     for (unsigned block = 1; block < block_count; ++block)
     {
@@ -2544,17 +2636,18 @@ void ReedSolomonDecodeLowPlanned(
         const unsigned offset = block * p;
         for (unsigned i = 0; i < p; ++i)
         {
-            mul_mem_inplace(work[offset + i], block_factors[block - 1], buffer_bytes);
-            xor_mem(work[i], work[offset + i], buffer_bytes);
+            mul_mem_inplace(
+                ops, work[offset + i], block_factors[block - 1], buffer_bytes);
+            xor_mem(ops, work[i], work[offset + i], buffer_bytes);
         }
     }
 
 #ifdef LEO_ERROR_BITFIELD_OPT
     FFT_DIT_ErrorBits(
-        buffer_bytes, work, p, p, FFTSkewStorage, output_dependencies);
+        ops, buffer_bytes, work, p, p, FFTSkewStorage, output_dependencies);
 #else
     (void)output_dependencies;
-    FFT_DIT(buffer_bytes, work, p, p, FFTSkewStorage);
+    FFT_DIT(ops, buffer_bytes, work, p, p, FFTSkewStorage);
 #endif
 
     for (unsigned i = 0; i < requested_count; ++i)
@@ -2562,12 +2655,34 @@ void ReedSolomonDecodeLowPlanned(
         const uint32_t coordinate = requested_coordinates[i];
         LEO_DEBUG_ASSERT(coordinate < p);
         mul_mem_inplace(
-            work[coordinate], kModulus - locator_logs[coordinate], buffer_bytes);
+            ops, work[coordinate], kModulus - locator_logs[coordinate],
+            buffer_bytes);
     }
 }
 
 
+void ReedSolomonDecodeLowPlanned(
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned p,
+    const void* const* coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    unsigned requested_count,
+    const leopard2_internal::OutputDependencyView& output_dependencies,
+    const ffe_t* locator_logs,
+    const ffe_t* block_factors,
+    void** work)
+{
+    ReedSolomonDecodeLowPlanned(
+        backend::GetDefaultOps(), buffer_bytes, n, p, coordinate_data,
+        block_input_counts, requested_coordinates, requested_count,
+        output_dependencies, locator_logs, block_factors, work);
+}
+
+
 void ReedSolomonDecodeHighPrepared(
+    const backend::Ops& ops,
     uint64_t buffer_bytes,
     unsigned n,
     unsigned t,
@@ -2595,22 +2710,22 @@ void ReedSolomonDecodeHighPrepared(
         while (input_count > 0 && !coordinate_data[offset + input_count - 1])
             --input_count;
         IFFT_DIT_Decoder(
-            buffer_bytes, input_count, work + offset, t,
+            ops, buffer_bytes, input_count, work + offset, t,
             FFTSkewStorage + offset);
         if (block != 0)
-            VectorXOR(buffer_bytes, t, work, work + offset);
+            VectorXOR(ops, buffer_bytes, t, work, work + offset);
     }
 
     // h on V_t, then z = h * Lambda on V_t.
-    FFT_DIT(buffer_bytes, work, t, t, FFTSkewStorage);
+    FFT_DIT(ops, buffer_bytes, work, t, t, FFTSkewStorage);
     for (unsigned i = 0; i < t; ++i)
     {
         if (coordinate_data[i])
-            mul_mem_inplace(work[i], locator_logs[i], buffer_bytes);
+            mul_mem_inplace(ops, work[i], locator_logs[i], buffer_bytes);
         else
             memset(work[i], 0, buffer_bytes);
     }
-    IFFT_DIT_Decoder(buffer_bytes, t, work, t, FFTSkewStorage);
+    IFFT_DIT_Decoder(ops, buffer_bytes, t, work, t, FFTSkewStorage);
 
     // Evaluate z only on message blocks that contain a requested original.
     for (unsigned block = 1; block < block_count; ++block)
@@ -2624,7 +2739,7 @@ void ReedSolomonDecodeHighPrepared(
         for (unsigned i = 0; i < t; ++i)
             memcpy(work[offset + i], work[i], buffer_bytes);
         FFT_DIT(
-            buffer_bytes, work + offset, requested_count, t,
+            ops, buffer_bytes, work + offset, requested_count, t,
             FFTSkewStorage + offset);
         for (unsigned i = 0; i < requested_count; ++i)
         {
@@ -2633,14 +2748,32 @@ void ReedSolomonDecodeHighPrepared(
             {
                 const ffe_t reveal_log = SubMod(
                     output_factors[coordinate], locator_logs[coordinate]);
-                mul_mem_inplace(work[coordinate], reveal_log, buffer_bytes);
+                mul_mem_inplace(
+                    ops, work[coordinate], reveal_log, buffer_bytes);
             }
         }
     }
 }
 
 
+void ReedSolomonDecodeHighPrepared(
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned t,
+    const void* const* coordinate_data,
+    const uint8_t* requested_outputs,
+    const ffe_t* locator_logs,
+    const ffe_t* output_factors,
+    void** work)
+{
+    ReedSolomonDecodeHighPrepared(
+        backend::GetDefaultOps(), buffer_bytes, n, t, coordinate_data,
+        requested_outputs, locator_logs, output_factors, work);
+}
+
+
 void ReedSolomonDecodeHighPlanned(
+    const backend::Ops& ops,
     uint64_t buffer_bytes,
     unsigned n,
     unsigned t,
@@ -2672,22 +2805,22 @@ void ReedSolomonDecodeHighPlanned(
         if (input_count != 0)
         {
             IFFT_DIT_Decoder(
-                buffer_bytes, input_count, work + offset, t,
+                ops, buffer_bytes, input_count, work + offset, t,
                 FFTSkewStorage + offset);
         }
         if (block != 0 && input_count != 0)
-            VectorXOR(buffer_bytes, t, work, work + offset);
+            VectorXOR(ops, buffer_bytes, t, work, work + offset);
     }
 
-    FFT_DIT(buffer_bytes, work, t, t, FFTSkewStorage);
+    FFT_DIT(ops, buffer_bytes, work, t, t, FFTSkewStorage);
     for (unsigned i = 0; i < t; ++i)
     {
         if (coordinate_data[i])
-            mul_mem_inplace(work[i], locator_logs[i], buffer_bytes);
+            mul_mem_inplace(ops, work[i], locator_logs[i], buffer_bytes);
         else
             memset(work[i], 0, buffer_bytes);
     }
-    IFFT_DIT_Decoder(buffer_bytes, t, work, t, FFTSkewStorage);
+    IFFT_DIT_Decoder(ops, buffer_bytes, t, work, t, FFTSkewStorage);
 
     for (unsigned output_block = 0;
          output_block < output_block_count;
@@ -2703,7 +2836,7 @@ void ReedSolomonDecodeHighPlanned(
         for (unsigned i = 0; i < t; ++i)
             memcpy(work[offset + i], work[i], buffer_bytes);
         FFT_DIT(
-            buffer_bytes, work + offset, descriptor.requested_prefix, t,
+            ops, buffer_bytes, work + offset, descriptor.requested_prefix, t,
             FFTSkewStorage + offset);
         for (uint32_t i = descriptor.requested_begin;
              i < descriptor.requested_end;
@@ -2713,12 +2846,33 @@ void ReedSolomonDecodeHighPlanned(
             LEO_DEBUG_ASSERT(coordinate >= offset && coordinate < offset + t);
             const ffe_t reveal_log = SubMod(
                 output_factors[coordinate], locator_logs[coordinate]);
-            mul_mem_inplace(work[coordinate], reveal_log, buffer_bytes);
+            mul_mem_inplace(ops, work[coordinate], reveal_log, buffer_bytes);
         }
     }
 }
 
+
+void ReedSolomonDecodeHighPlanned(
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned t,
+    const void* const* coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    const leopard2_internal::DecodeOutputBlock* output_blocks,
+    unsigned output_block_count,
+    const ffe_t* locator_logs,
+    const ffe_t* output_factors,
+    void** work)
+{
+    ReedSolomonDecodeHighPlanned(
+        backend::GetDefaultOps(), buffer_bytes, n, t, coordinate_data,
+        block_input_counts, requested_coordinates, output_blocks,
+        output_block_count, locator_logs, output_factors, work);
+}
+
 void ReedSolomonDecode(
+    const backend::Ops& ops,
     uint64_t buffer_bytes,
     unsigned original_count,
     unsigned recovery_count,
@@ -2769,7 +2923,8 @@ void ReedSolomonDecode(
     for (unsigned i = 0; i < recovery_count; ++i)
     {
         if (recovery[i])
-            mul_mem(work[i], recovery[i], error_locations[i], buffer_bytes);
+            mul_mem(
+                ops, work[i], recovery[i], error_locations[i], buffer_bytes);
         else
             memset(work[i], 0, buffer_bytes);
     }
@@ -2781,7 +2936,9 @@ void ReedSolomonDecode(
     for (unsigned i = 0; i < original_count; ++i)
     {
         if (original[i])
-            mul_mem(work[m + i], original[i], error_locations[m + i], buffer_bytes);
+            mul_mem(
+                ops, work[m + i], original[i], error_locations[m + i],
+                buffer_bytes);
         else
             memset(work[m + i], 0, buffer_bytes);
     }
@@ -2791,6 +2948,7 @@ void ReedSolomonDecode(
     // work <- IFFT(work, n, 0)
 
     IFFT_DIT_Decoder(
+        ops,
         buffer_bytes,
         m + original_count,
         work,
@@ -2804,6 +2962,7 @@ void ReedSolomonDecode(
         const unsigned width = ((i ^ (i - 1)) + 1) >> 1;
 
         VectorXOR(
+            ops,
             buffer_bytes,
             width,
             work + i - width,
@@ -2816,16 +2975,34 @@ void ReedSolomonDecode(
 
 #ifdef LEO_ERROR_BITFIELD_OPT
     FFT_DIT_ErrorBits(
-        buffer_bytes, work, output_count, n, FFTSkewStorage, error_bits);
+        ops, buffer_bytes, work, output_count, n, FFTSkewStorage, error_bits);
 #else
-    FFT_DIT(buffer_bytes, work, output_count, n, FFTSkewStorage);
+    FFT_DIT(ops, buffer_bytes, work, output_count, n, FFTSkewStorage);
 #endif
 
     // Reveal erasures
 
     for (unsigned i = 0; i < original_count; ++i)
         if (!original[i])
-            mul_mem(work[i], work[i + m], kModulus - error_locations[i + m], buffer_bytes);
+            mul_mem(
+                ops, work[i], work[i + m],
+                kModulus - error_locations[i + m], buffer_bytes);
+}
+
+
+void ReedSolomonDecode(
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned m,
+    unsigned n,
+    const void* const* original,
+    const void* const* recovery,
+    void** work)
+{
+    ReedSolomonDecode(
+        backend::GetDefaultOps(), buffer_bytes, original_count, recovery_count,
+        m, n, original, recovery, work);
 }
 
 

@@ -1,0 +1,88 @@
+{
+  "schema": "leopard2-context-backend-alignment/v1",
+  "created_utc": "2026-07-16",
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "allowed_cpus": "0-14,16-30",
+    "benchmark_cpu": 7,
+    "idle_sibling": 23,
+    "perf_event_paranoid": 4
+  },
+  "candidate": {
+    "source_patch_sha256": "4d751569d8d4733d865c21b9da8f801062133fe1ad1612675963e59c91e20bac",
+    "benchmark_sha256": "fcc2c84bb1eda894068e9616fb4e182774e746225f00e6f2d1b273b604ed6066",
+    "archive_sha256": "4b4b54d5710517b37a7d1cefc349ac7c1467e8b2f38eaae8eecb21c5095cd6f5",
+    "avx2_compile_option": "-falign-functions=64"
+  },
+  "exact_high_rate_gate": {
+    "baseline_commit": "dfa69baab6f056a6b09f4548bc196ac39797294a",
+    "parameters": {
+      "profile": "legacy_high_v1",
+      "field": "gf8",
+      "backend": "avx2",
+      "K": 240,
+      "R": 16,
+      "losses": 3,
+      "shard_bytes": 65536,
+      "reuse": 8,
+      "pairs": 31
+    },
+    "candidate_over_baseline_time": {
+      "encode": {
+        "geomean": 0.9921383622708561,
+        "confidence_95_lower": 0.9809008995487408,
+        "confidence_95_upper": 1.0035045643676512
+      },
+      "decode": {
+        "geomean": 0.9964345856938409,
+        "confidence_95_lower": 0.9942624986296351,
+        "confidence_95_upper": 0.9986114179457822
+      },
+      "leo_init": {
+        "geomean": 0.9900334452492825,
+        "confidence_95_lower": 0.9845685257349219,
+        "confidence_95_upper": 0.9955286981985618
+      }
+    },
+    "peak_rss_median_kib": {
+      "baseline": 20992,
+      "candidate": 20992
+    },
+    "raw_result_sha256": "24637ca41f8395ddade80bd2eb1ff1d5084d340649752cd810869e4757dd97e0"
+  },
+  "diagnostic_control": {
+    "description": "The same current source without private AVX2 function alignment exposed a link-placement regression even though hot-kernel instructions were unchanged.",
+    "candidate_over_baseline_time": {
+      "encode": 1.2704846237489211,
+      "decode": 1.202030321922709
+    }
+  },
+  "neighbor_medians_us": {
+    "columns": [
+      "current_unaligned_encode",
+      "current_unaligned_decode",
+      "aligned_encode",
+      "aligned_decode",
+      "prior_encode",
+      "prior_decode",
+      "baseline_encode",
+      "baseline_decode"
+    ],
+    "high_gf8_k240_r16_64k": [1160.6635, 1550.7673125, 893.210625, 1273.3516875, 893.9243125, 1284.3655, 894.7061875, 1281.753],
+    "balanced_gf8_k128_r128_64k": [1244.560125, 3025.916125, 957.663125, 2538.40675, 957.504375, 2544.8945, 959.17825, 2539.312],
+    "low_gf8_k16_r240_64k": [964.166875, 417.736, 955.69575, 393.139375, 961.5495, 394.053125, 965.306875, 387.7305],
+    "high_gf16_k1000_r200_64k": [9142.6965, 25813.2915, 9097.611, 25865.2225, 9100.926, 25673.81, 9119.2565, 25709.4355],
+    "tiny_high_gf8_k240_r16_64b": [2.87423, 3.911625, 2.821457, 3.84225, 2.81333, 3.8069375, 3.3685725, 4.178621]
+  },
+  "neighbor_summary_sha256": "d692aecf041cb55d90277573f686b36f93264d814fe1b009e6a1a11106985c8e",
+  "validation": {
+    "gcc_release_ctest": "34/34 passed",
+    "clang_release_ctest": "34/34 passed",
+    "portable_isa": "passed",
+    "tests_off_test_hooks": "absent",
+    "backend_matrix_source_fingerprint": "0adcead0c6881b68c1fc7bcd795df40b2dbb71e126cfa7c1076677629a275468",
+    "backend_matrix_sha256": "c4725540752c28ea297ad9d1c60909d3354bffb653757a22d808259133c2aba8",
+    "gcc_archive_growth_bytes": 960,
+    "clang_archive_growth_bytes": 3840
+  }
+}

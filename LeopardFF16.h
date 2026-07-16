@@ -33,6 +33,8 @@
 
 #ifdef LEO_HAS_FF16
 
+namespace leopard { namespace backend { struct Ops; }}
+
 /*
     16-bit Finite Field Math
 
@@ -82,6 +84,18 @@ ffe_t MultiplyLogElement(ffe_t value, ffe_t multiplier_log);
 // contain complete GF16 symbols.  Full 64-byte ALTMAP tiles use the active SIMD
 // backend.  A final compact tile stores q low bytes followed by q high bytes.
 void MultiplyBytes(
+    const backend::Ops& ops,
+    void* destination,
+    const void* source,
+    ffe_t multiplier_log,
+    uint64_t byte_count);
+void MultiplyBytes(
+    void* destination,
+    const void* source,
+    ffe_t multiplier_log,
+    uint64_t byte_count);
+void MultiplyAddBytes(
+    const backend::Ops& ops,
     void* destination,
     const void* source,
     ffe_t multiplier_log,
@@ -92,6 +106,14 @@ void MultiplyAddBytes(
     ffe_t multiplier_log,
     uint64_t byte_count);
 
+void ReedSolomonEncode(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned m, // = NextPow2(recovery_count)
+    const void* const * const data,
+    void** work); // m * 2 elements
 void ReedSolomonEncode(
     uint64_t buffer_bytes,
     unsigned original_count,
@@ -105,6 +127,15 @@ void ReedSolomonEncode(
 // original_count may be smaller than p; the remaining data coordinates are
 // shortened to zero.  Null recovery output pointers are not written.  p must
 // be a power of two in [2, kOrder / 2].
+void ReedSolomonEncodeLow(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned p, // = NextPow2(original_count)
+    const void* const * const data,
+    void* const * const recovery,
+    void** work); // p * 2 elements
 void ReedSolomonEncodeLow(
     uint64_t buffer_bytes,
     unsigned original_count,
@@ -145,6 +176,14 @@ bool IsDirectLocatorPreferred(unsigned n, unsigned erasure_count);
 // Null coordinate_data pointers are treated as zero.  Only coordinates marked
 // in requested_outputs are revealed, in-place, in the corresponding work slot.
 void ReedSolomonDecodePrepared(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    const void* const * const coordinate_data, // n elements
+    const uint8_t* requested_outputs, // n elements
+    const ffe_t* locator_logs, // n elements
+    void** work); // n elements
+void ReedSolomonDecodePrepared(
     uint64_t buffer_bytes,
     unsigned n,
     const void* const * const coordinate_data, // n elements
@@ -154,6 +193,17 @@ void ReedSolomonDecodePrepared(
 
 // Allocation-free execution companion for an immutable Leopard2 decode plan.
 // All pattern-dependent traversal and prefix values are prepared by the plan.
+void ReedSolomonDecodePlanned(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    const void* const * const coordinate_data, // n elements
+    unsigned input_count,
+    const uint32_t* requested_coordinates,
+    unsigned requested_count,
+    const leopard2_internal::OutputDependencyView& output_dependencies,
+    const ffe_t* locator_logs, // n elements
+    void** work); // n elements
 void ReedSolomonDecodePlanned(
     uint64_t buffer_bytes,
     unsigned n,
@@ -203,6 +253,16 @@ void TestOnlyAddFormalDerivative(
 #endif
 
 void ReedSolomonDecodeLowPrepared(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned p,
+    const void* const * const coordinate_data,
+    const uint8_t* requested_outputs,
+    const ffe_t* locator_logs,
+    const ffe_t* block_factors,
+    void** work);
+void ReedSolomonDecodeLowPrepared(
     uint64_t buffer_bytes,
     unsigned n,
     unsigned p,
@@ -212,6 +272,19 @@ void ReedSolomonDecodeLowPrepared(
     const ffe_t* block_factors,
     void** work);
 
+void ReedSolomonDecodeLowPlanned(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned p,
+    const void* const * const coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    unsigned requested_count,
+    const leopard2_internal::OutputDependencyView& output_dependencies,
+    const ffe_t* locator_logs,
+    const ffe_t* block_factors,
+    void** work);
 void ReedSolomonDecodeLowPlanned(
     uint64_t buffer_bytes,
     unsigned n,
@@ -226,6 +299,16 @@ void ReedSolomonDecodeLowPlanned(
     void** work);
 
 void ReedSolomonDecodeHighPrepared(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned t,
+    const void* const * const coordinate_data,
+    const uint8_t* requested_outputs,
+    const ffe_t* locator_logs,
+    const ffe_t* output_factors,
+    void** work);
+void ReedSolomonDecodeHighPrepared(
     uint64_t buffer_bytes,
     unsigned n,
     unsigned t,
@@ -235,6 +318,19 @@ void ReedSolomonDecodeHighPrepared(
     const ffe_t* output_factors,
     void** work);
 
+void ReedSolomonDecodeHighPlanned(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned t,
+    const void* const * const coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    const leopard2_internal::DecodeOutputBlock* output_blocks,
+    unsigned output_block_count,
+    const ffe_t* locator_logs,
+    const ffe_t* output_factors,
+    void** work);
 void ReedSolomonDecodeHighPlanned(
     uint64_t buffer_bytes,
     unsigned n,
@@ -248,6 +344,16 @@ void ReedSolomonDecodeHighPlanned(
     const ffe_t* output_factors,
     void** work);
 
+void ReedSolomonDecode(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned m, // = NextPow2(recovery_count)
+    unsigned n, // = NextPow2(m + original_count)
+    const void* const * const original, // original_count elements
+    const void* const * const recovery, // recovery_count elements
+    void** work); // n elements
 void ReedSolomonDecode(
     uint64_t buffer_bytes,
     unsigned original_count,

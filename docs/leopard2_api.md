@@ -172,17 +172,35 @@ through 128 is accepted; a larger count returns `LEO2_INVALID_ARGUMENT`.
 `leo2_context_thread_count` reports the effective value.  This option controls
 parallelism across batch items, not the wire profile or the result bytes.
 
-The context `backend` option is an exact capability constraint in API V2.
-`AUTO` accepts the library's qualified runtime backend.  An explicit value must
-equal that backend or context creation returns `LEO2_UNSUPPORTED`; it does not
-currently downgrade execution to a lower backend.  Per-context lower-backend
-selection remains future work. The production `AUTO` binary uses isolated
-runtime-dispatched scalar/SSSE3/AVX2 fixed-multiplier and XOR kernels, while
-diagnostic variants force one of those same ops tables for deterministic tests.
-On ARM, context introspection reports `NEON` when the existing native-NEON or
-SSE2NEON transform path is active, even while scalar tails or fallback fixed
-operations remain in use; it therefore describes effective execution rather
-than the private fallback-table implementation.
+The context `backend` option selects an immutable execution table.  `AUTO` uses
+the fastest table that passed the startup capability checks and known-answer
+tests.  In one ordinary production x86 binary, explicit `SCALAR`, `SSSE3`, and
+`AVX2` requests select that table when it was compiled and supported by the
+host.  Lower tables are allocated and known-answer-tested once, on the first
+explicit context request, so legacy and `AUTO`-only applications do not pay
+their setup or memory cost.  Qualification is serialized and its result is
+cached: an unavailable ISA returns `LEO2_UNSUPPORTED`, allocation failure
+returns `LEO2_OUT_OF_MEMORY`, and a known-answer-test failure returns
+`LEO2_INTERNAL_ERROR`.  A context never changes the process-default table
+used by the legacy `leo_*` API, and independent contexts selecting different
+tables can execute concurrently.
+Backend choice affects execution-path thresholds and kernels only, never the
+profile, field, coordinate map, or parity bytes.  Diagnostic builds still cap
+`AUTO` and explicit selection at their forced backend.
+Legacy custom builds that raise the entire core translation unit to SSSE3 or
+AVX2 retain `AUTO` compatibility but reject explicit table requests, because
+their inline kernels can bypass an exact lower-table selection.  The default
+CMake build uses isolated ISA objects and supports the explicit x86 choices.
+
+Byte-heavy calls pass the context's immutable table explicitly through every
+transform and OpenMP worker; selection is not recovered from mutable global or
+thread-local state.  Context-pool workers likewise receive it with each batch
+item, so independent contexts cannot contaminate one another.  On ARM, explicit `NEON`
+remains an exact request for the existing native-NEON or SSE2NEON transform
+path.  Selecting a lower scalar table on an active NEON path is rejected until
+the native-NEON backend is fully represented by the same ops-table boundary;
+introspection continues to describe effective execution rather than a scalar
+tail or fallback implementation detail.
 
 Only one batch call at a time uses a given context pool.  Concurrent batch calls
 sharing that context are serialized at the scheduler, while calls using separate

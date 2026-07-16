@@ -122,12 +122,35 @@ const Ops* InitializeAVX2(const InitializeArgs& args);
 // Returns false on allocation or known-answer-test failure.
 bool Initialize(const InitializeArgs& args);
 
+// Returns the immutable process default.  Byte-heavy Leopard2 entry points
+// pass their context table explicitly instead of consulting thread-local state.
 const Ops& GetOps();
+const Ops& GetDefaultOps();
+enum QualificationStatus
+{
+    QualificationAvailable = 0,
+    QualificationUnavailable,
+    QualificationOutOfMemory,
+    QualificationSelfTestFailed
+};
+
+// AUTO resolves to the process default.  On first use, an explicit lower value
+// initializes and known-answer-tests its immutable table under a setup lock.
+// A failed or unavailable request is cached and returns null deterministically.
+const Ops* GetQualifiedOps(
+    leo2_backend requested,
+    QualificationStatus* status = NULL);
 leo2_backend SelectedBackend();
 // Reports the effective public execution backend.  This can differ from the
 // fixed-ops table on the existing ARM paths, where legacy native NEON or
 // SSE2NEON transform kernels execute around a scalar tail/fallback table.
 leo2_backend ExecutionBackend();
 bool StartupSelfTestPassed();
+
+#ifdef LEO2_ENABLE_TEST_HOOKS
+// Test-only injection point for a copied/tracing immutable ops table.  The
+// caller must restore the qualified table before destroying the tracing table.
+void TestSetContextOps(leo2_context* context, const Ops* ops);
+#endif
 
 }} // namespace leopard::backend

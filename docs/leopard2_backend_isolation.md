@@ -5,6 +5,76 @@ two-way butterfly tier is documented in
 `docs/leopard2_backend_butterfly_tier.md`; the SIMD/backend Bead remains open
 for fused-four butterflies, native NEON, and platform gates.
 
+## Per-context backend selection checkpoint
+
+An ordinary CMake production archive can now host independent immutable
+Leopard2 contexts selecting `AUTO`, scalar, SSSE3, or AVX2 at the same time.
+`AUTO` retains the process startup choice used by the legacy API.  An explicit
+lower table is allocated and subjected to the complete backend known-answer
+test on first request under a setup mutex, then published once and cached for
+the process lifetime.  Context creation distinguishes an unavailable ISA,
+allocation failure, and a failed known-answer test.  Codec, plan, one-shot,
+direct, transform, XOR, and batch execution pass the selected table explicitly;
+there is no thread-local or mutable process-wide selection in byte execution.
+
+The final 2026-07-16 evidence host allowed 30 logical CPUs
+(`0-14,16-30`), so parallel builds and correctness gates used all 30 rather
+than assuming a 128-CPU numbering scheme.  Authoritative latency/performance
+checks remained isolated and pinned as required.
+
+- Release passed 34/34 CTests.  Strict GCC 13.3 and Clang 18 builds were clean,
+  and the focused explicit-context suite passed 9/9 under each compiler.
+- A fresh concurrent four-variant matrix (`auto,scalar,ssse3,avx2`) passed with
+  no wire/result mismatch.  Source fingerprint:
+  `0adcead0c6881b68c1fc7bcd795df40b2dbb71e126cfa7c1076677629a275468`;
+  merged `matrix.json` SHA-256:
+  `c4725540752c28ea297ad9d1c60909d3354bffb653757a22d808259133c2aba8`.
+- The context gate uses copied tracing tables to prove actual dispatch for GF8
+  and GF16 high/low transforms, generic and specialized decode, direct encode
+  and repair, sub-64-byte tails, R=1 XOR recovery, shared immutable codecs and
+  plans, mixed contexts, and the persistent batch pool.  It also races 24
+  first-use requests and verifies that lazy lower-table qualification never
+  changes the process default.
+- ASan plus UBSan passed the focused 9/9 suite with no memory or undefined-
+  behavior report.  The full sanitizer suite passed 33/34; its sole failure was
+  the static portable-ISA classifier rejecting sanitizer-generated `lahf` in an
+  SSSE3 archive member.  The non-instrumented GCC and Clang archive gates pass,
+  and the failing instruction is compiler sanitizer instrumentation rather than
+  codec code.  TSan without OpenMP passed the available focused 8/8 concurrency
+  tests with no race report.  Tests that intentionally override global
+  `new`/`delete` cannot link with compiler-rt TSan and are covered separately.
+- A tests-disabled Release archive was rebuilt after the final production
+  changes and contains no `TestSetContextOps`, tracing, or context-test symbol.
+- The final-source pinned 31-pair AB/BA gate at GF8 K=240, R=16, 64 KiB
+  measured candidate/baseline time ratios of 0.992138 for encode (95% interval
+  0.980901-1.003505), 0.996435 for decode (0.994262-0.998611), and 0.990033
+  for `leo_init` (0.984569-0.995529).  Median peak RSS was unchanged at
+  20,992 KiB.  Candidate executable/archive SHA-256 values were
+  `fcc2c84bb1eda894068e9616fb4e182774e746225f00e6f2d1b273b604ed6066`
+  and `4b4b54d5710517b37a7d1cefc349ac7c1467e8b2f38eaae8eecb21c5095cd6f5`.
+  The raw-result SHA-256 was
+  `24637ca41f8395ddade80bd2eb1ff1d5084d340649752cd810869e4757dd97e0`.
+
+The final performance gate caught a code-placement regression that the earlier
+checkpoint missed.  A small `LeopardCommon.cpp` change shifted downstream AVX2
+functions without changing the hot-kernel instructions; on this Ryzen 9950X3D,
+high GF8 encode/decode slowed by 27/20 percent.  A compiler-checked
+`-falign-functions=64` applied only to the private AVX2 object stabilizes every
+backend callback without raising the ISA floor.  The aligned build matches the
+prior fast layout within one percent across high, balanced, low, GF16, and
+64-byte neighbor cells; its worst observed neighbor versus baseline was 1.4
+percent.  GCC archive growth was 960 bytes and Clang archive growth was 3,840
+bytes.  The machine-readable checkpoint is
+`experiments/leopard2/context_backends/results/alignment_checkpoint.json`.
+MSVC remains unchanged pending native evidence; linker section alignment and
+hot-patch padding are not equivalent per-function policies.
+
+The current ARM path still reports its existing effective NEON execution but
+does not yet permit forcing lower scalar/SSSE3 tables, because translated inline
+kernels precede the fixed-ops fallback.  Native NEON table extraction, native
+MSVC/clang-cl evidence, allocation-failure injection, four-source XOR dispatch,
+and a fused explicit-backend R=1 kernel remain separate tracked work.
+
 ## Default contract
 
 The CMake build does not append `-march=native`. On x86-64, baseline control,

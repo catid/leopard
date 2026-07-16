@@ -347,6 +347,8 @@
 
 namespace leopard {
 
+namespace backend { struct Ops; }
+
 
 //------------------------------------------------------------------------------
 // Runtime CPU Architecture Check
@@ -415,11 +417,21 @@ LEO_FORCE_INLINE unsigned NextPow2(unsigned n)
 void xor_mem(
     void * LEO_RESTRICT x, const void * LEO_RESTRICT y,
     uint64_t bytes);
+void xor_mem(
+    const backend::Ops& ops,
+    void * LEO_RESTRICT x, const void * LEO_RESTRICT y,
+    uint64_t bytes);
 
 #ifdef LEO_M1_OPT
 
 // x[] ^= y[] ^ z[]
 void xor_mem_2to1(
+    void * LEO_RESTRICT x,
+    const void * LEO_RESTRICT y,
+    const void * LEO_RESTRICT z,
+    uint64_t bytes);
+void xor_mem_2to1(
+    const backend::Ops& ops,
     void * LEO_RESTRICT x,
     const void * LEO_RESTRICT y,
     const void * LEO_RESTRICT z,
@@ -445,9 +457,21 @@ void VectorXOR(
     unsigned count,
     void** x,
     void** y);
+void VectorXOR(
+    const backend::Ops& ops,
+    const uint64_t bytes,
+    unsigned count,
+    void** x,
+    void** y);
 
 // x[] ^= y[] (Multithreaded)
 void VectorXOR_Threads(
+    const uint64_t bytes,
+    unsigned count,
+    void** x,
+    void** y);
+void VectorXOR_Threads(
+    const backend::Ops& ops,
     const uint64_t bytes,
     unsigned count,
     void** x,

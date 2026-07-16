@@ -55,9 +55,20 @@ class leo2_thread_pool;
 struct leo2_context
 {
     leo2_backend backend;
+    const leopard::backend::Ops* ops;
     uint32_t thread_count;
     leo2_thread_pool* pool;
 };
+
+#ifdef LEO2_ENABLE_TEST_HOOKS
+namespace leopard { namespace backend {
+void TestSetContextOps(leo2_context* context, const Ops* ops)
+{
+    if (context && ops)
+        context->ops = ops;
+}
+}} // namespace leopard::backend
+#endif
 
 struct leo2_codec
 {
@@ -582,22 +593,24 @@ struct DirectField8
         return leopard::ff8::ElementLog(value);
     }
     static void MultiplyBytes(
+        const leopard::backend::Ops& ops,
         void* destination,
         const void* source,
         Element multiplier_log,
         uint64_t byte_count)
     {
         leopard::ff8::MultiplyBytes(
-            destination, source, multiplier_log, byte_count);
+            ops, destination, source, multiplier_log, byte_count);
     }
     static void MultiplyAddBytes(
+        const leopard::backend::Ops& ops,
         void* destination,
         const void* source,
         Element multiplier_log,
         uint64_t byte_count)
     {
         leopard::ff8::MultiplyAddBytes(
-            destination, source, multiplier_log, byte_count);
+            ops, destination, source, multiplier_log, byte_count);
     }
 };
 
@@ -617,22 +630,24 @@ struct DirectField16
         return leopard::ff16::ElementLog(value);
     }
     static void MultiplyBytes(
+        const leopard::backend::Ops& ops,
         void* destination,
         const void* source,
         Element multiplier_log,
         uint64_t byte_count)
     {
         leopard::ff16::MultiplyBytes(
-            destination, source, multiplier_log, byte_count);
+            ops, destination, source, multiplier_log, byte_count);
     }
     static void MultiplyAddBytes(
+        const leopard::backend::Ops& ops,
         void* destination,
         const void* source,
         Element multiplier_log,
         uint64_t byte_count)
     {
         leopard::ff16::MultiplyAddBytes(
-            destination, source, multiplier_log, byte_count);
+            ops, destination, source, multiplier_log, byte_count);
     }
 };
 
@@ -1374,15 +1389,13 @@ static leo2_result ValidateDecodeBuffers(
     return ValidateDisjointRanges(ranges, input_count, outputs, output_count);
 }
 
-static void XorArbitraryBytes(void* destination, const void* source, size_t bytes)
+static void XorArbitraryBytes(
+    const leopard::backend::Ops& ops,
+    void* destination,
+    const void* source,
+    size_t bytes)
 {
-    const size_t complete = bytes & ~static_cast<size_t>(63u);
-    if (complete != 0)
-        leopard::xor_mem(destination, source, complete);
-    uint8_t* output = static_cast<uint8_t*>(destination);
-    const uint8_t* input = static_cast<const uint8_t*>(source);
-    for (size_t i = complete; i < bytes; ++i)
-        output[i] ^= input[i];
+    leopard::xor_mem(ops, destination, source, bytes);
 }
 
 template<class Field>
@@ -1394,6 +1407,7 @@ static leo2_result ExecuteDirectEncodeRows(
     const std::vector<typename Field::Element>& generator_logs)
 {
     typedef typename Field::Element Element;
+    const leopard::backend::Ops& ops = *codec->context->ops;
     size_t expected_coefficients = 0;
     if (!CheckedMultiply(
             static_cast<size_t>(codec->original_count),
@@ -1423,16 +1437,16 @@ static leo2_result ExecuteDirectEncodeRows(
                     memcpy(output, source, shard_bytes);
                 else
                     Field::MultiplyBytes(
-                        output, source, multiplier_log, shard_bytes);
+                        ops, output, source, multiplier_log, shard_bytes);
             }
             else if (multiplier_log == 0)
             {
-                XorArbitraryBytes(output, source, shard_bytes);
+                XorArbitraryBytes(ops, output, source, shard_bytes);
             }
             else
             {
                 Field::MultiplyAddBytes(
-                    output, source, multiplier_log, shard_bytes);
+                    ops, output, source, multiplier_log, shard_bytes);
             }
         }
     }
@@ -1464,6 +1478,7 @@ static leo2_result ExecuteDirectRepair(
     void* const* restored_original)
 {
     const leo2_codec* codec = plan->codec;
+    const leopard::backend::Ops& ops = *codec->context->ops;
     for (uint32_t output_index = 0;
          output_index < plan->missing_original_count;
          ++output_index)
@@ -1487,19 +1502,19 @@ static leo2_result ExecuteDirectRepair(
                 if (term.multiplier_log == 0)
                     memcpy(output, source, shard_bytes);
                 else if (codec->field == LEO2_FIELD_GF8)
-                    leopard::ff8::MultiplyBytes(output, source,
+                    leopard::ff8::MultiplyBytes(ops, output, source,
                         static_cast<leopard::ff8::ffe_t>(term.multiplier_log), shard_bytes);
                 else
-                    leopard::ff16::MultiplyBytes(output, source,
+                    leopard::ff16::MultiplyBytes(ops, output, source,
                         static_cast<leopard::ff16::ffe_t>(term.multiplier_log), shard_bytes);
             }
             else if (term.multiplier_log == 0)
-                XorArbitraryBytes(output, source, shard_bytes);
+                XorArbitraryBytes(ops, output, source, shard_bytes);
             else if (codec->field == LEO2_FIELD_GF8)
-                leopard::ff8::MultiplyAddBytes(output, source,
+                leopard::ff8::MultiplyAddBytes(ops, output, source,
                     static_cast<leopard::ff8::ffe_t>(term.multiplier_log), shard_bytes);
             else
-                leopard::ff16::MultiplyAddBytes(output, source,
+                leopard::ff16::MultiplyAddBytes(ops, output, source,
                     static_cast<leopard::ff16::ffe_t>(term.multiplier_log), shard_bytes);
         }
     }
@@ -1540,7 +1555,7 @@ static leo2_result RunDecodeBatchItem(void* context, size_t index)
 
 extern "C" {
 
-LEO2_EXPORT const char* leo2_result_string(leo2_result result)
+LEO2_EXPORT const char* leo2_result_string(int result)
 {
     switch (result)
     {
@@ -1568,24 +1583,13 @@ LEO2_EXPORT leo2_result leo2_context_create(
     if (options && (options->struct_size < sizeof(leo2_context_options) ||
                     options->reserved != 0))
         return LEO2_INVALID_ARGUMENT;
-    const leo2_result initialized = EnsureInitialized();
-    if (initialized != LEO2_SUCCESS)
-        return initialized;
-
-    const leo2_backend actual = RuntimeBackend();
     const uint32_t requested_raw = options
         ? options->backend : static_cast<uint32_t>(LEO2_BACKEND_AUTO);
     if (requested_raw > static_cast<uint32_t>(LEO2_BACKEND_NEON))
         return LEO2_INVALID_ARGUMENT;
-    const leo2_backend requested = static_cast<leo2_backend>(requested_raw);
-    if (requested != LEO2_BACKEND_AUTO && requested != actual)
-        return LEO2_UNSUPPORTED;
-
-    leo2_context* context = new (std::nothrow) leo2_context;
-    if (!context)
-        return LEO2_OUT_OF_MEMORY;
-    context->backend = actual;
     uint32_t threads = options ? options->thread_count : 0;
+    if (threads > 128)
+        return LEO2_INVALID_ARGUMENT;
     if (threads == 0)
     {
         threads = static_cast<uint32_t>(std::thread::hardware_concurrency());
@@ -1594,11 +1598,61 @@ LEO2_EXPORT leo2_result leo2_context_create(
         if (threads > 128)
             threads = 128;
     }
-    if (threads > 128)
+
+    const leo2_result initialized = EnsureInitialized();
+    if (initialized != LEO2_SUCCESS)
+        return initialized;
+
+    const leo2_backend runtime_backend = RuntimeBackend();
+    const leo2_backend requested = static_cast<leo2_backend>(requested_raw);
+    const leopard::backend::Ops* ops = NULL;
+    leo2_backend effective_backend = runtime_backend;
+    if (requested == LEO2_BACKEND_AUTO)
+        ops = leopard::backend::GetQualifiedOps(LEO2_BACKEND_AUTO);
+    else if (requested == LEO2_BACKEND_NEON)
     {
-        delete context;
-        return LEO2_INVALID_ARGUMENT;
+        // Existing ARM transform kernels are selected outside the fixed-ops
+        // table.  Preserve exact NEON selection where it is already active;
+        // forcing a lower table on that path requires the native-NEON refactor.
+        if (runtime_backend != LEO2_BACKEND_NEON)
+            return LEO2_UNSUPPORTED;
+        ops = leopard::backend::GetQualifiedOps(LEO2_BACKEND_AUTO);
+        effective_backend = LEO2_BACKEND_NEON;
     }
+    else
+    {
+        if (runtime_backend == LEO2_BACKEND_NEON)
+            return LEO2_UNSUPPORTED;
+#if defined(LEO_TRY_SSSE3) || defined(LEO_TRY_AVX2)
+        // A legacy whole-translation-unit ISA build can enter inline kernels
+        // before the ops fallback.  AUTO remains compatible, but claiming an
+        // exact explicit table would be false.  The ordinary CMake production
+        // build isolates those ISAs and does not take this branch.
+        return LEO2_UNSUPPORTED;
+#else
+        leopard::backend::QualificationStatus qualification =
+            leopard::backend::QualificationAvailable;
+        ops = leopard::backend::GetQualifiedOps(requested, &qualification);
+        if (!ops)
+        {
+            if (qualification == leopard::backend::QualificationOutOfMemory)
+                return LEO2_OUT_OF_MEMORY;
+            if (qualification ==
+                    leopard::backend::QualificationSelfTestFailed)
+                return LEO2_INTERNAL_ERROR;
+            return LEO2_UNSUPPORTED;
+        }
+        effective_backend = requested;
+#endif
+    }
+    if (!ops || effective_backend == LEO2_BACKEND_AUTO)
+        return LEO2_INTERNAL_ERROR;
+
+    leo2_context* context = new (std::nothrow) leo2_context;
+    if (!context)
+        return LEO2_OUT_OF_MEMORY;
+    context->backend = effective_backend;
+    context->ops = ops;
     context->thread_count = threads;
     context->pool = NULL;
     if (threads > 1)
@@ -2021,6 +2075,7 @@ LEO2_EXPORT leo2_result leo2_encode(
     }
     if (requested_recovery_count == 0)
         return LEO2_SUCCESS;
+    const leopard::backend::Ops& ops = *codec->context->ops;
     if (ShouldUseDirectEncode(
             codec, shard_bytes, requested_recovery_count))
     {
@@ -2061,19 +2116,20 @@ LEO2_EXPORT leo2_result leo2_encode(
         {
             uint8_t* parity = static_cast<uint8_t*>(work[0]);
             memcpy(parity, pointers[0], rounded);
-            leopard::XORSummer summer;
-            summer.Initialize(parity);
-            for (uint32_t i = 1; i < codec->original_count; ++i)
-                summer.Add(pointers[i], rounded);
-            summer.Finalize(rounded);
+            uint32_t i = 1;
+            for (; i + 1 < codec->original_count; i += 2)
+                leopard::xor_mem_2to1(
+                    ops, parity, pointers[i], pointers[i + 1], rounded);
+            if (i < codec->original_count)
+                leopard::xor_mem(ops, parity, pointers[i], rounded);
         }
         else if (codec->field == LEO2_FIELD_GF8)
             leopard::ff8::ReedSolomonEncode(
-                rounded, codec->original_count, requested_recovery_prefix,
+                ops, rounded, codec->original_count, requested_recovery_prefix,
                 codec->padded_side, padded_original, work);
         else
             leopard::ff16::ReedSolomonEncode(
-                rounded, codec->original_count, requested_recovery_prefix,
+                ops, rounded, codec->original_count, requested_recovery_prefix,
                 codec->padded_side, padded_original, work);
 
         if (stage_partial_tile)
@@ -2100,11 +2156,11 @@ LEO2_EXPORT leo2_result leo2_encode(
         }
         if (codec->field == LEO2_FIELD_GF8)
             leopard::ff8::ReedSolomonEncodeLow(
-                rounded, codec->original_count, codec->recovery_count,
+                ops, rounded, codec->original_count, codec->recovery_count,
                 codec->padded_side, padded_original, parity, work);
         else
             leopard::ff16::ReedSolomonEncodeLow(
-                rounded, codec->original_count, codec->recovery_count,
+                ops, rounded, codec->original_count, codec->recovery_count,
                 codec->padded_side, padded_original, parity, work);
         if (stage_partial_tile)
             for (uint32_t i = 0; i < codec->recovery_count; ++i)
@@ -2373,6 +2429,7 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
         return result;
 
     const leo2_codec* codec = plan->codec;
+    const leopard::backend::Ops& ops = *codec->context->ops;
     if (plan->direct_copy)
     {
         const uint32_t recovery_index = plan->direct_copy_recovery;
@@ -2393,9 +2450,8 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
         {
             if (!original[i])
                 continue;
-            const uint8_t* source = static_cast<const uint8_t*>(original[i]);
-            for (size_t j = 0; j < static_cast<size_t>(shard_bytes); ++j)
-                output[j] ^= source[j];
+            XorArbitraryBytes(ops, output, original[i],
+                static_cast<size_t>(shard_bytes));
         }
         return LEO2_SUCCESS;
     }
@@ -2470,7 +2526,7 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
                     codec->parent_count, plan->generic_output_dependencies.data(),
                     plan->generic_output_dependencies.size());
             leopard::ff8::ReedSolomonDecodePlanned(
-                rounded, codec->parent_count, coordinate_input,
+                ops, rounded, codec->parent_count, coordinate_input,
                 plan->generic_input_count, requested_coordinates,
                 requested_count, dependencies, &plan->locator8[0], work);
         }
@@ -2482,14 +2538,14 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
                     plan->specialized_output_dependencies.data(),
                     plan->specialized_output_dependencies.size());
             leopard::ff8::ReedSolomonDecodeLowPlanned(
-                rounded, codec->parent_count, codec->padded_side,
+                ops, rounded, codec->parent_count, codec->padded_side,
                 coordinate_input, plan->block_input_counts.data(),
                 requested_coordinates, requested_count, dependencies,
                 &plan->locator8[0], &codec->fixed_factors8[0], work);
         }
         else
             leopard::ff8::ReedSolomonDecodeHighPlanned(
-                rounded, codec->parent_count, codec->padded_side,
+                ops, rounded, codec->parent_count, codec->padded_side,
                 coordinate_input, plan->block_input_counts.data(),
                 requested_coordinates, plan->high_output_blocks.data(),
                 static_cast<unsigned>(plan->high_output_blocks.size()),
@@ -2504,7 +2560,7 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
                     codec->parent_count, plan->generic_output_dependencies.data(),
                     plan->generic_output_dependencies.size());
             leopard::ff16::ReedSolomonDecodePlanned(
-                rounded, codec->parent_count, coordinate_input,
+                ops, rounded, codec->parent_count, coordinate_input,
                 plan->generic_input_count, requested_coordinates,
                 requested_count, dependencies, &plan->locator16[0], work);
         }
@@ -2516,14 +2572,14 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
                     plan->specialized_output_dependencies.data(),
                     plan->specialized_output_dependencies.size());
             leopard::ff16::ReedSolomonDecodeLowPlanned(
-                rounded, codec->parent_count, codec->padded_side,
+                ops, rounded, codec->parent_count, codec->padded_side,
                 coordinate_input, plan->block_input_counts.data(),
                 requested_coordinates, requested_count, dependencies,
                 &plan->locator16[0], &codec->fixed_factors16[0], work);
         }
         else
             leopard::ff16::ReedSolomonDecodeHighPlanned(
-                rounded, codec->parent_count, codec->padded_side,
+                ops, rounded, codec->parent_count, codec->padded_side,
                 coordinate_input, plan->block_input_counts.data(),
                 requested_coordinates, plan->high_output_blocks.data(),
                 static_cast<unsigned>(plan->high_output_blocks.size()),
