@@ -27,6 +27,8 @@
 */
 
 #include "direct_oracle.h"
+#include "LeopardFF8.h"
+#include "LeopardFF16.h"
 #include "leopard.h"
 #include "leopard2.h"
 
@@ -483,7 +485,7 @@ void run_decode_case(
         }
     }
 
-    if (field == LEO2_FIELD_GF16 && !missing_originals.empty())
+    if (!missing_originals.empty())
     {
         leo2_codec_options generic_options;
         memset(&generic_options, 0, sizeof(generic_options));
@@ -491,14 +493,14 @@ void run_decode_case(
         generic_options.flags = LEO2_CODEC_FORCE_GENERIC_DECODE;
         leo2_codec* generic_codec = NULL;
         require_result(leo2_codec_create(context, k, r, profile, field,
-            &generic_options, &generic_codec), "GF16 generic codec create");
+            &generic_options, &generic_codec), "generic codec create");
         leo2_decode_plan* generic_plan = NULL;
         require_result(leo2_decode_plan_create(generic_codec, &original_present[0],
-            &recovery_present[0], &generic_plan), "GF16 generic plan create");
+            &recovery_present[0], &generic_plan), "generic plan create");
         size_t generic_scratch_bytes = 0;
         require_result(leo2_decode_plan_scratch_size(
             generic_plan, bytes, &generic_scratch_bytes),
-            "GF16 generic scratch query");
+            "generic scratch query");
         AlignedBuffer generic_scratch(generic_scratch_bytes);
         Shards generic_restored(k, std::vector<uint8_t>(bytes, 0));
         std::vector<void*> generic_restored_ptrs(k, NULL);
@@ -508,12 +510,12 @@ void run_decode_case(
         require_result(leo2_decode_plan_execute(generic_plan, bytes,
             &original_ptrs[0], &recovery_ptrs[0], &generic_restored_ptrs[0],
             generic_scratch.data, generic_scratch.bytes),
-            "GF16 generic plan execute");
+            "generic plan execute");
         for (size_t i = 0; i < missing_originals.size(); ++i)
         {
             const unsigned index = missing_originals[i];
             require(generic_restored[index] == restored[index],
-                "GF16 specialized and generic recovery differ");
+                "selected decoder and generic recovery differ");
         }
         leo2_decode_plan_destroy(generic_plan);
         leo2_codec_destroy(generic_codec);
@@ -542,6 +544,167 @@ void test_no_loss_no_op(leo2_context* context)
         plan, 17, NULL, NULL, NULL, NULL, 0), "no-loss no-op execute");
     leo2_decode_plan_destroy(plan);
     leo2_codec_destroy(codec);
+}
+
+void test_direct_repair_dispatch_bounds(leo2_context* context)
+{
+    struct Case
+    {
+        unsigned k;
+        unsigned r;
+        leo2_profile profile;
+        leo2_field field;
+        size_t bytes;
+        bool expect_direct;
+    };
+    const Case cases[] = {
+        { 16, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 33, true },
+        { 17, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 33, false },
+        { 16, 31, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 66, true },
+        { 17, 31, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 66, false }
+    };
+    for (size_t case_i = 0; case_i < sizeof(cases) / sizeof(cases[0]); ++case_i)
+    {
+        const Case& test = cases[case_i];
+        std::vector<uint8_t> original_present(test.k, 1);
+        std::vector<uint8_t> recovery_present(test.r, 1);
+        for (unsigned i = 0; i < 4; ++i)
+            original_present[i] = 0;
+        // Force deterministic selection to skip parity zero.
+        recovery_present[0] = 0;
+
+        leo2_codec* codec = make_codec(
+            context, test.k, test.r, test.profile, test.field);
+        leo2_decode_plan* plan = NULL;
+        require_result(leo2_decode_plan_create(codec, &original_present[0],
+            &recovery_present[0], &plan), "direct-dispatch plan create");
+        size_t scratch_bytes = 0;
+        require_result(leo2_decode_plan_scratch_size(plan, test.bytes, &scratch_bytes),
+            "direct-dispatch scratch query");
+
+        leo2_codec_options generic_options;
+        memset(&generic_options, 0, sizeof(generic_options));
+        generic_options.struct_size = sizeof(generic_options);
+        generic_options.flags = LEO2_CODEC_FORCE_GENERIC_DECODE;
+        leo2_codec* generic_codec = NULL;
+        require_result(leo2_codec_create(context, test.k, test.r, test.profile,
+            test.field, &generic_options, &generic_codec),
+            "direct-dispatch generic codec create");
+        leo2_decode_plan* generic_plan = NULL;
+        require_result(leo2_decode_plan_create(generic_codec, &original_present[0],
+            &recovery_present[0], &generic_plan),
+            "direct-dispatch generic plan create");
+        size_t generic_scratch_bytes = 0;
+        require_result(leo2_decode_plan_scratch_size(
+            generic_plan, test.bytes, &generic_scratch_bytes),
+            "direct-dispatch generic scratch query");
+        require(test.expect_direct
+                ? scratch_bytes < generic_scratch_bytes
+                : scratch_bytes == generic_scratch_bytes,
+            "direct-repair dispatch boundary selected the wrong scratch shape");
+        leo2_decode_plan_destroy(generic_plan);
+        leo2_codec_destroy(generic_codec);
+        leo2_decode_plan_destroy(plan);
+        leo2_codec_destroy(codec);
+    }
+}
+
+void test_direct_repair_field_helpers()
+{
+    const BinaryField gf8 = leopard2_test::make_legacy_gf8();
+    for (unsigned a = 0; a < 256; ++a)
+        for (unsigned b = 0; b < 256; ++b)
+            require(leopard::ff8::MultiplyElements(
+                        static_cast<uint8_t>(a), static_cast<uint8_t>(b)) ==
+                    gf8.multiply(static_cast<Element>(a), static_cast<Element>(b)),
+                "GF8 production element multiply differs from direct oracle");
+    for (unsigned value = 1; value < 256; ++value)
+        require(leopard::ff8::InverseElement(static_cast<uint8_t>(value)) ==
+                gf8.inverse(static_cast<Element>(value)),
+            "GF8 production inverse differs from direct oracle");
+
+    const uint8_t gf8_coefficient = 173;
+    const uint8_t gf8_log = leopard::ff8::ElementLog(gf8_coefficient);
+    const size_t gf8_sizes[] = { 1, 63, 64, 65, 257 };
+    for (size_t size_i = 0; size_i < sizeof(gf8_sizes) / sizeof(gf8_sizes[0]); ++size_i)
+    {
+        const size_t bytes = gf8_sizes[size_i];
+        std::vector<uint8_t> source(bytes);
+        std::vector<uint8_t> product(bytes, 0);
+        std::vector<uint8_t> sum(bytes, 0xa5);
+        for (size_t i = 0; i < bytes; ++i)
+            source[i] = static_cast<uint8_t>(i * 37u + 11u);
+        leopard::ff8::MultiplyBytes(&product[0], &source[0], gf8_log, bytes);
+        leopard::ff8::MultiplyAddBytes(&sum[0], &source[0], gf8_log, bytes);
+        for (size_t i = 0; i < bytes; ++i)
+        {
+            const uint8_t expected = static_cast<uint8_t>(gf8.multiply(
+                source[i], gf8_coefficient));
+            require(product[i] == expected && sum[i] == (0xa5 ^ expected),
+                "GF8 fixed multiplier helper mishandled a SIMD tail");
+        }
+    }
+
+    const BinaryField gf16 = leopard2_test::make_legacy_gf16();
+    uint32_t state = 0x91e10da5u;
+    for (unsigned i = 0; i < 4096; ++i)
+    {
+        state = state * 1664525u + 1013904223u;
+        const uint16_t a = static_cast<uint16_t>(state);
+        state = state * 1664525u + 1013904223u;
+        const uint16_t b = static_cast<uint16_t>(state);
+        require(leopard::ff16::MultiplyElements(a, b) == gf16.multiply(a, b),
+            "GF16 production element multiply differs from direct oracle");
+        if (a != 0)
+            require(leopard::ff16::InverseElement(a) == gf16.inverse(a),
+                "GF16 production inverse differs from direct oracle");
+    }
+
+    const uint16_t gf16_coefficient = 0x93a7;
+    const uint16_t gf16_log = leopard::ff16::ElementLog(gf16_coefficient);
+    const size_t gf16_sizes[] = { 2, 34, 64, 66, 1026 };
+    for (size_t size_i = 0;
+         size_i < sizeof(gf16_sizes) / sizeof(gf16_sizes[0]); ++size_i)
+    {
+        const size_t bytes = gf16_sizes[size_i];
+        const size_t symbols = bytes / 2;
+        std::vector<uint16_t> values(symbols);
+        std::vector<uint8_t> source(bytes, 0);
+        std::vector<uint8_t> product(bytes, 0);
+        std::vector<uint8_t> sum(bytes, 0x5a);
+        for (size_t symbol = 0; symbol < symbols; ++symbol)
+            values[symbol] = static_cast<uint16_t>(symbol * 4051u + 0x1234u);
+        for (size_t tile = 0; tile < bytes; tile += 64)
+        {
+            const size_t tile_symbols = std::min<size_t>(32, (bytes - tile) / 2);
+            const size_t first_symbol = tile / 2;
+            for (size_t lane = 0; lane < tile_symbols; ++lane)
+            {
+                const uint16_t value = values[first_symbol + lane];
+                source[tile + lane] = static_cast<uint8_t>(value);
+                source[tile + tile_symbols + lane] = static_cast<uint8_t>(value >> 8);
+            }
+        }
+        leopard::ff16::MultiplyBytes(&product[0], &source[0], gf16_log, bytes);
+        leopard::ff16::MultiplyAddBytes(&sum[0], &source[0], gf16_log, bytes);
+        for (size_t tile = 0; tile < bytes; tile += 64)
+        {
+            const size_t tile_symbols = std::min<size_t>(32, (bytes - tile) / 2);
+            const size_t first_symbol = tile / 2;
+            for (size_t lane = 0; lane < tile_symbols; ++lane)
+            {
+                const uint16_t expected = static_cast<uint16_t>(gf16.multiply(
+                    values[first_symbol + lane], gf16_coefficient));
+                require(product[tile + lane] == static_cast<uint8_t>(expected) &&
+                        product[tile + tile_symbols + lane] ==
+                            static_cast<uint8_t>(expected >> 8) &&
+                        sum[tile + lane] == (0x5a ^ static_cast<uint8_t>(expected)) &&
+                        sum[tile + tile_symbols + lane] ==
+                            (0x5a ^ static_cast<uint8_t>(expected >> 8)),
+                    "GF16 fixed multiplier helper mishandled a compact tail");
+            }
+        }
+    }
 }
 
 void test_overlap_rejection(leo2_context* context)
@@ -690,7 +853,24 @@ int main()
             LEO2_FIELD_GF8, 31, std::vector<unsigned>{0},
             std::vector<unsigned>{0, 1, 3, 4}, &counts);
 
+        const size_t direct_gf16_boundaries[] = { 2, 34, 64, 66, 1026 };
+        for (size_t count_i = 0;
+             count_i < sizeof(direct_gf16_boundaries) /
+                 sizeof(direct_gf16_boundaries[0]);
+             ++count_i)
+        {
+            const size_t bytes = direct_gf16_boundaries[count_i];
+            run_decode_case(context, 9, 7, LEO2_PROFILE_LEGACY_HIGH_V1,
+                LEO2_FIELD_GF16, bytes, std::vector<unsigned>{0, 4, 8},
+                std::vector<unsigned>{0, 2, 6}, &counts);
+            run_decode_case(context, 5, 11, LEO2_PROFILE_LOW_V1,
+                LEO2_FIELD_GF16, bytes, std::vector<unsigned>{0, 1, 3, 4},
+                std::vector<unsigned>{0, 2, 10}, &counts);
+        }
+
         test_no_loss_no_op(context);
+        test_direct_repair_dispatch_bounds(context);
+        test_direct_repair_field_helpers();
         test_overlap_rejection(context);
         test_gf16_byte_granularity(context);
         leo2_context_destroy(context);

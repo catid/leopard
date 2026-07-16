@@ -516,6 +516,139 @@ static void mul_mem(
     RefMul(x, y, log_m, bytes);
 }
 
+// x[] ^= y[] * log_m for complete 64-byte ALTMAP tiles.
+static void muladd_mem(
+    void * LEO_RESTRICT x, const void * LEO_RESTRICT y,
+    ffe_t log_m, uint64_t bytes)
+{
+#if defined(LEO_TRY_AVX2)
+    if (CpuHasAVX2)
+    {
+        LEO_MUL_TABLES_256(0, log_m);
+        const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
+        LEO_M256 * LEO_RESTRICT x32 = reinterpret_cast<LEO_M256 *>(x);
+        const LEO_M256 * LEO_RESTRICT y32 = reinterpret_cast<const LEO_M256 *>(y);
+
+        do
+        {
+            LEO_M256 x_lo = _mm256_loadu_si256(x32);
+            LEO_M256 x_hi = _mm256_loadu_si256(x32 + 1);
+            const LEO_M256 y_lo = _mm256_loadu_si256(y32);
+            const LEO_M256 y_hi = _mm256_loadu_si256(y32 + 1);
+            LEO_MULADD_256(x_lo, x_hi, y_lo, y_hi, 0);
+            _mm256_storeu_si256(x32, x_lo);
+            _mm256_storeu_si256(x32 + 1, x_hi);
+            x32 += 2, y32 += 2;
+            bytes -= 64;
+        } while (bytes > 0);
+        return;
+    }
+#endif // LEO_TRY_AVX2
+
+    if (CpuHasSSSE3)
+    {
+        LEO_MUL_TABLES_128(0, log_m);
+        const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
+        LEO_M128 * LEO_RESTRICT x16 = reinterpret_cast<LEO_M128 *>(x);
+        const LEO_M128 * LEO_RESTRICT y16 = reinterpret_cast<const LEO_M128 *>(y);
+
+        do
+        {
+            for (unsigned i = 0; i < 2; ++i)
+            {
+                LEO_M128 x_lo = _mm_loadu_si128(x16 + i);
+                LEO_M128 x_hi = _mm_loadu_si128(x16 + i + 2);
+                const LEO_M128 y_lo = _mm_loadu_si128(y16 + i);
+                const LEO_M128 y_hi = _mm_loadu_si128(y16 + i + 2);
+                LEO_MULADD_128(x_lo, x_hi, y_lo, y_hi, 0);
+                _mm_storeu_si128(x16 + i, x_lo);
+                _mm_storeu_si128(x16 + i + 2, x_hi);
+            }
+            x16 += 4, y16 += 4;
+            bytes -= 64;
+        } while (bytes > 0);
+        return;
+    }
+
+    RefMulAdd(x, y, log_m, bytes);
+}
+
+
+ffe_t MultiplyElements(ffe_t a, ffe_t b)
+{
+    if (a == 0 || b == 0)
+        return 0;
+    return MultiplyLog(a, LogLUT[b]);
+}
+
+
+ffe_t InverseElement(ffe_t value)
+{
+    LEO_DEBUG_ASSERT(value != 0);
+    if (value == 0)
+        return 0;
+    return ExpLUT[kModulus - LogLUT[value]];
+}
+
+
+ffe_t ElementLog(ffe_t value)
+{
+    LEO_DEBUG_ASSERT(value != 0);
+    return LogLUT[value];
+}
+
+
+void MultiplyBytes(
+    void* destination,
+    const void* source,
+    ffe_t multiplier_log,
+    uint64_t byte_count)
+{
+    const uint64_t complete = byte_count & ~static_cast<uint64_t>(63);
+    if (complete != 0)
+        mul_mem(destination, source, multiplier_log, complete);
+
+    const uint64_t residual = byte_count - complete;
+    LEO_DEBUG_ASSERT((residual & 1) == 0);
+    const uint64_t symbols = residual / 2;
+    uint8_t* output = reinterpret_cast<uint8_t*>(destination);
+    const uint8_t* input = reinterpret_cast<const uint8_t*>(source);
+    for (uint64_t i = 0; i < symbols; ++i)
+    {
+        const ffe_t value = static_cast<ffe_t>(input[complete + i] |
+            (static_cast<unsigned>(input[complete + symbols + i]) << 8));
+        const ffe_t product = MultiplyLog(value, multiplier_log);
+        output[complete + i] = static_cast<uint8_t>(product);
+        output[complete + symbols + i] = static_cast<uint8_t>(product >> 8);
+    }
+}
+
+
+void MultiplyAddBytes(
+    void* destination,
+    const void* source,
+    ffe_t multiplier_log,
+    uint64_t byte_count)
+{
+    const uint64_t complete = byte_count & ~static_cast<uint64_t>(63);
+    if (complete != 0)
+        muladd_mem(destination, source, multiplier_log, complete);
+
+    const uint64_t residual = byte_count - complete;
+    LEO_DEBUG_ASSERT((residual & 1) == 0);
+    const uint64_t symbols = residual / 2;
+    uint8_t* output = reinterpret_cast<uint8_t*>(destination);
+    const uint8_t* input = reinterpret_cast<const uint8_t*>(source);
+    for (uint64_t i = 0; i < symbols; ++i)
+    {
+        const ffe_t value = static_cast<ffe_t>(input[complete + i] |
+            (static_cast<unsigned>(input[complete + symbols + i]) << 8));
+        const ffe_t product = MultiplyLog(value, multiplier_log);
+        output[complete + i] ^= static_cast<uint8_t>(product);
+        output[complete + symbols + i] ^= static_cast<uint8_t>(product >> 8);
+    }
+}
+
 
 //------------------------------------------------------------------------------
 // FFT

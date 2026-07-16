@@ -69,6 +69,27 @@ static const unsigned kPolynomial = 0x1002D;
 // Returns false if the self-test fails
 bool Initialize();
 
+// Internal scalar field helpers used while constructing immutable Leopard2
+// direct-repair plans.  Elements use Leopard's legacy Cantor coordinates.
+ffe_t MultiplyElements(ffe_t a, ffe_t b);
+ffe_t InverseElement(ffe_t value);
+ffe_t ElementLog(ffe_t value); // value must be nonzero
+
+// Fixed-multiplier execution helpers.  multiplier_log is produced by
+// ElementLog(), source and destination must not overlap, and byte_count must
+// contain complete GF16 symbols.  Full 64-byte ALTMAP tiles use the active SIMD
+// backend.  A final compact tile stores q low bytes followed by q high bytes.
+void MultiplyBytes(
+    void* destination,
+    const void* source,
+    ffe_t multiplier_log,
+    uint64_t byte_count);
+void MultiplyAddBytes(
+    void* destination,
+    const void* source,
+    ffe_t multiplier_log,
+    uint64_t byte_count);
+
 void ReedSolomonEncode(
     uint64_t buffer_bytes,
     unsigned original_count,

@@ -72,6 +72,19 @@ struct leo2_codec
     std::vector<uint16_t> permanent_locator16;
     std::vector<uint8_t> fixed_factors8;
     std::vector<uint16_t> fixed_factors16;
+    // Barycentric weights for the public systematic coordinates.  These are
+    // populated only for the rigorously bounded direct-repair dispatch region.
+    std::vector<uint8_t> direct_barycentric8;
+    std::vector<uint16_t> direct_barycentric16;
+};
+
+struct leo2_direct_repair_term
+{
+    // The high bit distinguishes recovery shards from original shards.
+    uint32_t tagged_source;
+    // Logarithmic fixed multiplier in the selected Leopard field.  Zero is
+    // the multiplicative identity and is executed as copy/XOR.
+    uint16_t multiplier_log;
 };
 
 struct leo2_decode_plan
@@ -83,15 +96,23 @@ struct leo2_decode_plan
     std::vector<uint8_t> requested;
     std::vector<uint8_t> locator8;
     std::vector<uint16_t> locator16;
+    std::vector<uint32_t> missing_originals;
+    std::vector<size_t> direct_term_offsets;
+    std::vector<leo2_direct_repair_term> direct_terms;
     uint32_t missing_original_count;
     bool no_op;
     bool direct_xor;
     bool direct_copy;
+    bool direct_repair;
 };
 
 namespace {
 
 static const size_t kScratchAlignment = 64;
+static const uint32_t kDirectRecoveryTag = 0x80000000u;
+static const uint32_t kDirectMaxOriginals = 16;
+static const uint32_t kDirectMaxLosses = 4;
+static const uint32_t kDirectMaxParentDimension = 256;
 
 typedef leo2_result (*BatchTaskFunction)(void* context, size_t index);
 
@@ -376,6 +397,238 @@ static uint32_t CoordinateForRecovery(const leo2_codec* codec, uint32_t index)
         : codec->padded_side + index;
 }
 
+struct DirectField8
+{
+    typedef leopard::ff8::ffe_t Element;
+    static Element Multiply(Element a, Element b)
+    {
+        return leopard::ff8::MultiplyElements(a, b);
+    }
+    static Element Inverse(Element value)
+    {
+        return leopard::ff8::InverseElement(value);
+    }
+    static Element Log(Element value)
+    {
+        return leopard::ff8::ElementLog(value);
+    }
+};
+
+struct DirectField16
+{
+    typedef leopard::ff16::ffe_t Element;
+    static Element Multiply(Element a, Element b)
+    {
+        return leopard::ff16::MultiplyElements(a, b);
+    }
+    static Element Inverse(Element value)
+    {
+        return leopard::ff16::InverseElement(value);
+    }
+    static Element Log(Element value)
+    {
+        return leopard::ff16::ElementLog(value);
+    }
+};
+
+static bool CanPrepareDirectRepair(const leo2_codec* codec)
+{
+    return (codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) == 0 &&
+        codec->original_count >= 2 &&
+        codec->original_count <= kDirectMaxOriginals &&
+        codec->parent_dimension <= kDirectMaxParentDimension &&
+        codec->padded_side >= 2;
+}
+
+template<class Field>
+static bool PrepareDirectBarycentricWeights(
+    const leo2_codec* codec,
+    std::vector<typename Field::Element>& weights)
+{
+    typedef typename Field::Element Element;
+    const uint32_t systematic_begin =
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 ? codec->padded_side : 0;
+    const uint32_t systematic_end = systematic_begin + codec->parent_dimension;
+    weights.resize(codec->original_count);
+    for (uint32_t original = 0; original < codec->original_count; ++original)
+    {
+        const uint32_t coordinate = systematic_begin + original;
+        Element denominator = 1;
+        for (uint32_t other = systematic_begin; other < systematic_end; ++other)
+        {
+            if (other == coordinate)
+                continue;
+            denominator = Field::Multiply(
+                denominator, static_cast<Element>(coordinate ^ other));
+        }
+        if (denominator == 0)
+        {
+            weights.clear();
+            return false;
+        }
+        weights[original] = Field::Inverse(denominator);
+    }
+    return true;
+}
+
+template<class Field>
+static bool InvertDirectRepairMatrix(
+    typename Field::Element matrix[kDirectMaxLosses][kDirectMaxLosses * 2],
+    uint32_t size)
+{
+    typedef typename Field::Element Element;
+    for (uint32_t column = 0; column < size; ++column)
+    {
+        uint32_t pivot = column;
+        while (pivot < size && matrix[pivot][column] == 0)
+            ++pivot;
+        if (pivot == size)
+            return false;
+        if (pivot != column)
+            for (uint32_t j = 0; j < size * 2; ++j)
+                std::swap(matrix[pivot][j], matrix[column][j]);
+
+        const Element pivot_value = matrix[column][column];
+        if (pivot_value != 1)
+        {
+            const Element inverse = Field::Inverse(pivot_value);
+            for (uint32_t j = 0; j < size * 2; ++j)
+                matrix[column][j] = Field::Multiply(matrix[column][j], inverse);
+        }
+        for (uint32_t row = 0; row < size; ++row)
+        {
+            if (row == column || matrix[row][column] == 0)
+                continue;
+            const Element factor = matrix[row][column];
+            for (uint32_t j = 0; j < size * 2; ++j)
+                matrix[row][j] ^= Field::Multiply(factor, matrix[column][j]);
+        }
+    }
+    return true;
+}
+
+template<class Field>
+static bool PrepareDirectRepairTerms(
+    leo2_decode_plan* plan,
+    const std::vector<typename Field::Element>& barycentric_weights)
+{
+    typedef typename Field::Element Element;
+    const leo2_codec* codec = plan->codec;
+    const uint32_t losses = plan->missing_original_count;
+    if (losses == 0 || losses > kDirectMaxLosses ||
+        barycentric_weights.size() != codec->original_count)
+        return false;
+
+    uint32_t selected_parities[kDirectMaxLosses] = {};
+    uint32_t selected_count = 0;
+    for (uint32_t parity = 0;
+         parity < codec->recovery_count && selected_count < losses;
+         ++parity)
+    {
+        if (plan->recovery_present[parity])
+            selected_parities[selected_count++] = parity;
+    }
+    if (selected_count != losses)
+        return false;
+
+    const uint32_t systematic_begin =
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 ? codec->padded_side : 0;
+    const uint32_t systematic_end = systematic_begin + codec->parent_dimension;
+    std::vector<Element> generator_rows(
+        static_cast<size_t>(losses) * codec->original_count);
+    for (uint32_t equation = 0; equation < losses; ++equation)
+    {
+        const uint32_t parity_coordinate =
+            CoordinateForRecovery(codec, selected_parities[equation]);
+        Element vanishing_value = 1;
+        for (uint32_t coordinate = systematic_begin;
+             coordinate < systematic_end;
+             ++coordinate)
+        {
+            vanishing_value = Field::Multiply(vanishing_value,
+                static_cast<Element>(parity_coordinate ^ coordinate));
+        }
+        if (vanishing_value == 0)
+            return false;
+        for (uint32_t original = 0; original < codec->original_count; ++original)
+        {
+            const Element difference = static_cast<Element>(
+                parity_coordinate ^ (systematic_begin + original));
+            if (difference == 0)
+                return false;
+            generator_rows[static_cast<size_t>(equation) * codec->original_count + original] =
+                Field::Multiply(Field::Multiply(vanishing_value,
+                    Field::Inverse(difference)), barycentric_weights[original]);
+        }
+    }
+
+    Element augmented[kDirectMaxLosses][kDirectMaxLosses * 2] = {};
+    for (uint32_t equation = 0; equation < losses; ++equation)
+    {
+        for (uint32_t missing = 0; missing < losses; ++missing)
+        {
+            augmented[equation][missing] = generator_rows[
+                static_cast<size_t>(equation) * codec->original_count +
+                plan->missing_originals[missing]];
+        }
+        augmented[equation][losses + equation] = 1;
+    }
+    if (!InvertDirectRepairMatrix<Field>(augmented, losses))
+        return false;
+
+    plan->direct_term_offsets.clear();
+    plan->direct_terms.clear();
+    plan->direct_term_offsets.push_back(0);
+    for (uint32_t output = 0; output < losses; ++output)
+    {
+        for (uint32_t equation = 0; equation < losses; ++equation)
+        {
+            const Element coefficient = augmented[output][losses + equation];
+            if (coefficient == 0)
+                continue;
+            leo2_direct_repair_term term = {
+                kDirectRecoveryTag | selected_parities[equation],
+                static_cast<uint16_t>(Field::Log(coefficient))
+            };
+            plan->direct_terms.push_back(term);
+        }
+        for (uint32_t original = 0; original < codec->original_count; ++original)
+        {
+            if (!plan->original_present[original])
+                continue;
+            Element coefficient = 0;
+            for (uint32_t equation = 0; equation < losses; ++equation)
+            {
+                coefficient ^= Field::Multiply(
+                    augmented[output][losses + equation],
+                    generator_rows[static_cast<size_t>(equation) *
+                        codec->original_count + original]);
+            }
+            if (coefficient == 0)
+                continue;
+            leo2_direct_repair_term term = {
+                original, static_cast<uint16_t>(Field::Log(coefficient))
+            };
+            plan->direct_terms.push_back(term);
+        }
+
+        const size_t begin = plan->direct_term_offsets.back();
+        const size_t end = plan->direct_terms.size();
+        if (begin == end)
+            return false;
+        for (size_t i = begin + 1; i < end; ++i)
+        {
+            if (plan->direct_terms[i].multiplier_log == 0)
+            {
+                std::swap(plan->direct_terms[begin], plan->direct_terms[i]);
+                break;
+            }
+        }
+        plan->direct_term_offsets.push_back(end);
+    }
+    return plan->direct_term_offsets.size() == losses + 1;
+}
+
 static leo2_backend RuntimeBackend()
 {
 #if defined(LEO_TRY_NEON)
@@ -593,6 +846,25 @@ static leo2_result DecodeLayout(
     return LEO2_SUCCESS;
 }
 
+static leo2_result DirectDecodeLayout(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    ScratchLayout& layout,
+    size_t& rounded_bytes)
+{
+    if (!codec || !RoundShardBytes(shard_bytes, rounded_bytes))
+        return LEO2_INVALID_ARGUMENT;
+    if (codec->field == LEO2_FIELD_GF16 && (shard_bytes & 1u) != 0)
+        return LEO2_UNSUPPORTED;
+    // Direct execution writes straight to disjoint restored buffers.  Scratch
+    // is needed only for overlap/range validation, never for shard data.
+    const size_t range_count = static_cast<size_t>(codec->original_count) * 2 +
+        codec->recovery_count;
+    if (!ComputeScratchLayout(range_count, 0, 0, rounded_bytes, layout))
+        return LEO2_INVALID_COUNTS;
+    return LEO2_SUCCESS;
+}
+
 static void CopyAndPad(void* destination, const void* source, size_t bytes, size_t rounded)
 {
     memcpy(destination, source, bytes);
@@ -740,6 +1012,67 @@ static leo2_result ValidateDecodeBuffers(
         if (!original[i])
             MakeRange(restored[i], shard_bytes, outputs[output_count++]);
     return ValidateDisjointRanges(ranges, input_count, outputs, output_count);
+}
+
+static void XorArbitraryBytes(void* destination, const void* source, size_t bytes)
+{
+    const size_t complete = bytes & ~static_cast<size_t>(63u);
+    if (complete != 0)
+        leopard::xor_mem(destination, source, complete);
+    uint8_t* output = static_cast<uint8_t*>(destination);
+    const uint8_t* input = static_cast<const uint8_t*>(source);
+    for (size_t i = complete; i < bytes; ++i)
+        output[i] ^= input[i];
+}
+
+static leo2_result ExecuteDirectRepair(
+    const leo2_decode_plan* plan,
+    size_t shard_bytes,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored_original)
+{
+    const leo2_codec* codec = plan->codec;
+    for (uint32_t output_index = 0;
+         output_index < plan->missing_original_count;
+         ++output_index)
+    {
+        const size_t begin = plan->direct_term_offsets[output_index];
+        const size_t end = plan->direct_term_offsets[output_index + 1];
+        if (begin == end)
+            return LEO2_INTERNAL_ERROR;
+        void* output = restored_original[plan->missing_originals[output_index]];
+        for (size_t term_index = begin; term_index < end; ++term_index)
+        {
+            const leo2_direct_repair_term& term = plan->direct_terms[term_index];
+            const bool parity = (term.tagged_source & kDirectRecoveryTag) != 0;
+            const uint32_t source_index = term.tagged_source & ~kDirectRecoveryTag;
+            const void* source = parity ? recovery[source_index] : original[source_index];
+            if (!source)
+                return LEO2_INTERNAL_ERROR;
+
+            if (term_index == begin)
+            {
+                if (term.multiplier_log == 0)
+                    memcpy(output, source, shard_bytes);
+                else if (codec->field == LEO2_FIELD_GF8)
+                    leopard::ff8::MultiplyBytes(output, source,
+                        static_cast<leopard::ff8::ffe_t>(term.multiplier_log), shard_bytes);
+                else
+                    leopard::ff16::MultiplyBytes(output, source,
+                        static_cast<leopard::ff16::ffe_t>(term.multiplier_log), shard_bytes);
+            }
+            else if (term.multiplier_log == 0)
+                XorArbitraryBytes(output, source, shard_bytes);
+            else if (codec->field == LEO2_FIELD_GF8)
+                leopard::ff8::MultiplyAddBytes(output, source,
+                    static_cast<leopard::ff8::ffe_t>(term.multiplier_log), shard_bytes);
+            else
+                leopard::ff16::MultiplyAddBytes(output, source,
+                    static_cast<leopard::ff16::ffe_t>(term.multiplier_log), shard_bytes);
+        }
+    }
+    return LEO2_SUCCESS;
 }
 
 struct EncodeBatchTaskContext
@@ -944,6 +1277,9 @@ LEO2_EXPORT leo2_result leo2_codec_create(
 
         if (field == LEO2_FIELD_GF8)
         {
+            if (CanPrepareDirectRepair(codec))
+                PrepareDirectBarycentricWeights<DirectField8>(
+                    codec, codec->direct_barycentric8);
             if (permanent_erasure_count != 0 &&
                 leopard::ff8::IsDirectLocatorPreferred(parent, recovery_count))
             {
@@ -969,6 +1305,9 @@ LEO2_EXPORT leo2_result leo2_codec_create(
         }
         else
         {
+            if (CanPrepareDirectRepair(codec))
+                PrepareDirectBarycentricWeights<DirectField16>(
+                    codec, codec->direct_barycentric16);
             if (permanent_erasure_count != 0 &&
                 leopard::ff16::IsDirectLocatorPreferred(parent, recovery_count))
             {
@@ -1241,11 +1580,13 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
             codec->padded_side == 1 && missing_original_count == 1;
         plan->direct_copy = codec->profile == LEO2_PROFILE_LOW_V1 &&
             codec->padded_side == 1 && missing_original_count == 1;
+        plan->direct_repair = false;
 
         for (uint32_t i = 0; i < codec->original_count; ++i)
         {
             if (!original_present[i])
             {
+                plan->missing_originals.push_back(i);
                 const uint32_t coordinate = CoordinateForOriginal(codec, i);
                 plan->coordinate_erased[coordinate] = 1;
                 plan->requested[coordinate] = 1;
@@ -1280,7 +1621,25 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
             return LEO2_NEED_MORE_DATA;
         }
 
-        if (!plan->no_op && !plan->direct_xor && !plan->direct_copy)
+        if (!plan->no_op && !plan->direct_xor && !plan->direct_copy &&
+            missing_original_count <= kDirectMaxLosses)
+        {
+            if (codec->field == LEO2_FIELD_GF8 &&
+                !codec->direct_barycentric8.empty())
+            {
+                plan->direct_repair = PrepareDirectRepairTerms<DirectField8>(
+                    plan, codec->direct_barycentric8);
+            }
+            else if (codec->field == LEO2_FIELD_GF16 &&
+                     !codec->direct_barycentric16.empty())
+            {
+                plan->direct_repair = PrepareDirectRepairTerms<DirectField16>(
+                    plan, codec->direct_barycentric16);
+            }
+        }
+
+        if (!plan->no_op && !plan->direct_xor && !plan->direct_copy &&
+            !plan->direct_repair)
         {
             if (codec->field == LEO2_FIELD_GF8)
             {
@@ -1342,7 +1701,9 @@ LEO2_EXPORT leo2_result leo2_decode_plan_scratch_size(
     }
     ScratchLayout layout;
     size_t rounded = 0;
-    const leo2_result result = DecodeLayout(plan->codec, shard_bytes, layout, rounded);
+    const leo2_result result = plan->direct_repair
+        ? DirectDecodeLayout(plan->codec, shard_bytes, layout, rounded)
+        : DecodeLayout(plan->codec, shard_bytes, layout, rounded);
     if (result != LEO2_SUCCESS)
         return result;
     *scratch_bytes_out = layout.total_bytes;
@@ -1365,7 +1726,9 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
 
     ScratchLayout layout;
     size_t rounded = 0;
-    leo2_result result = DecodeLayout(plan->codec, shard_bytes, layout, rounded);
+    leo2_result result = plan->direct_repair
+        ? DirectDecodeLayout(plan->codec, shard_bytes, layout, rounded)
+        : DecodeLayout(plan->codec, shard_bytes, layout, rounded);
     if (result != LEO2_SUCCESS)
         return result;
     AddressRange scratch_range;
@@ -1407,6 +1770,9 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
         }
         return LEO2_SUCCESS;
     }
+    if (plan->direct_repair)
+        return ExecuteDirectRepair(plan, static_cast<size_t>(shard_bytes),
+            original, recovery, restored_original);
 
     uint8_t* base = static_cast<uint8_t*>(scratch);
     void** coordinate_data = reinterpret_cast<void**>(base + layout.pointer_offset);
