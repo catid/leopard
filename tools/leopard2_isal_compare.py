@@ -33,7 +33,12 @@ from typing import Any, Mapping, Sequence
 SCHEMA = "leopard2-isal-comparison-checkpoint/v2"
 CORRECTNESS_SCHEMA = "leopard2-isal-correctness/v2"
 ISA_SCHEMA = "leopard2-isal-benchmark/v2"
-LEOPARD_SCHEMA = "leopard2-benchmark-v1"
+LEOPARD_SCHEMA_V1 = "leopard2-benchmark-v1"
+LEOPARD_SCHEMA_V2 = "leopard2-benchmark-v2"
+# The retained V2 ISA-L checkpoint predates Leopard benchmark schema v2 and
+# therefore intentionally contains v1 child documents.  Keep this alias for
+# the historical fixture while accepting the stronger current schema below.
+LEOPARD_SCHEMA = LEOPARD_SCHEMA_V1
 ISA_URL = "https://github.com/intel/isa-l"
 ISA_COMMIT = "e8cc5e87fc64b4da434f32bc1fa18184622a4998"
 ISA_TREE = "e56f9556f55549c39d90e2abfca2961c6426702e"
@@ -126,6 +131,16 @@ def require_hex(value: Any, length: int, label: str) -> str:
             any(character not in "0123456789abcdef" for character in value)):
         raise ComparisonError(f"{label} is not {length}-character lowercase hex")
     return value
+
+
+def validate_workload_digests(value: Mapping[str, Any]) -> None:
+    require_exact_keys(value, {
+        "algorithm", "original_data", "transmitted_parity",
+        "recovered_originals"}, "Leopard2 workload digests")
+    if value.get("algorithm") != "fnv1a64":
+        raise ComparisonError("Leopard2 workload digest algorithm changed")
+    for name in ("original_data", "transmitted_parity", "recovered_originals"):
+        require_hex(value.get(name), 16, f"Leopard2 workload digest {name}")
 
 
 def repo_root() -> Path:
@@ -1735,15 +1750,25 @@ def validate_isal_result(
 def validate_leopard_result(
         document: Mapping[str, Any], cell: Mapping[str, Any],
         iterations: int, warmup: int) -> list[int]:
-    if document.get("schema") != LEOPARD_SCHEMA:
+    schema = document.get("schema")
+    if schema not in (LEOPARD_SCHEMA_V1, LEOPARD_SCHEMA_V2):
         raise ComparisonError("wrong Leopard2 result schema")
-    require_exact_keys(document, {
+    top_level_keys = {
         "schema", "build", "parameters", "resolved", "correctness", "memory",
-        "metrics", "legacy"}, "Leopard2 child result")
+        "metrics", "legacy"}
+    if schema == LEOPARD_SCHEMA_V2:
+        top_level_keys.add("workload_digests")
+    require_exact_keys(document, top_level_keys, "Leopard2 child result")
+    if schema == LEOPARD_SCHEMA_V2:
+        validate_workload_digests(document.get("workload_digests", {}))
+    extra_parameters = {
+        "force_generic_decode": False, "force_specialized_decode": False,
+        "skip_legacy": True}
+    if schema == LEOPARD_SCHEMA_V2:
+        extra_parameters["retain_samples"] = True
     missing = validate_common_parameters(
         document, cell, iterations, warmup,
-        {"force_generic_decode": False, "force_specialized_decode": False,
-         "skip_legacy": True})
+        extra_parameters)
     build = document.get("build", {})
     require_exact_keys(build, {"compiler", "compiler_version", "cplusplus"},
                        "Leopard2 child build")
@@ -1783,8 +1808,10 @@ def validate_leopard_result(
         "decode_timing_includes_setup", "encode_execution",
         "decode_including_setup"}, "Leopard2 legacy evidence")
     if (legacy.get("available") is not False or
-            legacy.get("unavailable_reason") !=
-            "disabled by --skip-legacy for symmetric external comparison" or
+            legacy.get("unavailable_reason") != (
+                "disabled by --skip-legacy"
+                if schema == LEOPARD_SCHEMA_V2 else
+                "disabled by --skip-legacy for symmetric external comparison") or
             legacy.get("decode_timing_includes_setup") is not True or
             legacy.get("codec_setup") is not None or
             legacy.get("encode_execution") is not None or
@@ -2929,11 +2956,16 @@ def fake_isal_result(
 
 def fake_leopard_result(
         cell: Mapping[str, Any], iterations: int = 5,
-        warmup: int = 1) -> dict[str, Any]:
+        warmup: int = 1,
+        schema: str = LEOPARD_SCHEMA_V1) -> dict[str, Any]:
+    if schema not in (LEOPARD_SCHEMA_V1, LEOPARD_SCHEMA_V2):
+        raise ComparisonError("invalid fake Leopard2 result schema")
     params = expected_parameters(cell, iterations, warmup)
     params["force_generic_decode"] = False
     params["force_specialized_decode"] = False
     params["skip_legacy"] = True
+    if schema == LEOPARD_SCHEMA_V2:
+        params["retain_samples"] = True
     params["missing_original_indices"] = expected_missing_indices(
         params["K"], params["loss_count"], params["seed"])
     k, r, b, losses, batch = (params["K"], params["R"], params["shard_bytes"],
@@ -2944,8 +2976,8 @@ def fake_leopard_result(
     decode_output = losses * b * batch
     center = median([10.0 + index for index in range(iterations)])
     amortized = center + center / params["reuse"]
-    return {
-        "schema": LEOPARD_SCHEMA,
+    result = {
+        "schema": schema,
         "build": {"compiler": "test", "compiler_version": "test",
                   "cplusplus": 201103},
         "parameters": params,
@@ -2981,11 +3013,21 @@ def fake_leopard_result(
                 "a plan may read a deterministic subset"),
         },
         "legacy": {"available": False,
-                   "unavailable_reason":
-                       "disabled by --skip-legacy for symmetric external comparison",
+                   "unavailable_reason": (
+                       "disabled by --skip-legacy"
+                       if schema == LEOPARD_SCHEMA_V2 else
+                       "disabled by --skip-legacy for symmetric external comparison"),
                    "codec_setup": None, "decode_timing_includes_setup": True,
                    "encode_execution": None, "decode_including_setup": None},
     }
+    if schema == LEOPARD_SCHEMA_V2:
+        result["workload_digests"] = {
+            "algorithm": "fnv1a64",
+            "original_data": "1" * 16,
+            "transmitted_parity": "2" * 16,
+            "recovered_originals": "3" * 16,
+        }
+    return result
 
 
 def fake_source_bundle() -> dict[str, Any]:
@@ -3469,6 +3511,32 @@ def self_test() -> None:
     for cell in CHECKPOINT_CELLS:
         validate_isal_result(
             fake_isal_result(cell), cell, 5, 1, "1" * 64, "4" * 64)
+        validate_leopard_result(
+            fake_leopard_result(cell, schema=LEOPARD_SCHEMA_V1), cell, 5, 1)
+        validate_leopard_result(
+            fake_leopard_result(cell, schema=LEOPARD_SCHEMA_V2), cell, 5, 1)
+    leopard_schema_mutations = []
+    changed = fake_leopard_result(
+        CHECKPOINT_CELLS[0], schema=LEOPARD_SCHEMA_V2)
+    changed["workload_digests"]["algorithm"] = "sha256"
+    leopard_schema_mutations.append(changed)
+    changed = fake_leopard_result(
+        CHECKPOINT_CELLS[0], schema=LEOPARD_SCHEMA_V2)
+    changed["parameters"].pop("retain_samples")
+    leopard_schema_mutations.append(changed)
+    changed = fake_leopard_result(
+        CHECKPOINT_CELLS[0], schema=LEOPARD_SCHEMA_V1)
+    changed["workload_digests"] = {
+        "algorithm": "fnv1a64", "original_data": "1" * 16,
+        "transmitted_parity": "2" * 16, "recovered_originals": "3" * 16}
+    leopard_schema_mutations.append(changed)
+    for changed in leopard_schema_mutations:
+        try:
+            validate_leopard_result(changed, CHECKPOINT_CELLS[0], 5, 1)
+        except ComparisonError:
+            pass
+        else:
+            raise ComparisonError("Leopard benchmark schema mutation was accepted")
     base = fake_isal_result(CHECKPOINT_CELLS[4])
     mutations = []
     for path, value in (
@@ -3822,6 +3890,8 @@ def self_test() -> None:
         "correctness_mutations_rejected": len(correctness_mutations),
         "link_closure_mutations_rejected": len(closure_mutations),
         "coordinated_relabels_rejected": coordinated_relabels_rejected,
+        "leopard_benchmark_schemas_validated": 2,
+        "leopard_schema_mutations_rejected": len(leopard_schema_mutations),
         "reduced_correctness_fixture_cases": correctness["case_count"],
         "nasm_archive_sha256": NASM_ARCHIVE_SHA256, "status": "PASS",
     }, sort_keys=True))

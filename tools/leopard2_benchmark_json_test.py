@@ -16,18 +16,19 @@ def require(condition: bool, message: str) -> None:
         raise RuntimeError(message)
 
 
-def run(executable: Path, skip_legacy: bool) -> dict[str, Any]:
+def run(executable: Path, external_evidence: bool) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="leo2-benchmark-json-") as temporary:
         output = Path(temporary) / "result.json"
         command = [
             str(executable), "--k", "3", "--r", "2", "--profile", "high",
-            "--field", "gf8", "--backend", "auto", "--bytes", "64",
+            "--field", "auto", "--backend", "auto", "--bytes", "64",
             "--loss", "1", "--batch", "1", "--reuse", "1",
             "--iterations", "1", "--warmup", "0", "--threads", "1",
-            "--seed", "7", "--json", str(output),
+            "--seed", "7",
         ]
-        if skip_legacy:
-            command.insert(-2, "--skip-legacy")
+        if external_evidence:
+            command.extend(("--skip-legacy", "--retain-samples"))
+        command.extend(("--json", str(output)))
         completed = subprocess.run(
             command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, check=False)
@@ -38,11 +39,13 @@ def run(executable: Path, skip_legacy: bool) -> dict[str, Any]:
         return json.loads(output.read_text())
 
 
-def validate_common(document: dict[str, Any]) -> None:
-    require(set(document) == {
+def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
+    expected_top = {
         "schema", "build", "parameters", "resolved", "correctness",
-        "memory", "metrics", "legacy"}, "top-level JSON keys changed")
-    require(document["schema"] == "leopard2-benchmark-v1", "schema changed")
+        "memory", "metrics", "legacy"}
+    if document["schema"] == "leopard2-benchmark-v2":
+        expected_top.add("workload_digests")
+    require(set(document) == expected_top, "top-level JSON keys changed")
     require(set(document["build"]) == {
         "compiler", "compiler_version", "cplusplus"}, "build keys changed")
     require(set(document["resolved"]) == {
@@ -63,13 +66,56 @@ def validate_common(document: dict[str, Any]) -> None:
         "decode_timing_includes_setup", "encode_execution",
         "decode_including_setup"}, "legacy keys changed")
     for metric in ("codec_setup", "decode_plan_setup"):
-        require(set(document["metrics"][metric]) == {
-            "median_us", "mad_us", "minimum_us", "maximum_us"},
-            f"default {metric} unexpectedly retained raw samples")
+        expected = {
+            "median_us", "mad_us", "minimum_us", "maximum_us"}
+        if retain_samples:
+            expected.add("samples_us")
+        require(set(document["metrics"][metric]) == expected,
+                f"{metric} raw-sample structure changed")
+        samples = document["metrics"][metric].get("samples_us")
+        require((isinstance(samples, list) and len(samples) == 1) == retain_samples,
+                f"{metric} raw-sample cardinality changed")
     for metric in ("encode_execution", "decode_execution"):
-        require(not any(key.startswith("samples_us")
-                        for key in document["metrics"][metric]),
-                f"default {metric} unexpectedly retained raw samples")
+        expected = {
+            "median_us_per_batch_call", "mad_us_per_batch_call",
+            "minimum_us_per_batch_call", "maximum_us_per_batch_call",
+            ("input_GB_per_s" if metric == "encode_execution" else
+             "offered_received_GB_per_s"),
+            ("parity_output_GB_per_s" if metric == "encode_execution" else
+             "repaired_output_GB_per_s")}
+        if retain_samples:
+            expected.add("samples_us_per_batch_call")
+        require(set(document["metrics"][metric]) == expected,
+                f"{metric} structure changed")
+        samples = document["metrics"][metric].get("samples_us_per_batch_call")
+        require((isinstance(samples, list) and len(samples) == 1) == retain_samples,
+                f"{metric} raw-sample cardinality changed")
+
+
+def validate_workload_digests(document: dict[str, Any]) -> None:
+    digests = document.get("workload_digests")
+    require(isinstance(digests, dict) and set(digests) == {
+        "algorithm", "original_data", "transmitted_parity",
+        "recovered_originals"}, "workload digest structure changed")
+    require(digests["algorithm"] == "fnv1a64", "workload digest algorithm changed")
+    for name in ("original_data", "transmitted_parity", "recovered_originals"):
+        value = digests[name]
+        require(isinstance(value, str) and len(value) == 16 and
+                all(character in "0123456789abcdef" for character in value),
+                f"workload digest {name} is not lowercase FNV-1a hex")
+
+
+def validate_isal_comparison_contract(document: dict[str, Any]) -> None:
+    # Exercise the exact parser used by future ISA-L collection, rather than
+    # letting this executable-shape regression and the retained-artifact
+    # validator drift independently.
+    import leopard2_isal_compare as comparison
+
+    cell = {
+        "K": 3, "R": 2, "profile": "high", "shard_bytes": 64,
+        "loss_count": 1, "batch": 1, "reuse": 1, "seed": 7,
+    }
+    comparison.validate_leopard_result(document, cell, 1, 0)
 
 
 def main() -> int:
@@ -77,7 +123,9 @@ def main() -> int:
         raise RuntimeError("usage: leopard2_benchmark_json_test.py BENCH_LEOPARD2")
     executable = Path(sys.argv[1]).resolve()
     default = run(executable, False)
-    validate_common(default)
+    require(default["schema"] == "leopard2-benchmark-v1",
+            "default benchmark schema changed")
+    validate_common(default, False)
     require(set(default["parameters"]) == {
         "K", "R", "requested_profile", "requested_field",
         "requested_backend", "force_generic_decode",
@@ -90,15 +138,28 @@ def main() -> int:
             "default behavior no longer executes the available legacy oracle")
 
     external = run(executable, True)
-    validate_common(external)
-    require(set(external["parameters"]) == set(default["parameters"]) | {"skip_legacy"},
+    require(external["schema"] in {
+        "leopard2-benchmark-v1", "leopard2-benchmark-v2"},
+        "external-evidence benchmark schema changed")
+    validate_common(external, True)
+    expected_external_parameters = set(default["parameters"]) | {"skip_legacy"}
+    if external["schema"] == "leopard2-benchmark-v2":
+        expected_external_parameters.add("retain_samples")
+        validate_workload_digests(external)
+    require(set(external["parameters"]) == expected_external_parameters,
             "external-evidence parameter structure changed")
     require(external["parameters"]["skip_legacy"] is True,
             "external-evidence mode was not recorded")
+    if external["schema"] == "leopard2-benchmark-v2":
+        require(external["parameters"]["retain_samples"] is True,
+                "external-evidence raw-sample mode was not recorded")
+    unavailable_reason = (
+        "disabled by --skip-legacy" if
+        external["schema"] == "leopard2-benchmark-v2" else
+        "disabled by --skip-legacy for symmetric external comparison")
     require(external["legacy"] == {
         "available": False,
-        "unavailable_reason":
-            "disabled by --skip-legacy for symmetric external comparison",
+        "unavailable_reason": unavailable_reason,
         "codec_setup": None,
         "decode_timing_includes_setup": True,
         "encode_execution": None,
@@ -106,6 +167,7 @@ def main() -> int:
     }, "external-evidence mode did not completely skip legacy work")
     require(external["correctness"]["legacy_comparison"] is None,
             "external-evidence mode claimed a legacy comparison")
+    validate_isal_comparison_contract(external)
     print("leopard2 benchmark JSON regression passed")
     return 0
 
