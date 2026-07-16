@@ -39,8 +39,10 @@ prefix low; all currently have profile version 1.  Family 3 is the persistent
 identity corresponding to public enum value
 `LEO2_PROFILE_EXACT_EXPERIMENTAL_V1 == 3`; the stable codec constructor still
 rejects it, so this is a research-format freeze rather than production ABI.
-Family 4 is reserved for a possible future exact-high profile and version-1
-readers reject it.  Exact-high must never reinterpret family 3.
+Family 4 is reserved for any future serialization of C8's default-off
+exact-high candidate and version-1 readers reject it.  The current C8
+checkpoint is deliberately unserialized; exact-high must never reinterpret
+family 3.
 
 For family 3/map 1, `N=K+R`, the padded-side field equals `K`, and the ordered
 evaluation coordinates are the first `K+R` Leopard Cantor coordinates.  The
@@ -87,7 +89,10 @@ reader.
 The C7 exact-low coordinate set is frozen by family 3/version 1/map 1 rather
 than by an optional digest.  Changing its point order, field representation, or
 systematic/parity partition requires a new profile or coordinate-map version.
-Family 4 remains an unimplemented reservation, not a decodable identity.
+Family 4 remains an unimplemented serialization reservation, not a decodable
+identity.  C8's executable candidate and evidence remain independently named
+`exact_high_prefix_v1_candidate` until a later C9/C10 decision freezes a
+decoder and serialized profile.
 
 ## Migration rules
 

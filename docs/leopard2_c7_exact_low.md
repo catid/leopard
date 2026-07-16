@@ -51,8 +51,10 @@ There is no dyadic parent, no shortening, and no puncturing.  In the existing
 - `padded_side` is exactly `K`;
 - coordinate-map version is 1.
 
-Profile family 4 is reserved for future exact-high work and is rejected by the
-version-1 readers.  Exact-high must not reinterpret family 3.  Coordinate-,
+Profile family 4 is reserved for any future serialization of C8's completed,
+default-off exact-high candidate and is rejected by the version-1 readers.
+C8 remains an unserialized research profile; exact-high must not reinterpret
+family 3.  Coordinate-,
 shortening-, and puncturing-set digest TLVs are invalid for exact low V1 because
 the versioned map already fixes the coordinates and the latter two sets do not
 exist.  Rejecting all three values, including all-zero and all-one digests,
