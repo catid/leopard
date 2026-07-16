@@ -455,7 +455,7 @@
     "vandermonde_oracle_coefficients": 3060
   },
   "large_field": {
-    "affine_coefficients": 177600,
+    "affine_coefficients": 177888,
     "aligned_union_records": [
       {
         "K": 3,
@@ -512,6 +512,19 @@
         "reason": "ceil_pow2(K)+R exceeds the field order"
       },
       {
+        "K": 3,
+        "R": 500,
+        "aligned_one_coefficients": 0,
+        "aligned_symbolic_fragments": 13,
+        "available": true,
+        "changed_coefficients": 1125,
+        "dense_coefficients": 1500,
+        "field": "legacy-gf16-v1",
+        "globally_affine": false,
+        "prefix_one_coefficients": 3,
+        "prefix_symbolic_fragments": 16
+      },
+      {
         "K": 129,
         "R": 100,
         "aligned_one_coefficients": 0,
@@ -551,8 +564,8 @@
         "prefix_symbolic_fragments": 9
       }
     ],
-    "cases": 9,
-    "dense_coefficients": 83281,
+    "cases": 10,
+    "dense_coefficients": 84781,
     "records": [
       {
         "K": 3,
@@ -603,6 +616,14 @@
         "vandermonde_rows": 0
       },
       {
+        "K": 3,
+        "R": 500,
+        "coordinate_digest_sha256": "78f1b8baa0d6a413c44690b7a5ca9bab90d623eb2b6d19c615690e59f665ccc9",
+        "dense_coefficients": 1500,
+        "field": "legacy-gf16-v1",
+        "vandermonde_rows": 500
+      },
+      {
         "K": 129,
         "R": 100,
         "coordinate_digest_sha256": "845af45b11637333faf1424464917962616e72f93a29304ce365d3539db61427",
@@ -641,6 +662,6 @@
     "systematic_coordinates": "omega_0 .. omega_(K-1)"
   },
   "schema": "leopard2-c7-algebra/v1",
-  "source_sha256": "b2a7b8d8899e1f6bdf099bdba7ba66fc424c04d5561c42683ae7849e78000e06",
+  "source_sha256": "4bbe15f54fcb559d680516893541236abcfcc1564c49cc21b6aeb8c005ecaeab",
   "status": "pass"
 }
