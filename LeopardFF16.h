@@ -35,7 +35,7 @@
 /*
     16-bit Finite Field Math
 
-    This finite field contains 65536 elements and so each element is one byte.
+    This finite field contains 65536 elements and each element is two bytes.
     This library is designed for data that is a multiple of 64 bytes in size.
 
     Algorithms are described in LeopardCommon.h

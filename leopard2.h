@@ -50,7 +50,7 @@
 extern "C" {
 #endif
 
-#define LEO2_API_VERSION 1u
+#define LEO2_API_VERSION 2u
 
 typedef struct leo2_context leo2_context;
 typedef struct leo2_codec leo2_codec;
@@ -82,6 +82,19 @@ typedef enum leo2_field {
     LEO2_FIELD_GF16 = 2
 } leo2_field;
 
+/*
+    Shard layout is part of persistent code identity.  Native V1 retains the
+    existing GF8 and even-byte GF16 representation.  Padded-odd V1 is an
+    explicit GF16-only framing profile: an odd B-byte application payload is
+    stored as a physical W=B+1 byte systematic shard with wire[B] equal to
+    zero.  Every parity shard also stores all W bytes; its last byte is not
+    padding and may be nonzero.
+*/
+typedef enum leo2_shard_layout {
+    LEO2_SHARD_LAYOUT_NATIVE_V1 = 0,
+    LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1 = 1
+} leo2_shard_layout;
+
 typedef enum leo2_backend {
     LEO2_BACKEND_AUTO = 0,
     LEO2_BACKEND_SCALAR = 1,
@@ -106,6 +119,12 @@ typedef struct leo2_codec_options {
     size_t struct_size;
     uint32_t flags;
     uint32_t reserved;
+    /*
+        This field was appended in API version 2.  A version-1 struct_size,
+        ending immediately before shard_layout, selects NATIVE_V1.
+    */
+    /* Fixed-width ABI storage; set to one of the leo2_shard_layout values. */
+    uint32_t shard_layout;
 } leo2_codec_options;
 
 /* Test/diagnostic flags selecting a decoder independently of AUTO dispatch. */
@@ -154,15 +173,47 @@ LEO2_EXPORT uint32_t leo2_codec_parent_count(const leo2_codec* codec);
 LEO2_EXPORT uint32_t leo2_codec_padded_side(const leo2_codec* codec);
 LEO2_EXPORT leo2_profile leo2_codec_profile(const leo2_codec* codec);
 LEO2_EXPORT leo2_field leo2_codec_field(const leo2_codec* codec);
+LEO2_EXPORT leo2_shard_layout leo2_codec_shard_layout(const leo2_codec* codec);
+
+/*
+    Translate an application payload size to the exact physical shard size.
+    NATIVE_V1 returns the payload size subject to the native field granularity.
+    GF16_PADDED_ODD_V1 accepts only odd payload sizes and returns B+1.
+
+    Pack/unpack are allocation-free and use memmove semantics, so source and
+    destination may overlap.  wire_shard_bytes must equal the queried size.
+    Padded-odd unpack rejects a nonzero systematic pad byte.  These helpers are
+    for systematic/original coordinates; parity shards must retain all physical
+    bytes and must not be unpacked or truncated.
+*/
+LEO2_EXPORT leo2_result leo2_codec_wire_shard_bytes(
+    const leo2_codec* codec,
+    uint64_t payload_bytes,
+    uint64_t* wire_shard_bytes_out);
+LEO2_EXPORT leo2_result leo2_pack_systematic_shard(
+    const leo2_codec* codec,
+    uint64_t payload_bytes,
+    const void* payload,
+    void* wire_shard,
+    uint64_t wire_shard_bytes);
+LEO2_EXPORT leo2_result leo2_unpack_systematic_shard(
+    const leo2_codec* codec,
+    uint64_t payload_bytes,
+    const void* wire_shard,
+    uint64_t wire_shard_bytes,
+    void* payload);
 
 /*
     Scratch must start at leo2_scratch_alignment() alignment.  Scratch and all
     non-null shard ranges must be mutually disjoint, except that input shards may
     alias other input shards.  Recovery output entries may be null to request a
-    parity subset.  Encode/decode execution performs no allocation.  GF8 accepts
-    every positive shard_bytes value.  GF16 accepts positive even values and
-    returns LEO2_UNSUPPORTED for odd values because each symbol occupies two
-    application bytes; a no-loss plan remains a zero-scratch no-op.
+    parity subset.  Encode/decode execution performs no allocation.  shard_bytes
+    always describes the physical buffers.  GF8 accepts every positive native
+    length.  GF16 core execution accepts positive even physical lengths and
+    returns LEO2_UNSUPPORTED for odd physical lengths.  A padded-odd codec also
+    requires the last byte of every systematic physical input to be zero.  Use
+    leo2_codec_wire_shard_bytes and the pack/unpack helpers to map an odd payload
+    B to physical W=B+1.  A no-loss plan remains a zero-scratch no-op.
 */
 LEO2_EXPORT size_t leo2_scratch_alignment(void);
 LEO2_EXPORT leo2_result leo2_encode_scratch_size(

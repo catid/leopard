@@ -67,6 +67,7 @@ struct leo2_codec
     uint32_t parent_dimension;
     leo2_profile profile;
     leo2_field field;
+    leo2_shard_layout shard_layout;
     uint32_t flags;
     std::vector<uint8_t> permanent_erased;
     std::vector<uint8_t> permanent_locator8;
@@ -346,6 +347,39 @@ static bool RoundShardBytes(uint64_t shard_bytes, size_t& rounded)
     if (shard_bytes == 0 || shard_bytes > std::numeric_limits<size_t>::max())
         return false;
     return AlignUp(static_cast<size_t>(shard_bytes), kScratchAlignment, rounded);
+}
+
+static leo2_result ResolveWireShardBytes(
+    const leo2_codec* codec,
+    uint64_t payload_bytes,
+    uint64_t& wire_bytes)
+{
+    if (!codec || payload_bytes == 0)
+        return LEO2_INVALID_ARGUMENT;
+
+    if (codec->shard_layout == LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1)
+    {
+        if (codec->field != LEO2_FIELD_GF16)
+            return LEO2_INTERNAL_ERROR;
+        if ((payload_bytes & 1u) == 0)
+            return LEO2_UNSUPPORTED;
+        if (payload_bytes == std::numeric_limits<uint64_t>::max())
+            return LEO2_INVALID_ARGUMENT;
+        wire_bytes = payload_bytes + 1;
+    }
+    else
+    {
+        if (codec->shard_layout != LEO2_SHARD_LAYOUT_NATIVE_V1)
+            return LEO2_INTERNAL_ERROR;
+        if (codec->field == LEO2_FIELD_GF16 && (payload_bytes & 1u) != 0)
+            return LEO2_UNSUPPORTED;
+        wire_bytes = payload_bytes;
+    }
+
+    size_t rounded = 0;
+    if (!RoundShardBytes(wire_bytes, rounded))
+        return LEO2_INVALID_ARGUMENT;
+    return LEO2_SUCCESS;
 }
 
 static bool ComputeScratchLayout(
@@ -749,6 +783,17 @@ static leo2_result CheckScratch(
     return LEO2_SUCCESS;
 }
 
+static bool HasValidSystematicPad(
+    const leo2_codec* codec,
+    const void* shard,
+    uint64_t shard_bytes)
+{
+    if (codec->shard_layout != LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1)
+        return true;
+    LEO_DEBUG_ASSERT(shard != NULL && shard_bytes >= 2 && (shard_bytes & 1u) == 0);
+    return static_cast<const uint8_t*>(shard)[static_cast<size_t>(shard_bytes - 1)] == 0;
+}
+
 static leo2_result ValidateEncodeBuffers(
     const leo2_codec* codec,
     uint64_t shard_bytes,
@@ -770,6 +815,8 @@ static leo2_result ValidateEncodeBuffers(
             return LEO2_INVALID_ARGUMENT;
         if (RangesOverlap(range, scratch_range))
             return LEO2_OVERLAP;
+        if (!HasValidSystematicPad(codec, original[i], shard_bytes))
+            return LEO2_INVALID_ARGUMENT;
     }
     for (uint32_t i = 0; i < codec->recovery_count; ++i)
     {
@@ -971,6 +1018,8 @@ static leo2_result ValidateDecodeBuffers(
                 return LEO2_INVALID_ARGUMENT;
             if (RangesOverlap(range, scratch_range))
                 return LEO2_OVERLAP;
+            if (!HasValidSystematicPad(codec, original[i], shard_bytes))
+                return LEO2_INVALID_ARGUMENT;
             ++input_count;
         }
         else
@@ -1212,16 +1261,32 @@ LEO2_EXPORT leo2_result leo2_codec_create(
     if (!context || !codec_out || original_count == 0 || recovery_count == 0)
         return LEO2_INVALID_ARGUMENT;
     *codec_out = NULL;
+    leo2_shard_layout shard_layout = LEO2_SHARD_LAYOUT_NATIVE_V1;
     if (options)
     {
         const uint32_t supported_flags =
             LEO2_CODEC_FORCE_GENERIC_DECODE |
             LEO2_CODEC_FORCE_SPECIALIZED_DECODE;
-        if (options->struct_size < sizeof(leo2_codec_options) ||
+        const size_t version1_size = offsetof(leo2_codec_options, shard_layout);
+        const size_t layout_field_end = version1_size + sizeof(options->shard_layout);
+        if (options->struct_size < version1_size ||
+            (options->struct_size > version1_size &&
+             options->struct_size < layout_field_end) ||
             (options->flags & ~supported_flags) != 0 ||
             (options->flags & supported_flags) == supported_flags)
             return LEO2_INVALID_ARGUMENT;
+        if (options->struct_size >= layout_field_end)
+        {
+            const uint32_t raw_layout = options->shard_layout;
+            if (raw_layout != LEO2_SHARD_LAYOUT_NATIVE_V1 &&
+                raw_layout != LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1)
+                return LEO2_INVALID_ARGUMENT;
+            shard_layout = static_cast<leo2_shard_layout>(raw_layout);
+        }
     }
+    if (shard_layout == LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1 &&
+        field != LEO2_FIELD_GF16)
+        return LEO2_INVALID_ARGUMENT;
     if (profile == LEO2_PROFILE_AUTO)
         profile = recovery_count <= original_count
             ? LEO2_PROFILE_LEGACY_HIGH_V1 : LEO2_PROFILE_LOW_V1;
@@ -1259,6 +1324,7 @@ LEO2_EXPORT leo2_result leo2_codec_create(
         ? parent - padded : padded;
     codec->profile = profile;
     codec->field = field;
+    codec->shard_layout = shard_layout;
     codec->flags = options ? options->flags : 0;
     try
     {
@@ -1380,6 +1446,65 @@ LEO2_EXPORT leo2_profile leo2_codec_profile(const leo2_codec* codec)
 LEO2_EXPORT leo2_field leo2_codec_field(const leo2_codec* codec)
 {
     return codec ? codec->field : LEO2_FIELD_AUTO;
+}
+
+LEO2_EXPORT leo2_shard_layout leo2_codec_shard_layout(const leo2_codec* codec)
+{
+    return codec ? codec->shard_layout : LEO2_SHARD_LAYOUT_NATIVE_V1;
+}
+
+LEO2_EXPORT leo2_result leo2_codec_wire_shard_bytes(
+    const leo2_codec* codec,
+    uint64_t payload_bytes,
+    uint64_t* wire_shard_bytes_out)
+{
+    if (!wire_shard_bytes_out)
+        return LEO2_INVALID_ARGUMENT;
+    *wire_shard_bytes_out = 0;
+    return ResolveWireShardBytes(codec, payload_bytes, *wire_shard_bytes_out);
+}
+
+LEO2_EXPORT leo2_result leo2_pack_systematic_shard(
+    const leo2_codec* codec,
+    uint64_t payload_bytes,
+    const void* payload,
+    void* wire_shard,
+    uint64_t wire_shard_bytes)
+{
+    uint64_t expected_wire_bytes = 0;
+    const leo2_result result = ResolveWireShardBytes(
+        codec, payload_bytes, expected_wire_bytes);
+    if (result != LEO2_SUCCESS)
+        return result;
+    if (!payload || !wire_shard || wire_shard_bytes != expected_wire_bytes)
+        return LEO2_INVALID_ARGUMENT;
+
+    memmove(wire_shard, payload, static_cast<size_t>(payload_bytes));
+    if (codec->shard_layout == LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1)
+        static_cast<uint8_t*>(wire_shard)[static_cast<size_t>(payload_bytes)] = 0;
+    return LEO2_SUCCESS;
+}
+
+LEO2_EXPORT leo2_result leo2_unpack_systematic_shard(
+    const leo2_codec* codec,
+    uint64_t payload_bytes,
+    const void* wire_shard,
+    uint64_t wire_shard_bytes,
+    void* payload)
+{
+    uint64_t expected_wire_bytes = 0;
+    const leo2_result result = ResolveWireShardBytes(
+        codec, payload_bytes, expected_wire_bytes);
+    if (result != LEO2_SUCCESS)
+        return result;
+    if (!wire_shard || !payload || wire_shard_bytes != expected_wire_bytes)
+        return LEO2_INVALID_ARGUMENT;
+    if (codec->shard_layout == LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1 &&
+        static_cast<const uint8_t*>(wire_shard)[static_cast<size_t>(payload_bytes)] != 0)
+        return LEO2_INVALID_ARGUMENT;
+
+    memmove(payload, wire_shard, static_cast<size_t>(payload_bytes));
+    return LEO2_SUCCESS;
 }
 
 LEO2_EXPORT size_t leo2_scratch_alignment(void)

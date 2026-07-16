@@ -372,19 +372,31 @@ scalar and available SIMD builds execute the same test-only hooks into the
 production byte kernels.  Production branch-free pruning is deliberately not
 claimed here; it remains a separate task.
 
-## Current GF16 tail constraint
+## GF16 byte-tail and physical-storage profiles
 
 Legacy GF16 uses an ALTMAP tile containing 32 field symbols as 32 low bytes
 followed by 32 high bytes.  A partial 64-byte tile cannot simply be zero-padded
 and its parity truncated: multiplying a present low byte by a GF16 coefficient
 can produce a nonzero high byte, and discarding that byte makes later erasure
-recovery impossible.  Leopard2 therefore rejects byte-heavy GF16 execution whose
-shard length is not a multiple of 64.  GF8 supports every positive byte length.
+recovery impossible.
 
-Removing this restriction requires a separately specified compact-tail or batch
-packing construction with its own MDS proof; silently truncating ALTMAP is not an
-acceptable compatibility extension.  This is a current implementation limitation,
-not a change to the parent-code mathematics.
+Native Leopard2 GF16 safely supports every positive even byte length.  A final
+`2q` application bytes are compactly scattered as `q` low and `q` high bytes of
+complete GF16 symbols; the inverse gather restores the application buffer.
+Native odd lengths remain unsupported.
+
+The separately identified `LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1` embeds an odd
+`B`-byte application payload into a physical `W=B+1` systematic shard as
+`payload || 0`.  Every systematic and parity coordinate transmits all `W`
+bytes, and the ordinary compact-even GF16 code is applied at physical length
+`W`.  If `G_S` is the generator submatrix for any `K` public coordinates, its
+GF16 inverse recovers every padded symbol lane and therefore the injected
+payload.  The final parity byte is generally nonzero and may not be punctured.
+This changes application framing and persistent shard-layout identity, but not
+the parent-code coordinates, GF16 representation, transform, locator, or
+decoder normalization mathematics.  See `docs/leopard2_gf16_tails.md` for the
+alphabet impossibility proof, alternative-construction disposition, and full
+wire semantics.
 
 ## Formula-to-source map
 

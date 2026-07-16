@@ -36,7 +36,19 @@ static void store_be32(uint8_t *output, uint32_t value)
 static int known_critical(uint16_t type)
 {
     return type >= LEO2_CODE_ID_META_PROFILE_PARAMETERS_SHA256 &&
+        type <= LEO2_CODE_ID_META_SHARD_LAYOUT;
+}
+
+static int known_digest(uint16_t type)
+{
+    return type >= LEO2_CODE_ID_META_PROFILE_PARAMETERS_SHA256 &&
         type <= LEO2_CODE_ID_META_PUNCTURING_SET_SHA256;
+}
+
+static int aliases_known_critical(uint16_t type)
+{
+    return (type & UINT16_C(0x8000)) == 0u &&
+        known_critical(type | UINT16_C(0x8000));
 }
 
 static int ceil_pow2_bounded(uint64_t value, uint32_t *result)
@@ -155,6 +167,9 @@ leo2_code_id_status leo2_code_identity_validate(
                 return LEO2_CODE_ID_NONCANONICAL;
             }
         }
+        if (aliases_known_critical(item->type)) {
+            return LEO2_CODE_ID_NONCANONICAL;
+        }
         if ((item->type & UINT16_C(0x8000)) != 0u &&
             !known_critical(item->type)) {
             return LEO2_CODE_ID_UNSUPPORTED;
@@ -165,8 +180,24 @@ leo2_code_id_status leo2_code_identity_validate(
         if (item->value_bytes != 0u && item->value == NULL) {
             return LEO2_CODE_ID_INVALID_ARGUMENT;
         }
-        if (known_critical(item->type) && item->value_bytes != 32u) {
+        if (known_digest(item->type) && item->value_bytes != 32u) {
             return LEO2_CODE_ID_INVALID_IDENTITY;
+        }
+        if (item->type == LEO2_CODE_ID_META_SHARD_LAYOUT) {
+            uint8_t layout;
+            if (item->value_bytes != 1u || item->value == NULL) {
+                return LEO2_CODE_ID_INVALID_IDENTITY;
+            }
+            layout = item->value[0];
+            if (layout == LEO2_CODE_ID_SHARD_LAYOUT_NATIVE_V1) {
+                return LEO2_CODE_ID_NONCANONICAL;
+            }
+            if (layout != LEO2_CODE_ID_SHARD_LAYOUT_GF16_PADDED_ODD_V1) {
+                return LEO2_CODE_ID_UNSUPPORTED;
+            }
+            if (identity->field != LEO2_CODE_ID_FIELD_GF16) {
+                return LEO2_CODE_ID_INVALID_IDENTITY;
+            }
         }
     }
     return LEO2_CODE_ID_OK;
@@ -219,11 +250,30 @@ leo2_code_id_status leo2_code_identity_add_metadata(
     if (identity->metadata_count >= LEO2_CODE_ID_MAX_METADATA) {
         return LEO2_CODE_ID_INVALID_IDENTITY;
     }
+    if (aliases_known_critical(type)) {
+        return LEO2_CODE_ID_NONCANONICAL;
+    }
     if ((type & UINT16_C(0x8000)) != 0u && !known_critical(type)) {
         return LEO2_CODE_ID_UNSUPPORTED;
     }
-    if (known_critical(type) && value_bytes != 32u) {
+    if (known_digest(type) && value_bytes != 32u) {
         return LEO2_CODE_ID_INVALID_IDENTITY;
+    }
+    if (type == LEO2_CODE_ID_META_SHARD_LAYOUT) {
+        uint8_t layout;
+        if (value_bytes != 1u) {
+            return LEO2_CODE_ID_INVALID_IDENTITY;
+        }
+        layout = value[0];
+        if (layout == LEO2_CODE_ID_SHARD_LAYOUT_NATIVE_V1) {
+            return LEO2_CODE_ID_NONCANONICAL;
+        }
+        if (layout != LEO2_CODE_ID_SHARD_LAYOUT_GF16_PADDED_ODD_V1) {
+            return LEO2_CODE_ID_UNSUPPORTED;
+        }
+        if (identity->field != LEO2_CODE_ID_FIELD_GF16) {
+            return LEO2_CODE_ID_INVALID_IDENTITY;
+        }
     }
     for (index = 0; index < identity->metadata_count; ++index) {
         if ((identity->metadata[index].type & UINT16_C(0x7fff)) ==

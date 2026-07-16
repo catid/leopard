@@ -19,9 +19,12 @@ from code_identity import (
     MAX_METADATA,
     MAX_METADATA_VALUE,
     META_COORDINATE_SET_SHA256,
+    META_SHARD_LAYOUT,
     Metadata,
     PROFILE_LEGACY_HIGH,
     PROFILE_LOW,
+    SHARD_LAYOUT_GF16_PADDED_ODD_V1,
+    SHARD_LAYOUT_NATIVE_V1,
     deserialize,
     make_identity,
     serialize,
@@ -78,7 +81,7 @@ class CodeIdentityTests(unittest.TestCase):
         for count in range(MAX_METADATA + 1):
             metadata = tuple(
                 Metadata(type_id, bytes(((type_id * 17 + i) & 0xFF) for i in range(type_id % 257)))
-                for type_id in range(1, count + 1)
+                for type_id in range(6, 6 + count)
             )
             identity = make_identity(PROFILE_LOW, FIELD_GF16, 129, 100, metadata)
             self.assertEqual(deserialize(serialize(identity)), identity)
@@ -110,6 +113,64 @@ class CodeIdentityTests(unittest.TestCase):
             (Metadata(META_COORDINATE_SET_SHA256, digest),),
         )
         self.assertEqual(deserialize(serialize(identity)), identity)
+
+    def test_padded_odd_shard_layout_identity(self) -> None:
+        native = make_identity(PROFILE_LOW, FIELD_GF16, 2, 256)
+        native_bytes = serialize(native)
+        self.assertEqual(len(native_bytes), HEADER_BYTES)
+        self.assertEqual(deserialize(native_bytes), native)
+
+        padded = make_identity(
+            PROFILE_LOW,
+            FIELD_GF16,
+            2,
+            256,
+            (Metadata(
+                META_SHARD_LAYOUT,
+                bytes((SHARD_LAYOUT_GF16_PADDED_ODD_V1,)),
+            ),),
+        )
+        encoded = serialize(padded)
+        self.assertEqual(encoded[:8], native_bytes[:8])
+        self.assertEqual(encoded[8:12], struct.pack(">I", HEADER_BYTES + 5))
+        self.assertEqual(encoded[12:34], native_bytes[12:34])
+        self.assertEqual(encoded[34:36], b"\x00\x01")
+        self.assertEqual(encoded[HEADER_BYTES:], b"\x80\x05\x00\x01\x01")
+        self.assertEqual(deserialize(encoded), padded)
+
+        rejected = (
+            Metadata(META_SHARD_LAYOUT, b""),
+            Metadata(META_SHARD_LAYOUT, bytes((SHARD_LAYOUT_NATIVE_V1,))),
+            Metadata(META_SHARD_LAYOUT, b"\x02"),
+            Metadata(META_SHARD_LAYOUT, b"\x01\x00"),
+        )
+        for metadata in rejected:
+            with self.assertRaises(IdentityError):
+                serialize(make_identity(
+                    PROFILE_LOW, FIELD_GF16, 2, 256, (metadata,)
+                ))
+        for base_type in range(1, 6):
+            with self.assertRaises(IdentityError):
+                serialize(make_identity(
+                    PROFILE_LOW, FIELD_GF16, 2, 256,
+                    (Metadata(base_type, b"downgrade"),)
+                ))
+        with self.assertRaises(IdentityError):
+            serialize(make_identity(
+                PROFILE_LOW,
+                FIELD_GF8,
+                2,
+                5,
+                (Metadata(META_SHARD_LAYOUT, b"\x01"),),
+            ))
+        with self.assertRaises(IdentityError):
+            serialize(CodeIdentity(**{
+                **padded.__dict__,
+                "metadata": (
+                    Metadata(META_SHARD_LAYOUT & 0x7FFF, b"duplicate"),
+                    Metadata(META_SHARD_LAYOUT, b"\x01"),
+                ),
+            }))
 
     def test_every_truncation_and_trailing_byte_rejected(self) -> None:
         identity = make_identity(
@@ -148,10 +209,10 @@ class CodeIdentityTests(unittest.TestCase):
         base = make_identity(PROFILE_LOW, FIELD_GF16, 129, 100)
         for metadata in (
             (Metadata(0, b""),),
-            (Metadata(2, b"b"), Metadata(1, b"a")),
-            (Metadata(1, b"a"), Metadata(0x8001, bytes(32))),
+            (Metadata(7, b"b"), Metadata(6, b"a")),
+            (Metadata(6, b"a"), Metadata(0x8006, bytes(32))),
             (Metadata(META_COORDINATE_SET_SHA256, bytes(31)),),
-            (Metadata(1, b"x" * (MAX_METADATA_VALUE + 1)),),
+            (Metadata(6, b"x" * (MAX_METADATA_VALUE + 1)),),
         ):
             with self.assertRaises(IdentityError):
                 serialize(CodeIdentity(**{**base.__dict__, "metadata": metadata}))

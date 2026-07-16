@@ -215,6 +215,9 @@ static int run_unit_tests(void)
         "4c324944010000240000004801010201000003e8000000c80000080000000100"
         "000100018002002094b6af12d26e0acba766ecae613414f76b95c477d9a8d22"
         "a792ded9802a1a572";
+    static const char golden_4[] =
+        "4c32494401000024000000290201020100000002000001000000020000000002"
+        "000100018005000101";
     leo2_code_identity identity;
     leo2_code_identity decoded;
     uint8_t encoded[LEO2_CODE_ID_MAX_BYTES];
@@ -247,6 +250,9 @@ static int run_unit_tests(void)
         LEO2_CODE_ID_META_COORDINATE_SET_SHA256,
         "94b6af12d26e0acba766ecae613414f76b95c477d9a8d22a792ded9802a1a572",
         golden_3));
+    CHECK(test_golden(LEO2_CODE_ID_PROFILE_LOW,
+        LEO2_CODE_ID_FIELD_GF16, 2, 256,
+        LEO2_CODE_ID_META_SHARD_LAYOUT, "01", golden_4));
 
     CHECK(leo2_code_identity_make(&identity, LEO2_CODE_ID_PROFILE_LOW,
         LEO2_CODE_ID_FIELD_GF16, 129, 100) == LEO2_CODE_ID_OK);
@@ -276,6 +282,10 @@ static int run_unit_tests(void)
         &one, 1) == LEO2_CODE_ID_INVALID_IDENTITY);
     CHECK(leo2_code_identity_add_metadata(&identity, UINT16_C(0x8010),
         digest, sizeof(digest)) == LEO2_CODE_ID_UNSUPPORTED);
+    for (index = 1; index <= 5; ++index) {
+        CHECK(leo2_code_identity_add_metadata(&identity, (uint16_t)index,
+            &one, 1) == LEO2_CODE_ID_NONCANONICAL);
+    }
 
     CHECK(serialize_into(&identity, encoded, &encoded_bytes));
     for (index = 0; index < encoded_bytes; ++index) {
@@ -286,6 +296,40 @@ static int run_unit_tests(void)
     encoded[5] = 1u;
     CHECK(leo2_code_identity_deserialize(encoded, encoded_bytes, &decoded) ==
         LEO2_CODE_ID_NONCANONICAL);
+
+    CHECK(leo2_code_identity_make(&identity, LEO2_CODE_ID_PROFILE_LOW,
+        LEO2_CODE_ID_FIELD_GF16, 2, 256) == LEO2_CODE_ID_OK);
+    one = LEO2_CODE_ID_SHARD_LAYOUT_GF16_PADDED_ODD_V1;
+    CHECK(leo2_code_identity_add_metadata(&identity,
+        LEO2_CODE_ID_META_SHARD_LAYOUT, &one, 1) == LEO2_CODE_ID_OK);
+    CHECK(leo2_code_identity_validate(&identity) == LEO2_CODE_ID_OK);
+    CHECK(identity.metadata_count == 1u);
+    CHECK(identity.metadata[0].value[0] ==
+        LEO2_CODE_ID_SHARD_LAYOUT_GF16_PADDED_ODD_V1);
+
+    CHECK(leo2_code_identity_make(&identity, LEO2_CODE_ID_PROFILE_LOW,
+        LEO2_CODE_ID_FIELD_GF16, 2, 256) == LEO2_CODE_ID_OK);
+    one = LEO2_CODE_ID_SHARD_LAYOUT_NATIVE_V1;
+    CHECK(leo2_code_identity_add_metadata(&identity,
+        LEO2_CODE_ID_META_SHARD_LAYOUT, &one, 1) ==
+        LEO2_CODE_ID_NONCANONICAL);
+    one = 2u;
+    CHECK(leo2_code_identity_add_metadata(&identity,
+        LEO2_CODE_ID_META_SHARD_LAYOUT, &one, 1) ==
+        LEO2_CODE_ID_UNSUPPORTED);
+    CHECK(leo2_code_identity_add_metadata(&identity,
+        LEO2_CODE_ID_META_SHARD_LAYOUT, &one, 0) ==
+        LEO2_CODE_ID_INVALID_IDENTITY);
+    CHECK(leo2_code_identity_add_metadata(&identity,
+        LEO2_CODE_ID_META_SHARD_LAYOUT, digest, 2) ==
+        LEO2_CODE_ID_INVALID_IDENTITY);
+
+    CHECK(leo2_code_identity_make(&identity, LEO2_CODE_ID_PROFILE_LOW,
+        LEO2_CODE_ID_FIELD_GF8, 2, 5) == LEO2_CODE_ID_OK);
+    one = LEO2_CODE_ID_SHARD_LAYOUT_GF16_PADDED_ODD_V1;
+    CHECK(leo2_code_identity_add_metadata(&identity,
+        LEO2_CODE_ID_META_SHARD_LAYOUT, &one, 1) ==
+        LEO2_CODE_ID_INVALID_IDENTITY);
 
     CHECK(leo2_code_identity_make(&identity,
         LEO2_CODE_ID_PROFILE_LEGACY_HIGH, LEO2_CODE_ID_FIELD_GF8,

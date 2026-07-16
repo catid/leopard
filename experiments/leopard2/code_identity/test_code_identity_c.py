@@ -25,6 +25,7 @@ from code_identity import (  # noqa: E402
     MAX_METADATA,
     MAX_METADATA_VALUE,
     META_COORDINATE_SET_SHA256,
+    META_SHARD_LAYOUT,
     Metadata,
     PROFILE_LEGACY_HIGH,
     PROFILE_LOW,
@@ -186,9 +187,16 @@ def check_decode(oracle: COracle, data: bytes) -> bool:
     return expected.startswith("OK ")
 
 
-def raw_identity_with_tlvs(tlvs: Iterable[tuple[int, int, bytes]]) -> bytes:
+def raw_identity_with_tlvs(
+    tlvs: Iterable[tuple[int, int, bytes]],
+    *,
+    profile: int = PROFILE_LOW,
+    field: int = FIELD_GF16,
+    original_count: int = 129,
+    recovery_count: int = 100,
+) -> bytes:
     result = bytearray(serialize(make_identity(
-        PROFILE_LOW, FIELD_GF16, 129, 100
+        profile, field, original_count, recovery_count
     )))
     items = tuple(tlvs)
     struct.pack_into(">H", result, 34, len(items))
@@ -228,12 +236,28 @@ def malformed_corpus() -> list[bytes]:
 
     corpus += [
         raw_identity_with_tlvs(((0, 0, b""),)),
-        raw_identity_with_tlvs(((2, 1, b"b"), (1, 1, b"a"))),
-        raw_identity_with_tlvs(((1, 1, b"a"), (0x8001, 32, bytes(32)))),
+        raw_identity_with_tlvs(((7, 1, b"b"), (6, 1, b"a"))),
+        raw_identity_with_tlvs(((6, 1, b"a"), (0x8006, 32, bytes(32)))),
         raw_identity_with_tlvs(((META_COORDINATE_SET_SHA256, 31, bytes(31)),)),
         raw_identity_with_tlvs(((0x9234, 6, b"future"),)),
         raw_identity_with_tlvs(((0x1234, 8, b"short"),)),
         raw_identity_with_tlvs(((0x1234, MAX_METADATA_VALUE + 1, b""),)),
+        raw_identity_with_tlvs(((META_SHARD_LAYOUT, 0, b""),)),
+        raw_identity_with_tlvs(((META_SHARD_LAYOUT, 1, b"\x00"),)),
+        raw_identity_with_tlvs(((META_SHARD_LAYOUT, 1, b"\x02"),)),
+        raw_identity_with_tlvs(((META_SHARD_LAYOUT, 2, b"\x01\x00"),)),
+        *(raw_identity_with_tlvs(((base_type, 9, b"downgrade"),))
+          for base_type in range(1, 6)),
+        raw_identity_with_tlvs(
+            ((META_SHARD_LAYOUT, 1, b"\x01"),),
+            field=FIELD_GF8,
+            original_count=2,
+            recovery_count=5,
+        ),
+        raw_identity_with_tlvs((
+            (META_SHARD_LAYOUT & 0x7FFF, 9, b"duplicate"),
+            (META_SHARD_LAYOUT, 1, b"\x01"),
+        )),
     ]
     excessive_count = bytearray(base)
     struct.pack_into(">H", excessive_count, 34, MAX_METADATA + 1)
@@ -306,7 +330,7 @@ def run_differential(oracle: COracle) -> dict[str, int]:
                 bytes((type_id * 17 + index) & 0xFF
                       for index in range(type_id % 257)),
             )
-            for type_id in range(1, count + 1)
+            for type_id in range(6, 6 + count)
         )
         # Reverse the command order periodically: both make_identity and the C
         # builder must independently produce canonical type ordering.
@@ -333,8 +357,8 @@ def run_differential(oracle: COracle) -> dict[str, int]:
 
     exact_limit = tuple(
         Metadata(type_id, bytes([type_id]) * 4096)
-        for type_id in range(1, 16)
-    ) + (Metadata(16, bytes([16]) * 3995),)
+        for type_id in range(6, 21)
+    ) + (Metadata(21, bytes([21]) * 3995),)
     encoded = check_encode(
         oracle, PROFILE_LOW, FIELD_GF16, 129, 100, exact_limit
     )
@@ -343,7 +367,7 @@ def run_differential(oracle: COracle) -> dict[str, int]:
     if not check_decode(oracle, encoded):
         raise AssertionError("maximum-size canonical identity rejected")
     counts["size_limit_valid"] += 1
-    oversized = exact_limit[:-1] + (Metadata(16, bytes([16]) * 3996),)
+    oversized = exact_limit[:-1] + (Metadata(21, bytes([21]) * 3996),)
     if check_encode(
         oracle, PROFILE_LOW, FIELD_GF16, 129, 100, oversized
     ):

@@ -314,6 +314,41 @@ if(LEO2_BUILD_TESTS)
     target_link_libraries(leopard2_gf16_tails_test libleopard)
     add_test(NAME leopard2_gf16_tails COMMAND leopard2_gf16_tails_test)
 
+    add_executable(leopard2_gf16_padded_odd_test
+        tests/leopard2/direct_oracle.cpp
+        tests/leopard2/test_gf16_padded_odd.cpp)
+    target_include_directories(leopard2_gf16_padded_odd_test PRIVATE tests/leopard2)
+    target_link_libraries(leopard2_gf16_padded_odd_test libleopard)
+    add_test(NAME leopard2_gf16_padded_odd COMMAND leopard2_gf16_padded_odd_test)
+    set_tests_properties(leopard2_gf16_padded_odd PROPERTIES
+        ENVIRONMENT "OMP_NUM_THREADS=1")
+
+    add_executable(leopard2_max_counts_test tests/leopard2/test_max_counts.cpp)
+    target_link_libraries(leopard2_max_counts_test libleopard)
+    add_test(NAME leopard2_max_counts COMMAND leopard2_max_counts_test)
+    set_tests_properties(leopard2_max_counts PROPERTIES
+        ENVIRONMENT "OMP_NUM_THREADS=1")
+
+    add_executable(leopard2_encode_concurrency_test
+        tests/leopard2/test_encode_concurrency.cpp)
+    target_link_libraries(leopard2_encode_concurrency_test libleopard)
+    add_test(NAME leopard2_encode_concurrency
+        COMMAND leopard2_encode_concurrency_test)
+    set_tests_properties(leopard2_encode_concurrency PROPERTIES
+        ENVIRONMENT "OMP_NUM_THREADS=1")
+
+    add_executable(leopard2_codec_options_abi_test
+        tests/leopard2/test_codec_options_abi.c)
+    set_target_properties(leopard2_codec_options_abi_test PROPERTIES
+        LINKER_LANGUAGE CXX)
+    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+        target_compile_options(leopard2_codec_options_abi_test PRIVATE
+            -fshort-enums)
+    endif()
+    target_link_libraries(leopard2_codec_options_abi_test libleopard)
+    add_test(NAME leopard2_codec_options_abi
+        COMMAND leopard2_codec_options_abi_test)
+
     add_executable(leopard2_direct_repair_test
         tests/leopard2/direct_oracle.cpp
         tests/leopard2/direct_repair.cpp

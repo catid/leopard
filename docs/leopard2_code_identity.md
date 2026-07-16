@@ -41,13 +41,21 @@ do not match its profile.
 
 Each metadata record is a 16-bit type, 16-bit value length, then the value.  TLVs
 must be strictly increasing by type and base types must be unique.  Type zero is
-reserved.  Bit 15 marks critical metadata.  Known critical types 1 through 4 are
-32-byte SHA-256 digests of canonical profile parameters, evaluation coordinates,
-shortening coordinates, and puncturing coordinates respectively.  Unknown
-critical types fail closed.  Unknown noncritical types are retained byte for
-byte, so an old reader can parse and reserialize informational extensions without
-changing the identity.  Metadata is limited to 64 values of at most 4096 bytes;
-the complete identifier is limited to 65535 bytes.
+reserved.  Bit 15 marks critical metadata.  Base types `0x0001` through
+`0x0005` are reserved for their critical forms and are rejected, so clearing
+bit 15 cannot silently downgrade their semantics.  Critical types `0x8001` through
+`0x8004` are 32-byte SHA-256 digests of canonical profile parameters, evaluation
+coordinates, shortening coordinates, and puncturing coordinates respectively.
+Critical type `0x8005` is the one-byte shard-layout selector.  Its only current
+value is `1`, `GF16_PADDED_ODD_V1`; it is valid only with GF16.  Absence of the
+TLV is the single canonical spelling of `NATIVE_V1`.  An explicit value zero is
+therefore noncanonical, and other lengths or values fail closed.  This preserves
+every previously generated native identifier byte for byte while making the
+padded systematic framing unambiguous.  Unknown critical types fail closed.
+Unknown noncritical types are retained byte for byte, so an old reader can parse
+and reserialize informational extensions without changing the identity.
+Metadata is limited to 64 values of at most 4096 bytes; the complete identifier
+is limited to 65535 bytes.
 
 ## Canonical and forward-compatible behavior
 
@@ -109,13 +117,13 @@ reports the exact required buffer size and undersized output fails before any
 write.  Counts, TLV values, TLV count, and complete identifiers retain the same
 4096-byte, 64-entry, and 65535-byte bounds as the Python reference.
 
-`test_code_identity_c.c` contains 146 direct C checks and also provides a test-
+`test_code_identity_c.c` contains 186 direct C checks and also provides a test-
 only line protocol.  `test_code_identity_c.py` compiles it with strict C99 GCC
 warnings and compares both C serialization and C deserialization with the
-Python implementation.  The deterministic differential matrix covers all 3
+Python implementation.  The deterministic differential matrix covers all 4
 golden vectors, 3,952 valid profile/field/count combinations, 44 zero, field-
 boundary, and `UINT32_MAX` count cases, 4,162 metadata count/length cases, one
-exact 65,535-byte valid identifier, one 65,536-byte rejection, 70 explicitly
+exact 65,535-byte valid identifier, one 65,536-byte rejection, 81 explicitly
 malformed identifiers, and 20,000 deterministic mutated inputs.
 Of the mutations, 1,384 remain valid canonical identities; both implementations
 accept and reserialize those exact bytes, while both reject the other 18,616.

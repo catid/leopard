@@ -6,10 +6,11 @@
 ## Object lifetimes
 
 Create one `leo2_context`, then any number of immutable codecs.  A codec fixes
-`K`, `R`, profile, field, parent length, and coordinate map.  A decode plan copies
-one presence/erasure pattern and precomputes its locator values, profile-specific
-normalization factors, and deterministic received-coordinate selection.  The
-context and codec must outlive their codecs and plans respectively.
+`K`, `R`, profile, field, shard layout, parent length, and coordinate map.  A
+decode plan copies one presence/erasure pattern and precomputes its locator
+values, profile-specific normalization factors, and deterministic
+received-coordinate selection.  The context and codec must outlive their codecs
+and plans respectively.
 
 Codec and plan execution is read-only and may be called concurrently when every
 call has distinct outputs and scratch.  Setup may allocate; encode and reusable
@@ -85,10 +86,20 @@ Low V1:
 GF8 for a parent of at most 256 coordinates and GF16 otherwise.  Profile and field
 are mathematical code identity; backend selection never changes them.
 
-## Byte lengths and batch calls
+Shard layout is also code identity.  `LEO2_SHARD_LAYOUT_NATIVE_V1` is zero, so a
+zero-initialized options structure and the exact API-version-1 prefix retain
+native behavior.  API version 2 appends `shard_layout` to
+`leo2_codec_options`.  Its storage is fixed-width `uint32_t` even when a C
+caller uses short-enum compiler options; set it to a `leo2_shard_layout` value.
+An older `struct_size` ending at that field's offset is accepted, while a size
+containing only part of the field is rejected.
+`LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1` must be requested explicitly together
+with `LEO2_FIELD_GF16`; field AUTO never chooses it.
+
+## Byte lengths, physical storage, and batch calls
 
 GF8 supports every positive byte length and internally handles SIMD tails through
-caller scratch.  GF16 supports every positive even byte length.  Complete
+caller scratch.  Native GF16 supports every positive even byte length.  Complete
 64-byte ALTMAP tiles remain unchanged and use the zero-copy encoding path.  A
 partial final GF16 tile contains `q` complete symbols in `2q` application bytes:
 the first `q` bytes are scattered to ALTMAP low lanes `0..q-1`, the next `q`
@@ -97,6 +108,23 @@ gather.  Odd GF16 byte lengths return `LEO2_UNSUPPORTED` because an unpaired byt
 is not a complete GF16 symbol.  A no-loss decode plan remains a true no-op with
 zero scratch even for an otherwise unsupported byte length.  See
 `leopard2_gf16_tails.md` for the construction and the odd-length limitation.
+
+Core encode/decode `shard_bytes` always names the physical buffer size.  For an
+explicit padded-odd codec and an odd application payload `B`, call
+`leo2_codec_wire_shard_bytes` to obtain `W=B+1`, then use
+`leo2_pack_systematic_shard` to form every physical systematic coordinate as
+`payload || 0`.  Encode and decode use `W`.  Every parity coordinate stores all
+`W` bytes: parity byte `B` may be nonzero and cannot be omitted.  Recovered
+systematic wires can be converted back with `leo2_unpack_systematic_shard`,
+which verifies their final zero before returning the first `B` bytes.
+
+Pack and unpack allocate nothing and have `memmove` overlap semantics, including
+in-place operation.  Their wire-size argument must exactly match the size query.
+Padded codecs reject even application-size queries, odd physical core lengths,
+and nonzero final bytes in systematic inputs.  Native layout remains the only
+layout for even payloads, so all legacy-valid and existing compact-even parity
+bytes remain unchanged.  The no-loss decoder intentionally performs no buffer
+or pad validation because its contract is a true no-op.
 
 The batch entry points execute independent items using each item's own buffers and
 scratch.  A context owns a persistent worker pool when its effective

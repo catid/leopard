@@ -24,18 +24,23 @@ PROFILE_LOW = 2
 FIELD_GF8 = 1
 FIELD_GF16 = 2
 
-# Critical metadata known by this reader.  Values are SHA-256 digests of the
-# canonical mathematical objects named here, never implementation choices.
+# Critical metadata known by this reader.  The first four values are SHA-256
+# digests of canonical mathematical objects; shard layout is a one-byte wire
+# framing selector.  None of these values names an implementation choice.
 META_PROFILE_PARAMETERS_SHA256 = 0x8001
 META_COORDINATE_SET_SHA256 = 0x8002
 META_SHORTENING_SET_SHA256 = 0x8003
 META_PUNCTURING_SET_SHA256 = 0x8004
-_KNOWN_CRITICAL = {
+META_SHARD_LAYOUT = 0x8005
+SHARD_LAYOUT_NATIVE_V1 = 0
+SHARD_LAYOUT_GF16_PADDED_ODD_V1 = 1
+_KNOWN_DIGESTS = {
     META_PROFILE_PARAMETERS_SHA256,
     META_COORDINATE_SET_SHA256,
     META_SHORTENING_SET_SHA256,
     META_PUNCTURING_SET_SHA256,
 }
+_KNOWN_CRITICAL = _KNOWN_DIGESTS | {META_SHARD_LAYOUT}
 
 
 class IdentityError(ValueError):
@@ -139,14 +144,26 @@ def _validate(identity: CodeIdentity) -> None:
         if base_type in seen_base_types:
             raise IdentityError("duplicate metadata base type")
         seen_base_types.add(base_type)
+        if not item.type & 0x8000 and (item.type | 0x8000) in _KNOWN_CRITICAL:
+            raise IdentityError("noncritical alias of known critical metadata")
         if item.type & 0x8000 and item.type not in _KNOWN_CRITICAL:
             raise IdentityError("unknown critical metadata")
         if not isinstance(item.value, bytes):
             raise IdentityError("metadata values must be bytes")
         if len(item.value) > MAX_METADATA_VALUE:
             raise IdentityError("metadata value is too long")
-        if item.type in _KNOWN_CRITICAL and len(item.value) != 32:
+        if item.type in _KNOWN_DIGESTS and len(item.value) != 32:
             raise IdentityError("known digest metadata must be 32 bytes")
+        if item.type == META_SHARD_LAYOUT:
+            if len(item.value) != 1:
+                raise IdentityError("shard-layout metadata must be one byte")
+            layout = item.value[0]
+            if layout == SHARD_LAYOUT_NATIVE_V1:
+                raise IdentityError("explicit native shard layout is non-canonical")
+            if layout != SHARD_LAYOUT_GF16_PADDED_ODD_V1:
+                raise IdentityError("unsupported shard layout")
+            if identity.field != FIELD_GF16:
+                raise IdentityError("padded-odd shard layout requires GF16")
 
 
 def serialize(identity: CodeIdentity) -> bytes:

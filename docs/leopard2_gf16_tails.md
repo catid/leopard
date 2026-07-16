@@ -69,6 +69,57 @@ of source bytes that is indistinguishable from the all-zero pair at those two
 received coordinates.  The same test verifies compact even tails by direct
 GF16 encoding and recovery rather than by calling optimized transforms.
 
+## Versioned padded-odd construction
+
+`LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1` is the production construction for an
+odd application payload of `B` bytes.  It requires an explicitly selected GF16
+codec and defines the physical wire length
+
+    W = B + 1
+
+for every systematic and parity coordinate.  A systematic shard is packed as
+
+    wire[0 .. B-1] = payload[0 .. B-1]
+    wire[B]        = 0
+
+The complete `W` bytes are then interpreted by the existing compact even-byte
+GF16 representation.  Parity also contains `W` bytes, but parity byte `B` is an
+ordinary encoded byte and is generally nonzero.  It must be stored and
+transmitted.  Only recovered systematic coordinates may be unpacked by dropping
+their verified-zero final byte.
+
+Let `G` be the current systematic GF16 generator matrix and let `E(x)=x || 0`
+be the injective padded representation.  Encoding applies each row of `G`
+independently to every GF16 symbol lane of `E(x_0),...,E(x_(K-1))`.  For any set
+`S` of `K` transmitted coordinates, `G_S` is invertible, so all padded symbols
+and therefore every application payload are recovered.  This proves the
+operational MDS property required here: any `K` physical coordinates reconstruct
+all `K` application shards.  Because the final source byte is constrained, the
+result is a restricted-message subcode rather than a full-rate code over the
+larger `W`-byte physical alphabet.
+
+The layout does not change the high/low coordinate profile, field polynomial,
+Cantor representation, parent length, shortening, puncturing, parity order,
+codec coefficients, or decode-plan locators.  Core encode and decode continue to
+receive the physical even length `W`.  The layout is nevertheless persistent
+wire identity because it changes systematic storage size and payload framing.
+It may not be selected by `LEO2_FIELD_AUTO`, inferred from a CPU backend, or
+serialized as the native GF16 layout.
+
+The alternatives were rejected for the general production contract:
+
+- A GF16-even-prefix plus one-byte GF8 tail is a systematic product code and is
+  MDS only where the GF8 component is MDS.  The current dyadic implementation
+  requires its GF8 parent to fit in 256 coordinates.  An exact GF8 construction
+  could cover a separately proven bounded region, but cannot cover every
+  otherwise legal GF16 `(K,R)`.  In the current `N <= 256` region, AUTO already
+  selects all-GF8 and supports every byte length.
+- Pairing the last bytes of two stripes into one GF16 symbol retains `B` bytes
+  per logical shard and the GF16 count range, but changes the erasure unit.  It
+  guarantees recovery only when at least `K` coordinate pairs are jointly
+  available and couples the two stripes' parity.  This requires a separately
+  identified paired-batch API and is not the single-codeword contract.
+
 ## Required API and profile behavior
 
 The production-safe behavior is:
@@ -76,27 +127,45 @@ The production-safe behavior is:
 1. Keep complete 64-byte GF16 tiles unchanged.
 2. Accept even positive byte lengths by compactly scattering and gathering the
    final `2q` bytes as defined above.
-3. Return `LEO2_UNSUPPORTED` for odd byte lengths in the current GF16 profiles.
-   Scratch-size queries and execution calls must agree.
-4. Continue to accept every positive byte length in GF8 profiles.
-5. Document the GF16 two-byte execution granularity in public API and wire
+3. Keep native GF16 on even application and physical lengths.  Native queries
+   return `LEO2_UNSUPPORTED` for odd application lengths.
+4. Require explicit `LEO2_FIELD_GF16` and
+   `LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1` for odd payload framing.  An AUTO field
+   or GF8/layout mismatch is invalid.
+5. Expose the exact payload-to-wire size query and allocation-free systematic
+   pack/unpack helpers.  The helpers use overlap-safe move semantics.
+6. Keep core `shard_bytes` defined as physical bytes.  A padded codec accepts
+   the even `W`, rejects an odd physical length, and rejects a nonzero final byte
+   on a supplied systematic shard.  A no-loss decode remains a true no-op and
+   does not inspect buffers.
+7. Continue to accept every positive byte length in native GF8 profiles.
+8. Document the GF16 two-byte execution granularity in public API and wire
    identity documentation.  This is a relaxation of a previously invalid byte
    length, not a change to any legacy-valid codeword.
-
-If odd lengths are mandatory, one of these explicit designs is required:
-
-- add one wire padding byte per shard and expose `wire_shard_bytes = B + 1` for
-  odd `B`; the pad byte is part of every transmitted coordinate even if the
-  caller's payload view hides it;
-- introduce a separately identified GF8 or hybrid-tail profile, limited to a
-  coordinate range for which its byte-alphabet MDS proof holds; or
-- introduce an explicitly paired-batch profile that combines tails from two
-  codewords and requires compatible erasure patterns.
 
 None of these may be selected silently by a CPU backend or hidden behind the
 current GF16 profile identifier.  In particular, using GF8 for the last byte is
 not a GF16 wire-compatible kernel choice: the field, generator matrix, legal
 coordinate count, and persistent code identity all differ.
+
+The C API appends fixed-width `uint32_t` storage for `shard_layout` to
+`leo2_codec_options`; callers store one of the `leo2_shard_layout` values.  This
+keeps the options ABI stable under C short-enum compiler modes.  A caller
+presenting the exact older prefix size (the offset of this new field) is accepted and gets
+`LEO2_SHARD_LAYOUT_NATIVE_V1`.  Sizes that contain only part of the field are
+rejected.  `leo2_codec_shard_layout` exposes the resolved identity.  API version
+2 adds this field and the wire-size/pack/unpack entry points without changing
+the native enum value or the existing function signatures.
+
+A persistent serialized identifier must include the shard-layout family and
+version as a critical, fail-closed component in addition to high/low profile,
+field, parent, and coordinate map.  The experimental `L2ID` reference uses
+critical TLV `0x8005` with the one-byte value `1` for padded-odd V1.  Absence of
+that TLV is the single canonical spelling of native V1, preserving all earlier
+native identifier bytes; explicit zero, other lengths or values, and GF8 with
+padded-odd are rejected.  This remains an isolated experimental identity rather
+than public ABI.  Containers must also retain the physical wire length;
+padded-odd V1 then implies application length `B=W-1`.
 
 ## Validation obligations for the even-tail implementation
 
@@ -116,3 +185,14 @@ The compact scatter/gather must occur only in caller-to-scratch and
 scratch-to-caller staging.  The GF16 FFT, multiplication, locator, and decode
 kernels continue to receive full 64-byte ALTMAP tiles, so backend arithmetic and
 wire coefficients do not change.
+
+Padded-odd validation additionally covers every application size 1 through 65
+and 1023 through 1025, using padded-odd for odd sizes and native GF16 for even
+sizes.  Both high and low parity are compared with the independent scalar GF16
+generator; public `K`-subset invertibility, specialized recovery, the physical
+nonzero parity pad, overlap in both pack/unpack directions, overflow, malformed
+options, corrupted systematic pads, and native even-byte identity are tested.
+Representative high/low padded recovery also covers AUTO direct repair, AUTO
+transform dispatch, forced generic, and forced specialized execution.  The
+batch and concurrent encoder tests reuse immutable padded codecs with distinct
+outputs and scratch and compare every result with a serial reference.

@@ -28,6 +28,10 @@ COMPARE_TESTS = (
     "api",
     "random",
     "active_lch",
+    "gf16_padded_odd",
+    "max_counts",
+    "encode_concurrency",
+    "codec_options_abi",
     "transform_differential",
 )
 SOURCE_FILES = (
@@ -49,6 +53,10 @@ SOURCE_FILES = (
     "tests/leopard2/test_random.cpp",
     "tests/leopard2/test_boundaries.cpp",
     "tests/leopard2/test_active_lch.cpp",
+    "tests/leopard2/test_gf16_padded_odd.cpp",
+    "tests/leopard2/test_max_counts.cpp",
+    "tests/leopard2/test_encode_concurrency.cpp",
+    "tests/leopard2/test_codec_options_abi.c",
     "tests/leopard2/test_transform_differential.cpp",
     "tests/leopard2/direct_oracle.cpp",
     "tests/leopard2/direct_oracle.h",
@@ -365,6 +373,8 @@ def run_variant(context, variant, index):
     targets = [
         "leopard2_legacy_golden_test", "leopard2_api_test",
         "leopard2_random_test", "leopard2_active_lch_test",
+        "leopard2_gf16_padded_odd_test", "leopard2_max_counts_test",
+        "leopard2_encode_concurrency_test", "leopard2_codec_options_abi_test",
         "leopard2_transform_differential_test",
     ]
     build_command = [
@@ -388,6 +398,10 @@ def run_variant(context, variant, index):
             "--seed", "0x4c656f7061726432", "--cases", "64", "--threads", "1"
         ]),
         "active_lch": ("leopard2_active_lch_test", []),
+        "gf16_padded_odd": ("leopard2_gf16_padded_odd_test", []),
+        "max_counts": ("leopard2_max_counts_test", []),
+        "encode_concurrency": ("leopard2_encode_concurrency_test", []),
+        "codec_options_abi": ("leopard2_codec_options_abi_test", []),
         "transform_differential": ("leopard2_transform_differential_test", []),
     }
     tests = {}
