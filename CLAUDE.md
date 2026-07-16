@@ -2,6 +2,19 @@
 
 This file provides instructions and context for AI coding agents working on this project.
 
+## Branch and durability policy
+
+- Do implementation work on a dedicated topic branch, never directly on `main` or
+  `master`.
+- Make reviewable commits and push the topic branch periodically after coherent,
+  tested milestones, as well as at session completion, so work is not stranded on
+  one machine.
+- If an SSH push fails, inspect the currently forwarded agent and its identities
+  (`SSH_AUTH_SOCK` and `ssh-add -l`), obtain or select the latest forwarded key,
+  and retry the push.  Never place a private key in the repository or logs.
+- A current explicit user or orchestrator instruction not to push still takes
+  precedence over this standing policy.
+
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
 ## Beads Issue Tracker
 
