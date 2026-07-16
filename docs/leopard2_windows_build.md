@@ -15,9 +15,15 @@ For example, from an x64 Native Tools prompt for Visual Studio 2022:
 `LEO2_ENABLE_CUDA` remains `OFF` unless it is explicitly enabled.  See
 `README_CUDA.md` for the separate experimental CUDA gate.
 
-## Checked-in Visual Studio 2015 solution
+## Checked-in Visual Studio 2015-format solution
 
-`proj/Leopard.sln` remains available for existing Visual Studio 2015 users.
+`proj/Leopard.sln` retains metadata intended for Visual Studio 2015 legacy
+consumers.
+The checked-in legacy metadata is pinned consistently to Visual Studio 14,
+MSBuild ToolsVersion 14.0, and the v140 platform toolset; this follows the
+solution's own `VisualStudioVersion = 14.0.25420.1` declaration rather than the
+stale ToolsVersion 15.0 value inherited when the projects were downgraded from
+their original Visual Studio 2017 metadata.
 Its `Leopard` static-library project includes both public APIs and the same
 production C++ translation units as CMake.  It deliberately keeps the baseline
 files free of optional SSSE3/AVX2 code generation, compiles the SSSE3 backend in
@@ -37,3 +43,10 @@ and rejects missing or duplicate sources, filter drift, a project-wide ISA
 increase, or a CUDA dependency.  This structural check is not native Windows
 compiler or runtime evidence; final MSVC and clang-cl build, test, and dispatch
 validation still requires a Windows host.
+
+Open limitation: this repository has no captured native Visual Studio 2015
+load/build result.  The structural gate proves the checked-in metadata and
+source/option graph, but the legacy-IDE compatibility claim remains pending a
+real VS2015 build.  The approved conventional per-user property-sheet import
+is also an external trust boundary whose contents are not present for this
+host-side check.

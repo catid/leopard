@@ -2,8 +2,9 @@
 
 Windows users should use the CMake workflow described in
 [`docs/leopard2_windows_build.md`](docs/leopard2_windows_build.md).  The
-checked-in Visual Studio 2015 solution remains available for legacy consumers
-and is structurally checked against the production Leopard2 source graph.
+checked-in Visual Studio 2015-format solution remains available for legacy
+consumers and is structurally checked against the production Leopard2 source
+graph.  Native Visual Studio 2015 load/build validation is still outstanding.
 
 ## MDS Reed-Solomon Erasure Correction Codes for Large Data in C
 
