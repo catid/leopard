@@ -1467,6 +1467,70 @@ skip_body:
 }
 
 
+void ReedSolomonEncodeLow(
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned p,
+    const void* const* data,
+    void* const* recovery,
+    void** work)
+{
+    LEO_DEBUG_ASSERT(p >= 2 && p <= kOrder / 2);
+    LEO_DEBUG_ASSERT(original_count <= p);
+    LEO_DEBUG_ASSERT(recovery_count <= kOrder - p);
+
+    // Interpolate the systematic prefix.  Coordinates original_count..p-1
+    // are shortened and therefore supplied to the transform as known zeroes.
+    IFFT_DIT_Encoder(
+        buffer_bytes,
+        data,
+        original_count,
+        work,
+        nullptr,
+        p,
+        FFTSkew - 1);
+
+    // Evaluate the coefficient block on each requested parity coset.  The
+    // coefficient copy keeps work[0..p-1] reusable across all parity blocks.
+    for (unsigned recovery_offset = 0;
+        recovery_offset < recovery_count;
+        recovery_offset += p)
+    {
+        unsigned block_count = recovery_count - recovery_offset;
+        if (block_count > p)
+            block_count = p;
+
+        // The transform supports prefix pruning.  A nullable output is skipped
+        // safely; trim a completely unused suffix and avoid empty blocks.
+        unsigned requested_count = block_count;
+        while (requested_count > 0 && !recovery[recovery_offset + requested_count - 1])
+            --requested_count;
+        if (requested_count == 0)
+            continue;
+
+#pragma omp parallel for
+        for (int i = 0; i < (int)p; ++i)
+            memcpy(work[p + i], work[i], buffer_bytes);
+
+        FFT_DIT(
+            buffer_bytes,
+            work + p,
+            requested_count,
+            p,
+            FFTSkew + p + recovery_offset - 1);
+
+#pragma omp parallel for
+        for (int i = 0; i < (int)requested_count; ++i)
+        {
+            void* const output = recovery[recovery_offset + i];
+            if (output)
+                memcpy(output, work[p + i], buffer_bytes);
+        }
+    }
+}
+
+
 //------------------------------------------------------------------------------
 // ErrorBitfield
 
@@ -1648,6 +1712,104 @@ static void FFT_DIT_ErrorBits(
 
 //------------------------------------------------------------------------------
 // Reed-Solomon Decode
+
+void PrepareDecode(
+    unsigned n,
+    const uint8_t* erasures,
+    ffe_t* locator_logs)
+{
+    LEO_DEBUG_ASSERT(n >= 2 && n <= kOrder);
+
+    ffe_t error_locations[kOrder] = {};
+    for (unsigned i = 0; i < n; ++i)
+        error_locations[i] = erasures[i] ? 1 : 0;
+
+    FWHT(error_locations, kOrder, n);
+
+#pragma omp parallel for
+    for (int i = 0; i < (int)kOrder; ++i)
+    {
+        error_locations[i] = static_cast<ffe_t>(
+            ((unsigned)error_locations[i] * (unsigned)LogWalsh[i]) % kModulus);
+    }
+
+    FWHT(error_locations, kOrder, kOrder);
+    memcpy(locator_logs, error_locations, n * sizeof(ffe_t));
+}
+
+
+// mul_mem() uses restrict-qualified input and output pointers.  Keep its
+// contract intact while revealing a result in its existing coordinate slot.
+static void mul_mem_inplace(void* data, ffe_t log_m, uint64_t bytes)
+{
+    uint8_t source[64];
+    uint8_t* output = reinterpret_cast<uint8_t*>(data);
+
+    for (uint64_t offset = 0; offset < bytes; offset += sizeof(source))
+    {
+        memcpy(source, output + offset, sizeof(source));
+        mul_mem(output + offset, source, log_m, sizeof(source));
+    }
+}
+
+
+void ReedSolomonDecodePrepared(
+    uint64_t buffer_bytes,
+    unsigned n,
+    const void* const* coordinate_data,
+    const uint8_t* requested_outputs,
+    const ffe_t* locator_logs,
+    void** work)
+{
+    LEO_DEBUG_ASSERT(n >= 2 && n <= kOrder);
+
+    unsigned input_count = n;
+    while (input_count > 0 && !coordinate_data[input_count - 1])
+        --input_count;
+
+#ifdef LEO_ERROR_BITFIELD_OPT
+    ErrorBitfield error_bits;
+    for (unsigned i = 0; i < n; ++i)
+        if (requested_outputs[i])
+            error_bits.Set(i);
+    error_bits.Prepare();
+#endif // LEO_ERROR_BITFIELD_OPT
+
+#pragma omp parallel for
+    for (int i = 0; i < (int)n; ++i)
+    {
+        if (coordinate_data[i])
+            mul_mem(work[i], coordinate_data[i], locator_logs[i], buffer_bytes);
+        else
+            memset(work[i], 0, buffer_bytes);
+    }
+
+    IFFT_DIT_Decoder(buffer_bytes, input_count, work, n, FFTSkew - 1);
+
+    // Formal derivative in the normalized LCH basis.
+    for (unsigned i = 1; i < n; ++i)
+    {
+        const unsigned width = ((i ^ (i - 1)) + 1) >> 1;
+
+        if (width < 8)
+            VectorXOR(buffer_bytes, width, work + i - width, work + i);
+        else
+            VectorXOR_Threads(buffer_bytes, width, work + i - width, work + i);
+    }
+
+#ifdef LEO_ERROR_BITFIELD_OPT
+    FFT_DIT_ErrorBits(buffer_bytes, work, n, n, FFTSkew - 1, error_bits);
+#else
+    FFT_DIT(buffer_bytes, work, n, n, FFTSkew - 1);
+#endif // LEO_ERROR_BITFIELD_OPT
+
+#pragma omp parallel for
+    for (int i = 0; i < (int)n; ++i)
+    {
+        if (requested_outputs[i])
+            mul_mem_inplace(work[i], kModulus - locator_logs[i], buffer_bytes);
+    }
+}
 
 void ReedSolomonDecode(
     uint64_t buffer_bytes,

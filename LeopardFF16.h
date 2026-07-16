@@ -77,6 +77,38 @@ void ReedSolomonEncode(
     const void* const * const data,
     void** work); // m * 2 elements
 
+// Encodes the low-rate coordinate profile:
+//   [ data: 0 .. p-1 ][ recovery: p .. ]
+// original_count may be smaller than p; the remaining data coordinates are
+// shortened to zero.  Null recovery output pointers are not written.  p must
+// be a power of two in [2, kOrder / 2].
+void ReedSolomonEncodeLow(
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned p, // = NextPow2(original_count)
+    const void* const * const data,
+    void* const * const recovery,
+    void** work); // p * 2 elements
+
+// Precomputes logarithmic error-locator evaluations for an active power-of-two
+// parent.  erasures contains n bytes, one for each active coordinate.
+void PrepareDecode(
+    unsigned n,
+    const uint8_t* erasures,
+    ffe_t* locator_logs); // n elements
+
+// Generic active-parent decoder using locator evaluations from PrepareDecode.
+// Null coordinate_data pointers are treated as zero.  Only coordinates marked
+// in requested_outputs are revealed, in-place, in the corresponding work slot.
+void ReedSolomonDecodePrepared(
+    uint64_t buffer_bytes,
+    unsigned n,
+    const void* const * const coordinate_data, // n elements
+    const uint8_t* requested_outputs, // n elements
+    const ffe_t* locator_logs, // n elements
+    void** work); // n elements
+
 void ReedSolomonDecode(
     uint64_t buffer_bytes,
     unsigned original_count,

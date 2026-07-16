@@ -11,6 +11,8 @@ set(CMAKE_CXX_STANDARD 11)
 set(LIB_SOURCE_FILES
         leopard.cpp
         leopard.h
+        leopard2.cpp
+        leopard2.h
         LeopardCommon.cpp
         LeopardCommon.h
         LeopardFF16.cpp
@@ -23,6 +25,9 @@ set(BENCH_SOURCE_FILES
 
 set(EXPERIMENT_SOURCE_FILES
         tests/experiments.cpp)
+
+option(LEO2_BUILD_TESTS "Build Leopard2 correctness tests" ON)
+option(LEO2_BUILD_BENCHMARKS "Build Leopard benchmark programs" ON)
 
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
@@ -114,8 +119,27 @@ if(ENABLE_OPENMP)
 endif(ENABLE_OPENMP)
 
 add_library(libleopard STATIC ${LIB_SOURCE_FILES})
+target_include_directories(libleopard PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-add_executable(bench_leopard ${BENCH_SOURCE_FILES})
-target_link_libraries(bench_leopard libleopard)
+if(LEO2_BUILD_BENCHMARKS)
+    add_executable(bench_leopard ${BENCH_SOURCE_FILES})
+    target_link_libraries(bench_leopard libleopard)
 
-add_executable(experiment_leopard ${EXPERIMENT_SOURCE_FILES})
+    add_executable(experiment_leopard ${EXPERIMENT_SOURCE_FILES})
+endif()
+
+if(LEO2_BUILD_TESTS)
+    enable_testing()
+    add_executable(leopard2_direct_oracle_test
+        tests/leopard2/direct_oracle.cpp
+        tests/leopard2/test_direct_oracle.cpp)
+    target_include_directories(leopard2_direct_oracle_test PRIVATE tests/leopard2)
+    add_test(NAME leopard2_direct_oracle COMMAND leopard2_direct_oracle_test)
+
+    add_executable(leopard2_api_test
+        tests/leopard2/direct_oracle.cpp
+        tests/leopard2/test_api.cpp)
+    target_include_directories(leopard2_api_test PRIVATE tests/leopard2)
+    target_link_libraries(leopard2_api_test libleopard)
+    add_test(NAME leopard2_api COMMAND leopard2_api_test)
+endif()
