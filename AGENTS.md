@@ -2,6 +2,11 @@
 
 This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
 
+This checkout uses the Beads 1.x embedded-Dolt format. Before mutating issues,
+run `bd version`; do not use a legacy 0.x binary against this repository. If
+`type -a bd` reports more than one installation, explicitly select the 1.x
+binary before running any Beads command.
+
 ## Branch and durability policy
 
 - Do implementation work on a dedicated topic branch, never directly on `main` or
