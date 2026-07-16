@@ -142,6 +142,34 @@ class PortabilityTests(unittest.TestCase):
                     record, "live stale output", run_matrix.ROOT,
                     required=True, check_if_present=True)
 
+    def test_all_artifact_paths_are_checkout_contained(self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="c7-contained-", dir=run_matrix.ROOT) as directory:
+            with tempfile.TemporaryDirectory(prefix="c7-outside-") as outside:
+                directory_path = pathlib.Path(directory)
+                outside_file = pathlib.Path(outside) / "artifact"
+                outside_file.write_bytes(b"outside")
+                record = {
+                    "path": str(outside_file), "bytes": 7,
+                    "sha256": hashlib.sha256(b"outside").hexdigest(),
+                }
+                with self.assertRaises(ValueError):
+                    validate_evidence.validate_artifact(
+                        record, "absolute", run_matrix.ROOT, required=True)
+                record["path"] = "../escape"
+                with self.assertRaises(ValueError):
+                    validate_evidence.validate_artifact(
+                        record, "parent", run_matrix.ROOT, required=False)
+                link = directory_path / "escape"
+                link.symlink_to(pathlib.Path(outside), target_is_directory=True)
+                record["path"] = (
+                    directory_path.relative_to(run_matrix.ROOT) /
+                    "escape/artifact"
+                ).as_posix()
+                with self.assertRaises(ValueError):
+                    validate_evidence.validate_artifact(
+                        record, "symlink", run_matrix.ROOT, required=True)
+
     def test_argv_token_and_checkout_path_mutations_rejected(self) -> None:
         argv = [
             "cc", "-I${LEO2_SOURCE_ROOT}",
@@ -159,6 +187,10 @@ class PortabilityTests(unittest.TestCase):
             "/usr/bin/python3;${LEO2_SOURCE_ROOT}/experiments/leopard2/"))
         self.assertIsNotNone(validate_evidence.ABSOLUTE_PROJECT_PATH.search(
             "/tmp/foreign-checkout/experiments/leopard2/c7/file.cpp"))
+        for header in ("leopard.h", "leopard2.h"):
+            self.assertIsNotNone(
+                validate_evidence.ABSOLUTE_PROJECT_PATH.search(
+                    f"/tmp/foreign-checkout/{header}"))
 
     def test_reproducibility_fingerprint_mutation_rejected(self) -> None:
         artifacts = {
@@ -175,6 +207,15 @@ class PortabilityTests(unittest.TestCase):
             "runner": {"path": "r", "sha256": "c" * 64, "bytes": 1},
             "validator": {"path": "v", "sha256": "d" * 64, "bytes": 1},
             "reproducibility": {"fingerprints": artifacts},
+            "taskset": {"path": "/usr/bin/taskset"},
+            "builds": [
+                {
+                    "name": name,
+                    **{role: {"path": f"/usr/bin/{role}"}
+                       for role in run_matrix.PROGRAM_ROLES},
+                }
+                for name in run_matrix.BUILD_NAMES
+            ],
         }
         run_matrix.require_reproducible_peer(base, copy.deepcopy(base))
         forged = copy.deepcopy(base)
@@ -205,6 +246,10 @@ class PortabilityTests(unittest.TestCase):
             "checkout_roots_scanned": 2,
             "current_scan": scan,
             "peer_scan": scan,
+            "peer_attestation": {
+                "path": "results/peer-reproducibility-attestation.json",
+                "bytes": 1, "sha256": "b" * 64,
+            },
         }
         self.assertEqual(comparison["fingerprints_sha256"],
                          validate_evidence.canonical_json_sha256(fingerprints))

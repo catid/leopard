@@ -6,11 +6,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import pathlib
 import re
 import shutil
+import statistics
 import subprocess
-from typing import Any
+from typing import Any, Iterable
 
 from run_matrix import (
     BACKENDS,
@@ -20,7 +22,9 @@ from run_matrix import (
     EXPECTED_EXECUTABLE_SANITIZER_COUNTS,
     NORMALIZATION_SCHEMA,
     NORMALIZATION_TOKEN,
+    PEER_ATTESTATION_SCHEMA,
     PREFIX_MAP_TARGET,
+    PROGRAM_ROLES,
 )
 
 
@@ -66,11 +70,19 @@ EXPECTED_CORRECTNESS = {
     "hot_path_allocations": 0,
     "digest_fnv64": "0xec4179e9f2776a58",
 }
+EXPECTED_PROFILE = {
+    "family": 3, "version": 1, "coordinate_map": 1,
+    "systematic": "0..K-1", "parity": "K..K+R-1",
+    "production_enabled": False,
+}
+EXPECTED_RUNTIME = {
+    "scalar": "scalar", "ssse3": "ssse3", "avx2": "avx2", "auto": "avx2",
+}
 ABSOLUTE_PROJECT_PATH = re.compile(
     r"(?<![A-Za-z0-9_.$}{-])(?:[A-Za-z]:[\\/]|/)"
     r"(?:[A-Za-z0-9_.+@~-]+[\\/])+(?:"
     r"CMakeLists\.txt|cmake[\\/]leopardConfig\.cmake\.in|"
-    r"experiments[\\/]leopard2[\\/]|leopard2?\.cpp|"
+    r"experiments[\\/]leopard2[\\/]|leopard2?\.(?:cpp|h)|"
     r"Leopard(?:2|Common|FF)[A-Za-z0-9_]*\.(?:cpp|h))")
 
 
@@ -112,7 +124,8 @@ def validate_comparison(
         return
     required = {
         "build_names", "checkout_roots_scanned", "current_scan",
-        "fingerprints_sha256", "peer_manifest_sha256", "peer_scan", "status",
+        "fingerprints_sha256", "peer_attestation", "peer_manifest_sha256",
+        "peer_scan", "status",
     }
     if not isinstance(comparison, dict) or set(comparison) != required:
         raise ValueError("A/B comparison attestation schema changed")
@@ -134,6 +147,80 @@ def validate_comparison(
         raise ValueError("A/B root-byte scan attestation changed")
 
 
+def manifest_program_records(manifest: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "taskset": manifest["taskset"],
+        "builds": {
+            build["name"]: {role: build[role] for role in PROGRAM_ROLES}
+            for build in manifest["builds"]
+        },
+    }
+
+
+def validate_peer_attestation(
+    comparison: dict[str, Any], manifest: dict[str, Any],
+    source_root: pathlib.Path,
+) -> None:
+    if comparison == {"status": "not-run"}:
+        return
+    record = comparison["peer_attestation"]
+    path = validate_artifact(
+        record, "A/B peer attestation", source_root, required=True)
+    if pathlib.PurePosixPath(record["path"]).name != (
+            "peer-reproducibility-attestation.json"):
+        raise ValueError("A/B peer attestation path changed")
+    report = json.loads(path.read_text(encoding="utf-8"))
+    required = {
+        "binary_artifacts", "checks", "core_git_sha", "fingerprints",
+        "normalized_text_records_sha256", "peer_manifest",
+        "program_records_sha256", "root_scan", "runs_sha256", "schema",
+        "source_closures_sha256", "status", "tooling",
+    }
+    if set(report) != required:
+        raise ValueError("A/B peer attestation schema changed")
+    builds = {build["name"]: build for build in manifest["builds"]}
+    expected_binaries = {
+        name: {key: builds[name][key] for key in ("library", "executable")}
+        for name in BUILD_NAMES
+    }
+    expected_closures = {
+        name: builds[name]["source_closure"] for name in BUILD_NAMES
+    }
+    peer_manifest = report["peer_manifest"]
+    if (report["schema"] != PEER_ATTESTATION_SCHEMA or
+            report["status"] != "pass" or
+            report["core_git_sha"] != manifest["core_git_sha"] or
+            report["tooling"] != {
+                key: manifest[key] for key in ("source", "runner", "validator")
+            } or report["fingerprints"] !=
+            manifest["reproducibility"]["fingerprints"] or
+            report["binary_artifacts"] != expected_binaries or
+            report["program_records_sha256"] != canonical_json_sha256(
+                manifest_program_records(manifest)) or
+            report["source_closures_sha256"] != canonical_json_sha256(
+                expected_closures) or report["root_scan"] !=
+            comparison["peer_scan"] or
+            report["checks"] != {
+                "portable_semantics": "pass",
+                "live_tools_and_outputs": "pass",
+                "git_toplevel_and_head": "pass",
+                "program_identity_match": "pass",
+                "binary_and_text_root_scan": "pass",
+            } or not isinstance(peer_manifest, dict) or
+            set(peer_manifest) != {"bytes", "sha256"} or
+            type(peer_manifest["bytes"]) is not int or
+            peer_manifest["bytes"] <= 0 or
+            peer_manifest["sha256"] != comparison["peer_manifest_sha256"]):
+        raise ValueError("A/B peer attestation contents changed")
+    validate_sha(report["normalized_text_records_sha256"],
+                 "peer normalized-record digest")
+    validate_sha(report["runs_sha256"], "peer run-record digest")
+    serialized = json.dumps(report, sort_keys=True)
+    if (str(source_root.resolve()) in serialized or
+            ABSOLUTE_PROJECT_PATH.search(serialized)):
+        raise ValueError("A/B peer attestation leaked a checkout path")
+
+
 def validate_git_sha(value: object, label: str) -> str:
     if not isinstance(value, str) or not GIT_SHA_RE.fullmatch(value):
         raise ValueError(f"{label} is not a canonical git SHA")
@@ -141,8 +228,19 @@ def validate_git_sha(value: object, label: str) -> str:
 
 
 def resolve_path(path_text: str, source_root: pathlib.Path) -> pathlib.Path:
-    path = pathlib.Path(path_text)
-    return path if path.is_absolute() else source_root / path
+    if (not isinstance(path_text, str) or not path_text or "\\" in path_text):
+        raise ValueError("artifact path is not canonical checkout-relative POSIX")
+    pure = pathlib.PurePosixPath(path_text)
+    if pure.is_absolute() or any(part in ("", ".", "..") for part in pure.parts):
+        raise ValueError("artifact path is not canonical checkout-relative POSIX")
+    root = source_root.resolve()
+    candidate = root.joinpath(*pure.parts)
+    resolved = candidate.resolve(strict=False)
+    try:
+        resolved.relative_to(root)
+    except ValueError as error:
+        raise ValueError("artifact path escapes the source checkout") from error
+    return candidate
 
 
 def validate_artifact(
@@ -153,12 +251,13 @@ def validate_artifact(
             "bytes", "path", "sha256"}:
         raise ValueError(f"{label} artifact schema changed")
     path_text = record["path"]
-    if not isinstance(path_text, str) or not path_text:
-        raise ValueError(f"{label} path is invalid")
     if type(record["bytes"]) is not int or record["bytes"] < 0:
         raise ValueError(f"{label} byte count is invalid")
     expected = validate_sha(record["sha256"], f"{label} hash")
-    path = resolve_path(path_text, source_root)
+    try:
+        path = resolve_path(path_text, source_root)
+    except ValueError as error:
+        raise ValueError(f"{label} path is invalid: {error}") from error
     if required and not path.is_file():
         raise ValueError(f"{label} retained artifact is missing")
     if path.is_file() and check_if_present:
@@ -219,6 +318,7 @@ def validate_program_live(record: dict, label: str) -> pathlib.Path:
 
 def validate_argv(
     argv: object, token_count: object, label: str, *, require_token: bool,
+    source_root: pathlib.Path = ROOT,
 ) -> list[str]:
     if not isinstance(argv, list) or not all(isinstance(item, str) for item in argv):
         raise ValueError(f"{label} argv is not an exact string array")
@@ -229,18 +329,19 @@ def validate_argv(
         raise ValueError(f"{label} argv token count changed")
     if require_token and token_count == 0:
         raise ValueError(f"{label} argv lacks its normalization token")
-    if str(ROOT) in text or ABSOLUTE_PROJECT_PATH.search(text):
+    if str(source_root.resolve()) in text or ABSOLUTE_PROJECT_PATH.search(text):
         raise ValueError(f"{label} argv leaked an absolute checkout path")
     return argv
 
 
 def validate_git_artifact(
     commit: str, record: dict, expected_relative: str, label: str,
+    source_root: pathlib.Path,
 ) -> None:
     if record["path"] != expected_relative:
         raise ValueError(f"{label} repository path changed")
     completed = subprocess.run(
-        ["git", "show", f"{commit}:{expected_relative}"], cwd=ROOT,
+        ["git", "show", f"{commit}:{expected_relative}"], cwd=source_root,
         check=False, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     if completed.returncode != 0 or hashlib.sha256(
             completed.stdout).hexdigest() != record["sha256"]:
@@ -268,6 +369,24 @@ def compiler_identity(record: dict, family: str) -> tuple[str, str]:
     if not match:
         raise ValueError("recorded compiler version is not understood")
     return family, match.group(1)
+
+
+def validate_repository(
+    source_root: pathlib.Path, core_sha: str, *, require_checkout_head: bool,
+) -> pathlib.Path:
+    root = source_root.resolve()
+    top = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+        check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if top.returncode != 0 or pathlib.Path(top.stdout.strip()).resolve() != root:
+        raise ValueError("source root is not the exact Git worktree top level")
+    if require_checkout_head:
+        head = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"], check=False,
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if head.returncode != 0 or head.stdout.strip() != core_sha:
+            raise ValueError("peer checkout HEAD differs from its core commit")
+    return root
 
 
 def validate_symbol_scan(
@@ -333,27 +452,106 @@ def live_nm(record: dict, target: pathlib.Path, retained: pathlib.Path) -> None:
         raise ValueError("live nm output differs from retained bytes")
 
 
-def validate_child(data: dict, backend: str, affinity: list[int], sanitizer: bool) -> None:
-    if (data.get("schema") != "leopard2-c7-exact-low/v1" or
-            data.get("status") != "pass" or
-            data.get("production_constructor_rejected") is not True or
-            data.get("correctness") != EXPECTED_CORRECTNESS or
-            data.get("affinity") != affinity or data.get("benchmarks") != []):
-        raise ValueError("C7 child correctness result changed")
-    if data.get("requested_backend") != backend:
-        raise ValueError("C7 child requested backend changed")
+def validate_cpp_result(
+    data: dict[str, Any], backend: str, timing_scope: str,
+    affinity: list[int], sanitizer: bool,
+) -> None:
+    required = {
+        "affinity", "allocation_tracking", "benchmarks", "core_git_sha",
+        "correctness", "library_sha256", "omp_dynamic", "omp_num_threads",
+        "production_constructor_rejected", "profile", "requested_backend",
+        "runtime_backend", "sanitizer", "sanitizer_features", "schema",
+        "source_sha256", "status", "timing_scope",
+    }
+    if set(data) != required:
+        raise ValueError("unexpected C7 child result keys")
+    if (data["schema"] != "leopard2-c7-exact-low/v1" or
+            data["status"] != "pass" or data["profile"] != EXPECTED_PROFILE or
+            data["production_constructor_rejected"] is not True or
+            data["timing_scope"] != timing_scope or data["affinity"] != affinity or
+            data["omp_num_threads"] != "1" or data["omp_dynamic"] != "FALSE" or
+            data["correctness"] != EXPECTED_CORRECTNESS or
+            not isinstance(data["benchmarks"], list)):
+        raise ValueError("C7 child identity or correctness result changed")
+    validate_sha(data["source_sha256"], "C7 child source hash")
+    validate_sha(data["library_sha256"], "C7 child library hash")
+    validate_git_sha(data["core_git_sha"], "C7 child core commit")
     if sanitizer:
-        if (data.get("sanitizer") != "asan-ubsan" or
-                data.get("sanitizer_features") != {
+        if (data["requested_backend"] != "auto" or
+                data["runtime_backend"] != EXPECTED_RUNTIME["auto"] or
+                data["sanitizer"] != "asan-ubsan" or
+                data["allocation_tracking"] != "disabled-for-sanitizer" or
+                data["sanitizer_features"] != {
                     "address": True, "undefined": True}):
-            raise ValueError("sanitizer child lacks feature proof")
-    elif data.get("sanitizer") != "none":
-        raise ValueError("ordinary child unexpectedly claims sanitizers")
+            raise ValueError("sanitizer child provenance changed")
+    elif (data["requested_backend"] != backend or
+            data["runtime_backend"] != EXPECTED_RUNTIME[backend] or
+            data["sanitizer"] != "none" or
+            data["allocation_tracking"] != "global-new" or
+            data["sanitizer_features"] != {
+                "address": False, "undefined": False}):
+        raise ValueError("ordinary child backend provenance changed")
+    if timing_scope == "none-correctness-only" and data["benchmarks"] != []:
+        raise ValueError("correctness child unexpectedly contains timing")
+
+
+def validate_smoke(data: dict[str, Any], affinity: list[int]) -> None:
+    validate_cpp_result(
+        data, "auto", "non-authoritative-smoke", affinity, False)
+    cells = data["benchmarks"]
+    if len(cells) != 1 or not isinstance(cells[0], dict):
+        raise ValueError("smoke must contain exactly one benchmark cell")
+    cell = cells[0]
+    required = {
+        "K", "R", "batch", "bytes", "exact_coefficients", "exact_decode",
+        "exact_decode_samples_us", "exact_decode_setup",
+        "exact_decode_setup_samples_us", "exact_decode_terms", "exact_encode",
+        "exact_encode_samples_us", "exact_field", "exact_setup",
+        "exact_setup_samples_us", "losses", "padded_decode",
+        "padded_decode_samples_us", "padded_decode_scratch",
+        "padded_decode_setup", "padded_decode_setup_samples_us",
+        "padded_encode", "padded_encode_samples_us", "padded_encode_scratch",
+        "padded_field", "padded_setup", "padded_setup_samples_us",
+    }
+    if set(cell) != required:
+        raise ValueError("smoke benchmark cell schema changed")
+    if [cell[key] for key in ("K", "R", "bytes", "batch", "losses")] != [
+            3, 253, 64, 8, 3]:
+        raise ValueError("smoke benchmark geometry changed")
+    if (cell["exact_field"] != 1 or cell["padded_field"] != 2 or
+            cell["exact_coefficients"] != 759 or
+            cell["exact_decode_terms"] != 9):
+        raise ValueError("smoke field or exact accounting changed")
+    for key in ("padded_encode_scratch", "padded_decode_scratch"):
+        if type(cell[key]) is not int or cell[key] < 0:
+            raise ValueError("smoke scratch accounting is invalid")
+    pairs = (
+        ("exact_setup", "exact_setup_samples_us"),
+        ("padded_setup", "padded_setup_samples_us"),
+        ("exact_decode_setup", "exact_decode_setup_samples_us"),
+        ("padded_decode_setup", "padded_decode_setup_samples_us"),
+        ("exact_encode", "exact_encode_samples_us"),
+        ("padded_encode", "padded_encode_samples_us"),
+        ("exact_decode", "exact_decode_samples_us"),
+        ("padded_decode", "padded_decode_samples_us"),
+    )
+    for summary_key, samples_key in pairs:
+        samples = cell[samples_key]
+        if (not isinstance(samples, list) or len(samples) != 7 or
+                not all(type(value) in (int, float) and math.isfinite(value) and
+                        value > 0 for value in samples)):
+            raise ValueError("smoke raw sample schema changed")
+        summary = cell[summary_key]
+        median = statistics.median(samples)
+        mad = statistics.median(abs(value - median) for value in samples)
+        if (not isinstance(summary, dict) or
+                summary != {"median_us": median, "mad_us": mad}):
+            raise ValueError("smoke summary differs from raw samples")
 
 
 def validate_manifest(
     data: dict[str, Any], *, source_root: pathlib.Path = ROOT,
-    live: bool = False,
+    live: bool = False, require_checkout_head: bool = False,
 ) -> None:
     required_top = {
         "builds", "core_git_sha", "normalization", "reproducibility",
@@ -373,11 +571,14 @@ def validate_manifest(
         "operation": "replace exact source-root prefix only",
     }:
         raise ValueError("normalization identity changed")
+    source_root = source_root.resolve()
     serialized = json.dumps(data, sort_keys=True)
     if str(source_root.resolve()) in serialized or ABSOLUTE_PROJECT_PATH.search(
             serialized):
         raise ValueError("manifest leaked an absolute checkout path")
     core_sha = validate_git_sha(data["core_git_sha"], "manifest core commit")
+    validate_repository(
+        source_root, core_sha, require_checkout_head=require_checkout_head)
     source_rel = "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp"
     runner_rel = "experiments/leopard2/non_power_of_two/c7/run_matrix.py"
     validator_rel = "experiments/leopard2/non_power_of_two/c7/validate_evidence.py"
@@ -387,7 +588,8 @@ def validate_manifest(
         ("validator", validator_rel, "C7 validator"),
     ):
         validate_artifact(data[key], label, source_root, required=True)
-        validate_git_artifact(core_sha, data[key], relative, label)
+        validate_git_artifact(
+            core_sha, data[key], relative, label, source_root)
     taskset = validate_program_record(data["taskset"], "taskset")
     if live:
         validate_program_live(data["taskset"], "taskset")
@@ -448,13 +650,13 @@ def validate_manifest(
             raise ValueError("build argv normalization record changed")
         configure = validate_argv(
             build["configure_argv"], token_counts["configure"],
-            f"{name} configure", require_token=True)
+            f"{name} configure", require_token=True, source_root=source_root)
         build_argv = validate_argv(
             build["build_argv"], token_counts["build"],
-            f"{name} build", require_token=True)
+            f"{name} build", require_token=True, source_root=source_root)
         compile_argv = validate_argv(
             build["compile_argv"], token_counts["compile"],
-            f"{name} compile", require_token=True)
+            f"{name} compile", require_token=True, source_root=source_root)
         flags = build["prefix_map_flags"]
         mandatory = [
             f"-ffile-prefix-map={NORMALIZATION_TOKEN}={PREFIX_MAP_TARGET}",
@@ -467,6 +669,10 @@ def validate_manifest(
         if (not isinstance(build_dir, str) or pathlib.Path(build_dir).is_absolute() or
                 not build_dir.endswith(f"/core-{name}")):
             raise ValueError("build directory is not portable or canonical")
+        try:
+            resolve_path(build_dir, source_root)
+        except ValueError as error:
+            raise ValueError("build directory escapes the source checkout") from error
         candidate_root = build_dir.rsplit("/", 1)[0]
         if build_root is None:
             build_root = candidate_root
@@ -682,7 +888,8 @@ def validate_manifest(
             relative = entry["path"]
             if pathlib.Path(relative).is_absolute():
                 raise ValueError("source closure path is not portable")
-            validate_git_artifact(core_sha, entry, relative, "source closure")
+            validate_git_artifact(
+                core_sha, entry, relative, "source closure", source_root)
             closure_paths.append(relative)
         if closure_paths != sorted(set(closure_paths)):
             raise ValueError("source closure order or uniqueness changed")
@@ -714,6 +921,8 @@ def validate_manifest(
     validate_comparison(
         reproducibility["comparison"], expected_fingerprints,
         normalized_text_record_count)
+    validate_peer_attestation(
+        reproducibility["comparison"], data, source_root)
 
     runs = data["runs"]
     expected_runs = [*BUILD_NAMES, "smoke-nonauthoritative"]
@@ -730,14 +939,27 @@ def validate_manifest(
         name = run["name"]
         smoke = name == "smoke-nonauthoritative"
         build_name = "auto" if smoke else name
+        if (run["build"] != build_name or run["kind"] != (
+                "non-authoritative-smoke" if smoke else "correctness")):
+            raise ValueError("run build or kind changed")
         cpu = run["requested_cpu"]
         if type(cpu) is not int or cpu < 0 or run["observed_affinity"] != [cpu]:
             raise ValueError("run CPU or observed affinity changed")
         if not smoke:
             correctness_cpus.append(cpu)
+        expected_environment = {
+            "LC_ALL": "C", "OMP_NUM_THREADS": "1", "OMP_DYNAMIC": "FALSE",
+        }
+        if build_name == "asan-ubsan":
+            expected_environment.update({
+                "ASAN_OPTIONS": "detect_leaks=1:halt_on_error=1",
+                "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1",
+            })
+        if run["environment"] != expected_environment:
+            raise ValueError("run environment changed")
         argv = validate_argv(
             run["argv"], run["argv_source_root_tokens"], f"{name} run",
-            require_token=True)
+            require_token=True, source_root=source_root)
         result = validate_normalized_text(
             run["result"], f"{name} result", source_root, require_token=False)
         stdout = validate_normalized_text(
@@ -765,16 +987,11 @@ def validate_manifest(
                 child.get("library_sha256") != build["library"]["sha256"]):
             raise ValueError("run result is not bound to build inputs")
         if smoke:
-            if (child.get("timing_scope") != "non-authoritative-smoke" or len(
-                    child.get("benchmarks", [])) != 1 or
-                    child.get("correctness") != EXPECTED_CORRECTNESS or
-                    child.get("production_constructor_rejected") is not True or
-                    child.get("requested_backend") != "auto"):
-                raise ValueError("smoke result changed")
+            validate_smoke(child, [cpu])
         else:
-            validate_child(
+            validate_cpp_result(
                 child, "auto" if build_name == "asan-ubsan" else build_name,
-                [cpu], build_name == "asan-ubsan")
+                "none-correctness-only", [cpu], build_name == "asan-ubsan")
     if len(correctness_cpus) != 5 or len(set(correctness_cpus)) != 5:
         raise ValueError("correctness runs did not use five distinct CPUs")
 
@@ -783,11 +1000,19 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("manifest", type=pathlib.Path)
     parser.add_argument(
+        "--source-root", type=pathlib.Path, default=ROOT,
+        help="checkout root containing the manifest's retained artifacts")
+    parser.add_argument(
         "--live", action="store_true",
         help="require exact recorded tools/build outputs and replay nm scans")
+    parser.add_argument(
+        "--require-checkout-head", action="store_true",
+        help="require source-root HEAD to equal the manifest core commit")
     arguments = parser.parse_args()
     data = json.loads(arguments.manifest.read_text(encoding="utf-8"))
-    validate_manifest(data, live=arguments.live)
+    validate_manifest(
+        data, source_root=arguments.source_root, live=arguments.live,
+        require_checkout_head=arguments.require_checkout_head)
     print("C7 evidence validation passed (live)" if arguments.live else
           "C7 evidence validation passed (portable)")
     return 0

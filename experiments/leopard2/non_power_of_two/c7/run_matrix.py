@@ -28,11 +28,17 @@ SOURCE = HERE / "c7_exact_low.cpp"
 VALIDATOR = HERE / "validate_evidence.py"
 BACKENDS = ("scalar", "ssse3", "avx2", "auto")
 BUILD_NAMES = (*BACKENDS, "asan-ubsan")
+PROGRAM_ROLES = (
+    "ar", "c_compiler", "cmake", "cmake_linker", "compiler",
+    "cxx_compiler", "gmake", "launcher_python", "link_driver", "nm", "ranlib",
+    "standalone_linker",
+)
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 GIT_SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 NORMALIZATION_SCHEMA = "leopard2-source-root-prefix/v1"
 NORMALIZATION_TOKEN = "${LEO2_SOURCE_ROOT}"
 PREFIX_MAP_TARGET = "LEO2_SOURCE_ROOT"
+PEER_ATTESTATION_SCHEMA = "leopard2-c7-peer-reproducibility/v1"
 PREFIX_MAP_OPTIONS = (
     "-ffile-prefix-map", "-fdebug-prefix-map", "-fmacro-prefix-map")
 EXPECTED_EXECUTABLE_SANITIZER_COUNTS = {
@@ -596,6 +602,16 @@ def reproducibility_fingerprints(builds: list[dict[str, Any]]) -> dict[str, Any]
     }
 
 
+def manifest_program_records(manifest: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "taskset": manifest["taskset"],
+        "builds": {
+            build["name"]: {role: build[role] for role in PROGRAM_ROLES}
+            for build in manifest["builds"]
+        },
+    }
+
+
 def require_reproducible_peer(current: dict[str, Any], peer: dict[str, Any]) -> None:
     for key in ("schema", "core_git_sha"):
         if peer.get(key) != current.get(key):
@@ -604,10 +620,74 @@ def require_reproducible_peer(current: dict[str, Any], peer: dict[str, Any]) -> 
             peer.get("runner") != current.get("runner") or
             peer.get("validator") != current.get("validator")):
         raise RuntimeError("A/B manifests do not bind the same committed tooling")
+    try:
+        if manifest_program_records(peer) != manifest_program_records(current):
+            raise RuntimeError("A/B manifests do not bind the same exact programs")
+    except (KeyError, TypeError) as error:
+        raise RuntimeError("A/B peer program records are incomplete") from error
     left = current.get("reproducibility", {}).get("fingerprints")
     right = peer.get("reproducibility", {}).get("fingerprints")
     if left != right or set(left or ()) != set(BUILD_NAMES):
         raise RuntimeError("A/B archive or executable hashes differ")
+
+
+def trusted_validate_manifest(
+    manifest_path: pathlib.Path, source_root: pathlib.Path, *, live: bool,
+) -> None:
+    argv = [
+        sys.executable, str(VALIDATOR), "--source-root", str(source_root),
+        "--require-checkout-head",
+    ]
+    if live:
+        argv.append("--live")
+    argv.append(str(manifest_path))
+    completed = subprocess.run(
+        argv, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, check=False, env={
+            **os.environ, "PYTHONDONTWRITEBYTECODE": "1",
+        })
+    if completed.returncode != 0:
+        detail = completed.stderr.strip().splitlines()
+        suffix = detail[-1] if detail else "no validator diagnostic"
+        raise RuntimeError(
+            f"A/B peer failed {'live' if live else 'portable'} validation: "
+            f"{suffix}")
+
+
+def authenticate_peer(
+    current: dict[str, Any], peer_manifest_path: pathlib.Path,
+    peer_root: pathlib.Path,
+) -> dict[str, Any]:
+    trusted_validate_manifest(peer_manifest_path, peer_root, live=False)
+    peer = json.loads(peer_manifest_path.read_text(encoding="utf-8"))
+    require_reproducible_peer(current, peer)
+    # Portable validation and exact-program equality happen before live replay
+    # so an untrusted manifest cannot redirect a tool invocation.
+    trusted_validate_manifest(peer_manifest_path, peer_root, live=True)
+    return peer
+
+
+def checkout_artifact_path(
+    record: dict[str, Any], source_root: pathlib.Path, label: str,
+) -> pathlib.Path:
+    if not isinstance(record, dict) or not isinstance(record.get("path"), str):
+        raise RuntimeError(f"{label} artifact record is malformed")
+    pure = pathlib.PurePosixPath(record["path"])
+    if (pure.is_absolute() or "\\" in record["path"] or
+            any(part in ("", ".", "..") for part in pure.parts)):
+        raise RuntimeError(f"{label} artifact path is not checkout-relative")
+    root = source_root.resolve()
+    path = root.joinpath(*pure.parts)
+    try:
+        path.resolve(strict=False).relative_to(root)
+    except ValueError as error:
+        raise RuntimeError(f"{label} artifact path escapes its checkout") from error
+    if (not path.is_file() or type(record.get("bytes")) is not int or
+            path.stat().st_size != record["bytes"] or
+            not isinstance(record.get("sha256"), str) or
+            sha256(path) != record["sha256"]):
+        raise RuntimeError(f"{label} artifact bytes differ from its record")
+    return path
 
 
 def normalized_text_records(value: Any) -> Iterable[dict[str, Any]]:
@@ -630,17 +710,17 @@ def require_no_root_bytes(
     if any(needle in serialized for needle in needles):
         raise RuntimeError("normalized manifest leaked an A/B checkout root")
     text_records = list(normalized_text_records(manifest))
-    for record in text_records:
-        path = pathlib.Path(record["path"])
-        path = path if path.is_absolute() else source_root / path
+    for index, record in enumerate(text_records):
+        path = checkout_artifact_path(
+            record, source_root, f"normalized text {index}")
         contents = path.read_bytes()
         if any(needle in contents for needle in needles):
             raise RuntimeError("normalized retained text leaked an A/B checkout root")
     by_name = {build["name"]: build for build in manifest["builds"]}
     for name in BUILD_NAMES:
         for key in ("library", "executable"):
-            path = pathlib.Path(by_name[name][key]["path"])
-            path = path if path.is_absolute() else source_root / path
+            path = checkout_artifact_path(
+                by_name[name][key], source_root, f"{name} {key}")
             contents = path.read_bytes()
             if any(needle in contents for needle in needles):
                 raise RuntimeError("A/B binary leaked a checkout root")
@@ -649,6 +729,58 @@ def require_no_root_bytes(
         "archives": len(BUILD_NAMES),
         "executables": len(BUILD_NAMES),
     }
+
+
+def write_peer_attestation(
+    peer: dict[str, Any], peer_manifest_path: pathlib.Path,
+    peer_scan: dict[str, int], output: pathlib.Path,
+    forbidden_roots: Iterable[pathlib.Path],
+) -> dict[str, Any]:
+    by_name = {build["name"]: build for build in peer["builds"]}
+    normalized = sorted(
+        (dict(record) for record in normalized_text_records(peer)),
+        key=lambda record: record["path"])
+    report = {
+        "schema": PEER_ATTESTATION_SCHEMA,
+        "status": "pass",
+        "core_git_sha": peer["core_git_sha"],
+        "peer_manifest": {
+            "bytes": peer_manifest_path.stat().st_size,
+            "sha256": sha256(peer_manifest_path),
+        },
+        "tooling": {
+            key: peer[key] for key in ("source", "runner", "validator")
+        },
+        "fingerprints": peer["reproducibility"]["fingerprints"],
+        "binary_artifacts": {
+            name: {
+                key: by_name[name][key] for key in ("library", "executable")
+            }
+            for name in BUILD_NAMES
+        },
+        "program_records_sha256": canonical_json_sha256(
+            manifest_program_records(peer)),
+        "source_closures_sha256": canonical_json_sha256({
+            name: by_name[name]["source_closure"] for name in BUILD_NAMES
+        }),
+        "normalized_text_records_sha256": canonical_json_sha256(normalized),
+        "runs_sha256": canonical_json_sha256(peer["runs"]),
+        "root_scan": peer_scan,
+        "checks": {
+            "portable_semantics": "pass",
+            "live_tools_and_outputs": "pass",
+            "git_toplevel_and_head": "pass",
+            "program_identity_match": "pass",
+            "binary_and_text_root_scan": "pass",
+        },
+    }
+    serialized = json.dumps(report, indent=2, sort_keys=True) + "\n"
+    needles = [str(path.resolve()) for path in forbidden_roots]
+    if any(needle in serialized for needle in needles):
+        raise RuntimeError("peer attestation leaked an A/B checkout root")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(serialized, encoding="utf-8")
+    return artifact(output)
 
 
 def main() -> int:
@@ -773,10 +905,9 @@ def main() -> int:
             "comparison": {"status": "not-run"},
         },
     }
+    forbidden_roots: tuple[pathlib.Path, ...] = (ROOT,)
     if arguments.compare_reproducibility_manifest:
         peer_manifest_path = arguments.compare_reproducibility_manifest.resolve()
-        peer = json.loads(peer_manifest_path.read_text(encoding="utf-8"))
-        require_reproducible_peer(manifest, peer)
         peer_root = arguments.compare_reproducibility_root.resolve()
         if peer_root == ROOT:
             raise RuntimeError("A/B comparison requires a distinct source checkout")
@@ -784,9 +915,14 @@ def main() -> int:
             peer_manifest_path.relative_to(peer_root)
         except ValueError as error:
             raise RuntimeError("peer manifest is outside its source root") from error
+        peer = authenticate_peer(manifest, peer_manifest_path, peer_root)
         forbidden = (ROOT, peer_root)
         current_scan = require_no_root_bytes(manifest, ROOT, forbidden)
         peer_scan = require_no_root_bytes(peer, peer_root, forbidden)
+        attestation = write_peer_attestation(
+            peer, peer_manifest_path, peer_scan,
+            arguments.results_dir / "peer-reproducibility-attestation.json",
+            forbidden)
         fingerprints = manifest["reproducibility"]["fingerprints"]
         manifest["reproducibility"]["comparison"] = {
             "status": "pass",
@@ -796,10 +932,12 @@ def main() -> int:
             "checkout_roots_scanned": 2,
             "current_scan": current_scan,
             "peer_scan": peer_scan,
+            "peer_attestation": attestation,
         }
+        forbidden_roots = forbidden
     serialized = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
-    if str(ROOT) in serialized:
-        raise RuntimeError("manifest leaked the absolute source checkout root")
+    if any(str(path.resolve()) in serialized for path in forbidden_roots):
+        raise RuntimeError("manifest leaked an absolute A/B source checkout root")
     arguments.manifest.parent.mkdir(parents=True, exist_ok=True)
     arguments.manifest.write_text(serialized, encoding="utf-8")
     if not SHA256_RE.fullmatch(sha256(arguments.manifest)):
