@@ -2,6 +2,26 @@
 
 This file provides instructions and context for AI coding agents working on this project.
 
+This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
+
+This checkout uses the Beads 1.x embedded-Dolt format. Before mutating issues,
+run `bd version`; do not use a legacy 0.x binary against this repository. If
+`type -a bd` reports more than one installation, explicitly select the 1.x
+binary before running any Beads command.
+
+On a fresh clone, restore the issue database from the pushed Dolt history before
+claiming work:
+
+```bash
+chmod 700 .beads
+bd bootstrap --yes
+bd prime
+```
+
+If bootstrap cannot authenticate, follow the forwarded-SSH-agent procedure
+below and retry. The tracked `.beads/issues.jsonl` is a portable checkpoint and
+interchange copy; `bd bootstrap` is the preferred history-preserving restore.
+
 ## Branch and durability policy
 
 - Do implementation work on a dedicated topic branch, never directly on `main` or
@@ -14,6 +34,30 @@ This file provides instructions and context for AI coding agents working on this
   and retry the push.  Never place a private key in the repository or logs.
 - A current explicit user or orchestrator instruction not to push still takes
   precedence over this standing policy.
+
+## Landing the Plane (Session Completion)
+
+When ending a work session, complete all of these steps. Work is not complete
+until the required push succeeds.
+
+1. File Beads issues for remaining work.
+2. Run relevant builds, tests, linters, and other quality gates.
+3. Close finished issues and accurately update unfinished claims.
+4. Commit coherent changes, push Beads Dolt history, and push the topic branch:
+
+   ```bash
+   git pull --rebase
+   bd dolt push
+   git push
+   git status
+   ```
+
+5. Verify that the tree is clean and the branch is up to date with its remote.
+6. Leave a durable handoff with exact validation and remaining blockers.
+
+Never stop at "ready to push" when current instructions authorize publishing.
+If a push fails, resolve authentication or transport and retry; do not leave
+work stranded locally.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
 ## Beads Issue Tracker

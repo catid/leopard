@@ -12,6 +12,7 @@ last-touched
 
 # Daemon runtime (lock, log, pid)
 daemon.*
+daemon-error
 
 # Push state (runtime, per-machine)
 push-state.json
