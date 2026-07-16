@@ -76,7 +76,9 @@ uint8_t Log2PowerOfTwo(uint32_t size);
 size_t OutputDependencyBitCount(uint32_t transform_size);
 size_t OutputDependencyWordCount(uint32_t transform_size);
 
-// Returns false for malformed sizes, coordinates, or storage lengths.
+// transform_size must be a power of two in [2, 2^31].  Returns false for
+// malformed sizes, coordinates, pointers, or storage lengths without changing
+// caller storage.  In particular, transform_size == 1 is not a valid schedule.
 bool BuildOutputDependencies(
     uint32_t transform_size,
     const uint32_t* requested_coordinates,

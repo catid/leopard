@@ -83,13 +83,18 @@ bool BuildOutputDependencies(
         (requested_count != 0 && !requested_coordinates))
         return false;
 
+    // Validate the complete request before publishing any part of the
+    // schedule.  Callers may retain and reuse their previous immutable
+    // schedule when construction fails, so malformed coordinates must not
+    // leave a partially cleared or partially rebuilt bitmap behind.
+    for (size_t requested = 0; requested < requested_count; ++requested)
+        if (requested_coordinates[requested] >= transform_size)
+            return false;
+
     memset(words, 0, word_count * sizeof(uint64_t));
     for (size_t requested = 0; requested < requested_count; ++requested)
     {
         const uint32_t coordinate = requested_coordinates[requested];
-        if (coordinate >= transform_size)
-            return false;
-
         uint32_t groups_before = 0;
         unsigned mip_level = log2_size;
         while (mip_level >= 2)

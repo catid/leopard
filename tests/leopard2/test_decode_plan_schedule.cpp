@@ -262,10 +262,8 @@ static uint64_t CheckDependencyBitmap()
         }
     }
 
-    const unsigned sizes[] = { 32, 128, 256, 1024, 4096, 65536 };
-    for (unsigned s = 0; s < sizeof(sizes) / sizeof(sizes[0]); ++s)
+    for (unsigned n = 32; n <= 65536; n <<= 1)
     {
-        const unsigned n = sizes[s];
         for (unsigned pattern = 0; pattern < 24; ++pattern)
         {
             std::vector<uint8_t> requested(n, 0);
@@ -304,6 +302,148 @@ static uint64_t CheckDependencyBitmap()
     Require(!leopard2_internal::BuildOutputDependencies(
         8, NULL, 0, &invalid_word, 2), "wrong word count accepted");
     return comparisons;
+}
+
+static uint64_t CheckDependencyBuilderContract()
+{
+    static const uint64_t kCanary = UINT64_C(0xd15ea5edc0decafe);
+    uint64_t cases = 0;
+
+    const uint32_t invalid_sizes[] = { 0, 1, 3, 5, UINT32_MAX };
+    for (size_t i = 0; i < sizeof(invalid_sizes) / sizeof(invalid_sizes[0]); ++i)
+    {
+        std::vector<uint64_t> storage(3, kCanary);
+        const std::vector<uint64_t> before = storage;
+        Require(!leopard2_internal::BuildOutputDependencies(
+            invalid_sizes[i], NULL, 0, &storage[1],
+            leopard2_internal::OutputDependencyWordCount(invalid_sizes[i])),
+            "invalid transform size accepted");
+        Require(storage == before, "invalid size modified caller storage");
+        ++cases;
+    }
+
+    Require(leopard2_internal::OutputDependencyBitCount(1) == 0,
+        "transform size one dependency bits");
+    Require(leopard2_internal::OutputDependencyWordCount(1) == 0,
+        "transform size one dependency words");
+    const leopard2_internal::OutputDependencyView size_one_view =
+        leopard2_internal::MakeOutputDependencyView(1, NULL, 0);
+    Require(size_one_view.log2_size == 0 && !size_one_view.IsNeeded(1, 0),
+        "transform size one view contract");
+
+    for (uint32_t n = 2; n <= 65536; n <<= 1)
+    {
+        const size_t word_count =
+            leopard2_internal::OutputDependencyWordCount(n);
+        const uint32_t valid_coordinates[] = { 0, n - 1, n / 2 };
+
+        for (unsigned bad_position = 0; bad_position < 3; ++bad_position)
+        {
+            uint32_t coordinates[] = {
+                valid_coordinates[0], valid_coordinates[1], valid_coordinates[2]
+            };
+            coordinates[bad_position] = n;
+            std::vector<uint64_t> storage(word_count + 2, kCanary);
+            const std::vector<uint64_t> before = storage;
+            Require(!leopard2_internal::BuildOutputDependencies(
+                n, coordinates, 3, &storage[1], word_count),
+                "out-of-range coordinate accepted");
+            Require(storage == before,
+                "out-of-range coordinate modified caller storage");
+            ++cases;
+        }
+
+        std::vector<uint64_t> storage(word_count + 3, kCanary);
+        const std::vector<uint64_t> before = storage;
+        Require(!leopard2_internal::BuildOutputDependencies(
+            n, NULL, 1, &storage[1], word_count),
+            "null coordinate list accepted");
+        Require(storage == before, "null coordinates modified caller storage");
+        ++cases;
+
+        Require(!leopard2_internal::BuildOutputDependencies(
+            n, valid_coordinates, 3, &storage[1], word_count - 1),
+            "short word storage accepted");
+        Require(storage == before, "short storage modified caller storage");
+        ++cases;
+
+        Require(!leopard2_internal::BuildOutputDependencies(
+            n, valid_coordinates, 3, &storage[1], word_count + 1),
+            "long word storage accepted");
+        Require(storage == before, "long storage modified caller storage");
+        ++cases;
+
+        Require(!leopard2_internal::BuildOutputDependencies(
+            n, valid_coordinates, 3, NULL, word_count),
+            "null word storage accepted");
+        ++cases;
+
+        std::vector<uint32_t> all_coordinates(n);
+        std::vector<uint8_t> all_requested(n, 1);
+        for (uint32_t coordinate = 0; coordinate < n; ++coordinate)
+            all_coordinates[coordinate] = coordinate;
+        Require(leopard2_internal::BuildOutputDependencies(
+            n, &all_coordinates[0], all_coordinates.size(),
+            &storage[1], word_count), "all-coordinate dependency build");
+        Require(storage.front() == kCanary &&
+                storage[word_count + 1] == kCanary && storage.back() == kCanary,
+            "valid build changed canary");
+        const leopard2_internal::OutputDependencyView view =
+            leopard2_internal::MakeOutputDependencyView(
+                n, &storage[1], word_count);
+        cases += VerifyDependencyQueries(n, all_requested, view);
+    }
+    return cases;
+}
+
+static uint64_t CheckDependencyBuilderConcurrency()
+{
+    const uint32_t n = 65536;
+    const size_t word_count =
+        leopard2_internal::OutputDependencyWordCount(n);
+    std::vector<uint8_t> selected(n, 0);
+    std::vector<uint32_t> coordinates;
+    for (unsigned i = 0; i < 1024; ++i)
+    {
+        const uint32_t coordinate = Mix(0x8a51u + i * 31337u) & (n - 1);
+        if (!selected[coordinate])
+        {
+            selected[coordinate] = 1;
+            coordinates.push_back(coordinate);
+        }
+    }
+    std::sort(coordinates.begin(), coordinates.end());
+    std::vector<uint64_t> expected(word_count);
+    Require(leopard2_internal::BuildOutputDependencies(
+        n, &coordinates[0], coordinates.size(), &expected[0], word_count),
+        "concurrent reference dependency build");
+
+    static const unsigned kWorkers = 8;
+    static const unsigned kIterations = 64;
+    std::atomic<bool> start(false);
+    std::atomic<uint64_t> failures(0);
+    std::vector<std::thread> workers;
+    for (unsigned worker = 0; worker < kWorkers; ++worker)
+    {
+        workers.push_back(std::thread([&]() {
+            std::vector<uint64_t> words(word_count);
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            for (unsigned iteration = 0; iteration < kIterations; ++iteration)
+            {
+                if (!leopard2_internal::BuildOutputDependencies(
+                        n, &coordinates[0], coordinates.size(),
+                        &words[0], word_count) || words != expected)
+                    failures.fetch_add(1, std::memory_order_relaxed);
+            }
+        }));
+    }
+    start.store(true, std::memory_order_release);
+    for (size_t worker = 0; worker < workers.size(); ++worker)
+        workers[worker].join();
+    Require(failures.load(std::memory_order_relaxed) == 0,
+        "concurrent dependency build mismatch");
+    return static_cast<uint64_t>(kWorkers) * kIterations;
 }
 
 static void RequireResult(leo2_result actual, const char* operation)
@@ -640,6 +780,8 @@ int main()
     Require(leo_init() == Leopard_Success, "Leopard initialization");
 
     const uint64_t dependency_comparisons = CheckDependencyBitmap();
+    const uint64_t builder_contract_cases = CheckDependencyBuilderContract();
+    const uint64_t concurrent_builds = CheckDependencyBuilderConcurrency();
     uint64_t kernel_slots = 0;
     kernel_slots += CheckFieldKernels<leopard::ff8::ffe_t>(
         256, 32, leopard::ff8::kModulus,
@@ -666,6 +808,8 @@ int main()
     std::cout << "leopard2 decode-plan schedule tests passed: dependency_queries="
               << dependency_comparisons << " differential_work_slots="
               << kernel_slots << " concurrent_plan_executions=128"
+              << " dependency_builder_contract_cases=" << builder_contract_cases
+              << " concurrent_dependency_builds=" << concurrent_builds
               << " execution_cpp_allocations=0 gf16_max_schedule_bytes=2736"
               << std::endl;
     return 0;
