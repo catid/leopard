@@ -169,6 +169,13 @@ if(LEO2_BUILD_TESTS)
     target_link_libraries(leopard2_locator_test libleopard)
     add_test(NAME leopard2_locator COMMAND leopard2_locator_test)
 
+    add_executable(leopard2_gf16_tails_test
+        tests/leopard2/direct_oracle.cpp
+        tests/leopard2/test_gf16_tails.cpp)
+    target_include_directories(leopard2_gf16_tails_test PRIVATE tests/leopard2)
+    target_link_libraries(leopard2_gf16_tails_test libleopard)
+    add_test(NAME leopard2_gf16_tails COMMAND leopard2_gf16_tails_test)
+
     add_executable(leopard2_fuzz_smoke
         tests/leopard2/fuzz_api.cpp
         tests/leopard2/fuzz_replay.cpp)

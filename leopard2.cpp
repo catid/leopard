@@ -548,19 +548,16 @@ static leo2_result EncodeLayout(
 {
     if (!codec || !RoundShardBytes(shard_bytes, rounded_bytes))
         return LEO2_INVALID_ARGUMENT;
-    /*
-        Legacy GF16 stores 32 symbols per 64-byte ALTMAP tile.  Truncating a
-        tile can discard a nonzero high half that is required for decoding, so
-        partial tiles need a separately versioned compact-tail construction.
-    */
-    if (codec->field == LEO2_FIELD_GF16 && (shard_bytes & 63u) != 0)
+    // GF16 shards contain complete two-byte symbols.  A partial final ALTMAP
+    // tile is compactly scattered below; an unpaired byte has no GF16 symbol.
+    if (codec->field == LEO2_FIELD_GF16 && (shard_bytes & 1u) != 0)
         return LEO2_UNSUPPORTED;
     work_count = static_cast<size_t>(codec->padded_side) * 2;
     /*
         Transform kernels operate on complete 64-byte tiles.  Aligned shards
         can therefore be read from and written to the caller's disjoint
-        buffers directly.  Only a GF8 partial tile needs staged, zero-padded
-        inputs and outputs.
+        buffers directly.  A partial tile is staged for GF8 zero padding or
+        GF16 compact ALTMAP scatter/gather.
     */
     const bool stage_partial_tile = rounded_bytes != shard_bytes;
     const size_t original_slots = stage_partial_tile ? codec->original_count : 0;
@@ -585,7 +582,7 @@ static leo2_result DecodeLayout(
 {
     if (!codec || !RoundShardBytes(shard_bytes, rounded_bytes))
         return LEO2_INVALID_ARGUMENT;
-    if (codec->field == LEO2_FIELD_GF16 && (shard_bytes & 63u) != 0)
+    if (codec->field == LEO2_FIELD_GF16 && (shard_bytes & 1u) != 0)
         return LEO2_UNSUPPORTED;
     const size_t range_count = static_cast<size_t>(codec->original_count) * 2 + codec->recovery_count;
     const size_t pointer_count = static_cast<size_t>(codec->parent_count) * 2;
@@ -601,6 +598,74 @@ static void CopyAndPad(void* destination, const void* source, size_t bytes, size
     memcpy(destination, source, bytes);
     if (rounded > bytes)
         memset(static_cast<uint8_t*>(destination) + bytes, 0, rounded - bytes);
+}
+
+static void ScatterGF16CompactTail(
+    void* destination,
+    const void* source,
+    size_t bytes,
+    size_t rounded)
+{
+    LEO_DEBUG_ASSERT(bytes != 0 && (bytes & 1u) == 0 && rounded >= bytes);
+    uint8_t* output = static_cast<uint8_t*>(destination);
+    const uint8_t* input = static_cast<const uint8_t*>(source);
+    const size_t complete = bytes & ~static_cast<size_t>(63u);
+    if (complete != 0)
+        memcpy(output, input, complete);
+    const size_t residual = bytes - complete;
+    if (residual == 0)
+        return;
+
+    LEO_DEBUG_ASSERT(rounded == complete + 64);
+    memset(output + complete, 0, rounded - complete);
+    const size_t symbols = residual / 2;
+    memcpy(output + complete, input + complete, symbols);
+    memcpy(output + complete + 32, input + complete + symbols, symbols);
+}
+
+static void GatherGF16CompactTail(
+    void* destination,
+    const void* source,
+    size_t bytes)
+{
+    LEO_DEBUG_ASSERT(bytes != 0 && (bytes & 1u) == 0);
+    uint8_t* output = static_cast<uint8_t*>(destination);
+    const uint8_t* input = static_cast<const uint8_t*>(source);
+    const size_t complete = bytes & ~static_cast<size_t>(63u);
+    if (complete != 0)
+        memcpy(output, input, complete);
+    const size_t residual = bytes - complete;
+    if (residual == 0)
+        return;
+
+    const size_t symbols = residual / 2;
+    memcpy(output + complete, input + complete, symbols);
+    memcpy(output + complete + symbols, input + complete + 32, symbols);
+}
+
+static void StageShardForKernel(
+    const leo2_codec* codec,
+    void* destination,
+    const void* source,
+    size_t bytes,
+    size_t rounded)
+{
+    if (codec->field == LEO2_FIELD_GF16 && rounded != bytes)
+        ScatterGF16CompactTail(destination, source, bytes, rounded);
+    else
+        CopyAndPad(destination, source, bytes, rounded);
+}
+
+static void GatherShardFromKernel(
+    const leo2_codec* codec,
+    void* destination,
+    const void* source,
+    size_t bytes)
+{
+    if (codec->field == LEO2_FIELD_GF16 && (bytes & 63u) != 0)
+        GatherGF16CompactTail(destination, source, bytes);
+    else
+        memcpy(destination, source, bytes);
 }
 
 static leo2_result ValidateDecodeBuffers(
@@ -1026,7 +1091,8 @@ LEO2_EXPORT leo2_result leo2_encode(
         if (stage_partial_tile)
         {
             pointers[i] = slots + next_slot++ * rounded;
-            CopyAndPad(pointers[i], original[i], static_cast<size_t>(shard_bytes), rounded);
+            StageShardForKernel(codec, pointers[i], original[i],
+                static_cast<size_t>(shard_bytes), rounded);
         }
         else
             pointers[i] = const_cast<void*>(original[i]);
@@ -1072,7 +1138,8 @@ LEO2_EXPORT leo2_result leo2_encode(
         if (stage_partial_tile)
             for (uint32_t i = 0; i < requested_recovery_count; ++i)
                 if (recovery[i])
-                    memcpy(recovery[i], work[i], static_cast<size_t>(shard_bytes));
+                    GatherShardFromKernel(codec, recovery[i], work[i],
+                        static_cast<size_t>(shard_bytes));
     }
     else
     {
@@ -1101,7 +1168,8 @@ LEO2_EXPORT leo2_result leo2_encode(
         if (stage_partial_tile)
             for (uint32_t i = 0; i < codec->recovery_count; ++i)
                 if (recovery[i])
-                    memcpy(recovery[i], parity[i], static_cast<size_t>(shard_bytes));
+                    GatherShardFromKernel(codec, recovery[i], parity[i],
+                        static_cast<size_t>(shard_bytes));
     }
     return LEO2_SUCCESS;
 }
@@ -1352,7 +1420,8 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
         const uint32_t coordinate = CoordinateForOriginal(codec, i);
         if (original[i] && !plan->coordinate_erased[coordinate])
         {
-            CopyAndPad(slot, original[i], static_cast<size_t>(shard_bytes), rounded);
+            StageShardForKernel(codec, slot, original[i],
+                static_cast<size_t>(shard_bytes), rounded);
             coordinate_data[coordinate] = slot;
         }
     }
@@ -1362,7 +1431,8 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
         const uint32_t coordinate = CoordinateForRecovery(codec, i);
         if (recovery[i] && !plan->coordinate_erased[coordinate])
         {
-            CopyAndPad(slot, recovery[i], static_cast<size_t>(shard_bytes), rounded);
+            StageShardForKernel(codec, slot, recovery[i],
+                static_cast<size_t>(shard_bytes), rounded);
             coordinate_data[coordinate] = slot;
         }
     }
@@ -1406,7 +1476,8 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
 
     for (uint32_t i = 0; i < codec->original_count; ++i)
         if (!original[i])
-            memcpy(restored_original[i], work[CoordinateForOriginal(codec, i)],
+            GatherShardFromKernel(codec, restored_original[i],
+                work[CoordinateForOriginal(codec, i)],
                 static_cast<size_t>(shard_bytes));
     return LEO2_SUCCESS;
 }

@@ -158,7 +158,10 @@ LEO2_EXPORT leo2_field leo2_codec_field(const leo2_codec* codec);
     Scratch must start at leo2_scratch_alignment() alignment.  Scratch and all
     non-null shard ranges must be mutually disjoint, except that input shards may
     alias other input shards.  Recovery output entries may be null to request a
-    parity subset.  Encode/decode execution performs no allocation.
+    parity subset.  Encode/decode execution performs no allocation.  GF8 accepts
+    every positive shard_bytes value.  GF16 accepts positive even values and
+    returns LEO2_UNSUPPORTED for odd values because each symbol occupies two
+    application bytes; a no-loss plan remains a zero-scratch no-op.
 */
 LEO2_EXPORT size_t leo2_scratch_alignment(void);
 LEO2_EXPORT leo2_result leo2_encode_scratch_size(

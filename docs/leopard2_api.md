@@ -84,9 +84,15 @@ are mathematical code identity; backend selection never changes them.
 ## Byte lengths and batch calls
 
 GF8 supports every positive byte length and internally handles SIMD tails through
-caller scratch.  Legacy GF16 ALTMAP currently requires a multiple of 64 bytes;
-partial tiles return `LEO2_UNSUPPORTED` because truncating their high halves is
-not decodable.  See `leopard2_math_and_sources.md` for the proof obligation.
+caller scratch.  GF16 supports every positive even byte length.  Complete
+64-byte ALTMAP tiles remain unchanged and use the zero-copy encoding path.  A
+partial final GF16 tile contains `q` complete symbols in `2q` application bytes:
+the first `q` bytes are scattered to ALTMAP low lanes `0..q-1`, the next `q`
+bytes to high lanes `0..q-1`, and unused lanes are zero.  Outputs use the inverse
+gather.  Odd GF16 byte lengths return `LEO2_UNSUPPORTED` because an unpaired byte
+is not a complete GF16 symbol.  A no-loss decode plan remains a true no-op with
+zero scratch even for an otherwise unsupported byte length.  See
+`leopard2_gf16_tails.md` for the construction and the odd-length limitation.
 
 The batch entry points execute independent items using each item's own buffers and
 scratch.  A context owns a persistent worker pool when its effective

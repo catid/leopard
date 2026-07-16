@@ -108,6 +108,46 @@ private:
 
 typedef std::vector<std::vector<uint8_t> > Shards;
 
+std::vector<uint8_t> compact_pack_gf16(const std::vector<uint8_t>& input)
+{
+    require(!input.empty() && (input.size() & 1u) == 0,
+        "GF16 compact pack requires a positive even byte count");
+    const size_t rounded = (input.size() + 63u) & ~static_cast<size_t>(63u);
+    std::vector<uint8_t> output(rounded, 0);
+    const size_t complete = input.size() & ~static_cast<size_t>(63u);
+    std::copy(input.begin(), input.begin() + complete, output.begin());
+    const size_t symbols = (input.size() - complete) / 2;
+    if (symbols != 0)
+    {
+        std::copy(input.begin() + complete, input.begin() + complete + symbols,
+            output.begin() + complete);
+        std::copy(input.begin() + complete + symbols, input.end(),
+            output.begin() + complete + 32);
+    }
+    return output;
+}
+
+std::vector<uint8_t> compact_gather_gf16(
+    const std::vector<uint8_t>& input,
+    size_t bytes)
+{
+    require(bytes != 0 && (bytes & 1u) == 0 && input.size() >= bytes,
+        "GF16 compact gather requires a positive even byte count");
+    std::vector<uint8_t> output(bytes, 0);
+    const size_t complete = bytes & ~static_cast<size_t>(63u);
+    std::copy(input.begin(), input.begin() + complete, output.begin());
+    const size_t symbols = (bytes - complete) / 2;
+    if (symbols != 0)
+    {
+        std::copy(input.begin() + complete, input.begin() + complete + symbols,
+            output.begin() + complete);
+        std::copy(input.begin() + complete + 32,
+            input.begin() + complete + 32 + symbols,
+            output.begin() + complete + symbols);
+    }
+    return output;
+}
+
 Shards make_originals(unsigned count, size_t bytes, uint64_t seed)
 {
     Shards shards(count, std::vector<uint8_t>(bytes));
@@ -190,6 +230,29 @@ Shards encode_legacy(const Shards& original, unsigned recovery_count, size_t byt
     return recovery;
 }
 
+Shards encode_legacy_gf16_compact(
+    const Shards& original,
+    unsigned recovery_count,
+    size_t bytes)
+{
+    const size_t rounded = (bytes + 63u) & ~static_cast<size_t>(63u);
+    Shards packed(original.size());
+    for (size_t i = 0; i < original.size(); ++i)
+        packed[i] = compact_pack_gf16(original[i]);
+    std::vector<const void*> original_ptrs = const_pointers(packed);
+    const unsigned work_count = leo_encode_work_count(
+        static_cast<unsigned>(original.size()), recovery_count);
+    Shards work(work_count, std::vector<uint8_t>(rounded, 0));
+    std::vector<void*> work_ptrs = mutable_pointers(work);
+    require(leo_encode(rounded, static_cast<unsigned>(original.size()),
+        recovery_count, work_count, &original_ptrs[0], &work_ptrs[0]) ==
+        Leopard_Success, "legacy compact GF16 encode failed");
+    Shards recovery(recovery_count);
+    for (unsigned i = 0; i < recovery_count; ++i)
+        recovery[i] = compact_gather_gf16(work[i], bytes);
+    return recovery;
+}
+
 void test_profile_metadata(leo2_context* context)
 {
     leo2_codec* high = make_codec(
@@ -252,6 +315,25 @@ void compare_high_with_legacy(
     leo2_codec_destroy(codec);
 }
 
+void compare_high_gf16_compact_with_legacy(
+    leo2_context* context,
+    unsigned k,
+    unsigned r,
+    size_t bytes,
+    TestCounts* counts)
+{
+    leo2_codec* codec = make_codec(
+        context, k, r, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16);
+    const Shards original = make_originals(
+        k, bytes, 0x16a17d5ULL + bytes * 19u);
+    const Shards actual = encode_new(codec, original, bytes);
+    const Shards expected = encode_legacy_gf16_compact(original, r, bytes);
+    require(actual == expected,
+        "compact GF16 high parity differs from packed legacy ALTMAP");
+    counts->high_compatibility += static_cast<uint64_t>(r) * bytes;
+    leo2_codec_destroy(codec);
+}
+
 void compare_low_gf8_with_oracle(
     leo2_context* context,
     unsigned k,
@@ -286,21 +368,21 @@ void compare_low_gf8_with_oracle(
 void compare_low_gf16_with_oracle(
     leo2_context* context,
     const BinaryField& field,
+    size_t bytes,
     TestCounts* counts)
 {
     const unsigned k = 3;
     const unsigned r = 5;
-    const size_t bytes = 64;
     leo2_codec* codec = make_codec(
         context, k, r, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16);
     const Shards original = make_originals(k, bytes, 0x6789abcdefULL);
     const Shards actual = encode_new(codec, original, bytes);
     const ProfileLayout layout = leopard2_test::make_profile_layout(
         leopard2_test::kLow, k, r);
-    const size_t rounded = 64;
+    const size_t rounded = (bytes + 63u) & ~static_cast<size_t>(63u);
     Shards padded(k, std::vector<uint8_t>(rounded, 0));
     for (unsigned i = 0; i < k; ++i)
-        memcpy(&padded[i][0], &original[i][0], bytes);
+        padded[i] = compact_pack_gf16(original[i]);
     Shards expected(r, std::vector<uint8_t>(rounded, 0));
     for (size_t tile = 0; tile < rounded; tile += 64)
     {
@@ -321,7 +403,7 @@ void compare_low_gf16_with_oracle(
     }
     for (unsigned i = 0; i < r; ++i)
     {
-        require(std::equal(actual[i].begin(), actual[i].end(), expected[i].begin()),
+        require(actual[i] == compact_gather_gf16(expected[i], bytes),
             "low GF16 parity differs from direct interpolation");
         counts->low_oracle_symbols += bytes;
     }
@@ -482,15 +564,50 @@ void test_overlap_rejection(leo2_context* context)
     leo2_codec_destroy(codec);
 }
 
-void test_gf16_tail_rejection(leo2_context* context)
+void test_gf16_byte_granularity(leo2_context* context)
 {
     leo2_codec* codec = make_codec(
         context, 257, 33, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16);
+    const size_t odd_counts[] = { 1, 3, 33, 63, 65, 1023, 1025 };
+    for (size_t count_i = 0;
+         count_i < sizeof(odd_counts) / sizeof(odd_counts[0]); ++count_i)
+    {
+        const size_t bytes = odd_counts[count_i];
+        size_t scratch_bytes = 0;
+        require(leo2_encode_scratch_size(codec, bytes, &scratch_bytes) ==
+            LEO2_UNSUPPORTED, "odd GF16 encode length was not rejected");
+        require(leo2_encode(codec, bytes, NULL, NULL, NULL, 0) ==
+            LEO2_UNSUPPORTED, "odd GF16 encode execution disagrees with query");
+        require(leo2_decode_scratch_size(codec, bytes, &scratch_bytes) ==
+            LEO2_UNSUPPORTED, "odd GF16 decode length was not rejected");
+    }
+
+    std::vector<uint8_t> original_present(257, 1);
+    std::vector<uint8_t> recovery_present(33, 1);
+    original_present[0] = 0;
+    leo2_decode_plan* loss_plan = NULL;
+    require_result(leo2_decode_plan_create(codec, &original_present[0],
+        &recovery_present[0], &loss_plan), "odd GF16 loss plan create");
     size_t scratch_bytes = 0;
-    require(leo2_encode_scratch_size(codec, 65, &scratch_bytes) == LEO2_UNSUPPORTED,
-        "unsafe partial GF16 ALTMAP tile was not rejected");
-    require(leo2_decode_scratch_size(codec, 65, &scratch_bytes) == LEO2_UNSUPPORTED,
-        "unsafe partial GF16 decode tile was not rejected");
+    require(leo2_decode_plan_scratch_size(loss_plan, 65, &scratch_bytes) ==
+        LEO2_UNSUPPORTED, "odd GF16 loss-plan scratch was not rejected");
+    require(leo2_decode_plan_execute(loss_plan, 65, NULL, NULL, NULL, NULL, 0) ==
+        LEO2_UNSUPPORTED, "odd GF16 loss-plan execution was not rejected");
+    leo2_decode_plan_destroy(loss_plan);
+
+    original_present[0] = 1;
+    std::fill(recovery_present.begin(), recovery_present.end(), 0);
+    leo2_decode_plan* no_loss_plan = NULL;
+    require_result(leo2_decode_plan_create(codec, &original_present[0],
+        &recovery_present[0], &no_loss_plan), "odd GF16 no-loss plan create");
+    scratch_bytes = 99;
+    require_result(leo2_decode_plan_scratch_size(no_loss_plan, 65, &scratch_bytes),
+        "odd GF16 no-loss scratch query");
+    require(scratch_bytes == 0, "odd GF16 no-loss plan requires scratch");
+    require_result(leo2_decode_plan_execute(
+        no_loss_plan, 65, NULL, NULL, NULL, NULL, 0),
+        "odd GF16 no-loss execution");
+    leo2_decode_plan_destroy(no_loss_plan);
     leo2_codec_destroy(codec);
 }
 
@@ -527,7 +644,11 @@ int main()
         compare_low_gf8_with_oracle(context, 3, 5, 129, gf8, &counts);
         compare_low_gf8_with_oracle(context, 5, 11, 17, gf8, &counts);
         const BinaryField gf16 = leopard2_test::make_legacy_gf16();
-        compare_low_gf16_with_oracle(context, gf16, &counts);
+        for (size_t bytes = 2; bytes <= 64; bytes += 2)
+            compare_low_gf16_with_oracle(context, gf16, bytes, &counts);
+        compare_low_gf16_with_oracle(context, gf16, 66, &counts);
+        compare_low_gf16_with_oracle(context, gf16, 1024, &counts);
+        compare_low_gf16_with_oracle(context, gf16, 1026, &counts);
 
         run_decode_case(context, 9, 7, LEO2_PROFILE_LEGACY_HIGH_V1,
             LEO2_FIELD_GF8, 17, std::vector<unsigned>{0, 4, 8},
@@ -541,6 +662,27 @@ int main()
         run_decode_case(context, 257, 33, LEO2_PROFILE_LEGACY_HIGH_V1,
             LEO2_FIELD_GF16, 64, std::vector<unsigned>{1, 64, 128, 256},
             std::vector<unsigned>{29, 30, 31, 32}, &counts);
+        const size_t gf16_boundaries[] = { 2, 32, 34, 62, 64, 66, 1024, 1026 };
+        for (size_t count_i = 0;
+             count_i < sizeof(gf16_boundaries) / sizeof(gf16_boundaries[0]);
+             ++count_i)
+        {
+            const size_t bytes = gf16_boundaries[count_i];
+            compare_high_gf16_compact_with_legacy(
+                context, 257, 33, bytes, &counts);
+            run_decode_case(context, 257, 33, LEO2_PROFILE_LEGACY_HIGH_V1,
+                LEO2_FIELD_GF16, bytes, std::vector<unsigned>{1, 128, 256},
+                std::vector<unsigned>{31, 32}, &counts);
+            run_decode_case(context, 100, 156, LEO2_PROFILE_LOW_V1,
+                LEO2_FIELD_GF16, bytes, std::vector<unsigned>{0, 37, 99},
+                std::vector<unsigned>{151, 152, 155}, &counts);
+        }
+        run_decode_case(context, 257, 1, LEO2_PROFILE_LEGACY_HIGH_V1,
+            LEO2_FIELD_GF16, 66, std::vector<unsigned>{128},
+            std::vector<unsigned>(), &counts);
+        run_decode_case(context, 1, 300, LEO2_PROFILE_LOW_V1,
+            LEO2_FIELD_GF16, 66, std::vector<unsigned>{0},
+            std::vector<unsigned>{0, 299}, &counts);
         run_decode_case(context, 8, 1, LEO2_PROFILE_LEGACY_HIGH_V1,
             LEO2_FIELD_GF8, 33, std::vector<unsigned>{3},
             std::vector<unsigned>(), &counts);
@@ -550,7 +692,7 @@ int main()
 
         test_no_loss_no_op(context);
         test_overlap_rejection(context);
-        test_gf16_tail_rejection(context);
+        test_gf16_byte_granularity(context);
         leo2_context_destroy(context);
 
         std::cout << "high_compatibility_bytes=" << counts.high_compatibility
