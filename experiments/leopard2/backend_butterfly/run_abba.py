@@ -184,6 +184,83 @@ MATRIX_COMPARE_TESTS = (
     "transform_differential", "fuzz_smoke",
 )
 
+MATRIX_TEST_SPECS = {
+    "direct_oracle": ("leopard2_direct_oracle_test", []),
+    "backend_ops": ("leopard2_backend_ops_test", []),
+    "legacy_golden": ("leopard2_legacy_golden_test", []),
+    "api": ("leopard2_api_test", []),
+    "public_api_contract": ("leopard2_public_api_contract_test", []),
+    "random": ("leopard2_random_test", [
+        "--seed", "0x4c656f7061726432", "--cases", "64", "--threads", "1"]),
+    "locator": ("leopard2_locator_test", []),
+    "active_lch": ("leopard2_active_lch_test", []),
+    "gf16_tails": ("leopard2_gf16_tails_test", []),
+    "gf16_padded_odd": ("leopard2_gf16_padded_odd_test", []),
+    "gf16_legacy_encoder_matrix": (
+        "leopard2_gf16_legacy_encoder_matrix_test", []),
+    "low_gf16_direct_rows": ("leopard2_low_gf16_direct_rows_test", []),
+    "decode_high_acceptance": ("leopard2_decode_high_acceptance_test", []),
+    "decode_low_acceptance": ("leopard2_decode_low_acceptance_test", []),
+    "decode_plan_schedule": ("leopard2_decode_plan_schedule_test", []),
+    "direct_encode": ("leopard2_direct_encode_test", []),
+    "arbitrary_counts_acceptance": (
+        "leopard2_arbitrary_counts_acceptance_test", []),
+    "max_counts": ("leopard2_max_counts_test", []),
+    "encode_concurrency": ("leopard2_encode_concurrency_test", []),
+    "codec_options_abi": ("leopard2_codec_options_abi_test", []),
+    "direct_repair": ("leopard2_direct_repair_test", []),
+    "boundaries": ("leopard2_boundaries_test", []),
+    "transform_differential": ("leopard2_transform_differential_test", []),
+    "fuzz_smoke": ("leopard2_fuzz_smoke", []),
+}
+
+MATRIX_BUILD_TARGETS = tuple(MATRIX_TEST_SPECS[name][0]
+                             for name in MATRIX_COMPARE_TESTS)
+
+MATRIX_BUILD_CACHE_KEYS = (
+    "CMAKE_BUILD_TYPE", "CMAKE_GENERATOR", "CMAKE_C_FLAGS",
+    "CMAKE_C_FLAGS_RELEASE", "CMAKE_CXX_FLAGS", "CMAKE_CXX_FLAGS_RELEASE",
+    "CMAKE_EXE_LINKER_FLAGS", "CMAKE_EXE_LINKER_FLAGS_RELEASE",
+    "CMAKE_STATIC_LINKER_FLAGS", "CMAKE_STATIC_LINKER_FLAGS_RELEASE",
+    "ENABLE_OPENMP", "LEO2_BACKEND_VARIANT", "LEO2_BUILD_TESTS",
+    "LEO2_BUILD_BENCHMARKS", "LEO2_BUILD_FUZZERS", "LEO2_ENABLE_CUDA",
+    "CMAKE_C_COMPILER", "CMAKE_CXX_COMPILER",
+)
+
+MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS = {
+    "Leopard2Backend.cpp": 1, "Leopard2BackendAVX2.cpp": 1,
+    "Leopard2BackendSSSE3.cpp": 1, "Leopard2BackendScalar.cpp": 1,
+    "Leopard2CpuFeatures.cpp": 1, "Leopard2Plan.cpp": 1,
+    "LeopardCommon.cpp": 1, "LeopardFF16.cpp": 1, "LeopardFF8.cpp": 1,
+    "leopard.cpp": 1, "leopard2.cpp": 1,
+    "tests/leopard2/direct_oracle.cpp": 13,
+    "tests/leopard2/direct_repair.cpp": 1,
+    "tests/leopard2/fuzz_api.cpp": 1, "tests/leopard2/fuzz_replay.cpp": 1,
+    "tests/leopard2/test_active_lch.cpp": 1,
+    "tests/leopard2/test_api.cpp": 1,
+    "tests/leopard2/test_arbitrary_counts_acceptance.cpp": 1,
+    "tests/leopard2/test_backend_ops.cpp": 1,
+    "tests/leopard2/test_boundaries.cpp": 1,
+    "tests/leopard2/test_codec_options_abi.c": 1,
+    "tests/leopard2/test_decode_high_acceptance.cpp": 1,
+    "tests/leopard2/test_decode_low_acceptance.cpp": 1,
+    "tests/leopard2/test_decode_plan_schedule.cpp": 1,
+    "tests/leopard2/test_direct_encode.cpp": 1,
+    "tests/leopard2/test_direct_oracle.cpp": 1,
+    "tests/leopard2/test_direct_repair.cpp": 1,
+    "tests/leopard2/test_encode_concurrency.cpp": 1,
+    "tests/leopard2/test_encoder_gf16_legacy_matrix.cpp": 1,
+    "tests/leopard2/test_gf16_padded_odd.cpp": 1,
+    "tests/leopard2/test_gf16_tails.cpp": 1,
+    "tests/leopard2/test_legacy_golden.cpp": 1,
+    "tests/leopard2/test_locator.cpp": 1,
+    "tests/leopard2/test_low_gf16_direct_rows.cpp": 1,
+    "tests/leopard2/test_max_counts.cpp": 1,
+    "tests/leopard2/test_public_api_contract.cpp": 1,
+    "tests/leopard2/test_random.cpp": 1,
+    "tests/leopard2/test_transform_differential.cpp": 1,
+}
+
 CONFIGURATION_KEYS = (
     "CMAKE_BUILD_TYPE",
     "CMAKE_C_FLAGS",
@@ -917,9 +994,11 @@ def normalize_command(command, source_root, build_root, tool_paths):
         (str(source_root.resolve()), "@source"),
         (str(build_root.resolve()), "@build"),
     ]
-    replacements.extend(
-        (str(path.resolve()), "@tool/" + logical_name)
-        for logical_name, path in tool_paths.items())
+    for logical_name, path in tool_paths.items():
+        # Preserve both the spelling supplied to CMake (often a /usr/bin
+        # symlink) and the canonical executable identity used for comparison.
+        for spelling in {str(path), str(path.resolve())}:
+            replacements.append((spelling, "@tool/" + logical_name))
     replacements.sort(key=lambda value: len(value[0]), reverse=True)
     normalized = []
     for value in command:
@@ -978,6 +1057,10 @@ def normalized_compile_entry(entry, source_root, build_root, tool_paths):
         "argv": normalized_argv,
         "directory": tagged_path(directory, source_root, build_root),
         "output": tagged_path(output, source_root, build_root),
+        # CMake exports commands for configured targets that this focused
+        # evidence build intentionally does not materialize.  The production
+        # target subset is checked below and must have a concrete digest.
+        "output_sha256": sha256_file(output) if output.is_file() else None,
     }
     normalized["command_sha256"] = sha256_bytes(canonical_bytes(normalized))
     return relative, (normalized, output, directory)
@@ -1223,8 +1306,13 @@ def fresh_rebuild(source_root, template_cache, fresh_root, jobs):
         "-DCMAKE_RANLIB={}".format(values.get("CMAKE_RANLIB", "")),
         "-DCMAKE_MAKE_PROGRAM={}".format(values.get("CMAKE_MAKE_PROGRAM", "")),
     ])
+    configure_tools = {"cmake": cmake}
+    for logical_name, cache_key in TOOL_CACHE_KEYS:
+        value = values.get(cache_key)
+        require(value, "template cache omits tool: " + cache_key)
+        configure_tools[logical_name] = Path(value)
     logical_configure = normalize_command(
-        configure, source_root, build_root, {"cmake": cmake})
+        configure, source_root, build_root, configure_tools)
     logical_configure[0] = "@tool/cmake"
     configure_record = command_evidence(
         configure, source_root, "fresh CMake configure", logical_configure,
@@ -1259,8 +1347,22 @@ def fresh_rebuild(source_root, template_cache, fresh_root, jobs):
     }
 
 
-def self_test_rebuild_record(jobs, cmake_path):
-    configure_argv = ["@tool/cmake", "-S", "@source", "-B", "@build"]
+def self_test_rebuild_record(jobs, cache_path):
+    values = cache_values(cache_path)
+    cmake_path = values["CMAKE_COMMAND"]
+    configure_argv = ["@tool/cmake", "-S", "@source", "-B", "@build",
+                      "-G", values["CMAKE_GENERATOR"]]
+    for key in CONFIGURATION_KEYS:
+        if key != "CMAKE_GENERATOR":
+            configure_argv.append("-D{}={}".format(key, values[key]))
+    configure_argv.extend([
+        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+        "-DCMAKE_C_COMPILER=@tool/cc",
+        "-DCMAKE_CXX_COMPILER=@tool/cxx",
+        "-DCMAKE_AR=@tool/ar",
+        "-DCMAKE_RANLIB=@tool/ranlib",
+        "-DCMAKE_MAKE_PROGRAM=@tool/make",
+    ])
     build_argv = ["@tool/cmake", "--build", "@build", "--parallel",
                   str(jobs), "--target", "libleopard", "bench_leopard2"]
     _, cmake = executable_identity(cmake_path, "cmake", "CMAKE_COMMAND")
@@ -1486,6 +1588,8 @@ def build_record(source_root, source_identity, compile_commands, cmake_cache,
             "compile command translation-unit set mismatch: missing={} extra={}".format(
                 sorted(set(BUILD_TRANSLATION_UNITS) - set(by_file)),
                 sorted(set(by_file) - set(BUILD_TRANSLATION_UNITS))))
+    require(all(value[0]["output_sha256"] is not None for value in by_file.values()),
+            "evidence target compile output is missing")
     commands = {relative: by_file[relative][0]
                 for relative in sorted(by_file)}
     recipes, expected_objects = literal_link_recipes(
@@ -1572,13 +1676,16 @@ def validate_build_record(record, repo):
             "build translation-unit set")
     for relative, entry in units.items():
         require(set(entry) == {
-            "file", "argv", "directory", "output", "command_sha256"},
+            "file", "argv", "directory", "output", "output_sha256",
+            "command_sha256"},
             "translation-unit keys: " + relative)
         require(entry["file"] == relative and entry["directory"].startswith("@build/") and
                 entry["output"].startswith("@build/") and
                 isinstance(entry["argv"], list) and entry["argv"] and
                 entry["argv"][0] == "@tool/cxx",
                 "translation-unit identity: " + relative)
+        require(re.fullmatch(r"[0-9a-f]{64}", entry["output_sha256"] or "")
+                is not None, "translation-unit output digest: " + relative)
         require(all(isinstance(value, str) for value in entry["argv"]) and
                 entry["argv"].count("@source/" + relative) == 1,
                 "translation-unit source argument: " + relative)
@@ -1710,15 +1817,6 @@ def validate_build_record(record, repo):
     benchmark_command = recipes["benchmark"][0]
     expected_benchmark_object = units[
         "bench/leopard2/benchmark.cpp"]["output"]
-    require(benchmark_command.count(expected_benchmark_object) == 1 and
-            benchmark_command.count("@build/liblibleopard.a") == 1 and
-            benchmark_command.count("@build/bench_leopard2") == 1,
-            "literal benchmark target input/output closure")
-    allowed_build_tokens = {expected_benchmark_object,
-                            "@build/liblibleopard.a", "@build/bench_leopard2"}
-    require(all(not token.startswith("@build/") or token in allowed_build_tokens
-                for token in benchmark_command),
-            "literal benchmark recipe has an unexpected build input")
     for external in recipes["external_link_inputs"]:
         require(set(external) == {"path", "sha256"} and
                 external["path"].startswith("@external/") and
@@ -1735,6 +1833,23 @@ def validate_build_record(record, repo):
     require(expected_external_links == sorted(
         value["path"] for value in recipes["external_link_inputs"]),
         "literal link external inputs differ from CMake target metadata")
+    link = targets["bench_leopard2"]["link"]
+    require(isinstance(link, dict) and set(link) == {"language", "fragments"} and
+            link["language"] == "CXX" and isinstance(link["fragments"], list),
+            "CMake File API benchmark link identity")
+    expected_benchmark_command = ["@tool/cxx"]
+    for fragment in link["fragments"]:
+        require(set(fragment) == {"role", "fragment"} and
+                fragment["role"] in ("flags", "libraries") and
+                isinstance(fragment["fragment"], str),
+                "CMake File API benchmark link fragment")
+        if fragment["role"] == "flags":
+            expected_benchmark_command.extend(shlex.split(fragment["fragment"]))
+    expected_benchmark_command.extend([
+        expected_benchmark_object, "-o", "@build/bench_leopard2"])
+    expected_benchmark_command.extend(file_api_libraries)
+    require(benchmark_command == expected_benchmark_command,
+            "literal benchmark recipe differs from CMake target metadata")
 
     archive = record["archive"]
     require(set(archive) == {"members", "member_count", "digest"},
@@ -1745,15 +1860,24 @@ def validate_build_record(record, repo):
             archive["member_count"] == len(archive["members"]) ==
             len(BUILD_TRANSLATION_UNITS) - 1,
             "archive manifest identity")
+    expected_archive_members = {
+        entry["output"]: entry["output_sha256"]
+        for relative, entry in units.items()
+        if relative != "bench/leopard2/benchmark.cpp"
+    }
     member_names = []
+    member_objects = []
     for member in archive["members"]:
         require(set(member) == {"name", "object", "sha256"} and
-                member["object"].startswith("@build/") and
-                re.fullmatch(r"[0-9a-f]{64}", member["sha256"]) is not None,
+                member["object"] in expected_archive_members and
+                member["name"] == Path(member["object"]).name and
+                member["sha256"] == expected_archive_members[member["object"]],
                 "archive member identity")
         member_names.append(member["name"])
-    require(len(member_names) == len(set(member_names)),
-            "duplicate archive member identity")
+        member_objects.append(member["object"])
+    require(len(member_names) == len(set(member_names)) and
+            set(member_objects) == set(expected_archive_members),
+            "archive member/object closure")
     rebuild = record["rebuild"]
     require(set(rebuild) == {"isolation", "environment", "configure", "build",
                             "cmake_binary_sha256", "cmake_version",
@@ -1770,6 +1894,23 @@ def validate_build_record(record, repo):
                 sha256_bytes(canonical_bytes(command["argv"])) ==
                 command["command_sha256"],
                 "rebuild {} command identity".format(phase))
+    expected_configure = [
+        "@tool/cmake", "-S", "@source", "-B", "@build", "-G",
+        configuration["CMAKE_GENERATOR"],
+    ]
+    for key in CONFIGURATION_KEYS:
+        if key != "CMAKE_GENERATOR":
+            expected_configure.append("-D{}={}".format(key, configuration[key]))
+    expected_configure.extend([
+        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+        "-DCMAKE_C_COMPILER=@tool/cc",
+        "-DCMAKE_CXX_COMPILER=@tool/cxx",
+        "-DCMAKE_AR=@tool/ar",
+        "-DCMAKE_RANLIB=@tool/ranlib",
+        "-DCMAKE_MAKE_PROGRAM=@tool/make",
+    ])
+    require(rebuild["configure"]["argv"] == expected_configure,
+            "fresh configure argv")
     build_argv = rebuild["build"]["argv"]
     require(build_argv[:4] == ["@tool/cmake", "--build", "@build", "--parallel"] and
             build_argv[5:] == ["--target", "libleopard", "bench_leopard2"] and
@@ -1781,7 +1922,8 @@ def validate_build_record(record, repo):
             record["tools"]["cmake"]["binary_sha256"] and
             rebuild["cmake_version"] == record["tools"]["cmake"]["version"],
             "rebuild/CMake tool binding")
-    for value in [entry["command_sha256"] for entry in units.values()] + [
+    for value in ([entry["command_sha256"] for entry in units.values()] +
+                  [entry["output_sha256"] for entry in units.values()] + [
             record["build_input_files"].get("compile_commands.json"),
             record["build_input_files"].get("CMakeCache.txt"),
             record["artifacts"].get("library_sha256"),
@@ -1795,14 +1937,46 @@ def validate_build_record(record, repo):
             rebuild["configure"].get("stdout_sha256"),
             rebuild["configure"].get("stderr_sha256"),
             rebuild["build"].get("stdout_sha256"),
-            rebuild["build"].get("stderr_sha256")]:
+            rebuild["build"].get("stderr_sha256")]):
         require(re.fullmatch(r"[0-9a-f]{64}", value or "") is not None,
                 "build record SHA-256 format")
 
 
+def validate_matrix_compiler(compiler, label):
+    require(set(compiler) == {"executable", "binary_sha256", "version",
+                             "version_sha256"} and
+            isinstance(compiler["executable"], str) and
+            Path(compiler["executable"]).is_absolute() and
+            re.fullmatch(r"[0-9a-f]{64}", compiler["binary_sha256"]) is not None and
+            isinstance(compiler["version"], str) and compiler["version"] and
+            sha256_bytes(compiler["version"].encode("utf-8")) ==
+            compiler["version_sha256"], label + " compiler identity")
+
+
+def validate_matrix_command(command, label, extra_keys=()):
+    keys = {"argv", "cwd", "label", "returncode", "stderr_log",
+            "stdout_log", "timed_out", "stderr_sha256", "stdout_sha256",
+            "command_sha256"} | set(extra_keys)
+    require(set(command) == keys and command["label"] == label and
+            command["returncode"] == 0 and command["timed_out"] is False and
+            command["stdout_log"] == label + ".stdout.log" and
+            command["stderr_log"] == label + ".stderr.log" and
+            isinstance(command["argv"], list) and command["argv"] and
+            all(isinstance(value, str) for value in command["argv"]) and
+            isinstance(command["cwd"], str) and Path(command["cwd"]).is_absolute(),
+            "matrix command schema: " + label)
+    payload = dict(command)
+    digest = payload.pop("command_sha256")
+    require(sha256_bytes(canonical_bytes(payload)) == digest and
+            all(re.fullmatch(r"[0-9a-f]{64}", command[key]) is not None
+                for key in ("stdout_sha256", "stderr_sha256")),
+            "matrix command digest: " + label)
+
+
 def validate_matrix_document(document, repo, candidate_commit):
     require(set(document) == {
-        "compiler", "jobs", "jobs_per_variant", "machine", "mismatches",
+        "c_compiler", "compiler", "generator", "jobs", "jobs_per_variant",
+        "machine", "mismatches",
         "schema", "source_changed_during_run", "source_fingerprint",
         "status", "variant_workers", "variants"},
         "matrix top-level key set")
@@ -1823,14 +1997,12 @@ def validate_matrix_document(document, repo, candidate_commit):
                 "matrix source digest mismatch: " + relative)
     require(sha256_bytes(canonical_bytes(files)) == fingerprint.get("digest"),
             "matrix source aggregate digest")
+    c_compiler = document["c_compiler"]
     compiler = document["compiler"]
-    require(set(compiler) == {"executable", "binary_sha256", "version",
-                             "version_sha256"} and
-            isinstance(compiler["executable"], str) and compiler["executable"] and
-            re.fullmatch(r"[0-9a-f]{64}",
-                         compiler["binary_sha256"]) is not None and
-            sha256_bytes(compiler["version"].encode("utf-8")) ==
-            compiler["version_sha256"], "matrix compiler identity")
+    validate_matrix_compiler(c_compiler, "matrix C")
+    validate_matrix_compiler(compiler, "matrix C++")
+    require(document["generator"] in ("Ninja", "Unix Makefiles"),
+            "matrix generator identity")
     require(all(isinstance(document[key], int) and document[key] > 0
                 for key in ("jobs", "jobs_per_variant", "variant_workers")),
             "matrix worker geometry")
@@ -1860,20 +2032,13 @@ def validate_matrix_document(document, repo, candidate_commit):
                 value.get("status") == "passed" and
                 value.get("selected_cache_variant") == variant and
                 value.get("reason") == "" and
-                isinstance(value.get("resumed"), bool) and
+                value.get("resumed") is False and
                 isinstance(value.get("pin_cpu"), int) and
                 isinstance(value.get("commands"), list) and value["commands"],
                 "matrix variant failed or misconfigured")
         require(value.get("expected_runtime_backend") ==
                 (None if variant == "auto" else variant),
                 "matrix expected runtime backend: " + str(variant))
-        fresh = value.get("fresh_build")
-        require(isinstance(fresh, dict) and set(fresh) == {
-                    "configured_from_empty", "identity_sha256"} and
-                fresh["configured_from_empty"] is True and
-                re.fullmatch(r"[0-9a-f]{64}",
-                             fresh.get("identity_sha256", "")) is not None,
-                "matrix fresh-build identity: " + str(variant))
         expected_environment = {
             "LANG": "C", "LC_ALL": "C", "OMP_DYNAMIC": "FALSE",
             "OMP_NUM_THREADS": "1", "PATH": "/usr/bin:/bin"}
@@ -1881,10 +2046,22 @@ def validate_matrix_document(document, repo, candidate_commit):
             expected_environment["LEO2_EXPECT_BACKEND"] = variant
         require(value.get("build_environment") == expected_environment,
                 "matrix build/test environment: " + str(variant))
+        configuration_input = {
+            "c_compiler": c_compiler, "compiler": compiler,
+            "generator": document["generator"],
+            "jobs_per_variant": document["jobs_per_variant"],
+            "machine": machine, "source": fingerprint, "variant": variant,
+            "environment": expected_environment,
+        }
+        expected_configuration_id = sha256_bytes(
+            canonical_bytes(configuration_input))
+        require(value["configuration_id"] == expected_configuration_id,
+                "matrix configuration identity: " + str(variant))
         identity = value.get("build_identity")
         require(isinstance(identity, dict) and set(identity) == {
                     "cache", "cache_sha256", "compile_commands",
-                    "compile_commands_sha256", "tools", "digest"} and
+                    "compile_commands_sha256", "test_executables", "tools",
+                    "digest"} and
                 sha256_bytes(canonical_bytes(identity["cache"])) ==
                 identity["cache_sha256"] and
                 sha256_bytes(canonical_bytes(identity["compile_commands"])) ==
@@ -1895,7 +2072,20 @@ def validate_matrix_document(document, repo, candidate_commit):
         require(sha256_bytes(canonical_bytes(identity_payload)) == identity_digest,
                 "matrix build identity digest: " + str(variant))
         cache = identity["cache"]
-        require(cache.get("CMAKE_BUILD_TYPE") == "Release" and
+        require(set(cache) == set(MATRIX_BUILD_CACHE_KEYS) and
+                cache.get("CMAKE_BUILD_TYPE") == "Release" and
+                cache.get("CMAKE_GENERATOR") == document["generator"] and
+                cache.get("CMAKE_C_FLAGS") == "" and
+                cache.get("CMAKE_C_FLAGS_RELEASE") == "-O3 -DNDEBUG" and
+                cache.get("CMAKE_CXX_FLAGS") == "" and
+                cache.get("CMAKE_CXX_FLAGS_RELEASE") == "-O3 -DNDEBUG" and
+                cache.get("CMAKE_EXE_LINKER_FLAGS") == "" and
+                cache.get("CMAKE_EXE_LINKER_FLAGS_RELEASE") == "" and
+                cache.get("CMAKE_STATIC_LINKER_FLAGS") == "" and
+                cache.get("CMAKE_STATIC_LINKER_FLAGS_RELEASE") == "" and
+                cache.get("ENABLE_OPENMP") == "ON" and
+                cache.get("CMAKE_C_COMPILER") == "@tool/cc" and
+                cache.get("CMAKE_CXX_COMPILER") == "@tool/cxx" and
                 cache.get("LEO2_BACKEND_VARIANT") == variant and
                 cache.get("LEO2_BUILD_TESTS") in ("ON", "1", "TRUE") and
                 cache.get("LEO2_BUILD_BENCHMARKS") in ("OFF", "0", "FALSE", "") and
@@ -1905,13 +2095,80 @@ def validate_matrix_document(document, repo, candidate_commit):
                 identity["compile_commands"],
                 "matrix normalized CMake identity: " + str(variant))
         tools = identity["tools"]
-        require(set(tools) == {"cmake", "ctest", "cxx"},
+        require(set(tools) == {"cmake", "ctest", "cc", "cxx"},
                 "matrix build tool identity set")
         for tool in tools.values():
             require(set(tool) == {"basename", "binary_sha256", "version_sha256"} and
                     all(re.fullmatch(r"[0-9a-f]{64}", tool[key]) is not None
                         for key in ("binary_sha256", "version_sha256")),
                     "matrix build tool identity")
+        require(tools["cc"]["basename"] == Path(c_compiler["executable"]).name and
+                tools["cc"]["binary_sha256"] == c_compiler["binary_sha256"] and
+                tools["cc"]["version_sha256"] == c_compiler["version_sha256"] and
+                tools["cxx"]["basename"] == Path(compiler["executable"]).name and
+                tools["cxx"]["binary_sha256"] == compiler["binary_sha256"] and
+                tools["cxx"]["version_sha256"] == compiler["version_sha256"],
+                "matrix compiler/tool crosslink")
+
+        compile_commands = identity["compile_commands"]
+        counts = {}
+        for command in compile_commands:
+            require(set(command) == {"file", "language", "argv"} and
+                    isinstance(command["file"], str) and
+                    command["file"] in MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS and
+                    command["language"] ==
+                    ("C" if command["file"].endswith(".c") else "CXX") and
+                    isinstance(command["argv"], list) and command["argv"] and
+                    command["argv"][0] ==
+                    ("@tool/cc" if command["language"] == "C" else "@tool/cxx") and
+                    command["argv"].count("@source/" + command["file"]) == 1,
+                    "matrix compile command identity")
+            counts[command["file"]] = counts.get(command["file"], 0) + 1
+        require(counts == MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS,
+                "matrix compile source multiset")
+
+        commands = value["commands"]
+        require(len(commands) == 2 + len(MATRIX_COMPARE_TESTS) + 1 +
+                (1 if variant == "auto" else 0),
+                "matrix command count: " + variant)
+        configure = commands[0]
+        validate_matrix_command(configure, "configure")
+        configure_argv = configure["argv"]
+        require(len(configure_argv) == 16 and
+                Path(configure_argv[0]).name == tools["cmake"]["basename"],
+                "matrix configure tool/shape: " + variant)
+        source_root = configure_argv[2]
+        build_root = configure_argv[4]
+        expected_configure = [
+            configure_argv[0], "-S", source_root, "-B", build_root,
+            "-G", document["generator"], "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+            "-DCMAKE_C_COMPILER={}".format(c_compiler["executable"]),
+            "-DCMAKE_CXX_COMPILER={}".format(compiler["executable"]),
+            "-DLEO2_BACKEND_VARIANT={}".format(variant),
+            "-DLEO2_BUILD_TESTS=ON", "-DLEO2_BUILD_BENCHMARKS=OFF",
+            "-DLEO2_BUILD_FUZZERS=OFF", "-DLEO2_ENABLE_CUDA=OFF"]
+        require(configure_argv == expected_configure and
+                configure["cwd"] == source_root,
+                "matrix configure argv: " + variant)
+        fresh = value.get("fresh_build")
+        require(isinstance(fresh, dict) and set(fresh) == {
+                    "configured_from_empty", "identity_sha256"} and
+                fresh["configured_from_empty"] is True and
+                fresh["identity_sha256"] == sha256_bytes(canonical_bytes({
+                    "configuration_id": expected_configuration_id,
+                    "configure_argv": expected_configure,
+                    "environment": expected_environment})),
+                "matrix fresh-build identity: " + variant)
+
+        build_command = commands[1]
+        validate_matrix_command(build_command, "build")
+        require(build_command["cwd"] == source_root and
+                build_command["argv"] == [
+                    configure_argv[0], "--build", build_root, "--config", "Release",
+                    "-j", str(document["jobs_per_variant"]), "--target"] +
+                list(MATRIX_BUILD_TARGETS),
+                "matrix build argv: " + variant)
         require(value.get("source_fingerprint") == fingerprint["digest"],
                 "matrix variant source mismatch")
         tests = value.get("tests")
@@ -1920,24 +2177,56 @@ def validate_matrix_document(document, repo, candidate_commit):
             required_tests.add("cuda_optional")
         require(isinstance(tests, dict) and set(tests) == required_tests,
                 "matrix test set: " + str(value.get("variant")))
-        for test_name, test in tests.items():
-            require(test.get("returncode") == 0 and
-                    test.get("timed_out") is False and
-                    re.fullmatch(r"[0-9a-f]{64}",
-                                 test.get("stdout_sha256", "")) is not None and
-                    re.fullmatch(r"[0-9a-f]{64}",
-                                 test.get("stderr_sha256", "")) is not None,
-                    "matrix test failed: {} {}".format(
-                        value.get("variant"), test_name))
-            if test_name in ("portable_isa", "cuda_optional"):
-                require(test.get("ctest_executed") is True,
-                        "matrix named CTest was not executed: {} {}".format(
-                            variant, test_name))
-            else:
-                require(re.fullmatch(r"[0-9a-f]{64}",
-                                     test.get("executable_sha256", "")) is not None,
-                        "matrix executable identity: {} {}".format(
-                            variant, test_name))
+        executables = identity["test_executables"]
+        require(set(executables) == set(MATRIX_COMPARE_TESTS),
+                "matrix executable set: " + variant)
+        command_index = 2
+        for test_name in MATRIX_COMPARE_TESTS:
+            test = tests[test_name]
+            validate_matrix_command(test, "test_" + test_name,
+                                    {"executable_sha256"})
+            require(canonical_bytes(test) == canonical_bytes(commands[command_index]),
+                    "matrix test/command crosslink: " + test_name)
+            command_index += 1
+            executable = executables[test_name]
+            target, arguments = MATRIX_TEST_SPECS[test_name]
+            require(set(executable) == {"path", "sha256"} and
+                    executable["path"].startswith("@build/") and
+                    Path(executable["path"]).name == target and
+                    executable["sha256"] == test["executable_sha256"],
+                    "matrix test executable identity: " + test_name)
+            executable_path = str(Path(build_root) /
+                                  executable["path"][len("@build/"):])
+            require(test["cwd"] == source_root and len(test["argv"]) >= 4 and
+                    Path(test["argv"][0]).name == "taskset" and
+                    test["argv"][1:3] == ["-c", str(value["pin_cpu"])] and
+                    test["argv"][3:] == [executable_path] + arguments,
+                    "matrix test argv: " + test_name)
+
+        portable = tests["portable_isa"]
+        validate_matrix_command(portable, "test_portable_isa",
+                                {"ctest_executed"})
+        require(portable["ctest_executed"] is True and
+                canonical_bytes(portable) == canonical_bytes(commands[command_index]) and
+                portable["cwd"] == source_root and
+                Path(portable["argv"][0]).name == tools["ctest"]["basename"] and
+                portable["argv"][1:] == ["--test-dir", build_root, "-C", "Release",
+                    "-R", "^leopard2_portable_isa$", "--output-on-failure"],
+                "matrix portable-ISA CTest command")
+        command_index += 1
+        if variant == "auto":
+            cuda = tests["cuda_optional"]
+            validate_matrix_command(cuda, "test_cuda_optional",
+                                    {"ctest_executed"})
+            require(cuda["ctest_executed"] is True and
+                    canonical_bytes(cuda) == canonical_bytes(commands[command_index]) and
+                    cuda["cwd"] == source_root and
+                    cuda["argv"] == [portable["argv"][0], "--test-dir", build_root,
+                        "-C", "Release", "-R", "^leopard2_cuda_optional$",
+                        "--output-on-failure"],
+                    "matrix CUDA-optional CTest command")
+            command_index += 1
+        require(command_index == len(commands), "matrix command closure: " + variant)
 
     recomputed_mismatches = []
     auto_tests = by_variant["auto"]["tests"]
@@ -2190,11 +2479,17 @@ def validate_manifest(manifest_path, repo, raw_bundle_path=None,
     matrix_document = parse_json_bytes(matrix_raw, "embedded backend matrix")
     validate_matrix_document(
         matrix_document, repo, provenance["git"]["candidate"]["commit"])
+    candidate_cc = provenance["builds"]["candidate"]["tools"]["cc"]
     candidate_cxx = provenance["builds"]["candidate"]["tools"]["cxx"]
+    matrix_cc = matrix_document["c_compiler"]
     matrix_cxx = matrix_document["compiler"]
-    require(Path(matrix_cxx["executable"]).name == candidate_cxx["basename"] and
+    require(Path(matrix_cc["executable"]).name == candidate_cc["basename"] and
+            matrix_cc["binary_sha256"] == candidate_cc["binary_sha256"] and
+            matrix_cc["version"].strip() == candidate_cc["version"].strip() and
+            Path(matrix_cxx["executable"]).name == candidate_cxx["basename"] and
+            matrix_cxx["binary_sha256"] == candidate_cxx["binary_sha256"] and
             matrix_cxx["version"].strip() == candidate_cxx["version"].strip(),
-            "backend matrix/compiler build identity mismatch")
+            "backend matrix/C and C++ compiler build identity mismatch")
     require(matrix_document["source_fingerprint"]["digest"] ==
             provenance["matrix"]["source_fingerprint"],
             "matrix source fingerprint record")
@@ -2313,8 +2608,7 @@ def run_campaign(args, repo, allow_dirty=False, self_test=False):
                 "binary": Path(getattr(args, build)),
                 "target_graph": artifacts,
                 "rebuild": self_test_rebuild_record(
-                    args.build_jobs,
-                    cache_values(getattr(args, build + "_cmake_cache"))["CMAKE_COMMAND"]),
+                    args.build_jobs, getattr(args, build + "_cmake_cache")),
             }
     else:
         isolated = {
@@ -2685,6 +2979,20 @@ def rehash_compile_entry(entry):
     entry["command_sha256"] = sha256_bytes(canonical_bytes(payload))
 
 
+def rehash_matrix_command(command):
+    payload = dict(command)
+    payload.pop("command_sha256", None)
+    command["command_sha256"] = sha256_bytes(canonical_bytes(payload))
+
+
+def rehash_matrix_build_identity(identity):
+    identity["cache_sha256"] = sha256_bytes(
+        canonical_bytes(identity["cache"]))
+    identity["compile_commands_sha256"] = sha256_bytes(
+        canonical_bytes(identity["compile_commands"]))
+    rehash_nested_record(identity)
+
+
 def rehash_dependency_closure(closure):
     closure["file_count"] = len(closure["manifest"])
     closure["source_file_count"] = sum(
@@ -2782,74 +3090,203 @@ def self_test(repo):
             candidate_root, repo, candidate)
         fingerprint = git_file_hashes(repo, commit, MATRIX_SOURCE_FILES)
         empty_digest = sha256_bytes(b"")
+        cache = cache_values(candidate_build[1])
+
+        def matrix_compiler_identity(cache_key, logical_name):
+            path = cache[cache_key]
+            _, record = executable_identity(path, logical_name, cache_key)
+            version = record["version"].strip()
+            return {
+                "executable": str(Path(path).resolve()),
+                "binary_sha256": record["binary_sha256"],
+                "version": version,
+                "version_sha256": sha256_bytes(version.encode("utf-8")),
+            }
+
+        def matrix_tool_identity(path):
+            executable = Path(path).resolve()
+            completed = subprocess.run(
+                [str(executable), "--version"], stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, check=False)
+            raw = completed.stdout + completed.stderr
+            require(completed.returncode == 0 and raw,
+                    "self-test matrix tool identity")
+            return {"basename": executable.name,
+                    "binary_sha256": sha256_file(executable),
+                    "version_sha256": sha256_bytes(raw)}
+
+        def matrix_command(label, argv, extra=None):
+            record = {
+                "argv": [str(value) for value in argv],
+                "cwd": str(repo.resolve()),
+                "label": label,
+                "returncode": 0,
+                "stderr_log": label + ".stderr.log",
+                "stderr_sha256": empty_digest,
+                "stdout_log": label + ".stdout.log",
+                "stdout_sha256": empty_digest,
+                "timed_out": False,
+            }
+            if extra:
+                record.update(extra)
+            payload = dict(record)
+            record["command_sha256"] = sha256_bytes(canonical_bytes(payload))
+            return record
+
+        matrix_c_compiler = matrix_compiler_identity(
+            "CMAKE_C_COMPILER", "cc")
+        matrix_cxx_compiler = matrix_compiler_identity(
+            "CMAKE_CXX_COMPILER", "cxx")
+        matrix_cmake = str(Path(cache["CMAKE_COMMAND"]).resolve())
+        matrix_ctest = str(Path(shutil.which("ctest") or "/usr/bin/ctest").resolve())
+        matrix_taskset = str(Path(shutil.which("taskset") or
+                                  "/usr/bin/taskset").resolve())
+        matrix_generator = "Unix Makefiles"
+        matrix_machine = {
+            "allowed_cpu_list": "{},{}".format(cpu, sibling),
+            "architecture": "self-test", "cpu_flags": ["avx2"],
+            "logical_cpus_allowed": 2, "platform": "self-test",
+        }
         variants = []
         for value in ("auto", "scalar", "ssse3", "avx2"):
-            test_names = set(MATRIX_COMPARE_TESTS) | {"portable_isa"}
-            if value == "auto":
-                test_names.add("cuda_optional")
-            tests = {}
-            for name in sorted(test_names):
-                test = {"returncode": 0, "timed_out": False,
-                        "stdout_sha256": empty_digest,
-                        "stderr_sha256": empty_digest}
-                if name in ("portable_isa", "cuda_optional"):
-                    test["ctest_executed"] = True
-                else:
-                    test["executable_sha256"] = empty_digest
-                tests[name] = test
             build_environment = {
                 "LANG": "C", "LC_ALL": "C", "OMP_DYNAMIC": "FALSE",
                 "OMP_NUM_THREADS": "1", "PATH": "/usr/bin:/bin"}
             if value != "auto":
                 build_environment["LEO2_EXPECT_BACKEND"] = value
+            matrix_build_root = str((root / "matrix-build" / value).resolve())
+            compile_commands = []
+            for relative in sorted(MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS):
+                language = "C" if relative.endswith(".c") else "CXX"
+                tool = "@tool/cc" if language == "C" else "@tool/cxx"
+                for index in range(MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS[relative]):
+                    output_name = re.sub(r"[^A-Za-z0-9_.-]", "_", relative)
+                    compile_commands.append({
+                        "file": relative,
+                        "language": language,
+                        "argv": [tool, "-O3", "-DNDEBUG", "-c",
+                                 "@source/" + relative, "-o",
+                                 "@build/mock/{}-{}.o".format(
+                                     output_name, index)],
+                    })
+            build_cache = {
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_GENERATOR": matrix_generator,
+                "CMAKE_C_FLAGS": "", "CMAKE_C_FLAGS_RELEASE": "-O3 -DNDEBUG",
+                "CMAKE_CXX_FLAGS": "",
+                "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
+                "CMAKE_EXE_LINKER_FLAGS": "",
+                "CMAKE_EXE_LINKER_FLAGS_RELEASE": "",
+                "CMAKE_STATIC_LINKER_FLAGS": "",
+                "CMAKE_STATIC_LINKER_FLAGS_RELEASE": "",
+                "ENABLE_OPENMP": "ON", "LEO2_BACKEND_VARIANT": value,
+                "LEO2_BUILD_TESTS": "ON", "LEO2_BUILD_BENCHMARKS": "OFF",
+                "LEO2_BUILD_FUZZERS": "OFF", "LEO2_ENABLE_CUDA": "OFF",
+                "CMAKE_C_COMPILER": "@tool/cc",
+                "CMAKE_CXX_COMPILER": "@tool/cxx",
+            }
+            tools = {
+                "cmake": matrix_tool_identity(matrix_cmake),
+                "ctest": matrix_tool_identity(matrix_ctest),
+                "cc": {"basename": Path(matrix_c_compiler["executable"]).name,
+                       "binary_sha256": matrix_c_compiler["binary_sha256"],
+                       "version_sha256": matrix_c_compiler["version_sha256"]},
+                "cxx": {"basename": Path(matrix_cxx_compiler["executable"]).name,
+                        "binary_sha256": matrix_cxx_compiler["binary_sha256"],
+                        "version_sha256": matrix_cxx_compiler["version_sha256"]},
+            }
+            test_executables = {
+                name: {"path": "@build/" + MATRIX_TEST_SPECS[name][0],
+                       "sha256": empty_digest}
+                for name in MATRIX_COMPARE_TESTS
+            }
             build_identity = {
-                "cache": {"CMAKE_BUILD_TYPE": "Release",
-                          "LEO2_BACKEND_VARIANT": value,
-                          "LEO2_BUILD_TESTS": "ON",
-                          "LEO2_BUILD_BENCHMARKS": "OFF",
-                          "LEO2_BUILD_FUZZERS": "OFF",
-                          "LEO2_ENABLE_CUDA": "OFF"},
-                "compile_commands": [{"file": "leopard2.cpp",
-                                      "command": "@tool/cxx -c @source/leopard2.cpp"}],
-                "tools": {name: {"basename": name,
-                                 "binary_sha256": empty_digest,
-                                 "version_sha256": empty_digest}
-                          for name in ("cmake", "ctest", "cxx")},
+                "cache": build_cache,
+                "compile_commands": compile_commands,
+                "test_executables": test_executables,
+                "tools": tools,
             }
             build_identity["cache_sha256"] = sha256_bytes(
                 canonical_bytes(build_identity["cache"]))
             build_identity["compile_commands_sha256"] = sha256_bytes(
                 canonical_bytes(build_identity["compile_commands"]))
             build_identity["digest"] = sha256_bytes(canonical_bytes(build_identity))
+            configuration_input = {
+                "c_compiler": matrix_c_compiler,
+                "compiler": matrix_cxx_compiler,
+                "generator": matrix_generator,
+                "jobs_per_variant": 1,
+                "machine": matrix_machine,
+                "source": fingerprint,
+                "variant": value,
+                "environment": build_environment,
+            }
+            configuration_id = sha256_bytes(canonical_bytes(configuration_input))
+            configure_argv = [
+                matrix_cmake, "-S", str(repo.resolve()), "-B", matrix_build_root,
+                "-G", matrix_generator, "-DCMAKE_BUILD_TYPE=Release",
+                "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+                "-DCMAKE_C_COMPILER={}".format(matrix_c_compiler["executable"]),
+                "-DCMAKE_CXX_COMPILER={}".format(
+                    matrix_cxx_compiler["executable"]),
+                "-DLEO2_BACKEND_VARIANT={}".format(value),
+                "-DLEO2_BUILD_TESTS=ON", "-DLEO2_BUILD_BENCHMARKS=OFF",
+                "-DLEO2_BUILD_FUZZERS=OFF", "-DLEO2_ENABLE_CUDA=OFF",
+            ]
+            commands = [matrix_command("configure", configure_argv)]
+            commands.append(matrix_command("build", [
+                matrix_cmake, "--build", matrix_build_root, "--config", "Release",
+                "-j", "1", "--target"] + list(MATRIX_BUILD_TARGETS)))
+            tests = {}
+            for name in MATRIX_COMPARE_TESTS:
+                target, arguments = MATRIX_TEST_SPECS[name]
+                test = matrix_command(
+                    "test_" + name,
+                    [matrix_taskset, "-c", str(cpu),
+                     str(Path(matrix_build_root) / target)] + arguments,
+                    {"executable_sha256": empty_digest})
+                tests[name] = test
+                commands.append(test)
+            portable = matrix_command(
+                "test_portable_isa",
+                [matrix_ctest, "--test-dir", matrix_build_root, "-C", "Release",
+                 "-R", "^leopard2_portable_isa$", "--output-on-failure"],
+                {"ctest_executed": True})
+            tests["portable_isa"] = portable
+            commands.append(portable)
+            if value == "auto":
+                cuda = matrix_command(
+                    "test_cuda_optional",
+                    [matrix_ctest, "--test-dir", matrix_build_root, "-C", "Release",
+                     "-R", "^leopard2_cuda_optional$", "--output-on-failure"],
+                    {"ctest_executed": True})
+                tests["cuda_optional"] = cuda
+                commands.append(cuda)
             variants.append({
-                "configuration_id": empty_digest, "resumed": False,
+                "configuration_id": configuration_id, "resumed": False,
                 "variant": value, "status": "passed", "reason": "",
                 "schema": "leopard2-backend-matrix/v1",
                 "selected_cache_variant": value,
                 "expected_runtime_backend": None if value == "auto" else value,
-                "pin_cpu": cpu, "commands": [{"returncode": 0}],
+                "pin_cpu": cpu, "commands": commands,
                 "build_environment": build_environment,
                 "build_identity": build_identity,
                 "fresh_build": {"configured_from_empty": True,
-                                "identity_sha256": empty_digest},
+                                "identity_sha256": sha256_bytes(canonical_bytes({
+                                    "configuration_id": configuration_id,
+                                    "configure_argv": configure_argv,
+                                    "environment": build_environment,
+                                }))},
                 "source_fingerprint": fingerprint["digest"],
                 "tests": tests,
             })
         matrix = root / "matrix.json"
-        self_compiler_path = cache_values(candidate_build[1])["CMAKE_CXX_COMPILER"]
-        _, self_compiler = executable_identity(
-            self_compiler_path, "cxx", "CMAKE_CXX_COMPILER")
-        compiler_version = self_compiler["version"].strip()
         atomic_json(matrix, {
-            "compiler": {"executable": self_compiler_path,
-                         "binary_sha256": self_compiler["binary_sha256"],
-                         "version": compiler_version,
-                         "version_sha256": sha256_bytes(
-                             compiler_version.encode("utf-8"))},
+            "c_compiler": matrix_c_compiler,
+            "compiler": matrix_cxx_compiler,
+            "generator": matrix_generator,
             "jobs": 1, "jobs_per_variant": 1,
-            "machine": {"allowed_cpu_list": "{},{}".format(cpu, sibling),
-                        "architecture": "self-test", "cpu_flags": ["avx2"],
-                        "logical_cpus_allowed": 2, "platform": "self-test"},
+            "machine": matrix_machine,
             "schema": "leopard2-backend-matrix/v1", "status": "passed",
             "source_changed_during_run": False, "mismatches": [],
             "source_fingerprint": fingerprint, "variant_workers": 1,
@@ -2903,9 +3340,9 @@ def self_test(repo):
         bundle_path = output / "abba_raw.json"
         manifest = read_json(manifest_path, "self-test manifest")
         bundle = read_json(bundle_path, "self-test raw bundle")
-        binaries = {"baseline": baseline, "candidate": candidate}
         validate = lambda mp, bp: validate_manifest(
-            mp, repo, bp, binaries, matrix, allow_self_test=True)
+            mp, repo, bp, None, None, allow_self_test=True)
+        validate(manifest_path, bundle_path)
 
         mutations = []
         mutations.append(("return code", lambda m, b:
@@ -3003,6 +3440,16 @@ def self_test(repo):
             rehash_build_record(build)
         mutations.append(("extra archive member", mutate_archive_member))
 
+        def mutate_same_count_archive_member(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+            member = build["archive"]["members"][0]
+            member.update({"name": "injected.o", "object": "@build/injected.o",
+                           "sha256": "1" * 64})
+            rehash_nested_record(build["archive"])
+            rehash_build_record(build)
+        mutations.append(("same-count archive member substitution",
+                          mutate_same_count_archive_member))
+
         def mutate_link_recipe(m, b):
             build = m["provenance"]["builds"]["candidate"]
             recipes = build["link_recipes"]
@@ -3010,6 +3457,13 @@ def self_test(repo):
             rehash_nested_record(recipes)
             rehash_build_record(build)
         mutations.append(("extra benchmark link input", mutate_link_recipe))
+
+        def mutate_link_library(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+            build["link_recipes"]["benchmark"][0].append("-lmalicious")
+            rehash_nested_record(build["link_recipes"])
+            rehash_build_record(build)
+        mutations.append(("unbound benchmark link library", mutate_link_library))
 
         def mutate_archive_tool(m, b):
             build = m["provenance"]["builds"]["candidate"]
@@ -3027,6 +3481,16 @@ def self_test(repo):
                 canonical_bytes(command["argv"]))
             rehash_build_record(build)
         mutations.append(("fresh rebuild target substitution", mutate_rebuild_target))
+
+        def mutate_rebuild_configure(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+            command = build["rebuild"]["configure"]
+            command["argv"] = ["@tool/cmake", "-E", "true"]
+            command["command_sha256"] = sha256_bytes(
+                canonical_bytes(command["argv"]))
+            rehash_build_record(build)
+        mutations.append(("fresh configure no-op substitution",
+                          mutate_rebuild_configure))
 
         mutations.append(("git commit", lambda m, b:
                           m["provenance"]["git"]["baseline"].__setitem__(
@@ -3098,12 +3562,111 @@ def self_test(repo):
             def callback(document):
                 identity = document["variants"][0]["build_identity"]
                 identity["cache"]["CMAKE_CXX_FLAGS_RELEASE"] = "-O0"
-                identity["cache_sha256"] = sha256_bytes(
-                    canonical_bytes(identity["cache"]))
-                rehash_nested_record(identity)
+                rehash_matrix_build_identity(identity)
             mutate_embedded_matrix(m, b, callback)
         mutations.append(("matrix coordinated build identity",
                           mutate_matrix_build_identity))
+
+        def mutate_matrix_c_flags(m, b):
+            def callback(document):
+                identity = document["variants"][0]["build_identity"]
+                identity["cache"]["CMAKE_C_FLAGS_RELEASE"] = "-O0"
+                rehash_matrix_build_identity(identity)
+            mutate_embedded_matrix(m, b, callback)
+        mutations.append(("matrix coordinated C flags", mutate_matrix_c_flags))
+
+        def mutate_matrix_c_compiler(m, b):
+            def callback(document):
+                document["c_compiler"]["version"] = "forged C compiler"
+                document["c_compiler"]["version_sha256"] = sha256_bytes(
+                    document["c_compiler"]["version"].encode("utf-8"))
+                for variant in document["variants"]:
+                    identity = variant["build_identity"]
+                    identity["tools"]["cc"]["version_sha256"] = \
+                        document["c_compiler"]["version_sha256"]
+                    rehash_matrix_build_identity(identity)
+                    configuration_input = {
+                        "c_compiler": document["c_compiler"],
+                        "compiler": document["compiler"],
+                        "generator": document["generator"],
+                        "jobs_per_variant": document["jobs_per_variant"],
+                        "machine": document["machine"],
+                        "source": document["source_fingerprint"],
+                        "variant": variant["variant"],
+                        "environment": variant["build_environment"],
+                    }
+                    variant["configuration_id"] = sha256_bytes(
+                        canonical_bytes(configuration_input))
+                    variant["fresh_build"]["identity_sha256"] = sha256_bytes(
+                        canonical_bytes({
+                            "configuration_id": variant["configuration_id"],
+                            "configure_argv": variant["commands"][0]["argv"],
+                            "environment": variant["build_environment"],
+                        }))
+            mutate_embedded_matrix(m, b, callback)
+        mutations.append(("matrix coordinated C compiler",
+                          mutate_matrix_c_compiler))
+
+        def mutate_matrix_compile_source(m, b):
+            def callback(document):
+                identity = document["variants"][0]["build_identity"]
+                command = identity["compile_commands"][0]
+                old_source = "@source/" + command["file"]
+                command["file"] = "injected.cpp"
+                command["language"] = "CXX"
+                command["argv"] = [
+                    "@source/injected.cpp" if value == old_source else value
+                    for value in command["argv"]]
+                rehash_matrix_build_identity(identity)
+            mutate_embedded_matrix(m, b, callback)
+        mutations.append(("matrix injected compile source",
+                          mutate_matrix_compile_source))
+
+        def mutate_matrix_commands(m, b):
+            def callback(document):
+                document["variants"][0]["commands"] = [{"forged": True}]
+            mutate_embedded_matrix(m, b, callback)
+        mutations.append(("matrix forged command list", mutate_matrix_commands))
+
+        def mutate_matrix_configuration_id(m, b):
+            def callback(document):
+                variant = document["variants"][0]
+                variant["configuration_id"] = "4" * 64
+                variant["fresh_build"]["identity_sha256"] = sha256_bytes(
+                    canonical_bytes({
+                        "configuration_id": variant["configuration_id"],
+                        "configure_argv": variant["commands"][0]["argv"],
+                        "environment": variant["build_environment"],
+                    }))
+            mutate_embedded_matrix(m, b, callback)
+        mutations.append(("matrix coordinated configuration identity",
+                          mutate_matrix_configuration_id))
+
+        def mutate_matrix_fresh_identity(m, b):
+            def callback(document):
+                document["variants"][0]["fresh_build"]["identity_sha256"] = \
+                    "5" * 64
+            mutate_embedded_matrix(m, b, callback)
+        mutations.append(("matrix fresh-build identity",
+                          mutate_matrix_fresh_identity))
+
+        def mutate_matrix_resumed(m, b):
+            def callback(document):
+                document["variants"][0]["resumed"] = True
+            mutate_embedded_matrix(m, b, callback)
+        mutations.append(("matrix resumed evidence", mutate_matrix_resumed))
+
+        def mutate_matrix_executable_crosslink(m, b):
+            def callback(document):
+                variant = document["variants"][0]
+                command = next(value for value in variant["commands"]
+                               if value.get("label") == "test_backend_ops")
+                command["executable_sha256"] = "6" * 64
+                rehash_matrix_command(command)
+                variant["tests"]["backend_ops"] = copy.deepcopy(command)
+            mutate_embedded_matrix(m, b, callback)
+        mutations.append(("matrix test executable crosslink",
+                          mutate_matrix_executable_crosslink))
 
         first_name = manifest["entries"][0]["name"]
         def mutate_profile(m, b):
@@ -3207,8 +3770,7 @@ def self_test(repo):
         expect_failure(lambda: build_record(
             repo, manifest["provenance"]["git"]["candidate"],
             injected_compile, candidate_build[1], candidate_build[2], candidate,
-            self_test_rebuild_record(1, cache_values(candidate_build[1])[
-                "CMAKE_COMMAND"]), candidate_build[3]),
+            self_test_rebuild_record(1, candidate_build[1]), candidate_build[3]),
             "physical extra compile translation unit")
 
         missing = root / "missing-bundle"

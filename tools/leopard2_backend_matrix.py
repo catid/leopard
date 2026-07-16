@@ -9,11 +9,13 @@ library only so that backend verification adds no runtime dependency.
 from __future__ import print_function
 
 import argparse
+import collections
 import concurrent.futures
 import hashlib
 import json
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
@@ -50,12 +52,55 @@ COMPARE_TESTS = (
     "fuzz_smoke",
 )
 BUILD_CACHE_KEYS = (
-    "CMAKE_BUILD_TYPE", "CMAKE_CXX_FLAGS", "CMAKE_CXX_FLAGS_RELEASE",
+    "CMAKE_BUILD_TYPE", "CMAKE_GENERATOR",
+    "CMAKE_C_FLAGS", "CMAKE_C_FLAGS_RELEASE",
+    "CMAKE_CXX_FLAGS", "CMAKE_CXX_FLAGS_RELEASE",
     "CMAKE_EXE_LINKER_FLAGS", "CMAKE_EXE_LINKER_FLAGS_RELEASE",
     "CMAKE_STATIC_LINKER_FLAGS", "CMAKE_STATIC_LINKER_FLAGS_RELEASE",
     "ENABLE_OPENMP", "LEO2_BACKEND_VARIANT", "LEO2_BUILD_TESTS",
     "LEO2_BUILD_BENCHMARKS", "LEO2_BUILD_FUZZERS", "LEO2_ENABLE_CUDA",
 )
+
+EXPECTED_COMPILE_SOURCE_COUNTS = {
+    "Leopard2Backend.cpp": 1,
+    "Leopard2BackendAVX2.cpp": 1,
+    "Leopard2BackendSSSE3.cpp": 1,
+    "Leopard2BackendScalar.cpp": 1,
+    "Leopard2CpuFeatures.cpp": 1,
+    "Leopard2Plan.cpp": 1,
+    "LeopardCommon.cpp": 1,
+    "LeopardFF16.cpp": 1,
+    "LeopardFF8.cpp": 1,
+    "leopard.cpp": 1,
+    "leopard2.cpp": 1,
+    "tests/leopard2/direct_oracle.cpp": 13,
+    "tests/leopard2/direct_repair.cpp": 1,
+    "tests/leopard2/fuzz_api.cpp": 1,
+    "tests/leopard2/fuzz_replay.cpp": 1,
+    "tests/leopard2/test_active_lch.cpp": 1,
+    "tests/leopard2/test_api.cpp": 1,
+    "tests/leopard2/test_arbitrary_counts_acceptance.cpp": 1,
+    "tests/leopard2/test_backend_ops.cpp": 1,
+    "tests/leopard2/test_boundaries.cpp": 1,
+    "tests/leopard2/test_codec_options_abi.c": 1,
+    "tests/leopard2/test_decode_high_acceptance.cpp": 1,
+    "tests/leopard2/test_decode_low_acceptance.cpp": 1,
+    "tests/leopard2/test_decode_plan_schedule.cpp": 1,
+    "tests/leopard2/test_direct_encode.cpp": 1,
+    "tests/leopard2/test_direct_oracle.cpp": 1,
+    "tests/leopard2/test_direct_repair.cpp": 1,
+    "tests/leopard2/test_encode_concurrency.cpp": 1,
+    "tests/leopard2/test_encoder_gf16_legacy_matrix.cpp": 1,
+    "tests/leopard2/test_gf16_padded_odd.cpp": 1,
+    "tests/leopard2/test_gf16_tails.cpp": 1,
+    "tests/leopard2/test_legacy_golden.cpp": 1,
+    "tests/leopard2/test_locator.cpp": 1,
+    "tests/leopard2/test_low_gf16_direct_rows.cpp": 1,
+    "tests/leopard2/test_max_counts.cpp": 1,
+    "tests/leopard2/test_public_api_contract.cpp": 1,
+    "tests/leopard2/test_random.cpp": 1,
+    "tests/leopard2/test_transform_differential.cpp": 1,
+}
 SOURCE_FILES = (
     "CMakeLists.txt",
     "LeopardCommon.cpp",
@@ -320,6 +365,13 @@ def read_cache_variant(build):
     raise MatrixError("LEO2_BACKEND_VARIANT missing from {}".format(cache))
 
 
+def seal_command(record):
+    payload = dict(record)
+    payload.pop("command_sha256", None)
+    record["command_sha256"] = digest_value(payload)
+    return record
+
+
 def run_command(label, argv, cwd, log_dir, timeout, environment=None, hash_output=False):
     timed_out = False
     try:
@@ -353,9 +405,8 @@ def run_command(label, argv, cwd, log_dir, timeout, environment=None, hash_outpu
         "stdout_log": stdout_name,
         "timed_out": timed_out,
     }
-    if hash_output:
-        record["stderr_sha256"] = digest_bytes(stderr)
-        record["stdout_sha256"] = digest_bytes(stdout)
+    record["stderr_sha256"] = digest_bytes(stderr)
+    record["stdout_sha256"] = digest_bytes(stdout)
     return record
 
 
@@ -380,7 +431,7 @@ def parse_cache(path):
     return values
 
 
-def normalized_build_identity(build, source, compiler, cmake, ctest):
+def normalized_build_identity(build, source, c_compiler, compiler, cmake, ctest):
     cache_path = build / "CMakeCache.txt"
     compile_path = build / "compile_commands.json"
     if not cache_path.is_file() or not compile_path.is_file():
@@ -391,6 +442,15 @@ def normalized_build_identity(build, source, compiler, cmake, ctest):
         if key not in cache:
             raise MatrixError("fresh cache omits {}".format(key))
         normalized_cache[key] = cache[key]
+    compiler_cache = {
+        "CMAKE_C_COMPILER": (c_compiler, "@tool/cc"),
+        "CMAKE_CXX_COMPILER": (compiler, "@tool/cxx"),
+    }
+    for key, (identity_record, tag) in compiler_cache.items():
+        cached = Path(cache.get(key, "")).resolve()
+        if cached != Path(identity_record["executable"]).resolve():
+            raise MatrixError("fresh cache/compiler mismatch: {}".format(key))
+        normalized_cache[key] = tag
     commands = json.loads(compile_path.read_text(encoding="utf-8"))
     if not isinstance(commands, list) or not commands:
         raise MatrixError("compile_commands.json is empty or malformed")
@@ -398,7 +458,8 @@ def normalized_build_identity(build, source, compiler, cmake, ctest):
     seen = set()
     replacements = ((str(source.resolve()), "@source"),
                     (str(build.resolve()), "@build"),
-                    (compiler["executable"], "@tool/cxx"))
+                    (str(Path(c_compiler["executable"]).resolve()), "@tool/cc"),
+                    (str(Path(compiler["executable"]).resolve()), "@tool/cxx"))
     for entry in commands:
         path = Path(entry.get("file", ""))
         if not path.is_absolute():
@@ -410,16 +471,39 @@ def normalized_build_identity(build, source, compiler, cmake, ctest):
             raise MatrixError("compile source escapes source root: {}".format(path))
         raw = entry.get("arguments")
         if raw is None:
-            raw = entry.get("command", "")
-        text_value = json.dumps(raw, sort_keys=True) if isinstance(raw, list) else str(raw)
-        for actual, logical in replacements:
-            text_value = text_value.replace(actual, logical)
-        identity = (relative, text_value)
+            raw = shlex.split(entry.get("command", ""))
+        argv = [str(value) for value in raw]
+        if not argv:
+            raise MatrixError("empty compile command: {}".format(relative))
+        expected_compiler = c_compiler if relative.endswith(".c") else compiler
+        executable = Path(argv[0])
+        if not executable.is_absolute():
+            resolved = shutil.which(argv[0], path="/usr/bin:/bin")
+            if not resolved:
+                raise MatrixError("compile executable not found: {}".format(argv[0]))
+            executable = Path(resolved)
+        if executable.resolve() != Path(expected_compiler["executable"]).resolve():
+            raise MatrixError("compile language/tool mismatch: {}".format(relative))
+        normalized_argv = []
+        for argument in argv:
+            for actual, logical in replacements:
+                argument = argument.replace(actual, logical)
+            normalized_argv.append(argument)
+        normalized_argv[0] = "@tool/cc" if relative.endswith(".c") else "@tool/cxx"
+        source_tag = "@source/" + relative
+        if normalized_argv.count(source_tag) != 1:
+            raise MatrixError("compile command source mismatch: {}".format(relative))
+        language = "C" if relative.endswith(".c") else "CXX"
+        identity = (relative, tuple(normalized_argv))
         if identity in seen:
             raise MatrixError("duplicate compile command: {}".format(relative))
         seen.add(identity)
-        normalized_commands.append({"file": relative, "command": text_value})
-    normalized_commands.sort(key=lambda value: (value["file"], value["command"]))
+        normalized_commands.append({"file": relative, "language": language,
+                                    "argv": normalized_argv})
+    normalized_commands.sort(key=lambda value: (value["file"], value["argv"]))
+    counts = collections.Counter(value["file"] for value in normalized_commands)
+    if dict(counts) != EXPECTED_COMPILE_SOURCE_COUNTS:
+        raise MatrixError("compile-command source multiset mismatch")
 
     def identity(path, name):
         resolved = Path(path).resolve()
@@ -438,12 +522,16 @@ def normalized_build_identity(build, source, compiler, cmake, ctest):
         "cache_sha256": digest_value(normalized_cache),
         "compile_commands": normalized_commands,
         "compile_commands_sha256": digest_value(normalized_commands),
+        "test_executables": {},
         "tools": {
             "cmake": identity(cmake, "cmake"),
             "ctest": identity(ctest, "ctest"),
             "cxx": {"basename": Path(compiler["executable"]).name,
                     "binary_sha256": compiler["binary_sha256"],
                     "version_sha256": compiler["version_sha256"]},
+            "cc": {"basename": Path(c_compiler["executable"]).name,
+                   "binary_sha256": c_compiler["binary_sha256"],
+                   "version_sha256": c_compiler["version_sha256"]},
         },
     }
     result["digest"] = digest_value(result)
@@ -462,6 +550,7 @@ def run_variant(context, variant, index):
     if variant != "auto":
         environment["LEO2_EXPECT_BACKEND"] = variant
     identity_input = {
+        "c_compiler": context["c_compiler"],
         "compiler": context["compiler"],
         "generator": context["generator"],
         "jobs_per_variant": context["jobs_per_variant"],
@@ -507,6 +596,7 @@ def run_variant(context, variant, index):
         "-G", context["generator"],
         "-DCMAKE_BUILD_TYPE=Release",
         "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+        "-DCMAKE_C_COMPILER={}".format(context["c_compiler"]["executable"]),
         "-DCMAKE_CXX_COMPILER={}".format(context["compiler"]["executable"]),
         "-DLEO2_BACKEND_VARIANT={}".format(variant),
         "-DLEO2_BUILD_TESTS=ON",
@@ -526,6 +616,7 @@ def run_variant(context, variant, index):
         "configure", configure, context["source"], result_dir,
         context["timeout"], environment
     )
+    seal_command(command)
     commands.append(command)
     if command["returncode"] != 0:
         base.update({"commands": commands, "reason": "configure failed", "status": "failed", "tests": {}})
@@ -533,7 +624,7 @@ def run_variant(context, variant, index):
         return base
 
     base["build_identity"] = normalized_build_identity(
-        build, context["source"], context["compiler"],
+        build, context["source"], context["c_compiler"], context["compiler"],
         context["cmake"], context["ctest"])
 
     selected = read_cache_variant(build)
@@ -574,6 +665,7 @@ def run_variant(context, variant, index):
         "build", build_command, context["source"], result_dir,
         context["timeout"], environment
     )
+    seal_command(command)
     commands.append(command)
     if command["returncode"] != 0:
         base.update({"commands": commands, "reason": "build failed", "status": "failed", "tests": {}})
@@ -625,6 +717,11 @@ def run_variant(context, variant, index):
             context["timeout"], environment, hash_output=True
         )
         command["executable_sha256"] = digest_bytes(executable.read_bytes())
+        base["build_identity"]["test_executables"][name] = {
+            "path": "@build/" + executable.relative_to(build).as_posix(),
+            "sha256": command["executable_sha256"],
+        }
+        seal_command(command)
         tests[name] = command
         commands.append(command)
         if command["returncode"] != 0:
@@ -655,6 +752,7 @@ def run_variant(context, variant, index):
             (result_dir / command["stderr_log"]).read_bytes(),
         )
         command["ctest_executed"] = portable_was_run
+        seal_command(command)
         if command["returncode"] != 0 or not portable_was_run:
             if command["returncode"] == 0:
                 reason = (
@@ -690,6 +788,7 @@ def run_variant(context, variant, index):
             (result_dir / command["stderr_log"]).read_bytes(),
         )
         command["ctest_executed"] = cuda_was_run
+        seal_command(command)
         if command["returncode"] != 0 or not cuda_was_run:
             base.update({
                 "commands": commands,
@@ -705,6 +804,9 @@ def run_variant(context, variant, index):
             atomic_write_json(result_path, base)
             return base
 
+    identity_payload = dict(base["build_identity"])
+    identity_payload.pop("digest", None)
+    base["build_identity"]["digest"] = digest_value(identity_payload)
     base.update({
         "commands": commands,
         "expected_runtime_backend": None if variant == "auto" else variant,
@@ -762,6 +864,7 @@ def matrix_run(arguments):
     cpus = allowed_cpus()
     jobs = min(max(1, arguments.jobs), len(cpus), 128)
     workers = min(max(1, arguments.variant_workers), len(requested), jobs)
+    c_compiler = compiler_identity(arguments.c_compiler)
     compiler = compiler_identity(arguments.compiler)
     machine = {
         "allowed_cpu_list": compact_cpu_list(cpus),
@@ -779,6 +882,7 @@ def matrix_run(arguments):
         "allowed_cpus": cpus,
         "build_root": build_root,
         "cmake": str(Path(cmake).resolve()),
+        "c_compiler": c_compiler,
         "compiler": compiler,
         "ctest": str(Path(ctest).resolve()),
         "generator": arguments.generator,
@@ -816,7 +920,9 @@ def matrix_run(arguments):
     mismatches = compare_results(results)
     failed = [result["variant"] for result in results if result["status"] == "failed"]
     summary = {
+        "c_compiler": c_compiler,
         "compiler": compiler,
+        "generator": arguments.generator,
         "jobs": jobs,
         "jobs_per_variant": context["jobs_per_variant"],
         "machine": machine,
@@ -886,6 +992,7 @@ def parser():
     run.add_argument("--variant-workers", type=int, default=len(VARIANTS))
     run.add_argument("--timeout", type=int, default=900)
     run.add_argument("--compiler", default=os.environ.get("CXX", "c++"))
+    run.add_argument("--c-compiler", default=os.environ.get("CC", "cc"))
     run.add_argument("--cmake", default="cmake")
     run.add_argument("--ctest", default="ctest")
     run.add_argument("--generator", default="Ninja" if shutil.which("ninja") else "Unix Makefiles")
