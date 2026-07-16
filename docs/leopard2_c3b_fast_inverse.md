@@ -26,7 +26,7 @@ The principal result is negative:
   small-K dispatcher study, not a production promotion: it changes the code
   definition, has quadratic execution storage/work, and has no serialized
   exact-profile identity or end-to-end MDS/codec result yet.
-- Generic interpolation reaches only 1.058 and misses the 10% rule.
+- Generic interpolation reaches only 1.066 and misses the 10% rule.
 
 Thus the fast scalar candidates are rejected as executors for the current
 production path and retained as executable algebra/oracles.  The dense exact
@@ -160,11 +160,20 @@ exercises the non-Cantor GF4 basis.
 
 ## Setup and execution evidence
 
-All plan-dependent tree, phi, divided-difference, dense-matrix, cardinal, and
-epsilon-schedule work is measured as setup.  Byte-heavy execution contains no
-allocation and no inversion.  Normalized subspace constants are cached as the
-field-level analogue of Leopard's immutable skew table and excluded equally
-from every plan.
+Plan-dependent tree, phi, divided-difference, dense-matrix, cardinal, and
+epsilon metadata construction is measured as setup.  This is a Python scalar
+experiment: execution allocates ordinary lists and tuples, and that interpreter
+and allocation cost is included in the reported timing.  It is not an
+allocation-free production-kernel claim.  Normalized subspace constants are
+cached as the field-level analogue of Leopard's immutable skew table and
+excluded equally from every plan.
+
+`TangHanPlan.split_multipliers` retains the planned epsilon split constants for
+validation, but this scalar executor does not consume that tuple: execution
+looks up the equivalent value in the warmed field-level
+`subspace_multiplier` cache.  The recorded Tang--Han plan setup is therefore
+conservative and the execution includes the cache lookup; neither number is
+evidence for a production split schedule.
 
 The deterministic model uses
 
@@ -176,7 +185,8 @@ is useful for explaining algorithms, but not for promotion.
 
 Pinned Python timing used 15 samples and 64 iterations per sample.  Entries
 below are median nanoseconds for one symbol position spanning K shards.  MADs
-are retained in `results/timing.json` and are below 0.8% for every row.
+are retained in `results/timing.json`; the largest execution MAD is 0.8383% of
+its median.
 
 | Field | K/N | Padded | Dense | Generic | Coxon L2X | Coxon N2X | Tang--Han |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -263,6 +273,10 @@ Use another allowed physical core if CPU 15 is unavailable:
 The committed JSON files retain every correctness digest, operation counter,
 setup/execution median and MAD, and modeled or timed amortization cell.  Their
 source hash makes stale evidence fail verification.
+`summarize-timing` rejects a stale source hash and binds the raw timing file by
+SHA-256, but there is no separate summary-verification subcommand; reproduce
+the summarization command above and compare the committed hash when auditing
+that derived file.
 
 SHA-256 values for this checkpoint are:
 
