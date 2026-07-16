@@ -1,0 +1,172 @@
+{
+  "affinity": [
+    16
+  ],
+  "cases": [
+    {
+      "execution": {
+        "exact_dense_lch": {
+          "mad_ns": 8,
+          "median_ns": 5237
+        },
+        "exact_generic_lagrange": {
+          "mad_ns": 132,
+          "median_ns": 17486
+        },
+        "exact_newton_to_lch": {
+          "mad_ns": 42,
+          "median_ns": 15246
+        },
+        "parent_dense_lagrange_to_lch": {
+          "mad_ns": 25,
+          "median_ns": 3346
+        },
+        "parent_padded_lch": {
+          "mad_ns": 19,
+          "median_ns": 4230
+        }
+      },
+      "field": "gf16",
+      "iterations_per_sample": 16,
+      "parent": 4,
+      "q": 3,
+      "samples": 7,
+      "setup": {
+        "exact_dense_lch": {
+          "mad_ns": 820,
+          "median_ns": 91821
+        },
+        "exact_generic_lagrange": {
+          "mad_ns": 900,
+          "median_ns": 221573
+        },
+        "exact_newton_to_lch": {
+          "mad_ns": 2070,
+          "median_ns": 195422
+        },
+        "parent_dense_lagrange_to_lch": {
+          "mad_ns": 3730,
+          "median_ns": 156902
+        },
+        "parent_padded_lch": {
+          "mad_ns": 0,
+          "median_ns": 0
+        }
+      },
+      "shift": 0
+    },
+    {
+      "execution": {
+        "exact_dense_lch": {
+          "mad_ns": 35,
+          "median_ns": 15030
+        },
+        "exact_generic_lagrange": {
+          "mad_ns": 182,
+          "median_ns": 39317
+        },
+        "exact_newton_to_lch": {
+          "mad_ns": 128,
+          "median_ns": 40033
+        },
+        "parent_dense_lagrange_to_lch": {
+          "mad_ns": 82,
+          "median_ns": 17076
+        },
+        "parent_padded_lch": {
+          "mad_ns": 60,
+          "median_ns": 13210
+        }
+      },
+      "field": "gf16",
+      "iterations_per_sample": 16,
+      "parent": 8,
+      "q": 5,
+      "samples": 7,
+      "setup": {
+        "exact_dense_lch": {
+          "mad_ns": 1289,
+          "median_ns": 242702
+        },
+        "exact_generic_lagrange": {
+          "mad_ns": 890,
+          "median_ns": 467475
+        },
+        "exact_newton_to_lch": {
+          "mad_ns": 4000,
+          "median_ns": 603527
+        },
+        "parent_dense_lagrange_to_lch": {
+          "mad_ns": 3389,
+          "median_ns": 781958
+        },
+        "parent_padded_lch": {
+          "mad_ns": 0,
+          "median_ns": 0
+        }
+      },
+      "shift": 0
+    },
+    {
+      "execution": {
+        "exact_dense_lch": {
+          "mad_ns": 278,
+          "median_ns": 55202
+        },
+        "exact_generic_lagrange": {
+          "mad_ns": 26,
+          "median_ns": 135541
+        },
+        "exact_newton_to_lch": {
+          "mad_ns": 240,
+          "median_ns": 135183
+        },
+        "parent_dense_lagrange_to_lch": {
+          "mad_ns": 244,
+          "median_ns": 89112
+        },
+        "parent_padded_lch": {
+          "mad_ns": 126,
+          "median_ns": 39954
+        }
+      },
+      "field": "gf16",
+      "iterations_per_sample": 16,
+      "parent": 16,
+      "q": 9,
+      "samples": 7,
+      "setup": {
+        "exact_dense_lch": {
+          "mad_ns": 5380,
+          "median_ns": 1054642
+        },
+        "exact_generic_lagrange": {
+          "mad_ns": 9350,
+          "median_ns": 1384495
+        },
+        "exact_newton_to_lch": {
+          "mad_ns": 2889,
+          "median_ns": 2095134
+        },
+        "parent_dense_lagrange_to_lch": {
+          "mad_ns": 24280,
+          "median_ns": 5721014
+        },
+        "parent_padded_lch": {
+          "mad_ns": 0,
+          "median_ns": 0
+        }
+      },
+      "shift": 0
+    }
+  ],
+  "machine": {
+    "architecture": "x86_64",
+    "platform": "Linux-6.8.0-134-generic-x86_64-with-glibc2.39",
+    "processor": "x86_64",
+    "python": "3.12.3"
+  },
+  "omp_num_threads": "1",
+  "schema": "leopard2-c3-truncated-inverse-timing/v1",
+  "source_sha256": "c0030150633f133d0b04dda762096e3d6164173e99a60888b214476cb2d1b795"
+}

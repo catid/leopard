@@ -1,0 +1,224 @@
+{
+  "affinity": [
+    16
+  ],
+  "cases": [
+    {
+      "execution": {
+        "exact_dense_lch": {
+          "mad_ns": 4,
+          "median_ns": 984
+        },
+        "exact_generic_lagrange": {
+          "mad_ns": 6,
+          "median_ns": 2439
+        },
+        "exact_newton_to_lch": {
+          "mad_ns": 2,
+          "median_ns": 2914
+        },
+        "parent_dense_lagrange_to_lch": {
+          "mad_ns": 7,
+          "median_ns": 1159
+        },
+        "parent_padded_lch": {
+          "mad_ns": 9,
+          "median_ns": 2144
+        }
+      },
+      "field": "gf8",
+      "iterations_per_sample": 64,
+      "parent": 4,
+      "q": 3,
+      "samples": 11,
+      "setup": {
+        "exact_dense_lch": {
+          "mad_ns": 250,
+          "median_ns": 10460
+        },
+        "exact_generic_lagrange": {
+          "mad_ns": 500,
+          "median_ns": 11680
+        },
+        "exact_newton_to_lch": {
+          "mad_ns": 339,
+          "median_ns": 8060
+        },
+        "parent_dense_lagrange_to_lch": {
+          "mad_ns": 890,
+          "median_ns": 19140
+        },
+        "parent_padded_lch": {
+          "mad_ns": 0,
+          "median_ns": 0
+        }
+      },
+      "shift": 0
+    },
+    {
+      "execution": {
+        "exact_dense_lch": {
+          "mad_ns": 2,
+          "median_ns": 1860
+        },
+        "exact_generic_lagrange": {
+          "mad_ns": 5,
+          "median_ns": 4283
+        },
+        "exact_newton_to_lch": {
+          "mad_ns": 10,
+          "median_ns": 5067
+        },
+        "parent_dense_lagrange_to_lch": {
+          "mad_ns": 3,
+          "median_ns": 2742
+        },
+        "parent_padded_lch": {
+          "mad_ns": 25,
+          "median_ns": 5067
+        }
+      },
+      "field": "gf8",
+      "iterations_per_sample": 64,
+      "parent": 8,
+      "q": 5,
+      "samples": 11,
+      "setup": {
+        "exact_dense_lch": {
+          "mad_ns": 370,
+          "median_ns": 23730
+        },
+        "exact_generic_lagrange": {
+          "mad_ns": 441,
+          "median_ns": 27030
+        },
+        "exact_newton_to_lch": {
+          "mad_ns": 280,
+          "median_ns": 18140
+        },
+        "parent_dense_lagrange_to_lch": {
+          "mad_ns": 800,
+          "median_ns": 67391
+        },
+        "parent_padded_lch": {
+          "mad_ns": 0,
+          "median_ns": 0
+        }
+      },
+      "shift": 0
+    },
+    {
+      "execution": {
+        "exact_dense_lch": {
+          "mad_ns": 12,
+          "median_ns": 4484
+        },
+        "exact_generic_lagrange": {
+          "mad_ns": 46,
+          "median_ns": 10258
+        },
+        "exact_newton_to_lch": {
+          "mad_ns": 34,
+          "median_ns": 11725
+        },
+        "parent_dense_lagrange_to_lch": {
+          "mad_ns": 28,
+          "median_ns": 7630
+        },
+        "parent_padded_lch": {
+          "mad_ns": 76,
+          "median_ns": 11277
+        }
+      },
+      "field": "gf8",
+      "iterations_per_sample": 64,
+      "parent": 16,
+      "q": 9,
+      "samples": 11,
+      "setup": {
+        "exact_dense_lch": {
+          "mad_ns": 250,
+          "median_ns": 83171
+        },
+        "exact_generic_lagrange": {
+          "mad_ns": 690,
+          "median_ns": 94571
+        },
+        "exact_newton_to_lch": {
+          "mad_ns": 310,
+          "median_ns": 49921
+        },
+        "parent_dense_lagrange_to_lch": {
+          "mad_ns": 3780,
+          "median_ns": 357994
+        },
+        "parent_padded_lch": {
+          "mad_ns": 0,
+          "median_ns": 0
+        }
+      },
+      "shift": 0
+    },
+    {
+      "execution": {
+        "exact_dense_lch": {
+          "mad_ns": 28,
+          "median_ns": 13362
+        },
+        "exact_generic_lagrange": {
+          "mad_ns": 24,
+          "median_ns": 30482
+        },
+        "exact_newton_to_lch": {
+          "mad_ns": 33,
+          "median_ns": 32788
+        },
+        "parent_dense_lagrange_to_lch": {
+          "mad_ns": 70,
+          "median_ns": 24770
+        },
+        "parent_padded_lch": {
+          "mad_ns": 50,
+          "median_ns": 24355
+        }
+      },
+      "field": "gf8",
+      "iterations_per_sample": 64,
+      "parent": 32,
+      "q": 17,
+      "samples": 11,
+      "setup": {
+        "exact_dense_lch": {
+          "mad_ns": 3281,
+          "median_ns": 409055
+        },
+        "exact_generic_lagrange": {
+          "mad_ns": 2880,
+          "median_ns": 484686
+        },
+        "exact_newton_to_lch": {
+          "mad_ns": 640,
+          "median_ns": 154382
+        },
+        "parent_dense_lagrange_to_lch": {
+          "mad_ns": 3730,
+          "median_ns": 2314006
+        },
+        "parent_padded_lch": {
+          "mad_ns": 0,
+          "median_ns": 0
+        }
+      },
+      "shift": 0
+    }
+  ],
+  "machine": {
+    "architecture": "x86_64",
+    "platform": "Linux-6.8.0-134-generic-x86_64-with-glibc2.39",
+    "processor": "x86_64",
+    "python": "3.12.3"
+  },
+  "omp_num_threads": "1",
+  "schema": "leopard2-c3-truncated-inverse-timing/v1",
+  "source_sha256": "c0030150633f133d0b04dda762096e3d6164173e99a60888b214476cb2d1b795"
+}
