@@ -392,6 +392,30 @@ def validate_symbol_scan_text(
                 raise ValueError("sanitizer symbol family is incomplete")
 
 
+def live_symbol_scan_bytes(nm: pathlib.Path, target: str) -> bytes:
+    completed = subprocess.run(
+        [str(nm), "--print-file-name", target], cwd=ROOT, check=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    if completed.stderr:
+        raise ValueError("live nm scan produced unexpected stderr")
+    lines = [
+        line for line in completed.stdout.splitlines()
+        if b"__asan_" in line or b"__ubsan_" in line
+    ]
+    return b"\n".join(lines) + (b"\n" if lines else b"")
+
+
+def validate_live_symbol_scan(
+    nm: pathlib.Path, target: pathlib.Path, target_argument: str,
+    retained: pathlib.Path,
+) -> None:
+    if not target.is_file():
+        return
+    if live_symbol_scan_bytes(nm, target_argument) != retained.read_bytes():
+        raise ValueError("retained sanitizer scan differs from live nm output")
+
+
 def validate_run_log_text(stdout: str, stderr: str, *, smoke: bool) -> None:
     if stdout != "" or stderr != ("C7 benchmark 1/1\n" if smoke else ""):
         raise ValueError("run log semantics changed")
@@ -853,6 +877,10 @@ def validate_manifest(data: dict) -> None:
             target=expected_library, archive=True,
             expected_counts=expected_archive_counts,
             expected_members=expected_member_counts)
+        validate_live_symbol_scan(
+            nm, executable, expected_executable, executable_scan)
+        validate_live_symbol_scan(
+            nm, library, expected_library, archive_scan)
         closure = build["source_closure"]
         if not isinstance(closure, list) or len(closure) < 10:
             raise ValueError("core source closure is incomplete")
@@ -1074,11 +1102,34 @@ class CheckpointTests(unittest.TestCase):
         instrumentation = candidate["builds"][4]["instrumentation"]
         record = instrumentation["executable_symbol_scan"]
         target = candidate["builds"][4]["executable"]["path"]
-        asan_line = f"{target}:{' ' * 17}U __asan_init\n"
-        ubsan_line = (
-            f"{target}:{' ' * 17}U __ubsan_handle_pointer_overflow\n")
-        forged_scan = (asan_line * 320 + ubsan_line * 54).encode("utf-8")
+        retained_scan = resolve_record_path(record["path"]).read_bytes()
+        address = re.search(rb":([0-9a-f]{16}) ", retained_scan)
+        self.assertIsNotNone(address)
+        offset = address.start(1)
+        replacement = b"1" if retained_scan[offset:offset + 1] != b"1" else b"0"
+        forged_scan = (
+            retained_scan[:offset] + replacement + retained_scan[offset + 1:])
+        validate_symbol_scan_text(
+            forged_scan.decode("utf-8"), target=target, archive=False,
+            expected_counts={"asan_lines": 320, "ubsan_lines": 54},
+            expected_members={})
         require_rejection(record, candidate, forged_scan)
+
+        executable = resolve_record_path(
+            candidate["builds"][4]["executable"]["path"])
+        if (executable.is_file() and digest(executable) ==
+                candidate["builds"][4]["executable"]["sha256"]):
+            retained = resolve_record_path(record["path"]).read_bytes()
+            try:
+                resolve_record_path(record["path"]).write_bytes(forged_scan)
+                with self.assertRaises(ValueError):
+                    validate_live_symbol_scan(
+                        pathlib.Path(candidate["builds"][4]["nm"]["path"]),
+                        executable,
+                        candidate["builds"][4]["executable"]["path"],
+                        resolve_record_path(record["path"]))
+            finally:
+                resolve_record_path(record["path"]).write_bytes(retained)
 
 
 if __name__ == "__main__":
