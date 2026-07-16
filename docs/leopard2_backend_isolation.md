@@ -42,10 +42,35 @@ field initializers but had no read sites after scalar multiplication moved
 behind `Ops`.  Removing those write-only tables saves 65,536 plus 8,388,608
 bytes (8,454,144 bytes), 4,259,584 redundant field products, and 256 zero-table
 writes in an ordinary CMake process.  Legacy whole-translation-unit
-SSSE3/AVX2 diagnostic builds
-retain their actually consumed nibble tables; when their ISA is unavailable,
+SSSE3/AVX2 diagnostic builds retain their actually consumed nibble tables;
+when their ISA is unavailable,
 they also fall through to the qualified ops table without allocating an unused
 scalar duplicate.
+
+Final evidence on 2026-07-16 used all 30 allowed CPUs (`0-14,16-30`) for
+parallel gates:
+
+- Release, strict GCC 13.3, and strict Clang 18 each passed 43/43 CTests.
+- ASan plus UBSan passed all 42 runtime tests with leak detection disabled for
+  the deliberately process-lifetime successful tables.  A separate
+  leak-enabled AVX2 second-allocation-failure process passed, proving the local
+  GF8 owner is released.  The omitted static ISA test rejects the sanitizer's
+  inserted `lahf`, as documented by the earlier backend checkpoint.
+- TSan without OpenMP passed the 12-test backend-failure, immutable-ops,
+  context, and encode-concurrency subset with no report.
+- The fresh AUTO/scalar/SSSE3/AVX2 matrix passed every deterministic wire and
+  execution comparison, the portable-ISA gate, and all nine failure subprocess
+  registrations in each build.  Source fingerprint:
+  `8a1d3fe734f45b8a6eb24ca4a270321e58aff4d27820b196fb7aa7834cf48f4d`;
+  merged matrix SHA-256:
+  `aebfd5a1d335d93b8a13777b3167beeb7dbd8d8924612020c89a0542facb19dc`.
+- `nm` and `strings` found zero failure-injection hooks or identifying strings
+  and zero removed legacy scalar-table symbols in the tests-disabled archive.
+- Ten pinned AB/BA process runs on CPU 7 compared the pre-change commit
+  `fe564a9` with the candidate backend-ops executable.  Every baseline run
+  reported 21,504 KiB peak RSS and every candidate run 13,312 KiB, an observed
+  8,192-KiB reduction consistent with removing the touched 8-MiB duplicate;
+  CPU 23, its SMT sibling, was left idle.
 
 ## Per-context backend selection checkpoint
 
