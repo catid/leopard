@@ -280,6 +280,13 @@ if(LEO2_BUILD_TESTS)
     target_link_libraries(leopard2_boundaries_test libleopard)
     add_test(NAME leopard2_boundaries COMMAND leopard2_boundaries_test)
 
+    add_executable(leopard2_transform_differential_test
+        tests/leopard2/test_transform_differential.cpp
+        tests/leopard2/direct_oracle.cpp)
+    target_link_libraries(leopard2_transform_differential_test libleopard)
+    add_test(NAME leopard2_transform_differential
+        COMMAND leopard2_transform_differential_test)
+
     add_executable(leopard2_fuzz_smoke
         tests/leopard2/fuzz_api.cpp
         tests/leopard2/fuzz_replay.cpp)
