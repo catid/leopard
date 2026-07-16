@@ -41,6 +41,16 @@ interchange copy; `bd bootstrap` is the preferred history-preserving restore.
   technical, security, compatibility, legal, and other evidence-bearing claims.
 - Never print, log, or commit MCP credentials.
 
+## Claude CLI review policy
+
+- Claude CLI review requests can take substantially longer than 300 seconds.
+  Inspect the live session and recent output before declaring a timeout; elapsed
+  time alone is not evidence that the request has failed.
+- If the most recent requested Claude CLI run failed specifically because of a
+  timeout, retry it once with a sufficiently long timeout. Preserve the original
+  authentication, pricing, model, and effort constraints, and do not retry a
+  non-timeout failure unless the user explicitly requests it.
+
 ## Quick Reference
 
 ```bash
