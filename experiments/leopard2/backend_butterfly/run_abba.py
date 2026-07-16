@@ -138,7 +138,9 @@ MATRIX_SOURCE_FILES = (
     "leopard2.cpp",
     "leopard2.h",
     "tests/leopard2/test_legacy_golden.cpp",
+    "tests/leopard2/test_backend_failures.cpp",
     "tests/leopard2/test_backend_ops.cpp",
+    "tests/leopard2/test_context_backends.cpp",
     "tests/leopard2/legacy_golden_vectors.h",
     "tests/leopard2/test_api.cpp",
     "tests/leopard2/test_public_api_contract.cpp",
@@ -174,7 +176,7 @@ MATRIX_SOURCE_FILES = (
 )
 
 MATRIX_COMPARE_TESTS = (
-    "direct_oracle", "backend_ops", "legacy_golden", "api",
+    "direct_oracle", "backend_ops", "context_backends", "legacy_golden", "api",
     "public_api_contract", "random", "locator", "active_lch", "gf16_tails",
     "gf16_padded_odd", "gf16_legacy_encoder_matrix",
     "low_gf16_direct_rows", "decode_high_acceptance",
@@ -184,9 +186,22 @@ MATRIX_COMPARE_TESTS = (
     "transform_differential", "fuzz_smoke",
 )
 
+MATRIX_BACKEND_FAILURE_TESTS = (
+    "leopard2_backend_failure_scalar_ff8_allocation",
+    "leopard2_backend_failure_scalar_ff16_allocation",
+    "leopard2_backend_failure_scalar_kat",
+    "leopard2_backend_failure_ssse3_ff8_allocation",
+    "leopard2_backend_failure_ssse3_ff16_allocation",
+    "leopard2_backend_failure_ssse3_kat",
+    "leopard2_backend_failure_avx2_ff8_allocation",
+    "leopard2_backend_failure_avx2_ff16_allocation",
+    "leopard2_backend_failure_avx2_kat",
+)
+
 MATRIX_TEST_SPECS = {
     "direct_oracle": ("leopard2_direct_oracle_test", []),
     "backend_ops": ("leopard2_backend_ops_test", []),
+    "context_backends": ("leopard2_context_backends_test", []),
     "legacy_golden": ("leopard2_legacy_golden_test", []),
     "api": ("leopard2_api_test", []),
     "public_api_contract": ("leopard2_public_api_contract_test", []),
@@ -216,6 +231,9 @@ MATRIX_TEST_SPECS = {
 
 MATRIX_BUILD_TARGETS = tuple(MATRIX_TEST_SPECS[name][0]
                              for name in MATRIX_COMPARE_TESTS)
+MATRIX_BUILD_TARGETS = (
+    MATRIX_BUILD_TARGETS[:2] + ("leopard2_backend_failures_test",) +
+    MATRIX_BUILD_TARGETS[2:])
 
 MATRIX_BUILD_CACHE_KEYS = (
     "CMAKE_BUILD_TYPE", "CMAKE_GENERATOR", "CMAKE_C_FLAGS",
@@ -239,7 +257,9 @@ MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS = {
     "tests/leopard2/test_active_lch.cpp": 1,
     "tests/leopard2/test_api.cpp": 1,
     "tests/leopard2/test_arbitrary_counts_acceptance.cpp": 1,
+    "tests/leopard2/test_backend_failures.cpp": 1,
     "tests/leopard2/test_backend_ops.cpp": 1,
+    "tests/leopard2/test_context_backends.cpp": 1,
     "tests/leopard2/test_boundaries.cpp": 1,
     "tests/leopard2/test_codec_options_abi.c": 1,
     "tests/leopard2/test_decode_high_acceptance.cpp": 1,
@@ -2128,7 +2148,7 @@ def validate_matrix_document(document, repo, candidate_commit):
                 "matrix compile source multiset")
 
         commands = value["commands"]
-        require(len(commands) == 2 + len(MATRIX_COMPARE_TESTS) + 1 +
+        require(len(commands) == 2 + len(MATRIX_COMPARE_TESTS) + 2 +
                 (1 if variant == "auto" else 0),
                 "matrix command count: " + variant)
         configure = commands[0]
@@ -2172,7 +2192,8 @@ def validate_matrix_document(document, repo, candidate_commit):
         require(value.get("source_fingerprint") == fingerprint["digest"],
                 "matrix variant source mismatch")
         tests = value.get("tests")
-        required_tests = set(MATRIX_COMPARE_TESTS) | {"portable_isa"}
+        required_tests = set(MATRIX_COMPARE_TESTS) | {
+            "backend_failures", "portable_isa"}
         if value.get("variant") == "auto":
             required_tests.add("cuda_optional")
         require(isinstance(tests, dict) and set(tests) == required_tests,
@@ -2202,6 +2223,26 @@ def validate_matrix_document(document, repo, candidate_commit):
                     test["argv"][1:3] == ["-c", str(value["pin_cpu"])] and
                     test["argv"][3:] == [executable_path] + arguments,
                     "matrix test argv: " + test_name)
+
+        failures = tests["backend_failures"]
+        validate_matrix_command(
+            failures, "test_backend_failures",
+            {"ctest_executed", "ctest_executed_tests"})
+        require(
+            failures["ctest_executed"] is True and
+            failures["ctest_executed_tests"] ==
+                sorted(MATRIX_BACKEND_FAILURE_TESTS) and
+            canonical_bytes(failures) ==
+                canonical_bytes(commands[command_index]) and
+            failures["cwd"] == source_root and len(failures["argv"]) >= 4 and
+            Path(failures["argv"][0]).name == "taskset" and
+            failures["argv"][1:3] == ["-c", str(value["pin_cpu"])] and
+            Path(failures["argv"][3]).name == tools["ctest"]["basename"] and
+            failures["argv"][4:] == [
+                "--test-dir", build_root, "-C", "Release", "-R",
+                "^leopard2_backend_failure_", "--output-on-failure"],
+            "matrix backend-failure CTest command")
+        command_index += 1
 
         portable = tests["portable_isa"]
         validate_matrix_command(portable, "test_portable_isa",
@@ -3247,6 +3288,16 @@ def self_test(repo):
                     {"executable_sha256": empty_digest})
                 tests[name] = test
                 commands.append(test)
+            failures = matrix_command(
+                "test_backend_failures",
+                [matrix_taskset, "-c", str(cpu), matrix_ctest,
+                 "--test-dir", matrix_build_root, "-C", "Release", "-R",
+                 "^leopard2_backend_failure_", "--output-on-failure"],
+                {"ctest_executed": True,
+                 "ctest_executed_tests":
+                     sorted(MATRIX_BACKEND_FAILURE_TESTS)})
+            tests["backend_failures"] = failures
+            commands.append(failures)
             portable = matrix_command(
                 "test_portable_isa",
                 [matrix_ctest, "--test-dir", matrix_build_root, "-C", "Release",
