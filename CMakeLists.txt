@@ -554,6 +554,13 @@ if(LEO2_BUILD_TESTS)
         set(LEO2_PYTHON_EXECUTABLE ${Python3_EXECUTABLE})
     endif()
     if(LEO2_PYTHON_EXECUTABLE)
+        if(LEO2_BUILD_BENCHMARKS)
+            add_test(
+                NAME leopard2_benchmark_json_regression
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_benchmark_json_test.py
+                    $<TARGET_FILE:bench_leopard2>)
+        endif()
         add_test(
             NAME leopard2_cost_model_self_test
             COMMAND ${LEO2_PYTHON_EXECUTABLE}

@@ -92,6 +92,7 @@ struct Options
     bool force_generic_decode;
     bool force_specialized_decode;
     bool retain_samples;
+    bool skip_legacy;
     std::string output;
 
     Options()
@@ -111,6 +112,7 @@ struct Options
         , force_generic_decode(false)
         , force_specialized_decode(false)
         , retain_samples(false)
+        , skip_legacy(false)
         , output("-")
     {}
 };
@@ -359,6 +361,7 @@ static void Usage(std::ostream& output, const char* program)
         << "  --force-generic       Use the retained O(N log N) decoder\n"
         << "  --force-specialized   Use the profile-specific transform decoder\n"
         << "  --retain-samples      Include raw samples for comparison evidence\n"
+        << "  --skip-legacy         Skip old-Leopard work for external evidence\n"
         << "  --json PATH           JSON output path, or - for stdout\n"
         << "  --help                 Show this message\n";
 }
@@ -390,6 +393,7 @@ static Options ParseOptions(int argc, char** argv)
         else if (argument == "--force-generic") options.force_generic_decode = true;
         else if (argument == "--force-specialized") options.force_specialized_decode = true;
         else if (argument == "--retain-samples") options.retain_samples = true;
+        else if (argument == "--skip-legacy") options.skip_legacy = true;
         else if (argument == "--json" || argument == "--output") options.output = NeedValue(argc, argv, i);
         else Fail("unknown argument: " + argument);
     }
@@ -773,6 +777,8 @@ static std::string LegacyUnavailableReason(
     const Options& options,
     const leo2_codec* codec)
 {
+    if (options.skip_legacy)
+        return "disabled by --skip-legacy for symmetric external comparison";
     if (leo2_codec_profile(codec) != LEO2_PROFILE_LEGACY_HIGH_V1)
         return "old Leopard only defines the legacy high wire profile";
     if ((options.bytes & 63u) != 0)
@@ -999,6 +1005,7 @@ static int Run(const Options& options)
          << (options.force_generic_decode ? "true" : "false") << ",\n"
          << "    \"force_specialized_decode\": "
          << (options.force_specialized_decode ? "true" : "false") << ",\n"
+         << (options.skip_legacy ? "    \"skip_legacy\": true,\n" : "")
          << "    \"shard_bytes\": " << options.bytes << ",\n"
          << "    \"loss_count\": " << options.losses << ",\n"
          << "    \"missing_original_indices\": [";
