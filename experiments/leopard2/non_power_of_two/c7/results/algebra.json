@@ -1,0 +1,667 @@
+{
+  "coordinate_comparison": {
+    "affine_searched": "exactly generator-identical; it cannot change coefficient or execution cost",
+    "aligned_coset": "constructed as systematic 0..K-1 plus parity P..P+R-1. It is generally a non-affine dyadic union with different coefficients, and is unavailable when P+R exceeds the field; see measured symbolic fragment and coefficient-one comparisons",
+    "decision": "freeze the simple prefix map; do not add search tables to V1",
+    "general_searched": "can change the count of coefficient-one specializations but remains dense; it would require another coordinate-map identity and has no C6 evidence",
+    "prefix": "selected as canonical map 1 and inherits C6 execution evidence"
+  },
+  "derivation": {
+    "affine_invariance": "under phi(x)=a*x+b, a!=0, the K numerator factors contribute a^K while (q+x_i) and Z'(x_i)'s K-1 factors contribute a^K; the ratio and therefore every systematic generator byte is unchanged",
+    "density": "all evaluation points are distinct, so every numerator and denominator factor is nonzero and all K*R coefficients are nonzero",
+    "row_formula": "G[j,i] = Z(q_j) / ((q_j+x_i) * Z'(x_i))"
+  },
+  "gf4_exhaustive": {
+    "affine_coefficients": 734400,
+    "affine_maps": 28800,
+    "aligned_union": {
+      "aligned_one_coefficients": 198,
+      "aligned_symbolic_fragments": 328,
+      "available_geometries": 85,
+      "dense_coefficients": 1812,
+      "globally_affine_geometries": 49,
+      "nonaffine_changed_coefficients": 758,
+      "prefix_one_coefficients": 297,
+      "prefix_symbolic_fragments": 358
+    },
+    "dense_coefficients": 3060,
+    "geometries": 120,
+    "mds_subsets": 131038,
+    "search": [
+      {
+        "K": 1,
+        "R": 15,
+        "best_one_coefficients": 15,
+        "best_systematic_coordinates": [
+          0
+        ],
+        "canonical_one_coefficients": 15,
+        "dense_coefficients": 15
+      },
+      {
+        "K": 2,
+        "R": 14,
+        "best_one_coefficients": 0,
+        "best_systematic_coordinates": [
+          0,
+          1
+        ],
+        "canonical_one_coefficients": 0,
+        "dense_coefficients": 28
+      },
+      {
+        "K": 3,
+        "R": 13,
+        "best_one_coefficients": 3,
+        "best_systematic_coordinates": [
+          0,
+          1,
+          2
+        ],
+        "canonical_one_coefficients": 3,
+        "dense_coefficients": 39
+      },
+      {
+        "K": 4,
+        "R": 12,
+        "best_one_coefficients": 4,
+        "best_systematic_coordinates": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "canonical_one_coefficients": 4,
+        "dense_coefficients": 48
+      },
+      {
+        "K": 5,
+        "R": 11,
+        "best_one_coefficients": 9,
+        "best_systematic_coordinates": [
+          0,
+          1,
+          2,
+          4,
+          10
+        ],
+        "canonical_one_coefficients": 7,
+        "dense_coefficients": 55
+      },
+      {
+        "K": 6,
+        "R": 10,
+        "best_one_coefficients": 10,
+        "best_systematic_coordinates": [
+          0,
+          1,
+          2,
+          4,
+          10,
+          13
+        ],
+        "canonical_one_coefficients": 0,
+        "dense_coefficients": 60
+      },
+      {
+        "K": 7,
+        "R": 9,
+        "best_one_coefficients": 11,
+        "best_systematic_coordinates": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "canonical_one_coefficients": 11,
+        "dense_coefficients": 63
+      },
+      {
+        "K": 8,
+        "R": 8,
+        "best_one_coefficients": 7,
+        "best_systematic_coordinates": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          6,
+          8,
+          13
+        ],
+        "canonical_one_coefficients": 0,
+        "dense_coefficients": 64
+      },
+      {
+        "K": 9,
+        "R": 7,
+        "best_one_coefficients": 11,
+        "best_systematic_coordinates": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8
+        ],
+        "canonical_one_coefficients": 11,
+        "dense_coefficients": 63
+      },
+      {
+        "K": 10,
+        "R": 6,
+        "best_one_coefficients": 10,
+        "best_systematic_coordinates": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          8,
+          11,
+          13,
+          15
+        ],
+        "canonical_one_coefficients": 0,
+        "dense_coefficients": 60
+      },
+      {
+        "K": 11,
+        "R": 5,
+        "best_one_coefficients": 9,
+        "best_systematic_coordinates": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          8,
+          9,
+          10,
+          13
+        ],
+        "canonical_one_coefficients": 7,
+        "dense_coefficients": 55
+      },
+      {
+        "K": 12,
+        "R": 4,
+        "best_one_coefficients": 4,
+        "best_systematic_coordinates": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11
+        ],
+        "canonical_one_coefficients": 4,
+        "dense_coefficients": 48
+      },
+      {
+        "K": 13,
+        "R": 3,
+        "best_one_coefficients": 3,
+        "best_systematic_coordinates": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12
+        ],
+        "canonical_one_coefficients": 3,
+        "dense_coefficients": 39
+      },
+      {
+        "K": 14,
+        "R": 2,
+        "best_one_coefficients": 0,
+        "best_systematic_coordinates": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13
+        ],
+        "canonical_one_coefficients": 0,
+        "dense_coefficients": 28
+      },
+      {
+        "K": 15,
+        "R": 1,
+        "best_one_coefficients": 15,
+        "best_systematic_coordinates": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14
+        ],
+        "canonical_one_coefficients": 15,
+        "dense_coefficients": 15
+      }
+    ],
+    "searched_full_field_partitions": 65534,
+    "transform_search_candidates": 65519,
+    "transform_search_focus": [
+      {
+        "K": 3,
+        "R": 3,
+        "aligned_union": {
+          "fragments": 2,
+          "global_affine": false,
+          "one_coefficients": 0,
+          "parity": [
+            4,
+            5,
+            6
+          ]
+        },
+        "prefix": {
+          "fragments": 2,
+          "one_coefficients": 3,
+          "parity": [
+            3,
+            4,
+            5
+          ]
+        },
+        "searched": {
+          "fragments": 2,
+          "one_coefficients": 3,
+          "parity": [
+            3,
+            4,
+            5
+          ]
+        }
+      },
+      {
+        "K": 3,
+        "R": 5,
+        "aligned_union": {
+          "fragments": 2,
+          "global_affine": false,
+          "one_coefficients": 0,
+          "parity": [
+            4,
+            5,
+            6,
+            7,
+            8
+          ]
+        },
+        "prefix": {
+          "fragments": 2,
+          "one_coefficients": 3,
+          "parity": [
+            3,
+            4,
+            5,
+            6,
+            7
+          ]
+        },
+        "searched": {
+          "fragments": 2,
+          "one_coefficients": 3,
+          "parity": [
+            3,
+            4,
+            5,
+            6,
+            7
+          ]
+        }
+      },
+      {
+        "K": 5,
+        "R": 3,
+        "aligned_union": {
+          "fragments": 2,
+          "global_affine": false,
+          "one_coefficients": 2,
+          "parity": [
+            8,
+            9,
+            10
+          ]
+        },
+        "prefix": {
+          "fragments": 2,
+          "one_coefficients": 3,
+          "parity": [
+            5,
+            6,
+            7
+          ]
+        },
+        "searched": {
+          "fragments": 2,
+          "one_coefficients": 3,
+          "parity": [
+            5,
+            6,
+            7
+          ]
+        }
+      },
+      {
+        "K": 7,
+        "R": 5,
+        "aligned_union": {
+          "fragments": 2,
+          "global_affine": false,
+          "one_coefficients": 3,
+          "parity": [
+            8,
+            9,
+            10,
+            11,
+            12
+          ]
+        },
+        "prefix": {
+          "fragments": 2,
+          "one_coefficients": 9,
+          "parity": [
+            7,
+            8,
+            9,
+            10,
+            11
+          ]
+        },
+        "searched": {
+          "fragments": 2,
+          "one_coefficients": 9,
+          "parity": [
+            7,
+            8,
+            9,
+            10,
+            11
+          ]
+        }
+      },
+      {
+        "K": 9,
+        "R": 3,
+        "aligned_union": null,
+        "prefix": {
+          "fragments": 2,
+          "one_coefficients": 3,
+          "parity": [
+            9,
+            10,
+            11
+          ]
+        },
+        "searched": {
+          "fragments": 2,
+          "one_coefficients": 7,
+          "parity": [
+            9,
+            14,
+            15
+          ]
+        }
+      }
+    ],
+    "transform_search_wins": 57,
+    "vandermonde_oracle_coefficients": 3060
+  },
+  "large_field": {
+    "affine_coefficients": 177888,
+    "aligned_union_records": [
+      {
+        "K": 3,
+        "R": 253,
+        "available": false,
+        "field": "legacy-gf8-v1",
+        "reason": "ceil_pow2(K)+R exceeds the field order"
+      },
+      {
+        "K": 7,
+        "R": 249,
+        "available": false,
+        "field": "legacy-gf8-v1",
+        "reason": "ceil_pow2(K)+R exceeds the field order"
+      },
+      {
+        "K": 16,
+        "R": 240,
+        "aligned_one_coefficients": 0,
+        "aligned_symbolic_fragments": 5,
+        "available": true,
+        "changed_coefficients": 0,
+        "dense_coefficients": 3840,
+        "field": "legacy-gf8-v1",
+        "globally_affine": true,
+        "prefix_one_coefficients": 0,
+        "prefix_symbolic_fragments": 5
+      },
+      {
+        "K": 64,
+        "R": 192,
+        "aligned_one_coefficients": 0,
+        "aligned_symbolic_fragments": 3,
+        "available": true,
+        "changed_coefficients": 0,
+        "dense_coefficients": 12288,
+        "field": "legacy-gf8-v1",
+        "globally_affine": true,
+        "prefix_one_coefficients": 0,
+        "prefix_symbolic_fragments": 3
+      },
+      {
+        "K": 127,
+        "R": 129,
+        "available": false,
+        "field": "legacy-gf8-v1",
+        "reason": "ceil_pow2(K)+R exceeds the field order"
+      },
+      {
+        "K": 248,
+        "R": 8,
+        "available": false,
+        "field": "legacy-gf8-v1",
+        "reason": "ceil_pow2(K)+R exceeds the field order"
+      },
+      {
+        "K": 3,
+        "R": 500,
+        "aligned_one_coefficients": 0,
+        "aligned_symbolic_fragments": 13,
+        "available": true,
+        "changed_coefficients": 1125,
+        "dense_coefficients": 1500,
+        "field": "legacy-gf16-v1",
+        "globally_affine": false,
+        "prefix_one_coefficients": 3,
+        "prefix_symbolic_fragments": 16
+      },
+      {
+        "K": 129,
+        "R": 100,
+        "aligned_one_coefficients": 0,
+        "aligned_symbolic_fragments": 5,
+        "available": true,
+        "changed_coefficients": 12900,
+        "dense_coefficients": 12900,
+        "field": "legacy-gf16-v1",
+        "globally_affine": false,
+        "prefix_one_coefficients": 152,
+        "prefix_symbolic_fragments": 11
+      },
+      {
+        "K": 256,
+        "R": 64,
+        "aligned_one_coefficients": 0,
+        "aligned_symbolic_fragments": 2,
+        "available": true,
+        "changed_coefficients": 0,
+        "dense_coefficients": 16384,
+        "field": "legacy-gf16-v1",
+        "globally_affine": true,
+        "prefix_one_coefficients": 0,
+        "prefix_symbolic_fragments": 2
+      },
+      {
+        "K": 1000,
+        "R": 17,
+        "aligned_one_coefficients": 0,
+        "aligned_symbolic_fragments": 8,
+        "available": true,
+        "changed_coefficients": 17000,
+        "dense_coefficients": 17000,
+        "field": "legacy-gf16-v1",
+        "globally_affine": false,
+        "prefix_one_coefficients": 0,
+        "prefix_symbolic_fragments": 9
+      }
+    ],
+    "cases": 10,
+    "dense_coefficients": 84781,
+    "records": [
+      {
+        "K": 3,
+        "R": 253,
+        "coordinate_digest_sha256": "d25e1d2552f22b6566bf7898a090cae952c35f9d6d1766d1fbbab0b523cbd10a",
+        "dense_coefficients": 759,
+        "field": "legacy-gf8-v1",
+        "vandermonde_rows": 8
+      },
+      {
+        "K": 7,
+        "R": 249,
+        "coordinate_digest_sha256": "bc1701582d6b2e7dea945aa9f1a479c26d2c921900f4dff60c3b992e90a82c42",
+        "dense_coefficients": 1743,
+        "field": "legacy-gf8-v1",
+        "vandermonde_rows": 8
+      },
+      {
+        "K": 16,
+        "R": 240,
+        "coordinate_digest_sha256": "1c63f65ec9dd4b14f7fcc1ae09e4044b26fd07569a957ff40da00480c56feec2",
+        "dense_coefficients": 3840,
+        "field": "legacy-gf8-v1",
+        "vandermonde_rows": 8
+      },
+      {
+        "K": 64,
+        "R": 192,
+        "coordinate_digest_sha256": "244d493a0189be9789ecab85f820575d5be52275a2b65c7bf915ee382669931a",
+        "dense_coefficients": 12288,
+        "field": "legacy-gf8-v1",
+        "vandermonde_rows": 8
+      },
+      {
+        "K": 127,
+        "R": 129,
+        "coordinate_digest_sha256": "7d133ea612dc01b5b949de4c3b2daff34f8414b8ba631784e7bdc3858064c132",
+        "dense_coefficients": 16383,
+        "field": "legacy-gf8-v1",
+        "vandermonde_rows": 0
+      },
+      {
+        "K": 248,
+        "R": 8,
+        "coordinate_digest_sha256": "83e65bc27875fd26f2c5af83da74e617c98c1ca25f7f4a1fd2d7e3c6d5926acb",
+        "dense_coefficients": 1984,
+        "field": "legacy-gf8-v1",
+        "vandermonde_rows": 0
+      },
+      {
+        "K": 3,
+        "R": 500,
+        "coordinate_digest_sha256": "78f1b8baa0d6a413c44690b7a5ca9bab90d623eb2b6d19c615690e59f665ccc9",
+        "dense_coefficients": 1500,
+        "field": "legacy-gf16-v1",
+        "vandermonde_rows": 500
+      },
+      {
+        "K": 129,
+        "R": 100,
+        "coordinate_digest_sha256": "845af45b11637333faf1424464917962616e72f93a29304ce365d3539db61427",
+        "dense_coefficients": 12900,
+        "field": "legacy-gf16-v1",
+        "vandermonde_rows": 0
+      },
+      {
+        "K": 256,
+        "R": 64,
+        "coordinate_digest_sha256": "a90f6b7a7fcdfbb2eaf6abe097732a3431828bf29416729b9dc43d2f1010ba6f",
+        "dense_coefficients": 16384,
+        "field": "legacy-gf16-v1",
+        "vandermonde_rows": 0
+      },
+      {
+        "K": 1000,
+        "R": 17,
+        "coordinate_digest_sha256": "a8a2106fce46515b99dd15b218d5ec5b951a609c01060733a12dc5b1c3450014",
+        "dense_coefficients": 17000,
+        "field": "legacy-gf16-v1",
+        "vandermonde_rows": 0
+      }
+    ]
+  },
+  "profile": {
+    "coordinate_map_version": 1,
+    "future_exact_high_identity_family": 4,
+    "identity_family": 3,
+    "padded_side": "K",
+    "parent_count": "K+R",
+    "parity_coordinates": "omega_K .. omega_(K+R-1)",
+    "profile_version": 1,
+    "puncturing": "none",
+    "shortening": "none",
+    "systematic_coordinates": "omega_0 .. omega_(K-1)"
+  },
+  "schema": "leopard2-c7-algebra/v1",
+  "source_sha256": "4bbe15f54fcb559d680516893541236abcfcc1564c49cc21b6aeb8c005ecaeab",
+  "status": "pass"
+}

@@ -21,6 +21,14 @@ MAX_METADATA_VALUE = 4096
 
 PROFILE_LEGACY_HIGH = 1
 PROFILE_LOW = 2
+# This is the persistent identity assigned to the public enum value
+# LEO2_PROFILE_EXACT_EXPERIMENTAL_V1.  C7 freezes its v1 coordinate semantics
+# as exact-prefix low-rate; production codec construction remains unsupported.
+PROFILE_EXACT_LOW = 3
+# Family 4 is deliberately not accepted yet.  Reserving the number here keeps
+# C8's future exact-high profile from reusing family 3 or silently changing the
+# public enum-3 exact-low mathematics.
+PROFILE_EXACT_HIGH_RESERVED = 4
 FIELD_GF8 = 1
 FIELD_GF16 = 2
 
@@ -102,7 +110,9 @@ def _validate(identity: CodeIdentity) -> None:
     ):
         raise IdentityError("coordinate_map_version does not fit uint16")
 
-    if identity.profile not in (PROFILE_LEGACY_HIGH, PROFILE_LOW):
+    if identity.profile not in (
+        PROFILE_LEGACY_HIGH, PROFILE_LOW, PROFILE_EXACT_LOW
+    ):
         raise IdentityError("unknown profile family")
     if identity.profile_version != 1:
         raise IdentityError("unsupported profile version")
@@ -118,9 +128,16 @@ def _validate(identity: CodeIdentity) -> None:
     if identity.profile == PROFILE_LEGACY_HIGH:
         side = _ceil_pow2(identity.recovery_count)
         parent = _ceil_pow2(identity.original_count + side)
-    else:
+    elif identity.profile == PROFILE_LOW:
         side = _ceil_pow2(identity.original_count)
         parent = _ceil_pow2(side + identity.recovery_count)
+    else:
+        # Exact-low V1 has no dyadic parent or padded side.  These redundant
+        # envelope fields carry its exact transmitted length and K-side size.
+        side = identity.original_count
+        parent = identity.original_count + identity.recovery_count
+        if parent > 0xFFFFFFFF:
+            raise IdentityError("exact code length overflows uint32")
     if identity.padded_side != side or identity.parent_count != parent:
         raise IdentityError("parent or padded side is inconsistent with profile")
     if parent > 65536:
@@ -154,6 +171,14 @@ def _validate(identity: CodeIdentity) -> None:
             raise IdentityError("metadata value is too long")
         if item.type in _KNOWN_DIGESTS and len(item.value) != 32:
             raise IdentityError("known digest metadata must be 32 bytes")
+        if identity.profile == PROFILE_EXACT_LOW and item.type in (
+            META_COORDINATE_SET_SHA256,
+            META_SHORTENING_SET_SHA256,
+            META_PUNCTURING_SET_SHA256,
+        ):
+            raise IdentityError(
+                "exact-low V1 map is fixed and has no coordinate/shortening/puncturing TLV"
+            )
         if item.type == META_SHARD_LAYOUT:
             if len(item.value) != 1:
                 raise IdentityError("shard-layout metadata must be one byte")
@@ -273,10 +298,17 @@ def make_identity(
     metadata: Iterable[Metadata] = (),
 ) -> CodeIdentity:
     """Construct a current-profile identity and derive its redundant fields."""
-    side = _ceil_pow2(
-        recovery_count if profile == PROFILE_LEGACY_HIGH else original_count
-    )
-    parent = _ceil_pow2(original_count + side if profile == PROFILE_LEGACY_HIGH else side + recovery_count)
+    if profile == PROFILE_LEGACY_HIGH:
+        side = _ceil_pow2(recovery_count)
+        parent = _ceil_pow2(original_count + side)
+    elif profile == PROFILE_LOW:
+        side = _ceil_pow2(original_count)
+        parent = _ceil_pow2(side + recovery_count)
+    elif profile == PROFILE_EXACT_LOW:
+        side = original_count
+        parent = original_count + recovery_count
+    else:
+        raise IdentityError("unknown profile family")
     return CodeIdentity(
         profile=profile,
         profile_version=1,

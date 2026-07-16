@@ -1,0 +1,1983 @@
+{
+  "builds": [
+    {
+      "ar": {
+        "path": "/usr/bin/x86_64-linux-gnu-ar",
+        "sha256": "6452af2eea333b8c65e1adb92964fc8f97863ab003fa13f9d12bff5345cd7dbe",
+        "version": "GNU ar (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
+      },
+      "backend": "scalar",
+      "build_argv": [
+        "/usr/bin/cmake",
+        "--build",
+        "build/c7-matrix/core-scalar",
+        "--target",
+        "libleopard",
+        "--verbose",
+        "--",
+        "-j4"
+      ],
+      "build_dir": "build/c7-matrix/core-scalar",
+      "build_stderr": {
+        "bytes": 0,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-core-build.stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "build_stdout": {
+        "bytes": 10680,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-core-build.stdout.txt",
+        "sha256": "f19ed56a213c18311d6ecba2ec8fb2be9f7ef2939b98e2431b070499278ad219"
+      },
+      "c_compiler": {
+        "path": "/usr/bin/x86_64-linux-gnu-gcc-13",
+        "sha256": "1b99826121ae6682a634e5efe09bd3e3df58ce58e0b28f849114ab5b89139c26",
+        "version": "x86_64-linux-gnu-gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
+      },
+      "cmake": {
+        "path": "/usr/bin/cmake",
+        "sha256": "1c5227af4edd22d8d689def545e18ee458260c0fd579eba2187967f38817e638",
+        "version": "cmake version 3.28.3\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).\n"
+      },
+      "cmake_cache": {
+        "bytes": 20672,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-CMakeCache.txt",
+        "sha256": "618e3d188c3c2ed5d9334f18cbd74107a7ba411e1f353f7caeb8b6f82ece0c44"
+      },
+      "cmake_linker": {
+        "path": "/usr/bin/x86_64-linux-gnu-ld",
+        "sha256": "e9ceb054c12207970f2726dfc07e9a66b411602748628baf27399f02a9bbb31b",
+        "version": "GNU ld (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) a later version.\nThis program has absolutely no warranty.\n"
+      },
+      "compile_argv": [
+        "/usr/bin/x86_64-linux-gnu-g++-13",
+        "-v",
+        "-Wl,-v",
+        "-std=c++11",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Wpedantic",
+        "-Werror",
+        "-I.",
+        "-DLEO2_C7_SOURCE_SHA256=\"c2edae60a9d9b57826a0206532e0437a4f3fbe07d8d3978045ca75a78f92f604\"",
+        "-DLEO2_C7_CORE_GIT_SHA=\"09e1ccec9dfc84a33db965cbccea1f375fb9ff39\"",
+        "-DLEO2_C7_LIBRARY_SHA256=\"5c1ee539b3eeadf926ed21281468617ba43e56e76ba65e46e8337e69d7b1e85f\"",
+        "-O2",
+        "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp",
+        "build/c7-matrix/core-scalar/liblibleopard.a",
+        "-pthread",
+        "-fopenmp",
+        "-o",
+        "build/c7-matrix/c7-scalar"
+      ],
+      "compile_stderr": {
+        "bytes": 8990,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-compile.stderr.txt",
+        "sha256": "4478535f7b71e0a266db1b7c59d8d2e687db73d9e24a6484741152b075c38bd9"
+      },
+      "compile_stdout": {
+        "bytes": 38,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-compile.stdout.txt",
+        "sha256": "d3326e248ec71b75a9016c742a75e4a40f139e4126f659577553b8ee686507c9"
+      },
+      "compiler": {
+        "path": "/usr/bin/x86_64-linux-gnu-g++-13",
+        "sha256": "1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769",
+        "version": "x86_64-linux-gnu-g++-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
+      },
+      "configure_argv": [
+        "/usr/bin/cmake",
+        "-S",
+        ".",
+        "-B",
+        "build/c7-matrix/core-scalar",
+        "-G",
+        "Unix Makefiles",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_C_COMPILER=/usr/bin/x86_64-linux-gnu-gcc-13",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/x86_64-linux-gnu-g++-13",
+        "-DLEO2_BACKEND_VARIANT=scalar",
+        "-DLEO2_BUILD_TESTS=OFF",
+        "-DLEO2_BUILD_BENCHMARKS=OFF",
+        "-DLEO2_BUILD_FUZZERS=OFF",
+        "-DLEO2_ENABLE_CUDA=OFF",
+        "-DENABLE_OPENMP=ON"
+      ],
+      "configure_stderr": {
+        "bytes": 0,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-configure.stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "configure_stdout": {
+        "bytes": 1668,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-configure.stdout.txt",
+        "sha256": "99da37acda8a3acdf8287910d0b13fec7c909bf550374466572e2ca813ce7908"
+      },
+      "cxx_compiler": {
+        "path": "/usr/bin/x86_64-linux-gnu-g++-13",
+        "sha256": "1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769",
+        "version": "x86_64-linux-gnu-g++-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
+      },
+      "executable": {
+        "bytes": 2844712,
+        "path": "build/c7-matrix/c7-scalar",
+        "sha256": "1a60e03641679e603db0614d4ecc566efbaf6915d4a174c0377cd55cbd5c3c42"
+      },
+      "gmake": {
+        "path": "/usr/bin/gmake",
+        "sha256": "d78b8f1d099fbcfb6f2f49ab87223b9b68fb3956642f92d6ec6de812e8afa965",
+        "version": "GNU Make 4.3\nBuilt for x86_64-pc-linux-gnu\nCopyright (C) 1988-2020 Free Software Foundation, Inc.\nLicense GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>\nThis is free software: you are free to change and redistribute it.\nThere is NO WARRANTY, to the extent permitted by law.\n"
+      },
+      "instrumentation": {
+        "archive_members": [
+          "leopard.cpp.o",
+          "leopard2.cpp.o",
+          "Leopard2Backend.cpp.o",
+          "Leopard2BackendScalar.cpp.o",
+          "Leopard2CpuFeatures.cpp.o",
+          "Leopard2Plan.cpp.o",
+          "LeopardCommon.cpp.o",
+          "LeopardFF16.cpp.o",
+          "LeopardFF8.cpp.o",
+          "Leopard2BackendSSSE3.cpp.o",
+          "Leopard2BackendAVX2.cpp.o"
+        ],
+        "core_archive_counts": {
+          "asan_lines": 0,
+          "ubsan_lines": 0
+        },
+        "core_archive_member_counts": {
+          "Leopard2Backend.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "Leopard2BackendAVX2.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "Leopard2BackendSSSE3.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "Leopard2BackendScalar.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "Leopard2CpuFeatures.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "Leopard2Plan.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "LeopardCommon.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "LeopardFF16.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "LeopardFF8.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "leopard.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "leopard2.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          }
+        },
+        "core_archive_symbol_scan": {
+          "bytes": 0,
+          "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-nm-core-archive-sanitizers.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "executable_counts": {
+          "asan_lines": 0,
+          "ubsan_lines": 0
+        },
+        "executable_symbol_scan": {
+          "bytes": 0,
+          "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-nm-executable-sanitizers.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "required_compile_macro": false
+      },
+      "library": {
+        "bytes": 2633700,
+        "path": "build/c7-matrix/core-scalar/liblibleopard.a",
+        "sha256": "5c1ee539b3eeadf926ed21281468617ba43e56e76ba65e46e8337e69d7b1e85f"
+      },
+      "link_driver": {
+        "path": "/usr/bin/x86_64-linux-gnu-g++-13",
+        "sha256": "1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769",
+        "version": "x86_64-linux-gnu-g++-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
+      },
+      "name": "scalar",
+      "nm": {
+        "path": "/usr/bin/x86_64-linux-gnu-nm",
+        "sha256": "3708df3d7ce16e2c1dcdcd722784ae382d4d582276a71ab7bbe2d542f5621202",
+        "version": "GNU nm (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
+      },
+      "ranlib": {
+        "path": "/usr/bin/x86_64-linux-gnu-ranlib",
+        "sha256": "60254978b8ee2c1b21b41d16a18a621dbbcc72e43eb2fa9f916818256c77e9ee",
+        "version": "GNU ranlib (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
+      },
+      "sanitizer": false,
+      "source_closure": [
+        {
+          "bytes": 27399,
+          "path": "CMakeLists.txt",
+          "sha256": "0a20669b0ddfedb875f542bca9f7d1e8c49d20caa57fc3e351222aa43d2e2984"
+        },
+        {
+          "bytes": 8320,
+          "path": "Leopard2Backend.cpp",
+          "sha256": "51e4d9f437773f7755161f4e5bd4269f6bb95d50dd7d8f8bd1e1dbdfcf9ac900"
+        },
+        {
+          "bytes": 3752,
+          "path": "Leopard2Backend.h",
+          "sha256": "d1dbaa13d2bb0fafc95e46ac3cd956b64e5c945d3f27ac8d2fb6b08bdbb90866"
+        },
+        {
+          "bytes": 9083,
+          "path": "Leopard2BackendAVX2.cpp",
+          "sha256": "2f18e711bdc6ab47d2513165efcfd0a8ec284b3fda806a92a9cce77a35b76b66"
+        },
+        {
+          "bytes": 9066,
+          "path": "Leopard2BackendSSSE3.cpp",
+          "sha256": "48fec52c003df2d5dbc65db439fc64a7780191b4fcb58a7358cdb957c4ed36cd"
+        },
+        {
+          "bytes": 6253,
+          "path": "Leopard2BackendScalar.cpp",
+          "sha256": "cffd8434ce177aa2fa28768ea91fbf30a937c50bc3a621c1466c2745f94f125e"
+        },
+        {
+          "bytes": 3883,
+          "path": "Leopard2CpuFeatures.cpp",
+          "sha256": "b07ca9d486ea72b41a5c6724f8339dcd921af20f7a34f94505589cb9fa0cab46"
+        },
+        {
+          "bytes": 2654,
+          "path": "Leopard2Direct.h",
+          "sha256": "4e6964d850f069b765282ffd33d49e0f646242430a217186a40c1d6084fc656d"
+        },
+        {
+          "bytes": 2643,
+          "path": "Leopard2Dispatch.h",
+          "sha256": "d5a9d7dd2d388c70eda36c31d4a643a51c6be633747c97284c03676084ad9144"
+        },
+        {
+          "bytes": 3846,
+          "path": "Leopard2Plan.cpp",
+          "sha256": "f1cdb03ca4b5ed0fef3957ed62d2e85471953aca0064802d4a0ef8bc4df77673"
+        },
+        {
+          "bytes": 3803,
+          "path": "Leopard2Plan.h",
+          "sha256": "68a8a6fac34ae0b8e7c03e5a87fd67f20b993bded4440f3e0482cb90e7ca2c00"
+        },
+        {
+          "bytes": 23145,
+          "path": "LeopardCommon.cpp",
+          "sha256": "d2519c8a1515914d86f756ab6f2c6be597dfd0548a4c9b2552411c6eabaeeda4"
+        },
+        {
+          "bytes": 16178,
+          "path": "LeopardCommon.h",
+          "sha256": "da762b045c6dc61ba7ba4320dcd6c69dca2b7789025ec597f36ac2674f0d21c0"
+        },
+        {
+          "bytes": 86539,
+          "path": "LeopardFF16.cpp",
+          "sha256": "3580e7482c1c2bded950b4ee7e16e3e433de338013f001c494c7d97a347464ba"
+        },
+        {
+          "bytes": 9281,
+          "path": "LeopardFF16.h",
+          "sha256": "3dbb579882bd6bd6f16dbed8977b029b4b0d0078122e03fa73765d089dc57862"
+        },
+        {
+          "bytes": 89340,
+          "path": "LeopardFF8.cpp",
+          "sha256": "c8f5c6f7110df7d1df5e4ba729a9d043478eb9cb9ea56a4b4050442a7499ac16"
+        },
+        {
+          "bytes": 9248,
+          "path": "LeopardFF8.h",
+          "sha256": "4d9acab5fe9de6ed676f119d39173fdedefd76879a153900f1243ac2e1c4f9f7"
+        },
+        {
+          "bytes": 10559,
+          "path": "leopard.cpp",
+          "sha256": "d62578b0cddfc2f06c72ce33497b86e40483db6e0e42491f875cc3bc250f92f4"
+        },
+        {
+          "bytes": 8822,
+          "path": "leopard.h",
+          "sha256": "ca3083ce43a4727c89d9bb33479671af53efbedd41d0ba3ed748f1f464e33794"
+        },
+        {
+          "bytes": 92591,
+          "path": "leopard2.cpp",
+          "sha256": "7105f2e5fbb1690849fbedb14353848440440428cca6c373dfaf052884f616f3"
+        },
+        {
+          "bytes": 11959,
+          "path": "leopard2.h",
+          "sha256": "0023f28f9b9e1a6c97dfadead6bae97fbbb4ecb545e767648c535da534e12d0c"
+        }
+      ],
+      "standalone_linker": {
+        "path": "/usr/bin/ld",
+        "sha256": "e9ceb054c12207970f2726dfc07e9a66b411602748628baf27399f02a9bbb31b",
+        "version": "GNU ld (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) a later version.\nThis program has absolutely no warranty.\n"
+      }
+    },
+    {
+      "ar": {
+        "path": "/usr/bin/x86_64-linux-gnu-ar",
+        "sha256": "6452af2eea333b8c65e1adb92964fc8f97863ab003fa13f9d12bff5345cd7dbe",
+        "version": "GNU ar (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
+      },
+      "backend": "ssse3",
+      "build_argv": [
+        "/usr/bin/cmake",
+        "--build",
+        "build/c7-matrix/core-ssse3",
+        "--target",
+        "libleopard",
+        "--verbose",
+        "--",
+        "-j4"
+      ],
+      "build_dir": "build/c7-matrix/core-ssse3",
+      "build_stderr": {
+        "bytes": 0,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-core-build.stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "build_stdout": {
+        "bytes": 10638,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-core-build.stdout.txt",
+        "sha256": "375361a31660c0fa34a1b057f8bff5fbc9476ec7866c6cc8f9b6b8f95f41e753"
+      },
+      "c_compiler": {
+        "path": "/usr/bin/x86_64-linux-gnu-gcc-13",
+        "sha256": "1b99826121ae6682a634e5efe09bd3e3df58ce58e0b28f849114ab5b89139c26",
+        "version": "x86_64-linux-gnu-gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
+      },
+      "cmake": {
+        "path": "/usr/bin/cmake",
+        "sha256": "1c5227af4edd22d8d689def545e18ee458260c0fd579eba2187967f38817e638",
+        "version": "cmake version 3.28.3\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).\n"
+      },
+      "cmake_cache": {
+        "bytes": 20667,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-CMakeCache.txt",
+        "sha256": "638fd58a2ace2414a5de59076ea814bcd9a9c7445a06dce26b2b2d994d40751d"
+      },
+      "cmake_linker": {
+        "path": "/usr/bin/x86_64-linux-gnu-ld",
+        "sha256": "e9ceb054c12207970f2726dfc07e9a66b411602748628baf27399f02a9bbb31b",
+        "version": "GNU ld (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) a later version.\nThis program has absolutely no warranty.\n"
+      },
+      "compile_argv": [
+        "/usr/bin/x86_64-linux-gnu-g++-13",
+        "-v",
+        "-Wl,-v",
+        "-std=c++11",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Wpedantic",
+        "-Werror",
+        "-I.",
+        "-DLEO2_C7_SOURCE_SHA256=\"c2edae60a9d9b57826a0206532e0437a4f3fbe07d8d3978045ca75a78f92f604\"",
+        "-DLEO2_C7_CORE_GIT_SHA=\"09e1ccec9dfc84a33db965cbccea1f375fb9ff39\"",
+        "-DLEO2_C7_LIBRARY_SHA256=\"236d4ff8c7dce9efb95620a86a7476cf574ad8ec90b1e7bf781f9faf308ba264\"",
+        "-O2",
+        "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp",
+        "build/c7-matrix/core-ssse3/liblibleopard.a",
+        "-pthread",
+        "-fopenmp",
+        "-o",
+        "build/c7-matrix/c7-ssse3"
+      ],
+      "compile_stderr": {
+        "bytes": 8977,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-compile.stderr.txt",
+        "sha256": "4d531c6191169697ac207489cd898175e43e93b3fcea0e7d5ab0c4976d24a63a"
+      },
+      "compile_stdout": {
+        "bytes": 38,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-compile.stdout.txt",
+        "sha256": "d3326e248ec71b75a9016c742a75e4a40f139e4126f659577553b8ee686507c9"
+      },
+      "compiler": {
+        "path": "/usr/bin/x86_64-linux-gnu-g++-13",
+        "sha256": "1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769",
+        "version": "x86_64-linux-gnu-g++-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
+      },
+      "configure_argv": [
+        "/usr/bin/cmake",
+        "-S",
+        ".",
+        "-B",
+        "build/c7-matrix/core-ssse3",
+        "-G",
+        "Unix Makefiles",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_C_COMPILER=/usr/bin/x86_64-linux-gnu-gcc-13",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/x86_64-linux-gnu-g++-13",
+        "-DLEO2_BACKEND_VARIANT=ssse3",
+        "-DLEO2_BUILD_TESTS=OFF",
+        "-DLEO2_BUILD_BENCHMARKS=OFF",
+        "-DLEO2_BUILD_FUZZERS=OFF",
+        "-DLEO2_ENABLE_CUDA=OFF",
+        "-DENABLE_OPENMP=ON"
+      ],
+      "configure_stderr": {
+        "bytes": 0,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-configure.stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "configure_stdout": {
+        "bytes": 1667,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-configure.stdout.txt",
+        "sha256": "e62a44e06dc9b607af294f829916cd1539aa04cad0af768a7a37a1dfcfb6ba4b"
+      },
+      "cxx_compiler": {
+        "path": "/usr/bin/x86_64-linux-gnu-g++-13",
+        "sha256": "1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769",
+        "version": "x86_64-linux-gnu-g++-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
+      },
+      "executable": {
+        "bytes": 2872152,
+        "path": "build/c7-matrix/c7-ssse3",
+        "sha256": "56aaf48f7732c298b68ada047f3766f828da1cf9e4e98c23f548a0e41cad4916"
+      },
+      "gmake": {
+        "path": "/usr/bin/gmake",
+        "sha256": "d78b8f1d099fbcfb6f2f49ab87223b9b68fb3956642f92d6ec6de812e8afa965",
+        "version": "GNU Make 4.3\nBuilt for x86_64-pc-linux-gnu\nCopyright (C) 1988-2020 Free Software Foundation, Inc.\nLicense GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>\nThis is free software: you are free to change and redistribute it.\nThere is NO WARRANTY, to the extent permitted by law.\n"
+      },
+      "instrumentation": {
+        "archive_members": [
+          "leopard.cpp.o",
+          "leopard2.cpp.o",
+          "Leopard2Backend.cpp.o",
+          "Leopard2BackendScalar.cpp.o",
+          "Leopard2CpuFeatures.cpp.o",
+          "Leopard2Plan.cpp.o",
+          "LeopardCommon.cpp.o",
+          "LeopardFF16.cpp.o",
+          "LeopardFF8.cpp.o",
+          "Leopard2BackendSSSE3.cpp.o",
+          "Leopard2BackendAVX2.cpp.o"
+        ],
+        "core_archive_counts": {
+          "asan_lines": 0,
+          "ubsan_lines": 0
+        },
+        "core_archive_member_counts": {
+          "Leopard2Backend.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "Leopard2BackendAVX2.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "Leopard2BackendSSSE3.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "Leopard2BackendScalar.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "Leopard2CpuFeatures.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "Leopard2Plan.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "LeopardCommon.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "LeopardFF16.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "LeopardFF8.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "leopard.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "leopard2.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          }
+        },
+        "core_archive_symbol_scan": {
+          "bytes": 0,
+          "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-nm-core-archive-sanitizers.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "executable_counts": {
+          "asan_lines": 0,
+          "ubsan_lines": 0
+        },
+        "executable_symbol_scan": {
+          "bytes": 0,
+          "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-nm-executable-sanitizers.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "required_compile_macro": false
+      },
+      "library": {
+        "bytes": 2633556,
+        "path": "build/c7-matrix/core-ssse3/liblibleopard.a",
+        "sha256": "236d4ff8c7dce9efb95620a86a7476cf574ad8ec90b1e7bf781f9faf308ba264"
+      },
+      "link_driver": {
+        "path": "/usr/bin/x86_64-linux-gnu-g++-13",
+        "sha256": "1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769",
+        "version": "x86_64-linux-gnu-g++-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
+      },
+      "name": "ssse3",
+      "nm": {
+        "path": "/usr/bin/x86_64-linux-gnu-nm",
+        "sha256": "3708df3d7ce16e2c1dcdcd722784ae382d4d582276a71ab7bbe2d542f5621202",
+        "version": "GNU nm (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
+      },
+      "ranlib": {
+        "path": "/usr/bin/x86_64-linux-gnu-ranlib",
+        "sha256": "60254978b8ee2c1b21b41d16a18a621dbbcc72e43eb2fa9f916818256c77e9ee",
+        "version": "GNU ranlib (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
+      },
+      "sanitizer": false,
+      "source_closure": [
+        {
+          "bytes": 27399,
+          "path": "CMakeLists.txt",
+          "sha256": "0a20669b0ddfedb875f542bca9f7d1e8c49d20caa57fc3e351222aa43d2e2984"
+        },
+        {
+          "bytes": 8320,
+          "path": "Leopard2Backend.cpp",
+          "sha256": "51e4d9f437773f7755161f4e5bd4269f6bb95d50dd7d8f8bd1e1dbdfcf9ac900"
+        },
+        {
+          "bytes": 3752,
+          "path": "Leopard2Backend.h",
+          "sha256": "d1dbaa13d2bb0fafc95e46ac3cd956b64e5c945d3f27ac8d2fb6b08bdbb90866"
+        },
+        {
+          "bytes": 9083,
+          "path": "Leopard2BackendAVX2.cpp",
+          "sha256": "2f18e711bdc6ab47d2513165efcfd0a8ec284b3fda806a92a9cce77a35b76b66"
+        },
+        {
+          "bytes": 9066,
+          "path": "Leopard2BackendSSSE3.cpp",
+          "sha256": "48fec52c003df2d5dbc65db439fc64a7780191b4fcb58a7358cdb957c4ed36cd"
+        },
+        {
+          "bytes": 6253,
+          "path": "Leopard2BackendScalar.cpp",
+          "sha256": "cffd8434ce177aa2fa28768ea91fbf30a937c50bc3a621c1466c2745f94f125e"
+        },
+        {
+          "bytes": 3883,
+          "path": "Leopard2CpuFeatures.cpp",
+          "sha256": "b07ca9d486ea72b41a5c6724f8339dcd921af20f7a34f94505589cb9fa0cab46"
+        },
+        {
+          "bytes": 2654,
+          "path": "Leopard2Direct.h",
+          "sha256": "4e6964d850f069b765282ffd33d49e0f646242430a217186a40c1d6084fc656d"
+        },
+        {
+          "bytes": 2643,
+          "path": "Leopard2Dispatch.h",
+          "sha256": "d5a9d7dd2d388c70eda36c31d4a643a51c6be633747c97284c03676084ad9144"
+        },
+        {
+          "bytes": 3846,
+          "path": "Leopard2Plan.cpp",
+          "sha256": "f1cdb03ca4b5ed0fef3957ed62d2e85471953aca0064802d4a0ef8bc4df77673"
+        },
+        {
+          "bytes": 3803,
+          "path": "Leopard2Plan.h",
+          "sha256": "68a8a6fac34ae0b8e7c03e5a87fd67f20b993bded4440f3e0482cb90e7ca2c00"
+        },
+        {
+          "bytes": 23145,
+          "path": "LeopardCommon.cpp",
+          "sha256": "d2519c8a1515914d86f756ab6f2c6be597dfd0548a4c9b2552411c6eabaeeda4"
+        },
+        {
+          "bytes": 16178,
+          "path": "LeopardCommon.h",
+          "sha256": "da762b045c6dc61ba7ba4320dcd6c69dca2b7789025ec597f36ac2674f0d21c0"
+        },
+        {
+          "bytes": 86539,
+          "path": "LeopardFF16.cpp",
+          "sha256": "3580e7482c1c2bded950b4ee7e16e3e433de338013f001c494c7d97a347464ba"
+        },
+        {
+          "bytes": 9281,
+          "path": "LeopardFF16.h",
+          "sha256": "3dbb579882bd6bd6f16dbed8977b029b4b0d0078122e03fa73765d089dc57862"
+        },
+        {
+          "bytes": 89340,
+          "path": "LeopardFF8.cpp",
+          "sha256": "c8f5c6f7110df7d1df5e4ba729a9d043478eb9cb9ea56a4b4050442a7499ac16"
+        },
+        {
+          "bytes": 9248,
+          "path": "LeopardFF8.h",
+          "sha256": "4d9acab5fe9de6ed676f119d39173fdedefd76879a153900f1243ac2e1c4f9f7"
+        },
+        {
+          "bytes": 10559,
+          "path": "leopard.cpp",
+          "sha256": "d62578b0cddfc2f06c72ce33497b86e40483db6e0e42491f875cc3bc250f92f4"
+        },
+        {
+          "bytes": 8822,
+          "path": "leopard.h",
+          "sha256": "ca3083ce43a4727c89d9bb33479671af53efbedd41d0ba3ed748f1f464e33794"
+        },
+        {
+          "bytes": 92591,
+          "path": "leopard2.cpp",
+          "sha256": "7105f2e5fbb1690849fbedb14353848440440428cca6c373dfaf052884f616f3"
+        },
+        {
+          "bytes": 11959,
+          "path": "leopard2.h",
+          "sha256": "0023f28f9b9e1a6c97dfadead6bae97fbbb4ecb545e767648c535da534e12d0c"
+        }
+      ],
+      "standalone_linker": {
+        "path": "/usr/bin/ld",
+        "sha256": "e9ceb054c12207970f2726dfc07e9a66b411602748628baf27399f02a9bbb31b",
+        "version": "GNU ld (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) a later version.\nThis program has absolutely no warranty.\n"
+      }
+    },
+    {
+      "ar": {
+        "path": "/usr/bin/x86_64-linux-gnu-ar",
+        "sha256": "6452af2eea333b8c65e1adb92964fc8f97863ab003fa13f9d12bff5345cd7dbe",
+        "version": "GNU ar (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
+      },
+      "backend": "avx2",
+      "build_argv": [
+        "/usr/bin/cmake",
+        "--build",
+        "build/c7-matrix/core-avx2",
+        "--target",
+        "libleopard",
+        "--verbose",
+        "--",
+        "-j4"
+      ],
+      "build_dir": "build/c7-matrix/core-avx2",
+      "build_stderr": {
+        "bytes": 0,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-core-build.stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "build_stdout": {
+        "bytes": 10596,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-core-build.stdout.txt",
+        "sha256": "eaab19b90f4847c27ea5fd86306e1e2b6c9cf83fe702e5c8de24e65b0c458ae4"
+      },
+      "c_compiler": {
+        "path": "/usr/bin/x86_64-linux-gnu-gcc-13",
+        "sha256": "1b99826121ae6682a634e5efe09bd3e3df58ce58e0b28f849114ab5b89139c26",
+        "version": "x86_64-linux-gnu-gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
+      },
+      "cmake": {
+        "path": "/usr/bin/cmake",
+        "sha256": "1c5227af4edd22d8d689def545e18ee458260c0fd579eba2187967f38817e638",
+        "version": "cmake version 3.28.3\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).\n"
+      },
+      "cmake_cache": {
+        "bytes": 20662,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-CMakeCache.txt",
+        "sha256": "514a10b679f9d700ef8cc78a79b32708c89069eedc47cd773dd5c5a3a7c8aa91"
+      },
+      "cmake_linker": {
+        "path": "/usr/bin/x86_64-linux-gnu-ld",
+        "sha256": "e9ceb054c12207970f2726dfc07e9a66b411602748628baf27399f02a9bbb31b",
+        "version": "GNU ld (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) a later version.\nThis program has absolutely no warranty.\n"
+      },
+      "compile_argv": [
+        "/usr/bin/x86_64-linux-gnu-g++-13",
+        "-v",
+        "-Wl,-v",
+        "-std=c++11",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Wpedantic",
+        "-Werror",
+        "-I.",
+        "-DLEO2_C7_SOURCE_SHA256=\"c2edae60a9d9b57826a0206532e0437a4f3fbe07d8d3978045ca75a78f92f604\"",
+        "-DLEO2_C7_CORE_GIT_SHA=\"09e1ccec9dfc84a33db965cbccea1f375fb9ff39\"",
+        "-DLEO2_C7_LIBRARY_SHA256=\"f88033e153e52b0cbed54c2adeabb1e5a17c66493c049155eea6ed5012d89799\"",
+        "-O2",
+        "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp",
+        "build/c7-matrix/core-avx2/liblibleopard.a",
+        "-pthread",
+        "-fopenmp",
+        "-o",
+        "build/c7-matrix/c7-avx2"
+      ],
+      "compile_stderr": {
+        "bytes": 8964,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-compile.stderr.txt",
+        "sha256": "b90d4f61a3269b25ac99fb680c1180428fb359c0be6c3cb1d604c80c12b89d4f"
+      },
+      "compile_stdout": {
+        "bytes": 38,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-compile.stdout.txt",
+        "sha256": "d3326e248ec71b75a9016c742a75e4a40f139e4126f659577553b8ee686507c9"
+      },
+      "compiler": {
+        "path": "/usr/bin/x86_64-linux-gnu-g++-13",
+        "sha256": "1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769",
+        "version": "x86_64-linux-gnu-g++-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
+      },
+      "configure_argv": [
+        "/usr/bin/cmake",
+        "-S",
+        ".",
+        "-B",
+        "build/c7-matrix/core-avx2",
+        "-G",
+        "Unix Makefiles",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_C_COMPILER=/usr/bin/x86_64-linux-gnu-gcc-13",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/x86_64-linux-gnu-g++-13",
+        "-DLEO2_BACKEND_VARIANT=avx2",
+        "-DLEO2_BUILD_TESTS=OFF",
+        "-DLEO2_BUILD_BENCHMARKS=OFF",
+        "-DLEO2_BUILD_FUZZERS=OFF",
+        "-DLEO2_ENABLE_CUDA=OFF",
+        "-DENABLE_OPENMP=ON"
+      ],
+      "configure_stderr": {
+        "bytes": 0,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-configure.stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "configure_stdout": {
+        "bytes": 1666,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-configure.stdout.txt",
+        "sha256": "72a1d1ae6e65ae9b799fc4c87d4133d0fe6a124a37ff32bed36d146a4eda6eca"
+      },
+      "cxx_compiler": {
+        "path": "/usr/bin/x86_64-linux-gnu-g++-13",
+        "sha256": "1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769",
+        "version": "x86_64-linux-gnu-g++-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
+      },
+      "executable": {
+        "bytes": 2859256,
+        "path": "build/c7-matrix/c7-avx2",
+        "sha256": "e76a69ecc1042754766e8b490b263e70fe723c702192f87a5b0ece778c810d1b"
+      },
+      "gmake": {
+        "path": "/usr/bin/gmake",
+        "sha256": "d78b8f1d099fbcfb6f2f49ab87223b9b68fb3956642f92d6ec6de812e8afa965",
+        "version": "GNU Make 4.3\nBuilt for x86_64-pc-linux-gnu\nCopyright (C) 1988-2020 Free Software Foundation, Inc.\nLicense GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>\nThis is free software: you are free to change and redistribute it.\nThere is NO WARRANTY, to the extent permitted by law.\n"
+      },
+      "instrumentation": {
+        "archive_members": [
+          "leopard.cpp.o",
+          "leopard2.cpp.o",
+          "Leopard2Backend.cpp.o",
+          "Leopard2BackendScalar.cpp.o",
+          "Leopard2CpuFeatures.cpp.o",
+          "Leopard2Plan.cpp.o",
+          "LeopardCommon.cpp.o",
+          "LeopardFF16.cpp.o",
+          "LeopardFF8.cpp.o",
+          "Leopard2BackendSSSE3.cpp.o",
+          "Leopard2BackendAVX2.cpp.o"
+        ],
+        "core_archive_counts": {
+          "asan_lines": 0,
+          "ubsan_lines": 0
+        },
+        "core_archive_member_counts": {
+          "Leopard2Backend.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "Leopard2BackendAVX2.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "Leopard2BackendSSSE3.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "Leopard2BackendScalar.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "Leopard2CpuFeatures.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "Leopard2Plan.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "LeopardCommon.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "LeopardFF16.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "LeopardFF8.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "leopard.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "leopard2.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          }
+        },
+        "core_archive_symbol_scan": {
+          "bytes": 0,
+          "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-nm-core-archive-sanitizers.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "executable_counts": {
+          "asan_lines": 0,
+          "ubsan_lines": 0
+        },
+        "executable_symbol_scan": {
+          "bytes": 0,
+          "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-nm-executable-sanitizers.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "required_compile_macro": false
+      },
+      "library": {
+        "bytes": 2633540,
+        "path": "build/c7-matrix/core-avx2/liblibleopard.a",
+        "sha256": "f88033e153e52b0cbed54c2adeabb1e5a17c66493c049155eea6ed5012d89799"
+      },
+      "link_driver": {
+        "path": "/usr/bin/x86_64-linux-gnu-g++-13",
+        "sha256": "1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769",
+        "version": "x86_64-linux-gnu-g++-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
+      },
+      "name": "avx2",
+      "nm": {
+        "path": "/usr/bin/x86_64-linux-gnu-nm",
+        "sha256": "3708df3d7ce16e2c1dcdcd722784ae382d4d582276a71ab7bbe2d542f5621202",
+        "version": "GNU nm (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
+      },
+      "ranlib": {
+        "path": "/usr/bin/x86_64-linux-gnu-ranlib",
+        "sha256": "60254978b8ee2c1b21b41d16a18a621dbbcc72e43eb2fa9f916818256c77e9ee",
+        "version": "GNU ranlib (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
+      },
+      "sanitizer": false,
+      "source_closure": [
+        {
+          "bytes": 27399,
+          "path": "CMakeLists.txt",
+          "sha256": "0a20669b0ddfedb875f542bca9f7d1e8c49d20caa57fc3e351222aa43d2e2984"
+        },
+        {
+          "bytes": 8320,
+          "path": "Leopard2Backend.cpp",
+          "sha256": "51e4d9f437773f7755161f4e5bd4269f6bb95d50dd7d8f8bd1e1dbdfcf9ac900"
+        },
+        {
+          "bytes": 3752,
+          "path": "Leopard2Backend.h",
+          "sha256": "d1dbaa13d2bb0fafc95e46ac3cd956b64e5c945d3f27ac8d2fb6b08bdbb90866"
+        },
+        {
+          "bytes": 9083,
+          "path": "Leopard2BackendAVX2.cpp",
+          "sha256": "2f18e711bdc6ab47d2513165efcfd0a8ec284b3fda806a92a9cce77a35b76b66"
+        },
+        {
+          "bytes": 9066,
+          "path": "Leopard2BackendSSSE3.cpp",
+          "sha256": "48fec52c003df2d5dbc65db439fc64a7780191b4fcb58a7358cdb957c4ed36cd"
+        },
+        {
+          "bytes": 6253,
+          "path": "Leopard2BackendScalar.cpp",
+          "sha256": "cffd8434ce177aa2fa28768ea91fbf30a937c50bc3a621c1466c2745f94f125e"
+        },
+        {
+          "bytes": 3883,
+          "path": "Leopard2CpuFeatures.cpp",
+          "sha256": "b07ca9d486ea72b41a5c6724f8339dcd921af20f7a34f94505589cb9fa0cab46"
+        },
+        {
+          "bytes": 2654,
+          "path": "Leopard2Direct.h",
+          "sha256": "4e6964d850f069b765282ffd33d49e0f646242430a217186a40c1d6084fc656d"
+        },
+        {
+          "bytes": 2643,
+          "path": "Leopard2Dispatch.h",
+          "sha256": "d5a9d7dd2d388c70eda36c31d4a643a51c6be633747c97284c03676084ad9144"
+        },
+        {
+          "bytes": 3846,
+          "path": "Leopard2Plan.cpp",
+          "sha256": "f1cdb03ca4b5ed0fef3957ed62d2e85471953aca0064802d4a0ef8bc4df77673"
+        },
+        {
+          "bytes": 3803,
+          "path": "Leopard2Plan.h",
+          "sha256": "68a8a6fac34ae0b8e7c03e5a87fd67f20b993bded4440f3e0482cb90e7ca2c00"
+        },
+        {
+          "bytes": 23145,
+          "path": "LeopardCommon.cpp",
+          "sha256": "d2519c8a1515914d86f756ab6f2c6be597dfd0548a4c9b2552411c6eabaeeda4"
+        },
+        {
+          "bytes": 16178,
+          "path": "LeopardCommon.h",
+          "sha256": "da762b045c6dc61ba7ba4320dcd6c69dca2b7789025ec597f36ac2674f0d21c0"
+        },
+        {
+          "bytes": 86539,
+          "path": "LeopardFF16.cpp",
+          "sha256": "3580e7482c1c2bded950b4ee7e16e3e433de338013f001c494c7d97a347464ba"
+        },
+        {
+          "bytes": 9281,
+          "path": "LeopardFF16.h",
+          "sha256": "3dbb579882bd6bd6f16dbed8977b029b4b0d0078122e03fa73765d089dc57862"
+        },
+        {
+          "bytes": 89340,
+          "path": "LeopardFF8.cpp",
+          "sha256": "c8f5c6f7110df7d1df5e4ba729a9d043478eb9cb9ea56a4b4050442a7499ac16"
+        },
+        {
+          "bytes": 9248,
+          "path": "LeopardFF8.h",
+          "sha256": "4d9acab5fe9de6ed676f119d39173fdedefd76879a153900f1243ac2e1c4f9f7"
+        },
+        {
+          "bytes": 10559,
+          "path": "leopard.cpp",
+          "sha256": "d62578b0cddfc2f06c72ce33497b86e40483db6e0e42491f875cc3bc250f92f4"
+        },
+        {
+          "bytes": 8822,
+          "path": "leopard.h",
+          "sha256": "ca3083ce43a4727c89d9bb33479671af53efbedd41d0ba3ed748f1f464e33794"
+        },
+        {
+          "bytes": 92591,
+          "path": "leopard2.cpp",
+          "sha256": "7105f2e5fbb1690849fbedb14353848440440428cca6c373dfaf052884f616f3"
+        },
+        {
+          "bytes": 11959,
+          "path": "leopard2.h",
+          "sha256": "0023f28f9b9e1a6c97dfadead6bae97fbbb4ecb545e767648c535da534e12d0c"
+        }
+      ],
+      "standalone_linker": {
+        "path": "/usr/bin/ld",
+        "sha256": "e9ceb054c12207970f2726dfc07e9a66b411602748628baf27399f02a9bbb31b",
+        "version": "GNU ld (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) a later version.\nThis program has absolutely no warranty.\n"
+      }
+    },
+    {
+      "ar": {
+        "path": "/usr/bin/x86_64-linux-gnu-ar",
+        "sha256": "6452af2eea333b8c65e1adb92964fc8f97863ab003fa13f9d12bff5345cd7dbe",
+        "version": "GNU ar (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
+      },
+      "backend": "auto",
+      "build_argv": [
+        "/usr/bin/cmake",
+        "--build",
+        "build/c7-matrix/core-auto",
+        "--target",
+        "libleopard",
+        "--verbose",
+        "--",
+        "-j4"
+      ],
+      "build_dir": "build/c7-matrix/core-auto",
+      "build_stderr": {
+        "bytes": 0,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-core-build.stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "build_stdout": {
+        "bytes": 10344,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-core-build.stdout.txt",
+        "sha256": "0a4ae138371ee54548ad71fb6752da471fa8cd399dddc8769c633e1ae0c186d2"
+      },
+      "c_compiler": {
+        "path": "/usr/bin/x86_64-linux-gnu-gcc-13",
+        "sha256": "1b99826121ae6682a634e5efe09bd3e3df58ce58e0b28f849114ab5b89139c26",
+        "version": "x86_64-linux-gnu-gcc-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
+      },
+      "cmake": {
+        "path": "/usr/bin/cmake",
+        "sha256": "1c5227af4edd22d8d689def545e18ee458260c0fd579eba2187967f38817e638",
+        "version": "cmake version 3.28.3\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).\n"
+      },
+      "cmake_cache": {
+        "bytes": 20662,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-CMakeCache.txt",
+        "sha256": "b0af68f0434f82b5aebeaa0ae43219ac5b98df3c1dc70648c621b2f77712c331"
+      },
+      "cmake_linker": {
+        "path": "/usr/bin/x86_64-linux-gnu-ld",
+        "sha256": "e9ceb054c12207970f2726dfc07e9a66b411602748628baf27399f02a9bbb31b",
+        "version": "GNU ld (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) a later version.\nThis program has absolutely no warranty.\n"
+      },
+      "compile_argv": [
+        "/usr/bin/x86_64-linux-gnu-g++-13",
+        "-v",
+        "-Wl,-v",
+        "-std=c++11",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Wpedantic",
+        "-Werror",
+        "-I.",
+        "-DLEO2_C7_SOURCE_SHA256=\"c2edae60a9d9b57826a0206532e0437a4f3fbe07d8d3978045ca75a78f92f604\"",
+        "-DLEO2_C7_CORE_GIT_SHA=\"09e1ccec9dfc84a33db965cbccea1f375fb9ff39\"",
+        "-DLEO2_C7_LIBRARY_SHA256=\"c9dba912cbeb7c3115f7d2df8dd83fb0636e8ecbe420aa137c359a6480b5b172\"",
+        "-O2",
+        "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp",
+        "build/c7-matrix/core-auto/liblibleopard.a",
+        "-pthread",
+        "-fopenmp",
+        "-o",
+        "build/c7-matrix/c7-auto"
+      ],
+      "compile_stderr": {
+        "bytes": 8964,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-compile.stderr.txt",
+        "sha256": "6da53d4dea33e25421d42ffeca84bc0f2a9c704747b8a93b3ac8d9580cc2ded8"
+      },
+      "compile_stdout": {
+        "bytes": 38,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-compile.stdout.txt",
+        "sha256": "d3326e248ec71b75a9016c742a75e4a40f139e4126f659577553b8ee686507c9"
+      },
+      "compiler": {
+        "path": "/usr/bin/x86_64-linux-gnu-g++-13",
+        "sha256": "1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769",
+        "version": "x86_64-linux-gnu-g++-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
+      },
+      "configure_argv": [
+        "/usr/bin/cmake",
+        "-S",
+        ".",
+        "-B",
+        "build/c7-matrix/core-auto",
+        "-G",
+        "Unix Makefiles",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_C_COMPILER=/usr/bin/x86_64-linux-gnu-gcc-13",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/x86_64-linux-gnu-g++-13",
+        "-DLEO2_BACKEND_VARIANT=auto",
+        "-DLEO2_BUILD_TESTS=OFF",
+        "-DLEO2_BUILD_BENCHMARKS=OFF",
+        "-DLEO2_BUILD_FUZZERS=OFF",
+        "-DLEO2_ENABLE_CUDA=OFF",
+        "-DENABLE_OPENMP=ON"
+      ],
+      "configure_stderr": {
+        "bytes": 0,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-configure.stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "configure_stdout": {
+        "bytes": 1666,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-configure.stdout.txt",
+        "sha256": "3726f31f667b151a9aaa457a7e70237c25fec8237779200f29240d6cbb5140fc"
+      },
+      "cxx_compiler": {
+        "path": "/usr/bin/x86_64-linux-gnu-g++-13",
+        "sha256": "1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769",
+        "version": "x86_64-linux-gnu-g++-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
+      },
+      "executable": {
+        "bytes": 2914392,
+        "path": "build/c7-matrix/c7-auto",
+        "sha256": "e71ca48a24a7841ed1da7d05413f695c2886ab678a3f440c9e1ee2864246ffe0"
+      },
+      "gmake": {
+        "path": "/usr/bin/gmake",
+        "sha256": "d78b8f1d099fbcfb6f2f49ab87223b9b68fb3956642f92d6ec6de812e8afa965",
+        "version": "GNU Make 4.3\nBuilt for x86_64-pc-linux-gnu\nCopyright (C) 1988-2020 Free Software Foundation, Inc.\nLicense GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>\nThis is free software: you are free to change and redistribute it.\nThere is NO WARRANTY, to the extent permitted by law.\n"
+      },
+      "instrumentation": {
+        "archive_members": [
+          "leopard.cpp.o",
+          "leopard2.cpp.o",
+          "Leopard2Backend.cpp.o",
+          "Leopard2BackendScalar.cpp.o",
+          "Leopard2CpuFeatures.cpp.o",
+          "Leopard2Plan.cpp.o",
+          "LeopardCommon.cpp.o",
+          "LeopardFF16.cpp.o",
+          "LeopardFF8.cpp.o",
+          "Leopard2BackendSSSE3.cpp.o",
+          "Leopard2BackendAVX2.cpp.o"
+        ],
+        "core_archive_counts": {
+          "asan_lines": 0,
+          "ubsan_lines": 0
+        },
+        "core_archive_member_counts": {
+          "Leopard2Backend.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "Leopard2BackendAVX2.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "Leopard2BackendSSSE3.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "Leopard2BackendScalar.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "Leopard2CpuFeatures.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "Leopard2Plan.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "LeopardCommon.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "LeopardFF16.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "LeopardFF8.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "leopard.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          },
+          "leopard2.cpp.o": {
+            "asan_lines": 0,
+            "ubsan_lines": 0
+          }
+        },
+        "core_archive_symbol_scan": {
+          "bytes": 0,
+          "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-nm-core-archive-sanitizers.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "executable_counts": {
+          "asan_lines": 0,
+          "ubsan_lines": 0
+        },
+        "executable_symbol_scan": {
+          "bytes": 0,
+          "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-nm-executable-sanitizers.txt",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "required_compile_macro": false
+      },
+      "library": {
+        "bytes": 2634356,
+        "path": "build/c7-matrix/core-auto/liblibleopard.a",
+        "sha256": "c9dba912cbeb7c3115f7d2df8dd83fb0636e8ecbe420aa137c359a6480b5b172"
+      },
+      "link_driver": {
+        "path": "/usr/bin/x86_64-linux-gnu-g++-13",
+        "sha256": "1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769",
+        "version": "x86_64-linux-gnu-g++-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
+      },
+      "name": "auto",
+      "nm": {
+        "path": "/usr/bin/x86_64-linux-gnu-nm",
+        "sha256": "3708df3d7ce16e2c1dcdcd722784ae382d4d582276a71ab7bbe2d542f5621202",
+        "version": "GNU nm (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
+      },
+      "ranlib": {
+        "path": "/usr/bin/x86_64-linux-gnu-ranlib",
+        "sha256": "60254978b8ee2c1b21b41d16a18a621dbbcc72e43eb2fa9f916818256c77e9ee",
+        "version": "GNU ranlib (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
+      },
+      "sanitizer": false,
+      "source_closure": [
+        {
+          "bytes": 27399,
+          "path": "CMakeLists.txt",
+          "sha256": "0a20669b0ddfedb875f542bca9f7d1e8c49d20caa57fc3e351222aa43d2e2984"
+        },
+        {
+          "bytes": 8320,
+          "path": "Leopard2Backend.cpp",
+          "sha256": "51e4d9f437773f7755161f4e5bd4269f6bb95d50dd7d8f8bd1e1dbdfcf9ac900"
+        },
+        {
+          "bytes": 3752,
+          "path": "Leopard2Backend.h",
+          "sha256": "d1dbaa13d2bb0fafc95e46ac3cd956b64e5c945d3f27ac8d2fb6b08bdbb90866"
+        },
+        {
+          "bytes": 9083,
+          "path": "Leopard2BackendAVX2.cpp",
+          "sha256": "2f18e711bdc6ab47d2513165efcfd0a8ec284b3fda806a92a9cce77a35b76b66"
+        },
+        {
+          "bytes": 9066,
+          "path": "Leopard2BackendSSSE3.cpp",
+          "sha256": "48fec52c003df2d5dbc65db439fc64a7780191b4fcb58a7358cdb957c4ed36cd"
+        },
+        {
+          "bytes": 6253,
+          "path": "Leopard2BackendScalar.cpp",
+          "sha256": "cffd8434ce177aa2fa28768ea91fbf30a937c50bc3a621c1466c2745f94f125e"
+        },
+        {
+          "bytes": 3883,
+          "path": "Leopard2CpuFeatures.cpp",
+          "sha256": "b07ca9d486ea72b41a5c6724f8339dcd921af20f7a34f94505589cb9fa0cab46"
+        },
+        {
+          "bytes": 2654,
+          "path": "Leopard2Direct.h",
+          "sha256": "4e6964d850f069b765282ffd33d49e0f646242430a217186a40c1d6084fc656d"
+        },
+        {
+          "bytes": 2643,
+          "path": "Leopard2Dispatch.h",
+          "sha256": "d5a9d7dd2d388c70eda36c31d4a643a51c6be633747c97284c03676084ad9144"
+        },
+        {
+          "bytes": 3846,
+          "path": "Leopard2Plan.cpp",
+          "sha256": "f1cdb03ca4b5ed0fef3957ed62d2e85471953aca0064802d4a0ef8bc4df77673"
+        },
+        {
+          "bytes": 3803,
+          "path": "Leopard2Plan.h",
+          "sha256": "68a8a6fac34ae0b8e7c03e5a87fd67f20b993bded4440f3e0482cb90e7ca2c00"
+        },
+        {
+          "bytes": 23145,
+          "path": "LeopardCommon.cpp",
+          "sha256": "d2519c8a1515914d86f756ab6f2c6be597dfd0548a4c9b2552411c6eabaeeda4"
+        },
+        {
+          "bytes": 16178,
+          "path": "LeopardCommon.h",
+          "sha256": "da762b045c6dc61ba7ba4320dcd6c69dca2b7789025ec597f36ac2674f0d21c0"
+        },
+        {
+          "bytes": 86539,
+          "path": "LeopardFF16.cpp",
+          "sha256": "3580e7482c1c2bded950b4ee7e16e3e433de338013f001c494c7d97a347464ba"
+        },
+        {
+          "bytes": 9281,
+          "path": "LeopardFF16.h",
+          "sha256": "3dbb579882bd6bd6f16dbed8977b029b4b0d0078122e03fa73765d089dc57862"
+        },
+        {
+          "bytes": 89340,
+          "path": "LeopardFF8.cpp",
+          "sha256": "c8f5c6f7110df7d1df5e4ba729a9d043478eb9cb9ea56a4b4050442a7499ac16"
+        },
+        {
+          "bytes": 9248,
+          "path": "LeopardFF8.h",
+          "sha256": "4d9acab5fe9de6ed676f119d39173fdedefd76879a153900f1243ac2e1c4f9f7"
+        },
+        {
+          "bytes": 10559,
+          "path": "leopard.cpp",
+          "sha256": "d62578b0cddfc2f06c72ce33497b86e40483db6e0e42491f875cc3bc250f92f4"
+        },
+        {
+          "bytes": 8822,
+          "path": "leopard.h",
+          "sha256": "ca3083ce43a4727c89d9bb33479671af53efbedd41d0ba3ed748f1f464e33794"
+        },
+        {
+          "bytes": 92591,
+          "path": "leopard2.cpp",
+          "sha256": "7105f2e5fbb1690849fbedb14353848440440428cca6c373dfaf052884f616f3"
+        },
+        {
+          "bytes": 11959,
+          "path": "leopard2.h",
+          "sha256": "0023f28f9b9e1a6c97dfadead6bae97fbbb4ecb545e767648c535da534e12d0c"
+        }
+      ],
+      "standalone_linker": {
+        "path": "/usr/bin/ld",
+        "sha256": "e9ceb054c12207970f2726dfc07e9a66b411602748628baf27399f02a9bbb31b",
+        "version": "GNU ld (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) a later version.\nThis program has absolutely no warranty.\n"
+      }
+    },
+    {
+      "ar": {
+        "path": "/usr/bin/llvm-ar-18",
+        "sha256": "eedd2efbdee80acf60e17e10adeddf31be0347226245f935be95efa3ae00ec79",
+        "version": "Ubuntu LLVM version 18.1.3\n  Optimized build.\n"
+      },
+      "backend": "auto",
+      "build_argv": [
+        "/usr/bin/cmake",
+        "--build",
+        "build/c7-matrix/core-asan-ubsan",
+        "--target",
+        "libleopard",
+        "--verbose",
+        "--",
+        "-j4"
+      ],
+      "build_dir": "build/c7-matrix/core-asan-ubsan",
+      "build_stderr": {
+        "bytes": 0,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-core-build.stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "build_stdout": {
+        "bytes": 10740,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-core-build.stdout.txt",
+        "sha256": "327f66269c629956afd1ff1e0a6e064e301bc3a736d94512332ee4e3bf8c0f3f"
+      },
+      "c_compiler": {
+        "path": "/usr/bin/clang-18",
+        "sha256": "8ef402d453d1ba4902e4ee0f0f847f6cfa01400c95aa43c24e97818b9c0e3f45",
+        "version": "Ubuntu clang version 18.1.3 (1ubuntu1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/bin\n"
+      },
+      "cmake": {
+        "path": "/usr/bin/cmake",
+        "sha256": "1c5227af4edd22d8d689def545e18ee458260c0fd579eba2187967f38817e638",
+        "version": "cmake version 3.28.3\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).\n"
+      },
+      "cmake_cache": {
+        "bytes": 20580,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-CMakeCache.txt",
+        "sha256": "7ac24d40bcf2dfb795415002fa4ac788cd88ac6cad50ebbad5217ac4ddc6532d"
+      },
+      "cmake_linker": {
+        "path": "/usr/bin/ld",
+        "sha256": "e9ceb054c12207970f2726dfc07e9a66b411602748628baf27399f02a9bbb31b",
+        "version": "GNU ld (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) a later version.\nThis program has absolutely no warranty.\n"
+      },
+      "compile_argv": [
+        "/usr/bin/clang++-18",
+        "-v",
+        "-Wl,-v",
+        "-std=c++11",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Wpedantic",
+        "-Werror",
+        "-I.",
+        "-DLEO2_C7_SOURCE_SHA256=\"c2edae60a9d9b57826a0206532e0437a4f3fbe07d8d3978045ca75a78f92f604\"",
+        "-DLEO2_C7_CORE_GIT_SHA=\"09e1ccec9dfc84a33db965cbccea1f375fb9ff39\"",
+        "-DLEO2_C7_LIBRARY_SHA256=\"6d04cea8448e45940dca73fde54b1cf949e5bfbe4ae0eebce31589a1774cdc42\"",
+        "-O1",
+        "-fsanitize=address,undefined",
+        "-fno-omit-frame-pointer",
+        "-DLEO2_C7_DISABLE_GLOBAL_NEW_TRACKING=1",
+        "-DLEO2_C7_SANITIZER_MODE=\"asan-ubsan\"",
+        "-DLEO2_C7_REQUIRE_ASAN_UBSAN=1",
+        "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp",
+        "build/c7-matrix/core-asan-ubsan/liblibleopard.a",
+        "-pthread",
+        "-o",
+        "build/c7-matrix/c7-asan-ubsan"
+      ],
+      "compile_stderr": {
+        "bytes": 5012,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-compile.stderr.txt",
+        "sha256": "c999b48eb26287e905aa300d05876ac2a22554d96dedaef23fc7df50dffc4e2d"
+      },
+      "compile_stdout": {
+        "bytes": 38,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-compile.stdout.txt",
+        "sha256": "d3326e248ec71b75a9016c742a75e4a40f139e4126f659577553b8ee686507c9"
+      },
+      "compiler": {
+        "path": "/usr/bin/clang++-18",
+        "sha256": "8ef402d453d1ba4902e4ee0f0f847f6cfa01400c95aa43c24e97818b9c0e3f45",
+        "version": "Ubuntu clang version 18.1.3 (1ubuntu1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/bin\n"
+      },
+      "configure_argv": [
+        "/usr/bin/cmake",
+        "-S",
+        ".",
+        "-B",
+        "build/c7-matrix/core-asan-ubsan",
+        "-G",
+        "Unix Makefiles",
+        "-DCMAKE_BUILD_TYPE=Debug",
+        "-DCMAKE_C_COMPILER=/usr/bin/clang-18",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/clang++-18",
+        "-DLEO2_BACKEND_VARIANT=auto",
+        "-DLEO2_BUILD_TESTS=OFF",
+        "-DLEO2_BUILD_BENCHMARKS=OFF",
+        "-DLEO2_BUILD_FUZZERS=OFF",
+        "-DLEO2_ENABLE_CUDA=OFF",
+        "-DENABLE_OPENMP=OFF",
+        "-DCMAKE_C_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer"
+      ],
+      "configure_stderr": {
+        "bytes": 0,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-configure.stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "configure_stdout": {
+        "bytes": 1662,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-configure.stdout.txt",
+        "sha256": "34cda1c924aa68e8dfdff50b890622f980398035962d2d35d95c86f48854b31f"
+      },
+      "cxx_compiler": {
+        "path": "/usr/bin/clang++-18",
+        "sha256": "8ef402d453d1ba4902e4ee0f0f847f6cfa01400c95aa43c24e97818b9c0e3f45",
+        "version": "Ubuntu clang version 18.1.3 (1ubuntu1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/bin\n"
+      },
+      "executable": {
+        "bytes": 5075272,
+        "path": "build/c7-matrix/c7-asan-ubsan",
+        "sha256": "d4677e30147b0e42cd5495d16713d66797af92d778b99577ccde6644717fd169"
+      },
+      "gmake": {
+        "path": "/usr/bin/gmake",
+        "sha256": "d78b8f1d099fbcfb6f2f49ab87223b9b68fb3956642f92d6ec6de812e8afa965",
+        "version": "GNU Make 4.3\nBuilt for x86_64-pc-linux-gnu\nCopyright (C) 1988-2020 Free Software Foundation, Inc.\nLicense GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>\nThis is free software: you are free to change and redistribute it.\nThere is NO WARRANTY, to the extent permitted by law.\n"
+      },
+      "instrumentation": {
+        "archive_members": [
+          "leopard.cpp.o",
+          "leopard2.cpp.o",
+          "Leopard2Backend.cpp.o",
+          "Leopard2BackendScalar.cpp.o",
+          "Leopard2CpuFeatures.cpp.o",
+          "Leopard2Plan.cpp.o",
+          "LeopardCommon.cpp.o",
+          "LeopardFF16.cpp.o",
+          "LeopardFF8.cpp.o",
+          "Leopard2BackendSSSE3.cpp.o",
+          "Leopard2BackendAVX2.cpp.o"
+        ],
+        "core_archive_counts": {
+          "asan_lines": 306,
+          "ubsan_lines": 86
+        },
+        "core_archive_member_counts": {
+          "Leopard2Backend.cpp.o": {
+            "asan_lines": 21,
+            "ubsan_lines": 8
+          },
+          "Leopard2BackendAVX2.cpp.o": {
+            "asan_lines": 16,
+            "ubsan_lines": 7
+          },
+          "Leopard2BackendSSSE3.cpp.o": {
+            "asan_lines": 14,
+            "ubsan_lines": 8
+          },
+          "Leopard2BackendScalar.cpp.o": {
+            "asan_lines": 11,
+            "ubsan_lines": 6
+          },
+          "Leopard2CpuFeatures.cpp.o": {
+            "asan_lines": 9,
+            "ubsan_lines": 5
+          },
+          "Leopard2Plan.cpp.o": {
+            "asan_lines": 7,
+            "ubsan_lines": 5
+          },
+          "LeopardCommon.cpp.o": {
+            "asan_lines": 13,
+            "ubsan_lines": 6
+          },
+          "LeopardFF16.cpp.o": {
+            "asan_lines": 31,
+            "ubsan_lines": 10
+          },
+          "LeopardFF8.cpp.o": {
+            "asan_lines": 31,
+            "ubsan_lines": 9
+          },
+          "leopard.cpp.o": {
+            "asan_lines": 13,
+            "ubsan_lines": 7
+          },
+          "leopard2.cpp.o": {
+            "asan_lines": 140,
+            "ubsan_lines": 15
+          }
+        },
+        "core_archive_symbol_scan": {
+          "bytes": 42710,
+          "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-nm-core-archive-sanitizers.txt",
+          "sha256": "81b5a975e6561e57985fcaef8ccacfb164f108be250cbb75a591b6fcd29f89ed"
+        },
+        "executable_counts": {
+          "asan_lines": 320,
+          "ubsan_lines": 54
+        },
+        "executable_symbol_scan": {
+          "bytes": 28628,
+          "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-nm-executable-sanitizers.txt",
+          "sha256": "40408affaa67c508a886e0a7e50eea4dcf74deb85ad046b55bb60c6a0b683064"
+        },
+        "required_compile_macro": true
+      },
+      "library": {
+        "bytes": 3040116,
+        "path": "build/c7-matrix/core-asan-ubsan/liblibleopard.a",
+        "sha256": "6d04cea8448e45940dca73fde54b1cf949e5bfbe4ae0eebce31589a1774cdc42"
+      },
+      "link_driver": {
+        "path": "/usr/bin/clang++-18",
+        "sha256": "8ef402d453d1ba4902e4ee0f0f847f6cfa01400c95aa43c24e97818b9c0e3f45",
+        "version": "Ubuntu clang version 18.1.3 (1ubuntu1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/bin\n"
+      },
+      "name": "asan-ubsan",
+      "nm": {
+        "path": "/usr/bin/x86_64-linux-gnu-nm",
+        "sha256": "3708df3d7ce16e2c1dcdcd722784ae382d4d582276a71ab7bbe2d542f5621202",
+        "version": "GNU nm (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
+      },
+      "ranlib": {
+        "path": "/usr/bin/llvm-ranlib-18",
+        "sha256": "eedd2efbdee80acf60e17e10adeddf31be0347226245f935be95efa3ae00ec79",
+        "version": "Ubuntu LLVM version 18.1.3\n  Optimized build.\n"
+      },
+      "sanitizer": true,
+      "source_closure": [
+        {
+          "bytes": 27399,
+          "path": "CMakeLists.txt",
+          "sha256": "0a20669b0ddfedb875f542bca9f7d1e8c49d20caa57fc3e351222aa43d2e2984"
+        },
+        {
+          "bytes": 8320,
+          "path": "Leopard2Backend.cpp",
+          "sha256": "51e4d9f437773f7755161f4e5bd4269f6bb95d50dd7d8f8bd1e1dbdfcf9ac900"
+        },
+        {
+          "bytes": 3752,
+          "path": "Leopard2Backend.h",
+          "sha256": "d1dbaa13d2bb0fafc95e46ac3cd956b64e5c945d3f27ac8d2fb6b08bdbb90866"
+        },
+        {
+          "bytes": 9083,
+          "path": "Leopard2BackendAVX2.cpp",
+          "sha256": "2f18e711bdc6ab47d2513165efcfd0a8ec284b3fda806a92a9cce77a35b76b66"
+        },
+        {
+          "bytes": 9066,
+          "path": "Leopard2BackendSSSE3.cpp",
+          "sha256": "48fec52c003df2d5dbc65db439fc64a7780191b4fcb58a7358cdb957c4ed36cd"
+        },
+        {
+          "bytes": 6253,
+          "path": "Leopard2BackendScalar.cpp",
+          "sha256": "cffd8434ce177aa2fa28768ea91fbf30a937c50bc3a621c1466c2745f94f125e"
+        },
+        {
+          "bytes": 3883,
+          "path": "Leopard2CpuFeatures.cpp",
+          "sha256": "b07ca9d486ea72b41a5c6724f8339dcd921af20f7a34f94505589cb9fa0cab46"
+        },
+        {
+          "bytes": 2654,
+          "path": "Leopard2Direct.h",
+          "sha256": "4e6964d850f069b765282ffd33d49e0f646242430a217186a40c1d6084fc656d"
+        },
+        {
+          "bytes": 2643,
+          "path": "Leopard2Dispatch.h",
+          "sha256": "d5a9d7dd2d388c70eda36c31d4a643a51c6be633747c97284c03676084ad9144"
+        },
+        {
+          "bytes": 3846,
+          "path": "Leopard2Plan.cpp",
+          "sha256": "f1cdb03ca4b5ed0fef3957ed62d2e85471953aca0064802d4a0ef8bc4df77673"
+        },
+        {
+          "bytes": 3803,
+          "path": "Leopard2Plan.h",
+          "sha256": "68a8a6fac34ae0b8e7c03e5a87fd67f20b993bded4440f3e0482cb90e7ca2c00"
+        },
+        {
+          "bytes": 23145,
+          "path": "LeopardCommon.cpp",
+          "sha256": "d2519c8a1515914d86f756ab6f2c6be597dfd0548a4c9b2552411c6eabaeeda4"
+        },
+        {
+          "bytes": 16178,
+          "path": "LeopardCommon.h",
+          "sha256": "da762b045c6dc61ba7ba4320dcd6c69dca2b7789025ec597f36ac2674f0d21c0"
+        },
+        {
+          "bytes": 86539,
+          "path": "LeopardFF16.cpp",
+          "sha256": "3580e7482c1c2bded950b4ee7e16e3e433de338013f001c494c7d97a347464ba"
+        },
+        {
+          "bytes": 9281,
+          "path": "LeopardFF16.h",
+          "sha256": "3dbb579882bd6bd6f16dbed8977b029b4b0d0078122e03fa73765d089dc57862"
+        },
+        {
+          "bytes": 89340,
+          "path": "LeopardFF8.cpp",
+          "sha256": "c8f5c6f7110df7d1df5e4ba729a9d043478eb9cb9ea56a4b4050442a7499ac16"
+        },
+        {
+          "bytes": 9248,
+          "path": "LeopardFF8.h",
+          "sha256": "4d9acab5fe9de6ed676f119d39173fdedefd76879a153900f1243ac2e1c4f9f7"
+        },
+        {
+          "bytes": 10559,
+          "path": "leopard.cpp",
+          "sha256": "d62578b0cddfc2f06c72ce33497b86e40483db6e0e42491f875cc3bc250f92f4"
+        },
+        {
+          "bytes": 8822,
+          "path": "leopard.h",
+          "sha256": "ca3083ce43a4727c89d9bb33479671af53efbedd41d0ba3ed748f1f464e33794"
+        },
+        {
+          "bytes": 92591,
+          "path": "leopard2.cpp",
+          "sha256": "7105f2e5fbb1690849fbedb14353848440440428cca6c373dfaf052884f616f3"
+        },
+        {
+          "bytes": 11959,
+          "path": "leopard2.h",
+          "sha256": "0023f28f9b9e1a6c97dfadead6bae97fbbb4ecb545e767648c535da534e12d0c"
+        }
+      ],
+      "standalone_linker": {
+        "path": "/usr/bin/ld",
+        "sha256": "e9ceb054c12207970f2726dfc07e9a66b411602748628baf27399f02a9bbb31b",
+        "version": "GNU ld (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) a later version.\nThis program has absolutely no warranty.\n"
+      }
+    }
+  ],
+  "core_git_sha": "09e1ccec9dfc84a33db965cbccea1f375fb9ff39",
+  "runner": {
+    "bytes": 21866,
+    "path": "experiments/leopard2/non_power_of_two/c7/run_matrix.py",
+    "sha256": "1f29919c4b51eb507e0317438fb0dd1b22ee3d87c53e54d4de37650d429847ba"
+  },
+  "runs": [
+    {
+      "argv": [
+        "/usr/bin/taskset",
+        "-c",
+        "0",
+        "build/c7-matrix/c7-scalar",
+        "--backend",
+        "scalar",
+        "experiments/leopard2/non_power_of_two/c7/results/scalar.json",
+        "--correctness-only"
+      ],
+      "build": "scalar",
+      "environment": {
+        "LC_ALL": "C",
+        "OMP_DYNAMIC": "FALSE",
+        "OMP_NUM_THREADS": "1"
+      },
+      "kind": "correctness",
+      "name": "scalar",
+      "observed_affinity": [
+        0
+      ],
+      "requested_cpu": 0,
+      "result": {
+        "bytes": 1701,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/scalar.json",
+        "sha256": "5349fa4496a5be1d60c5baca9fb8fd6fbb8d6b02659dec162706385535bf97b1"
+      },
+      "stderr": {
+        "bytes": 0,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-run.stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stdout": {
+        "bytes": 0,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-run.stdout.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "argv": [
+        "/usr/bin/taskset",
+        "-c",
+        "1",
+        "build/c7-matrix/c7-ssse3",
+        "--backend",
+        "ssse3",
+        "experiments/leopard2/non_power_of_two/c7/results/ssse3.json",
+        "--correctness-only"
+      ],
+      "build": "ssse3",
+      "environment": {
+        "LC_ALL": "C",
+        "OMP_DYNAMIC": "FALSE",
+        "OMP_NUM_THREADS": "1"
+      },
+      "kind": "correctness",
+      "name": "ssse3",
+      "observed_affinity": [
+        1
+      ],
+      "requested_cpu": 1,
+      "result": {
+        "bytes": 1699,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/ssse3.json",
+        "sha256": "6a5369c897ea787db646de6823c16f03e48d91fa3056ba2e742ee306b3931e09"
+      },
+      "stderr": {
+        "bytes": 0,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-run.stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stdout": {
+        "bytes": 0,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-run.stdout.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "argv": [
+        "/usr/bin/taskset",
+        "-c",
+        "2",
+        "build/c7-matrix/c7-avx2",
+        "--backend",
+        "avx2",
+        "experiments/leopard2/non_power_of_two/c7/results/avx2.json",
+        "--correctness-only"
+      ],
+      "build": "avx2",
+      "environment": {
+        "LC_ALL": "C",
+        "OMP_DYNAMIC": "FALSE",
+        "OMP_NUM_THREADS": "1"
+      },
+      "kind": "correctness",
+      "name": "avx2",
+      "observed_affinity": [
+        2
+      ],
+      "requested_cpu": 2,
+      "result": {
+        "bytes": 1697,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/avx2.json",
+        "sha256": "641bd6e640f860cfdb50c7b78dca9149808680cb511e6c11934cc6b1014d7112"
+      },
+      "stderr": {
+        "bytes": 0,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-run.stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stdout": {
+        "bytes": 0,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-run.stdout.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "argv": [
+        "/usr/bin/taskset",
+        "-c",
+        "3",
+        "build/c7-matrix/c7-auto",
+        "--backend",
+        "auto",
+        "experiments/leopard2/non_power_of_two/c7/results/auto.json",
+        "--correctness-only"
+      ],
+      "build": "auto",
+      "environment": {
+        "LC_ALL": "C",
+        "OMP_DYNAMIC": "FALSE",
+        "OMP_NUM_THREADS": "1"
+      },
+      "kind": "correctness",
+      "name": "auto",
+      "observed_affinity": [
+        3
+      ],
+      "requested_cpu": 3,
+      "result": {
+        "bytes": 1697,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/auto.json",
+        "sha256": "0fdfc26b4cacf5347d0123fac5235cb4a63d873e0c9039a9b5f17b4b965db630"
+      },
+      "stderr": {
+        "bytes": 0,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-run.stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stdout": {
+        "bytes": 0,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-run.stdout.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "argv": [
+        "/usr/bin/taskset",
+        "-c",
+        "4",
+        "build/c7-matrix/c7-asan-ubsan",
+        "--backend",
+        "auto",
+        "experiments/leopard2/non_power_of_two/c7/results/asan-ubsan.json",
+        "--correctness-only"
+      ],
+      "build": "asan-ubsan",
+      "environment": {
+        "ASAN_OPTIONS": "detect_leaks=1:halt_on_error=1",
+        "LC_ALL": "C",
+        "OMP_DYNAMIC": "FALSE",
+        "OMP_NUM_THREADS": "1",
+        "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1"
+      },
+      "kind": "correctness",
+      "name": "asan-ubsan",
+      "observed_affinity": [
+        4
+      ],
+      "requested_cpu": 4,
+      "result": {
+        "bytes": 1713,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/asan-ubsan.json",
+        "sha256": "a99e04b1ffef38e1f629061021e83dd67426aa5e66e33ea5b26038c35f5f77ba"
+      },
+      "stderr": {
+        "bytes": 0,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-run.stderr.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stdout": {
+        "bytes": 0,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-run.stdout.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "argv": [
+        "/usr/bin/taskset",
+        "-c",
+        "0",
+        "build/c7-matrix/c7-auto",
+        "--backend",
+        "auto",
+        "experiments/leopard2/non_power_of_two/c7/results/smoke-nonauthoritative.json",
+        "--benchmark-smoke"
+      ],
+      "build": "auto",
+      "environment": {
+        "LC_ALL": "C",
+        "OMP_DYNAMIC": "FALSE",
+        "OMP_NUM_THREADS": "1"
+      },
+      "kind": "non-authoritative-smoke",
+      "name": "smoke-nonauthoritative",
+      "observed_affinity": [
+        0
+      ],
+      "requested_cpu": 0,
+      "result": {
+        "bytes": 3696,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/smoke-nonauthoritative.json",
+        "sha256": "0a0da58f3abcbaa75701731e2b030342a017b8cf767f53b051a6f776705b6b6c"
+      },
+      "stderr": {
+        "bytes": 17,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/smoke-nonauthoritative-run.stderr.txt",
+        "sha256": "66f01b765cd3cdcb54856314c8a0a9e66ff0759f418bc4c3ad2eebe26da8aad4"
+      },
+      "stdout": {
+        "bytes": 0,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/logs/smoke-nonauthoritative-run.stdout.txt",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    }
+  ],
+  "schema": "leopard2-c7-build-run-manifest/v2",
+  "scope": "correctness plus CPU0 non-authoritative harness smoke; no promotion timing",
+  "source": {
+    "bytes": 73385,
+    "path": "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp",
+    "sha256": "c2edae60a9d9b57826a0206532e0437a4f3fbe07d8d3978045ca75a78f92f604"
+  },
+  "status": "pass",
+  "taskset": {
+    "path": "/usr/bin/taskset",
+    "sha256": "a9c851792e54e91fba7b827019380abee54e715b6817899c835e4f221354b260",
+    "version": "taskset from util-linux 2.39.3\n"
+  }
+}

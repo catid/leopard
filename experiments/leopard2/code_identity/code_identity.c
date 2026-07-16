@@ -94,6 +94,14 @@ static leo2_code_id_status derive_counts(
             return LEO2_CODE_ID_INVALID_IDENTITY;
         }
         parent_input = (uint64_t)side + (uint64_t)recovery_count;
+    } else if (profile == LEO2_CODE_ID_PROFILE_EXACT_LOW) {
+        parent_input = (uint64_t)original_count + (uint64_t)recovery_count;
+        if (parent_input > UINT32_MAX) {
+            return LEO2_CODE_ID_INVALID_IDENTITY;
+        }
+        *parent_count = (uint32_t)parent_input;
+        *padded_side = original_count;
+        return LEO2_CODE_ID_OK;
     } else {
         return LEO2_CODE_ID_UNSUPPORTED;
     }
@@ -117,7 +125,8 @@ leo2_code_id_status leo2_code_identity_validate(
         return LEO2_CODE_ID_INVALID_ARGUMENT;
     }
     if (identity->profile != LEO2_CODE_ID_PROFILE_LEGACY_HIGH &&
-        identity->profile != LEO2_CODE_ID_PROFILE_LOW) {
+        identity->profile != LEO2_CODE_ID_PROFILE_LOW &&
+        identity->profile != LEO2_CODE_ID_PROFILE_EXACT_LOW) {
         return LEO2_CODE_ID_UNSUPPORTED;
     }
     if (identity->profile_version != 1u) {
@@ -181,6 +190,12 @@ leo2_code_id_status leo2_code_identity_validate(
             return LEO2_CODE_ID_INVALID_ARGUMENT;
         }
         if (known_digest(item->type) && item->value_bytes != 32u) {
+            return LEO2_CODE_ID_INVALID_IDENTITY;
+        }
+        if (identity->profile == LEO2_CODE_ID_PROFILE_EXACT_LOW &&
+            (item->type == LEO2_CODE_ID_META_COORDINATE_SET_SHA256 ||
+             item->type == LEO2_CODE_ID_META_SHORTENING_SET_SHA256 ||
+             item->type == LEO2_CODE_ID_META_PUNCTURING_SET_SHA256)) {
             return LEO2_CODE_ID_INVALID_IDENTITY;
         }
         if (item->type == LEO2_CODE_ID_META_SHARD_LAYOUT) {
@@ -257,6 +272,12 @@ leo2_code_id_status leo2_code_identity_add_metadata(
         return LEO2_CODE_ID_UNSUPPORTED;
     }
     if (known_digest(type) && value_bytes != 32u) {
+        return LEO2_CODE_ID_INVALID_IDENTITY;
+    }
+    if (identity->profile == LEO2_CODE_ID_PROFILE_EXACT_LOW &&
+        (type == LEO2_CODE_ID_META_COORDINATE_SET_SHA256 ||
+         type == LEO2_CODE_ID_META_SHORTENING_SET_SHA256 ||
+         type == LEO2_CODE_ID_META_PUNCTURING_SET_SHA256)) {
         return LEO2_CODE_ID_INVALID_IDENTITY;
     }
     if (type == LEO2_CODE_ID_META_SHARD_LAYOUT) {

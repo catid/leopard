@@ -313,15 +313,22 @@ one of the `K*R` terms.
 
 No method enters AUTO.  No CPU-dependent choice changes parity format.
 
-## C7 integration caveat
+## C7 integration result
 
-C7 was marked in progress in Beads, but no local worktree, branch, commit, or
-remote ref containing its exact-low implementation existed at the C8 base
-revision.  C8 therefore proceeds independently from the completed C0--C6
-evidence.  This does not block C8's parity-first candidate, but before C9/C10
-freeze a shared exact profile they must compare C7's eventual coordinate map,
-serialized identity, and decoder expectations.  Similar mathematics is not a
-license to merge code identifiers.
+C7 is now integrated alongside this checkpoint.  It freezes serialized
+research family 3/version 1/map 1 as an exact-low prefix profile with
+application-visible order `[ systematic ][ parity ]` and points
+`omega_0 .. omega_(K+R-1)`.  C8 retains its separately named, unserialized
+exact-high candidate with order `[ parity ][ systematic ]` and the role split
+at `R`.  These are distinct wire profiles even though both use a contiguous
+prefix of Cantor coordinates.
+
+Family 4 is reserved for any future serialization of C8, but current version-1
+identity readers reject it and the stable production constructor continues to
+reject `LEO2_PROFILE_EXACT_EXPERIMENTAL_V1`.  C7 therefore does not promote,
+rename, or reinterpret C8, and C8 does not reinterpret family 3.  C9/C10 must
+still freeze an exact-high decoder and serialized identity before considering
+dispatch or promotion.
 
 ## Reproduction
 
