@@ -337,7 +337,7 @@ static void InitFieldOperations()
         }
     }
 
-    for (unsigned i = 0; i < kFieldSize; ++i)
+    for (unsigned i = 0; i < kModulus; ++i)
         skewVec[i] = GFLog[skewVec[i]];
 
 #ifdef LEO_EXPERIMENT_EXTRA_MULS
@@ -367,23 +367,6 @@ static void InitFieldOperations()
 
 //------------------------------------------------------------------------------
 // Encoder
-
-// Encoding alg for k/n<0.5: message is a power of two
-static void encodeL(ffe_t* data, const unsigned k, ffe_t* codeword)
-{
-    memcpy(codeword, data, sizeof(ffe_t) * k);
-
-    IFLT(codeword, k, 0);
-
-    for (unsigned i = k; i < kFieldSize; i += k)
-    {
-        memcpy(&codeword[i], codeword, sizeof(ffe_t) * k);
-
-        FLT(&codeword[i], k, i, k);
-    }
-
-    memcpy(codeword, data, sizeof(ffe_t) * k);
-}
 
 // Encoding alg for k/n>0.5: parity is a power of two.
 // data: message array. parity: parity array. mem: buffer(size>= n-k)
@@ -588,7 +571,7 @@ void test(unsigned original_count, unsigned recovery_count, unsigned seed)
 //------------------------------------------------------------------------------
 // Entrypoint
 
-int main(int argc, char **argv)
+int main()
 {
     // Fill GFLog table and GFExp table
     InitField();

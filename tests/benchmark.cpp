@@ -325,15 +325,18 @@ static void ShuffleDeck16(PCGRandom &prng, uint16_t * LEO_RESTRICT deck, uint32_
                 deck[ii] = deck[jj];
                 deck[jj] = ii;
                 ++ii;
+                // fall through
             case 2:
                 jj = (uint8_t)(rv >> 8) % ii;
                 deck[ii] = deck[jj];
                 deck[jj] = ii;
                 ++ii;
+                // fall through
             case 1:
                 jj = (uint8_t)(rv >> 16) % ii;
                 deck[ii] = deck[jj];
                 deck[jj] = ii;
+                // fall through
             case 0:
                 return;
             }
