@@ -1,0 +1,57 @@
+/usr/include/c++/13/bits/locale_facets.h:1092:7:virtual std::ctype<char>::char_type std::ctype<char>::do_widen(char) const	8	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:1466:8:{anonymous}::Arguments::~Arguments()	16	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:75:6:void {anonymous}::require(bool, const std::string&)	48	static
+/usr/include/c++/13/bits/stl_heap.h:224:5:void std::__adjust_heap(_RandomAccessIterator, _Distance, _Distance, _Tp, _Compare) [with _RandomAccessIterator = __gnu_cxx::__normal_iterator<double*, vector<double> >; _Distance = long int; _Tp = double; _Compare = __gnu_cxx::__ops::_Iter_less_iter]	16	static
+/usr/include/c++/13/bits/stl_algo.h:1918:5:void std::__introsort_loop(_RandomAccessIterator, _RandomAccessIterator, _Size, _Compare) [with _RandomAccessIterator = __gnu_cxx::__normal_iterator<double*, vector<double> >; _Size = long int; _Compare = __gnu_cxx::__ops::_Iter_less_iter]	48	static
+/usr/include/c++/13/bits/stl_algobase.h:2064:5:_RandomAccessIterator std::__find_if(_RandomAccessIterator, _RandomAccessIterator, _Predicate, random_access_iterator_tag) [with _RandomAccessIterator = __gnu_cxx::__normal_iterator<const unsigned char*, vector<unsigned char> >; _Predicate = __gnu_cxx::__ops::_Iter_equals_val<const int>]	8	static
+/usr/include/c++/13/bits/basic_string.h:1681:7:std::__cxx11::basic_string<_CharT, _Traits, _Alloc>& std::__cxx11::basic_string<_CharT, _Traits, _Alloc>::assign(const _CharT*) [with _CharT = char; _Traits = std::char_traits<char>; _Alloc = std::allocator<char>]	32	static
+/usr/include/c++/13/bits/basic_string.h:853:7:std::__cxx11::basic_string<_CharT, _Traits, _Alloc>& std::__cxx11::basic_string<_CharT, _Traits, _Alloc>::operator=(std::__cxx11::basic_string<_CharT, _Traits, _Alloc>&&) [with _CharT = char; _Traits = std::char_traits<char>; _Alloc = std::allocator<char>]	32	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:823:6:void {anonymous}::production_transform(const BinaryField&, Direction, unsigned int, unsigned int, std::vector<void*>*)	32	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:1046:6:void {anonymous}::full_padded_execute(const Case&, const std::vector<std::array<unsigned char, 64> >&, const std::vector<unsigned int>&, const std::vector<unsigned int>&, std::vector<std::array<unsigned char, 64> >*, std::vector<void*>*, std::vector<std::array<unsigned char, 64> >*)	112	static
+/usr/include/c++/13/bits/basic_ios.h:449:7:std::basic_ios<_CharT, _Traits>::char_type std::basic_ios<_CharT, _Traits>::widen(char) const [with _CharT = char; _Traits = std::char_traits<char>]	32	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:970:7:{anonymous}::Shard {anonymous}::deterministic_shard(const BinaryField&, uint64_t, unsigned int)	16	static
+/usr/include/c++/13/bits/basic_string.h:641:7:std::__cxx11::basic_string<_CharT, _Traits, _Alloc>::basic_string(const _CharT*, const _Alloc&) [with _CharT = char; _Traits = std::char_traits<char>; _Alloc = std::allocator<char>]	64	static
+/usr/include/c++/13/bits/vector.tcc:210:5:std::vector<_Tp, _Alloc>& std::vector<_Tp, _Alloc>::operator=(const std::vector<_Tp, _Alloc>&) [with _Tp = unsigned char; _Alloc = std::allocator<unsigned char>]	48	static
+/usr/include/c++/13/bits/stl_vector.h:733:7:std::vector<_Tp, _Alloc>::~vector() [with _Tp = {anonymous}::BenchmarkResult; _Alloc = std::allocator<{anonymous}::BenchmarkResult>]	32	static
+/usr/include/c++/13/bits/stl_vector.h:733:7:std::vector<_Tp, _Alloc>::~vector() [with _Tp = {anonymous}::CaseResult; _Alloc = std::allocator<{anonymous}::CaseResult>]	32	static
+/usr/include/c++/13/bits/stl_vector.h:733:7:std::vector<_Tp, _Alloc>::~vector() [with _Tp = {anonymous}::Case; _Alloc = std::allocator<{anonymous}::Case>]	32	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:1002:8:{anonymous}::Case::~Case()	16	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:481:8:{anonymous}::VirtualProgram::~VirtualProgram()	32	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:623:8:{anonymous}::Program::~Program()	32	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:862:10:void {anonymous}::Executor::execute(const std::vector<std::array<unsigned char, 64> >&, std::vector<std::array<unsigned char, 64> >*)	384	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:1291:13:std::string {anonymous}::trim(const std::string&)	64	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:1128:8:double {anonymous}::median(std::vector<double>)	144	static
+/usr/include/c++/13/bits/unique_ptr.h:93:7:void std::default_delete<_Tp>::operator()(_Tp*) const [with _Tp = {anonymous}::Node]	32	static
+/usr/include/c++/13/bits/stl_vector.h:733:7:std::vector<_Tp, _Alloc>::~vector() [with _Tp = short unsigned int; _Alloc = std::allocator<short unsigned int>]	8	static
+/usr/include/c++/13/bits/stl_vector.h:733:7:std::vector<_Tp, _Alloc>::~vector() [with _Tp = unsigned int; _Alloc = std::allocator<unsigned int>]	8	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:1280:8:{anonymous}::RuntimeEnvironment::~RuntimeEnvironment()	16	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:84:5:{anonymous}::BinaryField::BinaryField(unsigned int, uint32_t, const {anonymous}::Element*)	160	static
+/usr/include/c++/13/bits/stl_vector.h:733:7:std::vector<_Tp, _Alloc>::~vector() [with _Tp = unsigned char; _Alloc = std::allocator<unsigned char>]	8	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:275:6:{anonymous}::Mask {anonymous}::concatenate(const Mask&, const Mask&)	80	static
+/usr/include/c++/13/bits/vector.tcc:445:7:) [with _Args = {const {anonymous}::Case&}; _Tp = {anonymous}::Case; _Alloc = std::allocator<{anonymous}::Case>]	112	static
+/usr/include/c++/13/bits/stl_vector.h:733:7:std::vector<_Tp, _Alloc>::~vector() [with _Tp = int; _Alloc = std::allocator<int>]	8	static
+/usr/include/c++/13/bits/vector.tcc:445:7:) [with _Args = {const {anonymous}::VirtualOperation&}; _Tp = {anonymous}::VirtualOperation; _Alloc = std::allocator<{anonymous}::VirtualOperation>]	96	static
+/usr/include/c++/13/bits/vector.tcc:445:7:) [with _Args = {const {anonymous}::PhysicalOperation&}; _Tp = {anonymous}::PhysicalOperation; _Alloc = std::allocator<{anonymous}::PhysicalOperation>]	96	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:492:18:std::vector<int> {anonymous}::emit_virtual(const Node&, const std::vector<int>&, VirtualProgram*)	448	static
+/usr/include/c++/13/bits/stl_vector.h:733:7:std::vector<_Tp, _Alloc>::~vector() [with _Tp = std::array<unsigned char, 64>; _Alloc = std::allocator<std::array<unsigned char, 64> >]	8	static
+/usr/include/c++/13/bits/stl_vector.h:733:7:std::vector<_Tp, _Alloc>::~vector() [with _Tp = void*; _Alloc = std::allocator<void*>]	8	static
+/usr/include/c++/13/bits/stl_vector.h:733:7:std::vector<_Tp, _Alloc>::~vector() [with _Tp = double; _Alloc = std::allocator<double>]	8	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:1503:6:void {anonymous}::add_prefix_cases(std::vector<Case>*, const std::string&, const BinaryField&, unsigned int, unsigned int, unsigned int, unsigned int, bool)	720	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:1266:13:std::string {anonymous}::json_escape(const std::string&)	512	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:1359:6:void {anonymous}::write_results(std::ostream&, const std::string&, const std::string&, leo2_backend, uint32_t, const RuntimeEnvironment&, uint64_t, uint64_t, const std::vector<CaseResult>&, const std::vector<BenchmarkResult>&)	336	static
+/usr/include/c++/13/bits/basic_string.h:3727:5:bool std::operator==(const __cxx11::basic_string<_CharT, _Traits, _Alloc>&, const _CharT*) [with _CharT = char; _Traits = char_traits<char>; _Alloc = allocator<char>]	32	static
+/usr/include/c++/13/bits/vector.tcc:270:5:void std::vector<_Tp, _Alloc>::_M_fill_assign(std::size_t, const value_type&) [with _Tp = unsigned char; _Alloc = std::allocator<unsigned char>]	48	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:299:23:std::unique_ptr<{anonymous}::Node> {anonymous}::make_node(unsigned int, unsigned int, Direction, const Mask&, const Mask&, NodeKind)	80	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:320:23:std::unique_ptr<{anonymous}::Node> {anonymous}::compile_forward_node(const std::vector<short unsigned int>&, unsigned int, unsigned int, const Mask&, const Mask&)	448	dynamic,bounded
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:390:23:std::unique_ptr<{anonymous}::Node> {anonymous}::compile_inverse_node(const std::vector<short unsigned int>&, unsigned int, unsigned int, const Mask&, const Mask&)	448	dynamic,bounded
+/usr/include/c++/13/bits/vector.tcc:445:7:) [with _Args = {const int&}; _Tp = int; _Alloc = std::allocator<int>]	80	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:797:9:{anonymous}::Program {anonymous}::compile_program(const std::vector<short unsigned int>&, unsigned int, unsigned int, Direction, const Mask&, const Mask&)	512	static
+/usr/include/c++/13/bits/vector.tcc:445:7:) [with _Args = {const unsigned int&}; _Tp = unsigned int; _Alloc = std::allocator<unsigned int>]	80	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:1300:20:{anonymous}::RuntimeEnvironment {anonymous}::read_runtime_environment()	1552	static
+/usr/include/c++/13/bits/vector.tcc:445:7:) [with _Args = {short unsigned int}; _Tp = short unsigned int; _Alloc = std::allocator<short unsigned int>]	80	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:209:22:std::vector<short unsigned int> {anonymous}::make_independent_skew(const BinaryField&)	208	static
+/usr/include/c++/13/bits/vector.tcc:445:7:) [with _Args = {std::array<unsigned char, 64>}; _Tp = std::array<unsigned char, 64>; _Alloc = std::allocator<std::array<unsigned char, 64> >]	80	static
+/usr/include/c++/13/bits/vector.tcc:445:7:) [with _Args = {double}; _Tp = double; _Alloc = std::allocator<double>]	80	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:1138:8:double {anonymous}::mad(const std::vector<double>&, double)	128	static
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:1172:17:{anonymous}::BenchmarkResult {anonymous}::benchmark_case(const Case&, unsigned int)	1072	dynamic,bounded
+experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp:1533:5:int main(int, char**)	1696	dynamic,bounded

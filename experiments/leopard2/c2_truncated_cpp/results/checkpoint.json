@@ -1,0 +1,206 @@
+{
+  "benchmark": {
+    "result_sha256": "3023abc7b5242811e2317b235e15b3b8e5dc436fd11a8a24ff5f1b15b2e2d36a",
+    "rows": [
+      {
+        "candidate_mad_us": 0.331,
+        "candidate_median_us": 48.171,
+        "candidate_scratch_bytes": 8960,
+        "direction": "forward",
+        "field_bits": 8,
+        "name": "gf8_benchmark_n256_s0_forward",
+        "padded_mad_us": 0.01,
+        "padded_median_us": 1.5,
+        "padded_over_candidate": 0.031,
+        "padded_scratch_bytes": 18432,
+        "parent_size": 256,
+        "repetitions": 41,
+        "setup_mad_us": 0.27,
+        "setup_median_us": 14.65
+      },
+      {
+        "candidate_mad_us": 2.2,
+        "candidate_median_us": 116.731,
+        "candidate_scratch_bytes": 8960,
+        "direction": "inverse",
+        "field_bits": 8,
+        "name": "gf8_benchmark_n256_s0_inverse",
+        "padded_mad_us": 0.01,
+        "padded_median_us": 1.62,
+        "padded_over_candidate": 0.014,
+        "padded_scratch_bytes": 18432,
+        "parent_size": 256,
+        "repetitions": 41,
+        "setup_mad_us": 0.159,
+        "setup_median_us": 27.73
+      },
+      {
+        "candidate_mad_us": 4.89,
+        "candidate_median_us": 745.499,
+        "candidate_scratch_bytes": 35072,
+        "direction": "forward",
+        "field_bits": 16,
+        "name": "gf16_medium_n1024_s0_forward",
+        "padded_mad_us": 0.069,
+        "padded_median_us": 12.64,
+        "padded_over_candidate": 0.017,
+        "padded_scratch_bytes": 73728,
+        "parent_size": 1024,
+        "repetitions": 23,
+        "setup_mad_us": 0.31,
+        "setup_median_us": 46.18
+      },
+      {
+        "candidate_mad_us": 2.999,
+        "candidate_median_us": 765.569,
+        "candidate_scratch_bytes": 35072,
+        "direction": "inverse",
+        "field_bits": 16,
+        "name": "gf16_medium_n1024_s0_inverse",
+        "padded_mad_us": 0.09,
+        "padded_median_us": 12.63,
+        "padded_over_candidate": 0.016,
+        "padded_scratch_bytes": 73728,
+        "parent_size": 1024,
+        "repetitions": 23,
+        "setup_mad_us": 0.91,
+        "setup_median_us": 116.641
+      },
+      {
+        "candidate_mad_us": 10.411,
+        "candidate_median_us": 3069.914,
+        "candidate_scratch_bytes": 139520,
+        "direction": "forward",
+        "field_bits": 16,
+        "name": "gf16_large_n4096_s0_forward",
+        "padded_mad_us": 0.53,
+        "padded_median_us": 59.911,
+        "padded_over_candidate": 0.02,
+        "padded_scratch_bytes": 294912,
+        "parent_size": 4096,
+        "repetitions": 11,
+        "setup_mad_us": 3.31,
+        "setup_median_us": 171.362
+      },
+      {
+        "candidate_mad_us": 4.97,
+        "candidate_median_us": 3185.055,
+        "candidate_scratch_bytes": 139520,
+        "direction": "inverse",
+        "field_bits": 16,
+        "name": "gf16_large_n4096_s0_inverse",
+        "padded_mad_us": 0.43,
+        "padded_median_us": 61.001,
+        "padded_over_candidate": 0.019,
+        "padded_scratch_bytes": 294912,
+        "parent_size": 4096,
+        "repetitions": 11,
+        "setup_mad_us": 1.58,
+        "setup_median_us": 461.335
+      }
+    ],
+    "runtime_backend": "avx2",
+    "scope": "single process; raw OMP_NUM_THREADS/openmp_max_threads are 1; raw sched_getaffinity contains one CPU; medians and MAD; input packing/output scatter included",
+    "slowdown_max": 72.05617283950616,
+    "slowdown_min": 32.114
+  },
+  "correctness": {
+    "asan_ubsan": {
+      "linked_library_sha256": "d0de519fed38d3a0a9e7e91dbd994ab81766bb7ca4b45272cddd7957093981e3",
+      "result_sha256": "467245e1f2db0358745892193ba0be5ec6b3158c5c9defa20525f324bae656ed",
+      "runtime_backend": "avx2",
+      "status": "pass"
+    },
+    "backends": {
+      "auto": {
+        "linked_library_sha256": "2585cd5059404b7154e11d738545a45f12f24c12a987ed94fa84b8cdf8f3d349",
+        "result_sha256": "c3aa6e1baee766dca717b9b82d85c8f840522da46105dc4a895c5c8cdda9800c",
+        "runtime_backend": "avx2"
+      },
+      "avx2": {
+        "linked_library_sha256": "85cfc5bc2ce21ee0a2874927104e3118403a9d8821ceb9df2746e448aa6122cf",
+        "result_sha256": "2a8ca8b05db7ba1478c471d1bfa5a264cfe75a5119c3e6038b054235fb44ecee",
+        "runtime_backend": "avx2"
+      },
+      "scalar": {
+        "linked_library_sha256": "f013f8df2dc483bcea0ea416dc4eecd9f0b66d9a78672a2e8fa240b1194fb66d",
+        "result_sha256": "4963cec441db221ac081421a312848efff581b880508d90cc889857a924ce317",
+        "runtime_backend": "scalar"
+      },
+      "ssse3": {
+        "linked_library_sha256": "29a2ce3fe03f1beab1a44eb3644d9f814ef0022477986e85765f5cb9727f4249",
+        "result_sha256": "d09547ce600dff935b37d0ac34b83c6b3b0dd9ded7a2bac23e407cc4b905965e",
+        "runtime_backend": "ssse3"
+      }
+    },
+    "bytes_compared_per_backend": 684416,
+    "cases_per_backend": 22,
+    "digest_fnv1a64": "0xeebedd5febef7e07",
+    "production_multiplier_checks_per_backend": 65790
+  },
+  "disposition": "not_promoted",
+  "inconclusive": "A fused SIMD boundary kernel and a more compact generated schedule were not implemented, so their crossover remains open.",
+  "machine": {
+    "benchmark_process_affinity_cpus": [
+      15
+    ],
+    "hostname": "ai",
+    "merge_process_affinity_cpus": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30,
+      31
+    ],
+    "platform": "Linux 6.8.0-134-generic x86_64",
+    "processor": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "python": "3.12.3"
+  },
+  "memory": {
+    "accounting": "caller inputs/outputs and ordinary call frames excluded; arena slots plus four 64-byte pair-staging shards and maximum complete-block pointers",
+    "irregular_scratch_ratio_max": 0.7743055555555556,
+    "irregular_scratch_ratio_min": 0.7717013888888888,
+    "largest_execution_scratch_bytes": 278912,
+    "largest_padded_scratch_bytes": 589824,
+    "largest_serialized_schedule_bytes": 368712,
+    "prefix_scratch_ratio_max": 0.5138888888888888,
+    "prefix_scratch_ratio_min": 0.4727647569444444
+  },
+  "negative_result": "The scalar ragged-boundary executor is 32.1-72.1x slower than the production padded SIMD transform in retained cells; compact scratch alone is not a promotion argument.",
+  "schema_version": "leopard2-c2-checkpoint/v2",
+  "source": {
+    "core_git_sha": "506d3272804efa47e21d6ffbd954b33debcfaf7e",
+    "core_matrix_sha256": "076d16f953d643485dcdd1ab084f887c572ff2558f715380cee7236c511c5d58",
+    "path": "experiments/leopard2/c2_truncated_cpp/c2_truncated.cpp",
+    "sha256": "932eaf7eb594d53a0aad86ca426785a7258212ec90bba64fe8aa14f005fffe74"
+  },
+  "status": "pass",
+  "wire_identity": "existing padded dyadic parent"
+}
