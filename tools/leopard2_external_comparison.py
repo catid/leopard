@@ -24,6 +24,12 @@ from typing import Mapping, Sequence
 
 SCHEMA = "leopard2-external-comparison-audit/v1"
 RETRIEVED = "2026-07-16"
+# The future adapter uses a deterministic 64-bit-host contract instead of
+# silently inheriting sizeof(long) from whichever machine runs this audit.
+# Jerasure requires region sizes to be longword multiples and pointers to be
+# longword aligned.  Eight-byte regions are safe for the intended 64-bit
+# comparison builds and keep offline classifications reproducible.
+JERASURE_ADAPTER_REGION_BYTES = 8
 SOURCES = {
     "isa-l": {
         "name": "Intel ISA-L",
@@ -148,9 +154,14 @@ def classify(provider: str, cell: Mapping[str, object]) -> dict:
         if provider_field not in ("gf8", "gf16"):
             reasons.append(
                 "public K+R exceeds Jerasure's selected GF8/GF16 evaluation-set bound")
-        if provider_field == "gf16" and shard_bytes % 2:
-            reasons.append("GF16 matrix regions require whole 16-bit words")
-        qualifications = []
+        if shard_bytes % JERASURE_ADAPTER_REGION_BYTES:
+            reasons.append(
+                "shard length is not a multiple of the deterministic 8-byte "
+                "Jerasure adapter region contract")
+        qualifications = [
+            "a reviewed adapter must allocate 8-byte-aligned regions; staging, "
+            "padding, and copy bytes for other layouts must be charged explicitly",
+        ]
         if provider_field == "gf8" and field == "gf16":
             qualifications.append(
                 "Jerasure can remain in GF(256) while dyadic parent inflation "
@@ -327,6 +338,21 @@ def self_test() -> None:
             jerasure_boundary["leopard2_field"] != "gf16" or
             not jerasure_boundary["qualifications"]):
         raise AuditError("Jerasure field-boundary advantage was not disclosed")
+    jerasure_gf8_unaligned = classify("jerasure", {
+        "K": 8, "R": 8, "requested_profile": "high", "shard_bytes": 1,
+    })
+    jerasure_gf16_unaligned = classify("jerasure", {
+        "K": 129, "R": 100, "requested_profile": "high", "shard_bytes": 2,
+    })
+    jerasure_aligned = classify("jerasure", {
+        "K": 129, "R": 100, "requested_profile": "high", "shard_bytes": 8,
+    })
+    if (jerasure_gf8_unaligned["status"] != "excluded" or
+            jerasure_gf16_unaligned["status"] != "excluded" or
+            jerasure_aligned["status"] != "adapter-required" or
+            not any("8-byte-aligned" in qualification
+                    for qualification in jerasure_aligned["qualifications"])):
+        raise AuditError("Jerasure deterministic region contract is not enforced")
     print(json.dumps({
         "isa_l": isa_counts,
         "jerasure": jerasure_counts,

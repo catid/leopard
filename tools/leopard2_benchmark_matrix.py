@@ -14,15 +14,26 @@ import json
 import math
 import os
 import re
+import sys
 import tempfile
 from collections import Counter
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
+_TOOLS_DIRECTORY = str(Path(__file__).resolve().parent)
+if _TOOLS_DIRECTORY not in sys.path:
+    sys.path.insert(0, _TOOLS_DIRECTORY)
+
+from leopard2_perf_evidence import (  # noqa: E402
+    perf_probe_command,
+    probe_command_matches_request,
+    read_perf_stat_evidence,
+)
+
 
 SCHEMA = "leopard2-benchmark-matrix/v3"
 SPEC_SCHEMA = "leopard2-benchmark-spec/v3"
-LAB_MANIFEST_SCHEMA = "leopard2-lab-manifest/v2"
+LAB_MANIFEST_SCHEMA = "leopard2-lab-manifest/v3"
 MODE_AUTOMATIC = "automatic"
 MODE_FORCED_SPECIALIZED = "forced-specialized"
 MODE_FORCED_GENERIC = "forced-generic"
@@ -120,12 +131,6 @@ DEFAULT_PERF_EVENTS = (
     "dTLB-load-misses",
 )
 PERF_EVENT_RE = re.compile(r"^[A-Za-z0-9_.:/=-]+$")
-PERF_EVENT_CANONICAL_ALIASES = {
-    "branch-instructions": "branches",
-    "branches": "branches",
-    "cpu-cycles": "cycles",
-    "cycles": "cycles",
-}
 
 
 class MatrixError(ValueError):
@@ -748,6 +753,9 @@ def _validate_manifest(value: object) -> dict:
             counter_executable = counters.get("executable") if isinstance(
                 counters, dict) else None
             if (not isinstance(counters, dict) or
+                    set(counters) != {
+                        "provider", "events", "optional", "executable",
+                        "probe_command"} or
                     counters.get("provider") != "linux-perf-stat" or
                     not isinstance(counters.get("events"), list) or
                     not counters["events"] or
@@ -762,7 +770,9 @@ def _validate_manifest(value: object) -> dict:
                     any(character not in "0123456789abcdef"
                         for character in counter_executable["sha256"]) or
                     not isinstance(counter_executable.get("size_bytes"), int) or
-                    counter_executable["size_bytes"] < 0):
+                    counter_executable["size_bytes"] < 0 or
+                    not probe_command_matches_request(
+                        counters, counters.get("probe_command"))):
                 raise MatrixError(
                     f"job {job['id']} has an invalid performance counter request")
     return value
@@ -782,6 +792,9 @@ def _validate_performance_evidence(
                 f"job {job['id']} has unexpected performance counter evidence")
         return None
     if (not isinstance(request, dict) or not isinstance(evidence, dict) or
+            not set(evidence).issubset({
+                "provider", "events", "optional", "executable", "probe",
+                "status", "raw_output", "measurements", "detail"}) or
             evidence.get("provider") != request.get("provider") or
             evidence.get("events") != request.get("events") or
             evidence.get("optional") != request.get("optional") or
@@ -792,13 +805,28 @@ def _validate_performance_evidence(
             f"job {job['id']} performance counter evidence differs from its request")
     probe = evidence.get("probe")
     if (not isinstance(probe, dict) or
+            not {"status", "command", "cpu_set", "exit_code",
+                 "duration_seconds"}.issubset(probe) or
+            not set(probe).issubset({
+                "status", "command", "cpu_set", "exit_code",
+                "duration_seconds", "stderr_tail", "detail"}) or
             probe.get("status") not in ("available", "unavailable") or
             probe.get("cpu_set") != job.get("cpu_set") or
-            not isinstance(probe.get("command"), list) or
-            not all(isinstance(argument, str) for argument in probe["command"]) or
+            not probe_command_matches_request(request, probe.get("command")) or
             (probe.get("exit_code") is not None and
              (isinstance(probe.get("exit_code"), bool) or
-              not isinstance(probe.get("exit_code"), int)))):
+              not isinstance(probe.get("exit_code"), int))) or
+            (probe.get("status") == "available" and
+             (probe.get("exit_code") != 0 or "detail" in probe)) or
+            (probe.get("status") == "unavailable" and
+             (not isinstance(probe.get("detail"), str) or
+              not probe.get("detail"))) or
+            isinstance(probe.get("duration_seconds"), bool) or
+            not isinstance(probe.get("duration_seconds"), (int, float)) or
+            not math.isfinite(float(probe["duration_seconds"])) or
+            float(probe["duration_seconds"]) < 0.0 or
+            ("stderr_tail" in probe and
+             not isinstance(probe["stderr_tail"], str))):
         raise MatrixError(f"job {job['id']} has invalid counter preflight evidence")
     raw_output = evidence.get("raw_output")
     if raw_output is None:
@@ -806,8 +834,7 @@ def _validate_performance_evidence(
             raise MatrixError(
                 f"job {job['id']} has an unsigned counter output identity")
     elif (raw_output != "perf-stat.txt" or
-          outputs.get("performance_counters") !=
-          file_identity(job_dir / "perf-stat.txt")):
+          not isinstance(outputs.get("performance_counters"), dict)):
         raise MatrixError(
             f"job {job['id']} performance counter output identity is invalid")
     measurements = evidence.get("measurements", [])
@@ -817,52 +844,50 @@ def _validate_performance_evidence(
     if raw_output is None and measurements:
         raise MatrixError(
             f"job {job['id']} has counter measurements without raw output")
-    if raw_output is not None or status in ("available", "partial"):
-        if len(measurements) != len(request["events"]):
+
+    if raw_output is None:
+        expected_detail = probe.get(
+            "detail", "performance counters were unavailable during preflight")
+        if status != "unavailable" or evidence.get("detail") != expected_detail:
             raise MatrixError(
-                f"job {job['id']} counter measurements are incomplete")
-    counted = 0
-    for index, measurement in enumerate(measurements):
-        if (not isinstance(measurement, dict) or
-                measurement.get("event") != request["events"][index] or
-                measurement.get("status") not in
-                ("counted", "not-counted", "missing")):
+                f"job {job['id']} counter status disagrees with its preflight")
+        expected_keys = {
+            "provider", "events", "optional", "executable", "probe",
+            "status", "detail"}
+        if set(evidence) != expected_keys:
             raise MatrixError(
-                f"job {job['id']} counter measurements do not match requested events")
-        measurement_status = measurement["status"]
-        if measurement_status == "missing":
-            continue
-        reported = measurement.get("reported_event")
-        requested_event = measurement["event"]
-        if (not isinstance(reported, str) or
-                PERF_EVENT_CANONICAL_ALIASES.get(reported, reported) !=
-                PERF_EVENT_CANONICAL_ALIASES.get(
-                    requested_event, requested_event) or
-                not isinstance(measurement.get("raw_value"), str)):
-            raise MatrixError(
-                f"job {job['id']} counter measurement reports a different event")
-        if measurement_status == "counted":
-            value = measurement.get("value")
-            if (isinstance(value, bool) or not isinstance(value, (int, float)) or
-                    not math.isfinite(float(value)) or float(value) < 0.0):
-                raise MatrixError(
-                    f"job {job['id']} counter measurement value is invalid")
-            counted += 1
-        percentage = measurement.get("running_percentage")
-        if (percentage is not None and
-                (isinstance(percentage, bool) or
-                 not isinstance(percentage, (int, float)) or
-                 not math.isfinite(float(percentage)) or
-                 not 0.0 <= float(percentage) <= 100.0)):
-            raise MatrixError(
-                f"job {job['id']} counter running percentage is invalid")
-    if ((status == "available" and counted != len(request["events"])) or
-            (status == "partial" and not 0 < counted < len(request["events"])) or
-            (status == "unavailable" and counted != 0) or
-            (status in ("available", "partial") and
-             (probe["status"] != "available" or raw_output is None))):
+                f"job {job['id']} has noncanonical unavailable counter evidence")
+        return dict(evidence)
+
+    if probe["status"] != "available":
         raise MatrixError(
-            f"job {job['id']} counter status disagrees with its measurements")
+            f"job {job['id']} has raw counters from an unavailable preflight")
+    try:
+        (raw_identity, derived_measurements, derived_status,
+         derived_detail) = read_perf_stat_evidence(
+             job_dir / "perf-stat.txt", request["events"])
+    except OSError as error:
+        raise MatrixError(
+            f"cannot read retained counters for job {job['id']}: {error}") from error
+    if raw_identity != outputs["performance_counters"]:
+        raise MatrixError(
+            f"job {job['id']} performance counter output identity is invalid")
+    if measurements != derived_measurements or status != derived_status:
+        raise MatrixError(
+            f"job {job['id']} counter JSON differs from retained raw output")
+    if ((derived_detail is None and "detail" in evidence) or
+            (derived_detail is not None and
+             evidence.get("detail") != derived_detail)):
+        raise MatrixError(
+            f"job {job['id']} counter detail differs from retained raw output")
+    expected_keys = {
+        "provider", "events", "optional", "executable", "probe", "status",
+        "raw_output", "measurements"}
+    if derived_detail is not None:
+        expected_keys.add("detail")
+    if set(evidence) != expected_keys:
+        raise MatrixError(
+            f"job {job['id']} has noncanonical raw counter evidence")
     return dict(evidence)
 
 
@@ -1409,6 +1434,9 @@ def self_test() -> None:
                     "optional": True,
                     "executable": counter_executable,
                 }
+                request["probe_command"] = perf_probe_command(
+                    counter_executable["path"], request["events"],
+                    "/usr/bin/python3")
                 job["performance_counters"] = request
                 unsigned_job = dict(job)
                 unsigned_job.pop("job_digest", None)
@@ -1423,9 +1451,10 @@ def self_test() -> None:
                     "status": "unavailable",
                     "probe": {
                         "status": "unavailable",
-                        "command": ["/tmp/perf", "stat"],
+                        "command": request["probe_command"],
                         "cpu_set": job["cpu_set"],
                         "exit_code": 255,
+                        "duration_seconds": 0.001,
                         "detail": "permission denied fixture",
                     },
                     "detail": "permission denied fixture",
@@ -1473,7 +1502,9 @@ def self_test() -> None:
                         },
                     ],
                 })
+                evidence.pop("detail", None)
                 evidence["probe"].update(status="available", exit_code=0)
+                evidence["probe"].pop("detail", None)
                 result["outputs"]["performance_counters"] = file_identity(raw_path)
                 result.pop("result_digest", None)
                 result["result_digest"] = digest(result)
@@ -1520,6 +1551,26 @@ def self_test() -> None:
         expect_error(
             "counter evidence relabeled from a different reported event",
             lambda: collect(*wrong_reported_fixture))
+
+        wrong_value_fixture = promote_available_counters(write_fixture(
+            "counter-value-disagrees-with-raw", add_unavailable_counters))
+        wrong_value_fixture = mutate_first_counter_result(
+            wrong_value_fixture,
+            lambda result: result["performance_counters"]["measurements"][
+                0].update(raw_value="999999999999", value=999999999999.0))
+        expect_error(
+            "counter JSON value contradicting retained raw output",
+            lambda: collect(*wrong_value_fixture))
+
+        bogus_probe_fixture = promote_available_counters(write_fixture(
+            "bogus-counter-probe", add_unavailable_counters))
+        bogus_probe_fixture = mutate_first_counter_result(
+            bogus_probe_fixture,
+            lambda result: result["performance_counters"]["probe"].update(
+                command=["bogus-probe"], exit_code=99))
+        expect_error(
+            "forged probe command and successful exit",
+            lambda: collect(*bogus_probe_fixture))
 
         mixed_epoch = write_fixture(
             "mixed-run-epoch",

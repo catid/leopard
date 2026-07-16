@@ -221,7 +221,14 @@ rejection, optional-denied bare execution, required-denied preflight, and
 counter-executable replacement rejection. It also rejects positional relabeling
 of a different reported event and rejects available/partial evidence without an
 available probe, a complete measurement list, and retained hashed raw output.
-The matrix self-test applies the same evidence invariants during collection.
+The exact preflight command is bound into each manifest request. Resume and
+matrix collection reparse `perf-stat.txt` through one shared canonical parser
+and require the recorded measurements, status, and detail to equal that
+raw-derived result; coordinated JSON/digest edits cannot substitute a different
+value while leaving the retained raw bytes unchanged. The matrix self-test
+applies the same evidence invariants during collection.
+Lab manifests therefore use `leopard2-lab-manifest/v3`; older manifests must be
+regenerated rather than being resumed under weaker evidence semantics.
 CTest also runs the independent operation-count model's schedule invariants;
 those counts remain modeled bounds rather than PMU observations.
 
@@ -255,8 +262,10 @@ profile/field/parent, the provider field, whether wire compatibility exists
 qualifications; the command does not claim to validate an independently edited
 or signed lab manifest. On the 7,134-job required matrix, the audit
 classifies 5,024 ISA-L rows as public-workload candidates and excludes 2,110
-whose `K+R` exceeds GF(256); all 7,134 even-byte GF8/GF16 rows are Jerasure
-adapter candidates. ISA-L remains eligible for `K+R<=256` when Leopard2's
+whose `K+R` exceeds GF(256); all 7,134 required GF8/GF16 rows are Jerasure
+adapter candidates because their shard sizes are multiples of the deterministic
+eight-byte adapter region contract. ISA-L remains eligible for `K+R<=256`
+when Leopard2's
 dyadic parent inflation selects GF16, but the report requires that field
 advantage to be disclosed. Jerasure likewise retains GF8 for those public
 lengths rather than silently following Leopard2 into GF16. A future ISA-L
@@ -268,6 +277,13 @@ ECC-Benchmark is excluded as an independent provider because it is a historical
 harness with different timing/loss semantics. Eligible means only that a future
 reviewed adapter can run the same public workload; it is explicitly not a
 measurement.
+
+Jerasure's public region API requires longword-multiple sizes and longword-
+aligned pointers. To make offline classification independent of audit-host
+`sizeof(long)`, the prospective comparison adapter uses a conservative
+eight-byte region granularity and eight-byte alignment contract. Arbitrary
+unaligned shard lengths are excluded from direct-region comparison; any future
+staging or padding experiment must report copied and padded bytes explicitly.
 
 Reproduce the policy and optional source-cache checks with:
 
