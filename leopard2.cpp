@@ -67,6 +67,11 @@ struct leo2_codec
     leo2_profile profile;
     leo2_field field;
     uint32_t flags;
+    std::vector<uint8_t> permanent_erased;
+    std::vector<uint8_t> permanent_locator8;
+    std::vector<uint16_t> permanent_locator16;
+    std::vector<uint8_t> fixed_factors8;
+    std::vector<uint16_t> fixed_factors16;
 };
 
 struct leo2_decode_plan
@@ -78,8 +83,6 @@ struct leo2_decode_plan
     std::vector<uint8_t> requested;
     std::vector<uint8_t> locator8;
     std::vector<uint16_t> locator16;
-    std::vector<uint8_t> fixed_factors8;
-    std::vector<uint16_t> fixed_factors16;
     uint32_t missing_original_count;
     bool no_op;
     bool direct_xor;
@@ -553,11 +556,22 @@ static leo2_result EncodeLayout(
     if (codec->field == LEO2_FIELD_GF16 && (shard_bytes & 63u) != 0)
         return LEO2_UNSUPPORTED;
     work_count = static_cast<size_t>(codec->padded_side) * 2;
-    const size_t parity_slots = codec->profile == LEO2_PROFILE_LOW_V1
+    /*
+        Transform kernels operate on complete 64-byte tiles.  Aligned shards
+        can therefore be read from and written to the caller's disjoint
+        buffers directly.  Only a GF8 partial tile needs staged, zero-padded
+        inputs and outputs.
+    */
+    const bool stage_partial_tile = rounded_bytes != shard_bytes;
+    const size_t original_slots = stage_partial_tile ? codec->original_count : 0;
+    const size_t parity_pointer_count = codec->profile == LEO2_PROFILE_LOW_V1
         ? codec->recovery_count : 0;
+    const size_t parity_slots = stage_partial_tile &&
+        codec->profile == LEO2_PROFILE_LOW_V1 ? codec->recovery_count : 0;
     const size_t range_count = static_cast<size_t>(codec->original_count) + codec->recovery_count;
-    const size_t pointer_count = static_cast<size_t>(codec->original_count) + work_count + parity_slots;
-    const size_t slot_count = pointer_count;
+    const size_t pointer_count = static_cast<size_t>(codec->original_count) +
+        work_count + parity_pointer_count;
+    const size_t slot_count = original_slots + work_count + parity_slots;
     if (!ComputeScratchLayout(range_count, pointer_count, slot_count, rounded_bytes, layout))
         return LEO2_INVALID_COUNTS;
     return LEO2_SUCCESS;
@@ -842,6 +856,83 @@ LEO2_EXPORT leo2_result leo2_codec_create(
     codec->profile = profile;
     codec->field = field;
     codec->flags = options ? options->flags : 0;
+    try
+    {
+        codec->permanent_erased.assign(parent, 0);
+        if (profile == LEO2_PROFILE_LEGACY_HIGH_V1)
+        {
+            for (uint32_t i = recovery_count; i < padded; ++i)
+                codec->permanent_erased[i] = 1;
+        }
+        else
+        {
+            for (uint32_t i = padded + recovery_count; i < parent; ++i)
+                codec->permanent_erased[i] = 1;
+        }
+
+        const bool specialized =
+            (codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) == 0;
+        const uint32_t permanent_erasure_count =
+            profile == LEO2_PROFILE_LEGACY_HIGH_V1
+                ? padded - recovery_count
+                : parent - padded - recovery_count;
+
+        if (field == LEO2_FIELD_GF8)
+        {
+            if (permanent_erasure_count != 0 &&
+                leopard::ff8::IsDirectLocatorPreferred(parent, recovery_count))
+            {
+                codec->permanent_locator8.resize(parent);
+                leopard::ff8::PrepareDecode(parent,
+                    &codec->permanent_erased[0], &codec->permanent_locator8[0]);
+            }
+            if (specialized && padded >= 2)
+            {
+                if (profile == LEO2_PROFILE_LOW_V1)
+                {
+                    codec->fixed_factors8.resize(parent / padded - 1);
+                    leopard::ff8::PrepareLowDecode(
+                        parent, padded, &codec->fixed_factors8[0]);
+                }
+                else
+                {
+                    codec->fixed_factors8.resize(parent);
+                    leopard::ff8::PrepareHighDecode(
+                        parent, padded, &codec->fixed_factors8[0]);
+                }
+            }
+        }
+        else
+        {
+            if (permanent_erasure_count != 0 &&
+                leopard::ff16::IsDirectLocatorPreferred(parent, recovery_count))
+            {
+                codec->permanent_locator16.resize(parent);
+                leopard::ff16::PrepareDecode(parent,
+                    &codec->permanent_erased[0], &codec->permanent_locator16[0]);
+            }
+            if (specialized && padded >= 2)
+            {
+                if (profile == LEO2_PROFILE_LOW_V1)
+                {
+                    codec->fixed_factors16.resize(parent / padded - 1);
+                    leopard::ff16::PrepareLowDecode(
+                        parent, padded, &codec->fixed_factors16[0]);
+                }
+                else
+                {
+                    codec->fixed_factors16.resize(parent);
+                    leopard::ff16::PrepareHighDecode(
+                        parent, padded, &codec->fixed_factors16[0]);
+                }
+            }
+        }
+    }
+    catch (const std::bad_alloc&)
+    {
+        delete codec;
+        return LEO2_OUT_OF_MEMORY;
+    }
     *codec_out = codec;
     return LEO2_SUCCESS;
 }
@@ -928,51 +1019,69 @@ LEO2_EXPORT leo2_result leo2_encode(
     uint8_t* base = static_cast<uint8_t*>(scratch);
     void** pointers = reinterpret_cast<void**>(base + layout.pointer_offset);
     uint8_t* slots = base + layout.data_offset;
+    const bool stage_partial_tile = rounded != shard_bytes;
+    size_t next_slot = 0;
     for (uint32_t i = 0; i < codec->original_count; ++i)
     {
-        pointers[i] = slots + static_cast<size_t>(i) * rounded;
-        CopyAndPad(pointers[i], original[i], static_cast<size_t>(shard_bytes), rounded);
+        if (stage_partial_tile)
+        {
+            pointers[i] = slots + next_slot++ * rounded;
+            CopyAndPad(pointers[i], original[i], static_cast<size_t>(shard_bytes), rounded);
+        }
+        else
+            pointers[i] = const_cast<void*>(original[i]);
     }
     void** work = pointers + codec->original_count;
     for (size_t i = 0; i < work_count; ++i)
-        work[i] = slots + (static_cast<size_t>(codec->original_count) + i) * rounded;
+        work[i] = slots + next_slot++ * rounded;
+
+    uint32_t requested_recovery_count = codec->recovery_count;
+    while (requested_recovery_count > 0 && !recovery[requested_recovery_count - 1])
+        --requested_recovery_count;
+    if (requested_recovery_count == 0)
+        return LEO2_SUCCESS;
 
     const void* const* padded_original = const_cast<const void* const*>(pointers);
     if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
     {
+        if (!stage_partial_tile)
+        {
+            for (uint32_t i = 0; i < requested_recovery_count; ++i)
+                if (recovery[i])
+                    work[i] = recovery[i];
+        }
         if (codec->padded_side == 1)
         {
             uint8_t* parity = static_cast<uint8_t*>(work[0]);
             memcpy(parity, pointers[0], rounded);
+            leopard::XORSummer summer;
+            summer.Initialize(parity);
             for (uint32_t i = 1; i < codec->original_count; ++i)
-            {
-                const uint8_t* source = static_cast<const uint8_t*>(pointers[i]);
-                for (size_t j = 0; j < rounded; ++j)
-                    parity[j] ^= source[j];
-            }
+                summer.Add(pointers[i], rounded);
+            summer.Finalize(rounded);
         }
         else if (codec->field == LEO2_FIELD_GF8)
             leopard::ff8::ReedSolomonEncode(
-                rounded, codec->original_count, codec->recovery_count,
+                rounded, codec->original_count, requested_recovery_count,
                 codec->padded_side, padded_original, work);
         else
             leopard::ff16::ReedSolomonEncode(
-                rounded, codec->original_count, codec->recovery_count,
+                rounded, codec->original_count, requested_recovery_count,
                 codec->padded_side, padded_original, work);
 
-        for (uint32_t i = 0; i < codec->recovery_count; ++i)
-            if (recovery[i])
-                memcpy(recovery[i], work[i], static_cast<size_t>(shard_bytes));
+        if (stage_partial_tile)
+            for (uint32_t i = 0; i < requested_recovery_count; ++i)
+                if (recovery[i])
+                    memcpy(recovery[i], work[i], static_cast<size_t>(shard_bytes));
     }
     else
     {
         void** parity = work + work_count;
         for (uint32_t i = 0; i < codec->recovery_count; ++i)
         {
-            parity[i] = recovery[i]
-                ? slots + (static_cast<size_t>(codec->original_count) +
-                    work_count + i) * rounded
-                : NULL;
+            parity[i] = recovery[i];
+            if (stage_partial_tile && recovery[i])
+                parity[i] = slots + next_slot++ * rounded;
         }
         if (codec->padded_side == 1)
         {
@@ -989,9 +1098,10 @@ LEO2_EXPORT leo2_result leo2_encode(
             leopard::ff16::ReedSolomonEncodeLow(
                 rounded, codec->original_count, codec->recovery_count,
                 codec->padded_side, padded_original, parity, work);
-        for (uint32_t i = 0; i < codec->recovery_count; ++i)
-            if (recovery[i])
-                memcpy(recovery[i], parity[i], static_cast<size_t>(shard_bytes));
+        if (stage_partial_tile)
+            for (uint32_t i = 0; i < codec->recovery_count; ++i)
+                if (recovery[i])
+                    memcpy(recovery[i], parity[i], static_cast<size_t>(shard_bytes));
     }
     return LEO2_SUCCESS;
 }
@@ -1055,7 +1165,7 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
         plan->codec = codec;
         plan->original_present.assign(original_present, original_present + codec->original_count);
         plan->recovery_present.assign(recovery_present, recovery_present + codec->recovery_count);
-        plan->coordinate_erased.assign(codec->parent_count, 0);
+        plan->coordinate_erased = codec->permanent_erased;
         plan->requested.assign(codec->parent_count, 0);
         plan->missing_original_count = missing_original_count;
         plan->no_op = missing_original_count == 0;
@@ -1064,17 +1174,6 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
         plan->direct_copy = codec->profile == LEO2_PROFILE_LOW_V1 &&
             codec->padded_side == 1 && missing_original_count == 1;
 
-        if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
-        {
-            for (uint32_t i = codec->recovery_count; i < codec->padded_side; ++i)
-                plan->coordinate_erased[i] = 1;
-        }
-        else
-        {
-            for (uint32_t i = codec->padded_side + codec->recovery_count;
-                 i < codec->parent_count; ++i)
-                plan->coordinate_erased[i] = 1;
-        }
         for (uint32_t i = 0; i < codec->original_count; ++i)
         {
             if (!original_present[i])
@@ -1118,50 +1217,26 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
             if (codec->field == LEO2_FIELD_GF8)
             {
                 plan->locator8.resize(codec->parent_count);
-                leopard::ff8::PrepareDecode(codec->parent_count,
-                    &plan->coordinate_erased[0], &plan->locator8[0]);
-                if ((codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) == 0)
-                {
-                    if (codec->profile == LEO2_PROFILE_LOW_V1)
-                    {
-                        plan->fixed_factors8.resize(
-                            codec->parent_count / codec->padded_side - 1);
-                        leopard::ff8::PrepareLowDecode(
-                            codec->parent_count, codec->padded_side,
-                            &plan->fixed_factors8[0]);
-                    }
-                    else
-                    {
-                        plan->fixed_factors8.resize(codec->parent_count);
-                        leopard::ff8::PrepareHighDecode(
-                            codec->parent_count, codec->padded_side,
-                            &plan->fixed_factors8[0]);
-                    }
-                }
+                if (codec->permanent_locator8.empty())
+                    leopard::ff8::PrepareDecode(codec->parent_count,
+                        &plan->coordinate_erased[0], &plan->locator8[0]);
+                else
+                    leopard::ff8::PrepareDecodeWithPermanent(
+                        codec->parent_count, &plan->coordinate_erased[0],
+                        &codec->permanent_erased[0], &codec->permanent_locator8[0],
+                        &plan->locator8[0]);
             }
             else
             {
                 plan->locator16.resize(codec->parent_count);
-                leopard::ff16::PrepareDecode(codec->parent_count,
-                    &plan->coordinate_erased[0], &plan->locator16[0]);
-                if ((codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) == 0)
-                {
-                    if (codec->profile == LEO2_PROFILE_LOW_V1)
-                    {
-                        plan->fixed_factors16.resize(
-                            codec->parent_count / codec->padded_side - 1);
-                        leopard::ff16::PrepareLowDecode(
-                            codec->parent_count, codec->padded_side,
-                            &plan->fixed_factors16[0]);
-                    }
-                    else
-                    {
-                        plan->fixed_factors16.resize(codec->parent_count);
-                        leopard::ff16::PrepareHighDecode(
-                            codec->parent_count, codec->padded_side,
-                            &plan->fixed_factors16[0]);
-                    }
-                }
+                if (codec->permanent_locator16.empty())
+                    leopard::ff16::PrepareDecode(codec->parent_count,
+                        &plan->coordinate_erased[0], &plan->locator16[0]);
+                else
+                    leopard::ff16::PrepareDecodeWithPermanent(
+                        codec->parent_count, &plan->coordinate_erased[0],
+                        &codec->permanent_erased[0], &codec->permanent_locator16[0],
+                        &plan->locator16[0]);
             }
         }
     }
@@ -1307,11 +1382,11 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
         else if (codec->profile == LEO2_PROFILE_LOW_V1)
             leopard::ff8::ReedSolomonDecodeLowPrepared(
                 rounded, codec->parent_count, codec->padded_side, coordinate_input,
-                &plan->requested[0], &plan->locator8[0], &plan->fixed_factors8[0], work);
+                &plan->requested[0], &plan->locator8[0], &codec->fixed_factors8[0], work);
         else
             leopard::ff8::ReedSolomonDecodeHighPrepared(
                 rounded, codec->parent_count, codec->padded_side, coordinate_input,
-                &plan->requested[0], &plan->locator8[0], &plan->fixed_factors8[0], work);
+                &plan->requested[0], &plan->locator8[0], &codec->fixed_factors8[0], work);
     }
     else
     {
@@ -1322,11 +1397,11 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
         else if (codec->profile == LEO2_PROFILE_LOW_V1)
             leopard::ff16::ReedSolomonDecodeLowPrepared(
                 rounded, codec->parent_count, codec->padded_side, coordinate_input,
-                &plan->requested[0], &plan->locator16[0], &plan->fixed_factors16[0], work);
+                &plan->requested[0], &plan->locator16[0], &codec->fixed_factors16[0], work);
         else
             leopard::ff16::ReedSolomonDecodeHighPrepared(
                 rounded, codec->parent_count, codec->padded_side, coordinate_input,
-                &plan->requested[0], &plan->locator16[0], &plan->fixed_factors16[0], work);
+                &plan->requested[0], &plan->locator16[0], &codec->fixed_factors16[0], work);
     }
 
     for (uint32_t i = 0; i < codec->original_count; ++i)

@@ -1868,7 +1868,7 @@ static void FFT_DIT_ErrorBits(
 //------------------------------------------------------------------------------
 // Reed-Solomon Decode
 
-void PrepareDecode(
+void PrepareDecodeWalshReference(
     unsigned n,
     const uint8_t* erasures,
     ffe_t* locator_logs)
@@ -1889,6 +1889,94 @@ void PrepareDecode(
 
     FWHT(error_locations, kOrder, kOrder);
     memcpy(locator_logs, error_locations, n * sizeof(ffe_t));
+}
+
+
+static unsigned CountErasures(
+    unsigned n,
+    const uint8_t* erasures,
+    const uint8_t* excluded)
+{
+    unsigned count = 0;
+    for (unsigned i = 0; i < n; ++i)
+        if (erasures[i] && (!excluded || !excluded[i]))
+            ++count;
+    return count;
+}
+
+
+bool IsDirectLocatorPreferred(unsigned n, unsigned erasure_count)
+{
+    // Whole-locator measurements show that the cache-friendly Walsh kernels
+    // cross the scalar direct loop well before their nominal operation counts
+    // meet.  Four direct contributions per field coordinate is a conservative
+    // portable cutoff; the codec-level calibration table may tighten it later.
+    const uint64_t direct_work = (uint64_t)n * erasure_count;
+    const uint64_t walsh_work = (uint64_t)kOrder * 4;
+    return direct_work <= walsh_work;
+}
+
+
+static void AddDirectLocatorContributions(
+    unsigned n,
+    const uint8_t* erasures,
+    const uint8_t* excluded,
+    ffe_t* locator_logs)
+{
+    // omega_i + omega_j = omega_(i xor j) in the Cantor coordinate order.
+    // At an erased coordinate the self factor is omitted, yielding the
+    // locator derivative needed by the recovery formula.  This is identical
+    // to the LogWalsh[0] = 0 convention in the reference convolution.
+    for (unsigned erased = 0; erased < n; ++erased)
+    {
+        if (!erasures[erased] || (excluded && excluded[erased]))
+            continue;
+        for (unsigned i = 0; i < n; ++i)
+            if (i != erased)
+                locator_logs[i] = AddMod(locator_logs[i], LogLUT[i ^ erased]);
+    }
+}
+
+
+void PrepareDecode(
+    unsigned n,
+    const uint8_t* erasures,
+    ffe_t* locator_logs)
+{
+    LEO_DEBUG_ASSERT(n >= 2 && n <= kOrder);
+
+    const unsigned erasure_count = CountErasures(n, erasures, nullptr);
+    if (!IsDirectLocatorPreferred(n, erasure_count))
+    {
+        PrepareDecodeWalshReference(n, erasures, locator_logs);
+        return;
+    }
+
+    memset(locator_logs, 0, n * sizeof(ffe_t));
+    AddDirectLocatorContributions(n, erasures, nullptr, locator_logs);
+}
+
+
+void PrepareDecodeWithPermanent(
+    unsigned n,
+    const uint8_t* erasures,
+    const uint8_t* permanent_erasures,
+    const ffe_t* permanent_locator_logs,
+    ffe_t* locator_logs)
+{
+    LEO_DEBUG_ASSERT(n >= 2 && n <= kOrder);
+
+    const unsigned dynamic_count = CountErasures(
+        n, erasures, permanent_erasures);
+    if (!IsDirectLocatorPreferred(n, dynamic_count))
+    {
+        PrepareDecode(n, erasures, locator_logs);
+        return;
+    }
+
+    memcpy(locator_logs, permanent_locator_logs, n * sizeof(ffe_t));
+    AddDirectLocatorContributions(
+        n, erasures, permanent_erasures, locator_logs);
 }
 
 

@@ -98,6 +98,26 @@ void PrepareDecode(
     const uint8_t* erasures,
     ffe_t* locator_logs); // n elements
 
+// Reuses locator contributions for permanent erasures (for example punctured
+// parent coordinates) and adds only the pattern-specific erasures.  The base
+// array must have been produced by PrepareDecode for permanent_erasures.
+void PrepareDecodeWithPermanent(
+    unsigned n,
+    const uint8_t* erasures,
+    const uint8_t* permanent_erasures,
+    const ffe_t* permanent_locator_logs,
+    ffe_t* locator_logs); // n elements
+
+// Full-field FWHT implementation retained as an independent differential
+// oracle for the sparse active-parent locator path.
+void PrepareDecodeWalshReference(
+    unsigned n,
+    const uint8_t* erasures,
+    ffe_t* locator_logs); // n elements
+
+// Returns the deterministic built-in locator setup decision for this field.
+bool IsDirectLocatorPreferred(unsigned n, unsigned erasure_count);
+
 // Generic active-parent decoder using locator evaluations from PrepareDecode.
 // Null coordinate_data pointers are treated as zero.  Only coordinates marked
 // in requested_outputs are revealed, in-place, in the corresponding work slot.

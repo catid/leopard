@@ -164,6 +164,10 @@ if(LEO2_BUILD_TESTS)
     target_link_libraries(leopard2_random_test libleopard)
     add_test(NAME leopard2_random COMMAND leopard2_random_test)
 
+    add_executable(leopard2_locator_test tests/leopard2/test_locator.cpp)
+    target_link_libraries(leopard2_locator_test libleopard)
+    add_test(NAME leopard2_locator COMMAND leopard2_locator_test)
+
     add_test(
         NAME leopard2_cuda_optional
         COMMAND ${CMAKE_COMMAND}
