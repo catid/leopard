@@ -50,6 +50,35 @@
 #include <string>
 #include <vector>
 
+#if defined(__linux__)
+#include <sched.h>
+#endif
+
+#ifndef __has_feature
+#define __has_feature(feature) 0
+#endif
+
+#if __has_feature(address_sanitizer) || defined(__SANITIZE_ADDRESS__)
+#define LEO2_C7_ASAN_COMPILED 1
+#else
+#define LEO2_C7_ASAN_COMPILED 0
+#endif
+
+#if __has_feature(undefined_behavior_sanitizer)
+#define LEO2_C7_UBSAN_COMPILED 1
+#else
+#define LEO2_C7_UBSAN_COMPILED 0
+#endif
+
+#if defined(LEO2_C7_REQUIRE_ASAN_UBSAN)
+#if !LEO2_C7_ASAN_COMPILED
+#error "LEO2_C7_REQUIRE_ASAN_UBSAN requires compiler ASan instrumentation"
+#endif
+#if !LEO2_C7_UBSAN_COMPILED
+#error "LEO2_C7_REQUIRE_ASAN_UBSAN requires compiler UBSan instrumentation"
+#endif
+#endif
+
 static bool C7TrackAllocations = false;
 static uint64_t C7TrackedAllocations = 0;
 
@@ -128,6 +157,21 @@ static const char* BackendName(leo2_backend backend)
     case LEO2_BACKEND_NEON: return "neon";
     default: return "auto";
     }
+}
+
+static std::vector<unsigned> ProcessAffinity()
+{
+    std::vector<unsigned> result;
+#if defined(__linux__)
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    if (sched_getaffinity(0, sizeof(set), &set) != 0)
+        Fail("sched_getaffinity failed");
+    for (unsigned cpu = 0; cpu < CPU_SETSIZE; ++cpu)
+        if (CPU_ISSET(cpu, &set))
+            result.push_back(cpu);
+#endif
+    return result;
 }
 
 static uint64_t Fnv(uint64_t hash, const uint8_t* data, size_t bytes)
@@ -315,6 +359,61 @@ static std::vector<Element> IndependentRows(
                 field.Multiply(vanishing,
                     field.Inverse(static_cast<Element>(point ^ i))),
                 weights[i]);
+    }
+    return rows;
+}
+
+template <typename Element>
+static std::vector<Element> IndependentVandermondeRows(
+    const IndependentField<Element>& field, unsigned k, unsigned r)
+{
+    std::vector<std::vector<Element> > augmented(
+        k, std::vector<Element>(static_cast<size_t>(k) * 2, 0));
+    for (unsigned row = 0; row < k; ++row)
+    {
+        Element power = 1;
+        for (unsigned column = 0; column < k; ++column)
+        {
+            augmented[row][column] = power;
+            power = field.Multiply(power, static_cast<Element>(row));
+        }
+        augmented[row][k + row] = 1;
+    }
+    for (unsigned column = 0; column < k; ++column)
+    {
+        unsigned pivot = column;
+        while (pivot < k && augmented[pivot][column] == 0)
+            ++pivot;
+        if (pivot == k)
+            Fail("independent Vandermonde matrix is singular");
+        if (pivot != column)
+            augmented[pivot].swap(augmented[column]);
+        const Element inverse = field.Inverse(augmented[column][column]);
+        for (unsigned value = 0; value < k * 2; ++value)
+            augmented[column][value] = field.Multiply(
+                augmented[column][value], inverse);
+        for (unsigned row = 0; row < k; ++row)
+        {
+            if (row == column || augmented[row][column] == 0)
+                continue;
+            const Element factor = augmented[row][column];
+            for (unsigned value = 0; value < k * 2; ++value)
+                augmented[row][value] ^= field.Multiply(
+                    factor, augmented[column][value]);
+        }
+    }
+    std::vector<Element> rows(static_cast<size_t>(k) * r, 0);
+    for (unsigned parity = 0; parity < r; ++parity)
+    {
+        const Element point = static_cast<Element>(k + parity);
+        std::vector<Element> powers(k, 1);
+        for (unsigned degree = 1; degree < k; ++degree)
+            powers[degree] = field.Multiply(powers[degree - 1], point);
+        for (unsigned original = 0; original < k; ++original)
+            for (unsigned degree = 0; degree < k; ++degree)
+                rows[static_cast<size_t>(parity) * k + original] ^=
+                    field.Multiply(powers[degree],
+                                   augmented[degree][k + original]);
     }
     return rows;
 }
@@ -543,6 +642,21 @@ struct ExactDecodePlan
                 if (recovery[parity] && RangesOverlap(destination, recovery[parity], bytes))
                     Fail("exact-low restored output overlaps a parity input");
         }
+        // Validate every input term for every output before writing the first
+        // byte.  This makes pointer/precondition failures atomic across a
+        // multi-output repair: a late null survivor or selected parity cannot
+        // leave earlier restored shards partially committed.
+        for (size_t output = 0; output < missing.size(); ++output)
+            for (size_t index = offsets[output]; index < offsets[output + 1]; ++index)
+            {
+                const DecodeTerm<Element>& term = terms[index];
+                const void* source = term.parity
+                    ? recovery[term.index] : original[term.index];
+                if (!source)
+                    Fail(term.parity
+                        ? "selected exact-low parity pointer is null"
+                        : "surviving exact-low original pointer is null");
+            }
         for (size_t output = 0; output < missing.size(); ++output)
         {
             void* destination = restored[missing[output]];
@@ -622,6 +736,7 @@ struct Correctness
     uint64_t gf8_cases;
     uint64_t gf16_cases;
     uint64_t coefficients;
+    uint64_t gf16_vandermonde_coefficients;
     uint64_t encode_executions;
     uint64_t encode_symbol_comparisons;
     uint64_t subset_encode_executions;
@@ -634,10 +749,30 @@ struct Correctness
     uint64_t parity_rebuilds;
     uint64_t odd_gf16_rejections;
     uint64_t overlap_rejections;
+    uint64_t parity_output_overlap_rejections;
+    uint64_t restored_output_overlap_rejections;
+    uint64_t restored_input_overlap_rejections;
+    uint64_t selected_parity_null_rejections;
+    uint64_t survivor_null_rejections;
+    uint64_t atomic_rejection_bytes_checked;
     uint64_t read_only_input_alias_calls;
+    uint64_t read_only_input_alias_symbol_comparisons;
     uint64_t hot_path_allocations;
     uint64_t digest;
 };
+
+static void RequireFilled(
+    const std::vector<std::vector<uint8_t> >& storage,
+    uint8_t expected, uint64_t& checked)
+{
+    for (size_t shard = 0; shard < storage.size(); ++shard)
+        for (size_t byte = 0; byte < storage[shard].size(); ++byte)
+        {
+            if (storage[shard][byte] != expected)
+                Fail("rejected execution partially changed an output");
+            ++checked;
+        }
+}
 
 template <typename Callable>
 static void ExpectRejected(Callable callable, uint64_t& counter)
@@ -688,6 +823,14 @@ static void ValidateCase(
     typedef typename Ops::Element Element;
     ExactCodec<Ops> codec(k, r);
     const std::vector<Element> rows = IndependentRows(independent, k, r);
+    if (sizeof(Element) == 2 && k == 3 && r == 500)
+    {
+        const std::vector<Element> vandermonde =
+            IndependentVandermondeRows(independent, k, r);
+        if (vandermonde != rows)
+            Fail("declared GF16 Vandermonde oracle disagrees with barycentric rows");
+        result.gf16_vandermonde_coefficients += vandermonde.size();
+    }
     for (unsigned parity = 0; parity < r; ++parity)
         for (unsigned original = 0; original < k; ++original)
         {
@@ -743,6 +886,18 @@ static void ValidateCase(
             ExpectRejected([&]() {
                 codec.Encode(bytes, &source_ptr[0], &overlapping[0]);
             }, result.overlap_rejections);
+            RequireFilled(parity, 0xa5, result.atomic_rejection_bytes_checked);
+            if (r > 1)
+            {
+                overlapping.assign(r, NULL);
+                overlapping[0] = &parity[0][1];
+                overlapping[1] = &parity[0][1];
+                ExpectRejected([&]() {
+                    codec.Encode(bytes, &source_ptr[0], &overlapping[0]);
+                }, result.parity_output_overlap_rejections);
+                ++result.overlap_rejections;
+                RequireFilled(parity, 0xa5, result.atomic_rejection_bytes_checked);
+            }
             if (sizeof(Element) == 2)
             {
                 ExpectRejected([&]() {
@@ -753,12 +908,37 @@ static void ValidateCase(
             {
                 std::vector<const void*> aliased_source = source_ptr;
                 aliased_source[1] = aliased_source[0];
+                std::vector<std::vector<uint8_t> > alias_output(
+                    r, std::vector<uint8_t>(bytes + 2, 0x79));
+                std::vector<void*> alias_output_ptr(r);
+                for (unsigned recovery = 0; recovery < r; ++recovery)
+                    alias_output_ptr[recovery] = &alias_output[recovery][1];
                 C7TrackedAllocations = 0;
                 C7TrackAllocations = true;
-                codec.Encode(bytes, &aliased_source[0], &parity_ptr[0]);
+                codec.Encode(bytes, &aliased_source[0], &alias_output_ptr[0]);
                 C7TrackAllocations = false;
                 result.hot_path_allocations += C7TrackedAllocations;
                 ++result.read_only_input_alias_calls;
+                for (unsigned recovery = 0; recovery < r; ++recovery)
+                {
+                    if (alias_output[recovery][0] != 0x79 ||
+                        alias_output[recovery][bytes + 1] != 0x79)
+                        Fail("aliased-input encode changed an output guard");
+                    for (size_t symbol = 0; symbol < symbols; ++symbol)
+                    {
+                        Element expected = 0;
+                        for (unsigned original = 0; original < k; ++original)
+                            expected ^= independent.Multiply(
+                                rows[static_cast<size_t>(recovery) * k + original],
+                                LoadSymbol<Element>(
+                                    static_cast<const uint8_t*>(aliased_source[original]),
+                                    bytes, symbol));
+                        if (LoadSymbol<Element>(&alias_output[recovery][1],
+                                               bytes, symbol) != expected)
+                            Fail("read-only input alias encode result is incorrect");
+                        ++result.read_only_input_alias_symbol_comparisons;
+                    }
+                }
             }
         }
 
@@ -847,7 +1027,7 @@ static void ValidateCase(
             for (unsigned original = 0; original < k; ++original)
                 restored[original] = &restored_storage[original][1];
 
-            if (size_index == 0 && loss_index == 0)
+            if (size_index == 0 && loss_index + 1 == loss_counts.size())
             {
                 void* saved = restored[missing[0]];
                 restored[missing[0]] = const_cast<void*>(
@@ -855,14 +1035,90 @@ static void ValidateCase(
                 ExpectRejected([&]() {
                     plan.Execute(bytes, &received_source[0],
                                  &received_parity[0], &restored[0]);
-                }, result.overlap_rejections);
+                }, result.restored_input_overlap_rejections);
+                ++result.overlap_rejections;
                 restored[missing[0]] = saved;
+                RequireFilled(restored_storage, 0x3c,
+                              result.atomic_rejection_bytes_checked);
+
+                unsigned survivor = codec.k;
+                for (unsigned original = 0; original < codec.k; ++original)
+                    if (!std::binary_search(missing.begin(), missing.end(), original))
+                    {
+                        survivor = original;
+                        break;
+                    }
+                if (survivor < codec.k)
+                {
+                    restored[missing[0]] = const_cast<void*>(
+                        received_source[survivor]);
+                    ExpectRejected([&]() {
+                        plan.Execute(bytes, &received_source[0],
+                                     &received_parity[0], &restored[0]);
+                    }, result.restored_input_overlap_rejections);
+                    ++result.overlap_rejections;
+                    restored[missing[0]] = saved;
+                    RequireFilled(restored_storage, 0x3c,
+                                  result.atomic_rejection_bytes_checked);
+                }
+
+                if (missing.size() > 1)
+                {
+                    void* second = restored[missing[1]];
+                    restored[missing[1]] = restored[missing[0]];
+                    ExpectRejected([&]() {
+                        plan.Execute(bytes, &received_source[0],
+                                     &received_parity[0], &restored[0]);
+                    }, result.restored_output_overlap_rejections);
+                    ++result.overlap_rejections;
+                    restored[missing[1]] = second;
+                    RequireFilled(restored_storage, 0x3c,
+                                  result.atomic_rejection_bytes_checked);
+                }
+
+                const unsigned selected = plan.selected_parities.back();
+                const void* selected_pointer = received_parity[selected];
+                received_parity[selected] = NULL;
+                ExpectRejected([&]() {
+                    plan.Execute(bytes, &received_source[0],
+                                 &received_parity[0], &restored[0]);
+                }, result.selected_parity_null_rejections);
+                received_parity[selected] = selected_pointer;
+                RequireFilled(restored_storage, 0x3c,
+                              result.atomic_rejection_bytes_checked);
+
+                unsigned required_survivor = codec.k;
+                for (size_t term_index = plan.offsets.back();
+                     term_index > 0; --term_index)
+                {
+                    const DecodeTerm<Element>& term = plan.terms[term_index - 1];
+                    if (!term.parity)
+                    {
+                        required_survivor = term.index;
+                        break;
+                    }
+                }
+                if (required_survivor < codec.k)
+                {
+                    const void* survivor_pointer =
+                        received_source[required_survivor];
+                    received_source[required_survivor] = NULL;
+                    ExpectRejected([&]() {
+                        plan.Execute(bytes, &received_source[0],
+                                     &received_parity[0], &restored[0]);
+                    }, result.survivor_null_rejections);
+                    received_source[required_survivor] = survivor_pointer;
+                    RequireFilled(restored_storage, 0x3c,
+                                  result.atomic_rejection_bytes_checked);
+                }
                 if (sizeof(Element) == 2)
                 {
                     ExpectRejected([&]() {
                         plan.Execute(3, &received_source[0],
                                      &received_parity[0], &restored[0]);
                     }, result.odd_gf16_rejections);
+                    RequireFilled(restored_storage, 0x3c,
+                                  result.atomic_rejection_bytes_checked);
                 }
             }
 
@@ -1035,6 +1291,10 @@ struct BenchmarkResult
     size_t padded_decode_scratch;
     std::vector<double> exact_encode_samples;
     std::vector<double> padded_encode_samples;
+    std::vector<double> exact_setup_samples;
+    std::vector<double> padded_setup_samples;
+    std::vector<double> exact_decode_setup_samples;
+    std::vector<double> padded_decode_setup_samples;
     std::vector<double> exact_decode_samples;
     std::vector<double> padded_decode_samples;
 };
@@ -1097,14 +1357,12 @@ static BenchmarkResult BenchmarkTyped(
     result.spec = spec;
     result.exact_coefficients = static_cast<size_t>(spec.k) * spec.r;
 
-    std::vector<double> exact_setup_samples;
-    std::vector<double> padded_setup_samples;
     for (unsigned sample = 0; sample < repeats; ++sample)
     {
         Clock::time_point begin = Clock::now();
         Codec* exact = new Codec(spec.k, spec.r);
         Clock::time_point end = Clock::now();
-        exact_setup_samples.push_back(
+        result.exact_setup_samples.push_back(
             std::chrono::duration<double, std::micro>(end - begin).count());
         delete exact;
 
@@ -1114,12 +1372,12 @@ static BenchmarkResult BenchmarkTyped(
             LEO2_PROFILE_LOW_V1, spec.padded_field, NULL, &padded),
             "C7 padded codec setup");
         end = Clock::now();
-        padded_setup_samples.push_back(
+        result.padded_setup_samples.push_back(
             std::chrono::duration<double, std::micro>(end - begin).count());
         leo2_codec_destroy(padded);
     }
-    result.exact_setup = Summarize(exact_setup_samples);
-    result.padded_setup = Summarize(padded_setup_samples);
+    result.exact_setup = Summarize(result.exact_setup_samples);
+    result.padded_setup = Summarize(result.padded_setup_samples);
 
     Codec exact(spec.k, spec.r);
     leo2_codec* padded = NULL;
@@ -1166,15 +1424,13 @@ static BenchmarkResult BenchmarkTyped(
         for (size_t i = 0; i < missing.size(); ++i)
             stripes[stripe].received_source[missing[i]] = NULL;
 
-    std::vector<double> exact_decode_setup_samples;
-    std::vector<double> padded_decode_setup_samples;
     for (unsigned sample = 0; sample < repeats; ++sample)
     {
         Clock::time_point begin = Clock::now();
         ExactDecodePlan<Ops>* plan = new ExactDecodePlan<Ops>(
             exact, missing, parity_present);
         Clock::time_point end = Clock::now();
-        exact_decode_setup_samples.push_back(
+        result.exact_decode_setup_samples.push_back(
             std::chrono::duration<double, std::micro>(end - begin).count());
         delete plan;
 
@@ -1183,12 +1439,12 @@ static BenchmarkResult BenchmarkTyped(
         Require(leo2_decode_plan_create(padded, &original_present[0],
             &parity_present[0], &public_plan), "C7 padded decode setup sample");
         end = Clock::now();
-        padded_decode_setup_samples.push_back(
+        result.padded_decode_setup_samples.push_back(
             std::chrono::duration<double, std::micro>(end - begin).count());
         leo2_decode_plan_destroy(public_plan);
     }
-    result.exact_decode_setup = Summarize(exact_decode_setup_samples);
-    result.padded_decode_setup = Summarize(padded_decode_setup_samples);
+    result.exact_decode_setup = Summarize(result.exact_decode_setup_samples);
+    result.padded_decode_setup = Summarize(result.padded_decode_setup_samples);
 
     for (unsigned round = 0; round < warmups + repeats; ++round)
     {
@@ -1305,6 +1561,9 @@ static void WriteJson(
     std::ofstream output(path.c_str(), std::ios::binary | std::ios::trunc);
     if (!output)
         Fail("cannot open C7 JSON output");
+    const std::vector<unsigned> affinity = ProcessAffinity();
+    const char* omp_threads = getenv("OMP_NUM_THREADS");
+    const char* omp_dynamic = getenv("OMP_DYNAMIC");
     output << std::setprecision(17);
     output << "{\n"
            << "  \"schema\":\"leopard2-c7-exact-low/v1\",\n"
@@ -1317,16 +1576,34 @@ static void WriteJson(
            << "  \"timing_scope\":\"" << timing_scope << "\",\n"
            << "  \"requested_backend\":\"" << requested_backend << "\",\n"
            << "  \"runtime_backend\":\"" << BackendName(runtime_backend) << "\",\n"
+           << "  \"affinity\":[";
+    for (size_t i = 0; i < affinity.size(); ++i)
+    {
+        if (i)
+            output << ',';
+        output << affinity[i];
+    }
+    output << "],\n"
+           << "  \"omp_num_threads\":\""
+           << (omp_threads ? omp_threads : "") << "\",\n"
+           << "  \"omp_dynamic\":\""
+           << (omp_dynamic ? omp_dynamic : "") << "\",\n"
            << "  \"source_sha256\":\"" << LEO2_C7_SOURCE_SHA256 << "\",\n"
            << "  \"core_git_sha\":\"" << LEO2_C7_CORE_GIT_SHA << "\",\n"
            << "  \"library_sha256\":\"" << LEO2_C7_LIBRARY_SHA256 << "\",\n"
            << "  \"sanitizer\":\"" << LEO2_C7_SANITIZER_MODE << "\",\n"
+           << "  \"sanitizer_features\":{\"address\":"
+           << (LEO2_C7_ASAN_COMPILED ? "true" : "false")
+           << ",\"undefined\":"
+           << (LEO2_C7_UBSAN_COMPILED ? "true" : "false") << "},\n"
            << "  \"allocation_tracking\":\""
            << LEO2_C7_ALLOCATION_TRACKING_MODE << "\",\n"
            << "  \"correctness\":{\n"
            << "    \"gf8_cases\":" << correctness.gf8_cases << ",\n"
            << "    \"gf16_cases\":" << correctness.gf16_cases << ",\n"
            << "    \"coefficients\":" << correctness.coefficients << ",\n"
+           << "    \"gf16_vandermonde_coefficients\":"
+           << correctness.gf16_vandermonde_coefficients << ",\n"
            << "    \"encode_executions\":" << correctness.encode_executions << ",\n"
            << "    \"encode_symbol_comparisons\":"
            << correctness.encode_symbol_comparisons << ",\n"
@@ -1347,8 +1624,22 @@ static void WriteJson(
            << correctness.odd_gf16_rejections << ",\n"
            << "    \"overlap_rejections\":"
            << correctness.overlap_rejections << ",\n"
+           << "    \"parity_output_overlap_rejections\":"
+           << correctness.parity_output_overlap_rejections << ",\n"
+           << "    \"restored_output_overlap_rejections\":"
+           << correctness.restored_output_overlap_rejections << ",\n"
+           << "    \"restored_input_overlap_rejections\":"
+           << correctness.restored_input_overlap_rejections << ",\n"
+           << "    \"selected_parity_null_rejections\":"
+           << correctness.selected_parity_null_rejections << ",\n"
+           << "    \"survivor_null_rejections\":"
+           << correctness.survivor_null_rejections << ",\n"
+           << "    \"atomic_rejection_bytes_checked\":"
+           << correctness.atomic_rejection_bytes_checked << ",\n"
            << "    \"read_only_input_alias_calls\":"
            << correctness.read_only_input_alias_calls << ",\n"
+           << "    \"read_only_input_alias_symbol_comparisons\":"
+           << correctness.read_only_input_alias_symbol_comparisons << ",\n"
            << "    \"hot_path_allocations\":"
            << correctness.hot_path_allocations << ",\n"
            << "    \"digest_fnv64\":\"0x" << std::hex
@@ -1385,6 +1676,14 @@ static void WriteJson(
         WriteSummary(output, cell.exact_decode);
         output << ",\"padded_decode\":";
         WriteSummary(output, cell.padded_decode);
+        output << ",\"exact_setup_samples_us\":";
+        WriteSamples(output, cell.exact_setup_samples);
+        output << ",\"padded_setup_samples_us\":";
+        WriteSamples(output, cell.padded_setup_samples);
+        output << ",\"exact_decode_setup_samples_us\":";
+        WriteSamples(output, cell.exact_decode_setup_samples);
+        output << ",\"padded_decode_setup_samples_us\":";
+        WriteSamples(output, cell.padded_decode_setup_samples);
         output << ",\"exact_encode_samples_us\":";
         WriteSamples(output, cell.exact_encode_samples);
         output << ",\"padded_encode_samples_us\":";

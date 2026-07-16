@@ -172,9 +172,13 @@ def _validate(identity: CodeIdentity) -> None:
         if item.type in _KNOWN_DIGESTS and len(item.value) != 32:
             raise IdentityError("known digest metadata must be 32 bytes")
         if identity.profile == PROFILE_EXACT_LOW and item.type in (
-            META_SHORTENING_SET_SHA256, META_PUNCTURING_SET_SHA256
+            META_COORDINATE_SET_SHA256,
+            META_SHORTENING_SET_SHA256,
+            META_PUNCTURING_SET_SHA256,
         ):
-            raise IdentityError("exact-low V1 has no shortening or puncturing set")
+            raise IdentityError(
+                "exact-low V1 map is fixed and has no coordinate/shortening/puncturing TLV"
+            )
         if item.type == META_SHARD_LAYOUT:
             if len(item.value) != 1:
                 raise IdentityError("shard-layout metadata must be one byte")

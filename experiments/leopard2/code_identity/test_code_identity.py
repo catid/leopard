@@ -99,16 +99,19 @@ class CodeIdentityTests(unittest.TestCase):
         with self.assertRaises(IdentityError):
             make_identity(PROFILE_EXACT_HIGH_RESERVED, FIELD_GF16, 253, 3)
         for metadata_type in (
-            META_SHORTENING_SET_SHA256, META_PUNCTURING_SET_SHA256
+            META_COORDINATE_SET_SHA256,
+            META_SHORTENING_SET_SHA256,
+            META_PUNCTURING_SET_SHA256,
         ):
-            with self.assertRaises(IdentityError):
-                serialize(make_identity(
-                    PROFILE_EXACT_LOW,
-                    FIELD_GF16,
-                    129,
-                    1000,
-                    (Metadata(metadata_type, bytes(32)),),
-                ))
+            for digest in (bytes(32), bytes((0xff,)) * 32):
+                with self.assertRaises(IdentityError):
+                    serialize(make_identity(
+                        PROFILE_EXACT_LOW,
+                        FIELD_GF16,
+                        129,
+                        1000,
+                        (Metadata(metadata_type, digest),),
+                    ))
 
     def test_exhaustive_practical_metadata_round_trips(self) -> None:
         tested = 0

@@ -347,6 +347,26 @@ static int run_unit_tests(void)
         LEO2_CODE_ID_FIELD_GF8, 3, 253) == LEO2_CODE_ID_OK);
     CHECK(identity.parent_count == 256u);
     CHECK(identity.padded_side == 3u);
+    memset(digest, 0, sizeof(digest));
+    CHECK(leo2_code_identity_add_metadata(&identity,
+        LEO2_CODE_ID_META_COORDINATE_SET_SHA256, digest, sizeof(digest)) ==
+        LEO2_CODE_ID_INVALID_IDENTITY);
+    CHECK(leo2_code_identity_add_metadata(&identity,
+        LEO2_CODE_ID_META_SHORTENING_SET_SHA256, digest, sizeof(digest)) ==
+        LEO2_CODE_ID_INVALID_IDENTITY);
+    CHECK(leo2_code_identity_add_metadata(&identity,
+        LEO2_CODE_ID_META_PUNCTURING_SET_SHA256, digest, sizeof(digest)) ==
+        LEO2_CODE_ID_INVALID_IDENTITY);
+    memset(digest, 0xff, sizeof(digest));
+    CHECK(leo2_code_identity_add_metadata(&identity,
+        LEO2_CODE_ID_META_COORDINATE_SET_SHA256, digest, sizeof(digest)) ==
+        LEO2_CODE_ID_INVALID_IDENTITY);
+    CHECK(leo2_code_identity_add_metadata(&identity,
+        LEO2_CODE_ID_META_SHORTENING_SET_SHA256, digest, sizeof(digest)) ==
+        LEO2_CODE_ID_INVALID_IDENTITY);
+    CHECK(leo2_code_identity_add_metadata(&identity,
+        LEO2_CODE_ID_META_PUNCTURING_SET_SHA256, digest, sizeof(digest)) ==
+        LEO2_CODE_ID_INVALID_IDENTITY);
     CHECK(leo2_code_identity_make(&identity,
         LEO2_CODE_ID_PROFILE_EXACT_HIGH_RESERVED, LEO2_CODE_ID_FIELD_GF16,
         253, 3) == LEO2_CODE_ID_UNSUPPORTED);

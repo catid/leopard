@@ -359,9 +359,10 @@ make this code wire-equivalent to the frozen GF16 parent.  That parent has 512
 distinct coordinates, while GF8 has only 256 elements; a GF8 transform cannot
 evaluate the same coordinate set.  C2-style truncation can preserve the parent
 only while retaining GF16.  C6 therefore recorded explicit unequal generator
-coefficients and treated the exact prefix map as an unfrozen new-profile
-candidate.  Its coordinate digests remain research fingerprints, not serialized
-code IDs.  C7 subsequently froze that same prefix mathematics as experimental
+coefficients and treated the exact prefix map as a then-unversioned new-profile
+candidate.  Its coordinate digests remain external research fingerprints, not
+serialized code IDs.  C7 subsequently froze that same prefix mathematics as
+experimental
 family 3/version 1/map 1 after the independent comparison below.  See
 `docs/leopard2_c6_gf256_rescue.md` for the C6 executable and promotion gates.
 
@@ -376,7 +377,9 @@ with `x_i=omega_i`, `q_j=omega_(K+j)`, and
 `Z(X)=product_s(X+x_s)`.  Distinct points make every factor nonzero, proving
 that all `K*R` entries are nonzero.  A separately implemented monomial
 Vandermonde inverse produces every row again; this is the independent oracle
-rather than a restatement of the barycentric formula.
+rather than a restatement of the barycentric formula.  The declared GF16
+`K=3,R=500` witness compares all 500 rows and 1,500 coefficients in both the
+Python algebra and standalone C++ gates.
 
 For one global affine map `phi(X)=aX+b`, `a != 0`, the numerator gains `a^K`.
 The explicit difference and the `K-1` derivative factors together gain the same
@@ -396,6 +399,9 @@ different parity bytes.  They do not inherit prefix identity or C6 timings.
 
 Family 3/version 1/map 1 consequently fixes the ordered prefix coordinates,
 has `parent_count=K+R`, `padded_side=K`, and has no shortening or puncturing.
+The Experiment-W serializer rejects coordinate-, shortening-, and
+puncturing-set digest TLVs for this family as redundant noncanonical spellings;
+changing any of those sets requires a new version instead of a digest override.
 Family 4 is reserved and rejected for future exact-high work.  The canonical
 coordinate-byte encoding, buffer layout, executable evidence, and remaining
 promotion gates are defined self-contained in

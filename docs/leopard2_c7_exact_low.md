@@ -24,10 +24,10 @@ field oracle, arbitrary valid physical tails, requested parity subsets,
 maximum-loss and missing-parity tests, re-encoding after recovery, allocation
 interposition, strict builds, and ASan+UBSan.  Its timing harness records raw
 setup and execution samples for exact and padded low profiles.  The retained
-CPU-0 smoke is explicitly non-authoritative and linked to historical core
-`48803c06fbd7a6802b4438af60e3104895938c9d`, before the later two-way SIMD
-work.  It cannot support a promotion claim.  Authoritative crossover timing
-must be rebuilt from the final integrated production commit.
+CPU-0 smoke is explicitly non-authoritative, is rebuilt from the same committed
+source as the correctness matrix, and cannot support a promotion claim.
+Authoritative crossover timing must be rebuilt from the final integrated
+production commit.
 
 ## Exact-low family 3/version 1/map 1
 
@@ -52,15 +52,18 @@ There is no dyadic parent, no shortening, and no puncturing.  In the existing
 - coordinate-map version is 1.
 
 Profile family 4 is reserved for future exact-high work and is rejected by the
-version-1 readers.  Exact-high must not reinterpret family 3.  Shortening- and
-puncturing-set TLVs are invalid for exact low V1 because those sets do not
-exist.  The stable codec API remains unchanged and unsupported.
+version-1 readers.  Exact-high must not reinterpret family 3.  Coordinate-,
+shortening-, and puncturing-set digest TLVs are invalid for exact low V1 because
+the versioned map already fixes the coordinates and the latter two sets do not
+exist.  Rejecting all three values, including all-zero and all-one digests,
+leaves one canonical identity spelling.  The stable codec API remains unchanged
+and unsupported.
 
 ### Canonical coordinate bytes
 
-The map is fixed by the version fields, so a coordinate-set digest is not
-required in an identity.  When a research artifact fingerprints the set, its
-one canonical byte representation is:
+The map is fixed by the version fields, so a coordinate-set digest is redundant
+and is rejected in a family-3 `L2ID`.  An external research artifact may still
+fingerprint the set.  Its one canonical byte representation is:
 
 1. ASCII `LEO2-EXACT-LOW-PREFIX-V1` followed by a zero byte;
 2. one byte containing field width, 8 or 16;
@@ -103,7 +106,9 @@ monomial Vandermonde matrix on the systematic points, inverting it with field
 Gaussian elimination, and multiplying parity power vectors by that inverse.
 The C++ byte executor separately derives barycentric rows with production field
 helpers and checks every coefficient against carryless polynomial arithmetic
-and the declared basis maps.
+and the declared basis maps.  A declared GF16 `K=3,R=500` case checks all 500
+Vandermonde rows (1,500 coefficients) in both independent oracles rather than
+sampling a few rows.
 
 ## Affine invariance
 
@@ -175,7 +180,11 @@ parity-presence bitmap, deterministically selects the lowest available parity
 equations, inverts only the missing-original minor, and folds surviving-original
 terms into fixed execution coefficients.  Execution restores missing originals
 only.  A no-loss plan returns without inspecting byte count or any pointer.
-Parity rebuild is explicit re-encoding and is checked byte for byte.
+Before the first output write, execution validates every restored destination,
+every selected parity term, and every surviving-original term.  A null required
+term or any unsupported overlap therefore rejects the whole call without
+partial output.  Parity rebuild is explicit re-encoding and is checked byte for
+byte.
 
 GF8 accepts every positive physical byte count.  GF16 accepts positive even
 physical counts in Leopard's established full-tile/compact-tail layout.  C7
@@ -198,7 +207,8 @@ The independent algebra result records:
 | Exhaustive affine maps / coefficients | 28,800 / 734,400 |
 | Fixed-systematic transform-search candidates | 65,519 |
 | Full-field systematic partitions | 65,534 |
-| Large GF8/GF16 geometries / dense coefficients | 9 / 83,281 |
+| Large GF8/GF16 geometries / dense coefficients | 10 / 84,781 |
+| Declared GF16 Vandermonde rows / coefficients | 500 / 1,500 |
 
 Each scalar, SSSE3, AVX2, and AUTO C++ artifact records the same:
 
@@ -206,6 +216,7 @@ Each scalar, SSSE3, AVX2, and AUTO C++ artifact records the same:
 | --- | ---: |
 | GF8/GF16 geometries | 9 / 5 |
 | Independently checked coefficients | 118,717 |
+| Independent GF16 Vandermonde coefficients | 1,500 |
 | Encode executions / symbol comparisons | 117 / 1,030,423 |
 | Requested-subset encodes | 117 |
 | Decode plans/executions | 403 / 403 |
@@ -213,20 +224,28 @@ Each scalar, SSSE3, AVX2, and AUTO C++ artifact records the same:
 | Maximum-loss plans | 117 |
 | Plans with an unavailable low parity | 175 |
 | Re-encode parity checks | 403 |
-| Odd-GF16 / overlap rejections | 10 / 28 |
-| Read-only input-alias calls | 13 |
+| Odd-GF16 / all overlap rejections | 10 / 59 |
+| Parity-output / restored-output / restored-input overlap rejects | 13 / 12 / 20 |
+| Null selected-parity / surviving-original rejects | 14 / 6 |
+| Bytes checked unchanged after atomic rejection | 61,570 |
+| Read-only input-alias calls / symbols checked | 13 / 2,139 |
 | Hot-path allocations | 0 |
 | Deterministic digest | `0xec4179e9f2776a58` |
 
 Lengths are GF8 `1,2,3,7,31,64,65,257` bytes and GF16
 `2,4,6,14,62,64,66,130,514` physical bytes.  Buffers are unaligned and guarded.
-Combined ASan+UBSan with leak detection passes the same complete matrix.
+Combined ASan+UBSan with leak detection passes the same complete matrix.  The
+sanitized standalone source has a compile-time feature gate that fails unless
+both instruments are active; the retained build/run manifest also records the
+exact compiler, flags, linked archive, executable, source closure, sanitizer
+symbol scan, run environment, child affinity, and artifact hashes.
 
 The Experiment-W Python suite passes 12 tests.  The strict C99 implementation
-passes 211 direct checks and the differential matrix covers 5 golden vectors,
+passes 217 direct checks and the differential matrix covers 5 golden vectors,
 6,085 valid profile/count/field identities, 66 edge cases, 4,162 metadata cases,
-and 20,000 deterministic mutations.  Existing family-1/family-2 golden bytes
-remain unchanged.
+87 malformed identifiers (including the six redundant-digest encodings), and
+20,000 deterministic mutations.  Existing family-1/family-2 golden bytes remain
+unchanged.
 
 ## Performance scope
 
@@ -236,14 +255,23 @@ balanced, and high transmitted rates; GF8/GF16; 64 B, 1 KiB, and 64 KiB; batch
 one/eight; and loss counts three/eight.  Exact scratch is zero; padded scratch
 is queried from the public API.
 
-`results/smoke-nonauthoritative.json` is only a harness smoke on CPU 0.  It is
-linked to historical core `48803c` and labels itself
-`non-authoritative-smoke`.  No number from it is a promotion result.  The final
-matrix must be rebuilt after the two-way SIMD and comparison-adapter work is
-integrated, pinned alone to CPU 15 with sibling 31 reserved, and wrapped by a
-hash-bound runner/manifest before any crossover conclusion.
+`results/smoke-nonauthoritative.json` is only a harness smoke pinned to CPU 0.
+It labels itself `non-authoritative-smoke` and retains seven raw samples for
+each of four setup and four execution measurements.  No number from it is a
+promotion result.  The final matrix must be rebuilt after the two-way SIMD and
+comparison-adapter work is integrated, on a separately isolated physical core,
+before any crossover conclusion.
 
 ## Reproduction
+
+Rebuild the four normal backend archives, the Clang ASan+UBSan archive, all five
+strict standalone executables, five independently pinned correctness runs, and
+the CPU-0 smoke from a committed source revision:
+
+    PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -X dev \
+      experiments/leopard2/non_power_of_two/c7/run_matrix.py \
+      --core-git-sha "$(git rev-parse HEAD)" --cpus 0,1,2,3,4 \
+      --smoke-cpu 0 --jobs-per-build 4
 
 Regenerate independent algebra and validate retained evidence:
 
@@ -263,14 +291,15 @@ Run the Experiment-W identity gates from its directory:
       PYTHONDONTWRITEBYTECODE=1 python3 test_code_identity_c.py \
       --cc gcc --sanitizers
 
-Compile the C++ source manually against a chosen Leopard static archive using
-strict C++11 flags and bind `LEO2_C7_SOURCE_SHA256`, `LEO2_C7_CORE_GIT_SHA`,
-and `LEO2_C7_LIBRARY_SHA256`.  Run correctness with
-`--backend NAME OUTPUT.json --correctness-only`.  Sanitizer builds define
-`LEO2_C7_DISABLE_GLOBAL_NEW_TRACKING=1` and
-`LEO2_C7_SANITIZER_MODE="asan-ubsan"` because allocator interposition would
-mask sanitizer allocation diagnostics.  Do not use the historical C6 archives
-for final performance evidence.
+The runner performs that strict source/core/archive binding and records it in
+`results/build-run-manifest.json`.  Sanitizer builds additionally define the
+allocation-interposition opt-out, the sanitizer mode, and the compile-time
+ASan+UBSan requirement because custom global allocation interposition would
+mask sanitizer allocation diagnostics.  The standalone C7 harness and runner
+are currently POSIX/Linux-only: they use `posix_memalign`, `sched_getaffinity`,
+and `taskset`.  The field mathematics and `L2ID` byte format are not
+Linux-specific.  Do not use historical C6 archives for final performance
+evidence.
 
 ## Disposition
 

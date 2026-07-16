@@ -25,7 +25,9 @@ from code_identity import (  # noqa: E402
     MAX_METADATA,
     MAX_METADATA_VALUE,
     META_COORDINATE_SET_SHA256,
+    META_PUNCTURING_SET_SHA256,
     META_SHARD_LAYOUT,
+    META_SHORTENING_SET_SHA256,
     Metadata,
     PROFILE_EXACT_LOW,
     PROFILE_LEGACY_HIGH,
@@ -259,6 +261,19 @@ def malformed_corpus() -> list[bytes]:
             (META_SHARD_LAYOUT & 0x7FFF, 9, b"duplicate"),
             (META_SHARD_LAYOUT, 1, b"\x01"),
         )),
+        *(raw_identity_with_tlvs(
+            ((metadata_type, 32, digest),),
+            profile=PROFILE_EXACT_LOW,
+            field=FIELD_GF16,
+            original_count=129,
+            recovery_count=1000,
+        )
+          for metadata_type in (
+              META_COORDINATE_SET_SHA256,
+              META_SHORTENING_SET_SHA256,
+              META_PUNCTURING_SET_SHA256,
+          )
+          for digest in (bytes(32), bytes((0xff,)) * 32)),
     ]
     excessive_count = bytearray(base)
     struct.pack_into(">H", excessive_count, 34, MAX_METADATA + 1)
