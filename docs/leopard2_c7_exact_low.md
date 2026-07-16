@@ -24,8 +24,9 @@ field oracle, arbitrary valid physical tails, requested parity subsets,
 maximum-loss and missing-parity tests, re-encoding after recovery, allocation
 interposition, strict builds, and ASan+UBSan.  Its timing harness records raw
 setup and execution samples for exact and padded low profiles.  The retained
-CPU-0 smoke is explicitly non-authoritative, is rebuilt from the same committed
-source as the correctness matrix, and cannot support a promotion claim.
+affinity-selected smoke is explicitly non-authoritative, is rebuilt from the
+same committed source as the correctness matrix, and cannot support a promotion
+claim.
 Authoritative crossover timing must be rebuilt from the final integrated
 production commit.
 
@@ -247,8 +248,9 @@ both instruments are active; the retained build/run manifest also records the
 exact CMake-selected compiler, make, archiver, ranlib, and linker roles plus the
 standalone link driver and compiler-selected linker.  It binds each tool's
 bytes and complete `--version` output, the path-normalized retained CMake
-cache, verbose configure, core-build, and standalone-link logs, linked archive, executable, source
-closure, run environment, child affinity, and artifact hashes.  The checker
+cache, verbose configure, core-build, and standalone-link logs, linked archive,
+executable, source closure, run environment, child affinity, and artifact
+hashes.  The checker
 parses those logs rather than accepting a success label.  The current-core
 probe freezes 320 ASan and 54 UBSan references in the standalone harness and
 329 ASan and 87 UBSan references across all 11 named core-archive members,
@@ -261,14 +263,19 @@ compiles use supported `-ffile-prefix-map` and `-fdebug-prefix-map`, plus
 stable binary mapping target is literal `LEO2_SOURCE_ROOT`.  A two-checkout
 proof requires every backend's archive and executable hashes to agree and
 scans both retained text and binary bytes for either checkout root.  The
+final manifest retains a machine-checkable `comparison` attestation: the peer
+manifest SHA-256, the canonical matching-fingerprint SHA-256, the five build
+names, and the exact normalized-text/archive/executable scan counts.  It stores
+no checkout path.  A `not-run` record is distinguishable from `pass` and is not
+accepted by the retained-checkpoint test.  The
 portable validator checks retained bytes, semantic logs, exact program records,
 sanitizer equality, and member attribution without executing or requiring the
 recorded tools or unretained build outputs.  `--live` explicitly requires those
 exact tools and outputs and byte-replays both `nm` scans.
 
-The earlier v2 results remain a historical, stale checkpoint until a final
-merged commit regenerates and freezes a v3 tree.  They must not be cited as
-current-core attestation.
+Current-core attestation requires a v3 retained manifest whose A/B comparison
+status is `pass`; the checkpoint suite rejects historical v2 evidence and
+single-checkout v3 evidence.
 
 The Experiment-W Python suite passes 12 tests.  The strict C99 implementation
 passes 217 direct checks and the differential matrix covers 5 golden vectors,
@@ -326,7 +333,10 @@ The A/B gate runs the same committed revision in a second checkout, then gives
 that checkout's manifest and root to the other runner with
 `--compare-reproducibility-manifest` and
 `--compare-reproducibility-root`.  Comparison fails on any backend hash
-difference or checkout-root byte leak.
+difference or checkout-root byte leak, and the resulting local manifest records
+the path-free comparison attestation.  The peer manifest may be the initial
+single-checkout input; only the comparison-producing manifest is retained as
+final evidence.
 
 Run the Experiment-W identity gates from its directory:
 

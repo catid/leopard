@@ -160,6 +160,48 @@ class PortabilityTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             run_matrix.require_reproducible_peer(base, forged)
 
+    def test_comparison_attestation_is_machine_checkable(self) -> None:
+        fingerprints = {
+            name: {
+                "library_sha256": format(index, "x") * 64,
+                "executable_sha256": format(index + 8, "x") * 64,
+            }
+            for index, name in enumerate(run_matrix.BUILD_NAMES, start=1)
+        }
+        scan = {
+            "normalized_text_records": 42,
+            "archives": len(run_matrix.BUILD_NAMES),
+            "executables": len(run_matrix.BUILD_NAMES),
+        }
+        comparison = {
+            "status": "pass",
+            "peer_manifest_sha256": "a" * 64,
+            "fingerprints_sha256":
+                run_matrix.canonical_json_sha256(fingerprints),
+            "build_names": list(run_matrix.BUILD_NAMES),
+            "checkout_roots_scanned": 2,
+            "current_scan": scan,
+            "peer_scan": scan,
+        }
+        self.assertEqual(comparison["fingerprints_sha256"],
+                         validate_evidence.canonical_json_sha256(fingerprints))
+        validate_evidence.validate_comparison(comparison, fingerprints, 42)
+        for key, value in (
+            ("status", "not-pass"),
+            ("peer_manifest_sha256", "0"),
+            ("fingerprints_sha256", "f" * 64),
+            ("checkout_roots_scanned", 1),
+        ):
+            forged = copy.deepcopy(comparison)
+            forged[key] = value
+            with self.assertRaises(ValueError):
+                validate_evidence.validate_comparison(forged, fingerprints, 42)
+        wrong_scan = copy.deepcopy(comparison)
+        wrong_scan["peer_scan"]["normalized_text_records"] = 41
+        with self.assertRaises(ValueError):
+            validate_evidence.validate_comparison(
+                wrong_scan, fingerprints, 42)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

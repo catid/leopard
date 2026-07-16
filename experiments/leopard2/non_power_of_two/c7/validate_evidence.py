@@ -82,10 +82,56 @@ def sha256(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
+def canonical_json_sha256(value: Any) -> str:
+    encoded = json.dumps(
+        value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def validate_sha(value: object, label: str) -> str:
     if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
         raise ValueError(f"{label} is not canonical SHA-256")
     return value
+
+
+def _walk_dicts(value: Any) -> Iterable[dict[str, Any]]:
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _walk_dicts(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _walk_dicts(child)
+
+
+def validate_comparison(
+    comparison: object, fingerprints: dict[str, Any],
+    normalized_text_records: int,
+) -> None:
+    if comparison == {"status": "not-run"}:
+        return
+    required = {
+        "build_names", "checkout_roots_scanned", "current_scan",
+        "fingerprints_sha256", "peer_manifest_sha256", "peer_scan", "status",
+    }
+    if not isinstance(comparison, dict) or set(comparison) != required:
+        raise ValueError("A/B comparison attestation schema changed")
+    if (comparison["status"] != "pass" or
+            comparison["build_names"] != list(BUILD_NAMES) or
+            comparison["checkout_roots_scanned"] != 2):
+        raise ValueError("A/B comparison attestation changed")
+    validate_sha(comparison["peer_manifest_sha256"],
+                 "A/B peer manifest hash")
+    if comparison["fingerprints_sha256"] != canonical_json_sha256(fingerprints):
+        raise ValueError("A/B fingerprint attestation changed")
+    expected_scan = {
+        "normalized_text_records": normalized_text_records,
+        "archives": len(BUILD_NAMES),
+        "executables": len(BUILD_NAMES),
+    }
+    if (comparison["current_scan"] != expected_scan or
+            comparison["peer_scan"] != expected_scan):
+        raise ValueError("A/B root-byte scan attestation changed")
 
 
 def validate_git_sha(value: object, label: str) -> str:
@@ -572,7 +618,8 @@ def validate_manifest(
             raise ValueError("standalone linker output changed")
         for required in (
             "c7_exact_low.cpp", "liblibleopard.a", "-std=c++11",
-            str(records["standalone_linker"]), *flags,
+            str(records["standalone_linker"]), NORMALIZATION_TOKEN,
+            PREFIX_MAP_TARGET,
         ):
             if required not in compile_stderr:
                 raise ValueError("standalone compile closure changed")
@@ -641,7 +688,7 @@ def validate_manifest(
 
     reproducibility = data["reproducibility"]
     if not isinstance(reproducibility, dict) or set(reproducibility) != {
-            "fingerprints", "prefix_map_target"} or reproducibility[
+            "comparison", "fingerprints", "prefix_map_target"} or reproducibility[
             "prefix_map_target"] != PREFIX_MAP_TARGET:
         raise ValueError("reproducibility record changed")
     expected_fingerprints = {
@@ -653,6 +700,13 @@ def validate_manifest(
     }
     if reproducibility["fingerprints"] != expected_fingerprints:
         raise ValueError("reproducibility fingerprints changed")
+    normalized_text_record_count = sum(
+        1 for item in _walk_dicts(data)
+        if set(item) == {
+            "bytes", "path", "sha256", "source_root_tokens"})
+    validate_comparison(
+        reproducibility["comparison"], expected_fingerprints,
+        normalized_text_record_count)
 
     runs = data["runs"]
     expected_runs = [*BUILD_NAMES, "smoke-nonauthoritative"]

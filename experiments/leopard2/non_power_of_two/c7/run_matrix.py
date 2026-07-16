@@ -61,6 +61,12 @@ def sha256(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
+def canonical_json_sha256(value: Any) -> str:
+    encoded = json.dumps(
+        value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def relative(path: pathlib.Path) -> str:
     path = path.resolve()
     try:
@@ -577,12 +583,13 @@ def normalized_text_records(value: Any) -> Iterable[dict[str, Any]]:
 def require_no_root_bytes(
     manifest: dict[str, Any], source_root: pathlib.Path,
     forbidden_roots: Iterable[pathlib.Path],
-) -> None:
+) -> dict[str, int]:
     needles = [str(path.resolve()).encode("utf-8") for path in forbidden_roots]
     serialized = json.dumps(manifest, sort_keys=True).encode("utf-8")
     if any(needle in serialized for needle in needles):
         raise RuntimeError("normalized manifest leaked an A/B checkout root")
-    for record in normalized_text_records(manifest):
+    text_records = list(normalized_text_records(manifest))
+    for record in text_records:
         path = pathlib.Path(record["path"])
         path = path if path.is_absolute() else source_root / path
         contents = path.read_bytes()
@@ -596,6 +603,11 @@ def require_no_root_bytes(
             contents = path.read_bytes()
             if any(needle in contents for needle in needles):
                 raise RuntimeError("A/B binary leaked a checkout root")
+    return {
+        "normalized_text_records": len(text_records),
+        "archives": len(BUILD_NAMES),
+        "executables": len(BUILD_NAMES),
+    }
 
 
 def main() -> int:
@@ -717,8 +729,33 @@ def main() -> int:
         "reproducibility": {
             "prefix_map_target": PREFIX_MAP_TARGET,
             "fingerprints": reproducibility_fingerprints(builds),
+            "comparison": {"status": "not-run"},
         },
     }
+    if arguments.compare_reproducibility_manifest:
+        peer_manifest_path = arguments.compare_reproducibility_manifest.resolve()
+        peer = json.loads(peer_manifest_path.read_text(encoding="utf-8"))
+        require_reproducible_peer(manifest, peer)
+        peer_root = arguments.compare_reproducibility_root.resolve()
+        if peer_root == ROOT:
+            raise RuntimeError("A/B comparison requires a distinct source checkout")
+        try:
+            peer_manifest_path.relative_to(peer_root)
+        except ValueError as error:
+            raise RuntimeError("peer manifest is outside its source root") from error
+        forbidden = (ROOT, peer_root)
+        current_scan = require_no_root_bytes(manifest, ROOT, forbidden)
+        peer_scan = require_no_root_bytes(peer, peer_root, forbidden)
+        fingerprints = manifest["reproducibility"]["fingerprints"]
+        manifest["reproducibility"]["comparison"] = {
+            "status": "pass",
+            "peer_manifest_sha256": sha256(peer_manifest_path),
+            "fingerprints_sha256": canonical_json_sha256(fingerprints),
+            "build_names": list(BUILD_NAMES),
+            "checkout_roots_scanned": 2,
+            "current_scan": current_scan,
+            "peer_scan": peer_scan,
+        }
     serialized = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
     if str(ROOT) in serialized:
         raise RuntimeError("manifest leaked the absolute source checkout root")
@@ -726,19 +763,6 @@ def main() -> int:
     arguments.manifest.write_text(serialized, encoding="utf-8")
     if not SHA256_RE.fullmatch(sha256(arguments.manifest)):
         raise AssertionError("manifest hashing failed")
-    if arguments.compare_reproducibility_manifest:
-        peer = json.loads(arguments.compare_reproducibility_manifest.read_text(
-            encoding="utf-8"))
-        require_reproducible_peer(manifest, peer)
-        peer_root = arguments.compare_reproducibility_root.resolve()
-        try:
-            arguments.compare_reproducibility_manifest.resolve().relative_to(
-                peer_root)
-        except ValueError as error:
-            raise RuntimeError("peer manifest is outside its source root") from error
-        forbidden = (ROOT, peer_root)
-        require_no_root_bytes(manifest, ROOT, forbidden)
-        require_no_root_bytes(peer, peer_root, forbidden)
     return 0
 
 

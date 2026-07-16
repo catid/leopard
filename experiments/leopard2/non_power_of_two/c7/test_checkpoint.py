@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import pathlib
@@ -37,22 +36,15 @@ class CheckpointTests(unittest.TestCase):
             })
             self.assertEqual(regenerated.read_bytes(), retained.read_bytes())
 
-    def test_retained_manifest_is_v3_or_explicitly_historical(self) -> None:
+    def test_retained_manifest_is_current_v3_comparison_evidence(self) -> None:
         manifest_path = RESULTS / "build-run-manifest.json"
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if data.get("schema") == "leopard2-c7-build-run-manifest/v3":
-            validate_evidence.validate_manifest(data)
-            return
-        # The tooling-only portability commit deliberately does not rewrite
-        # old evidence.  The final merged revision must replace this v2 branch
-        # before the Bead closes; v2 is never accepted as current attestation.
-        self.assertEqual(data.get("schema"), "leopard2-c7-build-run-manifest/v2")
-        with self.assertRaises(ValueError):
-            validate_evidence.validate_manifest(data)
-        retained_source = data.get("source", {}).get("sha256")
-        current_source = hashlib.sha256(
-            (HERE / "c7_exact_low.cpp").read_bytes()).hexdigest()
-        self.assertNotEqual(retained_source, current_source)
+        self.assertEqual(data.get("schema"),
+                         "leopard2-c7-build-run-manifest/v3")
+        self.assertEqual(
+            data.get("reproducibility", {}).get("comparison", {}).get("status"),
+            "pass")
+        validate_evidence.validate_manifest(data)
 
     def test_current_attestation_constants_are_exact(self) -> None:
         self.assertEqual(
@@ -77,6 +69,9 @@ class CheckpointTests(unittest.TestCase):
             self.skipTest("LEO2_C7_TEST_MANIFEST is not set")
         path = pathlib.Path(requested)
         data = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            data.get("reproducibility", {}).get("comparison", {}).get("status"),
+            "pass")
         validate_evidence.validate_manifest(data)
 
 
