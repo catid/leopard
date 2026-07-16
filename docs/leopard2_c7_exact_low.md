@@ -250,7 +250,13 @@ standalone link driver and compiler-selected linker.  It binds each tool's
 bytes and complete `--version` output, the path-normalized retained CMake
 cache, verbose configure, core-build, and standalone-link logs, linked archive,
 executable, source closure, run environment, child affinity, and artifact
-hashes.  The checker
+hashes.  Each build records the same exact 22-file core closure (all 11
+translation units, their complete project-header dependency set, top-level
+CMake input, and package-config template).  It also retains all 11 compiler
+dependency files after exact checkout-root normalization; the validator
+reparses those records and requires that they reconstruct precisely that
+closure.  The build job count is a typed integer in `1..8`, and the normalized
+build command must end in the corresponding exact `-jN` argument.  The checker
 parses those logs rather than accepting a success label.  The current-core
 probe freezes 320 ASan and 54 UBSan references in the standalone harness and
 329 ASan and 87 UBSan references across all 11 named core-archive members,
@@ -268,23 +274,41 @@ uses checkout-relative source, archive, and output arguments for the same
 reason.  A two-checkout
 proof requires every backend's archive and executable hashes to agree and
 scans both retained text and binary bytes for either checkout root.  The
-final manifest retains a machine-checkable `comparison` attestation: the peer
-manifest SHA-256, the canonical matching-fingerprint SHA-256, the five build
-names, and the exact normalized-text/archive/executable scan counts.  It stores
-no checkout path.  It also retains a canonical peer-attestation JSON artifact
-that binds the peer's committed tooling and core closure, exact programs,
-binary records, normalized records, run records, Git HEAD, live validation,
-and root-byte scan.  The trusted local validator first checks the peer
-portably, then requires exact program-record equality, and only then performs
-live tool and output replay; peer-controlled tool redirection is never
-executed.  Every non-tool artifact path is checkout-relative, contains no
+final manifest retains a machine-checkable `comparison` attestation: the exact
+peer-manifest artifact and SHA-256, a deterministic peer-evidence bundle, the
+canonical matching-fingerprint SHA-256, the five build names, and the exact
+normalized-text/archive/executable scan counts.  It stores no checkout path.
+The bundle contains only the normalized configure/build/compile logs, CMake
+caches, symbol scans, dependency records, and child result/stdout/stderr needed
+for portable semantic replay; it deliberately does not copy generated archives
+or executables.  Its gzip and tar metadata are canonical, every member is
+indexed by size and SHA-256, and validation rejects traversal, links, devices,
+duplicates, noncanonical metadata, and bounded-size/decompression violations.
+It also retains a canonical peer-attestation JSON artifact that binds both
+retained peer artifacts, the peer's committed tooling and core closure, exact
+programs, binary records, normalized records, run records, Git HEAD, one-time
+live validation, and root-byte scan.
+
+The runner reads the original peer manifest once, captures all peer evidence
+into a private immutable snapshot, and uses those exact bytes for portable and
+live validation, equality comparison, hashing, scanning, bundling, and
+attestation.  Subsequent changes to the peer manifest, logs, dependency files,
+archives, or executables cannot change the result.  The trusted local validator
+first checks the snapshot portably, then requires exact program-record
+equality, and only then performs one-time live tool and output replay;
+peer-controlled tool redirection is never executed.  Every non-tool artifact
+path is checkout-relative, contains no
 parent traversal, and resolves within the declared Git worktree even through
 symlinks.  A `not-run` record is distinguishable from `pass` and is not
 accepted by the retained-checkpoint test.  The
 portable validator checks retained bytes, semantic logs, exact program records,
 sanitizer equality, and member attribution without executing or requiring the
-recorded tools or unretained build outputs.  `--live` explicitly requires those
-exact tools and outputs and byte-replays both `nm` scans.
+recorded tools or unretained peer build outputs.  `--live` explicitly requires
+the current checkout's exact tools and independently rebuilt outputs and
+byte-replays both current `nm` scans.  Because all five current output hashes
+and all program records must equal the peer records, this rechecks equivalent
+bytes; it does not claim to recover or re-open the historical peer inodes after
+the private generation snapshot has been discarded.
 
 Run-result validation fixes the exact build role, correctness/smoke kind,
 sanitizer leak/undefined-behavior environment, selected runtime backend,
@@ -353,7 +377,14 @@ that checkout's manifest and root to the other runner with
 `--compare-reproducibility-manifest` and
 `--compare-reproducibility-root`.  Comparison fails on any backend hash
 difference or checkout-root byte leak, and the resulting local manifest records
-the path-free comparison attestation.  The peer manifest may be the initial
+the path-free comparison attestation.  It writes the exact captured bytes to
+`results/peer-manifest.json`, the portable semantic inputs to
+`results/peer-evidence-bundle.tar.gz`, and their binding report to
+`results/peer-reproducibility-attestation.json` (with `results` interpreted as
+the selected `--results-dir`).  These generated proof artifacts belong in the
+ignored research results area unless repository policy explicitly approves a
+small retained checkpoint; generated archives and copied executables are never
+placed in this bundle.  The peer manifest may be the initial
 single-checkout input; only the comparison-producing manifest is retained as
 final evidence.
 

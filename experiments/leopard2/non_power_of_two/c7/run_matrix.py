@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import gzip
 import hashlib
+import io
 import json
 import os
 import pathlib
@@ -19,6 +21,8 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
 from typing import Any, Iterable
 
 
@@ -38,7 +42,13 @@ GIT_SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 NORMALIZATION_SCHEMA = "leopard2-source-root-prefix/v1"
 NORMALIZATION_TOKEN = "${LEO2_SOURCE_ROOT}"
 PREFIX_MAP_TARGET = "LEO2_SOURCE_ROOT"
-PEER_ATTESTATION_SCHEMA = "leopard2-c7-peer-reproducibility/v1"
+PEER_ATTESTATION_SCHEMA = "leopard2-c7-peer-reproducibility/v2"
+PEER_BUNDLE_SCHEMA = "leopard2-c7-peer-evidence-bundle/v1"
+PEER_BUNDLE_MAX_MEMBERS = 256
+PEER_BUNDLE_MAX_MEMBER_BYTES = 16 * 1024 * 1024
+PEER_BUNDLE_MAX_TOTAL_BYTES = 64 * 1024 * 1024
+PEER_BUNDLE_MAX_ARCHIVE_BYTES = (
+    PEER_BUNDLE_MAX_TOTAL_BYTES + PEER_BUNDLE_MAX_MEMBERS * 2048 + 1024 * 1024)
 PREFIX_MAP_OPTIONS = (
     "-ffile-prefix-map", "-fdebug-prefix-map", "-fmacro-prefix-map")
 EXPECTED_EXECUTABLE_SANITIZER_COUNTS = {
@@ -58,6 +68,16 @@ EXPECTED_ARCHIVE_MEMBER_COUNTS = {
     "Leopard2BackendSSSE3.cpp.o": {"asan_lines": 18, "ubsan_lines": 8},
     "Leopard2BackendAVX2.cpp.o": {"asan_lines": 20, "ubsan_lines": 7},
 }
+EXPECTED_SOURCE_CLOSURE = (
+    "CMakeLists.txt", "Leopard2Backend.cpp", "Leopard2Backend.h",
+    "Leopard2BackendAVX2.cpp", "Leopard2BackendSSSE3.cpp",
+    "Leopard2BackendScalar.cpp", "Leopard2CpuFeatures.cpp",
+    "Leopard2Direct.h", "Leopard2Dispatch.h", "Leopard2Plan.cpp",
+    "Leopard2Plan.h", "LeopardCommon.cpp", "LeopardCommon.h",
+    "LeopardFF16.cpp", "LeopardFF16.h", "LeopardFF8.cpp", "LeopardFF8.h",
+    "cmake/leopardConfig.cmake.in", "leopard.cpp", "leopard.h",
+    "leopard2.cpp", "leopard2.h",
+)
 
 
 def sha256(path: pathlib.Path) -> str:
@@ -72,6 +92,56 @@ def canonical_json_sha256(value: Any) -> str:
     encoded = json.dumps(
         value, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def canonical_peer_tar(files: dict[str, bytes]) -> bytes:
+    for path in files:
+        pure = pathlib.PurePosixPath(path)
+        if (not path or pure.is_absolute() or pure.as_posix() != path or
+                "\\" in path or ":" in path or
+                any(part in ("", ".", "..") for part in pure.parts)):
+            raise RuntimeError("peer bundle path is not canonical")
+    if (len(files) > PEER_BUNDLE_MAX_MEMBERS or
+            any(len(contents) > PEER_BUNDLE_MAX_MEMBER_BYTES
+                for contents in files.values()) or
+            sum(map(len, files.values())) > PEER_BUNDLE_MAX_TOTAL_BYTES):
+        raise RuntimeError("peer evidence exceeds bundle safety limits")
+    index = {
+        "schema": PEER_BUNDLE_SCHEMA,
+        "files": [
+            {
+                "path": path, "bytes": len(contents),
+                "sha256": hashlib.sha256(contents).hexdigest(),
+            }
+            for path, contents in sorted(files.items())
+        ],
+    }
+    members = {
+        "index.json": (json.dumps(index, indent=2, sort_keys=True) + "\n").encode(),
+        **{f"files/{path}": contents for path, contents in files.items()},
+    }
+    output = io.BytesIO()
+    with tarfile.open(
+            fileobj=output, mode="w", format=tarfile.USTAR_FORMAT
+    ) as archive:
+        for name, contents in sorted(members.items()):
+            info = tarfile.TarInfo(name)
+            info.size = len(contents)
+            info.mode = 0o444
+            info.mtime = 0
+            info.uid = info.gid = 0
+            info.uname = info.gname = ""
+            archive.addfile(info, io.BytesIO(contents))
+    return output.getvalue()
+
+
+def canonical_peer_bundle(files: dict[str, bytes]) -> bytes:
+    output = io.BytesIO()
+    with gzip.GzipFile(
+            filename="", mode="wb", fileobj=output, mtime=0, compresslevel=9
+    ) as compressed:
+        compressed.write(canonical_peer_tar(files))
+    return output.getvalue()
 
 
 def relative(path: pathlib.Path) -> str:
@@ -109,10 +179,17 @@ def artifact(path: pathlib.Path) -> dict[str, Any]:
     }
 
 
-def normalize_source_root(text: str) -> tuple[str, int]:
-    """Replace only ROOT itself or ROOT followed by a path separator."""
-    pattern = re.compile(re.escape(str(ROOT)) + r"(?=\Z|[/\\=\s\"'])")
+def normalize_checkout_root(
+    text: str, source_root: pathlib.Path,
+) -> tuple[str, int]:
+    """Replace only source_root itself or a source-root path prefix."""
+    pattern = re.compile(
+        re.escape(str(source_root.resolve())) + r"(?=\Z|[/\\=\s\"'])")
     return pattern.subn(lambda _match: NORMALIZATION_TOKEN, text)
+
+
+def normalize_source_root(text: str) -> tuple[str, int]:
+    return normalize_checkout_root(text, ROOT)
 
 
 def normalize_argv(argv: list[str]) -> tuple[list[str], int]:
@@ -304,10 +381,17 @@ def filtered_symbol_scan(
     return counts, members
 
 
-def dependency_closure(build_dir: pathlib.Path) -> list[dict[str, Any]]:
+def dependency_closure(
+    build_dir: pathlib.Path, results: pathlib.Path, build_name: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     paths: set[pathlib.Path] = {
         ROOT / "CMakeLists.txt", ROOT / "cmake/leopardConfig.cmake.in"}
-    for dependency in build_dir.rglob("*.o.d"):
+    dependencies = sorted(build_dir.rglob("*.o.d"))
+    if len(dependencies) != len(EXPECTED_ARCHIVE_MEMBER_COUNTS):
+        raise RuntimeError("core dependency-file count changed")
+    retained_names: set[str] = set()
+    records: list[dict[str, Any]] = []
+    for dependency in dependencies:
         text = dependency.read_text(encoding="utf-8", errors="strict")
         flattened = text.replace("\\\n", " ")
         if ":" not in flattened:
@@ -322,11 +406,28 @@ def dependency_closure(build_dir: pathlib.Path) -> list[dict[str, Any]]:
                 candidate.relative_to(ROOT)
             except ValueError:
                 continue
-            if candidate.is_file() and "build" not in candidate.relative_to(ROOT).parts:
-                paths.add(candidate)
-    if len(paths) < 10:
-        raise RuntimeError("core dependency closure is unexpectedly small")
-    return [artifact(path) for path in sorted(paths)]
+            try:
+                candidate.relative_to(build_dir)
+            except ValueError:
+                if candidate.is_file():
+                    paths.add(candidate)
+        retained_name = dependency.name
+        if retained_name in retained_names:
+            raise RuntimeError("dependency-file basenames are not unique")
+        retained_names.add(retained_name)
+        retained = (
+            results / "logs" / f"{build_name}-dependencies" / retained_name)
+        retained.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(dependency, retained)
+        records.append({
+            "build_path": relative(dependency),
+            "retained": normalized_text_artifact(retained),
+        })
+    closure_paths = tuple(
+        path.relative_to(ROOT).as_posix() for path in sorted(paths))
+    if closure_paths != EXPECTED_SOURCE_CLOSURE:
+        raise RuntimeError("core dependency closure changed")
+    return [artifact(path) for path in sorted(paths)], records
 
 
 def cmake_build(
@@ -395,6 +496,8 @@ def cmake_build(
     library = build_dir / "liblibleopard.a"
     if not library.is_file():
         raise RuntimeError(f"missing library output: {library}")
+    source_closure, dependency_files = dependency_closure(
+        build_dir, results, name)
     normalized_configure, configure_tokens = normalize_argv(configure_argv)
     normalized_build, build_tokens = normalize_argv(build_argv)
     return {
@@ -420,8 +523,10 @@ def cmake_build(
         "cmake_linker": program_record(cmake_linker),
         "launcher_python": program_record(launcher_python),
         "library": artifact(library),
-        "source_closure": dependency_closure(build_dir),
+        "source_closure": source_closure,
+        "dependency_files": dependency_files,
         "build_dir": relative(build_dir),
+        "jobs": jobs,
         "prefix_map_flags": [normalize_source_root(flag)[0]
                              for flag in reproducibility_flags],
     }
@@ -633,11 +738,14 @@ def require_reproducible_peer(current: dict[str, Any], peer: dict[str, Any]) -> 
 
 def trusted_validate_manifest(
     manifest_path: pathlib.Path, source_root: pathlib.Path, *, live: bool,
+    evidence_root: pathlib.Path | None = None,
 ) -> None:
     argv = [
         sys.executable, str(VALIDATOR), "--source-root", str(source_root),
         "--require-checkout-head",
     ]
+    if evidence_root is not None:
+        argv.extend(["--evidence-root", str(evidence_root)])
     if live:
         argv.append("--live")
     argv.append(str(manifest_path))
@@ -655,15 +763,22 @@ def trusted_validate_manifest(
 
 
 def authenticate_peer(
-    current: dict[str, Any], peer_manifest_path: pathlib.Path,
-    peer_root: pathlib.Path,
+    current: dict[str, Any], peer_bytes: bytes, peer_manifest_snapshot: pathlib.Path,
+    peer_root: pathlib.Path, evidence_snapshot: pathlib.Path,
 ) -> dict[str, Any]:
-    trusted_validate_manifest(peer_manifest_path, peer_root, live=False)
-    peer = json.loads(peer_manifest_path.read_text(encoding="utf-8"))
+    trusted_validate_manifest(
+        peer_manifest_snapshot, peer_root, evidence_root=evidence_snapshot,
+        live=False)
+    peer = json.loads(peer_bytes)
+    if peer.get("reproducibility", {}).get("comparison") != {
+            "status": "not-run"}:
+        raise RuntimeError("A/B peer must be an initial non-comparison manifest")
     require_reproducible_peer(current, peer)
     # Portable validation and exact-program equality happen before live replay
     # so an untrusted manifest cannot redirect a tool invocation.
-    trusted_validate_manifest(peer_manifest_path, peer_root, live=True)
+    trusted_validate_manifest(
+        peer_manifest_snapshot, peer_root, evidence_root=evidence_snapshot,
+        live=True)
     return peer
 
 
@@ -689,6 +804,98 @@ def checkout_artifact_path(
             sha256(path) != record["sha256"]):
         raise RuntimeError(f"{label} artifact bytes differ from its record")
     return path
+
+
+def peer_portable_artifact_records(
+    peer: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Artifacts needed to replay peer semantics without copied binaries."""
+    return list(normalized_text_records(peer))
+
+
+def peer_artifact_records(peer: dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        records = peer_portable_artifact_records(peer)
+        by_name = {build["name"]: build for build in peer["builds"]}
+        for name in BUILD_NAMES:
+            records.extend(
+                by_name[name][key] for key in ("library", "executable"))
+    except (KeyError, TypeError) as error:
+        raise RuntimeError("peer artifact record graph is incomplete") from error
+    return records
+
+
+def capture_peer_snapshot(
+    peer: dict[str, Any], peer_root: pathlib.Path, snapshot_root: pathlib.Path,
+) -> dict[str, bytes]:
+    if snapshot_root.exists():
+        raise RuntimeError("peer snapshot destination already exists")
+    snapshot_root.mkdir(parents=True, mode=0o700)
+    files: dict[str, bytes] = {}
+    try:
+        records = peer_artifact_records(peer)
+        builds = peer["builds"]
+    except (KeyError, TypeError) as error:
+        raise RuntimeError("peer evidence graph is incomplete") from error
+    if (not isinstance(builds, list) or
+            not all(isinstance(build, dict) for build in builds) or
+            [build.get("name") for build in builds] != list(BUILD_NAMES) or
+            any(not isinstance(build.get("dependency_files"), list) or
+                len(build["dependency_files"]) != len(
+                    EXPECTED_ARCHIVE_MEMBER_COUNTS) for build in builds) or
+            len(records) + len(builds) * len(EXPECTED_ARCHIVE_MEMBER_COUNTS) >
+            PEER_BUNDLE_MAX_MEMBERS or
+            any(type(record.get("bytes")) is not int or
+                not 0 <= record["bytes"] <= PEER_BUNDLE_MAX_MEMBER_BYTES
+                for record in records) or
+            sum(record["bytes"] for record in records) >
+            PEER_BUNDLE_MAX_TOTAL_BYTES):
+        raise RuntimeError("peer snapshot exceeds its structural limits")
+
+    def retain(path_text: str, contents: bytes) -> None:
+        pure = pathlib.PurePosixPath(path_text)
+        if (pure.is_absolute() or pure.as_posix() != path_text or
+                "\\" in path_text or ":" in path_text or
+                any(part in ("", ".", "..") for part in pure.parts) or
+                path_text in files):
+            raise RuntimeError("peer snapshot path is noncanonical or duplicated")
+        destination = snapshot_root.joinpath(*pure.parts)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(contents)
+        destination.chmod(0o444)
+        files[path_text] = contents
+
+    for index, record in enumerate(records):
+        source = checkout_artifact_path(
+            record, peer_root, f"peer snapshot artifact {index}")
+        contents = source.read_bytes()
+        if (len(contents) != record["bytes"] or
+                hashlib.sha256(contents).hexdigest() != record["sha256"]):
+            raise RuntimeError("peer artifact changed while being snapshotted")
+        retain(record["path"], contents)
+
+    for build in peer["builds"]:
+        for entry in build["dependency_files"]:
+            build_path = entry["build_path"]
+            pure = pathlib.PurePosixPath(build_path)
+            if (pure.is_absolute() or pure.as_posix() != build_path or
+                    "\\" in build_path or ":" in build_path or
+                    any(part in ("", ".", "..") for part in pure.parts)):
+                raise RuntimeError("peer dependency path is noncanonical")
+            source = peer_root.joinpath(*pure.parts)
+            try:
+                source.resolve(strict=False).relative_to(peer_root.resolve())
+            except ValueError as error:
+                raise RuntimeError("peer dependency path escapes checkout") from error
+            if not source.is_file():
+                raise RuntimeError("peer dependency file is missing")
+            normalized = normalize_checkout_root(
+                source.read_text(encoding="utf-8", errors="strict"), peer_root)[0]
+            retained_path = entry["retained"]["path"]
+            if files.get(retained_path) != normalized.encode("utf-8"):
+                raise RuntimeError("peer dependency snapshot differs from retained copy")
+            retain(build_path, normalized.encode("utf-8"))
+    return files
 
 
 def normalized_text_records(value: Any) -> Iterable[dict[str, Any]]:
@@ -733,7 +940,8 @@ def require_no_root_bytes(
 
 
 def write_peer_attestation(
-    peer: dict[str, Any], peer_manifest_path: pathlib.Path,
+    peer: dict[str, Any], peer_manifest: dict[str, Any],
+    peer_evidence_bundle: dict[str, Any],
     peer_scan: dict[str, int], output: pathlib.Path,
     forbidden_roots: Iterable[pathlib.Path],
 ) -> dict[str, Any]:
@@ -745,10 +953,8 @@ def write_peer_attestation(
         "schema": PEER_ATTESTATION_SCHEMA,
         "status": "pass",
         "core_git_sha": peer["core_git_sha"],
-        "peer_manifest": {
-            "bytes": peer_manifest_path.stat().st_size,
-            "sha256": sha256(peer_manifest_path),
-        },
+        "peer_manifest_artifact": peer_manifest,
+        "peer_evidence_bundle": peer_evidence_bundle,
         "tooling": {
             key: peer[key] for key in ("source", "runner", "validator")
         },
@@ -916,23 +1122,71 @@ def main() -> int:
             peer_manifest_path.relative_to(peer_root)
         except ValueError as error:
             raise RuntimeError("peer manifest is outside its source root") from error
-        peer = authenticate_peer(manifest, peer_manifest_path, peer_root)
+        # Read the untrusted peer manifest exactly once.  Every validation,
+        # comparison, hash, and retained artifact below uses this immutable
+        # private snapshot rather than reopening peer-controlled paths.
+        peer_bytes = peer_manifest_path.read_bytes()
+        try:
+            peer_untrusted = json.loads(peer_bytes)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise RuntimeError("peer manifest is not canonical JSON") from error
+        if (not isinstance(peer_untrusted, dict) or
+                peer_untrusted.get("reproducibility", {}).get(
+                    "comparison") != {
+                "status": "not-run"}):
+            raise RuntimeError(
+                "A/B peer must be an initial non-comparison manifest")
         forbidden = (ROOT, peer_root)
-        current_scan = require_no_root_bytes(manifest, ROOT, forbidden)
-        peer_scan = require_no_root_bytes(peer, peer_root, forbidden)
-        attestation = write_peer_attestation(
-            peer, peer_manifest_path, peer_scan,
-            arguments.results_dir / "peer-reproducibility-attestation.json",
-            forbidden)
+        with tempfile.TemporaryDirectory(
+                prefix="peer-snapshot-", dir=arguments.build_dir
+        ) as snapshot_directory:
+            snapshot = pathlib.Path(snapshot_directory)
+            snapshot_manifest = snapshot / "peer-manifest.json"
+            snapshot_manifest.write_bytes(peer_bytes)
+            snapshot_manifest.chmod(0o444)
+            evidence_snapshot = snapshot / "evidence"
+            snapshot_files = capture_peer_snapshot(
+                peer_untrusted, peer_root, evidence_snapshot)
+            peer = authenticate_peer(
+                manifest, peer_bytes, snapshot_manifest, peer_root,
+                evidence_snapshot)
+            current_scan = require_no_root_bytes(manifest, ROOT, forbidden)
+            peer_scan = require_no_root_bytes(
+                peer, evidence_snapshot, forbidden)
+
+            retained_peer_manifest_path = (
+                arguments.results_dir / "peer-manifest.json")
+            retained_peer_manifest_path.write_bytes(peer_bytes)
+            peer_manifest = artifact(retained_peer_manifest_path)
+            retained_bundle_path = (
+                arguments.results_dir / "peer-evidence-bundle.tar.gz")
+            portable_paths = {
+                record["path"]
+                for record in peer_portable_artifact_records(peer)
+            }
+            portable_files = {
+                path: contents for path, contents in snapshot_files.items()
+                if path in portable_paths
+            }
+            if set(portable_files) != portable_paths:
+                raise RuntimeError("portable peer snapshot is incomplete")
+            retained_bundle_path.write_bytes(canonical_peer_bundle(portable_files))
+            peer_evidence_bundle = artifact(retained_bundle_path)
+            attestation = write_peer_attestation(
+                peer, peer_manifest, peer_evidence_bundle, peer_scan,
+                arguments.results_dir / "peer-reproducibility-attestation.json",
+                forbidden)
         fingerprints = manifest["reproducibility"]["fingerprints"]
         manifest["reproducibility"]["comparison"] = {
             "status": "pass",
-            "peer_manifest_sha256": sha256(peer_manifest_path),
+            "peer_manifest_sha256": hashlib.sha256(peer_bytes).hexdigest(),
             "fingerprints_sha256": canonical_json_sha256(fingerprints),
             "build_names": list(BUILD_NAMES),
             "checkout_roots_scanned": 2,
             "current_scan": current_scan,
             "peer_scan": peer_scan,
+            "peer_manifest": peer_manifest,
+            "peer_evidence_bundle": peer_evidence_bundle,
             "peer_attestation": attestation,
         }
         forbidden_roots = forbidden

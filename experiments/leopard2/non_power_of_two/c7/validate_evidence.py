@@ -4,14 +4,20 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
+import io
 import json
 import math
 import pathlib
+import posixpath
 import re
+import shlex
 import shutil
 import statistics
 import subprocess
+import tarfile
+import tempfile
 from typing import Any, Iterable
 
 from run_matrix import (
@@ -20,11 +26,19 @@ from run_matrix import (
     EXPECTED_ARCHIVE_MEMBER_COUNTS,
     EXPECTED_ARCHIVE_SANITIZER_COUNTS,
     EXPECTED_EXECUTABLE_SANITIZER_COUNTS,
+    EXPECTED_SOURCE_CLOSURE,
     NORMALIZATION_SCHEMA,
     NORMALIZATION_TOKEN,
     PEER_ATTESTATION_SCHEMA,
+    PEER_BUNDLE_MAX_ARCHIVE_BYTES,
+    PEER_BUNDLE_MAX_MEMBER_BYTES,
+    PEER_BUNDLE_MAX_MEMBERS,
+    PEER_BUNDLE_MAX_TOTAL_BYTES,
+    PEER_BUNDLE_SCHEMA,
     PREFIX_MAP_TARGET,
     PROGRAM_ROLES,
+    canonical_peer_tar,
+    peer_portable_artifact_records,
 )
 
 
@@ -125,7 +139,7 @@ def validate_comparison(
     required = {
         "build_names", "checkout_roots_scanned", "current_scan",
         "fingerprints_sha256", "peer_attestation", "peer_manifest_sha256",
-        "peer_scan", "status",
+        "peer_evidence_bundle", "peer_manifest", "peer_scan", "status",
     }
     if not isinstance(comparison, dict) or set(comparison) != required:
         raise ValueError("A/B comparison attestation schema changed")
@@ -135,6 +149,19 @@ def validate_comparison(
         raise ValueError("A/B comparison attestation changed")
     validate_sha(comparison["peer_manifest_sha256"],
                  "A/B peer manifest hash")
+    for key, filename in (
+        ("peer_manifest", "peer-manifest.json"),
+        ("peer_evidence_bundle", "peer-evidence-bundle.tar.gz"),
+        ("peer_attestation", "peer-reproducibility-attestation.json"),
+    ):
+        record = comparison[key]
+        if (not isinstance(record, dict) or
+                pathlib.PurePosixPath(str(record.get("path", ""))).name !=
+                filename):
+            raise ValueError(f"A/B {key} artifact identity changed")
+    if comparison["peer_manifest"]["sha256"] != comparison[
+            "peer_manifest_sha256"]:
+        raise ValueError("A/B peer manifest hashes disagree")
     if comparison["fingerprints_sha256"] != canonical_json_sha256(fingerprints):
         raise ValueError("A/B fingerprint attestation changed")
     expected_scan = {
@@ -157,22 +184,205 @@ def manifest_program_records(manifest: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _canonical_relative_path(path: object, label: str) -> str:
+    if not isinstance(path, str) or not path or "\\" in path or ":" in path:
+        raise ValueError(f"{label} path is not canonical")
+    pure = pathlib.PurePosixPath(path)
+    if (pure.is_absolute() or pure.as_posix() != path or
+            any(part in ("", ".", "..") for part in pure.parts)):
+        raise ValueError(f"{label} path is not canonical")
+    return path
+
+
+def _peer_bundle_records(peer: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    try:
+        records = peer_portable_artifact_records(peer)
+    except (KeyError, TypeError, RuntimeError) as error:
+        raise ValueError("peer portable artifact graph is incomplete") from error
+    expected: dict[str, dict[str, Any]] = {}
+    total = 0
+    for index, record in enumerate(records):
+        if not isinstance(record, dict) or set(record) != {
+                "bytes", "path", "sha256", "source_root_tokens"}:
+            raise ValueError("peer portable artifact record schema changed")
+        path = _canonical_relative_path(
+            record["path"], f"peer portable artifact {index}")
+        size = record["bytes"]
+        if (path in expected or type(size) is not int or size < 0 or
+                size > PEER_BUNDLE_MAX_MEMBER_BYTES):
+            raise ValueError("peer portable artifact size/path is invalid")
+        validate_sha(record["sha256"], f"peer portable artifact {index}")
+        expected[path] = record
+        total += size
+    if (len(expected) > PEER_BUNDLE_MAX_MEMBERS or
+            total > PEER_BUNDLE_MAX_TOTAL_BYTES):
+        raise ValueError("peer portable evidence exceeds bundle limits")
+    return expected
+
+
+def _read_peer_bundle(
+    contents: bytes, expected: dict[str, dict[str, Any]],
+) -> dict[str, bytes]:
+    if not contents or len(contents) > PEER_BUNDLE_MAX_ARCHIVE_BYTES:
+        raise ValueError("peer bundle compressed size is invalid")
+    if contents[:10] != b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff":
+        raise ValueError("peer bundle gzip metadata is noncanonical")
+    # Bound expansion before tar parsing.  Canonical tar padding is small, but
+    # leave one MiB for the index and block records while retaining a hard
+    # global ceiling for malicious manifests.
+    expected_payload = sum(record["bytes"] for record in expected.values())
+    expansion_limit = min(
+        PEER_BUNDLE_MAX_ARCHIVE_BYTES,
+        expected_payload + (len(expected) + 8) * 2048 + 1024 * 1024)
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(contents), mode="rb") as stream:
+            raw = stream.read(expansion_limit + 1)
+    except (EOFError, OSError) as error:
+        raise ValueError("peer bundle gzip stream is invalid") from error
+    if len(raw) > expansion_limit:
+        raise ValueError("peer bundle exceeds its decompression limit")
+    members: dict[str, bytes] = {}
+    total = 0
+    try:
+        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as archive:
+            infos = archive.getmembers()
+            if len(infos) > PEER_BUNDLE_MAX_MEMBERS + 1:
+                raise ValueError("peer bundle member count exceeds its limit")
+            if [info.name for info in infos] != sorted(info.name for info in infos):
+                raise ValueError("peer bundle member order is noncanonical")
+            for info in infos:
+                name = _canonical_relative_path(info.name, "peer bundle member")
+                if (not info.isreg() or name in members or info.size < 0 or
+                        info.size > PEER_BUNDLE_MAX_MEMBER_BYTES or
+                        info.mode != 0o444 or info.mtime != 0 or
+                        info.uid != 0 or info.gid != 0 or
+                        info.uname != "" or info.gname != "" or
+                        info.pax_headers):
+                    raise ValueError("peer bundle contains an unsafe member")
+                total += info.size
+                if total > PEER_BUNDLE_MAX_TOTAL_BYTES + 1024 * 1024:
+                    raise ValueError("peer bundle payload exceeds its limit")
+                extracted = archive.extractfile(info)
+                if extracted is None:
+                    raise ValueError("peer bundle member cannot be read")
+                payload = extracted.read(info.size + 1)
+                if len(payload) != info.size:
+                    raise ValueError("peer bundle member size changed")
+                members[name] = payload
+    except (tarfile.TarError, OSError) as error:
+        raise ValueError("peer bundle tar stream is invalid") from error
+
+    expected_names = {"index.json", *{
+        f"files/{path}" for path in expected
+    }}
+    if set(members) != expected_names:
+        raise ValueError("peer bundle member set changed")
+    try:
+        index = json.loads(members["index.json"])
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("peer bundle index is invalid") from error
+    expected_index = {
+        "schema": PEER_BUNDLE_SCHEMA,
+        "files": [
+            {
+                "path": path, "bytes": record["bytes"],
+                "sha256": record["sha256"],
+            }
+            for path, record in sorted(expected.items())
+        ],
+    }
+    if index != expected_index:
+        raise ValueError("peer bundle index disagrees with peer manifest")
+    files = {path: members[f"files/{path}"] for path in expected}
+    for path, record in expected.items():
+        payload = files[path]
+        if (len(payload) != record["bytes"] or
+                hashlib.sha256(payload).hexdigest() != record["sha256"]):
+            raise ValueError("peer bundle bytes disagree with peer manifest")
+    try:
+        canonical_tar = canonical_peer_tar(files)
+    except RuntimeError as error:
+        raise ValueError("peer bundle cannot be canonically reconstructed") from error
+    if raw != canonical_tar:
+        raise ValueError("peer bundle tar encoding or metadata is noncanonical")
+    return files
+
+
+def _materialize_peer_bundle(
+    files: dict[str, bytes], destination: pathlib.Path,
+) -> None:
+    destination.mkdir(mode=0o700)
+    for path, contents in files.items():
+        target = destination.joinpath(*pathlib.PurePosixPath(path).parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(contents)
+        target.chmod(0o444)
+
+
 def validate_peer_attestation(
     comparison: dict[str, Any], manifest: dict[str, Any],
-    source_root: pathlib.Path,
+    source_root: pathlib.Path, evidence_root: pathlib.Path, *, live: bool,
 ) -> None:
     if comparison == {"status": "not-run"}:
         return
+    peer_manifest_record = comparison["peer_manifest"]
+    peer_manifest_path = validate_artifact(
+        peer_manifest_record, "A/B peer manifest", evidence_root, required=True)
+    if (peer_manifest_record["bytes"] <= 0 or
+            peer_manifest_record["bytes"] > 16 * 1024 * 1024):
+        raise ValueError("A/B peer manifest size is invalid")
+    peer_manifest_bytes = peer_manifest_path.read_bytes()
+    try:
+        peer = json.loads(peer_manifest_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("A/B peer manifest JSON is invalid") from error
+    if not isinstance(peer, dict):
+        raise ValueError("A/B peer manifest is not an object")
+    if peer.get("reproducibility", {}).get("comparison") != {
+            "status": "not-run"}:
+        raise ValueError("A/B peer manifest is not an initial independent run")
+    try:
+        identity_mismatch = (
+            peer.get("schema") != manifest.get("schema") or
+            peer.get("core_git_sha") != manifest.get("core_git_sha") or
+            any(peer.get(key) != manifest.get(key) for key in (
+                "source", "runner", "validator", "normalization")) or
+            peer.get("taskset") != manifest.get("taskset") or
+            manifest_program_records(peer) != manifest_program_records(manifest) or
+            peer.get("reproducibility", {}).get("fingerprints") !=
+            manifest.get("reproducibility", {}).get("fingerprints"))
+    except (KeyError, TypeError) as error:
+        raise ValueError("A/B peer identity graph is incomplete") from error
+    if identity_mismatch:
+        raise ValueError("A/B peer does not bind the same source/program outputs")
+
+    bundle_record = comparison["peer_evidence_bundle"]
+    bundle_path = validate_artifact(
+        bundle_record, "A/B peer evidence bundle", evidence_root, required=True)
+    expected_bundle_records = _peer_bundle_records(peer)
+    files = _read_peer_bundle(bundle_path.read_bytes(), expected_bundle_records)
+    with tempfile.TemporaryDirectory(prefix="c7-peer-replay-") as directory:
+        peer_evidence_root = pathlib.Path(directory) / "evidence"
+        _materialize_peer_bundle(files, peer_evidence_root)
+        # The historical peer's exact tools and binary inode bytes were checked
+        # during capture.  Retained replay is intentionally portable; --live
+        # validates the current independent outputs, whose records are required
+        # above to equal the peer exactly.
+        validate_manifest(
+            peer, source_root=source_root, evidence_root=peer_evidence_root,
+            live=False, require_checkout_head=False)
+
     record = comparison["peer_attestation"]
     path = validate_artifact(
-        record, "A/B peer attestation", source_root, required=True)
+        record, "A/B peer attestation", evidence_root, required=True)
     if pathlib.PurePosixPath(record["path"]).name != (
             "peer-reproducibility-attestation.json"):
         raise ValueError("A/B peer attestation path changed")
     report = json.loads(path.read_text(encoding="utf-8"))
     required = {
         "binary_artifacts", "checks", "core_git_sha", "fingerprints",
-        "normalized_text_records_sha256", "peer_manifest",
+        "normalized_text_records_sha256", "peer_evidence_bundle",
+        "peer_manifest_artifact",
         "program_records_sha256", "root_scan", "runs_sha256", "schema",
         "source_closures_sha256", "status", "tooling",
     }
@@ -186,7 +396,6 @@ def validate_peer_attestation(
     expected_closures = {
         name: builds[name]["source_closure"] for name in BUILD_NAMES
     }
-    peer_manifest = report["peer_manifest"]
     if (report["schema"] != PEER_ATTESTATION_SCHEMA or
             report["status"] != "pass" or
             report["core_git_sha"] != manifest["core_git_sha"] or
@@ -206,17 +415,17 @@ def validate_peer_attestation(
                 "git_toplevel_and_head": "pass",
                 "program_identity_match": "pass",
                 "binary_and_text_root_scan": "pass",
-            } or not isinstance(peer_manifest, dict) or
-            set(peer_manifest) != {"bytes", "sha256"} or
-            type(peer_manifest["bytes"]) is not int or
-            peer_manifest["bytes"] <= 0 or
-            peer_manifest["sha256"] != comparison["peer_manifest_sha256"]):
+            } or report["peer_manifest_artifact"] != peer_manifest_record or
+            report["peer_evidence_bundle"] != bundle_record or
+            report["normalized_text_records_sha256"] != canonical_json_sha256(
+                sorted(
+                    (dict(item) for item in peer_portable_artifact_records(peer)),
+                    key=lambda item: item["path"])) or
+            report["runs_sha256"] != canonical_json_sha256(peer["runs"])):
         raise ValueError("A/B peer attestation contents changed")
-    validate_sha(report["normalized_text_records_sha256"],
-                 "peer normalized-record digest")
-    validate_sha(report["runs_sha256"], "peer run-record digest")
     serialized = json.dumps(report, sort_keys=True)
     if (str(source_root.resolve()) in serialized or
+            str(evidence_root.resolve()) in serialized or
             ABSOLUTE_PROJECT_PATH.search(serialized)):
         raise ValueError("A/B peer attestation leaked a checkout path")
 
@@ -269,8 +478,8 @@ def validate_artifact(
 
 
 def validate_normalized_text(
-    record: object, label: str, source_root: pathlib.Path, *,
-    require_token: bool,
+    record: object, label: str, artifact_root: pathlib.Path, *,
+    require_token: bool, checkout_root: pathlib.Path | None = None,
 ) -> pathlib.Path:
     if not isinstance(record, dict) or set(record) != {
             "bytes", "path", "sha256", "source_root_tokens"}:
@@ -279,13 +488,14 @@ def validate_normalized_text(
     if type(token_count) is not int or token_count < 0:
         raise ValueError(f"{label} token count is invalid")
     generic = {key: record[key] for key in ("bytes", "path", "sha256")}
-    path = validate_artifact(generic, label, source_root, required=True)
+    path = validate_artifact(generic, label, artifact_root, required=True)
     text = path.read_text(encoding="utf-8", errors="strict")
     if text.count(NORMALIZATION_TOKEN) != token_count:
         raise ValueError(f"{label} normalization token count changed")
     if require_token and token_count == 0:
         raise ValueError(f"{label} lacks its required normalization token")
-    if str(source_root.resolve()) in text or ABSOLUTE_PROJECT_PATH.search(text):
+    checkout_root = artifact_root if checkout_root is None else checkout_root
+    if str(checkout_root.resolve()) in text or ABSOLUTE_PROJECT_PATH.search(text):
         raise ValueError(f"{label} leaked an absolute checkout path")
     return path
 
@@ -358,6 +568,83 @@ def parse_cache(text: str) -> dict[str, str]:
                 raise ValueError(f"duplicate CMake cache key: {key}")
             values[key] = value
     return values
+
+
+def normalize_checkout_text(
+    text: str, source_root: pathlib.Path,
+) -> str:
+    pattern = re.compile(
+        re.escape(str(source_root.resolve())) + r"(?=\Z|[/\\=\s\"'])")
+    return pattern.sub(NORMALIZATION_TOKEN, text)
+
+
+def dependency_source_closure(
+    entries: object, build_dir: str, source_root: pathlib.Path,
+    evidence_root: pathlib.Path, *, live: bool,
+) -> tuple[str, ...]:
+    if not isinstance(entries, list) or len(entries) != len(ARCHIVE_MEMBERS):
+        raise ValueError("dependency-file matrix changed")
+    closure = {"CMakeLists.txt", "cmake/leopardConfig.cmake.in"}
+    build_paths: list[str] = []
+    dependency_names: list[str] = []
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict) or set(entry) != {"build_path", "retained"}:
+            raise ValueError("dependency-file record schema changed")
+        build_path = entry["build_path"]
+        if not isinstance(build_path, str):
+            raise ValueError("dependency build path is invalid")
+        try:
+            raw_path = resolve_path(build_path, evidence_root)
+        except ValueError as error:
+            raise ValueError("dependency build path escapes evidence root") from error
+        retained = validate_normalized_text(
+            entry["retained"], f"dependency file {index}", evidence_root,
+            require_token=False, checkout_root=source_root)
+        retained_text = retained.read_text(encoding="utf-8")
+        if live:
+            if not raw_path.is_file():
+                raise ValueError("live dependency file is missing")
+            live_text = raw_path.read_text(encoding="utf-8", errors="strict")
+            if normalize_checkout_text(live_text, source_root) != retained_text:
+                raise ValueError("live dependency file differs from retained bytes")
+        flattened = retained_text.replace("\\\n", " ")
+        if ":" not in flattened:
+            raise ValueError("retained dependency file is malformed")
+        for token in shlex.split(flattened.split(":", 1)[1]):
+            if token.startswith(f"{NORMALIZATION_TOKEN}/"):
+                candidate = token[len(NORMALIZATION_TOKEN) + 1:]
+            elif token.startswith("/"):
+                continue
+            else:
+                candidate = posixpath.normpath(
+                    posixpath.join(build_dir, token))
+            if (candidate == build_dir or
+                    candidate.startswith(f"{build_dir}/")):
+                continue
+            if (candidate.startswith("../") or candidate == ".." or
+                    candidate.startswith("/") or "\\" in candidate):
+                raise ValueError("dependency source path is not canonical")
+            closure.add(candidate)
+        build_paths.append(build_path)
+        dependency_names.append(pathlib.PurePosixPath(build_path).name)
+    if build_paths != sorted(set(build_paths)):
+        raise ValueError("dependency build paths are noncanonical or duplicated")
+    if sorted(dependency_names) != sorted(
+            f"{member}.d" for member in ARCHIVE_MEMBERS):
+        raise ValueError("dependency-file object identities changed")
+    return tuple(sorted(closure))
+
+
+def validate_source_closure_paths(closure: object) -> list[str]:
+    if not isinstance(closure, list) or len(closure) != len(
+            EXPECTED_SOURCE_CLOSURE):
+        raise ValueError("core source closure is incomplete")
+    if not all(isinstance(entry, dict) for entry in closure):
+        raise ValueError("core source closure record is malformed")
+    paths = [entry.get("path") for entry in closure]
+    if paths != list(EXPECTED_SOURCE_CLOSURE):
+        raise ValueError("source closure exact set/order changed")
+    return paths
 
 
 def compiler_identity(record: dict, family: str) -> tuple[str, str]:
@@ -551,7 +838,8 @@ def validate_smoke(data: dict[str, Any], affinity: list[int]) -> None:
 
 def validate_manifest(
     data: dict[str, Any], *, source_root: pathlib.Path = ROOT,
-    live: bool = False, require_checkout_head: bool = False,
+    evidence_root: pathlib.Path | None = None, live: bool = False,
+    require_checkout_head: bool = False,
 ) -> None:
     required_top = {
         "builds", "core_git_sha", "normalization", "reproducibility",
@@ -572,6 +860,8 @@ def validate_manifest(
     }:
         raise ValueError("normalization identity changed")
     source_root = source_root.resolve()
+    evidence_root = (
+        source_root if evidence_root is None else evidence_root.resolve())
     serialized = json.dumps(data, sort_keys=True)
     if str(source_root.resolve()) in serialized or ABSOLUTE_PROJECT_PATH.search(
             serialized):
@@ -612,10 +902,10 @@ def validate_manifest(
             "cmake", "cmake_cache", "cmake_linker", "compile_argv",
             "compile_stderr", "compile_stdout", "compiler",
             "configure_argv", "configure_stderr", "configure_stdout",
-            "cxx_compiler", "executable", "gmake", "instrumentation",
-            "launcher_python", "library", "link_driver", "name", "nm",
-            "prefix_map_flags", "ranlib", "sanitizer", "source_closure",
-            "standalone_linker",
+            "cxx_compiler", "dependency_files", "executable", "gmake",
+            "instrumentation", "jobs", "launcher_python", "library",
+            "link_driver", "name", "nm", "prefix_map_flags", "ranlib",
+            "sanitizer", "source_closure", "standalone_linker",
         }
         if set(build) != required:
             raise ValueError("build record schema changed")
@@ -657,6 +947,9 @@ def validate_manifest(
         compile_argv = validate_argv(
             build["compile_argv"], token_counts["compile"],
             f"{name} compile", require_token=True, source_root=source_root)
+        jobs = build["jobs"]
+        if type(jobs) is not int or not 1 <= jobs <= 8:
+            raise ValueError("build job count is not a typed value in 1..8")
         flags = build["prefix_map_flags"]
         mandatory = [
             f"-ffile-prefix-map={NORMALIZATION_TOKEN}={PREFIX_MAP_TARGET}",
@@ -670,7 +963,7 @@ def validate_manifest(
                 not build_dir.endswith(f"/core-{name}")):
             raise ValueError("build directory is not portable or canonical")
         try:
-            resolve_path(build_dir, source_root)
+            resolve_path(build_dir, evidence_root)
         except ValueError as error:
             raise ValueError("build directory escapes the source checkout") from error
         candidate_root = build_dir.rsplit("/", 1)[0]
@@ -684,10 +977,10 @@ def validate_manifest(
                 build["executable"]["path"] != expected_executable):
             raise ValueError("build output path changed")
         library = validate_artifact(
-            build["library"], f"{name} archive", source_root, required=live,
+            build["library"], f"{name} archive", evidence_root, required=live,
             check_if_present=live)
         executable = validate_artifact(
-            build["executable"], f"{name} executable", source_root, required=live,
+            build["executable"], f"{name} executable", evidence_root, required=live,
             check_if_present=live)
         log_paths: dict[str, pathlib.Path] = {}
         for label in (
@@ -695,10 +988,10 @@ def validate_manifest(
             "build_stderr", "compile_stdout", "compile_stderr", "cmake_cache",
         ):
             log_paths[label] = validate_normalized_text(
-                build[label], f"{name} {label}", source_root,
+                build[label], f"{name} {label}", evidence_root,
                 require_token=label in {
                     "configure_stdout", "build_stdout", "compile_stderr",
-                    "cmake_cache"})
+                    "cmake_cache"}, checkout_root=source_root)
 
         prefix_text = " ".join(flags)
         core_flags = prefix_text + (
@@ -726,7 +1019,7 @@ def validate_manifest(
         expected_build = [
             str(records["cmake"]), "--build",
             f"{NORMALIZATION_TOKEN}/{build_dir}", "--target", "libleopard",
-            "--verbose", "--", build_argv[-1],
+            "--verbose", "--", f"-j{jobs}",
         ]
         expected_compile_prefix = [
             str(records["compiler"]), "-v", "-Wl,-v", "-std=c++11", "-g",
@@ -862,10 +1155,12 @@ def validate_manifest(
             raise ValueError("sanitizer summary or member attribution changed")
         executable_scan = validate_normalized_text(
             instrumentation["executable_symbol_scan"],
-            f"{name} executable scan", source_root, require_token=False)
+            f"{name} executable scan", evidence_root, require_token=False,
+            checkout_root=source_root)
         archive_scan = validate_normalized_text(
             instrumentation["core_archive_symbol_scan"],
-            f"{name} archive scan", source_root, require_token=False)
+            f"{name} archive scan", evidence_root, require_token=False,
+            checkout_root=source_root)
         validate_symbol_scan(
             executable_scan.read_text(encoding="utf-8"), executable.name,
             archive=False, expected_counts=expected_executable_counts,
@@ -879,9 +1174,7 @@ def validate_manifest(
             live_nm(build["nm"], library, archive_scan)
 
         closure = build["source_closure"]
-        if not isinstance(closure, list) or len(closure) < 12:
-            raise ValueError("core source closure is incomplete")
-        closure_paths: list[str] = []
+        validate_source_closure_paths(closure)
         for index, entry in enumerate(closure):
             validate_artifact(
                 entry, f"{name} source closure {index}", source_root, required=True)
@@ -890,14 +1183,13 @@ def validate_manifest(
                 raise ValueError("source closure path is not portable")
             validate_git_artifact(
                 core_sha, entry, relative, "source closure", source_root)
-            closure_paths.append(relative)
-        if closure_paths != sorted(set(closure_paths)):
-            raise ValueError("source closure order or uniqueness changed")
-        if not {
-            "CMakeLists.txt", "cmake/leopardConfig.cmake.in", "leopard2.cpp",
-            "LeopardFF8.cpp", "LeopardFF16.cpp",
-        }.issubset(closure_paths):
-            raise ValueError("source closure lacks required configure/core inputs")
+        derived_closure = dependency_source_closure(
+            build["dependency_files"], build_dir, source_root, evidence_root,
+            live=live)
+        if derived_closure != EXPECTED_SOURCE_CLOSURE:
+            raise ValueError("dependency files do not reproduce source closure")
+        if by_name and closure != next(iter(by_name.values()))["source_closure"]:
+            raise ValueError("equivalent builds have different source closures")
         by_name[name] = build
 
     reproducibility = data["reproducibility"]
@@ -922,7 +1214,8 @@ def validate_manifest(
         reproducibility["comparison"], expected_fingerprints,
         normalized_text_record_count)
     validate_peer_attestation(
-        reproducibility["comparison"], data, source_root)
+        reproducibility["comparison"], data, source_root, evidence_root,
+        live=live)
 
     runs = data["runs"]
     expected_runs = [*BUILD_NAMES, "smoke-nonauthoritative"]
@@ -961,11 +1254,14 @@ def validate_manifest(
             run["argv"], run["argv_source_root_tokens"], f"{name} run",
             require_token=True, source_root=source_root)
         result = validate_normalized_text(
-            run["result"], f"{name} result", source_root, require_token=False)
+            run["result"], f"{name} result", evidence_root,
+            require_token=False, checkout_root=source_root)
         stdout = validate_normalized_text(
-            run["stdout"], f"{name} stdout", source_root, require_token=False)
+            run["stdout"], f"{name} stdout", evidence_root,
+            require_token=False, checkout_root=source_root)
         stderr = validate_normalized_text(
-            run["stderr"], f"{name} stderr", source_root, require_token=False)
+            run["stderr"], f"{name} stderr", evidence_root,
+            require_token=False, checkout_root=source_root)
         expected_argv = [
             str(taskset), "-c", str(cpu),
             f"{NORMALIZATION_TOKEN}/{by_name[build_name]['executable']['path']}",
@@ -1003,6 +1299,9 @@ def main() -> int:
         "--source-root", type=pathlib.Path, default=ROOT,
         help="checkout root containing the manifest's retained artifacts")
     parser.add_argument(
+        "--evidence-root", type=pathlib.Path,
+        help="optional immutable root for build/log/result artifacts")
+    parser.add_argument(
         "--live", action="store_true",
         help="require exact recorded tools/build outputs and replay nm scans")
     parser.add_argument(
@@ -1011,7 +1310,8 @@ def main() -> int:
     arguments = parser.parse_args()
     data = json.loads(arguments.manifest.read_text(encoding="utf-8"))
     validate_manifest(
-        data, source_root=arguments.source_root, live=arguments.live,
+        data, source_root=arguments.source_root,
+        evidence_root=arguments.evidence_root, live=arguments.live,
         require_checkout_head=arguments.require_checkout_head)
     print("C7 evidence validation passed (live)" if arguments.live else
           "C7 evidence validation passed (portable)")

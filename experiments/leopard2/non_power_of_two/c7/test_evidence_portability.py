@@ -252,6 +252,14 @@ class PortabilityTests(unittest.TestCase):
             "checkout_roots_scanned": 2,
             "current_scan": scan,
             "peer_scan": scan,
+            "peer_manifest": {
+                "path": "results/peer-manifest.json",
+                "bytes": 1, "sha256": "a" * 64,
+            },
+            "peer_evidence_bundle": {
+                "path": "results/peer-evidence-bundle.tar.gz",
+                "bytes": 1, "sha256": "c" * 64,
+            },
             "peer_attestation": {
                 "path": "results/peer-reproducibility-attestation.json",
                 "bytes": 1, "sha256": "b" * 64,
@@ -275,6 +283,27 @@ class PortabilityTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_evidence.validate_comparison(
                 wrong_scan, fingerprints, 42)
+
+    def test_canonical_peer_bundle_round_trip(self) -> None:
+        files = {
+            "evidence/empty.txt": b"",
+            "evidence/result.json": b'{"status":"pass"}\n',
+        }
+        records = {
+            path: {
+                "path": path, "bytes": len(contents),
+                "sha256": hashlib.sha256(contents).hexdigest(),
+                "source_root_tokens": 0,
+            }
+            for path, contents in files.items()
+        }
+        bundle = run_matrix.canonical_peer_bundle(files)
+        self.assertEqual(
+            bundle[:10], b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff")
+        self.assertEqual(
+            validate_evidence._read_peer_bundle(bundle, records), files)
+        with self.assertRaises(ValueError):
+            validate_evidence._read_peer_bundle(bundle + bundle, records)
 
 
 if __name__ == "__main__":
