@@ -91,6 +91,8 @@ struct Options
     uint64_t seed;
     bool force_generic_decode;
     bool force_specialized_decode;
+    bool skip_legacy;
+    bool retain_samples;
     std::string output;
 
     Options()
@@ -109,6 +111,8 @@ struct Options
         , seed(1)
         , force_generic_decode(false)
         , force_specialized_decode(false)
+        , skip_legacy(false)
+        , retain_samples(false)
         , output("-")
     {}
 };
@@ -213,6 +217,7 @@ struct Summary
     double mad_us;
     double minimum_us;
     double maximum_us;
+    std::vector<double> samples_us;
 };
 
 static void Fail(const std::string& message)
@@ -355,6 +360,8 @@ static void Usage(std::ostream& output, const char* program)
         << "  --seed N              Deterministic seed (default 1)\n"
         << "  --force-generic       Use the retained O(N log N) decoder\n"
         << "  --force-specialized   Use the profile-specific transform decoder\n"
+        << "  --skip-legacy         Do not run the in-tree legacy comparison\n"
+        << "  --retain-samples      Emit raw timing samples using benchmark schema v2\n"
         << "  --json PATH           JSON output path, or - for stdout\n"
         << "  --help                 Show this message\n";
 }
@@ -385,6 +392,8 @@ static Options ParseOptions(int argc, char** argv)
         else if (argument == "--seed") options.seed = ParseUnsigned(NeedValue(argc, argv, i), "--seed");
         else if (argument == "--force-generic") options.force_generic_decode = true;
         else if (argument == "--force-specialized") options.force_specialized_decode = true;
+        else if (argument == "--skip-legacy") options.skip_legacy = true;
+        else if (argument == "--retain-samples") options.retain_samples = true;
         else if (argument == "--json" || argument == "--output") options.output = NeedValue(argc, argv, i);
         else Fail("unknown argument: " + argument);
     }
@@ -503,9 +512,13 @@ static double Median(std::vector<double> values)
     return (values[middle - 1] + upper) * 0.5;
 }
 
-static Summary Summarize(const std::vector<double>& samples)
+static Summary Summarize(
+    const std::vector<double>& samples,
+    bool retain_samples)
 {
     Summary summary;
+    if (retain_samples)
+        summary.samples_us = samples;
     summary.median_us = Median(samples);
     std::vector<double> deviations(samples.size());
     for (size_t i = 0; i < samples.size(); ++i)
@@ -517,7 +530,11 @@ static Summary Summarize(const std::vector<double>& samples)
 }
 
 template<class Callable>
-static Summary Measure(size_t iterations, size_t inner_calls, const Callable& callable)
+static Summary Measure(
+    size_t iterations,
+    size_t inner_calls,
+    bool retain_samples,
+    const Callable& callable)
 {
     typedef std::chrono::steady_clock Clock;
     std::vector<double> samples;
@@ -532,7 +549,7 @@ static Summary Measure(size_t iterations, size_t inner_calls, const Callable& ca
             std::chrono::duration<double, std::micro> >(end - begin).count();
         samples.push_back(microseconds / static_cast<double>(inner_calls));
     }
-    return Summarize(samples);
+    return Summarize(samples, retain_samples);
 }
 
 static void FillOriginals(Stripe& stripe, const Options& options, size_t stripe_index)
@@ -668,6 +685,26 @@ static double GigabytesPerSecond(uint64_t bytes, double microseconds)
     return static_cast<double>(bytes) / (microseconds * 1000.0);
 }
 
+static uint64_t Fnv1a64Update(uint64_t digest, const void* data, size_t bytes)
+{
+    static const uint64_t kPrime = UINT64_C(1099511628211);
+    const uint8_t* input = static_cast<const uint8_t*>(data);
+    for (size_t i = 0; i < bytes; ++i)
+    {
+        digest ^= input[i];
+        digest *= kPrime;
+    }
+    return digest;
+}
+
+static std::string HexU64(uint64_t value)
+{
+    std::ostringstream output;
+    output << std::hex << std::nouppercase << std::setw(16)
+           << std::setfill('0') << value;
+    return output.str();
+}
+
 static uint64_t CheckedU64Product(uint64_t left, uint64_t right, const char* what)
 {
     if (left != 0 && right > std::numeric_limits<uint64_t>::max() / left)
@@ -690,30 +727,57 @@ static void WriteSummary(
     const char* input_name,
     uint64_t output_bytes,
     const char* output_name,
-    unsigned indent)
+    unsigned indent,
+    bool retain_samples)
 {
     const std::string spaces(indent, ' ');
     output << "{\n"
            << spaces << "  \"median_us_per_batch_call\": " << summary.median_us << ",\n"
            << spaces << "  \"mad_us_per_batch_call\": " << summary.mad_us << ",\n"
            << spaces << "  \"minimum_us_per_batch_call\": " << summary.minimum_us << ",\n"
-           << spaces << "  \"maximum_us_per_batch_call\": " << summary.maximum_us << ",\n"
-           << spaces << "  \"" << input_name << "\": ";
+           << spaces << "  \"maximum_us_per_batch_call\": " << summary.maximum_us << ",\n";
+    if (retain_samples)
+    {
+        output << spaces << "  \"samples_us_per_batch_call\": [";
+        for (size_t i = 0; i < summary.samples_us.size(); ++i)
+        {
+            if (i != 0)
+                output << ", ";
+            output << summary.samples_us[i];
+        }
+        output << "],\n";
+    }
+    output << spaces << "  \"" << input_name << "\": ";
     WriteOptionalRate(output, input_bytes, summary.median_us);
     output << ",\n" << spaces << "  \"" << output_name << "\": ";
     WriteOptionalRate(output, output_bytes, summary.median_us);
     output << "\n" << spaces << '}';
 }
 
-static void WriteSetupSummary(std::ostream& output, const Summary& summary, unsigned indent)
+static void WriteSetupSummary(
+    std::ostream& output,
+    const Summary& summary,
+    unsigned indent,
+    bool retain_samples)
 {
     const std::string spaces(indent, ' ');
     output << "{\n"
            << spaces << "  \"median_us\": " << summary.median_us << ",\n"
            << spaces << "  \"mad_us\": " << summary.mad_us << ",\n"
            << spaces << "  \"minimum_us\": " << summary.minimum_us << ",\n"
-           << spaces << "  \"maximum_us\": " << summary.maximum_us << "\n"
-           << spaces << '}';
+           << spaces << "  \"maximum_us\": " << summary.maximum_us;
+    if (retain_samples)
+    {
+        output << ",\n" << spaces << "  \"samples_us\": [";
+        for (size_t i = 0; i < summary.samples_us.size(); ++i)
+        {
+            if (i != 0)
+                output << ", ";
+            output << summary.samples_us[i];
+        }
+        output << ']';
+    }
+    output << "\n" << spaces << '}';
 }
 
 static void WriteAmortizedDecodeSummary(
@@ -821,14 +885,50 @@ static int Run(const Options& options)
         decode_items[i].scratch_bytes = stripe.decode_scratch.size();
     }
 
+    const bool extended_schema = options.skip_legacy || options.retain_samples;
+    static const uint64_t kFnv1a64Offset = UINT64_C(14695981039346656037);
+    uint64_t original_digest = kFnv1a64Offset;
+    uint64_t parity_digest = kFnv1a64Offset;
+    uint64_t recovered_digest = kFnv1a64Offset;
+
     RequireLeo2(leo2_encode_batch(codec, &encode_items[0], encode_items.size()),
         "correctness encode batch");
+    if (extended_schema)
+    {
+        for (size_t stripe_index = 0; stripe_index < stripes.size(); ++stripe_index)
+        {
+            const Stripe& stripe = *stripes[stripe_index];
+            original_digest = Fnv1a64Update(original_digest,
+                stripe.original_storage.data(),
+                CheckedSize(options.k, options.bytes, "original digest"));
+            parity_digest = Fnv1a64Update(parity_digest,
+                stripe.recovery_storage.data(),
+                CheckedSize(options.r, options.bytes, "parity digest"));
+        }
+    }
+
     RequireLeo2(leo2_decode_plan_execute_batch(plan, &decode_items[0], decode_items.size()),
         "correctness decode batch");
     for (size_t i = 0; i < stripes.size(); ++i)
         CheckRestored(*stripes[i], options, losses, "Leopard2");
+    if (extended_schema)
+    {
+        for (size_t stripe_index = 0; stripe_index < stripes.size(); ++stripe_index)
+        {
+            const Stripe& stripe = *stripes[stripe_index];
+            for (size_t loss_i = 0; loss_i < losses.size(); ++loss_i)
+            {
+                const uint32_t index = losses[loss_i];
+                const uint8_t* restored = stripe.restored_storage.bytes() +
+                    static_cast<size_t>(index) * static_cast<size_t>(options.bytes);
+                recovered_digest = Fnv1a64Update(recovered_digest, restored,
+                    static_cast<size_t>(options.bytes));
+            }
+        }
+    }
 
-    const Summary codec_setup = Measure(options.iterations, 1, [&]() {
+    const Summary codec_setup = Measure(
+        options.iterations, 1, options.retain_samples, [&]() {
         leo2_codec* temporary = NULL;
         RequireLeo2(leo2_codec_create(
             context, options.k, options.r, options.profile, options.field,
@@ -837,7 +937,8 @@ static int Run(const Options& options)
         leo2_codec_destroy(temporary);
     });
 
-    const Summary plan_setup = Measure(options.iterations, 1, [&]() {
+    const Summary plan_setup = Measure(
+        options.iterations, 1, options.retain_samples, [&]() {
         leo2_decode_plan* temporary = NULL;
         RequireLeo2(leo2_decode_plan_create(codec,
             &original_present[0], &recovery_present[0], &temporary),
@@ -853,16 +954,20 @@ static int Run(const Options& options)
             "decode warmup");
     }
 
-    const Summary encode_execution = Measure(options.iterations, options.reuse, [&]() {
+    const Summary encode_execution = Measure(
+        options.iterations, options.reuse, options.retain_samples, [&]() {
         RequireLeo2(leo2_encode_batch(codec, &encode_items[0], encode_items.size()),
             "timed encode batch");
     });
-    const Summary decode_execution = Measure(options.iterations, options.reuse, [&]() {
+    const Summary decode_execution = Measure(
+        options.iterations, options.reuse, options.retain_samples, [&]() {
         RequireLeo2(leo2_decode_plan_execute_batch(plan, &decode_items[0], decode_items.size()),
             "timed decode batch");
     });
 
-    const std::string legacy_reason = LegacyUnavailableReason(options, codec);
+    const std::string legacy_reason = options.skip_legacy
+        ? "disabled by --skip-legacy"
+        : LegacyUnavailableReason(options, codec);
     const bool legacy_available = legacy_reason.empty();
     Summary legacy_encode = Summary();
     Summary legacy_decode = Summary();
@@ -913,13 +1018,15 @@ static int Run(const Options& options)
                     "legacy decode warmup");
             }
         }
-        legacy_encode = Measure(options.iterations, options.reuse, [&]() {
+        legacy_encode = Measure(
+            options.iterations, options.reuse, options.retain_samples, [&]() {
             for (size_t i = 0; i < legacy.size(); ++i)
                 RequireLegacy(leo_encode(options.bytes, options.k, options.r,
                     encode_work_count, &stripes[i]->original[0], &legacy[i]->encode_work[0]),
                     "timed legacy encode");
         });
-        legacy_decode = Measure(options.iterations, options.reuse, [&]() {
+        legacy_decode = Measure(
+            options.iterations, options.reuse, options.retain_samples, [&]() {
             for (size_t i = 0; i < legacy.size(); ++i)
                 RequireLegacy(leo_decode(options.bytes, options.k, options.r,
                     decode_work_count, &legacy[i]->received_original[0],
@@ -952,7 +1059,8 @@ static int Run(const Options& options)
     std::ostringstream json;
     json << std::fixed << std::setprecision(6);
     json << "{\n"
-         << "  \"schema\": \"leopard2-benchmark-v1\",\n"
+         << "  \"schema\": \"leopard2-benchmark-v"
+         << (extended_schema ? 2 : 1) << "\",\n"
          << "  \"build\": {\n"
          << "    \"compiler\": \"" << CompilerName() << "\",\n"
          << "    \"compiler_version\": \"" << JsonEscape(CompilerVersion()) << "\",\n"
@@ -967,8 +1075,15 @@ static int Run(const Options& options)
          << "    \"force_generic_decode\": "
          << (options.force_generic_decode ? "true" : "false") << ",\n"
          << "    \"force_specialized_decode\": "
-         << (options.force_specialized_decode ? "true" : "false") << ",\n"
-         << "    \"shard_bytes\": " << options.bytes << ",\n"
+         << (options.force_specialized_decode ? "true" : "false") << ",\n";
+    if (extended_schema)
+    {
+        json << "    \"skip_legacy\": "
+             << (options.skip_legacy ? "true" : "false") << ",\n"
+             << "    \"retain_samples\": "
+             << (options.retain_samples ? "true" : "false") << ",\n";
+    }
+    json << "    \"shard_bytes\": " << options.bytes << ",\n"
          << "    \"loss_count\": " << options.losses << ",\n"
          << "    \"missing_original_indices\": [";
     for (size_t i = 0; i < losses.size(); ++i)
@@ -1000,8 +1115,17 @@ static int Run(const Options& options)
         json << "\"matched\"\n";
     else
         json << "null\n";
-    json << "  },\n"
-         << "  \"memory\": {\n"
+    json << "  },\n";
+    if (extended_schema)
+    {
+        json << "  \"workload_digests\": {\n"
+             << "    \"algorithm\": \"fnv1a64\",\n"
+             << "    \"original_data\": \"" << HexU64(original_digest) << "\",\n"
+             << "    \"transmitted_parity\": \"" << HexU64(parity_digest) << "\",\n"
+             << "    \"recovered_originals\": \"" << HexU64(recovered_digest) << "\"\n"
+             << "  },\n";
+    }
+    json << "  \"memory\": {\n"
          << "    \"scratch_alignment\": " << leo2_scratch_alignment() << ",\n"
          << "    \"encode_scratch_bytes_per_stripe\": " << encode_scratch_bytes << ",\n"
          << "    \"decode_scratch_bytes_per_stripe\": " << decode_scratch_bytes << ",\n"
@@ -1010,15 +1134,15 @@ static int Run(const Options& options)
          << "  },\n"
          << "  \"metrics\": {\n"
          << "    \"codec_setup\": ";
-    WriteSetupSummary(json, codec_setup, 4);
+    WriteSetupSummary(json, codec_setup, 4, options.retain_samples);
     json << ",\n    \"encode_execution\": ";
     WriteSummary(json, encode_execution, encode_input_bytes, "input_GB_per_s",
-        encode_output_bytes, "parity_output_GB_per_s", 4);
+        encode_output_bytes, "parity_output_GB_per_s", 4, options.retain_samples);
     json << ",\n    \"decode_plan_setup\": ";
-    WriteSetupSummary(json, plan_setup, 4);
+    WriteSetupSummary(json, plan_setup, 4, options.retain_samples);
     json << ",\n    \"decode_execution\": ";
     WriteSummary(json, decode_execution, decode_input_bytes, "offered_received_GB_per_s",
-        decode_output_bytes, "repaired_output_GB_per_s", 4);
+        decode_output_bytes, "repaired_output_GB_per_s", 4, options.retain_samples);
     json << ",\n    \"decode_amortized_at_reuse\": ";
     WriteAmortizedDecodeSummary(json, plan_setup, decode_execution, options.reuse,
         decode_input_bytes, decode_output_bytes, 4);
@@ -1038,13 +1162,13 @@ static int Run(const Options& options)
          << "    \"encode_execution\": ";
     if (legacy_available)
         WriteSummary(json, legacy_encode, encode_input_bytes, "input_GB_per_s",
-            encode_output_bytes, "parity_output_GB_per_s", 4);
+            encode_output_bytes, "parity_output_GB_per_s", 4, options.retain_samples);
     else
         json << "null";
     json << ",\n    \"decode_including_setup\": ";
     if (legacy_available)
         WriteSummary(json, legacy_decode, decode_input_bytes, "offered_received_GB_per_s",
-            decode_output_bytes, "repaired_output_GB_per_s", 4);
+            decode_output_bytes, "repaired_output_GB_per_s", 4, options.retain_samples);
     else
         json << "null";
     json << "\n  }\n}\n";
