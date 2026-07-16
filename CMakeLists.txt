@@ -530,6 +530,11 @@ if(LEO2_BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_external_comparison.py
                 self-test)
         add_test(
+            NAME leopard2_operation_counts_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_operation_counts.py
+                self-test)
+        add_test(
             NAME leopard2_direct_encode_crossover_self_test
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_direct_encode_crossover.py

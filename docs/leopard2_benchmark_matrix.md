@@ -220,6 +220,8 @@ verify parsed and hashed counter evidence, atomic resume, post-run corruption
 rejection, optional-denied bare execution, required-denied preflight, and
 counter-executable replacement rejection. The matrix self-test verifies
 counter request generation and preservation of unavailable evidence.
+CTest also runs the independent operation-count model's schedule invariants;
+those counts remain modeled bounds rather than PMU observations.
 
 The benchmark executable separately records codec and decode-plan setup,
 execution, setup amortized at the selected reuse count, input and generated or
