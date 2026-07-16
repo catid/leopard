@@ -400,7 +400,7 @@ def validate_manifest(
     build_root: str | None = None
     program_roles = (
         "ar", "c_compiler", "cmake", "cmake_linker", "compiler",
-        "cxx_compiler", "gmake", "link_driver", "nm", "ranlib",
+        "cxx_compiler", "gmake", "launcher_python", "link_driver", "nm", "ranlib",
         "standalone_linker",
     )
     for build in builds:
@@ -411,8 +411,9 @@ def validate_manifest(
             "compile_stderr", "compile_stdout", "compiler",
             "configure_argv", "configure_stderr", "configure_stdout",
             "cxx_compiler", "executable", "gmake", "instrumentation",
-            "library", "link_driver", "name", "nm", "prefix_map_flags",
-            "ranlib", "sanitizer", "source_closure", "standalone_linker",
+            "launcher_python", "library", "link_driver", "name", "nm",
+            "prefix_map_flags", "ranlib", "sanitizer", "source_closure",
+            "standalone_linker",
         }
         if set(build) != required:
             raise ValueError("build record schema changed")
@@ -513,6 +514,8 @@ def validate_manifest(
             f"-DCMAKE_C_FLAGS={core_flags}",
             f"-DCMAKE_CXX_FLAGS={core_flags}",
             f"-DCMAKE_EXE_LINKER_FLAGS={linker_flags}",
+            f"-DCMAKE_CXX_COMPILER_LAUNCHER={records['launcher_python']};"
+            f"{NORMALIZATION_TOKEN}/{data['runner']['path']};--compiler-launch",
         ]
         expected_build = [
             str(records["cmake"]), "--build",
@@ -538,13 +541,12 @@ def validate_manifest(
         else:
             expected_compile_prefix += ["-O2"]
         expected_compile_prefix += [
-            f"{NORMALIZATION_TOKEN}/{data['source']['path']}",
-            f"{NORMALIZATION_TOKEN}/{expected_library}", "-pthread",
+            data["source"]["path"], expected_library, "-pthread",
         ]
         if not sanitizer:
             expected_compile_prefix += ["-fopenmp"]
         expected_compile_prefix += [
-            "-o", f"{NORMALIZATION_TOKEN}/{expected_executable}"]
+            "-o", expected_executable]
         if (configure != expected_configure or build_argv != expected_build or
                 compile_argv != expected_compile_prefix):
             raise ValueError("exact normalized build command changed")
@@ -555,6 +557,9 @@ def validate_manifest(
             "CMAKE_BUILD_TYPE": "Debug" if sanitizer else "Release",
             "CMAKE_COMMAND": str(records["cmake"]),
             "CMAKE_CXX_COMPILER": str(records["cxx_compiler"]),
+            "CMAKE_CXX_COMPILER_LAUNCHER": (
+                f"{records['launcher_python']};{NORMALIZATION_TOKEN}/"
+                f"{data['runner']['path']};--compiler-launch"),
             "CMAKE_CXX_FLAGS": core_flags,
             "CMAKE_C_COMPILER": str(records["c_compiler"]),
             "CMAKE_C_FLAGS": core_flags,
@@ -605,7 +610,9 @@ def validate_manifest(
         for required in (
             str(records["cmake"]), str(records["cxx_compiler"]),
             str(records["gmake"]), str(records["ar"]), str(records["ranlib"]),
-            *flags, "Built target leopard2_backend_ssse3",
+            str(records["launcher_python"]),
+            f"{NORMALIZATION_TOKEN}/{data['runner']['path']}", *flags,
+            "Built target leopard2_backend_ssse3",
             "Built target leopard2_backend_avx2",
             "Linking CXX static library liblibleopard.a", "Built target libleopard",
         ):

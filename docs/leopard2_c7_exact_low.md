@@ -260,7 +260,12 @@ Manifest v3 normalizes only the exact checkout-root prefix to literal
 `${LEO2_SOURCE_ROOT}` in retained text and argv.  All core and standalone
 compiles use supported `-ffile-prefix-map` and `-fdebug-prefix-map`, plus
 `-fmacro-prefix-map` when both the paired C and C++ drivers accept it.  Their
-stable binary mapping target is literal `LEO2_SOURCE_ROOT`.  A two-checkout
+stable binary mapping target is literal `LEO2_SOURCE_ROOT`.  The hash-bound
+runner also launches core compilers with checkout inputs spelled relative to
+the stable build directory, because Clang ASan global metadata preserves an
+absolute source argument independently of those maps; the standalone harness
+uses checkout-relative source, archive, and output arguments for the same
+reason.  A two-checkout
 proof requires every backend's archive and executable hashes to agree and
 scans both retained text and binary bytes for either checkout root.  The
 final manifest retains a machine-checkable `comparison` attestation: the peer

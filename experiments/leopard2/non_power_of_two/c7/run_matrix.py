@@ -18,6 +18,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 from typing import Any, Iterable
 
 
@@ -116,6 +117,42 @@ def normalize_argv(argv: list[str]) -> tuple[list[str], int]:
         normalized.append(value)
         count += replacements
     return normalized, count
+
+
+def portable_compiler_argv(
+    argv: list[str], working_directory: pathlib.Path,
+) -> list[str]:
+    """Spell checkout inputs relative to CMake's stable build directory.
+
+    Clang's ASan global metadata does not honor prefix maps for an absolute
+    source argv.  Relative source and include spellings are reproducible and
+    still leave the prefix-map options in place for debug and macro paths.
+    """
+    root = str(ROOT)
+    prefix = root + os.sep
+    relative_root = os.path.relpath(ROOT, working_directory)
+    rewritten: list[str] = []
+    for argument in argv:
+        if argument == root:
+            rewritten.append(relative_root)
+        elif argument.startswith(prefix):
+            rewritten.append(os.path.relpath(argument, working_directory))
+        elif argument == f"-I{root}":
+            rewritten.append(f"-I{relative_root}")
+        elif argument.startswith(f"-I{prefix}"):
+            rewritten.append(
+                "-I" + os.path.relpath(argument[2:], working_directory))
+        else:
+            rewritten.append(argument)
+    return rewritten
+
+
+def compiler_launch(argv: list[str]) -> int:
+    if not argv:
+        raise SystemExit("--compiler-launch requires the compiler argv")
+    completed = subprocess.run(
+        portable_compiler_argv(argv, pathlib.Path.cwd()), check=False)
+    return completed.returncode
 
 
 def normalized_text_artifact(path: pathlib.Path) -> dict[str, Any]:
@@ -272,7 +309,7 @@ def dependency_closure(build_dir: pathlib.Path) -> list[dict[str, Any]]:
         for token in shlex.split(flattened.split(":", 1)[1]):
             candidate = pathlib.Path(token)
             if not candidate.is_absolute():
-                candidate = (ROOT / candidate).resolve()
+                candidate = (build_dir / candidate).resolve()
             else:
                 candidate = candidate.resolve()
             try:
@@ -309,6 +346,8 @@ def cmake_build(
     linker_flags = (
         "-fsanitize=address,undefined -fno-omit-frame-pointer"
         if sanitizer else "")
+    launcher_python = pathlib.Path(sys.executable).resolve()
+    launcher = f"{launcher_python};{pathlib.Path(__file__).resolve()};--compiler-launch"
     configure_argv = [
         str(resolve_program("cmake")), "-S", str(ROOT), "-B", str(build_dir),
         "-G", "Unix Makefiles",
@@ -322,6 +361,7 @@ def cmake_build(
         f"-DCMAKE_C_FLAGS={flag_text}",
         f"-DCMAKE_CXX_FLAGS={flag_text}",
         f"-DCMAKE_EXE_LINKER_FLAGS={linker_flags}",
+        f"-DCMAKE_CXX_COMPILER_LAUNCHER={launcher}",
     ]
     run_logged(configure_argv, configure_stdout, configure_stderr)
     cache_path = build_dir / "CMakeCache.txt"
@@ -372,6 +412,7 @@ def cmake_build(
         "ar": program_record(archive_program),
         "ranlib": program_record(ranlib_program),
         "cmake_linker": program_record(cmake_linker),
+        "launcher_python": program_record(launcher_python),
         "library": artifact(library),
         "source_closure": dependency_closure(build_dir),
         "build_dir": relative(build_dir),
@@ -410,10 +451,10 @@ def compile_experiment(
         ])
     else:
         argv.append("-O2")
-    argv.extend([str(SOURCE), str(library_path), "-pthread"])
+    argv.extend([relative(SOURCE), relative(library_path), "-pthread"])
     if not build["sanitizer"]:
         argv.append("-fopenmp")
-    argv.extend(["-o", str(executable)])
+    argv.extend(["-o", relative(executable)])
     run_logged(argv, stdout_path, stderr_path)
     nm = resolve_program("nm")
     archive_program = pathlib.Path(build["ar"]["path"])
@@ -767,4 +808,6 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) >= 2 and sys.argv[1] == "--compiler-launch":
+        raise SystemExit(compiler_launch(sys.argv[2:]))
     raise SystemExit(main())

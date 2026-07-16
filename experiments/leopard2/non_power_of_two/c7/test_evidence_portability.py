@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import os
 import pathlib
 import subprocess
 import tempfile
@@ -41,6 +42,24 @@ class PortabilityTests(unittest.TestCase):
                 run_matrix.validate_cpus(cpus, smoke, allowed)
         with self.assertRaises(ValueError):
             run_matrix.default_cpus({1, 3, 5, 7})
+
+    def test_compiler_launcher_rewrites_only_exact_checkout_paths(self) -> None:
+        cwd = run_matrix.ROOT / ".research/leopard2/c7-launch/core-scalar"
+        root = str(run_matrix.ROOT)
+        relative_root = os.path.relpath(run_matrix.ROOT, cwd)
+        argv = [
+            "/usr/bin/c++", f"-I{root}", f"{root}/leopard.cpp",
+            f"-ffile-prefix-map={root}=LEO2_SOURCE_ROOT",
+            f"{root}-sibling/leopard.cpp",
+        ]
+        self.assertEqual(
+            run_matrix.portable_compiler_argv(argv, cwd),
+            [
+                "/usr/bin/c++", f"-I{relative_root}",
+                os.path.relpath(run_matrix.ROOT / "leopard.cpp", cwd),
+                f"-ffile-prefix-map={root}=LEO2_SOURCE_ROOT",
+                f"{root}-sibling/leopard.cpp",
+            ])
 
     def test_normalized_artifact_schema_tokens_and_path_leaks(self) -> None:
         with tempfile.TemporaryDirectory(
