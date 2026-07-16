@@ -132,4 +132,7 @@ if(LEO_MAIN_PYTHON_EXECUTABLE)
             "${CMAKE_CURRENT_SOURCE_DIR}/test_legacy_main_benchmark.py"
             --benchmark $<TARGET_FILE:leopard_main_benchmark>
             --compile-commands "${CMAKE_BINARY_DIR}/compile_commands.json")
+    add_test(NAME leopard_main_compare_runner_selftest
+        COMMAND "${LEO_MAIN_PYTHON_EXECUTABLE}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/test_run_abba.py")
 endif()
