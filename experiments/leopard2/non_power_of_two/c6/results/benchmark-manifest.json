@@ -1,5 +1,4 @@
 {
-  "cell_count": 50,
   "command": [
     "build/c6/c6-avx2",
     "--backend",
@@ -8,20 +7,22 @@
   ],
   "core_git_sha": "48803c06fbd7a6802b4438af60e3104895938c9d",
   "cpu": 15,
+  "decode_cell_count": 56,
+  "encode_cell_count": 50,
   "environment": {
     "OMP_DYNAMIC": "FALSE",
     "OMP_NUM_THREADS": "1"
   },
-  "executable_sha256": "d4fe26a82e15099b4d5d096a186bfb0c03348146e802b1d84af3c5ea0f7049f0",
+  "executable_sha256": "11c1fd87f1c8470b19ad35de5fc33d659a91050ccda4c39c40eeb98e9f4f15aa",
   "library_sha256": "69c195f4b6e6ce6a7713fed29e17f7171cb6f2e17783e8a3feb48b2fb3fcf925",
   "result_path": "experiments/leopard2/non_power_of_two/c6/results/benchmark.json",
-  "result_sha256": "ba8ddff2b23fdd085e501d3670d839b51351aa4a90ebfde543f86cbb842854ba",
-  "runner_sha256": "c956c1701fa2cc1bc14b4f34874d8d1858ce695c92d8c2860138eac548d5dbc4",
-  "schema": "leopard2-c6-benchmark-run/v1",
-  "source_sha256": "6bf37c848d16af7f53fccadd2fdd6b643c1600a9fed39eb6390952ac18663a40",
+  "result_sha256": "f9ccc95a1b55635653460eb28feec654b17447cc11f7c3f27df76502ef07007b",
+  "runner_sha256": "934c73a953b6e8fe324e31441531eea15475a689c2670d0924feae4a1490cfb0",
+  "schema": "leopard2-c6-benchmark-run/v2",
+  "source_sha256": "177eb3df3a8e955a9813f18e80fbc9e2aca4c5b41c0f28744b36f34c9158a2bc",
   "status": "pass",
   "stderr_path": "experiments/leopard2/non_power_of_two/c6/results/benchmark.stderr.txt",
-  "stderr_sha256": "64de1ab137f7097583ab5dc1822b516a3a35533f54dbeb040571b27f040f2c72",
+  "stderr_sha256": "817e60787151509aea63ac547b6dcc036618cc732f059a4fde9ea22b5a476449",
   "stdout_path": "experiments/leopard2/non_power_of_two/c6/results/benchmark.stdout.txt",
   "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 }

@@ -1,9 +1,10 @@
 {
-  "schema":"leopard2-c6-cpp/v1",
-  "source_sha256":"6bf37c848d16af7f53fccadd2fdd6b643c1600a9fed39eb6390952ac18663a40",
+  "schema":"leopard2-c6-cpp/v2",
+  "source_sha256":"177eb3df3a8e955a9813f18e80fbc9e2aca4c5b41c0f28744b36f34c9158a2bc",
   "core_git_sha":"48803c06fbd7a6802b4438af60e3104895938c9d",
   "library_sha256":"94aceaef3acd1430dd6b3eb800db85ab16c7a9f31b34a1aa501f4228c416a94b",
   "sanitizer_mode":"none",
+  "allocation_tracking":"global-new",
   "compiler":"gcc",
   "compiler_version":"13.3.0",
   "cpu_model":"AMD Ryzen 9 9950X3D 16-Core Processor",
@@ -12,7 +13,9 @@
   "affinity":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31],
   "omp_num_threads":"1",
   "openmp_max_threads":1,
-  "correctness":{"cases":12,"coefficients":66920,"byte_comparisons":278074,"digest":"0xc58c8188e359fdf2"},
+  "correctness":{"cases":12,"coefficients":66920,"byte_comparisons":278074,"digest":"0xc58c8188e359fdf2","decode_cases":320,"decode_byte_comparisons":236500,"decode_digest":"0x29158fba4df259c1","no_loss_calls":96,"maximum_loss_cases":96,"hot_path_allocations":0},
   "cells":[
+  ],
+  "decode_cells":[
   ]
 }

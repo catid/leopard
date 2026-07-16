@@ -18,15 +18,21 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[4]
 HERE = Path(__file__).resolve().parent
 CORE_SHA = "48803c06fbd7a6802b4438af60e3104895938c9d"
-BENCHMARK_EXECUTABLE_SHA = "d4fe26a82e15099b4d5d096a186bfb0c03348146e802b1d84af3c5ea0f7049f0"
+BENCHMARK_EXECUTABLE_SHA = "11c1fd87f1c8470b19ad35de5fc33d659a91050ccda4c39c40eeb98e9f4f15aa"
 BENCHMARK_LIBRARY_SHA = "69c195f4b6e6ce6a7713fed29e17f7171cb6f2e17783e8a3feb48b2fb3fcf925"
-CPP_SCHEMA = "leopard2-c6-cpp/v1"
-CHECKPOINT_SCHEMA = "leopard2-c6-checkpoint/v1"
+CPP_SCHEMA = "leopard2-c6-cpp/v2"
+CHECKPOINT_SCHEMA = "leopard2-c6-checkpoint/v2"
 EXPECTED_CORRECTNESS = {
     "cases": 12,
     "coefficients": 66920,
     "byte_comparisons": 278074,
     "digest": "0xc58c8188e359fdf2",
+    "decode_cases": 320,
+    "decode_byte_comparisons": 236500,
+    "decode_digest": "0x29158fba4df259c1",
+    "no_loss_calls": 96,
+    "maximum_loss_cases": 96,
+    "hot_path_allocations": 0,
 }
 
 
@@ -98,6 +104,17 @@ def padded_scratch(profile: str, k: int, r: int, shard_bytes: int) -> int:
     return data_offset + slots * rounded
 
 
+def padded_decode_scratch(k: int, r: int, parent_count: int,
+                          shard_bytes: int) -> int:
+    rounded = align_up(shard_bytes, 64)
+    ranges = 2 * k + r
+    pointers = 2 * parent_count
+    slots = k + r + parent_count
+    pointer_offset = align_up(ranges * 16, 8)
+    data_offset = align_up(pointer_offset + pointers * 8, 64)
+    return data_offset + slots * rounded
+
+
 def expected_specs() -> set[tuple[str, int, int, int, int, int]]:
     geometries = (
         ("legacy_high_v1", 2, 129),
@@ -124,6 +141,37 @@ def expected_specs() -> set[tuple[str, int, int, int, int, int]]:
             output.add((profile, k, r, 1048576, 1, 1))
     if len(output) != 50:
         raise AssertionError(f"internal benchmark matrix has {len(output)} cells")
+    return output
+
+
+def expected_decode_specs() -> set[tuple[str, int, int, int, int, int, int]]:
+    patterns = (
+        ("legacy_high_v1", 2, 129, 2),
+        ("legacy_high_v1", 3, 129, 1),
+        ("legacy_high_v1", 3, 129, 3),
+        ("legacy_high_v1", 3, 130, 3),
+        ("legacy_high_v1", 4, 129, 4),
+        ("legacy_high_v1", 17, 129, 1),
+        ("legacy_high_v1", 17, 129, 4),
+        ("legacy_high_v1", 17, 129, 17),
+        ("low_v1", 129, 2, 2),
+        ("low_v1", 129, 3, 1),
+        ("low_v1", 129, 3, 3),
+        ("low_v1", 130, 3, 3),
+        ("low_v1", 129, 4, 4),
+        ("low_v1", 129, 17, 1),
+        ("low_v1", 129, 17, 4),
+        ("low_v1", 129, 17, 17),
+    )
+    output = set()
+    for profile, k, r, losses in patterns:
+        output.add((profile, k, r, losses, 64, 8, 8))
+        output.add((profile, k, r, losses, 1024, 8, 4))
+        output.add((profile, k, r, losses, 65536, 1, 1))
+        if k <= 3 or r <= 3:
+            output.add((profile, k, r, losses, 1048576, 1, 1))
+    if len(output) != 56:
+        raise AssertionError(f"internal decode matrix has {len(output)} cells")
     return output
 
 
@@ -220,8 +268,11 @@ def merge(paths: dict[str, Path]) -> dict[str, Any]:
     reference_correctness = None
     for label in ("auto", "scalar", "ssse3", "avx2"):
         data = artifacts[label]
-        if data.get("sanitizer_mode") != "none" or data.get("cells") != []:
+        if data.get("sanitizer_mode") != "none" or data.get("cells") != [] or \
+                data.get("decode_cells") != []:
             raise EvidenceError(f"{label}: backend artifact is not correctness-only")
+        if data.get("allocation_tracking") != "global-new":
+            raise EvidenceError(f"{label}: hot-path allocation tracking is not enabled")
         if data.get("requested_backend") != label:
             raise EvidenceError(f"{label}: requested backend label differs")
         if label in expected_runtime and data.get("runtime_backend") != expected_runtime[label]:
@@ -236,14 +287,19 @@ def merge(paths: dict[str, Path]) -> dict[str, Any]:
             raise EvidenceError("backend correctness digest is not deterministic")
 
     sanitizer = artifacts["asan-ubsan"]
-    if sanitizer.get("sanitizer_mode") != "asan-ubsan" or sanitizer.get("cells") != []:
+    if sanitizer.get("sanitizer_mode") != "asan-ubsan" or \
+            sanitizer.get("cells") != [] or sanitizer.get("decode_cells") != []:
         raise EvidenceError("sanitizer artifact does not identify correctness-only ASan+UBSan")
+    if sanitizer.get("allocation_tracking") != "disabled-for-sanitizer":
+        raise EvidenceError("sanitizer artifact does not declare disabled new interposition")
 
     benchmark = artifacts["benchmark"]
     if benchmark.get("requested_backend") != "avx2" or benchmark.get("runtime_backend") != "avx2":
         raise EvidenceError("benchmark did not run forced AVX2")
     if benchmark.get("sanitizer_mode") != "none":
         raise EvidenceError("benchmark is sanitizer-instrumented")
+    if benchmark.get("allocation_tracking") != "global-new":
+        raise EvidenceError("benchmark hot-path allocation tracking is not enabled")
     if benchmark.get("library_sha256") != BENCHMARK_LIBRARY_SHA:
         raise EvidenceError("benchmark linked archive differs from retained evidence")
     if benchmark.get("affinity") is None or len(benchmark["affinity"]) != 1:
@@ -253,7 +309,7 @@ def merge(paths: dict[str, Path]) -> dict[str, Any]:
 
     manifest = read_json(paths["benchmark-manifest"])
     if not isinstance(manifest, dict) or manifest.get("schema") != \
-            "leopard2-c6-benchmark-run/v1" or manifest.get("status") != "pass":
+            "leopard2-c6-benchmark-run/v2" or manifest.get("status") != "pass":
         raise EvidenceError("benchmark run manifest has the wrong schema or status")
     expected_manifest = {
         "core_git_sha": CORE_SHA,
@@ -265,7 +321,8 @@ def merge(paths: dict[str, Path]) -> dict[str, Any]:
         "stdout_sha256": sha256(paths["benchmark-stdout"]),
         "stderr_sha256": sha256(paths["benchmark-stderr"]),
         "cpu": benchmark["affinity"][0],
-        "cell_count": 50,
+        "encode_cell_count": 50,
+        "decode_cell_count": 56,
         "environment": {"OMP_NUM_THREADS": "1", "OMP_DYNAMIC": "FALSE"},
     }
     for name, value in expected_manifest.items():
@@ -323,6 +380,97 @@ def merge(paths: dict[str, Path]) -> dict[str, Any]:
     if seen != wanted:
         raise EvidenceError(f"benchmark matrix is incomplete: missing {sorted(wanted - seen)}")
 
+    plan_records = {
+        (record["profile"], record["K"], record["R"], record["losses"]): record
+        for record in algebra_raw.get("decoder_plan_records", [])
+    }
+    if len(plan_records) != 16 or algebra_raw.get("decoder") != {
+        "plans": 16,
+        "folded_nonzero_terms": 4933,
+        "recovered_values": 70,
+        "no_loss_execution_terms": 0,
+    }:
+        raise EvidenceError("independent decoder-plan algebra differs")
+    wanted_decode = expected_decode_specs()
+    wanted_plan_keys = {
+        (profile, k, r, losses)
+        for profile, k, r, losses, _bytes, _batch, _reuse in wanted_decode
+    }
+    if set(plan_records) != wanted_plan_keys:
+        raise EvidenceError("independent decoder-plan geometry differs")
+    for (profile, k, r, losses), record in plan_records.items():
+        expected_missing = [(index * k) // losses for index in range(losses)]
+        if record.get("missing_originals") != expected_missing or \
+                record.get("selected_parities") != list(range(losses)):
+            raise EvidenceError("independent decoder selection differs")
+        digest = record.get("term_digest_sha256")
+        if not isinstance(digest, str) or len(digest) != 64 or any(
+                character not in "0123456789abcdef" for character in digest):
+            raise EvidenceError("independent decoder term digest is malformed")
+    seen_decode = set()
+    validated_decode = []
+    for cell in benchmark.get("decode_cells", []):
+        if not isinstance(cell, dict):
+            raise EvidenceError("decode benchmark cell is not an object")
+        key = tuple(cell.get(name) for name in (
+            "profile", "K", "R", "losses", "bytes", "batch", "reuse"
+        ))
+        if key not in wanted_decode or key in seen_decode:
+            raise EvidenceError(f"unexpected or duplicate decode cell {key}")
+        seen_decode.add(key)
+        profile, k, r, losses, shard_bytes, batch, _reuse = key
+        parent_count = parent(profile, k, r)
+        if cell.get("parent") != parent_count or parent_count != 512:
+            raise EvidenceError("decode cell is not a 512-parent boundary case")
+        plan_record = plan_records.get((profile, k, r, losses))
+        if plan_record is None:
+            raise EvidenceError("decode cell has no independent algebra plan")
+        term_count = plan_record["term_count"]
+        if cell.get("selected_parity_count") != losses or \
+                cell.get("selected_parity_prefix_end") != losses:
+            raise EvidenceError("decode parity selection is not the declared prefix")
+        if cell.get("exact_codec_table_bytes") != k * r:
+            raise EvidenceError("decode codec-table accounting differs")
+        if cell.get("exact_plan_terms") != term_count:
+            raise EvidenceError("decode plan term count differs from independent algebra")
+        if cell.get("exact_term_record_bytes") != 12 or \
+                cell.get("exact_offset_record_bytes") != 8 or \
+                cell.get("exact_coordinate_record_bytes") != 4:
+            raise EvidenceError("decode record ABI accounting differs")
+        plan_payload = term_count * 12 + (losses + 1) * 8 + losses * 2 * 4
+        if cell.get("exact_plan_payload_bytes") != plan_payload:
+            raise EvidenceError("decode plan payload accounting differs")
+        execution_terms = term_count * batch
+        if cell.get("exact_execution_terms") != execution_terms or \
+                cell.get("exact_term_payload_bytes") != execution_terms * shard_bytes:
+            raise EvidenceError("decode execution-term accounting differs")
+        if cell.get("exact_execution_scratch_bytes") != 0:
+            raise EvidenceError("exact decode scratch accounting differs")
+        if cell.get("padded_execution_scratch_bytes") != padded_decode_scratch(
+                k, r, parent_count, shard_bytes):
+            raise EvidenceError("padded decode scratch accounting differs")
+        if cell.get("offered_received_bytes") != \
+                (k - losses + r) * shard_bytes * batch or \
+                cell.get("repaired_output_bytes") != losses * shard_bytes * batch:
+            raise EvidenceError("decode input/output byte accounting differs")
+        if cell.get("baseline") != "padded_specialized_gf16":
+            raise EvidenceError("decode baseline is not forced padded specialized GF16")
+        for digest_name in ("exact_output_digest", "padded_output_digest"):
+            digest = cell.get(digest_name)
+            if not isinstance(digest, str) or len(digest) != 18 or \
+                    not digest.startswith("0x"):
+                raise EvidenceError("malformed decode output digest")
+        if cell["exact_output_digest"] != cell["padded_output_digest"]:
+            raise EvidenceError("exact and padded decoders did not restore identical originals")
+        ratio, credible = validate_derived(cell)
+        validated_decode.append({**cell,
+                                 "padded_over_exact_ratio": ratio,
+                                 "credible_gain_percent": credible})
+    if seen_decode != wanted_decode:
+        raise EvidenceError(
+            f"decode benchmark matrix is incomplete: missing {sorted(wanted_decode - seen_decode)}"
+        )
+
     target = [cell for cell in validated_cells if min(cell["K"], cell["R"]) == 3]
     neighbors = [cell for cell in validated_cells if min(cell["K"], cell["R"]) in (2, 4)]
     wide = [cell for cell in validated_cells if min(cell["K"], cell["R"]) == 17]
@@ -331,6 +479,49 @@ def merge(paths: dict[str, Path]) -> dict[str, Any]:
     target_gate = all(cell["credible_gain_percent"] >= 10.0 for cell in target)
     neighbor_gate = all(cell["credible_gain_percent"] >= -2.0 for cell in neighbors)
     measured_region = target_gate and neighbor_gate
+
+    decode_target = [cell for cell in validated_decode
+                     if min(cell["K"], cell["R"]) == 3]
+    decode_neighbors = [cell for cell in validated_decode
+                        if min(cell["K"], cell["R"]) in (2, 4)]
+    decode_wide = [cell for cell in validated_decode
+                   if min(cell["K"], cell["R"]) == 17]
+    if len(decode_target) != 24 or len(decode_neighbors) != 14 or \
+            len(decode_wide) != 18:
+        raise EvidenceError("decode benchmark region classification differs")
+    decode_target_gate = all(
+        cell["credible_gain_percent"] >= 10.0 for cell in decode_target)
+    decode_neighbor_gate = all(
+        cell["credible_gain_percent"] >= -2.0 for cell in decode_neighbors)
+    decode_measured_region = decode_target_gate and decode_neighbor_gate
+    maximum_loss_cells = [cell for cell in validated_decode
+                          if cell["losses"] == min(cell["K"], cell["R"])]
+    if len(maximum_loss_cells) != 36:
+        raise EvidenceError("decode maximum-loss coverage differs")
+    decode_one_shot_ratios = [
+        (cell["padded_setup"]["median_us"] +
+         cell["padded_execution"]["median_us"]) /
+        (cell["exact_setup"]["median_us"] +
+         cell["exact_execution"]["median_us"])
+        for cell in validated_decode
+    ]
+    decode_declared_reuse_ratios = [
+        (cell["padded_setup"]["median_us"] / cell["reuse"] +
+         cell["padded_execution"]["median_us"]) /
+        (cell["exact_setup"]["median_us"] / cell["reuse"] +
+         cell["exact_execution"]["median_us"])
+        for cell in validated_decode
+    ]
+    decode_loss_groups = {}
+    for losses in sorted({cell["losses"] for cell in validated_decode}):
+        group = [cell for cell in validated_decode if cell["losses"] == losses]
+        decode_loss_groups[str(losses)] = {
+            "cells": len(group),
+            "credible_gain_percent_min": min(
+                cell["credible_gain_percent"] for cell in group),
+            "credible_gain_percent_max": max(
+                cell["credible_gain_percent"] for cell in group),
+        }
 
     artifact_hashes = {label: sha256(path) for label, path in paths.items()}
     return {
@@ -347,6 +538,7 @@ def merge(paths: dict[str, Path]) -> dict[str, Any]:
         "correctness": {
             "gf4_exhaustive": algebra_raw["gf4_exhaustive"],
             "gf8_algebra": algebra_raw["gf8"],
+            "gf8_decoder_algebra": algebra_raw["decoder"],
             "cpp_per_backend": EXPECTED_CORRECTNESS,
             "backends": {label: artifacts[label]["runtime_backend"]
                          for label in ("auto", "scalar", "ssse3", "avx2")},
@@ -355,6 +547,7 @@ def merge(paths: dict[str, Path]) -> dict[str, Any]:
         "geometry": {
             "affected_profile_cells": algebra_raw["affected_profile_cells"],
             "benchmark_cells": len(validated_cells),
+            "decode_benchmark_cells": len(validated_decode),
             "benchmark_parent": 512,
         },
         "benchmark": {
@@ -382,6 +575,47 @@ def merge(paths: dict[str, Path]) -> dict[str, Any]:
             "neighbors_no_regression_over_2_percent": neighbor_gate,
             "meaningful_region_gate": measured_region,
         },
+        "decode_benchmark": {
+            "baseline": "padded_specialized_gf16",
+            "target_cells": len(decode_target),
+            "neighbor_cells": len(decode_neighbors),
+            "wide_cells": len(decode_wide),
+            "maximum_loss_cells": len(maximum_loss_cells),
+            "maximum_loss_credible_gain_percent_min": min(
+                cell["credible_gain_percent"] for cell in maximum_loss_cells),
+            "maximum_loss_credible_gain_percent_max": max(
+                cell["credible_gain_percent"] for cell in maximum_loss_cells),
+            "target_credible_gain_percent_min": min(
+                cell["credible_gain_percent"] for cell in decode_target),
+            "target_credible_gain_percent_median": statistics.median(
+                cell["credible_gain_percent"] for cell in decode_target),
+            "neighbor_credible_gain_percent_min": min(
+                cell["credible_gain_percent"] for cell in decode_neighbors),
+            "wide_credible_gain_percent_min": min(
+                cell["credible_gain_percent"] for cell in decode_wide),
+            "wide_credible_gain_percent_max": max(
+                cell["credible_gain_percent"] for cell in decode_wide),
+            "target_at_least_10_percent": decode_target_gate,
+            "neighbors_no_regression_over_2_percent": decode_neighbor_gate,
+            "meaningful_region_gate": decode_measured_region,
+            "exact_setup_median_us_min": min(
+                cell["exact_setup"]["median_us"] for cell in validated_decode),
+            "exact_setup_median_us_max": max(
+                cell["exact_setup"]["median_us"] for cell in validated_decode),
+            "padded_setup_median_us_min": min(
+                cell["padded_setup"]["median_us"] for cell in validated_decode),
+            "padded_setup_median_us_max": max(
+                cell["padded_setup"]["median_us"] for cell in validated_decode),
+            "one_shot_setup_plus_execution_ratio_min": min(
+                decode_one_shot_ratios),
+            "one_shot_setup_plus_execution_ratio_median": statistics.median(
+                decode_one_shot_ratios),
+            "declared_reuse_setup_plus_execution_ratio_min": min(
+                decode_declared_reuse_ratios),
+            "declared_reuse_setup_plus_execution_ratio_median": statistics.median(
+                decode_declared_reuse_ratios),
+            "loss_count_groups": decode_loss_groups,
+        },
         "memory": {
             "exact_execution_scratch_bytes": 0,
             "exact_table_bytes_min": min(cell["exact_table_bytes"] for cell in validated_cells),
@@ -390,17 +624,29 @@ def merge(paths: dict[str, Path]) -> dict[str, Any]:
                 cell["padded_execution_scratch_bytes"] for cell in validated_cells),
             "padded_execution_scratch_bytes_max": max(
                 cell["padded_execution_scratch_bytes"] for cell in validated_cells),
+            "exact_decode_execution_scratch_bytes": 0,
+            "exact_decode_plan_payload_bytes_min": min(
+                cell["exact_plan_payload_bytes"] for cell in validated_decode),
+            "exact_decode_plan_payload_bytes_max": max(
+                cell["exact_plan_payload_bytes"] for cell in validated_decode),
+            "padded_decode_execution_scratch_bytes_min": min(
+                cell["padded_execution_scratch_bytes"] for cell in validated_decode),
+            "padded_decode_execution_scratch_bytes_max": max(
+                cell["padded_execution_scratch_bytes"] for cell in validated_decode),
         },
         "method_scope": algebra_raw["method_scope"],
         "disposition": {
             "measured_candidate_region": measured_region,
+            "measured_decode_region": decode_measured_region,
             "production_promotion": "none",
             "reason": (
                 "the exact GF8 prefix code has no frozen serialized profile identity, "
-                "production decoder, second-host timing, or calibrated dispatcher"
+                "second-host timing, production API review, or calibrated dispatcher"
             ),
             "legacy_wire_compatible": False,
             "default_build_changed": False,
+            "bead_recommendation": "close-experiment-result",
+            "promotion_followup": "C7/C8/C10 and W",
         },
     }
 
