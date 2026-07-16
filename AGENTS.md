@@ -33,6 +33,14 @@ interchange copy; `bd bootstrap` is the preferred history-preserving restore.
 - A current explicit user or orchestrator instruction not to push still takes
   precedence over this standing policy.
 
+## Web research policy
+
+- Route web searches through the configured Exa MCP server. If Exa is
+  unavailable, report that limitation before using another search provider.
+- Honor explicit source restrictions and prefer primary or official sources for
+  technical, security, compatibility, legal, and other evidence-bearing claims.
+- Never print, log, or commit MCP credentials.
+
 ## Quick Reference
 
 ```bash
