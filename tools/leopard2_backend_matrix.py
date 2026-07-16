@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shlex
 import shutil
 import subprocess
@@ -51,6 +52,17 @@ COMPARE_TESTS = (
     "boundaries",
     "transform_differential",
     "fuzz_smoke",
+)
+BACKEND_FAILURE_TESTS = (
+    "leopard2_backend_failure_scalar_ff8_allocation",
+    "leopard2_backend_failure_scalar_ff16_allocation",
+    "leopard2_backend_failure_scalar_kat",
+    "leopard2_backend_failure_ssse3_ff8_allocation",
+    "leopard2_backend_failure_ssse3_ff16_allocation",
+    "leopard2_backend_failure_ssse3_kat",
+    "leopard2_backend_failure_avx2_ff8_allocation",
+    "leopard2_backend_failure_avx2_ff16_allocation",
+    "leopard2_backend_failure_avx2_kat",
 )
 BUILD_CACHE_KEYS = (
     "CMAKE_BUILD_TYPE", "CMAKE_GENERATOR",
@@ -187,9 +199,30 @@ def normalized_output(value):
     return value.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
 
 
+CTEST_RESULT_LINE = re.compile(
+    br"^\s*\d+/\d+\s+Test\s+#\d+:\s+(\S+)\s+\.+(?:\s|$)"
+)
+
+
+def ctest_executed_test_names(stdout, stderr=b""):
+    names = []
+    for line in normalized_output(stdout + stderr).splitlines():
+        match = CTEST_RESULT_LINE.match(line)
+        if match:
+            names.append(match.group(1).decode("ascii", errors="replace"))
+    return tuple(names)
+
+
 def named_ctest_executed(stdout, test_name, stderr=b""):
-    output = normalized_output(stdout + stderr)
-    return b"Test #" in output and test_name.encode("ascii") in output
+    return ctest_executed_test_names(stdout, stderr) == (test_name,)
+
+
+def backend_failure_ctest_executed(stdout, stderr=b""):
+    executed = ctest_executed_test_names(stdout, stderr)
+    return (
+        len(executed) == len(BACKEND_FAILURE_TESTS)
+        and collections.Counter(executed) == collections.Counter(BACKEND_FAILURE_TESTS)
+    )
 
 
 def portable_ctest_executed(stdout, stderr=b""):
@@ -198,6 +231,13 @@ def portable_ctest_executed(stdout, stderr=b""):
 
 def cuda_ctest_executed(stdout, stderr=b""):
     return named_ctest_executed(stdout, "leopard2_cuda_optional", stderr)
+
+
+def pinned_command(argv, taskset, cpu):
+    command = [str(value) for value in argv]
+    if taskset:
+        return [str(taskset), "-c", str(cpu)] + command
+    return command
 
 
 def atomic_write_json(path, value):
@@ -717,9 +757,9 @@ def run_variant(context, variant, index):
     for name in COMPARE_TESTS:
         target, arguments = test_specs[name]
         executable = executable_path(build, target)
-        argv = [str(executable)] + arguments
-        if context["taskset"]:
-            argv = [context["taskset"], "-c", str(pin_cpu)] + argv
+        argv = pinned_command(
+            [str(executable)] + arguments, context["taskset"], pin_cpu
+        )
         test_environment = environment
         if name == "context_backends":
             test_environment = dict(environment)
@@ -753,18 +793,25 @@ def run_variant(context, variant, index):
         context["ctest"], "--test-dir", build, "-C", "Release",
         "-R", "^leopard2_backend_failure_", "--output-on-failure",
     ]
+    failure_command = pinned_command(
+        failure_command, context["taskset"], pin_cpu
+    )
     command = run_command(
         "test_backend_failures", failure_command, context["source"],
         result_dir, context["timeout"], environment, hash_output=True
     )
     tests["backend_failures"] = command
     commands.append(command)
-    failure_was_run = named_ctest_executed(
-        (result_dir / command["stdout_log"]).read_bytes(),
-        "leopard2_backend_failure_",
-        (result_dir / command["stderr_log"]).read_bytes(),
+    failure_stdout = (result_dir / command["stdout_log"]).read_bytes()
+    failure_stderr = (result_dir / command["stderr_log"]).read_bytes()
+    executed_failure_tests = ctest_executed_test_names(
+        failure_stdout, failure_stderr
+    )
+    failure_was_run = backend_failure_ctest_executed(
+        failure_stdout, failure_stderr
     )
     command["ctest_executed"] = failure_was_run
+    command["ctest_executed_tests"] = sorted(executed_failure_tests)
     seal_command(command)
     if command["returncode"] != 0 or not failure_was_run:
         base.update({
@@ -772,7 +819,7 @@ def run_variant(context, variant, index):
             "pin_cpu": pin_cpu,
             "reason": (
                 "backend failure matrix failed" if command["returncode"] != 0
-                else "backend failure tests were not registered or executed"
+                else "backend failure CTest set was incomplete or unexpected"
             ),
             "selected_cache_variant": selected,
             "status": "failed",
@@ -996,6 +1043,50 @@ def self_test():
         b"1/1 Test #2: leopard2_cuda_optional ... Passed\n"
     )
     assert not cuda_ctest_executed(b"No tests were found!!!\n")
+    failure_output = b"".join(
+        "{}/{} Test #{}: {} ... Passed\n".format(
+            index, len(BACKEND_FAILURE_TESTS), index, name
+        ).encode("ascii")
+        for index, name in enumerate(BACKEND_FAILURE_TESTS, 1)
+    )
+    assert ctest_executed_test_names(failure_output) == BACKEND_FAILURE_TESTS
+    assert backend_failure_ctest_executed(failure_output)
+
+    def failure_output_for(names):
+        return b"".join(
+            "{}/{} Test #{}: {} ... Passed\n".format(
+                index, len(names), index, name
+            ).encode("ascii")
+            for index, name in enumerate(names, 1)
+        )
+
+    assert backend_failure_ctest_executed(
+        failure_output_for(tuple(reversed(BACKEND_FAILURE_TESTS)))
+    )
+    mutations = (
+        BACKEND_FAILURE_TESTS[:-1],
+        BACKEND_FAILURE_TESTS[:4] + BACKEND_FAILURE_TESTS[5:],
+        BACKEND_FAILURE_TESTS[:-1] + (
+            "leopard2_backend_failure_avx2_kat_renamed",
+        ),
+        BACKEND_FAILURE_TESTS + (
+            "leopard2_backend_failure_scalar_kat_extra",
+        ),
+        BACKEND_FAILURE_TESTS[:-1] + (BACKEND_FAILURE_TESTS[0],),
+        (BACKEND_FAILURE_TESTS[0],),
+    )
+    for mutation in mutations:
+        assert not backend_failure_ctest_executed(
+            failure_output_for(mutation)
+        )
+    assert pinned_command(["ctest", "--test-dir", "build"], None, 7) == [
+        "ctest", "--test-dir", "build",
+    ]
+    assert pinned_command(
+        ["ctest", "--test-dir", "build"], "/usr/bin/taskset", 23
+    ) == [
+        "/usr/bin/taskset", "-c", "23", "ctest", "--test-dir", "build",
+    ]
     assert digest_value({"b": 2, "a": 1}) == digest_value({"a": 1, "b": 2})
     assert variant_flags("scalar") == []
     assert variant_flags("ssse3") == ["-mssse3", "-mno-avx"]
