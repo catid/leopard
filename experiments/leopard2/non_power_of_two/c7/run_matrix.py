@@ -56,7 +56,10 @@ def resolve_first(names: Iterable[str]) -> pathlib.Path:
     for name in names:
         found = shutil.which(name)
         if found:
-            return pathlib.Path(found).resolve()
+            # Preserve a C++ driver basename such as clang++-18.  Resolving
+            # that symlink to the shared `clang` binary changes driver mode at
+            # link time and silently drops the C++ runtime.
+            return pathlib.Path(found).absolute()
     raise RuntimeError(
         f"none of the required programs are available: {', '.join(names)}")
 
