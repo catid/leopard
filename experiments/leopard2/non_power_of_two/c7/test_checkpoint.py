@@ -13,7 +13,9 @@ import subprocess
 import sys
 import tempfile
 import tarfile
+import threading
 import unittest
+from unittest import mock
 
 import run_matrix
 import validate_evidence
@@ -250,6 +252,45 @@ class CheckpointTests(unittest.TestCase):
         artifact_bytes_rejected(
             "peer_evidence_bundle",
             gzip.compress(b"\0" * (expansion_limit + 1), mtime=0))
+
+    def test_optional_verified_peer_artifacts_are_single_snapshots(self) -> None:
+        requested = os.environ.get("LEO2_C7_TEST_MANIFEST")
+        if not requested:
+            self.skipTest("LEO2_C7_TEST_MANIFEST is not set")
+        data = json.loads(pathlib.Path(requested).read_text(encoding="utf-8"))
+        comparison = data["reproducibility"]["comparison"]
+        real_read = validate_evidence._read_file_once
+        for key, forged in (
+            ("peer_manifest", b"{}\n"),
+            ("peer_evidence_bundle", b"not a gzip stream\n"),
+            ("peer_attestation", b"{}\n"),
+        ):
+            path = (ROOT / comparison[key]["path"]).resolve()
+            original = path.read_bytes()
+            swapped = threading.Event()
+
+            def read_then_swap(
+                candidate: pathlib.Path, maximum_bytes: int, *,
+                target: pathlib.Path = path, replacement: bytes = forged,
+            ) -> bytes:
+                contents = real_read(candidate, maximum_bytes)
+                if candidate.resolve() == target and not swapped.is_set():
+                    worker = threading.Thread(
+                        target=target.write_bytes, args=(replacement,))
+                    worker.start()
+                    worker.join()
+                    swapped.set()
+                return contents
+
+            try:
+                with mock.patch.object(
+                        validate_evidence, "_read_file_once",
+                        side_effect=read_then_swap):
+                    validate_evidence.validate_manifest(data)
+                self.assertTrue(swapped.is_set())
+                self.assertEqual(path.read_bytes(), forged)
+            finally:
+                path.write_bytes(original)
 
     def test_optional_authenticated_peer_rejects_exploits(self) -> None:
         current_path = os.environ.get("LEO2_C7_TEST_MANIFEST")

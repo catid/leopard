@@ -194,6 +194,35 @@ def _canonical_relative_path(path: object, label: str) -> str:
     return path
 
 
+def _read_file_once(path: pathlib.Path, maximum_bytes: int) -> bytes:
+    """Read at most one bounded snapshot from an already-contained path."""
+    with path.open("rb") as stream:
+        return stream.read(maximum_bytes + 1)
+
+
+def read_verified_artifact_bytes(
+    record: object, label: str, evidence_root: pathlib.Path, *,
+    maximum_bytes: int,
+) -> bytes:
+    """Read once, then authenticate and return that exact byte string."""
+    if not isinstance(record, dict) or set(record) != {
+            "bytes", "path", "sha256"}:
+        raise ValueError(f"{label} artifact schema changed")
+    size = record["bytes"]
+    if type(size) is not int or not 1 <= size <= maximum_bytes:
+        raise ValueError(f"{label} byte count is invalid")
+    expected = validate_sha(record["sha256"], f"{label} hash")
+    try:
+        path = resolve_path(record["path"], evidence_root)
+        contents = _read_file_once(path, maximum_bytes)
+    except (OSError, ValueError) as error:
+        raise ValueError(f"{label} retained artifact cannot be read") from error
+    if (len(contents) != size or
+            hashlib.sha256(contents).hexdigest() != expected):
+        raise ValueError(f"{label} bytes disagree with the manifest")
+    return contents
+
+
 def _peer_bundle_records(peer: dict[str, Any]) -> dict[str, dict[str, Any]]:
     try:
         records = peer_portable_artifact_records(peer)
@@ -326,12 +355,9 @@ def validate_peer_attestation(
     if comparison == {"status": "not-run"}:
         return
     peer_manifest_record = comparison["peer_manifest"]
-    peer_manifest_path = validate_artifact(
-        peer_manifest_record, "A/B peer manifest", evidence_root, required=True)
-    if (peer_manifest_record["bytes"] <= 0 or
-            peer_manifest_record["bytes"] > 16 * 1024 * 1024):
-        raise ValueError("A/B peer manifest size is invalid")
-    peer_manifest_bytes = peer_manifest_path.read_bytes()
+    peer_manifest_bytes = read_verified_artifact_bytes(
+        peer_manifest_record, "A/B peer manifest", evidence_root,
+        maximum_bytes=16 * 1024 * 1024)
     try:
         peer = json.loads(peer_manifest_bytes)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -357,10 +383,11 @@ def validate_peer_attestation(
         raise ValueError("A/B peer does not bind the same source/program outputs")
 
     bundle_record = comparison["peer_evidence_bundle"]
-    bundle_path = validate_artifact(
-        bundle_record, "A/B peer evidence bundle", evidence_root, required=True)
+    bundle_bytes = read_verified_artifact_bytes(
+        bundle_record, "A/B peer evidence bundle", evidence_root,
+        maximum_bytes=PEER_BUNDLE_MAX_ARCHIVE_BYTES)
     expected_bundle_records = _peer_bundle_records(peer)
-    files = _read_peer_bundle(bundle_path.read_bytes(), expected_bundle_records)
+    files = _read_peer_bundle(bundle_bytes, expected_bundle_records)
     with tempfile.TemporaryDirectory(prefix="c7-peer-replay-") as directory:
         peer_evidence_root = pathlib.Path(directory) / "evidence"
         _materialize_peer_bundle(files, peer_evidence_root)
@@ -373,12 +400,13 @@ def validate_peer_attestation(
             live=False, require_checkout_head=False)
 
     record = comparison["peer_attestation"]
-    path = validate_artifact(
-        record, "A/B peer attestation", evidence_root, required=True)
+    attestation_bytes = read_verified_artifact_bytes(
+        record, "A/B peer attestation", evidence_root,
+        maximum_bytes=1024 * 1024)
     if pathlib.PurePosixPath(record["path"]).name != (
             "peer-reproducibility-attestation.json"):
         raise ValueError("A/B peer attestation path changed")
-    report = json.loads(path.read_text(encoding="utf-8"))
+    report = json.loads(attestation_bytes)
     required = {
         "binary_artifacts", "checks", "core_git_sha", "fingerprints",
         "normalized_text_records_sha256", "peer_evidence_bundle",

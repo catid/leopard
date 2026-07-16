@@ -309,6 +309,10 @@ byte-replays both current `nm` scans.  Because all five current output hashes
 and all program records must equal the peer records, this rechecks equivalent
 bytes; it does not claim to recover or re-open the historical peer inodes after
 the private generation snapshot has been discarded.
+The retained validator likewise reads the peer manifest, semantic bundle, and
+attestation only once each, authenticates the size and SHA-256 of that exact
+in-memory byte string, and parses those same bytes.  A concurrent replacement
+of any backing path after its read cannot redirect subsequent parsing.
 
 Run-result validation fixes the exact build role, correctness/smoke kind,
 sanitizer leak/undefined-behavior environment, selected runtime backend,
