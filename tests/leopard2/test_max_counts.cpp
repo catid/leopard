@@ -289,9 +289,61 @@ void test_low_limit(leo2_context* context, uint64_t& compared_bytes)
     leo2_codec_destroy(codec);
 }
 
+void test_low_k1_literal_limit(
+    leo2_context* context,
+    leo2_field field,
+    uint32_t r,
+    uint32_t expected_parent,
+    uint64_t& compared_bytes)
+{
+    leo2_codec* codec = NULL;
+    require_result(leo2_codec_create(context, 1, r, LEO2_PROFILE_LOW_V1,
+        field, NULL, &codec), "literal maximum low codec create");
+    require(codec != NULL, "literal maximum low codec create returned null");
+    require(leo2_codec_parent_count(codec) == expected_parent,
+        "literal maximum low parent mismatch");
+    require(leo2_codec_padded_side(codec) == 1,
+        "literal maximum low padded side mismatch");
+
+    const Word original = {{ 0x6d, 0xb2 }};
+    std::vector<const void*> original_input(1, original.data());
+    std::array<Word, 2> parity = {{{{ 0, 0 }}, {{ 0, 0 }}}};
+    std::vector<void*> parity_output(r, NULL);
+    parity_output[0] = parity[0].data();
+    parity_output[r - 1] = parity[1].data();
+    AlignedBuffer scratch = encode_scratch(codec);
+    require_result(leo2_encode(codec, 2, &original_input[0],
+        &parity_output[0], scratch.data(), scratch.size()),
+        "literal maximum low encode");
+    require(parity[0] == original,
+        "literal maximum low first parity is not the sole original");
+    require(parity[1] == original,
+        "literal maximum low last parity is not the sole original");
+    compared_bytes += 4;
+
+    std::vector<uint8_t> original_present(1, 0);
+    std::vector<uint8_t> recovery_present(r, 0);
+    recovery_present[r - 1] = 1;
+    original_input[0] = NULL;
+    std::vector<const void*> recovery_input(r, NULL);
+    recovery_input[r - 1] = parity[1].data();
+    Word restored_word = {{ 0, 0 }};
+    std::vector<void*> restored(1, restored_word.data());
+    recover_missing(codec, original_present, recovery_present, original_input,
+        recovery_input, restored);
+    require(restored_word == original,
+        "literal maximum low single-parity recovery mismatch");
+    compared_bytes += 2;
+    leo2_codec_destroy(codec);
+}
+
 void test_limit_rejection(leo2_context* context)
 {
     leo2_codec* codec = NULL;
+    require(leo2_codec_create(context, 1, 256,
+        LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, NULL, &codec) ==
+        LEO2_INVALID_COUNTS, "GF8 low parent overflow was accepted");
+    require(codec == NULL, "GF8 low overflow returned a codec");
     require(leo2_codec_create(context, 65535, 2,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, NULL, &codec) ==
         LEO2_INVALID_COUNTS, "GF16 high parent overflow was accepted");
@@ -321,10 +373,15 @@ int main()
         test_high_r1_limit(context, compared_bytes);
         test_high_general_limit(context, compared_bytes);
         test_low_limit(context, compared_bytes);
+        test_low_k1_literal_limit(context, LEO2_FIELD_GF8, 255, 256,
+            compared_bytes);
+        test_low_k1_literal_limit(context, LEO2_FIELD_GF16, 65535, 65536,
+            compared_bytes);
         test_limit_rejection(context);
 
         leo2_context_destroy(context);
-        std::cout << "leopard2 maximum-count test passed: full_parents=3"
+        std::cout << "leopard2 maximum-count test passed: full_parents=5"
+                  << " literal_low_k1_profiles=2"
                   << " compared_bytes=" << compared_bytes << std::endl;
         return 0;
     }
