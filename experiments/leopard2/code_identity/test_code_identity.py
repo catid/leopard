@@ -21,6 +21,10 @@ from code_identity import (
     META_COORDINATE_SET_SHA256,
     META_SHARD_LAYOUT,
     Metadata,
+    META_PUNCTURING_SET_SHA256,
+    META_SHORTENING_SET_SHA256,
+    PROFILE_EXACT_LOW,
+    PROFILE_EXACT_HIGH_RESERVED,
     PROFILE_LEGACY_HIGH,
     PROFILE_LOW,
     SHARD_LAYOUT_GF16_PADDED_ODD_V1,
@@ -63,7 +67,7 @@ class CodeIdentityTests(unittest.TestCase):
                   239, 240, 241, 247, 248, 249, 255, 256, 257, 511, 512,
                   513, 1000, 4096)
         tested = 0
-        for profile in (PROFILE_LEGACY_HIGH, PROFILE_LOW):
+        for profile in (PROFILE_LEGACY_HIGH, PROFILE_LOW, PROFILE_EXACT_LOW):
             for k in counts:
                 for r in counts:
                     for field in (FIELD_GF8, FIELD_GF16):
@@ -74,7 +78,37 @@ class CodeIdentityTests(unittest.TestCase):
                             continue
                         self.assertEqual(deserialize(encoded), identity)
                         tested += 1
-        self.assertEqual(tested, 3952)
+        self.assertEqual(tested, 6085)
+
+    def test_exact_low_v1_semantics_and_enum_reconciliation(self) -> None:
+        self.assertEqual(PROFILE_EXACT_LOW, 3)
+        self.assertEqual(PROFILE_EXACT_HIGH_RESERVED, 4)
+        gf8 = make_identity(PROFILE_EXACT_LOW, FIELD_GF8, 3, 253)
+        self.assertEqual(gf8.parent_count, 256)
+        self.assertEqual(gf8.padded_side, 3)
+        self.assertEqual(gf8.coordinate_map_version, 1)
+        self.assertEqual(deserialize(serialize(gf8)), gf8)
+
+        gf16 = make_identity(PROFILE_EXACT_LOW, FIELD_GF16, 1000, 4096)
+        self.assertEqual(gf16.parent_count, 5096)
+        self.assertEqual(gf16.padded_side, 1000)
+        self.assertEqual(deserialize(serialize(gf16)), gf16)
+
+        with self.assertRaises(IdentityError):
+            serialize(make_identity(PROFILE_EXACT_LOW, FIELD_GF8, 4, 253))
+        with self.assertRaises(IdentityError):
+            make_identity(PROFILE_EXACT_HIGH_RESERVED, FIELD_GF16, 253, 3)
+        for metadata_type in (
+            META_SHORTENING_SET_SHA256, META_PUNCTURING_SET_SHA256
+        ):
+            with self.assertRaises(IdentityError):
+                serialize(make_identity(
+                    PROFILE_EXACT_LOW,
+                    FIELD_GF16,
+                    129,
+                    1000,
+                    (Metadata(metadata_type, bytes(32)),),
+                ))
 
     def test_exhaustive_practical_metadata_round_trips(self) -> None:
         tested = 0

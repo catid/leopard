@@ -22,6 +22,10 @@ extern "C" {
 
 #define LEO2_CODE_ID_PROFILE_LEGACY_HIGH 1u
 #define LEO2_CODE_ID_PROFILE_LOW 2u
+/* Corresponds exactly to LEO2_PROFILE_EXACT_EXPERIMENTAL_V1 (enum value 3). */
+#define LEO2_CODE_ID_PROFILE_EXACT_LOW 3u
+/* Reserved for C8.  Version 1 readers intentionally reject this family. */
+#define LEO2_CODE_ID_PROFILE_EXACT_HIGH_RESERVED 4u
 #define LEO2_CODE_ID_FIELD_GF8 1u
 #define LEO2_CODE_ID_FIELD_GF16 2u
 

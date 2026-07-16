@@ -27,6 +27,7 @@ from code_identity import (  # noqa: E402
     META_COORDINATE_SET_SHA256,
     META_SHARD_LAYOUT,
     Metadata,
+    PROFILE_EXACT_LOW,
     PROFILE_LEGACY_HIGH,
     PROFILE_LOW,
     deserialize,
@@ -296,7 +297,7 @@ def run_differential(oracle: COracle) -> dict[str, int]:
             raise AssertionError(f"C rejected golden: {vector['name']}")
         counts["golden"] += 1
 
-    for profile in (PROFILE_LEGACY_HIGH, PROFILE_LOW):
+    for profile in (PROFILE_LEGACY_HIGH, PROFILE_LOW, PROFILE_EXACT_LOW):
         for original_count in COUNTS:
             for recovery_count in COUNTS:
                 for field in (FIELD_GF8, FIELD_GF16):
@@ -307,9 +308,9 @@ def run_differential(oracle: COracle) -> dict[str, int]:
                         if not check_decode(oracle, encoded):
                             raise AssertionError("canonical profile rejected")
                         counts["profile"] += 1
-    if counts["profile"] != 3952:
+    if counts["profile"] != 6085:
         raise AssertionError(f"unexpected profile count {counts['profile']}")
-    for profile in (PROFILE_LEGACY_HIGH, PROFILE_LOW):
+    for profile in (PROFILE_LEGACY_HIGH, PROFILE_LOW, PROFILE_EXACT_LOW):
         for original_count, recovery_count in COUNT_EDGE_PAIRS:
             for field in (FIELD_GF8, FIELD_GF16):
                 encoded = check_encode(
@@ -318,7 +319,7 @@ def run_differential(oracle: COracle) -> dict[str, int]:
                 if encoded and not check_decode(oracle, encoded):
                     raise AssertionError("canonical edge-count profile rejected")
                 counts["count_edges"] += 1
-    if counts["count_edges"] != 44:
+    if counts["count_edges"] != 66:
         raise AssertionError(
             f"unexpected count-edge cases {counts['count_edges']}"
         )
