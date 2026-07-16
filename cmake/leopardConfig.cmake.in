@@ -1,0 +1,38 @@
+@PACKAGE_INIT@
+
+# The public headers expose a C ABI, but the installed static archive is
+# implemented in C++.  Require the consuming project to enable CXX so CMake
+# selects the C++ link driver and supplies its runtime portably.  Silently
+# importing this target into a C-only project would defer the problem to an
+# opaque unresolved-symbol failure at link time.
+if(NOT CMAKE_CXX_COMPILER_LOADED)
+    set(leopard_FOUND FALSE)
+    set(leopard_NOT_FOUND_MESSAGE
+        "leopard::libleopard requires a consuming project with CXX enabled "
+        "(C sources remain supported; use project(... LANGUAGES C CXX))")
+    return()
+endif()
+
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+if(@ENABLE_OPENMP@)
+    find_dependency(OpenMP)
+    if(NOT TARGET OpenMP::OpenMP_CXX)
+        # CMake 3.7 and 3.8 FindOpenMP expose flags rather than an imported
+        # target.  Recreate the small target contract required by exports
+        # generated on newer CMake versions.
+        set(_leopard_openmp_flags "${OpenMP_CXX_FLAGS}")
+        separate_arguments(_leopard_openmp_flags)
+        add_library(OpenMP::OpenMP_CXX INTERFACE IMPORTED)
+        set_property(TARGET OpenMP::OpenMP_CXX PROPERTY
+            INTERFACE_COMPILE_OPTIONS "${_leopard_openmp_flags}")
+        if(NOT MSVC)
+            set_property(TARGET OpenMP::OpenMP_CXX PROPERTY
+                INTERFACE_LINK_LIBRARIES "${_leopard_openmp_flags}")
+        endif()
+        unset(_leopard_openmp_flags)
+    endif()
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/leopardTargets.cmake")
+check_required_components(leopard)

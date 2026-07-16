@@ -3,6 +3,8 @@ project(leopard)
 
 include(CMakeDependentOption)
 include(CheckCXXCompilerFlag)
+include(CMakePackageConfigHelpers)
+include(GNUInstallDirs)
 
 set(CMAKE_CONFIGURATION_TYPES "Debug;Release" CACHE STRING "" FORCE)
 
@@ -149,8 +151,45 @@ if(ENABLE_OPENMP)
 endif(ENABLE_OPENMP)
 
 add_library(libleopard STATIC ${LIB_SOURCE_FILES})
-target_include_directories(libleopard PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(libleopard PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(libleopard PUBLIC Threads::Threads)
+if(ENABLE_OPENMP)
+    if(TARGET OpenMP::OpenMP_CXX)
+        target_link_libraries(libleopard PUBLIC OpenMP::OpenMP_CXX)
+    else()
+        # FindOpenMP did not provide imported targets before CMake 3.9.  Keep
+        # the 3.7 project floor usable by propagating its compiler-driver flag;
+        # for static archives this is also the link flag that selects the
+        # OpenMP runtime on GCC and Clang.
+        target_link_libraries(libleopard PUBLIC "${OpenMP_CXX_FLAGS}")
+    endif()
+endif()
+
+# Keep the installed CPU package independent of optional backends.  CUDA
+# targets, once implemented, must use a separate opt-in export set rather than
+# becoming transitive dependencies of leopard::libleopard.
+set(LEOPARD_INSTALL_CMAKEDIR
+    "${CMAKE_INSTALL_LIBDIR}/cmake/leopard"
+    CACHE STRING "Install directory for Leopard CMake package files")
+configure_package_config_file(
+    cmake/leopardConfig.cmake.in
+    "${CMAKE_CURRENT_BINARY_DIR}/leopardConfig.cmake"
+    INSTALL_DESTINATION "${LEOPARD_INSTALL_CMAKEDIR}")
+install(TARGETS libleopard
+    EXPORT leopardTargets
+    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+install(FILES leopard.h leopard2.h
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/leopardConfig.cmake"
+    DESTINATION "${LEOPARD_INSTALL_CMAKEDIR}")
+install(EXPORT leopardTargets
+    FILE leopardTargets.cmake
+    NAMESPACE leopard::
+    DESTINATION "${LEOPARD_INSTALL_CMAKEDIR}")
 
 function(leo2_apply_backend_variant target_name)
     if(LEO2_BACKEND_VARIANT STREQUAL "auto")
@@ -301,6 +340,7 @@ if(LEO2_BUILD_TESTS)
             -DLEO2_GENERATOR=${CMAKE_GENERATOR}
             -DLEO2_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}
             -DLEO2_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}
+            -DLEO2_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_cuda_optional.cmake)
 
     if(CMAKE_VERSION VERSION_LESS 3.12)

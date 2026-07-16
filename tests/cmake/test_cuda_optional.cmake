@@ -1,10 +1,12 @@
 if(NOT DEFINED LEO2_SOURCE_DIR OR NOT DEFINED LEO2_BINARY_DIR OR
-   NOT DEFINED LEO2_GENERATOR)
-    message(FATAL_ERROR "CUDA optional test requires source, binary, and generator paths")
+   NOT DEFINED LEO2_GENERATOR OR NOT DEFINED LEO2_CTEST_COMMAND)
+    message(FATAL_ERROR
+        "CUDA optional test requires source, binary, generator, and CTest paths")
 endif()
 
 file(REMOVE_RECURSE "${LEO2_BINARY_DIR}")
 file(MAKE_DIRECTORY "${LEO2_BINARY_DIR}")
+set(install_prefix "${LEO2_BINARY_DIR}/stage")
 
 # Use the traditional source-directory configure form rather than -S/-B so
 # this regression test remains runnable at the project's CMake 3.7 floor.
@@ -23,6 +25,7 @@ list(APPEND configure_command
     -DLEO2_BUILD_TESTS=OFF
     -DLEO2_BUILD_BENCHMARKS=OFF
     -DCMAKE_BUILD_TYPE=Release
+    "-DCMAKE_INSTALL_PREFIX=${install_prefix}"
     "${LEO2_SOURCE_DIR}")
 execute_process(
     COMMAND "${CMAKE_COMMAND}" -E env
@@ -40,14 +43,47 @@ if(NOT configure_result EQUAL 0)
         "stderr:\n${configure_stderr}")
 endif()
 
-file(READ "${LEO2_BINARY_DIR}/CMakeCache.txt" cache_contents)
+set(cpu_cache_file "${LEO2_BINARY_DIR}/CMakeCache.txt")
+file(READ "${cpu_cache_file}" cache_contents)
 string(FIND "${cache_contents}" "LEO2_ENABLE_CUDA:BOOL=OFF" option_position)
 if(option_position EQUAL -1)
     message(FATAL_ERROR "Nested configure did not retain LEO2_ENABLE_CUDA=OFF")
 endif()
-string(FIND "${cache_contents}" "CMAKE_CUDA_COMPILER" compiler_position)
-if(NOT compiler_position EQUAL -1)
-    message(FATAL_ERROR "CUDA-disabled configure unexpectedly probed a CUDA compiler")
+file(STRINGS "${cpu_cache_file}" cuda_cache_entries REGEX "^CMAKE_CUDA")
+if(cuda_cache_entries)
+    message(FATAL_ERROR
+        "CUDA-disabled configure unexpectedly created CUDA cache entries: "
+        "${cuda_cache_entries}")
+endif()
+
+# Also cover the ordinary environment where CUDACXX is wholly absent.  The
+# invalid-value run above is the stronger probe-resistance case; this second
+# configure protects against accidentally making the variable mandatory.
+set(cuda_unset_dir "${LEO2_BINARY_DIR}-without-cudacxx")
+file(REMOVE_RECURSE "${cuda_unset_dir}")
+file(MAKE_DIRECTORY "${cuda_unset_dir}")
+unset(ENV{CUDACXX})
+execute_process(
+    COMMAND ${configure_command}
+    WORKING_DIRECTORY "${cuda_unset_dir}"
+    RESULT_VARIABLE cuda_unset_result
+    OUTPUT_VARIABLE cuda_unset_stdout
+    ERROR_VARIABLE cuda_unset_stderr)
+if(NOT cuda_unset_result EQUAL 0)
+    message(FATAL_ERROR
+        "Default configure without CUDACXX failed (${cuda_unset_result})\n"
+        "stdout:\n${cuda_unset_stdout}\n"
+        "stderr:\n${cuda_unset_stderr}")
+endif()
+set(cuda_unset_cache_file "${cuda_unset_dir}/CMakeCache.txt")
+file(READ "${cuda_unset_cache_file}" cuda_unset_cache)
+string(FIND "${cuda_unset_cache}" "LEO2_ENABLE_CUDA:BOOL=OFF"
+    cuda_unset_option_position)
+file(STRINGS "${cuda_unset_cache_file}" cuda_unset_cache_entries
+    REGEX "^CMAKE_CUDA")
+if(cuda_unset_option_position EQUAL -1 OR cuda_unset_cache_entries)
+    message(FATAL_ERROR
+        "Default configure without CUDACXX did not remain CUDA-free")
 endif()
 
 # Configuration alone would not catch an accidental CUDA header or link
@@ -65,6 +101,223 @@ if(NOT build_result EQUAL 0)
         "Default non-CUDA library build failed (${build_result})\n"
         "stdout:\n${build_stdout}\n"
         "stderr:\n${build_stderr}")
+endif()
+
+# A successful install with no install rules would not prove package
+# optionality.  Stage the normal CPU package and inspect its actual headers and
+# CMake export before consuming it from a separate project.
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" --build . --target install --config Release
+    WORKING_DIRECTORY "${LEO2_BINARY_DIR}"
+    RESULT_VARIABLE install_result
+    OUTPUT_VARIABLE install_stdout
+    ERROR_VARIABLE install_stderr)
+if(NOT install_result EQUAL 0)
+    message(FATAL_ERROR
+        "Default non-CUDA install failed (${install_result})\n"
+        "stdout:\n${install_stdout}\n"
+        "stderr:\n${install_stderr}")
+endif()
+
+file(GLOB_RECURSE installed_files
+    RELATIVE "${install_prefix}"
+    "${install_prefix}/*")
+if(NOT installed_files)
+    message(FATAL_ERROR
+        "Default non-CUDA install produced no artifacts")
+endif()
+
+set(saw_leopard_header FALSE)
+set(saw_leopard2_header FALSE)
+set(saw_package_config FALSE)
+set(saw_targets_export FALSE)
+foreach(installed_file ${installed_files})
+    string(TOLOWER "${installed_file}" installed_file_lower)
+    string(FIND "${installed_file_lower}" "cuda" cuda_name_position)
+    if(NOT cuda_name_position EQUAL -1)
+        message(FATAL_ERROR
+            "CUDA-disabled install unexpectedly produced '${installed_file}'")
+    endif()
+
+    get_filename_component(installed_name "${installed_file}" NAME)
+    if(installed_name STREQUAL "leopard.h")
+        set(saw_leopard_header TRUE)
+    elseif(installed_name STREQUAL "leopard2.h")
+        set(saw_leopard2_header TRUE)
+    elseif(installed_name STREQUAL "leopardConfig.cmake")
+        set(saw_package_config TRUE)
+    elseif(installed_name STREQUAL "leopardTargets.cmake")
+        set(saw_targets_export TRUE)
+    endif()
+
+    if(installed_file MATCHES "\\.(cmake|h)$")
+        file(READ "${install_prefix}/${installed_file}" installed_text)
+        string(TOLOWER "${installed_text}" installed_text_lower)
+        if(installed_text_lower MATCHES "cuda|cudart|nvidia")
+            message(FATAL_ERROR
+                "CUDA-disabled installed metadata/header '${installed_file}' "
+                "contains a CUDA dependency")
+        endif()
+    endif()
+endforeach()
+if(NOT saw_leopard_header OR NOT saw_leopard2_header OR
+   NOT saw_package_config OR NOT saw_targets_export)
+    message(FATAL_ERROR
+        "CPU package is incomplete: leopard.h=${saw_leopard_header}, "
+        "leopard2.h=${saw_leopard2_header}, "
+        "config=${saw_package_config}, targets=${saw_targets_export}")
+endif()
+
+# Consume the package only after moving its complete install tree.  This turns
+# the documented relocatability property into a regression test and catches
+# absolute source/build/install paths embedded in either config or export.
+set(relocated_prefix "${LEO2_BINARY_DIR}/relocated-stage")
+file(REMOVE_RECURSE "${relocated_prefix}")
+file(RENAME "${install_prefix}" "${relocated_prefix}")
+if(EXISTS "${install_prefix}" OR NOT EXISTS "${relocated_prefix}")
+    message(FATAL_ERROR "Could not relocate the staged CPU package")
+endif()
+
+# Validate the exported dependency surface instead of relying only on textual
+# inspection.  This fresh consumer has CUDA explicitly unavailable, imports the
+# installed target, checks its transitive links, compiles against both public
+# headers, links the default OpenMP-enabled static archive, and runs it.
+set(consumer_source_dir "${LEO2_BINARY_DIR}/consumer-source")
+set(consumer_binary_dir "${LEO2_BINARY_DIR}/consumer-build")
+file(MAKE_DIRECTORY "${consumer_source_dir}" "${consumer_binary_dir}")
+file(WRITE "${consumer_source_dir}/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.7)
+project(leopard_cpu_package_consumer LANGUAGES C CXX)
+
+find_package(leopard CONFIG REQUIRED)
+if(NOT TARGET leopard::libleopard)
+    message(FATAL_ERROR "Installed package did not export leopard::libleopard")
+endif()
+get_target_property(leopard_links
+    leopard::libleopard INTERFACE_LINK_LIBRARIES)
+string(TOLOWER "${leopard_links}" leopard_links_lower)
+if(leopard_links_lower MATCHES "cuda|cudart|nvidia")
+    message(FATAL_ERROR
+        "CPU target exposes a CUDA link dependency: ${leopard_links}")
+endif()
+
+add_executable(leopard_cpu_consumer main.c)
+target_link_libraries(leopard_cpu_consumer PRIVATE leopard::libleopard)
+enable_testing()
+add_test(NAME leopard_cpu_consumer COMMAND leopard_cpu_consumer)
+]=])
+file(WRITE "${consumer_source_dir}/main.c" [=[
+#include <leopard.h>
+#include <leopard2.h>
+
+int main()
+{
+    return leo_result_string(Leopard_Success) != 0 &&
+        leo2_result_string(LEO2_SUCCESS) != 0 ? 0 : 1;
+}
+]=])
+
+set(consumer_configure_command
+    "${CMAKE_COMMAND}"
+    -G "${LEO2_GENERATOR}")
+if(LEO2_GENERATOR_PLATFORM)
+    list(APPEND consumer_configure_command -A "${LEO2_GENERATOR_PLATFORM}")
+endif()
+if(LEO2_GENERATOR_TOOLSET)
+    list(APPEND consumer_configure_command -T "${LEO2_GENERATOR_TOOLSET}")
+endif()
+list(APPEND consumer_configure_command
+    -DCMAKE_BUILD_TYPE=Release
+    "-DCMAKE_PREFIX_PATH=${relocated_prefix}"
+    "${consumer_source_dir}")
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E env
+        "CUDACXX=${consumer_binary_dir}/definitely-not-a-cuda-compiler"
+        ${consumer_configure_command}
+    WORKING_DIRECTORY "${consumer_binary_dir}"
+    RESULT_VARIABLE consumer_configure_result
+    OUTPUT_VARIABLE consumer_configure_stdout
+    ERROR_VARIABLE consumer_configure_stderr)
+if(NOT consumer_configure_result EQUAL 0)
+    message(FATAL_ERROR
+        "Installed CPU package consumer configure failed "
+        "(${consumer_configure_result})\n"
+        "stdout:\n${consumer_configure_stdout}\n"
+        "stderr:\n${consumer_configure_stderr}")
+endif()
+file(STRINGS "${consumer_binary_dir}/CMakeCache.txt" consumer_cuda_cache_entries
+    REGEX "^CMAKE_CUDA")
+if(consumer_cuda_cache_entries)
+    message(FATAL_ERROR
+        "Installed CPU package consumer unexpectedly created CUDA cache entries: "
+        "${consumer_cuda_cache_entries}")
+endif()
+
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" --build . --config Release
+    WORKING_DIRECTORY "${consumer_binary_dir}"
+    RESULT_VARIABLE consumer_build_result
+    OUTPUT_VARIABLE consumer_build_stdout
+    ERROR_VARIABLE consumer_build_stderr)
+if(NOT consumer_build_result EQUAL 0)
+    message(FATAL_ERROR
+        "Installed CPU package consumer build failed (${consumer_build_result})\n"
+        "stdout:\n${consumer_build_stdout}\n"
+        "stderr:\n${consumer_build_stderr}")
+endif()
+execute_process(
+    COMMAND "${LEO2_CTEST_COMMAND}" -C Release --output-on-failure
+    WORKING_DIRECTORY "${consumer_binary_dir}"
+    RESULT_VARIABLE consumer_test_result
+    OUTPUT_VARIABLE consumer_test_stdout
+    ERROR_VARIABLE consumer_test_stderr)
+if(NOT consumer_test_result EQUAL 0)
+    message(FATAL_ERROR
+        "Installed CPU package consumer test failed (${consumer_test_result})\n"
+        "stdout:\n${consumer_test_stdout}\n"
+        "stderr:\n${consumer_test_stderr}")
+endif()
+
+# A C source is supported, but importing a static C++ implementation from a
+# project that has not enabled CXX cannot be linked portably.  Require the
+# package to reject that configuration immediately with a useful diagnostic,
+# rather than allowing an eventual unresolved-runtime failure from the C link
+# driver.
+set(c_only_source_dir "${LEO2_BINARY_DIR}/c-only-consumer-source")
+set(c_only_binary_dir "${LEO2_BINARY_DIR}/c-only-consumer-build")
+file(MAKE_DIRECTORY "${c_only_source_dir}" "${c_only_binary_dir}")
+file(WRITE "${c_only_source_dir}/CMakeLists.txt" [=[
+cmake_minimum_required(VERSION 3.7)
+project(leopard_c_only_consumer LANGUAGES C)
+find_package(leopard CONFIG REQUIRED)
+]=])
+set(c_only_configure_command
+    "${CMAKE_COMMAND}"
+    -G "${LEO2_GENERATOR}")
+if(LEO2_GENERATOR_PLATFORM)
+    list(APPEND c_only_configure_command -A "${LEO2_GENERATOR_PLATFORM}")
+endif()
+if(LEO2_GENERATOR_TOOLSET)
+    list(APPEND c_only_configure_command -T "${LEO2_GENERATOR_TOOLSET}")
+endif()
+list(APPEND c_only_configure_command
+    "-DCMAKE_PREFIX_PATH=${relocated_prefix}"
+    "${c_only_source_dir}")
+execute_process(
+    COMMAND ${c_only_configure_command}
+    WORKING_DIRECTORY "${c_only_binary_dir}"
+    RESULT_VARIABLE c_only_configure_result
+    OUTPUT_VARIABLE c_only_configure_stdout
+    ERROR_VARIABLE c_only_configure_stderr)
+if(c_only_configure_result EQUAL 0)
+    message(FATAL_ERROR
+        "C-only package consumer unexpectedly configured without CXX")
+endif()
+set(c_only_diagnostic "${c_only_configure_stdout}\n${c_only_configure_stderr}")
+if(NOT c_only_diagnostic MATCHES "CXX enabled|LANGUAGES C CXX")
+    message(FATAL_ERROR
+        "C-only package rejection did not explain the CXX requirement:\n"
+        "${c_only_diagnostic}")
 endif()
 
 # Opting in is the only point at which a CUDA toolchain becomes mandatory.
