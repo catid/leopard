@@ -1,0 +1,26 @@
+Ubuntu clang version 18.1.3 (1ubuntu1)
+Target: x86_64-pc-linux-gnu
+Thread model: posix
+InstalledDir: /usr/bin
+Found candidate GCC installation: /usr/bin/../lib/gcc/x86_64-linux-gnu/12
+Found candidate GCC installation: /usr/bin/../lib/gcc/x86_64-linux-gnu/13
+Selected GCC installation: /usr/bin/../lib/gcc/x86_64-linux-gnu/13
+Candidate multilib: .;@m64
+Selected multilib: .;@m64
+Found CUDA installation: /usr/local/cuda-13.3, version 
+ "/usr/lib/llvm-18/bin/clang" -cc1 -triple x86_64-pc-linux-gnu -emit-obj -dumpdir build/c7-matrix/c7-asan-ubsan- -disable-free -clear-ast-before-backend -disable-llvm-verifier -discard-value-names -main-file-name c7_exact_low.cpp -mrelocation-model pic -pic-level 2 -pic-is-pie -mframe-pointer=all -fmath-errno -ffp-contract=on -fno-rounding-math -mconstructor-aliases -funwind-tables=2 -target-cpu x86-64 -tune-cpu generic -debug-info-kind=constructor -dwarf-version=5 -debugger-tuning=gdb -fdebug-compilation-dir=/home/catid/leopard-wt-c6 -v -fcoverage-compilation-dir=/home/catid/leopard-wt-c6 -resource-dir /usr/lib/llvm-18/lib/clang/18 -I . -D "LEO2_C7_SOURCE_SHA256=\"c2edae60a9d9b57826a0206532e0437a4f3fbe07d8d3978045ca75a78f92f604\"" -D "LEO2_C7_CORE_GIT_SHA=\"e03aa38bfd648a2ab18ce63795a6a8342173abed\"" -D "LEO2_C7_LIBRARY_SHA256=\"6d04cea8448e45940dca73fde54b1cf949e5bfbe4ae0eebce31589a1774cdc42\"" -D LEO2_C7_DISABLE_GLOBAL_NEW_TRACKING=1 -D "LEO2_C7_SANITIZER_MODE=\"asan-ubsan\"" -D LEO2_C7_REQUIRE_ASAN_UBSAN=1 -internal-isystem /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13 -internal-isystem /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/x86_64-linux-gnu/c++/13 -internal-isystem /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/backward -internal-isystem /usr/lib/llvm-18/lib/clang/18/include -internal-isystem /usr/local/include -internal-isystem /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../x86_64-linux-gnu/include -internal-externc-isystem /usr/include/x86_64-linux-gnu -internal-externc-isystem /include -internal-externc-isystem /usr/include -O1 -Wall -Wextra -Wpedantic -Werror -std=c++11 -fdeprecated-macro -ferror-limit 19 -fsanitize=address,alignment,array-bounds,bool,builtin,enum,float-cast-overflow,function,integer-divide-by-zero,nonnull-attribute,null,object-size,pointer-overflow,return,returns-nonnull-attribute,shift-base,shift-exponent,signed-integer-overflow,unreachable,vla-bound,vptr -fsanitize-recover=alignment,array-bounds,bool,builtin,enum,float-cast-overflow,function,integer-divide-by-zero,nonnull-attribute,null,object-size,pointer-overflow,returns-nonnull-attribute,shift-base,shift-exponent,signed-integer-overflow,vla-bound,vptr -fsanitize-system-ignorelist=/usr/lib/llvm-18/lib/clang/18/share/asan_ignorelist.txt -fno-sanitize-memory-param-retval -fsanitize-address-use-after-scope -fsanitize-address-globals-dead-stripping -fno-assume-sane-operator-new -pthread -fgnuc-version=4.2.1 -fskip-odr-check-in-gmf -fcxx-exceptions -fexceptions -faddrsig -D__GCC_HAVE_DWARF2_CFI_ASM=1 -o /tmp/c7_exact_low-c5afa7.o -x c++ experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp
+clang -cc1 version 18.1.3 based upon LLVM 18.1.3 default target x86_64-pc-linux-gnu
+ignoring nonexistent directory "/usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../x86_64-linux-gnu/include"
+ignoring nonexistent directory "/include"
+#include "..." search starts here:
+#include <...> search starts here:
+ .
+ /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13
+ /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/x86_64-linux-gnu/c++/13
+ /usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../include/c++/13/backward
+ /usr/lib/llvm-18/lib/clang/18/include
+ /usr/local/include
+ /usr/include/x86_64-linux-gnu
+ /usr/include
+End of search list.
+ "/usr/bin/ld" -z relro --hash-style=gnu --build-id --eh-frame-hdr -m elf_x86_64 -pie -dynamic-linker /lib64/ld-linux-x86-64.so.2 -o build/c7-matrix/c7-asan-ubsan /lib/x86_64-linux-gnu/Scrt1.o /lib/x86_64-linux-gnu/crti.o /usr/bin/../lib/gcc/x86_64-linux-gnu/13/crtbeginS.o -L/usr/bin/../lib/gcc/x86_64-linux-gnu/13 -L/usr/bin/../lib/gcc/x86_64-linux-gnu/13/../../../../lib64 -L/lib/x86_64-linux-gnu -L/lib/../lib64 -L/usr/lib/x86_64-linux-gnu -L/usr/lib/../lib64 -L/lib -L/usr/lib --whole-archive /usr/lib/llvm-18/lib/clang/18/lib/linux/libclang_rt.asan_static-x86_64.a --no-whole-archive --whole-archive /usr/lib/llvm-18/lib/clang/18/lib/linux/libclang_rt.asan-x86_64.a --no-whole-archive --dynamic-list=/usr/lib/llvm-18/lib/clang/18/lib/linux/libclang_rt.asan-x86_64.a.syms --whole-archive /usr/lib/llvm-18/lib/clang/18/lib/linux/libclang_rt.asan_cxx-x86_64.a --no-whole-archive --dynamic-list=/usr/lib/llvm-18/lib/clang/18/lib/linux/libclang_rt.asan_cxx-x86_64.a.syms -v /tmp/c7_exact_low-c5afa7.o build/c7-matrix/core-asan-ubsan/liblibleopard.a -lstdc++ -lm --no-as-needed -lpthread -lrt -lm -ldl -lresolv -lgcc_s -lgcc -lpthread -lc -lgcc_s -lgcc /usr/bin/../lib/gcc/x86_64-linux-gnu/13/crtendS.o /lib/x86_64-linux-gnu/crtn.o
