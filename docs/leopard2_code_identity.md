@@ -131,7 +131,7 @@ write.  Counts, TLV values, TLV count, and complete identifiers retain the same
 `test_code_identity_c.c` contains 211 direct C checks and also provides a test-
 only line protocol.  `test_code_identity_c.py` compiles it with strict C99 GCC
 warnings and compares both C serialization and C deserialization with the
-Python implementation.  The deterministic differential matrix covers all 4
+Python implementation.  The deterministic differential matrix covers all 5
 golden vectors, 6,085 valid profile/field/count combinations, 66 zero, field-
 boundary, and `UINT32_MAX` count cases, 4,162 metadata count/length cases, one
 exact 65,535-byte valid identifier, one 65,536-byte rejection, 81 explicitly
