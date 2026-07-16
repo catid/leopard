@@ -28,6 +28,9 @@ EXPECTED_RUNTIME = {
 }
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 GIT_SHA = re.compile(r"[0-9a-f]{40}\Z")
+FROZEN_RESULTS_FILE_COUNT = 65
+FROZEN_RESULTS_TREE_SHA256 = (
+    "296125189abee1ac016c293f540ad9961cb29e95f2e5203eabed6485231138fd")
 ARCHIVE_MEMBERS = (
     "leopard.cpp.o", "leopard2.cpp.o", "Leopard2Backend.cpp.o",
     "Leopard2BackendScalar.cpp.o", "Leopard2CpuFeatures.cpp.o",
@@ -87,6 +90,30 @@ EXPECTED_CORRECTNESS = {
 
 def digest(path: pathlib.Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def frozen_results_manifest_bytes() -> bytes:
+    if not RESULTS.is_dir() or RESULTS.is_symlink():
+        raise ValueError("retained results root is absent or indirect")
+    files: list[pathlib.Path] = []
+    for entry in RESULTS.rglob("*"):
+        if entry.is_symlink() or not (entry.is_file() or entry.is_dir()):
+            raise ValueError("retained results tree contains an indirect entry")
+        if entry.is_file():
+            files.append(entry)
+    files.sort(key=lambda path: path.relative_to(RESULTS).as_posix())
+    if len(files) != FROZEN_RESULTS_FILE_COUNT:
+        raise ValueError("retained results path set changed")
+    return "".join(
+        f"{digest(path)}  ./{path.relative_to(RESULTS).as_posix()}\n"
+        for path in files
+    ).encode("utf-8")
+
+
+def validate_frozen_results_tree() -> None:
+    actual = hashlib.sha256(frozen_results_manifest_bytes()).hexdigest()
+    if actual != FROZEN_RESULTS_TREE_SHA256:
+        raise ValueError("retained results path or byte set changed")
 
 
 def load(name: str) -> dict:
@@ -615,6 +642,7 @@ def validate_smoke(data: dict, expected_affinity: list[int]) -> None:
 
 
 def validate_manifest(data: dict) -> None:
+    validate_frozen_results_tree()
     if set(data) != {
         "builds", "core_git_sha", "runner", "runs", "schema", "scope",
         "source", "status", "taskset",
@@ -1070,66 +1098,175 @@ class CheckpointTests(unittest.TestCase):
     def test_rehashed_semantic_log_forgeries_rejected(self) -> None:
         original = load("build-run-manifest.json")
 
-        def require_rejection(
-            record: dict, candidate: dict, forged: bytes,
+        def require_rebound_rejection(
+            candidate: dict, replacements: list[tuple[dict, bytes]],
         ) -> None:
-            path = resolve_record_path(record["path"])
-            retained = path.read_bytes()
+            retained: list[tuple[pathlib.Path, bytes]] = []
+            manifest_path = RESULTS / "build-run-manifest.json"
+            retained_manifest = manifest_path.read_bytes()
             try:
-                path.write_bytes(forged)
-                record.update(
-                    bytes=len(forged),
-                    sha256=hashlib.sha256(forged).hexdigest())
+                for record, forged in replacements:
+                    path = resolve_record_path(record["path"])
+                    retained.append((path, path.read_bytes()))
+                    path.write_bytes(forged)
+                    record.update(
+                        bytes=len(forged),
+                        sha256=hashlib.sha256(forged).hexdigest())
+                manifest_path.write_text(
+                    json.dumps(candidate, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    validate_frozen_results_tree()
                 with self.assertRaises(ValueError):
                     validate_manifest(candidate)
             finally:
-                path.write_bytes(retained)
+                for path, contents in retained:
+                    path.write_bytes(contents)
+                manifest_path.write_bytes(retained_manifest)
+
+        def mutate_after(data: bytes, marker: bytes) -> bytes:
+            offset = data.index(marker) + len(marker)
+            replacement = b"9" if data[offset:offset + 1] != b"9" else b"8"
+            return data[:offset] + replacement + data[offset + 1:]
+
+        def mutate_scan(record: dict) -> bytes:
+            retained = resolve_record_path(record["path"]).read_bytes()
+            address = re.search(rb":([0-9a-f]{16}) ", retained)
+            self.assertIsNotNone(address)
+            offset = address.start(1)
+            replacement = b"1" if retained[offset:offset + 1] != b"1" else b"0"
+            return retained[:offset] + replacement + retained[offset + 1:]
 
         candidate = copy.deepcopy(original)
         record = candidate["builds"][0]["configure_stdout"]
-        require_rejection(
-            record, candidate, b"FORGED CONFIGURE SUCCESS\n")
+        require_rebound_rejection(
+            candidate, [(record, b"FORGED CONFIGURE SUCCESS\n")])
 
         candidate = copy.deepcopy(original)
         record = candidate["builds"][0]["compile_stderr"]
-        require_rejection(record, candidate, b"FORGED COMPILE SUCCESS\n")
+        require_rebound_rejection(
+            candidate, [(record, b"FORGED COMPILE SUCCESS\n")])
 
         candidate = copy.deepcopy(original)
         record = candidate["runs"][0]["stdout"]
-        require_rejection(record, candidate, b"FORGED RUN SUCCESS\n")
+        require_rebound_rejection(
+            candidate, [(record, b"FORGED RUN SUCCESS\n")])
+
+        scalar = original["builds"][0]
+        configure_record = scalar["configure_stdout"]
+        build_record = scalar["build_stdout"]
+        compile_record = scalar["compile_stderr"]
+        plausible_configure = mutate_after(
+            resolve_record_path(configure_record["path"]).read_bytes(),
+            b"-- Configuring done (")
+        plausible_build = mutate_after(
+            resolve_record_path(build_record["path"]).read_bytes(), b"[  ")
+        plausible_compile = mutate_after(
+            resolve_record_path(compile_record["path"]).read_bytes(),
+            b"Compiler executable checksum: ")
+        validate_configure_log_text(
+            plausible_configure.decode("utf-8"), sanitizer=False,
+            c_compiler=pathlib.Path(scalar["c_compiler"]["path"]),
+            cxx_compiler=pathlib.Path(scalar["cxx_compiler"]["path"]),
+            build_dir=scalar["build_dir"])
+        validate_build_log_text(
+            plausible_build.decode("utf-8"), sanitizer=False,
+            cmake=pathlib.Path(scalar["cmake"]["path"]),
+            cxx_compiler=pathlib.Path(scalar["cxx_compiler"]["path"]),
+            gmake=pathlib.Path(scalar["gmake"]["path"]),
+            ar=pathlib.Path(scalar["ar"]["path"]),
+            ranlib=pathlib.Path(scalar["ranlib"]["path"]))
+        validate_compile_log_text(
+            resolve_record_path(scalar["compile_stdout"]["path"]).read_text(
+                encoding="utf-8"),
+            plausible_compile.decode("utf-8"), sanitizer=False,
+            compiler=pathlib.Path(scalar["compiler"]["path"]),
+            linker=pathlib.Path(scalar["standalone_linker"]["path"]))
+        candidate = copy.deepcopy(original)
+        candidate_scalar = candidate["builds"][0]
+        require_rebound_rejection(candidate, [
+            (candidate_scalar["configure_stdout"], plausible_configure),
+            (candidate_scalar["build_stdout"], plausible_build),
+            (candidate_scalar["compile_stderr"], plausible_compile),
+        ])
 
         candidate = copy.deepcopy(original)
         instrumentation = candidate["builds"][4]["instrumentation"]
-        record = instrumentation["executable_symbol_scan"]
+        executable_record = instrumentation["executable_symbol_scan"]
+        archive_record = instrumentation["core_archive_symbol_scan"]
+        forged_executable_scan = mutate_scan(executable_record)
+        forged_archive_scan = mutate_scan(archive_record)
         target = candidate["builds"][4]["executable"]["path"]
-        retained_scan = resolve_record_path(record["path"]).read_bytes()
-        address = re.search(rb":([0-9a-f]{16}) ", retained_scan)
-        self.assertIsNotNone(address)
-        offset = address.start(1)
-        replacement = b"1" if retained_scan[offset:offset + 1] != b"1" else b"0"
-        forged_scan = (
-            retained_scan[:offset] + replacement + retained_scan[offset + 1:])
         validate_symbol_scan_text(
-            forged_scan.decode("utf-8"), target=target, archive=False,
+            forged_executable_scan.decode("utf-8"), target=target, archive=False,
             expected_counts={"asan_lines": 320, "ubsan_lines": 54},
             expected_members={})
-        require_rejection(record, candidate, forged_scan)
+        expected_member_counts = {
+            member: {
+                "asan_lines": SANITIZED_MEMBER_COUNTS[member][0],
+                "ubsan_lines": SANITIZED_MEMBER_COUNTS[member][1],
+            }
+            for member in ARCHIVE_MEMBERS
+        }
+        validate_symbol_scan_text(
+            forged_archive_scan.decode("utf-8"),
+            target=candidate["builds"][4]["library"]["path"], archive=True,
+            expected_counts={"asan_lines": 306, "ubsan_lines": 86},
+            expected_members=expected_member_counts)
+        require_rebound_rejection(candidate, [
+            (executable_record, forged_executable_scan),
+            (archive_record, forged_archive_scan),
+        ])
 
-        executable = resolve_record_path(
-            candidate["builds"][4]["executable"]["path"])
-        if (executable.is_file() and digest(executable) ==
-                candidate["builds"][4]["executable"]["sha256"]):
-            retained = resolve_record_path(record["path"]).read_bytes()
+        sanitized = original["builds"][4]
+        nm = pathlib.Path(sanitized["nm"]["path"])
+        for target_key, scan_key, forged in (
+            ("executable", "executable_symbol_scan", forged_executable_scan),
+            ("library", "core_archive_symbol_scan", forged_archive_scan),
+        ):
+            target_record = sanitized[target_key]
+            target_path = resolve_record_path(target_record["path"])
+            scan_record = sanitized["instrumentation"][scan_key]
+            scan_path = resolve_record_path(scan_record["path"])
+            if not (target_path.is_file() and
+                    digest(target_path) == target_record["sha256"]):
+                continue
+            retained = scan_path.read_bytes()
             try:
-                resolve_record_path(record["path"]).write_bytes(forged_scan)
+                scan_path.write_bytes(forged)
                 with self.assertRaises(ValueError):
                     validate_live_symbol_scan(
-                        pathlib.Path(candidate["builds"][4]["nm"]["path"]),
-                        executable,
-                        candidate["builds"][4]["executable"]["path"],
-                        resolve_record_path(record["path"]))
+                        nm, target_path, target_record["path"], scan_path)
             finally:
-                resolve_record_path(record["path"]).write_bytes(retained)
+                scan_path.write_bytes(retained)
+
+        manifest_path = RESULTS / "build-run-manifest.json"
+        retained_manifest = manifest_path.read_bytes()
+        try:
+            manifest_path.write_bytes(retained_manifest + b"\n")
+            with self.assertRaises(ValueError):
+                validate_frozen_results_tree()
+        finally:
+            manifest_path.write_bytes(retained_manifest)
+
+        extra = RESULTS / "unexpected-artifact.bin"
+        self.assertFalse(extra.exists())
+        try:
+            extra.write_bytes(b"unexpected\n")
+            with self.assertRaises(ValueError):
+                validate_frozen_results_tree()
+        finally:
+            extra.unlink(missing_ok=True)
+
+        missing = RESULTS / "logs" / "scalar-run.stdout.txt"
+        retained_missing = missing.read_bytes()
+        try:
+            missing.unlink()
+            with self.assertRaises(ValueError):
+                validate_frozen_results_tree()
+        finally:
+            missing.write_bytes(retained_missing)
+        validate_frozen_results_tree()
 
 
 if __name__ == "__main__":
