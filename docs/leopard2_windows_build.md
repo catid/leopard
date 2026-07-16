@@ -40,9 +40,11 @@ platform with:
 
 It compares the hand-maintained project with CMake's production source graph
 and rejects missing or duplicate sources, filter drift, a project-wide ISA
-increase, or a CUDA dependency.  This structural check is not native Windows
-compiler or runtime evidence; final MSVC and clang-cl build, test, and dispatch
-validation still requires a Windows host.
+increase, unproved package or object-library link edges, or a CUDA dependency.
+Package discovery and link commands inside unmodeled CMake function or macro
+scopes fail closed.  This structural check is not native Windows compiler or
+runtime evidence; final MSVC and clang-cl build, test, and dispatch validation
+still requires a Windows host.
 
 Open limitation: this repository has no captured native Visual Studio 2015
 load/build result.  The structural gate proves the checked-in metadata and

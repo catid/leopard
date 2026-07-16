@@ -797,6 +797,11 @@ class CMakeProductionGraph(object):
             ("PythonInterp", "QUIET"),
             ("Python3", "COMPONENTS", "Interpreter", "QUIET"),
         }
+        approved_libleopard_links = {
+            ("PUBLIC", "Threads::Threads"),
+            ("PUBLIC", "OpenMP::OpenMP_CXX"),
+            ("PUBLIC", "${OpenMP_CXX_FLAGS}"),
+        }
 
         for command, body in self.raw_commands:
             tokens = cmake_tokens(body)
@@ -884,9 +889,13 @@ class CMakeProductionGraph(object):
                         command)
                 if command in {
                         "include", "add_subdirectory", "subdirs",
-                        "cmake_language", "load_command"}:
+                        "cmake_language", "load_command", "find_package"}:
                     raise ContractError(
                         "graph extension in unsupported CMake block: " + command)
+                if command in {"target_link_libraries", "link_libraries"}:
+                    raise ContractError(
+                        "link graph command in unsupported CMake block: " +
+                        command)
                 continue
 
             if command == "include":
@@ -906,6 +915,9 @@ class CMakeProductionGraph(object):
             if command in {"cmake_language", "load_command"}:
                 raise ContractError(
                     "CMake dynamic command execution is unsupported: " + command)
+            if command == "link_libraries":
+                raise ContractError(
+                    "CMake directory link graph requires recursive proof")
 
             if command == "set" and tokens:
                 variable = self._mutation_variable(tokens[0], guard, command)
@@ -1005,6 +1017,21 @@ class CMakeProductionGraph(object):
             if not bool_satisfiable(guard):
                 if command == "add_library" and tokens:
                     self.declared_targets.add(tokens[0])
+                continue
+            if command == "target_link_libraries" and tokens:
+                target = self._target_name(tokens[0], guard)
+                if target == "libleopard":
+                    link_specification = tuple(tokens[1:])
+                    if link_specification not in approved_libleopard_links:
+                        raise ContractError(
+                            "unapproved libleopard target_link_libraries: " +
+                            " ".join(tokens[1:]))
+                    if (link_specification ==
+                            ("PUBLIC", "${OpenMP_CXX_FLAGS}") and
+                            "OpenMP_CXX_FLAGS" in self.variables):
+                        raise ContractError(
+                            "local OpenMP_CXX_FLAGS mutation can redirect "
+                            "libleopard link inputs")
                 continue
             variable_writers = {
                 "file", "string", "math", "separate_arguments",
@@ -1120,9 +1147,13 @@ class CMakeProductionGraph(object):
             self._record_source_properties(command, raw_tokens, guard, reasons)
         elif (command == "set_property" and raw_tokens and
               raw_tokens[0].upper() == "TARGET"):
-            self._reject_target_source_property(command, raw_tokens, guard)
+            self._reject_target_graph_property(command, raw_tokens, guard)
+        elif command == "set_property" and raw_tokens:
+            self._reject_link_property(command, raw_tokens, guard)
         elif command == "set_target_properties" and raw_tokens:
-            self._reject_target_source_property(command, raw_tokens, guard)
+            self._reject_target_graph_property(command, raw_tokens, guard)
+        elif command == "set_directory_properties" and raw_tokens:
+            self._reject_link_property(command, raw_tokens, guard)
 
     def _record_source_properties(self, command, raw_tokens, guard, reasons):
         if reasons:
@@ -1154,7 +1185,7 @@ class CMakeProductionGraph(object):
             self.source_property_references.append(
                 (reference, guard, list(properties)))
 
-    def _reject_target_source_property(self, command, raw_tokens, guard):
+    def _reject_target_graph_property(self, command, raw_tokens, guard):
         tokens = self._expand(raw_tokens, guard)
         upper = [token.upper() for token in tokens]
         marker = "PROPERTY" if command == "set_property" else "PROPERTIES"
@@ -1166,6 +1197,18 @@ class CMakeProductionGraph(object):
         if "SOURCES" in property_tokens:
             raise ContractError(
                 "CMake target SOURCES property bypasses graph validation")
+        if any(property_name in property_tokens for property_name in {
+                "LINK_LIBRARIES", "INTERFACE_LINK_LIBRARIES"}):
+            raise ContractError(
+                "CMake target link property bypasses graph validation")
+
+    def _reject_link_property(self, command, raw_tokens, guard):
+        tokens = self._expand(raw_tokens, guard)
+        if any(token.upper() in {
+                "LINK_LIBRARIES", "INTERFACE_LINK_LIBRARIES"}
+                for token in tokens):
+            raise ContractError(
+                "CMake link property bypasses graph validation: " + command)
 
     @staticmethod
     def _literal_source(token, reject_cuda=True):
@@ -2056,6 +2099,95 @@ set(LIB_SOURCE_FILES ${SAVED_LIB_SOURCE_FILES})"""
                         "graph proof|unapproved CMake (?:graph|package)|"
                         "dynamic command"):
                     self.resolve(mutation)
+
+    def test_find_package_in_unsupported_block_is_rejected(self):
+        for block, closing in (
+                ("function(inject_package)", "endfunction()"),
+                ("macro(inject_package)", "endmacro()")):
+            for package in (
+                    "find_package(Injected CONFIG REQUIRED)",
+                    "find_package(Threads REQUIRED)"):
+                with self.subTest(block=block, package=package):
+                    mutation = (block + "\n    " + package + "\n" + closing +
+                                "\ninject_package()")
+                    with self.assertRaisesRegex(
+                            ContractError,
+                            "graph extension in unsupported CMake block: "
+                            "find_package"):
+                        self.resolve(mutation)
+
+    def test_object_library_link_attachment_is_rejected(self):
+        mutations = (
+            """
+add_library(linked_backend OBJECT LinkedBackend.cpp)
+target_link_libraries(libleopard PRIVATE linked_backend)
+""",
+            """
+add_library(linked_backend OBJECT LinkedBackend.cpp)
+set(LINK_DESTINATION libleopard)
+target_link_libraries(${LINK_DESTINATION} PRIVATE linked_backend)
+""",
+            """
+add_library(linked_backend OBJECT LinkedBackend.cpp)
+function(inject_link)
+    target_link_libraries(libleopard PRIVATE linked_backend)
+endfunction()
+inject_link()
+""",
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation.strip().splitlines()[-1]):
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "unapproved libleopard target_link_libraries|"
+                        "link graph command in unsupported CMake block"):
+                    self.resolve(mutation)
+
+    def test_equivalent_object_library_link_mutations_are_rejected(self):
+        object_definition = (
+            "add_library(linked_backend OBJECT LinkedBackend.cpp)")
+        mutations = (
+            "set_property(TARGET libleopard APPEND PROPERTY "
+            "LINK_LIBRARIES linked_backend)",
+            "set_target_properties(libleopard PROPERTIES "
+            "LINK_LIBRARIES linked_backend)",
+            "set_property(TARGET libleopard APPEND PROPERTY "
+            "INTERFACE_LINK_LIBRARIES linked_backend)",
+        )
+        for mutation in mutations:
+            with self.subTest(command=mutation.split("(", 1)[0]):
+                with self.assertRaisesRegex(
+                        ContractError, "link property bypasses graph"):
+                    self.resolve(object_definition + "\n" + mutation)
+
+        marker = "add_library(libleopard STATIC ${LIB_SOURCE_FILES})"
+        directory_mutations = (
+            "link_libraries(linked_backend)",
+            "set_property(DIRECTORY APPEND PROPERTY "
+            "LINK_LIBRARIES linked_backend)",
+            "set_directory_properties(PROPERTIES "
+            "LINK_LIBRARIES linked_backend)",
+        )
+        for mutation in directory_mutations:
+            with self.subTest(command=mutation.split("(", 1)[0]):
+                replacement = (
+                    object_definition + "\n" + mutation + "\n" + marker)
+                text = self.cmake.replace(marker, replacement, 1)
+                self.assertNotEqual(text, self.cmake)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "directory link graph|link property bypasses graph"):
+                    self.resolve_text(text)
+
+    def test_approved_link_flag_variable_cannot_be_locally_redirected(self):
+        marker = ('target_link_libraries(libleopard PUBLIC '
+                  '"${OpenMP_CXX_FLAGS}")')
+        mutation = "set(OpenMP_CXX_FLAGS linked_backend)\n" + marker
+        text = self.cmake.replace(marker, mutation, 1)
+        self.assertNotEqual(text, self.cmake)
+        with self.assertRaisesRegex(
+                ContractError, "OpenMP_CXX_FLAGS mutation"):
+            self.resolve_text(text)
 
     def test_indirect_module_path_mutation_is_rejected(self):
         mutation = (
