@@ -19,6 +19,7 @@ import math
 import os
 import platform
 import re
+import shlex
 import shutil
 import statistics
 import subprocess
@@ -641,6 +642,94 @@ def _link_manifest(path: Path, replacements: Mapping[str, str]) -> dict[str, Any
     }
 
 
+def _link_input_kind(path: Path) -> str:
+    name = path.name
+    if name.endswith((".o", ".obj")):
+        return "object"
+    if name.endswith((".a", ".lib")):
+        return "static-archive"
+    if ".so" in name or name.endswith((".dylib", ".dll")):
+        return "shared-library"
+    return "other-file"
+
+
+def _link_input_manifest(
+        path: Path, working_directory: Path,
+        replacements: Mapping[str, str]) -> dict[str, Any]:
+    """Hash every existing file consumed by a CMake-generated link command.
+
+    The normalized command text proves what CMake requested; this companion
+    closure proves which object/archive/library bytes actually existed at the
+    time of the link.  Output files and tool executables are deliberately
+    excluded.  Response files are rejected rather than silently leaving their
+    contents outside the closure.
+    """
+    try:
+        lines = [line for line in path.read_text().splitlines() if line.strip()]
+    except OSError as error:
+        raise ComparisonError(f"cannot read actual link command {path}: {error}") from error
+    if not lines:
+        raise ComparisonError(f"actual link command is empty: {path}")
+
+    records: dict[str, dict[str, Any]] = {}
+    for line in lines:
+        try:
+            arguments = shlex.split(line)
+        except ValueError as error:
+            raise ComparisonError(f"cannot parse actual link command {path}: {error}") from error
+        if not arguments:
+            raise ComparisonError(f"actual link command has an empty line: {path}")
+        if any(argument.startswith("@") for argument in arguments):
+            raise ComparisonError(
+                f"response-file link input is not closed by the evidence model: {path}")
+
+        output_indices: set[int] = set()
+        tool = Path(arguments[0]).name
+        for index, argument in enumerate(arguments[:-1]):
+            if argument == "-o":
+                output_indices.add(index + 1)
+        if tool in ("ar", "gcc-ar", "llvm-ar") and len(arguments) >= 3:
+            output_indices.add(2)
+        elif tool in ("ranlib", "gcc-ranlib", "llvm-ranlib"):
+            output_indices.update(range(1, len(arguments)))
+
+        for index, argument in enumerate(arguments[1:], start=1):
+            if index in output_indices or argument.startswith("-"):
+                continue
+            candidate = Path(argument)
+            if not candidate.is_absolute():
+                candidate = working_directory / candidate
+            absolute = Path(os.path.abspath(candidate))
+            if not absolute.is_file():
+                continue
+            real_path = absolute.resolve()
+            normalized_path = _replace_paths(str(absolute), replacements)
+            normalized_realpath = _replace_paths(str(real_path), replacements)
+            record = {
+                "normalized_path": normalized_path,
+                "normalized_realpath": normalized_realpath,
+                "kind": _link_input_kind(absolute),
+                "size_bytes": real_path.stat().st_size,
+                "sha256": sha256_file(real_path),
+            }
+            prior = records.get(normalized_path)
+            if prior is not None and prior != record:
+                raise ComparisonError(
+                    f"link input changed while closing command {path}: {normalized_path}")
+            records[normalized_path] = record
+
+    inputs = [records[name] for name in sorted(records)]
+    if not inputs:
+        raise ComparisonError(f"actual link command has no file inputs: {path}")
+    encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
+    return {
+        "schema": "leopard2-actual-link-input-closure/v1",
+        "inputs": inputs,
+        "input_count": len(inputs),
+        "sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+    }
+
+
 def _readelf_dynamic_names(readelf: Path, binary: Path, tag: str) -> list[str]:
     completed = run_checked([str(readelf), "-d", str(binary)], timeout=30)
     pattern = (r"Shared library: \[([^\]]+)\]" if tag == "NEEDED" else
@@ -651,41 +740,96 @@ def _readelf_dynamic_names(readelf: Path, binary: Path, tag: str) -> list[str]:
     return names
 
 
-def _runtime_link_manifest(
-        executable: Path, ldd: Path, readelf: Path) -> dict[str, Any]:
-    needed = _readelf_dynamic_names(readelf, executable, "NEEDED")
+def _readelf_interpreter(readelf: Path, binary: Path) -> Path:
+    completed = run_checked([str(readelf), "-l", str(binary)], timeout=30)
+    matches = re.findall(r"Requesting program interpreter: ([^\]]+)\]", completed.stdout)
+    if len(matches) != 1:
+        raise ComparisonError(f"executable has no unique ELF interpreter: {binary}")
+    path = Path(matches[0])
+    if not path.is_absolute() or not path.is_file():
+        raise ComparisonError(f"ELF interpreter is missing: {path}")
+    return path
+
+
+def _ldd_resolution_map(ldd: Path, executable: Path) -> dict[str, Path]:
     completed = run_checked([str(ldd), str(executable)], timeout=30)
-    resolved: dict[str, str] = {}
+    resolved: dict[str, Path] = {}
     for line in completed.stdout.splitlines():
         match = re.match(r"^\s*(\S+)\s+=>\s+(\S+)", line)
         if match:
             if match.group(2) == "not":
                 raise ComparisonError(f"unresolved dynamic dependency: {line.strip()}")
-            resolved[match.group(1)] = match.group(2)
-    dependencies = []
-    for name in needed:
-        candidate = resolved.get(name)
-        if not candidate:
+            resolved[match.group(1)] = Path(match.group(2))
+            continue
+        absolute = re.match(r"^\s*(/\S+)\s+\(", line)
+        if absolute:
+            path = Path(absolute.group(1))
+            resolved[path.name] = path
+    return resolved
+
+
+def _runtime_link_manifest(
+        executable: Path, ldd: Path, readelf: Path) -> dict[str, Any]:
+    direct_needed = _readelf_dynamic_names(readelf, executable, "NEEDED")
+    if not direct_needed:
+        raise ComparisonError(f"benchmark executable has no DT_NEEDED entries: {executable}")
+    interpreter_path = _readelf_interpreter(readelf, executable)
+    interpreter_realpath = interpreter_path.resolve()
+    interpreter_sonames = _readelf_dynamic_names(
+        readelf, interpreter_realpath, "SONAME")
+    if len(interpreter_sonames) != 1:
+        raise ComparisonError(
+            f"ELF interpreter has no unique SONAME: {interpreter_realpath}")
+    interpreter = {
+        "resolved_path": str(interpreter_path),
+        "resolved_realpath": str(interpreter_realpath),
+        "soname": interpreter_sonames[0],
+        "sha256": sha256_file(interpreter_realpath),
+    }
+
+    resolutions = _ldd_resolution_map(ldd, executable)
+    resolutions.setdefault(interpreter["soname"], interpreter_path)
+    pending = list(dict.fromkeys([*direct_needed, interpreter["soname"]]))
+    objects: dict[str, dict[str, Any]] = {}
+    while pending:
+        name = pending.pop(0)
+        if name in objects:
+            continue
+        linked_path = resolutions.get(name)
+        if linked_path is None:
             raise ComparisonError(
-                f"ldd did not resolve DT_NEEDED {name!r} for {executable}")
-        linked_path = Path(candidate)
+                f"ldd did not resolve transitive DT_NEEDED {name!r} for {executable}")
         real_path = linked_path.resolve()
         if not real_path.is_file():
             raise ComparisonError(f"resolved dynamic library is missing: {real_path}")
         sonames = _readelf_dynamic_names(readelf, real_path, "SONAME")
-        if len(sonames) != 1:
-            raise ComparisonError(f"resolved dynamic library has no unique SONAME: {real_path}")
-        dependencies.append({
-            "needed": name,
+        if len(sonames) != 1 or sonames[0] != name:
+            raise ComparisonError(
+                f"resolved dynamic library SONAME mismatch for {name!r}: {real_path}")
+        needed = _readelf_dynamic_names(readelf, real_path, "NEEDED")
+        objects[name] = {
+            "soname": name,
             "resolved_path": str(linked_path),
             "resolved_realpath": str(real_path),
-            "soname": sonames[0],
+            "needed": needed,
             "sha256": sha256_file(real_path),
-        })
-    encoded = json.dumps(dependencies, sort_keys=True, separators=(",", ":"))
+        }
+        for dependency in needed:
+            if dependency not in objects and dependency not in pending:
+                pending.append(dependency)
+
+    dependencies = [objects[name] for name in sorted(objects)]
+    payload = {
+        "direct_needed": direct_needed,
+        "interpreter": interpreter,
+        "dependencies": dependencies,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return {
-        "schema": "leopard2-resolved-dynamic-linkage/v1",
+        "schema": "leopard2-resolved-dynamic-linkage/v2",
         "executable_sha256": sha256_file(executable),
+        "direct_needed": direct_needed,
+        "interpreter": interpreter,
         "dependencies": dependencies,
         "dependency_count": len(dependencies),
         "sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
@@ -772,6 +916,21 @@ def build_identity(paths: Mapping[str, Path], nasm: Mapping[str, Any]) -> dict[s
     adapter_executable = (
         paths["adapter_build"] / "leopard2_isal_benchmark").resolve()
     leopard_executable = (paths["leopard_build"] / "bench_leopard2").resolve()
+    link_files = {
+        "isa_l_archive": (
+            paths["isa_build"] / "CMakeFiles/isal.dir/link.txt",
+            paths["isa_build"]),
+        "adapter_executable": (
+            paths["adapter_build"] /
+            "CMakeFiles/leopard2_isal_benchmark.dir/link.txt",
+            paths["adapter_build"]),
+        "leopard2_library": (
+            paths["leopard_build"] / "CMakeFiles/libleopard.dir/link.txt",
+            paths["leopard_build"]),
+        "leopard2_executable": (
+            paths["leopard_build"] / "CMakeFiles/bench_leopard2.dir/link.txt",
+            paths["leopard_build"]),
+    }
     identity = {
         "schema": TOOLCHAIN_SCHEMA,
         "recipe": recipe,
@@ -800,17 +959,12 @@ def build_identity(paths: Mapping[str, Path], nasm: Mapping[str, Any]) -> dict[s
                 paths["leopard_build"] / "compile_commands.json", replacements),
         },
         "link_commands": {
-            "isa_l_archive": _link_manifest(
-                paths["isa_build"] / "CMakeFiles/isal.dir/link.txt", replacements),
-            "adapter_executable": _link_manifest(
-                paths["adapter_build"] /
-                "CMakeFiles/leopard2_isal_benchmark.dir/link.txt", replacements),
-            "leopard2_library": _link_manifest(
-                paths["leopard_build"] / "CMakeFiles/libleopard.dir/link.txt",
-                replacements),
-            "leopard2_executable": _link_manifest(
-                paths["leopard_build"] / "CMakeFiles/bench_leopard2.dir/link.txt",
-                replacements),
+            name: _link_manifest(link_path, replacements)
+            for name, (link_path, _) in link_files.items()
+        },
+        "link_inputs": {
+            name: _link_input_manifest(link_path, directory, replacements)
+            for name, (link_path, directory) in link_files.items()
         },
         "static_inputs": {
             "isa_l_archive": {
@@ -918,45 +1072,129 @@ def _validate_link_manifest(value: Mapping[str, Any], label: str) -> None:
         raise ComparisonError(f"{label} digest is not line-derived")
 
 
+def _validate_link_input_manifest(value: Mapping[str, Any], label: str) -> None:
+    require_exact_keys(value, {"schema", "inputs", "input_count", "sha256"}, label)
+    if value.get("schema") != "leopard2-actual-link-input-closure/v1":
+        raise ComparisonError(f"wrong {label} schema")
+    inputs = value.get("inputs")
+    if not isinstance(inputs, list) or not inputs:
+        raise ComparisonError(f"{label} inputs are missing")
+    paths = []
+    for link_input in inputs:
+        require_exact_keys(link_input, {
+            "normalized_path", "normalized_realpath", "kind", "size_bytes",
+            "sha256"}, f"{label} input")
+        path = link_input.get("normalized_path")
+        realpath = link_input.get("normalized_realpath")
+        if (not isinstance(path, str) or not path or
+                not isinstance(realpath, str) or not realpath or
+                (not path.startswith("${") and not Path(path).is_absolute()) or
+                (not realpath.startswith("${") and not Path(realpath).is_absolute()) or
+                any(prefix in item for item in (path, realpath)
+                    for prefix in ("/home/", "/Users/"))):
+            raise ComparisonError(f"{label} input path is not normalized")
+        if link_input.get("kind") not in (
+                "object", "static-archive", "shared-library", "other-file"):
+            raise ComparisonError(f"{label} input kind is invalid")
+        size = link_input.get("size_bytes")
+        if isinstance(size, bool) or not isinstance(size, int) or size <= 0:
+            raise ComparisonError(f"{label} input size is invalid")
+        require_hex(link_input.get("sha256"), 64, f"{label} input digest")
+        paths.append(path)
+    if paths != sorted(set(paths)):
+        raise ComparisonError(f"{label} inputs are not uniquely sorted")
+    if value.get("input_count") != len(inputs):
+        raise ComparisonError(f"{label} input count is not derived")
+    encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
+    if value.get("sha256") != hashlib.sha256(encoded.encode("utf-8")).hexdigest():
+        raise ComparisonError(f"{label} digest is not input-derived")
+
+
 def _validate_runtime_link_manifest(
         value: Mapping[str, Any], label: str) -> None:
     require_exact_keys(value, {
-        "schema", "executable_sha256", "dependencies", "dependency_count",
-        "sha256"}, label)
-    if value.get("schema") != "leopard2-resolved-dynamic-linkage/v1":
+        "schema", "executable_sha256", "direct_needed", "interpreter",
+        "dependencies", "dependency_count", "sha256"}, label)
+    if value.get("schema") != "leopard2-resolved-dynamic-linkage/v2":
         raise ComparisonError(f"wrong {label} schema")
     require_hex(value.get("executable_sha256"), 64, f"{label} executable digest")
+    direct_needed = value.get("direct_needed")
+    if (not isinstance(direct_needed, list) or not direct_needed or
+            any(not isinstance(name, str) or not name for name in direct_needed) or
+            len(set(direct_needed)) != len(direct_needed)):
+        raise ComparisonError(f"{label} direct dependency list is invalid")
+    interpreter = value.get("interpreter", {})
+    require_exact_keys(interpreter, {
+        "resolved_path", "resolved_realpath", "soname", "sha256"},
+        f"{label} interpreter")
+    for name in ("resolved_path", "resolved_realpath", "soname"):
+        if not isinstance(interpreter.get(name), str) or not interpreter[name]:
+            raise ComparisonError(f"{label} interpreter {name} is missing")
+    if (not Path(interpreter["resolved_path"]).is_absolute() or
+            not Path(interpreter["resolved_realpath"]).is_absolute()):
+        raise ComparisonError(f"{label} interpreter path is not absolute")
+    require_hex(interpreter.get("sha256"), 64, f"{label} interpreter digest")
     dependencies = value.get("dependencies")
     if not isinstance(dependencies, list) or not dependencies:
         raise ComparisonError(f"{label} dependencies are missing")
-    needed_names = []
+    sonames = []
     for dependency in dependencies:
         require_exact_keys(dependency, {
-            "needed", "resolved_path", "resolved_realpath", "soname", "sha256"},
+            "soname", "resolved_path", "resolved_realpath", "needed", "sha256"},
             f"{label} dependency")
-        for name in ("needed", "resolved_path", "resolved_realpath", "soname"):
+        for name in ("resolved_path", "resolved_realpath", "soname"):
             if not isinstance(dependency.get(name), str) or not dependency[name]:
                 raise ComparisonError(f"{label} dependency {name} is missing")
+        needed = dependency.get("needed")
+        if (not isinstance(needed, list) or
+                any(not isinstance(name, str) or not name for name in needed) or
+                len(set(needed)) != len(needed)):
+            raise ComparisonError(f"{label} transitive dependency list is invalid")
         if (not Path(dependency["resolved_path"]).is_absolute() or
-                not Path(dependency["resolved_realpath"]).is_absolute() or
-                dependency["needed"] != dependency["soname"]):
-            raise ComparisonError(f"{label} dependency path/SONAME is inconsistent")
+                not Path(dependency["resolved_realpath"]).is_absolute()):
+            raise ComparisonError(f"{label} dependency path is not absolute")
         require_hex(dependency.get("sha256"), 64, f"{label} dependency digest")
-        needed_names.append(dependency["needed"])
-    if len(set(needed_names)) != len(needed_names):
+        sonames.append(dependency["soname"])
+    if sonames != sorted(set(sonames)):
         raise ComparisonError(f"{label} repeats a dynamic dependency")
     if value.get("dependency_count") != len(dependencies):
         raise ComparisonError(f"{label} dependency count is not derived")
-    encoded = json.dumps(dependencies, sort_keys=True, separators=(",", ":"))
+    known = set(sonames)
+    if (not set(direct_needed).issubset(known) or
+            interpreter["soname"] not in known or
+            any(not set(dependency["needed"]).issubset(known)
+                for dependency in dependencies)):
+        raise ComparisonError(f"{label} dynamic dependency graph is not transitively closed")
+    reachable = set(direct_needed) | {interpreter["soname"]}
+    by_name = {dependency["soname"]: dependency for dependency in dependencies}
+    interpreter_node = by_name[interpreter["soname"]]
+    if any(interpreter_node[name] != interpreter[name]
+           for name in ("resolved_path", "resolved_realpath", "soname", "sha256")):
+        raise ComparisonError(f"{label} interpreter differs from its closure node")
+    frontier = list(reachable)
+    while frontier:
+        name = frontier.pop()
+        for needed in by_name[name]["needed"]:
+            if needed not in reachable:
+                reachable.add(needed)
+                frontier.append(needed)
+    if reachable != known:
+        raise ComparisonError(f"{label} contains unreachable dynamic dependencies")
+    payload = {
+        "direct_needed": direct_needed,
+        "interpreter": interpreter,
+        "dependencies": dependencies,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     if value.get("sha256") != hashlib.sha256(encoded.encode("utf-8")).hexdigest():
-        raise ComparisonError(f"{label} digest is not dependency-derived")
+        raise ComparisonError(f"{label} digest is not closure-derived")
 
 
 def validate_build_identity(
         value: Mapping[str, Any], nasm: Mapping[str, Any]) -> None:
     require_exact_keys(value, {
         "schema", "recipe", "tools", "compile_commands", "link_commands",
-        "static_inputs", "runtime_linkage", "identity_sha256"},
+        "link_inputs", "static_inputs", "runtime_linkage", "identity_sha256"},
                        "build identity")
     if value.get("schema") != TOOLCHAIN_SCHEMA:
         raise ComparisonError("wrong build-identity schema")
@@ -1035,6 +1273,10 @@ def validate_build_identity(
         "leopard2_library": ("${AR}", "${RANLIB}"),
         "leopard2_executable": ("${CXX}",),
     }
+    link_inputs = value.get("link_inputs", {})
+    require_exact_keys(link_inputs, set(required_link_tools), "actual link input closure")
+    for name, manifest in link_inputs.items():
+        _validate_link_input_manifest(manifest, f"{name} link inputs")
     for name, required_tools in required_link_tools.items():
         text = "\n".join(links[name]["lines"])
         if any(tool not in text for tool in required_tools):
@@ -1052,6 +1294,24 @@ def validate_build_identity(
     adapter_link = "\n".join(links["adapter_executable"]["lines"])
     if adapter_link.count(archive["normalized_path"]) != 1:
         raise ComparisonError("adapter link does not require the recorded ISA-L archive")
+    adapter_inputs = {
+        item["normalized_path"]: item
+        for item in link_inputs["adapter_executable"]["inputs"]}
+    linked_archive = adapter_inputs.get(archive["normalized_path"])
+    if (linked_archive is None or linked_archive.get("kind") != "static-archive" or
+            linked_archive.get("sha256") != archive.get("sha256")):
+        raise ComparisonError("actual adapter link input differs from the ISA-L archive")
+    leopard_archives = [
+        item for item in link_inputs["leopard2_executable"]["inputs"]
+        if item["kind"] == "static-archive" and
+        item["normalized_path"].startswith("${LEOPARD_BUILD}/")]
+    if len(leopard_archives) != 1:
+        raise ComparisonError("Leopard2 executable has no unique built static-library input")
+    library_outputs = {
+        item["normalized_path"]: item
+        for item in link_inputs["leopard2_library"]["inputs"]}
+    if not library_outputs:
+        raise ComparisonError("Leopard2 static library has no object input closure")
     runtime = value.get("runtime_linkage", {})
     require_exact_keys(runtime, {"isa-l", "leopard2"}, "runtime linkage")
     for name, manifest in runtime.items():
@@ -2757,18 +3017,59 @@ def fake_link_manifest(lines: list[str]) -> dict[str, Any]:
     }
 
 
-def fake_runtime_link_manifest(executable_sha256: str) -> dict[str, Any]:
-    dependencies = [{
-        "needed": "libc.so.6",
-        "resolved_path": "/lib/libc.so.6",
-        "resolved_realpath": "/usr/lib/libc.so.6",
-        "soname": "libc.so.6",
-        "sha256": "c" * 64,
-    }]
-    encoded = json.dumps(dependencies, sort_keys=True, separators=(",", ":"))
+def fake_link_input_manifest(
+        entries: Sequence[tuple[str, str, str]]) -> dict[str, Any]:
+    inputs = [{
+        "normalized_path": path,
+        "normalized_realpath": path,
+        "kind": kind,
+        "size_bytes": 123,
+        "sha256": digest,
+    } for path, kind, digest in sorted(entries)]
+    encoded = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
     return {
-        "schema": "leopard2-resolved-dynamic-linkage/v1",
+        "schema": "leopard2-actual-link-input-closure/v1",
+        "inputs": inputs,
+        "input_count": len(inputs),
+        "sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+    }
+
+
+def fake_runtime_link_manifest(executable_sha256: str) -> dict[str, Any]:
+    direct_needed = ["libc.so.6"]
+    interpreter = {
+        "resolved_path": "/lib/ld-linux.so.2",
+        "resolved_realpath": "/usr/lib/ld-linux.so.2",
+        "soname": "ld-linux.so.2",
+        "sha256": "b" * 64,
+    }
+    dependencies = [
+        {
+            "soname": "ld-linux.so.2",
+            "resolved_path": "/lib/ld-linux.so.2",
+            "resolved_realpath": "/usr/lib/ld-linux.so.2",
+            "needed": [],
+            "sha256": "b" * 64,
+        },
+        {
+            "soname": "libc.so.6",
+            "resolved_path": "/lib/libc.so.6",
+            "resolved_realpath": "/usr/lib/libc.so.6",
+            "needed": ["ld-linux.so.2"],
+            "sha256": "c" * 64,
+        },
+    ]
+    payload = {
+        "direct_needed": direct_needed,
+        "interpreter": interpreter,
+        "dependencies": dependencies,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return {
+        "schema": "leopard2-resolved-dynamic-linkage/v2",
         "executable_sha256": executable_sha256,
+        "direct_needed": direct_needed,
+        "interpreter": interpreter,
         "dependencies": dependencies,
         "dependency_count": len(dependencies),
         "sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
@@ -2842,6 +3143,20 @@ def fake_build_identity() -> dict[str, Any]:
                 "${AR} qc libleopard.a objects", "${RANLIB} libleopard.a"]),
             "leopard2_executable": fake_link_manifest([
                 "${CXX} benchmark.o libleopard.a"]),
+        },
+        "link_inputs": {
+            "isa_l_archive": fake_link_input_manifest([
+                ("${ISA_L_BUILD}/isal.o", "object", "a" * 64)]),
+            "adapter_executable": fake_link_input_manifest([
+                ("${ADAPTER_BUILD}/adapter.o", "object", "a" * 64),
+                ("${ISA_L_INSTALL}/lib/libisal.a", "static-archive", "1" * 64),
+            ]),
+            "leopard2_library": fake_link_input_manifest([
+                ("${LEOPARD_BUILD}/leopard2.o", "object", "a" * 64)]),
+            "leopard2_executable": fake_link_input_manifest([
+                ("${LEOPARD_BUILD}/benchmark.o", "object", "a" * 64),
+                ("${LEOPARD_BUILD}/liblibleopard.a", "static-archive", "a" * 64),
+            ]),
         },
         "static_inputs": {
             "isa_l_archive": {
@@ -2917,13 +3232,19 @@ def fake_coordinated_build_relabel(sources: dict[str, Any]) -> None:
     link["sha256"] = hashlib.sha256(json.dumps(
         link["lines"], separators=(",", ":")).encode()).hexdigest()
     runtime = identity["runtime_linkage"]["isa-l"]
-    dependency = runtime["dependencies"][0]
+    dependency = next(
+        item for item in runtime["dependencies"] if item["soname"] == "libc.so.6")
     dependency["resolved_path"] = "/opt/forged/lib/libc.so.6"
     dependency["resolved_realpath"] = "/opt/forged/lib/libc.so.6"
     dependency["sha256"] = "e" * 64
     runtime["dependency_count"] = len(runtime["dependencies"])
+    runtime_payload = {
+        "direct_needed": runtime["direct_needed"],
+        "interpreter": runtime["interpreter"],
+        "dependencies": runtime["dependencies"],
+    }
     runtime["sha256"] = hashlib.sha256(json.dumps(
-        runtime["dependencies"], sort_keys=True,
+        runtime_payload, sort_keys=True,
         separators=(",", ":")).encode()).hexdigest()
     identity["identity_sha256"] = keyed_digest(identity, "identity_sha256")
 
@@ -3073,6 +3394,68 @@ def self_test() -> None:
     if (evidence_command.count("--skip-legacy") != 1 or
             evidence_command.count("--retain-samples") != 1):
         raise ComparisonError("Leopard external-evidence command is not isolated")
+    with tempfile.TemporaryDirectory(prefix="leo2-isal-link-closure-test-") as temporary:
+        directory = Path(temporary)
+        (directory / "adapter.o").write_bytes(b"object")
+        (directory / "libisal.a").write_bytes(b"archive")
+        link_command = directory / "link.txt"
+        link_command.write_text(
+            "/usr/bin/c++ adapter.o libisal.a -o adapter\n")
+        closure = _link_input_manifest(link_command, directory, {})
+        if ([item["normalized_path"] for item in closure["inputs"]] !=
+                [str(directory / "adapter.o"), str(directory / "libisal.a")]):
+            raise ComparisonError("actual link-input closure omitted or added a file")
+        link_command.write_text("/usr/bin/c++ @objects.rsp -o adapter\n")
+        try:
+            _link_input_manifest(link_command, directory, {})
+        except ComparisonError as error:
+            if "response-file" not in str(error):
+                raise
+        else:
+            raise ComparisonError("response-file link closure was silently accepted")
+    nasm_fixture = {
+        "executable_sha256": "4" * 64,
+        "reported_version": f"NASM version {NASM_VERSION} test",
+    }
+    pristine_identity = fake_build_identity()
+    validate_build_identity(pristine_identity, nasm_fixture)
+    closure_mutations = []
+    changed_identity = copy.deepcopy(pristine_identity)
+    adapter_closure = changed_identity["link_inputs"]["adapter_executable"]
+    adapter_closure["inputs"] = [
+        item for item in adapter_closure["inputs"]
+        if item["normalized_path"] != "${ISA_L_INSTALL}/lib/libisal.a"]
+    adapter_closure["input_count"] = len(adapter_closure["inputs"])
+    adapter_closure["sha256"] = hashlib.sha256(json.dumps(
+        adapter_closure["inputs"], sort_keys=True,
+        separators=(",", ":")).encode()).hexdigest()
+    changed_identity["identity_sha256"] = keyed_digest(
+        changed_identity, "identity_sha256")
+    closure_mutations.append(changed_identity)
+    changed_identity = copy.deepcopy(pristine_identity)
+    runtime = changed_identity["runtime_linkage"]["isa-l"]
+    runtime["dependencies"] = [
+        dependency for dependency in runtime["dependencies"]
+        if dependency["soname"] != runtime["interpreter"]["soname"]]
+    runtime["dependency_count"] = len(runtime["dependencies"])
+    runtime_payload = {
+        "direct_needed": runtime["direct_needed"],
+        "interpreter": runtime["interpreter"],
+        "dependencies": runtime["dependencies"],
+    }
+    runtime["sha256"] = hashlib.sha256(json.dumps(
+        runtime_payload, sort_keys=True,
+        separators=(",", ":")).encode()).hexdigest()
+    changed_identity["identity_sha256"] = keyed_digest(
+        changed_identity, "identity_sha256")
+    closure_mutations.append(changed_identity)
+    for changed_identity in closure_mutations:
+        try:
+            validate_build_identity(changed_identity, nasm_fixture)
+        except ComparisonError:
+            pass
+        else:
+            raise ComparisonError("incomplete actual link closure was accepted")
     if sys.platform.startswith("linux"):
         with tempfile.TemporaryDirectory(prefix="leo2-isal-lease-test-") as temporary:
             with advisory_cpu_lease(Path(temporary), 7, 8) as lease:
@@ -3322,11 +3705,32 @@ def self_test() -> None:
     changed["artifact_sha256"] = canonical_digest(changed)
     checkpoint_mutations.append(changed)
     changed = copy.deepcopy(checkpoint)
-    changed["sources"]["build_identity"]["runtime_linkage"]["isa-l"][
-        "dependencies"][0]["soname"] = "forged.so"
     runtime = changed["sources"]["build_identity"]["runtime_linkage"]["isa-l"]
+    runtime["dependencies"] = [
+        dependency for dependency in runtime["dependencies"]
+        if dependency["soname"] != runtime["interpreter"]["soname"]]
+    runtime["dependency_count"] = len(runtime["dependencies"])
+    runtime_payload = {
+        "direct_needed": runtime["direct_needed"],
+        "interpreter": runtime["interpreter"],
+        "dependencies": runtime["dependencies"],
+    }
     runtime["sha256"] = hashlib.sha256(json.dumps(
-        runtime["dependencies"], sort_keys=True,
+        runtime_payload, sort_keys=True,
+        separators=(",", ":")).encode()).hexdigest()
+    changed["sources"]["build_identity"]["identity_sha256"] = keyed_digest(
+        changed["sources"]["build_identity"], "identity_sha256")
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    closure = changed["sources"]["build_identity"]["link_inputs"][
+        "adapter_executable"]
+    closure["inputs"] = [
+        item for item in closure["inputs"]
+        if item["normalized_path"] != "${ISA_L_INSTALL}/lib/libisal.a"]
+    closure["input_count"] = len(closure["inputs"])
+    closure["sha256"] = hashlib.sha256(json.dumps(
+        closure["inputs"], sort_keys=True,
         separators=(",", ":")).encode()).hexdigest()
     changed["sources"]["build_identity"]["identity_sha256"] = keyed_digest(
         changed["sources"]["build_identity"], "identity_sha256")
@@ -3416,6 +3820,7 @@ def self_test() -> None:
         "result_mutations_rejected": len(mutations),
         "checkpoint_mutations_rejected": len(checkpoint_mutations),
         "correctness_mutations_rejected": len(correctness_mutations),
+        "link_closure_mutations_rejected": len(closure_mutations),
         "coordinated_relabels_rejected": coordinated_relabels_rejected,
         "reduced_correctness_fixture_cases": correctness["case_count"],
         "nasm_archive_sha256": NASM_ARCHIVE_SHA256, "status": "PASS",

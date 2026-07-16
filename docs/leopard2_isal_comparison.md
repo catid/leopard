@@ -65,12 +65,17 @@ as reproducibility evidence.
 
 The build identity retains normalized `compile_commands.json` entries and the
 actual CMake-generated link commands for the ISA-L archive, standalone adapter,
-Leopard library, and Leopard benchmark. It requires the adapter link to name the
-private `${ISA_L_INSTALL}/lib/libisal.a` exactly once and binds that archive's
-SHA-256 to the provider identity. `ldd` plus `readelf` are themselves identified
-by resolved path, version output, and executable hash; every `DT_NEEDED`
-dependency records its resolved path, real path, SONAME, and file hash. A
-post-run rebuild of this provenance must match byte-for-byte.
+Leopard library, and Leopard benchmark. A companion closure hashes every object,
+archive, and shared-library file consumed by those commands; response files are
+rejected instead of being silently omitted. It requires the adapter link to name
+the private `${ISA_L_INSTALL}/lib/libisal.a` exactly once and binds the bytes of
+that actual link input to the provider identity. `ldd` plus `readelf` are
+themselves identified by resolved path, version output, and executable hash.
+For each executable, the evidence records the ELF interpreter, direct
+`DT_NEEDED` list, and recursively closed `DT_NEEDED` graph. Every node carries
+its resolved path, real path, SONAME, outgoing dependencies, and file hash; a
+missing, unreachable, or unclosed node fails validation. A post-run rebuild of
+this provenance must match byte-for-byte.
 
 ## Codec and timing semantics
 
