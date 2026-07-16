@@ -1,0 +1,1 @@
+{"id":"int-769445a87ff29ed783acb0660fbed556","kind":"field_change","created_at":"2026-07-16T01:00:37.270366845Z","actor":"catid","issue_id":"leopard-79h.1","extra":{"field":"status","new_value":"closed","old_value":"in_progress","reason":"Baseline reproduced and committed in caf6e51"}}
