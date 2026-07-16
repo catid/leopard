@@ -266,6 +266,10 @@ leases, and a post-timing integrity recheck. Strict trusted-cache validation
 and the independent external audit pass. The six single-thread cells are
 accepted bounded evidence; they do not complete the required matrix or support
 claims about multicore execution, other machines, or wire compatibility.
+Those retained Leopard child records use benchmark schema v1. The comparison
+validator also accepts the current benchmark v2 only with its exact
+`retain_samples` flag and workload-digest structure, so future collection can
+use the integrated benchmark without weakening replay of the v1 evidence.
 
 `tools/leopard2_external_comparison.py` makes that boundary machine-readable.
 It deterministically regenerates the selected matrix, classifies every job, and

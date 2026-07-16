@@ -239,31 +239,66 @@ transport checks, the complete serialized-file digest is also listed:
 
 ## Reproduction
 
-From a Leopard topic-branch checkout:
+Portable replay of the retained artifacts works from any checkout that retains
+the evidence source commit in its Git ancestry:
 
     python3 tools/leopard2_isal_compare.py self-test
-    python3 tools/leopard2_isal_compare.py bootstrap --jobs 8
-    python3 tools/leopard2_isal_compare.py correctness --cases 128 \
-        --output experiments/leopard2/isal_compare/correctness_result.json
     python3 tools/leopard2_isal_compare.py validate-correctness \
-        experiments/leopard2/isal_compare/correctness_result.json \
-        --cache .research/leopard2 --require-local-build-match
-    python3 tools/leopard2_isal_compare.py run \
-        --cpu <isolated-allowed-cpu> \
-        --reserved-idle-cpu <reserved-SMT-sibling> \
-        --correctness-artifact \
-            experiments/leopard2/isal_compare/correctness_result.json \
-        --output experiments/leopard2/isal_compare/checkpoint_result.json
+        experiments/leopard2/isal_compare/correctness_result.json
     python3 tools/leopard2_isal_compare.py validate \
         experiments/leopard2/isal_compare/checkpoint_result.json \
         --correctness-artifact \
-            experiments/leopard2/isal_compare/correctness_result.json \
-        --cache .research/leopard2 --require-local-build-match
+            experiments/leopard2/isal_compare/correctness_result.json
+
+The accepted files bind Leopard source commit
+`69f5854230d8a50e8dcc32f6b31e33a30d113a88`. Strict trusted-cache replay must
+therefore run the validator and bootstrap from that exact clean source, not
+from a later integration commit. A later `HEAD` is expected to fail
+`--require-local-build-match`, even when only documentation or compatibility
+code changed. The following keeps the replay source and cache ignored while
+leaving the retained artifacts untouched:
+
+    EVIDENCE_ROOT="$PWD"
+    REPLAY_ROOT="$EVIDENCE_ROOT/.research/leopard2/replay-69f5854"
+    git worktree add --detach "$REPLAY_ROOT/source" \
+        69f5854230d8a50e8dcc32f6b31e33a30d113a88
+    (
+        cd "$REPLAY_ROOT/source"
+        python3 tools/leopard2_isal_compare.py bootstrap \
+            --cache "$REPLAY_ROOT/cache" --jobs 8
+        python3 tools/leopard2_isal_compare.py validate-correctness \
+            "$EVIDENCE_ROOT/experiments/leopard2/isal_compare/correctness_result.json" \
+            --cache "$REPLAY_ROOT/cache" --require-local-build-match
+        python3 tools/leopard2_isal_compare.py validate \
+            "$EVIDENCE_ROOT/experiments/leopard2/isal_compare/checkpoint_result.json" \
+            --correctness-artifact \
+                "$EVIDENCE_ROOT/experiments/leopard2/isal_compare/correctness_result.json" \
+            --cache "$REPLAY_ROOT/cache" --require-local-build-match
+    )
     python3 tools/leopard2_external_comparison.py isa-l-checkpoint \
         experiments/leopard2/isal_compare/checkpoint_result.json \
         --correctness-artifact \
             experiments/leopard2/isal_compare/correctness_result.json \
-        --cache .research/leopard2
+        --cache "$REPLAY_ROOT/cache"
+
+To collect a new checkpoint for the current codec, use a separate ignored
+cache and output directory. The harness accepts the retained Leopard benchmark
+v1 child documents and the current benchmark v2 documents with workload
+digests; it never rewrites an old artifact into the new schema:
+
+    CURRENT_ROOT="$PWD/.research/leopard2/current"
+    mkdir -p results/leopard2/isal-current
+    python3 tools/leopard2_isal_compare.py bootstrap \
+        --cache "$CURRENT_ROOT" --jobs 8
+    python3 tools/leopard2_isal_compare.py correctness \
+        --cache "$CURRENT_ROOT" --cases 128 \
+        --output results/leopard2/isal-current/correctness.json
+    python3 tools/leopard2_isal_compare.py run \
+        --cache "$CURRENT_ROOT" \
+        --cpu <isolated-allowed-cpu> \
+        --reserved-idle-cpu <reserved-SMT-sibling> \
+        --correctness-artifact results/leopard2/isal-current/correctness.json \
+        --output results/leopard2/isal-current/checkpoint.json
 
 `bootstrap` is capped at eight build jobs. The pinned `run` command is Linux-only;
 the parser/self-test and artifact policy remain usable elsewhere. The
@@ -277,7 +312,10 @@ do not treat recorded tool/link/runtime labels as independently trusted. The
 strict flag is the local evidence-audit mode: it requires the bootstrap cache,
 reconstructs that cache's live build provenance, exact-compares the complete
 build identity, and requires current `HEAD` and its build inputs to be clean and
-equal to the benchmark-source commit. The external `isa-l-checkpoint` audit
+equal to the benchmark-source commit. Integrations must preserve the recorded
+commit as an ancestor (for example with an ancestry-preserving merge); copying
+the files while discarding that commit makes portable Git-object replay
+non-durable. The external `isa-l-checkpoint` audit
 also requires `--cache`, reconstructs the same trusted provenance, enforces the
 exact 128-case gate, and reports a trusted-cache verification status; it cannot
 upgrade a portable-only or self-consistently relabeled artifact to verified.
