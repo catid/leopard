@@ -36,7 +36,7 @@
     "thread_count": 1
   },
   "build_binding": {
-    "checkpoint_generation_head": "37e852774bce6f9effb1acf1fcde99a758ecfe6e",
+    "checkpoint_generation_head": "e4ba821292e3fc2fd27e665d3107bafc91c1356b",
     "core_baseline_git_sha": "37e852774bce6f9effb1acf1fcde99a758ecfe6e",
     "experiment_source_sha256": "9d28e260b5894badd75fa95ebe67bc05aeff150e87a168fa41bae3fe4f09ecb3"
   },
@@ -75,9 +75,9 @@
     "per_q": [
       {
         "cells": 11,
-        "credible_gain_percent_max": 1.650048,
-        "credible_gain_percent_median": -11.546529,
-        "credible_gain_percent_min": -21.542553,
+        "credible_gain_percent_max": 1.6500484843990693,
+        "credible_gain_percent_median": -11.546529179980801,
+        "credible_gain_percent_min": -21.542553191489354,
         "credible_wins_at_least_10_percent": 0,
         "meaningful_region_gate": false,
         "modeled_traffic_reduction_percent_max": 10.867052023121381,
@@ -86,9 +86,9 @@
       },
       {
         "cells": 11,
-        "credible_gain_percent_max": 14.478765,
-        "credible_gain_percent_median": -7.472578,
-        "credible_gain_percent_min": -19.09364,
+        "credible_gain_percent_max": 14.478764967602253,
+        "credible_gain_percent_median": -7.472578306393496,
+        "credible_gain_percent_min": -19.09364046069103,
         "credible_wins_at_least_10_percent": 1,
         "meaningful_region_gate": false,
         "modeled_traffic_reduction_percent_max": 9.571788413098236,
@@ -97,9 +97,9 @@
       },
       {
         "cells": 11,
-        "credible_gain_percent_max": -2.803118,
-        "credible_gain_percent_median": -12.960837,
-        "credible_gain_percent_min": -17.320704,
+        "credible_gain_percent_max": -2.8031179132901873,
+        "credible_gain_percent_median": -12.960837272113434,
+        "credible_gain_percent_min": -17.320703653585923,
         "credible_wins_at_least_10_percent": 0,
         "meaningful_region_gate": false,
         "modeled_traffic_reduction_percent_max": 8.524882838652081,
@@ -108,9 +108,9 @@
       },
       {
         "cells": 11,
-        "credible_gain_percent_max": 4.249802,
-        "credible_gain_percent_median": -7.921837,
-        "credible_gain_percent_min": -14.824227,
+        "credible_gain_percent_max": 4.249802094203159,
+        "credible_gain_percent_median": -7.921836796263248,
+        "credible_gain_percent_min": -14.824226863928791,
         "credible_wins_at_least_10_percent": 0,
         "meaningful_region_gate": false,
         "modeled_traffic_reduction_percent_max": 7.6715072608913415,
@@ -119,9 +119,9 @@
       },
       {
         "cells": 10,
-        "credible_gain_percent_max": 1.186684,
-        "credible_gain_percent_median": -5.899718,
-        "credible_gain_percent_min": -16.96814,
+        "credible_gain_percent_max": 1.186683705890057,
+        "credible_gain_percent_median": -5.899718153643119,
+        "credible_gain_percent_min": -16.9681402254827,
         "credible_wins_at_least_10_percent": 0,
         "meaningful_region_gate": false,
         "modeled_traffic_reduction_percent_max": 6.967343416450921,
