@@ -256,15 +256,33 @@ ISA-L multicore cells still have no reviewed adapter, and a bounded result
 does not become a cross-library claim for unmeasured cells. That remaining work
 keeps the benchmark-harness Bead open.
 
+The checked-in ISA-L JSON artifacts are the coordinated V2 bounded checkpoint.
+They contain raw timing samples from both providers, immutable/direct scalar
+correctness oracles, detached recorded-commit builds with before/after
+Git-object replay, the actual file-input and transitive runtime-library
+closures, a controlled child environment, symmetric Leopard `--skip-legacy`
+work, a separately supplied full-correctness artifact binding, advisory CPU
+leases, and a post-timing integrity recheck. Strict trusted-cache validation
+and the independent external audit pass. The six single-thread cells are
+accepted bounded evidence; they do not complete the required matrix or support
+claims about multicore execution, other machines, or wire compatibility.
+Those retained Leopard child records use benchmark schema v1. The comparison
+validator also accepts the current benchmark v2 only with its exact
+`retain_samples` flag and workload-digest structure, so future collection can
+use the integrated benchmark without weakening replay of the v1 evidence.
+
 `tools/leopard2_external_comparison.py` makes that boundary machine-readable.
 It deterministically regenerates the selected matrix, classifies every job, and
 reports aggregate `adapter-available-unmeasured`/`adapter-required`/`excluded`,
 reason, and qualification counts. The internal per-cell classifier records the resolved Leopard2
 profile/field/parent, the provider field, whether wire compatibility exists
 (currently false for every external provider), and the reasons or
-qualifications. Its `isa-l-checkpoint` command independently invokes the
-fail-closed bounded-artifact validator; the matrix audit itself still contains
-no timing measurements. On the 7,134-job required matrix, the audit classifies
+qualifications. Its `isa-l-checkpoint` command requires the bootstrap cache,
+reconstructs and rehashes the complete trusted build provenance, and invokes
+the fail-closed bounded-artifact validator with the exact 128-case correctness
+artifact. It will not label a merely portable/self-consistent tool, link, or
+runtime relabel as verified. The matrix audit itself still contains no timing
+measurements. On the 7,134-job required matrix, the audit classifies
 5,003 ISA-L rows as supported by the default-off adapter but explicitly
 unmeasured, retains 21 multicore adapter gaps,
 and excludes 2,110 whose `K+R` exceeds GF(256); all 7,134 required GF8/GF16

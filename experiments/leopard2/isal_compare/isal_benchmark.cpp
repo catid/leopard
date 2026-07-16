@@ -27,7 +27,12 @@
 #include <string>
 #include <vector>
 
-#if !defined(LEO2_ISAL_COMMIT) || !defined(LEO2_ISAL_LIBRARY_SHA256)
+#if !defined(LEO2_ISAL_COMMIT) || !defined(LEO2_ISAL_TREE) || \
+    !defined(LEO2_ISAL_LIBRARY_SHA256) || \
+    !defined(LEO2_ISAL_HEADER_SHA256) || \
+    !defined(LEO2_ISAL_LICENSE_SHA256) || \
+    !defined(LEO2_NASM_EXECUTABLE_SHA256) || \
+    !defined(LEO2_NASM_ARCHIVE_SHA256)
 #error "The standalone CMake identity checks must define ISA-L provenance"
 #endif
 
@@ -46,12 +51,13 @@ struct Options
     uint32_t threads;
     uint64_t seed;
     std::string profile;
+    std::string oracle;
     std::string output;
 
     Options()
         : k(240), r(16), losses(1), bytes(65536), batch(1), reuse(8),
           iterations(9), warmup(2), threads(1), seed(1), profile("high"),
-          output("-")
+          oracle("full"), output("-")
     {}
 };
 
@@ -134,6 +140,7 @@ struct DecodePlan
 
 struct Stripe
 {
+    AlignedBuffer pristine;
     AlignedBuffer fragments;
     AlignedBuffer restored;
     std::vector<uint8_t*> encode_sources;
@@ -208,6 +215,8 @@ static Options ParseOptions(int argc, char** argv)
             options.seed = ParseUnsigned(NeedValue(argc, argv, i), "--seed");
         else if (argument == "--profile")
             options.profile = NeedValue(argc, argv, i);
+        else if (argument == "--oracle")
+            options.oracle = NeedValue(argc, argv, i);
         else if (argument == "--json" || argument == "--output")
             options.output = NeedValue(argc, argv, i);
         else if (argument == "--help" || argument == "-h")
@@ -216,7 +225,7 @@ static Options ParseOptions(int argc, char** argv)
                 << "Usage: " << argv[0]
                 << " --k K --r R --bytes B --loss L --batch N --reuse N"
                 << " --iterations N --warmup N --threads 1 --seed N"
-                << " --profile auto|high|low --json PATH\n";
+                << " --profile auto|high|low --oracle full|projection --json PATH\n";
             exit(0);
         }
         else
@@ -238,6 +247,8 @@ static Options ParseOptions(int argc, char** argv)
         options.profile != "legacy_high_v1" && options.profile != "low" &&
         options.profile != "low_v1")
         Fail("--profile must be auto, high, legacy_high_v1, low, or low_v1");
+    if (options.oracle != "full" && options.oracle != "projection")
+        Fail("--oracle must be full or projection");
     return options;
 }
 
@@ -293,6 +304,167 @@ static EncodePlan BuildEncodePlan(uint32_t k, uint32_t r)
     return plan;
 }
 
+static uint8_t ScalarGf8Multiply(uint8_t left, uint8_t right)
+{
+    uint8_t result = 0;
+    for (unsigned bit = 0; bit < 8; ++bit)
+    {
+        if ((right & 1u) != 0)
+            result ^= left;
+        const bool high = (left & 0x80u) != 0;
+        left = static_cast<uint8_t>(left << 1);
+        if (high)
+            left ^= 0x1d;
+        right = static_cast<uint8_t>(right >> 1);
+    }
+    return result;
+}
+
+static uint8_t ScalarGf8Inverse(uint8_t value)
+{
+    if (value == 0)
+        Fail("cannot invert zero in the independent GF(256) oracle");
+
+    // Fermat inversion, value^(256-2), over x^8+x^4+x^3+x^2+1.  This is
+    // deliberately independent of ISA-L's gf_inv tables and generator matrix.
+    uint8_t result = 1;
+    uint8_t power = value;
+    unsigned exponent = 254;
+    while (exponent != 0)
+    {
+        if ((exponent & 1u) != 0)
+            result = ScalarGf8Multiply(result, power);
+        power = ScalarGf8Multiply(power, power);
+        exponent >>= 1;
+    }
+    return result;
+}
+
+static uint8_t IndependentCauchyCoefficient(
+    uint32_t k,
+    uint32_t parity,
+    uint32_t source)
+{
+    const uint8_t row = static_cast<uint8_t>(k + parity);
+    const uint8_t column = static_cast<uint8_t>(source);
+    return ScalarGf8Inverse(static_cast<uint8_t>(row ^ column));
+}
+
+static std::vector<uint8_t> BuildIndependentCauchyCoefficients(
+    const Options& options)
+{
+    std::vector<uint8_t> coefficients(
+        static_cast<size_t>(options.k) * options.r);
+    for (uint32_t parity = 0; parity < options.r; ++parity)
+        for (uint32_t source = 0; source < options.k; ++source)
+            coefficients[static_cast<size_t>(parity) * options.k + source] =
+                IndependentCauchyCoefficient(options.k, parity, source);
+    return coefficients;
+}
+
+static void VerifyIndependentCauchyCoefficients(
+    const EncodePlan& encode,
+    const Options& options,
+    const std::vector<uint8_t>& coefficients)
+{
+    for (uint32_t parity = 0; parity < options.r; ++parity)
+        for (uint32_t source = 0; source < options.k; ++source)
+        {
+            const uint8_t actual = encode.matrix[
+                static_cast<size_t>(options.k + parity) * options.k + source];
+            const uint8_t expected = coefficients[
+                static_cast<size_t>(parity) * options.k + source];
+            if (actual != expected)
+                Fail("ISA-L Cauchy coefficient differs from the independent formula");
+        }
+}
+
+static std::vector<size_t> IndependentParityPositions(const Options& options)
+{
+    const size_t bytes = static_cast<size_t>(options.bytes);
+    std::vector<size_t> positions;
+    if (options.oracle == "full")
+    {
+        positions.resize(bytes);
+        for (size_t i = 0; i < bytes; ++i)
+            positions[i] = i;
+        return positions;
+    }
+
+    static const size_t boundaries[] = {
+        0, 1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65,
+        127, 128, 129, 255, 256, 257, 1023, 1024, 1025,
+    };
+    for (size_t i = 0; i < sizeof(boundaries) / sizeof(boundaries[0]); ++i)
+        if (boundaries[i] < bytes)
+            positions.push_back(boundaries[i]);
+    if (bytes > 0)
+        positions.push_back(bytes - 1);
+    std::sort(positions.begin(), positions.end());
+    positions.erase(std::unique(positions.begin(), positions.end()), positions.end());
+
+    XorShift64 random(options.seed ^ UINT64_C(0x4341554348594f52));
+    const size_t target = std::min<size_t>(bytes, 64);
+    while (positions.size() < target)
+    {
+        const size_t candidate = static_cast<size_t>(random.Next() % bytes);
+        if (std::find(positions.begin(), positions.end(), candidate) == positions.end())
+            positions.push_back(candidate);
+    }
+    std::sort(positions.begin(), positions.end());
+    positions.erase(std::unique(positions.begin(), positions.end()), positions.end());
+    return positions;
+}
+
+static void VerifyIndependentEncoding(
+    const Stripe& stripe,
+    const Options& options,
+    const std::vector<size_t>& positions,
+    const std::vector<uint8_t>& coefficients)
+{
+    const size_t bytes = static_cast<size_t>(options.bytes);
+    const size_t original_bytes = CheckedBytes(options.k, options.bytes,
+        "pristine original data");
+    if (memcmp(stripe.pristine.data(), stripe.fragments.data(), original_bytes) != 0)
+        Fail("ISA-L encoding modified a systematic source shard");
+    for (uint32_t parity = 0; parity < options.r; ++parity)
+    {
+        const uint8_t* actual = stripe.fragments.data() +
+            static_cast<size_t>(options.k + parity) * bytes;
+        for (size_t position_i = 0; position_i < positions.size(); ++position_i)
+        {
+            const size_t byte = positions[position_i];
+            uint8_t expected = 0;
+            for (uint32_t source = 0; source < options.k; ++source)
+                expected ^= ScalarGf8Multiply(
+                    coefficients[static_cast<size_t>(parity) * options.k + source],
+                    stripe.pristine.data()[static_cast<size_t>(source) * bytes + byte]);
+            if (actual[byte] != expected)
+                Fail("ISA-L parity differs from the independent scalar Cauchy oracle");
+        }
+    }
+}
+
+static void VerifyIndependentRecovery(
+    const Stripe& stripe,
+    const Options& options,
+    const std::vector<uint32_t>& losses)
+{
+    const size_t bytes = static_cast<size_t>(options.bytes);
+    const size_t original_bytes = CheckedBytes(
+        options.k, options.bytes, "post-decode original data");
+    if (memcmp(stripe.pristine.data(), stripe.fragments.data(), original_bytes) != 0)
+        Fail("ISA-L execution modified a systematic source shard");
+    for (size_t loss_i = 0; loss_i < losses.size(); ++loss_i)
+    {
+        const uint8_t* expected = stripe.pristine.data() +
+            static_cast<size_t>(losses[loss_i]) * bytes;
+        const uint8_t* actual = stripe.restored.data() + loss_i * bytes;
+        if (memcmp(expected, actual, bytes) != 0)
+            Fail("ISA-L recovery differs from immutable deterministic source data");
+    }
+}
+
 static DecodePlan BuildDecodePlan(
     const EncodePlan& encode,
     uint32_t k,
@@ -335,6 +507,8 @@ static void InitializeStripe(
     size_t stripe_index)
 {
     const size_t bytes = static_cast<size_t>(options.bytes);
+    stripe.pristine.Reset(CheckedBytes(options.k, options.bytes,
+        "pristine original storage"));
     stripe.fragments.Reset(CheckedBytes(options.k + options.r, options.bytes,
         "fragment storage"));
     stripe.restored.Reset(CheckedBytes(options.losses, options.bytes,
@@ -349,7 +523,8 @@ static void InitializeStripe(
     const size_t original_bytes = CheckedBytes(options.k, options.bytes,
         "original data");
     for (size_t i = 0; i < original_bytes; ++i)
-        stripe.fragments.data()[i] = static_cast<uint8_t>(random.Next() >> 56);
+        stripe.pristine.data()[i] = static_cast<uint8_t>(random.Next() >> 56);
+    memcpy(stripe.fragments.data(), stripe.pristine.data(), original_bytes);
     for (uint32_t i = 0; i < options.k; ++i)
         stripe.encode_sources[i] = stripe.fragments.data() + static_cast<size_t>(i) * bytes;
     for (uint32_t i = 0; i < options.r; ++i)
@@ -490,7 +665,11 @@ static int Run(const Options& options)
 {
     const std::vector<uint32_t> losses = SelectLosses(options);
     const EncodePlan encode = BuildEncodePlan(options.k, options.r);
+    const std::vector<uint8_t> independent_coefficients =
+        BuildIndependentCauchyCoefficients(options);
+    VerifyIndependentCauchyCoefficients(encode, options, independent_coefficients);
     const DecodePlan decode = BuildDecodePlan(encode, options.k, options.r, losses);
+    const std::vector<size_t> parity_positions = IndependentParityPositions(options);
 
     std::vector<Stripe*> stripes;
     stripes.reserve(options.batch);
@@ -522,17 +701,13 @@ static int Run(const Options& options)
         };
 
         encode_call();
+        for (size_t stripe_i = 0; stripe_i < stripes.size(); ++stripe_i)
+            VerifyIndependentEncoding(
+                *stripes[stripe_i], options, parity_positions,
+                independent_coefficients);
         decode_call();
         for (size_t stripe_i = 0; stripe_i < stripes.size(); ++stripe_i)
-            for (size_t loss_i = 0; loss_i < losses.size(); ++loss_i)
-            {
-                const uint8_t* expected = stripes[stripe_i]->fragments.data() +
-                    static_cast<size_t>(losses[loss_i]) * static_cast<size_t>(options.bytes);
-                const uint8_t* actual = stripes[stripe_i]->restored.data() +
-                    loss_i * static_cast<size_t>(options.bytes);
-                if (memcmp(expected, actual, static_cast<size_t>(options.bytes)) != 0)
-                    Fail("ISA-L recovery differs from deterministic source data");
-            }
+            VerifyIndependentRecovery(*stripes[stripe_i], options, losses);
 
         const Summary codec_setup = Measure(options.iterations, 1, [&]() {
             const EncodePlan temporary = BuildEncodePlan(options.k, options.r);
@@ -553,6 +728,13 @@ static int Run(const Options& options)
             options.iterations, options.reuse, encode_call);
         const Summary decode_execution = Measure(
             options.iterations, options.reuse, decode_call);
+        for (size_t stripe_i = 0; stripe_i < stripes.size(); ++stripe_i)
+        {
+            VerifyIndependentEncoding(
+                *stripes[stripe_i], options, parity_positions,
+                independent_coefficients);
+            VerifyIndependentRecovery(*stripes[stripe_i], options, losses);
+        }
 
         const uint64_t batch = static_cast<uint64_t>(options.batch);
         const uint64_t encode_input = CheckedProduct(
@@ -571,6 +753,16 @@ static int Run(const Options& options)
         const uint64_t decode_output = CheckedProduct(
             CheckedProduct(options.losses, options.bytes, "decode output"), batch,
             "decode output");
+        const uint64_t coefficient_checks = CheckedProduct(
+            options.k, options.r, "independent coefficient checks");
+        const uint64_t parity_checked = CheckedProduct(
+            CheckedProduct(static_cast<uint64_t>(parity_positions.size()), options.r,
+                "independent parity checked bytes"), batch,
+            "independent parity checked bytes");
+        const uint64_t parity_total = CheckedProduct(
+            CheckedProduct(options.bytes, options.r,
+                "independent parity total bytes"), batch,
+            "independent parity total bytes");
         const std::string profile = ResolvedProfile(options);
         const uint32_t parent = LeopardParent(options, profile);
         const char* leopard_field = parent <= 256 ? "gf8" : "gf16";
@@ -578,11 +770,19 @@ static int Run(const Options& options)
         std::ostringstream json;
         json << std::fixed << std::setprecision(9);
         json << "{\n"
-             << "  \"schema\":\"leopard2-isal-benchmark/v1\",\n"
+             << "  \"schema\":\"leopard2-isal-benchmark/v2\",\n"
              << "  \"provider\":{\"name\":\"Intel ISA-L\",\"source_commit\":\""
-             << LEO2_ISAL_COMMIT << "\",\"library_sha256\":\""
+             << LEO2_ISAL_COMMIT << "\",\"source_tree\":\""
+             << LEO2_ISAL_TREE << "\",\"library_sha256\":\""
              << LEO2_ISAL_LIBRARY_SHA256
-             << "\",\"license\":\"BSD-3-Clause\",\"field\":\"gf8\","
+             << "\",\"header_sha256\":\""
+             << LEO2_ISAL_HEADER_SHA256
+             << "\",\"license\":\"BSD-3-Clause\",\"license_sha256\":\""
+             << LEO2_ISAL_LICENSE_SHA256
+             << "\",\"nasm_executable_sha256\":\""
+             << LEO2_NASM_EXECUTABLE_SHA256
+             << "\",\"nasm_archive_sha256\":\""
+             << LEO2_NASM_ARCHIVE_SHA256 << "\",\"field\":\"gf8\","
              << "\"generator\":\"gf_gen_cauchy1_matrix\",\"wire_compatible\":false},\n"
              << "  \"parameters\":{\"K\":" << options.k << ",\"R\":" << options.r
              << ",\"requested_profile\":\"" << profile
@@ -608,7 +808,16 @@ static int Run(const Options& options)
                     ? "true" : "false")
              << ",\"scope\":\"public payload and repaired-output throughput only; parity bytes and generator matrices differ\"},\n"
              << "  \"correctness\":{\"direct_source_round_trip\":true,"
-             << "\"systematic_generator_prefix\":true},\n"
+             << "\"systematic_generator_prefix\":true,"
+             << "\"systematic_sources_immutable\":true,"
+             << "\"independent_scalar_cauchy_coefficients_checked\":"
+             << coefficient_checks << ','
+             << "\"independent_scalar_parity_mode\":\"" << options.oracle << "\","
+             << "\"independent_scalar_parity_checked_bytes_per_validation\":"
+             << parity_checked
+             << ",\"independent_scalar_parity_total_bytes_per_validation\":"
+             << parity_total
+             << ",\"independent_scalar_parity_validation_passes\":2},\n"
              << "  \"memory\":{\"alignment_bytes\":64,\"direct_application_buffers\":true,"
              << "\"staging_copy_bytes_per_execution\":0,\"encode_input_bytes_per_batch_call\":"
              << encode_input << ",\"encode_output_bytes_per_batch_call\":" << encode_output

@@ -15,13 +15,15 @@ throughput claim.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections import Counter
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 
 SCHEMA = "leopard2-external-comparison-audit/v1"
@@ -336,6 +338,42 @@ def _pkg_config_version(package: str) -> str | None:
     return completed.stdout.strip() if completed.returncode == 0 else None
 
 
+def _isal_comparison_module():
+    tools_dir = Path(__file__).resolve().parent
+    sys.path.insert(0, str(tools_dir))
+    try:
+        import leopard2_isal_compare as comparison
+    finally:
+        sys.path.pop(0)
+    return comparison
+
+
+def _validated_isal_checkpoint_result(
+        comparison: Any, document: Mapping[str, Any],
+        correctness: Mapping[str, Any],
+        trusted_provenance: Mapping[str, Any], checkpoint_path: Path) -> dict:
+    try:
+        comparison.validate_checkpoint(
+            document, correctness=correctness,
+            trusted_provenance=trusted_provenance)
+    except comparison.ComparisonError as error:
+        raise AuditError(f"invalid ISA-L checkpoint: {error}") from error
+    build_identity = trusted_provenance["executables"]["build_identity"]
+    source_bundle = trusted_provenance["executables"]["source_bundle"]
+    return {
+        "schema": "leopard2-external-isal-checkpoint-audit/v2",
+        "checkpoint": str(checkpoint_path),
+        "artifact_sha256": document["artifact_sha256"],
+        "correctness_artifact_sha256": correctness["artifact_sha256"],
+        "trusted_build_identity_sha256": build_identity["identity_sha256"],
+        "trusted_source_bundle_sha256": source_bundle["bundle_sha256"],
+        "cells": len(document["cells"]),
+        "results": len(document["results"]),
+        "wire_compatible": document["method"]["wire_compatible"],
+        "status": "verified-trusted-cache-bounded-checkpoint",
+    }
+
+
 def self_test() -> None:
     matrix = audit_matrix("required")
     if matrix["job_count"] != 7134:
@@ -398,35 +436,63 @@ def self_test() -> None:
             not any("8-byte-aligned" in qualification
                     for qualification in jerasure_aligned["qualifications"])):
         raise AuditError("Jerasure deterministic region contract is not enforced")
+    with tempfile.TemporaryDirectory(prefix="leo2-external-audit-test-") as temporary:
+        missing = Path(temporary)
+        try:
+            audit_isal_checkpoint(
+                missing / "checkpoint.json", missing / "correctness.json",
+                missing / "cache")
+        except AuditError as error:
+            if "run bootstrap first" not in str(error):
+                raise
+        else:
+            raise AuditError("ISA-L checkpoint audit accepted a missing trusted cache")
+    comparison = _isal_comparison_module()
+    correctness = comparison.fake_correctness_artifact(
+        comparison.AUTHORITATIVE_CORRECTNESS_CASES)
+    checkpoint = comparison.fake_checkpoint(correctness)
+    trusted_provenance = comparison.fake_trusted_provenance(
+        correctness["sources"])
+    verified = _validated_isal_checkpoint_result(
+        comparison, checkpoint, correctness, trusted_provenance,
+        Path("synthetic-checkpoint.json"))
+    if verified["status"] != "verified-trusted-cache-bounded-checkpoint":
+        raise AuditError("trusted ISA-L checkpoint audit status changed")
+    coordinated_correctness = copy.deepcopy(correctness)
+    comparison.fake_coordinated_build_relabel(coordinated_correctness["sources"])
+    coordinated_correctness["artifact_sha256"] = comparison.canonical_digest(
+        coordinated_correctness)
+    coordinated_checkpoint = comparison.fake_checkpoint(coordinated_correctness)
+    try:
+        _validated_isal_checkpoint_result(
+            comparison, coordinated_checkpoint, coordinated_correctness,
+            trusted_provenance, Path("coordinated-relabel.json"))
+    except AuditError:
+        pass
+    else:
+        raise AuditError(
+            "external ISA-L audit accepted a coordinated provenance relabel")
     print(json.dumps({
         "isa_l": isa_counts,
         "jerasure": jerasure_counts,
         "required_jobs": matrix["job_count"],
+        "missing_cache_rejected": True,
+        "coordinated_relabel_rejected": True,
         "status": "PASS",
     }, sort_keys=True))
 
 
-def audit_isal_checkpoint(path: Path) -> dict:
-    tools_dir = Path(__file__).resolve().parent
-    sys.path.insert(0, str(tools_dir))
+def audit_isal_checkpoint(
+        path: Path, correctness_path: Path, cache: Path) -> dict:
+    comparison = _isal_comparison_module()
     try:
-        import leopard2_isal_compare as comparison
-    finally:
-        sys.path.pop(0)
-    try:
+        trusted_provenance = comparison.load_provenance(cache.resolve())
         document = json.loads(path.read_text())
-        comparison.validate_checkpoint(document)
+        correctness = json.loads(correctness_path.read_text())
     except (OSError, json.JSONDecodeError, comparison.ComparisonError) as error:
         raise AuditError(f"invalid ISA-L checkpoint: {error}") from error
-    return {
-        "schema": "leopard2-external-isal-checkpoint-audit/v1",
-        "checkpoint": str(path),
-        "artifact_sha256": document["artifact_sha256"],
-        "cells": len(document["cells"]),
-        "results": len(document["results"]),
-        "wire_compatible": document["method"]["wire_compatible"],
-        "status": "verified-bounded-checkpoint",
-    }
+    return _validated_isal_checkpoint_result(
+        comparison, document, correctness, trusted_provenance, path)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -441,6 +507,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--path", default=".research/leopard2", type=Path)
     checkpoint_parser = subparsers.add_parser("isa-l-checkpoint")
     checkpoint_parser.add_argument("path", type=Path)
+    checkpoint_parser.add_argument(
+        "--correctness-artifact", type=Path, required=True)
+    checkpoint_parser.add_argument("--cache", type=Path, required=True)
     subparsers.add_parser("self-test")
     arguments = parser.parse_args(argv)
     try:
@@ -449,7 +518,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif arguments.command == "cache":
             output = audit_cache(arguments.path)
         elif arguments.command == "isa-l-checkpoint":
-            output = audit_isal_checkpoint(arguments.path)
+            output = audit_isal_checkpoint(
+                arguments.path, arguments.correctness_artifact,
+                arguments.cache)
         else:
             self_test()
             return 0
