@@ -689,6 +689,10 @@ if(LEO2_BUILD_TESTS)
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_direct_encode_crossover.py
                 self-test)
+        add_test(
+            NAME leopard2_visual_studio_project_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/proj/test_leopard_vcxproj.py)
     endif()
 endif()
 

@@ -20,12 +20,26 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\leopard.h" />
+    <ClInclude Include="..\leopard2.h" />
+    <ClInclude Include="..\Leopard2Backend.h" />
+    <ClInclude Include="..\Leopard2Direct.h" />
+    <ClInclude Include="..\Leopard2Dispatch.h" />
+    <ClInclude Include="..\Leopard2Plan.h" />
     <ClInclude Include="..\LeopardCommon.h" />
     <ClInclude Include="..\LeopardFF16.h" />
     <ClInclude Include="..\LeopardFF8.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\leopard.cpp" />
+    <ClCompile Include="..\leopard2.cpp" />
+    <ClCompile Include="..\Leopard2Backend.cpp" />
+    <ClCompile Include="..\Leopard2BackendScalar.cpp" />
+    <ClCompile Include="..\Leopard2CpuFeatures.cpp" />
+    <ClCompile Include="..\Leopard2Plan.cpp" />
+    <ClCompile Include="..\Leopard2BackendSSSE3.cpp" />
+    <ClCompile Include="..\Leopard2BackendAVX2.cpp">
+      <AdditionalOptions>/arch:AVX2 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
     <ClCompile Include="..\LeopardCommon.cpp" />
     <ClCompile Include="..\LeopardFF16.cpp" />
     <ClCompile Include="..\LeopardFF8.cpp" />
@@ -51,14 +65,14 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <WholeProgramOptimization>false</WholeProgramOptimization>
     <CharacterSet>MultiByte</CharacterSet>
     <PlatformToolset>v140</PlatformToolset>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
     <ConfigurationType>StaticLibrary</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
-    <WholeProgramOptimization>true</WholeProgramOptimization>
+    <WholeProgramOptimization>false</WholeProgramOptimization>
     <CharacterSet>MultiByte</CharacterSet>
     <PlatformToolset>v140</PlatformToolset>
   </PropertyGroup>
@@ -100,7 +114,7 @@
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
-      <PreprocessorDefinitions>_MBCS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_MBCS;LEO2_DISABLE_SSSE3_CODEGEN=1;LEO2_DISABLE_AVX2_CODEGEN=1;LEO2_HAVE_SSSE3_BACKEND=1;LEO2_HAVE_AVX2_BACKEND=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -118,7 +132,7 @@
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
-      <PreprocessorDefinitions>_MBCS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_MBCS;LEO2_DISABLE_SSSE3_CODEGEN=1;LEO2_DISABLE_AVX2_CODEGEN=1;LEO2_HAVE_SSSE3_BACKEND=1;LEO2_HAVE_AVX2_BACKEND=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -142,7 +156,7 @@
       <OmitFramePointers>false</OmitFramePointers>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <BufferSecurityCheck>true</BufferSecurityCheck>
-      <PreprocessorDefinitions>_MBCS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_MBCS;LEO2_DISABLE_SSSE3_CODEGEN=1;LEO2_DISABLE_AVX2_CODEGEN=1;LEO2_HAVE_SSSE3_BACKEND=1;LEO2_HAVE_AVX2_BACKEND=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -168,7 +182,7 @@
       <OmitFramePointers>true</OmitFramePointers>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <BufferSecurityCheck>true</BufferSecurityCheck>
-      <PreprocessorDefinitions>_MBCS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_MBCS;LEO2_DISABLE_SSSE3_CODEGEN=1;LEO2_DISABLE_AVX2_CODEGEN=1;LEO2_HAVE_SSSE3_BACKEND=1;LEO2_HAVE_AVX2_BACKEND=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <OpenMPSupport>true</OpenMPSupport>
     </ClCompile>
     <Link>
