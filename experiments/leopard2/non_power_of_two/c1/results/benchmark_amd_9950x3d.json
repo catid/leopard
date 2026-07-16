@@ -1,0 +1,610 @@
+{
+  "cases": [
+    {
+      "active_inputs": 9,
+      "direction": "forward",
+      "length": 16,
+      "metrics": {
+        "active_butterflies": 12,
+        "fixed_multiplications_per_byte": 5,
+        "flat_schedule_bytes": 192,
+        "full_butterflies": 32,
+        "hybrid_boundary_butterflies": 8,
+        "hybrid_complete_butterflies": 4,
+        "hybrid_complete_subtransforms": 1,
+        "hybrid_schedule_items": 9,
+        "input_zero_specializations": 0,
+        "length": 16,
+        "loads_per_byte": 24,
+        "multiplier_one_butterflies": 0,
+        "multiplier_zero_butterflies": 7,
+        "one_output_butterflies": 1,
+        "padded_fixed_multiplications_per_byte": 17,
+        "padded_loads_per_byte": 64,
+        "padded_stores_per_byte": 49,
+        "padded_xors_per_byte": 49,
+        "recursive_nodes_skipped": 9,
+        "recursive_nodes_visited": 8,
+        "skipped_butterflies": 20,
+        "stores_per_byte": 16,
+        "xors_per_byte": 16
+      },
+      "requested_outputs": 7,
+      "shard_bytes": 64,
+      "timings": {
+        "flat": {
+          "mad_ns": 460,
+          "median_ns": 34601,
+          "repetitions": 9
+        },
+        "flat_scalar": {
+          "mad_ns": 30,
+          "median_ns": 2890,
+          "repetitions": 8333
+        },
+        "generated_scalar": {
+          "mad_ns": 10,
+          "median_ns": 420,
+          "repetitions": 8333,
+          "source_bytes": 902,
+          "source_sha256": "ddc7a006741f8148c5ea59b967e7e81c13fbeeffdac12258acfb948579874754"
+        },
+        "hybrid": {
+          "mad_ns": 80,
+          "median_ns": 36080,
+          "repetitions": 9
+        },
+        "padded": {
+          "mad_ns": 550,
+          "median_ns": 101121,
+          "repetitions": 9
+        },
+        "recursive": {
+          "mad_ns": 130,
+          "median_ns": 36890,
+          "repetitions": 9
+        }
+      }
+    },
+    {
+      "active_inputs": 9,
+      "direction": "forward",
+      "length": 16,
+      "metrics": {
+        "active_butterflies": 12,
+        "fixed_multiplications_per_byte": 5,
+        "flat_schedule_bytes": 192,
+        "full_butterflies": 32,
+        "hybrid_boundary_butterflies": 8,
+        "hybrid_complete_butterflies": 4,
+        "hybrid_complete_subtransforms": 1,
+        "hybrid_schedule_items": 9,
+        "input_zero_specializations": 0,
+        "length": 16,
+        "loads_per_byte": 24,
+        "multiplier_one_butterflies": 0,
+        "multiplier_zero_butterflies": 7,
+        "one_output_butterflies": 1,
+        "padded_fixed_multiplications_per_byte": 17,
+        "padded_loads_per_byte": 64,
+        "padded_stores_per_byte": 49,
+        "padded_xors_per_byte": 49,
+        "recursive_nodes_skipped": 9,
+        "recursive_nodes_visited": 8,
+        "skipped_butterflies": 20,
+        "stores_per_byte": 16,
+        "xors_per_byte": 16
+      },
+      "requested_outputs": 7,
+      "shard_bytes": 1024,
+      "timings": {
+        "flat": {
+          "mad_ns": 1419,
+          "median_ns": 544687,
+          "repetitions": 9
+        },
+        "flat_scalar": {
+          "mad_ns": 30,
+          "median_ns": 2920,
+          "repetitions": 8333
+        },
+        "generated_scalar": {
+          "mad_ns": 10,
+          "median_ns": 420,
+          "repetitions": 8333,
+          "source_bytes": 902,
+          "source_sha256": "ddc7a006741f8148c5ea59b967e7e81c13fbeeffdac12258acfb948579874754"
+        },
+        "hybrid": {
+          "mad_ns": 41,
+          "median_ns": 545656,
+          "repetitions": 9
+        },
+        "padded": {
+          "mad_ns": 2521,
+          "median_ns": 1533168,
+          "repetitions": 9
+        },
+        "recursive": {
+          "mad_ns": 741,
+          "median_ns": 545797,
+          "repetitions": 9
+        }
+      }
+    },
+    {
+      "active_inputs": 9,
+      "direction": "forward",
+      "length": 16,
+      "metrics": {
+        "active_butterflies": 12,
+        "fixed_multiplications_per_byte": 5,
+        "flat_schedule_bytes": 192,
+        "full_butterflies": 32,
+        "hybrid_boundary_butterflies": 8,
+        "hybrid_complete_butterflies": 4,
+        "hybrid_complete_subtransforms": 1,
+        "hybrid_schedule_items": 9,
+        "input_zero_specializations": 0,
+        "length": 16,
+        "loads_per_byte": 24,
+        "multiplier_one_butterflies": 0,
+        "multiplier_zero_butterflies": 7,
+        "one_output_butterflies": 1,
+        "padded_fixed_multiplications_per_byte": 17,
+        "padded_loads_per_byte": 64,
+        "padded_stores_per_byte": 49,
+        "padded_xors_per_byte": 49,
+        "recursive_nodes_skipped": 9,
+        "recursive_nodes_visited": 8,
+        "skipped_butterflies": 20,
+        "stores_per_byte": 16,
+        "xors_per_byte": 16
+      },
+      "requested_outputs": 7,
+      "shard_bytes": 16384,
+      "timings": {
+        "flat": {
+          "mad_ns": 5440,
+          "median_ns": 9196479,
+          "repetitions": 7
+        },
+        "flat_scalar": {
+          "mad_ns": 30,
+          "median_ns": 2970,
+          "repetitions": 8333
+        },
+        "generated_scalar": {
+          "mad_ns": 10,
+          "median_ns": 410,
+          "repetitions": 8333,
+          "source_bytes": 902,
+          "source_sha256": "ddc7a006741f8148c5ea59b967e7e81c13fbeeffdac12258acfb948579874754"
+        },
+        "hybrid": {
+          "mad_ns": 14571,
+          "median_ns": 9174179,
+          "repetitions": 7
+        },
+        "padded": {
+          "mad_ns": 34130,
+          "median_ns": 25717024,
+          "repetitions": 7
+        },
+        "recursive": {
+          "mad_ns": 3639,
+          "median_ns": 9199369,
+          "repetitions": 7
+        }
+      }
+    },
+    {
+      "active_inputs": 9,
+      "direction": "forward",
+      "length": 16,
+      "metrics": {
+        "active_butterflies": 12,
+        "fixed_multiplications_per_byte": 5,
+        "flat_schedule_bytes": 192,
+        "full_butterflies": 32,
+        "hybrid_boundary_butterflies": 8,
+        "hybrid_complete_butterflies": 4,
+        "hybrid_complete_subtransforms": 1,
+        "hybrid_schedule_items": 9,
+        "input_zero_specializations": 0,
+        "length": 16,
+        "loads_per_byte": 24,
+        "multiplier_one_butterflies": 0,
+        "multiplier_zero_butterflies": 7,
+        "one_output_butterflies": 1,
+        "padded_fixed_multiplications_per_byte": 17,
+        "padded_loads_per_byte": 64,
+        "padded_stores_per_byte": 49,
+        "padded_xors_per_byte": 49,
+        "recursive_nodes_skipped": 9,
+        "recursive_nodes_visited": 8,
+        "skipped_butterflies": 20,
+        "stores_per_byte": 16,
+        "xors_per_byte": 16
+      },
+      "requested_outputs": 7,
+      "shard_bytes": 65536,
+      "timings": {
+        "flat": {
+          "mad_ns": 74481,
+          "median_ns": 36979656,
+          "repetitions": 7
+        },
+        "flat_scalar": {
+          "mad_ns": 30,
+          "median_ns": 2910,
+          "repetitions": 8333
+        },
+        "generated_scalar": {
+          "mad_ns": 10,
+          "median_ns": 420,
+          "repetitions": 8333,
+          "source_bytes": 902,
+          "source_sha256": "ddc7a006741f8148c5ea59b967e7e81c13fbeeffdac12258acfb948579874754"
+        },
+        "hybrid": {
+          "mad_ns": 230192,
+          "median_ns": 37080567,
+          "repetitions": 7
+        },
+        "padded": {
+          "mad_ns": 346573,
+          "median_ns": 103436790,
+          "repetitions": 7
+        },
+        "recursive": {
+          "mad_ns": 128491,
+          "median_ns": 37318640,
+          "repetitions": 7
+        }
+      }
+    },
+    {
+      "active_inputs": 33,
+      "direction": "forward",
+      "length": 64,
+      "metrics": {
+        "active_butterflies": 63,
+        "fixed_multiplications_per_byte": 32,
+        "flat_schedule_bytes": 1008,
+        "full_butterflies": 192,
+        "hybrid_boundary_butterflies": 31,
+        "hybrid_complete_butterflies": 32,
+        "hybrid_complete_subtransforms": 1,
+        "hybrid_schedule_items": 32,
+        "input_zero_specializations": 0,
+        "length": 64,
+        "loads_per_byte": 126,
+        "multiplier_one_butterflies": 0,
+        "multiplier_zero_butterflies": 31,
+        "one_output_butterflies": 15,
+        "padded_fixed_multiplications_per_byte": 129,
+        "padded_loads_per_byte": 384,
+        "padded_stores_per_byte": 321,
+        "padded_xors_per_byte": 321,
+        "recursive_nodes_skipped": 22,
+        "recursive_nodes_visited": 21,
+        "skipped_butterflies": 129,
+        "stores_per_byte": 80,
+        "xors_per_byte": 80
+      },
+      "requested_outputs": 17,
+      "shard_bytes": 64,
+      "timings": {
+        "flat": {
+          "mad_ns": 350,
+          "median_ns": 167482,
+          "repetitions": 9
+        },
+        "flat_scalar": {
+          "mad_ns": 71,
+          "median_ns": 13211,
+          "repetitions": 1587
+        },
+        "generated_scalar": {
+          "mad_ns": 20,
+          "median_ns": 1610,
+          "repetitions": 1587,
+          "source_bytes": 4288,
+          "source_sha256": "0c024b33ca344b201d073168c3f2c97a5ffb61283613361d0f298480df5406af"
+        },
+        "hybrid": {
+          "mad_ns": 150,
+          "median_ns": 181072,
+          "repetitions": 9
+        },
+        "padded": {
+          "mad_ns": 1180,
+          "median_ns": 624418,
+          "repetitions": 9
+        },
+        "recursive": {
+          "mad_ns": 510,
+          "median_ns": 177162,
+          "repetitions": 9
+        }
+      }
+    },
+    {
+      "active_inputs": 33,
+      "direction": "forward",
+      "length": 64,
+      "metrics": {
+        "active_butterflies": 63,
+        "fixed_multiplications_per_byte": 32,
+        "flat_schedule_bytes": 1008,
+        "full_butterflies": 192,
+        "hybrid_boundary_butterflies": 31,
+        "hybrid_complete_butterflies": 32,
+        "hybrid_complete_subtransforms": 1,
+        "hybrid_schedule_items": 32,
+        "input_zero_specializations": 0,
+        "length": 64,
+        "loads_per_byte": 126,
+        "multiplier_one_butterflies": 0,
+        "multiplier_zero_butterflies": 31,
+        "one_output_butterflies": 15,
+        "padded_fixed_multiplications_per_byte": 129,
+        "padded_loads_per_byte": 384,
+        "padded_stores_per_byte": 321,
+        "padded_xors_per_byte": 321,
+        "recursive_nodes_skipped": 22,
+        "recursive_nodes_visited": 21,
+        "skipped_butterflies": 129,
+        "stores_per_byte": 80,
+        "xors_per_byte": 80
+      },
+      "requested_outputs": 17,
+      "shard_bytes": 1024,
+      "timings": {
+        "flat": {
+          "mad_ns": 2630,
+          "median_ns": 2848014,
+          "repetitions": 9
+        },
+        "flat_scalar": {
+          "mad_ns": 90,
+          "median_ns": 13220,
+          "repetitions": 1587
+        },
+        "generated_scalar": {
+          "mad_ns": 10,
+          "median_ns": 1610,
+          "repetitions": 1587,
+          "source_bytes": 4288,
+          "source_sha256": "0c024b33ca344b201d073168c3f2c97a5ffb61283613361d0f298480df5406af"
+        },
+        "hybrid": {
+          "mad_ns": 2281,
+          "median_ns": 2857453,
+          "repetitions": 9
+        },
+        "padded": {
+          "mad_ns": 25870,
+          "median_ns": 9816486,
+          "repetitions": 9
+        },
+        "recursive": {
+          "mad_ns": 4740,
+          "median_ns": 2856123,
+          "repetitions": 9
+        }
+      }
+    },
+    {
+      "active_inputs": 33,
+      "direction": "forward",
+      "length": 64,
+      "metrics": {
+        "active_butterflies": 63,
+        "fixed_multiplications_per_byte": 32,
+        "flat_schedule_bytes": 1008,
+        "full_butterflies": 192,
+        "hybrid_boundary_butterflies": 31,
+        "hybrid_complete_butterflies": 32,
+        "hybrid_complete_subtransforms": 1,
+        "hybrid_schedule_items": 32,
+        "input_zero_specializations": 0,
+        "length": 64,
+        "loads_per_byte": 126,
+        "multiplier_one_butterflies": 0,
+        "multiplier_zero_butterflies": 31,
+        "one_output_butterflies": 15,
+        "padded_fixed_multiplications_per_byte": 129,
+        "padded_loads_per_byte": 384,
+        "padded_stores_per_byte": 321,
+        "padded_xors_per_byte": 321,
+        "recursive_nodes_skipped": 22,
+        "recursive_nodes_visited": 21,
+        "skipped_butterflies": 129,
+        "stores_per_byte": 80,
+        "xors_per_byte": 80
+      },
+      "requested_outputs": 17,
+      "shard_bytes": 16384,
+      "timings": {
+        "flat": {
+          "mad_ns": 54401,
+          "median_ns": 48599371,
+          "repetitions": 7
+        },
+        "flat_scalar": {
+          "mad_ns": 70,
+          "median_ns": 13060,
+          "repetitions": 1587
+        },
+        "generated_scalar": {
+          "mad_ns": 20,
+          "median_ns": 1620,
+          "repetitions": 1587,
+          "source_bytes": 4288,
+          "source_sha256": "0c024b33ca344b201d073168c3f2c97a5ffb61283613361d0f298480df5406af"
+        },
+        "hybrid": {
+          "mad_ns": 24050,
+          "median_ns": 48464760,
+          "repetitions": 7
+        },
+        "padded": {
+          "mad_ns": 284093,
+          "median_ns": 165356783,
+          "repetitions": 7
+        },
+        "recursive": {
+          "mad_ns": 37781,
+          "median_ns": 48630111,
+          "repetitions": 7
+        }
+      }
+    },
+    {
+      "active_inputs": 129,
+      "direction": "forward",
+      "length": 256,
+      "metrics": {
+        "active_butterflies": 319,
+        "fixed_multiplications_per_byte": 192,
+        "flat_schedule_bytes": 5104,
+        "full_butterflies": 1024,
+        "hybrid_boundary_butterflies": 127,
+        "hybrid_complete_butterflies": 192,
+        "hybrid_complete_subtransforms": 1,
+        "hybrid_schedule_items": 128,
+        "input_zero_specializations": 0,
+        "length": 256,
+        "loads_per_byte": 638,
+        "multiplier_one_butterflies": 0,
+        "multiplier_zero_butterflies": 127,
+        "one_output_butterflies": 63,
+        "padded_fixed_multiplications_per_byte": 769,
+        "padded_loads_per_byte": 2048,
+        "padded_stores_per_byte": 1793,
+        "padded_xors_per_byte": 1793,
+        "recursive_nodes_skipped": 72,
+        "recursive_nodes_visited": 71,
+        "skipped_butterflies": 705,
+        "stores_per_byte": 448,
+        "xors_per_byte": 448
+      },
+      "requested_outputs": 65,
+      "shard_bytes": 64,
+      "timings": {
+        "flat": {
+          "mad_ns": 1650,
+          "median_ns": 882131,
+          "repetitions": 9
+        },
+        "flat_scalar": {
+          "mad_ns": 240,
+          "median_ns": 61660,
+          "repetitions": 313
+        },
+        "generated_scalar": {
+          "mad_ns": 90,
+          "median_ns": 7950,
+          "repetitions": 313,
+          "source_bytes": 25086,
+          "source_sha256": "a96330df448179fc0a8a80c0bb9ba8e03c4286ed2bdafbe80fc84724cf325250"
+        },
+        "hybrid": {
+          "mad_ns": 1420,
+          "median_ns": 955781,
+          "repetitions": 9
+        },
+        "padded": {
+          "mad_ns": 1420,
+          "median_ns": 3406110,
+          "repetitions": 9
+        },
+        "recursive": {
+          "mad_ns": 590,
+          "median_ns": 921281,
+          "repetitions": 9
+        }
+      }
+    },
+    {
+      "active_inputs": 129,
+      "direction": "forward",
+      "length": 256,
+      "metrics": {
+        "active_butterflies": 319,
+        "fixed_multiplications_per_byte": 192,
+        "flat_schedule_bytes": 5104,
+        "full_butterflies": 1024,
+        "hybrid_boundary_butterflies": 127,
+        "hybrid_complete_butterflies": 192,
+        "hybrid_complete_subtransforms": 1,
+        "hybrid_schedule_items": 128,
+        "input_zero_specializations": 0,
+        "length": 256,
+        "loads_per_byte": 638,
+        "multiplier_one_butterflies": 0,
+        "multiplier_zero_butterflies": 127,
+        "one_output_butterflies": 63,
+        "padded_fixed_multiplications_per_byte": 769,
+        "padded_loads_per_byte": 2048,
+        "padded_stores_per_byte": 1793,
+        "padded_xors_per_byte": 1793,
+        "recursive_nodes_skipped": 72,
+        "recursive_nodes_visited": 71,
+        "skipped_butterflies": 705,
+        "stores_per_byte": 448,
+        "xors_per_byte": 448
+      },
+      "requested_outputs": 65,
+      "shard_bytes": 1024,
+      "timings": {
+        "flat": {
+          "mad_ns": 16771,
+          "median_ns": 15300180,
+          "repetitions": 9
+        },
+        "flat_scalar": {
+          "mad_ns": 181,
+          "median_ns": 61180,
+          "repetitions": 313
+        },
+        "generated_scalar": {
+          "mad_ns": 120,
+          "median_ns": 7970,
+          "repetitions": 313,
+          "source_bytes": 25086,
+          "source_sha256": "a96330df448179fc0a8a80c0bb9ba8e03c4286ed2bdafbe80fc84724cf325250"
+        },
+        "hybrid": {
+          "mad_ns": 26720,
+          "median_ns": 15374490,
+          "repetitions": 9
+        },
+        "padded": {
+          "mad_ns": 71051,
+          "median_ns": 54481180,
+          "repetitions": 9
+        },
+        "recursive": {
+          "mad_ns": 19610,
+          "median_ns": 15346710,
+          "repetitions": 9
+        }
+      }
+    }
+  ],
+  "clock": "time.perf_counter_ns",
+  "host": {
+    "allowed_cpus": 1,
+    "cpu_model": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "online_cpus": 32,
+    "platform": "Linux-6.8.0-134-generic-x86_64-with-glibc2.39",
+    "python": "3.12.3"
+  },
+  "schema_version": "leopard2-c1-v1",
+  "seed": "0x0c1b30000 + case_index",
+  "status": "pass",
+  "timing_scope": "Python scalar experiment; setup excluded"
+}

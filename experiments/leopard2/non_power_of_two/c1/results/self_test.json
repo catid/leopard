@@ -1,0 +1,20 @@
+{
+  "byte_cases": 6,
+  "byte_comparisons": 253686,
+  "counts": {
+    "direct_oracle_vectors": 134404,
+    "execution_form_comparisons": 29687,
+    "generated_kernel_comparisons": 23,
+    "generated_mask_rejections": 1,
+    "gf4_prefix_plans": 816,
+    "gf4_sparse_input_plans": 5672,
+    "gf4_sparse_plans": 2400,
+    "gf8_sparse_input_plans": 144,
+    "gf8_swept_plans": 856,
+    "inverse_vectors": 134404,
+    "requested_symbol_comparisons": 187666
+  },
+  "schema_version": "leopard2-c1-v1",
+  "seed": "0x0c1d3e3d",
+  "status": "pass"
+}
