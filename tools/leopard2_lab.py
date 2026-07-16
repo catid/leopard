@@ -13,9 +13,12 @@ from __future__ import print_function
 import argparse
 import hashlib
 import json
+import math
 import os
+import posixpath
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -30,7 +33,7 @@ except ImportError:  # pragma: no cover - Unix/Linux is the production target.
     resource = None
 
 
-MANIFEST_SCHEMA = "leopard2-lab-manifest/v1"
+MANIFEST_SCHEMA = "leopard2-lab-manifest/v2"
 RESULT_SCHEMA = "leopard2-lab-result/v1"
 MERGE_SCHEMA = "leopard2-lab-merged/v1"
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -116,8 +119,8 @@ def _allowed_cpus():
     return list(range(count)), "os.cpu_count"
 
 
-def _memory_total_bytes():
-    text = _read_text("/proc/meminfo")
+def _memory_total_bytes(proc_root="/proc"):
+    text = _read_text(Path(proc_root) / "meminfo")
     if text:
         for line in text.splitlines():
             fields = line.split()
@@ -127,6 +130,121 @@ def _memory_total_bytes():
                 except ValueError:
                     break
     return None
+
+
+def _decode_mount_field(value):
+    """Decode the octal escapes used by Linux mountinfo path fields."""
+    return re.sub(
+        r"\\([0-7]{3})",
+        lambda match: chr(int(match.group(1), 8)),
+        value)
+
+
+def _cgroup_memberships(proc_root):
+    text = _read_text(Path(proc_root) / "self" / "cgroup")
+    if not text:
+        return []
+    memberships = []
+    for line in text.splitlines():
+        fields = line.split(":", 2)
+        if len(fields) != 3:
+            continue
+        controllers = set(filter(None, fields[1].split(",")))
+        path = posixpath.normpath(fields[2])
+        if not path.startswith("/"):
+            continue
+        memberships.append((controllers, path))
+    return memberships
+
+
+def _cgroup_mounts(proc_root):
+    text = _read_text(Path(proc_root) / "self" / "mountinfo")
+    if not text:
+        return []
+    mounts = []
+    for line in text.splitlines():
+        try:
+            before, after = line.split(" - ", 1)
+        except ValueError:
+            continue
+        before_fields = before.split()
+        after_fields = after.split()
+        if len(before_fields) < 5 or len(after_fields) < 3:
+            continue
+        filesystem = after_fields[0]
+        if filesystem not in ("cgroup", "cgroup2"):
+            continue
+        mounts.append({
+            "filesystem": filesystem,
+            "root": posixpath.normpath(_decode_mount_field(before_fields[3])),
+            "mount_point": Path(_decode_mount_field(before_fields[4])),
+            "controllers": set(after_fields[2].split(",")),
+        })
+    return mounts
+
+
+def _mounted_cgroup_path(mount, membership):
+    mount_root = mount["root"]
+    if mount_root == "/":
+        relative = membership.lstrip("/")
+    elif membership == mount_root:
+        relative = ""
+    elif membership.startswith(mount_root.rstrip("/") + "/"):
+        relative = membership[len(mount_root.rstrip("/")) + 1:]
+    else:
+        return None
+    candidate = mount["mount_point"] / relative
+    mount_point = mount["mount_point"]
+    if candidate != mount_point and mount_point not in candidate.parents:
+        return None
+    return candidate
+
+
+def _read_cgroup_limits(proc_root):
+    memberships = _cgroup_memberships(proc_root)
+    mounts = _cgroup_mounts(proc_root)
+    limits = []
+    visited = set()
+    for mount in mounts:
+        if mount["filesystem"] == "cgroup2":
+            matching = [path for controllers, path in memberships if not controllers]
+            limit_name = "memory.max"
+        elif "memory" in mount["controllers"]:
+            matching = [path for controllers, path in memberships if "memory" in controllers]
+            limit_name = "memory.limit_in_bytes"
+        else:
+            continue
+        for membership in matching:
+            current = _mounted_cgroup_path(mount, membership)
+            if current is None:
+                continue
+            while True:
+                limit_path = current / limit_name
+                if limit_path not in visited:
+                    visited.add(limit_path)
+                    text = _read_text(limit_path)
+                    if text and text != "max":
+                        try:
+                            value = int(text)
+                        except ValueError:
+                            value = 0
+                        # cgroup v1 uses enormous values as unlimited sentinels.
+                        if 0 < value < (1 << 60):
+                            limits.append(value)
+                if current == mount["mount_point"]:
+                    break
+                current = current.parent
+    return limits
+
+
+def _memory_capacity_bytes(proc_root="/proc"):
+    """Return the smaller of physical memory and readable cgroup limits."""
+    candidates = []
+    total = _memory_total_bytes(proc_root)
+    if total:
+        candidates.append(total)
+    candidates.extend(_read_cgroup_limits(proc_root))
+    return min(candidates) if candidates else None
 
 
 def detect_topology():
@@ -187,6 +305,7 @@ def detect_topology():
         "numa_nodes": numa_nodes,
         "cpus": cpu_entries,
         "memory_total_bytes": _memory_total_bytes(),
+        "memory_capacity_bytes": _memory_capacity_bytes(),
     }
 
 
@@ -196,6 +315,91 @@ def _canonical_json_bytes(value):
 
 def _digest(value):
     return hashlib.sha256(_canonical_json_bytes(value)).hexdigest()
+
+
+def _file_identity(path):
+    """Return a content identity for an executable, independent of mtime."""
+    resolved = Path(path).resolve()
+    try:
+        if not resolved.is_file():
+            raise LabError("executable is not a regular file: {}".format(resolved))
+        hasher = hashlib.sha256()
+        with resolved.open("rb") as source:
+            before = os.fstat(source.fileno())
+            while True:
+                block = source.read(1024 * 1024)
+                if not block:
+                    break
+                hasher.update(block)
+            stat_result = os.fstat(source.fileno())
+        if (before.st_ino != stat_result.st_ino or
+                before.st_size != stat_result.st_size or
+                before.st_mtime_ns != stat_result.st_mtime_ns):
+            raise LabError("executable changed while it was being hashed: {}".format(resolved))
+    except OSError as error:
+        raise LabError("cannot hash executable {}: {}".format(resolved, error))
+    return {
+        "path": str(resolved),
+        "sha256": hasher.hexdigest(),
+        "size_bytes": stat_result.st_size,
+    }
+
+
+def _content_identity(path):
+    path = Path(path)
+    try:
+        hasher = hashlib.sha256()
+        size = 0
+        with path.open("rb") as source:
+            while True:
+                block = source.read(1024 * 1024)
+                if not block:
+                    break
+                hasher.update(block)
+                size += len(block)
+    except OSError as error:
+        raise LabError("cannot hash output {}: {}".format(path, error))
+    return {"sha256": hasher.hexdigest(), "size_bytes": size}
+
+
+def _resolve_executable(command, root_path, cwd, environment, identity_cache=None):
+    token = command[0]
+    if any("{" + replacement + "}" in token for replacement in TOKEN_REPLACEMENTS):
+        raise LabError("the command executable may not contain runtime tokens")
+    working_directory = Path(cwd)
+    if not working_directory.is_absolute():
+        working_directory = root_path / working_directory
+    if os.path.sep in token or (os.path.altsep and os.path.altsep in token):
+        candidate = Path(token)
+        if not candidate.is_absolute():
+            candidate = working_directory / candidate
+        executable = str(candidate)
+    else:
+        search_path = environment.get("PATH", os.environ.get("PATH", ""))
+        search_path = os.pathsep.join(
+            entry if Path(entry or ".").is_absolute()
+            else str(working_directory / (entry or "."))
+            for entry in search_path.split(os.pathsep))
+        executable = shutil.which(token, path=search_path)
+        if executable is None:
+            raise LabError("cannot resolve executable {!r}".format(token))
+    if not os.access(executable, os.X_OK):
+        raise LabError("command executable is not executable: {}".format(executable))
+    cache_key = str(Path(executable).resolve())
+    if identity_cache is not None and cache_key in identity_cache:
+        return dict(identity_cache[cache_key])
+    identity = _file_identity(executable)
+    if identity_cache is not None:
+        identity_cache[cache_key] = dict(identity)
+    return identity
+
+
+def _json_copy(value):
+    """Copy JSON-compatible metadata while rejecting non-JSON input early."""
+    try:
+        return json.loads(_canonical_json_bytes(value).decode("ascii"))
+    except (TypeError, ValueError) as error:
+        raise LabError("metadata must be JSON-serializable: {}".format(error))
 
 
 def _atomic_write_json(path, value):
@@ -230,7 +434,7 @@ def _load_json(path):
 def _positive_number(value, label, allow_zero=False):
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise LabError("{} must be a number".format(label))
-    if value < 0 or (value == 0 and not allow_zero):
+    if not math.isfinite(value) or value < 0 or (value == 0 and not allow_zero):
         comparator = "non-negative" if allow_zero else "positive"
         raise LabError("{} must be {}".format(label, comparator))
     return value
@@ -313,7 +517,7 @@ def _expand_jobs(spec_jobs):
 
 
 def _default_memory_mb(topology, workers):
-    total = topology.get("memory_total_bytes")
+    total = topology.get("memory_capacity_bytes")
     if total:
         per_worker = int((total // (1024 * 1024)) * 0.80 / workers)
         return max(256, min(4096, per_worker))
@@ -324,6 +528,14 @@ def build_manifest(spec, root=None, workers=None, base_seed=None):
     """Build and validate a deterministic manifest from a concise job spec."""
     if not isinstance(spec, dict):
         raise LabError("job specification must be a JSON object")
+    source_spec = dict(spec)
+    supplied_spec_digest = source_spec.pop("spec_digest", None)
+    computed_spec_digest = _digest(source_spec)
+    if supplied_spec_digest is not None and supplied_spec_digest != computed_spec_digest:
+        raise LabError("source specification digest does not match its contents")
+    spec_metadata = spec.get("metadata", {})
+    if not isinstance(spec_metadata, dict):
+        raise LabError("specification metadata must be an object")
     topology = detect_topology()
     if not topology["allowed_cpus"]:
         raise LabError("no CPUs are available in the process affinity mask")
@@ -354,6 +566,8 @@ def build_manifest(spec, root=None, workers=None, base_seed=None):
         raise LabError("specification must contain a non-empty jobs array")
     jobs = []
     cursor = 0
+    cpu_groups = {}
+    executable_identities = {}
     for raw in _expand_jobs(raw_jobs):
         job_id = raw["id"]
         command = raw.get("command")
@@ -371,6 +585,9 @@ def build_manifest(spec, root=None, workers=None, base_seed=None):
         _positive_number(timeout_seconds, "job {} timeout_seconds".format(job_id))
         _positive_int(memory_mb, "job {} memory_mb".format(job_id), allow_zero=True)
 
+        cpu_group = raw.get("cpu_group")
+        if cpu_group is not None and (not isinstance(cpu_group, str) or not cpu_group):
+            raise LabError("job {} cpu_group must be a non-empty string".format(job_id))
         if "cpu_set" in raw:
             raw_cpu_set = raw["cpu_set"]
             cpu_set = parse_cpu_list(raw_cpu_set) if isinstance(raw_cpu_set, str) else raw_cpu_set
@@ -380,19 +597,44 @@ def build_manifest(spec, root=None, workers=None, base_seed=None):
             unavailable = set(cpu_set) - allowed_set
             if unavailable:
                 raise LabError("job {} requests unavailable CPUs {}".format(job_id, format_cpu_list(unavailable)))
+            if cpu_group is not None and cpu_group in cpu_groups:
+                if cpu_set != cpu_groups[cpu_group]:
+                    raise LabError("job {} cpu_group changes its explicit CPU set".format(job_id))
+            elif cpu_group is not None:
+                cpu_groups[cpu_group] = list(cpu_set)
         else:
             cpu_count = raw.get("cpu_count", default_cpu_count)
             _positive_int(cpu_count, "job {} cpu_count".format(job_id))
             if cpu_count > len(cpu_order):
                 raise LabError("job {} requests {} CPUs, but only {} are allowed".format(
                     job_id, cpu_count, len(cpu_order)))
-            cpu_set = [cpu_order[(cursor + offset) % len(cpu_order)] for offset in range(cpu_count)]
-            cpu_set = sorted(set(cpu_set))
-            cursor = (cursor + cpu_count) % len(cpu_order)
+            if cpu_group is not None and cpu_group in cpu_groups:
+                cpu_set = list(cpu_groups[cpu_group])
+                if len(cpu_set) != cpu_count:
+                    raise LabError(
+                        "job {} cpu_group changes CPU count from {} to {}".format(
+                            job_id, len(cpu_set), cpu_count))
+            else:
+                cpu_set = [
+                    cpu_order[(cursor + offset) % len(cpu_order)]
+                    for offset in range(cpu_count)]
+                cpu_set = sorted(set(cpu_set))
+                cursor = (cursor + cpu_count) % len(cpu_order)
+                if cpu_group is not None:
+                    cpu_groups[cpu_group] = list(cpu_set)
 
         cwd = raw.get("cwd", ".")
         if not isinstance(cwd, str) or not cwd:
             raise LabError("job {} cwd must be a non-empty string".format(job_id))
+        minimum_memory_mb = raw.get("minimum_memory_mb", 0)
+        _positive_int(
+            minimum_memory_mb, "job {} minimum_memory_mb".format(job_id),
+            allow_zero=True)
+        executable = _resolve_executable(
+            command, root_path, cwd, environment, executable_identities)
+        benchmark_cell = raw.get("benchmark_cell")
+        if benchmark_cell is not None and not isinstance(benchmark_cell, dict):
+            raise LabError("job {} benchmark_cell must be an object".format(job_id))
         seed = _stable_seed(selected_seed, job_id)
         job = {
             "id": job_id,
@@ -401,9 +643,15 @@ def build_manifest(spec, root=None, workers=None, base_seed=None):
             "env": dict(sorted(environment.items())),
             "timeout_seconds": timeout_seconds,
             "memory_mb": memory_mb,
+            "minimum_memory_mb": minimum_memory_mb,
             "cpu_set": cpu_set,
             "seed": seed,
+            "executable": executable,
         }
+        if raw.get("cpu_group") is not None:
+            job["cpu_group"] = raw["cpu_group"]
+        if benchmark_cell is not None:
+            job["benchmark_cell"] = _json_copy(benchmark_cell)
         job["job_digest"] = _digest(job)
         jobs.append(job)
 
@@ -414,6 +662,11 @@ def build_manifest(spec, root=None, workers=None, base_seed=None):
         "workers": selected_workers,
         "cpu_policy": cpu_policy,
         "topology": topology,
+        "source_spec": {
+            "schema": spec.get("schema"),
+            "digest": supplied_spec_digest or computed_spec_digest,
+            "metadata": _json_copy(spec_metadata),
+        },
         "jobs": jobs,
     }
     manifest["manifest_digest"] = _digest(manifest)
@@ -434,6 +687,12 @@ def validate_manifest(manifest):
         raise LabError("manifest workers may not exceed 128")
     if not isinstance(manifest.get("root"), str):
         raise LabError("manifest root is missing")
+    source_spec = manifest.get("source_spec")
+    if (not isinstance(source_spec, dict) or
+            not isinstance(source_spec.get("digest"), str) or
+            not re.match(r"^[0-9a-f]{64}$", source_spec["digest"]) or
+            not isinstance(source_spec.get("metadata"), dict)):
+        raise LabError("manifest source specification identity is invalid")
     jobs = manifest.get("jobs")
     if not isinstance(jobs, list) or not jobs:
         raise LabError("manifest jobs are missing")
@@ -450,6 +709,18 @@ def validate_manifest(manifest):
             raise LabError("job {} has no command".format(job["id"]))
         if not isinstance(job.get("cpu_set"), list) or not job["cpu_set"]:
             raise LabError("job {} has no CPU set".format(job["id"]))
+        _positive_number(job.get("timeout_seconds"), "job {} timeout_seconds".format(job["id"]))
+        _positive_int(job.get("memory_mb"), "job {} memory_mb".format(job["id"]), allow_zero=True)
+        _positive_int(
+            job.get("minimum_memory_mb"),
+            "job {} minimum_memory_mb".format(job["id"]), allow_zero=True)
+        executable = job.get("executable")
+        if (not isinstance(executable, dict) or
+                not isinstance(executable.get("path"), str) or
+                not re.match(r"^[0-9a-f]{64}$", str(executable.get("sha256", ""))) or
+                not isinstance(executable.get("size_bytes"), int) or
+                executable["size_bytes"] < 0):
+            raise LabError("job {} has an invalid executable identity".format(job["id"]))
     if ids != sorted(ids) or len(ids) != len(set(ids)):
         raise LabError("manifest jobs must have unique ids in sorted order")
     return manifest
@@ -470,9 +741,28 @@ def _read_completed_result(output_dir, job, rerun_failed):
     if (result.get("schema") != RESULT_SCHEMA or result.get("state") != "complete" or
             result.get("job_digest") != job["job_digest"]):
         return None
+    _validate_terminal_result(result_path, result, job)
     if rerun_failed and result.get("outcome") != "success":
         return None
     return result
+
+
+def _validate_terminal_result(result_path, result, job):
+    unsigned = dict(result)
+    expected_result_digest = unsigned.pop("result_digest", None)
+    if expected_result_digest != _digest(unsigned):
+        raise LabError("terminal result digest is invalid for job {}".format(job["id"]))
+    if result.get("job_id") != job["id"] or result.get("cpu_set") != job["cpu_set"]:
+        raise LabError("terminal result identity is invalid for job {}".format(job["id"]))
+    outputs = result.get("outputs")
+    if not isinstance(outputs, dict):
+        raise LabError("terminal result output identities are missing for job {}".format(job["id"]))
+    job_dir = Path(result_path).parent
+    for name in ("stdout", "stderr"):
+        expected = outputs.get(name)
+        if not isinstance(expected, dict) or _content_identity(
+                job_dir / (name + ".txt")) != expected:
+            raise LabError("{} changed after job {} completed".format(name, job["id"]))
 
 
 def _replace_tokens(value, job):
@@ -488,7 +778,11 @@ def _replace_tokens(value, job):
 
 
 def _expanded_command(job):
-    return [_replace_tokens(argument, job) for argument in job["command"]]
+    command = [_replace_tokens(argument, job) for argument in job["command"]]
+    # Execute the exact content-addressed file recorded by the manifest.  This
+    # prevents a later PATH change from silently selecting a different binary.
+    command[0] = job["executable"]["path"]
+    return command
 
 
 def _expanded_environment(job):
@@ -522,6 +816,7 @@ def _base_result(job, command, duration_seconds, outcome, exit_code=None, detail
         "seed": job["seed"],
         "cpu_set": job["cpu_set"],
         "memory_mb": job["memory_mb"],
+        "minimum_memory_mb": job.get("minimum_memory_mb", 0),
         "timeout_seconds": job["timeout_seconds"],
         "command": command,
         "stdout": "stdout.txt",
@@ -530,6 +825,26 @@ def _base_result(job, command, duration_seconds, outcome, exit_code=None, detail
     if detail:
         result["detail"] = detail
     return result
+
+
+def _write_terminal_result(job_dir, result):
+    job_dir = Path(job_dir)
+    result["outputs"] = {
+        "stdout": _content_identity(job_dir / "stdout.txt"),
+        "stderr": _content_identity(job_dir / "stderr.txt"),
+    }
+    unsigned = dict(result)
+    unsigned.pop("result_digest", None)
+    result["result_digest"] = _digest(unsigned)
+    _atomic_write_json(job_dir / "result.json", result)
+    return result
+
+
+def _job_executable_matches(job):
+    current = _file_identity(job["executable"]["path"])
+    expected = job["executable"]
+    return (current["sha256"] == expected["sha256"] and
+            current["size_bytes"] == expected["size_bytes"])
 
 
 def _launch_job(job, manifest_root, output_dir):
@@ -545,6 +860,9 @@ def _launch_job(job, manifest_root, output_dir):
         cwd = Path(manifest_root) / cwd
     started = time.monotonic()
     try:
+        if not _job_executable_matches(job):
+            raise LabError("executable changed before launch: {}".format(
+                job["executable"]["path"]))
         process = subprocess.Popen(
             command,
             cwd=str(cwd),
@@ -559,7 +877,7 @@ def _launch_job(job, manifest_root, output_dir):
         stdout_handle.close()
         stderr_handle.close()
         result = _base_result(job, command, time.monotonic() - started, "launch_error", detail=str(error))
-        _atomic_write_json(job_dir / "result.json", result)
+        _write_terminal_result(job_dir, result)
         return None, result
     active = {
         "job": job,
@@ -595,6 +913,12 @@ def _finish_active(active, output_dir, forced_outcome=None, detail=None):
         exit_code = process.wait()
     active["stdout_handle"].close()
     active["stderr_handle"].close()
+    executable_detail = None
+    try:
+        if not _job_executable_matches(active["job"]):
+            executable_detail = "executable changed during execution"
+    except LabError as error:
+        executable_detail = str(error)
     if forced_outcome:
         outcome = forced_outcome
     elif active["timed_out"]:
@@ -603,15 +927,22 @@ def _finish_active(active, output_dir, forced_outcome=None, detail=None):
         outcome = "success"
     else:
         outcome = "failed"
+    if executable_detail:
+        outcome = "evidence_invalid"
+        detail = executable_detail if detail is None else detail + "; " + executable_detail
     result = _base_result(
         active["job"], active["command"], time.monotonic() - active["started"],
         outcome, exit_code=exit_code, detail=detail)
     result_path = _job_directory(output_dir, active["job"]["id"]) / "result.json"
-    _atomic_write_json(result_path, result)
-    return result
+    return _write_terminal_result(result_path.parent, result)
 
 
-def _can_launch(job, active, allow_cpu_overlap):
+def _can_launch(job, active, allow_cpu_overlap, memory_budget_mb=None):
+    if memory_budget_mb is not None:
+        active_memory_mb = sum(
+            current["job"].get("minimum_memory_mb", 0) for current in active)
+        if active_memory_mb + job.get("minimum_memory_mb", 0) > memory_budget_mb:
+            return False
     if allow_cpu_overlap:
         return True
     active_cpus = set()
@@ -631,23 +962,79 @@ def _validate_runtime_cpus(manifest):
                     job["id"], format_cpu_list(unavailable), source, format_cpu_list(current)))
 
 
+def _validate_runtime_executables(manifest):
+    identities = {}
+    for job in manifest["jobs"]:
+        expected = job["executable"]
+        path = expected["path"]
+        if path not in identities:
+            identities[path] = _file_identity(path)
+        current = identities[path]
+        if (current["sha256"] != expected["sha256"] or
+                current["size_bytes"] != expected["size_bytes"]):
+            raise LabError(
+                "job {} executable changed after manifest creation: {}".format(
+                    job["id"], expected["path"]))
+
+
+def _memory_unavailable_reason(job, memory_budget_mb):
+    required_mb = job.get("minimum_memory_mb", 0)
+    if not required_mb or memory_budget_mb is None:
+        return None
+    if required_mb > memory_budget_mb:
+        return (
+            "requires an estimated {} MiB but only {} MiB of the recorded "
+            "and current host memory budget is available".format(
+                required_mb, memory_budget_mb))
+    return None
+
+
+def _manifest_memory_budget_mb(manifest):
+    capacities = [
+        value for value in (
+            manifest.get("topology", {}).get("memory_capacity_bytes"),
+            _memory_capacity_bytes())
+        if isinstance(value, int) and value > 0]
+    if not capacities:
+        return None
+    capacity = min(capacities)
+    return int((capacity // (1024 * 1024)) * 0.80)
+
+
+def _record_unavailable(job, output_dir, reason):
+    job_dir = _job_directory(output_dir, job["id"])
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "stdout.txt").write_text("", encoding="utf-8")
+    (job_dir / "stderr.txt").write_text(reason + "\n", encoding="utf-8")
+    result = _base_result(
+        job, _expanded_command(job), 0.0, "unavailable", detail=reason)
+    return _write_terminal_result(job_dir, result)
+
+
 def _dry_run_plan(manifest, output_dir, rerun_failed, workers=None):
     _validate_runtime_cpus(manifest)
+    _validate_runtime_executables(manifest)
     worker_count = manifest["workers"] if workers is None else workers
     _positive_int(worker_count, "workers")
     if worker_count > 128:
         raise LabError("workers may not exceed 128")
+    memory_budget_mb = _manifest_memory_budget_mb(manifest)
     planned = []
     for job in manifest["jobs"]:
         completed = _read_completed_result(output_dir, job, rerun_failed)
+        unavailable_reason = None if completed else _memory_unavailable_reason(
+            job, memory_budget_mb)
         planned.append({
             "id": job["id"],
-            "action": "resume" if completed else "run",
+            "action": "resume" if completed else (
+                "unavailable" if unavailable_reason else "run"),
             "cpu_set": job["cpu_set"],
             "seed": job["seed"],
             "timeout_seconds": job["timeout_seconds"],
             "memory_mb": job["memory_mb"],
+            "minimum_memory_mb": job.get("minimum_memory_mb", 0),
             "command": _expanded_command(job),
+            "detail": unavailable_reason,
         })
     return {
         "manifest_digest": manifest["manifest_digest"],
@@ -662,6 +1049,7 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
     """Execute a manifest and return a summary; result files are always durable."""
     validate_manifest(manifest)
     _validate_runtime_cpus(manifest)
+    _validate_runtime_executables(manifest)
     worker_count = manifest["workers"] if workers is None else workers
     _positive_int(worker_count, "workers")
     if worker_count > 128:
@@ -674,13 +1062,21 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
     results = {}
     pending = []
     resumed = 0
+    preflight_unavailable = 0
+    memory_budget_mb = _manifest_memory_budget_mb(manifest)
     for job in manifest["jobs"]:
         completed = _read_completed_result(output_dir, job, rerun_failed)
         if completed is not None:
             results[job["id"]] = completed
             resumed += 1
         else:
-            pending.append(job)
+            unavailable_reason = _memory_unavailable_reason(job, memory_budget_mb)
+            if unavailable_reason:
+                results[job["id"]] = _record_unavailable(
+                    job, output_dir, unavailable_reason)
+                preflight_unavailable += 1
+            else:
+                pending.append(job)
 
     active = []
     total = len(manifest["jobs"])
@@ -693,7 +1089,8 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
             while pending and len(active) < worker_count and launched_any:
                 launched_any = False
                 for index, job in enumerate(pending):
-                    if not _can_launch(job, active, allow_cpu_overlap):
+                    if not _can_launch(
+                            job, active, allow_cpu_overlap, memory_budget_mb):
                         continue
                     pending.pop(index)
                     launched, launch_result = _launch_job(job, manifest["root"], output_dir)
@@ -725,9 +1122,11 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
                 counts = Counter(result["outcome"] for result in results.values())
                 print(
                     "lab: {}/{} complete ({} resumed, {} active, {} pending; "
-                    "{} success, {} failed, {} timeout, {} launch error)".format(
+                    "{} success, {} failed, {} timeout, {} launch error, "
+                    "{} unavailable)".format(
                         len(results), total, resumed, len(active), len(pending),
-                        counts["success"], counts["failed"], counts["timeout"], counts["launch_error"]),
+                        counts["success"], counts["failed"], counts["timeout"],
+                        counts["launch_error"], counts["unavailable"]),
                     file=sys.stderr,
                     flush=True,
                 )
@@ -756,7 +1155,8 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
     summary = {
         "total": total,
         "resumed": resumed,
-        "executed": total - resumed - len(pending),
+        "executed": total - resumed - preflight_unavailable - len(pending),
+        "preflight_unavailable": preflight_unavailable,
         "pending": len(pending),
         "elapsed_seconds": round(time.monotonic() - run_started, 6),
         "outcomes": merged["summary"],
@@ -779,6 +1179,7 @@ def merge_results(manifest, output_dir, output_path=None, allow_missing=False):
         result = _load_json(result_path)
         if result.get("schema") != RESULT_SCHEMA or result.get("job_digest") != job["job_digest"]:
             raise LabError("stale or invalid result for job {}".format(job["id"]))
+        _validate_terminal_result(result_path, result, job)
         records.append(result)
     if missing and not allow_missing:
         raise LabError("missing results for jobs: {}".format(", ".join(missing)))
@@ -820,10 +1221,50 @@ def self_test():
     with tempfile.TemporaryDirectory(prefix="leopard2-lab-self-test-") as temporary:
         root = Path(temporary)
         python = sys.executable
+        fake_proc = root / "fake-proc"
+        (fake_proc / "self").mkdir(parents=True)
+        (fake_proc / "meminfo").write_text(
+            "MemTotal:       8388608 kB\n", encoding="utf-8")
+        cgroup2_mount = root / "cgroup2"
+        cgroup2_scope = cgroup2_mount / "slice" / "scope"
+        cgroup2_scope.mkdir(parents=True)
+        (cgroup2_mount / "memory.max").write_text("max\n", encoding="utf-8")
+        (cgroup2_mount / "slice" / "memory.max").write_text(
+            str(3 * 1024 * 1024 * 1024) + "\n", encoding="utf-8")
+        (cgroup2_scope / "memory.max").write_text(
+            str(4 * 1024 * 1024 * 1024) + "\n", encoding="utf-8")
+        (fake_proc / "self" / "cgroup").write_text(
+            "0::/slice/scope\n", encoding="utf-8")
+        (fake_proc / "self" / "mountinfo").write_text(
+            "29 23 0:26 / {} rw - cgroup2 cgroup rw\n".format(
+                cgroup2_mount),
+            encoding="utf-8")
+        if _memory_capacity_bytes(fake_proc) != 3 * 1024 * 1024 * 1024:
+            raise LabError(
+                "self-test: cgroup v2 limiting ancestor was not discovered")
+
+        cgroup1_mount = root / "cgroup1-memory"
+        cgroup1_scope = cgroup1_mount / "job"
+        cgroup1_scope.mkdir(parents=True)
+        (cgroup1_mount / "memory.limit_in_bytes").write_text(
+            str(5 * 1024 * 1024 * 1024) + "\n", encoding="utf-8")
+        (cgroup1_scope / "memory.limit_in_bytes").write_text(
+            str(7 * 1024 * 1024 * 1024) + "\n", encoding="utf-8")
+        (fake_proc / "self" / "cgroup").write_text(
+            "5:cpu,memory:/docker/outer/job\n", encoding="utf-8")
+        (fake_proc / "self" / "mountinfo").write_text(
+            "30 23 0:27 /docker/outer {} rw - cgroup cgroup rw,memory\n".format(
+                cgroup1_mount),
+            encoding="utf-8")
+        if _memory_capacity_bytes(fake_proc) != 5 * 1024 * 1024 * 1024:
+            raise LabError(
+                "self-test: cgroup v1 current path or limiting ancestor was not discovered")
+
         spec = {
             "root": str(root),
             "workers": min(2, len(_allowed_cpus()[0])),
             "base_seed": 424242,
+            "metadata": {"campaign": "lab-self-test", "revision": 2},
             "defaults": {"timeout_seconds": 2.0, "memory_mb": 0, "cpu_count": 1},
             "jobs": [
                 {
@@ -850,6 +1291,26 @@ def self_test():
         second_manifest = build_manifest(spec)
         if _canonical_json_bytes(first_manifest) != _canonical_json_bytes(second_manifest):
             raise LabError("self-test: manifest generation is not deterministic")
+        if first_manifest["source_spec"]["metadata"] != spec["metadata"]:
+            raise LabError("self-test: source specification metadata was not preserved")
+        if first_manifest["source_spec"]["digest"] != _digest(spec):
+            raise LabError("self-test: source specification digest is incorrect")
+        expected_python = _file_identity(python)
+        if any(job["executable"]["sha256"] != expected_python["sha256"]
+               for job in first_manifest["jobs"]):
+            raise LabError("self-test: executable content was not hashed into each job")
+        grouped_manifest = build_manifest({
+            "root": str(root),
+            "defaults": {"memory_mb": 0, "cpu_count": 1},
+            "jobs": [
+                {"id": "pair.automatic", "command": [python, "-c", "pass"],
+                 "cpu_group": "pair"},
+                {"id": "pair.forced-generic", "command": [python, "-c", "pass"],
+                 "cpu_group": "pair"},
+            ],
+        })
+        if grouped_manifest["jobs"][0]["cpu_set"] != grouped_manifest["jobs"][1]["cpu_set"]:
+            raise LabError("self-test: CPU assignment group did not preserve pair affinity")
         output_dir = root / "results"
         first_summary = run_manifest(first_manifest, output_dir, progress_seconds=0.05, quiet=True)
         expected = {"success": 2, "failed": 1, "timeout": 1, "missing": 0}
@@ -881,6 +1342,135 @@ def self_test():
         plan = _dry_run_plan(first_manifest, output_dir, rerun_failed=False)
         if any(job["action"] != "resume" for job in plan["jobs"]):
             raise LabError("self-test: dry-run did not identify resumable jobs")
+        corrupted_stdout = _job_directory(output_dir, "success") / "stdout.txt"
+        with corrupted_stdout.open("a", encoding="utf-8") as output:
+            output.write("corruption\n")
+        try:
+            _dry_run_plan(first_manifest, output_dir, rerun_failed=False)
+        except LabError:
+            pass
+        else:
+            raise LabError("self-test: post-run output corruption was accepted")
+
+        stale_manifest = _json_copy(first_manifest)
+        stale_manifest["source_spec"]["metadata"]["revision"] = 3
+        try:
+            validate_manifest(stale_manifest)
+        except LabError:
+            pass
+        else:
+            raise LabError("self-test: stale manifest digest was accepted")
+
+        signed_spec = _json_copy(spec)
+        signed_spec["spec_digest"] = _digest(signed_spec)
+        signed_spec["metadata"]["revision"] = 3
+        try:
+            build_manifest(signed_spec)
+        except LabError:
+            pass
+        else:
+            raise LabError("self-test: stale source-spec digest was accepted")
+
+        mutable_executable = root / "mutable-executable.py"
+        mutable_executable.write_text("#!/usr/bin/env python3\nprint('one')\n", encoding="utf-8")
+        mutable_executable.chmod(0o700)
+        executable_manifest = build_manifest({
+            "root": str(root),
+            "defaults": {"memory_mb": 0},
+            "jobs": [{"id": "mutable", "command": [str(mutable_executable)]}],
+        })
+        mutable_executable.write_text("#!/usr/bin/env python3\nprint('two')\n", encoding="utf-8")
+        try:
+            _dry_run_plan(executable_manifest, root / "mutable-results", False)
+        except LabError:
+            pass
+        else:
+            raise LabError("self-test: changed executable content was accepted")
+
+        queued_target = root / "queued-target.py"
+        queued_target.write_text("#!/usr/bin/env python3\nprint('original')\n", encoding="utf-8")
+        queued_target.chmod(0o700)
+        mutate_code = "from pathlib import Path; Path({!r}).write_text({!r})".format(
+            str(queued_target), "#!/usr/bin/env python3\nprint('changed')\n")
+        queued_manifest = build_manifest({
+            "root": str(root), "workers": 1,
+            "defaults": {"memory_mb": 0, "cpu_count": 1},
+            "jobs": [
+                {"id": "queued-a-mutate", "command": [python, "-c", mutate_code]},
+                {"id": "queued-b-target", "command": [str(queued_target)]},
+            ],
+        })
+        queued_summary = run_manifest(
+            queued_manifest, root / "queued-results", quiet=True)
+        if queued_summary["outcomes"] != {
+                "launch_error": 1, "missing": 0, "success": 1}:
+            raise LabError(
+                "self-test: delayed executable replacement was not rejected: {}".format(
+                    queued_summary["outcomes"]))
+
+        if len(_allowed_cpus()[0]) >= 2:
+            available = _allowed_cpus()[0]
+            try:
+                build_manifest({
+                    "root": str(root),
+                    "jobs": [
+                        {"id": "group-a", "command": [python, "-c", "pass"],
+                         "cpu_group": "explicit", "cpu_set": [available[0]]},
+                        {"id": "group-b", "command": [python, "-c", "pass"],
+                         "cpu_group": "explicit", "cpu_set": [available[1]]},
+                    ],
+                })
+            except LabError:
+                pass
+            else:
+                raise LabError("self-test: explicit cpu_group mismatch was accepted")
+
+        total_mb = max(1, (_memory_total_bytes() or (1024 * 1024)) // (1024 * 1024))
+        unavailable_manifest = build_manifest({
+            "root": str(root),
+            "defaults": {"memory_mb": 0},
+            "jobs": [{
+                "id": "unavailable-memory",
+                "command": [python, "-c", "raise SystemExit(99)"],
+                "minimum_memory_mb": total_mb + 1,
+            }],
+        })
+        unavailable_output = root / "unavailable-results"
+        unavailable_summary = run_manifest(
+            unavailable_manifest, unavailable_output, quiet=True)
+        if unavailable_summary["outcomes"] != {"missing": 0, "unavailable": 1}:
+            raise LabError(
+                "self-test: memory preflight did not record unavailable: {}".format(
+                    unavailable_summary["outcomes"]))
+        if (unavailable_summary["executed"] != 0 or
+                unavailable_summary["preflight_unavailable"] != 1):
+            raise LabError(
+                "self-test: unavailable work was counted as executed: {}".format(
+                    unavailable_summary))
+
+        capacity_bytes = unavailable_manifest["topology"].get("memory_capacity_bytes")
+        if len(_allowed_cpus()[0]) >= 2 and isinstance(capacity_bytes, int):
+            capacity_mb = max(4, capacity_bytes // (1024 * 1024))
+            budget_mb = int(capacity_mb * 0.80)
+            per_job_mb = max(1, (budget_mb * 3) // 5)
+            aggregate_manifest = build_manifest({
+                "root": str(root),
+                "workers": 2,
+                "defaults": {"memory_mb": 0, "cpu_count": 1},
+                "jobs": [
+                    {"id": "aggregate-a", "command": [python, "-c", "pass"],
+                     "minimum_memory_mb": per_job_mb},
+                    {"id": "aggregate-b", "command": [python, "-c", "pass"],
+                     "minimum_memory_mb": per_job_mb},
+                ],
+            })
+            aggregate_summary = run_manifest(
+                aggregate_manifest, root / "aggregate-results", quiet=True)
+            if (aggregate_summary["outcomes"] != {"missing": 0, "success": 2} or
+                    aggregate_summary["executed"] != 2):
+                raise LabError(
+                    "self-test: aggregate-memory scheduling failed: {}".format(
+                        aggregate_summary))
     print("leopard2_lab self-test: PASS")
 
 
