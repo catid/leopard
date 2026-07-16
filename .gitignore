@@ -18,3 +18,8 @@ msvc/LHC_RS.vcxproj.user
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# Leopard2 local research, builds, and generated evidence
+/.research/
+/build/
+/results/
