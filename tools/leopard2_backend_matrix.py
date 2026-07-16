@@ -81,6 +81,7 @@ EXPECTED_COMPILE_SOURCE_COUNTS = {
     "tests/leopard2/test_active_lch.cpp": 1,
     "tests/leopard2/test_api.cpp": 1,
     "tests/leopard2/test_arbitrary_counts_acceptance.cpp": 1,
+    "tests/leopard2/test_backend_failures.cpp": 1,
     "tests/leopard2/test_backend_ops.cpp": 1,
     "tests/leopard2/test_context_backends.cpp": 1,
     "tests/leopard2/test_boundaries.cpp": 1,
@@ -126,6 +127,7 @@ SOURCE_FILES = (
     "leopard2.cpp",
     "leopard2.h",
     "tests/leopard2/test_legacy_golden.cpp",
+    "tests/leopard2/test_backend_failures.cpp",
     "tests/leopard2/test_backend_ops.cpp",
     "tests/leopard2/test_context_backends.cpp",
     "tests/leopard2/legacy_golden_vectors.h",
@@ -643,7 +645,8 @@ def run_variant(context, variant, index):
 
     targets = [
         "leopard2_direct_oracle_test",
-        "leopard2_backend_ops_test", "leopard2_context_backends_test",
+        "leopard2_backend_ops_test", "leopard2_backend_failures_test",
+        "leopard2_context_backends_test",
         "leopard2_legacy_golden_test", "leopard2_api_test",
         "leopard2_public_api_contract_test",
         "leopard2_random_test", "leopard2_locator_test",
@@ -745,6 +748,38 @@ def run_variant(context, variant, index):
             })
             atomic_write_json(result_path, base)
             return base
+
+    failure_command = [
+        context["ctest"], "--test-dir", build, "-C", "Release",
+        "-R", "^leopard2_backend_failure_", "--output-on-failure",
+    ]
+    command = run_command(
+        "test_backend_failures", failure_command, context["source"],
+        result_dir, context["timeout"], environment, hash_output=True
+    )
+    tests["backend_failures"] = command
+    commands.append(command)
+    failure_was_run = named_ctest_executed(
+        (result_dir / command["stdout_log"]).read_bytes(),
+        "leopard2_backend_failure_",
+        (result_dir / command["stderr_log"]).read_bytes(),
+    )
+    command["ctest_executed"] = failure_was_run
+    seal_command(command)
+    if command["returncode"] != 0 or not failure_was_run:
+        base.update({
+            "commands": commands,
+            "pin_cpu": pin_cpu,
+            "reason": (
+                "backend failure matrix failed" if command["returncode"] != 0
+                else "backend failure tests were not registered or executed"
+            ),
+            "selected_cache_variant": selected,
+            "status": "failed",
+            "tests": tests,
+        })
+        atomic_write_json(result_path, base)
+        return base
 
     if variant in VARIANTS:
         portable_command = [
