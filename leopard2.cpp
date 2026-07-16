@@ -32,6 +32,7 @@
 #include "LeopardFF8.h"
 #include "LeopardFF16.h"
 #include "Leopard2Dispatch.h"
+#include "Leopard2Direct.h"
 #include "leopard.h"
 
 #include <algorithm>
@@ -78,6 +79,13 @@ struct leo2_codec
     // populated only for the rigorously bounded direct-repair dispatch region.
     std::vector<uint8_t> direct_barycentric8;
     std::vector<uint16_t> direct_barycentric16;
+    // Exact row-major generator coefficients, represented as Leopard field
+    // logarithms, for the bounded allocation-free direct encoder.
+    std::vector<uint8_t> direct_generator_logs8;
+    std::vector<uint16_t> direct_generator_logs16;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    leo2_test_encode_mode test_encode_mode;
+#endif
 };
 
 struct leo2_direct_repair_term
@@ -121,8 +129,11 @@ namespace {
 static const size_t kScratchAlignment = 64;
 static const uint32_t kDirectRecoveryTag = 0x80000000u;
 static const uint32_t kDirectMaxOriginals = 16;
+static const uint32_t kDirectMaxRecoveries = 16;
 static const uint32_t kDirectMaxLosses = 4;
 static const uint32_t kDirectMaxParentDimension = 256;
+static const uint64_t kDirectSimdTileBytes = 64;
+static const uint64_t kDirectMinimumMeasuredBytes = 1024;
 
 typedef leo2_result (*BatchTaskFunction)(void* context, size_t index);
 
@@ -569,6 +580,24 @@ struct DirectField8
     {
         return leopard::ff8::ElementLog(value);
     }
+    static void MultiplyBytes(
+        void* destination,
+        const void* source,
+        Element multiplier_log,
+        uint64_t byte_count)
+    {
+        leopard::ff8::MultiplyBytes(
+            destination, source, multiplier_log, byte_count);
+    }
+    static void MultiplyAddBytes(
+        void* destination,
+        const void* source,
+        Element multiplier_log,
+        uint64_t byte_count)
+    {
+        leopard::ff8::MultiplyAddBytes(
+            destination, source, multiplier_log, byte_count);
+    }
 };
 
 struct DirectField16
@@ -586,7 +615,59 @@ struct DirectField16
     {
         return leopard::ff16::ElementLog(value);
     }
+    static void MultiplyBytes(
+        void* destination,
+        const void* source,
+        Element multiplier_log,
+        uint64_t byte_count)
+    {
+        leopard::ff16::MultiplyBytes(
+            destination, source, multiplier_log, byte_count);
+    }
+    static void MultiplyAddBytes(
+        void* destination,
+        const void* source,
+        Element multiplier_log,
+        uint64_t byte_count)
+    {
+        leopard::ff16::MultiplyAddBytes(
+            destination, source, multiplier_log, byte_count);
+    }
 };
+
+static bool IsDirectEncodeShape(const leo2_codec* codec)
+{
+    if (!codec || codec->original_count == 0 || codec->recovery_count == 0 ||
+        codec->original_count > kDirectMaxOriginals ||
+        codec->recovery_count > kDirectMaxRecoveries)
+        return false;
+    size_t coefficient_count = 0;
+    return CheckedMultiply(
+        static_cast<size_t>(codec->original_count),
+        static_cast<size_t>(codec->recovery_count), coefficient_count) &&
+        coefficient_count != 0;
+}
+
+static bool CanAutoDirectEncodeCodec(const leo2_codec* codec)
+{
+    if (!IsDirectEncodeShape(codec) || !codec->context ||
+        codec->profile != LEO2_PROFILE_LOW_V1 || codec->original_count < 2)
+        return false;
+    const leo2_backend backend = codec->context->backend;
+    if (backend == LEO2_BACKEND_SCALAR)
+        return codec->original_count >= 3;
+    return backend == LEO2_BACKEND_SSSE3 || backend == LEO2_BACKEND_AVX2;
+}
+
+static bool ShouldPrepareDirectEncode(const leo2_codec* codec)
+{
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    // Differential tests exercise both profiles and every bounded fringe.
+    return IsDirectEncodeShape(codec);
+#else
+    return CanAutoDirectEncodeCodec(codec);
+#endif
+}
 
 static bool CanPrepareDirectRepair(const leo2_codec* codec)
 {
@@ -627,6 +708,143 @@ static bool PrepareDirectBarycentricWeights(
         weights[original] = Field::Inverse(denominator);
     }
     return true;
+}
+
+template<class Field>
+static bool PrepareDirectGeneratorRow(
+    const leo2_codec* codec,
+    uint32_t recovery_index,
+    const std::vector<typename Field::Element>& barycentric_weights,
+    typename Field::Element* row)
+{
+    typedef typename Field::Element Element;
+    if (!codec || recovery_index >= codec->recovery_count || !row ||
+        barycentric_weights.size() != codec->original_count)
+        return false;
+
+    const uint32_t systematic_begin =
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 ? codec->padded_side : 0;
+    const uint32_t systematic_end = systematic_begin + codec->parent_dimension;
+    const uint32_t parity_coordinate =
+        CoordinateForRecovery(codec, recovery_index);
+
+    // This is the systematic Lagrange row over the complete parent message
+    // set.  Coordinates after the K public originals are shortened zeros, but
+    // remain factors in both Z(parity) and each public derivative Z'(x_i).
+    Element vanishing_value = 1;
+    for (uint32_t coordinate = systematic_begin;
+         coordinate < systematic_end;
+         ++coordinate)
+    {
+        vanishing_value = Field::Multiply(vanishing_value,
+            static_cast<Element>(parity_coordinate ^ coordinate));
+    }
+    if (vanishing_value == 0)
+        return false;
+
+    for (uint32_t original = 0; original < codec->original_count; ++original)
+    {
+        const Element difference = static_cast<Element>(
+            parity_coordinate ^ (systematic_begin + original));
+        if (difference == 0)
+            return false;
+        row[original] = Field::Multiply(
+            Field::Multiply(vanishing_value, Field::Inverse(difference)),
+            barycentric_weights[original]);
+        if (row[original] == 0)
+            return false;
+    }
+    return true;
+}
+
+template<class Field>
+static bool PrepareDirectGeneratorLogs(
+    const leo2_codec* codec,
+    const std::vector<typename Field::Element>& barycentric_weights,
+    std::vector<typename Field::Element>& generator_logs)
+{
+    typedef typename Field::Element Element;
+    if (!IsDirectEncodeShape(codec))
+        return false;
+    size_t coefficient_count = 0;
+    if (!CheckedMultiply(
+            static_cast<size_t>(codec->original_count),
+            static_cast<size_t>(codec->recovery_count), coefficient_count))
+        return false;
+
+    generator_logs.resize(coefficient_count);
+    Element row[kDirectMaxOriginals];
+    for (uint32_t recovery = 0; recovery < codec->recovery_count; ++recovery)
+    {
+        if (!PrepareDirectGeneratorRow<Field>(
+                codec, recovery, barycentric_weights, row))
+        {
+            generator_logs.clear();
+            return false;
+        }
+        const size_t row_offset =
+            static_cast<size_t>(recovery) * codec->original_count;
+        for (uint32_t original = 0;
+             original < codec->original_count;
+             ++original)
+        {
+            generator_logs[row_offset + original] = Field::Log(row[original]);
+        }
+    }
+    return true;
+}
+
+static bool HasDirectGeneratorRows(const leo2_codec* codec)
+{
+    if (!IsDirectEncodeShape(codec))
+        return false;
+    size_t coefficient_count = 0;
+    if (!CheckedMultiply(
+            static_cast<size_t>(codec->original_count),
+            static_cast<size_t>(codec->recovery_count), coefficient_count))
+        return false;
+    return codec->field == LEO2_FIELD_GF8
+        ? codec->direct_generator_logs8.size() == coefficient_count
+        : codec->field == LEO2_FIELD_GF16 &&
+            codec->direct_generator_logs16.size() == coefficient_count;
+}
+
+static bool AutoDirectEncodePreferred(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    uint32_t requested_recovery_count)
+{
+    if (!CanAutoDirectEncodeCodec(codec) || !HasDirectGeneratorRows(codec) ||
+        requested_recovery_count == 0 ||
+        requested_recovery_count > codec->recovery_count ||
+        shard_bytes == 0 || shard_bytes > std::numeric_limits<size_t>::max())
+        return false;
+
+    if (requested_recovery_count != 1 ||
+        shard_bytes < kDirectMinimumMeasuredBytes ||
+        shard_bytes % kDirectSimdTileBytes != 0)
+        return false;
+
+    // Pinned ABBA measurements promote only the regular SIMD-tile region.
+    // Scalar K=2 loses for large shards, and ragged GF8 tails have a sharp
+    // sawtooth crossover, so both retain the transform encoder.  Unmeasured
+    // backends also stay conservative until they have their own evidence.
+    return true;
+}
+
+static bool ShouldUseDirectEncode(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    uint32_t requested_recovery_count)
+{
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    if (codec->test_encode_mode == LEO2_TEST_ENCODE_FORCE_DIRECT)
+        return requested_recovery_count != 0 && HasDirectGeneratorRows(codec);
+    if (codec->test_encode_mode == LEO2_TEST_ENCODE_FORCE_TRANSFORM)
+        return false;
+#endif
+    return AutoDirectEncodePreferred(
+        codec, shard_bytes, requested_recovery_count);
 }
 
 template<class Field>
@@ -689,35 +907,15 @@ static bool PrepareDirectRepairTerms(
     if (selected_count != losses)
         return false;
 
-    const uint32_t systematic_begin =
-        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 ? codec->padded_side : 0;
-    const uint32_t systematic_end = systematic_begin + codec->parent_dimension;
     std::vector<Element> generator_rows(
         static_cast<size_t>(losses) * codec->original_count);
     for (uint32_t equation = 0; equation < losses; ++equation)
     {
-        const uint32_t parity_coordinate =
-            CoordinateForRecovery(codec, selected_parities[equation]);
-        Element vanishing_value = 1;
-        for (uint32_t coordinate = systematic_begin;
-             coordinate < systematic_end;
-             ++coordinate)
-        {
-            vanishing_value = Field::Multiply(vanishing_value,
-                static_cast<Element>(parity_coordinate ^ coordinate));
-        }
-        if (vanishing_value == 0)
+        Element* row = &generator_rows[
+            static_cast<size_t>(equation) * codec->original_count];
+        if (!PrepareDirectGeneratorRow<Field>(
+                codec, selected_parities[equation], barycentric_weights, row))
             return false;
-        for (uint32_t original = 0; original < codec->original_count; ++original)
-        {
-            const Element difference = static_cast<Element>(
-                parity_coordinate ^ (systematic_begin + original));
-            if (difference == 0)
-                return false;
-            generator_rows[static_cast<size_t>(equation) * codec->original_count + original] =
-                Field::Multiply(Field::Multiply(vanishing_value,
-                    Field::Inverse(difference)), barycentric_weights[original]);
-        }
     }
 
     Element augmented[kDirectMaxLosses][kDirectMaxLosses * 2] = {};
@@ -1198,6 +1396,77 @@ static void XorArbitraryBytes(void* destination, const void* source, size_t byte
         output[i] ^= input[i];
 }
 
+template<class Field>
+static leo2_result ExecuteDirectEncodeRows(
+    const leo2_codec* codec,
+    size_t shard_bytes,
+    const void* const* original,
+    void* const* recovery,
+    const std::vector<typename Field::Element>& generator_logs)
+{
+    typedef typename Field::Element Element;
+    size_t expected_coefficients = 0;
+    if (!CheckedMultiply(
+            static_cast<size_t>(codec->original_count),
+            static_cast<size_t>(codec->recovery_count), expected_coefficients) ||
+        generator_logs.size() != expected_coefficients)
+        return LEO2_INTERNAL_ERROR;
+
+    for (uint32_t recovery_index = 0;
+         recovery_index < codec->recovery_count;
+         ++recovery_index)
+    {
+        void* output = recovery[recovery_index];
+        if (!output)
+            continue;
+        const size_t row_offset =
+            static_cast<size_t>(recovery_index) * codec->original_count;
+        for (uint32_t original_index = 0;
+             original_index < codec->original_count;
+             ++original_index)
+        {
+            const void* source = original[original_index];
+            const Element multiplier_log =
+                generator_logs[row_offset + original_index];
+            if (original_index == 0)
+            {
+                if (multiplier_log == 0)
+                    memcpy(output, source, shard_bytes);
+                else
+                    Field::MultiplyBytes(
+                        output, source, multiplier_log, shard_bytes);
+            }
+            else if (multiplier_log == 0)
+            {
+                XorArbitraryBytes(output, source, shard_bytes);
+            }
+            else
+            {
+                Field::MultiplyAddBytes(
+                    output, source, multiplier_log, shard_bytes);
+            }
+        }
+    }
+    return LEO2_SUCCESS;
+}
+
+static leo2_result ExecuteDirectEncode(
+    const leo2_codec* codec,
+    size_t shard_bytes,
+    const void* const* original,
+    void* const* recovery)
+{
+    if (!HasDirectGeneratorRows(codec))
+        return LEO2_INTERNAL_ERROR;
+    if (codec->field == LEO2_FIELD_GF8)
+        return ExecuteDirectEncodeRows<DirectField8>(
+            codec, shard_bytes, original, recovery,
+            codec->direct_generator_logs8);
+    return ExecuteDirectEncodeRows<DirectField16>(
+        codec, shard_bytes, original, recovery,
+        codec->direct_generator_logs16);
+}
+
 static leo2_result ExecuteDirectRepair(
     const leo2_decode_plan* plan,
     size_t shard_bytes,
@@ -1454,6 +1723,9 @@ LEO2_EXPORT leo2_result leo2_codec_create(
     codec->field = field;
     codec->shard_layout = shard_layout;
     codec->flags = options ? options->flags : 0;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    codec->test_encode_mode = LEO2_TEST_ENCODE_AUTO;
+#endif
     try
     {
         codec->permanent_erased.assign(parent, 0);
@@ -1477,9 +1749,20 @@ LEO2_EXPORT leo2_result leo2_codec_create(
 
         if (field == LEO2_FIELD_GF8)
         {
-            if (CanPrepareDirectRepair(codec))
-                PrepareDirectBarycentricWeights<DirectField8>(
-                    codec, codec->direct_barycentric8);
+            const bool prepare_direct_repair = CanPrepareDirectRepair(codec);
+            const bool prepare_direct_encode = ShouldPrepareDirectEncode(codec);
+            if (prepare_direct_repair || prepare_direct_encode)
+            {
+                std::vector<DirectField8::Element> weights;
+                if (PrepareDirectBarycentricWeights<DirectField8>(codec, weights))
+                {
+                    if (prepare_direct_encode)
+                        PrepareDirectGeneratorLogs<DirectField8>(codec, weights,
+                            codec->direct_generator_logs8);
+                    if (prepare_direct_repair)
+                        codec->direct_barycentric8.swap(weights);
+                }
+            }
             if (permanent_erasure_count != 0 &&
                 leopard::ff8::IsDirectLocatorPreferred(parent, recovery_count))
             {
@@ -1505,9 +1788,20 @@ LEO2_EXPORT leo2_result leo2_codec_create(
         }
         else
         {
-            if (CanPrepareDirectRepair(codec))
-                PrepareDirectBarycentricWeights<DirectField16>(
-                    codec, codec->direct_barycentric16);
+            const bool prepare_direct_repair = CanPrepareDirectRepair(codec);
+            const bool prepare_direct_encode = ShouldPrepareDirectEncode(codec);
+            if (prepare_direct_repair || prepare_direct_encode)
+            {
+                std::vector<DirectField16::Element> weights;
+                if (PrepareDirectBarycentricWeights<DirectField16>(codec, weights))
+                {
+                    if (prepare_direct_encode)
+                        PrepareDirectGeneratorLogs<DirectField16>(codec, weights,
+                            codec->direct_generator_logs16);
+                    if (prepare_direct_repair)
+                        codec->direct_barycentric16.swap(weights);
+                }
+            }
             if (permanent_erasure_count != 0 &&
                 leopard::ff16::IsDirectLocatorPreferred(parent, recovery_count))
             {
@@ -1580,6 +1874,52 @@ LEO2_EXPORT leo2_shard_layout leo2_codec_shard_layout(const leo2_codec* codec)
 {
     return codec ? codec->shard_layout : LEO2_SHARD_LAYOUT_NATIVE_V1;
 }
+
+#ifdef LEO2_ENABLE_TEST_HOOKS
+LEO2_EXPORT leo2_result leo2_test_codec_set_encode_mode(
+    leo2_codec* codec,
+    leo2_test_encode_mode mode)
+{
+    if (!codec || (mode != LEO2_TEST_ENCODE_AUTO &&
+                   mode != LEO2_TEST_ENCODE_FORCE_DIRECT &&
+                   mode != LEO2_TEST_ENCODE_FORCE_TRANSFORM))
+        return LEO2_INVALID_ARGUMENT;
+    if (mode == LEO2_TEST_ENCODE_FORCE_DIRECT &&
+        !HasDirectGeneratorRows(codec))
+        return LEO2_UNSUPPORTED;
+    codec->test_encode_mode = mode;
+    return LEO2_SUCCESS;
+}
+
+LEO2_EXPORT int leo2_test_codec_direct_encode_capable(
+    const leo2_codec* codec)
+{
+    return HasDirectGeneratorRows(codec) ? 1 : 0;
+}
+
+LEO2_EXPORT leo2_result leo2_test_codec_encode_path(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    uint32_t requested_recovery_count,
+    int* direct_out)
+{
+    if (!direct_out)
+        return LEO2_INVALID_ARGUMENT;
+    *direct_out = 0;
+    if (!codec || requested_recovery_count > codec->recovery_count)
+        return LEO2_INVALID_ARGUMENT;
+    ScratchLayout layout;
+    size_t rounded = 0;
+    size_t work_count = 0;
+    const leo2_result result = EncodeLayout(
+        codec, shard_bytes, layout, rounded, work_count);
+    if (result != LEO2_SUCCESS)
+        return result;
+    *direct_out = ShouldUseDirectEncode(
+        codec, shard_bytes, requested_recovery_count) ? 1 : 0;
+    return LEO2_SUCCESS;
+}
+#endif
 
 LEO2_EXPORT leo2_result leo2_codec_wire_shard_bytes(
     const leo2_codec* codec,
@@ -1681,6 +2021,24 @@ LEO2_EXPORT leo2_result leo2_encode(
     if (result != LEO2_SUCCESS)
         return result;
 
+    uint32_t requested_recovery_count = 0;
+    uint32_t requested_recovery_prefix = 0;
+    for (uint32_t i = 0; i < codec->recovery_count; ++i)
+    {
+        if (!recovery[i])
+            continue;
+        ++requested_recovery_count;
+        requested_recovery_prefix = i + 1;
+    }
+    if (requested_recovery_count == 0)
+        return LEO2_SUCCESS;
+    if (ShouldUseDirectEncode(
+            codec, shard_bytes, requested_recovery_count))
+    {
+        return ExecuteDirectEncode(codec, static_cast<size_t>(shard_bytes),
+            original, recovery);
+    }
+
     uint8_t* base = static_cast<uint8_t*>(scratch);
     void** pointers = reinterpret_cast<void**>(base + layout.pointer_offset);
     uint8_t* slots = base + layout.data_offset;
@@ -1701,18 +2059,12 @@ LEO2_EXPORT leo2_result leo2_encode(
     for (size_t i = 0; i < work_count; ++i)
         work[i] = slots + next_slot++ * rounded;
 
-    uint32_t requested_recovery_count = codec->recovery_count;
-    while (requested_recovery_count > 0 && !recovery[requested_recovery_count - 1])
-        --requested_recovery_count;
-    if (requested_recovery_count == 0)
-        return LEO2_SUCCESS;
-
     const void* const* padded_original = const_cast<const void* const*>(pointers);
     if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
     {
         if (!stage_partial_tile)
         {
-            for (uint32_t i = 0; i < requested_recovery_count; ++i)
+            for (uint32_t i = 0; i < requested_recovery_prefix; ++i)
                 if (recovery[i])
                     work[i] = recovery[i];
         }
@@ -1728,15 +2080,15 @@ LEO2_EXPORT leo2_result leo2_encode(
         }
         else if (codec->field == LEO2_FIELD_GF8)
             leopard::ff8::ReedSolomonEncode(
-                rounded, codec->original_count, requested_recovery_count,
+                rounded, codec->original_count, requested_recovery_prefix,
                 codec->padded_side, padded_original, work);
         else
             leopard::ff16::ReedSolomonEncode(
-                rounded, codec->original_count, requested_recovery_count,
+                rounded, codec->original_count, requested_recovery_prefix,
                 codec->padded_side, padded_original, work);
 
         if (stage_partial_tile)
-            for (uint32_t i = 0; i < requested_recovery_count; ++i)
+            for (uint32_t i = 0; i < requested_recovery_prefix; ++i)
                 if (recovery[i])
                     GatherShardFromKernel(codec, recovery[i], work[i],
                         static_cast<size_t>(shard_bytes));

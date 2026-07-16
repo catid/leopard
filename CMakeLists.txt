@@ -15,6 +15,7 @@ set(LIB_SOURCE_FILES
         leopard.h
         leopard2.cpp
         leopard2.h
+        Leopard2Direct.h
         Leopard2Plan.cpp
         Leopard2Plan.h
         LeopardCommon.cpp
@@ -276,6 +277,14 @@ if(LEO2_BUILD_TESTS)
     enable_testing()
     target_compile_definitions(libleopard PRIVATE LEO2_ENABLE_TEST_HOOKS=1)
 
+    if(LEO2_BUILD_BENCHMARKS)
+        add_executable(bench_leopard2_direct_encode
+            bench/leopard2/direct_encode_benchmark.cpp)
+        target_compile_definitions(bench_leopard2_direct_encode PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1)
+        target_link_libraries(bench_leopard2_direct_encode libleopard)
+    endif()
+
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$" AND
         (LEO2_BACKEND_VARIANT STREQUAL "auto" OR
         LEO2_BACKEND_VARIANT STREQUAL "scalar"))
@@ -302,6 +311,17 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/test_direct_oracle.cpp)
     target_include_directories(leopard2_direct_oracle_test PRIVATE tests/leopard2)
     add_test(NAME leopard2_direct_oracle COMMAND leopard2_direct_oracle_test)
+
+    add_executable(leopard2_direct_encode_test
+        tests/leopard2/direct_oracle.cpp
+        tests/leopard2/test_direct_encode.cpp)
+    target_compile_definitions(leopard2_direct_encode_test PRIVATE
+        LEO2_ENABLE_TEST_HOOKS=1)
+    target_include_directories(leopard2_direct_encode_test PRIVATE tests/leopard2)
+    target_link_libraries(leopard2_direct_encode_test libleopard)
+    add_test(NAME leopard2_direct_encode COMMAND leopard2_direct_encode_test)
+    set_tests_properties(leopard2_direct_encode PROPERTIES
+        ENVIRONMENT "OMP_NUM_THREADS=1")
 
     add_executable(leopard2_active_lch_test
         tests/leopard2/direct_oracle.cpp
@@ -498,6 +518,11 @@ if(LEO2_BUILD_TESTS)
             NAME leopard2_benchmark_matrix_self_test
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_benchmark_matrix.py
+                self-test)
+        add_test(
+            NAME leopard2_direct_encode_crossover_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_direct_encode_crossover.py
                 self-test)
     endif()
 endif()
