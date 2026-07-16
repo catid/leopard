@@ -176,6 +176,18 @@ if(LEO2_BUILD_TESTS)
     target_link_libraries(leopard2_gf16_tails_test libleopard)
     add_test(NAME leopard2_gf16_tails COMMAND leopard2_gf16_tails_test)
 
+    add_executable(leopard2_direct_repair_test
+        tests/leopard2/direct_oracle.cpp
+        tests/leopard2/direct_repair.cpp
+        tests/leopard2/test_direct_repair.cpp)
+    target_include_directories(leopard2_direct_repair_test PRIVATE tests/leopard2)
+    add_test(NAME leopard2_direct_repair COMMAND leopard2_direct_repair_test)
+
+    add_executable(leopard2_legacy_golden_test
+        tests/leopard2/test_legacy_golden.cpp)
+    target_link_libraries(leopard2_legacy_golden_test libleopard)
+    add_test(NAME leopard2_legacy_golden COMMAND leopard2_legacy_golden_test)
+
     add_executable(leopard2_fuzz_smoke
         tests/leopard2/fuzz_api.cpp
         tests/leopard2/fuzz_replay.cpp)
