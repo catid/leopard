@@ -91,6 +91,7 @@ struct Options
     uint64_t seed;
     bool force_generic_decode;
     bool force_specialized_decode;
+    bool retain_samples;
     std::string output;
 
     Options()
@@ -109,6 +110,7 @@ struct Options
         , seed(1)
         , force_generic_decode(false)
         , force_specialized_decode(false)
+        , retain_samples(false)
         , output("-")
     {}
 };
@@ -209,6 +211,7 @@ struct LegacyStripe
 
 struct Summary
 {
+    std::vector<double> samples_us;
     double median_us;
     double mad_us;
     double minimum_us;
@@ -355,6 +358,7 @@ static void Usage(std::ostream& output, const char* program)
         << "  --seed N              Deterministic seed (default 1)\n"
         << "  --force-generic       Use the retained O(N log N) decoder\n"
         << "  --force-specialized   Use the profile-specific transform decoder\n"
+        << "  --retain-samples      Include raw samples for comparison evidence\n"
         << "  --json PATH           JSON output path, or - for stdout\n"
         << "  --help                 Show this message\n";
 }
@@ -385,6 +389,7 @@ static Options ParseOptions(int argc, char** argv)
         else if (argument == "--seed") options.seed = ParseUnsigned(NeedValue(argc, argv, i), "--seed");
         else if (argument == "--force-generic") options.force_generic_decode = true;
         else if (argument == "--force-specialized") options.force_specialized_decode = true;
+        else if (argument == "--retain-samples") options.retain_samples = true;
         else if (argument == "--json" || argument == "--output") options.output = NeedValue(argc, argv, i);
         else Fail("unknown argument: " + argument);
     }
@@ -506,6 +511,7 @@ static double Median(std::vector<double> values)
 static Summary Summarize(const std::vector<double>& samples)
 {
     Summary summary;
+    summary.samples_us = samples;
     summary.median_us = Median(samples);
     std::vector<double> deviations(samples.size());
     for (size_t i = 0; i < samples.size(); ++i)
@@ -690,7 +696,8 @@ static void WriteSummary(
     const char* input_name,
     uint64_t output_bytes,
     const char* output_name,
-    unsigned indent)
+    unsigned indent,
+    bool retain_samples)
 {
     const std::string spaces(indent, ' ');
     output << "{\n"
@@ -702,18 +709,42 @@ static void WriteSummary(
     WriteOptionalRate(output, input_bytes, summary.median_us);
     output << ",\n" << spaces << "  \"" << output_name << "\": ";
     WriteOptionalRate(output, output_bytes, summary.median_us);
+    if (retain_samples)
+    {
+        output << ",\n" << spaces << "  \"samples_us_per_batch_call\": [";
+        for (size_t i = 0; i < summary.samples_us.size(); ++i)
+        {
+            if (i != 0) output << ", ";
+            output << summary.samples_us[i];
+        }
+        output << ']';
+    }
     output << "\n" << spaces << '}';
 }
 
-static void WriteSetupSummary(std::ostream& output, const Summary& summary, unsigned indent)
+static void WriteSetupSummary(
+    std::ostream& output,
+    const Summary& summary,
+    unsigned indent,
+    bool retain_samples)
 {
     const std::string spaces(indent, ' ');
     output << "{\n"
            << spaces << "  \"median_us\": " << summary.median_us << ",\n"
            << spaces << "  \"mad_us\": " << summary.mad_us << ",\n"
            << spaces << "  \"minimum_us\": " << summary.minimum_us << ",\n"
-           << spaces << "  \"maximum_us\": " << summary.maximum_us << "\n"
-           << spaces << '}';
+           << spaces << "  \"maximum_us\": " << summary.maximum_us;
+    if (retain_samples)
+    {
+        output << ",\n" << spaces << "  \"samples_us\": [";
+        for (size_t i = 0; i < summary.samples_us.size(); ++i)
+        {
+            if (i != 0) output << ", ";
+            output << summary.samples_us[i];
+        }
+        output << ']';
+    }
+    output << "\n" << spaces << '}';
 }
 
 static void WriteAmortizedDecodeSummary(
@@ -1010,15 +1041,17 @@ static int Run(const Options& options)
          << "  },\n"
          << "  \"metrics\": {\n"
          << "    \"codec_setup\": ";
-    WriteSetupSummary(json, codec_setup, 4);
+    WriteSetupSummary(json, codec_setup, 4, options.retain_samples);
     json << ",\n    \"encode_execution\": ";
     WriteSummary(json, encode_execution, encode_input_bytes, "input_GB_per_s",
-        encode_output_bytes, "parity_output_GB_per_s", 4);
+        encode_output_bytes, "parity_output_GB_per_s", 4,
+        options.retain_samples);
     json << ",\n    \"decode_plan_setup\": ";
-    WriteSetupSummary(json, plan_setup, 4);
+    WriteSetupSummary(json, plan_setup, 4, options.retain_samples);
     json << ",\n    \"decode_execution\": ";
     WriteSummary(json, decode_execution, decode_input_bytes, "offered_received_GB_per_s",
-        decode_output_bytes, "repaired_output_GB_per_s", 4);
+        decode_output_bytes, "repaired_output_GB_per_s", 4,
+        options.retain_samples);
     json << ",\n    \"decode_amortized_at_reuse\": ";
     WriteAmortizedDecodeSummary(json, plan_setup, decode_execution, options.reuse,
         decode_input_bytes, decode_output_bytes, 4);
@@ -1038,13 +1071,15 @@ static int Run(const Options& options)
          << "    \"encode_execution\": ";
     if (legacy_available)
         WriteSummary(json, legacy_encode, encode_input_bytes, "input_GB_per_s",
-            encode_output_bytes, "parity_output_GB_per_s", 4);
+            encode_output_bytes, "parity_output_GB_per_s", 4,
+            options.retain_samples);
     else
         json << "null";
     json << ",\n    \"decode_including_setup\": ";
     if (legacy_available)
         WriteSummary(json, legacy_decode, decode_input_bytes, "offered_received_GB_per_s",
-            decode_output_bytes, "repaired_output_GB_per_s", 4);
+            decode_output_bytes, "repaired_output_GB_per_s", 4,
+            options.retain_samples);
     else
         json << "null";
     json << "\n  }\n}\n";
