@@ -235,6 +235,7 @@ Each scalar, SSSE3, AVX2, and AUTO C++ artifact records the same:
 | Null selected-parity / surviving-original rejects | 14 / 6 |
 | Bytes checked unchanged after atomic rejection | 61,570 |
 | Read-only input-alias calls / symbols checked | 13 / 2,139 |
+| Decode read-only input-alias calls / symbols checked | 117 / 6,025 |
 | Hot-path allocations | 0 |
 | Deterministic digest | `0xec4179e9f2776a58` |
 
@@ -245,19 +246,29 @@ sanitized standalone source has a compile-time feature gate that fails unless
 both instruments are active; the retained build/run manifest also records the
 exact CMake-selected compiler, make, archiver, ranlib, and linker roles plus the
 standalone link driver and compiler-selected linker.  It binds each tool's
-bytes and complete `--version` output, the raw CMake cache, verbose configure,
-core-build, and standalone-link logs, linked archive, executable, source
+bytes and complete `--version` output, the path-normalized retained CMake
+cache, verbose configure, core-build, and standalone-link logs, linked archive, executable, source
 closure, run environment, child affinity, and artifact hashes.  The checker
-parses those logs rather than accepting a success label.  Full `nm` scans prove
-320 ASan and 54 UBSan references in the harness executable and 306 ASan and 86
-UBSan references across all 11 named core-archive members; normal builds must
-contain none.  When matching binaries are locally available, the checker reruns
-the exact `nm --print-file-name` scans and byte-compares the filtered output.
-Finally, validator source freezes the complete 65-file retained results tree
-with SHA-256 `296125189abee1ac016c293f540ad9961cb29e95f2e5203eabed6485231138fd`.
-That digest covers sorted canonical `SHA256  ./relative/path` lines, so the
-manifest itself, every result, raw log, scan, and algebra artifact, and the
-exact path set cannot be rebound without a reviewed validator-source change.
+parses those logs rather than accepting a success label.  The current-core
+probe freezes 320 ASan and 54 UBSan references in the standalone harness and
+329 ASan and 87 UBSan references across all 11 named core-archive members,
+with exact per-member attribution; normal builds contain none.
+
+Manifest v3 normalizes only the exact checkout-root prefix to literal
+`${LEO2_SOURCE_ROOT}` in retained text and argv.  All core and standalone
+compiles use supported `-ffile-prefix-map` and `-fdebug-prefix-map`, plus
+`-fmacro-prefix-map` when both the paired C and C++ drivers accept it.  Their
+stable binary mapping target is literal `LEO2_SOURCE_ROOT`.  A two-checkout
+proof requires every backend's archive and executable hashes to agree and
+scans both retained text and binary bytes for either checkout root.  The
+portable validator checks retained bytes, semantic logs, exact program records,
+sanitizer equality, and member attribution without executing or requiring the
+recorded tools or unretained build outputs.  `--live` explicitly requires those
+exact tools and outputs and byte-replays both `nm` scans.
+
+The earlier v2 results remain a historical, stale checkpoint until a final
+merged commit regenerates and freezes a v3 tree.  They must not be cited as
+current-core attestation.
 
 The Experiment-W Python suite passes 12 tests.  The strict C99 implementation
 passes 217 direct checks and the differential matrix covers 5 golden vectors,
@@ -274,7 +285,9 @@ balanced, and high transmitted rates; GF8/GF16; 64 B, 1 KiB, and 64 KiB; batch
 one/eight; and loss counts three/eight.  Exact scratch is zero; padded scratch
 is queried from the public API.
 
-`results/smoke-nonauthoritative.json` is only a harness smoke pinned to CPU 0.
+`results/smoke-nonauthoritative.json` is only a harness smoke pinned to the
+first deterministically selected allowed CPU unless an explicit valid CPU is
+provided.
 It labels itself `non-authoritative-smoke` and retains seven raw samples for
 each of four setup and four execution measurements.  No number from it is a
 promotion result.  The final matrix must be rebuilt after the two-way SIMD and
@@ -285,12 +298,14 @@ before any crossover conclusion.
 
 Rebuild the four normal backend archives, the Clang ASan+UBSan archive, all five
 strict standalone executables, five independently pinned correctness runs, and
-the CPU-0 smoke from a committed source revision:
+the affinity-selected smoke from a committed source revision.  Omitting
+`--cpus` chooses the lowest five IDs from `sched_getaffinity`; the smoke uses the
+first selected CPU.  An explicit `--cpus` still requires exactly five distinct
+allowed IDs:
 
     PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -X dev \
       experiments/leopard2/non_power_of_two/c7/run_matrix.py \
-      --core-git-sha "$(git rev-parse HEAD)" --cpus 0,1,2,3,4 \
-      --smoke-cpu 0 --jobs-per-build 4
+      --core-git-sha "$(git rev-parse HEAD)" --jobs-per-build 4
 
 Regenerate independent algebra and validate retained evidence:
 
@@ -299,7 +314,19 @@ Regenerate independent algebra and validate retained evidence:
       --output experiments/leopard2/non_power_of_two/c7/results/algebra.json
 
     PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -X dev \
-      experiments/leopard2/non_power_of_two/c7/test_checkpoint.py -v
+      experiments/leopard2/non_power_of_two/c7/validate_evidence.py \
+      experiments/leopard2/non_power_of_two/c7/results/build-run-manifest.json
+
+    # Optional, host-specific exact tool/output and nm replay:
+    PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -X dev \
+      experiments/leopard2/non_power_of_two/c7/validate_evidence.py --live \
+      experiments/leopard2/non_power_of_two/c7/results/build-run-manifest.json
+
+The A/B gate runs the same committed revision in a second checkout, then gives
+that checkout's manifest and root to the other runner with
+`--compare-reproducibility-manifest` and
+`--compare-reproducibility-root`.  Comparison fails on any backend hash
+difference or checkout-root byte leak.
 
 Run the Experiment-W identity gates from its directory:
 

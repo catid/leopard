@@ -24,9 +24,33 @@ from typing import Any, Iterable
 ROOT = pathlib.Path(__file__).resolve().parents[4]
 HERE = pathlib.Path(__file__).resolve().parent
 SOURCE = HERE / "c7_exact_low.cpp"
+VALIDATOR = HERE / "validate_evidence.py"
 BACKENDS = ("scalar", "ssse3", "avx2", "auto")
+BUILD_NAMES = (*BACKENDS, "asan-ubsan")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 GIT_SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
+NORMALIZATION_SCHEMA = "leopard2-source-root-prefix/v1"
+NORMALIZATION_TOKEN = "${LEO2_SOURCE_ROOT}"
+PREFIX_MAP_TARGET = "LEO2_SOURCE_ROOT"
+PREFIX_MAP_OPTIONS = (
+    "-ffile-prefix-map", "-fdebug-prefix-map", "-fmacro-prefix-map")
+EXPECTED_EXECUTABLE_SANITIZER_COUNTS = {
+    "asan_lines": 320, "ubsan_lines": 54}
+EXPECTED_ARCHIVE_SANITIZER_COUNTS = {
+    "asan_lines": 329, "ubsan_lines": 87}
+EXPECTED_ARCHIVE_MEMBER_COUNTS = {
+    "leopard.cpp.o": {"asan_lines": 13, "ubsan_lines": 7},
+    "leopard2.cpp.o": {"asan_lines": 141, "ubsan_lines": 15},
+    "Leopard2Backend.cpp.o": {"asan_lines": 35, "ubsan_lines": 9},
+    "Leopard2BackendScalar.cpp.o": {"asan_lines": 11, "ubsan_lines": 6},
+    "Leopard2CpuFeatures.cpp.o": {"asan_lines": 9, "ubsan_lines": 5},
+    "Leopard2Plan.cpp.o": {"asan_lines": 7, "ubsan_lines": 5},
+    "LeopardCommon.cpp.o": {"asan_lines": 13, "ubsan_lines": 6},
+    "LeopardFF16.cpp.o": {"asan_lines": 31, "ubsan_lines": 10},
+    "LeopardFF8.cpp.o": {"asan_lines": 31, "ubsan_lines": 9},
+    "Leopard2BackendSSSE3.cpp.o": {"asan_lines": 18, "ubsan_lines": 8},
+    "Leopard2BackendAVX2.cpp.o": {"asan_lines": 20, "ubsan_lines": 7},
+}
 
 
 def sha256(path: pathlib.Path) -> str:
@@ -70,6 +94,56 @@ def artifact(path: pathlib.Path) -> dict[str, Any]:
         "sha256": sha256(path),
         "bytes": path.stat().st_size,
     }
+
+
+def normalize_source_root(text: str) -> tuple[str, int]:
+    """Replace only ROOT itself or ROOT followed by a path separator."""
+    pattern = re.compile(re.escape(str(ROOT)) + r"(?=\Z|[/\\=\s\"'])")
+    return pattern.subn(lambda _match: NORMALIZATION_TOKEN, text)
+
+
+def normalize_argv(argv: list[str]) -> tuple[list[str], int]:
+    normalized: list[str] = []
+    count = 0
+    for argument in argv:
+        value, replacements = normalize_source_root(argument)
+        normalized.append(value)
+        count += replacements
+    return normalized, count
+
+
+def normalized_text_artifact(path: pathlib.Path) -> dict[str, Any]:
+    text = path.read_text(encoding="utf-8", errors="strict")
+    normalized, count = normalize_source_root(text)
+    path.write_text(normalized, encoding="utf-8")
+    record = artifact(path)
+    record["source_root_tokens"] = count
+    return record
+
+
+def prefix_map_flags(
+    c_compiler: pathlib.Path, cxx_compiler: pathlib.Path,
+) -> list[str]:
+    result: list[str] = []
+    for index, option in enumerate(PREFIX_MAP_OPTIONS):
+        flag = f"{option}={ROOT}={PREFIX_MAP_TARGET}"
+        supported = []
+        for compiler, language in ((c_compiler, "c"), (cxx_compiler, "c++")):
+            completed = subprocess.run(
+                [str(compiler), "-Werror", flag, "-x", language, "-c", "-",
+                 "-o", os.devnull],
+                input=b"", stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                check=False,
+            )
+            supported.append(completed.returncode == 0)
+        if index < 2 and not all(supported):
+            raise RuntimeError(
+                f"required reproducibility flag is unsupported: {flag}")
+        if all(supported):
+            result.append(flag)
+    if len(result) < 2:
+        raise AssertionError("required prefix-map flags were not selected")
+    return result
 
 
 def committed_sha256(commit: str, path: pathlib.Path) -> str:
@@ -155,13 +229,11 @@ def filtered_symbol_scan(
     archive_members: Iterable[str],
 ) -> tuple[dict[str, int], dict[str, dict[str, int]]]:
     text = subprocess.run(
-        [str(nm), "--print-file-name", relative(target)], cwd=ROOT,
+        [str(nm), "--print-file-name", target.name], cwd=target.parent,
         check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     ).stdout
     lines = [line for line in text.splitlines()
              if "__asan_" in line or "__ubsan_" in line]
-    output.write_text("\n".join(lines) + ("\n" if lines else ""),
-                      encoding="utf-8")
     counts = {
         "asan_lines": sum("__asan_" in line for line in lines),
         "ubsan_lines": sum("__ubsan_" in line for line in lines),
@@ -176,11 +248,16 @@ def filtered_symbol_scan(
                 members[member]["asan_lines"] += "__asan_" in line
                 members[member]["ubsan_lines"] += "__ubsan_" in line
                 break
+    normalized = "\n".join(lines) + ("\n" if lines else "")
+    if str(ROOT) in normalized:
+        raise RuntimeError("nm output leaked the source checkout root")
+    output.write_text(normalized, encoding="utf-8")
     return counts, members
 
 
 def dependency_closure(build_dir: pathlib.Path) -> list[dict[str, Any]]:
-    paths: set[pathlib.Path] = {ROOT / "CMakeLists.txt"}
+    paths: set[pathlib.Path] = {
+        ROOT / "CMakeLists.txt", ROOT / "cmake/leopardConfig.cmake.in"}
     for dependency in build_dir.rglob("*.o.d"):
         text = dependency.read_text(encoding="utf-8", errors="strict")
         flattened = text.replace("\\\n", " ")
@@ -217,8 +294,17 @@ def cmake_build(
     build_stdout = results / "logs" / f"{name}-core-build.stdout.txt"
     build_stderr = results / "logs" / f"{name}-core-build.stderr.txt"
     cache_output = results / "logs" / f"{name}-CMakeCache.txt"
+    reproducibility_flags = prefix_map_flags(c_compiler, cxx_compiler)
+    compile_flags = list(reproducibility_flags)
+    if sanitizer:
+        compile_flags.extend([
+            "-fsanitize=address,undefined", "-fno-omit-frame-pointer"])
+    flag_text = " ".join(compile_flags)
+    linker_flags = (
+        "-fsanitize=address,undefined -fno-omit-frame-pointer"
+        if sanitizer else "")
     configure_argv = [
-        str(resolve_program("cmake")), "-S", ".", "-B", relative(build_dir),
+        str(resolve_program("cmake")), "-S", str(ROOT), "-B", str(build_dir),
         "-G", "Unix Makefiles",
         f"-DCMAKE_BUILD_TYPE={'Debug' if sanitizer else 'Release'}",
         f"-DCMAKE_C_COMPILER={c_compiler}",
@@ -227,13 +313,10 @@ def cmake_build(
         "-DLEO2_BUILD_TESTS=OFF", "-DLEO2_BUILD_BENCHMARKS=OFF",
         "-DLEO2_BUILD_FUZZERS=OFF", "-DLEO2_ENABLE_CUDA=OFF",
         f"-DENABLE_OPENMP={'OFF' if sanitizer else 'ON'}",
+        f"-DCMAKE_C_FLAGS={flag_text}",
+        f"-DCMAKE_CXX_FLAGS={flag_text}",
+        f"-DCMAKE_EXE_LINKER_FLAGS={linker_flags}",
     ]
-    if sanitizer:
-        flags = "-fsanitize=address,undefined -fno-omit-frame-pointer"
-        configure_argv.extend([
-            f"-DCMAKE_C_FLAGS={flags}", f"-DCMAKE_CXX_FLAGS={flags}",
-            f"-DCMAKE_EXE_LINKER_FLAGS={flags}",
-        ])
     run_logged(configure_argv, configure_stdout, configure_stderr)
     cache_path = build_dir / "CMakeCache.txt"
     shutil.copyfile(cache_path, cache_output)
@@ -253,24 +336,29 @@ def cmake_build(
     cmake_linker = pathlib.Path(
         cmake_cache_value(cache_path, "CMAKE_LINKER")).absolute()
     build_argv = [
-        str(resolve_program("cmake")), "--build", relative(build_dir),
+        str(resolve_program("cmake")), "--build", str(build_dir),
         "--target", "libleopard", "--verbose", "--", f"-j{jobs}",
     ]
     run_logged(build_argv, build_stdout, build_stderr)
     library = build_dir / "liblibleopard.a"
     if not library.is_file():
         raise RuntimeError(f"missing library output: {library}")
+    normalized_configure, configure_tokens = normalize_argv(configure_argv)
+    normalized_build, build_tokens = normalize_argv(build_argv)
     return {
         "name": name,
         "backend": "auto" if sanitizer else backend,
         "sanitizer": sanitizer,
-        "configure_argv": configure_argv,
-        "build_argv": build_argv,
-        "configure_stdout": artifact(configure_stdout),
-        "configure_stderr": artifact(configure_stderr),
-        "build_stdout": artifact(build_stdout),
-        "build_stderr": artifact(build_stderr),
-        "cmake_cache": artifact(cache_output),
+        "configure_argv": normalized_configure,
+        "build_argv": normalized_build,
+        "argv_source_root_tokens": {
+            "configure": configure_tokens, "build": build_tokens,
+        },
+        "configure_stdout": normalized_text_artifact(configure_stdout),
+        "configure_stderr": normalized_text_artifact(configure_stderr),
+        "build_stdout": normalized_text_artifact(build_stdout),
+        "build_stderr": normalized_text_artifact(build_stderr),
+        "cmake_cache": normalized_text_artifact(cache_output),
         "cmake": program_record(resolve_program("cmake")),
         "c_compiler": program_record(c_compiler),
         "cxx_compiler": program_record(cxx_compiler),
@@ -281,6 +369,8 @@ def cmake_build(
         "library": artifact(library),
         "source_closure": dependency_closure(build_dir),
         "build_dir": relative(build_dir),
+        "prefix_map_flags": [normalize_source_root(flag)[0]
+                             for flag in reproducibility_flags],
     }
 
 
@@ -294,9 +384,13 @@ def compile_experiment(
     stderr_path = results / "logs" / f"{name}-compile.stderr.txt"
     source_hash = sha256(SOURCE)
     library_path = ROOT / build["library"]["path"]
+    reproducibility_flags = [
+        flag.replace(NORMALIZATION_TOKEN, str(ROOT), 1)
+        for flag in build["prefix_map_flags"]
+    ]
     argv = [
         str(compiler), "-v", "-Wl,-v", "-std=c++11", "-g", "-Wall", "-Wextra",
-        "-Wpedantic", "-Werror", "-I.",
+        "-Wpedantic", "-Werror", *reproducibility_flags, f"-I{ROOT}",
         f'-DLEO2_C7_SOURCE_SHA256="{source_hash}"',
         f'-DLEO2_C7_CORE_GIT_SHA="{core_git_sha}"',
         f'-DLEO2_C7_LIBRARY_SHA256="{build["library"]["sha256"]}"',
@@ -310,10 +404,10 @@ def compile_experiment(
         ])
     else:
         argv.append("-O2")
-    argv.extend([relative(SOURCE), relative(library_path), "-pthread"])
+    argv.extend([str(SOURCE), str(library_path), "-pthread"])
     if not build["sanitizer"]:
         argv.append("-fopenmp")
-    argv.extend(["-o", relative(executable)])
+    argv.extend(["-o", str(executable)])
     run_logged(argv, stdout_path, stderr_path)
     nm = resolve_program("nm")
     archive_program = pathlib.Path(build["ar"]["path"])
@@ -331,32 +425,42 @@ def compile_experiment(
         nm, library_path, archive_scan, library_members)
     if executable_members:
         raise RuntimeError("executable symbol scan unexpectedly has archive members")
-    expected_executable = ({"asan_lines": 320, "ubsan_lines": 54}
+    expected_executable = (EXPECTED_EXECUTABLE_SANITIZER_COUNTS
                            if build["sanitizer"] else
                            {"asan_lines": 0, "ubsan_lines": 0})
-    expected_archive = ({"asan_lines": 306, "ubsan_lines": 86}
+    expected_archive = (EXPECTED_ARCHIVE_SANITIZER_COUNTS
                         if build["sanitizer"] else
                         {"asan_lines": 0, "ubsan_lines": 0})
     if executable_counts != expected_executable or archive_counts != expected_archive:
         raise RuntimeError("sanitizer symbol family/count proof changed")
+    expected_members = (
+        EXPECTED_ARCHIVE_MEMBER_COUNTS if build["sanitizer"] else
+        {member: {"asan_lines": 0, "ubsan_lines": 0}
+         for member in library_members})
+    if archive_member_counts != expected_members:
+        raise RuntimeError("sanitizer archive member attribution changed")
     instrumentation = {
         "required_compile_macro": bool(build["sanitizer"]),
         "archive_members": library_members,
-        "core_archive_symbol_scan": artifact(archive_scan),
+        "core_archive_symbol_scan": normalized_text_artifact(archive_scan),
         "core_archive_counts": archive_counts,
         "core_archive_member_counts": archive_member_counts,
-        "executable_symbol_scan": artifact(executable_scan),
+        "executable_symbol_scan": normalized_text_artifact(executable_scan),
         "executable_counts": executable_counts,
     }
     standalone_linker = compiler_program(compiler, "ld")
     result = dict(build)
+    normalized_compile, compile_tokens = normalize_argv(argv)
+    token_counts = dict(build["argv_source_root_tokens"])
+    token_counts["compile"] = compile_tokens
     result.update({
         "compiler": program_record(compiler),
         "link_driver": program_record(compiler),
         "standalone_linker": program_record(standalone_linker),
-        "compile_argv": argv,
-        "compile_stdout": artifact(stdout_path),
-        "compile_stderr": artifact(stderr_path),
+        "compile_argv": normalized_compile,
+        "argv_source_root_tokens": token_counts,
+        "compile_stdout": normalized_text_artifact(stdout_path),
+        "compile_stderr": normalized_text_artifact(stderr_path),
         "executable": artifact(executable),
         "instrumentation": instrumentation,
         "nm": program_record(nm),
@@ -375,7 +479,7 @@ def run_one(
     backend = "auto" if build["sanitizer"] else build["backend"]
     argv = [
         str(resolve_program("taskset")), "-c", str(cpu),
-        relative(executable), "--backend", backend, relative(result_path),
+        str(executable), "--backend", backend, str(result_path),
         "--benchmark-smoke" if smoke else "--correctness-only",
     ]
     environment = {
@@ -394,16 +498,18 @@ def run_one(
         raise RuntimeError(f"child source fingerprint mismatch for {name}")
     if data.get("library_sha256") != build["library"]["sha256"]:
         raise RuntimeError(f"child library fingerprint mismatch for {name}")
+    normalized_run, run_tokens = normalize_argv(argv)
     return {
         "name": name,
         "build": build["name"],
         "kind": "non-authoritative-smoke" if smoke else "correctness",
         "requested_cpu": cpu,
-        "argv": argv,
+        "argv": normalized_run,
+        "argv_source_root_tokens": run_tokens,
         "environment": environment,
-        "result": artifact(result_path),
-        "stdout": artifact(stdout_path),
-        "stderr": artifact(stderr_path),
+        "result": normalized_text_artifact(result_path),
+        "stdout": normalized_text_artifact(stdout_path),
+        "stderr": normalized_text_artifact(stderr_path),
         "observed_affinity": data["affinity"],
     }
 
@@ -415,6 +521,83 @@ def parse_cpus(text: str) -> list[int]:
     return result
 
 
+def default_cpus(allowed: Iterable[int]) -> list[int]:
+    selected = sorted(set(allowed))[:5]
+    if len(selected) != 5:
+        raise ValueError("C7 matrix requires at least five allowed CPUs")
+    return selected
+
+
+def validate_cpus(
+    cpus: list[int], smoke_cpu: int, allowed: Iterable[int],
+) -> None:
+    allowed_set = set(allowed)
+    if len(cpus) != 5 or len(set(cpus)) != 5 or any(
+            type(cpu) is not int or cpu < 0 for cpu in cpus):
+        raise ValueError("C7 correctness matrix requires five distinct CPUs")
+    if any(cpu not in allowed_set for cpu in [*cpus, smoke_cpu]):
+        raise ValueError("requested CPU is outside process affinity")
+
+
+def reproducibility_fingerprints(builds: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        build["name"]: {
+            "library_sha256": build["library"]["sha256"],
+            "executable_sha256": build["executable"]["sha256"],
+        }
+        for build in builds
+    }
+
+
+def require_reproducible_peer(current: dict[str, Any], peer: dict[str, Any]) -> None:
+    for key in ("schema", "core_git_sha"):
+        if peer.get(key) != current.get(key):
+            raise RuntimeError(f"A/B manifest {key} differs")
+    if (peer.get("source") != current.get("source") or
+            peer.get("runner") != current.get("runner") or
+            peer.get("validator") != current.get("validator")):
+        raise RuntimeError("A/B manifests do not bind the same committed tooling")
+    left = current.get("reproducibility", {}).get("fingerprints")
+    right = peer.get("reproducibility", {}).get("fingerprints")
+    if left != right or set(left or ()) != set(BUILD_NAMES):
+        raise RuntimeError("A/B archive or executable hashes differ")
+
+
+def normalized_text_records(value: Any) -> Iterable[dict[str, Any]]:
+    if isinstance(value, dict):
+        if set(value) == {"bytes", "path", "sha256", "source_root_tokens"}:
+            yield value
+        for child in value.values():
+            yield from normalized_text_records(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from normalized_text_records(child)
+
+
+def require_no_root_bytes(
+    manifest: dict[str, Any], source_root: pathlib.Path,
+    forbidden_roots: Iterable[pathlib.Path],
+) -> None:
+    needles = [str(path.resolve()).encode("utf-8") for path in forbidden_roots]
+    serialized = json.dumps(manifest, sort_keys=True).encode("utf-8")
+    if any(needle in serialized for needle in needles):
+        raise RuntimeError("normalized manifest leaked an A/B checkout root")
+    for record in normalized_text_records(manifest):
+        path = pathlib.Path(record["path"])
+        path = path if path.is_absolute() else source_root / path
+        contents = path.read_bytes()
+        if any(needle in contents for needle in needles):
+            raise RuntimeError("normalized retained text leaked an A/B checkout root")
+    by_name = {build["name"]: build for build in manifest["builds"]}
+    for name in BUILD_NAMES:
+        for key in ("library", "executable"):
+            path = pathlib.Path(by_name[name][key]["path"])
+            path = path if path.is_absolute() else source_root / path
+            contents = path.read_bytes()
+            if any(needle in contents for needle in needles):
+                raise RuntimeError("A/B binary leaked a checkout root")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--build-dir", type=pathlib.Path,
@@ -424,19 +607,22 @@ def main() -> int:
     parser.add_argument("--manifest", type=pathlib.Path,
                         default=HERE / "results/build-run-manifest.json")
     parser.add_argument("--jobs-per-build", type=int, default=4)
-    parser.add_argument("--cpus", type=parse_cpus, default=parse_cpus("0,1,2,3,4"))
-    parser.add_argument("--smoke-cpu", type=int, default=0)
+    parser.add_argument("--cpus", type=parse_cpus)
+    parser.add_argument("--smoke-cpu", type=int)
     parser.add_argument("--core-git-sha")
+    parser.add_argument("--compare-reproducibility-manifest", type=pathlib.Path)
+    parser.add_argument("--compare-reproducibility-root", type=pathlib.Path)
     arguments = parser.parse_args()
     allowed = os.sched_getaffinity(0)
-    if any(cpu not in allowed for cpu in arguments.cpus + [arguments.smoke_cpu]):
-        raise SystemExit("requested CPU is outside process affinity")
+    arguments.cpus = arguments.cpus or default_cpus(allowed)
+    if arguments.smoke_cpu is None:
+        arguments.smoke_cpu = arguments.cpus[0]
+    try:
+        validate_cpus(arguments.cpus, arguments.smoke_cpu, allowed)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
     if arguments.jobs_per_build < 1 or arguments.jobs_per_build > 8:
         raise SystemExit("jobs per build must be in 1..8")
-    if any(cpu in (15, 31) for cpu in arguments.cpus):
-        raise SystemExit("CPUs 15 and 31 are reserved from C7 checkpoint work")
-    if arguments.smoke_cpu != 0:
-        raise SystemExit("the retained non-authoritative smoke must use CPU 0")
     core_git_sha = arguments.core_git_sha or subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True, text=True,
         stdout=subprocess.PIPE,
@@ -449,7 +635,7 @@ def main() -> int:
     ).stdout.strip()
     if head != core_git_sha:
         raise SystemExit("--core-git-sha must equal the checked-out HEAD")
-    for committed_source in (SOURCE, pathlib.Path(__file__)):
+    for committed_source in (SOURCE, pathlib.Path(__file__), VALIDATOR):
         if committed_sha256(core_git_sha, committed_source) != sha256(
                 committed_source):
             raise SystemExit(
@@ -457,6 +643,19 @@ def main() -> int:
     arguments.build_dir = arguments.build_dir.resolve()
     arguments.results_dir = arguments.results_dir.resolve()
     arguments.manifest = arguments.manifest.resolve()
+    for label, path in (
+        ("--build-dir", arguments.build_dir),
+        ("--results-dir", arguments.results_dir),
+        ("--manifest", arguments.manifest),
+    ):
+        try:
+            path.relative_to(ROOT)
+        except ValueError as error:
+            raise SystemExit(f"{label} must be inside the source checkout") from error
+    if bool(arguments.compare_reproducibility_manifest) != bool(
+            arguments.compare_reproducibility_root):
+        raise SystemExit(
+            "A/B comparison requires both peer manifest and peer source root")
     arguments.build_dir.mkdir(parents=True, exist_ok=True)
     arguments.results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -497,23 +696,49 @@ def main() -> int:
         by_name["auto"], arguments.results_dir, arguments.smoke_cpu, True))
 
     manifest: dict[str, Any] = {
-        "schema": "leopard2-c7-build-run-manifest/v2",
+        "schema": "leopard2-c7-build-run-manifest/v3",
         "status": "pass",
         "scope": (
-            "correctness plus CPU0 non-authoritative harness smoke; no promotion timing"
+            "correctness plus one affinity-selected non-authoritative harness "
+            "smoke; no promotion timing"
         ),
+        "normalization": {
+            "schema": NORMALIZATION_SCHEMA,
+            "token": NORMALIZATION_TOKEN,
+            "operation": "replace exact source-root prefix only",
+        },
         "core_git_sha": core_git_sha,
         "source": artifact(SOURCE),
         "runner": artifact(pathlib.Path(__file__)),
+        "validator": artifact(VALIDATOR),
         "taskset": program_record(resolve_program("taskset")),
         "builds": builds,
         "runs": runs,
+        "reproducibility": {
+            "prefix_map_target": PREFIX_MAP_TARGET,
+            "fingerprints": reproducibility_fingerprints(builds),
+        },
     }
+    serialized = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    if str(ROOT) in serialized:
+        raise RuntimeError("manifest leaked the absolute source checkout root")
     arguments.manifest.parent.mkdir(parents=True, exist_ok=True)
-    arguments.manifest.write_text(
-        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    arguments.manifest.write_text(serialized, encoding="utf-8")
     if not SHA256_RE.fullmatch(sha256(arguments.manifest)):
         raise AssertionError("manifest hashing failed")
+    if arguments.compare_reproducibility_manifest:
+        peer = json.loads(arguments.compare_reproducibility_manifest.read_text(
+            encoding="utf-8"))
+        require_reproducible_peer(manifest, peer)
+        peer_root = arguments.compare_reproducibility_root.resolve()
+        try:
+            arguments.compare_reproducibility_manifest.resolve().relative_to(
+                peer_root)
+        except ValueError as error:
+            raise RuntimeError("peer manifest is outside its source root") from error
+        forbidden = (ROOT, peer_root)
+        require_no_root_bytes(manifest, ROOT, forbidden)
+        require_no_root_bytes(peer, peer_root, forbidden)
     return 0
 
 
