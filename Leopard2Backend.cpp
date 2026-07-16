@@ -314,10 +314,11 @@ static bool TestFF8Butterflies4(const Ops& ops, FF8MultiplyLog reference)
     };
     static const uint64_t byte_counts[] = {
         0, 1, 3, 7, 15, 16, 17, 31, 32, 33,
-        63, 64, 65, 127, 128, 129, 257, 521
+        63, 64, 65, 127, 128, 129, 257, 521,
+        1023, 1024, 1025
     };
-    uint8_t values[4][524];
-    uint8_t expected[4][524];
+    uint8_t values[4][1028];
+    uint8_t expected[4][1028];
     for (size_t set_i = 0;
          set_i < sizeof(log_sets) / sizeof(log_sets[0]); ++set_i)
         for (size_t count_i = 0;
