@@ -86,6 +86,7 @@ REQUIRED_BUILD_INPUTS = {
     "experiments/leopard2/isal_compare/isal_benchmark.cpp",
     "experiments/leopard2/isal_compare/NOTICE",
     "tools/leopard2_isal_compare.py", "tools/leopard2_external_comparison.py",
+    "tools/leopard2_benchmark_json_test.py",
 }
 
 # Bounded checkpoint only.  It covers low/balanced/high rates, tiny-batch
@@ -255,6 +256,7 @@ def _is_build_input(relative: str) -> bool:
     return relative in (
         "tools/leopard2_external_comparison.py",
         "tools/leopard2_isal_compare.py",
+        "tools/leopard2_benchmark_json_test.py",
         "tests/benchmark.cpp",
         "tests/experiments.cpp",
     )
@@ -725,6 +727,12 @@ def build_identity(paths: Mapping[str, Path], nasm: Mapping[str, Any]) -> dict[s
         str(linker.resolve()): "${LINKER}",
         str(build_program.resolve()): "${BUILD_PROGRAM}",
     }
+    for raw_path, token in (
+            (c_compiler, "${CC}"), (adapter_cxx, "${CXX}"),
+            (Path(str(nasm["path"])), "${NASM}"), (ar, "${AR}"),
+            (ranlib, "${RANLIB}"), (linker, "${LINKER}"),
+            (build_program, "${BUILD_PROGRAM}")):
+        replacements[str(raw_path)] = token
     recipe = {
         "isa_l": {
             "configure_definitions": [
@@ -1020,6 +1028,16 @@ def validate_build_identity(
         "leopard2_executable"}, "link-command manifests")
     for name, manifest in links.items():
         _validate_link_manifest(manifest, f"{name} link command")
+    required_link_tools = {
+        "isa_l_archive": ("${AR}", "${RANLIB}"),
+        "adapter_executable": ("${CXX}",),
+        "leopard2_library": ("${AR}", "${RANLIB}"),
+        "leopard2_executable": ("${CXX}",),
+    }
+    for name, required_tools in required_link_tools.items():
+        text = "\n".join(links[name]["lines"])
+        if any(tool not in text for tool in required_tools):
+            raise ComparisonError(f"{name} link command is not tied to its tools")
     static_inputs = value.get("static_inputs", {})
     require_exact_keys(static_inputs, {"isa_l_archive"}, "static link inputs")
     archive = static_inputs.get("isa_l_archive", {})
@@ -2768,10 +2786,12 @@ def fake_build_identity() -> dict[str, Any]:
             "leopard2": fake_compile_manifest("leopard2"),
         },
         "link_commands": {
-            "isa_l_archive": fake_link_manifest(["${AR} qc libisal.a objects"]),
+            "isa_l_archive": fake_link_manifest([
+                "${AR} qc libisal.a objects", "${RANLIB} libisal.a"]),
             "adapter_executable": fake_link_manifest([
                 "${CXX} adapter.o ${ISA_L_INSTALL}/lib/libisal.a"]),
-            "leopard2_library": fake_link_manifest(["${AR} qc libleopard.a objects"]),
+            "leopard2_library": fake_link_manifest([
+                "${AR} qc libleopard.a objects", "${RANLIB} libleopard.a"]),
             "leopard2_executable": fake_link_manifest([
                 "${CXX} benchmark.o libleopard.a"]),
         },
