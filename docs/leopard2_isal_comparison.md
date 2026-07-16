@@ -1,12 +1,11 @@
 # Leopard2 / Intel ISA-L comparison protocol
 
 > **Evidence status:** the checked-in `checkpoint_result.json` and
-> `correctness_result.json` use the superseded V1 schemas. They predate the
-> source-replay, raw-Leopard-sample, immutable-oracle, and post-run integrity
-> gates described below. The V2 validators intentionally reject them. Their
-> numbers are retained only as a provisional historical observation until a
-> clean V2 rebuild and coordinated pinned run replaces both files; they are not
-> accepted performance or release evidence.
+> `correctness_result.json` are the coordinated V2 bounded checkpoint. They pass
+> portable replay, strict reconstruction from the ignored trusted build cache,
+> and the independent external-comparison audit. This is accepted evidence for
+> the six documented single-thread cells only. It is not evidence for the full
+> required matrix, multicore scaling, other machines, or wire compatibility.
 
 This is a bounded external comparison, not a wire-compatibility result and not
 a replacement for the required Leopard2 benchmark matrix. Intel ISA-L and
@@ -174,16 +173,21 @@ the requested Leopard legacy-high V1 dyadic parent is 512 and therefore uses
 GF16. Results label that field advantage explicitly; it must not be presented
 as an ISA-only kernel advantage.
 
-## Provisional V1 result (not accepted evidence)
+## Accepted bounded V2 checkpoint
 
-The superseded V1 checkpoint was measured on an AMD Ryzen 9 9950X3D under Linux
-6.8.0-134. The runner and every child had singleton affinity to CPU 15; its SMT
-sibling CPU 31 was explicitly reserved idle. The readable scaling governor was
-`powersave`. The build used clean Leopard commit
-`1f41ddd41e2b3c040ff06e15f3dbaa58a8b05863` and source-bundle SHA-256
-`b284300601d18ef6edfb6e786067611bb3d59764c64de3b5a76ef660d283ec5c`.
+The V2 checkpoint was measured on an AMD Ryzen 9 9950X3D under Linux
+6.8.0-134. The runner and every child had singleton affinity to CPU 15; SMT
+sibling CPU 31 was held by the documented advisory lease. The lease is not an
+OS-exclusive reservation, and the artifact does not claim otherwise. The AMD
+P-state EPP driver reported governor `powersave` with energy preference
+`performance`; pre/post point frequencies were 5,560,502 and 5,394,152 kHz.
+The build used clean Leopard commit
+`69f5854230d8a50e8dcc32f6b31e33a30d113a88`, source-bundle SHA-256
+`483ba4072df8390611dbcfc2e57e5cb5d174540248eb79337f70225a38a80414`,
+and build-identity SHA-256
+`c1a0addcd420090aadbcc6b0809d81f732aa3f0d3999f70bb075a1a24938cde7`.
 
-The following provisional rates are decimal GB/s. `Enc out` counts generated parity bytes.
+The following rates are decimal GB/s. `Enc out` counts generated parity bytes.
 The three execution-only decode columns count, respectively, every offered
 received byte, the deterministic `K`-row subset actually consumed, and repaired
 original bytes. `Plan us` is not included in those execution rates. `Amort out`
@@ -194,45 +198,44 @@ MADs and all raw ISA-L samples.
 
 | Cell | Provider | Enc out | Dec offered | Dec selected | Dec repaired | Plan us | Amort out |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| high 240/16, 64 KiB x1, L=1 | ISA-L | 0.759 | 38.511 | 36.246 | 0.151 | 8225.907 | 0.045 |
-| high 240/16, 64 KiB x1, L=1 | Leopard2 | 0.895 | 8.512 | 8.012 | 0.033 | 1.231 | 0.033 |
-| high 240/16, 4 KiB x8, L=4 | ISA-L | 0.869 | 33.428 | 31.836 | 0.531 | 5831.250 | 0.134 |
-| high 240/16, 4 KiB x8, L=4 | Leopard2 | 1.054 | 9.708 | 9.245 | 0.154 | 1.270 | 0.154 |
-| balanced 128/128, 64 KiB x1, L=8 | ISA-L | 1.716 | 37.143 | 19.171 | 1.198 | 835.975 | 0.966 |
-| balanced 128/128, 64 KiB x1, L=8 | Leopard2 | 6.542 | 5.007 | 2.584 | 0.162 | 1.290 | 0.162 |
-| low 64/192, 64 KiB x1, L=8 | ISA-L | 3.607 | 75.422 | 19.464 | 2.433 | 129.931 | 2.262 |
-| low 64/192, 64 KiB x1, L=8 | Leopard2 | 9.108 | 12.062 | 3.113 | 0.389 | 1.270 | 0.389 |
-| boundary 129/100, 64 KiB x1, L=4 | ISA-L GF8 | 1.709 | 62.860 | 36.040 | 1.118 | 856.779 | 0.769 |
-| boundary 129/100, 64 KiB x1, L=4 | Leopard2 GF16 | 3.249 | 2.752 | 1.578 | 0.049 | 21.446 | 0.049 |
-| boundary 225/30, 64 KiB x1, L=2 | ISA-L GF8 | 0.971 | 40.322 | 35.859 | 0.319 | 4884.030 | 0.128 |
-| boundary 225/30, 64 KiB x1, L=2 | Leopard2 GF16 | 1.206 | 4.864 | 4.325 | 0.038 | 7.130 | 0.038 |
+| high 240/16, 64 KiB x1, L=1 | ISA-L | 0.790 | 37.595 | 35.383 | 0.147 | 4516.211 | 0.065 |
+| high 240/16, 64 KiB x1, L=1 | Leopard2 | 1.204 | 9.422 | 8.868 | 0.037 | 1.325 | 0.037 |
+| high 240/16, 4 KiB x8, L=4 | ISA-L | 0.873 | 33.428 | 31.836 | 0.531 | 4530.360 | 0.162 |
+| high 240/16, 4 KiB x8, L=4 | Leopard2 | 1.276 | 10.916 | 10.397 | 0.173 | 1.335 | 0.173 |
+| balanced 128/128, 64 KiB x1, L=8 | ISA-L | 1.705 | 36.779 | 18.983 | 1.186 | 649.537 | 1.003 |
+| balanced 128/128, 64 KiB x1, L=8 | Leopard2 | 9.022 | 6.152 | 3.175 | 0.198 | 1.300 | 0.198 |
+| low 64/192, 64 KiB x1, L=8 | ISA-L | 3.605 | 75.290 | 19.430 | 2.429 | 87.266 | 2.313 |
+| low 64/192, 64 KiB x1, L=8 | Leopard2 | 11.540 | 13.392 | 3.456 | 0.432 | 1.290 | 0.432 |
+| boundary 129/100, 64 KiB x1, L=4 | ISA-L GF8 | 1.714 | 62.893 | 36.059 | 1.118 | 642.942 | 0.832 |
+| boundary 129/100, 64 KiB x1, L=4 | Leopard2 GF16 | 3.956 | 3.199 | 1.834 | 0.057 | 29.411 | 0.057 |
+| boundary 225/30, 64 KiB x1, L=2 | ISA-L GF8 | 0.950 | 39.716 | 35.321 | 0.314 | 4143.151 | 0.140 |
+| boundary 225/30, 64 KiB x1, L=2 | Leopard2 GF16 | 1.454 | 5.366 | 4.773 | 0.042 | 9.360 | 0.042 |
 
-The provisional V1 data reported that Leopard2 generated parity faster in all
-six cells: ISA-L's encode throughput was
-0.262x to 0.849x Leopard2. ISA-L's byte-heavy decode execution was 3.443x to
-22.839x faster by repaired-output rate. ISA-L's much larger matrix-inversion and
-table setup cost matters at low reuse: after amortization it was 0.872x
-Leopard2 in the 4 KiB batch cell, while remaining 1.345x to 15.724x in the
-other five cells. The 22.839x and 15.724x boundary figures also include GF8
-versus padded-parent GF16 and are not kernel-only comparisons. These six cells
-are a bounded checkpoint, not evidence for the unmeasured matrix or other
-machines.
+Leopard2 generated parity faster in all six cells: ISA-L achieved 0.189x to
+0.685x Leopard2's parity-output rate. ISA-L's byte-heavy decode execution was
+3.062x to 19.659x faster by repaired-output rate. ISA-L's much larger
+matrix-inversion and table setup cost matters at low reuse: after amortization
+it was 0.932x Leopard2 in the 4 KiB batch cell, while remaining 1.762x to
+14.648x in the other five cells. The largest boundary figures include ISA-L GF8
+versus padded-parent Leopard2 GF16 and are not kernel-only comparisons. These
+six cells are a bounded checkpoint, not evidence for the unmeasured matrix or
+other machines.
 
-The provisional V1 deterministic adapter campaign reported 128/128 cases, including
+The coordinated deterministic adapter campaign passed 128/128 cases, including
 eight no-loss cases, sixteen maximum-loss cases, and 34 cases where dyadic
 padding gives ISA-L GF8 versus Leopard2 GF16. Every case verifies the systematic
 generator prefix and restores each requested source byte against independently
 retained input. It does not compare parity bytes because the wire formats and
 generator matrices intentionally differ.
 
-The superseded V1 artifacts use a canonical digest that excludes their self-identifying
-`artifact_sha256` value. The fail-closed validators recompute it. For independent
+The artifacts use a canonical digest that excludes their self-identifying
+`artifact_sha256` value. Fail-closed validators recompute it. For independent
 transport checks, the complete serialized-file digest is also listed:
 
-| Provisional V1 artifact | Historical canonical SHA-256 | Serialized file SHA-256 |
+| V2 artifact | Canonical SHA-256 | Serialized file SHA-256 |
 |---|---|---|
-| `checkpoint_result.json` | `eb3b8083425321a922ded8eaca9ae1144658b5615f596219f9245b07d5c32834` | `e67efd48af1d7333144d958adfc0b850c08d2048b87974eec41bb33147b220a8` |
-| `correctness_result.json` | `3349b66454a15c8121170f743ad759c843bd157654290a591fb88f9497055ee4` | `4392d9d5320434ab8a944194911fac0d6e01a75ab5d8f36d84d202b5f8d723d4` |
+| `checkpoint_result.json` | `3d78e93e890c3446d836538494e81ad37898f9879027f2a30354bb3bf9d42a01` | `7f4fbb51010c6218be8ca1167f55b08b182336d5e348c8c9f712fdc23468d3fb` |
+| `correctness_result.json` | `ff0cffbdb03fa71f110d284f262c8100c4bff64e263b320b49605c46a08fcf7f` | `ff1a9494dfc1dfb62460811627e7bd142767f215f47a83fcc47e97e19db0a438` |
 
 ## Reproduction
 

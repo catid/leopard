@@ -256,15 +256,16 @@ ISA-L multicore cells still have no reviewed adapter, and a bounded result
 does not become a cross-library claim for unmeasured cells. That remaining work
 keeps the benchmark-harness Bead open.
 
-The currently checked-in ISA-L JSON artifacts use the superseded V1 evidence
-schemas and are provisional only. The hardened V2 protocol requires raw timing
-samples from both providers, immutable/direct scalar correctness oracles,
-detached recorded-commit builds with before/after Git-object replay, actual
-compile/link/runtime-library identities, a controlled child environment,
-symmetric Leopard `--skip-legacy` work, a separately supplied full-correctness
-artifact binding, advisory CPU leases, and a post-timing integrity recheck. No
-V1 number is accepted as release evidence;
-the files must be replaced by a coordinated V2 run before quoting results.
+The checked-in ISA-L JSON artifacts are the coordinated V2 bounded checkpoint.
+They contain raw timing samples from both providers, immutable/direct scalar
+correctness oracles, detached recorded-commit builds with before/after
+Git-object replay, the actual file-input and transitive runtime-library
+closures, a controlled child environment, symmetric Leopard `--skip-legacy`
+work, a separately supplied full-correctness artifact binding, advisory CPU
+leases, and a post-timing integrity recheck. Strict trusted-cache validation
+and the independent external audit pass. The six single-thread cells are
+accepted bounded evidence; they do not complete the required matrix or support
+claims about multicore execution, other machines, or wire compatibility.
 
 `tools/leopard2_external_comparison.py` makes that boundary machine-readable.
 It deterministically regenerates the selected matrix, classifies every job, and
