@@ -33,9 +33,10 @@ option(LEO2_BUILD_BENCHMARKS "Build Leopard benchmark programs" ON)
 option(LEO2_BUILD_FUZZERS "Build Leopard2 libFuzzer targets" OFF)
 option(LEO2_ENABLE_CUDA "Build the optional Leopard2 CUDA backend" OFF)
 
-# Diagnostic-only backend selection.  auto is the historical default and does
-# not add definitions or target options.  Forced variants hold the wire format
-# fixed while making backend determinism testable in isolated builds.
+# Diagnostic-only backend selection.  auto is the portable default and does
+# not add definitions or target-local ISA options.  Forced variants hold the
+# wire format fixed while making backend determinism testable in isolated
+# builds.
 set(LEO2_BACKEND_VARIANT "auto" CACHE STRING
     "Diagnostic backend variant: auto, scalar, ssse3, or avx2")
 set_property(CACHE LEO2_BACKEND_VARIANT PROPERTY STRINGS auto scalar ssse3 avx2)
@@ -64,10 +65,10 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-check_cxx_compiler_flag("-march=native" COMPILER_SUPPORTS_MARCH_NATIVE)
-if(COMPILER_SUPPORTS_MARCH_NATIVE)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
-endif()
+# Do not raise the ISA floor of the whole library.  The default archive must be
+# safe to move between machines that implement the platform baseline.  Faster
+# diagnostic variants are explicit below; production runtime-dispatched ISA
+# backends must live behind translation-unit or function target boundaries.
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     check_cxx_compiler_flag("/O2" CXX_FLAG_O2)
@@ -205,6 +206,7 @@ function(leo2_apply_backend_variant target_name)
     if(LEO2_BACKEND_VARIANT STREQUAL "scalar")
         target_compile_definitions(${target_name} PRIVATE
             LEO2_BACKEND_FORCE_SCALAR=1
+            LEO2_DISABLE_SSSE3_CODEGEN=1
             LEO2_DISABLE_AVX2_CODEGEN=1)
     elseif(LEO2_BACKEND_VARIANT STREQUAL "ssse3")
         target_compile_definitions(${target_name} PRIVATE
@@ -216,8 +218,7 @@ function(leo2_apply_backend_variant target_name)
     endif()
 
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
-        if(LEO2_BACKEND_VARIANT STREQUAL "scalar" OR
-           LEO2_BACKEND_VARIANT STREQUAL "ssse3")
+        if(LEO2_BACKEND_VARIANT STREQUAL "ssse3")
             check_cxx_compiler_flag("-mssse3" LEO2_FLAG_MSSSE3)
             check_cxx_compiler_flag("-mno-avx" LEO2_FLAG_MNO_AVX)
             if(NOT LEO2_FLAG_MSSSE3 OR NOT LEO2_FLAG_MNO_AVX)
@@ -225,9 +226,9 @@ function(leo2_apply_backend_variant target_name)
                     "LEO2_BACKEND_VARIANT=${LEO2_BACKEND_VARIANT} is unavailable: "
                     "the compiler must support -mssse3 and -mno-avx")
             endif()
-            # These target-local options follow the historical global
-            # -march=native and cap this diagnostic library at the ISA required
-            # by its still-compiled legacy SSSE3 intrinsics.
+            # This is an explicit diagnostic archive, not a portable runtime-
+            # dispatched package.  The default auto and scalar variants never
+            # add this target-wide ISA flag.
             target_compile_options(${target_name} PRIVATE -mssse3 -mno-avx)
         elseif(LEO2_BACKEND_VARIANT STREQUAL "avx2")
             check_cxx_compiler_flag("-mavx2" LEO2_FLAG_MAVX2)
@@ -272,6 +273,28 @@ endif()
 if(LEO2_BUILD_TESTS)
     enable_testing()
     target_compile_definitions(libleopard PRIVATE LEO2_ENABLE_TEST_HOOKS=1)
+
+    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$" AND
+        (LEO2_BACKEND_VARIANT STREQUAL "auto" OR
+        LEO2_BACKEND_VARIANT STREQUAL "scalar"))
+        find_program(LEO2_OBJDUMP_EXECUTABLE NAMES objdump llvm-objdump)
+        find_program(LEO2_SH_EXECUTABLE NAMES sh)
+        if(LEO2_OBJDUMP_EXECUTABLE AND LEO2_SH_EXECUTABLE)
+            set(LEO2_PORTABLE_ISA_SELF_TEST_ARGS)
+            if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
+                list(APPEND LEO2_PORTABLE_ISA_SELF_TEST_ARGS
+                    "${CMAKE_C_COMPILER}" "${CMAKE_AR}")
+            endif()
+            add_test(NAME leopard2_portable_isa
+                COMMAND "${LEO2_SH_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_leopard2_portable_isa.sh"
+                    "${LEO2_OBJDUMP_EXECUTABLE}"
+                    "$<TARGET_FILE:libleopard>"
+                    "${CMAKE_CURRENT_BINARY_DIR}"
+                    ${LEO2_PORTABLE_ISA_SELF_TEST_ARGS})
+        endif()
+    endif()
+
     add_executable(leopard2_direct_oracle_test
         tests/leopard2/direct_oracle.cpp
         tests/leopard2/test_direct_oracle.cpp)

@@ -484,6 +484,7 @@ static void mul_mem(
     }
 #endif // LEO_TRY_AVX2
 
+#if defined(LEO_TRY_SSSE3)
     if (CpuHasSSSE3)
     {
         LEO_MUL_TABLES_128(0, log_m);
@@ -512,6 +513,7 @@ static void mul_mem(
 
         return;
     }
+#endif // LEO_TRY_SSSE3
 
     RefMul(x, y, log_m, bytes);
 }
@@ -545,6 +547,7 @@ static void muladd_mem(
     }
 #endif // LEO_TRY_AVX2
 
+#if defined(LEO_TRY_SSSE3)
     if (CpuHasSSSE3)
     {
         LEO_MUL_TABLES_128(0, log_m);
@@ -569,6 +572,7 @@ static void muladd_mem(
         } while (bytes > 0);
         return;
     }
+#endif // LEO_TRY_SSSE3
 
     RefMulAdd(x, y, log_m, bytes);
 }
@@ -816,6 +820,7 @@ static void IFFT_DIT2(
     }
 #endif // LEO_TRY_AVX2
 
+#if defined(LEO_TRY_SSSE3)
     if (CpuHasSSSE3)
     {
         LEO_MUL_TABLES_128(0, log_m);
@@ -849,6 +854,7 @@ static void IFFT_DIT2(
 
         return;
     }
+#endif // LEO_TRY_SSSE3
 
     // Reference version:
     xor_mem(y, x, bytes);
@@ -935,6 +941,7 @@ static void IFFT_DIT4(
 
 #endif // LEO_TRY_AVX2
 
+#if defined(LEO_TRY_SSSE3)
     if (CpuHasSSSE3)
     {
         LEO_MUL_TABLES_128(01, log_m01);
@@ -1002,6 +1009,7 @@ static void IFFT_DIT4(
 
         return;
     }
+#endif // LEO_TRY_SSSE3
 
 #endif // LEO_INTERLEAVE_BUTTERFLY4_OPT
 
@@ -1270,6 +1278,7 @@ static void FFT_DIT2(
     }
 #endif // LEO_TRY_AVX2
 
+#if defined(LEO_TRY_SSSE3)
     if (CpuHasSSSE3)
     {
         LEO_MUL_TABLES_128(0, log_m);
@@ -1303,6 +1312,7 @@ static void FFT_DIT2(
 
         return;
     }
+#endif // LEO_TRY_SSSE3
 
     // Reference version:
     RefMulAdd(x, y, log_m, bytes);
@@ -1389,6 +1399,7 @@ static void FFT_DIT4(
 
 #endif // LEO_TRY_AVX2
 
+#if defined(LEO_TRY_SSSE3)
     if (CpuHasSSSE3)
     {
         LEO_MUL_TABLES_128(01, log_m01);
@@ -1456,6 +1467,7 @@ static void FFT_DIT4(
 
         return;
     }
+#endif // LEO_TRY_SSSE3
 
 #endif // LEO_INTERLEAVE_BUTTERFLY4_OPT
 

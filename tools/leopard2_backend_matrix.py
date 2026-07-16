@@ -72,6 +72,7 @@ SOURCE_FILES = (
     "tests/leopard2/test_transform_differential.cpp",
     "tests/leopard2/direct_oracle.cpp",
     "tests/leopard2/direct_oracle.h",
+    "tools/check_leopard2_portable_isa.sh",
     "tools/leopard2_backend_matrix.py",
 )
 
@@ -96,6 +97,11 @@ def digest_value(value):
 
 def normalized_output(value):
     return value.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
+def portable_ctest_executed(stdout, stderr=b""):
+    output = normalized_output(stdout + stderr)
+    return b"Test #" in output and b"leopard2_portable_isa" in output
 
 
 def atomic_write_json(path, value):
@@ -191,7 +197,7 @@ def compiler_identity(compiler):
 
 
 def variant_flags(variant):
-    if variant in ("scalar", "ssse3"):
+    if variant == "ssse3":
         return ["-mssse3", "-mno-avx"]
     if variant == "avx2":
         return ["-mavx2", "-mno-avx512f"]
@@ -219,6 +225,8 @@ def availability(variant, machine, compiler):
     architecture = machine["architecture"].lower()
     if architecture not in ("x86_64", "amd64", "i386", "i486", "i586", "i686"):
         return False, "forced variants are x86-only on this implementation"
+    if variant == "scalar":
+        return True, ""
     required = "avx2" if variant == "avx2" else "ssse3"
     if required not in machine["cpu_flags"]:
         return False, "host CPU does not advertise {}".format(required)
@@ -460,6 +468,40 @@ def run_variant(context, variant, index):
             atomic_write_json(result_path, base)
             return base
 
+    if variant in ("auto", "scalar"):
+        portable_command = [
+            context["ctest"], "--test-dir", build, "-C", "Release",
+            "-R", "^leopard2_portable_isa$", "--output-on-failure",
+        ]
+        command = run_command(
+            "test_portable_isa", portable_command, context["source"], result_dir,
+            context["timeout"], environment, hash_output=True
+        )
+        tests["portable_isa"] = command
+        commands.append(command)
+        portable_was_run = portable_ctest_executed(
+            (result_dir / command["stdout_log"]).read_bytes(),
+            (result_dir / command["stderr_log"]).read_bytes(),
+        )
+        if command["returncode"] != 0 or not portable_was_run:
+            if command["returncode"] == 0:
+                reason = (
+                    "portable-ISA test was not registered or executed; install "
+                    "objdump or llvm-objdump and a POSIX sh, then reconfigure"
+                )
+            else:
+                reason = "portable-ISA test failed"
+            base.update({
+                "commands": commands,
+                "pin_cpu": pin_cpu,
+                "reason": reason,
+                "selected_cache_variant": selected,
+                "status": "failed",
+                "tests": tests,
+            })
+            atomic_write_json(result_path, base)
+            return base
+
     if variant == "auto":
         cuda_command = [
             context["ctest"], "--test-dir", build, "-C", "Release",
@@ -615,8 +657,18 @@ def self_test():
     assert compact_cpu_list([3, 2, 1, 7, 9, 8]) == "1-3,7-9"
     assert compact_cpu_list([]) == ""
     assert normalized_output(b"a\r\nb\rc\n") == b"a\nb\nc\n"
+    assert portable_ctest_executed(
+        b"1/1 Test #1: leopard2_portable_isa ... Passed\n"
+    )
+    assert not portable_ctest_executed(b"No tests were found!!!\n")
     assert digest_value({"b": 2, "a": 1}) == digest_value({"a": 1, "b": 2})
-    assert variant_flags("scalar") == ["-mssse3", "-mno-avx"]
+    assert variant_flags("scalar") == []
+    assert variant_flags("ssse3") == ["-mssse3", "-mno-avx"]
+    assert availability(
+        "scalar",
+        {"architecture": "x86_64", "cpu_flags": []},
+        {"executable": "not-needed-for-empty-flags"},
+    ) == (True, "")
     with tempfile.TemporaryDirectory(prefix="leo2-backend-self-test-") as directory:
         path = Path(directory) / "result.json"
         value = {"z": [3, 2, 1], "a": "stable"}

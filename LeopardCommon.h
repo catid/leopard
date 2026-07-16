@@ -180,19 +180,13 @@
 #endif
 
 #if defined(LEO2_BACKEND_FORCE_SCALAR)
-    // CpuHasSSSE3 is forced false by LeopardCommon.cpp when this is absent.
-    // Keep the AVX2 optimization marker defined because the legacy CPU probe's
-    // disabled-AVX2 assignment is not guarded by LEO_TRY_AVX2.  CMake also
-    // removes AVX code generation, so no AVX2 path is compiled or executable.
-    #define LEO_USE_AVX2_OPT
+    // The portable scalar diagnostic variant enables neither optional ISA.
 #elif defined(LEO2_BACKEND_FORCE_SSSE3)
     #define LEO_USE_SSSE3_OPT
-    // AVX2 code generation is disabled target-locally for this variant.  This
-    // marker only keeps the legacy CPU-probe source well-formed.
-    #define LEO_USE_AVX2_OPT
 #else
-    // auto and avx2 retain both historical optimization switches.  In the
-    // avx2 diagnostic build, CMake verifies compiler support and enables AVX2.
+    // auto uses an optional ISA only when the compiler invocation already has
+    // a suitable ISA boundary.  The default CMake build intentionally does
+    // not raise the whole-library target above the platform baseline.
     #define LEO_USE_SSSE3_OPT
     #define LEO_USE_AVX2_OPT
 #endif
@@ -272,8 +266,19 @@
     #define LEO_TARGET_MOBILE
 #endif // ANDROID
 
-#if !defined(LEO2_DISABLE_AVX2_CODEGEN) && \
-    (defined(__AVX2__) || (defined (_MSC_VER) && _MSC_VER >= 1900))
+#if !defined(LEO2_DISABLE_SSSE3_CODEGEN) && \
+    defined(LEO_USE_SSSE3_OPT) && \
+    ((defined(_MSC_VER) && \
+      (defined(LEO2_BACKEND_FORCE_SSSE3) || \
+       defined(LEO2_BACKEND_FORCE_AVX2))) || \
+     (!defined(_MSC_VER) && defined(__SSSE3__)) || \
+     defined(LEO_USE_SSE2NEON))
+    #define LEO_TRY_SSSE3 /* 128-bit nibble-table multiply */
+#endif
+
+#if !defined(LEO2_DISABLE_AVX2_CODEGEN) && defined(LEO_USE_AVX2_OPT) && \
+    ((!defined(_MSC_VER) && defined(__AVX2__)) || \
+     (defined(_MSC_VER) && defined(LEO2_BACKEND_FORCE_AVX2)))
     #define LEO_TRY_AVX2 /* 256-bit */
     #include <immintrin.h>
     #define LEO_ALIGN_BYTES 32
@@ -282,8 +287,10 @@
 #endif // __AVX2__
 
 #if !defined(LEO_TARGET_MOBILE)
-    // Note: MSVC currently only supports SSSE3 but not AVX2
-    #include <tmmintrin.h> // SSSE3: _mm_shuffle_epi8
+    // MSVC optional intrinsics are enabled only by forced diagnostic builds.
+    #if defined(LEO_TRY_SSSE3)
+        #include <tmmintrin.h> // SSSE3: _mm_shuffle_epi8
+    #endif
     #include <emmintrin.h> // SSE2
 #elif defined(LEO_USE_SSE2NEON)
     #include "sse2neon/sse2neon.h"

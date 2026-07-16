@@ -69,6 +69,8 @@ bool CpuHasSSSE3 = false;
 
 #define CPUID_EBX_AVX2    0x00000020
 #define CPUID_ECX_SSSE3   0x00000200
+#define CPUID_ECX_OSXSAVE 0x08000000
+#define CPUID_ECX_AVX     0x10000000
 
 static void _cpuid(unsigned int cpu_info[4U], const unsigned int cpu_info_type)
 {
@@ -107,6 +109,21 @@ static void _cpuid(unsigned int cpu_info[4U], const unsigned int cpu_info_type)
 #endif
 }
 
+#if defined(LEO_TRY_AVX2)
+static uint64_t ReadXCR0()
+{
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_AMD64) || defined(_M_IX86))
+    return static_cast<uint64_t>(_xgetbv(0));
+#elif defined(__i386__) || defined(__x86_64__)
+    unsigned int eax, edx;
+    __asm__ __volatile__ ("xgetbv" : "=a" (eax), "=d" (edx) : "c" (0));
+    return (static_cast<uint64_t>(edx) << 32) | eax;
+#else
+    return 0;
+#endif
+}
+#endif
+
 #elif defined(LEO_USE_SSE2NEON)
 bool CpuHasSSSE3 = true;
 #endif // defined(LEO_TARGET_MOBILE)
@@ -131,21 +148,44 @@ void InitializeCPUArch()
 
 #if !defined(LEO_TARGET_MOBILE)
     unsigned int cpu_info[4];
+    unsigned int max_basic_leaf = 0;
 
-    _cpuid(cpu_info, 1);
-    CpuHasSSSE3 = ((cpu_info[2] & CPUID_ECX_SSSE3) != 0);
+    _cpuid(cpu_info, 0);
+    max_basic_leaf = cpu_info[0];
 
 #if defined(LEO_TRY_AVX2)
-    _cpuid(cpu_info, 7);
-    CpuHasAVX2 = ((cpu_info[1] & CPUID_EBX_AVX2) != 0);
+    bool ymm_state_enabled = false;
+#endif
+    if (max_basic_leaf >= 1)
+    {
+        _cpuid(cpu_info, 1);
+        CpuHasSSSE3 = ((cpu_info[2] & CPUID_ECX_SSSE3) != 0);
+
+#if defined(LEO_TRY_AVX2)
+        const unsigned int avx_os_mask = CPUID_ECX_AVX | CPUID_ECX_OSXSAVE;
+        if ((cpu_info[2] & avx_os_mask) == avx_os_mask)
+        {
+            // XMM state (bit 1) and YMM state (bit 2) must both be managed by
+            // the OS before any AVX/AVX2 instruction can execute safely.
+            ymm_state_enabled = (ReadXCR0() & 0x6) == 0x6;
+        }
+#endif
+    }
+
+#if defined(LEO_TRY_AVX2)
+    if (ymm_state_enabled && max_basic_leaf >= 7)
+    {
+        _cpuid(cpu_info, 7);
+        CpuHasAVX2 = ((cpu_info[1] & CPUID_EBX_AVX2) != 0);
+    }
 #endif // LEO_TRY_AVX2
 
-#ifndef LEO_USE_SSSE3_OPT
+#if !defined(LEO_USE_SSSE3_OPT) || !defined(LEO_TRY_SSSE3)
     CpuHasSSSE3 = false;
-#endif // LEO_USE_SSSE3_OPT
-#ifndef LEO_USE_AVX2_OPT
+#endif
+#if defined(LEO_TRY_AVX2) && !defined(LEO_USE_AVX2_OPT)
     CpuHasAVX2 = false;
-#endif // LEO_USE_AVX2_OPT
+#endif
 
 #endif // LEO_TARGET_MOBILE
 }

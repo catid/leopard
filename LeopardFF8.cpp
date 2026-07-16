@@ -265,13 +265,14 @@ static LEO_FORCE_INLINE void RefMulAdd(
         bytes -= 64;
 } while (bytes > 0);
 #else
-    uint64_t * LEO_RESTRICT x8 = reinterpret_cast<uint64_t *>(x);
+    uint8_t * LEO_RESTRICT x1 = reinterpret_cast<uint8_t *>(x);
 
     do
     {
         for (unsigned j = 0; j < 8; ++j)
         {
-            uint64_t x_0 = x8[j];
+            uint64_t x_0;
+            memcpy(&x_0, x1 + j * sizeof(x_0), sizeof(x_0));
             x_0 ^= (uint64_t)lut[y1[0]];
             x_0 ^= (uint64_t)lut[y1[1]] << 8;
             x_0 ^= (uint64_t)lut[y1[2]] << 16;
@@ -280,11 +281,11 @@ static LEO_FORCE_INLINE void RefMulAdd(
             x_0 ^= (uint64_t)lut[y1[5]] << 40;
             x_0 ^= (uint64_t)lut[y1[6]] << 48;
             x_0 ^= (uint64_t)lut[y1[7]] << 56;
-            x8[j] = x_0;
+            memcpy(x1 + j * sizeof(x_0), &x_0, sizeof(x_0));
             y1 += 8;
         }
 
-        x8 += 8;
+        x1 += 64;
         bytes -= 64;
     } while (bytes > 0);
 #endif
@@ -312,7 +313,7 @@ static LEO_FORCE_INLINE void RefMul(
         bytes -= 64;
     } while (bytes > 0);
 #else
-    uint64_t * LEO_RESTRICT x8 = reinterpret_cast<uint64_t *>(x);
+    uint8_t * LEO_RESTRICT x1 = reinterpret_cast<uint8_t *>(x);
 
     do
     {
@@ -326,11 +327,11 @@ static LEO_FORCE_INLINE void RefMul(
             x_0 ^= (uint64_t)lut[y1[5]] << 40;
             x_0 ^= (uint64_t)lut[y1[6]] << 48;
             x_0 ^= (uint64_t)lut[y1[7]] << 56;
-            x8[j] = x_0;
+            memcpy(x1 + j * sizeof(x_0), &x_0, sizeof(x_0));
             y1 += 8;
         }
 
-        x8 += 8;
+        x1 += 64;
         bytes -= 64;
     } while (bytes > 0);
 #endif
@@ -445,6 +446,7 @@ static void mul_mem(
     }
 #endif // LEO_TRY_AVX2
 
+#if defined(LEO_TRY_SSSE3)
     if (CpuHasSSSE3)
     {
         const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
@@ -477,6 +479,7 @@ static void mul_mem(
 
         return;
     }
+#endif // LEO_TRY_SSSE3
 
     // Reference version:
     RefMul(x, y, log_m, bytes);
@@ -513,6 +516,7 @@ static void muladd_mem(
     }
 #endif // LEO_TRY_AVX2
 
+#if defined(LEO_TRY_SSSE3)
     if (CpuHasSSSE3)
     {
         const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
@@ -535,6 +539,7 @@ static void muladd_mem(
         } while (bytes > 0);
         return;
     }
+#endif // LEO_TRY_SSSE3
 
     RefMulAdd(x, y, log_m, bytes);
 }
@@ -767,6 +772,7 @@ static void IFFT_DIT2(
     }
 #endif // LEO_TRY_AVX2
 
+#if defined(LEO_TRY_SSSE3)
     if (CpuHasSSSE3)
     {
         const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
@@ -798,6 +804,7 @@ static void IFFT_DIT2(
 
         return;
     }
+#endif // LEO_TRY_SSSE3
 
     // Reference version:
     xor_mem(y, x, bytes);
@@ -874,6 +881,7 @@ static void IFFT_DIT4(
 
 #endif // LEO_TRY_AVX2
 
+#if defined(LEO_TRY_SSSE3)
     if (CpuHasSSSE3)
     {
         const LEO_M128 t01_lo = _mm_loadu_si128(&Multiply128LUT[log_m01].Value[0]);
@@ -927,6 +935,7 @@ static void IFFT_DIT4(
 
         return;
     }
+#endif // LEO_TRY_SSSE3
 
 #endif // LEO_INTERLEAVE_BUTTERFLY4_OPT
 
@@ -999,6 +1008,7 @@ static void IFFT_DIT2_xor(
     }
 #endif // LEO_TRY_AVX2
 
+#if defined(LEO_TRY_SSSE3)
     if (CpuHasSSSE3)
     {
         const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
@@ -1036,6 +1046,7 @@ static void IFFT_DIT2_xor(
 
         return;
     }
+#endif // LEO_TRY_SSSE3
 
     // Reference version:
     xor_mem(y_in, x_in, bytes);
@@ -1126,6 +1137,7 @@ static void IFFT_DIT4_xor(
 
 #endif // LEO_TRY_AVX2
 
+#if defined(LEO_TRY_SSSE3)
     if (CpuHasSSSE3)
     {
         const LEO_M128 t01_lo = _mm_loadu_si128(&Multiply128LUT[log_m01].Value[0]);
@@ -1190,6 +1202,7 @@ static void IFFT_DIT4_xor(
 
         return;
     }
+#endif // LEO_TRY_SSSE3
 
 #endif // LEO_INTERLEAVE_BUTTERFLY4_OPT
 
@@ -1491,6 +1504,7 @@ static void FFT_DIT2(
     }
 #endif // LEO_TRY_AVX2
 
+#if defined(LEO_TRY_SSSE3)
     if (CpuHasSSSE3)
     {
         const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
@@ -1522,6 +1536,7 @@ static void FFT_DIT2(
 
         return;
     }
+#endif // LEO_TRY_SSSE3
 
     // Reference version:
     RefMulAdd(x, y, log_m, bytes);
@@ -1597,6 +1612,7 @@ static void FFT_DIT4(
     }
 #endif // LEO_TRY_AVX2
 
+#if defined(LEO_TRY_SSSE3)
     if (CpuHasSSSE3)
     {
         const LEO_M128 t01_lo = _mm_loadu_si128(&Multiply128LUT[log_m01].Value[0]);
@@ -1651,6 +1667,7 @@ static void FFT_DIT4(
 
         return;
     }
+#endif // LEO_TRY_SSSE3
 
 #endif // LEO_INTERLEAVE_BUTTERFLY4_OPT
 
