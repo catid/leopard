@@ -68,7 +68,7 @@ EXPECTED_CORRECTNESS = {
 }
 ABSOLUTE_PROJECT_PATH = re.compile(
     r"(?<![A-Za-z0-9_.$}{-])(?:[A-Za-z]:[\\/]|/)"
-    r"[^\s\"']*(?:[\\/])(?:"
+    r"(?:[A-Za-z0-9_.+@~-]+[\\/])+(?:"
     r"CMakeLists\.txt|cmake[\\/]leopardConfig\.cmake\.in|"
     r"experiments[\\/]leopard2[\\/]|leopard2?\.cpp|"
     r"Leopard(?:2|Common|FF)[A-Za-z0-9_]*\.(?:cpp|h))")

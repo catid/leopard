@@ -155,6 +155,10 @@ class PortabilityTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_evidence.validate_argv(
                 leaked, 0, "argv", require_token=False)
+        self.assertIsNone(validate_evidence.ABSOLUTE_PROJECT_PATH.search(
+            "/usr/bin/python3;${LEO2_SOURCE_ROOT}/experiments/leopard2/"))
+        self.assertIsNotNone(validate_evidence.ABSOLUTE_PROJECT_PATH.search(
+            "/tmp/foreign-checkout/experiments/leopard2/c7/file.cpp"))
 
     def test_reproducibility_fingerprint_mutation_rejected(self) -> None:
         artifacts = {
