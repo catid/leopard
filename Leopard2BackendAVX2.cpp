@@ -461,6 +461,293 @@ static void AVX2XorMemory(
         *output++ ^= *input++;
 }
 
+static void AVX2XorMemory4(
+    void* destination0, const void* source0,
+    void* destination1, const void* source1,
+    void* destination2, const void* source2,
+    void* destination3, const void* source3,
+    uint64_t byte_count)
+{
+    uint8_t* output0 = static_cast<uint8_t*>(destination0);
+    uint8_t* output1 = static_cast<uint8_t*>(destination1);
+    uint8_t* output2 = static_cast<uint8_t*>(destination2);
+    uint8_t* output3 = static_cast<uint8_t*>(destination3);
+    const uint8_t* input0 = static_cast<const uint8_t*>(source0);
+    const uint8_t* input1 = static_cast<const uint8_t*>(source1);
+    const uint8_t* input2 = static_cast<const uint8_t*>(source2);
+    const uint8_t* input3 = static_cast<const uint8_t*>(source3);
+    while (byte_count >= 32)
+    {
+        const __m256i result0 = _mm256_xor_si256(
+            _mm256_loadu_si256(reinterpret_cast<const __m256i*>(output0)),
+            _mm256_loadu_si256(reinterpret_cast<const __m256i*>(input0)));
+        const __m256i result1 = _mm256_xor_si256(
+            _mm256_loadu_si256(reinterpret_cast<const __m256i*>(output1)),
+            _mm256_loadu_si256(reinterpret_cast<const __m256i*>(input1)));
+        const __m256i result2 = _mm256_xor_si256(
+            _mm256_loadu_si256(reinterpret_cast<const __m256i*>(output2)),
+            _mm256_loadu_si256(reinterpret_cast<const __m256i*>(input2)));
+        const __m256i result3 = _mm256_xor_si256(
+            _mm256_loadu_si256(reinterpret_cast<const __m256i*>(output3)),
+            _mm256_loadu_si256(reinterpret_cast<const __m256i*>(input3)));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(output0), result0);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(output1), result1);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(output2), result2);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(output3), result3);
+        output0 += 32;
+        output1 += 32;
+        output2 += 32;
+        output3 += 32;
+        input0 += 32;
+        input1 += 32;
+        input2 += 32;
+        input3 += 32;
+        byte_count -= 32;
+    }
+    while (byte_count-- != 0)
+    {
+        *output0++ ^= *input0++;
+        *output1++ ^= *input1++;
+        *output2++ ^= *input2++;
+        *output3++ ^= *input3++;
+    }
+}
+
+template<bool Inverse>
+static void AVX2FF8Butterfly4(
+    void* value0_pointer, void* value1_pointer,
+    void* value2_pointer, void* value3_pointer,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 255;
+    uint8_t* value0 = static_cast<uint8_t*>(value0_pointer);
+    uint8_t* value1 = static_cast<uint8_t*>(value1_pointer);
+    uint8_t* value2 = static_cast<uint8_t*>(value2_pointer);
+    uint8_t* value3 = static_cast<uint8_t*>(value3_pointer);
+
+    __m256i low01 = _mm256_setzero_si256();
+    __m256i high01 = _mm256_setzero_si256();
+    __m256i low23 = _mm256_setzero_si256();
+    __m256i high23 = _mm256_setzero_si256();
+    __m256i low02 = _mm256_setzero_si256();
+    __m256i high02 = _mm256_setzero_si256();
+    if (log01 != kZeroSkew)
+    {
+        low01 = BroadcastTable(FF8Tables[log01].low);
+        high01 = BroadcastTable(FF8Tables[log01].high);
+    }
+    if (log23 != kZeroSkew)
+    {
+        low23 = BroadcastTable(FF8Tables[log23].low);
+        high23 = BroadcastTable(FF8Tables[log23].high);
+    }
+    if (log02 != kZeroSkew)
+    {
+        low02 = BroadcastTable(FF8Tables[log02].low);
+        high02 = BroadcastTable(FF8Tables[log02].high);
+    }
+
+    while (byte_count >= 32)
+    {
+        __m256i x0 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(value0));
+        __m256i x1 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(value1));
+        __m256i x2 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(value2));
+        __m256i x3 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(value3));
+        if (Inverse)
+        {
+            x1 = _mm256_xor_si256(x1, x0);
+            if (log01 != kZeroSkew)
+                x0 = _mm256_xor_si256(x0,
+                    AVX2FF8ProductVector(x1, low01, high01));
+            x3 = _mm256_xor_si256(x3, x2);
+            if (log23 != kZeroSkew)
+                x2 = _mm256_xor_si256(x2,
+                    AVX2FF8ProductVector(x3, low23, high23));
+            x2 = _mm256_xor_si256(x2, x0);
+            x3 = _mm256_xor_si256(x3, x1);
+            if (log02 != kZeroSkew)
+            {
+                x0 = _mm256_xor_si256(x0,
+                    AVX2FF8ProductVector(x2, low02, high02));
+                x1 = _mm256_xor_si256(x1,
+                    AVX2FF8ProductVector(x3, low02, high02));
+            }
+        }
+        else
+        {
+            if (log02 != kZeroSkew)
+            {
+                x0 = _mm256_xor_si256(x0,
+                    AVX2FF8ProductVector(x2, low02, high02));
+                x1 = _mm256_xor_si256(x1,
+                    AVX2FF8ProductVector(x3, low02, high02));
+            }
+            x2 = _mm256_xor_si256(x2, x0);
+            x3 = _mm256_xor_si256(x3, x1);
+            if (log01 != kZeroSkew)
+                x0 = _mm256_xor_si256(x0,
+                    AVX2FF8ProductVector(x1, low01, high01));
+            x1 = _mm256_xor_si256(x1, x0);
+            if (log23 != kZeroSkew)
+                x2 = _mm256_xor_si256(x2,
+                    AVX2FF8ProductVector(x3, low23, high23));
+            x3 = _mm256_xor_si256(x3, x2);
+        }
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(value0), x0);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(value1), x1);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(value2), x2);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(value3), x3);
+        value0 += 32;
+        value1 += 32;
+        value2 += 32;
+        value3 += 32;
+        byte_count -= 32;
+    }
+    while (byte_count-- != 0)
+    {
+        uint8_t x0 = *value0;
+        uint8_t x1 = *value1;
+        uint8_t x2 = *value2;
+        uint8_t x3 = *value3;
+        if (Inverse)
+        {
+            x1 ^= x0;
+            if (log01 != kZeroSkew)
+                x0 ^= FF8Product(log01, x1);
+            x3 ^= x2;
+            if (log23 != kZeroSkew)
+                x2 ^= FF8Product(log23, x3);
+            x2 ^= x0;
+            x3 ^= x1;
+            if (log02 != kZeroSkew)
+            {
+                x0 ^= FF8Product(log02, x2);
+                x1 ^= FF8Product(log02, x3);
+            }
+        }
+        else
+        {
+            if (log02 != kZeroSkew)
+            {
+                x0 ^= FF8Product(log02, x2);
+                x1 ^= FF8Product(log02, x3);
+            }
+            x2 ^= x0;
+            x3 ^= x1;
+            if (log01 != kZeroSkew)
+                x0 ^= FF8Product(log01, x1);
+            x1 ^= x0;
+            if (log23 != kZeroSkew)
+                x2 ^= FF8Product(log23, x3);
+            x3 ^= x2;
+        }
+        *value0++ = x0;
+        *value1++ = x1;
+        *value2++ = x2;
+        *value3++ = x3;
+    }
+}
+
+static void AVX2FF8IFFTButterfly4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    AVX2FF8Butterfly4<true>(value0, value1, value2, value3,
+        log01, log23, log02, byte_count);
+}
+
+static void AVX2FF8FFTButterfly4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    AVX2FF8Butterfly4<false>(value0, value1, value2, value3,
+        log01, log23, log02, byte_count);
+}
+
+template<bool Inverse>
+static void AVX2FF16Butterfly4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 65535;
+    if (Inverse)
+    {
+        if (log01 == kZeroSkew)
+            AVX2XorMemory(value1, value0, byte_count);
+        else
+            AVX2FF16Butterfly2<true>(
+                value0, value1, log01, byte_count);
+        if (log23 == kZeroSkew)
+            AVX2XorMemory(value3, value2, byte_count);
+        else
+            AVX2FF16Butterfly2<true>(
+                value2, value3, log23, byte_count);
+        if (log02 == kZeroSkew)
+        {
+            AVX2XorMemory(value2, value0, byte_count);
+            AVX2XorMemory(value3, value1, byte_count);
+        }
+        else
+        {
+            AVX2FF16Butterfly2<true>(
+                value0, value2, log02, byte_count);
+            AVX2FF16Butterfly2<true>(
+                value1, value3, log02, byte_count);
+        }
+    }
+    else
+    {
+        if (log02 == kZeroSkew)
+        {
+            AVX2XorMemory(value2, value0, byte_count);
+            AVX2XorMemory(value3, value1, byte_count);
+        }
+        else
+        {
+            AVX2FF16Butterfly2<false>(
+                value0, value2, log02, byte_count);
+            AVX2FF16Butterfly2<false>(
+                value1, value3, log02, byte_count);
+        }
+        if (log01 == kZeroSkew)
+            AVX2XorMemory(value1, value0, byte_count);
+        else
+            AVX2FF16Butterfly2<false>(
+                value0, value1, log01, byte_count);
+        if (log23 == kZeroSkew)
+            AVX2XorMemory(value3, value2, byte_count);
+        else
+            AVX2FF16Butterfly2<false>(
+                value2, value3, log23, byte_count);
+    }
+}
+
+static void AVX2FF16IFFTButterfly4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    AVX2FF16Butterfly4<true>(value0, value1, value2, value3,
+        log01, log23, log02, byte_count);
+}
+
+static void AVX2FF16FFTButterfly4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    AVX2FF16Butterfly4<false>(value0, value1, value2, value3,
+        log01, log23, log02, byte_count);
+}
+
 static const Ops AVX2Ops = {
     LEO2_BACKEND_AVX2,
     "avx2",
@@ -469,11 +756,16 @@ static const Ops AVX2Ops = {
     AVX2FF16Multiply,
     AVX2FF16MultiplyAdd,
     AVX2XorMemory,
+    AVX2XorMemory4,
     AVX2FF8IFFTButterfly2,
     AVX2FF8FFTButterfly2,
     AVX2FF8IFFTButterfly2Xor,
+    AVX2FF8IFFTButterfly4,
+    AVX2FF8FFTButterfly4,
     AVX2FF16IFFTButterfly2,
-    AVX2FF16FFTButterfly2
+    AVX2FF16FFTButterfly2,
+    AVX2FF16IFFTButterfly4,
+    AVX2FF16FFTButterfly4
 };
 
 const Ops* InitializeAVX2(const InitializeArgs& args)

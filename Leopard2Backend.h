@@ -54,6 +54,22 @@ typedef void (*XorMemory)(
     const void* source,
     uint64_t byte_count);
 
+// Four independent in-place XOR pairs.  Destination ranges must be pairwise
+// disjoint and disjoint from all source ranges.  Read-only source ranges may
+// alias one another, matching the public API's allowed input-input aliasing.
+// Keeping this grouped operation in Ops prevents VectorXOR from silently
+// falling back to the process-default ISA for an explicitly lower context.
+typedef void (*XorMemory4)(
+    void* destination0,
+    const void* source0,
+    void* destination1,
+    const void* source1,
+    void* destination2,
+    const void* source2,
+    void* destination3,
+    const void* source3,
+    uint64_t byte_count);
+
 // In-place two-way LCH butterflies.  x and y must be disjoint shard buffers.
 // The multiplier is in Leopard's legacy logarithm representation.  Transform
 // callers specialize the kModulus zero-skew sentinel before entering these
@@ -75,6 +91,20 @@ typedef void (*IFFTButterfly2Xor)(
     uint16_t multiplier_log,
     uint64_t byte_count);
 
+// In-place fused two-layer LCH butterfly over four disjoint shard buffers.
+// The three multipliers correspond to pairs (0,1), (2,3), and (0,2)/(1,3).
+// UINT8_MAX and UINT16_MAX are the GF8/GF16 zero-skew sentinels respectively;
+// a sentinel suppresses the fixed multiplication but retains the XOR edge.
+typedef void (*Butterfly4)(
+    void* value0,
+    void* value1,
+    void* value2,
+    void* value3,
+    uint16_t multiplier_log01,
+    uint16_t multiplier_log23,
+    uint16_t multiplier_log02,
+    uint64_t byte_count);
+
 // This table is private to the implementation and immutable.  A backend owns
 // any tables referenced by its functions and publishes this object only after
 // initialization and the startup known-answer tests have succeeded.
@@ -87,11 +117,16 @@ struct Ops
     FixedMultiply ff16_multiply;
     FixedMultiply ff16_multiply_add;
     XorMemory xor_memory;
+    XorMemory4 xor_memory4;
     Butterfly2 ff8_ifft_butterfly2;
     Butterfly2 ff8_fft_butterfly2;
     IFFTButterfly2Xor ff8_ifft_butterfly2_xor;
+    Butterfly4 ff8_ifft_butterfly4;
+    Butterfly4 ff8_fft_butterfly4;
     Butterfly2 ff16_ifft_butterfly2;
     Butterfly2 ff16_fft_butterfly2;
+    Butterfly4 ff16_ifft_butterfly4;
+    Butterfly4 ff16_fft_butterfly4;
 };
 
 struct X86Features

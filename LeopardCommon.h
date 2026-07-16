@@ -441,8 +441,15 @@ void xor_mem_2to1(
 
 #ifdef LEO_USE_VECTOR4_OPT
 
-// For i = {0, 1, 2, 3}: x_i[] ^= x_i[]
+// For i = {0, 1, 2, 3}: x_i[] ^= y_i[]
 void xor_mem4(
+    void * LEO_RESTRICT x_0, const void * LEO_RESTRICT y_0,
+    void * LEO_RESTRICT x_1, const void * LEO_RESTRICT y_1,
+    void * LEO_RESTRICT x_2, const void * LEO_RESTRICT y_2,
+    void * LEO_RESTRICT x_3, const void * LEO_RESTRICT y_3,
+    uint64_t bytes);
+void xor_mem4(
+    const backend::Ops& ops,
     void * LEO_RESTRICT x_0, const void * LEO_RESTRICT y_0,
     void * LEO_RESTRICT x_1, const void * LEO_RESTRICT y_1,
     void * LEO_RESTRICT x_2, const void * LEO_RESTRICT y_2,

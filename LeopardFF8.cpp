@@ -300,7 +300,7 @@ static void mul_mem(
     ffe_t log_m, uint64_t bytes)
 {
 #if defined(LEO_TRY_AVX2)
-    if (CpuHasAVX2)
+    if (&ops == &backend::GetDefaultOps() && CpuHasAVX2)
     {
         const LEO_M256 table_lo_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[0]);
         const LEO_M256 table_hi_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[1]);
@@ -333,7 +333,7 @@ static void mul_mem(
 #endif // LEO_TRY_AVX2
 
 #if defined(LEO_TRY_SSSE3)
-    if (CpuHasSSSE3)
+    if (&ops == &backend::GetDefaultOps() && CpuHasSSSE3)
     {
         const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
         const LEO_M128 table_hi_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[1]);
@@ -377,7 +377,7 @@ static void muladd_mem(
     ffe_t log_m, uint64_t bytes)
 {
 #if defined(LEO_TRY_AVX2)
-    if (CpuHasAVX2)
+    if (&ops == &backend::GetDefaultOps() && CpuHasAVX2)
     {
         const LEO_M256 table_lo_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[0]);
         const LEO_M256 table_hi_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[1]);
@@ -403,7 +403,7 @@ static void muladd_mem(
 #endif // LEO_TRY_AVX2
 
 #if defined(LEO_TRY_SSSE3)
-    if (CpuHasSSSE3)
+    if (&ops == &backend::GetDefaultOps() && CpuHasSSSE3)
     {
         const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
         const LEO_M128 table_hi_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[1]);
@@ -687,7 +687,7 @@ static void IFFT_DIT2(
     ffe_t log_m, uint64_t bytes)
 {
 #if defined(LEO_TRY_AVX2)
-    if (CpuHasAVX2)
+    if (&ops == &backend::GetDefaultOps() && CpuHasAVX2)
     {
         const LEO_M256 table_lo_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[0]);
         const LEO_M256 table_hi_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[1]);
@@ -719,7 +719,7 @@ static void IFFT_DIT2(
 #endif // LEO_TRY_AVX2
 
 #if defined(LEO_TRY_SSSE3)
-    if (CpuHasSSSE3)
+    if (&ops == &backend::GetDefaultOps() && CpuHasSSSE3)
     {
         const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
         const LEO_M128 table_hi_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[1]);
@@ -770,7 +770,7 @@ static void IFFT_DIT4(
 
 #if defined(LEO_TRY_AVX2)
 
-    if (CpuHasAVX2)
+    if (&ops == &backend::GetDefaultOps() && CpuHasAVX2)
     {
         const LEO_M256 t01_lo = _mm256_loadu_si256(&Multiply256LUT[log_m01].Value[0]);
         const LEO_M256 t01_hi = _mm256_loadu_si256(&Multiply256LUT[log_m01].Value[1]);
@@ -827,7 +827,7 @@ static void IFFT_DIT4(
 #endif // LEO_TRY_AVX2
 
 #if defined(LEO_TRY_SSSE3)
-    if (CpuHasSSSE3)
+    if (&ops == &backend::GetDefaultOps() && CpuHasSSSE3)
     {
         const LEO_M128 t01_lo = _mm_loadu_si128(&Multiply128LUT[log_m01].Value[0]);
         const LEO_M128 t01_hi = _mm_loadu_si128(&Multiply128LUT[log_m01].Value[1]);
@@ -884,28 +884,9 @@ static void IFFT_DIT4(
 
 #endif // LEO_INTERLEAVE_BUTTERFLY4_OPT
 
-    // First layer:
-    if (log_m01 == kModulus)
-        xor_mem(ops, work[dist], work[0], bytes);
-    else
-        IFFT_DIT2(ops, work[0], work[dist], log_m01, bytes);
-
-    if (log_m23 == kModulus)
-        xor_mem(ops, work[dist * 3], work[dist * 2], bytes);
-    else
-        IFFT_DIT2(ops, work[dist * 2], work[dist * 3], log_m23, bytes);
-
-    // Second layer:
-    if (log_m02 == kModulus)
-    {
-        xor_mem(ops, work[dist * 2], work[0], bytes);
-        xor_mem(ops, work[dist * 3], work[dist], bytes);
-    }
-    else
-    {
-        IFFT_DIT2(ops, work[0], work[dist * 2], log_m02, bytes);
-        IFFT_DIT2(ops, work[dist], work[dist * 3], log_m02, bytes);
-    }
+    ops.ff8_ifft_butterfly4(
+        work[0], work[dist], work[dist * 2], work[dist * 3],
+        log_m01, log_m23, log_m02, bytes);
 }
 
 
@@ -917,7 +898,7 @@ static void IFFT_DIT2_xor(
     const ffe_t log_m, uint64_t bytes)
 {
 #if defined(LEO_TRY_AVX2)
-    if (CpuHasAVX2)
+    if (&ops == &backend::GetDefaultOps() && CpuHasAVX2)
     {
         const LEO_M256 table_lo_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[0]);
         const LEO_M256 table_hi_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[1]);
@@ -955,7 +936,7 @@ static void IFFT_DIT2_xor(
 #endif // LEO_TRY_AVX2
 
 #if defined(LEO_TRY_SSSE3)
-    if (CpuHasSSSE3)
+    if (&ops == &backend::GetDefaultOps() && CpuHasSSSE3)
     {
         const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
         const LEO_M128 table_hi_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[1]);
@@ -1014,7 +995,7 @@ static void IFFT_DIT4_xor(
 
 #if defined(LEO_TRY_AVX2)
 
-    if (CpuHasAVX2)
+    if (&ops == &backend::GetDefaultOps() && CpuHasAVX2)
     {
         const LEO_M256 t01_lo = _mm256_loadu_si256(&Multiply256LUT[log_m01].Value[0]);
         const LEO_M256 t01_hi = _mm256_loadu_si256(&Multiply256LUT[log_m01].Value[1]);
@@ -1082,7 +1063,7 @@ static void IFFT_DIT4_xor(
 #endif // LEO_TRY_AVX2
 
 #if defined(LEO_TRY_SSSE3)
-    if (CpuHasSSSE3)
+    if (&ops == &backend::GetDefaultOps() && CpuHasSSSE3)
     {
         const LEO_M128 t01_lo = _mm_loadu_si128(&Multiply128LUT[log_m01].Value[0]);
         const LEO_M128 t01_hi = _mm_loadu_si128(&Multiply128LUT[log_m01].Value[1]);
@@ -1150,33 +1131,14 @@ static void IFFT_DIT4_xor(
 
 #endif // LEO_INTERLEAVE_BUTTERFLY4_OPT
 
-    // First layer:
-    if (log_m01 == kModulus)
-        xor_mem(ops, work_in[dist], work_in[0], bytes);
-    else
-        IFFT_DIT2(ops, work_in[0], work_in[dist], log_m01, bytes);
-
-    if (log_m23 == kModulus)
-        xor_mem(ops, work_in[dist * 3], work_in[dist * 2], bytes);
-    else
-        IFFT_DIT2(ops, work_in[dist * 2], work_in[dist * 3], log_m23, bytes);
-
-    // Second layer:
-    if (log_m02 == kModulus)
-    {
-        xor_mem(ops, work_in[dist * 2], work_in[0], bytes);
-        xor_mem(ops, work_in[dist * 3], work_in[dist], bytes);
-    }
-    else
-    {
-        IFFT_DIT2(ops, work_in[0], work_in[dist * 2], log_m02, bytes);
-        IFFT_DIT2(ops, work_in[dist], work_in[dist * 3], log_m02, bytes);
-    }
-
-    xor_mem(ops, xor_out[0], work_in[0], bytes);
-    xor_mem(ops, xor_out[dist], work_in[dist], bytes);
-    xor_mem(ops, xor_out[dist * 2], work_in[dist * 2], bytes);
-    xor_mem(ops, xor_out[dist * 3], work_in[dist * 3], bytes);
+    ops.ff8_ifft_butterfly4(
+        work_in[0], work_in[dist], work_in[dist * 2], work_in[dist * 3],
+        log_m01, log_m23, log_m02, bytes);
+    ops.xor_memory4(
+        xor_out[0], work_in[0],
+        xor_out[dist], work_in[dist],
+        xor_out[dist * 2], work_in[dist * 2],
+        xor_out[dist * 3], work_in[dist * 3], bytes);
 }
 
 
@@ -1427,7 +1389,7 @@ static void FFT_DIT2(
     ffe_t log_m, uint64_t bytes)
 {
 #if defined(LEO_TRY_AVX2)
-    if (CpuHasAVX2)
+    if (&ops == &backend::GetDefaultOps() && CpuHasAVX2)
     {
         const LEO_M256 table_lo_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[0]);
         const LEO_M256 table_hi_y = _mm256_loadu_si256(&Multiply256LUT[log_m].Value[1]);
@@ -1459,7 +1421,7 @@ static void FFT_DIT2(
 #endif // LEO_TRY_AVX2
 
 #if defined(LEO_TRY_SSSE3)
-    if (CpuHasSSSE3)
+    if (&ops == &backend::GetDefaultOps() && CpuHasSSSE3)
     {
         const LEO_M128 table_lo_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
         const LEO_M128 table_hi_y = _mm_loadu_si128(&Multiply128LUT[log_m].Value[1]);
@@ -1509,7 +1471,7 @@ static void FFT_DIT4(
 #ifdef LEO_INTERLEAVE_BUTTERFLY4_OPT
 
 #if defined(LEO_TRY_AVX2)
-    if (CpuHasAVX2)
+    if (&ops == &backend::GetDefaultOps() && CpuHasAVX2)
     {
         const LEO_M256 t01_lo = _mm256_loadu_si256(&Multiply256LUT[log_m01].Value[0]);
         const LEO_M256 t01_hi = _mm256_loadu_si256(&Multiply256LUT[log_m01].Value[1]);
@@ -1566,7 +1528,7 @@ static void FFT_DIT4(
 #endif // LEO_TRY_AVX2
 
 #if defined(LEO_TRY_SSSE3)
-    if (CpuHasSSSE3)
+    if (&ops == &backend::GetDefaultOps() && CpuHasSSSE3)
     {
         const LEO_M128 t01_lo = _mm_loadu_si128(&Multiply128LUT[log_m01].Value[0]);
         const LEO_M128 t01_hi = _mm_loadu_si128(&Multiply128LUT[log_m01].Value[1]);
@@ -1624,28 +1586,9 @@ static void FFT_DIT4(
 
 #endif // LEO_INTERLEAVE_BUTTERFLY4_OPT
 
-    // First layer:
-    if (log_m02 == kModulus)
-    {
-        xor_mem(ops, work[dist * 2], work[0], bytes);
-        xor_mem(ops, work[dist * 3], work[dist], bytes);
-    }
-    else
-    {
-        FFT_DIT2(ops, work[0], work[dist * 2], log_m02, bytes);
-        FFT_DIT2(ops, work[dist], work[dist * 3], log_m02, bytes);
-    }
-
-    // Second layer:
-    if (log_m01 == kModulus)
-        xor_mem(ops, work[dist], work[0], bytes);
-    else
-        FFT_DIT2(ops, work[0], work[dist], log_m01, bytes);
-
-    if (log_m23 == kModulus)
-        xor_mem(ops, work[dist * 3], work[dist * 2], bytes);
-    else
-        FFT_DIT2(ops, work[dist * 2], work[dist * 3], log_m23, bytes);
+    ops.ff8_fft_butterfly4(
+        work[0], work[dist], work[dist * 2], work[dist * 3],
+        log_m01, log_m23, log_m02, bytes);
 }
 
 

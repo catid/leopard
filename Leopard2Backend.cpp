@@ -228,6 +228,142 @@ static bool TestFF8Butterflies(const Ops& ops, FF8MultiplyLog reference)
     return true;
 }
 
+template<bool Inverse>
+static void ReferenceFF8Butterfly4(
+    uint8_t* value0,
+    uint8_t* value1,
+    uint8_t* value2,
+    uint8_t* value3,
+    uint16_t log01,
+    uint16_t log23,
+    uint16_t log02,
+    uint64_t byte_count,
+    FF8MultiplyLog reference)
+{
+    static const uint16_t kZeroSkew = 255;
+    if (Inverse)
+    {
+        if (log01 == kZeroSkew)
+            for (uint64_t i = 0; i < byte_count; ++i)
+                value1[i] ^= value0[i];
+        else
+            ReferenceFF8Butterfly2<true>(value0, value1,
+                static_cast<uint8_t>(log01), byte_count, reference);
+        if (log23 == kZeroSkew)
+            for (uint64_t i = 0; i < byte_count; ++i)
+                value3[i] ^= value2[i];
+        else
+            ReferenceFF8Butterfly2<true>(value2, value3,
+                static_cast<uint8_t>(log23), byte_count, reference);
+        if (log02 == kZeroSkew)
+            for (uint64_t i = 0; i < byte_count; ++i)
+            {
+                value2[i] ^= value0[i];
+                value3[i] ^= value1[i];
+            }
+        else
+        {
+            ReferenceFF8Butterfly2<true>(value0, value2,
+                static_cast<uint8_t>(log02), byte_count, reference);
+            ReferenceFF8Butterfly2<true>(value1, value3,
+                static_cast<uint8_t>(log02), byte_count, reference);
+        }
+    }
+    else
+    {
+        if (log02 == kZeroSkew)
+            for (uint64_t i = 0; i < byte_count; ++i)
+            {
+                value2[i] ^= value0[i];
+                value3[i] ^= value1[i];
+            }
+        else
+        {
+            ReferenceFF8Butterfly2<false>(value0, value2,
+                static_cast<uint8_t>(log02), byte_count, reference);
+            ReferenceFF8Butterfly2<false>(value1, value3,
+                static_cast<uint8_t>(log02), byte_count, reference);
+        }
+        if (log01 == kZeroSkew)
+            for (uint64_t i = 0; i < byte_count; ++i)
+                value1[i] ^= value0[i];
+        else
+            ReferenceFF8Butterfly2<false>(value0, value1,
+                static_cast<uint8_t>(log01), byte_count, reference);
+        if (log23 == kZeroSkew)
+            for (uint64_t i = 0; i < byte_count; ++i)
+                value3[i] ^= value2[i];
+        else
+            ReferenceFF8Butterfly2<false>(value2, value3,
+                static_cast<uint8_t>(log23), byte_count, reference);
+    }
+}
+
+static bool TestFF8Butterflies4(const Ops& ops, FF8MultiplyLog reference)
+{
+    static const uint16_t log_sets[][3] = {
+        { 255, 255, 255 },
+        { 0, 0, 0 },
+        { 1, 2, 3 },
+        { 254, 253, 252 },
+        { 255, 0, 1 },
+        { 2, 255, 3 },
+        { 4, 5, 255 },
+        { 255, 255, 7 },
+        { 255, 11, 255 }
+    };
+    static const uint64_t byte_counts[] = {
+        0, 1, 3, 7, 15, 16, 17, 31, 32, 33,
+        63, 64, 65, 127, 128, 129, 257, 521
+    };
+    uint8_t values[4][524];
+    uint8_t expected[4][524];
+    for (size_t set_i = 0;
+         set_i < sizeof(log_sets) / sizeof(log_sets[0]); ++set_i)
+        for (size_t count_i = 0;
+             count_i < sizeof(byte_counts) / sizeof(byte_counts[0]);
+             ++count_i)
+        {
+            const uint64_t bytes = byte_counts[count_i];
+            for (unsigned lane = 0; lane < 4; ++lane)
+                for (size_t i = 0; i < sizeof(values[lane]); ++i)
+                    values[lane][i] = expected[lane][i] =
+                        static_cast<uint8_t>(i * (29U + lane * 12U) +
+                            set_i * 31U + count_i * 7U + lane);
+            ReferenceFF8Butterfly4<true>(
+                expected[0] + 1, expected[1] + 1,
+                expected[2] + 1, expected[3] + 1,
+                log_sets[set_i][0], log_sets[set_i][1],
+                log_sets[set_i][2], bytes, reference);
+            ops.ff8_ifft_butterfly4(
+                values[0] + 1, values[1] + 1,
+                values[2] + 1, values[3] + 1,
+                log_sets[set_i][0], log_sets[set_i][1],
+                log_sets[set_i][2], bytes);
+            if (std::memcmp(values, expected, sizeof(values)) != 0)
+                return false;
+
+            for (unsigned lane = 0; lane < 4; ++lane)
+                for (size_t i = 0; i < sizeof(values[lane]); ++i)
+                    values[lane][i] = expected[lane][i] =
+                        static_cast<uint8_t>(i * (43U + lane * 10U) +
+                            set_i * 17U + count_i * 11U + lane * 3U);
+            ReferenceFF8Butterfly4<false>(
+                expected[0] + 1, expected[1] + 1,
+                expected[2] + 1, expected[3] + 1,
+                log_sets[set_i][0], log_sets[set_i][1],
+                log_sets[set_i][2], bytes, reference);
+            ops.ff8_fft_butterfly4(
+                values[0] + 1, values[1] + 1,
+                values[2] + 1, values[3] + 1,
+                log_sets[set_i][0], log_sets[set_i][1],
+                log_sets[set_i][2], bytes);
+            if (std::memcmp(values, expected, sizeof(values)) != 0)
+                return false;
+        }
+    return true;
+}
+
 static void FillFF16(
     uint8_t* bytes,
     uint64_t byte_count,
@@ -423,6 +559,151 @@ static bool TestFF16Butterflies(const Ops& ops, FF16MultiplyLog reference)
     return true;
 }
 
+template<bool Inverse>
+static void ReferenceFF16Butterfly4(
+    uint8_t* value0,
+    uint8_t* value1,
+    uint8_t* value2,
+    uint8_t* value3,
+    uint16_t log01,
+    uint16_t log23,
+    uint16_t log02,
+    uint64_t byte_count,
+    FF16MultiplyLog reference)
+{
+    static const uint16_t kZeroSkew = 65535;
+    if (Inverse)
+    {
+        if (log01 == kZeroSkew)
+            for (uint64_t i = 0; i < byte_count; ++i)
+                value1[i] ^= value0[i];
+        else
+            ReferenceFF16Butterfly2<true>(
+                value0, value1, log01, byte_count, reference);
+        if (log23 == kZeroSkew)
+            for (uint64_t i = 0; i < byte_count; ++i)
+                value3[i] ^= value2[i];
+        else
+            ReferenceFF16Butterfly2<true>(
+                value2, value3, log23, byte_count, reference);
+        if (log02 == kZeroSkew)
+            for (uint64_t i = 0; i < byte_count; ++i)
+            {
+                value2[i] ^= value0[i];
+                value3[i] ^= value1[i];
+            }
+        else
+        {
+            ReferenceFF16Butterfly2<true>(
+                value0, value2, log02, byte_count, reference);
+            ReferenceFF16Butterfly2<true>(
+                value1, value3, log02, byte_count, reference);
+        }
+    }
+    else
+    {
+        if (log02 == kZeroSkew)
+            for (uint64_t i = 0; i < byte_count; ++i)
+            {
+                value2[i] ^= value0[i];
+                value3[i] ^= value1[i];
+            }
+        else
+        {
+            ReferenceFF16Butterfly2<false>(
+                value0, value2, log02, byte_count, reference);
+            ReferenceFF16Butterfly2<false>(
+                value1, value3, log02, byte_count, reference);
+        }
+        if (log01 == kZeroSkew)
+            for (uint64_t i = 0; i < byte_count; ++i)
+                value1[i] ^= value0[i];
+        else
+            ReferenceFF16Butterfly2<false>(
+                value0, value1, log01, byte_count, reference);
+        if (log23 == kZeroSkew)
+            for (uint64_t i = 0; i < byte_count; ++i)
+                value3[i] ^= value2[i];
+        else
+            ReferenceFF16Butterfly2<false>(
+                value2, value3, log23, byte_count, reference);
+    }
+}
+
+static bool TestFF16Butterflies4(const Ops& ops, FF16MultiplyLog reference)
+{
+    static const uint16_t log_sets[][3] = {
+        { 65535, 65535, 65535 },
+        { 0, 0, 0 },
+        { 1, 256, 4095 },
+        { 65534, 32767, 255 },
+        { 65535, 0, 1 },
+        { 2, 65535, 3 },
+        { 4, 5, 65535 },
+        { 65535, 65535, 32767 },
+        { 65535, 16, 65535 }
+    };
+    static const uint64_t byte_counts[] = {
+        0, 2, 6, 30, 62, 64, 66, 94, 126, 128, 130, 194
+    };
+    uint8_t values[4][198];
+    uint8_t expected[4][198];
+    for (size_t set_i = 0;
+         set_i < sizeof(log_sets) / sizeof(log_sets[0]); ++set_i)
+        for (size_t count_i = 0;
+             count_i < sizeof(byte_counts) / sizeof(byte_counts[0]);
+             ++count_i)
+        {
+            const uint64_t bytes = byte_counts[count_i];
+            for (unsigned lane = 0; lane < 4; ++lane)
+            {
+                std::memset(values[lane], 0xa5U + lane,
+                    sizeof(values[lane]));
+                FillFF16(values[lane] + 1, bytes,
+                    static_cast<uint32_t>(
+                        set_i * 101U + count_i * 17U + lane * 7U));
+                std::memcpy(expected[lane], values[lane],
+                    sizeof(values[lane]));
+            }
+            ReferenceFF16Butterfly4<true>(
+                expected[0] + 1, expected[1] + 1,
+                expected[2] + 1, expected[3] + 1,
+                log_sets[set_i][0], log_sets[set_i][1],
+                log_sets[set_i][2], bytes, reference);
+            ops.ff16_ifft_butterfly4(
+                values[0] + 1, values[1] + 1,
+                values[2] + 1, values[3] + 1,
+                log_sets[set_i][0], log_sets[set_i][1],
+                log_sets[set_i][2], bytes);
+            if (std::memcmp(values, expected, sizeof(values)) != 0)
+                return false;
+
+            for (unsigned lane = 0; lane < 4; ++lane)
+            {
+                std::memset(values[lane], 0x3cU + lane,
+                    sizeof(values[lane]));
+                FillFF16(values[lane] + 1, bytes,
+                    static_cast<uint32_t>(
+                        set_i * 149U + count_i * 29U + lane * 11U));
+                std::memcpy(expected[lane], values[lane],
+                    sizeof(values[lane]));
+            }
+            ReferenceFF16Butterfly4<false>(
+                expected[0] + 1, expected[1] + 1,
+                expected[2] + 1, expected[3] + 1,
+                log_sets[set_i][0], log_sets[set_i][1],
+                log_sets[set_i][2], bytes, reference);
+            ops.ff16_fft_butterfly4(
+                values[0] + 1, values[1] + 1,
+                values[2] + 1, values[3] + 1,
+                log_sets[set_i][0], log_sets[set_i][1],
+                log_sets[set_i][2], bytes);
+            if (std::memcmp(values, expected, sizeof(values)) != 0)
+                return false;
+        }
+    return true;
+}
+
 static bool TestXor(const Ops& ops)
 {
     static const uint64_t byte_counts[] = {
@@ -432,8 +713,16 @@ static bool TestXor(const Ops& ops)
     uint8_t source[260];
     uint8_t output[260];
     uint8_t expected[260];
+    uint8_t sources4[3][260];
+    uint8_t outputs4[4][260];
+    uint8_t expected4[4][260];
     for (size_t i = 0; i < sizeof(source); ++i)
+    {
         source[i] = static_cast<uint8_t>((i * 101U + 7U) & 255U);
+        for (unsigned source_i = 0; source_i < 3; ++source_i)
+            sources4[source_i][i] = static_cast<uint8_t>(
+                i * (37U + source_i * 18U) + source_i * 53U + 11U);
+    }
     for (size_t count_i = 0;
          count_i < sizeof(byte_counts) / sizeof(byte_counts[0]);
          ++count_i)
@@ -447,6 +736,27 @@ static bool TestXor(const Ops& ops)
         ops.xor_memory(output + 1, source + 1, bytes);
         if (std::memcmp(output, expected, sizeof(output)) != 0)
             return false;
+
+        for (unsigned pair = 0; pair < 4; ++pair)
+            for (size_t i = 0; i < sizeof(outputs4[pair]); ++i)
+                outputs4[pair][i] = expected4[pair][i] =
+                    static_cast<uint8_t>(
+                        i * (29U + pair * 6U) + count_i * 7U + pair);
+        // Pair 2 deliberately shares pair 0's read-only input.  Public shard
+        // inputs may alias each other even though every destination is
+        // disjoint from every source and other destination.
+        const unsigned source_indices[4] = { 0, 1, 0, 2 };
+        for (unsigned pair = 0; pair < 4; ++pair)
+            for (uint64_t i = 0; i < bytes; ++i)
+                expected4[pair][i + 1] ^=
+                    sources4[source_indices[pair]][i + 1];
+        ops.xor_memory4(
+            outputs4[0] + 1, sources4[0] + 1,
+            outputs4[1] + 1, sources4[1] + 1,
+            outputs4[2] + 1, sources4[0] + 1,
+            outputs4[3] + 1, sources4[2] + 1, bytes);
+        if (std::memcmp(outputs4, expected4, sizeof(outputs4)) != 0)
+            return false;
     }
     return true;
 }
@@ -455,13 +765,18 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
 {
     return ops.name && ops.ff8_multiply && ops.ff8_multiply_add &&
         ops.ff16_multiply && ops.ff16_multiply_add && ops.xor_memory &&
+        ops.xor_memory4 &&
         ops.ff8_ifft_butterfly2 && ops.ff8_fft_butterfly2 &&
-        ops.ff8_ifft_butterfly2_xor && ops.ff16_ifft_butterfly2 &&
-        ops.ff16_fft_butterfly2 &&
+        ops.ff8_ifft_butterfly2_xor && ops.ff8_ifft_butterfly4 &&
+        ops.ff8_fft_butterfly4 && ops.ff16_ifft_butterfly2 &&
+        ops.ff16_fft_butterfly2 && ops.ff16_ifft_butterfly4 &&
+        ops.ff16_fft_butterfly4 &&
         TestFF8(ops, args.ff8_multiply_log) &&
         TestFF8Butterflies(ops, args.ff8_multiply_log) &&
+        TestFF8Butterflies4(ops, args.ff8_multiply_log) &&
         TestFF16(ops, args.ff16_multiply_log) &&
-        TestFF16Butterflies(ops, args.ff16_multiply_log) && TestXor(ops);
+        TestFF16Butterflies(ops, args.ff16_multiply_log) &&
+        TestFF16Butterflies4(ops, args.ff16_multiply_log) && TestXor(ops);
 }
 
 static std::mutex& GetQualificationMutex()

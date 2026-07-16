@@ -117,6 +117,9 @@ struct TraceState
     std::atomic<uint64_t> ff8_calls;
     std::atomic<uint64_t> ff16_calls;
     std::atomic<uint64_t> xor_calls;
+    std::atomic<uint64_t> ff8_four_calls;
+    std::atomic<uint64_t> ff16_four_calls;
+    std::atomic<uint64_t> xor_four_calls;
 };
 
 TraceState g_trace;
@@ -164,6 +167,19 @@ void trace_xor(void* destination, const void* source, uint64_t bytes)
     trace_delegate()->xor_memory(destination, source, bytes);
 }
 
+void trace_xor4(
+    void* destination0, const void* source0,
+    void* destination1, const void* source1,
+    void* destination2, const void* source2,
+    void* destination3, const void* source3,
+    uint64_t bytes)
+{
+    g_trace.xor_four_calls.fetch_add(1, std::memory_order_relaxed);
+    trace_delegate()->xor_memory4(
+        destination0, source0, destination1, source1,
+        destination2, source2, destination3, source3, bytes);
+}
+
 void trace_ff8_ifft(void* x, void* y, uint16_t log, uint64_t bytes)
 {
     g_trace.ff8_calls.fetch_add(1, std::memory_order_relaxed);
@@ -196,6 +212,50 @@ void trace_ff16_fft(void* x, void* y, uint16_t log, uint64_t bytes)
     trace_delegate()->ff16_fft_butterfly2(x, y, log, bytes);
 }
 
+void trace_ff8_ifft4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02, uint64_t bytes)
+{
+    g_trace.ff8_calls.fetch_add(1, std::memory_order_relaxed);
+    g_trace.ff8_four_calls.fetch_add(1, std::memory_order_relaxed);
+    trace_delegate()->ff8_ifft_butterfly4(
+        value0, value1, value2, value3,
+        log01, log23, log02, bytes);
+}
+
+void trace_ff8_fft4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02, uint64_t bytes)
+{
+    g_trace.ff8_calls.fetch_add(1, std::memory_order_relaxed);
+    g_trace.ff8_four_calls.fetch_add(1, std::memory_order_relaxed);
+    trace_delegate()->ff8_fft_butterfly4(
+        value0, value1, value2, value3,
+        log01, log23, log02, bytes);
+}
+
+void trace_ff16_ifft4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02, uint64_t bytes)
+{
+    g_trace.ff16_calls.fetch_add(1, std::memory_order_relaxed);
+    g_trace.ff16_four_calls.fetch_add(1, std::memory_order_relaxed);
+    trace_delegate()->ff16_ifft_butterfly4(
+        value0, value1, value2, value3,
+        log01, log23, log02, bytes);
+}
+
+void trace_ff16_fft4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02, uint64_t bytes)
+{
+    g_trace.ff16_calls.fetch_add(1, std::memory_order_relaxed);
+    g_trace.ff16_four_calls.fetch_add(1, std::memory_order_relaxed);
+    trace_delegate()->ff16_fft_butterfly4(
+        value0, value1, value2, value3,
+        log01, log23, log02, bytes);
+}
+
 class TraceOpsGuard
 {
 public:
@@ -207,11 +267,16 @@ public:
         tracing_.ff16_multiply = trace_ff16_multiply;
         tracing_.ff16_multiply_add = trace_ff16_multiply_add;
         tracing_.xor_memory = trace_xor;
+        tracing_.xor_memory4 = trace_xor4;
         tracing_.ff8_ifft_butterfly2 = trace_ff8_ifft;
         tracing_.ff8_fft_butterfly2 = trace_ff8_fft;
         tracing_.ff8_ifft_butterfly2_xor = trace_ff8_ifft_xor;
+        tracing_.ff8_ifft_butterfly4 = trace_ff8_ifft4;
+        tracing_.ff8_fft_butterfly4 = trace_ff8_fft4;
         tracing_.ff16_ifft_butterfly2 = trace_ff16_ifft;
         tracing_.ff16_fft_butterfly2 = trace_ff16_fft;
+        tracing_.ff16_ifft_butterfly4 = trace_ff16_ifft4;
+        tracing_.ff16_fft_butterfly4 = trace_ff16_fft4;
         g_trace.delegate.store(entry.table, std::memory_order_release);
         reset();
         leopard::backend::TestSetContextOps(entry.context, &tracing_);
@@ -228,6 +293,9 @@ public:
         g_trace.ff8_calls.store(0, std::memory_order_relaxed);
         g_trace.ff16_calls.store(0, std::memory_order_relaxed);
         g_trace.xor_calls.store(0, std::memory_order_relaxed);
+        g_trace.ff8_four_calls.store(0, std::memory_order_relaxed);
+        g_trace.ff16_four_calls.store(0, std::memory_order_relaxed);
+        g_trace.xor_four_calls.store(0, std::memory_order_relaxed);
     }
 
     uint64_t ff8_calls() const
@@ -241,6 +309,18 @@ public:
     uint64_t xor_calls() const
     {
         return g_trace.xor_calls.load(std::memory_order_relaxed);
+    }
+    uint64_t ff8_four_calls() const
+    {
+        return g_trace.ff8_four_calls.load(std::memory_order_relaxed);
+    }
+    uint64_t ff16_four_calls() const
+    {
+        return g_trace.ff16_four_calls.load(std::memory_order_relaxed);
+    }
+    uint64_t xor_four_calls() const
+    {
+        return g_trace.xor_four_calls.load(std::memory_order_relaxed);
     }
 
 private:
@@ -574,20 +654,38 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
             const Shards recovery = encode_case(contexts[context_i].context,
                 test_case, originals, &codec);
             if (test_case.field == LEO2_FIELD_GF8)
+            {
                 require(trace.ff8_calls() != 0,
                     "GF8 encode bypassed the context ops table");
+                require(trace.ff8_four_calls() != 0,
+                    "GF8 encode bypassed the context radix-four table");
+            }
             else
+            {
                 require(trace.ff16_calls() != 0,
                     "GF16 encode bypassed the context ops table");
+                require(trace.ff16_four_calls() != 0,
+                    "GF16 encode bypassed the context radix-four table");
+            }
 
             trace.reset();
             decode_case(codec, test_case, originals, recovery);
             if (test_case.field == LEO2_FIELD_GF8)
+            {
                 require(trace.ff8_calls() != 0,
                     "GF8 decode bypassed the context ops table");
+                require(trace.ff8_four_calls() != 0,
+                    "GF8 decode bypassed the context radix-four table");
+            }
             else
+            {
                 require(trace.ff16_calls() != 0,
                     "GF16 decode bypassed the context ops table");
+                require(trace.ff16_four_calls() != 0,
+                    "GF16 decode bypassed the context radix-four table");
+            }
+            require(trace.xor_four_calls() != 0,
+                "decode bypassed the context grouped-XOR table");
             leo2_codec_destroy(codec);
         }
 
@@ -612,6 +710,10 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
             generic_recovery);
         require(trace.ff8_calls() != 0,
             "generic decode bypassed the context ops table");
+        require(trace.ff8_four_calls() != 0,
+            "generic decode bypassed the context radix-four table");
+        require(trace.xor_four_calls() != 0,
+            "generic decode bypassed the context grouped-XOR table");
         leo2_codec_destroy(generic_codec);
 
         const leo2_field direct_fields[] = {

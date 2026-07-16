@@ -481,6 +481,299 @@ static void SSSE3XorMemory(
         *output++ ^= *input++;
 }
 
+static void SSSE3XorMemory4(
+    void* destination0, const void* source0,
+    void* destination1, const void* source1,
+    void* destination2, const void* source2,
+    void* destination3, const void* source3,
+    uint64_t byte_count)
+{
+    uint8_t* output0 = static_cast<uint8_t*>(destination0);
+    uint8_t* output1 = static_cast<uint8_t*>(destination1);
+    uint8_t* output2 = static_cast<uint8_t*>(destination2);
+    uint8_t* output3 = static_cast<uint8_t*>(destination3);
+    const uint8_t* input0 = static_cast<const uint8_t*>(source0);
+    const uint8_t* input1 = static_cast<const uint8_t*>(source1);
+    const uint8_t* input2 = static_cast<const uint8_t*>(source2);
+    const uint8_t* input3 = static_cast<const uint8_t*>(source3);
+    while (byte_count >= 16)
+    {
+        const __m128i result0 = _mm_xor_si128(
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(output0)),
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(input0)));
+        const __m128i result1 = _mm_xor_si128(
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(output1)),
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(input1)));
+        const __m128i result2 = _mm_xor_si128(
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(output2)),
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(input2)));
+        const __m128i result3 = _mm_xor_si128(
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(output3)),
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(input3)));
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(output0), result0);
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(output1), result1);
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(output2), result2);
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(output3), result3);
+        output0 += 16;
+        output1 += 16;
+        output2 += 16;
+        output3 += 16;
+        input0 += 16;
+        input1 += 16;
+        input2 += 16;
+        input3 += 16;
+        byte_count -= 16;
+    }
+    while (byte_count-- != 0)
+    {
+        *output0++ ^= *input0++;
+        *output1++ ^= *input1++;
+        *output2++ ^= *input2++;
+        *output3++ ^= *input3++;
+    }
+}
+
+template<bool Inverse>
+static void SSSE3FF8Butterfly4(
+    void* value0_pointer, void* value1_pointer,
+    void* value2_pointer, void* value3_pointer,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 255;
+    uint8_t* value0 = static_cast<uint8_t*>(value0_pointer);
+    uint8_t* value1 = static_cast<uint8_t*>(value1_pointer);
+    uint8_t* value2 = static_cast<uint8_t*>(value2_pointer);
+    uint8_t* value3 = static_cast<uint8_t*>(value3_pointer);
+
+    __m128i low01 = _mm_setzero_si128();
+    __m128i high01 = _mm_setzero_si128();
+    __m128i low23 = _mm_setzero_si128();
+    __m128i high23 = _mm_setzero_si128();
+    __m128i low02 = _mm_setzero_si128();
+    __m128i high02 = _mm_setzero_si128();
+    if (log01 != kZeroSkew)
+    {
+        low01 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(
+            FF8Tables[log01].low));
+        high01 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(
+            FF8Tables[log01].high));
+    }
+    if (log23 != kZeroSkew)
+    {
+        low23 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(
+            FF8Tables[log23].low));
+        high23 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(
+            FF8Tables[log23].high));
+    }
+    if (log02 != kZeroSkew)
+    {
+        low02 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(
+            FF8Tables[log02].low));
+        high02 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(
+            FF8Tables[log02].high));
+    }
+
+    while (byte_count >= 16)
+    {
+        __m128i x0 = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(value0));
+        __m128i x1 = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(value1));
+        __m128i x2 = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(value2));
+        __m128i x3 = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(value3));
+        if (Inverse)
+        {
+            x1 = _mm_xor_si128(x1, x0);
+            if (log01 != kZeroSkew)
+                x0 = _mm_xor_si128(x0,
+                    SSSE3FF8ProductVector(x1, low01, high01));
+            x3 = _mm_xor_si128(x3, x2);
+            if (log23 != kZeroSkew)
+                x2 = _mm_xor_si128(x2,
+                    SSSE3FF8ProductVector(x3, low23, high23));
+            x2 = _mm_xor_si128(x2, x0);
+            x3 = _mm_xor_si128(x3, x1);
+            if (log02 != kZeroSkew)
+            {
+                x0 = _mm_xor_si128(x0,
+                    SSSE3FF8ProductVector(x2, low02, high02));
+                x1 = _mm_xor_si128(x1,
+                    SSSE3FF8ProductVector(x3, low02, high02));
+            }
+        }
+        else
+        {
+            if (log02 != kZeroSkew)
+            {
+                x0 = _mm_xor_si128(x0,
+                    SSSE3FF8ProductVector(x2, low02, high02));
+                x1 = _mm_xor_si128(x1,
+                    SSSE3FF8ProductVector(x3, low02, high02));
+            }
+            x2 = _mm_xor_si128(x2, x0);
+            x3 = _mm_xor_si128(x3, x1);
+            if (log01 != kZeroSkew)
+                x0 = _mm_xor_si128(x0,
+                    SSSE3FF8ProductVector(x1, low01, high01));
+            x1 = _mm_xor_si128(x1, x0);
+            if (log23 != kZeroSkew)
+                x2 = _mm_xor_si128(x2,
+                    SSSE3FF8ProductVector(x3, low23, high23));
+            x3 = _mm_xor_si128(x3, x2);
+        }
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(value0), x0);
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(value1), x1);
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(value2), x2);
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(value3), x3);
+        value0 += 16;
+        value1 += 16;
+        value2 += 16;
+        value3 += 16;
+        byte_count -= 16;
+    }
+    while (byte_count-- != 0)
+    {
+        uint8_t x0 = *value0;
+        uint8_t x1 = *value1;
+        uint8_t x2 = *value2;
+        uint8_t x3 = *value3;
+        if (Inverse)
+        {
+            x1 ^= x0;
+            if (log01 != kZeroSkew)
+                x0 ^= FF8Product(log01, x1);
+            x3 ^= x2;
+            if (log23 != kZeroSkew)
+                x2 ^= FF8Product(log23, x3);
+            x2 ^= x0;
+            x3 ^= x1;
+            if (log02 != kZeroSkew)
+            {
+                x0 ^= FF8Product(log02, x2);
+                x1 ^= FF8Product(log02, x3);
+            }
+        }
+        else
+        {
+            if (log02 != kZeroSkew)
+            {
+                x0 ^= FF8Product(log02, x2);
+                x1 ^= FF8Product(log02, x3);
+            }
+            x2 ^= x0;
+            x3 ^= x1;
+            if (log01 != kZeroSkew)
+                x0 ^= FF8Product(log01, x1);
+            x1 ^= x0;
+            if (log23 != kZeroSkew)
+                x2 ^= FF8Product(log23, x3);
+            x3 ^= x2;
+        }
+        *value0++ = x0;
+        *value1++ = x1;
+        *value2++ = x2;
+        *value3++ = x3;
+    }
+}
+
+static void SSSE3FF8IFFTButterfly4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    SSSE3FF8Butterfly4<true>(value0, value1, value2, value3,
+        log01, log23, log02, byte_count);
+}
+
+static void SSSE3FF8FFTButterfly4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    SSSE3FF8Butterfly4<false>(value0, value1, value2, value3,
+        log01, log23, log02, byte_count);
+}
+
+template<bool Inverse>
+static void SSSE3FF16Butterfly4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 65535;
+    if (Inverse)
+    {
+        if (log01 == kZeroSkew)
+            SSSE3XorMemory(value1, value0, byte_count);
+        else
+            SSSE3FF16Butterfly2<true>(
+                value0, value1, log01, byte_count);
+        if (log23 == kZeroSkew)
+            SSSE3XorMemory(value3, value2, byte_count);
+        else
+            SSSE3FF16Butterfly2<true>(
+                value2, value3, log23, byte_count);
+        if (log02 == kZeroSkew)
+        {
+            SSSE3XorMemory(value2, value0, byte_count);
+            SSSE3XorMemory(value3, value1, byte_count);
+        }
+        else
+        {
+            SSSE3FF16Butterfly2<true>(
+                value0, value2, log02, byte_count);
+            SSSE3FF16Butterfly2<true>(
+                value1, value3, log02, byte_count);
+        }
+    }
+    else
+    {
+        if (log02 == kZeroSkew)
+        {
+            SSSE3XorMemory(value2, value0, byte_count);
+            SSSE3XorMemory(value3, value1, byte_count);
+        }
+        else
+        {
+            SSSE3FF16Butterfly2<false>(
+                value0, value2, log02, byte_count);
+            SSSE3FF16Butterfly2<false>(
+                value1, value3, log02, byte_count);
+        }
+        if (log01 == kZeroSkew)
+            SSSE3XorMemory(value1, value0, byte_count);
+        else
+            SSSE3FF16Butterfly2<false>(
+                value0, value1, log01, byte_count);
+        if (log23 == kZeroSkew)
+            SSSE3XorMemory(value3, value2, byte_count);
+        else
+            SSSE3FF16Butterfly2<false>(
+                value2, value3, log23, byte_count);
+    }
+}
+
+static void SSSE3FF16IFFTButterfly4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    SSSE3FF16Butterfly4<true>(value0, value1, value2, value3,
+        log01, log23, log02, byte_count);
+}
+
+static void SSSE3FF16FFTButterfly4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    SSSE3FF16Butterfly4<false>(value0, value1, value2, value3,
+        log01, log23, log02, byte_count);
+}
+
 static const Ops SSSE3Ops = {
     LEO2_BACKEND_SSSE3,
     "ssse3",
@@ -489,11 +782,16 @@ static const Ops SSSE3Ops = {
     SSSE3FF16Multiply,
     SSSE3FF16MultiplyAdd,
     SSSE3XorMemory,
+    SSSE3XorMemory4,
     SSSE3FF8IFFTButterfly2,
     SSSE3FF8FFTButterfly2,
     SSSE3FF8IFFTButterfly2Xor,
+    SSSE3FF8IFFTButterfly4,
+    SSSE3FF8FFTButterfly4,
     SSSE3FF16IFFTButterfly2,
-    SSSE3FF16FFTButterfly2
+    SSSE3FF16FFTButterfly2,
+    SSSE3FF16IFFTButterfly4,
+    SSSE3FF16FFTButterfly4
 };
 
 const Ops* InitializeSSSE3(const InitializeArgs& args)

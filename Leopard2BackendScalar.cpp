@@ -366,6 +366,173 @@ static void ScalarXorMemory(
     leopard::xor_mem_baseline(destination, source, byte_count);
 }
 
+static void ScalarXorMemory4(
+    void* destination0, const void* source0,
+    void* destination1, const void* source1,
+    void* destination2, const void* source2,
+    void* destination3, const void* source3,
+    uint64_t byte_count)
+{
+    ScalarXorMemory(destination0, source0, byte_count);
+    ScalarXorMemory(destination1, source1, byte_count);
+    ScalarXorMemory(destination2, source2, byte_count);
+    ScalarXorMemory(destination3, source3, byte_count);
+}
+
+template<bool Inverse>
+static void ScalarFF8Butterfly4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 255;
+    if (Inverse)
+    {
+        if (log01 == kZeroSkew)
+            ScalarXorMemory(value1, value0, byte_count);
+        else
+            ScalarFF8Butterfly2<true>(
+                value0, value1, log01, byte_count);
+        if (log23 == kZeroSkew)
+            ScalarXorMemory(value3, value2, byte_count);
+        else
+            ScalarFF8Butterfly2<true>(
+                value2, value3, log23, byte_count);
+        if (log02 == kZeroSkew)
+        {
+            ScalarXorMemory(value2, value0, byte_count);
+            ScalarXorMemory(value3, value1, byte_count);
+        }
+        else
+        {
+            ScalarFF8Butterfly2<true>(
+                value0, value2, log02, byte_count);
+            ScalarFF8Butterfly2<true>(
+                value1, value3, log02, byte_count);
+        }
+    }
+    else
+    {
+        if (log02 == kZeroSkew)
+        {
+            ScalarXorMemory(value2, value0, byte_count);
+            ScalarXorMemory(value3, value1, byte_count);
+        }
+        else
+        {
+            ScalarFF8Butterfly2<false>(
+                value0, value2, log02, byte_count);
+            ScalarFF8Butterfly2<false>(
+                value1, value3, log02, byte_count);
+        }
+        if (log01 == kZeroSkew)
+            ScalarXorMemory(value1, value0, byte_count);
+        else
+            ScalarFF8Butterfly2<false>(
+                value0, value1, log01, byte_count);
+        if (log23 == kZeroSkew)
+            ScalarXorMemory(value3, value2, byte_count);
+        else
+            ScalarFF8Butterfly2<false>(
+                value2, value3, log23, byte_count);
+    }
+}
+
+static void ScalarFF8IFFTButterfly4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    ScalarFF8Butterfly4<true>(value0, value1, value2, value3,
+        log01, log23, log02, byte_count);
+}
+
+static void ScalarFF8FFTButterfly4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    ScalarFF8Butterfly4<false>(value0, value1, value2, value3,
+        log01, log23, log02, byte_count);
+}
+
+template<bool Inverse>
+static void ScalarFF16Butterfly4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 65535;
+    if (Inverse)
+    {
+        if (log01 == kZeroSkew)
+            ScalarXorMemory(value1, value0, byte_count);
+        else
+            ScalarFF16Butterfly2<true>(
+                value0, value1, log01, byte_count);
+        if (log23 == kZeroSkew)
+            ScalarXorMemory(value3, value2, byte_count);
+        else
+            ScalarFF16Butterfly2<true>(
+                value2, value3, log23, byte_count);
+        if (log02 == kZeroSkew)
+        {
+            ScalarXorMemory(value2, value0, byte_count);
+            ScalarXorMemory(value3, value1, byte_count);
+        }
+        else
+        {
+            ScalarFF16Butterfly2<true>(
+                value0, value2, log02, byte_count);
+            ScalarFF16Butterfly2<true>(
+                value1, value3, log02, byte_count);
+        }
+    }
+    else
+    {
+        if (log02 == kZeroSkew)
+        {
+            ScalarXorMemory(value2, value0, byte_count);
+            ScalarXorMemory(value3, value1, byte_count);
+        }
+        else
+        {
+            ScalarFF16Butterfly2<false>(
+                value0, value2, log02, byte_count);
+            ScalarFF16Butterfly2<false>(
+                value1, value3, log02, byte_count);
+        }
+        if (log01 == kZeroSkew)
+            ScalarXorMemory(value1, value0, byte_count);
+        else
+            ScalarFF16Butterfly2<false>(
+                value0, value1, log01, byte_count);
+        if (log23 == kZeroSkew)
+            ScalarXorMemory(value3, value2, byte_count);
+        else
+            ScalarFF16Butterfly2<false>(
+                value2, value3, log23, byte_count);
+    }
+}
+
+static void ScalarFF16IFFTButterfly4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    ScalarFF16Butterfly4<true>(value0, value1, value2, value3,
+        log01, log23, log02, byte_count);
+}
+
+static void ScalarFF16FFTButterfly4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    ScalarFF16Butterfly4<false>(value0, value1, value2, value3,
+        log01, log23, log02, byte_count);
+}
+
 static const Ops ScalarOps = {
     LEO2_BACKEND_SCALAR,
     "scalar",
@@ -374,11 +541,16 @@ static const Ops ScalarOps = {
     ScalarFF16Multiply,
     ScalarFF16MultiplyAdd,
     ScalarXorMemory,
+    ScalarXorMemory4,
     ScalarFF8IFFTButterfly2,
     ScalarFF8FFTButterfly2,
     ScalarFF8IFFTButterfly2Xor,
+    ScalarFF8IFFTButterfly4,
+    ScalarFF8FFTButterfly4,
     ScalarFF16IFFTButterfly2,
-    ScalarFF16FFTButterfly2
+    ScalarFF16FFTButterfly2,
+    ScalarFF16IFFTButterfly4,
+    ScalarFF16FFTButterfly4
 };
 
 const Ops* InitializeScalar(const InitializeArgs& args)
