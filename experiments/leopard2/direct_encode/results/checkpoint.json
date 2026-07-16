@@ -1,0 +1,442 @@
+{
+  "schema": "leopard2-direct-encode-evidence-checkpoint/v2",
+  "scope": "Bounded direct systematic encoder crossover and production AUTO-dispatch decision",
+  "source_state": {
+    "branch": "codex/leopard2",
+    "measurement_base_commit": "4b4aa3abb1883031edd89ee3218df0890fd08fdf",
+    "measurement_worktree_was_dirty": true,
+    "exact_source_commit": "fcca9d8115a15fd14b72b60013b7d35ad58d8c32",
+    "exact_source_commit_note": "Every file in the measured source fingerprint was committed without arithmetic or benchmark changes in this commit.",
+    "fingerprint": {
+      "digest": "61dc00e7d517e63ac50f2c18413817393e7fe0473cf1993e0bd84ee4e63de1b2",
+      "files": {
+        "CMakeLists.txt": "422cef02de8126766ff530ee9246857c49ad129dff6335e20cd3a406e9dc9c2f",
+        "Leopard2Direct.h": "4e6964d850f069b765282ffd33d49e0f646242430a217186a40c1d6084fc656d",
+        "Leopard2Dispatch.h": "d5a9d7dd2d388c70eda36c31d4a643a51c6be633747c97284c03676084ad9144",
+        "Leopard2Plan.cpp": "f1cdb03ca4b5ed0fef3957ed62d2e85471953aca0064802d4a0ef8bc4df77673",
+        "Leopard2Plan.h": "68a8a6fac34ae0b8e7c03e5a87fd67f20b993bded4440f3e0482cb90e7ca2c00",
+        "LeopardCommon.cpp": "c9a2f5e47d9c23693cbe7149a9566579293dddf4fdad4a1ed21e2ac184c1c9e8",
+        "LeopardCommon.h": "da762b045c6dc61ba7ba4320dcd6c69dca2b7789025ec597f36ac2674f0d21c0",
+        "LeopardFF16.cpp": "5200ff4a8bb044bcd224eaf5715182516c4a61d6f4c73fec30a8f15a224cc483",
+        "LeopardFF16.h": "57ae43e46148b3a3f93b27fd73a7b042f6433978f568506451337bd0002a0bf5",
+        "LeopardFF8.cpp": "34d444843cfce6390dbb09f6cd58859662bd964257ae350dd1c372ca278d401b",
+        "LeopardFF8.h": "aba3df205b8180196c0193c7416c093f9ffe4d6ef368f84e4f01f0d8314c8f43",
+        "bench/leopard2/direct_encode_benchmark.cpp": "23bc1ca1437af3420d418de7eb6185b726c49cafd52e03972917f64372056be0",
+        "leopard.cpp": "c3eedfd6a7e8eda2b09aefd671a87ae5e42346796d2bbe7bd1e0fa035cc2ec2f",
+        "leopard.h": "ca3083ce43a4727c89d9bb33479671af53efbedd41d0ba3ed748f1f464e33794",
+        "leopard2.cpp": "525008117c2e9251f2e433f3f3a6624b543035829b87dbdcc1539346efecd78b",
+        "leopard2.h": "0023f28f9b9e1a6c97dfadead6bae97fbbb4ecb545e767648c535da534e12d0c",
+        "tools/leopard2_direct_encode_crossover.py": "63ecea49a95ee86adb6e145bf4967b2385ceb7a29d40624b1fa8b5463a7b0d54"
+      }
+    },
+    "fingerprint_stable_during_authoritative_run": true
+  },
+  "host_capacity": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "allowed_cpu_list": "0-31",
+    "allowed_logical_cpu_count": 32,
+    "physical_core_count": 16,
+    "socket_count": 1,
+    "numa_node_count": 1,
+    "requested_project_parallelism_ceiling": 128,
+    "limitation": "The process affinity exposed only 32 logical CPUs. Parallel discovery used the available machine, while authoritative crossover measurements intentionally used one pinned physical core with its SMT sibling idle."
+  },
+  "production_auto_dispatch": {
+    "decision": "promoted_conservative_region",
+    "predicate": {
+      "profile": "low_v1",
+      "fields": [
+        "gf8",
+        "gf16"
+      ],
+      "generator_table_bounds": {
+        "K_min": 1,
+        "K_max": 16,
+        "R_min": 1,
+        "R_max": 16
+      },
+      "requested_recovery_output_count": 1,
+      "shard_bytes_minimum": 1024,
+      "shard_bytes_multiple": 64,
+      "backend_K_minimum": {
+        "scalar": 3,
+        "ssse3": 2,
+        "avx2": 2
+      },
+      "unpromoted_backends": [
+        "neon"
+      ]
+    },
+    "fallback": "transform encoder",
+    "notes": [
+      "The output count is the number of non-null requested recovery pointers, not the largest requested recovery index plus one.",
+      "K=1, scalar K=2, Q other than 1, shard sizes below 1024, shard sizes not divisible by 64, the legacy high profile, and unmeasured backends retain the transform encoder.",
+      "Generator rows are precomputed in production only for codecs that can enter this AUTO region."
+    ]
+  },
+  "authoritative_execution": {
+    "authority": "same-seed, single-core pinned ABBA execution evidence",
+    "artifact_root": "results/leopard2/direct-encode-crossover/pinned-authoritative-v1",
+    "artifact_sha256": {
+      "manifest.json": "c9077ba547a36715638f1e8589aff35049a93d854e9e976b3ff1ff71efea1fad",
+      "matrix.json": "d48df87800b42f1cdd0d72bd66c838212f36f5571a20855bc0708e503f72f5cb",
+      "analysis.json": "e07ead8f010b8e1ff562417560ece852b6b19670b77e0eb27ac3eec3cb18e139"
+    },
+    "configuration_id": "5dabf9ddc2d5eae6c58c3a01f3f6c4e8c8387f7679c870542ad8c8015c3a67d2",
+    "protocol": {
+      "pin_cpu": 15,
+      "idle_smt_sibling_cpu": 31,
+      "workers": 1,
+      "threads_per_benchmark": 1,
+      "abba_rounds": 3,
+      "order_per_round": [
+        "direct",
+        "transform",
+        "transform",
+        "direct"
+      ],
+      "same_seed_for_all_12_invocations_in_each_cell": true,
+      "batch": 1,
+      "reuse": 64,
+      "iterations_per_invocation": 15,
+      "warmups_per_invocation": 4,
+      "timeout_seconds_per_invocation": 180,
+      "governor": "powersave"
+    },
+    "status": {
+      "run_status": "passed",
+      "jobs_total": 75,
+      "jobs_passed": 75,
+      "jobs_failed": 0,
+      "source_changed_during_run": false,
+      "execution_input_error": null,
+      "promotion_threshold_percent": 5.0,
+      "gain_metric": "(transform_median_us / direct_median_us - 1) * 100"
+    },
+    "aggregates": {
+      "candidate": {
+        "all_cells_meet_promotion_threshold": true,
+        "cell_count": 45,
+        "failed_count": 0,
+        "gain_max_percent": 934.7950964680418,
+        "gain_median_percent": 113.84825332472799,
+        "gain_min_percent": 19.415035460992904,
+        "improvement_count": 45,
+        "promotion_count": 45,
+        "regression_count": 0,
+        "round_gain_median_percent": 114.56757051302331,
+        "round_gain_min_percent": 18.827655196717007,
+        "round_regression_count": 0,
+        "severe_regression_count": 0
+      },
+      "excluded_neighbors": {
+        "cell_count": 30,
+        "failed_count": 0,
+        "gain_max_percent": 1688.2939459278723,
+        "gain_median_percent": -3.6229805461694964,
+        "gain_min_percent": -46.47847119978367,
+        "improvement_count": 14,
+        "promotion_count": 12,
+        "regression_count": 16,
+        "round_gain_median_percent": -3.277513691500933,
+        "round_gain_min_percent": -46.90753214941825,
+        "round_regression_count": 50,
+        "severe_regression_count": 16
+      }
+    },
+    "regions": {
+      "candidate": {
+        "cell_count": 42,
+        "failed_count": 0,
+        "gain_max_percent": 934.7950964680418,
+        "gain_median_percent": 113.89938027985787,
+        "gain_min_percent": 19.415035460992904,
+        "improvement_count": 42,
+        "promotion_count": 42,
+        "regression_count": 0,
+        "round_gain_median_percent": 115.61126827445824,
+        "round_gain_min_percent": 18.827655196717007,
+        "round_regression_count": 0,
+        "severe_regression_count": 0
+      },
+      "candidate_sparse_output": {
+        "cell_count": 3,
+        "failed_count": 0,
+        "gain_max_percent": 120.44596609604734,
+        "gain_median_percent": 85.52517508669344,
+        "gain_min_percent": 25.679749103601356,
+        "improvement_count": 3,
+        "promotion_count": 3,
+        "regression_count": 0,
+        "round_gain_median_percent": 82.58003135032732,
+        "round_gain_min_percent": 25.270118764845595,
+        "round_regression_count": 0,
+        "severe_regression_count": 0
+      },
+      "excluded_high_profile": {
+        "cell_count": 6,
+        "failed_count": 0,
+        "gain_max_percent": 1688.2939459278723,
+        "gain_median_percent": 541.3242087046601,
+        "gain_min_percent": -19.646148680595054,
+        "improvement_count": 5,
+        "promotion_count": 3,
+        "regression_count": 1,
+        "round_gain_median_percent": 541.4125950232836,
+        "round_gain_min_percent": -19.999863101369996,
+        "round_regression_count": 5,
+        "severe_regression_count": 1
+      },
+      "excluded_q2": {
+        "cell_count": 3,
+        "failed_count": 0,
+        "gain_max_percent": 12.528048377848844,
+        "gain_median_percent": 10.30504817867759,
+        "gain_min_percent": -30.424429177812883,
+        "improvement_count": 2,
+        "promotion_count": 2,
+        "regression_count": 1,
+        "round_gain_median_percent": 11.296136363636355,
+        "round_gain_min_percent": -30.52336485893291,
+        "round_regression_count": 3,
+        "severe_regression_count": 1
+      },
+      "excluded_q2_holey": {
+        "cell_count": 3,
+        "failed_count": 0,
+        "gain_max_percent": 91.36041909913257,
+        "gain_median_percent": 52.326599885791495,
+        "gain_min_percent": 5.771068893839049,
+        "improvement_count": 3,
+        "promotion_count": 3,
+        "regression_count": 0,
+        "round_gain_median_percent": 52.11584074737139,
+        "round_gain_min_percent": 5.211161667099007,
+        "round_regression_count": 0,
+        "severe_regression_count": 0
+      },
+      "excluded_ragged_tail": {
+        "cell_count": 12,
+        "failed_count": 0,
+        "gain_max_percent": 88.02562725581045,
+        "gain_median_percent": -5.053627879682421,
+        "gain_min_percent": -46.47847119978367,
+        "improvement_count": 4,
+        "promotion_count": 4,
+        "regression_count": 8,
+        "round_gain_median_percent": -4.165062560978649,
+        "round_gain_min_percent": -46.90753214941825,
+        "round_regression_count": 24,
+        "severe_regression_count": 8
+      },
+      "excluded_scalar_k2": {
+        "cell_count": 6,
+        "failed_count": 0,
+        "gain_max_percent": -20.7762751059279,
+        "gain_median_percent": -23.979597455386838,
+        "gain_min_percent": -31.09783661157509,
+        "improvement_count": 0,
+        "promotion_count": 0,
+        "regression_count": 6,
+        "round_gain_median_percent": -22.872033537734865,
+        "round_gain_min_percent": -31.397425353749387,
+        "round_regression_count": 18,
+        "severe_regression_count": 6
+      }
+    },
+    "selected_exact_cells": [
+      {
+        "job_id": "346f164d394fc4d6bec8f0f1",
+        "seed": 3594596990871194302,
+        "cell": {
+          "backend": "avx2",
+          "field": "gf16",
+          "k": 2,
+          "mask": "0",
+          "profile": "low",
+          "q": 1,
+          "r": 1,
+          "region": "candidate",
+          "shard_bytes": 1024
+        },
+        "direct_median_us": 0.048047,
+        "transform_median_us": 0.497188,
+        "gain_percent": 934.7950964680418,
+        "round_gain_min_percent": 929.7541990134662
+      },
+      {
+        "job_id": "dad26bc305cb86480a08a4a8",
+        "seed": 10729229766678572174,
+        "cell": {
+          "backend": "ssse3",
+          "field": "gf8",
+          "k": 2,
+          "mask": "0",
+          "profile": "low",
+          "q": 1,
+          "r": 16,
+          "region": "candidate",
+          "shard_bytes": 1088
+        },
+        "direct_median_us": 0.08812500000000001,
+        "transform_median_us": 0.10523450000000001,
+        "gain_percent": 19.415035460992904,
+        "round_gain_min_percent": 18.827655196717007
+      },
+      {
+        "job_id": "04660468002892d44bf66bb6",
+        "seed": 3559709557550930500,
+        "cell": {
+          "backend": "ssse3",
+          "field": "gf8",
+          "k": 16,
+          "mask": "0",
+          "profile": "low",
+          "q": 1,
+          "r": 16,
+          "region": "candidate",
+          "shard_bytes": 4096
+        },
+        "direct_median_us": 2.028375,
+        "transform_median_us": 6.2345935,
+        "gain_percent": 207.3688790287792,
+        "round_gain_min_percent": 207.2073856657948
+      },
+      {
+        "job_id": "e23162fa243bbbbdaf6b4420",
+        "seed": 13939239618622751850,
+        "cell": {
+          "backend": "scalar",
+          "field": "gf8",
+          "k": 3,
+          "mask": "15",
+          "profile": "low",
+          "q": 1,
+          "r": 16,
+          "region": "candidate_sparse_output",
+          "shard_bytes": 4096
+        },
+        "direct_median_us": 1.5005625,
+        "transform_median_us": 3.3079295,
+        "gain_percent": 120.44596609604734,
+        "round_gain_min_percent": 120.50929417357969
+      },
+      {
+        "job_id": "e18d5868e0a069c225595679",
+        "seed": 12015115900043678890,
+        "cell": {
+          "backend": "avx2",
+          "field": "gf8",
+          "k": 2,
+          "mask": "0",
+          "profile": "low",
+          "q": 1,
+          "r": 1,
+          "region": "excluded_ragged_tail",
+          "shard_bytes": 63
+        },
+        "direct_median_us": 0.066562,
+        "transform_median_us": 0.035625,
+        "gain_percent": -46.47847119978367,
+        "round_gain_min_percent": -46.90753214941825
+      },
+      {
+        "job_id": "ee14c2d96a7b2dfeec6a46d4",
+        "seed": 4551736404684992834,
+        "cell": {
+          "backend": "scalar",
+          "field": "gf8",
+          "k": 2,
+          "mask": "0",
+          "profile": "low",
+          "q": 1,
+          "r": 1,
+          "region": "excluded_scalar_k2",
+          "shard_bytes": 1024
+        },
+        "direct_median_us": 0.258125,
+        "transform_median_us": 0.19289050000000002,
+        "gain_percent": -25.2724455205811,
+        "round_gain_min_percent": -24.846145643712912
+      },
+      {
+        "job_id": "e578cf5778922e08b75bc308",
+        "seed": 6220760240059577622,
+        "cell": {
+          "backend": "ssse3",
+          "field": "gf8",
+          "k": 2,
+          "mask": "0-1",
+          "profile": "low",
+          "q": 2,
+          "r": 16,
+          "region": "excluded_q2",
+          "shard_bytes": 4096
+        },
+        "direct_median_us": 0.502039,
+        "transform_median_us": 0.3492965,
+        "gain_percent": -30.424429177812883,
+        "round_gain_min_percent": -30.52336485893291
+      },
+      {
+        "job_id": "4f3cc9baa6daf59a315f270c",
+        "seed": 9131821749023418696,
+        "cell": {
+          "backend": "scalar",
+          "field": "gf8",
+          "k": 3,
+          "mask": "0",
+          "profile": "high",
+          "q": 1,
+          "r": 1,
+          "region": "excluded_high_profile",
+          "shard_bytes": 4096
+        },
+        "direct_median_us": 0.145937,
+        "transform_median_us": 0.11726600000000001,
+        "gain_percent": -19.646148680595054,
+        "round_gain_min_percent": -19.999863101369996
+      }
+    ]
+  },
+  "historical_non_authoritative": {
+    "concurrent_screening": {
+      "authority": "non-authoritative concurrent discovery only",
+      "source_summary_path": "results/leopard2/direct-encode/crossover-agent/final_summary.json",
+      "source_summary_sha256": "db98a9d3c8ebee7b4ab3a12f9f84c9fce86fa6aa46f821eecf4da599962d2bbd",
+      "broad_cells": 3744,
+      "broad_mode_invocations": 7488,
+      "targeted_cells": 64662,
+      "targeted_mode_invocations": 129324,
+      "validation_errors": 0,
+      "limitations": [
+        "The jobs ran concurrently across CPUs 0-15 and are unsuitable for authoritative cache-sensitive timing.",
+        "The sweep was used only to locate candidate and adverse regions for the same-seed pinned run."
+      ]
+    },
+    "old_pinned_execution": {
+      "authority": "rejected as authoritative",
+      "source_summary_sha256": {
+        "pinned-abba/summary.json": "1db231be22e62531a1bb9e41b7864dd79683343ff5123f1bde9336ad0e654220",
+        "pinned-abba-k2/summary.json": "fe5a5185bde290a49cbd39e77ac0743192f2ed9c4e044c746aa44d7e2fc14f5c",
+        "pinned-abba-scalar/summary.json": "b44a8f8a1f772e148f7a7872024da34aa90c1c5d284d11a926bae9d75f4cb7a4"
+      },
+      "limitations": [
+        "Each of the 12 direct/transform invocations in a cell used a different input seed, so the ABBA comparisons were not same-input pairs.",
+        "The direct_process_mad_us field in pinned-abba/summary.json was mislabeled and numerically invalid; it is intentionally not copied into this checkpoint."
+      ],
+      "superseded_by": "results/leopard2/direct-encode-crossover/pinned-authoritative-v1"
+    },
+    "old_setup_abba": {
+      "authority": "historical non-authoritative setup estimate",
+      "source_summary_path": "results/leopard2/direct-encode/setup-abba/summary.json",
+      "source_summary_sha256": "bfb50391486338870a20d759ef284b82ebfd4b70b4dd64f81f2bf1ae986f085e",
+      "execution_summary_path": "results/leopard2/direct-encode/setup-abba/execution-k16-summary.json",
+      "execution_summary_sha256": "4772307616db23d97a018e8cbd5210df4ac09c01f76f934e6651b51a7cb63dd3",
+      "limitations": [
+        "This setup study predates the same-seed authoritative runner and is retained only as a historical estimate.",
+        "No setup result from this historical study is used as production dispatch authority."
+      ]
+    }
+  }
+}

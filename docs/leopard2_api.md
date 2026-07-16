@@ -43,6 +43,14 @@ FFT and matches old Leopard in the compatibility test.  The low profile performs
 one padded-`P` IFFT followed by only the shifted parity blocks needed by the
 requested output prefix/subset.
 
+For bounded `K,R <= 16` codecs, setup can precompute exact full-parent
+systematic generator rows. AUTO uses this allocation-free direct evaluator only
+for the measured Low V1, one-output, regular-shard region; scalar requires
+`K >= 3`, SSSE3/AVX2 requires `K >= 2`, and physical shards must be at least
+1 KiB and a multiple of 64 bytes. All other cells retain the transform encoder.
+This is an internal kernel decision and does not change profile identity or
+parity bytes. See `leopard2_direct_encode.md` for the derivation and evidence.
+
 ## Decoding
 
 Create a plan from byte presence arrays with `leo2_decode_plan_create`.  Execution

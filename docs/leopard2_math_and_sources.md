@@ -406,6 +406,7 @@ wire semantics.
 | `FFTSkew` quotient and `p_i` constant generation | R16, R17; R10 eqs. (1)-(12), direct specialization above |
 | normalized-basis derivative accumulation | R16 decoder lineage; product-rule derivation above |
 | shifted-block encode and IFFT summation | R10 Lemma 1, eqs. (15)-(21) |
+| full-parent direct systematic generator row `Z_S(q) / ((q+x_i) Z'_S(x_i))` | shared new Lagrange derivation in `docs/leopard2_direct_encode.md`; independently checked by `tests/leopard2/direct_oracle.cpp` and `test_direct_encode.cpp` for every bounded high/low GF8/GF16 profile |
 | generic locator/derivative erasure identity | R10 eqs. (22)-(29); R16 decoder; direct derivation above |
 | low weighted block derivative combination | R10 Theorem 1, Corollary 1, Algorithm 4 |
 | high `h`, `z`, and message-only evaluation | R10 Corollary 2, eqs. (52)-(72), Algorithm 5 |
