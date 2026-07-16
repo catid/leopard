@@ -108,8 +108,9 @@ typedef struct leo2_codec_options {
     uint32_t reserved;
 } leo2_codec_options;
 
-/* Test/diagnostic flag retaining the full O(N log N) decoder fallback. */
+/* Test/diagnostic flags selecting a decoder independently of AUTO dispatch. */
 #define LEO2_CODEC_FORCE_GENERIC_DECODE 0x00000001u
+#define LEO2_CODEC_FORCE_SPECIALIZED_DECODE 0x00000002u
 
 typedef struct leo2_encode_batch_item {
     uint64_t shard_bytes;

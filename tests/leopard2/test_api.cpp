@@ -29,6 +29,7 @@
 #include "direct_oracle.h"
 #include "LeopardFF8.h"
 #include "LeopardFF16.h"
+#include "Leopard2Dispatch.h"
 #include "leopard.h"
 #include "leopard2.h"
 
@@ -519,6 +520,46 @@ void run_decode_case(
         }
         leo2_decode_plan_destroy(generic_plan);
         leo2_codec_destroy(generic_codec);
+
+        if (profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+            field == LEO2_FIELD_GF8 && k == 128 && r == 128 &&
+            missing_originals.size() == 128 && bytes >= 256 && bytes <= 1024 * 1024)
+        {
+            leo2_codec_options specialized_options;
+            memset(&specialized_options, 0, sizeof(specialized_options));
+            specialized_options.struct_size = sizeof(specialized_options);
+            specialized_options.flags = LEO2_CODEC_FORCE_SPECIALIZED_DECODE;
+            leo2_codec* specialized_codec = NULL;
+            require_result(leo2_codec_create(context, k, r, profile, field,
+                &specialized_options, &specialized_codec),
+                "specialized codec create");
+            leo2_decode_plan* specialized_plan = NULL;
+            require_result(leo2_decode_plan_create(specialized_codec,
+                &original_present[0], &recovery_present[0], &specialized_plan),
+                "specialized plan create");
+            size_t specialized_scratch_bytes = 0;
+            require_result(leo2_decode_plan_scratch_size(
+                specialized_plan, bytes, &specialized_scratch_bytes),
+                "specialized scratch query");
+            AlignedBuffer specialized_scratch(specialized_scratch_bytes);
+            Shards specialized_restored(k, std::vector<uint8_t>(bytes, 0));
+            std::vector<void*> specialized_restored_ptrs(k, NULL);
+            for (size_t i = 0; i < missing_originals.size(); ++i)
+                specialized_restored_ptrs[missing_originals[i]] =
+                    &specialized_restored[missing_originals[i]][0];
+            require_result(leo2_decode_plan_execute(specialized_plan, bytes,
+                &original_ptrs[0], &recovery_ptrs[0],
+                &specialized_restored_ptrs[0], specialized_scratch.data,
+                specialized_scratch.bytes), "specialized plan execute");
+            for (size_t i = 0; i < missing_originals.size(); ++i)
+            {
+                const unsigned index = missing_originals[i];
+                require(specialized_restored[index] == restored[index],
+                    "automatic and forced-specialized recovery differ");
+            }
+            leo2_decode_plan_destroy(specialized_plan);
+            leo2_codec_destroy(specialized_codec);
+        }
     }
     if ((bytes & 63u) != 0)
         ++counts->tail_cases;
@@ -792,6 +833,80 @@ void test_forced_backend(leo2_context* context)
         "forced build selected the wrong runtime backend");
 }
 
+void test_codec_flag_validation(leo2_context* context)
+{
+    leo2_codec_options options;
+    memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.flags = LEO2_CODEC_FORCE_GENERIC_DECODE |
+        LEO2_CODEC_FORCE_SPECIALIZED_DECODE;
+    leo2_codec* codec = reinterpret_cast<leo2_codec*>(static_cast<uintptr_t>(1));
+    require(leo2_codec_create(context, 9, 7, LEO2_PROFILE_LEGACY_HIGH_V1,
+        LEO2_FIELD_GF8, &options, &codec) == LEO2_INVALID_ARGUMENT,
+        "mutually exclusive decoder flags were accepted");
+    require(codec == NULL, "failed codec creation did not clear its output");
+
+    options.flags = 0x80000000u;
+    codec = reinterpret_cast<leo2_codec*>(static_cast<uintptr_t>(1));
+    require(leo2_codec_create(context, 9, 7, LEO2_PROFILE_LEGACY_HIGH_V1,
+        LEO2_FIELD_GF8, &options, &codec) == LEO2_INVALID_ARGUMENT,
+        "unknown codec flag was accepted");
+    require(codec == NULL, "unknown-flag failure did not clear its output");
+}
+
+void test_balanced_dispatch_policy()
+{
+    using leopard2_internal::ShouldUseBalancedGenericDecode;
+    const leo2_profile profile = LEO2_PROFILE_LEGACY_HIGH_V1;
+    const leo2_field field = LEO2_FIELD_GF8;
+    const uint32_t k = 128;
+    const uint32_t r = 128;
+    const uint32_t padded = 128;
+    const uint32_t parent = 256;
+    const uint32_t missing = 128;
+
+    require(ShouldUseBalancedGenericDecode(profile, field, k, r, padded,
+        parent, missing, 256, LEO2_BACKEND_SCALAR),
+        "balanced dispatch rejected its lower byte boundary");
+    require(ShouldUseBalancedGenericDecode(profile, field, k, r, padded,
+        parent, missing, 1024 * 1024, LEO2_BACKEND_SSSE3),
+        "balanced dispatch rejected its upper byte boundary");
+    require(ShouldUseBalancedGenericDecode(profile, field, k, r, padded,
+        parent, missing, 4096, LEO2_BACKEND_AVX2),
+        "balanced dispatch rejected AVX2");
+
+    require(!ShouldUseBalancedGenericDecode(profile, field, k, r, padded,
+        parent, missing, 255, LEO2_BACKEND_SCALAR),
+        "balanced dispatch crossed its lower byte boundary");
+    require(!ShouldUseBalancedGenericDecode(profile, field, k, r, padded,
+        parent, missing, 1024 * 1024 + 64, LEO2_BACKEND_SCALAR),
+        "balanced dispatch crossed its upper byte boundary");
+    require(!ShouldUseBalancedGenericDecode(LEO2_PROFILE_LOW_V1, field, k, r,
+        padded, parent, missing, 4096, LEO2_BACKEND_SCALAR),
+        "balanced dispatch accepted the low profile");
+    require(!ShouldUseBalancedGenericDecode(profile, LEO2_FIELD_GF16, k, r,
+        padded, parent, missing, 4096, LEO2_BACKEND_SCALAR),
+        "balanced dispatch accepted GF16");
+    require(!ShouldUseBalancedGenericDecode(profile, field, k - 1, r, padded,
+        parent, missing, 4096, LEO2_BACKEND_SCALAR),
+        "balanced dispatch accepted a neighboring K");
+    require(!ShouldUseBalancedGenericDecode(profile, field, k, r - 1, padded,
+        parent, missing, 4096, LEO2_BACKEND_SCALAR),
+        "balanced dispatch accepted a neighboring R");
+    require(!ShouldUseBalancedGenericDecode(profile, field, k, r, padded / 2,
+        parent, missing, 4096, LEO2_BACKEND_SCALAR),
+        "balanced dispatch accepted a different padded side");
+    require(!ShouldUseBalancedGenericDecode(profile, field, k, r, padded,
+        parent / 2, missing, 4096, LEO2_BACKEND_SCALAR),
+        "balanced dispatch accepted a different parent");
+    require(!ShouldUseBalancedGenericDecode(profile, field, k, r, padded,
+        parent, missing - 1, 4096, LEO2_BACKEND_SCALAR),
+        "balanced dispatch accepted partial recovery");
+    require(!ShouldUseBalancedGenericDecode(profile, field, k, r, padded,
+        parent, missing, 4096, LEO2_BACKEND_NEON),
+        "balanced dispatch accepted an unmeasured backend");
+}
+
 } // namespace
 
 int main()
@@ -808,6 +923,8 @@ int main()
         require(context != NULL && leo2_context_backend(context) != LEO2_BACKEND_AUTO,
             "context backend introspection failed");
         test_forced_backend(context);
+        test_codec_flag_validation(context);
+        test_balanced_dispatch_policy();
 
         test_profile_metadata(context);
         compare_high_with_legacy(context, 3, 2,
@@ -871,6 +988,13 @@ int main()
         run_decode_case(context, 1, 5, LEO2_PROFILE_LOW_V1,
             LEO2_FIELD_GF8, 31, std::vector<unsigned>{0},
             std::vector<unsigned>{0, 1, 3, 4}, &counts);
+
+        std::vector<unsigned> balanced_full_recovery(128);
+        for (size_t i = 0; i < balanced_full_recovery.size(); ++i)
+            balanced_full_recovery[i] = static_cast<unsigned>(i);
+        run_decode_case(context, 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1,
+            LEO2_FIELD_GF8, 257, balanced_full_recovery,
+            std::vector<unsigned>(), &counts);
 
         const size_t direct_gf16_boundaries[] = { 2, 34, 64, 66, 1026 };
         for (size_t count_i = 0;

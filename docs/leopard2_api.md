@@ -50,11 +50,15 @@ erasure.  This selection affects only the work schedule, not the decoded message
 Applications still pass the original presence pattern and may leave pointers for
 surplus received parity populated.
 
-For differential testing and diagnosis, set
-`LEO2_CODEC_FORCE_GENERIC_DECODE` in `leo2_codec_options.flags`.  Non-direct
-transform repairs then use the retained full `O(N log N)` active-parent decoder
-instead of the profile-specialized decoder.  The flag is not a distinct wire
-profile and does not change encoded data.
+For differential testing and diagnosis, set exactly one of
+`LEO2_CODEC_FORCE_GENERIC_DECODE` or
+`LEO2_CODEC_FORCE_SPECIALIZED_DECODE` in `leo2_codec_options.flags`.  The first
+selects the retained full `O(N log N)` active-parent decoder; the second selects
+the profile-specific transform decoder and bypasses bounded direct-matrix repair
+and automatic crossover dispatch.  The flags govern nontrivial transform or
+direct-matrix repairs; no-loss, single-XOR-parity, and single-original copy
+fast paths remain direct.  Supplying both flags is invalid.  These diagnostic
+choices are not wire profiles and do not change encoded data.
 
 `leo2_decode` is a convenience wrapper that allocates and destroys a plan.  Use a
 reusable plan when setup amortization matters.

@@ -37,6 +37,7 @@ SOURCE_FILES = (
     "LeopardFF8.h",
     "LeopardFF16.cpp",
     "LeopardFF16.h",
+    "Leopard2Dispatch.h",
     "leopard.cpp",
     "leopard.h",
     "leopard2.cpp",

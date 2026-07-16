@@ -31,6 +31,7 @@
 #include "LeopardCommon.h"
 #include "LeopardFF8.h"
 #include "LeopardFF16.h"
+#include "Leopard2Dispatch.h"
 #include "leopard.h"
 
 #include <algorithm>
@@ -433,7 +434,8 @@ struct DirectField16
 
 static bool CanPrepareDirectRepair(const leo2_codec* codec)
 {
-    return (codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) == 0 &&
+    return (codec->flags & (LEO2_CODEC_FORCE_GENERIC_DECODE |
+                           LEO2_CODEC_FORCE_SPECIALIZED_DECODE)) == 0 &&
         codec->original_count >= 2 &&
         codec->original_count <= kDirectMaxOriginals &&
         codec->parent_dimension <= kDirectMaxParentDimension &&
@@ -1212,8 +1214,12 @@ LEO2_EXPORT leo2_result leo2_codec_create(
     *codec_out = NULL;
     if (options)
     {
+        const uint32_t supported_flags =
+            LEO2_CODEC_FORCE_GENERIC_DECODE |
+            LEO2_CODEC_FORCE_SPECIALIZED_DECODE;
         if (options->struct_size < sizeof(leo2_codec_options) ||
-            (options->flags & ~LEO2_CODEC_FORCE_GENERIC_DECODE) != 0)
+            (options->flags & ~supported_flags) != 0 ||
+            (options->flags & supported_flags) == supported_flags)
             return LEO2_INVALID_ARGUMENT;
     }
     if (profile == LEO2_PROFILE_AUTO)
@@ -1807,11 +1813,30 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
         work[i] = slots + (work_base + i) * rounded;
 
     const void* const* coordinate_input = const_cast<const void* const*>(coordinate_data);
+    const leo2_backend backend = codec->context->backend;
+    const bool measured_balanced_full_recovery =
+        leopard2_internal::ShouldUseBalancedGenericDecode(
+            codec->profile, codec->field, codec->original_count,
+            codec->recovery_count, codec->padded_side, codec->parent_count,
+            plan->missing_original_count, rounded, backend);
+    /*
+        At this balanced full-recovery point the generic schedule has lower
+        aggregate work despite Algorithm 5's smaller transform side: the
+        operation model counts 1280 versus 1856 butterflies.  Two reversed,
+        CPU-pinned runs measured the generic decoder 5-32% faster from 256 B
+        through 1 MiB on the three production x86 backends.  Keep dispatch
+        strictly inside that measured region; neighboring counts, fields,
+        backends, and sizes retain the profile-specific decoder.
+    */
     const bool force_generic =
         (codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) != 0;
+    const bool force_specialized =
+        (codec->flags & LEO2_CODEC_FORCE_SPECIALIZED_DECODE) != 0;
+    const bool use_generic = force_generic ||
+        (!force_specialized && measured_balanced_full_recovery);
     if (codec->field == LEO2_FIELD_GF8)
     {
-        if (force_generic)
+        if (use_generic)
             leopard::ff8::ReedSolomonDecodePrepared(
                 rounded, codec->parent_count, coordinate_input, &plan->requested[0],
                 &plan->locator8[0], work);
@@ -1826,7 +1851,7 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
     }
     else
     {
-        if (force_generic)
+        if (use_generic)
             leopard::ff16::ReedSolomonDecodePrepared(
                 rounded, codec->parent_count, coordinate_input, &plan->requested[0],
                 &plan->locator16[0], work);

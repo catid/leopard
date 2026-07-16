@@ -90,6 +90,7 @@ struct Options
     uint32_t threads;
     uint64_t seed;
     bool force_generic_decode;
+    bool force_specialized_decode;
     std::string output;
 
     Options()
@@ -107,6 +108,7 @@ struct Options
         , threads(1)
         , seed(1)
         , force_generic_decode(false)
+        , force_specialized_decode(false)
         , output("-")
     {}
 };
@@ -352,6 +354,7 @@ static void Usage(std::ostream& output, const char* program)
         << "  --threads N           Context thread count (default 1)\n"
         << "  --seed N              Deterministic seed (default 1)\n"
         << "  --force-generic       Use the retained O(N log N) decoder\n"
+        << "  --force-specialized   Use the profile-specific transform decoder\n"
         << "  --json PATH           JSON output path, or - for stdout\n"
         << "  --help                 Show this message\n";
 }
@@ -381,6 +384,7 @@ static Options ParseOptions(int argc, char** argv)
         else if (argument == "--threads" || argument == "--thread-count") options.threads = ParseUint32(NeedValue(argc, argv, i), "--threads");
         else if (argument == "--seed") options.seed = ParseUnsigned(NeedValue(argc, argv, i), "--seed");
         else if (argument == "--force-generic") options.force_generic_decode = true;
+        else if (argument == "--force-specialized") options.force_specialized_decode = true;
         else if (argument == "--json" || argument == "--output") options.output = NeedValue(argc, argv, i);
         else Fail("unknown argument: " + argument);
     }
@@ -395,6 +399,8 @@ static Options ParseOptions(int argc, char** argv)
         Fail("--loss cannot exceed K");
     if (options.losses > options.r)
         Fail("--loss cannot exceed R when only transmitted recovery shards are used");
+    if (options.force_generic_decode && options.force_specialized_decode)
+        Fail("--force-generic and --force-specialized are mutually exclusive");
     return options;
 }
 
@@ -767,7 +773,9 @@ static int Run(const Options& options)
     memset(&codec_options, 0, sizeof(codec_options));
     codec_options.struct_size = sizeof(codec_options);
     codec_options.flags = options.force_generic_decode
-        ? LEO2_CODEC_FORCE_GENERIC_DECODE : 0;
+        ? LEO2_CODEC_FORCE_GENERIC_DECODE
+        : (options.force_specialized_decode
+            ? LEO2_CODEC_FORCE_SPECIALIZED_DECODE : 0);
     RequireLeo2(leo2_codec_create(
         context, options.k, options.r, options.profile, options.field,
         &codec_options, &codec),
@@ -958,6 +966,8 @@ static int Run(const Options& options)
          << "    \"requested_backend\": \"" << BackendName(options.backend) << "\",\n"
          << "    \"force_generic_decode\": "
          << (options.force_generic_decode ? "true" : "false") << ",\n"
+         << "    \"force_specialized_decode\": "
+         << (options.force_specialized_decode ? "true" : "false") << ",\n"
          << "    \"shard_bytes\": " << options.bytes << ",\n"
          << "    \"loss_count\": " << options.losses << ",\n"
          << "    \"missing_original_indices\": [";
