@@ -363,6 +363,68 @@ coefficients and assigns the exact prefix map an unfrozen new-profile identity.
 Its coordinate digests are research fingerprints, not serialized code IDs.
 See `docs/leopard2_c6_gf256_rescue.md` for the executable and promotion gates.
 
+## C8 exact high-rate parity solve (experimental only)
+
+C8 freezes a separate parity-first candidate solely for research:
+
+    parity points = {0,...,R-1}
+    message points = {R,...,R+K-1}
+    polynomial degree < K.
+
+Let the complete transmitted point set be `X={0,...,K+R-1}` in Leopard's
+Cantor-coordinate representation and define the dual weight
+
+    u_i = 1 / product_(ell != i) (omega_i + omega_ell).
+
+For each `0 <= a < R`, the Lagrange leading-coefficient identity gives
+
+    sum_i u_i omega_i^a f(omega_i) = 0
+
+for every polynomial `f` of degree less than `K`.  Partitioning the first `R`
+columns from the final `K` columns yields the exact parity constraints
+
+    A p + B m = 0,
+    p = inverse(A) B m.
+
+The sign disappears in characteristic two.  This is a new specialization of
+the generic generalized-RS dual and interpolation identities in R20/R21 to the
+C8 point order; no transform implementation is copied.  The independent C8
+oracle constructs `A` and `B` from the full-set vanishing derivative, then
+requires `inverse(A)B` to equal cardinal Lagrange rows built only from the
+message set.  Newton divided differences and a dyadic Schur-complement solve
+provide two additional algebraically independent execution forms.
+
+For non-power `R`, with `b` the largest lower power of two, partition
+
+    A = [ A11 A12 ; A21 A22 ]
+
+and use
+
+    S = A22 + A21 inverse(A11) A12.
+
+The scalar Schur executor must reproduce the full solve exactly.  Its dense
+cross-block work is measured rather than assumed sparse.
+
+The C8 and legacy-high generators coincide only if legacy padding disappears:
+
+    R = T = ceil_pow2(R),
+    K + R = N = ceil_pow2(K + T).
+
+Thus both `R` and `K+R` must be powers of two.  In that case both definitions
+interpolate the same `K` values at `R..R+K-1` and evaluate `0..R-1`.  Outside
+that gate legacy interpolation additionally fixes shortened parent values, or
+uses different message coordinates, so C8 records explicit coefficient and
+byte witnesses and claims a new profile.  Exhaustive GF(2^4) MDS/rank checks,
+GF8/GF16 direct algebra, all available SIMD backends, and ASan/UBSan gate the
+derivation.  The candidate remains unserialized and default-off; details and
+the no-promotion result are in `docs/leopard2_c8_exact_high.md`.
+
+R13 Appendix-A Algorithm 8 remains a prefix/coset epsilon transform.  C8's
+known message points are the suffix `R..R+K-1`, which is not generally an
+aligned `shift XOR (0..K-1)` set.  Applying Algorithm 8 by renumbering would
+change this coordinate profile.  C8 therefore labels its Tang--Han row a
+control/lower model until a suffix-set derivation is proved.
+
 ## Independent oracles and promotion gates
 
 The optimized LCH code is never its own only oracle.
@@ -474,6 +536,7 @@ wire semantics.
 | exact/truncated parent-preserving candidates | R15; R22 for general TFT design principles |
 | arbitrary-parameter new-profile candidates | R13, R14, R18-R21; never assumed wire-equivalent |
 | C6 exact-prefix GF8 generator `Z_S(q) w_i / (q+i)` | new specialization of direct Lagrange evaluation, with arbitrary-parameter context from R13, R14, R20, R21; exhaustive/direct evidence in the C6 algebra experiment |
+| C8 exact-high dual solve `p=inverse(A)B m` and Schur split | new specialization of generalized-RS dual/Lagrange identities from R20/R21; exhaustive/direct evidence in the C8 algebra and executable experiments |
 | exact-prefix Lagrange/Newton-to-LCH conversion | R15 Algorithms 1 and 3; executable derivation and direct-algebra checks in `experiments/leopard2/non_power_of_two/c3b/fast_inverse.py` |
 | arbitrary-epsilon inverse and completed evaluations | R13 Appendix A, Lemmas 8-9 and Algorithm 8; executable derivation and direct-algebra checks in the C3b experiment |
 
