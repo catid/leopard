@@ -342,19 +342,40 @@ during the retained run because another benchmark reserved one sibling pair):
       experiments/leopard2/non_power_of_two/c8/algebra.py verify \
         --output-dir experiments/leopard2/non_power_of_two/c8/results
 
-Build each normal backend library and the standalone source.  Replace `VARIANT`
-with `auto`, `scalar`, `ssse3`, and `avx2`:
+Create a detached source tree for the exact Leopard core revision recorded in
+the retained evidence.  The experiment source remains in the current checkout
+and is independently SHA-256 bound below, but every linked Leopard library must
+come from this detached tree.  These checks intentionally fail rather than
+labeling a library built from a moving checkout with the retained core SHA:
 
-    cmake -S . -B "build/c8/$VARIANT" -G Ninja \
+    set -euo pipefail
+    CORE_REV=dfa69baab6f056a6b09f4548bc196ac39797294a
+    CORE_SHA="$(git rev-parse --verify "$CORE_REV^{commit}")"
+    test "$CORE_SHA" = "$CORE_REV"
+    CORE_SOURCE="$PWD/.research/leopard2/c8/core-$CORE_SHA"
+    if [ ! -e "$CORE_SOURCE/.git" ]; then
+      if [ -e "$CORE_SOURCE" ]; then
+        echo "refusing non-worktree C8 core source: $CORE_SOURCE" >&2
+        exit 1
+      fi
+      git worktree add --detach "$CORE_SOURCE" "$CORE_SHA"
+    fi
+    test "$(git -C "$CORE_SOURCE" rev-parse HEAD)" = "$CORE_SHA"
+    test -z "$(git -C "$CORE_SOURCE" status --porcelain --untracked-files=no)"
+
+Build each normal backend library from `CORE_SOURCE` and link the standalone
+experiment from the current checkout.  Replace `VARIANT` with `auto`, `scalar`,
+`ssse3`, and `avx2`:
+
+    cmake -S "$CORE_SOURCE" -B "build/c8/$VARIANT" -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \
       -DLEO2_BUILD_TESTS=OFF -DLEO2_BUILD_BENCHMARKS=OFF \
       -DLEO2_BUILD_FUZZERS=OFF -DLEO2_ENABLE_CUDA=OFF \
       -DLEO2_BACKEND_VARIANT="$VARIANT"
     cmake --build "build/c8/$VARIANT" -j "$JOBS" --target libleopard
 
-    SOURCE=experiments/leopard2/non_power_of_two/c8/c8_exact_high.cpp
+    SOURCE="$PWD/experiments/leopard2/non_power_of_two/c8/c8_exact_high.cpp"
     SOURCE_SHA="$(sha256sum "$SOURCE" | awk '{print $1}')"
-    CORE_SHA="$(git rev-parse dfa69baab6f056a6b09f4548bc196ac39797294a)"
     LIBRARY="build/c8/$VARIANT/liblibleopard.a"
     LIBRARY_SHA="$(sha256sum "$LIBRARY" | awk '{print $1}')"
     g++ -std=c++11 -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Werror \
@@ -362,16 +383,36 @@ with `auto`, `scalar`, `ssse3`, and `avx2`:
       -DLEO2_C8_CORE_GIT_SHA=\"$CORE_SHA\" \
       -DLEO2_C8_LIBRARY_SHA256=\"$LIBRARY_SHA\" \
       -DLEO2_C8_SANITIZER_MODE=\"none\" \
-      -I. "$SOURCE" "$LIBRARY" -fopenmp -pthread \
+      -I"$CORE_SOURCE" "$SOURCE" "$LIBRARY" -fopenmp -pthread \
       -o "build/c8/c8-$VARIANT"
     OMP_NUM_THREADS=1 OMP_DYNAMIC=FALSE "build/c8/c8-$VARIANT" \
       --mode correctness --backend-label "$VARIANT" \
       --output \
         "experiments/leopard2/non_power_of_two/c8/results/$VARIANT.json"
 
-Build both the library and experiment with ASan+UBSan; define
-`LEO2_C8_DISABLE_GLOBAL_NEW_TRACKING=1` for the standalone sanitizer source and
-use `LEO2_C8_SANITIZER_MODE="asan-ubsan"`.  Run with:
+Build both the library and experiment with ASan+UBSan from the same verified
+`CORE_SOURCE`; define `LEO2_C8_DISABLE_GLOBAL_NEW_TRACKING=1` for the standalone
+sanitizer source and use `LEO2_C8_SANITIZER_MODE="asan-ubsan"`:
+
+    SAN_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+    cmake -S "$CORE_SOURCE" -B build/c8/asan -G Ninja \
+      -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DLEO2_BUILD_TESTS=OFF -DLEO2_BUILD_BENCHMARKS=OFF \
+      -DLEO2_BUILD_FUZZERS=OFF -DLEO2_ENABLE_CUDA=OFF \
+      -DLEO2_BACKEND_VARIANT=auto \
+      -DCMAKE_CXX_FLAGS="$SAN_FLAGS"
+    cmake --build build/c8/asan -j "$JOBS" --target libleopard
+
+    LIBRARY=build/c8/asan/liblibleopard.a
+    LIBRARY_SHA="$(sha256sum "$LIBRARY" | awk '{print $1}')"
+    g++ -std=c++11 -O1 -g -Wall -Wextra -Wpedantic -Werror $SAN_FLAGS \
+      -DLEO2_C8_DISABLE_GLOBAL_NEW_TRACKING=1 \
+      -DLEO2_C8_SOURCE_SHA256=\"$SOURCE_SHA\" \
+      -DLEO2_C8_CORE_GIT_SHA=\"$CORE_SHA\" \
+      -DLEO2_C8_LIBRARY_SHA256=\"$LIBRARY_SHA\" \
+      -DLEO2_C8_SANITIZER_MODE=\"asan-ubsan\" \
+      -I"$CORE_SOURCE" "$SOURCE" "$LIBRARY" -fopenmp -pthread \
+      -o build/c8/c8-asan-ubsan
 
     OMP_NUM_THREADS=1 OMP_DYNAMIC=FALSE \
     ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
