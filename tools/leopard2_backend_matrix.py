@@ -24,12 +24,15 @@ from pathlib import Path
 SCHEMA = "leopard2-backend-matrix/v1"
 VARIANTS = ("auto", "scalar", "ssse3", "avx2")
 COMPARE_TESTS = (
+    "direct_oracle",
     "backend_ops",
     "legacy_golden",
     "api",
     "public_api_contract",
     "random",
+    "locator",
     "active_lch",
+    "gf16_tails",
     "gf16_padded_odd",
     "gf16_legacy_encoder_matrix",
     "low_gf16_direct_rows",
@@ -41,7 +44,10 @@ COMPARE_TESTS = (
     "max_counts",
     "encode_concurrency",
     "codec_options_abi",
+    "direct_repair",
+    "boundaries",
     "transform_differential",
+    "fuzz_smoke",
 )
 SOURCE_FILES = (
     "CMakeLists.txt",
@@ -71,8 +77,10 @@ SOURCE_FILES = (
     "tests/leopard2/test_api.cpp",
     "tests/leopard2/test_public_api_contract.cpp",
     "tests/leopard2/test_random.cpp",
+    "tests/leopard2/test_locator.cpp",
     "tests/leopard2/test_boundaries.cpp",
     "tests/leopard2/test_active_lch.cpp",
+    "tests/leopard2/test_gf16_tails.cpp",
     "tests/leopard2/test_gf16_padded_odd.cpp",
     "tests/leopard2/test_encoder_gf16_legacy_matrix.cpp",
     "tests/leopard2/test_low_gf16_direct_rows.cpp",
@@ -87,6 +95,12 @@ SOURCE_FILES = (
     "tests/leopard2/test_transform_differential.cpp",
     "tests/leopard2/direct_oracle.cpp",
     "tests/leopard2/direct_oracle.h",
+    "tests/leopard2/test_direct_oracle.cpp",
+    "tests/leopard2/direct_repair.cpp",
+    "tests/leopard2/direct_repair.h",
+    "tests/leopard2/test_direct_repair.cpp",
+    "tests/leopard2/fuzz_api.cpp",
+    "tests/leopard2/fuzz_replay.cpp",
     "tools/check_leopard2_portable_isa.sh",
     "tools/leopard2_backend_matrix.py",
 )
@@ -406,9 +420,11 @@ def run_variant(context, variant, index):
         return base
 
     targets = [
+        "leopard2_direct_oracle_test",
         "leopard2_backend_ops_test", "leopard2_legacy_golden_test", "leopard2_api_test",
         "leopard2_public_api_contract_test",
-        "leopard2_random_test", "leopard2_active_lch_test",
+        "leopard2_random_test", "leopard2_locator_test",
+        "leopard2_active_lch_test", "leopard2_gf16_tails_test",
         "leopard2_gf16_padded_odd_test",
         "leopard2_gf16_legacy_encoder_matrix_test",
         "leopard2_low_gf16_direct_rows_test",
@@ -419,7 +435,8 @@ def run_variant(context, variant, index):
         "leopard2_arbitrary_counts_acceptance_test",
         "leopard2_max_counts_test",
         "leopard2_encode_concurrency_test", "leopard2_codec_options_abi_test",
-        "leopard2_transform_differential_test",
+        "leopard2_direct_repair_test", "leopard2_boundaries_test",
+        "leopard2_transform_differential_test", "leopard2_fuzz_smoke",
     ]
     build_command = [
         context["cmake"], "--build", build, "--config", "Release",
@@ -436,6 +453,7 @@ def run_variant(context, variant, index):
         return base
 
     test_specs = {
+        "direct_oracle": ("leopard2_direct_oracle_test", []),
         "backend_ops": ("leopard2_backend_ops_test", []),
         "legacy_golden": ("leopard2_legacy_golden_test", []),
         "api": ("leopard2_api_test", []),
@@ -443,7 +461,9 @@ def run_variant(context, variant, index):
         "random": ("leopard2_random_test", [
             "--seed", "0x4c656f7061726432", "--cases", "64", "--threads", "1"
         ]),
+        "locator": ("leopard2_locator_test", []),
         "active_lch": ("leopard2_active_lch_test", []),
+        "gf16_tails": ("leopard2_gf16_tails_test", []),
         "gf16_padded_odd": ("leopard2_gf16_padded_odd_test", []),
         "gf16_legacy_encoder_matrix": (
             "leopard2_gf16_legacy_encoder_matrix_test", []),
@@ -459,7 +479,10 @@ def run_variant(context, variant, index):
         "max_counts": ("leopard2_max_counts_test", []),
         "encode_concurrency": ("leopard2_encode_concurrency_test", []),
         "codec_options_abi": ("leopard2_codec_options_abi_test", []),
+        "direct_repair": ("leopard2_direct_repair_test", []),
+        "boundaries": ("leopard2_boundaries_test", []),
         "transform_differential": ("leopard2_transform_differential_test", []),
+        "fuzz_smoke": ("leopard2_fuzz_smoke", []),
     }
     tests = {}
     pin_cpu = context["allowed_cpus"][index % len(context["allowed_cpus"])]
