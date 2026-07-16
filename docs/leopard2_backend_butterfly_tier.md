@@ -1,7 +1,8 @@
 # Leopard2 isolated two-way butterfly tier
 
-Status: promoted as the second bounded production x86 backend tier. Fused-four
-butterflies, native NEON, and wider experimental ISAs remain open work.
+Status: implementation complete and correctness-qualified; final production
+promotion is gated on a fresh v3 evidence campaign. Fused-four butterflies,
+native NEON, and wider experimental ISAs remain open work.
 
 ## Scope and call-site audit
 
@@ -62,9 +63,16 @@ Evidence collected on the 2026-07-16 x86 host:
   `cad518a93b326f0f644b7972d488d04eaa2b0475`. This is compile-only evidence,
   not a native ARM correctness or performance claim.
 
-## Pinned end-to-end result
+## Historical v2 end-to-end result
 
-The authoritative machine-readable record is
+The checked-in `experiments/leopard2/backend_butterfly/results` files and the
+numbers below are a preliminary v2 checkpoint. They motivated the tier but are
+not promotion evidence: v2 did not retain portable raw samples or a replayable
+source/build closure, and its four cells did not cover tiny or compact-tail
+neighbors. The v3 campaign described below must replace this checkpoint before
+the status above can change to promoted.
+
+The historical machine-readable record is
 `experiments/leopard2/backend_butterfly/results/abba_manifest.json`; its SHA-256
 is `bcf67fcc07910b1d46fbac22239be10f3c54f2406533d89eea8ca3cbb6577643`.
 The compact adjacent summary points to that manifest. The fail-closed runner
@@ -76,16 +84,14 @@ environment and affinity, and every raw stdout and stderr. The stable raw
 evidence digest is
 `668c534950fb59292161ba6d0a7425497d7af70346d3f36851adbe8ab11598b6`.
 
-The runner rejects missing, duplicate, or relabelled ABBA slots and replays
-all promotion statistics from raw benchmark JSON. Its self-test ran a complete
-48-job mock campaign, then proved rejection of a modified stdout, missing raw
-file, duplicate/relabelled manifest entry, and missing manifest entry. Runner
+The former runner rejected missing, duplicate, or relabelled ABBA slots and
+replayed promotion statistics from benchmark JSON. Runner
 SHA-256 is
 `40e2432ebd5361fa40dbb0a7f1e91e9967c88e77d7472c5935ea9536541a5935`;
 the exact candidate source fingerprint it bound is
 `97f994005bc68cda349e7d98425f3e3500cbedd6a09622ed8aacebbf85dc348f`.
 
-Measurements used three A-B-B-A rounds, six invocation medians per build,
+Historical measurements used three A-B-B-A rounds, six invocation medians per build,
 seven samples per invocation, three warmups, reuse eight, and one thread. All
 48 invocations reported AVX2 and passed the round trip.
 
@@ -96,9 +102,34 @@ seven samples per invocation, three warmups, reuse eight, and one thread. All
 | high GF16, K=1000 R=200, 16 KiB, L=8 | 2714.694 to 2218.318 us | 22.38% | 6781.538 to 5968.193 us | 13.63% |
 | low GF16, K=128 R=1024, 16 KiB, L=16 | 2210.335 to 1912.097 us | 15.60% | 1283.556 to 1215.780 us | 5.57% |
 
-The measured region has no regression; all eight encode/decode metrics improve
-by at least 5%. This clears the normal production promotion threshold without
-changing dispatcher behavior.
+The historical measured region has no regression; all eight encode/decode
+metrics improve by at least 5%. Because the v2 provenance and neighbor matrix
+are incomplete, this is directional evidence rather than a cleared promotion
+gate.
+
+## Fail-closed v3 evidence gate
+
+The v3 runner retains an adjacent portable raw bundle for all 192 invocations:
+16 cells (GF8/GF16, high/low, 64 bytes, compact tails, 1 KiB, and the target
+large size), three A-B-B-A rounds, and both encode/decode metrics. Target cells
+must improve by at least 5%; every tiny and tail neighbor must remain within 2%
+of baseline. High-profile compact tails correctly report no old-API comparison,
+because the old API accepts only byte counts divisible by 64.
+
+Before timing, the runner performs a clean rebuild of each declared Git tree.
+It retains normalized compile commands for exactly the library and benchmark
+translation units, the full dependency manifest and per-unit edges, relevant
+CMake configuration, compiler/CMake/archive/link tool identities, rebuild
+recipe, and artifact hashes. Portable replay checks every source dependency
+against the declared Git commit, binds the candidate to the exact four-backend
+correctness matrix, reconstructs every statistic from raw stdout, and rejects
+noncanonical or inconsistent reservation, topology, command, and campaign
+records. It also retains the CPU vendor/model/family/stepping/microcode,
+kernel/uname identity, scaling driver/governor/EPP, readable min/max frequency
+bounds, pstate/boost/turbo attributes (explicitly null when unavailable), and
+labelled pre/post current-frequency snapshots. The reservation file itself
+must be canonical JSON with no trailing newline; the runner holds a nonblocking
+exclusive lock on it for the campaign.
 
 ## Reproduction
 
@@ -125,13 +156,40 @@ Exercise the evidence runner and its mutation tests before timing:
 
     python3 experiments/leopard2/backend_butterfly/run_abba.py self-test
 
-The full runner command requires explicit baseline/candidate paths and hashes,
-the baseline commit, backend-matrix fingerprint and digest, output directory,
-benchmark CPU, reserved sibling, and coordinator reservation evidence. Run
-`--help` for the complete fail-closed interface. Recheck retained raw evidence
-and exact binaries with:
+Create the reservation document from the repository root, substituting the
+coordinator identity and a unique nonce. This command emits canonical JSON
+without a trailing newline:
+
+    python3 -c 'import json,sys; sys.stdout.write(json.dumps({"benchmark_cpu":15,"nonce":"replace-with-unique-nonce","owner":"coordinator identity","reserved_sibling":31,"schema":"leopard2-cpu-reservation/v1","status":"held"},sort_keys=True,separators=(",",":")))' \
+      > build/leopard2-butterfly-reservation.json
+
+The full runner requires clean baseline and candidate worktrees plus matching
+Release build trees configured with benchmarks enabled, tests/fuzzers/CUDA
+disabled, and compile-command export enabled. A repository-relative example is:
+
+    python3 experiments/leopard2/backend_butterfly/run_abba.py run \
+      --baseline ../leopard-butterfly-baseline/build/evidence-release/bench_leopard2 \
+      --candidate build/evidence-release/bench_leopard2 \
+      --baseline-commit "$(git -C ../leopard-butterfly-baseline rev-parse HEAD)" \
+      --candidate-commit "$(git rev-parse HEAD)" \
+      --baseline-source-root ../leopard-butterfly-baseline \
+      --candidate-source-root . \
+      --baseline-compile-commands ../leopard-butterfly-baseline/build/evidence-release/compile_commands.json \
+      --candidate-compile-commands build/evidence-release/compile_commands.json \
+      --baseline-cmake-cache ../leopard-butterfly-baseline/build/evidence-release/CMakeCache.txt \
+      --candidate-cmake-cache build/evidence-release/CMakeCache.txt \
+      --baseline-library ../leopard-butterfly-baseline/build/evidence-release/liblibleopard.a \
+      --candidate-library build/evidence-release/liblibleopard.a \
+      --matrix build/backend-matrix-results/matrix.json \
+      --reservation-file build/leopard2-butterfly-reservation.json \
+      --output build/backend-butterfly-v3-campaign \
+      --cpu 15 --reserved-sibling 31 --build-jobs 8
+
+Run that command only while the coordinator has reserved the physical core and
+kept its sibling idle. Recheck the retained evidence on a fresh checkout with
+repository-relative paths; binaries and the standalone matrix are optional
+extra checks because both are already hash-bound and the matrix is embedded:
 
     python3 experiments/leopard2/backend_butterfly/run_abba.py verify \
-      --manifest results/leopard2/backend-butterfly-abba-20260716-v2/campaign/manifest.json \
-      --baseline results/leopard2/backend-butterfly-abba-20260716-v2/bin/baseline-bench_leopard2 \
-      --candidate results/leopard2/backend-butterfly-abba-20260716-v2/bin/candidate-bench_leopard2
+      --manifest experiments/leopard2/backend_butterfly/results/abba_manifest.json \
+      --raw-bundle experiments/leopard2/backend_butterfly/results/abba_raw.json
