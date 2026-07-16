@@ -42,6 +42,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <new>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -53,6 +54,55 @@
 
 #if defined(_OPENMP)
 #include <omp.h>
+#endif
+
+static bool C6TrackAllocations = false;
+static uint64_t C6TrackedAllocations = 0;
+
+#if !defined(LEO2_C6_DISABLE_GLOBAL_NEW_TRACKING)
+#if defined(__GNUC__) || defined(__clang__)
+#define C6_NOINLINE __attribute__((noinline))
+#else
+#define C6_NOINLINE
+#endif
+
+static C6_NOINLINE void* C6Allocate(size_t bytes)
+{
+    return malloc(bytes ? bytes : 1);
+}
+
+static C6_NOINLINE void C6Deallocate(void* pointer)
+{
+    free(pointer);
+}
+
+void* operator new(size_t bytes)
+{
+    if (C6TrackAllocations)
+        ++C6TrackedAllocations;
+    void* pointer = C6Allocate(bytes);
+    if (!pointer)
+        throw std::bad_alloc();
+    return pointer;
+}
+
+void* operator new[](size_t bytes)
+{
+    return ::operator new(bytes);
+}
+
+void operator delete(void* pointer) noexcept
+{
+    C6Deallocate(pointer);
+}
+
+void operator delete[](void* pointer) noexcept
+{
+    C6Deallocate(pointer);
+}
+#define LEO2_C6_ALLOCATION_TRACKING_MODE "global-new"
+#else
+#define LEO2_C6_ALLOCATION_TRACKING_MODE "disabled-for-sanitizer"
 #endif
 
 #ifndef LEO2_C6_SOURCE_SHA256
@@ -265,6 +315,150 @@ struct ExactPlan
             }
         }
     }
+
+    uint8_t Coefficient(unsigned parity, unsigned original) const
+    {
+        return leopard::ff8::MultiplyLogElement(
+            1, logs[parity * k + original]);
+    }
+};
+
+struct ExactDecodeTerm
+{
+    bool parity;
+    unsigned index;
+    uint8_t multiplier_log;
+};
+
+struct ExactDecodePlan
+{
+    const ExactPlan& codec;
+    std::vector<unsigned> missing;
+    std::vector<unsigned> selected_parities;
+    std::vector<size_t> offsets;
+    std::vector<ExactDecodeTerm> terms;
+
+    ExactDecodePlan(const ExactPlan& exact_codec,
+                    const std::vector<unsigned>& missing_originals)
+        : codec(exact_codec)
+        , missing(missing_originals)
+    {
+        if (!std::is_sorted(missing.begin(), missing.end()) ||
+            std::adjacent_find(missing.begin(), missing.end()) != missing.end())
+            Fail("exact decode missing set must be sorted and unique");
+        if (!missing.empty() && (missing.back() >= codec.k || missing.size() > codec.r))
+            Fail("exact decode missing set exceeds code capability");
+        offsets.push_back(0);
+        if (missing.empty())
+            return;
+
+        const size_t losses = missing.size();
+        selected_parities.resize(losses);
+        for (size_t equation = 0; equation < losses; ++equation)
+            selected_parities[equation] = static_cast<unsigned>(equation);
+
+        std::vector<std::vector<uint8_t> > augmented(
+            losses, std::vector<uint8_t>(losses * 2, 0));
+        for (size_t equation = 0; equation < losses; ++equation)
+        {
+            for (size_t column = 0; column < losses; ++column)
+                augmented[equation][column] = codec.Coefficient(
+                    selected_parities[equation], missing[column]);
+            augmented[equation][losses + equation] = 1;
+        }
+        for (size_t column = 0; column < losses; ++column)
+        {
+            size_t pivot = column;
+            while (pivot < losses && augmented[pivot][column] == 0)
+                ++pivot;
+            if (pivot == losses)
+                Fail("exact decode repair matrix is singular");
+            if (pivot != column)
+                augmented[pivot].swap(augmented[column]);
+            const uint8_t inverse = leopard::ff8::InverseElement(
+                augmented[column][column]);
+            for (size_t value = 0; value < losses * 2; ++value)
+                augmented[column][value] = leopard::ff8::MultiplyElements(
+                    augmented[column][value], inverse);
+            for (size_t row = 0; row < losses; ++row)
+            {
+                if (row == column || augmented[row][column] == 0)
+                    continue;
+                const uint8_t factor = augmented[row][column];
+                for (size_t value = 0; value < losses * 2; ++value)
+                    augmented[row][value] ^= leopard::ff8::MultiplyElements(
+                        factor, augmented[column][value]);
+            }
+        }
+
+        for (size_t output = 0; output < losses; ++output)
+        {
+            for (size_t equation = 0; equation < losses; ++equation)
+            {
+                const uint8_t coefficient = augmented[output][losses + equation];
+                if (coefficient)
+                    terms.push_back(ExactDecodeTerm{
+                        true, selected_parities[equation],
+                        leopard::ff8::ElementLog(coefficient)
+                    });
+            }
+            for (unsigned original = 0; original < codec.k; ++original)
+            {
+                if (std::binary_search(missing.begin(), missing.end(), original))
+                    continue;
+                uint8_t coefficient = 0;
+                for (size_t equation = 0; equation < losses; ++equation)
+                {
+                    coefficient ^= leopard::ff8::MultiplyElements(
+                        augmented[output][losses + equation],
+                        codec.Coefficient(selected_parities[equation], original));
+                }
+                if (coefficient)
+                    terms.push_back(ExactDecodeTerm{
+                        false, original, leopard::ff8::ElementLog(coefficient)
+                    });
+            }
+            if (terms.size() == offsets.back())
+                Fail("exact decode output has no execution terms");
+            offsets.push_back(terms.size());
+        }
+    }
+
+    void Execute(uint64_t bytes, const void* const* original,
+                 const void* const* recovery, void* const* restored) const
+    {
+        if (missing.empty())
+            return;
+        for (size_t output_index = 0; output_index < missing.size(); ++output_index)
+        {
+            void* output = restored[missing[output_index]];
+            const size_t begin = offsets[output_index];
+            const size_t end = offsets[output_index + 1];
+            for (size_t term_index = begin; term_index < end; ++term_index)
+            {
+                const ExactDecodeTerm& term = terms[term_index];
+                const void* input = term.parity
+                    ? recovery[term.index] : original[term.index];
+                if (term_index == begin)
+                {
+                    if (term.multiplier_log == 0)
+                        memcpy(output, input, static_cast<size_t>(bytes));
+                    else
+                        leopard::ff8::MultiplyBytes(
+                            output, input, term.multiplier_log, bytes);
+                }
+                else if (term.multiplier_log == 0)
+                {
+                    leopard::ff8::MultiplyAddBytes(output, input, 0, bytes);
+                }
+                else
+                {
+                    leopard::ff8::MultiplyAddBytes(
+                        output, input, term.multiplier_log, bytes);
+                }
+            }
+        }
+    }
 };
 
 static std::vector<uint8_t> IndependentRows(
@@ -314,7 +508,137 @@ struct Correctness
     uint64_t coefficients;
     uint64_t byte_comparisons;
     uint64_t digest;
+    uint64_t decode_cases;
+    uint64_t decode_byte_comparisons;
+    uint64_t decode_digest;
+    uint64_t no_loss_calls;
+    uint64_t maximum_loss_cases;
+    uint64_t hot_path_allocations;
 };
+
+static std::vector<unsigned> MissingSet(unsigned k, unsigned losses)
+{
+    std::vector<unsigned> missing;
+    for (unsigned index = 0; index < losses; ++index)
+        missing.push_back(static_cast<unsigned>(
+            (static_cast<uint64_t>(index) * k) / losses));
+    if (!std::is_sorted(missing.begin(), missing.end()) ||
+        std::adjacent_find(missing.begin(), missing.end()) != missing.end())
+        Fail("deterministic missing set contains a duplicate");
+    return missing;
+}
+
+static std::vector<unsigned> LossCounts(unsigned k, unsigned r)
+{
+    const unsigned maximum = std::min(k, r);
+    const unsigned candidates[] = {
+        1, std::min(2U, maximum), std::min(4U, maximum), maximum
+    };
+    std::vector<unsigned> output(candidates, candidates + 4);
+    std::sort(output.begin(), output.end());
+    output.erase(std::unique(output.begin(), output.end()), output.end());
+    return output;
+}
+
+static void RunDecodeCorrectness(
+    const ExactPlan& plan,
+    unsigned case_i,
+    Correctness& result)
+{
+    static const size_t byte_counts[] = { 1, 2, 3, 7, 31, 64, 65, 257 };
+    const std::vector<unsigned> loss_counts = LossCounts(plan.k, plan.r);
+    const unsigned maximum_losses = std::min(plan.k, plan.r);
+    for (size_t size_i = 0;
+         size_i < sizeof(byte_counts) / sizeof(byte_counts[0]);
+         ++size_i)
+    {
+        const size_t bytes = byte_counts[size_i];
+        std::vector<std::vector<uint8_t> > source(
+            plan.k, std::vector<uint8_t>(bytes + 2, 0xa5));
+        std::vector<std::vector<uint8_t> > parity(
+            plan.r, std::vector<uint8_t>(bytes + 2, 0xa5));
+        std::vector<const void*> source_ptr(plan.k);
+        std::vector<void*> parity_ptr(plan.r);
+        std::vector<const void*> received_parity(plan.r);
+        for (unsigned original = 0; original < plan.k; ++original)
+        {
+            for (size_t byte = 0; byte < bytes; ++byte)
+                source[original][byte + 1] = static_cast<uint8_t>(
+                    original * 97U + byte * 53U + case_i * 17U + size_i + 1U);
+            source_ptr[original] = &source[original][1];
+        }
+        for (unsigned recovery = 0; recovery < plan.r; ++recovery)
+        {
+            parity_ptr[recovery] = &parity[recovery][1];
+            received_parity[recovery] = &parity[recovery][1];
+        }
+        plan.Encode(bytes, &source_ptr[0], &parity_ptr[0]);
+
+        const ExactDecodePlan no_loss(plan, std::vector<unsigned>());
+        C6TrackedAllocations = 0;
+        C6TrackAllocations = true;
+        no_loss.Execute(bytes, NULL, NULL, NULL);
+        C6TrackAllocations = false;
+        result.hot_path_allocations += C6TrackedAllocations;
+        ++result.no_loss_calls;
+
+        for (size_t loss_i = 0; loss_i < loss_counts.size(); ++loss_i)
+        {
+            const unsigned losses = loss_counts[loss_i];
+            const std::vector<unsigned> missing = MissingSet(plan.k, losses);
+            const ExactDecodePlan decode(plan, missing);
+            if (decode.selected_parities.size() != losses)
+                Fail("exact decoder selected wrong parity count");
+            for (unsigned equation = 0; equation < losses; ++equation)
+                if (decode.selected_parities[equation] != equation)
+                    Fail("exact decoder parity selection is not deterministic");
+
+            std::vector<const void*> received_original = source_ptr;
+            for (size_t index = 0; index < missing.size(); ++index)
+                received_original[missing[index]] = NULL;
+            std::vector<std::vector<uint8_t> > restored_storage(
+                plan.k, std::vector<uint8_t>(bytes + 2, 0xa5));
+            std::vector<void*> restored(plan.k);
+            for (unsigned original = 0; original < plan.k; ++original)
+                restored[original] = &restored_storage[original][1];
+
+            C6TrackedAllocations = 0;
+            C6TrackAllocations = true;
+            decode.Execute(bytes, &received_original[0],
+                           &received_parity[0], &restored[0]);
+            C6TrackAllocations = false;
+            result.hot_path_allocations += C6TrackedAllocations;
+
+            for (unsigned original = 0; original < plan.k; ++original)
+            {
+                const bool was_missing = std::binary_search(
+                    missing.begin(), missing.end(), original);
+                if (restored_storage[original][0] != 0xa5 ||
+                    restored_storage[original][bytes + 1] != 0xa5)
+                    Fail("exact decoder changed an output guard");
+                if (was_missing)
+                {
+                    if (memcmp(&restored_storage[original][1],
+                               &source[original][1], bytes) != 0)
+                        Fail("exact decoder restored an original incorrectly");
+                    result.decode_digest = Fnv(
+                        result.decode_digest,
+                        &restored_storage[original][1], bytes);
+                    result.decode_byte_comparisons += bytes;
+                }
+                else
+                {
+                    for (size_t byte = 0; byte < bytes; ++byte)
+                        if (restored_storage[original][byte + 1] != 0xa5)
+                            Fail("exact decoder wrote a surviving original");
+                }
+            }
+            ++result.decode_cases;
+            if (losses == maximum_losses)
+                ++result.maximum_loss_cases;
+        }
+    }
+}
 
 static Correctness RunCorrectness()
 {
@@ -324,7 +648,10 @@ static Correctness RunCorrectness()
         { 129, 65 }, { 129, 127 }, { 31, 193 }, { 193, 31 }
     };
     IndependentGF8 field;
-    Correctness result = { 0, 0, 0, UINT64_C(1469598103934665603) };
+    Correctness result = {
+        0, 0, 0, UINT64_C(1469598103934665603),
+        0, 0, UINT64_C(1469598103934665603), 0, 0, 0
+    };
     const size_t bytes = 257;
     for (unsigned case_i = 0; case_i < sizeof(cases) / sizeof(cases[0]); ++case_i)
     {
@@ -373,7 +700,10 @@ static Correctness RunCorrectness()
         ++result.cases;
         result.coefficients += static_cast<uint64_t>(k) * r;
         result.byte_comparisons += static_cast<uint64_t>(r) * bytes;
+        RunDecodeCorrectness(plan, case_i, result);
     }
+    if (result.hot_path_allocations != 0)
+        Fail("exact decoder allocated in its execution hot path");
     return result;
 }
 
@@ -441,10 +771,14 @@ struct CellResult
     uint64_t padded_output_digest;
 };
 
-static leo2_codec* CreateCodec(leo2_context* context, const Geometry& geometry)
+static leo2_codec* CreateCodec(
+    leo2_context* context,
+    const Geometry& geometry,
+    uint32_t flags = 0)
 {
     leo2_codec_options options = {};
     options.struct_size = sizeof(options);
+    options.flags = flags;
     leo2_codec* codec = NULL;
     Require(leo2_codec_create(context, geometry.k, geometry.r,
         geometry.profile, LEO2_FIELD_GF16, &options, &codec), "codec create");
@@ -610,6 +944,307 @@ static CellResult BenchmarkCell(leo2_context* context, const CellSpec& spec)
     return result;
 }
 
+struct DecodeSpec
+{
+    Geometry geometry;
+    unsigned losses;
+    uint64_t bytes;
+    unsigned batch;
+    unsigned reuse;
+};
+
+struct DecodeStripe
+{
+    AlignedBuffer source_storage;
+    AlignedBuffer exact_parity_storage;
+    AlignedBuffer padded_parity_storage;
+    AlignedBuffer exact_restored_storage;
+    AlignedBuffer padded_restored_storage;
+    AlignedBuffer scratch;
+    std::vector<const void*> source_all;
+    std::vector<const void*> received_original;
+    std::vector<void*> exact_parity_write;
+    std::vector<void*> padded_parity_write;
+    std::vector<const void*> exact_parity;
+    std::vector<const void*> padded_parity;
+    std::vector<void*> exact_restored;
+    std::vector<void*> padded_restored;
+    leo2_decode_batch_item padded_item;
+};
+
+struct DecodeCellResult
+{
+    DecodeSpec spec;
+    Summary exact_setup;
+    Summary padded_setup;
+    Summary exact_execution;
+    Summary padded_execution;
+    size_t padded_scratch;
+    size_t exact_terms;
+    uint64_t exact_output_digest;
+    uint64_t padded_output_digest;
+};
+
+static std::vector<DecodeSpec> DecodeBenchmarkSpecs()
+{
+    struct Pattern
+    {
+        Geometry geometry;
+        unsigned losses;
+    };
+    static const Pattern patterns[] = {
+        { { LEO2_PROFILE_LEGACY_HIGH_V1, 2, 129 }, 2 },
+        { { LEO2_PROFILE_LEGACY_HIGH_V1, 3, 129 }, 1 },
+        { { LEO2_PROFILE_LEGACY_HIGH_V1, 3, 129 }, 3 },
+        { { LEO2_PROFILE_LEGACY_HIGH_V1, 3, 130 }, 3 },
+        { { LEO2_PROFILE_LEGACY_HIGH_V1, 4, 129 }, 4 },
+        { { LEO2_PROFILE_LEGACY_HIGH_V1, 17, 129 }, 1 },
+        { { LEO2_PROFILE_LEGACY_HIGH_V1, 17, 129 }, 4 },
+        { { LEO2_PROFILE_LEGACY_HIGH_V1, 17, 129 }, 17 },
+        { { LEO2_PROFILE_LOW_V1, 129, 2 }, 2 },
+        { { LEO2_PROFILE_LOW_V1, 129, 3 }, 1 },
+        { { LEO2_PROFILE_LOW_V1, 129, 3 }, 3 },
+        { { LEO2_PROFILE_LOW_V1, 130, 3 }, 3 },
+        { { LEO2_PROFILE_LOW_V1, 129, 4 }, 4 },
+        { { LEO2_PROFILE_LOW_V1, 129, 17 }, 1 },
+        { { LEO2_PROFILE_LOW_V1, 129, 17 }, 4 },
+        { { LEO2_PROFILE_LOW_V1, 129, 17 }, 17 }
+    };
+    std::vector<DecodeSpec> result;
+    for (size_t index = 0; index < sizeof(patterns) / sizeof(patterns[0]); ++index)
+    {
+        result.push_back(DecodeSpec{ patterns[index].geometry,
+                                    patterns[index].losses, 64, 8, 8 });
+        result.push_back(DecodeSpec{ patterns[index].geometry,
+                                    patterns[index].losses, 1024, 8, 4 });
+        result.push_back(DecodeSpec{ patterns[index].geometry,
+                                    patterns[index].losses, 65536, 1, 1 });
+        if (patterns[index].geometry.k <= 3 || patterns[index].geometry.r <= 3)
+            result.push_back(DecodeSpec{ patterns[index].geometry,
+                                        patterns[index].losses, 1048576, 1, 1 });
+    }
+    return result;
+}
+
+static void FillDecodeStripe(
+    DecodeStripe& stripe,
+    const DecodeSpec& spec,
+    const std::vector<unsigned>& missing,
+    const ExactPlan& exact_codec,
+    const leo2_codec* padded_codec,
+    size_t decode_scratch_bytes,
+    unsigned stripe_index)
+{
+    const size_t source_bytes = static_cast<size_t>(spec.geometry.k) * spec.bytes;
+    const size_t parity_bytes = static_cast<size_t>(spec.geometry.r) * spec.bytes;
+    const size_t restored_bytes = static_cast<size_t>(spec.losses) * spec.bytes;
+    stripe.source_storage.Reset(source_bytes);
+    stripe.exact_parity_storage.Reset(parity_bytes);
+    stripe.padded_parity_storage.Reset(parity_bytes);
+    stripe.exact_restored_storage.Reset(restored_bytes);
+    stripe.padded_restored_storage.Reset(restored_bytes);
+    stripe.source_all.resize(spec.geometry.k);
+    stripe.received_original.resize(spec.geometry.k);
+    stripe.exact_parity_write.resize(spec.geometry.r);
+    stripe.padded_parity_write.resize(spec.geometry.r);
+    stripe.exact_parity.resize(spec.geometry.r);
+    stripe.padded_parity.resize(spec.geometry.r);
+    stripe.exact_restored.assign(spec.geometry.k, static_cast<void*>(NULL));
+    stripe.padded_restored.assign(spec.geometry.k, static_cast<void*>(NULL));
+    for (size_t byte = 0; byte < source_bytes; ++byte)
+        stripe.source_storage.data()[byte] = static_cast<uint8_t>(
+            byte * 89U + stripe_index * 43U + spec.geometry.k * 7U + spec.losses);
+    for (unsigned original = 0; original < spec.geometry.k; ++original)
+    {
+        const uint8_t* pointer = stripe.source_storage.data() +
+            static_cast<size_t>(original) * spec.bytes;
+        stripe.source_all[original] = pointer;
+        stripe.received_original[original] = pointer;
+    }
+    for (size_t index = 0; index < missing.size(); ++index)
+    {
+        stripe.received_original[missing[index]] = NULL;
+        stripe.exact_restored[missing[index]] = stripe.exact_restored_storage.data() +
+            index * spec.bytes;
+        stripe.padded_restored[missing[index]] = stripe.padded_restored_storage.data() +
+            index * spec.bytes;
+    }
+    for (unsigned recovery = 0; recovery < spec.geometry.r; ++recovery)
+    {
+        uint8_t* exact_pointer = stripe.exact_parity_storage.data() +
+            static_cast<size_t>(recovery) * spec.bytes;
+        uint8_t* padded_pointer = stripe.padded_parity_storage.data() +
+            static_cast<size_t>(recovery) * spec.bytes;
+        stripe.exact_parity_write[recovery] = exact_pointer;
+        stripe.padded_parity_write[recovery] = padded_pointer;
+        stripe.exact_parity[recovery] = exact_pointer;
+        stripe.padded_parity[recovery] = padded_pointer;
+    }
+    exact_codec.Encode(spec.bytes, &stripe.source_all[0],
+                       &stripe.exact_parity_write[0]);
+
+    size_t encode_scratch_bytes = 0;
+    Require(leo2_encode_scratch_size(padded_codec, spec.bytes,
+                                     &encode_scratch_bytes),
+            "decode benchmark encode scratch query");
+    stripe.scratch.Reset(encode_scratch_bytes);
+    Require(leo2_encode(padded_codec, spec.bytes, &stripe.source_all[0],
+                        &stripe.padded_parity_write[0], stripe.scratch.data(),
+                        stripe.scratch.size()),
+            "decode benchmark parity preparation");
+    stripe.scratch.Reset(decode_scratch_bytes);
+    stripe.padded_item.shard_bytes = spec.bytes;
+    stripe.padded_item.original = &stripe.received_original[0];
+    stripe.padded_item.recovery = &stripe.padded_parity[0];
+    stripe.padded_item.restored_original = &stripe.padded_restored[0];
+    stripe.padded_item.scratch = stripe.scratch.data();
+    stripe.padded_item.scratch_bytes = stripe.scratch.size();
+}
+
+static void VerifyDecodeStripe(
+    const DecodeStripe& stripe,
+    const DecodeSpec& spec,
+    const std::vector<unsigned>& missing)
+{
+    for (size_t index = 0; index < missing.size(); ++index)
+    {
+        const uint8_t* expected = stripe.source_storage.data() +
+            static_cast<size_t>(missing[index]) * spec.bytes;
+        const uint8_t* exact = stripe.exact_restored_storage.data() +
+            index * spec.bytes;
+        const uint8_t* padded = stripe.padded_restored_storage.data() +
+            index * spec.bytes;
+        if (memcmp(expected, exact, static_cast<size_t>(spec.bytes)) != 0 ||
+            memcmp(expected, padded, static_cast<size_t>(spec.bytes)) != 0)
+            Fail("decode benchmark restored data incorrectly");
+    }
+}
+
+static DecodeCellResult BenchmarkDecodeCell(
+    leo2_context* context,
+    const DecodeSpec& spec)
+{
+    DecodeCellResult result;
+    result.spec = spec;
+    result.exact_output_digest = UINT64_C(1469598103934665603);
+    result.padded_output_digest = UINT64_C(1469598103934665603);
+    const std::vector<unsigned> missing = MissingSet(spec.geometry.k, spec.losses);
+    ExactPlan exact_codec(spec.geometry.k, spec.geometry.r);
+    leo2_codec* padded_codec = CreateCodec(
+        context, spec.geometry, LEO2_CODEC_FORCE_SPECIALIZED_DECODE);
+    std::vector<uint8_t> original_present(spec.geometry.k, 1);
+    std::vector<uint8_t> recovery_present(spec.geometry.r, 1);
+    for (size_t index = 0; index < missing.size(); ++index)
+        original_present[missing[index]] = 0;
+
+    std::vector<double> exact_setup, padded_setup;
+    for (unsigned sample = 0; sample < 9; ++sample)
+    {
+        Clock::time_point begin = Clock::now();
+        ExactDecodePlan* plan = new ExactDecodePlan(exact_codec, missing);
+        Clock::time_point end = Clock::now();
+        exact_setup.push_back(std::chrono::duration<double, std::micro>(
+            end - begin).count());
+        delete plan;
+
+        begin = Clock::now();
+        leo2_decode_plan* padded_plan = NULL;
+        Require(leo2_decode_plan_create(padded_codec, &original_present[0],
+            &recovery_present[0], &padded_plan), "padded decode plan setup");
+        end = Clock::now();
+        padded_setup.push_back(std::chrono::duration<double, std::micro>(
+            end - begin).count());
+        leo2_decode_plan_destroy(padded_plan);
+    }
+    result.exact_setup = Summarize(exact_setup);
+    result.padded_setup = Summarize(padded_setup);
+
+    ExactDecodePlan exact_plan(exact_codec, missing);
+    result.exact_terms = exact_plan.terms.size();
+    leo2_decode_plan* padded_plan = NULL;
+    Require(leo2_decode_plan_create(padded_codec, &original_present[0],
+        &recovery_present[0], &padded_plan), "padded decode plan create");
+    size_t padded_scratch = 0;
+    Require(leo2_decode_plan_scratch_size(padded_plan, spec.bytes,
+        &padded_scratch), "padded decode scratch query");
+    result.padded_scratch = padded_scratch;
+
+    std::vector<std::unique_ptr<DecodeStripe> > stripes;
+    std::vector<leo2_decode_batch_item> padded_items(spec.batch);
+    for (unsigned stripe_index = 0; stripe_index < spec.batch; ++stripe_index)
+    {
+        stripes.push_back(std::unique_ptr<DecodeStripe>(new DecodeStripe));
+        FillDecodeStripe(*stripes.back(), spec, missing, exact_codec,
+                         padded_codec, padded_scratch, stripe_index);
+        padded_items[stripe_index] = stripes.back()->padded_item;
+    }
+
+    for (unsigned warmup = 0; warmup < 2; ++warmup)
+    {
+        for (unsigned stripe_index = 0; stripe_index < spec.batch; ++stripe_index)
+            exact_plan.Execute(spec.bytes,
+                &stripes[stripe_index]->received_original[0],
+                &stripes[stripe_index]->exact_parity[0],
+                &stripes[stripe_index]->exact_restored[0]);
+        Require(leo2_decode_plan_execute_batch(
+            padded_plan, &padded_items[0], padded_items.size()),
+            "padded decode warmup");
+    }
+
+    std::vector<double> exact_samples, padded_samples;
+    for (unsigned sample = 0; sample < 9; ++sample)
+    {
+        double measured[2] = { 0, 0 };
+        for (unsigned order = 0; order < 2; ++order)
+        {
+            const bool run_exact = ((sample + order) & 1U) == 0;
+            const Clock::time_point begin = Clock::now();
+            for (unsigned call = 0; call < spec.reuse; ++call)
+            {
+                if (run_exact)
+                {
+                    for (unsigned stripe_index = 0;
+                         stripe_index < spec.batch; ++stripe_index)
+                    {
+                        exact_plan.Execute(spec.bytes,
+                            &stripes[stripe_index]->received_original[0],
+                            &stripes[stripe_index]->exact_parity[0],
+                            &stripes[stripe_index]->exact_restored[0]);
+                    }
+                }
+                else
+                {
+                    Require(leo2_decode_plan_execute_batch(
+                        padded_plan, &padded_items[0], padded_items.size()),
+                        "padded decode benchmark");
+                }
+            }
+            const Clock::time_point end = Clock::now();
+            measured[run_exact ? 0 : 1] =
+                std::chrono::duration<double, std::micro>(end - begin).count() /
+                spec.reuse;
+        }
+        exact_samples.push_back(measured[0]);
+        padded_samples.push_back(measured[1]);
+    }
+    result.exact_execution = Summarize(exact_samples);
+    result.padded_execution = Summarize(padded_samples);
+
+    for (unsigned stripe_index = 0; stripe_index < spec.batch; ++stripe_index)
+    {
+        VerifyDecodeStripe(*stripes[stripe_index], spec, missing);
+        result.exact_output_digest = Fnv(result.exact_output_digest,
+            stripes[stripe_index]->exact_restored_storage.data(),
+            stripes[stripe_index]->exact_restored_storage.size());
+        result.padded_output_digest = Fnv(result.padded_output_digest,
+            stripes[stripe_index]->padded_restored_storage.data(),
+            stripes[stripe_index]->padded_restored_storage.size());
+    }
+    leo2_decode_plan_destroy(padded_plan);
+    leo2_codec_destroy(padded_codec);
+    return result;
+}
+
 static std::vector<int> Affinity()
 {
     std::vector<int> output;
@@ -680,18 +1315,21 @@ static void WriteSummary(std::ostream& out, const Summary& value)
 
 static void WriteJson(const std::string& path, const char* requested_backend,
                       leo2_backend runtime_backend, const Correctness& correctness,
-                      const std::vector<CellResult>& cells)
+                      const std::vector<CellResult>& cells,
+                      const std::vector<DecodeCellResult>& decode_cells)
 {
     std::ofstream file(path.c_str(), std::ios::binary | std::ios::trunc);
     if (!file)
         Fail("cannot open JSON output");
     const std::vector<int> affinity = Affinity();
     const char* omp_env = getenv("OMP_NUM_THREADS");
-    file << "{\n  \"schema\":\"leopard2-c6-cpp/v1\",\n"
+    file << "{\n  \"schema\":\"leopard2-c6-cpp/v2\",\n"
          << "  \"source_sha256\":\"" << LEO2_C6_SOURCE_SHA256 << "\",\n"
          << "  \"core_git_sha\":\"" << LEO2_C6_CORE_GIT_SHA << "\",\n"
          << "  \"library_sha256\":\"" << LEO2_C6_LIBRARY_SHA256 << "\",\n"
          << "  \"sanitizer_mode\":\"" << LEO2_C6_SANITIZER_MODE << "\",\n"
+         << "  \"allocation_tracking\":\""
+         << LEO2_C6_ALLOCATION_TRACKING_MODE << "\",\n"
          << "  \"compiler\":\"" << CompilerName() << "\",\n"
          << "  \"compiler_version\":\"" << CompilerVersion() << "\",\n"
          << "  \"cpu_model\":\"" << CpuModel() << "\",\n"
@@ -713,7 +1351,15 @@ static void WriteJson(const std::string& path, const char* requested_backend,
     file << ",\n  \"correctness\":{\"cases\":" << correctness.cases
          << ",\"coefficients\":" << correctness.coefficients
          << ",\"byte_comparisons\":" << correctness.byte_comparisons
-         << ",\"digest\":\"" << Hex64(correctness.digest) << "\"},\n"
+         << ",\"digest\":\"" << Hex64(correctness.digest) << "\""
+         << ",\"decode_cases\":" << correctness.decode_cases
+         << ",\"decode_byte_comparisons\":"
+         << correctness.decode_byte_comparisons
+         << ",\"decode_digest\":\"" << Hex64(correctness.decode_digest) << "\""
+         << ",\"no_loss_calls\":" << correctness.no_loss_calls
+         << ",\"maximum_loss_cases\":" << correctness.maximum_loss_cases
+         << ",\"hot_path_allocations\":" << correctness.hot_path_allocations
+         << "},\n"
          << "  \"cells\":[\n";
     for (size_t index = 0; index < cells.size(); ++index)
     {
@@ -758,6 +1404,69 @@ static void WriteJson(const std::string& path, const char* requested_backend,
              << "\",\"padded_output_digest\":\"" << Hex64(cell.padded_output_digest)
              << "\"}" << (index + 1 == cells.size() ? "\n" : ",\n");
     }
+    file << "  ],\n  \"decode_cells\":[\n";
+    for (size_t index = 0; index < decode_cells.size(); ++index)
+    {
+        const DecodeCellResult& cell = decode_cells[index];
+        const uint64_t execution_terms = static_cast<uint64_t>(
+            cell.exact_terms) * cell.spec.batch;
+        const double ratio = cell.padded_execution.median /
+            cell.exact_execution.median;
+        const double credible = 100.0 * ((cell.padded_execution.median -
+            cell.padded_execution.mad) / (cell.exact_execution.median +
+            cell.exact_execution.mad) - 1.0);
+        const size_t plan_payload = cell.exact_terms * sizeof(ExactDecodeTerm) +
+            (static_cast<size_t>(cell.spec.losses) + 1) * sizeof(size_t) +
+            static_cast<size_t>(cell.spec.losses) * 2 * sizeof(unsigned);
+        file << "    {\"profile\":\"" << ProfileName(cell.spec.geometry.profile)
+             << "\",\"K\":" << cell.spec.geometry.k
+             << ",\"R\":" << cell.spec.geometry.r
+             << ",\"losses\":" << cell.spec.losses
+             << ",\"parent\":" << Parent(cell.spec.geometry.profile,
+                                              cell.spec.geometry.k,
+                                              cell.spec.geometry.r)
+             << ",\"bytes\":" << cell.spec.bytes
+             << ",\"batch\":" << cell.spec.batch
+             << ",\"reuse\":" << cell.spec.reuse
+             << ",\"exact_setup\":";
+        WriteSummary(file, cell.exact_setup);
+        file << ",\"padded_setup\":";
+        WriteSummary(file, cell.padded_setup);
+        file << ",\"exact_execution\":";
+        WriteSummary(file, cell.exact_execution);
+        file << ",\"padded_execution\":";
+        WriteSummary(file, cell.padded_execution);
+        file << ",\"padded_over_exact_ratio\":" << std::fixed
+             << std::setprecision(6) << ratio
+             << ",\"credible_gain_percent\":" << credible
+             << ",\"selected_parity_count\":" << cell.spec.losses
+             << ",\"selected_parity_prefix_end\":" << cell.spec.losses
+             << ",\"exact_codec_table_bytes\":"
+             << static_cast<uint64_t>(cell.spec.geometry.k) * cell.spec.geometry.r
+             << ",\"exact_plan_terms\":" << cell.exact_terms
+             << ",\"exact_term_record_bytes\":" << sizeof(ExactDecodeTerm)
+             << ",\"exact_offset_record_bytes\":" << sizeof(size_t)
+             << ",\"exact_coordinate_record_bytes\":" << sizeof(unsigned)
+             << ",\"exact_plan_payload_bytes\":" << plan_payload
+             << ",\"exact_execution_terms\":" << execution_terms
+             << ",\"exact_term_payload_bytes\":"
+             << execution_terms * cell.spec.bytes
+             << ",\"exact_execution_scratch_bytes\":0"
+             << ",\"padded_execution_scratch_bytes\":" << cell.padded_scratch
+             << ",\"offered_received_bytes\":"
+             << static_cast<uint64_t>(cell.spec.geometry.k - cell.spec.losses +
+                                      cell.spec.geometry.r) *
+                    cell.spec.bytes * cell.spec.batch
+             << ",\"repaired_output_bytes\":"
+             << static_cast<uint64_t>(cell.spec.losses) *
+                    cell.spec.bytes * cell.spec.batch
+             << ",\"baseline\":\"padded_specialized_gf16\""
+             << ",\"exact_output_digest\":\""
+             << Hex64(cell.exact_output_digest)
+             << "\",\"padded_output_digest\":\""
+             << Hex64(cell.padded_output_digest) << "\"}"
+             << (index + 1 == decode_cells.size() ? "\n" : ",\n");
+    }
     file << "  ]\n}\n";
     if (!file)
         Fail("failed while writing JSON output");
@@ -771,13 +1480,16 @@ int main(int argc, char** argv)
     {
         const bool correctness_only = argc == 5 &&
             std::string(argv[4]) == "--correctness-only";
-        if ((argc != 4 && !correctness_only) ||
+        const bool decode_smoke = argc == 5 &&
+            std::string(argv[4]) == "--decode-smoke";
+        if ((argc != 4 && !correctness_only && !decode_smoke) ||
             std::string(argv[1]) != "--backend" ||
             (std::string(argv[2]) != "auto" && std::string(argv[2]) != "scalar" &&
              std::string(argv[2]) != "ssse3" && std::string(argv[2]) != "avx2"))
         {
             std::cerr << "usage: " << argv[0]
-                      << " --backend NAME OUTPUT.json [--correctness-only]\n";
+                      << " --backend NAME OUTPUT.json "
+                      << "[--correctness-only|--decode-smoke]\n";
             return 2;
         }
         leo2_context_options context_options = {};
@@ -792,7 +1504,9 @@ int main(int argc, char** argv)
 
         const Correctness correctness = RunCorrectness();
         std::vector<CellResult> cells;
-        if (!correctness_only && std::string(LEO2_C6_SANITIZER_MODE) == "none")
+        std::vector<DecodeCellResult> decode_cells;
+        if (!correctness_only && !decode_smoke &&
+            std::string(LEO2_C6_SANITIZER_MODE) == "none")
         {
             const std::vector<CellSpec> specs = BenchmarkSpecs();
             for (size_t i = 0; i < specs.size(); ++i)
@@ -800,8 +1514,22 @@ int main(int argc, char** argv)
                 std::cerr << "C6 benchmark " << (i + 1) << '/' << specs.size() << '\n';
                 cells.push_back(BenchmarkCell(context, specs[i]));
             }
+            const std::vector<DecodeSpec> decode_specs = DecodeBenchmarkSpecs();
+            for (size_t i = 0; i < decode_specs.size(); ++i)
+            {
+                std::cerr << "C6 decode benchmark " << (i + 1) << '/'
+                          << decode_specs.size() << '\n';
+                decode_cells.push_back(BenchmarkDecodeCell(
+                    context, decode_specs[i]));
+            }
         }
-        WriteJson(argv[3], argv[2], runtime, correctness, cells);
+        else if (decode_smoke &&
+                 std::string(LEO2_C6_SANITIZER_MODE) == "none")
+        {
+            const std::vector<DecodeSpec> decode_specs = DecodeBenchmarkSpecs();
+            decode_cells.push_back(BenchmarkDecodeCell(context, decode_specs[0]));
+        }
+        WriteJson(argv[3], argv[2], runtime, correctness, cells, decode_cells);
         leo2_context_destroy(context);
         return 0;
     }

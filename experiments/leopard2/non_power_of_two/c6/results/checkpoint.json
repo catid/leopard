@@ -1,15 +1,15 @@
 {
   "artifacts_sha256": {
-    "algebra": "34c9dc32acd50447df522a78051bc6d3863898e1636c654ec2c8856ebb1d5482",
-    "asan-ubsan": "9aa7d727d461b2723c1eea5f4f5153460c37f086b240234f0c25b402ace2c1bf",
-    "auto": "38df7410a03ba4c7458790f40948a2d57e66162f66a67469276f354b31e8799c",
-    "avx2": "72ba2c6ecd779715d5e5237dc8bc26d82b079aaf368c3b05b36cd49bb10c25f2",
-    "benchmark": "ba8ddff2b23fdd085e501d3670d839b51351aa4a90ebfde543f86cbb842854ba",
-    "benchmark-manifest": "27ed3fb56bcef98f363072e13b0f69bdbbb2742b4417d8bd362e860dc9860f1f",
-    "benchmark-stderr": "64de1ab137f7097583ab5dc1822b516a3a35533f54dbeb040571b27f040f2c72",
+    "algebra": "8a8e1ba31ed99d549fd441c464dd0c796ae1edac1835e77e797e78297ff86aef",
+    "asan-ubsan": "cacaadb861e5d8d2c1f374f62806137fb18fb6340fa1accbfa8a0608c4af8525",
+    "auto": "6485811e61871602e3e19dd8979649124fd05caabba8f95c1f114953e9f0146b",
+    "avx2": "1119aed3d9b1d07320faae67d16eb9a3e5e4e3df711ea955a48c2393a92e2fc3",
+    "benchmark": "f9ccc95a1b55635653460eb28feec654b17447cc11f7c3f27df76502ef07007b",
+    "benchmark-manifest": "2baa80b0845b2d57d32cf274e96494c2a67ed27e7129d421f5e974d5139d9d34",
+    "benchmark-stderr": "817e60787151509aea63ac547b6dcc036618cc732f059a4fde9ea22b5a476449",
     "benchmark-stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "scalar": "ba5bc9cbe4478f16ab89db37200d3b3d16704408aab90caf237051f6f2335651",
-    "ssse3": "ce7978d14adf083e55b46692f64069f652c6f7c3ebdc982d0b9e737e0095e923"
+    "scalar": "2114f55f07e0ffd36e1dd0b1c043b5f8af541b244999c6231787074204a33f06",
+    "ssse3": "21e1e4d556641d03ca2ad06e0240425c5877681c87d1af856844b284c8b8d475"
   },
   "baseline_core_git_sha": "48803c06fbd7a6802b4438af60e3104895938c9d",
   "benchmark": {
@@ -17,20 +17,20 @@
     "compiler_version": "13.3.0",
     "cpu": 15,
     "cpu_model": "AMD Ryzen 9 9950X3D 16-Core Processor",
-    "executable_sha256": "d4fe26a82e15099b4d5d096a186bfb0c03348146e802b1d84af3c5ea0f7049f0",
+    "executable_sha256": "11c1fd87f1c8470b19ad35de5fc33d659a91050ccda4c39c40eeb98e9f4f15aa",
     "linked_library_sha256": "69c195f4b6e6ce6a7713fed29e17f7171cb6f2e17783e8a3feb48b2fb3fcf925",
     "meaningful_region_gate": true,
     "neighbor_cells": 14,
-    "neighbor_credible_gain_percent_min": 189.340011,
+    "neighbor_credible_gain_percent_min": 237.821827,
     "neighbors_no_regression_over_2_percent": true,
     "runtime_backend": "avx2",
     "target_at_least_10_percent": true,
     "target_cells": 24,
-    "target_credible_gain_percent_median": 392.246441,
-    "target_credible_gain_percent_min": 229.230223,
+    "target_credible_gain_percent_median": 406.2605885,
+    "target_credible_gain_percent_min": 225.584411,
     "wide_cells": 12,
-    "wide_credible_gain_percent_max": 34.465051,
-    "wide_credible_gain_percent_min": -26.118845
+    "wide_credible_gain_percent_max": 16.854102,
+    "wide_credible_gain_percent_min": -22.068386
   },
   "correctness": {
     "asan_ubsan": "pass",
@@ -44,7 +44,13 @@
       "byte_comparisons": 278074,
       "cases": 12,
       "coefficients": 66920,
-      "digest": "0xc58c8188e359fdf2"
+      "decode_byte_comparisons": 236500,
+      "decode_cases": 320,
+      "decode_digest": "0x29158fba4df259c1",
+      "digest": "0xc58c8188e359fdf2",
+      "hot_path_allocations": 0,
+      "maximum_loss_cases": 96,
+      "no_loss_calls": 96
     },
     "gf4_exhaustive": {
       "full_length_generators": 15,
@@ -57,14 +63,75 @@
       "explicit_wire_difference_witnesses": 24,
       "parity_coefficients_nonzero": 123596,
       "repair_minor_rank_checks": 80
+    },
+    "gf8_decoder_algebra": {
+      "folded_nonzero_terms": 4933,
+      "no_loss_execution_terms": 0,
+      "plans": 16,
+      "recovered_values": 70
     }
   },
+  "decode_benchmark": {
+    "baseline": "padded_specialized_gf16",
+    "declared_reuse_setup_plus_execution_ratio_median": 36.11798309690788,
+    "declared_reuse_setup_plus_execution_ratio_min": 2.280993381849241,
+    "exact_setup_median_us_max": 74.391,
+    "exact_setup_median_us_min": 0.08,
+    "loss_count_groups": {
+      "1": {
+        "cells": 14,
+        "credible_gain_percent_max": 179126.538462,
+        "credible_gain_percent_min": 1689.32724
+      },
+      "17": {
+        "cells": 6,
+        "credible_gain_percent_max": 1763.011346,
+        "credible_gain_percent_min": 153.342989
+      },
+      "2": {
+        "cells": 8,
+        "credible_gain_percent_max": 107772.09788,
+        "credible_gain_percent_min": 989.094721
+      },
+      "3": {
+        "cells": 16,
+        "credible_gain_percent_max": 52868.341352,
+        "credible_gain_percent_min": 657.508868
+      },
+      "4": {
+        "cells": 12,
+        "credible_gain_percent_max": 27448.214286,
+        "credible_gain_percent_min": 500.691976
+      }
+    },
+    "maximum_loss_cells": 36,
+    "maximum_loss_credible_gain_percent_max": 107772.09788,
+    "maximum_loss_credible_gain_percent_min": 153.342989,
+    "meaningful_region_gate": true,
+    "neighbor_cells": 14,
+    "neighbor_credible_gain_percent_min": 529.369116,
+    "neighbors_no_regression_over_2_percent": true,
+    "one_shot_setup_plus_execution_ratio_median": 33.36625352166401,
+    "one_shot_setup_plus_execution_ratio_min": 1.3514846560194032,
+    "padded_setup_median_us_max": 51.67,
+    "padded_setup_median_us_min": 1.4,
+    "target_at_least_10_percent": true,
+    "target_cells": 24,
+    "target_credible_gain_percent_median": 19516.0549495,
+    "target_credible_gain_percent_min": 657.508868,
+    "wide_cells": 18,
+    "wide_credible_gain_percent_max": 29778.579356,
+    "wide_credible_gain_percent_min": 153.342989
+  },
   "disposition": {
+    "bead_recommendation": "close-experiment-result",
     "default_build_changed": false,
     "legacy_wire_compatible": false,
     "measured_candidate_region": true,
+    "measured_decode_region": true,
     "production_promotion": "none",
-    "reason": "the exact GF8 prefix code has no frozen serialized profile identity, production decoder, second-host timing, or calibrated dispatcher"
+    "promotion_followup": "C7/C8/C10 and W",
+    "reason": "the exact GF8 prefix code has no frozen serialized profile identity, second-host timing, production API review, or calibrated dispatcher"
   },
   "geometry": {
     "affected_profile_cells": {
@@ -72,12 +139,18 @@
       "low_v1": 10795
     },
     "benchmark_cells": 50,
-    "benchmark_parent": 512
+    "benchmark_parent": 512,
+    "decode_benchmark_cells": 56
   },
   "memory": {
+    "exact_decode_execution_scratch_bytes": 0,
+    "exact_decode_plan_payload_bytes_max": 26596,
+    "exact_decode_plan_payload_bytes_min": 60,
     "exact_execution_scratch_bytes": 0,
     "exact_table_bytes_max": 2210,
     "exact_table_bytes_min": 258,
+    "padded_decode_execution_scratch_bytes_max": 676343936,
+    "padded_decode_execution_scratch_bytes_min": 51520,
     "padded_execution_scratch_bytes_max": 536878272,
     "padded_execution_scratch_bytes_min": 38976
   },
@@ -89,12 +162,12 @@
     "tang_han_epsilon_gf8": "C3b exact inverse algebra only; scalar best gain 0.862 and no end-to-end exact encoder/profile identity",
     "wire_compatible_truncated_gf8": "impossible in the target cells: the declared parent has 512 GF16 coordinates, exceeding GF8 order; C2 remains a same-field parent executor"
   },
-  "schema": "leopard2-c6-checkpoint/v1",
+  "schema": "leopard2-c6-checkpoint/v2",
   "source_sha256": {
-    "algebra.py": "dda5eeb861e8fcb71d64b998e8c46990d91ae497597d3bc852d2dd0a57d284ec",
-    "c6_gf256.cpp": "6bf37c848d16af7f53fccadd2fdd6b643c1600a9fed39eb6390952ac18663a40",
-    "checkpoint.py": "27c920bc3451f858c72ff4c9c86b245b7c41855cc595188848d479501d25b15e",
-    "run_benchmark.py": "c956c1701fa2cc1bc14b4f34874d8d1858ce695c92d8c2860138eac548d5dbc4"
+    "algebra.py": "8cd4184059a0849a1b430b7fe60c5af48915701c815f8d6b889f3f87a6e8a16d",
+    "c6_gf256.cpp": "177eb3df3a8e955a9813f18e80fbc9e2aca4c5b41c0f28744b36f34c9158a2bc",
+    "checkpoint.py": "05a84c48f51ba0d2dba8db8069088636362f617675c610baf621693543005cdf",
+    "run_benchmark.py": "934c73a953b6e8fe324e31441531eea15475a689c2670d0924feae4a1490cfb0"
   },
   "status": "pass"
 }

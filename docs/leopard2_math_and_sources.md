@@ -330,6 +330,30 @@ Cantor-coordinate elements.  `experiments/leopard2/non_power_of_two/c6/algebra.p
 checks the derivation using independent carryless polynomial arithmetic and
 exhaustive GF(2^4) rank tests.
 
+For an ordered missing-original set `M={m_0,...,m_(L-1)}`, the current C6
+checkpoint requires the parity prefix to be received and deterministically
+selects rows `0,...,L-1`.  It does not yet plan around parity erasures.  Let
+
+    A[e,u] = G(e,m_u)
+    b_e    = p_e + sum_(i not in M) G(e,i) d_i.
+
+Then `A d_M = b`, so plan setup computes `A^-1` and folds both kinds of input
+into one fixed coefficient list per missing output:
+
+    d_(m_u) = sum_e A^-1[u,e] p_e
+              + sum_(i not in M) (
+                    sum_e A^-1[u,e] G(e,i)) d_i.
+
+All signs are additions because the field has characteristic two.  Distinct
+evaluation points make `A` nonsingular: otherwise a nonzero degree-`<K`
+polynomial could vanish at the `K-L` surviving systematic points and the `L`
+selected parity points.  Byte-heavy execution consequently needs only fixed
+multiply-adds and no inverse, matrix operation, allocation, or scratch.  The
+Python oracle independently constructs and inverts `A`, folds the same terms,
+and evaluates them with carryless polynomial arithmetic.  This direct repair
+derivation follows the generic interpolation context of R20/R21 but is new for
+the exact-prefix coordinate convention above.
+
 No active-parent normalization, shortening factor, or puncturing factor can
 make this code wire-equivalent to the frozen GF16 parent.  That parent has 512
 distinct coordinates, while GF8 has only 256 elements; a GF8 transform cannot

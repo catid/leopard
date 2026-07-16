@@ -28,7 +28,7 @@ from typing import Sequence
 
 ROOT = Path(__file__).resolve().parents[4]
 C3B = ROOT / "experiments/leopard2/non_power_of_two/c3b/fast_inverse.py"
-SCHEMA = "leopard2-c6-algebra/v1"
+SCHEMA = "leopard2-c6-algebra/v2"
 
 
 def load_c3b():
@@ -115,6 +115,71 @@ def rank(field, matrix: Sequence[Sequence[int]]) -> int:
         if pivot_row == len(rows):
             break
     return pivot_row
+
+
+def invert_matrix(field, matrix: Sequence[Sequence[int]]) -> list[list[int]]:
+    size = len(matrix)
+    if size == 0 or any(len(row) != size for row in matrix):
+        raise ValueError("matrix must be nonempty and square")
+    augmented = [list(row) + [int(row_index == column)
+                              for column in range(size)]
+                 for row_index, row in enumerate(matrix)]
+    for column in range(size):
+        pivot = next((row for row in range(column, size)
+                      if augmented[row][column]), None)
+        if pivot is None:
+            raise ValueError("matrix is singular")
+        augmented[column], augmented[pivot] = augmented[pivot], augmented[column]
+        inverse = field.inverse(augmented[column][column])
+        augmented[column] = [field.multiply(value, inverse)
+                             for value in augmented[column]]
+        for row in range(size):
+            if row == column or augmented[row][column] == 0:
+                continue
+            factor = augmented[row][column]
+            augmented[row] = [left ^ field.multiply(factor, right)
+                              for left, right in zip(augmented[row],
+                                                     augmented[column])]
+    return [row[size:] for row in augmented]
+
+
+def deterministic_missing(k: int, losses: int) -> tuple[int, ...]:
+    if not 0 < losses <= k:
+        raise ValueError("invalid loss count")
+    result = tuple((index * k) // losses for index in range(losses))
+    if len(set(result)) != losses:
+        raise AssertionError("deterministic loss set contains a duplicate")
+    return result
+
+
+def direct_decode_terms(field, rows: Sequence[Sequence[int]], k: int,
+                        missing: Sequence[int]) -> tuple[tuple[tuple[int, int, int], ...], ...]:
+    losses = len(missing)
+    selected = tuple(range(losses))
+    inverse = invert_matrix(field, [[rows[parity][original]
+                                     for original in missing]
+                                    for parity in selected])
+    missing_set = set(missing)
+    outputs = []
+    for output in range(losses):
+        terms = []
+        for equation, parity in enumerate(selected):
+            coefficient = inverse[output][equation]
+            if coefficient:
+                terms.append((1, parity, coefficient))
+        for original in range(k):
+            if original in missing_set:
+                continue
+            coefficient = 0
+            for equation, parity in enumerate(selected):
+                coefficient ^= field.multiply(inverse[output][equation],
+                                              rows[parity][original])
+            if coefficient:
+                terms.append((0, original, coefficient))
+        if not terms:
+            raise AssertionError("decode output contains no terms")
+        outputs.append(tuple(terms))
+    return tuple(outputs)
 
 
 def systematic_generator(field, k: int, r: int) -> tuple[tuple[int, ...], ...]:
@@ -291,6 +356,71 @@ def validate_gf8_boundaries() -> tuple[list[dict], dict[str, int]]:
     }
 
 
+def decoder_patterns() -> tuple[tuple[str, int, int, int], ...]:
+    return (
+        ("legacy_high_v1", 2, 129, 2),
+        ("legacy_high_v1", 3, 129, 1),
+        ("legacy_high_v1", 3, 129, 3),
+        ("legacy_high_v1", 3, 130, 3),
+        ("legacy_high_v1", 4, 129, 4),
+        ("legacy_high_v1", 17, 129, 1),
+        ("legacy_high_v1", 17, 129, 4),
+        ("legacy_high_v1", 17, 129, 17),
+        ("low_v1", 129, 2, 2),
+        ("low_v1", 129, 3, 1),
+        ("low_v1", 129, 3, 3),
+        ("low_v1", 130, 3, 3),
+        ("low_v1", 129, 4, 4),
+        ("low_v1", 129, 17, 1),
+        ("low_v1", 129, 17, 4),
+        ("low_v1", 129, 17, 17),
+    )
+
+
+def validate_decoder_plans() -> tuple[list[dict], dict[str, int]]:
+    field = c3b.field_named("gf8")
+    records = []
+    total_terms = 0
+    recovered_values = 0
+    for pattern_index, (profile, k, r, losses) in enumerate(decoder_patterns()):
+        rows = generator_parity(field, k, r)
+        missing = deterministic_missing(k, losses)
+        outputs = direct_decode_terms(field, rows, k, missing)
+        message = [((index * 67 + pattern_index * 31 + 9) & 255)
+                   for index in range(k)]
+        parity = apply(field, rows, message)
+        for output_index, terms in enumerate(outputs):
+            recovered = 0
+            for is_parity, index, coefficient in terms:
+                source = parity[index] if is_parity else message[index]
+                recovered ^= field.multiply(coefficient, source)
+            if recovered != message[missing[output_index]]:
+                raise AssertionError("independent direct decoder recovered incorrectly")
+            recovered_values += 1
+        encoded = bytearray()
+        for terms in outputs:
+            for is_parity, index, coefficient in terms:
+                encoded += struct.pack(">BHB", is_parity, index, coefficient)
+        term_count = sum(len(terms) for terms in outputs)
+        total_terms += term_count
+        records.append({
+            "profile": profile,
+            "K": k,
+            "R": r,
+            "losses": losses,
+            "missing_originals": list(missing),
+            "selected_parities": list(range(losses)),
+            "term_count": term_count,
+            "term_digest_sha256": hashlib.sha256(encoded).hexdigest(),
+        })
+    return records, {
+        "plans": len(records),
+        "folded_nonzero_terms": total_terms,
+        "recovered_values": recovered_values,
+        "no_loss_execution_terms": 0,
+    }
+
+
 def prior_artifact(path: str) -> dict[str, object]:
     full = ROOT / path
     data = full.read_bytes()
@@ -307,6 +437,7 @@ def run() -> dict:
     if affected_counts != {"legacy_high_v1": 10795, "low_v1": 10795}:
         raise AssertionError(f"affected geometry changed: {affected_counts}")
     records, gf8_counts = validate_gf8_boundaries()
+    decoder_records, decoder_counts = validate_decoder_plans()
     return {
         "schema": SCHEMA,
         "status": "pass",
@@ -322,6 +453,8 @@ def run() -> dict:
         "gf4_exhaustive": exhaustive_gf4(),
         "gf8": gf8_counts,
         "boundary_records": records,
+        "decoder": decoder_counts,
+        "decoder_plan_records": decoder_records,
         "method_scope": {
             "legacy_padded_gf16": "measured by the C6 C++ public-API baseline",
             "exact_direct_gf8": "implemented and measured by the C6 C++ candidate",

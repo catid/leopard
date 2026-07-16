@@ -18,8 +18,8 @@ import sys
 from pathlib import Path
 
 
-SCHEMA = "leopard2-c6-benchmark-run/v1"
-RAW_SCHEMA = "leopard2-c6-cpp/v1"
+SCHEMA = "leopard2-c6-benchmark-run/v2"
+RAW_SCHEMA = "leopard2-c6-cpp/v2"
 CORE_SHA = "48803c06fbd7a6802b4438af60e3104895938c9d"
 
 
@@ -92,6 +92,8 @@ def main() -> int:
             raise SystemExit(f"raw benchmark {key} differs: {raw.get(key)!r} != {value!r}")
     if not isinstance(raw.get("cells"), list) or len(raw["cells"]) != 50:
         raise SystemExit("raw benchmark does not contain the declared 50-cell matrix")
+    if not isinstance(raw.get("decode_cells"), list) or len(raw["decode_cells"]) != 56:
+        raise SystemExit("raw benchmark does not contain the declared 56-cell decode matrix")
 
     manifest = {
         "schema": SCHEMA,
@@ -110,7 +112,8 @@ def main() -> int:
         "result_path": str(args.result),
         "stdout_path": str(args.stdout),
         "stderr_path": str(args.stderr),
-        "cell_count": 50,
+        "encode_cell_count": 50,
+        "decode_cell_count": 56,
     }
     write(args.manifest,
           (json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode("utf-8"))

@@ -397,6 +397,346 @@
     "parity_coordinates": "K..K+R-1",
     "systematic_coordinates": "0..K-1"
   },
+  "decoder": {
+    "folded_nonzero_terms": 4933,
+    "no_loss_execution_terms": 0,
+    "plans": 16,
+    "recovered_values": 70
+  },
+  "decoder_plan_records": [
+    {
+      "K": 2,
+      "R": 129,
+      "losses": 2,
+      "missing_originals": [
+        0,
+        1
+      ],
+      "profile": "legacy_high_v1",
+      "selected_parities": [
+        0,
+        1
+      ],
+      "term_count": 4,
+      "term_digest_sha256": "a9316cc6901d2a072c5b99110d6d7e07bf2e9b460b3a54c63592552286e71d38"
+    },
+    {
+      "K": 3,
+      "R": 129,
+      "losses": 1,
+      "missing_originals": [
+        0
+      ],
+      "profile": "legacy_high_v1",
+      "selected_parities": [
+        0
+      ],
+      "term_count": 3,
+      "term_digest_sha256": "4a72ba2a9a5c5cc35f95f5801cc3e7d97a202e64eab053fa08e46b8ac866af86"
+    },
+    {
+      "K": 3,
+      "R": 129,
+      "losses": 3,
+      "missing_originals": [
+        0,
+        1,
+        2
+      ],
+      "profile": "legacy_high_v1",
+      "selected_parities": [
+        0,
+        1,
+        2
+      ],
+      "term_count": 9,
+      "term_digest_sha256": "c0ff129b1774e6c89312be454826cf9303ce7ed76562b6c5195521783ae29158"
+    },
+    {
+      "K": 3,
+      "R": 130,
+      "losses": 3,
+      "missing_originals": [
+        0,
+        1,
+        2
+      ],
+      "profile": "legacy_high_v1",
+      "selected_parities": [
+        0,
+        1,
+        2
+      ],
+      "term_count": 9,
+      "term_digest_sha256": "c0ff129b1774e6c89312be454826cf9303ce7ed76562b6c5195521783ae29158"
+    },
+    {
+      "K": 4,
+      "R": 129,
+      "losses": 4,
+      "missing_originals": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "profile": "legacy_high_v1",
+      "selected_parities": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "term_count": 16,
+      "term_digest_sha256": "d61e926d2cafadbcc8197442ecc1e90a429afaf50b312f6559abebdc3ed15ac5"
+    },
+    {
+      "K": 17,
+      "R": 129,
+      "losses": 1,
+      "missing_originals": [
+        0
+      ],
+      "profile": "legacy_high_v1",
+      "selected_parities": [
+        0
+      ],
+      "term_count": 17,
+      "term_digest_sha256": "7701dee23d44209e68c60c94e323360d9e756edc84f2fd941cb8af9062f9f402"
+    },
+    {
+      "K": 17,
+      "R": 129,
+      "losses": 4,
+      "missing_originals": [
+        0,
+        4,
+        8,
+        12
+      ],
+      "profile": "legacy_high_v1",
+      "selected_parities": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "term_count": 68,
+      "term_digest_sha256": "b48654ce88c1fa2b92204096438f2d7c4f2ccc886f803f905fda6fb101e7f5c8"
+    },
+    {
+      "K": 17,
+      "R": 129,
+      "losses": 17,
+      "missing_originals": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "profile": "legacy_high_v1",
+      "selected_parities": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "term_count": 289,
+      "term_digest_sha256": "47b448c7537e80b2c14aa1a49c57f4c7cd8b4c344e47df485c2d318051cc179f"
+    },
+    {
+      "K": 129,
+      "R": 2,
+      "losses": 2,
+      "missing_originals": [
+        0,
+        64
+      ],
+      "profile": "low_v1",
+      "selected_parities": [
+        0,
+        1
+      ],
+      "term_count": 258,
+      "term_digest_sha256": "6c2bae96c48b2d90bfe50ad63409f929d86d46d5e02b471e2416c0b9d02e4848"
+    },
+    {
+      "K": 129,
+      "R": 3,
+      "losses": 1,
+      "missing_originals": [
+        0
+      ],
+      "profile": "low_v1",
+      "selected_parities": [
+        0
+      ],
+      "term_count": 129,
+      "term_digest_sha256": "205d6419dc3bd3e88971ba30f634d43735bdb3f3e4f7e770ba566de8cded16c8"
+    },
+    {
+      "K": 129,
+      "R": 3,
+      "losses": 3,
+      "missing_originals": [
+        0,
+        43,
+        86
+      ],
+      "profile": "low_v1",
+      "selected_parities": [
+        0,
+        1,
+        2
+      ],
+      "term_count": 387,
+      "term_digest_sha256": "479e94761369e5d5d02faea4acdcd14a942c9e2c6a134d7f7271f136b5eea938"
+    },
+    {
+      "K": 130,
+      "R": 3,
+      "losses": 3,
+      "missing_originals": [
+        0,
+        43,
+        86
+      ],
+      "profile": "low_v1",
+      "selected_parities": [
+        0,
+        1,
+        2
+      ],
+      "term_count": 390,
+      "term_digest_sha256": "a7795e20c1da181bd7f77fda90ca01b2c42bec697f470b087485e7c142f4cafc"
+    },
+    {
+      "K": 129,
+      "R": 4,
+      "losses": 4,
+      "missing_originals": [
+        0,
+        32,
+        64,
+        96
+      ],
+      "profile": "low_v1",
+      "selected_parities": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "term_count": 516,
+      "term_digest_sha256": "3e2b781e143e4ff3850779c579d7f02e1b58003adf551980eaa0c3f532d36090"
+    },
+    {
+      "K": 129,
+      "R": 17,
+      "losses": 1,
+      "missing_originals": [
+        0
+      ],
+      "profile": "low_v1",
+      "selected_parities": [
+        0
+      ],
+      "term_count": 129,
+      "term_digest_sha256": "205d6419dc3bd3e88971ba30f634d43735bdb3f3e4f7e770ba566de8cded16c8"
+    },
+    {
+      "K": 129,
+      "R": 17,
+      "losses": 4,
+      "missing_originals": [
+        0,
+        32,
+        64,
+        96
+      ],
+      "profile": "low_v1",
+      "selected_parities": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "term_count": 516,
+      "term_digest_sha256": "3e2b781e143e4ff3850779c579d7f02e1b58003adf551980eaa0c3f532d36090"
+    },
+    {
+      "K": 129,
+      "R": 17,
+      "losses": 17,
+      "missing_originals": [
+        0,
+        7,
+        15,
+        22,
+        30,
+        37,
+        45,
+        53,
+        60,
+        68,
+        75,
+        83,
+        91,
+        98,
+        106,
+        113,
+        121
+      ],
+      "profile": "low_v1",
+      "selected_parities": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16
+      ],
+      "term_count": 2193,
+      "term_digest_sha256": "c5879ea5f5f791f57c42f4487cb8751c9bc993e7acf80f8af2eb9c2a58a6777a"
+    }
+  ],
   "gf4_exhaustive": {
     "full_length_generators": 15,
     "implied_public_geometries": 120,
@@ -435,7 +775,7 @@
       "sha256": "56176ecfe27473da175230cc2182c0b44f4de41f6e9330eddc430eedf9714e6d"
     }
   ],
-  "schema": "leopard2-c6-algebra/v1",
-  "source_sha256": "dda5eeb861e8fcb71d64b998e8c46990d91ae497597d3bc852d2dd0a57d284ec",
+  "schema": "leopard2-c6-algebra/v2",
+  "source_sha256": "8cd4184059a0849a1b430b7fe60c5af48915701c815f8d6b889f3f87a6e8a16d",
   "status": "pass"
 }

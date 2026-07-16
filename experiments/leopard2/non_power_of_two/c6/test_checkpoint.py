@@ -97,8 +97,33 @@ class CheckpointTests(unittest.TestCase):
             result = checkpoint.merge(paths)
             self.assertEqual(result["status"], "pass")
             self.assertEqual(result["geometry"]["benchmark_cells"], 50)
+            self.assertEqual(result["geometry"]["decode_benchmark_cells"], 56)
             self.assertTrue(result["benchmark"]["meaningful_region_gate"])
+            self.assertEqual(result["decode_benchmark"]["maximum_loss_cells"], 36)
+            self.assertGreater(
+                result["decode_benchmark"][
+                    "one_shot_setup_plus_execution_ratio_min"], 1.0)
+            self.assertGreater(
+                result["decode_benchmark"][
+                    "declared_reuse_setup_plus_execution_ratio_min"], 1.0)
+            self.assertEqual(result["memory"]["exact_decode_execution_scratch_bytes"], 0)
+            self.assertEqual(result["correctness"]["gf8_decoder_algebra"], {
+                "plans": 16,
+                "folded_nonzero_terms": 4933,
+                "recovered_values": 70,
+                "no_loss_execution_terms": 0,
+            })
+            self.assertEqual(
+                result["correctness"]["cpp_per_backend"]["hot_path_allocations"], 0)
+            self.assertEqual(
+                result["correctness"]["cpp_per_backend"]["no_loss_calls"], 96)
+            self.assertEqual(
+                result["correctness"]["cpp_per_backend"]["maximum_loss_cases"], 96)
             self.assertEqual(result["disposition"]["production_promotion"], "none")
+            self.assertEqual(
+                result["disposition"]["bead_recommendation"],
+                "close-experiment-result",
+            )
             raw = json.loads(self.contents["benchmark"])
             gains = sorted(
                 cell["credible_gain_percent"] for cell in raw["cells"]
@@ -119,6 +144,11 @@ class CheckpointTests(unittest.TestCase):
         algebra["gf8"]["boundary_cases"] -= 1
         self.expect_reject({"algebra": algebra})
 
+    def test_decoder_algebra_mutation_rejected(self):
+        algebra = copy.deepcopy(self.algebra)
+        algebra["decoder_plan_records"][0]["term_count"] += 1
+        self.expect_reject({"algebra": algebra})
+
     def test_missing_duplicate_extra_and_relabelled_cells_rejected(self):
         mutations = (
             lambda data: data["cells"].pop(),
@@ -136,10 +166,36 @@ class CheckpointTests(unittest.TestCase):
             data["cells"][0]["credible_gain_percent"] += 1.0
         self.expect_reject(self.coherent_benchmark_change(mutate))
 
+    def test_missing_duplicate_extra_and_relabelled_decode_cells_rejected(self):
+        mutations = (
+            lambda data: data["decode_cells"].pop(),
+            lambda data: data["decode_cells"].append(
+                copy.deepcopy(data["decode_cells"][0])),
+            lambda data: data["decode_cells"][0].__setitem__("bytes", 128),
+            lambda data: data["decode_cells"][0].__setitem__("profile", "low_v1"),
+            lambda data: data["decode_cells"][0].__setitem__("losses", 1),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                self.expect_reject(self.coherent_benchmark_change(mutation))
+
+    def test_coordinated_decode_derived_timing_forgery_rejected(self):
+        def mutate(data):
+            data["decode_cells"][0]["padded_over_exact_ratio"] += 0.01
+            data["decode_cells"][0]["credible_gain_percent"] += 1.0
+        self.expect_reject(self.coherent_benchmark_change(mutate))
+
     def test_nonfinite_or_negative_uncertainty_rejected(self):
         for value in (float("nan"), -1.0):
             def mutate(data, replacement=value):
                 data["cells"][0]["exact_execution"]["mad_us"] = replacement
+            with self.subTest(value=value):
+                self.expect_reject(self.coherent_benchmark_change(mutate))
+
+    def test_decode_nonfinite_or_negative_uncertainty_rejected(self):
+        for value in (float("nan"), -1.0):
+            def mutate(data, replacement=value):
+                data["decode_cells"][0]["exact_execution"]["mad_us"] = replacement
             with self.subTest(value=value):
                 self.expect_reject(self.coherent_benchmark_change(mutate))
 
@@ -155,10 +211,36 @@ class CheckpointTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.expect_reject(self.coherent_benchmark_change(mutate))
 
+    def test_decode_accounting_forgery_rejected(self):
+        numeric_fields = (
+            "selected_parity_count", "selected_parity_prefix_end",
+            "exact_codec_table_bytes", "exact_plan_terms",
+            "exact_term_record_bytes", "exact_offset_record_bytes",
+            "exact_coordinate_record_bytes", "exact_plan_payload_bytes",
+            "exact_execution_terms", "exact_term_payload_bytes",
+            "exact_execution_scratch_bytes", "padded_execution_scratch_bytes",
+            "offered_received_bytes", "repaired_output_bytes",
+        )
+        for field in numeric_fields:
+            def mutate(data, name=field):
+                data["decode_cells"][0][name] += 1
+            with self.subTest(field=field):
+                self.expect_reject(self.coherent_benchmark_change(mutate))
+
+        def mutate_baseline(data):
+            data["decode_cells"][0]["baseline"] = "padded_generic_gf16"
+        self.expect_reject(self.coherent_benchmark_change(mutate_baseline))
+
     def test_profile_output_identity_forgery_rejected(self):
         def mutate(data):
             data["cells"][0]["padded_output_digest"] = \
                 data["cells"][0]["exact_output_digest"]
+        self.expect_reject(self.coherent_benchmark_change(mutate))
+
+    def test_decode_output_difference_forgery_rejected(self):
+        def mutate(data):
+            data["decode_cells"][0]["padded_output_digest"] = \
+                "0x0000000000000000"
         self.expect_reject(self.coherent_benchmark_change(mutate))
 
     def test_affinity_backend_and_threading_forgery_rejected(self):
@@ -166,6 +248,8 @@ class CheckpointTests(unittest.TestCase):
             lambda data: data.__setitem__("affinity", [15, 31]),
             lambda data: data.__setitem__("runtime_backend", "scalar"),
             lambda data: data.__setitem__("requested_backend", "auto"),
+            lambda data: data.__setitem__(
+                "allocation_tracking", "disabled-for-sanitizer"),
             lambda data: data.__setitem__("omp_num_threads", "2"),
             lambda data: data.__setitem__("openmp_max_threads", 2),
         )
@@ -182,6 +266,15 @@ class CheckpointTests(unittest.TestCase):
         def mutate_correctness(data):
             data["correctness"]["digest"] = "0x0000000000000000"
         self.expect_reject(self.coherent_benchmark_change(mutate_correctness))
+        for field, replacement in (
+            ("decode_digest", "0x0000000000000000"),
+            ("hot_path_allocations", 1),
+        ):
+            def mutate_decode_correctness(data, name=field, value=replacement):
+                data["correctness"][name] = value
+            with self.subTest(field=field):
+                self.expect_reject(
+                    self.coherent_benchmark_change(mutate_decode_correctness))
 
     def test_manifest_executable_result_and_log_binding_rejected(self):
         for field in (
@@ -193,12 +286,24 @@ class CheckpointTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.expect_reject({"benchmark-manifest": manifest})
 
+        for field in ("encode_cell_count", "decode_cell_count"):
+            manifest = json.loads(self.contents["benchmark-manifest"])
+            manifest[field] -= 1
+            with self.subTest(field=field):
+                self.expect_reject({"benchmark-manifest": manifest})
+
     def test_backend_matrix_and_sanitizer_labels_rejected(self):
         scalar = json.loads(self.contents["scalar"])
         scalar["runtime_backend"] = "avx2"
         self.expect_reject({"scalar": scalar})
+        scalar = json.loads(self.contents["scalar"])
+        scalar["allocation_tracking"] = "disabled-for-sanitizer"
+        self.expect_reject({"scalar": scalar})
         sanitizer = json.loads(self.contents["asan-ubsan"])
         sanitizer["sanitizer_mode"] = "none"
+        self.expect_reject({"asan-ubsan": sanitizer})
+        sanitizer = json.loads(self.contents["asan-ubsan"])
+        sanitizer["allocation_tracking"] = "global-new"
         self.expect_reject({"asan-ubsan": sanitizer})
 
     def test_log_tamper_rejected_even_with_unchanged_manifest(self):
