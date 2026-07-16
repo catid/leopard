@@ -406,7 +406,7 @@ def self_test() -> None:
     }, sort_keys=True))
 
 
-def audit_isal_checkpoint(path: Path) -> dict:
+def audit_isal_checkpoint(path: Path, correctness_path: Path) -> dict:
     tools_dir = Path(__file__).resolve().parent
     sys.path.insert(0, str(tools_dir))
     try:
@@ -415,7 +415,8 @@ def audit_isal_checkpoint(path: Path) -> dict:
         sys.path.pop(0)
     try:
         document = json.loads(path.read_text())
-        comparison.validate_checkpoint(document)
+        correctness = json.loads(correctness_path.read_text())
+        comparison.validate_checkpoint(document, correctness=correctness)
     except (OSError, json.JSONDecodeError, comparison.ComparisonError) as error:
         raise AuditError(f"invalid ISA-L checkpoint: {error}") from error
     return {
@@ -441,6 +442,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--path", default=".research/leopard2", type=Path)
     checkpoint_parser = subparsers.add_parser("isa-l-checkpoint")
     checkpoint_parser.add_argument("path", type=Path)
+    checkpoint_parser.add_argument(
+        "--correctness-artifact", type=Path, required=True)
     subparsers.add_parser("self-test")
     arguments = parser.parse_args(argv)
     try:
@@ -449,7 +452,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif arguments.command == "cache":
             output = audit_cache(arguments.path)
         elif arguments.command == "isa-l-checkpoint":
-            output = audit_isal_checkpoint(arguments.path)
+            output = audit_isal_checkpoint(
+                arguments.path, arguments.correctness_artifact)
         else:
             self_test()
             return 0

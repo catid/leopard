@@ -13,12 +13,12 @@ from __future__ import annotations
 
 import argparse
 import copy
-import fcntl
 import hashlib
 import json
 import math
 import os
 import platform
+import re
 import shutil
 import statistics
 import subprocess
@@ -50,6 +50,25 @@ ABBA = (("isa-l", "leopard2"), ("leopard2", "isa-l"),
 SOURCE_BUNDLE_SCHEMA = "leopard2-isal-build-input-closure/v2"
 TOOLCHAIN_SCHEMA = "leopard2-isal-build-toolchain/v2"
 LEASE_SCHEMA = "leopard2-advisory-cpu-lease/v1"
+EVIDENCE_ITERATIONS = 9
+EVIDENCE_WARMUP = 2
+CONTROLLED_CHILD_ENVIRONMENT = {
+    "LANG": "C",
+    "LC_ALL": "C",
+    "MALLOC_ARENA_MAX": "1",
+    "OMP_DYNAMIC": "FALSE",
+    "OMP_NUM_THREADS": "1",
+    "OMP_PROC_BIND": "TRUE",
+}
+CONTAMINATING_ENVIRONMENT_NAMES = {
+    "GLIBC_TUNABLES", "LD_AUDIT", "LD_DEBUG", "LD_DEBUG_OUTPUT",
+    "LD_LIBRARY_PATH", "LD_PRELOAD", "LD_PROFILE",
+}
+CONTAMINATING_ENVIRONMENT_PREFIXES = (
+    "ASAN_", "BLIS_", "GOMP_", "JEMALLOC_", "KMP_", "MALLOC_",
+    "MKL_", "MSAN_", "NUMEXPR_", "OMP_", "OPENBLAS_", "TCMALLOC_",
+    "TSAN_", "UBSAN_", "VECLIB_",
+)
 GENERATED_EVIDENCE_PATHS = (
     "experiments/leopard2/isal_compare/checkpoint_result.json",
     "experiments/leopard2/isal_compare/correctness_result.json",
@@ -130,6 +149,12 @@ def canonical_digest(document: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def mapping_digest(document: Mapping[str, Any]) -> str:
+    encoded = json.dumps(
+        dict(document), sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 def keyed_digest(document: Mapping[str, Any], digest_key: str) -> str:
     payload = copy.deepcopy(dict(document))
     payload.pop(digest_key, None)
@@ -147,6 +172,49 @@ def run_checked(command: Sequence[str], **kwargs: Any) -> subprocess.CompletedPr
             f"command failed ({completed.returncode}): {' '.join(command)}\n"
             f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}")
     return completed
+
+
+def reject_contaminating_environment() -> None:
+    contaminated = sorted(
+        name for name in os.environ
+        if name in CONTAMINATING_ENVIRONMENT_NAMES or
+        name.startswith(CONTAMINATING_ENVIRONMENT_PREFIXES))
+    if contaminated:
+        raise ComparisonError(
+            "ambient loader/OpenMP/allocator/tuning variables are forbidden: " +
+            ", ".join(contaminated))
+
+
+def controlled_child_environment(cpu: int | None = None) -> dict[str, str]:
+    environment = dict(CONTROLLED_CHILD_ENVIRONMENT)
+    if cpu is not None:
+        if isinstance(cpu, bool) or not isinstance(cpu, int) or cpu < 0:
+            raise ComparisonError("controlled child CPU must be nonnegative")
+        environment["GOMP_CPU_AFFINITY"] = str(cpu)
+    return environment
+
+
+def child_environment_record(cpu: int | None = None) -> dict[str, Any]:
+    return {
+        "schema": "leopard2-controlled-child-environment/v1",
+        "inheritance": "none; explicit allowlist only",
+        "ambient_contamination_policy": (
+            "reject loader, OpenMP, allocator, sanitizer, and math-runtime tuning variables"),
+        "variables": controlled_child_environment(cpu),
+    }
+
+
+def validate_child_environment_record(
+        value: Mapping[str, Any], cpu: int | None = None) -> None:
+    require_exact_keys(value, {
+        "schema", "inheritance", "ambient_contamination_policy", "variables"},
+        "controlled child environment")
+    if (value.get("schema") != "leopard2-controlled-child-environment/v1" or
+            value.get("inheritance") != "none; explicit allowlist only" or
+            value.get("ambient_contamination_policy") !=
+            "reject loader, OpenMP, allocator, sanitizer, and math-runtime tuning variables" or
+            value.get("variables") != controlled_child_environment(cpu)):
+        raise ComparisonError("controlled child environment changed")
 
 
 def git_identity(checkout: Path) -> tuple[str, str, str]:
@@ -321,8 +389,68 @@ def build_paths(cache: Path) -> dict[str, Path]:
         "isa_install": cache / "toolchains" / f"isa-l-{ISA_COMMIT[:8]}-install",
         "adapter_build": cache / "build" / "leopard2-isal-adapter",
         "leopard_build": cache / "build" / "leopard2-isal-leopard",
+        "leopard_source": cache / "sources" / "leopard-detached",
         "provenance": cache / "toolchains" / "isal-comparison-provenance.json",
     }
+
+
+def materialize_leopard_source(
+        paths: Mapping[str, Path]) -> tuple[dict[str, Any], dict[str, Any]]:
+    root = repo_root().resolve()
+    status = leopard_build_status(root)
+    if status:
+        raise ComparisonError(
+            "benchmark source must be committed before detached materialization; "
+            f"status={status!r}")
+    head, tree, _ = git_identity(root)
+    expected_bundle = source_bundle(root, head)
+    destination = paths["leopard_source"].resolve()
+    if destination.exists():
+        completed = subprocess.run(
+            ["git", "-C", str(root), "worktree", "remove", "--force",
+             str(destination)],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        if completed.returncode != 0:
+            shutil.rmtree(destination)
+    run_checked(["git", "-C", str(root), "worktree", "prune"], timeout=30)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    run_checked([
+        "git", "-C", str(root), "worktree", "add", "--detach",
+        str(destination), head], timeout=120)
+    materialized_head, materialized_tree, dirty = git_identity(destination)
+    symbolic = subprocess.run(
+        ["git", "-C", str(destination), "symbolic-ref", "-q", "HEAD"],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    before = source_bundle(destination, "HEAD")
+    if (materialized_head != head or materialized_tree != tree or dirty or
+            symbolic.returncode == 0 or before != expected_bundle):
+        raise ComparisonError(
+            "detached Leopard source materialization differs from the recorded commit")
+    return ({
+        "commit": head,
+        "tree": tree,
+        "dirty": False,
+        "clean_at_build": True,
+        "materialization": "detached Git worktree",
+        "detached_head": True,
+        "build_inputs_before_sha256": before["bundle_sha256"],
+        "build_inputs_after_sha256": before["bundle_sha256"],
+    }, expected_bundle)
+
+
+def verify_materialized_leopard_source(
+        paths: Mapping[str, Path], expected_bundle: Mapping[str, Any],
+        identity: Mapping[str, Any]) -> dict[str, Any]:
+    source = paths["leopard_source"]
+    head, tree, dirty = git_identity(source)
+    after = source_bundle(source, "HEAD")
+    if (head != identity.get("commit") or tree != identity.get("tree") or dirty or
+            after != dict(expected_bundle)):
+        raise ComparisonError(
+            "detached Leopard build inputs changed during bootstrap")
+    result = dict(identity)
+    result["build_inputs_after_sha256"] = after["bundle_sha256"]
+    return result
 
 
 def clone_isa_l(source: Path) -> None:
@@ -393,7 +521,7 @@ def configure_build_install_isa(
     build = paths["isa_build"]
     install = paths["isa_install"]
     run_checked([
-        "cmake", "-S", str(source), "-B", str(build),
+        "cmake", "-G", "Unix Makefiles", "-S", str(source), "-B", str(build),
         "-DCMAKE_BUILD_TYPE=Release", f"-DCMAKE_INSTALL_PREFIX={install}",
         f"-DCMAKE_ASM_NASM_COMPILER={nasm['path']}",
         "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
@@ -443,7 +571,11 @@ def _tool_identity(path: Path, version_arguments: Sequence[str]) -> dict[str, An
     reported = (completed.stdout + completed.stderr).strip()
     if not reported:
         raise ComparisonError(f"tool emitted no version identity: {path}")
-    return {"sha256": sha256_file(resolved), "reported_version": reported}
+    return {
+        "path": str(resolved),
+        "sha256": sha256_file(resolved),
+        "reported_version": reported,
+    }
 
 
 def _replace_paths(value: str, replacements: Mapping[str, str]) -> str:
@@ -488,8 +620,77 @@ def _compile_manifest(path: Path, replacements: Mapping[str, str]) -> dict[str, 
     }
 
 
+def _link_manifest(path: Path, replacements: Mapping[str, str]) -> dict[str, Any]:
+    try:
+        raw = path.read_text().strip()
+    except OSError as error:
+        raise ComparisonError(f"cannot read actual link command {path}: {error}") from error
+    if not raw:
+        raise ComparisonError(f"actual link command is empty: {path}")
+    normalized = _replace_paths(raw, replacements)
+    lines = normalized.splitlines()
+    encoded = json.dumps(lines, separators=(",", ":"))
+    return {
+        "schema": "leopard2-normalized-link-command/v1",
+        "lines": lines,
+        "line_count": len(lines),
+        "sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+    }
+
+
+def _readelf_dynamic_names(readelf: Path, binary: Path, tag: str) -> list[str]:
+    completed = run_checked([str(readelf), "-d", str(binary)], timeout=30)
+    pattern = (r"Shared library: \[([^\]]+)\]" if tag == "NEEDED" else
+               r"Library soname: \[([^\]]+)\]")
+    names = re.findall(pattern, completed.stdout)
+    if tag == "SONAME" and len(names) > 1:
+        raise ComparisonError(f"multiple SONAME entries in {binary}")
+    return names
+
+
+def _runtime_link_manifest(
+        executable: Path, ldd: Path, readelf: Path) -> dict[str, Any]:
+    needed = _readelf_dynamic_names(readelf, executable, "NEEDED")
+    completed = run_checked([str(ldd), str(executable)], timeout=30)
+    resolved: dict[str, str] = {}
+    for line in completed.stdout.splitlines():
+        match = re.match(r"^\s*(\S+)\s+=>\s+(\S+)", line)
+        if match:
+            if match.group(2) == "not":
+                raise ComparisonError(f"unresolved dynamic dependency: {line.strip()}")
+            resolved[match.group(1)] = match.group(2)
+    dependencies = []
+    for name in needed:
+        candidate = resolved.get(name)
+        if not candidate:
+            raise ComparisonError(
+                f"ldd did not resolve DT_NEEDED {name!r} for {executable}")
+        linked_path = Path(candidate)
+        real_path = linked_path.resolve()
+        if not real_path.is_file():
+            raise ComparisonError(f"resolved dynamic library is missing: {real_path}")
+        sonames = _readelf_dynamic_names(readelf, real_path, "SONAME")
+        if len(sonames) != 1:
+            raise ComparisonError(f"resolved dynamic library has no unique SONAME: {real_path}")
+        dependencies.append({
+            "needed": name,
+            "resolved_path": str(linked_path),
+            "resolved_realpath": str(real_path),
+            "soname": sonames[0],
+            "sha256": sha256_file(real_path),
+        })
+    encoded = json.dumps(dependencies, sort_keys=True, separators=(",", ":"))
+    return {
+        "schema": "leopard2-resolved-dynamic-linkage/v1",
+        "executable_sha256": sha256_file(executable),
+        "dependencies": dependencies,
+        "dependency_count": len(dependencies),
+        "sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+    }
+
+
 def build_identity(paths: Mapping[str, Path], nasm: Mapping[str, Any]) -> dict[str, Any]:
-    root = repo_root().resolve()
+    root = paths["leopard_source"].resolve()
     c_compiler = Path(_cmake_cache_value(paths["isa_build"], "CMAKE_C_COMPILER"))
     adapter_cxx = Path(_cmake_cache_value(paths["adapter_build"], "CMAKE_CXX_COMPILER"))
     leopard_cxx = Path(_cmake_cache_value(paths["leopard_build"], "CMAKE_CXX_COMPILER"))
@@ -499,6 +700,8 @@ def build_identity(paths: Mapping[str, Path], nasm: Mapping[str, Any]) -> dict[s
     ranlib = Path(_cmake_cache_value(paths["isa_build"], "CMAKE_RANLIB"))
     linker = Path(_cmake_cache_value(paths["isa_build"], "CMAKE_LINKER"))
     build_program = Path(_cmake_cache_value(paths["isa_build"], "CMAKE_MAKE_PROGRAM"))
+    ldd = Path(shutil.which("ldd") or "")
+    readelf = Path(shutil.which("readelf") or "")
     for build in (paths["adapter_build"], paths["leopard_build"]):
         for cache_name, expected in (
                 ("CMAKE_AR", ar), ("CMAKE_RANLIB", ranlib),
@@ -508,7 +711,7 @@ def build_identity(paths: Mapping[str, Path], nasm: Mapping[str, Any]) -> dict[s
                 raise ComparisonError(
                     f"comparison builds used different {cache_name} tools")
     replacements = {
-        str(root): "${LEOPARD_ROOT}",
+        str(root): "${LEOPARD_SOURCE}",
         str(paths["isa_source"].resolve()): "${ISA_L_SOURCE}",
         str(paths["isa_install"].resolve()): "${ISA_L_INSTALL}",
         str(paths["isa_build"].resolve()): "${ISA_L_BUILD}",
@@ -556,6 +759,10 @@ def build_identity(paths: Mapping[str, Path], nasm: Mapping[str, Any]) -> dict[s
             "build_target": "bench_leopard2",
         },
     }
+    isa_archive = (paths["isa_install"] / "lib" / "libisal.a").resolve()
+    adapter_executable = (
+        paths["adapter_build"] / "leopard2_isal_benchmark").resolve()
+    leopard_executable = (paths["leopard_build"] / "bench_leopard2").resolve()
     identity = {
         "schema": TOOLCHAIN_SCHEMA,
         "recipe": recipe,
@@ -567,7 +774,10 @@ def build_identity(paths: Mapping[str, Path], nasm: Mapping[str, Any]) -> dict[s
             "ranlib": _tool_identity(ranlib, ["--version"]),
             "linker": _tool_identity(linker, ["--version"]),
             "build_program": _tool_identity(build_program, ["--version"]),
+            "ldd": _tool_identity(ldd, ["--version"]),
+            "readelf": _tool_identity(readelf, ["--version"]),
             "nasm": {
+                "path": "${NASM}",
                 "sha256": str(nasm["executable_sha256"]),
                 "reported_version": str(nasm["reported_version"]),
             },
@@ -580,6 +790,30 @@ def build_identity(paths: Mapping[str, Path], nasm: Mapping[str, Any]) -> dict[s
             "leopard2": _compile_manifest(
                 paths["leopard_build"] / "compile_commands.json", replacements),
         },
+        "link_commands": {
+            "isa_l_archive": _link_manifest(
+                paths["isa_build"] / "CMakeFiles/isal.dir/link.txt", replacements),
+            "adapter_executable": _link_manifest(
+                paths["adapter_build"] /
+                "CMakeFiles/leopard2_isal_benchmark.dir/link.txt", replacements),
+            "leopard2_library": _link_manifest(
+                paths["leopard_build"] / "CMakeFiles/libleopard.dir/link.txt",
+                replacements),
+            "leopard2_executable": _link_manifest(
+                paths["leopard_build"] / "CMakeFiles/bench_leopard2.dir/link.txt",
+                replacements),
+        },
+        "static_inputs": {
+            "isa_l_archive": {
+                "normalized_path": "${ISA_L_INSTALL}/lib/libisal.a",
+                "sha256": sha256_file(isa_archive),
+                "required_by_adapter_link": True,
+            },
+        },
+        "runtime_linkage": {
+            "isa-l": _runtime_link_manifest(adapter_executable, ldd, readelf),
+            "leopard2": _runtime_link_manifest(leopard_executable, ldd, readelf),
+        },
     }
     identity["identity_sha256"] = keyed_digest(identity, "identity_sha256")
     return identity
@@ -588,18 +822,13 @@ def build_identity(paths: Mapping[str, Path], nasm: Mapping[str, Any]) -> dict[s
 def build_benchmarks(
         paths: Mapping[str, Path], jobs: int,
         nasm: Mapping[str, Any]) -> dict[str, Any]:
-    root = repo_root()
-    head, tree, tracked_dirty = git_identity(root)
-    status = full_git_status(root)
-    if tracked_dirty or status:
-        raise ComparisonError(
-            "benchmark executables must be built from a completely clean commit; "
-            f"HEAD={head}, status={status!r}")
-    bundle = source_bundle(root)
+    source_identity, bundle = materialize_leopard_source(paths)
+    root = paths["leopard_source"]
     isa_install = paths["isa_install"]
     adapter_build = paths["adapter_build"]
     run_checked([
-        "cmake", "-S", str(root / "experiments/leopard2/isal_compare"),
+        "cmake", "-G", "Unix Makefiles",
+        "-S", str(root / "experiments/leopard2/isal_compare"),
         "-B", str(adapter_build), "-DCMAKE_BUILD_TYPE=Release",
         f"-DLEO2_ISAL_SOURCE_ROOT={paths['isa_source']}",
         f"-DLEO2_ISAL_INSTALL_ROOT={isa_install}",
@@ -612,7 +841,7 @@ def build_benchmarks(
 
     leopard_build = paths["leopard_build"]
     run_checked([
-        "cmake", "-S", str(root), "-B", str(leopard_build),
+        "cmake", "-G", "Unix Makefiles", "-S", str(root), "-B", str(leopard_build),
         "-DCMAKE_BUILD_TYPE=Release", "-DLEO2_BUILD_TESTS=OFF",
         "-DLEO2_BUILD_BENCHMARKS=ON", "-DLEO2_BUILD_FUZZERS=OFF",
         "-DLEO2_ENABLE_CUDA=OFF", "-DENABLE_OPENMP=ON",
@@ -625,12 +854,12 @@ def build_benchmarks(
     leopard_exe = leopard_build / "bench_leopard2"
     if not isa_exe.is_file() or not leopard_exe.is_file():
         raise ComparisonError("comparison executables were not built")
+    source_identity = verify_materialized_leopard_source(
+        paths, bundle, source_identity)
     return {
         "isa-l": {"path": str(isa_exe), "sha256": sha256_file(isa_exe)},
         "leopard2": {"path": str(leopard_exe), "sha256": sha256_file(leopard_exe)},
-        "leopard_source": {
-            "commit": head, "tree": tree, "dirty": False, "clean_at_build": True,
-        },
+        "leopard_source": source_identity,
         "source_bundle": bundle,
         "build_identity": build_identity(paths, nasm),
     }
@@ -650,7 +879,7 @@ def _validate_compile_manifest(value: Mapping[str, Any], label: str) -> None:
             raise ComparisonError(f"{label} entry shape changed")
         if any(not isinstance(item, str) or not item for item in entry.values()):
             raise ComparisonError(f"{label} entry contains an invalid value")
-        if not (entry["file"].startswith("${LEOPARD_ROOT}/") or
+        if not (entry["file"].startswith("${LEOPARD_SOURCE}/") or
                 entry["file"].startswith("${ISA_L_SOURCE}/")):
             raise ComparisonError(f"{label} source path is not portable")
         if any(prefix in text for text in entry.values()
@@ -663,10 +892,62 @@ def _validate_compile_manifest(value: Mapping[str, Any], label: str) -> None:
         raise ComparisonError(f"{label} digest is not entry-derived")
 
 
+def _validate_link_manifest(value: Mapping[str, Any], label: str) -> None:
+    require_exact_keys(value, {"schema", "lines", "line_count", "sha256"}, label)
+    if value.get("schema") != "leopard2-normalized-link-command/v1":
+        raise ComparisonError(f"wrong {label} schema")
+    lines = value.get("lines")
+    if (not isinstance(lines, list) or not lines or
+            any(not isinstance(line, str) or not line for line in lines)):
+        raise ComparisonError(f"{label} lines are missing")
+    if value.get("line_count") != len(lines):
+        raise ComparisonError(f"{label} line count is not derived")
+    if any(prefix in line for line in lines for prefix in ("/home/", "/Users/")):
+        raise ComparisonError(f"{label} retained a checkout-specific path")
+    encoded = json.dumps(lines, separators=(",", ":"))
+    if value.get("sha256") != hashlib.sha256(encoded.encode("utf-8")).hexdigest():
+        raise ComparisonError(f"{label} digest is not line-derived")
+
+
+def _validate_runtime_link_manifest(
+        value: Mapping[str, Any], label: str) -> None:
+    require_exact_keys(value, {
+        "schema", "executable_sha256", "dependencies", "dependency_count",
+        "sha256"}, label)
+    if value.get("schema") != "leopard2-resolved-dynamic-linkage/v1":
+        raise ComparisonError(f"wrong {label} schema")
+    require_hex(value.get("executable_sha256"), 64, f"{label} executable digest")
+    dependencies = value.get("dependencies")
+    if not isinstance(dependencies, list) or not dependencies:
+        raise ComparisonError(f"{label} dependencies are missing")
+    needed_names = []
+    for dependency in dependencies:
+        require_exact_keys(dependency, {
+            "needed", "resolved_path", "resolved_realpath", "soname", "sha256"},
+            f"{label} dependency")
+        for name in ("needed", "resolved_path", "resolved_realpath", "soname"):
+            if not isinstance(dependency.get(name), str) or not dependency[name]:
+                raise ComparisonError(f"{label} dependency {name} is missing")
+        if (not Path(dependency["resolved_path"]).is_absolute() or
+                not Path(dependency["resolved_realpath"]).is_absolute() or
+                dependency["needed"] != dependency["soname"]):
+            raise ComparisonError(f"{label} dependency path/SONAME is inconsistent")
+        require_hex(dependency.get("sha256"), 64, f"{label} dependency digest")
+        needed_names.append(dependency["needed"])
+    if len(set(needed_names)) != len(needed_names):
+        raise ComparisonError(f"{label} repeats a dynamic dependency")
+    if value.get("dependency_count") != len(dependencies):
+        raise ComparisonError(f"{label} dependency count is not derived")
+    encoded = json.dumps(dependencies, sort_keys=True, separators=(",", ":"))
+    if value.get("sha256") != hashlib.sha256(encoded.encode("utf-8")).hexdigest():
+        raise ComparisonError(f"{label} digest is not dependency-derived")
+
+
 def validate_build_identity(
         value: Mapping[str, Any], nasm: Mapping[str, Any]) -> None:
     require_exact_keys(value, {
-        "schema", "recipe", "tools", "compile_commands", "identity_sha256"},
+        "schema", "recipe", "tools", "compile_commands", "link_commands",
+        "static_inputs", "runtime_linkage", "identity_sha256"},
                        "build identity")
     if value.get("schema") != TOOLCHAIN_SCHEMA:
         raise ComparisonError("wrong build-identity schema")
@@ -686,8 +967,8 @@ def validate_build_identity(
         if (not isinstance(definitions, list) or not definitions or
                 any(not isinstance(item, str) or not item for item in definitions)):
             raise ComparisonError(f"{name} configure recipe is invalid")
-        if not isinstance(record.get("generator"), str) or not record["generator"]:
-            raise ComparisonError(f"{name} CMake generator is missing")
+        if record.get("generator") != "Unix Makefiles":
+            raise ComparisonError(f"{name} CMake generator changed")
         if record.get("build_target") != expected_target:
             raise ComparisonError(f"{name} build target changed")
     expected_definitions = {
@@ -717,9 +998,11 @@ def validate_build_identity(
     tools = value.get("tools", {})
     require_exact_keys(tools, {
         "cmake", "cc", "cxx", "nasm", "ar", "ranlib", "linker",
-        "build_program"}, "build tools")
+        "build_program", "ldd", "readelf"}, "build tools")
     for name, tool in tools.items():
-        require_exact_keys(tool, {"sha256", "reported_version"}, f"{name} tool")
+        require_exact_keys(tool, {"path", "sha256", "reported_version"}, f"{name} tool")
+        if not isinstance(tool.get("path"), str) or not tool["path"]:
+            raise ComparisonError(f"{name} tool path is missing")
         require_hex(tool.get("sha256"), 64, f"{name} tool digest")
         if not isinstance(tool.get("reported_version"), str) or not tool["reported_version"]:
             raise ComparisonError(f"{name} tool version is missing")
@@ -731,9 +1014,33 @@ def validate_build_identity(
                        "compile-command manifests")
     for name, manifest in commands.items():
         _validate_compile_manifest(manifest, f"{name} compile commands")
+    links = value.get("link_commands", {})
+    require_exact_keys(links, {
+        "isa_l_archive", "adapter_executable", "leopard2_library",
+        "leopard2_executable"}, "link-command manifests")
+    for name, manifest in links.items():
+        _validate_link_manifest(manifest, f"{name} link command")
+    static_inputs = value.get("static_inputs", {})
+    require_exact_keys(static_inputs, {"isa_l_archive"}, "static link inputs")
+    archive = static_inputs.get("isa_l_archive", {})
+    require_exact_keys(archive, {
+        "normalized_path", "sha256", "required_by_adapter_link"},
+        "ISA-L archive link input")
+    require_hex(archive.get("sha256"), 64, "ISA-L archive digest")
+    if (archive.get("normalized_path") != "${ISA_L_INSTALL}/lib/libisal.a" or
+            archive.get("required_by_adapter_link") is not True):
+        raise ComparisonError("ISA-L archive link contract changed")
+    adapter_link = "\n".join(links["adapter_executable"]["lines"])
+    if adapter_link.count(archive["normalized_path"]) != 1:
+        raise ComparisonError("adapter link does not require the recorded ISA-L archive")
+    runtime = value.get("runtime_linkage", {})
+    require_exact_keys(runtime, {"isa-l", "leopard2"}, "runtime linkage")
+    for name, manifest in runtime.items():
+        _validate_runtime_link_manifest(manifest, f"{name} runtime linkage")
 
 
 def bootstrap(cache: Path, jobs: int) -> dict[str, Any]:
+    reject_contaminating_environment()
     if jobs < 1 or jobs > 8:
         raise ComparisonError("--jobs must be in 1..8")
     paths = build_paths(cache)
@@ -820,24 +1127,35 @@ def load_provenance(cache: Path) -> dict[str, Any]:
         "isa-l", "leopard2", "leopard_source", "source_bundle", "build_identity"},
         "benchmark executable provenance")
     leopard_source = executables.get("leopard_source", {})
-    require_exact_keys(leopard_source, {"commit", "tree", "dirty", "clean_at_build"},
+    require_exact_keys(leopard_source, {
+        "commit", "tree", "dirty", "clean_at_build", "materialization",
+        "detached_head", "build_inputs_before_sha256",
+        "build_inputs_after_sha256"},
                        "Leopard source provenance")
     require_hex(leopard_source.get("commit"), 40, "Leopard source commit")
     require_hex(leopard_source.get("tree"), 40, "Leopard source tree")
+    materialized = build_paths(cache)["leopard_source"]
     current_head = run_checked(
-        ["git", "-C", str(repo_root()), "rev-parse", "HEAD"]).stdout.strip()
+        ["git", "-C", str(materialized), "rev-parse", "HEAD"]).stdout.strip()
     current_tree = run_checked(
-        ["git", "-C", str(repo_root()), "rev-parse", "HEAD^{tree}"]).stdout.strip()
-    current_dirty = leopard_build_status(repo_root())
+        ["git", "-C", str(materialized), "rev-parse", "HEAD^{tree}"]).stdout.strip()
+    current_dirty = full_git_status(materialized)
     if (leopard_source.get("dirty") is not False or
-            leopard_source.get("clean_at_build") is not True or current_dirty or
+            leopard_source.get("clean_at_build") is not True or
+            leopard_source.get("materialization") != "detached Git worktree" or
+            leopard_source.get("detached_head") is not True or current_dirty or
             current_head != leopard_source.get("commit") or
             current_tree != leopard_source.get("tree")):
-        raise ComparisonError("current benchmark source checkout is not clean")
+        raise ComparisonError("detached benchmark source materialization changed")
     recorded_bundle = document.get("executables", {}).get("source_bundle", {})
     validate_source_bundle(recorded_bundle)
-    if source_bundle(repo_root(), current_head) != recorded_bundle:
-        raise ComparisonError("current build-input closure changed after bootstrap")
+    if source_bundle(materialized, current_head) != recorded_bundle:
+        raise ComparisonError("detached build-input closure changed after bootstrap")
+    if (leopard_source.get("build_inputs_before_sha256") !=
+            recorded_bundle.get("bundle_sha256") or
+            leopard_source.get("build_inputs_after_sha256") !=
+            recorded_bundle.get("bundle_sha256")):
+        raise ComparisonError("before/after build-input hashes are not bundle-derived")
     validate_build_identity(executables.get("build_identity", {}), nasm)
     if build_identity(build_paths(cache), nasm) != executables.get("build_identity"):
         raise ComparisonError("toolchain or normalized compile commands changed after bootstrap")
@@ -863,6 +1181,11 @@ def resolved_identity(cell: Mapping[str, Any]) -> tuple[str, str, int]:
     parent = (ceil_pow2(ceil_pow2(k) + r) if profile == "low_v1"
               else ceil_pow2(k + ceil_pow2(r)))
     return profile, "gf8" if parent <= 256 else "gf16", parent
+
+
+def expected_padded_side(cell: Mapping[str, Any]) -> int:
+    profile, _, _ = resolved_identity(cell)
+    return ceil_pow2(int(cell["R"]) if profile == "legacy_high_v1" else int(cell["K"]))
 
 
 def finite_positive(value: Any, label: str, allow_zero: bool = False) -> float:
@@ -971,6 +1294,9 @@ def validate_common_parameters(
             any(isinstance(index, bool) or not isinstance(index, int) or
                 index < 0 or index >= expected["K"] for index in missing)):
         raise ComparisonError("missing-original indices are invalid")
+    if missing != expected_missing_indices(
+            expected["K"], expected["loss_count"], expected["seed"]):
+        raise ComparisonError("missing-original indices are not seed-derived")
     return missing
 
 
@@ -1137,7 +1463,8 @@ def validate_leopard_result(
         "metrics", "legacy"}, "Leopard2 child result")
     missing = validate_common_parameters(
         document, cell, iterations, warmup,
-        {"force_generic_decode": False, "force_specialized_decode": False})
+        {"force_generic_decode": False, "force_specialized_decode": False,
+         "skip_legacy": True})
     build = document.get("build", {})
     require_exact_keys(build, {"compiler", "compiler_version", "cplusplus"},
                        "Leopard2 child build")
@@ -1154,6 +1481,8 @@ def validate_leopard_result(
         "padded_side"}, "Leopard2 resolved identity")
     if (resolved.get("profile") != profile or resolved.get("field") != field or
             resolved.get("parent_count") != parent or
+            resolved.get("padded_side") != expected_padded_side(cell) or
+            resolved.get("backend") not in ("scalar", "ssse3", "avx2", "neon") or
             resolved.get("thread_count") != 1):
         raise ComparisonError("Leopard2 resolved identity changed")
     correctness = document.get("correctness", {})
@@ -1174,9 +1503,14 @@ def validate_leopard_result(
         "available", "unavailable_reason", "codec_setup",
         "decode_timing_includes_setup", "encode_execution",
         "decode_including_setup"}, "Leopard2 legacy evidence")
-    if (not isinstance(legacy.get("available"), bool) or
+    if (legacy.get("available") is not False or
+            legacy.get("unavailable_reason") !=
+            "disabled by --skip-legacy for symmetric external comparison" or
             legacy.get("decode_timing_includes_setup") is not True or
-            legacy.get("codec_setup") is not None):
+            legacy.get("codec_setup") is not None or
+            legacy.get("encode_execution") is not None or
+            legacy.get("decode_including_setup") is not None or
+            correctness.get("legacy_comparison") is not None):
         raise ComparisonError("Leopard2 legacy timing contract changed")
     metrics = document.get("metrics", {})
     require_exact_keys(metrics, {
@@ -1292,13 +1626,20 @@ def aggregate_results(results: Sequence[Mapping[str, Any]]) -> list[dict[str, An
 
 
 def allowed_cpus() -> set[int]:
-    if hasattr(os, "sched_getaffinity"):
+    if sys.platform.startswith("linux") and hasattr(os, "sched_getaffinity"):
         return set(os.sched_getaffinity(0))
-    raise ComparisonError("sched_getaffinity is required for pinned evidence")
+    raise ComparisonError("pinned ISA-L evidence collection is Linux-only")
 
 
 @contextmanager
 def advisory_cpu_lease(cache: Path, cpu: int, sibling: int):
+    if not sys.platform.startswith("linux"):
+        raise ComparisonError("pinned ISA-L evidence collection is Linux-only")
+    try:
+        import fcntl  # pylint: disable=import-outside-toplevel
+    except ImportError as error:
+        raise ComparisonError(
+            "Linux fcntl support is required for pinned evidence") from error
     lease_directory = cache / "leases"
     lease_directory.mkdir(parents=True, exist_ok=True)
     handles = []
@@ -1471,6 +1812,7 @@ def child_command(
         command[command.index("--bytes"):command.index("--bytes")] = [
             "--field", "auto", "--backend", "auto"]
         command.insert(-2, "--retain-samples")
+        command.insert(-2, "--skip-legacy")
     else:
         if oracle_mode not in ("full", "projection"):
             raise ComparisonError("ISA-L child requires an explicit oracle mode")
@@ -1489,6 +1831,16 @@ class XorShift64:
         value ^= (value << 17) & 0xFFFFFFFFFFFFFFFF
         self.state = value & 0xFFFFFFFFFFFFFFFF
         return self.state
+
+
+def expected_missing_indices(k: int, losses: int, seed: int) -> list[int]:
+    order = list(range(k))
+    random = XorShift64(seed ^ 0xD1B54A32D192ED03)
+    for remaining in range(len(order), 1, -1):
+        selected = random.next() % remaining
+        order[remaining - 1], order[selected] = (
+            order[selected], order[remaining - 1])
+    return sorted(order[:losses])
 
 
 def correctness_cells(count: int) -> list[dict[str, Any]]:
@@ -1568,29 +1920,41 @@ def validate_portable_sources(sources: Mapping[str, Any], verify_local: bool) ->
         raise ComparisonError("portable NASM identity changed")
     require_hex(nasm.get("executable_sha256"), 64, "portable NASM executable digest")
     leopard = sources.get("leopard", {})
-    require_exact_keys(leopard, {"commit", "tree", "dirty", "clean_at_build"},
+    require_exact_keys(leopard, {
+        "commit", "tree", "dirty", "clean_at_build", "materialization",
+        "detached_head", "build_inputs_before_sha256",
+        "build_inputs_after_sha256"},
                        "portable Leopard source")
     require_hex(leopard.get("commit"), 40, "portable Leopard commit")
     require_hex(leopard.get("tree"), 40, "portable Leopard tree")
-    if leopard.get("dirty") is not False or leopard.get("clean_at_build") is not True:
+    if (leopard.get("dirty") is not False or
+            leopard.get("clean_at_build") is not True or
+            leopard.get("materialization") != "detached Git worktree" or
+            leopard.get("detached_head") is not True):
         raise ComparisonError("portable Leopard source was not clean")
     bundle = sources.get("source_bundle", {})
     validate_source_bundle(bundle, verify_local=verify_local)
     if (leopard.get("commit") != bundle.get("source_commit") or
-            leopard.get("tree") != bundle.get("source_tree")):
+            leopard.get("tree") != bundle.get("source_tree") or
+            leopard.get("build_inputs_before_sha256") != bundle.get("bundle_sha256") or
+            leopard.get("build_inputs_after_sha256") != bundle.get("bundle_sha256")):
         raise ComparisonError("portable Leopard identity is not source-bundle-derived")
     validate_build_identity(sources.get("build_identity", {}), nasm)
+    if (sources["build_identity"]["static_inputs"]["isa_l_archive"]["sha256"] !=
+            isa["library_sha256"]):
+        raise ComparisonError("linked ISA-L archive differs from source identity")
     commands = sources["build_identity"]["compile_commands"]
     for manifest_name in ("adapter", "leopard2"):
         for entry in commands[manifest_name]["entries"]:
-            if entry["file"].startswith("${LEOPARD_ROOT}/"):
-                relative = entry["file"][len("${LEOPARD_ROOT}/"):]
+            if entry["file"].startswith("${LEOPARD_SOURCE}/"):
+                relative = entry["file"][len("${LEOPARD_SOURCE}/"):]
                 if relative not in bundle["entries"]:
                     raise ComparisonError(
                         "Leopard compile command source is absent from source bundle")
 
 
 def run_correctness(cache: Path, count: int, output: Path) -> dict[str, Any]:
+    reject_contaminating_environment()
     provenance = load_provenance(cache)
     executable = Path(provenance["executables"]["isa-l"]["path"])
     cells = correctness_cells(count)
@@ -1602,7 +1966,8 @@ def run_correctness(cache: Path, count: int, output: Path) -> dict[str, Any]:
             command = child_command(
                 "isa-l", executable, cell, iterations=3, warmup=0,
                 output=result_path, oracle_mode="full")
-            completed = run_checked(command, timeout=120)
+            completed = run_checked(
+                command, env=controlled_child_environment(), timeout=120)
             if completed.stdout or completed.stderr:
                 raise ComparisonError(f"correctness child {index} emitted output")
             document = json.loads(result_path.read_text())
@@ -1619,6 +1984,7 @@ def run_correctness(cache: Path, count: int, output: Path) -> dict[str, Any]:
         "sources": portable_sources(provenance),
         "executables": {
             "isa-l": {"sha256": provenance["executables"]["isa-l"]["sha256"]}},
+        "child_environment": child_environment_record(),
         "case_generation_seed": "0x4c454f324953414c",
         "case_count": count,
         "no_loss_cases": sum(result["cell"]["loss_count"] == 0 for result in results),
@@ -1640,7 +2006,8 @@ def run_correctness(cache: Path, count: int, output: Path) -> dict[str, Any]:
 def validate_correctness(
         document: Mapping[str, Any], verify_local: bool = False) -> None:
     require_exact_keys(document, {
-        "schema", "sources", "executables", "case_generation_seed", "case_count",
+        "schema", "sources", "executables", "child_environment",
+        "case_generation_seed", "case_count",
         "no_loss_cases", "maximum_loss_cases", "padding_boundary_gf16_comparisons",
         "results", "artifact_sha256"}, "correctness artifact")
     if document.get("schema") != CORRECTNESS_SCHEMA:
@@ -1649,12 +2016,16 @@ def validate_correctness(
         raise ComparisonError("correctness case-generation seed changed")
     sources = document.get("sources", {})
     validate_portable_sources(sources, verify_local=verify_local)
+    validate_child_environment_record(document.get("child_environment", {}))
     executables = document.get("executables", {})
     require_exact_keys(executables, {"isa-l"}, "correctness executables")
     require_exact_keys(executables.get("isa-l", {}), {"sha256"},
                        "correctness ISA-L executable")
     require_hex(executables["isa-l"].get("sha256"), 64,
                 "correctness ISA-L executable digest")
+    runtime = sources["build_identity"]["runtime_linkage"]["isa-l"]
+    if runtime.get("executable_sha256") != executables["isa-l"]["sha256"]:
+        raise ComparisonError("correctness executable differs from runtime-link identity")
     count = document.get("case_count")
     if isinstance(count, bool) or not isinstance(count, int):
         raise ComparisonError("invalid correctness case count")
@@ -1687,9 +2058,44 @@ def validate_correctness(
         raise ComparisonError("correctness artifact digest mismatch")
 
 
+def correctness_binding(document: Mapping[str, Any]) -> dict[str, Any]:
+    sources = document["sources"]
+    executables = document["executables"]
+    return {
+        "schema": "leopard2-isal-correctness-binding/v1",
+        "artifact_schema": document["schema"],
+        "artifact_sha256": document["artifact_sha256"],
+        "case_count": document["case_count"],
+        "sources_sha256": mapping_digest(sources),
+        "executables_sha256": mapping_digest(executables),
+        "source_bundle_sha256": sources["source_bundle"]["bundle_sha256"],
+        "build_identity_sha256": sources["build_identity"]["identity_sha256"],
+        "leopard_commit": sources["leopard"]["commit"],
+        "leopard_tree": sources["leopard"]["tree"],
+        "isa_l_commit": sources["isa_l"]["commit"],
+        "isa_l_tree": sources["isa_l"]["tree"],
+        "isa_l_library_sha256": sources["isa_l"]["library_sha256"],
+        "nasm_executable_sha256": sources["nasm"]["executable_sha256"],
+        "isa_l_executable_sha256": executables["isa-l"]["sha256"],
+    }
+
+
+def validate_correctness_binding(
+        value: Mapping[str, Any], correctness: Mapping[str, Any]) -> None:
+    expected = correctness_binding(correctness)
+    require_exact_keys(value, set(expected), "correctness binding")
+    if dict(value) != expected:
+        raise ComparisonError(
+            "performance checkpoint is not bound to the supplied correctness artifact")
+
+
 def run_checkpoint(
         cache: Path, cpu: int, reserved_idle_cpu: int, output: Path,
-        iterations: int, warmup: int) -> dict[str, Any]:
+        iterations: int, warmup: int,
+        correctness_artifact: Path) -> dict[str, Any]:
+    if not sys.platform.startswith("linux"):
+        raise ComparisonError("pinned ISA-L evidence collection is Linux-only")
+    reject_contaminating_environment()
     original_affinity = allowed_cpus()
     if cpu not in original_affinity:
         raise ComparisonError(
@@ -1705,18 +2111,28 @@ def run_checkpoint(
         raise ComparisonError(
             f"reserved idle CPU {reserved_idle_cpu} is not an allowed SMT sibling "
             f"of CPU {cpu}: {siblings}")
-    if iterations < 5 or warmup < 1:
-        raise ComparisonError("checkpoint requires at least 5 samples and 1 warmup")
+    if iterations != EVIDENCE_ITERATIONS or warmup != EVIDENCE_WARMUP:
+        raise ComparisonError(
+            f"checkpoint requires exactly {EVIDENCE_ITERATIONS} samples and "
+            f"{EVIDENCE_WARMUP} warmups per child")
     provenance = load_provenance(cache)
+    try:
+        correctness = json.loads(correctness_artifact.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise ComparisonError(f"cannot read correctness artifact: {error}") from error
+    validate_correctness(correctness)
+    if (correctness.get("sources") != portable_sources(provenance) or
+            correctness.get("executables", {}).get("isa-l", {}).get("sha256") !=
+            provenance["executables"]["isa-l"]["sha256"]):
+        raise ComparisonError(
+            "correctness artifact source/build/executable identity differs from bootstrap")
+    if output.resolve() == correctness_artifact.resolve():
+        raise ComparisonError("checkpoint output cannot replace the correctness artifact")
     executables = {
         provider: Path(provenance["executables"][provider]["path"])
         for provider in ("isa-l", "leopard2")}
     results: list[dict[str, Any]] = []
-    environment = os.environ.copy()
-    environment.update({
-        "OMP_NUM_THREADS": "1", "OMP_DYNAMIC": "FALSE",
-        "GOMP_CPU_AFFINITY": str(cpu), "LC_ALL": "C",
-    })
+    environment = controlled_child_environment(cpu)
     with advisory_cpu_lease(cache, cpu, reserved_idle_cpu) as lease:
         os.sched_setaffinity(0, {cpu})
         try:
@@ -1734,6 +2150,7 @@ def run_checkpoint(
                 raise ComparisonError(
                     f"child did not inherit singleton affinity: {child_affinity}")
             pre_frequency = current_frequency_snapshot(cpu, "pre")
+            post_frequency: dict[str, Any] | None = None
             with tempfile.TemporaryDirectory(
                     prefix="leo2-isal-", dir=str(cache)) as temporary:
                 temporary_path = Path(temporary)
@@ -1749,6 +2166,10 @@ def run_checkpoint(
                                 oracle_mode="projection" if provider == "isa-l" else None)
                             completed = run_checked(
                                 command, env=environment, timeout=600)
+                            if (cell_index == len(CHECKPOINT_CELLS) - 1 and
+                                    repetition == len(ABBA) - 1 and
+                                    order_index == len(order) - 1):
+                                post_frequency = current_frequency_snapshot(cpu, "post")
                             if allowed_cpus() != {cpu}:
                                 raise ComparisonError(
                                     "runner affinity changed during the measurement window")
@@ -1780,12 +2201,20 @@ def run_checkpoint(
                         if missing_by_provider["isa-l"] != missing_by_provider["leopard2"]:
                             raise ComparisonError(
                                 "providers did not use the same erasure pattern")
+            if post_frequency is None:
+                raise ComparisonError("post-timing frequency snapshot was not captured")
             post_timing_provenance = load_provenance(cache)
             if post_timing_provenance != provenance:
                 raise ComparisonError(
                     "source, toolchain, library, or executable provenance changed "
                     "during the measurement window")
-            post_frequency = current_frequency_snapshot(cpu, "post")
+            try:
+                post_correctness = json.loads(correctness_artifact.read_text())
+            except (OSError, json.JSONDecodeError) as error:
+                raise ComparisonError(
+                    f"correctness artifact changed during timing: {error}") from error
+            if post_correctness != correctness:
+                raise ComparisonError("correctness artifact changed during timing")
             host = cpu_metadata(
                 cpu, original_affinity, reserved_idle_cpu, child_affinity, lease,
                 pre_frequency, post_frequency)
@@ -1800,9 +2229,13 @@ def run_checkpoint(
             "provider_order_by_repetition": [list(order) for order in ABBA],
             "repetitions": 4, "iterations_per_child": iterations,
             "warmup_per_child": warmup, "thread_count": 1,
+            "raw_samples_retained_per_metric": iterations,
+            "warmups_are_untimed_per_operation": True,
             "codec_setup_separate": True, "decode_plan_setup_separate": True,
             "execution_reuses_setup": True,
             "post_timing_integrity_verified": True,
+            "post_frequency_capture": (
+                "immediately after final child returns and before result validation"),
             "isa_l_timing_oracle": (
                 "all K*R Cauchy coefficients plus deterministic projection of at most "
                 "64 byte positions per parity shard and stripe, before and after timing"),
@@ -1818,6 +2251,8 @@ def run_checkpoint(
                 "the deterministic K-row subset actually consumed"),
         },
         "sources": portable_sources(provenance),
+        "child_environment": child_environment_record(cpu),
+        "correctness_binding": correctness_binding(correctness),
         "executables": {
             provider: {"sha256": provenance["executables"][provider]["sha256"]}
             for provider in ("isa-l", "leopard2")},
@@ -1834,7 +2269,7 @@ def run_checkpoint(
         "compare 64/128-core aggregate batches on hardware exposing those CPUs",
     ]
     checkpoint["artifact_sha256"] = canonical_digest(checkpoint)
-    validate_checkpoint(checkpoint)
+    validate_checkpoint(checkpoint, correctness=correctness)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(checkpoint, indent=2, sort_keys=True) + "\n")
     return checkpoint
@@ -1879,29 +2314,41 @@ def validate_frequency_snapshot(value: Mapping[str, Any], phase: str) -> None:
 
 
 def validate_checkpoint(
-        document: Mapping[str, Any], verify_local: bool = False) -> None:
+        document: Mapping[str, Any], verify_local: bool = False,
+        correctness: Mapping[str, Any] | None = None) -> None:
+    if correctness is None:
+        raise ComparisonError(
+            "checkpoint validation requires its bound correctness artifact")
+    validate_correctness(correctness, verify_local=verify_local)
     require_exact_keys(document, {
-        "schema", "method", "sources", "executables", "host", "cells", "results",
-        "aggregate", "remaining_gates", "artifact_sha256"}, "checkpoint")
+        "schema", "method", "sources", "executables", "child_environment",
+        "correctness_binding", "host", "cells", "results", "aggregate",
+        "remaining_gates", "artifact_sha256"}, "checkpoint")
     if document.get("schema") != SCHEMA:
         raise ComparisonError("wrong checkpoint schema")
     method = document.get("method", {})
     require_exact_keys(method, {
         "provider_order", "provider_order_by_repetition", "repetitions",
         "iterations_per_child", "warmup_per_child", "thread_count",
+        "raw_samples_retained_per_metric", "warmups_are_untimed_per_operation",
         "codec_setup_separate", "decode_plan_setup_separate",
         "execution_reuses_setup", "post_timing_integrity_verified",
+        "post_frequency_capture",
         "isa_l_timing_oracle", "full_correctness_oracle",
         "wire_compatible", "comparison_scope",
         "decode_input_rate_semantics"}, "checkpoint method")
     if (method.get("provider_order") != "ABBA" or
             method.get("provider_order_by_repetition") != [list(order) for order in ABBA] or
             method.get("repetitions") != 4 or method.get("thread_count") != 1 or
+            method.get("raw_samples_retained_per_metric") != EVIDENCE_ITERATIONS or
+            method.get("warmups_are_untimed_per_operation") is not True or
             method.get("wire_compatible") is not False or
             method.get("codec_setup_separate") is not True or
             method.get("decode_plan_setup_separate") is not True or
             method.get("execution_reuses_setup") is not True or
             method.get("post_timing_integrity_verified") is not True or
+            method.get("post_frequency_capture") !=
+            "immediately after final child returns and before result validation" or
             method.get("isa_l_timing_oracle") !=
             "all K*R Cauchy coefficients plus deterministic projection of at most "
             "64 byte positions per parity shard and stripe, before and after timing" or
@@ -1917,13 +2364,19 @@ def validate_checkpoint(
         raise ComparisonError("checkpoint method/fairness contract changed")
     iterations = method.get("iterations_per_child")
     warmup = method.get("warmup_per_child")
-    if (isinstance(iterations, bool) or not isinstance(iterations, int) or iterations < 5 or
-            isinstance(warmup, bool) or not isinstance(warmup, int) or warmup < 1):
+    if (iterations != EVIDENCE_ITERATIONS or warmup != EVIDENCE_WARMUP):
         raise ComparisonError("checkpoint sample/warmup contract changed")
     if document.get("cells") != [dict(cell) for cell in CHECKPOINT_CELLS]:
         raise ComparisonError("checkpoint cell matrix changed")
     sources = document.get("sources", {})
     validate_portable_sources(sources, verify_local=verify_local)
+    validate_child_environment_record(
+        document.get("child_environment", {}),
+        document.get("host", {}).get("requested_cpu"))
+    validate_correctness_binding(
+        document.get("correctness_binding", {}), correctness)
+    if correctness.get("sources") != sources:
+        raise ComparisonError("checkpoint and correctness sources differ")
     executables = document.get("executables", {})
     require_exact_keys(executables, {"isa-l", "leopard2"}, "checkpoint executables")
     for provider in ("isa-l", "leopard2"):
@@ -1931,6 +2384,13 @@ def validate_checkpoint(
         require_exact_keys(executable, {"sha256"}, f"checkpoint {provider} executable")
         require_hex(executable.get("sha256"), 64,
                     f"checkpoint {provider} executable digest")
+        if (sources["build_identity"]["runtime_linkage"][provider].get(
+                "executable_sha256") != executable.get("sha256")):
+            raise ComparisonError(
+                f"checkpoint {provider} differs from runtime-link executable")
+    if (correctness.get("executables", {}).get("isa-l", {}).get("sha256") !=
+            executables["isa-l"]["sha256"]):
+        raise ComparisonError("checkpoint ISA-L executable differs from correctness gate")
     host = document.get("host", {})
     require_exact_keys(host, {
         "requested_cpu", "allowed_cpu_count", "allowed_cpus",
@@ -1991,6 +2451,7 @@ def validate_checkpoint(
     if not isinstance(results, list) or len(results) != len(CHECKPOINT_CELLS) * 8:
         raise ComparisonError("checkpoint result cardinality changed")
     seen: set[tuple[int, int, int, str]] = set()
+    leopard_backends: set[str] = set()
     for result in results:
         if not isinstance(result, Mapping):
             raise ComparisonError("checkpoint result is not an object")
@@ -2025,6 +2486,9 @@ def validate_checkpoint(
                 sources["nasm"]["executable_sha256"], "projection")
         else:
             validate_leopard_result(result.get("document", {}), cell, iterations, warmup)
+            leopard_backends.add(result["document"]["resolved"]["backend"])
+    if len(leopard_backends) != 1:
+        raise ComparisonError("Leopard2 resolved backend changed across repetitions")
     for cell_index in range(len(CHECKPOINT_CELLS)):
         for repetition, order in enumerate(ABBA):
             documents = {result["provider"]: result["document"] for result in results
@@ -2064,7 +2528,8 @@ def fake_isal_result(
         cell: Mapping[str, Any], iterations: int = 5, warmup: int = 1,
         oracle_mode: str = "full") -> dict[str, Any]:
     params = expected_parameters(cell, iterations, warmup)
-    params["missing_original_indices"] = list(range(params["loss_count"]))
+    params["missing_original_indices"] = expected_missing_indices(
+        params["K"], params["loss_count"], params["seed"])
     k, r, b, losses, batch = (params["K"], params["R"], params["shard_bytes"],
                               params["loss_count"], params["batch"])
     profile, field, parent = resolved_identity(cell)
@@ -2142,7 +2607,9 @@ def fake_leopard_result(
     params = expected_parameters(cell, iterations, warmup)
     params["force_generic_decode"] = False
     params["force_specialized_decode"] = False
-    params["missing_original_indices"] = list(range(params["loss_count"]))
+    params["skip_legacy"] = True
+    params["missing_original_indices"] = expected_missing_indices(
+        params["K"], params["loss_count"], params["seed"])
     k, r, b, losses, batch = (params["K"], params["R"], params["shard_bytes"],
                               params["loss_count"], params["batch"])
     profile, field, parent = resolved_identity(cell)
@@ -2157,7 +2624,8 @@ def fake_leopard_result(
                   "cplusplus": 201103},
         "parameters": params,
         "resolved": {"profile": profile, "field": field, "parent_count": parent,
-                     "thread_count": 1, "backend": "avx2", "padded_side": 1},
+                     "thread_count": 1, "backend": "avx2",
+                     "padded_side": expected_padded_side(cell)},
         "correctness": {"leopard2_round_trip": True,
                         "legacy_comparison": None},
         "memory": {"scratch_alignment": 64,
@@ -2186,7 +2654,9 @@ def fake_leopard_result(
                 "offered_received counts all non-null shard pointers supplied; "
                 "a plan may read a deterministic subset"),
         },
-        "legacy": {"available": False, "unavailable_reason": "test",
+        "legacy": {"available": False,
+                   "unavailable_reason":
+                       "disabled by --skip-legacy for symmetric external comparison",
                    "codec_setup": None, "decode_timing_includes_setup": True,
                    "encode_execution": None, "decode_including_setup": None},
     }
@@ -2198,7 +2668,7 @@ def fake_source_bundle() -> dict[str, Any]:
 
 def fake_compile_manifest(name: str) -> dict[str, Any]:
     file_name = ("${ISA_L_SOURCE}/erasure_code/ec_base.c" if name == "isa_l" else
-                 "${LEOPARD_ROOT}/leopard2.cpp")
+                 "${LEOPARD_SOURCE}/leopard2.cpp")
     entries = [{
         "directory": "${" + name.upper() + "_BUILD}",
         "file": file_name,
@@ -2208,6 +2678,33 @@ def fake_compile_manifest(name: str) -> dict[str, Any]:
     return {
         "schema": "leopard2-normalized-compile-commands/v1",
         "entries": entries, "entry_count": 1,
+        "sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+    }
+
+
+def fake_link_manifest(lines: list[str]) -> dict[str, Any]:
+    encoded = json.dumps(lines, separators=(",", ":"))
+    return {
+        "schema": "leopard2-normalized-link-command/v1",
+        "lines": lines, "line_count": len(lines),
+        "sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+    }
+
+
+def fake_runtime_link_manifest(executable_sha256: str) -> dict[str, Any]:
+    dependencies = [{
+        "needed": "libc.so.6",
+        "resolved_path": "/lib/libc.so.6",
+        "resolved_realpath": "/usr/lib/libc.so.6",
+        "soname": "libc.so.6",
+        "sha256": "c" * 64,
+    }]
+    encoded = json.dumps(dependencies, sort_keys=True, separators=(",", ":"))
+    return {
+        "schema": "leopard2-resolved-dynamic-linkage/v1",
+        "executable_sha256": executable_sha256,
+        "dependencies": dependencies,
+        "dependency_count": len(dependencies),
         "sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
     }
 
@@ -2244,20 +2741,50 @@ def fake_build_identity() -> dict[str, Any]:
                 "build_target": "bench_leopard2"},
         },
         "tools": {
-            "cmake": {"sha256": "5" * 64, "reported_version": "cmake test"},
-            "cc": {"sha256": "6" * 64, "reported_version": "cc test"},
-            "cxx": {"sha256": "7" * 64, "reported_version": "cxx test"},
-            "ar": {"sha256": "8" * 64, "reported_version": "ar test"},
-            "ranlib": {"sha256": "9" * 64, "reported_version": "ranlib test"},
-            "linker": {"sha256": "a" * 64, "reported_version": "ld test"},
-            "build_program": {"sha256": "b" * 64, "reported_version": "make test"},
-            "nasm": {"sha256": "4" * 64,
+            "cmake": {"path": "/usr/bin/cmake", "sha256": "5" * 64,
+                      "reported_version": "cmake test"},
+            "cc": {"path": "/usr/bin/cc", "sha256": "6" * 64,
+                   "reported_version": "cc test"},
+            "cxx": {"path": "/usr/bin/c++", "sha256": "7" * 64,
+                    "reported_version": "cxx test"},
+            "ar": {"path": "/usr/bin/ar", "sha256": "8" * 64,
+                   "reported_version": "ar test"},
+            "ranlib": {"path": "/usr/bin/ranlib", "sha256": "9" * 64,
+                       "reported_version": "ranlib test"},
+            "linker": {"path": "/usr/bin/ld", "sha256": "a" * 64,
+                       "reported_version": "ld test"},
+            "build_program": {"path": "/usr/bin/make", "sha256": "b" * 64,
+                              "reported_version": "make test"},
+            "ldd": {"path": "/usr/bin/ldd", "sha256": "d" * 64,
+                    "reported_version": "ldd test"},
+            "readelf": {"path": "/usr/bin/readelf", "sha256": "e" * 64,
+                        "reported_version": "readelf test"},
+            "nasm": {"path": "${NASM}", "sha256": "4" * 64,
                      "reported_version": f"NASM version {NASM_VERSION} test"},
         },
         "compile_commands": {
             "isa_l": fake_compile_manifest("isa_l"),
             "adapter": fake_compile_manifest("adapter"),
             "leopard2": fake_compile_manifest("leopard2"),
+        },
+        "link_commands": {
+            "isa_l_archive": fake_link_manifest(["${AR} qc libisal.a objects"]),
+            "adapter_executable": fake_link_manifest([
+                "${CXX} adapter.o ${ISA_L_INSTALL}/lib/libisal.a"]),
+            "leopard2_library": fake_link_manifest(["${AR} qc libleopard.a objects"]),
+            "leopard2_executable": fake_link_manifest([
+                "${CXX} benchmark.o libleopard.a"]),
+        },
+        "static_inputs": {
+            "isa_l_archive": {
+                "normalized_path": "${ISA_L_INSTALL}/lib/libisal.a",
+                "sha256": "1" * 64,
+                "required_by_adapter_link": True,
+            },
+        },
+        "runtime_linkage": {
+            "isa-l": fake_runtime_link_manifest("2" * 64),
+            "leopard2": fake_runtime_link_manifest("3" * 64),
         },
     }
     identity["identity_sha256"] = keyed_digest(identity, "identity_sha256")
@@ -2280,22 +2807,29 @@ def fake_portable_sources() -> dict[str, Any]:
             "executable_sha256": "4" * 64,
             "reported_version": f"NASM version {NASM_VERSION} test",
         },
-        "leopard": {"commit": bundle["source_commit"],
-                    "tree": bundle["source_tree"],
-                    "dirty": False, "clean_at_build": True},
+        "leopard": {
+            "commit": bundle["source_commit"], "tree": bundle["source_tree"],
+            "dirty": False, "clean_at_build": True,
+            "materialization": "detached Git worktree", "detached_head": True,
+            "build_inputs_before_sha256": bundle["bundle_sha256"],
+            "build_inputs_after_sha256": bundle["bundle_sha256"],
+        },
         "source_bundle": bundle,
         "build_identity": fake_build_identity(),
     }
 
 
-def fake_checkpoint() -> dict[str, Any]:
+def fake_checkpoint(correctness: Mapping[str, Any]) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     for cell_index, cell in enumerate(CHECKPOINT_CELLS):
         for repetition, order in enumerate(ABBA):
             for order_index, provider in enumerate(order):
-                document = (fake_isal_result(cell, oracle_mode="projection")
+                document = (fake_isal_result(
+                                cell, EVIDENCE_ITERATIONS, EVIDENCE_WARMUP,
+                                oracle_mode="projection")
                             if provider == "isa-l" else
-                            fake_leopard_result(cell))
+                            fake_leopard_result(
+                                cell, EVIDENCE_ITERATIONS, EVIDENCE_WARMUP))
                 results.append({
                     "cell_index": cell_index, "repetition": repetition,
                     "order_index": order_index, "provider": provider,
@@ -2308,11 +2842,15 @@ def fake_checkpoint() -> dict[str, Any]:
         "method": {
             "provider_order": "ABBA",
             "provider_order_by_repetition": [list(order) for order in ABBA],
-            "repetitions": 4, "iterations_per_child": 5,
-            "warmup_per_child": 1, "thread_count": 1,
+            "repetitions": 4, "iterations_per_child": EVIDENCE_ITERATIONS,
+            "warmup_per_child": EVIDENCE_WARMUP, "thread_count": 1,
+            "raw_samples_retained_per_metric": EVIDENCE_ITERATIONS,
+            "warmups_are_untimed_per_operation": True,
             "codec_setup_separate": True, "decode_plan_setup_separate": True,
             "execution_reuses_setup": True, "wire_compatible": False,
             "post_timing_integrity_verified": True,
+            "post_frequency_capture":
+                "immediately after final child returns and before result validation",
             "isa_l_timing_oracle": (
                 "all K*R Cauchy coefficients plus deterministic projection of at most "
                 "64 byte positions per parity shard and stripe, before and after timing"),
@@ -2326,11 +2864,13 @@ def fake_checkpoint() -> dict[str, Any]:
                 "offered counts every non-erased public shard pointer; selected counts "
                 "the deterministic K-row subset actually consumed"),
         },
-        "sources": fake_portable_sources(),
+        "sources": copy.deepcopy(correctness["sources"]),
         "executables": {
             "isa-l": {"sha256": "2" * 64},
             "leopard2": {"sha256": "3" * 64},
         },
+        "child_environment": child_environment_record(7),
+        "correctness_binding": correctness_binding(correctness),
         "host": {
             "requested_cpu": 7, "allowed_cpus": [7, 8],
             "allowed_cpu_count": 2,
@@ -2388,6 +2928,7 @@ def fake_correctness_artifact() -> dict[str, Any]:
         "schema": CORRECTNESS_SCHEMA,
         "sources": fake_portable_sources(),
         "executables": {"isa-l": {"sha256": "2" * 64}},
+        "child_environment": child_environment_record(),
         "case_generation_seed": "0x4c454f324953414c",
         "case_count": len(cells),
         "no_loss_cases": sum(cell["loss_count"] == 0 for cell in cells),
@@ -2402,15 +2943,37 @@ def fake_correctness_artifact() -> dict[str, Any]:
 
 
 def self_test() -> None:
-    with tempfile.TemporaryDirectory(prefix="leo2-isal-lease-test-") as temporary:
-        with advisory_cpu_lease(Path(temporary), 7, 8) as lease:
-            validate_advisory_lease(lease, 7, 8)
-            try:
-                with advisory_cpu_lease(Path(temporary), 7, 8):
-                    raise ComparisonError("duplicate advisory CPU lease was acquired")
-            except ComparisonError as error:
-                if "already held" not in str(error):
-                    raise
+    saved_preload = os.environ.get("LD_PRELOAD")
+    os.environ["LD_PRELOAD"] = "/self-test/forbidden.so"
+    try:
+        try:
+            reject_contaminating_environment()
+        except ComparisonError as error:
+            if "LD_PRELOAD" not in str(error):
+                raise
+        else:
+            raise ComparisonError("ambient LD_PRELOAD contamination was accepted")
+    finally:
+        if saved_preload is None:
+            os.environ.pop("LD_PRELOAD", None)
+        else:
+            os.environ["LD_PRELOAD"] = saved_preload
+    evidence_command = child_command(
+        "leopard2", Path("/bench_leopard2"), CHECKPOINT_CELLS[0],
+        EVIDENCE_ITERATIONS, EVIDENCE_WARMUP, Path("/result.json"))
+    if (evidence_command.count("--skip-legacy") != 1 or
+            evidence_command.count("--retain-samples") != 1):
+        raise ComparisonError("Leopard external-evidence command is not isolated")
+    if sys.platform.startswith("linux"):
+        with tempfile.TemporaryDirectory(prefix="leo2-isal-lease-test-") as temporary:
+            with advisory_cpu_lease(Path(temporary), 7, 8) as lease:
+                validate_advisory_lease(lease, 7, 8)
+                try:
+                    with advisory_cpu_lease(Path(temporary), 7, 8):
+                        raise ComparisonError("duplicate advisory CPU lease was acquired")
+                except ComparisonError as error:
+                    if "already held" not in str(error):
+                        raise
     for cell in CHECKPOINT_CELLS:
         validate_isal_result(
             fake_isal_result(cell), cell, 5, 1, "1" * 64, "4" * 64)
@@ -2448,8 +3011,16 @@ def self_test() -> None:
             pass
         else:
             raise ComparisonError("ISA-L result mutation was accepted")
-    checkpoint = fake_checkpoint()
-    validate_checkpoint(checkpoint, verify_local=False)
+    correctness = fake_correctness_artifact()
+    validate_correctness(correctness, verify_local=False)
+    checkpoint = fake_checkpoint(correctness)
+    validate_checkpoint(checkpoint, verify_local=False, correctness=correctness)
+    try:
+        validate_checkpoint(checkpoint, verify_local=False)
+    except ComparisonError:
+        pass
+    else:
+        raise ComparisonError("checkpoint validation accepted no correctness artifact")
     checkpoint_mutations = []
     changed = copy.deepcopy(checkpoint)
     changed["results"].pop()
@@ -2556,15 +3127,92 @@ def self_test() -> None:
     changed["host"]["coordinator_lease"]["lock_names"] = ["forged"]
     changed["artifact_sha256"] = canonical_digest(changed)
     checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["child_environment"]["variables"]["LD_PRELOAD"] = "/tmp/inject.so"
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["method"]["iterations_per_child"] = EVIDENCE_ITERATIONS - 1
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["method"]["warmup_per_child"] = EVIDENCE_WARMUP - 1
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["method"]["post_frequency_capture"] = "after provenance validation"
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    leopard_result = next(
+        result for result in changed["results"] if result["provider"] == "leopard2")
+    leopard_result["document"]["resolved"]["padded_side"] *= 2
+    changed["aggregate"] = aggregate_results(changed["results"])
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    leopard_result = next(
+        result for result in changed["results"] if result["provider"] == "leopard2")
+    leopard_result["document"]["parameters"].pop("skip_legacy")
+    changed["aggregate"] = aggregate_results(changed["results"])
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    leopard_results = [
+        result for result in changed["results"] if result["provider"] == "leopard2"]
+    leopard_results[0]["document"]["resolved"]["backend"] = "scalar"
+    changed["aggregate"] = aggregate_results(changed["results"])
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["results"][0]["document"]["parameters"]["missing_original_indices"] = []
+    changed["aggregate"] = aggregate_results(changed["results"])
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["correctness_binding"]["artifact_sha256"] = "0" * 64
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["sources"]["leopard"]["build_inputs_after_sha256"] = "0" * 64
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["sources"]["build_identity"]["link_commands"][
+        "adapter_executable"]["lines"] = ["${CXX} adapter.o"]
+    link = changed["sources"]["build_identity"]["link_commands"]["adapter_executable"]
+    link["line_count"] = 1
+    link["sha256"] = hashlib.sha256(
+        json.dumps(link["lines"], separators=(",", ":")).encode()).hexdigest()
+    changed["sources"]["build_identity"]["identity_sha256"] = keyed_digest(
+        changed["sources"]["build_identity"], "identity_sha256")
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["sources"]["build_identity"]["runtime_linkage"]["isa-l"][
+        "dependencies"][0]["soname"] = "forged.so"
+    runtime = changed["sources"]["build_identity"]["runtime_linkage"]["isa-l"]
+    runtime["sha256"] = hashlib.sha256(json.dumps(
+        runtime["dependencies"], sort_keys=True,
+        separators=(",", ":")).encode()).hexdigest()
+    changed["sources"]["build_identity"]["identity_sha256"] = keyed_digest(
+        changed["sources"]["build_identity"], "identity_sha256")
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["sources"]["build_identity"]["static_inputs"]["isa_l_archive"][
+        "sha256"] = "0" * 64
+    changed["sources"]["build_identity"]["identity_sha256"] = keyed_digest(
+        changed["sources"]["build_identity"], "identity_sha256")
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
     for changed in checkpoint_mutations:
         try:
-            validate_checkpoint(changed, verify_local=False)
+            validate_checkpoint(changed, verify_local=False, correctness=correctness)
         except ComparisonError:
             pass
         else:
             raise ComparisonError("checkpoint mutation was accepted")
-    correctness = fake_correctness_artifact()
-    validate_correctness(correctness, verify_local=False)
     correctness_mutations = []
     changed = copy.deepcopy(correctness)
     changed["executables"]["isa-l"].pop("sha256")
@@ -2586,6 +3234,10 @@ def self_test() -> None:
     changed = copy.deepcopy(correctness)
     changed["results"][0]["document"]["correctness"][
         "independent_scalar_parity_mode"] = "projection"
+    changed["artifact_sha256"] = canonical_digest(changed)
+    correctness_mutations.append(changed)
+    changed = copy.deepcopy(correctness)
+    changed["child_environment"]["variables"]["LD_LIBRARY_PATH"] = "/tmp"
     changed["artifact_sha256"] = canonical_digest(changed)
     correctness_mutations.append(changed)
     for changed in correctness_mutations:
@@ -2615,8 +3267,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     run_parser.add_argument("--cpu", type=int, required=True)
     run_parser.add_argument("--reserved-idle-cpu", type=int, required=True)
     run_parser.add_argument("--output", type=Path, required=True)
-    run_parser.add_argument("--iterations", type=int, default=9)
-    run_parser.add_argument("--warmup", type=int, default=2)
+    run_parser.add_argument("--correctness-artifact", type=Path, required=True)
+    run_parser.add_argument("--iterations", type=int, default=EVIDENCE_ITERATIONS)
+    run_parser.add_argument("--warmup", type=int, default=EVIDENCE_WARMUP)
     correctness_parser = subparsers.add_parser("correctness")
     correctness_parser.add_argument("--cache", type=Path, default=default_cache())
     correctness_parser.add_argument("--cases", type=int, default=128)
@@ -2627,6 +3280,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--require-local-build-match", action="store_true")
     validate_parser = subparsers.add_parser("validate")
     validate_parser.add_argument("checkpoint", type=Path)
+    validate_parser.add_argument("--correctness-artifact", type=Path, required=True)
     validate_parser.add_argument("--require-local-build-match", action="store_true")
     subparsers.add_parser("self-test")
     arguments = parser.parse_args(argv)
@@ -2638,7 +3292,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             output = run_checkpoint(
                 arguments.cache.resolve(), arguments.cpu,
                 arguments.reserved_idle_cpu, arguments.output.resolve(),
-                arguments.iterations, arguments.warmup)
+                arguments.iterations, arguments.warmup,
+                arguments.correctness_artifact.resolve())
             print(json.dumps({
                 "artifact_sha256": output["artifact_sha256"],
                 "cells": len(output["cells"]), "results": len(output["results"]),
@@ -2663,8 +3318,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             }, sort_keys=True))
         elif arguments.command == "validate":
             document = json.loads(arguments.checkpoint.read_text())
+            correctness = json.loads(arguments.correctness_artifact.read_text())
             validate_checkpoint(
-                document, verify_local=arguments.require_local_build_match)
+                document, verify_local=arguments.require_local_build_match,
+                correctness=correctness)
             print(json.dumps({
                 "artifact_sha256": document["artifact_sha256"],
                 "cells": len(document["cells"]), "results": len(document["results"]),
