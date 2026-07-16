@@ -123,6 +123,62 @@ def program_record(path: pathlib.Path) -> dict[str, Any]:
     }
 
 
+def cmake_cache_value(path: pathlib.Path, key: str) -> str:
+    prefix = f"{key}:"
+    matches = []
+    for line in path.read_text(encoding="utf-8", errors="strict").splitlines():
+        if line.startswith(prefix) and "=" in line:
+            matches.append(line.split("=", 1)[1])
+    if len(matches) != 1 or not matches[0]:
+        raise RuntimeError(f"CMake cache key is absent or ambiguous: {key}")
+    return matches[0]
+
+
+def compiler_program(compiler: pathlib.Path, name: str) -> pathlib.Path:
+    output = subprocess.run(
+        [str(compiler), f"-print-prog-name={name}"], check=True, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ).stdout.strip()
+    if not output:
+        raise RuntimeError(f"compiler did not resolve {name}: {compiler}")
+    path = pathlib.Path(output)
+    if path.is_absolute():
+        return path.absolute()
+    found = shutil.which(output)
+    if not found:
+        raise RuntimeError(f"compiler-selected program is unavailable: {output}")
+    return pathlib.Path(found).absolute()
+
+
+def filtered_symbol_scan(
+    nm: pathlib.Path, target: pathlib.Path, output: pathlib.Path,
+    archive_members: Iterable[str],
+) -> tuple[dict[str, int], dict[str, dict[str, int]]]:
+    text = subprocess.run(
+        [str(nm), "--print-file-name", relative(target)], cwd=ROOT,
+        check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ).stdout
+    lines = [line for line in text.splitlines()
+             if "__asan_" in line or "__ubsan_" in line]
+    output.write_text("\n".join(lines) + ("\n" if lines else ""),
+                      encoding="utf-8")
+    counts = {
+        "asan_lines": sum("__asan_" in line for line in lines),
+        "ubsan_lines": sum("__ubsan_" in line for line in lines),
+    }
+    members = {
+        member: {"asan_lines": 0, "ubsan_lines": 0}
+        for member in archive_members
+    }
+    for line in lines:
+        for member in members:
+            if f":{member}:" in line:
+                members[member]["asan_lines"] += "__asan_" in line
+                members[member]["ubsan_lines"] += "__ubsan_" in line
+                break
+    return counts, members
+
+
 def dependency_closure(build_dir: pathlib.Path) -> list[dict[str, Any]]:
     paths: set[pathlib.Path] = {ROOT / "CMakeLists.txt"}
     for dependency in build_dir.rglob("*.o.d"):
@@ -160,6 +216,7 @@ def cmake_build(
     configure_stderr = results / "logs" / f"{name}-configure.stderr.txt"
     build_stdout = results / "logs" / f"{name}-core-build.stdout.txt"
     build_stderr = results / "logs" / f"{name}-core-build.stderr.txt"
+    cache_output = results / "logs" / f"{name}-CMakeCache.txt"
     configure_argv = [
         str(resolve_program("cmake")), "-S", ".", "-B", relative(build_dir),
         "-G", "Unix Makefiles",
@@ -178,9 +235,26 @@ def cmake_build(
             f"-DCMAKE_EXE_LINKER_FLAGS={flags}",
         ])
     run_logged(configure_argv, configure_stdout, configure_stderr)
+    cache_path = build_dir / "CMakeCache.txt"
+    shutil.copyfile(cache_path, cache_output)
+    cache_compilers = {
+        "CMAKE_C_COMPILER": str(c_compiler),
+        "CMAKE_CXX_COMPILER": str(cxx_compiler),
+    }
+    for key, expected in cache_compilers.items():
+        if cmake_cache_value(cache_path, key) != expected:
+            raise RuntimeError(f"CMake selected an unexpected {key}")
+    make_program = pathlib.Path(
+        cmake_cache_value(cache_path, "CMAKE_MAKE_PROGRAM")).absolute()
+    archive_program = pathlib.Path(
+        cmake_cache_value(cache_path, "CMAKE_AR")).absolute()
+    ranlib_program = pathlib.Path(
+        cmake_cache_value(cache_path, "CMAKE_RANLIB")).absolute()
+    cmake_linker = pathlib.Path(
+        cmake_cache_value(cache_path, "CMAKE_LINKER")).absolute()
     build_argv = [
         str(resolve_program("cmake")), "--build", relative(build_dir),
-        "--target", "libleopard", "--", f"-j{jobs}",
+        "--target", "libleopard", "--verbose", "--", f"-j{jobs}",
     ]
     run_logged(build_argv, build_stdout, build_stderr)
     library = build_dir / "liblibleopard.a"
@@ -196,9 +270,14 @@ def cmake_build(
         "configure_stderr": artifact(configure_stderr),
         "build_stdout": artifact(build_stdout),
         "build_stderr": artifact(build_stderr),
+        "cmake_cache": artifact(cache_output),
         "cmake": program_record(resolve_program("cmake")),
         "c_compiler": program_record(c_compiler),
         "cxx_compiler": program_record(cxx_compiler),
+        "gmake": program_record(make_program),
+        "ar": program_record(archive_program),
+        "ranlib": program_record(ranlib_program),
+        "cmake_linker": program_record(cmake_linker),
         "library": artifact(library),
         "source_closure": dependency_closure(build_dir),
         "build_dir": relative(build_dir),
@@ -216,7 +295,7 @@ def compile_experiment(
     source_hash = sha256(SOURCE)
     library_path = ROOT / build["library"]["path"]
     argv = [
-        str(compiler), "-std=c++11", "-g", "-Wall", "-Wextra",
+        str(compiler), "-v", "-Wl,-v", "-std=c++11", "-g", "-Wall", "-Wextra",
         "-Wpedantic", "-Werror", "-I.",
         f'-DLEO2_C7_SOURCE_SHA256="{source_hash}"',
         f'-DLEO2_C7_CORE_GIT_SHA="{core_git_sha}"',
@@ -237,34 +316,44 @@ def compile_experiment(
     argv.extend(["-o", relative(executable)])
     run_logged(argv, stdout_path, stderr_path)
     nm = resolve_program("nm")
-    nm_output = subprocess.run(
-        [str(nm), str(executable)], check=True, text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    ).stdout
-    sanitizer_symbols = "\n".join(
-        line for line in nm_output.splitlines()
-        if "__asan_" in line or "__ubsan_" in line)
-    if sanitizer_symbols:
-        sanitizer_symbols += "\n"
-    nm_path = results / "logs" / f"{name}-nm-sanitizer-symbols.txt"
-    nm_path.write_text(sanitizer_symbols, encoding="utf-8")
+    archive_program = pathlib.Path(build["ar"]["path"])
+    library_members = subprocess.run(
+        [str(archive_program), "t", relative(library_path)], cwd=ROOT,
+        check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ).stdout.splitlines()
+    if len(library_members) != len(set(library_members)) or not library_members:
+        raise RuntimeError("static archive member list is invalid")
+    executable_scan = results / "logs" / f"{name}-nm-executable-sanitizers.txt"
+    archive_scan = results / "logs" / f"{name}-nm-core-archive-sanitizers.txt"
+    executable_counts, executable_members = filtered_symbol_scan(
+        nm, executable, executable_scan, ())
+    archive_counts, archive_member_counts = filtered_symbol_scan(
+        nm, library_path, archive_scan, library_members)
+    if executable_members:
+        raise RuntimeError("executable symbol scan unexpectedly has archive members")
+    expected_executable = ({"asan_lines": 320, "ubsan_lines": 54}
+                           if build["sanitizer"] else
+                           {"asan_lines": 0, "ubsan_lines": 0})
+    expected_archive = ({"asan_lines": 306, "ubsan_lines": 86}
+                        if build["sanitizer"] else
+                        {"asan_lines": 0, "ubsan_lines": 0})
+    if executable_counts != expected_executable or archive_counts != expected_archive:
+        raise RuntimeError("sanitizer symbol family/count proof changed")
     instrumentation = {
         "required_compile_macro": bool(build["sanitizer"]),
-        "sanitizer_symbol_scan": artifact(nm_path),
-        "has_asan_symbols": "__asan_" in nm_output,
-        "has_ubsan_symbols": "__ubsan_" in nm_output,
+        "archive_members": library_members,
+        "core_archive_symbol_scan": artifact(archive_scan),
+        "core_archive_counts": archive_counts,
+        "core_archive_member_counts": archive_member_counts,
+        "executable_symbol_scan": artifact(executable_scan),
+        "executable_counts": executable_counts,
     }
-    if build["sanitizer"] and not (
-            instrumentation["has_asan_symbols"] and
-            instrumentation["has_ubsan_symbols"]):
-        raise RuntimeError("sanitizer executable lacks ASan/UBSan references")
-    if not build["sanitizer"] and (
-            instrumentation["has_asan_symbols"] or
-            instrumentation["has_ubsan_symbols"]):
-        raise RuntimeError("normal executable unexpectedly references sanitizers")
+    standalone_linker = compiler_program(compiler, "ld")
     result = dict(build)
     result.update({
         "compiler": program_record(compiler),
+        "link_driver": program_record(compiler),
+        "standalone_linker": program_record(standalone_linker),
         "compile_argv": argv,
         "compile_stdout": artifact(stdout_path),
         "compile_stderr": artifact(stderr_path),
@@ -408,7 +497,7 @@ def main() -> int:
         by_name["auto"], arguments.results_dir, arguments.smoke_cpu, True))
 
     manifest: dict[str, Any] = {
-        "schema": "leopard2-c7-build-run-manifest/v1",
+        "schema": "leopard2-c7-build-run-manifest/v2",
         "status": "pass",
         "scope": (
             "correctness plus CPU0 non-authoritative harness smoke; no promotion timing"
