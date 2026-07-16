@@ -21,15 +21,22 @@ different backend. Backend choice changes kernels only, never wire identity.
 Every variant archive is checked by `tools/check_leopard2_portable_isa.sh`.
 The checker extracts and classifies each member. Baseline members reject
 post-SSE2 instructions; the feature member permits XGETBV only; the SSSE3
-member permits SSE3/SSSE3 but not AVX/SSE4; and the AVX2 member permits VEX
-instructions while rejecting AVX-512 registers/masks and feature-probe
-instructions. Metadata rejects target-raising flags outside the named objects,
-unrelated flags inside them, all `-march`/`-mcpu`, and LTO leakage.
+member permits SSE3/SSSE3 but not AVX/SSE4; and the AVX2 member permits only a
+reviewed exact set of AVX/AVX2 VEX mnemonics. It rejects EVEX by encoding prefix
+even when an AVX-512 instruction uses only YMM operands, and rejects separately
+probed VEX families such as FMA and F16C. Member privilege is granted only to
+the exact CMake object basenames, so a lookalike name cannot escape baseline
+classification. Metadata rejects target-raising flags outside the named
+objects, unrelated flags inside them, all `-march`/`-mcpu`, and LTO leakage.
 
-The denylist is deliberately conservative, not a proof about every future x86
-instruction spelling. It matches only disassembled mnemonic fields, avoiding
-symbol/operand false positives, and rejects every `-march` or `-mcpu` value
-rather than guessing whether a toolchain treats it as baseline-compatible.
+The baseline denylist is deliberately conservative. The privileged AVX2 member
+is instead fail-closed: a new VEX mnemonic must be added to the reviewed allow
+list after confirming that the existing CPUID/XCR0 contract implies it. Static
+self-tests inject FMA, F16C, EVEX-with-YMM, feature-probe leakage, and lookalike
+member names and require each archive to be rejected. Matching uses disassembled
+mnemonic fields, avoiding symbol/operand false positives, and rejects every
+`-march` or `-mcpu` value rather than guessing whether a toolchain treats it as
+baseline-compatible.
 CTest registers the gate for every x86-64 variant when both
 `objdump`/`llvm-objdump` and a POSIX `sh` are available. The backend matrix
 treats a missing or unexecuted gate as a failure rather than accepting CTest's
@@ -78,7 +85,9 @@ Runtime-dispatch checkpoint evidence on 2026-07-16 with GCC 13.3.0 on the
   scalar, SSSE3, or AVX2 boundary;
 - AArch64/SSE2NEON compile-only preservation passed at submodule commit
   `cad518a93b326f0f644b7972d488d04eaa2b0475`. This is not a native-NEON
-  runtime or performance claim.
+  runtime or performance claim. Public context introspection preserves truthful
+  `NEON` reporting for this existing SIMD execution path; the private selected
+  fixed-ops table remains scalar until the native NEON extraction is complete.
 
 The preceding portable-safety checkpoint evidence is retained below for the
 before/after record:

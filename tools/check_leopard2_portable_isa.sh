@@ -30,6 +30,14 @@ fi
 # names and operands cannot trigger a false positive.
 forbidden_mnemonics='^(addsubp[ds]|haddp[ds]|hsubp[ds]|lddqu|movddup|movshdup|movsldup|fisttp[[:alnum:]]*|monitor|mwait|monitorx|mwaitx|prefetchw|prefetchwt1|lahf|sahf|pabs[bdw]|palignr|phadd(d|sw|w)|phsub(d|sw|w)|pmaddubsw|pmulhrsw|pshufb|psign[bdw]|blendp[ds]|blendvp[ds]|dpp[ds]|extractps|insertps|movntdqa|mpsadbw|packusdw|pblendvb|pblendw|pcmpeqq|pextr[bdq]|phminposuw|pinsr[bdq]|pmax(sb|sd|uw|ud)|pmin(sb|sd|uw|ud)|pmov(sx|zx)(bd|bq|bw|dq|dw|wd|wq)|pmuldq|pmulld|ptest|round(p[ds]|s[ds])|crc32[[:alnum:]]*|pcmp(e|i)str[im]|pcmpgtq|popcnt|extrq|insertq|movntsd|movntss|v[[:alnum:]_.]*|cmpxchg16b|lzcnt|tzcnt|andn|bextr|blcfill|blci|blcic|blcmsk|blcs|blsfill|blsic|t1mskc|tzmsk|blsi|blsmsk|blsr|bzhi|pdep|pext|mulx|rorx|sarx|shlx|shrx|adcx|adox|movbe|rdrand|rdseed|rdpid|rdtscp|clflushopt|clwb|clzero|cldemote|wbnoinvd|serialize|umonitor|umwait|tpause|movdiri|movdir64b|enqcmd|enqcmds|xgetbv|xsetbv|xsave[[:alnum:]]*|xrstor[[:alnum:]]*|aes(enc|enclast|dec|declast|imc|keygenassist)|pclmul[[:alnum:]]*|gf2p8[[:alnum:]]*|sha1(msg1|msg2|nexte|rnds4)|sha256(msg1|msg2|rnds2)|k(add|and|andn|mov|not|or|ortest|shiftl|shiftr|test|unpck|xnor|xor)[bdqw]*)$'
 
+# The AVX2 runtime probe establishes AVX, OS-managed XMM/YMM state, and AVX2
+# only.  It does not establish FMA, F16C, XOP, AES, GFNI, VNNI, or any AVX-512
+# subset.  Keep this list intentionally exact and fail closed: when an AVX2
+# kernel starts using another AVX/AVX2 mnemonic, reviewers must add that
+# mnemonic after checking its architectural feature contract.  A broad `v*'
+# exemption would silently admit instructions whose CPUID bits are not probed.
+allowed_avx2_vex_mnemonics='^(vbroadcasti128|vmovdqa|vmovdqu|vmovq|vmovups|vpand|vpbroadcastb|vpbroadcastq|vpshufb|vpsrlq|vpxor|vxorps|vzeroupper)$'
+
 # Reject target-raising options in Make, Ninja, or compilation-database
 # metadata.  -mno-* and the x86-64 SSE2 baseline remain allowed.  All -march
 # and -mcpu values are conservatively rejected because proving that an
@@ -48,11 +56,13 @@ scan_object()
     object_name=$3
     scan_index=$((scan_index + 1))
     disassembly_file="$scratch_root/disassembly.$scan_index"
+    raw_disassembly_file="$scratch_root/disassembly-raw.$scan_index"
     mnemonics_file="$scratch_root/mnemonics.$scan_index"
     forbidden_file="$scratch_root/forbidden.$scan_index"
     violations_file="$scratch_root/violations.$scan_index"
 
     LC_ALL=C "$objdump_bin" -d --no-show-raw-insn "$object_file" > "$disassembly_file"
+    LC_ALL=C "$objdump_bin" -d "$object_file" > "$raw_disassembly_file"
     sed -nE 's/^[[:space:]]*[0-9a-f]+:[[:space:]]+([[:alnum:]_.]+).*/\1/p' \
         "$disassembly_file" | sort -u > "$mnemonics_file"
 
@@ -80,13 +90,23 @@ scan_object()
             fi
             ;;
         avx2)
-            # AVX/AVX2 VEX instructions and the SSSE3 family are confined to
-            # this named member.  AVX-512 register/mask syntax remains banned;
-            # CMake also compiles this object with -mno-avx512f.
-            grep -Ev '^(v[[:alnum:]_.]*|addsubp[ds]|haddp[ds]|hsubp[ds]|lddqu|movddup|movshdup|movsldup|fisttp[[:alnum:]]*|pabs[bdw]|palignr|phadd(d|sw|w)|phsub(d|sw|w)|pmaddubsw|pmulhrsw|pshufb|psign[bdw])$' \
+            # Admit only the reviewed AVX/AVX2 VEX mnemonics above plus the
+            # SSSE3 family.  In particular, AVX2 does not imply FMA/F16C/XOP or
+            # other separately probed extensions even though their mnemonics
+            # also begin with `v'.
+            grep -Ev "$allowed_avx2_vex_mnemonics|^(addsubp[ds]|haddp[ds]|hsubp[ds]|lddqu|movddup|movshdup|movsldup|fisttp[[:alnum:]]*|pabs[bdw]|palignr|phadd(d|sw|w)|phsub(d|sw|w)|pmaddubsw|pmulhrsw|pshufb|psign[bdw])$" \
                 "$forbidden_file" > "$violations_file" || true
             if ! grep -Eq '^v[[:alnum:]_.]*$' "$mnemonics_file"; then
                 echo "portable ISA check: AVX2 member has no VEX instruction: $object_name" >&2
+                return 1
+            fi
+            # EVEX can encode AVX-512-family instructions using only XMM/YMM
+            # operands and no mask, so operand spelling alone is insufficient.
+            # Prefix byte 0x62 is EVEX in the x86-64 objects checked here.
+            if grep -Eq '^[[:space:]]*[0-9a-f]+:[[:space:]]+62([[:space:]]|$)' \
+                "$raw_disassembly_file"
+            then
+                echo "portable ISA check: AVX2 member contains an EVEX instruction: $object_name" >&2
                 return 1
             fi
             if grep -Eq '(%zmm[0-9]+|%k[0-7]|\{1to[0-9]+\}|\{z\})' "$disassembly_file"; then
@@ -127,9 +147,12 @@ scan_archive()
         extracted="$scratch_root/member.$member_index.o"
         "$archive_ar" p "$archive_file" "$member" > "$extracted"
         case "$member" in
-            *Leopard2BackendSSSE3*) object_class=ssse3 ;;
-            *Leopard2BackendAVX2*) object_class=avx2 ;;
-            *Leopard2CpuFeatures*) object_class=cpu_features ;;
+            Leopard2BackendSSSE3.cpp.o|Leopard2BackendSSSE3.cpp.obj)
+                object_class=ssse3 ;;
+            Leopard2BackendAVX2.cpp.o|Leopard2BackendAVX2.cpp.obj)
+                object_class=avx2 ;;
+            Leopard2CpuFeatures.cpp.o|Leopard2CpuFeatures.cpp.obj)
+                object_class=cpu_features ;;
             *) object_class=baseline ;;
         esac
         scan_object "$extracted" "$object_class" "$member" || exit 1
@@ -320,7 +343,15 @@ run_negative_controls()
     expect_classified_archive_accepted good_ssse3 \
         'Leopard2BackendSSSE3.cpp.o' 'pshufb %xmm0, %xmm0'
     expect_classified_archive_accepted good_avx2 \
-        'Leopard2BackendAVX2.cpp.o' 'vpaddd %ymm0, %ymm0, %ymm0'
+        'Leopard2BackendAVX2.cpp.o' 'vpxor %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected avx2_leaks_fma \
+        'Leopard2BackendAVX2.cpp.o' \
+        'vfmadd132ps %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected avx2_leaks_f16c \
+        'Leopard2BackendAVX2.cpp.o' 'vcvtph2ps %xmm0, %ymm0'
+    expect_classified_archive_rejected avx2_leaks_evex \
+        'Leopard2BackendAVX2.cpp.o' \
+        'vpternlogd $0, %ymm0, %ymm0, %ymm0'
     expect_classified_archive_rejected probe_leaks_avx2 \
         'Leopard2CpuFeatures.cpp.o' 'vpaddd %ymm0, %ymm0, %ymm0'
     expect_classified_archive_rejected ssse3_leaks_avx2 \
@@ -329,6 +360,12 @@ run_negative_controls()
         'Leopard2BackendAVX2.cpp.o' 'xgetbv'
     expect_classified_archive_rejected avx2_leaks_avx512 \
         'Leopard2BackendAVX2.cpp.o' 'vpxord %zmm0, %zmm0, %zmm0'
+    expect_classified_archive_rejected lookalike_ssse3_member \
+        'NotLeopard2BackendSSSE3.cpp.o' 'pshufb %xmm0, %xmm0'
+    expect_classified_archive_rejected lookalike_avx2_member \
+        'NotLeopard2BackendAVX2.cpp.o' 'vpaddd %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected lookalike_probe_member \
+        'NotLeopard2CpuFeatures.cpp.o' 'xgetbv'
 
     expect_metadata_rejected flag_make_ssse3 make '-mssse3'
     expect_metadata_rejected flag_compile_sse41 compile_commands '-msse4.1'

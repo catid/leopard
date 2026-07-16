@@ -192,6 +192,26 @@ void InitializeCPUArch()
 }
 
 
+namespace backend {
+
+leo2_backend ExecutionBackend()
+{
+    if (SelectedBackend() == LEO2_BACKEND_AUTO)
+        return LEO2_BACKEND_AUTO;
+#if defined(LEO_TRY_NEON)
+    if (CpuHasNeon)
+        return LEO2_BACKEND_NEON;
+#endif
+#if defined(LEO_USE_SSE2NEON)
+    if (CpuHasSSSE3)
+        return LEO2_BACKEND_NEON;
+#endif
+    return SelectedBackend();
+}
+
+} // namespace backend
+
+
 //------------------------------------------------------------------------------
 // XOR Memory
 

@@ -98,6 +98,10 @@ bool Initialize(const InitializeArgs& args);
 
 const Ops& GetOps();
 leo2_backend SelectedBackend();
+// Reports the effective public execution backend.  This can differ from the
+// fixed-ops table on the existing ARM paths, where legacy native NEON or
+// SSE2NEON transform kernels execute around a scalar tail/fallback table.
+leo2_backend ExecutionBackend();
 bool StartupSelfTestPassed();
 
 }} // namespace leopard::backend

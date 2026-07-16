@@ -152,7 +152,7 @@ int main()
             "backend startup known-answer tests");
         const leopard::backend::Ops& ops = leopard::backend::GetOps();
         require(ops.kind == leopard::backend::SelectedBackend(),
-            "backend introspection is not derived from selected ops");
+            "fixed-ops introspection is not derived from selected ops");
         require(ops.kind != LEO2_BACKEND_AUTO && ops.name,
             "backend selection missing");
 
@@ -163,9 +163,12 @@ int main()
         leo2_context* context = NULL;
         require(leo2_context_create(&options, &context) == LEO2_SUCCESS,
             "context creation");
-        require(leo2_context_backend(context) == ops.kind,
-            "public introspection differs from selected ops");
-        verify_expected_backend(ops.kind);
+        const leo2_backend execution = leopard::backend::ExecutionBackend();
+        require(execution != LEO2_BACKEND_AUTO,
+            "effective execution backend missing");
+        require(leo2_context_backend(context) == execution,
+            "public introspection differs from effective execution backend");
+        verify_expected_backend(execution);
         leo2_context_destroy(context);
 
         test_concurrent_immutable_ops();

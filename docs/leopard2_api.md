@@ -179,6 +179,10 @@ currently downgrade execution to a lower backend.  Per-context lower-backend
 selection remains future work. The production `AUTO` binary uses isolated
 runtime-dispatched scalar/SSSE3/AVX2 fixed-multiplier and XOR kernels, while
 diagnostic variants force one of those same ops tables for deterministic tests.
+On ARM, context introspection reports `NEON` when the existing native-NEON or
+SSE2NEON transform path is active, even while scalar tails or fallback fixed
+operations remain in use; it therefore describes effective execution rather
+than the private fallback-table implementation.
 
 Only one batch call at a time uses a given context pool.  Concurrent batch calls
 sharing that context are serialized at the scheduler, while calls using separate

@@ -988,7 +988,7 @@ static bool PrepareDirectRepairTerms(
 
 static leo2_backend RuntimeBackend()
 {
-    return leopard::backend::SelectedBackend();
+    return leopard::backend::ExecutionBackend();
 }
 
 static leo2_result EnsureInitialized()
