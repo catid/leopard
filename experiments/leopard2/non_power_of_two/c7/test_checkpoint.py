@@ -10,11 +10,12 @@ import math
 import os
 import pathlib
 import re
+import shutil
+import statistics
 import subprocess
 import sys
 import tempfile
 import unittest
-import statistics
 
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -27,6 +28,33 @@ EXPECTED_RUNTIME = {
 }
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 GIT_SHA = re.compile(r"[0-9a-f]{40}\Z")
+ARCHIVE_MEMBERS = (
+    "leopard.cpp.o", "leopard2.cpp.o", "Leopard2Backend.cpp.o",
+    "Leopard2BackendScalar.cpp.o", "Leopard2CpuFeatures.cpp.o",
+    "Leopard2Plan.cpp.o", "LeopardCommon.cpp.o", "LeopardFF16.cpp.o",
+    "LeopardFF8.cpp.o", "Leopard2BackendSSSE3.cpp.o",
+    "Leopard2BackendAVX2.cpp.o",
+)
+SANITIZED_MEMBER_COUNTS = {
+    "leopard.cpp.o": (13, 7),
+    "leopard2.cpp.o": (140, 15),
+    "Leopard2Backend.cpp.o": (21, 8),
+    "Leopard2BackendScalar.cpp.o": (11, 6),
+    "Leopard2CpuFeatures.cpp.o": (9, 5),
+    "Leopard2Plan.cpp.o": (7, 5),
+    "LeopardCommon.cpp.o": (13, 6),
+    "LeopardFF16.cpp.o": (31, 10),
+    "LeopardFF8.cpp.o": (31, 9),
+    "Leopard2BackendSSSE3.cpp.o": (14, 8),
+    "Leopard2BackendAVX2.cpp.o": (16, 7),
+}
+CORE_SOURCES = {
+    "leopard.cpp", "leopard2.cpp", "Leopard2Backend.cpp",
+    "Leopard2BackendScalar.cpp", "Leopard2CpuFeatures.cpp",
+    "Leopard2Plan.cpp", "LeopardCommon.cpp", "LeopardFF16.cpp",
+    "LeopardFF8.cpp", "Leopard2BackendSSSE3.cpp",
+    "Leopard2BackendAVX2.cpp",
+}
 EXPECTED_CORRECTNESS = {
     "gf8_cases": 9,
     "gf16_cases": 5,
@@ -102,17 +130,54 @@ def validate_artifact(
     return path
 
 
-def validate_program(record: object, label: str) -> pathlib.Path:
+def expected_program(names: tuple[str, ...], *, resolve: bool) -> pathlib.Path:
+    for name in names:
+        found = shutil.which(name)
+        if found:
+            path = pathlib.Path(found).absolute()
+            return path.resolve() if resolve else path
+    raise ValueError(f"required validation program is absent: {names}")
+
+
+def compiler_program(compiler: pathlib.Path, name: str) -> pathlib.Path:
+    completed = subprocess.run(
+        [str(compiler), f"-print-prog-name={name}"], check=True, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    value = completed.stdout.strip()
+    if not value:
+        raise ValueError(f"compiler did not resolve {name}")
+    path = pathlib.Path(value)
+    if path.is_absolute():
+        return path.absolute()
+    found = shutil.which(value)
+    if not found:
+        raise ValueError(f"compiler-selected tool is absent: {value}")
+    return pathlib.Path(found).absolute()
+
+
+def validate_program(
+    record: object, label: str, expected_path: pathlib.Path,
+) -> pathlib.Path:
     if not isinstance(record, dict) or set(record) != {
             "path", "sha256", "version"}:
         raise ValueError(f"{label} program schema changed")
     path_text = record["path"]
     if not isinstance(path_text, str) or not pathlib.Path(path_text).is_absolute():
         raise ValueError(f"{label} path is not absolute")
-    validate_sha(record["sha256"], f"{label} hash")
-    if not isinstance(record["version"], str) or not record["version"].strip():
-        raise ValueError(f"{label} version is empty")
-    return pathlib.Path(path_text)
+    path = pathlib.Path(path_text)
+    if path != expected_path or not path.is_file():
+        raise ValueError(f"{label} path does not match its fixed role")
+    expected_hash = validate_sha(record["sha256"], f"{label} hash")
+    if digest(path) != expected_hash:
+        raise ValueError(f"{label} current executable bytes changed")
+    version = subprocess.run(
+        [str(path), "--version"], check=True, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    ).stdout
+    if record["version"] != version or not version.strip():
+        raise ValueError(f"{label} version output changed")
+    return path
 
 
 def validate_git_artifact(
@@ -130,6 +195,207 @@ def validate_git_artifact(
     if committed.returncode != 0 or hashlib.sha256(
             committed.stdout).hexdigest() != record["sha256"]:
         raise ValueError(f"{label} is not bound to the core commit")
+
+
+def parse_cmake_cache(text: str) -> dict[str, str]:
+    if "FORGED" in text or not text.endswith("\n"):
+        raise ValueError("CMake cache is not retained raw output")
+    values: dict[str, str] = {}
+    for line in text.splitlines():
+        match = re.fullmatch(r"([^#/:=][^:=]*):([^=]+)=(.*)", line)
+        if not match:
+            continue
+        key, value = match.group(1), match.group(3)
+        if key in values:
+            raise ValueError(f"duplicate CMake cache key: {key}")
+        values[key] = value
+    return values
+
+
+def validate_cmake_cache_text(
+    text: str, *, sanitizer: bool, backend: str, build_dir: str,
+    cmake: pathlib.Path, c_compiler: pathlib.Path,
+    cxx_compiler: pathlib.Path, gmake: pathlib.Path, ar: pathlib.Path,
+    ranlib: pathlib.Path, cmake_linker: pathlib.Path,
+) -> None:
+    values = parse_cmake_cache(text)
+    flags = "-fsanitize=address,undefined -fno-omit-frame-pointer" if sanitizer else ""
+    expected = {
+        "CMAKE_AR": str(ar),
+        "CMAKE_BUILD_TYPE": "Debug" if sanitizer else "Release",
+        "CMAKE_COMMAND": str(cmake),
+        "CMAKE_CXX_COMPILER": str(cxx_compiler),
+        "CMAKE_CXX_FLAGS": flags,
+        "CMAKE_C_COMPILER": str(c_compiler),
+        "CMAKE_C_FLAGS": flags,
+        "CMAKE_EXE_LINKER_FLAGS": flags,
+        "CMAKE_GENERATOR": "Unix Makefiles",
+        "CMAKE_HOME_DIRECTORY": str(ROOT),
+        "CMAKE_LINKER": str(cmake_linker),
+        "CMAKE_MAKE_PROGRAM": str(gmake),
+        "CMAKE_RANLIB": str(ranlib),
+        "ENABLE_OPENMP": "OFF" if sanitizer else "ON",
+        "LEO2_BACKEND_VARIANT": backend,
+        "LEO2_BUILD_BENCHMARKS": "OFF",
+        "LEO2_BUILD_FUZZERS": "OFF",
+        "LEO2_BUILD_TESTS": "OFF",
+        "LEO2_ENABLE_CUDA": "OFF",
+        "leopard_BINARY_DIR": str((ROOT / build_dir).resolve()),
+    }
+    for key, value in expected.items():
+        if values.get(key) != value:
+            raise ValueError(f"CMake cache role changed: {key}")
+
+
+def validate_configure_log_text(
+    text: str, *, sanitizer: bool, c_compiler: pathlib.Path,
+    cxx_compiler: pathlib.Path, build_dir: str,
+) -> None:
+    if not text.endswith("\n") or "FORGED" in text or "CMake Error" in text or (
+            "CMake Warning" in text):
+        raise ValueError("configure log is not a clean raw success")
+    lines = text.splitlines()
+    if len(lines) < 35 or any(not line.startswith("-- ") for line in lines):
+        raise ValueError("configure log structure changed")
+    family = "Clang" if sanitizer else "GNU"
+    c_version = subprocess.run(
+        [str(c_compiler), "-dumpfullversion", "-dumpversion"], check=True,
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ).stdout.strip()
+    cxx_version = subprocess.run(
+        [str(cxx_compiler), "-dumpfullversion", "-dumpversion"], check=True,
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ).stdout.strip()
+    required = {
+        f"-- The C compiler identification is {family} {c_version}",
+        f"-- The CXX compiler identification is {family} {cxx_version}",
+        f"-- Check for working C compiler: {c_compiler} - skipped",
+        f"-- Check for working CXX compiler: {cxx_compiler} - skipped",
+        "-- Detecting C compile features - done",
+        "-- Detecting CXX compile features - done",
+        "-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success",
+        "-- Found Threads: TRUE  ",
+        "-- Performing Test LEO2_FLAG_MSSSE3 - Success",
+        "-- Performing Test LEO2_FLAG_MAVX2 - Success",
+        f"-- Build files have been written to: {(ROOT / build_dir).resolve()}",
+    }
+    if not required.issubset(set(lines)):
+        raise ValueError("configure log lacks required semantic events")
+    if sum(line.startswith("-- Configuring done (") for line in lines) != 1 or (
+            sum(line.startswith("-- Generating done (") for line in lines) != 1):
+        raise ValueError("configure/generate completion is ambiguous")
+    if sum(line.startswith("-- Found OpenMP: TRUE") for line in lines) != 1:
+        raise ValueError("OpenMP discovery record changed")
+
+
+def validate_build_log_text(
+    text: str, *, sanitizer: bool, cmake: pathlib.Path,
+    cxx_compiler: pathlib.Path, gmake: pathlib.Path, ar: pathlib.Path,
+    ranlib: pathlib.Path,
+) -> None:
+    lowered = text.lower()
+    if (not text.endswith("\n") or "forged" in lowered or "error:" in lowered or
+            "undefined reference" in lowered or "failed" in lowered):
+        raise ValueError("core build log is not a clean raw success")
+    built_sources = set(re.findall(
+        r"Building CXX object [^\n ]*/([^/ ]+\.cpp)\.o", text))
+    if built_sources != CORE_SOURCES:
+        raise ValueError("core build log source set changed")
+    for required in (
+        str(cmake), str(cxx_compiler), str(gmake), str(ar), str(ranlib),
+        "Built target leopard2_backend_ssse3",
+        "Built target leopard2_backend_avx2",
+        "Linking CXX static library liblibleopard.a",
+        "Built target libleopard",
+    ):
+        if required not in text:
+            raise ValueError(f"core build log did not execute {required}")
+    has_sanitizer_flags = "-fsanitize=address,undefined" in text
+    if has_sanitizer_flags is not sanitizer:
+        raise ValueError("core build sanitizer command evidence changed")
+
+
+def validate_compile_log_text(
+    stdout: str, stderr: str, *, sanitizer: bool,
+    compiler: pathlib.Path, linker: pathlib.Path,
+) -> None:
+    if stdout != "" or not stderr.endswith("\n") or "FORGED" in stderr:
+        raise ValueError("standalone compiler log framing changed")
+    lowered = stderr.lower()
+    if "undefined reference" in lowered or "error:" in lowered:
+        raise ValueError("standalone compiler log contains a failure")
+    for required in (
+        "c7_exact_low.cpp", "liblibleopard.a", "-std=c++11", str(linker),
+    ):
+        if required not in stderr:
+            raise ValueError("standalone verbose compile closure is incomplete")
+    linker_version = subprocess.run(
+        [str(linker), "--version"], check=True, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    ).stdout.splitlines()[0]
+    if linker_version not in stderr:
+        raise ValueError("standalone linker version evidence changed")
+    if sanitizer:
+        if ("clang version" not in lowered or "libclang_rt.asan" not in stderr or
+                "-fsanitize=address" not in stderr):
+            raise ValueError("sanitizer link-driver evidence changed")
+    elif (f"COLLECT_GCC={compiler}" not in stderr or
+          "collect2" not in lowered):
+        raise ValueError("GCC link-driver evidence changed")
+
+
+def validate_symbol_scan_text(
+    text: str, *, target: str, archive: bool,
+    expected_counts: dict[str, int],
+    expected_members: dict[str, dict[str, int]],
+) -> None:
+    if text and not text.endswith("\n"):
+        raise ValueError("symbol scan is not canonical line output")
+    counts = {"asan_lines": 0, "ubsan_lines": 0}
+    members = {member: {"asan_lines": 0, "ubsan_lines": 0}
+               for member in expected_members}
+    line_pattern = re.compile(
+        r"(?:(?:[0-9a-f]{16}) |(?: {17}))([A-Za-z?]) (\S+)\Z")
+    for line in text.splitlines():
+        prefix = f"{target}:"
+        if not line.startswith(prefix):
+            raise ValueError("symbol scan target prefix changed")
+        body = line[len(prefix):]
+        member = None
+        if archive:
+            if ":" not in body:
+                raise ValueError("archive symbol line omits its member")
+            member, body = body.split(":", 1)
+            if member not in members:
+                raise ValueError("archive symbol line names an unknown member")
+        match = line_pattern.fullmatch(body)
+        if not match:
+            raise ValueError("symbol scan line is not nm canonical format")
+        symbol = match.group(2)
+        asan = "__asan_" in symbol
+        ubsan = "__ubsan_" in symbol
+        if not asan and not ubsan:
+            raise ValueError("symbol scan contains a non-sanitizer symbol")
+        counts["asan_lines"] += asan
+        counts["ubsan_lines"] += ubsan
+        if member is not None:
+            members[member]["asan_lines"] += asan
+            members[member]["ubsan_lines"] += ubsan
+    if counts != expected_counts or members != expected_members:
+        raise ValueError("sanitizer symbol counts or member attribution changed")
+    if expected_counts["asan_lines"]:
+        for required in (
+            "__asan_init", "__asan_report_load1", "__asan_report_store1",
+            "__ubsan_handle_pointer_overflow",
+            "__ubsan_handle_type_mismatch_v1",
+        ):
+            if required not in text:
+                raise ValueError("sanitizer symbol family is incomplete")
+
+
+def validate_run_log_text(stdout: str, stderr: str, *, smoke: bool) -> None:
+    if stdout != "" or stderr != ("C7 benchmark 1/1\n" if smoke else ""):
+        raise ValueError("run log semantics changed")
 
 
 def validate_profile(data: dict) -> None:
@@ -331,7 +597,7 @@ def validate_manifest(data: dict) -> None:
         "source", "status", "taskset",
     }:
         raise ValueError("manifest keys changed")
-    if (data["schema"] != "leopard2-c7-build-run-manifest/v1" or
+    if (data["schema"] != "leopard2-c7-build-run-manifest/v2" or
             data["status"] != "pass" or data["scope"] !=
             "correctness plus CPU0 non-authoritative harness smoke; no promotion timing"):
         raise ValueError("manifest scope/status changed")
@@ -343,9 +609,9 @@ def validate_manifest(data: dict) -> None:
         raise ValueError("manifest source paths changed")
     validate_git_artifact(core_sha, data["source"], "C7 source")
     validate_git_artifact(core_sha, data["runner"], "C7 runner")
-    taskset = validate_program(data["taskset"], "taskset")
-    if taskset.name != "taskset":
-        raise ValueError("taskset program changed")
+    taskset = validate_program(
+        data["taskset"], "taskset",
+        expected_program(("taskset",), resolve=True))
     builds = data["builds"]
     if not isinstance(builds, list) or [item.get("name") for item in builds] != list(
             BUILD_NAMES):
@@ -353,12 +619,14 @@ def validate_manifest(data: dict) -> None:
     by_name: dict[str, dict] = {}
     for build in builds:
         required = {
-            "backend", "build_argv", "build_dir", "build_stderr",
-            "build_stdout", "c_compiler", "cmake", "compile_argv",
-            "compile_stderr", "compile_stdout", "compiler", "configure_argv",
+            "ar", "backend", "build_argv", "build_dir", "build_stderr",
+            "build_stdout", "c_compiler", "cmake", "cmake_cache",
+            "cmake_linker", "compile_argv", "compile_stderr",
+            "compile_stdout", "compiler", "configure_argv",
             "configure_stderr", "configure_stdout", "cxx_compiler",
-            "executable", "instrumentation", "library", "name", "nm",
-            "sanitizer", "source_closure",
+            "executable", "gmake", "instrumentation", "library",
+            "link_driver", "name", "nm", "ranlib", "sanitizer",
+            "source_closure", "standalone_linker",
         }
         if set(build) != required:
             raise ValueError("build record schema changed")
@@ -369,24 +637,64 @@ def validate_manifest(data: dict) -> None:
             raise ValueError("build backend/sanitizer label changed")
         for label in (
             "configure_stdout", "configure_stderr", "build_stdout",
-            "build_stderr", "compile_stdout", "compile_stderr",
+            "build_stderr", "compile_stdout", "compile_stderr", "cmake_cache",
         ):
             validate_artifact(build[label], f"{name} {label}", require_retained=True)
         library = validate_artifact(
             build["library"], f"{name} archive", require_retained=False)
         executable = validate_artifact(
             build["executable"], f"{name} executable", require_retained=False)
-        cmake = validate_program(build["cmake"], f"{name} cmake")
-        c_compiler = validate_program(build["c_compiler"], f"{name} C compiler")
+        expected_cmake = expected_program(("cmake",), resolve=True)
+        expected_nm = expected_program(("nm",), resolve=True)
+        expected_gmake = expected_program(("gmake", "make"), resolve=False)
+        if sanitizer:
+            expected_c = expected_program(
+                ("clang", "clang-18", "clang-17", "clang-16"), resolve=False)
+            expected_cxx = expected_program(
+                ("clang++", "clang++-18", "clang++-17", "clang++-16"),
+                resolve=False)
+            expected_ar = expected_program(
+                ("llvm-ar-18", "llvm-ar-17", "llvm-ar-16", "llvm-ar"),
+                resolve=False)
+            expected_ranlib = expected_program(
+                ("llvm-ranlib-18", "llvm-ranlib-17", "llvm-ranlib-16",
+                 "llvm-ranlib"), resolve=False)
+            expected_cmake_linker = expected_program(("ld",), resolve=False)
+        else:
+            expected_c = expected_program(("gcc",), resolve=True)
+            expected_cxx = expected_program(("g++",), resolve=True)
+            expected_ar = expected_program(
+                ("x86_64-linux-gnu-ar", "ar"), resolve=False)
+            expected_ranlib = expected_program(
+                ("x86_64-linux-gnu-ranlib", "ranlib"), resolve=False)
+            expected_cmake_linker = expected_program(
+                ("x86_64-linux-gnu-ld", "ld"), resolve=False)
+        expected_standalone_linker = compiler_program(expected_cxx, "ld")
+        cmake = validate_program(build["cmake"], f"{name} cmake", expected_cmake)
+        c_compiler = validate_program(
+            build["c_compiler"], f"{name} C compiler", expected_c)
         cxx_compiler = validate_program(
-            build["cxx_compiler"], f"{name} C++ compiler")
+            build["cxx_compiler"], f"{name} C++ compiler", expected_cxx)
         compiler_path = validate_program(
-            build["compiler"], f"{name} standalone compiler")
-        nm = validate_program(build["nm"], f"{name} nm")
-        if build["compiler"] != build["cxx_compiler"]:
-            raise ValueError("standalone and core C++ compilers differ")
-        if cmake.name != "cmake" or nm.name not in {"nm", "x86_64-linux-gnu-nm"}:
-            raise ValueError("build program identity changed")
+            build["compiler"], f"{name} standalone compiler", expected_cxx)
+        link_driver = validate_program(
+            build["link_driver"], f"{name} link driver", expected_cxx)
+        standalone_linker = validate_program(
+            build["standalone_linker"], f"{name} standalone linker",
+            expected_standalone_linker)
+        nm = validate_program(build["nm"], f"{name} nm", expected_nm)
+        gmake = validate_program(
+            build["gmake"], f"{name} make", expected_gmake)
+        ar = validate_program(build["ar"], f"{name} ar", expected_ar)
+        ranlib = validate_program(
+            build["ranlib"], f"{name} ranlib", expected_ranlib)
+        cmake_linker = validate_program(
+            build["cmake_linker"], f"{name} CMake linker",
+            expected_cmake_linker)
+        if (build["compiler"] != build["cxx_compiler"] or
+                build["link_driver"] != build["cxx_compiler"] or
+                link_driver != compiler_path):
+            raise ValueError("standalone/core/link-driver roles differ")
         configure = build["configure_argv"]
         build_argv = build["build_argv"]
         compile_argv = build["compile_argv"]
@@ -409,6 +717,7 @@ def validate_manifest(data: dict) -> None:
             "build_stderr": f"experiments/leopard2/non_power_of_two/c7/results/logs/{name}-core-build.stderr.txt",
             "compile_stdout": f"experiments/leopard2/non_power_of_two/c7/results/logs/{name}-compile.stdout.txt",
             "compile_stderr": f"experiments/leopard2/non_power_of_two/c7/results/logs/{name}-compile.stderr.txt",
+            "cmake_cache": f"experiments/leopard2/non_power_of_two/c7/results/logs/{name}-CMakeCache.txt",
         }
         if any(build[label]["path"] != path for label, path in expected_logs.items()):
             raise ValueError("build log path changed")
@@ -432,10 +741,11 @@ def validate_manifest(data: dict) -> None:
             ]
         expected_build = [
             str(cmake), "--build", expected_build_dir, "--target",
-            "libleopard", "--", "-j4",
+            "libleopard", "--verbose", "--", "-j4",
         ]
         expected_compile = [
-            str(compiler_path), "-std=c++11", "-g", "-Wall", "-Wextra",
+            str(compiler_path), "-v", "-Wl,-v", "-std=c++11", "-g", "-Wall",
+            "-Wextra",
             "-Wpedantic", "-Werror", "-I.",
             f'-DLEO2_C7_SOURCE_SHA256="{data["source"]["sha256"]}"',
             f'-DLEO2_C7_CORE_GIT_SHA="{core_sha}"',
@@ -460,29 +770,90 @@ def validate_manifest(data: dict) -> None:
         if configure != expected_configure or build_argv != expected_build or (
                 compile_argv != expected_compile):
             raise ValueError("exact configure/build/compile command changed")
+        cache_text = resolve_record_path(
+            build["cmake_cache"]["path"]).read_text(encoding="utf-8")
+        validate_cmake_cache_text(
+            cache_text, sanitizer=sanitizer, backend=build["backend"],
+            build_dir=expected_build_dir, cmake=cmake,
+            c_compiler=c_compiler, cxx_compiler=cxx_compiler, gmake=gmake,
+            ar=ar, ranlib=ranlib, cmake_linker=cmake_linker)
+        configure_stdout_text = resolve_record_path(
+            build["configure_stdout"]["path"]).read_text(encoding="utf-8")
+        configure_stderr_text = resolve_record_path(
+            build["configure_stderr"]["path"]).read_text(encoding="utf-8")
+        build_stdout_text = resolve_record_path(
+            build["build_stdout"]["path"]).read_text(encoding="utf-8")
+        build_stderr_text = resolve_record_path(
+            build["build_stderr"]["path"]).read_text(encoding="utf-8")
+        compile_stdout_text = resolve_record_path(
+            build["compile_stdout"]["path"]).read_text(encoding="utf-8")
+        compile_stderr_text = resolve_record_path(
+            build["compile_stderr"]["path"]).read_text(encoding="utf-8")
+        if configure_stderr_text != "" or build_stderr_text != "":
+            raise ValueError("configure/core-build stderr is not empty")
+        validate_configure_log_text(
+            configure_stdout_text, sanitizer=sanitizer,
+            c_compiler=c_compiler, cxx_compiler=cxx_compiler,
+            build_dir=expected_build_dir)
+        validate_build_log_text(
+            build_stdout_text, sanitizer=sanitizer, cmake=cmake,
+            cxx_compiler=cxx_compiler, gmake=gmake, ar=ar, ranlib=ranlib)
+        validate_compile_log_text(
+            compile_stdout_text, compile_stderr_text, sanitizer=sanitizer,
+            compiler=compiler_path, linker=standalone_linker)
         instrumentation = build["instrumentation"]
         if set(instrumentation) != {
-            "has_asan_symbols", "has_ubsan_symbols", "required_compile_macro",
-            "sanitizer_symbol_scan",
+            "archive_members", "core_archive_counts",
+            "core_archive_member_counts", "core_archive_symbol_scan",
+            "executable_counts", "executable_symbol_scan",
+            "required_compile_macro",
         }:
             raise ValueError("instrumentation schema changed")
-        scan_path = validate_artifact(
-            instrumentation["sanitizer_symbol_scan"], f"{name} nm scan",
-            require_retained=True)
-        if instrumentation["sanitizer_symbol_scan"]["path"] != (
-                f"experiments/leopard2/non_power_of_two/c7/results/logs/"
-                f"{name}-nm-sanitizer-symbols.txt"):
+        executable_scan = validate_artifact(
+            instrumentation["executable_symbol_scan"],
+            f"{name} executable nm scan", require_retained=True)
+        archive_scan = validate_artifact(
+            instrumentation["core_archive_symbol_scan"],
+            f"{name} core archive nm scan", require_retained=True)
+        scan_prefix = "experiments/leopard2/non_power_of_two/c7/results/logs"
+        if (instrumentation["executable_symbol_scan"]["path"] !=
+                f"{scan_prefix}/{name}-nm-executable-sanitizers.txt" or
+                instrumentation["core_archive_symbol_scan"]["path"] !=
+                f"{scan_prefix}/{name}-nm-core-archive-sanitizers.txt"):
             raise ValueError("nm scan path changed")
-        scan = scan_path.read_text(encoding="utf-8")
-        observed_asan = "__asan_" in scan
-        observed_ubsan = "__ubsan_" in scan
+        expected_executable_counts = (
+            {"asan_lines": 320, "ubsan_lines": 54} if sanitizer else
+            {"asan_lines": 0, "ubsan_lines": 0})
+        expected_archive_counts = (
+            {"asan_lines": 306, "ubsan_lines": 86} if sanitizer else
+            {"asan_lines": 0, "ubsan_lines": 0})
+        expected_member_counts = {
+            member: {
+                "asan_lines": SANITIZED_MEMBER_COUNTS[member][0]
+                if sanitizer else 0,
+                "ubsan_lines": SANITIZED_MEMBER_COUNTS[member][1]
+                if sanitizer else 0,
+            }
+            for member in ARCHIVE_MEMBERS
+        }
         if (instrumentation["required_compile_macro"] is not sanitizer or
-                instrumentation["has_asan_symbols"] is not observed_asan or
-                instrumentation["has_ubsan_symbols"] is not observed_ubsan or
-                observed_asan is not sanitizer or observed_ubsan is not sanitizer):
-            raise ValueError("sanitizer instrumentation proof changed")
-        if sanitizer and "clang" not in build["compiler"]["version"].lower():
-            raise ValueError("sanitizer compiler lacks __has_feature contract")
+                instrumentation["archive_members"] != list(ARCHIVE_MEMBERS) or
+                instrumentation["executable_counts"] !=
+                expected_executable_counts or
+                instrumentation["core_archive_counts"] !=
+                expected_archive_counts or
+                instrumentation["core_archive_member_counts"] !=
+                expected_member_counts):
+            raise ValueError("sanitizer instrumentation summary changed")
+        validate_symbol_scan_text(
+            executable_scan.read_text(encoding="utf-8"),
+            target=expected_executable, archive=False,
+            expected_counts=expected_executable_counts, expected_members={})
+        validate_symbol_scan_text(
+            archive_scan.read_text(encoding="utf-8"),
+            target=expected_library, archive=True,
+            expected_counts=expected_archive_counts,
+            expected_members=expected_member_counts)
         closure = build["source_closure"]
         if not isinstance(closure, list) or len(closure) < 10:
             raise ValueError("core source closure is incomplete")
@@ -546,8 +917,10 @@ def validate_manifest(data: dict) -> None:
             raise ValueError("run environment changed")
         result_path = validate_artifact(
             run["result"], f"{name} result", require_retained=True)
-        validate_artifact(run["stdout"], f"{name} stdout", require_retained=True)
-        validate_artifact(run["stderr"], f"{name} stderr", require_retained=True)
+        stdout_path = validate_artifact(
+            run["stdout"], f"{name} stdout", require_retained=True)
+        stderr_path = validate_artifact(
+            run["stderr"], f"{name} stderr", require_retained=True)
         result_prefix = "experiments/leopard2/non_power_of_two/c7/results"
         if (run["result"]["path"] != f"{result_prefix}/{name}.json" or
                 run["stdout"]["path"] !=
@@ -564,6 +937,9 @@ def validate_manifest(data: dict) -> None:
         ]
         if argv != expected_argv:
             raise ValueError("run argv changed")
+        validate_run_log_text(
+            stdout_path.read_text(encoding="utf-8"),
+            stderr_path.read_text(encoding="utf-8"), smoke=smoke)
         build = by_name[build_name]
         child = json.loads(result_path.read_text(encoding="utf-8"))
         if (child["source_sha256"] != data["source"]["sha256"] or
@@ -626,7 +1002,7 @@ class CheckpointTests(unittest.TestCase):
             lambda item: item["source"].update(sha256="g" * 64),
             lambda item: item["builds"][0]["compile_argv"].remove("-Werror"),
             lambda item: item["builds"][4]["instrumentation"].update(
-                has_ubsan_symbols=False),
+                executable_counts={"asan_lines": 320, "ubsan_lines": 53}),
             lambda item: item["runs"][0].update(requested_cpu=15),
             lambda item: item["runs"][5].update(kind="authoritative"),
             lambda item: item["runs"][5]["result"].update(sha256="0" * 64),
@@ -637,6 +1013,73 @@ class CheckpointTests(unittest.TestCase):
         for candidate in mutations:
             with self.assertRaises((ValueError, OSError)):
                 validate_manifest(candidate)
+
+    def test_coordinated_program_forgeries_rejected(self) -> None:
+        original = load("build-run-manifest.json")
+
+        taskset_forgery = copy.deepcopy(original)
+        forged_taskset = copy.deepcopy(
+            taskset_forgery["builds"][0]["cxx_compiler"])
+        taskset_forgery["taskset"] = forged_taskset
+        for run in taskset_forgery["runs"]:
+            run["argv"][0] = forged_taskset["path"]
+        with self.assertRaises(ValueError):
+            validate_manifest(taskset_forgery)
+
+        compiler_forgery = copy.deepcopy(original)
+        build = compiler_forgery["builds"][0]
+        forged_cxx = copy.deepcopy(
+            compiler_forgery["builds"][4]["cxx_compiler"])
+        for role in ("cxx_compiler", "compiler", "link_driver"):
+            build[role] = copy.deepcopy(forged_cxx)
+        for index, argument in enumerate(build["configure_argv"]):
+            if argument.startswith("-DCMAKE_CXX_COMPILER="):
+                build["configure_argv"][index] = (
+                    f"-DCMAKE_CXX_COMPILER={forged_cxx['path']}")
+        build["compile_argv"][0] = forged_cxx["path"]
+        with self.assertRaises(ValueError):
+            validate_manifest(compiler_forgery)
+
+    def test_rehashed_semantic_log_forgeries_rejected(self) -> None:
+        original = load("build-run-manifest.json")
+
+        def require_rejection(
+            record: dict, candidate: dict, forged: bytes,
+        ) -> None:
+            path = resolve_record_path(record["path"])
+            retained = path.read_bytes()
+            try:
+                path.write_bytes(forged)
+                record.update(
+                    bytes=len(forged),
+                    sha256=hashlib.sha256(forged).hexdigest())
+                with self.assertRaises(ValueError):
+                    validate_manifest(candidate)
+            finally:
+                path.write_bytes(retained)
+
+        candidate = copy.deepcopy(original)
+        record = candidate["builds"][0]["configure_stdout"]
+        require_rejection(
+            record, candidate, b"FORGED CONFIGURE SUCCESS\n")
+
+        candidate = copy.deepcopy(original)
+        record = candidate["builds"][0]["compile_stderr"]
+        require_rejection(record, candidate, b"FORGED COMPILE SUCCESS\n")
+
+        candidate = copy.deepcopy(original)
+        record = candidate["runs"][0]["stdout"]
+        require_rejection(record, candidate, b"FORGED RUN SUCCESS\n")
+
+        candidate = copy.deepcopy(original)
+        instrumentation = candidate["builds"][4]["instrumentation"]
+        record = instrumentation["executable_symbol_scan"]
+        target = candidate["builds"][4]["executable"]["path"]
+        asan_line = f"{target}:{' ' * 17}U __asan_init\n"
+        ubsan_line = (
+            f"{target}:{' ' * 17}U __ubsan_handle_pointer_overflow\n")
+        forged_scan = (asan_line * 320 + ubsan_line * 54).encode("utf-8")
+        require_rejection(record, candidate, forged_scan)
 
 
 if __name__ == "__main__":

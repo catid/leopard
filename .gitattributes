@@ -1,3 +1,6 @@
 
 # Use bd merge for beads JSONL files
 .beads/issues.jsonl merge=beads
+
+# CMake emits significant trailing spaces in these retained raw evidence logs.
+experiments/leopard2/non_power_of_two/c7/results/logs/*-configure.stdout.txt whitespace=-blank-at-eol

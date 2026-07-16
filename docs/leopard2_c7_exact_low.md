@@ -237,8 +237,15 @@ Lengths are GF8 `1,2,3,7,31,64,65,257` bytes and GF16
 Combined ASan+UBSan with leak detection passes the same complete matrix.  The
 sanitized standalone source has a compile-time feature gate that fails unless
 both instruments are active; the retained build/run manifest also records the
-exact compiler, flags, linked archive, executable, source closure, sanitizer
-symbol scan, run environment, child affinity, and artifact hashes.
+exact CMake-selected compiler, make, archiver, ranlib, and linker roles plus the
+standalone link driver and compiler-selected linker.  It binds each tool's
+bytes and complete `--version` output, the raw CMake cache, verbose configure,
+core-build, and standalone-link logs, linked archive, executable, source
+closure, run environment, child affinity, and artifact hashes.  The checker
+parses those logs rather than accepting a success label.  Full `nm` scans prove
+320 ASan and 54 UBSan references in the harness executable and 306 ASan and 86
+UBSan references across all 11 named core-archive members; normal builds must
+contain none.
 
 The Experiment-W Python suite passes 12 tests.  The strict C99 implementation
 passes 217 direct checks and the differential matrix covers 5 golden vectors,
