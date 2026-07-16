@@ -52,6 +52,7 @@ TOOLCHAIN_SCHEMA = "leopard2-isal-build-toolchain/v2"
 LEASE_SCHEMA = "leopard2-advisory-cpu-lease/v1"
 EVIDENCE_ITERATIONS = 9
 EVIDENCE_WARMUP = 2
+AUTHORITATIVE_CORRECTNESS_CASES = 128
 CONTROLLED_CHILD_ENVIRONMENT = {
     "LANG": "C",
     "LC_ALL": "C",
@@ -1914,6 +1915,30 @@ def portable_sources(provenance: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def validate_trusted_provenance_binding(
+        sources: Mapping[str, Any], executables: Mapping[str, Any],
+        trusted_provenance: Mapping[str, Any], providers: Sequence[str]) -> None:
+    """Require artifact identities to equal independently reconstructed provenance."""
+    try:
+        trusted_sources = portable_sources(trusted_provenance)
+        trusted_executables = trusted_provenance["executables"]
+    except (KeyError, TypeError) as error:
+        raise ComparisonError("trusted cache provenance is incomplete") from error
+    if dict(sources) != trusted_sources:
+        raise ComparisonError(
+            "artifact source/build identity differs from reconstructed cache provenance")
+    for provider in providers:
+        try:
+            artifact_sha256 = executables[provider]["sha256"]
+            trusted_sha256 = trusted_executables[provider]["sha256"]
+        except (KeyError, TypeError) as error:
+            raise ComparisonError(
+                f"trusted {provider} executable provenance is incomplete") from error
+        if artifact_sha256 != trusted_sha256:
+            raise ComparisonError(
+                f"artifact {provider} executable differs from reconstructed cache provenance")
+
+
 def validate_portable_sources(sources: Mapping[str, Any], verify_local: bool) -> None:
     require_exact_keys(sources, {
         "isa_l", "nasm", "leopard", "source_bundle", "build_identity"},
@@ -2022,7 +2047,11 @@ def run_correctness(cache: Path, count: int, output: Path) -> dict[str, Any]:
 
 
 def validate_correctness(
-        document: Mapping[str, Any], verify_local: bool = False) -> None:
+        document: Mapping[str, Any], verify_local: bool = False,
+        trusted_provenance: Mapping[str, Any] | None = None) -> None:
+    if verify_local and trusted_provenance is None:
+        raise ComparisonError(
+            "local build validation requires reconstructed cache provenance")
     require_exact_keys(document, {
         "schema", "sources", "executables", "child_environment",
         "case_generation_seed", "case_count",
@@ -2041,6 +2070,9 @@ def validate_correctness(
                        "correctness ISA-L executable")
     require_hex(executables["isa-l"].get("sha256"), 64,
                 "correctness ISA-L executable digest")
+    if trusted_provenance is not None:
+        validate_trusted_provenance_binding(
+            sources, executables, trusted_provenance, ("isa-l",))
     runtime = sources["build_identity"]["runtime_linkage"]["isa-l"]
     if runtime.get("executable_sha256") != executables["isa-l"]["sha256"]:
         raise ComparisonError("correctness executable differs from runtime-link identity")
@@ -2107,6 +2139,15 @@ def validate_correctness_binding(
             "performance checkpoint is not bound to the supplied correctness artifact")
 
 
+def require_authoritative_correctness_campaign(
+        correctness: Mapping[str, Any], allow_reduced_self_test: bool = False) -> None:
+    if (not allow_reduced_self_test and
+            correctness.get("case_count") != AUTHORITATIVE_CORRECTNESS_CASES):
+        raise ComparisonError(
+            "authoritative performance checkpoints require the exact documented "
+            f"{AUTHORITATIVE_CORRECTNESS_CASES}-case correctness campaign")
+
+
 def run_checkpoint(
         cache: Path, cpu: int, reserved_idle_cpu: int, output: Path,
         iterations: int, warmup: int,
@@ -2138,12 +2179,8 @@ def run_checkpoint(
         correctness = json.loads(correctness_artifact.read_text())
     except (OSError, json.JSONDecodeError) as error:
         raise ComparisonError(f"cannot read correctness artifact: {error}") from error
-    validate_correctness(correctness)
-    if (correctness.get("sources") != portable_sources(provenance) or
-            correctness.get("executables", {}).get("isa-l", {}).get("sha256") !=
-            provenance["executables"]["isa-l"]["sha256"]):
-        raise ComparisonError(
-            "correctness artifact source/build/executable identity differs from bootstrap")
+    validate_correctness(correctness, trusted_provenance=provenance)
+    require_authoritative_correctness_campaign(correctness)
     if output.resolve() == correctness_artifact.resolve():
         raise ComparisonError("checkpoint output cannot replace the correctness artifact")
     executables = {
@@ -2287,7 +2324,9 @@ def run_checkpoint(
         "compare 64/128-core aggregate batches on hardware exposing those CPUs",
     ]
     checkpoint["artifact_sha256"] = canonical_digest(checkpoint)
-    validate_checkpoint(checkpoint, correctness=correctness)
+    validate_checkpoint(
+        checkpoint, correctness=correctness,
+        trusted_provenance=post_timing_provenance)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(checkpoint, indent=2, sort_keys=True) + "\n")
     return checkpoint
@@ -2333,11 +2372,17 @@ def validate_frequency_snapshot(value: Mapping[str, Any], phase: str) -> None:
 
 def validate_checkpoint(
         document: Mapping[str, Any], verify_local: bool = False,
-        correctness: Mapping[str, Any] | None = None) -> None:
+        correctness: Mapping[str, Any] | None = None,
+        trusted_provenance: Mapping[str, Any] | None = None,
+        _self_test_allow_reduced_correctness: bool = False) -> None:
     if correctness is None:
         raise ComparisonError(
             "checkpoint validation requires its bound correctness artifact")
-    validate_correctness(correctness, verify_local=verify_local)
+    validate_correctness(
+        correctness, verify_local=verify_local,
+        trusted_provenance=trusted_provenance)
+    require_authoritative_correctness_campaign(
+        correctness, _self_test_allow_reduced_correctness)
     require_exact_keys(document, {
         "schema", "method", "sources", "executables", "child_environment",
         "correctness_binding", "host", "cells", "results", "aggregate",
@@ -2406,6 +2451,9 @@ def validate_checkpoint(
                 "executable_sha256") != executable.get("sha256")):
             raise ComparisonError(
                 f"checkpoint {provider} differs from runtime-link executable")
+    if trusted_provenance is not None:
+        validate_trusted_provenance_binding(
+            sources, executables, trusted_provenance, ("isa-l", "leopard2"))
     if (correctness.get("executables", {}).get("isa-l", {}).get("sha256") !=
             executables["isa-l"]["sha256"]):
         raise ComparisonError("checkpoint ISA-L executable differs from correctness gate")
@@ -2839,6 +2887,47 @@ def fake_portable_sources() -> dict[str, Any]:
     }
 
 
+def fake_trusted_provenance(sources: Mapping[str, Any]) -> dict[str, Any]:
+    """Test-only stand-in for the result of a successful load_provenance call."""
+    return {
+        "isa_l": copy.deepcopy(sources["isa_l"]),
+        "nasm": copy.deepcopy(sources["nasm"]),
+        "executables": {
+            "isa-l": {"path": "/fake/isa-l", "sha256": "2" * 64},
+            "leopard2": {"path": "/fake/leopard2", "sha256": "3" * 64},
+            "leopard_source": copy.deepcopy(sources["leopard"]),
+            "source_bundle": copy.deepcopy(sources["source_bundle"]),
+            "build_identity": copy.deepcopy(sources["build_identity"]),
+        },
+    }
+
+
+def fake_coordinated_build_relabel(sources: dict[str, Any]) -> None:
+    """Create a shape-valid, fully rehashed but untrusted build identity."""
+    identity = sources["build_identity"]
+    identity["tools"]["cxx"] = {
+        "path": "/opt/forged/bin/c++",
+        "sha256": "f" * 64,
+        "reported_version": "coordinated forged compiler 1.0",
+    }
+    link = identity["link_commands"]["adapter_executable"]
+    link["lines"] = [
+        "${CXX} injected.o ${ISA_L_INSTALL}/lib/libisal.a"]
+    link["line_count"] = len(link["lines"])
+    link["sha256"] = hashlib.sha256(json.dumps(
+        link["lines"], separators=(",", ":")).encode()).hexdigest()
+    runtime = identity["runtime_linkage"]["isa-l"]
+    dependency = runtime["dependencies"][0]
+    dependency["resolved_path"] = "/opt/forged/lib/libc.so.6"
+    dependency["resolved_realpath"] = "/opt/forged/lib/libc.so.6"
+    dependency["sha256"] = "e" * 64
+    runtime["dependency_count"] = len(runtime["dependencies"])
+    runtime["sha256"] = hashlib.sha256(json.dumps(
+        runtime["dependencies"], sort_keys=True,
+        separators=(",", ":")).encode()).hexdigest()
+    identity["identity_sha256"] = keyed_digest(identity, "identity_sha256")
+
+
 def fake_checkpoint(correctness: Mapping[str, Any]) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     for cell_index, cell in enumerate(CHECKPOINT_CELLS):
@@ -3033,8 +3122,32 @@ def self_test() -> None:
             raise ComparisonError("ISA-L result mutation was accepted")
     correctness = fake_correctness_artifact()
     validate_correctness(correctness, verify_local=False)
+    trusted_provenance = fake_trusted_provenance(correctness["sources"])
+    validate_correctness(
+        correctness, verify_local=False,
+        trusted_provenance=trusted_provenance)
+    try:
+        validate_correctness(correctness, verify_local=True)
+    except ComparisonError as error:
+        if "reconstructed cache provenance" not in str(error):
+            raise
+    else:
+        raise ComparisonError(
+            "local correctness validation accepted no trusted cache provenance")
     checkpoint = fake_checkpoint(correctness)
-    validate_checkpoint(checkpoint, verify_local=False, correctness=correctness)
+    try:
+        validate_checkpoint(
+            checkpoint, verify_local=False, correctness=correctness)
+    except ComparisonError as error:
+        if f"{AUTHORITATIVE_CORRECTNESS_CASES}-case" not in str(error):
+            raise
+    else:
+        raise ComparisonError(
+            "authoritative checkpoint accepted a reduced correctness campaign")
+    validate_checkpoint(
+        checkpoint, verify_local=False, correctness=correctness,
+        trusted_provenance=trusted_provenance,
+        _self_test_allow_reduced_correctness=True)
     try:
         validate_checkpoint(checkpoint, verify_local=False)
     except ComparisonError:
@@ -3228,7 +3341,9 @@ def self_test() -> None:
     checkpoint_mutations.append(changed)
     for changed in checkpoint_mutations:
         try:
-            validate_checkpoint(changed, verify_local=False, correctness=correctness)
+            validate_checkpoint(
+                changed, verify_local=False, correctness=correctness,
+                _self_test_allow_reduced_correctness=True)
         except ComparisonError:
             pass
         else:
@@ -3267,11 +3382,42 @@ def self_test() -> None:
             pass
         else:
             raise ComparisonError("correctness mutation was accepted")
+    coordinated_correctness = copy.deepcopy(correctness)
+    fake_coordinated_build_relabel(coordinated_correctness["sources"])
+    coordinated_correctness["artifact_sha256"] = canonical_digest(
+        coordinated_correctness)
+    # Portable validation intentionally proves internal consistency only.
+    validate_correctness(coordinated_correctness, verify_local=False)
+    coordinated_checkpoint = fake_checkpoint(coordinated_correctness)
+    validate_checkpoint(
+        coordinated_checkpoint, verify_local=False,
+        correctness=coordinated_correctness,
+        _self_test_allow_reduced_correctness=True)
+    coordinated_relabels_rejected = 0
+    for artifact_kind in ("correctness", "checkpoint"):
+        try:
+            if artifact_kind == "correctness":
+                validate_correctness(
+                    coordinated_correctness,
+                    trusted_provenance=trusted_provenance)
+            else:
+                validate_checkpoint(
+                    coordinated_checkpoint,
+                    correctness=coordinated_correctness,
+                    trusted_provenance=trusted_provenance,
+                    _self_test_allow_reduced_correctness=True)
+        except ComparisonError:
+            coordinated_relabels_rejected += 1
+        else:
+            raise ComparisonError(
+                f"trusted validation accepted coordinated {artifact_kind} relabel")
     print(json.dumps({
         "cells": len(CHECKPOINT_CELLS),
         "result_mutations_rejected": len(mutations),
         "checkpoint_mutations_rejected": len(checkpoint_mutations),
         "correctness_mutations_rejected": len(correctness_mutations),
+        "coordinated_relabels_rejected": coordinated_relabels_rejected,
+        "reduced_correctness_fixture_cases": correctness["case_count"],
         "nasm_archive_sha256": NASM_ARCHIVE_SHA256, "status": "PASS",
     }, sort_keys=True))
 
@@ -3292,15 +3438,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     run_parser.add_argument("--warmup", type=int, default=EVIDENCE_WARMUP)
     correctness_parser = subparsers.add_parser("correctness")
     correctness_parser.add_argument("--cache", type=Path, default=default_cache())
-    correctness_parser.add_argument("--cases", type=int, default=128)
+    correctness_parser.add_argument(
+        "--cases", type=int, default=AUTHORITATIVE_CORRECTNESS_CASES)
     correctness_parser.add_argument("--output", type=Path, required=True)
     correctness_validate_parser = subparsers.add_parser("validate-correctness")
     correctness_validate_parser.add_argument("artifact", type=Path)
+    correctness_validate_parser.add_argument(
+        "--cache", type=Path, default=default_cache())
     correctness_validate_parser.add_argument(
         "--require-local-build-match", action="store_true")
     validate_parser = subparsers.add_parser("validate")
     validate_parser.add_argument("checkpoint", type=Path)
     validate_parser.add_argument("--correctness-artifact", type=Path, required=True)
+    validate_parser.add_argument("--cache", type=Path, default=default_cache())
     validate_parser.add_argument("--require-local-build-match", action="store_true")
     subparsers.add_parser("self-test")
     arguments = parser.parse_args(argv)
@@ -3330,8 +3480,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             }, sort_keys=True))
         elif arguments.command == "validate-correctness":
             document = json.loads(arguments.artifact.read_text())
+            trusted_provenance = (
+                load_provenance(arguments.cache.resolve())
+                if arguments.require_local_build_match else None)
             validate_correctness(
-                document, verify_local=arguments.require_local_build_match)
+                document, verify_local=arguments.require_local_build_match,
+                trusted_provenance=trusted_provenance)
             print(json.dumps({
                 "artifact_sha256": document["artifact_sha256"],
                 "cases": document["case_count"], "status": "PASS",
@@ -3339,9 +3493,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif arguments.command == "validate":
             document = json.loads(arguments.checkpoint.read_text())
             correctness = json.loads(arguments.correctness_artifact.read_text())
+            trusted_provenance = (
+                load_provenance(arguments.cache.resolve())
+                if arguments.require_local_build_match else None)
             validate_checkpoint(
                 document, verify_local=arguments.require_local_build_match,
-                correctness=correctness)
+                correctness=correctness,
+                trusted_provenance=trusted_provenance)
             print(json.dumps({
                 "artifact_sha256": document["artifact_sha256"],
                 "cells": len(document["cells"]), "results": len(document["results"]),

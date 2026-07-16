@@ -52,10 +52,16 @@ benchmark sources, runner, audit, and notice. Every bundle entry carries its
 Git mode, blob ID (or gitlink commit), and SHA-256. Validation reconstructs the
 bundle with `git ls-tree` and `git cat-file` from the recorded commit and checks
 its recorded tree, so replay remains valid after later documentation commits
-without trusting the current checkout contents. An optional
-`--require-local-build-match` gate additionally requires the current checkout
-to be the clean benchmark-source commit. Executable hashes alone are not
-accepted as reproducibility evidence.
+without trusting the current checkout contents. That portable validation mode
+checks artifact shape, self-derived hashes, and committed source bytes; by
+itself it does not independently attest the recorded compiler, actual link
+commands, or runtime-library paths. The optional
+`--require-local-build-match` gate loads the ignored bootstrap cache, rehashes
+and reconstructs its complete provenance, exact-compares the artifact's tools,
+normalized compile and actual link commands, static inputs, runtime dependency
+paths/hashes, and executable hashes, and also requires the current checkout to
+be the clean benchmark-source commit. Executable hashes alone are not accepted
+as reproducibility evidence.
 
 The build identity retains normalized `compile_commands.json` entries and the
 actual CMake-generated link commands for the ISA-L archive, standalone adapter,
@@ -138,7 +144,11 @@ correctness artifact's canonical SHA-256 and exact source-bundle, build,
 library, NASM, and ISA-L executable identities. Checkpoint validation likewise
 requires that same correctness artifact and rejects either an identity mismatch
 or a missing gate; a projected timing oracle cannot stand in for the full-byte
-campaign.
+campaign. Authoritative checkpoint collection and validation require exactly
+the documented deterministic 128-case campaign. Smaller 16-to-512-case
+artifacts remain useful for standalone correctness development, but cannot
+authorize or validate timing evidence; only the synthetic internal self-test
+has a reduced-fixture override.
 
 Host metadata records the scaling driver, governor, energy-performance
 preference, cpuinfo and policy min/max frequencies in kHz, AMD P-state status,
@@ -228,7 +238,8 @@ From a Leopard topic-branch checkout:
     python3 tools/leopard2_isal_compare.py correctness --cases 128 \
         --output experiments/leopard2/isal_compare/correctness_result.json
     python3 tools/leopard2_isal_compare.py validate-correctness \
-        experiments/leopard2/isal_compare/correctness_result.json
+        experiments/leopard2/isal_compare/correctness_result.json \
+        --cache .research/leopard2 --require-local-build-match
     python3 tools/leopard2_isal_compare.py run \
         --cpu <isolated-allowed-cpu> \
         --reserved-idle-cpu <reserved-SMT-sibling> \
@@ -238,7 +249,8 @@ From a Leopard topic-branch checkout:
     python3 tools/leopard2_isal_compare.py validate \
         experiments/leopard2/isal_compare/checkpoint_result.json \
         --correctness-artifact \
-            experiments/leopard2/isal_compare/correctness_result.json
+            experiments/leopard2/isal_compare/correctness_result.json \
+        --cache .research/leopard2 --require-local-build-match
     python3 tools/leopard2_external_comparison.py isa-l-checkpoint \
         experiments/leopard2/isal_compare/checkpoint_result.json \
         --correctness-artifact \
@@ -250,10 +262,14 @@ single-core timing phase uses
 fewer cores intentionally because cache-sensitive provider comparisons are not
 valid under concurrent memory-intensive load.
 
-The two validation commands replay the recorded Git commit by default and do
-not require it to equal current `HEAD`. Add `--require-local-build-match` only
-when auditing the untouched benchmark-source checkout itself. Do not run the
-timing command concurrently with any other cache- or memory-sensitive job.
+Without `--require-local-build-match`, the two validation commands replay the
+recorded Git source commit and verify internal artifact consistency, but they
+do not treat recorded tool/link/runtime labels as independently trusted. The
+strict flag is the local evidence-audit mode: it requires the bootstrap cache,
+reconstructs that cache's live build provenance, exact-compares the complete
+build identity, and requires current `HEAD` and its build inputs to be clean and
+equal to the benchmark-source commit. Do not run the timing command
+concurrently with any other cache- or memory-sensitive job.
 
 ## Scope limits
 
