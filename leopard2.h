@@ -76,6 +76,12 @@ typedef enum leo2_profile {
     LEO2_PROFILE_EXACT_EXPERIMENTAL_V1 = 3
 } leo2_profile;
 
+/*
+    EXACT_EXPERIMENTAL_V1 reserves a distinct code identity for research.  It is
+    not implemented by the stable codec constructors and currently returns
+    LEO2_UNSUPPORTED; it never aliases either production V1 profile.
+*/
+
 typedef enum leo2_field {
     LEO2_FIELD_AUTO = 0,
     LEO2_FIELD_GF8 = 1,
@@ -104,13 +110,22 @@ typedef enum leo2_backend {
 } leo2_backend;
 
 /*
-    A future caller-executor adapter can be added through a larger struct_size.
+    Option structs must be zero-initialized before their documented fields are
+    assigned.  reserved must be zero.  struct_size may exceed the current
+    definition; the known prefix is consumed and an unknown trailing extension
+    is ignored.  A future caller-executor adapter can therefore be added without
+    changing the entry point.
+
     thread_count selects the persistent context pool used by batch entry points;
     the calling thread participates and no worker is created per batch call.
+    backend is currently an exact capability constraint: AUTO accepts the
+    library's qualified runtime backend; any other value must equal it or
+    creation returns LEO2_UNSUPPORTED.  It does not select a lower backend.
 */
 typedef struct leo2_context_options {
     size_t struct_size;
-    leo2_backend backend;
+    /* Fixed-width ABI storage; set to one of the leo2_backend values. */
+    uint32_t backend;
     uint32_t thread_count; /* zero means library default */
     uint32_t reserved;
 } leo2_context_options;
@@ -131,6 +146,11 @@ typedef struct leo2_codec_options {
 #define LEO2_CODEC_FORCE_GENERIC_DECODE 0x00000001u
 #define LEO2_CODEC_FORCE_SPECIALIZED_DECODE 0x00000002u
 
+/*
+    These are the fixed V1 batch-item layouts.  A future incompatible extension
+    will use a new suffixed type and entry point rather than reading past them.
+    A batch may contain at most UINT32_MAX items.
+*/
 typedef struct leo2_encode_batch_item {
     uint64_t shard_bytes;
     const void* const* original;
@@ -150,10 +170,16 @@ typedef struct leo2_decode_batch_item {
 
 LEO2_EXPORT const char* leo2_result_string(leo2_result result);
 
+/*
+    Successful setup returns immutable objects.  A context must outlive all of
+    its codecs, and a codec must outlive all of its decode plans.  A non-null
+    output handle is set to null before validation and remains null on failure.
+*/
 LEO2_EXPORT leo2_result leo2_context_create(
     const leo2_context_options* options,
     leo2_context** context_out);
 LEO2_EXPORT void leo2_context_destroy(leo2_context* context);
+/* Null context introspection returns AUTO and zero respectively. */
 LEO2_EXPORT leo2_backend leo2_context_backend(const leo2_context* context);
 LEO2_EXPORT uint32_t leo2_context_thread_count(const leo2_context* context);
 
@@ -167,6 +193,7 @@ LEO2_EXPORT leo2_result leo2_codec_create(
     leo2_codec** codec_out);
 LEO2_EXPORT void leo2_codec_destroy(leo2_codec* codec);
 
+/* Null codec introspection returns zero, AUTO, or NATIVE_V1 respectively. */
 LEO2_EXPORT uint32_t leo2_codec_original_count(const leo2_codec* codec);
 LEO2_EXPORT uint32_t leo2_codec_recovery_count(const leo2_codec* codec);
 LEO2_EXPORT uint32_t leo2_codec_parent_count(const leo2_codec* codec);
@@ -204,10 +231,11 @@ LEO2_EXPORT leo2_result leo2_unpack_systematic_shard(
     void* payload);
 
 /*
-    Scratch must start at leo2_scratch_alignment() alignment.  Scratch and all
-    non-null shard ranges must be mutually disjoint, except that input shards may
-    alias other input shards.  Recovery output entries may be null to request a
-    parity subset.  Encode/decode execution performs no allocation.  shard_bytes
+    Scratch-size output is set to zero before validation and remains zero on
+    failure.  Scratch must start at leo2_scratch_alignment() alignment.  Scratch
+    and all non-null shard ranges must be mutually disjoint, except that input
+    shards may alias other input shards.  Recovery output entries may be null to
+    request a parity subset.  Encode/decode execution performs no allocation.  shard_bytes
     always describes the physical buffers.  GF8 accepts every positive native
     length.  GF16 core execution accepts positive even physical lengths and
     returns LEO2_UNSUPPORTED for odd physical lengths.  A padded-odd codec also
@@ -244,6 +272,7 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
     const uint8_t* recovery_present,
     leo2_decode_plan** plan_out);
 LEO2_EXPORT void leo2_decode_plan_destroy(leo2_decode_plan* plan);
+/* Null plan introspection reports zero missing originals. */
 LEO2_EXPORT uint32_t leo2_decode_plan_missing_original_count(
     const leo2_decode_plan* plan);
 LEO2_EXPORT leo2_result leo2_decode_plan_scratch_size(

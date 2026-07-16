@@ -26,6 +26,7 @@ VARIANTS = ("auto", "scalar", "ssse3", "avx2")
 COMPARE_TESTS = (
     "legacy_golden",
     "api",
+    "public_api_contract",
     "random",
     "active_lch",
     "gf16_padded_odd",
@@ -55,6 +56,7 @@ SOURCE_FILES = (
     "tests/leopard2/test_legacy_golden.cpp",
     "tests/leopard2/legacy_golden_vectors.h",
     "tests/leopard2/test_api.cpp",
+    "tests/leopard2/test_public_api_contract.cpp",
     "tests/leopard2/test_random.cpp",
     "tests/leopard2/test_boundaries.cpp",
     "tests/leopard2/test_active_lch.cpp",
@@ -382,6 +384,7 @@ def run_variant(context, variant, index):
 
     targets = [
         "leopard2_legacy_golden_test", "leopard2_api_test",
+        "leopard2_public_api_contract_test",
         "leopard2_random_test", "leopard2_active_lch_test",
         "leopard2_gf16_padded_odd_test",
         "leopard2_gf16_legacy_encoder_matrix_test",
@@ -410,6 +413,7 @@ def run_variant(context, variant, index):
     test_specs = {
         "legacy_golden": ("leopard2_legacy_golden_test", []),
         "api": ("leopard2_api_test", []),
+        "public_api_contract": ("leopard2_public_api_contract_test", []),
         "random": ("leopard2_random_test", [
             "--seed", "0x4c656f7061726432", "--cases", "64", "--threads", "1"
         ]),

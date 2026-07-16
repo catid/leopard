@@ -778,7 +778,7 @@ static leo2_result CheckScratch(
         return LEO2_INVALID_ARGUMENT;
     if ((reinterpret_cast<uintptr_t>(scratch) & (kScratchAlignment - 1)) != 0)
         return LEO2_BAD_ALIGNMENT;
-    if (!MakeRange(scratch, layout.total_bytes, scratch_range))
+    if (!MakeRange(scratch, scratch_bytes, scratch_range))
         return LEO2_INVALID_ARGUMENT;
     return LEO2_SUCCESS;
 }
@@ -800,12 +800,12 @@ static leo2_result ValidateEncodeBuffers(
     const void* const* original,
     void* const* recovery,
     void* scratch,
-    const ScratchLayout& layout)
+    size_t scratch_bytes)
 {
     if (!original || !recovery)
         return LEO2_INVALID_ARGUMENT;
     AddressRange scratch_range;
-    if (!MakeRange(scratch, layout.total_bytes, scratch_range))
+    if (!MakeRange(scratch, scratch_bytes, scratch_range))
         return LEO2_INVALID_ARGUMENT;
 
     for (uint32_t i = 0; i < codec->original_count; ++i)
@@ -996,13 +996,13 @@ static leo2_result ValidateDecodeBuffers(
     const void* const* recovery,
     void* const* restored,
     void* scratch,
-    const ScratchLayout& layout)
+    size_t scratch_bytes)
 {
     const leo2_codec* codec = plan->codec;
     if (!original || !recovery || !restored)
         return LEO2_INVALID_ARGUMENT;
     AddressRange scratch_range;
-    if (!MakeRange(scratch, layout.total_bytes, scratch_range))
+    if (!MakeRange(scratch, scratch_bytes, scratch_range))
         return LEO2_INVALID_ARGUMENT;
 
     size_t input_count = 0;
@@ -1185,16 +1185,19 @@ LEO2_EXPORT leo2_result leo2_context_create(
     if (!context_out)
         return LEO2_INVALID_ARGUMENT;
     *context_out = NULL;
-    if (options && options->struct_size < sizeof(leo2_context_options))
+    if (options && (options->struct_size < sizeof(leo2_context_options) ||
+                    options->reserved != 0))
         return LEO2_INVALID_ARGUMENT;
     const leo2_result initialized = EnsureInitialized();
     if (initialized != LEO2_SUCCESS)
         return initialized;
 
     const leo2_backend actual = RuntimeBackend();
-    const leo2_backend requested = options ? options->backend : LEO2_BACKEND_AUTO;
-    if (requested < LEO2_BACKEND_AUTO || requested > LEO2_BACKEND_NEON)
+    const uint32_t requested_raw = options
+        ? options->backend : static_cast<uint32_t>(LEO2_BACKEND_AUTO);
+    if (requested_raw > static_cast<uint32_t>(LEO2_BACKEND_NEON))
         return LEO2_INVALID_ARGUMENT;
+    const leo2_backend requested = static_cast<leo2_backend>(requested_raw);
     if (requested != LEO2_BACKEND_AUTO && requested != actual)
         return LEO2_UNSUPPORTED;
 
@@ -1258,9 +1261,11 @@ LEO2_EXPORT leo2_result leo2_codec_create(
     const leo2_codec_options* options,
     leo2_codec** codec_out)
 {
-    if (!context || !codec_out || original_count == 0 || recovery_count == 0)
+    if (!codec_out)
         return LEO2_INVALID_ARGUMENT;
     *codec_out = NULL;
+    if (!context || original_count == 0 || recovery_count == 0)
+        return LEO2_INVALID_ARGUMENT;
     leo2_shard_layout shard_layout = LEO2_SHARD_LAYOUT_NATIVE_V1;
     if (options)
     {
@@ -1272,6 +1277,7 @@ LEO2_EXPORT leo2_result leo2_codec_create(
         if (options->struct_size < version1_size ||
             (options->struct_size > version1_size &&
              options->struct_size < layout_field_end) ||
+            options->reserved != 0 ||
             (options->flags & ~supported_flags) != 0 ||
             (options->flags & supported_flags) == supported_flags)
             return LEO2_INVALID_ARGUMENT;
@@ -1519,6 +1525,7 @@ LEO2_EXPORT leo2_result leo2_encode_scratch_size(
 {
     if (!scratch_bytes_out)
         return LEO2_INVALID_ARGUMENT;
+    *scratch_bytes_out = 0;
     ScratchLayout layout;
     size_t rounded = 0;
     size_t work_count = 0;
@@ -1547,7 +1554,8 @@ LEO2_EXPORT leo2_result leo2_encode(
     result = CheckScratch(scratch, scratch_bytes, layout, scratch_range);
     if (result != LEO2_SUCCESS)
         return result;
-    result = ValidateEncodeBuffers(codec, shard_bytes, original, recovery, scratch, layout);
+    result = ValidateEncodeBuffers(
+        codec, shard_bytes, original, recovery, scratch, scratch_bytes);
     if (result != LEO2_SUCCESS)
         return result;
 
@@ -1649,6 +1657,8 @@ LEO2_EXPORT leo2_result leo2_encode_batch(
     const leo2_encode_batch_item* items,
     size_t item_count)
 {
+    if (item_count > 0xffffffffu)
+        return LEO2_INVALID_ARGUMENT;
     if (item_count != 0 && !items)
         return LEO2_INVALID_ARGUMENT;
     if (!codec)
@@ -1671,9 +1681,11 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
     const uint8_t* recovery_present,
     leo2_decode_plan** plan_out)
 {
-    if (!codec || !original_present || !recovery_present || !plan_out)
+    if (!plan_out)
         return LEO2_INVALID_ARGUMENT;
     *plan_out = NULL;
+    if (!codec || !original_present || !recovery_present)
+        return LEO2_INVALID_ARGUMENT;
     uint32_t present_count = 0;
     uint32_t missing_original_count = 0;
     for (uint32_t i = 0; i < codec->original_count; ++i)
@@ -1823,13 +1835,13 @@ LEO2_EXPORT leo2_result leo2_decode_plan_scratch_size(
     uint64_t shard_bytes,
     size_t* scratch_bytes_out)
 {
-    if (!plan || !scratch_bytes_out || shard_bytes == 0)
+    if (!scratch_bytes_out)
+        return LEO2_INVALID_ARGUMENT;
+    *scratch_bytes_out = 0;
+    if (!plan || shard_bytes == 0)
         return LEO2_INVALID_ARGUMENT;
     if (plan->no_op)
-    {
-        *scratch_bytes_out = 0;
         return LEO2_SUCCESS;
-    }
     ScratchLayout layout;
     size_t rounded = 0;
     const leo2_result result = plan->direct_repair
@@ -1867,7 +1879,8 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
     if (result != LEO2_SUCCESS)
         return result;
     result = ValidateDecodeBuffers(
-        plan, shard_bytes, original, recovery, restored_original, scratch, layout);
+        plan, shard_bytes, original, recovery, restored_original,
+        scratch, scratch_bytes);
     if (result != LEO2_SUCCESS)
         return result;
 
@@ -2003,6 +2016,8 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute_batch(
     const leo2_decode_batch_item* items,
     size_t item_count)
 {
+    if (item_count > 0xffffffffu)
+        return LEO2_INVALID_ARGUMENT;
     if (item_count != 0 && !items)
         return LEO2_INVALID_ARGUMENT;
     if (!plan)
@@ -2026,6 +2041,7 @@ LEO2_EXPORT leo2_result leo2_decode_scratch_size(
 {
     if (!scratch_bytes_out)
         return LEO2_INVALID_ARGUMENT;
+    *scratch_bytes_out = 0;
     ScratchLayout layout;
     size_t rounded = 0;
     const leo2_result result = DecodeLayout(codec, shard_bytes, layout, rounded);

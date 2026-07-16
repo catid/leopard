@@ -9,12 +9,26 @@ Create one `leo2_context`, then any number of immutable codecs.  A codec fixes
 `K`, `R`, profile, field, shard layout, parent length, and coordinate map.  A
 decode plan copies one presence/erasure pattern and precomputes its locator
 values, profile-specific normalization factors, and deterministic
-received-coordinate selection.  The context and codec must outlive their codecs
-and plans respectively.
+received-coordinate selection.  A context must outlive every codec created from
+it, and a codec must outlive every plan created from it.
 
 Codec and plan execution is read-only and may be called concurrently when every
 call has distinct outputs and scratch.  Setup may allocate; encode and reusable
 plan execution do not.
+
+Setup functions clear a non-null output handle before validating the remaining
+arguments, so a failed create never leaves a stale object pointer.  Scratch-size
+queries similarly clear a non-null size output to zero before validation.  Null
+introspection arguments return their documented zero, AUTO, or native-layout
+sentinel.
+
+Option structures must be zero-initialized, `struct_size` set, and every
+`reserved` field left zero.  A nonzero reserved field is rejected.  A
+`struct_size` larger than the current definition is accepted and only the known
+prefix is read; unknown trailing bytes are ignored.  The `backend` and
+`shard_layout` option members use fixed-width `uint32_t` ABI storage even when a
+C caller enables short enums.  Batch-item structures are fixed V1 layouts; a
+future incompatible extension will use new suffixed types and entry points.
 
 ## Encoding
 
@@ -86,6 +100,10 @@ Low V1:
 GF8 for a parent of at most 256 coordinates and GF16 otherwise.  Profile and field
 are mathematical code identity; backend selection never changes them.
 
+`LEO2_PROFILE_EXACT_EXPERIMENTAL_V1` reserves a distinct research code identity.
+The production constructor currently returns `LEO2_UNSUPPORTED` for it; it never
+falls back to or aliases either production V1 profile.
+
 Shard layout is also code identity.  `LEO2_SHARD_LAYOUT_NATIVE_V1` is zero, so a
 zero-initialized options structure and the exact API-version-1 prefix retain
 native behavior.  API version 2 appends `shard_layout` to
@@ -127,7 +145,8 @@ bytes remain unchanged.  The no-loss decoder intentionally performs no buffer
 or pad validation because its contract is a true no-op.
 
 The batch entry points execute independent items using each item's own buffers and
-scratch.  A context owns a persistent worker pool when its effective
+scratch.  `item_count` may not exceed `UINT32_MAX`; larger counts return
+`LEO2_INVALID_ARGUMENT` before any item is read.  A context owns a persistent worker pool when its effective
 `thread_count` is greater than one, so batch calls do not create threads in the
 hot path.  The calling thread participates in the batch; the pool contains
 `thread_count - 1` workers.  A count of one executes batch items serially.
@@ -137,6 +156,13 @@ when it is unavailable, and caps the result at 128.  An explicit count from 1
 through 128 is accepted; a larger count returns `LEO2_INVALID_ARGUMENT`.
 `leo2_context_thread_count` reports the effective value.  This option controls
 parallelism across batch items, not the wire profile or the result bytes.
+
+The context `backend` option is an exact capability constraint in API V2.
+`AUTO` accepts the library's qualified runtime backend.  An explicit value must
+equal that backend or context creation returns `LEO2_UNSUPPORTED`; it does not
+currently downgrade execution to a lower backend.  Per-context lower-backend
+selection remains part of the production backend-isolation work, while the
+diagnostic build variants provide deterministic scalar/SSSE3/AVX2 test builds.
 
 Only one batch call at a time uses a given context pool.  Concurrent batch calls
 sharing that context are serialized at the scheduler, while calls using separate

@@ -296,6 +296,12 @@ if(LEO2_BUILD_TESTS)
     target_link_libraries(leopard2_api_test libleopard)
     add_test(NAME leopard2_api COMMAND leopard2_api_test)
 
+    add_executable(leopard2_public_api_contract_test
+        tests/leopard2/test_public_api_contract.cpp)
+    target_link_libraries(leopard2_public_api_contract_test libleopard)
+    add_test(NAME leopard2_public_api_contract
+        COMMAND leopard2_public_api_contract_test)
+
     add_executable(leopard2_random_test
         tests/leopard2/direct_oracle.cpp
         tests/leopard2/test_random.cpp)

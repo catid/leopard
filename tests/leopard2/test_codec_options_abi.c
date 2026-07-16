@@ -35,6 +35,8 @@
 
 typedef char leo2_layout_storage_must_be_u32[
     sizeof(((leo2_codec_options *)0)->shard_layout) == sizeof(uint32_t) ? 1 : -1];
+typedef char leo2_backend_storage_must_be_u32[
+    sizeof(((leo2_context_options *)0)->backend) == sizeof(uint32_t) ? 1 : -1];
 
 static int require_result(leo2_result actual, leo2_result expected,
     const char *operation)
@@ -85,6 +87,18 @@ int main(void)
     leo2_codec_destroy(codec);
     codec = NULL;
 
+    memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.reserved = 1;
+    codec = (leo2_codec *)(uintptr_t)1;
+    if (!require_result(leo2_codec_create(context, 5, 3,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, &options, &codec),
+            LEO2_INVALID_ARGUMENT, "C ABI codec reserved rejection") ||
+        codec != NULL) {
+        leo2_context_destroy(context);
+        return 1;
+    }
+
     /* The exact v1 prefix ignores bytes belonging to the appended field. */
     memset(&options, 0xa5, sizeof(options));
     options.struct_size = version1_size;
@@ -113,7 +127,18 @@ int main(void)
     }
 
     leo2_context_destroy(context);
-    printf("leopard2 C codec-options ABI passed: layout_bytes=%lu v1_bytes=%lu\n",
+    context = (leo2_context *)(uintptr_t)1;
+    memset(&context_options, 0, sizeof(context_options));
+    context_options.struct_size = sizeof(context_options);
+    context_options.reserved = 1;
+    if (!require_result(leo2_context_create(&context_options, &context),
+            LEO2_INVALID_ARGUMENT, "C ABI context reserved rejection") ||
+        context != NULL) {
+        return 1;
+    }
+
+    printf("leopard2 C options ABI passed: backend_bytes=%lu layout_bytes=%lu v1_bytes=%lu\n",
+        (unsigned long)sizeof(context_options.backend),
         (unsigned long)sizeof(options.shard_layout),
         (unsigned long)version1_size);
     return 0;
