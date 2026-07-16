@@ -259,8 +259,11 @@ keeps the benchmark-harness Bead open.
 The currently checked-in ISA-L JSON artifacts use the superseded V1 evidence
 schemas and are provisional only. The hardened V2 protocol requires raw timing
 samples from both providers, immutable/direct scalar correctness oracles,
-recorded-commit Git-object replay, clean rebuilds, advisory CPU leases, and a
-post-timing integrity recheck. No V1 number is accepted as release evidence;
+detached recorded-commit builds with before/after Git-object replay, actual
+compile/link/runtime-library identities, a controlled child environment,
+symmetric Leopard `--skip-legacy` work, a separately supplied full-correctness
+artifact binding, advisory CPU leases, and a post-timing integrity recheck. No
+V1 number is accepted as release evidence;
 the files must be replaced by a coordinated V2 run before quoting results.
 
 `tools/leopard2_external_comparison.py` makes that boundary machine-readable.

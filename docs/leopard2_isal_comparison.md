@@ -38,9 +38,15 @@ checks the pinned digest before extraction, builds it under the ignored
 clean checkout at the exact commit. Its static library, license, NASM binary,
 and both benchmark executables are hashed into ignored provenance and the
 retained checkpoint. No third-party source, archive, or library is committed.
-Bootstrap refuses any tracked or untracked repository change and deletes the
-ISA-L build/install tree plus both benchmark build trees before rebuilding.
-It records the clean Leopard commit and a content-addressed bundle covering the
+Bootstrap refuses every source/build-input or unrelated tracked/untracked
+change (the two generated evidence paths are the only exception), deletes the
+ISA-L build/install tree plus both benchmark build trees, and materializes the
+recorded Leopard commit as a new detached Git worktree under the ignored cache.
+Both benchmarks are configured and compiled from that detached materialization,
+not from the invoking checkout. Before and after compilation the runner
+reconstructs and compares the complete Git-object input bundle; either a dirty
+materialization or a changed object/hash aborts bootstrap. It records the clean
+Leopard commit and a content-addressed bundle covering the
 production codec/backends, production and standalone CMake files, both
 benchmark sources, runner, audit, and notice. Every bundle entry carries its
 Git mode, blob ID (or gitlink commit), and SHA-256. Validation reconstructs the
@@ -50,6 +56,15 @@ without trusting the current checkout contents. An optional
 `--require-local-build-match` gate additionally requires the current checkout
 to be the clean benchmark-source commit. Executable hashes alone are not
 accepted as reproducibility evidence.
+
+The build identity retains normalized `compile_commands.json` entries and the
+actual CMake-generated link commands for the ISA-L archive, standalone adapter,
+Leopard library, and Leopard benchmark. It requires the adapter link to name the
+private `${ISA_L_INSTALL}/lib/libisal.a` exactly once and binds that archive's
+SHA-256 to the provider identity. `ldd` plus `readelf` are themselves identified
+by resolved path, version output, and executable hash; every `DT_NEEDED`
+dependency records its resolved path, real path, SONAME, and file hash. A
+post-run rebuild of this provenance must match byte-for-byte.
 
 ## Codec and timing semantics
 
@@ -82,26 +97,55 @@ generates `loss_count * shard_bytes`. Reports retain offered and selected byte
 counts separately. Setup and byte-heavy execution are always separate, and
 amortized decode is derived at the declared reuse count.
 
+For this external comparison the Leopard child is always invoked with
+`--skip-legacy --retain-samples`. The first flag is recorded in its JSON and
+prevents all correctness, warmup, allocation, and timed work in the old Leopard
+benchmark path; ISA-L has no corresponding second codec. Normal invocations of
+`bench_leopard2` do not enable this mode and retain the prior default JSON
+structure and legacy-oracle behavior. CTest includes a regression for both
+shapes. Validation also recomputes the missing-index permutation directly from
+`K`, loss count, and seed; verifies the high-profile padded side is
+`ceil_pow2(R)` and the low-profile side is `ceil_pow2(K)`; accepts only a real
+resolved backend; and requires that backend to remain identical across every
+repetition.
+
 Each V2 checkpoint cell runs four independent provider pairs in
-ABBA order. Each child performs two warmups and nine timed samples. The runner
+ABBA order. Each child performs exactly two untimed warmups and exactly nine
+timed samples, all of which must be retained; other counts are rejected. The runner
 requires one explicit allowed CPU and one explicitly reserved SMT sibling. It
 sets its own affinity to the singleton CPU, verifies a child inherits exactly
 that set, runs every provider child by inheritance, restores its original
 affinity, sets OpenMP to one thread, and records topology and governor data when
-readable. It holds advisory `fcntl` locks for both logical siblings throughout
+readable. Evidence children inherit no ambient environment. They receive only
+an exact recorded allowlist (`LANG=C`, `LC_ALL=C`, one-thread OpenMP settings,
+`MALLOC_ARENA_MAX=1`, and the pinned GNU affinity). Collection rejects ambient
+`LD_PRELOAD`, `LD_LIBRARY_PATH`, `GLIBC_TUNABLES`, loader controls, OpenMP
+controls, allocator controls, sanitizer settings, and common math-runtime
+tuning variables before launching anything. It holds advisory `fcntl` locks for both logical siblings throughout
 measurement and the post-timing source/tool/library/executable recheck. Those
 locks serialize cooperating Leopard2 lab jobs; they are explicitly not an
-OS-exclusive CPU reservation. ISA-L and Leopard2 retain every raw timing sample;
+OS-exclusive CPU reservation. The `fcntl` import is conditional: policy
+self-tests remain portable, while pinned collection explicitly requires Linux.
+ISA-L and Leopard2 retain every raw timing sample;
 validation recomputes median, MAD, extrema, rates, setup amortization, cell
 cardinality, ABBA order, identities, and aggregate values. Leopard2 results use
 the already validated production benchmark schema. Both implementations
 restore and compare every missing byte to independently retained deterministic
 source data, and the paired missing-index lists must be identical.
 
+A performance run requires `--correctness-artifact`. Its checkpoint embeds the
+correctness artifact's canonical SHA-256 and exact source-bundle, build,
+library, NASM, and ISA-L executable identities. Checkpoint validation likewise
+requires that same correctness artifact and rejects either an identity mismatch
+or a missing gate; a projected timing oracle cannot stand in for the full-byte
+campaign.
+
 Host metadata records the scaling driver, governor, energy-performance
 preference, cpuinfo and policy min/max frequencies in kHz, AMD P-state status,
 and explicit nullable `boost` and Intel `no_turbo` controls. Labeled pre/post
-snapshots retain both readable current-frequency sources in kHz. A current
+snapshots retain both readable current-frequency sources in kHz. The post
+snapshot is taken immediately when the final child returns, before parsing that
+child's result or rehashing provenance. A current
 frequency is a point-in-time observation, not a claim that frequency remained
 fixed during a run; validation checks field shape, units, positivity, and range
 ordering without requiring the two snapshots to match. On AMD P-state hosts,
@@ -188,13 +232,21 @@ From a Leopard topic-branch checkout:
     python3 tools/leopard2_isal_compare.py run \
         --cpu <isolated-allowed-cpu> \
         --reserved-idle-cpu <reserved-SMT-sibling> \
+        --correctness-artifact \
+            experiments/leopard2/isal_compare/correctness_result.json \
         --output experiments/leopard2/isal_compare/checkpoint_result.json
     python3 tools/leopard2_isal_compare.py validate \
-        experiments/leopard2/isal_compare/checkpoint_result.json
+        experiments/leopard2/isal_compare/checkpoint_result.json \
+        --correctness-artifact \
+            experiments/leopard2/isal_compare/correctness_result.json
     python3 tools/leopard2_external_comparison.py isa-l-checkpoint \
-        experiments/leopard2/isal_compare/checkpoint_result.json
+        experiments/leopard2/isal_compare/checkpoint_result.json \
+        --correctness-artifact \
+            experiments/leopard2/isal_compare/correctness_result.json
 
-`bootstrap` is capped at eight build jobs. The single-core timing phase uses
+`bootstrap` is capped at eight build jobs. The pinned `run` command is Linux-only;
+the parser/self-test and artifact policy remain usable elsewhere. The
+single-core timing phase uses
 fewer cores intentionally because cache-sensitive provider comparisons are not
 valid under concurrent memory-intensive load.
 
