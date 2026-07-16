@@ -27,6 +27,13 @@ EXPECTED_BACKENDS = ("auto", "scalar", "ssse3", "avx2")
 EXPECTED_CORRECTNESS_CASES = 144
 EXPECTED_DIRECT_CHECKS = 388
 EXPECTED_FACTOR_CHECKS = 1_260_048
+EXPECTED_CORRECTNESS_DIGEST = "0x56af7bbc2fb6a888"
+CORE_BASELINE_GIT_SHA = "37e852774bce6f9effb1acf1fcde99a758ecfe6e"
+TAIL_POLICY = "zero-pad to kernel quantum; compare valid and padded bytes"
+NORMAL_SANITIZER_MODE = "none"
+SANITIZED_MODE = "asan-ubsan"
+RETAINED_POINTER_BYTES = 8
+GUARD_BYTES_PER_SHARD = 64
 CORRECTNESS_GF8_Q = (
     1, 3, 5, 7, 9, 15, 17, 31, 33, 63, 65, 127, 129, 191, 255,
 )
@@ -104,6 +111,105 @@ def ceil_power_of_two(value: int) -> int:
     return 1 << (value - 1).bit_length()
 
 
+def canonical_binary_blocks(q: int) -> tuple[tuple[int, int], ...]:
+    require(q >= 1, "binary prefix must be nonempty")
+    result: list[tuple[int, int]] = []
+    offset = 0
+    remaining = q
+    while remaining:
+        block_size = 1 << (remaining.bit_length() - 1)
+        require(offset & (block_size - 1) == 0,
+                "internal binary block is not aligned")
+        result.append((offset, block_size))
+        offset += block_size
+        remaining -= block_size
+    require(offset == q, "internal binary blocks do not cover prefix")
+    return tuple(result)
+
+
+def active_jobs_for_block(offset: int, size: int, parent: int) -> int:
+    """Count nonzero LCH block factors in the legacy coordinate order.
+
+    A non-base block factor contains the subspace polynomial for the highest
+    set bit of ``offset``.  Its roots are exactly the coordinate prefix below
+    that power of two, so all aligned shifts at or above it are active.
+    """
+    require(size >= 1 and parent % size == 0,
+            "internal job geometry is invalid")
+    if offset == 0:
+        return parent // size
+    first_active_shift = 1 << (offset.bit_length() - 1)
+    require(first_active_shift % size == 0 and first_active_shift < parent,
+            "internal active-job boundary is invalid")
+    return (parent - first_active_shift) // size
+
+
+def expected_execution_accounting(q: int, processed_bytes: int) -> dict[str, int]:
+    """Derive every non-timing execution counter written by c5_dyadic.cpp."""
+    require(processed_bytes >= 1 and processed_bytes % 64 == 0,
+            "processed bytes must use the retained kernel quantum")
+    parent = ceil_power_of_two(q)
+    blocks = canonical_binary_blocks(q)
+    largest_block = blocks[0][1]
+    fused_power_plus_one = q == largest_block + 1
+    largest_tail_block = blocks[1][1] if len(blocks) > 1 else 0
+
+    jobs = sum(active_jobs_for_block(offset, size, parent)
+               for offset, size in blocks)
+    candidate_scratch = largest_block * RETAINED_POINTER_BYTES
+    if not fused_power_plus_one and largest_tail_block > 1:
+        candidate_scratch += largest_tail_block * (
+            processed_bytes + GUARD_BYTES_PER_SHARD)
+    padded_scratch = parent * RETAINED_POINTER_BYTES
+
+    candidate_traffic = 0
+    for block_index, (offset, size) in enumerate(blocks):
+        active_jobs = active_jobs_for_block(offset, size, parent)
+        base = block_index == 0
+        if fused_power_plus_one and not base:
+            continue
+        shard_bytes = size * processed_bytes
+        butterfly_bytes = 2 * processed_bytes * size * (size.bit_length() - 1)
+        if base:
+            candidate_traffic += active_jobs * (
+                2 * shard_bytes + butterfly_bytes)
+            if fused_power_plus_one:
+                # The upper base coset injects the one-shard tail: one input
+                # read plus one output read and write.
+                require(active_jobs == 2,
+                        "internal fused base must have two output cosets")
+                candidate_traffic += 3 * processed_bytes
+        elif size > 1:
+            candidate_traffic += active_jobs * (
+                5 * shard_bytes + butterfly_bytes)
+        else:
+            candidate_traffic += active_jobs * 3 * shard_bytes
+
+    padded_traffic = processed_bytes * (
+        q + parent + 2 * parent * (parent.bit_length() - 1))
+    return {
+        "jobs": jobs,
+        "candidate_scratch_bytes": candidate_scratch,
+        "padded_scratch_bytes": padded_scratch,
+        "candidate_traffic_bytes": candidate_traffic,
+        "padded_traffic_bytes": padded_traffic,
+    }
+
+
+def expected_resident_batch_bytes(
+    q: int,
+    processed_bytes: int,
+    batch: int,
+) -> int:
+    parent = ceil_power_of_two(q)
+    accounting = expected_execution_accounting(q, processed_bytes)
+    shard_storage = (q + parent) * (
+        processed_bytes + GUARD_BYTES_PER_SHARD)
+    return batch * (
+        shard_storage + accounting["candidate_scratch_bytes"] +
+        accounting["padded_scratch_bytes"])
+
+
 def expected_correctness_cells() -> frozenset[tuple[int, int, int]]:
     result = {
         (8, q, valid_bytes)
@@ -178,17 +284,11 @@ def expected_direct_checks(field_bits: int, q: int, valid_bytes: int) -> int:
 
 def expected_factor_checks(q: int) -> int:
     parent = ceil_power_of_two(q)
-    offset = 0
-    remaining = q
     result = 0
-    while remaining:
-        block_size = 1 << (remaining.bit_length() - 1)
+    for offset, block_size in canonical_binary_blocks(q):
         # One normalizer comparison per canonical block, then one subspace
         # comparison per set bit of the block offset on every output coset.
         result += 1 + (parent // block_size) * offset.bit_count()
-        offset += block_size
-        remaining -= block_size
-    require(offset == q, "internal factor-check decomposition is incomplete")
     return result
 
 
@@ -228,7 +328,9 @@ def validate_correctness_cases(
                 f"{path}: wrong compared-byte count for correctness cell {key}")
         require(require_int(case, "blocks", path, 1) == q.bit_count(),
                 f"{path}: wrong binary-block count for correctness cell {key}")
-        require_int(case, "jobs", path, 1)
+        accounting = expected_execution_accounting(q, processed_bytes)
+        require(require_int(case, "jobs", path, 1) == accounting["jobs"],
+                f"{path}: wrong active-job count for correctness cell {key}")
         factor_checks = require_int(case, "factor_checks", path, 1)
         require(factor_checks == expected_factor_checks(q),
                 f"{path}: wrong factor-check count for correctness cell {key}")
@@ -237,10 +339,15 @@ def validate_correctness_cases(
         require(direct == expected_direct_checks(field_bits, q, valid_bytes),
                 f"{path}: wrong direct-check count for correctness cell {key}")
         direct_total += direct
-        require_int(case, "candidate_scratch_bytes", path)
-        require_int(case, "padded_scratch_bytes", path)
-        require_int(case, "candidate_traffic_bytes", path, 1)
-        require_int(case, "padded_traffic_bytes", path, 1)
+        for accounting_key in (
+            "candidate_scratch_bytes", "padded_scratch_bytes",
+            "candidate_traffic_bytes", "padded_traffic_bytes",
+        ):
+            minimum = 1 if "traffic" in accounting_key else 0
+            require(require_int(case, accounting_key, path, minimum) ==
+                    accounting[accounting_key],
+                    f"{path}: wrong {accounting_key} for correctness cell "
+                    f"{key}")
 
     require(seen == expected, f"{path}: correctness matrix is incomplete")
     require(direct_total == EXPECTED_DIRECT_CHECKS,
@@ -254,6 +361,7 @@ def validate_common(
     payload: dict[str, Any],
     source_hash: str,
     expected_mode: str,
+    expected_sanitizer_mode: str,
 ) -> None:
     require(payload.get("schema_version") == SCHEMA,
             f"{path}: wrong schema")
@@ -268,24 +376,28 @@ def validate_common(
             f"{path}: expected mode {expected_mode}")
     require(payload.get("kernel_quantum_bytes") == 64,
             f"{path}: kernel quantum changed")
+    require(payload.get("tail_policy") == TAIL_POLICY,
+            f"{path}: tail policy changed")
     binding = payload.get("build_binding")
     require(isinstance(binding, dict), f"{path}: missing build binding")
     require(binding.get("source_sha256") == source_hash,
             f"{path}: source hash mismatch")
-    require(isinstance(binding.get("core_git_sha"), str) and
-            len(binding["core_git_sha"]) == 40,
-            f"{path}: invalid core git SHA")
+    require(binding.get("core_git_sha") == CORE_BASELINE_GIT_SHA,
+            f"{path}: core git SHA is not the retained baseline")
     require(isinstance(binding.get("linked_library_sha256"), str) and
             len(binding["linked_library_sha256"]) == 64,
             f"{path}: invalid library hash")
+    require(binding.get("sanitizer_mode") == expected_sanitizer_mode,
+            f"{path}: wrong sanitizer mode")
     require(payload.get("direct_symbol_checks") == EXPECTED_DIRECT_CHECKS,
             f"{path}: direct check count changed")
     require(payload.get("factor_checks") == EXPECTED_FACTOR_CHECKS,
             f"{path}: factor check count changed")
     digest = payload.get("correctness_digest_fnv1a64")
     require(isinstance(digest, str) and
-            re.fullmatch(r"0x[0-9a-f]{16}", digest) is not None,
-            f"{path}: invalid correctness digest")
+            re.fullmatch(r"0x[0-9a-f]{16}", digest) is not None and
+            digest == EXPECTED_CORRECTNESS_DIGEST,
+            f"{path}: correctness digest is not the retained oracle value")
     validate_correctness_cases(path, payload)
 
 
@@ -424,9 +536,22 @@ def validate_benchmark_rows(
             "padded_traffic_bytes_per_execution",
         ):
             require_int(row, storage_key, path)
-        require(row["candidate_traffic_bytes_per_execution"] > 0 and
-                row["padded_traffic_bytes_per_execution"] > 0,
-                f"{path}: zero benchmark traffic in cell {key}")
+        accounting = expected_execution_accounting(q, processed_bytes)
+        benchmark_accounting = {
+            "candidate_scratch_bytes_per_stripe":
+                accounting["candidate_scratch_bytes"],
+            "padded_scratch_bytes_per_stripe":
+                accounting["padded_scratch_bytes"],
+            "resident_batch_bytes": expected_resident_batch_bytes(
+                q, processed_bytes, batch),
+            "candidate_traffic_bytes_per_execution":
+                accounting["candidate_traffic_bytes"],
+            "padded_traffic_bytes_per_execution":
+                accounting["padded_traffic_bytes"],
+        }
+        for storage_key, expected_value in benchmark_accounting.items():
+            require(row[storage_key] == expected_value,
+                    f"{path}: wrong {storage_key} for benchmark cell {key}")
 
         claimed_ratio = require_finite_nonnegative(
             row, "padded_over_candidate", path)
@@ -551,17 +676,26 @@ def summarize_benchmarks(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def git_status(repository: pathlib.Path) -> str:
-    completed = subprocess.run(
-        ["git", "-C", str(repository), "rev-parse", "HEAD"],
-        check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    return completed.stdout.strip()
+def validate_core_revision(repository: pathlib.Path) -> None:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(repository), "cat-file", "-t",
+             CORE_BASELINE_GIT_SHA],
+            check=True, text=True, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE)
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise CheckpointError(
+            "retained core baseline is not present in the repository") from error
+    require(completed.stdout.strip() == "commit",
+            "retained core baseline does not name a commit")
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     source = pathlib.Path(args.source)
     require(source.exists(), f"missing source: {source}")
     source_hash = sha256(source)
+    repository = pathlib.Path(args.repository)
+    validate_core_revision(repository)
     backend_results = parse_binding(args.backend, "--backend")
     backend_libraries = parse_binding(args.library, "--library")
     require(set(backend_results) == set(EXPECTED_BACKENDS),
@@ -576,7 +710,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     for label in EXPECTED_BACKENDS:
         path = backend_results[label]
         payload = load_json(path)
-        validate_common(path, payload, source_hash, "backend")
+        validate_common(path, payload, source_hash, "backend",
+                        NORMAL_SANITIZER_MODE)
         validate_library_binding(label, path, payload, backend_libraries[label])
         validate_forced_backend_runtime(path, label, payload)
         validate_backend_benchmarks(path, payload)
@@ -590,10 +725,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     sanitizer_path = pathlib.Path(args.sanitizer)
     sanitizer_library = pathlib.Path(args.sanitizer_library)
     sanitizer = load_json(sanitizer_path)
-    validate_common(sanitizer_path, sanitizer, source_hash, "correctness")
+    validate_common(sanitizer_path, sanitizer, source_hash, "correctness",
+                    SANITIZED_MODE)
     require(sanitizer["requested_backend"] == "asan-ubsan",
             "sanitizer label mismatch")
-    require(sanitizer["build_binding"]["sanitizer_mode"] == "asan-ubsan",
+    require(sanitizer["build_binding"]["sanitizer_mode"] == SANITIZED_MODE,
             "sanitizer mode mismatch")
     require(sanitizer_library.exists(), "sanitizer library is missing")
     require(sanitizer["build_binding"]["linked_library_sha256"] ==
@@ -605,7 +741,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
     benchmark_path = pathlib.Path(args.benchmark)
     benchmark = load_json(benchmark_path)
-    validate_common(benchmark_path, benchmark, source_hash, "all")
+    validate_common(benchmark_path, benchmark, source_hash, "all",
+                    NORMAL_SANITIZER_MODE)
     validate_authoritative_runtime(benchmark_path, benchmark)
     require(benchmark["build_binding"]["linked_library_sha256"] ==
             sha256(backend_libraries["avx2"]),
@@ -617,7 +754,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     core_shas.add(benchmark["build_binding"]["core_git_sha"])
     require(len(core_shas) == 1, "raw artifacts use different core revisions")
 
-    current_head = git_status(pathlib.Path(args.repository))
     return {
         "schema_version": "leopard2-c5-checkpoint-v1",
         "status": "pass",
@@ -626,8 +762,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "default_build_integration": False,
         "build_binding": {
             "experiment_source_sha256": source_hash,
+            "checkpoint_merger_sha256": sha256(
+                pathlib.Path(__file__).resolve()),
             "core_baseline_git_sha": next(iter(core_shas)),
-            "checkpoint_generation_head": current_head,
         },
         "correctness": {
             "backend_variants": list(EXPECTED_BACKENDS),

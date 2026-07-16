@@ -18,12 +18,14 @@ SPEC.loader.exec_module(MODULE)
 
 
 def benchmark_row(q: int, valid_bytes: int, batch: int, reuse: int) -> dict:
+    processed_bytes = (valid_bytes + 63) // 64 * 64
+    accounting = MODULE.expected_execution_accounting(q, processed_bytes)
     row = {
         "field_bits": 8 if q <= 129 else 16,
         "q": q,
         "parent": 1 << (q - 1).bit_length(),
         "valid_bytes": valid_bytes,
-        "processed_bytes": (valid_bytes + 63) // 64 * 64,
+        "processed_bytes": processed_bytes,
         "batch": batch,
         "reuse": reuse,
         "samples": 7 if valid_bytes >= 65536 else 11,
@@ -33,11 +35,16 @@ def benchmark_row(q: int, valid_bytes: int, batch: int, reuse: int) -> dict:
         "candidate_mad_us": 0.1,
         "padded_median_us": 10.0,
         "padded_mad_us": 0.1,
-        "candidate_scratch_bytes_per_stripe": 64,
-        "padded_scratch_bytes_per_stripe": 64,
-        "resident_batch_bytes": 1024,
-        "candidate_traffic_bytes_per_execution": 900,
-        "padded_traffic_bytes_per_execution": 1000,
+        "candidate_scratch_bytes_per_stripe":
+            accounting["candidate_scratch_bytes"],
+        "padded_scratch_bytes_per_stripe":
+            accounting["padded_scratch_bytes"],
+        "resident_batch_bytes": MODULE.expected_resident_batch_bytes(
+            q, processed_bytes, batch),
+        "candidate_traffic_bytes_per_execution":
+            accounting["candidate_traffic_bytes"],
+        "padded_traffic_bytes_per_execution":
+            accounting["padded_traffic_bytes"],
     }
     ratio, gain = MODULE.recomputed_benchmark_metrics(row)
     row["padded_over_candidate"] = round(ratio, 6)
@@ -63,6 +70,7 @@ def full_benchmark_rows() -> list[dict]:
 def correctness_case(field_bits: int, q: int, valid_bytes: int) -> dict:
     parent = MODULE.ceil_power_of_two(q)
     processed_bytes = (valid_bytes + 63) // 64 * 64
+    accounting = MODULE.expected_execution_accounting(q, processed_bytes)
     return {
         "field_bits": field_bits,
         "q": q,
@@ -70,15 +78,15 @@ def correctness_case(field_bits: int, q: int, valid_bytes: int) -> dict:
         "valid_bytes": valid_bytes,
         "processed_bytes": processed_bytes,
         "blocks": q.bit_count(),
-        "jobs": 1,
+        "jobs": accounting["jobs"],
         "factor_checks": MODULE.expected_factor_checks(q),
         "compared_bytes": parent * processed_bytes,
         "direct_symbol_checks": MODULE.expected_direct_checks(
             field_bits, q, valid_bytes),
-        "candidate_scratch_bytes": 0,
-        "padded_scratch_bytes": 0,
-        "candidate_traffic_bytes": 1,
-        "padded_traffic_bytes": 1,
+        "candidate_scratch_bytes": accounting["candidate_scratch_bytes"],
+        "padded_scratch_bytes": accounting["padded_scratch_bytes"],
+        "candidate_traffic_bytes": accounting["candidate_traffic_bytes"],
+        "padded_traffic_bytes": accounting["padded_traffic_bytes"],
     }
 
 
@@ -99,6 +107,29 @@ def authoritative_payload() -> dict:
             "omp_num_threads_env": "1",
             "openmp_max_threads": 1,
         },
+    }
+
+
+def common_payload(mode: str = "backend", sanitizer_mode: str = "none") -> dict:
+    return {
+        "schema_version": MODULE.SCHEMA,
+        "status": "pass",
+        "wire_identity": "existing padded dyadic parent",
+        "exact_profile_implemented": False,
+        "default_build_integration": False,
+        "mode": mode,
+        "kernel_quantum_bytes": 64,
+        "tail_policy": MODULE.TAIL_POLICY,
+        "build_binding": {
+            "source_sha256": "a" * 64,
+            "core_git_sha": MODULE.CORE_BASELINE_GIT_SHA,
+            "linked_library_sha256": "b" * 64,
+            "sanitizer_mode": sanitizer_mode,
+        },
+        "direct_symbol_checks": MODULE.EXPECTED_DIRECT_CHECKS,
+        "factor_checks": MODULE.EXPECTED_FACTOR_CHECKS,
+        "correctness_digest_fnv1a64": MODULE.EXPECTED_CORRECTNESS_DIGEST,
+        "correctness_cases": full_correctness_cases(),
     }
 
 
@@ -160,6 +191,23 @@ class CheckpointTests(unittest.TestCase):
                 "benchmarks": rows,
             })
 
+    def test_benchmark_matrix_rejects_forged_accounting(self) -> None:
+        mutations = (
+            "candidate_scratch_bytes_per_stripe",
+            "padded_scratch_bytes_per_stripe",
+            "resident_batch_bytes",
+            "candidate_traffic_bytes_per_execution",
+            "padded_traffic_bytes_per_execution",
+        )
+        for key in mutations:
+            with self.subTest(key=key):
+                rows = full_benchmark_rows()
+                rows[0][key] += 1
+                with self.assertRaises(MODULE.CheckpointError):
+                    MODULE.validate_benchmarks(pathlib.Path("synthetic"), {
+                        "benchmarks": rows,
+                    })
+
     def test_benchmark_matrix_rejects_duplicate_cell(self) -> None:
         rows = full_benchmark_rows()
         rows[-1] = copy.deepcopy(rows[0])
@@ -193,6 +241,83 @@ class CheckpointTests(unittest.TestCase):
         with self.assertRaises(MODULE.CheckpointError):
             MODULE.validate_correctness_cases(
                 pathlib.Path("synthetic"), payload)
+
+    def test_correctness_matrix_rejects_coordinated_metric_forgery(self) -> None:
+        mutations = (
+            "jobs", "candidate_scratch_bytes", "padded_scratch_bytes",
+            "candidate_traffic_bytes", "padded_traffic_bytes",
+        )
+        for key in mutations:
+            with self.subTest(key=key):
+                payload = {"correctness_cases": full_correctness_cases()}
+                for case in payload["correctness_cases"]:
+                    case[key] += 1
+                with self.assertRaises(MODULE.CheckpointError):
+                    MODULE.validate_correctness_cases(
+                        pathlib.Path("synthetic"), payload)
+
+    def test_execution_accounting_matches_retained_known_cells(self) -> None:
+        self.assertEqual(MODULE.expected_execution_accounting(7, 64), {
+            "jobs": 8,
+            "candidate_scratch_bytes": 288,
+            "padded_scratch_bytes": 64,
+            "candidate_traffic_bytes": 5632,
+            "padded_traffic_bytes": 4032,
+        })
+        self.assertEqual(MODULE.expected_execution_accounting(1000, 64), {
+            "jobs": 96,
+            "candidate_scratch_bytes": 36864,
+            "padded_scratch_bytes": 8192,
+            "candidate_traffic_bytes": 4030464,
+            "padded_traffic_bytes": 1440256,
+        })
+
+    def test_common_metadata_rejects_tail_and_digest_forgery(self) -> None:
+        payload = common_payload()
+        MODULE.validate_common(
+            pathlib.Path("synthetic"), payload, "a" * 64, "backend", "none")
+        mutations = (
+            ("tail", lambda value: value.update(
+                {"tail_policy": "unvalidated tail semantics"})),
+            ("digest", lambda value: value.update(
+                {"correctness_digest_fnv1a64": "0x0000000000000000"})),
+        )
+        for label, mutate in mutations:
+            with self.subTest(label=label):
+                changed = copy.deepcopy(payload)
+                mutate(changed)
+                with self.assertRaises(MODULE.CheckpointError):
+                    MODULE.validate_common(
+                        pathlib.Path("synthetic"), changed, "a" * 64,
+                        "backend", "none")
+
+    def test_common_metadata_rejects_wrong_core_revision(self) -> None:
+        payload = common_payload()
+        payload["build_binding"]["core_git_sha"] = "d" * 40
+        with self.assertRaises(MODULE.CheckpointError):
+            MODULE.validate_common(
+                pathlib.Path("synthetic"), payload, "a" * 64,
+                "backend", "none")
+        MODULE.validate_core_revision(HERE.parents[2])
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaises(MODULE.CheckpointError):
+                MODULE.validate_core_revision(pathlib.Path(directory))
+
+    def test_common_metadata_requires_exact_sanitizer_mode(self) -> None:
+        normal = common_payload()
+        MODULE.validate_common(
+            pathlib.Path("synthetic"), normal, "a" * 64,
+            "backend", MODULE.NORMAL_SANITIZER_MODE)
+        normal["build_binding"]["sanitizer_mode"] = MODULE.SANITIZED_MODE
+        with self.assertRaises(MODULE.CheckpointError):
+            MODULE.validate_common(
+                pathlib.Path("synthetic"), normal, "a" * 64,
+                "backend", MODULE.NORMAL_SANITIZER_MODE)
+
+        sanitized = common_payload("correctness", MODULE.SANITIZED_MODE)
+        MODULE.validate_common(
+            pathlib.Path("synthetic"), sanitized, "a" * 64,
+            "correctness", MODULE.SANITIZED_MODE)
 
     def test_authoritative_runtime_metadata_is_fail_closed(self) -> None:
         MODULE.validate_authoritative_runtime(

@@ -36,7 +36,7 @@
     "thread_count": 1
   },
   "build_binding": {
-    "checkpoint_generation_head": "e4ba821292e3fc2fd27e665d3107bafc91c1356b",
+    "checkpoint_merger_sha256": "7542781282bfe38b8ab8bf6f4ac80a9a2c220b2662d1e0b1d67d25d5d0740d16",
     "core_baseline_git_sha": "37e852774bce6f9effb1acf1fcde99a758ecfe6e",
     "experiment_source_sha256": "9d28e260b5894badd75fa95ebe67bc05aeff150e87a168fa41bae3fe4f09ecb3"
   },
