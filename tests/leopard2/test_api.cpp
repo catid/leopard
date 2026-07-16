@@ -774,6 +774,24 @@ void test_gf16_byte_granularity(leo2_context* context)
     leo2_codec_destroy(codec);
 }
 
+void test_forced_backend(leo2_context* context)
+{
+    const char* expected = std::getenv("LEO2_EXPECT_BACKEND");
+    if (!expected || expected[0] == '\0')
+        return;
+    leo2_backend backend = LEO2_BACKEND_AUTO;
+    if (std::strcmp(expected, "scalar") == 0)
+        backend = LEO2_BACKEND_SCALAR;
+    else if (std::strcmp(expected, "ssse3") == 0)
+        backend = LEO2_BACKEND_SSSE3;
+    else if (std::strcmp(expected, "avx2") == 0)
+        backend = LEO2_BACKEND_AVX2;
+    else
+        throw std::runtime_error("invalid LEO2_EXPECT_BACKEND test value");
+    require(leo2_context_backend(context) == backend,
+        "forced build selected the wrong runtime backend");
+}
+
 } // namespace
 
 int main()
@@ -789,6 +807,7 @@ int main()
         require_result(leo2_context_create(&options, &context), "context create");
         require(context != NULL && leo2_context_backend(context) != LEO2_BACKEND_AUTO,
             "context backend introspection failed");
+        test_forced_backend(context);
 
         test_profile_metadata(context);
         compare_high_with_legacy(context, 3, 2,

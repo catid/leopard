@@ -31,6 +31,25 @@ option(LEO2_BUILD_BENCHMARKS "Build Leopard benchmark programs" ON)
 option(LEO2_BUILD_FUZZERS "Build Leopard2 libFuzzer targets" OFF)
 option(LEO2_ENABLE_CUDA "Build the optional Leopard2 CUDA backend" OFF)
 
+# Diagnostic-only backend selection.  auto is the historical default and does
+# not add definitions or target options.  Forced variants hold the wire format
+# fixed while making backend determinism testable in isolated builds.
+set(LEO2_BACKEND_VARIANT "auto" CACHE STRING
+    "Diagnostic backend variant: auto, scalar, ssse3, or avx2")
+set_property(CACHE LEO2_BACKEND_VARIANT PROPERTY STRINGS auto scalar ssse3 avx2)
+string(TOLOWER "${LEO2_BACKEND_VARIANT}" LEO2_BACKEND_VARIANT_NORMALIZED)
+if(NOT LEO2_BACKEND_VARIANT_NORMALIZED STREQUAL "auto" AND
+   NOT LEO2_BACKEND_VARIANT_NORMALIZED STREQUAL "scalar" AND
+   NOT LEO2_BACKEND_VARIANT_NORMALIZED STREQUAL "ssse3" AND
+   NOT LEO2_BACKEND_VARIANT_NORMALIZED STREQUAL "avx2")
+    message(FATAL_ERROR
+        "Invalid LEO2_BACKEND_VARIANT='${LEO2_BACKEND_VARIANT}'. "
+        "Expected auto, scalar, ssse3, or avx2")
+endif()
+set(LEO2_BACKEND_VARIANT "${LEO2_BACKEND_VARIANT_NORMALIZED}" CACHE STRING
+    "Diagnostic backend variant: auto, scalar, ssse3, or avx2" FORCE)
+set_property(CACHE LEO2_BACKEND_VARIANT PROPERTY STRINGS auto scalar ssse3 avx2)
+
 # CUDA is deliberately opt-in.  In particular, the default configuration must
 # not probe for a CUDA compiler or make CUDA a transitive build dependency.
 # Backend sources will be added behind this gate by the end-of-project CUDA
@@ -133,6 +152,74 @@ add_library(libleopard STATIC ${LIB_SOURCE_FILES})
 target_include_directories(libleopard PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(libleopard PUBLIC Threads::Threads)
 
+function(leo2_apply_backend_variant target_name)
+    if(LEO2_BACKEND_VARIANT STREQUAL "auto")
+        return()
+    endif()
+
+    if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|i.86)$")
+        message(FATAL_ERROR
+            "LEO2_BACKEND_VARIANT=${LEO2_BACKEND_VARIANT} is unavailable on "
+            "processor '${CMAKE_SYSTEM_PROCESSOR}'; use auto")
+    endif()
+
+    if(LEO2_BACKEND_VARIANT STREQUAL "scalar")
+        target_compile_definitions(${target_name} PRIVATE
+            LEO2_BACKEND_FORCE_SCALAR=1
+            LEO2_DISABLE_AVX2_CODEGEN=1)
+    elseif(LEO2_BACKEND_VARIANT STREQUAL "ssse3")
+        target_compile_definitions(${target_name} PRIVATE
+            LEO2_BACKEND_FORCE_SSSE3=1
+            LEO2_DISABLE_AVX2_CODEGEN=1)
+    elseif(LEO2_BACKEND_VARIANT STREQUAL "avx2")
+        target_compile_definitions(${target_name} PRIVATE
+            LEO2_BACKEND_FORCE_AVX2=1)
+    endif()
+
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+        if(LEO2_BACKEND_VARIANT STREQUAL "scalar" OR
+           LEO2_BACKEND_VARIANT STREQUAL "ssse3")
+            check_cxx_compiler_flag("-mssse3" LEO2_FLAG_MSSSE3)
+            check_cxx_compiler_flag("-mno-avx" LEO2_FLAG_MNO_AVX)
+            if(NOT LEO2_FLAG_MSSSE3 OR NOT LEO2_FLAG_MNO_AVX)
+                message(FATAL_ERROR
+                    "LEO2_BACKEND_VARIANT=${LEO2_BACKEND_VARIANT} is unavailable: "
+                    "the compiler must support -mssse3 and -mno-avx")
+            endif()
+            # These target-local options follow the historical global
+            # -march=native and cap this diagnostic library at the ISA required
+            # by its still-compiled legacy SSSE3 intrinsics.
+            target_compile_options(${target_name} PRIVATE -mssse3 -mno-avx)
+        elseif(LEO2_BACKEND_VARIANT STREQUAL "avx2")
+            check_cxx_compiler_flag("-mavx2" LEO2_FLAG_MAVX2)
+            check_cxx_compiler_flag("-mno-avx512f" LEO2_FLAG_MNO_AVX512F)
+            if(NOT LEO2_FLAG_MAVX2 OR NOT LEO2_FLAG_MNO_AVX512F)
+                message(FATAL_ERROR
+                    "LEO2_BACKEND_VARIANT=avx2 is unavailable: the compiler "
+                    "must support -mavx2 and -mno-avx512f")
+            endif()
+            target_compile_options(${target_name} PRIVATE
+                -mavx2 -mno-avx512f)
+        endif()
+    elseif(MSVC)
+        if(LEO2_BACKEND_VARIANT STREQUAL "avx2")
+            check_cxx_compiler_flag("/arch:AVX2" LEO2_FLAG_ARCH_AVX2)
+            if(NOT LEO2_FLAG_ARCH_AVX2)
+                message(FATAL_ERROR
+                    "LEO2_BACKEND_VARIANT=avx2 is unavailable: the compiler "
+                    "does not support /arch:AVX2")
+            endif()
+            target_compile_options(${target_name} PRIVATE /arch:AVX2)
+        endif()
+    else()
+        message(FATAL_ERROR
+            "LEO2_BACKEND_VARIANT=${LEO2_BACKEND_VARIANT} is unavailable for "
+            "compiler '${CMAKE_CXX_COMPILER_ID}'")
+    endif()
+endfunction()
+
+leo2_apply_backend_variant(libleopard)
+
 if(LEO2_BUILD_BENCHMARKS)
     add_executable(bench_leopard ${BENCH_SOURCE_FILES})
     target_link_libraries(bench_leopard libleopard)
@@ -188,6 +275,11 @@ if(LEO2_BUILD_TESTS)
     target_link_libraries(leopard2_legacy_golden_test libleopard)
     add_test(NAME leopard2_legacy_golden COMMAND leopard2_legacy_golden_test)
 
+    add_executable(leopard2_boundaries_test
+        tests/leopard2/test_boundaries.cpp)
+    target_link_libraries(leopard2_boundaries_test libleopard)
+    add_test(NAME leopard2_boundaries COMMAND leopard2_boundaries_test)
+
     add_executable(leopard2_fuzz_smoke
         tests/leopard2/fuzz_api.cpp
         tests/leopard2/fuzz_replay.cpp)
@@ -242,4 +334,5 @@ if(LEO2_BUILD_FUZZERS)
     set_property(TARGET leopard2_api_fuzzer APPEND_STRING PROPERTY
         LINK_FLAGS " -fsanitize=fuzzer,address,undefined")
     target_link_libraries(leopard2_api_fuzzer Threads::Threads)
+    leo2_apply_backend_variant(leopard2_api_fuzzer)
 endif()

@@ -170,9 +170,32 @@
 #define LEO_HAS_FF8
 #define LEO_HAS_FF16
 
-// Enable using SIMD instructions
-#define LEO_USE_SSSE3_OPT
-#define LEO_USE_AVX2_OPT
+// Enable using SIMD instructions.  The LEO2_BACKEND_FORCE_* definitions are
+// diagnostic build controls supplied target-locally by CMake.  With none set,
+// preserve the historical build exactly.
+#if (defined(LEO2_BACKEND_FORCE_SCALAR) + \
+     defined(LEO2_BACKEND_FORCE_SSSE3) + \
+     defined(LEO2_BACKEND_FORCE_AVX2)) > 1
+    #error "Only one Leopard2 diagnostic backend may be forced"
+#endif
+
+#if defined(LEO2_BACKEND_FORCE_SCALAR)
+    // CpuHasSSSE3 is forced false by LeopardCommon.cpp when this is absent.
+    // Keep the AVX2 optimization marker defined because the legacy CPU probe's
+    // disabled-AVX2 assignment is not guarded by LEO_TRY_AVX2.  CMake also
+    // removes AVX code generation, so no AVX2 path is compiled or executable.
+    #define LEO_USE_AVX2_OPT
+#elif defined(LEO2_BACKEND_FORCE_SSSE3)
+    #define LEO_USE_SSSE3_OPT
+    // AVX2 code generation is disabled target-locally for this variant.  This
+    // marker only keeps the legacy CPU-probe source well-formed.
+    #define LEO_USE_AVX2_OPT
+#else
+    // auto and avx2 retain both historical optimization switches.  In the
+    // avx2 diagnostic build, CMake verifies compiler support and enables AVX2.
+    #define LEO_USE_SSSE3_OPT
+    #define LEO_USE_AVX2_OPT
+#endif
 
 // Avoid calculating final FFT values in decoder using bitfield
 #define LEO_ERROR_BITFIELD_OPT
@@ -249,7 +272,8 @@
     #define LEO_TARGET_MOBILE
 #endif // ANDROID
 
-#if defined(__AVX2__) || (defined (_MSC_VER) && _MSC_VER >= 1900)
+#if !defined(LEO2_DISABLE_AVX2_CODEGEN) && \
+    (defined(__AVX2__) || (defined (_MSC_VER) && _MSC_VER >= 1900))
     #define LEO_TRY_AVX2 /* 256-bit */
     #include <immintrin.h>
     #define LEO_ALIGN_BYTES 32
