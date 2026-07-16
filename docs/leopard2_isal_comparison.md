@@ -1,4 +1,12 @@
-# Leopard2 / Intel ISA-L comparison checkpoint
+# Leopard2 / Intel ISA-L comparison protocol
+
+> **Evidence status:** the checked-in `checkpoint_result.json` and
+> `correctness_result.json` use the superseded V1 schemas. They predate the
+> source-replay, raw-Leopard-sample, immutable-oracle, and post-run integrity
+> gates described below. The V2 validators intentionally reject them. Their
+> numbers are retained only as a provisional historical observation until a
+> clean V2 rebuild and coordinated pinned run replaces both files; they are not
+> accepted performance or release evidence.
 
 This is a bounded external comparison, not a wire-compatibility result and not
 a replacement for the required Leopard2 benchmark matrix. Intel ISA-L and
@@ -30,12 +38,18 @@ checks the pinned digest before extraction, builds it under the ignored
 clean checkout at the exact commit. Its static library, license, NASM binary,
 and both benchmark executables are hashed into ignored provenance and the
 retained checkpoint. No third-party source, archive, or library is committed.
-Bootstrap refuses any tracked or untracked repository change. It records the
-clean Leopard commit and a content-addressed bundle covering the production and
-standalone CMake files, both benchmark sources, runner, audit, and notice.
-Checkpoint and correctness validation require those local source hashes to
-still match; executable hashes alone are not accepted as reproducibility
-evidence.
+Bootstrap refuses any tracked or untracked repository change and deletes the
+ISA-L build/install tree plus both benchmark build trees before rebuilding.
+It records the clean Leopard commit and a content-addressed bundle covering the
+production codec/backends, production and standalone CMake files, both
+benchmark sources, runner, audit, and notice. Every bundle entry carries its
+Git mode, blob ID (or gitlink commit), and SHA-256. Validation reconstructs the
+bundle with `git ls-tree` and `git cat-file` from the recorded commit and checks
+its recorded tree, so replay remains valid after later documentation commits
+without trusting the current checkout contents. An optional
+`--require-local-build-match` gate additionally requires the current checkout
+to be the clean benchmark-source commit. Executable hashes alone are not
+accepted as reproducibility evidence.
 
 ## Codec and timing semantics
 
@@ -49,6 +63,17 @@ available, inverts that `K` by `K` matrix, and prepares only the requested
 missing-original rows. Execution reuses those tables for all stripes and reuse
 iterations.
 
+Correctness does not trust that ISA-L-generated matrix as its parity oracle.
+The adapter independently derives every parity coefficient as
+`inverse((K + parity_index) XOR source_index)` in scalar GF(256), using the
+`0x11d` polynomial and a separately implemented Fermat inverse, and checks all
+`K*R` generated coefficients. The correctness campaign recomputes every parity
+byte from those independently derived coefficients and immutable source bytes.
+Performance children instead check a deterministic projection of at most 64
+boundary/random byte positions per parity shard and stripe before and after
+timing; their JSON records projection mode and exact checked/total byte counts.
+Projected performance checks are never presented as the full correctness gate.
+
 Both providers operate directly on 64-byte-aligned application shard buffers;
 there is no format conversion, padding, transfer, or staging copy. Encoding
 reads `K * shard_bytes` and generates `R * shard_bytes` per stripe. Decode is
@@ -57,18 +82,31 @@ generates `loss_count * shard_bytes`. Reports retain offered and selected byte
 counts separately. Setup and byte-heavy execution are always separate, and
 amortized decode is derived at the declared reuse count.
 
-Each authoritative checkpoint cell runs four independent provider pairs in
+Each V2 checkpoint cell runs four independent provider pairs in
 ABBA order. Each child performs two warmups and nine timed samples. The runner
 requires one explicit allowed CPU and one explicitly reserved SMT sibling. It
 sets its own affinity to the singleton CPU, verifies a child inherits exactly
 that set, runs every provider child by inheritance, restores its original
 affinity, sets OpenMP to one thread, and records topology and governor data when
-readable. ISA-L retains every raw timing sample;
+readable. It holds advisory `fcntl` locks for both logical siblings throughout
+measurement and the post-timing source/tool/library/executable recheck. Those
+locks serialize cooperating Leopard2 lab jobs; they are explicitly not an
+OS-exclusive CPU reservation. ISA-L and Leopard2 retain every raw timing sample;
 validation recomputes median, MAD, extrema, rates, setup amortization, cell
 cardinality, ABBA order, identities, and aggregate values. Leopard2 results use
 the already validated production benchmark schema. Both implementations
 restore and compare every missing byte to independently retained deterministic
 source data, and the paired missing-index lists must be identical.
+
+Host metadata records the scaling driver, governor, energy-performance
+preference, cpuinfo and policy min/max frequencies in kHz, AMD P-state status,
+and explicit nullable `boost` and Intel `no_turbo` controls. Labeled pre/post
+snapshots retain both readable current-frequency sources in kHz. A current
+frequency is a point-in-time observation, not a claim that frequency remained
+fixed during a run; validation checks field shape, units, positivity, and range
+ordering without requiring the two snapshots to match. On AMD P-state hosts,
+`amd-pstate-epp`, EPP, and `/sys/devices/system/cpu/amd_pstate/status` therefore
+remain visible even when the generic boost path is absent.
 
 The bounded cells are high `(240,16)`, balanced `(128,128)`, low `(64,192)`,
 tiny-shard batch `(240,16)`, and padding-boundary `(129,100)` and `(225,30)`.
@@ -77,16 +115,16 @@ the requested Leopard legacy-high V1 dyadic parent is 512 and therefore uses
 GF16. Results label that field advantage explicitly; it must not be presented
 as an ISA-only kernel advantage.
 
-## Bounded checkpoint result
+## Provisional V1 result (not accepted evidence)
 
-The retained checkpoint was measured on an AMD Ryzen 9 9950X3D under Linux
+The superseded V1 checkpoint was measured on an AMD Ryzen 9 9950X3D under Linux
 6.8.0-134. The runner and every child had singleton affinity to CPU 15; its SMT
 sibling CPU 31 was explicitly reserved idle. The readable scaling governor was
 `powersave`. The build used clean Leopard commit
 `1f41ddd41e2b3c040ff06e15f3dbaa58a8b05863` and source-bundle SHA-256
 `b284300601d18ef6edfb6e786067611bb3d59764c64de3b5a76ef660d283ec5c`.
 
-The following rates are decimal GB/s. `Enc out` counts generated parity bytes.
+The following provisional rates are decimal GB/s. `Enc out` counts generated parity bytes.
 The three execution-only decode columns count, respectively, every offered
 received byte, the deterministic `K`-row subset actually consumed, and repaired
 original bytes. `Plan us` is not included in those execution rates. `Amort out`
@@ -110,7 +148,8 @@ MADs and all raw ISA-L samples.
 | boundary 225/30, 64 KiB x1, L=2 | ISA-L GF8 | 0.971 | 40.322 | 35.859 | 0.319 | 4884.030 | 0.128 |
 | boundary 225/30, 64 KiB x1, L=2 | Leopard2 GF16 | 1.206 | 4.864 | 4.325 | 0.038 | 7.130 | 0.038 |
 
-Leopard2 generated parity faster in all six cells: ISA-L's encode throughput was
+The provisional V1 data reported that Leopard2 generated parity faster in all
+six cells: ISA-L's encode throughput was
 0.262x to 0.849x Leopard2. ISA-L's byte-heavy decode execution was 3.443x to
 22.839x faster by repaired-output rate. ISA-L's much larger matrix-inversion and
 table setup cost matters at low reuse: after amortization it was 0.872x
@@ -120,18 +159,18 @@ versus padded-parent GF16 and are not kernel-only comparisons. These six cells
 are a bounded checkpoint, not evidence for the unmeasured matrix or other
 machines.
 
-The separate deterministic adapter campaign passed 128/128 cases, including
+The provisional V1 deterministic adapter campaign reported 128/128 cases, including
 eight no-loss cases, sixteen maximum-loss cases, and 34 cases where dyadic
 padding gives ISA-L GF8 versus Leopard2 GF16. Every case verifies the systematic
 generator prefix and restores each requested source byte against independently
 retained input. It does not compare parity bytes because the wire formats and
 generator matrices intentionally differ.
 
-Both artifacts use a canonical digest that excludes their self-identifying
+The superseded V1 artifacts use a canonical digest that excludes their self-identifying
 `artifact_sha256` value. The fail-closed validators recompute it. For independent
 transport checks, the complete serialized-file digest is also listed:
 
-| Artifact | Validator canonical SHA-256 | Serialized file SHA-256 |
+| Provisional V1 artifact | Historical canonical SHA-256 | Serialized file SHA-256 |
 |---|---|---|
 | `checkpoint_result.json` | `eb3b8083425321a922ded8eaca9ae1144658b5615f596219f9245b07d5c32834` | `e67efd48af1d7333144d958adfc0b850c08d2048b87974eec41bb33147b220a8` |
 | `correctness_result.json` | `3349b66454a15c8121170f743ad759c843bd157654290a591fb88f9497055ee4` | `4392d9d5320434ab8a944194911fac0d6e01a75ab5d8f36d84d202b5f8d723d4` |
@@ -158,6 +197,11 @@ From a Leopard topic-branch checkout:
 `bootstrap` is capped at eight build jobs. The single-core timing phase uses
 fewer cores intentionally because cache-sensitive provider comparisons are not
 valid under concurrent memory-intensive load.
+
+The two validation commands replay the recorded Git commit by default and do
+not require it to equal current `HEAD`. Add `--require-local-build-match` only
+when auditing the untouched benchmark-source checkout itself. Do not run the
+timing command concurrently with any other cache- or memory-sensitive job.
 
 ## Scope limits
 
