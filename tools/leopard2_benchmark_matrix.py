@@ -120,6 +120,12 @@ DEFAULT_PERF_EVENTS = (
     "dTLB-load-misses",
 )
 PERF_EVENT_RE = re.compile(r"^[A-Za-z0-9_.:/=-]+$")
+PERF_EVENT_CANONICAL_ALIASES = {
+    "branch-instructions": "branches",
+    "branches": "branches",
+    "cpu-cycles": "cycles",
+    "cycles": "cycles",
+}
 
 
 class MatrixError(ValueError):
@@ -787,7 +793,12 @@ def _validate_performance_evidence(
     probe = evidence.get("probe")
     if (not isinstance(probe, dict) or
             probe.get("status") not in ("available", "unavailable") or
-            probe.get("cpu_set") != job.get("cpu_set")):
+            probe.get("cpu_set") != job.get("cpu_set") or
+            not isinstance(probe.get("command"), list) or
+            not all(isinstance(argument, str) for argument in probe["command"]) or
+            (probe.get("exit_code") is not None and
+             (isinstance(probe.get("exit_code"), bool) or
+              not isinstance(probe.get("exit_code"), int)))):
         raise MatrixError(f"job {job['id']} has invalid counter preflight evidence")
     raw_output = evidence.get("raw_output")
     if raw_output is None:
@@ -802,24 +813,54 @@ def _validate_performance_evidence(
     measurements = evidence.get("measurements", [])
     if not isinstance(measurements, list):
         raise MatrixError(f"job {job['id']} counter measurements are invalid")
+    status = evidence["status"]
+    if raw_output is None and measurements:
+        raise MatrixError(
+            f"job {job['id']} has counter measurements without raw output")
+    if raw_output is not None or status in ("available", "partial"):
+        if len(measurements) != len(request["events"]):
+            raise MatrixError(
+                f"job {job['id']} counter measurements are incomplete")
     counted = 0
-    if measurements:
-        if ([measurement.get("event") for measurement in measurements
-             if isinstance(measurement, dict)] != request["events"] or
-                len(measurements) != len(request["events"]) or
-                not all(measurement.get("status") in
-                        ("counted", "not-counted", "missing")
-                        for measurement in measurements
-                        if isinstance(measurement, dict))):
+    for index, measurement in enumerate(measurements):
+        if (not isinstance(measurement, dict) or
+                measurement.get("event") != request["events"][index] or
+                measurement.get("status") not in
+                ("counted", "not-counted", "missing")):
             raise MatrixError(
                 f"job {job['id']} counter measurements do not match requested events")
-        counted = sum(
-            measurement.get("status") == "counted"
-            for measurement in measurements)
-    status = evidence["status"]
+        measurement_status = measurement["status"]
+        if measurement_status == "missing":
+            continue
+        reported = measurement.get("reported_event")
+        requested_event = measurement["event"]
+        if (not isinstance(reported, str) or
+                PERF_EVENT_CANONICAL_ALIASES.get(reported, reported) !=
+                PERF_EVENT_CANONICAL_ALIASES.get(
+                    requested_event, requested_event) or
+                not isinstance(measurement.get("raw_value"), str)):
+            raise MatrixError(
+                f"job {job['id']} counter measurement reports a different event")
+        if measurement_status == "counted":
+            value = measurement.get("value")
+            if (isinstance(value, bool) or not isinstance(value, (int, float)) or
+                    not math.isfinite(float(value)) or float(value) < 0.0):
+                raise MatrixError(
+                    f"job {job['id']} counter measurement value is invalid")
+            counted += 1
+        percentage = measurement.get("running_percentage")
+        if (percentage is not None and
+                (isinstance(percentage, bool) or
+                 not isinstance(percentage, (int, float)) or
+                 not math.isfinite(float(percentage)) or
+                 not 0.0 <= float(percentage) <= 100.0)):
+            raise MatrixError(
+                f"job {job['id']} counter running percentage is invalid")
     if ((status == "available" and counted != len(request["events"])) or
             (status == "partial" and not 0 < counted < len(request["events"])) or
-            (status == "unavailable" and counted != 0)):
+            (status == "unavailable" and counted != 0) or
+            (status in ("available", "partial") and
+             (probe["status"] != "available" or raw_output is None))):
         raise MatrixError(
             f"job {job['id']} counter status disagrees with its measurements")
     return dict(evidence)
@@ -1399,6 +1440,86 @@ def self_test() -> None:
                     for record in counter_collected["records"])):
             raise MatrixError(
                 "collector did not preserve unavailable counter evidence")
+
+        def promote_available_counters(fixture):
+            manifest_path, results_path = fixture
+            manifest = load_json(manifest_path)
+            for job in manifest["jobs"]:
+                job_dir = results_path / "jobs" / job["id"]
+                raw_path = job_dir / "perf-stat.txt"
+                raw_path.write_text(
+                    "1000;;cycles;1.000;100.00;\n"
+                    "2000;;instructions;1.000;100.00;\n",
+                    encoding="utf-8")
+                result_path = job_dir / "result.json"
+                result = load_json(result_path)
+                evidence = result["performance_counters"]
+                evidence.update({
+                    "status": "available",
+                    "raw_output": "perf-stat.txt",
+                    "measurements": [
+                        {
+                            "event": "cycles", "reported_event": "cycles",
+                            "raw_value": "1000", "unit": "",
+                            "status": "counted", "value": 1000.0,
+                            "runtime": "1.000", "running_percentage": 100.0,
+                        },
+                        {
+                            "event": "instructions",
+                            "reported_event": "instructions",
+                            "raw_value": "2000", "unit": "",
+                            "status": "counted", "value": 2000.0,
+                            "runtime": "1.000", "running_percentage": 100.0,
+                        },
+                    ],
+                })
+                evidence["probe"].update(status="available", exit_code=0)
+                result["outputs"]["performance_counters"] = file_identity(raw_path)
+                result.pop("result_digest", None)
+                result["result_digest"] = digest(result)
+                write_json(result_path, result)
+            return manifest_path, results_path
+
+        available_fixture = promote_available_counters(write_fixture(
+            "available-counters", add_unavailable_counters))
+        available_collected = collect(*available_fixture)
+        if available_collected["performance_counter_summary"] != {
+                "available": 5}:
+            raise MatrixError(
+                "collector did not preserve available counter evidence")
+
+        def mutate_first_counter_result(fixture, mutation):
+            manifest_path, results_path = fixture
+            manifest = load_json(manifest_path)
+            job = manifest["jobs"][0]
+            result_path = results_path / "jobs" / job["id"] / "result.json"
+            result = load_json(result_path)
+            result.pop("result_digest", None)
+            mutation(result)
+            result["result_digest"] = digest(result)
+            write_json(result_path, result)
+            return manifest_path, results_path
+
+        missing_raw_fixture = promote_available_counters(write_fixture(
+            "available-without-raw", add_unavailable_counters))
+        missing_raw_fixture = mutate_first_counter_result(
+            missing_raw_fixture,
+            lambda result: (
+                result["performance_counters"].pop("raw_output"),
+                result["outputs"].pop("performance_counters")))
+        expect_error(
+            "available counter evidence without retained raw output",
+            lambda: collect(*missing_raw_fixture))
+
+        wrong_reported_fixture = promote_available_counters(write_fixture(
+            "wrong-reported-counter", add_unavailable_counters))
+        wrong_reported_fixture = mutate_first_counter_result(
+            wrong_reported_fixture,
+            lambda result: result["performance_counters"]["measurements"][
+                0].update(reported_event="instructions"))
+        expect_error(
+            "counter evidence relabeled from a different reported event",
+            lambda: collect(*wrong_reported_fixture))
 
         mixed_epoch = write_fixture(
             "mixed-run-epoch",

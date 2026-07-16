@@ -218,8 +218,10 @@ epochs, and zero and non-finite timing. It runs through CTest as
 The lab self-test additionally uses a content-addressed fake `perf` provider to
 verify parsed and hashed counter evidence, atomic resume, post-run corruption
 rejection, optional-denied bare execution, required-denied preflight, and
-counter-executable replacement rejection. The matrix self-test verifies
-counter request generation and preservation of unavailable evidence.
+counter-executable replacement rejection. It also rejects positional relabeling
+of a different reported event and rejects available/partial evidence without an
+available probe, a complete measurement list, and retained hashed raw output.
+The matrix self-test applies the same evidence invariants during collection.
 CTest also runs the independent operation-count model's schedule invariants;
 those counts remain modeled bounds rather than PMU observations.
 
@@ -245,15 +247,22 @@ cross-library throughput claim. That remaining work keeps the benchmark-harness
 Bead open.
 
 `tools/leopard2_external_comparison.py` makes that boundary machine-readable.
-For every signed matrix job it reports `adapter-required` or `excluded`, the
-resolved Leopard2 profile/field/parent, whether wire compatibility exists
-(currently false for every external provider), exact source commit and license,
-and the reasons or qualifications. On the 7,134-job required matrix, the audit
+It deterministically regenerates the selected matrix, classifies every job, and
+reports aggregate `adapter-required`/`excluded`, reason, and qualification
+counts. The internal per-cell classifier records the resolved Leopard2
+profile/field/parent, the provider field, whether wire compatibility exists
+(currently false for every external provider), and the reasons or
+qualifications; the command does not claim to validate an independently edited
+or signed lab manifest. On the 7,134-job required matrix, the audit
 classifies 5,024 ISA-L rows as public-workload candidates and excludes 2,110
 whose `K+R` exceeds GF(256); all 7,134 even-byte GF8/GF16 rows are Jerasure
 adapter candidates. ISA-L remains eligible for `K+R<=256` when Leopard2's
 dyadic parent inflation selects GF16, but the report requires that field
-advantage to be disclosed. FastECC is excluded from all current rows because
+advantage to be disclosed. Jerasure likewise retains GF8 for those public
+lengths rather than silently following Leopard2 into GF16. A future ISA-L
+adapter must use the MDS-safe `gf_gen_cauchy1_matrix`; ISA-L documents that
+`gf_gen_rs_matrix` does not guarantee every submatrix is invertible for many
+larger `(K,R)` pairs. FastECC is excluded from all current rows because
 its prime-field NTT stores wider parity sectors than source sectors, and
 ECC-Benchmark is excluded as an independent provider because it is a historical
 harness with different timing/loss semantics. Eligible means only that a future

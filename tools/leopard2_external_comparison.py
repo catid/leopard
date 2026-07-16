@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Audit whether external erasure-code results are fairly comparable.
 
-This tool does not benchmark third-party code.  It classifies every signed
-Leopard2 matrix job against explicit provider constraints so an unsupported
-cell cannot be silently resized, moved to another field, or reported as a
-wire-compatible comparison.  Eligible cells still require a reviewed adapter
-and are reported as ``adapter-required`` until one exists.
+This tool does not benchmark third-party code.  It classifies every job in a
+deterministically regenerated Leopard2 matrix against explicit provider
+constraints so an unsupported cell cannot be silently resized, moved to
+another field, or reported as a wire-compatible comparison.  The matrix command
+emits aggregate status/reason/qualification counts; ``classify`` returns the
+per-cell detail used to build those aggregates.  Eligible cells still require a
+reviewed adapter and are reported as ``adapter-required`` until one exists.
 """
 
 from __future__ import annotations
@@ -68,6 +70,14 @@ def _ceil_pow2(value: int) -> int:
     return 1 << (value - 1).bit_length()
 
 
+def _binary_field_for_length(length: int) -> str:
+    if length <= 256:
+        return "gf8"
+    if length <= 65536:
+        return "gf16"
+    return "unsupported"
+
+
 def _resolved_identity(cell: Mapping[str, object]) -> tuple[str, str, int]:
     k = int(cell["K"])
     r = int(cell["R"])
@@ -84,12 +94,7 @@ def _resolved_identity(cell: Mapping[str, object]) -> tuple[str, str, int]:
         parent = _ceil_pow2(_ceil_pow2(k) + r)
     else:
         parent = _ceil_pow2(k + _ceil_pow2(r))
-    if parent <= 256:
-        field = "gf8"
-    elif parent <= 65536:
-        field = "gf16"
-    else:
-        field = "unsupported"
+    field = _binary_field_for_length(parent)
     return profile, field, parent
 
 
@@ -108,9 +113,11 @@ def classify(provider: str, cell: Mapping[str, object]) -> dict:
         "leopard2_profile": profile,
         "leopard2_field": field,
         "leopard2_parent": parent,
+        "provider_field": None,
         "wire_compatible": False,
     }
     if provider == "isa-l":
+        base["provider_field"] = "gf8" if k + r <= 256 else "unsupported"
         reasons = []
         if k + r > 256:
             reasons.append("public K+R exceeds the GF(256) evaluation-set bound")
@@ -125,25 +132,38 @@ def classify(provider: str, cell: Mapping[str, object]) -> dict:
                 "public payload and repaired-output throughput only; parity bytes "
                 "and generator matrices differ"),
             "qualifications": ([
+                "a reviewed adapter must use gf_gen_cauchy1_matrix; ISA-L's "
+                "gf_gen_rs_matrix documentation does not guarantee every "
+                "submatrix is invertible for many larger K,R pairs",
+            ] + ([
                 "ISA-L remains in GF(256) while dyadic parent inflation selects "
                 "GF16 for Leopard2; report that field advantage explicitly",
-            ] if field == "gf16" and k + r <= 256 else []),
+            ] if field == "gf16" and k + r <= 256 else [])),
         })
         return base
     if provider == "jerasure":
+        provider_field = _binary_field_for_length(k + r)
+        base["provider_field"] = provider_field
         reasons = []
-        if field not in ("gf8", "gf16"):
-            reasons.append("cell is outside Jerasure's selected GF8/GF16 comparison")
-        if field == "gf16" and shard_bytes % 2:
+        if provider_field not in ("gf8", "gf16"):
+            reasons.append(
+                "public K+R exceeds Jerasure's selected GF8/GF16 evaluation-set bound")
+        if provider_field == "gf16" and shard_bytes % 2:
             reasons.append("GF16 matrix regions require whole 16-bit words")
+        qualifications = []
+        if provider_field == "gf8" and field == "gf16":
+            qualifications.append(
+                "Jerasure can remain in GF(256) while dyadic parent inflation "
+                "selects GF16 for Leopard2; report that field advantage explicitly")
         base.update({
             "status": "excluded" if reasons else "adapter-required",
             "reasons": reasons or [
                 "mathematically comparable public erasure workload, but the "
                 "reviewed GF-Complete/Jerasure adapter is not present"],
             "comparison_scope": (
-                "public payload and repaired-output throughput only; field "
-                "polynomial, representation, coordinates, and parity bytes differ"),
+                "public payload and repaired-output throughput only; field/basis "
+                "representation, coordinates, generator matrices, and parity bytes differ"),
+            "qualifications": qualifications,
         })
         return base
     if provider == "fastecc":
@@ -192,15 +212,19 @@ def audit_matrix(preset: str) -> dict:
     for provider in sorted(SOURCES):
         status_counts: Counter[str] = Counter()
         reason_counts: Counter[str] = Counter()
+        qualification_counts: Counter[str] = Counter()
         for job in specification["jobs"]:
             result = classify(provider, job["benchmark_cell"])
             status_counts[result["status"]] += 1
             for reason in result["reasons"]:
                 reason_counts[reason] += 1
+            for qualification in result.get("qualifications", []):
+                qualification_counts[qualification] += 1
         providers[provider] = {
             "source": dict(SOURCES[provider], retrieved=RETRIEVED),
             "job_status_counts": dict(sorted(status_counts.items())),
             "reason_counts": dict(sorted(reason_counts.items())),
+            "qualification_counts": dict(sorted(qualification_counts.items())),
         }
     return {
         "schema": SCHEMA,
@@ -294,6 +318,15 @@ def self_test() -> None:
             boundary["leopard2_field"] != "gf16" or
             not boundary["qualifications"]):
         raise AuditError("GF8 field-boundary comparison was incorrectly excluded")
+    if not any("gf_gen_cauchy1_matrix" in qualification
+               for qualification in boundary["qualifications"]):
+        raise AuditError("ISA-L MDS-safe generator requirement is missing")
+    jerasure_boundary = classify("jerasure", representative)
+    if (jerasure_boundary["status"] != "adapter-required" or
+            jerasure_boundary["provider_field"] != "gf8" or
+            jerasure_boundary["leopard2_field"] != "gf16" or
+            not jerasure_boundary["qualifications"]):
+        raise AuditError("Jerasure field-boundary advantage was not disclosed")
     print(json.dumps({
         "isa_l": isa_counts,
         "jerasure": jerasure_counts,

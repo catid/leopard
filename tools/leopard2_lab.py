@@ -40,6 +40,12 @@ JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 TOKEN_REPLACEMENTS = ("seed", "job_id", "cpu_set")
 PERF_PROVIDER = "linux-perf-stat"
 PERF_EVENT_RE = re.compile(r"^[A-Za-z0-9_.:/=-]+$")
+PERF_EVENT_CANONICAL_ALIASES = {
+    "branch-instructions": "branches",
+    "branches": "branches",
+    "cpu-cycles": "cycles",
+    "cycles": "cycles",
+}
 
 
 class LabError(Exception):
@@ -884,37 +890,8 @@ def _validate_terminal_result(result_path, result, job):
         if not isinstance(expected, dict) or _content_identity(
                 job_dir / (name + ".txt")) != expected:
             raise LabError("{} changed after job {} completed".format(name, job["id"]))
-    request = job.get("performance_counters")
-    counters = result.get("performance_counters")
-    if request is None:
-        if counters is not None or "performance_counters" in outputs:
-            raise LabError(
-                "job {} has unexpected performance counter evidence".format(
-                    job["id"]))
-        return
-    if (not isinstance(counters, dict) or
-            counters.get("provider") != request["provider"] or
-            counters.get("events") != request["events"] or
-            counters.get("optional") != request["optional"] or
-            counters.get("executable") != request["executable"] or
-            counters.get("status") not in ("available", "partial", "unavailable") or
-            not isinstance(counters.get("probe"), dict) or
-            counters["probe"].get("status") not in ("available", "unavailable")):
-        raise LabError(
-            "terminal performance counter evidence is invalid for job {}".format(
-                job["id"]))
-    raw_name = counters.get("raw_output")
-    if raw_name is None:
-        if "performance_counters" in outputs:
-            raise LabError(
-                "job {} has an unsigned performance counter output".format(
-                    job["id"]))
-    elif (raw_name != "perf-stat.txt" or
-          not isinstance(outputs.get("performance_counters"), dict) or
-          _content_identity(job_dir / raw_name) != outputs["performance_counters"]):
-        raise LabError(
-            "performance counter output changed after job {} completed".format(
-                job["id"]))
+    _validate_performance_evidence(
+        job, result.get("performance_counters"), outputs, job_dir)
 
 
 def _replace_tokens(value, job):
@@ -966,9 +943,124 @@ def _parse_counter_value(raw_value):
         parsed = float(value)
     except ValueError:
         return None
-    if not math.isfinite(parsed):
+    if not math.isfinite(parsed) or parsed < 0.0:
         return None
     return parsed
+
+
+def _canonical_perf_event(event):
+    """Return an explicit perf generic-event alias, never a positional guess."""
+    return PERF_EVENT_CANONICAL_ALIASES.get(event, event)
+
+
+def _perf_events_match(requested, reported):
+    return _canonical_perf_event(requested) == _canonical_perf_event(reported)
+
+
+def _validate_performance_evidence(job, counters, outputs, job_dir):
+    """Validate counter status, measurements, probe, and retained raw bytes."""
+    request = job.get("performance_counters")
+    has_output_identity = "performance_counters" in outputs
+    output_identity = outputs.get("performance_counters")
+    if request is None:
+        if counters is not None or has_output_identity:
+            raise LabError(
+                "job {} has unexpected performance counter evidence".format(
+                    job["id"]))
+        return
+    if (not isinstance(counters, dict) or
+            counters.get("provider") != request["provider"] or
+            counters.get("events") != request["events"] or
+            counters.get("optional") != request["optional"] or
+            counters.get("executable") != request["executable"] or
+            counters.get("status") not in ("available", "partial", "unavailable")):
+        raise LabError(
+            "terminal performance counter evidence is invalid for job {}".format(
+                job["id"]))
+
+    probe = counters.get("probe")
+    if (not isinstance(probe, dict) or
+            probe.get("status") not in ("available", "unavailable") or
+            probe.get("cpu_set") != job["cpu_set"] or
+            not isinstance(probe.get("command"), list) or
+            not all(isinstance(argument, str) for argument in probe["command"]) or
+            (probe.get("exit_code") is not None and
+             (isinstance(probe.get("exit_code"), bool) or
+              not isinstance(probe.get("exit_code"), int)))):
+        raise LabError(
+            "terminal performance counter probe is invalid for job {}".format(
+                job["id"]))
+
+    status = counters["status"]
+    raw_name = counters.get("raw_output")
+    measurements = counters.get("measurements", [])
+    if not isinstance(measurements, list):
+        raise LabError(
+            "terminal performance counter measurements are invalid for job {}".format(
+                job["id"]))
+    if raw_name is None:
+        if has_output_identity or measurements:
+            raise LabError(
+                "job {} has counter measurements without signed raw output".format(
+                    job["id"]))
+    elif (raw_name != "perf-stat.txt" or
+          not isinstance(output_identity, dict) or
+          _content_identity(Path(job_dir) / raw_name) != output_identity):
+        raise LabError(
+            "performance counter output changed after job {} completed".format(
+                job["id"]))
+
+    if raw_name is not None or status in ("available", "partial"):
+        if len(measurements) != len(request["events"]):
+            raise LabError(
+                "job {} has incomplete performance counter measurements".format(
+                    job["id"]))
+
+    counted = 0
+    for index, measurement in enumerate(measurements):
+        if (not isinstance(measurement, dict) or
+                measurement.get("event") != request["events"][index] or
+                measurement.get("status") not in
+                ("counted", "not-counted", "missing")):
+            raise LabError(
+                "job {} has invalid performance counter measurement {}".format(
+                    job["id"], index))
+        measurement_status = measurement["status"]
+        if measurement_status == "missing":
+            continue
+        reported = measurement.get("reported_event")
+        if (not isinstance(reported, str) or
+                not _perf_events_match(measurement["event"], reported) or
+                not isinstance(measurement.get("raw_value"), str)):
+            raise LabError(
+                "job {} counter measurement {} reports a different event".format(
+                    job["id"], index))
+        if measurement_status == "counted":
+            value = measurement.get("value")
+            if (isinstance(value, bool) or not isinstance(value, (int, float)) or
+                    not math.isfinite(float(value)) or float(value) < 0.0):
+                raise LabError(
+                    "job {} counter measurement {} has an invalid value".format(
+                        job["id"], index))
+            counted += 1
+        percentage = measurement.get("running_percentage")
+        if (percentage is not None and
+                (isinstance(percentage, bool) or
+                 not isinstance(percentage, (int, float)) or
+                 not math.isfinite(float(percentage)) or
+                 not 0.0 <= float(percentage) <= 100.0)):
+            raise LabError(
+                "job {} counter measurement {} has invalid running percentage".format(
+                    job["id"], index))
+
+    if ((status == "available" and counted != len(request["events"])) or
+            (status == "partial" and not 0 < counted < len(request["events"])) or
+            (status == "unavailable" and counted != 0) or
+            (status in ("available", "partial") and
+             (probe["status"] != "available" or raw_name is None))):
+        raise LabError(
+            "job {} performance counter status disagrees with its evidence".format(
+                job["id"]))
 
 
 def _parse_perf_stat(path, requested_events):
@@ -988,18 +1080,13 @@ def _parse_perf_stat(path, requested_events):
         rows.append(fields)
     measurements = []
     unused = list(range(len(rows)))
-    for event_index, requested in enumerate(requested_events):
+    for requested in requested_events:
         selected = None
         for row_index in unused:
             reported = rows[row_index][2]
-            if (reported == requested or reported.startswith(requested + ":") or
-                    requested.startswith(reported + ":")):
+            if _perf_events_match(requested, reported):
                 selected = row_index
                 break
-        if selected is None and event_index < len(rows):
-            positional = event_index
-            if positional in unused:
-                selected = positional
         if selected is None:
             measurements.append({
                 "event": requested,
@@ -1829,6 +1916,36 @@ def self_test():
         if counter_second["resumed"] != 1 or counter_second["executed"] != 0:
             raise LabError(
                 "self-test: performance counter result was not resumable")
+
+        def expect_invalid_counter_result(label, mutation):
+            candidate = _json_copy(counter_result)
+            candidate.pop("result_digest", None)
+            mutation(candidate)
+            candidate["result_digest"] = _digest(candidate)
+            try:
+                _validate_terminal_result(
+                    counter_result_path, candidate, counter_job)
+            except LabError:
+                return
+            raise LabError(
+                "self-test: invalid counter evidence was accepted: " + label)
+
+        def remove_counter_raw_identity(candidate):
+            candidate["performance_counters"].pop("raw_output")
+            candidate["outputs"].pop("performance_counters")
+
+        expect_invalid_counter_result(
+            "available measurements without retained raw output",
+            remove_counter_raw_identity)
+        expect_invalid_counter_result(
+            "available result with unavailable probe",
+            lambda candidate: candidate["performance_counters"]["probe"].update(
+                status="unavailable"))
+        expect_invalid_counter_result(
+            "reported event differs from requested event",
+            lambda candidate: candidate["performance_counters"]["measurements"][
+                0].update(reported_event="instructions"))
+
         with (_job_directory(counter_output, counter_job["id"]) /
               "perf-stat.txt").open("a", encoding="utf-8") as output:
             output.write("corruption\n")
@@ -1893,6 +2010,52 @@ def self_test():
                 required_summary["preflight_unavailable"] != 1):
             raise LabError(
                 "self-test: required denied counters were not preflight unavailable")
+
+        wrong_event_perf = root / "wrong-event-perf.py"
+        wrong_event_perf.write_text(
+            "#!/usr/bin/env python3\n"
+            "import subprocess, sys\n"
+            "args = sys.argv[1:]\n"
+            "output = args[args.index('-o') + 1]\n"
+            "command = args[args.index('--') + 1:]\n"
+            "completed = subprocess.run(command, check=False)\n"
+            "with open(output, 'w', encoding='utf-8') as destination:\n"
+            "    destination.write('123;;instructions;1.000;100.00;\\n')\n"
+            "raise SystemExit(completed.returncode)\n",
+            encoding="utf-8")
+        wrong_event_perf.chmod(0o700)
+        wrong_event_manifest = build_manifest({
+            "root": str(root),
+            "workers": 1,
+            "defaults": {
+                "memory_mb": 0,
+                "cpu_count": 1,
+                "performance_counters": {
+                    "command": str(wrong_event_perf),
+                    "events": ["cycles"],
+                    "optional": False,
+                },
+            },
+            "jobs": [{
+                "id": "counter-wrong-reported-event",
+                "command": [python, "-c", "print('must not execute')"],
+            }],
+        })
+        wrong_event_output = root / "counter-wrong-event-results"
+        wrong_event_summary = run_manifest(
+            wrong_event_manifest, wrong_event_output, quiet=True)
+        wrong_event_result = _load_json(
+            _job_directory(
+                wrong_event_output, wrong_event_manifest["jobs"][0]["id"]) /
+            "result.json")
+        if (wrong_event_summary["outcomes"] != {
+                "missing": 0, "unavailable": 1} or
+                wrong_event_summary["executed"] != 0 or
+                wrong_event_result["performance_counters"]["probe"][
+                    "status"] != "unavailable" or
+                "performance_counters" in wrong_event_result["outputs"]):
+            raise LabError(
+                "self-test: positional event relabeling made wrong PMU data available")
 
         mutable_counter_manifest = build_manifest({
             "root": str(root),
