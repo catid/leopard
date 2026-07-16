@@ -319,8 +319,13 @@ def validate_compile_log_text(
     stdout: str, stderr: str, *, sanitizer: bool,
     compiler: pathlib.Path, linker: pathlib.Path,
 ) -> None:
-    if stdout != "" or not stderr.endswith("\n") or "FORGED" in stderr:
-        raise ValueError("standalone compiler log framing changed")
+    linker_version = subprocess.run(
+        [str(linker), "--version"], check=True, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    ).stdout.splitlines()[0]
+    if (stdout != f"{linker_version}\n" or not stderr.endswith("\n") or
+            "FORGED" in stderr):
+        raise ValueError("standalone compiler/linker log framing changed")
     lowered = stderr.lower()
     if "undefined reference" in lowered or "error:" in lowered:
         raise ValueError("standalone compiler log contains a failure")
@@ -329,12 +334,6 @@ def validate_compile_log_text(
     ):
         if required not in stderr:
             raise ValueError("standalone verbose compile closure is incomplete")
-    linker_version = subprocess.run(
-        [str(linker), "--version"], check=True, text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-    ).stdout.splitlines()[0]
-    if linker_version not in stderr:
-        raise ValueError("standalone linker version evidence changed")
     if sanitizer:
         if ("clang version" not in lowered or "libclang_rt.asan" not in stderr or
                 "-fsanitize=address" not in stderr):

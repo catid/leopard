@@ -1,15 +1,65 @@
-[  8%] Building CXX object CMakeFiles/leopard2_backend_ssse3.dir/Leopard2BackendSSSE3.cpp.o
-[ 16%] Building CXX object CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o
+Change Dir: '/home/catid/leopard-wt-c6/build/c7-matrix/core-auto'
+
+Run Build Command(s): /usr/bin/cmake -E env VERBOSE=1 /usr/bin/gmake -f Makefile -j4 libleopard
+/usr/bin/cmake -S/home/catid/leopard-wt-c6 -B/home/catid/leopard-wt-c6/build/c7-matrix/core-auto --check-build-system CMakeFiles/Makefile.cmake 0
+/usr/bin/gmake  -f CMakeFiles/Makefile2 libleopard
+gmake[1]: Entering directory '/home/catid/leopard-wt-c6/build/c7-matrix/core-auto'
+/usr/bin/cmake -S/home/catid/leopard-wt-c6 -B/home/catid/leopard-wt-c6/build/c7-matrix/core-auto --check-build-system CMakeFiles/Makefile.cmake 0
+/usr/bin/cmake -E cmake_progress_start /home/catid/leopard-wt-c6/build/c7-matrix/core-auto/CMakeFiles 12
+/usr/bin/gmake  -f CMakeFiles/Makefile2 CMakeFiles/libleopard.dir/all
+gmake[2]: Entering directory '/home/catid/leopard-wt-c6/build/c7-matrix/core-auto'
+/usr/bin/gmake  -f CMakeFiles/leopard2_backend_avx2.dir/build.make CMakeFiles/leopard2_backend_avx2.dir/depend
+/usr/bin/gmake  -f CMakeFiles/leopard2_backend_ssse3.dir/build.make CMakeFiles/leopard2_backend_ssse3.dir/depend
+gmake[3]: Entering directory '/home/catid/leopard-wt-c6/build/c7-matrix/core-auto'
+cd /home/catid/leopard-wt-c6/build/c7-matrix/core-auto && /usr/bin/cmake -E cmake_depends "Unix Makefiles" /home/catid/leopard-wt-c6 /home/catid/leopard-wt-c6 /home/catid/leopard-wt-c6/build/c7-matrix/core-auto /home/catid/leopard-wt-c6/build/c7-matrix/core-auto /home/catid/leopard-wt-c6/build/c7-matrix/core-auto/CMakeFiles/leopard2_backend_avx2.dir/DependInfo.cmake "--color="
+gmake[3]: Entering directory '/home/catid/leopard-wt-c6/build/c7-matrix/core-auto'
+cd /home/catid/leopard-wt-c6/build/c7-matrix/core-auto && /usr/bin/cmake -E cmake_depends "Unix Makefiles" /home/catid/leopard-wt-c6 /home/catid/leopard-wt-c6 /home/catid/leopard-wt-c6/build/c7-matrix/core-auto /home/catid/leopard-wt-c6/build/c7-matrix/core-auto /home/catid/leopard-wt-c6/build/c7-matrix/core-auto/CMakeFiles/leopard2_backend_ssse3.dir/DependInfo.cmake "--color="
+gmake[3]: Leaving directory '/home/catid/leopard-wt-c6/build/c7-matrix/core-auto'
+/usr/bin/gmake  -f CMakeFiles/leopard2_backend_avx2.dir/build.make CMakeFiles/leopard2_backend_avx2.dir/build
+gmake[3]: Leaving directory '/home/catid/leopard-wt-c6/build/c7-matrix/core-auto'
+/usr/bin/gmake  -f CMakeFiles/leopard2_backend_ssse3.dir/build.make CMakeFiles/leopard2_backend_ssse3.dir/build
+gmake[3]: Entering directory '/home/catid/leopard-wt-c6/build/c7-matrix/core-auto'
+gmake[3]: Entering directory '/home/catid/leopard-wt-c6/build/c7-matrix/core-auto'
+[  8%] Building CXX object CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o
+[ 16%] Building CXX object CMakeFiles/leopard2_backend_ssse3.dir/Leopard2BackendSSSE3.cpp.o
+/usr/bin/x86_64-linux-gnu-g++-13  -I/home/catid/leopard-wt-c6 -Wall -Wextra -fopenmp -g -O0 -O3 -std=gnu++11 -mssse3 -mno-avx -MD -MT CMakeFiles/leopard2_backend_ssse3.dir/Leopard2BackendSSSE3.cpp.o -MF CMakeFiles/leopard2_backend_ssse3.dir/Leopard2BackendSSSE3.cpp.o.d -o CMakeFiles/leopard2_backend_ssse3.dir/Leopard2BackendSSSE3.cpp.o -c /home/catid/leopard-wt-c6/Leopard2BackendSSSE3.cpp
+/usr/bin/x86_64-linux-gnu-g++-13  -I/home/catid/leopard-wt-c6 -Wall -Wextra -fopenmp -g -O0 -O3 -std=gnu++11 -mavx2 -mno-avx512f -MD -MT CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o -MF CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o.d -o CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o -c /home/catid/leopard-wt-c6/Leopard2BackendAVX2.cpp
+gmake[3]: Leaving directory '/home/catid/leopard-wt-c6/build/c7-matrix/core-auto'
 [ 16%] Built target leopard2_backend_ssse3
+gmake[3]: Leaving directory '/home/catid/leopard-wt-c6/build/c7-matrix/core-auto'
 [ 16%] Built target leopard2_backend_avx2
-[ 25%] Building CXX object CMakeFiles/libleopard.dir/leopard.cpp.o
-[ 33%] Building CXX object CMakeFiles/libleopard.dir/leopard2.cpp.o
-[ 50%] Building CXX object CMakeFiles/libleopard.dir/Leopard2Backend.cpp.o
+/usr/bin/gmake  -f CMakeFiles/libleopard.dir/build.make CMakeFiles/libleopard.dir/depend
+gmake[3]: Entering directory '/home/catid/leopard-wt-c6/build/c7-matrix/core-auto'
+cd /home/catid/leopard-wt-c6/build/c7-matrix/core-auto && /usr/bin/cmake -E cmake_depends "Unix Makefiles" /home/catid/leopard-wt-c6 /home/catid/leopard-wt-c6 /home/catid/leopard-wt-c6/build/c7-matrix/core-auto /home/catid/leopard-wt-c6/build/c7-matrix/core-auto /home/catid/leopard-wt-c6/build/c7-matrix/core-auto/CMakeFiles/libleopard.dir/DependInfo.cmake "--color="
+gmake[3]: Leaving directory '/home/catid/leopard-wt-c6/build/c7-matrix/core-auto'
+/usr/bin/gmake  -f CMakeFiles/libleopard.dir/build.make CMakeFiles/libleopard.dir/build
+gmake[3]: Entering directory '/home/catid/leopard-wt-c6/build/c7-matrix/core-auto'
+[ 25%] Building CXX object CMakeFiles/libleopard.dir/leopard2.cpp.o
+[ 33%] Building CXX object CMakeFiles/libleopard.dir/Leopard2Backend.cpp.o
+/usr/bin/x86_64-linux-gnu-g++-13 -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I/home/catid/leopard-wt-c6 -Wall -Wextra -fopenmp -g -O0 -O3 -std=gnu++11 -fopenmp -MD -MT CMakeFiles/libleopard.dir/leopard2.cpp.o -MF CMakeFiles/libleopard.dir/leopard2.cpp.o.d -o CMakeFiles/libleopard.dir/leopard2.cpp.o -c /home/catid/leopard-wt-c6/leopard2.cpp
+/usr/bin/x86_64-linux-gnu-g++-13 -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I/home/catid/leopard-wt-c6 -Wall -Wextra -fopenmp -g -O0 -O3 -std=gnu++11 -fopenmp -MD -MT CMakeFiles/libleopard.dir/Leopard2Backend.cpp.o -MF CMakeFiles/libleopard.dir/Leopard2Backend.cpp.o.d -o CMakeFiles/libleopard.dir/Leopard2Backend.cpp.o -c /home/catid/leopard-wt-c6/Leopard2Backend.cpp
+[ 41%] Building CXX object CMakeFiles/libleopard.dir/leopard.cpp.o
 [ 50%] Building CXX object CMakeFiles/libleopard.dir/Leopard2BackendScalar.cpp.o
+/usr/bin/x86_64-linux-gnu-g++-13 -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I/home/catid/leopard-wt-c6 -Wall -Wextra -fopenmp -g -O0 -O3 -std=gnu++11 -fopenmp -MD -MT CMakeFiles/libleopard.dir/leopard.cpp.o -MF CMakeFiles/libleopard.dir/leopard.cpp.o.d -o CMakeFiles/libleopard.dir/leopard.cpp.o -c /home/catid/leopard-wt-c6/leopard.cpp
+/usr/bin/x86_64-linux-gnu-g++-13 -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I/home/catid/leopard-wt-c6 -Wall -Wextra -fopenmp -g -O0 -O3 -std=gnu++11 -fopenmp -MD -MT CMakeFiles/libleopard.dir/Leopard2BackendScalar.cpp.o -MF CMakeFiles/libleopard.dir/Leopard2BackendScalar.cpp.o.d -o CMakeFiles/libleopard.dir/Leopard2BackendScalar.cpp.o -c /home/catid/leopard-wt-c6/Leopard2BackendScalar.cpp
 [ 58%] Building CXX object CMakeFiles/libleopard.dir/Leopard2CpuFeatures.cpp.o
+/usr/bin/x86_64-linux-gnu-g++-13 -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I/home/catid/leopard-wt-c6 -Wall -Wextra -fopenmp -g -O0 -O3 -std=gnu++11 -fopenmp -MD -MT CMakeFiles/libleopard.dir/Leopard2CpuFeatures.cpp.o -MF CMakeFiles/libleopard.dir/Leopard2CpuFeatures.cpp.o.d -o CMakeFiles/libleopard.dir/Leopard2CpuFeatures.cpp.o -c /home/catid/leopard-wt-c6/Leopard2CpuFeatures.cpp
 [ 66%] Building CXX object CMakeFiles/libleopard.dir/Leopard2Plan.cpp.o
+/usr/bin/x86_64-linux-gnu-g++-13 -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I/home/catid/leopard-wt-c6 -Wall -Wextra -fopenmp -g -O0 -O3 -std=gnu++11 -fopenmp -MD -MT CMakeFiles/libleopard.dir/Leopard2Plan.cpp.o -MF CMakeFiles/libleopard.dir/Leopard2Plan.cpp.o.d -o CMakeFiles/libleopard.dir/Leopard2Plan.cpp.o -c /home/catid/leopard-wt-c6/Leopard2Plan.cpp
 [ 75%] Building CXX object CMakeFiles/libleopard.dir/LeopardCommon.cpp.o
+/usr/bin/x86_64-linux-gnu-g++-13 -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I/home/catid/leopard-wt-c6 -Wall -Wextra -fopenmp -g -O0 -O3 -std=gnu++11 -fopenmp -MD -MT CMakeFiles/libleopard.dir/LeopardCommon.cpp.o -MF CMakeFiles/libleopard.dir/LeopardCommon.cpp.o.d -o CMakeFiles/libleopard.dir/LeopardCommon.cpp.o -c /home/catid/leopard-wt-c6/LeopardCommon.cpp
 [ 83%] Building CXX object CMakeFiles/libleopard.dir/LeopardFF16.cpp.o
+/usr/bin/x86_64-linux-gnu-g++-13 -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I/home/catid/leopard-wt-c6 -Wall -Wextra -fopenmp -g -O0 -O3 -std=gnu++11 -fopenmp -MD -MT CMakeFiles/libleopard.dir/LeopardFF16.cpp.o -MF CMakeFiles/libleopard.dir/LeopardFF16.cpp.o.d -o CMakeFiles/libleopard.dir/LeopardFF16.cpp.o -c /home/catid/leopard-wt-c6/LeopardFF16.cpp
 [ 91%] Building CXX object CMakeFiles/libleopard.dir/LeopardFF8.cpp.o
+/usr/bin/x86_64-linux-gnu-g++-13 -DLEO2_DISABLE_AVX2_CODEGEN=1 -DLEO2_DISABLE_SSSE3_CODEGEN=1 -DLEO2_HAVE_AVX2_BACKEND=1 -DLEO2_HAVE_SSSE3_BACKEND=1 -I/home/catid/leopard-wt-c6 -Wall -Wextra -fopenmp -g -O0 -O3 -std=gnu++11 -fopenmp -MD -MT CMakeFiles/libleopard.dir/LeopardFF8.cpp.o -MF CMakeFiles/libleopard.dir/LeopardFF8.cpp.o.d -o CMakeFiles/libleopard.dir/LeopardFF8.cpp.o -c /home/catid/leopard-wt-c6/LeopardFF8.cpp
 [100%] Linking CXX static library liblibleopard.a
+/usr/bin/cmake -P CMakeFiles/libleopard.dir/cmake_clean_target.cmake
+/usr/bin/cmake -E cmake_link_script CMakeFiles/libleopard.dir/link.txt --verbose=1
+/usr/bin/x86_64-linux-gnu-ar qc liblibleopard.a CMakeFiles/libleopard.dir/leopard.cpp.o CMakeFiles/libleopard.dir/leopard2.cpp.o CMakeFiles/libleopard.dir/Leopard2Backend.cpp.o CMakeFiles/libleopard.dir/Leopard2BackendScalar.cpp.o CMakeFiles/libleopard.dir/Leopard2CpuFeatures.cpp.o CMakeFiles/libleopard.dir/Leopard2Plan.cpp.o CMakeFiles/libleopard.dir/LeopardCommon.cpp.o CMakeFiles/libleopard.dir/LeopardFF16.cpp.o CMakeFiles/libleopard.dir/LeopardFF8.cpp.o CMakeFiles/leopard2_backend_ssse3.dir/Leopard2BackendSSSE3.cpp.o CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o
+/usr/bin/x86_64-linux-gnu-ranlib liblibleopard.a
+gmake[3]: Leaving directory '/home/catid/leopard-wt-c6/build/c7-matrix/core-auto'
 [100%] Built target libleopard
+gmake[2]: Leaving directory '/home/catid/leopard-wt-c6/build/c7-matrix/core-auto'
+/usr/bin/cmake -E cmake_progress_start /home/catid/leopard-wt-c6/build/c7-matrix/core-auto/CMakeFiles 0
+gmake[1]: Leaving directory '/home/catid/leopard-wt-c6/build/c7-matrix/core-auto'
+
