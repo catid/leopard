@@ -37,6 +37,9 @@ BACKEND_DEFINITIONS = {
     "LEO2_HAVE_SSSE3_BACKEND=1",
     "LEO2_HAVE_AVX2_BACKEND=1",
 }
+PROTECTED_MACRO_NAMES = {
+    definition.split("=")[0] for definition in BACKEND_DEFINITIONS
+}
 
 
 class ContractError(AssertionError):
@@ -147,15 +150,27 @@ class CMakeProductionGraph(object):
         self.commands = [(name, cmake_tokens(body))
                          for name, body in cmake_commands(text)]
         self.variables = {}
+        self.conditional_variables = set()
         self.targets = {}
         self.attachments = {}
         self._read_variables()
         self._read_targets()
 
     def _read_variables(self):
+        condition_depth = 0
         for name, tokens in self.commands:
+            if name == "if":
+                condition_depth += 1
+                continue
+            if name == "endif":
+                if condition_depth == 0:
+                    raise ContractError("unbalanced CMake endif")
+                condition_depth -= 1
+                continue
             if name == "set" and tokens:
                 variable = tokens[0]
+                if condition_depth:
+                    self.conditional_variables.add(variable)
                 values = list(tokens[1:])
                 if "CACHE" in values:
                     values = values[:values.index("CACHE")]
@@ -163,15 +178,21 @@ class CMakeProductionGraph(object):
                     values.pop()
                 self.variables[variable] = values
             elif name == "unset" and tokens:
+                if condition_depth:
+                    self.conditional_variables.add(tokens[0])
                 self.variables.pop(tokens[0], None)
             elif name == "list" and len(tokens) >= 2:
                 operation = tokens[0].upper()
                 variable = tokens[1]
+                if condition_depth:
+                    self.conditional_variables.add(variable)
                 if operation == "APPEND":
                     self.variables.setdefault(variable, []).extend(tokens[2:])
                 elif operation == "PREPEND":
                     self.variables[variable] = (
                         list(tokens[2:]) + self.variables.get(variable, []))
+        if condition_depth:
+            raise ContractError("unbalanced CMake if")
 
     def _expand(self, tokens, stack=None):
         stack = [] if stack is None else stack
@@ -186,6 +207,10 @@ class CMakeProductionGraph(object):
                 if variable not in self.variables:
                     raise ContractError(
                         "unresolved CMake source variable: " + variable)
+                if variable in self.conditional_variables:
+                    raise ContractError(
+                        "conditional CMake source variable is ambiguous: " +
+                        variable)
                 expanded.extend(self._expand(
                     self.variables[variable], stack + [variable]))
             elif "${" in token or "$ENV{" in token:
@@ -244,7 +269,11 @@ class CMakeProductionGraph(object):
                 "unsupported CMake source generator expression: " + token)
         if "$" in token:
             raise ContractError("unresolved CMake source token: " + token)
-        path = PurePosixPath(token.replace("\\", "/"))
+        normalized = token.replace("\\", "/")
+        if re.match(r"^[A-Za-z]:", normalized):
+            raise ContractError(
+                "production source must not use a drive path: " + token)
+        path = PurePosixPath(normalized)
         if path.is_absolute() or ".." in path.parts:
             raise ContractError(
                 "production source must be repository-relative: " + token)
@@ -356,7 +385,13 @@ def normalized_condition(condition):
         r"'([^'|]+)\|([^']+)'\s*$", condition or "")
     if not match:
         raise ContractError("unsupported MSBuild Condition: " + str(condition))
-    key = match.group(1).strip().lower() + "|" + match.group(2).strip().lower()
+    configuration = match.group(1)
+    platform = match.group(2)
+    if configuration != configuration.strip() or platform != platform.strip():
+        raise ContractError(
+            "MSBuild Condition values contain semantic whitespace: " +
+            str(condition))
+    key = configuration.lower() + "|" + platform.lower()
     if key not in EXPECTED_CONFIGS:
         raise ContractError("unexpected MSBuild configuration: " + key)
     return key
@@ -444,6 +479,19 @@ def validate_msbuild_configurations(tree):
                 "msb:AdditionalOptions", NS))
         if re.search(r"/arch\s*:\s*avx", options, re.IGNORECASE):
             raise ContractError(key + " raises the project-wide ISA floor")
+        if re.search(
+                r"(?:/|-)[du]\s*leo2_(?:backend_force|disable|have)_",
+                options, re.IGNORECASE):
+            raise ContractError(key + " overrides backend isolation macros")
+        undefined = ";".join(
+            node.text or "" for node in compile_node.findall(
+                "msb:UndefinePreprocessorDefinitions", NS))
+        undefined_macros = {
+            macro.strip().split("=")[0] for macro in undefined.split(";")
+            if macro.strip()
+        }
+        if undefined_macros & PROTECTED_MACRO_NAMES:
+            raise ContractError(key + " undefines backend isolation macros")
         enhanced = " ".join(
             node.text or "" for node in compile_node.findall(
                 "msb:EnableEnhancedInstructionSet", NS))
@@ -460,9 +508,45 @@ def validate_per_file_isa(tree):
     options = {}
     for node in compile_nodes:
         path = project_path(PROJECT, node.attrib["Include"])
+        if path in options:
+            raise ContractError("duplicate per-file compile item: " + path)
         options[path] = " ".join(
             child.text or "" for child in node.findall(
                 "msb:AdditionalOptions", NS))
+        definitions = node.findall("msb:PreprocessorDefinitions", NS)
+        if len(definitions) > 1:
+            raise ContractError(
+                "duplicate per-file PreprocessorDefinitions: " + path)
+        if definitions:
+            macros = set((definitions[0].text or "").split(";"))
+            if "%(PreprocessorDefinitions)" not in macros:
+                raise ContractError(
+                    "per-file definitions do not inherit isolation macros: " +
+                    path)
+            if any(macro.startswith("LEO2_BACKEND_FORCE_")
+                   for macro in macros):
+                raise ContractError("per-file backend force: " + path)
+        undefined = ";".join(
+            child.text or "" for child in node.findall(
+                "msb:UndefinePreprocessorDefinitions", NS))
+        undefined_macros = {
+            macro.strip().split("=")[0] for macro in undefined.split(";")
+            if macro.strip()
+        }
+        if undefined_macros & PROTECTED_MACRO_NAMES:
+            raise ContractError(
+                "per-file metadata undefines isolation macros: " + path)
+        flags_lower = options[path].lower()
+        if re.search(r"(?:/|-)[du]\s*leo2_(?:backend_force|disable|have)_",
+                     flags_lower):
+            raise ContractError(
+                "per-file options override isolation macros: " + path)
+        enhanced = node.findall("msb:EnableEnhancedInstructionSet", NS)
+        if len(enhanced) > 1 or any(
+                (child.text or "").strip() not in ("", "NotSet")
+                for child in enhanced):
+            raise ContractError(
+                "per-file enhanced ISA metadata is unsupported: " + path)
     avx2 = options.get("Leopard2BackendAVX2.cpp", "")
     if "/arch:AVX2" not in avx2 or "%(AdditionalOptions)" not in avx2:
         raise ContractError("AVX2 backend lacks its inherited /arch:AVX2 option")
@@ -573,6 +657,19 @@ target_sources(libleopard PRIVATE $<TARGET_OBJECTS:future_backend>)
         self.assertIn("future_backend", objects)
         self.assertIn("FutureBackend.cpp", object_sources)
 
+    def test_resolved_target_objects_variable_is_traversed(self):
+        mutation = """
+add_library(variable_backend OBJECT VariableBackend.cpp)
+set(OBJECT_EXPRESSION $<TARGET_OBJECTS:variable_backend>)
+target_sources(libleopard PRIVATE ${OBJECT_EXPRESSION})
+"""
+        (sources, unused_headers, objects,
+         object_sources, unused_cmake) = self.resolve(mutation)
+        del unused_headers, unused_cmake
+        self.assertIn("VariableBackend.cpp", sources)
+        self.assertIn("variable_backend", objects)
+        self.assertIn("VariableBackend.cpp", object_sources)
+
     def test_unresolved_variable_is_rejected(self):
         with self.assertRaisesRegex(ContractError, "unresolved.*EXTRA_SOURCES"):
             self.resolve(
@@ -589,6 +686,19 @@ target_sources(libleopard PRIVATE ${EXTRA_SOURCES})
         self.assertIn("ExtraOne.cpp", sources)
         self.assertIn("ExtraTwo.cpp", sources)
 
+    def test_conditional_source_variable_is_rejected(self):
+        mutation = """
+if(WIN32)
+    set(BRANCH_SOURCES BranchWin.cpp)
+else()
+    set(BRANCH_SOURCES BranchOther.cpp)
+endif()
+target_sources(libleopard PRIVATE ${BRANCH_SOURCES})
+"""
+        with self.assertRaisesRegex(
+                ContractError, "conditional.*BRANCH_SOURCES"):
+            self.resolve(mutation)
+
     def test_conditional_generator_expression_is_rejected(self):
         with self.assertRaisesRegex(ContractError, "generator expression"):
             self.resolve(
@@ -599,6 +709,14 @@ target_sources(libleopard PRIVATE ${EXTRA_SOURCES})
         for path in ("accidental.cu", "accidental.cuh"):
             with self.subTest(path=path):
                 with self.assertRaisesRegex(ContractError, "CUDA source"):
+                    self.resolve(
+                        "target_sources(libleopard PRIVATE " + path + ")")
+
+    def test_path_escape_is_rejected(self):
+        for path in ("../Escape.cpp", "sub/../Escape.cpp", "C:/Escape.cpp"):
+            with self.subTest(path=path):
+                with self.assertRaisesRegex(
+                        ContractError, "repository-relative|drive path"):
                     self.resolve(
                         "target_sources(libleopard PRIVATE " + path + ")")
 
@@ -633,6 +751,99 @@ class MSBuildConditionMutationTest(unittest.TestCase):
                 tree.getroot().remove(node)
                 with self.assertRaisesRegex(ContractError, "Conditions differ"):
                     validate_msbuild_configurations(tree)
+
+    def test_semantic_condition_whitespace_is_rejected(self):
+        tree = self.fresh_tree()
+        node = tree.findall(
+            ".//msb:PropertyGroup[@Label='Configuration']", NS)[0]
+        node.set(
+            "Condition",
+            "'$(Configuration)|$(Platform)'==' Debug | Win32 '")
+        with self.assertRaisesRegex(ContractError, "semantic whitespace"):
+            validate_msbuild_configurations(tree)
+
+
+class MSBuildPerFileMutationTest(unittest.TestCase):
+    @staticmethod
+    def fresh_tree():
+        return ET.parse(str(PROJECT))
+
+    @staticmethod
+    def compile_item(tree, filename):
+        for node in tree.findall(".//msb:ClCompile[@Include]", NS):
+            if project_path(PROJECT, node.attrib["Include"]) == filename:
+                return node
+        raise AssertionError("compile item not found: " + filename)
+
+    @staticmethod
+    def add_metadata(node, name, value):
+        namespace = "{http://schemas.microsoft.com/developer/msbuild/2003}"
+        child = ET.SubElement(node, namespace + name)
+        child.text = value
+
+    def test_per_file_backend_force_is_rejected(self):
+        tree = self.fresh_tree()
+        node = self.compile_item(tree, "leopard2.cpp")
+        self.add_metadata(
+            node, "PreprocessorDefinitions",
+            "LEO2_BACKEND_FORCE_AVX2=1;%(PreprocessorDefinitions)")
+        with self.assertRaisesRegex(ContractError, "per-file backend force"):
+            validate_per_file_isa(tree)
+
+    def test_per_file_definition_replacement_is_rejected(self):
+        tree = self.fresh_tree()
+        node = self.compile_item(tree, "leopard2.cpp")
+        self.add_metadata(node, "PreprocessorDefinitions", "LOCAL_ONLY=1")
+        with self.assertRaisesRegex(ContractError, "do not inherit"):
+            validate_per_file_isa(tree)
+
+    def test_per_file_enhanced_isa_is_rejected(self):
+        tree = self.fresh_tree()
+        node = self.compile_item(tree, "leopard2.cpp")
+        self.add_metadata(
+            node, "EnableEnhancedInstructionSet",
+            "AdvancedVectorExtensions2")
+        with self.assertRaisesRegex(ContractError, "enhanced ISA"):
+            validate_per_file_isa(tree)
+
+    def test_per_file_undefine_isolation_is_rejected(self):
+        tree = self.fresh_tree()
+        node = self.compile_item(tree, "leopard2.cpp")
+        self.add_metadata(
+            node, "UndefinePreprocessorDefinitions",
+            "LEO2_DISABLE_AVX2_CODEGEN")
+        with self.assertRaisesRegex(ContractError, "undefines isolation"):
+            validate_per_file_isa(tree)
+
+    def test_duplicate_avx2_compile_item_is_rejected(self):
+        tree = self.fresh_tree()
+        node = self.compile_item(tree, "Leopard2BackendAVX2.cpp")
+        for group in tree.getroot().findall("msb:ItemGroup", NS):
+            if node in list(group):
+                group.append(copy.deepcopy(node))
+                break
+        with self.assertRaisesRegex(ContractError, "duplicate per-file"):
+            validate_per_file_isa(tree)
+
+    def test_configuration_undefine_isolation_is_rejected(self):
+        tree = self.fresh_tree()
+        node = tree.findall(
+            ".//msb:ItemDefinitionGroup/msb:ClCompile", NS)[0]
+        self.add_metadata(
+            node, "UndefinePreprocessorDefinitions",
+            "LEO2_DISABLE_AVX2_CODEGEN")
+        with self.assertRaisesRegex(ContractError, "undefines backend isolation"):
+            validate_msbuild_configurations(tree)
+
+    def test_configuration_option_backend_force_is_rejected(self):
+        tree = self.fresh_tree()
+        node = tree.findall(
+            ".//msb:ItemDefinitionGroup/msb:ClCompile", NS)[0]
+        self.add_metadata(
+            node, "AdditionalOptions",
+            "/DLEO2_BACKEND_FORCE_AVX2=1 %(AdditionalOptions)")
+        with self.assertRaisesRegex(ContractError, "overrides backend isolation"):
+            validate_msbuild_configurations(tree)
 
 
 if __name__ == "__main__":
