@@ -358,10 +358,49 @@ No active-parent normalization, shortening factor, or puncturing factor can
 make this code wire-equivalent to the frozen GF16 parent.  That parent has 512
 distinct coordinates, while GF8 has only 256 elements; a GF8 transform cannot
 evaluate the same coordinate set.  C2-style truncation can preserve the parent
-only while retaining GF16.  C6 therefore records explicit unequal generator
-coefficients and assigns the exact prefix map an unfrozen new-profile identity.
-Its coordinate digests are research fingerprints, not serialized code IDs.
-See `docs/leopard2_c6_gf256_rescue.md` for the executable and promotion gates.
+only while retaining GF16.  C6 therefore recorded explicit unequal generator
+coefficients and treated the exact prefix map as an unfrozen new-profile
+candidate.  Its coordinate digests remain research fingerprints, not serialized
+code IDs.  C7 subsequently froze that same prefix mathematics as experimental
+family 3/version 1/map 1 after the independent comparison below.  See
+`docs/leopard2_c6_gf256_rescue.md` for the C6 executable and promotion gates.
+
+## C7 exact-low coordinate selection (experimental only)
+
+C7 generalizes the C6 prefix construction to either declared legacy field when
+`K+R` fits the field.  The parity-row derivation above is equivalently
+
+    G[j,i] = Z(q_j) / ((q_j + x_i) Z'(x_i)),
+
+with `x_i=omega_i`, `q_j=omega_(K+j)`, and
+`Z(X)=product_s(X+x_s)`.  Distinct points make every factor nonzero, proving
+that all `K*R` entries are nonzero.  A separately implemented monomial
+Vandermonde inverse produces every row again; this is the independent oracle
+rather than a restatement of the barycentric formula.
+
+For one global affine map `phi(X)=aX+b`, `a != 0`, the numerator gains `a^K`.
+The explicit difference and the `K-1` derivative factors together gain the same
+`a^K`, so the systematic generator is invariant.  The exhaustive GF(2^4) test
+checks all 240 affine maps for all 120 valid `(K,R)` geometries.  This identity
+does not apply to the separately studied non-affine aligned union
+
+    systematic = omega_0 .. omega_(K-1)
+    parity     = omega_P .. omega_(P+R-1), P=ceil_pow2(K).
+
+C7 constructs that union explicitly, rejects it when `P+R` exceeds the field,
+classifies whether the whole ordered set is one affine image, and otherwise
+compares its changed coefficients, coefficient-one specializations, and exact
+aligned-dyadic fragment count.  It also exhausts every GF(16) parity subset with
+the systematic prefix fixed.  Those searches remain dense and can define
+different parity bytes.  They do not inherit prefix identity or C6 timings.
+
+Family 3/version 1/map 1 consequently fixes the ordered prefix coordinates,
+has `parent_count=K+R`, `padded_side=K`, and has no shortening or puncturing.
+Family 4 is reserved and rejected for future exact-high work.  The canonical
+coordinate-byte encoding, buffer layout, executable evidence, and remaining
+promotion gates are defined self-contained in
+`docs/leopard2_c7_exact_low.md`.  The production constructor and AUTO dispatcher
+continue to reject this experimental profile.
 
 ## C8 exact high-rate parity solve (experimental only)
 
