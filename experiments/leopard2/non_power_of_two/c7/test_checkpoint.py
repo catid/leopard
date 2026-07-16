@@ -45,6 +45,28 @@ class CheckpointTests(unittest.TestCase):
             data.get("reproducibility", {}).get("comparison", {}).get("status"),
             "pass")
         validate_evidence.validate_manifest(data)
+        leaked = json.loads(json.dumps(data))
+        compile_argv = leaked["builds"][0]["compile_argv"]
+        index = next(i for i, value in enumerate(compile_argv)
+                     if run_matrix.NORMALIZATION_TOKEN in value)
+        compile_argv[index] = compile_argv[index].replace(
+            run_matrix.NORMALIZATION_TOKEN, str(ROOT), 1)
+        leaked["builds"][0]["argv_source_root_tokens"]["compile"] -= 1
+        with self.assertRaises(ValueError):
+            validate_evidence.validate_manifest(leaked)
+        missing_token = json.loads(json.dumps(data))
+        compile_argv = missing_token["builds"][0]["compile_argv"]
+        index = next(i for i, value in enumerate(compile_argv)
+                     if run_matrix.NORMALIZATION_TOKEN in value)
+        compile_argv[index] = compile_argv[index].replace(
+            run_matrix.NORMALIZATION_TOKEN, "LEO2_SOURCE_ROOT", 1)
+        missing_token["builds"][0]["argv_source_root_tokens"]["compile"] -= 1
+        with self.assertRaises(ValueError):
+            validate_evidence.validate_manifest(missing_token)
+        failed_comparison = json.loads(json.dumps(data))
+        failed_comparison["reproducibility"]["comparison"]["status"] = "failed"
+        with self.assertRaises(ValueError):
+            validate_evidence.validate_manifest(failed_comparison)
 
     def test_current_attestation_constants_are_exact(self) -> None:
         self.assertEqual(
