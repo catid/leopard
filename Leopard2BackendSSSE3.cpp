@@ -5,6 +5,7 @@
 
 #include "Leopard2Backend.h"
 
+#include <memory>
 #include <new>
 #include <tmmintrin.h>
 
@@ -499,20 +500,32 @@ const Ops* InitializeSSSE3(const InitializeArgs& args)
 {
     if (!args.ff8_multiply_log || !args.ff16_multiply_log)
         return NULL;
-    if (!FF8Tables)
-        FF8Tables = new (std::nothrow) FF8NibbleTable[256];
-    if (!FF16Tables)
-        FF16Tables = new (std::nothrow) FF16NibbleTable[65536];
-    if (!FF8Tables || !FF16Tables)
+    if (FF8Tables || FF16Tables)
+        return FF8Tables && FF16Tables ? &SSSE3Ops : NULL;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    if (TestShouldFailAllocation(LEO2_BACKEND_SSSE3, false))
+        return NULL;
+#endif
+    std::unique_ptr<FF8NibbleTable[]> ff8(
+        new (std::nothrow) FF8NibbleTable[256]);
+    if (!ff8)
+        return NULL;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    if (TestShouldFailAllocation(LEO2_BACKEND_SSSE3, true))
+        return NULL;
+#endif
+    std::unique_ptr<FF16NibbleTable[]> ff16(
+        new (std::nothrow) FF16NibbleTable[65536]);
+    if (!ff16)
         return NULL;
 
     for (unsigned log = 0; log < 256; ++log)
     {
         for (unsigned value = 0; value < 16; ++value)
         {
-            FF8Tables[log].low[value] = args.ff8_multiply_log(
+            ff8[log].low[value] = args.ff8_multiply_log(
                 static_cast<uint8_t>(value), static_cast<uint8_t>(log));
-            FF8Tables[log].high[value] = args.ff8_multiply_log(
+            ff8[log].high[value] = args.ff8_multiply_log(
                 static_cast<uint8_t>(value << 4), static_cast<uint8_t>(log));
         }
     }
@@ -526,14 +539,26 @@ const Ops* InitializeSSSE3(const InitializeArgs& args)
                 const uint16_t product = args.ff16_multiply_log(
                     static_cast<uint16_t>(value << (nibble * 4)),
                     static_cast<uint16_t>(log));
-                FF16Tables[log].low[nibble][value] =
+                ff16[log].low[nibble][value] =
                     static_cast<uint8_t>(product);
-                FF16Tables[log].high[nibble][value] =
+                ff16[log].high[nibble][value] =
                     static_cast<uint8_t>(product >> 8);
             }
         }
     }
+    FF8Tables = ff8.release();
+    FF16Tables = ff16.release();
     return &SSSE3Ops;
 }
+
+#ifdef LEO2_ENABLE_TEST_HOOKS
+void TestGetSSSE3TableState(TestBackendState* state)
+{
+    state->ff8_published = FF8Tables != NULL;
+    state->ff16_published = FF16Tables != NULL;
+    state->ff8_bytes = 256U * sizeof(FF8NibbleTable);
+    state->ff16_bytes = 65536U * sizeof(FF16NibbleTable);
+}
+#endif
 
 }} // namespace leopard::backend

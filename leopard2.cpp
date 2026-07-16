@@ -1017,7 +1017,12 @@ static leo2_result EnsureInitialized()
         result = leo_init();
         attempted = true;
     }
-    return result == Leopard_Success ? LEO2_SUCCESS : LEO2_INTERNAL_ERROR;
+    if (result == Leopard_Success)
+        return LEO2_SUCCESS;
+    if (leopard::backend::StartupQualificationFailure() ==
+            leopard::backend::QualificationOutOfMemory)
+        return LEO2_OUT_OF_MEMORY;
+    return LEO2_INTERNAL_ERROR;
 }
 
 static bool MakeRange(const void* pointer, uint64_t bytes, AddressRange& range)

@@ -6,6 +6,7 @@
 #include "Leopard2Backend.h"
 
 #include <cstring>
+#include <memory>
 #include <new>
 
 namespace leopard {
@@ -384,28 +385,57 @@ const Ops* InitializeScalar(const InitializeArgs& args)
 {
     if (!args.ff8_multiply_log || !args.ff16_multiply_log)
         return NULL;
-    if (!FF8Table)
-        FF8Table = new (std::nothrow) uint8_t[256U * 256U];
-    if (!FF16Table)
-        FF16Table = new (std::nothrow) uint16_t[65536U * 64U];
-    if (!FF8Table || !FF16Table)
+
+    // Tables are immutable and intentionally retained for process lifetime,
+    // but construction must be failure-atomic.  Build the complete pair in
+    // local owners and publish neither pointer until both allocations and all
+    // arithmetic have completed.
+    if (FF8Table || FF16Table)
+        return FF8Table && FF16Table ? &ScalarOps : NULL;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    if (TestShouldFailAllocation(LEO2_BACKEND_SCALAR, false))
+        return NULL;
+#endif
+    std::unique_ptr<uint8_t[]> ff8(
+        new (std::nothrow) uint8_t[256U * 256U]);
+    if (!ff8)
+        return NULL;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    if (TestShouldFailAllocation(LEO2_BACKEND_SCALAR, true))
+        return NULL;
+#endif
+    std::unique_ptr<uint16_t[]> ff16(
+        new (std::nothrow) uint16_t[65536U * 64U]);
+    if (!ff16)
         return NULL;
 
     for (unsigned log = 0; log < 256; ++log)
         for (unsigned value = 0; value < 256; ++value)
-            FF8Table[log * 256U + value] = args.ff8_multiply_log(
+            ff8[log * 256U + value] = args.ff8_multiply_log(
                 static_cast<uint8_t>(value), static_cast<uint8_t>(log));
 
     for (unsigned log = 0; log < 65536; ++log)
     {
-        uint16_t* table = FF16Table + static_cast<size_t>(log) * 64U;
+        uint16_t* table = ff16.get() + static_cast<size_t>(log) * 64U;
         for (unsigned nibble = 0; nibble < 4; ++nibble)
             for (unsigned value = 0; value < 16; ++value)
                 table[nibble * 16U + value] = args.ff16_multiply_log(
                     static_cast<uint16_t>(value << (nibble * 4)),
                     static_cast<uint16_t>(log));
     }
+    FF8Table = ff8.release();
+    FF16Table = ff16.release();
     return &ScalarOps;
 }
+
+#ifdef LEO2_ENABLE_TEST_HOOKS
+void TestGetScalarTableState(TestBackendState* state)
+{
+    state->ff8_published = FF8Table != NULL;
+    state->ff16_published = FF16Table != NULL;
+    state->ff8_bytes = 256U * 256U * sizeof(uint8_t);
+    state->ff16_bytes = 65536U * 64U * sizeof(uint16_t);
+}
+#endif
 
 }} // namespace leopard::backend

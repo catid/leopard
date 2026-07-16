@@ -5,6 +5,7 @@
 
 #include "Leopard2Backend.h"
 
+#include <atomic>
 #include <cstring>
 #include <mutex>
 
@@ -23,6 +24,56 @@ static QualificationStatus QualificationFailures[LEO2_BACKEND_NEON + 1] = {};
 static InitializeArgs SavedInitializeArgs = { NULL, NULL };
 static uint32_t QualifiableBackendMask = 0;
 static bool SelfTestPassed = false;
+static QualificationStatus StartupFailure = QualificationAvailable;
+
+#ifdef LEO2_ENABLE_TEST_HOOKS
+static std::atomic<unsigned> TestFault(TestSetupFaultNone);
+static std::atomic<unsigned> TestFaultConsumptions(0);
+
+static TestSetupFault AllocationFaultFor(
+    leo2_backend backend,
+    bool ff16)
+{
+    switch (backend)
+    {
+    case LEO2_BACKEND_SCALAR:
+        return ff16 ? TestSetupFaultScalarFF16Allocation
+                    : TestSetupFaultScalarFF8Allocation;
+    case LEO2_BACKEND_SSSE3:
+        return ff16 ? TestSetupFaultSSSE3FF16Allocation
+                    : TestSetupFaultSSSE3FF8Allocation;
+    case LEO2_BACKEND_AVX2:
+        return ff16 ? TestSetupFaultAVX2FF16Allocation
+                    : TestSetupFaultAVX2FF8Allocation;
+    default:
+        return TestSetupFaultNone;
+    }
+}
+
+static TestSetupFault KATFaultFor(leo2_backend backend)
+{
+    switch (backend)
+    {
+    case LEO2_BACKEND_SCALAR: return TestSetupFaultScalarKAT;
+    case LEO2_BACKEND_SSSE3: return TestSetupFaultSSSE3KAT;
+    case LEO2_BACKEND_AVX2: return TestSetupFaultAVX2KAT;
+    default: return TestSetupFaultNone;
+    }
+}
+
+static bool ConsumeTestFault(TestSetupFault expected)
+{
+    if (expected == TestSetupFaultNone)
+        return false;
+    unsigned value = static_cast<unsigned>(expected);
+    if (!TestFault.compare_exchange_strong(value,
+            static_cast<unsigned>(TestSetupFaultNone),
+            std::memory_order_acq_rel, std::memory_order_acquire))
+        return false;
+    TestFaultConsumptions.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+#endif
 
 static bool TestFF8(const Ops& ops, FF8MultiplyLog reference)
 {
@@ -424,19 +475,20 @@ static bool RegisterQualifiedOps(
     const Ops* ops,
     const InitializeArgs& args)
 {
-    if (!ops || ops->kind != expected_kind || !TestOps(*ops, args))
+    if (!ops || ops->kind != expected_kind)
+        return false;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    if (ConsumeTestFault(KATFaultFor(expected_kind)))
+        return false;
+#endif
+    if (!TestOps(*ops, args))
         return false;
     QualifiedOps[expected_kind] = ops;
     return true;
 }
 
-bool Initialize(const InitializeArgs& args)
+static leo2_backend SelectBackend(const X86Features& features)
 {
-    if (SelectedOps)
-        return SelfTestPassed;
-
-    const X86Features features = DetectX86Features();
-    (void)features;
     leo2_backend selected_kind = LEO2_BACKEND_SCALAR;
 
 #if defined(LEO2_BACKEND_FORCE_SCALAR)
@@ -444,18 +496,18 @@ bool Initialize(const InitializeArgs& args)
 #elif defined(LEO2_BACKEND_FORCE_SSSE3)
 # if defined(LEO2_HAVE_SSSE3_BACKEND)
     if (!features.ssse3)
-        return false;
+        return LEO2_BACKEND_AUTO;
     selected_kind = LEO2_BACKEND_SSSE3;
 # else
-    return false;
+    return LEO2_BACKEND_AUTO;
 # endif
 #elif defined(LEO2_BACKEND_FORCE_AVX2)
 # if defined(LEO2_HAVE_AVX2_BACKEND)
     if (!features.avx2)
-        return false;
+        return LEO2_BACKEND_AUTO;
     selected_kind = LEO2_BACKEND_AVX2;
 # else
-    return false;
+    return LEO2_BACKEND_AUTO;
 # endif
 #else
 # if defined(LEO2_HAVE_AVX2_BACKEND)
@@ -467,6 +519,19 @@ bool Initialize(const InitializeArgs& args)
         selected_kind = LEO2_BACKEND_SSSE3;
 # endif
 #endif
+    return selected_kind;
+}
+
+bool Initialize(const InitializeArgs& args)
+{
+    if (SelectedOps)
+        return SelfTestPassed;
+
+    const X86Features features = DetectX86Features();
+    (void)features;
+    const leo2_backend selected_kind = SelectBackend(features);
+    if (selected_kind == LEO2_BACKEND_AUTO)
+        return false;
 
     // The selected process default is mandatory.  Lower tables are initialized
     // lazily by an explicit context request, so legacy/AUTO-only applications
@@ -485,8 +550,20 @@ bool Initialize(const InitializeArgs& args)
         selected_ops = InitializeAVX2(args);
 #endif
 
-    if (!RegisterQualifiedOps(selected_kind, selected_ops, args))
+    if (!selected_ops)
+    {
+        QualificationStates[selected_kind] = QualificationFailed;
+        QualificationFailures[selected_kind] = QualificationOutOfMemory;
+        StartupFailure = QualificationOutOfMemory;
         return false;
+    }
+    if (!RegisterQualifiedOps(selected_kind, selected_ops, args))
+    {
+        QualificationStates[selected_kind] = QualificationFailed;
+        QualificationFailures[selected_kind] = QualificationSelfTestFailed;
+        StartupFailure = QualificationSelfTestFailed;
+        return false;
+    }
 
     uint32_t qualifiable_mask = 1U << LEO2_BACKEND_SCALAR;
 #if defined(LEO2_HAVE_SSSE3_BACKEND)
@@ -503,6 +580,7 @@ bool Initialize(const InitializeArgs& args)
         SavedInitializeArgs = args;
         QualifiableBackendMask = qualifiable_mask;
         QualificationStates[selected_kind] = QualificationPassed;
+        StartupFailure = QualificationAvailable;
         SelfTestPassed = true;
         SelectedOps = QualifiedOps[selected_kind];
     }
@@ -599,5 +677,73 @@ bool StartupSelfTestPassed()
 {
     return SelfTestPassed;
 }
+
+QualificationStatus StartupQualificationFailure()
+{
+    return StartupFailure;
+}
+
+#ifdef LEO2_ENABLE_TEST_HOOKS
+void TestSetSetupFault(TestSetupFault fault)
+{
+    TestFaultConsumptions.store(0, std::memory_order_relaxed);
+    TestFault.store(static_cast<unsigned>(fault), std::memory_order_release);
+}
+
+bool TestSetupFaultPending()
+{
+    return TestFault.load(std::memory_order_acquire) !=
+        static_cast<unsigned>(TestSetupFaultNone);
+}
+
+unsigned TestSetupFaultConsumptions()
+{
+    return TestFaultConsumptions.load(std::memory_order_relaxed);
+}
+
+bool TestShouldFailAllocation(leo2_backend backend, bool ff16)
+{
+    return ConsumeTestFault(AllocationFaultFor(backend, ff16));
+}
+
+leo2_backend TestDefaultBackendForHost()
+{
+    return SelectBackend(DetectX86Features());
+}
+
+bool TestGetBackendState(leo2_backend backend, TestBackendState* state)
+{
+    if (!state)
+        return false;
+    *state = TestBackendState();
+    switch (backend)
+    {
+    case LEO2_BACKEND_SCALAR:
+        TestGetScalarTableState(state);
+        break;
+# if defined(LEO2_HAVE_SSSE3_BACKEND)
+    case LEO2_BACKEND_SSSE3:
+        TestGetSSSE3TableState(state);
+        break;
+# endif
+# if defined(LEO2_HAVE_AVX2_BACKEND)
+    case LEO2_BACKEND_AVX2:
+        TestGetAVX2TableState(state);
+        break;
+# endif
+    default:
+        return false;
+    }
+    const unsigned index = static_cast<unsigned>(backend);
+    std::lock_guard<std::mutex> lock(GetQualificationMutex());
+    state->qualified = QualifiedOps[index] != NULL &&
+        QualificationStates[index] == QualificationPassed;
+    if (QualificationStates[index] == QualificationFailed)
+        state->failure = QualificationFailures[index];
+    else
+        state->failure = QualificationAvailable;
+    return true;
+}
+#endif
 
 }} // namespace leopard::backend

@@ -322,6 +322,14 @@ endif()
 if(LEO2_BUILD_TESTS)
     enable_testing()
     target_compile_definitions(libleopard PRIVATE LEO2_ENABLE_TEST_HOOKS=1)
+    if(TARGET leopard2_backend_ssse3)
+        target_compile_definitions(leopard2_backend_ssse3 PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1)
+    endif()
+    if(TARGET leopard2_backend_avx2)
+        target_compile_definitions(leopard2_backend_avx2 PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1)
+    endif()
 
     if(LEO2_BUILD_BENCHMARKS)
         add_executable(bench_leopard2_direct_encode
@@ -372,6 +380,22 @@ if(LEO2_BUILD_TESTS)
     add_test(NAME leopard2_backend_ops COMMAND leopard2_backend_ops_test)
     set_tests_properties(leopard2_backend_ops PROPERTIES
         ENVIRONMENT "OMP_NUM_THREADS=1")
+
+    add_executable(leopard2_backend_failures_test
+        tests/leopard2/test_backend_failures.cpp)
+    target_compile_definitions(leopard2_backend_failures_test PRIVATE
+        LEO2_ENABLE_TEST_HOOKS=1)
+    target_link_libraries(leopard2_backend_failures_test libleopard)
+    foreach(backend scalar ssse3 avx2)
+        foreach(stage ff8-allocation ff16-allocation kat)
+            string(REPLACE "-" "_" stage_name "${stage}")
+            add_test(NAME leopard2_backend_failure_${backend}_${stage_name}
+                COMMAND leopard2_backend_failures_test ${backend} ${stage})
+            set_tests_properties(
+                leopard2_backend_failure_${backend}_${stage_name}
+                PROPERTIES ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
+        endforeach()
+    endforeach()
 
     add_executable(leopard2_context_backends_test
         tests/leopard2/test_context_backends.cpp)

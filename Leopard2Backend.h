@@ -146,8 +146,53 @@ leo2_backend SelectedBackend();
 // SSE2NEON transform kernels execute around a scalar tail/fallback table.
 leo2_backend ExecutionBackend();
 bool StartupSelfTestPassed();
+// Distinguishes backend allocation and known-answer-test failures for the new
+// API while the legacy leo_init() contract continues to report Platform.
+QualificationStatus StartupQualificationFailure();
 
 #ifdef LEO2_ENABLE_TEST_HOOKS
+// Deterministic one-shot setup faults.  These hooks are compiled only into
+// test-enabled archives; production archives contain neither the selector nor
+// any branches in setup or byte-execution paths.
+enum TestSetupFault
+{
+    TestSetupFaultNone = 0,
+    TestSetupFaultScalarFF8Allocation,
+    TestSetupFaultScalarFF16Allocation,
+    TestSetupFaultSSSE3FF8Allocation,
+    TestSetupFaultSSSE3FF16Allocation,
+    TestSetupFaultAVX2FF8Allocation,
+    TestSetupFaultAVX2FF16Allocation,
+    TestSetupFaultScalarKAT,
+    TestSetupFaultSSSE3KAT,
+    TestSetupFaultAVX2KAT
+};
+
+struct TestBackendState
+{
+    bool ff8_published;
+    bool ff16_published;
+    bool qualified;
+    QualificationStatus failure;
+    uint64_t ff8_bytes;
+    uint64_t ff16_bytes;
+};
+
+void TestSetSetupFault(TestSetupFault fault);
+bool TestSetupFaultPending();
+unsigned TestSetupFaultConsumptions();
+bool TestShouldFailAllocation(leo2_backend backend, bool ff16);
+leo2_backend TestDefaultBackendForHost();
+bool TestGetBackendState(leo2_backend backend, TestBackendState* state);
+
+void TestGetScalarTableState(TestBackendState* state);
+# if defined(LEO2_HAVE_SSSE3_BACKEND)
+void TestGetSSSE3TableState(TestBackendState* state);
+# endif
+# if defined(LEO2_HAVE_AVX2_BACKEND)
+void TestGetAVX2TableState(TestBackendState* state);
+# endif
+
 // Test-only injection point for a copied/tracing immutable ops table.  The
 // caller must restore the qualified table before destroying the tracing table.
 void TestSetContextOps(leo2_context* context, const Ops* ops);
