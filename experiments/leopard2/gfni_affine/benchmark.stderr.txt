@@ -1,0 +1,17 @@
+cpu=0
+compiler=13.3.0
+features gfni=1 avx2=1024 avx512f=32768 avx512bw=2097152
+identity_matrix=0x102040810204080
+aes_root_of_0x11d=0x3 to_aes_matrix=0xefd0aaca822e5cae from_aes_matrix=0xffb08466dc727ea0
+matrix_hash_fnv1a64=0xc5ae814681e06043
+multiply_hash_fnv1a64=0x5a9c078c013b3e83
+operand_bits_for_output_0=56,57,58,59,60,61,62,63
+operand_bits_for_output_1=48,49,50,51,52,53,54,55
+operand_bits_for_output_2=40,41,42,43,44,45,46,47
+operand_bits_for_output_3=32,33,34,35,36,37,38,39
+operand_bits_for_output_4=24,25,26,27,28,29,30,31
+operand_bits_for_output_5=16,17,18,19,20,21,22,23
+operand_bits_for_output_6=8,9,10,11,12,13,14,15
+operand_bits_for_output_7=0,1,2,3,4,5,6,7
+exhaustive_cases=65536 affine_forms=3 mul_isomorphism_forms=3 nibble_forms=2 status=passed
+sink=151380

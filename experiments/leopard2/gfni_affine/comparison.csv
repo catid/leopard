@@ -1,0 +1,15 @@
+kind,bytes,avx512_nibble_median_ns,gfni_zmm_median_ns,gfni_zmm_improvement_percent,gfni_ymm_improvement_percent,best_kernel,meets_5_percent_cell_threshold
+mul,64,197867.000,184577.000,7.200,-2.499,gfni_zmm,yes
+mul,256,324673.500,244872.000,32.589,1.899,gfni_zmm,yes
+mul,1024,552796.000,352803.500,56.687,-4.439,gfni_zmm,yes
+mul,16384,457274.500,300498.000,52.172,-6.969,gfni_zmm,yes
+mul,65536,719882.500,573436.000,25.538,16.412,gfni_zmm,yes
+mul,1048576,914039.500,907985.000,0.667,-1.020,gfni_zmm,no
+mul,16777216,821894.000,840119.000,-2.169,-3.780,avx512_nibble,no
+chain,256,1509066.500,1319770.000,14.343,1.804,gfni_zmm,yes
+chain,1024,874065.000,811769.000,7.674,-1.493,gfni_zmm,yes
+chain,4096,702062.500,569926.000,23.185,-6.040,gfni_zmm,yes
+chain,16384,748723.000,631932.000,18.482,-6.424,gfni_zmm,yes
+chain,65536,1135882.500,1132002.000,0.343,1.736,gfni_ymm,no
+chain,262144,1025526.500,958850.500,6.954,1.031,gfni_mul_zmm,yes
+chain,1048576,1806389.500,1800219.000,0.343,-0.514,gfni_zmm,no
