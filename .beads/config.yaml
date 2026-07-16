@@ -16,8 +16,9 @@
 # Disable daemon for RPC communication (forces direct database access)
 # no-daemon: false
 
-# Disable auto-flush of database to JSONL after mutations
-# no-auto-flush: false
+# The embedded Dolt database is authoritative.  Keep the tracked JSONL as an
+# intentional portable checkpoint instead of rewriting it after read commands.
+no-auto-flush: true
 
 # Disable auto-import from JSONL when it's newer than database
 # no-auto-import: false
