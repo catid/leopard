@@ -1,0 +1,22 @@
+{
+  "deterministic_output": true,
+  "files": [
+    {
+      "bytes": 666353,
+      "path": "focus.csv",
+      "sha256": "538b7c539c5bb22dba4b976d0686256b4cf5c0d6e33ab98acabd7d064ebe9d4d"
+    },
+    {
+      "bytes": 401408,
+      "path": "gf16_samples.json",
+      "sha256": "7bd13398a297202b33c9499a992661adfef9c6e755e482e05f8209cefcd3ae98"
+    },
+    {
+      "bytes": 41302,
+      "path": "summary.json",
+      "sha256": "56176ecfe27473da175230cc2182c0b44f4de41f6e9330eddc430eedf9714e6d"
+    }
+  ],
+  "schema_version": "leopard2-c0-v2",
+  "workers": 32
+}
