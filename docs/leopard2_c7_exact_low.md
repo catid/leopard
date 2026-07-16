@@ -193,7 +193,10 @@ versioned padded-odd shard layout to represent an odd payload.  Read-only input
 shards may alias each other.  Every non-null encode output must be disjoint from
 all inputs and other outputs.  Every restored decode output must be disjoint
 from every received input and other restored output.  Invalid overlap is
-rejected before a fixed-multiplier helper runs.
+rejected before a fixed-multiplier helper runs.  The decode alias test uses a
+valid constant-zero codeword, points every surviving-original and parity input
+at one shared read-only buffer, and restores one original into separate guarded
+storage for every retained GF8 and GF16 byte length.
 
 ## Correctness checkpoint
 
