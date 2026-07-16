@@ -1,0 +1,290 @@
+{
+  "coverage": {
+    "basis_vectors": 1107672,
+    "compact_contract_rejections": 3,
+    "direct_symbol_comparisons": 8315600,
+    "gf2_4_prefix_plans": 1374,
+    "gf2_4_sparse_plans": 264576,
+    "gf8_prefix_plans": 1674,
+    "gf8_sparse_plans": 378,
+    "padded_symbol_comparisons": 26070,
+    "padded_vectors": 4814,
+    "partial_dense_materializations": 0,
+    "zero_vectors": 268002
+  },
+  "operation_count_scope": "butterfly and compact boundary combinations; plan setup, Python container conversion, and final scatter excluded",
+  "oracle": {
+    "forward": "direct normalized-LCH polynomial evaluation matrix",
+    "inverse": "GF Gaussian inverse of the direct evaluation matrix",
+    "secondary": "explicit full padded Leopard butterfly recurrence"
+  },
+  "representative_operation_and_memory_counts": [
+    {
+      "active_inputs": 9,
+      "candidate": {
+        "boundary_nodes": 4,
+        "boundary_pairs": 15,
+        "compact_values_written": 21,
+        "complete_blocks": 2,
+        "complete_butterflies": 5,
+        "fixed_multiplications": 5,
+        "loads": 32,
+        "maximum_dense_block": 4,
+        "partial_dense_materializations": 0,
+        "stores": 31,
+        "xors": 16
+      },
+      "direction": "forward",
+      "padded": {
+        "boundary_nodes": 0,
+        "boundary_pairs": 0,
+        "compact_values_written": 0,
+        "complete_blocks": 1,
+        "complete_butterflies": 32,
+        "fixed_multiplications": 17,
+        "loads": 64,
+        "maximum_dense_block": 16,
+        "partial_dense_materializations": 0,
+        "stores": 64,
+        "xors": 49
+      },
+      "parent_size": 16,
+      "ratios": {
+        "fixed_multiplications": 0.29411764705882354,
+        "loads": 0.5,
+        "stores": 0.484375,
+        "xors": 0.32653061224489793
+      },
+      "requested_outputs": 7,
+      "workspace_contract": {
+        "compact_boundary_values_written": 21,
+        "incomplete_dense_blocks": 0,
+        "largest_dense_candidate_block": 4,
+        "padded_parent_slots": 16
+      }
+    },
+    {
+      "active_inputs": 33,
+      "candidate": {
+        "boundary_nodes": 6,
+        "boundary_pairs": 63,
+        "compact_values_written": 79,
+        "complete_blocks": 1,
+        "complete_butterflies": 32,
+        "fixed_multiplications": 32,
+        "loads": 158,
+        "maximum_dense_block": 16,
+        "partial_dense_materializations": 0,
+        "stores": 143,
+        "xors": 80
+      },
+      "direction": "forward",
+      "padded": {
+        "boundary_nodes": 0,
+        "boundary_pairs": 0,
+        "compact_values_written": 0,
+        "complete_blocks": 1,
+        "complete_butterflies": 192,
+        "fixed_multiplications": 129,
+        "loads": 384,
+        "maximum_dense_block": 64,
+        "partial_dense_materializations": 0,
+        "stores": 384,
+        "xors": 321
+      },
+      "parent_size": 64,
+      "ratios": {
+        "fixed_multiplications": 0.24806201550387597,
+        "loads": 0.4114583333333333,
+        "stores": 0.3723958333333333,
+        "xors": 0.24922118380062305
+      },
+      "requested_outputs": 17,
+      "workspace_contract": {
+        "compact_boundary_values_written": 79,
+        "incomplete_dense_blocks": 0,
+        "largest_dense_candidate_block": 16,
+        "padded_parent_slots": 64
+      }
+    },
+    {
+      "active_inputs": 129,
+      "candidate": {
+        "boundary_nodes": 8,
+        "boundary_pairs": 255,
+        "compact_values_written": 319,
+        "complete_blocks": 1,
+        "complete_butterflies": 192,
+        "fixed_multiplications": 192,
+        "loads": 766,
+        "maximum_dense_block": 64,
+        "partial_dense_materializations": 0,
+        "stores": 703,
+        "xors": 448
+      },
+      "direction": "forward",
+      "padded": {
+        "boundary_nodes": 0,
+        "boundary_pairs": 0,
+        "compact_values_written": 0,
+        "complete_blocks": 1,
+        "complete_butterflies": 1024,
+        "fixed_multiplications": 769,
+        "loads": 2048,
+        "maximum_dense_block": 256,
+        "partial_dense_materializations": 0,
+        "stores": 2048,
+        "xors": 1793
+      },
+      "parent_size": 256,
+      "ratios": {
+        "fixed_multiplications": 0.24967490247074123,
+        "loads": 0.3740234375,
+        "stores": 0.34326171875,
+        "xors": 0.2498605688789738
+      },
+      "requested_outputs": 65,
+      "workspace_contract": {
+        "compact_boundary_values_written": 319,
+        "incomplete_dense_blocks": 0,
+        "largest_dense_candidate_block": 64,
+        "padded_parent_slots": 256
+      }
+    },
+    {
+      "active_inputs": 9,
+      "candidate": {
+        "boundary_nodes": 3,
+        "boundary_pairs": 13,
+        "compact_values_written": 17,
+        "complete_blocks": 3,
+        "complete_butterflies": 6,
+        "fixed_multiplications": 5,
+        "loads": 30,
+        "maximum_dense_block": 4,
+        "partial_dense_materializations": 0,
+        "stores": 29,
+        "xors": 16
+      },
+      "direction": "inverse",
+      "padded": {
+        "boundary_nodes": 0,
+        "boundary_pairs": 0,
+        "compact_values_written": 0,
+        "complete_blocks": 1,
+        "complete_butterflies": 32,
+        "fixed_multiplications": 17,
+        "loads": 64,
+        "maximum_dense_block": 16,
+        "partial_dense_materializations": 0,
+        "stores": 64,
+        "xors": 49
+      },
+      "parent_size": 16,
+      "ratios": {
+        "fixed_multiplications": 0.29411764705882354,
+        "loads": 0.46875,
+        "stores": 0.453125,
+        "xors": 0.32653061224489793
+      },
+      "requested_outputs": 7,
+      "workspace_contract": {
+        "compact_boundary_values_written": 17,
+        "incomplete_dense_blocks": 0,
+        "largest_dense_candidate_block": 4,
+        "padded_parent_slots": 16
+      }
+    },
+    {
+      "active_inputs": 33,
+      "candidate": {
+        "boundary_nodes": 17,
+        "boundary_pairs": 48,
+        "compact_values_written": 49,
+        "complete_blocks": 1,
+        "complete_butterflies": 32,
+        "fixed_multiplications": 32,
+        "loads": 128,
+        "maximum_dense_block": 16,
+        "partial_dense_materializations": 0,
+        "stores": 113,
+        "xors": 80
+      },
+      "direction": "inverse",
+      "padded": {
+        "boundary_nodes": 0,
+        "boundary_pairs": 0,
+        "compact_values_written": 0,
+        "complete_blocks": 1,
+        "complete_butterflies": 192,
+        "fixed_multiplications": 129,
+        "loads": 384,
+        "maximum_dense_block": 64,
+        "partial_dense_materializations": 0,
+        "stores": 384,
+        "xors": 321
+      },
+      "parent_size": 64,
+      "ratios": {
+        "fixed_multiplications": 0.24806201550387597,
+        "loads": 0.3333333333333333,
+        "stores": 0.2942708333333333,
+        "xors": 0.24922118380062305
+      },
+      "requested_outputs": 17,
+      "workspace_contract": {
+        "compact_boundary_values_written": 49,
+        "incomplete_dense_blocks": 0,
+        "largest_dense_candidate_block": 16,
+        "padded_parent_slots": 64
+      }
+    },
+    {
+      "active_inputs": 129,
+      "candidate": {
+        "boundary_nodes": 65,
+        "boundary_pairs": 192,
+        "compact_values_written": 193,
+        "complete_blocks": 1,
+        "complete_butterflies": 192,
+        "fixed_multiplications": 192,
+        "loads": 640,
+        "maximum_dense_block": 64,
+        "partial_dense_materializations": 0,
+        "stores": 577,
+        "xors": 448
+      },
+      "direction": "inverse",
+      "padded": {
+        "boundary_nodes": 0,
+        "boundary_pairs": 0,
+        "compact_values_written": 0,
+        "complete_blocks": 1,
+        "complete_butterflies": 1024,
+        "fixed_multiplications": 769,
+        "loads": 2048,
+        "maximum_dense_block": 256,
+        "partial_dense_materializations": 0,
+        "stores": 2048,
+        "xors": 1793
+      },
+      "parent_size": 256,
+      "ratios": {
+        "fixed_multiplications": 0.24967490247074123,
+        "loads": 0.3125,
+        "stores": 0.28173828125,
+        "xors": 0.2498605688789738
+      },
+      "requested_outputs": 65,
+      "workspace_contract": {
+        "compact_boundary_values_written": 193,
+        "incomplete_dense_blocks": 0,
+        "largest_dense_candidate_block": 64,
+        "padded_parent_slots": 256
+      }
+    }
+  ],
+  "schema_version": "leopard2-c2-v1",
+  "status": "pass",
+  "timing": "not measured"
+}
