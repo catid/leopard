@@ -7,8 +7,9 @@
 
 Create one `leo2_context`, then any number of immutable codecs.  A codec fixes
 `K`, `R`, profile, field, parent length, and coordinate map.  A decode plan copies
-one presence/erasure pattern and precomputes its locator values.  The context and
-codec must outlive their codecs and plans respectively.
+one presence/erasure pattern and precomputes its locator values, profile-specific
+normalization factors, and deterministic received-coordinate selection.  The
+context and codec must outlive their codecs and plans respectively.
 
 Codec and plan execution is read-only and may be called concurrently when every
 call has distinct outputs and scratch.  Setup may allocate; encode and reusable
@@ -37,9 +38,23 @@ original output entries are ignored.  Missing parity is never rebuilt implicitly
 `leo2_decode_plan_execute` restores missing originals only.  A pattern with no
 missing originals has zero scratch and is a true no-op, including when parity is
 missing.  `R=1` high-profile repair and `K=1` low-profile repair use direct paths.
-Other patterns currently use the generic active-parent LCH derivative decoder with
-locator setup cached in the plan.  Specialized IT2026 low/high execution remains
-behind its proof and differential gates.
+Other patterns use the specialized IT2026 low- or high-rate decoder selected by
+the codec profile.  Locator construction, profile normalization, pruning inputs,
+and output selection depend only on the erasure pattern and are performed during
+plan creation; execution is the byte-heavy reusable step.
+
+The plan uses exactly `K` received public coordinates.  It keeps every surviving
+systematic shard, then keeps the lowest-index received parity shards needed to
+reach `K`; any surplus received parity is treated as a deterministic virtual
+erasure.  This selection affects only the work schedule, not the decoded message.
+Applications still pass the original presence pattern and may leave pointers for
+surplus received parity populated.
+
+For differential testing and diagnosis, set
+`LEO2_CODEC_FORCE_GENERIC_DECODE` in `leo2_codec_options.flags`.  Non-direct
+transform repairs then use the retained full `O(N log N)` active-parent decoder
+instead of the profile-specialized decoder.  The flag is not a distinct wire
+profile and does not change encoded data.
 
 `leo2_decode` is a convenience wrapper that allocates and destroys a plan.  Use a
 reusable plan when setup amortization matters.
@@ -73,6 +88,21 @@ caller scratch.  Legacy GF16 ALTMAP currently requires a multiple of 64 bytes;
 partial tiles return `LEO2_UNSUPPORTED` because truncating their high halves is
 not decodable.  See `leopard2_math_and_sources.md` for the proof obligation.
 
-The initial batch entry points execute independent items using per-item scratch.
-They provide a stable interface for later pool/executor and SIMD-across-stripes
-dispatch; the current implementation preserves deterministic serial ordering.
+The batch entry points execute independent items using each item's own buffers and
+scratch.  A context owns a persistent worker pool when its effective
+`thread_count` is greater than one, so batch calls do not create threads in the
+hot path.  The calling thread participates in the batch; the pool contains
+`thread_count - 1` workers.  A count of one executes batch items serially.
+
+`thread_count = 0` selects `std::thread::hardware_concurrency()`, falls back to one
+when it is unavailable, and caps the result at 128.  An explicit count from 1
+through 128 is accepted; a larger count returns `LEO2_INVALID_ARGUMENT`.
+`leo2_context_thread_count` reports the effective value.  This option controls
+parallelism across batch items, not the wire profile or the result bytes.
+
+Only one batch call at a time uses a given context pool.  Concurrent batch calls
+sharing that context are serialized at the scheduler, while calls using separate
+contexts may run independently.  Ordinary encode or plan-execute calls remain
+safe to invoke concurrently with distinct outputs and scratch.  Within a batch,
+the implementation reports the result from the lowest-index failing item
+deterministically; completion order is otherwise unspecified.

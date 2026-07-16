@@ -400,6 +400,42 @@ void run_decode_case(
             ++counts->recovered_shards;
         }
     }
+
+    if (field == LEO2_FIELD_GF16 && !missing_originals.empty())
+    {
+        leo2_codec_options generic_options;
+        memset(&generic_options, 0, sizeof(generic_options));
+        generic_options.struct_size = sizeof(generic_options);
+        generic_options.flags = LEO2_CODEC_FORCE_GENERIC_DECODE;
+        leo2_codec* generic_codec = NULL;
+        require_result(leo2_codec_create(context, k, r, profile, field,
+            &generic_options, &generic_codec), "GF16 generic codec create");
+        leo2_decode_plan* generic_plan = NULL;
+        require_result(leo2_decode_plan_create(generic_codec, &original_present[0],
+            &recovery_present[0], &generic_plan), "GF16 generic plan create");
+        size_t generic_scratch_bytes = 0;
+        require_result(leo2_decode_plan_scratch_size(
+            generic_plan, bytes, &generic_scratch_bytes),
+            "GF16 generic scratch query");
+        AlignedBuffer generic_scratch(generic_scratch_bytes);
+        Shards generic_restored(k, std::vector<uint8_t>(bytes, 0));
+        std::vector<void*> generic_restored_ptrs(k, NULL);
+        for (size_t i = 0; i < missing_originals.size(); ++i)
+            generic_restored_ptrs[missing_originals[i]] =
+                &generic_restored[missing_originals[i]][0];
+        require_result(leo2_decode_plan_execute(generic_plan, bytes,
+            &original_ptrs[0], &recovery_ptrs[0], &generic_restored_ptrs[0],
+            generic_scratch.data, generic_scratch.bytes),
+            "GF16 generic plan execute");
+        for (size_t i = 0; i < missing_originals.size(); ++i)
+        {
+            const unsigned index = missing_originals[i];
+            require(generic_restored[index] == restored[index],
+                "GF16 specialized and generic recovery differ");
+        }
+        leo2_decode_plan_destroy(generic_plan);
+        leo2_codec_destroy(generic_codec);
+    }
     if ((bytes & 63u) != 0)
         ++counts->tail_cases;
 

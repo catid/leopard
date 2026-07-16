@@ -91,9 +91,9 @@ typedef enum leo2_backend {
 } leo2_backend;
 
 /*
-    A future executor adapter can be added through a larger struct_size.  The
-    first release records the requested thread count but performs one stripe per
-    call; use the batch entry points to supply independent work.
+    A future caller-executor adapter can be added through a larger struct_size.
+    thread_count selects the persistent context pool used by batch entry points;
+    the calling thread participates and no worker is created per batch call.
 */
 typedef struct leo2_context_options {
     size_t struct_size;
@@ -107,6 +107,9 @@ typedef struct leo2_codec_options {
     uint32_t flags;
     uint32_t reserved;
 } leo2_codec_options;
+
+/* Test/diagnostic flag retaining the full O(N log N) decoder fallback. */
+#define LEO2_CODEC_FORCE_GENERIC_DECODE 0x00000001u
 
 typedef struct leo2_encode_batch_item {
     uint64_t shard_bytes;

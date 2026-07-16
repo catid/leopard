@@ -34,6 +34,8 @@
 #include "leopard.h"
 
 #include <algorithm>
+#include <atomic>
+#include <condition_variable>
 #include <limits>
 #include <mutex>
 #include <new>
@@ -41,10 +43,17 @@
 #include <thread>
 #include <vector>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
+class leo2_thread_pool;
+
 struct leo2_context
 {
     leo2_backend backend;
     uint32_t thread_count;
+    leo2_thread_pool* pool;
 };
 
 struct leo2_codec
@@ -57,6 +66,7 @@ struct leo2_codec
     uint32_t parent_dimension;
     leo2_profile profile;
     leo2_field field;
+    uint32_t flags;
 };
 
 struct leo2_decode_plan
@@ -68,6 +78,8 @@ struct leo2_decode_plan
     std::vector<uint8_t> requested;
     std::vector<uint8_t> locator8;
     std::vector<uint16_t> locator16;
+    std::vector<uint8_t> fixed_factors8;
+    std::vector<uint16_t> fixed_factors16;
     uint32_t missing_original_count;
     bool no_op;
     bool direct_xor;
@@ -77,6 +89,192 @@ struct leo2_decode_plan
 namespace {
 
 static const size_t kScratchAlignment = 64;
+
+typedef leo2_result (*BatchTaskFunction)(void* context, size_t index);
+
+} // namespace
+
+class leo2_thread_pool
+{
+public:
+    leo2_thread_pool()
+        : stopping_(false)
+        , generation_(0)
+        , function_(NULL)
+        , function_context_(NULL)
+        , task_count_(0)
+        , next_task_(0)
+        , failure_(0)
+        , completed_workers_(0)
+    {}
+
+    ~leo2_thread_pool()
+    {
+        Stop();
+    }
+
+    bool Start(uint32_t worker_count)
+    {
+        try
+        {
+            workers_.reserve(worker_count);
+            for (uint32_t i = 0; i < worker_count; ++i)
+                workers_.push_back(std::thread(&leo2_thread_pool::Worker, this));
+        }
+        catch (...)
+        {
+            Stop();
+            return false;
+        }
+        return true;
+    }
+
+    leo2_result Run(
+        size_t task_count,
+        BatchTaskFunction function,
+        void* function_context)
+    {
+        if (task_count == 0)
+            return LEO2_SUCCESS;
+        if (workers_.empty())
+        {
+            for (size_t i = 0; i < task_count; ++i)
+            {
+                const leo2_result result = function(function_context, i);
+                if (result != LEO2_SUCCESS)
+                    return result;
+            }
+            return LEO2_SUCCESS;
+        }
+
+        /* One context supports concurrent codecs, but one batch owns its pool
+           at a time.  Independent callers remain correct and are serialized at
+           this optional scheduling layer rather than racing shared job state. */
+        std::lock_guard<std::mutex> run_lock(run_mutex_);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            function_ = function;
+            function_context_ = function_context;
+            task_count_ = task_count;
+            next_task_.store(0, std::memory_order_relaxed);
+            failure_.store(PackFailure(task_count, LEO2_SUCCESS), std::memory_order_relaxed);
+            completed_workers_ = 0;
+            ++generation_;
+        }
+        work_ready_.notify_all();
+
+#ifdef _OPENMP
+        const int saved_openmp_threads = omp_get_max_threads();
+        omp_set_num_threads(1);
+#endif
+        ExecuteTasks();
+#ifdef _OPENMP
+        omp_set_num_threads(saved_openmp_threads);
+#endif
+
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            work_done_.wait(lock, [this]() {
+                return completed_workers_ == workers_.size();
+            });
+            function_ = NULL;
+            function_context_ = NULL;
+            task_count_ = 0;
+        }
+        return UnpackFailureResult(failure_.load(std::memory_order_relaxed));
+    }
+
+private:
+    static uint64_t PackFailure(size_t index, leo2_result result)
+    {
+        const uint64_t bounded_index = index > 0xffffffffu ? 0xffffffffu : index;
+        return (bounded_index << 32) | static_cast<uint32_t>(result);
+    }
+
+    static leo2_result UnpackFailureResult(uint64_t packed)
+    {
+        return static_cast<leo2_result>(static_cast<int32_t>(packed));
+    }
+
+    void RecordFailure(size_t index, leo2_result result)
+    {
+        if (result == LEO2_SUCCESS)
+            return;
+        uint64_t candidate = PackFailure(index, result);
+        uint64_t current = failure_.load(std::memory_order_relaxed);
+        while ((candidate >> 32) < (current >> 32) &&
+               !failure_.compare_exchange_weak(
+                   current, candidate, std::memory_order_relaxed, std::memory_order_relaxed))
+        {}
+    }
+
+    void ExecuteTasks()
+    {
+        for (;;)
+        {
+            const size_t index = next_task_.fetch_add(1, std::memory_order_relaxed);
+            if (index >= task_count_)
+                break;
+            RecordFailure(index, function_(function_context_, index));
+        }
+    }
+
+    void Worker()
+    {
+#ifdef _OPENMP
+        omp_set_num_threads(1);
+#endif
+        uint64_t seen_generation = 0;
+        for (;;)
+        {
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                work_ready_.wait(lock, [this, seen_generation]() {
+                    return stopping_ || generation_ != seen_generation;
+                });
+                if (stopping_)
+                    return;
+                seen_generation = generation_;
+            }
+            ExecuteTasks();
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                ++completed_workers_;
+                if (completed_workers_ == workers_.size())
+                    work_done_.notify_one();
+            }
+        }
+    }
+
+    void Stop()
+    {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stopping_ = true;
+        }
+        work_ready_.notify_all();
+        for (size_t i = 0; i < workers_.size(); ++i)
+            if (workers_[i].joinable())
+                workers_[i].join();
+        workers_.clear();
+    }
+
+    std::vector<std::thread> workers_;
+    std::mutex mutex_;
+    std::mutex run_mutex_;
+    std::condition_variable work_ready_;
+    std::condition_variable work_done_;
+    bool stopping_;
+    uint64_t generation_;
+    BatchTaskFunction function_;
+    void* function_context_;
+    size_t task_count_;
+    std::atomic<size_t> next_task_;
+    std::atomic<uint64_t> failure_;
+    size_t completed_workers_;
+};
+
+namespace {
 
 struct AddressRange
 {
@@ -465,6 +663,36 @@ static leo2_result ValidateDecodeBuffers(
     return ValidateDisjointRanges(ranges, input_count, outputs, output_count);
 }
 
+struct EncodeBatchTaskContext
+{
+    const leo2_codec* codec;
+    const leo2_encode_batch_item* items;
+};
+
+static leo2_result RunEncodeBatchItem(void* context, size_t index)
+{
+    const EncodeBatchTaskContext* batch = static_cast<const EncodeBatchTaskContext*>(context);
+    const leo2_encode_batch_item& item = batch->items[index];
+    return leo2_encode(
+        batch->codec, item.shard_bytes, item.original, item.recovery,
+        item.scratch, item.scratch_bytes);
+}
+
+struct DecodeBatchTaskContext
+{
+    const leo2_decode_plan* plan;
+    const leo2_decode_batch_item* items;
+};
+
+static leo2_result RunDecodeBatchItem(void* context, size_t index)
+{
+    const DecodeBatchTaskContext* batch = static_cast<const DecodeBatchTaskContext*>(context);
+    const leo2_decode_batch_item& item = batch->items[index];
+    return leo2_decode_plan_execute(
+        batch->plan, item.shard_bytes, item.original, item.recovery,
+        item.restored_original, item.scratch, item.scratch_bytes);
+}
+
 } // namespace
 
 extern "C" {
@@ -517,14 +745,34 @@ LEO2_EXPORT leo2_result leo2_context_create(
         threads = static_cast<uint32_t>(std::thread::hardware_concurrency());
         if (threads == 0)
             threads = 1;
+        if (threads > 128)
+            threads = 128;
+    }
+    if (threads > 128)
+    {
+        delete context;
+        return LEO2_INVALID_ARGUMENT;
     }
     context->thread_count = threads;
+    context->pool = NULL;
+    if (threads > 1)
+    {
+        context->pool = new (std::nothrow) leo2_thread_pool;
+        if (!context->pool || !context->pool->Start(threads - 1))
+        {
+            delete context->pool;
+            delete context;
+            return LEO2_OUT_OF_MEMORY;
+        }
+    }
     *context_out = context;
     return LEO2_SUCCESS;
 }
 
 LEO2_EXPORT void leo2_context_destroy(leo2_context* context)
 {
+    if (context)
+        delete context->pool;
     delete context;
 }
 
@@ -552,7 +800,8 @@ LEO2_EXPORT leo2_result leo2_codec_create(
     *codec_out = NULL;
     if (options)
     {
-        if (options->struct_size < sizeof(leo2_codec_options) || options->flags != 0)
+        if (options->struct_size < sizeof(leo2_codec_options) ||
+            (options->flags & ~LEO2_CODEC_FORCE_GENERIC_DECODE) != 0)
             return LEO2_INVALID_ARGUMENT;
     }
     if (profile == LEO2_PROFILE_AUTO)
@@ -592,6 +841,7 @@ LEO2_EXPORT leo2_result leo2_codec_create(
         ? parent - padded : padded;
     codec->profile = profile;
     codec->field = field;
+    codec->flags = options ? options->flags : 0;
     *codec_out = codec;
     return LEO2_SUCCESS;
 }
@@ -753,11 +1003,14 @@ LEO2_EXPORT leo2_result leo2_encode_batch(
 {
     if (item_count != 0 && !items)
         return LEO2_INVALID_ARGUMENT;
+    if (!codec)
+        return LEO2_INVALID_ARGUMENT;
+    EncodeBatchTaskContext batch = { codec, items };
+    if (codec->context->pool)
+        return codec->context->pool->Run(item_count, RunEncodeBatchItem, &batch);
     for (size_t i = 0; i < item_count; ++i)
     {
-        const leo2_result result = leo2_encode(
-            codec, items[i].shard_bytes, items[i].original, items[i].recovery,
-            items[i].scratch, items[i].scratch_bytes);
+        const leo2_result result = RunEncodeBatchItem(&batch, i);
         if (result != LEO2_SUCCESS)
             return result;
     }
@@ -835,6 +1088,31 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
             if (!recovery_present[i])
                 plan->coordinate_erased[CoordinateForRecovery(codec, i)] = 1;
 
+        /*
+            Specialized decoders use exactly parent redundancy erasures.  Keep
+            every surviving systematic shard, then the lowest-index parity
+            shards needed to reach K public survivors; mark surplus received
+            parity as deterministic virtual erasures.
+        */
+        uint32_t public_survivors_needed = codec->original_count;
+        for (uint32_t i = 0; i < codec->original_count; ++i)
+            if (original_present[i])
+                --public_survivors_needed;
+        for (uint32_t i = 0; i < codec->recovery_count; ++i)
+        {
+            if (!recovery_present[i])
+                continue;
+            if (public_survivors_needed != 0)
+                --public_survivors_needed;
+            else
+                plan->coordinate_erased[CoordinateForRecovery(codec, i)] = 1;
+        }
+        if (public_survivors_needed != 0)
+        {
+            delete plan;
+            return LEO2_NEED_MORE_DATA;
+        }
+
         if (!plan->no_op && !plan->direct_xor && !plan->direct_copy)
         {
             if (codec->field == LEO2_FIELD_GF8)
@@ -842,12 +1120,48 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
                 plan->locator8.resize(codec->parent_count);
                 leopard::ff8::PrepareDecode(codec->parent_count,
                     &plan->coordinate_erased[0], &plan->locator8[0]);
+                if ((codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) == 0)
+                {
+                    if (codec->profile == LEO2_PROFILE_LOW_V1)
+                    {
+                        plan->fixed_factors8.resize(
+                            codec->parent_count / codec->padded_side - 1);
+                        leopard::ff8::PrepareLowDecode(
+                            codec->parent_count, codec->padded_side,
+                            &plan->fixed_factors8[0]);
+                    }
+                    else
+                    {
+                        plan->fixed_factors8.resize(codec->parent_count);
+                        leopard::ff8::PrepareHighDecode(
+                            codec->parent_count, codec->padded_side,
+                            &plan->fixed_factors8[0]);
+                    }
+                }
             }
             else
             {
                 plan->locator16.resize(codec->parent_count);
                 leopard::ff16::PrepareDecode(codec->parent_count,
                     &plan->coordinate_erased[0], &plan->locator16[0]);
+                if ((codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) == 0)
+                {
+                    if (codec->profile == LEO2_PROFILE_LOW_V1)
+                    {
+                        plan->fixed_factors16.resize(
+                            codec->parent_count / codec->padded_side - 1);
+                        leopard::ff16::PrepareLowDecode(
+                            codec->parent_count, codec->padded_side,
+                            &plan->fixed_factors16[0]);
+                    }
+                    else
+                    {
+                        plan->fixed_factors16.resize(codec->parent_count);
+                        leopard::ff16::PrepareHighDecode(
+                            codec->parent_count, codec->padded_side,
+                            &plan->fixed_factors16[0]);
+                    }
+                }
             }
         }
     }
@@ -960,19 +1274,21 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
     for (uint32_t i = 0; i < codec->original_count; ++i)
     {
         uint8_t* slot = slots + static_cast<size_t>(i) * rounded;
-        if (original[i])
+        const uint32_t coordinate = CoordinateForOriginal(codec, i);
+        if (original[i] && !plan->coordinate_erased[coordinate])
         {
             CopyAndPad(slot, original[i], static_cast<size_t>(shard_bytes), rounded);
-            coordinate_data[CoordinateForOriginal(codec, i)] = slot;
+            coordinate_data[coordinate] = slot;
         }
     }
     for (uint32_t i = 0; i < codec->recovery_count; ++i)
     {
         uint8_t* slot = slots + (static_cast<size_t>(codec->original_count) + i) * rounded;
-        if (recovery[i])
+        const uint32_t coordinate = CoordinateForRecovery(codec, i);
+        if (recovery[i] && !plan->coordinate_erased[coordinate])
         {
             CopyAndPad(slot, recovery[i], static_cast<size_t>(shard_bytes), rounded);
-            coordinate_data[CoordinateForRecovery(codec, i)] = slot;
+            coordinate_data[coordinate] = slot;
         }
     }
     const size_t work_base = static_cast<size_t>(codec->original_count) + codec->recovery_count;
@@ -980,14 +1296,38 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
         work[i] = slots + (work_base + i) * rounded;
 
     const void* const* coordinate_input = const_cast<const void* const*>(coordinate_data);
+    const bool force_generic =
+        (codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) != 0;
     if (codec->field == LEO2_FIELD_GF8)
-        leopard::ff8::ReedSolomonDecodePrepared(
-            rounded, codec->parent_count, coordinate_input, &plan->requested[0],
-            &plan->locator8[0], work);
+    {
+        if (force_generic)
+            leopard::ff8::ReedSolomonDecodePrepared(
+                rounded, codec->parent_count, coordinate_input, &plan->requested[0],
+                &plan->locator8[0], work);
+        else if (codec->profile == LEO2_PROFILE_LOW_V1)
+            leopard::ff8::ReedSolomonDecodeLowPrepared(
+                rounded, codec->parent_count, codec->padded_side, coordinate_input,
+                &plan->requested[0], &plan->locator8[0], &plan->fixed_factors8[0], work);
+        else
+            leopard::ff8::ReedSolomonDecodeHighPrepared(
+                rounded, codec->parent_count, codec->padded_side, coordinate_input,
+                &plan->requested[0], &plan->locator8[0], &plan->fixed_factors8[0], work);
+    }
     else
-        leopard::ff16::ReedSolomonDecodePrepared(
-            rounded, codec->parent_count, coordinate_input, &plan->requested[0],
-            &plan->locator16[0], work);
+    {
+        if (force_generic)
+            leopard::ff16::ReedSolomonDecodePrepared(
+                rounded, codec->parent_count, coordinate_input, &plan->requested[0],
+                &plan->locator16[0], work);
+        else if (codec->profile == LEO2_PROFILE_LOW_V1)
+            leopard::ff16::ReedSolomonDecodeLowPrepared(
+                rounded, codec->parent_count, codec->padded_side, coordinate_input,
+                &plan->requested[0], &plan->locator16[0], &plan->fixed_factors16[0], work);
+        else
+            leopard::ff16::ReedSolomonDecodeHighPrepared(
+                rounded, codec->parent_count, codec->padded_side, coordinate_input,
+                &plan->requested[0], &plan->locator16[0], &plan->fixed_factors16[0], work);
+    }
 
     for (uint32_t i = 0; i < codec->original_count; ++i)
         if (!original[i])
@@ -1003,11 +1343,14 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute_batch(
 {
     if (item_count != 0 && !items)
         return LEO2_INVALID_ARGUMENT;
+    if (!plan)
+        return LEO2_INVALID_ARGUMENT;
+    DecodeBatchTaskContext batch = { plan, items };
+    if (plan->codec->context->pool)
+        return plan->codec->context->pool->Run(item_count, RunDecodeBatchItem, &batch);
     for (size_t i = 0; i < item_count; ++i)
     {
-        const leo2_result result = leo2_decode_plan_execute(
-            plan, items[i].shard_bytes, items[i].original, items[i].recovery,
-            items[i].restored_original, items[i].scratch, items[i].scratch_bytes);
+        const leo2_result result = RunDecodeBatchItem(&batch, i);
         if (result != LEO2_SUCCESS)
             return result;
     }

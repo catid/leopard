@@ -1742,7 +1742,7 @@ void PrepareDecode(
 // contract intact while revealing a result in its existing coordinate slot.
 static void mul_mem_inplace(void* data, ffe_t log_m, uint64_t bytes)
 {
-    uint8_t source[64];
+    alignas(64) uint8_t source[64];
     uint8_t* output = reinterpret_cast<uint8_t*>(data);
 
     for (uint64_t offset = 0; offset < bytes; offset += sizeof(source))
@@ -1808,6 +1808,222 @@ void ReedSolomonDecodePrepared(
     {
         if (requested_outputs[i])
             mul_mem_inplace(work[i], kModulus - locator_logs[i], buffer_bytes);
+    }
+}
+
+
+void PrepareLowDecode(
+    unsigned n,
+    unsigned p,
+    ffe_t* block_factors)
+{
+    LEO_DEBUG_ASSERT(p >= 2 && p <= n && n <= kOrder);
+
+    ffe_t numerator_log = 0;
+    for (unsigned i = 1; i < p; ++i)
+        numerator_log = AddMod(numerator_log, LogLUT[i]);
+
+    const unsigned block_count = n / p;
+    for (unsigned block = 1; block < block_count; ++block)
+    {
+        const unsigned shift = block * p;
+        ffe_t denominator_log = 0;
+        for (unsigned i = 0; i < p; ++i)
+            denominator_log = AddMod(denominator_log, LogLUT[shift ^ i]);
+        block_factors[block - 1] = SubMod(numerator_log, denominator_log);
+    }
+}
+
+
+void PrepareHighDecode(
+    unsigned n,
+    unsigned t,
+    ffe_t* output_factors)
+{
+    LEO_DEBUG_ASSERT(t >= 2 && t < n && n <= kOrder);
+
+    // c_n = product(V_n \ {0}).  R10's full-field form silently has c_m=1;
+    // retaining this numerator is required for an active parent in GF16.
+    ffe_t active_derivative_log = 0;
+    for (unsigned i = 1; i < n; ++i)
+        active_derivative_log = AddMod(active_derivative_log, LogLUT[i]);
+
+    // p_(N-T) from the normalized LCH basis.
+    ffe_t normalization_log = 0;
+    for (unsigned width = t; width < n; width <<= 1)
+        for (unsigned i = 0; i < width; ++i)
+            normalization_log = AddMod(normalization_log, LogLUT[width ^ i]);
+
+    const unsigned block_count = n / t;
+#pragma omp parallel for
+    for (int block = 1; block < (int)block_count; ++block)
+    {
+        const unsigned coordinate = (unsigned)block * t;
+        ffe_t subspace_log = 0;
+        for (unsigned i = 0; i < t; ++i)
+            subspace_log = AddMod(subspace_log, LogLUT[coordinate ^ i]);
+        const ffe_t factor = SubMod(
+            active_derivative_log,
+            AddMod(normalization_log, subspace_log));
+        for (unsigned i = 0; i < t; ++i)
+            output_factors[coordinate + i] = factor;
+    }
+}
+
+
+void ReedSolomonDecodeLowPrepared(
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned p,
+    const void* const* coordinate_data,
+    const uint8_t* requested_outputs,
+    const ffe_t* locator_logs,
+    const ffe_t* block_factors,
+    void** work)
+{
+    LEO_DEBUG_ASSERT(p >= 2 && p <= n && n <= kOrder);
+
+#ifdef LEO_ERROR_BITFIELD_OPT
+    ErrorBitfield error_bits;
+    for (unsigned i = 0; i < p; ++i)
+        if (requested_outputs[i])
+            error_bits.Set(i);
+    error_bits.Prepare();
+#endif
+
+#pragma omp parallel for
+    for (int i = 0; i < (int)n; ++i)
+    {
+        if (coordinate_data[i])
+            mul_mem(work[i], coordinate_data[i], locator_logs[i], buffer_bytes);
+        else
+            memset(work[i], 0, buffer_bytes);
+    }
+
+    const unsigned block_count = n / p;
+    for (unsigned block = 0; block < block_count; ++block)
+    {
+        const unsigned offset = block * p;
+        unsigned input_count = p;
+        while (input_count > 0 && !coordinate_data[offset + input_count - 1])
+            --input_count;
+        IFFT_DIT_Decoder(
+            buffer_bytes, input_count, work + offset, p, FFTSkew + offset - 1);
+    }
+
+    // R10 Corollary 1 derivative term.  The omitted scalar-sum contribution
+    // is f-hat^(0), which vanishes at every requested erasure because
+    // f(e) * Lambda(e) = 0; leaving slot zero unchanged is therefore exact.
+    for (unsigned i = 1; i < p; ++i)
+    {
+        const unsigned width = ((i ^ (i - 1)) + 1) >> 1;
+        if (width < 8)
+            VectorXOR(buffer_bytes, width, work + i - width, work + i);
+        else
+            VectorXOR_Threads(buffer_bytes, width, work + i - width, work + i);
+    }
+
+    // Weighted block reduction by c_k / s_k(omega_(block*P)).
+    for (unsigned block = 1; block < block_count; ++block)
+    {
+        const unsigned offset = block * p;
+#pragma omp parallel for
+        for (int i = 0; i < (int)p; ++i)
+        {
+            mul_mem_inplace(work[offset + i], block_factors[block - 1], buffer_bytes);
+            xor_mem(work[i], work[offset + i], buffer_bytes);
+        }
+    }
+
+#ifdef LEO_ERROR_BITFIELD_OPT
+    FFT_DIT_ErrorBits(buffer_bytes, work, p, p, FFTSkew - 1, error_bits);
+#else
+    FFT_DIT(buffer_bytes, work, p, p, FFTSkew - 1);
+#endif
+
+#pragma omp parallel for
+    for (int i = 0; i < (int)p; ++i)
+        if (requested_outputs[i])
+            mul_mem_inplace(work[i], kModulus - locator_logs[i], buffer_bytes);
+}
+
+
+void ReedSolomonDecodeHighPrepared(
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned t,
+    const void* const* coordinate_data,
+    const uint8_t* requested_outputs,
+    const ffe_t* locator_logs,
+    const ffe_t* output_factors,
+    void** work)
+{
+    LEO_DEBUG_ASSERT(t >= 2 && t < n && n <= kOrder);
+
+#pragma omp parallel for
+    for (int i = 0; i < (int)n; ++i)
+    {
+        if (coordinate_data[i])
+            memcpy(work[i], coordinate_data[i], buffer_bytes);
+        else
+            memset(work[i], 0, buffer_bytes);
+    }
+
+    const unsigned block_count = n / t;
+    for (unsigned block = 0; block < block_count; ++block)
+    {
+        const unsigned offset = block * t;
+        unsigned input_count = t;
+        while (input_count > 0 && !coordinate_data[offset + input_count - 1])
+            --input_count;
+        IFFT_DIT_Decoder(
+            buffer_bytes, input_count, work + offset, t, FFTSkew + offset - 1);
+        if (block != 0)
+        {
+            if (t < 8)
+                VectorXOR(buffer_bytes, t, work, work + offset);
+            else
+                VectorXOR_Threads(buffer_bytes, t, work, work + offset);
+        }
+    }
+
+    // h on V_t, then z = h * Lambda on V_t.
+    FFT_DIT(buffer_bytes, work, t, t, FFTSkew - 1);
+#pragma omp parallel for
+    for (int i = 0; i < (int)t; ++i)
+    {
+        if (coordinate_data[i])
+            mul_mem_inplace(work[i], locator_logs[i], buffer_bytes);
+        else
+            memset(work[i], 0, buffer_bytes);
+    }
+    IFFT_DIT_Decoder(buffer_bytes, t, work, t, FFTSkew - 1);
+
+    // Evaluate z only on message blocks that contain a requested original.
+    for (unsigned block = 1; block < block_count; ++block)
+    {
+        const unsigned offset = block * t;
+        unsigned requested_count = t;
+        while (requested_count > 0 && !requested_outputs[offset + requested_count - 1])
+            --requested_count;
+        if (requested_count == 0)
+            continue;
+#pragma omp parallel for
+        for (int i = 0; i < (int)t; ++i)
+            memcpy(work[offset + i], work[i], buffer_bytes);
+        FFT_DIT(
+            buffer_bytes, work + offset, requested_count, t, FFTSkew + offset - 1);
+#pragma omp parallel for
+        for (int i = 0; i < (int)requested_count; ++i)
+        {
+            const unsigned coordinate = offset + i;
+            if (requested_outputs[coordinate])
+            {
+                const ffe_t reveal_log = SubMod(
+                    output_factors[coordinate], locator_logs[coordinate]);
+                mul_mem_inplace(work[coordinate], reveal_log, buffer_bytes);
+            }
+        }
     }
 }
 

@@ -109,6 +109,38 @@ void ReedSolomonDecodePrepared(
     const ffe_t* locator_logs, // n elements
     void** work); // n elements
 
+// Precompute the active-parent fixed factors used by the IT2026 specialized
+// low/high original-recovery decoders.
+void PrepareLowDecode(
+    unsigned n,
+    unsigned p,
+    ffe_t* block_factors); // n / p - 1 elements
+
+void PrepareHighDecode(
+    unsigned n,
+    unsigned t,
+    ffe_t* output_factors); // n elements; t..n-1 are initialized
+
+void ReedSolomonDecodeLowPrepared(
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned p,
+    const void* const * const coordinate_data,
+    const uint8_t* requested_outputs,
+    const ffe_t* locator_logs,
+    const ffe_t* block_factors,
+    void** work);
+
+void ReedSolomonDecodeHighPrepared(
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned t,
+    const void* const * const coordinate_data,
+    const uint8_t* requested_outputs,
+    const ffe_t* locator_logs,
+    const ffe_t* output_factors,
+    void** work);
+
 void ReedSolomonDecode(
     uint64_t buffer_bytes,
     unsigned original_count,
