@@ -971,10 +971,12 @@ static void ValidateCase(
             result.digest = Fnv(result.digest, &parity[recovery][1], bytes);
         }
 
-        // A constant-zero codeword gives every received shard identical bytes,
-        // so all surviving-original and parity inputs can validly share one
-        // read-only buffer.  Exercise that strongest input/input alias case
-        // while restoring one original into separate guarded storage.
+        // A nonzero constant-polynomial codeword gives every received shard
+        // identical bytes, so all surviving-original and parity inputs can
+        // validly share one read-only buffer.  Exercise that strongest
+        // input/input alias case while restoring one original into separate
+        // guarded storage, and snapshot the complete shared input so an
+        // accidental write cannot hide behind unchanged guard bytes.
         {
             const std::vector<unsigned> missing(1, 0);
             const ExactDecodePlan<Ops> alias_plan(
@@ -982,6 +984,16 @@ static void ValidateCase(
             std::vector<uint8_t> shared_input(bytes + 2, 0);
             shared_input.front() = 0x71;
             shared_input.back() = 0x71;
+            for (size_t symbol = 0; symbol < symbols; ++symbol)
+            {
+                const uint32_t value = 1U +
+                    (case_index * 193U + static_cast<unsigned>(size_index) * 17U +
+                     static_cast<unsigned>(symbol) * 29U) % (Ops::Order() - 1U);
+                StoreSymbol<Element>(
+                    &shared_input[1], bytes, symbol,
+                    static_cast<Element>(value));
+            }
+            const std::vector<uint8_t> shared_snapshot = shared_input;
             std::vector<const void*> aliased_original(
                 k, static_cast<const void*>(&shared_input[1]));
             std::vector<const void*> aliased_parity(
@@ -998,13 +1010,17 @@ static void ValidateCase(
             C7TrackAllocations = false;
             result.hot_path_allocations += C7TrackedAllocations;
             ++result.decode_read_only_input_alias_calls;
-            if (shared_input.front() != 0x71 || shared_input.back() != 0x71 ||
+            if (shared_input != shared_snapshot ||
                 restored_alias.front() != 0x4d || restored_alias.back() != 0x4d)
-                Fail("decode input alias execution changed a guard");
-            for (size_t byte = 1; byte + 1 < restored_alias.size(); ++byte)
+                Fail("decode input alias execution changed shared input or a guard");
+            for (size_t symbol = 0; symbol < symbols; ++symbol)
             {
-                if (restored_alias[byte] != 0)
-                    Fail("decode input alias execution restored nonzero data");
+                const Element expected = LoadSymbol<Element>(
+                    &shared_snapshot[1], bytes, symbol);
+                const Element actual = LoadSymbol<Element>(
+                    &restored_alias[1], bytes, symbol);
+                if (actual != expected)
+                    Fail("decode input alias execution restored wrong constant data");
             }
             result.decode_read_only_input_alias_symbol_comparisons += symbols;
         }
