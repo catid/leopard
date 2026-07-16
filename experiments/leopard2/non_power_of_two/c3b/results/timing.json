@@ -1,0 +1,496 @@
+{
+  "affinity": [
+    15
+  ],
+  "cases": [
+    {
+      "count": 3,
+      "execution_per_symbol_position": {
+        "exact_coxon_algorithm1_newton_to_lch": {
+          "mad_ns": 24,
+          "median_ns": 2863
+        },
+        "exact_coxon_algorithm3_lagrange_to_lch": {
+          "mad_ns": 26,
+          "median_ns": 3243
+        },
+        "exact_dense_inverse": {
+          "mad_ns": 5,
+          "median_ns": 1266
+        },
+        "exact_generic_interpolation": {
+          "mad_ns": 5,
+          "median_ns": 2633
+        },
+        "exact_tang_han_algorithm8_epsilon_ifft": {
+          "mad_ns": 7,
+          "median_ns": 2702
+        },
+        "parent_padded_lch": {
+          "mad_ns": 5,
+          "median_ns": 2094
+        }
+      },
+      "field": "gf8",
+      "iterations_per_sample": 64,
+      "parent": 4,
+      "samples": 15,
+      "setup": {
+        "exact_coxon_algorithm1_newton_to_lch": {
+          "mad_ns": 339,
+          "median_ns": 14820
+        },
+        "exact_coxon_algorithm3_lagrange_to_lch": {
+          "mad_ns": 230,
+          "median_ns": 11330
+        },
+        "exact_dense_inverse": {
+          "mad_ns": 420,
+          "median_ns": 11890
+        },
+        "exact_generic_interpolation": {
+          "mad_ns": 299,
+          "median_ns": 11370
+        },
+        "exact_tang_han_algorithm8_epsilon_ifft": {
+          "mad_ns": 90,
+          "median_ns": 800
+        },
+        "parent_padded_lch": {
+          "mad_ns": 0,
+          "median_ns": 0
+        }
+      },
+      "shift": 3
+    },
+    {
+      "count": 5,
+      "execution_per_symbol_position": {
+        "exact_coxon_algorithm1_newton_to_lch": {
+          "mad_ns": 32,
+          "median_ns": 6133
+        },
+        "exact_coxon_algorithm3_lagrange_to_lch": {
+          "mad_ns": 32,
+          "median_ns": 8093
+        },
+        "exact_dense_inverse": {
+          "mad_ns": 18,
+          "median_ns": 2243
+        },
+        "exact_generic_interpolation": {
+          "mad_ns": 6,
+          "median_ns": 4670
+        },
+        "exact_tang_han_algorithm8_epsilon_ifft": {
+          "mad_ns": 24,
+          "median_ns": 6273
+        },
+        "parent_padded_lch": {
+          "mad_ns": 23,
+          "median_ns": 4977
+        }
+      },
+      "field": "gf8",
+      "iterations_per_sample": 64,
+      "parent": 8,
+      "samples": 15,
+      "setup": {
+        "exact_coxon_algorithm1_newton_to_lch": {
+          "mad_ns": 290,
+          "median_ns": 33170
+        },
+        "exact_coxon_algorithm3_lagrange_to_lch": {
+          "mad_ns": 380,
+          "median_ns": 23340
+        },
+        "exact_dense_inverse": {
+          "mad_ns": 640,
+          "median_ns": 28660
+        },
+        "exact_generic_interpolation": {
+          "mad_ns": 230,
+          "median_ns": 25650
+        },
+        "exact_tang_han_algorithm8_epsilon_ifft": {
+          "mad_ns": 50,
+          "median_ns": 860
+        },
+        "parent_padded_lch": {
+          "mad_ns": 0,
+          "median_ns": 0
+        }
+      },
+      "shift": 3
+    },
+    {
+      "count": 9,
+      "execution_per_symbol_position": {
+        "exact_coxon_algorithm1_newton_to_lch": {
+          "mad_ns": 18,
+          "median_ns": 15100
+        },
+        "exact_coxon_algorithm3_lagrange_to_lch": {
+          "mad_ns": 28,
+          "median_ns": 21474
+        },
+        "exact_dense_inverse": {
+          "mad_ns": 9,
+          "median_ns": 5464
+        },
+        "exact_generic_interpolation": {
+          "mad_ns": 11,
+          "median_ns": 11962
+        },
+        "exact_tang_han_algorithm8_epsilon_ifft": {
+          "mad_ns": 23,
+          "median_ns": 14173
+        },
+        "parent_padded_lch": {
+          "mad_ns": 15,
+          "median_ns": 11137
+        }
+      },
+      "field": "gf8",
+      "iterations_per_sample": 64,
+      "parent": 16,
+      "samples": 15,
+      "setup": {
+        "exact_coxon_algorithm1_newton_to_lch": {
+          "mad_ns": 710,
+          "median_ns": 74621
+        },
+        "exact_coxon_algorithm3_lagrange_to_lch": {
+          "mad_ns": 460,
+          "median_ns": 41391
+        },
+        "exact_dense_inverse": {
+          "mad_ns": 830,
+          "median_ns": 103221
+        },
+        "exact_generic_interpolation": {
+          "mad_ns": 1000,
+          "median_ns": 94991
+        },
+        "exact_tang_han_algorithm8_epsilon_ifft": {
+          "mad_ns": 50,
+          "median_ns": 900
+        },
+        "parent_padded_lch": {
+          "mad_ns": 0,
+          "median_ns": 0
+        }
+      },
+      "shift": 3
+    },
+    {
+      "count": 17,
+      "execution_per_symbol_position": {
+        "exact_coxon_algorithm1_newton_to_lch": {
+          "mad_ns": 46,
+          "median_ns": 36203
+        },
+        "exact_coxon_algorithm3_lagrange_to_lch": {
+          "mad_ns": 64,
+          "median_ns": 43375
+        },
+        "exact_dense_inverse": {
+          "mad_ns": 11,
+          "median_ns": 16620
+        },
+        "exact_generic_interpolation": {
+          "mad_ns": 18,
+          "median_ns": 37049
+        },
+        "exact_tang_han_algorithm8_epsilon_ifft": {
+          "mad_ns": 87,
+          "median_ns": 31399
+        },
+        "parent_padded_lch": {
+          "mad_ns": 39,
+          "median_ns": 24789
+        }
+      },
+      "field": "gf8",
+      "iterations_per_sample": 64,
+      "parent": 32,
+      "samples": 15,
+      "setup": {
+        "exact_coxon_algorithm1_newton_to_lch": {
+          "mad_ns": 580,
+          "median_ns": 182422
+        },
+        "exact_coxon_algorithm3_lagrange_to_lch": {
+          "mad_ns": 531,
+          "median_ns": 59871
+        },
+        "exact_dense_inverse": {
+          "mad_ns": 1850,
+          "median_ns": 541976
+        },
+        "exact_generic_interpolation": {
+          "mad_ns": 921,
+          "median_ns": 489476
+        },
+        "exact_tang_han_algorithm8_epsilon_ifft": {
+          "mad_ns": 30,
+          "median_ns": 990
+        },
+        "parent_padded_lch": {
+          "mad_ns": 0,
+          "median_ns": 0
+        }
+      },
+      "shift": 3
+    },
+    {
+      "count": 3,
+      "execution_per_symbol_position": {
+        "exact_coxon_algorithm1_newton_to_lch": {
+          "mad_ns": 12,
+          "median_ns": 8055
+        },
+        "exact_coxon_algorithm3_lagrange_to_lch": {
+          "mad_ns": 19,
+          "median_ns": 5071
+        },
+        "exact_dense_inverse": {
+          "mad_ns": 17,
+          "median_ns": 5446
+        },
+        "exact_generic_interpolation": {
+          "mad_ns": 18,
+          "median_ns": 16396
+        },
+        "exact_tang_han_algorithm8_epsilon_ifft": {
+          "mad_ns": 8,
+          "median_ns": 4674
+        },
+        "parent_padded_lch": {
+          "mad_ns": 25,
+          "median_ns": 4029
+        }
+      },
+      "field": "gf16",
+      "iterations_per_sample": 64,
+      "parent": 4,
+      "samples": 15,
+      "setup": {
+        "exact_coxon_algorithm1_newton_to_lch": {
+          "mad_ns": 1120,
+          "median_ns": 291013
+        },
+        "exact_coxon_algorithm3_lagrange_to_lch": {
+          "mad_ns": 730,
+          "median_ns": 161132
+        },
+        "exact_dense_inverse": {
+          "mad_ns": 1410,
+          "median_ns": 84891
+        },
+        "exact_generic_interpolation": {
+          "mad_ns": 1469,
+          "median_ns": 209102
+        },
+        "exact_tang_han_algorithm8_epsilon_ifft": {
+          "mad_ns": 30,
+          "median_ns": 700
+        },
+        "parent_padded_lch": {
+          "mad_ns": 0,
+          "median_ns": 0
+        }
+      },
+      "shift": 3
+    },
+    {
+      "count": 5,
+      "execution_per_symbol_position": {
+        "exact_coxon_algorithm1_newton_to_lch": {
+          "mad_ns": 25,
+          "median_ns": 23341
+        },
+        "exact_coxon_algorithm3_lagrange_to_lch": {
+          "mad_ns": 49,
+          "median_ns": 16620
+        },
+        "exact_dense_inverse": {
+          "mad_ns": 17,
+          "median_ns": 14012
+        },
+        "exact_generic_interpolation": {
+          "mad_ns": 35,
+          "median_ns": 33784
+        },
+        "exact_tang_han_algorithm8_epsilon_ifft": {
+          "mad_ns": 20,
+          "median_ns": 16924
+        },
+        "parent_padded_lch": {
+          "mad_ns": 21,
+          "median_ns": 13271
+        }
+      },
+      "field": "gf16",
+      "iterations_per_sample": 64,
+      "parent": 8,
+      "samples": 15,
+      "setup": {
+        "exact_coxon_algorithm1_newton_to_lch": {
+          "mad_ns": 1280,
+          "median_ns": 843989
+        },
+        "exact_coxon_algorithm3_lagrange_to_lch": {
+          "mad_ns": 1370,
+          "median_ns": 370214
+        },
+        "exact_dense_inverse": {
+          "mad_ns": 830,
+          "median_ns": 206692
+        },
+        "exact_generic_interpolation": {
+          "mad_ns": 810,
+          "median_ns": 421824
+        },
+        "exact_tang_han_algorithm8_epsilon_ifft": {
+          "mad_ns": 40,
+          "median_ns": 800
+        },
+        "parent_padded_lch": {
+          "mad_ns": 0,
+          "median_ns": 0
+        }
+      },
+      "shift": 3
+    },
+    {
+      "count": 9,
+      "execution_per_symbol_position": {
+        "exact_coxon_algorithm1_newton_to_lch": {
+          "mad_ns": 40,
+          "median_ns": 85311
+        },
+        "exact_coxon_algorithm3_lagrange_to_lch": {
+          "mad_ns": 32,
+          "median_ns": 45557
+        },
+        "exact_dense_inverse": {
+          "mad_ns": 79,
+          "median_ns": 48983
+        },
+        "exact_generic_interpolation": {
+          "mad_ns": 83,
+          "median_ns": 127897
+        },
+        "exact_tang_han_algorithm8_epsilon_ifft": {
+          "mad_ns": 77,
+          "median_ns": 49056
+        },
+        "parent_padded_lch": {
+          "mad_ns": 30,
+          "median_ns": 35426
+        }
+      },
+      "field": "gf16",
+      "iterations_per_sample": 64,
+      "parent": 16,
+      "samples": 15,
+      "setup": {
+        "exact_coxon_algorithm1_newton_to_lch": {
+          "mad_ns": 3069,
+          "median_ns": 2535888
+        },
+        "exact_coxon_algorithm3_lagrange_to_lch": {
+          "mad_ns": 1670,
+          "median_ns": 701638
+        },
+        "exact_dense_inverse": {
+          "mad_ns": 1440,
+          "median_ns": 936290
+        },
+        "exact_generic_interpolation": {
+          "mad_ns": 1680,
+          "median_ns": 1257254
+        },
+        "exact_tang_han_algorithm8_epsilon_ifft": {
+          "mad_ns": 30,
+          "median_ns": 870
+        },
+        "parent_padded_lch": {
+          "mad_ns": 0,
+          "median_ns": 0
+        }
+      },
+      "shift": 3
+    },
+    {
+      "count": 17,
+      "execution_per_symbol_position": {
+        "exact_coxon_algorithm1_newton_to_lch": {
+          "mad_ns": 427,
+          "median_ns": 315901
+        },
+        "exact_coxon_algorithm3_lagrange_to_lch": {
+          "mad_ns": 205,
+          "median_ns": 108916
+        },
+        "exact_dense_inverse": {
+          "mad_ns": 1168,
+          "median_ns": 217698
+        },
+        "exact_generic_interpolation": {
+          "mad_ns": 385,
+          "median_ns": 490988
+        },
+        "exact_tang_han_algorithm8_epsilon_ifft": {
+          "mad_ns": 105,
+          "median_ns": 131504
+        },
+        "parent_padded_lch": {
+          "mad_ns": 278,
+          "median_ns": 90168
+        }
+      },
+      "field": "gf16",
+      "iterations_per_sample": 64,
+      "parent": 32,
+      "samples": 15,
+      "setup": {
+        "exact_coxon_algorithm1_newton_to_lch": {
+          "mad_ns": 4500,
+          "median_ns": 8308641
+        },
+        "exact_coxon_algorithm3_lagrange_to_lch": {
+          "mad_ns": 3360,
+          "median_ns": 1052922
+        },
+        "exact_dense_inverse": {
+          "mad_ns": 5570,
+          "median_ns": 6148517
+        },
+        "exact_generic_interpolation": {
+          "mad_ns": 4771,
+          "median_ns": 5708653
+        },
+        "exact_tang_han_algorithm8_epsilon_ifft": {
+          "mad_ns": 30,
+          "median_ns": 980
+        },
+        "parent_padded_lch": {
+          "mad_ns": 0,
+          "median_ns": 0
+        }
+      },
+      "shift": 3
+    }
+  ],
+  "machine": {
+    "architecture": "x86_64",
+    "platform": "Linux-6.8.0-134-generic-x86_64-with-glibc2.39",
+    "processor": "x86_64",
+    "python": "3.12.3"
+  },
+  "omp_num_threads": "1",
+  "schema": "leopard2-c3b-fast-inverse-timing/v1",
+  "source_sha256": "bf63d8f228c7ca19b49f1971affc72ebfeebda870111111662c8b32ede0c9e84"
+}

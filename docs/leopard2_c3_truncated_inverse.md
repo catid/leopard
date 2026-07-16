@@ -219,9 +219,12 @@ Exact SHA-256 values for this checkpoint are:
   profile.
 - **Transparent Newton and generic executors:** killed as scalar production
   candidates in the measured cells, retained as independent oracles.
-- **Fast Coxon/Tang-Han inverse:** not implemented and still inconclusive.
+- **Fast Coxon/Tang-Han inverse:** the follow-up C3b checkpoint implements
+  Coxon Algorithms 1 and 3 and Tang--Han Algorithm 8.  All pass exact-prefix
+  algebra, but all three scalar executors miss the 10% performance rule; see
+  `docs/leopard2_c3b_fast_inverse.md`.
 
-A production promotion would still require a derived fast conversion,
-exhaustive exact-profile MDS proof, serialized identity, C++/SIMD implementation,
+A production promotion would still require exhaustive exact-profile MDS proof,
+serialized identity, C++/SIMD implementation,
 whole-codec setup/execution benchmarks, neighboring-regression checks, and a
 deterministic dispatcher.  C3 deliberately stops before that integration.

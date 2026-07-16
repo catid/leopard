@@ -413,6 +413,8 @@ wire semantics.
 | active-parent factor `c_n` in high recovery | new derivation above from congruence modulo `s_n`; direct tests required |
 | exact/truncated parent-preserving candidates | R15; R22 for general TFT design principles |
 | arbitrary-parameter new-profile candidates | R13, R14, R18-R21; never assumed wire-equivalent |
+| exact-prefix Lagrange/Newton-to-LCH conversion | R15 Algorithms 1 and 3; executable derivation and direct-algebra checks in `experiments/leopard2/non_power_of_two/c3b/fast_inverse.py` |
+| arbitrary-epsilon inverse and completed evaluations | R13 Appendix A, Lemmas 8-9 and Algorithm 8; executable derivation and direct-algebra checks in the C3b experiment |
 
 ## Literature refresh
 
