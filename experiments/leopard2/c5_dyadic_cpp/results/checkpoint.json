@@ -1,0 +1,139 @@
+{
+  "artifacts_sha256": {
+    "backend_auto": "fec21b70642ada5793a398853f24d64aa647d0cb97c4a0c7d05cda7fb095b006",
+    "backend_avx2": "ed3838cf86ccded4ad614d525a16a05b1bc57fd79519852ba7d4e55db53f71ba",
+    "backend_scalar": "7138f9c6c3c71692e7e6ece1fc74eeef02a0aed7f255cf19e24e6004dbea1e4f",
+    "backend_ssse3": "482918eba2aadbd93aef0aa6fb1c4e5d3d83eb8ce4280d0e590841a240f6f057",
+    "benchmark": "903c39264e5b49e515f5a147b00c83af7adad3581da770e2cf8e61a5a28992e8",
+    "sanitizer": "3785db9c07647e7c58484389fd9a6e3819f54d91d1c2fe8d225768c49a386c39"
+  },
+  "benchmark": {
+    "affinity_cpus": [
+      15
+    ],
+    "backend": "avx2",
+    "batch": [
+      1,
+      8
+    ],
+    "cells": 54,
+    "execution_order": "alternating ABBA",
+    "reuse": [
+      1,
+      8
+    ],
+    "setup_median_us_range": [
+      16.501,
+      738.108
+    ],
+    "setup_reported_separately": true,
+    "shard_bytes": [
+      64,
+      1024,
+      65536,
+      1048576
+    ],
+    "thread_count": 1
+  },
+  "build_binding": {
+    "checkpoint_generation_head": "37e852774bce6f9effb1acf1fcde99a758ecfe6e",
+    "core_baseline_git_sha": "37e852774bce6f9effb1acf1fcde99a758ecfe6e",
+    "experiment_source_sha256": "9d28e260b5894badd75fa95ebe67bc05aeff150e87a168fa41bae3fe4f09ecb3"
+  },
+  "correctness": {
+    "backend_case_executions": 576,
+    "backend_variants": [
+      "auto",
+      "scalar",
+      "ssse3",
+      "avx2"
+    ],
+    "cases_per_variant": 144,
+    "digest": "0x56af7bbc2fb6a888",
+    "direct_symbol_checks_per_variant": 388,
+    "factor_checks_per_variant": 1260048,
+    "sanitizer_case_executions": 144,
+    "sanitizers": [
+      "address",
+      "undefined"
+    ],
+    "tail_policy": "zero-pad to kernel quantum; compare valid and padded bytes"
+  },
+  "default_build_integration": false,
+  "exact_profile_implemented": false,
+  "limitations": [
+    "The candidate operates on existing parent LCH coefficients; it is not a systematic encoder API.",
+    "The only fused route is q=2^a+1; general multi-block factors use scalar multiplication.",
+    "Tail bytes are zero-padded to the legacy 64-byte kernel quantum.",
+    "No exact-size coordinate profile or serialized code identity is introduced.",
+    "Timing is authoritative only for the recorded pinned host/backend."
+  ],
+  "promotion": {
+    "disposition": "reject: no bounded q region passed the measured 10% gate without neighboring regressions",
+    "experimental_followup": false,
+    "neighbor_regression_limit_percent": 2.0,
+    "per_q": [
+      {
+        "cells": 11,
+        "credible_gain_percent_max": 1.650048,
+        "credible_gain_percent_median": -11.546529,
+        "credible_gain_percent_min": -21.542553,
+        "credible_wins_at_least_10_percent": 0,
+        "meaningful_region_gate": false,
+        "modeled_traffic_reduction_percent_max": 10.867052023121381,
+        "modeled_traffic_reduction_percent_min": 10.867052023121381,
+        "q": 33
+      },
+      {
+        "cells": 11,
+        "credible_gain_percent_max": 14.478765,
+        "credible_gain_percent_median": -7.472578,
+        "credible_gain_percent_min": -19.09364,
+        "credible_wins_at_least_10_percent": 1,
+        "meaningful_region_gate": false,
+        "modeled_traffic_reduction_percent_max": 9.571788413098236,
+        "modeled_traffic_reduction_percent_min": 9.571788413098236,
+        "q": 65
+      },
+      {
+        "cells": 11,
+        "credible_gain_percent_max": -2.803118,
+        "credible_gain_percent_median": -12.960837,
+        "credible_gain_percent_min": -17.320704,
+        "credible_wins_at_least_10_percent": 0,
+        "meaningful_region_gate": false,
+        "modeled_traffic_reduction_percent_max": 8.524882838652081,
+        "modeled_traffic_reduction_percent_min": 8.524882838652081,
+        "q": 129
+      },
+      {
+        "cells": 11,
+        "credible_gain_percent_max": 4.249802,
+        "credible_gain_percent_median": -7.921837,
+        "credible_gain_percent_min": -14.824227,
+        "credible_wins_at_least_10_percent": 0,
+        "meaningful_region_gate": false,
+        "modeled_traffic_reduction_percent_max": 7.6715072608913415,
+        "modeled_traffic_reduction_percent_min": 7.6715072608913415,
+        "q": 257
+      },
+      {
+        "cells": 10,
+        "credible_gain_percent_max": 1.186684,
+        "credible_gain_percent_median": -5.899718,
+        "credible_gain_percent_min": -16.96814,
+        "credible_wins_at_least_10_percent": 0,
+        "meaningful_region_gate": false,
+        "modeled_traffic_reduction_percent_max": 6.967343416450921,
+        "modeled_traffic_reduction_percent_min": 6.967343416450921,
+        "q": 513
+      }
+    ],
+    "production_promotion": false,
+    "promotion_threshold_percent": 10.0,
+    "qualified_q": []
+  },
+  "schema_version": "leopard2-c5-checkpoint-v1",
+  "status": "pass",
+  "wire_identity": "existing padded dyadic parent"
+}

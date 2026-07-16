@@ -13,6 +13,12 @@ block pair and adds an explicit local-to-global join.  These are bounded kills
 of the studied routes, not a proof that no factored or pruned exact algorithm
 can exist.
 
+The later bounded C++ executor in `docs/leopard2_c5_cpp_execution.md` completes
+the remaining SIMD, sanitizer, tail, setup/execution, scratch, batch/reuse, and
+pinned timing gates.  Its strongest fused `q=2^a+1` implementation also fails
+the region-wide 10% promotion rule, so the disposition here is unchanged and
+the previously open measurement obligation is resolved.
+
 The deterministic program and artifact are:
 
     experiments/leopard2/c5_gf16_checkpoint.py
@@ -169,9 +175,11 @@ parent schedule is assigned to C1/C2.
   identifier and independent MDS proof.
 - Promote no code, profile, dispatcher cell, or wire-format change from C5.
 
-This checkpoint does not satisfy the full C5 C++/SIMD/timing gate.  The only
-modeled ceiling above the promotion threshold requires fused parent pruning;
-that implementation and measurement remain open in the C1/C2 scheduler track.
+This scalar checkpoint did not itself satisfy the full C5 C++/SIMD/timing
+gate.  The only modeled ceiling above the promotion threshold required fused
+parent pruning.  The later C++ checkpoint implements and rejects the bounded
+`2^a+1` fusion; broader general-purpose pruning remains a separate C1/C2
+scheduler question.
 
 ## Reproduction
 

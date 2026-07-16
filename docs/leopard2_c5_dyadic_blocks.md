@@ -1,11 +1,12 @@
 # Leopard2 C5 binary dyadic-block decomposition
 
 Status: bounded scalar checkpoint complete with a non-promotion disposition for
-the naive local-to-global join-plus-parent route studied here.  Do not close the
-parent C5 Bead:
-its broader acceptance still requires representative GF16 and measured
-byte/batch/reuse evidence for any surviving optimized factorization.  The
-coordinator can retain this result as a completed scalar-checkpoint child.
+the naive local-to-global join-plus-parent route studied here.  The subsequent
+standalone C++ execution, GF16, SIMD, sanitizer, byte/batch/reuse, scratch, and
+measured promotion gates are complete in
+`docs/leopard2_c5_cpp_execution.md`.  That fused `2^a+1` candidate also receives
+a non-promotion disposition; this document remains the independent algebra and
+small-field exact-profile evidence.
 
 This checkpoint does not justify adding a separate binary-block encoder or
 wire profile.  The parent-preserving identity is correct but is already a
@@ -220,12 +221,12 @@ but 218 of 255 GF8 prefixes already have more block butterflies before factor
 multiplications and accumulation are charged.  The few favorable geometries
 are better represented by the more general C1/C2 scheduled pruning work.
 
-No timing was run, intentionally: this scalar checkpoint ran while other host
+No timing was run in this scalar stage, intentionally: it ran while other host
 validation was active, and the studied explicit route did not justify an
 optimized candidate.  The density proof uses only distinct
 prefix points and active-subspace root sets and therefore extends structurally
-to GF16, but that proof does not satisfy the parent Bead's executable GF16 or
-measured byte/batch/reuse gates.  Those gates remain open.
+to GF16.  The later C++ checkpoint cited above supplies the executable GF16 and
+measured byte/batch/reuse gates without changing this scalar result.
 
 Only promote a surviving block factorization if a C1/C2 production schedule
 subsuming it passes all wire/correctness gates and demonstrates at least a 10%
