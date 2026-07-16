@@ -28,6 +28,7 @@ set(EXPERIMENT_SOURCE_FILES
 
 option(LEO2_BUILD_TESTS "Build Leopard2 correctness tests" ON)
 option(LEO2_BUILD_BENCHMARKS "Build Leopard benchmark programs" ON)
+option(LEO2_BUILD_FUZZERS "Build Leopard2 libFuzzer targets" OFF)
 option(LEO2_ENABLE_CUDA "Build the optional Leopard2 CUDA backend" OFF)
 
 # CUDA is deliberately opt-in.  In particular, the default configuration must
@@ -168,6 +169,12 @@ if(LEO2_BUILD_TESTS)
     target_link_libraries(leopard2_locator_test libleopard)
     add_test(NAME leopard2_locator COMMAND leopard2_locator_test)
 
+    add_executable(leopard2_fuzz_smoke
+        tests/leopard2/fuzz_api.cpp
+        tests/leopard2/fuzz_replay.cpp)
+    target_link_libraries(leopard2_fuzz_smoke libleopard)
+    add_test(NAME leopard2_fuzz_smoke COMMAND leopard2_fuzz_smoke)
+
     add_test(
         NAME leopard2_cuda_optional
         COMMAND ${CMAKE_COMMAND}
@@ -192,4 +199,28 @@ if(LEO2_BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/cost_model.py
                 self-test)
     endif()
+endif()
+
+if(LEO2_BUILD_FUZZERS)
+    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        message(FATAL_ERROR
+            "LEO2_BUILD_FUZZERS requires upstream Clang libFuzzer support")
+    endif()
+
+    # Build an independently instrumented copy of the library into the fuzz
+    # executable.  Applying sanitizer flags only to fuzz_api.cpp would leave
+    # the codec itself invisible to ASan, UBSan, and coverage-guided mutation;
+    # applying them to libleopard would in turn break ordinary targets that
+    # link the uninstrumented sanitizer runtime.
+    add_executable(leopard2_api_fuzzer
+        tests/leopard2/fuzz_api.cpp
+        ${LIB_SOURCE_FILES})
+    target_include_directories(leopard2_api_fuzzer PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_options(leopard2_api_fuzzer PRIVATE
+        -fsanitize=fuzzer,address,undefined
+        -fno-omit-frame-pointer)
+    set_property(TARGET leopard2_api_fuzzer APPEND_STRING PROPERTY
+        LINK_FLAGS " -fsanitize=fuzzer,address,undefined")
+    target_link_libraries(leopard2_api_fuzzer Threads::Threads)
 endif()
