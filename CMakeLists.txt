@@ -28,6 +28,15 @@ set(EXPERIMENT_SOURCE_FILES
 
 option(LEO2_BUILD_TESTS "Build Leopard2 correctness tests" ON)
 option(LEO2_BUILD_BENCHMARKS "Build Leopard benchmark programs" ON)
+option(LEO2_ENABLE_CUDA "Build the optional Leopard2 CUDA backend" OFF)
+
+# CUDA is deliberately opt-in.  In particular, the default configuration must
+# not probe for a CUDA compiler or make CUDA a transitive build dependency.
+# Backend sources will be added behind this gate by the end-of-project CUDA
+# work tracked in Beads.
+if(LEO2_ENABLE_CUDA)
+    enable_language(CUDA)
+endif()
 
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
@@ -109,6 +118,7 @@ else()
 endif()
 
 find_package(OpenMP)
+find_package(Threads REQUIRED)
 cmake_dependent_option(ENABLE_OPENMP "Enable OpenMP support" ON "OPENMP_FOUND" OFF)
 if(ENABLE_OPENMP)
     if(NOT OPENMP_FOUND)
@@ -120,10 +130,14 @@ endif(ENABLE_OPENMP)
 
 add_library(libleopard STATIC ${LIB_SOURCE_FILES})
 target_include_directories(libleopard PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(libleopard PUBLIC Threads::Threads)
 
 if(LEO2_BUILD_BENCHMARKS)
     add_executable(bench_leopard ${BENCH_SOURCE_FILES})
     target_link_libraries(bench_leopard libleopard)
+
+    add_executable(bench_leopard2 bench/leopard2/benchmark.cpp)
+    target_link_libraries(bench_leopard2 libleopard)
 
     add_executable(experiment_leopard ${EXPERIMENT_SOURCE_FILES})
 endif()
@@ -142,4 +156,36 @@ if(LEO2_BUILD_TESTS)
     target_include_directories(leopard2_api_test PRIVATE tests/leopard2)
     target_link_libraries(leopard2_api_test libleopard)
     add_test(NAME leopard2_api COMMAND leopard2_api_test)
+
+    add_executable(leopard2_random_test
+        tests/leopard2/direct_oracle.cpp
+        tests/leopard2/test_random.cpp)
+    target_include_directories(leopard2_random_test PRIVATE tests/leopard2)
+    target_link_libraries(leopard2_random_test libleopard)
+    add_test(NAME leopard2_random COMMAND leopard2_random_test)
+
+    add_test(
+        NAME leopard2_cuda_optional
+        COMMAND ${CMAKE_COMMAND}
+            -DLEO2_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLEO2_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/cuda-optional-test
+            -DLEO2_GENERATOR=${CMAKE_GENERATOR}
+            -DLEO2_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}
+            -DLEO2_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_cuda_optional.cmake)
+
+    if(CMAKE_VERSION VERSION_LESS 3.12)
+        find_package(PythonInterp QUIET)
+        set(LEO2_PYTHON_EXECUTABLE ${PYTHON_EXECUTABLE})
+    else()
+        find_package(Python3 COMPONENTS Interpreter QUIET)
+        set(LEO2_PYTHON_EXECUTABLE ${Python3_EXECUTABLE})
+    endif()
+    if(LEO2_PYTHON_EXECUTABLE)
+        add_test(
+            NAME leopard2_cost_model_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/cost_model.py
+                self-test)
+    endif()
 endif()
