@@ -106,6 +106,20 @@ FULL_SHARD_BYTES = (
     4194304,
     16777216,
 )
+DEFAULT_PERF_EVENTS = (
+    "cycles",
+    "instructions",
+    "cache-references",
+    "cache-misses",
+    "branches",
+    "branch-misses",
+    "page-faults",
+    "context-switches",
+    "cpu-migrations",
+    "dTLB-loads",
+    "dTLB-load-misses",
+)
+PERF_EVENT_RE = re.compile(r"^[A-Za-z0-9_.:/=-]+$")
 
 
 class MatrixError(ValueError):
@@ -471,9 +485,22 @@ def make_spec(
     iterations: int,
     warmup: int,
     pinned_cpu: int | None = None,
+    perf_stat: str | None = None,
+    perf_events: Sequence[str] = DEFAULT_PERF_EVENTS,
+    require_perf_counters: bool = False,
 ) -> dict:
     if workers <= 0 or workers > 128:
         raise MatrixError("workers must be in [1, 128]")
+    if require_perf_counters and perf_stat is None:
+        raise MatrixError("required performance counters need --perf-stat")
+    if perf_stat is not None:
+        if not perf_stat:
+            raise MatrixError("perf-stat command must not be empty")
+        if (not perf_events or len(perf_events) != len(set(perf_events)) or
+                not all(isinstance(event, str) and PERF_EVENT_RE.match(event)
+                        for event in perf_events)):
+            raise MatrixError(
+                "performance counter events must be unique simple perf event names")
     jobs: List[Dict[str, object]] = []
     if preset == "smoke":
         cells = (
@@ -554,16 +581,24 @@ def make_spec(
         raise MatrixError("duplicate job ids: " + ", ".join(duplicates))
     if preset == "required":
         _validate_required_dimensions(jobs, iterations, warmup)
+    defaults = {
+        "cpu_policy": "physical-first",
+        "timeout_seconds": 1800,
+        "memory_mb": 4096,
+    }
+    if perf_stat is not None:
+        defaults["performance_counters"] = {
+            "provider": "linux-perf-stat",
+            "command": perf_stat,
+            "events": list(perf_events),
+            "optional": not require_perf_counters,
+        }
     spec = {
         "schema": SPEC_SCHEMA,
         "root": str(Path.cwd().resolve()),
         "base_seed": 0x4C454F32,
         "workers": workers,
-        "defaults": {
-            "cpu_policy": "physical-first",
-            "timeout_seconds": 1800,
-            "memory_mb": 4096,
-        },
+        "defaults": defaults,
         "metadata": {
             "preset": preset,
             "serial_timing_jobs": workers == 1,
@@ -574,6 +609,13 @@ def make_spec(
             "counterbalance_temporal_order_requires_workers": 1,
             "benchmark": benchmark,
             "pinned_cpu": pinned_cpu,
+            "performance_counters": {
+                "requested": perf_stat is not None,
+                "provider": "linux-perf-stat" if perf_stat is not None else None,
+                "events": list(perf_events) if perf_stat is not None else [],
+                "optional": (
+                    not require_perf_counters if perf_stat is not None else None),
+            },
         },
         "jobs": sorted(jobs, key=lambda item: str(item["id"])),
     }
@@ -695,7 +737,92 @@ def _validate_manifest(value: object) -> dict:
         if declared_mode != _mode_from_cell(expected_cell):
             raise MatrixError(
                 f"job {job['id']} counterbalance suffix disagrees with its cell")
+        counters = job.get("performance_counters")
+        if counters is not None:
+            counter_executable = counters.get("executable") if isinstance(
+                counters, dict) else None
+            if (not isinstance(counters, dict) or
+                    counters.get("provider") != "linux-perf-stat" or
+                    not isinstance(counters.get("events"), list) or
+                    not counters["events"] or
+                    len(counters["events"]) != len(set(counters["events"])) or
+                    not all(isinstance(event, str) and PERF_EVENT_RE.match(event)
+                            for event in counters["events"] or []) or
+                    not isinstance(counters.get("optional"), bool) or
+                    not isinstance(counter_executable, dict) or
+                    not isinstance(counter_executable.get("path"), str) or
+                    not isinstance(counter_executable.get("sha256"), str) or
+                    len(counter_executable["sha256"]) != 64 or
+                    any(character not in "0123456789abcdef"
+                        for character in counter_executable["sha256"]) or
+                    not isinstance(counter_executable.get("size_bytes"), int) or
+                    counter_executable["size_bytes"] < 0):
+                raise MatrixError(
+                    f"job {job['id']} has an invalid performance counter request")
     return value
+
+
+def _validate_performance_evidence(
+    job: Mapping[str, object], lab_result: Mapping[str, object], job_dir: Path,
+) -> dict | None:
+    request = job.get("performance_counters")
+    evidence = lab_result.get("performance_counters")
+    outputs = lab_result.get("outputs")
+    if not isinstance(outputs, dict):
+        raise MatrixError(f"job {job['id']} output identities are missing")
+    if request is None:
+        if evidence is not None or "performance_counters" in outputs:
+            raise MatrixError(
+                f"job {job['id']} has unexpected performance counter evidence")
+        return None
+    if (not isinstance(request, dict) or not isinstance(evidence, dict) or
+            evidence.get("provider") != request.get("provider") or
+            evidence.get("events") != request.get("events") or
+            evidence.get("optional") != request.get("optional") or
+            evidence.get("executable") != request.get("executable") or
+            evidence.get("status") not in
+            ("available", "partial", "unavailable")):
+        raise MatrixError(
+            f"job {job['id']} performance counter evidence differs from its request")
+    probe = evidence.get("probe")
+    if (not isinstance(probe, dict) or
+            probe.get("status") not in ("available", "unavailable") or
+            probe.get("cpu_set") != job.get("cpu_set")):
+        raise MatrixError(f"job {job['id']} has invalid counter preflight evidence")
+    raw_output = evidence.get("raw_output")
+    if raw_output is None:
+        if "performance_counters" in outputs:
+            raise MatrixError(
+                f"job {job['id']} has an unsigned counter output identity")
+    elif (raw_output != "perf-stat.txt" or
+          outputs.get("performance_counters") !=
+          file_identity(job_dir / "perf-stat.txt")):
+        raise MatrixError(
+            f"job {job['id']} performance counter output identity is invalid")
+    measurements = evidence.get("measurements", [])
+    if not isinstance(measurements, list):
+        raise MatrixError(f"job {job['id']} counter measurements are invalid")
+    counted = 0
+    if measurements:
+        if ([measurement.get("event") for measurement in measurements
+             if isinstance(measurement, dict)] != request["events"] or
+                len(measurements) != len(request["events"]) or
+                not all(measurement.get("status") in
+                        ("counted", "not-counted", "missing")
+                        for measurement in measurements
+                        if isinstance(measurement, dict))):
+            raise MatrixError(
+                f"job {job['id']} counter measurements do not match requested events")
+        counted = sum(
+            measurement.get("status") == "counted"
+            for measurement in measurements)
+    status = evidence["status"]
+    if ((status == "available" and counted != len(request["events"])) or
+            (status == "partial" and not 0 < counted < len(request["events"])) or
+            (status == "unavailable" and counted != 0)):
+        raise MatrixError(
+            f"job {job['id']} counter status disagrees with its measurements")
+    return dict(evidence)
 
 
 def collect(manifest_path: Path, results_dir: Path) -> dict:
@@ -743,6 +870,8 @@ def collect(manifest_path: Path, results_dir: Path) -> dict:
                     for character in run_epoch)):
             raise MatrixError(f"job {job_id} has no valid run epoch")
         order_trial, order_sequence, _ = _parse_ordered_job_id(job_id)
+        performance_counters = _validate_performance_evidence(
+            job, lab_result, job_dir)
         record = {
             "job_id": job_id,
             "outcome": outcome,
@@ -755,6 +884,8 @@ def collect(manifest_path: Path, results_dir: Path) -> dict:
             "run_epoch": run_epoch,
             "order_trial": order_trial,
             "order_sequence": order_sequence,
+            "performance_counter_request": job.get("performance_counters"),
+            "performance_counters": performance_counters,
         }
         if outcome == "success":
             benchmark = _validate_benchmark(load_json(job_dir / "stdout.txt"), job_id)
@@ -823,6 +954,12 @@ def collect(manifest_path: Path, results_dir: Path) -> dict:
             "resume_group": record["resume_group"],
             "run_epoch": record["run_epoch"],
             "order_trial": record["order_trial"],
+            "performance_counter_request": record[
+                "performance_counter_request"],
+            "performance_counter_status": (
+                record["performance_counters"]["status"]
+                if record["performance_counters"] is not None else
+                "not-requested"),
         }
         # AB and BA deliberately share one cpu_group so the lab assigns the
         # same CPU set.  They remain distinct comparison repetitions here.
@@ -900,6 +1037,11 @@ def collect(manifest_path: Path, results_dir: Path) -> dict:
         "manifest_digest": manifest.get("manifest_digest"),
         "source_spec": manifest.get("source_spec"),
         "summary": dict(sorted(outcomes.items())),
+        "performance_counter_summary": dict(sorted(Counter(
+            (record["performance_counters"]["status"]
+             if record["performance_counters"] is not None else
+             "not-requested")
+            for record in records).items())),
         "record_count": len(records),
         "comparison_count": len(comparisons),
         "dispatcher_check_count": len(dispatcher_checks),
@@ -941,6 +1083,25 @@ def self_test() -> None:
     pinned = make_spec("/tmp/bench_leopard2", "checkpoint", 1, 3, 1, 7)
     if any(job.get("cpu_set") != [7] or "cpu_count" in job for job in pinned["jobs"]):
         raise MatrixError("pinned checkpoint invariant failed")
+    instrumented = make_spec(
+        "/tmp/bench_leopard2", "smoke", 1, 3, 1, 7,
+        "/tmp/perf", ("cycles", "instructions"), False)
+    instrumented_request = instrumented["defaults"].get(
+        "performance_counters", {})
+    if (instrumented_request.get("provider") != "linux-perf-stat" or
+            instrumented_request.get("events") != ["cycles", "instructions"] or
+            instrumented_request.get("optional") is not True or
+            instrumented["metadata"]["performance_counters"]["requested"] is
+            not True):
+        raise MatrixError("performance counter generation invariant failed")
+    try:
+        make_spec(
+            "/tmp/bench_leopard2", "smoke", 1, 3, 1, None,
+            "/tmp/perf", ("cycles", "cycles"), False)
+    except MatrixError:
+        pass
+    else:
+        raise MatrixError("duplicate performance events were accepted")
     required = make_spec("/tmp/bench_leopard2", "required", 1, 3, 1)
     if len(required["jobs"]) != 7134:
         raise MatrixError("required preset job-count invariant failed")
@@ -1194,6 +1355,51 @@ def self_test() -> None:
                 collected["source_spec"]["metadata"]["preset"] != "self-test"):
             raise MatrixError("collector pairing invariant failed")
 
+        def add_unavailable_counters(manifest, results, benchmarks):
+            del benchmarks
+            counter_executable = {
+                "path": "/tmp/perf", "sha256": "c" * 64,
+                "size_bytes": 67890,
+            }
+            for job in manifest["jobs"]:
+                request = {
+                    "provider": "linux-perf-stat",
+                    "events": ["cycles", "instructions"],
+                    "optional": True,
+                    "executable": counter_executable,
+                }
+                job["performance_counters"] = request
+                unsigned_job = dict(job)
+                unsigned_job.pop("job_digest", None)
+                job["job_digest"] = digest(unsigned_job)
+                result = results[job["id"]]
+                result["job_digest"] = job["job_digest"]
+                result["performance_counters"] = {
+                    "provider": request["provider"],
+                    "events": request["events"],
+                    "optional": request["optional"],
+                    "executable": counter_executable,
+                    "status": "unavailable",
+                    "probe": {
+                        "status": "unavailable",
+                        "command": ["/tmp/perf", "stat"],
+                        "cpu_set": job["cpu_set"],
+                        "exit_code": 255,
+                        "detail": "permission denied fixture",
+                    },
+                    "detail": "permission denied fixture",
+                }
+
+        counter_fixture = write_fixture(
+            "unavailable-counters", add_unavailable_counters)
+        counter_collected = collect(*counter_fixture)
+        if (counter_collected["performance_counter_summary"] != {
+                "unavailable": 5} or
+                any(record["performance_counters"]["status"] != "unavailable"
+                    for record in counter_collected["records"])):
+            raise MatrixError(
+                "collector did not preserve unavailable counter evidence")
+
         mixed_epoch = write_fixture(
             "mixed-run-epoch",
             lambda manifest, results, benchmarks: results[
@@ -1328,6 +1534,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     generate.add_argument("--iterations", type=int, default=9)
     generate.add_argument("--warmup", type=int, default=2)
     generate.add_argument("--pinned-cpu", type=int)
+    generate.add_argument(
+        "--perf-stat",
+        help=("perf executable to content-address and use for optional Linux "
+              "hardware counters"))
+    generate.add_argument(
+        "--perf-events",
+        default=",".join(DEFAULT_PERF_EVENTS),
+        help="comma-separated perf events (default: portable CPU/cache/TLB set)")
+    generate.add_argument(
+        "--require-perf-counters", action="store_true",
+        help="record jobs unavailable instead of running when counters cannot be read")
     generate.add_argument("--output", required=True)
     collect_parser = subparsers.add_parser("collect", help="collect benchmark JSON from lab results")
     collect_parser.add_argument("--manifest", required=True)
@@ -1337,9 +1554,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "generate":
+            perf_events = tuple(
+                event.strip() for event in args.perf_events.split(",")
+                if event.strip())
             spec = make_spec(
                 args.benchmark, args.preset, args.workers, args.iterations,
-                args.warmup, args.pinned_cpu)
+                args.warmup, args.pinned_cpu, args.perf_stat, perf_events,
+                args.require_perf_counters)
             write_json(Path(args.output), spec)
             print(json.dumps({"jobs": len(spec["jobs"]), "output": args.output,
                               "spec_digest": spec["spec_digest"]}, sort_keys=True))

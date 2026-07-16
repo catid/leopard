@@ -38,6 +38,8 @@ RESULT_SCHEMA = "leopard2-lab-result/v1"
 MERGE_SCHEMA = "leopard2-lab-merged/v1"
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 TOKEN_REPLACEMENTS = ("seed", "job_id", "cpu_set")
+PERF_PROVIDER = "linux-perf-stat"
+PERF_EVENT_RE = re.compile(r"^[A-Za-z0-9_.:/=-]+$")
 
 
 class LabError(Exception):
@@ -399,6 +401,40 @@ def _resolve_executable(command, root_path, cwd, environment, identity_cache=Non
     return identity
 
 
+def _normalize_performance_counters(
+        value, root_path, cwd, environment, identity_cache):
+    """Validate and content-address an optional Linux perf-stat request."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise LabError("performance_counters must be an object")
+    provider = value.get("provider", PERF_PROVIDER)
+    if provider != PERF_PROVIDER:
+        raise LabError("unsupported performance counter provider {!r}".format(provider))
+    command = value.get("command", "perf")
+    if not isinstance(command, str) or not command:
+        raise LabError("performance counter command must be a non-empty string")
+    events = value.get("events")
+    if (not isinstance(events, list) or not events or
+            not all(isinstance(event, str) and PERF_EVENT_RE.match(event)
+                    for event in events)):
+        raise LabError(
+            "performance counter events must be a non-empty list of simple perf event names")
+    if len(events) != len(set(events)):
+        raise LabError("performance counter events must be unique")
+    optional = value.get("optional", True)
+    if not isinstance(optional, bool):
+        raise LabError("performance counter optional must be boolean")
+    executable = _resolve_executable(
+        [command], root_path, cwd, environment, identity_cache)
+    return {
+        "provider": provider,
+        "events": list(events),
+        "optional": optional,
+        "executable": executable,
+    }
+
+
 def _json_copy(value):
     """Copy JSON-compatible metadata while rejecting non-JSON input early."""
     try:
@@ -556,6 +592,7 @@ def build_manifest(spec, root=None, workers=None, base_seed=None):
     defaults = spec.get("defaults", {})
     if not isinstance(defaults, dict):
         raise LabError("defaults must be an object")
+    default_performance_counters = defaults.get("performance_counters")
     default_timeout = defaults.get("timeout_seconds", 300.0)
     _positive_number(default_timeout, "default timeout_seconds")
     default_memory = defaults.get("memory_mb", _default_memory_mb(topology, selected_workers))
@@ -642,6 +679,9 @@ def build_manifest(spec, root=None, workers=None, base_seed=None):
             allow_zero=True)
         executable = _resolve_executable(
             command, root_path, cwd, environment, executable_identities)
+        performance_counters = _normalize_performance_counters(
+            raw.get("performance_counters", default_performance_counters),
+            root_path, cwd, environment, executable_identities)
         benchmark_cell = raw.get("benchmark_cell")
         if benchmark_cell is not None and not isinstance(benchmark_cell, dict):
             raise LabError("job {} benchmark_cell must be an object".format(job_id))
@@ -664,6 +704,8 @@ def build_manifest(spec, root=None, workers=None, base_seed=None):
             job["resume_group"] = resume_group
         if benchmark_cell is not None:
             job["benchmark_cell"] = _json_copy(benchmark_cell)
+        if performance_counters is not None:
+            job["performance_counters"] = performance_counters
         job["job_digest"] = _digest(job)
         jobs.append(job)
 
@@ -733,6 +775,27 @@ def validate_manifest(manifest):
                 not isinstance(executable.get("size_bytes"), int) or
                 executable["size_bytes"] < 0):
             raise LabError("job {} has an invalid executable identity".format(job["id"]))
+        counters = job.get("performance_counters")
+        if counters is not None:
+            counter_executable = counters.get("executable") if isinstance(
+                counters, dict) else None
+            if (not isinstance(counters, dict) or
+                    counters.get("provider") != PERF_PROVIDER or
+                    not isinstance(counters.get("events"), list) or
+                    not counters["events"] or
+                    not all(isinstance(event, str) and PERF_EVENT_RE.match(event)
+                            for event in counters["events"]) or
+                    len(counters["events"]) != len(set(counters["events"])) or
+                    not isinstance(counters.get("optional"), bool) or
+                    not isinstance(counter_executable, dict) or
+                    not isinstance(counter_executable.get("path"), str) or
+                    not re.match(r"^[0-9a-f]{64}$", str(
+                        counter_executable.get("sha256", ""))) or
+                    not isinstance(counter_executable.get("size_bytes"), int) or
+                    counter_executable["size_bytes"] < 0):
+                raise LabError(
+                    "job {} has an invalid performance counter request".format(
+                        job["id"]))
         resume_group = job.get("resume_group")
         if resume_group is not None and (
                 not isinstance(resume_group, str) or not resume_group):
@@ -821,6 +884,37 @@ def _validate_terminal_result(result_path, result, job):
         if not isinstance(expected, dict) or _content_identity(
                 job_dir / (name + ".txt")) != expected:
             raise LabError("{} changed after job {} completed".format(name, job["id"]))
+    request = job.get("performance_counters")
+    counters = result.get("performance_counters")
+    if request is None:
+        if counters is not None or "performance_counters" in outputs:
+            raise LabError(
+                "job {} has unexpected performance counter evidence".format(
+                    job["id"]))
+        return
+    if (not isinstance(counters, dict) or
+            counters.get("provider") != request["provider"] or
+            counters.get("events") != request["events"] or
+            counters.get("optional") != request["optional"] or
+            counters.get("executable") != request["executable"] or
+            counters.get("status") not in ("available", "partial", "unavailable") or
+            not isinstance(counters.get("probe"), dict) or
+            counters["probe"].get("status") not in ("available", "unavailable")):
+        raise LabError(
+            "terminal performance counter evidence is invalid for job {}".format(
+                job["id"]))
+    raw_name = counters.get("raw_output")
+    if raw_name is None:
+        if "performance_counters" in outputs:
+            raise LabError(
+                "job {} has an unsigned performance counter output".format(
+                    job["id"]))
+    elif (raw_name != "perf-stat.txt" or
+          not isinstance(outputs.get("performance_counters"), dict) or
+          _content_identity(job_dir / raw_name) != outputs["performance_counters"]):
+        raise LabError(
+            "performance counter output changed after job {} completed".format(
+                job["id"]))
 
 
 def _replace_tokens(value, job):
@@ -841,6 +935,194 @@ def _expanded_command(job):
     # prevents a later PATH change from silently selecting a different binary.
     command[0] = job["executable"]["path"]
     return command
+
+
+def _performance_command(job, command, output_path):
+    """Wrap a command in the exact content-addressed perf executable."""
+    counters = job["performance_counters"]
+    wrapped = [
+        counters["executable"]["path"], "stat", "--no-big-num", "-x", ";",
+    ]
+    for event in counters["events"]:
+        wrapped.extend(("-e", event))
+    wrapped.extend(("-o", str(output_path), "--"))
+    wrapped.extend(command)
+    return wrapped
+
+
+def _counter_executable_matches(job):
+    counters = job.get("performance_counters")
+    if counters is None:
+        return True
+    current = _file_identity(counters["executable"]["path"])
+    expected = counters["executable"]
+    return (current["sha256"] == expected["sha256"] and
+            current["size_bytes"] == expected["size_bytes"])
+
+
+def _parse_counter_value(raw_value):
+    value = raw_value.strip().replace(",", "")
+    try:
+        parsed = float(value)
+    except ValueError:
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return parsed
+
+
+def _parse_perf_stat(path, requested_events):
+    """Parse perf's stable delimiter format without discarding raw evidence."""
+    try:
+        lines = Path(path).read_text(
+            encoding="utf-8", errors="replace").splitlines()
+    except OSError as error:
+        return [], "cannot read perf-stat output: {}".format(error)
+    rows = []
+    for line in lines:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        fields = [field.strip() for field in line.split(";")]
+        if len(fields) < 3:
+            continue
+        rows.append(fields)
+    measurements = []
+    unused = list(range(len(rows)))
+    for event_index, requested in enumerate(requested_events):
+        selected = None
+        for row_index in unused:
+            reported = rows[row_index][2]
+            if (reported == requested or reported.startswith(requested + ":") or
+                    requested.startswith(reported + ":")):
+                selected = row_index
+                break
+        if selected is None and event_index < len(rows):
+            positional = event_index
+            if positional in unused:
+                selected = positional
+        if selected is None:
+            measurements.append({
+                "event": requested,
+                "status": "missing",
+            })
+            continue
+        unused.remove(selected)
+        fields = rows[selected]
+        parsed = _parse_counter_value(fields[0])
+        measurement = {
+            "event": requested,
+            "reported_event": fields[2],
+            "raw_value": fields[0],
+            "unit": fields[1],
+            "status": "counted" if parsed is not None else "not-counted",
+        }
+        if parsed is not None:
+            measurement["value"] = parsed
+        if len(fields) > 3 and fields[3]:
+            measurement["runtime"] = fields[3]
+        if len(fields) > 4 and fields[4]:
+            percentage = fields[4].rstrip("%")
+            parsed_percentage = _parse_counter_value(percentage)
+            if parsed_percentage is not None:
+                measurement["running_percentage"] = parsed_percentage
+        measurements.append(measurement)
+    counted = sum(
+        measurement["status"] == "counted" for measurement in measurements)
+    if counted == len(requested_events):
+        return measurements, None
+    return measurements, "{} of {} requested events were counted".format(
+        counted, len(requested_events))
+
+
+def _probe_performance_counters(job):
+    """Check PMU access on the exact CPU set before timing real work."""
+    started = time.monotonic()
+    counters = job["performance_counters"]
+    logical_command = [
+        counters["executable"]["path"], "stat", "--no-big-num", "-x", ";",
+    ]
+    for event in counters["events"]:
+        logical_command.extend(("-e", event))
+    logical_command.extend(("--", sys.executable, "-c", "pass"))
+    probe = {
+        "status": "unavailable",
+        "command": logical_command,
+        "cpu_set": job["cpu_set"],
+        "exit_code": None,
+    }
+    try:
+        with tempfile.TemporaryDirectory(prefix="leopard2-perf-probe-") as temporary:
+            output_path = Path(temporary) / "perf-stat.txt"
+            command = _performance_command(
+                job, [sys.executable, "-c", "pass"], output_path)
+            completed = subprocess.run(
+                command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10.0,
+                check=False,
+                preexec_fn=lambda: _child_setup(job["cpu_set"], 0),
+            )
+            probe["exit_code"] = completed.returncode
+            stderr = completed.stderr.decode("utf-8", errors="replace").strip()
+            if stderr:
+                probe["stderr_tail"] = stderr[-4096:]
+            measurements, parse_detail = _parse_perf_stat(
+                output_path, counters["events"])
+            if completed.returncode == 0 and parse_detail is None:
+                probe["status"] = "available"
+                probe["duration_seconds"] = round(
+                    time.monotonic() - started, 6)
+                return probe
+            details = []
+            if completed.returncode != 0:
+                details.append("perf probe exited {}".format(completed.returncode))
+            if parse_detail:
+                details.append(parse_detail)
+            probe["detail"] = "; ".join(details) or "perf probe failed"
+    except (OSError, subprocess.SubprocessError, LabError) as error:
+        probe["detail"] = "perf probe could not run: {}".format(error)
+    probe["duration_seconds"] = round(time.monotonic() - started, 6)
+    return probe
+
+
+def _performance_result(job, probe, output_path=None):
+    request = job.get("performance_counters")
+    if request is None:
+        return None
+    if not isinstance(probe, dict):
+        probe = {
+            "status": "unavailable",
+            "command": [],
+            "cpu_set": job["cpu_set"],
+            "exit_code": None,
+            "detail": "performance counter preflight was not run",
+        }
+    result = {
+        "provider": request["provider"],
+        "events": request["events"],
+        "optional": request["optional"],
+        "executable": request["executable"],
+        "probe": probe,
+        "status": "unavailable",
+    }
+    if output_path is None:
+        result["detail"] = probe.get(
+            "detail", "performance counters were unavailable during preflight")
+        return result
+    result["raw_output"] = "perf-stat.txt"
+    measurements, detail = _parse_perf_stat(output_path, request["events"])
+    result["measurements"] = measurements
+    counted = sum(
+        measurement.get("status") == "counted" for measurement in measurements)
+    if counted == len(request["events"]):
+        result["status"] = "available"
+    elif counted:
+        result["status"] = "partial"
+    if detail:
+        result["detail"] = detail
+    return result
 
 
 def _expanded_environment(job):
@@ -895,6 +1177,13 @@ def _write_terminal_result(job_dir, result):
         "stdout": _content_identity(job_dir / "stdout.txt"),
         "stderr": _content_identity(job_dir / "stderr.txt"),
     }
+    counters = result.get("performance_counters")
+    if isinstance(counters, dict) and counters.get("raw_output") is not None:
+        raw_name = counters["raw_output"]
+        if raw_name != "perf-stat.txt":
+            raise LabError("invalid performance counter output name")
+        result["outputs"]["performance_counters"] = _content_identity(
+            job_dir / raw_name)
     unsigned = dict(result)
     unsigned.pop("result_digest", None)
     result["result_digest"] = _digest(unsigned)
@@ -909,14 +1198,28 @@ def _job_executable_matches(job):
             current["size_bytes"] == expected["size_bytes"])
 
 
-def _launch_job(job, manifest_root, output_dir, run_epoch):
+def _launch_job(
+        job, manifest_root, output_dir, run_epoch, performance_probe=None):
     job_dir = _job_directory(output_dir, job["id"])
     job_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = job_dir / "stdout.txt"
     stderr_path = job_dir / "stderr.txt"
+    counter_output_path = job_dir / "perf-stat.txt"
+    try:
+        counter_output_path.unlink()
+    except FileNotFoundError:
+        pass
     stdout_handle = stdout_path.open("wb")
     stderr_handle = stderr_path.open("wb")
     command = _expanded_command(job)
+    process_command = command
+    counter_active = (
+        job.get("performance_counters") is not None and
+        isinstance(performance_probe, dict) and
+        performance_probe.get("status") == "available")
+    if counter_active:
+        process_command = _performance_command(
+            job, command, counter_output_path)
     cwd = Path(job["cwd"])
     if not cwd.is_absolute():
         cwd = Path(manifest_root) / cwd
@@ -925,8 +1228,11 @@ def _launch_job(job, manifest_root, output_dir, run_epoch):
         if not _job_executable_matches(job):
             raise LabError("executable changed before launch: {}".format(
                 job["executable"]["path"]))
+        if not _counter_executable_matches(job):
+            raise LabError("performance counter executable changed before launch: {}".format(
+                job["performance_counters"]["executable"]["path"]))
         process = subprocess.Popen(
-            command,
+            process_command,
             cwd=str(cwd),
             env=_expanded_environment(job),
             stdin=subprocess.DEVNULL,
@@ -941,11 +1247,17 @@ def _launch_job(job, manifest_root, output_dir, run_epoch):
         result = _base_result(
             job, command, time.monotonic() - started, "launch_error",
             detail=str(error), run_epoch=run_epoch)
+        performance = _performance_result(
+            job, performance_probe,
+            counter_output_path if counter_output_path.is_file() else None)
+        if performance is not None:
+            result["performance_counters"] = performance
         _write_terminal_result(job_dir, result)
         return None, result
     active = {
         "job": job,
         "command": command,
+        "process_command": process_command,
         "process": process,
         "started": started,
         "stdout_handle": stdout_handle,
@@ -953,6 +1265,8 @@ def _launch_job(job, manifest_root, output_dir, run_epoch):
         "timed_out": False,
         "terminate_started": None,
         "run_epoch": run_epoch,
+        "performance_probe": performance_probe,
+        "counter_output_path": counter_output_path if counter_active else None,
     }
     return active, None
 
@@ -982,6 +1296,8 @@ def _finish_active(active, output_dir, forced_outcome=None, detail=None):
     try:
         if not _job_executable_matches(active["job"]):
             executable_detail = "executable changed during execution"
+        elif not _counter_executable_matches(active["job"]):
+            executable_detail = "performance counter executable changed during execution"
     except LabError as error:
         executable_detail = str(error)
     if forced_outcome:
@@ -999,6 +1315,13 @@ def _finish_active(active, output_dir, forced_outcome=None, detail=None):
         active["job"], active["command"], time.monotonic() - active["started"],
         outcome, exit_code=exit_code, detail=detail,
         run_epoch=active["run_epoch"])
+    counter_output_path = active.get("counter_output_path")
+    performance = _performance_result(
+        active["job"], active.get("performance_probe"),
+        counter_output_path if (
+            counter_output_path is not None and counter_output_path.is_file()) else None)
+    if performance is not None:
+        result["performance_counters"] = performance
     result_path = _job_directory(output_dir, active["job"]["id"]) / "result.json"
     return _write_terminal_result(result_path.parent, result)
 
@@ -1041,6 +1364,19 @@ def _validate_runtime_executables(manifest):
             raise LabError(
                 "job {} executable changed after manifest creation: {}".format(
                     job["id"], expected["path"]))
+        counters = job.get("performance_counters")
+        if counters is None:
+            continue
+        expected = counters["executable"]
+        path = expected["path"]
+        if path not in identities:
+            identities[path] = _file_identity(path)
+        current = identities[path]
+        if (current["sha256"] != expected["sha256"] or
+                current["size_bytes"] != expected["size_bytes"]):
+            raise LabError(
+                "job {} performance counter executable changed after manifest "
+                "creation: {}".format(job["id"], expected["path"]))
 
 
 def _memory_unavailable_reason(job, memory_budget_mb):
@@ -1067,7 +1403,8 @@ def _manifest_memory_budget_mb(manifest):
     return int((capacity // (1024 * 1024)) * 0.80)
 
 
-def _record_unavailable(job, output_dir, reason, run_epoch):
+def _record_unavailable(
+        job, output_dir, reason, run_epoch, performance_probe=None):
     job_dir = _job_directory(output_dir, job["id"])
     job_dir.mkdir(parents=True, exist_ok=True)
     (job_dir / "stdout.txt").write_text("", encoding="utf-8")
@@ -1075,6 +1412,17 @@ def _record_unavailable(job, output_dir, reason, run_epoch):
     result = _base_result(
         job, _expanded_command(job), 0.0, "unavailable", detail=reason,
         run_epoch=run_epoch)
+    if job.get("performance_counters") is not None:
+        if performance_probe is None:
+            performance_probe = {
+                "status": "unavailable",
+                "command": [],
+                "cpu_set": job["cpu_set"],
+                "exit_code": None,
+                "detail": "job was unavailable before performance counter preflight",
+            }
+        result["performance_counters"] = _performance_result(
+            job, performance_probe)
     return _write_terminal_result(job_dir, result)
 
 
@@ -1102,6 +1450,7 @@ def _dry_run_plan(manifest, output_dir, rerun_failed, workers=None):
             "memory_mb": job["memory_mb"],
             "minimum_memory_mb": job.get("minimum_memory_mb", 0),
             "command": _expanded_command(job),
+            "performance_counters": job.get("performance_counters"),
             "detail": unavailable_reason,
         })
     return {
@@ -1127,6 +1476,7 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
     output_dir.mkdir(parents=True, exist_ok=True)
     _atomic_write_json(output_dir / "manifest.json", manifest)
     run_epoch = _new_run_epoch()
+    run_started = time.monotonic()
 
     results = {}
     pending = []
@@ -1148,9 +1498,38 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
             else:
                 pending.append(job)
 
+    performance_probes = {}
+    probe_cache = {}
+    runnable = []
+    for job in pending:
+        request = job.get("performance_counters")
+        if request is None:
+            performance_probes[job["id"]] = None
+            runnable.append(job)
+            continue
+        probe_key = _digest({
+            "provider": request["provider"],
+            "events": request["events"],
+            "executable": request["executable"],
+            "cpu_set": job["cpu_set"],
+        })
+        if probe_key not in probe_cache:
+            probe_cache[probe_key] = _probe_performance_counters(job)
+        probe = _json_copy(probe_cache[probe_key])
+        performance_probes[job["id"]] = probe
+        if probe["status"] == "unavailable" and not request["optional"]:
+            reason = (
+                "required performance counters are unavailable: " +
+                probe.get("detail", "perf preflight failed"))
+            results[job["id"]] = _record_unavailable(
+                job, output_dir, reason, run_epoch, probe)
+            preflight_unavailable += 1
+        else:
+            runnable.append(job)
+    pending = runnable
+
     active = []
     total = len(manifest["jobs"])
-    run_started = time.monotonic()
     last_progress = 0.0
     interrupted = False
     try:
@@ -1164,7 +1543,8 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
                         continue
                     pending.pop(index)
                     launched, launch_result = _launch_job(
-                        job, manifest["root"], output_dir, run_epoch)
+                        job, manifest["root"], output_dir, run_epoch,
+                        performance_probes.get(job["id"]))
                     if launched is not None:
                         active.append(launched)
                     else:
@@ -1382,6 +1762,160 @@ def self_test():
         })
         if grouped_manifest["jobs"][0]["cpu_set"] != grouped_manifest["jobs"][1]["cpu_set"]:
             raise LabError("self-test: CPU assignment group did not preserve pair affinity")
+
+        fake_perf = root / "fake-perf.py"
+        fake_perf.write_text(
+            "#!/usr/bin/env python3\n"
+            "import subprocess, sys\n"
+            "args = sys.argv[1:]\n"
+            "if not args or args[0] != 'stat' or '--' not in args:\n"
+            "    raise SystemExit(64)\n"
+            "events = [args[index + 1] for index, value in enumerate(args[:-1]) "
+            "if value == '-e']\n"
+            "output = args[args.index('-o') + 1]\n"
+            "command = args[args.index('--') + 1:]\n"
+            "completed = subprocess.run(command, check=False)\n"
+            "with open(output, 'w', encoding='utf-8') as destination:\n"
+            "    for index, event in enumerate(events):\n"
+            "        destination.write('{};;{};1.000;100.00;\\n'.format("
+            "1000 + index, event))\n"
+            "raise SystemExit(completed.returncode)\n",
+            encoding="utf-8")
+        fake_perf.chmod(0o700)
+        counter_request = {
+            "provider": PERF_PROVIDER,
+            "command": str(fake_perf),
+            "events": ["cycles", "instructions"],
+            "optional": True,
+        }
+        counter_manifest = build_manifest({
+            "root": str(root),
+            "workers": 1,
+            "defaults": {
+                "memory_mb": 0,
+                "cpu_count": 1,
+                "performance_counters": counter_request,
+            },
+            "jobs": [{
+                "id": "counter-success",
+                "command": [python, "-c", "print('counter child')"],
+            }],
+        })
+        counter_job = counter_manifest["jobs"][0]
+        if (counter_job["performance_counters"]["executable"] !=
+                _file_identity(fake_perf)):
+            raise LabError(
+                "self-test: performance counter executable was not content-addressed")
+        counter_output = root / "counter-results"
+        counter_summary = run_manifest(
+            counter_manifest, counter_output, quiet=True)
+        if counter_summary["outcomes"] != {"missing": 0, "success": 1}:
+            raise LabError(
+                "self-test: fake performance counters did not run: {}".format(
+                    counter_summary["outcomes"]))
+        counter_result_path = (
+            _job_directory(counter_output, counter_job["id"]) / "result.json")
+        counter_result = _load_json(counter_result_path)
+        counter_evidence = counter_result.get("performance_counters", {})
+        if (counter_evidence.get("status") != "available" or
+                [entry.get("event") for entry in
+                 counter_evidence.get("measurements", [])] !=
+                counter_request["events"] or
+                "performance_counters" not in counter_result.get("outputs", {})):
+            raise LabError(
+                "self-test: counted events were not retained as signed evidence")
+        counter_second = run_manifest(
+            counter_manifest, counter_output, quiet=True)
+        if counter_second["resumed"] != 1 or counter_second["executed"] != 0:
+            raise LabError(
+                "self-test: performance counter result was not resumable")
+        with (_job_directory(counter_output, counter_job["id"]) /
+              "perf-stat.txt").open("a", encoding="utf-8") as output:
+            output.write("corruption\n")
+        try:
+            _dry_run_plan(counter_manifest, counter_output, False)
+        except LabError:
+            pass
+        else:
+            raise LabError(
+                "self-test: changed performance counter evidence was accepted")
+
+        denied_perf = root / "denied-perf.py"
+        denied_perf.write_text(
+            "#!/usr/bin/env python3\n"
+            "import sys\n"
+            "sys.stderr.write('permission denied by test policy\\n')\n"
+            "raise SystemExit(255)\n",
+            encoding="utf-8")
+        denied_perf.chmod(0o700)
+
+        def denied_counter_manifest(optional):
+            return build_manifest({
+                "root": str(root),
+                "workers": 1,
+                "defaults": {
+                    "memory_mb": 0,
+                    "cpu_count": 1,
+                    "performance_counters": {
+                        "command": str(denied_perf),
+                        "events": ["cycles"],
+                        "optional": optional,
+                    },
+                },
+                "jobs": [{
+                    "id": "counter-denied-{}".format(
+                        "optional" if optional else "required"),
+                    "command": [python, "-c", "print('ran without counters')"],
+                }],
+            })
+
+        optional_manifest = denied_counter_manifest(True)
+        optional_output = root / "counter-denied-optional-results"
+        optional_summary = run_manifest(
+            optional_manifest, optional_output, quiet=True)
+        optional_result = _load_json(
+            _job_directory(optional_output, optional_manifest["jobs"][0]["id"]) /
+            "result.json")
+        if (optional_summary["outcomes"] != {"missing": 0, "success": 1} or
+                optional_result["performance_counters"]["status"] !=
+                "unavailable" or
+                "performance_counters" in optional_result["outputs"]):
+            raise LabError(
+                "self-test: optional denied counters did not preserve bare execution")
+
+        required_manifest = denied_counter_manifest(False)
+        required_output = root / "counter-denied-required-results"
+        required_summary = run_manifest(
+            required_manifest, required_output, quiet=True)
+        if (required_summary["outcomes"] != {
+                "missing": 0, "unavailable": 1} or
+                required_summary["executed"] != 0 or
+                required_summary["preflight_unavailable"] != 1):
+            raise LabError(
+                "self-test: required denied counters were not preflight unavailable")
+
+        mutable_counter_manifest = build_manifest({
+            "root": str(root),
+            "defaults": {
+                "memory_mb": 0,
+                "performance_counters": {
+                    "command": str(denied_perf),
+                    "events": ["cycles"],
+                },
+            },
+            "jobs": [{"id": "mutable-counter", "command": [python, "-c", "pass"]}],
+        })
+        denied_perf.write_text(
+            "#!/usr/bin/env python3\nraise SystemExit(254)\n",
+            encoding="utf-8")
+        try:
+            _dry_run_plan(
+                mutable_counter_manifest, root / "mutable-counter-results", False)
+        except LabError:
+            pass
+        else:
+            raise LabError(
+                "self-test: changed performance counter executable was accepted")
 
         atomic_manifest = build_manifest({
             "root": str(root),

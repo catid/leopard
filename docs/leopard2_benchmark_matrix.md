@@ -9,6 +9,20 @@ runner's durable per-job stdout. This keeps the benchmark executable focused on
 one code cell while the runner owns affinity, memory limits, timeouts, resume,
 failure logs, and deterministic merging.
 
+Linux `perf stat` counters are an opt-in runner feature. The generator signs
+the exact `perf` executable and requested event list into every job. Before
+timing, the lab runner probes the same events on the job's assigned CPU set.
+When an optional probe is denied or an event is unsupported, the benchmark
+still runs and its result records `performance_counters.status=unavailable`
+plus the probe command, exit code, and diagnostic; it never substitutes zero
+counts. A successful probe wraps the benchmark, retains the delimiter-format
+`perf-stat.txt`, hashes that file into the terminal result, and parses each
+requested event as `counted`, `not-counted`, or `missing`. Collection rejects
+mutated raw counter output, request/evidence mismatches, or paired jobs with
+different counter availability. Use `--require-perf-counters` only for a
+campaign where a missing PMU measurement should make a cell explicitly
+`unavailable` rather than execute it without counters.
+
 ## Presets
 
 - `smoke` has ten jobs for one low- and one high-rate cell. Each cell runs the
@@ -133,6 +147,7 @@ affinity mask; CPU 0 below is an example, not a portable assumption.
     python3 tools/leopard2_benchmark_matrix.py generate \
         --benchmark "$PWD/build/release/bench_leopard2" \
         --preset checkpoint --workers 1 --pinned-cpu 0 \
+        --perf-stat /usr/bin/perf \
         --output results/leopard2/benchmark-checkpoint/spec.json
     python3 tools/leopard2_lab.py manifest \
         --spec results/leopard2/benchmark-checkpoint/spec.json \
@@ -153,6 +168,21 @@ run epoch. If any counterbalanced row is absent or comes from another runner
 invocation, the entire five-row cell is rerun. Existing result files are
 overwritten only for that incomplete or mixed-epoch cell.
 Use `--rerun-failed` only after retaining and understanding the original stderr.
+The default counter request covers cycles, instructions, generic cache and
+branch events, page/context events, and data-TLB loads/misses. Site-specific
+uncore memory-bandwidth events are not portable; supply a comma-separated list
+with `--perf-events` when the host PMU and event naming have been verified.
+The runner does not require privileged installation or attempt to change
+`perf_event_paranoid`.
+
+The 2026-07-16 checkpoint on this host exercised the complete ten-job smoke
+pipeline with `/usr/bin/perf` pinned to CPU 15. All ten benchmarks succeeded;
+all ten counter records were explicitly unavailable because the kernel reports
+`perf_event_paranoid=4` and the probe exited 255. The ignored, machine-specific
+evidence is under
+`results/leopard2/benchmark-perf-smoke-20260716/`. This is pipeline evidence,
+not an authoritative performance result; other implementation workers were
+active during the smoke run.
 
 Generate the larger required specification with an allowed pinned CPU:
 
@@ -185,11 +215,29 @@ replacement, request-parameter mismatches, failed round trips, duplicate pair
 members, scheduled-pair identity drift, incomplete expected cells, mixed run
 epochs, and zero and non-finite timing. It runs through CTest as
 `leopard2_benchmark_matrix_self_test`.
+The lab self-test additionally uses a content-addressed fake `perf` provider to
+verify parsed and hashed counter evidence, atomic resume, post-run corruption
+rejection, optional-denied bare execution, required-denied preflight, and
+counter-executable replacement rejection. The matrix self-test verifies
+counter request generation and preservation of unavailable evidence.
 
 The benchmark executable separately records codec and decode-plan setup,
 execution, setup amortized at the selected reuse count, input and generated or
 repaired output throughput, median/MAD/minimum/maximum timing, selected
 profile/field/backend, scratch, legacy availability, and round-trip status.
 Logical operation counts are provided independently by
-`tools/leopard2_operation_counts.py`; neither tool presents estimates as
+`tools/leopard2_operation_counts.py`. Those estimates remain labeled as a
+model; only successful, signed `perf stat` observations are presented as
 hardware counters.
+
+## External-library comparison policy
+
+ISA-L, Jerasure, FastECC, and other libraries may be added as separate job
+executables, but a result is comparable only when the adapter records the same
+public `(K,R)`, shard bytes, loss pattern, batch/reuse semantics, thread count,
+and amount of generated or repaired output. Field or code-family limitations,
+setup included by one side but not the other, and unsupported `R>K` or parent
+sizes must be explicit exclusions rather than silently adjusted cells. The
+current committed matrix has no external-library adapters, so it makes no
+cross-library throughput claim. That remaining work keeps the benchmark-harness
+Bead open.
