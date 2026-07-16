@@ -77,6 +77,65 @@ the requested Leopard legacy-high V1 dyadic parent is 512 and therefore uses
 GF16. Results label that field advantage explicitly; it must not be presented
 as an ISA-only kernel advantage.
 
+## Bounded checkpoint result
+
+The retained checkpoint was measured on an AMD Ryzen 9 9950X3D under Linux
+6.8.0-134. The runner and every child had singleton affinity to CPU 15; its SMT
+sibling CPU 31 was explicitly reserved idle. The readable scaling governor was
+`powersave`. The build used clean Leopard commit
+`1f41ddd41e2b3c040ff06e15f3dbaa58a8b05863` and source-bundle SHA-256
+`b284300601d18ef6edfb6e786067611bb3d59764c64de3b5a76ef660d283ec5c`.
+
+The following rates are decimal GB/s. `Enc out` counts generated parity bytes.
+The three execution-only decode columns count, respectively, every offered
+received byte, the deterministic `K`-row subset actually consumed, and repaired
+original bytes. `Plan us` is not included in those execution rates. `Amort out`
+includes plan setup amortized over the cell's declared reuse count of eight.
+Each number is the median of four independent run medians; each run contains
+nine timed samples after two warmups. The checkpoint retains the corresponding
+MADs and all raw ISA-L samples.
+
+| Cell | Provider | Enc out | Dec offered | Dec selected | Dec repaired | Plan us | Amort out |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| high 240/16, 64 KiB x1, L=1 | ISA-L | 0.759 | 38.511 | 36.246 | 0.151 | 8225.907 | 0.045 |
+| high 240/16, 64 KiB x1, L=1 | Leopard2 | 0.895 | 8.512 | 8.012 | 0.033 | 1.231 | 0.033 |
+| high 240/16, 4 KiB x8, L=4 | ISA-L | 0.869 | 33.428 | 31.836 | 0.531 | 5831.250 | 0.134 |
+| high 240/16, 4 KiB x8, L=4 | Leopard2 | 1.054 | 9.708 | 9.245 | 0.154 | 1.270 | 0.154 |
+| balanced 128/128, 64 KiB x1, L=8 | ISA-L | 1.716 | 37.143 | 19.171 | 1.198 | 835.975 | 0.966 |
+| balanced 128/128, 64 KiB x1, L=8 | Leopard2 | 6.542 | 5.007 | 2.584 | 0.162 | 1.290 | 0.162 |
+| low 64/192, 64 KiB x1, L=8 | ISA-L | 3.607 | 75.422 | 19.464 | 2.433 | 129.931 | 2.262 |
+| low 64/192, 64 KiB x1, L=8 | Leopard2 | 9.108 | 12.062 | 3.113 | 0.389 | 1.270 | 0.389 |
+| boundary 129/100, 64 KiB x1, L=4 | ISA-L GF8 | 1.709 | 62.860 | 36.040 | 1.118 | 856.779 | 0.769 |
+| boundary 129/100, 64 KiB x1, L=4 | Leopard2 GF16 | 3.249 | 2.752 | 1.578 | 0.049 | 21.446 | 0.049 |
+| boundary 225/30, 64 KiB x1, L=2 | ISA-L GF8 | 0.971 | 40.322 | 35.859 | 0.319 | 4884.030 | 0.128 |
+| boundary 225/30, 64 KiB x1, L=2 | Leopard2 GF16 | 1.206 | 4.864 | 4.325 | 0.038 | 7.130 | 0.038 |
+
+Leopard2 generated parity faster in all six cells: ISA-L's encode throughput was
+0.262x to 0.849x Leopard2. ISA-L's byte-heavy decode execution was 3.443x to
+22.839x faster by repaired-output rate. ISA-L's much larger matrix-inversion and
+table setup cost matters at low reuse: after amortization it was 0.872x
+Leopard2 in the 4 KiB batch cell, while remaining 1.345x to 15.724x in the
+other five cells. The 22.839x and 15.724x boundary figures also include GF8
+versus padded-parent GF16 and are not kernel-only comparisons. These six cells
+are a bounded checkpoint, not evidence for the unmeasured matrix or other
+machines.
+
+The separate deterministic adapter campaign passed 128/128 cases, including
+eight no-loss cases, sixteen maximum-loss cases, and 34 cases where dyadic
+padding gives ISA-L GF8 versus Leopard2 GF16. Every case verifies the systematic
+generator prefix and restores each requested source byte against independently
+retained input. It does not compare parity bytes because the wire formats and
+generator matrices intentionally differ.
+
+Both artifacts use a canonical digest that excludes their self-identifying
+`artifact_sha256` value. The fail-closed validators recompute it. For independent
+transport checks, the complete serialized-file digest is also listed:
+
+| Artifact | Validator canonical SHA-256 | Serialized file SHA-256 |
+|---|---|---|
+| `checkpoint_result.json` | `eb3b8083425321a922ded8eaca9ae1144658b5615f596219f9245b07d5c32834` | `e67efd48af1d7333144d958adfc0b850c08d2048b87974eec41bb33147b220a8` |
+| `correctness_result.json` | `3349b66454a15c8121170f743ad759c843bd157654290a591fb88f9497055ee4` | `4392d9d5320434ab8a944194911fac0d6e01a75ab5d8f36d84d202b5f8d723d4` |
+
 ## Reproduction
 
 From a Leopard topic-branch checkout:
@@ -102,15 +161,15 @@ valid under concurrent memory-intensive load.
 
 ## Scope limits
 
-This adapter currently freezes only one-thread execution and positive-loss
-decode. The machine-readable required-matrix audit therefore marks supported
-single-thread rows `adapter-available-unmeasured`, keeps multicore rows
-`adapter-required`, and excludes public lengths beyond ISA-L's GF(256)
-bound. The full signed 7,134-cell matrix, persistent-pool multicore scheduling,
-64/128-core batch scaling, other x86 microarchitectures, and available PMU and
-memory-bandwidth evidence remain release-level work. The retained artifact also
-lists these gates so a bounded checkpoint cannot be mistaken for their
-completion.
+This adapter currently freezes only one-thread execution. Positive-loss and
+no-loss decode are supported. The machine-readable required-matrix audit
+therefore marks supported single-thread rows `adapter-available-unmeasured`,
+keeps multicore rows `adapter-required`, and excludes public lengths beyond
+ISA-L's GF(256) bound. The full signed 7,134-cell matrix, persistent-pool
+multicore scheduling, 64/128-core batch scaling, other x86 microarchitectures,
+and available PMU and memory-bandwidth evidence remain release-level work. The
+retained artifact also lists these gates so a bounded checkpoint cannot be
+mistaken for their completion.
 
 ISA-L's public `ec_encode_data` call takes a byte length, source/table counts,
 tables, and buffers; it has no thread-count or executor argument. The current
