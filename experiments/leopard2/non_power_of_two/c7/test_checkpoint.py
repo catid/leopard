@@ -96,6 +96,21 @@ class CheckpointTests(unittest.TestCase):
             data.get("reproducibility", {}).get("comparison", {}).get("status"),
             "pass")
         validate_evidence.validate_manifest(data)
+        candidate = json.loads(json.dumps(data))
+        record = candidate["reproducibility"]["comparison"]["peer_attestation"]
+        attestation_path = ROOT / record["path"]
+        original = attestation_path.read_bytes()
+        report = json.loads(original)
+        report["checks"]["live_tools_and_outputs"] = "failed"
+        forged = (json.dumps(report, indent=2, sort_keys=True) + "\n").encode()
+        try:
+            attestation_path.write_bytes(forged)
+            record["bytes"] = len(forged)
+            record["sha256"] = hashlib.sha256(forged).hexdigest()
+            with self.assertRaises(ValueError):
+                validate_evidence.validate_manifest(candidate)
+        finally:
+            attestation_path.write_bytes(original)
 
     def test_optional_authenticated_peer_rejects_exploits(self) -> None:
         current_path = os.environ.get("LEO2_C7_TEST_MANIFEST")
@@ -130,6 +145,21 @@ class CheckpointTests(unittest.TestCase):
                 build[key]["path"] = "/usr/bin/true"
         rejected(redirected)
 
+        true_path = pathlib.Path("/usr/bin/true")
+        if true_path.is_file():
+            program_redirect = json.loads(json.dumps(peer))
+            true_record = {
+                "path": str(true_path),
+                "sha256": validate_evidence.sha256(true_path),
+                "version": subprocess.run(
+                    [str(true_path), "--version"], check=True, text=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT).stdout,
+            }
+            program_redirect["taskset"] = true_record
+            for run in program_redirect["runs"]:
+                run["argv"][0] = str(true_path)
+            rejected(program_redirect)
+
         wrong_bytes = json.loads(json.dumps(peer))
         wrong_bytes["builds"][0]["library"]["bytes"] += 1
         rejected(wrong_bytes)
@@ -156,6 +186,9 @@ class CheckpointTests(unittest.TestCase):
             self.skipTest("C7 peer evidence environment is not set")
         peer = json.loads(pathlib.Path(requested).read_text(encoding="utf-8"))
         peer_root = pathlib.Path(root_text).resolve()
+        with self.assertRaises(ValueError):
+            validate_evidence.validate_manifest(
+                peer, source_root=peer_root / "experiments")
 
         for run_index, key, value in (
             (0, "build", "auto"),

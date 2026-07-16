@@ -673,7 +673,8 @@ def checkout_artifact_path(
     if not isinstance(record, dict) or not isinstance(record.get("path"), str):
         raise RuntimeError(f"{label} artifact record is malformed")
     pure = pathlib.PurePosixPath(record["path"])
-    if (pure.is_absolute() or "\\" in record["path"] or
+    if (pure.is_absolute() or pure.as_posix() != record["path"] or
+            "\\" in record["path"] or ":" in record["path"] or
             any(part in ("", ".", "..") for part in pure.parts)):
         raise RuntimeError(f"{label} artifact path is not checkout-relative")
     root = source_root.resolve()
@@ -942,6 +943,10 @@ def main() -> int:
     arguments.manifest.write_text(serialized, encoding="utf-8")
     if not SHA256_RE.fullmatch(sha256(arguments.manifest)):
         raise AssertionError("manifest hashing failed")
+    # Never publish a success exit for evidence that the trusted current
+    # validator cannot replay from the just-written bytes.
+    trusted_validate_manifest(arguments.manifest, ROOT, live=False)
+    trusted_validate_manifest(arguments.manifest, ROOT, live=True)
     return 0
 
 

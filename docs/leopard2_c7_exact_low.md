@@ -271,12 +271,26 @@ scans both retained text and binary bytes for either checkout root.  The
 final manifest retains a machine-checkable `comparison` attestation: the peer
 manifest SHA-256, the canonical matching-fingerprint SHA-256, the five build
 names, and the exact normalized-text/archive/executable scan counts.  It stores
-no checkout path.  A `not-run` record is distinguishable from `pass` and is not
+no checkout path.  It also retains a canonical peer-attestation JSON artifact
+that binds the peer's committed tooling and core closure, exact programs,
+binary records, normalized records, run records, Git HEAD, live validation,
+and root-byte scan.  The trusted local validator first checks the peer
+portably, then requires exact program-record equality, and only then performs
+live tool and output replay; peer-controlled tool redirection is never
+executed.  Every non-tool artifact path is checkout-relative, contains no
+parent traversal, and resolves within the declared Git worktree even through
+symlinks.  A `not-run` record is distinguishable from `pass` and is not
 accepted by the retained-checkpoint test.  The
 portable validator checks retained bytes, semantic logs, exact program records,
 sanitizer equality, and member attribution without executing or requiring the
 recorded tools or unretained build outputs.  `--live` explicitly requires those
 exact tools and outputs and byte-replays both `nm` scans.
+
+Run-result validation fixes the exact build role, correctness/smoke kind,
+sanitizer leak/undefined-behavior environment, selected runtime backend,
+profile identity, allocation mode, OpenMP settings, and complete child schema.
+The smoke cell must retain exactly seven positive finite samples per metric and
+median/MAD summaries recomputed from those samples.
 
 Current-core attestation requires a v3 retained manifest whose A/B comparison
 status is `pass`; the checkpoint suite rejects historical v2 evidence and

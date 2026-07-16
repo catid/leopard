@@ -160,6 +160,12 @@ class PortabilityTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     validate_evidence.validate_artifact(
                         record, "parent", run_matrix.ROOT, required=False)
+                for noncanonical in ("a//artifact", "C:/artifact", "./artifact"):
+                    record["path"] = noncanonical
+                    with self.assertRaises(ValueError):
+                        validate_evidence.validate_artifact(
+                            record, "noncanonical", run_matrix.ROOT,
+                            required=False)
                 link = directory_path / "escape"
                 link.symlink_to(pathlib.Path(outside), target_is_directory=True)
                 record["path"] = (

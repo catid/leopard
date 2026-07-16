@@ -228,10 +228,12 @@ def validate_git_sha(value: object, label: str) -> str:
 
 
 def resolve_path(path_text: str, source_root: pathlib.Path) -> pathlib.Path:
-    if (not isinstance(path_text, str) or not path_text or "\\" in path_text):
+    if (not isinstance(path_text, str) or not path_text or
+            "\\" in path_text or ":" in path_text):
         raise ValueError("artifact path is not canonical checkout-relative POSIX")
     pure = pathlib.PurePosixPath(path_text)
-    if pure.is_absolute() or any(part in ("", ".", "..") for part in pure.parts):
+    if (pure.is_absolute() or pure.as_posix() != path_text or
+            any(part in ("", ".", "..") for part in pure.parts)):
         raise ValueError("artifact path is not canonical checkout-relative POSIX")
     root = source_root.resolve()
     candidate = root.joinpath(*pure.parts)
@@ -276,8 +278,6 @@ def validate_normalized_text(
     token_count = record["source_root_tokens"]
     if type(token_count) is not int or token_count < 0:
         raise ValueError(f"{label} token count is invalid")
-    if pathlib.Path(record["path"]).is_absolute():
-        raise ValueError(f"{label} retained path is not checkout-relative")
     generic = {key: record[key] for key in ("bytes", "path", "sha256")}
     path = validate_artifact(generic, label, source_root, required=True)
     text = path.read_text(encoding="utf-8", errors="strict")
