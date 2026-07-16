@@ -557,10 +557,11 @@ void VectorXOR_Threads(
                 x[i + 3], y[i + 3],
                 bytes);
         }
-        count %= 4;
-        i_end -= count;
-        x += i_end;
-        y += i_end;
+        // The vectorized loop above consumed every complete group of four.
+        const unsigned processed = count & ~3u;
+        count &= 3u;
+        x += processed;
+        y += processed;
     }
 #endif // LEO_USE_VECTOR4_OPT
 
@@ -597,10 +598,11 @@ void VectorXOR(
                 x[i + 3], y[i + 3],
                 bytes);
         }
-        count %= 4;
-        i_end -= count;
-        x += i_end;
-        y += i_end;
+        // The vectorized loop above consumed every complete group of four.
+        const unsigned processed = count & ~3u;
+        count &= 3u;
+        x += processed;
+        y += processed;
     }
 #endif // LEO_USE_VECTOR4_OPT
 

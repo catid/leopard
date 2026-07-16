@@ -1,4 +1,5 @@
 #include "Leopard2Backend.h"
+#include "LeopardCommon.h"
 #include "LeopardFF8.h"
 #include "LeopardFF16.h"
 #include "leopard.h"
@@ -184,6 +185,62 @@ void test_concurrent_immutable_ops()
         "concurrent immutable backend execution failed");
 }
 
+void test_vector_xor_count_tail()
+{
+    static const unsigned kMaximumCount = 13;
+    static const unsigned kBytes = 64;
+    const leopard::backend::Ops& ops = leopard::backend::GetOps();
+
+    for (unsigned threaded = 0; threaded < 2; ++threaded)
+    {
+        for (unsigned count = 1; count <= kMaximumCount; ++count)
+        {
+            std::vector<std::vector<uint8_t> > destinations(
+                count, std::vector<uint8_t>(kBytes));
+            std::vector<std::vector<uint8_t> > sources(
+                count, std::vector<uint8_t>(kBytes));
+            std::vector<std::vector<uint8_t> > expected(
+                count, std::vector<uint8_t>(kBytes));
+            std::vector<void*> destination_pointers(count);
+            std::vector<void*> source_pointers(count);
+
+            for (unsigned lane = 0; lane < count; ++lane)
+            {
+                for (unsigned byte = 0; byte < kBytes; ++byte)
+                {
+                    destinations[lane][byte] = static_cast<uint8_t>(
+                        lane * 47U + byte * 13U + threaded);
+                    sources[lane][byte] = static_cast<uint8_t>(
+                        lane * 29U + byte * 71U + count);
+                    expected[lane][byte] = static_cast<uint8_t>(
+                        destinations[lane][byte] ^ sources[lane][byte]);
+                }
+                destination_pointers[lane] = destinations[lane].data();
+                source_pointers[lane] = sources[lane].data();
+            }
+
+            if (threaded)
+            {
+                leopard::VectorXOR_Threads(
+                    ops, kBytes, count,
+                    destination_pointers.data(), source_pointers.data());
+            }
+            else
+            {
+                leopard::VectorXOR(
+                    ops, kBytes, count,
+                    destination_pointers.data(), source_pointers.data());
+            }
+
+            for (unsigned lane = 0; lane < count; ++lane)
+            {
+                require(destinations[lane] == expected[lane],
+                    "VectorXOR count-tail mismatch");
+            }
+        }
+    }
+}
+
 void verify_expected_backend(leo2_backend backend)
 {
     const char* expected = std::getenv("LEO2_EXPECT_BACKEND");
@@ -230,6 +287,7 @@ int main()
         verify_expected_backend(execution);
         leo2_context_destroy(context);
 
+        test_vector_xor_count_tail();
         test_concurrent_immutable_ops();
         std::printf("Leopard2 backend ops passed: threads=16 "
             "iterations=1024 startup_kat=pass\n");
