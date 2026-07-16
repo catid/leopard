@@ -821,9 +821,7 @@ static void IFFT_DIT2(
     }
 #endif // LEO_TRY_SSSE3
 
-    // Reference version:
-    xor_mem(y, x, bytes);
-    muladd_mem(x, y, log_m, bytes);
+    backend::GetOps().ff8_ifft_butterfly2(x, y, log_m, bytes);
 }
 
 
@@ -1063,11 +1061,8 @@ static void IFFT_DIT2_xor(
     }
 #endif // LEO_TRY_SSSE3
 
-    // Reference version:
-    xor_mem(y_in, x_in, bytes);
-    muladd_mem(x_in, y_in, log_m, bytes);
-    xor_mem(y_out, y_in, bytes);
-    xor_mem(x_out, x_in, bytes);
+    backend::GetOps().ff8_ifft_butterfly2_xor(
+        x_in, y_in, x_out, y_out, log_m, bytes);
 }
 
 
@@ -1553,9 +1548,7 @@ static void FFT_DIT2(
     }
 #endif // LEO_TRY_SSSE3
 
-    // Reference version:
-    muladd_mem(x, y, log_m, bytes);
-    xor_mem(y, x, bytes);
+    backend::GetOps().ff8_fft_butterfly2(x, y, log_m, bytes);
 }
 
 

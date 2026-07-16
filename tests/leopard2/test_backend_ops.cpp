@@ -60,6 +60,53 @@ void run_kernel_check(unsigned seed)
     require(std::memcmp(product8, expected8, sizeof(product8)) == 0,
         "concurrent FF8 fixed multiply mismatch");
 
+    uint8_t butterfly_x8[259];
+    uint8_t butterfly_y8[259];
+    uint8_t original_x8[259];
+    uint8_t original_y8[259];
+    uint8_t accumulator_x8[259];
+    uint8_t accumulator_y8[259];
+    uint8_t expected_accumulator_x8[259];
+    uint8_t expected_accumulator_y8[259];
+    for (unsigned i = 0; i < sizeof(butterfly_x8); ++i)
+    {
+        butterfly_x8[i] = original_x8[i] = static_cast<uint8_t>(
+            i * 43U + seed * 7U);
+        butterfly_y8[i] = original_y8[i] = static_cast<uint8_t>(
+            i * 83U + seed * 11U);
+        accumulator_x8[i] = expected_accumulator_x8[i] =
+            static_cast<uint8_t>(i * 97U + seed * 13U);
+        accumulator_y8[i] = expected_accumulator_y8[i] =
+            static_cast<uint8_t>(i * 17U + seed * 19U);
+    }
+    ops.ff8_ifft_butterfly2(
+        butterfly_x8, butterfly_y8, log8, sizeof(butterfly_x8));
+    for (unsigned i = 0; i < sizeof(butterfly_x8); ++i)
+    {
+        expected_accumulator_x8[i] ^= butterfly_x8[i];
+        expected_accumulator_y8[i] ^= butterfly_y8[i];
+    }
+    ops.ff8_ifft_butterfly2_xor(
+        original_x8, original_y8, accumulator_x8, accumulator_y8,
+        log8, sizeof(original_x8));
+    require(std::memcmp(accumulator_x8, expected_accumulator_x8,
+                sizeof(accumulator_x8)) == 0 &&
+            std::memcmp(accumulator_y8, expected_accumulator_y8,
+                sizeof(accumulator_y8)) == 0,
+        "concurrent GF8 accumulating butterfly mismatch");
+    require(std::memcmp(original_x8, butterfly_x8,
+                sizeof(original_x8)) != 0 ||
+            std::memcmp(original_y8, butterfly_y8,
+                sizeof(original_y8)) != 0,
+        "concurrent GF8 butterfly fixture did not transform");
+    ops.ff8_fft_butterfly2(
+        butterfly_x8, butterfly_y8, log8, sizeof(butterfly_x8));
+    require(std::memcmp(butterfly_x8, original_x8,
+                sizeof(butterfly_x8)) == 0 &&
+            std::memcmp(butterfly_y8, original_y8,
+                sizeof(butterfly_y8)) == 0,
+        "concurrent GF8 butterfly round trip mismatch");
+
     uint8_t source16[130];
     uint8_t product16[130];
     uint8_t expected16[130];
@@ -99,6 +146,18 @@ void run_kernel_check(unsigned seed)
     ops.ff16_multiply(product16, source16, log16, sizeof(source16));
     require(std::memcmp(product16, expected16, sizeof(product16)) == 0,
         "concurrent FF16 fixed multiply mismatch");
+
+    uint8_t butterfly_x16[130];
+    uint8_t butterfly_y16[130];
+    std::memcpy(butterfly_x16, source16, sizeof(source16));
+    std::memcpy(butterfly_y16, product16, sizeof(product16));
+    ops.ff16_ifft_butterfly2(
+        butterfly_x16, butterfly_y16, log16, sizeof(butterfly_x16));
+    ops.ff16_fft_butterfly2(
+        butterfly_x16, butterfly_y16, log16, sizeof(butterfly_x16));
+    require(std::memcmp(butterfly_x16, source16, sizeof(source16)) == 0 &&
+            std::memcmp(butterfly_y16, product16, sizeof(product16)) == 0,
+        "concurrent GF16 butterfly round trip mismatch");
 }
 
 void test_concurrent_immutable_ops()

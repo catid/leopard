@@ -1,0 +1,39 @@
+{
+  "schema": "leopard2-backend-butterfly-abba-summary/v2",
+  "authoritative_manifest": "abba_manifest.json",
+  "authoritative_manifest_sha256": "bcf67fcc07910b1d46fbac22239be10f3c54f2406533d89eea8ca3cbb6577643",
+  "raw_evidence_sha256": "668c534950fb59292161ba6d0a7425497d7af70346d3f36851adbe8ab11598b6",
+  "runner_sha256": "40e2432ebd5361fa40dbb0a7f1e91e9967c88e77d7472c5935ea9536541a5935",
+  "candidate_source_sha256": "97f994005bc68cda349e7d98425f3e3500cbedd6a09622ed8aacebbf85dc348f",
+  "baseline": {
+    "git_commit": "48803c06fbd7a6802b4438af60e3104895938c9d",
+    "executable_sha256": "0db77daf67f5204592b59dc116ae56ec83cfb4e31ad049df07cb1ebadd6eb561"
+  },
+  "candidate": {
+    "executable_sha256": "519e78c5503baf269ac107b04c7b42bff8c8bfd6418da6fba113915d18f7add6",
+    "backend_matrix_source_fingerprint": "ba4f96d2f38b79f76dc2ce8e4a81a5ab4670904c2945ba529132f42d0b6e2678",
+    "backend_matrix_sha256": "9594c8d4921ca472df1fec219753d4c2d5d5fd9717aec6647550bc0c8de18937"
+  },
+  "execution": {
+    "entry_count": 48,
+    "rounds": 3,
+    "order_per_round": ["A1", "B1", "B2", "A2"],
+    "enforced_affinity": [15],
+    "thread_siblings": [15, 31],
+    "reserved_idle_sibling": 31,
+    "omp_environment": {"OMP_DYNAMIC": "FALSE", "OMP_NUM_THREADS": "1"},
+    "samples_per_invocation": 7,
+    "warmups_per_invocation": 3,
+    "reuse_per_sample": 8,
+    "batch": 1,
+    "threads": 1,
+    "seed": 42
+  },
+  "promotion": [
+    {"cell": "high-gf8", "encode_speedup_percent": 25.2484, "decode_speedup_percent": 13.6816},
+    {"cell": "low-gf8", "encode_speedup_percent": 25.5099, "decode_speedup_percent": 8.9516},
+    {"cell": "high-gf16", "encode_speedup_percent": 22.3762, "decode_speedup_percent": 13.6280},
+    {"cell": "low-gf16", "encode_speedup_percent": 15.5974, "decode_speedup_percent": 5.5747}
+  ],
+  "status": "passed_all_eight_metrics_at_or_above_five_percent"
+}

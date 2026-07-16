@@ -1,7 +1,9 @@
 # Leopard2 backend isolation checkpoint
 
-Status: first production runtime-dispatch checkpoint complete; the SIMD/backend
-Bead remains open for fused butterflies, native NEON, and platform gates.
+Status: fixed-kernel runtime-dispatch checkpoint complete. The subsequent
+two-way butterfly tier is documented in
+`docs/leopard2_backend_butterfly_tier.md`; the SIMD/backend Bead remains open
+for fused-four butterflies, native NEON, and platform gates.
 
 ## Default contract
 
@@ -156,16 +158,18 @@ AVX2, not of the forced AVX2 diagnostic build.
 The isolated AVX2 fixed-multiply/multiply-add and XOR tier materially recovers
 the portable fallback cost without raising the archive ISA floor. It does not
 yet recover the earlier whole-translation-unit diagnostic ceiling in every
-cell because two-way butterflies, IFFT-XOR butterflies, and fused-four
-butterflies still execute their baseline implementations. Those kernels are
-the next extraction target. The scalar GF8 packing correction made during this
-checkpoint restored the previous scalar encode range instead of accepting a
-table-dispatch regression.
+cell because, at this checkpoint, two-way butterflies, IFFT-XOR butterflies,
+and fused-four butterflies still executed their baseline implementations. The
+later two-way and IFFT-XOR result is recorded in
+`leopard2_backend_butterfly_tier.md`; fused four remains open. The scalar GF8
+packing correction made during this checkpoint restored the previous scalar
+encode range instead of accepting a table-dispatch regression.
 
 ## Remaining production gates
 
-- Extract the two-way, IFFT-XOR, and fused-four/radix butterfly families into
-  the same private ops boundary and remeasure the whole-codec ceiling.
+- Extract the fused-four/radix butterfly families into the same private ops
+  boundary and remeasure the whole-codec ceiling. Two-way and GF8 IFFT-XOR
+  extraction passed its separate correctness and performance gate.
 - Implement and test native NEON separately. The AArch64 evidence above is a
   compile-only preservation gate for the existing SSE2NEON translation path,
   not a native-NEON runtime or performance claim.

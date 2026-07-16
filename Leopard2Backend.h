@@ -54,6 +54,27 @@ typedef void (*XorMemory)(
     const void* source,
     uint64_t byte_count);
 
+// In-place two-way LCH butterflies.  x and y must be disjoint shard buffers.
+// The multiplier is in Leopard's legacy logarithm representation.  Transform
+// callers specialize the kModulus zero-skew sentinel before entering these
+// functions, so the backend always receives an ordinary fixed multiplier.
+typedef void (*Butterfly2)(
+    void* x,
+    void* y,
+    uint16_t multiplier_log,
+    uint64_t byte_count);
+
+// Accumulating inverse two-way butterfly used by the GF8 encoder.  All four
+// buffers must be pairwise disjoint.  Inputs are read-only; outputs are XORed
+// with the inverse-butterfly result.
+typedef void (*IFFTButterfly2Xor)(
+    const void* x_input,
+    const void* y_input,
+    void* x_output,
+    void* y_output,
+    uint16_t multiplier_log,
+    uint64_t byte_count);
+
 // This table is private to the implementation and immutable.  A backend owns
 // any tables referenced by its functions and publishes this object only after
 // initialization and the startup known-answer tests have succeeded.
@@ -66,6 +87,11 @@ struct Ops
     FixedMultiply ff16_multiply;
     FixedMultiply ff16_multiply_add;
     XorMemory xor_memory;
+    Butterfly2 ff8_ifft_butterfly2;
+    Butterfly2 ff8_fft_butterfly2;
+    IFFTButterfly2Xor ff8_ifft_butterfly2_xor;
+    Butterfly2 ff16_ifft_butterfly2;
+    Butterfly2 ff16_fft_butterfly2;
 };
 
 struct X86Features

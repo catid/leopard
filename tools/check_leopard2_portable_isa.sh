@@ -344,6 +344,11 @@ run_negative_controls()
         'Leopard2BackendSSSE3.cpp.o' 'pshufb %xmm0, %xmm0'
     expect_classified_archive_accepted good_avx2 \
         'Leopard2BackendAVX2.cpp.o' 'vpxor %ymm0, %ymm0, %ymm0'
+    # Sanitizer instrumentation can materialize an integer argument with the
+    # VEX-encoded AVX vmovd form.  AVX is already required by the runtime
+    # probe, so admit this exact move while retaining the fail-closed v* list.
+    expect_classified_archive_accepted good_avx_move \
+        'Leopard2BackendAVX2.cpp.o' 'vmovd %eax, %xmm0'
     expect_classified_archive_rejected avx2_leaks_fma \
         'Leopard2BackendAVX2.cpp.o' \
         'vfmadd132ps %ymm0, %ymm0, %ymm0'

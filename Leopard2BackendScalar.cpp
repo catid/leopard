@@ -74,6 +74,134 @@ static void ScalarFF8MultiplyAdd(
         destination, source, multiplier_log, byte_count);
 }
 
+static uint64_t ScalarFF8PackedProduct(
+    uint64_t value,
+    const uint8_t* table)
+{
+    uint64_t product = 0;
+    product ^= static_cast<uint64_t>(table[value & 255U]);
+    product ^= static_cast<uint64_t>(table[(value >> 8) & 255U]) << 8;
+    product ^= static_cast<uint64_t>(table[(value >> 16) & 255U]) << 16;
+    product ^= static_cast<uint64_t>(table[(value >> 24) & 255U]) << 24;
+    product ^= static_cast<uint64_t>(table[(value >> 32) & 255U]) << 32;
+    product ^= static_cast<uint64_t>(table[(value >> 40) & 255U]) << 40;
+    product ^= static_cast<uint64_t>(table[(value >> 48) & 255U]) << 48;
+    product ^= static_cast<uint64_t>(table[value >> 56]) << 56;
+    return product;
+}
+
+template<bool Inverse>
+static void ScalarFF8Butterfly2(
+    void* x_pointer,
+    void* y_pointer,
+    uint16_t multiplier_log,
+    uint64_t byte_count)
+{
+    uint8_t* x = static_cast<uint8_t*>(x_pointer);
+    uint8_t* y = static_cast<uint8_t*>(y_pointer);
+    const uint8_t* table = FF8Table +
+        static_cast<size_t>(multiplier_log) * 256U;
+    while (byte_count >= 8)
+    {
+        uint64_t x_value;
+        uint64_t y_value;
+        std::memcpy(&x_value, x, sizeof(x_value));
+        std::memcpy(&y_value, y, sizeof(y_value));
+        if (Inverse)
+        {
+            y_value ^= x_value;
+            x_value ^= ScalarFF8PackedProduct(y_value, table);
+        }
+        else
+        {
+            x_value ^= ScalarFF8PackedProduct(y_value, table);
+            y_value ^= x_value;
+        }
+        std::memcpy(x, &x_value, sizeof(x_value));
+        std::memcpy(y, &y_value, sizeof(y_value));
+        x += 8;
+        y += 8;
+        byte_count -= 8;
+    }
+    while (byte_count-- != 0)
+    {
+        if (Inverse)
+        {
+            *y ^= *x;
+            *x ^= table[*y];
+        }
+        else
+        {
+            *x ^= table[*y];
+            *y ^= *x;
+        }
+        ++x;
+        ++y;
+    }
+}
+
+static void ScalarFF8IFFTButterfly2(
+    void* x, void* y, uint16_t multiplier_log, uint64_t byte_count)
+{
+    ScalarFF8Butterfly2<true>(x, y, multiplier_log, byte_count);
+}
+
+static void ScalarFF8FFTButterfly2(
+    void* x, void* y, uint16_t multiplier_log, uint64_t byte_count)
+{
+    ScalarFF8Butterfly2<false>(x, y, multiplier_log, byte_count);
+}
+
+static void ScalarFF8IFFTButterfly2Xor(
+    const void* x_input_pointer,
+    const void* y_input_pointer,
+    void* x_output_pointer,
+    void* y_output_pointer,
+    uint16_t multiplier_log,
+    uint64_t byte_count)
+{
+    const uint8_t* x_input = static_cast<const uint8_t*>(x_input_pointer);
+    const uint8_t* y_input = static_cast<const uint8_t*>(y_input_pointer);
+    uint8_t* x_output = static_cast<uint8_t*>(x_output_pointer);
+    uint8_t* y_output = static_cast<uint8_t*>(y_output_pointer);
+    const uint8_t* table = FF8Table +
+        static_cast<size_t>(multiplier_log) * 256U;
+    while (byte_count >= 8)
+    {
+        uint64_t x_value;
+        uint64_t y_value;
+        uint64_t x_accumulator;
+        uint64_t y_accumulator;
+        std::memcpy(&x_value, x_input, sizeof(x_value));
+        std::memcpy(&y_value, y_input, sizeof(y_value));
+        std::memcpy(&x_accumulator, x_output, sizeof(x_accumulator));
+        std::memcpy(&y_accumulator, y_output, sizeof(y_accumulator));
+        y_value ^= x_value;
+        x_value ^= ScalarFF8PackedProduct(y_value, table);
+        x_accumulator ^= x_value;
+        y_accumulator ^= y_value;
+        std::memcpy(x_output, &x_accumulator, sizeof(x_accumulator));
+        std::memcpy(y_output, &y_accumulator, sizeof(y_accumulator));
+        x_input += 8;
+        y_input += 8;
+        x_output += 8;
+        y_output += 8;
+        byte_count -= 8;
+    }
+    while (byte_count-- != 0)
+    {
+        const uint8_t y_value = static_cast<uint8_t>(*y_input ^ *x_input);
+        const uint8_t x_value = static_cast<uint8_t>(
+            *x_input ^ table[y_value]);
+        *x_output ^= x_value;
+        *y_output ^= y_value;
+        ++x_input;
+        ++y_input;
+        ++x_output;
+        ++y_output;
+    }
+}
+
 static uint16_t ScalarFF16Product(uint16_t multiplier_log, uint16_t value)
 {
     const uint16_t* table = FF16Table +
@@ -158,6 +286,77 @@ static void ScalarFF16MultiplyAdd(
         destination, source, multiplier_log, byte_count);
 }
 
+template<bool Inverse>
+static void ScalarFF16Butterfly2(
+    void* x_pointer,
+    void* y_pointer,
+    uint16_t multiplier_log,
+    uint64_t byte_count)
+{
+    uint8_t* x = static_cast<uint8_t*>(x_pointer);
+    uint8_t* y = static_cast<uint8_t*>(y_pointer);
+    uint64_t offset = 0;
+    while (byte_count - offset >= 64)
+    {
+        for (unsigned i = 0; i < 32; ++i)
+        {
+            uint16_t x_value = static_cast<uint16_t>(x[offset + i] |
+                (static_cast<unsigned>(x[offset + 32 + i]) << 8));
+            uint16_t y_value = static_cast<uint16_t>(y[offset + i] |
+                (static_cast<unsigned>(y[offset + 32 + i]) << 8));
+            if (Inverse)
+            {
+                y_value ^= x_value;
+                x_value ^= ScalarFF16Product(multiplier_log, y_value);
+            }
+            else
+            {
+                x_value ^= ScalarFF16Product(multiplier_log, y_value);
+                y_value ^= x_value;
+            }
+            x[offset + i] = static_cast<uint8_t>(x_value);
+            x[offset + 32 + i] = static_cast<uint8_t>(x_value >> 8);
+            y[offset + i] = static_cast<uint8_t>(y_value);
+            y[offset + 32 + i] = static_cast<uint8_t>(y_value >> 8);
+        }
+        offset += 64;
+    }
+    const uint64_t symbols = (byte_count - offset) / 2;
+    for (uint64_t i = 0; i < symbols; ++i)
+    {
+        uint16_t x_value = static_cast<uint16_t>(x[offset + i] |
+            (static_cast<unsigned>(x[offset + symbols + i]) << 8));
+        uint16_t y_value = static_cast<uint16_t>(y[offset + i] |
+            (static_cast<unsigned>(y[offset + symbols + i]) << 8));
+        if (Inverse)
+        {
+            y_value ^= x_value;
+            x_value ^= ScalarFF16Product(multiplier_log, y_value);
+        }
+        else
+        {
+            x_value ^= ScalarFF16Product(multiplier_log, y_value);
+            y_value ^= x_value;
+        }
+        x[offset + i] = static_cast<uint8_t>(x_value);
+        x[offset + symbols + i] = static_cast<uint8_t>(x_value >> 8);
+        y[offset + i] = static_cast<uint8_t>(y_value);
+        y[offset + symbols + i] = static_cast<uint8_t>(y_value >> 8);
+    }
+}
+
+static void ScalarFF16IFFTButterfly2(
+    void* x, void* y, uint16_t multiplier_log, uint64_t byte_count)
+{
+    ScalarFF16Butterfly2<true>(x, y, multiplier_log, byte_count);
+}
+
+static void ScalarFF16FFTButterfly2(
+    void* x, void* y, uint16_t multiplier_log, uint64_t byte_count)
+{
+    ScalarFF16Butterfly2<false>(x, y, multiplier_log, byte_count);
+}
+
 static void ScalarXorMemory(
     void* destination,
     const void* source,
@@ -173,7 +372,12 @@ static const Ops ScalarOps = {
     ScalarFF8MultiplyAdd,
     ScalarFF16Multiply,
     ScalarFF16MultiplyAdd,
-    ScalarXorMemory
+    ScalarXorMemory,
+    ScalarFF8IFFTButterfly2,
+    ScalarFF8FFTButterfly2,
+    ScalarFF8IFFTButterfly2Xor,
+    ScalarFF16IFFTButterfly2,
+    ScalarFF16FFTButterfly2
 };
 
 const Ops* InitializeScalar(const InitializeArgs& args)

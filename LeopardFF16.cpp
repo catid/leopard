@@ -869,9 +869,7 @@ static void IFFT_DIT2(
     }
 #endif // LEO_TRY_SSSE3
 
-    // Reference version:
-    xor_mem(y, x, bytes);
-    muladd_mem(x, y, log_m, bytes);
+    backend::GetOps().ff16_ifft_butterfly2(x, y, log_m, bytes);
 }
 
 
@@ -1327,9 +1325,7 @@ static void FFT_DIT2(
     }
 #endif // LEO_TRY_SSSE3
 
-    // Reference version:
-    muladd_mem(x, y, log_m, bytes);
-    xor_mem(y, x, bytes);
+    backend::GetOps().ff16_fft_butterfly2(x, y, log_m, bytes);
 }
 
 
