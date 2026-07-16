@@ -1,0 +1,18 @@
+{
+  "schema":"leopard2-c6-cpp/v1",
+  "source_sha256":"6bf37c848d16af7f53fccadd2fdd6b643c1600a9fed39eb6390952ac18663a40",
+  "core_git_sha":"48803c06fbd7a6802b4438af60e3104895938c9d",
+  "library_sha256":"69c195f4b6e6ce6a7713fed29e17f7171cb6f2e17783e8a3feb48b2fb3fcf925",
+  "sanitizer_mode":"none",
+  "compiler":"gcc",
+  "compiler_version":"13.3.0",
+  "cpu_model":"AMD Ryzen 9 9950X3D 16-Core Processor",
+  "requested_backend":"avx2",
+  "runtime_backend":"avx2",
+  "affinity":[0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31],
+  "omp_num_threads":"1",
+  "openmp_max_threads":1,
+  "correctness":{"cases":12,"coefficients":66920,"byte_comparisons":278074,"digest":"0xc58c8188e359fdf2"},
+  "cells":[
+  ]
+}

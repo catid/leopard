@@ -1,0 +1,441 @@
+{
+  "affected_profile_cells": {
+    "legacy_high_v1": 10795,
+    "low_v1": 10795
+  },
+  "boundary_records": [
+    {
+      "K": 1,
+      "R": 129,
+      "exact_coordinate_digest_sha256": "7511f46f7dc6bab63273a20bd94b4aa30d9dde13567bc01cd37221f861076178",
+      "padded_parent": 512,
+      "parity_coefficients": 129,
+      "profile": "legacy_high_v1",
+      "repair_minor_rank_checks": 1,
+      "transmitted": 130,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 1,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 3,
+      "R": 129,
+      "exact_coordinate_digest_sha256": "b32f9f8c6cfd1ab549ab57c325924353665dc7fcff1caf0c5a627366705d0e72",
+      "padded_parent": 512,
+      "parity_coefficients": 387,
+      "profile": "legacy_high_v1",
+      "repair_minor_rank_checks": 3,
+      "transmitted": 132,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 1,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 17,
+      "R": 129,
+      "exact_coordinate_digest_sha256": "1cebfb1776607221b4be1a99d26f17530bda47a7ed6bb3d67277f06eac7253a3",
+      "padded_parent": 512,
+      "parity_coefficients": 2193,
+      "profile": "legacy_high_v1",
+      "repair_minor_rank_checks": 4,
+      "transmitted": 146,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 10,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 31,
+      "R": 129,
+      "exact_coordinate_digest_sha256": "f18bcbda1b3d99ca8ec9c10410e257a79eddcd87bb6cb67d74edd4fcbda6b9b4",
+      "padded_parent": 512,
+      "parity_coefficients": 3999,
+      "profile": "legacy_high_v1",
+      "repair_minor_rank_checks": 4,
+      "transmitted": 160,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 1,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 63,
+      "R": 129,
+      "exact_coordinate_digest_sha256": "d229ea2ebf354b55f74ed7a6e70b93730d7c1eb351f474205910cb71b51df13d",
+      "padded_parent": 512,
+      "parity_coefficients": 8127,
+      "profile": "legacy_high_v1",
+      "repair_minor_rank_checks": 4,
+      "transmitted": 192,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 1,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 65,
+      "R": 129,
+      "exact_coordinate_digest_sha256": "1b77f66f4df262d337c6550745248a244bc3b7afea4c97f1001155dc5d3abca9",
+      "padded_parent": 512,
+      "parity_coefficients": 8385,
+      "profile": "legacy_high_v1",
+      "repair_minor_rank_checks": 4,
+      "transmitted": 194,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 94,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 127,
+      "R": 129,
+      "exact_coordinate_digest_sha256": "a67c980f9bd0500dcdccd3bf76e60aa31c7766dd009fa2219e652c48663bddb6",
+      "padded_parent": 512,
+      "parity_coefficients": 16383,
+      "profile": "legacy_high_v1",
+      "repair_minor_rank_checks": 4,
+      "transmitted": 256,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 1,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 1,
+      "R": 193,
+      "exact_coordinate_digest_sha256": "4b5d76d630dd4398eba14f1a05532e98cd137b5c8138d44a7c271a2e6a1e2036",
+      "padded_parent": 512,
+      "parity_coefficients": 193,
+      "profile": "legacy_high_v1",
+      "repair_minor_rank_checks": 1,
+      "transmitted": 194,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 1,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 3,
+      "R": 193,
+      "exact_coordinate_digest_sha256": "ffde9bd26d83e261c10d609b0e88de073f7b0c02f71b857fd3710b338945cfc5",
+      "padded_parent": 512,
+      "parity_coefficients": 579,
+      "profile": "legacy_high_v1",
+      "repair_minor_rank_checks": 3,
+      "transmitted": 196,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 1,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 17,
+      "R": 193,
+      "exact_coordinate_digest_sha256": "05f216c7aad3623a6484249379c3ad167b9b7b7984fc93bed7bd510895e88c8a",
+      "padded_parent": 512,
+      "parity_coefficients": 3281,
+      "profile": "legacy_high_v1",
+      "repair_minor_rank_checks": 4,
+      "transmitted": 210,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 10,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 31,
+      "R": 193,
+      "exact_coordinate_digest_sha256": "a0fd5fa06d53f964ecbad8902a7abadf141826477f4f5b7fa59d78d01055c383",
+      "padded_parent": 512,
+      "parity_coefficients": 5983,
+      "profile": "legacy_high_v1",
+      "repair_minor_rank_checks": 4,
+      "transmitted": 224,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 1,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 63,
+      "R": 193,
+      "exact_coordinate_digest_sha256": "7256c54c6c6a516e779b442c5a73068b1835ff107e4185bb2c8e5f2e56bec6f7",
+      "padded_parent": 512,
+      "parity_coefficients": 12159,
+      "profile": "legacy_high_v1",
+      "repair_minor_rank_checks": 4,
+      "transmitted": 256,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 1,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 129,
+      "R": 1,
+      "exact_coordinate_digest_sha256": "dd1088c6c51f23d4c70a4b733ba3391c7abece439b3b95c9c8d2b9c4e883d9ef",
+      "padded_parent": 512,
+      "parity_coefficients": 129,
+      "profile": "low_v1",
+      "repair_minor_rank_checks": 1,
+      "transmitted": 130,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 27,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 129,
+      "R": 3,
+      "exact_coordinate_digest_sha256": "dd9b69e5b1da80a940ffe629a0f72dfc670e073cf24e55e77bacda10b79fa126",
+      "padded_parent": 512,
+      "parity_coefficients": 387,
+      "profile": "low_v1",
+      "repair_minor_rank_checks": 3,
+      "transmitted": 132,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 27,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 129,
+      "R": 17,
+      "exact_coordinate_digest_sha256": "f92bc68186d73b91bf721806af6925cdc76ba896067b5486965b5c3f4857c088",
+      "padded_parent": 512,
+      "parity_coefficients": 2193,
+      "profile": "low_v1",
+      "repair_minor_rank_checks": 4,
+      "transmitted": 146,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 27,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 129,
+      "R": 31,
+      "exact_coordinate_digest_sha256": "6c1288c2e7969cd2273d31a4a3de26e65b2f7fd5d03fe7fa063cd06f29cfeeb3",
+      "padded_parent": 512,
+      "parity_coefficients": 3999,
+      "profile": "low_v1",
+      "repair_minor_rank_checks": 4,
+      "transmitted": 160,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 27,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 129,
+      "R": 63,
+      "exact_coordinate_digest_sha256": "07eb9204fbb88306c1cc95cdd4b3a7d06a1320e573dcde7188cf3dce389f2495",
+      "padded_parent": 512,
+      "parity_coefficients": 8127,
+      "profile": "low_v1",
+      "repair_minor_rank_checks": 4,
+      "transmitted": 192,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 27,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 129,
+      "R": 65,
+      "exact_coordinate_digest_sha256": "d820c88a620a45a6fdbc0c10ca972b0ffa3e2ca650cbfe38c65c73a5d3533aa4",
+      "padded_parent": 512,
+      "parity_coefficients": 8385,
+      "profile": "low_v1",
+      "repair_minor_rank_checks": 4,
+      "transmitted": 194,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 27,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 129,
+      "R": 127,
+      "exact_coordinate_digest_sha256": "d5d4d8a03f5e0990866974e471f4b476913d4684f76adb0925c9fb312ef999af",
+      "padded_parent": 512,
+      "parity_coefficients": 16383,
+      "profile": "low_v1",
+      "repair_minor_rank_checks": 4,
+      "transmitted": 256,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 27,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 193,
+      "R": 1,
+      "exact_coordinate_digest_sha256": "2e3a01e5dd28d2ff9088cccaf05867ea2150634b52973c6dae78cce9be0f209e",
+      "padded_parent": 512,
+      "parity_coefficients": 193,
+      "profile": "low_v1",
+      "repair_minor_rank_checks": 1,
+      "transmitted": 194,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 53,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 193,
+      "R": 3,
+      "exact_coordinate_digest_sha256": "5f21a0fdd6404aa54e4788c2abfe25a5ae74d640b0beafd40fd4d8d09522a563",
+      "padded_parent": 512,
+      "parity_coefficients": 579,
+      "profile": "low_v1",
+      "repair_minor_rank_checks": 3,
+      "transmitted": 196,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 53,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 193,
+      "R": 17,
+      "exact_coordinate_digest_sha256": "42756e7297cb94faa1774b7e09790a3661e47ef2a2e80c933d491d9e8b010c94",
+      "padded_parent": 512,
+      "parity_coefficients": 3281,
+      "profile": "low_v1",
+      "repair_minor_rank_checks": 4,
+      "transmitted": 210,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 53,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 193,
+      "R": 31,
+      "exact_coordinate_digest_sha256": "516fbac78926f5c749dac7d28ed9bdc9f195075c1175f2a01d42a18bf6400767",
+      "padded_parent": 512,
+      "parity_coefficients": 5983,
+      "profile": "low_v1",
+      "repair_minor_rank_checks": 4,
+      "transmitted": 224,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 53,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    },
+    {
+      "K": 193,
+      "R": 63,
+      "exact_coordinate_digest_sha256": "5282b574a1d8bb3068d32f5355d114b3636c048528f1f91aa10ba12a6b9a1d3d",
+      "padded_parent": 512,
+      "parity_coefficients": 12159,
+      "profile": "low_v1",
+      "repair_minor_rank_checks": 4,
+      "transmitted": 256,
+      "wire_difference_witness": {
+        "exact_gf8_coefficient": 53,
+        "padded_gf16_coefficient": 9073,
+        "parity": 0,
+        "systematic": 0
+      }
+    }
+  ],
+  "code_definition": {
+    "degree_bound": "degree < K",
+    "field": "legacy_gf8_representation_v1",
+    "identity_status": "unfrozen-new-profile; no serialized production identity",
+    "legacy_wire_compatible": false,
+    "parity_coordinates": "K..K+R-1",
+    "systematic_coordinates": "0..K-1"
+  },
+  "gf4_exhaustive": {
+    "full_length_generators": 15,
+    "implied_public_geometries": 120,
+    "k_coordinate_subsets": 65534
+  },
+  "gf8": {
+    "boundary_cases": 24,
+    "direct_evaluation_checks": 68,
+    "explicit_wire_difference_witnesses": 24,
+    "parity_coefficients_nonzero": 123596,
+    "repair_minor_rank_checks": 80
+  },
+  "method_scope": {
+    "binary_block_gf8": "C5 found the materialized join dense/rejected; a fully fused exact join is the direct evaluator measured here",
+    "exact_direct_gf8": "implemented and measured by the C6 C++ candidate",
+    "generic_gf8": "same exact prefix polynomial and wire definition; generic per-stripe interpolation is retained as an oracle, not relabeled as a distinct plan",
+    "legacy_padded_gf16": "measured by the C6 C++ public-API baseline",
+    "tang_han_epsilon_gf8": "C3b exact inverse algebra only; scalar best gain 0.862 and no end-to-end exact encoder/profile identity",
+    "wire_compatible_truncated_gf8": "impossible in the target cells: the declared parent has 512 GF16 coordinates, exceeding GF8 order; C2 remains a same-field parent executor"
+  },
+  "prior_evidence": [
+    {
+      "path": "experiments/leopard2/c2_truncated_cpp/results/checkpoint.json",
+      "sha256": "132b2237dffce14bdba8fb621b145935fa8fc811a3849a16ccb61598df45b959"
+    },
+    {
+      "path": "experiments/leopard2/non_power_of_two/c3b/results/checkpoint.json",
+      "sha256": "5e71fa9ea2e72d9fec10f4e123a1acf85bd3de2c74738f523d59b80e1660e0bc"
+    },
+    {
+      "path": "experiments/leopard2/c5_dyadic_cpp/results/checkpoint.json",
+      "sha256": "b6fa1f984b62d5731a263779193e55c4537667de9492b3c8f803eade3a5174d7"
+    },
+    {
+      "path": "experiments/leopard2/non_power_of_two/c0/results/summary.json",
+      "sha256": "56176ecfe27473da175230cc2182c0b44f4de41f6e9330eddc430eedf9714e6d"
+    }
+  ],
+  "schema": "leopard2-c6-algebra/v1",
+  "source_sha256": "dda5eeb861e8fcb71d64b998e8c46990d91ae497597d3bc852d2dd0a57d284ec",
+  "status": "pass"
+}

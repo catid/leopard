@@ -303,6 +303,42 @@ is omitted unless parity rebuilding is explicitly requested (and re-encoding is
 normally simpler).  Both active formulas are new derivations from R10 equations
 (55)-(66) and are gated by exhaustive small-field and direct GF8/GF16 tests.
 
+## C6 exact-prefix GF8 boundary code (experimental only)
+
+C6 studies a separately defined exact code for the cells where a frozen dyadic
+profile has a 512-coordinate GF16 parent even though `K+R <= 256`.  It uses the
+legacy GF8 field representation but not a legacy parent coordinate map.
+Integers `0..255` are symbol bit patterns in Leopard's Cantor-coordinate
+representation, so `i xor s` denotes `omega_i + omega_s`; it is not arithmetic
+on raw polynomial-basis integer encodings:
+
+    source points = {0,...,K-1}
+    parity points = {K,...,K+R-1}.
+
+Let `S={0,...,K-1}` and `Z_S(x)=product_(s in S)(x+s)`.  Characteristic-two
+addition is coordinate XOR.  Direct Lagrange evaluation gives
+
+    w_i    = 1 / product_(s in S, s != i)(i+s)
+    G(q,i) = Z_S(q) w_i / (q+i),       q in {K,...,K+R-1}.
+
+Every denominator is nonzero because all public evaluation coordinates are
+distinct.  The systematic generator is identity rows followed by `G`; any `K`
+rows are an evaluation map at `K` distinct field elements and are nonsingular.
+This is the generic exact-parameter RS construction described in the context of
+R13, R14, R20, and R21, specialized by a new derivation to Leopard's public
+Cantor-coordinate elements.  `experiments/leopard2/non_power_of_two/c6/algebra.py`
+checks the derivation using independent carryless polynomial arithmetic and
+exhaustive GF(2^4) rank tests.
+
+No active-parent normalization, shortening factor, or puncturing factor can
+make this code wire-equivalent to the frozen GF16 parent.  That parent has 512
+distinct coordinates, while GF8 has only 256 elements; a GF8 transform cannot
+evaluate the same coordinate set.  C2-style truncation can preserve the parent
+only while retaining GF16.  C6 therefore records explicit unequal generator
+coefficients and assigns the exact prefix map an unfrozen new-profile identity.
+Its coordinate digests are research fingerprints, not serialized code IDs.
+See `docs/leopard2_c6_gf256_rescue.md` for the executable and promotion gates.
+
 ## Independent oracles and promotion gates
 
 The optimized LCH code is never its own only oracle.
@@ -413,6 +449,7 @@ wire semantics.
 | active-parent factor `c_n` in high recovery | new derivation above from congruence modulo `s_n`; direct tests required |
 | exact/truncated parent-preserving candidates | R15; R22 for general TFT design principles |
 | arbitrary-parameter new-profile candidates | R13, R14, R18-R21; never assumed wire-equivalent |
+| C6 exact-prefix GF8 generator `Z_S(q) w_i / (q+i)` | new specialization of direct Lagrange evaluation, with arbitrary-parameter context from R13, R14, R20, R21; exhaustive/direct evidence in the C6 algebra experiment |
 | exact-prefix Lagrange/Newton-to-LCH conversion | R15 Algorithms 1 and 3; executable derivation and direct-algebra checks in `experiments/leopard2/non_power_of_two/c3b/fast_inverse.py` |
 | arbitrary-epsilon inverse and completed evaluations | R13 Appendix A, Lemmas 8-9 and Algorithm 8; executable derivation and direct-algebra checks in the C3b experiment |
 
