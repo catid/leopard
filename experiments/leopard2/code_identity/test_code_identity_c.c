@@ -218,6 +218,9 @@ static int run_unit_tests(void)
     static const char golden_4[] =
         "4c32494401000024000000290201020100000002000001000000020000000002"
         "000100018005000101";
+    static const char golden_5[] =
+        "4c32494401000024000000240301010100000003000000fd0000010000000003"
+        "00010000";
     leo2_code_identity identity;
     leo2_code_identity decoded;
     uint8_t encoded[LEO2_CODE_ID_MAX_BYTES];
@@ -253,6 +256,8 @@ static int run_unit_tests(void)
     CHECK(test_golden(LEO2_CODE_ID_PROFILE_LOW,
         LEO2_CODE_ID_FIELD_GF16, 2, 256,
         LEO2_CODE_ID_META_SHARD_LAYOUT, "01", golden_4));
+    CHECK(test_golden(LEO2_CODE_ID_PROFILE_EXACT_LOW,
+        LEO2_CODE_ID_FIELD_GF8, 3, 253, 0, "-", golden_5));
 
     CHECK(leo2_code_identity_make(&identity, LEO2_CODE_ID_PROFILE_LOW,
         LEO2_CODE_ID_FIELD_GF16, 129, 100) == LEO2_CODE_ID_OK);
@@ -338,6 +343,13 @@ static int run_unit_tests(void)
     CHECK(identity.padded_side == 1u);
     CHECK(leo2_code_identity_make(&identity, LEO2_CODE_ID_PROFILE_LOW,
         LEO2_CODE_ID_FIELD_GF8, 129, 100) == LEO2_CODE_ID_UNSUPPORTED);
+    CHECK(leo2_code_identity_make(&identity, LEO2_CODE_ID_PROFILE_EXACT_LOW,
+        LEO2_CODE_ID_FIELD_GF8, 3, 253) == LEO2_CODE_ID_OK);
+    CHECK(identity.parent_count == 256u);
+    CHECK(identity.padded_side == 3u);
+    CHECK(leo2_code_identity_make(&identity,
+        LEO2_CODE_ID_PROFILE_EXACT_HIGH_RESERVED, LEO2_CODE_ID_FIELD_GF16,
+        253, 3) == LEO2_CODE_ID_UNSUPPORTED);
     CHECK(leo2_code_identity_make(&identity, LEO2_CODE_ID_PROFILE_LOW,
         LEO2_CODE_ID_FIELD_GF16, 32768, 32768) == LEO2_CODE_ID_OK);
     CHECK(identity.parent_count == 65536u);

@@ -32,12 +32,23 @@ header is 36 bytes:
 | 32 | 2 | coordinate-map version |
 | 34 | 2 | metadata TLV count |
 
-Profile family 1 is legacy high and family 2 is low; both currently have profile
-version 1.  Field family 1 is legacy GF8 and family 2 is legacy GF16, both with
-field-representation version 1.  Coordinate-map version 1 means the exact maps
-in `docs/leopard2_math_and_sources.md`.  Redundant `N` and padded-side values are
-intentional: readers recompute them and reject an identity whose claimed values
-do not match its profile.
+Profile family 1 is legacy high, family 2 is padded low, and family 3 is exact
+prefix low; all currently have profile version 1.  Family 3 is the persistent
+identity corresponding to public enum value
+`LEO2_PROFILE_EXACT_EXPERIMENTAL_V1 == 3`; the stable codec constructor still
+rejects it, so this is a research-format freeze rather than production ABI.
+Family 4 is reserved for a possible future exact-high profile and version-1
+readers reject it.  Exact-high must never reinterpret family 3.
+
+For family 3/map 1, `N=K+R`, the padded-side field equals `K`, and the ordered
+evaluation coordinates are the first `K+R` Leopard Cantor coordinates.  The
+first `K` are systematic and the next `R` are transmitted parity.  There are
+no shortened or punctured positions, so shortening- or puncturing-set metadata
+is rejected.  Field family 1 is legacy GF8 and field family 2 is legacy GF16,
+both with field-representation version 1.  Coordinate-map version 1 means the
+exact maps in `docs/leopard2_math_and_sources.md` and the C7 addendum.  Redundant
+`N` and padded-side values are intentional: readers recompute them and reject
+an identity whose claimed values do not match its profile.
 
 Each metadata record is a 16-bit type, 16-bit value length, then the value.  TLVs
 must be strictly increasing by type and base types must be unique.  Type zero is
@@ -68,10 +79,10 @@ a new version rather than interpreting old bytes according to a new coordinate
 map.  Only unknown noncritical metadata may be skipped or preserved by an older
 reader.
 
-The experimental exact profile is intentionally absent.  Its coordinate set is
-not frozen; assigning it a persistent identifier now would create an accidental
-compatibility promise.  When frozen, it needs a new profile family/version and a
-critical coordinate-set digest or an equally complete versioned map.
+The C7 exact-low coordinate set is frozen by family 3/version 1/map 1 rather
+than by an optional digest.  Changing its point order, field representation, or
+systematic/parity partition requires a new profile or coordinate-map version.
+Family 4 remains an unimplemented reservation, not a decodable identity.
 
 ## Migration rules
 
@@ -100,7 +111,7 @@ Run:
       PYTHONDONTWRITEBYTECODE=1 python3 test_code_identity_c.py \
         --cc gcc --sanitizers
 
-The suite checks golden bytes and hashes, 3,952 profile/field/count boundary
+The suite checks golden bytes and hashes, 6,085 profile/field/count boundary
 round trips, 4,162 metadata count/length round trips, every truncation, trailing
 bytes, reserved bits, bad lengths, integer overflow, inconsistent derived fields,
 unknown critical extensions, malformed digest TLVs, ordering/duplicate rules,
@@ -117,11 +128,11 @@ reports the exact required buffer size and undersized output fails before any
 write.  Counts, TLV values, TLV count, and complete identifiers retain the same
 4096-byte, 64-entry, and 65535-byte bounds as the Python reference.
 
-`test_code_identity_c.c` contains 186 direct C checks and also provides a test-
+`test_code_identity_c.c` contains 211 direct C checks and also provides a test-
 only line protocol.  `test_code_identity_c.py` compiles it with strict C99 GCC
 warnings and compares both C serialization and C deserialization with the
 Python implementation.  The deterministic differential matrix covers all 4
-golden vectors, 3,952 valid profile/field/count combinations, 44 zero, field-
+golden vectors, 6,085 valid profile/field/count combinations, 66 zero, field-
 boundary, and `UINT32_MAX` count cases, 4,162 metadata count/length cases, one
 exact 65,535-byte valid identifier, one 65,536-byte rejection, 81 explicitly
 malformed identifiers, and 20,000 deterministic mutated inputs.
@@ -134,11 +145,12 @@ buffer.  The harness compiles into an automatically removed temporary directory
 and leaves no generated binary or Python bytecode in the source tree.
 
 The independent-implementation and deterministic sanitized differential gates
-are now satisfied.  Promotion still requires a sustained coverage-guided C API
-fuzzing campaign, a frozen exact-profile decision, cross-endian or emulated-
-endian validation, and a concrete API/storage use case that justifies committing
-a public wire contract.  Kill or revise this proposal if the fixed header cannot
-represent a frozen profile without profile-specific interpretation, forward-
-compatible parsing becomes ambiguous, or the envelope adds material operational
-complexity without preventing real profile mismatches.  Until those gates pass,
-this code remains isolated experimental evidence rather than public ABI.
+are now satisfied, including the frozen experimental exact-low identity.
+Promotion still requires a sustained coverage-guided C API fuzzing campaign,
+cross-endian or emulated-endian validation, and a concrete API/storage use case
+that justifies committing a public wire contract.  Kill or revise this proposal
+if the fixed header cannot represent a frozen profile without profile-specific
+interpretation, forward-compatible parsing becomes ambiguous, or the envelope
+adds material operational complexity without preventing real profile
+mismatches.  Until those gates pass, this code remains isolated experimental
+evidence rather than public ABI.
