@@ -513,8 +513,7 @@ static void AVX2XorMemory4(
     }
 }
 
-template<bool Inverse>
-static void AVX2FF8Butterfly4Nonzero(
+static void AVX2FF8IFFTButterfly4Nonzero(
     void* value0_pointer, void* value1_pointer,
     void* value2_pointer, void* value3_pointer,
     uint16_t log01, uint16_t log23, uint16_t log02,
@@ -541,36 +540,18 @@ static void AVX2FF8Butterfly4Nonzero(
             reinterpret_cast<const __m256i*>(value2));
         __m256i x3 = _mm256_loadu_si256(
             reinterpret_cast<const __m256i*>(value3));
-        if (Inverse)
-        {
-            x1 = _mm256_xor_si256(x1, x0);
-            x0 = _mm256_xor_si256(x0,
-                AVX2FF8ProductVector(x1, low01, high01));
-            x3 = _mm256_xor_si256(x3, x2);
-            x2 = _mm256_xor_si256(x2,
-                AVX2FF8ProductVector(x3, low23, high23));
-            x2 = _mm256_xor_si256(x2, x0);
-            x3 = _mm256_xor_si256(x3, x1);
-            x0 = _mm256_xor_si256(x0,
-                AVX2FF8ProductVector(x2, low02, high02));
-            x1 = _mm256_xor_si256(x1,
-                AVX2FF8ProductVector(x3, low02, high02));
-        }
-        else
-        {
-            x0 = _mm256_xor_si256(x0,
-                AVX2FF8ProductVector(x2, low02, high02));
-            x1 = _mm256_xor_si256(x1,
-                AVX2FF8ProductVector(x3, low02, high02));
-            x2 = _mm256_xor_si256(x2, x0);
-            x3 = _mm256_xor_si256(x3, x1);
-            x0 = _mm256_xor_si256(x0,
-                AVX2FF8ProductVector(x1, low01, high01));
-            x1 = _mm256_xor_si256(x1, x0);
-            x2 = _mm256_xor_si256(x2,
-                AVX2FF8ProductVector(x3, low23, high23));
-            x3 = _mm256_xor_si256(x3, x2);
-        }
+        x1 = _mm256_xor_si256(x1, x0);
+        x0 = _mm256_xor_si256(x0,
+            AVX2FF8ProductVector(x1, low01, high01));
+        x3 = _mm256_xor_si256(x3, x2);
+        x2 = _mm256_xor_si256(x2,
+            AVX2FF8ProductVector(x3, low23, high23));
+        x2 = _mm256_xor_si256(x2, x0);
+        x3 = _mm256_xor_si256(x3, x1);
+        x0 = _mm256_xor_si256(x0,
+            AVX2FF8ProductVector(x2, low02, high02));
+        x1 = _mm256_xor_si256(x1,
+            AVX2FF8ProductVector(x3, low02, high02));
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(value0), x0);
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(value1), x1);
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(value2), x2);
@@ -587,28 +568,14 @@ static void AVX2FF8Butterfly4Nonzero(
         uint8_t x1 = *value1;
         uint8_t x2 = *value2;
         uint8_t x3 = *value3;
-        if (Inverse)
-        {
-            x1 ^= x0;
-            x0 ^= FF8Product(log01, x1);
-            x3 ^= x2;
-            x2 ^= FF8Product(log23, x3);
-            x2 ^= x0;
-            x3 ^= x1;
-            x0 ^= FF8Product(log02, x2);
-            x1 ^= FF8Product(log02, x3);
-        }
-        else
-        {
-            x0 ^= FF8Product(log02, x2);
-            x1 ^= FF8Product(log02, x3);
-            x2 ^= x0;
-            x3 ^= x1;
-            x0 ^= FF8Product(log01, x1);
-            x1 ^= x0;
-            x2 ^= FF8Product(log23, x3);
-            x3 ^= x2;
-        }
+        x1 ^= x0;
+        x0 ^= FF8Product(log01, x1);
+        x3 ^= x2;
+        x2 ^= FF8Product(log23, x3);
+        x2 ^= x0;
+        x3 ^= x1;
+        x0 ^= FF8Product(log02, x2);
+        x1 ^= FF8Product(log02, x3);
         *value0++ = x0;
         *value1++ = x1;
         *value2++ = x2;
@@ -616,8 +583,7 @@ static void AVX2FF8Butterfly4Nonzero(
     }
 }
 
-template<bool Inverse>
-static void AVX2FF8Butterfly4(
+static void AVX2FF8IFFTButterfly4Kernel(
     void* value0_pointer, void* value1_pointer,
     void* value2_pointer, void* value3_pointer,
     uint16_t log01, uint16_t log23, uint16_t log02,
@@ -626,7 +592,7 @@ static void AVX2FF8Butterfly4(
     static const uint16_t kZeroSkew = 255;
     if (log01 != kZeroSkew && log23 != kZeroSkew && log02 != kZeroSkew)
     {
-        AVX2FF8Butterfly4Nonzero<Inverse>(
+        AVX2FF8IFFTButterfly4Nonzero(
             value0_pointer, value1_pointer, value2_pointer, value3_pointer,
             log01, log23, log02, byte_count);
         return;
@@ -669,45 +635,22 @@ static void AVX2FF8Butterfly4(
             reinterpret_cast<const __m256i*>(value2));
         __m256i x3 = _mm256_loadu_si256(
             reinterpret_cast<const __m256i*>(value3));
-        if (Inverse)
+        x1 = _mm256_xor_si256(x1, x0);
+        if (log01 != kZeroSkew)
+            x0 = _mm256_xor_si256(x0,
+                AVX2FF8ProductVector(x1, low01, high01));
+        x3 = _mm256_xor_si256(x3, x2);
+        if (log23 != kZeroSkew)
+            x2 = _mm256_xor_si256(x2,
+                AVX2FF8ProductVector(x3, low23, high23));
+        x2 = _mm256_xor_si256(x2, x0);
+        x3 = _mm256_xor_si256(x3, x1);
+        if (log02 != kZeroSkew)
         {
-            x1 = _mm256_xor_si256(x1, x0);
-            if (log01 != kZeroSkew)
-                x0 = _mm256_xor_si256(x0,
-                    AVX2FF8ProductVector(x1, low01, high01));
-            x3 = _mm256_xor_si256(x3, x2);
-            if (log23 != kZeroSkew)
-                x2 = _mm256_xor_si256(x2,
-                    AVX2FF8ProductVector(x3, low23, high23));
-            x2 = _mm256_xor_si256(x2, x0);
-            x3 = _mm256_xor_si256(x3, x1);
-            if (log02 != kZeroSkew)
-            {
-                x0 = _mm256_xor_si256(x0,
-                    AVX2FF8ProductVector(x2, low02, high02));
-                x1 = _mm256_xor_si256(x1,
-                    AVX2FF8ProductVector(x3, low02, high02));
-            }
-        }
-        else
-        {
-            if (log02 != kZeroSkew)
-            {
-                x0 = _mm256_xor_si256(x0,
-                    AVX2FF8ProductVector(x2, low02, high02));
-                x1 = _mm256_xor_si256(x1,
-                    AVX2FF8ProductVector(x3, low02, high02));
-            }
-            x2 = _mm256_xor_si256(x2, x0);
-            x3 = _mm256_xor_si256(x3, x1);
-            if (log01 != kZeroSkew)
-                x0 = _mm256_xor_si256(x0,
-                    AVX2FF8ProductVector(x1, low01, high01));
-            x1 = _mm256_xor_si256(x1, x0);
-            if (log23 != kZeroSkew)
-                x2 = _mm256_xor_si256(x2,
-                    AVX2FF8ProductVector(x3, low23, high23));
-            x3 = _mm256_xor_si256(x3, x2);
+            x0 = _mm256_xor_si256(x0,
+                AVX2FF8ProductVector(x2, low02, high02));
+            x1 = _mm256_xor_si256(x1,
+                AVX2FF8ProductVector(x3, low02, high02));
         }
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(value0), x0);
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(value1), x1);
@@ -725,37 +668,18 @@ static void AVX2FF8Butterfly4(
         uint8_t x1 = *value1;
         uint8_t x2 = *value2;
         uint8_t x3 = *value3;
-        if (Inverse)
+        x1 ^= x0;
+        if (log01 != kZeroSkew)
+            x0 ^= FF8Product(log01, x1);
+        x3 ^= x2;
+        if (log23 != kZeroSkew)
+            x2 ^= FF8Product(log23, x3);
+        x2 ^= x0;
+        x3 ^= x1;
+        if (log02 != kZeroSkew)
         {
-            x1 ^= x0;
-            if (log01 != kZeroSkew)
-                x0 ^= FF8Product(log01, x1);
-            x3 ^= x2;
-            if (log23 != kZeroSkew)
-                x2 ^= FF8Product(log23, x3);
-            x2 ^= x0;
-            x3 ^= x1;
-            if (log02 != kZeroSkew)
-            {
-                x0 ^= FF8Product(log02, x2);
-                x1 ^= FF8Product(log02, x3);
-            }
-        }
-        else
-        {
-            if (log02 != kZeroSkew)
-            {
-                x0 ^= FF8Product(log02, x2);
-                x1 ^= FF8Product(log02, x3);
-            }
-            x2 ^= x0;
-            x3 ^= x1;
-            if (log01 != kZeroSkew)
-                x0 ^= FF8Product(log01, x1);
-            x1 ^= x0;
-            if (log23 != kZeroSkew)
-                x2 ^= FF8Product(log23, x3);
-            x3 ^= x2;
+            x0 ^= FF8Product(log02, x2);
+            x1 ^= FF8Product(log02, x3);
         }
         *value0++ = x0;
         *value1++ = x1;
@@ -769,7 +693,7 @@ static void AVX2FF8IFFTButterfly4(
     uint16_t log01, uint16_t log23, uint16_t log02,
     uint64_t byte_count)
 {
-    AVX2FF8Butterfly4<true>(value0, value1, value2, value3,
+    AVX2FF8IFFTButterfly4Kernel(value0, value1, value2, value3,
         log01, log23, log02, byte_count);
 }
 
