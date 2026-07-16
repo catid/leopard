@@ -89,6 +89,7 @@ struct Options
     size_t warmup;
     uint32_t threads;
     uint64_t seed;
+    bool force_generic_decode;
     std::string output;
 
     Options()
@@ -105,6 +106,7 @@ struct Options
         , warmup(2)
         , threads(1)
         , seed(1)
+        , force_generic_decode(false)
         , output("-")
     {}
 };
@@ -349,6 +351,7 @@ static void Usage(std::ostream& output, const char* program)
         << "  --warmup N            Untimed calls (default 2)\n"
         << "  --threads N           Context thread count (default 1)\n"
         << "  --seed N              Deterministic seed (default 1)\n"
+        << "  --force-generic       Use the retained O(N log N) decoder\n"
         << "  --json PATH           JSON output path, or - for stdout\n"
         << "  --help                 Show this message\n";
 }
@@ -377,6 +380,7 @@ static Options ParseOptions(int argc, char** argv)
         else if (argument == "--warmup") options.warmup = ParseSize(NeedValue(argc, argv, i), "--warmup");
         else if (argument == "--threads" || argument == "--thread-count") options.threads = ParseUint32(NeedValue(argc, argv, i), "--threads");
         else if (argument == "--seed") options.seed = ParseUnsigned(NeedValue(argc, argv, i), "--seed");
+        else if (argument == "--force-generic") options.force_generic_decode = true;
         else if (argument == "--json" || argument == "--output") options.output = NeedValue(argc, argv, i);
         else Fail("unknown argument: " + argument);
     }
@@ -759,8 +763,14 @@ static int Run(const Options& options)
     RequireLeo2(leo2_context_create(&context_options, &context), "context create");
 
     leo2_codec* codec = NULL;
+    leo2_codec_options codec_options;
+    memset(&codec_options, 0, sizeof(codec_options));
+    codec_options.struct_size = sizeof(codec_options);
+    codec_options.flags = options.force_generic_decode
+        ? LEO2_CODEC_FORCE_GENERIC_DECODE : 0;
     RequireLeo2(leo2_codec_create(
-        context, options.k, options.r, options.profile, options.field, NULL, &codec),
+        context, options.k, options.r, options.profile, options.field,
+        &codec_options, &codec),
         "codec create");
 
     size_t encode_scratch_bytes = 0;
@@ -813,7 +823,8 @@ static int Run(const Options& options)
     const Summary codec_setup = Measure(options.iterations, 1, [&]() {
         leo2_codec* temporary = NULL;
         RequireLeo2(leo2_codec_create(
-            context, options.k, options.r, options.profile, options.field, NULL, &temporary),
+            context, options.k, options.r, options.profile, options.field,
+            &codec_options, &temporary),
             "timed codec create");
         leo2_codec_destroy(temporary);
     });
@@ -945,6 +956,8 @@ static int Run(const Options& options)
          << "    \"requested_profile\": \"" << ProfileName(options.profile) << "\",\n"
          << "    \"requested_field\": \"" << FieldName(options.field) << "\",\n"
          << "    \"requested_backend\": \"" << BackendName(options.backend) << "\",\n"
+         << "    \"force_generic_decode\": "
+         << (options.force_generic_decode ? "true" : "false") << ",\n"
          << "    \"shard_bytes\": " << options.bytes << ",\n"
          << "    \"loss_count\": " << options.losses << ",\n"
          << "    \"missing_original_indices\": [";
