@@ -249,34 +249,38 @@ public `(K,R)`, shard bytes, loss pattern, batch/reuse semantics, thread count,
 and amount of generated or repaired output. Field or code-family limitations,
 setup included by one side but not the other, and unsupported `R>K` or parent
 sizes must be explicit exclusions rather than silently adjusted cells. The
-current committed matrix has no external-library adapters, so it makes no
-cross-library throughput claim. That remaining work keeps the benchmark-harness
-Bead open.
+default-off, single-thread ISA-L checkpoint adapter is documented in
+`docs/leopard2_isal_comparison.md`. It does not create a production dependency
+and does not complete the external-library matrix. Jerasure and the remaining
+ISA-L multicore cells still have no reviewed adapter, and a bounded result
+does not become a cross-library claim for unmeasured cells. That remaining work
+keeps the benchmark-harness Bead open.
 
 `tools/leopard2_external_comparison.py` makes that boundary machine-readable.
 It deterministically regenerates the selected matrix, classifies every job, and
-reports aggregate `adapter-required`/`excluded`, reason, and qualification
-counts. The internal per-cell classifier records the resolved Leopard2
+reports aggregate `adapter-available-unmeasured`/`adapter-required`/`excluded`,
+reason, and qualification counts. The internal per-cell classifier records the resolved Leopard2
 profile/field/parent, the provider field, whether wire compatibility exists
 (currently false for every external provider), and the reasons or
-qualifications; the command does not claim to validate an independently edited
-or signed lab manifest. On the 7,134-job required matrix, the audit
-classifies 5,024 ISA-L rows as public-workload candidates and excludes 2,110
-whose `K+R` exceeds GF(256); all 7,134 required GF8/GF16 rows are Jerasure
-adapter candidates because their shard sizes are multiples of the deterministic
+qualifications. Its `isa-l-checkpoint` command independently invokes the
+fail-closed bounded-artifact validator; the matrix audit itself still contains
+no timing measurements. On the 7,134-job required matrix, the audit classifies
+5,003 ISA-L rows as supported by the default-off adapter but explicitly
+unmeasured, retains 21 multicore adapter gaps,
+and excludes 2,110 whose `K+R` exceeds GF(256); all 7,134 required GF8/GF16
+rows are Jerasure adapter candidates because their shard sizes are multiples of the deterministic
 eight-byte adapter region contract. ISA-L remains eligible for `K+R<=256`
-when Leopard2's
-dyadic parent inflation selects GF16, but the report requires that field
+when Leopard2's dyadic parent inflation selects GF16, but the report requires that field
 advantage to be disclosed. Jerasure likewise retains GF8 for those public
-lengths rather than silently following Leopard2 into GF16. A future ISA-L
-adapter must use the MDS-safe `gf_gen_cauchy1_matrix`; ISA-L documents that
+lengths rather than silently following Leopard2 into GF16. The ISA-L adapter
+uses the MDS-safe `gf_gen_cauchy1_matrix`; ISA-L documents that
 `gf_gen_rs_matrix` does not guarantee every submatrix is invertible for many
-larger `(K,R)` pairs. FastECC is excluded from all current rows because
-its prime-field NTT stores wider parity sectors than source sectors, and
+larger `(K,R)` pairs. It is standalone and default-off, so ordinary Leopard
+builds have no ISA-L dependency. FastECC is excluded from all current rows
+because its prime-field NTT stores wider parity sectors than source sectors, and
 ECC-Benchmark is excluded as an independent provider because it is a historical
-harness with different timing/loss semantics. Eligible means only that a future
-reviewed adapter can run the same public workload; it is explicitly not a
-measurement.
+harness with different timing/loss semantics. Adapter availability is
+explicitly not a measurement.
 
 Jerasure's public region API requires longword-multiple sizes and longword-
 aligned pointers. To make offline classification independent of audit-host
@@ -293,7 +297,8 @@ Reproduce the policy and optional source-cache checks with:
         --path .research/leopard2
 
 The cache check performed on 2026-07-16 verified all four recorded commits.
-This host lacks NASM for the current optimized ISA-L x86-64 build and lacks the
-GF-Complete package required by Jerasure 2.0. These are recorded host/toolchain
-gaps, not favorable fairness exclusions; the eligible rows remain open for
-adapters on a suitable build host.
+This host lacks system NASM, so the ISA-L checkpoint uses the pinned official
+NASM 2.16.03 archive and locally built binary described in the dedicated
+comparison document. The host still lacks the GF-Complete package required by
+Jerasure 2.0. These are recorded host/toolchain facts, not favorable fairness
+exclusions.

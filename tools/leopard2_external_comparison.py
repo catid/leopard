@@ -6,8 +6,10 @@ deterministically regenerated Leopard2 matrix against explicit provider
 constraints so an unsupported cell cannot be silently resized, moved to
 another field, or reported as a wire-compatible comparison.  The matrix command
 emits aggregate status/reason/qualification counts; ``classify`` returns the
-per-cell detail used to build those aggregates.  Eligible cells still require a
-reviewed adapter and are reported as ``adapter-required`` until one exists.
+per-cell detail used to build those aggregates.  ISA-L cells supported by the
+bounded, default-off single-thread adapter are explicitly called
+``adapter-available-unmeasured``: this audit never turns availability into a
+throughput claim.
 """
 
 from __future__ import annotations
@@ -38,6 +40,13 @@ SOURCES = {
         "license": "BSD-3-Clause",
         "kind": "codec",
         "coordinate_equivalence": "different systematic GF(256) matrix code",
+        "adapter": {
+            "status": "bounded-default-off",
+            "entrypoint": "tools/leopard2_isal_compare.py",
+            "generator": "gf_gen_cauchy1_matrix",
+            "maximum_threads": 1,
+            "production_dependency": False,
+        },
     },
     "jerasure": {
         "name": "Jerasure 2.0",
@@ -129,18 +138,29 @@ def classify(provider: str, cell: Mapping[str, object]) -> dict:
             reasons.append("public K+R exceeds the GF(256) evaluation-set bound")
         if shard_bytes > 0x7FFFFFFF:
             reasons.append("shard length exceeds ISA-L's signed-int API")
+        thread_count = int(cell.get("thread_count", 1))
+        adapter_gaps = []
+        if thread_count != 1:
+            adapter_gaps.append(
+                "the bounded adapter has no persistent-pool implementation for "
+                "thread counts above one")
+        status = ("excluded" if reasons else
+                  "adapter-required" if adapter_gaps else
+                  "adapter-available-unmeasured")
         base.update({
-            "status": "excluded" if reasons else "adapter-required",
-            "reasons": reasons or [
-                "mathematically comparable public erasure workload, but no "
-                "reviewed in-tree ISA-L adapter exists"],
+            "status": status,
+            "reasons": reasons or adapter_gaps or [
+                "the reviewed default-off adapter can execute this public workload, "
+                "but this audit contains no measurement"],
             "comparison_scope": (
                 "public payload and repaired-output throughput only; parity bytes "
                 "and generator matrices differ"),
             "qualifications": ([
-                "a reviewed adapter must use gf_gen_cauchy1_matrix; ISA-L's "
-                "gf_gen_rs_matrix documentation does not guarantee every "
-                "submatrix is invertible for many larger K,R pairs",
+                "the adapter uses gf_gen_cauchy1_matrix; ISA-L's gf_gen_rs_matrix "
+                "documentation does not guarantee every submatrix is invertible "
+                "for many larger K,R pairs",
+                "the ISA-L adapter is standalone and default-off; production "
+                "Leopard has no ISA-L build or runtime dependency",
             ] + ([
                 "ISA-L remains in GF(256) while dyadic parent inflation selects "
                 "GF16 for Leopard2; report that field advantage explicitly",
@@ -284,9 +304,25 @@ def audit_cache(cache: Path) -> dict:
         "sources": sources,
         "host_dependencies": {
             "nasm": shutil.which("nasm"),
+            "ignored_cache_nasm": _cached_nasm(cache),
             "pkg_config": shutil.which("pkg-config"),
             "gf_complete_version": _pkg_config_version("gf_complete"),
         },
+    }
+
+
+def _cached_nasm(cache: Path) -> dict | None:
+    executable = cache / "toolchains" / "nasm-2.16.03-install" / "bin" / "nasm"
+    if not executable.is_file():
+        return None
+    completed = subprocess.run(
+        [str(executable), "-v"], text=True, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, check=False)
+    return {
+        "path": str(executable),
+        "status": "verified" if completed.returncode == 0 and
+                  "NASM version 2.16.03" in completed.stdout else "mismatch",
+        "version": completed.stdout.strip() or completed.stderr.strip(),
     }
 
 
@@ -310,28 +346,37 @@ def self_test() -> None:
     if providers["ecc-benchmark"]["job_status_counts"] != {"excluded": 7134}:
         raise AuditError("ECC-Benchmark methodology exclusion changed")
     isa_counts = providers["isa-l"]["job_status_counts"]
-    if not isa_counts.get("adapter-required") or not isa_counts.get("excluded"):
-        raise AuditError("ISA-L matrix must contain eligible and over-256 exclusions")
+    if (not isa_counts.get("adapter-available-unmeasured") or
+            not isa_counts.get("adapter-required") or not isa_counts.get("excluded")):
+        raise AuditError(
+            "ISA-L matrix must distinguish adapter-ready, adapter-gap, and "
+            "over-256 rows")
     jerasure_counts = providers["jerasure"]["job_status_counts"]
     if jerasure_counts != {"adapter-required": 7134}:
         raise AuditError("even-byte GF8/GF16 Jerasure eligibility changed")
     representative = {
         "K": 240, "R": 16, "requested_profile": "high", "shard_bytes": 4096,
     }
-    if classify("isa-l", representative)["status"] != "adapter-required":
+    if classify("isa-l", representative)["status"] != "adapter-available-unmeasured":
         raise AuditError("representative ISA-L cell was incorrectly excluded")
     representative.update(K=512, R=1536, requested_profile="low")
     if classify("isa-l", representative)["status"] != "excluded":
         raise AuditError("GF16 ISA-L cell was incorrectly admitted")
     representative.update(K=129, R=100, requested_profile="high")
     boundary = classify("isa-l", representative)
-    if (boundary["status"] != "adapter-required" or
+    if (boundary["status"] != "adapter-available-unmeasured" or
             boundary["leopard2_field"] != "gf16" or
             not boundary["qualifications"]):
         raise AuditError("GF8 field-boundary comparison was incorrectly excluded")
     if not any("gf_gen_cauchy1_matrix" in qualification
                for qualification in boundary["qualifications"]):
         raise AuditError("ISA-L MDS-safe generator requirement is missing")
+    threaded = dict(representative, thread_count=8)
+    if classify("isa-l", threaded)["status"] != "adapter-required":
+        raise AuditError("bounded ISA-L adapter silently admitted multicore work")
+    no_loss = dict(representative, loss_count=0)
+    if classify("isa-l", no_loss)["status"] != "adapter-available-unmeasured":
+        raise AuditError("bounded ISA-L adapter incorrectly rejects no-loss decode")
     jerasure_boundary = classify("jerasure", representative)
     if (jerasure_boundary["status"] != "adapter-required" or
             jerasure_boundary["provider_field"] != "gf8" or
@@ -361,6 +406,29 @@ def self_test() -> None:
     }, sort_keys=True))
 
 
+def audit_isal_checkpoint(path: Path) -> dict:
+    tools_dir = Path(__file__).resolve().parent
+    sys.path.insert(0, str(tools_dir))
+    try:
+        import leopard2_isal_compare as comparison
+    finally:
+        sys.path.pop(0)
+    try:
+        document = json.loads(path.read_text())
+        comparison.validate_checkpoint(document)
+    except (OSError, json.JSONDecodeError, comparison.ComparisonError) as error:
+        raise AuditError(f"invalid ISA-L checkpoint: {error}") from error
+    return {
+        "schema": "leopard2-external-isal-checkpoint-audit/v1",
+        "checkpoint": str(path),
+        "artifact_sha256": document["artifact_sha256"],
+        "cells": len(document["cells"]),
+        "results": len(document["results"]),
+        "wire_compatible": document["method"]["wire_compatible"],
+        "status": "verified-bounded-checkpoint",
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -371,6 +439,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     cache_parser = subparsers.add_parser("cache")
     cache_parser.add_argument(
         "--path", default=".research/leopard2", type=Path)
+    checkpoint_parser = subparsers.add_parser("isa-l-checkpoint")
+    checkpoint_parser.add_argument("path", type=Path)
     subparsers.add_parser("self-test")
     arguments = parser.parse_args(argv)
     try:
@@ -378,6 +448,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             output = audit_matrix(arguments.preset)
         elif arguments.command == "cache":
             output = audit_cache(arguments.path)
+        elif arguments.command == "isa-l-checkpoint":
+            output = audit_isal_checkpoint(arguments.path)
         else:
             self_test()
             return 0

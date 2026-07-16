@@ -574,6 +574,14 @@ if(LEO2_BUILD_TESTS)
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_external_comparison.py
                 self-test)
+        # Pure policy/evidence validation only: this test neither finds nor
+        # links ISA-L.  The actual adapter lives in a standalone default-off
+        # experiment CMake project.
+        add_test(
+            NAME leopard2_isal_comparison_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_isal_compare.py
+                self-test)
         add_test(
             NAME leopard2_operation_counts_self_test
             COMMAND ${LEO2_PYTHON_EXECUTABLE}

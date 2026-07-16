@@ -503,10 +503,17 @@ Comparison repositories were refreshed into the ignored research cache on
 | R07 ECC-Benchmark | `c43d4290f8525351821f7b04791cee3bdfbaccdd` | MIT |
 
 `tools/leopard2_external_comparison.py cache` verifies these identities when
-the optional cache is present. The current x86-64 host has neither NASM (which
-current ISA-L requires for its optimized build) nor an installed GF-Complete
-package (which Jerasure 2.0 requires). Those host facts are not mathematical
-exclusions and do not turn an unmeasured cell into a benchmark result.
+the optional cache is present. The current x86-64 host has no system NASM, so
+the default-off ISA-L checkpoint builds official NASM 2.16.03 from
+https://www.nasm.us/pub/nasm/releasebuilds/2.16.03/nasm-2.16.03.tar.xz after
+verifying archive SHA-256
+`1412a1c760bbd05db026b6c0d1657affd6631cd0a63cddb6f73cc6d4aa616148`.
+It remains inside the ignored research cache. The host has no installed
+GF-Complete package, which Jerasure 2.0 requires. Those host facts are not
+mathematical exclusions and do not turn an unmeasured cell into a benchmark
+result. The adapter methodology and ISA-L BSD notice are recorded in
+`docs/leopard2_isal_comparison.md` and
+`experiments/leopard2/isal_compare/NOTICE` respectively.
 
 R14 and R18 were available only through their publisher landing pages in this
 pass.  They are inputs to later exact-size experiments, not to the initial
