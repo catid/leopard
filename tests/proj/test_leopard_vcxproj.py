@@ -40,10 +40,52 @@ BACKEND_DEFINITIONS = {
 PROTECTED_MACRO_NAMES = {
     definition.split("=")[0] for definition in BACKEND_DEFINITIONS
 }
+MSBUILD_PROPERTY = re.compile(r"\$\([^)]+\)")
+MSBUILD_METADATA = re.compile(r"%\([^)]+\)")
+BACKEND_OPTION_OVERRIDE = re.compile(
+    r"(?:/|-)[du]\s*leo2_(?:backend_force|disable|have)_",
+    re.IGNORECASE)
+WPO_OPTION = re.compile(
+    r"/(?:gl|ltcg)(?=$|[\s:,+-])|-flto(?:=\S+)?|/qipo(?=$|[\s:,+-])",
+    re.IGNORECASE)
 
 
 class ContractError(AssertionError):
     pass
+
+
+def normalized_msbuild_option_text(text):
+    return (text or "").replace('"', "").replace("'", "")
+
+
+def msbuild_values(text):
+    return {
+        value.strip().strip('"').strip("'")
+        for value in (text or "").split(";")
+        if value.strip()
+    }
+
+
+def reject_msbuild_expansion(text, label, allowed_metadata=()):
+    if MSBUILD_PROPERTY.search(text or ""):
+        raise ContractError(label + " contains unresolved MSBuild property expansion")
+    allowed = set(allowed_metadata)
+    for expansion in MSBUILD_METADATA.findall(text or ""):
+        if expansion not in allowed:
+            raise ContractError(label + " contains unresolved MSBuild metadata: " +
+                                expansion)
+
+
+def reject_backend_option_override(text, label):
+    normalized = normalized_msbuild_option_text(text)
+    if BACKEND_OPTION_OVERRIDE.search(normalized):
+        raise ContractError(label + " overrides backend isolation macros")
+
+
+def reject_wpo_options(text, label):
+    normalized = normalized_msbuild_option_text(text)
+    if WPO_OPTION.search(normalized):
+        raise ContractError(label + " enables whole-program optimization")
 
 
 def cmake_commands(text):
@@ -149,27 +191,56 @@ class CMakeProductionGraph(object):
     def __init__(self, text):
         self.commands = [(name, cmake_tokens(body))
                          for name, body in cmake_commands(text)]
+        self.annotated_commands = self._annotate_commands(self.commands)
         self.variables = {}
         self.conditional_variables = set()
+        self.unsupported_variables = set()
         self.targets = {}
+        self.target_definition_contexts = {}
         self.attachments = {}
+        self.source_property_references = []
         self._read_variables()
         self._read_targets()
 
+    @staticmethod
+    def _annotate_commands(commands):
+        annotated = []
+        stack = []
+        starts = {
+            "if": "endif",
+            "function": "endfunction",
+            "macro": "endmacro",
+            "foreach": "endforeach",
+            "while": "endwhile",
+            "block": "endblock",
+        }
+        ends = {value: key for key, value in starts.items()}
+        for name, tokens in commands:
+            if name in starts:
+                stack.append((name, tuple(tokens)))
+                continue
+            if name in ("elseif", "else"):
+                if not stack or stack[-1][0] != "if":
+                    raise ContractError("unbalanced CMake " + name)
+                branch = tuple(tokens) if name == "elseif" else ("ELSE",)
+                stack[-1] = ("if", branch)
+                continue
+            if name in ends:
+                if not stack or stack[-1][0] != ends[name]:
+                    raise ContractError("unbalanced CMake " + name)
+                stack.pop()
+                continue
+            annotated.append((name, tokens, tuple(stack)))
+        if stack:
+            raise ContractError("unbalanced CMake block: " + stack[-1][0])
+        return annotated
+
     def _read_variables(self):
-        condition_depth = 0
-        for name, tokens in self.commands:
-            if name == "if":
-                condition_depth += 1
-                continue
-            if name == "endif":
-                if condition_depth == 0:
-                    raise ContractError("unbalanced CMake endif")
-                condition_depth -= 1
-                continue
+        for name, tokens, context in self.annotated_commands:
+            conditional = bool(context)
             if name == "set" and tokens:
                 variable = tokens[0]
-                if condition_depth:
+                if conditional:
                     self.conditional_variables.add(variable)
                 values = list(tokens[1:])
                 if "CACHE" in values:
@@ -178,21 +249,23 @@ class CMakeProductionGraph(object):
                     values.pop()
                 self.variables[variable] = values
             elif name == "unset" and tokens:
-                if condition_depth:
+                if conditional:
                     self.conditional_variables.add(tokens[0])
                 self.variables.pop(tokens[0], None)
             elif name == "list" and len(tokens) >= 2:
                 operation = tokens[0].upper()
                 variable = tokens[1]
-                if condition_depth:
+                if conditional:
                     self.conditional_variables.add(variable)
                 if operation == "APPEND":
                     self.variables.setdefault(variable, []).extend(tokens[2:])
                 elif operation == "PREPEND":
                     self.variables[variable] = (
                         list(tokens[2:]) + self.variables.get(variable, []))
-        if condition_depth:
-            raise ContractError("unbalanced CMake if")
+                else:
+                    for token in tokens[1:]:
+                        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", token):
+                            self.unsupported_variables.add(token)
 
     def _expand(self, tokens, stack=None):
         stack = [] if stack is None else stack
@@ -210,6 +283,10 @@ class CMakeProductionGraph(object):
                 if variable in self.conditional_variables:
                     raise ContractError(
                         "conditional CMake source variable is ambiguous: " +
+                        variable)
+                if variable in self.unsupported_variables:
+                    raise ContractError(
+                        "unsupported list operation touches source variable: " +
                         variable)
                 expanded.extend(self._expand(
                     self.variables[variable], stack + [variable]))
@@ -230,9 +307,13 @@ class CMakeProductionGraph(object):
 
     def _read_targets(self):
         library_types = {"STATIC", "SHARED", "MODULE", "OBJECT", "INTERFACE"}
-        for command, raw_tokens in self.commands:
+        for command, raw_tokens, context in self.annotated_commands:
+            conditional = bool(context)
             if command == "add_library" and raw_tokens:
                 target = self._target_name(raw_tokens[0])
+                if target == "libleopard" and conditional:
+                    raise ContractError(
+                        "libleopard add_library must be unconditional")
                 tokens = self._expand(raw_tokens[1:])
                 if "ALIAS" in tokens or "IMPORTED" in tokens:
                     continue
@@ -241,14 +322,20 @@ class CMakeProductionGraph(object):
                     kind = tokens.pop(0).upper()
                 if tokens and tokens[0].upper() == "EXCLUDE_FROM_ALL":
                     tokens.pop(0)
-                definition = (kind, tokens)
+                definition = (kind, tokens, conditional)
+                self.target_definition_contexts.setdefault(target, []).append(
+                    context)
                 if target in self.targets:
                     # The GNU/Clang and MSVC branches define the same isolated
                     # object target with different flags.  Coalesce only an
                     # identical source definition; any source drift is
                     # ambiguous and therefore rejected.
-                    if self.targets[target] != definition:
+                    if self.targets[target][:2] != definition[:2]:
                         raise ContractError("conflicting CMake target: " + target)
+                    previous = self.targets[target]
+                    self.targets[target] = (
+                        previous[0], previous[1],
+                        previous[2] or conditional)
                 else:
                     self.targets[target] = definition
             elif command == "target_sources" and raw_tokens:
@@ -260,10 +347,68 @@ class CMakeProductionGraph(object):
                         target)
                 sources = [token for token in tokens if token.upper() not in {
                     "PRIVATE", "PUBLIC", "INTERFACE", "SYSTEM", "BEFORE"}]
-                self.attachments.setdefault(target, []).extend(sources)
+                if conditional and target == "libleopard" and any(
+                        not self._target_objects.match(token)
+                        for token in sources):
+                    raise ContractError(
+                        "conditional direct libleopard source attachment")
+                self.attachments.setdefault(target, []).extend(
+                    (source, conditional) for source in sources)
+            elif command == "set_source_files_properties" and raw_tokens:
+                self._record_source_properties(
+                    command, raw_tokens, conditional)
+            elif (command == "set_property" and raw_tokens and
+                  raw_tokens[0].upper() == "SOURCE"):
+                self._record_source_properties(
+                    command, raw_tokens, conditional)
+            elif (command == "set_property" and raw_tokens and
+                  raw_tokens[0].upper() == "TARGET"):
+                self._reject_target_source_property(command, raw_tokens)
+            elif command == "set_target_properties" and raw_tokens:
+                self._reject_target_source_property(command, raw_tokens)
+
+    def _record_source_properties(self, command, raw_tokens, conditional):
+        tokens = self._expand(raw_tokens)
+        upper = [token.upper() for token in tokens]
+        if "PROPERTIES" in upper:
+            property_index = upper.index("PROPERTIES")
+        elif "PROPERTY" in upper:
+            property_index = upper.index("PROPERTY")
+        else:
+            raise ContractError(
+                "unsupported CMake source-property command")
+        first_source = 1 if command == "set_property" else 0
+        source_tokens = tokens[first_source:property_index]
+        if any(token.upper() in {
+                "APPEND", "APPEND_STRING", "DIRECTORY", "TARGET_DIRECTORY"}
+                for token in source_tokens):
+            raise ContractError(
+                "unsupported scoped CMake source-property command")
+        if not source_tokens:
+            raise ContractError("CMake source-property command has no sources")
+        properties = tokens[property_index + 1:]
+        if not properties:
+            raise ContractError("CMake source-property command has no properties")
+        for token in source_tokens:
+            reference = self._literal_source(token, reject_cuda=False)
+            self.source_property_references.append(
+                (reference, conditional, list(properties)))
+
+    def _reject_target_source_property(self, command, raw_tokens):
+        tokens = self._expand(raw_tokens)
+        upper = [token.upper() for token in tokens]
+        marker = "PROPERTY" if command == "set_property" else "PROPERTIES"
+        if marker not in upper:
+            raise ContractError(
+                "unsupported CMake target-property command")
+        property_index = upper.index(marker)
+        property_tokens = upper[property_index + 1:]
+        if "SOURCES" in property_tokens:
+            raise ContractError(
+                "CMake target SOURCES property bypasses graph validation")
 
     @staticmethod
-    def _literal_source(token):
+    def _literal_source(token, reject_cuda=True):
         if "$<" in token:
             raise ContractError(
                 "unsupported CMake source generator expression: " + token)
@@ -281,10 +426,37 @@ class CMakeProductionGraph(object):
         if suffix not in KNOWN_SOURCE_SUFFIXES:
             raise ContractError(
                 "unsupported production source path (fail closed): " + token)
-        if suffix in CUDA_SUFFIXES:
+        if reject_cuda and suffix in CUDA_SUFFIXES:
             raise ContractError(
                 "CUDA source attached to ordinary CPU libleopard: " + token)
         return path.as_posix()
+
+    @staticmethod
+    def _context_is_msvc_reachable(context):
+        if not context:
+            return True
+        positive_windows_or_msvc = False
+        for block, tokens in context:
+            if block != "if":
+                return False
+            expression = " ".join(tokens).upper()
+            if (re.search(
+                    r"(?:^|[\s(])(?:0|FALSE|OFF|NO|N|IGNORE|NOTFOUND)"
+                    r"(?:$|[\s)])", expression) and
+                    not re.search(r"\bOR\b", expression)):
+                return False
+            if re.search(r"\bNOT\s+(?:WIN32|MSVC)\b", expression):
+                return False
+            if ("CMAKE_CXX_COMPILER_ID" in expression and
+                    re.search(r"\b(?:MATCHES|STREQUAL)\b", expression) and
+                    "MSVC" not in expression):
+                return False
+            if re.search(r"\b(?:WIN32|MSVC)\b", expression):
+                positive_windows_or_msvc = True
+            if ("CMAKE_CXX_COMPILER_ID" in expression and
+                    "MSVC" in expression):
+                positive_windows_or_msvc = True
+        return positive_windows_or_msvc
 
     def resolve(self, target="libleopard"):
         resolved = []
@@ -299,8 +471,14 @@ class CMakeProductionGraph(object):
             if name not in self.targets:
                 raise ContractError("attached CMake target is undefined: " + name)
             visiting.append(name)
-            kind, sources = self.targets[name]
-            for token in list(sources) + self.attachments.get(name, []):
+            kind, sources, definition_conditional = self.targets[name]
+            entries = [
+                (token, definition_conditional, True) for token in sources
+            ] + [
+                (token, conditional, False)
+                for token, conditional in self.attachments.get(name, [])
+            ]
+            for token, conditional, from_definition in entries:
                 object_match = self._target_objects.match(token)
                 if object_match:
                     object_target = object_match.group(1)
@@ -314,6 +492,9 @@ class CMakeProductionGraph(object):
                     attached_objects.append(object_target)
                     visit(object_target, True)
                 else:
+                    if conditional and not from_definition:
+                        raise ContractError(
+                            "conditional CMake source attachment: " + token)
                     literal = self._literal_source(token)
                     resolved.append(literal)
                     if reached_as_object:
@@ -321,6 +502,20 @@ class CMakeProductionGraph(object):
             visiting.pop()
 
         visit(target)
+        for object_target in sorted(set(attached_objects)):
+            contexts = self.target_definition_contexts.get(object_target, [])
+            if not any(self._context_is_msvc_reachable(context)
+                       for context in contexts):
+                raise ContractError(
+                    "attached OBJECT target has no MSVC-reachable definition: " +
+                    object_target)
+        resolved_set = set(resolved)
+        for reference, conditional, properties in self.source_property_references:
+            if reference in resolved_set:
+                qualifier = "conditional " if conditional else ""
+                raise ContractError(
+                    qualifier + "CMake source properties affect production " +
+                    reference + ": " + " ".join(properties))
         duplicates = sorted(
             path for path, count in Counter(resolved).items() if count != 1)
         if duplicates:
@@ -340,6 +535,92 @@ def item_paths(tree, kind, project_file):
         project_path(project_file, node.attrib["Include"])
         for node in tree.findall(".//msb:" + kind + "[@Include]", NS)
     ]
+
+
+def xml_local_name(node):
+    return node.tag.rsplit("}", 1)[-1]
+
+
+def validate_source_item_structure(tree):
+    allowed_compile_metadata = {"AdditionalOptions"}
+    direct_item_groups = set(tree.getroot().findall("msb:ItemGroup", NS))
+    seen = []
+    for group in tree.findall(".//msb:ItemGroup", NS):
+        source_items = [
+            node for node in list(group)
+            if xml_local_name(node) in ("ClCompile", "ClInclude")
+        ]
+        if not source_items:
+            continue
+        if group not in direct_item_groups:
+            raise ContractError(
+                "source ItemGroup must be a direct Project child")
+        if "Condition" in group.attrib:
+            raise ContractError("source ItemGroup must be unconditional")
+        for node in source_items:
+            kind = xml_local_name(node)
+            if "Remove" in node.attrib or "Update" in node.attrib:
+                raise ContractError(kind + " Remove/Update transforms are unsupported")
+            if "Include" not in node.attrib:
+                raise ContractError(kind + " source item lacks Include")
+            if "Condition" in node.attrib:
+                raise ContractError(kind + " source item must be unconditional")
+            unexpected_attributes = set(node.attrib) - {"Include"}
+            if unexpected_attributes:
+                raise ContractError(
+                    kind + " source item has unsupported attributes: " +
+                    ", ".join(sorted(unexpected_attributes)))
+            path = project_path(PROJECT, node.attrib["Include"])
+            seen.append((kind, path))
+            for metadata in list(node):
+                name = xml_local_name(metadata)
+                if name == "ExcludedFromBuild":
+                    raise ContractError(
+                        "ExcludedFromBuild can invalidate required source " +
+                        "coverage: " + path)
+                if "Condition" in metadata.attrib:
+                    raise ContractError(
+                        path + " source metadata must be unconditional")
+                if metadata.attrib:
+                    raise ContractError(
+                        path + " source metadata has unsupported attributes")
+                if kind == "ClInclude" or name not in allowed_compile_metadata:
+                    raise ContractError(
+                        path + " has unsupported source metadata: " + name)
+
+    for node in tree.findall(".//msb:ExcludedFromBuild", NS):
+        raise ContractError(
+            "ExcludedFromBuild can invalidate required source coverage")
+
+    duplicates = sorted(
+        item for item, count in Counter(seen).items() if count != 1)
+    if duplicates:
+        raise ContractError("duplicate MSBuild source items: " + repr(duplicates))
+
+
+def validate_no_wpo_overrides(tree):
+    allowed_additional_options = set(tree.findall(
+        ".//msb:ClCompile[@Include='..\\Leopard2BackendAVX2.cpp']/"
+        "msb:AdditionalOptions", NS))
+    for node in tree.iter():
+        name = xml_local_name(node)
+        text = node.text or ""
+        if name == "AdditionalOptions":
+            reject_msbuild_expansion(
+                text, "AdditionalOptions", ("%(AdditionalOptions)",))
+            reject_wpo_options(text, "AdditionalOptions")
+            if node not in allowed_additional_options:
+                raise ContractError(
+                    "AdditionalOptions is allowed only on the AVX2 source")
+        elif name == "WholeProgramOptimization":
+            if text.strip().lower() != "false" or "Condition" in node.attrib:
+                raise ContractError(
+                    "WholeProgramOptimization must be unconditional false")
+        elif name.lower() in {
+                "linktimecodegeneration",
+                "uselinktimecodegeneration",
+                "profileguidedoptimization"}:
+            raise ContractError(name + " can override WPO isolation")
 
 
 def production_graph(text=None, require_files=True):
@@ -444,6 +725,9 @@ def validate_msbuild_configurations(tree):
             nodes = parent.findall("msb:" + tag, NS)
             if len(nodes) != 1:
                 raise ContractError(key + " must define exactly one " + label)
+            if nodes[0].attrib:
+                raise ContractError(
+                    key + " has conditional/attributed " + label)
             return nodes[0].text or ""
 
         if unique_text(
@@ -467,36 +751,26 @@ def validate_msbuild_configurations(tree):
             raise ContractError(key + " has the wrong static runtime library")
         raw_definitions = unique_text(
             compile_node, "PreprocessorDefinitions", "PreprocessorDefinitions")
-        macro_set = set(raw_definitions.split(";"))
+        reject_msbuild_expansion(
+            raw_definitions, key + " PreprocessorDefinitions",
+            ("%(PreprocessorDefinitions)",))
+        macro_set = msbuild_values(raw_definitions)
         required = set(BACKEND_DEFINITIONS)
         required.update(("_MBCS", "%(PreprocessorDefinitions)"))
-        if not required.issubset(macro_set):
-            raise ContractError(key + " is missing backend isolation definitions")
+        if macro_set != required:
+            raise ContractError(
+                key + " backend definitions are not the exact contract")
         if any(macro.startswith("LEO2_BACKEND_FORCE_") for macro in macro_set):
             raise ContractError(key + " forces a diagnostic backend")
-        options = " ".join(
-            node.text or "" for node in compile_node.findall(
-                "msb:AdditionalOptions", NS))
-        if re.search(r"/arch\s*:\s*avx", options, re.IGNORECASE):
-            raise ContractError(key + " raises the project-wide ISA floor")
-        if re.search(
-                r"(?:/|-)[du]\s*leo2_(?:backend_force|disable|have)_",
-                options, re.IGNORECASE):
-            raise ContractError(key + " overrides backend isolation macros")
-        undefined = ";".join(
-            node.text or "" for node in compile_node.findall(
-                "msb:UndefinePreprocessorDefinitions", NS))
-        undefined_macros = {
-            macro.strip().split("=")[0] for macro in undefined.split(";")
-            if macro.strip()
-        }
-        if undefined_macros & PROTECTED_MACRO_NAMES:
-            raise ContractError(key + " undefines backend isolation macros")
-        enhanced = " ".join(
-            node.text or "" for node in compile_node.findall(
-                "msb:EnableEnhancedInstructionSet", NS))
-        if enhanced.strip() not in ("", "NotSet"):
-            raise ContractError(key + " raises the project-wide ISA floor")
+        for forbidden in (
+                "AdditionalOptions",
+                "UndefinePreprocessorDefinitions",
+                "EnableEnhancedInstructionSet",
+                "ForcedIncludeFiles",
+                "ForcedUsingFiles"):
+            if compile_node.findall("msb:" + forbidden, NS):
+                raise ContractError(
+                    key + " must not define configuration-level " + forbidden)
 
     for node in tree.findall(".//msb:WholeProgramOptimization", NS):
         if (node.text or "").strip().lower() != "false":
@@ -510,6 +784,14 @@ def validate_per_file_isa(tree):
         path = project_path(PROJECT, node.attrib["Include"])
         if path in options:
             raise ContractError("duplicate per-file compile item: " + path)
+        metadata = [xml_local_name(child) for child in list(node)]
+        if path == "Leopard2BackendAVX2.cpp":
+            if metadata != ["AdditionalOptions"]:
+                raise ContractError(
+                    "AVX2 source metadata is not the exact contract")
+        elif metadata:
+            raise ContractError(
+                "non-AVX2 source has per-file metadata: " + path)
         options[path] = " ".join(
             child.text or "" for child in node.findall(
                 "msb:AdditionalOptions", NS))
@@ -518,7 +800,11 @@ def validate_per_file_isa(tree):
             raise ContractError(
                 "duplicate per-file PreprocessorDefinitions: " + path)
         if definitions:
-            macros = set((definitions[0].text or "").split(";"))
+            raw_definitions = definitions[0].text or ""
+            reject_msbuild_expansion(
+                raw_definitions, path + " PreprocessorDefinitions",
+                ("%(PreprocessorDefinitions)",))
+            macros = msbuild_values(raw_definitions)
             if "%(PreprocessorDefinitions)" not in macros:
                 raise ContractError(
                     "per-file definitions do not inherit isolation macros: " +
@@ -529,31 +815,43 @@ def validate_per_file_isa(tree):
         undefined = ";".join(
             child.text or "" for child in node.findall(
                 "msb:UndefinePreprocessorDefinitions", NS))
+        reject_msbuild_expansion(
+            undefined, path + " UndefinePreprocessorDefinitions",
+            ("%(UndefinePreprocessorDefinitions)",))
         undefined_macros = {
-            macro.strip().split("=")[0] for macro in undefined.split(";")
-            if macro.strip()
+            macro.split("=")[0] for macro in msbuild_values(undefined)
         }
         if undefined_macros & PROTECTED_MACRO_NAMES:
             raise ContractError(
                 "per-file metadata undefines isolation macros: " + path)
-        flags_lower = options[path].lower()
-        if re.search(r"(?:/|-)[du]\s*leo2_(?:backend_force|disable|have)_",
-                     flags_lower):
-            raise ContractError(
-                "per-file options override isolation macros: " + path)
+        reject_msbuild_expansion(
+            options[path], path + " AdditionalOptions",
+            ("%(AdditionalOptions)",))
+        reject_backend_option_override(options[path], "per-file " + path)
+        reject_wpo_options(options[path], "per-file " + path)
         enhanced = node.findall("msb:EnableEnhancedInstructionSet", NS)
+        enhanced_text = " ".join(child.text or "" for child in enhanced)
+        reject_msbuild_expansion(
+            enhanced_text, path + " EnableEnhancedInstructionSet")
         if len(enhanced) > 1 or any(
                 (child.text or "").strip() not in ("", "NotSet")
                 for child in enhanced):
             raise ContractError(
                 "per-file enhanced ISA metadata is unsupported: " + path)
     avx2 = options.get("Leopard2BackendAVX2.cpp", "")
-    if "/arch:AVX2" not in avx2 or "%(AdditionalOptions)" not in avx2:
-        raise ContractError("AVX2 backend lacks its inherited /arch:AVX2 option")
+    if avx2.strip() != "/arch:AVX2 %(AdditionalOptions)":
+        raise ContractError("AVX2 backend options are not the exact contract")
     for path, flags in options.items():
         if path != "Leopard2BackendAVX2.cpp" and re.search(
                 r"/arch\s*:\s*avx", flags, re.IGNORECASE):
             raise ContractError("non-AVX2 source raises ISA: " + path)
+
+
+def validate_visual_studio_project(tree):
+    validate_source_item_structure(tree)
+    validate_msbuild_configurations(tree)
+    validate_per_file_isa(tree)
+    validate_no_wpo_overrides(tree)
 
 
 class LeopardVisualStudioProjectTest(unittest.TestCase):
@@ -598,8 +896,7 @@ class LeopardVisualStudioProjectTest(unittest.TestCase):
                 "Header Files", node.findtext("msb:Filter", namespaces=NS))
 
     def test_exact_msbuild_configuration_contract(self):
-        validate_msbuild_configurations(self.project)
-        validate_per_file_isa(self.project)
+        validate_visual_studio_project(self.project)
 
     def test_cuda_remains_absent_and_opt_in(self):
         project_text = PROJECT.read_text(encoding="utf-8-sig").lower()
@@ -637,6 +934,9 @@ class CMakeGraphMutationTest(unittest.TestCase):
     def resolve(self, mutation):
         return production_graph(
             self.cmake + "\n" + mutation + "\n", require_files=False)
+
+    def resolve_text(self, text):
+        return production_graph(text, require_files=False)
 
     def test_direct_target_sources_is_retained(self):
         (sources, unused_headers, unused_objects,
@@ -699,6 +999,107 @@ target_sources(libleopard PRIVATE ${BRANCH_SOURCES})
                 ContractError, "conditional.*BRANCH_SOURCES"):
             self.resolve(mutation)
 
+    def test_unsupported_list_operation_on_source_variable_is_rejected(self):
+        marker = "add_library(libleopard STATIC ${LIB_SOURCE_FILES})"
+        mutation = "list(REMOVE_ITEM LIB_SOURCE_FILES leopard2.cpp)"
+        text = self.cmake.replace(marker, mutation + "\n" + marker, 1)
+        with self.assertRaisesRegex(
+                ContractError, "unsupported list operation.*LIB_SOURCE_FILES"):
+            self.resolve_text(text)
+
+    def test_conditional_libleopard_definition_is_rejected(self):
+        marker = "add_library(libleopard STATIC ${LIB_SOURCE_FILES})"
+        replacement = """if(NOT WIN32)
+add_library(libleopard STATIC ${LIB_SOURCE_FILES})
+endif()"""
+        text = self.cmake.replace(marker, replacement, 1)
+        with self.assertRaisesRegex(
+                ContractError, "add_library must be unconditional"):
+            self.resolve_text(text)
+
+    def test_contextual_libleopard_definition_is_rejected(self):
+        marker = "add_library(libleopard STATIC ${LIB_SOURCE_FILES})"
+        wrappers = (
+            ("function(wrapper)", "endfunction()"),
+            ("macro(wrapper)", "endmacro()"),
+            ("foreach(item IN ITEMS one)", "endforeach()"),
+            ("while(FALSE)", "endwhile()"),
+        )
+        for opening, closing in wrappers:
+            with self.subTest(block=opening.split("(", 1)[0]):
+                replacement = opening + "\n" + marker + "\n" + closing
+                text = self.cmake.replace(marker, replacement, 1)
+                with self.assertRaisesRegex(
+                        ContractError, "add_library must be unconditional"):
+                    self.resolve_text(text)
+
+    def test_attached_object_requires_msvc_reachable_definition(self):
+        texts = ("""
+set(LIB_SOURCE_FILES Base.cpp Base.h)
+add_library(libleopard STATIC ${LIB_SOURCE_FILES})
+if(NOT WIN32)
+    add_library(hidden_backend OBJECT HiddenBackend.cpp)
+endif()
+target_sources(libleopard PRIVATE $<TARGET_OBJECTS:hidden_backend>)
+""", """
+set(LIB_SOURCE_FILES Base.cpp Base.h)
+add_library(libleopard STATIC ${LIB_SOURCE_FILES})
+if(MSVC)
+    if(FALSE)
+        add_library(hidden_backend OBJECT HiddenBackend.cpp)
+    endif()
+endif()
+target_sources(libleopard PRIVATE $<TARGET_OBJECTS:hidden_backend>)
+""")
+        for text in texts:
+            with self.subTest(definition=text.splitlines()[3].strip()):
+                with self.assertRaisesRegex(
+                        ContractError, "no MSVC-reachable definition"):
+                    self.resolve_text(text)
+
+    def test_current_msvc_object_branch_is_required(self):
+        text = self.cmake.replace("elseif(MSVC)", "elseif(FALSE)", 1)
+        self.assertNotEqual(text, self.cmake)
+        with self.assertRaisesRegex(
+                ContractError, "no MSVC-reachable definition"):
+            self.resolve_text(text)
+
+    def test_conditional_direct_source_attachment_is_rejected(self):
+        mutation = """
+if(WIN32)
+    target_sources(libleopard PRIVATE Conditional.cpp)
+endif()
+"""
+        with self.assertRaisesRegex(
+                ContractError, "conditional direct libleopard"):
+            self.resolve(mutation)
+
+    def test_source_properties_on_production_source_are_rejected(self):
+        mutations = (
+            "set_source_files_properties(leopard2.cpp "
+            "PROPERTIES HEADER_FILE_ONLY TRUE)",
+            "set_property(SOURCE leopard2.cpp "
+            "PROPERTY HEADER_FILE_ONLY TRUE)",
+        )
+        for mutation in mutations:
+            with self.subTest(command=mutation.split("(", 1)[0]):
+                with self.assertRaisesRegex(
+                        ContractError, "source properties affect production"):
+                    self.resolve(mutation)
+
+    def test_target_sources_property_mutation_is_rejected(self):
+        mutations = (
+            "set_property(TARGET libleopard APPEND PROPERTY "
+            "SOURCES Injected.cpp)",
+            "set_target_properties(libleopard PROPERTIES "
+            "SOURCES Injected.cpp)",
+        )
+        for mutation in mutations:
+            with self.subTest(command=mutation.split("(", 1)[0]):
+                with self.assertRaisesRegex(
+                        ContractError, "SOURCES property"):
+                    self.resolve(mutation)
+
     def test_conditional_generator_expression_is_rejected(self):
         with self.assertRaisesRegex(ContractError, "generator expression"):
             self.resolve(
@@ -738,8 +1139,8 @@ class MSBuildConditionMutationTest(unittest.TestCase):
                     "Condition",
                     " '$(Configuration)|$(Platform)' == 'Debug|Win32' ")
                 tree.getroot().append(duplicate)
-                with self.assertRaisesRegex(ContractError, "duplicate"):
-                    validate_msbuild_configurations(tree)
+                with self.assertRaises(ContractError):
+                    validate_visual_studio_project(tree)
 
     def test_missing_condition_is_rejected(self):
         for xpath, label in (
@@ -749,8 +1150,8 @@ class MSBuildConditionMutationTest(unittest.TestCase):
                 tree = self.fresh_tree()
                 node = tree.findall(xpath, NS)[0]
                 tree.getroot().remove(node)
-                with self.assertRaisesRegex(ContractError, "Conditions differ"):
-                    validate_msbuild_configurations(tree)
+                with self.assertRaises(ContractError):
+                    validate_visual_studio_project(tree)
 
     def test_semantic_condition_whitespace_is_rejected(self):
         tree = self.fresh_tree()
@@ -759,8 +1160,8 @@ class MSBuildConditionMutationTest(unittest.TestCase):
         node.set(
             "Condition",
             "'$(Configuration)|$(Platform)'==' Debug | Win32 '")
-        with self.assertRaisesRegex(ContractError, "semantic whitespace"):
-            validate_msbuild_configurations(tree)
+        with self.assertRaises(ContractError):
+            validate_visual_studio_project(tree)
 
 
 class MSBuildPerFileMutationTest(unittest.TestCase):
@@ -781,21 +1182,29 @@ class MSBuildPerFileMutationTest(unittest.TestCase):
         child = ET.SubElement(node, namespace + name)
         child.text = value
 
+    @classmethod
+    def source_group(cls, tree, filename="leopard2.cpp"):
+        node = cls.compile_item(tree, filename)
+        for group in tree.getroot().findall("msb:ItemGroup", NS):
+            if node in list(group):
+                return group
+        raise AssertionError("source ItemGroup not found")
+
     def test_per_file_backend_force_is_rejected(self):
         tree = self.fresh_tree()
         node = self.compile_item(tree, "leopard2.cpp")
         self.add_metadata(
             node, "PreprocessorDefinitions",
             "LEO2_BACKEND_FORCE_AVX2=1;%(PreprocessorDefinitions)")
-        with self.assertRaisesRegex(ContractError, "per-file backend force"):
-            validate_per_file_isa(tree)
+        with self.assertRaises(ContractError):
+            validate_visual_studio_project(tree)
 
     def test_per_file_definition_replacement_is_rejected(self):
         tree = self.fresh_tree()
         node = self.compile_item(tree, "leopard2.cpp")
         self.add_metadata(node, "PreprocessorDefinitions", "LOCAL_ONLY=1")
-        with self.assertRaisesRegex(ContractError, "do not inherit"):
-            validate_per_file_isa(tree)
+        with self.assertRaises(ContractError):
+            validate_visual_studio_project(tree)
 
     def test_per_file_enhanced_isa_is_rejected(self):
         tree = self.fresh_tree()
@@ -803,8 +1212,8 @@ class MSBuildPerFileMutationTest(unittest.TestCase):
         self.add_metadata(
             node, "EnableEnhancedInstructionSet",
             "AdvancedVectorExtensions2")
-        with self.assertRaisesRegex(ContractError, "enhanced ISA"):
-            validate_per_file_isa(tree)
+        with self.assertRaises(ContractError):
+            validate_visual_studio_project(tree)
 
     def test_per_file_undefine_isolation_is_rejected(self):
         tree = self.fresh_tree()
@@ -812,8 +1221,8 @@ class MSBuildPerFileMutationTest(unittest.TestCase):
         self.add_metadata(
             node, "UndefinePreprocessorDefinitions",
             "LEO2_DISABLE_AVX2_CODEGEN")
-        with self.assertRaisesRegex(ContractError, "undefines isolation"):
-            validate_per_file_isa(tree)
+        with self.assertRaises(ContractError):
+            validate_visual_studio_project(tree)
 
     def test_duplicate_avx2_compile_item_is_rejected(self):
         tree = self.fresh_tree()
@@ -822,8 +1231,8 @@ class MSBuildPerFileMutationTest(unittest.TestCase):
             if node in list(group):
                 group.append(copy.deepcopy(node))
                 break
-        with self.assertRaisesRegex(ContractError, "duplicate per-file"):
-            validate_per_file_isa(tree)
+        with self.assertRaises(ContractError):
+            validate_visual_studio_project(tree)
 
     def test_configuration_undefine_isolation_is_rejected(self):
         tree = self.fresh_tree()
@@ -832,8 +1241,8 @@ class MSBuildPerFileMutationTest(unittest.TestCase):
         self.add_metadata(
             node, "UndefinePreprocessorDefinitions",
             "LEO2_DISABLE_AVX2_CODEGEN")
-        with self.assertRaisesRegex(ContractError, "undefines backend isolation"):
-            validate_msbuild_configurations(tree)
+        with self.assertRaises(ContractError):
+            validate_visual_studio_project(tree)
 
     def test_configuration_option_backend_force_is_rejected(self):
         tree = self.fresh_tree()
@@ -842,8 +1251,176 @@ class MSBuildPerFileMutationTest(unittest.TestCase):
         self.add_metadata(
             node, "AdditionalOptions",
             "/DLEO2_BACKEND_FORCE_AVX2=1 %(AdditionalOptions)")
-        with self.assertRaisesRegex(ContractError, "overrides backend isolation"):
-            validate_msbuild_configurations(tree)
+        with self.assertRaises(ContractError):
+            validate_visual_studio_project(tree)
+
+    def test_excluded_from_build_is_rejected_globally_and_conditionally(self):
+        for condition in (None,
+                          "'$(Configuration)|$(Platform)'=='Release|x64'"):
+            with self.subTest(condition=condition or "global"):
+                tree = self.fresh_tree()
+                node = self.compile_item(tree, "leopard2.cpp")
+                namespace = (
+                    "{http://schemas.microsoft.com/developer/msbuild/2003}")
+                excluded = ET.SubElement(node, namespace + "ExcludedFromBuild")
+                excluded.text = "true"
+                if condition:
+                    excluded.set("Condition", condition)
+                with self.assertRaises(ContractError):
+                    validate_visual_studio_project(tree)
+
+    def test_configuration_excluded_from_build_is_rejected(self):
+        tree = self.fresh_tree()
+        node = tree.findall(
+            ".//msb:ItemDefinitionGroup/msb:ClCompile", NS)[0]
+        self.add_metadata(node, "ExcludedFromBuild", "true")
+        with self.assertRaises(ContractError):
+            validate_visual_studio_project(tree)
+
+    def test_clcompile_remove_is_rejected(self):
+        tree = self.fresh_tree()
+        group = self.source_group(tree)
+        namespace = "{http://schemas.microsoft.com/developer/msbuild/2003}"
+        removed = ET.SubElement(group, namespace + "ClCompile")
+        removed.set("Remove", "..\\leopard2.cpp")
+        with self.assertRaises(ContractError):
+            validate_visual_studio_project(tree)
+
+    def test_clcompile_update_is_rejected(self):
+        tree = self.fresh_tree()
+        group = self.source_group(tree)
+        namespace = "{http://schemas.microsoft.com/developer/msbuild/2003}"
+        updated = ET.SubElement(group, namespace + "ClCompile")
+        updated.set("Update", "..\\leopard2.cpp")
+        self.add_metadata(
+            updated, "AdditionalOptions",
+            "/arch:AVX2 %(AdditionalOptions)")
+        with self.assertRaises(ContractError):
+            validate_visual_studio_project(tree)
+
+    def test_source_group_item_and_metadata_conditions_are_rejected(self):
+        mutations = ("group", "item", "metadata")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                tree = self.fresh_tree()
+                node = self.compile_item(tree, "leopard2.cpp")
+                condition = "'$(Configuration)'=='Release'"
+                if mutation == "group":
+                    self.source_group(tree).set("Condition", condition)
+                elif mutation == "item":
+                    node.set("Condition", condition)
+                else:
+                    namespace = (
+                        "{http://schemas.microsoft.com/developer/msbuild/2003}")
+                    metadata = ET.SubElement(
+                        node, namespace + "AdditionalOptions")
+                    metadata.text = "%(AdditionalOptions)"
+                    metadata.set("Condition", condition)
+                with self.assertRaises(ContractError):
+                    validate_visual_studio_project(tree)
+
+    def test_nested_source_item_group_is_rejected(self):
+        tree = self.fresh_tree()
+        group = self.source_group(tree)
+        root = tree.getroot()
+        root.remove(group)
+        namespace = "{http://schemas.microsoft.com/developer/msbuild/2003}"
+        choose = ET.SubElement(root, namespace + "Choose")
+        when = ET.SubElement(choose, namespace + "When")
+        when.set("Condition", "'$(Configuration)'=='Release'")
+        when.append(group)
+        with self.assertRaises(ContractError):
+            validate_visual_studio_project(tree)
+
+    def test_unmodeled_source_metadata_is_rejected(self):
+        tree = self.fresh_tree()
+        node = self.compile_item(tree, "leopard2.cpp")
+        self.add_metadata(node, "CompileAs", "CompileAsC")
+        with self.assertRaises(ContractError):
+            validate_visual_studio_project(tree)
+
+    def test_quoted_backend_flags_are_rejected(self):
+        options = (
+            '/D"LEO2_BACKEND_FORCE_AVX2=1"',
+            '/U"LEO2_DISABLE_AVX2_CODEGEN"',
+        )
+        for scope in ("configuration", "per-file"):
+            for option in options:
+                with self.subTest(scope=scope, option=option):
+                    tree = self.fresh_tree()
+                    if scope == "configuration":
+                        node = tree.findall(
+                            ".//msb:ItemDefinitionGroup/msb:ClCompile", NS)[0]
+                    else:
+                        node = self.compile_item(tree, "leopard2.cpp")
+                    self.add_metadata(
+                        node, "AdditionalOptions",
+                        option + " %(AdditionalOptions)")
+                    with self.assertRaises(ContractError):
+                        validate_visual_studio_project(tree)
+
+    def test_unresolved_msbuild_property_is_rejected_in_controlled_fields(self):
+        mutations = ("config-option", "file-option",
+                     "config-definition", "file-definition",
+                     "config-isa", "file-isa")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                tree = self.fresh_tree()
+                if mutation.startswith("config"):
+                    node = tree.findall(
+                        ".//msb:ItemDefinitionGroup/msb:ClCompile", NS)[0]
+                else:
+                    node = self.compile_item(tree, "leopard2.cpp")
+                if mutation.endswith("option"):
+                    self.add_metadata(
+                        node, "AdditionalOptions",
+                        "$(HiddenISA) %(AdditionalOptions)")
+                elif mutation.endswith("isa"):
+                    self.add_metadata(
+                        node, "EnableEnhancedInstructionSet",
+                        "$(HiddenISA)")
+                elif mutation == "config-definition":
+                    definitions = node.find(
+                        "msb:PreprocessorDefinitions", NS)
+                    definitions.text += ";$(InjectedBackendMacro)"
+                else:
+                    self.add_metadata(
+                        node, "PreprocessorDefinitions",
+                        "$(InjectedBackendMacro);%(PreprocessorDefinitions)")
+                with self.assertRaises(ContractError):
+                    validate_visual_studio_project(tree)
+
+    def test_wpo_option_forms_are_rejected(self):
+        for option in ("/GL", "/LTCG", "/LTCG:INCREMENTAL", "-flto=thin"):
+            with self.subTest(option=option):
+                tree = self.fresh_tree()
+                link = tree.findall(
+                    ".//msb:ItemDefinitionGroup/msb:Link", NS)[0]
+                self.add_metadata(
+                    link, "AdditionalOptions",
+                    option + " %(AdditionalOptions)")
+                with self.assertRaises(ContractError):
+                    validate_visual_studio_project(tree)
+
+    def test_non_avx2_additional_options_are_rejected(self):
+        for option in ("@hidden.rsp", "/FIhidden.h"):
+            with self.subTest(option=option):
+                tree = self.fresh_tree()
+                link = tree.findall(
+                    ".//msb:ItemDefinitionGroup/msb:Link", NS)[0]
+                self.add_metadata(
+                    link, "AdditionalOptions",
+                    option + " %(AdditionalOptions)")
+                with self.assertRaises(ContractError):
+                    validate_visual_studio_project(tree)
+
+    def test_wpo_property_override_is_rejected(self):
+        tree = self.fresh_tree()
+        link = tree.findall(".//msb:ItemDefinitionGroup/msb:Link", NS)[0]
+        self.add_metadata(
+            link, "LinkTimeCodeGeneration", "UseLinkTimeCodeGeneration")
+        with self.assertRaises(ContractError):
+            validate_visual_studio_project(tree)
 
 
 if __name__ == "__main__":
