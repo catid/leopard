@@ -1,0 +1,64 @@
+{
+  "schema": "leopard-main-benchmark-v1",
+  "build": {
+    "main_source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "cplusplus": 201103
+  },
+  "parameters": {
+    "K": 129,
+    "R": 1,
+    "shard_bytes": 65536,
+    "loss_count": 1,
+    "missing_original_indices": [108],
+    "batch": 1,
+    "reuse": 8,
+    "iterations": 9,
+    "warmup": 2,
+    "thread_count": 1,
+    "seed": 101
+  },
+  "resolved": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "thread_count": 1,
+    "parent_count": 256,
+    "padded_side": 1
+  },
+  "correctness": {"round_trip": true},
+  "workload_digests": {
+    "algorithm": "fnv1a64",
+    "original_data": "4b3529c4c87db053",
+    "transmitted_parity": "4252f57b39c69907",
+    "recovered_originals": "7346e65b13f520fc"
+  },
+  "memory": {
+    "alignment": 64,
+    "encode_work_shards_per_stripe": 1,
+    "decode_work_shards_per_stripe": 129,
+    "encode_work_bytes_batch": 65536,
+    "decode_work_bytes_batch": 8454144
+  },
+  "metrics": {
+    "codec_setup": null,
+    "decode_timing_includes_setup": true,
+    "encode_execution": {
+      "median_us_per_batch_call": 83.004750,
+      "mad_us_per_batch_call": 1.370000,
+      "minimum_us_per_batch_call": 78.979625,
+      "maximum_us_per_batch_call": 85.004750,
+      "samples_us_per_batch_call": [81.169625, 78.979625, 84.271000, 85.004750, 82.837125, 83.004750, 84.374750, 82.769625, 84.458500],
+      "input_GB_per_s": 101.851328,
+      "parity_output_GB_per_s": 0.789545
+    },
+    "decode_including_setup": {
+      "median_us_per_batch_call": 84.149625,
+      "mad_us_per_batch_call": 0.057625,
+      "minimum_us_per_batch_call": 83.846000,
+      "maximum_us_per_batch_call": 84.207250,
+      "samples_us_per_batch_call": [84.089750, 83.894750, 84.171000, 84.149625, 83.861000, 84.198500, 84.207250, 84.155875, 83.846000],
+      "offered_received_GB_per_s": 100.465617,
+      "repaired_output_GB_per_s": 0.778803
+    },
+    "rate_semantics": "offered_received counts every non-null original and all R supplied parity shards"
+  }
+}

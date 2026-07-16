@@ -1,0 +1,102 @@
+{
+  "schema": "leopard2-benchmark-v2",
+  "build": {
+    "compiler": "gcc",
+    "compiler_version": "13.3.0",
+    "cplusplus": 201103
+  },
+  "parameters": {
+    "K": 129,
+    "R": 1,
+    "requested_profile": "legacy_high_v1",
+    "requested_field": "auto",
+    "requested_backend": "auto",
+    "force_generic_decode": false,
+    "force_specialized_decode": false,
+    "skip_legacy": true,
+    "retain_samples": true,
+    "shard_bytes": 65536,
+    "loss_count": 1,
+    "missing_original_indices": [108],
+    "batch": 1,
+    "reuse": 8,
+    "iterations": 9,
+    "warmup": 2,
+    "thread_count": 1,
+    "seed": 101
+  },
+  "resolved": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "thread_count": 1,
+    "parent_count": 256,
+    "padded_side": 1
+  },
+  "correctness": {
+    "leopard2_round_trip": true,
+    "legacy_comparison": null
+  },
+  "workload_digests": {
+    "algorithm": "fnv1a64",
+    "original_data": "4b3529c4c87db053",
+    "transmitted_parity": "4252f57b39c69907",
+    "recovered_originals": "7346e65b13f520fc"
+  },
+  "memory": {
+    "scratch_alignment": 64,
+    "encode_scratch_bytes_per_stripe": 134208,
+    "decode_scratch_bytes_per_stripe": 25305152,
+    "encode_scratch_bytes_batch": 134208,
+    "decode_scratch_bytes_batch": 25305152
+  },
+  "metrics": {
+    "codec_setup": {
+      "median_us": 0.030000,
+      "mad_us": 0.000000,
+      "minimum_us": 0.030000,
+      "maximum_us": 1.500000,
+      "samples_us": [1.500000, 0.050000, 0.030000, 0.040000, 0.030000, 0.030000, 0.030000, 0.030000, 0.030000]
+    },
+    "encode_execution": {
+      "median_us_per_batch_call": 102.313750,
+      "mad_us_per_batch_call": 1.550125,
+      "minimum_us_per_batch_call": 98.752500,
+      "maximum_us_per_batch_call": 108.853875,
+      "samples_us_per_batch_call": [108.853875, 105.504875, 103.676250, 102.298625, 102.313750, 102.516125, 100.763625, 100.201125, 98.752500],
+      "input_GB_per_s": 82.629598,
+      "parity_output_GB_per_s": 0.640540
+    },
+    "decode_plan_setup": {
+      "median_us": 0.110000,
+      "mad_us": 0.000000,
+      "minimum_us": 0.110000,
+      "maximum_us": 0.970000,
+      "samples_us": [0.970000, 0.280000, 0.150000, 0.110000, 0.110000, 0.110000, 0.110000, 0.110000, 0.110000]
+    },
+    "decode_execution": {
+      "median_us_per_batch_call": 122.067625,
+      "mad_us_per_batch_call": 1.286250,
+      "minimum_us_per_batch_call": 120.260250,
+      "maximum_us_per_batch_call": 127.897625,
+      "samples_us_per_batch_call": [127.897625, 124.226500, 122.088875, 122.465125, 120.260250, 120.706375, 120.781375, 122.067625, 120.870125],
+      "offered_received_GB_per_s": 69.257872,
+      "repaired_output_GB_per_s": 0.536883
+    },
+    "decode_amortized_at_reuse": {
+      "reuse_count": 8,
+      "derived_median_us_per_batch_call": 122.081375,
+      "offered_received_GB_per_s": 69.250072,
+      "repaired_output_GB_per_s": 0.536822
+    },
+    "rate_semantics": "offered_received counts all non-null shard pointers supplied; a plan may read a deterministic subset"
+  },
+  "legacy": {
+    "available": false,
+    "unavailable_reason": "disabled by --skip-legacy",
+    "codec_setup": null,
+    "decode_timing_includes_setup": true,
+    "encode_execution": null,
+    "decode_including_setup": null
+  }
+}

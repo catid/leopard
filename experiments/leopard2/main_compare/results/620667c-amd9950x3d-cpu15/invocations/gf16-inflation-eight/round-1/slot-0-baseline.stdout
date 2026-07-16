@@ -1,0 +1,64 @@
+{
+  "schema": "leopard-main-benchmark-v1",
+  "build": {
+    "main_source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "cplusplus": 201103
+  },
+  "parameters": {
+    "K": 200,
+    "R": 50,
+    "shard_bytes": 65536,
+    "loss_count": 8,
+    "missing_original_indices": [2, 24, 40, 84, 88, 96, 129, 137],
+    "batch": 1,
+    "reuse": 8,
+    "iterations": 9,
+    "warmup": 2,
+    "thread_count": 1,
+    "seed": 113
+  },
+  "resolved": {
+    "profile": "legacy_high_v1",
+    "field": "gf16",
+    "thread_count": 1,
+    "parent_count": 512,
+    "padded_side": 64
+  },
+  "correctness": {"round_trip": true},
+  "workload_digests": {
+    "algorithm": "fnv1a64",
+    "original_data": "f7d5d0ee6de3a13e",
+    "transmitted_parity": "412980fc1e6c348a",
+    "recovered_originals": "156d6b9fdeb8daff"
+  },
+  "memory": {
+    "alignment": 64,
+    "encode_work_shards_per_stripe": 128,
+    "decode_work_shards_per_stripe": 512,
+    "encode_work_bytes_batch": 8388608,
+    "decode_work_bytes_batch": 33554432
+  },
+  "metrics": {
+    "codec_setup": null,
+    "decode_timing_includes_setup": true,
+    "encode_execution": {
+      "median_us_per_batch_call": 1381.710875,
+      "mad_us_per_batch_call": 2.226250,
+      "minimum_us_per_batch_call": 1377.567000,
+      "maximum_us_per_batch_call": 1410.463750,
+      "samples_us_per_batch_call": [1410.463750, 1377.567000, 1380.397125, 1378.535875, 1385.197250, 1381.710875, 1381.959625, 1383.937125, 1380.009625],
+      "input_GB_per_s": 9.486210,
+      "parity_output_GB_per_s": 2.371553
+    },
+    "decode_including_setup": {
+      "median_us_per_batch_call": 6627.652375,
+      "mad_us_per_batch_call": 7.721250,
+      "minimum_us_per_batch_call": 6614.586000,
+      "maximum_us_per_batch_call": 6778.861750,
+      "samples_us_per_batch_call": [6778.861750, 6627.652375, 6621.587375, 6619.931125, 6632.147500, 6640.071375, 6614.586000, 6616.127375, 6632.182500],
+      "offered_received_GB_per_s": 2.392961,
+      "repaired_output_GB_per_s": 0.079106
+    },
+    "rate_semantics": "offered_received counts every non-null original and all R supplied parity shards"
+  }
+}

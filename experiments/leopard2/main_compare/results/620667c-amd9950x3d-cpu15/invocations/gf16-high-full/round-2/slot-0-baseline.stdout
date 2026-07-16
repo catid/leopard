@@ -1,0 +1,64 @@
+{
+  "schema": "leopard-main-benchmark-v1",
+  "build": {
+    "main_source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "cplusplus": 201103
+  },
+  "parameters": {
+    "K": 1000,
+    "R": 200,
+    "shard_bytes": 65536,
+    "loss_count": 200,
+    "missing_original_indices": [1, 3, 13, 21, 37, 38, 40, 43, 46, 58, 63, 66, 67, 71, 72, 74, 80, 99, 101, 102, 103, 105, 109, 113, 129, 135, 145, 150, 151, 156, 157, 164, 165, 170, 176, 180, 192, 200, 206, 210, 214, 216, 217, 220, 224, 227, 229, 230, 239, 242, 246, 248, 260, 271, 277, 282, 284, 291, 292, 294, 295, 301, 310, 325, 329, 341, 347, 351, 353, 363, 366, 372, 380, 381, 383, 403, 410, 417, 424, 426, 430, 436, 439, 469, 470, 471, 472, 473, 477, 483, 497, 500, 503, 507, 517, 527, 528, 529, 537, 538, 540, 542, 546, 551, 556, 560, 561, 563, 564, 568, 571, 575, 577, 580, 582, 583, 588, 594, 600, 601, 609, 614, 620, 622, 623, 636, 637, 647, 660, 663, 664, 671, 681, 690, 693, 694, 707, 713, 715, 716, 719, 721, 730, 749, 755, 760, 761, 765, 766, 768, 772, 774, 775, 778, 779, 784, 786, 789, 790, 791, 804, 810, 814, 821, 825, 827, 828, 830, 832, 833, 834, 839, 844, 851, 863, 883, 888, 892, 893, 894, 914, 916, 919, 927, 928, 935, 940, 944, 946, 953, 970, 972, 973, 980, 985, 986, 987, 988, 992, 996],
+    "batch": 1,
+    "reuse": 8,
+    "iterations": 9,
+    "warmup": 2,
+    "thread_count": 1,
+    "seed": 131
+  },
+  "resolved": {
+    "profile": "legacy_high_v1",
+    "field": "gf16",
+    "thread_count": 1,
+    "parent_count": 2048,
+    "padded_side": 256
+  },
+  "correctness": {"round_trip": true},
+  "workload_digests": {
+    "algorithm": "fnv1a64",
+    "original_data": "2e6742f62886a84d",
+    "transmitted_parity": "a699ca0636a5e945",
+    "recovered_originals": "ad709f4e86a0ac0a"
+  },
+  "memory": {
+    "alignment": 64,
+    "encode_work_shards_per_stripe": 512,
+    "decode_work_shards_per_stripe": 2048,
+    "encode_work_bytes_batch": 33554432,
+    "decode_work_bytes_batch": 134217728
+  },
+  "metrics": {
+    "codec_setup": null,
+    "decode_timing_includes_setup": true,
+    "encode_execution": {
+      "median_us_per_batch_call": 9415.774875,
+      "mad_us_per_batch_call": 1.533750,
+      "minimum_us_per_batch_call": 9403.427250,
+      "maximum_us_per_batch_call": 9559.236500,
+      "samples_us_per_batch_call": [9559.236500, 9414.552375, 9414.557375, 9406.506000, 9403.427250, 9417.308625, 9417.078625, 9452.396625, 9415.774875],
+      "input_GB_per_s": 6.960234,
+      "parity_output_GB_per_s": 1.392047
+    },
+    "decode_including_setup": {
+      "median_us_per_batch_call": 61577.593375,
+      "mad_us_per_batch_call": 192.859750,
+      "minimum_us_per_batch_call": 61259.449625,
+      "maximum_us_per_batch_call": 62502.723750,
+      "samples_us_per_batch_call": [61269.639875, 61577.593375, 61610.827500, 61573.230750, 61788.542000, 61259.449625, 61384.733625, 62502.723750, 61692.364500],
+      "offered_received_GB_per_s": 1.064283,
+      "repaired_output_GB_per_s": 0.212857
+    },
+    "rate_semantics": "offered_received counts every non-null original and all R supplied parity shards"
+  }
+}

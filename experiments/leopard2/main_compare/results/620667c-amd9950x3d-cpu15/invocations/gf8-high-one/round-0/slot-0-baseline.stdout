@@ -1,0 +1,64 @@
+{
+  "schema": "leopard-main-benchmark-v1",
+  "build": {
+    "main_source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "cplusplus": 201103
+  },
+  "parameters": {
+    "K": 240,
+    "R": 16,
+    "shard_bytes": 65536,
+    "loss_count": 1,
+    "missing_original_indices": [55],
+    "batch": 1,
+    "reuse": 8,
+    "iterations": 9,
+    "warmup": 2,
+    "thread_count": 1,
+    "seed": 103
+  },
+  "resolved": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "thread_count": 1,
+    "parent_count": 256,
+    "padded_side": 16
+  },
+  "correctness": {"round_trip": true},
+  "workload_digests": {
+    "algorithm": "fnv1a64",
+    "original_data": "098bc6a8e198c13e",
+    "transmitted_parity": "9848b9ee681c432e",
+    "recovered_originals": "2835cd93082ba377"
+  },
+  "memory": {
+    "alignment": 64,
+    "encode_work_shards_per_stripe": 32,
+    "decode_work_shards_per_stripe": 256,
+    "encode_work_bytes_batch": 2097152,
+    "decode_work_bytes_batch": 16777216
+  },
+  "metrics": {
+    "codec_setup": null,
+    "decode_timing_includes_setup": true,
+    "encode_execution": {
+      "median_us_per_batch_call": 688.074125,
+      "mad_us_per_batch_call": 2.190000,
+      "minimum_us_per_batch_call": 685.884125,
+      "maximum_us_per_batch_call": 738.587250,
+      "samples_us_per_batch_call": [738.587250, 696.651750, 690.789250, 687.780375, 686.485500, 685.884125, 691.630500, 687.817875, 688.074125],
+      "input_GB_per_s": 22.858933,
+      "parity_output_GB_per_s": 1.523929
+    },
+    "decode_including_setup": {
+      "median_us_per_batch_call": 1983.049125,
+      "mad_us_per_batch_call": 3.617625,
+      "minimum_us_per_batch_call": 1979.196500,
+      "maximum_us_per_batch_call": 2092.032875,
+      "samples_us_per_batch_call": [2092.032875, 1987.829125, 1979.196500, 1986.145375, 1979.712875, 1983.049125, 1979.431500, 1995.004250, 1980.567750],
+      "offered_received_GB_per_s": 8.427265,
+      "repaired_output_GB_per_s": 0.033048
+    },
+    "rate_semantics": "offered_received counts every non-null original and all R supplied parity shards"
+  }
+}

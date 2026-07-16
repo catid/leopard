@@ -1,0 +1,102 @@
+{
+  "schema": "leopard2-benchmark-v2",
+  "build": {
+    "compiler": "gcc",
+    "compiler_version": "13.3.0",
+    "cplusplus": 201103
+  },
+  "parameters": {
+    "K": 1000,
+    "R": 200,
+    "requested_profile": "legacy_high_v1",
+    "requested_field": "auto",
+    "requested_backend": "auto",
+    "force_generic_decode": false,
+    "force_specialized_decode": false,
+    "skip_legacy": true,
+    "retain_samples": true,
+    "shard_bytes": 65536,
+    "loss_count": 200,
+    "missing_original_indices": [1, 3, 13, 21, 37, 38, 40, 43, 46, 58, 63, 66, 67, 71, 72, 74, 80, 99, 101, 102, 103, 105, 109, 113, 129, 135, 145, 150, 151, 156, 157, 164, 165, 170, 176, 180, 192, 200, 206, 210, 214, 216, 217, 220, 224, 227, 229, 230, 239, 242, 246, 248, 260, 271, 277, 282, 284, 291, 292, 294, 295, 301, 310, 325, 329, 341, 347, 351, 353, 363, 366, 372, 380, 381, 383, 403, 410, 417, 424, 426, 430, 436, 439, 469, 470, 471, 472, 473, 477, 483, 497, 500, 503, 507, 517, 527, 528, 529, 537, 538, 540, 542, 546, 551, 556, 560, 561, 563, 564, 568, 571, 575, 577, 580, 582, 583, 588, 594, 600, 601, 609, 614, 620, 622, 623, 636, 637, 647, 660, 663, 664, 671, 681, 690, 693, 694, 707, 713, 715, 716, 719, 721, 730, 749, 755, 760, 761, 765, 766, 768, 772, 774, 775, 778, 779, 784, 786, 789, 790, 791, 804, 810, 814, 821, 825, 827, 828, 830, 832, 833, 834, 839, 844, 851, 863, 883, 888, 892, 893, 894, 914, 916, 919, 927, 928, 935, 940, 944, 946, 953, 970, 972, 973, 980, 985, 986, 987, 988, 992, 996],
+    "batch": 1,
+    "reuse": 8,
+    "iterations": 9,
+    "warmup": 2,
+    "thread_count": 1,
+    "seed": 131
+  },
+  "resolved": {
+    "profile": "legacy_high_v1",
+    "field": "gf16",
+    "backend": "avx2",
+    "thread_count": 1,
+    "parent_count": 2048,
+    "padded_side": 256
+  },
+  "correctness": {
+    "leopard2_round_trip": true,
+    "legacy_comparison": null
+  },
+  "workload_digests": {
+    "algorithm": "fnv1a64",
+    "original_data": "2e6742f62886a84d",
+    "transmitted_parity": "a699ca0636a5e945",
+    "recovered_originals": "ad709f4e86a0ac0a"
+  },
+  "memory": {
+    "scratch_alignment": 64,
+    "encode_scratch_bytes_per_stripe": 33585728,
+    "decode_scratch_bytes_per_stripe": 212928896,
+    "encode_scratch_bytes_batch": 33585728,
+    "decode_scratch_bytes_batch": 212928896
+  },
+  "metrics": {
+    "codec_setup": {
+      "median_us": 3.420000,
+      "mad_us": 0.010000,
+      "minimum_us": 3.410000,
+      "maximum_us": 12.490000,
+      "samples_us": [12.490000, 3.510000, 3.410000, 3.420000, 3.410000, 3.430000, 3.410000, 3.440000, 3.420000]
+    },
+    "encode_execution": {
+      "median_us_per_batch_call": 10652.680375,
+      "mad_us_per_batch_call": 35.562875,
+      "minimum_us_per_batch_call": 10576.808125,
+      "maximum_us_per_batch_call": 10830.514875,
+      "samples_us_per_batch_call": [10830.514875, 10641.605250, 10597.822250, 10682.664375, 10637.478875, 10652.680375, 10742.816375, 10688.243250, 10576.808125],
+      "input_GB_per_s": 6.152067,
+      "parity_output_GB_per_s": 1.230413
+    },
+    "decode_plan_setup": {
+      "median_us": 198.083000,
+      "mad_us": 0.491000,
+      "minimum_us": 197.592000,
+      "maximum_us": 211.343000,
+      "samples_us": [211.343000, 199.232000, 200.722000, 198.083000, 197.822000, 197.592000, 197.712000, 199.413000, 197.712000]
+    },
+    "decode_execution": {
+      "median_us_per_batch_call": 36461.488500,
+      "mad_us_per_batch_call": 77.250875,
+      "minimum_us_per_batch_call": 36291.850250,
+      "maximum_us_per_batch_call": 36624.473000,
+      "samples_us_per_batch_call": [36624.473000, 36555.868375, 36509.541750, 36461.488500, 36486.348875, 36384.237625, 36296.138000, 36291.850250, 36454.282250],
+      "offered_received_GB_per_s": 1.797403,
+      "repaired_output_GB_per_s": 0.359481
+    },
+    "decode_amortized_at_reuse": {
+      "reuse_count": 8,
+      "derived_median_us_per_batch_call": 36486.248875,
+      "offered_received_GB_per_s": 1.796184,
+      "repaired_output_GB_per_s": 0.359237
+    },
+    "rate_semantics": "offered_received counts all non-null shard pointers supplied; a plan may read a deterministic subset"
+  },
+  "legacy": {
+    "available": false,
+    "unavailable_reason": "disabled by --skip-legacy",
+    "codec_setup": null,
+    "decode_timing_includes_setup": true,
+    "encode_execution": null,
+    "decode_including_setup": null
+  }
+}
