@@ -342,6 +342,28 @@ if(LEO2_BUILD_TESTS)
     set_tests_properties(leopard2_low_gf16_direct_rows PROPERTIES
         ENVIRONMENT "OMP_NUM_THREADS=1")
 
+    add_executable(leopard2_decode_high_acceptance_test
+        tests/leopard2/direct_oracle.cpp
+        tests/leopard2/test_decode_high_acceptance.cpp)
+    target_include_directories(leopard2_decode_high_acceptance_test
+        PRIVATE tests/leopard2)
+    target_link_libraries(leopard2_decode_high_acceptance_test libleopard)
+    add_test(NAME leopard2_decode_high_acceptance
+        COMMAND leopard2_decode_high_acceptance_test)
+    set_tests_properties(leopard2_decode_high_acceptance PROPERTIES
+        ENVIRONMENT "OMP_NUM_THREADS=1")
+
+    add_executable(leopard2_decode_low_acceptance_test
+        tests/leopard2/direct_oracle.cpp
+        tests/leopard2/test_decode_low_acceptance.cpp)
+    target_include_directories(leopard2_decode_low_acceptance_test
+        PRIVATE tests/leopard2)
+    target_link_libraries(leopard2_decode_low_acceptance_test libleopard)
+    add_test(NAME leopard2_decode_low_acceptance
+        COMMAND leopard2_decode_low_acceptance_test)
+    set_tests_properties(leopard2_decode_low_acceptance PROPERTIES
+        ENVIRONMENT "OMP_NUM_THREADS=1")
+
     add_executable(leopard2_max_counts_test tests/leopard2/test_max_counts.cpp)
     target_link_libraries(leopard2_max_counts_test libleopard)
     add_test(NAME leopard2_max_counts COMMAND leopard2_max_counts_test)

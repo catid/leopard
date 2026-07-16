@@ -31,6 +31,8 @@ COMPARE_TESTS = (
     "gf16_padded_odd",
     "gf16_legacy_encoder_matrix",
     "low_gf16_direct_rows",
+    "decode_high_acceptance",
+    "decode_low_acceptance",
     "max_counts",
     "encode_concurrency",
     "codec_options_abi",
@@ -58,6 +60,8 @@ SOURCE_FILES = (
     "tests/leopard2/test_gf16_padded_odd.cpp",
     "tests/leopard2/test_encoder_gf16_legacy_matrix.cpp",
     "tests/leopard2/test_low_gf16_direct_rows.cpp",
+    "tests/leopard2/test_decode_high_acceptance.cpp",
+    "tests/leopard2/test_decode_low_acceptance.cpp",
     "tests/leopard2/test_max_counts.cpp",
     "tests/leopard2/test_encode_concurrency.cpp",
     "tests/leopard2/test_codec_options_abi.c",
@@ -379,7 +383,9 @@ def run_variant(context, variant, index):
         "leopard2_random_test", "leopard2_active_lch_test",
         "leopard2_gf16_padded_odd_test",
         "leopard2_gf16_legacy_encoder_matrix_test",
-        "leopard2_low_gf16_direct_rows_test", "leopard2_max_counts_test",
+        "leopard2_low_gf16_direct_rows_test",
+        "leopard2_decode_high_acceptance_test",
+        "leopard2_decode_low_acceptance_test", "leopard2_max_counts_test",
         "leopard2_encode_concurrency_test", "leopard2_codec_options_abi_test",
         "leopard2_transform_differential_test",
     ]
@@ -408,6 +414,10 @@ def run_variant(context, variant, index):
         "gf16_legacy_encoder_matrix": (
             "leopard2_gf16_legacy_encoder_matrix_test", []),
         "low_gf16_direct_rows": ("leopard2_low_gf16_direct_rows_test", []),
+        "decode_high_acceptance": (
+            "leopard2_decode_high_acceptance_test", []),
+        "decode_low_acceptance": (
+            "leopard2_decode_low_acceptance_test", []),
         "max_counts": ("leopard2_max_counts_test", []),
         "encode_concurrency": ("leopard2_encode_concurrency_test", []),
         "codec_options_abi": ("leopard2_codec_options_abi_test", []),
