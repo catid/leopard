@@ -238,14 +238,19 @@ def compile_experiment(
     run_logged(argv, stdout_path, stderr_path)
     nm = resolve_program("nm")
     nm_output = subprocess.run(
-        [str(nm), "-u", str(executable)], check=True, text=True,
+        [str(nm), str(executable)], check=True, text=True,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     ).stdout
-    nm_path = results / "logs" / f"{name}-nm-undefined.txt"
-    nm_path.write_text(nm_output, encoding="utf-8")
+    sanitizer_symbols = "\n".join(
+        line for line in nm_output.splitlines()
+        if "__asan_" in line or "__ubsan_" in line)
+    if sanitizer_symbols:
+        sanitizer_symbols += "\n"
+    nm_path = results / "logs" / f"{name}-nm-sanitizer-symbols.txt"
+    nm_path.write_text(sanitizer_symbols, encoding="utf-8")
     instrumentation = {
         "required_compile_macro": bool(build["sanitizer"]),
-        "undefined_symbol_scan": artifact(nm_path),
+        "sanitizer_symbol_scan": artifact(nm_path),
         "has_asan_symbols": "__asan_" in nm_output,
         "has_ubsan_symbols": "__ubsan_" in nm_output,
     }

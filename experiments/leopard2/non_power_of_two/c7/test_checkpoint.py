@@ -463,15 +463,15 @@ def validate_manifest(data: dict) -> None:
         instrumentation = build["instrumentation"]
         if set(instrumentation) != {
             "has_asan_symbols", "has_ubsan_symbols", "required_compile_macro",
-            "undefined_symbol_scan",
+            "sanitizer_symbol_scan",
         }:
             raise ValueError("instrumentation schema changed")
         scan_path = validate_artifact(
-            instrumentation["undefined_symbol_scan"], f"{name} nm scan",
+            instrumentation["sanitizer_symbol_scan"], f"{name} nm scan",
             require_retained=True)
-        if instrumentation["undefined_symbol_scan"]["path"] != (
+        if instrumentation["sanitizer_symbol_scan"]["path"] != (
                 f"experiments/leopard2/non_power_of_two/c7/results/logs/"
-                f"{name}-nm-undefined.txt"):
+                f"{name}-nm-sanitizer-symbols.txt"):
             raise ValueError("nm scan path changed")
         scan = scan_path.read_text(encoding="utf-8")
         observed_asan = "__asan_" in scan
