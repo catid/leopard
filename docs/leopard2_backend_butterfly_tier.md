@@ -409,6 +409,14 @@ Run the forced-backend differential matrix and runner mutation tests:
       --jobs "$JOBS" --variant-workers 4 --timeout 900 --no-resume
     python3 experiments/leopard2/backend_butterfly/run_abba.py self-test
 
+The ABBA collector bounds benchmark stdout, stderr, and elapsed time. Linux
+collection uses temporary child-subreaper ownership, procfs ancestry snapshots,
+pidfd signaling, and bounded adopted-child reaping, so a benchmark cannot escape
+cleanup with `setsid()` and a double fork. The self-test exercises that exact
+case and proves the daemon PID and delayed marker are gone. Authoritative
+collection fails closed before spawning when these Linux facilities are not
+available; structural replay remains portable.
+
 The final-source control must be constructed from the final candidate tree by
 reverting only the production four-way runtime selections. It retains the
 final R1, locator, Windows, test, matrix, and collector changes, so the
