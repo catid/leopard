@@ -94,6 +94,10 @@ prevent a root-owned task or kernel thread from being scheduled there, and
 Linux scheduler counters have jiffy resolution. It therefore records and
 checks the observed sibling counters rather than claiming OS-exclusive CPU
 ownership.
+The collector also holds the same stable
+`/run/user/UID` directory lock as the current C7 and backend-butterfly runners
+for the whole campaign, so replacing this reservation file does not split their
+exclusive authority.
 
     python3 -c 'import json,sys; sys.stdout.write(json.dumps({"benchmark_cpu":15,"nonce":"replace-with-unique-value","owner":"benchmark coordinator","reserved_sibling":31,"schema":"leopard2-cpu-reservation/v1","status":"held"},sort_keys=True,separators=(",",":")))' \
         > build/leopard2-main-reservation.json

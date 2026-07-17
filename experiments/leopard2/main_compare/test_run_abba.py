@@ -694,6 +694,35 @@ class MainCompareRunnerTests(unittest.TestCase):
                         0o600)
             finally:
                 os.umask(previous)
+    def test_stable_anchor_blocks_recreated_reservation_inode(self) -> None:
+        payload = {
+            "benchmark_cpu": 0,
+            "nonce": "stable-anchor-fixture",
+            "owner": "unit test",
+            "reserved_sibling": 1,
+            "schema": runner.RESERVATION_SCHEMA,
+            "status": "held",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime_root = root / "runtime"
+            runtime_root.mkdir(mode=0o700)
+            runtime_root.chmod(0o700)
+            path = root / "reservation.json"
+            old = root / "reservation.old"
+            path.write_bytes(runner.canonical_bytes(payload))
+            with runner.Reservation(
+                    path, 0, 1, runtime_root=runtime_root):
+                path.rename(old)
+                path.write_bytes(runner.canonical_bytes(payload))
+                try:
+                    with self.assertRaises(runner.EvidenceError):
+                        with runner.Reservation(
+                                path, 0, 1, runtime_root=runtime_root):
+                            pass
+                finally:
+                    path.unlink()
+                    old.rename(path)
 
     def test_custom_cell_parser_rejects_non_wire_cases(self) -> None:
         good = runner.parse_cell("cell:240:16:65536:8:1")

@@ -591,7 +591,9 @@ owned mode `0600`.  Every normal Leopard2 evidence runner uses this normalized
 pair path, so choosing another coordinator-reservation filename cannot create a
 collision.  Reservation and pair acquisition share the same exclusive flock on
 the `/run/user/UID` directory inode used by the exact-main and butterfly
-runners.  Its parent is outside the user's replacement authority, so replacing
+runners.  This stable layer conservatively serializes all current Leopard2
+evidence campaigns for the UID, including campaigns on disjoint pairs.  Its
+parent is outside the user's replacement authority, so replacing
 the reservation file, pair marker, or complete child lease directory cannot
 split cooperating runners onto two independently locked inodes.  File,
 directory, device, inode, path, contents, and lock state are
@@ -599,10 +601,16 @@ revalidated throughout the campaign.  The runner moves itself to housekeeping
 CPUs, pins the child to the timing CPU, and rejects evidence unless the timing
 CPU records work, the sibling records elapsed scheduler time but no non-idle
 work, and the retained child and isolation durations agree.  Do not run other
-performance work during this window.  The child starts a new process session;
-on timeout or leader exit the runner sends `SIGKILL` to the complete process
-group and bounds both leader reaping and descendant-group disappearance before
-continuing publication.
+performance work during this window.  The child starts a new process session,
+and the single-threaded Linux runner temporarily enables
+`PR_SET_CHILD_SUBREAPER` before spawning it.  On timeout or leader exit the
+runner sends `SIGKILL` through race-free Linux pidfds to every procfs-tracked
+descendant identity, including descendants that called `setsid()` or
+double-forked out of the original process group.  Adopted descendants are
+explicitly reaped and two clean procfs scans are required within the bounded
+teardown interval before publication.  Missing Linux `prctl`, pidfd, or procfs
+support, pre-existing child processes, or an unproved reap fails closed before
+evidence can be accepted.
 
 The `/proc/stat` check is deliberately only a coarse rejection gate.  Non-idle
 jiffies on the benchmark CPU prove that some work occurred, not that the child

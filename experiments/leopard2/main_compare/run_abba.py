@@ -1099,30 +1099,102 @@ def validate_isolation(
         require(value["accepted"] is True,
                 "reserved SMT sibling performed non-idle work during the campaign")
     return value
+def pair_lease_runtime_root(uid: int | None = None) -> Path:
+    """Return the user-owned, root-anchored runtime directory shared by runners."""
+    retained_uid = os.getuid() if uid is None else uid
+    return Path("/run/user") / str(retained_uid)
+
+
+class StableLeaseAnchor:
+    """Serialize current Leopard2 evidence runners across replaceable files."""
+
+    def __init__(self, path: Path | None = None):
+        self.path = (pair_lease_runtime_root() if path is None else
+                     Path(os.path.abspath(os.fspath(path))))
+        self.descriptor: int | None = None
+        self.identity: tuple[int, int, int, int] | None = None
+
+    @staticmethod
+    def _metadata(metadata: os.stat_result) -> tuple[int, int, int, int]:
+        mode = stat.S_IMODE(metadata.st_mode)
+        require(stat.S_ISDIR(metadata.st_mode) and
+                metadata.st_uid == os.getuid() and mode & 0o022 == 0,
+                "stable runner lease anchor has unsafe ownership or mode")
+        return metadata.st_dev, metadata.st_ino, metadata.st_uid, mode
+
+    def validate_current(self) -> None:
+        require(self.descriptor is not None and self.identity is not None,
+                "stable runner lease anchor is not held")
+        descriptor = os.fstat(self.descriptor)
+        path = os.lstat(self.path)
+        require(self._metadata(descriptor) == self.identity and
+                (descriptor.st_dev, descriptor.st_ino) ==
+                    (path.st_dev, path.st_ino),
+                "stable runner lease anchor path was replaced")
+
+    def __enter__(self) -> StableLeaseAnchor:
+        require(self.descriptor is None,
+                "stable runner lease anchor is already held")
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | \
+            getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            self.descriptor = os.open(self.path, flags)
+            fcntl.flock(self.descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            descriptor = os.fstat(self.descriptor)
+            path = os.lstat(self.path)
+            self.identity = self._metadata(descriptor)
+            require((descriptor.st_dev, descriptor.st_ino) ==
+                    (path.st_dev, path.st_ino),
+                    "stable runner lease anchor changed during acquisition")
+            self.validate_current()
+            return self
+        except BaseException as error:
+            self.__exit__(None, None, None)
+            if isinstance(error, OSError):
+                raise EvidenceError(
+                    f"cannot acquire stable runner lease anchor: {error}") from error
+            raise
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        del exc_type, exc, tb
+        try:
+            if self.descriptor is not None:
+                descriptor = self.descriptor
+                self.descriptor = None
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                finally:
+                    os.close(descriptor)
+        finally:
+            self.identity = None
 
 
 class Reservation:
     """Hold the coordinator-created canonical reservation for the whole run."""
 
-    def __init__(self, path: Path, cpu: int, sibling: int):
-        self.path = path.resolve(strict=True)
+    def __init__(self, path: Path, cpu: int, sibling: int,
+                 runtime_root: Path | None = None):
+        self.requested_path = Path(os.path.abspath(os.fspath(path)))
+        self.path = self.requested_path
         self.cpu = cpu
         self.sibling = sibling
         self.descriptor: int | None = None
         self.identity: dict[str, Any] | None = None
+        self.anchor = StableLeaseAnchor(runtime_root)
 
     def __enter__(self) -> dict[str, Any]:
-        flags = os.O_RDONLY
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        self.descriptor = os.open(self.path, flags)
         try:
-            fcntl.flock(self.descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            os.close(self.descriptor)
-            self.descriptor = None
-            raise EvidenceError(f"CPU reservation is already locked: {self.path}") from error
-        try:
+            self.anchor.__enter__()
+            self.path = self.requested_path.resolve(strict=True)
+            flags = os.O_RDONLY
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            self.descriptor = os.open(self.path, flags)
+            try:
+                fcntl.flock(self.descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise EvidenceError(
+                    f"CPU reservation is already locked: {self.path}") from error
             raw = os.read(self.descriptor, 1024 * 1024)
             payload = parse_reservation(raw, self.cpu, self.sibling)
             self.identity = {
@@ -1131,18 +1203,27 @@ class Reservation:
                 "payload": payload,
                 "lock": "exclusive_nonblocking",
             }
+            self.anchor.validate_current()
             return self.identity
-        except Exception:
-            fcntl.flock(self.descriptor, fcntl.LOCK_UN)
-            os.close(self.descriptor)
-            self.descriptor = None
+        except BaseException:
+            self._release()
             raise
 
+    def _release(self) -> None:
+        try:
+            if self.descriptor is not None:
+                descriptor = self.descriptor
+                self.descriptor = None
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                finally:
+                    os.close(descriptor)
+        finally:
+            self.anchor.__exit__(None, None, None)
+
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        if self.descriptor is not None:
-            fcntl.flock(self.descriptor, fcntl.LOCK_UN)
-            os.close(self.descriptor)
-            self.descriptor = None
+        del exc_type, exc, tb
+        self._release()
 
 
 def parse_reservation(raw: bytes, cpu: int, sibling: int) -> dict[str, Any]:

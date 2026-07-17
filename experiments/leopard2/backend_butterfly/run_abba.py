@@ -15,6 +15,7 @@ import platform
 import re
 import shlex
 import shutil
+import stat
 import statistics
 import subprocess
 import sys
@@ -2358,18 +2359,115 @@ def matrix_record(path, repo, candidate_commit):
     }
 
 
-def reservation_record(path, cpu, sibling):
+def pair_lease_runtime_root(uid=None):
+    """Return the user-owned, root-anchored runtime directory shared by runners."""
+    retained_uid = os.getuid() if uid is None else uid
+    return Path("/run/user") / str(retained_uid)
+
+
+class StableLeaseAnchor(object):
+    """Serialize current Leopard2 evidence runners across replaceable files."""
+
+    def __init__(self, path=None):
+        self.path = (pair_lease_runtime_root() if path is None else
+                     Path(os.path.abspath(os.fspath(path))))
+        self.descriptor = None
+        self.identity = None
+
+    @staticmethod
+    def _metadata(metadata):
+        mode = stat.S_IMODE(metadata.st_mode)
+        require(stat.S_ISDIR(metadata.st_mode) and
+                metadata.st_uid == os.getuid() and mode & 0o022 == 0,
+                "stable runner lease anchor has unsafe ownership or mode")
+        return (metadata.st_dev, metadata.st_ino, metadata.st_uid, mode)
+
+    def validate_current(self):
+        require(self.descriptor is not None and self.identity is not None,
+                "stable runner lease anchor is not held")
+        descriptor = os.fstat(self.descriptor)
+        path = os.lstat(self.path)
+        require(self._metadata(descriptor) == self.identity and
+                (descriptor.st_dev, descriptor.st_ino) ==
+                (path.st_dev, path.st_ino),
+                "stable runner lease anchor path was replaced")
+
+    def acquire(self):
+        require(fcntl is not None,
+                "evidence collection requires Linux/POSIX fcntl file locking")
+        require(self.descriptor is None,
+                "stable runner lease anchor is already held")
+        flags = (os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+                 getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+        try:
+            self.descriptor = os.open(self.path, flags)
+            fcntl.flock(self.descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            descriptor = os.fstat(self.descriptor)
+            path = os.lstat(self.path)
+            self.identity = self._metadata(descriptor)
+            require((descriptor.st_dev, descriptor.st_ino) ==
+                    (path.st_dev, path.st_ino),
+                    "stable runner lease anchor changed during acquisition")
+            self.validate_current()
+            return self
+        except BaseException as error:
+            self.release()
+            if isinstance(error, OSError):
+                raise EvidenceError(
+                    "cannot acquire stable runner lease anchor: {}".format(error))
+            raise
+
+    def release(self):
+        try:
+            if self.descriptor is not None:
+                descriptor = self.descriptor
+                self.descriptor = None
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                finally:
+                    os.close(descriptor)
+        finally:
+            self.identity = None
+
+
+class ReservationHandle(object):
+    """Release the replaceable reservation inode and stable anchor together."""
+
+    def __init__(self, handle, anchor):
+        self.handle = handle
+        self.anchor = anchor
+
+    def close(self):
+        try:
+            if self.handle is not None:
+                handle = self.handle
+                self.handle = None
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                finally:
+                    handle.close()
+        finally:
+            if self.anchor is not None:
+                anchor = self.anchor
+                self.anchor = None
+                anchor.release()
+
+
+def reservation_record(path, cpu, sibling, runtime_root=None):
     require(fcntl is not None,
             "evidence collection requires Linux/POSIX fcntl file locking")
-    path = Path(path).resolve()
-    require(path.is_file(), "reservation file missing")
-    handle = path.open("r+")
+    anchor = StableLeaseAnchor(runtime_root)
+    handle = None
     try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError as error:
-        handle.close()
-        raise EvidenceError("cannot acquire exclusive CPU reservation: {}".format(error))
-    try:
+        anchor.acquire()
+        path = Path(path).resolve()
+        require(path.is_file(), "reservation file missing")
+        handle = path.open("r+")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            raise EvidenceError(
+                "cannot acquire exclusive CPU reservation: {}".format(error))
         raw = handle.read().encode("utf-8")
         document = parse_json_bytes(raw, "reservation")
         canonical = checked_json_bytes(document, "reservation")
@@ -2389,9 +2487,16 @@ def reservation_record(path, cpu, sibling):
         require(isinstance(document.get("nonce"), str) and
                 len(document["nonce"]) >= 16,
                 "reservation nonce")
-        return handle, {"sha256": sha256_bytes(canonical), "document": document}
+        anchor.validate_current()
+        return (ReservationHandle(handle, anchor),
+                {"sha256": sha256_bytes(canonical), "document": document})
     except BaseException:
-        handle.close()
+        if handle is not None:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            finally:
+                handle.close()
+        anchor.release()
         raise
 
 
@@ -3947,7 +4052,25 @@ def self_test(repo):
                                 encoding="utf-8")
         expect_failure(lambda: reservation_record(noncanonical, cpu, sibling),
                        "noncanonical reservation")
-        mutation_count = len(mutations) + 6
+        anchor_root = root / "stable-anchor-runtime"
+        anchor_root.mkdir(mode=0o700)
+        anchor_root.chmod(0o700)
+        anchored = root / "stable-anchor-reservation.json"
+        anchored_old = root / "stable-anchor-reservation.old"
+        anchored.write_bytes(canonical_bytes(reservation_document))
+        anchored_handle, _anchored_identity = reservation_record(
+            anchored, cpu, sibling, runtime_root=anchor_root)
+        try:
+            anchored.rename(anchored_old)
+            anchored.write_bytes(canonical_bytes(reservation_document))
+            expect_failure(lambda: reservation_record(
+                anchored, cpu, sibling, runtime_root=anchor_root),
+                "recreated reservation inode split")
+        finally:
+            anchored.unlink()
+            anchored_old.rename(anchored)
+            anchored_handle.close()
+        mutation_count = len(mutations) + 7
     print("butterfly ABBA v6 self-test passed: path-independent replay + {} adversarial mutations".format(
         mutation_count))
 

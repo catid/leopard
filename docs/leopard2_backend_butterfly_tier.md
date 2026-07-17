@@ -424,6 +424,16 @@ fresh final-source four-variant matrix, a canonical no-newline reservation
 file, and a physical core whose allowed SMT sibling is idle. Run the collector
 twice, using distinct output directories and otherwise identical arguments:
 
+The current collector first holds a nonblocking exclusive flock on the owned
+`/run/user/UID` directory inode and retains it until the reservation handle is
+closed.  C7 and the exact-main collector use the same stable anchor.  Therefore
+replacement of the reservation inode or its containing directory cannot let a
+current peer acquire a disjoint file lock while a campaign is active.  The v6
+evidence schema and historical portable replay remain unchanged because the
+anchor is execution authority, not retained benchmark data.  This stable layer
+conservatively serializes all current Leopard2 evidence campaigns for the UID,
+including campaigns on disjoint pairs.
+
     python3 experiments/leopard2/backend_butterfly/run_abba.py run \
       --backend avx2 \
       --baseline CONTROL_BUILD/bench_leopard2 \

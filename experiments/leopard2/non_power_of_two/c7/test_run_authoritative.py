@@ -27,6 +27,24 @@ sys.modules[SPEC.name] = runner
 SPEC.loader.exec_module(runner)
 
 
+def load_peer_module(name: str, path: Path):
+    specification = importlib.util.spec_from_file_location(name, path)
+    assert specification is not None and specification.loader is not None
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[specification.name] = module
+    specification.loader.exec_module(module)
+    return module
+
+
+LEOPARD2_EXPERIMENTS = MODULE_PATH.parents[2]
+main_runner = load_peer_module(
+    "c7_main_compare_peer",
+    LEOPARD2_EXPERIMENTS / "main_compare/run_abba.py")
+butterfly_runner = load_peer_module(
+    "c7_backend_butterfly_peer",
+    LEOPARD2_EXPERIMENTS / "backend_butterfly/run_abba.py")
+
+
 def resign(value: dict) -> dict:
     payload = copy.deepcopy(value)
     payload.pop("digest", None)
@@ -353,39 +371,73 @@ class AuthoritativeRunnerTests(unittest.TestCase):
 
     def test_timeout_kills_descendants_and_bounds_the_reap(self) -> None:
         marker = self.root / "descendant-marker"
+        ready = self.root / "descendant-ready"
+        subreaper_before = runner._get_child_subreaper()
         child = (
             "import os,sys,time\n"
             "pid=os.fork()\n"
             "if pid == 0:\n"
-            " time.sleep(.5)\n"
-            " open(sys.argv[1], 'w').write('survived')\n"
+            " os.setsid()\n"
+            " daemon=os.fork()\n"
+            " if daemon != 0: os._exit(0)\n"
+            " open(sys.argv[2], 'w').write('setsid-double-fork-ready')\n"
+            " time.sleep(1.5)\n"
+            " open(sys.argv[1], 'w').write('escaped')\n"
             " os._exit(0)\n"
+            "deadline=time.monotonic()+5\n"
+            "while not os.path.exists(sys.argv[2]) and time.monotonic()<deadline:\n"
+            " time.sleep(.01)\n"
             "time.sleep(10)\n"
         )
         completed, timed_out, _started, _ended = runner.run_child_bounded(
-            [sys.executable, "-c", child, str(marker)],
+            [sys.executable, "-c", child, str(marker), str(ready)],
             self.root / "group/stdout.bin", self.root / "group/stderr.bin",
-            0.1, os.environ)
+            1.0, os.environ)
         self.assertTrue(timed_out)
         self.assertEqual(completed.returncode, 124)
-        time.sleep(0.75)
+        self.assertEqual(ready.read_text(encoding="utf-8"),
+                         "setsid-double-fork-ready")
+        self.assertEqual(runner._get_child_subreaper(), subreaper_before)
+        time.sleep(1.75)
         self.assertFalse(marker.exists())
 
         process = mock.Mock(pid=123456)
-        process.wait.side_effect = [
-            subprocess.TimeoutExpired(["fixture"], 0.1),
-            subprocess.TimeoutExpired(["fixture"],
-                                      runner.CHILD_REAP_TIMEOUT_SECONDS),
-        ]
-        process.poll.return_value = None
-        with mock.patch.object(runner.os, "killpg") as killpg, \
-             self.assertRaises(runner.EvidenceError):
-            runner._wait_isolated_child(process, 0.1)
-        killpg.assert_called_once_with(process.pid, runner.signal.SIGKILL)
+        process.wait.side_effect = subprocess.TimeoutExpired(["fixture"], 0.1)
+        containment = mock.Mock()
+        containment.terminate_and_reap.side_effect = runner.EvidenceError(
+            "bounded reap proof failed")
+        with self.assertRaisesRegex(runner.EvidenceError, "bounded reap"):
+            runner._wait_isolated_child(process, 0.1, containment)
+        containment.terminate_and_reap.assert_called_once_with(process)
         self.assertEqual(process.wait.call_args_list[0], mock.call(timeout=0.1))
-        reap_timeout = process.wait.call_args_list[1].kwargs["timeout"]
-        self.assertGreater(reap_timeout, 0)
-        self.assertLessEqual(reap_timeout, runner.CHILD_REAP_TIMEOUT_SECONDS)
+
+    def test_descendant_containment_fails_closed_before_spawn_when_unavailable(
+            self) -> None:
+        with mock.patch.object(runner.sys, "platform", "not-linux"), \
+             mock.patch.object(runner.subprocess, "Popen") as popen, \
+             self.assertRaisesRegex(runner.EvidenceError, "requires Linux"):
+            runner.run_child_bounded(
+                [sys.executable, "-c", "pass"],
+                self.root / "unavailable/stdout.bin",
+                self.root / "unavailable/stderr.bin", 1.0, os.environ)
+        popen.assert_not_called()
+
+        for index, unavailable in enumerate((
+                "_validate_linux_pidfd_support", "_get_child_subreaper",
+                "_proc_process_snapshot")):
+            with self.subTest(unavailable=unavailable), \
+                 mock.patch.object(
+                     runner, unavailable,
+                     side_effect=runner.EvidenceError(
+                         f"{unavailable} unavailable")), \
+                 mock.patch.object(runner.subprocess, "Popen") as popen, \
+                 self.assertRaisesRegex(runner.EvidenceError, "unavailable"):
+                runner.run_child_bounded(
+                    [sys.executable, "-c", "pass"],
+                    self.root / f"unavailable-{index}/stdout.bin",
+                    self.root / f"unavailable-{index}/stderr.bin",
+                    1.0, os.environ)
+            popen.assert_not_called()
 
     def test_live_build_validator_invocation_is_fail_closed(self) -> None:
         validator = self.root / runner.BUILD_VALIDATOR_RELATIVE
@@ -711,6 +763,150 @@ class AuthoritativeRunnerTests(unittest.TestCase):
                 reservation.unlink()
                 original.rename(reservation)
                 guard.validate_current(retained)
+
+    def test_current_runners_share_anchor_across_reservation_replacement(
+            self) -> None:
+        runtime_root = self.root / "cross-runner-runtime"
+        runtime_root.mkdir(mode=0o700)
+        runtime_root.chmod(0o700)
+        reservation_parent = self.root / "cross-runner-reservation-directory"
+        reservation_parent.mkdir(mode=0o700)
+        reservation_parent.chmod(0o700)
+        reservation = reservation_parent / "reservation.json"
+        original = reservation_parent / "reservation.original"
+        original_parent = self.root / "cross-runner-reservation-directory.original"
+        payload = {
+            "benchmark_cpu": 25,
+            "nonce": "cross-runner-fixture-nonce",
+            "owner": "unit-test",
+            "reserved_sibling": 26,
+            "schema": runner.RESERVATION_SCHEMA,
+            "status": "held",
+        }
+        encoded = runner.canonical_bytes(payload)
+        reservation.write_bytes(encoded)
+        reservation.chmod(0o600)
+
+        def replace_while_held(blocked_error: type[BaseException], acquire) -> None:
+            reservation.rename(original)
+            reservation.write_bytes(encoded)
+            reservation.chmod(0o600)
+            try:
+                with self.assertRaises(blocked_error):
+                    acquire()
+            finally:
+                reservation.unlink()
+                original.rename(reservation)
+
+        def replace_directory_while_held(
+                blocked_error: type[BaseException], acquire) -> None:
+            reservation_parent.rename(original_parent)
+            reservation_parent.mkdir(mode=0o700)
+            reservation_parent.chmod(0o700)
+            reservation.write_bytes(encoded)
+            reservation.chmod(0o600)
+            try:
+                with self.assertRaises(blocked_error):
+                    acquire()
+            finally:
+                reservation.unlink()
+                reservation_parent.rmdir()
+                original_parent.rename(reservation_parent)
+
+        def replace_both(blocked_error: type[BaseException], acquire) -> None:
+            replace_while_held(blocked_error, acquire)
+            replace_directory_while_held(blocked_error, acquire)
+
+        def acquire_c7() -> None:
+            with runner.Reservation(
+                    reservation, 25, 26, runtime_root=runtime_root):
+                pass
+
+        def acquire_main() -> None:
+            with main_runner.Reservation(
+                    reservation, 25, 26, runtime_root=runtime_root):
+                pass
+
+        def acquire_butterfly() -> None:
+            handle, _identity = butterfly_runner.reservation_record(
+                reservation, 25, 26, runtime_root=runtime_root)
+            handle.close()
+
+        with runner.Reservation(
+                reservation, 25, 26, runtime_root=runtime_root):
+            replace_both(main_runner.EvidenceError, acquire_main)
+        with main_runner.Reservation(
+                reservation, 25, 26, runtime_root=runtime_root):
+            replace_both(runner.EvidenceError, acquire_c7)
+        with runner.Reservation(
+                reservation, 25, 26, runtime_root=runtime_root):
+            replace_both(
+                butterfly_runner.EvidenceError, acquire_butterfly)
+        handle, _identity = butterfly_runner.reservation_record(
+            reservation, 25, 26, runtime_root=runtime_root)
+        try:
+            replace_both(runner.EvidenceError, acquire_c7)
+        finally:
+            handle.close()
+        with main_runner.Reservation(
+                reservation, 25, 26, runtime_root=runtime_root):
+            replace_both(
+                butterfly_runner.EvidenceError, acquire_butterfly)
+        handle, _identity = butterfly_runner.reservation_record(
+            reservation, 25, 26, runtime_root=runtime_root)
+        try:
+            replace_both(main_runner.EvidenceError, acquire_main)
+        finally:
+            handle.close()
+
+    def test_current_c7_retains_predecessor_kernel_lease_interop(self) -> None:
+        runtime_root = self.root / "legacy-kernel-runtime"
+        runtime_root.mkdir(mode=0o700)
+        runtime_root.chmod(0o700)
+        legacy_pair = runner.KernelNamespaceLease(
+            "pair", runner.pair_lease_payload(27, 28))
+        legacy_pair.acquire()
+        try:
+            with self.assertRaises(runner.EvidenceError):
+                with runner.PairLease(27, 28, runtime_root=runtime_root):
+                    pass
+        finally:
+            legacy_pair.release()
+        with runner.PairLease(27, 28, runtime_root=runtime_root):
+            legacy_peer = runner.KernelNamespaceLease(
+                "pair", runner.pair_lease_payload(27, 28))
+            with self.assertRaises(runner.EvidenceError):
+                legacy_peer.acquire()
+
+        reservation = self.root / "legacy-kernel-reservation.json"
+        payload = {
+            "benchmark_cpu": 27,
+            "nonce": "legacy-kernel-fixture",
+            "owner": "unit-test",
+            "reserved_sibling": 28,
+            "schema": runner.RESERVATION_SCHEMA,
+            "status": "held",
+        }
+        reservation.write_bytes(runner.canonical_bytes(payload))
+        reservation.chmod(0o600)
+        authority = runner.reservation_authority_payload(
+            reservation, 27, 28)
+        legacy_reservation = runner.KernelNamespaceLease(
+            "reservation", authority)
+        legacy_reservation.acquire()
+        try:
+            with self.assertRaises(runner.EvidenceError):
+                with runner.Reservation(
+                        reservation, 27, 28, runtime_root=runtime_root):
+                    pass
+        finally:
+            legacy_reservation.release()
+        with runner.Reservation(
+                reservation, 27, 28, runtime_root=runtime_root):
+            legacy_peer = runner.KernelNamespaceLease(
+                "reservation", authority)
+            with self.assertRaises(runner.EvidenceError):
+                legacy_peer.acquire()
 
     def test_git_identity_uses_exact_tree_and_rejects_untracked_files(self) -> None:
         repository = self.root / "repository"
