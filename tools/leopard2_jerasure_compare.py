@@ -2730,16 +2730,29 @@ def run_mutation_tests(correctness_path: Path) -> dict[str, int]:
             "no_loss_mutations_rejected": 1}
 
 
-def self_test() -> None:
-    # Normal configuration must remain entirely independent of third parties.
+def optionality_test() -> dict[str, Any]:
+    """Prove the default CMake/test graph needs no ignored/external inputs."""
     production = (repo_root() / "CMakeLists.txt").read_text()
     forbidden = (
         "add_subdirectory(experiments/leopard2/jerasure_compare",
         "leo2_jerasure_source_root", "leo2_gf_complete_source_root",
         "target_link_libraries(libleopard jerasure",
+        "leopard2_jerasure_comparison_mutation_test",
+        "experiments/leopard2/jerasure_compare/correctness_result.json",
     )
     if any(pattern in production.lower() for pattern in forbidden):
-        raise ComparisonError("production CMake unexpectedly references Jerasure")
+        raise ComparisonError(
+            "default CMake unexpectedly requires Jerasure or generated evidence")
+    return {
+        "default_cmake_external_dependencies": False,
+        "default_ctest_generated_evidence_dependencies": False,
+        "manual_mutation_campaign_retained": True,
+    }
+
+
+def self_test() -> None:
+    # Normal configuration must remain entirely independent of third parties.
+    optionality = optionality_test()
     sys.path.insert(0, str(repo_root() / "tools"))
     try:
         import leopard2_external_comparison as audit
@@ -2783,7 +2796,7 @@ def self_test() -> None:
         "aligned_contract_bytes": 8, "synthetic_cells": len(cells),
         "host_metadata_binding": True,
         "bounded_domain_rejections": 3,
-        **state_counts}, sort_keys=True, allow_nan=False))
+        **optionality, **state_counts}, sort_keys=True, allow_nan=False))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -2819,6 +2832,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     mutation_parser = subparsers.add_parser("mutation-test")
     mutation_parser.add_argument("correctness_artifact", type=Path)
     subparsers.add_parser("self-test")
+    subparsers.add_parser("optionality-test")
     arguments = parser.parse_args(argv)
     try:
         if arguments.command == "bootstrap":
@@ -2861,6 +2875,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                              sort_keys=True, allow_nan=False))
         elif arguments.command == "mutation-test":
             counts = run_mutation_tests(arguments.correctness_artifact.resolve())
+            print(json.dumps(
+                {"status": "PASS", **counts}, sort_keys=True, allow_nan=False))
+        elif arguments.command == "optionality-test":
+            counts = optionality_test()
             print(json.dumps(
                 {"status": "PASS", **counts}, sort_keys=True, allow_nan=False))
         else:

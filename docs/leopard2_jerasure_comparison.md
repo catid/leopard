@@ -133,8 +133,15 @@ source:
       -DLEO2_ENABLE_CUDA=OFF
     cmake --build build/release -j 10
     ctest --test-dir build/release \
-      -R 'leopard2_(external|jerasure)_comparison_(self|mutation)_test' \
+      -R 'leopard2_(external_comparison_self|jerasure_(comparison_self|default_optionality))_test' \
       --output-on-failure
+
+These default tests are dependency-free: they do not read a generated
+correctness artifact and do not discover, compile, link, or load Jerasure or
+GF-Complete.  The full adversarial mutation campaign is intentionally not a
+default CTest because it validates a generated, ignored 128-case correctness
+artifact.  Run it manually after generating that artifact, using the command
+below.
 
 Bootstrap and replay use only the ignored cache for third-party source and
 build products:
