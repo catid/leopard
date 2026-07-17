@@ -835,6 +835,10 @@ class CMakeProductionGraph(object):
         ("set_property", (
             "TARGET", "leopard2_api_fuzzer", "APPEND_STRING", "PROPERTY",
             "LINK_FLAGS", " -fsanitize=fuzzer,address,undefined")),
+        ("set_property", (
+            "TARGET", "leopard2_pruned_plan_fuzzer", "APPEND_STRING",
+            "PROPERTY", "LINK_FLAGS",
+            " -fsanitize=fuzzer,address,undefined")),
     }
     _approved_nontarget_property_commands = {
         ("set_property", (

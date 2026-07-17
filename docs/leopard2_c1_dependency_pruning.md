@@ -343,8 +343,55 @@ parameters, for example:
 
 This checkpoint closes only the raw transform-instrumentation gap.  The
 external authoritative runner, real encode/decode integration, alias/scatter
-and fuzz gates, end-to-end neighboring cells, and a deterministic dispatcher
-remain open.
+and public-codec integration fuzz gates, end-to-end neighboring cells, and a
+deterministic dispatcher remain open.
+
+## Plan/executor fuzz boundary
+
+`tests/leopard2/fuzz_pruned_transform.cpp` exercises the internal plan compiler
+and executor without exposing them through the public ABI.  Each input selects
+GF8 or GF16, a dyadic parent through 256 coordinates, an aligned coset,
+forward or inverse direction, arbitrary sparse masks, byte tails, and one
+qualified scalar/SSSE3/AVX2 backend.  It compares the flat and fused schedules
+with a full padded transform on every requested coordinate.  It also checks
+that malformed mask values leave an existing plan byte-for-byte equivalent,
+and that invalid stored indices, multipliers where representable, zero-output
+indices, and fused descriptors fail before an out-of-range access.
+
+The ordinary CTest graph builds a deterministic replay driver.  A separate
+Clang libFuzzer target compiles the library and isolated SIMD members directly
+with coverage, ASan, and UBSan, so the fuzz boundary is not an uninstrumented
+archive call.  Both targets require the internal test-hook ABI for the full
+transform oracle and are never installed.
+
+Run the deterministic gate with:
+
+    cmake --build build/c1-benchmark \
+        --target leopard2_pruned_fuzz_smoke -j 128
+    OMP_NUM_THREADS=1 OMP_DYNAMIC=FALSE \
+        build/c1-benchmark/leopard2_pruned_fuzz_smoke \
+        0xc1f022d17 1024
+
+Build the coverage-guided target with Clang and run one bounded campaign with:
+
+    cmake -S . -B build/c1-fuzz -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+        -DLEO2_BUILD_TESTS=OFF -DLEO2_BUILD_BENCHMARKS=OFF \
+        -DLEO2_BUILD_FUZZERS=ON -DCMAKE_C_COMPILER=clang \
+        -DCMAKE_CXX_COMPILER=clang++
+    cmake --build build/c1-fuzz \
+        --target leopard2_pruned_plan_fuzzer -j 128
+    mkdir -p build/c1-fuzz/corpus
+    ASAN_OPTIONS=detect_leaks=1 OMP_NUM_THREADS=1 OMP_DYNAMIC=FALSE \
+        build/c1-fuzz/leopard2_pruned_plan_fuzzer \
+        build/c1-fuzz/corpus -runs=2000 -max_len=256 -timeout=5
+
+Replace 128 with the allowed CPU count.  The 2026-07-17 development campaign
+completed 2,000 inputs under Clang 18 ASan+UBSan with no crash, and the strict
+GCC plus Clang sanitizer replay each completed 1,024 deterministic inputs.
+The process affinity exposed 28 CPUs rather than the requested 128; all 28 ran
+distinct ASan+UBSan seeds concurrently for another 7,168 inputs.  These are
+fuzz/correctness results, not the still-open performance or production-
+integration gates.
 
 ## Disposition
 

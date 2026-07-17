@@ -697,6 +697,17 @@ if(LEO2_BUILD_TESTS)
     target_link_libraries(leopard2_fuzz_smoke libleopard)
     add_test(NAME leopard2_fuzz_smoke COMMAND leopard2_fuzz_smoke)
 
+    add_executable(leopard2_pruned_fuzz_smoke
+        tests/leopard2/fuzz_pruned_transform.cpp
+        tests/leopard2/fuzz_replay.cpp)
+    target_compile_definitions(leopard2_pruned_fuzz_smoke PRIVATE
+        LEO2_ENABLE_TEST_HOOKS=1)
+    target_link_libraries(leopard2_pruned_fuzz_smoke libleopard)
+    add_test(NAME leopard2_pruned_fuzz_smoke
+        COMMAND leopard2_pruned_fuzz_smoke 0xc1f022d17 256)
+    set_tests_properties(leopard2_pruned_fuzz_smoke PROPERTIES
+        ENVIRONMENT "OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")
+
     add_test(
         NAME leopard2_cuda_optional
         COMMAND ${CMAKE_COMMAND}
@@ -823,8 +834,29 @@ if(LEO2_BUILD_FUZZERS)
         ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_options(leopard2_api_fuzzer PRIVATE
         ${LEO2_FUZZ_SANITIZER_FLAGS})
+    # The backend fuzz object members are shared with the pruned-plan fuzzer,
+    # whose full-transform oracle requires the test-hook ABI.  Compile the API
+    # fuzzer's private core copy with the same hooks so those instrumented
+    # members have one consistent, fully sanitized definition.
+    target_compile_definitions(leopard2_api_fuzzer PRIVATE
+        LEO2_ENABLE_TEST_HOOKS=1)
     if(LEO2_X86_TARGET)
         target_compile_definitions(leopard2_api_fuzzer PRIVATE
+            LEO2_DISABLE_SSSE3_CODEGEN=1
+            LEO2_DISABLE_AVX2_CODEGEN=1)
+    endif()
+
+    add_executable(leopard2_pruned_plan_fuzzer
+        tests/leopard2/fuzz_pruned_transform.cpp
+        ${LIB_SOURCE_FILES})
+    target_include_directories(leopard2_pruned_plan_fuzzer PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_options(leopard2_pruned_plan_fuzzer PRIVATE
+        ${LEO2_FUZZ_SANITIZER_FLAGS})
+    target_compile_definitions(leopard2_pruned_plan_fuzzer PRIVATE
+        LEO2_ENABLE_TEST_HOOKS=1)
+    if(LEO2_X86_TARGET)
+        target_compile_definitions(leopard2_pruned_plan_fuzzer PRIVATE
             LEO2_DISABLE_SSSE3_CODEGEN=1
             LEO2_DISABLE_AVX2_CODEGEN=1)
     endif()
@@ -837,11 +869,17 @@ if(LEO2_BUILD_FUZZERS)
             Leopard2BackendSSSE3.cpp)
         target_include_directories(leopard2_backend_ssse3_fuzz PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR})
+        target_compile_definitions(leopard2_backend_ssse3_fuzz PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1)
         target_compile_options(leopard2_backend_ssse3_fuzz PRIVATE
             ${LEO2_FUZZ_SANITIZER_FLAGS} -mssse3 -mno-avx)
         target_sources(leopard2_api_fuzzer PRIVATE
             $<TARGET_OBJECTS:leopard2_backend_ssse3_fuzz>)
+        target_sources(leopard2_pruned_plan_fuzzer PRIVATE
+            $<TARGET_OBJECTS:leopard2_backend_ssse3_fuzz>)
         target_compile_definitions(leopard2_api_fuzzer PRIVATE
+            LEO2_HAVE_SSSE3_BACKEND=1)
+        target_compile_definitions(leopard2_pruned_plan_fuzzer PRIVATE
             LEO2_HAVE_SSSE3_BACKEND=1)
     endif()
     if(LEO2_HAVE_AVX2_BACKEND)
@@ -849,25 +887,40 @@ if(LEO2_BUILD_FUZZERS)
             Leopard2BackendAVX2.cpp)
         target_include_directories(leopard2_backend_avx2_fuzz PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR})
+        target_compile_definitions(leopard2_backend_avx2_fuzz PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1)
         target_compile_options(leopard2_backend_avx2_fuzz PRIVATE
             ${LEO2_FUZZ_SANITIZER_FLAGS} -mavx2 -mno-avx512f)
         target_sources(leopard2_api_fuzzer PRIVATE
             $<TARGET_OBJECTS:leopard2_backend_avx2_fuzz>)
+        target_sources(leopard2_pruned_plan_fuzzer PRIVATE
+            $<TARGET_OBJECTS:leopard2_backend_avx2_fuzz>)
         target_compile_definitions(leopard2_api_fuzzer PRIVATE
+            LEO2_HAVE_AVX2_BACKEND=1)
+        target_compile_definitions(leopard2_pruned_plan_fuzzer PRIVATE
             LEO2_HAVE_AVX2_BACKEND=1)
     endif()
     set_property(TARGET leopard2_api_fuzzer APPEND_STRING PROPERTY
         LINK_FLAGS " -fsanitize=fuzzer,address,undefined")
+    set_property(TARGET leopard2_pruned_plan_fuzzer APPEND_STRING PROPERTY
+        LINK_FLAGS " -fsanitize=fuzzer,address,undefined")
     target_link_libraries(leopard2_api_fuzzer Threads::Threads)
+    target_link_libraries(leopard2_pruned_plan_fuzzer Threads::Threads)
     if(NOT LEO2_BACKEND_VARIANT STREQUAL "auto")
         if(LEO2_BACKEND_VARIANT STREQUAL "scalar")
             target_compile_definitions(leopard2_api_fuzzer PRIVATE
                 LEO2_BACKEND_FORCE_SCALAR=1)
+            target_compile_definitions(leopard2_pruned_plan_fuzzer PRIVATE
+                LEO2_BACKEND_FORCE_SCALAR=1)
         elseif(LEO2_BACKEND_VARIANT STREQUAL "ssse3")
             target_compile_definitions(leopard2_api_fuzzer PRIVATE
                 LEO2_BACKEND_FORCE_SSSE3=1)
+            target_compile_definitions(leopard2_pruned_plan_fuzzer PRIVATE
+                LEO2_BACKEND_FORCE_SSSE3=1)
         elseif(LEO2_BACKEND_VARIANT STREQUAL "avx2")
             target_compile_definitions(leopard2_api_fuzzer PRIVATE
+                LEO2_BACKEND_FORCE_AVX2=1)
+            target_compile_definitions(leopard2_pruned_plan_fuzzer PRIVATE
                 LEO2_BACKEND_FORCE_AVX2=1)
         endif()
     endif()
