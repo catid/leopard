@@ -2724,6 +2724,93 @@ void ReedSolomonDecodeLowPlanned(
 }
 
 
+void ReedSolomonDecodeLowTiledPlanned(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned p,
+    const void* const* coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    unsigned requested_count,
+    const leopard2_internal::OutputDependencyView& output_dependencies,
+    const ffe_t* locator_logs,
+    const ffe_t* block_factors,
+    void** work)
+{
+    LEO_DEBUG_ASSERT(p >= 2 && p <= n && n <= kOrder);
+    LEO_DEBUG_ASSERT(n % p == 0);
+
+    void** const accumulator = work;
+    void** const tile = work + p;
+    const unsigned block_count = n / p;
+
+    const unsigned first_input_count = block_input_counts[0];
+    LEO_DEBUG_ASSERT(first_input_count <= p);
+    for (unsigned i = 0; i < p; ++i)
+    {
+        if (coordinate_data[i])
+            mul_mem(
+                ops, accumulator[i], coordinate_data[i], locator_logs[i],
+                buffer_bytes);
+        else
+            memset(accumulator[i], 0, buffer_bytes);
+    }
+    if (first_input_count != 0)
+        IFFT_DIT_Decoder(
+            ops, buffer_bytes, first_input_count, accumulator, p,
+            FFTSkewStorage);
+
+    AddFormalDerivative(ops, buffer_bytes, p, accumulator);
+
+    for (unsigned block = 1; block < block_count; ++block)
+    {
+        const unsigned input_count = block_input_counts[block];
+        LEO_DEBUG_ASSERT(input_count <= p);
+        if (input_count == 0)
+            continue;
+        const unsigned offset = block * p;
+        for (unsigned i = 0; i < p; ++i)
+        {
+            const unsigned coordinate = offset + i;
+            if (coordinate_data[coordinate])
+                mul_mem(
+                    ops, tile[i], coordinate_data[coordinate],
+                    locator_logs[coordinate], buffer_bytes);
+            else
+                memset(tile[i], 0, buffer_bytes);
+        }
+        IFFT_DIT_Decoder(
+            ops, buffer_bytes, input_count, tile, p,
+            FFTSkewStorage + offset);
+        for (unsigned i = 0; i < p; ++i)
+        {
+            mul_mem_inplace(
+                ops, tile[i], block_factors[block - 1], buffer_bytes);
+            xor_mem(ops, accumulator[i], tile[i], buffer_bytes);
+        }
+    }
+
+#ifdef LEO_ERROR_BITFIELD_OPT
+    FFT_DIT_ErrorBits(
+        ops, buffer_bytes, accumulator, p, p, FFTSkewStorage,
+        output_dependencies);
+#else
+    (void)output_dependencies;
+    FFT_DIT(ops, buffer_bytes, accumulator, p, p, FFTSkewStorage);
+#endif
+
+    for (unsigned i = 0; i < requested_count; ++i)
+    {
+        const uint32_t coordinate = requested_coordinates[i];
+        LEO_DEBUG_ASSERT(coordinate < p);
+        mul_mem_inplace(
+            ops, accumulator[coordinate], kModulus - locator_logs[coordinate],
+            buffer_bytes);
+    }
+}
+
+
 void ReedSolomonDecodeHighPrepared(
     const backend::Ops& ops,
     uint64_t buffer_bytes,
@@ -2912,6 +2999,108 @@ void ReedSolomonDecodeHighPlanned(
         backend::GetDefaultOps(), buffer_bytes, n, t, coordinate_data,
         block_input_counts, requested_coordinates, output_blocks,
         output_block_count, locator_logs, output_factors, work);
+}
+
+
+void ReedSolomonDecodeHighTiledPlanned(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned t,
+    const void* const* coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    const leopard2_internal::DecodeOutputBlock* output_blocks,
+    unsigned output_block_count,
+    const ffe_t* locator_logs,
+    const ffe_t* output_factors,
+    void* const* requested_output,
+    void** work)
+{
+    LEO_DEBUG_ASSERT(t >= 2 && t < n && n <= kOrder);
+    LEO_DEBUG_ASSERT(n % t == 0);
+
+    void** const accumulator = work;
+    void** const tile = work + t;
+    const unsigned block_count = n / t;
+
+    const unsigned first_input_count = block_input_counts[0];
+    LEO_DEBUG_ASSERT(first_input_count <= t);
+    for (unsigned i = 0; i < t; ++i)
+    {
+        if (coordinate_data[i])
+            memcpy(accumulator[i], coordinate_data[i], buffer_bytes);
+        else
+            memset(accumulator[i], 0, buffer_bytes);
+    }
+    if (first_input_count != 0)
+        IFFT_DIT_Decoder(
+            ops, buffer_bytes, first_input_count, accumulator, t,
+            FFTSkewStorage);
+
+    for (unsigned block = 1; block < block_count; ++block)
+    {
+        const unsigned input_count = block_input_counts[block];
+        LEO_DEBUG_ASSERT(input_count <= t);
+        if (input_count == 0)
+            continue;
+        const unsigned offset = block * t;
+        for (unsigned i = 0; i < t; ++i)
+        {
+            const void* const source = coordinate_data[offset + i];
+            if (source)
+                memcpy(tile[i], source, buffer_bytes);
+            else
+                memset(tile[i], 0, buffer_bytes);
+        }
+        IFFT_DIT_Decoder(
+            ops, buffer_bytes, input_count, tile, t,
+            FFTSkewStorage + offset);
+        VectorXOR(ops, buffer_bytes, t, accumulator, tile);
+    }
+
+    FFT_DIT(ops, buffer_bytes, accumulator, t, t, FFTSkewStorage);
+    for (unsigned i = 0; i < t; ++i)
+    {
+        if (coordinate_data[i])
+            mul_mem_inplace(
+                ops, accumulator[i], locator_logs[i], buffer_bytes);
+        else
+            memset(accumulator[i], 0, buffer_bytes);
+    }
+    IFFT_DIT_Decoder(
+        ops, buffer_bytes, t, accumulator, t, FFTSkewStorage);
+
+    for (unsigned output_block = 0;
+         output_block < output_block_count;
+         ++output_block)
+    {
+        const leopard2_internal::DecodeOutputBlock& descriptor =
+            output_blocks[output_block];
+        LEO_DEBUG_ASSERT(descriptor.block > 0 && descriptor.block < block_count);
+        LEO_DEBUG_ASSERT(descriptor.requested_prefix > 0 &&
+            descriptor.requested_prefix <= t);
+        LEO_DEBUG_ASSERT(descriptor.requested_begin < descriptor.requested_end);
+        const unsigned offset = descriptor.block * t;
+        for (unsigned i = 0; i < t; ++i)
+            memcpy(tile[i], accumulator[i], buffer_bytes);
+        FFT_DIT(
+            ops, buffer_bytes, tile, descriptor.requested_prefix, t,
+            FFTSkewStorage + offset);
+        for (uint32_t i = descriptor.requested_begin;
+             i < descriptor.requested_end;
+             ++i)
+        {
+            const uint32_t coordinate = requested_coordinates[i];
+            LEO_DEBUG_ASSERT(coordinate >= offset && coordinate < offset + t);
+            LEO_DEBUG_ASSERT(requested_output[i] != NULL);
+            const ffe_t reveal_log = SubMod(
+                output_factors[coordinate], locator_logs[coordinate]);
+            mul_mem(
+                ops, requested_output[i], tile[coordinate - offset],
+                reveal_log, buffer_bytes);
+        }
+    }
 }
 
 void ReedSolomonDecode(

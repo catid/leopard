@@ -623,28 +623,28 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
         require_result(leo2_decode_plan_scratch_size(plan, test.bytes, &scratch_bytes),
             "direct-dispatch scratch query");
 
-        leo2_codec_options generic_options;
-        memset(&generic_options, 0, sizeof(generic_options));
-        generic_options.struct_size = sizeof(generic_options);
-        generic_options.flags = LEO2_CODEC_FORCE_GENERIC_DECODE;
-        leo2_codec* generic_codec = NULL;
+        leo2_codec_options reference_options;
+        memset(&reference_options, 0, sizeof(reference_options));
+        reference_options.struct_size = sizeof(reference_options);
+        reference_options.flags = LEO2_CODEC_FORCE_SPECIALIZED_DECODE;
+        leo2_codec* reference_codec = NULL;
         require_result(leo2_codec_create(context, test.k, test.r, test.profile,
-            test.field, &generic_options, &generic_codec),
-            "direct-dispatch generic codec create");
-        leo2_decode_plan* generic_plan = NULL;
-        require_result(leo2_decode_plan_create(generic_codec, &original_present[0],
-            &recovery_present[0], &generic_plan),
-            "direct-dispatch generic plan create");
-        size_t generic_scratch_bytes = 0;
+            test.field, &reference_options, &reference_codec),
+            "direct-dispatch reference codec create");
+        leo2_decode_plan* reference_plan = NULL;
+        require_result(leo2_decode_plan_create(reference_codec,
+            &original_present[0], &recovery_present[0], &reference_plan),
+            "direct-dispatch reference plan create");
+        size_t reference_scratch_bytes = 0;
         require_result(leo2_decode_plan_scratch_size(
-            generic_plan, test.bytes, &generic_scratch_bytes),
-            "direct-dispatch generic scratch query");
+            reference_plan, test.bytes, &reference_scratch_bytes),
+            "direct-dispatch reference scratch query");
         require(test.expect_direct
-                ? scratch_bytes < generic_scratch_bytes
-                : scratch_bytes == generic_scratch_bytes,
+                ? scratch_bytes < reference_scratch_bytes
+                : scratch_bytes == reference_scratch_bytes,
             "direct-repair dispatch boundary selected the wrong scratch shape");
-        leo2_decode_plan_destroy(generic_plan);
-        leo2_codec_destroy(generic_codec);
+        leo2_decode_plan_destroy(reference_plan);
+        leo2_codec_destroy(reference_codec);
         leo2_decode_plan_destroy(plan);
         leo2_codec_destroy(codec);
     }

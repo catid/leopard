@@ -757,10 +757,19 @@ void test_aligned_decode_input_staging_elision(
         require(ragged_one_shot > aligned_one_shot &&
                 ragged_one_shot - aligned_one_shot == staged_input_bytes,
             "aligned one-shot retained K+R input staging slots");
-        require(aligned_plan == aligned_one_shot &&
-                ragged_plan == ragged_one_shot,
-            "plan and one-shot transform scratch geometry diverged");
-        counts->scratch_checks += 3;
+        require(aligned_one_shot >= aligned_plan &&
+                ragged_one_shot >= ragged_plan,
+            "one-shot transform scratch does not cover the exact plan");
+        const bool exact_high_output_retention =
+            item.profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+            (item.flags & LEO2_CODEC_FORCE_GENERIC_DECODE) == 0;
+        require(exact_high_output_retention
+                ? aligned_one_shot > aligned_plan &&
+                    ragged_one_shot > ragged_plan
+                : aligned_one_shot == aligned_plan &&
+                    ragged_one_shot == ragged_plan,
+            "plan-specific transform scratch geometry is not deterministic");
+        counts->scratch_checks += 4;
 
         const size_t byte_sizes[] = { 64, item.ragged_bytes };
         for (size_t size_i = 0;
@@ -807,6 +816,102 @@ void test_aligned_decode_input_staging_elision(
                 "input-staging transform modified a caller input shard");
             ++counts->scratch_checks;
         }
+    }
+}
+
+void test_tiled_decode_workspace_slopes(
+    leo2_context* context,
+    Counts* counts)
+{
+    struct Case
+    {
+        uint32_t k;
+        uint32_t r;
+        uint32_t missing;
+        leo2_profile profile;
+        leo2_field field;
+        uint32_t flags;
+    };
+    const Case cases[] = {
+        { 200, 9, 5, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          LEO2_CODEC_FORCE_SPECIALIZED_DECODE },
+        { 9, 200, 5, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8,
+          LEO2_CODEC_FORCE_SPECIALIZED_DECODE },
+        { 1000, 17, 7, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
+          LEO2_CODEC_FORCE_SPECIALIZED_DECODE },
+        { 17, 1000, 7, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16,
+          LEO2_CODEC_FORCE_SPECIALIZED_DECODE },
+        { 128, 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          LEO2_CODEC_FORCE_SPECIALIZED_DECODE },
+        { 128, 128, 128, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8,
+          LEO2_CODEC_FORCE_SPECIALIZED_DECODE },
+        { 1000, 17, 7, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
+          LEO2_CODEC_FORCE_GENERIC_DECODE }
+    };
+
+    for (size_t case_i = 0;
+         case_i < sizeof(cases) / sizeof(cases[0]); ++case_i)
+    {
+        const Case& item = cases[case_i];
+        leo2_codec_options options;
+        memset(&options, 0, sizeof(options));
+        options.struct_size = sizeof(options);
+        options.flags = item.flags;
+        CodecOwner codec;
+        require_result(leo2_codec_create(context, item.k, item.r,
+            item.profile, item.field, &options, &codec.codec), LEO2_SUCCESS,
+            "tiled-workspace codec create");
+
+        std::vector<uint8_t> original_present(item.k, 1);
+        std::vector<uint8_t> recovery_present(item.r, 1);
+        for (uint32_t i = 0; i < item.missing; ++i)
+            original_present[i] = 0;
+        PlanOwner plan;
+        require_result(leo2_decode_plan_create(codec.codec,
+            &original_present[0], &recovery_present[0], &plan.plan),
+            LEO2_SUCCESS, "tiled-workspace plan create");
+
+        size_t plan_64 = 0;
+        size_t plan_128 = 0;
+        size_t one_shot_64 = 0;
+        size_t one_shot_128 = 0;
+        require_result(leo2_decode_plan_scratch_size(
+            plan.plan, 64, &plan_64), LEO2_SUCCESS,
+            "tiled-workspace 64-byte plan query");
+        require_result(leo2_decode_plan_scratch_size(
+            plan.plan, 128, &plan_128), LEO2_SUCCESS,
+            "tiled-workspace 128-byte plan query");
+        require_result(leo2_decode_scratch_size(
+            codec.codec, 64, &one_shot_64), LEO2_SUCCESS,
+            "tiled-workspace 64-byte one-shot query");
+        require_result(leo2_decode_scratch_size(
+            codec.codec, 128, &one_shot_128), LEO2_SUCCESS,
+            "tiled-workspace 128-byte one-shot query");
+
+        const size_t side = leo2_codec_padded_side(codec.codec);
+        const size_t parent = leo2_codec_parent_count(codec.codec);
+        const bool generic =
+            (item.flags & LEO2_CODEC_FORCE_GENERIC_DECODE) != 0;
+        const size_t tiled_plan_slots = item.profile == LEO2_PROFILE_LOW_V1
+            ? side * 2
+            : side * 2 + item.missing;
+        const size_t tiled_one_shot_slots =
+            item.profile == LEO2_PROFILE_LOW_V1
+                ? side * 2
+                : side * 2 + item.r;
+        const size_t expected_plan_slots = generic
+            ? parent
+            : std::min(parent, tiled_plan_slots);
+        const size_t expected_one_shot_slots = generic
+            ? parent
+            : std::min(parent, tiled_one_shot_slots);
+        require(plan_128 > plan_64 &&
+                plan_128 - plan_64 == expected_plan_slots * 64,
+            "plan scratch does not have the declared side-sized slope");
+        require(one_shot_128 > one_shot_64 &&
+                one_shot_128 - one_shot_64 == expected_one_shot_slots * 64,
+            "one-shot scratch does not have the declared worst-case slope");
+        counts->scratch_checks += 2;
     }
 }
 
@@ -1126,6 +1231,7 @@ int main()
         test_introspection_and_null_contracts(context.context, &counts);
         test_alias_and_scratch_contracts(context.context, &counts);
         test_aligned_decode_input_staging_elision(context.context, &counts);
+        test_tiled_decode_workspace_slopes(context.context, &counts);
         test_concurrent_shared_context_batches(context.context, &counts);
         test_deterministic_batch_failures(context.context, &counts);
         test_legacy_negative_contract(&counts);

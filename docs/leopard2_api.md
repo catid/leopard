@@ -75,12 +75,23 @@ tests, and pinned measurements.
 
 For a physical shard size that is a multiple of 64 bytes, selected transform
 inputs already use the kernels' native tile layout and remain read-only.
-Execution therefore references those caller shards directly and reserves full
-shard data slots only for the `N` transform outputs, rather than staging another
-`K+R` shards.  A ragged final tile still needs `K+R` input slots for GF8 zero
-padding or GF16 compact-to-ALTMAP scatter.  The public overlap checks are
-unchanged.  Tiling the remaining `N`-slot transform workspace down toward
-`O(min(P,T))` is separate unfinished work.
+Execution therefore references those caller shards directly.  The specialized
+low decoder uses at most `min(N,2P)` full-shard data slots: one accumulator and
+one reusable parent-block tile when that is smaller.  The specialized high
+decoder similarly uses `min(N,2T+L)` slots, where `L` is the number of requested
+missing originals; its last `L` tiled slots retain outputs until
+application-layout scatter.  The retained materialized specialized kernel is
+used when its regular `N` slots are no larger, avoiding a balanced-rate scratch
+regression.  Forced generic decoding retains `N` work slots.  A ragged final
+tile adds `K+R` input slots for GF8 zero padding or GF16 compact-to-ALTMAP
+scatter.  The public overlap checks are unchanged.
+
+`leo2_decode_plan_scratch_size` uses the exact `L` for its immutable pattern.
+The pattern-independent one-shot query uses `min(N,2T+R)` for a high profile,
+so it is safe for every valid pattern accepted later by `leo2_decode`.  Pointer
+and range-validation metadata are additional small terms; neither is a
+full-shard data slot.  See `leopard2_decode_tiled_workspace.md` for the execution
+equivalence and scratch formulas.
 
 The plan uses exactly `K` received public coordinates.  It keeps every surviving
 systematic shard, then keeps the lowest-index received parity shards needed to

@@ -341,6 +341,25 @@ void ReedSolomonDecodeLowPlanned(
     const ffe_t* block_factors,
     void** work);
 
+/*
+    Side-sized production form of Algorithm 4.  work contains exactly 2*p
+    shard pointers: the first p hold the final requested message block and the
+    second p are a reusable parent-block tile.
+*/
+void ReedSolomonDecodeLowTiledPlanned(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned p,
+    const void* const * const coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    unsigned requested_count,
+    const leopard2_internal::OutputDependencyView& output_dependencies,
+    const ffe_t* locator_logs,
+    const ffe_t* block_factors,
+    void** work);
+
 void ReedSolomonDecodeHighPrepared(
     const backend::Ops& ops,
     uint64_t buffer_bytes,
@@ -385,6 +404,26 @@ void ReedSolomonDecodeHighPlanned(
     unsigned output_block_count,
     const ffe_t* locator_logs,
     const ffe_t* output_factors,
+    void** work);
+
+/*
+    Side-sized production form of Algorithm 5.  work contains exactly 2*t
+    shard pointers.  requested_output contains one disjoint kernel-layout
+    destination for each requested coordinate, in requested_coordinates order.
+*/
+void ReedSolomonDecodeHighTiledPlanned(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned t,
+    const void* const * const coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    const leopard2_internal::DecodeOutputBlock* output_blocks,
+    unsigned output_block_count,
+    const ffe_t* locator_logs,
+    const ffe_t* output_factors,
+    void* const* requested_output,
     void** work);
 
 void ReedSolomonDecode(

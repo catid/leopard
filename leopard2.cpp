@@ -1205,30 +1205,90 @@ static leo2_result EncodeLayout(
     return LEO2_SUCCESS;
 }
 
+static bool UseGenericDecode(
+    const leo2_decode_plan* plan,
+    size_t rounded_shard_bytes)
+{
+    const leo2_codec* codec = plan->codec;
+    const bool force_generic =
+        (codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) != 0;
+    const bool force_specialized =
+        (codec->flags & LEO2_CODEC_FORCE_SPECIALIZED_DECODE) != 0;
+    const bool measured_balanced_full_recovery =
+        leopard2_internal::ShouldUseBalancedGenericDecode(
+            codec->profile, codec->field, codec->original_count,
+            codec->recovery_count, codec->padded_side, codec->parent_count,
+            plan->missing_original_count, rounded_shard_bytes,
+            codec->context->backend);
+    return force_generic ||
+        (!force_specialized && measured_balanced_full_recovery);
+}
+
 static leo2_result DecodeLayout(
     const leo2_codec* codec,
+    const leo2_decode_plan* plan,
     uint64_t shard_bytes,
     ScratchLayout& layout,
-    size_t& rounded_bytes)
+    size_t& rounded_bytes,
+    size_t& work_slot_count)
 {
+    work_slot_count = 0;
     if (!codec || !RoundShardBytes(shard_bytes, rounded_bytes))
         return LEO2_INVALID_ARGUMENT;
     if (codec->field == LEO2_FIELD_GF16 && (shard_bytes & 1u) != 0)
         return LEO2_UNSUPPORTED;
     const size_t range_count = static_cast<size_t>(codec->original_count) * 2 + codec->recovery_count;
-    const size_t pointer_count = static_cast<size_t>(codec->parent_count) * 2;
+    const bool force_generic =
+        (codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) != 0;
+    const bool known_generic = plan ? UseGenericDecode(plan, rounded_bytes) : force_generic;
+    if (known_generic ||
+        (codec->profile != LEO2_PROFILE_LOW_V1 &&
+         codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1))
+    {
+        work_slot_count = codec->parent_count;
+    }
+    else
+    {
+        size_t tiled_slot_count = 0;
+        if (!CheckedMultiply(
+                static_cast<size_t>(codec->padded_side), 2,
+                tiled_slot_count))
+            return LEO2_INVALID_COUNTS;
+        if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
+        {
+            const size_t output_slots = plan
+                ? plan->requested_coordinates.size()
+                : static_cast<size_t>(codec->recovery_count);
+            if (!CheckedAdd(
+                    tiled_slot_count, output_slots, tiled_slot_count))
+                return LEO2_INVALID_COUNTS;
+        }
+        /* Keep the retained materialized specialized kernel when its regular
+           N-slot workspace is no larger than the tiled form. */
+        work_slot_count = std::min(
+            static_cast<size_t>(codec->parent_count), tiled_slot_count);
+    }
+    size_t pointer_count = 0;
+    if (!CheckedAdd(
+            static_cast<size_t>(codec->parent_count), work_slot_count,
+            pointer_count))
+        return LEO2_INVALID_COUNTS;
     /*
         Complete 64-byte tiles already use the transform kernels' native
         layout.  The selected coordinate inputs are immutable, so execution
-        can point at the caller shards directly and reserve data slots only
-        for the N transform outputs.  Ragged tails still need K+R staging
-        slots for zero padding (GF8) or compact-to-ALTMAP scatter (GF16).
+        can point at the caller shards directly.  Specialized execution uses
+        two side-sized transform tiles, plus one retained shard per requested
+        high-profile output.  Generic fallback retains N work slots.  Ragged
+        tails still need K+R staging slots for zero padding (GF8) or
+        compact-to-ALTMAP scatter (GF16).
     */
     const bool stage_inputs = rounded_bytes != shard_bytes;
     const size_t input_slot_count = stage_inputs
         ? static_cast<size_t>(codec->original_count) + codec->recovery_count
         : 0;
-    const size_t slot_count = input_slot_count + codec->parent_count;
+    size_t slot_count = 0;
+    if (!CheckedAdd(input_slot_count, work_slot_count, slot_count))
+        return LEO2_INVALID_COUNTS;
     if (!ComputeScratchLayout(range_count, pointer_count, slot_count, rounded_bytes, layout))
         return LEO2_INVALID_COUNTS;
     return LEO2_SUCCESS;
@@ -2403,9 +2463,12 @@ LEO2_EXPORT leo2_result leo2_decode_plan_scratch_size(
         return LEO2_SUCCESS;
     ScratchLayout layout;
     size_t rounded = 0;
+    size_t work_slot_count = 0;
     const leo2_result result = plan->direct_repair
         ? DirectDecodeLayout(plan->codec, shard_bytes, layout, rounded)
-        : DecodeLayout(plan->codec, shard_bytes, layout, rounded);
+        : DecodeLayout(
+            plan->codec, plan, shard_bytes, layout, rounded,
+            work_slot_count);
     if (result != LEO2_SUCCESS)
         return result;
     *scratch_bytes_out = layout.total_bytes;
@@ -2428,9 +2491,12 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
 
     ScratchLayout layout;
     size_t rounded = 0;
+    size_t work_slot_count = 0;
     leo2_result result = plan->direct_repair
         ? DirectDecodeLayout(plan->codec, shard_bytes, layout, rounded)
-        : DecodeLayout(plan->codec, shard_bytes, layout, rounded);
+        : DecodeLayout(
+            plan->codec, plan, shard_bytes, layout, rounded,
+            work_slot_count);
     if (result != LEO2_SUCCESS)
         return result;
     AddressRange scratch_range;
@@ -2527,16 +2593,10 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
     const size_t work_base = stage_inputs
         ? static_cast<size_t>(codec->original_count) + codec->recovery_count
         : 0;
-    for (uint32_t i = 0; i < codec->parent_count; ++i)
+    for (size_t i = 0; i < work_slot_count; ++i)
         work[i] = slots + (work_base + i) * rounded;
 
     const void* const* coordinate_input = const_cast<const void* const*>(coordinate_data);
-    const leo2_backend backend = codec->context->backend;
-    const bool measured_balanced_full_recovery =
-        leopard2_internal::ShouldUseBalancedGenericDecode(
-            codec->profile, codec->field, codec->original_count,
-            codec->recovery_count, codec->padded_side, codec->parent_count,
-            plan->missing_original_count, rounded, backend);
     /*
         At this balanced full-recovery point the generic schedule has lower
         aggregate work despite Algorithm 5's smaller transform side: the
@@ -2546,16 +2606,15 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
         strictly inside that measured region; neighboring counts, fields,
         backends, and sizes retain the profile-specific decoder.
     */
-    const bool force_generic =
-        (codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) != 0;
-    const bool force_specialized =
-        (codec->flags & LEO2_CODEC_FORCE_SPECIALIZED_DECODE) != 0;
-    const bool use_generic = force_generic ||
-        (!force_specialized && measured_balanced_full_recovery);
+    const bool use_generic = UseGenericDecode(plan, rounded);
+    const bool use_tiled = !use_generic &&
+        work_slot_count < static_cast<size_t>(codec->parent_count);
     const uint32_t* const requested_coordinates =
         plan->requested_coordinates.data();
     const unsigned requested_count =
         static_cast<unsigned>(plan->requested_coordinates.size());
+    void** const high_requested_output =
+        work + static_cast<size_t>(codec->padded_side) * 2;
     if (codec->field == LEO2_FIELD_GF8)
     {
         if (use_generic)
@@ -2569,6 +2628,27 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
                 plan->generic_input_count, requested_coordinates,
                 requested_count, dependencies, &plan->locator8[0], work);
         }
+        else if (codec->profile == LEO2_PROFILE_LOW_V1 && use_tiled)
+        {
+            const leopard2_internal::OutputDependencyView dependencies =
+                leopard2_internal::MakeOutputDependencyView(
+                    codec->padded_side,
+                    plan->specialized_output_dependencies.data(),
+                    plan->specialized_output_dependencies.size());
+            leopard::ff8::ReedSolomonDecodeLowTiledPlanned(
+                ops, rounded, codec->parent_count, codec->padded_side,
+                coordinate_input, plan->block_input_counts.data(),
+                requested_coordinates, requested_count, dependencies,
+                &plan->locator8[0], &codec->fixed_factors8[0], work);
+        }
+        else if (use_tiled)
+            leopard::ff8::ReedSolomonDecodeHighTiledPlanned(
+                ops, rounded, codec->parent_count, codec->padded_side,
+                coordinate_input, plan->block_input_counts.data(),
+                requested_coordinates, plan->high_output_blocks.data(),
+                static_cast<unsigned>(plan->high_output_blocks.size()),
+                &plan->locator8[0], &codec->fixed_factors8[0],
+                high_requested_output, work);
         else if (codec->profile == LEO2_PROFILE_LOW_V1)
         {
             const leopard2_internal::OutputDependencyView dependencies =
@@ -2603,6 +2683,27 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
                 plan->generic_input_count, requested_coordinates,
                 requested_count, dependencies, &plan->locator16[0], work);
         }
+        else if (codec->profile == LEO2_PROFILE_LOW_V1 && use_tiled)
+        {
+            const leopard2_internal::OutputDependencyView dependencies =
+                leopard2_internal::MakeOutputDependencyView(
+                    codec->padded_side,
+                    plan->specialized_output_dependencies.data(),
+                    plan->specialized_output_dependencies.size());
+            leopard::ff16::ReedSolomonDecodeLowTiledPlanned(
+                ops, rounded, codec->parent_count, codec->padded_side,
+                coordinate_input, plan->block_input_counts.data(),
+                requested_coordinates, requested_count, dependencies,
+                &plan->locator16[0], &codec->fixed_factors16[0], work);
+        }
+        else if (use_tiled)
+            leopard::ff16::ReedSolomonDecodeHighTiledPlanned(
+                ops, rounded, codec->parent_count, codec->padded_side,
+                coordinate_input, plan->block_input_counts.data(),
+                requested_coordinates, plan->high_output_blocks.data(),
+                static_cast<unsigned>(plan->high_output_blocks.size()),
+                &plan->locator16[0], &codec->fixed_factors16[0],
+                high_requested_output, work);
         else if (codec->profile == LEO2_PROFILE_LOW_V1)
         {
             const leopard2_internal::OutputDependencyView dependencies =
@@ -2628,9 +2729,14 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
     for (size_t i = 0; i < plan->missing_originals.size(); ++i)
     {
         const uint32_t original_index = plan->missing_originals[i];
-        GatherShardFromKernel(codec, restored_original[original_index],
-                work[CoordinateForOriginal(codec, original_index)],
-                static_cast<size_t>(shard_bytes));
+        const void* const source = use_generic || !use_tiled
+            ? work[CoordinateForOriginal(codec, original_index)]
+            : codec->profile == LEO2_PROFILE_LOW_V1
+                ? work[CoordinateForOriginal(codec, original_index)]
+                : high_requested_output[i];
+        GatherShardFromKernel(
+            codec, restored_original[original_index], source,
+            static_cast<size_t>(shard_bytes));
     }
     return LEO2_SUCCESS;
 }
@@ -2668,7 +2774,9 @@ LEO2_EXPORT leo2_result leo2_decode_scratch_size(
     *scratch_bytes_out = 0;
     ScratchLayout layout;
     size_t rounded = 0;
-    const leo2_result result = DecodeLayout(codec, shard_bytes, layout, rounded);
+    size_t work_slot_count = 0;
+    const leo2_result result = DecodeLayout(
+        codec, NULL, shard_bytes, layout, rounded, work_slot_count);
     if (result != LEO2_SUCCESS)
         return result;
     *scratch_bytes_out = layout.total_bytes;

@@ -27,6 +27,7 @@
 */
 
 #include "Leopard2Plan.h"
+#include "Leopard2Backend.h"
 #include "LeopardFF8.h"
 #include "LeopardFF16.h"
 #include "leopard.h"
@@ -674,13 +675,21 @@ static uint64_t CheckFieldKernels(
         const uint16_t*, const uint32_t*, unsigned,
         const leopard2_internal::OutputDependencyView&, const Ffe*, const Ffe*,
         void**),
+    void (*low_tiled)(const leopard::backend::Ops&, uint64_t, unsigned,
+        unsigned, const void* const*, const uint16_t*, const uint32_t*,
+        unsigned, const leopard2_internal::OutputDependencyView&, const Ffe*,
+        const Ffe*, void**),
     void (*prepare_high)(unsigned, unsigned, Ffe*),
     void (*high_prepared)(uint64_t, unsigned, unsigned, const void* const*,
         const uint8_t*, const Ffe*, const Ffe*, void**),
     void (*high_planned)(uint64_t, unsigned, unsigned, const void* const*,
         const uint16_t*, const uint32_t*,
         const leopard2_internal::DecodeOutputBlock*, unsigned, const Ffe*,
-        const Ffe*, void**))
+        const Ffe*, void**),
+    void (*high_tiled)(const leopard::backend::Ops&, uint64_t, unsigned,
+        unsigned, const void* const*, const uint16_t*, const uint32_t*,
+        const leopard2_internal::DecodeOutputBlock*, unsigned, const Ffe*,
+        const Ffe*, void* const*, void**))
 {
     AlignedBytes sources(static_cast<size_t>(n) * kBytes);
     Require(sources.valid(), "aligned source allocation");
@@ -749,6 +758,16 @@ static uint64_t CheckFieldKernels(
         &low_factors[0], &actual_work[0]);
     Require(memcmp(expected_storage.data(), actual_storage.data(),
         expected_storage.size()) == 0, "low planned/prepared mismatch");
+    AlignedBytes low_tiled_storage(static_cast<size_t>(side) * 2 * kBytes);
+    std::vector<void*> low_tiled_work;
+    PrepareWorkPointers(side * 2, low_tiled_storage, low_tiled_work);
+    low_tiled(leopard::backend::GetDefaultOps(), kBytes, n, side,
+        &coordinate_data[0], &block_inputs[0], &low_coordinates[0],
+        low_coordinates.size(), low_view, &locator[0], &low_factors[0],
+        &low_tiled_work[0]);
+    Require(memcmp(expected_storage.data(), low_tiled_storage.data(),
+        static_cast<size_t>(side) * kBytes) == 0,
+        "low tiled/planned mismatch");
 
     std::vector<uint8_t> high_requested(n, 0);
     high_requested[side + 1] = high_requested[side * 3 + side / 2] =
@@ -766,8 +785,26 @@ static uint64_t CheckFieldKernels(
         &high_factors[0], &actual_work[0]);
     Require(memcmp(expected_storage.data(), actual_storage.data(),
         expected_storage.size()) == 0, "high planned/prepared mismatch");
+    const unsigned high_tiled_count =
+        side * 2 + static_cast<unsigned>(high_coordinates.size());
+    AlignedBytes high_tiled_storage(
+        static_cast<size_t>(high_tiled_count) * kBytes);
+    std::vector<void*> high_tiled_work;
+    PrepareWorkPointers(
+        high_tiled_count, high_tiled_storage, high_tiled_work);
+    high_tiled(leopard::backend::GetDefaultOps(), kBytes, n, side,
+        &coordinate_data[0], &block_inputs[0], &high_coordinates[0],
+        &high_blocks[0], high_blocks.size(), &locator[0], &high_factors[0],
+        &high_tiled_work[side * 2], &high_tiled_work[0]);
+    for (size_t i = 0; i < high_coordinates.size(); ++i)
+    {
+        Require(memcmp(expected_work[high_coordinates[i]],
+                high_tiled_work[side * 2 + i], kBytes) == 0,
+            "high tiled/planned requested output mismatch");
+    }
 
-    return static_cast<uint64_t>(n) * 3;
+    return static_cast<uint64_t>(n) * 3 + side * 3 +
+        high_coordinates.size();
 }
 
 } // namespace
@@ -790,9 +827,11 @@ int main()
         leopard::ff8::PrepareLowDecode,
         leopard::ff8::ReedSolomonDecodeLowPrepared,
         leopard::ff8::ReedSolomonDecodeLowPlanned,
+        leopard::ff8::ReedSolomonDecodeLowTiledPlanned,
         leopard::ff8::PrepareHighDecode,
         leopard::ff8::ReedSolomonDecodeHighPrepared,
-        leopard::ff8::ReedSolomonDecodeHighPlanned);
+        leopard::ff8::ReedSolomonDecodeHighPlanned,
+        leopard::ff8::ReedSolomonDecodeHighTiledPlanned);
     kernel_slots += CheckFieldKernels<leopard::ff16::ffe_t>(
         1024, 128, leopard::ff16::kModulus,
         leopard::ff16::ReedSolomonDecodePrepared,
@@ -800,9 +839,11 @@ int main()
         leopard::ff16::PrepareLowDecode,
         leopard::ff16::ReedSolomonDecodeLowPrepared,
         leopard::ff16::ReedSolomonDecodeLowPlanned,
+        leopard::ff16::ReedSolomonDecodeLowTiledPlanned,
         leopard::ff16::PrepareHighDecode,
         leopard::ff16::ReedSolomonDecodeHighPrepared,
-        leopard::ff16::ReedSolomonDecodeHighPlanned);
+        leopard::ff16::ReedSolomonDecodeHighPlanned,
+        leopard::ff16::ReedSolomonDecodeHighTiledPlanned);
     CheckPublicPlanReuseAndAllocation();
 
     std::cout << "leopard2 decode-plan schedule tests passed: dependency_queries="
