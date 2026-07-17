@@ -27,5 +27,13 @@ checking, independently fixed C++ loss vectors, and transactional no-replace
 publication preflight. It does not execute either real benchmark binary and
 must not be cited as timing evidence.
 
+`production-smoke` closes that mock/production boundary without creating
+performance evidence. It executes one tiny correctness invocation per requested
+backend against both exact real binaries, validates the complete benchmark-v2
+schema and checked round trip, and requires the original-data, transmitted-parity,
+and repaired-original digests to match between control and candidate. The source
+and repaired digests intentionally cover different domains and are not compared
+to one another.
+
 See `docs/reproduction/leopard2_low_encode_copy.md` for the exact build,
 reservation, collection, and replay commands.

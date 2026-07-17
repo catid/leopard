@@ -232,14 +232,49 @@ def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def open_regular_readonly(
+    path: Path, what: str, limit: int, *, require_single_link: bool = True
+) -> tuple[int, os.stat_result]:
+    """Open a bounded regular file without ever blocking on a special file."""
+    require(type(limit) is int and 0 <= limit <= MAX_BUILD_ARTIFACT_BYTES,
+            f"{what} byte limit is invalid")
+    try:
+        before = os.lstat(path)
+    except OSError as error:
+        raise EvidenceError(f"cannot inspect {what}: {error}") from error
+    require(stat.S_ISREG(before.st_mode) and
+            (not require_single_link or before.st_nlink == 1) and
+            0 <= before.st_size <= limit,
+            f"{what} is not a bounded " +
+            ("single-link " if require_single_link else "") + "regular file")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | \
+        getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise EvidenceError(f"cannot safely open {what}: {error}") from error
+    try:
+        opened = os.fstat(descriptor)
+        after = os.lstat(path)
+        require(stat.S_ISREG(opened.st_mode) and
+                (not require_single_link or opened.st_nlink == 1) and
+                (opened.st_dev, opened.st_ino) ==
+                (before.st_dev, before.st_ino) == (after.st_dev, after.st_ino) and
+                opened.st_size == before.st_size == after.st_size and
+                opened.st_size <= limit,
+                f"{what} changed type, identity, links, or size while opening")
+        return descriptor, opened
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
 def sha256_file(path: Path, limit: int = MAX_BUILD_ARTIFACT_BYTES) -> str:
     require(type(limit) is int and 0 <= limit <= MAX_BUILD_ARTIFACT_BYTES,
             "file digest limit is invalid")
-    descriptor = os.open(
-        path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
-        getattr(os, "O_NOFOLLOW", 0))
+    descriptor, initial = open_regular_readonly(
+        path, "file digest input", limit, require_single_link=False)
     try:
-        initial = os.fstat(descriptor)
         path_metadata = os.lstat(path)
         require(stat.S_ISREG(initial.st_mode) and
                 (initial.st_dev, initial.st_ino) ==
@@ -332,10 +367,8 @@ def parse_json_bytes(value: bytes, what: str, limit: int = MAX_JSON_BYTES) -> ob
 
 
 def read_json_limited(path: Path, what: str, limit: int = MAX_JSON_BYTES) -> object:
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags)
+    descriptor, metadata = open_regular_readonly(path, what, limit)
     try:
-        metadata = os.fstat(descriptor)
         path_metadata = os.lstat(path)
         require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1 and
                 (metadata.st_dev, metadata.st_ino) ==
@@ -352,7 +385,13 @@ def read_json_limited(path: Path, what: str, limit: int = MAX_JSON_BYTES) -> obj
             retained += len(block)
             require(retained <= limit, f"{what} exceeds {limit} bytes")
         final = os.fstat(descriptor)
-        require((final.st_size, final.st_mtime_ns, final.st_ctime_ns) ==
+        final_path = os.lstat(path)
+        require(stat.S_ISREG(final.st_mode) and final.st_nlink == 1 and
+                stat.S_ISREG(final_path.st_mode) and final_path.st_nlink == 1 and
+                (final.st_dev, final.st_ino) ==
+                (metadata.st_dev, metadata.st_ino) ==
+                (final_path.st_dev, final_path.st_ino) and
+                (final.st_size, final.st_mtime_ns, final.st_ctime_ns) ==
                 (metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns),
                 f"{what} changed while it was read")
         return parse_json_bytes(b"".join(chunks), what, limit)
@@ -394,6 +433,22 @@ def validate_path_text(value: object, what: str, absolute: bool | None = None) -
         len(part.encode("utf-8")) <= MAX_PATH_COMPONENT_BYTES for part in path.parts),
         f"{what} has too many or oversized components")
     return value
+
+
+def top_level_evidence_path(path: Path, what: str) -> Path:
+    """Reject a non-regular top-level input without following that entry."""
+    # abspath removes lexical '.'/'..' components but, unlike resolve(), never
+    # follows the top-level directory entry.  The subsequent descriptor open
+    # uses O_NOFOLLOW and rebinds the inode, covering a replacement race.
+    absolute = Path(os.path.abspath(os.fspath(path)))
+    validate_path_text(str(absolute), what, absolute=True)
+    try:
+        metadata = os.lstat(absolute)
+    except OSError as error:
+        raise EvidenceError(f"cannot inspect {what}: {error}") from error
+    require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1,
+            f"{what} is not a single-link regular file")
+    return absolute
 
 
 def safe_evidence_path(root: Path, relative: object) -> Path:
@@ -440,16 +495,20 @@ def verify_artifact(
             0 <= value["size"] <= limit,
             f"{what} identity is invalid")
     path = safe_evidence_path(root, value.get("path"))
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags)
+    descriptor, metadata = open_regular_readonly(path, what, limit)
     try:
-        metadata = os.fstat(descriptor)
         path_metadata = os.lstat(path)
         digest, size = sha256_descriptor(descriptor, limit)
         final = os.fstat(descriptor)
+        final_path = os.lstat(path)
         require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1 and
                 (metadata.st_dev, metadata.st_ino) ==
                 (path_metadata.st_dev, path_metadata.st_ino) and
+                stat.S_ISREG(final.st_mode) and final.st_nlink == 1 and
+                stat.S_ISREG(final_path.st_mode) and final_path.st_nlink == 1 and
+                (metadata.st_dev, metadata.st_ino) ==
+                (final.st_dev, final.st_ino) ==
+                (final_path.st_dev, final_path.st_ino) and
                 (metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns) ==
                 (final.st_size, final.st_mtime_ns, final.st_ctime_ns) and
                 size == metadata.st_size == value["size"] and
@@ -587,6 +646,7 @@ def validate_support_contract() -> dict[str, Any]:
         "cpu_stat_snapshot", "git_identity", "host_identity", "isolation_record",
         "PairLease", "parse_cpu_list", "runtime_closure", "validate_host_record",
         "validate_isolation", "validate_topology", "run_process_bounded",
+        "terminate_process_group_bounded",
     )
     for name in required_callables:
         require(callable(getattr(SUPPORT, name, None)),
@@ -1509,13 +1569,19 @@ class HardenedReservation:
         self._acquire_kernel_lease()
         try:
             parent = os.lstat(self.path.parent)
+            path_before = os.lstat(self.path)
             require(stat.S_ISDIR(parent.st_mode) and parent.st_uid == os.getuid() and
                     stat.S_IMODE(parent.st_mode) == 0o700,
                     "CPU reservation parent must be an owned mode-0700 directory")
+            require(stat.S_ISREG(path_before.st_mode) and
+                    path_before.st_uid == os.getuid() and
+                    path_before.st_nlink == 1 and
+                    stat.S_IMODE(path_before.st_mode) == 0o600,
+                    "CPU reservation must be an owned single-link mode-0600 file")
         except Exception:
             self._release_kernel_lease()
             raise
-        flags = os.O_RDONLY
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
         if hasattr(os, "O_CLOEXEC"):
             flags |= os.O_CLOEXEC
         if hasattr(os, "O_NOFOLLOW"):
@@ -1527,6 +1593,7 @@ class HardenedReservation:
             require(stat.S_ISREG(metadata.st_mode) and metadata.st_uid == os.getuid() and
                     metadata.st_nlink == 1 and stat.S_IMODE(metadata.st_mode) == 0o600 and
                     (metadata.st_dev, metadata.st_ino) ==
+                    (path_before.st_dev, path_before.st_ino) ==
                     (path_metadata.st_dev, path_metadata.st_ino),
                     "CPU reservation must be an owned single-link mode-0600 file")
             try:
@@ -1790,6 +1857,23 @@ def validate_execution_identity(
     return value
 
 
+def terminate_process_group_bounded(
+    process: subprocess.Popen[bytes], timeout: float = 5.0
+) -> tuple[bool, int]:
+    """SIGKILL a child process group and make one bounded reap attempt."""
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        return True, process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return False, (
+            process.returncode if isinstance(process.returncode, int)
+            else -int(signal.SIGKILL)
+        )
+
+
 def run_bounded(
     command: Sequence[str], environment: Mapping[str, str], timeout: float,
     pass_fds: Sequence[int] = (),
@@ -1847,25 +1931,26 @@ def run_bounded(
             if failure is not None:
                 break
         if failure is not None:
+            reaped, returncode = terminate_process_group_bounded(process)
+            if not reaped:
+                failure += "; process group was not reapable within five seconds"
+        else:
             try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        returncode = process.wait(timeout=5)
+                returncode = process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                reaped, returncode = terminate_process_group_bounded(process)
+                failure = (
+                    "benchmark closed its output but did not terminate within five seconds"
+                )
+                if not reaped:
+                    failure += "; process group was not reapable within five seconds"
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait()
-        returncode = process.returncode
+        reaped, returncode = terminate_process_group_bounded(process)
         failure = "benchmark process did not terminate within five seconds after SIGKILL"
+        if not reaped:
+            failure += "; bounded reap failed"
     except BaseException:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait()
+        terminate_process_group_bounded(process)
         raise
     finally:
         selector.close()
@@ -1916,8 +2001,11 @@ def validate_digests(value: object) -> dict[str, str]:
         require(isinstance(digest, str) and HEX64.fullmatch(digest) is not None,
                 f"invalid workload digest {name}")
         result[name] = digest
-    require(result["original_data"] == result["recovered_originals"],
-            "recovered-original digest differs from original data")
+    # benchmark-v2 deliberately uses different domains here: original_data
+    # covers every K source shard, while recovered_originals covers only the L
+    # missing shards.  Round-trip truth is asserted by the benchmark's checked
+    # decoder, and validate_invocations independently requires all three
+    # digests (including parity and repaired output) to match across A/B runs.
     return result
 
 
@@ -3163,7 +3251,7 @@ def run_campaign(options: argparse.Namespace) -> int:
 
 
 def verify_campaign(options: argparse.Namespace) -> int:
-    manifest_path = options.manifest.resolve(strict=True)
+    manifest_path = top_level_evidence_path(options.manifest, "manifest path")
     manifest = read_json_limited(manifest_path, "manifest")
     _, status = validate_manifest(
         manifest, manifest_path.parent,
@@ -3181,7 +3269,7 @@ def verify_campaign(options: argparse.Namespace) -> int:
 
 
 def verify_failed_campaign(options: argparse.Namespace) -> int:
-    failure_path = options.failure.resolve(strict=True)
+    failure_path = top_level_evidence_path(options.failure, "failure path")
     failure = read_json_limited(failure_path, "failure bundle")
     validate_failure(failure, failure_path.parent)
     print("failed low-encode-copy campaign diagnostics verified; not performance evidence")
@@ -3522,6 +3610,8 @@ def run_self_test(_options: argparse.Namespace) -> int:
                 "duration_ns", 0)),
             ("wire digest", lambda value: value["invocations"][0]["result"]
              ["workload_digests"].__setitem__("transmitted_parity", "f" * 16)),
+            ("recovery digest", lambda value: value["invocations"][0]["result"]
+             ["workload_digests"].__setitem__("recovered_originals", "e" * 16)),
             ("analysis", lambda value: value["analysis"]["cells"]
              [FIXED_CELLS[0].identifier]["encode_execution"].__setitem__(
                  "ci95_lower", 99.0)),
@@ -3589,12 +3679,19 @@ def run_self_test(_options: argparse.Namespace) -> int:
         expect_evidence_error(
             lambda: SUPPORT.validate_pair_lease_identity(
                 bad_lease, 0, 16), "boolean pair-lease CPU")
+        distinct_domains = validate_digests({
+            "algorithm": "fnv1a64", "original_data": "0" * 16,
+            "transmitted_parity": "1" * 16,
+            "recovered_originals": "2" * 16,
+        })
+        require(len(set(distinct_domains.values())) == 3,
+                "benchmark-v2 digest domains were conflated")
         expect_evidence_error(
             lambda: validate_digests({
                 "algorithm": "fnv1a64", "original_data": "0" * 16,
                 "transmitted_parity": "1" * 16,
-                "recovered_originals": "2" * 16,
-            }), "recovery digest mismatch")
+                "recovered_originals": "not-a-digest",
+            }), "malformed recovery digest")
         expect_evidence_error(
             lambda: validate_relinked_executable_sha("0" * 64, "1" * 64, "mock"),
             "stale executable relink")
@@ -3646,6 +3743,29 @@ def run_self_test(_options: argparse.Namespace) -> int:
         expect_evidence_error(
             lambda: safe_evidence_path(root, "artifact-link"),
             "retained artifact symlink")
+        top_level = root / "top-level.json"
+        write_bytes_exclusive(top_level, b"{}")
+        top_symlink = root / "top-level-symlink.json"
+        top_symlink.symlink_to(top_level)
+        expect_evidence_error(
+            lambda: top_level_evidence_path(top_symlink, "top-level symlink"),
+            "top-level evidence symlink")
+        top_hardlink = root / "top-level-hardlink.json"
+        os.link(top_level, top_hardlink)
+        expect_evidence_error(
+            lambda: top_level_evidence_path(top_hardlink, "top-level hardlink"),
+            "top-level evidence hardlink")
+        top_fifo = root / "top-level.fifo"
+        os.mkfifo(top_fifo, 0o600)
+        expect_evidence_error(
+            lambda: read_json_limited(top_fifo, "top-level FIFO"),
+            "nonblocking FIFO input")
+        expect_evidence_error(
+            lambda: top_level_evidence_path(root, "top-level directory"),
+            "top-level evidence directory")
+        expect_evidence_error(
+            lambda: top_level_evidence_path(Path("/dev/null"), "device input"),
+            "top-level evidence device")
         empty = root / "fast" / "children" / "unbound-empty-directory"
         empty.mkdir(mode=0o700)
         expect_evidence_error(
@@ -3678,6 +3798,51 @@ def run_self_test(_options: argparse.Namespace) -> int:
             require("exceeded" in str(error), "child timeout used the wrong error")
         else:
             raise EvidenceError("child timeout was accepted")
+        descendant_marker = root / "escaped-descendant"
+        descendant_program = (
+            "import os,pathlib,time\n"
+            "child=os.fork()\n"
+            "if child == 0:\n"
+            " time.sleep(.25);pathlib.Path(" + repr(str(descendant_marker)) +
+            ").write_text('escaped')\n"
+            "else:\n"
+            " while True: pass\n"
+        )
+        try:
+            run_bounded(
+                (str(Path(sys.executable).resolve()), "-c", descendant_program),
+                CHILD_ENVIRONMENT, 0.05)
+        except BoundedChildError:
+            pass
+        else:
+            raise EvidenceError("descendant timeout was accepted")
+        time.sleep(0.4)
+        require(not descendant_marker.exists(),
+                "timed-out benchmark descendant escaped process-group cleanup")
+
+        class NeverReaps:
+            pid = 999_999_999
+            returncode: int | None = None
+
+            def __init__(self) -> None:
+                self.wait_timeouts: list[float | None] = []
+
+            def wait(self, timeout: float | None = None) -> int:
+                self.wait_timeouts.append(timeout)
+                raise subprocess.TimeoutExpired(("never-reaps",), timeout)
+
+        never_reaps = NeverReaps()
+        reaped, _ = terminate_process_group_bounded(never_reaps)  # type: ignore[arg-type]
+        require(not reaped and never_reaps.wait_timeouts == [5.0] and
+                all(value is not None for value in never_reaps.wait_timeouts),
+                "benchmark cleanup performed an unbounded wait")
+        support_never_reaps = NeverReaps()
+        support_reaped, _ = SUPPORT.terminate_process_group_bounded(
+            support_never_reaps)  # type: ignore[arg-type]
+        require(not support_reaped and
+                support_never_reaps.wait_timeouts == [5.0] and
+                all(value is not None for value in support_never_reaps.wait_timeouts),
+                "support cleanup performed an unbounded wait")
         expect_evidence_error(
             lambda: SUPPORT.run_process_bounded(
                 ("/usr/bin/python3", "-c",
@@ -3741,6 +3906,42 @@ def run_self_test(_options: argparse.Namespace) -> int:
                 lambda: SUPPORT.PairLease(
                     cpu, sibling, root=directory_lease_root).__enter__(),
                 "pair lease directory replacement overlap")
+
+        butterfly_path = Path(__file__).resolve().parents[1] / \
+            "backend_butterfly" / "run_abba.py"
+        butterfly_spec = importlib.util.spec_from_file_location(
+            "leopard2_low_copy_butterfly_lease_test", butterfly_path)
+        require(butterfly_spec is not None and butterfly_spec.loader is not None,
+                "cannot load butterfly lease interoperability oracle")
+        butterfly = importlib.util.module_from_spec(butterfly_spec)
+        sys.modules[butterfly_spec.name] = butterfly
+        butterfly_spec.loader.exec_module(butterfly)
+
+        def expect_butterfly_rejection(action: Callable[[], object], name: str) -> None:
+            try:
+                action()
+            except butterfly.EvidenceError:
+                return
+            raise EvidenceError(f"butterfly interoperability accepted: {name}")
+
+        cross_root = root / "butterfly-cross-lease-root"
+        cross_root.mkdir(mode=0o700)
+        with SUPPORT.PairLease(cpu, sibling, root=cross_root) as identity:
+            Path(identity["path"]).rename(cross_root / "old.lock")
+            expect_butterfly_rejection(
+                lambda: butterfly.PairLease(
+                    sibling, cpu, root=cross_root).__enter__(),
+                "butterfly file-replacement lease overlap")
+        reverse_root = root / "butterfly-reverse-lease-root"
+        reverse_root.mkdir(mode=0o700)
+        with butterfly.PairLease(cpu, sibling, root=reverse_root):
+            moved = root / "butterfly-reverse-lease-root-moved"
+            reverse_root.rename(moved)
+            reverse_root.mkdir(mode=0o700)
+            expect_evidence_error(
+                lambda: SUPPORT.PairLease(
+                    sibling, cpu, root=reverse_root).__enter__(),
+                "butterfly directory-replacement lease overlap")
 
         immutable_root = root / "immutable"
         immutable_root.mkdir(mode=0o700)
@@ -3826,6 +4027,52 @@ def run_self_test(_options: argparse.Namespace) -> int:
     return 0
 
 
+def run_production_smoke(options: argparse.Namespace) -> int:
+    """Exercise real benchmark-v2 semantics without producing timing evidence."""
+    backends = tuple(options.backend or ("scalar",))
+    require(len(backends) == len(set(backends)),
+            "production-smoke backends must be unique")
+    require(isinstance(options.timeout, float) and math.isfinite(options.timeout) and
+            0 < options.timeout <= 60.0,
+            "production-smoke timeout must be in (0,60]")
+    executables = {
+        "control": options.control.absolute(),
+        "candidate": options.candidate.absolute(),
+    }
+    for side, executable in executables.items():
+        require_bounded_regular(
+            executable, f"production-smoke {side} executable",
+            MAX_BUILD_ARTIFACT_BYTES)
+        require(os.access(executable, os.X_OK),
+                f"production-smoke {side} executable is not executable")
+    campaign = {"iterations": 1, "reuse": 1, "warmup": 0}
+    for backend in backends:
+        base = FIXED_CELLS[0]
+        cell = Cell(
+            identifier=f"production-smoke-{backend}", backend=backend,
+            field=base.field, k=base.k, r=base.r,
+            shard_bytes=base.shard_bytes, role="target", seed=base.seed,
+            losses=base.losses)
+        validated: dict[str, dict[str, Any]] = {}
+        for side, executable in executables.items():
+            returncode, stdout, stderr, _ = run_bounded(
+                benchmark_arguments(executable, cell, campaign),
+                CHILD_ENVIRONMENT, options.timeout)
+            require(returncode == 0 and not stderr,
+                    f"production-smoke {side}/{backend} failed or wrote stderr")
+            parsed = parse_json_bytes(
+                stdout, f"production-smoke {side}/{backend}", MAX_STDOUT_BYTES)
+            validated[side] = validate_result(parsed, cell, campaign)
+        require(validated["control"]["digests"] ==
+                validated["candidate"]["digests"],
+                f"production-smoke control/candidate original, parity, or repaired "
+                f"digests differ for {backend}")
+    print(
+        "low-encode-copy production smoke passed real benchmark-v2 round-trip and "
+        "A/B wire/recovery semantics for: " + ",".join(backends))
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     commands = result.add_subparsers(dest="command", required=True)
@@ -3895,6 +4142,24 @@ def parser() -> argparse.ArgumentParser:
     self_test = commands.add_parser(
         "self-test", help="run fast mock/adversarial tests without real benchmarking")
     self_test.set_defaults(function=run_self_test)
+    smoke = commands.add_parser(
+        "production-smoke",
+        help="run a non-authoritative correctness/schema smoke against real binaries")
+    smoke.add_argument(
+        "--control",
+        default="/home/catid/leopard-wt-low-copy-baseline/build/"
+                "low-copy-authoritative/bench_leopard2",
+        type=Path)
+    smoke.add_argument(
+        "--candidate",
+        default="/home/catid/leopard-wt-low-copy/build/"
+                "low-copy-authoritative/bench_leopard2",
+        type=Path)
+    smoke.add_argument(
+        "--backend", action="append", choices=("scalar", "ssse3", "avx2"),
+        help="backend to smoke; repeat for more than one (default: scalar)")
+    smoke.add_argument("--timeout", default=30.0, type=float)
+    smoke.set_defaults(function=run_production_smoke)
     return result
 
 

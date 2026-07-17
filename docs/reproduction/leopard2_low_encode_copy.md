@@ -64,6 +64,12 @@ Loss coordinates use the benchmark's xorshift64 sequence (shifts 13, 7, and
 independently compiled C++ implementation before it invokes the Python mock,
 so a shared coordinator/mock RNG defect cannot authenticate itself.
 
+Benchmark-v2's `original_data` digest covers all K source shards, while
+`recovered_originals` covers only the L missing originals. They are deliberately
+different digest domains. The harness checks every repaired byte against its
+source internally; the collector requires that checked round trip and compares
+all three digests independently across every control and candidate invocation.
+
 ## Isolation and publication contract
 
 Launch affinity must contain exactly the chosen measured SMT pair plus at
@@ -103,9 +109,12 @@ reservation and an otherwise idle machine remain required.
 
 Children and build/provenance helpers have timeouts and separately bounded
 stdout and stderr collection; overflow or timeout kills the whole child process
-group. Retained JSON has byte, depth, node, string, integer, floating-point,
+group. Every subsequent reap attempt also has a finite timeout; an unkillable
+process is reported without an unbounded `wait`. Retained JSON has byte, depth,
+node, string, integer, floating-point,
 path, and collection limits. Retained-artifact hashing is bounded, rejects
-symlinks, binds an open descriptor to the named inode, and rejects concurrent
+symlinks, hardlinks, FIFOs and other special files before a nonblocking open,
+binds the open descriptor to the named inode, and rejects concurrent
 metadata or size changes. The retained-file inventory rejects symlinks,
 unexpected names, empty directories, excess entries, and files outside the
 declared caps.
@@ -168,6 +177,14 @@ Run this while other jobs are active if desired.  It never invokes either real
 benchmark:
 
     python3 experiments/leopard2/low_encode_copy/run_abba.py self-test
+
+Then close the mock/production semantic gap with the tiny real-harness smoke.
+It executes benchmark timing machinery only as a correctness/schema probe and
+does not retain or report timings, compare speed, reserve a core, or constitute
+authoritative evidence:
+
+    python3 experiments/leopard2/low_encode_copy/run_abba.py production-smoke \
+      --backend scalar --backend ssse3 --backend avx2
 
 ## Run the authoritative campaign
 

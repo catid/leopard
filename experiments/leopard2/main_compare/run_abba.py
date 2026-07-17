@@ -148,17 +148,23 @@ def bounded_file_snapshot(
     require(type(limit) is int and 0 <= limit <= MAX_IDENTITY_FILE_BYTES,
             "file identity limit is invalid")
     resolved = path.resolve(strict=True)
+    before = os.lstat(resolved)
+    require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and
+            0 <= before.st_size <= limit,
+            f"file identity is not a bounded single-link regular file: {resolved}")
     descriptor = os.open(
         resolved, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
-        getattr(os, "O_NOFOLLOW", 0))
+        getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     try:
         initial = os.fstat(descriptor)
         path_metadata = os.lstat(resolved)
-        require(stat.S_ISREG(initial.st_mode) and
+        require(stat.S_ISREG(initial.st_mode) and initial.st_nlink == 1 and
                 (initial.st_dev, initial.st_ino) ==
+                (before.st_dev, before.st_ino) ==
                 (path_metadata.st_dev, path_metadata.st_ino) and
                 0 <= initial.st_size <= limit,
-                f"file identity is not a bounded inode-bound regular file: {resolved}")
+                f"file identity is not a bounded inode-bound single-link regular file: "
+                f"{resolved}")
         digest = hashlib.sha256()
         prefix = b""
         retained = 0
@@ -175,7 +181,12 @@ def bounded_file_snapshot(
             offset += len(block)
             require(retained <= limit, f"file identity exceeds {limit} bytes")
         final = os.fstat(descriptor)
-        require(retained == initial.st_size and
+        final_path = os.lstat(resolved)
+        require(retained == initial.st_size and final.st_nlink == 1 and
+                stat.S_ISREG(final_path.st_mode) and final_path.st_nlink == 1 and
+                (final.st_dev, final.st_ino) ==
+                (initial.st_dev, initial.st_ino) ==
+                (final_path.st_dev, final_path.st_ino) and
                 (final.st_size, final.st_mtime_ns, final.st_ctime_ns,
                  final.st_dev, final.st_ino) ==
                 (initial.st_size, initial.st_mtime_ns, initial.st_ctime_ns,
@@ -229,6 +240,23 @@ def write_bytes_exclusive(path: Path, value: bytes) -> None:
             os.fsync(stream.fileno())
     except FileExistsError as error:
         raise EvidenceError(f"refusing to replace evidence file {path}") from error
+
+
+def terminate_process_group_bounded(
+    process: subprocess.Popen[bytes], timeout: float = 5.0
+) -> tuple[bool, int]:
+    """SIGKILL a child process group and make one bounded reap attempt."""
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        return True, process.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return False, (
+            process.returncode if isinstance(process.returncode, int)
+            else -int(signal.SIGKILL)
+        )
 
 
 def run_process_bounded(
@@ -291,26 +319,19 @@ def run_process_bounded(
             if failure is not None:
                 break
         if failure is not None:
+            reaped, returncode = terminate_process_group_bounded(process)
+            if not reaped:
+                failure += "; process group was not reapable within five seconds"
+        else:
             try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-        try:
-            returncode = process.wait(timeout=5)
-        except subprocess.TimeoutExpired as error:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
-            raise EvidenceError(
-                "command did not terminate after SIGKILL") from error
+                returncode = process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                reaped, returncode = terminate_process_group_bounded(process)
+                failure = "command closed its output but did not terminate"
+                if not reaped:
+                    failure += "; process group was not reapable within five seconds"
     except BaseException:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        process.wait()
+        terminate_process_group_bounded(process)
         raise
     finally:
         selector.close()
@@ -1110,13 +1131,19 @@ class PairLease:
             flags |= os.O_CLOEXEC
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
+        if hasattr(os, "O_NONBLOCK"):
+            flags |= os.O_NONBLOCK
         created_file = False
+        before: os.stat_result | None = None
         try:
             try:
                 self.descriptor = os.open(
                     self.path, flags | os.O_CREAT | os.O_EXCL, 0o600)
                 created_file = True
             except FileExistsError:
+                before = os.lstat(self.path)
+                require(stat.S_ISREG(before.st_mode),
+                        "CPU pair lease path is not a regular file")
                 self.descriptor = os.open(self.path, flags)
             if created_file:
                 os.fchmod(self.descriptor, 0o600)
@@ -1128,8 +1155,13 @@ class PairLease:
             raise EvidenceError(f"cannot open CPU pair lease: {error}") from error
         try:
             metadata = os.fstat(self.descriptor)
+            path_metadata = os.lstat(self.path)
             require(stat.S_ISREG(metadata.st_mode) and metadata.st_uid == os.getuid() and
-                    metadata.st_nlink == 1 and stat.S_IMODE(metadata.st_mode) == 0o600,
+                    metadata.st_nlink == 1 and stat.S_IMODE(metadata.st_mode) == 0o600 and
+                    (metadata.st_dev, metadata.st_ino) ==
+                    (path_metadata.st_dev, path_metadata.st_ino) and
+                    (before is None or (metadata.st_dev, metadata.st_ino) ==
+                     (before.st_dev, before.st_ino)),
                     "CPU pair lease file has unsafe ownership, type, links, or permissions")
             try:
                 fcntl.flock(self.descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)

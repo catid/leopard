@@ -108,7 +108,9 @@ def main() -> int:
         f"{options.k}:{options.r}:{options.bytes}:{options.seed}:"
         f"{options.field}:{options.backend}"
     ).encode("ascii")
-    digest = hashlib.sha256(identity).hexdigest()[:16]
+    original_digest = hashlib.sha256(b"original:" + identity).hexdigest()[:16]
+    parity_digest = hashlib.sha256(b"parity:" + identity).hexdigest()[:16]
+    recovered_digest = hashlib.sha256(b"recovered:" + identity).hexdigest()[:16]
     encode_input_bytes = options.k * options.bytes
     encode_output_bytes = options.r * options.bytes
     decode_input_bytes = (options.k - options.loss + options.r) * options.bytes
@@ -155,9 +157,9 @@ def main() -> int:
         },
         "workload_digests": {
             "algorithm": "fnv1a64",
-            "original_data": digest,
-            "transmitted_parity": digest,
-            "recovered_originals": digest,
+            "original_data": original_digest,
+            "transmitted_parity": parity_digest,
+            "recovered_originals": recovered_digest,
         },
         "memory": {
             "scratch_alignment": 64,

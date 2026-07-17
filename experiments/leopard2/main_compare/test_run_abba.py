@@ -10,9 +10,11 @@ import json
 import math
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from dataclasses import asdict
 from pathlib import Path
 
@@ -637,6 +639,33 @@ class MainCompareRunnerTests(unittest.TestCase):
             with self.assertRaises(runner.EvidenceError):
                 runner.validate_failure(failure, root, check_files=True)
 
+    def test_bounded_file_snapshot_rejects_fifo_without_open_block(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fifo = Path(directory) / "identity.fifo"
+            os.mkfifo(fifo, 0o600)
+            with self.assertRaises(runner.EvidenceError):
+                runner.bounded_file_snapshot(fifo)
+
+    def test_process_group_reap_never_uses_unbounded_wait(self) -> None:
+        class NeverReaps:
+            pid = 123456
+            returncode = None
+
+            def __init__(self) -> None:
+                self.calls: list[float | None] = []
+
+            def wait(self, timeout: float | None = None) -> int:
+                self.calls.append(timeout)
+                raise subprocess.TimeoutExpired(("never",), timeout)
+
+        process = NeverReaps()
+        with mock.patch.object(os, "killpg"):
+            reaped, returncode = runner.terminate_process_group_bounded(process)
+        self.assertFalse(reaped)
+        self.assertEqual(returncode, -9)
+        self.assertEqual(process.calls, [5.0])
+        self.assertNotIn(None, process.calls)
+
     def test_reservation_is_locked_and_canonical(self) -> None:
         payload = {
             "benchmark_cpu": 0,
@@ -705,6 +734,35 @@ class MainCompareRunnerTests(unittest.TestCase):
             with jerasure.PairLease(0, 1, root=root):
                 with self.assertRaises(runner.EvidenceError):
                     with runner.PairLease(1, 0, root=lease_directory):
+                        pass
+
+    def test_pair_lease_interoperates_with_butterfly_after_replacement(self) -> None:
+        butterfly_path = MODULE_PATH.resolve().parents[1] / \
+            "backend_butterfly" / "run_abba.py"
+        specification = importlib.util.spec_from_file_location(
+            "butterfly_pair_lease_test", butterfly_path)
+        self.assertIsNotNone(specification)
+        self.assertIsNotNone(specification.loader)
+        butterfly = importlib.util.module_from_spec(specification)
+        sys.modules[specification.name] = butterfly
+        specification.loader.exec_module(butterfly)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / runner.pair_lease_directory().name
+            with runner.PairLease(0, 1, root=root) as identity:
+                Path(identity["path"]).rename(root / "old.lock")
+                with self.assertRaises(butterfly.EvidenceError):
+                    with butterfly.PairLease(1, 0, root=root):
+                        pass
+            # The reverse direction remains exclusive even if the entire
+            # diagnostic directory is replaced while the socket lease lives.
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            root = parent / runner.pair_lease_directory().name
+            with butterfly.PairLease(0, 1, root=root):
+                root.rename(parent / "old-directory")
+                root.mkdir(mode=0o700)
+                with self.assertRaises(runner.EvidenceError):
+                    with runner.PairLease(1, 0, root=root):
                         pass
 
     def test_pair_lease_creation_ignores_restrictive_umask(self) -> None:
