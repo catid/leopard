@@ -41,10 +41,37 @@ platform with:
 It compares the hand-maintained project with CMake's production source graph
 and rejects missing or duplicate sources, filter drift, a project-wide ISA
 increase, unproved package or object-library link edges, or a CUDA dependency.
-Package discovery and link commands inside unmodeled CMake function or macro
-scopes fail closed.  This structural check is not native Windows compiler or
-runtime evidence; final MSVC and clang-cl build, test, and dispatch validation
-still requires a Windows host.
+The CMake proof follows compile, include, and link mutations onto every object
+library attached to `libleopard`; only the checked-in baseline definitions,
+include paths, runtime links, and the AVX2 object's `/arch:AVX2` option are
+accepted.  Directory-wide compile/link options, source or target property
+bypasses, compiler-flag and IPO rewrites, generated/custom build commands, and
+package discovery or build mutations inside unmodeled function/macro scopes
+fail closed.  Required options, compiler probes, package/install commands, and
+protected cache/control assignments are exact manifests rather than presence
+checks, and their evaluation order is pinned.  Project options and non-forced
+cache defaults remain symbolic so every supported command-line setting is
+checked, as are all x86 processor spellings recognized by the build.  When
+CUDA is off, tool discovery is limited to the checked objdump and shell probes;
+CUDA source properties, toolkit commands in tests, and CUDA/NVIDIA markers
+anywhere in the reachable CPU source/header text are rejected.  The sole
+marker-bearing test is the exact checked CUDA-optional self-test manifest.  The
+Visual Studio proof likewise pins the solution projects and configuration
+mappings, XML namespace, complete root evaluation phase order, item types,
+configuration tools, properties, and Windows case-insensitive source aliases.
+The constrained lexer understands arbitrary-delimiter CMake
+bracket comments and balances bracket arguments; bracket arguments themselves
+fail closed until the graph model has an explicit semantic use for them.
+
+This is a proof about mutations authored in the checked-in `CMakeLists.txt`,
+not a claim that an arbitrary invocation is trustworthy.  Environment flags,
+compiler launchers selected by a toolchain file, compiler or linker wrappers,
+and imported-package implementations are external trust boundaries and must be
+controlled by the release environment.  The CMake graph interpreter currently
+models the MSVC compiler branch only; clang-cl and the GNU-compatible compiler
+branch still require their own exact mutation manifests.  The structural check
+is also not native Windows compiler or runtime evidence; final MSVC and
+clang-cl build, test, and dispatch validation still requires a Windows host.
 
 Open limitation: this repository has no captured native Visual Studio 2015
 load/build result.  The structural gate proves the checked-in metadata and

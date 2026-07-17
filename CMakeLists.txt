@@ -159,7 +159,15 @@ if(ENABLE_OPENMP)
 endif(ENABLE_OPENMP)
 
 set(LEO2_X86_TARGET OFF)
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86|X86|x86_64|amd64|AMD64|i.86)$")
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86" OR
+   CMAKE_SYSTEM_PROCESSOR STREQUAL "X86" OR
+   CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" OR
+   CMAKE_SYSTEM_PROCESSOR STREQUAL "amd64" OR
+   CMAKE_SYSTEM_PROCESSOR STREQUAL "AMD64" OR
+   CMAKE_SYSTEM_PROCESSOR STREQUAL "i386" OR
+   CMAKE_SYSTEM_PROCESSOR STREQUAL "i486" OR
+   CMAKE_SYSTEM_PROCESSOR STREQUAL "i586" OR
+   CMAKE_SYSTEM_PROCESSOR STREQUAL "i686")
     set(LEO2_X86_TARGET ON)
 endif()
 
@@ -180,7 +188,9 @@ target_link_libraries(libleopard PUBLIC Threads::Threads)
 set(LEO2_HAVE_SSSE3_BACKEND OFF)
 set(LEO2_HAVE_AVX2_BACKEND OFF)
 if(LEO2_X86_TARGET)
-    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+       CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
+       CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
         check_cxx_compiler_flag("-mssse3" LEO2_FLAG_MSSSE3)
         check_cxx_compiler_flag("-mno-avx" LEO2_FLAG_MNO_AVX)
         if(LEO2_FLAG_MSSSE3 AND LEO2_FLAG_MNO_AVX)
@@ -276,11 +286,7 @@ install(EXPORT leopardTargets
     NAMESPACE leopard::
     DESTINATION "${LEOPARD_INSTALL_CMAKEDIR}")
 
-function(leo2_apply_backend_variant target_name)
-    if(LEO2_BACKEND_VARIANT STREQUAL "auto")
-        return()
-    endif()
-
+if(NOT LEO2_BACKEND_VARIANT STREQUAL "auto")
     if(NOT LEO2_X86_TARGET)
         message(FATAL_ERROR
             "LEO2_BACKEND_VARIANT=${LEO2_BACKEND_VARIANT} is unavailable on "
@@ -288,26 +294,24 @@ function(leo2_apply_backend_variant target_name)
     endif()
 
     if(LEO2_BACKEND_VARIANT STREQUAL "scalar")
-        target_compile_definitions(${target_name} PRIVATE
+        target_compile_definitions(libleopard PRIVATE
             LEO2_BACKEND_FORCE_SCALAR=1)
     elseif(LEO2_BACKEND_VARIANT STREQUAL "ssse3")
         if(NOT LEO2_HAVE_SSSE3_BACKEND)
             message(FATAL_ERROR
                 "LEO2_BACKEND_VARIANT=ssse3 is unavailable for this compiler")
         endif()
-        target_compile_definitions(${target_name} PRIVATE
+        target_compile_definitions(libleopard PRIVATE
             LEO2_BACKEND_FORCE_SSSE3=1)
     elseif(LEO2_BACKEND_VARIANT STREQUAL "avx2")
         if(NOT LEO2_HAVE_AVX2_BACKEND)
             message(FATAL_ERROR
                 "LEO2_BACKEND_VARIANT=avx2 is unavailable for this compiler")
         endif()
-        target_compile_definitions(${target_name} PRIVATE
+        target_compile_definitions(libleopard PRIVATE
             LEO2_BACKEND_FORCE_AVX2=1)
     endif()
-endfunction()
-
-leo2_apply_backend_variant(libleopard)
+endif()
 
 if(LEO2_BUILD_BENCHMARKS)
     add_executable(bench_leopard ${BENCH_SOURCE_FILES})
@@ -372,12 +376,15 @@ if(LEO2_BUILD_TESTS)
 
     endif()
 
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+    if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" OR
+       CMAKE_SYSTEM_PROCESSOR STREQUAL "amd64" OR
+       CMAKE_SYSTEM_PROCESSOR STREQUAL "AMD64")
         find_program(LEO2_OBJDUMP_EXECUTABLE NAMES objdump llvm-objdump)
         find_program(LEO2_SH_EXECUTABLE NAMES sh)
         if(LEO2_OBJDUMP_EXECUTABLE AND LEO2_SH_EXECUTABLE)
             set(LEO2_PORTABLE_ISA_SELF_TEST_ARGS)
-            if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND NOT MSVC)
+            if((CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
+                CMAKE_C_COMPILER_ID STREQUAL "Clang") AND NOT MSVC)
                 list(APPEND LEO2_PORTABLE_ISA_SELF_TEST_ARGS
                     "${CMAKE_C_COMPILER}" "${CMAKE_AR}")
             endif()
@@ -580,7 +587,9 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/test_codec_options_abi.c)
     set_target_properties(leopard2_codec_options_abi_test PROPERTIES
         LINKER_LANGUAGE CXX)
-    if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
+       CMAKE_C_COMPILER_ID STREQUAL "Clang" OR
+       CMAKE_C_COMPILER_ID STREQUAL "AppleClang")
         target_compile_options(leopard2_codec_options_abi_test PRIVATE
             -fshort-enums)
     endif()
@@ -753,5 +762,16 @@ if(LEO2_BUILD_FUZZERS)
     set_property(TARGET leopard2_api_fuzzer APPEND_STRING PROPERTY
         LINK_FLAGS " -fsanitize=fuzzer,address,undefined")
     target_link_libraries(leopard2_api_fuzzer Threads::Threads)
-    leo2_apply_backend_variant(leopard2_api_fuzzer)
+    if(NOT LEO2_BACKEND_VARIANT STREQUAL "auto")
+        if(LEO2_BACKEND_VARIANT STREQUAL "scalar")
+            target_compile_definitions(leopard2_api_fuzzer PRIVATE
+                LEO2_BACKEND_FORCE_SCALAR=1)
+        elseif(LEO2_BACKEND_VARIANT STREQUAL "ssse3")
+            target_compile_definitions(leopard2_api_fuzzer PRIVATE
+                LEO2_BACKEND_FORCE_SSSE3=1)
+        elseif(LEO2_BACKEND_VARIANT STREQUAL "avx2")
+            target_compile_definitions(leopard2_api_fuzzer PRIVATE
+                LEO2_BACKEND_FORCE_AVX2=1)
+        endif()
+    endif()
 endif()

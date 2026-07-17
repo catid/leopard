@@ -92,6 +92,35 @@ class ContractError(AssertionError):
     pass
 
 
+_CMAKE_BRACKET_OPEN = re.compile(r"\[(=*)\[")
+
+
+def cmake_bracket_span(text, index, label):
+    """Return (content, next index) for a CMake [=[...]=] construct."""
+    match = _CMAKE_BRACKET_OPEN.match(text, index)
+    if not match:
+        return None
+    closing = "]" + match.group(1) + "]"
+    end = text.find(closing, match.end())
+    if end < 0:
+        raise ContractError("unterminated CMake bracket " + label)
+    content = text[match.end():end]
+    if content.startswith("\r\n"):
+        content = content[2:]
+    elif content.startswith("\n"):
+        content = content[1:]
+    return content, end + len(closing)
+
+
+def cmake_comment_end(text, index):
+    """Return the first index after a line or bracket comment at '#'."""
+    bracket = cmake_bracket_span(text, index + 1, "comment")
+    if bracket is not None:
+        return bracket[1]
+    newline = text.find("\n", index)
+    return len(text) if newline < 0 else newline + 1
+
+
 def normalized_msbuild_option_text(text):
     return (text or "").replace('"', "").replace("'", "")
 
@@ -136,17 +165,24 @@ def cmake_commands(text):
             index += 1
             continue
         if text[index] == "#":
-            newline = text.find("\n", index)
-            index = length if newline < 0 else newline + 1
+            index = cmake_comment_end(text, index)
             continue
+        if cmake_bracket_span(text, index, "argument") is not None:
+            raise ContractError("stray CMake bracket argument")
         match = re.match(r"[A-Za-z_][A-Za-z0-9_]*", text[index:])
         if not match:
             index += 1
             continue
         name = match.group(0).lower()
         cursor = index + len(match.group(0))
-        while cursor < length and text[cursor].isspace():
-            cursor += 1
+        while cursor < length:
+            if text[cursor].isspace():
+                cursor += 1
+                continue
+            if text[cursor] == "#":
+                cursor = cmake_comment_end(text, cursor)
+                continue
+            break
         if cursor >= length or text[cursor] != "(":
             index = cursor
             continue
@@ -164,17 +200,22 @@ def cmake_commands(text):
             elif char == '"':
                 quoted = not quoted
             elif not quoted and char == "#":
-                newline = text.find("\n", cursor)
-                cursor = length if newline < 0 else newline
+                cursor = cmake_comment_end(text, cursor)
                 continue
-            elif not quoted and char == "(":
-                depth += 1
-            elif not quoted and char == ")":
-                depth -= 1
-                if depth == 0:
-                    commands.append((name, text[start:cursor]))
-                    cursor += 1
-                    break
+            elif not quoted:
+                bracket = (cmake_bracket_span(
+                    text, cursor, "argument") if char == "[" else None)
+                if bracket is not None:
+                    cursor = bracket[1]
+                    continue
+                if char == "(":
+                    depth += 1
+                elif char == ")":
+                    depth -= 1
+                    if depth == 0:
+                        commands.append((name, text[start:cursor]))
+                        cursor += 1
+                        break
             cursor += 1
         if depth:
             raise ContractError("unterminated CMake command: " + name)
@@ -185,33 +226,52 @@ def cmake_commands(text):
 def cmake_tokens(body):
     tokens = []
     token = []
+    token_started = False
     quoted = False
     escaped = False
 
     def flush():
-        if token:
+        nonlocal token_started
+        if token_started:
             tokens.append("".join(token))
             del token[:]
+            token_started = False
 
     index = 0
     while index < len(body):
         char = body[index]
         if escaped:
             token.append(char)
+            token_started = True
             escaped = False
         elif char == "\\":
+            token_started = True
             escaped = True
         elif char == '"':
+            token_started = True
             quoted = not quoted
         elif not quoted and char == "#":
             flush()
-            newline = body.find("\n", index)
-            index = len(body) if newline < 0 else newline
+            index = cmake_comment_end(body, index)
             continue
-        elif not quoted and (char.isspace() or char == ";"):
+        elif not quoted and char == "[":
+            bracket = cmake_bracket_span(body, index, "argument")
+            if bracket is not None:
+                raise ContractError(
+                    "CMake bracket arguments are unsupported by the "
+                    "production graph proof")
+            token.append(char)
+            token_started = True
+        elif not quoted and char.isspace():
             flush()
+        elif not quoted and char == ";":
+            if token_started:
+                flush()
+            else:
+                tokens.append("")
         else:
             token.append(char)
+            token_started = True
         index += 1
     if quoted or escaped:
         raise ContractError("unterminated quote or escape in CMake arguments")
@@ -223,40 +283,60 @@ def cmake_condition_tokens(body):
     """Tokenize an if() body while retaining quotes and grouping."""
     tokens = []
     token = []
+    token_started = False
     quoted = False
     token_was_quoted = False
     escaped = False
 
     def flush():
-        if token:
+        nonlocal token_started
+        if token_started:
             tokens.append(("".join(token), token_was_quoted))
             del token[:]
+            token_started = False
 
     index = 0
     while index < len(body):
         char = body[index]
         if escaped:
             token.append(char)
+            token_started = True
             escaped = False
         elif char == "\\":
+            token_started = True
             escaped = True
         elif char == '"':
+            token_started = True
             quoted = not quoted
             token_was_quoted = True
         elif not quoted and char == "#":
             flush()
-            newline = body.find("\n", index)
-            index = len(body) if newline < 0 else newline
+            index = cmake_comment_end(body, index)
             continue
+        elif not quoted and char == "[":
+            bracket = cmake_bracket_span(body, index, "argument")
+            if bracket is not None:
+                raise ContractError(
+                    "CMake bracket arguments are unsupported by the "
+                    "production graph proof")
+            token.append(char)
+            token_started = True
         elif not quoted and char in "()":
             flush()
             tokens.append((char, False))
             token_was_quoted = False
-        elif not quoted and (char.isspace() or char == ";"):
+        elif not quoted and char.isspace():
             flush()
+            token_was_quoted = False
+        elif not quoted and char == ";":
+            if token_started:
+                flush()
+            else:
+                tokens.append(("", False))
             token_was_quoted = False
         else:
             token.append(char)
+            token_started = True
         index += 1
     if quoted or escaped:
         raise ContractError("unterminated quote or escape in CMake condition")
@@ -391,12 +471,354 @@ class CMakeProductionGraph(object):
     _embedded_variable = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
     _target_objects = re.compile(
         r"^\$<TARGET_OBJECTS:([A-Za-z_][A-Za-z0-9_.+\-]*)>$")
+    _cuda_graph_marker = re.compile(
+        r"cuda|nvcc|nvrtc|nvidia|cudart|ptxas|nvlink|fatbinary|"
+        r"cuobjdump|nvc\+\+",
+        re.IGNORECASE)
+
+    _target_build_mutation_commands = {
+        "target_compile_definitions", "target_compile_features",
+        "target_compile_options", "target_include_directories",
+        "target_link_directories", "target_link_libraries",
+        "target_link_interface_libraries", "target_link_options",
+        "target_precompile_headers",
+    }
+    _directory_build_mutation_commands = {
+        "add_compile_definitions", "add_compile_options", "add_definitions",
+        "add_link_options", "include_directories", "link_directories",
+        "link_libraries", "remove_definitions",
+    }
+    _build_extension_commands = {
+        "add_custom_command", "add_custom_target", "add_dependencies",
+        "cmake_parse_arguments", "configure_file",
+        "configure_package_config_file", "execute_process", "file",
+        "try_compile", "try_run",
+    }
+    _modeled_command_names = {
+        "add_library", "add_subdirectory", "check_c_compiler_flag",
+        "check_cxx_compiler_flag", "cmake_dependent_option",
+        "cmake_language", "cmake_minimum_required", "cmake_parse_arguments",
+        "cmake_path",
+        "configure_package_config_file", "find_package",
+        "get_cmake_property", "get_directory_property",
+        "get_filename_component", "get_property",
+        "get_source_file_property", "get_target_property", "include",
+        "list", "load_command", "math", "option", "project",
+        "separate_arguments", "set", "set_directory_properties",
+        "set_property", "set_source_files_properties",
+        "set_target_properties", "string", "subdirs", "target_sources",
+        "unset", "enable_language",
+    }
+    _safe_root_command_names = {
+        "add_executable", "add_test", "else", "elseif", "enable_testing",
+        "endif", "find_program", "if", "install", "message",
+        "set_tests_properties",
+        "function", "endfunction", "macro", "endmacro", "foreach",
+        "endforeach", "while", "endwhile", "block", "endblock",
+    }
+    _protected_variable = re.compile(
+        r"^(?:CMAKE_.+|WIN32|MSVC|LEOPARD_INSTALL_CMAKEDIR|"
+        r"ENABLE_OPENMP|LEO2_FLAG_ARCH_AVX2|"
+        r"LEO2_(?:BACKEND_VARIANT(?:_NORMALIZED)?|BUILD_BENCHMARKS|BUILD_FUZZERS|"
+        r"BUILD_TESTS|ENABLE_CUDA)|"
+        r"CXX_FLAG_(?:O2|Oy|Zi|W4)|"
+        r"(?:OpenMP|OPENMP|Threads|THREADS)_.+)$")
+    _approved_production_mutations = {
+        ("libleopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_DISABLE_SSSE3_CODEGEN=1",
+            "LEO2_DISABLE_AVX2_CODEGEN=1")),
+        ("libleopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_HAVE_SSSE3_BACKEND=1")),
+        ("libleopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_HAVE_AVX2_BACKEND=1")),
+        ("libleopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1")),
+        ("libleopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_BACKEND_FORCE_SCALAR=1")),
+        ("libleopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_BACKEND_FORCE_SSSE3=1")),
+        ("libleopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_BACKEND_FORCE_AVX2=1")),
+        ("libleopard", "target_include_directories", (
+            "PUBLIC", "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>",
+            "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")),
+        ("libleopard", "target_link_libraries", (
+            "PUBLIC", "Threads::Threads")),
+        ("libleopard", "target_link_libraries", (
+            "PUBLIC", "OpenMP::OpenMP_CXX")),
+        ("libleopard", "target_link_libraries", (
+            "PUBLIC", "${OpenMP_CXX_FLAGS}")),
+        ("leopard2_backend_ssse3", "target_include_directories", (
+            "PRIVATE", "${CMAKE_CURRENT_SOURCE_DIR}")),
+        ("leopard2_backend_avx2", "target_include_directories", (
+            "PRIVATE", "${CMAKE_CURRENT_SOURCE_DIR}")),
+        ("leopard2_backend_avx2", "target_compile_options", (
+            "PRIVATE", "/arch:AVX2")),
+    }
+    _approved_protected_assignments = {
+        ("CMAKE_CONFIGURATION_TYPES", "Debug;Release"),
+        ("CMAKE_CXX_STANDARD", "11"),
+        ("CMAKE_BUILD_TYPE", "Release"),
+        ("CMAKE_CXX_FLAGS_RELEASE", "${CMAKE_CXX_FLAGS_RELEASE} /O2"),
+        ("CMAKE_CXX_FLAGS_DEBUG", "${CMAKE_CXX_FLAGS_DEBUG} /Oy"),
+        ("CMAKE_CXX_FLAGS_DEBUG", "${CMAKE_CXX_FLAGS_DEBUG} /Zi"),
+        ("CMAKE_CXX_FLAGS", "${CMAKE_CXX_FLAGS} /W4"),
+        ("CMAKE_CXX_FLAGS", "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}"),
+        ("CMAKE_EXE_LINKER_FLAGS",
+         "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}"),
+        ("LEOPARD_INSTALL_CMAKEDIR",
+         "${CMAKE_INSTALL_LIBDIR}/cmake/leopard"),
+        ("LEO2_BACKEND_VARIANT", "auto"),
+        ("LEO2_BACKEND_VARIANT", "${LEO2_BACKEND_VARIANT_NORMALIZED}"),
+    }
+    _approved_protected_set_commands = {
+        ("CMAKE_CONFIGURATION_TYPES", "Debug;Release", "CACHE", "STRING",
+         "", "FORCE"),
+        ("CMAKE_CXX_STANDARD", "11"),
+        ("CMAKE_BUILD_TYPE", "Release"),
+        ("CMAKE_CXX_FLAGS_RELEASE", "${CMAKE_CXX_FLAGS_RELEASE} /O2"),
+        ("CMAKE_CXX_FLAGS_DEBUG", "${CMAKE_CXX_FLAGS_DEBUG} /Oy"),
+        ("CMAKE_CXX_FLAGS_DEBUG", "${CMAKE_CXX_FLAGS_DEBUG} /Zi"),
+        ("CMAKE_CXX_FLAGS", "${CMAKE_CXX_FLAGS} /W4"),
+        ("CMAKE_CXX_FLAGS", "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}"),
+        ("CMAKE_EXE_LINKER_FLAGS",
+         "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}"),
+        ("LEOPARD_INSTALL_CMAKEDIR",
+         "${CMAKE_INSTALL_LIBDIR}/cmake/leopard", "CACHE", "STRING",
+         "Install directory for Leopard CMake package files"),
+        ("LEO2_BACKEND_VARIANT", "auto", "CACHE", "STRING",
+         "Diagnostic backend variant: auto, scalar, ssse3, or avx2"),
+        ("LEO2_BACKEND_VARIANT", "${LEO2_BACKEND_VARIANT_NORMALIZED}",
+         "CACHE", "STRING",
+         "Diagnostic backend variant: auto, scalar, ssse3, or avx2", "FORCE"),
+    }
+    _approved_package_configure = (
+        "cmake/leopardConfig.cmake.in",
+        "${CMAKE_CURRENT_BINARY_DIR}/leopardConfig.cmake",
+        "INSTALL_DESTINATION", "${LEOPARD_INSTALL_CMAKEDIR}")
+    _required_trusted_commands = Counter({
+        ("cmake_minimum_required", ("VERSION", "3.7")): 1,
+        ("project", ("leopard",)): 1,
+        ("add_library", ("libleopard", "STATIC", "${LIB_SOURCE_FILES}")): 1,
+        ("include", ("CMakeDependentOption",)): 1,
+        ("include", ("CheckCXXCompilerFlag",)): 1,
+        ("include", ("CMakePackageConfigHelpers",)): 1,
+        ("include", ("GNUInstallDirs",)): 1,
+        ("find_package", ("OpenMP",)): 1,
+        ("find_package", ("Threads", "REQUIRED")): 1,
+        ("option", (
+            "LEO2_BUILD_TESTS", "Build Leopard2 correctness tests", "ON")): 1,
+        ("option", (
+            "LEO2_BUILD_BENCHMARKS", "Build Leopard benchmark programs",
+            "ON")): 1,
+        ("option", (
+            "LEO2_BUILD_FUZZERS", "Build Leopard2 libFuzzer targets",
+            "OFF")): 1,
+        ("option", (
+            "LEO2_ENABLE_CUDA", "Build the optional Leopard2 CUDA backend",
+            "OFF")): 1,
+        ("string", (
+            "TOLOWER", "${LEO2_BACKEND_VARIANT}",
+            "LEO2_BACKEND_VARIANT_NORMALIZED")): 1,
+        ("configure_package_config_file", _approved_package_configure): 1,
+        ("check_cxx_compiler_flag", ("/O2", "CXX_FLAG_O2")): 1,
+        ("check_cxx_compiler_flag", ("/Oy", "CXX_FLAG_Oy")): 1,
+        ("check_cxx_compiler_flag", ("/Zi", "CXX_FLAG_Zi")): 1,
+        ("check_cxx_compiler_flag", ("/W4", "CXX_FLAG_W4")): 1,
+        ("check_cxx_compiler_flag",
+         ("/arch:AVX2", "LEO2_FLAG_ARCH_AVX2")): 1,
+        ("cmake_dependent_option", (
+            "ENABLE_OPENMP", "Enable OpenMP support", "ON",
+            "OPENMP_FOUND", "OFF")): 1,
+        ("install", (
+            "TARGETS", "libleopard", "EXPORT", "leopardTargets", "ARCHIVE",
+            "DESTINATION", "${CMAKE_INSTALL_LIBDIR}", "LIBRARY", "DESTINATION",
+            "${CMAKE_INSTALL_LIBDIR}", "RUNTIME", "DESTINATION",
+            "${CMAKE_INSTALL_BINDIR}")): 1,
+        ("install", (
+            "FILES", "leopard.h", "leopard2.h", "DESTINATION",
+            "${CMAKE_INSTALL_INCLUDEDIR}")): 1,
+        ("install", (
+            "FILES", "${CMAKE_CURRENT_BINARY_DIR}/leopardConfig.cmake",
+            "DESTINATION", "${LEOPARD_INSTALL_CMAKEDIR}")): 1,
+        ("install", (
+            "EXPORT", "leopardTargets", "FILE", "leopardTargets.cmake",
+            "NAMESPACE", "leopard::", "DESTINATION",
+            "${LEOPARD_INSTALL_CMAKEDIR}")): 1,
+    })
+    # CMake is an imperative language: proving that each security-sensitive
+    # command appears once is not enough when moving a package discovery,
+    # compiler probe, or cache assignment changes what later commands see.
+    # Keep one exact data-flow order for every trusted command, protected
+    # assignment, and production-target mutation.  Membership and guard checks
+    # below remain responsible for useful missing/duplicate diagnostics; this
+    # sequence closes reorder-only attacks.
+    _required_contract_event_order = (
+        ("trusted", ("cmake_minimum_required", ("VERSION", "3.7"))),
+        ("trusted", ("project", ("leopard",))),
+        ("trusted", ("include", ("CMakeDependentOption",))),
+        ("trusted", ("include", ("CheckCXXCompilerFlag",))),
+        ("trusted", ("include", ("CMakePackageConfigHelpers",))),
+        ("trusted", ("include", ("GNUInstallDirs",))),
+        ("protected", (
+            "CMAKE_CONFIGURATION_TYPES", "Debug;Release", "CACHE",
+            "STRING", "", "FORCE")),
+        ("protected", ("CMAKE_CXX_STANDARD", "11")),
+        ("trusted", ("option", (
+            "LEO2_BUILD_TESTS", "Build Leopard2 correctness tests", "ON"))),
+        ("trusted", ("option", (
+            "LEO2_BUILD_BENCHMARKS", "Build Leopard benchmark programs",
+            "ON"))),
+        ("trusted", ("option", (
+            "LEO2_BUILD_FUZZERS", "Build Leopard2 libFuzzer targets",
+            "OFF"))),
+        ("trusted", ("option", (
+            "LEO2_ENABLE_CUDA", "Build the optional Leopard2 CUDA backend",
+            "OFF"))),
+        ("protected", (
+            "LEO2_BACKEND_VARIANT", "auto", "CACHE", "STRING",
+            "Diagnostic backend variant: auto, scalar, ssse3, or avx2")),
+        ("trusted", ("string", (
+            "TOLOWER", "${LEO2_BACKEND_VARIANT}",
+            "LEO2_BACKEND_VARIANT_NORMALIZED"))),
+        ("protected", (
+            "LEO2_BACKEND_VARIANT", "${LEO2_BACKEND_VARIANT_NORMALIZED}",
+            "CACHE", "STRING",
+            "Diagnostic backend variant: auto, scalar, ssse3, or avx2",
+            "FORCE")),
+        ("guarded", ("enable_language", ("CUDA",))),
+        ("protected", ("CMAKE_BUILD_TYPE", "Release")),
+        ("trusted", ("check_cxx_compiler_flag", ("/O2", "CXX_FLAG_O2"))),
+        ("trusted", ("check_cxx_compiler_flag", ("/Oy", "CXX_FLAG_Oy"))),
+        ("trusted", ("check_cxx_compiler_flag", ("/Zi", "CXX_FLAG_Zi"))),
+        ("trusted", ("check_cxx_compiler_flag", ("/W4", "CXX_FLAG_W4"))),
+        ("protected", (
+            "CMAKE_CXX_FLAGS_RELEASE", "${CMAKE_CXX_FLAGS_RELEASE} /O2")),
+        ("protected", (
+            "CMAKE_CXX_FLAGS_DEBUG", "${CMAKE_CXX_FLAGS_DEBUG} /Oy")),
+        ("protected", (
+            "CMAKE_CXX_FLAGS_DEBUG", "${CMAKE_CXX_FLAGS_DEBUG} /Zi")),
+        ("protected", ("CMAKE_CXX_FLAGS", "${CMAKE_CXX_FLAGS} /W4")),
+        ("trusted", ("find_package", ("OpenMP",))),
+        ("trusted", ("find_package", ("Threads", "REQUIRED"))),
+        ("trusted", ("cmake_dependent_option", (
+            "ENABLE_OPENMP", "Enable OpenMP support", "ON",
+            "OPENMP_FOUND", "OFF"))),
+        ("protected", (
+            "CMAKE_CXX_FLAGS", "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")),
+        ("protected", (
+            "CMAKE_EXE_LINKER_FLAGS",
+            "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")),
+        ("trusted", ("add_library", (
+            "libleopard", "STATIC", "${LIB_SOURCE_FILES}"))),
+        ("mutation", ("libleopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_DISABLE_SSSE3_CODEGEN=1",
+            "LEO2_DISABLE_AVX2_CODEGEN=1"))),
+        ("mutation", ("libleopard", "target_include_directories", (
+            "PUBLIC", "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>",
+            "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"))),
+        ("mutation", ("libleopard", "target_link_libraries", (
+            "PUBLIC", "Threads::Threads"))),
+        ("mutation", ("leopard2_backend_ssse3",
+            "target_include_directories", (
+                "PRIVATE", "${CMAKE_CURRENT_SOURCE_DIR}"))),
+        ("trusted", ("check_cxx_compiler_flag", (
+            "/arch:AVX2", "LEO2_FLAG_ARCH_AVX2"))),
+        ("mutation", ("leopard2_backend_avx2",
+            "target_include_directories", (
+                "PRIVATE", "${CMAKE_CURRENT_SOURCE_DIR}"))),
+        ("mutation", ("leopard2_backend_avx2", "target_compile_options", (
+            "PRIVATE", "/arch:AVX2"))),
+        ("mutation", ("libleopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_HAVE_SSSE3_BACKEND=1"))),
+        ("mutation", ("libleopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_HAVE_AVX2_BACKEND=1"))),
+        ("mutation", ("libleopard", "target_link_libraries", (
+            "PUBLIC", "OpenMP::OpenMP_CXX"))),
+        ("mutation", ("libleopard", "target_link_libraries", (
+            "PUBLIC", "${OpenMP_CXX_FLAGS}"))),
+        ("protected", (
+            "LEOPARD_INSTALL_CMAKEDIR",
+            "${CMAKE_INSTALL_LIBDIR}/cmake/leopard", "CACHE", "STRING",
+            "Install directory for Leopard CMake package files")),
+        ("trusted", ("configure_package_config_file",
+            _approved_package_configure)),
+        ("trusted", ("install", (
+            "TARGETS", "libleopard", "EXPORT", "leopardTargets", "ARCHIVE",
+            "DESTINATION", "${CMAKE_INSTALL_LIBDIR}", "LIBRARY",
+            "DESTINATION", "${CMAKE_INSTALL_LIBDIR}", "RUNTIME",
+            "DESTINATION", "${CMAKE_INSTALL_BINDIR}"))),
+        ("trusted", ("install", (
+            "FILES", "leopard.h", "leopard2.h", "DESTINATION",
+            "${CMAKE_INSTALL_INCLUDEDIR}"))),
+        ("trusted", ("install", (
+            "FILES", "${CMAKE_CURRENT_BINARY_DIR}/leopardConfig.cmake",
+            "DESTINATION", "${LEOPARD_INSTALL_CMAKEDIR}"))),
+        ("trusted", ("install", (
+            "EXPORT", "leopardTargets", "FILE", "leopardTargets.cmake",
+            "NAMESPACE", "leopard::", "DESTINATION",
+            "${LEOPARD_INSTALL_CMAKEDIR}"))),
+        ("mutation", ("libleopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_BACKEND_FORCE_SCALAR=1"))),
+        ("mutation", ("libleopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_BACKEND_FORCE_SSSE3=1"))),
+        ("mutation", ("libleopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_BACKEND_FORCE_AVX2=1"))),
+        ("mutation", ("libleopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1"))),
+    )
+    _dangerous_build_properties = {
+        "COMPILE_DEFINITIONS", "COMPILE_FEATURES", "COMPILE_FLAGS",
+        "COMPILE_OPTIONS", "CXX_COMPILER_LAUNCHER", "CXX_EXTENSIONS",
+        "CXX_STANDARD", "CXX_STANDARD_REQUIRED", "IMPORTED_IMPLIB",
+        "IMPORTED_LIBNAME", "IMPORTED_LINK_DEPENDENT_LIBRARIES",
+        "IMPORTED_LINK_INTERFACE_LIBRARIES", "IMPORTED_LOCATION",
+        "IMPORTED_OBJECTS", "INCLUDE_DIRECTORIES",
+        "INTERFACE_COMPILE_DEFINITIONS", "INTERFACE_COMPILE_FEATURES",
+        "INTERFACE_COMPILE_OPTIONS", "INTERFACE_INCLUDE_DIRECTORIES",
+        "INTERFACE_SOURCES",
+        "INTERFACE_LINK_DIRECTORIES", "INTERFACE_LINK_LIBRARIES",
+        "INTERFACE_LINK_LIBRARIES_DIRECT",
+        "INTERFACE_LINK_LIBRARIES_DIRECT_EXCLUDE",
+        "INTERFACE_LINK_OPTIONS", "INTERFACE_PRECOMPILE_HEADERS",
+        "INTERPROCEDURAL_OPTIMIZATION", "LINK_DIRECTORIES", "LINK_FLAGS",
+        "LINK_INTERFACE_LIBRARIES", "LINK_LIBRARIES", "LINK_OPTIONS",
+        "LINKER_TYPE", "MSVC_RUNTIME_LIBRARY", "POSITION_INDEPENDENT_CODE",
+        "PRECOMPILE_HEADERS",
+        "RULE_LAUNCH_COMPILE", "RULE_LAUNCH_CUSTOM", "RULE_LAUNCH_LINK",
+        "STATIC_LIBRARY_OPTIONS", "UNITY_BUILD",
+    }
+    _dangerous_build_property_prefixes = (
+        "COMPILE_DEFINITIONS_", "IMPORTED_IMPLIB_", "IMPORTED_LOCATION_",
+        "IMPORTED_OBJECTS_", "INTERPROCEDURAL_OPTIMIZATION_", "LINK_FLAGS_",
+        "VS_",
+    )
+    _approved_target_property_commands = {
+        ("set_target_properties", (
+            "leopard2_codec_options_abi_test", "PROPERTIES",
+            "LINKER_LANGUAGE", "CXX")),
+        ("set_property", (
+            "TARGET", "leopard2_api_fuzzer", "APPEND_STRING", "PROPERTY",
+            "LINK_FLAGS", " -fsanitize=fuzzer,address,undefined")),
+    }
+    _approved_nontarget_property_commands = {
+        ("set_property", (
+            "CACHE", "LEO2_BACKEND_VARIANT", "PROPERTY", "STRINGS",
+            "auto", "scalar", "ssse3", "avx2")),
+    }
 
     def __init__(self, text, processor="AMD64", pointer_size="8",
-                 platform_name="x64"):
+                 platform_name="x64", require_mutation_contract=False):
         self.raw_commands = cmake_commands(text)
         self.commands = [(name, cmake_tokens(body))
                          for name, body in self.raw_commands]
+        if (require_mutation_contract and
+                self.commands[:2] != [
+                    ("cmake_minimum_required", ["VERSION", "3.7"]),
+                    ("project", ["leopard"])]):
+            raise ContractError(
+                "CMake bootstrap must begin with exact minimum and project "
+                "commands")
         source_commands = {
             "add_library", "target_sources", "set_source_files_properties",
             "set_property", "set_target_properties"}
@@ -409,7 +831,13 @@ class CMakeProductionGraph(object):
         self.variables = {}
         self.targets = {}
         self.declared_targets = set()
+        self.target_aliases = {}
         self.attachments = {}
+        self.target_build_mutations = []
+        self.trusted_command_counts = Counter()
+        self.protected_assignments = []
+        self.contract_events = []
+        self.require_mutation_contract = require_mutation_contract
         self.source_property_references = []
         # Visual Studio 14 and v140 are the repository's declared legacy
         # configuration.  Compiler capability probes remain symbolic.
@@ -423,6 +851,8 @@ class CMakeProductionGraph(object):
                 "CMAKE_VS_PLATFORM_NAME": platform_name,
                 "CMAKE_GENERATOR_PLATFORM": platform_name}.items():
             self.variables[name] = [(BOOL_TRUE, (value,), ())]
+        self.variables["CMAKE_CURRENT_SOURCE_DIR"] = [
+            (BOOL_TRUE, (".",), ())]
         self._read_graph()
 
     @staticmethod
@@ -512,6 +942,162 @@ class CMakeProductionGraph(object):
             raise ContractError("unresolved CMake target name: " + token)
         return names[0]
 
+    def _canonical_target(self, name):
+        visited = []
+        while name in self.target_aliases:
+            if name in visited:
+                raise ContractError(
+                    "cyclic CMake target ALIAS: " + " -> ".join(
+                        visited + [name]))
+            visited.append(name)
+            name = self.target_aliases[name]
+        return name
+
+    def _record_target_build_mutation(self, command, tokens, guard, reasons):
+        if not tokens:
+            raise ContractError("CMake " + command + " has no target")
+        target = self._target_name(tokens[0], guard)
+        if target in self.target_aliases:
+            raise ContractError(
+                "CMake target ALIAS cannot be mutated: " + target)
+        specification = tuple(tokens[1:])
+        self.target_build_mutations.append(
+            (target, command, specification, guard, tuple(reasons)))
+        key = (target, command, specification)
+        if key in self._approved_production_mutations:
+            self.contract_events.append(("mutation", key))
+
+    def _record_trusted_command(self, command, tokens, guard, reasons):
+        key = (command, tuple(tokens))
+        if key not in self._required_trusted_commands:
+            return
+        if reasons or not bool_tautology(guard):
+            raise ContractError(
+                "trusted CMake command guard drift: " + command + " " +
+                repr(tuple(reasons)))
+        self.trusted_command_counts[key] += 1
+        self.contract_events.append(("trusted", key))
+
+    @classmethod
+    def _is_protected_variable(cls, name):
+        return cls._protected_variable.match(name) is not None
+
+    @classmethod
+    def _is_dangerous_build_property(cls, name):
+        upper = name.upper()
+        return (upper in cls._dangerous_build_properties or
+                upper.startswith(cls._dangerous_build_property_prefixes))
+
+    @staticmethod
+    def _backend_variant_comparison(value):
+        symbol = (
+            BOOL_SYMBOL_PREFIX +
+            "external-cache:leo2_backend_variant",)
+        return bool_atom(
+            "comparison:" + repr((symbol, "STREQUAL", (value,))))
+
+    @classmethod
+    def _expected_production_mutation_guard(cls, key):
+        target, command, specification = key
+        forced_variants = {
+            ("PRIVATE", "LEO2_BACKEND_FORCE_SCALAR=1"): "scalar",
+            ("PRIVATE", "LEO2_BACKEND_FORCE_SSSE3=1"): "ssse3",
+            ("PRIVATE", "LEO2_BACKEND_FORCE_AVX2=1"): "avx2",
+        }
+        if specification in forced_variants:
+            auto = cls._backend_variant_comparison("auto")
+            scalar = cls._backend_variant_comparison("scalar")
+            ssse3 = cls._backend_variant_comparison("ssse3")
+            guard = bool_not(auto)
+            variant = forced_variants[specification]
+            if variant == "scalar":
+                return bool_and(guard, scalar)
+            guard = bool_and(guard, bool_not(scalar))
+            if variant == "ssse3":
+                return bool_and(guard, ssse3)
+            return bool_and(
+                guard, bool_not(ssse3),
+                cls._backend_variant_comparison("avx2"))
+        if specification == ("PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1"):
+            return bool_atom("option:LEO2_BUILD_TESTS")
+        if (target == "leopard2_backend_avx2" or
+                specification == ("PRIVATE", "LEO2_HAVE_AVX2_BACKEND=1")):
+            return bool_atom("probe:LEO2_FLAG_ARCH_AVX2")
+        if (command == "target_link_libraries" and specification ==
+                ("PUBLIC", "OpenMP::OpenMP_CXX")):
+            return bool_and(
+                bool_atom("dependent-option:ENABLE_OPENMP"),
+                bool_atom("predicate:TARGET:OpenMP::OpenMP_CXX"))
+        if (command == "target_link_libraries" and specification ==
+                ("PUBLIC", "${OpenMP_CXX_FLAGS}")):
+            enabled = bool_atom("dependent-option:ENABLE_OPENMP")
+            imported = bool_atom("predicate:TARGET:OpenMP::OpenMP_CXX")
+            return bool_and(enabled, bool_not(bool_and(enabled, imported)))
+        return BOOL_TRUE
+
+    @staticmethod
+    def _formula_equivalent(left, right):
+        difference = bool_or(
+            bool_and(left, bool_not(right)),
+            bool_and(right, bool_not(left)))
+        return not bool_satisfiable(difference)
+
+    @classmethod
+    def _validate_protected_assignment(cls, name, values, tokens):
+        if (tuple(tokens) not in cls._approved_protected_set_commands or
+                len(values) != 1 or (name, values[0]) not in
+                cls._approved_protected_assignments):
+            raise ContractError(
+                "unapproved production compiler-control variable mutation: " +
+                name)
+
+    @staticmethod
+    def _expected_protected_assignment_guard(name, values):
+        value = values[0]
+        probes = {
+            "${CMAKE_CXX_FLAGS_RELEASE} /O2": "CXX_FLAG_O2",
+            "${CMAKE_CXX_FLAGS_DEBUG} /Oy": "CXX_FLAG_Oy",
+            "${CMAKE_CXX_FLAGS_DEBUG} /Zi": "CXX_FLAG_Zi",
+            "${CMAKE_CXX_FLAGS} /W4": "CXX_FLAG_W4",
+        }
+        if value in probes:
+            return bool_atom("probe:" + probes[value])
+        if name in {"CMAKE_CXX_FLAGS", "CMAKE_EXE_LINKER_FLAGS"} and (
+                "OpenMP" in value):
+            return bool_atom("dependent-option:ENABLE_OPENMP")
+        if name == "CMAKE_BUILD_TYPE":
+            return bool_not(bool_atom("external:CMAKE_BUILD_TYPE"))
+        return BOOL_TRUE
+
+    def _validate_required_protected_assignments(self):
+        observed = Counter(
+            tokens
+            for unused_name, unused_values, tokens, unused_guard,
+            unused_reasons in
+            self.protected_assignments)
+        expected = Counter(self._approved_protected_set_commands)
+        if observed != expected:
+            missing = sorted((expected - observed).elements(), key=repr)
+            extra = sorted((observed - expected).elements(), key=repr)
+            raise ContractError(
+                "missing or duplicate protected CMake assignment: missing=" +
+                repr(missing) + " extra=" + repr(extra))
+        for name, values, unused_tokens, guard, reasons in (
+                self.protected_assignments):
+            allowed_reasons = ()
+            if name == "CMAKE_BUILD_TYPE":
+                allowed_reasons = (
+                    "unmodeled CMake conditional variable: CMAKE_BUILD_TYPE",)
+            if reasons != allowed_reasons:
+                raise ContractError(
+                    "unsupported condition guards protected CMake assignment: " +
+                    name + " " + repr(reasons))
+            expected_guard = self._expected_protected_assignment_guard(
+                name, values)
+            if not self._formula_equivalent(guard, expected_guard):
+                raise ContractError(
+                    "protected CMake assignment guard drift: " + name)
+
     def _mutation_variable(self, token, active_guard, command):
         names = self._expand([token], active_guard)
         if len(names) != 1 or not re.match(
@@ -556,10 +1142,10 @@ class CMakeProductionGraph(object):
             return BOOL_FALSE
         if upper in {"1", "TRUE", "ON", "YES", "Y"}:
             return BOOL_TRUE
-        try:
-            return BOOL_TRUE if float(text) != 0 else BOOL_FALSE
-        except ValueError:
-            return BOOL_TRUE
+        # CMake's numeric/truth parsing is its own language contract.  Values
+        # outside the explicit constants above remain reachable rather than
+        # being concretized with Python's numeric grammar.
+        return bool_atom("truth:" + repr(text))
 
     def _condition_operand(self, token, active_guard, standalone=False):
         text, quoted = token
@@ -582,12 +1168,14 @@ class CMakeProductionGraph(object):
             constants = {
                 "0", "1", "FALSE", "TRUE", "OFF", "ON", "NO", "YES",
                 "N", "Y", "IGNORE", "NOTFOUND"}
-            reasons = ()
             if (re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", text) and
                     text.upper() not in constants):
-                reasons = (
-                    "unmodeled unquoted CMake conditional operand: " + text,)
-            return [(BOOL_TRUE, (text,), reasons)]
+                reason = (
+                    "unmodeled unquoted CMake conditional operand: " + text)
+                return [(BOOL_TRUE,
+                         (BOOL_SYMBOL_PREFIX + "external:" + text,),
+                         (reason,))]
+            return [(BOOL_TRUE, (text,), ())]
         variants = self._variable_variants(name, active_guard)
         if not variants:
             reason = "unmodeled CMake conditional variable: " + name
@@ -620,18 +1208,14 @@ class CMakeProductionGraph(object):
         if operation == "STREQUAL":
             return BOOL_TRUE if left_text == right_text else BOOL_FALSE
         if operation == "MATCHES":
-            try:
-                matched = re.search(right_text, left_text) is not None
-            except re.error as error:
-                raise ContractError(
-                    "invalid CMake MATCHES expression: " + str(error))
-            return BOOL_TRUE if matched else BOOL_FALSE
+            # CMake's regex engine and Python's are not dialect-equivalent.
+            # Keep every MATCHES result symbolic so dialect differences cannot
+            # make a real-reachable production mutation disappear from proof.
+            return bool_atom(
+                "matches:" + repr((left_text, right_text)))
         if operation == "EQUAL":
-            try:
-                matched = float(left_text) == float(right_text)
-            except ValueError:
-                matched = False
-            return BOOL_TRUE if matched else BOOL_FALSE
+            return bool_atom(
+                "numeric-equal:" + repr((left_text, right_text)))
         return bool_atom("unsupported-comparison:" +
                          repr((left_text, operation, right_text)))
 
@@ -655,7 +1239,13 @@ class CMakeProductionGraph(object):
                        for value in (left_value or (), right_value or ())):
                     reasons.append(
                         "unsupported comparison of symbolic CMake boolean")
-                if operation not in {"STREQUAL", "MATCHES", "EQUAL"}:
+                if operation == "MATCHES":
+                    reasons.append(
+                        "CMake MATCHES regex dialect is intentionally symbolic")
+                elif operation == "EQUAL":
+                    reasons.append(
+                        "CMake numeric comparison is intentionally symbolic")
+                elif operation != "STREQUAL":
                     reasons.append(
                         "unsupported CMake comparison operator: " + operation)
         return formula, self._merge_reasons(reasons)
@@ -797,14 +1387,21 @@ class CMakeProductionGraph(object):
             ("PythonInterp", "QUIET"),
             ("Python3", "COMPONENTS", "Interpreter", "QUIET"),
         }
-        approved_libleopard_links = {
-            ("PUBLIC", "Threads::Threads"),
-            ("PUBLIC", "OpenMP::OpenMP_CXX"),
-            ("PUBLIC", "${OpenMP_CXX_FLAGS}"),
-        }
-
         for command, body in self.raw_commands:
             tokens = cmake_tokens(body)
+            if any("$CACHE{" in token or "$ENV{" in token
+                   for token in tokens):
+                raise ContractError(
+                    "external cache/environment expansion is unsupported in "
+                    "the production graph proof")
+            if command not in (
+                    self._modeled_command_names |
+                    self._target_build_mutation_commands |
+                    self._directory_build_mutation_commands |
+                    self._build_extension_commands |
+                    self._safe_root_command_names):
+                raise ContractError(
+                    "unmodeled root CMake command: " + command)
             if command == "if":
                 conditional_depth += 1
                 if unsupported_depth:
@@ -855,9 +1452,16 @@ class CMakeProductionGraph(object):
                     reasons = frame["parent_reasons"]
                 continue
             if command in starts:
-                stack.append({"type": command})
-                unsupported_depth += 1
-                continue
+                if (command in {"function", "macro"} and tokens and
+                        tokens[0].lower() in (
+                            self._target_build_mutation_commands |
+                            self._directory_build_mutation_commands |
+                            self._build_extension_commands |
+                            self._modeled_command_names)):
+                    raise ContractError(
+                        "CMake build-graph command shadowing is unsupported: " +
+                        tokens[0])
+                raise ContractError("unsupported CMake block: " + command)
             if command in ends:
                 if not stack or stack[-1]["type"] != ends[command]:
                     raise ContractError("unbalanced CMake " + command)
@@ -873,7 +1477,7 @@ class CMakeProductionGraph(object):
                 if command in {
                         "add_library", "target_sources",
                         "set_source_files_properties", "set_property",
-                        "set_target_properties"}:
+                        "set_target_properties", "set_directory_properties"}:
                     raise ContractError(
                         "source graph command in unsupported CMake block: " +
                         command)
@@ -889,25 +1493,211 @@ class CMakeProductionGraph(object):
                         command)
                 if command in {
                         "include", "add_subdirectory", "subdirs",
-                        "cmake_language", "load_command", "find_package"}:
+                        "cmake_language", "load_command", "find_package",
+                        "project", "enable_language"}:
                     raise ContractError(
                         "graph extension in unsupported CMake block: " + command)
-                if command in {"target_link_libraries", "link_libraries"}:
+                if command in self._target_build_mutation_commands:
                     raise ContractError(
-                        "link graph command in unsupported CMake block: " +
+                        "compile/link mutation in unsupported CMake block: " +
                         command)
+                if command in self._directory_build_mutation_commands:
+                    raise ContractError(
+                        "directory compile/link mutation in unsupported CMake "
+                        "block: " + command)
+                if command in self._build_extension_commands:
+                    raise ContractError(
+                        "build extension in unsupported CMake block: " + command)
                 continue
 
+            cuda_guard = bool_atom("option:LEO2_ENABLE_CUDA")
+            default_reachable = bool_satisfiable(
+                bool_and(guard, bool_not(cuda_guard)))
+            if default_reachable and command == "find_program":
+                try:
+                    program_tokens = self._expand(tokens, guard)
+                except ContractError as error:
+                    raise ContractError(
+                        "unresolved tool discovery is reachable in the "
+                        "CPU-only graph: " + str(error))
+                approved_program_searches = {
+                    ("LEO2_OBJDUMP_EXECUTABLE", "NAMES", "objdump",
+                     "llvm-objdump"),
+                    ("LEO2_SH_EXECUTABLE", "NAMES", "sh"),
+                }
+                if tuple(program_tokens) not in approved_program_searches:
+                    raise ContractError(
+                        "unapproved tool discovery is reachable in the CPU-only "
+                        "graph")
+            is_source_property = (
+                command == "set_source_files_properties" or
+                (command == "set_property" and tokens and
+                 tokens[0].upper() == "SOURCE"))
+            if default_reachable and is_source_property:
+                try:
+                    source_property_tokens = self._expand(tokens, guard)
+                except ContractError as error:
+                    raise ContractError(
+                        "unresolved source property is reachable in the "
+                        "CPU-only graph: " + str(error))
+                upper_source_properties = {
+                    token.upper() for token in source_property_tokens}
+                if any("$<" in token for token in source_property_tokens):
+                    raise ContractError(
+                        "unmodeled source-property generator expression is "
+                        "reachable in the CPU-only graph")
+                if ("LANGUAGE" in upper_source_properties and
+                        "CUDA" in upper_source_properties) or any(
+                            self._cuda_graph_marker.search(token)
+                            for token in source_property_tokens):
+                    raise ContractError(
+                        "CUDA source property is reachable in the CPU-only "
+                        "graph")
+            if default_reachable and command == "add_test":
+                approved_cuda_optional_test = (
+                    "NAME", "leopard2_cuda_optional", "COMMAND",
+                    "${CMAKE_COMMAND}",
+                    "-DLEO2_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}",
+                    "-DLEO2_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/"
+                    "cuda-optional-test",
+                    "-DLEO2_GENERATOR=${CMAKE_GENERATOR}",
+                    "-DLEO2_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}",
+                    "-DLEO2_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}",
+                    "-DLEO2_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}",
+                    "-P", "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/"
+                    "test_cuda_optional.cmake",
+                )
+                if tuple(tokens) == approved_cuda_optional_test:
+                    test_tokens = []
+                else:
+                    try:
+                        command_index = tokens.index("COMMAND")
+                    except ValueError:
+                        command_index = 0
+                    test_tokens = tokens[command_index + 1:]
+                expanded_test_tokens = []
+                for token in test_tokens:
+                    if self._variable.fullmatch(token):
+                        try:
+                            expanded_test_tokens.extend(
+                                self._expand([token], guard))
+                        except ContractError:
+                            expanded_test_tokens.append(token)
+                    elif "${" in token:
+                        try:
+                            expanded_test_tokens.append(
+                                self._expand_embedded_token(token, guard))
+                        except ContractError:
+                            expanded_test_tokens.append(token)
+                    else:
+                        expanded_test_tokens.append(token)
+                approved_test_generators = {"$<TARGET_FILE:bench_leopard2>"}
+                if any("$<" in token and
+                       token not in approved_test_generators
+                       for token in expanded_test_tokens):
+                    raise ContractError(
+                        "unmodeled test generator expression is reachable in "
+                        "the CPU-only graph")
+                if any(self._cuda_graph_marker.search(token)
+                       for token in expanded_test_tokens):
+                    raise ContractError(
+                        "CUDA test command is reachable in the CPU-only graph")
+            inspected_tokens = tokens
+            if default_reachable and command in {
+                    "add_library", "add_executable", "target_sources"}:
+                try:
+                    inspected_tokens = self._expand(tokens, guard)
+                except ContractError as error:
+                    raise ContractError(
+                        "unresolved source graph is reachable in the "
+                        "CPU-only graph: " + str(error))
+                if any("$<" in token and
+                       self._target_objects.fullmatch(token) is None
+                       for token in inspected_tokens):
+                    raise ContractError(
+                        "unmodeled source generator expression is reachable "
+                        "in the CPU-only graph")
+            if (default_reachable and
+                    command in self._target_build_mutation_commands):
+                approved_dependency_generators = {
+                    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>",
+                    "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>",
+                }
+                if any("$<" in token and
+                       token not in approved_dependency_generators
+                       for token in tokens):
+                    raise ContractError(
+                        "unmodeled target dependency generator expression "
+                        "is reachable in the CPU-only graph")
+                dependency_tokens = []
+                for token in tokens:
+                    if token in approved_dependency_generators:
+                        dependency_tokens.append(token)
+                        continue
+                    if self._variable.fullmatch(token):
+                        try:
+                            dependency_tokens.extend(
+                                self._expand([token], guard))
+                        except ContractError:
+                            # Unknown package/toolchain variables are an
+                            # external trust boundary.  Locally assigned
+                            # indirection resolves above and is inspected.
+                            dependency_tokens.append(token)
+                            continue
+                    elif "${" in token:
+                        try:
+                            dependency_tokens.append(
+                                self._expand_embedded_token(token, guard))
+                        except ContractError:
+                            dependency_tokens.append(token)
+                    else:
+                        dependency_tokens.append(token)
+                if any("$<" in token and
+                       token not in approved_dependency_generators
+                       for token in dependency_tokens):
+                    raise ContractError(
+                        "expanded target dependency generator expression is "
+                        "reachable in the CPU-only graph")
+                if any(re.search(
+                        r"cuda|nvidia|cudart|nvrtc", token, re.IGNORECASE)
+                       for token in dependency_tokens):
+                    raise ContractError(
+                        "CUDA target dependency is reachable in the CPU-only "
+                        "graph")
+            if default_reachable and any(
+                    re.search(r"\.cuh?(?:$|[;>])", token, re.IGNORECASE) or
+                    re.search(
+                        r"(?:^|[/\\])(?:cuda(?:_[A-Za-z0-9_]+)?|nvrtc)\.h$",
+                        token, re.IGNORECASE)
+                    for token in inspected_tokens):
+                raise ContractError(
+                    "CUDA source/header is reachable in the CPU-only graph")
+
+            if command == "cmake_minimum_required":
+                if tokens != ["VERSION", "3.7"]:
+                    raise ContractError(
+                        "unapproved CMake minimum-version contract")
+                if bool_satisfiable(guard):
+                    self._record_trusted_command(
+                        command, tokens, guard, reasons)
+                continue
             if command == "include":
                 if len(tokens) != 1 or tokens[0] not in approved_includes:
                     raise ContractError(
                         "unapproved CMake graph include: " + " ".join(tokens))
+                if bool_satisfiable(guard):
+                    self._record_trusted_command(
+                        command, tokens, guard, reasons)
                 continue
             if command == "find_package":
                 if tuple(tokens) not in approved_packages:
                     raise ContractError(
                         "unapproved CMake package graph import: " +
                         " ".join(tokens))
+                if (bool_satisfiable(guard) and tuple(tokens) in {
+                        ("OpenMP",), ("Threads", "REQUIRED")}):
+                    self._record_trusted_command(
+                        command, tokens, guard, reasons)
                 continue
             if command in {"add_subdirectory", "subdirs"}:
                 raise ContractError(
@@ -915,9 +1705,61 @@ class CMakeProductionGraph(object):
             if command in {"cmake_language", "load_command"}:
                 raise ContractError(
                     "CMake dynamic command execution is unsupported: " + command)
-            if command == "link_libraries":
+            if (command == "project" and bool_satisfiable(guard) and
+                    tokens != ["leopard"]):
                 raise ContractError(
-                    "CMake directory link graph requires recursive proof")
+                    "unapproved CMake project language/toolchain mutation")
+            if command == "project" and bool_satisfiable(guard):
+                self._record_trusted_command(command, tokens, guard, reasons)
+                continue
+            if command == "enable_language" and bool_satisfiable(guard):
+                cuda_guard = bool_atom("option:LEO2_ENABLE_CUDA")
+                if (tokens == ["CUDA"] and not reasons and
+                        self._formula_equivalent(guard, cuda_guard)):
+                    self.contract_events.append(
+                        ("guarded", (command, tuple(tokens))))
+                    continue
+                raise ContractError(
+                    "reachable CMake language enablement is unsupported")
+            if command == "install" and bool_satisfiable(guard):
+                key = (command, tuple(tokens))
+                if key not in self._required_trusted_commands:
+                    raise ContractError(
+                        "unapproved CMake install/package mutation")
+                self._record_trusted_command(command, tokens, guard, reasons)
+                continue
+            if (command == "configure_package_config_file" and
+                    bool_satisfiable(guard)):
+                if tuple(tokens) != self._approved_package_configure:
+                    raise ContractError(
+                        "unapproved generated package configuration command")
+                self._record_trusted_command(command, tokens, guard, reasons)
+                continue
+            if (command in self._directory_build_mutation_commands and
+                    bool_satisfiable(guard)):
+                raise ContractError(
+                    "CMake directory compile/link graph requires recursive "
+                    "proof: " + command)
+            if (command in self._build_extension_commands and
+                    bool_satisfiable(guard)):
+                raise ContractError(
+                    "CMake generated/custom build extension requires recursive "
+                    "proof: " + command)
+
+            if command == "string" and bool_satisfiable(guard):
+                key = (command, tuple(tokens))
+                if key in self._required_trusted_commands:
+                    self._record_trusted_command(
+                        command, tokens, guard, reasons)
+                    value = self._unique_variable_value(
+                        "LEO2_BACKEND_VARIANT", guard)
+                    if len(value) != 1:
+                        raise ContractError(
+                            "backend variant normalizer input is not scalar")
+                    self._assign(
+                        "LEO2_BACKEND_VARIANT_NORMALIZED",
+                        (value[0].lower(),), guard, reasons)
+                    continue
 
             if command == "set" and tokens:
                 variable = self._mutation_variable(tokens[0], guard, command)
@@ -926,12 +1768,42 @@ class CMakeProductionGraph(object):
                         "CMAKE_MODULE_PATH can redirect approved graph includes")
                 raw_values = list(tokens[1:])
                 upper = [value.upper() for value in raw_values]
+                has_cache = "CACHE" in upper
+                if (bool_satisfiable(guard) and
+                        "PARENT_SCOPE" in upper):
+                    raise ContractError(
+                        "CMake PARENT_SCOPE assignment is unsupported: " +
+                        variable)
                 if "CACHE" in upper:
                     raw_values = raw_values[:upper.index("CACHE")]
                 if raw_values and raw_values[-1].upper() == "PARENT_SCOPE":
                     raw_values.pop()
-                value, value_reasons = self._assignment_values(
-                    raw_values, guard)
+                if (bool_satisfiable(guard) and
+                        self._is_protected_variable(variable)):
+                    self._validate_protected_assignment(
+                        variable, raw_values, tokens)
+                    self.protected_assignments.append(
+                        (variable, tuple(raw_values), tuple(tokens), guard,
+                         tuple(reasons)))
+                    self.contract_events.append(("protected", tuple(tokens)))
+                elif bool_satisfiable(guard) and has_cache:
+                    raise ContractError(
+                        "unapproved CMake cache assignment: " + variable)
+                if has_cache and "FORCE" not in upper:
+                    # A non-FORCE cache initializer is only a default.  A
+                    # caller's -D value survives and must keep every branch
+                    # depending on it reachable in the proof.
+                    value = (
+                        BOOL_SYMBOL_PREFIX + "external-cache:" + variable,)
+                    value_reasons = ()
+                elif raw_values:
+                    value, value_reasons = self._assignment_values(
+                        raw_values, guard)
+                else:
+                    value = (BOOL_SYMBOL_PREFIX + "external:" + variable,)
+                    value_reasons = (
+                        "empty CMake set may reveal external cache variable: " +
+                        variable,)
                 assignment_reasons = self._merge_reasons(reasons, value_reasons)
                 if conditional_depth:
                     assignment_reasons = self._merge_reasons(
@@ -941,44 +1813,105 @@ class CMakeProductionGraph(object):
                 continue
             if command == "unset" and tokens:
                 variable = self._mutation_variable(tokens[0], guard, command)
+                if (bool_satisfiable(guard) and
+                        self._is_protected_variable(variable)):
+                    raise ContractError(
+                        "unapproved production compiler-control variable "
+                        "mutation: " + variable)
                 if variable == "CMAKE_MODULE_PATH":
                     raise ContractError(
                         "CMAKE_MODULE_PATH mutation is unsupported")
-                unset_reasons = reasons
-                if conditional_depth:
-                    unset_reasons = self._merge_reasons(
-                        unset_reasons,
-                        (CONDITIONAL_ASSIGNMENT_PREFIX + variable,))
-                self._assign(variable, None, guard, unset_reasons)
+                if bool_satisfiable(guard):
+                    raise ContractError(
+                        "CMake unset state/cache fallback is unsupported: " +
+                        variable)
                 continue
             if command == "option" and len(tokens) >= 2:
                 variable = self._mutation_variable(tokens[0], guard, command)
-                default = tokens[-1] if len(tokens) >= 3 else "OFF"
+                trusted_option = (
+                    command, tuple(tokens)) in self._required_trusted_commands
+                if (bool_satisfiable(guard) and
+                        self._is_protected_variable(variable) and
+                        not trusted_option):
+                    raise ContractError(
+                        "unapproved production compiler-control variable "
+                        "mutation: " + variable)
+                if bool_satisfiable(guard) and not trusted_option:
+                    raise ContractError(
+                        "unapproved CMake cache option: " + variable)
+                if bool_satisfiable(guard) and trusted_option:
+                    self._record_trusted_command(
+                        command, tokens, guard, reasons)
                 option_reasons = reasons
                 if conditional_depth:
                     option_reasons = self._merge_reasons(
                         option_reasons,
                         (CONDITIONAL_ASSIGNMENT_PREFIX + variable,))
-                self._assign(variable, (default,), guard, option_reasons)
+                # option() also preserves an existing cache value.  Its
+                # authored default cannot prove the normal-command-line value.
+                self._assign(
+                    variable,
+                    (BOOL_SYMBOL_PREFIX + "option:" + variable,),
+                    guard, option_reasons)
                 continue
             if command in {"check_cxx_compiler_flag",
                            "check_c_compiler_flag"} and len(tokens) >= 2:
                 variable = self._mutation_variable(
                     tokens[-1], guard, command)
+                trusted_probe = (
+                    command, tuple(tokens)) in self._required_trusted_commands
+                if bool_satisfiable(guard) and not trusted_probe:
+                    raise ContractError(
+                        "unapproved production compiler probe: " + command +
+                        " " + " ".join(tokens))
+                if (bool_satisfiable(guard) and
+                        self._is_protected_variable(variable) and
+                        not trusted_probe):
+                    raise ContractError(
+                        "compiler probe may not overwrite production compiler "
+                        "control variable: " + variable)
+                if bool_satisfiable(guard):
+                    self._record_trusted_command(
+                        command, tokens, guard, reasons)
                 symbol = BOOL_SYMBOL_PREFIX + "probe:" + variable
                 self._assign(variable, (symbol,), guard, reasons)
                 continue
             if command == "cmake_dependent_option" and tokens:
                 variable = self._mutation_variable(tokens[0], guard, command)
+                trusted_option = (
+                    command, tuple(tokens)) in self._required_trusted_commands
+                if bool_satisfiable(guard) and not trusted_option:
+                    raise ContractError(
+                        "unapproved production dependent option: " +
+                        " ".join(tokens))
+                if (bool_satisfiable(guard) and
+                        self._is_protected_variable(variable) and
+                        not trusted_option):
+                    raise ContractError(
+                        "dependent option may not overwrite production compiler "
+                        "control variable: " + variable)
+                if bool_satisfiable(guard):
+                    self._record_trusted_command(
+                        command, tokens, guard, reasons)
                 symbol = BOOL_SYMBOL_PREFIX + "dependent-option:" + variable
                 self._assign(variable, (symbol,), guard, reasons)
                 continue
             if command == "list" and len(tokens) >= 2:
                 operation = tokens[0].upper()
                 variable = self._mutation_variable(tokens[1], guard, command)
+                if (bool_satisfiable(guard) and
+                        self._is_protected_variable(variable)):
+                    raise ContractError(
+                        "unapproved production compiler-control variable "
+                        "mutation: " + variable)
                 if variable == "CMAKE_MODULE_PATH":
                     raise ContractError(
                         "CMAKE_MODULE_PATH mutation is unsupported")
+                if (bool_satisfiable(guard) and
+                        operation not in {"APPEND", "PREPEND"}):
+                    raise ContractError(
+                        "unsupported CMake list operation " + operation +
+                        " touches " + variable)
                 if operation in {"APPEND", "PREPEND"}:
                     additions, addition_reasons = self._assignment_values(
                         tokens[2:], guard)
@@ -996,12 +1929,6 @@ class CMakeProductionGraph(object):
                             list_reasons,
                             (CONDITIONAL_ASSIGNMENT_PREFIX + variable,))
                     self._assign(variable, value, guard, list_reasons)
-                else:
-                    reason = (
-                        "unsupported list operation touches source variable: " +
-                        variable)
-                    self._assign(variable, (), guard,
-                                 self._merge_reasons(reasons, (reason,)))
                 continue
 
             if (command == "target_sources" and tokens and
@@ -1018,27 +1945,16 @@ class CMakeProductionGraph(object):
                 if command == "add_library" and tokens:
                     self.declared_targets.add(tokens[0])
                 continue
-            if command == "target_link_libraries" and tokens:
-                target = self._target_name(tokens[0], guard)
-                if target == "libleopard":
-                    link_specification = tuple(tokens[1:])
-                    if link_specification not in approved_libleopard_links:
-                        raise ContractError(
-                            "unapproved libleopard target_link_libraries: " +
-                            " ".join(tokens[1:]))
-                    if (link_specification ==
-                            ("PUBLIC", "${OpenMP_CXX_FLAGS}") and
-                            "OpenMP_CXX_FLAGS" in self.variables):
-                        raise ContractError(
-                            "local OpenMP_CXX_FLAGS mutation can redirect "
-                            "libleopard link inputs")
+            if command in self._target_build_mutation_commands:
+                self._record_target_build_mutation(
+                    command, tokens, guard, reasons)
                 continue
             variable_writers = {
                 "file", "string", "math", "separate_arguments",
                 "cmake_path", "get_property", "get_cmake_property",
                 "get_directory_property", "get_filename_component",
                 "get_source_file_property", "get_target_property",
-                "execute_process", "try_compile", "try_run",
+                "execute_process", "find_program", "try_compile", "try_run",
                 "cmake_parse_arguments"}
             expanded_identifiers = set()
             for token in tokens:
@@ -1068,6 +1984,17 @@ class CMakeProductionGraph(object):
                 raise ContractError(
                     "CMAKE_MODULE_PATH mutation can redirect package graph "
                     "imports")
+            protected_identifiers = sorted(
+                identifier for identifier in expanded_identifiers
+                if self._is_protected_variable(identifier))
+            property_commands = {
+                "set_property", "set_source_files_properties",
+                "set_target_properties", "set_directory_properties"}
+            if protected_identifiers and command not in property_commands:
+                raise ContractError(
+                    "unmodeled command may mutate production compiler-control "
+                    "variable: " + command + " " +
+                    ", ".join(protected_identifiers))
             if command in variable_writers:
                 for variable in expanded_identifiers:
                     reason = (
@@ -1093,6 +2020,21 @@ class CMakeProductionGraph(object):
 
         if stack:
             raise ContractError("unbalanced CMake block: " + stack[-1]["type"])
+        if (self.require_mutation_contract and
+                self.trusted_command_counts != self._required_trusted_commands):
+            missing = self._required_trusted_commands - self.trusted_command_counts
+            extra = self.trusted_command_counts - self._required_trusted_commands
+            raise ContractError(
+                "missing or duplicate trusted CMake command: missing=" +
+                repr(sorted(missing.elements(), key=repr)) + " extra=" +
+                repr(sorted(extra.elements(), key=repr)))
+        if self.require_mutation_contract:
+            self._validate_required_protected_assignments()
+            expected_events = self._required_contract_event_order
+            if (Counter(self.contract_events) == Counter(expected_events) and
+                    tuple(self.contract_events) != expected_events):
+                raise ContractError(
+                    "security-sensitive CMake command order drift")
 
     def _read_graph_command(self, command, raw_tokens, guard, reasons,
                             conditional_depth):
@@ -1103,19 +2045,41 @@ class CMakeProductionGraph(object):
             raise ContractError(
                 "unsupported conditional CMake source graph: " + reasons[0])
         if command == "add_library" and raw_tokens:
+            if raw_tokens[0] in {"OpenMP::OpenMP_CXX", "Threads::Threads"}:
+                raise ContractError(
+                    "approved package target cannot be locally declared: " +
+                    raw_tokens[0])
             target = self._target_name(raw_tokens[0], guard)
             self.declared_targets.add(target)
             if target == "libleopard" and not bool_tautology(guard):
                 raise ContractError(
                     "libleopard add_library must be unconditional")
             tokens = self._expand(raw_tokens[1:], guard)
-            if "ALIAS" in tokens or "IMPORTED" in tokens:
+            upper_tokens = [token.upper() for token in tokens]
+            if upper_tokens and upper_tokens[0] == "ALIAS":
+                if len(tokens) != 2:
+                    raise ContractError(
+                        "unsupported CMake target ALIAS declaration: " + target)
+                if target in self.target_aliases:
+                    raise ContractError(
+                        "duplicate CMake target ALIAS: " + target)
+                self.target_aliases[target] = tokens[1]
+                return
+            if "IMPORTED" in upper_tokens:
                 return
             kind = "DEFAULT"
             if tokens and tokens[0].upper() in library_types:
                 kind = tokens.pop(0).upper()
             if tokens and tokens[0].upper() == "EXCLUDE_FROM_ALL":
                 tokens.pop(0)
+            if target == "libleopard":
+                if (kind != "STATIC" or
+                        tuple(raw_tokens) != (
+                            "libleopard", "STATIC", "${LIB_SOURCE_FILES}")):
+                    raise ContractError(
+                        "libleopard must be one exact STATIC library definition")
+                self._record_trusted_command(
+                    command, raw_tokens, guard, reasons)
             definitions = self.targets.setdefault(target, [])
             for definition in definitions:
                 if (definition[0] != kind or definition[1] != tokens):
@@ -1127,6 +2091,9 @@ class CMakeProductionGraph(object):
             definitions.append([kind, tokens, guard])
         elif command == "target_sources" and raw_tokens:
             target = self._target_name(raw_tokens[0], guard)
+            if target in self.target_aliases:
+                raise ContractError(
+                    "CMake target ALIAS cannot be mutated: " + target)
             tokens = self._expand(raw_tokens[1:], guard)
             if any(token.upper() == "FILE_SET" for token in tokens):
                 raise ContractError(
@@ -1187,6 +2154,8 @@ class CMakeProductionGraph(object):
 
     def _reject_target_graph_property(self, command, raw_tokens, guard):
         tokens = self._expand(raw_tokens, guard)
+        if (command, tuple(tokens)) in self._approved_target_property_commands:
+            return
         upper = [token.upper() for token in tokens]
         marker = "PROPERTY" if command == "set_property" else "PROPERTIES"
         if marker not in upper:
@@ -1197,18 +2166,94 @@ class CMakeProductionGraph(object):
         if "SOURCES" in property_tokens:
             raise ContractError(
                 "CMake target SOURCES property bypasses graph validation")
-        if any(property_name in property_tokens for property_name in {
-                "LINK_LIBRARIES", "INTERFACE_LINK_LIBRARIES"}):
+        if any(self._is_dangerous_build_property(property_name)
+               for property_name in property_tokens):
             raise ContractError(
-                "CMake target link property bypasses graph validation")
+                "CMake target compile/link property bypasses graph validation")
+        raise ContractError(
+            "unapproved CMake target property mutation: " + command)
 
     def _reject_link_property(self, command, raw_tokens, guard):
         tokens = self._expand(raw_tokens, guard)
-        if any(token.upper() in {
-                "LINK_LIBRARIES", "INTERFACE_LINK_LIBRARIES"}
-                for token in tokens):
+        upper = [token.upper() for token in tokens]
+        if ((command, tuple(tokens)) in
+                self._approved_nontarget_property_commands):
+            return
+        if tokens and upper[0] == "CACHE" and "PROPERTY" in upper:
+            property_index = upper.index("PROPERTY")
+            protected = [
+                token for token in tokens[1:property_index]
+                if (self._is_protected_variable(token) or
+                    token == "OpenMP_CXX_FLAGS")
+            ]
+            if protected:
+                raise ContractError(
+                    "CMake cache property may mutate production "
+                    "compiler-control variable: " + ", ".join(protected))
+        if any(self._is_dangerous_build_property(token) for token in tokens):
             raise ContractError(
-                "CMake link property bypasses graph validation: " + command)
+                "CMake compile/link property bypasses graph validation: " +
+                command)
+        raise ContractError(
+            "unapproved CMake non-target property mutation: " + command)
+
+    def _validate_production_mutations(self, production_presence):
+        observed = Counter()
+        for target, command, specification, mutation_guard, reasons in (
+                self.target_build_mutations):
+            canonical = self._canonical_target(target)
+            presence = production_presence.get(canonical, BOOL_FALSE)
+            overlap = bool_and(presence, mutation_guard)
+            if not bool_satisfiable(overlap):
+                continue
+            key = (canonical, command, specification)
+            if key not in self._approved_production_mutations:
+                raise ContractError(
+                    "unapproved production target compile/link mutation: " +
+                    canonical + " " + command + " " +
+                    " ".join(specification))
+            allowed_reasons = ()
+            if specification in {
+                    ("PRIVATE", "LEO2_BACKEND_FORCE_SCALAR=1"),
+                    ("PRIVATE", "LEO2_BACKEND_FORCE_SSSE3=1"),
+                    ("PRIVATE", "LEO2_BACKEND_FORCE_AVX2=1")}:
+                allowed_reasons = (
+                    "unsupported comparison of symbolic CMake boolean",)
+            if (command == "target_link_libraries" and specification in {
+                    ("PUBLIC", "OpenMP::OpenMP_CXX"),
+                    ("PUBLIC", "${OpenMP_CXX_FLAGS}")}):
+                allowed_reasons = (
+                    "unsupported CMake conditional predicate: TARGET",)
+            if reasons != allowed_reasons:
+                raise ContractError(
+                    "unsupported condition guards production target mutation: " +
+                    canonical + " " + command + " " + repr(reasons))
+            expected_guard = self._expected_production_mutation_guard(key)
+            if not self._formula_equivalent(mutation_guard, expected_guard):
+                raise ContractError(
+                    "production target mutation guard drift: " + canonical +
+                    " " + command + " actual=" + repr(mutation_guard) +
+                    " expected=" + repr(expected_guard))
+            observed[key] += 1
+            if bool_satisfiable(
+                    bool_and(mutation_guard, bool_not(presence))):
+                raise ContractError(
+                    "production target mutation is reachable without its "
+                    "target: " + canonical + " " + command)
+            if (key == ("libleopard", "target_link_libraries",
+                        ("PUBLIC", "${OpenMP_CXX_FLAGS}")) and
+                    "OpenMP_CXX_FLAGS" in self.variables):
+                raise ContractError(
+                    "local OpenMP_CXX_FLAGS mutation can redirect libleopard "
+                    "link inputs")
+        if self.require_mutation_contract:
+            expected = Counter(self._approved_production_mutations)
+            if observed != expected:
+                missing = sorted((expected - observed).elements(), key=repr)
+                extra = sorted((observed - expected).elements(), key=repr)
+                raise ContractError(
+                    "missing or duplicate production target mutation: " +
+                    "missing=" + repr(missing) + " extra=" + repr(extra))
 
     @staticmethod
     def _literal_source(token, reject_cuda=True):
@@ -1238,9 +2283,11 @@ class CMakeProductionGraph(object):
         resolved = []
         attached_objects = set()
         object_sources = set()
+        production_presence = {}
         visiting = []
 
         def visit(name, reach_guard, reached_as_object=False):
+            name = self._canonical_target(name)
             for active_name, active_guard in visiting:
                 if (name == active_name and
                         bool_satisfiable(bool_and(reach_guard, active_guard))):
@@ -1267,12 +2314,16 @@ class CMakeProductionGraph(object):
             entries.extend(
                 (token, bool_and(presence, attachment_guard))
                 for token, attachment_guard in self.attachments.get(name, []))
+            production_presence[name] = bool_or(
+                production_presence.get(name, BOOL_FALSE),
+                bool_and(reach_guard, presence))
             for token, entry_guard in entries:
                 if not bool_satisfiable(entry_guard):
                     continue
                 object_match = self._target_objects.match(token)
                 if object_match:
-                    object_target = object_match.group(1)
+                    object_target = self._canonical_target(
+                        object_match.group(1))
                     object_definitions = [
                         definition for definition in self.targets.get(
                             object_target, [])
@@ -1300,21 +2351,33 @@ class CMakeProductionGraph(object):
             visiting.pop()
 
         visit(target, BOOL_TRUE)
+        self._validate_production_mutations(production_presence)
+        if (self.require_mutation_contract and
+                tuple(self.contract_events) !=
+                self._required_contract_event_order):
+            raise ContractError(
+                "security-sensitive CMake command order drift")
         resolved_by_path = {}
+        resolved_by_windows_key = {}
         for path, guard in resolved:
             resolved_by_path.setdefault(path, []).append(guard)
+            resolved_by_windows_key.setdefault(path.casefold(), []).append(
+                (path, guard))
         for reference, property_guard, properties in self.source_property_references:
             if any(bool_satisfiable(bool_and(property_guard, source_guard))
-                   for source_guard in resolved_by_path.get(reference, [])):
+                   for unused_path, source_guard in
+                   resolved_by_windows_key.get(reference.casefold(), [])):
                 raise ContractError(
                     "CMake source properties affect production " + reference +
                     ": " + " ".join(properties))
         duplicates = []
-        for path, guards in resolved_by_path.items():
+        for entries in resolved_by_windows_key.values():
+            guards = [guard for unused_path, guard in entries]
             if any(bool_satisfiable(bool_and(left, right))
                    for index, left in enumerate(guards)
                    for right in guards[index + 1:]):
-                duplicates.append(path)
+                duplicates.append(" / ".join(sorted({
+                    path for path, unused_guard in entries})))
         duplicates.sort()
         if duplicates:
             raise ContractError(
@@ -1337,6 +2400,17 @@ def item_paths(tree, kind, project_file):
 
 def xml_local_name(node):
     return node.tag.rsplit("}", 1)[-1]
+
+
+def validate_msbuild_namespace(tree):
+    namespace_prefix = "{" + NS["msb"] + "}"
+    for node in tree.iter():
+        if (not isinstance(node.tag, str) or
+                not node.tag.startswith(namespace_prefix) or
+                node.tag == namespace_prefix):
+            raise ContractError(
+                "foreign or missing MSBuild XML namespace: " +
+                str(node.tag))
 
 
 def validate_msbuild_element_casing(tree):
@@ -1405,6 +2479,162 @@ def validate_source_item_structure(tree):
     if duplicates:
         raise ContractError("duplicate MSBuild source items: " + repr(duplicates))
 
+    all_item_groups = tree.findall(".//msb:ItemGroup", NS)
+    root_item_groups = tree.getroot().findall("msb:ItemGroup", NS)
+    if set(all_item_groups) != set(root_item_groups):
+        raise ContractError("all MSBuild ItemGroups must be direct Project children")
+    if len(root_item_groups) != 3:
+        raise ContractError("MSBuild ItemGroup topology is not exact")
+    item_group_kinds = []
+    for group in root_item_groups:
+        child_names = {xml_local_name(child) for child in list(group)}
+        if group.attrib == {"Label": "ProjectConfigurations"}:
+            expected = {"ProjectConfiguration"}
+            kind = "ProjectConfigurations"
+        elif not group.attrib and child_names == {"ClInclude"}:
+            expected = {"ClInclude"}
+            kind = "ClInclude"
+        elif not group.attrib and child_names == {"ClCompile"}:
+            expected = {"ClCompile"}
+            kind = "ClCompile"
+        else:
+            raise ContractError(
+                "unapproved MSBuild ItemGroup contents: " +
+                ", ".join(sorted(child_names)))
+        if child_names != expected:
+            raise ContractError("MSBuild " + kind + " ItemGroup is not exact")
+        item_group_kinds.append(kind)
+    if item_group_kinds != ["ProjectConfigurations", "ClInclude", "ClCompile"]:
+        raise ContractError("MSBuild ItemGroup order is not exact")
+
+
+def validate_exact_msbuild_children(parent, expected, label):
+    children = list(parent)
+    if [xml_local_name(child) for child in children] != [
+            name for name, unused_text in expected]:
+        raise ContractError(label + " children differ from the exact contract")
+    for child, (name, expected_text) in zip(children, expected):
+        if child.attrib or list(child):
+            raise ContractError(label + " " + name + " must be a plain value")
+        if (child.text or "").strip() != expected_text:
+            raise ContractError(label + " " + name + " value differs")
+
+
+def validate_msbuild_property_topology(tree):
+    root = tree.getroot()
+    all_groups = tree.findall(".//msb:PropertyGroup", NS)
+    root_groups = root.findall("msb:PropertyGroup", NS)
+    if set(all_groups) != set(root_groups):
+        raise ContractError(
+            "all MSBuild PropertyGroups must be direct Project children")
+    if len(root_groups) != 10:
+        raise ContractError("MSBuild PropertyGroup topology is not exact")
+
+    globals_groups = [group for group in root_groups
+                      if group.attrib == {"Label": "Globals"}]
+    if len(globals_groups) != 1:
+        raise ContractError("MSBuild Globals PropertyGroup is not exact")
+    validate_exact_msbuild_children(globals_groups[0], (
+        ("ProjectGuid", "{32176592-2F30-4BD5-B645-EB11C8D3453E}"),
+        ("RootNamespace", "GF65536"),
+        ("ProjectName", "Leopard"),
+    ), "Globals PropertyGroup")
+
+    user_groups = [group for group in root_groups
+                   if group.attrib == {"Label": "UserMacros"}]
+    if len(user_groups) != 1 or list(user_groups[0]):
+        raise ContractError("MSBuild UserMacros PropertyGroup must be empty")
+
+    configuration_groups = [
+        group for group in root_groups
+        if group.attrib.get("Label") == "Configuration"]
+    configurations = index_conditions(
+        configuration_groups, "Configuration PropertyGroup",
+        {"Condition", "Label"})
+    for key, group in configurations.items():
+        configuration, unused_platform = EXPECTED_CONFIGS[key]
+        del unused_platform
+        validate_exact_msbuild_children(group, (
+            ("ConfigurationType", "StaticLibrary"),
+            ("UseDebugLibraries",
+             "true" if configuration == "Debug" else "false"),
+            ("WholeProgramOptimization", "false"),
+            ("CharacterSet", "MultiByte"),
+            ("PlatformToolset", "v140"),
+        ), key + " Configuration PropertyGroup")
+
+    output_groups = [group for group in root_groups if not group.attrib.get("Label")]
+    outputs = index_conditions(output_groups, "output PropertyGroup")
+    for key, group in outputs.items():
+        validate_exact_msbuild_children(group, (
+            ("OutDir", "Output/$(ProjectName)/$(Configuration)/$(Platform)/"),
+            ("IntDir", "Obj/$(ProjectName)/$(Configuration)/$(Platform)/"),
+        ), key + " output PropertyGroup")
+
+    approved = set(globals_groups + user_groups + configuration_groups +
+                   output_groups)
+    if set(root_groups) != approved:
+        raise ContractError("unapproved root MSBuild PropertyGroup")
+
+
+def validate_msbuild_root_order(tree):
+    """Pin evaluation phases, not merely the contents of each phase."""
+    def descriptor(name, attributes=None):
+        return (name, tuple(sorted((attributes or {}).items())))
+
+    def condition(configuration, platform):
+        return "'$(Configuration)|$(Platform)'=='" + \
+            configuration + "|" + platform + "'"
+
+    expected = [
+        descriptor("ItemGroup", {"Label": "ProjectConfigurations"}),
+        descriptor("ItemGroup"),
+        descriptor("ItemGroup"),
+        descriptor("PropertyGroup", {"Label": "Globals"}),
+        descriptor("Import", {
+            "Project": "$(VCTargetsPath)\\Microsoft.Cpp.Default.props"}),
+    ]
+    for configuration, platform in (
+            ("Debug", "Win32"), ("Debug", "x64"),
+            ("Release", "Win32"), ("Release", "x64")):
+        expected.append(descriptor("PropertyGroup", {
+            "Condition": condition(configuration, platform),
+            "Label": "Configuration"}))
+    expected.extend((
+        descriptor("Import", {
+            "Project": "$(VCTargetsPath)\\Microsoft.Cpp.props"}),
+        descriptor("ImportGroup", {"Label": "ExtensionSettings"}),
+    ))
+    for configuration, platform in (
+            ("Debug", "Win32"), ("Debug", "x64"),
+            ("Release", "Win32"), ("Release", "x64")):
+        expected.append(descriptor("ImportGroup", {
+            "Condition": condition(configuration, platform),
+            "Label": "PropertySheets"}))
+    expected.append(descriptor("PropertyGroup", {"Label": "UserMacros"}))
+    for configuration, platform in (
+            ("Debug", "Win32"), ("Release", "Win32"),
+            ("Debug", "x64"), ("Release", "x64")):
+        expected.append(descriptor("PropertyGroup", {
+            "Condition": condition(configuration, platform)}))
+    for configuration, platform in (
+            ("Debug", "Win32"), ("Debug", "x64"),
+            ("Release", "Win32"), ("Release", "x64")):
+        expected.append(descriptor("ItemDefinitionGroup", {
+            "Condition": condition(configuration, platform)}))
+    expected.extend((
+        descriptor("Import", {
+            "Project": "$(VCTargetsPath)\\Microsoft.Cpp.targets"}),
+        descriptor("ImportGroup", {"Label": "ExtensionTargets"}),
+    ))
+
+    actual = [descriptor(xml_local_name(node), node.attrib)
+              for node in list(tree.getroot())]
+    if actual != expected:
+        raise ContractError(
+            "MSBuild root evaluation phase/order differs from the exact "
+            "contract")
+
 
 def validate_no_wpo_overrides(tree):
     allowed_additional_options = set(tree.findall(
@@ -1441,6 +2671,16 @@ def validate_msbuild_imports_and_toolchain(tree):
     if root.attrib != expected_root_attributes:
         raise ContractError(
             "MSBuild Project attributes differ from the VS2015 contract")
+    allowed_root_children = {
+        "Import", "ImportGroup", "ItemDefinitionGroup", "ItemGroup",
+        "PropertyGroup"}
+    unexpected_root_children = [
+        xml_local_name(node) for node in list(root)
+        if xml_local_name(node) not in allowed_root_children]
+    if unexpected_root_children:
+        raise ContractError(
+            "unapproved root MSBuild elements: " +
+            ", ".join(unexpected_root_children))
 
     parent = {
         child: node for node in root.iter() for child in list(node)
@@ -1499,15 +2739,31 @@ def validate_msbuild_imports_and_toolchain(tree):
     forbidden_properties = {
         "cltoolexe", "cltoolpath", "vctoolspath", "vctoolsinstalldir",
         "vcinstalldir", "vctargetspath", "executablepath", "useenv",
-        "toolexe", "toolpath",
+        "toolexe", "toolpath", "userrootdir", "msbuilduserextensionspath",
+        "msbuildextensionspath", "msbuildextensionspath32",
+        "msbuildextensionspath64", "includepath", "librarypath",
+        "referencepath", "sourcepath", "excludepath", "cltoolarchitecture",
     }
     for node in root.iter():
         name = xml_local_name(node).lower()
+        parent_name = xml_local_name(parent[node]).lower() if node in parent else ""
+        if name in {"configuration", "platform"}:
+            if parent_name != "projectconfiguration":
+                raise ContractError(
+                    "MSBuild configuration/import input override is forbidden: " +
+                    xml_local_name(node))
+        if (name.endswith("dependson") or
+                (name.endswith("targets") and name.startswith((
+                    "forceimport", "custombefore", "customafter",
+                    "importbywildcard")))):
+            raise ContractError(
+                "MSBuild import/target-chain hook is forbidden: " +
+                xml_local_name(node))
         if name in forbidden_properties:
             raise ContractError(
                 "MSBuild compiler tool override is forbidden: " +
                 xml_local_name(node))
-        if name in {"target", "usingtask"}:
+        if name in {"target", "usingtask", "exec"}:
             raise ContractError(
                 "custom MSBuild execution logic is forbidden: " +
                 xml_local_name(node))
@@ -1528,19 +2784,113 @@ def validate_msbuild_imports_and_toolchain(tree):
                     "MSBuild task tool override is forbidden: " + attribute)
 
 
-def production_graph(text=None, require_files=True):
+def production_local_includes(source_text):
+    source_text = re.sub(r"\\\r?\n", "", source_text)
+    includes = []
+    for operand in re.findall(
+            r"^\s*#\s*include\b([^\n]*)", source_text, re.MULTILINE):
+        literal = re.match(
+            r'^\s*(?:<([^>\n]+)>|"([^"\n]+)")', operand)
+        if literal is None:
+            raise ContractError(
+                "nonliteral production include cannot be proved CPU-only: " +
+                operand.strip())
+        includes.append(literal.group(1) or literal.group(2))
+    return includes
+
+
+def production_cuda_preprocessor_lines(source_text):
+    source_text = re.sub(r"\\\r?\n", "", source_text)
+    lines = [line for line in re.findall(
+        r"^\s*#.*$", source_text, re.MULTILINE)
+        if (re.search(r"\.cuh?(?:[>\"']|\s|$)", line, re.IGNORECASE) or
+            re.search(
+                r"(?:cuda(?:_[A-Za-z0-9_]+)?|nvrtc)\.h"
+                r"(?:[>\"']|\s|$)",
+                line, re.IGNORECASE) or
+            re.search(
+                r"cuda|nvrtc|nvidia|[<\"'/\\](?:thrust|cub)[/\\]",
+                line, re.IGNORECASE))]
+    lines.extend(
+        line for line in source_text.splitlines()
+        if (not re.match(r"^\s*#", line) and
+            re.search(r"(?:__pragma|_Pragma)\s*\(.*comment", line,
+                      re.IGNORECASE) and
+            re.search(r"cuda|nvrtc|nvidia", line, re.IGNORECASE)))
+    return lines
+
+
+def production_cuda_source_lines(source_text):
+    """Return any CPU-production lines that mention a CUDA runtime/toolchain."""
+    marker = re.compile(
+        r"cuda|nvcc|nvrtc|nvidia|cudart|ptxas|nvlink|fatbinary|"
+        r"cuobjdump|nvc\+\+|[<\"'/\\](?:thrust|cub)[/\\]",
+        re.IGNORECASE)
+    return [line for line in source_text.splitlines() if marker.search(line)]
+
+
+def windows_repository_include(base_directory, included):
+    requested = PurePosixPath(included.replace("\\", "/"))
+    if requested.is_absolute():
+        return None
+    try:
+        base_parts = list(
+            base_directory.resolve().relative_to(ROOT.resolve()).parts)
+    except ValueError:
+        raise ContractError("include base escapes the repository")
+    parts = base_parts
+    for part in requested.parts:
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            if not parts:
+                return None
+            parts.pop()
+        else:
+            parts.append(part)
+    current = ROOT.resolve()
+    for part in parts:
+        if not current.is_dir():
+            return None
+        matches = [child for child in current.iterdir()
+                   if child.name.casefold() == part.casefold()]
+        if len(matches) > 1:
+            raise ContractError(
+                "ambiguous Windows case-insensitive include component: " +
+                part)
+        if not matches:
+            return None
+        current = matches[0]
+    try:
+        current.resolve().relative_to(ROOT.resolve())
+    except ValueError:
+        raise ContractError("included file escapes the repository")
+    return current
+
+
+def production_graph(text=None, require_files=True,
+                     require_mutation_contract=None):
+    if require_mutation_contract is None:
+        require_mutation_contract = text is None
     cmake = CMAKE.read_text(encoding="utf-8") if text is None else text
-    configurations = (
-        CMakeProductionGraph(
-            cmake, processor="x86", pointer_size="4",
-            platform_name="Win32").resolve(),
-        CMakeProductionGraph(
-            cmake, processor="i686", pointer_size="4",
-            platform_name="Win32").resolve(),
-        CMakeProductionGraph(
-            cmake, processor="AMD64", pointer_size="8",
-            platform_name="x64").resolve(),
+    processor_configurations = (
+        ("x86", "4", "Win32"),
+        ("X86", "4", "Win32"),
+        ("i386", "4", "Win32"),
+        ("i486", "4", "Win32"),
+        ("i586", "4", "Win32"),
+        ("i686", "4", "Win32"),
+        ("x86_64", "8", "x64"),
+        ("amd64", "8", "x64"),
+        ("AMD64", "8", "x64"),
     )
+    configurations = tuple(
+        CMakeProductionGraph(
+            cmake, processor=processor, pointer_size=pointer_size,
+            platform_name=platform_name,
+            require_mutation_contract=require_mutation_contract).resolve()
+        for processor, pointer_size, platform_name in
+        processor_configurations)
     if any(configuration != configurations[0]
            for configuration in configurations[1:]):
         raise ContractError(
@@ -1561,19 +2911,33 @@ def production_graph(text=None, require_files=True):
             if not source.is_file():
                 raise ContractError(
                     "production graph names missing file: " + relative)
-            for included in re.findall(
-                    r'^\s*#\s*include\s+"([^"\n]+\.(?:h|hh|hpp|hxx|inl|cuh))"',
-                    source.read_text(encoding="utf-8"), re.MULTILINE):
-                candidate = (source.parent / included).resolve()
-                try:
-                    local = candidate.relative_to(ROOT).as_posix()
-                except ValueError:
+            source_text = source.read_text(encoding="utf-8")
+            cuda_lines = production_cuda_source_lines(source_text)
+            if cuda_lines:
+                raise ContractError(
+                    "CUDA source marker reachable from CPU libleopard: " +
+                    cuda_lines[0].strip())
+            for included in production_local_includes(source_text):
+                if re.match(
+                        r"^(?:cuda(?:_[a-z0-9_]+)?|nvrtc)\.h$",
+                        PurePosixPath(
+                            included.replace("\\", "/")).name.lower()):
+                    raise ContractError(
+                        "CUDA header reachable from CPU libleopard: " +
+                        included)
+                candidate = windows_repository_include(
+                    source.parent, included)
+                if candidate is None:
                     continue
+                local = candidate.resolve().relative_to(
+                    ROOT.resolve()).as_posix()
                 if candidate.suffix.lower() in CUDA_SUFFIXES:
                     raise ContractError(
                         "CUDA header reachable from CPU libleopard: " + local)
-                if candidate.is_file() and local not in headers:
+                if (candidate.is_file() and
+                        candidate.suffix.lower() in HEADER_SUFFIXES):
                     headers.add(local)
+                if candidate.is_file() and local not in visited:
                     pending.append(local)
     return (sorted(compiled), sorted(headers), object_targets,
             object_sources, cmake)
@@ -1763,6 +3127,51 @@ def validate_msbuild_configurations(tree):
                 raise ContractError(
                     key + " must not define configuration-level " + forbidden)
 
+        expected_compile = [
+            ("WarningLevel", "Level3"),
+            ("Optimization",
+             "Disabled" if configuration == "Debug" else
+             ("MaxSpeed" if key == "release|win32" else "Full")),
+        ]
+        if configuration == "Release":
+            expected_compile.extend((
+                ("FunctionLevelLinking", "true"),
+                ("IntrinsicFunctions", "true"),
+            ))
+        expected_compile.append(("SDLCheck", "true"))
+        if configuration == "Release":
+            expected_compile.extend((
+                ("InlineFunctionExpansion",
+                 "AnySuitable" if key == "release|win32" else
+                 "OnlyExplicitInline"),
+                ("FavorSizeOrSpeed", "Speed"),
+                ("OmitFramePointers",
+                 "false" if key == "release|win32" else "true"),
+            ))
+        expected_compile.append(("RuntimeLibrary", expected_runtime))
+        if configuration == "Release":
+            expected_compile.append(("BufferSecurityCheck", "true"))
+        expected_compile.append(("PreprocessorDefinitions", raw_definitions))
+        if key == "release|x64":
+            expected_compile.append(("OpenMPSupport", "true"))
+        validate_exact_msbuild_children(
+            compile_node, tuple(expected_compile),
+            key + " configuration ClCompile")
+
+        link_node = definitions[key].find("msb:Link", NS)
+        expected_link = [("GenerateDebugInformation", "true")]
+        if configuration == "Release":
+            expected_link.extend((
+                ("EnableCOMDATFolding", "true"),
+                ("OptimizeReferences", "true"),
+            ))
+        expected_link.append(("AdditionalLibraryDirectories", ""))
+        validate_exact_msbuild_children(
+            link_node, tuple(expected_link), key + " configuration Link")
+        validate_exact_msbuild_children(
+            definitions[key].find("msb:PostBuildEvent", NS),
+            (("Command", ""),), key + " PostBuildEvent")
+
     for node in tree.findall(".//msb:WholeProgramOptimization", NS):
         if (node.text or "").strip().lower() != "false":
             raise ContractError("WholeProgramOptimization must always be false")
@@ -1852,22 +3261,86 @@ def validate_per_file_isa(tree):
 
 
 def validate_visual_studio_project(tree):
+    validate_msbuild_namespace(tree)
     validate_msbuild_element_casing(tree)
     validate_msbuild_imports_and_toolchain(tree)
     validate_source_item_structure(tree)
     validate_msbuild_configurations(tree)
+    validate_msbuild_property_topology(tree)
     validate_per_file_isa(tree)
     validate_no_wpo_overrides(tree)
+    validate_msbuild_root_order(tree)
+
+
+def validate_legacy_solution_manifest(solution):
+    actual = [line.strip() for line in solution.lstrip("\ufeff").splitlines()
+              if line.strip()]
+    project_type = "{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}"
+    projects = (
+        ("Leopard", "Leopard.vcxproj",
+         "{32176592-2F30-4BD5-B645-EB11C8D3453E}"),
+        ("LeopardBenchmark", "..\\tests\\proj\\Benchmark.vcxproj",
+         "{97FCA15F-EAF3-4F1A-AFF8-83E693DA9D45}"),
+        ("LeopardExperiments", "..\\tests\\proj\\Experiments.vcxproj",
+         "{97FCA15F-EAF3-4F1A-AFF8-83E693DA9D65}"),
+    )
+    configurations = (
+        "Debug|Win32", "Debug|x64", "Release|Win32", "Release|x64")
+    expected = [
+        "Microsoft Visual Studio Solution File, Format Version 12.00",
+        "# Visual Studio 14",
+        "VisualStudioVersion = 14.0.25420.1",
+        "MinimumVisualStudioVersion = 10.0.40219.1",
+    ]
+    for name, path, guid in projects:
+        expected.extend((
+            'Project("' + project_type + '") = "' + name + '", "' +
+            path + '", "' + guid + '"',
+            "EndProject",
+        ))
+    expected.extend((
+        "Global",
+        "GlobalSection(SolutionConfigurationPlatforms) = preSolution",
+    ))
+    expected.extend(configuration + " = " + configuration
+                    for configuration in configurations)
+    expected.extend((
+        "EndGlobalSection",
+        "GlobalSection(ProjectConfigurationPlatforms) = postSolution",
+    ))
+    for unused_name, unused_path, guid in projects:
+        for configuration in configurations:
+            expected.extend((
+                guid + "." + configuration + ".ActiveCfg = " +
+                configuration,
+                guid + "." + configuration + ".Build.0 = " +
+                configuration,
+            ))
+    expected.extend((
+        "EndGlobalSection",
+        "GlobalSection(SolutionProperties) = preSolution",
+        "HideSolutionNode = FALSE",
+        "EndGlobalSection",
+        "EndGlobal",
+    ))
+    if actual != expected:
+        raise ContractError(
+            "legacy Visual Studio solution graph/configuration manifest "
+            "differs")
 
 
 def validate_legacy_visual_studio_metadata():
     solution = SOLUTION.read_text(encoding="utf-8-sig")
+    validate_legacy_solution_manifest(solution)
     if ("# Visual Studio 14" not in solution or
             "VisualStudioVersion = 14.0.25420.1" not in solution):
         raise ContractError(
             "legacy solution does not declare the repository's VS2015 version")
     for project in LEGACY_PROJECTS:
         tree = ET.parse(str(project))
+        validate_msbuild_namespace(tree)
+        validate_msbuild_element_casing(tree)
+        validate_msbuild_imports_and_toolchain(tree)
         if tree.getroot().attrib.get("ToolsVersion") != EXPECTED_TOOLS_VERSION:
             raise ContractError(
                 project.name + " does not use MSBuild ToolsVersion 14.0")
@@ -1880,6 +3353,19 @@ def validate_legacy_visual_studio_metadata():
         if toolsets != {"v140"}:
             raise ContractError(
                 project.name + " does not use the Visual Studio 2015 toolset")
+        references = tree.findall(".//msb:ProjectReference", NS)
+        if project == ROOT / "tests" / "proj" / "Benchmark.vcxproj":
+            if (len(references) != 1 or references[0].attrib != {
+                    "Include": "..\\..\\proj\\Leopard.vcxproj"} or
+                    [xml_local_name(child)
+                     for child in list(references[0])] != ["Project"] or
+                    (references[0][0].text or "").strip().lower() !=
+                    "{32176592-2f30-4bd5-b645-eb11c8d3453e}"):
+                raise ContractError(
+                    "Benchmark ProjectReference is not the exact contract")
+        elif references:
+            raise ContractError(
+                project.name + " has an unapproved ProjectReference")
 
 
 class LeopardVisualStudioProjectTest(unittest.TestCase):
@@ -1929,6 +3415,32 @@ class LeopardVisualStudioProjectTest(unittest.TestCase):
     def test_visual_studio_2015_metadata_is_internally_consistent(self):
         validate_legacy_visual_studio_metadata()
 
+    def test_legacy_solution_graph_and_mappings_are_exact(self):
+        solution = SOLUTION.read_text(encoding="utf-8-sig")
+        leopard_guid = "{32176592-2F30-4BD5-B645-EB11C8D3453E}"
+        mutations = (
+            solution.replace(
+                "\t" + leopard_guid +
+                ".Debug|Win32.Build.0 = Debug|Win32\n", "", 1),
+            solution.replace(
+                "Global\n",
+                'Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = '
+                '"Injected", "Injected.vcxproj", '
+                '"{00000000-0000-0000-0000-000000000000}"\n'
+                "EndProject\nGlobal\n", 1),
+            solution.replace(
+                leopard_guid +
+                ".Release|x64.ActiveCfg = Release|x64",
+                leopard_guid +
+                ".Release|x64.ActiveCfg = Release|Win32", 1),
+        )
+        for mutated in mutations:
+            with self.subTest(size=len(mutated)):
+                self.assertNotEqual(solution, mutated)
+                with self.assertRaisesRegex(
+                        ContractError, "solution graph/configuration"):
+                    validate_legacy_solution_manifest(mutated)
+
     def test_cuda_remains_absent_and_opt_in(self):
         project_text = PROJECT.read_text(encoding="utf-8-sig").lower()
         filters_text = FILTERS.read_text(encoding="utf-8-sig").lower()
@@ -1956,6 +3468,90 @@ class LeopardVisualStudioProjectTest(unittest.TestCase):
         self.assertEqual(1, cuda_enable_count)
         self.assertEqual([], condition_stack)
 
+    def test_cuda_include_scanner_covers_angle_and_cu_forms(self):
+        source = """
+#include <Injected.cuh>
+#include "Generated.cu"
+# include <cuda_runtime.h>
+#include \\
+  "Spliced.cuh"
+#define CUDA_HEADER "MacroInjected.cuh"
+#pragma comment(lib, "cudart.lib")
+__pragma(comment(lib, "nvcuda.lib"))
+#include <cuda/std/atomic>
+#include <thrust/device_vector.h>
+#include <cub/cub.cuh>
+"""
+        self.assertEqual(
+            ["Injected.cuh", "Generated.cu", "cuda_runtime.h",
+             "Spliced.cuh", "cuda/std/atomic", "thrust/device_vector.h",
+             "cub/cub.cuh"],
+            production_local_includes(source))
+        self.assertEqual(10, len(production_cuda_preprocessor_lines(source)))
+        self.assertEqual(
+            ["Hidden.inc", "Hidden.ipp", "Hidden"],
+            production_local_includes(
+                '#include "Hidden.inc"\n#include <Hidden.ipp>\n'
+                '#include "Hidden"\n'))
+        with self.assertRaisesRegex(ContractError, "nonliteral production include"):
+            production_local_includes(
+                '#define H "Hidden.inc"\n#include H\n')
+        runtime_source = """
+HMODULE module = LoadLibraryA("nvcuda.dll");
+void *entry = GetProcAddress(module, "cuInit");
+"""
+        self.assertEqual(
+            ['HMODULE module = LoadLibraryA("nvcuda.dll");'],
+            production_cuda_source_lines(runtime_source))
+        self.assertEqual(
+            ROOT / "LeopardCommon.h",
+            windows_repository_include(ROOT, "leopardcommon.h"))
+
+
+class CMakeLexerTest(unittest.TestCase):
+    def test_empty_quoted_arguments_and_list_elements_are_not_discarded(self):
+        self.assertEqual(
+            ["VALUE", "", "tail"], cmake_tokens('VALUE "" tail'))
+        self.assertEqual(
+            ["VALUE", "", "tail"], cmake_tokens("VALUE;;tail"))
+
+    def test_bracket_comments_are_skipped_at_every_delimiter_depth(self):
+        for equals in ("", "=", "==="):
+            opening = "#[" + equals + "["
+            closing = "]" + equals + "]"
+            text = (
+                opening + "\nmessage( hidden ( ) # \\\" )\n" + closing +
+                "\nset(SAFE_VALUE retained)\n")
+            with self.subTest(equals=equals):
+                commands = cmake_commands(text)
+                self.assertEqual(["set"], [name for name, unused in commands])
+                self.assertEqual(
+                    ["SAFE_VALUE", "retained"], cmake_tokens(commands[0][1]))
+
+    def test_bracket_arguments_are_balanced_atomically_and_fail_closed(self):
+        for equals in ("", "=", "==="):
+            opening = "[" + equals + "["
+            closing = "]" + equals + "]"
+            text = (
+                "message(" + opening + "( # \\\"\n" + closing + ")\n"
+                "set(CMAKE_VS_GLOBALS VCTargetsPath=C:/evil)\n"
+                "message(" + opening + ") # \\\"\n" + closing + ")\n")
+            with self.subTest(equals=equals):
+                commands = cmake_commands(text)
+                self.assertEqual(
+                    ["message", "set", "message"],
+                    [name for name, unused in commands])
+                with self.assertRaisesRegex(
+                        ContractError, "bracket arguments are unsupported"):
+                    cmake_tokens(commands[0][1])
+
+    def test_unterminated_bracket_constructs_are_rejected(self):
+        for text in ("#[=[ unterminated", "message([==[ unterminated)"):
+            with self.subTest(text=text):
+                with self.assertRaisesRegex(
+                        ContractError, "unterminated CMake bracket"):
+                    cmake_commands(text)
+
 
 class CMakeGraphMutationTest(unittest.TestCase):
     @classmethod
@@ -1964,10 +3560,13 @@ class CMakeGraphMutationTest(unittest.TestCase):
 
     def resolve(self, mutation):
         return production_graph(
-            self.cmake + "\n" + mutation + "\n", require_files=False)
+            self.cmake + "\n" + mutation + "\n", require_files=False,
+            require_mutation_contract=True)
 
-    def resolve_text(self, text):
-        return production_graph(text, require_files=False)
+    def resolve_text(self, text, require_mutation_contract=False):
+        return production_graph(
+            text, require_files=False,
+            require_mutation_contract=require_mutation_contract)
 
     def test_direct_target_sources_is_retained(self):
         (sources, unused_headers, unused_objects,
@@ -2035,7 +3634,8 @@ target_sources(libleopard PRIVATE ${BRANCH_SOURCES})
         mutation = "list(REMOVE_ITEM LIB_SOURCE_FILES leopard2.cpp)"
         text = self.cmake.replace(marker, mutation + "\n" + marker, 1)
         with self.assertRaisesRegex(
-                ContractError, "unsupported list operation.*LIB_SOURCE_FILES"):
+                ContractError,
+                "unsupported (?:CMake )?list operation.*LIB_SOURCE_FILES"):
             self.resolve_text(text)
 
     def test_source_variable_is_snapshotted_at_add_library_time(self):
@@ -2080,7 +3680,9 @@ set(LIB_SOURCE_FILES ${SAVED_LIB_SOURCE_FILES})"""
                 text = self.cmake.replace(
                     marker, mutation + "\n" + marker, 1)
                 with self.assertRaisesRegex(
-                        ContractError, "may mutate source variable"):
+                        ContractError,
+                        "may mutate source variable|generated/custom build|"
+                        "unmodeled root CMake command"):
                     self.resolve_text(text)
 
     def test_unproved_graph_imports_are_rejected(self):
@@ -2100,6 +3702,22 @@ set(LIB_SOURCE_FILES ${SAVED_LIB_SOURCE_FILES})"""
                         "dynamic command"):
                     self.resolve(mutation)
 
+    def test_approved_package_targets_cannot_be_locally_shadowed(self):
+        mutations = (
+            "add_library(Threads::Threads INTERFACE IMPORTED)",
+            "add_library(OpenMP::OpenMP_CXX INTERFACE IMPORTED)",
+            "add_library(injected_runtime INTERFACE)\n"
+            "add_library(Threads::Threads ALIAS injected_runtime)",
+            "add_library(injected_openmp INTERFACE)\n"
+            "add_library(OpenMP::OpenMP_CXX ALIAS injected_openmp)",
+        )
+        for mutation in mutations:
+            with self.subTest(target=mutation.splitlines()[-1]):
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "approved package target cannot be locally declared"):
+                    self.resolve(mutation)
+
     def test_find_package_in_unsupported_block_is_rejected(self):
         for block, closing in (
                 ("function(inject_package)", "endfunction()"),
@@ -2112,8 +3730,7 @@ set(LIB_SOURCE_FILES ${SAVED_LIB_SOURCE_FILES})"""
                                 "\ninject_package()")
                     with self.assertRaisesRegex(
                             ContractError,
-                            "graph extension in unsupported CMake block: "
-                            "find_package"):
+                            "unsupported CMake block"):
                         self.resolve(mutation)
 
     def test_object_library_link_attachment_is_rejected(self):
@@ -2139,8 +3756,9 @@ inject_link()
             with self.subTest(mutation=mutation.strip().splitlines()[-1]):
                 with self.assertRaisesRegex(
                         ContractError,
-                        "unapproved libleopard target_link_libraries|"
-                        "link graph command in unsupported CMake block"):
+                        "unapproved production target compile/link mutation|"
+                        "compile/link mutation in unsupported CMake block|"
+                        "unsupported CMake block"):
                     self.resolve(mutation)
 
     def test_equivalent_object_library_link_mutations_are_rejected(self):
@@ -2176,8 +3794,873 @@ inject_link()
                 self.assertNotEqual(text, self.cmake)
                 with self.assertRaisesRegex(
                         ContractError,
-                        "directory link graph|link property bypasses graph"):
+                        "directory compile/link graph|"
+                        "compile/link property bypasses graph"):
                     self.resolve_text(text)
+
+    def test_attached_object_compile_and_link_mutations_are_rejected(self):
+        prelude = """
+add_library(injected_backend OBJECT InjectedBackend.cpp)
+target_sources(libleopard PRIVATE $<TARGET_OBJECTS:injected_backend>)
+"""
+        mutations = (
+            "target_link_libraries(injected_backend PRIVATE Injected::Injected)",
+            "target_compile_options(injected_backend PRIVATE /arch:AVX2)",
+            "target_compile_definitions(injected_backend PRIVATE "
+            "LEO2_DISABLE_SSSE3_CODEGEN=0)",
+            "target_compile_features(injected_backend PRIVATE cxx_std_20)",
+            "target_include_directories(injected_backend PRIVATE injected)",
+            "target_link_options(injected_backend PRIVATE /LTCG)",
+            "target_link_directories(injected_backend PRIVATE injected)",
+            "target_link_interface_libraries(injected_backend Injected::Injected)",
+            "target_precompile_headers(injected_backend PRIVATE injected.h)",
+            "set(MUTATION_TARGET injected_backend)\n"
+            "target_compile_options(${MUTATION_TARGET} PRIVATE /arch:AVX2)",
+            "TaRgEt_CoMpIlE_OpTiOnS(injected_backend PRIVATE /arch:AVX2)",
+        )
+        for mutation in mutations:
+            with self.subTest(command=mutation.splitlines()[-1].split("(", 1)[0]):
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "unapproved production target compile/link mutation"):
+                    self.resolve(prelude + mutation)
+
+    def test_libleopard_compile_mutations_are_rejected(self):
+        mutations = (
+            "target_compile_options(libleopard PRIVATE /arch:AVX2)",
+            "target_compile_definitions(libleopard PRIVATE INJECTED=1)",
+            "target_compile_definitions(libleopard PRIVATE "
+            "LEO2_BACKEND_FORCE_AVX2=1)",
+            "target_compile_features(libleopard PRIVATE cxx_std_20)",
+            "target_include_directories(libleopard PRIVATE injected)",
+            "target_link_options(libleopard PRIVATE /LTCG)",
+            "target_link_directories(libleopard PRIVATE injected)",
+            "target_link_interface_libraries(libleopard Injected::Injected)",
+            "target_precompile_headers(libleopard PRIVATE injected.h)",
+            "set(MUTATION_TARGET libleopard)\n"
+            "target_compile_options(${MUTATION_TARGET} PRIVATE /arch:AVX2)",
+        )
+        for mutation in mutations:
+            with self.subTest(command=mutation.splitlines()[-1].split("(", 1)[0]):
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "unapproved production target compile/link mutation|"
+                        "unsupported condition guards production target mutation"):
+                    self.resolve(mutation)
+
+    def test_target_alias_cannot_hide_production_mutation(self):
+        mutations = (
+            """
+add_library(libleopard_alias ALIAS libleopard)
+target_compile_options(libleopard_alias PRIVATE /arch:AVX2)
+""",
+            """
+add_library(alias_backend OBJECT AliasBackend.cpp)
+add_library(backend_alias ALIAS alias_backend)
+target_sources(libleopard PRIVATE $<TARGET_OBJECTS:alias_backend>)
+target_compile_definitions(backend_alias PRIVATE INJECTED=1)
+""",
+            """
+add_library(alias_backend OBJECT AliasBackend.cpp)
+add_library(backend_alias ALIAS alias_backend)
+target_sources(libleopard PRIVATE $<TARGET_OBJECTS:backend_alias>)
+target_compile_options(alias_backend PRIVATE /arch:AVX2)
+""",
+        )
+        for mutation in mutations:
+            with self.subTest(last=mutation.strip().splitlines()[-1]):
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "target ALIAS cannot be mutated|"
+                        "unapproved production target compile/link mutation"):
+                    self.resolve(mutation)
+
+    def test_scoped_compile_and_link_mutations_are_rejected(self):
+        commands = (
+            "target_compile_options(libleopard PRIVATE /arch:AVX2)",
+            "target_compile_definitions(libleopard PRIVATE INJECTED=1)",
+            "target_include_directories(libleopard PRIVATE injected)",
+            "target_link_options(libleopard PRIVATE /LTCG)",
+        )
+        for opening, closing in (
+                ("function(inject)", "endfunction()"),
+                ("macro(inject)", "endmacro()")):
+            for command in commands:
+                mutation = (opening + "\n" + command + "\n" + closing +
+                            "\ninject()")
+                with self.subTest(scope=opening.split("(", 1)[0],
+                                  command=command.split("(", 1)[0]):
+                    with self.assertRaisesRegex(
+                            ContractError,
+                            "compile/link mutation in unsupported CMake block|"
+                            "unsupported CMake block"):
+                        self.resolve(mutation)
+
+    def test_directory_compile_and_link_mutations_are_rejected(self):
+        mutations = (
+            "add_compile_options(/arch:AVX2)",
+            "add_compile_definitions(INJECTED=1)",
+            "add_definitions(/DLEO2_DISABLE_SSSE3_CODEGEN=0)",
+            "remove_definitions(/DLEO2_DISABLE_SSSE3_CODEGEN=1)",
+            "include_directories(injected)",
+            "add_link_options(/LTCG)",
+            "link_directories(injected)",
+            "link_libraries(injected)",
+        )
+        for mutation in mutations:
+            with self.subTest(command=mutation.split("(", 1)[0]):
+                with self.assertRaisesRegex(
+                        ContractError, "directory compile/link graph"):
+                    self.resolve(mutation)
+
+    def test_compile_link_properties_are_rejected(self):
+        mutations = (
+            "set_property(TARGET libleopard APPEND PROPERTY "
+            "COMPILE_OPTIONS /arch:AVX2)",
+            "set_target_properties(libleopard PROPERTIES "
+            "COMPILE_DEFINITIONS INJECTED=1)",
+            "set_property(TARGET libleopard APPEND PROPERTY LINK_OPTIONS /LTCG)",
+            "set_target_properties(libleopard PROPERTIES "
+            "INTERPROCEDURAL_OPTIMIZATION ON)",
+            "set_target_properties(libleopard PROPERTIES "
+            "INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)",
+            "set_target_properties(libleopard PROPERTIES "
+            "COMPILE_DEFINITIONS_RELEASE INJECTED=1)",
+            "set_target_properties(libleopard PROPERTIES "
+            "MSVC_RUNTIME_LIBRARY MultiThreaded)",
+            "set_property(TARGET Threads::Threads PROPERTY "
+            "IMPORTED_LOCATION_RELEASE Injected.lib)",
+            "set_property(TARGET OpenMP::OpenMP_CXX PROPERTY "
+            "INTERFACE_COMPILE_OPTIONS /arch:AVX2)",
+            "set_property(TARGET libleopard PROPERTY "
+            "INTERFACE_LINK_LIBRARIES_DIRECT Injected::Injected)",
+            "set_property(TARGET libleopard PROPERTY "
+            "INTERFACE_SOURCES C:/Injected.cpp)",
+            "set_property(TARGET libleopard PROPERTY "
+            "VS_USER_PROPS C:/Injected.props)",
+            "set_property(TARGET libleopard PROPERTY "
+            "VS_PLATFORM_TOOLSET injected)",
+            "set_property(TARGET libleopard PROPERTY "
+            "POSITION_INDEPENDENT_CODE ON)",
+            "set_property(TARGET libleopard APPEND PROPERTY "
+            "STATIC_LIBRARY_OPTIONS /LTCG)",
+            "set_property(DIRECTORY APPEND PROPERTY COMPILE_OPTIONS /arch:AVX2)",
+            "set_directory_properties(PROPERTIES LINK_OPTIONS /LTCG)",
+            "set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE injected)",
+            "set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK injected)",
+        )
+        for mutation in mutations:
+            with self.subTest(property=mutation):
+                with self.assertRaisesRegex(
+                        ContractError, "compile/link property bypasses graph"):
+                    self.resolve(mutation)
+
+    def test_compiler_control_variables_are_rejected(self):
+        mutations = (
+            "set(CMAKE_CXX_FLAGS /arch:AVX2)",
+            "set(CMAKE_CXX_FLAGS_RELEASE \"${CMAKE_CXX_FLAGS_RELEASE} /GL\")",
+            "string(APPEND CMAKE_CXX_FLAGS \" /arch:AVX2\")",
+            "list(APPEND CMAKE_CXX_FLAGS /arch:AVX2)",
+            "unset(CMAKE_CXX_FLAGS)",
+            "set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)",
+            "set(CMAKE_CXX_COMPILER_LAUNCHER injected)",
+            "set(CMAKE_CXX_ARCHIVE_CREATE injected)",
+            "set(CMAKE_STATIC_LINKER_FLAGS /LTCG)",
+            "set(CMAKE_CXX_STANDARD 20)",
+            "set(CMAKE_CXX_EXTENSIONS ON)",
+            "set(CMAKE_UNITY_BUILD ON)",
+            "set(CMAKE_VS_GLOBALS CLToolExe=Injected.exe)",
+            "set(CMAKE_CURRENT_SOURCE_DIR injected)",
+            "set(CMAKE_INSTALL_INCLUDEDIR injected)",
+            "set(CMAKE_CXX_COMPILER_ID GNU)",
+            "set(CMAKE_SYSTEM_PROCESSOR ARM64)",
+            "set(CMAKE_USER_MAKE_RULES_OVERRIDE injected.cmake)",
+            "set(CMAKE_PROJECT_INCLUDE injected.cmake)",
+            "set(CMAKE_TOOLCHAIN_FILE injected.cmake)",
+            "set(CMAKE_AR injected)",
+            "set_property(CACHE CMAKE_CXX_FLAGS PROPERTY VALUE /arch:AVX2)",
+            "set_property(CACHE OpenMP_CXX_FLAGS PROPERTY VALUE /arch:AVX2)",
+            "set(OpenMP_CXX_LIB_NAMES evil CACHE STRING \"\" FORCE)",
+            "set(OpenMP_evil_LIBRARY C:/evil.lib CACHE FILEPATH \"\" FORCE)",
+            "set(OPENMP_FOUND TRUE)",
+            "set(Threads_FOUND TRUE)",
+            "set(THREADS_PTHREAD_ARG injected)",
+            "set(LEOPARD_INSTALL_CMAKEDIR C:/evil)",
+            "set(LEO2_FLAG_ARCH_AVX2 TRUE CACHE BOOL \"\" FORCE)",
+            "option(LEO2_FLAG_ARCH_AVX2 \"poison\" ON)",
+            "set(CXX_FLAG_O2 TRUE CACHE BOOL \"\" FORCE)",
+            "set(ENABLE_OPENMP OFF CACHE BOOL \"\" FORCE)",
+            "option(ENABLE_OPENMP \"poison\" OFF)",
+            "set(LEO2_ENABLE_CUDA ON CACHE BOOL \"\" FORCE)",
+            "set(LEO2_BUILD_TESTS OFF CACHE BOOL \"\" FORCE)",
+            "set(LEO2_BUILD_FUZZERS ON CACHE BOOL \"\" FORCE)",
+            "set(LEO2_BACKEND_VARIANT avx2 CACHE STRING \"\" FORCE)",
+            "set_property(CACHE OpenMP_CXX_LIB_NAMES PROPERTY VALUE evil)",
+            "set_property(CACHE Threads_FOUND PROPERTY VALUE TRUE)",
+            "set_property(CACHE LEO2_FLAG_ARCH_AVX2 PROPERTY VALUE TRUE)",
+            "set_property(CACHE ENABLE_OPENMP PROPERTY VALUE OFF)",
+            "set(FLAG_DEST CMAKE_CXX_FLAGS)\n"
+            "set(${FLAG_DEST} /arch:AVX2)",
+        )
+        for mutation in mutations:
+            with self.subTest(command=mutation.splitlines()[-1]):
+                with self.assertRaisesRegex(
+                        ContractError, "compiler-control variable"):
+                    self.resolve(mutation)
+
+    def test_unapproved_compiler_probes_are_rejected(self):
+        mutations = (
+            'check_cxx_compiler_flag("/arch:AVX" LEO2_FLAG_ARCH_AVX2)',
+            'check_cxx_compiler_flag("/GL" INJECTED_FLAG_GL)',
+            'check_c_compiler_flag("/O2" INJECTED_C_FLAG_O2)',
+        )
+        for mutation in mutations:
+            with self.subTest(probe=mutation):
+                with self.assertRaisesRegex(
+                        ContractError, "unapproved production compiler probe"):
+                    self.resolve(mutation)
+
+    def test_cache_state_mutation_properties_are_rejected(self):
+        mutations = (
+            "set_property(CACHE LEO2_BACKEND_VARIANT PROPERTY VALUE avx2)",
+            "set_property(CACHE LEO2_ENABLE_CUDA PROPERTY VALUE ON)",
+            "set_property(CACHE LEO2_BUILD_TESTS PROPERTY VALUE OFF)",
+        )
+        for mutation in mutations:
+            with self.subTest(property=mutation):
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "non-target property mutation|compiler-control variable"):
+                    self.resolve(mutation)
+
+    def test_backend_variant_normalizer_is_exact(self):
+        marker = ('string(TOLOWER "${LEO2_BACKEND_VARIANT}" '
+                  'LEO2_BACKEND_VARIANT_NORMALIZED)')
+        replacements = (
+            "string(CONCAT LEO2_BACKEND_VARIANT_NORMALIZED avx2)",
+            'string(TOLOWER "avx2" LEO2_BACKEND_VARIANT_NORMALIZED)',
+            "string(REPLACE auto avx2 LEO2_BACKEND_VARIANT_NORMALIZED "
+            "${LEO2_BACKEND_VARIANT})",
+        )
+        for replacement in replacements:
+            with self.subTest(normalizer=replacement):
+                text = self.cmake.replace(marker, replacement, 1)
+                self.assertNotEqual(text, self.cmake)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "compiler-control variable|trusted CMake command"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+
+    def test_find_program_cannot_rewrite_production_control_state(self):
+        cases = (
+            ("add_library(libleopard STATIC ${LIB_SOURCE_FILES})",
+             "find_program(LEO2_X86_TARGET NAMES definitely_missing)"),
+            ("if(LEO2_HAVE_SSSE3_BACKEND)",
+             "find_program(LEO2_HAVE_SSSE3_BACKEND NAMES definitely_missing)"),
+        )
+        for marker, mutation in cases:
+            with self.subTest(variable=mutation.split("(", 1)[1].split()[0]):
+                text = self.cmake.replace(
+                    marker, mutation + "\n" + marker, 1)
+                self.assertNotEqual(text, self.cmake)
+                with self.assertRaises(ContractError):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+
+    def test_language_and_project_toolchain_mutations_are_rejected(self):
+        mutations = (
+            "enable_language(CXX)",
+            "enable_language(CUDA)",
+            "project(leopard LANGUAGES CXX CUDA)",
+            "function(inject)\nenable_language(CUDA)\n"
+            "endfunction()\ninject()",
+            "macro(inject)\nproject(injected LANGUAGES CXX CUDA)\n"
+            "endmacro()\ninject()",
+        )
+        for mutation in mutations:
+            with self.subTest(command=mutation.split("(", 1)[0]):
+                with self.assertRaisesRegex(
+                        ContractError, "language|toolchain|unsupported CMake block"):
+                    self.resolve(mutation)
+
+    def test_generated_and_custom_build_extensions_are_rejected(self):
+        mutations = (
+            "add_custom_command(TARGET libleopard POST_BUILD "
+            "COMMAND injected)",
+            "add_custom_command(OUTPUT Injected.obj COMMAND injected)",
+            "add_custom_target(injected ALL COMMAND injected)",
+            "add_dependencies(libleopard injected)",
+            "configure_file(Injected.cpp leopard2.cpp COPYONLY)",
+            "file(GENERATE OUTPUT Injected.cpp CONTENT injected)",
+            "execute_process(COMMAND injected)",
+            "try_compile(RESULT build Injected.cpp)",
+            "cmake_parse_arguments(LIB \"\" SOURCE_FILES \"\" "
+            "SOURCE_FILES Injected.cpp)",
+            "configure_package_config_file(Injected.cpp leopard2.cpp "
+            "INSTALL_DESTINATION injected)",
+            "function(inject)\n"
+            "configure_package_config_file(Injected.cpp leopard2.cpp "
+            "INSTALL_DESTINATION injected)\nendfunction()\ninject()",
+        )
+        for mutation in mutations:
+            with self.subTest(command=mutation.split("(", 1)[0]):
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "generated/custom build extension|"
+                        "generated package configuration|build extension|"
+                        "unsupported CMake block"):
+                    self.resolve(mutation)
+
+    def test_unmodeled_root_commands_are_rejected(self):
+        mutations = (
+            "exec_program(injected)",
+            "write_file(leopard2.cpp injected)",
+            "write_basic_package_version_file(injected.cmake VERSION 1.0)",
+            "export(TARGETS libleopard FILE injected.cmake)",
+            "cmake_policy(SET CMP0001 OLD)",
+        )
+        for mutation in mutations:
+            with self.subTest(command=mutation.split("(", 1)[0]):
+                with self.assertRaisesRegex(
+                        ContractError, "unmodeled root CMake command"):
+                    self.resolve(mutation)
+
+    def test_bracket_comment_command_smuggling_is_rejected(self):
+        mutation = """#[[
+message(
+]]
+set(CMAKE_VS_GLOBALS VCTargetsPath=C:/evil)
+#[[
+)
+]]"""
+        with self.assertRaisesRegex(
+                ContractError, "compiler-control variable"):
+            self.resolve(mutation)
+
+        mutation = """set #[=[ ignored comment ]=]
+(CMAKE_VS_GLOBALS VCTargetsPath=C:/evil)"""
+        with self.assertRaisesRegex(
+                ContractError, "compiler-control variable"):
+            self.resolve(mutation)
+
+    def test_bracket_argument_command_smuggling_is_rejected(self):
+        mutation = """message([=[(]=])
+set(CMAKE_VS_GLOBALS VCTargetsPath=C:/evil)
+message([=[)]=])"""
+        self.assertEqual(
+            ["message", "set", "message"],
+            [name for name, unused in cmake_commands(mutation)])
+        with self.assertRaisesRegex(
+                ContractError, "bracket arguments are unsupported"):
+            self.resolve(mutation)
+
+    def test_regex_dialect_differences_cannot_make_mutations_unreachable(self):
+        mutation = r'''if("a" MATCHES "\\a")
+set(CMAKE_VS_GLOBALS VCTargetsPath=C:/evil)
+endif()'''
+        with self.assertRaisesRegex(
+                ContractError, "compiler-control variable"):
+            self.resolve(mutation)
+
+    def test_unknown_comparison_operands_remain_external_and_symbolic(self):
+        conditions = (
+            'USER_SWITCH STREQUAL "yes"',
+            "USER_SWITCH EQUAL 7",
+            'USER_SWITCH MATCHES "^yes$"',
+        )
+        for condition in conditions:
+            with self.subTest(condition=condition):
+                mutation = (
+                    "if(" + condition + ")\n"
+                    "set(CMAKE_VS_GLOBALS VCTargetsPath=C:/evil)\n"
+                    "endif()")
+                with self.assertRaisesRegex(
+                        ContractError, "compiler-control variable"):
+                    self.resolve(mutation)
+
+    def test_external_cache_and_environment_expansions_are_rejected(self):
+        mutations = (
+            'set(DEST CMAKE_VS_GLOBALS CACHE STRING "")\n'
+            'string(CONCAT $CACHE{DEST} "VCTargetsPath=C:/evil")',
+            'string(CONCAT $CACHE{DEST} "VCTargetsPath=C:/evil")',
+            'get_filename_component($CACHE{DEST} injected ABSOLUTE)',
+            'get_property($ENV{DEST} GLOBAL PROPERTY INJECTED)',
+        )
+        for mutation in mutations:
+            with self.subTest(command=mutation.splitlines()[-1]):
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "cache assignment|cache/environment expansion"):
+                    self.resolve(mutation)
+
+    def test_cache_options_and_backend_enum_remain_external(self):
+        mutations = (
+            "if(NOT LEO2_BUILD_TESTS)\n"
+            "target_compile_options(libleopard PRIVATE /GL)\nendif()",
+            "if(LEO2_ENABLE_CUDA)\n"
+            "target_compile_options(libleopard PRIVATE /GL)\nendif()",
+            "if(LEO2_BUILD_FUZZERS)\n"
+            "target_compile_options(libleopard PRIVATE /GL)\nendif()",
+            "if(NOT LEO2_BUILD_BENCHMARKS)\n"
+            "target_compile_options(libleopard PRIVATE /GL)\nendif()",
+            "if(LEO2_BACKEND_VARIANT STREQUAL \"scalar\")\n"
+            "target_compile_options(libleopard PRIVATE /GL)\nendif()",
+            "if(LEOPARD_INSTALL_CMAKEDIR STREQUAL \"evil\")\n"
+            "target_compile_options(libleopard PRIVATE /GL)\nendif()",
+        )
+        for mutation in mutations:
+            with self.subTest(condition=mutation.splitlines()[0]):
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "unapproved production target compile/link mutation"):
+                    self.resolve(mutation)
+
+    def test_every_supported_x86_processor_spelling_is_proved(self):
+        for processor in (
+                "x86", "X86", "i386", "i486", "i586", "i686",
+                "x86_64", "amd64", "AMD64"):
+            with self.subTest(processor=processor):
+                mutation = (
+                    "if(CMAKE_SYSTEM_PROCESSOR STREQUAL \"" + processor +
+                    "\")\ntarget_compile_options(libleopard PRIVATE /GL)\n"
+                    "endif()")
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "unapproved production target compile/link mutation"):
+                    self.resolve(mutation)
+
+    def test_cuda_tools_and_sources_cannot_enter_default_graph(self):
+        mutations = (
+            "find_program(CUDA_NVCC_EXECUTABLE nvcc REQUIRED)",
+            "set(PROGRAM nvcc)\nfind_program(TOOL ${PROGRAM} REQUIRED)",
+            "find_program(TOOL ptxas REQUIRED)",
+            "find_program(TOOL nvlink REQUIRED)",
+            "find_program(TOOL fatbinary REQUIRED)",
+            "find_program(TOOL cuobjdump REQUIRED)",
+            "add_library(cuda_always STATIC kernels.cu)",
+            "add_library(cuda_always STATIC kernels.$<LOWER_CASE:CU>)",
+            "set(CUDA_ALWAYS_SOURCE kernels.cuh)",
+            "add_library(extra_cuda STATIC tests.cpp)\n"
+            "target_link_libraries(extra_cuda PRIVATE "
+            "C:/CUDA/lib/x64/cudart.lib)",
+            "add_library(extra_cuda STATIC tests.cpp)\n"
+            "target_include_directories(extra_cuda PRIVATE "
+            "C:/Program_Files/NVIDIA_GPU_Computing_Toolkit/CUDA/include)",
+            "add_library(extra_cuda STATIC tests.cpp)\n"
+            "target_link_libraries(extra_cuda PRIVATE "
+            "$<JOIN:cu,>dart.lib)",
+            "add_library(extra_cuda STATIC tests.cpp)\nset(VENDOR CUDA)\n"
+            "target_include_directories(extra_cuda PRIVATE "
+            "C:/${VENDOR}/include)",
+            "add_library(extra_cuda STATIC tests.cpp)\nset(VENDOR nvidia)\n"
+            "target_link_libraries(extra_cuda PRIVATE "
+            "C:/${VENDOR}/lib/foo.lib)",
+            "add_library(extra_cuda STATIC tests.cpp)\n"
+            "set(GEN \"$<JOIN:cu,>dart.lib\")\n"
+            "target_link_libraries(extra_cuda PRIVATE ${GEN})",
+            "add_library(extra_cuda STATIC tests/benchmark.cpp)\n"
+            "set_source_files_properties(tests/benchmark.cpp "
+            "PROPERTIES LANGUAGE CUDA)",
+            "add_library(extra_cuda STATIC tests/benchmark.cpp)\n"
+            "set_property(SOURCE tests/benchmark.cpp PROPERTY LANGUAGE CUDA)",
+            "add_library(extra_cuda STATIC tests/benchmark.cpp)\n"
+            "set_source_files_properties(tests/benchmark.cpp PROPERTIES "
+            "VS_TOOL_OVERRIDE CudaCompile)",
+            "add_library(extra_cuda STATIC tests/benchmark.cpp)\n"
+            "set_source_files_properties(tests/benchmark.cpp PROPERTIES "
+            "COMPILE_OPTIONS \"-x;cuda\")",
+            "add_library(extra_cuda STATIC tests/benchmark.cpp)\n"
+            "set_source_files_properties(tests/benchmark.cpp PROPERTIES "
+            "COMPILE_OPTIONS $<JOIN:cu,da>)",
+            "add_test(NAME cuda_probe COMMAND nvcc --version)",
+            "set(TEST_TOOL nvcc)\n"
+            "add_test(NAME cuda_probe COMMAND ${TEST_TOOL} --version)",
+            "add_test(NAME cuda_probe COMMAND $<JOIN:nv,cc> --version)",
+        )
+        for mutation in mutations:
+            with self.subTest(command=mutation.split("(", 1)[0]):
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "CUDA .*CPU-only graph|source generator expression|"
+                        "dependency generator expression|"
+                        "expanded target dependency generator expression|"
+                        "unapproved tool discovery|unmodeled source-property|"
+                        "unmodeled test generator expression"):
+                    self.resolve(mutation)
+
+    def test_unapproved_cache_declarations_cannot_hide_external_state(self):
+        mutations = (
+            'option(USER_SWITCH "external switch" OFF)',
+            'set(USER_SWITCH OFF CACHE BOOL "external switch")',
+            'set(USER_SWITCH)\nif(USER_SWITCH)\n'
+            'set(CMAKE_VS_GLOBALS VCTargetsPath=C:/evil)\nendif()',
+            "unset(USER_SWITCH)",
+        )
+        for mutation in mutations:
+            with self.subTest(command=mutation.splitlines()[0]):
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "cache option|cache assignment|compiler-control "
+                        "variable|unset state"):
+                    self.resolve(mutation)
+
+    def test_install_execution_extensions_are_rejected(self):
+        for mutation in (
+                'install(CODE "execute_process(COMMAND injected)")',
+                "install(SCRIPT injected.cmake)"):
+            with self.subTest(command=mutation):
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "unapproved CMake install/package mutation"):
+                    self.resolve(mutation)
+
+    def test_arbitrary_target_properties_are_rejected(self):
+        mutations = (
+            "set_property(TARGET libleopard PROPERTY LINKER_LANGUAGE CUDA)",
+            "set_property(TARGET libleopard PROPERTY EXCLUDE_FROM_ALL TRUE)",
+            "set_property(TARGET libleopard PROPERTY SOVERSION 99)",
+            "set_target_properties(leopard2_codec_options_abi_test "
+            "PROPERTIES LINKER_LANGUAGE CUDA)",
+        )
+        for mutation in mutations:
+            with self.subTest(property=mutation):
+                with self.assertRaisesRegex(ContractError, "property"):
+                    self.resolve(mutation)
+
+    def test_build_graph_command_shadowing_is_rejected(self):
+        mutations = (
+            "function(target_compile_options)\nendfunction()",
+            "macro(target_link_libraries)\nendmacro()",
+            "function(add_custom_command)\nendfunction()",
+            "macro(target_sources)\nendmacro()",
+            "macro(check_cxx_compiler_flag)\nendmacro()",
+            "macro(find_package)\nendmacro()",
+            "macro(option)\nendmacro()",
+            "macro(cmake_dependent_option)\nendmacro()",
+        )
+        for mutation in mutations:
+            with self.subTest(command=mutation.split("(", 1)[0]):
+                with self.assertRaisesRegex(
+                        ContractError, "command shadowing"):
+                    self.resolve(mutation)
+
+    def test_scoped_directory_properties_are_rejected(self):
+        for mutation in (
+                "function(inject)\nset_directory_properties(PROPERTIES "
+                "COMPILE_OPTIONS /arch:AVX2)\nendfunction()\ninject()",
+                "macro(inject)\nset_directory_properties(PROPERTIES "
+                "LINK_OPTIONS /LTCG)\nendmacro()\ninject()"):
+            with self.subTest(scope=mutation.split("(", 1)[0]):
+                with self.assertRaisesRegex(
+                        ContractError, "unsupported CMake block"):
+                    self.resolve(mutation)
+
+    def test_required_production_mutations_cannot_be_removed_or_duplicated(self):
+        commands = (
+            """target_compile_definitions(libleopard PRIVATE
+        LEO2_DISABLE_SSSE3_CODEGEN=1
+        LEO2_DISABLE_AVX2_CODEGEN=1)""",
+            """target_include_directories(libleopard PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)""",
+            "target_link_libraries(libleopard PUBLIC Threads::Threads)",
+            """target_include_directories(leopard2_backend_ssse3 PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR})""",
+            """target_include_directories(leopard2_backend_avx2 PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR})""",
+            "target_compile_options(leopard2_backend_avx2 PRIVATE /arch:AVX2)",
+            "target_compile_definitions(libleopard PRIVATE "
+            "LEO2_HAVE_SSSE3_BACKEND=1)",
+            "target_compile_definitions(libleopard PRIVATE "
+            "LEO2_HAVE_AVX2_BACKEND=1)",
+            "target_compile_definitions(libleopard PRIVATE "
+            "LEO2_ENABLE_TEST_HOOKS=1)",
+            "target_link_libraries(libleopard PUBLIC OpenMP::OpenMP_CXX)",
+            "target_link_libraries(libleopard PUBLIC \"${OpenMP_CXX_FLAGS}\")",
+        )
+        for command in commands:
+            with self.subTest(command=command.split("(", 1)[0]):
+                index = self.cmake.rfind(command)
+                self.assertNotEqual(-1, index)
+                text = self.cmake[:index] + self.cmake[index + len(command):]
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "missing or duplicate production target mutation"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+
+        with self.assertRaisesRegex(
+                ContractError,
+                "missing or duplicate production target mutation"):
+            self.resolve(
+                "target_link_libraries(libleopard PUBLIC Threads::Threads)")
+
+    def test_required_trusted_cmake_commands_cannot_be_removed_or_duplicated(self):
+        commands = (
+            "cmake_minimum_required(VERSION 3.7)",
+            "project(leopard)",
+            "add_library(libleopard STATIC ${LIB_SOURCE_FILES})",
+            "include(CMakeDependentOption)",
+            "include(CheckCXXCompilerFlag)",
+            "include(CMakePackageConfigHelpers)",
+            "include(GNUInstallDirs)",
+            "find_package(OpenMP)",
+            "find_package(Threads REQUIRED)",
+            'option(LEO2_BUILD_TESTS "Build Leopard2 correctness tests" ON)',
+            'option(LEO2_BUILD_BENCHMARKS "Build Leopard benchmark programs" '
+            'ON)',
+            'option(LEO2_BUILD_FUZZERS "Build Leopard2 libFuzzer targets" OFF)',
+            'option(LEO2_ENABLE_CUDA "Build the optional Leopard2 CUDA backend" '
+            'OFF)',
+            'string(TOLOWER "${LEO2_BACKEND_VARIANT}" '
+            'LEO2_BACKEND_VARIANT_NORMALIZED)',
+            'check_cxx_compiler_flag("/O2" CXX_FLAG_O2)',
+            'check_cxx_compiler_flag("/Oy" CXX_FLAG_Oy)',
+            'check_cxx_compiler_flag("/Zi" CXX_FLAG_Zi)',
+            'check_cxx_compiler_flag("/W4" CXX_FLAG_W4)',
+            'check_cxx_compiler_flag("/arch:AVX2" LEO2_FLAG_ARCH_AVX2)',
+            'cmake_dependent_option(ENABLE_OPENMP "Enable OpenMP support" '
+            'ON "OPENMP_FOUND" OFF)',
+            """configure_package_config_file(
+    cmake/leopardConfig.cmake.in
+    "${CMAKE_CURRENT_BINARY_DIR}/leopardConfig.cmake"
+    INSTALL_DESTINATION "${LEOPARD_INSTALL_CMAKEDIR}")""",
+            """install(TARGETS libleopard
+    EXPORT leopardTargets
+    ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")""",
+            """install(FILES leopard.h leopard2.h
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")""",
+            """install(FILES "${CMAKE_CURRENT_BINARY_DIR}/leopardConfig.cmake"
+    DESTINATION "${LEOPARD_INSTALL_CMAKEDIR}")""",
+            """install(EXPORT leopardTargets
+    FILE leopardTargets.cmake
+    NAMESPACE leopard::
+    DESTINATION "${LEOPARD_INSTALL_CMAKEDIR}")""",
+        )
+        for command in commands:
+            with self.subTest(command=command.split("(", 1)[0]):
+                self.assertEqual(1, self.cmake.count(command))
+                text = self.cmake.replace(command, "", 1)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "missing or duplicate trusted CMake command|"
+                        "unsupported conditional CMake source graph|"
+                        "reachable CMake language enablement|"
+                        "CMake bootstrap must begin"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+
+        with self.assertRaisesRegex(
+                ContractError,
+                "missing or duplicate trusted CMake command"):
+            self.resolve("find_package(Threads REQUIRED)")
+
+    def test_minimum_and_project_are_the_first_executable_commands(self):
+        preambles = (
+            """if(NOT MSVC)
+set(CMAKE_VS_GLOBALS VCTargetsPath=C:/evil)
+endif()""",
+            """if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+set(CMAKE_VS_GLOBALS VCTargetsPath=C:/evil)
+endif()""",
+            """set(X yes)
+if("X" STREQUAL "yes")
+set(CMAKE_VS_GLOBALS VCTargetsPath=C:/evil)
+endif()""",
+        )
+        for preamble in preambles:
+            with self.subTest(first=preamble.splitlines()[0]):
+                with self.assertRaisesRegex(
+                        ContractError, "CMake bootstrap must begin"):
+                    self.resolve_text(
+                        preamble + "\n" + self.cmake,
+                        require_mutation_contract=True)
+
+    def test_trusted_cmake_command_arguments_and_guards_are_exact(self):
+        marker = ('check_cxx_compiler_flag("/arch:AVX2" '
+                  'LEO2_FLAG_ARCH_AVX2)')
+        text = self.cmake.replace(
+            marker,
+            'check_cxx_compiler_flag("/arch:AVX" LEO2_FLAG_ARCH_AVX2)', 1)
+        self.assertNotEqual(text, self.cmake)
+        with self.assertRaisesRegex(
+                ContractError,
+                "unapproved production compiler probe|"
+                "missing or duplicate trusted CMake command"):
+            self.resolve_text(text, require_mutation_contract=True)
+
+        marker = "include(GNUInstallDirs)"
+        replacement = (
+            "if(COMMAND injected_gate)\n" + marker + "\nendif()")
+        text = self.cmake.replace(marker, replacement, 1)
+        self.assertNotEqual(text, self.cmake)
+        with self.assertRaisesRegex(
+                ContractError, "trusted CMake command guard drift"):
+            self.resolve_text(text, require_mutation_contract=True)
+
+    def test_security_sensitive_cmake_command_order_is_exact(self):
+        discovery = "find_package(OpenMP)\n"
+        insertion = "endif(ENABLE_OPENMP)\n\nset(LEO2_X86_TARGET OFF)"
+        self.assertEqual(1, self.cmake.count(discovery))
+        self.assertEqual(1, self.cmake.count(insertion))
+        text = self.cmake.replace(discovery, "", 1).replace(
+            insertion,
+            "endif(ENABLE_OPENMP)\nfind_package(OpenMP)\n\n"
+            "set(LEO2_X86_TARGET OFF)", 1)
+        with self.assertRaisesRegex(
+                ContractError, "security-sensitive CMake command order"):
+            self.resolve_text(text, require_mutation_contract=True)
+
+    def test_required_protected_assignments_cannot_be_removed_or_duplicated(self):
+        commands = (
+            'set(CMAKE_CONFIGURATION_TYPES "Debug;Release" CACHE STRING "" '
+            'FORCE)',
+            "set(CMAKE_CXX_STANDARD 11)",
+            "set(CMAKE_BUILD_TYPE Release)",
+            'set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2")',
+            'set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Oy")',
+            'set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Zi")',
+            'set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W4")',
+            'set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")',
+            'set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} '
+            '${OpenMP_EXE_LINKER_FLAGS}")',
+            """set(LEOPARD_INSTALL_CMAKEDIR
+    "${CMAKE_INSTALL_LIBDIR}/cmake/leopard"
+    CACHE STRING "Install directory for Leopard CMake package files")""",
+            """set(LEO2_BACKEND_VARIANT "auto" CACHE STRING
+    "Diagnostic backend variant: auto, scalar, ssse3, or avx2")""",
+            """set(LEO2_BACKEND_VARIANT "${LEO2_BACKEND_VARIANT_NORMALIZED}" CACHE STRING
+    "Diagnostic backend variant: auto, scalar, ssse3, or avx2" FORCE)""",
+        )
+        for command in commands:
+            with self.subTest(variable=command.split("(", 1)[1].split()[0]):
+                self.assertEqual(1, self.cmake.count(command))
+                text = self.cmake.replace(command, "", 1)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "missing or duplicate protected CMake assignment|"
+                        "may mutate source variable|"
+                        "unresolved CMake source variable"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+
+        with self.assertRaisesRegex(
+                ContractError,
+                "missing or duplicate protected CMake assignment"):
+            self.resolve("set(CMAKE_CXX_STANDARD 11)")
+
+    def test_protected_assignment_guard_drift_is_rejected(self):
+        marker = "set(CMAKE_CXX_STANDARD 11)"
+        replacement = (
+            "if(COMMAND injected_gate)\n" + marker + "\nendif()")
+        text = self.cmake.replace(marker, replacement, 1)
+        self.assertNotEqual(text, self.cmake)
+        with self.assertRaisesRegex(
+                ContractError,
+                "guards protected CMake assignment|"
+                "protected CMake assignment guard drift"):
+            self.resolve_text(text, require_mutation_contract=True)
+
+    def test_protected_assignment_cache_and_scope_modifiers_are_exact(self):
+        replacements = (
+            ("set(CMAKE_CXX_STANDARD 11)",
+             "set(CMAKE_CXX_STANDARD 11 PARENT_SCOPE)"),
+            ('set(CMAKE_CONFIGURATION_TYPES "Debug;Release" CACHE STRING "" '
+             'FORCE)',
+             'set(CMAKE_CONFIGURATION_TYPES "Debug;Release" CACHE STRING "")'),
+            ("""set(LEOPARD_INSTALL_CMAKEDIR
+    "${CMAKE_INSTALL_LIBDIR}/cmake/leopard"
+    CACHE STRING "Install directory for Leopard CMake package files")""",
+             """set(LEOPARD_INSTALL_CMAKEDIR
+    "${CMAKE_INSTALL_LIBDIR}/cmake/leopard"
+    CACHE STRING "Install directory for Leopard CMake package files" FORCE)"""),
+        )
+        for marker, replacement in replacements:
+            with self.subTest(replacement=replacement.splitlines()[0]):
+                text = self.cmake.replace(marker, replacement, 1)
+                self.assertNotEqual(text, self.cmake)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "compiler-control variable mutation|PARENT_SCOPE"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+
+    def test_source_list_parent_scope_cannot_preserve_attacker_state(self):
+        marker = "set(LIB_SOURCE_FILES\n"
+        text = self.cmake.replace(
+            marker, "set(LIB_SOURCE_FILES tests.cpp)\n" + marker, 1)
+        text = text.replace(
+            "        LeopardFF8.h)",
+            "        LeopardFF8.h PARENT_SCOPE)", 1)
+        self.assertNotEqual(text, self.cmake)
+        with self.assertRaisesRegex(ContractError, "PARENT_SCOPE"):
+            self.resolve_text(text, require_mutation_contract=True)
+
+    def test_computed_list_output_variables_cannot_rewrite_source_graph(self):
+        marker = "add_library(libleopard STATIC ${LIB_SOURCE_FILES})"
+        operations = (
+            "list(GET EVIL 0 LIB_SOURCE_FILES)",
+            "list(LENGTH EVIL LIB_SOURCE_FILES)",
+            'list(JOIN EVIL "" LIB_SOURCE_FILES)',
+            "list(POP_BACK EVIL LIB_SOURCE_FILES)",
+            "list(TRANSFORM EVIL TOUPPER OUTPUT_VARIABLE LIB_SOURCE_FILES)",
+        )
+        for operation in operations:
+            with self.subTest(operation=operation.split("(", 1)[1].split()[0]):
+                mutation = "set(EVIL tests.cpp)\n" + operation
+                text = self.cmake.replace(
+                    marker, mutation + "\n" + marker, 1)
+                self.assertNotEqual(text, self.cmake)
+                with self.assertRaisesRegex(
+                        ContractError, "unsupported CMake list operation"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+
+    def test_libleopard_library_kind_and_definition_are_exact(self):
+        marker = "add_library(libleopard STATIC ${LIB_SOURCE_FILES})"
+        replacements = (
+            "add_library(libleopard SHARED ${LIB_SOURCE_FILES})",
+            "add_library(libleopard MODULE ${LIB_SOURCE_FILES})",
+            "add_library(libleopard OBJECT ${LIB_SOURCE_FILES})",
+            "add_library(libleopard ${LIB_SOURCE_FILES})",
+            "add_library(libleopard STATIC EXCLUDE_FROM_ALL "
+            "${LIB_SOURCE_FILES})",
+        )
+        for replacement in replacements:
+            with self.subTest(definition=replacement):
+                text = self.cmake.replace(marker, replacement, 1)
+                self.assertNotEqual(text, self.cmake)
+                with self.assertRaisesRegex(
+                        ContractError, "exact STATIC library definition"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+
+        with self.assertRaisesRegex(
+                ContractError,
+                "missing or duplicate trusted CMake command"):
+            self.resolve(marker)
+
+    def test_production_mutation_guard_drift_is_rejected(self):
+        marker = "target_link_libraries(libleopard PUBLIC Threads::Threads)"
+        replacements = (
+            "if(COMMAND injected_gate)\n" + marker + "\nendif()",
+            "if(CMAKE_VS_PLATFORM_NAME STREQUAL \"x64\")\n" + marker +
+            "\nendif()",
+            "if(FALSE)\n" + marker + "\nendif()",
+        )
+        for replacement in replacements:
+            with self.subTest(guard=replacement.splitlines()[0]):
+                text = self.cmake.replace(marker, replacement, 1)
+                self.assertNotEqual(text, self.cmake)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "guards production target mutation|guard drift|"
+                        "missing or duplicate production target mutation"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
 
     def test_approved_link_flag_variable_cannot_be_locally_redirected(self):
         marker = ('target_link_libraries(libleopard PUBLIC '
@@ -2186,7 +4669,8 @@ inject_link()
         text = self.cmake.replace(marker, mutation, 1)
         self.assertNotEqual(text, self.cmake)
         with self.assertRaisesRegex(
-                ContractError, "OpenMP_CXX_FLAGS mutation"):
+                ContractError,
+                "OpenMP_CXX_FLAGS.*mutation|mutation.*OpenMP_CXX_FLAGS"):
             self.resolve_text(text)
 
     def test_indirect_module_path_mutation_is_rejected(self):
@@ -2212,7 +4696,9 @@ inject_sources()""",
         for mutation in mutations:
             with self.subTest(block=mutation.splitlines()[1]):
                 with self.assertRaisesRegex(
-                        ContractError, "mutation in unsupported CMake block"):
+                        ContractError,
+                        "mutation in unsupported CMake block|"
+                        "unsupported CMake block"):
                     self.resolve(mutation)
 
     def test_win32_only_source_variable_mutation_is_rejected(self):
@@ -2256,7 +4742,9 @@ endif()"""
                 replacement = opening + "\n" + marker + "\n" + closing
                 text = self.cmake.replace(marker, replacement, 1)
                 with self.assertRaisesRegex(
-                        ContractError, "add_library must be unconditional"):
+                        ContractError,
+                        "add_library must be unconditional|"
+                        "unsupported CMake block"):
                     self.resolve_text(text)
 
     def test_contextual_target_property_source_mutation_is_rejected(self):
@@ -2317,7 +4805,8 @@ target_sources(libleopard PRIVATE $<TARGET_OBJECTS:hidden_backend>)
                 text = self.cmake.replace("elseif(MSVC)", replacement, 1)
                 self.assertNotEqual(text, self.cmake)
                 with self.assertRaisesRegex(
-                        ContractError, "no MSVC-reachable"):
+                        ContractError,
+                        "no MSVC-reachable|unsupported conditional"):
                     self.resolve_text(text)
 
     def test_target_objects_attachment_must_reach_msvc(self):
@@ -2375,12 +4864,25 @@ endif()
             "PROPERTIES HEADER_FILE_ONLY TRUE)",
             "set_property(SOURCE leopard2.cpp "
             "PROPERTY HEADER_FILE_ONLY TRUE)",
+            "set_source_files_properties(leopard2.cpp "
+            "PROPERTIES GENERATED TRUE)",
+            "set_property(SOURCE leopard2.cpp "
+            "PROPERTY COMPILE_OPTIONS /arch:AVX2)",
+            "set_property(SOURCE Leopard2BackendSSSE3.cpp "
+            "PROPERTY COMPILE_DEFINITIONS LEO2_DISABLE_SSSE3_CODEGEN=0)",
+            "set_source_files_properties(leopardff8.cpp "
+            "PROPERTIES COMPILE_OPTIONS /arch:AVX2)",
         )
         for mutation in mutations:
             with self.subTest(command=mutation.split("(", 1)[0]):
                 with self.assertRaisesRegex(
                         ContractError, "source properties affect production"):
                     self.resolve(mutation)
+
+        with self.assertRaisesRegex(
+                ContractError, "duplicate production source attachment"):
+            self.resolve(
+                "target_sources(libleopard PRIVATE leopardff8.cpp)")
 
     def test_target_sources_property_mutation_is_rejected(self):
         mutations = (
@@ -2455,7 +4957,8 @@ class MSBuildToolchainMutationTest(unittest.TestCase):
         tree = self.fresh_tree()
         target = ET.SubElement(tree.getroot(), namespace + "Target")
         target.set("BeforeTargets", "ClCompile")
-        with self.assertRaisesRegex(ContractError, "execution logic"):
+        with self.assertRaisesRegex(
+                ContractError, "execution logic|unapproved root MSBuild"):
             validate_visual_studio_project(tree)
 
     def test_build_event_and_custom_build_commands_are_rejected(self):
@@ -2477,6 +4980,98 @@ class MSBuildToolchainMutationTest(unittest.TestCase):
                     command.text = "injected-compiler.exe"
                 with self.assertRaisesRegex(
                         ContractError, "build-event|custom MSBuild build"):
+                    validate_visual_studio_project(tree)
+
+    def test_configuration_compile_tool_contract_rejects_extra_inputs(self):
+        namespace = "{http://schemas.microsoft.com/developer/msbuild/2003}"
+        tree = self.fresh_tree()
+        compile_tool = tree.find(
+            ".//msb:ItemDefinitionGroup/msb:ClCompile", NS)
+        include_dirs = ET.SubElement(
+            compile_tool, namespace + "AdditionalIncludeDirectories")
+        include_dirs.text = "..\\injected;%(AdditionalIncludeDirectories)"
+        with self.assertRaisesRegex(
+                ContractError, "ClCompile.*exact contract"):
+            validate_visual_studio_project(tree)
+
+    def test_foreign_namespace_cannot_satisfy_exact_tool_properties(self):
+        tree = self.fresh_tree()
+        sdl_check = tree.find(
+            ".//msb:ItemDefinitionGroup/msb:ClCompile/msb:SDLCheck", NS)
+        sdl_check.tag = "{urn:foreign}SDLCheck"
+        with self.assertRaisesRegex(
+                ContractError, "foreign or missing MSBuild XML namespace"):
+            validate_visual_studio_project(tree)
+
+    def test_unapproved_build_bearing_item_types_are_rejected(self):
+        namespace = "{http://schemas.microsoft.com/developer/msbuild/2003}"
+        for item_name in (
+                "ProjectReference", "ResourceCompile", "Object",
+                "PackageReference", "Reference", "Midl"):
+            with self.subTest(item=item_name):
+                tree = self.fresh_tree()
+                group = ET.SubElement(tree.getroot(), namespace + "ItemGroup")
+                item = ET.SubElement(group, namespace + item_name)
+                item.set("Include", "injected")
+                with self.assertRaisesRegex(
+                        ContractError, "ItemGroup topology|ItemGroup contents"):
+                    validate_visual_studio_project(tree)
+
+    def test_import_and_toolchain_input_properties_are_rejected(self):
+        namespace = "{http://schemas.microsoft.com/developer/msbuild/2003}"
+        for property_name in (
+                "UserRootDir", "MSBuildUserExtensionsPath", "Platform",
+                "Configuration", "IncludePath", "CLToolArchitecture",
+                "BuildDependsOn", "ForceImportAfterCppTargets",
+                "CustomAfterMicrosoftCommonTargets"):
+            with self.subTest(property=property_name):
+                tree = self.fresh_tree()
+                group = ET.SubElement(
+                    tree.getroot(), namespace + "PropertyGroup")
+                value = ET.SubElement(group, namespace + property_name)
+                value.text = "injected"
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "override is forbidden|hook is forbidden|"
+                        "PropertyGroup topology"):
+                    validate_visual_studio_project(tree)
+
+    def test_root_evaluation_phase_order_is_exact(self):
+        mutations = ("definitions-before-props", "sheets-after-definitions")
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                tree = self.fresh_tree()
+                root = tree.getroot()
+                children = list(root)
+                if mutation == "definitions-before-props":
+                    definitions = [node for node in children
+                                   if xml_local_name(node) ==
+                                   "ItemDefinitionGroup"]
+                    for node in definitions:
+                        root.remove(node)
+                    cpp_props = next(
+                        index for index, node in enumerate(list(root))
+                        if (xml_local_name(node) == "Import" and
+                            node.attrib.get("Project", "").endswith(
+                                "Microsoft.Cpp.props")))
+                    for offset, node in enumerate(definitions):
+                        root.insert(cpp_props + offset, node)
+                else:
+                    sheets = [node for node in children
+                              if (xml_local_name(node) == "ImportGroup" and
+                                  node.attrib.get("Label") ==
+                                  "PropertySheets")]
+                    for node in sheets:
+                        root.remove(node)
+                    targets = next(
+                        index for index, node in enumerate(list(root))
+                        if (xml_local_name(node) == "Import" and
+                            node.attrib.get("Project", "").endswith(
+                                "Microsoft.Cpp.targets")))
+                    for offset, node in enumerate(sheets):
+                        root.insert(targets + offset, node)
+                with self.assertRaisesRegex(
+                        ContractError, "root evaluation phase/order"):
                     validate_visual_studio_project(tree)
 
     def test_librarian_archive_inputs_are_rejected(self):
@@ -2630,7 +5225,8 @@ class MSBuildConditionMutationTest(unittest.TestCase):
                 node.set("Condition", "false")
                 with self.assertRaisesRegex(
                         ContractError,
-                        "ProjectConfigurations|ProjectConfiguration attributes"):
+                        "ProjectConfigurations|ProjectConfiguration attributes|"
+                        "unapproved MSBuild ItemGroup"):
                     validate_visual_studio_project(tree)
 
     def test_project_configuration_transform_outside_group_is_rejected(self):
@@ -2641,7 +5237,8 @@ class MSBuildConditionMutationTest(unittest.TestCase):
             group, namespace + "ProjectConfiguration")
         transformed.set("Remove", "Debug|Win32")
         with self.assertRaisesRegex(
-                ContractError, "outside the canonical group"):
+                ContractError,
+                "outside the canonical group|ItemGroup topology"):
             validate_visual_studio_project(tree)
 
     def test_missing_condition_is_rejected(self):
@@ -2689,7 +5286,9 @@ class MSBuildConditionMutationTest(unittest.TestCase):
         when = ET.SubElement(choose, namespace + "When")
         when.set("Condition", "false")
         when.append(definition)
-        with self.assertRaisesRegex(ContractError, "direct Project children"):
+        with self.assertRaisesRegex(
+                ContractError,
+                "direct Project children|unapproved root MSBuild"):
             validate_visual_studio_project(tree)
 
 
