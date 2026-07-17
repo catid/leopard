@@ -9,7 +9,7 @@
 #include <memory>
 #include <new>
 
-#if defined(__aarch64__) || defined(_M_ARM64)
+#if defined(__aarch64__)
 #include <arm_neon.h>
 #endif
 
@@ -379,7 +379,7 @@ static void ScalarXorMemory2To1(
     uint8_t* output = static_cast<uint8_t*>(destination);
     const uint8_t* input0 = static_cast<const uint8_t*>(source0);
     const uint8_t* input1 = static_cast<const uint8_t*>(source1);
-#if defined(__aarch64__) || defined(_M_ARM64)
+#if defined(__aarch64__)
     while (byte_count >= 64)
     {
         for (unsigned offset = 0; offset < 64; offset += 16)
