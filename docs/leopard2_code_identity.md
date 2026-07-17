@@ -132,12 +132,18 @@ corpus with:
     JOBS="$(nproc)"; if [ "$JOBS" -gt 128 ]; then JOBS=128; fi
     cmake --build ../../../build/code-id-fuzz \
       --target leopard2_code_identity_fuzzer -j "$JOBS"
+    PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v \
+      test_fuzz_campaign.py
+    test ! -e ../../../build/code-id-corpus-independent
     PYTHONDONTWRITEBYTECODE=1 python3 make_fuzz_corpus.py \
-      --output ../../../build/code-id-corpus
-    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
-      UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
-      ../../../build/code-id-fuzz/leopard2_code_identity_fuzzer \
-      ../../../build/code-id-corpus -max_len=65535 -rss_limit_mb=8192
+      --output ../../../build/code-id-corpus-independent
+    test ! -e ../../../build/code-id-campaign-independent
+    PYTHONDONTWRITEBYTECODE=1 python3 run_fuzz_campaign.py \
+      --fuzzer ../../../build/code-id-fuzz/leopard2_code_identity_fuzzer \
+      --corpus ../../../build/code-id-corpus-independent \
+      --results ../../../build/code-id-campaign-independent \
+      --runs 50000 --max-len 65535 --rss-limit-mb 8192 \
+      --external-rss-limit-mb 10240
 
 Use the allowed CPU count rather than a literal 128 when fewer CPUs are in the
 process affinity mask.  The explicit libFuzzer RSS limit avoids a Clang 18
@@ -190,21 +196,32 @@ allocations, so an out-of-bounds parser read cannot hide inside a larger test
 buffer.  The harness compiles into an automatically removed temporary directory
 and leaves no generated binary or Python bytecode in the source tree.
 
-At implementation commit `d5d605b`, 28 allowed CPUs each completed 50,000
-libFuzzer executions under ASan+UBSan: 1,400,000 total executions, zero crash or
-sanitizer artifacts, maximum reported worker RSS 60 MiB, and a merged corpus of
-2,458 files.  The deterministic corpus began with 178 files covering golden,
-malformed, profile-boundary, critical-extension, and builder-state inputs.  The
-same 217 direct C checks and complete differential matrix passed in a statically
-linked s390x binary under QEMU 8.2.2 with zero mismatch, providing executed
-big-endian evidence rather than an inference from byte-wise loads.  The compact
-machine-readable checkpoint is `fuzz_checkpoint.json`; raw corpora and worker
-logs remain ignored build artifacts.
+The initial campaign at implementation commit `d5d605b` is rejected as evidence:
+all 28 workers reused seed `1279609156` while mutating one shared corpus.  It
+found no crash, but it was neither a set of reproducible independent campaigns
+nor compliant with the logged-distinct-seed requirement.  The replacement
+runner derives a stable nonzero seed per worker, gives every affinity-pinned
+worker an isolated input corpus and artifact directory, validates exact logged
+seed and execution counts, rejects sanitizer markers and timeouts, retains each
+log, enforces an externally observed resident-memory limit in addition to
+libFuzzer's own accounting, and merges successful corpora by content hash.  It
+refuses dirty source or nonempty result directories.  `test_fuzz_campaign.py`
+covers stable distinct seeds, isolated corpora, order-independent merging, stale
+directories, malformed logs, sanitizer markers, a bounded timeout, and the
+external RSS cap.  A replacement 28-worker campaign must update
+`fuzz_checkpoint.json` before the fuzz gate is considered satisfied.
 
-The independent implementation, deterministic sanitized differential,
-coverage-guided parser, and emulated big-endian research gates are now
-satisfied, including the frozen experimental exact-low identity.  Public
-promotion still requires a concrete API/storage use case and a deliberate
+The same 217 direct C checks and complete differential matrix passed in a
+statically linked s390x binary under QEMU 8.2.2 with zero mismatch, providing
+executed big-endian evidence rather than an inference from byte-wise loads.  Raw
+corpora and worker logs remain ignored build artifacts.
+
+The independent implementation, deterministic sanitized differential, and
+emulated big-endian research gates are satisfied, including the frozen
+experimental exact-low identity.  The coverage-guided target is implemented,
+but its independent-seed campaign gate remains pending the replacement run
+described above.  Public promotion still requires a concrete API/storage use
+case and a deliberate
 decision that the remaining exact-profile mathematics are stable enough to
 justify a long-term wire promise.  Kill or revise this proposal if the fixed
 header cannot represent a frozen profile without profile-specific

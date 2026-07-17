@@ -86,12 +86,23 @@ def corpus() -> tuple[bytes, ...]:
     return tuple(sorted(seeds, key=lambda value: (len(value), value)))
 
 
+def require_clean_output(path: pathlib.Path) -> None:
+    """Create an output directory, but never mix with a stale corpus."""
+    if path.exists() or path.is_symlink():
+        if path.is_symlink() or not path.is_dir():
+            raise ValueError(f"output is not a real directory: {path}")
+        if any(path.iterdir()):
+            raise ValueError(f"output directory is not empty: {path}")
+    else:
+        path.mkdir(parents=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True, type=pathlib.Path)
     arguments = parser.parse_args()
 
-    arguments.output.mkdir(parents=True, exist_ok=True)
+    require_clean_output(arguments.output)
     written: list[dict[str, object]] = []
     for value in corpus():
         digest = hashlib.sha256(value).hexdigest()

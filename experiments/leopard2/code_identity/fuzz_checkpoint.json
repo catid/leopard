@@ -31,7 +31,9 @@
     "maximum_reported_worker_rss_mb": 60,
     "maximum_edge_coverage": 455,
     "maximum_feature_coverage": 1307,
-    "crash_or_sanitizer_artifacts": 0
+    "crash_or_sanitizer_artifacts": 0,
+    "valid_for_independent_seed_requirement": false,
+    "rejection": "all workers reused one seed and concurrently mutated one shared corpus"
   },
   "native_differential": {
     "python_unittests": 12,
@@ -64,5 +66,5 @@
     "canonical_mutations": 1384,
     "mismatches": 0
   },
-  "disposition": "experimental-default-off-pending-public-storage-contract"
+  "disposition": "campaign-rejected-pending-distinct-seed-isolated-corpus-rerun"
 }
