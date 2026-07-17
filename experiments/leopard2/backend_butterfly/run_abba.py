@@ -28,9 +28,10 @@ except ImportError:  # Verification remains usable on non-POSIX hosts.
     fcntl = None
 
 
-SCHEMA = "leopard2-backend-butterfly-abba/v5"
+SCHEMA = "leopard2-backend-butterfly-abba/v6"
 RAW_SCHEMA = "leopard2-backend-butterfly-raw/v1"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
+SUPPORTED_BACKENDS = ("ssse3", "avx2")
 SEQUENCES = (("A1", "baseline"), ("B1", "candidate"),
              ("B2", "candidate"), ("A2", "baseline"))
 ROUNDS = tuple(range(1, 17))
@@ -80,17 +81,21 @@ CELLS = (
     cell("high-gf8-64b", 240, 16, "high", "gf8", 64, 4, "neighbor"),
     cell("high-gf8-tail", 240, 16, "high", "gf8", 65, 4, "neighbor"),
     cell("high-gf8-1k", 240, 16, "high", "gf8", 1024, 4, "neighbor"),
+    cell("high-gf8-1025", 240, 16, "high", "gf8", 1025, 4, "neighbor"),
     cell("high-gf8", 240, 16, "high", "gf8", 65536, 4, "target"),
     cell("low-gf8-64b", 32, 224, "low", "gf8", 64, 16, "neighbor"),
     cell("low-gf8-tail", 32, 224, "low", "gf8", 65, 16, "neighbor"),
     cell("low-gf8-1k", 32, 224, "low", "gf8", 1024, 16, "neighbor"),
+    cell("low-gf8-1025", 32, 224, "low", "gf8", 1025, 16, "neighbor"),
     cell("low-gf8", 32, 224, "low", "gf8", 65536, 16, "target"),
     cell("high-gf16-64b", 1000, 200, "high", "gf16", 64, 8, "neighbor"),
     cell("high-gf16-tail", 1000, 200, "high", "gf16", 66, 8, "neighbor"),
+    cell("high-gf16-130", 1000, 200, "high", "gf16", 130, 8, "neighbor"),
     cell("high-gf16-1k", 1000, 200, "high", "gf16", 1024, 8, "neighbor"),
     cell("high-gf16", 1000, 200, "high", "gf16", 16384, 8, "target"),
     cell("low-gf16-64b", 128, 1024, "low", "gf16", 64, 16, "neighbor"),
     cell("low-gf16-tail", 128, 1024, "low", "gf16", 66, 16, "neighbor"),
+    cell("low-gf16-130", 128, 1024, "low", "gf16", 130, 16, "neighbor"),
     cell("low-gf16-1k", 128, 1024, "low", "gf16", 1024, 16, "neighbor"),
     cell("low-gf16", 128, 1024, "low", "gf16", 16384, 16, "target"),
     # Balanced-rate neighbors exercise the same kernels without extrapolating
@@ -611,13 +616,15 @@ def validate_host_record(host, cpu):
             "host current-frequency snapshots")
 
 
-def benchmark_arguments(item):
+def benchmark_arguments(item, backend):
+    require(backend in SUPPORTED_BACKENDS,
+            "unsupported campaign backend: " + str(backend))
     return [
         "--k", str(item["K"]), "--r", str(item["R"]),
         "--profile", item["profile"], "--field", item["field"],
         "--bytes", str(item["bytes"]), "--loss", str(item["loss"]),
         "--batch", "1", "--reuse", "8", "--iterations", "7",
-        "--warmup", "3", "--threads", "1", "--backend", "auto",
+        "--warmup", "3", "--threads", "1", "--backend", backend,
         "--seed", "42", "--json", "-",
     ]
 
@@ -678,7 +685,9 @@ def validate_setup_metric(metric, label):
             label + " setup metric ordering")
 
 
-def check_raw(raw, item, label, missing_indices=None):
+def check_raw(raw, item, label, requested_backend, missing_indices=None):
+    require(requested_backend in SUPPORTED_BACKENDS,
+            label + " unsupported requested backend")
     require(set(raw) == {"schema", "build", "parameters", "resolved",
                          "correctness", "memory", "metrics", "legacy"},
             label + " top-level key set")
@@ -705,7 +714,8 @@ def check_raw(raw, item, label, missing_indices=None):
     expected = {
         "K": item["K"], "R": item["R"],
         "requested_profile": item["resolved_profile"],
-        "requested_field": item["field"], "requested_backend": "auto",
+        "requested_field": item["field"],
+        "requested_backend": requested_backend,
         "force_generic_decode": False, "force_specialized_decode": False,
         "shard_bytes": item["bytes"], "loss_count": item["loss"],
         "batch": 1, "reuse": 8, "iterations": 7, "warmup": 3,
@@ -728,7 +738,7 @@ def check_raw(raw, item, label, missing_indices=None):
     require(isinstance(resolved, dict), label + " resolved")
     expected_resolved = {
         "profile": item["resolved_profile"], "field": item["field"],
-        "backend": "avx2", "thread_count": 1,
+        "backend": requested_backend, "thread_count": 1,
         "parent_count": item["parent_count"],
         "padded_side": item["padded_side"],
     }
@@ -815,7 +825,7 @@ def check_raw(raw, item, label, missing_indices=None):
 def invocation_log_standard_error(metric):
     """Conservative robust log-scale SE from one seven-sample invocation.
 
-    The benchmark does not retain the seven underlying samples in v5, so this
+    The benchmark does not retain the seven underlying samples in v6, so this
     deliberately uses both the reported MAD and full min/max span.  It is not a
     claim that the original samples can be reconstructed.
     """
@@ -874,7 +884,9 @@ def paired_abba_statistics(entries, raw_by_name, item, metric_index):
     }
 
 
-def summarize(entries, raw_by_name):
+def summarize(entries, raw_by_name, requested_backend):
+    require(requested_backend in SUPPORTED_BACKENDS,
+            "unsupported summary backend: " + str(requested_backend))
     summary = []
     for item in CELLS:
         cell_result = {
@@ -884,6 +896,8 @@ def summarize(entries, raw_by_name):
             "parameters": {
                 "K": item["K"], "R": item["R"],
                 "profile": item["resolved_profile"], "field": item["field"],
+                "requested_backend": requested_backend,
+                "resolved_backend": requested_backend,
                 "shard_bytes": item["bytes"], "losses": item["loss"],
                 "rounded_transform_bytes": item["rounded_transform_bytes"],
                 "tail_mapping": item["tail_mapping"],
@@ -2470,11 +2484,17 @@ def validate_manifest(manifest_path, repo, raw_bundle_path=None,
         "order_per_round", "rounds", "cell_count", "entry_count",
         "samples_per_invocation", "warmups_per_invocation", "reuse_per_sample",
         "batch", "threads", "seed", "target_threshold_percent",
-        "neighbor_floor_percent", "self_test", "started_unix",
+        "neighbor_floor_percent", "requested_backend", "resolved_backend",
+        "self_test", "started_unix",
         "finished_unix"}, "campaign key set")
     is_self_test = campaign.get("self_test") is True
     require(not is_self_test or allow_self_test,
             "self-test manifest is not production evidence")
+    requested_backend = campaign.get("requested_backend")
+    resolved_backend = campaign.get("resolved_backend")
+    require(requested_backend in SUPPORTED_BACKENDS and
+            resolved_backend == requested_backend,
+            "campaign requested/resolved backend identity")
     provenance = manifest.get("provenance", {})
     require(set(provenance) == {
         "runner_sha256", "git", "builds", "matrix", "execution"},
@@ -2547,6 +2567,13 @@ def validate_manifest(manifest_path, repo, raw_bundle_path=None,
     matrix_document = parse_json_bytes(matrix_raw, "embedded backend matrix")
     validate_matrix_document(
         matrix_document, repo, provenance["git"]["candidate"]["commit"])
+    matrix_backend = next(
+        (value for value in matrix_document["variants"]
+         if value["variant"] == requested_backend), None)
+    require(matrix_backend is not None and
+            matrix_backend["status"] == "passed" and
+            matrix_backend["expected_runtime_backend"] == resolved_backend,
+            "campaign backend is not bound to a passing matrix variant")
     candidate_cc = provenance["builds"]["candidate"]["tools"]["cc"]
     candidate_cxx = provenance["builds"]["candidate"]["tools"]["cxx"]
     matrix_cc = matrix_document["c_compiler"]
@@ -2604,7 +2631,7 @@ def validate_manifest(manifest_path, repo, raw_bundle_path=None,
         require(entry["binary_sha256"] == binary_hashes[build],
                 "binary relabel: " + name)
         expected_argv = [logical_executable(build, binary_hashes[build])] + \
-            benchmark_arguments(item)
+            benchmark_arguments(item, requested_backend)
         require(entry["argv"] == expected_argv, "logical argv mismatch: " + name)
         command_record = {
             "affinity": provenance["execution"]["enforced_affinity"],
@@ -2622,7 +2649,9 @@ def validate_manifest(manifest_path, repo, raw_bundle_path=None,
             raw = parse_json_bytes(stdout, "benchmark output " + name)
         except (UnicodeError, ValueError) as error:
             raise EvidenceError("invalid benchmark JSON {}: {}".format(name, error))
-        parsed = check_raw(raw, item, name, missing_by_cell.get(item["name"]))
+        parsed = check_raw(
+            raw, item, name, requested_backend,
+            missing_by_cell.get(item["name"]))
         missing_by_cell.setdefault(item["name"], parsed[2])
         require(build not in reported_builds or reported_builds[build] == parsed[3],
                 "benchmark build identity changed: " + name)
@@ -2633,7 +2662,7 @@ def validate_manifest(manifest_path, repo, raw_bundle_path=None,
             "baseline/candidate reported compiler identity mismatch")
     require(stable_raw_digest(entries) == manifest["raw_evidence_sha256"],
             "stable raw evidence digest mismatch")
-    recomputed = summarize(entries, raw_by_name)
+    recomputed = summarize(entries, raw_by_name, requested_backend)
     require(canonical_bytes(recomputed) == canonical_bytes(manifest["summary"]),
             "summary does not replay from raw evidence")
     for item in recomputed:
@@ -2653,6 +2682,9 @@ def run_campaign(args, repo, allow_dirty=False, self_test=False):
             "Linux scheduler affinity APIs are required")
     require(isinstance(args.build_jobs, int) and 1 <= args.build_jobs <= 128,
             "build jobs must be in [1,128]")
+    require(args.backend in SUPPORTED_BACKENDS,
+            "campaign backend must be one of: " +
+            ",".join(SUPPORTED_BACKENDS))
     source_roots = {
         "baseline": Path(args.baseline_source_root).resolve(),
         "candidate": Path(args.candidate_source_root).resolve(),
@@ -2753,10 +2785,11 @@ def run_campaign(args, repo, allow_dirty=False, self_test=False):
         for index, (name, item, round_number, sequence, build) in enumerate(jobs, 1):
             require(sorted(os.sched_getaffinity(0)) == enforced_affinity,
                     "runner affinity changed before " + name)
-            actual_argv = [str(binaries[build])] + benchmark_arguments(item)
+            actual_argv = [str(binaries[build])] + \
+                benchmark_arguments(item, args.backend)
             logical_argv = [logical_executable(
                 build, builds[build]["artifacts"]["benchmark_sha256"])] + \
-                benchmark_arguments(item)
+                benchmark_arguments(item, args.backend)
             command_record = {"affinity": enforced_affinity,
                               "argv": logical_argv,
                               "environment": child_environment}
@@ -2771,7 +2804,9 @@ def run_campaign(args, repo, allow_dirty=False, self_test=False):
             require(completed.returncode == 0,
                     "benchmark failed {} rc={}".format(name, completed.returncode))
             raw = parse_json_bytes(completed.stdout, "benchmark output " + name)
-            parsed = check_raw(raw, item, name, missing_by_cell.get(item["name"]))
+            parsed = check_raw(
+                raw, item, name, args.backend,
+                missing_by_cell.get(item["name"]))
             missing_by_cell.setdefault(item["name"], parsed[2])
             require(build not in reported_builds or
                     reported_builds[build] == parsed[3],
@@ -2811,7 +2846,7 @@ def run_campaign(args, repo, allow_dirty=False, self_test=False):
         }
         raw_bundle_path = output_directory / "abba_raw.json"
         atomic_json(raw_bundle_path, bundle)
-        summary = summarize(entries, raw_by_name)
+        summary = summarize(entries, raw_by_name, args.backend)
         manifest = {
             "schema": SCHEMA,
             "status": "pending",
@@ -2830,6 +2865,8 @@ def run_campaign(args, repo, allow_dirty=False, self_test=False):
                 "batch": 1, "threads": 1, "seed": 42,
                 "target_threshold_percent": TARGET_THRESHOLD,
                 "neighbor_floor_percent": NEIGHBOR_FLOOR,
+                "requested_backend": args.backend,
+                "resolved_backend": args.backend,
                 "self_test": self_test,
                 "started_unix": campaign_start, "finished_unix": campaign_end,
             },
@@ -2881,7 +2918,7 @@ def write_mock(path, factor):
 import json,sys
 a=sys.argv[1:]
 def v(name): return a[a.index(name)+1]
-k=int(v('--k')); r=int(v('--r')); profile=v('--profile'); field=v('--field')
+k=int(v('--k')); r=int(v('--r')); profile=v('--profile'); field=v('--field'); backend=v('--backend')
 byte_count=int(v('--bytes')); loss=int(v('--loss')); base=float(k+r+loss+byte_count/64.0+1)
 factor=%.8f
 missing=list(range(loss))
@@ -2900,7 +2937,7 @@ parent=1<<(parent_input-1).bit_length()
 encode=rated(base*factor,'input_GB_per_s','parity_output_GB_per_s')
 decode=rated(base*2*factor,'offered_received_GB_per_s','repaired_output_GB_per_s')
 legacy_reason=None if legacy_comparison else ('old Leopard only defines the legacy high wire profile' if profile!='high' else 'old Leopard requires shard bytes divisible by 64')
-out={'schema':'leopard2-benchmark-v1','build':{'compiler':'mock','compiler_version':'1','cplusplus':201103},'parameters':{'K':k,'R':r,'requested_profile':resolved_profile,'requested_field':field,'requested_backend':'auto','force_generic_decode':False,'force_specialized_decode':False,'shard_bytes':byte_count,'loss_count':loss,'missing_original_indices':missing,'batch':int(v('--batch')),'reuse':int(v('--reuse')),'iterations':int(v('--iterations')),'warmup':int(v('--warmup')),'thread_count':int(v('--threads')),'seed':int(v('--seed'))},'resolved':{'profile':resolved_profile,'field':field,'backend':'avx2','thread_count':1,'parent_count':parent,'padded_side':padded},'correctness':{'leopard2_round_trip':True,'legacy_comparison':legacy_comparison},'memory':{'scratch_alignment':64,'encode_scratch_bytes_per_stripe':64,'decode_scratch_bytes_per_stripe':128,'encode_scratch_bytes_batch':64,'decode_scratch_bytes_batch':128},'metrics':{'codec_setup':setup(1.0),'encode_execution':encode,'decode_plan_setup':setup(2.0),'decode_execution':decode,'decode_amortized_at_reuse':{'reuse_count':8,'derived_median_us_per_batch_call':base*2*factor+.25,'offered_received_GB_per_s':1.0/(base*2*factor+.25),'repaired_output_GB_per_s':2.0/(base*2*factor+.25)},'rate_semantics':'offered_received counts all non-null shard pointers supplied; a plan may read a deterministic subset'},'legacy':{'available':legacy_comparison is not None,'unavailable_reason':legacy_reason,'codec_setup':None,'decode_timing_includes_setup':True,'encode_execution':rated(base*1.1,'input_GB_per_s','parity_output_GB_per_s') if legacy_comparison else None,'decode_including_setup':rated(base*2.2,'offered_received_GB_per_s','repaired_output_GB_per_s') if legacy_comparison else None}}
+out={'schema':'leopard2-benchmark-v1','build':{'compiler':'mock','compiler_version':'1','cplusplus':201103},'parameters':{'K':k,'R':r,'requested_profile':resolved_profile,'requested_field':field,'requested_backend':backend,'force_generic_decode':False,'force_specialized_decode':False,'shard_bytes':byte_count,'loss_count':loss,'missing_original_indices':missing,'batch':int(v('--batch')),'reuse':int(v('--reuse')),'iterations':int(v('--iterations')),'warmup':int(v('--warmup')),'thread_count':int(v('--threads')),'seed':int(v('--seed'))},'resolved':{'profile':resolved_profile,'field':field,'backend':backend,'thread_count':1,'parent_count':parent,'padded_side':padded},'correctness':{'leopard2_round_trip':True,'legacy_comparison':legacy_comparison},'memory':{'scratch_alignment':64,'encode_scratch_bytes_per_stripe':64,'decode_scratch_bytes_per_stripe':128,'encode_scratch_bytes_batch':64,'decode_scratch_bytes_batch':128},'metrics':{'codec_setup':setup(1.0),'encode_execution':encode,'decode_plan_setup':setup(2.0),'decode_execution':decode,'decode_amortized_at_reuse':{'reuse_count':8,'derived_median_us_per_batch_call':base*2*factor+.25,'offered_received_GB_per_s':1.0/(base*2*factor+.25),'repaired_output_GB_per_s':2.0/(base*2*factor+.25)},'rate_semantics':'offered_received counts all non-null shard pointers supplied; a plan may read a deterministic subset'},'legacy':{'available':legacy_comparison is not None,'unavailable_reason':legacy_reason,'codec_setup':None,'decode_timing_includes_setup':True,'encode_execution':rated(base*1.1,'input_GB_per_s','parity_output_GB_per_s') if legacy_comparison else None,'decode_including_setup':rated(base*2.2,'offered_received_GB_per_s','repaired_output_GB_per_s') if legacy_comparison else None}}
 print(json.dumps(out,sort_keys=True,allow_nan=False))
 """ % factor
     path.write_text(source, encoding="utf-8")
@@ -3081,14 +3118,17 @@ def recompute_self_test_summary(manifest, bundle):
     raw_by_name = {}
     entries = {value["name"]: value for value in manifest["entries"]}
     missing_by_cell = {}
+    backend = manifest["campaign"]["requested_backend"]
     for name, item, _, _, _ in expected_jobs():
         stdout, _ = decode_raw_record(bundle["raw"][name], name)
         parsed = check_raw(
             parse_json_bytes(stdout, "self-test summary " + name), item, name,
+            backend,
             missing_by_cell.get(item["name"]))
         missing_by_cell.setdefault(item["name"], parsed[2])
         raw_by_name[name] = parsed[:2]
-    manifest["summary"] = summarize(list(entries.values()), raw_by_name)
+    manifest["summary"] = summarize(
+        list(entries.values()), raw_by_name, backend)
 
 
 def mutate_raw_stdout(manifest, bundle, name, callback):
@@ -3391,10 +3431,20 @@ def self_test(repo):
             baseline_library=baseline_build[2], candidate_library=candidate_build[2],
             matrix=matrix, output=output, cpu=cpu, reserved_sibling=sibling,
             reservation_file=reservation, build_jobs=1, timeout=30,
+            backend="avx2",
         )
         args.baseline_self_test_artifacts = baseline_build[3]
         args.candidate_self_test_artifacts = candidate_build[3]
         run_campaign(args, repo, allow_dirty=True, self_test=True)
+
+        ssse3_args = copy.copy(args)
+        ssse3_args.backend = "ssse3"
+        ssse3_args.output = root / "evidence-ssse3"
+        run_campaign(ssse3_args, repo, allow_dirty=True, self_test=True)
+        validate_manifest(
+            ssse3_args.output / "abba_manifest.json", repo,
+            ssse3_args.output / "abba_raw.json", None, matrix,
+            allow_self_test=True)
 
         slow_root = root / "slow-candidate-build"
         slow_root.mkdir()
@@ -3749,6 +3799,31 @@ def self_test(repo):
                           mutate_matrix_executable_crosslink))
 
         first_name = manifest["entries"][0]["name"]
+        def mutate_raw_requested_backend(m, b):
+            mutate_raw_stdout(
+                m, b, first_name,
+                lambda raw: raw["parameters"].__setitem__(
+                    "requested_backend", "ssse3"))
+        mutations.append(("raw requested backend",
+                          mutate_raw_requested_backend))
+
+        def mutate_raw_resolved_backend(m, b):
+            mutate_raw_stdout(
+                m, b, first_name,
+                lambda raw: raw["resolved"].__setitem__(
+                    "backend", "ssse3"))
+        mutations.append(("raw resolved backend",
+                          mutate_raw_resolved_backend))
+
+        mutations.append((
+            "campaign requested backend",
+            lambda m, b: m["campaign"].__setitem__(
+                "requested_backend", "ssse3")))
+        mutations.append((
+            "campaign resolved backend",
+            lambda m, b: m["campaign"].__setitem__(
+                "resolved_backend", "ssse3")))
+
         def mutate_profile(m, b):
             mutate_raw_stdout(
                 m, b, first_name,
@@ -3872,11 +3947,13 @@ def self_test(repo):
         expect_failure(lambda: reservation_record(noncanonical, cpu, sibling),
                        "noncanonical reservation")
         mutation_count = len(mutations) + 6
-    print("butterfly ABBA v5 self-test passed: path-independent replay + {} adversarial mutations".format(
+    print("butterfly ABBA v6 self-test passed: path-independent replay + {} adversarial mutations".format(
         mutation_count))
 
 
 def add_run_arguments(parser):
+    parser.add_argument("--backend", choices=SUPPORTED_BACKENDS, required=True,
+                        help="explicit production runtime backend to qualify")
     parser.add_argument("--baseline", type=Path, required=True)
     parser.add_argument("--candidate", type=Path, required=True)
     parser.add_argument("--baseline-commit", required=True)
@@ -3915,7 +3992,8 @@ def main():
     try:
         if args.command == "run":
             run_campaign(args, repo)
-            print("butterfly ABBA v5 campaign passed: cells={} entries={}".format(
+            print("butterfly ABBA v6 campaign passed: backend={} cells={} entries={}".format(
+                args.backend,
                 len(CELLS), len(expected_jobs())))
         elif args.command == "verify":
             supplied = None
@@ -3925,7 +4003,7 @@ def main():
                 supplied = {"baseline": args.baseline, "candidate": args.candidate}
             validate_manifest(args.manifest, repo, args.raw_bundle,
                               supplied, args.matrix)
-            print("butterfly ABBA v5 path-independent evidence replay passed")
+            print("butterfly ABBA v6 path-independent evidence replay passed")
         elif args.command == "self-test":
             self_test(repo)
         else:

@@ -8,6 +8,14 @@ tests, and build closure, so an integrated-source backend matrix and pinned
 campaign must be collected before this tier is evidence-qualified again.
 Native NEON, AVX-512, GFNI, and wider fusion schedules remain separate work.
 
+The current v6 collector requires two distinct final-source campaigns, one
+with `--backend ssse3` and one with `--backend avx2`. Each campaign binds the
+requested and resolved backend reported by every benchmark process to the
+same passing forced-backend matrix variant. The v6 geometry has 26 cells,
+1,664 process invocations, and 52 encode/decode gates per backend. In addition
+to the historical cells, it covers high- and low-profile GF8 at 1,025 bytes
+and GF16 at 130 bytes, immediately above the production fusion thresholds.
+
 ## Production architecture
 
 Leopard2's immutable private backend table now owns every fixed-multiply, XOR,
@@ -103,10 +111,14 @@ current integrated source:
   compile-only preservation evidence, not native ARM correctness or
   performance evidence.
 
-The retained v5 runner revision passed path-independent replay plus 52 adversarial
-mutations. These include missing/reordered ABBA slots, raw-output edits,
-compiler and build-graph substitutions, source-closure changes, topology and
-reservation changes, confidence-summary edits, and a high-variance fixture.
+The retained v5 runner revision passed path-independent replay plus 52
+adversarial mutations. These include missing/reordered ABBA slots, raw-output
+edits, compiler and build-graph substitutions, source-closure changes,
+topology and reservation changes, confidence-summary edits, and a high-
+variance fixture. The current v6 self-test additionally runs successful AVX2
+and SSSE3 mock campaigns and rejects independent changes to raw requested or
+resolved backend identity and to manifest requested or resolved backend
+identity.
 
 ## Historical pre-R1 non-regression evidence
 
@@ -208,17 +220,49 @@ Run the forced-backend differential matrix and runner mutation tests:
       --jobs "$JOBS" --variant-workers 4 --timeout 900 --no-resume
     python3 experiments/leopard2/backend_butterfly/run_abba.py self-test
 
-The full campaign requires clean baseline and candidate worktrees, matching
-Unix Makefiles Release template builds, a canonical no-newline reservation
-file, and a physical core whose allowed SMT sibling is idle. Run
-`run_abba.py run --help` for the explicit source, commit, CMake cache,
-compile-command, archive, matrix, CPU, and output arguments. Do not run other
-memory-intensive jobs during the pinned phase.
+The final-source control must be constructed from the final candidate tree by
+reverting only the production four-way runtime hunks. It retains the final R1,
+locator, Windows, test, matrix, and collector changes, so the experiment has a
+single production-runtime treatment. Configure clean tests-disabled Unix
+Makefiles Release builds for both trees with `LEO2_BACKEND_VARIANT=auto`,
+`LEO2_BUILD_BENCHMARKS=ON`, `LEO2_BUILD_TESTS=OFF`, and
+`CMAKE_EXPORT_COMPILE_COMMANDS=ON`.
 
-Replay the historical evidence without substituting a different build-path
-binary; successful replay authenticates that historical campaign only:
+The full campaign requires those clean baseline and candidate worktrees, a
+fresh final-source four-variant matrix, a canonical no-newline reservation
+file, and a physical core whose allowed SMT sibling is idle. Run the collector
+twice, using distinct output directories and otherwise identical arguments:
 
-    python3 experiments/leopard2/backend_butterfly/run_abba.py verify \
+    python3 experiments/leopard2/backend_butterfly/run_abba.py run \
+      --backend avx2 \
+      --baseline CONTROL_BUILD/bench_leopard2 \
+      --candidate CANDIDATE_BUILD/bench_leopard2 \
+      --baseline-commit CONTROL_SHA --candidate-commit CANDIDATE_SHA \
+      --baseline-source-root CONTROL_TREE \
+      --candidate-source-root CANDIDATE_TREE \
+      --baseline-compile-commands CONTROL_BUILD/compile_commands.json \
+      --candidate-compile-commands CANDIDATE_BUILD/compile_commands.json \
+      --baseline-cmake-cache CONTROL_BUILD/CMakeCache.txt \
+      --candidate-cmake-cache CANDIDATE_BUILD/CMakeCache.txt \
+      --baseline-library CONTROL_BUILD/liblibleopard.a \
+      --candidate-library CANDIDATE_BUILD/liblibleopard.a \
+      --matrix FINAL_MATRIX/matrix.json --output ABBA_AVX2 \
+      --cpu CPU --reserved-sibling SIBLING \
+      --reservation-file RESERVATION_JSON --build-jobs "$JOBS" --timeout 120
+
+Repeat with `--backend ssse3 --output ABBA_SSSE3`. Do not run other memory-
+intensive jobs during either pinned phase. Each manifest can then be replayed
+with `run_abba.py verify`; v6 checks the embedded raw evidence and matrix and
+will not accept the historical v5 schema.
+
+Replay the historical evidence with the historical v5 collector from the
+named candidate commit, without substituting a different build-path binary.
+The current v6 collector intentionally rejects a v5 manifest. Successful replay
+authenticates that historical campaign only:
+
+    git worktree add --detach ../leopard-abba-v5 \
+      ae2b8566ad08cae02869c3fcf41de046b0b652ed
+    python3 ../leopard-abba-v5/experiments/leopard2/backend_butterfly/run_abba.py verify \
       --manifest .research/leopard2/context-xor4/abba-ae2b856-v5-16round/abba_manifest.json \
       --raw-bundle .research/leopard2/context-xor4/abba-ae2b856-v5-16round/abba_raw.json \
       --matrix .research/leopard2/context-xor4/backend-matrix-results-final/matrix.json

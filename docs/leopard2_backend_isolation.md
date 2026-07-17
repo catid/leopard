@@ -7,6 +7,13 @@ qualification; its scope and required rerun are documented in
 `docs/leopard2_backend_butterfly_tier.md`. Native NEON and additional
 platform/ISA gates remain open.
 
+The current evidence protocol uses separate explicit SSSE3 and AVX2 v6 ABBA
+campaigns. Each binds the benchmark's requested and resolved backend to a
+passing forced-backend matrix variant and includes high/low GF8 1,025-byte and
+GF16 130-byte neighbors above the production fusion cutoffs. Until both
+final-source campaigns pass, the retained pre-R1 timing remains causal history,
+not qualification of the integrated source.
+
 ## Four-way completion
 
 The immutable `Ops` table now includes four independent XOR pairs and forward
