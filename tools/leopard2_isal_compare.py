@@ -940,7 +940,7 @@ def build_identity(paths: Mapping[str, Path], nasm: Mapping[str, Any]) -> dict[s
             "CMakeFiles/leopard2_isal_benchmark.dir/link.txt",
             paths["adapter_build"]),
         "leopard2_library": (
-            paths["leopard_build"] / "CMakeFiles/libleopard.dir/link.txt",
+            paths["leopard_build"] / "CMakeFiles/leopard.dir/link.txt",
             paths["leopard_build"]),
         "leopard2_executable": (
             paths["leopard_build"] / "CMakeFiles/bench_leopard2.dir/link.txt",
@@ -3197,7 +3197,7 @@ def fake_build_identity() -> dict[str, Any]:
                 ("${LEOPARD_BUILD}/leopard2.o", "object", "a" * 64)]),
             "leopard2_executable": fake_link_input_manifest([
                 ("${LEOPARD_BUILD}/benchmark.o", "object", "a" * 64),
-                ("${LEOPARD_BUILD}/liblibleopard.a", "static-archive", "a" * 64),
+                ("${LEOPARD_BUILD}/libleopard.a", "static-archive", "a" * 64),
             ]),
         },
         "static_inputs": {

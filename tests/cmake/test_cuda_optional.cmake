@@ -1,7 +1,10 @@
 if(NOT DEFINED LEO2_SOURCE_DIR OR NOT DEFINED LEO2_BINARY_DIR OR
-   NOT DEFINED LEO2_GENERATOR OR NOT DEFINED LEO2_CTEST_COMMAND)
+   NOT DEFINED LEO2_GENERATOR OR NOT DEFINED LEO2_CTEST_COMMAND OR
+   NOT DEFINED LEO2_STATIC_LIBRARY_PREFIX OR
+   NOT DEFINED LEO2_STATIC_LIBRARY_SUFFIX)
     message(FATAL_ERROR
-        "CUDA optional test requires source, binary, generator, and CTest paths")
+        "CUDA optional test requires source, binary, generator, CTest, and "
+        "static-library naming inputs")
 endif()
 
 file(REMOVE_RECURSE "${LEO2_BINARY_DIR}")
@@ -90,7 +93,7 @@ endif()
 # dependency added to the ordinary CPU library.  Build that target as part of
 # the optionality contract as well.
 execute_process(
-    COMMAND "${CMAKE_COMMAND}" --build . --target libleopard --config Release
+    COMMAND "${CMAKE_COMMAND}" --build . --target leopard --config Release
     WORKING_DIRECTORY "${LEO2_BINARY_DIR}"
     RESULT_VARIABLE build_result
     OUTPUT_VARIABLE build_stdout
@@ -101,6 +104,31 @@ if(NOT build_result EQUAL 0)
         "Default non-CUDA library build failed (${build_result})\n"
         "stdout:\n${build_stdout}\n"
         "stderr:\n${build_stderr}")
+endif()
+
+# Inspect the fresh build tree before install so a stale staged artifact cannot
+# satisfy the naming assertion.
+set(canonical_library_name
+    "${LEO2_STATIC_LIBRARY_PREFIX}leopard${LEO2_STATIC_LIBRARY_SUFFIX}")
+set(legacy_library_name
+    "${LEO2_STATIC_LIBRARY_PREFIX}libleopard${LEO2_STATIC_LIBRARY_SUFFIX}")
+set(saw_built_canonical_library FALSE)
+set(saw_built_legacy_library FALSE)
+file(GLOB_RECURSE built_files
+    RELATIVE "${LEO2_BINARY_DIR}"
+    "${LEO2_BINARY_DIR}/*")
+foreach(built_file ${built_files})
+    get_filename_component(built_name "${built_file}" NAME)
+    if(built_name STREQUAL "${canonical_library_name}")
+        set(saw_built_canonical_library TRUE)
+    elseif(built_name STREQUAL "${legacy_library_name}")
+        set(saw_built_legacy_library TRUE)
+    endif()
+endforeach()
+if(NOT saw_built_canonical_library OR saw_built_legacy_library)
+    message(FATAL_ERROR
+        "Fresh CPU build naming contract failed: expected "
+        "'${canonical_library_name}' and no '${legacy_library_name}'")
 endif()
 
 # A successful install with no install rules would not prove package
@@ -131,6 +159,8 @@ set(saw_leopard_header FALSE)
 set(saw_leopard2_header FALSE)
 set(saw_package_config FALSE)
 set(saw_targets_export FALSE)
+set(saw_canonical_library FALSE)
+set(saw_legacy_library FALSE)
 foreach(installed_file ${installed_files})
     string(TOLOWER "${installed_file}" installed_file_lower)
     string(FIND "${installed_file_lower}" "cuda" cuda_name_position)
@@ -148,6 +178,10 @@ foreach(installed_file ${installed_files})
         set(saw_package_config TRUE)
     elseif(installed_name STREQUAL "leopardTargets.cmake")
         set(saw_targets_export TRUE)
+    elseif(installed_name STREQUAL "${canonical_library_name}")
+        set(saw_canonical_library TRUE)
+    elseif(installed_name STREQUAL "${legacy_library_name}")
+        set(saw_legacy_library TRUE)
     endif()
 
     if(installed_file MATCHES "\\.(cmake|h)$")
@@ -160,6 +194,11 @@ foreach(installed_file ${installed_files})
         endif()
     endif()
 endforeach()
+if(NOT saw_canonical_library OR saw_legacy_library)
+    message(FATAL_ERROR
+        "CPU archive naming contract failed: expected "
+        "'${canonical_library_name}' and no '${legacy_library_name}'")
+endif()
 if(NOT saw_leopard_header OR NOT saw_leopard2_header OR
    NOT saw_package_config OR NOT saw_targets_export)
     message(FATAL_ERROR
@@ -190,11 +229,17 @@ cmake_minimum_required(VERSION 3.7)
 project(leopard_cpu_package_consumer LANGUAGES C CXX)
 
 find_package(leopard CONFIG REQUIRED)
-if(NOT TARGET leopard::libleopard)
-    message(FATAL_ERROR "Installed package did not export leopard::libleopard")
+find_package(leopard CONFIG REQUIRED)
+if(NOT TARGET leopard::leopard)
+    message(FATAL_ERROR "Installed package did not export leopard::leopard")
+endif()
+get_target_property(leopard_type leopard::leopard TYPE)
+if(NOT leopard_type STREQUAL "STATIC_LIBRARY")
+    message(FATAL_ERROR
+        "Canonical target has unexpected type '${leopard_type}'")
 endif()
 get_target_property(leopard_links
-    leopard::libleopard INTERFACE_LINK_LIBRARIES)
+    leopard::leopard INTERFACE_LINK_LIBRARIES)
 string(TOLOWER "${leopard_links}" leopard_links_lower)
 if(leopard_links_lower MATCHES "cuda|cudart|nvidia")
     message(FATAL_ERROR
@@ -202,9 +247,32 @@ if(leopard_links_lower MATCHES "cuda|cudart|nvidia")
 endif()
 
 add_executable(leopard_cpu_consumer main.c)
-target_link_libraries(leopard_cpu_consumer PRIVATE leopard::libleopard)
+target_link_libraries(leopard_cpu_consumer PRIVATE leopard::leopard)
+
+# The old imported name remains a forwarding compatibility target, not a
+# second archive or canonical export.
+if(NOT TARGET leopard::libleopard)
+    message(FATAL_ERROR
+        "Installed package lost leopard::libleopard compatibility target")
+endif()
+get_target_property(leopard_compat_type leopard::libleopard TYPE)
+if(NOT leopard_compat_type STREQUAL "INTERFACE_LIBRARY")
+    message(FATAL_ERROR
+        "Compatibility target has unexpected type '${leopard_compat_type}'")
+endif()
+get_target_property(leopard_compat_links
+    leopard::libleopard INTERFACE_LINK_LIBRARIES)
+if(NOT leopard_compat_links STREQUAL "leopard::leopard")
+    message(FATAL_ERROR
+        "Compatibility target does not forward to leopard::leopard: "
+        "${leopard_compat_links}")
+endif()
+add_executable(leopard_legacy_name_consumer main.c)
+target_link_libraries(
+    leopard_legacy_name_consumer PRIVATE leopard::libleopard)
 enable_testing()
 add_test(NAME leopard_cpu_consumer COMMAND leopard_cpu_consumer)
+add_test(NAME leopard_legacy_name_consumer COMMAND leopard_legacy_name_consumer)
 ]=])
 file(WRITE "${consumer_source_dir}/main.c" [=[
 #include <leopard.h>

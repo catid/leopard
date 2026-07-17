@@ -325,7 +325,7 @@ def cmake_build_metadata(executable):
     for relative in (
             "compile_commands.json", "CMakeFiles/CMakeConfigureLog.yaml",
             "CMakeFiles/CMakeOutput.log", "build.ninja",
-            "CMakeFiles/libleopard.dir/flags.make",
+            "CMakeFiles/leopard.dir/flags.make",
             "CMakeFiles/bench_leopard2_direct_encode.dir/flags.make"):
         path = build_root / relative
         if path.is_file():

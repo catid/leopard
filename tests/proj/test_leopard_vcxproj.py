@@ -524,29 +524,29 @@ class CMakeProductionGraph(object):
         r"CXX_FLAG_(?:O2|Oy|Zi|W4)|"
         r"(?:OpenMP|OPENMP|Threads|THREADS)_.+)$")
     _approved_production_mutations = {
-        ("libleopard", "target_compile_definitions", (
+        ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_DISABLE_SSSE3_CODEGEN=1",
             "LEO2_DISABLE_AVX2_CODEGEN=1")),
-        ("libleopard", "target_compile_definitions", (
+        ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_HAVE_SSSE3_BACKEND=1")),
-        ("libleopard", "target_compile_definitions", (
+        ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_HAVE_AVX2_BACKEND=1")),
-        ("libleopard", "target_compile_definitions", (
+        ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1")),
-        ("libleopard", "target_compile_definitions", (
+        ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_BACKEND_FORCE_SCALAR=1")),
-        ("libleopard", "target_compile_definitions", (
+        ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_BACKEND_FORCE_SSSE3=1")),
-        ("libleopard", "target_compile_definitions", (
+        ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_BACKEND_FORCE_AVX2=1")),
-        ("libleopard", "target_include_directories", (
+        ("leopard", "target_include_directories", (
             "PUBLIC", "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>",
             "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")),
-        ("libleopard", "target_link_libraries", (
+        ("leopard", "target_link_libraries", (
             "PUBLIC", "Threads::Threads")),
-        ("libleopard", "target_link_libraries", (
+        ("leopard", "target_link_libraries", (
             "PUBLIC", "OpenMP::OpenMP_CXX")),
-        ("libleopard", "target_link_libraries", (
+        ("leopard", "target_link_libraries", (
             "PUBLIC", "${OpenMP_CXX_FLAGS}")),
         ("leopard2_backend_ssse3", "target_include_directories", (
             "PRIVATE", "${CMAKE_CURRENT_SOURCE_DIR}")),
@@ -623,7 +623,8 @@ class CMakeProductionGraph(object):
     _required_trusted_commands = Counter({
         ("cmake_minimum_required", ("VERSION", "3.7")): 1,
         ("project", ("leopard",)): 1,
-        ("add_library", ("libleopard", "STATIC", "${LIB_SOURCE_FILES}")): 1,
+        ("add_library", ("leopard", "STATIC", "${LIB_SOURCE_FILES}")): 1,
+        ("add_library", ("libleopard", "ALIAS", "leopard")): 1,
         ("include", ("CMakeDependentOption",)): 1,
         ("include", ("CheckCXXCompilerFlag",)): 1,
         ("include", ("CMakePackageConfigHelpers",)): 1,
@@ -655,7 +656,7 @@ class CMakeProductionGraph(object):
             "ENABLE_OPENMP", "Enable OpenMP support", "ON",
             "OPENMP_FOUND", "OFF")): 1,
         ("install", (
-            "TARGETS", "libleopard", "EXPORT", "leopardTargets", "ARCHIVE",
+            "TARGETS", "leopard", "EXPORT", "leopardTargets", "ARCHIVE",
             "DESTINATION", "${CMAKE_INSTALL_LIBDIR}", "LIBRARY", "DESTINATION",
             "${CMAKE_INSTALL_LIBDIR}", "RUNTIME", "DESTINATION",
             "${CMAKE_INSTALL_BINDIR}")): 1,
@@ -734,14 +735,16 @@ class CMakeProductionGraph(object):
             "CMAKE_EXE_LINKER_FLAGS",
             "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")),
         ("trusted", ("add_library", (
-            "libleopard", "STATIC", "${LIB_SOURCE_FILES}"))),
-        ("mutation", ("libleopard", "target_compile_definitions", (
+            "leopard", "STATIC", "${LIB_SOURCE_FILES}"))),
+        ("trusted", ("add_library", (
+            "libleopard", "ALIAS", "leopard"))),
+        ("mutation", ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_DISABLE_SSSE3_CODEGEN=1",
             "LEO2_DISABLE_AVX2_CODEGEN=1"))),
-        ("mutation", ("libleopard", "target_include_directories", (
+        ("mutation", ("leopard", "target_include_directories", (
             "PUBLIC", "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>",
             "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"))),
-        ("mutation", ("libleopard", "target_link_libraries", (
+        ("mutation", ("leopard", "target_link_libraries", (
             "PUBLIC", "Threads::Threads"))),
         ("mutation", ("leopard2_backend_ssse3",
             "target_include_directories", (
@@ -753,13 +756,13 @@ class CMakeProductionGraph(object):
                 "PRIVATE", "${CMAKE_CURRENT_SOURCE_DIR}"))),
         ("mutation", ("leopard2_backend_avx2", "target_compile_options", (
             "PRIVATE", "/arch:AVX2"))),
-        ("mutation", ("libleopard", "target_compile_definitions", (
+        ("mutation", ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_HAVE_SSSE3_BACKEND=1"))),
-        ("mutation", ("libleopard", "target_compile_definitions", (
+        ("mutation", ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_HAVE_AVX2_BACKEND=1"))),
-        ("mutation", ("libleopard", "target_link_libraries", (
+        ("mutation", ("leopard", "target_link_libraries", (
             "PUBLIC", "OpenMP::OpenMP_CXX"))),
-        ("mutation", ("libleopard", "target_link_libraries", (
+        ("mutation", ("leopard", "target_link_libraries", (
             "PUBLIC", "${OpenMP_CXX_FLAGS}"))),
         ("protected", (
             "LEOPARD_INSTALL_CMAKEDIR",
@@ -768,7 +771,7 @@ class CMakeProductionGraph(object):
         ("trusted", ("configure_package_config_file",
             _approved_package_configure)),
         ("trusted", ("install", (
-            "TARGETS", "libleopard", "EXPORT", "leopardTargets", "ARCHIVE",
+            "TARGETS", "leopard", "EXPORT", "leopardTargets", "ARCHIVE",
             "DESTINATION", "${CMAKE_INSTALL_LIBDIR}", "LIBRARY",
             "DESTINATION", "${CMAKE_INSTALL_LIBDIR}", "RUNTIME",
             "DESTINATION", "${CMAKE_INSTALL_BINDIR}"))),
@@ -782,18 +785,18 @@ class CMakeProductionGraph(object):
             "EXPORT", "leopardTargets", "FILE", "leopardTargets.cmake",
             "NAMESPACE", "leopard::", "DESTINATION",
             "${LEOPARD_INSTALL_CMAKEDIR}"))),
-        ("mutation", ("libleopard", "target_compile_definitions", (
+        ("mutation", ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_BACKEND_FORCE_SCALAR=1"))),
-        ("mutation", ("libleopard", "target_compile_definitions", (
+        ("mutation", ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_BACKEND_FORCE_SSSE3=1"))),
-        ("mutation", ("libleopard", "target_compile_definitions", (
+        ("mutation", ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_BACKEND_FORCE_AVX2=1"))),
         ("locator-provenance", ("find_program", _locator_git_find)),
         ("locator-provenance", (
             "execute_process", _locator_git_revision)),
         ("locator-provenance", (
             "execute_process", _locator_git_status)),
-        ("mutation", ("libleopard", "target_compile_definitions", (
+        ("mutation", ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1"))),
         ("mutation", ("leopard2_backend_ssse3",
             "target_compile_definitions", (
@@ -1535,9 +1538,9 @@ class CMakeProductionGraph(object):
 
             if unsupported_depth:
                 if (command == "add_library" and tokens and
-                        tokens[0] == "libleopard"):
+                        tokens[0] == "leopard"):
                     raise ContractError(
-                        "libleopard add_library must be unconditional")
+                        "leopard add_library must be unconditional")
                 if command in {
                         "add_library", "target_sources",
                         "set_source_files_properties", "set_property",
@@ -1629,6 +1632,10 @@ class CMakeProductionGraph(object):
                     "-DLEO2_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}",
                     "-DLEO2_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}",
                     "-DLEO2_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}",
+                    "-DLEO2_STATIC_LIBRARY_PREFIX="
+                    "${CMAKE_STATIC_LIBRARY_PREFIX}",
+                    "-DLEO2_STATIC_LIBRARY_SUFFIX="
+                    "${CMAKE_STATIC_LIBRARY_SUFFIX}",
                     "-P", "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/"
                     "test_cuda_optional.cmake",
                 )
@@ -2022,15 +2029,15 @@ class CMakeProductionGraph(object):
                 continue
 
             if (command == "target_sources" and tokens and
-                    tokens[0] == "libleopard" and
+                    tokens[0] == "leopard" and
                     not bool_satisfiable(guard)):
                 raise ContractError(
-                    "libleopard TARGET_OBJECTS has no MSVC-reachable "
+                    "leopard TARGET_OBJECTS has no MSVC-reachable "
                     "definition or attachment configuration")
             if (command == "add_library" and tokens and
-                    tokens[0] == "libleopard" and conditional_depth):
+                    tokens[0] == "leopard" and conditional_depth):
                 raise ContractError(
-                    "libleopard add_library must be unconditional")
+                    "leopard add_library must be unconditional")
             if not bool_satisfiable(guard):
                 if command == "add_library" and tokens:
                     self.declared_targets.add(tokens[0])
@@ -2152,9 +2159,9 @@ class CMakeProductionGraph(object):
                     raw_tokens[0])
             target = self._target_name(raw_tokens[0], guard)
             self.declared_targets.add(target)
-            if target == "libleopard" and not bool_tautology(guard):
+            if target == "leopard" and not bool_tautology(guard):
                 raise ContractError(
-                    "libleopard add_library must be unconditional")
+                    "leopard add_library must be unconditional")
             tokens = self._expand(raw_tokens[1:], guard)
             upper_tokens = [token.upper() for token in tokens]
             if upper_tokens and upper_tokens[0] == "ALIAS":
@@ -2164,8 +2171,18 @@ class CMakeProductionGraph(object):
                 if target in self.target_aliases:
                     raise ContractError(
                         "duplicate CMake target ALIAS: " + target)
+                if target == "libleopard":
+                    if tuple(raw_tokens) != (
+                            "libleopard", "ALIAS", "leopard"):
+                        raise ContractError(
+                            "libleopard must remain an exact alias of leopard")
+                    self._record_trusted_command(
+                        command, raw_tokens, guard, reasons)
                 self.target_aliases[target] = tokens[1]
                 return
+            if target == "libleopard":
+                raise ContractError(
+                    "libleopard must remain an exact alias of leopard")
             if "IMPORTED" in upper_tokens:
                 return
             kind = "DEFAULT"
@@ -2173,12 +2190,12 @@ class CMakeProductionGraph(object):
                 kind = tokens.pop(0).upper()
             if tokens and tokens[0].upper() == "EXCLUDE_FROM_ALL":
                 tokens.pop(0)
-            if target == "libleopard":
+            if target == "leopard":
                 if (kind != "STATIC" or
                         tuple(raw_tokens) != (
-                            "libleopard", "STATIC", "${LIB_SOURCE_FILES}")):
+                            "leopard", "STATIC", "${LIB_SOURCE_FILES}")):
                     raise ContractError(
-                        "libleopard must be one exact STATIC library definition")
+                        "leopard must be one exact STATIC library definition")
                 self._record_trusted_command(
                     command, raw_tokens, guard, reasons)
             definitions = self.targets.setdefault(target, [])
@@ -2202,10 +2219,10 @@ class CMakeProductionGraph(object):
                     target)
             sources = [token for token in tokens if token.upper() not in {
                 "PRIVATE", "PUBLIC", "INTERFACE", "SYSTEM", "BEFORE"}]
-            if (conditional_depth and target == "libleopard" and any(
+            if (conditional_depth and target == "leopard" and any(
                     not self._target_objects.match(token) for token in sources)):
                 raise ContractError(
-                    "conditional direct libleopard source attachment")
+                    "conditional direct leopard source attachment")
             self.attachments.setdefault(target, []).extend(
                 (source, guard) for source in sources)
         elif command == "set_source_files_properties" and raw_tokens:
@@ -2341,11 +2358,11 @@ class CMakeProductionGraph(object):
                 raise ContractError(
                     "production target mutation is reachable without its "
                     "target: " + canonical + " " + command)
-            if (key == ("libleopard", "target_link_libraries",
+            if (key == ("leopard", "target_link_libraries",
                         ("PUBLIC", "${OpenMP_CXX_FLAGS}")) and
                     "OpenMP_CXX_FLAGS" in self.variables):
                 raise ContractError(
-                    "local OpenMP_CXX_FLAGS mutation can redirect libleopard "
+                    "local OpenMP_CXX_FLAGS mutation can redirect leopard "
                     "link inputs")
         if self.require_mutation_contract:
             expected = Counter(self._approved_production_mutations)
@@ -2377,10 +2394,10 @@ class CMakeProductionGraph(object):
                 "unsupported production source path (fail closed): " + token)
         if reject_cuda and suffix in CUDA_SUFFIXES:
             raise ContractError(
-                "CUDA source attached to ordinary CPU libleopard: " + token)
+                "CUDA source attached to ordinary CPU leopard: " + token)
         return path.as_posix()
 
-    def resolve(self, target="libleopard"):
+    def resolve(self, target="leopard"):
         resolved = []
         attached_objects = set()
         object_sources = set()
@@ -3083,7 +3100,7 @@ def production_graph(text=None, require_files=True,
             cuda_lines = production_cuda_source_lines(source_text)
             if cuda_lines:
                 raise ContractError(
-                    "CUDA source marker reachable from CPU libleopard: " +
+                    "CUDA source marker reachable from CPU leopard: " +
                     cuda_lines[0].strip())
             for included in production_local_includes(source_text):
                 if re.match(
@@ -3091,7 +3108,7 @@ def production_graph(text=None, require_files=True,
                         PurePosixPath(
                             included.replace("\\", "/")).name.lower()):
                     raise ContractError(
-                        "CUDA header reachable from CPU libleopard: " +
+                        "CUDA header reachable from CPU leopard: " +
                         included)
                 candidate = windows_repository_include(
                     source.parent, included)
@@ -3101,7 +3118,7 @@ def production_graph(text=None, require_files=True,
                     ROOT.resolve()).as_posix()
                 if candidate.suffix.lower() in CUDA_SUFFIXES:
                     raise ContractError(
-                        "CUDA header reachable from CPU libleopard: " + local)
+                        "CUDA header reachable from CPU leopard: " + local)
                 if (candidate.is_file() and
                         candidate.suffix.lower() in HEADER_SUFFIXES):
                     headers.add(local)
@@ -3803,17 +3820,73 @@ class CMakeGraphMutationTest(unittest.TestCase):
             text, require_files=False,
             require_mutation_contract=require_mutation_contract)
 
+    def test_legacy_target_references_are_explicitly_classified(self):
+        # These four experiment families authenticate the historical CMake
+        # target and archive names as evidence fields.  Rewriting them in
+        # place would invalidate replay, so they require a separately
+        # versioned migration.  No production tool or new experiment family
+        # may silently add another functional reference to those names.
+        compatibility_contracts = {
+            "CMakeLists.txt",
+            "cmake/leopardConfig.cmake.in",
+            "tests/cmake/test_cuda_optional.cmake",
+            "tests/proj/test_leopard_vcxproj.py",
+        }
+        authenticated_replay_contracts = {
+            "experiments/leopard2/backend_butterfly/run_abba.py",
+            "experiments/leopard2/low_encode_copy/run_abba.py",
+            "experiments/leopard2/main_compare/run_abba.py",
+            "experiments/leopard2/non_power_of_two/c7/run_authoritative.py",
+            "experiments/leopard2/non_power_of_two/c7/run_matrix.py",
+            "experiments/leopard2/non_power_of_two/c7/"
+            "test_evidence_portability.py",
+            "experiments/leopard2/non_power_of_two/c7/"
+            "test_run_authoritative.py",
+            "experiments/leopard2/non_power_of_two/c7/validate_evidence.py",
+        }
+        legacy_reference = re.compile(
+            r"liblibleopard|CMakeFiles/libleopard[.]dir|"
+            r"leopard::libleopard|TARGET_FILE:libleopard|"
+            r"(?:add_library|target_[A-Za-z_]+)[(][ \t]*libleopard\b|"
+            r"install[(][ \t]*TARGETS[ \t]+libleopard\b|"
+            r"(?:\"libleopard\"|'libleopard')|"
+            r"--target[^\n]*\blibleopard\b")
+        candidates = {CMAKE}
+        for relative_root in ("cmake", "tests", "tools", "experiments/leopard2"):
+            root = ROOT / relative_root
+            for path in root.rglob("*"):
+                if (not path.is_file() or "results" in path.parts or
+                        path.suffix.lower() not in {
+                            ".cmake", ".in", ".py", ".sh"}):
+                    continue
+                candidates.add(path)
+
+        actual = set()
+        for path in candidates:
+            text = path.read_text(encoding="utf-8")
+            if legacy_reference.search(text):
+                actual.add(path.relative_to(ROOT).as_posix())
+
+        self.assertEqual(
+            compatibility_contracts | authenticated_replay_contracts,
+            actual,
+            "legacy CMake target/archive reference allowlist drifted")
+
+        self.assertEqual(
+            1, self.cmake.count("add_library(libleopard ALIAS leopard)"))
+        self.assertNotIn("liblibleopard", self.cmake)
+
     def test_direct_target_sources_is_retained(self):
         (sources, unused_headers, unused_objects,
          unused_object_sources, unused_cmake) = self.resolve(
-            "target_sources(libleopard PRIVATE New.cpp)")
+            "target_sources(leopard PRIVATE New.cpp)")
         del unused_headers, unused_objects, unused_object_sources, unused_cmake
         self.assertIn("New.cpp", sources)
 
     def test_future_attached_object_target_is_traversed(self):
         mutation = """
 add_library(future_backend OBJECT FutureBackend.cpp)
-target_sources(libleopard PRIVATE $<TARGET_OBJECTS:future_backend>)
+target_sources(leopard PRIVATE $<TARGET_OBJECTS:future_backend>)
 """
         (sources, unused_headers, objects,
          object_sources, unused_cmake) = self.resolve(mutation)
@@ -3826,7 +3899,7 @@ target_sources(libleopard PRIVATE $<TARGET_OBJECTS:future_backend>)
         mutation = """
 add_library(variable_backend OBJECT VariableBackend.cpp)
 set(OBJECT_EXPRESSION $<TARGET_OBJECTS:variable_backend>)
-target_sources(libleopard PRIVATE ${OBJECT_EXPRESSION})
+target_sources(leopard PRIVATE ${OBJECT_EXPRESSION})
 """
         (sources, unused_headers, objects,
          object_sources, unused_cmake) = self.resolve(mutation)
@@ -3838,12 +3911,12 @@ target_sources(libleopard PRIVATE ${OBJECT_EXPRESSION})
     def test_unresolved_variable_is_rejected(self):
         with self.assertRaisesRegex(ContractError, "unresolved.*EXTRA_SOURCES"):
             self.resolve(
-                "target_sources(libleopard PRIVATE ${EXTRA_SOURCES})")
+                "target_sources(leopard PRIVATE ${EXTRA_SOURCES})")
 
     def test_resolved_variable_is_retained(self):
         mutation = """
 set(EXTRA_SOURCES ExtraOne.cpp ExtraTwo.cpp)
-target_sources(libleopard PRIVATE ${EXTRA_SOURCES})
+target_sources(leopard PRIVATE ${EXTRA_SOURCES})
 """
         (sources, unused_headers, unused_objects,
          unused_object_sources, unused) = self.resolve(mutation)
@@ -3858,14 +3931,14 @@ if(WIN32)
 else()
     set(BRANCH_SOURCES BranchOther.cpp)
 endif()
-target_sources(libleopard PRIVATE ${BRANCH_SOURCES})
+target_sources(leopard PRIVATE ${BRANCH_SOURCES})
 """
         with self.assertRaisesRegex(
                 ContractError, "conditional.*BRANCH_SOURCES"):
             self.resolve(mutation)
 
     def test_unsupported_list_operation_on_source_variable_is_rejected(self):
-        marker = "add_library(libleopard STATIC ${LIB_SOURCE_FILES})"
+        marker = "add_library(leopard STATIC ${LIB_SOURCE_FILES})"
         mutation = "list(REMOVE_ITEM LIB_SOURCE_FILES leopard2.cpp)"
         text = self.cmake.replace(marker, mutation + "\n" + marker, 1)
         with self.assertRaisesRegex(
@@ -3874,10 +3947,10 @@ target_sources(libleopard PRIVATE ${BRANCH_SOURCES})
             self.resolve_text(text)
 
     def test_source_variable_is_snapshotted_at_add_library_time(self):
-        marker = "add_library(libleopard STATIC ${LIB_SOURCE_FILES})"
+        marker = "add_library(leopard STATIC ${LIB_SOURCE_FILES})"
         replacement = """set(SAVED_LIB_SOURCE_FILES ${LIB_SOURCE_FILES})
 set(LIB_SOURCE_FILES Injected.cpp)
-add_library(libleopard STATIC ${LIB_SOURCE_FILES})
+add_library(leopard STATIC ${LIB_SOURCE_FILES})
 set(LIB_SOURCE_FILES ${SAVED_LIB_SOURCE_FILES})"""
         text = self.cmake.replace(marker, replacement, 1)
         self.assertNotEqual(text, self.cmake)
@@ -3886,7 +3959,7 @@ set(LIB_SOURCE_FILES ${SAVED_LIB_SOURCE_FILES})"""
         self.assertNotIn("leopard2.cpp", sources)
 
     def test_indirect_mutation_destinations_are_resolved_at_command_time(self):
-        marker = "add_library(libleopard STATIC ${LIB_SOURCE_FILES})"
+        marker = "add_library(leopard STATIC ${LIB_SOURCE_FILES})"
         mutations = (
             "set(${SOURCE_DEST} Injected.cpp)",
             "list(APPEND ${SOURCE_DEST} Injected.cpp)",
@@ -3900,7 +3973,7 @@ set(LIB_SOURCE_FILES ${SAVED_LIB_SOURCE_FILES})"""
                 self.assertIn("Injected.cpp", self.resolve_text(text)[0])
 
     def test_unmodeled_source_variable_writers_are_rejected(self):
-        marker = "add_library(libleopard STATIC ${LIB_SOURCE_FILES})"
+        marker = "add_library(leopard STATIC ${LIB_SOURCE_FILES})"
         mutations = (
             'file(GLOB LIB_SOURCE_FILES "*.cpp")',
             ('set(GLOB_OUTPUT LIB_SOURCE_FILES)\n'
@@ -3925,7 +3998,7 @@ set(LIB_SOURCE_FILES ${SAVED_LIB_SOURCE_FILES})"""
                 "add_subdirectory(cmake/injected_sources)",
                 "subdirs(cmake/injected_sources)",
                 "include(cmake/injected_sources.cmake)",
-                "cmake_language(CALL target_sources libleopard PRIVATE "
+                "cmake_language(CALL target_sources leopard PRIVATE "
                 "Injected.cpp)",
                 "load_command(injected cmake/injected-command)",
                 "find_package(Injected CONFIG REQUIRED PATHS "
@@ -3972,17 +4045,17 @@ set(LIB_SOURCE_FILES ${SAVED_LIB_SOURCE_FILES})"""
         mutations = (
             """
 add_library(linked_backend OBJECT LinkedBackend.cpp)
-target_link_libraries(libleopard PRIVATE linked_backend)
+target_link_libraries(leopard PRIVATE linked_backend)
 """,
             """
 add_library(linked_backend OBJECT LinkedBackend.cpp)
-set(LINK_DESTINATION libleopard)
+set(LINK_DESTINATION leopard)
 target_link_libraries(${LINK_DESTINATION} PRIVATE linked_backend)
 """,
             """
 add_library(linked_backend OBJECT LinkedBackend.cpp)
 function(inject_link)
-    target_link_libraries(libleopard PRIVATE linked_backend)
+    target_link_libraries(leopard PRIVATE linked_backend)
 endfunction()
 inject_link()
 """,
@@ -4000,11 +4073,11 @@ inject_link()
         object_definition = (
             "add_library(linked_backend OBJECT LinkedBackend.cpp)")
         mutations = (
-            "set_property(TARGET libleopard APPEND PROPERTY "
+            "set_property(TARGET leopard APPEND PROPERTY "
             "LINK_LIBRARIES linked_backend)",
-            "set_target_properties(libleopard PROPERTIES "
+            "set_target_properties(leopard PROPERTIES "
             "LINK_LIBRARIES linked_backend)",
-            "set_property(TARGET libleopard APPEND PROPERTY "
+            "set_property(TARGET leopard APPEND PROPERTY "
             "INTERFACE_LINK_LIBRARIES linked_backend)",
         )
         for mutation in mutations:
@@ -4013,7 +4086,7 @@ inject_link()
                         ContractError, "link property bypasses graph"):
                     self.resolve(object_definition + "\n" + mutation)
 
-        marker = "add_library(libleopard STATIC ${LIB_SOURCE_FILES})"
+        marker = "add_library(leopard STATIC ${LIB_SOURCE_FILES})"
         directory_mutations = (
             "link_libraries(linked_backend)",
             "set_property(DIRECTORY APPEND PROPERTY "
@@ -4036,7 +4109,7 @@ inject_link()
     def test_attached_object_compile_and_link_mutations_are_rejected(self):
         prelude = """
 add_library(injected_backend OBJECT InjectedBackend.cpp)
-target_sources(libleopard PRIVATE $<TARGET_OBJECTS:injected_backend>)
+target_sources(leopard PRIVATE $<TARGET_OBJECTS:injected_backend>)
 """
         mutations = (
             "target_link_libraries(injected_backend PRIVATE Injected::Injected)",
@@ -4060,19 +4133,19 @@ target_sources(libleopard PRIVATE $<TARGET_OBJECTS:injected_backend>)
                         "unapproved production target compile/link mutation"):
                     self.resolve(prelude + mutation)
 
-    def test_libleopard_compile_mutations_are_rejected(self):
+    def test_leopard_compile_mutations_are_rejected(self):
         mutations = (
-            "target_compile_options(libleopard PRIVATE /arch:AVX2)",
-            "target_compile_definitions(libleopard PRIVATE INJECTED=1)",
-            "target_compile_definitions(libleopard PRIVATE "
+            "target_compile_options(leopard PRIVATE /arch:AVX2)",
+            "target_compile_definitions(leopard PRIVATE INJECTED=1)",
+            "target_compile_definitions(leopard PRIVATE "
             "LEO2_BACKEND_FORCE_AVX2=1)",
-            "target_compile_features(libleopard PRIVATE cxx_std_20)",
-            "target_include_directories(libleopard PRIVATE injected)",
-            "target_link_options(libleopard PRIVATE /LTCG)",
-            "target_link_directories(libleopard PRIVATE injected)",
-            "target_link_interface_libraries(libleopard Injected::Injected)",
-            "target_precompile_headers(libleopard PRIVATE injected.h)",
-            "set(MUTATION_TARGET libleopard)\n"
+            "target_compile_features(leopard PRIVATE cxx_std_20)",
+            "target_include_directories(leopard PRIVATE injected)",
+            "target_link_options(leopard PRIVATE /LTCG)",
+            "target_link_directories(leopard PRIVATE injected)",
+            "target_link_interface_libraries(leopard Injected::Injected)",
+            "target_precompile_headers(leopard PRIVATE injected.h)",
+            "set(MUTATION_TARGET leopard)\n"
             "target_compile_options(${MUTATION_TARGET} PRIVATE /arch:AVX2)",
         )
         for mutation in mutations:
@@ -4086,19 +4159,19 @@ target_sources(libleopard PRIVATE $<TARGET_OBJECTS:injected_backend>)
     def test_target_alias_cannot_hide_production_mutation(self):
         mutations = (
             """
-add_library(libleopard_alias ALIAS libleopard)
-target_compile_options(libleopard_alias PRIVATE /arch:AVX2)
+add_library(leopard_alias ALIAS leopard)
+target_compile_options(leopard_alias PRIVATE /arch:AVX2)
 """,
             """
 add_library(alias_backend OBJECT AliasBackend.cpp)
 add_library(backend_alias ALIAS alias_backend)
-target_sources(libleopard PRIVATE $<TARGET_OBJECTS:alias_backend>)
+target_sources(leopard PRIVATE $<TARGET_OBJECTS:alias_backend>)
 target_compile_definitions(backend_alias PRIVATE INJECTED=1)
 """,
             """
 add_library(alias_backend OBJECT AliasBackend.cpp)
 add_library(backend_alias ALIAS alias_backend)
-target_sources(libleopard PRIVATE $<TARGET_OBJECTS:backend_alias>)
+target_sources(leopard PRIVATE $<TARGET_OBJECTS:backend_alias>)
 target_compile_options(alias_backend PRIVATE /arch:AVX2)
 """,
         )
@@ -4112,10 +4185,10 @@ target_compile_options(alias_backend PRIVATE /arch:AVX2)
 
     def test_scoped_compile_and_link_mutations_are_rejected(self):
         commands = (
-            "target_compile_options(libleopard PRIVATE /arch:AVX2)",
-            "target_compile_definitions(libleopard PRIVATE INJECTED=1)",
-            "target_include_directories(libleopard PRIVATE injected)",
-            "target_link_options(libleopard PRIVATE /LTCG)",
+            "target_compile_options(leopard PRIVATE /arch:AVX2)",
+            "target_compile_definitions(leopard PRIVATE INJECTED=1)",
+            "target_include_directories(leopard PRIVATE injected)",
+            "target_link_options(leopard PRIVATE /LTCG)",
         )
         for opening, closing in (
                 ("function(inject)", "endfunction()"),
@@ -4150,34 +4223,34 @@ target_compile_options(alias_backend PRIVATE /arch:AVX2)
 
     def test_compile_link_properties_are_rejected(self):
         mutations = (
-            "set_property(TARGET libleopard APPEND PROPERTY "
+            "set_property(TARGET leopard APPEND PROPERTY "
             "COMPILE_OPTIONS /arch:AVX2)",
-            "set_target_properties(libleopard PROPERTIES "
+            "set_target_properties(leopard PROPERTIES "
             "COMPILE_DEFINITIONS INJECTED=1)",
-            "set_property(TARGET libleopard APPEND PROPERTY LINK_OPTIONS /LTCG)",
-            "set_target_properties(libleopard PROPERTIES "
+            "set_property(TARGET leopard APPEND PROPERTY LINK_OPTIONS /LTCG)",
+            "set_target_properties(leopard PROPERTIES "
             "INTERPROCEDURAL_OPTIMIZATION ON)",
-            "set_target_properties(libleopard PROPERTIES "
+            "set_target_properties(leopard PROPERTIES "
             "INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)",
-            "set_target_properties(libleopard PROPERTIES "
+            "set_target_properties(leopard PROPERTIES "
             "COMPILE_DEFINITIONS_RELEASE INJECTED=1)",
-            "set_target_properties(libleopard PROPERTIES "
+            "set_target_properties(leopard PROPERTIES "
             "MSVC_RUNTIME_LIBRARY MultiThreaded)",
             "set_property(TARGET Threads::Threads PROPERTY "
             "IMPORTED_LOCATION_RELEASE Injected.lib)",
             "set_property(TARGET OpenMP::OpenMP_CXX PROPERTY "
             "INTERFACE_COMPILE_OPTIONS /arch:AVX2)",
-            "set_property(TARGET libleopard PROPERTY "
+            "set_property(TARGET leopard PROPERTY "
             "INTERFACE_LINK_LIBRARIES_DIRECT Injected::Injected)",
-            "set_property(TARGET libleopard PROPERTY "
+            "set_property(TARGET leopard PROPERTY "
             "INTERFACE_SOURCES C:/Injected.cpp)",
-            "set_property(TARGET libleopard PROPERTY "
+            "set_property(TARGET leopard PROPERTY "
             "VS_USER_PROPS C:/Injected.props)",
-            "set_property(TARGET libleopard PROPERTY "
+            "set_property(TARGET leopard PROPERTY "
             "VS_PLATFORM_TOOLSET injected)",
-            "set_property(TARGET libleopard PROPERTY "
+            "set_property(TARGET leopard PROPERTY "
             "POSITION_INDEPENDENT_CODE ON)",
-            "set_property(TARGET libleopard APPEND PROPERTY "
+            "set_property(TARGET leopard APPEND PROPERTY "
             "STATIC_LIBRARY_OPTIONS /LTCG)",
             "set_property(DIRECTORY APPEND PROPERTY COMPILE_OPTIONS /arch:AVX2)",
             "set_directory_properties(PROPERTIES LINK_OPTIONS /LTCG)",
@@ -4289,7 +4362,7 @@ target_compile_options(alias_backend PRIVATE /arch:AVX2)
 
     def test_find_program_cannot_rewrite_production_control_state(self):
         cases = (
-            ("add_library(libleopard STATIC ${LIB_SOURCE_FILES})",
+            ("add_library(leopard STATIC ${LIB_SOURCE_FILES})",
              "find_program(LEO2_X86_TARGET NAMES definitely_missing)"),
             ("if(LEO2_HAVE_SSSE3_BACKEND)",
              "find_program(LEO2_HAVE_SSSE3_BACKEND NAMES definitely_missing)"),
@@ -4420,11 +4493,11 @@ target_compile_options(alias_backend PRIVATE /arch:AVX2)
 
     def test_generated_and_custom_build_extensions_are_rejected(self):
         mutations = (
-            "add_custom_command(TARGET libleopard POST_BUILD "
+            "add_custom_command(TARGET leopard POST_BUILD "
             "COMMAND injected)",
             "add_custom_command(OUTPUT Injected.obj COMMAND injected)",
             "add_custom_target(injected ALL COMMAND injected)",
-            "add_dependencies(libleopard injected)",
+            "add_dependencies(leopard injected)",
             "configure_file(Injected.cpp leopard2.cpp COPYONLY)",
             "file(GENERATE OUTPUT Injected.cpp CONTENT injected)",
             "execute_process(COMMAND injected)",
@@ -4451,7 +4524,7 @@ target_compile_options(alias_backend PRIVATE /arch:AVX2)
             "exec_program(injected)",
             "write_file(leopard2.cpp injected)",
             "write_basic_package_version_file(injected.cmake VERSION 1.0)",
-            "export(TARGETS libleopard FILE injected.cmake)",
+            "export(TARGETS leopard FILE injected.cmake)",
             "cmake_policy(SET CMP0001 OLD)",
         )
         for mutation in mutations:
@@ -4531,17 +4604,17 @@ endif()'''
     def test_cache_options_and_backend_enum_remain_external(self):
         mutations = (
             "if(NOT LEO2_BUILD_TESTS)\n"
-            "target_compile_options(libleopard PRIVATE /GL)\nendif()",
+            "target_compile_options(leopard PRIVATE /GL)\nendif()",
             "if(LEO2_ENABLE_CUDA)\n"
-            "target_compile_options(libleopard PRIVATE /GL)\nendif()",
+            "target_compile_options(leopard PRIVATE /GL)\nendif()",
             "if(LEO2_BUILD_FUZZERS)\n"
-            "target_compile_options(libleopard PRIVATE /GL)\nendif()",
+            "target_compile_options(leopard PRIVATE /GL)\nendif()",
             "if(NOT LEO2_BUILD_BENCHMARKS)\n"
-            "target_compile_options(libleopard PRIVATE /GL)\nendif()",
+            "target_compile_options(leopard PRIVATE /GL)\nendif()",
             "if(LEO2_BACKEND_VARIANT STREQUAL \"scalar\")\n"
-            "target_compile_options(libleopard PRIVATE /GL)\nendif()",
+            "target_compile_options(leopard PRIVATE /GL)\nendif()",
             "if(LEOPARD_INSTALL_CMAKEDIR STREQUAL \"evil\")\n"
-            "target_compile_options(libleopard PRIVATE /GL)\nendif()",
+            "target_compile_options(leopard PRIVATE /GL)\nendif()",
         )
         for mutation in mutations:
             with self.subTest(condition=mutation.splitlines()[0]):
@@ -4557,7 +4630,7 @@ endif()'''
             with self.subTest(processor=processor):
                 mutation = (
                     "if(CMAKE_SYSTEM_PROCESSOR STREQUAL \"" + processor +
-                    "\")\ntarget_compile_options(libleopard PRIVATE /GL)\n"
+                    "\")\ntarget_compile_options(leopard PRIVATE /GL)\n"
                     "endif()")
                 with self.assertRaisesRegex(
                         ContractError,
@@ -4651,9 +4724,9 @@ endif()'''
 
     def test_arbitrary_target_properties_are_rejected(self):
         mutations = (
-            "set_property(TARGET libleopard PROPERTY LINKER_LANGUAGE CUDA)",
-            "set_property(TARGET libleopard PROPERTY EXCLUDE_FROM_ALL TRUE)",
-            "set_property(TARGET libleopard PROPERTY SOVERSION 99)",
+            "set_property(TARGET leopard PROPERTY LINKER_LANGUAGE CUDA)",
+            "set_property(TARGET leopard PROPERTY EXCLUDE_FROM_ALL TRUE)",
+            "set_property(TARGET leopard PROPERTY SOVERSION 99)",
             "set_target_properties(leopard2_codec_options_abi_test "
             "PROPERTIES LINKER_LANGUAGE CUDA)",
         )
@@ -4692,30 +4765,30 @@ endif()'''
 
     def test_required_production_mutations_cannot_be_removed_or_duplicated(self):
         commands = (
-            """target_compile_definitions(libleopard PRIVATE
+            """target_compile_definitions(leopard PRIVATE
         LEO2_DISABLE_SSSE3_CODEGEN=1
         LEO2_DISABLE_AVX2_CODEGEN=1)""",
-            """target_include_directories(libleopard PUBLIC
+            """target_include_directories(leopard PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)""",
-            "target_link_libraries(libleopard PUBLIC Threads::Threads)",
+            "target_link_libraries(leopard PUBLIC Threads::Threads)",
             """target_include_directories(leopard2_backend_ssse3 PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR})""",
             """target_include_directories(leopard2_backend_avx2 PRIVATE
                 ${CMAKE_CURRENT_SOURCE_DIR})""",
             "target_compile_options(leopard2_backend_avx2 PRIVATE /arch:AVX2)",
-            "target_compile_definitions(libleopard PRIVATE "
+            "target_compile_definitions(leopard PRIVATE "
             "LEO2_HAVE_SSSE3_BACKEND=1)",
-            "target_compile_definitions(libleopard PRIVATE "
+            "target_compile_definitions(leopard PRIVATE "
             "LEO2_HAVE_AVX2_BACKEND=1)",
-            "target_compile_definitions(libleopard PRIVATE "
+            "target_compile_definitions(leopard PRIVATE "
             "LEO2_ENABLE_TEST_HOOKS=1)",
             "target_compile_definitions(leopard2_backend_ssse3 PRIVATE\n"
             "            LEO2_ENABLE_TEST_HOOKS=1)",
             "target_compile_definitions(leopard2_backend_avx2 PRIVATE\n"
             "            LEO2_ENABLE_TEST_HOOKS=1)",
-            "target_link_libraries(libleopard PUBLIC OpenMP::OpenMP_CXX)",
-            "target_link_libraries(libleopard PUBLIC \"${OpenMP_CXX_FLAGS}\")",
+            "target_link_libraries(leopard PUBLIC OpenMP::OpenMP_CXX)",
+            "target_link_libraries(leopard PUBLIC \"${OpenMP_CXX_FLAGS}\")",
         )
         for command in commands:
             with self.subTest(command=command.split("(", 1)[0]):
@@ -4732,13 +4805,14 @@ endif()'''
                 ContractError,
                 "missing or duplicate production target mutation"):
             self.resolve(
-                "target_link_libraries(libleopard PUBLIC Threads::Threads)")
+                "target_link_libraries(leopard PUBLIC Threads::Threads)")
 
     def test_required_trusted_cmake_commands_cannot_be_removed_or_duplicated(self):
         commands = (
             "cmake_minimum_required(VERSION 3.7)",
             "project(leopard)",
-            "add_library(libleopard STATIC ${LIB_SOURCE_FILES})",
+            "add_library(leopard STATIC ${LIB_SOURCE_FILES})",
+            "add_library(libleopard ALIAS leopard)",
             "include(CMakeDependentOption)",
             "include(CheckCXXCompilerFlag)",
             "include(CMakePackageConfigHelpers)",
@@ -4764,7 +4838,7 @@ endif()'''
     cmake/leopardConfig.cmake.in
     "${CMAKE_CURRENT_BINARY_DIR}/leopardConfig.cmake"
     INSTALL_DESTINATION "${LEOPARD_INSTALL_CMAKEDIR}")""",
-            """install(TARGETS libleopard
+            """install(TARGETS leopard
     EXPORT leopardTargets
     ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
     LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
@@ -4939,7 +5013,7 @@ endif()""",
             self.resolve_text(text, require_mutation_contract=True)
 
     def test_computed_list_output_variables_cannot_rewrite_source_graph(self):
-        marker = "add_library(libleopard STATIC ${LIB_SOURCE_FILES})"
+        marker = "add_library(leopard STATIC ${LIB_SOURCE_FILES})"
         operations = (
             "list(GET EVIL 0 LIB_SOURCE_FILES)",
             "list(LENGTH EVIL LIB_SOURCE_FILES)",
@@ -4958,14 +5032,14 @@ endif()""",
                     self.resolve_text(
                         text, require_mutation_contract=True)
 
-    def test_libleopard_library_kind_and_definition_are_exact(self):
-        marker = "add_library(libleopard STATIC ${LIB_SOURCE_FILES})"
+    def test_leopard_library_kind_and_definition_are_exact(self):
+        marker = "add_library(leopard STATIC ${LIB_SOURCE_FILES})"
         replacements = (
-            "add_library(libleopard SHARED ${LIB_SOURCE_FILES})",
-            "add_library(libleopard MODULE ${LIB_SOURCE_FILES})",
-            "add_library(libleopard OBJECT ${LIB_SOURCE_FILES})",
-            "add_library(libleopard ${LIB_SOURCE_FILES})",
-            "add_library(libleopard STATIC EXCLUDE_FROM_ALL "
+            "add_library(leopard SHARED ${LIB_SOURCE_FILES})",
+            "add_library(leopard MODULE ${LIB_SOURCE_FILES})",
+            "add_library(leopard OBJECT ${LIB_SOURCE_FILES})",
+            "add_library(leopard ${LIB_SOURCE_FILES})",
+            "add_library(leopard STATIC EXCLUDE_FROM_ALL "
             "${LIB_SOURCE_FILES})",
         )
         for replacement in replacements:
@@ -4982,8 +5056,30 @@ endif()""",
                 "missing or duplicate trusted CMake command"):
             self.resolve(marker)
 
+    def test_legacy_target_is_alias_only(self):
+        marker = "add_library(libleopard ALIAS leopard)"
+        replacements = (
+            "add_library(libleopard STATIC ${LIB_SOURCE_FILES})",
+            "add_library(libleopard ALIAS leopard2_backend_ssse3)",
+        )
+        for replacement in replacements:
+            with self.subTest(definition=replacement):
+                text = self.cmake.replace(marker, replacement, 1)
+                self.assertNotEqual(text, self.cmake)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "exact alias|missing or duplicate trusted"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+
+        with self.assertRaisesRegex(
+                ContractError, "missing or duplicate trusted"):
+            self.resolve_text(
+                self.cmake.replace(marker, "", 1),
+                require_mutation_contract=True)
+
     def test_production_mutation_guard_drift_is_rejected(self):
-        marker = "target_link_libraries(libleopard PUBLIC Threads::Threads)"
+        marker = "target_link_libraries(leopard PUBLIC Threads::Threads)"
         replacements = (
             "if(COMMAND injected_gate)\n" + marker + "\nendif()",
             "if(CMAKE_VS_PLATFORM_NAME STREQUAL \"x64\")\n" + marker +
@@ -5002,7 +5098,7 @@ endif()""",
                         text, require_mutation_contract=True)
 
     def test_approved_link_flag_variable_cannot_be_locally_redirected(self):
-        marker = ('target_link_libraries(libleopard PUBLIC '
+        marker = ('target_link_libraries(leopard PUBLIC '
                   '"${OpenMP_CXX_FLAGS}")')
         mutation = "set(OpenMP_CXX_FLAGS linked_backend)\n" + marker
         text = self.cmake.replace(marker, mutation, 1)
@@ -5041,7 +5137,7 @@ inject_sources()""",
                     self.resolve(mutation)
 
     def test_win32_only_source_variable_mutation_is_rejected(self):
-        marker = "add_library(libleopard STATIC ${LIB_SOURCE_FILES})"
+        marker = "add_library(leopard STATIC ${LIB_SOURCE_FILES})"
         conditions = (
             'CMAKE_SYSTEM_PROCESSOR STREQUAL "x86"',
             'CMAKE_VS_PLATFORM_NAME STREQUAL "Win32"',
@@ -5058,18 +5154,18 @@ inject_sources()""",
                         ContractError, "conditional.*LIB_SOURCE_FILES"):
                     self.resolve_text(text)
 
-    def test_conditional_libleopard_definition_is_rejected(self):
-        marker = "add_library(libleopard STATIC ${LIB_SOURCE_FILES})"
+    def test_conditional_leopard_definition_is_rejected(self):
+        marker = "add_library(leopard STATIC ${LIB_SOURCE_FILES})"
         replacement = """if(NOT WIN32)
-add_library(libleopard STATIC ${LIB_SOURCE_FILES})
+add_library(leopard STATIC ${LIB_SOURCE_FILES})
 endif()"""
         text = self.cmake.replace(marker, replacement, 1)
         with self.assertRaisesRegex(
                 ContractError, "add_library must be unconditional"):
             self.resolve_text(text)
 
-    def test_contextual_libleopard_definition_is_rejected(self):
-        marker = "add_library(libleopard STATIC ${LIB_SOURCE_FILES})"
+    def test_contextual_leopard_definition_is_rejected(self):
+        marker = "add_library(leopard STATIC ${LIB_SOURCE_FILES})"
         wrappers = (
             ("function(wrapper)", "endfunction()"),
             ("macro(wrapper)", "endmacro()"),
@@ -5088,9 +5184,9 @@ endif()"""
 
     def test_contextual_target_property_source_mutation_is_rejected(self):
         mutations = (
-            "set_property(TARGET libleopard APPEND PROPERTY "
+            "set_property(TARGET leopard APPEND PROPERTY "
             "SOURCES Injected.cpp)",
-            "set_target_properties(libleopard PROPERTIES "
+            "set_target_properties(leopard PROPERTIES "
             "SOURCES Injected.cpp)",
         )
         for mutation in mutations:
@@ -5105,20 +5201,20 @@ endif()"""
     def test_attached_object_requires_msvc_reachable_definition(self):
         texts = ("""
 set(LIB_SOURCE_FILES Base.cpp Base.h)
-add_library(libleopard STATIC ${LIB_SOURCE_FILES})
+add_library(leopard STATIC ${LIB_SOURCE_FILES})
 if(NOT WIN32)
     add_library(hidden_backend OBJECT HiddenBackend.cpp)
 endif()
-target_sources(libleopard PRIVATE $<TARGET_OBJECTS:hidden_backend>)
+target_sources(leopard PRIVATE $<TARGET_OBJECTS:hidden_backend>)
 """, """
 set(LIB_SOURCE_FILES Base.cpp Base.h)
-add_library(libleopard STATIC ${LIB_SOURCE_FILES})
+add_library(leopard STATIC ${LIB_SOURCE_FILES})
 if(MSVC)
     if(FALSE)
         add_library(hidden_backend OBJECT HiddenBackend.cpp)
     endif()
 endif()
-target_sources(libleopard PRIVATE $<TARGET_OBJECTS:hidden_backend>)
+target_sources(leopard PRIVATE $<TARGET_OBJECTS:hidden_backend>)
 """)
         for text in texts:
             with self.subTest(definition=text.splitlines()[3].strip()):
@@ -5149,7 +5245,7 @@ target_sources(libleopard PRIVATE $<TARGET_OBJECTS:hidden_backend>)
                     self.resolve_text(text)
 
     def test_target_objects_attachment_must_reach_msvc(self):
-        marker = """    target_sources(libleopard PRIVATE
+        marker = """    target_sources(leopard PRIVATE
         $<TARGET_OBJECTS:leopard2_backend_ssse3>)"""
         for condition in ("FALSE", "NOT WIN32"):
             with self.subTest(condition=condition):
@@ -5163,7 +5259,7 @@ target_sources(libleopard PRIVATE $<TARGET_OBJECTS:hidden_backend>)
                     self.resolve_text(text)
 
     def test_target_objects_attachment_rejects_unmodeled_condition(self):
-        marker = """    target_sources(libleopard PRIVATE
+        marker = """    target_sources(leopard PRIVATE
         $<TARGET_OBJECTS:leopard2_backend_ssse3>)"""
         replacement = (
             "    if(COMMAND injected_attachment_gate)\n" + marker +
@@ -5175,7 +5271,7 @@ target_sources(libleopard PRIVATE $<TARGET_OBJECTS:hidden_backend>)
             self.resolve_text(text)
 
     def test_target_objects_else_preserves_unsupported_condition(self):
-        marker = """    target_sources(libleopard PRIVATE
+        marker = """    target_sources(leopard PRIVATE
         $<TARGET_OBJECTS:leopard2_backend_ssse3>)"""
         replacement = (
             "    if(COMMAND injected_attachment_gate)\n"
@@ -5190,11 +5286,11 @@ target_sources(libleopard PRIVATE $<TARGET_OBJECTS:hidden_backend>)
     def test_conditional_direct_source_attachment_is_rejected(self):
         mutation = """
 if(WIN32)
-    target_sources(libleopard PRIVATE Conditional.cpp)
+    target_sources(leopard PRIVATE Conditional.cpp)
 endif()
 """
         with self.assertRaisesRegex(
-                ContractError, "conditional direct libleopard"):
+                ContractError, "conditional direct leopard"):
             self.resolve(mutation)
 
     def test_source_properties_on_production_source_are_rejected(self):
@@ -5221,13 +5317,13 @@ endif()
         with self.assertRaisesRegex(
                 ContractError, "duplicate production source attachment"):
             self.resolve(
-                "target_sources(libleopard PRIVATE leopardff8.cpp)")
+                "target_sources(leopard PRIVATE leopardff8.cpp)")
 
     def test_target_sources_property_mutation_is_rejected(self):
         mutations = (
-            "set_property(TARGET libleopard APPEND PROPERTY "
+            "set_property(TARGET leopard APPEND PROPERTY "
             "SOURCES Injected.cpp)",
-            "set_target_properties(libleopard PROPERTIES "
+            "set_target_properties(leopard PROPERTIES "
             "SOURCES Injected.cpp)",
         )
         for mutation in mutations:
@@ -5239,7 +5335,7 @@ endif()
     def test_conditional_generator_expression_is_rejected(self):
         with self.assertRaisesRegex(ContractError, "generator expression"):
             self.resolve(
-                "target_sources(libleopard PRIVATE "
+                "target_sources(leopard PRIVATE "
                 "\"$<$<BOOL:1>:Conditional.cpp>\")")
 
     def test_cuda_source_or_header_is_rejected(self):
@@ -5247,7 +5343,7 @@ endif()
             with self.subTest(path=path):
                 with self.assertRaisesRegex(ContractError, "CUDA source"):
                     self.resolve(
-                        "target_sources(libleopard PRIVATE " + path + ")")
+                        "target_sources(leopard PRIVATE " + path + ")")
 
     def test_path_escape_is_rejected(self):
         for path in ("../Escape.cpp", "sub/../Escape.cpp", "C:/Escape.cpp"):
@@ -5255,7 +5351,7 @@ endif()
                 with self.assertRaisesRegex(
                         ContractError, "repository-relative|drive path"):
                     self.resolve(
-                        "target_sources(libleopard PRIVATE " + path + ")")
+                        "target_sources(leopard PRIVATE " + path + ")")
 
 
 class MSBuildToolchainMutationTest(unittest.TestCase):

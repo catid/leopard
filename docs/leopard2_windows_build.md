@@ -42,7 +42,7 @@ It compares the hand-maintained project with CMake's production source graph
 and rejects missing or duplicate sources, filter drift, a project-wide ISA
 increase, unproved package or object-library link edges, or a CUDA dependency.
 The CMake proof follows compile, include, and link mutations onto every object
-library attached to `libleopard`; only the checked-in baseline definitions,
+library attached to `leopard`; only the checked-in baseline definitions,
 include paths, runtime links, and the AVX2 object's `/arch:AVX2` option are
 accepted.  Directory-wide compile/link options, source or target property
 bypasses, compiler-flag and IPO rewrites, generated/custom build commands, and

@@ -8,7 +8,7 @@
 if(NOT CMAKE_CXX_COMPILER_LOADED)
     set(leopard_FOUND FALSE)
     set(leopard_NOT_FOUND_MESSAGE
-        "leopard::libleopard requires a consuming project with CXX enabled "
+        "leopard::leopard requires a consuming project with CXX enabled "
         "(C sources remain supported; use project(... LANGUAGES C CXX))")
     return()
 endif()
@@ -35,4 +35,15 @@ if(@ENABLE_OPENMP@)
 endif()
 
 include("${CMAKE_CURRENT_LIST_DIR}/leopardTargets.cmake")
+
+# Compatibility for consumers of releases that exported
+# leopard::libleopard.  New code should link leopard::leopard.  This interface
+# target forwards to the canonical import and does not create or install a
+# second library artifact.
+if(TARGET leopard::leopard AND NOT TARGET leopard::libleopard)
+    add_library(leopard::libleopard INTERFACE IMPORTED)
+    set_property(TARGET leopard::libleopard PROPERTY
+        INTERFACE_LINK_LIBRARIES leopard::leopard)
+endif()
+
 check_required_components(leopard)

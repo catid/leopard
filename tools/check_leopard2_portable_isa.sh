@@ -240,7 +240,7 @@ scan_archive()
 scan_build_metadata()
 {
     metadata_root=$1
-    baseline_flags="$metadata_root/CMakeFiles/libleopard.dir/flags.make"
+    baseline_flags="$metadata_root/CMakeFiles/leopard.dir/flags.make"
     if [ -f "$baseline_flags" ] &&
        LC_ALL=C grep -Ein -- "$forbidden_metadata" "$baseline_flags"
     then
@@ -469,12 +469,12 @@ expect_metadata_rejected()
     metadata_kind=$2
     fixture_flag=$3
     fixture_dir="$scratch_root/metadata-$fixture_name"
-    mkdir -p "$fixture_dir/CMakeFiles/libleopard.dir"
+    mkdir -p "$fixture_dir/CMakeFiles/leopard.dir"
 
     case "$metadata_kind" in
         make)
             printf 'CXX_FLAGS = -O2 %s\n' "$fixture_flag" > \
-                "$fixture_dir/CMakeFiles/libleopard.dir/flags.make"
+                "$fixture_dir/CMakeFiles/leopard.dir/flags.make"
             ;;
         compile_commands)
             printf '[{"command":"c++ -O2 %s -c x.cpp","file":"x.cpp"}]\n' \

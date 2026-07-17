@@ -1209,7 +1209,7 @@ def build_identity(paths: Mapping[str, Path]) -> dict[str, Any]:
         "adapter_executable": (
             adapter / "CMakeFiles/leopard2_jerasure_benchmark.dir/link.txt", adapter),
         "leopard2_library": (
-            leopard / "CMakeFiles/libleopard.dir/link.txt", leopard),
+            leopard / "CMakeFiles/leopard.dir/link.txt", leopard),
         "leopard2_executable": (
             leopard / "CMakeFiles/bench_leopard2.dir/link.txt", leopard),
     }
@@ -4057,7 +4057,7 @@ def optionality_test() -> dict[str, Any]:
     forbidden = (
         "add_subdirectory(experiments/leopard2/jerasure_compare",
         "leo2_jerasure_source_root", "leo2_gf_complete_source_root",
-        "target_link_libraries(libleopard jerasure",
+        "target_link_libraries(leopard jerasure",
         "leopard2_jerasure_comparison_mutation_test",
         "experiments/leopard2/jerasure_compare/correctness_result.json",
     )

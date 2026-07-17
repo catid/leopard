@@ -171,19 +171,24 @@ if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86" OR
     set(LEO2_X86_TARGET ON)
 endif()
 
-add_library(libleopard STATIC ${LIB_SOURCE_FILES})
+add_library(leopard STATIC ${LIB_SOURCE_FILES})
+# Keep source-tree consumers that linked the historical target working while
+# making `leopard` the canonical CMake target.  Installed consumers use the
+# conventional `leopard::leopard` export.  ALIAS targets do not create a
+# second archive.
+add_library(libleopard ALIAS leopard)
 if(LEO2_X86_TARGET)
-    target_compile_definitions(libleopard PRIVATE
+    target_compile_definitions(leopard PRIVATE
         LEO2_DISABLE_SSSE3_CODEGEN=1
         LEO2_DISABLE_AVX2_CODEGEN=1)
 endif()
-target_include_directories(libleopard PUBLIC
+target_include_directories(leopard PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-target_link_libraries(libleopard PUBLIC Threads::Threads)
+target_link_libraries(leopard PUBLIC Threads::Threads)
 
-# Optional x86 kernels are compiled in dedicated object libraries.  Nothing in
-# libleopard's baseline translation units is built above the x86-64 SSE2 floor;
+# Optional x86 kernels are compiled in dedicated object libraries.  None of
+# leopard's baseline translation units is built above the x86-64 SSE2 floor;
 # runtime feature checks select one immutable ops table after startup KATs.
 set(LEO2_HAVE_SSSE3_BACKEND OFF)
 set(LEO2_HAVE_AVX2_BACKEND OFF)
@@ -241,30 +246,30 @@ if(LEO2_X86_TARGET)
 endif()
 
 if(LEO2_HAVE_SSSE3_BACKEND)
-    target_sources(libleopard PRIVATE
+    target_sources(leopard PRIVATE
         $<TARGET_OBJECTS:leopard2_backend_ssse3>)
-    target_compile_definitions(libleopard PRIVATE LEO2_HAVE_SSSE3_BACKEND=1)
+    target_compile_definitions(leopard PRIVATE LEO2_HAVE_SSSE3_BACKEND=1)
 endif()
 if(LEO2_HAVE_AVX2_BACKEND)
-    target_sources(libleopard PRIVATE
+    target_sources(leopard PRIVATE
         $<TARGET_OBJECTS:leopard2_backend_avx2>)
-    target_compile_definitions(libleopard PRIVATE LEO2_HAVE_AVX2_BACKEND=1)
+    target_compile_definitions(leopard PRIVATE LEO2_HAVE_AVX2_BACKEND=1)
 endif()
 if(ENABLE_OPENMP)
     if(TARGET OpenMP::OpenMP_CXX)
-        target_link_libraries(libleopard PUBLIC OpenMP::OpenMP_CXX)
+        target_link_libraries(leopard PUBLIC OpenMP::OpenMP_CXX)
     else()
         # FindOpenMP did not provide imported targets before CMake 3.9.  Keep
         # the 3.7 project floor usable by propagating its compiler-driver flag;
         # for static archives this is also the link flag that selects the
         # OpenMP runtime on GCC and Clang.
-        target_link_libraries(libleopard PUBLIC "${OpenMP_CXX_FLAGS}")
+        target_link_libraries(leopard PUBLIC "${OpenMP_CXX_FLAGS}")
     endif()
 endif()
 
 # Keep the installed CPU package independent of optional backends.  CUDA
 # targets, once implemented, must use a separate opt-in export set rather than
-# becoming transitive dependencies of leopard::libleopard.
+# becoming transitive dependencies of leopard::leopard.
 set(LEOPARD_INSTALL_CMAKEDIR
     "${CMAKE_INSTALL_LIBDIR}/cmake/leopard"
     CACHE STRING "Install directory for Leopard CMake package files")
@@ -272,7 +277,7 @@ configure_package_config_file(
     cmake/leopardConfig.cmake.in
     "${CMAKE_CURRENT_BINARY_DIR}/leopardConfig.cmake"
     INSTALL_DESTINATION "${LEOPARD_INSTALL_CMAKEDIR}")
-install(TARGETS libleopard
+install(TARGETS leopard
     EXPORT leopardTargets
     ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
     LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
@@ -294,35 +299,35 @@ if(NOT LEO2_BACKEND_VARIANT STREQUAL "auto")
     endif()
 
     if(LEO2_BACKEND_VARIANT STREQUAL "scalar")
-        target_compile_definitions(libleopard PRIVATE
+        target_compile_definitions(leopard PRIVATE
             LEO2_BACKEND_FORCE_SCALAR=1)
     elseif(LEO2_BACKEND_VARIANT STREQUAL "ssse3")
         if(NOT LEO2_HAVE_SSSE3_BACKEND)
             message(FATAL_ERROR
                 "LEO2_BACKEND_VARIANT=ssse3 is unavailable for this compiler")
         endif()
-        target_compile_definitions(libleopard PRIVATE
+        target_compile_definitions(leopard PRIVATE
             LEO2_BACKEND_FORCE_SSSE3=1)
     elseif(LEO2_BACKEND_VARIANT STREQUAL "avx2")
         if(NOT LEO2_HAVE_AVX2_BACKEND)
             message(FATAL_ERROR
                 "LEO2_BACKEND_VARIANT=avx2 is unavailable for this compiler")
         endif()
-        target_compile_definitions(libleopard PRIVATE
+        target_compile_definitions(leopard PRIVATE
             LEO2_BACKEND_FORCE_AVX2=1)
     endif()
 endif()
 
 if(LEO2_BUILD_BENCHMARKS)
     add_executable(bench_leopard ${BENCH_SOURCE_FILES})
-    target_link_libraries(bench_leopard libleopard)
+    target_link_libraries(bench_leopard leopard)
 
     add_executable(bench_leopard2 bench/leopard2/benchmark.cpp)
-    target_link_libraries(bench_leopard2 libleopard)
+    target_link_libraries(bench_leopard2 leopard)
 
     add_executable(bench_leopard2_locator
         bench/leopard2/locator_benchmark.cpp)
-    target_link_libraries(bench_leopard2_locator libleopard)
+    target_link_libraries(bench_leopard2_locator leopard)
     set(LEO2_LOCATOR_SOURCE_GIT_SHA "unknown")
     set(LEO2_LOCATOR_SOURCE_DIRTY 1)
     find_program(LEO2_LOCATOR_GIT_EXECUTABLE NAMES git)
@@ -357,7 +362,7 @@ endif()
 
 if(LEO2_BUILD_TESTS)
     enable_testing()
-    target_compile_definitions(libleopard PRIVATE LEO2_ENABLE_TEST_HOOKS=1)
+    target_compile_definitions(leopard PRIVATE LEO2_ENABLE_TEST_HOOKS=1)
     if(LEO2_HAVE_SSSE3_BACKEND)
         target_compile_definitions(leopard2_backend_ssse3 PRIVATE
             LEO2_ENABLE_TEST_HOOKS=1)
@@ -372,7 +377,7 @@ if(LEO2_BUILD_TESTS)
             bench/leopard2/direct_encode_benchmark.cpp)
         target_compile_definitions(bench_leopard2_direct_encode PRIVATE
             LEO2_ENABLE_TEST_HOOKS=1)
-        target_link_libraries(bench_leopard2_direct_encode libleopard)
+        target_link_libraries(bench_leopard2_direct_encode leopard)
 
         # C1 is internal and absent from production dispatch.  This benchmark
         # is built only with the test hooks that expose the full padded LCH
@@ -383,7 +388,7 @@ if(LEO2_BUILD_TESTS)
             LEO2_ENABLE_TEST_HOOKS=1
             LEO2_PRUNED_SOURCE_GIT_SHA="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
             LEO2_PRUNED_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
-        target_link_libraries(bench_leopard2_pruned_transform libleopard)
+        target_link_libraries(bench_leopard2_pruned_transform leopard)
 
     endif()
 
@@ -412,7 +417,7 @@ if(LEO2_BUILD_TESTS)
                 COMMAND "${LEO2_SH_EXECUTABLE}"
                     "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_leopard2_portable_isa.sh"
                     "${LEO2_OBJDUMP_EXECUTABLE}"
-                    "$<TARGET_FILE:libleopard>"
+                    "$<TARGET_FILE:leopard>"
                     "${CMAKE_CURRENT_BINARY_DIR}"
                     ${LEO2_PORTABLE_ISA_SELF_TEST_ARGS}
                     "${LEO2_PORTABLE_ISA_EXPECTED_CLASSES_ARG}")
@@ -427,7 +432,7 @@ if(LEO2_BUILD_TESTS)
 
     add_executable(leopard2_backend_ops_test
         tests/leopard2/test_backend_ops.cpp)
-    target_link_libraries(leopard2_backend_ops_test libleopard)
+    target_link_libraries(leopard2_backend_ops_test leopard)
     add_test(NAME leopard2_backend_ops COMMAND leopard2_backend_ops_test)
     set_tests_properties(leopard2_backend_ops PROPERTIES
         ENVIRONMENT "OMP_NUM_THREADS=1")
@@ -436,7 +441,7 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/test_backend_failures.cpp)
     target_compile_definitions(leopard2_backend_failures_test PRIVATE
         LEO2_ENABLE_TEST_HOOKS=1)
-    target_link_libraries(leopard2_backend_failures_test libleopard)
+    target_link_libraries(leopard2_backend_failures_test leopard)
     add_test(NAME leopard2_backend_failure_scalar_ff8_allocation
         COMMAND leopard2_backend_failures_test scalar ff8-allocation)
     add_test(NAME leopard2_backend_failure_scalar_ff16_allocation
@@ -471,7 +476,7 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/test_context_backends.cpp)
     target_compile_definitions(leopard2_context_backends_test PRIVATE
         LEO2_ENABLE_TEST_HOOKS=1)
-    target_link_libraries(leopard2_context_backends_test libleopard)
+    target_link_libraries(leopard2_context_backends_test leopard)
     add_test(NAME leopard2_context_backends
         COMMAND leopard2_context_backends_test)
     set_tests_properties(leopard2_context_backends PROPERTIES
@@ -481,7 +486,7 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/test_r1_xor.cpp)
     target_compile_definitions(leopard2_r1_xor_test PRIVATE
         LEO2_ENABLE_TEST_HOOKS=1)
-    target_link_libraries(leopard2_r1_xor_test libleopard)
+    target_link_libraries(leopard2_r1_xor_test leopard)
     add_test(NAME leopard2_r1_xor COMMAND leopard2_r1_xor_test)
     set_tests_properties(leopard2_r1_xor PROPERTIES
         ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
@@ -492,7 +497,7 @@ if(LEO2_BUILD_TESTS)
     target_compile_definitions(leopard2_direct_encode_test PRIVATE
         LEO2_ENABLE_TEST_HOOKS=1)
     target_include_directories(leopard2_direct_encode_test PRIVATE tests/leopard2)
-    target_link_libraries(leopard2_direct_encode_test libleopard)
+    target_link_libraries(leopard2_direct_encode_test leopard)
     add_test(NAME leopard2_direct_encode COMMAND leopard2_direct_encode_test)
     set_tests_properties(leopard2_direct_encode PROPERTIES
         ENVIRONMENT "OMP_NUM_THREADS=1")
@@ -503,7 +508,7 @@ if(LEO2_BUILD_TESTS)
     target_compile_definitions(leopard2_active_lch_test PRIVATE
         LEO2_ENABLE_TEST_HOOKS=1)
     target_include_directories(leopard2_active_lch_test PRIVATE tests/leopard2)
-    target_link_libraries(leopard2_active_lch_test libleopard)
+    target_link_libraries(leopard2_active_lch_test leopard)
     add_test(NAME leopard2_active_lch COMMAND leopard2_active_lch_test)
     set_tests_properties(leopard2_active_lch PROPERTIES
         ENVIRONMENT "OMP_NUM_THREADS=1")
@@ -512,19 +517,19 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/direct_oracle.cpp
         tests/leopard2/test_api.cpp)
     target_include_directories(leopard2_api_test PRIVATE tests/leopard2)
-    target_link_libraries(leopard2_api_test libleopard)
+    target_link_libraries(leopard2_api_test leopard)
     add_test(NAME leopard2_api COMMAND leopard2_api_test)
 
     add_executable(leopard2_public_api_contract_test
         tests/leopard2/test_public_api_contract.cpp)
-    target_link_libraries(leopard2_public_api_contract_test libleopard)
+    target_link_libraries(leopard2_public_api_contract_test leopard)
     add_test(NAME leopard2_public_api_contract
         COMMAND leopard2_public_api_contract_test)
 
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND ENABLE_OPENMP)
         add_executable(leopard2_initialization_threads_test
             tests/leopard2/test_initialization_threads.cpp)
-        target_link_libraries(leopard2_initialization_threads_test libleopard)
+        target_link_libraries(leopard2_initialization_threads_test leopard)
         add_test(NAME leopard2_initialization_threads_legacy
             COMMAND leopard2_initialization_threads_test legacy)
         add_test(NAME leopard2_initialization_threads_explicit
@@ -543,16 +548,16 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/direct_oracle.cpp
         tests/leopard2/test_random.cpp)
     target_include_directories(leopard2_random_test PRIVATE tests/leopard2)
-    target_link_libraries(leopard2_random_test libleopard)
+    target_link_libraries(leopard2_random_test leopard)
     add_test(NAME leopard2_random COMMAND leopard2_random_test)
 
     add_executable(leopard2_locator_test tests/leopard2/test_locator.cpp)
-    target_link_libraries(leopard2_locator_test libleopard)
+    target_link_libraries(leopard2_locator_test leopard)
     add_test(NAME leopard2_locator COMMAND leopard2_locator_test)
 
     add_executable(leopard2_decode_plan_schedule_test
         tests/leopard2/test_decode_plan_schedule.cpp)
-    target_link_libraries(leopard2_decode_plan_schedule_test libleopard)
+    target_link_libraries(leopard2_decode_plan_schedule_test leopard)
     add_test(NAME leopard2_decode_plan_schedule
         COMMAND leopard2_decode_plan_schedule_test)
     set_tests_properties(leopard2_decode_plan_schedule PROPERTIES
@@ -562,21 +567,21 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/direct_oracle.cpp
         tests/leopard2/test_gf16_tails.cpp)
     target_include_directories(leopard2_gf16_tails_test PRIVATE tests/leopard2)
-    target_link_libraries(leopard2_gf16_tails_test libleopard)
+    target_link_libraries(leopard2_gf16_tails_test leopard)
     add_test(NAME leopard2_gf16_tails COMMAND leopard2_gf16_tails_test)
 
     add_executable(leopard2_gf16_padded_odd_test
         tests/leopard2/direct_oracle.cpp
         tests/leopard2/test_gf16_padded_odd.cpp)
     target_include_directories(leopard2_gf16_padded_odd_test PRIVATE tests/leopard2)
-    target_link_libraries(leopard2_gf16_padded_odd_test libleopard)
+    target_link_libraries(leopard2_gf16_padded_odd_test leopard)
     add_test(NAME leopard2_gf16_padded_odd COMMAND leopard2_gf16_padded_odd_test)
     set_tests_properties(leopard2_gf16_padded_odd PROPERTIES
         ENVIRONMENT "OMP_NUM_THREADS=1")
 
     add_executable(leopard2_gf16_legacy_encoder_matrix_test
         tests/leopard2/test_encoder_gf16_legacy_matrix.cpp)
-    target_link_libraries(leopard2_gf16_legacy_encoder_matrix_test libleopard)
+    target_link_libraries(leopard2_gf16_legacy_encoder_matrix_test leopard)
     add_test(NAME leopard2_gf16_legacy_encoder_matrix
         COMMAND leopard2_gf16_legacy_encoder_matrix_test)
     set_tests_properties(leopard2_gf16_legacy_encoder_matrix PROPERTIES
@@ -587,7 +592,7 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/test_low_gf16_direct_rows.cpp)
     target_include_directories(leopard2_low_gf16_direct_rows_test
         PRIVATE tests/leopard2)
-    target_link_libraries(leopard2_low_gf16_direct_rows_test libleopard)
+    target_link_libraries(leopard2_low_gf16_direct_rows_test leopard)
     add_test(NAME leopard2_low_gf16_direct_rows
         COMMAND leopard2_low_gf16_direct_rows_test)
     set_tests_properties(leopard2_low_gf16_direct_rows PROPERTIES
@@ -598,7 +603,7 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/test_decode_high_acceptance.cpp)
     target_include_directories(leopard2_decode_high_acceptance_test
         PRIVATE tests/leopard2)
-    target_link_libraries(leopard2_decode_high_acceptance_test libleopard)
+    target_link_libraries(leopard2_decode_high_acceptance_test leopard)
     add_test(NAME leopard2_decode_high_acceptance
         COMMAND leopard2_decode_high_acceptance_test)
     set_tests_properties(leopard2_decode_high_acceptance PROPERTIES
@@ -609,7 +614,7 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/test_decode_low_acceptance.cpp)
     target_include_directories(leopard2_decode_low_acceptance_test
         PRIVATE tests/leopard2)
-    target_link_libraries(leopard2_decode_low_acceptance_test libleopard)
+    target_link_libraries(leopard2_decode_low_acceptance_test leopard)
     add_test(NAME leopard2_decode_low_acceptance
         COMMAND leopard2_decode_low_acceptance_test)
     set_tests_properties(leopard2_decode_low_acceptance PROPERTIES
@@ -620,21 +625,21 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/test_arbitrary_counts_acceptance.cpp)
     target_include_directories(leopard2_arbitrary_counts_acceptance_test
         PRIVATE tests/leopard2)
-    target_link_libraries(leopard2_arbitrary_counts_acceptance_test libleopard)
+    target_link_libraries(leopard2_arbitrary_counts_acceptance_test leopard)
     add_test(NAME leopard2_arbitrary_counts_acceptance
         COMMAND leopard2_arbitrary_counts_acceptance_test)
     set_tests_properties(leopard2_arbitrary_counts_acceptance PROPERTIES
         ENVIRONMENT "OMP_NUM_THREADS=1")
 
     add_executable(leopard2_max_counts_test tests/leopard2/test_max_counts.cpp)
-    target_link_libraries(leopard2_max_counts_test libleopard)
+    target_link_libraries(leopard2_max_counts_test leopard)
     add_test(NAME leopard2_max_counts COMMAND leopard2_max_counts_test)
     set_tests_properties(leopard2_max_counts PROPERTIES
         ENVIRONMENT "OMP_NUM_THREADS=1")
 
     add_executable(leopard2_encode_concurrency_test
         tests/leopard2/test_encode_concurrency.cpp)
-    target_link_libraries(leopard2_encode_concurrency_test libleopard)
+    target_link_libraries(leopard2_encode_concurrency_test leopard)
     add_test(NAME leopard2_encode_concurrency
         COMMAND leopard2_encode_concurrency_test)
     set_tests_properties(leopard2_encode_concurrency PROPERTIES
@@ -650,7 +655,7 @@ if(LEO2_BUILD_TESTS)
         target_compile_options(leopard2_codec_options_abi_test PRIVATE
             -fshort-enums)
     endif()
-    target_link_libraries(leopard2_codec_options_abi_test libleopard)
+    target_link_libraries(leopard2_codec_options_abi_test leopard)
     add_test(NAME leopard2_codec_options_abi
         COMMAND leopard2_codec_options_abi_test)
 
@@ -663,18 +668,18 @@ if(LEO2_BUILD_TESTS)
 
     add_executable(leopard2_legacy_golden_test
         tests/leopard2/test_legacy_golden.cpp)
-    target_link_libraries(leopard2_legacy_golden_test libleopard)
+    target_link_libraries(leopard2_legacy_golden_test leopard)
     add_test(NAME leopard2_legacy_golden COMMAND leopard2_legacy_golden_test)
 
     add_executable(leopard2_boundaries_test
         tests/leopard2/test_boundaries.cpp)
-    target_link_libraries(leopard2_boundaries_test libleopard)
+    target_link_libraries(leopard2_boundaries_test leopard)
     add_test(NAME leopard2_boundaries COMMAND leopard2_boundaries_test)
 
     add_executable(leopard2_transform_differential_test
         tests/leopard2/test_transform_differential.cpp
         tests/leopard2/direct_oracle.cpp)
-    target_link_libraries(leopard2_transform_differential_test libleopard)
+    target_link_libraries(leopard2_transform_differential_test leopard)
     add_test(NAME leopard2_transform_differential
         COMMAND leopard2_transform_differential_test)
 
@@ -685,7 +690,7 @@ if(LEO2_BUILD_TESTS)
         LEO2_ENABLE_TEST_HOOKS=1)
     target_include_directories(leopard2_pruned_transform_test
         PRIVATE tests/leopard2)
-    target_link_libraries(leopard2_pruned_transform_test libleopard)
+    target_link_libraries(leopard2_pruned_transform_test leopard)
     add_test(NAME leopard2_pruned_transform
         COMMAND leopard2_pruned_transform_test)
     set_tests_properties(leopard2_pruned_transform PROPERTIES
@@ -694,7 +699,7 @@ if(LEO2_BUILD_TESTS)
     add_executable(leopard2_fuzz_smoke
         tests/leopard2/fuzz_api.cpp
         tests/leopard2/fuzz_replay.cpp)
-    target_link_libraries(leopard2_fuzz_smoke libleopard)
+    target_link_libraries(leopard2_fuzz_smoke leopard)
     add_test(NAME leopard2_fuzz_smoke COMMAND leopard2_fuzz_smoke)
 
     add_executable(leopard2_pruned_fuzz_smoke
@@ -702,7 +707,7 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/fuzz_replay.cpp)
     target_compile_definitions(leopard2_pruned_fuzz_smoke PRIVATE
         LEO2_ENABLE_TEST_HOOKS=1)
-    target_link_libraries(leopard2_pruned_fuzz_smoke libleopard)
+    target_link_libraries(leopard2_pruned_fuzz_smoke leopard)
     add_test(NAME leopard2_pruned_fuzz_smoke
         COMMAND leopard2_pruned_fuzz_smoke 0xc1f022d17 256)
     set_tests_properties(leopard2_pruned_fuzz_smoke PROPERTIES
@@ -717,6 +722,8 @@ if(LEO2_BUILD_TESTS)
             -DLEO2_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}
             -DLEO2_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}
             -DLEO2_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}
+            -DLEO2_STATIC_LIBRARY_PREFIX=${CMAKE_STATIC_LIBRARY_PREFIX}
+            -DLEO2_STATIC_LIBRARY_SUFFIX=${CMAKE_STATIC_LIBRARY_SUFFIX}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_cuda_optional.cmake)
 
     if(CMAKE_VERSION VERSION_LESS 3.12)
@@ -823,7 +830,7 @@ if(LEO2_BUILD_FUZZERS)
     # Build an independently instrumented copy of the library into the fuzz
     # executable.  Applying sanitizer flags only to fuzz_api.cpp would leave
     # the codec itself invisible to ASan, UBSan, and coverage-guided mutation;
-    # applying them to libleopard would in turn break ordinary targets that
+    # applying them to leopard would in turn break ordinary targets that
     # link the uninstrumented sanitizer runtime.
     set(LEO2_FUZZ_SANITIZER_FLAGS
         -fsanitize=fuzzer,address,undefined
@@ -862,7 +869,7 @@ if(LEO2_BUILD_FUZZERS)
             LEO2_DISABLE_AVX2_CODEGEN=1)
     endif()
 
-    # Experiment W's parser is deliberately absent from libleopard and the
+    # Experiment W's parser is deliberately absent from leopard and the
     # installed API.  This opt-in target nevertheless gives its complete C99
     # deserialize/validate/serialize boundary native libFuzzer, ASan, and
     # UBSan coverage.

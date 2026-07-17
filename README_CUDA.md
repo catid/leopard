@@ -33,7 +33,11 @@ The default install remains a standalone CPU package:
 
 It installs `leopard.h`, `leopard2.h`, the static CPU library, and a relocatable
 CMake config package.  Consumers can use `find_package(leopard CONFIG REQUIRED)`
-and link `leopard::libleopard`.  The exported target carries only the CPU
+and link `leopard::leopard`.  The archive follows the platform convention
+(`libleopard.a` on Unix-like systems and `leopard.lib` with MSVC); it is not
+named `liblibleopard.a`.  A deprecated `leopard::libleopard` forwarding target
+keeps existing package consumers source-compatible without installing a second
+library.  The canonical exported target carries only the CPU
 threading/OpenMP dependencies selected when the library was built; it does not
 contain CUDA targets, headers, compiler settings, runtime libraries, or device
 initialization.  A future CUDA backend must remain in a separate opt-in export
