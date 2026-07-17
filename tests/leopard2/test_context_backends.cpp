@@ -117,6 +117,7 @@ struct TraceState
     std::atomic<uint64_t> ff8_calls;
     std::atomic<uint64_t> ff16_calls;
     std::atomic<uint64_t> xor_calls;
+    std::atomic<uint64_t> xor_two_to_one_calls;
     std::atomic<uint64_t> ff8_four_calls;
     std::atomic<uint64_t> ff16_four_calls;
     std::atomic<uint64_t> xor_four_calls;
@@ -165,6 +166,17 @@ void trace_xor(void* destination, const void* source, uint64_t bytes)
 {
     g_trace.xor_calls.fetch_add(1, std::memory_order_relaxed);
     trace_delegate()->xor_memory(destination, source, bytes);
+}
+
+void trace_xor_2to1(
+    void* destination,
+    const void* source0,
+    const void* source1,
+    uint64_t bytes)
+{
+    g_trace.xor_two_to_one_calls.fetch_add(1, std::memory_order_relaxed);
+    trace_delegate()->xor_memory_2to1(
+        destination, source0, source1, bytes);
 }
 
 void trace_xor4(
@@ -267,6 +279,7 @@ public:
         tracing_.ff16_multiply = trace_ff16_multiply;
         tracing_.ff16_multiply_add = trace_ff16_multiply_add;
         tracing_.xor_memory = trace_xor;
+        tracing_.xor_memory_2to1 = trace_xor_2to1;
         tracing_.xor_memory4 = trace_xor4;
         tracing_.ff8_ifft_butterfly2 = trace_ff8_ifft;
         tracing_.ff8_fft_butterfly2 = trace_ff8_fft;
@@ -293,6 +306,7 @@ public:
         g_trace.ff8_calls.store(0, std::memory_order_relaxed);
         g_trace.ff16_calls.store(0, std::memory_order_relaxed);
         g_trace.xor_calls.store(0, std::memory_order_relaxed);
+        g_trace.xor_two_to_one_calls.store(0, std::memory_order_relaxed);
         g_trace.ff8_four_calls.store(0, std::memory_order_relaxed);
         g_trace.ff16_four_calls.store(0, std::memory_order_relaxed);
         g_trace.xor_four_calls.store(0, std::memory_order_relaxed);
@@ -309,6 +323,11 @@ public:
     uint64_t xor_calls() const
     {
         return g_trace.xor_calls.load(std::memory_order_relaxed);
+    }
+    uint64_t xor_two_to_one_calls() const
+    {
+        return g_trace.xor_two_to_one_calls.load(
+            std::memory_order_relaxed);
     }
     uint64_t ff8_four_calls() const
     {
@@ -763,8 +782,10 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
         trace.reset();
         const Shards xor_recovery = encode_case(contexts[context_i].context,
             xor_case, xor_originals, &xor_codec);
-        require(trace.xor_calls() != 0,
-            "R=1 encode bypassed the context XOR table");
+        require(trace.xor_two_to_one_calls() == 4,
+            "R=1 encode bypassed the fused context XOR table");
+        require(trace.xor_calls() == 0,
+            "even R=1 encode unexpectedly used a single-source XOR tail");
 
         std::vector<uint8_t> original_present(xor_case.k, 1);
         std::vector<uint8_t> recovery_present(xor_case.r, 1);
@@ -791,8 +812,10 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
             &restored_pointers[0], scratch.data(), scratch_bytes),
             LEO2_SUCCESS, "R=1 decode");
         require(restored == xor_originals[0], "R=1 restored data mismatch");
-        require(trace.xor_calls() != 0,
-            "R=1 decode bypassed the context XOR table");
+        require(trace.xor_two_to_one_calls() == 4,
+            "R=1 decode bypassed the fused context XOR table");
+        require(trace.xor_calls() == 0,
+            "even R=1 decode unexpectedly used a single-source XOR tail");
         leo2_decode_plan_destroy(xor_plan);
         leo2_codec_destroy(xor_codec);
     }

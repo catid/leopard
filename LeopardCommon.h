@@ -427,14 +427,14 @@ void xor_mem(
 // x[] ^= y[] ^ z[]
 void xor_mem_2to1(
     void * LEO_RESTRICT x,
-    const void * LEO_RESTRICT y,
-    const void * LEO_RESTRICT z,
+    const void * y,
+    const void * z,
     uint64_t bytes);
 void xor_mem_2to1(
     const backend::Ops& ops,
     void * LEO_RESTRICT x,
-    const void * LEO_RESTRICT y,
-    const void * LEO_RESTRICT z,
+    const void * y,
+    const void * z,
     uint64_t bytes);
 
 #endif // LEO_M1_OPT

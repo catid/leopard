@@ -2451,13 +2451,23 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
             return LEO2_INTERNAL_ERROR;
         uint8_t* output = static_cast<uint8_t*>(restored_original[missing]);
         memcpy(output, recovery[0], static_cast<size_t>(shard_bytes));
+        const void* waiting = NULL;
         for (uint32_t i = 0; i < codec->original_count; ++i)
         {
             if (!original[i])
                 continue;
-            XorArbitraryBytes(ops, output, original[i],
-                static_cast<size_t>(shard_bytes));
+            if (!waiting)
+                waiting = original[i];
+            else
+            {
+                leopard::xor_mem_2to1(ops, output, waiting, original[i],
+                    static_cast<size_t>(shard_bytes));
+                waiting = NULL;
+            }
         }
+        if (waiting)
+            XorArbitraryBytes(ops, output, waiting,
+                static_cast<size_t>(shard_bytes));
         return LEO2_SUCCESS;
     }
     if (plan->direct_repair)

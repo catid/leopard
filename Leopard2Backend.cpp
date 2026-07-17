@@ -738,6 +738,24 @@ static bool TestXor(const Ops& ops)
         if (std::memcmp(output, expected, sizeof(output)) != 0)
             return false;
 
+        for (size_t i = 0; i < sizeof(output); ++i)
+            output[i] = expected[i] =
+                static_cast<uint8_t>((i * 43U + count_i * 3U) & 255U);
+        for (uint64_t i = 0; i < bytes; ++i)
+            expected[i + 1] ^= source[i + 1] ^ sources4[0][i + 1];
+        ops.xor_memory_2to1(
+            output + 1, source + 1, sources4[0] + 1, bytes);
+        if (std::memcmp(output, expected, sizeof(output)) != 0)
+            return false;
+
+        // The two read-only inputs may be the same range.  Their contribution
+        // cancels exactly and the destination, including guards, is unchanged.
+        std::memcpy(expected, output, sizeof(output));
+        ops.xor_memory_2to1(
+            output + 1, source + 1, source + 1, bytes);
+        if (std::memcmp(output, expected, sizeof(output)) != 0)
+            return false;
+
         for (unsigned pair = 0; pair < 4; ++pair)
             for (size_t i = 0; i < sizeof(outputs4[pair]); ++i)
                 outputs4[pair][i] = expected4[pair][i] =
@@ -766,7 +784,7 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
 {
     return ops.name && ops.ff8_multiply && ops.ff8_multiply_add &&
         ops.ff16_multiply && ops.ff16_multiply_add && ops.xor_memory &&
-        ops.xor_memory4 &&
+        ops.xor_memory_2to1 && ops.xor_memory4 &&
         ops.ff8_ifft_butterfly2 && ops.ff8_fft_butterfly2 &&
         ops.ff8_ifft_butterfly2_xor && ops.ff8_ifft_butterfly4 &&
         ops.ff8_fft_butterfly4 && ops.ff16_ifft_butterfly2 &&

@@ -461,6 +461,52 @@ static void AVX2XorMemory(
         *output++ ^= *input++;
 }
 
+static void AVX2XorMemory2To1(
+    void* destination,
+    const void* source0,
+    const void* source1,
+    uint64_t byte_count)
+{
+    uint8_t* output = static_cast<uint8_t*>(destination);
+    const uint8_t* input0 = static_cast<const uint8_t*>(source0);
+    const uint8_t* input1 = static_cast<const uint8_t*>(source1);
+    while (byte_count >= 128)
+    {
+        for (unsigned offset = 0; offset < 128; offset += 32)
+        {
+            __m256i result = _mm256_xor_si256(
+                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(
+                    output + offset)),
+                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(
+                    input0 + offset)));
+            result = _mm256_xor_si256(result,
+                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(
+                    input1 + offset)));
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(output + offset), result);
+        }
+        output += 128;
+        input0 += 128;
+        input1 += 128;
+        byte_count -= 128;
+    }
+    while (byte_count >= 32)
+    {
+        __m256i result = _mm256_xor_si256(
+            _mm256_loadu_si256(reinterpret_cast<const __m256i*>(output)),
+            _mm256_loadu_si256(reinterpret_cast<const __m256i*>(input0)));
+        result = _mm256_xor_si256(result,
+            _mm256_loadu_si256(reinterpret_cast<const __m256i*>(input1)));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(output), result);
+        output += 32;
+        input0 += 32;
+        input1 += 32;
+        byte_count -= 32;
+    }
+    while (byte_count-- != 0)
+        *output++ ^= *input0++ ^ *input1++;
+}
+
 static void AVX2XorMemory4(
     void* destination0, const void* source0,
     void* destination1, const void* source1,
@@ -1042,6 +1088,7 @@ static const Ops AVX2Ops = {
     AVX2FF16Multiply,
     AVX2FF16MultiplyAdd,
     AVX2XorMemory,
+    AVX2XorMemory2To1,
     AVX2XorMemory4,
     AVX2FF8IFFTButterfly2,
     AVX2FF8FFTButterfly2,

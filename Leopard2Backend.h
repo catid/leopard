@@ -54,6 +54,19 @@ typedef void (*XorMemory)(
     const void* source,
     uint64_t byte_count);
 
+// One-pass accumulation of two read-only inputs:
+//
+//     destination[i] ^= source0[i] ^ source1[i]
+//
+// The destination range must be disjoint from both source ranges.  The two
+// read-only sources may alias one another, matching the public API's allowed
+// input-input aliasing.  A zero byte count performs no access.
+typedef void (*XorMemory2To1)(
+    void* destination,
+    const void* source0,
+    const void* source1,
+    uint64_t byte_count);
+
 // Four independent in-place XOR pairs.  Destination ranges must be pairwise
 // disjoint and disjoint from all source ranges.  Read-only source ranges may
 // alias one another, matching the public API's allowed input-input aliasing.
@@ -117,6 +130,7 @@ struct Ops
     FixedMultiply ff16_multiply;
     FixedMultiply ff16_multiply_add;
     XorMemory xor_memory;
+    XorMemory2To1 xor_memory_2to1;
     XorMemory4 xor_memory4;
     Butterfly2 ff8_ifft_butterfly2;
     Butterfly2 ff8_fft_butterfly2;

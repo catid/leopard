@@ -466,6 +466,15 @@ if(LEO2_BUILD_TESTS)
     set_tests_properties(leopard2_context_backends PROPERTIES
         ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=4")
 
+    add_executable(leopard2_r1_xor_test
+        tests/leopard2/test_r1_xor.cpp)
+    target_compile_definitions(leopard2_r1_xor_test PRIVATE
+        LEO2_ENABLE_TEST_HOOKS=1)
+    target_link_libraries(leopard2_r1_xor_test libleopard)
+    add_test(NAME leopard2_r1_xor COMMAND leopard2_r1_xor_test)
+    set_tests_properties(leopard2_r1_xor PROPERTIES
+        ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
+
     add_executable(leopard2_direct_encode_test
         tests/leopard2/direct_oracle.cpp
         tests/leopard2/test_direct_encode.cpp)

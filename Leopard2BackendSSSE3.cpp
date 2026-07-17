@@ -481,6 +481,52 @@ static void SSSE3XorMemory(
         *output++ ^= *input++;
 }
 
+static void SSSE3XorMemory2To1(
+    void* destination,
+    const void* source0,
+    const void* source1,
+    uint64_t byte_count)
+{
+    uint8_t* output = static_cast<uint8_t*>(destination);
+    const uint8_t* input0 = static_cast<const uint8_t*>(source0);
+    const uint8_t* input1 = static_cast<const uint8_t*>(source1);
+    while (byte_count >= 64)
+    {
+        for (unsigned offset = 0; offset < 64; offset += 16)
+        {
+            __m128i result = _mm_xor_si128(
+                _mm_loadu_si128(reinterpret_cast<const __m128i*>(
+                    output + offset)),
+                _mm_loadu_si128(reinterpret_cast<const __m128i*>(
+                    input0 + offset)));
+            result = _mm_xor_si128(result,
+                _mm_loadu_si128(reinterpret_cast<const __m128i*>(
+                    input1 + offset)));
+            _mm_storeu_si128(
+                reinterpret_cast<__m128i*>(output + offset), result);
+        }
+        output += 64;
+        input0 += 64;
+        input1 += 64;
+        byte_count -= 64;
+    }
+    while (byte_count >= 16)
+    {
+        __m128i result = _mm_xor_si128(
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(output)),
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(input0)));
+        result = _mm_xor_si128(result,
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(input1)));
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(output), result);
+        output += 16;
+        input0 += 16;
+        input1 += 16;
+        byte_count -= 16;
+    }
+    while (byte_count-- != 0)
+        *output++ ^= *input0++ ^ *input1++;
+}
+
 static void SSSE3XorMemory4(
     void* destination0, const void* source0,
     void* destination1, const void* source1,
@@ -1068,6 +1114,7 @@ static const Ops SSSE3Ops = {
     SSSE3FF16Multiply,
     SSSE3FF16MultiplyAdd,
     SSSE3XorMemory,
+    SSSE3XorMemory2To1,
     SSSE3XorMemory4,
     SSSE3FF8IFFTButterfly2,
     SSSE3FF8FFTButterfly2,

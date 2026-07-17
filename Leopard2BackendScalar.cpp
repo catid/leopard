@@ -366,6 +366,34 @@ static void ScalarXorMemory(
     leopard::xor_mem_baseline(destination, source, byte_count);
 }
 
+static void ScalarXorMemory2To1(
+    void* destination,
+    const void* source0,
+    const void* source1,
+    uint64_t byte_count)
+{
+    uint8_t* output = static_cast<uint8_t*>(destination);
+    const uint8_t* input0 = static_cast<const uint8_t*>(source0);
+    const uint8_t* input1 = static_cast<const uint8_t*>(source1);
+    while (byte_count >= sizeof(uint64_t))
+    {
+        uint64_t destination_word;
+        uint64_t source0_word;
+        uint64_t source1_word;
+        std::memcpy(&destination_word, output, sizeof(destination_word));
+        std::memcpy(&source0_word, input0, sizeof(source0_word));
+        std::memcpy(&source1_word, input1, sizeof(source1_word));
+        destination_word ^= source0_word ^ source1_word;
+        std::memcpy(output, &destination_word, sizeof(destination_word));
+        output += sizeof(uint64_t);
+        input0 += sizeof(uint64_t);
+        input1 += sizeof(uint64_t);
+        byte_count -= sizeof(uint64_t);
+    }
+    while (byte_count-- != 0)
+        *output++ ^= *input0++ ^ *input1++;
+}
+
 static void ScalarXorMemory4(
     void* destination0, const void* source0,
     void* destination1, const void* source1,
@@ -541,6 +569,7 @@ static const Ops ScalarOps = {
     ScalarFF16Multiply,
     ScalarFF16MultiplyAdd,
     ScalarXorMemory,
+    ScalarXorMemory2To1,
     ScalarXorMemory4,
     ScalarFF8IFFTButterfly2,
     ScalarFF8FFTButterfly2,
