@@ -303,20 +303,20 @@ label.  In particular, the forced-scalar build must have empty stderr; its
 compile-time-only backend selection explicitly consumes the otherwise unused
 feature record without changing the selected scalar backend.  Manifest v4's
 post-R1 probe freezes 320 ASan and 54 UBSan references in
-the standalone harness and 406 ASan and 89 UBSan references across all 11 named
+the standalone harness and 425 ASan and 90 UBSan references across all 11 named
 core-archive members; normal builds contain none.  The exact sanitized archive
 attribution is:
 
 | Archive member | ASan | UBSan |
 | --- | ---: | ---: |
 | `leopard.cpp.o` | 13 | 7 |
-| `leopard2.cpp.o` | 146 | 15 |
+| `leopard2.cpp.o` | 149 | 15 |
 | `Leopard2Backend.cpp.o` | 40 | 9 |
 | `Leopard2BackendScalar.cpp.o` | 16 | 6 |
 | `Leopard2CpuFeatures.cpp.o` | 9 | 5 |
-| `Leopard2Plan.cpp.o` | 60 | 8 |
+| `Leopard2Plan.cpp.o` | 75 | 9 |
 | `LeopardCommon.cpp.o` | 13 | 5 |
-| `LeopardFF16.cpp.o` | 27 | 10 |
+| `LeopardFF16.cpp.o` | 28 | 10 |
 | `LeopardFF8.cpp.o` | 28 | 9 |
 | `Leopard2BackendSSSE3.cpp.o` | 26 | 8 |
 | `Leopard2BackendAVX2.cpp.o` | 28 | 7 |
@@ -330,11 +330,38 @@ range or minimum.  The v4 runner still compares the exact totals and every
 named member, aborting before correctness execution if any count changes.  The
 unchanged 320/54 standalone count independently confirms that the experimental
 harness instrumentation did not drift.
-The 406/89 counts were regenerated from the current 22-file integrated core
+The 425/90 counts were regenerated from the current 22-file integrated core
 closure and are frozen by both the runner and validator.  The v4 constants
 remain exact expectations, not an inference that a changed source closure
 preserves instrumentation; any later core change requires another fresh
 fail-closed scan before A/B generation.
+
+The current attribution was independently rebuilt at every archive-producing
+implementation checkpoint and at the final integrated core with Clang 18.1.3,
+ASan+UBSan, OpenMP disabled, and the same prefix maps used by the evidence
+runner.  This accounts for every archive delta from the last accepted v4 core
+instead of merely replacing a total:
+
+| Core checkpoint | ASan | UBSan | Change attributed at checkpoint |
+| --- | ---: | ---: | --- |
+| `04a8ba3` | 348 | 86 | Last accepted v4 core |
+| `45815ec` | 348 | 86 | Aligned decode input staging removal |
+| `005cfd5` | 349 | 86 | Specialized-side workspace tiling |
+| `9cc3865` | 352 | 86 | Bounded ragged decode staging |
+| `bc7162a` | 353 | 86 | Bounded ragged encode staging |
+| `cd8e74c` | 406 | 89 | Pruned LCH schedule |
+| `443187e` | 406 | 89 | CMake-only direct-oracle test target |
+| `cdd984d` | 408 | 89 | Complete-leaf fusion |
+| `f79dca3` | 421 | 90 | Complete-layer fusion |
+| `1e69cd5` | 424 | 90 | Lazy allowed-CPU scheduler budget |
+| `7d54992` | 425 | 90 | Serialized FF16 OpenMP initialization |
+| `6dc8e17` | 425 | 90 | Serialized codec/plan setup |
+| `a7ff79e` | 425 | 90 | Final integrated core after three CMake-only closure changes |
+
+The final row brackets the later `21b4090`, `0f5dd23`, and `bca68f1`
+CMake-only benchmark/fuzzer target changes and proves they did not alter the
+library archive.  The `443187e` and final scans both used the runner's exact
+compiler-launcher and source-prefix normalization path.
 
 ### Dual Git identity and historical evidence
 
@@ -362,7 +389,7 @@ peer-attestation v2 evidence for its pre-R1 core.  It is never rewritten or
 accepted by the v4 generator.  The validator retains a read-only v3 path that
 authenticates its tooling and core bytes directly from the recorded Git commit
 and applies its original exact 329 ASan / 87 UBSan archive proof.  Relabeling
-those bytes as v4 fails both the 406/89 member proof and the required separate
+those bytes as v4 fails both the 425/90 member proof and the required separate
 tooling identity.
 
 All nested identity and accounting comparisons are recursively type-strict.

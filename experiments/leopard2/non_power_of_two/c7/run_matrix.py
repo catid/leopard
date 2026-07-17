@@ -60,16 +60,16 @@ PREFIX_MAP_OPTIONS = (
 EXPECTED_EXECUTABLE_SANITIZER_COUNTS = {
     "asan_lines": 320, "ubsan_lines": 54}
 EXPECTED_ARCHIVE_SANITIZER_COUNTS = {
-    "asan_lines": 406, "ubsan_lines": 89}
+    "asan_lines": 425, "ubsan_lines": 90}
 EXPECTED_ARCHIVE_MEMBER_COUNTS = {
     "leopard.cpp.o": {"asan_lines": 13, "ubsan_lines": 7},
-    "leopard2.cpp.o": {"asan_lines": 146, "ubsan_lines": 15},
+    "leopard2.cpp.o": {"asan_lines": 149, "ubsan_lines": 15},
     "Leopard2Backend.cpp.o": {"asan_lines": 40, "ubsan_lines": 9},
     "Leopard2BackendScalar.cpp.o": {"asan_lines": 16, "ubsan_lines": 6},
     "Leopard2CpuFeatures.cpp.o": {"asan_lines": 9, "ubsan_lines": 5},
-    "Leopard2Plan.cpp.o": {"asan_lines": 60, "ubsan_lines": 8},
+    "Leopard2Plan.cpp.o": {"asan_lines": 75, "ubsan_lines": 9},
     "LeopardCommon.cpp.o": {"asan_lines": 13, "ubsan_lines": 5},
-    "LeopardFF16.cpp.o": {"asan_lines": 27, "ubsan_lines": 10},
+    "LeopardFF16.cpp.o": {"asan_lines": 28, "ubsan_lines": 10},
     "LeopardFF8.cpp.o": {"asan_lines": 28, "ubsan_lines": 9},
     "Leopard2BackendSSSE3.cpp.o": {"asan_lines": 26, "ubsan_lines": 8},
     "Leopard2BackendAVX2.cpp.o": {"asan_lines": 28, "ubsan_lines": 7},
