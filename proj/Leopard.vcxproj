@@ -28,6 +28,7 @@
     <ClInclude Include="..\LeopardCommon.h" />
     <ClInclude Include="..\LeopardFF16.h" />
     <ClInclude Include="..\LeopardFF8.h" />
+    <ClInclude Include="..\sse2neon\sse2neon.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\leopard.cpp" />

@@ -58,9 +58,15 @@ Git path admits exactly `rev-parse HEAD` and
 `status --porcelain --untracked-files=normal`, with fixed result/output
 variables, source working directory, guards, and evaluation order;
 CUDA source properties, toolkit commands in tests, and CUDA/NVIDIA markers
-anywhere in the reachable CPU source/header text are rejected.  The sole
-marker-bearing test is the exact checked CUDA-optional self-test manifest.  The
-Visual Studio proof likewise pins the solution projects and configuration
+in compiled text reachable from the CPU source/header graph are rejected.  The
+scanner removes C and C++ comments before classifying source, so third-party
+license and author comments such as an `nvidia.com` email address do not create
+a false dependency.  Quoted and raw string literals remain compiled text;
+actual CUDA includes, `.cu`/`.cuh` references, NVIDIA/CUDA preprocessor names,
+runtime and tool names, CUDA function qualifiers, and kernel-launch syntax are
+still rejected.  The sole marker-bearing test is the exact checked
+CUDA-optional self-test manifest.  The Visual Studio proof likewise pins the
+solution projects and configuration
 mappings, XML namespace, complete root evaluation phase order, item types,
 configuration tools, properties, and Windows case-insensitive source aliases.
 The constrained lexer understands arbitrary-delimiter CMake

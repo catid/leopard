@@ -2877,8 +2877,71 @@ def validate_msbuild_imports_and_toolchain(tree):
                     "MSBuild task tool override is forbidden: " + attribute)
 
 
+def strip_c_family_comments(source_text):
+    """Remove C/C++ comments while preserving literals and line numbers."""
+    result = []
+    index = 0
+    length = len(source_text)
+    while index < length:
+        if source_text.startswith("//", index):
+            result.extend((" ", " "))
+            index += 2
+            while index < length and source_text[index] not in "\r\n":
+                result.append(" ")
+                index += 1
+            continue
+        if source_text.startswith("/*", index):
+            result.extend((" ", " "))
+            index += 2
+            while index < length and not source_text.startswith("*/", index):
+                character = source_text[index]
+                result.append(character if character in "\r\n" else " ")
+                index += 1
+            if index == length:
+                raise ContractError("unterminated C/C++ block comment")
+            result.extend((" ", " "))
+            index += 2
+            continue
+
+        raw = None
+        if source_text[index] in "RuUL":
+            raw = re.match(
+                r'(?:u8|u|U|L)?R"([^ ()\\\t\r\n]{0,16})\(',
+                source_text[index:])
+        if raw is not None:
+            terminator = ")" + raw.group(1) + '"'
+            end = source_text.find(
+                terminator, index + raw.end())
+            if end < 0:
+                raise ContractError("unterminated C++ raw string literal")
+            end += len(terminator)
+            result.append(source_text[index:end])
+            index = end
+            continue
+
+        character = source_text[index]
+        if character in "\"'":
+            quote = character
+            result.append(character)
+            index += 1
+            while index < length:
+                character = source_text[index]
+                result.append(character)
+                index += 1
+                if character == "\\" and index < length:
+                    result.append(source_text[index])
+                    index += 1
+                elif character == quote:
+                    break
+            continue
+        result.append(character)
+        index += 1
+    return "".join(result)
+
+
 def production_local_includes(source_text):
-    source_text = re.sub(r"\\\r?\n", "", source_text)
+    source_text = strip_c_family_comments(
+        re.sub(r"\\\r?\n", "", source_text))
     includes = []
     for operand in re.findall(
             r"^\s*#\s*include\b([^\n]*)", source_text, re.MULTILINE):
@@ -2893,7 +2956,8 @@ def production_local_includes(source_text):
 
 
 def production_cuda_preprocessor_lines(source_text):
-    source_text = re.sub(r"\\\r?\n", "", source_text)
+    source_text = strip_c_family_comments(
+        re.sub(r"\\\r?\n", "", source_text))
     lines = [line for line in re.findall(
         r"^\s*#.*$", source_text, re.MULTILINE)
         if (re.search(r"\.cuh?(?:[>\"']|\s|$)", line, re.IGNORECASE) or
@@ -2917,9 +2981,12 @@ def production_cuda_source_lines(source_text):
     """Return any CPU-production lines that mention a CUDA runtime/toolchain."""
     marker = re.compile(
         r"cuda|nvcc|nvrtc|nvidia|cudart|ptxas|nvlink|fatbinary|"
-        r"cuobjdump|nvc\+\+|[<\"'/\\](?:thrust|cub)[/\\]",
+        r"cuobjdump|nvc\+\+|__(?:global|device|host|shared|constant|managed)__|"
+        r"__launch_bounds__|<<<|>>>|\.cuh?(?:[>\"']|\s|$)|"
+        r"[<\"'/\\](?:thrust|cub)[/\\]",
         re.IGNORECASE)
-    return [line for line in source_text.splitlines() if marker.search(line)]
+    code = strip_c_family_comments(re.sub(r"\\\r?\n", "", source_text))
+    return [line for line in code.splitlines() if marker.search(line)]
 
 
 def windows_repository_include(base_directory, included):
@@ -3596,9 +3663,76 @@ void *entry = GetProcAddress(module, "cuInit");
         self.assertEqual(
             ['HMODULE module = LoadLibraryA("nvcuda.dll");'],
             production_cuda_source_lines(runtime_source))
+
+        portability_header = (
+            ROOT / "sse2neon" / "sse2neon.h").read_text(encoding="utf-8")
+        author_comment = "//   Brandon Rowlett <browlett@nvidia.com>"
+        self.assertIn(author_comment, portability_header)
+        self.assertEqual(
+            [], production_cuda_source_lines(portability_header))
+        self.assertEqual(
+            [], production_cuda_preprocessor_lines(portability_header))
+
+        commented_examples = """
+// #include <cuda_runtime.h>
+// #define NVIDIA_BACKEND 1
+/*
+#include "kernel.cuh"
+__global__ void documentation_only_kernel() {}
+documentation_only_kernel<<<1, 1>>>();
+const char *tool = "nvcc";
+*/
+#include "StillCpuOnly.h"
+"""
+        self.assertEqual(
+            ["StillCpuOnly.h"],
+            production_local_includes(commented_examples))
+        self.assertEqual(
+            [], production_cuda_source_lines(commented_examples))
+        self.assertEqual(
+            [], production_cuda_preprocessor_lines(commented_examples))
+
+        cuda_mutations = (
+            '#include <cuda_runtime.h>',
+            '#include "kernel.cuh"',
+            '#include <thrust/device_vector.h>',
+            '#define NVIDIA_BACKEND 1',
+            '#define __CUDACC__ 1',
+            'const char *tool = "nvcc";',
+            '#pragma comment(lib, "nvcuda.lib")',
+            '__global__ void kernel() {}',
+            'kernel<<<1, 1>>>();',
+        )
+        for mutation in cuda_mutations:
+            with self.subTest(cuda_mutation=mutation):
+                mutated = portability_header + "\n" + mutation + "\n"
+                self.assertTrue(production_cuda_source_lines(mutated))
+
+        self.assertTrue(production_cuda_source_lines(
+            'const char *literal = R"tag(// nvidia runtime)tag";'))
         self.assertEqual(
             ROOT / "LeopardCommon.h",
             windows_repository_include(ROOT, "leopardcommon.h"))
+
+    def test_c_family_comment_stripping_preserves_compiled_literals(self):
+        source = (
+            'const char *ordinary = "// nvidia /* cuda */"; '
+            '// author@nvidia.com\n'
+            'const char *raw = R"tag(/* cuda */ // nvcc)tag";\n'
+            '/* #include <cuda_runtime.h>\n'
+            'kernel<<<1, 1>>>(); */\n')
+        stripped = strip_c_family_comments(source)
+        self.assertIn('"// nvidia /* cuda */"', stripped)
+        self.assertIn('R"tag(/* cuda */ // nvcc)tag"', stripped)
+        self.assertNotIn("author@nvidia.com", stripped)
+        self.assertNotIn("cuda_runtime.h", stripped)
+        self.assertNotIn("kernel<<<1, 1>>>", stripped)
+        self.assertEqual(source.count("\n"), stripped.count("\n"))
+
+        with self.assertRaisesRegex(ContractError, "unterminated.*comment"):
+            strip_c_family_comments("/* documentation")
+        with self.assertRaisesRegex(ContractError, "unterminated.*raw string"):
+            strip_c_family_comments('R"tag(documentation)wrong"')
 
 
 class CMakeLexerTest(unittest.TestCase):
