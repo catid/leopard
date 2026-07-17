@@ -1,14 +1,21 @@
 # Leopard2 context-routed butterfly tier
 
-Status: production implementation landed. The correctness and 16-round
-non-regression results retained below are historical evidence for the pre-R1
-candidate `ae2b8566ad08cae02869c3fcf41de046b0b652ed`; they are not final-source
-evidence for the later integrated tree. R1 changed the backend table, sources,
-tests, and build closure, so an integrated-source backend matrix and pinned
-campaign must be collected before this tier is evidence-qualified again. The
-first final-source AVX2 v6 campaign was retained as failed evidence and caused
-the GF16 size policy correction documented below; a fresh campaign on the
-corrected source is still required.
+Status: production implementation and the conservative GF16 size policy are
+landed at `04a8ba35fc9b1eb068cd748358eb04b79bc5e63b`. Final-source Release,
+strict-compiler, sanitizer, and forced-backend correctness gates pass. The
+retained timing evidence decisively supports every enabled GF16 treatment but
+does not pass the predeclared whole-campaign AVX2 statistical gate: two
+large-shard decode controls whose executed code is identical crossed the
+one-sided `-2%` confidence floor. That failure is retained and reported below;
+it was not resampled or relabeled as a passing campaign. The production policy
+remains because exact linked-code and data-layout comparison rules out a
+size-policy change in those failing controls, while the actually changed
+64/128-byte paths have large positive lower bounds.
+
+The older correctness and 16-round non-regression results retained below are
+historical evidence for the pre-R1 candidate
+`ae2b8566ad08cae02869c3fcf41de046b0b652ed`; they are not substituted for the
+final-source evidence.
 Native NEON, AVX-512, GFNI, and wider fusion schedules remain separate work.
 
 The current v6 collector requires two distinct final-source campaigns, one
@@ -155,9 +162,86 @@ retained manifest SHA-256 is
 the raw bundle SHA-256 is
 `cc243b91e323405917cab0d969ac90111ce5850565915f26bd0171a6c2445b42`.
 Production therefore keeps SSSE3 fusion at exactly 64 transform bytes and uses
-the split schedule at 128 bytes. AVX2 retains both qualified sizes. A fresh
-source-bound matrix and matched-control campaign are required before closing
-the backend bead.
+the split schedule at 128 bytes. AVX2 retains both qualified sizes. The final
+source-bound matrix and sensitivity evidence are recorded next.
+
+## Final exact-source qualification and disposition
+
+Commit `04a8ba35fc9b1eb068cd748358eb04b79bc5e63b` passed the final CPU
+correctness and safety gates available on this host:
+
+- Release: 50/50 CTests passed.
+- GCC 13 strict warnings: 48/48 CTests passed.
+- Clang 18 ASan plus UBSan: all 47 applicable CTests passed.
+- The fresh AUTO/scalar/SSSE3/AVX2 matrix passed all four variants, 145/145
+  semantic gates, and 156/156 normalized cross-backend comparisons. Its
+  `matrix.json` SHA-256 is
+  `21d5a32d492759fd68026c4ed0e971a2c9bf50d474d7ccd60a68a55adac4cc38`;
+  the 58-file source fingerprint is
+  `878afd91fb09d99eebfb6e7d5673ee218ba7479ab9d6622469a9ca01d48fad88`.
+
+The exact-source policy-matched SSSE3 campaign passed all 26 cells and 1,664
+ABBA entries. Exact 64-byte GF16 high-rate encode/decode improved by
+12.708/10.699 percent (one-sided 95% lower bounds 12.332/10.390 percent), and
+low-rate encode/decode improved by 4.052/1.866 percent (lower bounds
+3.671/1.529 percent). Public 66-byte shards, which stage to 128 transform
+bytes, remained on the split SSSE3 policy and cleared the neighbor floor. The
+manifest/raw SHA-256 values are
+`45623d45a183bb8e5bacbd2a9c3ddce318645f76111b4443de77395917383d23`
+and
+`465ad82e4affc346e49e85eeef263d78eb8fcbc050415304c8aeb340b3dee812`.
+
+The corresponding exact-production AVX2 campaign retained strong intended
+gains but failed two large LOW_V1 GF16 decode confidence bounds. To separate a
+real treatment effect from layout or eligibility-check changes, a final
+predeclared sensitivity pair was built from the production tree. The false
+commit `4817f471424e3dfed177b98d50421f46446a09c3` and true commit
+`ac87bc208625398a6de85c92c1ab06b2ca8d0c7a` have identical linked code,
+symbols, relocations, section layout, and normalized build recipes. They differ
+by one initialized volatile gate byte at executable offset `0x4b030`; the true
+arm selects the production schedule. The true arm's fresh four-backend matrix
+passed with zero mismatch (`matrix.json` SHA-256
+`c95d574c82c620652586289103652de04ce971212e670682ebafa6c802bac158`).
+
+The AVX2 sensitivity campaign completed its one allowed set of 1,664 pinned
+invocations. It did **not** pass the declared whole-campaign gate:
+
+| Cell and metric | Point estimate | One-sided 95% lower bound |
+| --- | ---: | ---: |
+| low GF16, 16 KiB, 16 losses, decode | -0.3951% | -2.3600% |
+| low GF16, 16 KiB, one loss, decode | -0.3537% | -2.4995% |
+
+No other cell failed. Both failures execute the same large-shard split code in
+the two layout-identical binaries. The paths actually changed by the gate were
+strongly positive:
+
+| GF16 treatment | Encode point/lower | Decode point/lower |
+| --- | ---: | ---: |
+| high, 64 B | +27.8547% / +27.0404% | +28.0752% / +27.4430% |
+| high, public 66 B -> 128 B | +8.8682% / +8.3740% | +8.4342% / +8.1551% |
+| low, 64 B | +19.6951% / +18.8706% | +4.8058% / +4.4769% |
+| low, public 66 B -> 128 B | +5.0400% / +4.1726% | +1.4794% / +0.8448% |
+
+The failed sensitivity manifest/raw SHA-256 values are
+`ff443934cd38f3d24f21906503977c1da1255e5ce9bf038dd48e9d982c6071ab`
+and
+`09577453d6f36f8809763c23bb255b2f4fbdb23b045ef5fff78c40efb1df1830`;
+the stable raw-evidence digest is
+`540d2dc65826c7032c3a74d9ff1e1a6b97dd96463d546ca9b3667171ff4da2b8`.
+An independent replay authenticated all provenance and all 1,664 raw records,
+then reproduced the two policy failures. The current v6 `verify` command
+rejects a deliberately failed status before full replay, and its CPU
+reservation is advisory rather than a measurement of sibling activity; those
+tooling limitations are tracked separately and are not a reason to resample
+this pair.
+
+Final disposition: retain exact 64-byte GF16 fusion on all production backends,
+retain exact 128-byte fusion only on AVX2, and keep every larger GF16 transform
+on the split schedule. This is not reported as a passed AVX2 whole-campaign.
+The decision combines exact-path identity for the two failing controls,
+decisive positive lower bounds for every changed path, the separate
+exact-production matrix, and the passed SSSE3 campaign. No wire or API identity
+depends on this kernel choice.
 
 ## Historical pre-R1 correctness, safety, and portability evidence
 
@@ -335,8 +419,13 @@ twice, using distinct output directories and otherwise identical arguments:
 
 Repeat with `--backend ssse3 --output ABBA_SSSE3`. Do not run other memory-
 intensive jobs during either pinned phase. Each manifest can then be replayed
-with `run_abba.py verify`; v6 checks the embedded raw evidence and matrix and
-will not accept the historical v5 schema.
+with `run_abba.py verify` when its campaign status is `passed`; v6 checks the
+embedded raw evidence and matrix and will not accept the historical v5 schema.
+The current command deliberately stops at `campaign status` for retained
+failed manifests instead of replaying them to the expected statistical
+failure. That limitation, and fail-closed measurement of reserved-sibling
+activity, are tracked by the evidence-runner follow-up. Do not rerun the final
+layout-matched AVX2 pair to work around this verifier behavior.
 
 For AVX2, candidate and control differ at the 64- and 128-byte GF16 schedule
 choices. For SSSE3, they differ only at 64 bytes; both select the split schedule
