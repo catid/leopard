@@ -6,6 +6,32 @@ checked-in Visual Studio 2015-format solution remains available for legacy
 consumers and is structurally checked against the production Leopard2 source
 graph.  Native Visual Studio 2015 load/build validation is still outstanding.
 
+## Portable builds
+
+The default CMake build is portable for the target platform; it does not add
+`-march=native`.  On x86-64, baseline code stays at the platform's SSE2 floor,
+while SSSE3 and AVX2 kernels are compiled in separate translation units and
+selected only after runtime CPU and operating-system checks.  A normal
+distributable build therefore needs no host-CPU option:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target leopard
+```
+
+Do not add `-march=native` when producing binaries for other machines: it can
+allow the compiler to emit unsupported instructions anywhere in the program.
+For cross-compilation, select the destination architecture in a CMake toolchain
+file and keep its baseline compatible with every deployment CPU.  The
+`LEO2_BACKEND_VARIANT` setting is a diagnostic control for forcing a qualified
+backend during testing; it is not a portability target or a wire-format choice.
+The `leopard2_portable_isa` test audits the x86-64 archive and build metadata to
+catch accidental baseline-ISA increases.
+
+```sh
+ctest --test-dir build -R '^leopard2_portable_isa$' --output-on-failure
+```
+
 ## MDS Reed-Solomon Erasure Correction Codes for Large Data in C
 
 Leopard-RS is a fast library for Erasure Correction Coding.
