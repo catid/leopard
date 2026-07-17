@@ -92,6 +92,9 @@ EXPECTED_CORRECTNESS = {
     "decode_read_only_input_alias_symbol_comparisons": 6025,
     "detached_plan_executions": 14,
     "detached_plan_symbol_comparisons": 3598,
+    "owned_backend_codec_executions": 2,
+    "detached_backend_plan_executions": 2,
+    "owned_backend_symbol_comparisons": 196,
     "concurrent_backend_contexts": 3,
     "concurrent_backend_executions": 384,
     "concurrent_backend_trace_calls": 30720,
@@ -99,13 +102,15 @@ EXPECTED_CORRECTNESS = {
     "exhaustive_small_plans": 163,
     "exhaustive_small_executions": 4720,
     "exhaustive_small_symbol_comparisons": 8192,
-    "malformed_plan_rejections": 74,
+    "malformed_plan_rejections": 102,
     "hot_path_allocations": 0,
     "digest_fnv64": "0x329cac84bfd9f27",
 }
 LEGACY_EXPECTED_CORRECTNESS = dict(EXPECTED_CORRECTNESS)
 for _new_correctness_key in (
     "detached_plan_executions", "detached_plan_symbol_comparisons",
+    "owned_backend_codec_executions", "detached_backend_plan_executions",
+    "owned_backend_symbol_comparisons",
     "concurrent_backend_contexts", "concurrent_backend_executions",
     "concurrent_backend_trace_calls", "concurrent_wire_digest_comparisons",
     "exhaustive_small_plans", "exhaustive_small_executions",

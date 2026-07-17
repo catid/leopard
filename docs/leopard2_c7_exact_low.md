@@ -182,8 +182,9 @@ Encoding evaluates exactly the requested transmitted parity outputs; a null
 parity output is skipped.  Execution has zero transform scratch and allocates
 nothing.  Setup is quadratic in the transmitted generator size, so this direct
 implementation is a crossover candidate, not a balanced-code production
-answer.  Codec execution carries the immutable, startup-qualified byte-kernel
-table selected by its context; it never consults the process-default backend.
+answer.  Codec execution owns an immutable value-copy of the startup-qualified
+byte-kernel table selected by its context; it never retains the caller's table
+address or consults the process-default backend.
 
 The immutable original-repair plan accepts a sorted missing-original set and a
 parity-presence bitmap, deterministically selects the lowest available parity
@@ -193,6 +194,13 @@ only.  A no-loss plan returns without inspecting byte count or any pointer.
 The plan copies its counts, selected backend table, coordinates, and folded
 terms during setup; it does not retain a codec reference and remains valid
 after the setup codec is destroyed.
+The ownership regression constructs codec and plan objects from stack-local
+backend tables, poisons those external tables, lets them and the plan's setup
+codec leave scope, then executes both objects.  This runs under the ordinary,
+ASan+UBSan, and TSan gates and would reach a rejecting poison kernel (or an
+ASan use-after-scope report) if either object retained a pointer.  Every
+parity-presence byte is validated as exactly zero or one, including for a
+no-loss plan; values 2 and 255 are explicit malformed inputs.
 Before the first output write, execution validates every restored destination,
 every selected parity term, and every surviving-original term.  A null required
 term or any unsupported overlap therefore rejects the whole call without
@@ -248,10 +256,12 @@ Each scalar, SSSE3, AVX2, and AUTO C++ artifact records the same:
 | Read-only input-alias calls / symbols checked | 13 / 2,139 |
 | Decode read-only input-alias calls / symbols checked | 117 / 6,025 |
 | Detached-codec plan executions / symbols checked | 14 / 3,598 |
+| Owned codec / detached backend-plan executions | 2 / 2 |
+| Owned-backend recovered-symbol comparisons | 196 |
 | Concurrent traced backend contexts / executions (AUTO archive) | 3 / 384 |
 | Traced fixed-multiply calls / cross-backend digest comparisons (AUTO) | 30,720 / 4 |
 | Exhaustive small-code plans / executions / symbol checks | 163 / 4,720 / 8,192 |
-| Malformed plan rejections | 74 |
+| Malformed plan rejections | 102 |
 | Hot-path allocations | 0 |
 | Deterministic digest | `0x0329cac84bfd9f27` |
 
@@ -293,18 +303,18 @@ label.  In particular, the forced-scalar build must have empty stderr; its
 compile-time-only backend selection explicitly consumes the otherwise unused
 feature record without changing the selected scalar backend.  Manifest v4's
 post-R1 probe freezes 320 ASan and 54 UBSan references in
-the standalone harness and 348 ASan and 86 UBSan references across all 11 named
+the standalone harness and 406 ASan and 89 UBSan references across all 11 named
 core-archive members; normal builds contain none.  The exact sanitized archive
 attribution is:
 
 | Archive member | ASan | UBSan |
 | --- | ---: | ---: |
 | `leopard.cpp.o` | 13 | 7 |
-| `leopard2.cpp.o` | 141 | 15 |
+| `leopard2.cpp.o` | 146 | 15 |
 | `Leopard2Backend.cpp.o` | 40 | 9 |
 | `Leopard2BackendScalar.cpp.o` | 16 | 6 |
 | `Leopard2CpuFeatures.cpp.o` | 9 | 5 |
-| `Leopard2Plan.cpp.o` | 7 | 5 |
+| `Leopard2Plan.cpp.o` | 60 | 8 |
 | `LeopardCommon.cpp.o` | 13 | 5 |
 | `LeopardFF16.cpp.o` | 27 | 10 |
 | `LeopardFF8.cpp.o` | 28 | 9 |
@@ -312,21 +322,19 @@ attribution is:
 | `Leopard2BackendAVX2.cpp.o` | 28 | 7 |
 
 The delta from retained v3's 329/87 archive attribution is expected after the
-integrated backend work: active-parent locator setup, context-selected and
-native fused XOR operations, SSSE3/AVX2/NEON additions, and GF8/GF16 kernel
-refactoring changed the compiler's instrumented sites.  These totals are not a
+integrated backend and plan work: active-parent locator setup, context-selected
+and native fused XOR operations, SSSE3/AVX2/NEON additions, GF8/GF16 kernel
+refactoring, and the expanded immutable-plan implementation changed the
+compiler's instrumented sites.  These totals are not a
 range or minimum.  The v4 runner still compares the exact totals and every
 named member, aborting before correctness execution if any count changes.  The
 unchanged 320/54 standalone count independently confirms that the experimental
 harness instrumentation did not drift.
-The counts first came from a fresh five-variant compile at post-R1 commit
-`808ca28`; the runner stopped on the old fail-closed constants before executing
-any child.  That closure remained byte-identical through `219831f`.  The later
-one-line forced-scalar warning fix changes `Leopard2Backend.cpp`, however, so
-the final selected core must receive a fresh fail-closed sanitizer scan before
-A/B generation.  The v4 constants remain exact expectations, not an inference
-that a changed source closure preserves instrumentation.  No timing or
-correctness result is taken from the stopped run.
+The 406/89 counts were regenerated from the current 22-file integrated core
+closure and are frozen by both the runner and validator.  The v4 constants
+remain exact expectations, not an inference that a changed source closure
+preserves instrumentation; any later core change requires another fresh
+fail-closed scan before A/B generation.
 
 ### Dual Git identity and historical evidence
 
@@ -354,7 +362,7 @@ peer-attestation v2 evidence for its pre-R1 core.  It is never rewritten or
 accepted by the v4 generator.  The validator retains a read-only v3 path that
 authenticates its tooling and core bytes directly from the recorded Git commit
 and applies its original exact 329 ASan / 87 UBSan archive proof.  Relabeling
-those bytes as v4 fails both the 348/86 member proof and the required separate
+those bytes as v4 fails both the 406/89 member proof and the required separate
 tooling identity.
 
 All nested identity and accounting comparisons are recursively type-strict.

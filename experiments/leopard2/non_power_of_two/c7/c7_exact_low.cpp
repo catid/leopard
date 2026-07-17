@@ -451,13 +451,13 @@ struct ExactCodec
     typedef typename Ops::Element Element;
     unsigned k;
     unsigned r;
-    const leopard::backend::Ops* backend_ops;
+    const leopard::backend::Ops backend_ops;
     std::vector<Element> logs;
 
     ExactCodec(const leopard::backend::Ops& selected_backend,
                unsigned original_count, unsigned recovery_count)
         : k(original_count), r(recovery_count)
-        , backend_ops(&selected_backend)
+        , backend_ops(selected_backend)
         , logs(static_cast<size_t>(k) * r)
     {
         if (k == 0 || r == 0 || static_cast<uint64_t>(k) + r > Ops::Order())
@@ -531,10 +531,10 @@ struct ExactCodec
                 memcpy(output, original[0], static_cast<size_t>(bytes));
             else
                 Ops::MultiplyBytes(
-                    *backend_ops, output, original[0], first, bytes);
+                    backend_ops, output, original[0], first, bytes);
             for (unsigned i = 1; i < k; ++i)
                 Ops::MultiplyAddBytes(
-                    *backend_ops, output, original[i],
+                    backend_ops, output, original[i],
                     logs[static_cast<size_t>(parity) * k + i], bytes);
         }
     }
@@ -554,7 +554,7 @@ struct ExactDecodePlan
     typedef typename Ops::Element Element;
     unsigned k;
     unsigned r;
-    const leopard::backend::Ops* backend_ops;
+    const leopard::backend::Ops backend_ops;
     std::vector<unsigned> missing;
     std::vector<unsigned> selected_parities;
     std::vector<size_t> offsets;
@@ -571,6 +571,9 @@ struct ExactDecodePlan
             (!missing.empty() && missing.back() >= k) ||
             missing.size() > r || parity_present.size() != r)
             Fail("invalid exact-low decode pattern");
+        for (size_t parity = 0; parity < parity_present.size(); ++parity)
+            if (parity_present[parity] > 1)
+                Fail("exact-low parity presence must be zero or one");
         offsets.push_back(0);
         if (missing.empty())
             return;
@@ -708,12 +711,12 @@ struct ExactDecodePlan
                         memcpy(destination, source, static_cast<size_t>(bytes));
                     else
                         Ops::MultiplyBytes(
-                            *backend_ops, destination, source,
+                            backend_ops, destination, source,
                             term.multiplier_log, bytes);
                 }
                 else
                     Ops::MultiplyAddBytes(
-                        *backend_ops, destination, source,
+                        backend_ops, destination, source,
                         term.multiplier_log, bytes);
             }
         }
@@ -911,6 +914,9 @@ struct Correctness
     uint64_t decode_read_only_input_alias_symbol_comparisons;
     uint64_t detached_plan_executions;
     uint64_t detached_plan_symbol_comparisons;
+    uint64_t owned_backend_codec_executions;
+    uint64_t detached_backend_plan_executions;
+    uint64_t owned_backend_symbol_comparisons;
     uint64_t concurrent_backend_contexts;
     uint64_t concurrent_backend_executions;
     uint64_t concurrent_backend_trace_calls;
@@ -922,6 +928,94 @@ struct Correctness
     uint64_t hot_path_allocations;
     uint64_t digest;
 };
+
+static void RejectExternalBackendUse(
+    void*, const void*, uint16_t, uint64_t)
+{
+    Fail("exact-low retained an external backend table");
+}
+
+static void PoisonExternalBackendTable(leopard::backend::Ops& ops)
+{
+    ops.ff8_multiply = &RejectExternalBackendUse;
+    ops.ff8_multiply_add = &RejectExternalBackendUse;
+    ops.ff16_multiply = &RejectExternalBackendUse;
+    ops.ff16_multiply_add = &RejectExternalBackendUse;
+}
+
+template <typename Ops>
+static void ValidateOwnedBackendTables(
+    const leopard::backend::Ops& selected_backend, Correctness& result)
+{
+    typedef typename Ops::Element Element;
+    const unsigned k = 4;
+    const unsigned r = 4;
+    const size_t bytes = sizeof(Element) == 1 ? 65 : 66;
+    const unsigned missing_array[] = { 1, 3 };
+    const std::vector<unsigned> missing(
+        missing_array, missing_array + sizeof(missing_array) / sizeof(unsigned));
+    std::vector<uint8_t> parity_present(r, 1);
+    parity_present[0] = 0;
+
+    std::unique_ptr<ExactCodec<Ops> > codec;
+    std::unique_ptr<ExactDecodePlan<Ops> > plan;
+    {
+        leopard::backend::Ops caller_table = selected_backend;
+        codec.reset(new ExactCodec<Ops>(caller_table, k, r));
+        PoisonExternalBackendTable(caller_table);
+    }
+    {
+        leopard::backend::Ops caller_table = selected_backend;
+        ExactCodec<Ops> setup_codec(caller_table, k, r);
+        plan.reset(new ExactDecodePlan<Ops>(
+            setup_codec, missing, parity_present));
+        PoisonExternalBackendTable(caller_table);
+    }
+
+    std::vector<std::vector<uint8_t> > source(
+        k, std::vector<uint8_t>(bytes));
+    std::vector<std::vector<uint8_t> > parity(
+        r, std::vector<uint8_t>(bytes));
+    std::vector<std::vector<uint8_t> > restored(
+        k, std::vector<uint8_t>(bytes, 0xa7));
+    std::vector<const void*> source_pointer(k);
+    std::vector<void*> parity_pointer(r);
+    for (unsigned original = 0; original < k; ++original)
+    {
+        for (size_t byte = 0; byte < bytes; ++byte)
+            source[original][byte] = static_cast<uint8_t>(
+                original * 61U + static_cast<unsigned>(byte) * 17U + 3U);
+        source_pointer[original] = &source[original][0];
+    }
+    for (unsigned recovery = 0; recovery < r; ++recovery)
+        parity_pointer[recovery] = &parity[recovery][0];
+
+    codec->Encode(bytes, &source_pointer[0], &parity_pointer[0]);
+    ++result.owned_backend_codec_executions;
+
+    std::vector<const void*> received_source = source_pointer;
+    std::vector<const void*> received_parity(r, NULL);
+    std::vector<void*> restored_pointer(k, NULL);
+    for (size_t i = 0; i < missing.size(); ++i)
+    {
+        received_source[missing[i]] = NULL;
+        restored_pointer[missing[i]] = &restored[missing[i]][0];
+    }
+    for (unsigned recovery = 0; recovery < r; ++recovery)
+        if (parity_present[recovery])
+            received_parity[recovery] = &parity[recovery][0];
+
+    plan->Execute(bytes, &received_source[0], &received_parity[0],
+                  &restored_pointer[0]);
+    ++result.detached_backend_plan_executions;
+    const size_t symbols = bytes / sizeof(Element);
+    for (size_t i = 0; i < missing.size(); ++i)
+    {
+        if (memcmp(&restored[missing[i]][0], &source[missing[i]][0], bytes) != 0)
+            Fail("owned exact-low backend table changed restored data");
+        result.owned_backend_symbol_comparisons += symbols;
+    }
+}
 
 static void ValidateConcurrentBackendContexts(Correctness& result)
 {
@@ -1252,6 +1346,19 @@ static void ValidateCase(
         ExactDecodePlan<Ops> invalid(
             codec, std::vector<unsigned>(), wrong_parity_size);
     }, result.malformed_plan_rejections);
+    const uint8_t invalid_presence_values[] = { 2, 255 };
+    for (size_t invalid_index = 0;
+         invalid_index < sizeof(invalid_presence_values); ++invalid_index)
+    {
+        std::vector<uint8_t> invalid_presence = all_parity_present;
+        const unsigned parity = static_cast<unsigned>(
+            (case_index * 41U + invalid_index * 17U) % r);
+        invalid_presence[parity] = invalid_presence_values[invalid_index];
+        ExpectRejected([&]() {
+            ExactDecodePlan<Ops> invalid(
+                codec, std::vector<unsigned>(), invalid_presence);
+        }, result.malformed_plan_rejections);
+    }
     std::vector<uint8_t> no_parity(r, 0);
     const std::vector<unsigned> one_missing(1, 0);
     ExpectRejected([&]() {
@@ -1726,6 +1833,8 @@ static Correctness RunCorrectness(const leopard::backend::Ops& backend_ops)
             gf16_bytes, gf16, result);
         ++result.gf16_cases;
     }
+    ValidateOwnedBackendTables<FieldOps<uint8_t> >(backend_ops, result);
+    ValidateOwnedBackendTables<FieldOps<uint16_t> >(backend_ops, result);
     ValidateExhaustiveSmallPlans(backend_ops, result);
     ValidateConcurrentBackendContexts(result);
     if (result.hot_path_allocations != 0)
@@ -2174,6 +2283,12 @@ static void WriteJson(
            << correctness.detached_plan_executions << ",\n"
            << "    \"detached_plan_symbol_comparisons\":"
            << correctness.detached_plan_symbol_comparisons << ",\n"
+           << "    \"owned_backend_codec_executions\":"
+           << correctness.owned_backend_codec_executions << ",\n"
+           << "    \"detached_backend_plan_executions\":"
+           << correctness.detached_backend_plan_executions << ",\n"
+           << "    \"owned_backend_symbol_comparisons\":"
+           << correctness.owned_backend_symbol_comparisons << ",\n"
            << "    \"concurrent_backend_contexts\":"
            << correctness.concurrent_backend_contexts << ",\n"
            << "    \"concurrent_backend_executions\":"
