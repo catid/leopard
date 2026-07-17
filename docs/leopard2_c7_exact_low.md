@@ -182,13 +182,17 @@ Encoding evaluates exactly the requested transmitted parity outputs; a null
 parity output is skipped.  Execution has zero transform scratch and allocates
 nothing.  Setup is quadratic in the transmitted generator size, so this direct
 implementation is a crossover candidate, not a balanced-code production
-answer.
+answer.  Codec execution carries the immutable, startup-qualified byte-kernel
+table selected by its context; it never consults the process-default backend.
 
 The immutable original-repair plan accepts a sorted missing-original set and a
 parity-presence bitmap, deterministically selects the lowest available parity
 equations, inverts only the missing-original minor, and folds surviving-original
 terms into fixed execution coefficients.  Execution restores missing originals
 only.  A no-loss plan returns without inspecting byte count or any pointer.
+The plan copies its counts, selected backend table, coordinates, and folded
+terms during setup; it does not retain a codec reference and remains valid
+after the setup codec is destroyed.
 Before the first output write, execution validates every restored destination,
 every selected parity term, and every surviving-original term.  A null required
 term or any unsupported overlap therefore rejects the whole call without
@@ -235,7 +239,7 @@ Each scalar, SSSE3, AVX2, and AUTO C++ artifact records the same:
 | Decode plans/executions | 403 / 403 |
 | Recovered-symbol comparisons | 272,487 |
 | Maximum-loss plans | 117 |
-| Plans with an unavailable low parity | 175 |
+| Plans with varied unavailable parity subsets | 175 |
 | Re-encode parity checks | 403 |
 | Odd-GF16 / all overlap rejections | 10 / 59 |
 | Parity-output / restored-output / restored-input overlap rejects | 13 / 12 / 20 |
@@ -243,11 +247,23 @@ Each scalar, SSSE3, AVX2, and AUTO C++ artifact records the same:
 | Bytes checked unchanged after atomic rejection | 61,570 |
 | Read-only input-alias calls / symbols checked | 13 / 2,139 |
 | Decode read-only input-alias calls / symbols checked | 117 / 6,025 |
+| Detached-codec plan executions / symbols checked | 14 / 3,598 |
+| Concurrent traced backend contexts / executions | 3 / 384 |
+| Traced fixed-multiply calls / cross-backend digest comparisons | 30,720 / 4 |
+| Exhaustive small-code plans / executions / symbol checks | 163 / 4,720 / 8,192 |
+| Malformed plan rejections | 74 |
 | Hot-path allocations | 0 |
-| Deterministic digest | `0xec4179e9f2776a58` |
+| Deterministic digest | `0x0329cac84bfd9f27` |
 
 Lengths are GF8 `1,2,3,7,31,64,65,257` bytes and GF16
 `2,4,6,14,62,64,66,130,514` physical bytes.  Buffers are unaligned and guarded.
+The large cases vary missing-original coordinates and both exact-size and
+surplus parity-availability subsets deterministically.  The small `K=4,R=4`
+gate enumerates every valid missing-original/parity-presence pair and executes
+every one-byte GF8 basis message.  A single production archive also runs
+scalar, SSSE3, and AVX2 codec/plan execution concurrently through distinct
+tracing tables and requires identical wire digests with nonzero calls through
+each selected table.
 Combined ASan+UBSan with leak detection passes the same complete matrix.  The
 sanitized standalone source has a compile-time feature gate that fails unless
 both instruments are active; the retained build/run manifest also records the

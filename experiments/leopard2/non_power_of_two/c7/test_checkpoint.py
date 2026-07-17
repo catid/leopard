@@ -97,12 +97,12 @@ class CheckpointTests(unittest.TestCase):
         ))
         self.assertEqual(run_matrix.EXPECTED_ARCHIVE_MEMBER_COUNTS, {
             "leopard.cpp.o": {"asan_lines": 13, "ubsan_lines": 7},
-            "leopard2.cpp.o": {"asan_lines": 141, "ubsan_lines": 15},
+            "leopard2.cpp.o": {"asan_lines": 146, "ubsan_lines": 15},
             "Leopard2Backend.cpp.o": {"asan_lines": 40, "ubsan_lines": 9},
             "Leopard2BackendScalar.cpp.o": {
                 "asan_lines": 16, "ubsan_lines": 6},
             "Leopard2CpuFeatures.cpp.o": {"asan_lines": 9, "ubsan_lines": 5},
-            "Leopard2Plan.cpp.o": {"asan_lines": 7, "ubsan_lines": 5},
+            "Leopard2Plan.cpp.o": {"asan_lines": 60, "ubsan_lines": 8},
             "LeopardCommon.cpp.o": {"asan_lines": 13, "ubsan_lines": 5},
             "LeopardFF16.cpp.o": {"asan_lines": 27, "ubsan_lines": 10},
             "LeopardFF8.cpp.o": {"asan_lines": 28, "ubsan_lines": 9},
@@ -113,13 +113,13 @@ class CheckpointTests(unittest.TestCase):
         })
         self.assertEqual(
             sum(item["asan_lines"] for item in
-                run_matrix.EXPECTED_ARCHIVE_MEMBER_COUNTS.values()), 348)
+                run_matrix.EXPECTED_ARCHIVE_MEMBER_COUNTS.values()), 406)
         self.assertEqual(
             sum(item["ubsan_lines"] for item in
-                run_matrix.EXPECTED_ARCHIVE_MEMBER_COUNTS.values()), 86)
+                run_matrix.EXPECTED_ARCHIVE_MEMBER_COUNTS.values()), 89)
         self.assertEqual(
             run_matrix.EXPECTED_ARCHIVE_SANITIZER_COUNTS,
-            {"asan_lines": 348, "ubsan_lines": 86})
+            {"asan_lines": 406, "ubsan_lines": 89})
         self.assertEqual(
             run_matrix.EXPECTED_EXECUTABLE_SANITIZER_COUNTS,
             {"asan_lines": 320, "ubsan_lines": 54})

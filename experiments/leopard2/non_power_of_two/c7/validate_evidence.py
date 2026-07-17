@@ -90,9 +90,29 @@ EXPECTED_CORRECTNESS = {
     "read_only_input_alias_symbol_comparisons": 2139,
     "decode_read_only_input_alias_calls": 117,
     "decode_read_only_input_alias_symbol_comparisons": 6025,
+    "detached_plan_executions": 14,
+    "detached_plan_symbol_comparisons": 3598,
+    "concurrent_backend_contexts": 3,
+    "concurrent_backend_executions": 384,
+    "concurrent_backend_trace_calls": 30720,
+    "concurrent_wire_digest_comparisons": 4,
+    "exhaustive_small_plans": 163,
+    "exhaustive_small_executions": 4720,
+    "exhaustive_small_symbol_comparisons": 8192,
+    "malformed_plan_rejections": 74,
     "hot_path_allocations": 0,
-    "digest_fnv64": "0xec4179e9f2776a58",
+    "digest_fnv64": "0x329cac84bfd9f27",
 }
+LEGACY_EXPECTED_CORRECTNESS = dict(EXPECTED_CORRECTNESS)
+for _new_correctness_key in (
+    "detached_plan_executions", "detached_plan_symbol_comparisons",
+    "concurrent_backend_contexts", "concurrent_backend_executions",
+    "concurrent_backend_trace_calls", "concurrent_wire_digest_comparisons",
+    "exhaustive_small_plans", "exhaustive_small_executions",
+    "exhaustive_small_symbol_comparisons", "malformed_plan_rejections",
+):
+    del LEGACY_EXPECTED_CORRECTNESS[_new_correctness_key]
+LEGACY_EXPECTED_CORRECTNESS["digest_fnv64"] = "0xec4179e9f2776a58"
 EXPECTED_PROFILE = {
     "family": 3, "version": 1, "coordinate_map": 1,
     "systematic": "0..K-1", "parity": "K..K+R-1",
@@ -922,7 +942,7 @@ def live_nm(
 
 def validate_cpp_result(
     data: dict[str, Any], backend: str, timing_scope: str,
-    affinity: list[int], sanitizer: bool,
+    affinity: list[int], sanitizer: bool, *, legacy: bool = False,
 ) -> None:
     required = {
         "affinity", "allocation_tracking", "benchmarks", "core_git_sha",
@@ -931,6 +951,8 @@ def validate_cpp_result(
         "runtime_backend", "sanitizer", "sanitizer_features", "schema",
         "source_sha256", "status", "timing_scope",
     }
+    if not legacy:
+        required.add("exact_byte_backend")
     if set(data) != required:
         raise ValueError("unexpected C7 child result keys")
     if (data["schema"] != "leopard2-c7-exact-low/v1" or
@@ -940,7 +962,9 @@ def validate_cpp_result(
             data["timing_scope"] != timing_scope or
             not typed_equal(data["affinity"], affinity) or
             data["omp_num_threads"] != "1" or data["omp_dynamic"] != "FALSE" or
-            not typed_equal(data["correctness"], EXPECTED_CORRECTNESS) or
+            not typed_equal(data["correctness"],
+                            LEGACY_EXPECTED_CORRECTNESS if legacy else
+                            EXPECTED_CORRECTNESS) or
             not isinstance(data["benchmarks"], list)):
         raise ValueError("C7 child identity or correctness result changed")
     validate_sha(data["source_sha256"], "C7 child source hash")
@@ -949,6 +973,8 @@ def validate_cpp_result(
     if sanitizer:
         if (data["requested_backend"] != "auto" or
                 data["runtime_backend"] != EXPECTED_RUNTIME["auto"] or
+                (not legacy and data["exact_byte_backend"] !=
+                 EXPECTED_RUNTIME["auto"]) or
                 data["sanitizer"] != "asan-ubsan" or
                 data["allocation_tracking"] != "disabled-for-sanitizer" or
                 not typed_equal(data["sanitizer_features"], {
@@ -956,6 +982,8 @@ def validate_cpp_result(
             raise ValueError("sanitizer child provenance changed")
     elif (data["requested_backend"] != backend or
             data["runtime_backend"] != EXPECTED_RUNTIME[backend] or
+            (not legacy and data["exact_byte_backend"] !=
+             EXPECTED_RUNTIME[backend]) or
             data["sanitizer"] != "none" or
             data["allocation_tracking"] != "global-new" or
             not typed_equal(data["sanitizer_features"], {
@@ -966,9 +994,12 @@ def validate_cpp_result(
         raise ValueError("correctness child unexpectedly contains timing")
 
 
-def validate_smoke(data: dict[str, Any], affinity: list[int]) -> None:
+def validate_smoke(
+    data: dict[str, Any], affinity: list[int], *, legacy: bool = False,
+) -> None:
     validate_cpp_result(
-        data, "auto", "non-authoritative-smoke", affinity, False)
+        data, "auto", "non-authoritative-smoke", affinity, False,
+        legacy=legacy)
     cells = data["benchmarks"]
     if len(cells) != 1 or not isinstance(cells[0], dict):
         raise ValueError("smoke must contain exactly one benchmark cell")
@@ -1531,11 +1562,12 @@ def validate_manifest(
                 child.get("library_sha256") != build["library"]["sha256"]):
             raise ValueError("run result is not bound to build inputs")
         if smoke:
-            validate_smoke(child, [cpu])
+            validate_smoke(child, [cpu], legacy=legacy)
         else:
             validate_cpp_result(
                 child, "auto" if build_name == "asan-ubsan" else build_name,
-                "none-correctness-only", [cpu], build_name == "asan-ubsan")
+                "none-correctness-only", [cpu], build_name == "asan-ubsan",
+                legacy=legacy)
     if len(correctness_cpus) != 5 or len(set(correctness_cpus)) != 5:
         raise ValueError("correctness runs did not use five distinct CPUs")
 

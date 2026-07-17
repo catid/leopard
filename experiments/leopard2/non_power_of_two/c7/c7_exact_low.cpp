@@ -31,9 +31,11 @@
 
 #include "LeopardFF8.h"
 #include "LeopardFF16.h"
+#include "Leopard2Backend.h"
 #include "leopard2.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -44,10 +46,13 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <new>
+#include <numeric>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(__linux__)
@@ -159,6 +164,20 @@ static const char* BackendName(leo2_backend backend)
     }
 }
 
+static leo2_backend ParseBackend(const std::string& name)
+{
+    if (name == "auto")
+        return LEO2_BACKEND_AUTO;
+    if (name == "scalar")
+        return LEO2_BACKEND_SCALAR;
+    if (name == "ssse3")
+        return LEO2_BACKEND_SSSE3;
+    if (name == "avx2")
+        return LEO2_BACKEND_AVX2;
+    Fail("unknown C7 backend name");
+    return LEO2_BACKEND_AUTO;
+}
+
 static std::vector<unsigned> ProcessAffinity()
 {
     std::vector<unsigned> result;
@@ -211,12 +230,16 @@ template <> struct FieldOps<uint8_t>
         { return leopard::ff8::ElementLog(value); }
     static Element FromLog(Element log)
         { return leopard::ff8::MultiplyLogElement(1, log); }
-    static void MultiplyBytes(void* output, const void* input, Element log,
+    static void MultiplyBytes(const leopard::backend::Ops& backend_ops,
+                              void* output, const void* input, Element log,
                               uint64_t bytes)
-        { leopard::ff8::MultiplyBytes(output, input, log, bytes); }
-    static void MultiplyAddBytes(void* output, const void* input, Element log,
+        { leopard::ff8::MultiplyBytes(
+              backend_ops, output, input, log, bytes); }
+    static void MultiplyAddBytes(const leopard::backend::Ops& backend_ops,
+                                 void* output, const void* input, Element log,
                                  uint64_t bytes)
-        { leopard::ff8::MultiplyAddBytes(output, input, log, bytes); }
+        { leopard::ff8::MultiplyAddBytes(
+              backend_ops, output, input, log, bytes); }
 };
 
 template <> struct FieldOps<uint16_t>
@@ -233,12 +256,16 @@ template <> struct FieldOps<uint16_t>
         { return leopard::ff16::ElementLog(value); }
     static Element FromLog(Element log)
         { return leopard::ff16::MultiplyLogElement(1, log); }
-    static void MultiplyBytes(void* output, const void* input, Element log,
+    static void MultiplyBytes(const leopard::backend::Ops& backend_ops,
+                              void* output, const void* input, Element log,
                               uint64_t bytes)
-        { leopard::ff16::MultiplyBytes(output, input, log, bytes); }
-    static void MultiplyAddBytes(void* output, const void* input, Element log,
+        { leopard::ff16::MultiplyBytes(
+              backend_ops, output, input, log, bytes); }
+    static void MultiplyAddBytes(const leopard::backend::Ops& backend_ops,
+                                 void* output, const void* input, Element log,
                                  uint64_t bytes)
-        { leopard::ff16::MultiplyAddBytes(output, input, log, bytes); }
+        { leopard::ff16::MultiplyAddBytes(
+              backend_ops, output, input, log, bytes); }
 };
 
 template <typename Element>
@@ -424,10 +451,13 @@ struct ExactCodec
     typedef typename Ops::Element Element;
     unsigned k;
     unsigned r;
+    const leopard::backend::Ops* backend_ops;
     std::vector<Element> logs;
 
-    ExactCodec(unsigned original_count, unsigned recovery_count)
+    ExactCodec(const leopard::backend::Ops& selected_backend,
+               unsigned original_count, unsigned recovery_count)
         : k(original_count), r(recovery_count)
+        , backend_ops(&selected_backend)
         , logs(static_cast<size_t>(k) * r)
     {
         if (k == 0 || r == 0 || static_cast<uint64_t>(k) + r > Ops::Order())
@@ -500,10 +530,11 @@ struct ExactCodec
             if (first == 0)
                 memcpy(output, original[0], static_cast<size_t>(bytes));
             else
-                Ops::MultiplyBytes(output, original[0], first, bytes);
+                Ops::MultiplyBytes(
+                    *backend_ops, output, original[0], first, bytes);
             for (unsigned i = 1; i < k; ++i)
                 Ops::MultiplyAddBytes(
-                    output, original[i],
+                    *backend_ops, output, original[i],
                     logs[static_cast<size_t>(parity) * k + i], bytes);
         }
     }
@@ -521,7 +552,9 @@ template <typename Ops>
 struct ExactDecodePlan
 {
     typedef typename Ops::Element Element;
-    const ExactCodec<Ops>& codec;
+    unsigned k;
+    unsigned r;
+    const leopard::backend::Ops* backend_ops;
     std::vector<unsigned> missing;
     std::vector<unsigned> selected_parities;
     std::vector<size_t> offsets;
@@ -530,18 +563,19 @@ struct ExactDecodePlan
     ExactDecodePlan(const ExactCodec<Ops>& exact_codec,
                     const std::vector<unsigned>& missing_originals,
                     const std::vector<uint8_t>& parity_present)
-        : codec(exact_codec), missing(missing_originals)
+        : k(exact_codec.k), r(exact_codec.r)
+        , backend_ops(exact_codec.backend_ops), missing(missing_originals)
     {
         if (!std::is_sorted(missing.begin(), missing.end()) ||
             std::adjacent_find(missing.begin(), missing.end()) != missing.end() ||
-            (!missing.empty() && missing.back() >= codec.k) ||
-            missing.size() > codec.r || parity_present.size() != codec.r)
+            (!missing.empty() && missing.back() >= k) ||
+            missing.size() > r || parity_present.size() != r)
             Fail("invalid exact-low decode pattern");
         offsets.push_back(0);
         if (missing.empty())
             return;
         for (unsigned parity = 0;
-             parity < codec.r && selected_parities.size() < missing.size();
+             parity < r && selected_parities.size() < missing.size();
              ++parity)
             if (parity_present[parity])
                 selected_parities.push_back(parity);
@@ -554,7 +588,7 @@ struct ExactDecodePlan
         for (size_t equation = 0; equation < losses; ++equation)
         {
             for (size_t column = 0; column < losses; ++column)
-                augmented[equation][column] = codec.Coefficient(
+                augmented[equation][column] = exact_codec.Coefficient(
                     selected_parities[equation], missing[column]);
             augmented[equation][losses + equation] = 1;
         }
@@ -595,7 +629,7 @@ struct ExactDecodePlan
                     terms.push_back(term);
                 }
             }
-            for (unsigned original = 0; original < codec.k; ++original)
+            for (unsigned original = 0; original < k; ++original)
             {
                 if (std::binary_search(missing.begin(), missing.end(), original))
                     continue;
@@ -603,7 +637,8 @@ struct ExactDecodePlan
                 for (size_t equation = 0; equation < losses; ++equation)
                     coefficient ^= Ops::Multiply(
                         augmented[output][losses + equation],
-                        codec.Coefficient(selected_parities[equation], original));
+                        exact_codec.Coefficient(
+                            selected_parities[equation], original));
                 if (coefficient)
                 {
                     DecodeTerm<Element> term = {
@@ -635,10 +670,10 @@ struct ExactDecodePlan
             for (size_t earlier = 0; earlier < output; ++earlier)
                 if (RangesOverlap(destination, restored[missing[earlier]], bytes))
                     Fail("exact-low restored outputs overlap");
-            for (unsigned source = 0; source < codec.k; ++source)
+            for (unsigned source = 0; source < k; ++source)
                 if (original[source] && RangesOverlap(destination, original[source], bytes))
                     Fail("exact-low restored output overlaps an original input");
-            for (unsigned parity = 0; parity < codec.r; ++parity)
+            for (unsigned parity = 0; parity < r; ++parity)
                 if (recovery[parity] && RangesOverlap(destination, recovery[parity], bytes))
                     Fail("exact-low restored output overlaps a parity input");
         }
@@ -672,16 +707,67 @@ struct ExactDecodePlan
                     if (term.multiplier_log == 0)
                         memcpy(destination, source, static_cast<size_t>(bytes));
                     else
-                        Ops::MultiplyBytes(destination, source,
-                                           term.multiplier_log, bytes);
+                        Ops::MultiplyBytes(
+                            *backend_ops, destination, source,
+                            term.multiplier_log, bytes);
                 }
                 else
-                    Ops::MultiplyAddBytes(destination, source,
-                                          term.multiplier_log, bytes);
+                    Ops::MultiplyAddBytes(
+                        *backend_ops, destination, source,
+                        term.multiplier_log, bytes);
             }
         }
     }
 };
+
+static const leopard::backend::Ops* C7TraceTargets[3] = { NULL, NULL, NULL };
+static std::atomic<uint64_t> C7TraceCalls[3];
+
+template <unsigned Slot>
+static void TraceFF8Multiply(
+    void* output, const void* input, uint16_t log, uint64_t bytes)
+{
+    C7TraceCalls[Slot].fetch_add(1, std::memory_order_relaxed);
+    C7TraceTargets[Slot]->ff8_multiply(output, input, log, bytes);
+}
+
+template <unsigned Slot>
+static void TraceFF8MultiplyAdd(
+    void* output, const void* input, uint16_t log, uint64_t bytes)
+{
+    C7TraceCalls[Slot].fetch_add(1, std::memory_order_relaxed);
+    C7TraceTargets[Slot]->ff8_multiply_add(output, input, log, bytes);
+}
+
+template <unsigned Slot>
+static void TraceFF16Multiply(
+    void* output, const void* input, uint16_t log, uint64_t bytes)
+{
+    C7TraceCalls[Slot].fetch_add(1, std::memory_order_relaxed);
+    C7TraceTargets[Slot]->ff16_multiply(output, input, log, bytes);
+}
+
+template <unsigned Slot>
+static void TraceFF16MultiplyAdd(
+    void* output, const void* input, uint16_t log, uint64_t bytes)
+{
+    C7TraceCalls[Slot].fetch_add(1, std::memory_order_relaxed);
+    C7TraceTargets[Slot]->ff16_multiply_add(output, input, log, bytes);
+}
+
+template <unsigned Slot>
+static void ConfigureTracingOps(
+    const leopard::backend::Ops& target,
+    leopard::backend::Ops& tracing)
+{
+    C7TraceTargets[Slot] = &target;
+    C7TraceCalls[Slot].store(0, std::memory_order_relaxed);
+    tracing = target;
+    tracing.ff8_multiply = &TraceFF8Multiply<Slot>;
+    tracing.ff8_multiply_add = &TraceFF8MultiplyAdd<Slot>;
+    tracing.ff16_multiply = &TraceFF16Multiply<Slot>;
+    tracing.ff16_multiply_add = &TraceFF16MultiplyAdd<Slot>;
+}
 
 template <typename Element>
 static Element LoadSymbol(const uint8_t* data, size_t bytes, size_t symbol)
@@ -731,6 +817,70 @@ static void StoreSymbol(uint8_t* data, size_t bytes, size_t symbol, Element valu
     data[complete + residual_symbols + lane] = static_cast<uint8_t>(value >> 8);
 }
 
+template <typename Ops>
+static uint64_t RunConcurrentBackendCase(
+    const leopard::backend::Ops& backend_ops, size_t bytes,
+    uint64_t& executions)
+{
+    const unsigned k = 8;
+    const unsigned r = 8;
+    const unsigned iterations = 32;
+    ExactCodec<Ops> codec(backend_ops, k, r);
+    std::vector<std::vector<uint8_t> > source(
+        k, std::vector<uint8_t>(bytes));
+    std::vector<std::vector<uint8_t> > parity(
+        r, std::vector<uint8_t>(bytes));
+    std::vector<std::vector<uint8_t> > restored(
+        k, std::vector<uint8_t>(bytes, 0xcc));
+    std::vector<const void*> source_pointer(k);
+    std::vector<void*> parity_pointer(r);
+    for (unsigned original = 0; original < k; ++original)
+    {
+        for (size_t byte = 0; byte < bytes; ++byte)
+            source[original][byte] = static_cast<uint8_t>(
+                original * 73U + static_cast<unsigned>(byte) * 29U + 11U);
+        source_pointer[original] = &source[original][0];
+    }
+    for (unsigned recovery = 0; recovery < r; ++recovery)
+        parity_pointer[recovery] = &parity[recovery][0];
+
+    const unsigned missing_array[] = { 1, 6 };
+    const std::vector<unsigned> missing(
+        missing_array, missing_array + sizeof(missing_array) / sizeof(unsigned));
+    std::vector<uint8_t> parity_present(r, 1);
+    parity_present[0] = 0;
+    const ExactDecodePlan<Ops> plan(codec, missing, parity_present);
+    std::vector<const void*> received_source = source_pointer;
+    received_source[missing[0]] = NULL;
+    received_source[missing[1]] = NULL;
+    std::vector<const void*> received_parity(r);
+    for (unsigned recovery = 0; recovery < r; ++recovery)
+        received_parity[recovery] = parity_present[recovery]
+            ? static_cast<const void*>(&parity[recovery][0]) : NULL;
+    std::vector<void*> restored_pointer(k, NULL);
+    restored_pointer[missing[0]] = &restored[missing[0]][0];
+    restored_pointer[missing[1]] = &restored[missing[1]][0];
+
+    for (unsigned iteration = 0; iteration < iterations; ++iteration)
+    {
+        codec.Encode(bytes, &source_pointer[0], &parity_pointer[0]);
+        plan.Execute(bytes, &received_source[0], &received_parity[0],
+                     &restored_pointer[0]);
+        for (size_t i = 0; i < missing.size(); ++i)
+            if (memcmp(&restored[missing[i]][0], &source[missing[i]][0],
+                       bytes) != 0)
+                Fail("concurrent exact-low plan restored the wrong original");
+        executions += 2;
+    }
+
+    uint64_t digest = UINT64_C(1469598103934665603);
+    for (unsigned recovery = 0; recovery < r; ++recovery)
+        digest = Fnv(digest, &parity[recovery][0], bytes);
+    for (size_t i = 0; i < missing.size(); ++i)
+        digest = Fnv(digest, &restored[missing[i]][0], bytes);
+    return digest;
+}
+
 struct Correctness
 {
     uint64_t gf8_cases;
@@ -759,9 +909,192 @@ struct Correctness
     uint64_t read_only_input_alias_symbol_comparisons;
     uint64_t decode_read_only_input_alias_calls;
     uint64_t decode_read_only_input_alias_symbol_comparisons;
+    uint64_t detached_plan_executions;
+    uint64_t detached_plan_symbol_comparisons;
+    uint64_t concurrent_backend_contexts;
+    uint64_t concurrent_backend_executions;
+    uint64_t concurrent_backend_trace_calls;
+    uint64_t concurrent_wire_digest_comparisons;
+    uint64_t exhaustive_small_plans;
+    uint64_t exhaustive_small_executions;
+    uint64_t exhaustive_small_symbol_comparisons;
+    uint64_t malformed_plan_rejections;
     uint64_t hot_path_allocations;
     uint64_t digest;
 };
+
+static void ValidateConcurrentBackendContexts(Correctness& result)
+{
+    const leo2_backend kinds[3] = {
+        LEO2_BACKEND_SCALAR, LEO2_BACKEND_SSSE3, LEO2_BACKEND_AVX2
+    };
+    leo2_context* contexts[3] = { NULL, NULL, NULL };
+    leopard::backend::Ops tracing[3] = {};
+    bool available[3] = { false, false, false };
+    for (unsigned slot = 0; slot < 3; ++slot)
+    {
+        leo2_context_options options = {};
+        options.struct_size = sizeof(options);
+        options.backend = static_cast<uint32_t>(kinds[slot]);
+        options.thread_count = 1;
+        const leo2_result created = leo2_context_create(&options, &contexts[slot]);
+        if (created == LEO2_UNSUPPORTED)
+            continue;
+        Require(created, "C7 concurrent backend context create");
+        if (leo2_context_backend(contexts[slot]) != kinds[slot])
+            Fail("concurrent C7 context selected the wrong backend");
+        leopard::backend::QualificationStatus qualification =
+            leopard::backend::QualificationAvailable;
+        const leopard::backend::Ops* target =
+            leopard::backend::GetQualifiedOps(kinds[slot], &qualification);
+        if (!target || target->kind != kinds[slot])
+            Fail("concurrent C7 backend table did not qualify exactly");
+        if (slot == 0)
+            ConfigureTracingOps<0>(*target, tracing[slot]);
+        else if (slot == 1)
+            ConfigureTracingOps<1>(*target, tracing[slot]);
+        else
+            ConfigureTracingOps<2>(*target, tracing[slot]);
+        available[slot] = true;
+        ++result.concurrent_backend_contexts;
+    }
+    if (!available[0])
+        Fail("scalar concurrent C7 backend is unavailable");
+
+    uint64_t gf8_digest[3] = {};
+    uint64_t gf16_digest[3] = {};
+    uint64_t executions[3] = {};
+    std::exception_ptr errors[3];
+    std::vector<std::thread> threads;
+    for (unsigned slot = 0; slot < 3; ++slot)
+    {
+        if (!available[slot])
+            continue;
+        threads.push_back(std::thread([&, slot]() {
+            try
+            {
+                gf8_digest[slot] = RunConcurrentBackendCase<FieldOps<uint8_t> >(
+                    tracing[slot], 129, executions[slot]);
+                gf16_digest[slot] = RunConcurrentBackendCase<FieldOps<uint16_t> >(
+                    tracing[slot], 130, executions[slot]);
+            }
+            catch (...)
+            {
+                errors[slot] = std::current_exception();
+            }
+        }));
+    }
+    for (size_t thread = 0; thread < threads.size(); ++thread)
+        threads[thread].join();
+
+    unsigned reference = 0;
+    while (reference < 3 && !available[reference])
+        ++reference;
+    for (unsigned slot = 0; slot < 3; ++slot)
+    {
+        if (!available[slot])
+            continue;
+        if (errors[slot])
+            std::rethrow_exception(errors[slot]);
+        if (gf8_digest[slot] != gf8_digest[reference] ||
+            gf16_digest[slot] != gf16_digest[reference])
+            Fail("concurrent exact-low backends changed the wire result");
+        if (slot != reference)
+            result.concurrent_wire_digest_comparisons += 2;
+        const uint64_t calls = C7TraceCalls[slot].load(
+            std::memory_order_relaxed);
+        if (calls == 0)
+            Fail("exact-low execution bypassed its selected backend table");
+        result.concurrent_backend_trace_calls += calls;
+        result.concurrent_backend_executions += executions[slot];
+        leo2_context_destroy(contexts[slot]);
+        contexts[slot] = NULL;
+    }
+}
+
+static unsigned CountBits(unsigned value)
+{
+    unsigned count = 0;
+    while (value)
+    {
+        count += value & 1U;
+        value >>= 1;
+    }
+    return count;
+}
+
+static void ValidateExhaustiveSmallPlans(
+    const leopard::backend::Ops& backend_ops, Correctness& result)
+{
+    typedef FieldOps<uint8_t> Ops;
+    const unsigned k = 4;
+    const unsigned r = 4;
+    const uint64_t bytes = 1;
+    ExactCodec<Ops> codec(backend_ops, k, r);
+    std::vector<std::vector<uint8_t> > source(k, std::vector<uint8_t>(1));
+    std::vector<std::vector<uint8_t> > parity(r, std::vector<uint8_t>(1));
+    std::vector<const void*> source_pointer(k);
+    std::vector<void*> parity_pointer(r);
+    for (unsigned original = 0; original < k; ++original)
+        source_pointer[original] = &source[original][0];
+    for (unsigned recovery = 0; recovery < r; ++recovery)
+        parity_pointer[recovery] = &parity[recovery][0];
+
+    for (unsigned missing_mask = 0; missing_mask < (1U << k); ++missing_mask)
+    {
+        const unsigned losses = CountBits(missing_mask);
+        std::vector<unsigned> missing;
+        for (unsigned original = 0; original < k; ++original)
+            if (missing_mask & (1U << original))
+                missing.push_back(original);
+        for (unsigned parity_mask = 0; parity_mask < (1U << r); ++parity_mask)
+        {
+            if (CountBits(parity_mask) < losses)
+                continue;
+            std::vector<uint8_t> parity_present(r, 0);
+            for (unsigned recovery = 0; recovery < r; ++recovery)
+                parity_present[recovery] = static_cast<uint8_t>(
+                    (parity_mask >> recovery) & 1U);
+            const ExactDecodePlan<Ops> plan(codec, missing, parity_present);
+            ++result.exhaustive_small_plans;
+            if (missing.empty())
+            {
+                plan.Execute(bytes, NULL, NULL, NULL);
+                ++result.exhaustive_small_executions;
+                continue;
+            }
+            for (unsigned basis = 0; basis < k * 8; ++basis)
+            {
+                for (unsigned original = 0; original < k; ++original)
+                    source[original][0] = 0;
+                source[basis / 8][0] = static_cast<uint8_t>(1U << (basis & 7U));
+                codec.Encode(bytes, &source_pointer[0], &parity_pointer[0]);
+                std::vector<const void*> received_source = source_pointer;
+                std::vector<const void*> received_parity(r, NULL);
+                std::vector<std::vector<uint8_t> > restored(
+                    k, std::vector<uint8_t>(1, 0xa7));
+                std::vector<void*> restored_pointer(k, NULL);
+                for (size_t i = 0; i < missing.size(); ++i)
+                {
+                    received_source[missing[i]] = NULL;
+                    restored_pointer[missing[i]] = &restored[missing[i]][0];
+                }
+                for (unsigned recovery = 0; recovery < r; ++recovery)
+                    if (parity_present[recovery])
+                        received_parity[recovery] = &parity[recovery][0];
+                plan.Execute(bytes, &received_source[0], &received_parity[0],
+                             &restored_pointer[0]);
+                ++result.exhaustive_small_executions;
+                for (size_t i = 0; i < missing.size(); ++i)
+                {
+                    if (restored[missing[i]][0] != source[missing[i]][0])
+                        Fail("exhaustive exact-low plan restored wrong basis data");
+                    ++result.exhaustive_small_symbol_comparisons;
+                }
+            }
+        }
+    }
+}
 
 static void RequireFilled(
     const std::vector<std::vector<uint8_t> >& storage,
@@ -803,6 +1136,58 @@ static std::vector<unsigned> MissingSet(unsigned k, unsigned losses)
     return missing;
 }
 
+static uint64_t NextPatternValue(uint64_t& state)
+{
+    state ^= state >> 12;
+    state ^= state << 25;
+    state ^= state >> 27;
+    return state * UINT64_C(2685821657736338717);
+}
+
+static std::vector<unsigned> VariedMissingSet(
+    unsigned k, unsigned losses, uint64_t seed)
+{
+    if (losses == 0 || losses > k)
+        Fail("invalid varied exact-low loss count");
+    std::vector<unsigned> coordinates(k);
+    std::iota(coordinates.begin(), coordinates.end(), 0U);
+    uint64_t state = seed ? seed : UINT64_C(0x9e3779b97f4a7c15);
+    for (unsigned i = 0; i < losses; ++i)
+    {
+        const unsigned selected = i + static_cast<unsigned>(
+            NextPatternValue(state) % (k - i));
+        std::swap(coordinates[i], coordinates[selected]);
+    }
+    coordinates.resize(losses);
+    std::sort(coordinates.begin(), coordinates.end());
+    return coordinates;
+}
+
+static bool MarkVariedUnavailableParities(
+    std::vector<uint8_t>& parity_present, unsigned required,
+    uint64_t seed)
+{
+    const unsigned r = static_cast<unsigned>(parity_present.size());
+    if (required >= r)
+        return false;
+    const unsigned cap = std::min(7U, r - required);
+    uint64_t state = seed ? seed : UINT64_C(0xd1b54a32d192ed03);
+    const uint64_t selector = NextPatternValue(state);
+    const unsigned unavailable = (selector & 1U)
+        ? r - required
+        : 1U + static_cast<unsigned>(selector % cap);
+    std::vector<unsigned> coordinates(r);
+    std::iota(coordinates.begin(), coordinates.end(), 0U);
+    for (unsigned i = 0; i < unavailable; ++i)
+    {
+        const unsigned selected = i + static_cast<unsigned>(
+            NextPatternValue(state) % (r - i));
+        std::swap(coordinates[i], coordinates[selected]);
+        parity_present[coordinates[i]] = 0;
+    }
+    return true;
+}
+
 static std::vector<unsigned> LossCounts(unsigned k, unsigned r)
 {
     const unsigned maximum = std::min(k, r);
@@ -817,13 +1202,14 @@ static std::vector<unsigned> LossCounts(unsigned k, unsigned r)
 
 template <typename Ops>
 static void ValidateCase(
+    const leopard::backend::Ops& backend_ops,
     unsigned k, unsigned r, unsigned case_index,
     const std::vector<size_t>& byte_counts,
     const IndependentField<typename Ops::Element>& independent,
     Correctness& result)
 {
     typedef typename Ops::Element Element;
-    ExactCodec<Ops> codec(k, r);
+    ExactCodec<Ops> codec(backend_ops, k, r);
     const std::vector<Element> rows = IndependentRows(independent, k, r);
     if (sizeof(Element) == 2 && k == 3 && r == 500)
     {
@@ -844,8 +1230,51 @@ static void ValidateCase(
         }
 
     std::vector<uint8_t> all_parity_present(r, 1);
+    if (k > 1)
+    {
+        const unsigned unsorted_array[] = { 1, 0 };
+        const std::vector<unsigned> unsorted(
+            unsorted_array, unsorted_array + 2);
+        ExpectRejected([&]() {
+            ExactDecodePlan<Ops> invalid(codec, unsorted, all_parity_present);
+        }, result.malformed_plan_rejections);
+        const std::vector<unsigned> duplicate(2, 0);
+        ExpectRejected([&]() {
+            ExactDecodePlan<Ops> invalid(codec, duplicate, all_parity_present);
+        }, result.malformed_plan_rejections);
+    }
+    const std::vector<unsigned> out_of_range(1, k);
+    ExpectRejected([&]() {
+        ExactDecodePlan<Ops> invalid(codec, out_of_range, all_parity_present);
+    }, result.malformed_plan_rejections);
+    std::vector<uint8_t> wrong_parity_size(r - 1, 1);
+    ExpectRejected([&]() {
+        ExactDecodePlan<Ops> invalid(
+            codec, std::vector<unsigned>(), wrong_parity_size);
+    }, result.malformed_plan_rejections);
+    std::vector<uint8_t> no_parity(r, 0);
+    const std::vector<unsigned> one_missing(1, 0);
+    ExpectRejected([&]() {
+        ExactDecodePlan<Ops> invalid(codec, one_missing, no_parity);
+    }, result.malformed_plan_rejections);
+    if (k > r)
+    {
+        std::vector<unsigned> too_many(r + 1);
+        std::iota(too_many.begin(), too_many.end(), 0U);
+        ExpectRejected([&]() {
+            ExactDecodePlan<Ops> invalid(codec, too_many, all_parity_present);
+        }, result.malformed_plan_rejections);
+    }
     const ExactDecodePlan<Ops> no_loss(
         codec, std::vector<unsigned>(), all_parity_present);
+    const std::vector<unsigned> detached_missing(
+        1, static_cast<unsigned>((case_index * 37U + k / 2U) % k));
+    std::unique_ptr<ExactDecodePlan<Ops> > detached_plan;
+    {
+        ExactCodec<Ops> temporary_codec(backend_ops, k, r);
+        detached_plan.reset(new ExactDecodePlan<Ops>(
+            temporary_codec, detached_missing, all_parity_present));
+    }
     C7TrackedAllocations = 0;
     C7TrackAllocations = true;
     no_loss.Execute(1, NULL, NULL, NULL);
@@ -971,6 +1400,35 @@ static void ValidateCase(
             result.digest = Fnv(result.digest, &parity[recovery][1], bytes);
         }
 
+        // Plans are immutable, self-contained execution objects: destroying
+        // the codec used for setup must not invalidate its field/backend table,
+        // repair coefficients, or coordinate metadata.
+        if (size_index + 1 == byte_counts.size())
+        {
+            std::vector<const void*> detached_source = source_ptr;
+            detached_source[detached_missing[0]] = NULL;
+            std::vector<const void*> detached_parity(r);
+            for (unsigned recovery = 0; recovery < r; ++recovery)
+                detached_parity[recovery] = &parity[recovery][1];
+            std::vector<uint8_t> detached_storage(bytes + 2, 0x94);
+            std::vector<void*> detached_restored(k, NULL);
+            detached_restored[detached_missing[0]] = &detached_storage[1];
+            C7TrackedAllocations = 0;
+            C7TrackAllocations = true;
+            detached_plan->Execute(
+                bytes, &detached_source[0], &detached_parity[0],
+                &detached_restored[0]);
+            C7TrackAllocations = false;
+            result.hot_path_allocations += C7TrackedAllocations;
+            if (detached_storage.front() != 0x94 ||
+                detached_storage.back() != 0x94 ||
+                memcmp(&detached_storage[1],
+                       &source[detached_missing[0]][1], bytes) != 0)
+                Fail("decode plan retained destroyed codec state");
+            ++result.detached_plan_executions;
+            result.detached_plan_symbol_comparisons += symbols;
+        }
+
         // A nonzero constant-polynomial codeword gives every received shard
         // identical bytes, so all surviving-original and parity inputs can
         // validly share one read-only buffer.  Exercise that strongest
@@ -1057,14 +1515,18 @@ static void ValidateCase(
         for (size_t loss_index = 0; loss_index < loss_counts.size(); ++loss_index)
         {
             const unsigned losses = loss_counts[loss_index];
-            const std::vector<unsigned> missing = MissingSet(k, losses);
+            const uint64_t pattern_seed =
+                (static_cast<uint64_t>(case_index + 1U) << 40) ^
+                (static_cast<uint64_t>(size_index + 1U) << 20) ^
+                static_cast<uint64_t>(loss_index + 1U);
+            const std::vector<unsigned> missing = VariedMissingSet(
+                k, losses, pattern_seed);
             std::vector<uint8_t> parity_present(r, 1);
             bool has_unavailable_parity = false;
             if (r > losses && ((case_index + size_index + loss_index) & 1U))
-            {
-                parity_present[0] = 0;
-                has_unavailable_parity = true;
-            }
+                has_unavailable_parity = MarkVariedUnavailableParities(
+                    parity_present, losses,
+                    pattern_seed ^ UINT64_C(0xa0761d6478bd642f));
             const ExactDecodePlan<Ops> plan(codec, missing, parity_present);
             ++result.decode_plans;
             result.maximum_loss_plans += losses == std::min(k, r);
@@ -1230,7 +1692,7 @@ static void ValidateCase(
     }
 }
 
-static Correctness RunCorrectness()
+static Correctness RunCorrectness(const leopard::backend::Ops& backend_ops)
 {
     Correctness result = {};
     result.digest = UINT64_C(1469598103934665603);
@@ -1253,16 +1715,19 @@ static Correctness RunCorrectness()
     for (unsigned i = 0; i < sizeof(gf8_cases) / sizeof(gf8_cases[0]); ++i)
     {
         ValidateCase<FieldOps<uint8_t> >(
-            gf8_cases[i][0], gf8_cases[i][1], i, gf8_bytes, gf8, result);
+            backend_ops, gf8_cases[i][0], gf8_cases[i][1], i,
+            gf8_bytes, gf8, result);
         ++result.gf8_cases;
     }
     for (unsigned i = 0; i < sizeof(gf16_cases) / sizeof(gf16_cases[0]); ++i)
     {
         ValidateCase<FieldOps<uint16_t> >(
-            gf16_cases[i][0], gf16_cases[i][1], 100 + i,
+            backend_ops, gf16_cases[i][0], gf16_cases[i][1], 100 + i,
             gf16_bytes, gf16, result);
         ++result.gf16_cases;
     }
+    ValidateExhaustiveSmallPlans(backend_ops, result);
+    ValidateConcurrentBackendContexts(result);
     if (result.hot_path_allocations != 0)
         Fail("exact-low execution allocated in a hot path");
     return result;
@@ -1404,7 +1869,8 @@ struct Stripe
 
 template <typename Ops>
 static BenchmarkResult BenchmarkTyped(
-    leo2_context* context, const BenchmarkSpec& spec)
+    leo2_context* context, const leopard::backend::Ops& backend_ops,
+    const BenchmarkSpec& spec)
 {
     typedef ExactCodec<Ops> Codec;
     const unsigned repeats = 7;
@@ -1416,7 +1882,7 @@ static BenchmarkResult BenchmarkTyped(
     for (unsigned sample = 0; sample < repeats; ++sample)
     {
         Clock::time_point begin = Clock::now();
-        Codec* exact = new Codec(spec.k, spec.r);
+        Codec* exact = new Codec(backend_ops, spec.k, spec.r);
         Clock::time_point end = Clock::now();
         result.exact_setup_samples.push_back(
             std::chrono::duration<double, std::micro>(end - begin).count());
@@ -1435,7 +1901,7 @@ static BenchmarkResult BenchmarkTyped(
     result.exact_setup = Summarize(result.exact_setup_samples);
     result.padded_setup = Summarize(result.padded_setup_samples);
 
-    Codec exact(spec.k, spec.r);
+    Codec exact(backend_ops, spec.k, spec.r);
     leo2_codec* padded = NULL;
     Require(leo2_codec_create(context, spec.k, spec.r,
         LEO2_PROFILE_LOW_V1, spec.padded_field, NULL, &padded),
@@ -1610,7 +2076,8 @@ static void WriteSamples(std::ostream& output, const std::vector<double>& sample
 
 static void WriteJson(
     const std::string& path, const std::string& requested_backend,
-    leo2_backend runtime_backend, const Correctness& correctness,
+    leo2_backend runtime_backend, leo2_backend exact_byte_backend,
+    const Correctness& correctness,
     const std::vector<BenchmarkResult>& benchmarks,
     bool production_profile_rejected, const char* timing_scope)
 {
@@ -1632,6 +2099,8 @@ static void WriteJson(
            << "  \"timing_scope\":\"" << timing_scope << "\",\n"
            << "  \"requested_backend\":\"" << requested_backend << "\",\n"
            << "  \"runtime_backend\":\"" << BackendName(runtime_backend) << "\",\n"
+           << "  \"exact_byte_backend\":\""
+           << BackendName(exact_byte_backend) << "\",\n"
            << "  \"affinity\":[";
     for (size_t i = 0; i < affinity.size(); ++i)
     {
@@ -1701,6 +2170,26 @@ static void WriteJson(
            << "    \"decode_read_only_input_alias_symbol_comparisons\":"
            << correctness.decode_read_only_input_alias_symbol_comparisons
            << ",\n"
+           << "    \"detached_plan_executions\":"
+           << correctness.detached_plan_executions << ",\n"
+           << "    \"detached_plan_symbol_comparisons\":"
+           << correctness.detached_plan_symbol_comparisons << ",\n"
+           << "    \"concurrent_backend_contexts\":"
+           << correctness.concurrent_backend_contexts << ",\n"
+           << "    \"concurrent_backend_executions\":"
+           << correctness.concurrent_backend_executions << ",\n"
+           << "    \"concurrent_backend_trace_calls\":"
+           << correctness.concurrent_backend_trace_calls << ",\n"
+           << "    \"concurrent_wire_digest_comparisons\":"
+           << correctness.concurrent_wire_digest_comparisons << ",\n"
+           << "    \"exhaustive_small_plans\":"
+           << correctness.exhaustive_small_plans << ",\n"
+           << "    \"exhaustive_small_executions\":"
+           << correctness.exhaustive_small_executions << ",\n"
+           << "    \"exhaustive_small_symbol_comparisons\":"
+           << correctness.exhaustive_small_symbol_comparisons << ",\n"
+           << "    \"malformed_plan_rejections\":"
+           << correctness.malformed_plan_rejections << ",\n"
            << "    \"hot_path_allocations\":"
            << correctness.hot_path_allocations << ",\n"
            << "    \"digest_fnv64\":\"0x" << std::hex
@@ -1784,13 +2273,24 @@ int main(int argc, char** argv)
         }
         leo2_context_options options = {};
         options.struct_size = sizeof(options);
+        const std::string requested(argv[2]);
+        const leo2_backend requested_backend = ParseBackend(requested);
+        options.backend = static_cast<uint32_t>(requested_backend);
         options.thread_count = 1;
         leo2_context* context = NULL;
         Require(leo2_context_create(&options, &context), "C7 context create");
         const leo2_backend runtime = leo2_context_backend(context);
-        const std::string requested(argv[2]);
         if (requested != "auto" && requested != BackendName(runtime))
             Fail("runtime backend differs from requested build label");
+        leopard::backend::QualificationStatus qualification =
+            leopard::backend::QualificationAvailable;
+        const leopard::backend::Ops* backend_ops =
+            leopard::backend::GetQualifiedOps(
+                requested_backend, &qualification);
+        if (!backend_ops)
+            Fail("exact-low byte backend did not qualify");
+        if (runtime != LEO2_BACKEND_NEON && backend_ops->kind != runtime)
+            Fail("exact-low byte backend differs from context backend");
 
         leo2_codec* unsupported = reinterpret_cast<leo2_codec*>(1);
         const leo2_result exact_result = leo2_codec_create(
@@ -1801,7 +2301,7 @@ int main(int argc, char** argv)
         if (!production_rejected)
             Fail("production constructor unexpectedly enabled C7 profile");
 
-        const Correctness correctness = RunCorrectness();
+        const Correctness correctness = RunCorrectness(*backend_ops);
         std::vector<BenchmarkResult> benchmarks;
         if (!correctness_only && std::string(LEO2_C7_SANITIZER_MODE) == "none")
         {
@@ -1812,13 +2312,14 @@ int main(int argc, char** argv)
                           << specs.size() << '\n';
                 if (specs[i].exact_field == LEO2_FIELD_GF8)
                     benchmarks.push_back(BenchmarkTyped<FieldOps<uint8_t> >(
-                        context, specs[i]));
+                        context, *backend_ops, specs[i]));
                 else
                     benchmarks.push_back(BenchmarkTyped<FieldOps<uint16_t> >(
-                        context, specs[i]));
+                        context, *backend_ops, specs[i]));
             }
         }
-        WriteJson(argv[3], requested, runtime, correctness, benchmarks,
+        WriteJson(argv[3], requested, runtime, backend_ops->kind,
+                  correctness, benchmarks,
                   production_rejected,
                   correctness_only ? "none-correctness-only" :
                   (benchmark_smoke ? "non-authoritative-smoke" :
