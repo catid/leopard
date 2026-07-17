@@ -338,14 +338,16 @@ and applies its original exact 329 ASan / 87 UBSan archive proof.  Relabeling
 those bytes as v4 fails both the 348/86 member proof and the required separate
 tooling identity.
 
-All nested semantic comparisons are recursively type-strict.  JSON `false`
-does not satisfy an expected integer zero, `true` does not satisfy field or
-profile identifier one, and Boolean values are never accepted as numeric sample
-summaries.  Historical v3 evidence may represent an exact-zero MAD as integer
-`0` rather than recomputed floating-point `0.0`; that sole numeric-representation
-compatibility is retained.  Artifact sizes, normalization-token counts, build
-jobs, CPU identifiers, scratch sizes, and raw sample arrays also retain explicit
-type and range checks.  Mutation tests cover ordinary-build sanitizer zeros,
+All nested identity and accounting comparisons are recursively type-strict.
+JSON `false` does not satisfy an expected integer zero, `true` does not satisfy
+field or profile identifier one, and Boolean values are never accepted as
+numeric measurements.  Finite timing samples and their raw-derived summaries
+may use numerically equivalent JSON integer or floating-point syntax; this
+includes historical v3 evidence whose exact-zero MAD is serialized as integer
+`0` rather than floating-point `0.0`.  Artifact sizes, normalization-token
+counts, build jobs, CPU identifiers, scratch sizes, and all non-measurement
+fields retain explicit type and range checks.  Mutation tests cover
+ordinary-build sanitizer zeros,
 per-member counts, exact-field and profile identifiers, correctness zeros,
 affinity, sample summaries, A/B tooling records, and comparison scan counts.
 
