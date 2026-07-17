@@ -2675,6 +2675,49 @@ def _process_identity(
     return None if record is None else (pid, record[3])
 
 
+def _raw_direct_child_pids(parent: int) -> set[int]:
+    """Read Linux's authoritative direct-child list without helper reuse.
+
+    This deliberately does not call the normal procfs snapshot helpers.  It is
+    the fail-closed teardown path when a normal snapshot, identity lookup, or
+    pidfd operation has failed after Popen.  A child PID cannot be reused while
+    it remains an unreaped child of this process, so a PID read from this file
+    can safely be signalled before any wait operation for that PID.
+    """
+    require(type(parent) is int and parent > 0,
+            "invalid parent for Linux direct-child inspection")
+    path = f"/proc/{parent}/task/{parent}/children"
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | \
+        getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        raise EvidenceError(
+            f"cannot open Linux direct-child list for {parent}: {error}") from error
+    try:
+        data = os.read(descriptor, MAX_LOG_BYTES + 1)
+        require(len(data) <= MAX_LOG_BYTES,
+                "Linux direct-child list exceeds the safety bound")
+        require(os.read(descriptor, 1) == b"",
+                "Linux direct-child list changed during bounded read")
+    except OSError as error:
+        raise EvidenceError(
+            f"cannot read Linux direct-child list for {parent}: {error}") from error
+    finally:
+        os.close(descriptor)
+    try:
+        fields = data.split()
+        require(all(field.isascii() and field.isdigit() for field in fields),
+                "Linux direct-child list contains an invalid PID")
+        children = {int(field) for field in fields}
+    except (OverflowError, ValueError) as error:
+        raise EvidenceError(
+            "Linux direct-child list contains an invalid PID") from error
+    require(all(0 < child < (1 << 31) for child in children),
+            "Linux direct-child list contains an out-of-range PID")
+    return children
+
+
 class LinuxDescendantContainment:
     """Own, kill, reap, and prove teardown of one complete Linux child tree.
 
@@ -2690,6 +2733,7 @@ class LinuxDescendantContainment:
         self.baseline_children: set[tuple[int, int]] = set()
         self.leader: tuple[int, int] | None = None
         self.known: set[tuple[int, int]] = set()
+        self.spawned_process: subprocess.Popen[bytes] | None = None
         self.active = False
         self.proven_empty = False
 
@@ -2829,57 +2873,144 @@ class LinuxDescendantContainment:
                     "contained child descendants remained after SIGKILL")
             time.sleep(min(0.01, remaining))
 
+    @staticmethod
+    def _kill_unreaped_direct_child(pid: int, parent: int) -> None:
+        """Kill one still-owned direct child without risking PID reuse."""
+        if pid not in _raw_direct_child_pids(parent):
+            return
+        descriptor: int | None = None
+        try:
+            try:
+                descriptor = os.pidfd_open(pid, 0)
+                signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+                return
+            except Exception:
+                # The PID is still listed as our direct, unreaped child.  The
+                # kernel therefore cannot reuse it before the following kill.
+                if pid not in _raw_direct_child_pids(parent):
+                    return
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+
+    def emergency_terminate_and_reap(
+            self, process: subprocess.Popen[bytes]) -> None:
+        """Independent descendant teardown for every post-Popen failure.
+
+        Killing and reaping the exact Popen leader causes every descendant to
+        be adopted by this temporary subreaper.  We then kill only PIDs that
+        Linux reports as our direct, unreaped children.  Repeating that step
+        walks arbitrary fork depth and also reaches descendants that changed
+        process group or session.  No process is signalled after it is reaped.
+        """
+        require(self.active and process is self.spawned_process and
+                process.pid > 0 and not self.baseline_children,
+                "emergency child teardown lacks exclusive child ownership")
+        deadline = time.monotonic() + CHILD_REAP_TIMEOUT_SECONDS
+
+        while process.returncode is None:
+            self._kill_unreaped_direct_child(process.pid, self.runner_pid)
+            remaining = deadline - time.monotonic()
+            require(remaining > 0,
+                    "spawned process remained after emergency SIGKILL")
+            try:
+                process.wait(timeout=max(0.001, min(0.05, remaining)))
+            except subprocess.TimeoutExpired:
+                continue
+            except ChildProcessError as error:
+                raise EvidenceError(
+                    "cannot reap the exact spawned process") from error
+
+        empty_scans = 0
+        while True:
+            children = _raw_direct_child_pids(self.runner_pid)
+            require(process.pid not in children,
+                    "reaped spawned process remains in the direct-child list")
+            for pid in sorted(children):
+                self._kill_unreaped_direct_child(pid, self.runner_pid)
+            for pid in sorted(children):
+                try:
+                    os.waitpid(pid, os.WNOHANG)
+                except (ChildProcessError, ProcessLookupError):
+                    pass
+                except OSError as error:
+                    raise EvidenceError(
+                        f"cannot emergency-reap contained child {pid}: {error}") from error
+
+            live = _raw_direct_child_pids(self.runner_pid)
+            if not live:
+                empty_scans += 1
+                if empty_scans >= 2:
+                    self.proven_empty = True
+                    return
+            else:
+                empty_scans = 0
+            remaining = deadline - time.monotonic()
+            require(remaining > 0,
+                    "contained descendants remained after emergency SIGKILL")
+            time.sleep(min(0.01, remaining))
+
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        del exc, tb
+        del exc_type, exc, tb
         if not self.active:
             return
-        if self.leader is not None:
-            if not self.proven_empty:
-                # Preserve the teardown error and retain subreaper ownership;
-                # restoring it could orphan an unproved descendant to init.
-                require(exc_type is not None,
-                        "child descendant containment closed without teardown proof")
-                return
-        else:
-            snapshot = _proc_process_snapshot()
-            if (self._direct_children(snapshot, self.runner_pid) !=
-                    self.baseline_children):
-                require(exc_type is not None,
-                        "unattached child appeared during descendant containment")
-                return
+        cleanup_error: BaseException | None = None
+        if self.spawned_process is not None and not self.proven_empty:
+            try:
+                self.emergency_terminate_and_reap(self.spawned_process)
+            except BaseException as error:
+                cleanup_error = error
         require(self.previous_subreaper is not None,
                 "previous child-subreaper state was lost")
         previous = self.previous_subreaper
-        self.active = False
-        self.previous_subreaper = None
-        _set_child_subreaper(previous)
+        try:
+            _set_child_subreaper(previous)
+        finally:
+            self.active = False
+            self.previous_subreaper = None
+        if cleanup_error is not None:
+            raise EvidenceError(
+                f"emergency child teardown failed: {cleanup_error}") from cleanup_error
+        require(self.proven_empty or self.spawned_process is None,
+                "child descendant containment closed without teardown proof")
 
 
 def _kill_child_tree_and_reap(
         process: subprocess.Popen[bytes],
         containment: LinuxDescendantContainment) -> None:
     """Kill and reap the isolated child plus descendants outside its PGID."""
-    containment.terminate_and_reap(process)
+    if containment.leader is None:
+        containment.emergency_terminate_and_reap(process)
+        return
+    try:
+        containment.terminate_and_reap(process)
+    except BaseException as error:
+        try:
+            containment.emergency_terminate_and_reap(process)
+        except BaseException as fallback_error:
+            raise EvidenceError(
+                "normal and emergency child teardown both failed: "
+                f"normal={error}; emergency={fallback_error}") from fallback_error
+        raise EvidenceError(
+            f"normal child teardown failed after safe emergency cleanup: {error}") from error
 
 
 def _wait_isolated_child(
-        process: subprocess.Popen[bytes], timeout_seconds: float,
-        containment: LinuxDescendantContainment) -> tuple[int, bool]:
-    timed_out = False
+        process: subprocess.Popen[bytes], timeout_seconds: float) -> tuple[int, bool]:
     try:
-        try:
-            returncode = process.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            returncode = 124
-    finally:
-        _kill_child_tree_and_reap(process, containment)
-    return returncode, timed_out
+        return process.wait(timeout=timeout_seconds), False
+    except subprocess.TimeoutExpired:
+        return 124, True
 
 
 def run_child_bounded(command: Sequence[str], stdout_path: Path,
                       stderr_path: Path, timeout_seconds: float,
-                      environment: Mapping[str, str]) -> tuple[
+                      environment: Mapping[str, str], *,
+                      cwd: Path | None = None) -> tuple[
                           subprocess.CompletedProcess[bytes], bool, int, int]:
     """Run without PIPE accumulation; inherited RLIMIT_FSIZE bounds every output."""
     stdout_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2888,7 +3019,6 @@ def run_child_bounded(command: Sequence[str], stdout_path: Path,
     stdout_fd = os.open(stdout_path, flags, 0o600)
     stderr_fd: int | None = None
     process: subprocess.Popen[bytes] | None = None
-    cleanup_attempted = False
     started = time.monotonic_ns()
     timed_out = False
     try:
@@ -2897,12 +3027,16 @@ def run_child_bounded(command: Sequence[str], stdout_path: Path,
             try:
                 process = subprocess.Popen(
                     list(command), stdin=subprocess.DEVNULL, stdout=stdout_fd,
-                    stderr=stderr_fd, env=dict(environment), close_fds=True,
+                    stderr=stderr_fd, cwd=None if cwd is None else str(cwd),
+                    env=dict(environment), close_fds=True,
                     preexec_fn=_child_resource_limits, start_new_session=True)
+                # Record the exact Popen object before any fallible attachment
+                # validation.  __exit__ can therefore reap it even when attach
+                # or a later procfs/pidfd operation raises.
+                containment.spawned_process = process
                 containment.attach(process.pid)
-                cleanup_attempted = True
                 returncode, timed_out = _wait_isolated_child(
-                    process, timeout_seconds, containment)
+                    process, timeout_seconds)
                 os.fsync(stdout_fd)
                 os.fsync(stderr_fd)
                 ended = time.monotonic_ns()
@@ -2910,10 +3044,7 @@ def run_child_bounded(command: Sequence[str], stdout_path: Path,
                     list(command), returncode, stdout=b"", stderr=b"")
                 return completed, timed_out, started, ended
             finally:
-                if process is not None and not cleanup_attempted:
-                    if containment.leader is None:
-                        containment.attach(process.pid)
-                    cleanup_attempted = True
+                if process is not None:
                     _kill_child_tree_and_reap(process, containment)
     finally:
         if stderr_fd is not None:
@@ -2931,48 +3062,9 @@ def run_capture_bounded(
         stdout_path = root / "stdout.bin"
         stderr_path = root / "stderr.bin"
         retained_command = list(command)
-        if cwd is not None:
-            # Popen's cwd is needed for Git commands.  Use a tiny wrapper-free
-            # local implementation so the same file-backed capture policy holds.
-            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | \
-                getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-            stdout_fd = os.open(stdout_path, flags, 0o600)
-            stderr_fd = os.open(stderr_path, flags, 0o600)
-            process: subprocess.Popen[bytes] | None = None
-            cleanup_attempted = False
-            timed_out = False
-            try:
-                with LinuxDescendantContainment() as containment:
-                    try:
-                        process = subprocess.Popen(
-                            retained_command, cwd=str(cwd),
-                            stdin=subprocess.DEVNULL,
-                            stdout=stdout_fd, stderr=stderr_fd,
-                            env=dict(environment), close_fds=True,
-                            preexec_fn=_child_resource_limits,
-                            start_new_session=True)
-                        containment.attach(process.pid)
-                        cleanup_attempted = True
-                        returncode, timed_out = _wait_isolated_child(
-                            process, timeout_seconds, containment)
-                        os.fsync(stdout_fd)
-                        os.fsync(stderr_fd)
-                    finally:
-                        if process is not None and not cleanup_attempted:
-                            if containment.leader is None:
-                                containment.attach(process.pid)
-                            cleanup_attempted = True
-                            _kill_child_tree_and_reap(
-                                process, containment)
-            finally:
-                os.close(stderr_fd)
-                os.close(stdout_fd)
-            completed = subprocess.CompletedProcess(
-                retained_command, returncode, stdout=b"", stderr=b"")
-        else:
-            completed, timed_out, _started, _ended = run_child_bounded(
-                retained_command, stdout_path, stderr_path, timeout_seconds,
-                environment)
+        completed, timed_out, _started, _ended = run_child_bounded(
+            retained_command, stdout_path, stderr_path, timeout_seconds,
+            environment, cwd=cwd)
         stdout = read_bounded(stdout_path, MAX_LOG_BYTES)
         stderr = read_bounded(stderr_path, MAX_LOG_BYTES)
         return completed, stdout, stderr, timed_out

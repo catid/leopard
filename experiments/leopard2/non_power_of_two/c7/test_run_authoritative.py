@@ -6,15 +6,18 @@ from __future__ import annotations
 import argparse
 import copy
 import fcntl
+import gc
 import importlib.util
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import warnings
 from pathlib import Path
 from unittest import mock
 
@@ -403,13 +406,201 @@ class AuthoritativeRunnerTests(unittest.TestCase):
 
         process = mock.Mock(pid=123456)
         process.wait.side_effect = subprocess.TimeoutExpired(["fixture"], 0.1)
-        containment = mock.Mock()
-        containment.terminate_and_reap.side_effect = runner.EvidenceError(
-            "bounded reap proof failed")
-        with self.assertRaisesRegex(runner.EvidenceError, "bounded reap"):
-            runner._wait_isolated_child(process, 0.1, containment)
-        containment.terminate_and_reap.assert_called_once_with(process)
+        returncode, mock_timed_out = runner._wait_isolated_child(process, 0.1)
+        self.assertEqual(returncode, 124)
+        self.assertTrue(mock_timed_out)
         self.assertEqual(process.wait.call_args_list[0], mock.call(timeout=0.1))
+
+    def test_post_spawn_attach_failure_reaps_and_restores_both_call_paths(
+            self) -> None:
+        for index, cwd in enumerate((None, self.root)):
+            with self.subTest(cwd=cwd):
+                marker = self.root / f"attach-delayed-{index}"
+                child = (
+                    "import pathlib,sys,time\n"
+                    "time.sleep(.5)\n"
+                    "pathlib.Path(sys.argv[1]).write_text('escaped')\n"
+                )
+                subreaper_before = runner._get_child_subreaper()
+                with warnings.catch_warnings(record=True) as caught:
+                    warnings.simplefilter("always", ResourceWarning)
+                    with mock.patch.object(
+                            runner.LinuxDescendantContainment, "attach",
+                            side_effect=runner.EvidenceError(
+                                "synthetic post-spawn attach failure")), \
+                         self.assertRaisesRegex(
+                             runner.EvidenceError, "post-spawn attach"):
+                        if cwd is None:
+                            runner.run_child_bounded(
+                                [sys.executable, "-c", child, str(marker)],
+                                self.root / f"attach-{index}/stdout.bin",
+                                self.root / f"attach-{index}/stderr.bin",
+                                2.0, os.environ)
+                        else:
+                            runner.run_capture_bounded(
+                                [sys.executable, "-c", child, str(marker)],
+                                cwd=cwd, timeout_seconds=2.0,
+                                environment=os.environ)
+                    gc.collect()
+                self.assertFalse(any(
+                    item.category is ResourceWarning for item in caught), caught)
+                self.assertEqual(
+                    runner._get_child_subreaper(), subreaper_before)
+                self.assertEqual(
+                    runner._raw_direct_child_pids(os.getpid()), set())
+                time.sleep(.65)
+                self.assertFalse(marker.exists())
+
+    def test_post_spawn_teardown_failures_use_independent_safe_reap(self) -> None:
+        real_snapshot = runner._proc_process_snapshot
+        real_pidfd_signal = runner._linux_pidfd_signal
+
+        def fail_snapshot_after_preflight():
+            fail_snapshot_after_preflight.calls += 1
+            if fail_snapshot_after_preflight.calls == 1:
+                return real_snapshot()
+            raise runner.EvidenceError("synthetic post-spawn procfs failure")
+
+        fail_snapshot_after_preflight.calls = 0
+
+        def fail_pidfd_kill(descriptor: int, signal_number: int) -> None:
+            if signal_number == 0:
+                real_pidfd_signal(descriptor, signal_number)
+                return
+            raise runner.EvidenceError("synthetic pidfd signal failure")
+
+        injections = (
+            mock.patch.object(
+                runner.LinuxDescendantContainment, "_signal_identity",
+                side_effect=runner.EvidenceError(
+                    "synthetic identity signal failure")),
+            mock.patch.object(
+                runner, "_linux_pidfd_signal", side_effect=fail_pidfd_kill),
+            mock.patch.object(
+                runner, "_proc_process_snapshot",
+                side_effect=fail_snapshot_after_preflight),
+            mock.patch.object(
+                runner.LinuxDescendantContainment, "terminate_and_reap",
+                side_effect=runner.EvidenceError(
+                    "synthetic primary teardown failure")),
+        )
+        for index, injection in enumerate(injections):
+            with self.subTest(injection=index):
+                fail_snapshot_after_preflight.calls = 0
+                marker = self.root / f"teardown-delayed-{index}"
+                ready = self.root / f"teardown-ready-{index}"
+                child = (
+                    "import os,pathlib,sys,time\n"
+                    "pid=os.fork()\n"
+                    "if pid == 0:\n"
+                    " os.setsid()\n"
+                    " daemon=os.fork()\n"
+                    " if daemon != 0: os._exit(0)\n"
+                    " pathlib.Path(sys.argv[2]).write_text('ready')\n"
+                    " time.sleep(.6)\n"
+                    " pathlib.Path(sys.argv[1]).write_text('escaped')\n"
+                    " os._exit(0)\n"
+                    "deadline=time.monotonic()+2\n"
+                    "while not os.path.exists(sys.argv[2]) and "
+                    "time.monotonic()<deadline: time.sleep(.005)\n"
+                    "time.sleep(10)\n"
+                )
+                subreaper_before = runner._get_child_subreaper()
+                with warnings.catch_warnings(record=True) as caught:
+                    warnings.simplefilter("always", ResourceWarning)
+                    with injection, self.assertRaisesRegex(
+                            runner.EvidenceError,
+                            "safe emergency cleanup"):
+                        runner.run_child_bounded(
+                            [sys.executable, "-c", child,
+                             str(marker), str(ready)],
+                            self.root / f"teardown-{index}/stdout.bin",
+                            self.root / f"teardown-{index}/stderr.bin",
+                            .3, os.environ)
+                    gc.collect()
+                self.assertEqual(ready.read_text(encoding="utf-8"), "ready")
+                self.assertFalse(any(
+                    item.category is ResourceWarning for item in caught), caught)
+                self.assertEqual(
+                    runner._get_child_subreaper(), subreaper_before)
+                self.assertEqual(
+                    runner._raw_direct_child_pids(os.getpid()), set())
+                time.sleep(.75)
+                self.assertFalse(marker.exists())
+
+    def test_emergency_reap_does_not_signal_disappeared_or_unrelated_pid(
+            self) -> None:
+        with mock.patch.object(
+                runner, "_raw_direct_child_pids",
+                side_effect=({456789}, set())) as children, \
+             mock.patch.object(
+                 runner.os, "pidfd_open", side_effect=OSError("gone")), \
+             mock.patch.object(runner.os, "kill") as kill:
+            runner.LinuxDescendantContainment._kill_unreaped_direct_child(
+                456789, os.getpid())
+        self.assertEqual(children.call_count, 2)
+        kill.assert_not_called()
+
+        with mock.patch.object(
+                runner, "_raw_direct_child_pids", return_value={654321}), \
+             mock.patch.object(runner.os, "pidfd_open") as pidfd_open, \
+             mock.patch.object(runner.os, "kill") as kill:
+            runner.LinuxDescendantContainment._kill_unreaped_direct_child(
+                456789, os.getpid())
+        pidfd_open.assert_not_called()
+        kill.assert_not_called()
+
+    def test_post_spawn_failure_leaves_unrelated_same_uid_process_alive(
+            self) -> None:
+        pid_path = self.root / "unrelated.pid"
+        marker = self.root / "unrelated-alive"
+        helper = (
+            "import os,pathlib,sys,time\n"
+            "pid=os.fork()\n"
+            "if pid != 0:\n"
+            " pathlib.Path(sys.argv[1]).write_text(str(pid))\n"
+            " os._exit(0)\n"
+            "os.setsid()\n"
+            "time.sleep(.7)\n"
+            "pathlib.Path(sys.argv[2]).write_text('alive')\n"
+            "time.sleep(10)\n"
+        )
+        launcher = subprocess.Popen(
+            [sys.executable, "-c", helper, str(pid_path), str(marker)],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, close_fds=True)
+        self.assertEqual(launcher.wait(timeout=2.0), 0)
+        unrelated_pid = int(pid_path.read_text(encoding="utf-8"))
+        unrelated_pidfd = os.pidfd_open(unrelated_pid, 0)
+        try:
+            self.assertEqual(
+                runner._raw_direct_child_pids(os.getpid()), set())
+            delayed = self.root / "contained-delayed"
+            child = (
+                "import pathlib,sys,time\n"
+                "time.sleep(.5)\n"
+                "pathlib.Path(sys.argv[1]).write_text('escaped')\n"
+            )
+            with mock.patch.object(
+                    runner.LinuxDescendantContainment, "attach",
+                    side_effect=runner.EvidenceError(
+                        "synthetic post-spawn attach failure")), \
+                 self.assertRaises(runner.EvidenceError):
+                runner.run_child_bounded(
+                    [sys.executable, "-c", child, str(delayed)],
+                    self.root / "unrelated-check/stdout.bin",
+                    self.root / "unrelated-check/stderr.bin",
+                    2.0, os.environ)
+            time.sleep(.85)
+            self.assertEqual(marker.read_text(encoding="utf-8"), "alive")
+            self.assertFalse(delayed.exists())
+            signal.pidfd_send_signal(unrelated_pidfd, 0)
+        finally:
+            try:
+                signal.pidfd_send_signal(unrelated_pidfd, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            os.close(unrelated_pidfd)
 
     def test_descendant_containment_fails_closed_before_spawn_when_unavailable(
             self) -> None:

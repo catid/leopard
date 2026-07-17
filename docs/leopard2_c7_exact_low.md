@@ -612,6 +612,19 @@ teardown interval before publication.  Missing Linux `prctl`, pidfd, or procfs
 support, pre-existing child processes, or an unproved reap fails closed before
 evidence can be accepted.
 
+The runner records the exact `Popen` child in the containment object before its
+first fallible post-spawn identity check.  If attachment, the normal procfs
+walk, pidfd signalling, or normal teardown fails, an independent teardown path
+kills and reaps that still-unreaped direct child, then repeatedly reads Linux's
+direct-child list while subreaper ownership is retained.  Each newly adopted
+direct child is killed before it is waited for, so its PID cannot be reused;
+deeper descendants are adopted and handled on subsequent passes.  This reaches
+`setsid()` and double-fork escapees without signalling a PID that is not an
+owned, unreaped child.  The caller's previous subreaper state is restored only
+after cleanup is attempted, and any use of this recovery path rejects the run
+even when cleanup succeeds.  File-backed capture with and without `cwd` uses
+this one implementation rather than two divergent lifecycle paths.
+
 The `/proc/stat` check is deliberately only a coarse rejection gate.  Non-idle
 jiffies on the benchmark CPU prove that some work occurred, not that the child
 caused that work, and zero non-idle jiffies on the sibling cannot exclude work
