@@ -1980,6 +1980,22 @@ def validate_matrix_compiler(compiler, label):
             compiler["version_sha256"], label + " compiler identity")
 
 
+def compiler_version_signature(version):
+    """Remove only an argv[0]-dependent GCC driver label.
+
+    GCC prints the invoked driver name before the parenthesized package
+    identity.  CMake records the resolved executable while a matrix runner may
+    have invoked the same binary through cc/c++.  The executable basename and
+    binary digest are checked separately, so retaining the package/version and
+    all following lines is the stable semantic comparison.
+    """
+    lines = version.strip().splitlines()
+    _, marker, suffix = lines[0].partition(" (")
+    if marker:
+        lines[0] = "(" + suffix
+    return "\n".join(lines)
+
+
 def validate_matrix_command(command, label, extra_keys=()):
     keys = {"argv", "cwd", "label", "returncode", "stderr_log",
             "stdout_log", "timed_out", "stderr_sha256", "stdout_sha256",
@@ -2533,10 +2549,12 @@ def validate_manifest(manifest_path, repo, raw_bundle_path=None,
     matrix_cxx = matrix_document["compiler"]
     require(Path(matrix_cc["executable"]).name == candidate_cc["basename"] and
             matrix_cc["binary_sha256"] == candidate_cc["binary_sha256"] and
-            matrix_cc["version"].strip() == candidate_cc["version"].strip() and
+            compiler_version_signature(matrix_cc["version"]) ==
+            compiler_version_signature(candidate_cc["version"]) and
             Path(matrix_cxx["executable"]).name == candidate_cxx["basename"] and
             matrix_cxx["binary_sha256"] == candidate_cxx["binary_sha256"] and
-            matrix_cxx["version"].strip() == candidate_cxx["version"].strip(),
+            compiler_version_signature(matrix_cxx["version"]) ==
+            compiler_version_signature(candidate_cxx["version"]),
             "backend matrix/C and C++ compiler build identity mismatch")
     require(matrix_document["source_fingerprint"]["digest"] ==
             provenance["matrix"]["source_fingerprint"],
