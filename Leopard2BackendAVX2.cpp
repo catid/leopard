@@ -827,7 +827,13 @@ static void AVX2FF8FFTButterfly4(
         AVX2FF8Butterfly2<false>(value2, value3, log23, byte_count);
 }
 
-static void AVX2FF16MultiplyAddPair(
+#if defined(_MSC_VER)
+#define LEO2_AVX2_FORCE_INLINE __forceinline
+#else
+#define LEO2_AVX2_FORCE_INLINE inline __attribute__((always_inline))
+#endif
+
+static LEO2_AVX2_FORCE_INLINE void AVX2FF16MultiplyAddPair(
     __m256i& destination_low,
     __m256i& destination_high,
     __m256i source_low,
@@ -908,10 +914,10 @@ static void AVX2FF16Butterfly4(
     uint64_t byte_count)
 {
     static const uint16_t kZeroSkew = 65535;
-    // The fused GF16 kernel wins for one exact 64-byte symbol tile.  Larger
-    // shards put enough table state under register pressure that the regular
-    // two-way schedule is faster on the measured AVX2 target.
-    if (byte_count != 64)
+    // Keep small working sets fused.  This also covers public tails such as
+    // 66 bytes, which staging rounds to 128 bytes.  Larger shards use the
+    // split schedule to bound register pressure and table residency.
+    if (byte_count < 64 || byte_count > 128)
     {
         AVX2FF16Butterfly4Split<Inverse>(
             value0, value1, value2, value3,
@@ -1016,6 +1022,8 @@ static void AVX2FF16IFFTButterfly4(
     AVX2FF16Butterfly4<true>(value0, value1, value2, value3,
         log01, log23, log02, byte_count);
 }
+
+#undef LEO2_AVX2_FORCE_INLINE
 
 static void AVX2FF16FFTButterfly4(
     void* value0, void* value1, void* value2, void* value3,

@@ -938,10 +938,10 @@ static void SSSE3FF16Butterfly4(
     uint64_t byte_count)
 {
     static const uint16_t kZeroSkew = 65535;
-    // The fused GF16 kernel wins for one exact 64-byte symbol tile.  Larger
-    // shards put enough table state under register pressure that the regular
-    // two-way schedule is faster on the measured SSSE3/AVX2 target family.
-    if (byte_count != 64)
+    // Keep small working sets fused.  This also covers public tails such as
+    // 66 bytes, which staging rounds to 128 bytes.  Larger shards use the
+    // split schedule to bound register pressure and table residency.
+    if (byte_count < 64 || byte_count > 128)
     {
         SSSE3FF16Butterfly4Split<Inverse>(
             value0, value1, value2, value3,
