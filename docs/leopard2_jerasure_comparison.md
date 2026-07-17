@@ -101,10 +101,23 @@ match across the two different codes.
 Ambient loader, allocator, OpenMP, sanitizer, math-runtime, and
 `GF_COMPLETE_*` dispatch controls are rejected before collection.  Children
 receive a fixed one-thread environment.  Authoritative timing additionally
-requires singleton CPU affinity, an explicitly reserved SMT sibling, an
-advisory two-CPU lease, ABBA provider order, four independent repetitions, two
-warmups, and nine retained timing samples.  Setup, execution, and setup
-amortized at the declared reuse count remain separate.
+requires an explicitly reserved SMT pair plus at least one additional CPU in
+the runner's launch affinity for housekeeping.  A pair-only launch affinity is
+rejected before collection.  The runner then requires singleton CPU affinity
+for every timed child and an explicitly reserved SMT sibling.  Both
+logical CPUs must mutually report exactly that two-CPU pair through Linux
+`thread_siblings_list`, with matching core and package identities.  The runner
+holds both its cache-local coordinator locks and the cross-comparator,
+pair-wide lock at
+`/run/user/UID/leopard2-cpu-leases/leopard2-cpu-pair-UID-A-B.lock`.  The
+per-user runtime root and child directory must be owned by that UID at mode
+0700; the canonical lease file must be an owned, single-link mode-0600 regular
+file.  Its device and inode are bound into evidence and the pathname, open
+descriptor, permissions, ownership, link count, and contents are rechecked
+before every accepted pair.  This closes the unlink-and-replace gap of a flat
+predictable advisory lock.  ABBA provider order, four independent repetitions,
+two warmups, and nine retained timing samples are still mandatory.  Setup,
+execution, and setup amortized at the declared reuse count remain separate.
 
 GF-Complete is compiled at portable compiler defaults.  The standalone build
 does not apply whole-archive `-msse*`, `-mavx*`, `-mpclmul`, or native-target
@@ -117,10 +130,32 @@ artifact, source/build/executable identities, cells, CPU pair, environment,
 and method.  Each child document is validated and atomically persisted.  A
 repetition becomes resumable only after both providers, their matching loss
 and workload identities, per-pair pre/post frequency snapshots, singleton
-affinity evidence, and host/lease record are atomically bound.  A partial
-two-provider repetition is discarded and rerun; a complete but tampered one
-fails closed.  Affinity is rechecked after every timing child.  Final and
-correctness JSON files also use atomic replacement.
+affinity evidence, exact SMT topology, lease inode, and CPU-activity audit are
+atomically bound.  Immediately around every two-child repetition the runner
+records the first eight non-double-counted fields for both logical CPUs from
+`/proc/stat`.  It accepts the pair only when the benchmark CPU accumulated
+non-idle work, the interval spans at least one sibling scheduler jiffy, and the
+reserved sibling accumulated zero non-idle jiffies.  Every delta and acceptance
+decision is recomputed during portable validation.  A failed isolation check
+is retained under the durable state's `failures/` directory and aborts rather
+than resampling.  A partial two-provider repetition is discarded and rerun; a
+complete but tampered one fails closed.  Affinity is rechecked after every
+timing child.  Final and correctness JSON files also use atomic replacement.
+
+These controls are cooperative and unprivileged.  They cannot stop root-owned
+tasks or kernel work from being scheduled on the pair, and `/proc/stat` has
+scheduler-jiffy resolution.  Observed non-idle sibling activity therefore
+fails the campaign instead of being described as OS-exclusive isolation.
+The additional allowed CPU supplies a place outside the reserved core for
+ambient housekeeping but does not move or constrain kernel work by itself.
+Activity on the benchmark logical CPU cannot be separated from the intended
+child's work by these counters, so an external host reservation and an idle
+machine remain required.  Version-2 timing artifacts carry these semantics.
+Retained version-1 checkpoints remain
+portable-validation compatible, and version-1 durable manifests remain
+structurally parseable for diagnostics, but version 1 does not acquire the new
+isolation guarantee retroactively and cannot be resumed as a version-2
+campaign.
 
 ## Correctness evidence lifecycle
 
@@ -172,7 +207,13 @@ build products:
     python3 tools/leopard2_jerasure_compare.py mutation-test \
       results/leopard2/jerasure/correctness.json
 
-Only after reserving one physical core and its SMT sibling may timing run:
+Only after reserving one physical core and its SMT sibling may timing run.  The
+runner must be launched with both logical CPUs and at least one additional
+housekeeping CPU in its allowed affinity.  On Linux, verify that
+`/run/user/$(id -u)` exists, is owned by the current UID, and has mode 0700; the
+runner creates its protected child lease directory itself:
+
+    stat -c '%u %a %n' /run/user/$(id -u)
 
     python3 tools/leopard2_jerasure_compare.py run \
       --cache .research/leopard2 \
@@ -189,9 +230,12 @@ Only after reserving one physical core and its SMT sibling may timing run:
       --cache .research/leopard2 --require-local-build-match
 
 The first checkpoint validation is portable and proves internal closure and
-derivation.  The second is the required trusted-cache replay: it re-hashes the
-local pinned sources, detached Leopard materialization, toolchain/build/link
-closure, and executables.  Both must pass before any timing value is cited.
+derivation, including mutual topology records, retained lease UID/path/inodes,
+every scheduler-counter delta, and the zero-non-idle-sibling decision; it does
+not require the collector's UID or lease inode to exist on the replay host.
+The second is the required trusted-cache replay: it re-hashes the local pinned
+sources, detached Leopard materialization, toolchain/build/link closure, and
+executables.  Both must pass before any timing value is cited.
 
 No performance number should be quoted from the correctness artifact or from
 an unpinned direct invocation of the standalone executable.
