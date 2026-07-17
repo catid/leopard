@@ -520,6 +520,12 @@ if(LEO2_BUILD_TESTS)
             COMMAND leopard2_initialization_threads_test explicit)
         add_test(NAME leopard2_initialization_threads_default
             COMMAND leopard2_initialization_threads_test default)
+        add_test(NAME leopard2_initialization_threads_gf16_high_codec
+            COMMAND leopard2_initialization_threads_test gf16-high-codec)
+        add_test(NAME leopard2_initialization_threads_gf16_high_plan
+            COMMAND leopard2_initialization_threads_test gf16-high-plan)
+        add_test(NAME leopard2_initialization_threads_gf16_low_plan
+            COMMAND leopard2_initialization_threads_test gf16-low-plan)
     endif()
 
     add_executable(leopard2_random_test

@@ -1953,16 +1953,17 @@ void PrepareDecodeWalshReference(
     for (unsigned i = 0; i < n; ++i)
         error_locations[i] = erasures[i] ? 1 : 0;
 
-    FWHT<true>(error_locations, kOrder, n);
+    // Locator construction is setup work.  Keep it serial so creating a codec
+    // or decode plan cannot instantiate a persistent OpenMP worker team.
+    FWHT<false>(error_locations, kOrder, n);
 
-#pragma omp parallel for
     for (int i = 0; i < (int)kOrder; ++i)
     {
         error_locations[i] = static_cast<ffe_t>(
             ((unsigned)error_locations[i] * (unsigned)LogWalsh[i]) % kModulus);
     }
 
-    FWHT<true>(error_locations, kOrder, kOrder);
+    FWHT<false>(error_locations, kOrder, kOrder);
     memcpy(locator_logs, error_locations, n * sizeof(ffe_t));
 }
 
@@ -1982,7 +1983,9 @@ static void PrepareDecodeWalshActiveCombined(
                 1 : 0;
     }
 
-    FWHT<true>(locator_logs, n, n);
+    // This routine is reached only while constructing immutable setup state.
+    // Execution-time transforms retain their parallel FWHT and byte kernels.
+    FWHT<false>(locator_logs, n, n);
 
     const ffe_t* transformed_kernel =
         n == kOrder ? LogWalsh : ActiveLogWalsh + n - 2;
@@ -1993,7 +1996,7 @@ static void PrepareDecodeWalshActiveCombined(
                 static_cast<unsigned>(transformed_kernel[i])) % kModulus);
     }
 
-    FWHT<true>(locator_logs, n, n);
+    FWHT<false>(locator_logs, n, n);
 }
 
 
@@ -2356,7 +2359,6 @@ void PrepareHighDecode(
     const ffe_t normalization_log = LchNormalizerLog(n - t);
 
     const unsigned block_count = n / t;
-#pragma omp parallel for
     for (int block = 1; block < (int)block_count; ++block)
     {
         const unsigned coordinate = (unsigned)block * t;
