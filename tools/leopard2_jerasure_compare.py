@@ -112,13 +112,137 @@ def sha256_file(path: Path) -> str:
 def canonical_digest(document: Mapping[str, Any]) -> str:
     payload = dict(document)
     payload.pop("artifact_sha256", None)
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def mapping_digest(document: Mapping[str, Any]) -> str:
-    encoded = json.dumps(document, sort_keys=True, separators=(",", ":"))
+    encoded = json.dumps(
+        document, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def strict_json_loads(text: str, label: str) -> Any:
+    def object_pairs(pairs: Sequence[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ComparisonError(f"{label} has duplicate key {key!r}")
+            result[key] = value
+        return result
+
+    def parse_float(value: str) -> float:
+        parsed = float(value)
+        if not math.isfinite(parsed):
+            raise ComparisonError(f"{label} has non-finite float {value!r}")
+        return parsed
+
+    def parse_constant(value: str) -> Any:
+        raise ComparisonError(f"{label} has forbidden JSON constant {value!r}")
+
+    try:
+        return json.loads(
+            text, object_pairs_hook=object_pairs, parse_float=parse_float,
+            parse_constant=parse_constant)
+    except (json.JSONDecodeError, ValueError, OverflowError) as error:
+        raise ComparisonError(f"invalid {label}: {error}") from error
+
+
+def strict_json_load(path: Path, label: str) -> Any:
+    try:
+        return strict_json_loads(path.read_text(encoding="utf-8"), label)
+    except (OSError, UnicodeError) as error:
+        raise ComparisonError(f"cannot read {label}: {error}") from error
+
+
+def require_int(
+        value: Any, label: str, minimum: int | None = None,
+        maximum: int | None = None) -> int:
+    if type(value) is not int:  # bool must never stand in for a JSON integer.
+        raise ComparisonError(f"{label} is not an integer")
+    if minimum is not None and value < minimum:
+        raise ComparisonError(f"{label} is below {minimum}")
+    if maximum is not None and value > maximum:
+        raise ComparisonError(f"{label} exceeds {maximum}")
+    return value
+
+
+def exact_json_equal(observed: Any, expected: Any) -> bool:
+    """Compare JSON values without Python's bool/int equality aliasing."""
+    if isinstance(expected, Mapping):
+        return (isinstance(observed, Mapping) and
+                set(observed) == set(expected) and
+                all(exact_json_equal(observed[key], expected[key])
+                    for key in expected))
+    if isinstance(expected, list):
+        return (type(observed) is list and len(observed) == len(expected) and
+                all(exact_json_equal(left, right)
+                    for left, right in zip(observed, expected)))
+    return type(observed) is type(expected) and observed == expected
+
+
+def require_exact_json_value(observed: Any, expected: Any, label: str) -> None:
+    if not exact_json_equal(observed, expected):
+        raise ComparisonError(f"{label} changed or has an ambiguous JSON type")
+
+
+def validate_integer_list(
+        value: Any, label: str, minimum: int = 0,
+        maximum: int | None = None) -> list[int]:
+    if not isinstance(value, list):
+        raise ComparisonError(f"{label} is not a list")
+    for index, item in enumerate(value):
+        require_int(item, f"{label}[{index}]", minimum, maximum)
+    return value
+
+
+def validate_cell_integer_types(cell: Mapping[str, Any], label: str) -> None:
+    require_exact_keys(cell, {
+        "K", "R", "profile", "shard_bytes", "loss_count", "batch", "reuse", "seed"},
+        label)
+    for name in ("K", "R", "shard_bytes", "batch", "reuse"):
+        require_int(cell.get(name), f"{label}.{name}", 1)
+    for name in ("loss_count", "seed"):
+        require_int(cell.get(name), f"{label}.{name}", 0)
+    if cell.get("profile") not in ("auto", "high", "legacy_high_v1", "low", "low_v1"):
+        raise ComparisonError(f"{label}.profile is invalid")
+
+
+def validate_child_integer_types(
+        document: Mapping[str, Any], label: str,
+        leopard: bool = False) -> None:
+    if not isinstance(document, Mapping):
+        raise ComparisonError(f"{label} is not an object")
+    parameters = document.get("parameters", {})
+    if not isinstance(parameters, Mapping):
+        raise ComparisonError(f"{label} parameters are missing")
+    for name in ("K", "R", "shard_bytes", "batch", "reuse", "iterations",
+                 "thread_count"):
+        require_int(parameters.get(name), f"{label} parameters.{name}", 1)
+    for name in ("loss_count", "warmup", "seed"):
+        require_int(parameters.get(name), f"{label} parameters.{name}", 0)
+    validate_integer_list(
+        parameters.get("missing_original_indices"),
+        f"{label} missing-original indices", 0,
+        require_int(parameters.get("K"), f"{label} parameters.K", 1) - 1)
+    if leopard:
+        for name in ("force_generic_decode", "force_specialized_decode",
+                     "skip_legacy", "retain_samples"):
+            if name in parameters and type(parameters[name]) is not bool:
+                raise ComparisonError(f"{label} parameters.{name} is not Boolean")
+        resolved = document.get("resolved", {})
+        if not isinstance(resolved, Mapping):
+            raise ComparisonError(f"{label} resolved identity is not an object")
+        for name in ("thread_count", "parent_count", "padded_side"):
+            require_int(resolved.get(name), f"{label} resolved.{name}", 1)
+    metrics = document.get("metrics", {})
+    if not isinstance(metrics, Mapping):
+        raise ComparisonError(f"{label} metrics are not an object")
+    amortized = metrics.get("decode_amortized_at_reuse", {})
+    if not isinstance(amortized, Mapping):
+        raise ComparisonError(f"{label} amortized metrics are not an object")
+    require_int(amortized.get("reuse_count"), f"{label} amortized reuse count", 1)
 
 
 def atomic_write_json(path: Path, document: Mapping[str, Any]) -> None:
@@ -127,7 +251,7 @@ def atomic_write_json(path: Path, document: Mapping[str, Any]) -> None:
     temporary = path.with_name(f".{path.name}.tmp.{os.getpid()}")
     try:
         with temporary.open("w", encoding="utf-8") as output:
-            json.dump(document, output, indent=2, sort_keys=True)
+            json.dump(document, output, indent=2, sort_keys=True, allow_nan=False)
             output.write("\n")
             output.flush()
             os.fsync(output.fileno())
@@ -546,11 +670,10 @@ def validate_source_record(
                 "headers": dict(headers), "clean_at_build": True}
     if any(value.get(key) != expected_value for key, expected_value in expected.items()):
         raise ComparisonError(f"{name} source identity changed")
+    if value.get("clean_at_build") is not True:
+        raise ComparisonError(f"{name} clean-build claim is not Boolean true")
     require_hex(value.get("tracked_tree_listing_sha256"), 64, f"{name} tree listing")
-    if (isinstance(value.get("tracked_entry_count"), bool) or
-            not isinstance(value.get("tracked_entry_count"), int) or
-            value["tracked_entry_count"] <= 0):
-        raise ComparisonError(f"{name} tracked entry count is invalid")
+    require_int(value.get("tracked_entry_count"), f"{name} tracked entry count", 1)
 
 
 def validate_compile_manifest(value: Mapping[str, Any], label: str) -> None:
@@ -567,15 +690,19 @@ def validate_compile_manifest(value: Mapping[str, Any], label: str) -> None:
                 {"directory", "file", "command"},
                 {"directory", "file", "command", "output"})):
             raise ComparisonError(f"{label} entry shape changed")
+        if any(not isinstance(item, str) or not item for item in entry.values()):
+            raise ComparisonError(f"{label} entry contains an invalid value")
         if not any(str(entry["file"]).startswith(prefix) for prefix in prefixes):
             raise ComparisonError(f"{label} source path is not closed")
         if any(prefix in str(text) for text in entry.values()
                for prefix in ("/home/", "/Users/")):
             raise ComparisonError(f"{label} retained checkout-specific path")
-    if value.get("entry_count") != len(entries):
+    entry_count = require_int(value.get("entry_count"), f"{label} entry count", 1)
+    if entry_count != len(entries):
         raise ComparisonError(f"{label} entry count changed")
     expected = hashlib.sha256(json.dumps(
-        entries, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        entries, sort_keys=True, separators=(",", ":"),
+        allow_nan=False).encode("utf-8")).hexdigest()
     if value.get("sha256") != expected:
         raise ComparisonError(f"{label} digest is not entry-derived")
 
@@ -601,10 +728,9 @@ def validate_build_identity(value: Mapping[str, Any]) -> None:
         require_hex(binding.get("tree"), 40, f"{name} build tree")
         require_hex(binding.get("tracked_tree_listing_sha256"), 64,
                     f"{name} build tree listing")
-        if (isinstance(binding.get("tracked_entry_count"), bool) or
-                not isinstance(binding.get("tracked_entry_count"), int) or
-                binding["tracked_entry_count"] <= 0):
-            raise ComparisonError(f"{name} build source entry count is invalid")
+        require_int(
+            binding.get("tracked_entry_count"),
+            f"{name} build source entry count", 1)
     recipe = value.get("recipe", {})
     require_exact_keys(recipe, {"adapter", "leopard2"}, "build recipe")
     tools = value.get("tools", {})
@@ -640,6 +766,10 @@ def validate_build_identity(value: Mapping[str, Any]) -> None:
     require_exact_keys(links, expected_links, "link commands")
     require_exact_keys(inputs, expected_links, "link input closures")
     for name in sorted(expected_links):
+        if not isinstance(links[name], Mapping) or not isinstance(inputs[name], Mapping):
+            raise ComparisonError(f"{name} link closure is not an object")
+        require_int(links[name].get("line_count"), f"{name} link line count", 1)
+        require_int(inputs[name].get("input_count"), f"{name} link input count", 1)
         common._validate_link_manifest(links[name], f"{name} link command")
         common._validate_link_input_manifest(inputs[name], f"{name} link inputs")
     static = value.get("static_inputs", {})
@@ -661,6 +791,11 @@ def validate_build_identity(value: Mapping[str, Any]) -> None:
     runtime = value.get("runtime_linkage", {})
     require_exact_keys(runtime, {"jerasure", "leopard2"}, "runtime linkage")
     for name, manifest in runtime.items():
+        if not isinstance(manifest, Mapping):
+            raise ComparisonError(f"{name} runtime linkage is not an object")
+        require_int(
+            manifest.get("dependency_count"),
+            f"{name} runtime dependency count", 1)
         common._validate_runtime_link_manifest(manifest, f"{name} runtime linkage")
 
 
@@ -683,6 +818,7 @@ def validate_portable_sources(value: Mapping[str, Any]) -> None:
     require_hex(leopard.get("commit"), 40, "Leopard commit")
     require_hex(leopard.get("tree"), 40, "Leopard tree")
     require_hex(leopard.get("tracked_tree_listing_sha256"), 64, "Leopard tree listing")
+    require_int(leopard.get("tracked_entry_count"), "Leopard tracked entry count", 1)
     if (leopard.get("clean_at_build") is not True or
             leopard.get("materialization") != "detached Git worktree" or
             leopard.get("detached_head") is not True):
@@ -699,8 +835,8 @@ def validate_portable_sources(value: Mapping[str, Any]) -> None:
 def load_provenance(cache: Path) -> dict[str, Any]:
     paths = build_paths(cache)
     try:
-        document = json.loads(paths["provenance"].read_text())
-    except (OSError, json.JSONDecodeError) as error:
+        document = strict_json_load(paths["provenance"], "Jerasure provenance")
+    except ComparisonError as error:
         raise ComparisonError(f"run bootstrap first: {error}") from error
     require_exact_keys(document, {
         "schema", "jerasure", "gf_complete", "leopard_source",
@@ -723,8 +859,15 @@ def load_provenance(cache: Path) -> dict[str, Any]:
         "maximum_leopard_parent": MAX_PARENT,
         "gf_complete_kernel_policy": GF_COMPLETE_KERNEL_POLICY,
         "wire_compatible": False}
-    if document.get("constraints") != expected_constraints:
-        raise ComparisonError("provenance constraints changed")
+    constraints = document.get("constraints", {})
+    for name in ("execution_threads", "region_multiple_bytes",
+                 "application_alignment_bytes", "maximum_bootstrap_jobs",
+                 "maximum_original_count", "maximum_recovery_count",
+                 "maximum_matrix_coefficients", "maximum_application_bytes",
+                 "maximum_leopard_parent"):
+        require_int(constraints.get(name), f"provenance constraints.{name}", 1)
+    require_exact_json_value(
+        constraints, expected_constraints, "provenance constraints")
     executables = document.get("executables", {})
     require_exact_keys(executables, {"jerasure", "leopard2"}, "executables")
     for provider, record in executables.items():
@@ -757,6 +900,7 @@ def ceil_pow2(value: int) -> int:
 
 
 def validate_cell_domain(cell: Mapping[str, Any]) -> None:
+    validate_cell_integer_types(cell, "comparison cell")
     k, r = int(cell["K"]), int(cell["R"])
     losses = int(cell.get("loss_count", 0))
     batch = int(cell.get("batch", 1))
@@ -921,6 +1065,7 @@ def validate_child_result(
         "Jerasure child")
     if document.get("schema") != CHILD_SCHEMA:
         raise ComparisonError("wrong Jerasure child schema")
+    validate_child_integer_types(document, "Jerasure child")
     provider = document.get("provider", {})
     require_exact_keys(provider, {
         "name", "source_commit", "source_tree", "header_sha256",
@@ -944,6 +1089,8 @@ def validate_child_result(
     }
     if any(provider.get(key) != value for key, value in required_provider.items()):
         raise ComparisonError("Jerasure provider identity changed")
+    if provider.get("wire_compatible") is not False:
+        raise ComparisonError("Jerasure wire-compatibility claim changed")
     if provider.get("gf_complete_simd_flags") != GF_COMPLETE_KERNEL_POLICY:
         raise ComparisonError("GF-Complete portable kernel policy changed")
     parameters = document.get("parameters", {})
@@ -951,8 +1098,8 @@ def validate_child_result(
     require_exact_keys(parameters, set(expected) | {"missing_original_indices"},
                        "Jerasure parameters")
     for key, value in expected.items():
-        if parameters.get(key) != value:
-            raise ComparisonError(f"Jerasure parameter {key} changed")
+        require_exact_json_value(
+            parameters.get(key), value, f"Jerasure parameter {key}")
     missing = parameters.get("missing_original_indices")
     expected_missing = expected_missing_indices(
         expected["K"], expected["loss_count"], expected["seed"])
@@ -963,6 +1110,7 @@ def validate_child_result(
     require_exact_keys(identity, {
         "leopard2_profile", "leopard2_parent", "leopard2_field",
         "jerasure_field_advantage_from_padding", "scope"}, "comparison identity")
+    require_int(identity.get("leopard2_parent"), "comparison parent", 1, MAX_PARENT)
     scope = ("public payload and repaired-output throughput only; field/basis "
              "representation, coordinates, generator matrices, and parity bytes differ")
     if (identity.get("leopard2_profile") != profile or
@@ -984,6 +1132,12 @@ def validate_child_result(
         "independent_scalar_parity_checked_bytes_per_validation",
         "independent_scalar_parity_total_bytes_per_validation",
         "independent_scalar_parity_validation_passes"}, "Jerasure correctness")
+    for name in (
+            "independent_systematic_vandermonde_coefficients_checked",
+            "independent_scalar_parity_checked_bytes_per_validation",
+            "independent_scalar_parity_total_bytes_per_validation",
+            "independent_scalar_parity_validation_passes"):
+        require_int(correctness.get(name), f"Jerasure correctness.{name}", 0)
     if (correctness.get("direct_source_round_trip") is not True or
             correctness.get("systematic_sources_immutable") is not True or
             correctness.get("independent_systematic_vandermonde_coefficients_checked") != k * r or
@@ -1021,8 +1175,13 @@ def validate_child_result(
         "decode_id_bytes": 0 if no_loss else k * 4,
     }
     require_exact_keys(memory, set(expected_memory), "Jerasure memory")
-    if any(memory.get(key) != value for key, value in expected_memory.items()):
-        raise ComparisonError("Jerasure memory/traffic semantics changed")
+    if memory.get("direct_application_buffers") is not True:
+        raise ComparisonError("Jerasure direct application-buffer claim changed")
+    for key, value in expected_memory.items():
+        if key != "direct_application_buffers":
+            require_int(memory.get(key), f"Jerasure memory.{key}", 0)
+        require_exact_json_value(
+            memory.get(key), value, f"Jerasure memory.{key}")
     metrics = document.get("metrics", {})
     require_exact_keys(metrics, {
         "codec_setup", "encode_execution", "decode_plan_setup",
@@ -1050,6 +1209,7 @@ def validate_child_result(
         "reuse_count", "derived_median_us_per_batch_call",
         "offered_received_GB_per_s", "repaired_output_GB_per_s"},
         "Jerasure amortized decode")
+    require_int(amortized.get("reuse_count"), "Jerasure amortized reuse count", 1)
     expected_us = (float(metrics["decode_execution"]["median_us_per_batch_call"]) +
                    float(metrics["decode_plan_setup"]["median_us"]) / expected["reuse"])
     if (amortized.get("reuse_count") != expected["reuse"] or
@@ -1154,7 +1314,7 @@ def run_correctness(cache: Path, count: int, workers: int, output: Path) -> dict
             completed = run_checked(command, env=environment, timeout=300)
             if completed.stdout or completed.stderr:
                 raise ComparisonError(f"correctness child {index} emitted output")
-            document = json.loads(result_path.read_text())
+            document = strict_json_load(result_path, f"correctness child {index}")
             validate_child_result(document, cell, 3, 0, "full")
             return {"case_index": index, "cell": cell,
                     "executable_sha256": provenance["executables"]["jerasure"]["sha256"],
@@ -1208,12 +1368,10 @@ def validate_correctness(
     if document["sources"]["build_identity"]["runtime_linkage"]["jerasure"].get(
             "executable_sha256") != executable_hash:
         raise ComparisonError("correctness executable differs from runtime closure")
-    count = document.get("case_count")
-    workers = document.get("worker_count")
-    if (isinstance(count, bool) or not isinstance(count, int) or count < 16 or count > 512 or
-            isinstance(workers, bool) or not isinstance(workers, int) or
-            workers < 1 or workers > 10):
-        raise ComparisonError("correctness campaign dimensions invalid")
+    count = require_int(document.get("case_count"), "correctness case count", 16, 512)
+    workers = require_int(document.get("worker_count"), "correctness worker count", 1, 10)
+    for name in ("no_loss_cases", "maximum_loss_cases", "gf16_cases"):
+        require_int(document.get(name), f"correctness {name}", 0, count)
     cells = correctness_cells(count)
     results = document.get("results")
     if not isinstance(results, list) or len(results) != count:
@@ -1222,7 +1380,12 @@ def validate_correctness(
         require_exact_keys(result, {
             "case_index", "cell", "executable_sha256", "document"},
             "correctness result")
-        if (result.get("case_index") != index or result.get("cell") != cell or
+        case_index = require_int(
+            result.get("case_index"), "correctness result case index", 0, count - 1)
+        validate_cell_integer_types(result.get("cell", {}),
+                                    f"correctness result cell {index}")
+        if (case_index != index or
+                not exact_json_equal(result.get("cell"), cell) or
                 result.get("executable_sha256") != executable_hash):
             raise ComparisonError("correctness result order/identity changed")
         validate_child_result(result["document"], cell, 3, 0, "full")
@@ -1232,8 +1395,10 @@ def validate_correctness(
             cell["loss_count"] == min(cell["K"], cell["R"]) for cell in cells),
         "gf16_cases": sum(resolved_identity(cell)[3] == "gf16" for cell in cells),
     }
-    if any(document.get(key) != value for key, value in derived.items()):
-        raise ComparisonError("correctness coverage counts are not case-derived")
+    for key, value in derived.items():
+        require_exact_json_value(
+            document.get(key), value,
+            f"correctness coverage count {key}")
     if document.get("artifact_sha256") != canonical_digest(document):
         raise ComparisonError("correctness artifact digest changed")
     if trusted_provenance is not None:
@@ -1246,6 +1411,8 @@ def validate_correctness(
 def validate_leopard_result(
         document: Mapping[str, Any], cell: Mapping[str, Any],
         iterations: int, warmup: int) -> list[int]:
+    validate_cell_domain(cell)
+    validate_child_integer_types(document, "Leopard2 child", leopard=True)
     try:
         return common.validate_leopard_result(document, cell, iterations, warmup)
     except common.ComparisonError as error:
@@ -1358,19 +1525,43 @@ def validate_host_metadata(
         "cpu_model_name", "cpu_family", "cpu_model", "cpu_stepping", "microcode",
         "platform", "uname", "python", "pinning", "parallelism_note"},
         "measurement host")
-    allowed = sorted(set(int(cpu) for cpu in original_allowed))
+    requested_cpu = require_int(requested_cpu, "expected requested CPU", 0)
+    reserved_cpu = require_int(reserved_cpu, "expected reserved CPU", 0)
+    if any(type(value) is not int or value < 0 for value in original_allowed):
+        raise ComparisonError("expected host allowed CPU set is invalid")
+    allowed = sorted(set(original_allowed))
+    observed_requested = require_int(
+        host.get("requested_cpu"), "measurement host requested CPU", 0)
+    observed_reserved = require_int(
+        host.get("reserved_idle_sibling_cpu"),
+        "measurement host reserved CPU", 0)
+    observed_allowed_count = require_int(
+        host.get("allowed_cpu_count"), "measurement host CPU count", 1)
     siblings = host.get("thread_siblings")
-    if (host.get("requested_cpu") != requested_cpu or
-            host.get("reserved_idle_sibling_cpu") != reserved_cpu or
-            host.get("allowed_cpus") != allowed or
-            host.get("allowed_cpu_count") != len(allowed) or
+    observed_allowed = host.get("allowed_cpus")
+    process_affinity = validate_integer_list(
+        host.get("process_affinity_during_run"),
+        "measurement process affinity")
+    child_affinity = validate_integer_list(
+        host.get("child_affinity_preflight"),
+        "measurement child affinity")
+    if (observed_requested != requested_cpu or
+            observed_reserved != reserved_cpu or
+            observed_allowed != allowed or
+            observed_allowed_count != len(allowed) or
             requested_cpu not in allowed or reserved_cpu not in allowed or
-            not isinstance(siblings, list) or requested_cpu not in siblings or
+            not isinstance(observed_allowed, list) or
+            any(type(value) is not int or value < 0
+                for value in observed_allowed) or
+            not isinstance(siblings, list) or
+            any(type(value) is not int or value < 0 for value in siblings) or
+            requested_cpu not in siblings or
             reserved_cpu not in siblings or
             not isinstance(host.get("thread_siblings_list"), str) or
             common.parse_cpu_list(host["thread_siblings_list"]) != siblings or
-            host.get("process_affinity_during_run") != [requested_cpu] or
-            host.get("child_affinity_preflight") != [requested_cpu] or
+            process_affinity != [requested_cpu] or
+            child_affinity != [requested_cpu] or
+            type(host.get("cpuinfo_processor")) is not int or
             host.get("cpuinfo_processor") != requested_cpu or
             host.get("pinning") !=
             "runner sched_setaffinity singleton; all children inherit" or
@@ -1379,8 +1570,13 @@ def validate_host_metadata(
             "correctness are capped at ten workers"):
         raise ComparisonError("measurement host affinity evidence is invalid")
     try:
+        lease = host.get("coordinator_lease", {})
+        if not isinstance(lease, Mapping):
+            raise ComparisonError("measurement coordinator lease is not an object")
+        validate_integer_list(
+            lease.get("cpus"), "measurement coordinator lease CPUs")
         common.validate_advisory_lease(
-            host.get("coordinator_lease", {}), requested_cpu, reserved_cpu)
+            lease, requested_cpu, reserved_cpu)
         common.validate_frequency_snapshot(host.get("current_frequency_pre", {}), "pre")
         common.validate_frequency_snapshot(host.get("current_frequency_post", {}), "post")
     except common.ComparisonError as error:
@@ -1451,8 +1647,44 @@ def validate_run_manifest(
         raise ComparisonError("wrong run-manifest schema")
     if document.get("artifact_sha256") != canonical_digest(document):
         raise ComparisonError("run-manifest digest changed")
-    if document != expected:
-        raise ComparisonError("durable run state is bound to a different exact run")
+    cpu = require_int(document.get("cpu"), "run manifest cpu", 0)
+    reserved = require_int(
+        document.get("reserved_idle_cpu"), "run manifest reserved CPU", 0)
+    if cpu == reserved:
+        raise ComparisonError("run manifest CPU pair is not distinct")
+    allowed = document.get("original_allowed_cpus")
+    if (not isinstance(allowed, list) or
+            any(type(value) is not int or value < 0 for value in allowed) or
+            allowed != sorted(set(allowed)) or cpu not in allowed or reserved not in allowed):
+        raise ComparisonError("run manifest allowed CPU identity is invalid")
+    method = document.get("method", {})
+    require_exact_keys(method, set(checkpoint_method()), "run manifest method")
+    for name in ("repetitions", "iterations_per_child", "warmups_per_child",
+                 "raw_samples_retained_per_metric", "region_contract_bytes",
+                 "alignment_bytes"):
+        require_int(method.get(name), f"run manifest method.{name}", 0)
+    cells = document.get("cells")
+    if not isinstance(cells, list):
+        raise ComparisonError("run manifest cells are not a list")
+    for index, cell in enumerate(cells):
+        validate_cell_integer_types(cell, f"run manifest cell {index}")
+    bounds = document.get("bounds", {})
+    require_exact_keys(bounds, {
+        "maximum_original_count", "maximum_recovery_count",
+        "maximum_matrix_coefficients", "maximum_application_bytes",
+        "maximum_leopard_parent", "gf_complete_kernel_policy"},
+        "run manifest bounds")
+    for name in ("maximum_original_count", "maximum_recovery_count",
+                 "maximum_matrix_coefficients", "maximum_application_bytes",
+                 "maximum_leopard_parent"):
+        require_int(bounds.get(name), f"run manifest bounds.{name}", 1)
+    binding = document.get("correctness_binding", {})
+    require_exact_keys(
+        binding, set(expected.get("correctness_binding", {})),
+        "run manifest correctness binding")
+    require_int(binding.get("case_count"), "run manifest correctness case count", 1)
+    require_exact_json_value(
+        document, expected, "durable run state exact-run binding")
 
 
 def state_directory(output: Path) -> Path:
@@ -1463,8 +1695,8 @@ def establish_run_manifest(state: Path, expected: Mapping[str, Any]) -> dict[str
     path = state / "manifest.json"
     if path.exists():
         try:
-            document = json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError) as error:
+            document = strict_json_load(path, "durable run manifest")
+        except ComparisonError as error:
             raise ComparisonError(f"invalid durable run manifest: {error}") from error
         validate_run_manifest(document, expected)
         return dict(document)
@@ -1500,11 +1732,27 @@ def validate_child_artifact(
         "schema", "manifest_sha256", "cell_index", "repetition", "order_index",
         "provider", "executable_sha256", "document", "artifact_sha256"},
         "durable child artifact")
+    artifact_cell = require_int(
+        artifact.get("cell_index"), "durable child cell index", 0,
+        len(CHECKPOINT_CELLS) - 1)
+    artifact_repetition = require_int(
+        artifact.get("repetition"), "durable child repetition", 0,
+        len(ABBA) - 1)
+    artifact_order = require_int(
+        artifact.get("order_index"), "durable child order index", 0, 1)
+    require_hex(artifact.get("manifest_sha256"), 64,
+                "durable child manifest digest")
+    require_hex(artifact.get("executable_sha256"), 64,
+                "durable child executable digest")
+    require_hex(artifact.get("artifact_sha256"), 64,
+                "durable child artifact digest")
+    if not isinstance(artifact.get("provider"), str):
+        raise ComparisonError("durable child provider is not text")
     if (artifact.get("schema") != CHILD_ARTIFACT_SCHEMA or
             artifact.get("manifest_sha256") != manifest_digest or
-            artifact.get("cell_index") != cell_index or
-            artifact.get("repetition") != repetition or
-            artifact.get("order_index") != order_index or
+            artifact_cell != cell_index or
+            artifact_repetition != repetition or
+            artifact_order != order_index or
             artifact.get("provider") != provider or
             artifact.get("executable_sha256") != executable_sha256 or
             artifact.get("artifact_sha256") != canonical_digest(artifact)):
@@ -1544,19 +1792,37 @@ def validate_group_artifacts(
             discard_partial_group(directory)
         raise FileNotFoundError("ABBA repetition is incomplete")
     try:
-        children = [json.loads(path.read_text()) for path in child_paths]
-        group = json.loads(group_path.read_text())
-    except (OSError, json.JSONDecodeError) as error:
+        children = [strict_json_load(path, "durable child artifact")
+                    for path in child_paths]
+        group = strict_json_load(group_path, "durable ABBA repetition")
+    except ComparisonError as error:
         raise ComparisonError(f"durable ABBA repetition is invalid: {error}") from error
     require_exact_keys(group, {
         "schema", "manifest_sha256", "cell_index", "repetition",
         "provider_order", "child_artifact_sha256", "host", "artifact_sha256"},
         "durable ABBA repetition")
-    manifest_digest = str(manifest["artifact_sha256"])
+    group_cell = require_int(
+        group.get("cell_index"), "durable ABBA cell index", 0,
+        len(CHECKPOINT_CELLS) - 1)
+    group_repetition = require_int(
+        group.get("repetition"), "durable ABBA repetition index", 0,
+        len(ABBA) - 1)
+    child_digests = group.get("child_artifact_sha256")
+    if (not isinstance(child_digests, list) or len(child_digests) != 2 or
+            any(not isinstance(value, str) for value in child_digests)):
+        raise ComparisonError("durable ABBA child digest list is invalid")
+    for index, digest in enumerate(child_digests):
+        require_hex(digest, 64, f"durable ABBA child digest {index}")
+    require_hex(group.get("manifest_sha256"), 64,
+                "durable ABBA manifest digest")
+    require_hex(group.get("artifact_sha256"), 64,
+                "durable ABBA artifact digest")
+    manifest_digest = require_hex(
+        manifest.get("artifact_sha256"), 64, "run manifest digest")
     if (group.get("schema") != GROUP_ARTIFACT_SCHEMA or
             group.get("manifest_sha256") != manifest_digest or
-            group.get("cell_index") != cell_index or
-            group.get("repetition") != repetition or
+            group_cell != cell_index or
+            group_repetition != repetition or
             group.get("provider_order") != list(order) or
             group.get("child_artifact_sha256") != [
                 child.get("artifact_sha256") for child in children] or
@@ -1582,7 +1848,10 @@ def validate_group_artifacts(
             if digests["jerasure"].get(key) != digests["leopard2"].get(key):
                 raise ComparisonError(f"provider workload digest mismatch: {key}")
     validate_host_metadata(
-        group["host"], int(manifest["cpu"]), int(manifest["reserved_idle_cpu"]),
+        group["host"],
+        require_int(manifest.get("cpu"), "run manifest CPU", 0),
+        require_int(manifest.get("reserved_idle_cpu"),
+                    "run manifest reserved CPU", 0),
         original_allowed)
     return results, dict(group["host"])
 
@@ -1618,26 +1887,33 @@ def validate_host_groups(value: Mapping[str, Any]) -> None:
     require_exact_keys(value, {
         "schema", "requested_cpu", "reserved_idle_sibling_cpu", "allowed_cpus",
         "allowed_cpu_count", "group_count", "groups"}, "checkpoint host groups")
-    cpu = value.get("requested_cpu")
-    reserved = value.get("reserved_idle_sibling_cpu")
+    cpu = require_int(value.get("requested_cpu"), "host-groups requested CPU", 0)
+    reserved = require_int(
+        value.get("reserved_idle_sibling_cpu"), "host-groups reserved CPU", 0)
+    allowed_count = require_int(
+        value.get("allowed_cpu_count"), "host-groups allowed CPU count", 1)
+    group_count = require_int(value.get("group_count"), "host-groups count", 0)
     allowed = value.get("allowed_cpus")
     groups = value.get("groups")
     if (value.get("schema") != HOST_GROUPS_SCHEMA or
-            isinstance(cpu, bool) or not isinstance(cpu, int) or
-            isinstance(reserved, bool) or not isinstance(reserved, int) or
             cpu == reserved or not isinstance(allowed, list) or
+            any(type(item) is not int or item < 0 for item in allowed) or
             allowed != sorted(set(allowed)) or cpu not in allowed or reserved not in allowed or
-            value.get("allowed_cpu_count") != len(allowed) or
+            allowed_count != len(allowed) or
             not isinstance(groups, list) or
-            value.get("group_count") != len(CHECKPOINT_CELLS) * len(ABBA) or
-            len(groups) != value.get("group_count")):
+            group_count != len(CHECKPOINT_CELLS) * len(ABBA) or
+            len(groups) != group_count):
         raise ComparisonError("checkpoint host-group identity is invalid")
     seen = set()
     observed_order = []
     for group in groups:
         require_exact_keys(group, {"cell_index", "repetition", "host"},
                            "checkpoint host group")
-        identity = (group.get("cell_index"), group.get("repetition"))
+        identity = (
+            require_int(group.get("cell_index"), "host-group cell index", 0,
+                        len(CHECKPOINT_CELLS) - 1),
+            require_int(group.get("repetition"), "host-group repetition", 0,
+                        len(ABBA) - 1))
         if (identity in seen or identity[0] not in range(len(CHECKPOINT_CELLS)) or
                 identity[1] not in range(len(ABBA))):
             raise ComparisonError("checkpoint host-group order/identity changed")
@@ -1660,7 +1936,7 @@ def run_checkpoint(
     if iterations != EVIDENCE_ITERATIONS or warmup != EVIDENCE_WARMUP:
         raise ComparisonError("authoritative timing requires 9 iterations and 2 warmups")
     provenance = load_provenance(cache)
-    correctness = json.loads(correctness_path.read_text())
+    correctness = strict_json_load(correctness_path, "correctness artifact")
     validate_correctness(correctness, trusted_provenance=provenance)
     if correctness.get("case_count") != AUTHORITATIVE_CORRECTNESS_CASES:
         raise ComparisonError("timing requires the authoritative 128-case correctness artifact")
@@ -1686,8 +1962,8 @@ def run_checkpoint(
     manifest = establish_run_manifest(durable_state, manifest_expected)
     if output.exists():
         try:
-            existing = json.loads(output.read_text())
-        except (OSError, json.JSONDecodeError) as error:
+            existing = strict_json_load(output, "existing checkpoint")
+        except ComparisonError as error:
             raise ComparisonError(f"existing checkpoint is invalid: {error}") from error
         validate_checkpoint(existing, correctness, trusted_provenance=provenance)
         host = existing["host"]
@@ -1705,11 +1981,12 @@ def run_checkpoint(
             if common.allowed_cpus() != {cpu}:
                 raise ComparisonError("runner failed to establish singleton affinity")
             probe = run_checked([
-                sys.executable, "-c", "import json,os;print(json.dumps(sorted(os.sched_getaffinity(0))))"],
+                sys.executable, "-c",
+                "import json,os;print(json.dumps(sorted(os.sched_getaffinity(0)),allow_nan=False))"],
                 env=environment, timeout=30)
             if probe.stderr:
                 raise ComparisonError("child-affinity preflight emitted stderr")
-            inherited = json.loads(probe.stdout)
+            inherited = strict_json_loads(probe.stdout, "child-affinity preflight")
             if inherited != [cpu]:
                 raise ComparisonError("timing child did not inherit singleton affinity")
             for cell_index, cell in enumerate(CHECKPOINT_CELLS):
@@ -1744,8 +2021,8 @@ def run_checkpoint(
                                 raise ComparisonError(
                                     f"{provider} emitted unexpected output")
                             try:
-                                document = json.loads(raw_path.read_text())
-                            except (OSError, json.JSONDecodeError) as error:
+                                document = strict_json_load(raw_path, f"{provider} timing JSON")
+                            except ComparisonError as error:
                                 raise ComparisonError(
                                     f"invalid {provider} timing JSON: {error}") from error
                             missing = (validate_child_result(
@@ -1810,7 +2087,8 @@ def run_checkpoint(
             post_provenance = load_provenance(cache)
             if post_provenance != provenance:
                 raise ComparisonError("source/build/executable provenance changed during timing")
-            post_correctness = json.loads(correctness_path.read_text())
+            post_correctness = strict_json_load(
+                correctness_path, "post-timing correctness artifact")
             if post_correctness != correctness:
                 raise ComparisonError("correctness artifact changed during timing")
         finally:
@@ -1851,23 +2129,36 @@ def validate_checkpoint(
     if document.get("schema") != SCHEMA:
         raise ComparisonError("wrong checkpoint schema")
     validate_portable_sources(document["sources"])
-    if document["sources"] != correctness["sources"]:
-        raise ComparisonError("checkpoint/correctness source identities differ")
-    if document.get("correctness_binding") != correctness_binding(correctness):
-        raise ComparisonError("checkpoint is not bound to supplied correctness artifact")
+    require_exact_json_value(
+        document["sources"], correctness["sources"],
+        "checkpoint/correctness source identities")
+    expected_binding = correctness_binding(correctness)
+    binding = document.get("correctness_binding", {})
+    require_exact_keys(binding, set(expected_binding), "checkpoint correctness binding")
+    require_int(binding.get("case_count"), "checkpoint correctness case count", 1)
+    require_exact_json_value(
+        binding, expected_binding,
+        "checkpoint binding to supplied correctness artifact")
     cells = document.get("cells")
+    if not isinstance(cells, list):
+        raise ComparisonError("checkpoint cells are not a list")
+    for index, cell in enumerate(cells):
+        validate_cell_integer_types(cell, f"checkpoint cell {index}")
     if cells != [dict(cell) for cell in CHECKPOINT_CELLS]:
         raise ComparisonError("checkpoint cells changed")
     method = document.get("method", {})
     require_exact_keys(method, set(checkpoint_method()), "checkpoint method")
-    if method != checkpoint_method():
-        raise ComparisonError("checkpoint method changed")
+    for name in ("repetitions", "iterations_per_child", "warmups_per_child",
+                 "raw_samples_retained_per_metric", "region_contract_bytes",
+                 "alignment_bytes"):
+        require_int(method.get(name), f"checkpoint method.{name}", 0)
+    require_exact_json_value(method, checkpoint_method(), "checkpoint method")
     if document.get("limitations") != checkpoint_limitations():
         raise ComparisonError("checkpoint limitations changed")
     validate_host_groups(document.get("host", {}))
     try:
         common.validate_child_environment_record(
-            document["child_environment"], int(document["host"]["requested_cpu"]))
+            document["child_environment"], document["host"]["requested_cpu"])
     except (common.ComparisonError, KeyError, TypeError, ValueError) as error:
         raise ComparisonError(f"invalid timing environment/host binding: {error}") from error
     executables = document.get("executables", {})
@@ -1893,9 +2184,11 @@ def validate_checkpoint(
         cell_index, repetition, order_index = (
             result["cell_index"], result["repetition"], result["order_index"])
         provider = result["provider"]
-        if (not isinstance(cell_index, int) or cell_index < 0 or
-                cell_index >= len(CHECKPOINT_CELLS) or repetition not in range(4) or
-                order_index not in range(2) or ABBA[repetition][order_index] != provider):
+        if (type(cell_index) is not int or cell_index < 0 or
+                cell_index >= len(CHECKPOINT_CELLS) or
+                type(repetition) is not int or repetition not in range(4) or
+                type(order_index) is not int or order_index not in range(2) or
+                ABBA[repetition][order_index] != provider):
             raise ComparisonError("timing result ABBA identity changed")
         identity = (cell_index, repetition, order_index, provider)
         if identity in seen:
@@ -1922,8 +2215,9 @@ def validate_checkpoint(
             if providers["jerasure"][1].get(key) != providers["leopard2"][1].get(key):
                 raise ComparisonError(f"paired workload digest differs: {key}")
     expected_aggregate = aggregate_results(results)
-    if document.get("aggregate") != expected_aggregate:
-        raise ComparisonError("checkpoint aggregate is not result-derived")
+    require_exact_json_value(
+        document.get("aggregate"), expected_aggregate,
+        "checkpoint result-derived aggregate")
     if document.get("artifact_sha256") != canonical_digest(document):
         raise ComparisonError("checkpoint artifact digest changed")
     if trusted_provenance is not None:
@@ -1979,19 +2273,76 @@ def fake_host_metadata(cpu: int, reserved_cpu: int, allowed: Sequence[int]) -> d
 
 
 def run_state_self_test() -> dict[str, int]:
-    cpu, reserved, allowed = 7, 8, [7, 8]
+    strict_json_mutations = (
+        '{"value":1,"value":2}', '{"value":NaN}', '{"value":1e999}')
+    for raw in strict_json_mutations:
+        try:
+            strict_json_loads(raw, "self-test malformed JSON")
+        except ComparisonError:
+            pass
+        else:
+            raise ComparisonError("ambiguous/non-finite JSON was accepted")
+    try:
+        canonical_digest({"value": float("nan")})
+    except (TypeError, ValueError):
+        pass
+    else:
+        raise ComparisonError("non-finite JSON serialization was accepted")
+
+    cpu, reserved, allowed = 1, 2, [1, 2]
     host = fake_host_metadata(cpu, reserved, allowed)
     validate_host_metadata(host, cpu, reserved, allowed)
     manifest: dict[str, Any] = {
         "schema": RUN_MANIFEST_SCHEMA,
+        "output_path": "/tmp/leopard2-jerasure-self-test-checkpoint.json",
+        "correctness_path": "/tmp/leopard2-jerasure-self-test-correctness.json",
         "cpu": cpu, "reserved_idle_cpu": reserved,
+        "original_allowed_cpus": allowed,
+        "method": checkpoint_method(),
+        "cells": [dict(cell) for cell in CHECKPOINT_CELLS],
+        "sources_sha256": "3" * 64,
+        "provenance_sha256": "4" * 64,
         "executables": {"jerasure": "1" * 64, "leopard2": "2" * 64},
+        "correctness_binding": {
+            "schema": "leopard2-jerasure-correctness-binding/v1",
+            "artifact_sha256": "5" * 64,
+            "source_identity_sha256": "6" * 64,
+            "jerasure_executable_sha256": "1" * 64,
+            "case_count": AUTHORITATIVE_CORRECTNESS_CASES,
+        },
+        "child_environment": common.child_environment_record(cpu),
+        "bounds": {
+            "maximum_original_count": MAX_K,
+            "maximum_recovery_count": MAX_R,
+            "maximum_matrix_coefficients": MAX_MATRIX_COEFFICIENTS,
+            "maximum_application_bytes": MAX_APPLICATION_BYTES,
+            "maximum_leopard_parent": MAX_PARENT,
+            "gf_complete_kernel_policy": GF_COMPLETE_KERNEL_POLICY,
+        },
     }
     manifest["artifact_sha256"] = canonical_digest(manifest)
+    ambiguous_manifest = copy.deepcopy(manifest)
+    ambiguous_manifest["cells"][0]["batch"] = True
+    ambiguous_manifest["artifact_sha256"] = canonical_digest(ambiguous_manifest)
+    try:
+        validate_run_manifest(ambiguous_manifest, manifest)
+    except ComparisonError:
+        pass
+    else:
+        raise ComparisonError("Boolean run-manifest integer was accepted")
+    ambiguous_host = copy.deepcopy(host)
+    ambiguous_host["requested_cpu"] = True
+    try:
+        validate_host_metadata(ambiguous_host, cpu, reserved, allowed)
+    except ComparisonError:
+        pass
+    else:
+        raise ComparisonError("Boolean host CPU identity was accepted")
     with tempfile.TemporaryDirectory(prefix="leo2-jerasure-state-self-test-") as temp:
         state = Path(temp) / "state"
         establish_run_manifest(state, manifest)
-        validate_run_manifest(json.loads((state / "manifest.json").read_text()), manifest)
+        validate_run_manifest(
+            strict_json_load(state / "manifest.json", "self-test run manifest"), manifest)
         directory = group_directory(state, 0, 0)
         directory.mkdir(parents=True)
         first = make_child_artifact(
@@ -2024,7 +2375,33 @@ def run_state_self_test() -> dict[str, int]:
         if load_completed_group(
                 state, manifest, 0, 0, allowed, validate_payload=False) is None:
             raise ComparisonError("complete ABBA repetition was not resumed")
-        tampered = json.loads((directory / f"order0.{ABBA[0][0]}.json").read_text())
+        ambiguous_child = copy.deepcopy(children[0])
+        ambiguous_child["order_index"] = False
+        ambiguous_child["artifact_sha256"] = canonical_digest(ambiguous_child)
+        atomic_write_json(
+            directory / f"order0.{ABBA[0][0]}.json", ambiguous_child)
+        try:
+            load_completed_group(
+                state, manifest, 0, 0, allowed, validate_payload=False)
+        except ComparisonError:
+            pass
+        else:
+            raise ComparisonError("Boolean durable-child integer was accepted")
+        atomic_write_json(directory / f"order0.{ABBA[0][0]}.json", children[0])
+        ambiguous_group = copy.deepcopy(group)
+        ambiguous_group["cell_index"] = False
+        ambiguous_group["artifact_sha256"] = canonical_digest(ambiguous_group)
+        atomic_write_json(directory / "group.json", ambiguous_group)
+        try:
+            load_completed_group(
+                state, manifest, 0, 0, allowed, validate_payload=False)
+        except ComparisonError:
+            pass
+        else:
+            raise ComparisonError("Boolean durable-group integer was accepted")
+        atomic_write_json(directory / "group.json", group)
+        tampered = strict_json_load(
+            directory / f"order0.{ABBA[0][0]}.json", "self-test child artifact")
         tampered["document"] = {"tampered": True}
         atomic_write_json(directory / f"order0.{ABBA[0][0]}.json", tampered)
         try:
@@ -2035,7 +2412,8 @@ def run_state_self_test() -> dict[str, int]:
         else:
             raise ComparisonError("tampered durable child artifact was accepted")
     return {"partial_groups_discarded": 1, "complete_groups_resumed": 1,
-            "state_mutations_rejected": 1}
+            "state_mutations_rejected": 5,
+            "strict_json_mutations_rejected": 4}
 
 
 def fake_jerasure_result(
@@ -2188,8 +2566,8 @@ def fake_checkpoint(correctness: Mapping[str, Any]) -> dict[str, Any]:
 
 def run_mutation_tests(correctness_path: Path) -> dict[str, int]:
     try:
-        correctness = json.loads(correctness_path.read_text())
-    except (OSError, json.JSONDecodeError) as error:
+        correctness = strict_json_load(correctness_path, "mutation correctness artifact")
+    except ComparisonError as error:
         raise ComparisonError(f"mutation test needs correctness artifact: {error}") from error
     validate_correctness(correctness)
     checkpoint = fake_checkpoint(correctness)
@@ -2241,6 +2619,30 @@ def run_mutation_tests(correctness_path: Path) -> dict[str, int]:
     changed["child_environment"]["variables"]["LD_PRELOAD"] = "/tmp/inject.so"
     changed["artifact_sha256"] = canonical_digest(changed)
     checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["results"][0]["order_index"] = False
+    changed["aggregate"] = aggregate_results(changed["results"])
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["cells"][0]["batch"] = True
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["aggregate"][0]["cell_index"] = False
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["host"]["groups"][0]["cell_index"] = False
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    jerasure = next(result for result in changed["results"]
+                    if result["provider"] == "jerasure")
+    jerasure["document"]["parameters"]["thread_count"] = True
+    changed["aggregate"] = aggregate_results(changed["results"])
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
     for changed in checkpoint_mutations:
         try:
             validate_checkpoint(changed, correctness)
@@ -2274,7 +2676,7 @@ def run_mutation_tests(correctness_path: Path) -> dict[str, int]:
     gf_entry["command"] += " -march=x86-64-v3"
     compile_manifest["sha256"] = hashlib.sha256(json.dumps(
         compile_manifest["entries"], sort_keys=True,
-        separators=(",", ":")).encode("utf-8")).hexdigest()
+        separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
     build_identity = changed["sources"]["build_identity"]
     build_identity["identity_sha256"] = mapping_digest({
         key: value for key, value in build_identity.items()
@@ -2283,6 +2685,23 @@ def run_mutation_tests(correctness_path: Path) -> dict[str, int]:
     correctness_mutations.append(changed)
     changed = copy.deepcopy(correctness)
     changed["artifact_sha256"] = "0" * 64
+    correctness_mutations.append(changed)
+    changed = copy.deepcopy(correctness)
+    changed["results"][1]["case_index"] = True
+    changed["artifact_sha256"] = canonical_digest(changed)
+    correctness_mutations.append(changed)
+    changed = copy.deepcopy(correctness)
+    changed["results"][0]["cell"]["K"] = True
+    changed["artifact_sha256"] = canonical_digest(changed)
+    correctness_mutations.append(changed)
+    changed = copy.deepcopy(correctness)
+    changed["results"][0]["document"]["parameters"]["K"] = True
+    changed["artifact_sha256"] = canonical_digest(changed)
+    correctness_mutations.append(changed)
+    changed = copy.deepcopy(correctness)
+    changed["results"][0]["document"]["memory"][
+        "staging_copy_bytes_per_execution"] = False
+    changed["artifact_sha256"] = canonical_digest(changed)
     correctness_mutations.append(changed)
     for changed in correctness_mutations:
         try:
@@ -2364,7 +2783,7 @@ def self_test() -> None:
         "aligned_contract_bytes": 8, "synthetic_cells": len(cells),
         "host_metadata_binding": True,
         "bounded_domain_rejections": 3,
-        **state_counts}, sort_keys=True))
+        **state_counts}, sort_keys=True, allow_nan=False))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -2406,22 +2825,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             document = bootstrap(arguments.cache.resolve(), arguments.jobs)
             print(json.dumps({"status": "PASS",
                               "provenance_sha256": document["provenance_sha256"]},
-                             sort_keys=True))
+                             sort_keys=True, allow_nan=False))
         elif arguments.command == "correctness":
             document = run_correctness(
                 arguments.cache.resolve(), arguments.cases, arguments.workers,
                 arguments.output.resolve())
             print(json.dumps({"status": "PASS", "cases": document["case_count"],
                               "artifact_sha256": document["artifact_sha256"]},
-                             sort_keys=True))
+                             sort_keys=True, allow_nan=False))
         elif arguments.command == "validate-correctness":
-            document = json.loads(arguments.artifact.read_text())
+            document = strict_json_load(arguments.artifact, "correctness artifact")
             provenance = (load_provenance(arguments.cache.resolve())
                           if arguments.require_local_build_match else None)
             validate_correctness(document, trusted_provenance=provenance)
             print(json.dumps({"status": "PASS", "cases": document["case_count"],
                               "artifact_sha256": document["artifact_sha256"]},
-                             sort_keys=True))
+                             sort_keys=True, allow_nan=False))
         elif arguments.command == "run":
             document = run_checkpoint(
                 arguments.cache.resolve(), arguments.cpu, arguments.reserved_idle_cpu,
@@ -2429,19 +2848,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 arguments.iterations, arguments.warmup)
             print(json.dumps({"status": "PASS", "results": len(document["results"]),
                               "artifact_sha256": document["artifact_sha256"]},
-                             sort_keys=True))
+                             sort_keys=True, allow_nan=False))
         elif arguments.command == "validate":
-            checkpoint = json.loads(arguments.checkpoint.read_text())
-            correctness = json.loads(arguments.correctness_artifact.read_text())
+            checkpoint = strict_json_load(arguments.checkpoint, "checkpoint")
+            correctness = strict_json_load(
+                arguments.correctness_artifact, "correctness artifact")
             provenance = (load_provenance(arguments.cache.resolve())
                           if arguments.require_local_build_match else None)
             validate_checkpoint(checkpoint, correctness, trusted_provenance=provenance)
             print(json.dumps({"status": "PASS", "results": len(checkpoint["results"]),
                               "artifact_sha256": checkpoint["artifact_sha256"]},
-                             sort_keys=True))
+                             sort_keys=True, allow_nan=False))
         elif arguments.command == "mutation-test":
             counts = run_mutation_tests(arguments.correctness_artifact.resolve())
-            print(json.dumps({"status": "PASS", **counts}, sort_keys=True))
+            print(json.dumps(
+                {"status": "PASS", **counts}, sort_keys=True, allow_nan=False))
         else:
             self_test()
     except (ComparisonError, common.ComparisonError, OSError,
