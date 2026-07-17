@@ -24,6 +24,8 @@ import math
 import os
 import platform
 import re
+import resource
+import socket
 import stat
 import statistics
 import subprocess
@@ -35,14 +37,17 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
-RAW_SCHEMA = "leopard2-c7-authoritative-raw/v2"
-MANIFEST_SCHEMA = "leopard2-c7-authoritative-manifest/v2"
+RAW_SCHEMA = "leopard2-c7-authoritative-raw/v3"
+MANIFEST_SCHEMA = "leopard2-c7-authoritative-manifest/v3"
 FAILURE_SCHEMA = "leopard2-c7-authoritative-failure/v4"
-FAILURE_STATE_SCHEMA = "leopard2-c7-authoritative-failure-state/v1"
+FAILURE_STATE_SCHEMA = "leopard2-c7-authoritative-failure-state/v2"
+PUBLICATION_STATE_SCHEMA = "leopard2-c7-authoritative-publication-state/v1"
+LIFECYCLE_SCHEMA = "leopard2-c7-authoritative-lifecycle/v1"
 INPUT_SCHEMA = "leopard2-c7-authoritative-input/v2"
 BUILD_PROVENANCE_SCHEMA = "leopard2-c7-authoritative-build-provenance/v2"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
+KERNEL_LEASE_SCHEMA = "leopard2-linux-abstract-lease/v1"
 ISOLATION_SCHEMA = "leopard2-c7-authoritative-isolation/v1"
 BUILD_MANIFEST_SCHEMA = "leopard2-c7-build-run-manifest/v4"
 BUILD_ATTESTATION_SCHEMA = "leopard2-c7-authoritative-build-attestation/v1"
@@ -56,6 +61,11 @@ MAX_TOP_LEVEL_JSON_BYTES = 16 * 1024 * 1024
 MAX_TIMEOUT_SECONDS = 24 * 60 * 60
 MAX_CPU_ID = (1 << 20) - 1
 MAX_CPU_SET_SIZE = 1 << 16
+MAX_ARTIFACT_COUNT = 256
+MAX_ARTIFACT_DEPTH = 16
+MAX_ARTIFACT_PATH_BYTES = 4096
+MAX_REPORTED_SCRATCH_BYTES = 1 << 40
+MAX_DIAGNOSTIC_BYTES = 16 * 1024
 SOURCE_RELATIVE = Path("experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp")
 RUNNER_RELATIVE = Path("experiments/leopard2/non_power_of_two/c7/run_authoritative.py")
 BUILD_RUNNER_RELATIVE = Path(
@@ -122,12 +132,45 @@ FAILURE_CODE_STAGE = {
     "host-after-capture-failed": 9,
     "host-drift": 10,
     "child-result-invalid": 10,
-    "internal-validation-failed": 11,
-    "reservation-final-invalid": 11,
-    "lease-final-invalid": 11,
-    "raw-write-failed": 11,
     "manifest-validation-failed": 11,
     "manifest-write-failed": 11,
+    "guard-exit-failed": 11,
+    "affinity-restore-failed": 11,
+    "publication-state-write-failed": 11,
+    "raw-write-failed": 11,
+    "final-snapshot-invalid": 11,
+}
+FAILURE_DIAGNOSTICS = {
+    "arguments-invalid": "authoritative arguments are invalid",
+    "request-invalid": "authoritative request is invalid",
+    "host-capture-failed": "authoritative host capture failed",
+    "reservation-failed": "CPU reservation acquisition failed",
+    "lease-failed": "CPU pair lease acquisition failed",
+    "inputs-capture-failed": "authoritative input capture failed",
+    "attestation-failed": "authoritative build attestation failed",
+    "child-capture-failed": "C7 child capture failed",
+    "isolation-capture-failed": "C7 isolation capture failed",
+    "child-timeout": "C7 child timed out",
+    "child-result-missing": "C7 child did not write result JSON",
+    "child-stdout-invalid": "C7 child unexpectedly wrote stdout",
+    "child-stderr-invalid": "C7 child stderr progress changed",
+    "isolation-rejected": "C7 isolation policy rejected the child",
+    "reservation-post-child-invalid":
+        "post-child reservation guard validation failed",
+    "lease-post-child-invalid": "post-child pair guard validation failed",
+    "child-result-json-invalid": "C7 child result JSON is invalid",
+    "inputs-after-capture-failed": "post-child input capture failed",
+    "inputs-drift": "source/archive/executable changed during C7 run",
+    "host-after-capture-failed": "post-child host capture failed",
+    "host-drift": "host topology/frequency policy changed during C7 run",
+    "child-result-invalid": "C7 child result validation failed",
+    "guard-exit-failed": "authoritative guard teardown failed",
+    "affinity-restore-failed": "original process affinity was not restored exactly",
+    "publication-state-write-failed": "publication state staging failed",
+    "raw-write-failed": "raw evidence staging failed",
+    "manifest-validation-failed": "manifest validation failed",
+    "manifest-write-failed": "terminal manifest publication failed",
+    "final-snapshot-invalid": "final staged snapshot validation failed",
 }
 
 EXPECTED_PROFILE = {
@@ -203,6 +246,179 @@ def require(condition: bool, message: str) -> None:
         raise EvidenceError(message)
 
 
+def bounded_diagnostic(value: object, label: str) -> str:
+    require(isinstance(value, str) and value and
+            len(value.encode("utf-8", errors="replace")) <= MAX_DIAGNOSTIC_BYTES,
+            f"{label} is not a bounded diagnostic")
+    return value
+
+
+def empty_lifecycle() -> dict[str, Any]:
+    def guard() -> dict[str, Any]:
+        return {"entered": False, "exit": "not-entered",
+                "error_type": None, "error": None}
+
+    def check() -> dict[str, Any]:
+        return {"status": "not-reached", "error_type": None, "error": None}
+
+    return {
+        "schema": LIFECYCLE_SCHEMA,
+        "reservation": guard(), "pair_lease": guard(),
+        "guard_checks": {
+            "reservation_post_child": check(), "pair_post_child": check(),
+            "reservation_final": check(), "pair_final": check(),
+        },
+        "affinity": {
+            "captured": None, "restore_attempted": False,
+            "restore_succeeded": False, "observed": None, "exact": False,
+            "error_type": None, "error": None,
+        },
+    }
+
+
+def _bounded_exception(error: BaseException) -> tuple[str, str]:
+    name = type(error).__name__[:128] or "Exception"
+    message = str(error)
+    encoded = message.encode("utf-8", errors="replace")
+    if len(encoded) > MAX_DIAGNOSTIC_BYTES:
+        encoded = encoded[:MAX_DIAGNOSTIC_BYTES]
+        message = encoded.decode("utf-8", errors="replace")
+    return name, message or name
+
+
+def validate_lifecycle(value: object, *, require_success: bool) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+        "schema", "reservation", "pair_lease", "guard_checks", "affinity"} and
+        value["schema"] == LIFECYCLE_SCHEMA,
+        "authoritative lifecycle schema changed")
+    for name in ("reservation", "pair_lease"):
+        guard = value[name]
+        require(isinstance(guard, dict) and set(guard) == {
+            "entered", "exit", "error_type", "error"} and
+            type(guard["entered"]) is bool and
+            guard["exit"] in ("not-entered", "pass", "failed"),
+            f"{name} lifecycle changed")
+        if guard["entered"]:
+            require(guard["exit"] in ("pass", "failed"),
+                    f"{name} entered without teardown")
+        else:
+            require(guard["exit"] == "not-entered",
+                    f"{name} exited without entering")
+        if guard["exit"] == "failed":
+            bounded_diagnostic(guard["error_type"], f"{name} exit type")
+            bounded_diagnostic(guard["error"], f"{name} exit error")
+        else:
+            require(guard["error_type"] is None and guard["error"] is None,
+                    f"{name} lifecycle has a spurious error")
+    checks = value["guard_checks"]
+    require(isinstance(checks, dict) and set(checks) == {
+        "reservation_post_child", "pair_post_child",
+        "reservation_final", "pair_final"},
+        "guard-check lifecycle changed")
+    for name, check in checks.items():
+        require(isinstance(check, dict) and set(check) == {
+            "status", "error_type", "error"} and
+            check["status"] in ("not-reached", "pass", "failed"),
+            f"{name} guard-check lifecycle changed")
+        if check["status"] == "failed":
+            bounded_diagnostic(check["error_type"], f"{name} failure type")
+            bounded_diagnostic(check["error"], f"{name} failure error")
+        else:
+            require(check["error_type"] is None and check["error"] is None,
+                    f"{name} has a spurious guard-check error")
+    require(checks["pair_post_child"]["status"] == "not-reached" or
+            checks["reservation_post_child"]["status"] == "pass",
+            "pair post-child check bypassed reservation check")
+    require(checks["reservation_final"]["status"] == "not-reached" or
+            (checks["reservation_post_child"]["status"] == "pass" and
+             checks["pair_post_child"]["status"] == "pass"),
+            "final guard checks bypassed post-child checks")
+    require(checks["pair_final"]["status"] == "not-reached" or
+            checks["reservation_final"]["status"] == "pass",
+            "final pair check bypassed final reservation check")
+    affinity = value["affinity"]
+    require(isinstance(affinity, dict) and set(affinity) == {
+        "captured", "restore_attempted", "restore_succeeded", "observed",
+        "exact", "error_type", "error"} and
+        type(affinity["restore_attempted"]) is bool and
+        type(affinity["restore_succeeded"]) is bool and
+        type(affinity["exact"]) is bool,
+        "affinity lifecycle changed")
+    for key in ("captured", "observed"):
+        item = affinity[key]
+        require(item is None or (isinstance(item, list) and item and
+                len(item) <= MAX_CPU_SET_SIZE and
+                all(type(cpu) is int and 0 <= cpu <= MAX_CPU_ID for cpu in item) and
+                item == sorted(set(item))),
+                f"affinity {key} CPU set is invalid")
+    require((affinity["captured"] is not None) ==
+            affinity["restore_attempted"],
+            "affinity restore attempt does not match capture")
+    if affinity["restore_succeeded"]:
+        require(affinity["restore_attempted"] and
+                affinity["observed"] is not None and
+                affinity["error_type"] is None and affinity["error"] is None,
+                "successful affinity restore lifecycle is inconsistent")
+        require(affinity["exact"] is
+                typed_equal(affinity["observed"], affinity["captured"]),
+                "affinity exact-readback predicate changed")
+    else:
+        require(affinity["exact"] is False,
+                "failed affinity restore cannot be exact")
+        if affinity["restore_attempted"]:
+            bounded_diagnostic(affinity["error_type"], "affinity restore type")
+            bounded_diagnostic(affinity["error"], "affinity restore error")
+        else:
+            require(affinity["error_type"] is None and affinity["error"] is None and
+                    affinity["observed"] is None,
+                    "uncaptured affinity has spurious lifecycle data")
+    if require_success:
+        require(all(value[name]["entered"] and value[name]["exit"] == "pass"
+                    for name in ("reservation", "pair_lease")) and
+                all(check["status"] == "pass" for check in checks.values()) and
+                affinity["restore_succeeded"] and affinity["exact"],
+                "successful evidence has incomplete teardown or affinity restoration")
+    return value
+
+
+def run_guard_check(lifecycle: dict[str, Any], name: str,
+                    operation: Any) -> None:
+    check = lifecycle["guard_checks"][name]
+    require(check["status"] == "not-reached",
+            f"{name} guard check ran more than once")
+    try:
+        operation()
+    except BaseException as error:
+        error_type, message = _bounded_exception(error)
+        check.update(status="failed", error_type=error_type, error=message)
+        raise
+    check["status"] = "pass"
+
+
+class ExitRecordingGuard:
+    """Ensure teardown runs, while preserving the body failure as primary."""
+
+    def __init__(self, guard: Any, lifecycle: dict[str, Any], name: str):
+        self.guard = guard
+        self.lifecycle = lifecycle
+        self.name = name
+
+    def __enter__(self) -> Any:
+        retained = self.guard.__enter__()
+        self.lifecycle[self.name]["entered"] = True
+        return retained
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+        try:
+            self.guard.__exit__(exc_type, exc, tb)
+            self.lifecycle[self.name]["exit"] = "pass"
+        except BaseException as error:  # teardown must be recorded, never hidden
+            error_type, message = _bounded_exception(error)
+            self.lifecycle[self.name].update(
+                exit="failed", error_type=error_type, error=message)
+        return False
+
+
 def typed_equal(left: Any, right: Any) -> bool:
     if type(left) is not type(right):
         return False
@@ -243,12 +459,106 @@ def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
+def _lexical_absolute(path: Path) -> Path:
+    return Path(os.path.abspath(os.fspath(path)))
+
+
+def _open_parent_nofollow(path: Path) -> tuple[int, str, Path]:
+    absolute = _lexical_absolute(path)
+    parts = absolute.parts
+    require(absolute.is_absolute() and len(parts) >= 2 and
+            all(part not in ("", ".", "..") for part in parts[1:]) and
+            len(os.fsencode(str(absolute))) <= MAX_ARTIFACT_PATH_BYTES,
+            "file path is not a bounded canonical absolute path")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | \
+        getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(parts[0], flags)
+    try:
+        for component in parts[1:-1]:
+            child = os.open(component, flags, dir_fd=descriptor)
+            metadata = os.fstat(child)
+            require(stat.S_ISDIR(metadata.st_mode),
+                    "file path component is not a directory")
+            os.close(descriptor)
+            descriptor = child
+        return descriptor, parts[-1], absolute
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _snapshot_regular_fd(descriptor: int, maximum_bytes: int,
+                         label: str) -> tuple[bytes, os.stat_result]:
+    before = os.fstat(descriptor)
+    require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1,
+            f"{label} is not a single-link regular file")
+    require(0 <= before.st_size <= maximum_bytes,
+            f"{label} exceeds the evidence bound")
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    chunks: list[bytes] = []
+    retained = 0
+    while retained <= maximum_bytes:
+        chunk = os.read(descriptor, min(1 << 20, maximum_bytes + 1 - retained))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        retained += len(chunk)
+    require(retained <= maximum_bytes, f"{label} exceeds the evidence bound")
+    data = b"".join(chunks)
+    after = os.fstat(descriptor)
+    stable_fields = ("st_dev", "st_ino", "st_mode", "st_nlink", "st_size",
+                     "st_mtime_ns", "st_ctime_ns")
+    require(all(getattr(before, key) == getattr(after, key)
+                for key in stable_fields) and len(data) == before.st_size,
+            f"{label} changed while it was read")
+    return data, after
+
+
+def regular_path_snapshot(path: Path, maximum_bytes: int,
+                          label: str) -> tuple[bytes, os.stat_result, Path]:
+    try:
+        parent, name, absolute = _open_parent_nofollow(path)
+    except OSError as error:
+        raise EvidenceError(f"cannot securely open {label}: {error}") from error
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            name, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+            getattr(os, "O_NOFOLLOW", 0), dir_fd=parent)
+        data, metadata = _snapshot_regular_fd(descriptor, maximum_bytes, label)
+        current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        require((current.st_dev, current.st_ino, current.st_mode,
+                 current.st_nlink, current.st_size, current.st_mtime_ns,
+                 current.st_ctime_ns) ==
+                (metadata.st_dev, metadata.st_ino, metadata.st_mode,
+                 metadata.st_nlink, metadata.st_size, metadata.st_mtime_ns,
+                 metadata.st_ctime_ns), f"{label} path was replaced while read")
+        live_parent, live_name, _live_absolute = _open_parent_nofollow(absolute)
+        try:
+            live_directory = os.fstat(live_parent)
+            opened_directory = os.fstat(parent)
+            live = os.stat(
+                live_name, dir_fd=live_parent, follow_symlinks=False)
+            require((live_directory.st_dev, live_directory.st_ino) ==
+                    (opened_directory.st_dev, opened_directory.st_ino) and
+                    (live.st_dev, live.st_ino) ==
+                    (metadata.st_dev, metadata.st_ino),
+                    f"{label} path chain was replaced while read")
+        finally:
+            os.close(live_parent)
+        return data, metadata, absolute
+    except OSError as error:
+        raise EvidenceError(f"cannot securely read {label}: {error}") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        os.close(parent)
+
+
 def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    data, _metadata, _absolute = regular_path_snapshot(
+        path, MAX_ARTIFACT_BYTES, path.name)
+    return sha256_bytes(data)
 
 
 def signed(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -282,14 +592,22 @@ def strict_json(data: bytes, label: str) -> Any:
         raise EvidenceError(f"{label} contains non-finite number {value}")
 
     def finite_float(value: str) -> float:
+        if len(value) > 128:
+            raise EvidenceError(f"{label} contains an oversized number")
         parsed = float(value)
         if not math.isfinite(parsed):
             raise EvidenceError(f"{label} contains non-finite number {value}")
         return parsed
 
+    def bounded_int(value: str) -> int:
+        if len(value) > 128:
+            raise EvidenceError(f"{label} contains an oversized integer")
+        return int(value)
+
     try:
         return json.loads(data.decode("utf-8"), object_pairs_hook=pairs,
-                          parse_constant=reject_constant, parse_float=finite_float)
+                          parse_constant=reject_constant, parse_float=finite_float,
+                          parse_int=bounded_int)
     except (UnicodeDecodeError, ValueError, RecursionError) as error:
         raise EvidenceError(f"invalid {label}: {error}") from error
 
@@ -303,21 +621,68 @@ def canonical_pretty_bytes(value: object) -> bytes:
 
 
 def read_bounded(path: Path, maximum_bytes: int = MAX_ARTIFACT_BYTES) -> bytes:
-    with path.open("rb") as stream:
-        data = stream.read(maximum_bytes + 1)
-    require(len(data) <= maximum_bytes, f"{path.name} exceeds the evidence bound")
+    data, _metadata, _absolute = regular_path_snapshot(
+        path, maximum_bytes, path.name)
     return data
 
 
 def write_exclusive(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    parent: int | None = None
+    descriptor: int | None = None
+    created_identity: tuple[int, int] | None = None
+    completed = False
+    name = path.name
     try:
-        with path.open("xb") as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
+        parent, name, _absolute = _open_parent_nofollow(path)
+        descriptor = os.open(
+            name, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+            getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            0o600, dir_fd=parent)
+        opened = os.fstat(descriptor)
+        created_identity = (opened.st_dev, opened.st_ino)
+        offset = 0
+        while offset < len(data):
+            written = os.write(descriptor, data[offset:])
+            require(written > 0, f"short write to {path}")
+            offset += written
+        os.fsync(descriptor)
+        metadata = os.fstat(descriptor)
+        current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1 and
+                (metadata.st_dev, metadata.st_ino, metadata.st_size) ==
+                (current.st_dev, current.st_ino, current.st_size) and
+                metadata.st_size == len(data), f"written path changed: {path}")
+        live_parent, live_name, _live_absolute = _open_parent_nofollow(path)
+        try:
+            live_directory = os.fstat(live_parent)
+            opened_directory = os.fstat(parent)
+            live = os.stat(
+                live_name, dir_fd=live_parent, follow_symlinks=False)
+            require((live_directory.st_dev, live_directory.st_ino) ==
+                    (opened_directory.st_dev, opened_directory.st_ino) and
+                    (live.st_dev, live.st_ino) ==
+                    (metadata.st_dev, metadata.st_ino),
+                    f"written path chain changed: {path}")
+        finally:
+            os.close(live_parent)
+        completed = True
     except FileExistsError as error:
         raise EvidenceError(f"refusing to replace {path}") from error
+    except OSError as error:
+        raise EvidenceError(f"cannot securely write {path}: {error}") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if not completed and parent is not None and created_identity is not None:
+            try:
+                current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                if (current.st_dev, current.st_ino) == created_identity:
+                    os.unlink(name, dir_fd=parent)
+            except OSError:
+                pass
+        if parent is not None:
+            os.close(parent)
 
 
 def write_json_exclusive(path: Path, value: object) -> None:
@@ -325,48 +690,34 @@ def write_json_exclusive(path: Path, value: object) -> None:
 
 
 def run_checked(arguments: Sequence[str], cwd: Path | None = None) -> bytes:
-    completed = subprocess.run(list(arguments), cwd=None if cwd is None else str(cwd),
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                               check=False, timeout=30, env=CHILD_ENVIRONMENT)
+    completed, stdout, stderr, timed_out = run_capture_bounded(
+        arguments, cwd=cwd, timeout_seconds=30,
+        environment=CHILD_ENVIRONMENT)
+    require(not timed_out, f"command timed out: {' '.join(arguments)}")
     if completed.returncode:
         raise EvidenceError(
             f"command failed ({completed.returncode}): {' '.join(arguments)}: "
-            + completed.stderr.decode("utf-8", errors="replace").strip())
-    return completed.stdout
+            + stderr.decode("utf-8", errors="replace").strip())
+    return stdout
 
 
 def file_identity(path: Path, kind: str) -> dict[str, Any]:
-    path = path.resolve(strict=True)
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags)
-    try:
-        info = os.fstat(descriptor)
-        require(stat.S_ISREG(info.st_mode), f"{kind} is not a regular file")
-        require(0 < info.st_size <= MAX_ARTIFACT_BYTES,
-                f"{kind} size is outside the evidence bound")
-        mode = stat.S_IMODE(info.st_mode)
-        if kind in ("runner", "executable", "taskset", "python"):
-            require(mode & 0o111 != 0, f"{kind} is not executable")
-        digest = hashlib.sha256()
-        prefix = b""
-        while True:
-            chunk = os.read(descriptor, 1 << 20)
-            if not chunk:
-                break
-            if len(prefix) < 8:
-                prefix += chunk[:8 - len(prefix)]
-            digest.update(chunk)
-        if kind == "archive":
-            require(prefix == b"!<arch>\n", "C7 archive is not ar format")
-        return {"kind": kind, "name": path.name, "size": info.st_size,
-                "mode": mode, "sha256": digest.hexdigest()}
-    finally:
-        os.close(descriptor)
+    data, info, absolute = regular_path_snapshot(path, MAX_ARTIFACT_BYTES, kind)
+    require(info.st_size > 0, f"{kind} size is outside the evidence bound")
+    mode = stat.S_IMODE(info.st_mode)
+    if kind in ("runner", "executable", "taskset", "python"):
+        require(mode & 0o111 != 0, f"{kind} is not executable")
+    if kind == "archive":
+        require(data.startswith(b"!<arch>\n"), "C7 archive is not ar format")
+    return {"kind": kind, "name": absolute.name, "size": info.st_size,
+            "mode": mode, "device": info.st_dev, "inode": info.st_ino,
+            "sha256": sha256_bytes(data)}
 
 
 def committed_file_identity(root: Path, commit: str, relative: Path,
                             kind: str) -> dict[str, Any]:
-    path = (root / relative).resolve(strict=True)
+    root = _lexical_absolute(root)
+    path = _lexical_absolute(root / relative)
     try:
         path.relative_to(root)
     except ValueError as error:
@@ -628,18 +979,17 @@ def derive_build_attestation(
 
 
 def run_build_validator(source_root: Path, build_manifest: Path) -> None:
-    validator = (source_root / BUILD_VALIDATOR_RELATIVE).resolve(strict=True)
-    completed = subprocess.run(
+    validator = _lexical_absolute(source_root / BUILD_VALIDATOR_RELATIVE)
+    completed, stdout, stderr, timed_out = run_capture_bounded(
         [sys.executable, str(validator), str(build_manifest),
          "--source-root", str(source_root), "--evidence-root", str(source_root),
          "--live", "--require-checkout-head"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
-        timeout=300, env=VALIDATOR_ENVIRONMENT)
-    require(completed.returncode == 0,
+        cwd=None, timeout_seconds=300, environment=VALIDATOR_ENVIRONMENT)
+    require(not timed_out and completed.returncode == 0,
             "C7 v4 live build validation failed: " +
-            completed.stderr.decode("utf-8", errors="replace").strip())
-    require(completed.stdout == b"C7 evidence validation passed (live)\n" and
-            completed.stderr == b"", "C7 v4 live validator output changed")
+            stderr.decode("utf-8", errors="replace").strip())
+    require(stdout == b"C7 evidence validation passed (live)\n" and
+            stderr == b"", "C7 v4 live validator output changed")
 
 
 def verified_build_attestation(
@@ -864,6 +1214,10 @@ def validate_input_snapshot(value: object) -> dict[str, Any]:
 
 
 def parse_cpu_list(text: str) -> set[int]:
+    require(isinstance(text, str) and len(text) <= MAX_CPU_SET_SIZE * 16 and
+            re.fullmatch(r"[0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*",
+                         text.strip()) is not None,
+            "invalid CPU list syntax")
     result: set[int] = set()
     for item in text.strip().split(","):
         if "-" in item:
@@ -1057,6 +1411,83 @@ def cpu_stat_delta(before: Mapping[str, Any],
             "total_jiffies": idle + nonidle}
 
 
+def kernel_lease_namespace(kind: str, payload: Mapping[str, Any]) -> str:
+    require(kind in ("pair", "reservation", "terminal"),
+            "kernel lease kind is invalid")
+    digest = sha256_bytes(canonical_bytes(payload))
+    return f"@leopard2-{kind}-{digest}"
+
+
+def validate_kernel_lease_identity(value: object, kind: str,
+                                   payload: Mapping[str, Any]) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+        "schema", "authority", "namespace", "device", "inode", "payload_sha256"} and
+        value["schema"] == KERNEL_LEASE_SCHEMA and
+        value["authority"] == "linux-abstract-unix-bind" and
+        value["namespace"] == kernel_lease_namespace(kind, payload) and
+        type(value["device"]) is int and value["device"] >= 0 and
+        type(value["inode"]) is int and value["inode"] > 0 and
+        value["payload_sha256"] == sha256_bytes(canonical_bytes(payload)),
+        "kernel lease identity changed")
+    return value
+
+
+class KernelNamespaceLease:
+    """An unlinked, kernel-owned exclusive name that path replacement cannot split."""
+
+    def __init__(self, kind: str, payload: Mapping[str, Any]):
+        self.kind = kind
+        self.payload = copy.deepcopy(dict(payload))
+        self.namespace = kernel_lease_namespace(kind, self.payload)
+        self.socket: socket.socket | None = None
+        self.identity: dict[str, Any] | None = None
+        self._identity_bytes: bytes | None = None
+
+    def acquire(self) -> dict[str, Any]:
+        require(self.socket is None, "kernel lease is already acquired")
+        retained = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            retained.bind("\0" + self.namespace[1:])
+        except OSError as error:
+            retained.close()
+            raise EvidenceError(
+                f"{self.kind} kernel lease is already held or unavailable") from error
+        metadata = os.fstat(retained.fileno())
+        require(stat.S_ISSOCK(metadata.st_mode) and metadata.st_nlink == 1 and
+                retained.getsockname() ==
+                    b"\0" + self.namespace[1:].encode("ascii"),
+                "kernel lease socket identity is invalid")
+        self.socket = retained
+        self.identity = {
+            "schema": KERNEL_LEASE_SCHEMA,
+            "authority": "linux-abstract-unix-bind",
+            "namespace": self.namespace, "device": metadata.st_dev,
+            "inode": metadata.st_ino,
+            "payload_sha256": sha256_bytes(canonical_bytes(self.payload)),
+        }
+        self._identity_bytes = canonical_bytes(self.identity)
+        return copy.deepcopy(self.identity)
+
+    def validate_current(self) -> None:
+        require(self.socket is not None and self.identity is not None,
+                "kernel lease is not held")
+        require(self._identity_bytes == canonical_bytes(self.identity),
+                "kernel lease immutable identity changed")
+        metadata = os.fstat(self.socket.fileno())
+        require(stat.S_ISSOCK(metadata.st_mode) and metadata.st_nlink == 1 and
+                (metadata.st_dev, metadata.st_ino) ==
+                    (self.identity["device"], self.identity["inode"]) and
+                self.socket.getsockname() ==
+                    b"\0" + self.namespace[1:].encode("ascii"),
+                "kernel lease descriptor changed")
+        validate_kernel_lease_identity(self.identity, self.kind, self.payload)
+
+    def release(self) -> None:
+        if self.socket is not None:
+            self.socket.close()
+            self.socket = None
+
+
 def pair_lease_payload(cpu: int, sibling: int,
                        uid: int | None = None) -> dict[str, Any]:
     require(type(cpu) is int and type(sibling) is int and
@@ -1105,7 +1536,11 @@ class PairLease:
         self.root = self.runtime_root / "leopard2-cpu-leases"
         self.path = self.root / pair_lease_name(cpu, sibling)
         self.descriptor: int | None = None
+        self.directory_fd: int | None = None
         self.identity: dict[str, Any] | None = None
+        self._identity_bytes: bytes | None = None
+        self.kernel = KernelNamespaceLease(
+            "pair", pair_lease_payload(cpu, sibling))
 
     def _validate_runtime_root(self) -> os.stat_result:
         metadata = os.lstat(self.runtime_root)
@@ -1124,12 +1559,23 @@ class PairLease:
                 "CPU pair lease directory is not an owned mode-0700 directory")
         return metadata
 
-    def validate_current(self) -> None:
-        require(self.descriptor is not None and self.identity is not None,
+    def validate_current(self, expected_identity: Mapping[str, Any] | None = None) -> None:
+        require(self.descriptor is not None and self.directory_fd is not None and
+                self.identity is not None,
                 "CPU pair lease is not held")
+        require(self._identity_bytes == canonical_bytes(self.identity),
+                "CPU pair lease immutable identity changed")
+        if expected_identity is not None:
+            require(typed_equal(expected_identity, self.identity),
+                    "CPU pair lease retained identity differs from its guard")
+        self.kernel.validate_current()
         directory = self._validate_directory()
+        require(self.directory_fd is not None,
+                "CPU pair lease directory descriptor was lost")
+        opened_directory = os.fstat(self.directory_fd)
         descriptor = os.fstat(self.descriptor)
-        path = os.lstat(self.path)
+        path = os.stat(
+            self.path.name, dir_fd=self.directory_fd, follow_symlinks=False)
         require(stat.S_ISREG(descriptor.st_mode) and
                 descriptor.st_uid == os.getuid() and descriptor.st_nlink == 1 and
                 stat.S_IMODE(descriptor.st_mode) == 0o600 and
@@ -1138,33 +1584,39 @@ class PairLease:
                     (self.identity["device"], self.identity["inode"]),
                 "CPU pair lease path was replaced or its metadata changed")
         require((directory.st_dev, directory.st_ino) ==
+                (opened_directory.st_dev, opened_directory.st_ino) ==
                 (self.identity["directory_device"],
                  self.identity["directory_inode"]),
                 "CPU pair lease directory was replaced")
+        require(typed_equal(self.identity["authority"], self.kernel.identity),
+                "CPU pair lease authority identity changed")
         expected = canonical_bytes(pair_lease_payload(self.cpu, self.sibling))
-        os.lseek(self.descriptor, 0, os.SEEK_SET)
-        retained = os.read(self.descriptor, 4096)
+        retained, _metadata = _snapshot_regular_fd(
+            self.descriptor, 4096, "CPU pair lease")
         require(retained == expected, "CPU pair lease contents changed while held")
 
     def __enter__(self) -> dict[str, Any]:
-        self._validate_runtime_root()
+        authority = self.kernel.acquire()
         try:
-            self.root.mkdir(mode=0o700)
-            os.chmod(self.root, 0o700)
-        except FileExistsError:
-            pass
-        self._validate_directory()
-        flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | \
-            getattr(os, "O_NOFOLLOW", 0)
-        try:
-            self.descriptor = os.open(
-                self.path, flags | os.O_CREAT | os.O_EXCL, 0o600)
-            os.fchmod(self.descriptor, 0o600)
-        except FileExistsError:
-            self.descriptor = os.open(self.path, flags)
-        except OSError as error:
-            raise EvidenceError(f"cannot open CPU pair lease: {error}") from error
-        try:
+            self._validate_runtime_root()
+            try:
+                self.root.mkdir(mode=0o700)
+                os.chmod(self.root, 0o700)
+            except FileExistsError:
+                pass
+            self._validate_directory()
+            self.directory_fd, _unused = _open_directory_nofollow(
+                self.root, "CPU pair lease directory")
+            flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | \
+                getattr(os, "O_NOFOLLOW", 0)
+            try:
+                self.descriptor = os.open(
+                    self.path.name, flags | os.O_CREAT | os.O_EXCL, 0o600,
+                    dir_fd=self.directory_fd)
+                os.fchmod(self.descriptor, 0o600)
+            except FileExistsError:
+                self.descriptor = os.open(
+                    self.path.name, flags, dir_fd=self.directory_fd)
             metadata = os.fstat(self.descriptor)
             require(stat.S_ISREG(metadata.st_mode) and
                     metadata.st_uid == os.getuid() and metadata.st_nlink == 1 and
@@ -1176,28 +1628,32 @@ class PairLease:
                 raise EvidenceError(
                     f"physical CPU pair is already leased: {self.path}") from error
             expected = canonical_bytes(pair_lease_payload(self.cpu, self.sibling))
-            os.lseek(self.descriptor, 0, os.SEEK_SET)
-            retained = os.read(self.descriptor, 4096)
+            retained, _opened = _snapshot_regular_fd(
+                self.descriptor, 4096, "CPU pair lease")
             if not retained:
                 require(os.write(self.descriptor, expected) == len(expected),
                         "short write to CPU pair lease")
                 os.fsync(self.descriptor)
-                retained = expected
+                retained, _opened = _snapshot_regular_fd(
+                    self.descriptor, 4096, "CPU pair lease")
             require(retained == expected,
                     "CPU pair lease has unexpected or noncanonical contents")
-            directory = self._validate_directory()
+            directory = os.fstat(self.directory_fd)
             self.identity = {
+                "schema": PAIR_LEASE_SCHEMA,
+                "authority": authority,
                 "device": metadata.st_dev,
                 "directory_device": directory.st_dev,
                 "directory_inode": directory.st_ino,
                 "inode": metadata.st_ino,
                 "lock": "exclusive_nonblocking_pair_wide",
-                "path": str(self.path.resolve()),
+                "path": str(_lexical_absolute(self.path)),
                 "payload": pair_lease_payload(self.cpu, self.sibling),
                 "sha256": sha256_bytes(retained),
             }
+            self._identity_bytes = canonical_bytes(self.identity)
             self.validate_current()
-            return self.identity
+            return copy.deepcopy(self.identity)
         except Exception:
             if self.descriptor is not None:
                 try:
@@ -1205,19 +1661,30 @@ class PairLease:
                 finally:
                     os.close(self.descriptor)
                     self.descriptor = None
+            if self.directory_fd is not None:
+                os.close(self.directory_fd)
+                self.directory_fd = None
+            self.kernel.release()
             raise
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        if self.descriptor is not None:
-            fcntl.flock(self.descriptor, fcntl.LOCK_UN)
-            os.close(self.descriptor)
-            self.descriptor = None
+        try:
+            if self.descriptor is not None:
+                fcntl.flock(self.descriptor, fcntl.LOCK_UN)
+                os.close(self.descriptor)
+                self.descriptor = None
+            if self.directory_fd is not None:
+                os.close(self.directory_fd)
+                self.directory_fd = None
+        finally:
+            self.kernel.release()
 
 
 def validate_pair_lease_identity(value: object, cpu: int,
                                  sibling: int) -> dict[str, Any]:
     require(isinstance(value, dict) and set(value) == {
-        "device", "directory_device", "directory_inode", "inode", "lock",
+        "schema", "authority", "device", "directory_device", "directory_inode",
+        "inode", "lock",
         "path", "payload", "sha256"}, "CPU pair lease identity is incomplete")
     payload = value["payload"]
     require(isinstance(payload, dict) and set(payload) == {"cpus", "schema", "uid"} and
@@ -1229,6 +1696,9 @@ def validate_pair_lease_identity(value: object, cpu: int,
         pair_lease_name(cpu, sibling, payload["uid"])
     require(value["path"] == str(expected_path),
             "CPU pair lease path does not identify the reserved pair")
+    require(value["schema"] == PAIR_LEASE_SCHEMA,
+            "CPU pair lease schema changed")
+    validate_kernel_lease_identity(value["authority"], "pair", payload)
     require(all(type(value[name]) is int and value[name] >= 0 for name in
                 ("device", "directory_device", "directory_inode", "inode")),
             "CPU pair lease filesystem identity is invalid")
@@ -1338,79 +1808,164 @@ def parse_reservation(raw: bytes, cpu: int, sibling: int) -> dict[str, Any]:
     return payload
 
 
+def reservation_authority_payload(path: Path, cpu: int, sibling: int,
+                                  reservation_sha256: str | None = None,
+                                  uid: int | None = None) -> dict[str, Any]:
+    retained_uid = os.getuid() if uid is None else uid
+    result: dict[str, Any] = {
+        "cpus": sorted((cpu, sibling)), "path": str(_lexical_absolute(path)),
+        "uid": retained_uid,
+    }
+    if reservation_sha256 is not None:
+        result["reservation_sha256"] = reservation_sha256
+    return result
+
+
 class Reservation:
     def __init__(self, path: Path, cpu: int, sibling: int):
-        self.path = path.resolve(strict=True)
+        self.path = _lexical_absolute(path)
         self.cpu = cpu
         self.sibling = sibling
         self.fd: int | None = None
+        self.parent_fd: int | None = None
+        self.name = self.path.name
         self.raw = b""
         self.identity: dict[str, Any] | None = None
-        self.device: int | None = None
-        self.inode: int | None = None
+        self._identity_bytes: bytes | None = None
+        self.kernel = KernelNamespaceLease(
+            "reservation", reservation_authority_payload(
+                self.path, cpu, sibling))
 
     def __enter__(self) -> dict[str, Any]:
-        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | \
-            getattr(os, "O_NOFOLLOW", 0)
-        self.fd = os.open(self.path, flags)
+        self.kernel.acquire()
         try:
+            self.parent_fd, self.name, _absolute = _open_parent_nofollow(self.path)
+            directory = os.fstat(self.parent_fd)
+            require(stat.S_ISDIR(directory.st_mode),
+                    "CPU reservation parent is not a directory")
+            self.fd = os.open(
+                self.name, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+                getattr(os, "O_NOFOLLOW", 0), dir_fd=self.parent_fd)
             descriptor = os.fstat(self.fd)
-            current = os.lstat(self.path)
+            current = os.stat(
+                self.name, dir_fd=self.parent_fd, follow_symlinks=False)
             require(stat.S_ISREG(descriptor.st_mode) and
                     descriptor.st_uid == os.getuid() and descriptor.st_nlink == 1 and
                     stat.S_IMODE(descriptor.st_mode) & 0o022 == 0 and
                     (descriptor.st_dev, descriptor.st_ino) ==
                     (current.st_dev, current.st_ino),
                     "CPU reservation has unsafe ownership, type, links, or permissions")
-            self.device, self.inode = descriptor.st_dev, descriptor.st_ino
-            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
-            os.close(self.fd)
-            self.fd = None
-            raise EvidenceError("CPU reservation is already locked") from error
-        try:
-            self.raw = os.read(self.fd, MAX_LOG_BYTES + 1)
-            require(len(self.raw) <= MAX_LOG_BYTES,
-                    "CPU reservation is unexpectedly large")
+            try:
+                fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise EvidenceError("CPU reservation is already locked") from error
+            self.raw, descriptor = _snapshot_regular_fd(
+                self.fd, MAX_LOG_BYTES, "CPU reservation")
             payload = parse_reservation(self.raw, self.cpu, self.sibling)
-            self.identity = {"schema": RESERVATION_SCHEMA, "bytes": len(self.raw),
-                             "sha256": sha256_bytes(self.raw), "payload": payload,
-                             "lock": "exclusive_nonblocking"}
-            return self.identity
+            reservation_sha = sha256_bytes(self.raw)
+            authority_payload = reservation_authority_payload(
+                self.path, self.cpu, self.sibling, reservation_sha)
+            # Upgrade the pre-open namespace binding with the immutable byte digest.
+            # The path/pair namespace remains held; this second name binds its content.
+            content_kernel = KernelNamespaceLease("reservation", authority_payload)
+            content_authority = content_kernel.acquire()
+            self.content_kernel = content_kernel
+            self.identity = {
+                "schema": RESERVATION_SCHEMA, "bytes": len(self.raw),
+                "sha256": reservation_sha, "payload": payload,
+                "lock": "linux_abstract_bind_plus_flock",
+                "path": str(self.path), "uid": os.getuid(),
+                "device": descriptor.st_dev, "inode": descriptor.st_ino,
+                "directory_device": directory.st_dev,
+                "directory_inode": directory.st_ino,
+                "authority": {"path": copy.deepcopy(self.kernel.identity),
+                              "content": content_authority},
+            }
+            self._identity_bytes = canonical_bytes(self.identity)
+            self.validate_current()
+            return copy.deepcopy(self.identity)
         except Exception:
-            fcntl.flock(self.fd, fcntl.LOCK_UN)
-            os.close(self.fd)
-            self.fd = None
+            self._release()
             raise
 
-    def validate_current(self) -> None:
-        require(self.fd is not None and self.identity is not None,
+    def validate_current(self, expected_identity: Mapping[str, Any] | None = None) -> None:
+        require(self.fd is not None and self.parent_fd is not None and
+                self.identity is not None and hasattr(self, "content_kernel"),
                 "CPU reservation lock was lost")
+        require(self._identity_bytes == canonical_bytes(self.identity),
+                "CPU reservation immutable identity changed")
+        if expected_identity is not None:
+            require(typed_equal(expected_identity, self.identity),
+                    "CPU reservation retained identity differs from its guard")
+        self.kernel.validate_current()
+        self.content_kernel.validate_current()
         descriptor = os.fstat(self.fd)
-        current = os.lstat(self.path)
+        directory = os.fstat(self.parent_fd)
+        current = os.stat(self.name, dir_fd=self.parent_fd, follow_symlinks=False)
+        live_parent, live_name, _absolute = _open_parent_nofollow(self.path)
+        try:
+            live_directory = os.fstat(live_parent)
+            live_path = os.stat(
+                live_name, dir_fd=live_parent, follow_symlinks=False)
+        finally:
+            os.close(live_parent)
         require((descriptor.st_dev, descriptor.st_ino) ==
                 (current.st_dev, current.st_ino) ==
-                (self.device, self.inode) and descriptor.st_uid == os.getuid() and
-                descriptor.st_nlink == 1 and stat.S_ISREG(descriptor.st_mode) and
+                (live_path.st_dev, live_path.st_ino) ==
+                (self.identity["device"], self.identity["inode"]) and
+                (directory.st_dev, directory.st_ino) ==
+                (live_directory.st_dev, live_directory.st_ino) ==
+                (self.identity["directory_device"],
+                 self.identity["directory_inode"]) and
+                descriptor.st_uid == os.getuid() and descriptor.st_nlink == 1 and
+                stat.S_ISREG(descriptor.st_mode) and
                 stat.S_IMODE(descriptor.st_mode) & 0o022 == 0,
                 "CPU reservation path was replaced or its metadata changed")
-        os.lseek(self.fd, 0, os.SEEK_SET)
-        raw = os.read(self.fd, MAX_LOG_BYTES + 1)
+        raw, _metadata = _snapshot_regular_fd(
+            self.fd, MAX_LOG_BYTES, "CPU reservation")
         require(raw == self.raw, "CPU reservation changed while locked")
         parse_reservation(raw, self.cpu, self.sibling)
+        expected_authority_payload = reservation_authority_payload(
+            self.path, self.cpu, self.sibling, self.identity["sha256"])
+        require(typed_equal(self.identity["authority"]["path"],
+                            self.kernel.identity) and
+                typed_equal(self.identity["authority"]["content"],
+                            self.content_kernel.identity),
+                "CPU reservation authority identity changed")
+        validate_kernel_lease_identity(
+            self.identity["authority"]["path"], "reservation",
+            reservation_authority_payload(self.path, self.cpu, self.sibling))
+        validate_kernel_lease_identity(
+            self.identity["authority"]["content"], "reservation",
+            expected_authority_payload)
+
+    def _release(self) -> None:
+        try:
+            if self.fd is not None:
+                try:
+                    fcntl.flock(self.fd, fcntl.LOCK_UN)
+                finally:
+                    os.close(self.fd)
+                    self.fd = None
+            if self.parent_fd is not None:
+                os.close(self.parent_fd)
+                self.parent_fd = None
+        finally:
+            if hasattr(self, "content_kernel"):
+                self.content_kernel.release()
+            self.kernel.release()
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        if self.fd is not None:
-            fcntl.flock(self.fd, fcntl.LOCK_UN)
-            os.close(self.fd)
-            self.fd = None
+        self._release()
 
 
 def validate_reservation_record(value: object, cpu: int, sibling: int) -> dict[str, Any]:
     require(isinstance(value, dict) and set(value) == {
-        "schema", "bytes", "sha256", "payload", "lock"} and
+        "schema", "bytes", "sha256", "payload", "lock", "path", "uid",
+        "device", "inode", "directory_device", "directory_inode", "authority"} and
         value["schema"] == RESERVATION_SCHEMA and
-        value["lock"] == "exclusive_nonblocking", "reservation record changed")
+        value["lock"] == "linux_abstract_bind_plus_flock",
+        "reservation record changed")
     require(type(value["bytes"]) is int and 0 < value["bytes"] <= MAX_LOG_BYTES and
             isinstance(value["sha256"], str) and
             SHA256_RE.fullmatch(value["sha256"]) is not None,
@@ -1420,6 +1975,22 @@ def validate_reservation_record(value: object, cpu: int, sibling: int) -> dict[s
             "reservation bytes or checksum changed")
     require(parse_reservation(raw, cpu, sibling) == value["payload"],
             "reservation semantics changed")
+    require(isinstance(value["path"], str) and os.path.isabs(value["path"]) and
+            type(value["uid"]) is int and value["uid"] >= 0 and
+            all(type(value[name]) is int and value[name] >= 0 for name in
+                ("device", "inode", "directory_device", "directory_inode")),
+            "reservation opened-object identity is invalid")
+    authority_payload = reservation_authority_payload(
+        Path(value["path"]), cpu, sibling, value["sha256"], value["uid"])
+    require(isinstance(value["authority"], dict) and
+            set(value["authority"]) == {"path", "content"},
+            "reservation authority schema changed")
+    validate_kernel_lease_identity(
+        value["authority"]["path"], "reservation",
+        reservation_authority_payload(
+            Path(value["path"]), cpu, sibling, uid=value["uid"]))
+    validate_kernel_lease_identity(
+        value["authority"]["content"], "reservation", authority_payload)
     return value
 
 
@@ -1486,9 +2057,11 @@ def validate_child_result(value: object, cpu: int, inputs: Mapping[str, Any]) ->
                 cell["exact_decode_terms"] == k * losses,
                 f"C7 cell {index} exact accounting changed")
         require(type(cell["padded_encode_scratch"]) is int and
-                cell["padded_encode_scratch"] >= 0 and
+                0 <= cell["padded_encode_scratch"] <=
+                    MAX_REPORTED_SCRATCH_BYTES and
                 type(cell["padded_decode_scratch"]) is int and
-                cell["padded_decode_scratch"] >= 0,
+                0 <= cell["padded_decode_scratch"] <=
+                    MAX_REPORTED_SCRATCH_BYTES,
                 f"C7 cell {index} scratch accounting is invalid")
         summaries = {name: validate_summary(cell, name, samples)
                      for name, samples in SUMMARY_SAMPLE_PAIRS}
@@ -1508,27 +2081,102 @@ def artifact_relative_path(relative: object) -> Path:
     require(relative_path.as_posix() == relative,
             "artifact path is not canonical")
     parts = relative_path.parts
-    require(all(part not in ("", ".", "..") for part in parts),
+    require(len(parts) <= MAX_ARTIFACT_DEPTH and
+            len(os.fsencode(relative)) <= MAX_ARTIFACT_PATH_BYTES and
+            all(part not in ("", ".", "..") for part in parts),
             "artifact path is not canonical")
     return relative_path
 
 
-def safe_artifact(root: Path, relative: object) -> Path:
-    relative_path = artifact_relative_path(relative)
-    path = root.joinpath(*relative_path.parts).resolve()
+def _open_directory_nofollow(path: Path, label: str) -> tuple[int, Path]:
+    absolute = _lexical_absolute(path)
     try:
-        path.relative_to(root.resolve())
-    except ValueError as error:
-        raise EvidenceError("artifact path escapes evidence root") from error
-    return path
+        parent, name, _unused = _open_parent_nofollow(absolute)
+        try:
+            descriptor = os.open(
+                name, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+                getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=parent)
+        finally:
+            os.close(parent)
+    except OSError as error:
+        raise EvidenceError(f"cannot securely open {label}: {error}") from error
+    metadata = os.fstat(descriptor)
+    require(stat.S_ISDIR(metadata.st_mode), f"{label} is not a directory")
+    return descriptor, absolute
+
+
+def _artifact_snapshot(root: Path, relative: object, maximum_bytes: int,
+                       label: str) -> tuple[bytes, os.stat_result]:
+    relative_path = artifact_relative_path(relative)
+    root_descriptor, absolute_root = _open_directory_nofollow(
+        root, "artifact root")
+    directories = [root_descriptor]
+    components: list[tuple[str, os.stat_result]] = []
+    descriptor: int | None = None
+    try:
+        for component in relative_path.parts[:-1]:
+            child = os.open(
+                component, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+                getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=directories[-1])
+            before = os.fstat(child)
+            current = os.stat(
+                component, dir_fd=directories[-1], follow_symlinks=False)
+            require(stat.S_ISDIR(before.st_mode) and
+                    (before.st_dev, before.st_ino) ==
+                    (current.st_dev, current.st_ino),
+                    f"{label} directory component was replaced")
+            components.append((component, before))
+            directories.append(child)
+        descriptor = os.open(
+            relative_path.parts[-1], os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+            getattr(os, "O_NOFOLLOW", 0), dir_fd=directories[-1])
+        data, metadata = _snapshot_regular_fd(
+            descriptor, maximum_bytes, label)
+        current = os.stat(
+            relative_path.parts[-1], dir_fd=directories[-1],
+            follow_symlinks=False)
+        require((current.st_dev, current.st_ino, current.st_mode,
+                 current.st_nlink, current.st_size, current.st_mtime_ns,
+                 current.st_ctime_ns) ==
+                (metadata.st_dev, metadata.st_ino, metadata.st_mode,
+                 metadata.st_nlink, metadata.st_size, metadata.st_mtime_ns,
+                 metadata.st_ctime_ns), f"{label} path was replaced while read")
+        for index, (component, opened) in enumerate(components):
+            live = os.stat(
+                component, dir_fd=directories[index], follow_symlinks=False)
+            require((live.st_dev, live.st_ino, live.st_mode,
+                     live.st_mtime_ns, live.st_ctime_ns) ==
+                    (opened.st_dev, opened.st_ino, opened.st_mode,
+                     opened.st_mtime_ns, opened.st_ctime_ns),
+                    f"{label} directory path was replaced while read")
+        live_root = os.stat(absolute_root, follow_symlinks=False)
+        opened_root = os.fstat(root_descriptor)
+        require((live_root.st_dev, live_root.st_ino) ==
+                (opened_root.st_dev, opened_root.st_ino),
+                f"{label} artifact root was replaced while read")
+        return data, metadata
+    except OSError as error:
+        raise EvidenceError(f"cannot securely read {label}: {error}") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        for directory in reversed(directories):
+            os.close(directory)
 
 
 def artifact_record(root: Path, path: Path) -> dict[str, Any]:
-    size = path.stat().st_size
-    require(type(size) is int and 0 <= size <= MAX_ARTIFACT_BYTES,
-            "retained artifact is unexpectedly large")
-    return {"path": path.relative_to(root).as_posix(), "size": size,
-            "sha256": sha256_file(path)}
+    root = _lexical_absolute(root)
+    path = _lexical_absolute(path)
+    try:
+        relative = path.relative_to(root).as_posix()
+    except ValueError as error:
+        raise EvidenceError("artifact path escapes evidence root") from error
+    data, metadata = _artifact_snapshot(
+        root, relative, MAX_ARTIFACT_BYTES, "retained artifact")
+    return {"path": relative, "size": metadata.st_size,
+            "sha256": sha256_bytes(data)}
 
 
 def validate_artifact_record(record: object, label: str,
@@ -1546,32 +2194,108 @@ def validate_artifact_record(record: object, label: str,
 def read_artifact(root: Path, record: object, label: str,
                   maximum_bytes: int = MAX_ARTIFACT_BYTES) -> bytes:
     record = validate_artifact_record(record, label, maximum_bytes)
-    path = safe_artifact(root, record["path"])
-    require(path.is_file(), f"missing retained {label}")
-    with path.open("rb") as stream:
-        data = stream.read(maximum_bytes + 1)
+    data, _metadata = _artifact_snapshot(
+        root, record["path"], maximum_bytes, label)
     require(record["size"] == len(data) and record["sha256"] == sha256_bytes(data),
             f"retained {label} checksum changed")
     return data
 
 
 def artifact_inventory(root: Path) -> list[dict[str, Any]]:
-    """Return the exact retained regular-file inventory except failure.json."""
-    root = root.resolve(strict=True)
+    """Return the exact staged inventory, excluding either terminal record."""
+    descriptor, absolute_root = _open_directory_nofollow(root, "artifact root")
     records: list[dict[str, Any]] = []
-    for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
-        relative = path.relative_to(root).as_posix()
-        metadata = path.lstat()
-        require(not stat.S_ISLNK(metadata.st_mode),
-                f"retained artifact is a symbolic link: {relative}")
-        if stat.S_ISDIR(metadata.st_mode):
-            continue
-        require(stat.S_ISREG(metadata.st_mode),
-                f"retained artifact is not a regular file: {relative}")
-        if relative == "failure.json":
-            continue
-        records.append(artifact_record(root, path))
-    return records
+    seen_directories: set[tuple[int, int]] = set()
+    node_count = 0
+
+    def scan(directory: int, prefix: tuple[str, ...]) -> None:
+        nonlocal node_count
+        directory_before = os.fstat(directory)
+        identity = (directory_before.st_dev, directory_before.st_ino)
+        require(identity not in seen_directories,
+                "artifact directory graph contains a loop")
+        seen_directories.add(identity)
+        names: list[str] = []
+        with os.scandir(directory) as iterator:
+            for entry in iterator:
+                node_count += 1
+                require(node_count <= MAX_ARTIFACT_COUNT * 2,
+                        "artifact tree contains too many entries")
+                names.append(entry.name)
+        for name in sorted(names):
+            require(name not in ("", ".", "..") and "/" not in name and
+                    "\\" not in name,
+                    "artifact tree contains a noncanonical name")
+            relative_parts = (*prefix, name)
+            relative = "/".join(relative_parts)
+            artifact_relative_path(relative)
+            before = os.stat(name, dir_fd=directory, follow_symlinks=False)
+            require(not stat.S_ISLNK(before.st_mode),
+                    f"retained artifact is a symbolic link: {relative}")
+            if stat.S_ISDIR(before.st_mode):
+                child = os.open(
+                    name, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+                    getattr(os, "O_DIRECTORY", 0) |
+                    getattr(os, "O_NOFOLLOW", 0), dir_fd=directory)
+                try:
+                    opened = os.fstat(child)
+                    require((opened.st_dev, opened.st_ino) ==
+                            (before.st_dev, before.st_ino),
+                            "artifact directory was replaced while scanning")
+                    scan(child, relative_parts)
+                    after = os.stat(
+                        name, dir_fd=directory, follow_symlinks=False)
+                    require((after.st_dev, after.st_ino, after.st_mtime_ns,
+                             after.st_ctime_ns) ==
+                            (before.st_dev, before.st_ino, before.st_mtime_ns,
+                             before.st_ctime_ns),
+                            "artifact directory changed while scanning")
+                finally:
+                    os.close(child)
+                continue
+            require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1,
+                    f"retained artifact is not a single-link regular file: {relative}")
+            if relative in ("failure.json", "manifest.json"):
+                continue
+            require(len(records) < MAX_ARTIFACT_COUNT,
+                    "artifact inventory contains too many files")
+            child = os.open(
+                name, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+                getattr(os, "O_NOFOLLOW", 0), dir_fd=directory)
+            try:
+                data, opened = _snapshot_regular_fd(
+                    child, MAX_ARTIFACT_BYTES, relative)
+                after = os.stat(name, dir_fd=directory, follow_symlinks=False)
+                require((after.st_dev, after.st_ino, after.st_mode,
+                         after.st_nlink, after.st_size, after.st_mtime_ns,
+                         after.st_ctime_ns) ==
+                        (opened.st_dev, opened.st_ino, opened.st_mode,
+                         opened.st_nlink, opened.st_size, opened.st_mtime_ns,
+                         opened.st_ctime_ns),
+                        "artifact changed while scanning")
+                records.append({"path": relative, "size": len(data),
+                                "sha256": sha256_bytes(data)})
+            finally:
+                os.close(child)
+        directory_after = os.fstat(directory)
+        require((directory_after.st_dev, directory_after.st_ino,
+                 directory_after.st_mtime_ns, directory_after.st_ctime_ns) ==
+                (directory_before.st_dev, directory_before.st_ino,
+                 directory_before.st_mtime_ns, directory_before.st_ctime_ns),
+                "artifact directory changed while scanning")
+
+    try:
+        scan(descriptor, ())
+        current = os.stat(absolute_root, follow_symlinks=False)
+        opened = os.fstat(descriptor)
+        require((current.st_dev, current.st_ino) ==
+                (opened.st_dev, opened.st_ino),
+                "artifact root was replaced while scanning")
+        return sorted(records, key=lambda item: item["path"])
+    except OSError as error:
+        raise EvidenceError(f"cannot securely inventory artifacts: {error}") from error
+    finally:
+        os.close(descriptor)
 
 
 def validate_artifact_inventory(value: object, root: Path | None,
@@ -1582,7 +2306,8 @@ def validate_artifact_inventory(value: object, root: Path | None,
     for index, item in enumerate(value):
         record = validate_artifact_record(item, f"failure inventory item {index}")
         path = record["path"]
-        require(path != "failure.json" and (index == 0 or previous < path),
+        require(path not in ("failure.json", "manifest.json") and
+                (index == 0 or previous < path),
                 "failure artifact inventory is not strictly sorted and unique")
         previous = path
         records.append(record)
@@ -1601,18 +2326,18 @@ def inventory_contains(inventory: Sequence[Mapping[str, Any]],
 
 def retain_build_provenance(root: Path, build_manifest: Path,
                             inputs: Mapping[str, Any]) -> dict[str, Any]:
-    data = read_bounded(build_manifest.resolve(strict=True))
+    data = read_bounded(_lexical_absolute(build_manifest))
     identity = inputs["build_manifest"]
     require(len(data) == identity["bytes"] and
             sha256_bytes(data) == identity["sha256"],
             "C7 build manifest changed before retention")
-    manifest_path = root / "provenance/build-run-manifest-v4.json"
+    manifest_path = root / "snapshot/provenance/build-run-manifest-v4.json"
     write_exclusive(manifest_path, data)
-    runner_data = read_bounded(Path(__file__).resolve(strict=True))
+    runner_data = read_bounded(_lexical_absolute(Path(__file__)))
     require(len(runner_data) == inputs["runner"]["bytes"] and
             sha256_bytes(runner_data) == inputs["runner"]["sha256"],
             "authoritative runner changed before retention")
-    runner_path = root / "provenance/run_authoritative.py"
+    runner_path = root / "snapshot/provenance/run_authoritative.py"
     write_exclusive(runner_path, runner_data)
     return {"schema": BUILD_PROVENANCE_SCHEMA,
             "manifest": artifact_record(root, manifest_path),
@@ -1629,8 +2354,9 @@ def validate_build_provenance(value: object, root: Path,
     require(isinstance(value["manifest"], dict) and
             isinstance(value["runner"], dict) and
             value["manifest"].get("path") ==
-                "provenance/build-run-manifest-v4.json" and
-            value["runner"].get("path") == "provenance/run_authoritative.py",
+                "snapshot/provenance/build-run-manifest-v4.json" and
+            value["runner"].get("path") ==
+                "snapshot/provenance/run_authoritative.py",
             "retained C7 build provenance paths changed")
     data = read_artifact(root, value["manifest"], "C7 v4 build manifest")
     require(data == canonical_pretty_bytes(
@@ -1658,6 +2384,103 @@ def validate_build_provenance(value: object, root: Path,
 def expected_stderr() -> bytes:
     return b"".join(f"C7 benchmark {index}/12\n".encode("ascii")
                     for index in range(1, 13))
+
+
+def _child_resource_limits() -> None:
+    resource.setrlimit(
+        resource.RLIMIT_FSIZE, (MAX_LOG_BYTES, MAX_LOG_BYTES))
+
+
+def run_child_bounded(command: Sequence[str], stdout_path: Path,
+                      stderr_path: Path, timeout_seconds: float,
+                      environment: Mapping[str, str]) -> tuple[
+                          subprocess.CompletedProcess[bytes], bool, int, int]:
+    """Run without PIPE accumulation; inherited RLIMIT_FSIZE bounds every output."""
+    stdout_path.parent.mkdir(parents=True, exist_ok=True)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | \
+        getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    stdout_fd = os.open(stdout_path, flags, 0o600)
+    stderr_fd: int | None = None
+    process: subprocess.Popen[bytes] | None = None
+    started = time.monotonic_ns()
+    timed_out = False
+    try:
+        stderr_fd = os.open(stderr_path, flags, 0o600)
+        process = subprocess.Popen(
+            list(command), stdin=subprocess.DEVNULL, stdout=stdout_fd,
+            stderr=stderr_fd, env=dict(environment), close_fds=True,
+            preexec_fn=_child_resource_limits)
+        try:
+            returncode = process.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            process.kill()
+            process.wait()
+            returncode = 124
+        os.fsync(stdout_fd)
+        os.fsync(stderr_fd)
+        ended = time.monotonic_ns()
+        completed = subprocess.CompletedProcess(
+            list(command), returncode, stdout=b"", stderr=b"")
+        return completed, timed_out, started, ended
+    finally:
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait()
+        if stderr_fd is not None:
+            os.close(stderr_fd)
+        os.close(stdout_fd)
+
+
+def run_capture_bounded(
+        command: Sequence[str], *, cwd: Path | None, timeout_seconds: float,
+        environment: Mapping[str, str]) -> tuple[
+            subprocess.CompletedProcess[bytes], bytes, bytes, bool]:
+    """Bound diagnostic command output without ever accumulating a PIPE."""
+    with tempfile.TemporaryDirectory(prefix="leopard2-c7-capture-") as directory:
+        root = Path(directory)
+        stdout_path = root / "stdout.bin"
+        stderr_path = root / "stderr.bin"
+        retained_command = list(command)
+        if cwd is not None:
+            # Popen's cwd is needed for Git commands.  Use a tiny wrapper-free
+            # local implementation so the same file-backed capture policy holds.
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | \
+                getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+            stdout_fd = os.open(stdout_path, flags, 0o600)
+            stderr_fd = os.open(stderr_path, flags, 0o600)
+            process: subprocess.Popen[bytes] | None = None
+            timed_out = False
+            try:
+                process = subprocess.Popen(
+                    retained_command, cwd=str(cwd), stdin=subprocess.DEVNULL,
+                    stdout=stdout_fd, stderr=stderr_fd,
+                    env=dict(environment), close_fds=True,
+                    preexec_fn=_child_resource_limits)
+                try:
+                    returncode = process.wait(timeout=timeout_seconds)
+                except subprocess.TimeoutExpired:
+                    timed_out = True
+                    process.kill()
+                    process.wait()
+                    returncode = 124
+                os.fsync(stdout_fd)
+                os.fsync(stderr_fd)
+            finally:
+                if process is not None and process.poll() is None:
+                    process.kill()
+                    process.wait()
+                os.close(stderr_fd)
+                os.close(stdout_fd)
+            completed = subprocess.CompletedProcess(
+                retained_command, returncode, stdout=b"", stderr=b"")
+        else:
+            completed, timed_out, _started, _ended = run_child_bounded(
+                retained_command, stdout_path, stderr_path, timeout_seconds,
+                environment)
+        stdout = read_bounded(stdout_path, MAX_LOG_BYTES)
+        stderr = read_bounded(stderr_path, MAX_LOG_BYTES)
+        return completed, stdout, stderr, timed_out
 
 
 def bounded_positive_number(value: object, label: str,
@@ -1694,17 +2517,50 @@ def validate_request(value: object) -> dict[str, Any]:
     return value
 
 
+PUBLICATION_CONTEXT_FIELDS = (
+    "arguments", "request", "inputs_before", "inputs_after", "host_before",
+    "host_after", "reservation", "pair_lease", "isolation",
+    "build_provenance", "child", "validated_output", "lifecycle",
+)
+
+
+def publication_state_payload(created_utc: str,
+                              context: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "schema": PUBLICATION_STATE_SCHEMA, "created_utc": created_utc,
+        **{key: copy.deepcopy(context[key]) for key in PUBLICATION_CONTEXT_FIELDS},
+    }
+
+
+def validate_publication_state(value: object) -> dict[str, Any]:
+    state = verify_signature(value, "C7 publication state")
+    require(set(state) == {"schema", "created_utc", "digest",
+                           *PUBLICATION_CONTEXT_FIELDS} and
+            state["schema"] == PUBLICATION_STATE_SCHEMA,
+            "publication state schema changed")
+    validate_utc(state["created_utc"], "publication state creation time")
+    validate_lifecycle(state["lifecycle"], require_success=True)
+    return state
+
+
 def validate_raw(value: object, root: Path, check_files: bool = True,
                  result_override: object | None = None) -> dict[str, Any]:
     raw = verify_signature(value, "C7 raw evidence")
-    require(set(raw) == {"schema", "created_utc", "request", "inputs_before",
+    require(set(raw) == {"schema", "created_utc", "arguments", "request",
+                         "publication_state", "pair_lease", "lifecycle", "inputs_before",
                          "inputs_after", "host_before", "host_after", "reservation",
                          "isolation", "build_provenance", "child",
                          "validated_output", "digest"} and
             raw["schema"] == RAW_SCHEMA, "raw evidence schema changed")
     validate_utc(raw["created_utc"], "raw creation time")
+    arguments = validate_arguments(raw["arguments"])
     request = validate_request(raw["request"])
     cpu, sibling = request["cpu"], request["sibling"]
+    require(cpu == arguments["cpu"] and sibling == arguments["sibling"] and
+            typed_equal(request["timeout_seconds"],
+                        arguments["timeout_seconds"]),
+            "raw arguments differ from the request")
+    validate_lifecycle(raw["lifecycle"], require_success=True)
     inputs = validate_input_snapshot(raw["inputs_before"])
     require(typed_equal(raw["inputs_after"], inputs), "input identity changed during run")
     validate_build_provenance(raw["build_provenance"], root, inputs)
@@ -1713,7 +2569,10 @@ def validate_raw(value: object, root: Path, check_files: bool = True,
     require(typed_equal(raw["host_before"], raw["host_after"]),
             "host topology/frequency policy changed during run")
     validate_reservation_record(raw["reservation"], cpu, sibling)
+    pair_lease = validate_pair_lease_identity(raw["pair_lease"], cpu, sibling)
     validate_isolation(raw["isolation"], cpu, sibling)
+    require(typed_equal(raw["isolation"]["pair_lease"], pair_lease),
+            "raw isolation differs from its pair lease")
     child = raw["child"]
     require(isinstance(child, dict) and set(child) == {
         "command", "environment", "returncode", "timed_out", "duration_ns",
@@ -1737,14 +2596,33 @@ def validate_raw(value: object, root: Path, check_files: bool = True,
     normalized = validate_child_result(parsed, cpu, inputs)
     require(typed_equal(raw["validated_output"], normalized),
             "retained C7 validation summary changed")
+    if check_files:
+        state_record = validate_artifact_record(
+            raw["publication_state"], "publication state",
+            MAX_TOP_LEVEL_JSON_BYTES)
+        require(state_record["path"] == "snapshot/publication-state.json",
+                "publication state path changed")
+        state_bytes = read_artifact(
+            root, state_record, "publication state", MAX_TOP_LEVEL_JSON_BYTES)
+        state = strict_json(state_bytes, "C7 publication state")
+        require(state_bytes == canonical_bytes(state) + b"\n",
+                "publication state is not canonical JSON")
+        validate_publication_state(state)
+        expected = signed(publication_state_payload(
+            raw["created_utc"], {key: raw[key]
+                                 for key in PUBLICATION_CONTEXT_FIELDS}))
+        require(typed_equal(state, expected),
+                "raw evidence differs from immutable publication state")
     return normalized
 
 
 def validate_manifest(value: object, root: Path) -> dict[str, Any]:
     manifest = verify_signature(value, "C7 manifest")
-    require(set(manifest) == {"schema", "created_utc", "valid", "raw", "request",
-                              "inputs", "reservation", "isolation", "build_provenance",
-                              "validated_output", "digest"} and
+    require(set(manifest) == {"schema", "created_utc", "valid", "raw",
+                              "publication_state", "artifact_inventory",
+                              "arguments", "request", "inputs", "reservation",
+                              "pair_lease", "isolation", "build_provenance",
+                              "lifecycle", "validated_output", "digest"} and
             manifest["schema"] == MANIFEST_SCHEMA and manifest["valid"] is True,
             "C7 manifest schema changed")
     validate_utc(manifest["created_utc"], "manifest creation time")
@@ -1753,15 +2631,25 @@ def validate_manifest(value: object, root: Path) -> dict[str, Any]:
     require(raw_bytes == canonical_bytes(raw) + b"\n",
             "raw evidence is not canonical JSON")
     normalized = validate_raw(raw, root, check_files=True)
+    inventory = validate_artifact_inventory(
+        manifest["artifact_inventory"], root, check_files=True)
+    inventory_contains(inventory, manifest["raw"], "raw evidence")
+    inventory_contains(
+        inventory, manifest["publication_state"], "publication state")
     require(manifest["created_utc"] == raw["created_utc"],
             "manifest creation time differs from raw evidence")
-    for key, expected in (("request", raw["request"]),
+    for key, expected in (("arguments", raw["arguments"]),
+                          ("request", raw["request"]),
                           ("inputs", raw["inputs_before"]),
                           ("reservation", raw["reservation"]),
+                          ("pair_lease", raw["pair_lease"]),
                           ("isolation", raw["isolation"]),
                           ("build_provenance", raw["build_provenance"]),
+                          ("lifecycle", raw["lifecycle"]),
                           ("validated_output", normalized)):
         require(typed_equal(manifest[key], expected), f"manifest {key} differs from raw")
+    require(typed_equal(manifest["publication_state"], raw["publication_state"]),
+            "manifest publication state differs from raw")
     return normalized
 
 
@@ -1779,14 +2667,14 @@ def validate_failure_child(value: object, request: Mapping[str, Any],
             "failure child invocation or outcome is invalid")
     validate_artifact_record(value["stdout"], "failure stdout", MAX_LOG_BYTES)
     validate_artifact_record(value["stderr"], "failure stderr", MAX_LOG_BYTES)
-    require(value["stdout"]["path"] == "child/stdout.bin" and
-            value["stderr"]["path"] == "child/stderr.bin",
+    require(value["stdout"]["path"] == "snapshot/child/stdout.bin" and
+            value["stderr"]["path"] == "snapshot/child/stderr.bin",
             "failure child stream paths changed")
     require(value["result"] is None or isinstance(value["result"], dict),
             "failure result artifact record changed")
     if value["result"] is not None:
         validate_artifact_record(value["result"], "failure result")
-        require(value["result"]["path"] == "child/result.json",
+        require(value["result"]["path"] == "snapshot/child/result.json",
                 "failure child result path changed")
     if check_files:
         require(root is not None, "failure artifact root is absent")
@@ -1834,11 +2722,19 @@ def validate_arguments(value: object) -> dict[str, Any]:
 
 def failure_state_payload(completed_stage: Mapping[str, Any],
                           failure_code: str,
-                          context: Mapping[str, Any]) -> dict[str, Any]:
+                          context: Mapping[str, Any],
+                          lifecycle: Mapping[str, Any] | None = None,
+                          publication: Mapping[str, Any] | None = None,
+                          snapshot_inventory: Mapping[str, Any] | None = None) -> dict[str, Any]:
     return {
         "schema": FAILURE_STATE_SCHEMA,
         "completed_stage": copy.deepcopy(completed_stage),
         "failure_code": failure_code,
+        "lifecycle": copy.deepcopy(
+            empty_lifecycle() if lifecycle is None else lifecycle),
+        "publication": copy.deepcopy(
+            {"state": None, "raw": None} if publication is None else publication),
+        "snapshot_inventory": copy.deepcopy(snapshot_inventory),
         **{key: copy.deepcopy(context[key]) for key in FAILURE_CONTEXT_FIELDS},
     }
 
@@ -1846,7 +2742,8 @@ def failure_state_payload(completed_stage: Mapping[str, Any],
 def validate_failure_state(value: object) -> dict[str, Any]:
     state = verify_signature(value, "C7 failure state")
     require(set(state) == {
-        "schema", "completed_stage", "failure_code", "digest",
+        "schema", "completed_stage", "failure_code", "lifecycle",
+        "publication", "snapshot_inventory", "digest",
         *FAILURE_CONTEXT_FIELDS} and state["schema"] == FAILURE_STATE_SCHEMA and
         isinstance(state["failure_code"], str) and
         state["failure_code"] in FAILURE_CODE_STAGE,
@@ -1854,10 +2751,61 @@ def validate_failure_state(value: object) -> dict[str, Any]:
     stage = validate_completed_failure_stage(state["completed_stage"])
     require(FAILURE_CODE_STAGE[state["failure_code"]] == stage["index"],
             "failure code does not identify the completed stage")
+    validate_lifecycle(state["lifecycle"], require_success=False)
+    validate_publication_records(state["publication"])
+    validate_snapshot_inventory(state["snapshot_inventory"])
     for index, key in enumerate(FAILURE_CONTEXT_FIELDS):
         require((state[key] is not None) == (stage["index"] >= index),
                 f"failure state presence mask changed at {key}")
     return state
+
+
+def validate_publication_records(value: object) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {"state", "raw"},
+            "failure publication record changed")
+    if value["state"] is not None:
+        validate_artifact_record(
+            value["state"], "failed publication state", MAX_TOP_LEVEL_JSON_BYTES)
+        require(value["state"]["path"] == "snapshot/publication-state.json",
+                "failed publication state path changed")
+    if value["raw"] is not None:
+        require(value["state"] is not None,
+                "failed raw publication has no publication state")
+        validate_artifact_record(
+            value["raw"], "failed raw evidence", MAX_TOP_LEVEL_JSON_BYTES)
+        require(value["raw"]["path"] == "snapshot/raw.json",
+                "failed raw evidence path changed")
+    return value
+
+
+def validate_snapshot_inventory(value: object) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    require(isinstance(value, dict) and set(value) == {
+        "expected", "observed", "predicate"} and
+        value["predicate"] in (
+            "inventory-mismatch", "reservation-guard-validation",
+            "pair-guard-validation", "snapshot-revalidation"),
+            "snapshot mismatch inventory changed")
+    for name in ("expected", "observed"):
+        records = value[name]
+        require(isinstance(records, list) and len(records) <= MAX_ARTIFACT_COUNT,
+                f"snapshot {name} inventory is invalid")
+        previous = ""
+        for index, record in enumerate(records):
+            validate_artifact_record(record, f"snapshot {name} item {index}")
+            require((index == 0 or previous < record["path"]) and
+                    record["path"] not in (
+                        "manifest.json", "failure.json", "failure/state-v2.json"),
+                    f"snapshot {name} inventory order changed")
+            previous = record["path"]
+    if value["predicate"] == "inventory-mismatch":
+        require(not typed_equal(value["expected"], value["observed"]),
+                "snapshot inventory-mismatch predicate is false")
+    else:
+        require(typed_equal(value["expected"], value["observed"]),
+                "guard/semantic snapshot predicate contains an inventory mismatch")
+    return value
 
 
 def _failure_result_bytes(root: Path, child: Mapping[str, Any]) -> bytes:
@@ -1873,19 +2821,38 @@ def _validate_failure(value: object, root: Path | None,
     require(set(failure) == {
         "schema", "status", "created_utc", "failure_code", "completed_stage",
         "error_type", "error", "traceback", "state", "artifact_inventory",
-        "digest", *FAILURE_CONTEXT_FIELDS} and
+        "lifecycle", "publication", "snapshot_inventory", "digest",
+        *FAILURE_CONTEXT_FIELDS} and
         failure["schema"] == FAILURE_SCHEMA and failure["status"] == "failed" and
         isinstance(failure["failure_code"], str) and
         failure["failure_code"] in FAILURE_CODE_STAGE and
         isinstance(failure["error_type"], str) and failure["error_type"] and
         isinstance(failure["error"], str) and failure["error"] and
-        isinstance(failure["traceback"], str) and failure["traceback"],
+        isinstance(failure["traceback"], str) and failure["traceback"] and
+        len(failure["traceback"].encode("utf-8", errors="replace")) <=
+            MAX_DIAGNOSTIC_BYTES,
         "failure evidence schema changed")
     validate_utc(failure["created_utc"], "failure creation time")
     stage = validate_completed_failure_stage(failure["completed_stage"])
     code = failure["failure_code"]
     require(FAILURE_CODE_STAGE[code] == stage["index"],
             "failure code does not identify the completed stage")
+    require(failure["error_type"] == "EvidenceError",
+            "failure error type is not canonical")
+    if code == "child-exit":
+        pass  # bound to the retained return code after child validation below
+    else:
+        require(code in FAILURE_DIAGNOSTICS and
+                failure["error"] == FAILURE_DIAGNOSTICS[code],
+                "failure diagnostic does not match its code")
+    lifecycle = validate_lifecycle(
+        failure["lifecycle"], require_success=False)
+    publication = validate_publication_records(failure["publication"])
+    snapshot_inventory = validate_snapshot_inventory(
+        failure["snapshot_inventory"])
+    require((snapshot_inventory is not None) ==
+            (code == "final-snapshot-invalid"),
+            "snapshot mismatch presence does not match its failure code")
     for index, key in enumerate(FAILURE_CONTEXT_FIELDS):
         require((failure[key] is not None) == (stage["index"] >= index),
                 f"failure context presence mask changed at {key}")
@@ -1894,7 +2861,7 @@ def _validate_failure(value: object, root: Path | None,
         failure["artifact_inventory"], root, check_files=True)
     state_record = validate_artifact_record(
         failure["state"], "failure state", MAX_TOP_LEVEL_JSON_BYTES)
-    require(state_record["path"] == "failure/state-v1.json",
+    require(state_record["path"] == "failure/state-v2.json",
             "failure state path changed")
     inventory_contains(inventory, state_record, "failure state")
     state_bytes = read_artifact(
@@ -1904,9 +2871,32 @@ def _validate_failure(value: object, root: Path | None,
             "failure state is not canonical JSON")
     validate_failure_state(state)
     expected_state = signed(failure_state_payload(
-        stage, code, {key: failure[key] for key in FAILURE_CONTEXT_FIELDS}))
+        stage, code, {key: failure[key] for key in FAILURE_CONTEXT_FIELDS},
+        lifecycle, publication, snapshot_inventory))
     require(typed_equal(state, expected_state),
             "failure top-level context differs from retained state")
+
+    expected_inventory = [state_record]
+    if failure["build_provenance"] is not None:
+        expected_inventory.extend((failure["build_provenance"]["manifest"],
+                                   failure["build_provenance"]["runner"]))
+    if failure["child"] is not None:
+        expected_inventory.extend((failure["child"]["stdout"],
+                                   failure["child"]["stderr"]))
+        if failure["child"]["result"] is not None:
+            expected_inventory.append(failure["child"]["result"])
+    for retained in (publication["state"], publication["raw"]):
+        if retained is not None:
+            expected_inventory.append(retained)
+    if snapshot_inventory is None:
+        require(typed_equal(
+            sorted(expected_inventory, key=lambda item: item["path"]), inventory),
+            "failure inventory is not the exact stage-derived artifact set")
+    else:
+        require(typed_equal(
+            sorted([*snapshot_inventory["observed"], state_record],
+                   key=lambda item: item["path"]), inventory),
+            "final-snapshot failure inventory differs from its observation")
 
     arguments = None
     request = None
@@ -1951,11 +2941,39 @@ def _validate_failure(value: object, root: Path | None,
                            "failure authoritative runner")
     if stage["index"] >= 7:
         child = validate_failure_child(
-            failure["child"], request, root, check_files=True)
-        inventory_contains(inventory, child["stdout"], "failure child stdout")
-        inventory_contains(inventory, child["stderr"], "failure child stderr")
-        if child["result"] is not None:
-            inventory_contains(inventory, child["result"], "failure child result")
+            failure["child"], request, root,
+            check_files=code != "final-snapshot-invalid")
+        if code != "final-snapshot-invalid":
+            inventory_contains(inventory, child["stdout"], "failure child stdout")
+            inventory_contains(inventory, child["stderr"], "failure child stderr")
+            if child["result"] is not None:
+                inventory_contains(inventory, child["result"], "failure child result")
+    if code == "final-snapshot-invalid":
+        require(stage["index"] == 11 and
+                lifecycle["reservation"]["exit"] == "pass" and
+                lifecycle["pair_lease"]["exit"] == "pass" and
+                lifecycle["affinity"]["restore_succeeded"] and
+                lifecycle["affinity"]["exact"],
+                "final-snapshot lifecycle predicate is false")
+        require(typed_equal(
+            snapshot_inventory["expected"],
+            sorted(expected_inventory[1:], key=lambda item: item["path"])),
+            "final-snapshot expected inventory is not context-derived")
+        checks = lifecycle["guard_checks"]
+        predicate = snapshot_inventory["predicate"]
+        if predicate == "reservation-guard-validation":
+            require(checks["reservation_final"]["status"] == "failed" and
+                    checks["pair_final"]["status"] == "not-reached",
+                    "final reservation-guard predicate is false")
+        elif predicate == "pair-guard-validation":
+            require(checks["reservation_final"]["status"] == "pass" and
+                    checks["pair_final"]["status"] == "failed",
+                    "final pair-guard predicate is false")
+        else:
+            require(checks["reservation_final"]["status"] == "pass" and
+                    checks["pair_final"]["status"] == "pass",
+                    "final snapshot revalidation predicate is false")
+        return failure
     if stage["index"] >= 8:
         isolation = validate_isolation(
             failure["isolation"], request["cpu"], request["sibling"],
@@ -1963,16 +2981,22 @@ def _validate_failure(value: object, root: Path | None,
         require(typed_equal(isolation["pair_lease"], pair_lease) and
                 child["duration_ns"] == isolation["duration_ns"],
                 "failure child/isolation/lease relationship changed")
+        checks = lifecycle["guard_checks"]
 
         if code == "child-timeout":
+            require(checks["reservation_post_child"]["status"] == "not-reached" and
+                    checks["pair_post_child"]["status"] == "not-reached",
+                    "timeout failure ran post-child guard checks")
             require(child["timed_out"] is True and child["returncode"] == 124 and
-                    failure["error_type"] == "EvidenceError" and
-                    failure["error"] == "C7 child timed out",
+                    failure["error"] == FAILURE_DIAGNOSTICS[code],
                     "timeout failure predicate changed")
             return failure
         require(child["timed_out"] is False,
                 "non-timeout failure retains a timed-out child")
         if code == "child-exit":
+            require(checks["reservation_post_child"]["status"] == "not-reached" and
+                    checks["pair_post_child"]["status"] == "not-reached",
+                    "child-exit failure ran post-child guard checks")
             require(child["returncode"] != 0 and
                     failure["error_type"] == "EvidenceError" and
                     failure["error"] == f"C7 child exited {child['returncode']}",
@@ -1981,8 +3005,11 @@ def _validate_failure(value: object, root: Path | None,
         require(child["returncode"] == 0,
                 "post-success failure retains a nonzero child exit")
         if code == "child-result-missing":
+            require(checks["reservation_post_child"]["status"] == "not-reached" and
+                    checks["pair_post_child"]["status"] == "not-reached",
+                    "missing-result failure ran post-child guard checks")
             require(child["result"] is None and
-                    failure["error"] == "C7 child did not write result JSON",
+                    failure["error"] == FAILURE_DIAGNOSTICS[code],
                     "missing-result failure predicate changed")
             return failure
         require(child["result"] is not None,
@@ -1990,21 +3017,45 @@ def _validate_failure(value: object, root: Path | None,
 
         stdout = read_artifact(root, child["stdout"], "failure stdout", MAX_LOG_BYTES)
         if code == "child-stdout-invalid":
+            require(checks["reservation_post_child"]["status"] == "not-reached" and
+                    checks["pair_post_child"]["status"] == "not-reached",
+                    "stdout failure ran post-child guard checks")
             require(stdout != b"", "stdout failure predicate is false")
             return failure
         require(stdout == b"", "post-success failure has unexpected stdout")
         stderr = read_artifact(root, child["stderr"], "failure stderr", MAX_LOG_BYTES)
         if code == "child-stderr-invalid":
+            require(checks["reservation_post_child"]["status"] == "not-reached" and
+                    checks["pair_post_child"]["status"] == "not-reached",
+                    "stderr failure ran post-child guard checks")
             require(stderr != expected_stderr(), "stderr failure predicate is false")
             return failure
         require(stderr == expected_stderr(),
                 "post-success failure has invalid stderr progress")
         if code == "isolation-rejected":
+            require(checks["reservation_post_child"]["status"] == "not-reached" and
+                    checks["pair_post_child"]["status"] == "not-reached",
+                    "isolation failure ran post-child guard checks")
             require(isolation["accepted"] is False,
                     "isolation failure predicate is false")
             return failure
         require(isolation["accepted"] is True,
                 "post-success failure retains rejected isolation")
+
+        if code == "reservation-post-child-invalid":
+            require(checks["reservation_post_child"]["status"] == "failed" and
+                    checks["pair_post_child"]["status"] == "not-reached",
+                    "reservation post-child guard predicate is false")
+            return failure
+        if code == "lease-post-child-invalid":
+            require(checks["reservation_post_child"]["status"] == "pass" and
+                    checks["pair_post_child"]["status"] == "failed",
+                    "pair post-child guard predicate is false")
+            return failure
+
+        require(checks["reservation_post_child"]["status"] == "pass" and
+                checks["pair_post_child"]["status"] == "pass",
+                "post-guard failure lacks completed post-child checks")
 
         result_bytes = _failure_result_bytes(root, child)
         if code == "child-result-json-invalid":
@@ -2042,6 +3093,40 @@ def _validate_failure(value: object, root: Path | None,
             parsed_result, request["cpu"], inputs_before)
         require(typed_equal(failure["validated_output"], normalized),
                 "failure validated output differs from the child result")
+        guard_failed = any(lifecycle[name]["exit"] == "failed"
+                           for name in ("reservation", "pair_lease"))
+        affinity = lifecycle["affinity"]
+        require(all(check["status"] == "pass" for check in
+                    lifecycle["guard_checks"].values()),
+                "post-validation failure lacks all guard checks")
+        if code == "guard-exit-failed":
+            require(guard_failed and affinity["restore_succeeded"] and
+                    affinity["exact"], "guard-exit failure predicate is false")
+            return failure
+        require(not guard_failed,
+                "non-guard failure retains a failed guard teardown")
+        if code == "affinity-restore-failed":
+            require(affinity["restore_attempted"] and
+                    (not affinity["restore_succeeded"] or not affinity["exact"]),
+                    "affinity-restore failure predicate is false")
+            return failure
+        require(affinity["restore_succeeded"] and affinity["exact"],
+                "publication failure lacks exact affinity restoration")
+        if code == "publication-state-write-failed":
+            require(publication["state"] is None and publication["raw"] is None,
+                    "publication-state failure predicate is false")
+            return failure
+        require(publication["state"] is not None,
+                "post-publication-state failure lacks its staged state")
+        if code == "raw-write-failed":
+            require(publication["raw"] is None,
+                    "raw-write failure predicate is false")
+            return failure
+        require(publication["raw"] is not None,
+                "post-raw failure lacks staged raw evidence")
+        require(code in ("manifest-validation-failed",
+                         "final-snapshot-invalid", "manifest-write-failed"),
+                "stage-11 failure has no exact lifecycle predicate")
     return failure
 
 
@@ -2057,10 +3142,75 @@ def validate_failure(value: object, root: Path | None = None,
             f"malformed C7 failure evidence: {type(error).__name__}: {error}") from error
 
 
+def _failure_diagnostic(code: str, child: Mapping[str, Any] | None) -> str:
+    if code == "child-exit":
+        require(child is not None and type(child.get("returncode")) is int,
+                "child-exit has no retained return code")
+        return f"C7 child exited {child['returncode']}"
+    require(code in FAILURE_DIAGNOSTICS, "failure code has no canonical diagnostic")
+    return FAILURE_DIAGNOSTICS[code]
+
+
+def _bounded_traceback(value: str) -> str:
+    encoded = (value or "failure captured without a Python traceback\n").encode(
+        "utf-8", errors="replace")
+    if len(encoded) > MAX_DIAGNOSTIC_BYTES:
+        encoded = encoded[:MAX_DIAGNOSTIC_BYTES]
+    return encoded.decode("utf-8", errors="replace")
+
+
+def _restore_affinity(lifecycle: dict[str, Any], original: set[int] | None) -> None:
+    if original is None:
+        return
+    affinity = lifecycle["affinity"]
+    affinity["restore_attempted"] = True
+    try:
+        os.sched_setaffinity(0, original)
+        observed = set(os.sched_getaffinity(0))
+        affinity["observed"] = sorted(observed)
+        affinity["restore_succeeded"] = True
+        affinity["exact"] = observed == original
+        if observed != original:
+            affinity["restore_succeeded"] = False
+            affinity["error_type"] = "EvidenceError"
+            affinity["error"] = "affinity readback differs from captured CPU set"
+    except BaseException as error:
+        error_type, message = _bounded_exception(error)
+        affinity.update(restore_succeeded=False, observed=None, exact=False,
+                        error_type=error_type, error=message)
+
+
+def _publish_terminal(root: Path, name: str, value: Mapping[str, Any]) -> None:
+    require(name in ("manifest.json", "failure.json"),
+            "terminal artifact name is invalid")
+    other = "failure.json" if name == "manifest.json" else "manifest.json"
+    authority = KernelNamespaceLease(
+        "terminal", {"path": str(_lexical_absolute(root)), "uid": os.getuid()})
+    authority.acquire()
+    try:
+        require(not os.path.lexists(root / name) and
+                not os.path.lexists(root / other),
+                "terminal success/failure artifact already exists")
+        write_json_exclusive(root / name, value)
+    except BaseException:
+        try:
+            authority.release()
+        except OSError:
+            pass
+        raise
+    try:
+        authority.release()
+    except OSError:
+        pass
+
+
 def run_campaign(options: argparse.Namespace) -> int:
-    output = options.output.resolve()
+    output = _lexical_absolute(options.output)
     require(not output.exists(), f"output already exists: {output}")
-    output.mkdir(parents=True)
+    output.mkdir(parents=True, mode=0o700)
+    os.chmod(output, 0o700)
+    lifecycle = empty_lifecycle()
+    publication: dict[str, Any] = {"state": None, "raw": None}
     arguments: dict[str, Any] | None = None
     child_record: dict[str, Any] | None = None
     isolation: dict[str, Any] | None = None
@@ -2076,241 +3226,329 @@ def run_campaign(options: argparse.Namespace) -> int:
     original_affinity: set[int] | None = None
     completed_stage_index = -1
     failure_code = "arguments-invalid"
+    body_error: BaseException | None = None
+    body_traceback = ""
+    reservation_guard: Reservation | None = None
+    pair_guard: PairLease | None = None
+    final_snapshot_predicate = "snapshot-revalidation"
     try:
-        candidate_arguments = {
+        arguments = validate_arguments({
             "cpu": options.cpu, "sibling": options.sibling,
             "timeout_seconds": options.timeout,
             "expected_tooling_commit": options.expected_tooling_commit,
             "expected_core_commit": options.expected_core_commit,
-        }
-        arguments = validate_arguments(candidate_arguments)
+        })
         completed_stage_index = 0
         failure_code = "request-invalid"
-        candidate_request = {
-            "backend": "avx2",
-            "cell_geometry": [list(cell) for cell in EXPECTED_CELLS],
+        request = {
+            "backend": "avx2", "cell_geometry": [list(cell) for cell in EXPECTED_CELLS],
             "child_environment": dict(CHILD_ENVIRONMENT), "cpu": options.cpu,
             "sibling": options.sibling, "timeout_seconds": options.timeout,
             "command": ["${TASKSET}", "-c", str(options.cpu),
-                        "${C7_EXECUTABLE}", "--backend", "avx2",
-                        "${RESULT_JSON}"],
+                        "${C7_EXECUTABLE}", "--backend", "avx2", "${RESULT_JSON}"],
         }
-        validate_request(candidate_request)
-        request = candidate_request
+        validate_request(request)
         completed_stage_index = 1
         failure_code = "host-capture-failed"
         original_affinity = set(os.sched_getaffinity(0))
+        require(original_affinity, "launch affinity is empty")
+        lifecycle["affinity"]["captured"] = sorted(original_affinity)
         allowed, housekeeping = validate_topology(options.cpu, options.sibling)
-        candidate_host = host_identity(options.cpu, options.sibling, allowed)
-        validate_host(candidate_host, options.cpu, options.sibling)
-        host_before = candidate_host
+        host_before = host_identity(options.cpu, options.sibling, allowed)
+        validate_host(host_before, options.cpu, options.sibling)
         completed_stage_index = 2
         failure_code = "reservation-failed"
         reservation_guard = Reservation(
             options.reservation_file, options.cpu, options.sibling)
         pair_guard = PairLease(options.cpu, options.sibling)
-        with reservation_guard as candidate_reservation:
-            validate_reservation_record(
-                candidate_reservation, options.cpu, options.sibling)
-            reservation_record = candidate_reservation
+        with ExitRecordingGuard(reservation_guard, lifecycle, "reservation") as retained_reservation:
+            require(typed_equal(retained_reservation, reservation_guard.identity),
+                    "reservation guard returned a mutable or foreign identity")
+            validate_reservation_record(retained_reservation, options.cpu, options.sibling)
+            reservation_record = copy.deepcopy(retained_reservation)
             completed_stage_index = 3
             failure_code = "lease-failed"
-            with pair_guard as candidate_pair_lease:
-                validate_pair_lease_identity(
-                    candidate_pair_lease, options.cpu, options.sibling)
-                pair_lease_record = candidate_pair_lease
+            with ExitRecordingGuard(pair_guard, lifecycle, "pair_lease") as retained_pair:
+                require(typed_equal(retained_pair, pair_guard.identity),
+                        "pair guard returned a mutable or foreign identity")
+                validate_pair_lease_identity(retained_pair, options.cpu, options.sibling)
+                pair_lease_record = copy.deepcopy(retained_pair)
                 completed_stage_index = 4
                 failure_code = "inputs-capture-failed"
                 os.sched_setaffinity(0, housekeeping)
-                taskset = Path("/usr/bin/taskset").resolve(strict=True)
-                executable = options.executable.resolve(strict=True)
-                archive = options.archive.resolve(strict=True)
-                build_manifest = options.build_manifest.resolve(strict=True)
-                source_root = options.source_root.resolve(strict=True)
-                candidate_inputs = input_snapshot(
+                taskset = _lexical_absolute(Path("/usr/bin/taskset"))
+                executable = _lexical_absolute(options.executable)
+                archive = _lexical_absolute(options.archive)
+                build_manifest = _lexical_absolute(options.build_manifest)
+                source_root = _lexical_absolute(options.source_root)
+                inputs_before = input_snapshot(
                     source_root, options.expected_tooling_commit,
                     options.expected_core_commit, archive, executable, taskset,
                     build_manifest)
-                validate_input_snapshot(candidate_inputs)
-                candidate_provenance = retain_build_provenance(
-                    output, build_manifest, candidate_inputs)
-                validate_build_provenance(
-                    candidate_provenance, output, candidate_inputs)
-                inputs_before = candidate_inputs
+                validate_input_snapshot(inputs_before)
                 completed_stage_index = 5
                 failure_code = "attestation-failed"
-                build_provenance = candidate_provenance
+                build_provenance = retain_build_provenance(
+                    output, build_manifest, inputs_before)
+                validate_build_provenance(build_provenance, output, inputs_before)
                 completed_stage_index = 6
                 failure_code = "child-capture-failed"
-
-                result_path = output / "child/result.json"
-                stdout_path = output / "child/stdout.bin"
-                stderr_path = output / "child/stderr.bin"
+                result_path = output / "snapshot/child/result.json"
+                stdout_path = output / "snapshot/child/stdout.bin"
+                stderr_path = output / "snapshot/child/stderr.bin"
                 result_path.parent.mkdir(parents=True, exist_ok=True)
                 before_cpu = cpu_stat_snapshot(options.cpu)
                 before_sibling = cpu_stat_snapshot(options.sibling)
-                started = time.monotonic_ns()
-                timed_out = False
                 command = [str(taskset), "-c", str(options.cpu), str(executable),
                            "--backend", "avx2", str(result_path)]
-                try:
-                    completed = subprocess.run(
-                        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                        check=False, timeout=options.timeout,
-                        env=dict(CHILD_ENVIRONMENT))
-                except subprocess.TimeoutExpired as error:
-                    timed_out = True
-                    completed = subprocess.CompletedProcess(
-                        command, 124, error.stdout or b"", error.stderr or b"")
-                ended = time.monotonic_ns()
+                completed, timed_out, started, ended = run_child_bounded(
+                    command, stdout_path, stderr_path, options.timeout,
+                    CHILD_ENVIRONMENT)
                 after_cpu = cpu_stat_snapshot(options.cpu)
                 after_sibling = cpu_stat_snapshot(options.sibling)
-                write_exclusive(stdout_path, completed.stdout)
-                write_exclusive(stderr_path, completed.stderr)
-                result_record = (artifact_record(output, result_path)
-                                 if result_path.is_file() else None)
-                candidate_child = {
-                    "command": request["command"],
-                    "environment": dict(CHILD_ENVIRONMENT),
+                try:
+                    result_record = artifact_record(output, result_path)
+                except EvidenceError:
+                    result_record = None
+                child_record = {
+                    "command": request["command"], "environment": dict(CHILD_ENVIRONMENT),
                     "returncode": completed.returncode, "timed_out": timed_out,
                     "duration_ns": ended - started,
                     "stdout": artifact_record(output, stdout_path),
                     "stderr": artifact_record(output, stderr_path),
                     "result": result_record,
                 }
-                validate_failure_child(
-                    candidate_child, request, output, check_files=True)
-                child_record = candidate_child
+                validate_failure_child(child_record, request, output, check_files=True)
                 completed_stage_index = 7
                 failure_code = "isolation-capture-failed"
-                candidate_isolation = isolation_record(
+                isolation = isolation_record(
                     options.cpu, options.sibling, pair_lease_record,
                     before_cpu, after_cpu, before_sibling, after_sibling,
                     started, ended)
-                validate_isolation(
-                    candidate_isolation, options.cpu, options.sibling,
-                    require_accepted=False)
-                isolation = candidate_isolation
+                validate_isolation(isolation, options.cpu, options.sibling,
+                                   require_accepted=False)
                 completed_stage_index = 8
-
                 failure_code = "child-timeout"
-                require(not timed_out, "C7 child timed out")
+                require(not timed_out, FAILURE_DIAGNOSTICS[failure_code])
                 failure_code = "child-exit"
                 require(completed.returncode == 0,
                         f"C7 child exited {completed.returncode}")
                 failure_code = "child-result-missing"
-                require(result_record is not None,
-                        "C7 child did not write result JSON")
+                require(result_record is not None, FAILURE_DIAGNOSTICS[failure_code])
+                stdout = read_artifact(output, child_record["stdout"], "stdout", MAX_LOG_BYTES)
+                stderr = read_artifact(output, child_record["stderr"], "stderr", MAX_LOG_BYTES)
                 failure_code = "child-stdout-invalid"
-                require(completed.stdout == b"", "C7 child unexpectedly wrote stdout")
+                require(stdout == b"", FAILURE_DIAGNOSTICS[failure_code])
                 failure_code = "child-stderr-invalid"
-                require(completed.stderr == expected_stderr(),
-                        "C7 child stderr progress changed")
+                require(stderr == expected_stderr(), FAILURE_DIAGNOSTICS[failure_code])
                 failure_code = "isolation-rejected"
                 validate_isolation(isolation, options.cpu, options.sibling)
                 failure_code = "reservation-post-child-invalid"
-                reservation_guard.validate_current()
+                run_guard_check(
+                    lifecycle, "reservation_post_child",
+                    lambda: reservation_guard.validate_current(reservation_record))
                 failure_code = "lease-post-child-invalid"
-                pair_guard.validate_current()
+                run_guard_check(
+                    lifecycle, "pair_post_child",
+                    lambda: pair_guard.validate_current(pair_lease_record))
                 failure_code = "child-result-json-invalid"
                 result_bytes = read_artifact(output, result_record, "result")
                 parsed = strict_json(result_bytes, "C7 result")
-
                 failure_code = "inputs-after-capture-failed"
-                candidate_inputs_after = input_snapshot(
+                inputs_after = input_snapshot(
                     source_root, options.expected_tooling_commit,
                     options.expected_core_commit, archive, executable, taskset,
                     build_manifest)
-                validate_input_snapshot(candidate_inputs_after)
-                inputs_after = candidate_inputs_after
+                validate_input_snapshot(inputs_after)
                 completed_stage_index = 9
                 failure_code = "inputs-drift"
                 require(typed_equal(inputs_after, inputs_before),
-                        "source/archive/executable changed during C7 run")
+                        FAILURE_DIAGNOSTICS[failure_code])
                 failure_code = "host-after-capture-failed"
-                candidate_host_after = host_identity(
-                    options.cpu, options.sibling, allowed)
-                validate_host(candidate_host_after, options.cpu, options.sibling)
-                host_after = candidate_host_after
+                host_after = host_identity(options.cpu, options.sibling, allowed)
+                validate_host(host_after, options.cpu, options.sibling)
                 completed_stage_index = 10
                 failure_code = "host-drift"
                 require(typed_equal(host_after, host_before),
-                        "host topology/frequency policy changed during C7 run")
+                        FAILURE_DIAGNOSTICS[failure_code])
                 failure_code = "child-result-invalid"
-                validated_output = validate_child_result(
-                    parsed, options.cpu, inputs_before)
+                validated_output = validate_child_result(parsed, options.cpu, inputs_before)
                 completed_stage_index = 11
-                failure_code = "internal-validation-failed"
-                created = utc_now()
-                raw = signed({
-                    "schema": RAW_SCHEMA, "created_utc": created,
-                    "request": request, "inputs_before": inputs_before,
-                    "inputs_after": inputs_after, "host_before": host_before,
-                    "host_after": host_after, "reservation": reservation_record,
-                    "isolation": isolation,
-                    "build_provenance": build_provenance,
-                    "child": child_record,
-                    "validated_output": validated_output,
-                })
-                validate_raw(raw, output, check_files=True)
-                raw_path = output / "raw.json"
-                failure_code = "raw-write-failed"
-                write_json_exclusive(raw_path, raw)
-                failure_code = "manifest-validation-failed"
-                manifest = signed({
-                    "schema": MANIFEST_SCHEMA, "created_utc": created,
-                    "valid": True, "raw": artifact_record(output, raw_path),
-                    "request": request, "inputs": inputs_before,
-                    "reservation": reservation_record,
-                    "isolation": isolation,
-                    "build_provenance": build_provenance,
-                    "validated_output": validated_output,
-                })
-                validate_manifest(manifest, output)
-                failure_code = "reservation-final-invalid"
-                reservation_guard.validate_current()
-                failure_code = "lease-final-invalid"
-                pair_guard.validate_current()
-                failure_code = "manifest-write-failed"
-                write_json_exclusive(output / "manifest.json", manifest)
-    except Exception as error:
+
+                # This is the final lease call.  Everything it protects is read
+                # again after it returns, closing a validate-then-replace window.
+                failure_code = "final-snapshot-invalid"
+                final_snapshot_predicate = "reservation-guard-validation"
+                run_guard_check(
+                    lifecycle, "reservation_final",
+                    lambda: reservation_guard.validate_current(reservation_record))
+                final_snapshot_predicate = "pair-guard-validation"
+                run_guard_check(
+                    lifecycle, "pair_final",
+                    lambda: pair_guard.validate_current(pair_lease_record))
+                final_snapshot_predicate = "snapshot-revalidation"
+                require(read_artifact(output, result_record, "result") == result_bytes,
+                        FAILURE_DIAGNOSTICS[failure_code])
+                require(read_artifact(output, child_record["stdout"], "stdout",
+                                      MAX_LOG_BYTES) == b"",
+                        FAILURE_DIAGNOSTICS[failure_code])
+                require(read_artifact(output, child_record["stderr"], "stderr",
+                                      MAX_LOG_BYTES) == expected_stderr(),
+                        FAILURE_DIAGNOSTICS[failure_code])
+                validate_child_result(strict_json(result_bytes, "C7 result"),
+                                      options.cpu, inputs_before)
+                expected_paths = sorted(
+                    [build_provenance["manifest"], build_provenance["runner"],
+                     child_record["stdout"], child_record["stderr"], result_record],
+                    key=lambda item: item["path"])
+                require(typed_equal(artifact_inventory(output), expected_paths),
+                        FAILURE_DIAGNOSTICS[failure_code])
+    except BaseException as error:
+        body_error = error
+        body_traceback = traceback.format_exc()
+
+    # Context managers have exited before this point.  Restore and read back the
+    # exact launch mask before selecting either terminal outcome.
+    _restore_affinity(lifecycle, original_affinity)
+    if body_error is None and any(
+            lifecycle[name]["exit"] == "failed"
+            for name in ("reservation", "pair_lease")):
+        body_error = EvidenceError(FAILURE_DIAGNOSTICS["guard-exit-failed"])
+        body_traceback = "guard teardown failed after successful body\n"
+        failure_code = "guard-exit-failed"
+    if body_error is None and original_affinity is not None and not (
+            lifecycle["affinity"]["restore_succeeded"] and
+            lifecycle["affinity"]["exact"]):
+        body_error = EvidenceError(FAILURE_DIAGNOSTICS["affinity-restore-failed"])
+        body_traceback = "affinity restore/readback failed after successful body\n"
+        failure_code = "affinity-restore-failed"
+
+    context = {
+        "arguments": arguments, "request": request, "host_before": host_before,
+        "reservation": reservation_record, "pair_lease": pair_lease_record,
+        "inputs_before": inputs_before, "build_provenance": build_provenance,
+        "child": child_record, "isolation": isolation,
+        "inputs_after": inputs_after, "host_after": host_after,
+        "validated_output": validated_output,
+    }
+
+    if body_error is None:
+        try:
+            validate_lifecycle(lifecycle, require_success=True)
+            created = utc_now()
+            success_context = {
+                "arguments": arguments, "request": request,
+                "inputs_before": inputs_before, "inputs_after": inputs_after,
+                "host_before": host_before, "host_after": host_after,
+                "reservation": reservation_record, "pair_lease": pair_lease_record,
+                "isolation": isolation, "build_provenance": build_provenance,
+                "child": child_record, "validated_output": validated_output,
+                "lifecycle": lifecycle,
+            }
+            failure_code = "publication-state-write-failed"
+            publication_state = signed(publication_state_payload(
+                created, success_context))
+            validate_publication_state(publication_state)
+            state_path = output / "snapshot/publication-state.json"
+            write_json_exclusive(state_path, publication_state)
+            publication["state"] = artifact_record(output, state_path)
+            failure_code = "raw-write-failed"
+            raw = signed({
+                "schema": RAW_SCHEMA, "created_utc": created,
+                "publication_state": publication["state"], **success_context,
+            })
+            validate_raw(raw, output, check_files=True)
+            raw_path = output / "snapshot/raw.json"
+            write_json_exclusive(raw_path, raw)
+            publication["raw"] = artifact_record(output, raw_path)
+            failure_code = "manifest-validation-failed"
+            manifest = signed({
+                "schema": MANIFEST_SCHEMA, "created_utc": created, "valid": True,
+                "publication_state": publication["state"], "raw": publication["raw"],
+                "artifact_inventory": artifact_inventory(output),
+                "arguments": arguments, "request": request, "inputs": inputs_before,
+                "reservation": reservation_record, "pair_lease": pair_lease_record,
+                "isolation": isolation, "build_provenance": build_provenance,
+                "lifecycle": lifecycle, "validated_output": validated_output,
+            })
+            validate_manifest(manifest, output)
+            failure_code = "final-snapshot-invalid"
+            observed = set(os.sched_getaffinity(0))
+            if observed != original_affinity:
+                lifecycle["affinity"].update(
+                    observed=sorted(observed), restore_succeeded=True,
+                    exact=False, error_type=None, error=None)
+                raise EvidenceError(FAILURE_DIAGNOSTICS["affinity-restore-failed"])
+            require(typed_equal(manifest["artifact_inventory"],
+                                artifact_inventory(output)),
+                    FAILURE_DIAGNOSTICS[failure_code])
+            validate_manifest(manifest, output)
+            failure_code = "manifest-write-failed"
+            _publish_terminal(output, "manifest.json", manifest)
+        except BaseException as error:
+            body_error = error
+            body_traceback = traceback.format_exc()
+            if (failure_code == "final-snapshot-invalid" and
+                    not lifecycle["affinity"]["exact"]):
+                failure_code = "affinity-restore-failed"
+
+    if body_error is not None:
         require(FAILURE_CODE_STAGE.get(failure_code) == completed_stage_index,
                 "internal failure-code/stage mismatch")
-        context = {
-            "arguments": arguments, "request": request,
-            "host_before": host_before, "reservation": reservation_record,
-            "pair_lease": pair_lease_record, "inputs_before": inputs_before,
-            "build_provenance": build_provenance, "child": child_record,
-            "isolation": isolation, "inputs_after": inputs_after,
-            "host_after": host_after, "validated_output": validated_output,
-        }
         stage = completed_failure_stage(completed_stage_index)
-        state = signed(failure_state_payload(stage, failure_code, context))
-        state_path = output / "failure/state-v1.json"
+        snapshot_inventory: dict[str, Any] | None = None
+        if failure_code == "final-snapshot-invalid":
+            expected_snapshot: list[dict[str, Any]] = []
+            if build_provenance is not None:
+                expected_snapshot.extend((build_provenance["manifest"],
+                                          build_provenance["runner"]))
+            if child_record is not None:
+                expected_snapshot.extend((child_record["stdout"],
+                                          child_record["stderr"]))
+                if child_record["result"] is not None:
+                    expected_snapshot.append(child_record["result"])
+            for retained in (publication["state"], publication["raw"]):
+                if retained is not None:
+                    expected_snapshot.append(retained)
+            snapshot_inventory = {
+                "expected": sorted(expected_snapshot,
+                                   key=lambda item: item["path"]),
+                "observed": artifact_inventory(output),
+            }
+            snapshot_inventory["predicate"] = (
+                "inventory-mismatch" if not typed_equal(
+                    snapshot_inventory["expected"],
+                    snapshot_inventory["observed"])
+                else final_snapshot_predicate)
+        state = signed(failure_state_payload(
+            stage, failure_code, context, lifecycle, publication,
+            snapshot_inventory))
+        state_path = output / "failure/state-v2.json"
         write_json_exclusive(state_path, state)
+        error_text = _failure_diagnostic(failure_code, child_record)
         failure = signed({
             "schema": FAILURE_SCHEMA, "status": "failed",
             "created_utc": utc_now(), "failure_code": failure_code,
-            "completed_stage": stage, "error_type": type(error).__name__,
-            "error": str(error), "traceback": traceback.format_exc(),
+            "completed_stage": stage, "error_type": "EvidenceError",
+            "error": error_text, "traceback": _bounded_traceback(body_traceback),
             "state": artifact_record(output, state_path),
             "artifact_inventory": artifact_inventory(output),
-            **context,
+            "lifecycle": lifecycle, "publication": publication,
+            "snapshot_inventory": snapshot_inventory, **context,
         })
         validate_failure(failure, output, check_files=True)
-        failure_path = output / "failure.json"
-        if not failure_path.exists():
-            write_json_exclusive(failure_path, failure)
-        raise
-    finally:
-        if original_affinity is not None:
-            os.sched_setaffinity(0, original_affinity)
-    print(output / "manifest.json")
+        _publish_terminal(output, "failure.json", failure)
+        raise EvidenceError(error_text) from body_error
+
+    try:
+        print(output / "manifest.json")
+    except OSError:
+        pass
     return 0
 
 
 def verify_campaign(options: argparse.Namespace) -> int:
-    manifest_path = options.manifest.resolve(strict=True)
+    manifest_path = _lexical_absolute(options.manifest)
     root = manifest_path.parent
     manifest_bytes = read_bounded(manifest_path, MAX_TOP_LEVEL_JSON_BYTES)
     manifest = strict_json(manifest_bytes, "C7 manifest")
@@ -2324,7 +3562,7 @@ def verify_campaign(options: argparse.Namespace) -> int:
 
 
 def verify_failure_campaign(options: argparse.Namespace) -> int:
-    failure_path = options.failure.resolve(strict=True)
+    failure_path = _lexical_absolute(options.failure)
     require(failure_path.name == "failure.json",
             "failure replay requires the canonical failure.json filename")
     root = failure_path.parent
@@ -2338,7 +3576,7 @@ def verify_failure_campaign(options: argparse.Namespace) -> int:
         "failure_code": validated["failure_code"],
         "failure_sha256": sha256_bytes(failure_bytes),
     }, sort_keys=True))
-    return 0
+    return 2
 
 
 def synthetic_result(cpu: int, inputs: Mapping[str, Any]) -> dict[str, Any]:
@@ -2477,7 +3715,15 @@ def synthetic_cpu_stat(cpu: int, *, user: int, idle: int) -> dict[str, Any]:
 
 def synthetic_pair_lease(cpu: int, sibling: int) -> dict[str, Any]:
     payload = pair_lease_payload(cpu, sibling, uid=1000)
-    return {"device": 1, "directory_device": 1, "directory_inode": 2,
+    authority = {
+        "schema": KERNEL_LEASE_SCHEMA,
+        "authority": "linux-abstract-unix-bind",
+        "namespace": kernel_lease_namespace("pair", payload),
+        "device": 1, "inode": 4,
+        "payload_sha256": sha256_bytes(canonical_bytes(payload)),
+    }
+    return {"schema": PAIR_LEASE_SCHEMA, "authority": authority,
+            "device": 1, "directory_device": 1, "directory_inode": 2,
             "inode": 3, "lock": "exclusive_nonblocking_pair_wide",
             "path": str(pair_lease_directory(1000) /
                         pair_lease_name(cpu, sibling, 1000)),
@@ -2516,16 +3762,16 @@ def synthetic_bundle(root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[s
     cpu, sibling = 0, 1
     inputs = synthetic_inputs()
     result = synthetic_result(cpu, inputs)
-    result_path = root / "child/result.json"
-    stdout_path = root / "child/stdout.bin"
-    stderr_path = root / "child/stderr.bin"
+    result_path = root / "snapshot/child/result.json"
+    stdout_path = root / "snapshot/child/stdout.bin"
+    stderr_path = root / "snapshot/child/stderr.bin"
     write_json_exclusive(result_path, result)
     write_exclusive(stdout_path, b"")
     write_exclusive(stderr_path, expected_stderr())
-    retained_build_manifest = root / "provenance/build-run-manifest-v4.json"
+    retained_build_manifest = root / "snapshot/provenance/build-run-manifest-v4.json"
     write_exclusive(retained_build_manifest,
                     canonical_pretty_bytes(synthetic_build_manifest(inputs)))
-    retained_runner = root / "provenance/run_authoritative.py"
+    retained_runner = root / "snapshot/provenance/run_authoritative.py"
     write_exclusive(retained_runner, read_bounded(Path(__file__).resolve(strict=True)))
     build_provenance = {
         "schema": BUILD_PROVENANCE_SCHEMA,
@@ -2537,9 +3783,29 @@ def synthetic_bundle(root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[s
                "reserved_sibling": sibling, "schema": RESERVATION_SCHEMA,
                "status": "held"}
     reservation_bytes = canonical_bytes(payload)
-    reservation = {"schema": RESERVATION_SCHEMA, "bytes": len(reservation_bytes),
-                   "sha256": sha256_bytes(reservation_bytes), "payload": payload,
-                   "lock": "exclusive_nonblocking"}
+    reservation_sha = sha256_bytes(reservation_bytes)
+    reservation_path = Path("/fixture/cpu-reservation.json")
+    path_authority_payload = reservation_authority_payload(
+        reservation_path, cpu, sibling, uid=1000)
+    content_authority_payload = reservation_authority_payload(
+        reservation_path, cpu, sibling, reservation_sha, uid=1000)
+    def authority(identity: int, authority_payload: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "schema": KERNEL_LEASE_SCHEMA,
+            "authority": "linux-abstract-unix-bind",
+            "namespace": kernel_lease_namespace("reservation", authority_payload),
+            "device": 1, "inode": identity,
+            "payload_sha256": sha256_bytes(canonical_bytes(authority_payload)),
+        }
+    reservation = {
+        "schema": RESERVATION_SCHEMA, "bytes": len(reservation_bytes),
+        "sha256": reservation_sha, "payload": payload,
+        "lock": "linux_abstract_bind_plus_flock", "path": str(reservation_path),
+        "uid": 1000, "device": 1, "inode": 5,
+        "directory_device": 1, "directory_inode": 6,
+        "authority": {"path": authority(7, path_authority_payload),
+                      "content": authority(8, content_authority_payload)},
+    }
     isolation = isolation_record(
         cpu, sibling, synthetic_pair_lease(cpu, sibling),
         synthetic_cpu_stat(cpu, user=0, idle=0),
@@ -2555,27 +3821,54 @@ def synthetic_bundle(root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[s
     }
     normalized = validate_child_result(result, cpu, inputs)
     created = "2026-07-17T00:00:00Z"
-    raw = signed({
-        "schema": RAW_SCHEMA, "created_utc": created, "request": request,
+    arguments = {
+        "cpu": cpu, "sibling": sibling, "timeout_seconds": 10.0,
+        "expected_tooling_commit": inputs["git"]["tooling_commit"],
+        "expected_core_commit": inputs["git"]["core_commit"],
+    }
+    lifecycle = empty_lifecycle()
+    for name in ("reservation", "pair_lease"):
+        lifecycle[name].update(entered=True, exit="pass")
+    for check in lifecycle["guard_checks"].values():
+        check["status"] = "pass"
+    lifecycle["affinity"].update(
+        captured=[0, 1, 2], restore_attempted=True,
+        restore_succeeded=True, observed=[0, 1, 2], exact=True)
+    child = {"command": request["command"],
+             "environment": copy.deepcopy(CHILD_ENVIRONMENT),
+             "returncode": 0, "timed_out": False, "duration_ns": 1,
+             "stdout": artifact_record(root, stdout_path),
+             "stderr": artifact_record(root, stderr_path),
+             "result": artifact_record(root, result_path)}
+    success_context = {
+        "arguments": arguments, "request": request,
         "inputs_before": inputs, "inputs_after": copy.deepcopy(inputs),
         "host_before": synthetic_host(cpu, sibling),
         "host_after": synthetic_host(cpu, sibling), "reservation": reservation,
-        "isolation": isolation, "build_provenance": build_provenance,
-        "child": {"command": request["command"],
-                  "environment": copy.deepcopy(CHILD_ENVIRONMENT),
-                  "returncode": 0, "timed_out": False, "duration_ns": 1,
-                  "stdout": artifact_record(root, stdout_path),
-                  "stderr": artifact_record(root, stderr_path),
-                  "result": artifact_record(root, result_path)},
-        "validated_output": normalized,
+        "pair_lease": isolation["pair_lease"], "isolation": isolation,
+        "build_provenance": build_provenance, "child": child,
+        "validated_output": normalized, "lifecycle": lifecycle,
+    }
+    state = signed(publication_state_payload(created, success_context))
+    state_path = root / "snapshot/publication-state.json"
+    write_json_exclusive(state_path, state)
+    raw = signed({
+        "schema": RAW_SCHEMA, "created_utc": created,
+        "publication_state": artifact_record(root, state_path),
+        **success_context,
     })
-    raw_path = root / "raw.json"
+    raw_path = root / "snapshot/raw.json"
     write_json_exclusive(raw_path, raw)
     manifest = signed({
         "schema": MANIFEST_SCHEMA, "created_utc": created, "valid": True,
-        "raw": artifact_record(root, raw_path), "request": request,
-        "inputs": inputs, "reservation": reservation, "isolation": isolation,
-        "build_provenance": build_provenance, "validated_output": normalized,
+        "raw": artifact_record(root, raw_path),
+        "publication_state": artifact_record(root, state_path),
+        "artifact_inventory": artifact_inventory(root),
+        "arguments": arguments, "request": request,
+        "inputs": inputs, "reservation": reservation,
+        "pair_lease": isolation["pair_lease"], "isolation": isolation,
+        "build_provenance": build_provenance, "lifecycle": lifecycle,
+        "validated_output": normalized,
     })
     return manifest, raw, result
 
@@ -2641,7 +3934,7 @@ def self_test() -> int:
         changed_raw = signed({key: value for key, value in changed_raw.items()
                               if key != "digest"})
         expect_rejected(lambda: validate_raw(changed_raw, root), "host drift")
-        result_path = root / "child/result.json"
+        result_path = root / "snapshot/child/result.json"
         original = result_path.read_bytes()
         result_path.write_bytes(b"{}\n")
         expect_rejected(lambda: validate_manifest(manifest, root), "artifact bytes")
@@ -2659,8 +3952,13 @@ def self_test() -> int:
     return 0
 
 
+class EvidenceArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise EvidenceError(f"invalid command line: {message}")
+
+
 def parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser(description=__doc__)
+    result = EvidenceArgumentParser(description=__doc__)
     commands = result.add_subparsers(dest="command", required=True)
     run = commands.add_parser(
         "run", help="execute one fixed 12-cell authoritative AVX2 campaign")
@@ -2706,8 +4004,8 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(arguments: Sequence[str] | None = None) -> int:
-    options = parser().parse_args(arguments)
     try:
+        options = parser().parse_args(arguments)
         return int(options.function(options))
     except (EvidenceError, OSError, ValueError, OverflowError, RecursionError,
             AttributeError, IndexError, KeyError, TypeError,

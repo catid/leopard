@@ -604,6 +604,13 @@ cooperating Leopard2 runners; it cannot exclude arbitrary processes.  The
 coordinator must therefore keep unrelated work off both logical CPUs for the
 entire timed child interval.
 
+The filesystem markers are diagnostic records, not the exclusive authority.
+Both the CPU pair and reservation also hold deterministic Linux abstract Unix
+socket names for their complete identity.  Those kernel-owned names remain
+exclusive if a marker file or the complete lease directory is renamed and
+recreated.  Guard validation binds the retained record back to the immutable
+descriptor, directory, device, inode, payload, and abstract-socket identity.
+
 Run the synthetic validator and mutation suite before reserving a core:
 
     PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -X dev \
@@ -633,14 +640,20 @@ exact ignored build paths produced above:
       --reservation-file "$RESERVATION" --output "$OUTPUT" \
       --cpu "$CPU" --sibling "$SIBLING"
 
-Success writes v2 canonical `raw.json` and `manifest.json`, the verified v4
+Success writes a terminal v3 canonical `manifest.json` only after staging v3
+`snapshot/raw.json`, signed `snapshot/publication-state.json`, the verified v4
 build manifest, exact authoritative runner, and exact child result and
-stdout/stderr bytes.  Any failure after output-directory creation retains a v4
-`failure.json`, a separately checksummed canonical `failure/state-v1.json`, and
+stdout/stderr bytes.  Both guards must have exited and the launch affinity must
+have been restored and read back exactly before success staging begins.  The
+manifest is the last fallible publication operation.  Any failure after
+output-directory creation retains a mutually exclusive v4 `failure.json`, a
+separately checksummed canonical `failure/state-v2.json`, and
 an exact sorted inventory of every other regular file in the bundle.  The state
 machine has typed ordered stages (`arguments` through `validated`), requires an
 exact presence mask for all 12 context records, and binds each enumerated
-`failure_code` to the last completed stage.  Replay proves timeout, exit,
+`failure_code` to the last completed stage, guard-check/teardown lifecycle,
+affinity restoration, exact stage-derived inventory, and canonical diagnostic.
+Replay proves timeout, exit,
 missing-result, stream, isolation, input-drift, host-drift, invalid-JSON, and
 invalid-child-result predicates from retained bytes where those predicates are
 claimed.  Input and host post-snapshots must equal their pre-snapshots except for
@@ -656,7 +669,8 @@ reservation paths:
       --manifest "$OUTPUT/manifest.json"
 
     # Use this instead when the campaign retained failure.json.  A valid replay
-    # prints status=VERIFIED_FAILURE plus the enumerated failure_code.
+    # prints status=VERIFIED_FAILURE plus the enumerated failure_code and exits
+    # with status 2, so policy automation cannot mistake it for success.
     PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -X dev \
       experiments/leopard2/non_power_of_two/c7/run_authoritative.py \
       verify-failure --failure "$OUTPUT/failure.json"

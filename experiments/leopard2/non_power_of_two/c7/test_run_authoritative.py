@@ -72,8 +72,8 @@ class AuthoritativeRunnerTests(unittest.TestCase):
                              runner.canonical_bytes(self.raw))
             self.assertEqual(runner.canonical_bytes(peer_result),
                              runner.canonical_bytes(self.result))
-            self.assertEqual((peer_root / "raw.json").read_bytes(),
-                             (self.root / "raw.json").read_bytes())
+            self.assertEqual((peer_root / "snapshot/raw.json").read_bytes(),
+                             (self.root / "snapshot/raw.json").read_bytes())
 
     def test_child_matrix_and_numeric_mutations_rejected(self) -> None:
         mutations = (
@@ -221,7 +221,7 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         self.assert_raw_rejected(changed)
 
     def test_retained_artifact_path_hash_and_bytes_mutations_rejected(self) -> None:
-        result_path = self.root / "child/result.json"
+        result_path = self.root / "snapshot/child/result.json"
         result_path.write_bytes(b"{}\n")
         with self.assertRaises(runner.EvidenceError):
             runner.validate_manifest(self.manifest, self.root)
@@ -237,12 +237,98 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         changed["child"]["stderr"]["size"] = True
         self.assert_raw_rejected(changed)
 
-        build_path = self.root / "provenance/build-run-manifest-v4.json"
+        build_path = self.root / "snapshot/provenance/build-run-manifest-v4.json"
         build_original = build_path.read_bytes()
         build_path.write_bytes(b"{}\n")
         with self.assertRaises(runner.EvidenceError):
             runner.validate_manifest(self.manifest, self.root)
         build_path.write_bytes(build_original)
+
+    def test_replay_rejects_symlinks_hardlinks_and_artifact_explosion(self) -> None:
+        result_path = self.root / "snapshot/child/result.json"
+        saved_result = result_path.read_bytes()
+        result_path.unlink()
+        result_path.symlink_to("result.json")
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_manifest(self.manifest, self.root)
+        result_path.unlink()
+        result_path.write_bytes(saved_result)
+
+        raw_path = self.root / "snapshot/raw.json"
+        saved_raw = raw_path.read_bytes()
+        raw_path.unlink()
+        raw_path.symlink_to("raw.json")
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_manifest(self.manifest, self.root)
+        raw_path.unlink()
+        raw_path.write_bytes(saved_raw)
+
+        stdout_path = self.root / "snapshot/child/stdout.bin"
+        stdout_path.unlink()
+        external = self.root.parent / f"{self.root.name}-external-stdout"
+        external.write_bytes(b"")
+        os.link(external, stdout_path)
+        try:
+            with self.assertRaises(runner.EvidenceError):
+                runner.validate_manifest(self.manifest, self.root)
+        finally:
+            stdout_path.unlink()
+            external.unlink()
+            stdout_path.write_bytes(b"")
+
+        crowded = self.root / "crowded"
+        crowded.mkdir()
+        for index in range(runner.MAX_ARTIFACT_COUNT + 1):
+            (crowded / f"{index:04d}").write_bytes(b"")
+        with self.assertRaises(runner.EvidenceError):
+            runner.artifact_inventory(crowded)
+
+    def test_file_growth_cpu_syntax_numeric_and_cli_bounds(self) -> None:
+        for value in ("1,", ",", "1,,2"):
+            with self.subTest(cpu_list=value), self.assertRaises(runner.EvidenceError):
+                runner.parse_cpu_list(value)
+
+        huge = runner.synthetic_result(0, runner.synthetic_inputs())
+        huge["benchmarks"][0]["padded_encode_scratch"] = 10 ** 10000
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_child_result(huge, 0, runner.synthetic_inputs())
+
+        growing = self.root / "growing.bin"
+        growing.write_bytes(b"a" * 32)
+        real_read = os.read
+        appended = False
+
+        def racing_read(descriptor: int, count: int) -> bytes:
+            nonlocal appended
+            data = real_read(descriptor, count)
+            if data and not appended:
+                appended = True
+                with growing.open("ab") as stream:
+                    stream.write(b"b")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+            return data
+
+        with mock.patch.object(runner.os, "read", side_effect=racing_read), \
+             self.assertRaises(runner.EvidenceError):
+            runner.read_bounded(growing)
+
+        completed = subprocess.run(
+            [sys.executable, str(MODULE_PATH), "run", "--cpu", "bad"],
+            check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("invalid command line", completed.stderr)
+
+    def test_subprocess_capture_is_file_backed_and_bounded(self) -> None:
+        stdout = self.root / "bounded/stdout.bin"
+        stderr = self.root / "bounded/stderr.bin"
+        completed, timed_out, _started, _ended = runner.run_child_bounded(
+            [sys.executable, "-c",
+             "import os; os.write(1, b'x' * (2 * 1024 * 1024))"],
+            stdout, stderr, 10.0, os.environ)
+        self.assertFalse(timed_out)
+        self.assertIsInstance(completed.returncode, int)
+        self.assertLessEqual(stdout.stat().st_size, runner.MAX_LOG_BYTES)
 
     def test_live_build_validator_invocation_is_fail_closed(self) -> None:
         validator = self.root / runner.BUILD_VALIDATOR_RELATIVE
@@ -252,15 +338,22 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         build_manifest.write_text("{}\n", encoding="utf-8")
         successful = subprocess.CompletedProcess(
             ["validator"], 0, b"C7 evidence validation passed (live)\n", b"")
-        with mock.patch.object(runner.subprocess, "run", return_value=successful) as call:
+        with mock.patch.object(
+                runner, "run_capture_bounded",
+                return_value=(successful,
+                              b"C7 evidence validation passed (live)\n",
+                              b"", False)) as call:
             runner.run_build_validator(self.root, build_manifest)
         argv = call.call_args.args[0]
         self.assertIn("--live", argv)
         self.assertIn("--require-checkout-head", argv)
-        self.assertEqual(call.call_args.kwargs["env"], runner.VALIDATOR_ENVIRONMENT)
+        self.assertEqual(call.call_args.kwargs["environment"],
+                         runner.VALIDATOR_ENVIRONMENT)
 
         changed = subprocess.CompletedProcess(["validator"], 0, b"portable only\n", b"")
-        with mock.patch.object(runner.subprocess, "run", return_value=changed), \
+        with mock.patch.object(
+                runner, "run_capture_bounded",
+                return_value=(changed, b"portable only\n", b"", False)), \
              self.assertRaises(runner.EvidenceError):
             runner.run_build_validator(self.root, build_manifest)
 
@@ -445,12 +538,22 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         path.write_bytes(encoded)
         path.chmod(0o600)
         guard = runner.Reservation(path, 0, 1)
-        with guard:
+        with guard as retained:
             path.rename(self.root / "old-reservation.json")
             path.write_bytes(encoded)
             path.chmod(0o600)
             with self.assertRaises(runner.EvidenceError):
                 guard.validate_current()
+            with self.assertRaises(runner.EvidenceError):
+                with runner.Reservation(path, 0, 1):
+                    pass
+            changed = copy.deepcopy(retained)
+            changed["payload"]["owner"] = "forged-owner"
+            changed_raw = runner.canonical_bytes(changed["payload"])
+            changed["bytes"] = len(changed_raw)
+            changed["sha256"] = runner.sha256_bytes(changed_raw)
+            with self.assertRaises(runner.EvidenceError):
+                guard.validate_current(changed)
 
     def test_pair_lease_serializes_pair_and_rejects_path_replacement(self) -> None:
         runtime_root = self.root / "runtime-root"
@@ -459,8 +562,9 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         first = runner.PairLease(7, 8, runtime_root=runtime_root)
         with first as identity:
             self.assertEqual(set(identity), {
-                "device", "directory_device", "directory_inode", "inode", "lock",
-                "path", "payload", "sha256"})
+                "schema", "authority", "device", "directory_device",
+                "directory_inode", "inode", "lock", "path", "payload",
+                "sha256"})
             with self.assertRaises(runner.EvidenceError):
                 with runner.PairLease(7, 8, runtime_root=runtime_root):
                     pass
@@ -471,6 +575,30 @@ class AuthoritativeRunnerTests(unittest.TestCase):
             first.path.chmod(0o600)
             with self.assertRaises(runner.EvidenceError):
                 first.validate_current()
+
+    def test_pair_directory_replacement_cannot_split_kernel_authority(self) -> None:
+        runtime_root = self.root / "runtime-directory-replacement"
+        runtime_root.mkdir(mode=0o700)
+        runtime_root.chmod(0o700)
+        first = runner.PairLease(9, 10, runtime_root=runtime_root)
+        with first as retained:
+            original = runtime_root / "leopard2-cpu-leases"
+            replaced = runtime_root / "leopard2-cpu-leases.old"
+            original.rename(replaced)
+            original.mkdir(mode=0o700)
+            original.chmod(0o700)
+            with self.assertRaises(runner.EvidenceError):
+                with runner.PairLease(9, 10, runtime_root=runtime_root):
+                    pass
+            changed = copy.deepcopy(retained)
+            changed["payload"]["uid"] += 1
+            changed["path"] = str(runner.pair_lease_directory(
+                changed["payload"]["uid"]) / runner.pair_lease_name(
+                    9, 10, changed["payload"]["uid"]))
+            changed["sha256"] = runner.sha256_bytes(
+                runner.canonical_bytes(changed["payload"]))
+            with self.assertRaises(runner.EvidenceError):
+                first.validate_current(changed)
 
     def test_git_identity_uses_exact_tree_and_rejects_untracked_files(self) -> None:
         repository = self.root / "repository"
@@ -531,7 +659,8 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         self.assertEqual(failure["schema"], runner.FAILURE_SCHEMA)
         self.assertEqual(failure["status"], "failed")
         self.assertEqual(failure["failure_code"], "host-capture-failed")
-        self.assertIn("synthetic topology failure", failure["error"])
+        self.assertEqual(failure["error"],
+                         runner.FAILURE_DIAGNOSTICS["host-capture-failed"])
         self.assertIsNone(failure["child"])
         self.assertIsNotNone(failure["request"])
         self.assertFalse((output / "manifest.json").exists())
@@ -563,7 +692,9 @@ class AuthoritativeRunnerTests(unittest.TestCase):
             timeout=1.0, expected_tooling_commit="b" * 40,
             expected_core_commit="e" * 40, reservation_file=reservation)
         pair_guard = mock.MagicMock()
-        pair_guard.__enter__.return_value = runner.synthetic_pair_lease(0, 1)
+        pair_identity = runner.synthetic_pair_lease(0, 1)
+        pair_guard.__enter__.return_value = pair_identity
+        pair_guard.identity = copy.deepcopy(pair_identity)
         pair_guard.__exit__.return_value = None
         snapshots = [
             runner.synthetic_cpu_stat(0, user=0, idle=0),
@@ -572,14 +703,12 @@ class AuthoritativeRunnerTests(unittest.TestCase):
             runner.synthetic_cpu_stat(1, user=0, idle=1),
         ]
 
-        if timeout:
-            def child_effect(*unused_args: object, **unused_kwargs: object) -> object:
-                raise subprocess.TimeoutExpired(
-                    ["fixture"], 1.0, output=b"partial", stderr=b"timed out")
-        else:
-            def child_effect(*unused_args: object, **unused_kwargs: object) -> object:
-                return subprocess.CompletedProcess(
-                    ["fixture"], 7, b"", b"failed\n")
+        def child_effect(command: object, stdout_path: Path, stderr_path: Path,
+                         *unused_args: object, **unused_kwargs: object) -> object:
+            runner.write_exclusive(stdout_path, b"partial" if timeout else b"")
+            runner.write_exclusive(stderr_path, b"timed out" if timeout else b"failed\n")
+            return (subprocess.CompletedProcess(
+                ["fixture"], 124 if timeout else 7, b"", b""), timeout, 1, 2)
         with mock.patch.object(runner, "validate_topology", return_value=({0, 1, 2}, {2})), \
              mock.patch.object(runner, "host_identity",
                                return_value=runner.synthetic_host(0, 1)), \
@@ -588,7 +717,7 @@ class AuthoritativeRunnerTests(unittest.TestCase):
              mock.patch.object(runner, "cpu_stat_snapshot", side_effect=snapshots), \
              mock.patch.object(runner.os, "sched_getaffinity", return_value={0, 1, 2}), \
              mock.patch.object(runner.os, "sched_setaffinity"), \
-             mock.patch.object(runner.subprocess, "run", side_effect=child_effect):
+             mock.patch.object(runner, "run_child_bounded", side_effect=child_effect):
             with self.assertRaises(runner.EvidenceError):
                 runner.run_campaign(options)
         failure = runner.strict_json((output / "failure.json").read_bytes(), "failure")
@@ -605,6 +734,132 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         self.assertEqual(stdout, b"partial" if timeout else b"")
         self.assertEqual(stderr, b"timed out" if timeout else b"failed\n")
         return failure, output
+
+    def _run_success_variant(self, name: str, *, mutate_on_final_lease: bool = False,
+                             exit_failure: bool = False,
+                             restore_failure: bool = False,
+                             malformed_result: bool = False,
+                             post_child_guard_failure: bool = False) -> tuple[Path, dict | None]:
+        inputs = runner.synthetic_inputs()
+        executable = self.root / f"{name}-executable"
+        archive = self.root / f"{name}-archive.a"
+        build_manifest = self.root / f"{name}-build-manifest.json"
+        reservation = self.root / f"{name}-reservation.json"
+        output = self.root / f"{name}-run"
+        executable.write_bytes(b"fixture")
+        executable.chmod(0o755)
+        archive.write_bytes(b"!<arch>\n")
+        build_manifest.write_bytes(runner.canonical_pretty_bytes(
+            runner.synthetic_build_manifest(inputs)))
+        reservation.write_bytes(runner.canonical_bytes({
+            "benchmark_cpu": 0, "nonce": f"{name}-fixture", "owner": "unit-test",
+            "reserved_sibling": 1, "schema": runner.RESERVATION_SCHEMA,
+            "status": "held",
+        }))
+        reservation.chmod(0o600)
+        options = argparse.Namespace(
+            output=output, executable=executable, archive=archive,
+            build_manifest=build_manifest, source_root=self.root, cpu=0, sibling=1,
+            timeout=1.0, expected_tooling_commit="b" * 40,
+            expected_core_commit="e" * 40, reservation_file=reservation)
+        pair_guard = mock.MagicMock()
+        pair_identity = runner.synthetic_pair_lease(0, 1)
+        pair_guard.__enter__.return_value = pair_identity
+        pair_guard.identity = copy.deepcopy(pair_identity)
+        pair_guard.__exit__.return_value = None
+        if exit_failure:
+            pair_guard.__exit__.side_effect = RuntimeError("synthetic exit failure")
+        validation_calls = 0
+
+        def validate_pair(*unused: object) -> None:
+            nonlocal validation_calls
+            validation_calls += 1
+            if post_child_guard_failure and validation_calls == 1:
+                raise runner.EvidenceError("synthetic post-child guard failure")
+            if mutate_on_final_lease and validation_calls == 2:
+                (output / "snapshot/child/result.json").write_bytes(b"{}\n")
+
+        pair_guard.validate_current.side_effect = validate_pair
+        snapshots = [
+            runner.synthetic_cpu_stat(0, user=0, idle=0),
+            runner.synthetic_cpu_stat(1, user=0, idle=0),
+            runner.synthetic_cpu_stat(0, user=1, idle=0),
+            runner.synthetic_cpu_stat(1, user=0, idle=1),
+        ]
+
+        def child_effect(command: object, stdout_path: Path, stderr_path: Path,
+                         *unused: object, **unused_kw: object) -> object:
+            result_path = output / "snapshot/child/result.json"
+            if malformed_result:
+                runner.write_exclusive(result_path, b"{malformed\n")
+            else:
+                runner.write_json_exclusive(result_path, runner.synthetic_result(0, inputs))
+            runner.write_exclusive(stdout_path, b"")
+            runner.write_exclusive(stderr_path, runner.expected_stderr())
+            return subprocess.CompletedProcess(["fixture"], 0, b"", b""), False, 1, 2
+
+        set_calls = 0
+
+        def set_affinity(unused_pid: int, unused_mask: object) -> None:
+            nonlocal set_calls
+            set_calls += 1
+            if restore_failure and set_calls == 2:
+                raise OSError("synthetic restore failure")
+
+        with mock.patch.object(runner, "validate_topology", return_value=({0, 1, 2}, {2})), \
+             mock.patch.object(runner, "host_identity",
+                               return_value=runner.synthetic_host(0, 1)), \
+             mock.patch.object(runner, "PairLease", return_value=pair_guard), \
+             mock.patch.object(runner, "input_snapshot", return_value=inputs), \
+             mock.patch.object(runner, "cpu_stat_snapshot", side_effect=snapshots), \
+             mock.patch.object(runner.os, "sched_getaffinity",
+                               return_value={0, 1, 2}), \
+             mock.patch.object(runner.os, "sched_setaffinity",
+                               side_effect=set_affinity), \
+             mock.patch.object(runner, "run_child_bounded", side_effect=child_effect):
+            if (mutate_on_final_lease or exit_failure or restore_failure or
+                    post_child_guard_failure):
+                with self.assertRaises(runner.EvidenceError):
+                    runner.run_campaign(options)
+            else:
+                self.assertEqual(runner.run_campaign(options), 0)
+        failure = None
+        if (output / "failure.json").exists():
+            failure = runner.strict_json(
+                (output / "failure.json").read_bytes(), "failure")
+            runner.validate_failure(failure, output, check_files=True)
+        return output, failure
+
+    def test_terminal_publication_waits_for_final_snapshot_guard_exit_and_affinity(self) -> None:
+        output, failure = self._run_success_variant(
+            "final-replace", mutate_on_final_lease=True)
+        self.assertIsNotNone(failure)
+        self.assertEqual(failure["failure_code"], "final-snapshot-invalid")
+        self.assertFalse((output / "manifest.json").exists())
+
+        output, failure = self._run_success_variant(
+            "exit-failure", exit_failure=True)
+        self.assertIsNotNone(failure)
+        self.assertEqual(failure["failure_code"], "guard-exit-failed")
+        self.assertFalse((output / "manifest.json").exists())
+
+        output, failure = self._run_success_variant(
+            "restore-failure", restore_failure=True)
+        self.assertIsNotNone(failure)
+        self.assertEqual(failure["failure_code"], "affinity-restore-failed")
+        self.assertFalse((output / "manifest.json").exists())
+
+        output, failure = self._run_success_variant(
+            "post-child-guard", malformed_result=True,
+            post_child_guard_failure=True)
+        self.assertIsNotNone(failure)
+        self.assertEqual(failure["failure_code"], "lease-post-child-invalid")
+        self.assertFalse((output / "manifest.json").exists())
+
+        output, failure = self._run_success_variant("clean-success")
+        self.assertIsNone(failure)
+        self.assertTrue((output / "manifest.json").is_file())
+        self.assertFalse((output / "failure.json").exists())
 
     def test_nonzero_child_retains_failure_evidence(self) -> None:
         failure, _output = self._run_child_failure(timeout=False)
@@ -626,10 +881,20 @@ class AuthoritativeRunnerTests(unittest.TestCase):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
                  "PYTHONHASHSEED": "0"})
-        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.returncode, 2, completed.stderr)
         report = json.loads(completed.stdout)
         self.assertEqual(report["status"], "VERIFIED_FAILURE")
         self.assertEqual(report["failure_code"], "child-timeout")
+
+        hardlink = self.root / "failure-hardlink.json"
+        os.link(output / "failure.json", hardlink)
+        completed = subprocess.run(
+            [sys.executable, str(MODULE_PATH), "verify-failure", "--failure",
+             str(output / "failure.json")], check=False, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("single-link regular file", completed.stderr)
+        hardlink.unlink()
 
     def test_failure_coordinated_resigned_mutations_are_rejected(self) -> None:
         failure, output = self._run_child_failure(timeout=True)
@@ -705,7 +970,7 @@ class AuthoritativeRunnerTests(unittest.TestCase):
             state = runner.signed(runner.failure_state_payload(
                 changed["completed_stage"], changed["failure_code"],
                 {key: changed[key] for key in runner.FAILURE_CONTEXT_FIELDS}))
-            state_path = root / "failure/state-v1.json"
+            state_path = root / "failure/state-v2.json"
             state_path.write_bytes(runner.canonical_bytes(state) + b"\n")
             changed["state"] = runner.artifact_record(root, state_path)
             changed["artifact_inventory"] = runner.artifact_inventory(root)
@@ -772,7 +1037,7 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         state = runner.signed(runner.failure_state_payload(
             changed["completed_stage"], changed["failure_code"],
             {key: changed[key] for key in runner.FAILURE_CONTEXT_FIELDS}))
-        state_path = numeric_root / "failure/state-v1.json"
+        state_path = numeric_root / "failure/state-v2.json"
         state_path.write_bytes(runner.canonical_bytes(state) + b"\n")
         changed["state"] = runner.artifact_record(numeric_root, state_path)
         changed["artifact_inventory"] = runner.artifact_inventory(numeric_root)
