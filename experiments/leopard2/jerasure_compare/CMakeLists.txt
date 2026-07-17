@@ -162,4 +162,24 @@ if(BUILD_TESTING)
             --seed 504 --oracle full --json
             "${CMAKE_CURRENT_BINARY_DIR}/invalid-thread.json")
     set_tests_properties(jerasure_compare_rejects_threads PROPERTIES WILL_FAIL TRUE)
+    add_test(NAME jerasure_compare_no_loss_is_noop
+        COMMAND leopard2_jerasure_benchmark
+            --k 8 --r 8 --profile high --bytes 64 --loss 0
+            --batch 1 --reuse 2 --iterations 3 --warmup 0 --threads 1
+            --seed 505 --oracle full --json
+            "${CMAKE_CURRENT_BINARY_DIR}/no-loss.json")
+    add_test(NAME jerasure_compare_rejects_count_bound
+        COMMAND leopard2_jerasure_benchmark
+            --k 4097 --r 1 --profile high --bytes 8 --loss 1
+            --batch 1 --reuse 1 --iterations 3 --warmup 0 --threads 1
+            --seed 506 --oracle full --json
+            "${CMAKE_CURRENT_BINARY_DIR}/invalid-count.json")
+    set_tests_properties(jerasure_compare_rejects_count_bound PROPERTIES WILL_FAIL TRUE)
+    add_test(NAME jerasure_compare_rejects_memory_bound
+        COMMAND leopard2_jerasure_benchmark
+            --k 4096 --r 4096 --profile high --bytes 1048576 --loss 1
+            --batch 1 --reuse 1 --iterations 3 --warmup 0 --threads 1
+            --seed 507 --oracle projection --json
+            "${CMAKE_CURRENT_BINARY_DIR}/invalid-memory.json")
+    set_tests_properties(jerasure_compare_rejects_memory_bound PROPERTIES WILL_FAIL TRUE)
 endif()
