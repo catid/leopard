@@ -250,6 +250,10 @@ struct TestOnlyTransformCallsiteCounts
 {
     uint64_t ifft_dit4;
     uint64_t fft_dit4;
+    uint64_t ifft_dit4_fused;
+    uint64_t ifft_dit4_split;
+    uint64_t fft_dit4_fused;
+    uint64_t fft_dit4_split;
 };
 void TestOnlyResetTransformCallsiteCounts();
 TestOnlyTransformCallsiteCounts TestOnlyGetTransformCallsiteCounts();

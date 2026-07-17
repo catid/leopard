@@ -46,7 +46,19 @@ namespace leopard { namespace ff16 {
 #if defined(LEO2_ENABLE_TEST_HOOKS)
 static std::atomic<uint64_t> TestIFFTDIT4Calls(0);
 static std::atomic<uint64_t> TestFFTDIT4Calls(0);
+static std::atomic<uint64_t> TestIFFTDIT4FusedCalls(0);
+static std::atomic<uint64_t> TestIFFTDIT4SplitCalls(0);
+static std::atomic<uint64_t> TestFFTDIT4FusedCalls(0);
+static std::atomic<uint64_t> TestFFTDIT4SplitCalls(0);
 #endif
+
+static inline bool UseFusedButterfly4(uint64_t bytes)
+{
+    // Whole-codec evidence qualifies only one or two complete ALTMAP tiles.
+    // Larger working sets retain the two-layer schedule, which has lower
+    // table/register pressure even though it performs more backend calls.
+    return bytes == 64 || bytes == 128;
+}
 
 
 //------------------------------------------------------------------------------
@@ -834,14 +846,18 @@ static void IFFT_DIT4(
     const ffe_t log_m23,
     const ffe_t log_m02)
 {
+    const bool use_fused_four_way = UseFusedButterfly4(bytes);
 #if defined(LEO2_ENABLE_TEST_HOOKS)
     TestIFFTDIT4Calls.fetch_add(1, std::memory_order_relaxed);
+    (use_fused_four_way ? TestIFFTDIT4FusedCalls : TestIFFTDIT4SplitCalls)
+        .fetch_add(1, std::memory_order_relaxed);
 #endif
 #ifdef LEO_INTERLEAVE_BUTTERFLY4_OPT
 
 #if defined(LEO_TRY_AVX2)
 
-    if (&ops == &backend::GetDefaultOps() && CpuHasAVX2)
+    if (use_fused_four_way &&
+        &ops == &backend::GetDefaultOps() && CpuHasAVX2)
     {
         LEO_MUL_TABLES_256(01, log_m01);
         LEO_MUL_TABLES_256(23, log_m23);
@@ -908,7 +924,8 @@ static void IFFT_DIT4(
 #endif // LEO_TRY_AVX2
 
 #if defined(LEO_TRY_SSSE3)
-    if (&ops == &backend::GetDefaultOps() && CpuHasSSSE3)
+    if (use_fused_four_way &&
+        &ops == &backend::GetDefaultOps() && CpuHasSSSE3)
     {
         LEO_MUL_TABLES_128(01, log_m01);
         LEO_MUL_TABLES_128(23, log_m23);
@@ -979,9 +996,36 @@ static void IFFT_DIT4(
 
 #endif // LEO_INTERLEAVE_BUTTERFLY4_OPT
 
-    ops.ff16_ifft_butterfly4(
-        work[0], work[dist], work[dist * 2], work[dist * 3],
-        log_m01, log_m23, log_m02, bytes);
+    if (use_fused_four_way)
+    {
+        ops.ff16_ifft_butterfly4(
+            work[0], work[dist], work[dist * 2], work[dist * 3],
+            log_m01, log_m23, log_m02, bytes);
+        return;
+    }
+
+    // First layer:
+    if (log_m01 == kModulus)
+        xor_mem(ops, work[dist], work[0], bytes);
+    else
+        IFFT_DIT2(ops, work[0], work[dist], log_m01, bytes);
+
+    if (log_m23 == kModulus)
+        xor_mem(ops, work[dist * 3], work[dist * 2], bytes);
+    else
+        IFFT_DIT2(ops, work[dist * 2], work[dist * 3], log_m23, bytes);
+
+    // Second layer:
+    if (log_m02 == kModulus)
+    {
+        xor_mem(ops, work[dist * 2], work[0], bytes);
+        xor_mem(ops, work[dist * 3], work[dist], bytes);
+    }
+    else
+    {
+        IFFT_DIT2(ops, work[0], work[dist * 2], log_m02, bytes);
+        IFFT_DIT2(ops, work[dist], work[dist * 3], log_m02, bytes);
+    }
 }
 
 
@@ -1282,14 +1326,18 @@ static void FFT_DIT4(
     const ffe_t log_m23,
     const ffe_t log_m02)
 {
+    const bool use_fused_four_way = UseFusedButterfly4(bytes);
 #if defined(LEO2_ENABLE_TEST_HOOKS)
     TestFFTDIT4Calls.fetch_add(1, std::memory_order_relaxed);
+    (use_fused_four_way ? TestFFTDIT4FusedCalls : TestFFTDIT4SplitCalls)
+        .fetch_add(1, std::memory_order_relaxed);
 #endif
 #ifdef LEO_INTERLEAVE_BUTTERFLY4_OPT
 
 #if defined(LEO_TRY_AVX2)
 
-    if (&ops == &backend::GetDefaultOps() && CpuHasAVX2)
+    if (use_fused_four_way &&
+        &ops == &backend::GetDefaultOps() && CpuHasAVX2)
     {
         LEO_MUL_TABLES_256(01, log_m01);
         LEO_MUL_TABLES_256(23, log_m23);
@@ -1356,7 +1404,8 @@ static void FFT_DIT4(
 #endif // LEO_TRY_AVX2
 
 #if defined(LEO_TRY_SSSE3)
-    if (&ops == &backend::GetDefaultOps() && CpuHasSSSE3)
+    if (use_fused_four_way &&
+        &ops == &backend::GetDefaultOps() && CpuHasSSSE3)
     {
         LEO_MUL_TABLES_128(01, log_m01);
         LEO_MUL_TABLES_128(23, log_m23);
@@ -1427,9 +1476,36 @@ static void FFT_DIT4(
 
 #endif // LEO_INTERLEAVE_BUTTERFLY4_OPT
 
-    ops.ff16_fft_butterfly4(
-        work[0], work[dist], work[dist * 2], work[dist * 3],
-        log_m01, log_m23, log_m02, bytes);
+    if (use_fused_four_way)
+    {
+        ops.ff16_fft_butterfly4(
+            work[0], work[dist], work[dist * 2], work[dist * 3],
+            log_m01, log_m23, log_m02, bytes);
+        return;
+    }
+
+    // First layer:
+    if (log_m02 == kModulus)
+    {
+        xor_mem(ops, work[dist * 2], work[0], bytes);
+        xor_mem(ops, work[dist * 3], work[dist], bytes);
+    }
+    else
+    {
+        FFT_DIT2(ops, work[0], work[dist * 2], log_m02, bytes);
+        FFT_DIT2(ops, work[dist], work[dist * 3], log_m02, bytes);
+    }
+
+    // Second layer:
+    if (log_m01 == kModulus)
+        xor_mem(ops, work[dist], work[0], bytes);
+    else
+        FFT_DIT2(ops, work[0], work[dist], log_m01, bytes);
+
+    if (log_m23 == kModulus)
+        xor_mem(ops, work[dist * 3], work[dist * 2], bytes);
+    else
+        FFT_DIT2(ops, work[dist * 2], work[dist * 3], log_m23, bytes);
 }
 
 
@@ -2289,6 +2365,10 @@ void TestOnlyResetTransformCallsiteCounts()
 {
     TestIFFTDIT4Calls.store(0, std::memory_order_relaxed);
     TestFFTDIT4Calls.store(0, std::memory_order_relaxed);
+    TestIFFTDIT4FusedCalls.store(0, std::memory_order_relaxed);
+    TestIFFTDIT4SplitCalls.store(0, std::memory_order_relaxed);
+    TestFFTDIT4FusedCalls.store(0, std::memory_order_relaxed);
+    TestFFTDIT4SplitCalls.store(0, std::memory_order_relaxed);
 }
 
 
@@ -2297,6 +2377,14 @@ TestOnlyTransformCallsiteCounts TestOnlyGetTransformCallsiteCounts()
     TestOnlyTransformCallsiteCounts result;
     result.ifft_dit4 = TestIFFTDIT4Calls.load(std::memory_order_relaxed);
     result.fft_dit4 = TestFFTDIT4Calls.load(std::memory_order_relaxed);
+    result.ifft_dit4_fused =
+        TestIFFTDIT4FusedCalls.load(std::memory_order_relaxed);
+    result.ifft_dit4_split =
+        TestIFFTDIT4SplitCalls.load(std::memory_order_relaxed);
+    result.fft_dit4_fused =
+        TestFFTDIT4FusedCalls.load(std::memory_order_relaxed);
+    result.fft_dit4_split =
+        TestFFTDIT4SplitCalls.load(std::memory_order_relaxed);
     return result;
 }
 

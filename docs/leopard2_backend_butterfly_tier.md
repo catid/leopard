@@ -5,7 +5,10 @@ non-regression results retained below are historical evidence for the pre-R1
 candidate `ae2b8566ad08cae02869c3fcf41de046b0b652ed`; they are not final-source
 evidence for the later integrated tree. R1 changed the backend table, sources,
 tests, and build closure, so an integrated-source backend matrix and pinned
-campaign must be collected before this tier is evidence-qualified again.
+campaign must be collected before this tier is evidence-qualified again. The
+first final-source AVX2 v6 campaign was retained as failed evidence and caused
+the GF16 size policy correction documented below; a fresh campaign on the
+corrected source is still required.
 Native NEON, AVX-512, GFNI, and wider fusion schedules remain separate work.
 
 The current v6 collector requires two distinct final-source campaigns, one
@@ -48,10 +51,13 @@ The selected schedules are deliberately size-specific:
 - GF8 inverse butterflies remain fused for every shard size.
 - GF8 forward butterflies are fused through 1,024 bytes and use the qualified
   split two-way schedule above that size.
-- GF16 forward and inverse butterflies fuse complete 64- and 128-byte working
-  sets. This includes a public 66-byte compact tail after staging rounds it to
-  128 bytes. Smaller residuals and shards above 128 bytes use the split
-  schedule to bound table residency and register pressure.
+- GF16 forward and inverse butterflies fuse only exact 64- and 128-byte
+  transform working sets. This includes a public 66-byte compact tail after
+  staging rounds it to 128 bytes. The field callsite classifies every radix-
+  four invocation before backend dispatch; a public 130-byte shard stages to
+  192 bytes and therefore uses the two-layer split schedule, as do all larger
+  working sets. Test-only counters independently prove total, fused, and split
+  inverse/forward selections at 66, 128, 130, and 1,026 public bytes.
 - Scalar kernels retain the straightforward reference-equivalent operation
   order.
 
@@ -81,6 +87,40 @@ instruction counts.
 
 Only exact 64-/128-byte GF16 fused tiles and the measured GF8 cutover remain in
 production.
+
+## Failed final-source AVX2 campaign and policy correction
+
+The first v6 final-source AVX2 campaign compared candidate
+`ca52c4e97472dd3af5a7544fbedd795b4ea724b5` with matched split control
+`f3e8dfbc6cb1943c8fd8728801e38cf0a1ab3816`. It completed all 1,664
+isolated invocations but correctly published a failed manifest. Five gates in
+four GF16 cells fell below the fixed `-2%` lower-confidence floor:
+
+| Cell and metric | Point estimate | One-sided 95% lower bound |
+| --- | ---: | ---: |
+| high GF16, 130 B encode | -4.231% | -4.515% |
+| high GF16, 130 B decode | -3.888% | -4.079% |
+| high GF16, 1 KiB decode | -1.591% | -2.122% |
+| low GF16, 130 B encode | -2.732% | -3.078% |
+| low GF16, 16 KiB decode | -0.145% | -2.052% |
+
+The 130-byte result exposed the implementation error most directly: staging
+rounded it to a 192-byte transform buffer, but the field callsite sent every
+size through the fused four-way backend. The production correction now sends
+only 64 and 128 transform bytes through `ff16_*_butterfly4`; every larger size
+executes the historical two `ff16_*_butterfly2` layers with identical modulus
+XOR semantics. This is a measured size policy, not a field or wire change.
+
+The ignored failed artifacts are under
+`.research/leopard2/context-xor4/final-ca52c4e-v6-avx2-clean1/`:
+
+- `abba_manifest.json` SHA-256:
+  `b03c1553ba02dbd22baa943e912e52e48713de92ca0cff774427d4c64c55fea9`
+- `abba_raw.json` SHA-256:
+  `22265cf4f27c21401edd0e42bfaf4c9eef6d7f5b104c4631b286dc8724b62f1e`
+
+These results are retained rather than resampled or excluded. They do not
+qualify either the old candidate or the corrected source.
 
 ## Historical pre-R1 correctness, safety, and portability evidence
 
@@ -221,10 +261,15 @@ Run the forced-backend differential matrix and runner mutation tests:
     python3 experiments/leopard2/backend_butterfly/run_abba.py self-test
 
 The final-source control must be constructed from the final candidate tree by
-reverting only the production four-way runtime hunks. It retains the final R1,
-locator, Windows, test, matrix, and collector changes, so the experiment has a
-single production-runtime treatment. Configure clean tests-disabled Unix
-Makefiles Release builds for both trees with `LEO2_BACKEND_VARIANT=auto`,
+reverting only the production four-way runtime selections. It retains the
+final R1, locator, Windows, test, matrix, and collector changes, so the
+experiment has a single production-runtime treatment. The GF8 control retains
+the documented two-layer replacements. For GF16, leave the new >128-byte
+split schedule byte-identical and change only `UseFusedButterfly4()` to select
+no sizes in the control. Candidate and control therefore differ only for the
+still-enabled 64-/128-byte GF16 fused regime; 130-byte and larger cells execute
+the same split schedule in both. Configure clean tests-disabled Unix Makefiles
+Release builds for both trees with `LEO2_BACKEND_VARIANT=auto`,
 `LEO2_BUILD_BENCHMARKS=ON`, `LEO2_BUILD_TESTS=OFF`, and
 `CMAKE_EXPORT_COMPILE_COMMANDS=ON`.
 

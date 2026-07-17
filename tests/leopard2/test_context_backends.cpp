@@ -368,6 +368,7 @@ private:
 void require_four_way_callsites(
     const TraceOpsGuard& trace,
     leo2_field field,
+    size_t public_bytes,
     const std::string& operation,
     bool expect_ff8_accumulating_ifft)
 {
@@ -399,10 +400,38 @@ void require_four_way_callsites(
             operation + " did not exercise GF16 IFFT_DIT4");
         require(callsites.fft_dit4 != 0,
             operation + " did not exercise GF16 FFT_DIT4");
-        require(trace.ff16_ifft_four_calls() == callsites.ifft_dit4,
-            operation + " has a GF16 inverse radix-four callsite bypass");
-        require(trace.ff16_fft_four_calls() == callsites.fft_dit4,
-            operation + " has a GF16 forward radix-four callsite bypass");
+        require(callsites.ifft_dit4 ==
+                callsites.ifft_dit4_fused + callsites.ifft_dit4_split,
+            operation + " has an unclassified GF16 inverse radix-four callsite");
+        require(callsites.fft_dit4 ==
+                callsites.fft_dit4_fused + callsites.fft_dit4_split,
+            operation + " has an unclassified GF16 forward radix-four callsite");
+        require(trace.ff16_ifft_four_calls() == callsites.ifft_dit4_fused,
+            operation + " has a GF16 inverse fused-dispatch mismatch");
+        require(trace.ff16_fft_four_calls() == callsites.fft_dit4_fused,
+            operation + " has a GF16 forward fused-dispatch mismatch");
+
+        const size_t transform_bytes = (public_bytes + 63U) & ~size_t(63U);
+        const bool expect_fused =
+            transform_bytes == 64U || transform_bytes == 128U;
+        if (expect_fused)
+        {
+            require(callsites.ifft_dit4_fused == callsites.ifft_dit4 &&
+                    callsites.ifft_dit4_split == 0,
+                operation + " did not fuse the qualified GF16 inverse size");
+            require(callsites.fft_dit4_fused == callsites.fft_dit4 &&
+                    callsites.fft_dit4_split == 0,
+                operation + " did not fuse the qualified GF16 forward size");
+        }
+        else
+        {
+            require(callsites.ifft_dit4_split == callsites.ifft_dit4 &&
+                    callsites.ifft_dit4_fused == 0,
+                operation + " fused an unqualified GF16 inverse size");
+            require(callsites.fft_dit4_split == callsites.fft_dit4 &&
+                    callsites.fft_dit4_fused == 0,
+                operation + " fused an unqualified GF16 forward size");
+        }
     }
 }
 
@@ -704,6 +733,12 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
     const CodecCase transform_cases[] = {
         { 33, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 257 },
         { 17, 33, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, 129 },
+        { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 66 },
+        { 17, 33, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 66 },
+        { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 128 },
+        { 17, 33, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 128 },
+        { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 130 },
+        { 17, 33, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 130 },
         { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 1026 },
         { 17, 33, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 1026 }
     };
@@ -743,6 +778,7 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                     "GF16 encode bypassed the context ops table");
             }
             require_four_way_callsites(trace, test_case.field,
+                test_case.bytes,
                 profile_name + " encode",
                 test_case.field == LEO2_FIELD_GF8 &&
                     test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1);
@@ -760,6 +796,7 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                     "GF16 decode bypassed the context ops table");
             }
             require_four_way_callsites(trace, test_case.field,
+                test_case.bytes,
                 profile_name + " decode", false);
             require(trace.xor_four_calls() != 0,
                 "decode bypassed the context grouped-XOR table");
@@ -788,6 +825,7 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
         require(trace.ff8_calls() != 0,
             "generic decode bypassed the context ops table");
         require_four_way_callsites(trace, generic_case.field,
+            generic_case.bytes,
             "generic high-profile decode", false);
         require(trace.xor_four_calls() != 0,
             "generic decode bypassed the context grouped-XOR table");

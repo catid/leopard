@@ -14,6 +14,15 @@ GF16 130-byte neighbors above the production fusion cutoffs. Until both
 final-source campaigns pass, the retained pre-R1 timing remains causal history,
 not qualification of the integrated source.
 
+The first final-source AVX2 v6 campaign failed five gates in four GF16 cells
+and is retained verbatim in the butterfly-tier document. It proved that the
+intended GF16 cutoff had not been enforced at the field callsite: a 130-byte
+public shard became a 192-byte transform and still entered the fused backend.
+Production now permits fused GF16 forward/inverse dispatch only for exact 64-
+or 128-byte transform buffers; all larger buffers execute the context-routed
+two-way schedule. Counters and high/low encode/decode tests cover compact 66-
+byte, exact 128-byte, 130-byte, and larger cases.
+
 ## Four-way completion
 
 The immutable `Ops` table now includes four independent XOR pairs and forward
