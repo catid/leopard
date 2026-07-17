@@ -1,0 +1,53 @@
+#!/usr/bin/env sh
+
+# Select a Beads 1.x executable even when an obsolete 0.x installation appears
+# first in PATH.  BEADS_BIN may explicitly select a verified executable.
+set -eu
+
+is_beads_v1() {
+  [ -x "$1" ] || return 1
+  candidate_dir=${1%/*}
+  [ "$candidate_dir" != "$1" ] || candidate_dir=.
+  PATH="$candidate_dir:${PATH:-}" "$1" version 2>/dev/null |
+    grep -Eq '^bd version 1([.[:space:]]|$)'
+}
+
+run_beads() {
+  candidate=$1
+  shift
+  candidate_dir=${candidate%/*}
+  [ "$candidate_dir" != "$candidate" ] || candidate_dir=.
+  PATH="$candidate_dir:${PATH:-}"
+  export PATH
+  exec "$candidate" "$@"
+}
+
+if [ -n "${BEADS_BIN:-}" ]; then
+  if is_beads_v1 "$BEADS_BIN"; then
+    run_beads "$BEADS_BIN" "$@"
+  fi
+  echo >&2 "beads: BEADS_BIN does not name a Beads 1.x executable: $BEADS_BIN"
+  exit 127
+fi
+
+remaining_path=${PATH:-}
+while [ -n "$remaining_path" ]; do
+  case "$remaining_path" in
+    *:*) candidate_dir=${remaining_path%%:*}; remaining_path=${remaining_path#*:} ;;
+    *) candidate_dir=$remaining_path; remaining_path= ;;
+  esac
+  [ -n "$candidate_dir" ] || candidate_dir=.
+  candidate=$candidate_dir/bd
+  if is_beads_v1 "$candidate"; then
+    run_beads "$candidate" "$@"
+  fi
+done
+
+for candidate in "${HOME:-}/.nvm/versions/node/"*/bin/bd; do
+  if is_beads_v1 "$candidate"; then
+    run_beads "$candidate" "$@"
+  fi
+done
+
+echo >&2 'beads: Beads 1.x is required; no verified 1.x executable was found'
+exit 127
