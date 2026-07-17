@@ -60,6 +60,9 @@ MAX_BENCHMARK_STDERR_BYTES = 8 * 1024 * 1024
 CHILD_REAP_TIMEOUT_SECONDS = 5.0
 PR_SET_CHILD_SUBREAPER = 36
 PR_GET_CHILD_SUBREAPER = 37
+# Keep authenticated policy rejection distinct from both evidence failure (1)
+# and argparse's command-line usage error (2).
+EXPECTED_POLICY_FAILURE_EXIT = 3
 
 
 def cell(name, k, r, profile, field, byte_count, loss, kind):
@@ -3480,7 +3483,8 @@ def validate_manifest(manifest_path, repo, raw_bundle_path=None,
         "raw_bundle_file", "raw_bundle_sha256", "raw_evidence_sha256",
         "summary"}, "manifest top-level key set")
     require(manifest.get("schema") == SCHEMA, "unsupported manifest schema")
-    require(manifest.get("status") == "passed", "campaign status")
+    require(manifest.get("status") in ("passed", "failed"),
+            "campaign status")
     campaign = manifest.get("campaign", {})
     require(set(campaign) == {
         "order_per_round", "rounds", "cell_count", "entry_count",
@@ -3667,9 +3671,18 @@ def validate_manifest(manifest_path, repo, raw_bundle_path=None,
     recomputed = summarize(entries, raw_by_name, requested_backend)
     require(canonical_bytes(recomputed) == canonical_bytes(manifest["summary"]),
             "summary does not replay from raw evidence")
+    policy_failures = []
     for item in recomputed:
-        require(item["encode"]["accepted"] and item["decode"]["accepted"],
-                item["name"] + " violates its promotion/neighbor floor")
+        for metric in ("encode", "decode"):
+            if not item[metric]["accepted"]:
+                policy_failures.append(item["name"] + ":" + metric)
+    if manifest["status"] == "passed":
+        if policy_failures:
+            raise EvidenceError(
+                policy_failures[0] + " violates its promotion/neighbor floor")
+    else:
+        require(policy_failures,
+                "failed campaign has no replayed promotion/neighbor-floor failure")
     if binaries is not None:
         for build in ("baseline", "candidate"):
             path = Path(binaries[build]).resolve()
@@ -4512,6 +4525,36 @@ def self_test(repo):
             "negative-performance manifest")
         require(failed_manifest.get("status") == "failed",
                 "negative-performance campaign published a passed manifest")
+        failed_bundle_path = slow_args.output / "abba_raw.json"
+        failed_replay = validate_manifest(
+            slow_args.output / "abba_manifest.json", repo,
+            failed_bundle_path, None, matrix, allow_self_test=True)
+        require(failed_replay.get("status") == "failed",
+                "negative-performance replay lost expected policy status")
+
+        failed_bundle = read_json(
+            failed_bundle_path, "negative-performance raw bundle")
+        failed_mutations = (
+            ("failed raw", lambda m, b:
+             b["raw"][m["entries"][0]["name"]].__setitem__(
+                 "stdout_base64", "e30K")),
+            ("failed summary", lambda m, b:
+             m["summary"][0]["encode"].__setitem__(
+                 "speedup_percent", 999.0)),
+            ("failed provenance", lambda m, b:
+             m["provenance"].__setitem__("runner_sha256", "0" * 64)),
+            ("failed status", lambda m, b:
+             m.__setitem__("status", "passed")),
+        )
+        for index, (label, mutation) in enumerate(failed_mutations):
+            mutated = root / ("failed-mutation-{}".format(index))
+            mutated.mkdir()
+            mp, bp = coordinated_manifest_mutation(
+                failed_manifest, failed_bundle, mutated, mutation)
+            expect_failure(
+                lambda mp=mp, bp=bp: validate_manifest(
+                    mp, repo, bp, None, matrix, allow_self_test=True),
+                label)
         manifest_path = output / "abba_manifest.json"
         bundle_path = output / "abba_raw.json"
         manifest = read_json(manifest_path, "self-test manifest")
@@ -4521,6 +4564,8 @@ def self_test(repo):
         validate(manifest_path, bundle_path)
 
         mutations = []
+        mutations.append(("passed status", lambda m, b:
+                          m.__setitem__("status", "failed")))
         mutations.append(("return code", lambda m, b:
                           m["entries"][0].__setitem__("returncode", 17)))
         mutations.append(("ABBA entry order", lambda m, b:
@@ -5109,7 +5154,7 @@ def self_test(repo):
             # lease; otherwise this legacy probe would still be rejected.
             use_context(jerasure.PairLease(cpu, sibling, root=cross_runtime))
 
-        mutation_count = len(mutations) + 19
+        mutation_count = len(mutations) + len(failed_mutations) + 19
     print("butterfly ABBA v6 self-test passed: path-independent replay + {} adversarial mutations".format(
         mutation_count))
 
@@ -5164,8 +5209,14 @@ def main():
                 require(args.baseline is not None and args.candidate is not None,
                         "supply both binaries or neither")
                 supplied = {"baseline": args.baseline, "candidate": args.candidate}
-            validate_manifest(args.manifest, repo, args.raw_bundle,
-                              supplied, args.matrix)
+            manifest = validate_manifest(
+                args.manifest, repo, args.raw_bundle, supplied, args.matrix)
+            if manifest["status"] == "failed":
+                print(
+                    "butterfly ABBA v6 evidence replay authenticated: "
+                    "campaign failed its statistical policy",
+                    file=sys.stderr)
+                return EXPECTED_POLICY_FAILURE_EXIT
             print("butterfly ABBA v6 path-independent evidence replay passed")
         elif args.command == "self-test":
             self_test(repo)

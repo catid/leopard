@@ -252,17 +252,19 @@ and
 the stable raw-evidence digest is
 `540d2dc65826c7032c3a74d9ff1e1a6b97dd96463d546ca9b3667171ff4da2b8`.
 An independent replay authenticated all provenance and all 1,664 raw records,
-then reproduced the two policy failures. The current v6 `verify` command
-rejects a deliberately failed status before full replay, and its CPU
-reservation is advisory rather than a measurement of sibling activity. The
-current collector additionally holds the common pair-wide filesystem lease and
-the legacy Linux abstract-socket namespace used by exact-main, low-copy, and
-Jerasure collectors, so distinct reservation files cannot cause overlapping
-measurements on one physical pair. It also retains the current shared stable
-directory anchor used by C7 and exact-main. Pair-only legacy collectors and
-anchor-aware current collectors therefore both intersect its authority. Those
-tooling limitations are tracked separately and are not a reason to resample
-this pair.
+then reproduced the two policy failures. The v6 `verify` command now performs
+the same complete provenance, raw-record, summary, and statistical replay for
+both passed and failed manifests. An authenticated failed manifest exits 3,
+distinct from evidence rejection (1) and command-line usage errors (2). Its CPU
+reservation is still advisory rather than a measurement of sibling activity.
+The current collector additionally holds the common pair-wide filesystem lease
+and the legacy Linux abstract-socket namespace used by exact-main, low-copy,
+and Jerasure collectors, so distinct reservation files cannot cause
+overlapping measurements on one physical pair. It also retains the current
+shared stable directory anchor used by C7 and exact-main. Pair-only legacy
+collectors and anchor-aware current collectors therefore both intersect its
+authority. Those tooling limitations are tracked separately and are not a
+reason to resample this pair.
 
 Final disposition: retain exact 64-byte GF16 fusion on all production backends,
 retain exact 128-byte fusion only on AVX2, and keep every larger GF16 transform
@@ -479,13 +481,15 @@ Leopard2 evidence campaigns for the UID, including campaigns on disjoint pairs.
 
 Repeat with `--backend ssse3 --output ABBA_SSSE3`. Do not run other memory-
 intensive jobs during either pinned phase. Each manifest can then be replayed
-with `run_abba.py verify` when its campaign status is `passed`; v6 checks the
-embedded raw evidence and matrix and will not accept the historical v5 schema.
-The current command deliberately stops at `campaign status` for retained
-failed manifests instead of replaying them to the expected statistical
-failure. That limitation, and fail-closed measurement of reserved-sibling
-activity, are tracked by the evidence-runner follow-up. Do not rerun the final
-layout-matched AVX2 pair to work around this verifier behavior.
+with `run_abba.py verify`; v6 checks the embedded raw evidence and matrix and
+will not accept the historical v5 schema. A passed campaign prints success and
+exits 0. A completely authenticated failed campaign reproduces at least one
+statistical-policy failure and exits 3. Evidence corruption or inconsistent
+status exits 1, while malformed command-line use remains argparse exit 2. The
+self-test covers failed-manifest raw, summary, provenance, and status
+mutations. Fail-closed measurement of reserved-sibling activity remains
+tracked by the evidence-runner follow-up. Do not rerun the final layout-matched
+AVX2 pair merely because the replay tooling changed.
 
 For AVX2, candidate and control differ at the 64- and 128-byte GF16 schedule
 choices. For SSSE3, they differ only at 64 bytes; both select the split schedule
