@@ -22,7 +22,8 @@ The `self-test` command uses only `mock_benchmark.py`. It executes all 24 fixed
 cells through five mock A1/B1/B2/A2 rounds, then exercises raw-sample
 validation, pass and policy-failure replay, bounded inputs and outputs,
 mutation rejection, immutable executable staging, reservation replacement,
-stable pair-lease interoperability (including path replacement), exact-affinity
+stable pair-lease interoperability (including path replacement), shared stable
+anchor interoperability with the current butterfly collector, exact-affinity
 checking, independently fixed C++ loss vectors, Linux subreaper/pidfd teardown
 of a `setsid()` double-fork daemon, and transactional no-replace publication
 preflight. The sibling `../test_process_containment.py` gate injects post-spawn

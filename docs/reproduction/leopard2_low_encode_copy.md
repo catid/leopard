@@ -92,7 +92,12 @@ and digest. Both reservation and pair lease are revalidated before and after
 every measured child. The coordinator's affinity is also required to equal the
 housekeeping set at those boundaries. The reservation also has a stable Linux
 abstract-socket lease, so replacing its path cannot create an overlapping
-reservation.
+reservation. For compatibility with the current C7, exact-main, and butterfly
+collectors, the reservation additionally holds the common nonblocking stable
+anchor on the owned `/run/user/UID` directory for the campaign lifetime. This
+conservatively serializes current Leopard2 evidence campaigns across physical
+CPU pairs and prevents a runner using the newer anchor protocol from overlapping
+the low-copy collector.
 
 After the initial attestation, the collector copies each benchmark into a
 private staged file, revalidates its bytes, opens it read-only, unlinks its

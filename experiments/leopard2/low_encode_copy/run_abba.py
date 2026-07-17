@@ -1501,7 +1501,10 @@ def validate_retained_snapshot(
 class HardenedReservation:
     """Hold and continuously bind a coordinator-created CPU reservation."""
 
-    def __init__(self, path: Path, cpu: int, sibling: int):
+    def __init__(
+        self, path: Path, cpu: int, sibling: int,
+        runtime_root: Path | None = None,
+    ):
         absolute = path.absolute()
         resolved = path.resolve(strict=True)
         require(absolute == resolved,
@@ -1512,6 +1515,7 @@ class HardenedReservation:
         self.descriptor: int | None = None
         self.identity: dict[str, Any] | None = None
         self.kernel_socket: socket.socket | None = None
+        self.anchor = SUPPORT.StableLeaseAnchor(runtime_root)
         material = canonical_bytes({
             "cpu": cpu,
             "path": str(self.path),
@@ -1570,8 +1574,9 @@ class HardenedReservation:
         return payload
 
     def __enter__(self) -> dict[str, Any]:
-        self._acquire_kernel_lease()
         try:
+            self.anchor.__enter__()
+            self._acquire_kernel_lease()
             parent = os.lstat(self.path.parent)
             path_before = os.lstat(self.path)
             require(stat.S_ISDIR(parent.st_mode) and parent.st_uid == os.getuid() and
@@ -1582,15 +1587,11 @@ class HardenedReservation:
                     path_before.st_nlink == 1 and
                     stat.S_IMODE(path_before.st_mode) == 0o600,
                     "CPU reservation must be an owned single-link mode-0600 file")
-        except Exception:
-            self._release_kernel_lease()
-            raise
-        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
-        if hasattr(os, "O_CLOEXEC"):
-            flags |= os.O_CLOEXEC
-        if hasattr(os, "O_NOFOLLOW"):
-            flags |= os.O_NOFOLLOW
-        try:
+            flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+            if hasattr(os, "O_CLOEXEC"):
+                flags |= os.O_CLOEXEC
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
             self.descriptor = os.open(self.path, flags)
             metadata = os.fstat(self.descriptor)
             path_metadata = os.lstat(self.path)
@@ -1620,14 +1621,8 @@ class HardenedReservation:
             }
             self.validate_current()
             return self.identity
-        except Exception:
-            if self.descriptor is not None:
-                try:
-                    fcntl.flock(self.descriptor, fcntl.LOCK_UN)
-                finally:
-                    os.close(self.descriptor)
-                    self.descriptor = None
-            self._release_kernel_lease()
+        except BaseException:
+            self.__exit__(None, None, None)
             raise
 
     def validate_current(self) -> None:
@@ -1636,6 +1631,7 @@ class HardenedReservation:
                 self.kernel_socket.fileno() >= 0 and
                 self.kernel_socket.getsockname() == self.kernel_name,
                 "CPU reservation is not held")
+        self.anchor.validate_current()
         descriptor = os.fstat(self.descriptor)
         path = os.lstat(self.path)
         parent = os.lstat(self.path.parent)
@@ -1655,8 +1651,10 @@ class HardenedReservation:
                 "CPU reservation contents changed")
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        del exc_type, exc, tb
         descriptor = self.descriptor
         self.descriptor = None
+        self.identity = None
         try:
             if descriptor is not None:
                 try:
@@ -1664,7 +1662,10 @@ class HardenedReservation:
                 finally:
                     os.close(descriptor)
         finally:
-            self._release_kernel_lease()
+            try:
+                self._release_kernel_lease()
+            finally:
+                self.anchor.__exit__(None, None, None)
 
 
 def validate_reservation_identity(
@@ -3948,24 +3949,22 @@ def run_self_test(_options: argparse.Namespace) -> int:
                 return
             raise EvidenceError(f"butterfly interoperability accepted: {name}")
 
-        cross_root = root / "butterfly-cross-lease-root"
+        cross_root = root / "butterfly-cross-anchor-root"
         cross_root.mkdir(mode=0o700)
-        with SUPPORT.PairLease(cpu, sibling, root=cross_root) as identity:
-            Path(identity["path"]).rename(cross_root / "old.lock")
+        with SUPPORT.StableLeaseAnchor(cross_root):
             expect_butterfly_rejection(
-                lambda: butterfly.PairLease(
-                    sibling, cpu, root=cross_root).__enter__(),
-                "butterfly file-replacement lease overlap")
-        reverse_root = root / "butterfly-reverse-lease-root"
+                lambda: butterfly.StableLeaseAnchor(cross_root).acquire(),
+                "butterfly stable-anchor overlap")
+        reverse_root = root / "butterfly-reverse-anchor-root"
         reverse_root.mkdir(mode=0o700)
-        with butterfly.PairLease(cpu, sibling, root=reverse_root):
-            moved = root / "butterfly-reverse-lease-root-moved"
-            reverse_root.rename(moved)
-            reverse_root.mkdir(mode=0o700)
+        butterfly_anchor = butterfly.StableLeaseAnchor(reverse_root)
+        butterfly_anchor.acquire()
+        try:
             expect_evidence_error(
-                lambda: SUPPORT.PairLease(
-                    sibling, cpu, root=reverse_root).__enter__(),
-                "butterfly directory-replacement lease overlap")
+                lambda: SUPPORT.StableLeaseAnchor(reverse_root).__enter__(),
+                "butterfly reverse stable-anchor overlap")
+        finally:
+            butterfly_anchor.release()
 
         immutable_root = root / "immutable"
         immutable_root.mkdir(mode=0o700)
