@@ -59,41 +59,89 @@ static void BuildRawPrunedOperations(
         return;
 
     const uint32_t half = size >> 1;
-    if (!inverse)
+    if (size == 2)
     {
         const uint16_t log_m = multiplier_log(
             multiplier_context, coset + half);
-        for (uint32_t offset = 0; offset < half; ++offset)
-        {
-            const RawPrunedOperation operation = {
-                start + offset,
-                start + half + offset,
-                log_m
-            };
-            operations.push_back(operation);
-        }
+        const RawPrunedOperation operation = {
+            start,
+            start + 1,
+            log_m
+        };
+        operations.push_back(operation);
+        return;
     }
 
-    BuildRawPrunedOperations(
-        start, half, coset, inverse,
-        multiplier_log, multiplier_context, operations);
-    BuildRawPrunedOperations(
-        start + half, half, coset + half, inverse,
-        multiplier_log, multiplier_context, operations);
+    // Group every pair of transform layers in the exact order consumed by
+    // Butterfly4.  Operations for different offsets and disjoint child
+    // subspaces commute, so this is the same radix-2 DAG as the historical
+    // root/child traversal with complete two-layer regions made contiguous.
+    const uint32_t quarter = size >> 2;
+    const uint16_t log_m01 = multiplier_log(
+        multiplier_context, coset + quarter);
+    const uint16_t log_m23 = multiplier_log(
+        multiplier_context, coset + half + quarter);
+    const uint16_t log_m02 = multiplier_log(
+        multiplier_context, coset + half);
 
     if (inverse)
     {
-        const uint16_t log_m = multiplier_log(
-            multiplier_context, coset + half);
-        for (uint32_t offset = 0; offset < half; ++offset)
+        BuildRawPrunedOperations(
+            start, quarter, coset, inverse,
+            multiplier_log, multiplier_context, operations);
+        BuildRawPrunedOperations(
+            start + quarter, quarter, coset + quarter, inverse,
+            multiplier_log, multiplier_context, operations);
+        BuildRawPrunedOperations(
+            start + half, quarter, coset + half, inverse,
+            multiplier_log, multiplier_context, operations);
+        BuildRawPrunedOperations(
+            start + half + quarter, quarter, coset + half + quarter,
+            inverse, multiplier_log, multiplier_context, operations);
+    }
+
+    for (uint32_t offset = 0; offset < quarter; ++offset)
+    {
+        const uint32_t value0 = start + offset;
+        const uint32_t value1 = value0 + quarter;
+        const uint32_t value2 = value0 + half;
+        const uint32_t value3 = value2 + quarter;
+        if (inverse)
         {
-            const RawPrunedOperation operation = {
-                start + offset,
-                start + half + offset,
-                log_m
+            const RawPrunedOperation grouped[] = {
+                { value0, value1, log_m01 },
+                { value2, value3, log_m23 },
+                { value0, value2, log_m02 },
+                { value1, value3, log_m02 }
             };
-            operations.push_back(operation);
+            operations.insert(operations.end(), grouped, grouped + 4);
         }
+        else
+        {
+            const RawPrunedOperation grouped[] = {
+                { value0, value2, log_m02 },
+                { value1, value3, log_m02 },
+                { value0, value1, log_m01 },
+                { value2, value3, log_m23 }
+            };
+            operations.insert(operations.end(), grouped, grouped + 4);
+        }
+    }
+
+    if (!inverse)
+    {
+        BuildRawPrunedOperations(
+            start, quarter, coset, inverse,
+            multiplier_log, multiplier_context, operations);
+        BuildRawPrunedOperations(
+            start + quarter, quarter, coset + quarter, inverse,
+            multiplier_log, multiplier_context, operations);
+        BuildRawPrunedOperations(
+            start + half, quarter, coset + half, inverse,
+            multiplier_log, multiplier_context, operations);
+        BuildRawPrunedOperations(
+            start + half + quarter, quarter, coset + half + quarter,
+            inverse, multiplier_log, multiplier_context, operations);
     }
 }
 
@@ -434,7 +482,14 @@ bool CompilePrunedTransformPlan(
             if (needed[i] != 0 && candidate.input_mask[i] == 0)
                 return false;
 
-        candidate.operations.reserve(raw.size());
+        size_t retained_operation_count = 0;
+        for (size_t i = 0; i < planned.size(); ++i)
+        {
+            const uint8_t flags = planned[i].flags;
+            if ((flags & (PrunedWriteX | PrunedWriteY)) != 0)
+                ++retained_operation_count;
+        }
+        candidate.operations.reserve(retained_operation_count);
         for (size_t i = 0; i < planned.size(); ++i)
         {
             const PrunedTransformOperation& operation = planned[i];

@@ -32,10 +32,12 @@ struct TestCounts
     uint64_t backends;
     uint64_t fused_four_descriptors;
     uint64_t execution_steps;
+    uint64_t max_plan_bytes;
 
     TestCounts()
         : plans(0), executions(0), compared_bytes(0), direct_symbols(0)
         , backends(0), fused_four_descriptors(0), execution_steps(0)
+        , max_plan_bytes(0)
     {}
 };
 
@@ -43,6 +45,18 @@ void require(bool condition, const std::string& message)
 {
     if (!condition)
         throw std::runtime_error(message);
+}
+
+uint64_t plan_storage_bytes(
+    const leopard2_internal::PrunedTransformPlan& plan)
+{
+    return sizeof(plan) +
+        plan.input_mask.capacity() * sizeof(plan.input_mask[0]) +
+        plan.output_mask.capacity() * sizeof(plan.output_mask[0]) +
+        plan.operations.capacity() * sizeof(plan.operations[0]) +
+        plan.fused_four_starts.capacity() *
+            sizeof(plan.fused_four_starts[0]) +
+        plan.zero_outputs.capacity() * sizeof(plan.zero_outputs[0]);
 }
 
 uint64_t mix64(uint64_t value)
@@ -247,6 +261,9 @@ void run_case(
     counts.fused_four_descriptors += plan.fused_four_starts.size();
     counts.execution_steps += plan.operations.size() -
         plan.fused_four_starts.size() * 3U;
+    const uint64_t plan_bytes = plan_storage_bytes(plan);
+    if (plan_bytes > counts.max_plan_bytes)
+        counts.max_plan_bytes = plan_bytes;
 
     std::vector<std::vector<uint8_t> > initial =
         make_input(size, bytes, input_mask, seed);
@@ -686,8 +703,9 @@ void test_fused_four_descriptors()
         require(Field::prepare(
                 size, 0, inverse != 0, all.data(), all.data(), plan),
             "complete fused plan construction failed");
-        require(plan.fused_four_starts.size() == size / 4,
-            "complete plan omitted leaf four-way descriptors");
+        require(plan.fused_four_starts.size() ==
+                (size / 4) * (exact_log2(size) / 2),
+            "complete plan omitted four-way layer groups");
         for (size_t i = 0; i < plan.fused_four_starts.size(); ++i)
         {
             require(plan.fused_four_starts[i] + 3 < plan.operations.size(),
@@ -698,6 +716,27 @@ void test_fused_four_descriptors()
                     "fused descriptors overlap or are unsorted");
         }
     }
+}
+
+void test_max_parent_plan_footprint(TestCounts& counts)
+{
+    const unsigned size = 65536;
+    const std::vector<uint8_t> all(size, 1);
+    leopard2_internal::PrunedTransformPlan plan;
+    require(GF16::prepare(
+            size, 0, false, all.data(), all.data(), plan),
+        "maximum GF16 plan construction failed");
+    require(plan.operations.size() ==
+            static_cast<size_t>(size / 2) * exact_log2(size),
+        "maximum GF16 plan lost full-transform operations");
+    require(plan.fused_four_starts.size() ==
+            static_cast<size_t>(size / 4) * (exact_log2(size) / 2),
+        "maximum GF16 plan omitted all-level fusion");
+    const uint64_t bytes = plan_storage_bytes(plan);
+    require(bytes < UINT64_C(16) * 1024 * 1024,
+        "maximum GF16 plan exceeds bounded metadata budget");
+    if (bytes > counts.max_plan_bytes)
+        counts.max_plan_bytes = bytes;
 }
 
 void test_shared_plan_concurrency(const leopard::backend::Ops& ops)
@@ -770,6 +809,7 @@ int main()
         const uint64_t bytes8[] = { 1, 7, 63, 64, 65, 129 };
         const uint64_t bytes16[] = { 2, 18, 62, 64, 66, 130 };
         TestCounts counts;
+        test_max_parent_plan_footprint(counts);
         for (size_t i = 0; i < sizeof(requested) / sizeof(requested[0]); ++i)
         {
             leopard::backend::QualificationStatus status =
@@ -810,6 +850,7 @@ int main()
                   << " direct_symbols=" << counts.direct_symbols
                   << " fused_four=" << counts.fused_four_descriptors
                   << " execution_steps=" << counts.execution_steps
+                  << " max_plan_bytes=" << counts.max_plan_bytes
                   << std::endl;
         return 0;
     }
