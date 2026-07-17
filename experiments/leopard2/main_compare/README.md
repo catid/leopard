@@ -61,10 +61,20 @@ For a single JSON cell:
 Release artifacts with the expected compile, object, archive, link, source,
 runtime-library, and field/profile identities. Each cell runs three independent
 `baseline,candidate,candidate,baseline` rounds on one pinned logical CPU while
-the sibling is reserved. Both implementations must report the same deterministic
-loss set and all three workload digests. A strict child environment prevents
-ambient OpenMP, loader, allocator, or profiling settings from silently changing
-one executable.
+the sibling is reserved. Version-2 evidence additionally holds a pair-wide,
+per-user lock at
+`/run/user/UID/leopard2-cpu-leases/leopard2-cpu-pair-UID-A-B.lock`, derived
+from both sorted logical CPU numbers. It validates the owned runtime and lease
+directories, binds the open file's device and inode to its path, and rechecks
+that identity after every child. The runner samples both CPUs from `/proc/stat`
+immediately around the child sequence, and fails closed unless the benchmark
+CPU did work and the reserved sibling accumulated zero non-idle jiffies. The
+pair-wide lock prevents cooperating runners that implement this protocol from
+using the physical core through different coordinator reservation files. A
+coordinator must still exclude older or unrelated tools.
+Both implementations must report the same deterministic loss set and all three
+workload digests. A strict child environment prevents ambient OpenMP, loader,
+allocator, or profiling settings from silently changing one executable.
 
 Build Leopard2 separately with production test hooks disabled:
 
@@ -79,7 +89,11 @@ Build Leopard2 separately with production test hooks disabled:
 Choose a physical core from the allowed CPU set and reserve both of its SMT
 threads. The reservation must be canonical JSON without a trailing newline;
 replace the CPU numbers, owner, and nonce below. Keep unrelated user work off
-both logical CPUs for the entire run.
+both logical CPUs for the entire run. The runner is unprivileged: it cannot
+prevent a root-owned task or kernel thread from being scheduled there, and
+Linux scheduler counters have jiffy resolution. It therefore records and
+checks the observed sibling counters rather than claiming OS-exclusive CPU
+ownership.
 
     python3 -c 'import json,sys; sys.stdout.write(json.dumps({"benchmark_cpu":15,"nonce":"replace-with-unique-value","owner":"benchmark coordinator","reserved_sibling":31,"schema":"leopard2-cpu-reservation/v1","status":"held"},sort_keys=True,separators=(",",":")))' \
         > build/leopard2-main-reservation.json
@@ -109,6 +123,21 @@ Verify while the exact build inputs still exist:
 
     python3 experiments/leopard2/main_compare/run_abba.py verify \
         --manifest /tmp/leopard2-vs-main/manifest.json
+
+The version-2 verifier recomputes the pair-lock identity, every per-field CPU
+counter delta, the zero-non-idle-sibling decision, workload identities, and all
+statistics. Version-1 retained bundles remain structurally replayable for
+historical comparison, but they do not acquire version-2 isolation semantics
+retroactively. A sibling-activity or child failure produces signed
+`failure.json` diagnostics that bind every retained invocation stream. Verify
+those diagnostics with:
+
+    python3 experiments/leopard2/main_compare/run_abba.py verify-failure \
+        --failure /tmp/leopard2-vs-main/failure.json
+
+The verifier labels them explicitly as failed diagnostics, not performance
+evidence. A failed campaign must not be converted into a passing run by
+discarding samples.
 
 The reported ratio is baseline time divided by Leopard2 time, so values above
 one favor Leopard2. Encode excludes codec construction for both implementations.

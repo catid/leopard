@@ -3,10 +3,13 @@
 
 from __future__ import annotations
 
+import argparse
 import copy
 import importlib.util
 import json
 import math
+import os
+import stat
 import sys
 import tempfile
 import unittest
@@ -106,6 +109,32 @@ HOST = {
     "reserved_sibling": host_cpu(1),
     "turbo_and_pstate": {"fixture": "0"},
 }
+
+
+def cpu_stat(cpu: int, *, user: int, idle: int) -> dict:
+    fields = {
+        "user": user, "nice": 0, "system": 0, "idle": idle,
+        "iowait": 0, "irq": 0, "softirq": 0, "steal": 0,
+    }
+    return {"cpu": cpu, "fields": fields, "total_jiffies": sum(fields.values())}
+
+
+PAIR_LEASE_PAYLOAD = runner.pair_lease_payload(0, 1)
+PAIR_LEASE = {
+    "device": 1,
+    "directory_device": 1,
+    "directory_inode": 2,
+    "inode": 3,
+    "lock": "exclusive_nonblocking_pair_wide",
+    "path": str(runner.pair_lease_directory() / runner.pair_lease_name(0, 1)),
+    "payload": PAIR_LEASE_PAYLOAD,
+    "sha256": runner.sha256_bytes(runner.canonical_bytes(PAIR_LEASE_PAYLOAD)),
+}
+ISOLATION = runner.isolation_record(
+    0, 1, PAIR_LEASE, 1_000, 2_000,
+    cpu_stat(0, user=100, idle=100), cpu_stat(0, user=110, idle=110),
+    cpu_stat(1, user=100, idle=100), cpu_stat(1, user=100, idle=120),
+)
 
 
 def summary(samples: list[float], setup: bool = False) -> dict:
@@ -260,6 +289,7 @@ def synthetic_raw(candidate_scale: float = 0.8) -> dict:
         "validity_is_independent_of_speed": True,
         "campaign": copy.deepcopy(CAMPAIGN),
         "host_initial": copy.deepcopy(HOST),
+        "isolation": copy.deepcopy(ISOLATION),
         "reservation": RESERVATION,
         "input_specification": copy.deepcopy(SPECIFICATION),
         "identities_initial": identity,
@@ -293,6 +323,14 @@ class MainCompareRunnerTests(unittest.TestCase):
             self.assertEqual(result["degrees_of_freedom"], 2)
             self.assertTrue(math.isfinite(result["ci95_lower"]))
             self.assertTrue(result["performance_result_does_not_affect_evidence_validity"])
+
+    def test_legacy_v1_raw_fixture_remains_replayable(self) -> None:
+        value = synthetic_raw()
+        value["schema"] = runner.RAW_SCHEMA_V1
+        value.pop("isolation")
+        value = resign(value)
+        runner.validate_raw(
+            value, None, check_files=False, check_current_inputs=False)
 
     def test_slower_candidate_is_valid_evidence(self) -> None:
         value = synthetic_raw(candidate_scale=2.0)
@@ -369,6 +407,88 @@ class MainCompareRunnerTests(unittest.TestCase):
             invocation["reservation_after"]["sha256"] = "f" * 64
         self.assert_rejected(value)
 
+    def test_isolation_mutations_and_active_sibling_rejected(self) -> None:
+        value = synthetic_raw()
+        value["isolation"]["delta"]["reserved_sibling"]["idle_jiffies"] += 1
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
+        value["isolation"]["pair_lease"]["path"] = "/tmp/wrong-pair.lock"
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
+        value["isolation"]["accepted"] = False
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
+        before = value["isolation"]["before"]
+        after = value["isolation"]["after"]
+        active_after = copy.deepcopy(after["reserved_sibling"])
+        active_after["fields"]["user"] += 1
+        active_after["total_jiffies"] += 1
+        value["isolation"] = runner.isolation_record(
+            0, 1, value["isolation"]["pair_lease"],
+            before["monotonic_ns"], after["monotonic_ns"],
+            before["benchmark_cpu"], after["benchmark_cpu"],
+            before["reserved_sibling"], active_after)
+        self.assertFalse(value["isolation"]["accepted"])
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
+        value["isolation"]["before"]["benchmark_cpu"]["cpu"] = 98
+        value["isolation"]["after"]["benchmark_cpu"]["cpu"] = 98
+        value["isolation"]["delta"]["benchmark_cpu"]["cpu"] = 98
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
+        value["isolation"]["before"]["benchmark_cpu"] = []
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
+        before = value["isolation"]["before"]
+        after = value["isolation"]["after"]
+        before["benchmark_cpu"], before["reserved_sibling"] = (
+            before["reserved_sibling"], before["benchmark_cpu"])
+        after["benchmark_cpu"], after["reserved_sibling"] = (
+            after["reserved_sibling"], after["benchmark_cpu"])
+        value["isolation"]["delta"]["benchmark_cpu"], \
+            value["isolation"]["delta"]["reserved_sibling"] = (
+                value["isolation"]["delta"]["reserved_sibling"],
+                value["isolation"]["delta"]["benchmark_cpu"])
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
+        value["invocations"][0]["duration_ns"] = 0
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
+        value["isolation"]["after"]["monotonic_ns"] = 1_001
+        self.assert_rejected(value)
+
+    def test_isolation_replay_does_not_require_original_uid(self) -> None:
+        value = synthetic_raw()
+        payload = runner.pair_lease_payload(0, 1, uid=12345)
+        lease = {
+            "device": 10,
+            "directory_device": 11,
+            "directory_inode": 12,
+            "inode": 13,
+            "lock": "exclusive_nonblocking_pair_wide",
+            "path": str(runner.pair_lease_directory(12345) /
+                runner.pair_lease_name(0, 1, uid=12345)),
+            "payload": payload,
+            "sha256": runner.sha256_bytes(runner.canonical_bytes(payload)),
+        }
+        before = value["isolation"]["before"]
+        after = value["isolation"]["after"]
+        value["isolation"] = runner.isolation_record(
+            0, 1, lease, before["monotonic_ns"], after["monotonic_ns"],
+            before["benchmark_cpu"], after["benchmark_cpu"],
+            before["reserved_sibling"], after["reserved_sibling"])
+        value = resign(value)
+        runner.validate_raw(
+            value, None, check_files=False, check_current_inputs=False)
+
     def test_signature_mutation_rejected(self) -> None:
         value = synthetic_raw()
         value["created_utc"] = "changed"
@@ -405,6 +525,118 @@ class MainCompareRunnerTests(unittest.TestCase):
                 runner.validate_raw(
                     value, root, check_files=True, check_current_inputs=False)
 
+    def test_v2_manifest_binds_isolation_and_replays_portably(self) -> None:
+        value = synthetic_raw()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for index, invocation in enumerate(value["invocations"]):
+                stdout = json.dumps(invocation["result"]).encode("utf-8")
+                stdout_path = root / f"{index}.stdout"
+                stderr_path = root / f"{index}.stderr"
+                stdout_path.write_bytes(stdout)
+                stderr_path.write_bytes(b"")
+                invocation["stdout"] = {
+                    "path": stdout_path.name,
+                    "size": len(stdout),
+                    "sha256": runner.sha256_bytes(stdout),
+                }
+                invocation["stderr"] = {
+                    "path": stderr_path.name,
+                    "size": 0,
+                    "sha256": runner.sha256_bytes(b""),
+                }
+            value = resign(value)
+            raw_path = root / "raw.json"
+            runner.write_json_exclusive(raw_path, value)
+            manifest = runner.signed({
+                "schema": runner.MANIFEST_SCHEMA,
+                "created_utc": "2026-07-16T00:00:00Z",
+                "valid": True,
+                "validity_is_independent_of_speed": True,
+                "raw": {
+                    "path": raw_path.name,
+                    "size": raw_path.stat().st_size,
+                    "sha256": runner.sha256_file(raw_path),
+                    "payload_digest": value["digest"],
+                },
+                "campaign": value["campaign"],
+                "host": value["host_initial"],
+                "isolation": value["isolation"],
+                "reservation": value["reservation"],
+                "identities": value["identities_initial"],
+                "analysis": value["analysis"],
+            })
+            manifest_path = root / "manifest.json"
+            runner.write_json_exclusive(manifest_path, manifest)
+            options = argparse.Namespace(
+                manifest=manifest_path, no_current_input_check=True)
+            self.assertEqual(runner.verify_campaign(options), 0)
+
+            edited = copy.deepcopy(manifest)
+            edited["isolation"]["accepted"] = False
+            edited = resign(edited)
+            manifest_path.unlink()
+            runner.write_json_exclusive(manifest_path, edited)
+            with self.assertRaises(runner.EvidenceError):
+                runner.verify_campaign(options)
+
+    def test_failed_bundle_binds_retained_invocation_files(self) -> None:
+        value = synthetic_raw()
+        invocation = copy.deepcopy(value["invocations"][0])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stdout = root / "first.stdout"
+            stderr = root / "first.stderr"
+            stdout.write_text(json.dumps(invocation["result"]), encoding="utf-8")
+            stderr.write_bytes(b"diagnostic")
+            invocation["stdout"] = {
+                "path": stdout.name, "size": stdout.stat().st_size,
+                "sha256": runner.sha256_file(stdout),
+            }
+            invocation["stderr"] = {
+                "path": stderr.name, "size": stderr.stat().st_size,
+                "sha256": runner.sha256_file(stderr),
+            }
+            failure = runner.signed({
+                "schema": runner.FAILURE_SCHEMA,
+                "created_utc": "2026-07-16T00:00:00Z",
+                "status": "failed", "valid": False,
+                "error_type": "EvidenceError", "error": "fixture failure",
+                "campaign": copy.deepcopy(CAMPAIGN),
+                "host_initial": copy.deepcopy(HOST),
+                "reservation": copy.deepcopy(RESERVATION),
+                "pair_lease": copy.deepcopy(PAIR_LEASE),
+                "isolation": copy.deepcopy(ISOLATION),
+                "input_specification": copy.deepcopy(SPECIFICATION),
+                "identities_initial": copy.deepcopy(invocation["identity_before"]),
+                "invocations": [invocation],
+                "retained_files": runner.retained_file_records(root),
+                "traceback": "fixture traceback",
+            })
+            failure_path = root / "failure.json"
+            runner.write_json_exclusive(failure_path, failure)
+            runner.validate_failure(failure, root, check_files=True)
+            self.assertEqual(runner.verify_failed_campaign(
+                argparse.Namespace(failure=failure_path)), 0)
+
+            stdout.write_bytes(b"{}")
+            semantic_mismatch = copy.deepcopy(failure)
+            replacement = {
+                "path": stdout.name, "size": stdout.stat().st_size,
+                "sha256": runner.sha256_file(stdout),
+            }
+            semantic_mismatch["invocations"][0]["stdout"] = replacement
+            for index, retained in enumerate(semantic_mismatch["retained_files"]):
+                if retained["path"] == stdout.name:
+                    semantic_mismatch["retained_files"][index] = replacement
+            semantic_mismatch = resign(semantic_mismatch)
+            with self.assertRaises(runner.EvidenceError):
+                runner.validate_failure(semantic_mismatch, root, check_files=True)
+
+            stdout.write_bytes(b"edited")
+            with self.assertRaises(runner.EvidenceError):
+                runner.validate_failure(failure, root, check_files=True)
+
     def test_reservation_is_locked_and_canonical(self) -> None:
         payload = {
             "benchmark_cpu": 0,
@@ -426,6 +658,42 @@ class MainCompareRunnerTests(unittest.TestCase):
             with self.assertRaises(runner.EvidenceError):
                 with runner.Reservation(path, 0, 1):
                     pass
+
+    def test_pair_lease_serializes_different_reservation_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / runner.pair_lease_directory().name
+            with runner.PairLease(0, 1, root=root) as identity:
+                self.assertEqual(identity["payload"], runner.pair_lease_payload(0, 1))
+                with self.assertRaises(runner.EvidenceError):
+                    with runner.PairLease(1, 0, root=root):
+                        pass
+            path = root / runner.pair_lease_name(0, 1)
+            path.chmod(0o644)
+            with self.assertRaises(runner.EvidenceError):
+                with runner.PairLease(0, 1, root=root):
+                    pass
+
+    def test_pair_lease_detects_unlink_and_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / runner.pair_lease_directory().name
+            first = runner.PairLease(0, 1, root=root)
+            with first:
+                first.path.unlink()
+                with runner.PairLease(0, 1, root=root):
+                    with self.assertRaises(runner.EvidenceError):
+                        first.validate_current()
+
+    def test_pair_lease_creation_ignores_restrictive_umask(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / runner.pair_lease_directory().name
+            previous = os.umask(0o777)
+            try:
+                with runner.PairLease(0, 1, root=root) as identity:
+                    self.assertEqual(
+                        stat.S_IMODE(os.lstat(Path(identity["path"])).st_mode),
+                        0o600)
+            finally:
+                os.umask(previous)
 
     def test_custom_cell_parser_rejects_non_wire_cases(self) -> None:
         good = runner.parse_cell("cell:240:16:65536:8:1")

@@ -20,6 +20,7 @@ import os
 import platform
 import re
 import shlex
+import stat
 import statistics
 import subprocess
 import sys
@@ -31,9 +32,19 @@ from typing import Any, Iterable, Mapping, Sequence
 
 
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
-RAW_SCHEMA = "leopard2-main-compare-raw/v1"
-MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v1"
+RAW_SCHEMA_V1 = "leopard2-main-compare-raw/v1"
+RAW_SCHEMA = "leopard2-main-compare-raw/v2"
+MANIFEST_SCHEMA_V1 = "leopard2-main-compare-manifest/v1"
+MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v2"
+FAILURE_SCHEMA = "leopard2-main-compare-failure/v2"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
+PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
+ISOLATION_SCHEMA = "leopard2-main-compare-isolation/v1"
+CPU_STAT_FIELDS = (
+    "user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal",
+)
+CPU_STAT_IDLE_FIELDS = ("idle", "iowait")
+MAX_SIBLING_NONIDLE_JIFFIES = 0
 ROUNDS = 3
 ORDER = ("baseline", "candidate", "candidate", "baseline")
 FNV_OFFSET = 14695981039346656037
@@ -739,6 +750,357 @@ def host_identity(cpu: int, sibling: int, allowed_at_launch: set[int]) -> dict[s
     }
 
 
+def cpu_stat_snapshot(cpu: int) -> dict[str, Any]:
+    """Read non-double-counted Linux scheduler counters for one logical CPU."""
+    require(cpu >= 0, "CPU stat identity must be non-negative")
+    prefix = f"cpu{cpu} "
+    for line in Path("/proc/stat").read_text(encoding="ascii").splitlines():
+        if not line.startswith(prefix):
+            continue
+        tokens = line.split()
+        require(tokens[0] == f"cpu{cpu}" and
+                len(tokens) >= 1 + len(CPU_STAT_FIELDS),
+                f"CPU {cpu} has an incomplete /proc/stat record")
+        try:
+            values = [int(value) for value in tokens[1:1 + len(CPU_STAT_FIELDS)]]
+        except ValueError as error:
+            raise EvidenceError(f"CPU {cpu} has a non-integer /proc/stat record") from error
+        require(all(value >= 0 for value in values),
+                f"CPU {cpu} has a negative /proc/stat counter")
+        fields = dict(zip(CPU_STAT_FIELDS, values))
+        return {"cpu": cpu, "fields": fields, "total_jiffies": sum(values)}
+    raise EvidenceError(f"CPU {cpu} is absent from /proc/stat")
+
+
+def cpu_stat_delta(before: Mapping[str, Any], after: Mapping[str, Any]) -> dict[str, Any]:
+    require(isinstance(before, dict) and isinstance(after, dict) and
+            before.get("cpu") == after.get("cpu") and
+            isinstance(before.get("cpu"), int),
+            "CPU stat snapshots refer to different CPUs")
+    before_fields = before.get("fields")
+    after_fields = after.get("fields")
+    require(isinstance(before_fields, dict) and isinstance(after_fields, dict) and
+            set(before_fields) == set(CPU_STAT_FIELDS) and
+            set(after_fields) == set(CPU_STAT_FIELDS),
+            "CPU stat snapshot fields are incomplete")
+    deltas: dict[str, int] = {}
+    for name in CPU_STAT_FIELDS:
+        first = before_fields[name]
+        last = after_fields[name]
+        require(isinstance(first, int) and not isinstance(first, bool) and first >= 0 and
+                isinstance(last, int) and not isinstance(last, bool) and last >= first,
+                f"CPU stat counter {name} moved backwards")
+        deltas[name] = last - first
+    idle = sum(deltas[name] for name in CPU_STAT_IDLE_FIELDS)
+    nonidle = sum(value for name, value in deltas.items()
+                  if name not in CPU_STAT_IDLE_FIELDS)
+    total = idle + nonidle
+    require(after.get("total_jiffies") == sum(after_fields.values()) and
+            before.get("total_jiffies") == sum(before_fields.values()),
+            "CPU stat total does not match its fields")
+    return {
+        "cpu": before["cpu"],
+        "fields": deltas,
+        "idle_jiffies": idle,
+        "nonidle_jiffies": nonidle,
+        "total_jiffies": total,
+    }
+
+
+def pair_lease_payload(
+    cpu: int, sibling: int, uid: int | None = None
+) -> dict[str, Any]:
+    retained_uid = os.getuid() if uid is None else uid
+    return {
+        "cpus": sorted((cpu, sibling)),
+        "schema": PAIR_LEASE_SCHEMA,
+        "uid": retained_uid,
+    }
+
+
+def pair_lease_name(cpu: int, sibling: int, uid: int | None = None) -> str:
+    first, second = sorted((cpu, sibling))
+    retained_uid = os.getuid() if uid is None else uid
+    return f"leopard2-cpu-pair-{retained_uid}-{first}-{second}.lock"
+
+
+def pair_lease_directory(uid: int | None = None) -> Path:
+    retained_uid = os.getuid() if uid is None else uid
+    return Path("/run/user") / str(retained_uid) / "leopard2-cpu-leases"
+
+
+class PairLease:
+    """Serialize normal Leopard2 evidence runners by physical CPU pair."""
+
+    def __init__(self, cpu: int, sibling: int, root: Path | None = None):
+        require(cpu >= 0 and sibling >= 0 and cpu != sibling,
+                "pair lease requires two distinct non-negative CPUs")
+        self.cpu = cpu
+        self.sibling = sibling
+        self.production_root = root is None
+        self.root = pair_lease_directory() if root is None else root
+        self.path = self.root / \
+            pair_lease_name(cpu, sibling)
+        self.descriptor: int | None = None
+        self.identity: dict[str, Any] | None = None
+
+    def _validate_directory(self) -> os.stat_result:
+        if self.production_root:
+            runtime = os.lstat(self.root.parent)
+            require(stat.S_ISDIR(runtime.st_mode) and
+                    runtime.st_uid == os.getuid() and
+                    stat.S_IMODE(runtime.st_mode) == 0o700,
+                    "CPU pair runtime directory is not an owned mode-0700 directory")
+        metadata = os.lstat(self.root)
+        require(stat.S_ISDIR(metadata.st_mode) and
+                metadata.st_uid == os.getuid() and
+                stat.S_IMODE(metadata.st_mode) == 0o700,
+                "CPU pair lease directory is not an owned mode-0700 directory")
+        return metadata
+
+    def validate_current(self) -> None:
+        require(self.descriptor is not None and self.identity is not None,
+                "CPU pair lease is not held")
+        directory = self._validate_directory()
+        descriptor = os.fstat(self.descriptor)
+        path = os.lstat(self.path)
+        require(stat.S_ISREG(descriptor.st_mode) and
+                descriptor.st_uid == os.getuid() and descriptor.st_nlink == 1 and
+                stat.S_IMODE(descriptor.st_mode) == 0o600 and
+                (descriptor.st_dev, descriptor.st_ino) == (path.st_dev, path.st_ino) and
+                (descriptor.st_dev, descriptor.st_ino) ==
+                    (self.identity["device"], self.identity["inode"]),
+                "CPU pair lease path was replaced or its metadata changed")
+        require((directory.st_dev, directory.st_ino) ==
+                (self.identity["directory_device"],
+                 self.identity["directory_inode"]),
+                "CPU pair lease directory was replaced")
+        expected = canonical_bytes(pair_lease_payload(self.cpu, self.sibling))
+        os.lseek(self.descriptor, 0, os.SEEK_SET)
+        retained = os.read(self.descriptor, 4096)
+        require(retained == expected,
+                "CPU pair lease contents changed while held")
+
+    def __enter__(self) -> dict[str, Any]:
+        created_directory = False
+        try:
+            self.root.mkdir(mode=0o700)
+            created_directory = True
+        except FileExistsError:
+            pass
+        except OSError as error:
+            raise EvidenceError(f"cannot create CPU pair lease directory: {error}") from error
+        if created_directory:
+            os.chmod(self.root, 0o700)
+        self._validate_directory()
+        flags = os.O_RDWR
+        if hasattr(os, "O_CLOEXEC"):
+            flags |= os.O_CLOEXEC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        created_file = False
+        try:
+            try:
+                self.descriptor = os.open(
+                    self.path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+                created_file = True
+            except FileExistsError:
+                self.descriptor = os.open(self.path, flags)
+            if created_file:
+                os.fchmod(self.descriptor, 0o600)
+        except OSError as error:
+            if self.descriptor is not None:
+                os.close(self.descriptor)
+                self.descriptor = None
+            raise EvidenceError(f"cannot open CPU pair lease: {error}") from error
+        try:
+            metadata = os.fstat(self.descriptor)
+            require(stat.S_ISREG(metadata.st_mode) and metadata.st_uid == os.getuid() and
+                    metadata.st_nlink == 1 and stat.S_IMODE(metadata.st_mode) == 0o600,
+                    "CPU pair lease file has unsafe ownership, type, links, or permissions")
+            try:
+                fcntl.flock(self.descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise EvidenceError(
+                    f"physical CPU pair is already leased: {self.path}") from error
+            expected = canonical_bytes(pair_lease_payload(self.cpu, self.sibling))
+            os.lseek(self.descriptor, 0, os.SEEK_SET)
+            retained = os.read(self.descriptor, 4096)
+            if not retained:
+                written = os.write(self.descriptor, expected)
+                require(written == len(expected), "short write to CPU pair lease")
+                os.fsync(self.descriptor)
+                retained = expected
+            require(retained == expected,
+                    "CPU pair lease has unexpected or noncanonical contents")
+            directory = self._validate_directory()
+            self.identity = {
+                "device": metadata.st_dev,
+                "directory_device": directory.st_dev,
+                "directory_inode": directory.st_ino,
+                "inode": metadata.st_ino,
+                "lock": "exclusive_nonblocking_pair_wide",
+                "path": str(self.path.resolve()),
+                "payload": pair_lease_payload(self.cpu, self.sibling),
+                "sha256": sha256_bytes(retained),
+            }
+            self.validate_current()
+            return self.identity
+        except Exception:
+            if self.descriptor is not None:
+                try:
+                    fcntl.flock(self.descriptor, fcntl.LOCK_UN)
+                finally:
+                    os.close(self.descriptor)
+                    self.descriptor = None
+            raise
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        if self.descriptor is not None:
+            fcntl.flock(self.descriptor, fcntl.LOCK_UN)
+            os.close(self.descriptor)
+            self.descriptor = None
+
+
+def validate_pair_lease_identity(
+    value: object, cpu: int, sibling: int
+) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+        "device", "directory_device", "directory_inode", "inode", "lock",
+        "path", "payload", "sha256"},
+        "CPU pair lease identity is incomplete")
+    payload = value.get("payload")
+    require(isinstance(payload, dict) and set(payload) == {"cpus", "schema", "uid"} and
+            payload.get("schema") == PAIR_LEASE_SCHEMA and
+            payload.get("cpus") == sorted((cpu, sibling)) and
+            isinstance(payload.get("uid"), int) and
+            not isinstance(payload.get("uid"), bool) and payload["uid"] >= 0,
+            "CPU pair lease payload does not match the campaign")
+    expected_name = pair_lease_name(cpu, sibling, payload["uid"])
+    path = value.get("path")
+    expected_path = pair_lease_directory(payload["uid"]) / expected_name
+    require(isinstance(path, str) and Path(path) == expected_path,
+            "CPU pair lease path does not identify the reserved pair")
+    require(all(isinstance(value.get(name), int) and
+                not isinstance(value.get(name), bool) and value[name] >= 0
+                for name in ("device", "directory_device", "directory_inode", "inode")),
+            "CPU pair lease filesystem identity is invalid")
+    require(value.get("lock") == "exclusive_nonblocking_pair_wide" and
+            value.get("sha256") == sha256_bytes(canonical_bytes(payload)),
+            "CPU pair lease lock or digest is invalid")
+    return value
+
+
+def isolation_record(
+    cpu: int,
+    sibling: int,
+    pair_lease: Mapping[str, Any],
+    before_monotonic_ns: int,
+    after_monotonic_ns: int,
+    before_cpu: Mapping[str, Any],
+    after_cpu: Mapping[str, Any],
+    before_sibling: Mapping[str, Any],
+    after_sibling: Mapping[str, Any],
+) -> dict[str, Any]:
+    require(all(isinstance(snapshot, dict) for snapshot in (
+                before_cpu, after_cpu, before_sibling, after_sibling)),
+            "isolation snapshots are not objects")
+    require(isinstance(before_monotonic_ns, int) and
+            not isinstance(before_monotonic_ns, bool) and before_monotonic_ns >= 0 and
+            isinstance(after_monotonic_ns, int) and
+            not isinstance(after_monotonic_ns, bool) and after_monotonic_ns >= 0,
+            "isolation monotonic timestamps are invalid")
+    require(
+        before_cpu.get("cpu") == cpu and after_cpu.get("cpu") == cpu and
+        before_sibling.get("cpu") == sibling and
+        after_sibling.get("cpu") == sibling,
+        "isolation snapshots do not match the reserved CPU pair")
+    benchmark_delta = cpu_stat_delta(before_cpu, after_cpu)
+    sibling_delta = cpu_stat_delta(before_sibling, after_sibling)
+    require(benchmark_delta["cpu"] == cpu and sibling_delta["cpu"] == sibling,
+            "isolation deltas do not match the reserved CPU pair")
+    accepted = (
+        after_monotonic_ns > before_monotonic_ns and
+        benchmark_delta["nonidle_jiffies"] > 0 and
+        sibling_delta["total_jiffies"] > 0 and
+        sibling_delta["nonidle_jiffies"] <= MAX_SIBLING_NONIDLE_JIFFIES
+    )
+    return {
+        "accepted": accepted,
+        "after": {
+            "benchmark_cpu": dict(after_cpu),
+            "monotonic_ns": after_monotonic_ns,
+            "reserved_sibling": dict(after_sibling),
+        },
+        "before": {
+            "benchmark_cpu": dict(before_cpu),
+            "monotonic_ns": before_monotonic_ns,
+            "reserved_sibling": dict(before_sibling),
+        },
+        "benchmark_cpu": cpu,
+        "delta": {
+            "benchmark_cpu": benchmark_delta,
+            "reserved_sibling": sibling_delta,
+        },
+        "pair_lease": dict(pair_lease),
+        "policy": {
+            "counter_source": "/proc/stat",
+            "idle_fields": list(CPU_STAT_IDLE_FIELDS),
+            "nonidle_fields": [
+                name for name in CPU_STAT_FIELDS if name not in CPU_STAT_IDLE_FIELDS
+            ],
+            "reserved_sibling_max_nonidle_jiffies":
+                MAX_SIBLING_NONIDLE_JIFFIES,
+        },
+        "reserved_sibling": sibling,
+        "schema": ISOLATION_SCHEMA,
+    }
+
+
+def validate_isolation(
+    value: object, cpu: int, sibling: int, require_accepted: bool = True
+) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+        "accepted", "after", "before", "benchmark_cpu", "delta", "pair_lease",
+        "policy", "reserved_sibling", "schema"},
+        "isolation evidence is incomplete")
+    require(value.get("schema") == ISOLATION_SCHEMA and
+            value.get("benchmark_cpu") == cpu and
+            value.get("reserved_sibling") == sibling,
+            "isolation evidence CPU identity is invalid")
+    require(value.get("policy") == {
+        "counter_source": "/proc/stat",
+        "idle_fields": list(CPU_STAT_IDLE_FIELDS),
+        "nonidle_fields": [
+            name for name in CPU_STAT_FIELDS if name not in CPU_STAT_IDLE_FIELDS
+        ],
+        "reserved_sibling_max_nonidle_jiffies": MAX_SIBLING_NONIDLE_JIFFIES,
+    }, "isolation evidence policy was edited")
+    validate_pair_lease_identity(value.get("pair_lease"), cpu, sibling)
+    before = value.get("before")
+    after = value.get("after")
+    require(isinstance(before, dict) and isinstance(after, dict) and
+            set(before) == {"benchmark_cpu", "monotonic_ns", "reserved_sibling"} and
+            set(after) == {"benchmark_cpu", "monotonic_ns", "reserved_sibling"} and
+            isinstance(before.get("monotonic_ns"), int) and
+            not isinstance(before.get("monotonic_ns"), bool) and
+            isinstance(after.get("monotonic_ns"), int) and
+            not isinstance(after.get("monotonic_ns"), bool) and
+            all(isinstance(record, dict) for record in (
+                before.get("benchmark_cpu"), before.get("reserved_sibling"),
+                after.get("benchmark_cpu"), after.get("reserved_sibling"))),
+            "isolation snapshots are incomplete")
+    expected = isolation_record(
+        cpu, sibling, value["pair_lease"], before["monotonic_ns"],
+        after["monotonic_ns"], before["benchmark_cpu"], after["benchmark_cpu"],
+        before["reserved_sibling"], after["reserved_sibling"])
+    require(value == expected, "isolation deltas or acceptance were edited")
+    if require_accepted:
+        require(value["accepted"] is True,
+                "reserved SMT sibling performed non-idle work during the campaign")
+    return value
+
+
 class Reservation:
     """Hold the coordinator-created canonical reservation for the whole run."""
 
@@ -1172,7 +1534,9 @@ def validate_raw(
     check_current_inputs: bool,
 ) -> dict[str, Any]:
     raw = verify_signature(raw, "raw bundle")
-    require(raw.get("schema") == RAW_SCHEMA, "wrong raw bundle schema")
+    raw_schema = raw.get("schema")
+    require(raw_schema in (RAW_SCHEMA_V1, RAW_SCHEMA),
+            "wrong raw bundle schema")
     campaign = raw.get("campaign")
     require(isinstance(campaign, dict), "campaign is not an object")
     require(campaign.get("rounds") == ROUNDS and
@@ -1209,6 +1573,11 @@ def validate_raw(
     host_final = raw.get("host_final")
     require(host_initial == host_final, "host policy/topology changed during campaign")
     validate_host_record(host_initial, cpu, sibling, allowed)
+    if raw_schema == RAW_SCHEMA:
+        validate_isolation(raw.get("isolation"), cpu, sibling)
+    else:
+        require("isolation" not in raw,
+                "legacy raw schema contains unversioned isolation evidence")
     cells_value = campaign.get("cells")
     require(isinstance(cells_value, list) and cells_value, "campaign has no cells")
     cells = [Cell(**value) for value in cells_value]
@@ -1266,6 +1635,7 @@ def validate_raw(
         for cell in cells for round_index in range(ROUNDS)
         for slot, implementation in enumerate(ORDER)
     ]
+    total_child_duration_ns = 0
     for invocation, expected in zip(invocations, expected_sequence):
         require(isinstance(invocation, dict), "invocation is not an object")
         observed = (
@@ -1281,6 +1651,11 @@ def validate_raw(
                 "an invocation observed a changed CPU reservation")
         require(invocation.get("returncode") == 0,
                 "benchmark child did not exit successfully")
+        duration_ns = invocation.get("duration_ns")
+        require(isinstance(duration_ns, int) and not isinstance(duration_ns, bool) and
+                duration_ns > 0,
+                "benchmark child duration is not a positive integer")
+        total_child_duration_ns += duration_ns
         cell = cell_by_id[expected[0]]
         expected_command = [
             input_spec["taskset"], "-c", str(cpu),
@@ -1327,6 +1702,12 @@ def validate_raw(
                         f"candidate backend changed within cell {expected[0]}")
             else:
                 candidate_backend_by_cell[expected[0]] = backend
+    if raw_schema == RAW_SCHEMA:
+        isolation = raw["isolation"]
+        elapsed_ns = isolation["after"]["monotonic_ns"] - \
+            isolation["before"]["monotonic_ns"]
+        require(elapsed_ns >= total_child_duration_ns,
+                "isolation interval does not cover all benchmark child durations")
     calculated = analyze(invocations, campaign)
     require(raw.get("analysis") == calculated, "paired-log analysis was edited")
     return calculated
@@ -1451,6 +1832,153 @@ def cells_from_options(options: argparse.Namespace) -> tuple[Cell, ...]:
     return cells
 
 
+def retained_file_records(output: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    failure_path = output / "failure.json"
+    for path in sorted(candidate for candidate in output.rglob("*")
+                       if candidate.is_file() and candidate != failure_path):
+        records.append({
+            "path": str(path.relative_to(output)),
+            "size": path.stat().st_size,
+            "sha256": sha256_file(path),
+        })
+    return records
+
+
+def validate_failure(
+    value: object, output: Path, check_files: bool = True
+) -> dict[str, Any]:
+    failure = verify_signature(value, "failed campaign")
+    require(set(failure) == {
+        "campaign", "created_utc", "digest", "error", "error_type",
+        "host_initial", "identities_initial", "input_specification",
+        "invocations", "isolation", "pair_lease", "reservation",
+        "retained_files", "schema", "status", "traceback", "valid"},
+        "failed campaign has unexpected or missing fields")
+    require(failure.get("schema") == FAILURE_SCHEMA and
+            failure.get("status") == "failed" and failure.get("valid") is False,
+            "failed campaign status is invalid")
+    require(all(isinstance(failure.get(name), str) and failure[name]
+                for name in ("created_utc", "error", "error_type", "traceback")),
+            "failed campaign diagnostic fields are invalid")
+    campaign = failure.get("campaign")
+    require(isinstance(campaign, dict), "failed campaign metadata is missing")
+    cpu = campaign.get("benchmark_cpu")
+    sibling = campaign.get("reserved_sibling")
+    require(isinstance(cpu, int) and not isinstance(cpu, bool) and cpu >= 0 and
+            isinstance(sibling, int) and not isinstance(sibling, bool) and
+            sibling >= 0 and cpu != sibling,
+            "failed campaign CPU pair is invalid")
+    pair_lease = failure.get("pair_lease")
+    isolation = failure.get("isolation")
+    if pair_lease is not None:
+        validate_pair_lease_identity(pair_lease, cpu, sibling)
+    if isolation is not None:
+        validate_isolation(isolation, cpu, sibling, require_accepted=False)
+        require(pair_lease == isolation["pair_lease"],
+                "failed campaign isolation uses another pair lease")
+    reservation = failure.get("reservation")
+    if reservation is not None:
+        require(isinstance(reservation, dict) and
+                reservation.get("lock") == "exclusive_nonblocking" and
+                isinstance(reservation.get("payload"), dict),
+                "failed campaign reservation is invalid")
+        payload = reservation["payload"]
+        require(parse_reservation(canonical_bytes(payload), cpu, sibling) == payload and
+                reservation.get("sha256") == sha256_bytes(canonical_bytes(payload)),
+                "failed campaign reservation identity is invalid")
+    invocations = failure.get("invocations")
+    require(isinstance(invocations, list), "failed invocation prefix is not a list")
+    cells_value = campaign.get("cells")
+    require(isinstance(cells_value, list) and cells_value,
+            "failed campaign cells are missing")
+    cells = [Cell(**item) for item in cells_value]
+    for cell in cells:
+        validate_cell(cell)
+    expected_sequence = [
+        (cell.identifier, round_index, slot, implementation)
+        for cell in cells for round_index in range(ROUNDS)
+        for slot, implementation in enumerate(ORDER)
+    ]
+    require(len(invocations) <= len(expected_sequence),
+            "failed invocation prefix is too long")
+    specification = failure.get("input_specification")
+    initial = failure.get("identities_initial")
+    if invocations:
+        require(isinstance(specification, dict) and isinstance(initial, dict) and
+                reservation is not None,
+                "failed invocation prefix lacks build or reservation identity")
+    cell_by_id = {cell.identifier: cell for cell in cells}
+    for invocation, expected in zip(invocations, expected_sequence):
+        require(isinstance(invocation, dict) and
+                (invocation.get("cell_id"), invocation.get("round"),
+                 invocation.get("slot"), invocation.get("implementation")) == expected and
+                invocation.get("returncode") == 0,
+                "failed campaign invocation prefix was edited")
+        duration_ns = invocation.get("duration_ns")
+        require(isinstance(duration_ns, int) and not isinstance(duration_ns, bool) and
+                duration_ns > 0,
+                "failed campaign invocation duration is invalid")
+        implementation = expected[3]
+        cell = cell_by_id[expected[0]]
+        expected_command = [
+            specification["taskset"], "-c", str(cpu),
+            *benchmark_arguments(implementation, Path(specification[
+                f"{implementation}_executable"]), cell, campaign),
+        ]
+        require(invocation.get("command") == expected_command and
+                invocation.get("environment") == CHILD_ENVIRONMENT and
+                invocation.get("pinned_cpu") == cpu and
+                invocation.get("identity_before") == initial and
+                invocation.get("identity_after") == initial and
+                invocation.get("reservation_before") == reservation and
+                invocation.get("reservation_after") == reservation,
+                "failed campaign invocation execution identity was edited")
+        normalized = validate_result(
+            implementation, invocation.get("result"), cell, campaign)
+        require(invocation.get("normalized") == normalized,
+                "failed campaign invocation result was edited")
+    retained = failure.get("retained_files")
+    require(isinstance(retained, list), "failed retained-file list is invalid")
+    retained_paths: set[str] = set()
+    retained_by_path: dict[str, dict[str, Any]] = {}
+    for record in retained:
+        require(isinstance(record, dict) and set(record) == {"path", "sha256", "size"} and
+                isinstance(record.get("path"), str) and
+                isinstance(record.get("size"), int) and
+                not isinstance(record.get("size"), bool) and record["size"] >= 0 and
+                isinstance(record.get("sha256"), str) and
+                HEX256.fullmatch(record["sha256"]) is not None and
+                record["path"] not in retained_paths,
+                "failed retained-file identity is invalid")
+        retained_paths.add(record["path"])
+        retained_by_path[record["path"]] = record
+        if check_files:
+            path = safe_evidence_path(output, record["path"])
+            require(path.is_file() and path.stat().st_size == record["size"] and
+                    sha256_file(path) == record["sha256"],
+                    "failed retained file is missing or changed")
+    for invocation in invocations:
+        for name in ("stdout", "stderr"):
+            stream = invocation.get(name)
+            require(isinstance(stream, dict) and
+                    retained_by_path.get(stream.get("path")) == stream,
+                    "failed invocation stream is not retained")
+            if check_files and name == "stdout":
+                path = safe_evidence_path(output, stream["path"])
+                try:
+                    parsed = json.loads(path.read_text(encoding="utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                    raise EvidenceError(
+                        f"failed invocation stdout is not JSON: {error}") from error
+                require(parsed == invocation.get("result"),
+                        "failed invocation stdout differs from embedded result")
+    if check_files:
+        require(retained == retained_file_records(output),
+                "failed output directory contains unbound or missing files")
+    return failure
+
+
 def run_campaign(options: argparse.Namespace) -> int:
     output = options.output.resolve()
     require(not output.exists(), f"output path already exists: {output}")
@@ -1498,25 +2026,55 @@ def run_campaign(options: argparse.Namespace) -> int:
             "--reuse and --warmup must be positive")
     require(math.isfinite(options.timeout) and options.timeout > 0,
             "--timeout must be positive and finite")
+    isolation: dict[str, Any] | None = None
+    host_initial: dict[str, Any] | None = None
+    reservation: dict[str, Any] | None = None
+    pair_lease: dict[str, Any] | None = None
+    initial: dict[str, Any] | None = None
+    invocations: list[dict[str, Any]] = []
+    before_monotonic_ns: int | None = None
+    before_cpu: dict[str, Any] | None = None
+    before_sibling: dict[str, Any] | None = None
     try:
         allowed_at_launch, housekeeping = validate_topology(
             options.cpu, options.reserved_sibling)
         campaign["allowed_cpu_set_at_launch"] = sorted(allowed_at_launch)
         host_initial = host_identity(
             options.cpu, options.reserved_sibling, allowed_at_launch)
+        pair_guard = PairLease(options.cpu, options.reserved_sibling)
         with Reservation(
             options.reservation_file, options.cpu, options.reserved_sibling
-        ) as reservation:
+        ) as reservation, pair_guard as pair_lease:
             os.sched_setaffinity(0, housekeeping)
             initial = input_snapshot(specification)
-            invocations: list[dict[str, Any]] = []
-            for cell in cells:
-                for round_index in range(ROUNDS):
-                    for slot, implementation in enumerate(ORDER):
-                        invocations.append(run_child(
-                            implementation, cell, round_index, slot, campaign,
-                            specification, initial, reservation, output,
-                            options.cpu, options.timeout))
+            before_monotonic_ns = time.monotonic_ns()
+            before_cpu = cpu_stat_snapshot(options.cpu)
+            before_sibling = cpu_stat_snapshot(options.reserved_sibling)
+            try:
+                for cell in cells:
+                    for round_index in range(ROUNDS):
+                        for slot, implementation in enumerate(ORDER):
+                            invocation = run_child(
+                                implementation, cell, round_index, slot, campaign,
+                                specification, initial, reservation, output,
+                                options.cpu, options.timeout)
+                            pair_guard.validate_current()
+                            invocations.append(invocation)
+            finally:
+                if before_monotonic_ns is not None and before_cpu is not None and \
+                        before_sibling is not None:
+                    after_cpu = cpu_stat_snapshot(options.cpu)
+                    after_sibling = cpu_stat_snapshot(options.reserved_sibling)
+                    after_monotonic_ns = time.monotonic_ns()
+                    isolation = isolation_record(
+                        options.cpu, options.reserved_sibling, pair_lease,
+                        before_monotonic_ns, after_monotonic_ns,
+                        before_cpu, after_cpu, before_sibling, after_sibling)
+                    pair_guard.validate_current()
+            require(isolation is not None,
+                    "campaign produced no scheduler isolation evidence")
+            require(isolation["accepted"] is True,
+                    "reserved SMT sibling performed non-idle work during the campaign")
             final = input_snapshot(specification)
             require(final == initial, "input identity changed during campaign")
             host_final = host_identity(
@@ -1530,6 +2088,7 @@ def run_campaign(options: argparse.Namespace) -> int:
                 "validity_is_independent_of_speed": True,
                 "campaign": campaign,
                 "host_initial": host_initial,
+                "isolation": isolation,
                 "reservation": reservation,
                 "input_specification": specification,
                 "identities_initial": initial,
@@ -1554,6 +2113,7 @@ def run_campaign(options: argparse.Namespace) -> int:
                 },
                 "campaign": campaign,
                 "host": host_initial,
+                "isolation": isolation,
                 "reservation": reservation,
                 "identities": initial,
                 "analysis": analysis,
@@ -1561,15 +2121,27 @@ def run_campaign(options: argparse.Namespace) -> int:
             write_json_exclusive(output / "manifest.json", manifest)
     except Exception as error:
         failure = signed({
-            "schema": "leopard2-main-compare-failure/v1",
+            "schema": FAILURE_SCHEMA,
             "created_utc": utc_now(),
+            "status": "failed",
+            "valid": False,
             "error_type": type(error).__name__,
             "error": str(error),
+            "campaign": campaign,
+            "host_initial": host_initial,
+            "reservation": reservation,
+            "pair_lease": pair_lease,
+            "isolation": isolation,
+            "input_specification": specification,
+            "identities_initial": initial,
+            "invocations": invocations,
+            "retained_files": retained_file_records(output),
             "traceback": traceback.format_exc(),
         })
         failure_path = output / "failure.json"
         if not failure_path.exists():
             write_json_exclusive(failure_path, failure)
+        validate_failure(failure, output, check_files=True)
         raise
     print(output / "manifest.json")
     return 0
@@ -1579,7 +2151,9 @@ def verify_campaign(options: argparse.Namespace) -> int:
     manifest_path = options.manifest.resolve(strict=True)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     verify_signature(manifest, "manifest")
-    require(manifest.get("schema") == MANIFEST_SCHEMA and manifest.get("valid") is True,
+    manifest_schema = manifest.get("schema")
+    require(manifest_schema in (MANIFEST_SCHEMA_V1, MANIFEST_SCHEMA) and
+            manifest.get("valid") is True,
             "manifest is not valid main-comparison evidence")
     output = manifest_path.parent
     raw_info = manifest.get("raw")
@@ -1590,12 +2164,22 @@ def verify_campaign(options: argparse.Namespace) -> int:
             raw_info.get("sha256") == sha256_file(raw_path),
             "raw bundle file identity mismatch")
     raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    expected_raw_schema = (
+        RAW_SCHEMA if manifest_schema == MANIFEST_SCHEMA else RAW_SCHEMA_V1)
+    require(isinstance(raw, dict) and raw.get("schema") == expected_raw_schema,
+            "manifest/raw schema versions do not match")
     analysis = validate_raw(
         raw, output, check_files=True,
         check_current_inputs=not options.no_current_input_check)
     require(raw_info.get("payload_digest") == raw.get("digest"),
             "manifest/raw payload identity mismatch")
-    for name in ("campaign", "host", "reservation", "identities", "analysis"):
+    names = ["campaign", "host", "reservation", "identities", "analysis"]
+    if manifest_schema == MANIFEST_SCHEMA:
+        names.append("isolation")
+    else:
+        require("isolation" not in manifest,
+                "legacy manifest contains unversioned isolation evidence")
+    for name in names:
         if name == "identities":
             expected = raw["identities_initial"]
         elif name == "host":
@@ -1605,11 +2189,26 @@ def verify_campaign(options: argparse.Namespace) -> int:
         require(manifest.get(name) == expected,
                 f"manifest {name} differs from retained raw bundle")
     require(manifest.get("analysis") == analysis, "manifest analysis was edited")
-    if options.no_current_input_check:
+    if manifest_schema == MANIFEST_SCHEMA_V1:
+        print("legacy exact-main v1 bundle verified; it has no v2 CPU-isolation "
+              "qualification")
+    elif options.no_current_input_check:
         print("exact-main ABBA bundle structurally verified only; current build/source "
               "closure was not revalidated")
     else:
         print("exact-main ABBA evidence and current build/source closure verified")
+    return 0
+
+
+def verify_failed_campaign(options: argparse.Namespace) -> int:
+    failure_path = options.failure.resolve(strict=True)
+    try:
+        failure = json.loads(failure_path.read_text(encoding="utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise EvidenceError(f"failed campaign JSON is invalid: {error}") from error
+    validate_failure(failure, failure_path.parent, check_files=True)
+    print("failed exact-main campaign diagnostics and retained files verified; "
+          "this is not valid performance evidence")
     return 0
 
 
@@ -1646,6 +2245,10 @@ def parser() -> argparse.ArgumentParser:
     verify.add_argument("--no-current-input-check", action="store_true",
                         help="structural-only replay without revalidating original build paths")
     verify.set_defaults(function=verify_campaign)
+    verify_failure = commands.add_parser(
+        "verify-failure", help="verify a retained failed campaign bundle")
+    verify_failure.add_argument("--failure", required=True, type=Path)
+    verify_failure.set_defaults(function=verify_failed_campaign)
     return result
 
 
