@@ -117,7 +117,11 @@ typedef enum leo2_backend {
     changing the entry point.
 
     thread_count selects the persistent context pool used by batch entry points;
-    the calling thread participates and no worker is created per batch call.
+    the calling thread participates.  Workers are started lazily by the first
+    batch containing more than one item, grown only when a larger batch needs
+    more parallelism, then reused without recreating existing workers.
+    A zero value uses the process's allowed CPU count where the platform exposes
+    it, capped at 128; explicit nonzero values retain their requested budget.
     backend selects an immutable execution table for this context.  AUTO uses
     the fastest startup-qualified runtime backend.  On production x86 builds,
     SCALAR, SSSE3, and AVX2 may explicitly select any compiled, host-qualified

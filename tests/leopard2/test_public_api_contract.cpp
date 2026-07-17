@@ -42,9 +42,19 @@
 #include <thread>
 #include <vector>
 
+#if defined(__linux__)
+#include <sched.h>
+#endif
+
 #if defined(_MSC_VER)
 #include <malloc.h>
 #endif
+
+extern "C" {
+uint32_t leo2_test_context_worker_count(const leo2_context* context);
+void leo2_test_set_thread_start_fault(int enabled);
+unsigned leo2_test_thread_start_fault_consumptions(void);
+}
 
 namespace {
 
@@ -135,6 +145,7 @@ struct Counts
         , introspection_checks(0)
         , alias_checks(0)
         , scratch_checks(0)
+        , scheduler_checks(0)
         , concurrent_batches(0)
         , batch_failure_checks(0)
         , legacy_checks(0)
@@ -144,6 +155,7 @@ struct Counts
     uint64_t introspection_checks;
     uint64_t alias_checks;
     uint64_t scratch_checks;
+    uint64_t scheduler_checks;
     uint64_t concurrent_batches;
     uint64_t batch_failure_checks;
     uint64_t legacy_checks;
@@ -540,6 +552,56 @@ void test_introspection_and_null_contracts(
     require_result(leo2_decode_plan_execute_batch(NULL, NULL, 0),
         LEO2_INVALID_ARGUMENT, "null plan empty batch");
     counts->introspection_checks += 21;
+}
+
+void test_default_affinity_thread_budget(Counts* counts)
+{
+#if defined(__linux__)
+    cpu_set_t saved;
+    CPU_ZERO(&saved);
+    require(sched_getaffinity(0, sizeof(saved), &saved) == 0,
+        "cannot read Linux affinity for default-thread test");
+
+    cpu_set_t limited;
+    CPU_ZERO(&limited);
+    uint32_t selected = 0;
+    for (int cpu = 0; cpu < CPU_SETSIZE && selected < 2; ++cpu)
+    {
+        if (CPU_ISSET(cpu, &saved))
+        {
+            CPU_SET(cpu, &limited);
+            ++selected;
+        }
+    }
+    require(selected != 0, "Linux affinity mask contains no CPUs");
+    require(sched_setaffinity(0, sizeof(limited), &limited) == 0,
+        "cannot constrain Linux affinity for default-thread test");
+
+    leo2_context* raw_context = NULL;
+    const leo2_result create_result = leo2_context_create(NULL, &raw_context);
+    const int restore_result = sched_setaffinity(0, sizeof(saved), &saved);
+    ContextOwner context;
+    context.context = raw_context;
+    require(restore_result == 0,
+        "cannot restore Linux affinity after default-thread test");
+    require_result(create_result, LEO2_SUCCESS,
+        "affinity-constrained default context create");
+    require(leo2_context_thread_count(context.context) == selected,
+        "default context ignored the Linux allowed CPU set");
+    require(leo2_test_context_worker_count(context.context) == 0,
+        "unused default context eagerly started worker threads");
+    counts->scheduler_checks += 3;
+#else
+    ContextOwner context;
+    require_result(leo2_context_create(NULL, &context.context),
+        LEO2_SUCCESS, "default context create");
+    require(leo2_context_thread_count(context.context) >= 1 &&
+            leo2_context_thread_count(context.context) <= 128,
+        "default context thread budget is out of range");
+    require(leo2_test_context_worker_count(context.context) == 0,
+        "unused default context eagerly started worker threads");
+    counts->scheduler_checks += 2;
+#endif
 }
 
 void test_alias_and_scratch_contracts(leo2_context* context, Counts* counts)
@@ -1166,9 +1228,11 @@ private:
     BatchFixture& operator=(const BatchFixture&);
 };
 
-void run_encode_batch_call(const BatchFixture& fixture, unsigned call_index)
+void run_encode_batch_call(
+    const BatchFixture& fixture,
+    unsigned call_index,
+    size_t item_count = 4)
 {
-    const size_t item_count = 4;
     std::vector<Shards> output(item_count,
         Shards(2, Bytes(fixture.bytes, 0xa5)));
     std::vector<std::vector<void*> > output_pointers(item_count);
@@ -1227,6 +1291,15 @@ void test_concurrent_shared_context_batches(
     Counts* counts)
 {
     const BatchFixture fixture(context, 33);
+    require(leo2_test_context_worker_count(context) == 0,
+        "context eagerly started workers before its first parallel batch");
+    require_result(leo2_encode_batch(fixture.codec, NULL, 0),
+        LEO2_SUCCESS, "empty batch before lazy start");
+    run_encode_batch_call(fixture, 0, 1);
+    require(leo2_test_context_worker_count(context) == 0,
+        "single-item batch unnecessarily started worker threads");
+    counts->scheduler_checks += 3;
+
     const unsigned caller_count = 8;
     const unsigned repetitions = 4;
     std::atomic<unsigned> ready(0);
@@ -1264,8 +1337,100 @@ void test_concurrent_shared_context_batches(
         callers[i].join();
     for (unsigned caller = 0; caller < caller_count; ++caller)
         require(errors[caller].empty(), errors[caller]);
+    require(leo2_test_context_worker_count(context) == 3,
+        "concurrent first use did not start exactly one persistent pool");
+    ++counts->scheduler_checks;
     counts->concurrent_batches +=
         static_cast<uint64_t>(caller_count) * repetitions;
+}
+
+void test_lazy_thread_start_failure(Counts* counts)
+{
+    leo2_context_options options;
+    memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.backend = LEO2_BACKEND_AUTO;
+    options.thread_count = 4;
+    ContextOwner context;
+    require_result(leo2_context_create(&options, &context.context),
+        LEO2_SUCCESS, "lazy-failure context create");
+    const BatchFixture fixture(context.context, 65);
+
+    const size_t item_count = 2;
+    std::vector<Shards> output(item_count,
+        Shards(2, Bytes(fixture.bytes, 0xa5)));
+    std::vector<std::vector<void*> > output_pointers(item_count);
+    std::vector<std::unique_ptr<AlignedBuffer> > scratch(item_count);
+    leo2_encode_batch_item items[item_count];
+    for (size_t item = 0; item < item_count; ++item)
+    {
+        output_pointers[item] = mutable_pointers(output[item]);
+        scratch[item].reset(new AlignedBuffer(fixture.encode_scratch_bytes));
+        items[item].shard_bytes = fixture.bytes;
+        items[item].original = &fixture.original_pointers[0];
+        items[item].recovery = &output_pointers[item][0];
+        items[item].scratch = scratch[item]->data();
+        items[item].scratch_bytes = scratch[item]->size();
+    }
+
+    leo2_test_set_thread_start_fault(1);
+    static const unsigned caller_count = 8;
+    std::atomic<unsigned> ready(0);
+    std::atomic<bool> start(false);
+    std::vector<leo2_result> results(caller_count, LEO2_SUCCESS);
+    std::vector<std::thread> callers;
+    for (unsigned caller = 0; caller < caller_count; ++caller)
+    {
+        callers.push_back(std::thread([&, caller]() {
+            ready.fetch_add(1, std::memory_order_release);
+            while (!start.load(std::memory_order_acquire))
+                std::this_thread::yield();
+            results[caller] = leo2_encode_batch(
+                fixture.codec, items, item_count);
+        }));
+    }
+    while (ready.load(std::memory_order_acquire) != caller_count)
+        std::this_thread::yield();
+    start.store(true, std::memory_order_release);
+    for (size_t caller = 0; caller < callers.size(); ++caller)
+        callers[caller].join();
+    for (unsigned caller = 0; caller < caller_count; ++caller)
+        require_result(results[caller], LEO2_OUT_OF_MEMORY,
+            "concurrent injected lazy thread-start failure");
+    require(leo2_test_thread_start_fault_consumptions() == 1,
+        "lazy thread-start fault was not consumed exactly once");
+    require(leo2_test_context_worker_count(context.context) == 0,
+        "failed lazy start retained partial worker threads");
+    require_result(leo2_encode_batch(fixture.codec, items, item_count),
+        LEO2_OUT_OF_MEMORY, "cached lazy thread-start failure");
+    require(leo2_test_thread_start_fault_consumptions() == 1,
+        "cached lazy failure retried thread creation");
+    leo2_test_set_thread_start_fault(0);
+    counts->scheduler_checks += 5;
+}
+
+void test_incremental_lazy_thread_growth(Counts* counts)
+{
+    leo2_context_options options;
+    memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.backend = LEO2_BACKEND_AUTO;
+    options.thread_count = 8;
+    ContextOwner context;
+    require_result(leo2_context_create(&options, &context.context),
+        LEO2_SUCCESS, "lazy-growth context create");
+    const BatchFixture fixture(context.context, 129);
+
+    run_encode_batch_call(fixture, 0, 2);
+    require(leo2_test_context_worker_count(context.context) == 1,
+        "two-item batch started unused workers");
+    run_encode_batch_call(fixture, 1, 4);
+    require(leo2_test_context_worker_count(context.context) == 3,
+        "larger batch did not grow the persistent pool exactly");
+    run_encode_batch_call(fixture, 2, 2);
+    require(leo2_test_context_worker_count(context.context) == 3,
+        "smaller batch discarded persistent workers");
+    counts->scheduler_checks += 3;
 }
 
 void test_deterministic_batch_failures(leo2_context* context, Counts* counts)
@@ -1425,12 +1590,15 @@ int main()
             LEO2_SUCCESS, "contract context create");
 
         test_introspection_and_null_contracts(context.context, &counts);
+        test_default_affinity_thread_budget(&counts);
         test_alias_and_scratch_contracts(context.context, &counts);
         test_aligned_decode_input_staging_elision(context.context, &counts);
         test_tiled_decode_workspace_slopes(context.context, &counts);
         test_ragged_decode_tail_staging_slopes(context.context, &counts);
         test_ragged_encode_tail_staging_slopes(context.context, &counts);
         test_concurrent_shared_context_batches(context.context, &counts);
+        test_incremental_lazy_thread_growth(&counts);
+        test_lazy_thread_start_failure(&counts);
         test_deterministic_batch_failures(context.context, &counts);
         test_legacy_negative_contract(&counts);
 
@@ -1439,6 +1607,7 @@ int main()
                   << " introspection_checks=" << counts.introspection_checks
                   << " alias_checks=" << counts.alias_checks
                   << " scratch_checks=" << counts.scratch_checks
+                  << " scheduler_checks=" << counts.scheduler_checks
                   << " concurrent_batches=" << counts.concurrent_batches
                   << " batch_failure_checks=" << counts.batch_failure_checks
                   << " legacy_checks=" << counts.legacy_checks

@@ -192,14 +192,23 @@ or pad validation because its contract is a true no-op.
 
 The batch entry points execute independent items using each item's own buffers and
 scratch.  `item_count` may not exceed `UINT32_MAX`; larger counts return
-`LEO2_INVALID_ARGUMENT` before any item is read.  A context owns a persistent worker pool when its effective
-`thread_count` is greater than one, so batch calls do not create threads in the
-hot path.  The calling thread participates in the batch; the pool contains
-`thread_count - 1` workers.  A count of one executes batch items serially.
+`LEO2_INVALID_ARGUMENT` before any item is read.  A context with an effective
+`thread_count` greater than one owns a persistent pool control object, but starts
+no worker threads during context construction.  Empty and single-item batches
+remain serial and do not start workers.  The first larger batch starts
+up to `min(thread_count - 1, item_count - 1)` workers.  A later, larger batch
+can grow the pool to the additional parallelism it needs; started workers remain
+persistent and are reused.  A lazy start can return `LEO2_OUT_OF_MEMORY` and a
+failed pool remains failed deterministically.
+The calling thread participates.  A count of one always executes serially.
 
-`thread_count = 0` selects `std::thread::hardware_concurrency()`, falls back to one
-when it is unavailable, and caps the result at 128.  An explicit count from 1
-through 128 is accepted; a larger count returns `LEO2_INVALID_ARGUMENT`.
+On Linux, `thread_count = 0` counts the CPUs in `sched_getaffinity`, so cpuset
+and container restrictions are honored.  On Windows it counts the process
+affinity mask.  Other platforms, or a failed affinity query, use
+`std::thread::hardware_concurrency()`.  The default falls back to one and is
+capped at 128.  An explicit count from 1 through 128 is retained even when it
+exceeds the current affinity budget; a larger count returns
+`LEO2_INVALID_ARGUMENT`.
 `leo2_context_thread_count` reports the effective value.  This option controls
 parallelism across batch items, not the wire profile or the result bytes.
 

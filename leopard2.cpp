@@ -38,6 +38,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <condition_variable>
 #include <limits>
 #include <mutex>
@@ -45,6 +46,15 @@
 #include <string.h>
 #include <thread>
 #include <vector>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#elif defined(__linux__)
+#include <sched.h>
+#endif
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -149,13 +159,90 @@ static const uint64_t kDirectMinimumMeasuredBytes = 1024;
 
 typedef leo2_result (*BatchTaskFunction)(void* context, size_t index);
 
+#ifdef LEO2_ENABLE_TEST_HOOKS
+static std::atomic<bool> g_test_thread_start_fault(false);
+static std::atomic<unsigned> g_test_thread_start_fault_consumptions(0);
+
+static bool TestConsumeThreadStartFault()
+{
+    if (!g_test_thread_start_fault.exchange(false, std::memory_order_acq_rel))
+        return false;
+    g_test_thread_start_fault_consumptions.fetch_add(
+        1, std::memory_order_relaxed);
+    return true;
+}
+#endif
+
+#if defined(__linux__)
+static uint32_t LinuxAllowedThreadCount()
+{
+    // cpu_set_t covers the ordinary case.  Retry with progressively larger,
+    // stack-owned masks so a process restricted to high-numbered CPUs on a
+    // very large host does not silently fall back to the online CPU count.
+    static const size_t kMaximumAffinityBytes = 16 * 1024;
+    unsigned long mask[kMaximumAffinityBytes / sizeof(unsigned long)];
+    for (size_t bytes = sizeof(cpu_set_t);
+         bytes <= kMaximumAffinityBytes;
+         bytes *= 2)
+    {
+        memset(mask, 0, bytes);
+        if (sched_getaffinity(
+                0, bytes, reinterpret_cast<cpu_set_t*>(mask)) == 0)
+        {
+            uint32_t allowed = 0;
+            const size_t word_count = bytes / sizeof(unsigned long);
+            for (size_t i = 0; i < word_count && allowed < 128; ++i)
+            {
+                unsigned long word = mask[i];
+                while (word != 0 && allowed < 128)
+                {
+                    word &= word - 1;
+                    ++allowed;
+                }
+            }
+            return allowed;
+        }
+        if (errno != EINVAL || bytes == kMaximumAffinityBytes)
+            break;
+    }
+    return 0;
+}
+#endif
+
+static uint32_t DefaultThreadCount()
+{
+    uint32_t allowed = 0;
+#if defined(_WIN32)
+    DWORD_PTR process_mask = 0;
+    DWORD_PTR system_mask = 0;
+    if (GetProcessAffinityMask(
+            GetCurrentProcess(), &process_mask, &system_mask))
+    {
+        while (process_mask != 0)
+        {
+            allowed += static_cast<uint32_t>(process_mask & 1u);
+            process_mask >>= 1;
+        }
+    }
+#elif defined(__linux__)
+    allowed = LinuxAllowedThreadCount();
+#endif
+    if (allowed == 0)
+        allowed = static_cast<uint32_t>(std::thread::hardware_concurrency());
+    if (allowed == 0)
+        allowed = 1;
+    return std::min<uint32_t>(allowed, 128);
+}
+
 } // namespace
 
 class leo2_thread_pool
 {
 public:
-    leo2_thread_pool()
-        : stopping_(false)
+    explicit leo2_thread_pool(uint32_t worker_count)
+        : worker_count_(worker_count)
+        , start_failed_(false)
+        , stopping_(false)
         , generation_(0)
         , function_(NULL)
         , function_context_(NULL)
@@ -170,21 +257,13 @@ public:
         Stop();
     }
 
-    bool Start(uint32_t worker_count)
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    uint32_t TestWorkerCount()
     {
-        try
-        {
-            workers_.reserve(worker_count);
-            for (uint32_t i = 0; i < worker_count; ++i)
-                workers_.push_back(std::thread(&leo2_thread_pool::Worker, this));
-        }
-        catch (...)
-        {
-            Stop();
-            return false;
-        }
-        return true;
+        std::lock_guard<std::mutex> lock(run_mutex_);
+        return static_cast<uint32_t>(workers_.size());
     }
+#endif
 
     leo2_result Run(
         size_t task_count,
@@ -193,21 +272,17 @@ public:
     {
         if (task_count == 0)
             return LEO2_SUCCESS;
-        if (workers_.empty())
+        if (task_count == 1)
         {
-            for (size_t i = 0; i < task_count; ++i)
-            {
-                const leo2_result result = function(function_context, i);
-                if (result != LEO2_SUCCESS)
-                    return result;
-            }
-            return LEO2_SUCCESS;
+            return function(function_context, 0);
         }
 
         /* One context supports concurrent codecs, but one batch owns its pool
            at a time.  Independent callers remain correct and are serialized at
            this optional scheduling layer rather than racing shared job state. */
         std::lock_guard<std::mutex> run_lock(run_mutex_);
+        if (!EnsureStarted(task_count))
+            return LEO2_OUT_OF_MEMORY;
         {
             std::lock_guard<std::mutex> lock(mutex_);
             function_ = function;
@@ -242,6 +317,42 @@ public:
     }
 
 private:
+    bool EnsureStarted(size_t task_count)
+    {
+        const size_t target_workers = std::min<size_t>(
+            worker_count_, task_count - 1);
+        if (workers_.size() >= target_workers)
+            return true;
+        if (start_failed_ || worker_count_ == 0)
+            return false;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+        if (TestConsumeThreadStartFault())
+        {
+            start_failed_ = true;
+            return false;
+        }
+#endif
+        try
+        {
+            workers_.reserve(worker_count_);
+            uint64_t seen_generation = 0;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                seen_generation = generation_;
+            }
+            while (workers_.size() < target_workers)
+                workers_.push_back(std::thread(
+                    &leo2_thread_pool::Worker, this, seen_generation));
+        }
+        catch (...)
+        {
+            start_failed_ = true;
+            Stop();
+            return false;
+        }
+        return true;
+    }
+
     static uint64_t PackFailure(size_t index, leo2_result result)
     {
         const uint64_t bounded_index = index > 0xffffffffu ? 0xffffffffu : index;
@@ -276,12 +387,11 @@ private:
         }
     }
 
-    void Worker()
+    void Worker(uint64_t seen_generation)
     {
 #ifdef _OPENMP
         omp_set_num_threads(1);
 #endif
-        uint64_t seen_generation = 0;
         for (;;)
         {
             {
@@ -321,6 +431,8 @@ private:
     std::mutex run_mutex_;
     std::condition_variable work_ready_;
     std::condition_variable work_done_;
+    uint32_t worker_count_;
+    bool start_failed_;
     bool stopping_;
     uint64_t generation_;
     BatchTaskFunction function_;
@@ -2025,13 +2137,7 @@ LEO2_EXPORT leo2_result leo2_context_create(
     if (threads > 128)
         return LEO2_INVALID_ARGUMENT;
     if (threads == 0)
-    {
-        threads = static_cast<uint32_t>(std::thread::hardware_concurrency());
-        if (threads == 0)
-            threads = 1;
-        if (threads > 128)
-            threads = 128;
-    }
+        threads = DefaultThreadCount();
 
     const leo2_result initialized = EnsureInitialized();
     if (initialized != LEO2_SUCCESS)
@@ -2091,10 +2197,9 @@ LEO2_EXPORT leo2_result leo2_context_create(
     context->pool = NULL;
     if (threads > 1)
     {
-        context->pool = new (std::nothrow) leo2_thread_pool;
-        if (!context->pool || !context->pool->Start(threads - 1))
+        context->pool = new (std::nothrow) leo2_thread_pool(threads - 1);
+        if (!context->pool)
         {
-            delete context->pool;
             delete context;
             return LEO2_OUT_OF_MEMORY;
         }
@@ -2119,6 +2224,28 @@ LEO2_EXPORT uint32_t leo2_context_thread_count(const leo2_context* context)
 {
     return context ? context->thread_count : 0;
 }
+
+#ifdef LEO2_ENABLE_TEST_HOOKS
+LEO2_EXPORT uint32_t leo2_test_context_worker_count(
+    const leo2_context* context)
+{
+    return context && context->pool
+        ? context->pool->TestWorkerCount()
+        : 0;
+}
+
+LEO2_EXPORT void leo2_test_set_thread_start_fault(int enabled)
+{
+    g_test_thread_start_fault.store(enabled != 0, std::memory_order_release);
+    g_test_thread_start_fault_consumptions.store(0, std::memory_order_release);
+}
+
+LEO2_EXPORT unsigned leo2_test_thread_start_fault_consumptions(void)
+{
+    return g_test_thread_start_fault_consumptions.load(
+        std::memory_order_acquire);
+}
+#endif
 
 LEO2_EXPORT leo2_result leo2_codec_create(
     leo2_context* context,
