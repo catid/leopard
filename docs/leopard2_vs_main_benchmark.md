@@ -165,19 +165,19 @@ The committed evidence bundle is under
 reservation, run, and verification commands. From a different machine, replay
 the retained streams and analysis structurally with:
 
-Before opening the replaceable reservation file, the current collector holds a
-nonblocking exclusive flock on the owned `/run/user/UID` directory inode for
-the complete campaign.  C7 and the backend-butterfly collector hold the same
-stable anchor, so renaming or recreating a reservation file or its containing
-directory cannot split current cooperating runners onto independent file
-locks.  This stable layer conservatively serializes all current Leopard2
-evidence campaigns for the UID, including campaigns on disjoint pairs.  The
-retained evidence schema and historical portable replay are unchanged; this
-anchor is runtime authority rather than a new wire claim.
-
     python3 experiments/leopard2/main_compare/run_abba.py verify \
       --manifest experiments/leopard2/main_compare/results/620667c-amd9950x3d-cpu15/manifest.json \
       --no-current-input-check
 
 Omitting `--no-current-input-check` additionally requires the original exact
 source and build paths and re-hashes their full closure.
+
+Before opening the replaceable reservation file, the current collector holds a
+nonblocking exclusive flock on the owned `/run/user/UID` directory inode for
+the complete campaign. C7 and the backend-butterfly collector hold the same
+stable anchor, so renaming or recreating a reservation file or its containing
+directory cannot split current cooperating runners onto independent file
+locks. This stable layer conservatively serializes all current Leopard2
+evidence campaigns for the UID, including campaigns on disjoint pairs. The
+retained evidence schema and historical portable replay are unchanged; this
+anchor is runtime authority rather than a new wire claim.
