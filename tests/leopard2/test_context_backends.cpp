@@ -733,6 +733,8 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
     const CodecCase transform_cases[] = {
         { 33, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 257 },
         { 17, 33, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, 129 },
+        { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 64 },
+        { 17, 33, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 64 },
         { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 66 },
         { 17, 33, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 66 },
         { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 128 },

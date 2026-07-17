@@ -57,7 +57,8 @@ The selected schedules are deliberately size-specific:
   four invocation before backend dispatch; a public 130-byte shard stages to
   192 bytes and therefore uses the two-layer split schedule, as do all larger
   working sets. Test-only counters independently prove total, fused, and split
-  inverse/forward selections at 66, 128, 130, and 1,026 public bytes.
+  inverse/forward selections for both profiles at 64, 66, 128, 130, and 1,026
+  public bytes.
 - Scalar kernels retain the straightforward reference-equivalent operation
   order.
 
