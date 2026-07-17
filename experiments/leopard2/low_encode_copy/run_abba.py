@@ -1122,7 +1122,8 @@ def validate_result(
     correctness = value.get("correctness")
     require(isinstance(correctness, dict) and set(correctness) ==
             {"legacy_comparison", "leopard2_round_trip"} and
-            correctness.get("leopard2_round_trip") is True,
+            correctness.get("leopard2_round_trip") is True and
+            correctness.get("legacy_comparison") is None,
             "benchmark round trip failed")
     memory = value.get("memory")
     require(isinstance(memory, dict) and set(memory) == {
