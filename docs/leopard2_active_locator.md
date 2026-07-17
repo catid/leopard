@@ -116,15 +116,21 @@ by parent size.  The provisional single-layout thresholds were rejected after
 this sweep exposed branch-pattern bias.  Final cutoffs select the direct path
 through the last ambiguous region and the active path only in a multi-layout
 winning region.  At every first active cell the active path won all nine frozen
-layouts by at least 11% on the calibration host.  These deterministic built-in
+layouts by at least 13% on the calibration host.  These deterministic built-in
 cutoffs are deliberately more conservative than that host's median crossover;
 other architectures should retain correctness but still need their own offline
 performance calibration.  Raw machine-readable results are generated under
 `.research/leopard2/locator-active/` and remain ignored because they are
-machine-specific.  The frozen implementation-head manifest hash is added in the
-evidence-only follow-up commit; earlier single-order manifests are exploratory
-and are not promotion evidence.  The initialization A/B/B/A manifest has
-SHA-256 `2c2678e4d5cf1f8f899154c55f4b7fc5ba38f5ba082b0c346e37c130447f08e4`.
+machine-specific.  The frozen v2 manifest contains 360 runs (40 boundary cells
+times nine layouts), identifies clean implementation commit `dbca4fa`, retains
+every ABBA sample, and has SHA-256
+`e31ee8c8757acf13de9efeb79d4380e6ef875c65febb6192073d7651ffbc0ac6`.
+Earlier single-order manifests are exploratory and are not promotion evidence.
+The initialization A/B/B/A manifest has SHA-256
+`2c2678e4d5cf1f8f899154c55f4b7fc5ba38f5ba082b0c346e37c130447f08e4`.
+The frozen run recorded `amd-pstate-epp`, the `powersave` scaling governor with
+`performance` energy preference, and isolated CPU 14; no other benchmark job
+ran concurrently.
 
 Representative reproduction commands:
 
