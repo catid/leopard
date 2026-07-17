@@ -58,6 +58,14 @@ SOURCES = {
         "kind": "codec",
         "coordinate_equivalence": "different systematic Vandermonde matrix code",
         "runtime_dependency": "GF-Complete",
+        "adapter": {
+            "status": "bounded-default-off",
+            "entrypoint": "tools/leopard2_jerasure_compare.py",
+            "generator": "reed_sol_vandermonde_coding_matrix",
+            "maximum_threads": 1,
+            "region_multiple_bytes": JERASURE_ADAPTER_REGION_BYTES,
+            "production_dependency": False,
+        },
     },
     "fastecc": {
         "name": "FastECC",
@@ -180,19 +188,29 @@ def classify(provider: str, cell: Mapping[str, object]) -> dict:
             reasons.append(
                 "shard length is not a multiple of the deterministic 8-byte "
                 "Jerasure adapter region contract")
+        thread_count = int(cell.get("thread_count", 1))
+        adapter_gaps = []
+        if thread_count != 1:
+            adapter_gaps.append(
+                "the bounded adapter has no persistent-pool implementation for "
+                "thread counts above one")
         qualifications = [
-            "a reviewed adapter must allocate 8-byte-aligned regions; staging, "
-            "padding, and copy bytes for other layouts must be charged explicitly",
+            "the reviewed adapter allocates 64-byte-aligned application regions, "
+            "enforces the 8-byte region multiple, and records zero staging bytes",
+            "the standalone adapter and private static archives are default-off; "
+            "production Leopard has no Jerasure or GF-Complete dependency",
         ]
         if provider_field == "gf8" and field == "gf16":
             qualifications.append(
                 "Jerasure can remain in GF(256) while dyadic parent inflation "
                 "selects GF16 for Leopard2; report that field advantage explicitly")
         base.update({
-            "status": "excluded" if reasons else "adapter-required",
-            "reasons": reasons or [
-                "mathematically comparable public erasure workload, but the "
-                "reviewed GF-Complete/Jerasure adapter is not present"],
+            "status": ("excluded" if reasons else
+                       "adapter-required" if adapter_gaps else
+                       "adapter-available-unmeasured"),
+            "reasons": reasons or adapter_gaps or [
+                "the reviewed default-off adapter can execute this public workload, "
+                "but this audit contains no measurement"],
             "comparison_scope": (
                 "public payload and repaired-output throughput only; field/basis "
                 "representation, coordinates, generator matrices, and parity bytes differ"),
@@ -390,8 +408,12 @@ def self_test() -> None:
             "ISA-L matrix must distinguish adapter-ready, adapter-gap, and "
             "over-256 rows")
     jerasure_counts = providers["jerasure"]["job_status_counts"]
-    if jerasure_counts != {"adapter-required": 7134}:
-        raise AuditError("even-byte GF8/GF16 Jerasure eligibility changed")
+    if (not jerasure_counts.get("adapter-available-unmeasured") or
+            not jerasure_counts.get("adapter-required") or
+            sum(jerasure_counts.values()) != 7134):
+        raise AuditError(
+            "Jerasure matrix must distinguish single-thread adapter-ready and "
+            "multicore adapter-gap cells")
     representative = {
         "K": 240, "R": 16, "requested_profile": "high", "shard_bytes": 4096,
     }
@@ -416,7 +438,7 @@ def self_test() -> None:
     if classify("isa-l", no_loss)["status"] != "adapter-available-unmeasured":
         raise AuditError("bounded ISA-L adapter incorrectly rejects no-loss decode")
     jerasure_boundary = classify("jerasure", representative)
-    if (jerasure_boundary["status"] != "adapter-required" or
+    if (jerasure_boundary["status"] != "adapter-available-unmeasured" or
             jerasure_boundary["provider_field"] != "gf8" or
             jerasure_boundary["leopard2_field"] != "gf16" or
             not jerasure_boundary["qualifications"]):
@@ -432,10 +454,16 @@ def self_test() -> None:
     })
     if (jerasure_gf8_unaligned["status"] != "excluded" or
             jerasure_gf16_unaligned["status"] != "excluded" or
-            jerasure_aligned["status"] != "adapter-required" or
-            not any("8-byte-aligned" in qualification
+            jerasure_aligned["status"] != "adapter-available-unmeasured" or
+            not any("8-byte region multiple" in qualification
                     for qualification in jerasure_aligned["qualifications"])):
         raise AuditError("Jerasure deterministic region contract is not enforced")
+    jerasure_threaded = classify("jerasure", {
+        "K": 129, "R": 100, "requested_profile": "high",
+        "shard_bytes": 8, "thread_count": 8,
+    })
+    if jerasure_threaded["status"] != "adapter-required":
+        raise AuditError("bounded Jerasure adapter silently admitted multicore work")
     with tempfile.TemporaryDirectory(prefix="leo2-external-audit-test-") as temporary:
         missing = Path(temporary)
         try:

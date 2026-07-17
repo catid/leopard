@@ -722,6 +722,14 @@ if(LEO2_BUILD_TESTS)
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_isal_compare.py
                 self-test)
+        # Pure policy/evidence validation only: this test never discovers,
+        # compiles, links, or loads Jerasure/GF-Complete.  The real adapter is
+        # an explicitly configured standalone experiment project.
+        add_test(
+            NAME leopard2_jerasure_comparison_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_jerasure_compare.py
+                self-test)
         add_test(
             NAME leopard2_operation_counts_self_test
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
