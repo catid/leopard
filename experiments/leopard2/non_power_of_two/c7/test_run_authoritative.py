@@ -123,6 +123,14 @@ class AuthoritativeRunnerTests(unittest.TestCase):
                                     if key != "binding_sha256"}))
         self.assert_raw_rejected(changed)
 
+        changed = copy.deepcopy(self.raw)
+        changed["inputs_after"]["executable"]["sha256"] = "f" * 64
+        changed["inputs_after"]["binding_sha256"] = runner.sha256_bytes(
+            runner.canonical_bytes({key: value for key, value in
+                                    changed["inputs_after"].items()
+                                    if key != "binding_sha256"}))
+        self.assert_raw_rejected(changed)
+
     def test_core_source_closure_mutations_rejected(self) -> None:
         for mutation in (
             lambda value: value["core_source_closure"].reverse(),
@@ -138,6 +146,46 @@ class AuthoritativeRunnerTests(unittest.TestCase):
             with self.assertRaises(runner.EvidenceError):
                 runner.validate_input_snapshot(inputs)
 
+    def test_v4_build_attestation_rejects_build_and_binary_mutations(self) -> None:
+        inputs = runner.synthetic_inputs()
+        original = runner.synthetic_build_manifest(inputs)
+
+        def validate(value: dict) -> None:
+            runner.derive_build_attestation(
+                value, inputs["build_manifest"], inputs["git"]["tooling_commit"],
+                inputs["git"]["core_commit"], inputs["source"],
+                inputs["build_runner"], inputs["build_validator"],
+                inputs["archive"], inputs["executable"])
+
+        mutations = (
+            lambda value: value.update(schema="leopard2-c7-build-run-manifest/v3"),
+            lambda value: value["reproducibility"].update(
+                comparison={"status": "not-run"}),
+            lambda value: value["builds"][2]["compile_argv"].remove("-O2"),
+            lambda value: value["builds"][2].update(sanitizer=True),
+            lambda value: value["builds"][2]["executable"].update(
+                sha256="f" * 64),
+        )
+        for index, mutation in enumerate(mutations):
+            changed = copy.deepcopy(original)
+            mutation(changed)
+            with self.subTest(index=index), self.assertRaises(runner.EvidenceError):
+                validate(changed)
+
+    def test_isolation_requires_observed_timing_and_duration_binding(self) -> None:
+        pair = runner.synthetic_pair_lease(0, 1)
+        inactive = runner.isolation_record(
+            0, 1, pair, runner.synthetic_cpu_stat(0, user=0, idle=0),
+            runner.synthetic_cpu_stat(0, user=0, idle=1),
+            runner.synthetic_cpu_stat(1, user=0, idle=0),
+            runner.synthetic_cpu_stat(1, user=0, idle=1), 1, 2)
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_isolation(inactive, 0, 1)
+
+        changed = copy.deepcopy(self.raw)
+        changed["child"]["duration_ns"] += 1
+        self.assert_raw_rejected(changed)
+
     def test_host_isolation_and_reservation_mutations_rejected(self) -> None:
         changed = copy.deepcopy(self.raw)
         changed["host_after"]["timing_cpu"]["frequency_policy"][
@@ -145,10 +193,14 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         self.assert_raw_rejected(changed)
 
         changed = copy.deepcopy(self.raw)
-        before = changed["isolation"]["before"]
-        after = copy.deepcopy(before)
-        after["1"]["system"] += 1
-        changed["isolation"] = runner.isolation_record(0, 1, before, after, 1, 2)
+        isolation = changed["isolation"]
+        after_sibling = copy.deepcopy(isolation["after"]["sibling_cpu"])
+        after_sibling["fields"]["system"] += 1
+        after_sibling["total_jiffies"] += 1
+        changed["isolation"] = runner.isolation_record(
+            0, 1, isolation["pair_lease"], isolation["before"]["timing_cpu"],
+            isolation["after"]["timing_cpu"],
+            isolation["before"]["sibling_cpu"], after_sibling, 1, 2)
         self.assert_raw_rejected(changed)
 
         changed = copy.deepcopy(self.raw)
@@ -175,6 +227,81 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         changed["child"]["stderr"]["size"] = True
         self.assert_raw_rejected(changed)
 
+        build_path = self.root / "provenance/build-run-manifest-v4.json"
+        build_original = build_path.read_bytes()
+        build_path.write_bytes(b"{}\n")
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_manifest(self.manifest, self.root)
+        build_path.write_bytes(build_original)
+
+    def test_live_build_validator_invocation_is_fail_closed(self) -> None:
+        validator = self.root / runner.BUILD_VALIDATOR_RELATIVE
+        validator.parent.mkdir(parents=True)
+        validator.write_text("fixture\n", encoding="utf-8")
+        build_manifest = self.root / "build-manifest-v4.json"
+        build_manifest.write_text("{}\n", encoding="utf-8")
+        successful = subprocess.CompletedProcess(
+            ["validator"], 0, b"C7 evidence validation passed (live)\n", b"")
+        with mock.patch.object(runner.subprocess, "run", return_value=successful) as call:
+            runner.run_build_validator(self.root, build_manifest)
+        argv = call.call_args.args[0]
+        self.assertIn("--live", argv)
+        self.assertIn("--require-checkout-head", argv)
+        self.assertEqual(call.call_args.kwargs["env"], runner.VALIDATOR_ENVIRONMENT)
+
+        changed = subprocess.CompletedProcess(["validator"], 0, b"portable only\n", b"")
+        with mock.patch.object(runner.subprocess, "run", return_value=changed), \
+             self.assertRaises(runner.EvidenceError):
+            runner.run_build_validator(self.root, build_manifest)
+
+    def test_verified_build_attestation_binds_exact_local_avx2_files(self) -> None:
+        source = self.root / runner.SOURCE_RELATIVE
+        build_runner = self.root / runner.BUILD_RUNNER_RELATIVE
+        build_validator = self.root / runner.BUILD_VALIDATOR_RELATIVE
+        archive = self.root / ".research/fixture/build/core-avx2/liblibleopard.a"
+        executable = self.root / ".research/fixture/build/c7-avx2"
+        for path, data in ((source, b"source\n"), (build_runner, b"runner\n"),
+                           (build_validator, b"validator\n"),
+                           (archive, b"!<arch>\n"), (executable, b"ELF fixture\n")):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        build_runner.chmod(0o755)
+        build_validator.chmod(0o755)
+        executable.chmod(0o755)
+        identities = {
+            "git": {"tooling_commit": "b" * 40, "core_commit": "e" * 40},
+            "source": {**runner.file_identity(source, "source"),
+                       "path": runner.SOURCE_RELATIVE.as_posix()},
+            "build_runner": {**runner.file_identity(build_runner, "build-runner"),
+                             "path": runner.BUILD_RUNNER_RELATIVE.as_posix()},
+            "build_validator": {
+                **runner.file_identity(build_validator, "build-validator"),
+                "path": runner.BUILD_VALIDATOR_RELATIVE.as_posix()},
+            "archive": runner.file_identity(archive, "archive"),
+            "executable": runner.file_identity(executable, "executable"),
+        }
+        build_manifest = self.root / ".research/fixture/results/build-run-manifest.json"
+        build_manifest.parent.mkdir(parents=True)
+        build_manifest.write_bytes(runner.canonical_pretty_bytes(
+            runner.synthetic_build_manifest(identities)))
+        with mock.patch.object(runner, "run_build_validator"):
+            identity, attestation = runner.verified_build_attestation(
+                self.root, build_manifest, "b" * 40, "e" * 40,
+                identities["source"], identities["build_runner"],
+                identities["build_validator"], identities["archive"],
+                identities["executable"], archive, executable)
+        self.assertEqual(attestation["manifest"]["sha256"], identity["sha256"])
+        self.assertEqual(attestation["avx2"]["optimization"], "-O2")
+
+        with executable.open("ab") as stream:
+            stream.write(b"trailing mutation")
+        with mock.patch.object(runner, "run_build_validator"), \
+             self.assertRaises(runner.EvidenceError):
+            runner.verified_build_attestation(
+                self.root, build_manifest, "b" * 40, "e" * 40,
+                identities["source"], identities["build_runner"],
+                identities["build_validator"], identities["archive"],
+                runner.file_identity(executable, "executable"), archive, executable)
     def test_manifest_and_raw_coordinated_mutations_rejected(self) -> None:
         changed = copy.deepcopy(self.manifest)
         changed["validated_output"]["cell_count"] = 11
@@ -204,6 +331,7 @@ class AuthoritativeRunnerTests(unittest.TestCase):
                    "schema": runner.RESERVATION_SCHEMA, "status": "held"}
         path = self.root / "reservation.json"
         path.write_bytes(runner.canonical_bytes(payload))
+        path.chmod(0o600)
         guard = runner.Reservation(path, 0, 1)
         with guard:
             with self.assertRaises(runner.EvidenceError):
@@ -220,6 +348,42 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         path.write_bytes(runner.canonical_bytes(payload))
         with runner.Reservation(path, 0, 1):
             pass
+
+    def test_reservation_rejects_path_replacement(self) -> None:
+        payload = {"benchmark_cpu": 0, "nonce": "fixture-nonce",
+                   "owner": "unit-test", "reserved_sibling": 1,
+                   "schema": runner.RESERVATION_SCHEMA, "status": "held"}
+        encoded = runner.canonical_bytes(payload)
+        path = self.root / "replacement-reservation.json"
+        path.write_bytes(encoded)
+        path.chmod(0o600)
+        guard = runner.Reservation(path, 0, 1)
+        with guard:
+            path.rename(self.root / "old-reservation.json")
+            path.write_bytes(encoded)
+            path.chmod(0o600)
+            with self.assertRaises(runner.EvidenceError):
+                guard.validate_current()
+
+    def test_pair_lease_serializes_pair_and_rejects_path_replacement(self) -> None:
+        runtime_root = self.root / "runtime-root"
+        runtime_root.mkdir(mode=0o700)
+        runtime_root.chmod(0o700)
+        first = runner.PairLease(7, 8, runtime_root=runtime_root)
+        with first as identity:
+            self.assertEqual(set(identity), {
+                "device", "directory_device", "directory_inode", "inode", "lock",
+                "path", "payload", "sha256"})
+            with self.assertRaises(runner.EvidenceError):
+                with runner.PairLease(7, 8, runtime_root=runtime_root):
+                    pass
+            old = first.path.with_suffix(".old")
+            first.path.rename(old)
+            first.path.write_bytes(runner.canonical_bytes(
+                runner.pair_lease_payload(7, 8)))
+            first.path.chmod(0o600)
+            with self.assertRaises(runner.EvidenceError):
+                first.validate_current()
 
     def test_git_identity_uses_exact_tree_and_rejects_untracked_files(self) -> None:
         repository = self.root / "repository"
@@ -257,6 +421,8 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         archive = self.root / "archive.a"
         executable.write_bytes(b"fixture")
         archive.write_bytes(b"!<arch>\n")
+        build_manifest = self.root / "build-manifest.json"
+        build_manifest.write_bytes(b"{}\n")
         executable.chmod(0o755)
         output = self.root / "failed-run"
         options = argparse.Namespace(
@@ -264,7 +430,8 @@ class AuthoritativeRunnerTests(unittest.TestCase):
             source_root=self.root, cpu=0, sibling=1, timeout=1.0,
             expected_tooling_commit="a" * 40,
             expected_core_commit="a" * 40,
-            reservation_file=self.root / "missing-reservation.json")
+            reservation_file=self.root / "missing-reservation.json",
+            build_manifest=build_manifest)
         with mock.patch.object(
                 runner, "validate_topology",
                 side_effect=runner.EvidenceError("synthetic topology failure")):
@@ -278,6 +445,84 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         self.assertIn("synthetic topology failure", failure["error"])
         self.assertIsNone(failure["child"])
         self.assertFalse((output / "manifest.json").exists())
+
+    def _run_child_failure(self, *, timeout: bool) -> dict:
+        inputs = runner.synthetic_inputs()
+        executable = self.root / ("timeout-executable" if timeout else "exit-executable")
+        archive = self.root / ("timeout-archive.a" if timeout else "exit-archive.a")
+        build_manifest = self.root / (
+            "timeout-build-manifest.json" if timeout else "exit-build-manifest.json")
+        reservation = self.root / (
+            "timeout-reservation.json" if timeout else "exit-reservation.json")
+        output = self.root / ("timeout-run" if timeout else "exit-run")
+        executable.write_bytes(b"fixture")
+        executable.chmod(0o755)
+        archive.write_bytes(b"!<arch>\n")
+        build_manifest.write_bytes(runner.canonical_pretty_bytes(
+            runner.synthetic_build_manifest(inputs)))
+        reservation_payload = {
+            "benchmark_cpu": 0, "nonce": "failure-fixture", "owner": "unit-test",
+            "reserved_sibling": 1, "schema": runner.RESERVATION_SCHEMA,
+            "status": "held",
+        }
+        reservation.write_bytes(runner.canonical_bytes(reservation_payload))
+        reservation.chmod(0o600)
+        options = argparse.Namespace(
+            output=output, executable=executable, archive=archive,
+            build_manifest=build_manifest, source_root=self.root, cpu=0, sibling=1,
+            timeout=1.0, expected_tooling_commit="b" * 40,
+            expected_core_commit="e" * 40, reservation_file=reservation)
+        pair_guard = mock.MagicMock()
+        pair_guard.__enter__.return_value = runner.synthetic_pair_lease(0, 1)
+        pair_guard.__exit__.return_value = None
+        snapshots = [
+            runner.synthetic_cpu_stat(0, user=0, idle=0),
+            runner.synthetic_cpu_stat(1, user=0, idle=0),
+            runner.synthetic_cpu_stat(0, user=1, idle=0),
+            runner.synthetic_cpu_stat(1, user=0, idle=1),
+        ]
+
+        if timeout:
+            def child_effect(*unused_args: object, **unused_kwargs: object) -> object:
+                raise subprocess.TimeoutExpired(
+                    ["fixture"], 1.0, output=b"partial", stderr=b"timed out")
+        else:
+            def child_effect(*unused_args: object, **unused_kwargs: object) -> object:
+                return subprocess.CompletedProcess(
+                    ["fixture"], 7, b"", b"failed\n")
+        with mock.patch.object(runner, "validate_topology", return_value=({0, 1, 2}, {2})), \
+             mock.patch.object(runner, "host_identity",
+                               return_value=runner.synthetic_host(0, 1)), \
+             mock.patch.object(runner, "PairLease", return_value=pair_guard), \
+             mock.patch.object(runner, "input_snapshot", return_value=inputs), \
+             mock.patch.object(runner, "cpu_stat_snapshot", side_effect=snapshots), \
+             mock.patch.object(runner.os, "sched_getaffinity", return_value={0, 1, 2}), \
+             mock.patch.object(runner.os, "sched_setaffinity"), \
+             mock.patch.object(runner.subprocess, "run", side_effect=child_effect):
+            with self.assertRaises(runner.EvidenceError):
+                runner.run_campaign(options)
+        failure = runner.strict_json((output / "failure.json").read_bytes(), "failure")
+        runner.validate_failure(failure)
+        self.assertIsNotNone(failure["build_provenance"])
+        self.assertIsNotNone(failure["isolation"])
+        self.assertFalse((output / "manifest.json").exists())
+        stdout = runner.read_artifact(output, failure["child"]["stdout"], "stdout")
+        stderr = runner.read_artifact(output, failure["child"]["stderr"], "stderr")
+        self.assertEqual(stdout, b"partial" if timeout else b"")
+        self.assertEqual(stderr, b"timed out" if timeout else b"failed\n")
+        return failure
+
+    def test_nonzero_child_retains_failure_evidence(self) -> None:
+        failure = self._run_child_failure(timeout=False)
+        self.assertEqual(failure["child"]["returncode"], 7)
+        self.assertFalse(failure["child"]["timed_out"])
+        self.assertIn("C7 child exited 7", failure["error"])
+
+    def test_timeout_child_retains_failure_evidence(self) -> None:
+        failure = self._run_child_failure(timeout=True)
+        self.assertEqual(failure["child"]["returncode"], 124)
+        self.assertTrue(failure["child"]["timed_out"])
+        self.assertIn("C7 child timed out", failure["error"])
 
 
 if __name__ == "__main__":

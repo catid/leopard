@@ -512,7 +512,13 @@ allowed IDs:
       --manifest .research/leopard2/c7-final/results/build-run-manifest.json
 
 The separate authoritative runner consumes the resulting non-sanitized AVX2
-archive and standalone executable.  Its schedule is not configurable: all 12
+archive, standalone executable, and final v4 A/B build manifest.  It runs the
+committed evidence validator in live, clean-HEAD mode before and after timing,
+requires the A/B comparison status to be `pass`, proves the exact `-O2`
+non-sanitized AVX2 compile record, and requires the supplied archive and
+executable paths and bytes to match that record.  A byte-identical copy of the
+v4 manifest and a compact derived attestation are retained for portable replay.
+Its schedule is not configurable: all 12
 declared cells run in their frozen order, with seven retained samples for each
 setup and execution metric.  The runner supports distinct clean tooling and
 ancestor core commits, records exact Git trees plus runner, harness, archive,
@@ -521,9 +527,25 @@ source closure used by the build runner, and checks the harness's embedded
 source, archive, and core identities.  A coordinator must first reserve one allowed
 physical core and its SMT sibling using canonical
 `leopard2-cpu-reservation/v1` JSON.  The runner takes a nonblocking exclusive
-lock for the whole campaign, moves itself to housekeeping CPUs, pins the child
-to the timing CPU, and rejects evidence if `/proc/stat` reports any non-idle
-work on the sibling.  Do not run other performance work during this window.
+lock on that file and also takes the per-user system-wide shared pair lease
+`/run/user/UID/leopard2-cpu-leases/leopard2-cpu-pair-UID-A-B.lock`.  The runtime
+directory and child lease directory must be owned mode `0700`; the lease file is
+owned mode `0600`.  Every normal Leopard2 evidence runner uses this normalized
+pair path, so choosing another coordinator-reservation filename cannot create a
+collision.  File, directory, device, inode, path, contents, and lock state are
+revalidated throughout the campaign.  The runner moves itself to housekeeping
+CPUs, pins the child to the timing CPU, and rejects evidence unless the timing
+CPU records work, the sibling records elapsed scheduler time but no non-idle
+work, and the retained child and isolation durations agree.  Do not run other
+performance work during this window.
+
+The `/proc/stat` check is deliberately only a coarse rejection gate.  Non-idle
+jiffies on the benchmark CPU prove that some work occurred, not that the child
+caused that work, and zero non-idle jiffies on the sibling cannot exclude work
+shorter than the kernel's jiffy resolution.  The shared lease serializes
+cooperating Leopard2 runners; it cannot exclude arbitrary processes.  The
+coordinator must therefore keep unrelated work off both logical CPUs for the
+entire timed child interval.
 
 Run the synthetic validator and mutation suite before reserving a core:
 
@@ -539,22 +561,27 @@ exact ignored build paths produced above:
     CPU=<isolated-logical-cpu>
     SIBLING=<that-cpu-smt-sibling>
     RESERVATION=.research/leopard2/c7-final/cpu-reservation.json
+    BUILD_MANIFEST=.research/leopard2/c7-final/results/build-run-manifest.json
     OUTPUT=.research/leopard2/c7-final/authoritative
     # The coordinator writes RESERVATION as canonical JSON without a newline:
     # {"benchmark_cpu":CPU,"nonce":"...","owner":"...",
     #  "reserved_sibling":SIBLING,"schema":"leopard2-cpu-reservation/v1",
     #  "status":"held"}
+    chmod 600 "$RESERVATION"
+    test "$(stat -c '%u:%a' "/run/user/$(id -u)")" = "$(id -u):700"
     python3 experiments/leopard2/non_power_of_two/c7/run_authoritative.py run \
       --source-root . --expected-tooling-commit "$TOOLING_SHA" \
       --expected-core-commit "$CORE_SHA" \
       --archive .research/leopard2/c7-final/build/core-avx2/liblibleopard.a \
       --executable .research/leopard2/c7-final/build/c7-avx2 \
+      --build-manifest "$BUILD_MANIFEST" \
       --reservation-file "$RESERVATION" --output "$OUTPUT" \
       --cpu "$CPU" --sibling "$SIBLING"
 
-Success writes canonical `raw.json` and `manifest.json` plus the exact child
-result and stdout/stderr bytes.  Any failure after output-directory creation
-retains a signed `failure.json` and whatever child artifacts were available;
+Success writes v2 canonical `raw.json` and `manifest.json`, the verified v4
+build manifest, and the exact child result and stdout/stderr bytes.  Any failure
+after output-directory creation retains a signed v2 `failure.json`, available
+build/isolation context, and whatever child artifacts were available;
 an existing output directory is never replaced.  Verification is portable and
 does not reopen the original checkout, build, or reservation paths:
 
