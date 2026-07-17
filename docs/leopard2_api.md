@@ -200,6 +200,10 @@ up to `min(thread_count - 1, item_count - 1)` workers.  A later, larger batch
 can grow the pool to the additional parallelism it needs; started workers remain
 persistent and are reused.  A lazy start can return `LEO2_OUT_OF_MEMORY` and a
 failed pool remains failed deterministically.
+One-time field and table initialization is deliberately serial even in an
+OpenMP build, so the first `leo_init` or context creation does not leave an
+OpenMP worker team behind.  This does not disable OpenMP in the existing
+byte-heavy legacy execution paths.
 The calling thread participates.  A count of one always executes serially.
 
 On Linux, `thread_count = 0` counts the CPUs in `sched_getaffinity`, so cpuset

@@ -141,6 +141,7 @@ static LEO_FORCE_INLINE void FWHT_4(ffe_t* data, unsigned s)
 // Decimation in time (DIT) Fast Walsh-Hadamard Transform
 // Unrolls pairs of layers to perform cross-layer operations in registers
 // m_truncated: Number of elements that are non-zero at the front of data
+template<bool EnableParallel>
 static void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated)
 {
     // Decimation in time: Unroll 2 layers at a time
@@ -148,7 +149,7 @@ static void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated)
     for (; dist4 <= m; dist = dist4, dist4 <<= 2)
     {
         // For each set of dist*4 elements:
-#pragma omp parallel for
+#pragma omp parallel for if(EnableParallel)
         for (int r = 0; r < (int)m_truncated; r += dist4)
         {
             // For each set of dist elements:
@@ -160,7 +161,7 @@ static void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated)
 
     // If there is one layer left:
     if (dist < m)
-#pragma omp parallel for
+#pragma omp parallel for if(EnableParallel)
         for (int i = 0; i < (int)dist; ++i)
             FWHT_2(data[i], data[i + dist]);
 }
@@ -345,7 +346,9 @@ static void InitializeMultiplyTables()
         Multiply128LUT = reinterpret_cast<const Multiply128LUT_t*>(SIMDSafeAllocate(sizeof(Multiply128LUT_t) * kOrder));
 
     // For each value we could multiply by:
-#pragma omp parallel for
+    // Table construction is one-time setup.  Keep it serial so leo_init() and
+    // leo2_context_create() do not instantiate a persistent OpenMP worker team
+    // before the application asks Leopard to execute byte-heavy work.
     for (int log_m = 0; log_m < (int)kOrder; ++log_m)
     {
         // For each 4 bits of the finite field width in bits:
@@ -686,7 +689,7 @@ static void FFTInitialize()
         LogWalsh[i] = LogLUT[i];
     LogWalsh[0] = 0;
 
-    FWHT(LogWalsh, kOrder, kOrder);
+    FWHT<false>(LogWalsh, kOrder, kOrder);
 
     // On V_n, XOR convolution is diagonalized by an n-point Walsh transform.
     // Unlike the full-field case, applying that transform twice multiplies by
@@ -698,7 +701,7 @@ static void FFTInitialize()
         for (unsigned i = 0; i < n; ++i)
             active[i] = LogLUT[i];
         active[0] = 0;
-        FWHT(active, n, n);
+        FWHT<false>(active, n, n);
 
         const unsigned inverse_n = kOrder / n;
         for (unsigned i = 0; i < n; ++i)
@@ -1950,7 +1953,7 @@ void PrepareDecodeWalshReference(
     for (unsigned i = 0; i < n; ++i)
         error_locations[i] = erasures[i] ? 1 : 0;
 
-    FWHT(error_locations, kOrder, n);
+    FWHT<true>(error_locations, kOrder, n);
 
 #pragma omp parallel for
     for (int i = 0; i < (int)kOrder; ++i)
@@ -1959,7 +1962,7 @@ void PrepareDecodeWalshReference(
             ((unsigned)error_locations[i] * (unsigned)LogWalsh[i]) % kModulus);
     }
 
-    FWHT(error_locations, kOrder, kOrder);
+    FWHT<true>(error_locations, kOrder, kOrder);
     memcpy(locator_logs, error_locations, n * sizeof(ffe_t));
 }
 
@@ -1979,7 +1982,7 @@ static void PrepareDecodeWalshActiveCombined(
                 1 : 0;
     }
 
-    FWHT(locator_logs, n, n);
+    FWHT<true>(locator_logs, n, n);
 
     const ffe_t* transformed_kernel =
         n == kOrder ? LogWalsh : ActiveLogWalsh + n - 2;
@@ -1990,7 +1993,7 @@ static void PrepareDecodeWalshActiveCombined(
                 static_cast<unsigned>(transformed_kernel[i])) % kModulus);
     }
 
-    FWHT(locator_logs, n, n);
+    FWHT<true>(locator_logs, n, n);
 }
 
 
@@ -3173,13 +3176,13 @@ void ReedSolomonDecode(
 
     // Evaluate error locator polynomial
 
-    FWHT(error_locations, kOrder, m + original_count);
+    FWHT<true>(error_locations, kOrder, m + original_count);
 
 #pragma omp parallel for
     for (int i = 0; i < (int)kOrder; ++i)
         error_locations[i] = ((unsigned)error_locations[i] * (unsigned)LogWalsh[i]) % kModulus;
 
-    FWHT(error_locations, kOrder, kOrder);
+    FWHT<true>(error_locations, kOrder, kOrder);
 
     // work <- recovery data
 

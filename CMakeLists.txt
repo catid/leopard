@@ -510,6 +510,18 @@ if(LEO2_BUILD_TESTS)
     add_test(NAME leopard2_public_api_contract
         COMMAND leopard2_public_api_contract_test)
 
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND ENABLE_OPENMP)
+        add_executable(leopard2_initialization_threads_test
+            tests/leopard2/test_initialization_threads.cpp)
+        target_link_libraries(leopard2_initialization_threads_test libleopard)
+        add_test(NAME leopard2_initialization_threads_legacy
+            COMMAND leopard2_initialization_threads_test legacy)
+        add_test(NAME leopard2_initialization_threads_explicit
+            COMMAND leopard2_initialization_threads_test explicit)
+        add_test(NAME leopard2_initialization_threads_default
+            COMMAND leopard2_initialization_threads_test default)
+    endif()
+
     add_executable(leopard2_random_test
         tests/leopard2/direct_oracle.cpp
         tests/leopard2/test_random.cpp)
