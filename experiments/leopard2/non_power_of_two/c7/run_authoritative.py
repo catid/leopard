@@ -25,6 +25,7 @@ import os
 import platform
 import re
 import resource
+import signal
 import socket
 import stat
 import statistics
@@ -66,6 +67,7 @@ MAX_ARTIFACT_DEPTH = 16
 MAX_ARTIFACT_PATH_BYTES = 4096
 MAX_REPORTED_SCRATCH_BYTES = 1 << 40
 MAX_DIAGNOSTIC_BYTES = 16 * 1024
+CHILD_REAP_TIMEOUT_SECONDS = 5.0
 SOURCE_RELATIVE = Path("experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp")
 RUNNER_RELATIVE = Path("experiments/leopard2/non_power_of_two/c7/run_authoritative.py")
 BUILD_RUNNER_RELATIVE = Path(
@@ -524,7 +526,8 @@ def regular_path_snapshot(path: Path, maximum_bytes: int,
     try:
         descriptor = os.open(
             name, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
-            getattr(os, "O_NOFOLLOW", 0), dir_fd=parent)
+            getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=parent)
         data, metadata = _snapshot_regular_fd(descriptor, maximum_bytes, label)
         current = os.stat(name, dir_fd=parent, follow_symlinks=False)
         require((current.st_dev, current.st_ino, current.st_mode,
@@ -1520,11 +1523,75 @@ def pair_lease_directory(uid: int | None = None) -> Path:
     return pair_lease_runtime_root(uid) / "leopard2-cpu-leases"
 
 
+class StableLeaseAnchor:
+    """Shared non-replaceable ancestor lock for all Leopard2 evidence runners."""
+
+    def __init__(self, path: Path | None = None):
+        self.path = pair_lease_runtime_root() if path is None else _lexical_absolute(path)
+        self.descriptor: int | None = None
+        self.identity: tuple[int, int, int, int] | None = None
+
+    @staticmethod
+    def _metadata(metadata: os.stat_result) -> tuple[int, int, int, int]:
+        mode = stat.S_IMODE(metadata.st_mode)
+        require(stat.S_ISDIR(metadata.st_mode) and
+                metadata.st_uid == os.getuid() and mode & 0o022 == 0,
+                "stable runner lease anchor has unsafe ownership or mode")
+        return metadata.st_dev, metadata.st_ino, metadata.st_uid, mode
+
+    def validate_current(self) -> None:
+        require(self.descriptor is not None and self.identity is not None,
+                "stable runner lease anchor is not held")
+        descriptor = os.fstat(self.descriptor)
+        path = os.lstat(self.path)
+        require(self._metadata(descriptor) == self.identity and
+                (descriptor.st_dev, descriptor.st_ino) ==
+                    (path.st_dev, path.st_ino),
+                "stable runner lease anchor path was replaced")
+
+    def __enter__(self) -> StableLeaseAnchor:
+        require(self.descriptor is None,
+                "stable runner lease anchor is already held")
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | \
+            getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            self.descriptor = os.open(self.path, flags)
+            fcntl.flock(self.descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            descriptor = os.fstat(self.descriptor)
+            path = os.lstat(self.path)
+            self.identity = self._metadata(descriptor)
+            require((descriptor.st_dev, descriptor.st_ino) ==
+                    (path.st_dev, path.st_ino),
+                    "stable runner lease anchor changed during acquisition")
+            self.validate_current()
+            return self
+        except BaseException as error:
+            self.__exit__(None, None, None)
+            if isinstance(error, OSError):
+                raise EvidenceError(
+                    f"cannot acquire stable runner lease anchor: {error}") from error
+            raise
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        del exc_type, exc, tb
+        try:
+            if self.descriptor is not None:
+                descriptor = self.descriptor
+                self.descriptor = None
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                finally:
+                    os.close(descriptor)
+        finally:
+            self.identity = None
+
+
 class PairLease:
     """Serialize Leopard2 evidence runners by one physical CPU pair."""
 
     def __init__(self, cpu: int, sibling: int,
-                 runtime_root: Path | None = None):
+                 runtime_root: Path | None = None,
+                 anchor: StableLeaseAnchor | None = None):
         require(type(cpu) is int and type(sibling) is int and
                 0 <= cpu <= MAX_CPU_ID and 0 <= sibling <= MAX_CPU_ID and
                 cpu != sibling,
@@ -1539,6 +1606,10 @@ class PairLease:
         self.directory_fd: int | None = None
         self.identity: dict[str, Any] | None = None
         self._identity_bytes: bytes | None = None
+        self.anchor = anchor
+        self.owns_anchor = anchor is None
+        if self.owns_anchor:
+            self.anchor = StableLeaseAnchor(self.runtime_root)
         self.kernel = KernelNamespaceLease(
             "pair", pair_lease_payload(cpu, sibling))
 
@@ -1561,8 +1632,9 @@ class PairLease:
 
     def validate_current(self, expected_identity: Mapping[str, Any] | None = None) -> None:
         require(self.descriptor is not None and self.directory_fd is not None and
-                self.identity is not None,
+                self.identity is not None and self.anchor is not None,
                 "CPU pair lease is not held")
+        self.anchor.validate_current()
         require(self._identity_bytes == canonical_bytes(self.identity),
                 "CPU pair lease immutable identity changed")
         if expected_identity is not None:
@@ -1596,8 +1668,13 @@ class PairLease:
         require(retained == expected, "CPU pair lease contents changed while held")
 
     def __enter__(self) -> dict[str, Any]:
-        authority = self.kernel.acquire()
+        require(self.anchor is not None, "CPU pair stable anchor is unavailable")
+        if self.owns_anchor:
+            self.anchor.__enter__()
+        else:
+            self.anchor.validate_current()
         try:
+            authority = self.kernel.acquire()
             self._validate_runtime_root()
             try:
                 self.root.mkdir(mode=0o700)
@@ -1608,7 +1685,7 @@ class PairLease:
             self.directory_fd, _unused = _open_directory_nofollow(
                 self.root, "CPU pair lease directory")
             flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | \
-                getattr(os, "O_NOFOLLOW", 0)
+                getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
             try:
                 self.descriptor = os.open(
                     self.path.name, flags | os.O_CREAT | os.O_EXCL, 0o600,
@@ -1655,29 +1732,49 @@ class PairLease:
             self.validate_current()
             return copy.deepcopy(self.identity)
         except Exception:
-            if self.descriptor is not None:
+            try:
                 try:
-                    fcntl.flock(self.descriptor, fcntl.LOCK_UN)
+                    if self.descriptor is not None:
+                        descriptor = self.descriptor
+                        self.descriptor = None
+                        try:
+                            fcntl.flock(descriptor, fcntl.LOCK_UN)
+                        finally:
+                            os.close(descriptor)
                 finally:
-                    os.close(self.descriptor)
-                    self.descriptor = None
-            if self.directory_fd is not None:
-                os.close(self.directory_fd)
-                self.directory_fd = None
-            self.kernel.release()
+                    if self.directory_fd is not None:
+                        directory = self.directory_fd
+                        self.directory_fd = None
+                        os.close(directory)
+            finally:
+                try:
+                    self.kernel.release()
+                finally:
+                    if self.owns_anchor and self.anchor is not None:
+                        self.anchor.__exit__(None, None, None)
             raise
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         try:
-            if self.descriptor is not None:
-                fcntl.flock(self.descriptor, fcntl.LOCK_UN)
-                os.close(self.descriptor)
-                self.descriptor = None
-            if self.directory_fd is not None:
-                os.close(self.directory_fd)
-                self.directory_fd = None
+            try:
+                if self.descriptor is not None:
+                    descriptor = self.descriptor
+                    self.descriptor = None
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_UN)
+                    finally:
+                        os.close(descriptor)
+            finally:
+                if self.directory_fd is not None:
+                    directory = self.directory_fd
+                    self.directory_fd = None
+                    os.close(directory)
         finally:
-            self.kernel.release()
+            try:
+                self.kernel.release()
+            finally:
+                if self.owns_anchor and self.anchor is not None:
+                    self.anchor.__exit__(exc_type, exc, tb)
 
 
 def validate_pair_lease_identity(value: object, cpu: int,
@@ -1822,7 +1919,8 @@ def reservation_authority_payload(path: Path, cpu: int, sibling: int,
 
 
 class Reservation:
-    def __init__(self, path: Path, cpu: int, sibling: int):
+    def __init__(self, path: Path, cpu: int, sibling: int,
+                 anchor: StableLeaseAnchor | None = None):
         self.path = _lexical_absolute(path)
         self.cpu = cpu
         self.sibling = sibling
@@ -1832,20 +1930,30 @@ class Reservation:
         self.raw = b""
         self.identity: dict[str, Any] | None = None
         self._identity_bytes: bytes | None = None
+        self.anchor = anchor
+        self.owns_anchor = anchor is None
+        if self.owns_anchor:
+            self.anchor = StableLeaseAnchor()
         self.kernel = KernelNamespaceLease(
             "reservation", reservation_authority_payload(
                 self.path, cpu, sibling))
 
     def __enter__(self) -> dict[str, Any]:
-        self.kernel.acquire()
+        require(self.anchor is not None, "reservation stable anchor is unavailable")
+        if self.owns_anchor:
+            self.anchor.__enter__()
+        else:
+            self.anchor.validate_current()
         try:
+            self.kernel.acquire()
             self.parent_fd, self.name, _absolute = _open_parent_nofollow(self.path)
             directory = os.fstat(self.parent_fd)
             require(stat.S_ISDIR(directory.st_mode),
                     "CPU reservation parent is not a directory")
             self.fd = os.open(
                 self.name, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
-                getattr(os, "O_NOFOLLOW", 0), dir_fd=self.parent_fd)
+                getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+                dir_fd=self.parent_fd)
             descriptor = os.fstat(self.fd)
             current = os.stat(
                 self.name, dir_fd=self.parent_fd, follow_symlinks=False)
@@ -1890,8 +1998,10 @@ class Reservation:
 
     def validate_current(self, expected_identity: Mapping[str, Any] | None = None) -> None:
         require(self.fd is not None and self.parent_fd is not None and
-                self.identity is not None and hasattr(self, "content_kernel"),
+                self.identity is not None and hasattr(self, "content_kernel") and
+                self.anchor is not None,
                 "CPU reservation lock was lost")
+        self.anchor.validate_current()
         require(self._identity_bytes == canonical_bytes(self.identity),
                 "CPU reservation immutable identity changed")
         if expected_identity is not None:
@@ -1941,19 +2051,29 @@ class Reservation:
 
     def _release(self) -> None:
         try:
-            if self.fd is not None:
-                try:
-                    fcntl.flock(self.fd, fcntl.LOCK_UN)
-                finally:
-                    os.close(self.fd)
+            try:
+                if self.fd is not None:
+                    descriptor = self.fd
                     self.fd = None
-            if self.parent_fd is not None:
-                os.close(self.parent_fd)
-                self.parent_fd = None
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_UN)
+                    finally:
+                        os.close(descriptor)
+            finally:
+                if self.parent_fd is not None:
+                    parent = self.parent_fd
+                    self.parent_fd = None
+                    os.close(parent)
         finally:
-            if hasattr(self, "content_kernel"):
-                self.content_kernel.release()
-            self.kernel.release()
+            try:
+                try:
+                    if hasattr(self, "content_kernel"):
+                        self.content_kernel.release()
+                finally:
+                    self.kernel.release()
+            finally:
+                if self.owns_anchor and self.anchor is not None:
+                    self.anchor.__exit__(None, None, None)
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         self._release()
@@ -2131,7 +2251,8 @@ def _artifact_snapshot(root: Path, relative: object, maximum_bytes: int,
             directories.append(child)
         descriptor = os.open(
             relative_path.parts[-1], os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
-            getattr(os, "O_NOFOLLOW", 0), dir_fd=directories[-1])
+            getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=directories[-1])
         data, metadata = _snapshot_regular_fd(
             descriptor, maximum_bytes, label)
         current = os.stat(
@@ -2261,7 +2382,8 @@ def artifact_inventory(root: Path) -> list[dict[str, Any]]:
                     "artifact inventory contains too many files")
             child = os.open(
                 name, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
-                getattr(os, "O_NOFOLLOW", 0), dir_fd=directory)
+                getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+                dir_fd=directory)
             try:
                 data, opened = _snapshot_regular_fd(
                     child, MAX_ARTIFACT_BYTES, relative)
@@ -2391,6 +2513,49 @@ def _child_resource_limits() -> None:
         resource.RLIMIT_FSIZE, (MAX_LOG_BYTES, MAX_LOG_BYTES))
 
 
+def _kill_process_group_and_reap(process: subprocess.Popen[bytes]) -> None:
+    """Kill the isolated child session and bound the leader reap operation."""
+    deadline = time.monotonic() + CHILD_REAP_TIMEOUT_SECONDS
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except OSError as error:
+        raise EvidenceError(f"cannot kill child process group: {error}") from error
+    if process.poll() is None:
+        try:
+            process.wait(timeout=max(0.001, deadline - time.monotonic()))
+        except subprocess.TimeoutExpired as error:
+            raise EvidenceError(
+                "child process group leader did not terminate after SIGKILL") from error
+    while True:
+        try:
+            os.killpg(process.pid, 0)
+        except ProcessLookupError:
+            break
+        except OSError as error:
+            raise EvidenceError(
+                f"cannot verify child process-group teardown: {error}") from error
+        remaining = deadline - time.monotonic()
+        require(remaining > 0,
+                "child process group retained descendants after SIGKILL")
+        time.sleep(min(0.01, remaining))
+
+
+def _wait_isolated_child(
+        process: subprocess.Popen[bytes], timeout_seconds: float) -> tuple[int, bool]:
+    timed_out = False
+    try:
+        try:
+            returncode = process.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            returncode = 124
+    finally:
+        _kill_process_group_and_reap(process)
+    return returncode, timed_out
+
+
 def run_child_bounded(command: Sequence[str], stdout_path: Path,
                       stderr_path: Path, timeout_seconds: float,
                       environment: Mapping[str, str]) -> tuple[
@@ -2402,6 +2567,7 @@ def run_child_bounded(command: Sequence[str], stdout_path: Path,
     stdout_fd = os.open(stdout_path, flags, 0o600)
     stderr_fd: int | None = None
     process: subprocess.Popen[bytes] | None = None
+    cleanup_attempted = False
     started = time.monotonic_ns()
     timed_out = False
     try:
@@ -2409,14 +2575,9 @@ def run_child_bounded(command: Sequence[str], stdout_path: Path,
         process = subprocess.Popen(
             list(command), stdin=subprocess.DEVNULL, stdout=stdout_fd,
             stderr=stderr_fd, env=dict(environment), close_fds=True,
-            preexec_fn=_child_resource_limits)
-        try:
-            returncode = process.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            process.kill()
-            process.wait()
-            returncode = 124
+            preexec_fn=_child_resource_limits, start_new_session=True)
+        cleanup_attempted = True
+        returncode, timed_out = _wait_isolated_child(process, timeout_seconds)
         os.fsync(stdout_fd)
         os.fsync(stderr_fd)
         ended = time.monotonic_ns()
@@ -2424,9 +2585,9 @@ def run_child_bounded(command: Sequence[str], stdout_path: Path,
             list(command), returncode, stdout=b"", stderr=b"")
         return completed, timed_out, started, ended
     finally:
-        if process is not None and process.poll() is None:
-            process.kill()
-            process.wait()
+        if process is not None and not cleanup_attempted:
+            cleanup_attempted = True
+            _kill_process_group_and_reap(process)
         if stderr_fd is not None:
             os.close(stderr_fd)
         os.close(stdout_fd)
@@ -2450,26 +2611,23 @@ def run_capture_bounded(
             stdout_fd = os.open(stdout_path, flags, 0o600)
             stderr_fd = os.open(stderr_path, flags, 0o600)
             process: subprocess.Popen[bytes] | None = None
+            cleanup_attempted = False
             timed_out = False
             try:
                 process = subprocess.Popen(
                     retained_command, cwd=str(cwd), stdin=subprocess.DEVNULL,
                     stdout=stdout_fd, stderr=stderr_fd,
                     env=dict(environment), close_fds=True,
-                    preexec_fn=_child_resource_limits)
-                try:
-                    returncode = process.wait(timeout=timeout_seconds)
-                except subprocess.TimeoutExpired:
-                    timed_out = True
-                    process.kill()
-                    process.wait()
-                    returncode = 124
+                    preexec_fn=_child_resource_limits, start_new_session=True)
+                cleanup_attempted = True
+                returncode, timed_out = _wait_isolated_child(
+                    process, timeout_seconds)
                 os.fsync(stdout_fd)
                 os.fsync(stderr_fd)
             finally:
-                if process is not None and process.poll() is None:
-                    process.kill()
-                    process.wait()
+                if process is not None and not cleanup_attempted:
+                    cleanup_attempted = True
+                    _kill_process_group_and_reap(process)
                 os.close(stderr_fd)
                 os.close(stdout_fd)
             completed = subprocess.CompletedProcess(
@@ -2617,6 +2775,7 @@ def validate_raw(value: object, root: Path, check_files: bool = True,
 
 
 def validate_manifest(value: object, root: Path) -> dict[str, Any]:
+    _require_terminal_absent(root, "failure.json")
     manifest = verify_signature(value, "C7 manifest")
     require(set(manifest) == {"schema", "created_utc", "valid", "raw",
                               "publication_state", "artifact_inventory",
@@ -2817,6 +2976,7 @@ def _validate_failure(value: object, root: Path | None,
                       check_files: bool) -> dict[str, Any]:
     require(check_files and root is not None,
             "v4 failure validation requires its retained artifact directory")
+    _require_terminal_absent(root, "manifest.json")
     failure = verify_signature(value, "C7 failure evidence")
     require(set(failure) == {
         "schema", "status", "created_utc", "failure_code", "completed_stage",
@@ -3180,28 +3340,139 @@ def _restore_affinity(lifecycle: dict[str, Any], original: set[int] | None) -> N
                         error_type=error_type, error=message)
 
 
-def _publish_terminal(root: Path, name: str, value: Mapping[str, Any]) -> None:
+def _root_identity(descriptor: int, root: Path, *,
+                   require_private_owner: bool = False) -> tuple[int, int]:
+    opened = os.fstat(descriptor)
+    current = os.stat(_lexical_absolute(root), follow_symlinks=False)
+    mode = stat.S_IMODE(opened.st_mode)
+    require(stat.S_ISDIR(opened.st_mode) and
+            (opened.st_dev, opened.st_ino) == (current.st_dev, current.st_ino),
+            "evidence root path or inode changed")
+    if require_private_owner:
+        require(opened.st_uid == os.getuid() and mode & 0o022 == 0,
+                "evidence root ownership or mode is unsafe for publication")
+    return opened.st_dev, opened.st_ino
+
+
+def _terminal_absent(descriptor: int, name: str) -> None:
+    try:
+        os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    raise EvidenceError(f"terminal artifact already exists: {name}")
+
+
+def _require_terminal_absent(root: Path, name: str) -> None:
+    descriptor, absolute = _open_directory_nofollow(root, "evidence root")
+    try:
+        _root_identity(descriptor, absolute)
+        _terminal_absent(descriptor, name)
+        _root_identity(descriptor, absolute)
+    finally:
+        os.close(descriptor)
+
+
+def _write_json_exclusive_at(
+        descriptor: int, name: str, value: Mapping[str, Any]) -> tuple[int, int]:
+    require(name in ("manifest.json", "failure.json"),
+            "terminal artifact name is invalid")
+    data = canonical_bytes(value) + b"\n"
+    child: int | None = None
+    identity: tuple[int, int] | None = None
+    completed = False
+    try:
+        child = os.open(
+            name, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+            getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            0o600, dir_fd=descriptor)
+        opened = os.fstat(child)
+        identity = opened.st_dev, opened.st_ino
+        offset = 0
+        while offset < len(data):
+            written = os.write(child, data[offset:])
+            require(written > 0, f"short terminal write: {name}")
+            offset += written
+        os.fsync(child)
+        retained = os.fstat(child)
+        current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+        require(stat.S_ISREG(retained.st_mode) and retained.st_nlink == 1 and
+                (retained.st_dev, retained.st_ino, retained.st_size) ==
+                    (current.st_dev, current.st_ino, current.st_size) and
+                retained.st_size == len(data),
+                f"terminal artifact changed while written: {name}")
+        completed = True
+        return identity
+    except FileExistsError as error:
+        raise EvidenceError(f"refusing to replace terminal artifact: {name}") from error
+    except OSError as error:
+        raise EvidenceError(f"cannot securely write terminal artifact {name}: {error}") \
+            from error
+    finally:
+        if child is not None:
+            os.close(child)
+        if not completed and identity is not None:
+            try:
+                current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                if (current.st_dev, current.st_ino) == identity:
+                    os.unlink(name, dir_fd=descriptor)
+            except OSError:
+                pass
+
+
+def _remove_created_terminal(
+        descriptor: int, name: str, identity: tuple[int, int]) -> None:
+    try:
+        current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+        if (current.st_dev, current.st_ino) == identity:
+            os.unlink(name, dir_fd=descriptor)
+            os.fsync(descriptor)
+    except OSError:
+        pass
+
+
+def _publish_terminal(root: Path, name: str, value: Mapping[str, Any],
+                      expected_root: tuple[int, int] | None = None) -> None:
     require(name in ("manifest.json", "failure.json"),
             "terminal artifact name is invalid")
     other = "failure.json" if name == "manifest.json" else "manifest.json"
+    descriptor, absolute = _open_directory_nofollow(root, "evidence root")
     authority = KernelNamespaceLease(
         "terminal", {"path": str(_lexical_absolute(root)), "uid": os.getuid()})
-    authority.acquire()
+    created: tuple[int, int] | None = None
+    acquired = False
     try:
-        require(not os.path.lexists(root / name) and
-                not os.path.lexists(root / other),
-                "terminal success/failure artifact already exists")
-        write_json_exclusive(root / name, value)
+        opened_root = _root_identity(
+            descriptor, absolute, require_private_owner=True)
+        if expected_root is not None:
+            require(opened_root == expected_root,
+                    "evidence root differs from its creation inode")
+        authority.acquire()
+        acquired = True
+        require(_root_identity(
+                    descriptor, absolute, require_private_owner=True) == opened_root,
+                "evidence root changed before terminal publication")
+        _terminal_absent(descriptor, name)
+        _terminal_absent(descriptor, other)
+        created = _write_json_exclusive_at(descriptor, name, value)
+        _terminal_absent(descriptor, other)
+        require(_root_identity(
+                    descriptor, absolute, require_private_owner=True) == opened_root,
+                "evidence root changed during terminal publication")
+        os.fsync(descriptor)
+        require(_root_identity(
+                    descriptor, absolute, require_private_owner=True) == opened_root,
+                "evidence root changed after terminal publication")
     except BaseException:
-        try:
-            authority.release()
-        except OSError:
-            pass
+        if created is not None:
+            _remove_created_terminal(descriptor, name, created)
         raise
-    try:
-        authority.release()
-    except OSError:
-        pass
+    finally:
+        if acquired:
+            try:
+                authority.release()
+            except OSError:
+                pass
+        os.close(descriptor)
 
 
 def run_campaign(options: argparse.Namespace) -> int:
@@ -3209,6 +3480,13 @@ def run_campaign(options: argparse.Namespace) -> int:
     require(not output.exists(), f"output already exists: {output}")
     output.mkdir(parents=True, mode=0o700)
     os.chmod(output, 0o700)
+    output_descriptor, _output_absolute = _open_directory_nofollow(
+        output, "evidence root")
+    try:
+        output_identity = _root_identity(
+            output_descriptor, output, require_private_owner=True)
+    finally:
+        os.close(output_descriptor)
     lifecycle = empty_lifecycle()
     publication: dict[str, Any] = {"state": None, "raw": None}
     arguments: dict[str, Any] | None = None
@@ -3260,7 +3538,8 @@ def run_campaign(options: argparse.Namespace) -> int:
         failure_code = "reservation-failed"
         reservation_guard = Reservation(
             options.reservation_file, options.cpu, options.sibling)
-        pair_guard = PairLease(options.cpu, options.sibling)
+        pair_guard = PairLease(
+            options.cpu, options.sibling, anchor=reservation_guard.anchor)
         with ExitRecordingGuard(reservation_guard, lifecycle, "reservation") as retained_reservation:
             require(typed_equal(retained_reservation, reservation_guard.identity),
                     "reservation guard returned a mutable or foreign identity")
@@ -3484,7 +3763,8 @@ def run_campaign(options: argparse.Namespace) -> int:
                     FAILURE_DIAGNOSTICS[failure_code])
             validate_manifest(manifest, output)
             failure_code = "manifest-write-failed"
-            _publish_terminal(output, "manifest.json", manifest)
+            _publish_terminal(
+                output, "manifest.json", manifest, output_identity)
         except BaseException as error:
             body_error = error
             body_traceback = traceback.format_exc()
@@ -3537,7 +3817,8 @@ def run_campaign(options: argparse.Namespace) -> int:
             "snapshot_inventory": snapshot_inventory, **context,
         })
         validate_failure(failure, output, check_files=True)
-        _publish_terminal(output, "failure.json", failure)
+        _publish_terminal(
+            output, "failure.json", failure, output_identity)
         raise EvidenceError(error_text) from body_error
 
     try:

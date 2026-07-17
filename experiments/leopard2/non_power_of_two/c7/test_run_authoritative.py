@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import fcntl
 import importlib.util
 import json
 import os
@@ -12,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -283,6 +285,25 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         with self.assertRaises(runner.EvidenceError):
             runner.artifact_inventory(crowded)
 
+    def test_fifo_inputs_are_rejected_without_blocking(self) -> None:
+        fifo = self.root / "manifest-fifo.json"
+        os.mkfifo(fifo)
+        completed = subprocess.run(
+            [sys.executable, str(MODULE_PATH), "verify", "--manifest", str(fifo)],
+            check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=2.0,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
+                 "PYTHONHASHSEED": "0"})
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("not a single-link regular file", completed.stderr)
+        self.assertNotIn("Traceback (most recent call last)", completed.stderr)
+
+        result_path = self.root / "snapshot/child/result.json"
+        result_path.unlink()
+        os.mkfifo(result_path)
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_manifest(self.manifest, self.root)
+
     def test_file_growth_cpu_syntax_numeric_and_cli_bounds(self) -> None:
         for value in ("1,", ",", "1,,2"):
             with self.subTest(cpu_list=value), self.assertRaises(runner.EvidenceError):
@@ -329,6 +350,42 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         self.assertFalse(timed_out)
         self.assertIsInstance(completed.returncode, int)
         self.assertLessEqual(stdout.stat().st_size, runner.MAX_LOG_BYTES)
+
+    def test_timeout_kills_descendants_and_bounds_the_reap(self) -> None:
+        marker = self.root / "descendant-marker"
+        child = (
+            "import os,sys,time\n"
+            "pid=os.fork()\n"
+            "if pid == 0:\n"
+            " time.sleep(.5)\n"
+            " open(sys.argv[1], 'w').write('survived')\n"
+            " os._exit(0)\n"
+            "time.sleep(10)\n"
+        )
+        completed, timed_out, _started, _ended = runner.run_child_bounded(
+            [sys.executable, "-c", child, str(marker)],
+            self.root / "group/stdout.bin", self.root / "group/stderr.bin",
+            0.1, os.environ)
+        self.assertTrue(timed_out)
+        self.assertEqual(completed.returncode, 124)
+        time.sleep(0.75)
+        self.assertFalse(marker.exists())
+
+        process = mock.Mock(pid=123456)
+        process.wait.side_effect = [
+            subprocess.TimeoutExpired(["fixture"], 0.1),
+            subprocess.TimeoutExpired(["fixture"],
+                                      runner.CHILD_REAP_TIMEOUT_SECONDS),
+        ]
+        process.poll.return_value = None
+        with mock.patch.object(runner.os, "killpg") as killpg, \
+             self.assertRaises(runner.EvidenceError):
+            runner._wait_isolated_child(process, 0.1)
+        killpg.assert_called_once_with(process.pid, runner.signal.SIGKILL)
+        self.assertEqual(process.wait.call_args_list[0], mock.call(timeout=0.1))
+        reap_timeout = process.wait.call_args_list[1].kwargs["timeout"]
+        self.assertGreater(reap_timeout, 0)
+        self.assertLessEqual(reap_timeout, runner.CHILD_REAP_TIMEOUT_SECONDS)
 
     def test_live_build_validator_invocation_is_fail_closed(self) -> None:
         validator = self.root / runner.BUILD_VALIDATOR_RELATIVE
@@ -600,6 +657,61 @@ class AuthoritativeRunnerTests(unittest.TestCase):
             with self.assertRaises(runner.EvidenceError):
                 first.validate_current(changed)
 
+    def test_shared_anchor_blocks_cross_runner_inode_splits(self) -> None:
+        runtime_root = self.root / "shared-anchor-runtime"
+        runtime_root.mkdir(mode=0o700)
+        runtime_root.chmod(0o700)
+        pair = runner.PairLease(21, 22, runtime_root=runtime_root)
+        with pair as retained:
+            current = runtime_root / "leopard2-cpu-leases"
+            original = runtime_root / "leopard2-cpu-leases.original"
+            current.rename(original)
+            current.mkdir(mode=0o700)
+            peer = os.open(
+                runtime_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) |
+                getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0))
+            try:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(peer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                os.close(peer)
+            current.rmdir()
+            original.rename(current)
+            pair.validate_current(retained)
+
+        anchor_root = self.root / "shared-reservation-anchor"
+        anchor_root.mkdir(mode=0o700)
+        anchor_root.chmod(0o700)
+        reservation = self.root / "shared-reservation.json"
+        payload = {
+            "benchmark_cpu": 23, "nonce": "shared-anchor-fixture",
+            "owner": "unit-test", "reserved_sibling": 24,
+            "schema": runner.RESERVATION_SCHEMA, "status": "held",
+        }
+        encoded = runner.canonical_bytes(payload)
+        reservation.write_bytes(encoded)
+        reservation.chmod(0o600)
+        anchor = runner.StableLeaseAnchor(anchor_root)
+        with anchor:
+            guard = runner.Reservation(reservation, 23, 24, anchor=anchor)
+            with guard as retained:
+                original = self.root / "shared-reservation.original"
+                reservation.rename(original)
+                reservation.write_bytes(encoded)
+                reservation.chmod(0o600)
+                peer = os.open(
+                    anchor_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) |
+                    getattr(os, "O_CLOEXEC", 0) |
+                    getattr(os, "O_NOFOLLOW", 0))
+                try:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(peer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    os.close(peer)
+                reservation.unlink()
+                original.rename(reservation)
+                guard.validate_current(retained)
+
     def test_git_identity_uses_exact_tree_and_rejects_untracked_files(self) -> None:
         repository = self.root / "repository"
         repository.mkdir()
@@ -860,6 +972,62 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         self.assertIsNone(failure)
         self.assertTrue((output / "manifest.json").is_file())
         self.assertFalse((output / "failure.json").exists())
+
+    def test_terminal_publication_is_root_bound_and_mutually_exclusive(self) -> None:
+        root = self.root / "terminal-root"
+        root.mkdir(mode=0o700)
+        root.chmod(0o700)
+        descriptor, _absolute = runner._open_directory_nofollow(
+            root, "terminal test root")
+        try:
+            identity = runner._root_identity(descriptor, root)
+        finally:
+            os.close(descriptor)
+        original_write = runner._write_json_exclusive_at
+        displaced = self.root / "terminal-root.original"
+
+        def replace_root(directory: int, name: str, value: dict) -> tuple[int, int]:
+            root.rename(displaced)
+            root.mkdir(mode=0o700)
+            root.chmod(0o700)
+            return original_write(directory, name, value)
+
+        with mock.patch.object(
+                runner, "_write_json_exclusive_at", side_effect=replace_root), \
+             self.assertRaises(runner.EvidenceError):
+            runner._publish_terminal(
+                root, "manifest.json", {"probe": "root replacement"}, identity)
+        self.assertFalse((root / "manifest.json").exists())
+        self.assertFalse((displaced / "manifest.json").exists())
+
+        exclusive = self.root / "terminal-exclusive"
+        exclusive.mkdir(mode=0o700)
+        exclusive.chmod(0o700)
+
+        def inject_other(directory: int, name: str,
+                         value: dict) -> tuple[int, int]:
+            original_write(directory, "failure.json", {"probe": "other"})
+            return original_write(directory, name, value)
+
+        with mock.patch.object(
+                runner, "_write_json_exclusive_at", side_effect=inject_other), \
+             self.assertRaises(runner.EvidenceError):
+            runner._publish_terminal(
+                exclusive, "manifest.json", {"probe": "requested"})
+        self.assertFalse((exclusive / "manifest.json").exists())
+        self.assertTrue((exclusive / "failure.json").exists())
+
+        manifest_path = self.root / "manifest.json"
+        failure_path = self.root / "failure.json"
+        runner.write_json_exclusive(manifest_path, self.manifest)
+        runner.write_json_exclusive(failure_path, {"probe": "opposite terminal"})
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_manifest(self.manifest, self.root)
+
+        failure, output = self._run_child_failure(timeout=True)
+        runner.write_json_exclusive(output / "manifest.json", {"probe": "opposite"})
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(failure, output, check_files=True)
 
     def test_nonzero_child_retains_failure_evidence(self) -> None:
         failure, _output = self._run_child_failure(timeout=False)

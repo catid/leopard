@@ -589,12 +589,20 @@ lock on that file and also takes the per-user system-wide shared pair lease
 directory and child lease directory must be owned mode `0700`; the lease file is
 owned mode `0600`.  Every normal Leopard2 evidence runner uses this normalized
 pair path, so choosing another coordinator-reservation filename cannot create a
-collision.  File, directory, device, inode, path, contents, and lock state are
+collision.  Reservation and pair acquisition share the same exclusive flock on
+the `/run/user/UID` directory inode used by the exact-main and butterfly
+runners.  Its parent is outside the user's replacement authority, so replacing
+the reservation file, pair marker, or complete child lease directory cannot
+split cooperating runners onto two independently locked inodes.  File,
+directory, device, inode, path, contents, and lock state are
 revalidated throughout the campaign.  The runner moves itself to housekeeping
 CPUs, pins the child to the timing CPU, and rejects evidence unless the timing
 CPU records work, the sibling records elapsed scheduler time but no non-idle
 work, and the retained child and isolation durations agree.  Do not run other
-performance work during this window.
+performance work during this window.  The child starts a new process session;
+on timeout or leader exit the runner sends `SIGKILL` to the complete process
+group and bounds both leader reaping and descendant-group disappearance before
+continuing publication.
 
 The `/proc/stat` check is deliberately only a coarse rejection gate.  Non-idle
 jiffies on the benchmark CPU prove that some work occurred, not that the child
@@ -604,12 +612,12 @@ cooperating Leopard2 runners; it cannot exclude arbitrary processes.  The
 coordinator must therefore keep unrelated work off both logical CPUs for the
 entire timed child interval.
 
-The filesystem markers are diagnostic records, not the exclusive authority.
-Both the CPU pair and reservation also hold deterministic Linux abstract Unix
-socket names for their complete identity.  Those kernel-owned names remain
-exclusive if a marker file or the complete lease directory is renamed and
-recreated.  Guard validation binds the retained record back to the immutable
-descriptor, directory, device, inode, payload, and abstract-socket identity.
+The replaceable filesystem markers are diagnostic records, not the sole
+exclusive authority.  The stable runtime-directory anchor is the shared
+cross-runner authority.  Both the CPU pair and reservation additionally hold
+deterministic Linux abstract Unix socket names for their complete identity.
+Guard validation binds the retained record back to the immutable descriptor,
+directory, device, inode, payload, stable anchor, and abstract-socket identity.
 
 Run the synthetic validator and mutation suite before reserving a core:
 
@@ -663,6 +671,14 @@ replaced.  Success and failure have deliberately different replay commands and
 output statuses; validating a failure never turns it into benchmark success.
 Both forms are portable and do not reopen the original checkout, build, or
 reservation paths:
+
+Terminal publication retains the output-directory descriptor and creation
+inode, writes with `O_EXCL` relative to that descriptor, fsyncs the file and
+directory, and revalidates the lexical root before returning.  Both success and
+failure replay reject the presence of the opposite terminal name.  Evidence
+reads open leaf files nonblocking and verify regular single-link metadata before
+reading, so FIFOs, devices, sockets, symlinks, and hardlinks fail closed rather
+than blocking replay.
 
     PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -X dev \
       experiments/leopard2/non_power_of_two/c7/run_authoritative.py verify \
