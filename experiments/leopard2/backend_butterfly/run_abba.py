@@ -327,6 +327,7 @@ TOOL_CACHE_KEYS = (
 )
 
 CONFIGURED_TRANSLATION_UNITS = BUILD_TRANSLATION_UNITS + (
+    "bench/leopard2/locator_benchmark.cpp",
     "tests/benchmark.cpp",
     "tests/experiments.cpp",
 )
