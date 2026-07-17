@@ -827,8 +827,31 @@ static void AVX2FF8FFTButterfly4(
         AVX2FF8Butterfly2<false>(value2, value3, log23, byte_count);
 }
 
+static void AVX2FF16MultiplyAddPair(
+    __m256i& destination_low,
+    __m256i& destination_high,
+    __m256i source_low,
+    __m256i source_high,
+    const FF16NibbleTable& table)
+{
+    const __m256i low_tables[4] = {
+        BroadcastTable(table.low[0]), BroadcastTable(table.low[1]),
+        BroadcastTable(table.low[2]), BroadcastTable(table.low[3])
+    };
+    const __m256i high_tables[4] = {
+        BroadcastTable(table.high[0]), BroadcastTable(table.high[1]),
+        BroadcastTable(table.high[2]), BroadcastTable(table.high[3])
+    };
+    __m256i product_low;
+    __m256i product_high;
+    AVX2FF16ProductVectors(source_low, source_high,
+        low_tables, high_tables, product_low, product_high);
+    destination_low = _mm256_xor_si256(destination_low, product_low);
+    destination_high = _mm256_xor_si256(destination_high, product_high);
+}
+
 template<bool Inverse>
-static void AVX2FF16Butterfly4(
+static void AVX2FF16Butterfly4Split(
     void* value0, void* value1, void* value2, void* value3,
     uint16_t log01, uint16_t log23, uint16_t log02,
     uint64_t byte_count)
@@ -839,13 +862,11 @@ static void AVX2FF16Butterfly4(
         if (log01 == kZeroSkew)
             AVX2XorMemory(value1, value0, byte_count);
         else
-            AVX2FF16Butterfly2<true>(
-                value0, value1, log01, byte_count);
+            AVX2FF16Butterfly2<true>(value0, value1, log01, byte_count);
         if (log23 == kZeroSkew)
             AVX2XorMemory(value3, value2, byte_count);
         else
-            AVX2FF16Butterfly2<true>(
-                value2, value3, log23, byte_count);
+            AVX2FF16Butterfly2<true>(value2, value3, log23, byte_count);
         if (log02 == kZeroSkew)
         {
             AVX2XorMemory(value2, value0, byte_count);
@@ -853,10 +874,8 @@ static void AVX2FF16Butterfly4(
         }
         else
         {
-            AVX2FF16Butterfly2<true>(
-                value0, value2, log02, byte_count);
-            AVX2FF16Butterfly2<true>(
-                value1, value3, log02, byte_count);
+            AVX2FF16Butterfly2<true>(value0, value2, log02, byte_count);
+            AVX2FF16Butterfly2<true>(value1, value3, log02, byte_count);
         }
     }
     else
@@ -868,22 +887,125 @@ static void AVX2FF16Butterfly4(
         }
         else
         {
-            AVX2FF16Butterfly2<false>(
-                value0, value2, log02, byte_count);
-            AVX2FF16Butterfly2<false>(
-                value1, value3, log02, byte_count);
+            AVX2FF16Butterfly2<false>(value0, value2, log02, byte_count);
+            AVX2FF16Butterfly2<false>(value1, value3, log02, byte_count);
         }
         if (log01 == kZeroSkew)
             AVX2XorMemory(value1, value0, byte_count);
         else
-            AVX2FF16Butterfly2<false>(
-                value0, value1, log01, byte_count);
+            AVX2FF16Butterfly2<false>(value0, value1, log01, byte_count);
         if (log23 == kZeroSkew)
             AVX2XorMemory(value3, value2, byte_count);
         else
-            AVX2FF16Butterfly2<false>(
-                value2, value3, log23, byte_count);
+            AVX2FF16Butterfly2<false>(value2, value3, log23, byte_count);
     }
+}
+
+template<bool Inverse>
+static void AVX2FF16Butterfly4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 65535;
+    // The fused GF16 kernel wins for one exact 64-byte symbol tile.  Larger
+    // shards put enough table state under register pressure that the regular
+    // two-way schedule is faster on the measured AVX2 target.
+    if (byte_count != 64)
+    {
+        AVX2FF16Butterfly4Split<Inverse>(
+            value0, value1, value2, value3,
+            log01, log23, log02, byte_count);
+        return;
+    }
+    uint8_t* values[4] = {
+        static_cast<uint8_t*>(value0), static_cast<uint8_t*>(value1),
+        static_cast<uint8_t*>(value2), static_cast<uint8_t*>(value3)
+    };
+    uint64_t offset = 0;
+    while (byte_count - offset >= 64)
+    {
+        __m256i low[4];
+        __m256i high[4];
+        for (unsigned lane = 0; lane < 4; ++lane)
+        {
+            low[lane] = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(values[lane] + offset));
+            high[lane] = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(
+                    values[lane] + offset + 32));
+        }
+
+        if (Inverse)
+        {
+            low[1] = _mm256_xor_si256(low[1], low[0]);
+            high[1] = _mm256_xor_si256(high[1], high[0]);
+            if (log01 != kZeroSkew)
+                AVX2FF16MultiplyAddPair(low[0], high[0], low[1], high[1],
+                    FF16Tables[log01]);
+
+            low[3] = _mm256_xor_si256(low[3], low[2]);
+            high[3] = _mm256_xor_si256(high[3], high[2]);
+            if (log23 != kZeroSkew)
+                AVX2FF16MultiplyAddPair(low[2], high[2], low[3], high[3],
+                    FF16Tables[log23]);
+
+            low[2] = _mm256_xor_si256(low[2], low[0]);
+            high[2] = _mm256_xor_si256(high[2], high[0]);
+            low[3] = _mm256_xor_si256(low[3], low[1]);
+            high[3] = _mm256_xor_si256(high[3], high[1]);
+            if (log02 != kZeroSkew)
+            {
+                AVX2FF16MultiplyAddPair(low[0], high[0], low[2], high[2],
+                    FF16Tables[log02]);
+                AVX2FF16MultiplyAddPair(low[1], high[1], low[3], high[3],
+                    FF16Tables[log02]);
+            }
+        }
+        else
+        {
+            if (log02 != kZeroSkew)
+            {
+                AVX2FF16MultiplyAddPair(low[0], high[0], low[2], high[2],
+                    FF16Tables[log02]);
+                AVX2FF16MultiplyAddPair(low[1], high[1], low[3], high[3],
+                    FF16Tables[log02]);
+            }
+            low[2] = _mm256_xor_si256(low[2], low[0]);
+            high[2] = _mm256_xor_si256(high[2], high[0]);
+            low[3] = _mm256_xor_si256(low[3], low[1]);
+            high[3] = _mm256_xor_si256(high[3], high[1]);
+
+            if (log01 != kZeroSkew)
+                AVX2FF16MultiplyAddPair(low[0], high[0], low[1], high[1],
+                    FF16Tables[log01]);
+            low[1] = _mm256_xor_si256(low[1], low[0]);
+            high[1] = _mm256_xor_si256(high[1], high[0]);
+
+            if (log23 != kZeroSkew)
+                AVX2FF16MultiplyAddPair(low[2], high[2], low[3], high[3],
+                    FF16Tables[log23]);
+            low[3] = _mm256_xor_si256(low[3], low[2]);
+            high[3] = _mm256_xor_si256(high[3], high[2]);
+        }
+
+        for (unsigned lane = 0; lane < 4; ++lane)
+        {
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(values[lane] + offset), low[lane]);
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(
+                values[lane] + offset + 32), high[lane]);
+        }
+        offset += 64;
+    }
+
+    const uint64_t residual = byte_count - offset;
+    if (residual == 0)
+        return;
+    AVX2FF16Butterfly4Split<Inverse>(
+        values[0] + offset, values[1] + offset,
+        values[2] + offset, values[3] + offset,
+        log01, log23, log02, residual);
 }
 
 static void AVX2FF16IFFTButterfly4(

@@ -865,8 +865,23 @@ static void SSSE3FF8FFTButterfly4(
         SSSE3FF8Butterfly2<false>(value2, value3, log23, byte_count);
 }
 
+static void SSSE3FF16MultiplyAddPair(
+    __m128i& destination_low,
+    __m128i& destination_high,
+    __m128i source_low,
+    __m128i source_high,
+    const FF16NibbleTable& table)
+{
+    __m128i product_low;
+    __m128i product_high;
+    SSSE3FF16ProductVectors(source_low, source_high,
+        table, product_low, product_high);
+    destination_low = _mm_xor_si128(destination_low, product_low);
+    destination_high = _mm_xor_si128(destination_high, product_high);
+}
+
 template<bool Inverse>
-static void SSSE3FF16Butterfly4(
+static void SSSE3FF16Butterfly4Split(
     void* value0, void* value1, void* value2, void* value3,
     uint16_t log01, uint16_t log23, uint16_t log02,
     uint64_t byte_count)
@@ -877,13 +892,11 @@ static void SSSE3FF16Butterfly4(
         if (log01 == kZeroSkew)
             SSSE3XorMemory(value1, value0, byte_count);
         else
-            SSSE3FF16Butterfly2<true>(
-                value0, value1, log01, byte_count);
+            SSSE3FF16Butterfly2<true>(value0, value1, log01, byte_count);
         if (log23 == kZeroSkew)
             SSSE3XorMemory(value3, value2, byte_count);
         else
-            SSSE3FF16Butterfly2<true>(
-                value2, value3, log23, byte_count);
+            SSSE3FF16Butterfly2<true>(value2, value3, log23, byte_count);
         if (log02 == kZeroSkew)
         {
             SSSE3XorMemory(value2, value0, byte_count);
@@ -891,10 +904,8 @@ static void SSSE3FF16Butterfly4(
         }
         else
         {
-            SSSE3FF16Butterfly2<true>(
-                value0, value2, log02, byte_count);
-            SSSE3FF16Butterfly2<true>(
-                value1, value3, log02, byte_count);
+            SSSE3FF16Butterfly2<true>(value0, value2, log02, byte_count);
+            SSSE3FF16Butterfly2<true>(value1, value3, log02, byte_count);
         }
     }
     else
@@ -906,22 +917,129 @@ static void SSSE3FF16Butterfly4(
         }
         else
         {
-            SSSE3FF16Butterfly2<false>(
-                value0, value2, log02, byte_count);
-            SSSE3FF16Butterfly2<false>(
-                value1, value3, log02, byte_count);
+            SSSE3FF16Butterfly2<false>(value0, value2, log02, byte_count);
+            SSSE3FF16Butterfly2<false>(value1, value3, log02, byte_count);
         }
         if (log01 == kZeroSkew)
             SSSE3XorMemory(value1, value0, byte_count);
         else
-            SSSE3FF16Butterfly2<false>(
-                value0, value1, log01, byte_count);
+            SSSE3FF16Butterfly2<false>(value0, value1, log01, byte_count);
         if (log23 == kZeroSkew)
             SSSE3XorMemory(value3, value2, byte_count);
         else
-            SSSE3FF16Butterfly2<false>(
-                value2, value3, log23, byte_count);
+            SSSE3FF16Butterfly2<false>(value2, value3, log23, byte_count);
     }
+}
+
+template<bool Inverse>
+static void SSSE3FF16Butterfly4(
+    void* value0, void* value1, void* value2, void* value3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 65535;
+    // The fused GF16 kernel wins for one exact 64-byte symbol tile.  Larger
+    // shards put enough table state under register pressure that the regular
+    // two-way schedule is faster on the measured SSSE3/AVX2 target family.
+    if (byte_count != 64)
+    {
+        SSSE3FF16Butterfly4Split<Inverse>(
+            value0, value1, value2, value3,
+            log01, log23, log02, byte_count);
+        return;
+    }
+    uint8_t* values[4] = {
+        static_cast<uint8_t*>(value0), static_cast<uint8_t*>(value1),
+        static_cast<uint8_t*>(value2), static_cast<uint8_t*>(value3)
+    };
+    uint64_t offset = 0;
+    while (byte_count - offset >= 64)
+    {
+        for (unsigned vector_offset = 0; vector_offset < 32;
+             vector_offset += 16)
+        {
+            __m128i low[4];
+            __m128i high[4];
+            for (unsigned lane = 0; lane < 4; ++lane)
+            {
+                low[lane] = _mm_loadu_si128(reinterpret_cast<const __m128i*>(
+                    values[lane] + offset + vector_offset));
+                high[lane] = _mm_loadu_si128(
+                    reinterpret_cast<const __m128i*>(
+                        values[lane] + offset + 32 + vector_offset));
+            }
+
+            if (Inverse)
+            {
+                low[1] = _mm_xor_si128(low[1], low[0]);
+                high[1] = _mm_xor_si128(high[1], high[0]);
+                if (log01 != kZeroSkew)
+                    SSSE3FF16MultiplyAddPair(low[0], high[0], low[1], high[1],
+                        FF16Tables[log01]);
+
+                low[3] = _mm_xor_si128(low[3], low[2]);
+                high[3] = _mm_xor_si128(high[3], high[2]);
+                if (log23 != kZeroSkew)
+                    SSSE3FF16MultiplyAddPair(low[2], high[2], low[3], high[3],
+                        FF16Tables[log23]);
+
+                low[2] = _mm_xor_si128(low[2], low[0]);
+                high[2] = _mm_xor_si128(high[2], high[0]);
+                low[3] = _mm_xor_si128(low[3], low[1]);
+                high[3] = _mm_xor_si128(high[3], high[1]);
+                if (log02 != kZeroSkew)
+                {
+                    SSSE3FF16MultiplyAddPair(low[0], high[0], low[2], high[2],
+                        FF16Tables[log02]);
+                    SSSE3FF16MultiplyAddPair(low[1], high[1], low[3], high[3],
+                        FF16Tables[log02]);
+                }
+            }
+            else
+            {
+                if (log02 != kZeroSkew)
+                {
+                    SSSE3FF16MultiplyAddPair(low[0], high[0], low[2], high[2],
+                        FF16Tables[log02]);
+                    SSSE3FF16MultiplyAddPair(low[1], high[1], low[3], high[3],
+                        FF16Tables[log02]);
+                }
+                low[2] = _mm_xor_si128(low[2], low[0]);
+                high[2] = _mm_xor_si128(high[2], high[0]);
+                low[3] = _mm_xor_si128(low[3], low[1]);
+                high[3] = _mm_xor_si128(high[3], high[1]);
+
+                if (log01 != kZeroSkew)
+                    SSSE3FF16MultiplyAddPair(low[0], high[0], low[1], high[1],
+                        FF16Tables[log01]);
+                low[1] = _mm_xor_si128(low[1], low[0]);
+                high[1] = _mm_xor_si128(high[1], high[0]);
+
+                if (log23 != kZeroSkew)
+                    SSSE3FF16MultiplyAddPair(low[2], high[2], low[3], high[3],
+                        FF16Tables[log23]);
+                low[3] = _mm_xor_si128(low[3], low[2]);
+                high[3] = _mm_xor_si128(high[3], high[2]);
+            }
+
+            for (unsigned lane = 0; lane < 4; ++lane)
+            {
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(
+                    values[lane] + offset + vector_offset), low[lane]);
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(
+                    values[lane] + offset + 32 + vector_offset), high[lane]);
+            }
+        }
+        offset += 64;
+    }
+
+    const uint64_t residual = byte_count - offset;
+    if (residual == 0)
+        return;
+    SSSE3FF16Butterfly4Split<Inverse>(
+        values[0] + offset, values[1] + offset,
+        values[2] + offset, values[3] + offset,
+        log01, log23, log02, residual);
 }
 
 static void SSSE3FF16IFFTButterfly4(
