@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import copy
+import errno
 import hashlib
 import json
 import math
@@ -23,6 +24,7 @@ import os
 import platform
 import shlex
 import shutil
+import socket
 import stat
 import subprocess
 import sys
@@ -535,16 +537,40 @@ class PairLease:
         self.directory_descriptor: int | None = None
         self.root_descriptor: int | None = None
         self.expected = canonical_bytes(pair_lease_payload(cpu, sibling))
+        self.kernel_socket: socket.socket | None = None
+        material = canonical_bytes({
+            "cpus": sorted((cpu, sibling)),
+            "root": os.path.abspath(self.directory),
+            "schema": PAIR_LEASE_SCHEMA,
+            "uid": os.getuid(),
+        })
+        self.kernel_name = b"\0leopard2-pair-v1-" + \
+            hashlib.sha256(material).hexdigest()[:40].encode("ascii")
+
+    def _acquire_kernel_lease(self) -> None:
+        lease = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        lease.set_inheritable(False)
+        try:
+            lease.bind(self.kernel_name)
+        except OSError as error:
+            lease.close()
+            if error.errno == errno.EADDRINUSE:
+                raise ComparisonError(
+                    "physical CPU pair already has a kernel lease") from error
+            raise ComparisonError(f"cannot bind stable CPU pair lease: {error}") from error
+        self.kernel_socket = lease
 
     def __enter__(self) -> "PairLease":
         if fcntl is None or not sys.platform.startswith("linux"):
             raise ComparisonError("protected CPU pair leases require Linux fcntl")
+        self._acquire_kernel_lease()
         directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
         directory_flags |= getattr(os, "O_CLOEXEC", 0)
         directory_flags |= getattr(os, "O_NOFOLLOW", 0)
         try:
             self.root_descriptor = os.open(self.root, directory_flags)
         except OSError as error:
+            self._close()
             raise ComparisonError(
                 f"cannot open protected per-user runtime directory: {error}") from error
         try:
@@ -629,7 +655,9 @@ class PairLease:
 
     def revalidate(self) -> dict[str, Any]:
         if (self.descriptor is None or self.directory_descriptor is None or
-                self.root_descriptor is None):
+                self.root_descriptor is None or self.kernel_socket is None or
+                self.kernel_socket.fileno() < 0 or
+                self.kernel_socket.getsockname() != self.kernel_name):
             raise ComparisonError("CPU pair lease is not held")
         try:
             root_fd = os.fstat(self.root_descriptor)
@@ -679,19 +707,37 @@ class PairLease:
         return identity
 
     def _close(self) -> None:
-        if self.descriptor is not None:
+        failures: list[str] = []
+        descriptor = self.descriptor
+        self.descriptor = None
+        if descriptor is not None:
+            if fcntl is not None:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                except OSError as error:
+                    failures.append(f"lease unlock fd {descriptor}: {error}")
             try:
-                if fcntl is not None:
-                    fcntl.flock(self.descriptor, fcntl.LOCK_UN)
-            finally:
-                os.close(self.descriptor)
-                self.descriptor = None
-        if self.directory_descriptor is not None:
-            os.close(self.directory_descriptor)
-            self.directory_descriptor = None
-        if self.root_descriptor is not None:
-            os.close(self.root_descriptor)
-            self.root_descriptor = None
+                os.close(descriptor)
+            except OSError as error:
+                failures.append(f"lease close fd {descriptor}: {error}")
+        for name in ("directory_descriptor", "root_descriptor"):
+            retained = getattr(self, name)
+            setattr(self, name, None)
+            if retained is not None:
+                try:
+                    os.close(retained)
+                except OSError as error:
+                    failures.append(f"{name} {retained}: {error}")
+        kernel_socket = self.kernel_socket
+        self.kernel_socket = None
+        if kernel_socket is not None:
+            try:
+                kernel_socket.close()
+            except OSError as error:
+                failures.append(f"kernel socket: {error}")
+        if failures:
+            raise ComparisonError(
+                "CPU pair lease teardown failed: " + "; ".join(failures))
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         self._close()
@@ -3127,6 +3173,14 @@ def run_isolation_self_test() -> dict[str, int]:
             first.path.unlink()
             first.path.write_bytes(first.expected)
             first.path.chmod(0o600)
+            try:
+                with PairLease(cpu, sibling, root=root):
+                    pass
+            except ComparisonError:
+                lease_checks += 1
+            else:
+                raise ComparisonError(
+                    "replacement path bypassed the stable kernel pair lease")
             try:
                 first.revalidate()
             except ComparisonError:

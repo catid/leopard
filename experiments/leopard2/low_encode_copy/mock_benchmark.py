@@ -13,7 +13,7 @@ from pathlib import Path
 MASK64 = (1 << 64) - 1
 
 
-class XorShift64Star:
+class XorShift64:
     def __init__(self, seed: int):
         self.state = seed & MASK64
         if self.state == 0:
@@ -21,16 +21,16 @@ class XorShift64Star:
 
     def next(self) -> int:
         value = self.state
-        value ^= value >> 12
-        value ^= (value << 25) & MASK64
-        value ^= value >> 27
+        value ^= (value << 13) & MASK64
+        value ^= value >> 7
+        value ^= (value << 17) & MASK64
         self.state = value & MASK64
-        return (self.state * 2685821657736338717) & MASK64
+        return self.state
 
 
 def losses(k: int, count: int, seed: int) -> list[int]:
     order = list(range(k))
-    random = XorShift64Star(seed ^ 0xD1B54A32D192ED03)
+    random = XorShift64(seed ^ 0xD1B54A32D192ED03)
     for remaining in range(k, 1, -1):
         selected = random.next() % remaining
         order[remaining - 1], order[selected] = order[selected], order[remaining - 1]

@@ -5,7 +5,9 @@ change between control commit `4070e4e527935026fb87593567587558f0a08d51`
 and candidate commit `6d3afee213b94d486cf5f8145ac18078883ebc20`.
 It does not build either side.  It accepts only the clean, tests-disabled,
 Release production builds described in the reproduction guide, verifies their
-source/object/archive/link/runtime closure, and then runs the fixed matrix.
+source/object/archive/link/runtime closure, cleanly recompiles every retained
+source/object pair byte-for-byte, and then runs the fixed matrix. Successful
+evidence uses raw/manifest schema v3; failed-run diagnostics use schema v3.
 
 The evidence exit statuses are deliberately distinct:
 
@@ -20,9 +22,10 @@ The `self-test` command uses only `mock_benchmark.py`. It executes all 24 fixed
 cells through five mock A1/B1/B2/A2 rounds, then exercises raw-sample
 validation, pass and policy-failure replay, bounded inputs and outputs,
 mutation rejection, immutable executable staging, reservation replacement,
-pair-lease interoperability, exact-affinity checking, and no-replace
-publication. It does not execute either real benchmark binary and must not be
-cited as timing evidence.
+stable pair-lease interoperability (including path replacement), exact-affinity
+checking, independently fixed C++ loss vectors, and transactional no-replace
+publication preflight. It does not execute either real benchmark binary and
+must not be cited as timing evidence.
 
 See `docs/reproduction/leopard2_low_encode_copy.md` for the exact build,
 reservation, collection, and replay commands.

@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import copy
 import datetime as dt
+import errno
 import fcntl
 import hashlib
 import json
@@ -19,7 +20,10 @@ import math
 import os
 import platform
 import re
+import selectors
 import shlex
+import signal
+import socket
 import stat
 import statistics
 import subprocess
@@ -65,6 +69,10 @@ CHILD_ENVIRONMENT = {
     "PATH": "/usr/bin:/bin",
     "TZ": "UTC",
 }
+MAX_COMMAND_STDOUT_BYTES = 128 * 1024 * 1024
+MAX_COMMAND_STDERR_BYTES = 8 * 1024 * 1024
+MAX_COMMAND_TIMEOUT_SECONDS = 3600.0
+MAX_IDENTITY_FILE_BYTES = 256 * 1024 * 1024
 
 
 class EvidenceError(RuntimeError):
@@ -134,12 +142,52 @@ def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
+def bounded_file_snapshot(
+    path: Path, limit: int = MAX_IDENTITY_FILE_BYTES
+) -> tuple[os.stat_result, str, bytes]:
+    require(type(limit) is int and 0 <= limit <= MAX_IDENTITY_FILE_BYTES,
+            "file identity limit is invalid")
+    resolved = path.resolve(strict=True)
+    descriptor = os.open(
+        resolved, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+        getattr(os, "O_NOFOLLOW", 0))
+    try:
+        initial = os.fstat(descriptor)
+        path_metadata = os.lstat(resolved)
+        require(stat.S_ISREG(initial.st_mode) and
+                (initial.st_dev, initial.st_ino) ==
+                (path_metadata.st_dev, path_metadata.st_ino) and
+                0 <= initial.st_size <= limit,
+                f"file identity is not a bounded inode-bound regular file: {resolved}")
+        digest = hashlib.sha256()
+        prefix = b""
+        retained = 0
+        offset = 0
+        while True:
+            block = os.pread(
+                descriptor, min(1024 * 1024, limit + 1 - retained), offset)
+            if not block:
+                break
+            if not prefix:
+                prefix = block[:8]
             digest.update(block)
-    return digest.hexdigest()
+            retained += len(block)
+            offset += len(block)
+            require(retained <= limit, f"file identity exceeds {limit} bytes")
+        final = os.fstat(descriptor)
+        require(retained == initial.st_size and
+                (final.st_size, final.st_mtime_ns, final.st_ctime_ns,
+                 final.st_dev, final.st_ino) ==
+                (initial.st_size, initial.st_mtime_ns, initial.st_ctime_ns,
+                 initial.st_dev, initial.st_ino),
+                f"file identity changed while hashing: {resolved}")
+        return initial, digest.hexdigest(), prefix
+    finally:
+        os.close(descriptor)
+
+
+def sha256_file(path: Path, limit: int = MAX_IDENTITY_FILE_BYTES) -> str:
+    return bounded_file_snapshot(path, limit)[1]
 
 
 def signed(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -183,15 +231,108 @@ def write_bytes_exclusive(path: Path, value: bytes) -> None:
         raise EvidenceError(f"refusing to replace evidence file {path}") from error
 
 
+def run_process_bounded(
+    arguments: Sequence[str],
+    cwd: Path | None = None,
+    environment: Mapping[str, str] | None = None,
+    timeout: float = 30.0,
+    max_stdout: int = MAX_COMMAND_STDOUT_BYTES,
+    max_stderr: int = MAX_COMMAND_STDERR_BYTES,
+) -> subprocess.CompletedProcess[bytes]:
+    require(isinstance(arguments, Sequence) and 1 <= len(arguments) <= 512 and
+            all(isinstance(item, str) and item and
+                len(item.encode("utf-8")) <= 65536 for item in arguments),
+            "subprocess argument vector is invalid or oversized")
+    require(isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and
+            math.isfinite(float(timeout)) and 0 < timeout <= MAX_COMMAND_TIMEOUT_SECONDS,
+            "subprocess timeout is invalid")
+    require(type(max_stdout) is int and 0 <= max_stdout <= MAX_COMMAND_STDOUT_BYTES and
+            type(max_stderr) is int and 0 <= max_stderr <= MAX_COMMAND_STDERR_BYTES,
+            "subprocess output limits are invalid")
+    process = subprocess.Popen(
+        list(arguments), cwd=None if cwd is None else str(cwd),
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        start_new_session=True,
+        env=None if environment is None else dict(environment))
+    require(process.stdout is not None and process.stderr is not None,
+            "cannot capture subprocess output")
+    selector = selectors.DefaultSelector()
+    stdout_fd = process.stdout.fileno()
+    stderr_fd = process.stderr.fileno()
+    outputs = {stdout_fd: bytearray(), stderr_fd: bytearray()}
+    limits = {
+        process.stdout.fileno(): max_stdout,
+        process.stderr.fileno(): max_stderr,
+    }
+    for stream in (process.stdout, process.stderr):
+        os.set_blocking(stream.fileno(), False)
+        selector.register(stream, selectors.EVENT_READ)
+    deadline = time.monotonic() + float(timeout)
+    failure: str | None = None
+    try:
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                failure = f"command exceeded {float(timeout):.3f} seconds"
+                break
+            for key, _ in selector.select(min(remaining, 0.1)):
+                descriptor = key.fileobj.fileno()
+                try:
+                    block = os.read(descriptor, 65536)
+                except BlockingIOError:
+                    continue
+                if not block:
+                    selector.unregister(key.fileobj)
+                    continue
+                outputs[descriptor].extend(block)
+                if len(outputs[descriptor]) > limits[descriptor]:
+                    failure = "command output exceeded its byte limit"
+                    break
+            if failure is not None:
+                break
+        if failure is not None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        try:
+            returncode = process.wait(timeout=5)
+        except subprocess.TimeoutExpired as error:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
+            raise EvidenceError(
+                "command did not terminate after SIGKILL") from error
+    except BaseException:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+        raise
+    finally:
+        selector.close()
+        process.stdout.close()
+        process.stderr.close()
+    stdout = bytes(outputs[stdout_fd])
+    stderr = bytes(outputs[stderr_fd])
+    if failure is not None:
+        raise EvidenceError(failure)
+    return subprocess.CompletedProcess(list(arguments), returncode, stdout, stderr)
+
+
 def run_checked(
     arguments: Sequence[str],
     cwd: Path | None = None,
     environment: Mapping[str, str] | None = None,
+    timeout: float = 30.0,
+    max_stdout: int = MAX_COMMAND_STDOUT_BYTES,
+    max_stderr: int = MAX_COMMAND_STDERR_BYTES,
 ) -> bytes:
-    completed = subprocess.run(
-        list(arguments), cwd=None if cwd is None else str(cwd),
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False,
-        timeout=30, env=None if environment is None else dict(environment))
+    completed = run_process_bounded(
+        arguments, cwd, environment, timeout, max_stdout, max_stderr)
     if completed.returncode != 0:
         detail = completed.stderr.decode("utf-8", errors="replace").strip()
         raise EvidenceError(
@@ -212,9 +353,9 @@ def git_identity(root: Path, expected_commit: str, detached: bool) -> dict[str, 
         str(git), "-C", str(root), "status", "--porcelain=v1",
         "--untracked-files=normal")).decode()
     require(status == "", f"source {root} is not clean: {status!r}")
-    symbolic = subprocess.run(
+    symbolic = run_process_bounded(
         (str(git), "-C", str(root), "symbolic-ref", "-q", "HEAD"),
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=30)
+        max_stdout=65536, max_stderr=65536)
     is_detached = symbolic.returncode != 0
     if detached:
         require(is_detached, f"exact-main source {root} is not detached")
@@ -232,20 +373,18 @@ def git_identity(root: Path, expected_commit: str, detached: bool) -> dict[str, 
 
 def artifact_identity(path: Path, kind: str) -> dict[str, Any]:
     path = path.resolve(strict=True)
-    require(path.is_file(), f"{kind} is not a regular file: {path}")
-    stat = path.stat()
+    metadata, digest, prefix = bounded_file_snapshot(path)
     if kind == "executable":
         require(os.access(path, os.X_OK), f"benchmark is not executable: {path}")
     if kind == "archive":
-        with path.open("rb") as stream:
-            require(stream.read(8) == b"!<arch>\n", f"not an ar archive: {path}")
+        require(prefix == b"!<arch>\n", f"not an ar archive: {path}")
     return {
         "path": str(path),
         "kind": kind,
-        "size": stat.st_size,
-        "mode": stat.st_mode & 0o7777,
-        "mtime_ns": stat.st_mtime_ns,
-        "sha256": sha256_file(path),
+        "size": metadata.st_size,
+        "mode": metadata.st_mode & 0o7777,
+        "mtime_ns": metadata.st_mtime_ns,
+        "sha256": digest,
     }
 
 
@@ -874,6 +1013,35 @@ class PairLease:
             pair_lease_name(cpu, sibling)
         self.descriptor: int | None = None
         self.identity: dict[str, Any] | None = None
+        self.kernel_socket: socket.socket | None = None
+        material = canonical_bytes({
+            "cpus": sorted((cpu, sibling)),
+            "root": os.path.abspath(self.root),
+            "schema": PAIR_LEASE_SCHEMA,
+            "uid": os.getuid(),
+        })
+        self.kernel_name = b"\0leopard2-pair-v1-" + \
+            hashlib.sha256(material).hexdigest()[:40].encode("ascii")
+
+    def _acquire_kernel_lease(self) -> None:
+        require(sys.platform.startswith("linux") and hasattr(socket, "AF_UNIX"),
+                "Linux abstract Unix sockets are required for stable CPU leases")
+        lease = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        lease.set_inheritable(False)
+        try:
+            lease.bind(self.kernel_name)
+        except OSError as error:
+            lease.close()
+            if error.errno == errno.EADDRINUSE:
+                raise EvidenceError(
+                    "physical CPU pair already has a kernel lease") from error
+            raise EvidenceError(f"cannot bind stable CPU pair lease: {error}") from error
+        self.kernel_socket = lease
+
+    def _release_kernel_lease(self) -> None:
+        if self.kernel_socket is not None:
+            self.kernel_socket.close()
+            self.kernel_socket = None
 
     def _validate_directory(self) -> os.stat_result:
         if self.production_root:
@@ -890,11 +1058,18 @@ class PairLease:
         return metadata
 
     def validate_current(self) -> None:
-        require(self.descriptor is not None and self.identity is not None,
+        require(self.descriptor is not None and self.identity is not None and
+                self.kernel_socket is not None and
+                self.kernel_socket.fileno() >= 0 and
+                self.kernel_socket.getsockname() == self.kernel_name,
                 "CPU pair lease is not held")
-        directory = self._validate_directory()
-        descriptor = os.fstat(self.descriptor)
-        path = os.lstat(self.path)
+        try:
+            directory = self._validate_directory()
+            descriptor = os.fstat(self.descriptor)
+            path = os.lstat(self.path)
+        except OSError as error:
+            raise EvidenceError(
+                f"CPU pair lease path/descriptor revalidation failed: {error}") from error
         require(stat.S_ISREG(descriptor.st_mode) and
                 descriptor.st_uid == os.getuid() and descriptor.st_nlink == 1 and
                 stat.S_IMODE(descriptor.st_mode) == 0o600 and
@@ -913,6 +1088,7 @@ class PairLease:
                 "CPU pair lease contents changed while held")
 
     def __enter__(self) -> dict[str, Any]:
+        self._acquire_kernel_lease()
         created_directory = False
         try:
             self.root.mkdir(mode=0o700)
@@ -920,10 +1096,15 @@ class PairLease:
         except FileExistsError:
             pass
         except OSError as error:
+            self._release_kernel_lease()
             raise EvidenceError(f"cannot create CPU pair lease directory: {error}") from error
-        if created_directory:
-            os.chmod(self.root, 0o700)
-        self._validate_directory()
+        try:
+            if created_directory:
+                os.chmod(self.root, 0o700)
+            self._validate_directory()
+        except Exception:
+            self._release_kernel_lease()
+            raise
         flags = os.O_RDWR
         if hasattr(os, "O_CLOEXEC"):
             flags |= os.O_CLOEXEC
@@ -943,6 +1124,7 @@ class PairLease:
             if self.descriptor is not None:
                 os.close(self.descriptor)
                 self.descriptor = None
+            self._release_kernel_lease()
             raise EvidenceError(f"cannot open CPU pair lease: {error}") from error
         try:
             metadata = os.fstat(self.descriptor)
@@ -984,13 +1166,20 @@ class PairLease:
                 finally:
                     os.close(self.descriptor)
                     self.descriptor = None
+            self._release_kernel_lease()
             raise
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        if self.descriptor is not None:
-            fcntl.flock(self.descriptor, fcntl.LOCK_UN)
-            os.close(self.descriptor)
-            self.descriptor = None
+        descriptor = self.descriptor
+        self.descriptor = None
+        try:
+            if descriptor is not None:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                finally:
+                    os.close(descriptor)
+        finally:
+            self._release_kernel_lease()
 
 
 def validate_pair_lease_identity(
@@ -1877,14 +2066,9 @@ def run_child(
     environment = dict(CHILD_ENVIRONMENT)
     start_utc = utc_now()
     start = time.monotonic_ns()
-    try:
-        completed = subprocess.run(
-            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            env=environment, check=False, timeout=timeout)
-    except subprocess.TimeoutExpired as error:
-        stdout = error.stdout or b""
-        stderr = error.stderr or b""
-        completed = subprocess.CompletedProcess(command, 124, stdout, stderr)
+    completed = run_process_bounded(
+        command, environment=environment, timeout=timeout,
+        max_stdout=8 * 1024 * 1024, max_stderr=1024 * 1024)
     duration_ns = time.monotonic_ns() - start
     stem = f"invocations/{cell.identifier}/round-{round_index}/slot-{slot}-{implementation}"
     stdout_path = output / f"{stem}.stdout"

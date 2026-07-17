@@ -25,6 +25,7 @@ import selectors
 import shlex
 import shutil
 import signal
+import socket
 import stat
 import statistics
 import subprocess
@@ -39,9 +40,9 @@ from typing import Any, Callable, Mapping, Sequence
 
 CONTROL_COMMIT = "4070e4e527935026fb87593567587558f0a08d51"
 CANDIDATE_COMMIT = "6d3afee213b94d486cf5f8145ac18078883ebc20"
-RAW_SCHEMA = "leopard2-low-encode-copy-raw/v2"
-MANIFEST_SCHEMA = "leopard2-low-encode-copy-manifest/v2"
-FAILURE_SCHEMA = "leopard2-low-encode-copy-failure/v2"
+RAW_SCHEMA = "leopard2-low-encode-copy-raw/v3"
+MANIFEST_SCHEMA = "leopard2-low-encode-copy-manifest/v3"
+FAILURE_SCHEMA = "leopard2-low-encode-copy-failure/v3"
 EXECUTION_SCHEMA = "leopard2-low-encode-copy-execution/v1"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 ROUNDS = 5
@@ -76,11 +77,43 @@ MAX_ITERATIONS = 1000
 MAX_REUSE = 1_000_000_000
 MAX_WARMUP = 1000
 MAX_TIMEOUT_SECONDS = 3600.0
+MAX_PATH_BYTES = 4096
+MAX_PATH_COMPONENT_BYTES = 255
 HEX64 = re.compile(r"^[0-9a-f]{16}$")
 HEX256 = re.compile(r"^[0-9a-f]{64}$")
 TARGET_SPEEDUP = 1.05
 NEIGHBOR_REGRESSION_FLOOR = 1.0 / 1.02
 _RELINK_CACHE: dict[str, str] = {}
+_RECOMPILE_CACHE: dict[str, dict[str, Any]] = {}
+
+# These vectors were generated from the independently compiled C++
+# bench/leopard2/benchmark.cpp XorShift64 implementation.  They deliberately
+# do not call the Python mock, so copying the same wrong PRNG into the runner
+# and mock cannot make the self-test pass again.
+LOSS_VECTOR_FIXTURES = (
+    (0x26100, 8, 1, (6,)),
+    (0x26101, 16, 1, (1,)),
+    (0x26102, 32, 1, (29,)),
+    (0x26103, 64, 1, (33,)),
+    (0x26104, 100, 1, (65,)),
+    (0x26105, 127, 1, (83,)),
+    (0x26106, 128, 1, (52,)),
+    (0x26107, 129, 1, (125,)),
+    (0x123456, 17, 4, (1, 8, 10, 11)),
+    (0x26117, 129, 8, (16, 24, 48, 57, 93, 110, 113, 128)),
+)
+
+FAILURE_PHASES = (
+    "initialized",
+    "topology_validated",
+    "locks_acquired",
+    "affinity_isolated",
+    "inputs_attested",
+    "executables_staged",
+    "measurement_started",
+    "measurement_completed",
+    "evidence_prepared",
+)
 
 
 def _load_support() -> tuple[Any, Path]:
@@ -199,12 +232,29 @@ def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+def sha256_file(path: Path, limit: int = MAX_BUILD_ARTIFACT_BYTES) -> str:
+    require(type(limit) is int and 0 <= limit <= MAX_BUILD_ARTIFACT_BYTES,
+            "file digest limit is invalid")
+    descriptor = os.open(
+        path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+        getattr(os, "O_NOFOLLOW", 0))
+    try:
+        initial = os.fstat(descriptor)
+        path_metadata = os.lstat(path)
+        require(stat.S_ISREG(initial.st_mode) and
+                (initial.st_dev, initial.st_ino) ==
+                (path_metadata.st_dev, path_metadata.st_ino) and
+                initial.st_size <= limit,
+                "file digest input is not a bounded inode-bound regular file")
+        digest, size = sha256_descriptor(descriptor, limit)
+        final = os.fstat(descriptor)
+        require(size == initial.st_size and
+                (final.st_size, final.st_mtime_ns, final.st_ctime_ns) ==
+                (initial.st_size, initial.st_mtime_ns, initial.st_ctime_ns),
+                "file changed while hashing")
+        return digest
+    finally:
+        os.close(descriptor)
 
 
 def sha256_descriptor(descriptor: int, limit: int) -> tuple[str, int]:
@@ -333,9 +383,21 @@ def write_json_exclusive(path: Path, value: object) -> None:
     write_bytes_exclusive(path, canonical_bytes(value) + b"\n")
 
 
+def validate_path_text(value: object, what: str, absolute: bool | None = None) -> str:
+    require(isinstance(value, str) and value and "\0" not in value and
+            len(value.encode("utf-8")) <= MAX_PATH_BYTES,
+            f"{what} is not a bounded path")
+    path = Path(value)
+    require(absolute is None or path.is_absolute() is absolute,
+            f"{what} has the wrong absolute/relative form")
+    require(len(path.parts) <= 128 and all(
+        len(part.encode("utf-8")) <= MAX_PATH_COMPONENT_BYTES for part in path.parts),
+        f"{what} has too many or oversized components")
+    return value
+
+
 def safe_evidence_path(root: Path, relative: object) -> Path:
-    require(isinstance(relative, str) and relative and not os.path.isabs(relative),
-            "evidence path is not relative")
+    relative = validate_path_text(relative, "evidence path", absolute=False)
     require("\\" not in relative, "evidence path contains a backslash")
     canonical_root = root.resolve(strict=True)
     candidate = canonical_root.joinpath(relative)
@@ -362,7 +424,7 @@ def artifact_record(
             f"retained artifact is not a single-link regular file: {path}")
     return {
         "path": str(path.relative_to(root.resolve())),
-        "sha256": sha256_file(path),
+        "sha256": sha256_file(path, limit),
         "size": metadata.st_size,
     }
 
@@ -524,7 +586,7 @@ def validate_support_contract() -> dict[str, Any]:
         "artifact_identity", "build_provenance", "canonical_bytes",
         "cpu_stat_snapshot", "git_identity", "host_identity", "isolation_record",
         "PairLease", "parse_cpu_list", "runtime_closure", "validate_host_record",
-        "validate_isolation", "validate_topology",
+        "validate_isolation", "validate_topology", "run_process_bounded",
     )
     for name in required_callables:
         require(callable(getattr(SUPPORT, name, None)),
@@ -543,6 +605,10 @@ def validate_support_contract() -> dict[str, Any]:
             SUPPORT.MAX_CPU_LIST_ENTRIES == 4096 and
             SUPPORT.MAX_CPU_LIST_TEXT_BYTES == 65_536,
             "support bounded CPU-list contract changed")
+    require(SUPPORT.MAX_COMMAND_STDOUT_BYTES == 128 * 1024 * 1024 and
+            SUPPORT.MAX_COMMAND_STDERR_BYTES == 8 * 1024 * 1024 and
+            SUPPORT.MAX_COMMAND_TIMEOUT_SECONDS == 3600.0,
+            "support bounded subprocess contract changed")
     probe = {"b": 2, "a": 1}
     require(SUPPORT.canonical_bytes(probe) == canonical_bytes(probe),
             "support canonical JSON contract changed")
@@ -567,6 +633,9 @@ def validate_support_contract() -> dict[str, Any]:
             "pair_lease_schema": SUPPORT.PAIR_LEASE_SCHEMA,
             "reservation_schema": SUPPORT.RESERVATION_SCHEMA,
             "sibling_max_nonidle_jiffies": SUPPORT.MAX_SIBLING_NONIDLE_JIFFIES,
+            "subprocess_stderr_limit": SUPPORT.MAX_COMMAND_STDERR_BYTES,
+            "subprocess_stdout_limit": SUPPORT.MAX_COMMAND_STDOUT_BYTES,
+            "subprocess_timeout_limit": SUPPORT.MAX_COMMAND_TIMEOUT_SECONDS,
         },
     }
 
@@ -671,6 +740,77 @@ def strict_compile_recipes(
         result[relative] = normalized
     require(len(result) == len(pairs), f"{side} strict compile closure is incomplete")
     return dict(sorted(result.items()))
+
+
+def clean_recompile_proof(
+    side: str, specification: Mapping[str, Any], provenance: Mapping[str, Any],
+    recipes: Mapping[str, Sequence[str]],
+) -> list[dict[str, Any]]:
+    root = Path(specification[f"{side}_source_root"]).resolve(strict=True)
+    build = Path(specification[f"{side}_build_dir"]).resolve(strict=True)
+    entries = read_json_limited(
+        build / "compile_commands.json", f"{side} compile commands",
+        MAX_BUILD_METADATA_BYTES)
+    require(isinstance(entries, list), f"{side} compile commands are not a list")
+    by_source: dict[Path, Mapping[str, Any]] = {}
+    for entry in entries:
+        require(isinstance(entry, dict) and isinstance(entry.get("file"), str),
+                f"{side} clean-recompile entry is invalid")
+        source = Path(entry["file"]).resolve(strict=True)
+        require(source not in by_source,
+                f"{side} clean-recompile source is duplicated")
+        by_source[source] = entry
+    result: list[dict[str, Any]] = []
+    pairs = provenance["validated_compile_commands"]["required_source_object_pairs"]
+    with tempfile.TemporaryDirectory(prefix=f"leo2-{side}-recompile-") as temporary:
+        for index, pair in enumerate(pairs):
+            source = Path(pair["source"]["path"])
+            relative = str(source.relative_to(root))
+            entry = by_source.get(source)
+            require(entry is not None, f"{side} clean-recompile source is missing")
+            tokens = SUPPORT.compile_command_tokens(entry)
+            output_positions = [
+                position for position, token in enumerate(tokens) if token == "-o"
+            ]
+            require(len(output_positions) == 1 and output_positions[0] + 1 < len(tokens),
+                    f"{side} clean-recompile output is invalid")
+            cache_key = sha256_bytes(canonical_bytes({
+                "compiler": provenance["compiler"],
+                "normalized_recipe": recipes[relative],
+                "object": pair["object"],
+                "source": pair["source"],
+            }))
+            cached = _RECOMPILE_CACHE.get(cache_key)
+            if cached is None:
+                output = Path(temporary) / f"object-{index}.o"
+                command = list(tokens)
+                command[output_positions[0] + 1] = str(output)
+                completed = SUPPORT.run_process_bounded(
+                    command, cwd=build, environment=CHILD_ENVIRONMENT,
+                    timeout=120.0, max_stdout=MAX_STDOUT_BYTES,
+                    max_stderr=MAX_STDERR_BYTES)
+                require(completed.returncode == 0,
+                        f"{side} clean recompilation failed for {relative}: " +
+                        completed.stderr[:4096].decode("utf-8", errors="replace"))
+                require_bounded_regular(
+                    output, f"{side} clean-recompiled object",
+                    MAX_BUILD_ARTIFACT_BYTES)
+                digest = sha256_file(output, MAX_BUILD_ARTIFACT_BYTES)
+                size = os.lstat(output).st_size
+                require(digest == pair["object"]["sha256"] and
+                        size == pair["object"]["size"],
+                        f"{side} object is not reproducible from its retained source/recipe: "
+                        f"{relative}")
+                cached = {
+                    "cache_key": cache_key,
+                    "object_sha256": digest,
+                    "object_size": size,
+                    "source": relative,
+                    "status": "byte_identical_clean_recompile",
+                }
+                _RECOMPILE_CACHE[cache_key] = copy.deepcopy(cached)
+            result.append(copy.deepcopy(cached))
+    return result
 
 
 def strict_archive_and_link_provenance(
@@ -805,13 +945,10 @@ def strict_archive_and_link_provenance(
             relinked = Path(temporary) / "bench_leopard2"
             command = list(link_tokens)
             command[output_index] = str(relinked)
-            try:
-                completed = subprocess.run(
-                    command, cwd=str(build), env=dict(CHILD_ENVIRONMENT),
-                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE, check=False, timeout=30)
-            except subprocess.TimeoutExpired as error:
-                raise EvidenceError(f"{side} reproducible relink timed out") from error
+            completed = SUPPORT.run_process_bounded(
+                command, cwd=build, environment=CHILD_ENVIRONMENT,
+                timeout=30.0, max_stdout=MAX_STDOUT_BYTES,
+                max_stderr=MAX_STDERR_BYTES)
             require(completed.returncode == 0 and
                     len(completed.stdout) <= MAX_STDOUT_BYTES and
                     len(completed.stderr) <= MAX_STDERR_BYTES,
@@ -883,6 +1020,8 @@ def validate_build_provenance(
                                 MAX_BUILD_ARTIFACT_BYTES)
     result["strict_compile_recipes"] = strict_compile_recipes(
         side, specification, result)
+    result["clean_recompile_proof"] = clean_recompile_proof(
+        side, specification, result, result["strict_compile_recipes"])
     result["strict_link_provenance"] = strict_archive_and_link_provenance(
         side, specification, result)
     return result
@@ -969,14 +1108,16 @@ def validate_file_identity(
             {"kind", "mode", "mtime_ns", "path", "sha256", "size"},
             f"retained {what} identity is incomplete")
     path = value.get("path")
-    require(isinstance(path, str) and Path(path).is_absolute() and
+    require(isinstance(path, str), f"retained {what} path is invalid")
+    validate_path_text(path, f"retained {what} path", absolute=True)
+    require(Path(path).is_absolute() and
             (expected_path is None or path == str(Path(expected_path).resolve())),
             f"retained {what} path is invalid")
     require(isinstance(value.get("kind"), str) and value["kind"] and
             (expected_kind is None or value["kind"] == expected_kind),
             f"retained {what} kind is invalid")
     require(isinstance(value.get("size"), int) and not isinstance(value["size"], bool) and
-            value["size"] >= 0 and
+            0 <= value["size"] <= MAX_BUILD_ARTIFACT_BYTES and
             isinstance(value.get("mode"), int) and not isinstance(value["mode"], bool) and
             0 <= value["mode"] <= 0o7777 and
             isinstance(value.get("mtime_ns"), int) and
@@ -1006,6 +1147,28 @@ def validate_source_identity(
     return value
 
 
+def validate_clean_recompile_record(
+    proof: object, source_name: str, pair: Mapping[str, Any],
+    compiler: Mapping[str, Any], normalized_recipe: Sequence[str],
+) -> dict[str, Any]:
+    require(isinstance(proof, dict) and set(proof) == {
+        "cache_key", "object_sha256", "object_size", "source", "status"},
+        "retained clean-recompile record is invalid")
+    expected_key = sha256_bytes(canonical_bytes({
+        "compiler": compiler,
+        "normalized_recipe": list(normalized_recipe),
+        "object": pair["object"],
+        "source": pair["source"],
+    }))
+    require(proof.get("source") == source_name and
+            proof.get("status") == "byte_identical_clean_recompile" and
+            proof.get("cache_key") == expected_key and
+            proof.get("object_sha256") == pair["object"]["sha256"] and
+            proof.get("object_size") == pair["object"]["size"],
+            "retained clean-recompile digest is invalid")
+    return proof
+
+
 def validate_build_identity(
     value: object, side: str, specification: Mapping[str, Any],
     outer_executable: Mapping[str, Any], outer_archive: Mapping[str, Any],
@@ -1015,7 +1178,7 @@ def validate_build_identity(
         "compile_commands", "compiler", "compiler_version_stdout",
         "executable_link_recipe", "validated_archive", "validated_archive_members",
         "validated_cache", "validated_compile_commands", "validated_executable",
-        "strict_compile_recipes", "strict_link_provenance",
+        "strict_compile_recipes", "clean_recompile_proof", "strict_link_provenance",
     }
     require(isinstance(value, dict) and set(value) == expected_keys,
             f"retained {side} build identity is incomplete")
@@ -1122,6 +1285,30 @@ def validate_build_identity(
                 all(isinstance(token, str) for token in tokens)
                 for tokens in strict_recipes.values()),
             f"retained {side} strict compile recipes are invalid")
+    proofs = value.get("clean_recompile_proof")
+    require(isinstance(proofs, list) and len(proofs) == len(pairs),
+            f"retained {side} clean-recompile proof is incomplete")
+    pair_by_relative = {
+        str(Path(pair["source"]["path"]).relative_to(
+            Path(specification[f"{side}_source_root"]).resolve())): pair
+        for pair in pairs
+    }
+    seen_proofs: set[str] = set()
+    for proof in proofs:
+        require(isinstance(proof, dict),
+                f"retained {side} clean-recompile record is invalid")
+        source_name = proof.get("source")
+        require(isinstance(source_name, str) and source_name in pair_by_relative and
+                source_name not in seen_proofs and
+                proof.get("status") == "byte_identical_clean_recompile",
+                f"retained {side} clean-recompile source/status is invalid")
+        seen_proofs.add(source_name)
+        pair = pair_by_relative[source_name]
+        validate_clean_recompile_record(
+            proof, source_name, pair, value["compiler"],
+            strict_recipes[source_name])
+    require(seen_proofs == set(pair_by_relative),
+            f"retained {side} clean-recompile closure differs")
     link = value.get("strict_link_provenance")
     require(isinstance(link, dict) and set(link) == {
         "archive_member_content", "external_link_inputs",
@@ -1260,6 +1447,35 @@ class HardenedReservation:
         self.sibling = sibling
         self.descriptor: int | None = None
         self.identity: dict[str, Any] | None = None
+        self.kernel_socket: socket.socket | None = None
+        material = canonical_bytes({
+            "cpu": cpu,
+            "path": str(self.path),
+            "schema": RESERVATION_SCHEMA,
+            "sibling": sibling,
+            "uid": os.getuid(),
+        })
+        self.kernel_name = b"\0leopard2-reservation-v1-" + \
+            hashlib.sha256(material).hexdigest()[:36].encode("ascii")
+
+    def _acquire_kernel_lease(self) -> None:
+        require(sys.platform.startswith("linux") and hasattr(socket, "AF_UNIX"),
+                "Linux abstract Unix sockets are required for stable reservations")
+        lease = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        lease.set_inheritable(False)
+        try:
+            lease.bind(self.kernel_name)
+        except OSError as error:
+            lease.close()
+            if error.errno == errno.EADDRINUSE:
+                raise EvidenceError("CPU reservation already has a kernel lease") from error
+            raise EvidenceError(f"cannot bind stable CPU reservation: {error}") from error
+        self.kernel_socket = lease
+
+    def _release_kernel_lease(self) -> None:
+        if self.kernel_socket is not None:
+            self.kernel_socket.close()
+            self.kernel_socket = None
 
     @staticmethod
     def parse(raw: bytes, cpu: int, sibling: int) -> dict[str, Any]:
@@ -1290,17 +1506,22 @@ class HardenedReservation:
         return payload
 
     def __enter__(self) -> dict[str, Any]:
-        parent = os.lstat(self.path.parent)
-        require(stat.S_ISDIR(parent.st_mode) and parent.st_uid == os.getuid() and
-                stat.S_IMODE(parent.st_mode) == 0o700,
-                "CPU reservation parent must be an owned mode-0700 directory")
+        self._acquire_kernel_lease()
+        try:
+            parent = os.lstat(self.path.parent)
+            require(stat.S_ISDIR(parent.st_mode) and parent.st_uid == os.getuid() and
+                    stat.S_IMODE(parent.st_mode) == 0o700,
+                    "CPU reservation parent must be an owned mode-0700 directory")
+        except Exception:
+            self._release_kernel_lease()
+            raise
         flags = os.O_RDONLY
         if hasattr(os, "O_CLOEXEC"):
             flags |= os.O_CLOEXEC
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
-        self.descriptor = os.open(self.path, flags)
         try:
+            self.descriptor = os.open(self.path, flags)
             metadata = os.fstat(self.descriptor)
             path_metadata = os.lstat(self.path)
             require(stat.S_ISREG(metadata.st_mode) and metadata.st_uid == os.getuid() and
@@ -1335,10 +1556,14 @@ class HardenedReservation:
                 finally:
                     os.close(self.descriptor)
                     self.descriptor = None
+            self._release_kernel_lease()
             raise
 
     def validate_current(self) -> None:
-        require(self.descriptor is not None and self.identity is not None,
+        require(self.descriptor is not None and self.identity is not None and
+                self.kernel_socket is not None and
+                self.kernel_socket.fileno() >= 0 and
+                self.kernel_socket.getsockname() == self.kernel_name,
                 "CPU reservation is not held")
         descriptor = os.fstat(self.descriptor)
         path = os.lstat(self.path)
@@ -1359,10 +1584,16 @@ class HardenedReservation:
                 "CPU reservation contents changed")
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        if self.descriptor is not None:
-            fcntl.flock(self.descriptor, fcntl.LOCK_UN)
-            os.close(self.descriptor)
-            self.descriptor = None
+        descriptor = self.descriptor
+        self.descriptor = None
+        try:
+            if descriptor is not None:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                finally:
+                    os.close(descriptor)
+        finally:
+            self._release_kernel_lease()
 
 
 def validate_reservation_identity(
@@ -1507,18 +1738,29 @@ class ImmutableExecutables:
                 }
             temporary.rmdir()
             return copy.deepcopy(self.identities), dict(self.descriptors)
-        except Exception:
+        except Exception as primary:
             shutil.rmtree(temporary, ignore_errors=True)
-            self.__exit__(None, None, None)
+            try:
+                self.__exit__(None, None, None)
+            except Exception as cleanup:
+                raise EvidenceError(
+                    "immutable executable staging failed and cleanup also failed: "
+                    f"{type(primary).__name__}: {primary}; "
+                    f"{type(cleanup).__name__}: {cleanup}") from primary
             raise
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        for descriptor in self.descriptors.values():
+        descriptors = list(self.descriptors.values())
+        self.descriptors.clear()
+        failures: list[str] = []
+        for descriptor in descriptors:
             try:
                 os.close(descriptor)
-            except OSError:
-                pass
-        self.descriptors.clear()
+            except OSError as error:
+                failures.append(f"fd {descriptor}: {error}")
+        require(not failures,
+                "cannot close immutable executable descriptors: " +
+                "; ".join(failures))
 
 
 def validate_execution_identity(
@@ -1552,6 +1794,16 @@ def run_bounded(
     command: Sequence[str], environment: Mapping[str, str], timeout: float,
     pass_fds: Sequence[int] = (),
 ) -> tuple[int, bytes, bytes, int]:
+    require(isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and
+            math.isfinite(float(timeout)) and 0 < timeout <= MAX_TIMEOUT_SECONDS,
+            "benchmark timeout is invalid")
+    require(isinstance(command, Sequence) and 1 <= len(command) <= 64 and
+            all(isinstance(item, str) and item and
+                len(item.encode("utf-8")) <= MAX_PATH_BYTES for item in command),
+            "benchmark command is invalid or oversized")
+    require(len(pass_fds) <= 8 and all(
+        isinstance(item, int) and not isinstance(item, bool) and 0 <= item <= 1_048_575
+        for item in pass_fds), "benchmark inherited descriptor list is invalid")
     started = time.monotonic_ns()
     process = subprocess.Popen(
         list(command), cwd="/", env=dict(environment), stdin=subprocess.DEVNULL,
@@ -1608,6 +1860,13 @@ def run_bounded(
         process.wait()
         returncode = process.returncode
         failure = "benchmark process did not terminate within five seconds after SIGKILL"
+    except BaseException:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        process.wait()
+        raise
     finally:
         selector.close()
         process.stdout.close()
@@ -1622,7 +1881,7 @@ def run_bounded(
     return returncode, stdout, stderr, duration
 
 
-class XorShift64Star:
+class XorShift64:
     def __init__(self, seed: int):
         self.state = seed & ((1 << 64) - 1)
         if self.state == 0:
@@ -1630,16 +1889,16 @@ class XorShift64Star:
 
     def next(self) -> int:
         value = self.state
-        value ^= value >> 12
-        value ^= (value << 25) & ((1 << 64) - 1)
-        value ^= value >> 27
+        value ^= (value << 13) & ((1 << 64) - 1)
+        value ^= value >> 7
+        value ^= (value << 17) & ((1 << 64) - 1)
         self.state = value & ((1 << 64) - 1)
-        return (self.state * 2685821657736338717) & ((1 << 64) - 1)
+        return self.state
 
 
 def expected_losses(cell: Cell) -> list[int]:
     order = list(range(cell.k))
-    random = XorShift64Star(cell.seed ^ 0xD1B54A32D192ED03)
+    random = XorShift64(cell.seed ^ 0xD1B54A32D192ED03)
     for remaining in range(cell.k, 1, -1):
         selected = random.next() % remaining
         order[remaining - 1], order[selected] = order[selected], order[remaining - 1]
@@ -2064,6 +2323,8 @@ def validate_input_specification(value: object) -> dict[str, str]:
     require(isinstance(value, dict) and set(value) == expected and
             all(isinstance(item, str) and item for item in value.values()),
             "input specification is incomplete or has unexpected fields")
+    for name, item in value.items():
+        validate_path_text(item, f"input specification {name}", absolute=True)
     return value
 
 
@@ -2262,6 +2523,38 @@ def retained_child_records(output: Path) -> list[dict[str, Any]]:
     return sorted(records, key=lambda item: item["path"])
 
 
+def validate_failure_lifecycle(value: object) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+        "completed_phases", "failed_phase", "teardown_error", "teardown_status"},
+        "failure lifecycle is incomplete")
+    completed = value.get("completed_phases")
+    require(isinstance(completed, list) and completed and
+            all(isinstance(item, str) for item in completed) and
+            completed == list(FAILURE_PHASES[:len(completed)]),
+            "failure lifecycle phases are not an exact prefix")
+    failed_phase = value.get("failed_phase")
+    expected_next = (
+        FAILURE_PHASES[len(completed)] if len(completed) < len(FAILURE_PHASES)
+        else "teardown"
+    )
+    teardown_status = value.get("teardown_status")
+    teardown_error = value.get("teardown_error")
+    require(teardown_status in {"completed", "failed"} and
+            ((teardown_status == "completed" and teardown_error is None) or
+             (teardown_status == "failed" and isinstance(teardown_error, str) and
+              1 <= len(teardown_error.encode("utf-8")) <= 8192)),
+            "failure lifecycle teardown result is invalid")
+    require(
+        (teardown_status == "failed" and
+         (failed_phase == expected_next or
+          (failed_phase == "teardown" and completed == list(FAILURE_PHASES)))) or
+        (teardown_status == "completed" and failed_phase == expected_next) or
+        (teardown_status == "completed" and failed_phase == "publication" and
+         completed == list(FAILURE_PHASES)),
+        "failure lifecycle failed phase is inconsistent")
+    return value
+
+
 def validate_failure(
     failure: object, output: Path, allow_self_test: bool = False
 ) -> dict[str, Any]:
@@ -2270,7 +2563,8 @@ def validate_failure(
         "campaign", "created_utc", "digest", "error", "error_type", "host_initial",
         "identities_initial", "input_specification", "invocations", "isolation",
         "execution",
-        "pair_lease", "reservation", "retained_files", "schema", "status", "traceback",
+        "lifecycle", "pair_lease", "reservation", "retained_files", "schema",
+        "status", "traceback",
         "valid",
     }
     require(set(failure) == expected_keys and failure.get("schema") == FAILURE_SCHEMA and
@@ -2279,20 +2573,28 @@ def validate_failure(
     validate_utc(failure.get("created_utc"), "failure created_utc")
     for name, maximum in (("error_type", 256), ("error", 8192), ("traceback", 65536)):
         item = failure.get(name)
-        require(isinstance(item, str) and len(item.encode("utf-8")) <= maximum,
+        require(isinstance(item, str) and 1 <= len(item.encode("utf-8")) <= maximum,
                 f"failure {name} is invalid or oversized")
+    lifecycle = validate_failure_lifecycle(failure.get("lifecycle"))
+    completed = set(lifecycle["completed_phases"])
     campaign, cells = validate_campaign(failure.get("campaign"), allow_self_test)
     cpu = campaign["benchmark_cpu"]
     sibling = campaign["reserved_sibling"]
     specification = validate_input_specification(failure.get("input_specification"))
     host = failure.get("host_initial")
+    if "topology_validated" in completed:
+        require(host is not None, "failure topology phase lacks host identity")
     if host is not None:
         SUPPORT.validate_host_record(
             host, cpu, sibling, campaign["allowed_cpu_set_at_launch"])
     pair_lease = failure.get("pair_lease")
+    if "locks_acquired" in completed:
+        require(pair_lease is not None, "failure lock phase lacks pair lease")
     if pair_lease is not None:
         SUPPORT.validate_pair_lease_identity(pair_lease, cpu, sibling)
     reservation = failure.get("reservation")
+    if "locks_acquired" in completed:
+        require(reservation is not None, "failure lock phase lacks reservation")
     if reservation is not None:
         validate_reservation_identity(reservation, cpu, sibling)
     isolation = failure.get("isolation")
@@ -2303,6 +2605,20 @@ def validate_failure(
     invocations = failure.get("invocations")
     initial = failure.get("identities_initial")
     execution = failure.get("execution")
+    if "inputs_attested" in completed:
+        require(isinstance(initial, dict),
+                "failure input-attestation phase lacks identities")
+    if isinstance(initial, dict) and not allow_self_test:
+        validate_retained_snapshot(initial, specification)
+    if "executables_staged" in completed:
+        require(execution is not None,
+                "failure executable-staging phase lacks execution identity")
+    if "measurement_started" not in completed:
+        require(invocations == [],
+                "failure has invocations before measurement started")
+    if "measurement_completed" in completed:
+        require(isinstance(isolation, dict) and isolation.get("accepted") is True,
+                "completed measurement lacks accepted isolation evidence")
     if invocations:
         require(isinstance(initial, dict) and reservation is not None,
                 "failed invocation prefix lacks source/build/reservation identity")
@@ -2343,7 +2659,7 @@ def raw_file_identity(path: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "path": "raw.json",
         "payload_digest": payload["digest"],
-        "sha256": sha256_file(path),
+        "sha256": sha256_file(path, MAX_JSON_BYTES),
         "size": metadata.st_size,
     }
 
@@ -2442,10 +2758,10 @@ def publish_no_replace(stage: Path, output: Path) -> None:
         if code == errno.EEXIST:
             raise EvidenceError(f"refusing to replace evidence output {output}")
         raise EvidenceError(f"cannot atomically publish evidence: {os.strerror(code)}")
-    fsync_directory(output.parent)
 
 
 def create_stage(output: Path) -> Path:
+    validate_path_text(str(output.absolute()), "evidence output", absolute=True)
     output = output.resolve()
     require(not output.exists(), f"output path already exists: {output}")
     output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -2455,21 +2771,23 @@ def create_stage(output: Path) -> Path:
         stage = output.parent / f".{output.name}.staging-{os.getpid()}-{nonce}"
         try:
             os.mkdir(stage, 0o700)
+            os.chmod(stage, 0o700)
             return stage
         except FileExistsError:
             continue
     raise EvidenceError("cannot allocate a unique evidence staging directory")
 
 
-def publish_manifest(stage: Path, output: Path, manifest: Mapping[str, Any]) -> int:
+def publish_manifest(
+    stage: Path, output: Path, manifest: Mapping[str, Any],
+    check_current_inputs: bool = True, allow_self_test: bool = False,
+) -> int:
     _, status = validate_manifest(
-        manifest, stage, check_current_inputs=True, allow_self_test=False)
+        manifest, stage, check_current_inputs=check_current_inputs,
+        allow_self_test=allow_self_test)
     fsync_tree(stage)
+    fsync_directory(output.parent)
     publish_no_replace(stage, output)
-    retained = read_json_limited(output / "manifest.json", "published manifest")
-    _, replay_status = validate_manifest(
-        retained, output, check_current_inputs=True, allow_self_test=False)
-    require(replay_status == status, "published manifest status changed")
     return status
 
 
@@ -2478,9 +2796,8 @@ def publish_failure(
 ) -> None:
     validate_failure(failure, stage)
     fsync_tree(stage)
+    fsync_directory(output.parent)
     publish_no_replace(stage, output)
-    retained = read_json_limited(output / "failure.json", "published failure")
-    validate_failure(retained, output)
 
 
 def authoritative_specification(options: argparse.Namespace) -> dict[str, str]:
@@ -2514,6 +2831,25 @@ def authoritative_specification(options: argparse.Namespace) -> dict[str, str]:
 def validate_exact_affinity(expected: set[int]) -> None:
     require(expected and set(os.sched_getaffinity(0)) == expected,
             "coordinator affinity left the exact housekeeping set")
+
+
+class TrackedContextExit:
+    """Preserve a primary failure while retaining an independent exit failure."""
+
+    def __init__(self, context: Any, label: str):
+        self.context = context
+        self.label = label
+        self.exit_error: str | None = None
+
+    def __enter__(self) -> Any:
+        return self.context.__enter__()
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+        try:
+            self.context.__exit__(exc_type, exc, tb)
+        except Exception as error:
+            self.exit_error = f"{self.label}: {type(error).__name__}: {error}"
+        return False
 
 
 def run_campaign(options: argparse.Namespace) -> int:
@@ -2568,6 +2904,13 @@ def run_campaign(options: argparse.Namespace) -> int:
     execution: dict[str, dict[str, Any]] | None = None
     execution_descriptors: dict[str, int] = {}
     invocations: list[dict[str, Any]] = []
+    manifest: dict[str, Any] | None = None
+    completed_phases = ["initialized"]
+    caught: Exception | None = None
+    caught_traceback = ""
+    teardown_errors: list[str] = []
+    pair_context: TrackedContextExit | None = None
+    reservation_context: TrackedContextExit | None = None
     try:
         allowed_checked, housekeeping = SUPPORT.validate_topology(
             options.cpu, options.reserved_sibling)
@@ -2575,11 +2918,17 @@ def run_campaign(options: argparse.Namespace) -> int:
                 "launch affinity changed during topology validation")
         host_initial = SUPPORT.host_identity(
             options.cpu, options.reserved_sibling, allowed)
+        completed_phases.append("topology_validated")
         pair_guard = SUPPORT.PairLease(options.cpu, options.reserved_sibling)
         reservation_guard = HardenedReservation(
             options.reservation_file, options.cpu, options.reserved_sibling)
-        with pair_guard as pair_lease, reservation_guard as reservation:
+        pair_context = TrackedContextExit(pair_guard, "CPU pair lease teardown")
+        reservation_context = TrackedContextExit(
+            reservation_guard, "CPU reservation teardown")
+        with pair_context as pair_lease, reservation_context as reservation:
+            completed_phases.append("locks_acquired")
             os.sched_setaffinity(0, housekeeping)
+            completed_phases.append("affinity_isolated")
 
             def validate_guards() -> None:
                 pair_guard.validate_current()
@@ -2588,13 +2937,16 @@ def run_campaign(options: argparse.Namespace) -> int:
 
             validate_guards()
             initial = input_snapshot(specification)
+            completed_phases.append("inputs_attested")
             execution_guard = ImmutableExecutables(stage, specification, initial)
             execution, execution_descriptors = execution_guard.__enter__()
             validate_execution_identity(execution, initial)
+            completed_phases.append("executables_staged")
 
             def snapshot() -> Mapping[str, Any]:
                 return input_snapshot(specification)
 
+            completed_phases.append("measurement_started")
             before_monotonic_ns = time.monotonic_ns()
             before_cpu = SUPPORT.cpu_stat_snapshot(options.cpu)
             before_sibling = SUPPORT.cpu_stat_snapshot(options.reserved_sibling)
@@ -2620,6 +2972,7 @@ def run_campaign(options: argparse.Namespace) -> int:
                 validate_guards()
             require(isolation["accepted"] is True,
                     "reserved SMT sibling performed non-idle work during the campaign")
+            completed_phases.append("measurement_completed")
             final = input_snapshot(specification)
             require(final == initial, "input identity changed during campaign")
             host_final = SUPPORT.host_identity(
@@ -2665,59 +3018,148 @@ def run_campaign(options: argparse.Namespace) -> int:
             })
             write_json_exclusive(stage / "manifest.json", manifest)
             validate_guards()
-            result = publish_manifest(stage, output, manifest)
-            validate_guards()
-            stage = Path()
-            print(output / "manifest.json")
-            return result
+            validate_manifest(
+                manifest, stage, check_current_inputs=True, allow_self_test=False)
+            completed_phases.append("evidence_prepared")
     except Exception as error:
-        if stage != Path() and stage.exists():
-            for name in ("manifest.json", "raw.json", "failure.json"):
-                path = stage / name
-                if path.exists():
-                    metadata = os.lstat(path)
-                    require(stat.S_ISREG(metadata.st_mode),
-                            f"cannot clean unsafe staged artifact {path}")
-                    path.unlink()
+        caught = error
+        caught_traceback = traceback.format_exc()[-65536:]
+    finally:
+        if execution_guard is not None:
+            try:
+                execution_guard.__exit__(None, None, None)
+            except Exception as error:
+                teardown_errors.append(
+                    f"immutable executable teardown: {type(error).__name__}: {error}")
+            execution_guard = None
+        for tracked in (reservation_context, pair_context):
+            if tracked is not None and tracked.exit_error is not None:
+                teardown_errors.append(tracked.exit_error)
+        try:
+            os.sched_setaffinity(0, original_affinity)
+            validate_exact_affinity(original_affinity)
+        except Exception as error:
+            teardown_errors.append(
+                f"affinity restoration: {type(error).__name__}: {error}")
+
+    if caught is None and (
+        manifest is None or completed_phases != list(FAILURE_PHASES)
+    ):
+        caught = EvidenceError(
+            "campaign teardown reached publication without complete prepared evidence")
+        caught_traceback = str(caught)
+
+    primary_failed_phase = (
+        FAILURE_PHASES[len(completed_phases)]
+        if caught is not None and len(completed_phases) < len(FAILURE_PHASES)
+        else None
+    )
+    if teardown_errors:
+        teardown_error = "; ".join(teardown_errors)[:8192]
+        if caught is None:
+            caught = EvidenceError(teardown_error)
+            caught_traceback = teardown_error
+        else:
+            caught_traceback = (caught_traceback + "\n" + teardown_error)[-65536:]
+    else:
+        teardown_error = None
+
+    def remove_staged_summary_files() -> None:
+        for name in ("manifest.json", "raw.json", "failure.json"):
+            path = stage / name
+            if not path.exists():
+                continue
+            metadata = os.lstat(path)
+            require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1,
+                    f"cannot clean unsafe staged artifact {path}")
+            path.unlink()
+
+    if caught is not None:
+        try:
+            remove_staged_summary_files()
+            failed_phase = primary_failed_phase or (
+                "teardown" if teardown_errors else
+                (FAILURE_PHASES[len(completed_phases)]
+                 if len(completed_phases) < len(FAILURE_PHASES) else "teardown"))
             failure = signed({
                 "campaign": campaign,
                 "created_utc": utc_now(),
-                "error": str(error)[:8192],
-                "error_type": type(error).__name__[:256],
+                "error": (str(caught) or repr(caught))[:8192],
+                "error_type": type(caught).__name__[:256] or "Exception",
                 "host_initial": host_initial,
                 "identities_initial": initial,
                 "execution": execution,
                 "input_specification": specification,
                 "invocations": invocations,
                 "isolation": isolation,
+                "lifecycle": {
+                    "completed_phases": completed_phases,
+                    "failed_phase": failed_phase,
+                    "teardown_error": teardown_error,
+                    "teardown_status": "failed" if teardown_errors else "completed",
+                },
                 "pair_lease": pair_lease,
                 "reservation": reservation,
                 "retained_files": retained_child_records(stage),
                 "schema": FAILURE_SCHEMA,
                 "status": "failed",
-                "traceback": traceback.format_exc()[-65536:],
+                "traceback": (caught_traceback or repr(caught))[-65536:],
                 "valid": False,
             })
-            try:
-                write_json_exclusive(stage / "failure.json", failure)
-                publish_failure(stage, output, failure)
-                stage = Path()
-            except Exception:
-                if stage.exists():
-                    shutil.rmtree(stage)
-                raise
-        if isinstance(error, EvidenceError):
+            write_json_exclusive(stage / "failure.json", failure)
+            publish_failure(stage, output, failure)
+            stage = Path()
+        except Exception:
+            if stage != Path() and stage.exists():
+                shutil.rmtree(stage)
             raise
-        raise EvidenceError(f"campaign failed: {type(error).__name__}: {error}") from error
-    finally:
-        if execution_guard is not None:
-            execution_guard.__exit__(None, None, None)
-        try:
-            os.sched_setaffinity(0, original_affinity)
-        except OSError:
-            pass
-        if stage != Path() and stage.exists():
-            shutil.rmtree(stage)
+        if isinstance(caught, EvidenceError):
+            raise caught
+        raise EvidenceError(
+            f"campaign failed: {type(caught).__name__}: {caught}") from caught
+
+    require(manifest is not None,
+            "campaign publication lost its prepared manifest")
+    try:
+        result = publish_manifest(stage, output, manifest)
+    except Exception as error:
+        if output.exists():
+            if stage.exists():
+                shutil.rmtree(stage)
+            raise EvidenceError(
+                "publication failed because the output path is already visible") from error
+        remove_staged_summary_files()
+        failure = signed({
+            "campaign": campaign,
+            "created_utc": utc_now(),
+            "error": (str(error) or repr(error))[:8192],
+            "error_type": type(error).__name__[:256] or "Exception",
+            "host_initial": host_initial,
+            "identities_initial": initial,
+            "execution": execution,
+            "input_specification": specification,
+            "invocations": invocations,
+            "isolation": isolation,
+            "lifecycle": {
+                "completed_phases": completed_phases,
+                "failed_phase": "publication",
+                "teardown_error": None,
+                "teardown_status": "completed",
+            },
+            "pair_lease": pair_lease,
+            "reservation": reservation,
+            "retained_files": retained_child_records(stage),
+            "schema": FAILURE_SCHEMA,
+            "status": "failed",
+            "traceback": traceback.format_exc()[-65536:],
+            "valid": False,
+        })
+        write_json_exclusive(stage / "failure.json", failure)
+        publish_failure(stage, output, failure)
+        stage = Path()
+        raise EvidenceError(f"campaign publication failed: {error}") from error
+    stage = Path()
+    return result
 
 
 def verify_campaign(options: argparse.Namespace) -> int:
@@ -2934,7 +3376,7 @@ def expect_evidence_error(action: Callable[[], object], name: str) -> None:
     try:
         action()
     except (EvidenceError, FileNotFoundError, NotADirectoryError, OSError, ValueError,
-            TypeError, KeyError, AttributeError):
+            TypeError, KeyError, AttributeError, RuntimeError):
         return
     raise EvidenceError(f"adversarial mutation was accepted: {name}")
 
@@ -2947,6 +3389,13 @@ def resign(value: Mapping[str, Any]) -> dict[str, Any]:
 
 def run_self_test(_options: argparse.Namespace) -> int:
     validate_support_contract()
+    for seed, k, count, expected in LOSS_VECTOR_FIXTURES:
+        fixture = Cell(
+            identifier="loss-vector", backend="scalar", field="gf16",
+            k=k, r=max(1, count), shard_bytes=64, role="target",
+            seed=seed, losses=count)
+        require(tuple(expected_losses(fixture)) == expected,
+                f"benchmark-compatible loss vector changed for seed {seed:#x}")
     for cell in FIXED_CELLS:
         validate_cell(cell)
     cpu, sibling, allowed = find_self_test_pair()
@@ -3006,16 +3455,63 @@ def run_self_test(_options: argparse.Namespace) -> int:
             "input_specification": fast_raw["input_specification"],
             "invocations": [],
             "isolation": None,
+            "lifecycle": {
+                "completed_phases": ["initialized"],
+                "failed_phase": "topology_validated",
+                "teardown_error": None,
+                "teardown_status": "completed",
+            },
             "pair_lease": None,
             "reservation": None,
             "retained_files": [],
             "schema": FAILURE_SCHEMA,
             "status": "failed",
-            "traceback": "",
+            "traceback": "intentional self-test traceback",
             "valid": False,
         })
         write_json_exclusive(failed_root / "failure.json", failure)
         validate_failure(failure, failed_root, allow_self_test=True)
+        bad_lifecycle = copy.deepcopy(failure)
+        bad_lifecycle["lifecycle"]["completed_phases"] = [
+            "initialized", "locks_acquired"]
+        bad_lifecycle = resign(bad_lifecycle)
+        expect_evidence_error(
+            lambda: validate_failure(
+                bad_lifecycle, failed_root, allow_self_test=True),
+            "failure lifecycle prefix")
+        bad_teardown = copy.deepcopy(failure)
+        bad_teardown["lifecycle"]["teardown_status"] = "failed"
+        bad_teardown["lifecycle"]["teardown_error"] = None
+        bad_teardown = resign(bad_teardown)
+        expect_evidence_error(
+            lambda: validate_failure(
+                bad_teardown, failed_root, allow_self_test=True),
+            "failure teardown state")
+        combined_failure = copy.deepcopy(failure)
+        combined_failure["lifecycle"]["teardown_status"] = "failed"
+        combined_failure["lifecycle"]["teardown_error"] = \
+            "intentional teardown failure"
+        combined_failure = resign(combined_failure)
+        validate_failure(combined_failure, failed_root, allow_self_test=True)
+
+        class BrokenExit:
+            def __enter__(self) -> None:
+                return None
+
+            def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+                raise EvidenceError("intentional context-exit failure")
+
+        tracked_exit = TrackedContextExit(BrokenExit(), "self-test teardown")
+        try:
+            with tracked_exit:
+                raise EvidenceError("intentional primary failure")
+        except EvidenceError as error:
+            require(str(error) == "intentional primary failure" and
+                    tracked_exit.exit_error is not None and
+                    "context-exit failure" in tracked_exit.exit_error,
+                    "tracked teardown obscured the primary failure")
+        else:
+            raise EvidenceError("tracked context suppressed a primary failure")
 
         mutations: list[tuple[str, Callable[[dict[str, Any]], None]]] = [
             ("command", lambda value: value["invocations"][0]["command"].__setitem__(
@@ -3102,6 +3598,34 @@ def run_self_test(_options: argparse.Namespace) -> int:
         expect_evidence_error(
             lambda: validate_relinked_executable_sha("0" * 64, "1" * 64, "mock"),
             "stale executable relink")
+        synthetic_pair = {
+            "source": {"path": "/mock/source.cpp", "sha256": "1" * 64},
+            "object": {"path": "/mock/object.o", "sha256": "2" * 64, "size": 7},
+        }
+        synthetic_compiler = {"path": "/mock/c++", "sha256": "3" * 64}
+        synthetic_recipe = ["<compiler>", "-O3", "<source>", "-o", "<object>"]
+        synthetic_proof = {
+            "cache_key": sha256_bytes(canonical_bytes({
+                "compiler": synthetic_compiler,
+                "normalized_recipe": synthetic_recipe,
+                "object": synthetic_pair["object"],
+                "source": synthetic_pair["source"],
+            })),
+            "object_sha256": "2" * 64,
+            "object_size": 7,
+            "source": "source.cpp",
+            "status": "byte_identical_clean_recompile",
+        }
+        validate_clean_recompile_record(
+            synthetic_proof, "source.cpp", synthetic_pair,
+            synthetic_compiler, synthetic_recipe)
+        bad_proof = copy.deepcopy(synthetic_proof)
+        bad_proof["object_sha256"] = "4" * 64
+        expect_evidence_error(
+            lambda: validate_clean_recompile_record(
+                bad_proof, "source.cpp", synthetic_pair,
+                synthetic_compiler, synthetic_recipe),
+            "clean-recompile digest mismatch")
         control_policy = {
             "compiler": {"sha256": "0" * 64},
             "compiler_version_stdout": {"text": "mock"},
@@ -3154,6 +3678,13 @@ def run_self_test(_options: argparse.Namespace) -> int:
             require("exceeded" in str(error), "child timeout used the wrong error")
         else:
             raise EvidenceError("child timeout was accepted")
+        expect_evidence_error(
+            lambda: SUPPORT.run_process_bounded(
+                ("/usr/bin/python3", "-c",
+                 "import sys;sys.stdout.buffer.write(b'x'*2048)"),
+                environment=CHILD_ENVIRONMENT, timeout=5.0,
+                max_stdout=1024, max_stderr=1024),
+            "support subprocess output cap")
 
         reservation_root = root / "reservation-root"
         reservation_root.mkdir(mode=0o700)
@@ -3175,6 +3706,11 @@ def run_self_test(_options: argparse.Namespace) -> int:
             expect_evidence_error(
                 lambda: HardenedReservation.validate_current(
                     reservation_guard), "reservation replacement")
+            replacement_guard = HardenedReservation(
+                reservation_path, cpu, sibling)
+            expect_evidence_error(
+                lambda: replacement_guard.__enter__(),
+                "reservation kernel-lease replacement overlap")
 
         lease_root = root / "lease-root"
         lease_root.mkdir(mode=0o700)
@@ -3182,6 +3718,29 @@ def run_self_test(_options: argparse.Namespace) -> int:
         second = SUPPORT.PairLease(sibling, cpu, root=lease_root)
         with first:
             expect_evidence_error(lambda: second.__enter__(), "pair lease overlap")
+
+        replacement_lease_root = root / "replacement-lease-root"
+        replacement_lease_root.mkdir(mode=0o700)
+        replacement_first = SUPPORT.PairLease(
+            cpu, sibling, root=replacement_lease_root)
+        with replacement_first:
+            replacement_first.path.rename(replacement_lease_root / "old.lock")
+            expect_evidence_error(
+                lambda: SUPPORT.PairLease(
+                    cpu, sibling, root=replacement_lease_root).__enter__(),
+                "pair lease file replacement overlap")
+
+        directory_lease_root = root / "directory-lease-root"
+        directory_lease_root.mkdir(mode=0o700)
+        directory_first = SUPPORT.PairLease(cpu, sibling, root=directory_lease_root)
+        with directory_first:
+            moved_root = root / "directory-lease-root-moved"
+            directory_lease_root.rename(moved_root)
+            directory_lease_root.mkdir(mode=0o700)
+            expect_evidence_error(
+                lambda: SUPPORT.PairLease(
+                    cpu, sibling, root=directory_lease_root).__enter__(),
+                "pair lease directory replacement overlap")
 
         immutable_root = root / "immutable"
         immutable_root.mkdir(mode=0o700)
@@ -3227,6 +3786,42 @@ def run_self_test(_options: argparse.Namespace) -> int:
         another.mkdir(mode=0o700)
         expect_evidence_error(
             lambda: publish_no_replace(another, final), "no-replace publication")
+
+        loop_root = root / "loop"
+        loop_root.mkdir(mode=0o700)
+        (loop_root / "a").symlink_to("b")
+        (loop_root / "b").symlink_to("a")
+        loop_result = SUPPORT.run_process_bounded(
+            (str(Path(sys.executable).resolve()), str(Path(__file__).resolve()),
+             "verify", "--manifest", str(loop_root / "a")),
+            environment=CHILD_ENVIRONMENT, timeout=10.0,
+            max_stdout=65536, max_stderr=65536)
+        require(loop_result.returncode == 1 and b"Traceback" not in loop_result.stderr,
+                "symlink-loop input was not rejected cleanly")
+
+        invalid_publish = copy.deepcopy(fast_manifest)
+        invalid_publish["status"] = "policy_failed"
+        invalid_publish = resign(invalid_publish)
+        rejected_output = root / "rejected-publication"
+        expect_evidence_error(
+            lambda: publish_manifest(
+                root / "fast", rejected_output, invalid_publish,
+                check_current_inputs=False, allow_self_test=True),
+            "invalid manifest publication preflight")
+        require((root / "fast").is_dir() and not rejected_output.exists(),
+                "invalid publication changed the staged/output paths")
+        published_output = root / "published-fast"
+        published_status = publish_manifest(
+            root / "fast", published_output, fast_manifest,
+            check_current_inputs=False, allow_self_test=True)
+        require(published_status == 0 and not (root / "fast").exists() and
+                published_output.is_dir(),
+                "valid publication did not perform one final no-replace rename")
+        _, replay_status = validate_manifest(
+            fast_manifest, published_output,
+            check_current_inputs=False, allow_self_test=True)
+        require(replay_status == 0,
+                "published self-test evidence did not replay")
     print("low-encode-copy runner self-test passed: full 24-cell mock ABBA and hardened adversarial gates")
     return 0
 
@@ -3313,7 +3908,8 @@ def main(arguments: Sequence[str] | None = None) -> int:
         print(f"low-encode-copy evidence error: {error}", file=sys.stderr)
         return 1
     except (OSError, ValueError, TypeError, KeyError, AttributeError,
-            OverflowError, RecursionError, MemoryError, subprocess.SubprocessError,
+            OverflowError, RecursionError, RuntimeError, MemoryError,
+            subprocess.SubprocessError,
             json.JSONDecodeError) as error:
         print(
             f"low-encode-copy evidence input error: {type(error).__name__}: {error}",

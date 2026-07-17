@@ -679,9 +679,33 @@ class MainCompareRunnerTests(unittest.TestCase):
             first = runner.PairLease(0, 1, root=root)
             with first:
                 first.path.unlink()
-                with runner.PairLease(0, 1, root=root):
-                    with self.assertRaises(runner.EvidenceError):
-                        first.validate_current()
+                with self.assertRaises(runner.EvidenceError):
+                    with runner.PairLease(0, 1, root=root):
+                        pass
+                with self.assertRaises(runner.EvidenceError):
+                    first.validate_current()
+
+    def test_pair_lease_interoperates_with_jerasure_runner(self) -> None:
+        jerasure_path = MODULE_PATH.resolve().parents[3] / \
+            "tools/leopard2_jerasure_compare.py"
+        specification = importlib.util.spec_from_file_location(
+            "jerasure_compare_pair_lease_test", jerasure_path)
+        self.assertIsNotNone(specification)
+        self.assertIsNotNone(specification.loader)
+        jerasure = importlib.util.module_from_spec(specification)
+        sys.modules[specification.name] = jerasure
+        specification.loader.exec_module(jerasure)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            lease_directory = root / jerasure.pair_lease_directory_name()
+            with runner.PairLease(0, 1, root=lease_directory):
+                with self.assertRaises(jerasure.ComparisonError):
+                    with jerasure.PairLease(1, 0, root=root):
+                        pass
+            with jerasure.PairLease(0, 1, root=root):
+                with self.assertRaises(runner.EvidenceError):
+                    with runner.PairLease(1, 0, root=lease_directory):
+                        pass
 
     def test_pair_lease_creation_ignores_restrictive_umask(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

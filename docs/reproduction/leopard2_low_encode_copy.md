@@ -17,7 +17,16 @@ object/archive/link closure, unreproducible linked executables, or changed
 runtime dependencies. Provenance validation binds the Python coordinator, Git,
 compiler, archiver, ranlib, every required source/object pair, each archive
 member's bytes, the exact normalized link recipe and external link inputs, and
-a byte-identical clean-room relink of each benchmark.
+a byte-identical clean recompilation of every required object followed by a
+byte-identical clean-room relink of each benchmark. The clean recompilation
+executes the exact retained compiler command and working directory with only
+its output redirected to a private temporary file; a digest or size difference
+invalidates the run before measurement.
+
+The authoritative bundles use `leopard2-low-encode-copy-raw/v3` and
+`leopard2-low-encode-copy-manifest/v3`. Failed-run diagnostics use
+`leopard2-low-encode-copy-failure/v3`, whose signed lifecycle is an exact prefix
+of the declared phases and records the failed phase plus teardown result.
 
 The retained benchmark output is schema `leopard2-benchmark-v2`.  Every child
 must retain its raw timing samples, resolve the explicitly requested LOW_V1
@@ -50,6 +59,11 @@ the predeclared no-regression threshold.  One failed cell makes the manifest a
 valid `policy_failed` result and makes verification exit 2.  Performance never
 changes the structural validity of the evidence.
 
+Loss coordinates use the benchmark's xorshift64 sequence (shifts 13, 7, and
+17). The coordinator self-test checks hard-coded vectors produced by an
+independently compiled C++ implementation before it invokes the Python mock,
+so a shared coordinator/mock RNG defect cannot authenticate itself.
+
 ## Isolation and publication contract
 
 Launch affinity must contain exactly the chosen measured SMT pair plus at
@@ -58,7 +72,11 @@ exactly two siblings, moves itself to housekeeping CPUs, and pins each child to
 one measured logical CPU.  It acquires the common pair-wide lease at
 `/run/user/UID/leopard2-cpu-leases/leopard2-cpu-pair-UID-A-B.lock`, so it cannot
 overlap exact-main, butterfly, Jerasure, or other audited Leopard2 collectors
-on that physical core.
+on that physical core. A Linux abstract Unix-domain socket is held for the same
+CPU-pair/root identity for the full lease lifetime. It remains exclusive even
+if the diagnostic filesystem lock or its containing directory is renamed or
+replaced; the filesystem inode lock is retained for reviewable identity and
+continuous tamper checks.
 
 The coordinator reservation is a canonical JSON file without a trailing
 newline.  Its parent must be owned mode 0700 and the file must be an owned,
@@ -66,7 +84,9 @@ single-link mode-0600 regular file.  The collector takes an exclusive lock and
 binds the parent and file device/inode, mode, ownership, link count, payload,
 and digest. Both reservation and pair lease are revalidated before and after
 every measured child. The coordinator's affinity is also required to equal the
-housekeeping set at those boundaries and around evidence publication.
+housekeeping set at those boundaries. The reservation also has a stable Linux
+abstract-socket lease, so replacing its path cannot create an overlapping
+reservation.
 
 After the initial attestation, the collector copies each benchmark into a
 private staged file, revalidates its bytes, opens it read-only, unlinks its
@@ -81,13 +101,24 @@ must accrue time, and the sibling must accrue exactly zero non-idle jiffies.
 These counters cannot attribute every jiffy to the child, so the external host
 reservation and an otherwise idle machine remain required.
 
-Children have separately bounded stdout and stderr collection. Retained JSON
-has byte, depth, node, string, integer, floating-point, and collection limits.
-The retained-file inventory rejects symlinks, unexpected names, empty
-directories, excess entries, and files outside the declared caps. Output is
-first written under a private staging directory, fully validated and fsynced,
-and then published with Linux `renameat2(RENAME_NOREPLACE)`. A run cannot
-replace an existing result.
+Children and build/provenance helpers have timeouts and separately bounded
+stdout and stderr collection; overflow or timeout kills the whole child process
+group. Retained JSON has byte, depth, node, string, integer, floating-point,
+path, and collection limits. Retained-artifact hashing is bounded, rejects
+symlinks, binds an open descriptor to the named inode, and rejects concurrent
+metadata or size changes. The retained-file inventory rejects symlinks,
+unexpected names, empty directories, excess entries, and files outside the
+declared caps.
+
+Output is first written under a private mode-0700 staging directory and fully
+validated. Both lock contexts have exited, immutable executable descriptors
+are closed, and the coordinator's exact launch affinity is restored before
+success can become visible. The stage tree and output parent are fsynced before
+Linux `renameat2(RENAME_NOREPLACE)`, which is the final publication operation.
+There is no failable validation or teardown after that rename, and a run
+cannot replace an existing result. A pre-publication or teardown failure
+instead publishes signed lifecycle diagnostics; it can never leave an
+acceptable success manifest visible.
 
 ## Build the exact inputs
 
