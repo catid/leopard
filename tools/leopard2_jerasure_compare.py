@@ -1206,8 +1206,13 @@ def run_checkpoint(
             "independent scalar systematic-Vandermonde algebra"),
     }
     host = common.cpu_metadata(
-        cpu, reserved_idle_cpu, original_affinity, inherited, lease,
-        pre_frequency, post_frequency)
+        cpu=cpu,
+        original_allowed=original_affinity,
+        reserved_idle_cpu=reserved_idle_cpu,
+        child_affinity_preflight=inherited,
+        lease=lease,
+        pre_frequency=pre_frequency,
+        post_frequency=post_frequency)
     checkpoint: dict[str, Any] = {
         "schema": SCHEMA, "method": method,
         "sources": portable_sources(provenance),
@@ -1349,9 +1354,33 @@ def self_test() -> None:
         original, recovered = expected_digests(cell)
         require_hex(original, 16, "synthetic original digest")
         require_hex(recovered, 16, "synthetic recovered digest")
+    allowed = common.allowed_cpus()
+    if not allowed:
+        raise ComparisonError("self-test requires at least one allowed CPU")
+    cpu = min(allowed)
+    sibling_text = common.optional_text(
+        Path(f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list"))
+    siblings = common.parse_cpu_list(sibling_text) if sibling_text else [cpu]
+    reserved_cpu = next(
+        (candidate for candidate in siblings
+         if candidate != cpu and candidate in allowed), cpu)
+    host = common.cpu_metadata(
+        cpu=cpu,
+        original_allowed=allowed,
+        reserved_idle_cpu=reserved_cpu,
+        child_affinity_preflight=[cpu],
+        lease={"schema": "self-test", "cpus": sorted({cpu, reserved_cpu})},
+        pre_frequency={"captured_phase": "self-test-pre"},
+        post_frequency={"captured_phase": "self-test-post"})
+    if (host.get("allowed_cpu_count") != len(allowed) or
+            host.get("allowed_cpus") != sorted(allowed) or
+            host.get("reserved_idle_sibling_cpu") != reserved_cpu or
+            host.get("child_affinity_preflight") != [cpu]):
+        raise ComparisonError("host-metadata argument binding changed")
     print(json.dumps({
         "status": "PASS", "normal_build_optional": True,
-        "aligned_contract_bytes": 8, "synthetic_cells": len(cells)}, sort_keys=True))
+        "aligned_contract_bytes": 8, "synthetic_cells": len(cells),
+        "host_metadata_binding": True}, sort_keys=True))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
