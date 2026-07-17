@@ -288,6 +288,64 @@ These are correctness results, not timing evidence. Other workers were active
 on the host, so no cache-sensitive or authoritative crossover number was
 collected for this checkpoint.
 
+## C++ transform benchmark checkpoint
+
+`bench/leopard2/pruned_transform_benchmark.cpp` now provides the missing
+primitive-level A/B instrument needed before codec integration.  It is built
+only when both tests and benchmarks are enabled because it deliberately uses
+test-only access to the full padded LCH kernels.  It is not installed, is not
+linked by production callers, and cannot change dispatch.
+
+For one exact prefix or deterministic-holey mask cell it constructs the
+immutable plan once, removes the fused descriptors from a copy to obtain the
+flat executor, and verifies both copies against a separately executed full
+padded transform before taking any timing sample.  For a holey mask the full
+baseline executes through the last live input or requested output, matching
+the existing prefix-truncation contract.  It reports:
+
+- plan setup samples independently of byte execution;
+- full, flat, and all-level-fused raw samples in rotating order;
+- padded butterflies, retained operations, fused descriptors, effective
+  execution steps, and exact vector-capacity footprint;
+- the requested and actually qualified backend;
+- a requested-output digest and source SHA/dirty state; and
+- the number of preallocated workspaces admitted by an explicit memory cap.
+
+Resets occur outside each timed interval.  Multiple preallocated workspaces
+avoid applying a sparse-input plan to its own dead temporary outputs on the
+next iteration.  The JSON labels itself non-authoritative: host topology,
+singleton affinity, idle SMT sibling, reservation ownership, frequency state,
+cache/TLB counters, executable identity, timeout capture, and deterministic
+replay remain the responsibility of the external evidence runner.  In
+particular, development smoke numbers collected while other workers are active
+must not be used for the 10 percent promotion threshold.
+
+Build and validate the JSON contract with:
+
+    cmake -S . -B build/c1-benchmark -DCMAKE_BUILD_TYPE=Release \
+        -DLEO2_BUILD_TESTS=ON -DLEO2_BUILD_BENCHMARKS=ON
+    cmake --build build/c1-benchmark \
+        --target bench_leopard2_pruned_transform -j 128
+    OMP_NUM_THREADS=1 OMP_DYNAMIC=FALSE \
+        python3 tools/leopard2_pruned_transform_benchmark_json_test.py \
+        build/c1-benchmark/bench_leopard2_pruned_transform
+
+Replace 128 with the allowed CPU count when fewer CPUs are available.  A
+representative high/low boundary cell can then be emitted with explicit
+parameters, for example:
+
+    OMP_NUM_THREADS=1 OMP_DYNAMIC=FALSE \
+        build/c1-benchmark/bench_leopard2_pruned_transform \
+        --field gf8 --size 64 --shift 0 --direction forward \
+        --input-active 33 --output-requested 17 --bytes 65536 \
+        --backend avx2 --iterations 31 --samples 9 \
+        --setup-iterations 31 --memory-mib 512
+
+This checkpoint closes only the raw transform-instrumentation gap.  The
+external authoritative runner, real encode/decode integration, alias/scatter
+and fuzz gates, end-to-end neighboring cells, and a deterministic dispatcher
+remain open.
+
 ## Disposition
 
 Promote the following into a bounded C++ prototype behind tests and explicit

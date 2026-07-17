@@ -374,6 +374,17 @@ if(LEO2_BUILD_TESTS)
             LEO2_ENABLE_TEST_HOOKS=1)
         target_link_libraries(bench_leopard2_direct_encode libleopard)
 
+        # C1 is internal and absent from production dispatch.  This benchmark
+        # is built only with the test hooks that expose the full padded LCH
+        # oracle; it is never installed and cannot affect production behavior.
+        add_executable(bench_leopard2_pruned_transform
+            bench/leopard2/pruned_transform_benchmark.cpp)
+        target_compile_definitions(bench_leopard2_pruned_transform PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1
+            LEO2_PRUNED_SOURCE_GIT_SHA="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
+            LEO2_PRUNED_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
+        target_link_libraries(bench_leopard2_pruned_transform libleopard)
+
     endif()
 
     if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" OR
@@ -718,6 +729,14 @@ if(LEO2_BUILD_TESTS)
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_benchmark_json_test.py
                     $<TARGET_FILE:bench_leopard2>)
+            add_test(
+                NAME leopard2_pruned_transform_benchmark_smoke
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_pruned_transform_benchmark_json_test.py
+                    $<TARGET_FILE:bench_leopard2_pruned_transform>)
+            set_tests_properties(
+                leopard2_pruned_transform_benchmark_smoke PROPERTIES
+                ENVIRONMENT "OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")
         endif()
         add_test(
             NAME leopard2_cost_model_self_test
