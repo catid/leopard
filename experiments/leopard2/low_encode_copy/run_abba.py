@@ -265,14 +265,17 @@ def safe_evidence_path(root: Path, relative: object) -> Path:
     require(isinstance(relative, str) and relative and not os.path.isabs(relative),
             "evidence path is not relative")
     require("\\" not in relative, "evidence path contains a backslash")
-    candidate = root.joinpath(relative)
+    canonical_root = root.resolve(strict=True)
+    candidate = canonical_root.joinpath(relative)
     require(all(part not in ("", ".", "..") for part in Path(relative).parts),
             "evidence path contains an unsafe component")
-    resolved = candidate.resolve()
+    resolved = candidate.resolve(strict=True)
     try:
-        resolved.relative_to(root.resolve())
+        resolved.relative_to(canonical_root)
     except ValueError as error:
         raise EvidenceError(f"evidence path escapes output directory: {relative}") from error
+    require(resolved == candidate,
+            f"evidence path contains a symlink or noncanonical component: {relative}")
     return resolved
 
 
@@ -777,7 +780,11 @@ class HardenedReservation:
     """Hold and continuously bind a coordinator-created CPU reservation."""
 
     def __init__(self, path: Path, cpu: int, sibling: int):
-        self.path = path.resolve(strict=True)
+        absolute = path.absolute()
+        resolved = path.resolve(strict=True)
+        require(absolute == resolved,
+                "CPU reservation path must be canonical and contain no symlink")
+        self.path = resolved
         self.cpu = cpu
         self.sibling = sibling
         self.descriptor: int | None = None
@@ -2295,6 +2302,11 @@ def run_self_test(_options: argparse.Namespace) -> int:
             lambda: parse_json_bytes(b"[" * 64 + b"0" + b"]" * 64,
                                      "deep JSON"),
             "bounded JSON depth")
+        symlink = root / "artifact-link"
+        symlink.symlink_to(root / "fast" / "raw.json")
+        expect_evidence_error(
+            lambda: safe_evidence_path(root, "artifact-link"),
+            "retained artifact symlink")
         try:
             run_bounded(
                 ("/usr/bin/python3", "-c",
@@ -2352,7 +2364,7 @@ def run_self_test(_options: argparse.Namespace) -> int:
         another.mkdir(mode=0o700)
         expect_evidence_error(
             lambda: publish_no_replace(another, final), "no-replace publication")
-    print("low-encode-copy runner self-test passed: mock ABBA, policy exits, 18 adversarial gates")
+    print("low-encode-copy runner self-test passed: mock ABBA, policy exits, 19 adversarial gates")
     return 0
 
 
