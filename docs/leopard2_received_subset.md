@@ -83,8 +83,14 @@ production GF8/GF16 differential tests remain required before integration.
 ## Symbolic result
 
 Across all GF(2^4) receive patterns, exact block DP was strictly better than the
-prefer-systematic baseline in 309,047 patterns and equal in 449,879. It never
-lost the declared objective. Aggregate counts were:
+prefer-systematic baseline in 333,421 patterns and equal in 425,505 under the
+complete declared objective, including its final coordinate-tuple tie-break. It
+never lost that objective. Looking only at the first three schedule metrics, it
+was better in 309,047 patterns and tied in 449,879; 24,374 of those metric ties
+were resolved in exact DP's favor by the declared coordinate ordering.
+The separately accumulated selected-subset-change counter is also 333,421,
+providing an independent accounting invariant for the full-objective split.
+Aggregate metric counts were:
 
 | Policy | Active blocks | IFFT butterflies | Prefix slots |
 | --- | ---: | ---: | ---: |
@@ -96,15 +102,20 @@ lost the declared objective. Aggregate counts were:
 Relative to prefer-systematic, exact DP reduced the aggregate modeled counts by
 12.91% active blocks, 8.92% butterflies, and 7.94% prefix slots. The split was:
 
-| Profile | Patterns improved | Active blocks | Butterflies | Prefix slots |
-| --- | ---: | ---: | ---: | ---: |
-| legacy high | 52,520 / 163,796 | -4.70% | -5.60% | -3.13% |
-| low | 256,527 / 595,130 | -15.65% | -11.21% | -10.64% |
+| Profile | Full-objective improved | Metric-only improved | Active blocks | Butterflies | Prefix slots |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| legacy high | 76,894 / 163,796 | 52,520 / 163,796 | -4.70% | -5.60% | -3.13% |
+| low | 256,527 / 595,130 | 256,527 / 595,130 | -15.65% | -11.21% | -10.64% |
 
 These aggregate small-field ratios are prioritization evidence only. They are
 not a throughput claim and do not meet the experiment's promotion threshold.
-The greedy policy matched the exact objective in 702,601 of 758,926 patterns;
-the remaining 56,325 patterns quantify the potential value of the DP setup.
+The greedy policy matched the complete exact objective in 667,518 of 758,926
+patterns. It tied all three schedule metrics in 702,601 patterns, but selected a
+lexicographically higher coordinate tuple in 35,083 of those metric ties. Of
+the 91,408 full-objective losses, 56,325 therefore changed one or more schedule
+metrics and 35,083 changed only the deterministic coordinate tie-break. These
+counts distinguish possible execution-cost savings from reproducibility-only
+selection differences.
 
 ## Reproduction
 
@@ -128,10 +139,12 @@ Run the exhaustive checkpoint using every allowed CPU, capped at 128:
 
 The retained result is
 `experiments/leopard2/received_subset/results/checkpoint.json`, SHA-256
-`aed08c1e646c574163c38e0a550ebbbcb1f1b6adce2124d09e2520b5dbe09f66`.
+`765d3906f16bf14a7c888a0455bd2be2758148c8674a750393dc24347af580f4`.
 The allowed set on the evidence host contained 28 CPUs, so the primary Python
-3.12 run used 28 workers. A second Python 3.13 run with seven workers produced a
-byte-identical file. Neither run was timed as a benchmark.
+3.12 run used 28 workers. A separate Python 3.13 run also used 28 workers and
+produced a byte-identical file. The runs wrote disjoint outputs and did not
+overlap, so their worker pools did not contend. Neither run was timed as a
+benchmark.
 
 ## Promotion gaps
 

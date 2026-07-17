@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Iterable, Sequence
 
 
-SCHEMA = "leopard2-received-subset-checkpoint-v1"
+SCHEMA = "leopard2-received-subset-checkpoint-v2"
 FIELD_ORDER = 16
 FIELD_POLYNOMIAL = 0x13  # x^4 + x + 1
 POLICIES = (
@@ -29,6 +29,24 @@ POLICIES = (
     "prefer_systematic",
     "block_aligned_greedy",
     "exact_block_dp",
+)
+FULL_COMPARISON_KEYS = (
+    "strictly_better_than_prefer_systematic",
+    "equal_to_prefer_systematic",
+    "strictly_worse_than_prefer_systematic",
+    "strictly_worse_than_exact",
+    "equal_to_exact",
+)
+# Unprefixed comparison counters cover SelectionCost.total_key: all three
+# schedule metrics followed by the selected-coordinate tuple.  Metric-prefixed
+# counters deliberately omit only that final deterministic tie-break.
+METRIC_COMPARISON_KEYS = tuple(
+    f"metric_{key}" for key in FULL_COMPARISON_KEYS
+)
+TIEBREAK_COMPARISON_KEY = "metric_equal_but_tiebreak_worse_than_exact"
+COMPARISON_KEYS = (
+    FULL_COMPARISON_KEYS + METRIC_COMPARISON_KEYS +
+    (TIEBREAK_COMPARISON_KEY,)
 )
 
 
@@ -434,11 +452,7 @@ def proof_cell(arguments: tuple[str, int, int]) -> dict:
         for policy in POLICIES
     }
     comparison = {
-        policy: {"strictly_better_than_prefer_systematic": 0,
-                 "equal_to_prefer_systematic": 0,
-                 "strictly_worse_than_prefer_systematic": 0,
-                 "strictly_worse_than_exact": 0,
-                 "equal_to_exact": 0}
+        policy: {key: 0 for key in COMPARISON_KEYS}
         for policy in POLICIES
     }
     availability_patterns = 0
@@ -472,18 +486,35 @@ def proof_cell(arguments: tuple[str, int, int]) -> dict:
         baseline = costs["prefer_systematic"]
         exact = costs["exact_block_dp"]
         for policy, cost in costs.items():
-            if cost.metric_key < baseline.metric_key:
+            if cost.total_key < baseline.total_key:
                 comparison[policy]["strictly_better_than_prefer_systematic"] += 1
-            elif cost.metric_key == baseline.metric_key:
+            elif cost.total_key == baseline.total_key:
                 comparison[policy]["equal_to_prefer_systematic"] += 1
             else:
                 comparison[policy]["strictly_worse_than_prefer_systematic"] += 1
-            if cost.metric_key == exact.metric_key:
+            if cost.total_key == exact.total_key:
                 comparison[policy]["equal_to_exact"] += 1
-            elif cost.metric_key > exact.metric_key:
+            elif cost.total_key > exact.total_key:
                 comparison[policy]["strictly_worse_than_exact"] += 1
             else:
                 raise AssertionError("exact DP lost its declared objective")
+
+            if cost.metric_key < baseline.metric_key:
+                comparison[policy][
+                    "metric_strictly_better_than_prefer_systematic"] += 1
+            elif cost.metric_key == baseline.metric_key:
+                comparison[policy]["metric_equal_to_prefer_systematic"] += 1
+            else:
+                comparison[policy][
+                    "metric_strictly_worse_than_prefer_systematic"] += 1
+            if cost.metric_key == exact.metric_key:
+                comparison[policy]["metric_equal_to_exact"] += 1
+                if cost.total_key > exact.total_key:
+                    comparison[policy][TIEBREAK_COMPARISON_KEY] += 1
+            elif cost.metric_key > exact.metric_key:
+                comparison[policy]["metric_strictly_worse_than_exact"] += 1
+            else:
+                raise AssertionError("exact DP lost its metric objective")
 
         block_reduction = baseline.active_blocks - exact.active_blocks
         butterfly_reduction = baseline.ifft_butterflies - exact.ifft_butterflies
@@ -560,13 +591,7 @@ def merge(cells: Sequence[dict], source_sha256: str) -> dict:
                             "selected_subset_changes")}
         comparisons = {
             key: sum(row["comparison"][policy][key] for row in ordered)
-            for key in (
-                "strictly_better_than_prefer_systematic",
-                "equal_to_prefer_systematic",
-                "strictly_worse_than_prefer_systematic",
-                "strictly_worse_than_exact",
-                "equal_to_exact",
-            )
+            for key in COMPARISON_KEYS
         }
         policy_totals[policy] = {"cost_sums": sums, "comparisons": comparisons}
     best = sorted(
@@ -651,6 +676,11 @@ def validate_checkpoint(path: Path) -> dict:
                    for value in sums.values()):
                 raise ValueError("checkpoint policy sum is malformed")
             comparison = row["comparison"][policy]
+            if set(comparison) != set(COMPARISON_KEYS):
+                raise ValueError("checkpoint comparison keys differ")
+            if any(not isinstance(value, int) or value < 0
+                   for value in comparison.values()):
+                raise ValueError("checkpoint comparison count is malformed")
             if sum(comparison[key] for key in (
                 "strictly_better_than_prefer_systematic",
                 "equal_to_prefer_systematic",
@@ -661,6 +691,48 @@ def validate_checkpoint(path: Path) -> dict:
                 "strictly_worse_than_exact", "equal_to_exact",
             )) != expected_patterns:
                 raise ValueError("exact comparison partition differs")
+            if sum(comparison[key] for key in (
+                "metric_strictly_better_than_prefer_systematic",
+                "metric_equal_to_prefer_systematic",
+                "metric_strictly_worse_than_prefer_systematic",
+            )) != expected_patterns:
+                raise ValueError("metric baseline comparison partition differs")
+            if sum(comparison[key] for key in (
+                "metric_strictly_worse_than_exact", "metric_equal_to_exact",
+            )) != expected_patterns:
+                raise ValueError("metric exact comparison partition differs")
+            if comparison[TIEBREAK_COMPARISON_KEY] != (
+                comparison["metric_equal_to_exact"] -
+                comparison["equal_to_exact"]
+            ):
+                raise ValueError("metric-tie/tiebreak partition differs")
+            if comparison["equal_to_exact"] > comparison["metric_equal_to_exact"]:
+                raise ValueError("full exact matches exceed metric matches")
+            if sums["selected_subset_changes"] != (
+                expected_patterns -
+                comparison["equal_to_prefer_systematic"]
+            ):
+                raise ValueError("selection-change/full-objective partition differs")
+            if policy == "prefer_systematic" and any((
+                comparison["strictly_better_than_prefer_systematic"] != 0,
+                comparison["equal_to_prefer_systematic"] != expected_patterns,
+                comparison["strictly_worse_than_prefer_systematic"] != 0,
+                comparison[
+                    "metric_strictly_better_than_prefer_systematic"] != 0,
+                comparison["metric_equal_to_prefer_systematic"] !=
+                expected_patterns,
+                comparison[
+                    "metric_strictly_worse_than_prefer_systematic"] != 0,
+            )):
+                raise ValueError("baseline self-comparison differs")
+            if policy == "exact_block_dp" and any((
+                comparison["strictly_worse_than_exact"] != 0,
+                comparison["equal_to_exact"] != expected_patterns,
+                comparison["metric_strictly_worse_than_exact"] != 0,
+                comparison["metric_equal_to_exact"] != expected_patterns,
+                comparison[TIEBREAK_COMPARISON_KEY] != 0,
+            )):
+                raise ValueError("exact self-comparison differs")
     if document != merge(cells, source_hash):
         raise ValueError("checkpoint aggregates or ordering differ")
     return {

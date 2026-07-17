@@ -73,6 +73,25 @@ class ReceivedSubsetTests(unittest.TestCase):
                 comparisons += 1
         self.assertEqual(comparisons, 680)
 
+    def test_metric_ties_still_use_coordinate_objective(self) -> None:
+        lower_coordinates = MODULE.selection_cost((0, 2), 4)
+        higher_coordinates = MODULE.selection_cost((1, 2), 4)
+        self.assertEqual(lower_coordinates.metric_key,
+                         higher_coordinates.metric_key)
+        self.assertLess(lower_coordinates.total_key,
+                        higher_coordinates.total_key)
+
+        geometry = MODULE.make_geometry("legacy_high_v1", 3, 3)
+        available = (4, 5, 1, 2)
+        greedy = MODULE.selection_cost(
+            MODULE.select_block_greedy(geometry, available), geometry.side)
+        exact = MODULE.selection_cost(
+            MODULE.select_exact_block_dp(geometry, available), geometry.side)
+        self.assertEqual(greedy.selected, (1, 4, 5))
+        self.assertEqual(exact.selected, (1, 2, 4))
+        self.assertEqual(greedy.metric_key, exact.metric_key)
+        self.assertGreater(greedy.total_key, exact.total_key)
+
     def test_policies_are_deterministic_and_can_diverge(self) -> None:
         geometry = MODULE.make_geometry("legacy_high_v1", 5, 3)
         available = geometry.public_coordinates
@@ -125,11 +144,73 @@ class ReceivedSubsetTests(unittest.TestCase):
         validated = MODULE.validate_checkpoint(retained)
         self.assertEqual(validated["profile_cells"], 170)
         document = json.loads(retained.read_text(encoding="utf-8"))
+        patterns = document["totals"]["availability_patterns"]
+        for policy in MODULE.POLICIES:
+            policy_total = document["policy_totals"][policy]
+            comparison = policy_total["comparisons"]
+            self.assertEqual(sum(comparison[key] for key in (
+                "strictly_better_than_prefer_systematic",
+                "equal_to_prefer_systematic",
+                "strictly_worse_than_prefer_systematic",
+            )), patterns)
+            self.assertEqual(sum(comparison[key] for key in (
+                "strictly_worse_than_exact", "equal_to_exact",
+            )), patterns)
+            self.assertEqual(sum(comparison[key] for key in (
+                "metric_strictly_better_than_prefer_systematic",
+                "metric_equal_to_prefer_systematic",
+                "metric_strictly_worse_than_prefer_systematic",
+            )), patterns)
+            self.assertEqual(sum(comparison[key] for key in (
+                "metric_strictly_worse_than_exact", "metric_equal_to_exact",
+            )), patterns)
+            self.assertEqual(
+                comparison[MODULE.TIEBREAK_COMPARISON_KEY],
+                comparison["metric_equal_to_exact"] -
+                comparison["equal_to_exact"])
+            self.assertEqual(
+                policy_total["cost_sums"]["selected_subset_changes"],
+                patterns - comparison["equal_to_prefer_systematic"])
+
+        exact = document["policy_totals"]["exact_block_dp"]["comparisons"]
+        self.assertEqual(exact["strictly_better_than_prefer_systematic"],
+                         333421)
+        self.assertEqual(exact["equal_to_prefer_systematic"], 425505)
+        self.assertEqual(exact["metric_strictly_better_than_prefer_systematic"],
+                         309047)
+        self.assertEqual(exact["metric_equal_to_prefer_systematic"], 449879)
+        self.assertEqual(
+            document["policy_totals"]["exact_block_dp"]["cost_sums"][
+                "selected_subset_changes"], 333421)
+
+        greedy = document["policy_totals"]["block_aligned_greedy"][
+            "comparisons"]
+        self.assertEqual(greedy["equal_to_exact"], 667518)
+        self.assertEqual(greedy["metric_equal_to_exact"], 702601)
+        self.assertEqual(greedy[MODULE.TIEBREAK_COMPARISON_KEY], 35083)
+
         document["totals"]["mds_subsets"] += 1
         with tempfile.TemporaryDirectory() as directory_name:
             path = Path(directory_name) / "mutated.json"
             MODULE.write_json(path, document)
             with self.assertRaises(ValueError):
+                MODULE.validate_checkpoint(path)
+
+    def test_validator_rejects_internally_remerged_tiebreak_error(self) -> None:
+        retained = HERE / "results/checkpoint.json"
+        document = json.loads(retained.read_text(encoding="utf-8"))
+        cell = next(
+            row for row in document["cells"]
+            if row["comparison"]["block_aligned_greedy"][
+                MODULE.TIEBREAK_COMPARISON_KEY] > 0)
+        cell["comparison"]["block_aligned_greedy"][
+            MODULE.TIEBREAK_COMPARISON_KEY] += 1
+        malformed = MODULE.merge(document["cells"], document["source_sha256"])
+        with tempfile.TemporaryDirectory() as directory_name:
+            path = Path(directory_name) / "remerged.json"
+            MODULE.write_json(path, malformed)
+            with self.assertRaisesRegex(ValueError,
+                                        "metric-tie/tiebreak partition"):
                 MODULE.validate_checkpoint(path)
 
 
