@@ -6,9 +6,10 @@ its core archive to an exact core commit beneath a clean tooling revision,
 validates the final v4 A/B build provenance live, holds both a coordinator
 reservation and the shared per-user physical-core lease, pins the child to one
 SMT thread, and rejects the run when the sibling records any non-idle work.
-``verify`` is portable: it replays canonical retained bytes and every derived
-value without requiring the original source, build, executable, or reservation
-paths.  ``self-test`` is synthetic and never executes benchmark timing.
+``verify`` and ``verify-failure`` are portable: they replay canonical retained
+bytes and every derived value without requiring the original source, build,
+executable, or reservation paths.  A verified failure remains a failure.
+``self-test`` is synthetic and never executes benchmark timing.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ from typing import Any, Mapping, Sequence
 
 RAW_SCHEMA = "leopard2-c7-authoritative-raw/v2"
 MANIFEST_SCHEMA = "leopard2-c7-authoritative-manifest/v2"
-FAILURE_SCHEMA = "leopard2-c7-authoritative-failure/v2"
+FAILURE_SCHEMA = "leopard2-c7-authoritative-failure/v3"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
 ISOLATION_SCHEMA = "leopard2-c7-authoritative-isolation/v1"
@@ -296,8 +297,7 @@ def file_identity(path: Path, kind: str) -> dict[str, Any]:
         require(0 < info.st_size <= MAX_ARTIFACT_BYTES,
                 f"{kind} size is outside the evidence bound")
         mode = stat.S_IMODE(info.st_mode)
-        if kind in ("runner", "build-runner", "build-validator", "executable",
-                    "taskset", "python"):
+        if kind in ("runner", "executable", "taskset", "python"):
             require(mode & 0o111 != 0, f"{kind} is not executable")
         digest = hashlib.sha256()
         prefix = b""
@@ -328,6 +328,18 @@ def committed_file_identity(root: Path, commit: str, relative: Path,
                              f"{commit}:{relative.as_posix()}"))
     require(record["sha256"] == sha256_bytes(committed),
             f"{kind} differs from committed source")
+    tree_entry = run_checked(("git", "-C", str(root), "ls-tree", "-z", commit,
+                              "--", relative.as_posix()))
+    require(tree_entry.endswith(b"\0") and tree_entry.count(b"\0") == 1 and
+            b"\t" in tree_entry, f"{kind} committed mode is absent")
+    header, retained_path = tree_entry[:-1].split(b"\t", 1)
+    fields = header.split()
+    require(len(fields) == 3 and fields[1] == b"blob" and
+            fields[0] in (b"100644", b"100755") and
+            retained_path == relative.as_posix().encode("utf-8"),
+            f"{kind} committed mode is invalid")
+    require(bool(record["mode"] & 0o111) == (fields[0] == b"100755"),
+            f"{kind} executable mode differs from committed source")
     record["path"] = relative.as_posix()
     return record
 
@@ -662,10 +674,12 @@ def validate_input_snapshot(value: object) -> dict[str, Any]:
             isinstance(record["sha256"], str) and
             SHA256_RE.fullmatch(record["sha256"]) is not None,
             f"retained {key} identity is invalid")
-        if key in ("runner", "build_runner", "build_validator", "executable",
-                   "taskset", "python"):
+        if key in ("runner", "executable", "taskset", "python"):
             require(record["mode"] & 0o111 != 0,
                     f"retained {key} is not executable")
+        if key in ("build_runner", "build_validator"):
+            require(record["mode"] & 0o111 == 0,
+                    f"retained {key} differs from committed nonexecutable mode")
         if key in committed_paths:
             expected_path = committed_paths[key]
             require(record["path"] == expected_path.as_posix() and
@@ -882,17 +896,31 @@ def cpu_stat_snapshot(cpu: int) -> dict[str, Any]:
     raise EvidenceError(f"CPU {cpu} is absent from /proc/stat")
 
 
+def validate_cpu_stat_snapshot(value: object, expected_cpu: int,
+                               label: str) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+        "cpu", "fields", "total_jiffies"} and
+        type(value["cpu"]) is int and value["cpu"] == expected_cpu and
+        isinstance(value["fields"], dict) and
+        set(value["fields"]) == set(CPU_STAT_FIELDS) and
+        all(type(value["fields"][name]) is int and value["fields"][name] >= 0
+            for name in CPU_STAT_FIELDS) and
+        type(value["total_jiffies"]) is int and
+        value["total_jiffies"] == sum(value["fields"].values()),
+        f"{label} CPU stat snapshot is invalid")
+    return value
+
+
 def cpu_stat_delta(before: Mapping[str, Any],
                    after: Mapping[str, Any]) -> dict[str, Any]:
     require(isinstance(before, dict) and isinstance(after, dict) and
             type(before.get("cpu")) is int and type(after.get("cpu")) is int and
             before.get("cpu") == after.get("cpu"),
             "CPU stat snapshots refer to different CPUs")
-    before_fields, after_fields = before.get("fields"), after.get("fields")
-    require(isinstance(before_fields, dict) and isinstance(after_fields, dict) and
-            set(before_fields) == set(CPU_STAT_FIELDS) and
-            set(after_fields) == set(CPU_STAT_FIELDS),
-            "CPU stat snapshot fields are incomplete")
+    expected_cpu = before["cpu"]
+    before = validate_cpu_stat_snapshot(before, expected_cpu, "before")
+    after = validate_cpu_stat_snapshot(after, expected_cpu, "after")
+    before_fields, after_fields = before["fields"], after["fields"]
     deltas: dict[str, int] = {}
     for name in CPU_STAT_FIELDS:
         first, last = before_fields[name], after_fields[name]
@@ -900,11 +928,6 @@ def cpu_stat_delta(before: Mapping[str, Any],
                 type(last) is int and last >= first,
                 f"CPU stat counter {name} moved backwards")
         deltas[name] = last - first
-    require(type(before.get("total_jiffies")) is int and
-            type(after.get("total_jiffies")) is int and
-            before["total_jiffies"] == sum(before_fields.values()) and
-            after["total_jiffies"] == sum(after_fields.values()),
-            "CPU stat total does not match its fields")
     idle = sum(deltas[name] for name in CPU_STAT_IDLE_FIELDS)
     nonidle = sum(value for name, value in deltas.items()
                   if name not in CPU_STAT_IDLE_FIELDS)
@@ -1090,10 +1113,15 @@ def isolation_record(cpu: int, sibling: int, pair_lease: Mapping[str, Any],
                      before_sibling: Mapping[str, Any],
                      after_sibling: Mapping[str, Any], started_ns: int,
                      ended_ns: int) -> dict[str, Any]:
-    require(before_cpu.get("cpu") == cpu and after_cpu.get("cpu") == cpu and
-            before_sibling.get("cpu") == sibling and
-            after_sibling.get("cpu") == sibling,
-            "isolation snapshots do not match the reserved CPU pair")
+    before_cpu = validate_cpu_stat_snapshot(
+        before_cpu, cpu, "before timing CPU")
+    after_cpu = validate_cpu_stat_snapshot(after_cpu, cpu, "after timing CPU")
+    before_sibling = validate_cpu_stat_snapshot(
+        before_sibling, sibling, "before sibling CPU")
+    after_sibling = validate_cpu_stat_snapshot(
+        after_sibling, sibling, "after sibling CPU")
+    require(type(started_ns) is int and type(ended_ns) is int,
+            "isolation monotonic timestamps are invalid")
     benchmark_delta = cpu_stat_delta(before_cpu, after_cpu)
     sibling_delta = cpu_stat_delta(before_sibling, after_sibling)
     accepted = (ended_ns > started_ns and benchmark_delta["nonidle_jiffies"] > 0 and
@@ -1139,6 +1167,14 @@ def validate_isolation(value: object, cpu: int, sibling: int, *,
             type(before["monotonic_ns"]) is int and
             type(after["monotonic_ns"]) is int,
             "isolation snapshots changed")
+    validate_cpu_stat_snapshot(before["timing_cpu"], cpu,
+                               "before timing CPU")
+    validate_cpu_stat_snapshot(after["timing_cpu"], cpu,
+                               "after timing CPU")
+    validate_cpu_stat_snapshot(before["sibling_cpu"], sibling,
+                               "before sibling CPU")
+    validate_cpu_stat_snapshot(after["sibling_cpu"], sibling,
+                               "after sibling CPU")
     expected = isolation_record(
         cpu, sibling, value["pair_lease"], before["timing_cpu"],
         after["timing_cpu"], before["sibling_cpu"], after["sibling_cpu"],
@@ -1334,7 +1370,7 @@ def validate_child_result(value: object, cpu: int, inputs: Mapping[str, Any]) ->
             "cells": normalized}
 
 
-def safe_artifact(root: Path, relative: object) -> Path:
+def artifact_relative_path(relative: object) -> Path:
     require(isinstance(relative, str) and relative and
             "\\" not in relative and ":" not in relative and
             not os.path.isabs(relative),
@@ -1345,7 +1381,12 @@ def safe_artifact(root: Path, relative: object) -> Path:
     parts = relative_path.parts
     require(all(part not in ("", ".", "..") for part in parts),
             "artifact path is not canonical")
-    path = root.joinpath(*parts).resolve()
+    return relative_path
+
+
+def safe_artifact(root: Path, relative: object) -> Path:
+    relative_path = artifact_relative_path(relative)
+    path = root.joinpath(*relative_path.parts).resolve()
     try:
         path.relative_to(root.resolve())
     except ValueError as error:
@@ -1361,14 +1402,21 @@ def artifact_record(root: Path, path: Path) -> dict[str, Any]:
             "sha256": sha256_file(path)}
 
 
-def read_artifact(root: Path, record: object, label: str,
-                  maximum_bytes: int = MAX_ARTIFACT_BYTES) -> bytes:
+def validate_artifact_record(record: object, label: str,
+                             maximum_bytes: int = MAX_ARTIFACT_BYTES) -> dict[str, Any]:
     require(isinstance(record, dict) and set(record) == {"path", "size", "sha256"},
             f"{label} artifact record changed")
     require(type(record["size"]) is int and 0 <= record["size"] <= maximum_bytes and
             isinstance(record["sha256"], str) and
             SHA256_RE.fullmatch(record["sha256"]) is not None,
             f"{label} artifact identity is invalid")
+    artifact_relative_path(record["path"])
+    return record
+
+
+def read_artifact(root: Path, record: object, label: str,
+                  maximum_bytes: int = MAX_ARTIFACT_BYTES) -> bytes:
+    record = validate_artifact_record(record, label, maximum_bytes)
     path = safe_artifact(root, record["path"])
     require(path.is_file(), f"missing retained {label}")
     with path.open("rb") as stream:
@@ -1418,6 +1466,28 @@ def expected_stderr() -> bytes:
                     for index in range(1, 13))
 
 
+def validate_request(value: object) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+        "backend", "cell_geometry", "child_environment", "command", "cpu",
+        "sibling", "timeout_seconds"} and value["backend"] == "avx2" and
+        typed_equal(value["cell_geometry"],
+                    [list(cell) for cell in EXPECTED_CELLS]) and
+        typed_equal(value["child_environment"], CHILD_ENVIRONMENT),
+        "authoritative request changed")
+    cpu, sibling = value["cpu"], value["sibling"]
+    require(type(cpu) is int and type(sibling) is int and
+            cpu >= 0 and sibling >= 0 and cpu != sibling and
+            type(value["timeout_seconds"]) in (int, float) and
+            math.isfinite(value["timeout_seconds"]) and
+            value["timeout_seconds"] > 0,
+            "authoritative request CPU or timeout is invalid")
+    require(typed_equal(value["command"], [
+        "${TASKSET}", "-c", str(cpu), "${C7_EXECUTABLE}",
+        "--backend", "avx2", "${RESULT_JSON}"]),
+        "authoritative child command changed")
+    return value
+
+
 def validate_raw(value: object, root: Path, check_files: bool = True,
                  result_override: object | None = None) -> dict[str, Any]:
     raw = verify_signature(value, "C7 raw evidence")
@@ -1427,22 +1497,8 @@ def validate_raw(value: object, root: Path, check_files: bool = True,
                          "validated_output", "digest"} and
             raw["schema"] == RAW_SCHEMA, "raw evidence schema changed")
     validate_utc(raw["created_utc"], "raw creation time")
-    request = raw["request"]
-    require(isinstance(request, dict) and set(request) == {
-        "backend", "cell_geometry", "child_environment", "command", "cpu",
-        "sibling", "timeout_seconds"} and request["backend"] == "avx2" and
-        typed_equal(request["cell_geometry"], [list(cell) for cell in EXPECTED_CELLS]) and
-        typed_equal(request["child_environment"], CHILD_ENVIRONMENT),
-        "authoritative request changed")
+    request = validate_request(raw["request"])
     cpu, sibling = request["cpu"], request["sibling"]
-    require(type(cpu) is int and type(sibling) is int and cpu >= 0 and sibling >= 0 and
-            cpu != sibling and type(request["timeout_seconds"]) in (int, float) and
-            math.isfinite(request["timeout_seconds"]) and request["timeout_seconds"] > 0,
-            "authoritative request CPU or timeout is invalid")
-    require(typed_equal(request["command"], [
-        "${TASKSET}", "-c", str(cpu), "${C7_EXECUTABLE}",
-        "--backend", "avx2", "${RESULT_JSON}"]),
-        "authoritative child command changed")
     inputs = validate_input_snapshot(raw["inputs_before"])
     require(typed_equal(raw["inputs_after"], inputs), "input identity changed during run")
     validate_build_provenance(raw["build_provenance"], root, inputs)
@@ -1503,25 +1559,158 @@ def validate_manifest(value: object, root: Path) -> dict[str, Any]:
     return normalized
 
 
-def validate_failure(value: object) -> dict[str, Any]:
+def validate_failure_child(value: object, request: Mapping[str, Any],
+                           root: Path | None, check_files: bool) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+        "command", "environment", "returncode", "timed_out", "duration_ns",
+        "stdout", "stderr", "result"},
+        "failure child record changed")
+    require(typed_equal(value["command"], request["command"]) and
+            typed_equal(value["environment"], CHILD_ENVIRONMENT) and
+            type(value["returncode"]) is int and
+            type(value["timed_out"]) is bool and
+            type(value["duration_ns"]) is int and value["duration_ns"] > 0,
+            "failure child invocation or outcome is invalid")
+    validate_artifact_record(value["stdout"], "failure stdout", MAX_LOG_BYTES)
+    validate_artifact_record(value["stderr"], "failure stderr", MAX_LOG_BYTES)
+    require(value["result"] is None or isinstance(value["result"], dict),
+            "failure result artifact record changed")
+    if value["result"] is not None:
+        validate_artifact_record(value["result"], "failure result")
+    if check_files:
+        require(root is not None, "failure artifact root is absent")
+        read_artifact(root, value["stdout"], "failure stdout", MAX_LOG_BYTES)
+        read_artifact(root, value["stderr"], "failure stderr", MAX_LOG_BYTES)
+        if value["result"] is not None:
+            read_artifact(root, value["result"], "failure result")
+    return value
+
+
+def classify_failure(child: Mapping[str, Any] | None,
+                     error_type: str, error: str) -> str:
+    if child is None:
+        return "validation"
+    if (child["timed_out"] is True and child["returncode"] == 124 and
+            error_type == "EvidenceError" and error == "C7 child timed out"):
+        return "timeout"
+    if (child["timed_out"] is False and child["returncode"] != 0 and
+            error_type == "EvidenceError" and
+            error == f"C7 child exited {child['returncode']}"):
+        return "child-exit"
+    return "validation"
+
+
+def validate_failure(value: object, root: Path | None = None,
+                     check_files: bool = False) -> dict[str, Any]:
     failure = verify_signature(value, "C7 failure evidence")
     require(isinstance(failure, dict) and set(failure) == {
-        "schema", "created_utc", "error_type", "error", "child", "traceback",
-        "isolation", "build_provenance", "digest"} and
-        failure["schema"] == FAILURE_SCHEMA and
+        "schema", "status", "failure_kind", "created_utc", "error_type",
+        "error", "traceback", "request", "inputs_before", "inputs_after",
+        "host_before", "host_after", "reservation", "pair_lease", "isolation",
+        "build_provenance", "child", "digest"} and
+        failure["schema"] == FAILURE_SCHEMA and failure["status"] == "failed" and
+        failure["failure_kind"] in ("validation", "timeout", "child-exit") and
         isinstance(failure["error_type"], str) and failure["error_type"] and
-        isinstance(failure["error"], str) and
-        isinstance(failure["traceback"], str) and failure["traceback"] and
-        (failure["child"] is None or isinstance(failure["child"], dict)) and
-        (failure["build_provenance"] is None or
-         isinstance(failure["build_provenance"], dict)) and
-        (failure["isolation"] is None or isinstance(failure["isolation"], dict)),
+        isinstance(failure["error"], str) and failure["error"] and
+        isinstance(failure["traceback"], str) and failure["traceback"],
         "failure evidence schema changed")
     validate_utc(failure["created_utc"], "failure creation time")
-    if failure["isolation"] is not None:
-        isolation = failure["isolation"]
-        validate_isolation(isolation, isolation["timing_cpu"],
-                           isolation["sibling_cpu"], require_accepted=False)
+
+    request = failure["request"]
+    if request is not None:
+        request = validate_request(request)
+    inputs_before = failure["inputs_before"]
+    if inputs_before is not None:
+        inputs_before = validate_input_snapshot(inputs_before)
+    inputs_after = failure["inputs_after"]
+    if inputs_after is not None:
+        require(inputs_before is not None,
+                "failure inputs-after has no inputs-before context")
+        validate_input_snapshot(inputs_after)
+
+    for key in ("host_before", "host_after"):
+        host = failure[key]
+        if host is not None:
+            require(request is not None,
+                    f"failure {key.replace('_', '-')} has no request context")
+            validate_host(host, request["cpu"], request["sibling"])
+    reservation = failure["reservation"]
+    if reservation is not None:
+        require(request is not None,
+                "failure reservation has no request context")
+        validate_reservation_record(
+            reservation, request["cpu"], request["sibling"])
+    pair_lease = failure["pair_lease"]
+    if pair_lease is not None:
+        require(request is not None,
+                "failure pair lease has no request context")
+        validate_pair_lease_identity(
+            pair_lease, request["cpu"], request["sibling"])
+
+    provenance = failure["build_provenance"]
+    if provenance is not None:
+        require(inputs_before is not None and isinstance(provenance, dict) and
+                set(provenance) == {"manifest", "attestation"},
+                "failure build provenance has no input context or changed schema")
+        validate_artifact_record(
+            provenance["manifest"], "failure C7 v4 build manifest")
+        require(typed_equal(provenance["attestation"],
+                            inputs_before["build_attestation"]) and
+                provenance["manifest"]["size"] ==
+                    inputs_before["build_manifest"]["size"] and
+                provenance["manifest"]["sha256"] ==
+                    inputs_before["build_manifest"]["sha256"],
+                "failure build provenance differs from its input attestation")
+        if check_files:
+            require(root is not None, "failure provenance root is absent")
+            validate_build_provenance(provenance, root, inputs_before)
+
+    isolation = failure["isolation"]
+    if isolation is not None:
+        require(request is not None,
+                "failure isolation has no request context")
+        validate_isolation(isolation, request["cpu"], request["sibling"],
+                           require_accepted=False)
+        require(pair_lease is not None and
+                typed_equal(isolation["pair_lease"], pair_lease),
+                "failure isolation differs from the held pair lease")
+
+    child = failure["child"]
+    if child is not None:
+        require(request is not None,
+                "failure child has no request context")
+        child = validate_failure_child(child, request, root, check_files)
+        require(inputs_before is not None and
+                failure["host_before"] is not None and reservation is not None and
+                pair_lease is not None and provenance is not None,
+                "failure child is missing launch provenance")
+        if isolation is not None:
+            require(child["duration_ns"] == isolation["duration_ns"],
+                    "failure child and isolation durations differ")
+    if isolation is not None:
+        require(child is not None,
+                "failure isolation has no child context")
+
+    expected_kind = classify_failure(
+        child, failure["error_type"], failure["error"])
+    require(failure["failure_kind"] == expected_kind,
+            "failure kind differs from the child outcome")
+    if expected_kind == "timeout":
+        require(child is not None and child["returncode"] == 124 and
+                failure["error_type"] == "EvidenceError" and
+                failure["error"] == "C7 child timed out",
+                "timeout failure status or error relationship changed")
+    elif expected_kind == "child-exit":
+        require(child is not None and child["timed_out"] is False and
+                child["returncode"] != 0 and
+                failure["error_type"] == "EvidenceError" and
+                failure["error"] ==
+                    f"C7 child exited {child['returncode']}",
+                "child-exit failure status or error relationship changed")
+    else:
+        require(failure["error"] != "C7 child timed out" and
+                re.fullmatch(r"C7 child exited -?[0-9]+", failure["error"]) is None,
+                "validation failure uses a child-outcome error")
     return failure
 
 
@@ -1532,6 +1721,13 @@ def run_campaign(options: argparse.Namespace) -> int:
     child_record: dict[str, Any] | None = None
     isolation: dict[str, Any] | None = None
     build_provenance: dict[str, Any] | None = None
+    request: dict[str, Any] | None = None
+    inputs_before: dict[str, Any] | None = None
+    inputs_after: dict[str, Any] | None = None
+    host_before: dict[str, Any] | None = None
+    host_after: dict[str, Any] | None = None
+    reservation_record: dict[str, Any] | None = None
+    pair_lease_record: dict[str, Any] | None = None
     original_affinity: set[int] | None = None
     try:
         taskset = Path("/usr/bin/taskset").resolve(strict=True)
@@ -1542,9 +1738,7 @@ def run_campaign(options: argparse.Namespace) -> int:
         require(type(options.timeout) in (int, float) and
                 math.isfinite(options.timeout) and options.timeout > 0,
                 "--timeout must be positive and finite")
-        original_affinity = set(os.sched_getaffinity(0))
-        allowed, housekeeping = validate_topology(options.cpu, options.sibling)
-        request = {
+        candidate_request = {
             "backend": "avx2",
             "cell_geometry": [list(cell) for cell in EXPECTED_CELLS],
             "child_environment": dict(CHILD_ENVIRONMENT), "cpu": options.cpu,
@@ -1553,11 +1747,16 @@ def run_campaign(options: argparse.Namespace) -> int:
                         "${C7_EXECUTABLE}", "--backend", "avx2",
                         "${RESULT_JSON}"],
         }
+        validate_request(candidate_request)
+        request = candidate_request
+        original_affinity = set(os.sched_getaffinity(0))
+        allowed, housekeeping = validate_topology(options.cpu, options.sibling)
         host_before = host_identity(options.cpu, options.sibling, allowed)
         reservation_guard = Reservation(
             options.reservation_file, options.cpu, options.sibling)
         pair_guard = PairLease(options.cpu, options.sibling)
-        with reservation_guard as reservation, pair_guard as pair_lease:
+        with reservation_guard as reservation_record, \
+                pair_guard as pair_lease_record:
             os.sched_setaffinity(0, housekeeping)
             inputs_before = input_snapshot(
                 source_root, options.expected_tooling_commit,
@@ -1600,7 +1799,7 @@ def run_campaign(options: argparse.Namespace) -> int:
                 "result": result_record,
             }
             isolation = isolation_record(
-                options.cpu, options.sibling, pair_lease,
+                options.cpu, options.sibling, pair_lease_record,
                 before_cpu, after_cpu, before_sibling, after_sibling,
                 started, ended)
             pair_guard.validate_current()
@@ -1611,7 +1810,8 @@ def run_campaign(options: argparse.Namespace) -> int:
             result_bytes = read_artifact(output, result_record, "result")
             parsed = strict_json(result_bytes, "C7 result")
             validate_isolation(isolation, options.cpu, options.sibling)
-            validate_reservation_record(reservation, options.cpu, options.sibling)
+            validate_reservation_record(
+                reservation_record, options.cpu, options.sibling)
             inputs_after = input_snapshot(
                 source_root, options.expected_tooling_commit,
                 options.expected_core_commit, archive, executable, taskset,
@@ -1627,7 +1827,7 @@ def run_campaign(options: argparse.Namespace) -> int:
                 "schema": RAW_SCHEMA, "created_utc": created, "request": request,
                 "inputs_before": inputs_before, "inputs_after": inputs_after,
                 "host_before": host_before, "host_after": host_after,
-                "reservation": reservation, "isolation": isolation,
+                "reservation": reservation_record, "isolation": isolation,
                 "build_provenance": build_provenance,
                 "child": child_record, "validated_output": normalized,
             })
@@ -1637,21 +1837,31 @@ def run_campaign(options: argparse.Namespace) -> int:
             manifest = signed({
                 "schema": MANIFEST_SCHEMA, "created_utc": created, "valid": True,
                 "raw": artifact_record(output, raw_path), "request": request,
-                "inputs": inputs_before, "reservation": reservation,
+                "inputs": inputs_before, "reservation": reservation_record,
                 "isolation": isolation, "build_provenance": build_provenance,
                 "validated_output": normalized,
             })
             validate_manifest(manifest, output)
-            write_json_exclusive(output / "manifest.json", manifest)
             reservation_guard.validate_current()
             pair_guard.validate_current()
+            write_json_exclusive(output / "manifest.json", manifest)
     except Exception as error:
-        failure = signed({"schema": FAILURE_SCHEMA, "created_utc": utc_now(),
-                          "error_type": type(error).__name__, "error": str(error),
-                          "child": child_record, "isolation": isolation,
-                          "build_provenance": build_provenance,
-                          "traceback": traceback.format_exc()})
-        validate_failure(failure)
+        error_type = type(error).__name__
+        error_text = str(error)
+        failure = signed({
+            "schema": FAILURE_SCHEMA, "status": "failed",
+            "failure_kind": classify_failure(
+                child_record, error_type, error_text),
+            "created_utc": utc_now(), "error_type": error_type,
+            "error": error_text, "traceback": traceback.format_exc(),
+            "request": request, "inputs_before": inputs_before,
+            "inputs_after": inputs_after, "host_before": host_before,
+            "host_after": host_after, "reservation": reservation_record,
+            "pair_lease": pair_lease_record, "isolation": isolation,
+            "build_provenance": build_provenance,
+            "child": child_record,
+        })
+        validate_failure(failure, output, check_files=True)
         failure_path = output / "failure.json"
         if not failure_path.exists():
             write_json_exclusive(failure_path, failure)
@@ -1673,6 +1883,22 @@ def verify_campaign(options: argparse.Namespace) -> int:
     normalized = validate_manifest(manifest, root)
     print(json.dumps({"status": "PASS", "cells": normalized["cell_count"],
                       "manifest_sha256": sha256_file(manifest_path)}, sort_keys=True))
+    return 0
+
+
+def verify_failure_campaign(options: argparse.Namespace) -> int:
+    failure_path = options.failure.resolve(strict=True)
+    root = failure_path.parent
+    failure_bytes = failure_path.read_bytes()
+    failure = strict_json(failure_bytes, "C7 failure evidence")
+    require(failure_bytes == canonical_bytes(failure) + b"\n",
+            "failure evidence is not canonical JSON")
+    validated = validate_failure(failure, root, check_files=True)
+    print(json.dumps({
+        "status": "VERIFIED_FAILURE",
+        "failure_kind": validated["failure_kind"],
+        "failure_sha256": sha256_file(failure_path),
+    }, sort_keys=True))
     return 0
 
 
@@ -1757,16 +1983,16 @@ def synthetic_build_manifest(inputs: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def synthetic_inputs() -> dict[str, Any]:
-    def identity(kind: str, name: str) -> dict[str, Any]:
+    def identity(kind: str, name: str, mode: int = 0o644) -> dict[str, Any]:
         return {"kind": kind, "name": name, "size": 1,
-                "mode": 0o755, "sha256": "a" * 64}
+                "mode": mode, "sha256": "a" * 64}
 
     result = {
         "git": {"tooling_commit": "b" * 40, "tooling_tree": "c" * 40,
                 "core_commit": "e" * 40, "core_tree": "f" * 40,
                 "core_is_ancestor": True, "clean": True,
                 "tracked_tree_sha256": "d" * 64},
-        "runner": {**identity("runner", RUNNER_RELATIVE.name),
+        "runner": {**identity("runner", RUNNER_RELATIVE.name, 0o755),
                    "path": RUNNER_RELATIVE.as_posix()},
         "source": {**identity("source", SOURCE_RELATIVE.name),
                    "path": SOURCE_RELATIVE.as_posix()},
@@ -1776,9 +2002,9 @@ def synthetic_inputs() -> dict[str, Any]:
             **identity("build-validator", BUILD_VALIDATOR_RELATIVE.name),
             "path": BUILD_VALIDATOR_RELATIVE.as_posix()},
         "archive": identity("archive", "liblibleopard.a"),
-        "executable": identity("executable", "c7-avx2"),
-        "taskset": identity("taskset", "taskset"),
-        "python": identity("python", "python3"),
+        "executable": identity("executable", "c7-avx2", 0o755),
+        "taskset": identity("taskset", "taskset", 0o755),
+        "python": identity("python", "python3", 0o755),
         "core_source_closure": [
             {**identity("core-source", Path(path).name), "path": path}
             for path in CORE_SOURCE_CLOSURE
@@ -2018,6 +2244,12 @@ def parser() -> argparse.ArgumentParser:
     verify.add_argument("--manifest", required=True, type=Path,
                         help="retained manifest.json")
     verify.set_defaults(function=verify_campaign)
+    verify_failure = commands.add_parser(
+        "verify-failure",
+        help="portably authenticate a failed campaign without treating it as success")
+    verify_failure.add_argument("--failure", required=True, type=Path,
+                                help="retained failure.json")
+    verify_failure.set_defaults(function=verify_failure_campaign)
     test = commands.add_parser(
         "self-test", help="run synthetic validation and mutation tests only")
     test.set_defaults(function=lambda unused: self_test())

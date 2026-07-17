@@ -493,23 +493,72 @@ before any crossover conclusion.
 
 Rebuild the four normal backend archives, the Clang ASan+UBSan archive, all five
 strict standalone executables, five independently pinned correctness runs, and
-the affinity-selected smoke from a clean committed tooling revision.  Keep
-builds and results under ignored paths so final clean-HEAD validation remains
+the affinity-selected smoke from the same clean committed tooling revision in
+two checkouts.  The first checkout produces the required initial
+`comparison.status=not-run` peer.  The original checkout then rebuilds the same
+relative paths and produces the final `comparison.status=pass` manifest.  Keep
+both builds and results under ignored paths so clean-HEAD validation remains
 meaningful.  Select the frozen integrated core explicitly; it must be an
 ancestor of tooling `HEAD`, and all 22 core-closure paths must still match it
-byte for byte.  Omitting
-`--cpus` chooses the lowest five IDs from `sched_getaffinity`; the smoke uses the
-first selected CPU.  An explicit `--cpus` still requires exactly five distinct
-allowed IDs:
+byte for byte.  Omitting `--cpus` chooses the same lowest five IDs from
+`sched_getaffinity` in each sequential run; the smoke uses the first selected
+CPU.
 
+The following is the complete two-checkout sequence.  `PEER_ROOT` and the
+relative lab path must not exist before starting.  Five builds run concurrently,
+so `JOBS_PER_BUILD=25` uses at most 125 compile jobs on the 128-CPU target while
+remaining runnable on smaller allowed CPU sets:
+
+    SOURCE_ROOT="$(git rev-parse --show-toplevel)"
+    cd "$SOURCE_ROOT"
     test -z "$(git status --porcelain=v1 --untracked-files=all)"
-    CORE_SHA=<frozen-integrated-core-commit>
+    TOOLING_SHA="$(git rev-parse HEAD)"
+    : "${CORE_SHA:?export CORE_SHA as the full frozen integrated core commit}"
+    git merge-base --is-ancestor "$CORE_SHA" "$TOOLING_SHA"
+    LAB_REL=.research/leopard2/c7-v4-ab
+    PEER_ROOT="$(dirname "$SOURCE_ROOT")/leopard-c7-peer-${TOOLING_SHA:0:12}"
+    test ! -e "$PEER_ROOT"
+    test ! -e "$SOURCE_ROOT/$LAB_REL"
+    git worktree add --detach "$PEER_ROOT" "$TOOLING_SHA"
+    test -z "$(git -C "$PEER_ROOT" status --porcelain=v1 --untracked-files=all)"
+    CPU_COUNT="$(python3 -c 'import os; print(len(os.sched_getaffinity(0)))')"
+    JOBS_PER_BUILD=$((CPU_COUNT / 5))
+    if [ "$JOBS_PER_BUILD" -lt 1 ]; then JOBS_PER_BUILD=1; fi
+    if [ "$JOBS_PER_BUILD" -gt 25 ]; then JOBS_PER_BUILD=25; fi
+
+    (
+      cd "$PEER_ROOT"
+      PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -X dev \
+        experiments/leopard2/non_power_of_two/c7/run_matrix.py \
+        --core-git-sha "$CORE_SHA" --jobs-per-build "$JOBS_PER_BUILD" \
+        --build-dir "$LAB_REL/build" \
+        --results-dir "$LAB_REL/results" \
+        --manifest "$LAB_REL/results/build-run-manifest.json"
+    )
+
+    cd "$SOURCE_ROOT"
     PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -X dev \
       experiments/leopard2/non_power_of_two/c7/run_matrix.py \
-      --core-git-sha "$CORE_SHA" --jobs-per-build 4 \
-      --build-dir .research/leopard2/c7-final/build \
-      --results-dir .research/leopard2/c7-final/results \
-      --manifest .research/leopard2/c7-final/results/build-run-manifest.json
+      --core-git-sha "$CORE_SHA" --jobs-per-build "$JOBS_PER_BUILD" \
+      --build-dir "$LAB_REL/build" \
+      --results-dir "$LAB_REL/results" \
+      --manifest "$LAB_REL/results/build-run-manifest.json" \
+      --compare-reproducibility-manifest \
+        "$PEER_ROOT/$LAB_REL/results/build-run-manifest.json" \
+      --compare-reproducibility-root "$PEER_ROOT"
+
+    BUILD_MANIFEST="$SOURCE_ROOT/$LAB_REL/results/build-run-manifest.json"
+    python3 - "$BUILD_MANIFEST" <<'PY'
+    import json
+    import sys
+    with open(sys.argv[1], encoding="utf-8") as stream:
+        manifest = json.load(stream)
+    assert manifest["reproducibility"]["comparison"]["status"] == "pass"
+    PY
+    PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -X dev \
+      experiments/leopard2/non_power_of_two/c7/validate_evidence.py \
+      "$BUILD_MANIFEST" --source-root "$SOURCE_ROOT" \
+      --evidence-root "$SOURCE_ROOT" --live --require-checkout-head
 
 The separate authoritative runner consumes the resulting non-sanitized AVX2
 archive, standalone executable, and final v4 A/B build manifest.  It runs the
@@ -524,8 +573,10 @@ setup and execution metric.  The runner supports distinct clean tooling and
 ancestor core commits, records exact Git trees plus runner, harness, archive,
 executable, Python, and `taskset` hashes, proves the same fixed 22-file core
 source closure used by the build runner, and checks the harness's embedded
-source, archive, and core identities.  A coordinator must first reserve one allowed
-physical core and its SMT sibling using canonical
+source, archive, and core identities.  The committed `run_matrix.py` and
+`validate_evidence.py` tools remain nonexecutable Git mode `100644` files and
+are invoked through the recorded Python interpreter.  A coordinator must first
+reserve one allowed physical core and its SMT sibling using canonical
 `leopard2-cpu-reservation/v1` JSON.  The runner takes a nonblocking exclusive
 lock on that file and also takes the per-user system-wide shared pair lease
 `/run/user/UID/leopard2-cpu-leases/leopard2-cpu-pair-UID-A-B.lock`.  The runtime
@@ -557,12 +608,10 @@ Run the synthetic validator and mutation suite before reserving a core:
 Then run one authoritative campaign, substituting an allowed SMT pair and the
 exact ignored build paths produced above:
 
-    TOOLING_SHA="$(git rev-parse HEAD)"
     CPU=<isolated-logical-cpu>
     SIBLING=<that-cpu-smt-sibling>
-    RESERVATION=.research/leopard2/c7-final/cpu-reservation.json
-    BUILD_MANIFEST=.research/leopard2/c7-final/results/build-run-manifest.json
-    OUTPUT=.research/leopard2/c7-final/authoritative
+    RESERVATION="$SOURCE_ROOT/$LAB_REL/cpu-reservation.json"
+    OUTPUT="$SOURCE_ROOT/$LAB_REL/authoritative"
     # The coordinator writes RESERVATION as canonical JSON without a newline:
     # {"benchmark_cpu":CPU,"nonce":"...","owner":"...",
     #  "reserved_sibling":SIBLING,"schema":"leopard2-cpu-reservation/v1",
@@ -570,24 +619,38 @@ exact ignored build paths produced above:
     chmod 600 "$RESERVATION"
     test "$(stat -c '%u:%a' "/run/user/$(id -u)")" = "$(id -u):700"
     python3 experiments/leopard2/non_power_of_two/c7/run_authoritative.py run \
-      --source-root . --expected-tooling-commit "$TOOLING_SHA" \
+      --source-root "$SOURCE_ROOT" --expected-tooling-commit "$TOOLING_SHA" \
       --expected-core-commit "$CORE_SHA" \
-      --archive .research/leopard2/c7-final/build/core-avx2/liblibleopard.a \
-      --executable .research/leopard2/c7-final/build/c7-avx2 \
+      --archive "$SOURCE_ROOT/$LAB_REL/build/core-avx2/liblibleopard.a" \
+      --executable "$SOURCE_ROOT/$LAB_REL/build/c7-avx2" \
       --build-manifest "$BUILD_MANIFEST" \
       --reservation-file "$RESERVATION" --output "$OUTPUT" \
       --cpu "$CPU" --sibling "$SIBLING"
 
 Success writes v2 canonical `raw.json` and `manifest.json`, the verified v4
 build manifest, and the exact child result and stdout/stderr bytes.  Any failure
-after output-directory creation retains a signed v2 `failure.json`, available
-build/isolation context, and whatever child artifacts were available;
-an existing output directory is never replaced.  Verification is portable and
-does not reopen the original checkout, build, or reservation paths:
+after output-directory creation retains a signed v3 `failure.json` with every
+available request, input, host, reservation, pair-lease, build, isolation, and
+child record, plus checksummed child streams and partial result when present.  An existing
+output directory is never replaced.  Success and failure have deliberately
+different replay commands and output statuses; authenticating a failure never
+turns it into benchmark success.  Both forms are portable and do not reopen the
+original checkout, build, or reservation paths:
 
     PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -X dev \
       experiments/leopard2/non_power_of_two/c7/run_authoritative.py verify \
       --manifest "$OUTPUT/manifest.json"
+
+    # Use this instead when the campaign retained failure.json.  A valid replay
+    # prints status=VERIFIED_FAILURE plus validation, timeout, or child-exit.
+    PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -X dev \
+      experiments/leopard2/non_power_of_two/c7/run_authoritative.py \
+      verify-failure --failure "$OUTPUT/failure.json"
+
+After the authoritative bundle has been replayed and copied to its retained
+location, remove the detached peer worktree if it is no longer needed:
+
+    git worktree remove --force "$PEER_ROOT"
 
 Regenerate independent algebra and validate retained evidence:
 

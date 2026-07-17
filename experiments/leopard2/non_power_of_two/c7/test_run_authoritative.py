@@ -265,8 +265,6 @@ class AuthoritativeRunnerTests(unittest.TestCase):
                            (archive, b"!<arch>\n"), (executable, b"ELF fixture\n")):
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
-        build_runner.chmod(0o755)
-        build_validator.chmod(0o755)
         executable.chmod(0o755)
         identities = {
             "git": {"tooling_commit": "b" * 40, "core_commit": "e" * 40},
@@ -292,6 +290,8 @@ class AuthoritativeRunnerTests(unittest.TestCase):
                 identities["executable"], archive, executable)
         self.assertEqual(attestation["manifest"]["sha256"], identity["sha256"])
         self.assertEqual(attestation["avx2"]["optimization"], "-O2")
+        self.assertEqual(identities["build_runner"]["mode"] & 0o111, 0)
+        self.assertEqual(identities["build_validator"]["mode"] & 0o111, 0)
 
         with executable.open("ab") as stream:
             stream.write(b"trailing mutation")
@@ -302,6 +302,57 @@ class AuthoritativeRunnerTests(unittest.TestCase):
                 identities["source"], identities["build_runner"],
                 identities["build_validator"], identities["archive"],
                 runner.file_identity(executable, "executable"), archive, executable)
+
+    def test_committed_python_tool_modes_are_nonexecutable_and_enforced(self) -> None:
+        source_root = MODULE_PATH.parents[4]
+        head = subprocess.check_output(
+            ["git", "-C", str(source_root), "rev-parse", "HEAD"],
+            text=True).strip()
+        for relative, kind in (
+                (runner.BUILD_RUNNER_RELATIVE, "build-runner"),
+                (runner.BUILD_VALIDATOR_RELATIVE, "build-validator")):
+            entry = subprocess.check_output(
+                ["git", "-C", str(source_root), "ls-tree", head, "--",
+                 relative.as_posix()], text=True)
+            self.assertTrue(entry.startswith("100644 blob "), entry)
+            identity = runner.committed_file_identity(
+                source_root, head, relative, kind)
+            self.assertEqual(identity["mode"] & 0o111, 0)
+
+        repository = self.root / "mode-repository"
+        repository.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+        subprocess.run(["git", "config", "user.email", "fixture@example.com"],
+                       cwd=repository, check=True)
+        subprocess.run(["git", "config", "user.name", "Fixture"],
+                       cwd=repository, check=True)
+        tool = repository / "tool.py"
+        tool.write_text("print('fixture')\n", encoding="utf-8")
+        tool.chmod(0o644)
+        subprocess.run(["git", "add", "tool.py"], cwd=repository, check=True)
+        subprocess.run(["git", "commit", "-qm", "fixture"],
+                       cwd=repository, check=True)
+        commit = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip()
+        identity = runner.committed_file_identity(
+            repository, commit, Path("tool.py"), "build-runner")
+        self.assertEqual(identity["mode"] & 0o111, 0)
+        tool.chmod(0o755)
+        with self.assertRaises(runner.EvidenceError):
+            runner.committed_file_identity(
+                repository, commit, Path("tool.py"), "build-runner")
+
+        inputs = runner.synthetic_inputs()
+        self.assertEqual(inputs["build_runner"]["mode"] & 0o111, 0)
+        self.assertEqual(inputs["build_validator"]["mode"] & 0o111, 0)
+        runner.validate_input_snapshot(inputs)
+        inputs["build_runner"]["mode"] = 0o755
+        inputs["binding_sha256"] = runner.sha256_bytes(runner.canonical_bytes(
+            {key: value for key, value in inputs.items()
+             if key != "binding_sha256"}))
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_input_snapshot(inputs)
+
     def test_manifest_and_raw_coordinated_mutations_rejected(self) -> None:
         changed = copy.deepcopy(self.manifest)
         changed["validated_output"]["cell_count"] = 11
@@ -440,13 +491,16 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         failure_path = output / "failure.json"
         self.assertTrue(failure_path.is_file())
         failure = runner.strict_json(failure_path.read_bytes(), "failure")
-        runner.validate_failure(failure)
+        runner.validate_failure(failure, output, check_files=True)
         self.assertEqual(failure["schema"], runner.FAILURE_SCHEMA)
+        self.assertEqual(failure["status"], "failed")
+        self.assertEqual(failure["failure_kind"], "validation")
         self.assertIn("synthetic topology failure", failure["error"])
         self.assertIsNone(failure["child"])
+        self.assertIsNotNone(failure["request"])
         self.assertFalse((output / "manifest.json").exists())
 
-    def _run_child_failure(self, *, timeout: bool) -> dict:
+    def _run_child_failure(self, *, timeout: bool) -> tuple[dict, Path]:
         inputs = runner.synthetic_inputs()
         executable = self.root / ("timeout-executable" if timeout else "exit-executable")
         archive = self.root / ("timeout-archive.a" if timeout else "exit-archive.a")
@@ -502,7 +556,11 @@ class AuthoritativeRunnerTests(unittest.TestCase):
             with self.assertRaises(runner.EvidenceError):
                 runner.run_campaign(options)
         failure = runner.strict_json((output / "failure.json").read_bytes(), "failure")
-        runner.validate_failure(failure)
+        runner.validate_failure(failure, output, check_files=True)
+        self.assertIsNotNone(failure["request"])
+        self.assertIsNotNone(failure["inputs_before"])
+        self.assertIsNotNone(failure["host_before"])
+        self.assertIsNotNone(failure["reservation"])
         self.assertIsNotNone(failure["build_provenance"])
         self.assertIsNotNone(failure["isolation"])
         self.assertFalse((output / "manifest.json").exists())
@@ -510,19 +568,91 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         stderr = runner.read_artifact(output, failure["child"]["stderr"], "stderr")
         self.assertEqual(stdout, b"partial" if timeout else b"")
         self.assertEqual(stderr, b"timed out" if timeout else b"failed\n")
-        return failure
+        return failure, output
 
     def test_nonzero_child_retains_failure_evidence(self) -> None:
-        failure = self._run_child_failure(timeout=False)
+        failure, _output = self._run_child_failure(timeout=False)
         self.assertEqual(failure["child"]["returncode"], 7)
         self.assertFalse(failure["child"]["timed_out"])
-        self.assertIn("C7 child exited 7", failure["error"])
+        self.assertEqual(failure["failure_kind"], "child-exit")
+        self.assertEqual(failure["error"], "C7 child exited 7")
 
     def test_timeout_child_retains_failure_evidence(self) -> None:
-        failure = self._run_child_failure(timeout=True)
+        failure, output = self._run_child_failure(timeout=True)
         self.assertEqual(failure["child"]["returncode"], 124)
         self.assertTrue(failure["child"]["timed_out"])
-        self.assertIn("C7 child timed out", failure["error"])
+        self.assertEqual(failure["failure_kind"], "timeout")
+        self.assertEqual(failure["error"], "C7 child timed out")
+
+        completed = subprocess.run(
+            [sys.executable, str(MODULE_PATH), "verify-failure", "--failure",
+             str(output / "failure.json")], check=False, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
+                 "PYTHONHASHSEED": "0"})
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        report = json.loads(completed.stdout)
+        self.assertEqual(report["status"], "VERIFIED_FAILURE")
+        self.assertEqual(report["failure_kind"], "timeout")
+
+    def test_failure_coordinated_resigned_mutations_are_rejected(self) -> None:
+        failure, output = self._run_child_failure(timeout=True)
+
+        mutations = (
+            lambda value: value.update(status="pass"),
+            lambda value: value.update(failure_kind="child-exit"),
+            lambda value: value.update(error="C7 child exited 124"),
+            lambda value: value["child"].update(returncode=0),
+            lambda value: value["child"].update(timed_out=False),
+            lambda value: (
+                value.update(failure_kind="validation"),
+                value["child"].update(returncode=0, timed_out=False)),
+            lambda value: value["child"]["stdout"].update(sha256="f" * 64),
+            lambda value: value["child"]["stderr"].update(path="../outside"),
+            lambda value: value["build_provenance"]["attestation"]["avx2"].update(
+                optimization="-O0"),
+            lambda value: value["reservation"]["payload"].update(status="released"),
+            lambda value: value["pair_lease"].update(inode=99),
+        )
+        for index, mutation in enumerate(mutations):
+            changed = copy.deepcopy(failure)
+            mutation(changed)
+            with self.subTest(index=index), self.assertRaises(runner.EvidenceError):
+                runner.validate_failure(
+                    resign(changed), output, check_files=True)
+
+    def test_malformed_nested_failure_is_caught_by_cli(self) -> None:
+        failure, output = self._run_child_failure(timeout=True)
+        malformed_values = []
+        changed = copy.deepcopy(failure)
+        changed["isolation"] = {"timing_cpu": 0, "sibling_cpu": 1}
+        malformed_values.append(changed)
+        changed = copy.deepcopy(failure)
+        changed["isolation"]["before"]["timing_cpu"] = None
+        malformed_values.append(changed)
+        changed = copy.deepcopy(failure)
+        changed["child"] = {"timed_out": True}
+        malformed_values.append(changed)
+        changed = copy.deepcopy(failure)
+        changed["build_provenance"] = {"manifest": None}
+        malformed_values.append(changed)
+        changed = copy.deepcopy(failure)
+        changed["pair_lease"] = {"payload": None}
+        malformed_values.append(changed)
+
+        for index, changed in enumerate(malformed_values):
+            path = output / f"malformed-{index}.json"
+            path.write_bytes(runner.canonical_bytes(resign(changed)) + b"\n")
+            completed = subprocess.run(
+                [sys.executable, str(MODULE_PATH), "verify-failure", "--failure",
+                 str(path)], check=False, text=True, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
+                     "PYTHONHASHSEED": "0"})
+            with self.subTest(index=index):
+                self.assertEqual(completed.returncode, 1)
+                self.assertIn("C7 authoritative evidence error:", completed.stderr)
+                self.assertNotIn("Traceback (most recent call last)", completed.stderr)
 
 
 if __name__ == "__main__":
