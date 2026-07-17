@@ -9,6 +9,10 @@
 #include <memory>
 #include <new>
 
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+#endif
+
 namespace leopard {
 void xor_mem_baseline(void* destination, const void* source, uint64_t byte_count);
 namespace backend {
@@ -375,6 +379,33 @@ static void ScalarXorMemory2To1(
     uint8_t* output = static_cast<uint8_t*>(destination);
     const uint8_t* input0 = static_cast<const uint8_t*>(source0);
     const uint8_t* input1 = static_cast<const uint8_t*>(source1);
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+    while (byte_count >= 64)
+    {
+        for (unsigned offset = 0; offset < 64; offset += 16)
+        {
+            uint8x16_t result = veorq_u8(
+                vld1q_u8(output + offset), vld1q_u8(input0 + offset));
+            result = veorq_u8(result, vld1q_u8(input1 + offset));
+            vst1q_u8(output + offset, result);
+        }
+        output += 64;
+        input0 += 64;
+        input1 += 64;
+        byte_count -= 64;
+    }
+    while (byte_count >= 16)
+    {
+        uint8x16_t result = veorq_u8(
+            vld1q_u8(output), vld1q_u8(input0));
+        result = veorq_u8(result, vld1q_u8(input1));
+        vst1q_u8(output, result);
+        output += 16;
+        input0 += 16;
+        input1 += 16;
+        byte_count -= 16;
+    }
+#endif
     while (byte_count >= sizeof(uint64_t))
     {
         uint64_t destination_word;
