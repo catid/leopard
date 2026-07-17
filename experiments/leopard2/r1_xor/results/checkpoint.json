@@ -1,0 +1,132 @@
+{
+  "schema": "leopard2-r1-xor-checkpoint/v1",
+  "runtime_candidate": {
+    "source_commit": "800e0367baa06d8adb3304615b914a51698052aa",
+    "executable_sha256": "175e64f23dbfc7041694cc9fa7b866021b18d6116213cc9382b93b646eccbfc4",
+    "benchmark_scope": "exact recorded x86 executable; later AArch64-only guard hardening leaves the benchmarked x86 path unchanged",
+    "source_commit_provenance": "observed from CMAKE_HOME_DIRECTORY at manifest creation; not embedded in or cryptographically bound to the executable"
+  },
+  "baseline": {
+    "source_commit": "694881245bb07a58cb69b97fdffe5772d39f65e1",
+    "executable_sha256": "5c2b77cd747892fc64dd3907ae219b5bc0a7b291edb185df60ca0367b9301132"
+  },
+  "configuration_id": "2140858c6e2f7ab17155f4df94ddb5d503411f7cfebca98bf32dd0bfac721bcd",
+  "evidence": {
+    "ignored_result_directory": ".research/leopard2/r1-xor/pinned-800e036",
+    "manifest_sha256": "54f5d62180b201296cc3ca98ac8fd141e56d3d76298063f9e8adea41ba4f6be0",
+    "analysis_sha256": "4a10242f7946f2356100ee0f282e0120191eed26e00e22cb87eba7e26f391207",
+    "runner_sha256": "3e75a43ec89f70aeaf3f9dc1a422560da90952a84d4f7fd4771de94480510a80",
+    "artifact_tree_sha256": "881749de0f88d664088f6b2aaed1e7823ee6ff1c858b250d468b0af8f9c03c0f",
+    "artifact_tree_method": "sha256 of sorted relative-path sha256sum output for all evidence files",
+    "artifact_files": 3113,
+    "artifact_bytes": 5075529,
+    "jobs": 51,
+    "benchmark_invocations": 1020,
+    "abba_rounds_per_job": 5,
+    "inner_iterations": 9,
+    "warmups": 2
+  },
+  "machine": {
+    "cpu_model": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "allowed_logical_cpus": 30,
+    "pinned_cpu": 14,
+    "physical_core": 14,
+    "smt_sibling_kept_idle": 30,
+    "package": 0,
+    "governor_reported": "powersave",
+    "energy_preference_reported": "performance"
+  },
+  "matrix": {
+    "backends": [
+      "scalar",
+      "ssse3",
+      "avx2"
+    ],
+    "target_cells_per_backend": 10,
+    "neighbor_cells_per_backend": 7,
+    "target_k": [
+      3,
+      9,
+      10,
+      32,
+      240
+    ],
+    "shard_byte_range": [
+      1,
+      1048576
+    ],
+    "batch_counts": [
+      1,
+      8,
+      64
+    ],
+    "neighbors": [
+      "R=1 K=2 single-source tail",
+      "R=2 non-fused transform path"
+    ]
+  },
+  "target_results_percent": {
+    "avx2": {
+      "encode_median_range": [
+        0.6072539241484654,
+        61.651223009266175
+      ],
+      "decode_median_range": [
+        3.020890736937032,
+        43.008243033206604
+      ],
+      "encode_credible_five_percent_wins": 8,
+      "decode_credible_five_percent_wins": 8
+    },
+    "scalar": {
+      "encode_median_range": [
+        6.5386394286206295,
+        31.453894021679176
+      ],
+      "decode_median_range": [
+        4.700028323956085,
+        31.367453930916312
+      ],
+      "encode_credible_five_percent_wins": 10,
+      "decode_credible_five_percent_wins": 8
+    },
+    "ssse3": {
+      "encode_median_range": [
+        7.984977712260011,
+        54.36145935357493
+      ],
+      "decode_median_range": [
+        4.968624627095997,
+        56.037048412547506
+      ],
+      "encode_credible_five_percent_wins": 10,
+      "decode_credible_five_percent_wins": 9
+    }
+  },
+  "neighbor_results_percent": {
+    "avx2": {
+      "worst_encode_median": -0.41588397323834014,
+      "worst_decode_median": -1.7199520285488545,
+      "credible_regressions_over_two_percent": 0
+    },
+    "scalar": {
+      "worst_encode_median": -0.46462466694559,
+      "worst_decode_median": -0.605991635608405,
+      "credible_regressions_over_two_percent": 0
+    },
+    "ssse3": {
+      "worst_encode_median": -0.6648111561368908,
+      "worst_decode_median": -1.4037841136978035,
+      "credible_regressions_over_two_percent": 0
+    }
+  },
+  "promotion": {
+    "fused_slot": "promoted for every qualified backend",
+    "r1_pairing": "promoted without a shard-size threshold",
+    "new_online_autotuning": false,
+    "all_backend_metric_groups_have_a_credible_five_percent_target_win": true,
+    "no_observed_target_or_neighbor_regression_over_two_percent": true,
+    "no_credible_target_or_neighbor_regression_over_two_percent": true,
+    "aggregate_analysis_gate_passed": true
+  }
+}
