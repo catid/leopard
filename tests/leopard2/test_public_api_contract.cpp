@@ -761,6 +761,52 @@ void test_aligned_decode_input_staging_elision(
                 ragged_plan == ragged_one_shot,
             "plan and one-shot transform scratch geometry diverged");
         counts->scratch_checks += 3;
+
+        const size_t byte_sizes[] = { 64, item.ragged_bytes };
+        for (size_t size_i = 0;
+             size_i < sizeof(byte_sizes) / sizeof(byte_sizes[0]); ++size_i)
+        {
+            const size_t bytes = byte_sizes[size_i];
+            Shards source(item.k, Bytes(bytes, 0));
+            fill_shards(source, static_cast<uint32_t>(
+                0x51a9e000u + case_i * 17u + size_i));
+            Shards recovery(item.r, Bytes(bytes, 0));
+            std::vector<const void*> source_pointers = const_pointers(source);
+            std::vector<void*> recovery_outputs = mutable_pointers(recovery);
+            size_t encode_scratch_bytes = 0;
+            require_result(leo2_encode_scratch_size(codec.codec, bytes,
+                &encode_scratch_bytes), LEO2_SUCCESS,
+                "input-staging fixture encode scratch query");
+            AlignedBuffer encode_scratch(encode_scratch_bytes);
+            require_result(leo2_encode(codec.codec, bytes,
+                &source_pointers[0], &recovery_outputs[0],
+                encode_scratch.data(), encode_scratch.size()), LEO2_SUCCESS,
+                "input-staging fixture encode");
+
+            const Shards source_before = source;
+            const Shards recovery_before = recovery;
+            std::vector<const void*> decode_original =
+                const_pointers(source);
+            std::vector<const void*> decode_recovery =
+                const_pointers(recovery);
+            decode_original[0] = NULL;
+            Bytes restored(bytes, 0xcc);
+            std::vector<void*> restored_original(item.k, NULL);
+            restored_original[0] = &restored[0];
+            const size_t execution_scratch_bytes =
+                size_i == 0 ? aligned_plan : ragged_plan;
+            AlignedBuffer execution_scratch(execution_scratch_bytes);
+            require_result(leo2_decode_plan_execute(plan.plan, bytes,
+                &decode_original[0], &decode_recovery[0],
+                &restored_original[0], execution_scratch.data(),
+                execution_scratch.size()), LEO2_SUCCESS,
+                "input-staging transform decode");
+            require(restored == source[0],
+                "input-staging transform restored wrong bytes");
+            require(source == source_before && recovery == recovery_before,
+                "input-staging transform modified a caller input shard");
+            ++counts->scratch_checks;
+        }
     }
 }
 
