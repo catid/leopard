@@ -620,14 +620,12 @@ def validate_build_identity(value: Mapping[str, Any]) -> None:
     require_exact_keys(compile_commands, {"adapter", "leopard2"}, "compile commands")
     for name, manifest in compile_commands.items():
         validate_compile_manifest(manifest, f"{name} compile commands")
-    forbidden_isa_flags = {
-        "-msse2", "-msse3", "-mssse3", "-msse4.1", "-msse4.2", "-mpclmul",
-        "-mavx", "-mavx2", "-mavx512f", "-march=native", "-mtune=native"}
     for entry in compile_commands["adapter"]["entries"]:
         if str(entry["file"]).startswith("${GF_COMPLETE_SOURCE}/"):
-            flags = set(shlex.split(str(entry["command"])))
-            if flags & forbidden_isa_flags:
-                raise ComparisonError("GF-Complete compile closure contains broad ISA flags")
+            flags = shlex.split(str(entry["command"]))
+            if any(flag.startswith("-m") and len(flag) > 2 for flag in flags):
+                raise ComparisonError(
+                    "GF-Complete compile closure contains a target/ISA -m flag")
     adapter_files = [entry["file"] for entry in compile_commands["adapter"]["entries"]]
     if (not any(path.startswith("${JERASURE_SOURCE}/") for path in adapter_files) or
             not any(path.startswith("${GF_COMPLETE_SOURCE}/") for path in adapter_files) or
@@ -2266,6 +2264,21 @@ def run_mutation_tests(correctness_path: Path) -> dict[str, int]:
     changed = copy.deepcopy(correctness)
     changed["results"][0]["document"]["provider"][
         "gf_complete_simd_flags"] = "-mpclmul"
+    changed["artifact_sha256"] = canonical_digest(changed)
+    correctness_mutations.append(changed)
+    changed = copy.deepcopy(correctness)
+    compile_manifest = changed["sources"]["build_identity"]["compile_commands"][
+        "adapter"]
+    gf_entry = next(entry for entry in compile_manifest["entries"]
+                    if entry["file"].startswith("${GF_COMPLETE_SOURCE}/"))
+    gf_entry["command"] += " -march=x86-64-v3"
+    compile_manifest["sha256"] = hashlib.sha256(json.dumps(
+        compile_manifest["entries"], sort_keys=True,
+        separators=(",", ":")).encode("utf-8")).hexdigest()
+    build_identity = changed["sources"]["build_identity"]
+    build_identity["identity_sha256"] = mapping_digest({
+        key: value for key, value in build_identity.items()
+        if key != "identity_sha256"})
     changed["artifact_sha256"] = canonical_digest(changed)
     correctness_mutations.append(changed)
     changed = copy.deepcopy(correctness)
