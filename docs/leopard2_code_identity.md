@@ -3,7 +3,7 @@
 Status: Experiment W reference proposal, not public API or a frozen production
 wire contract.  Family 3/version 1/map 1 nevertheless freezes the experimental
 C7 exact-low mathematics so retained research artifacts cannot reinterpret it.
-Bead: `leopard-79h.18.23`.  Validation date: 2026-07-16 UTC.
+Bead: `leopard-79h.18.23`.  Validation date: 2026-07-17 UTC.
 
 The reference implementation is
 `experiments/leopard2/code_identity/code_identity.py`.  Its identifier describes
@@ -121,6 +121,38 @@ Run:
       PYTHONDONTWRITEBYTECODE=1 python3 test_code_identity_c.py \
         --cc gcc --sanitizers
 
+Build the isolated coverage-guided target and generate its deterministic seed
+corpus with:
+
+    cmake -S ../../.. -B ../../../build/code-id-fuzz \
+      -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+      -DLEO2_BUILD_TESTS=OFF -DLEO2_BUILD_BENCHMARKS=OFF \
+      -DLEO2_BUILD_FUZZERS=ON -DLEO2_ENABLE_CUDA=OFF \
+      -DCMAKE_C_COMPILER=clang-18 -DCMAKE_CXX_COMPILER=clang++-18
+    JOBS="$(nproc)"; if [ "$JOBS" -gt 128 ]; then JOBS=128; fi
+    cmake --build ../../../build/code-id-fuzz \
+      --target leopard2_code_identity_fuzzer -j "$JOBS"
+    PYTHONDONTWRITEBYTECODE=1 python3 make_fuzz_corpus.py \
+      --output ../../../build/code-id-corpus
+    ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+      UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+      ../../../build/code-id-fuzz/leopard2_code_identity_fuzzer \
+      ../../../build/code-id-corpus -max_len=65535 -rss_limit_mb=8192
+
+Use the allowed CPU count rather than a literal 128 when fewer CPUs are in the
+process affinity mask.  The explicit libFuzzer RSS limit avoids a Clang 18
+high-water-accounting false positive seen in long-lived launch environments;
+an experiment runner should still impose an external per-job memory cap.
+
+The same complete C/Python differential can execute as a real big-endian s390x
+binary under QEMU.  On Debian/Ubuntu the optional validation-only packages are
+`gcc-s390x-linux-gnu`, `libc6-dev-s390x-cross`, and `qemu-user-static`; they are
+not build or runtime dependencies of Leopard:
+
+    PYTHONDONTWRITEBYTECODE=1 python3 test_code_identity_c.py \
+      --cc s390x-linux-gnu-gcc --static \
+      --runner /usr/bin/qemu-s390x-static
+
 The suite checks golden bytes and hashes, 6,085 profile/field/count boundary
 round trips, 4,162 metadata count/length round trips, every truncation, trailing
 bytes, reserved bits, bad lengths, integer overflow, inconsistent derived fields,
@@ -129,14 +161,17 @@ and 20,000 deterministic mutation cases.  Unknown noncritical data is explicitly
 round-tripped.  The test has no third-party dependencies.
 
 The independent C99 implementation is `code_identity.c` with its deliberately
-experimental header `code_identity.h`.  It is not included by the root CMake
-build, installed, or exposed through the Leopard public ABI.  It parses metadata
-as borrowed views into caller-owned input and serializes into caller-owned
-storage; the implementation performs no allocation.  Borrowed input and metadata
-storage must not overlap the destination objects.  The size-query operation
-reports the exact required buffer size and undersized output fails before any
-write.  Counts, TLV values, TLV count, and complete identifiers retain the same
-4096-byte, 64-entry, and 65535-byte bounds as the Python reference.
+experimental header `code_identity.h`.  It is not linked into `libleopard`,
+installed, or exposed through the Leopard public ABI.  Root CMake sees it only
+inside the default-off `leopard2_code_identity_fuzzer` target when
+`LEO2_BUILD_FUZZERS=ON`; a tests/benchmarks/fuzzers-off archive contains neither
+identity nor fuzzer symbols.  It parses metadata as borrowed views into
+caller-owned input and serializes into caller-owned storage; the implementation
+performs no allocation.  Borrowed input and metadata storage must not overlap the
+destination objects.  The size-query operation reports the exact required buffer
+size and undersized output fails before any write.  Counts, TLV values, TLV count,
+and complete identifiers retain the same 4096-byte, 64-entry, and 65535-byte
+bounds as the Python reference.
 
 `test_code_identity_c.c` contains 217 direct C checks and also provides a test-
 only line protocol.  `test_code_identity_c.py` compiles it with strict C99 GCC
@@ -155,13 +190,25 @@ allocations, so an out-of-bounds parser read cannot hide inside a larger test
 buffer.  The harness compiles into an automatically removed temporary directory
 and leaves no generated binary or Python bytecode in the source tree.
 
-The independent-implementation and deterministic sanitized differential gates
-are now satisfied, including the frozen experimental exact-low identity.
-Promotion still requires a sustained coverage-guided C API fuzzing campaign,
-cross-endian or emulated-endian validation, and a concrete API/storage use case
-that justifies committing a public wire contract.  Kill or revise this proposal
-if the fixed header cannot represent a frozen profile without profile-specific
+At implementation commit `d5d605b`, 28 allowed CPUs each completed 50,000
+libFuzzer executions under ASan+UBSan: 1,400,000 total executions, zero crash or
+sanitizer artifacts, maximum reported worker RSS 60 MiB, and a merged corpus of
+2,458 files.  The deterministic corpus began with 178 files covering golden,
+malformed, profile-boundary, critical-extension, and builder-state inputs.  The
+same 217 direct C checks and complete differential matrix passed in a statically
+linked s390x binary under QEMU 8.2.2 with zero mismatch, providing executed
+big-endian evidence rather than an inference from byte-wise loads.  The compact
+machine-readable checkpoint is `fuzz_checkpoint.json`; raw corpora and worker
+logs remain ignored build artifacts.
+
+The independent implementation, deterministic sanitized differential,
+coverage-guided parser, and emulated big-endian research gates are now
+satisfied, including the frozen experimental exact-low identity.  Public
+promotion still requires a concrete API/storage use case and a deliberate
+decision that the remaining exact-profile mathematics are stable enough to
+justify a long-term wire promise.  Kill or revise this proposal if the fixed
+header cannot represent a frozen profile without profile-specific
 interpretation, forward-compatible parsing becomes ambiguous, or the envelope
 adds material operational complexity without preventing real profile
-mismatches.  Until those gates pass, this code remains isolated experimental
+mismatches.  Until that decision, this code remains isolated experimental
 evidence rather than public ABI.
