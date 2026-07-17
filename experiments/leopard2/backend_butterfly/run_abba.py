@@ -28,12 +28,12 @@ except ImportError:  # Verification remains usable on non-POSIX hosts.
     fcntl = None
 
 
-SCHEMA = "leopard2-backend-butterfly-abba/v3"
+SCHEMA = "leopard2-backend-butterfly-abba/v4"
 RAW_SCHEMA = "leopard2-backend-butterfly-raw/v1"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 SEQUENCES = (("A1", "baseline"), ("B1", "candidate"),
              ("B2", "candidate"), ("A2", "baseline"))
-ROUNDS = (1, 2, 3)
+ROUNDS = tuple(range(1, 9))
 # This campaign qualifies a correctness-driven backend-routing refactor, not a
 # speculative speedup.  "target" identifies the primary rate/size regimes;
 # both those cells and their neighbors use the bead's one-sided non-regression
@@ -42,8 +42,8 @@ ROUNDS = (1, 2, 3)
 TARGET_THRESHOLD = -2.0
 NEIGHBOR_FLOOR = -2.0
 INVOCATION_SAMPLES = 7
-# One-sided 95% Student-t critical value with three ABBA rounds (df=2).
-ONE_SIDED_T95_DF2 = 2.9199855803537256
+# One-sided 95% Student-t critical value with eight ABBA rounds (df=7).
+ONE_SIDED_T95_DF7 = 1.894578605061305
 FRESH_BUILD_ENVIRONMENT = {
     "LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"}
 
@@ -811,7 +811,7 @@ def check_raw(raw, item, label, missing_indices=None):
 def invocation_log_standard_error(metric):
     """Conservative robust log-scale SE from one seven-sample invocation.
 
-    The benchmark does not retain the seven underlying samples in v3, so this
+    The benchmark does not retain the seven underlying samples in v4, so this
     deliberately uses both the reported MAD and full min/max span.  It is not a
     claim that the original samples can be reconstructed.
     """
@@ -859,9 +859,9 @@ def paired_abba_statistics(entries, raw_by_name, item, metric_index):
     between_mean_variance = statistics.variance(round_logs) / len(round_logs)
     within_mean_variance = sum(round_within_variances) / len(round_logs) ** 2
     standard_error = math.sqrt(between_mean_variance + within_mean_variance)
-    lower_log = mean_log - ONE_SIDED_T95_DF2 * standard_error
+    lower_log = mean_log - ONE_SIDED_T95_DF7 * standard_error
     return {
-        "method": "paired ABBA log-ratio; one-sided 95% t lower bound, df=2",
+        "method": "paired ABBA log-ratio; one-sided 95% t lower bound, df=7",
         "round_speedup_percent": round_speedups,
         "speedup_percent": (math.exp(mean_log) - 1.0) * 100.0,
         "lower_confidence_speedup_percent": (math.exp(lower_log) - 1.0) * 100.0,
@@ -892,9 +892,11 @@ def summarize(entries, raw_by_name):
                           for entry in entries
                           if entry["cell"] == item["name"] and
                           entry["build"] == build]
-                require(len(metrics) == 6,
-                        "{} {} {} requires six invocations".format(
-                            item["name"], metric_name, build))
+                expected_invocations = 2 * len(ROUNDS)
+                require(len(metrics) == expected_invocations,
+                        "{} {} {} requires {} invocations".format(
+                            item["name"], metric_name, build,
+                            expected_invocations))
                 values = [value["median_us_per_batch_call"] for value in metrics]
                 median = statistics.median(values)
                 mad = statistics.median(abs(value - median) for value in values)
@@ -3761,8 +3763,7 @@ def self_test(repo):
         def mutate_high_variance(m, b):
             prefix = "high-gf8-r"
             for entry in m["entries"]:
-                if (entry["name"].startswith(prefix) and
-                        entry["build"] == "candidate"):
+                if entry["name"].startswith(prefix):
                     def widen(raw):
                         for metric_name in ("encode_execution", "decode_execution"):
                             metric = raw["metrics"][metric_name]
@@ -3842,7 +3843,7 @@ def self_test(repo):
         expect_failure(lambda: reservation_record(noncanonical, cpu, sibling),
                        "noncanonical reservation")
         mutation_count = len(mutations) + 6
-    print("butterfly ABBA v3 self-test passed: path-independent replay + {} adversarial mutations".format(
+    print("butterfly ABBA v4 self-test passed: path-independent replay + {} adversarial mutations".format(
         mutation_count))
 
 
@@ -3885,7 +3886,7 @@ def main():
     try:
         if args.command == "run":
             run_campaign(args, repo)
-            print("butterfly ABBA v3 campaign passed: cells={} entries={}".format(
+            print("butterfly ABBA v4 campaign passed: cells={} entries={}".format(
                 len(CELLS), len(expected_jobs())))
         elif args.command == "verify":
             supplied = None
@@ -3895,7 +3896,7 @@ def main():
                 supplied = {"baseline": args.baseline, "candidate": args.candidate}
             validate_manifest(args.manifest, repo, args.raw_bundle,
                               supplied, args.matrix)
-            print("butterfly ABBA v3 path-independent evidence replay passed")
+            print("butterfly ABBA v4 path-independent evidence replay passed")
         elif args.command == "self-test":
             self_test(repo)
         else:
