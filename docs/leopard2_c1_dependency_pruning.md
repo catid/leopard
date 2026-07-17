@@ -255,6 +255,16 @@ The complete Debug CTest graph passed 49/49 after initializing the checkout's
 A tests-off Release archive also built cleanly, exported no test-hook symbol,
 and passed the repository's fail-closed SSE2/SSSE3/AVX2 member-isolation check.
 
+The fused-leaf follow-up repeated the focused matrix after its final compact
+start-index representation under GCC 13.3 strict Release, Clang 18.1
+ASan+UBSan, and Clang 18.1 TSan (OpenMP disabled in sanitizer builds); all
+passed. The complete Release CTest graph was effectively 49/49: the first run
+passed 48 tests and failed only because the fresh worktree lacked the tracked
+`sse2neon` contents, then the exact Visual Studio project test passed after
+`git submodule update --init sse2neon`. Its tests-off archive again contained
+no test hooks and passed portable ISA isolation. Independent review is still
+required before this follow-up can be integrated or benchmarked for promotion.
+
 These are correctness results, not timing evidence. Other workers were active
 on the host, so no cache-sensitive or authoritative crossover number was
 collected for this checkpoint.
