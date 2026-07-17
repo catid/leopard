@@ -1,226 +1,214 @@
-# Leopard2 isolated two-way butterfly tier
+# Leopard2 context-routed butterfly tier
 
-Status: implementation complete and correctness-qualified; final production
-promotion is gated on a fresh v3 evidence campaign. Fused-four butterflies,
-native NEON, and wider experimental ISAs remain open work.
+Status: production implementation and correctness gates complete. The final
+16-round non-regression campaign passed all 44 encode/decode confidence gates.
+Native NEON, AVX-512, GFNI, and wider fusion schedules remain separate,
+evidence-gated work.
 
-## Scope and call-site audit
+## Production architecture
 
-The default portable build deliberately disables whole-translation-unit SSSE3
-and AVX2 code generation in `LeopardFF8.cpp` and `LeopardFF16.cpp`. Before this
-tier, fixed multiply, multiply-add, and XOR already used the immutable runtime
-backend, but the two-way LCH butterflies fell back to separate baseline memory
-passes. Because the radix-four wrappers decompose through these functions when
-their old whole-TU intrinsic branches are unavailable, the audited two-way
-call sites cover every nonzero-skew fallback butterfly in both fields, not only
-the final odd transform layer.
+Leopard2's immutable private backend table now owns every fixed-multiply, XOR,
+two-way butterfly, and four-way butterfly used by a transform. The completed
+four-way boundary contains:
 
-This tier adds five private operations to the existing immutable table:
+- four independent XOR pairs;
+- forward and inverse GF8 fused-two-layer butterflies; and
+- forward and inverse GF16 fused-two-layer butterflies over the legacy ALTMAP
+  representation.
 
-- forward and inverse GF8 two-way butterflies;
-- the GF8 inverse-butterfly XOR accumulator used by the encoder; and
-- forward and inverse GF16 two-way butterflies over legacy ALTMAP tiles.
+The three four-way multipliers describe pairs `(0,1)`, `(2,3)`, and
+`(0,2)/(1,3)`. The GF8 and GF16 modulus sentinels retain the XOR edge while
+suppressing its multiplication. Scalar, SSSE3, and AVX2 backends implement the
+same equations. Startup known-answer tests compare each implementation with an
+independent reference across multiplier boundaries, vector tails, unaligned
+buffers, and guard bytes before an immutable table may be published.
 
-Scalar, SSSE3, and AVX2 implementations preserve the equations and legacy
-symbol representation. They fuse the multiply and both XOR dependencies in a
-single pass over each pair of shards. GF8 accepts every byte count internally;
-GF16 accepts complete symbols and retains the existing 64-byte ALTMAP tile plus
-compact-tail layout. The accumulating GF8 operation treats all inputs as
-read-only and requires four pairwise-disjoint buffers, matching its production
-encoder call sites. No public API, coordinate map, field, or wire identifier
-changed.
+Production field translation units are compiled with their legacy whole-file
+SSSE3/AVX2 branches disabled. Every grouped fallback therefore receives the
+calling context's `Ops` table. Explicit scalar and SSSE3 contexts can coexist
+with AVX2 and AUTO contexts in one process without falling through to the
+process-default ISA. Tracing tests prove that high/low GF8 and GF16 encode,
+specialized and generic decode, shared immutable codecs/plans, and mixed
+contexts reach the selected four-way and grouped-XOR entries.
 
-Fused-four extraction was intentionally excluded. Its six-table live set and
-more complicated zero-skew specialization deserve a separate evidence gate.
+The selected schedules are deliberately size-specific:
 
-## Correctness and isolation gates
+- GF8 inverse butterflies remain fused for every shard size.
+- GF8 forward butterflies are fused through 1,024 bytes and use the qualified
+  split two-way schedule above that size.
+- GF16 forward and inverse butterflies fuse complete 64- and 128-byte working
+  sets. This includes a public 66-byte compact tail after staging rounds it to
+  128 bytes. Smaller residuals and shards above 128 bytes use the split
+  schedule to bound table residency and register pressure.
+- Scalar kernels retain the straightforward reference-equivalent operation
+  order.
 
-Startup known-answer tests now cover forward, inverse, and accumulating
-butterflies with guard bytes and unaligned pointers. GF8 covers all 256
-logarithm values and lengths around 16/32/64-byte vector boundaries through
-521 bytes. GF16 covers boundary logs, full ALTMAP tiles, and compact tails
-through 194 bytes. The accumulating input buffers are checked for immutability.
+Grouped XOR also fixed a latent count-tail bug: after processing complete
+groups of four shards, both threaded and non-threaded loops now advance by the
+number actually consumed before processing one to three residual shards. A
+regression test covers counts 1 through 13 in both modes.
 
-Pre-v3 implementation evidence collected earlier on the 2026-07-16 x86 host
-(these counts and hashes describe that checkpoint, not the final widened gate):
+No public API, field representation, coordinate map, profile identifier, or
+wire byte changed.
 
-- strict GCC 13.3 `-Wall -Wextra -Wpedantic -Werror`: 32/32 CTests passed;
-- ASan plus UBSan, halt-on-error with leak detection: 32/32 passed;
-- TSan under disabled ASLR: the 16-thread immutable-backend test completed
-  1,024 executions and the four-profile encoder test completed 528 executions
-  with no report;
-- an older four-variant matrix passed the then-current comparison set. The
-  final gate is now 24 deterministic comparisons per backend plus four
-  portable-ISA CTests and the default build's CUDA-optional CTest: 101 named
-  executions total. Its final fingerprint and merged SHA-256 must come from a
-  fresh run and must not reuse obsolete pre-widening values;
-- the portable archive checker passed for Release and sanitizer builds. The
-  sanitizer build exposed VEX `vmovd`; the exact move is now allowed because
-  the existing runtime contract already proves AVX and OS-managed XMM/YMM
-  state. A positive fixture was added while the fail-closed VEX allowlist and
-  FMA/F16C/EVEX negative controls remain in force; and
-- AArch64/SSE2NEON cross-compilation completed at submodule commit
-  `cad518a93b326f0f644b7972d488d04eaa2b0475`. This is compile-only evidence,
-  not a native ARM correctness or performance claim.
+## Rejected variants
 
-## Historical v2 end-to-end result
+The production cutoffs came from whole-codec measurements, not microkernel
+instruction counts.
 
-The checked-in `experiments/leopard2/backend_butterfly/results` files and the
-numbers below are a preliminary v2 checkpoint. They motivated the tier but are
-not promotion evidence: v2 did not retain portable raw samples or a replayable
-source/build closure, and its four cells did not cover tiny or compact-tail
-neighbors. The v3 campaign described below must replace this checkpoint before
-the status above can change to promoted.
+- Keeping GF8 forward fusion for large shards lost to the split schedule, so
+  fusion stops at 1,024 bytes.
+- Pre-broadcasting all three GF16 tables and fusing through 1,024 bytes caused
+  roughly a ten-percent low-GF16 encode regression from table/register
+  pressure. The code was reverted.
+- A paired split helper sharing the cross-pair table and a two-XOR-coalesced
+  variant both remained marginally outside the `-2%` confidence floor. A
+  sequential-nibble rewrite showed no useful gain. All were reverted.
+- A field-side shortcut was rejected by the tracing test because it bypassed
+  the selected context's four-way entry.
 
-The historical machine-readable record is
-`experiments/leopard2/backend_butterfly/results/abba_manifest.json`; its SHA-256
-is `bcf67fcc07910b1d46fbac22239be10f3c54f2406533d89eea8ca3cbb6577643`.
-The compact adjacent summary points to that manifest. The fail-closed runner
-set and verified its own affinity as exactly CPU 15, exported
-`OMP_NUM_THREADS=1` and `OMP_DYNAMIC=FALSE`, verified that CPUs 15 and 31 are
-thread siblings, and recorded the coordinator's reservation of sibling 31 as
-idle. It hashed the exact baseline and candidate binaries, every argv plus its
-environment and affinity, and every raw stdout and stderr. The stable raw
-evidence digest is
-`668c534950fb59292161ba6d0a7425497d7af70346d3f36851adbe8ab11598b6`.
+Only exact 64-/128-byte GF16 fused tiles and the measured GF8 cutover remain in
+production.
 
-The former runner rejected missing, duplicate, or relabelled ABBA slots and
-replayed promotion statistics from benchmark JSON. Runner
-SHA-256 is
-`40e2432ebd5361fa40dbb0a7f1e91e9967c88e77d7472c5935ea9536541a5935`;
-the exact candidate source fingerprint it bound is
-`97f994005bc68cda349e7d98425f3e3500cbedd6a09622ed8aacebbf85dc348f`.
+## Correctness, safety, and portability evidence
 
-Historical measurements used three A-B-B-A rounds, six invocation medians per build,
-seven samples per invocation, three warmups, reuse eight, and one thread. All
-48 invocations reported AVX2 and passed the round trip.
+Final source validation on the 2026-07-17 x86 host used every one of the 30
+logical CPUs granted to this worker (`0-14,16-30`) for parallel builds and
+tests:
 
-| Cell | Encode baseline to tier | Encode gain | Decode baseline to tier | Decode gain |
+- Release: 44/44 CTests passed.
+- GCC 13.3 strict warnings (`-Wall -Wextra -Wpedantic -Werror`): 44/44 passed.
+- Clang 18 strict warnings: 44/44 passed.
+- ASan plus UBSan: all 42 applicable runtime tests passed. The separate static
+  ISA classifier rejects sanitizer-inserted `sahf` in a baseline member; the
+  ordinary Release archive passes that classifier, so this is recorded as a
+  sanitizer-code-generation limitation rather than a codec failure.
+- TSan initially hit this host's `unexpected memory mapping` startup failure.
+  Direct runs under `setarch x86_64 -R` passed the 16-thread backend-ops test
+  (1,024 executions), mixed-context test, and four-profile concurrent encoder
+  test (528 executions) without a TSan report.
+- The final AUTO/scalar/SSSE3/AVX2 matrix passed every deterministic comparison,
+  backend-failure subprocess, portable-ISA gate, and the default build's
+  CUDA-optional test. Its source fingerprint is
+  `8b63b1e8ea56d8a924f6087bda46fad43619fe07d9ec899baaf0783ad7ebb3cb`;
+  `matrix.json` SHA-256 is
+  `8053489efe9bd04c847e669166ee5ab88a449fc89676616d63e786e037b13bbe`.
+- AArch64/SSE2NEON cross-compilation completed after the final field changes.
+  Existing ignored-OpenMP and unused-x86-parameter warnings remain. This is
+  compile-only preservation evidence, not native ARM correctness or
+  performance evidence.
+
+The v5 runner self-test passed path-independent replay plus 52 adversarial
+mutations. These include missing/reordered ABBA slots, raw-output edits,
+compiler and build-graph substitutions, source-closure changes, topology and
+reservation changes, confidence-summary edits, and a high-variance fixture.
+
+## Final non-regression evidence
+
+The final campaign compares baseline commit
+`4cbe17c4374739ae087dfae9568949a17a15b2f2` with candidate commit
+`ae2b8566ad08cae02869c3fcf41de046b0b652ed`. It contains 22 cells, 16 paired
+A-B-B-A rounds per cell, seven measured samples and three warmups per
+invocation, reuse eight, and one thread: 1,408 isolated process invocations and
+44 encode/decode gates. Fresh baseline and candidate builds used all 30 allowed
+CPUs. Measurements were pinned to CPU 14 while its SMT sibling, CPU 30, was
+reserved and idle.
+
+This tier qualifies a correctness-driven context-routing refactor. Every target
+and neighbor therefore uses a one-sided 95% lower-confidence non-regression
+floor of `-2%`; it does not require every cell to gain five percent. Statistics
+are paired log ratios with 15 degrees of freedom and include conservative
+within-invocation uncertainty derived from each median, MAD, minimum, and
+maximum.
+
+Representative point estimates and one-sided 95% lower bounds are percentages
+relative to the pre-tier baseline:
+
+| Cell | Encode point | Encode lower | Decode point | Decode lower |
 | --- | ---: | ---: | ---: | ---: |
-| high GF8, K=240 R=16, 64 KiB, L=4 | 1171.602 to 935.422 us | 25.25% | 2151.791 to 1892.822 us | 13.68% |
-| low GF8, K=32 R=224, 64 KiB, L=16 | 1247.569 to 994.001 us | 25.51% | 765.713 to 702.801 us | 8.95% |
-| high GF16, K=1000 R=200, 16 KiB, L=8 | 2714.694 to 2218.318 us | 22.38% | 6781.538 to 5968.193 us | 13.63% |
-| low GF16, K=128 R=1024, 16 KiB, L=16 | 2210.335 to 1912.097 us | 15.60% | 1283.556 to 1215.780 us | 5.57% |
+| high GF8, K=240 R=16, 64 KiB, L=4 | +2.422% | +1.248% | +4.840% | +3.754% |
+| low GF8, K=32 R=224, 64 KiB, L=16 | +2.437% | +1.923% | +3.916% | +3.175% |
+| high GF16, K=1000 R=200, 16 KiB, L=8 | +1.548% | +1.132% | +1.024% | +0.566% |
+| low GF16, K=128 R=1024, 16 KiB, L=16 | +0.359% | -0.664% | +2.547% | +0.830% |
+| balanced GF8, K=128 R=128, 64 KiB | +2.120% | +1.756% | +7.630% | +6.630% |
+| balanced GF16, K=512 R=512, 16 KiB | +0.161% | -0.039% | +2.130% | +1.545% |
+| low GF16 neighbor, K=128 R=1024, 1 KiB | -1.131% | -1.482% | +2.462% | +2.286% |
 
-The historical measured region has no regression; all eight encode/decode
-metrics improve by at least 5%. Because the v2 provenance and neighbor matrix
-are incomplete, this is directional evidence rather than a cleared promotion
-gate.
+The low-GF16 1-KiB encode cell is the weakest lower bound and still clears the
+fixed floor. All 44 gates passed.
 
-## Fail-closed v3 evidence gate
+The ignored machine-readable final artifacts are under
+`.research/leopard2/context-xor4/abba-ae2b856-v5-16round/`:
 
-The v3 runner retains an adjacent raw bundle for all 264 invocations: 22 cells,
-three A-B-B-A rounds, and both encode/decode metrics. The matrix includes GF8
-and GF16 high/low targets; 64-byte, compact-tail, and 1 KiB neighbors; balanced
-GF8/GF16 neighbors; and a second one-loss decode geometry for every high/low
-field regime. High-profile compact tails correctly report no old-API
-comparison, because the old API accepts only byte counts divisible by 64.
+- `abba_manifest.json` SHA-256:
+  `f25eeafc9857052e3c333b5b095fbd18eb08e80b86a2ac2d46fee45aca8051c8`
+- `abba_raw.json` SHA-256:
+  `0ebd33990052d717aced183a68224888a2e1a5c9315b3e39798adbf671d02d85`
 
-Promotion uses a paired log-ratio for each A-B-B-A round. It reports the three
-round estimates and applies a one-sided 95% Student-t lower bound with two
-degrees of freedom. The uncertainty combines between-round variation with a
-conservative within-invocation estimate derived from each invocation's
-reported median, MAD, minimum, and maximum. The seven underlying samples are
-not retained or reconstructed. A target's lower bound must be at least 5%; a
-neighbor's lower bound must be at least -2%. High-variance or overlapping
-results fail even when their ratio of aggregate medians looks favorable.
+Path-independent replay of the manifest, raw bundle, embedded matrix, source
+closure, build graph, and all statistics passed. Caller template binaries are
+not interchangeable with the exact fresh-build executables because build paths
+affect their byte hashes; the collector verified the exact executables before
+publishing the passed manifest.
 
-Before timing, the runner configures each declared Git tree into a new, empty,
-isolated shadow build. The caller-supplied executable/archive paths are strict
-compatibility assertions and are never selected for timing. CMake File API
-metadata derives the `libleopard` and `bench_leopard2` target artifacts and the
-complete target dependency/source graph. Collection rejects every unexpected
-configured translation unit. It captures literal CMake archive/link recipes,
-verifies that they use the actual `CMAKE_AR`, `CMAKE_RANLIB`, and C++ link
-driver, checks the exact archive member/object set byte-for-byte, and rejects
-unexpected benchmark link inputs.
+## Retained failed evidence
 
-The record also retains normalized compile commands for exactly the target
-closure, the full dependency manifest and per-unit edges, relevant compile and
-link configuration (including OpenMP), compiler/CMake/tool identities, fresh
-configure/build recipes, and artifact hashes. Tests, fuzzers, CUDA, and test
-hooks are required off in both performance builds. Evidence is published with
-`status: passed` only after confidence thresholds and replay both succeed;
-failed performance leaves a `status: failed` manifest. Replay checks every
-source dependency against the declared Git commit, binds the candidate to the
-exact four-backend correctness matrix, reconstructs every campaign statistic
-from raw stdout, and rejects
-noncanonical or inconsistent reservation, topology, command, and campaign
-records. The prerequisite backend matrix likewise starts every non-resumed
-variant from an empty directory, uses an allowlisted environment, proves that
-both named CTests actually executed, recomputes all cross-backend stdout/stderr
-mismatches, and retains normalized cache/compile/tool identities. It also
-retains the CPU vendor/model/family/stepping/microcode,
-kernel/uname identity, scaling driver/governor/EPP, readable min/max frequency
-bounds, pstate/boost/turbo attributes (explicitly null when unavailable), and
-labelled pre/post current-frequency snapshots. The reservation file itself
-must be canonical JSON with no trailing newline; the runner holds a nonblocking
-exclusive lock on it for the campaign.
+Failures were not discarded or converted into exceptions:
+
+- The eight-round v4 campaign failed exactly one of 44 gates: low-GF16 1-KiB
+  encode had a `-1.619%` point estimate and `-2.114%` lower bound. Its manifest
+  and raw SHA-256 values are
+  `c8c6fa06898d1c09811c3154da80d6316009ef77c783d07da8aedbae4ae59796`
+  and
+  `13fbc5456c0bf622da8b4925403f3d9c1bfcf96c679bdaa739a28d199c411dea`.
+- A predetermined 16-round confirmation at commit `2b7a4ae` cleared all 44
+  performance gates, but publication failed because GCC reports a different
+  first-line driver name when the same resolved binary is invoked through
+  `cc/c++`. The failed manifest/raw hashes are
+  `3057db060a236fe2be646dda65eb51e744f3a738d275d202dcd0c55a0b6eda63`
+  and
+  `ad3358f8c8c7ee040506df13d929ac0f74ce53f29125969bff5e6b88e9c6adcd`.
+  Replay after normalizing only that argv0-dependent label proved it was the
+  sole failure. The executable basename, binary digest, package/version text,
+  and remaining version output are still checked.
+
+The final campaign was the one clean replacement after that provenance fix;
+there was no repeated sampling after its result.
 
 ## Reproduction
 
-Build and run the normal correctness gate:
+Use every allowed CPU for compilation and correctness work, capped at 128:
 
+    JOBS="$(nproc)"
+    if [ "$JOBS" -gt 128 ]; then JOBS=128; fi
     cmake -S . -B build/release \
       -DCMAKE_BUILD_TYPE=Release \
       -DLEO2_BUILD_TESTS=ON \
       -DLEO2_BUILD_BENCHMARKS=ON \
       -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-    cmake --build build/release -j8
-    ctest --test-dir build/release -j8 --output-on-failure
+    cmake --build build/release -j "$JOBS"
+    ctest --test-dir build/release -j "$JOBS" --output-on-failure
 
-Run the forced-backend differential matrix:
+Run the forced-backend differential matrix and runner mutation tests:
 
     python3 tools/leopard2_backend_matrix.py run \
       --source . \
       --build-root build/backend-matrix \
       --result-dir build/backend-matrix-results \
       --variants auto,scalar,ssse3,avx2 \
-      --jobs 8 --variant-workers 4 --timeout 900 --no-resume
-
-Exercise the evidence runner and its mutation tests before timing:
-
+      --jobs "$JOBS" --variant-workers 4 --timeout 900 --no-resume
     python3 experiments/leopard2/backend_butterfly/run_abba.py self-test
 
-Create the reservation document from the repository root, substituting the
-coordinator identity and a unique nonce. This command emits canonical JSON
-without a trailing newline:
+The full campaign requires clean baseline and candidate worktrees, matching
+Unix Makefiles Release template builds, a canonical no-newline reservation
+file, and a physical core whose allowed SMT sibling is idle. Run
+`run_abba.py run --help` for the explicit source, commit, CMake cache,
+compile-command, archive, matrix, CPU, and output arguments. Do not run other
+memory-intensive jobs during the pinned phase.
 
-    python3 -c 'import json,sys; sys.stdout.write(json.dumps({"benchmark_cpu":15,"nonce":"replace-with-unique-nonce","owner":"coordinator identity","reserved_sibling":31,"schema":"leopard2-cpu-reservation/v1","status":"held"},sort_keys=True,separators=(",",":")))' \
-      > build/leopard2-butterfly-reservation.json
-
-Collection is currently Linux/GNU-family only: it requires scheduler affinity,
-`/proc` and `/sys`, POSIX file locking, GNU-style dependency files, and CMake's
-Unix Makefiles `link.txt` recipes. Verification is path-independent across
-Linux checkouts and does not need the original build directories. The full
-runner requires clean baseline and candidate worktrees plus matching Unix
-Makefiles Release template build trees configured with benchmarks enabled,
-tests/fuzzers/CUDA disabled, and compile-command export enabled. The runner
-then creates its own fresh shadow builds. A repository-relative example is:
-
-    python3 experiments/leopard2/backend_butterfly/run_abba.py run \
-      --baseline ../leopard-butterfly-baseline/build/evidence-release/bench_leopard2 \
-      --candidate build/evidence-release/bench_leopard2 \
-      --baseline-commit "$(git -C ../leopard-butterfly-baseline rev-parse HEAD)" \
-      --candidate-commit "$(git rev-parse HEAD)" \
-      --baseline-source-root ../leopard-butterfly-baseline \
-      --candidate-source-root . \
-      --baseline-compile-commands ../leopard-butterfly-baseline/build/evidence-release/compile_commands.json \
-      --candidate-compile-commands build/evidence-release/compile_commands.json \
-      --baseline-cmake-cache ../leopard-butterfly-baseline/build/evidence-release/CMakeCache.txt \
-      --candidate-cmake-cache build/evidence-release/CMakeCache.txt \
-      --baseline-library ../leopard-butterfly-baseline/build/evidence-release/liblibleopard.a \
-      --candidate-library build/evidence-release/liblibleopard.a \
-      --matrix build/backend-matrix-results/matrix.json \
-      --reservation-file build/leopard2-butterfly-reservation.json \
-      --output build/backend-butterfly-v3-campaign \
-      --cpu 15 --reserved-sibling 31 --build-jobs 8
-
-Run that command only while the coordinator has reserved the physical core and
-kept its sibling idle. Recheck the retained evidence on a fresh Linux checkout
-with repository-relative paths; binaries and the standalone matrix are optional
-extra checks because both are already hash-bound and the matrix is embedded:
+Replay retained evidence without substituting a different build-path binary:
 
     python3 experiments/leopard2/backend_butterfly/run_abba.py verify \
-      --manifest experiments/leopard2/backend_butterfly/results/abba_manifest.json \
-      --raw-bundle experiments/leopard2/backend_butterfly/results/abba_raw.json
+      --manifest .research/leopard2/context-xor4/abba-ae2b856-v5-16round/abba_manifest.json \
+      --raw-bundle .research/leopard2/context-xor4/abba-ae2b856-v5-16round/abba_raw.json \
+      --matrix .research/leopard2/context-xor4/backend-matrix-results-final/matrix.json

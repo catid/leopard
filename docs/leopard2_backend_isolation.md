@@ -1,9 +1,21 @@
 # Leopard2 backend isolation checkpoint
 
-Status: fixed-kernel runtime-dispatch checkpoint complete. The subsequent
-two-way butterfly tier is documented in
-`docs/leopard2_backend_butterfly_tier.md`; the SIMD/backend Bead remains open
-for fused-four butterflies, native NEON, and platform gates.
+Status: x86 scalar/SSSE3/AVX2 fixed kernels, two-way butterflies, grouped XOR,
+and four-way butterflies are context-routed and evidence-qualified. The final
+butterfly tier is documented in `docs/leopard2_backend_butterfly_tier.md`.
+Native NEON and additional platform/ISA gates remain open.
+
+## Four-way completion
+
+The immutable `Ops` table now includes four independent XOR pairs and forward
+and inverse four-way GF8/GF16 butterflies. Production transform call sites pass
+the selected context table through high/low encode, specialized and generic
+decode, shared plans, and batches; explicit lower contexts no longer reach a
+process-default grouped kernel. GF8 forward fusion is size-selected, and GF16
+fusion is retained only for qualified 64-/128-byte tiles. Scalar, SSSE3, and
+AVX2 results are deterministic and wire-identical. See the butterfly-tier
+document for the rejected variants, sanitizer/platform qualifications, and the
+final 1,408-invocation non-regression campaign.
 
 ## Failure-atomic table ownership
 
@@ -138,9 +150,10 @@ hot-patch padding are not equivalent per-function policies.
 
 The current ARM path still reports its existing effective NEON execution but
 does not yet permit forcing lower scalar/SSSE3 tables, because translated inline
-kernels precede the fixed-ops fallback.  Native NEON table extraction, native
-MSVC/clang-cl evidence, four-source XOR dispatch, and a fused explicit-backend
-R=1 kernel remain separate tracked work.
+kernels precede the fixed-ops fallback. Native NEON table extraction, native
+MSVC/clang-cl evidence, and a fused explicit-backend R=1 kernel remain separate
+tracked work. The grouped four-source XOR and four-way transform dispatch are
+complete for the production x86 scalar/SSSE3/AVX2 boundary.
 
 ## Default contract
 
@@ -292,21 +305,19 @@ AVX2, not of the forced AVX2 diagnostic build.
 | high GF16 K=1000 R=200, 16 KiB, L=8 | SSSE3 | 3.223 | 1.746 |
 | high GF16 K=1000 R=200, 16 KiB, L=8 | AVX2 (`auto`) | 6.047 | 2.841 |
 
-The isolated AVX2 fixed-multiply/multiply-add and XOR tier materially recovers
-the portable fallback cost without raising the archive ISA floor. It does not
-yet recover the earlier whole-translation-unit diagnostic ceiling in every
-cell because, at this checkpoint, two-way butterflies, IFFT-XOR butterflies,
-and fused-four butterflies still executed their baseline implementations. The
-later two-way and IFFT-XOR result is recorded in
-`leopard2_backend_butterfly_tier.md`; fused four remains open. The scalar GF8
-packing correction made during this checkpoint restored the previous scalar
-encode range instead of accepting a table-dispatch regression.
+The isolated AVX2 fixed-multiply/multiply-add and XOR tier materially recovered
+the portable fallback cost without raising the archive ISA floor. At this
+historical checkpoint, two-way, IFFT-XOR, and four-way butterflies still used
+baseline implementations. Those families are now context-routed and qualified
+as recorded in `leopard2_backend_butterfly_tier.md`. The scalar GF8 packing
+correction made during this checkpoint restored the previous scalar encode
+range instead of accepting a table-dispatch regression.
 
 ## Remaining production gates
 
-- Extract the fused-four/radix butterfly families into the same private ops
-  boundary and remeasure the whole-codec ceiling. Two-way and GF8 IFFT-XOR
-  extraction passed its separate correctness and performance gate.
+- Preserve the completed grouped-XOR and fused-four/radix boundary with the
+  cross-backend wire matrix, startup known-answer tests, static ISA checks, and
+  pinned whole-codec non-regression gate.
 - Implement and test native NEON separately. The AArch64 evidence above is a
   compile-only preservation gate for the existing SSE2NEON translation path,
   not a native-NEON runtime or performance claim.
