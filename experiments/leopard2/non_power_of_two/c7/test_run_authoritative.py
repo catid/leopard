@@ -534,7 +534,8 @@ class AuthoritativeRunnerTests(unittest.TestCase):
                 runner, "_raw_direct_child_pids",
                 side_effect=({456789}, set())) as children, \
              mock.patch.object(
-                 runner.os, "pidfd_open", side_effect=OSError("gone")), \
+                 runner.os, "pidfd_open", create=True,
+                 side_effect=OSError("gone")), \
              mock.patch.object(runner.os, "kill") as kill:
             runner.LinuxDescendantContainment._kill_unreaped_direct_child(
                 456789, os.getpid())
@@ -543,7 +544,8 @@ class AuthoritativeRunnerTests(unittest.TestCase):
 
         with mock.patch.object(
                 runner, "_raw_direct_child_pids", return_value={654321}), \
-             mock.patch.object(runner.os, "pidfd_open") as pidfd_open, \
+             mock.patch.object(
+                 runner.os, "pidfd_open", create=True) as pidfd_open, \
              mock.patch.object(runner.os, "kill") as kill:
             runner.LinuxDescendantContainment._kill_unreaped_direct_child(
                 456789, os.getpid())
@@ -571,7 +573,9 @@ class AuthoritativeRunnerTests(unittest.TestCase):
             stderr=subprocess.DEVNULL, close_fds=True)
         self.assertEqual(launcher.wait(timeout=2.0), 0)
         unrelated_pid = int(pid_path.read_text(encoding="utf-8"))
-        unrelated_pidfd = os.pidfd_open(unrelated_pid, 0)
+        unrelated_pidfd = runner._linux_pidfd_open(unrelated_pid)
+        self.assertIsNotNone(unrelated_pidfd)
+        assert unrelated_pidfd is not None
         try:
             self.assertEqual(
                 runner._raw_direct_child_pids(os.getpid()), set())
@@ -594,13 +598,12 @@ class AuthoritativeRunnerTests(unittest.TestCase):
             time.sleep(.85)
             self.assertEqual(marker.read_text(encoding="utf-8"), "alive")
             self.assertFalse(delayed.exists())
-            signal.pidfd_send_signal(unrelated_pidfd, 0)
+            runner._linux_pidfd_signal(unrelated_pidfd, 0)
         finally:
             try:
-                signal.pidfd_send_signal(unrelated_pidfd, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            os.close(unrelated_pidfd)
+                runner._linux_pidfd_signal(unrelated_pidfd, signal.SIGKILL)
+            finally:
+                os.close(unrelated_pidfd)
 
     def test_descendant_containment_fails_closed_before_spawn_when_unavailable(
             self) -> None:
