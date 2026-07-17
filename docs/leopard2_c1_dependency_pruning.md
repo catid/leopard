@@ -383,15 +383,25 @@ Build the coverage-guided target with Clang and run one bounded campaign with:
     mkdir -p build/c1-fuzz/corpus
     ASAN_OPTIONS=detect_leaks=1 OMP_NUM_THREADS=1 OMP_DYNAMIC=FALSE \
         build/c1-fuzz/leopard2_pruned_plan_fuzzer \
-        build/c1-fuzz/corpus -runs=2000 -max_len=256 -timeout=5
+        build/c1-fuzz/corpus -runs=2000 -max_len=256 -timeout=5 \
+        -rss_limit_mb=8192
 
-Replace 128 with the allowed CPU count.  The 2026-07-17 development campaign
-completed 2,000 inputs under Clang 18 ASan+UBSan with no crash, and the strict
-GCC plus Clang sanitizer replay each completed 1,024 deterministic inputs.
-The process affinity exposed 28 CPUs rather than the requested 128; all 28 ran
-distinct ASan+UBSan seeds concurrently for another 7,168 inputs.  These are
-fuzz/correctness results, not the still-open performance or production-
-integration gates.
+Run the fuzzer under an external per-job memory cap; the libFuzzer RSS option
+is not a substitute for that containment.  Clang 18's internal RSS accounting
+on the 2026-07-17 host reported about 4,173--4,180 MiB from process start and
+incorrectly tripped its default 2,048 MiB limit.  A fixed-input control measured
+45,312 KiB maximum resident set with `/usr/bin/time -v`.  The explicit 8 GiB
+override above avoids that false internal limit while retaining an external
+memory cap.
+
+Replace 128 with the allowed CPU count.  With the RSS override, the 2026-07-17
+development campaign completed 2,000 inputs under Clang 18 ASan+UBSan with no
+crash, and the strict GCC plus Clang sanitizer replay each completed 1,024
+deterministic inputs.  The process affinity exposed 28 CPUs rather than the
+requested 128; all 28 ran distinct ASan+UBSan seeds concurrently for another
+7,168 inputs.  The 45,312 KiB fixed-input measurement is a control, not a claim
+about peak campaign memory.  These are fuzz/correctness results, not the still-
+open performance or production-integration gates.
 
 ## Disposition
 
