@@ -644,7 +644,8 @@ def validate_support_contract() -> dict[str, Any]:
     required_callables = (
         "artifact_identity", "build_provenance", "canonical_bytes",
         "cpu_stat_snapshot", "git_identity", "host_identity", "isolation_record",
-        "PairLease", "parse_cpu_list", "runtime_closure", "validate_host_record",
+        "PairLease", "StableLeaseAnchor", "parse_cpu_list", "runtime_closure",
+        "validate_host_record",
         "validate_isolation", "validate_topology", "run_process_bounded",
         "terminate_process_group_bounded", "LinuxDescendantContainment",
     )
@@ -697,6 +698,8 @@ def validate_support_contract() -> dict[str, Any]:
             "pair_lease_schema": SUPPORT.PAIR_LEASE_SCHEMA,
             "reservation_schema": SUPPORT.RESERVATION_SCHEMA,
             "sibling_max_nonidle_jiffies": SUPPORT.MAX_SIBLING_NONIDLE_JIFFIES,
+            "stable_lease_anchor": (
+                "nonblocking flock on the root-anchored owned runtime directory"),
             "subprocess_stderr_limit": SUPPORT.MAX_COMMAND_STDERR_BYTES,
             "subprocess_stdout_limit": SUPPORT.MAX_COMMAND_STDOUT_BYTES,
             "subprocess_timeout_limit": SUPPORT.MAX_COMMAND_TIMEOUT_SECONDS,
