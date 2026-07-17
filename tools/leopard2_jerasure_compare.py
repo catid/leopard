@@ -263,6 +263,7 @@ def validate_child_integer_types(
         require_int(parameters.get("K"), f"{label} parameters.K", 1) - 1)
     if leopard:
         for name in ("force_generic_decode", "force_specialized_decode",
+                     "force_tiled_decode", "force_materialized_decode",
                      "skip_legacy", "retain_samples"):
             if name in parameters and type(parameters[name]) is not bool:
                 raise ComparisonError(f"{label} parameters.{name} is not Boolean")

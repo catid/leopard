@@ -170,6 +170,9 @@ typedef struct leo2_codec_options {
 /* Test/diagnostic flags selecting a decoder independently of AUTO dispatch. */
 #define LEO2_CODEC_FORCE_GENERIC_DECODE 0x00000001u
 #define LEO2_CODEC_FORCE_SPECIALIZED_DECODE 0x00000002u
+/* Select the side-sized or retained N-slot specialized kernel for diagnostics. */
+#define LEO2_CODEC_FORCE_TILED_DECODE 0x00000004u
+#define LEO2_CODEC_FORCE_MATERIALIZED_DECODE 0x00000008u
 
 /*
     These are the fixed V1 batch-item layouts.  A future incompatible extension

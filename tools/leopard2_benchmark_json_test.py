@@ -129,10 +129,14 @@ def main() -> int:
     require(set(default["parameters"]) == {
         "K", "R", "requested_profile", "requested_field",
         "requested_backend", "force_generic_decode",
-        "force_specialized_decode", "shard_bytes", "loss_count",
+        "force_specialized_decode", "force_tiled_decode",
+        "force_materialized_decode", "shard_bytes", "loss_count",
         "missing_original_indices", "batch", "reuse", "iterations",
         "warmup", "thread_count", "seed"},
         "default parameter structure changed")
+    require(default["parameters"]["force_tiled_decode"] is False and
+            default["parameters"]["force_materialized_decode"] is False,
+            "default benchmark forced a specialized workspace kernel")
     require(default["legacy"]["available"] is True and
             default["correctness"]["legacy_comparison"] == "matched",
             "default behavior no longer executes the available legacy oracle")

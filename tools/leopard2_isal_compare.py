@@ -1576,9 +1576,24 @@ def validate_common_parameters(
     expected = expected_parameters(cell, iterations, warmup)
     if extra_expected:
         expected.update(extra_expected)
-    require_exact_keys(parameters, set(expected) | {"missing_original_indices"},
-                       "result parameters")
+    # The workspace diagnostic selectors were appended to benchmark schema v1
+    # as false-by-default metadata.  Retained pre-selector artifacts remain
+    # valid when both keys are absent; present keys are still type/value bound.
+    optional_false = {
+        name for name in ("force_tiled_decode", "force_materialized_decode")
+        if expected.get(name) is False
+    }
+    actual_keys = set(parameters)
+    required_keys = (set(expected) - optional_false) | {
+        "missing_original_indices"}
+    allowed_keys = set(expected) | {"missing_original_indices"}
+    if not required_keys.issubset(actual_keys) or not actual_keys.issubset(allowed_keys):
+        raise ComparisonError(
+            f"result parameters keys changed: got {sorted(actual_keys)!r}, "
+            f"required {sorted(required_keys)!r}, allowed {sorted(allowed_keys)!r}")
     for name, value in expected.items():
+        if name in optional_false and name not in parameters:
+            continue
         if parameters.get(name) != value:
             raise ComparisonError(
                 f"result parameter {name}={parameters.get(name)!r}, expected {value!r}")
@@ -1763,6 +1778,7 @@ def validate_leopard_result(
         validate_workload_digests(document.get("workload_digests", {}))
     extra_parameters = {
         "force_generic_decode": False, "force_specialized_decode": False,
+        "force_tiled_decode": False, "force_materialized_decode": False,
         "skip_legacy": True}
     if schema == LEOPARD_SCHEMA_V2:
         extra_parameters["retain_samples"] = True

@@ -88,8 +88,12 @@ one reusable parent-block tile when that is smaller.  The specialized high
 decoder similarly uses `min(N,2T+L)` slots, where `L` is the number of requested
 missing originals; its last `L` tiled slots retain outputs until
 application-layout scatter.  The retained materialized specialized kernel is
-used when its regular `N` slots are no larger, avoiding a balanced-rate scratch
-regression.  Forced generic decoding retains `N` work slots.  A ragged final
+used when its regular `N` slots are no larger.  One offline-calibrated
+legacy-high GF8 region also reserves and uses `N` slots because that regular
+traversal is faster for a single stripe; measured AVX2 multi-item batches
+execute tiled using the same conservative allocation.  SSSE3 batches retain
+the materialized traversal pending dedicated evidence.  Forced generic decoding
+retains `N` work slots.  A ragged final
 tile adds `64*(K+R)` bytes for GF8 zero padding or GF16 compact-to-ALTMAP
 scatter.  The public overlap checks are unchanged.
 
@@ -110,7 +114,7 @@ erasure.  This selection affects only the work schedule, not the decoded message
 Applications still pass the original presence pattern and may leave pointers for
 surplus received parity populated.
 
-For differential testing and diagnosis, set exactly one of
+For differential testing and diagnosis, set at most one of
 `LEO2_CODEC_FORCE_GENERIC_DECODE` or
 `LEO2_CODEC_FORCE_SPECIALIZED_DECODE` in `leo2_codec_options.flags`.  The first
 selects the retained full `O(N log N)` active-parent decoder; the second selects
@@ -119,6 +123,16 @@ and automatic crossover dispatch.  The flags govern nontrivial transform or
 direct-matrix repairs; no-loss, single-XOR-parity, and single-original copy
 fast paths remain direct.  Supplying both flags is invalid.  These diagnostic
 choices are not wire profiles and do not change encoded data.
+
+Within a profile-specific decoder,
+`LEO2_CODEC_FORCE_TILED_DECODE` and
+`LEO2_CODEC_FORCE_MATERIALIZED_DECODE` select the side-sized or retained
+`N`-slot traversal for offline comparison.  They imply specialized decoding,
+may be combined with `LEO2_CODEC_FORCE_SPECIALIZED_DECODE`, and are mutually
+exclusive.  Either workspace flag combined with forced generic is invalid.
+Normal applications should leave all four flags clear and use deterministic
+AUTO dispatch.  See `leopard2_decode_tiled_workspace.md` for the calibrated
+region and its authenticated evidence.
 
 `leo2_decode` is a convenience wrapper that allocates and destroys a plan.  Use a
 reusable plan when setup amortization matters.

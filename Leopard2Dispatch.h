@@ -61,4 +61,37 @@ static inline bool ShouldUseBalancedGenericDecode(
          backend == LEO2_BACKEND_AVX2);
 }
 
+/*
+    Offline-calibrated exception to the side-sized high decoder.  Both kernels
+    implement the same legacy-high mathematics and wire profile; this policy
+    selects the retained regular N-slot traversal only where three-round pinned
+    evidence found a credible tiled regression.  Batch calls are handled by the
+    caller because two or more stripes restore the tiled cache advantage.
+*/
+static inline bool ShouldUseMaterializedHighDecode(
+    leo2_profile profile,
+    leo2_field field,
+    uint32_t original_count,
+    uint32_t recovery_count,
+    uint32_t padded_side,
+    uint32_t parent_count,
+    uint32_t missing_original_count,
+    size_t rounded_shard_bytes,
+    leo2_backend backend)
+{
+    if (profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        field != LEO2_FIELD_GF8 ||
+        original_count != 224 || recovery_count != 32 ||
+        padded_side != 32 || parent_count != 256 ||
+        missing_original_count == 0 || missing_original_count > 8 ||
+        rounded_shard_bytes > 64 * 1024)
+        return false;
+
+    if (backend == LEO2_BACKEND_AVX2)
+        return rounded_shard_bytes >= 24 * 1024;
+    if (backend == LEO2_BACKEND_SSSE3)
+        return rounded_shard_bytes >= 32 * 1024;
+    return false;
+}
+
 } // namespace leopard2_internal

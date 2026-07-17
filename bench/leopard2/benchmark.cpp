@@ -91,6 +91,8 @@ struct Options
     uint64_t seed;
     bool force_generic_decode;
     bool force_specialized_decode;
+    bool force_tiled_decode;
+    bool force_materialized_decode;
     bool skip_legacy;
     bool retain_samples;
     std::string output;
@@ -111,6 +113,8 @@ struct Options
         , seed(1)
         , force_generic_decode(false)
         , force_specialized_decode(false)
+        , force_tiled_decode(false)
+        , force_materialized_decode(false)
         , skip_legacy(false)
         , retain_samples(false)
         , output("-")
@@ -360,6 +364,8 @@ static void Usage(std::ostream& output, const char* program)
         << "  --seed N              Deterministic seed (default 1)\n"
         << "  --force-generic       Use the retained O(N log N) decoder\n"
         << "  --force-specialized   Use the profile-specific transform decoder\n"
+        << "  --force-tiled         Use the side-sized specialized kernel\n"
+        << "  --force-materialized  Use the retained N-slot specialized kernel\n"
         << "  --skip-legacy         Do not run the in-tree legacy comparison\n"
         << "  --retain-samples      Emit raw timing samples using benchmark schema v2\n"
         << "  --json PATH           JSON output path, or - for stdout\n"
@@ -392,6 +398,8 @@ static Options ParseOptions(int argc, char** argv)
         else if (argument == "--seed") options.seed = ParseUnsigned(NeedValue(argc, argv, i), "--seed");
         else if (argument == "--force-generic") options.force_generic_decode = true;
         else if (argument == "--force-specialized") options.force_specialized_decode = true;
+        else if (argument == "--force-tiled") options.force_tiled_decode = true;
+        else if (argument == "--force-materialized") options.force_materialized_decode = true;
         else if (argument == "--skip-legacy") options.skip_legacy = true;
         else if (argument == "--retain-samples") options.retain_samples = true;
         else if (argument == "--json" || argument == "--output") options.output = NeedValue(argc, argv, i);
@@ -410,6 +418,11 @@ static Options ParseOptions(int argc, char** argv)
         Fail("--loss cannot exceed R when only transmitted recovery shards are used");
     if (options.force_generic_decode && options.force_specialized_decode)
         Fail("--force-generic and --force-specialized are mutually exclusive");
+    if (options.force_tiled_decode && options.force_materialized_decode)
+        Fail("--force-tiled and --force-materialized are mutually exclusive");
+    if (options.force_generic_decode &&
+        (options.force_tiled_decode || options.force_materialized_decode))
+        Fail("--force-generic cannot select a specialized workspace kernel");
     return options;
 }
 
@@ -836,10 +849,15 @@ static int Run(const Options& options)
     leo2_codec_options codec_options;
     memset(&codec_options, 0, sizeof(codec_options));
     codec_options.struct_size = sizeof(codec_options);
-    codec_options.flags = options.force_generic_decode
-        ? LEO2_CODEC_FORCE_GENERIC_DECODE
-        : (options.force_specialized_decode
-            ? LEO2_CODEC_FORCE_SPECIALIZED_DECODE : 0);
+    codec_options.flags = 0;
+    if (options.force_generic_decode)
+        codec_options.flags |= LEO2_CODEC_FORCE_GENERIC_DECODE;
+    if (options.force_specialized_decode)
+        codec_options.flags |= LEO2_CODEC_FORCE_SPECIALIZED_DECODE;
+    if (options.force_tiled_decode)
+        codec_options.flags |= LEO2_CODEC_FORCE_TILED_DECODE;
+    if (options.force_materialized_decode)
+        codec_options.flags |= LEO2_CODEC_FORCE_MATERIALIZED_DECODE;
     RequireLeo2(leo2_codec_create(
         context, options.k, options.r, options.profile, options.field,
         &codec_options, &codec),
@@ -1075,7 +1093,11 @@ static int Run(const Options& options)
          << "    \"force_generic_decode\": "
          << (options.force_generic_decode ? "true" : "false") << ",\n"
          << "    \"force_specialized_decode\": "
-         << (options.force_specialized_decode ? "true" : "false") << ",\n";
+         << (options.force_specialized_decode ? "true" : "false") << ",\n"
+         << "    \"force_tiled_decode\": "
+         << (options.force_tiled_decode ? "true" : "false") << ",\n"
+         << "    \"force_materialized_decode\": "
+         << (options.force_materialized_decode ? "true" : "false") << ",\n";
     if (extended_schema)
     {
         json << "    \"skip_legacy\": "

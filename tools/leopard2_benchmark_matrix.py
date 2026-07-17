@@ -56,6 +56,8 @@ EXPECTED_CELL_FIELDS = (
     "requested_backend",
     "force_generic_decode",
     "force_specialized_decode",
+    "force_tiled_decode",
+    "force_materialized_decode",
     "shard_bytes",
     "loss_count",
     "batch",
@@ -340,6 +342,8 @@ def _job(
         "requested_backend": "auto",
         "force_generic_decode": mode == MODE_FORCED_GENERIC,
         "force_specialized_decode": mode == MODE_FORCED_SPECIALIZED,
+        "force_tiled_decode": False,
+        "force_materialized_decode": False,
         "shard_bytes": shard_bytes,
         "loss_count": losses,
         "batch": batch,
@@ -675,9 +679,22 @@ def _validate_benchmark(value: object, job_id: str) -> dict:
         raise MatrixError(f"job {job_id} has an invalid force_generic_decode value")
     if not isinstance(parameters.get("force_specialized_decode"), bool):
         raise MatrixError(f"job {job_id} has an invalid force_specialized_decode value")
+    if not isinstance(parameters.get("force_tiled_decode"), bool):
+        raise MatrixError(f"job {job_id} has an invalid force_tiled_decode value")
+    if not isinstance(parameters.get("force_materialized_decode"), bool):
+        raise MatrixError(
+            f"job {job_id} has an invalid force_materialized_decode value")
     if (parameters["force_generic_decode"] and
             parameters["force_specialized_decode"]):
         raise MatrixError(f"job {job_id} forces two decoder policies")
+    if (parameters["force_tiled_decode"] and
+            parameters["force_materialized_decode"]):
+        raise MatrixError(f"job {job_id} forces two workspace kernels")
+    if (parameters["force_generic_decode"] and
+            (parameters["force_tiled_decode"] or
+             parameters["force_materialized_decode"])):
+        raise MatrixError(
+            f"job {job_id} combines generic and specialized workspace policies")
     missing = parameters.get("missing_original_indices")
     if (not isinstance(missing, list) or
             not all(isinstance(index, int) and not isinstance(index, bool) and index >= 0
@@ -1358,6 +1375,8 @@ def self_test() -> None:
                         "requested_field": "auto", "requested_backend": "auto",
                         "force_generic_decode": forced_generic,
                         "force_specialized_decode": forced_specialized,
+                        "force_tiled_decode": False,
+                        "force_materialized_decode": False,
                         "shard_bytes": 4096, "loss_count": 2,
                         "missing_original_indices": [3, 11],
                         "batch": 1, "reuse": 8, "iterations": 3,

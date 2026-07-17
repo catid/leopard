@@ -146,6 +146,16 @@ struct leo2_decode_plan
     bool direct_repair;
 };
 
+static leo2_result DecodePlanExecuteInternal(
+    const leo2_decode_plan* plan,
+    uint64_t shard_bytes,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored_original,
+    void* scratch,
+    size_t scratch_bytes,
+    bool multi_item_batch);
+
 namespace {
 
 static const size_t kScratchAlignment = 64;
@@ -629,7 +639,9 @@ static bool PreparePlanExecutionMetadata(leo2_decode_plan* plan)
     const bool force_generic =
         (codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) != 0;
     const bool force_specialized =
-        (codec->flags & LEO2_CODEC_FORCE_SPECIALIZED_DECODE) != 0;
+        (codec->flags & (LEO2_CODEC_FORCE_SPECIALIZED_DECODE |
+                         LEO2_CODEC_FORCE_TILED_DECODE |
+                         LEO2_CODEC_FORCE_MATERIALIZED_DECODE)) != 0;
     // AUTO owns both immutable paths because dispatch may depend on shard
     // bytes, backend, or a future offline table.  A forced diagnostic path
     // pays only for the metadata it can execute.
@@ -852,7 +864,9 @@ static bool ShouldPrepareDirectEncode(const leo2_codec* codec)
 static bool CanPrepareDirectRepair(const leo2_codec* codec)
 {
     return (codec->flags & (LEO2_CODEC_FORCE_GENERIC_DECODE |
-                           LEO2_CODEC_FORCE_SPECIALIZED_DECODE)) == 0 &&
+                           LEO2_CODEC_FORCE_SPECIALIZED_DECODE |
+                           LEO2_CODEC_FORCE_TILED_DECODE |
+                           LEO2_CODEC_FORCE_MATERIALIZED_DECODE)) == 0 &&
         codec->original_count >= 2 &&
         codec->original_count <= kDirectMaxOriginals &&
         codec->parent_dimension <= kDirectMaxParentDimension &&
@@ -1388,7 +1402,9 @@ static bool UseGenericDecode(
     const bool force_generic =
         (codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) != 0;
     const bool force_specialized =
-        (codec->flags & LEO2_CODEC_FORCE_SPECIALIZED_DECODE) != 0;
+        (codec->flags & (LEO2_CODEC_FORCE_SPECIALIZED_DECODE |
+                         LEO2_CODEC_FORCE_TILED_DECODE |
+                         LEO2_CODEC_FORCE_MATERIALIZED_DECODE)) != 0;
     const bool measured_balanced_full_recovery =
         leopard2_internal::ShouldUseBalancedGenericDecode(
             codec->profile, codec->field, codec->original_count,
@@ -1397,6 +1413,25 @@ static bool UseGenericDecode(
             codec->context->backend);
     return force_generic ||
         (!force_specialized && measured_balanced_full_recovery);
+}
+
+static bool UseMaterializedDecode(
+    const leo2_codec* codec,
+    const leo2_decode_plan* plan,
+    size_t rounded_shard_bytes)
+{
+    if ((codec->flags & LEO2_CODEC_FORCE_TILED_DECODE) != 0)
+        return false;
+    if ((codec->flags & LEO2_CODEC_FORCE_MATERIALIZED_DECODE) != 0)
+        return true;
+    const uint32_t missing_original_count = plan
+        ? plan->missing_original_count
+        : 1; // One-shot scratch must cover every AUTO materialized plan.
+    return leopard2_internal::ShouldUseMaterializedHighDecode(
+        codec->profile, codec->field, codec->original_count,
+        codec->recovery_count, codec->padded_side, codec->parent_count,
+        missing_original_count, rounded_shard_bytes,
+        codec->context->backend);
 }
 
 static leo2_result DecodeLayout(
@@ -1423,7 +1458,9 @@ static leo2_result DecodeLayout(
     const bool known_generic = plan
         ? UseGenericDecode(plan, geometry.rounded_bytes)
         : force_generic;
-    if (known_generic ||
+    const bool known_materialized = !known_generic &&
+        UseMaterializedDecode(codec, plan, geometry.rounded_bytes);
+    if (known_generic || known_materialized ||
         (codec->profile != LEO2_PROFILE_LOW_V1 &&
          codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1))
     {
@@ -1447,8 +1484,12 @@ static leo2_result DecodeLayout(
         }
         /* Keep the retained materialized specialized kernel when its regular
            N-slot workspace is no larger than the tiled form. */
-        geometry.work_slot_count = std::min(
-            static_cast<size_t>(codec->parent_count), tiled_slot_count);
+        const bool force_tiled =
+            (codec->flags & LEO2_CODEC_FORCE_TILED_DECODE) != 0;
+        geometry.work_slot_count = force_tiled
+            ? tiled_slot_count
+            : std::min(
+                static_cast<size_t>(codec->parent_count), tiled_slot_count);
     }
     size_t pointer_count = 0;
     if (!CheckedAdd(
@@ -2134,15 +2175,17 @@ struct DecodeBatchTaskContext
 {
     const leo2_decode_plan* plan;
     const leo2_decode_batch_item* items;
+    bool multi_item_batch;
 };
 
 static leo2_result RunDecodeBatchItem(void* context, size_t index)
 {
     const DecodeBatchTaskContext* batch = static_cast<const DecodeBatchTaskContext*>(context);
     const leo2_decode_batch_item& item = batch->items[index];
-    return leo2_decode_plan_execute(
+    return DecodePlanExecuteInternal(
         batch->plan, item.shard_bytes, item.original, item.recovery,
-        item.restored_original, item.scratch, item.scratch_bytes);
+        item.restored_original, item.scratch, item.scratch_bytes,
+        batch->multi_item_batch);
 }
 
 } // namespace
@@ -2328,7 +2371,15 @@ LEO2_EXPORT leo2_result leo2_codec_create(
     {
         const uint32_t supported_flags =
             LEO2_CODEC_FORCE_GENERIC_DECODE |
-            LEO2_CODEC_FORCE_SPECIALIZED_DECODE;
+            LEO2_CODEC_FORCE_SPECIALIZED_DECODE |
+            LEO2_CODEC_FORCE_TILED_DECODE |
+            LEO2_CODEC_FORCE_MATERIALIZED_DECODE;
+        const uint32_t algorithm_flags = options->flags &
+            (LEO2_CODEC_FORCE_GENERIC_DECODE |
+             LEO2_CODEC_FORCE_SPECIALIZED_DECODE);
+        const uint32_t workspace_flags = options->flags &
+            (LEO2_CODEC_FORCE_TILED_DECODE |
+             LEO2_CODEC_FORCE_MATERIALIZED_DECODE);
         const size_t version1_size = offsetof(leo2_codec_options, shard_layout);
         const size_t layout_field_end = version1_size + sizeof(options->shard_layout);
         if (options->struct_size < version1_size ||
@@ -2336,7 +2387,12 @@ LEO2_EXPORT leo2_result leo2_codec_create(
              options->struct_size < layout_field_end) ||
             options->reserved != 0 ||
             (options->flags & ~supported_flags) != 0 ||
-            (options->flags & supported_flags) == supported_flags)
+            algorithm_flags == (LEO2_CODEC_FORCE_GENERIC_DECODE |
+                                LEO2_CODEC_FORCE_SPECIALIZED_DECODE) ||
+            workspace_flags == (LEO2_CODEC_FORCE_TILED_DECODE |
+                                LEO2_CODEC_FORCE_MATERIALIZED_DECODE) ||
+            ((algorithm_flags & LEO2_CODEC_FORCE_GENERIC_DECODE) != 0 &&
+             workspace_flags != 0))
             return LEO2_INVALID_ARGUMENT;
         if (options->struct_size >= layout_field_end)
         {
@@ -3032,14 +3088,17 @@ LEO2_EXPORT leo2_result leo2_decode_plan_scratch_size(
     return LEO2_SUCCESS;
 }
 
-LEO2_EXPORT leo2_result leo2_decode_plan_execute(
+} // extern "C"
+
+static leo2_result DecodePlanExecuteInternal(
     const leo2_decode_plan* plan,
     uint64_t shard_bytes,
     const void* const* original,
     const void* const* recovery,
     void* const* restored_original,
     void* scratch,
-    size_t scratch_bytes)
+    size_t scratch_bytes,
+    bool multi_item_batch)
 {
     if (!plan || shard_bytes == 0)
         return LEO2_INVALID_ARGUMENT;
@@ -3132,9 +3191,18 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
     */
     const bool use_generic =
         UseGenericDecode(plan, geometry.rounded_bytes);
+    const bool force_tiled =
+        (codec->flags & LEO2_CODEC_FORCE_TILED_DECODE) != 0;
+    const bool force_materialized =
+        (codec->flags & LEO2_CODEC_FORCE_MATERIALIZED_DECODE) != 0;
+    const bool calibrated_materialized = !force_materialized &&
+        UseMaterializedDecode(codec, plan, geometry.rounded_bytes);
+    const bool measured_batch_tiled = multi_item_batch &&
+        calibrated_materialized &&
+        codec->context->backend == LEO2_BACKEND_AVX2;
     const bool use_tiled = !use_generic &&
-        geometry.work_slot_count <
-            static_cast<size_t>(codec->parent_count);
+        (force_tiled || measured_batch_tiled ||
+         geometry.work_slot_count < static_cast<size_t>(codec->parent_count));
 
     if (geometry.aligned_prefix_bytes != 0)
     {
@@ -3168,6 +3236,22 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
     return LEO2_SUCCESS;
 }
 
+extern "C" {
+
+LEO2_EXPORT leo2_result leo2_decode_plan_execute(
+    const leo2_decode_plan* plan,
+    uint64_t shard_bytes,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored_original,
+    void* scratch,
+    size_t scratch_bytes)
+{
+    return DecodePlanExecuteInternal(
+        plan, shard_bytes, original, recovery, restored_original,
+        scratch, scratch_bytes, false);
+}
+
 LEO2_EXPORT leo2_result leo2_decode_plan_execute_batch(
     const leo2_decode_plan* plan,
     const leo2_decode_batch_item* items,
@@ -3179,7 +3263,7 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute_batch(
         return LEO2_INVALID_ARGUMENT;
     if (!plan)
         return LEO2_INVALID_ARGUMENT;
-    DecodeBatchTaskContext batch = { plan, items };
+    DecodeBatchTaskContext batch = { plan, items, item_count > 1 };
     if (plan->codec->context->pool)
         return plan->codec->context->pool->Run(item_count, RunDecodeBatchItem, &batch);
     for (size_t i = 0; i < item_count; ++i)

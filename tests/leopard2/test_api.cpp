@@ -846,12 +846,313 @@ void test_codec_flag_validation(leo2_context* context)
         "mutually exclusive decoder flags were accepted");
     require(codec == NULL, "failed codec creation did not clear its output");
 
+    options.flags = LEO2_CODEC_FORCE_TILED_DECODE |
+        LEO2_CODEC_FORCE_MATERIALIZED_DECODE;
+    codec = reinterpret_cast<leo2_codec*>(static_cast<uintptr_t>(1));
+    require(leo2_codec_create(context, 9, 7, LEO2_PROFILE_LEGACY_HIGH_V1,
+        LEO2_FIELD_GF8, &options, &codec) == LEO2_INVALID_ARGUMENT,
+        "mutually exclusive specialized workspace flags were accepted");
+    require(codec == NULL, "workspace-flag failure did not clear its output");
+
+    options.flags = LEO2_CODEC_FORCE_GENERIC_DECODE |
+        LEO2_CODEC_FORCE_TILED_DECODE;
+    codec = reinterpret_cast<leo2_codec*>(static_cast<uintptr_t>(1));
+    require(leo2_codec_create(context, 9, 7, LEO2_PROFILE_LEGACY_HIGH_V1,
+        LEO2_FIELD_GF8, &options, &codec) == LEO2_INVALID_ARGUMENT,
+        "generic decode accepted a specialized workspace flag");
+    require(codec == NULL, "generic/workspace failure did not clear its output");
+
+    options.flags = LEO2_CODEC_FORCE_SPECIALIZED_DECODE |
+        LEO2_CODEC_FORCE_TILED_DECODE;
+    codec = NULL;
+    require_result(leo2_codec_create(context, 9, 7,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, &options, &codec),
+        "specialized tiled codec create");
+    leo2_codec_destroy(codec);
+
+    options.flags = LEO2_CODEC_FORCE_SPECIALIZED_DECODE |
+        LEO2_CODEC_FORCE_MATERIALIZED_DECODE;
+    codec = NULL;
+    require_result(leo2_codec_create(context, 9, 7,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, &options, &codec),
+        "specialized materialized codec create");
+    leo2_codec_destroy(codec);
+
     options.flags = 0x80000000u;
     codec = reinterpret_cast<leo2_codec*>(static_cast<uintptr_t>(1));
     require(leo2_codec_create(context, 9, 7, LEO2_PROFILE_LEGACY_HIGH_V1,
         LEO2_FIELD_GF8, &options, &codec) == LEO2_INVALID_ARGUMENT,
         "unknown codec flag was accepted");
     require(codec == NULL, "unknown-flag failure did not clear its output");
+}
+
+void test_tiled_high_dispatch_policy()
+{
+    using leopard2_internal::ShouldUseMaterializedHighDecode;
+    const leo2_profile profile = LEO2_PROFILE_LEGACY_HIGH_V1;
+    const leo2_field field = LEO2_FIELD_GF8;
+    const uint32_t k = 224;
+    const uint32_t r = 32;
+    const uint32_t padded = 32;
+    const uint32_t parent = 256;
+
+    require(ShouldUseMaterializedHighDecode(profile, field, k, r, padded,
+        parent, 1, 24 * 1024, LEO2_BACKEND_AVX2),
+        "AVX2 materialized policy rejected its lower byte boundary");
+    require(ShouldUseMaterializedHighDecode(profile, field, k, r, padded,
+        parent, 8, 64 * 1024, LEO2_BACKEND_AVX2),
+        "AVX2 materialized policy rejected its upper byte/loss boundary");
+    require(ShouldUseMaterializedHighDecode(profile, field, k, r, padded,
+        parent, 1, 32 * 1024, LEO2_BACKEND_SSSE3),
+        "SSSE3 materialized policy rejected its lower byte boundary");
+    require(ShouldUseMaterializedHighDecode(profile, field, k, r, padded,
+        parent, 8, 64 * 1024, LEO2_BACKEND_SSSE3),
+        "SSSE3 materialized policy rejected its upper byte/loss boundary");
+
+    require(!ShouldUseMaterializedHighDecode(profile, field, k, r, padded,
+        parent, 1, 16 * 1024, LEO2_BACKEND_AVX2),
+        "AVX2 materialized policy crossed its lower byte boundary");
+    require(!ShouldUseMaterializedHighDecode(profile, field, k, r, padded,
+        parent, 1, 24 * 1024, LEO2_BACKEND_SSSE3),
+        "SSSE3 materialized policy crossed its lower byte boundary");
+    require(!ShouldUseMaterializedHighDecode(profile, field, k, r, padded,
+        parent, 1, 64 * 1024 + 64, LEO2_BACKEND_AVX2),
+        "materialized policy crossed its upper byte boundary");
+    require(!ShouldUseMaterializedHighDecode(profile, field, k, r, padded,
+        parent, 9, 32 * 1024, LEO2_BACKEND_AVX2),
+        "materialized policy accepted too many missing originals");
+    require(!ShouldUseMaterializedHighDecode(profile, field, k, r, padded,
+        parent, 1, 32 * 1024, LEO2_BACKEND_SCALAR),
+        "materialized policy accepted the scalar backend");
+    require(!ShouldUseMaterializedHighDecode(LEO2_PROFILE_LOW_V1, field,
+        k, r, padded, parent, 1, 32 * 1024, LEO2_BACKEND_AVX2),
+        "materialized policy accepted the low profile");
+    require(!ShouldUseMaterializedHighDecode(profile, LEO2_FIELD_GF16,
+        k, r, padded, parent, 1, 32 * 1024, LEO2_BACKEND_AVX2),
+        "materialized policy accepted GF16");
+    require(!ShouldUseMaterializedHighDecode(profile, field, k - 1, r,
+        padded, parent, 1, 32 * 1024, LEO2_BACKEND_AVX2),
+        "materialized policy accepted a neighboring K");
+    require(!ShouldUseMaterializedHighDecode(profile, field, k, r - 1,
+        padded, parent, 1, 32 * 1024, LEO2_BACKEND_AVX2),
+        "materialized policy accepted a neighboring R");
+    require(!ShouldUseMaterializedHighDecode(profile, field, k, r,
+        padded / 2, parent, 1, 32 * 1024, LEO2_BACKEND_AVX2),
+        "materialized policy accepted a neighboring padded side");
+    require(!ShouldUseMaterializedHighDecode(profile, field, k, r, padded,
+        parent / 2, 1, 32 * 1024, LEO2_BACKEND_AVX2),
+        "materialized policy accepted a neighboring parent");
+}
+
+leo2_codec* make_flagged_codec(
+    leo2_context* context,
+    unsigned k,
+    unsigned r,
+    leo2_profile profile,
+    leo2_field field,
+    uint32_t flags)
+{
+    leo2_codec_options options;
+    memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.flags = flags;
+    leo2_codec* codec = NULL;
+    require_result(leo2_codec_create(
+        context, k, r, profile, field, &options, &codec),
+        "flagged codec create");
+    require(codec != NULL, "flagged codec create returned a null codec");
+    return codec;
+}
+
+void test_tiled_materialized_execution(leo2_context* context)
+{
+    const unsigned k = 224;
+    const unsigned r = 32;
+    const size_t bytes = 32 * 1024;
+    const unsigned missing_count = 8;
+    leo2_codec* auto_codec = make_codec(context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    leo2_codec* tiled_codec = make_flagged_codec(context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+        LEO2_CODEC_FORCE_SPECIALIZED_DECODE |
+            LEO2_CODEC_FORCE_TILED_DECODE);
+    leo2_codec* materialized_codec = make_flagged_codec(context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+        LEO2_CODEC_FORCE_SPECIALIZED_DECODE |
+            LEO2_CODEC_FORCE_MATERIALIZED_DECODE);
+
+    const Shards source = make_originals(k, bytes, UINT64_C(0x71e2d15a));
+    const Shards parity = encode_new(auto_codec, source, bytes);
+    std::vector<uint8_t> original_present(k, 1);
+    std::vector<uint8_t> recovery_present(r, 1);
+    for (unsigned i = 0; i < missing_count; ++i)
+        original_present[i] = 0;
+
+    leo2_decode_plan* plans[3] = { NULL, NULL, NULL };
+    leo2_codec* codecs[3] = { auto_codec, tiled_codec, materialized_codec };
+    size_t scratch_bytes[3] = { 0, 0, 0 };
+    for (unsigned i = 0; i < 3; ++i)
+    {
+        require_result(leo2_decode_plan_create(codecs[i], &original_present[0],
+            &recovery_present[0], &plans[i]), "workspace plan create");
+        require_result(leo2_decode_plan_scratch_size(
+            plans[i], bytes, &scratch_bytes[i]), "workspace scratch query");
+    }
+    require(scratch_bytes[2] > scratch_bytes[1],
+        "materialized workspace is not larger than tiled workspace");
+    const leo2_backend backend = leo2_context_backend(context);
+    if (backend == LEO2_BACKEND_AVX2 || backend == LEO2_BACKEND_SSSE3)
+        require(scratch_bytes[0] == scratch_bytes[2],
+            "AUTO did not reserve its calibrated materialized workspace");
+    else
+        require(scratch_bytes[0] == scratch_bytes[1],
+            "uncalibrated backend did not retain the tiled workspace");
+
+    std::vector<const void*> original_inputs = const_pointers(source);
+    std::vector<const void*> recovery_inputs = const_pointers(parity);
+    for (unsigned i = 0; i < missing_count; ++i)
+        original_inputs[i] = NULL;
+    Shards restored[3] = {
+        Shards(k, std::vector<uint8_t>(bytes, 0)),
+        Shards(k, std::vector<uint8_t>(bytes, 0)),
+        Shards(k, std::vector<uint8_t>(bytes, 0))
+    };
+    for (unsigned path = 0; path < 3; ++path)
+    {
+        std::vector<void*> output(k, NULL);
+        for (unsigned i = 0; i < missing_count; ++i)
+            output[i] = &restored[path][i][0];
+        AlignedBuffer scratch(scratch_bytes[path]);
+        require_result(leo2_decode_plan_execute(plans[path], bytes,
+            &original_inputs[0], &recovery_inputs[0], &output[0],
+            scratch.data, scratch.bytes), "workspace decode execute");
+        for (unsigned i = 0; i < missing_count; ++i)
+            require(restored[path][i] == source[i],
+                "workspace decode restored the wrong original");
+    }
+    for (unsigned i = 0; i < missing_count; ++i)
+    {
+        require(restored[0][i] == restored[1][i],
+            "AUTO and tiled decode differ");
+        require(restored[0][i] == restored[2][i],
+            "AUTO and materialized decode differ");
+    }
+
+    Shards batch_restored[2] = {
+        Shards(k, std::vector<uint8_t>(bytes, 0)),
+        Shards(k, std::vector<uint8_t>(bytes, 0))
+    };
+    std::vector<void*> batch_output[2] = {
+        std::vector<void*>(k, NULL), std::vector<void*>(k, NULL)
+    };
+    AlignedBuffer batch_scratch0(scratch_bytes[0]);
+    AlignedBuffer batch_scratch1(scratch_bytes[0]);
+    leo2_decode_batch_item items[2];
+    memset(items, 0, sizeof(items));
+    for (unsigned item = 0; item < 2; ++item)
+    {
+        for (unsigned i = 0; i < missing_count; ++i)
+            batch_output[item][i] = &batch_restored[item][i][0];
+        items[item].shard_bytes = bytes;
+        items[item].original = &original_inputs[0];
+        items[item].recovery = &recovery_inputs[0];
+        items[item].restored_original = &batch_output[item][0];
+        items[item].scratch = item == 0
+            ? batch_scratch0.data : batch_scratch1.data;
+        items[item].scratch_bytes = scratch_bytes[0];
+    }
+    require_result(leo2_decode_plan_execute_batch(plans[0], items, 2),
+        "AUTO tiled batch execute");
+    for (unsigned item = 0; item < 2; ++item)
+        for (unsigned i = 0; i < missing_count; ++i)
+            require(batch_restored[item][i] == source[i],
+                "AUTO tiled batch restored the wrong original");
+
+    for (unsigned i = 0; i < 3; ++i)
+        leo2_decode_plan_destroy(plans[i]);
+    leo2_codec_destroy(materialized_codec);
+    leo2_codec_destroy(tiled_codec);
+    leo2_codec_destroy(auto_codec);
+}
+
+void test_batch_materialized_capacity(leo2_context* context)
+{
+    const unsigned k = 128;
+    const unsigned r = 128;
+    const size_t bytes = 257;
+    leo2_codec* codec = make_flagged_codec(context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+        LEO2_CODEC_FORCE_SPECIALIZED_DECODE);
+    leo2_codec* tiled_codec = make_flagged_codec(context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+        LEO2_CODEC_FORCE_SPECIALIZED_DECODE |
+            LEO2_CODEC_FORCE_TILED_DECODE);
+    const Shards source = make_originals(k, bytes, UINT64_C(0xb47c4d15));
+    const Shards parity = encode_new(codec, source, bytes);
+    std::vector<uint8_t> original_present(k, 1);
+    std::vector<uint8_t> recovery_present(r, 1);
+    original_present[0] = 0;
+    leo2_decode_plan* plan = NULL;
+    require_result(leo2_decode_plan_create(codec, &original_present[0],
+        &recovery_present[0], &plan), "materialized-capacity plan create");
+    size_t scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(plan, bytes, &scratch_bytes),
+        "materialized-capacity scratch query");
+    leo2_decode_plan* tiled_plan = NULL;
+    require_result(leo2_decode_plan_create(tiled_codec, &original_present[0],
+        &recovery_present[0], &tiled_plan), "forced-tiled-capacity plan create");
+    size_t tiled_scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+        tiled_plan, bytes, &tiled_scratch_bytes),
+        "forced-tiled-capacity scratch query");
+    require(tiled_scratch_bytes > scratch_bytes,
+        "forced tiled query did not reserve its extra output slot");
+
+    std::vector<const void*> original_inputs = const_pointers(source);
+    std::vector<const void*> recovery_inputs = const_pointers(parity);
+    original_inputs[0] = NULL;
+    Shards restored[2] = {
+        Shards(k, std::vector<uint8_t>(bytes, 0)),
+        Shards(k, std::vector<uint8_t>(bytes, 0))
+    };
+    std::vector<void*> outputs[2] = {
+        std::vector<void*>(k, NULL), std::vector<void*>(k, NULL)
+    };
+    outputs[0][0] = &restored[0][0][0];
+    outputs[1][0] = &restored[1][0][0];
+    AlignedBuffer scratch0(scratch_bytes);
+    AlignedBuffer scratch1(scratch_bytes);
+    leo2_decode_batch_item items[2];
+    memset(items, 0, sizeof(items));
+    for (unsigned item = 0; item < 2; ++item)
+    {
+        items[item].shard_bytes = bytes;
+        items[item].original = &original_inputs[0];
+        items[item].recovery = &recovery_inputs[0];
+        items[item].restored_original = &outputs[item][0];
+        items[item].scratch = item == 0 ? scratch0.data : scratch1.data;
+        items[item].scratch_bytes = scratch_bytes;
+    }
+    require_result(leo2_decode_plan_execute_batch(plan, items, 2),
+        "materialized-capacity batch execute");
+    require(restored[0][0] == source[0] && restored[1][0] == source[0],
+        "materialized-capacity batch restored the wrong original");
+
+    Shards tiled_restored(k, std::vector<uint8_t>(bytes, 0));
+    std::vector<void*> tiled_output(k, NULL);
+    tiled_output[0] = &tiled_restored[0][0];
+    AlignedBuffer tiled_scratch(tiled_scratch_bytes);
+    require_result(leo2_decode_plan_execute(tiled_plan, bytes,
+        &original_inputs[0], &recovery_inputs[0], &tiled_output[0],
+        tiled_scratch.data, tiled_scratch.bytes),
+        "forced-tiled-capacity execute");
+    require(tiled_restored[0] == source[0],
+        "forced tiled capacity restored the wrong original");
+
+    leo2_decode_plan_destroy(tiled_plan);
+    leo2_decode_plan_destroy(plan);
+    leo2_codec_destroy(tiled_codec);
+    leo2_codec_destroy(codec);
 }
 
 void test_balanced_dispatch_policy()
@@ -925,6 +1226,9 @@ int main()
         test_forced_backend(context);
         test_codec_flag_validation(context);
         test_balanced_dispatch_policy();
+        test_tiled_high_dispatch_policy();
+        test_tiled_materialized_execution(context);
+        test_batch_materialized_capacity(context);
 
         test_profile_metadata(context);
         compare_high_with_legacy(context, 3, 2,

@@ -66,21 +66,96 @@ The old `N`-materializing planned high kernel remains available internally and
 is compared byte-for-byte with the new requested outputs in the decode-plan
 schedule test.
 
-## Validation and promotion state
+## Calibrated execution policy
 
-The combined side-sized and fixed-tail checkpoint has passed the full 50-test
+The side-sized traversal is the production default.  One narrow deterministic
+exception retains the regular `N`-slot high kernel for a single stripe when all
+of the following are true:
+
+- the profile is legacy-high GF8 with `K=224`, `R=T=32`, and `N=256`;
+- one through eight originals are missing;
+- rounded shard bytes are 24 through 64 KiB on AVX2, or 32 through 64 KiB on
+  SSSE3; and
+- the call contains exactly one batch item on AVX2.  SSSE3 retains the
+  materialized exception for every batch size pending a dedicated batch sweep.
+
+Scalar, two-or-more-item AVX2 batches, more than eight missing originals, the
+neighboring `T=16` and `T=64` parents, and sizes outside those byte intervals
+remain tiled.  An automatic plan reserves enough scratch for the materialized
+exception; an AVX2 multi-item batch reuses that caller allocation while
+executing the smaller tiled traversal.  This conservative query keeps immutable
+plans usable for both single and batch calls without allocating in execution.
+
+`LEO2_CODEC_FORCE_TILED_DECODE` and
+`LEO2_CODEC_FORCE_MATERIALIZED_DECODE` are diagnostic flags for differential
+tests and offline calibration.  They select only a workspace/traversal for the
+same specialized decoder, never a field, profile, coordinate map, or wire
+format.  They are mutually exclusive; forcing generic together with either is
+invalid.  Forced tiled reserves the full `2P` or `2T+L` geometry even when that
+diagnostic workspace is larger than `N`; the normal dispatcher retains the
+materialized traversal in that case.
+
+## Isolated performance evidence
+
+The retained machine-readable summary is
+`experiments/leopard2/decoder_dispatch/results/tiled_high_amd_9950x3d.json`.
+Its file SHA-256 is
+`812332d2edee285b59adb0a45751b111df91bc6fbd1a2294f5ad94b4037d3283` and its
+canonical content SHA-256 is
+`7654e3d95f83edf854b9ae0f4f2cb2f48ef849e40d0205e396b614ad686d9cd0`.
+The identity-recorded raw manifest is intentionally kept in the ignored research
+cache; its SHA-256 is
+`011b9c2815d320a558c4b802eacd4f29819dfa5d3c565f2978768a0744d87bf3`.
+
+The run compared clean detached control commit
+`3c75ec7131b5eb36bb4e07cb8e40cc6dc1620703` with tiled candidate commit
+`bc7162a16b93fae4e66179cb477e3532176d8405`.  It contains 117 cells and 1,404
+benchmark invocations: three independent paired-log ABBA/BAAB rounds, 11
+internal samples, a dedicated physical core (CPU 14), and an idle SMT sibling
+(CPU 30).  The matrix covers AVX2 and SSSE3 `T=32` byte/loss boundaries,
+scalar, batch size two, plan reuse 1 and 64, and AVX2 `T=16`/`T=64` neighbors.
+Setup and execution are reported separately.  Candidate scratch fell by
+46.82% to 84.34% across the matrix.
+
+The 14 cells with a 95% confidence interval entirely worse than a 2%
+regression were confined to the single-stripe `T=32` AVX2/SSSE3 region encoded
+above.  The matrix also found 46 credible gains of at least 5%.  Scalar `T=32`
+gained 6.90% to 11.74%; AVX2 `T=16` gained 6.05% to 11.49%; and AVX2 `T=64`
+gained 1.92% to 18.27%.  At batch size two, AVX2 `T=32` tied or won throughout
+and gained roughly 20% to 50% in the 64-to-80-KiB cells.  These results support
+a region dispatcher rather than rolling back the bounded workspace globally.
+
+Reproduce the collection and validated reduction with:
+
+    python3 experiments/leopard2/decoder_dispatch/run_tiled_high_abba.py \
+        --control-root CONTROL_WORKTREE \
+        --candidate-root CANDIDATE_WORKTREE \
+        --control-commit 3c75ec7131b5eb36bb4e07cb8e40cc6dc1620703 \
+        --candidate-commit bc7162a16b93fae4e66179cb477e3532176d8405 \
+        --output OUTPUT_DIRECTORY --cpu 14 --sibling 30
+    python3 experiments/leopard2/decoder_dispatch/analyze_tiled_high.py \
+        --manifest OUTPUT_DIRECTORY/manifest.json \
+        --output /tmp/tiled-high-summary.json --require-rounds 3
+
+The logical CPU pair must be replaced by an allowed physical-core/sibling pair
+on another host.  Absolute timings are host-specific; source/binary identity,
+round-trip digests, scratch geometry, and evidence validation are the
+reproducible contract.
+
+## Correctness validation
+
+The combined side-sized and fixed-tail checkpoint passed the full 50-test
 Release suite; strict GCC 13 warning-as-error tests; focused Clang 18
 ASan/UBSan and TSan tests; and an AArch64/SSE2NEON compile-only check.  It also
-directly compares tiled GF8/GF16 kernels with the retained materialized planned
+directly compared tiled GF8/GF16 kernels with the retained materialized planned
 kernels on sparse inputs and completely empty blocks.  Public contract tests
 execute 65/129-byte GF8 and 66/130-byte GF16 splits through low, high, and
 forced-generic paths and verify both recovered bytes and the fixed-staging
-scratch slope.  The decode-plan schedule target cannot be linked with TSan
-because its pre-existing test-only global allocation replacements conflict
+scratch slope.  The calibrated-dispatch regression adds boundary/policy checks,
+forced tiled-versus-materialized byte equality, scratch selection, and the
+multi-item AUTO route.  The decode-plan schedule target cannot be linked with
+TSan because its pre-existing test-only global allocation replacements conflict
 with the TSan runtime; the public plan, high/low acceptance, and shared-context
 tests cover the concurrent production entry points under TSan instead.
 
-This is not yet a performance promotion claim.  Production integration still
-requires an independent source review and isolated paired measurements covering
-setup, execution, cache effects, and neighboring high/low regimes.  Forced
-generic remains the correctness fallback.
+Forced generic remains the correctness fallback.

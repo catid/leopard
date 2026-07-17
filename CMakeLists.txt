@@ -986,6 +986,16 @@ if(LEO2_BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_direct_encode_crossover.py
                 self-test)
         add_test(
+            NAME leopard2_tiled_high_runner_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/decoder_dispatch/run_tiled_high_abba.py
+                --self-test)
+        add_test(
+            NAME leopard2_tiled_high_analyzer_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/decoder_dispatch/analyze_tiled_high.py
+                --self-test)
+        add_test(
             NAME leopard2_visual_studio_project_self_test
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/proj/test_leopard_vcxproj.py)
