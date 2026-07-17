@@ -1217,8 +1217,18 @@ static leo2_result DecodeLayout(
         return LEO2_UNSUPPORTED;
     const size_t range_count = static_cast<size_t>(codec->original_count) * 2 + codec->recovery_count;
     const size_t pointer_count = static_cast<size_t>(codec->parent_count) * 2;
-    const size_t slot_count = static_cast<size_t>(codec->original_count) +
-        codec->recovery_count + codec->parent_count;
+    /*
+        Complete 64-byte tiles already use the transform kernels' native
+        layout.  The selected coordinate inputs are immutable, so execution
+        can point at the caller shards directly and reserve data slots only
+        for the N transform outputs.  Ragged tails still need K+R staging
+        slots for zero padding (GF8) or compact-to-ALTMAP scatter (GF16).
+    */
+    const bool stage_inputs = rounded_bytes != shard_bytes;
+    const size_t input_slot_count = stage_inputs
+        ? static_cast<size_t>(codec->original_count) + codec->recovery_count
+        : 0;
+    const size_t slot_count = input_slot_count + codec->parent_count;
     if (!ComputeScratchLayout(range_count, pointer_count, slot_count, rounded_bytes, layout))
         return LEO2_INVALID_COUNTS;
     return LEO2_SUCCESS;
@@ -2478,31 +2488,45 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
     void** coordinate_data = reinterpret_cast<void**>(base + layout.pointer_offset);
     void** work = coordinate_data + codec->parent_count;
     uint8_t* slots = base + layout.data_offset;
+    const bool stage_inputs = rounded != shard_bytes;
     std::fill(coordinate_data, coordinate_data + codec->parent_count, static_cast<void*>(NULL));
 
     for (uint32_t i = 0; i < codec->original_count; ++i)
     {
-        uint8_t* slot = slots + static_cast<size_t>(i) * rounded;
         const uint32_t coordinate = CoordinateForOriginal(codec, i);
         if (original[i] && !plan->coordinate_erased[coordinate])
         {
-            StageShardForKernel(codec, slot, original[i],
-                static_cast<size_t>(shard_bytes), rounded);
-            coordinate_data[coordinate] = slot;
+            if (stage_inputs)
+            {
+                uint8_t* slot = slots + static_cast<size_t>(i) * rounded;
+                StageShardForKernel(codec, slot, original[i],
+                    static_cast<size_t>(shard_bytes), rounded);
+                coordinate_data[coordinate] = slot;
+            }
+            else
+                coordinate_data[coordinate] = const_cast<void*>(original[i]);
         }
     }
     for (uint32_t i = 0; i < codec->recovery_count; ++i)
     {
-        uint8_t* slot = slots + (static_cast<size_t>(codec->original_count) + i) * rounded;
         const uint32_t coordinate = CoordinateForRecovery(codec, i);
         if (recovery[i] && !plan->coordinate_erased[coordinate])
         {
-            StageShardForKernel(codec, slot, recovery[i],
-                static_cast<size_t>(shard_bytes), rounded);
-            coordinate_data[coordinate] = slot;
+            if (stage_inputs)
+            {
+                uint8_t* slot = slots +
+                    (static_cast<size_t>(codec->original_count) + i) * rounded;
+                StageShardForKernel(codec, slot, recovery[i],
+                    static_cast<size_t>(shard_bytes), rounded);
+                coordinate_data[coordinate] = slot;
+            }
+            else
+                coordinate_data[coordinate] = const_cast<void*>(recovery[i]);
         }
     }
-    const size_t work_base = static_cast<size_t>(codec->original_count) + codec->recovery_count;
+    const size_t work_base = stage_inputs
+        ? static_cast<size_t>(codec->original_count) + codec->recovery_count
+        : 0;
     for (uint32_t i = 0; i < codec->parent_count; ++i)
         work[i] = slots + (work_base + i) * rounded;
 

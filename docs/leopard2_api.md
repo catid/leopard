@@ -73,6 +73,15 @@ scans shard pointers for transform prefixes during execution. See
 `leopard2_decode_plan_schedules.md` for representation, bounds, differential
 tests, and pinned measurements.
 
+For a physical shard size that is a multiple of 64 bytes, selected transform
+inputs already use the kernels' native tile layout and remain read-only.
+Execution therefore references those caller shards directly and reserves full
+shard data slots only for the `N` transform outputs, rather than staging another
+`K+R` shards.  A ragged final tile still needs `K+R` input slots for GF8 zero
+padding or GF16 compact-to-ALTMAP scatter.  The public overlap checks are
+unchanged.  Tiling the remaining `N`-slot transform workspace down toward
+`O(min(P,T))` is separate unfinished work.
+
 The plan uses exactly `K` received public coordinates.  It keeps every surviving
 systematic shard, then keeps the lowest-index received parity shards needed to
 reach `K`; any surplus received parity is treated as a deterministic virtual
@@ -133,8 +142,9 @@ with `LEO2_FIELD_GF16`; field AUTO never chooses it.
 
 GF8 supports every positive byte length and internally handles SIMD tails through
 caller scratch.  Native GF16 supports every positive even byte length.  Complete
-64-byte ALTMAP tiles remain unchanged and use the zero-copy encoding path.  A
-partial final GF16 tile contains `q` complete symbols in `2q` application bytes:
+64-byte tiles remain unchanged and use zero-copy encode input and decode input
+paths.  A partial final GF16 tile contains `q` complete symbols in `2q`
+application bytes:
 the first `q` bytes are scattered to ALTMAP low lanes `0..q-1`, the next `q`
 bytes to high lanes `0..q-1`, and unused lanes are zero.  Outputs use the inverse
 gather.  Odd GF16 byte lengths return `LEO2_UNSUPPORTED` because an unpaired byte

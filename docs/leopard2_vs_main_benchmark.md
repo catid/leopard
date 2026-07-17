@@ -128,9 +128,10 @@ mismatch, but it confirmed these production gaps:
 2. Dense locator setup still runs ambient-field 256/65,536-entry Walsh
    transforms rather than always scaling with active parent `N`. Tracked as
    `leopard-79h.29.1`.
-3. Transform decode still stages `K+R+N` full shard slots and `2N` pointers,
-   rather than the planned tiled `O(min(P,T))` target. Tracked as
-   `leopard-79h.26.2`.
+3. Transform decode now removes the `K+R` input-staging slots for complete
+   64-byte tiles, leaving `N` full data slots plus `2N` pointers. Ragged tails
+   still stage `K+R+N`, and the planned tiled `O(min(P,T))` transform workspace
+   remains open. Tracked as `leopard-79h.26.2`.
 4. Runtime backend choice is process-global; lower scalar/SSSE3 contexts in the
    same production binary are not supported. Tracked as `leopard-79h.13.1`.
 

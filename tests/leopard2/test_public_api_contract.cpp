@@ -687,6 +687,83 @@ void test_alias_and_scratch_contracts(leo2_context* context, Counts* counts)
     require(restored == source[0], "valid decode restored wrong bytes");
 }
 
+void test_aligned_decode_input_staging_elision(
+    leo2_context* context,
+    Counts* counts)
+{
+    struct Case
+    {
+        uint32_t k;
+        uint32_t r;
+        leo2_profile profile;
+        leo2_field field;
+        uint32_t flags;
+        size_t ragged_bytes;
+    };
+    const Case cases[] = {
+        { 19, 5, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          LEO2_CODEC_FORCE_SPECIALIZED_DECODE, 63 },
+        { 5, 19, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8,
+          LEO2_CODEC_FORCE_SPECIALIZED_DECODE, 63 },
+        { 19, 5, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
+          LEO2_CODEC_FORCE_GENERIC_DECODE, 62 },
+        { 5, 19, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16,
+          LEO2_CODEC_FORCE_SPECIALIZED_DECODE, 62 }
+    };
+
+    for (size_t case_i = 0;
+         case_i < sizeof(cases) / sizeof(cases[0]); ++case_i)
+    {
+        const Case& item = cases[case_i];
+        leo2_codec_options options;
+        memset(&options, 0, sizeof(options));
+        options.struct_size = sizeof(options);
+        options.flags = item.flags;
+        CodecOwner codec;
+        require_result(leo2_codec_create(context, item.k, item.r,
+            item.profile, item.field, &options, &codec.codec), LEO2_SUCCESS,
+            "aligned-input scratch codec create");
+
+        std::vector<uint8_t> original_present(item.k, 1);
+        std::vector<uint8_t> recovery_present(item.r, 1);
+        original_present[0] = 0;
+        PlanOwner plan;
+        require_result(leo2_decode_plan_create(codec.codec,
+            &original_present[0], &recovery_present[0], &plan.plan),
+            LEO2_SUCCESS, "aligned-input scratch plan create");
+
+        size_t aligned_plan = 0;
+        size_t ragged_plan = 0;
+        size_t aligned_one_shot = 0;
+        size_t ragged_one_shot = 0;
+        require_result(leo2_decode_plan_scratch_size(
+            plan.plan, 64, &aligned_plan), LEO2_SUCCESS,
+            "aligned plan scratch query");
+        require_result(leo2_decode_plan_scratch_size(
+            plan.plan, item.ragged_bytes, &ragged_plan), LEO2_SUCCESS,
+            "ragged plan scratch query");
+        require_result(leo2_decode_scratch_size(
+            codec.codec, 64, &aligned_one_shot), LEO2_SUCCESS,
+            "aligned one-shot scratch query");
+        require_result(leo2_decode_scratch_size(
+            codec.codec, item.ragged_bytes, &ragged_one_shot), LEO2_SUCCESS,
+            "ragged one-shot scratch query");
+
+        const size_t staged_input_bytes =
+            static_cast<size_t>(item.k + item.r) * 64;
+        require(ragged_plan > aligned_plan &&
+                ragged_plan - aligned_plan == staged_input_bytes,
+            "aligned plan retained K+R input staging slots");
+        require(ragged_one_shot > aligned_one_shot &&
+                ragged_one_shot - aligned_one_shot == staged_input_bytes,
+            "aligned one-shot retained K+R input staging slots");
+        require(aligned_plan == aligned_one_shot &&
+                ragged_plan == ragged_one_shot,
+            "plan and one-shot transform scratch geometry diverged");
+        counts->scratch_checks += 3;
+    }
+}
+
 struct BatchFixture
 {
     BatchFixture(leo2_context* context, size_t bytes)
@@ -1002,6 +1079,7 @@ int main()
 
         test_introspection_and_null_contracts(context.context, &counts);
         test_alias_and_scratch_contracts(context.context, &counts);
+        test_aligned_decode_input_staging_elision(context.context, &counts);
         test_concurrent_shared_context_batches(context.context, &counts);
         test_deterministic_batch_failures(context.context, &counts);
         test_legacy_negative_contract(&counts);
