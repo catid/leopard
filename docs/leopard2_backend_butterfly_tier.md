@@ -2,10 +2,12 @@
 
 Status: production implementation and the conservative GF16 size policy are
 landed at `04a8ba35fc9b1eb068cd748358eb04b79bc5e63b`. Final-source Release,
-strict-compiler, sanitizer, and forced-backend correctness gates pass. The
-retained timing evidence decisively supports every enabled GF16 treatment but
-does not pass the predeclared whole-campaign AVX2 statistical gate: two
-large-shard decode controls whose executed code is identical crossed the
+GCC/Clang strict, ASan/UBSan, focused TSan, portable-ISA, and forced-backend
+correctness gates pass, with the TSan test-link limitation documented below.
+The retained timing evidence decisively supports every measured SSSE3/AVX2
+GF16 treatment but does not pass the predeclared whole-campaign AVX2
+statistical gate: two large-shard decode controls whose executed code is
+identical crossed the
 one-sided `-2%` confidence floor. That failure is retained and reported below;
 it was not resampled or relabeled as a passing campaign. The production policy
 remains because exact linked-code and data-layout comparison rules out a
@@ -172,7 +174,20 @@ correctness and safety gates available on this host:
 
 - Release: 50/50 CTests passed.
 - GCC 13 strict warnings: 48/48 CTests passed.
+- Clang 18 strict warnings: all 58 compile commands contained
+  `-Wall -Wextra -Wpedantic -Werror`, the build emitted no warning or error,
+  and 50/50 CTests passed.
 - Clang 18 ASan plus UBSan: all 47 applicable CTests passed.
+- Clang 18 TSan with OpenMP disabled passed seven focused executables without
+  a report: backend operations, mixed contexts, encode concurrency, R=1, high
+  and low shared-plan decode, and shared-context public batches. The plan-
+  schedule test's intentional strong global `new`/`delete` overrides conflict
+  with compiler-rt TSan at link time; that exact test passes in Release, while
+  its concurrent shared-plan behavior is covered by the passing high/low and
+  context TSan targets.
+- The portable-ISA archive classifier passed. The AArch64/SSE2NEON compile-
+  only gate also passed at exact gitlink `cad518a`, including native vector XOR
+  instructions; this is not native-ARM performance evidence.
 - The fresh AUTO/scalar/SSSE3/AVX2 matrix passed all four variants, 145/145
   semantic gates, and 156/156 normalized cross-backend comparisons. Its
   `matrix.json` SHA-256 is
@@ -192,15 +207,23 @@ and
 `465ad82e4affc346e49e85eeef263d78eb8fcbc050415304c8aeb340b3dee812`.
 
 The corresponding exact-production AVX2 campaign retained strong intended
-gains but failed two large LOW_V1 GF16 decode confidence bounds. To separate a
-real treatment effect from layout or eligibility-check changes, a final
-predeclared sensitivity pair was built from the production tree. The false
-commit `4817f471424e3dfed177b98d50421f46446a09c3` and true commit
+gains but failed two large LOW_V1 GF16 decode confidence bounds: the loss-16
+cell had a -0.151 percent center and -2.226 percent lower bound; the one-loss
+cell had a -0.666 percent center and -2.608 percent lower bound. Its retained
+manifest/raw SHA-256 values are
+`5c326327d335b464a071f9546620225e5de1c71438ada79aef81f1593e690219`
+and
+`76be32c6455b47d684352b8bc2d486c3c8b8a1e34ebe20580c802f4831a8a899`.
+To separate a real treatment effect from layout or eligibility-check changes,
+a final predeclared sensitivity pair was built from the production tree. The
+false commit `4817f471424e3dfed177b98d50421f46446a09c3` and true commit
 `ac87bc208625398a6de85c92c1ab06b2ca8d0c7a` have identical linked code,
-symbols, relocations, section layout, and normalized build recipes. They differ
-by one initialized volatile gate byte at executable offset `0x4b030`; the true
-arm selects the production schedule. The true arm's fresh four-backend matrix
-passed with zero mismatch (`matrix.json` SHA-256
+symbols, relocations, allocated runtime section layout, and normalized build
+recipes. Their non-loadable debug sections reflect different worktree-path
+lengths and are not claimed identical. The binaries differ by one initialized
+volatile gate byte at executable offset `0x4b030`; the true arm selects the
+production schedule. The true arm's fresh four-backend matrix passed with zero
+mismatch (`matrix.json` SHA-256
 `c95d574c82c620652586289103652de04ce971212e670682ebafa6c802bac158`).
 
 The AVX2 sensitivity campaign completed its one allowed set of 1,664 pinned
@@ -239,9 +262,10 @@ Final disposition: retain exact 64-byte GF16 fusion on all production backends,
 retain exact 128-byte fusion only on AVX2, and keep every larger GF16 transform
 on the split schedule. This is not reported as a passed AVX2 whole-campaign.
 The decision combines exact-path identity for the two failing controls,
-decisive positive lower bounds for every changed path, the separate
-exact-production matrix, and the passed SSSE3 campaign. No wire or API identity
-depends on this kernel choice.
+decisive positive lower bounds for every measured x86-SIMD changed path, the
+separate exact-production matrix, and the passed SSSE3 campaign. Scalar
+correctness is qualified, but no scalar performance promotion is claimed. No
+wire or API identity depends on this kernel choice.
 
 ## Historical pre-R1 correctness, safety, and portability evidence
 
