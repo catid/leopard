@@ -25,8 +25,12 @@ mutation rejection, immutable executable staging, reservation replacement,
 stable pair-lease interoperability (including path replacement), exact-affinity
 checking, independently fixed C++ loss vectors, Linux subreaper/pidfd teardown
 of a `setsid()` double-fork daemon, and transactional no-replace publication
-preflight. It does not execute either real benchmark binary and
-must not be cited as timing evidence.
+preflight. The sibling `../test_process_containment.py` gate injects post-spawn
+attachment, procfs, pidfd, and teardown failures through all three evidence
+runners (18 real runner/fault combinations) and verifies the independent
+emergency cleanup path. Neither test
+executes either real benchmark binary, and they must not be cited as timing
+evidence.
 
 `production-smoke` closes that mock/production boundary without creating
 performance evidence. It executes one tiny correctness invocation per requested

@@ -135,4 +135,9 @@ if(LEO_MAIN_PYTHON_EXECUTABLE)
     add_test(NAME leopard_main_compare_runner_selftest
         COMMAND "${LEO_MAIN_PYTHON_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/test_run_abba.py")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME leopard_evidence_process_containment_faults
+            COMMAND "${LEO_MAIN_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../test_process_containment.py")
+    endif()
 endif()

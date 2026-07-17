@@ -114,8 +114,12 @@ pidfd, reaps adopted children, and requires two empty scans before restoring the
 prior subreaper state. This contains descendants that call `setsid()` or
 double-fork, not just the initial process group. Platforms without those Linux
 facilities fail closed before an authoritative child is spawned; portable
-evidence replay remains available. Every cleanup deadline is finite and no
-unbounded `wait` is used. Retained JSON has byte, depth, node, string, integer, floating-point,
+evidence replay remains available. Every post-spawn exception also enters a
+separate emergency implementation with independent procfs, pidfd, and prctl
+calls. It reaps the complete provable tree and restores the exact prior
+child-subreaper state even when normal attachment or teardown was the failing
+operation. Every cleanup deadline is finite and no unbounded `wait` is used.
+Retained JSON has byte, depth, node, string, integer, floating-point,
 path, and collection limits. Retained-artifact hashing is bounded, rejects
 symlinks, hardlinks, FIFOs and other special files before a nonblocking open,
 binds the open descriptor to the named inode, and rejects concurrent

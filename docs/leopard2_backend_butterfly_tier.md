@@ -415,7 +415,12 @@ pidfd signaling, and bounded adopted-child reaping, so a benchmark cannot escape
 cleanup with `setsid()` and a double fork. The self-test exercises that exact
 case and proves the daemon PID and delayed marker are gone. Authoritative
 collection fails closed before spawning when these Linux facilities are not
-available; structural replay remains portable.
+available; structural replay remains portable. A separately implemented
+emergency procfs/pidfd/prctl path runs after every post-spawn exception, so a
+fault in normal attachment, signaling, or teardown cannot strand the process
+tree or leave the runner in a changed child-subreaper state. Run
+`experiments/leopard2/test_process_containment.py` to exercise those faults
+against the butterfly, low-copy, and exact-main runners together.
 
 The final-source control must be constructed from the final candidate tree by
 reverting only the production four-way runtime selections. It retains the
