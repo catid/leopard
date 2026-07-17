@@ -424,6 +424,8 @@ int main()
             test_primitive_concurrency(*ops);
             ++ops_tested;
         }
+        require(ops_tested != 0,
+            "no qualified fused XOR backend was available for testing");
 
         // Runtime NEON intentionally rejects lower x86/scalar context requests
         // until its complete transform table is extracted.  Probe the public
@@ -450,10 +452,9 @@ int main()
             "no public R=1 backend was available for testing");
         require(effective_tested,
             "effective runtime backend lacked public R=1 coverage");
-        std::printf("Leopard2 R=1 fused XOR passed: ops_backends=%u "
-            "public_backends=%u tails=0..257 max_bytes=1048579 "
-            "fields=gf8,gf16 concurrency=pass\n",
-            ops_tested, public_tested);
+        std::printf("Leopard2 R=1 fused XOR passed: backends=qualified "
+            "tails=0..257 max_bytes=1048579 fields=gf8,gf16 "
+            "concurrency=pass\n");
         return 0;
     }
     catch (const std::exception& error)

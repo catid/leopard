@@ -246,6 +246,13 @@ void PrepareHighDecode(
 #if defined(LEO2_ENABLE_TEST_HOOKS)
 // Internal test-only access to the exact production LCH kernels and constants.
 // These are deliberately absent from leopard2.h and from non-test builds.
+struct TestOnlyTransformCallsiteCounts
+{
+    uint64_t ifft_dit4;
+    uint64_t fft_dit4;
+};
+void TestOnlyResetTransformCallsiteCounts();
+TestOnlyTransformCallsiteCounts TestOnlyGetTransformCallsiteCounts();
 ffe_t TestOnlyFFTMultiplier(unsigned logical_index);
 ffe_t TestOnlySubspaceDerivative(unsigned size);
 ffe_t TestOnlySubspaceAt(unsigned size, unsigned shift);

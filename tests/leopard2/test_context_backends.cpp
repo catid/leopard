@@ -28,6 +28,8 @@
 
 #include "Leopard2Backend.h"
 #include "Leopard2Direct.h"
+#include "LeopardFF16.h"
+#include "LeopardFF8.h"
 #include "leopard.h"
 #include "leopard2.h"
 
@@ -118,8 +120,10 @@ struct TraceState
     std::atomic<uint64_t> ff16_calls;
     std::atomic<uint64_t> xor_calls;
     std::atomic<uint64_t> xor_two_to_one_calls;
-    std::atomic<uint64_t> ff8_four_calls;
-    std::atomic<uint64_t> ff16_four_calls;
+    std::atomic<uint64_t> ff8_ifft_four_calls;
+    std::atomic<uint64_t> ff8_fft_four_calls;
+    std::atomic<uint64_t> ff16_ifft_four_calls;
+    std::atomic<uint64_t> ff16_fft_four_calls;
     std::atomic<uint64_t> xor_four_calls;
 };
 
@@ -229,7 +233,7 @@ void trace_ff8_ifft4(
     uint16_t log01, uint16_t log23, uint16_t log02, uint64_t bytes)
 {
     g_trace.ff8_calls.fetch_add(1, std::memory_order_relaxed);
-    g_trace.ff8_four_calls.fetch_add(1, std::memory_order_relaxed);
+    g_trace.ff8_ifft_four_calls.fetch_add(1, std::memory_order_relaxed);
     trace_delegate()->ff8_ifft_butterfly4(
         value0, value1, value2, value3,
         log01, log23, log02, bytes);
@@ -240,7 +244,7 @@ void trace_ff8_fft4(
     uint16_t log01, uint16_t log23, uint16_t log02, uint64_t bytes)
 {
     g_trace.ff8_calls.fetch_add(1, std::memory_order_relaxed);
-    g_trace.ff8_four_calls.fetch_add(1, std::memory_order_relaxed);
+    g_trace.ff8_fft_four_calls.fetch_add(1, std::memory_order_relaxed);
     trace_delegate()->ff8_fft_butterfly4(
         value0, value1, value2, value3,
         log01, log23, log02, bytes);
@@ -251,7 +255,7 @@ void trace_ff16_ifft4(
     uint16_t log01, uint16_t log23, uint16_t log02, uint64_t bytes)
 {
     g_trace.ff16_calls.fetch_add(1, std::memory_order_relaxed);
-    g_trace.ff16_four_calls.fetch_add(1, std::memory_order_relaxed);
+    g_trace.ff16_ifft_four_calls.fetch_add(1, std::memory_order_relaxed);
     trace_delegate()->ff16_ifft_butterfly4(
         value0, value1, value2, value3,
         log01, log23, log02, bytes);
@@ -262,7 +266,7 @@ void trace_ff16_fft4(
     uint16_t log01, uint16_t log23, uint16_t log02, uint64_t bytes)
 {
     g_trace.ff16_calls.fetch_add(1, std::memory_order_relaxed);
-    g_trace.ff16_four_calls.fetch_add(1, std::memory_order_relaxed);
+    g_trace.ff16_fft_four_calls.fetch_add(1, std::memory_order_relaxed);
     trace_delegate()->ff16_fft_butterfly4(
         value0, value1, value2, value3,
         log01, log23, log02, bytes);
@@ -307,9 +311,13 @@ public:
         g_trace.ff16_calls.store(0, std::memory_order_relaxed);
         g_trace.xor_calls.store(0, std::memory_order_relaxed);
         g_trace.xor_two_to_one_calls.store(0, std::memory_order_relaxed);
-        g_trace.ff8_four_calls.store(0, std::memory_order_relaxed);
-        g_trace.ff16_four_calls.store(0, std::memory_order_relaxed);
+        g_trace.ff8_ifft_four_calls.store(0, std::memory_order_relaxed);
+        g_trace.ff8_fft_four_calls.store(0, std::memory_order_relaxed);
+        g_trace.ff16_ifft_four_calls.store(0, std::memory_order_relaxed);
+        g_trace.ff16_fft_four_calls.store(0, std::memory_order_relaxed);
         g_trace.xor_four_calls.store(0, std::memory_order_relaxed);
+        leopard::ff8::TestOnlyResetTransformCallsiteCounts();
+        leopard::ff16::TestOnlyResetTransformCallsiteCounts();
     }
 
     uint64_t ff8_calls() const
@@ -329,13 +337,21 @@ public:
         return g_trace.xor_two_to_one_calls.load(
             std::memory_order_relaxed);
     }
-    uint64_t ff8_four_calls() const
+    uint64_t ff8_ifft_four_calls() const
     {
-        return g_trace.ff8_four_calls.load(std::memory_order_relaxed);
+        return g_trace.ff8_ifft_four_calls.load(std::memory_order_relaxed);
     }
-    uint64_t ff16_four_calls() const
+    uint64_t ff8_fft_four_calls() const
     {
-        return g_trace.ff16_four_calls.load(std::memory_order_relaxed);
+        return g_trace.ff8_fft_four_calls.load(std::memory_order_relaxed);
+    }
+    uint64_t ff16_ifft_four_calls() const
+    {
+        return g_trace.ff16_ifft_four_calls.load(std::memory_order_relaxed);
+    }
+    uint64_t ff16_fft_four_calls() const
+    {
+        return g_trace.ff16_fft_four_calls.load(std::memory_order_relaxed);
     }
     uint64_t xor_four_calls() const
     {
@@ -348,6 +364,47 @@ private:
     const ContextEntry& entry_;
     leopard::backend::Ops tracing_;
 };
+
+void require_four_way_callsites(
+    const TraceOpsGuard& trace,
+    leo2_field field,
+    const std::string& operation,
+    bool expect_ff8_accumulating_ifft)
+{
+    if (field == LEO2_FIELD_GF8)
+    {
+        const leopard::ff8::TestOnlyTransformCallsiteCounts callsites =
+            leopard::ff8::TestOnlyGetTransformCallsiteCounts();
+        require(callsites.ifft_dit4 != 0,
+            operation + " did not exercise GF8 IFFT_DIT4");
+        if (expect_ff8_accumulating_ifft)
+            require(callsites.ifft_dit4_xor != 0,
+                operation + " did not exercise GF8 IFFT_DIT4_xor");
+        else
+            require(callsites.ifft_dit4_xor == 0,
+                operation + " unexpectedly exercised GF8 IFFT_DIT4_xor");
+        require(callsites.fft_dit4 != 0,
+            operation + " did not exercise GF8 FFT_DIT4");
+        require(trace.ff8_ifft_four_calls() ==
+                callsites.ifft_dit4 + callsites.ifft_dit4_xor,
+            operation + " has a GF8 inverse radix-four callsite bypass");
+        require(trace.ff8_fft_four_calls() == callsites.fft_dit4,
+            operation + " has a GF8 forward radix-four callsite bypass");
+    }
+    else
+    {
+        const leopard::ff16::TestOnlyTransformCallsiteCounts callsites =
+            leopard::ff16::TestOnlyGetTransformCallsiteCounts();
+        require(callsites.ifft_dit4 != 0,
+            operation + " did not exercise GF16 IFFT_DIT4");
+        require(callsites.fft_dit4 != 0,
+            operation + " did not exercise GF16 FFT_DIT4");
+        require(trace.ff16_ifft_four_calls() == callsites.ifft_dit4,
+            operation + " has a GF16 inverse radix-four callsite bypass");
+        require(trace.ff16_fft_four_calls() == callsites.fft_dit4,
+            operation + " has a GF16 forward radix-four callsite bypass");
+    }
+}
 
 struct CodecCase
 {
@@ -645,7 +702,7 @@ void test_process_default_immutable(
 void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
 {
     const CodecCase transform_cases[] = {
-        { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 257 },
+        { 33, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 257 },
         { 17, 33, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, 129 },
         { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 1026 },
         { 17, 33, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 1026 }
@@ -666,6 +723,9 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
              ++case_i)
         {
             const CodecCase& test_case = transform_cases[case_i];
+            const std::string profile_name =
+                test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1 ?
+                    "high-profile" : "low-profile";
             const Shards originals = make_originals(test_case,
                 static_cast<uint32_t>(0x243f6a88U + case_i * 977U));
             leo2_codec* codec = NULL;
@@ -676,16 +736,16 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
             {
                 require(trace.ff8_calls() != 0,
                     "GF8 encode bypassed the context ops table");
-                require(trace.ff8_four_calls() != 0,
-                    "GF8 encode bypassed the context radix-four table");
             }
             else
             {
                 require(trace.ff16_calls() != 0,
                     "GF16 encode bypassed the context ops table");
-                require(trace.ff16_four_calls() != 0,
-                    "GF16 encode bypassed the context radix-four table");
             }
+            require_four_way_callsites(trace, test_case.field,
+                profile_name + " encode",
+                test_case.field == LEO2_FIELD_GF8 &&
+                    test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1);
 
             trace.reset();
             decode_case(codec, test_case, originals, recovery);
@@ -693,16 +753,14 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
             {
                 require(trace.ff8_calls() != 0,
                     "GF8 decode bypassed the context ops table");
-                require(trace.ff8_four_calls() != 0,
-                    "GF8 decode bypassed the context radix-four table");
             }
             else
             {
                 require(trace.ff16_calls() != 0,
                     "GF16 decode bypassed the context ops table");
-                require(trace.ff16_four_calls() != 0,
-                    "GF16 decode bypassed the context radix-four table");
             }
+            require_four_way_callsites(trace, test_case.field,
+                profile_name + " decode", false);
             require(trace.xor_four_calls() != 0,
                 "decode bypassed the context grouped-XOR table");
             leo2_codec_destroy(codec);
@@ -729,8 +787,8 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
             generic_recovery);
         require(trace.ff8_calls() != 0,
             "generic decode bypassed the context ops table");
-        require(trace.ff8_four_calls() != 0,
-            "generic decode bypassed the context radix-four table");
+        require_four_way_callsites(trace, generic_case.field,
+            "generic high-profile decode", false);
         require(trace.xor_four_calls() != 0,
             "generic decode bypassed the context grouped-XOR table");
         leo2_codec_destroy(generic_codec);
@@ -861,8 +919,9 @@ void test_public_codecs(const std::vector<ContextEntry>& contexts)
 void test_concurrent_public_codecs(
     const std::vector<ContextEntry>& contexts)
 {
-    const CodecCase test_case = {
-        33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 1025
+    const CodecCase test_cases[] = {
+        { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 1025 },
+        { 17, 33, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, 1025 }
     };
     std::atomic<unsigned> ready(0);
     std::atomic<bool> go(false);
@@ -870,33 +929,42 @@ void test_concurrent_public_codecs(
     std::vector<std::thread> threads;
     for (size_t context_i = 0; context_i < contexts.size(); ++context_i)
     {
-        for (unsigned lane = 0; lane < 2; ++lane)
+        for (size_t case_i = 0;
+             case_i < sizeof(test_cases) / sizeof(test_cases[0]); ++case_i)
         {
-            leo2_context* const context = contexts[context_i].context;
-            const uint32_t seed = static_cast<uint32_t>(
-                0x243f6a88U + context_i * 257U + lane * 17U);
-            threads.push_back(std::thread(
-                [context, test_case, seed, &ready, &go, &failures]() {
-                try
-                {
-                    const Shards originals = make_originals(test_case, seed);
-                    ready.fetch_add(1, std::memory_order_release);
-                    while (!go.load(std::memory_order_acquire))
-                        std::this_thread::yield();
-                    for (unsigned iteration = 0; iteration < 8; ++iteration)
+            for (unsigned lane = 0; lane < 2; ++lane)
+            {
+                leo2_context* const context = contexts[context_i].context;
+                const CodecCase test_case = test_cases[case_i];
+                const uint32_t seed = static_cast<uint32_t>(
+                    0x243f6a88U + context_i * 257U + case_i * 67U +
+                    lane * 17U);
+                threads.push_back(std::thread(
+                    [context, test_case, seed, &ready, &go, &failures]() {
+                    try
                     {
-                        leo2_codec* codec = NULL;
-                        const Shards recovery = encode_case(
-                            context, test_case, originals, &codec);
-                        decode_case(codec, test_case, originals, recovery);
-                        leo2_codec_destroy(codec);
+                        const Shards originals = make_originals(
+                            test_case, seed);
+                        ready.fetch_add(1, std::memory_order_release);
+                        while (!go.load(std::memory_order_acquire))
+                            std::this_thread::yield();
+                        for (unsigned iteration = 0; iteration < 8;
+                             ++iteration)
+                        {
+                            leo2_codec* codec = NULL;
+                            const Shards recovery = encode_case(
+                                context, test_case, originals, &codec);
+                            decode_case(
+                                codec, test_case, originals, recovery);
+                            leo2_codec_destroy(codec);
+                        }
                     }
-                }
-                catch (...)
-                {
-                    failures.fetch_add(1, std::memory_order_relaxed);
-                }
-            }));
+                    catch (...)
+                    {
+                        failures.fetch_add(1, std::memory_order_relaxed);
+                    }
+                }));
+            }
         }
     }
     while (ready.load(std::memory_order_acquire) != threads.size())
@@ -911,58 +979,66 @@ void test_concurrent_public_codecs(
 void test_shared_codec_and_plan(
     const std::vector<ContextEntry>& contexts)
 {
-    const CodecCase test_case = {
-        33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 1024
+    const CodecCase test_cases[] = {
+        { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 1024 },
+        { 17, 33, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 1026 }
     };
-    const Shards originals = make_originals(test_case, 0xb7e15162U);
     const unsigned thread_count = 4;
     const unsigned repetitions = 4;
-    for (size_t context_i = 0; context_i < contexts.size(); ++context_i)
+    for (size_t case_i = 0;
+         case_i < sizeof(test_cases) / sizeof(test_cases[0]); ++case_i)
     {
-        leo2_codec* codec = NULL;
-        const Shards reference = encode_case(contexts[context_i].context,
-            test_case, originals, &codec);
-        leo2_decode_plan* plan = make_plan(codec, test_case);
-        std::atomic<unsigned> ready(0);
-        std::atomic<bool> go(false);
-        std::atomic<unsigned> failures(0);
-        std::vector<std::thread> threads;
-        for (unsigned thread_i = 0; thread_i < thread_count; ++thread_i)
+        const CodecCase test_case = test_cases[case_i];
+        const Shards originals = make_originals(test_case,
+            static_cast<uint32_t>(0xb7e15162U + case_i * 131U));
+        for (size_t context_i = 0; context_i < contexts.size(); ++context_i)
         {
-            threads.push_back(std::thread(
-                [codec, plan, test_case, &originals, &reference, &ready, &go,
-                 &failures]() {
-                try
-                {
-                    ready.fetch_add(1, std::memory_order_release);
-                    while (!go.load(std::memory_order_acquire))
-                        std::this_thread::yield();
-                    for (unsigned iteration = 0; iteration < repetitions;
-                         ++iteration)
+            leo2_codec* codec = NULL;
+            const Shards reference = encode_case(contexts[context_i].context,
+                test_case, originals, &codec);
+            leo2_decode_plan* plan = make_plan(codec, test_case);
+            std::atomic<unsigned> ready(0);
+            std::atomic<bool> go(false);
+            std::atomic<unsigned> failures(0);
+            std::vector<std::thread> threads;
+            for (unsigned thread_i = 0; thread_i < thread_count; ++thread_i)
+            {
+                threads.push_back(std::thread(
+                    [codec, plan, test_case, &originals, &reference, &ready,
+                     &go, &failures]() {
+                    try
                     {
-                        const Shards recovery = execute_encode(
-                            codec, test_case, originals);
-                        if (recovery != reference)
-                            throw std::runtime_error(
-                                "shared codec parity mismatch");
-                        execute_plan(plan, test_case, originals, recovery);
+                        ready.fetch_add(1, std::memory_order_release);
+                        while (!go.load(std::memory_order_acquire))
+                            std::this_thread::yield();
+                        for (unsigned iteration = 0; iteration < repetitions;
+                             ++iteration)
+                        {
+                            const Shards recovery = execute_encode(
+                                codec, test_case, originals);
+                            if (recovery != reference)
+                                throw std::runtime_error(
+                                    "shared codec parity mismatch");
+                            execute_plan(
+                                plan, test_case, originals, recovery);
+                        }
                     }
-                }
-                catch (...)
-                {
-                    failures.fetch_add(1, std::memory_order_relaxed);
-                }
-            }));
+                    catch (...)
+                    {
+                        failures.fetch_add(1, std::memory_order_relaxed);
+                    }
+                }));
+            }
+            while (ready.load(std::memory_order_acquire) != thread_count)
+                std::this_thread::yield();
+            go.store(true, std::memory_order_release);
+            for (size_t thread_i = 0; thread_i < threads.size(); ++thread_i)
+                threads[thread_i].join();
+            require(failures.load(std::memory_order_relaxed) == 0,
+                "shared codec/plan execution failed");
+            leo2_decode_plan_destroy(plan);
+            leo2_codec_destroy(codec);
         }
-        while (ready.load(std::memory_order_acquire) != thread_count)
-            std::this_thread::yield();
-        go.store(true, std::memory_order_release);
-        for (size_t thread_i = 0; thread_i < threads.size(); ++thread_i)
-            threads[thread_i].join();
-        require(failures.load(std::memory_order_relaxed) == 0,
-            "shared codec/plan execution failed");
-        leo2_decode_plan_destroy(plan);
-        leo2_codec_destroy(codec);
     }
 }
 

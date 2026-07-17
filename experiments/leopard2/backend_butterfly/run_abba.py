@@ -146,6 +146,7 @@ MATRIX_SOURCE_FILES = (
     "tests/leopard2/test_backend_failures.cpp",
     "tests/leopard2/test_backend_ops.cpp",
     "tests/leopard2/test_context_backends.cpp",
+    "tests/leopard2/test_r1_xor.cpp",
     "tests/leopard2/legacy_golden_vectors.h",
     "tests/leopard2/test_api.cpp",
     "tests/leopard2/test_public_api_contract.cpp",
@@ -181,7 +182,8 @@ MATRIX_SOURCE_FILES = (
 )
 
 MATRIX_COMPARE_TESTS = (
-    "direct_oracle", "backend_ops", "context_backends", "legacy_golden", "api",
+    "direct_oracle", "backend_ops", "context_backends", "r1_xor",
+    "legacy_golden", "api",
     "public_api_contract", "random", "locator", "active_lch", "gf16_tails",
     "gf16_padded_odd", "gf16_legacy_encoder_matrix",
     "low_gf16_direct_rows", "decode_high_acceptance",
@@ -207,6 +209,7 @@ MATRIX_TEST_SPECS = {
     "direct_oracle": ("leopard2_direct_oracle_test", []),
     "backend_ops": ("leopard2_backend_ops_test", []),
     "context_backends": ("leopard2_context_backends_test", []),
+    "r1_xor": ("leopard2_r1_xor_test", []),
     "legacy_golden": ("leopard2_legacy_golden_test", []),
     "api": ("leopard2_api_test", []),
     "public_api_contract": ("leopard2_public_api_contract_test", []),
@@ -265,6 +268,7 @@ MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS = {
     "tests/leopard2/test_backend_failures.cpp": 1,
     "tests/leopard2/test_backend_ops.cpp": 1,
     "tests/leopard2/test_context_backends.cpp": 1,
+    "tests/leopard2/test_r1_xor.cpp": 1,
     "tests/leopard2/test_boundaries.cpp": 1,
     "tests/leopard2/test_codec_options_abi.c": 1,
     "tests/leopard2/test_decode_high_acceptance.cpp": 1,

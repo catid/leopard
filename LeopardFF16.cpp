@@ -33,11 +33,20 @@
 
 #include <string.h>
 
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+#include <atomic>
+#endif
+
 #ifdef _MSC_VER
     #pragma warning(disable: 4752) // found Intel(R) Advanced Vector Extensions; consider using /arch:AVX
 #endif
 
 namespace leopard { namespace ff16 {
+
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+static std::atomic<uint64_t> TestIFFTDIT4Calls(0);
+static std::atomic<uint64_t> TestFFTDIT4Calls(0);
+#endif
 
 
 //------------------------------------------------------------------------------
@@ -825,6 +834,9 @@ static void IFFT_DIT4(
     const ffe_t log_m23,
     const ffe_t log_m02)
 {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    TestIFFTDIT4Calls.fetch_add(1, std::memory_order_relaxed);
+#endif
 #ifdef LEO_INTERLEAVE_BUTTERFLY4_OPT
 
 #if defined(LEO_TRY_AVX2)
@@ -1270,6 +1282,9 @@ static void FFT_DIT4(
     const ffe_t log_m23,
     const ffe_t log_m02)
 {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    TestFFTDIT4Calls.fetch_add(1, std::memory_order_relaxed);
+#endif
 #ifdef LEO_INTERLEAVE_BUTTERFLY4_OPT
 
 #if defined(LEO_TRY_AVX2)
@@ -2269,6 +2284,21 @@ void PrepareHighDecode(
 
 
 #if defined(LEO2_ENABLE_TEST_HOOKS)
+
+void TestOnlyResetTransformCallsiteCounts()
+{
+    TestIFFTDIT4Calls.store(0, std::memory_order_relaxed);
+    TestFFTDIT4Calls.store(0, std::memory_order_relaxed);
+}
+
+
+TestOnlyTransformCallsiteCounts TestOnlyGetTransformCallsiteCounts()
+{
+    TestOnlyTransformCallsiteCounts result;
+    result.ifft_dit4 = TestIFFTDIT4Calls.load(std::memory_order_relaxed);
+    result.fft_dit4 = TestFFTDIT4Calls.load(std::memory_order_relaxed);
+    return result;
+}
 
 static ffe_t NonzeroElementFromLog(ffe_t value_log)
 {

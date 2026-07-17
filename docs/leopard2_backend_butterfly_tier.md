@@ -1,9 +1,12 @@
 # Leopard2 context-routed butterfly tier
 
-Status: production implementation and correctness gates complete. The final
-16-round non-regression campaign passed all 44 encode/decode confidence gates.
-Native NEON, AVX-512, GFNI, and wider fusion schedules remain separate,
-evidence-gated work.
+Status: production implementation landed. The correctness and 16-round
+non-regression results retained below are historical evidence for the pre-R1
+candidate `ae2b8566ad08cae02869c3fcf41de046b0b652ed`; they are not final-source
+evidence for the later integrated tree. R1 changed the backend table, sources,
+tests, and build closure, so an integrated-source backend matrix and pinned
+campaign must be collected before this tier is evidence-qualified again.
+Native NEON, AVX-512, GFNI, and wider fusion schedules remain separate work.
 
 ## Production architecture
 
@@ -27,9 +30,10 @@ Production field translation units are compiled with their legacy whole-file
 SSSE3/AVX2 branches disabled. Every grouped fallback therefore receives the
 calling context's `Ops` table. Explicit scalar and SSSE3 contexts can coexist
 with AVX2 and AUTO contexts in one process without falling through to the
-process-default ISA. Tracing tests prove that high/low GF8 and GF16 encode,
-specialized and generic decode, shared immutable codecs/plans, and mixed
-contexts reach the selected four-way and grouped-XOR entries.
+process-default ISA. Tracing tests separately count forward and inverse
+four-way dispatch for each high/low GF8 and GF16 encode/decode callsite. They
+also exercise generic decode, shared immutable codecs/plans, mixed contexts,
+and grouped-XOR entries; the concurrency cases include both profiles.
 
 The selected schedules are deliberately size-specific:
 
@@ -70,11 +74,12 @@ instruction counts.
 Only exact 64-/128-byte GF16 fused tiles and the measured GF8 cutover remain in
 production.
 
-## Correctness, safety, and portability evidence
+## Historical pre-R1 correctness, safety, and portability evidence
 
-Final source validation on the 2026-07-17 x86 host used every one of the 30
-logical CPUs granted to this worker (`0-14,16-30`) for parallel builds and
-tests:
+The retained pre-R1 validation on the 2026-07-17 x86 host used every one of the
+30 logical CPUs granted to that worker (`0-14,16-30`) for parallel builds and
+tests. These counts and hashes describe the named historical candidate, not the
+current integrated source:
 
 - Release: 44/44 CTests passed.
 - GCC 13.3 strict warnings (`-Wall -Wextra -Wpedantic -Werror`): 44/44 passed.
@@ -87,25 +92,25 @@ tests:
   Direct runs under `setarch x86_64 -R` passed the 16-thread backend-ops test
   (1,024 executions), mixed-context test, and four-profile concurrent encoder
   test (528 executions) without a TSan report.
-- The final AUTO/scalar/SSSE3/AVX2 matrix passed every deterministic comparison,
+- That AUTO/scalar/SSSE3/AVX2 matrix passed every deterministic comparison,
   backend-failure subprocess, portable-ISA gate, and the default build's
   CUDA-optional test. Its source fingerprint is
   `8b63b1e8ea56d8a924f6087bda46fad43619fe07d9ec899baaf0783ad7ebb3cb`;
   `matrix.json` SHA-256 is
   `8053489efe9bd04c847e669166ee5ab88a449fc89676616d63e786e037b13bbe`.
-- AArch64/SSE2NEON cross-compilation completed after the final field changes.
+- AArch64/SSE2NEON cross-compilation completed after those field changes.
   Existing ignored-OpenMP and unused-x86-parameter warnings remain. This is
   compile-only preservation evidence, not native ARM correctness or
   performance evidence.
 
-The v5 runner self-test passed path-independent replay plus 52 adversarial
+The retained v5 runner revision passed path-independent replay plus 52 adversarial
 mutations. These include missing/reordered ABBA slots, raw-output edits,
 compiler and build-graph substitutions, source-closure changes, topology and
 reservation changes, confidence-summary edits, and a high-variance fixture.
 
-## Final non-regression evidence
+## Historical pre-R1 non-regression evidence
 
-The final campaign compares baseline commit
+The retained campaign compares baseline commit
 `4cbe17c4374739ae087dfae9568949a17a15b2f2` with candidate commit
 `ae2b8566ad08cae02869c3fcf41de046b0b652ed`. It contains 22 cells, 16 paired
 A-B-B-A rounds per cell, seven measured samples and three warmups per
@@ -137,7 +142,7 @@ relative to the pre-tier baseline:
 The low-GF16 1-KiB encode cell is the weakest lower bound and still clears the
 fixed floor. All 44 gates passed.
 
-The ignored machine-readable final artifacts are under
+The ignored machine-readable historical artifacts are under
 `.research/leopard2/context-xor4/abba-ae2b856-v5-16round/`:
 
 - `abba_manifest.json` SHA-256:
@@ -172,8 +177,12 @@ Failures were not discarded or converted into exceptions:
   sole failure. The executable basename, binary digest, package/version text,
   and remaining version output are still checked.
 
-The final campaign was the one clean replacement after that provenance fix;
-there was no repeated sampling after its result.
+That historical campaign was the one clean replacement after that provenance
+fix; there was no repeated sampling after its result.
+
+These results remain useful causal history for the four-way implementation but
+must not be cited as qualification of a later source tree. Final-source closure
+requires fresh source-bound matrix and ABBA artifacts after R1 integration.
 
 ## Reproduction
 
@@ -206,7 +215,8 @@ file, and a physical core whose allowed SMT sibling is idle. Run
 compile-command, archive, matrix, CPU, and output arguments. Do not run other
 memory-intensive jobs during the pinned phase.
 
-Replay retained evidence without substituting a different build-path binary:
+Replay the historical evidence without substituting a different build-path
+binary; successful replay authenticates that historical campaign only:
 
     python3 experiments/leopard2/backend_butterfly/run_abba.py verify \
       --manifest .research/leopard2/context-xor4/abba-ae2b856-v5-16round/abba_manifest.json \

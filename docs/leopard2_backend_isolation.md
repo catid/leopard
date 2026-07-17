@@ -1,9 +1,11 @@
 # Leopard2 backend isolation checkpoint
 
 Status: x86 scalar/SSSE3/AVX2 fixed kernels, two-way butterflies, grouped XOR,
-and four-way butterflies are context-routed and evidence-qualified. The final
-butterfly tier is documented in `docs/leopard2_backend_butterfly_tier.md`.
-Native NEON and additional platform/ISA gates remain open.
+and four-way butterflies are context-routed. The retained butterfly evidence
+predates R1 integration and is historical rather than final-source
+qualification; its scope and required rerun are documented in
+`docs/leopard2_backend_butterfly_tier.md`. Native NEON and additional
+platform/ISA gates remain open.
 
 ## Four-way completion
 
@@ -15,7 +17,7 @@ process-default grouped kernel. GF8 forward fusion is size-selected, and GF16
 fusion is retained only for qualified 64-/128-byte tiles. Scalar, SSSE3, and
 AVX2 results are deterministic and wire-identical. See the butterfly-tier
 document for the rejected variants, sanitizer/platform qualifications, and the
-final 1,408-invocation non-regression campaign.
+retained pre-R1 1,408-invocation non-regression campaign.
 
 ## Failure-atomic table ownership
 
