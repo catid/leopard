@@ -114,6 +114,14 @@ std::vector<unsigned> shifts(unsigned order, unsigned size)
     return result;
 }
 
+unsigned ceil_power_of_two(unsigned value)
+{
+    unsigned result = 1;
+    while (result < value)
+        result <<= 1;
+    return result;
+}
+
 struct GF8
 {
     static unsigned order() { return leopard::ff8::kOrder; }
@@ -310,6 +318,75 @@ void test_exhaustive_small_masks(
     }
 }
 
+template<class Field>
+void test_profile_masks(
+    const leopard::backend::Ops& ops,
+    unsigned k,
+    unsigned r,
+    uint64_t bytes,
+    TestCounts& counts)
+{
+    const unsigned t = ceil_power_of_two(r);
+    const unsigned high_parent = ceil_power_of_two(k + t);
+    require(high_parent <= Field::order(), "high profile exceeds field");
+    std::vector<uint8_t> all_t(t, 1);
+    std::vector<uint8_t> high_partial(t, 0);
+    unsigned final_message_count = k % t;
+    if (final_message_count == 0)
+        final_message_count = t;
+    for (unsigned i = 0; i < final_message_count; ++i)
+        high_partial[i] = 1;
+    const unsigned high_message_shift =
+        t + ((k - 1) / t) * t;
+    run_case<Field>(
+        ops, t, high_message_shift, true, bytes,
+        high_partial, all_t, UINT64_C(0x4849474849464654), counts);
+
+    std::vector<uint8_t> transmitted_high(t, 0);
+    std::vector<uint8_t> requested_high(t, 0);
+    for (unsigned i = 0; i < r; ++i)
+    {
+        transmitted_high[i] = 1;
+        requested_high[i] = static_cast<uint8_t>((i % 3U) != 1U);
+    }
+    run_case<Field>(
+        ops, t, 0, false, bytes, all_t, transmitted_high,
+        UINT64_C(0x4849474850524546), counts);
+    run_case<Field>(
+        ops, t, 0, false, bytes, all_t, requested_high,
+        UINT64_C(0x48494748484f4c45), counts);
+
+    const unsigned p = ceil_power_of_two(k);
+    const unsigned low_parent = ceil_power_of_two(p + r);
+    require(low_parent <= Field::order(), "low profile exceeds field");
+    std::vector<uint8_t> low_message(p, 0);
+    std::vector<uint8_t> all_p(p, 1);
+    for (unsigned i = 0; i < k; ++i)
+        low_message[i] = 1;
+    run_case<Field>(
+        ops, p, 0, true, bytes, low_message, all_p,
+        UINT64_C(0x4c4f574949464654), counts);
+
+    unsigned final_recovery_count = r % p;
+    if (final_recovery_count == 0)
+        final_recovery_count = p;
+    std::vector<uint8_t> low_final(p, 0);
+    for (unsigned i = 0; i < final_recovery_count; ++i)
+        low_final[i] = 1;
+    const unsigned low_parity_shift = p + ((r - 1) / p) * p;
+    run_case<Field>(
+        ops, p, low_parity_shift, false, bytes, all_p, low_final,
+        UINT64_C(0x4c4f575052454649), counts);
+
+    std::vector<uint8_t> requested_low(p, 0);
+    const unsigned first_block_count = r < p ? r : p;
+    for (unsigned i = 0; i < first_block_count; ++i)
+        requested_low[i] = static_cast<uint8_t>((i % 5U) == 0U || i + 1 == p);
+    run_case<Field>(
+        ops, p, p, false, bytes, all_p, requested_low,
+        UINT64_C(0x4c4f57484f4c4559), counts);
+}
+
 bool same_plan(
     const leopard2_internal::PrunedTransformPlan& left,
     const leopard2_internal::PrunedTransformPlan& right)
@@ -493,6 +570,10 @@ int main()
                 bytes16, sizeof(bytes16) / sizeof(bytes16[0]), counts);
             test_exhaustive_small_masks<GF8>(*ops, 17, counts);
             test_exhaustive_small_masks<GF16>(*ops, 18, counts);
+            test_profile_masks<GF8>(*ops, 100, 30, 65, counts);
+            test_profile_masks<GF16>(*ops, 1000, 200, 130, counts);
+            test_profile_masks<GF8>(*ops, 17, 100, 129, counts);
+            test_profile_masks<GF16>(*ops, 257, 700, 66, counts);
             test_shared_plan_concurrency(*ops);
             ++counts.backends;
         }

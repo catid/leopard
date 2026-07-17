@@ -217,17 +217,18 @@ full padded production transform. The deterministic gate covers:
 | C++ check | Result |
 | --- | ---: |
 | Qualified backends | scalar, SSSE3, AVX2 |
-| Compiled/executed plans | 13,008 |
-| Requested bytes compared | 18,116,076 |
+| Compiled/executed plans | 13,080 |
+| Requested bytes compared | 19,610,919 |
 | Exhaustive sparse masks | every input/output mask at N=2 and N=4, forward and inverse, first and last aligned cosets, GF8 and GF16 |
 | Larger parents | GF8 through N=256; GF16 through N=1,024 |
+| Real profile masks | high message-tail IFFT and transmitted/holey parity FFT; low shortened-message IFFT and final/holey parity-block FFT for GF8 (100,30), (17,100) and GF16 (1000,200), (257,700) |
 | Shard tails | GF8 1, 7, 17, 63, 64, 65, 129 bytes; GF16 2, 18, 62, 64, 66, 130 bytes |
 | Shared-plan concurrency | eight threads, sixteen executions each, per available backend |
 
 The complete Debug CTest graph passed 49/49 after initializing the checkout's
 `sse2neon` submodule. GCC 13.3 and Clang 18.1 strict Release builds passed with
 `-Werror -Wpedantic`. Clang 18 ASan+UBSan and TSan builds each repeated all
-13,008 prototype cases and the concurrency gate without a diagnostic.
+13,080 prototype cases and the concurrency gate without a diagnostic.
 
 These are correctness results, not timing evidence. Other workers were active
 on the host, so no cache-sensitive or authoritative crossover number was
