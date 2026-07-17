@@ -3954,18 +3954,29 @@ def run_self_test(_options: argparse.Namespace) -> int:
 
         cross_root = root / "butterfly-cross-anchor-root"
         cross_root.mkdir(mode=0o700)
-        with SUPPORT.StableLeaseAnchor(cross_root):
+        cross_reservation_root = root / "butterfly-cross-reservation"
+        cross_reservation_root.mkdir(mode=0o700)
+        cross_reservation = cross_reservation_root / "reservation.json"
+        write_bytes_exclusive(cross_reservation, canonical_bytes(payload))
+        with HardenedReservation(
+                cross_reservation, cpu, sibling, runtime_root=cross_root):
             expect_butterfly_rejection(
                 lambda: butterfly.StableLeaseAnchor(cross_root).acquire(),
-                "butterfly stable-anchor overlap")
+                "low-copy reservation versus butterfly stable-anchor overlap")
         reverse_root = root / "butterfly-reverse-anchor-root"
         reverse_root.mkdir(mode=0o700)
+        reverse_reservation_root = root / "butterfly-reverse-reservation"
+        reverse_reservation_root.mkdir(mode=0o700)
+        reverse_reservation = reverse_reservation_root / "reservation.json"
+        write_bytes_exclusive(reverse_reservation, canonical_bytes(payload))
         butterfly_anchor = butterfly.StableLeaseAnchor(reverse_root)
         butterfly_anchor.acquire()
         try:
             expect_evidence_error(
-                lambda: SUPPORT.StableLeaseAnchor(reverse_root).__enter__(),
-                "butterfly reverse stable-anchor overlap")
+                lambda: HardenedReservation(
+                    reverse_reservation, cpu, sibling,
+                    runtime_root=reverse_root).__enter__(),
+                "butterfly versus low-copy reservation stable-anchor overlap")
         finally:
             butterfly_anchor.release()
 
