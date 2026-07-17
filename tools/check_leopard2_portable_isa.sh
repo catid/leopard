@@ -4,12 +4,12 @@ set -eu
 
 usage()
 {
-    echo "usage: $0 OBJDUMP STATIC_ARCHIVE [BUILD_DIRECTORY [EXPECTED_CLASSES] | [BUILD_DIRECTORY CC AR [EXPECTED_CLASSES]]]" >&2
+    echo "usage: $0 OBJDUMP STATIC_ARCHIVE [BUILD_DIRECTORY [EXPECTED_CLASSES] | [BUILD_DIRECTORY CC AR [EXPECTED_CLASSES [optional|required]]]]" >&2
     exit 2
 }
 
 case "$#" in
-    2|3|4|5|6) ;;
+    2|3|4|5|6|7) ;;
     *) usage ;;
 esac
 
@@ -19,6 +19,7 @@ build_dir=${3:-}
 cc_bin=
 ar_bin=
 expected_classes=
+metadata_mode=optional
 case "$#" in
     4)
         expected_classes=$4
@@ -32,6 +33,16 @@ case "$#" in
         ar_bin=$5
         expected_classes=$6
         ;;
+    7)
+        cc_bin=$4
+        ar_bin=$5
+        expected_classes=$6
+        metadata_mode=$7
+        ;;
+esac
+case "$metadata_mode" in
+    optional|required) ;;
+    *) usage ;;
 esac
 
 if [ ! -f "$archive" ]; then
@@ -240,6 +251,7 @@ scan_archive()
 scan_build_metadata()
 {
     metadata_root=$1
+    required=${2:-optional}
     baseline_flags="$metadata_root/CMakeFiles/leopard.dir/flags.make"
     if [ -f "$baseline_flags" ] &&
        LC_ALL=C grep -Ein -- "$forbidden_metadata" "$baseline_flags"
@@ -249,6 +261,16 @@ scan_build_metadata()
     fi
 
     compile_commands="$metadata_root/compile_commands.json"
+    if [ "$required" = required ]; then
+        if [ ! -s "$compile_commands" ]; then
+            echo "portable ISA check: required compile metadata is missing or empty: $compile_commands" >&2
+            return 1
+        fi
+        if ! grep -Eq '(^|[/\\])leopard[.]cpp' "$compile_commands"; then
+            echo "portable ISA check: required compile metadata has no baseline leopard.cpp entry" >&2
+            return 1
+        fi
+    fi
     if [ -f "$compile_commands" ]; then
         violating_lines="$scratch_root/metadata-violations"
         LC_ALL=C grep -Ein -- "$forbidden_metadata" "$compile_commands" |
@@ -494,6 +516,36 @@ expect_metadata_rejected()
     return 0
 }
 
+expect_required_metadata_rejected()
+{
+    fixture_name=$1
+    fixture_kind=$2
+    fixture_dir="$scratch_root/required-metadata-$fixture_name"
+    mkdir -p "$fixture_dir"
+    case "$fixture_kind" in
+        missing) ;;
+        empty) : > "$fixture_dir/compile_commands.json" ;;
+        unrelated)
+            printf '[{"command":"c++ -O2 -c unrelated.cpp","file":"unrelated.cpp"}]\n' > \
+                "$fixture_dir/compile_commands.json"
+            ;;
+        *)
+            echo "portable ISA checker self-test: unknown required metadata fixture" >&2
+            return 1
+            ;;
+    esac
+    fixture_log="$scratch_root/required-metadata-$fixture_name.log"
+    if scan_build_metadata "$fixture_dir" required > "$fixture_log" 2>&1; then
+        echo "portable ISA checker self-test: $fixture_name metadata was accepted" >&2
+        return 1
+    fi
+    if ! grep -q 'required compile metadata' "$fixture_log"; then
+        cat "$fixture_log" >&2
+        echo "portable ISA checker self-test: required-metadata rejection reason missing" >&2
+        return 1
+    fi
+}
+
 run_negative_controls()
 {
     baseline_archive=$(write_assembly_archive baseline_sse2 'pxor %xmm0, %xmm0')
@@ -555,6 +607,9 @@ run_negative_controls()
     expect_metadata_rejected flag_compile_sse41 compile_commands '-msse4.1'
     expect_metadata_rejected flag_march make '-march=native'
     expect_metadata_rejected flag_lto make '-flto=auto'
+    expect_required_metadata_rejected missing_compile_commands missing
+    expect_required_metadata_rejected empty_compile_commands empty
+    expect_required_metadata_rejected unrelated_compile_commands unrelated
 
     echo "portable ISA checker negative controls: PASS"
 }
@@ -567,7 +622,12 @@ if ! scan_archive "$archive" "${ar_bin:-}" "$expected_classes"; then
     exit 1
 fi
 
-if [ -n "$build_dir" ] && ! scan_build_metadata "$build_dir"; then
+if [ -n "$build_dir" ]; then
+    if ! scan_build_metadata "$build_dir" "$metadata_mode"; then
+        exit 1
+    fi
+elif [ "$metadata_mode" = required ]; then
+    echo "portable ISA check: required compile metadata needs a build directory" >&2
     exit 1
 fi
 

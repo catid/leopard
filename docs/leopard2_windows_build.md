@@ -38,6 +38,16 @@ platform with:
 
     python3 tests/proj/test_leopard_vcxproj.py
 
+The default-off `LEO2_PORTABLE_ISA_RELEASE_AUDIT` CMake mode is deliberately
+not a Windows release gate.  Its current implementation requires a native
+non-Apple Unix x86-64 Release build, a GNU-style static archive, POSIX `sh`,
+`compile_commands.json`, and compatible `objdump` or `llvm-objdump` output.
+Enabling it with MSVC/Windows fails configuration instead of pretending that
+its ELF/GNU-archive classification proves a COFF library.  Windows release
+validation must keep using this structural project/CMake proof and native MSVC
+build/tests; a future COFF disassembly audit needs its own reviewed parser and
+negative controls.
+
 It compares the hand-maintained project with CMake's production source graph
 and rejects missing or duplicate sources, filter drift, a project-wide ISA
 increase, unproved package or object-library link edges, or a CUDA dependency.

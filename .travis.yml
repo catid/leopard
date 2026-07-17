@@ -8,7 +8,7 @@ matrix:
     ###
     ## Release build using the latest GCC
     ###
-    - env: CMAKE_BUILD_TYPE=Release C_COMPILER=gcc-8 CXX_COMPILER=g++-8
+    - env: CMAKE_BUILD_TYPE=Release C_COMPILER=gcc-8 CXX_COMPILER=g++-8 LEO2_PORTABLE_ISA_RELEASE_AUDIT=ON
       addons:
         apt:
           sources:
@@ -138,7 +138,7 @@ matrix:
     ###
     ## clang on Linux
     ###
-    - env: C_COMPILER=clang-3.9 CXX_COMPILER=clang++-3.9
+    - env: CMAKE_BUILD_TYPE=Release C_COMPILER=clang-3.9 CXX_COMPILER=clang++-3.9 LEO2_PORTABLE_ISA_RELEASE_AUDIT=ON
       addons:
         apt:
           sources:
@@ -229,6 +229,8 @@ before_install:
 - cd build
 
 script:
-- if [ "${CXX}" != "pgc++" ]; then export AVX_FLAG="-mavx"; fi
-- cmake .. -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" -DCMAKE_CXX_COMPILER="${CXX_COMPILER}" -DCMAKE_CXX_FLAGS="${AVX_FLAG} ${CXXFLAGS}"
+- if [ "${LEO2_PORTABLE_ISA_RELEASE_AUDIT:-OFF}" = "ON" ]; then export LEO2_RELEASE_AUDIT_FLAGS="-DLEO2_PORTABLE_ISA_RELEASE_AUDIT=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"; fi
+- if [ -n "${C_COMPILER:-}" ]; then export LEO2_C_COMPILER_FLAG="-DCMAKE_C_COMPILER=${C_COMPILER}"; fi; if [ -n "${CXX_COMPILER:-}" ]; then export LEO2_CXX_COMPILER_FLAG="-DCMAKE_CXX_COMPILER=${CXX_COMPILER}"; fi
+- cmake .. -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}" ${LEO2_C_COMPILER_FLAG:-} ${LEO2_CXX_COMPILER_FLAG:-} -DCMAKE_CXX_FLAGS="${CXXFLAGS}" ${LEO2_RELEASE_AUDIT_FLAGS:-}
 - make VERBOSE=1
+- if [ "${LEO2_PORTABLE_ISA_RELEASE_AUDIT:-OFF}" = "ON" ]; then ctest -R '^leopard2_portable_isa$' --output-on-failure; fi

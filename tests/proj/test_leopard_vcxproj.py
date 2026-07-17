@@ -521,7 +521,7 @@ class CMakeProductionGraph(object):
         r"LEOPARD_ENABLE_GF(?:8|16)|"
         r"ENABLE_OPENMP|LEO2_FLAG_ARCH_AVX2|"
         r"LEO2_(?:BACKEND_VARIANT(?:_NORMALIZED)?|BUILD_BENCHMARKS|BUILD_FUZZERS|"
-        r"BUILD_TESTS|ENABLE_CUDA)|"
+        r"BUILD_TESTS|ENABLE_CUDA|PORTABLE_ISA_RELEASE_AUDIT)|"
         r"CXX_FLAG_(?:O2|Oy|Zi|W4)|"
         r"(?:OpenMP|OPENMP|Threads|THREADS)_.+)$")
     _approved_production_mutations = {
@@ -659,6 +659,9 @@ class CMakeProductionGraph(object):
             "LEOPARD_ENABLE_GF8", "Include the GF(2^8) codec", "ON")): 1,
         ("option", (
             "LEOPARD_ENABLE_GF16", "Include the GF(2^16) codec", "ON")): 1,
+        ("option", (
+            "LEO2_PORTABLE_ISA_RELEASE_AUDIT",
+            "Require the strict x86-64 portable-ISA release audit", "OFF")): 1,
         ("string", (
             "TOLOWER", "${LEO2_BACKEND_VARIANT}",
             "LEO2_BACKEND_VARIANT_NORMALIZED")): 1,
@@ -721,6 +724,9 @@ class CMakeProductionGraph(object):
             "LEOPARD_ENABLE_GF8", "Include the GF(2^8) codec", "ON"))),
         ("trusted", ("option", (
             "LEOPARD_ENABLE_GF16", "Include the GF(2^16) codec", "ON"))),
+        ("trusted", ("option", (
+            "LEO2_PORTABLE_ISA_RELEASE_AUDIT",
+            "Require the strict x86-64 portable-ISA release audit", "OFF"))),
         ("protected", (
             "LEO2_BACKEND_VARIANT", "auto", "CACHE", "STRING",
             "Diagnostic backend variant: auto, scalar, ssse3, or avx2")),
@@ -3878,6 +3884,34 @@ class CMakeGraphMutationTest(unittest.TestCase):
             text, require_files=False,
             require_mutation_contract=require_mutation_contract)
 
+    def test_portable_release_audit_is_opt_in_and_platform_scoped(self):
+        option = (
+            'option(LEO2_PORTABLE_ISA_RELEASE_AUDIT\n'
+            '    "Require the strict x86-64 portable-ISA release audit" OFF)')
+        self.assertEqual(1, self.cmake.count(option))
+        required_scope = (
+            'if(LEO2_PORTABLE_ISA_RELEASE_AUDIT)\n'
+            '    if(MSVC OR WIN32)')
+        self.assertEqual(1, self.cmake.count(required_scope))
+        self.assertEqual(
+            1, self.cmake.count(
+                'LEO2_PORTABLE_ISA_RELEASE_AUDIT currently supports x86-64 only'))
+        self.assertEqual(
+            1, self.cmake.count(
+                'LEO2_PORTABLE_ISA_RELEASE_AUDIT requires a single-configuration '))
+        self.assertEqual(
+            1, self.cmake.count('if(CMAKE_GENERATOR MATCHES "Multi-Config")'))
+        self.assertEqual(
+            1, self.cmake.count('"CMAKE_EXPORT_COMPILE_COMMANDS=ON")'))
+
+        default_on = self.cmake.replace(option, option[:-4] + 'ON)', 1)
+        self.assertNotEqual(default_on, self.cmake)
+        with self.assertRaisesRegex(
+                ContractError, "unapproved (?:CMake cache option|production "
+                "compiler-control variable mutation)|missing or duplicate "
+                "trusted CMake command"):
+            self.resolve_text(default_on, require_mutation_contract=True)
+
     def test_legacy_target_references_are_explicitly_classified(self):
         # These four experiment families authenticate the historical CMake
         # target and archive names as evidence fields.  Rewriting them in
@@ -4358,6 +4392,7 @@ target_compile_options(alias_backend PRIVATE /arch:AVX2)
             "set(ENABLE_OPENMP OFF CACHE BOOL \"\" FORCE)",
             "option(ENABLE_OPENMP \"poison\" OFF)",
             "set(LEO2_ENABLE_CUDA ON CACHE BOOL \"\" FORCE)",
+            "set(LEO2_PORTABLE_ISA_RELEASE_AUDIT ON CACHE BOOL \"\" FORCE)",
             "set(LEO2_BUILD_TESTS OFF CACHE BOOL \"\" FORCE)",
             "set(LEO2_BUILD_FUZZERS ON CACHE BOOL \"\" FORCE)",
             "set(LEO2_BACKEND_VARIANT avx2 CACHE STRING \"\" FORCE)",
@@ -4390,6 +4425,7 @@ target_compile_options(alias_backend PRIVATE /arch:AVX2)
         mutations = (
             "set_property(CACHE LEO2_BACKEND_VARIANT PROPERTY VALUE avx2)",
             "set_property(CACHE LEO2_ENABLE_CUDA PROPERTY VALUE ON)",
+            "set_property(CACHE LEO2_PORTABLE_ISA_RELEASE_AUDIT PROPERTY VALUE ON)",
             "set_property(CACHE LEO2_BUILD_TESTS PROPERTY VALUE OFF)",
         )
         for mutation in mutations:
@@ -4665,6 +4701,8 @@ endif()'''
             "target_compile_options(leopard PRIVATE /GL)\nendif()",
             "if(LEO2_ENABLE_CUDA)\n"
             "target_compile_options(leopard PRIVATE /GL)\nendif()",
+            "if(LEO2_PORTABLE_ISA_RELEASE_AUDIT)\n"
+            "target_compile_options(leopard PRIVATE /GL)\nendif()",
             "if(LEO2_BUILD_FUZZERS)\n"
             "target_compile_options(leopard PRIVATE /GL)\nendif()",
             "if(NOT LEO2_BUILD_BENCHMARKS)\n"
@@ -4883,6 +4921,10 @@ endif()'''
             'option(LEO2_BUILD_FUZZERS "Build Leopard2 libFuzzer targets" OFF)',
             'option(LEO2_ENABLE_CUDA "Build the optional Leopard2 CUDA backend" '
             'OFF)',
+            'option(LEOPARD_ENABLE_GF8 "Include the GF(2^8) codec" ON)',
+            'option(LEOPARD_ENABLE_GF16 "Include the GF(2^16) codec" ON)',
+            'option(LEO2_PORTABLE_ISA_RELEASE_AUDIT\n'
+            '    "Require the strict x86-64 portable-ISA release audit" OFF)',
             'string(TOLOWER "${LEO2_BACKEND_VARIANT}" '
             'LEO2_BACKEND_VARIANT_NORMALIZED)',
             'check_cxx_compiler_flag("/O2" CXX_FLAG_O2)',

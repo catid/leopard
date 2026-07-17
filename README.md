@@ -25,12 +25,35 @@ For cross-compilation, select the destination architecture in a CMake toolchain
 file and keep its baseline compatible with every deployment CPU.  The
 `LEO2_BACKEND_VARIANT` setting is a diagnostic control for forcing a qualified
 backend during testing; it is not a portability target or a wire-format choice.
-The `leopard2_portable_isa` test audits the x86-64 archive and build metadata to
-catch accidental baseline-ISA increases.
+When its POSIX shell and disassembly tools are available, the normal test build
+registers `leopard2_portable_isa` to audit the x86-64 archive and any available
+build metadata.  Missing audit tools remain non-fatal for ordinary developer,
+cross-platform, and dependency-light builds.
 
 ```sh
 ctest --test-dir build -R '^leopard2_portable_isa$' --output-on-failure
 ```
+
+Release CI can make every part of that evidence mandatory with the default-off
+strict mode:
+
+```sh
+cmake -S . -B build/release-audit -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+  -DLEO2_PORTABLE_ISA_RELEASE_AUDIT=ON
+cmake --build build/release-audit --target leopard
+ctest --test-dir build/release-audit \
+  -R '^leopard2_portable_isa$' --output-on-failure
+```
+
+This mode fails closed if tests, the static-archive tool, `objdump` or
+`llvm-objdump`, POSIX `sh`, `compile_commands.json`, or the archive audit itself
+is unavailable.  It currently supports native, single-configuration x86-64
+release builds on non-Apple Unix with GCC or Clang.  MSVC/Windows uses the
+portable runtime-dispatch build plus the separately documented Visual Studio
+structural audit; enabling this strict ELF/GNU-archive audit there is an
+intentional configuration error.
 
 ## Leopard2 field selection and reduced builds
 

@@ -37,6 +37,8 @@ option(LEO2_BUILD_FUZZERS "Build Leopard2 libFuzzer targets" OFF)
 option(LEO2_ENABLE_CUDA "Build the optional Leopard2 CUDA backend" OFF)
 option(LEOPARD_ENABLE_GF8 "Include the GF(2^8) codec" ON)
 option(LEOPARD_ENABLE_GF16 "Include the GF(2^16) codec" ON)
+option(LEO2_PORTABLE_ISA_RELEASE_AUDIT
+    "Require the strict x86-64 portable-ISA release audit" OFF)
 
 if(NOT LEOPARD_ENABLE_GF8 AND NOT LEOPARD_ENABLE_GF16)
     message(FATAL_ERROR
@@ -172,6 +174,61 @@ if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86" OR
    CMAKE_SYSTEM_PROCESSOR STREQUAL "i586" OR
    CMAKE_SYSTEM_PROCESSOR STREQUAL "i686")
     set(LEO2_X86_TARGET ON)
+endif()
+
+# This opt-in gate is intentionally narrower than ordinary portable builds.
+# It is a release/CI evidence mode for single-config, native x86-64 builds with
+# GNU-compatible archive/disassembly metadata.  Normal Windows, cross, and
+# developer builds do not acquire any of these tool requirements.
+if(LEO2_PORTABLE_ISA_RELEASE_AUDIT)
+    if(MSVC OR WIN32)
+        message(FATAL_ERROR
+            "LEO2_PORTABLE_ISA_RELEASE_AUDIT is not implemented for "
+            "MSVC/Windows COFF archives; use the default portable build and "
+            "the Visual Studio structural audit")
+    endif()
+    if(NOT UNIX OR APPLE OR CMAKE_CROSSCOMPILING)
+        message(FATAL_ERROR
+            "LEO2_PORTABLE_ISA_RELEASE_AUDIT currently requires a native "
+            "non-Apple Unix build")
+    endif()
+    if(NOT (CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" OR
+            CMAKE_SYSTEM_PROCESSOR STREQUAL "amd64" OR
+            CMAKE_SYSTEM_PROCESSOR STREQUAL "AMD64"))
+        message(FATAL_ERROR
+            "LEO2_PORTABLE_ISA_RELEASE_AUDIT currently supports x86-64 only")
+    endif()
+    if(NOT ((CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
+             CMAKE_C_COMPILER_ID STREQUAL "Clang") AND
+            (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+             CMAKE_CXX_COMPILER_ID STREQUAL "Clang")))
+        message(FATAL_ERROR
+            "LEO2_PORTABLE_ISA_RELEASE_AUDIT requires supported "
+            "GCC or Clang C/C++ toolchains")
+    endif()
+    if(CMAKE_GENERATOR MATCHES "Multi-Config")
+        message(FATAL_ERROR
+            "LEO2_PORTABLE_ISA_RELEASE_AUDIT requires a single-configuration "
+            "generator")
+    endif()
+    if(NOT LEO2_BUILD_TESTS)
+        message(FATAL_ERROR
+            "LEO2_PORTABLE_ISA_RELEASE_AUDIT requires LEO2_BUILD_TESTS=ON")
+    endif()
+    if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
+        message(FATAL_ERROR
+            "LEO2_PORTABLE_ISA_RELEASE_AUDIT requires "
+            "CMAKE_BUILD_TYPE=Release")
+    endif()
+    if(NOT CMAKE_EXPORT_COMPILE_COMMANDS)
+        message(FATAL_ERROR
+            "LEO2_PORTABLE_ISA_RELEASE_AUDIT requires "
+            "CMAKE_EXPORT_COMPILE_COMMANDS=ON")
+    endif()
+    if(NOT CMAKE_AR OR NOT EXISTS "${CMAKE_AR}")
+        message(FATAL_ERROR
+            "LEO2_PORTABLE_ISA_RELEASE_AUDIT requires a usable CMAKE_AR")
+    endif()
 endif()
 
 add_library(leopard STATIC ${LIB_SOURCE_FILES})
@@ -430,6 +487,65 @@ if(LEO2_BUILD_TESTS)
     set_tests_properties(leopard2_field_options PROPERTIES
         ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
 
+    # The portable archive audit is useful for reduced-field archives too, so
+    # keep it outside the dual-field-only exhaustive-test graph below.
+    if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" OR
+       CMAKE_SYSTEM_PROCESSOR STREQUAL "amd64" OR
+       CMAKE_SYSTEM_PROCESSOR STREQUAL "AMD64")
+        find_program(LEO2_OBJDUMP_EXECUTABLE NAMES objdump llvm-objdump)
+        find_program(LEO2_SH_EXECUTABLE NAMES sh)
+        if(LEO2_PORTABLE_ISA_RELEASE_AUDIT AND
+           (NOT LEO2_OBJDUMP_EXECUTABLE OR
+            NOT EXISTS "${LEO2_OBJDUMP_EXECUTABLE}"))
+            message(FATAL_ERROR
+                "LEO2_PORTABLE_ISA_RELEASE_AUDIT requires objdump or "
+                "llvm-objdump")
+        endif()
+        if(LEO2_PORTABLE_ISA_RELEASE_AUDIT AND
+           (NOT LEO2_SH_EXECUTABLE OR NOT EXISTS "${LEO2_SH_EXECUTABLE}"))
+            message(FATAL_ERROR
+                "LEO2_PORTABLE_ISA_RELEASE_AUDIT requires a POSIX sh")
+        endif()
+        if(LEO2_PORTABLE_ISA_RELEASE_AUDIT AND
+           NOT EXISTS
+               "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_leopard2_portable_isa.sh")
+            message(FATAL_ERROR
+                "LEO2_PORTABLE_ISA_RELEASE_AUDIT checker script is missing")
+        endif()
+        if(LEO2_OBJDUMP_EXECUTABLE AND
+           EXISTS "${LEO2_OBJDUMP_EXECUTABLE}" AND
+           LEO2_SH_EXECUTABLE AND EXISTS "${LEO2_SH_EXECUTABLE}")
+            set(LEO2_PORTABLE_ISA_SELF_TEST_ARGS)
+            if((CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
+                CMAKE_C_COMPILER_ID STREQUAL "Clang") AND NOT MSVC)
+                list(APPEND LEO2_PORTABLE_ISA_SELF_TEST_ARGS
+                    "${CMAKE_C_COMPILER}" "${CMAKE_AR}")
+            endif()
+            set(LEO2_PORTABLE_ISA_EXPECTED_CLASSES cpu_features)
+            if(LEO2_HAVE_SSSE3_BACKEND)
+                list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES ssse3)
+            endif()
+            if(LEO2_HAVE_AVX2_BACKEND)
+                list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES avx2)
+            endif()
+            string(REPLACE ";" "," LEO2_PORTABLE_ISA_EXPECTED_CLASSES_ARG
+                "${LEO2_PORTABLE_ISA_EXPECTED_CLASSES}")
+            set(LEO2_PORTABLE_ISA_METADATA_ARGS)
+            if(LEO2_PORTABLE_ISA_RELEASE_AUDIT)
+                list(APPEND LEO2_PORTABLE_ISA_METADATA_ARGS required)
+            endif()
+            add_test(NAME leopard2_portable_isa
+                COMMAND "${LEO2_SH_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_leopard2_portable_isa.sh"
+                    "${LEO2_OBJDUMP_EXECUTABLE}"
+                    "$<TARGET_FILE:leopard>"
+                    "${CMAKE_CURRENT_BINARY_DIR}"
+                    ${LEO2_PORTABLE_ISA_SELF_TEST_ARGS}
+                    "${LEO2_PORTABLE_ISA_EXPECTED_CLASSES_ARG}"
+                    ${LEO2_PORTABLE_ISA_METADATA_ARGS})
+        endif()
+    endif()
+
     # The exhaustive internal suite intentionally cross-checks both concrete
     # field implementations in the same process.  Reduced archives instead
     # build the focused public/legacy contract test above; the default dual
@@ -454,38 +570,6 @@ if(LEO2_BUILD_TESTS)
             LEO2_PRUNED_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
         target_link_libraries(bench_leopard2_pruned_transform leopard)
 
-    endif()
-
-    if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" OR
-       CMAKE_SYSTEM_PROCESSOR STREQUAL "amd64" OR
-       CMAKE_SYSTEM_PROCESSOR STREQUAL "AMD64")
-        find_program(LEO2_OBJDUMP_EXECUTABLE NAMES objdump llvm-objdump)
-        find_program(LEO2_SH_EXECUTABLE NAMES sh)
-        if(LEO2_OBJDUMP_EXECUTABLE AND LEO2_SH_EXECUTABLE)
-            set(LEO2_PORTABLE_ISA_SELF_TEST_ARGS)
-            if((CMAKE_C_COMPILER_ID STREQUAL "GNU" OR
-                CMAKE_C_COMPILER_ID STREQUAL "Clang") AND NOT MSVC)
-                list(APPEND LEO2_PORTABLE_ISA_SELF_TEST_ARGS
-                    "${CMAKE_C_COMPILER}" "${CMAKE_AR}")
-            endif()
-            set(LEO2_PORTABLE_ISA_EXPECTED_CLASSES cpu_features)
-            if(LEO2_HAVE_SSSE3_BACKEND)
-                list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES ssse3)
-            endif()
-            if(LEO2_HAVE_AVX2_BACKEND)
-                list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES avx2)
-            endif()
-            string(REPLACE ";" "," LEO2_PORTABLE_ISA_EXPECTED_CLASSES_ARG
-                "${LEO2_PORTABLE_ISA_EXPECTED_CLASSES}")
-            add_test(NAME leopard2_portable_isa
-                COMMAND "${LEO2_SH_EXECUTABLE}"
-                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_leopard2_portable_isa.sh"
-                    "${LEO2_OBJDUMP_EXECUTABLE}"
-                    "$<TARGET_FILE:leopard>"
-                    "${CMAKE_CURRENT_BINARY_DIR}"
-                    ${LEO2_PORTABLE_ISA_SELF_TEST_ARGS}
-                    "${LEO2_PORTABLE_ISA_EXPECTED_CLASSES_ARG}")
-        endif()
     endif()
 
     add_executable(leopard2_direct_oracle_test
