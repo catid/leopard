@@ -234,6 +234,8 @@ The complete Debug CTest graph passed 49/49 after initializing the checkout's
 `sse2neon` submodule. GCC 13.3 and Clang 18.1 strict Release builds passed with
 `-Werror -Wpedantic`. Clang 18 ASan+UBSan and TSan builds each repeated all
 19,728 prototype cases and the concurrency gate without a diagnostic.
+A tests-off Release archive also built cleanly, exported no test-hook symbol,
+and passed the repository's fail-closed SSE2/SSSE3/AVX2 member-isolation check.
 
 These are correctness results, not timing evidence. Other workers were active
 on the host, so no cache-sensitive or authoritative crossover number was
