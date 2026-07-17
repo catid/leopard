@@ -9,6 +9,7 @@ import json
 import os
 import pathlib
 import random
+import shlex
 import struct
 import subprocess
 import sys
@@ -60,9 +61,9 @@ COUNT_EDGE_PAIRS = (
 
 
 class COracle:
-    def __init__(self, executable: pathlib.Path) -> None:
+    def __init__(self, command: Sequence[str]) -> None:
         self.process = subprocess.Popen(
-            [str(executable), "--protocol"],
+            [*command, "--protocol"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -97,7 +98,12 @@ class COracle:
             )
 
 
-def compile_oracle(cc: str, output: pathlib.Path, sanitizer: bool) -> None:
+def compile_oracle(
+    cc: str,
+    output: pathlib.Path,
+    sanitizer: bool,
+    static_link: bool,
+) -> None:
     command = [
         cc,
         "-std=c99",
@@ -117,6 +123,8 @@ def compile_oracle(cc: str, output: pathlib.Path, sanitizer: bool) -> None:
             "-fsanitize=address,undefined",
             "-fno-sanitize-recover=all",
         ]
+    if static_link:
+        command.append("-static")
     command += [
         str(HERE / "code_identity.c"),
         str(HERE / "test_code_identity_c.c"),
@@ -417,13 +425,27 @@ def main() -> int:
         "--sanitizers", action="store_true",
         help="compile the C oracle with AddressSanitizer and UBSan",
     )
+    parser.add_argument(
+        "--static", action="store_true",
+        help="link the oracle statically (useful for cross-architecture QEMU)",
+    )
+    parser.add_argument(
+        "--runner", default="",
+        help="optional command prefix used to execute the C oracle",
+    )
     arguments = parser.parse_args()
+
+    if arguments.sanitizers and arguments.static:
+        parser.error("--sanitizers and --static cannot be combined")
 
     with tempfile.TemporaryDirectory(prefix="leo2-code-identity-c-") as temp:
         executable = pathlib.Path(temp) / "test_code_identity_c"
-        compile_oracle(arguments.cc, executable, arguments.sanitizers)
-        subprocess.run([str(executable)], check=True)
-        oracle = COracle(executable)
+        compile_oracle(
+            arguments.cc, executable, arguments.sanitizers, arguments.static
+        )
+        command = [*shlex.split(arguments.runner), str(executable)]
+        subprocess.run(command, check=True)
+        oracle = COracle(command)
         try:
             counts = run_differential(oracle)
         finally:

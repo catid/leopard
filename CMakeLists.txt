@@ -814,9 +814,10 @@ if(LEO2_BUILD_TESTS)
 endif()
 
 if(LEO2_BUILD_FUZZERS)
-    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
+       NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
         message(FATAL_ERROR
-            "LEO2_BUILD_FUZZERS requires upstream Clang libFuzzer support")
+            "LEO2_BUILD_FUZZERS requires upstream Clang C/C++ libFuzzer support")
     endif()
 
     # Build an independently instrumented copy of the library into the fuzz
@@ -861,6 +862,20 @@ if(LEO2_BUILD_FUZZERS)
             LEO2_DISABLE_AVX2_CODEGEN=1)
     endif()
 
+    # Experiment W's parser is deliberately absent from libleopard and the
+    # installed API.  This opt-in target nevertheless gives its complete C99
+    # deserialize/validate/serialize boundary native libFuzzer, ASan, and
+    # UBSan coverage.
+    add_executable(leopard2_code_identity_fuzzer
+        experiments/leopard2/code_identity/fuzz_code_identity.c
+        experiments/leopard2/code_identity/code_identity.c)
+    target_include_directories(leopard2_code_identity_fuzzer PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/code_identity)
+    target_compile_options(leopard2_code_identity_fuzzer PRIVATE
+        ${LEO2_FUZZ_SANITIZER_FLAGS}
+        -std=c99 -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion
+        -Wshadow -Werror)
+
     # Do not silently turn a forced fuzzer into a scalar-only build.  Compile
     # sanitizer-instrumented copies of the same isolated backend members so
     # coverage, ASan, and UBSan include the fixed-kernel boundary too.
@@ -903,6 +918,8 @@ if(LEO2_BUILD_FUZZERS)
     set_property(TARGET leopard2_api_fuzzer APPEND_STRING PROPERTY
         LINK_FLAGS " -fsanitize=fuzzer,address,undefined")
     set_property(TARGET leopard2_pruned_plan_fuzzer APPEND_STRING PROPERTY
+        LINK_FLAGS " -fsanitize=fuzzer,address,undefined")
+    set_property(TARGET leopard2_code_identity_fuzzer APPEND_STRING PROPERTY
         LINK_FLAGS " -fsanitize=fuzzer,address,undefined")
     target_link_libraries(leopard2_api_fuzzer Threads::Threads)
     target_link_libraries(leopard2_pruned_plan_fuzzer Threads::Threads)
