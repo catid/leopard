@@ -566,15 +566,21 @@ committed evidence validator in live, clean-HEAD mode before and after timing,
 requires the A/B comparison status to be `pass`, proves the exact `-O2`
 non-sanitized AVX2 compile record, and requires the supplied archive and
 executable paths and bytes to match that record.  A byte-identical copy of the
-v4 manifest and a compact derived attestation are retained for portable replay.
+v4 manifest, the exact authoritative runner, and a compact derived attestation
+are retained for portable replay.
 Its schedule is not configurable: all 12
 declared cells run in their frozen order, with seven retained samples for each
 setup and execution metric.  The runner supports distinct clean tooling and
-ancestor core commits, records exact Git trees plus runner, harness, archive,
-executable, Python, and `taskset` hashes, proves the same fixed 22-file core
-source closure used by the build runner, and checks the harness's embedded
-source, archive, and core identities.  The committed `run_matrix.py` and
-`validate_evidence.py` tools remain nonexecutable Git mode `100644` files and
+ancestor core commits, records the two exact commit IDs plus runner, harness,
+archive, executable, Python, and `taskset` hashes, proves the same fixed 22-file
+core source closure in every one of the five v4 build records, and checks the
+harness's embedded source, archive, and core identities.  Clean checkout, tree,
+and ancestry checks remain live preconditions; tree hashes are deliberately not
+claimed by portable evidence because no retained Git object database can derive
+them.  The compact portable claims are re-derived from the retained v4 build
+manifest rather than trusted as free-standing metadata.  The committed
+`run_matrix.py` and `validate_evidence.py` tools remain nonexecutable Git mode
+`100644` files and
 are invoked through the recorded Python interpreter.  A coordinator must first
 reserve one allowed physical core and its SMT sibling using canonical
 `leopard2-cpu-reservation/v1` JSON.  The runner takes a nonblocking exclusive
@@ -628,24 +634,40 @@ exact ignored build paths produced above:
       --cpu "$CPU" --sibling "$SIBLING"
 
 Success writes v2 canonical `raw.json` and `manifest.json`, the verified v4
-build manifest, and the exact child result and stdout/stderr bytes.  Any failure
-after output-directory creation retains a signed v3 `failure.json` with every
-available request, input, host, reservation, pair-lease, build, isolation, and
-child record, plus checksummed child streams and partial result when present.  An existing
-output directory is never replaced.  Success and failure have deliberately
-different replay commands and output statuses; authenticating a failure never
-turns it into benchmark success.  Both forms are portable and do not reopen the
-original checkout, build, or reservation paths:
+build manifest, exact authoritative runner, and exact child result and
+stdout/stderr bytes.  Any failure after output-directory creation retains a v4
+`failure.json`, a separately checksummed canonical `failure/state-v1.json`, and
+an exact sorted inventory of every other regular file in the bundle.  The state
+machine has typed ordered stages (`arguments` through `validated`), requires an
+exact presence mask for all 12 context records, and binds each enumerated
+`failure_code` to the last completed stage.  Replay proves timeout, exit,
+missing-result, stream, isolation, input-drift, host-drift, invalid-JSON, and
+invalid-child-result predicates from retained bytes where those predicates are
+claimed.  Input and host post-snapshots must equal their pre-snapshots except for
+the corresponding exact drift failure code.  Checksummed child streams and a
+partial result are retained when present.  An existing output directory is never
+replaced.  Success and failure have deliberately different replay commands and
+output statuses; validating a failure never turns it into benchmark success.
+Both forms are portable and do not reopen the original checkout, build, or
+reservation paths:
 
     PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -X dev \
       experiments/leopard2/non_power_of_two/c7/run_authoritative.py verify \
       --manifest "$OUTPUT/manifest.json"
 
     # Use this instead when the campaign retained failure.json.  A valid replay
-    # prints status=VERIFIED_FAILURE plus validation, timeout, or child-exit.
+    # prints status=VERIFIED_FAILURE plus the enumerated failure_code.
     PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -X dev \
       experiments/leopard2/non_power_of_two/c7/run_authoritative.py \
       verify-failure --failure "$OUTPUT/failure.json"
+
+The SHA-256 `digest` fields, retained state, and artifact inventory provide
+canonical self-consistency and detect accidental damage or partial/coordinated
+rewrites that do not also rewrite the retained state.  They are unkeyed and are
+not a hostile-writer authenticity mechanism: an attacker able to replace every
+file can recompute the state, inventory, and digests.  Preserve the bundle in an
+immutable or independently authenticated store, or add an external digital
+signature, when adversarial provenance is part of the threat model.
 
 After the authoritative bundle has been replayed and copied to its retained
 location, remove the detached peer worktree if it is no longer needed:

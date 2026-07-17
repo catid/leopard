@@ -8,6 +8,7 @@ import copy
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -123,6 +124,13 @@ class AuthoritativeRunnerTests(unittest.TestCase):
                                     if key != "binding_sha256"}))
         self.assert_raw_rejected(changed)
 
+        request = copy.deepcopy(self.raw["request"])
+        request["cpu"] = runner.MAX_CPU_ID + 1
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_request(request)
+        with self.assertRaises(runner.EvidenceError):
+            runner.parse_cpu_list(f"0-{runner.MAX_CPU_SET_SIZE}")
+
         changed = copy.deepcopy(self.raw)
         changed["inputs_after"]["executable"]["sha256"] = "f" * 64
         changed["inputs_after"]["binding_sha256"] = runner.sha256_bytes(
@@ -134,7 +142,7 @@ class AuthoritativeRunnerTests(unittest.TestCase):
     def test_core_source_closure_mutations_rejected(self) -> None:
         for mutation in (
             lambda value: value["core_source_closure"].reverse(),
-            lambda value: value["core_source_closure"][0].update(size=True),
+            lambda value: value["core_source_closure"][0].update(bytes=True),
             lambda value: value["core_source_closure"][0].update(
                 path="LeopardFF8.cpp"),
         ):
@@ -155,7 +163,9 @@ class AuthoritativeRunnerTests(unittest.TestCase):
                 value, inputs["build_manifest"], inputs["git"]["tooling_commit"],
                 inputs["git"]["core_commit"], inputs["source"],
                 inputs["build_runner"], inputs["build_validator"],
-                inputs["archive"], inputs["executable"])
+                inputs["archive"], inputs["executable"],
+                inputs["core_source_closure"], inputs["taskset"],
+                inputs["python"])
 
         mutations = (
             lambda value: value.update(schema="leopard2-c7-build-run-manifest/v3"),
@@ -278,16 +288,39 @@ class AuthoritativeRunnerTests(unittest.TestCase):
             "archive": runner.file_identity(archive, "archive"),
             "executable": runner.file_identity(executable, "executable"),
         }
+        fixture_inputs = runner.synthetic_inputs()
+        manifest_inputs = copy.deepcopy(fixture_inputs)
+        manifest_inputs.update({
+            "git": identities["git"],
+            "source": {"bytes": identities["source"]["size"],
+                       "path": runner.SOURCE_RELATIVE.as_posix(),
+                       "sha256": identities["source"]["sha256"]},
+            "build_runner": {"bytes": identities["build_runner"]["size"],
+                             "path": runner.BUILD_RUNNER_RELATIVE.as_posix(),
+                             "sha256": identities["build_runner"]["sha256"]},
+            "build_validator": {
+                "bytes": identities["build_validator"]["size"],
+                "path": runner.BUILD_VALIDATOR_RELATIVE.as_posix(),
+                "sha256": identities["build_validator"]["sha256"]},
+            "archive": {"bytes": identities["archive"]["size"],
+                        "path": ".research/fixture/build/core-avx2/liblibleopard.a",
+                        "sha256": identities["archive"]["sha256"]},
+            "executable": {"bytes": identities["executable"]["size"],
+                           "path": ".research/fixture/build/c7-avx2",
+                           "sha256": identities["executable"]["sha256"]},
+        })
         build_manifest = self.root / ".research/fixture/results/build-run-manifest.json"
         build_manifest.parent.mkdir(parents=True)
         build_manifest.write_bytes(runner.canonical_pretty_bytes(
-            runner.synthetic_build_manifest(identities)))
+            runner.synthetic_build_manifest(manifest_inputs)))
         with mock.patch.object(runner, "run_build_validator"):
             identity, attestation = runner.verified_build_attestation(
                 self.root, build_manifest, "b" * 40, "e" * 40,
                 identities["source"], identities["build_runner"],
                 identities["build_validator"], identities["archive"],
-                identities["executable"], archive, executable)
+                identities["executable"], manifest_inputs["core_source_closure"],
+                manifest_inputs["taskset"], manifest_inputs["python"],
+                archive, executable)
         self.assertEqual(attestation["manifest"]["sha256"], identity["sha256"])
         self.assertEqual(attestation["avx2"]["optimization"], "-O2")
         self.assertEqual(identities["build_runner"]["mode"] & 0o111, 0)
@@ -301,7 +334,10 @@ class AuthoritativeRunnerTests(unittest.TestCase):
                 self.root, build_manifest, "b" * 40, "e" * 40,
                 identities["source"], identities["build_runner"],
                 identities["build_validator"], identities["archive"],
-                runner.file_identity(executable, "executable"), archive, executable)
+                runner.file_identity(executable, "executable"),
+                manifest_inputs["core_source_closure"],
+                manifest_inputs["taskset"], manifest_inputs["python"],
+                archive, executable)
 
     def test_committed_python_tool_modes_are_nonexecutable_and_enforced(self) -> None:
         source_root = MODULE_PATH.parents[4]
@@ -343,8 +379,8 @@ class AuthoritativeRunnerTests(unittest.TestCase):
                 repository, commit, Path("tool.py"), "build-runner")
 
         inputs = runner.synthetic_inputs()
-        self.assertEqual(inputs["build_runner"]["mode"] & 0o111, 0)
-        self.assertEqual(inputs["build_validator"]["mode"] & 0o111, 0)
+        self.assertNotIn("mode", inputs["build_runner"])
+        self.assertNotIn("mode", inputs["build_validator"])
         runner.validate_input_snapshot(inputs)
         inputs["build_runner"]["mode"] = 0o755
         inputs["binding_sha256"] = runner.sha256_bytes(runner.canonical_bytes(
@@ -494,7 +530,7 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         runner.validate_failure(failure, output, check_files=True)
         self.assertEqual(failure["schema"], runner.FAILURE_SCHEMA)
         self.assertEqual(failure["status"], "failed")
-        self.assertEqual(failure["failure_kind"], "validation")
+        self.assertEqual(failure["failure_code"], "host-capture-failed")
         self.assertIn("synthetic topology failure", failure["error"])
         self.assertIsNone(failure["child"])
         self.assertIsNotNone(failure["request"])
@@ -574,14 +610,14 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         failure, _output = self._run_child_failure(timeout=False)
         self.assertEqual(failure["child"]["returncode"], 7)
         self.assertFalse(failure["child"]["timed_out"])
-        self.assertEqual(failure["failure_kind"], "child-exit")
+        self.assertEqual(failure["failure_code"], "child-exit")
         self.assertEqual(failure["error"], "C7 child exited 7")
 
     def test_timeout_child_retains_failure_evidence(self) -> None:
         failure, output = self._run_child_failure(timeout=True)
         self.assertEqual(failure["child"]["returncode"], 124)
         self.assertTrue(failure["child"]["timed_out"])
-        self.assertEqual(failure["failure_kind"], "timeout")
+        self.assertEqual(failure["failure_code"], "child-timeout")
         self.assertEqual(failure["error"], "C7 child timed out")
 
         completed = subprocess.run(
@@ -593,19 +629,60 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         report = json.loads(completed.stdout)
         self.assertEqual(report["status"], "VERIFIED_FAILURE")
-        self.assertEqual(report["failure_kind"], "timeout")
+        self.assertEqual(report["failure_code"], "child-timeout")
 
     def test_failure_coordinated_resigned_mutations_are_rejected(self) -> None:
         failure, output = self._run_child_failure(timeout=True)
 
+        def drop_captured_context(value: dict) -> None:
+            for key in runner.FAILURE_CONTEXT_FIELDS:
+                value[key] = None
+            value["completed_stage"] = runner.completed_failure_stage(-1)
+            value["failure_code"] = "arguments-invalid"
+            value["error"] = "synthetic preflight failure"
+
+        def timeout_to_missing_result(value: dict) -> None:
+            value["child"].update(timed_out=False, returncode=0)
+            value["failure_code"] = "child-result-missing"
+            value["error"] = "C7 child did not write result JSON"
+
+        def rewrite_duration(value: dict) -> None:
+            value["isolation"]["after"]["monotonic_ns"] += 1_000_000
+            value["isolation"]["duration_ns"] += 1_000_000
+            value["child"]["duration_ns"] += 1_000_000
+
+        def fabricate_post_timeout(value: dict) -> None:
+            value["inputs_after"] = copy.deepcopy(value["inputs_before"])
+
+        def mutate_closure(value: dict) -> None:
+            value["inputs_before"]["core_source_closure"][0]["sha256"] = "0" * 64
+            payload = {key: item for key, item in value["inputs_before"].items()
+                       if key != "binding_sha256"}
+            value["inputs_before"]["binding_sha256"] = runner.sha256_bytes(
+                runner.canonical_bytes(payload))
+
+        def add_removed_tree_claim(value: dict) -> None:
+            value["inputs_before"]["git"]["tooling_tree"] = "0" * 40
+            payload = {key: item for key, item in value["inputs_before"].items()
+                       if key != "binding_sha256"}
+            value["inputs_before"]["binding_sha256"] = runner.sha256_bytes(
+                runner.canonical_bytes(payload))
+
         mutations = (
+            drop_captured_context,
+            timeout_to_missing_result,
+            rewrite_duration,
+            fabricate_post_timeout,
+            mutate_closure,
+            add_removed_tree_claim,
+            lambda value: value["host_before"]["timing_cpu"].update(cpu=False),
             lambda value: value.update(status="pass"),
-            lambda value: value.update(failure_kind="child-exit"),
+            lambda value: value.update(failure_code="child-exit"),
             lambda value: value.update(error="C7 child exited 124"),
             lambda value: value["child"].update(returncode=0),
             lambda value: value["child"].update(timed_out=False),
             lambda value: (
-                value.update(failure_kind="validation"),
+                value.update(failure_code="child-result-missing"),
                 value["child"].update(returncode=0, timed_out=False)),
             lambda value: value["child"]["stdout"].update(sha256="f" * 64),
             lambda value: value["child"]["stderr"].update(path="../outside"),
@@ -620,6 +697,111 @@ class AuthoritativeRunnerTests(unittest.TestCase):
             with self.subTest(index=index), self.assertRaises(runner.EvidenceError):
                 runner.validate_failure(
                     resign(changed), output, check_files=True)
+
+    def test_rebound_failure_rejects_mask_type_and_provenance_forgeries(self) -> None:
+        failure, output = self._run_child_failure(timeout=True)
+
+        def rebind(changed: dict, root: Path) -> dict:
+            state = runner.signed(runner.failure_state_payload(
+                changed["completed_stage"], changed["failure_code"],
+                {key: changed[key] for key in runner.FAILURE_CONTEXT_FIELDS}))
+            state_path = root / "failure/state-v1.json"
+            state_path.write_bytes(runner.canonical_bytes(state) + b"\n")
+            changed["state"] = runner.artifact_record(root, state_path)
+            changed["artifact_inventory"] = runner.artifact_inventory(root)
+            return resign(changed)
+
+        mutations = []
+        changed = copy.deepcopy(failure)
+        changed["inputs_after"] = copy.deepcopy(changed["inputs_before"])
+        mutations.append(changed)
+        changed = copy.deepcopy(failure)
+        changed["host_before"]["timing_cpu"]["cpu"] = False
+        mutations.append(changed)
+        changed = copy.deepcopy(failure)
+        inputs = changed["inputs_before"]
+        inputs["core_source_closure"][0]["sha256"] = "0" * 64
+        inputs["build_attestation"]["core_source_closure_sha256"] = \
+            runner.sha256_bytes(runner.canonical_bytes(
+                inputs["core_source_closure"]))
+        inputs["binding_sha256"] = runner.sha256_bytes(runner.canonical_bytes(
+            {key: item for key, item in inputs.items()
+             if key != "binding_sha256"}))
+        changed["build_provenance"]["attestation"] = copy.deepcopy(
+            inputs["build_attestation"])
+        mutations.append(changed)
+        changed = copy.deepcopy(failure)
+        changed["inputs_before"]["git"]["core_tree"] = "1" * 40
+        changed["inputs_before"]["binding_sha256"] = runner.sha256_bytes(
+            runner.canonical_bytes({key: item for key, item in
+                                    changed["inputs_before"].items()
+                                    if key != "binding_sha256"}))
+        mutations.append(changed)
+
+        for index, changed in enumerate(mutations):
+            root = self.root / f"rebound-{index}"
+            shutil.copytree(output, root)
+            rebound = rebind(changed, root)
+            with self.subTest(index=index), self.assertRaises(runner.EvidenceError):
+                runner.validate_failure(rebound, root, check_files=True)
+
+    def test_failure_artifact_inventory_is_exact_and_state_path_is_fixed(self) -> None:
+        failure, output = self._run_child_failure(timeout=True)
+        changed = copy.deepcopy(failure)
+        changed["artifact_inventory"].pop()
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(resign(changed), output, check_files=True)
+
+        changed = copy.deepcopy(failure)
+        changed["state"]["path"] = "failure/renamed-state.json"
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(resign(changed), output, check_files=True)
+
+        runner.write_exclusive(output / "unexpected.bin", b"unexpected")
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(failure, output, check_files=True)
+
+    def test_failure_cli_bounds_numeric_conversion_and_top_level_reads(self) -> None:
+        failure, output = self._run_child_failure(timeout=True)
+        numeric_root = self.root / "overflow-timeout"
+        shutil.copytree(output, numeric_root)
+        changed = copy.deepcopy(failure)
+        huge = 10 ** 400
+        changed["arguments"]["timeout_seconds"] = huge
+        changed["request"]["timeout_seconds"] = huge
+        state = runner.signed(runner.failure_state_payload(
+            changed["completed_stage"], changed["failure_code"],
+            {key: changed[key] for key in runner.FAILURE_CONTEXT_FIELDS}))
+        state_path = numeric_root / "failure/state-v1.json"
+        state_path.write_bytes(runner.canonical_bytes(state) + b"\n")
+        changed["state"] = runner.artifact_record(numeric_root, state_path)
+        changed["artifact_inventory"] = runner.artifact_inventory(numeric_root)
+        (numeric_root / "failure.json").write_bytes(
+            runner.canonical_bytes(resign(changed)) + b"\n")
+
+        completed = subprocess.run(
+            [sys.executable, str(MODULE_PATH), "verify-failure", "--failure",
+             str(numeric_root / "failure.json")], check=False, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
+                 "PYTHONHASHSEED": "0"})
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("C7 authoritative evidence error:", completed.stderr)
+        self.assertNotIn("Traceback (most recent call last)", completed.stderr)
+
+        oversized_root = self.root / "oversized"
+        oversized_root.mkdir()
+        oversized = oversized_root / "failure.json"
+        oversized.write_bytes(b" " * (runner.MAX_TOP_LEVEL_JSON_BYTES + 1))
+        completed = subprocess.run(
+            [sys.executable, str(MODULE_PATH), "verify-failure", "--failure",
+             str(oversized)], check=False, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1",
+                 "PYTHONHASHSEED": "0"})
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("exceeds the evidence bound", completed.stderr)
+        self.assertNotIn("Traceback (most recent call last)", completed.stderr)
 
     def test_malformed_nested_failure_is_caught_by_cli(self) -> None:
         failure, output = self._run_child_failure(timeout=True)
@@ -641,7 +823,9 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         malformed_values.append(changed)
 
         for index, changed in enumerate(malformed_values):
-            path = output / f"malformed-{index}.json"
+            malformed_root = self.root / f"malformed-{index}"
+            shutil.copytree(output, malformed_root)
+            path = malformed_root / "failure.json"
             path.write_bytes(runner.canonical_bytes(resign(changed)) + b"\n")
             completed = subprocess.run(
                 [sys.executable, str(MODULE_PATH), "verify-failure", "--failure",

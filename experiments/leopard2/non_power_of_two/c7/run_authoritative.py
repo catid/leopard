@@ -37,7 +37,10 @@ from typing import Any, Mapping, Sequence
 
 RAW_SCHEMA = "leopard2-c7-authoritative-raw/v2"
 MANIFEST_SCHEMA = "leopard2-c7-authoritative-manifest/v2"
-FAILURE_SCHEMA = "leopard2-c7-authoritative-failure/v3"
+FAILURE_SCHEMA = "leopard2-c7-authoritative-failure/v4"
+FAILURE_STATE_SCHEMA = "leopard2-c7-authoritative-failure-state/v1"
+INPUT_SCHEMA = "leopard2-c7-authoritative-input/v2"
+BUILD_PROVENANCE_SCHEMA = "leopard2-c7-authoritative-build-provenance/v2"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
 ISOLATION_SCHEMA = "leopard2-c7-authoritative-isolation/v1"
@@ -49,6 +52,10 @@ GIT_SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 SAMPLE_COUNT = 7
 MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 MAX_LOG_BYTES = 1024 * 1024
+MAX_TOP_LEVEL_JSON_BYTES = 16 * 1024 * 1024
+MAX_TIMEOUT_SECONDS = 24 * 60 * 60
+MAX_CPU_ID = (1 << 20) - 1
+MAX_CPU_SET_SIZE = 1 << 16
 SOURCE_RELATIVE = Path("experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp")
 RUNNER_RELATIVE = Path("experiments/leopard2/non_power_of_two/c7/run_authoritative.py")
 BUILD_RUNNER_RELATIVE = Path(
@@ -81,6 +88,47 @@ CPU_STAT_FIELDS = (
     "user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal",
 )
 CPU_STAT_IDLE_FIELDS = ("idle", "iowait")
+FAILURE_STAGES = (
+    "arguments", "request", "host", "reservation", "lease", "inputs",
+    "attested", "child-captured", "isolated", "inputs-after", "host-after",
+    "validated",
+)
+FAILURE_CONTEXT_FIELDS = (
+    "arguments", "request", "host_before", "reservation", "pair_lease",
+    "inputs_before", "build_provenance", "child", "isolation", "inputs_after",
+    "host_after", "validated_output",
+)
+FAILURE_CODE_STAGE = {
+    "arguments-invalid": -1,
+    "request-invalid": 0,
+    "host-capture-failed": 1,
+    "reservation-failed": 2,
+    "lease-failed": 3,
+    "inputs-capture-failed": 4,
+    "attestation-failed": 5,
+    "child-capture-failed": 6,
+    "isolation-capture-failed": 7,
+    "child-timeout": 8,
+    "child-exit": 8,
+    "child-result-missing": 8,
+    "child-stdout-invalid": 8,
+    "child-stderr-invalid": 8,
+    "isolation-rejected": 8,
+    "reservation-post-child-invalid": 8,
+    "lease-post-child-invalid": 8,
+    "child-result-json-invalid": 8,
+    "inputs-after-capture-failed": 8,
+    "inputs-drift": 9,
+    "host-after-capture-failed": 9,
+    "host-drift": 10,
+    "child-result-invalid": 10,
+    "internal-validation-failed": 11,
+    "reservation-final-invalid": 11,
+    "lease-final-invalid": 11,
+    "raw-write-failed": 11,
+    "manifest-validation-failed": 11,
+    "manifest-write-failed": 11,
+}
 
 EXPECTED_PROFILE = {
     "family": 3, "version": 1, "coordinate_map": 1,
@@ -187,7 +235,7 @@ def canonical_bytes(value: object) -> bytes:
     try:
         return json.dumps(value, sort_keys=True, separators=(",", ":"),
                           allow_nan=False).encode("utf-8")
-    except (TypeError, ValueError) as error:
+    except (TypeError, ValueError, RecursionError) as error:
         raise EvidenceError(f"value is not canonical JSON: {error}") from error
 
 
@@ -242,7 +290,7 @@ def strict_json(data: bytes, label: str) -> Any:
     try:
         return json.loads(data.decode("utf-8"), object_pairs_hook=pairs,
                           parse_constant=reject_constant, parse_float=finite_float)
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
+    except (UnicodeDecodeError, ValueError, RecursionError) as error:
         raise EvidenceError(f"invalid {label}: {error}") from error
 
 
@@ -250,7 +298,7 @@ def canonical_pretty_bytes(value: object) -> bytes:
     try:
         return (json.dumps(value, indent=2, sort_keys=True, allow_nan=False) +
                 "\n").encode("utf-8")
-    except (TypeError, ValueError) as error:
+    except (TypeError, ValueError, RecursionError) as error:
         raise EvidenceError(f"value is not canonical pretty JSON: {error}") from error
 
 
@@ -388,10 +436,24 @@ def manifest_artifact(value: object, expected_path: Path,
 
 def artifact_matches_identity(record: Mapping[str, Any],
                               identity: Mapping[str, Any], label: str) -> None:
-    require(record["bytes"] == identity["size"] and
-            record["sha256"] == identity["sha256"] and
-            Path(record["path"]).name == identity["name"],
+    size = identity.get("size", identity.get("bytes"))
+    expected_path = identity.get("path")
+    expected_name = identity.get("name")
+    path_matches = (record["path"] == expected_path if expected_path is not None
+                    else Path(record["path"]).name == expected_name)
+    require(record["bytes"] == size and
+            record["sha256"] == identity.get("sha256") and path_matches,
             f"{label} differs from the supplied exact file")
+
+
+def retained_artifact(identity: Mapping[str, Any], path: Path) -> dict[str, Any]:
+    return {"bytes": identity["size"], "path": path.as_posix(),
+            "sha256": identity["sha256"]}
+
+
+def retained_program(identity: Mapping[str, Any], path: Path) -> dict[str, Any]:
+    return {"path": str(path.resolve(strict=True)),
+            "sha256": identity["sha256"]}
 
 
 def resolve_build_artifact(root: Path, record: Mapping[str, Any], label: str) -> Path:
@@ -411,12 +473,27 @@ def resolve_build_artifact(root: Path, record: Mapping[str, Any], label: str) ->
     return candidate
 
 
+def manifest_program(value: object, label: str) -> dict[str, str]:
+    require(isinstance(value, dict) and set(value) == {
+        "path", "sha256", "version"} and
+        isinstance(value["path"], str) and value["path"] and
+        os.path.isabs(value["path"]) and
+        isinstance(value["sha256"], str) and
+        SHA256_RE.fullmatch(value["sha256"]) is not None and
+        isinstance(value["version"], str) and value["version"],
+        f"{label} program record changed")
+    return {"path": value["path"], "sha256": value["sha256"]}
+
+
 def derive_build_attestation(
     value: object, manifest_identity: Mapping[str, Any],
     expected_tooling_commit: str, expected_core_commit: str,
     source_identity: Mapping[str, Any], build_runner_identity: Mapping[str, Any],
     build_validator_identity: Mapping[str, Any], archive_identity: Mapping[str, Any],
-    executable_identity: Mapping[str, Any], *, source_root: Path | None = None,
+    executable_identity: Mapping[str, Any],
+    core_source_closure: Sequence[Mapping[str, Any]],
+    taskset_identity: Mapping[str, Any], python_identity: Mapping[str, Any], *,
+    source_root: Path | None = None,
     archive_path: Path | None = None, executable_path: Path | None = None,
 ) -> dict[str, Any]:
     require(isinstance(value, dict), "C7 build manifest is not an object")
@@ -439,6 +516,21 @@ def derive_build_attestation(
     require(isinstance(builds, list) and
             [item.get("name") if isinstance(item, dict) else None for item in builds] ==
             list(BUILD_NAMES), "C7 build matrix changed")
+    require(isinstance(core_source_closure, list) and
+            len(core_source_closure) == len(CORE_SOURCE_CLOSURE),
+            "retained core source closure changed")
+    build_record_sha256: dict[str, str] = {}
+    for build, name in zip(builds, BUILD_NAMES):
+        require(typed_equal(build.get("source_closure"), core_source_closure),
+                f"C7 {name} build source closure differs")
+        launcher_python = manifest_program(
+            build.get("launcher_python"), f"C7 {name} launcher Python")
+        require(typed_equal(launcher_python, python_identity),
+                f"C7 {name} launcher Python differs from the runner")
+        build_record_sha256[name] = sha256_bytes(canonical_bytes(build))
+    taskset = manifest_program(value.get("taskset"), "C7 taskset")
+    require(typed_equal(taskset, taskset_identity),
+            "C7 taskset differs from the runner")
     avx2 = builds[2]
     require(avx2.get("name") == "avx2" and avx2.get("backend") == "avx2" and
             avx2.get("sanitizer") is False,
@@ -498,20 +590,14 @@ def derive_build_attestation(
                 "library_sha256": library["sha256"],
                 "executable_sha256": executable_record["sha256"],
             }), "C7 v4 A/B reproducibility attestation is absent or changed")
-    require(manifest_identity.get("kind") == "build-manifest" and
-            type(manifest_identity.get("size")) is int and
-            manifest_identity["size"] > 0 and
+    manifest_size = manifest_identity.get("size", manifest_identity.get("bytes"))
+    require(type(manifest_size) is int and manifest_size > 0 and
             isinstance(manifest_identity.get("sha256"), str) and
             SHA256_RE.fullmatch(manifest_identity["sha256"]) is not None,
             "C7 build manifest file identity changed")
     return {
         "schema": BUILD_ATTESTATION_SCHEMA,
-        "validation": {
-            "checkout_head_required": True,
-            "mode": "live",
-            "validator_stdout": "C7 evidence validation passed (live)\n",
-        },
-        "manifest": {"bytes": manifest_identity["size"],
+        "manifest": {"bytes": manifest_size,
                      "schema": BUILD_MANIFEST_SCHEMA,
                      "sha256": manifest_identity["sha256"]},
         "status": "pass", "scope": BUILD_SCOPE,
@@ -521,6 +607,11 @@ def derive_build_attestation(
         "source": copy.deepcopy(source),
         "build_runner": copy.deepcopy(build_runner),
         "build_validator": copy.deepcopy(build_validator),
+        "taskset": copy.deepcopy(taskset),
+        "python": copy.deepcopy(python_identity),
+        "core_source_closure_sha256": sha256_bytes(
+            canonical_bytes(core_source_closure)),
+        "build_record_sha256": build_record_sha256,
         "avx2": {
             "name": "avx2", "backend": "avx2", "sanitizer": False,
             "library": copy.deepcopy(library),
@@ -556,7 +647,10 @@ def verified_build_attestation(
     expected_core_commit: str, source_identity: Mapping[str, Any],
     build_runner_identity: Mapping[str, Any],
     build_validator_identity: Mapping[str, Any], archive_identity: Mapping[str, Any],
-    executable_identity: Mapping[str, Any], archive_path: Path, executable_path: Path,
+    executable_identity: Mapping[str, Any],
+    core_source_closure: Sequence[Mapping[str, Any]],
+    taskset_identity: Mapping[str, Any], python_identity: Mapping[str, Any],
+    archive_path: Path, executable_path: Path,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     build_manifest = build_manifest.resolve(strict=True)
     try:
@@ -576,7 +670,8 @@ def verified_build_attestation(
     attestation = derive_build_attestation(
         parsed, before, expected_tooling_commit, expected_core_commit,
         source_identity, build_runner_identity, build_validator_identity,
-        archive_identity, executable_identity, source_root=source_root,
+        archive_identity, executable_identity, core_source_closure,
+        taskset_identity, python_identity, source_root=source_root,
         archive_path=archive_path, executable_path=executable_path)
     return before, attestation
 
@@ -589,36 +684,55 @@ def input_snapshot(source_root: Path, expected_tooling_commit: str,
     runner = Path(__file__).resolve(strict=True)
     require(runner == (source_root / RUNNER_RELATIVE).resolve(strict=True),
             "runner is not the committed runner in --source-root")
-    core_source_closure = [
+    core_source_identities = [
         committed_file_identity(
             source_root, expected_core_commit, Path(relative), "core-source")
-        for relative in CORE_SOURCE_CLOSURE
-    ]
-    git = git_identity(source_root, expected_tooling_commit, expected_core_commit)
-    runner = committed_file_identity(
+        for relative in CORE_SOURCE_CLOSURE]
+    core_source_closure = [
+        retained_artifact(identity, Path(relative))
+        for identity, relative in zip(core_source_identities, CORE_SOURCE_CLOSURE)]
+    live_git = git_identity(
+        source_root, expected_tooling_commit, expected_core_commit)
+    git = {"tooling_commit": live_git["tooling_commit"],
+           "core_commit": live_git["core_commit"]}
+    runner_identity = committed_file_identity(
         source_root, expected_tooling_commit, RUNNER_RELATIVE, "runner")
-    source = committed_file_identity(
+    source_identity = committed_file_identity(
         source_root, expected_tooling_commit, SOURCE_RELATIVE, "source")
-    build_runner = committed_file_identity(
+    build_runner_identity = committed_file_identity(
         source_root, expected_tooling_commit, BUILD_RUNNER_RELATIVE, "build-runner")
-    build_validator = committed_file_identity(
+    build_validator_identity = committed_file_identity(
         source_root, expected_tooling_commit, BUILD_VALIDATOR_RELATIVE,
         "build-validator")
     archive_identity = file_identity(archive, "archive")
     executable_identity = file_identity(executable, "executable")
+    taskset_identity = retained_program(
+        file_identity(taskset, "taskset"), taskset)
+    python_path = Path(sys.executable).resolve(strict=True)
+    python_identity = retained_program(
+        file_identity(python_path, "python"), python_path)
     build_manifest_identity, build_attestation = verified_build_attestation(
         source_root, build_manifest, expected_tooling_commit, expected_core_commit,
-        source, build_runner, build_validator, archive_identity, executable_identity,
-        archive, executable)
+        source_identity, build_runner_identity, build_validator_identity,
+        archive_identity, executable_identity, core_source_closure,
+        taskset_identity, python_identity, archive, executable)
     result = {
-        "git": git, "runner": runner, "source": source,
-        "build_runner": build_runner, "build_validator": build_validator,
-        "build_manifest": build_manifest_identity,
+        "schema": INPUT_SCHEMA, "git": git,
+        "runner": retained_artifact(runner_identity, RUNNER_RELATIVE),
+        "source": retained_artifact(source_identity, SOURCE_RELATIVE),
+        "build_runner": retained_artifact(
+            build_runner_identity, BUILD_RUNNER_RELATIVE),
+        "build_validator": retained_artifact(
+            build_validator_identity, BUILD_VALIDATOR_RELATIVE),
+        "build_manifest": {
+            "bytes": build_manifest_identity["size"],
+            "schema": BUILD_MANIFEST_SCHEMA,
+            "sha256": build_manifest_identity["sha256"],
+        },
         "build_attestation": build_attestation,
-        "archive": archive_identity,
-        "executable": executable_identity,
-        "taskset": file_identity(taskset, "taskset"),
-        "python": file_identity(Path(sys.executable), "python"),
+        "archive": copy.deepcopy(build_attestation["avx2"]["library"]),
+        "executable": copy.deepcopy(build_attestation["avx2"]["executable"]),
+        "taskset": taskset_identity, "python": python_identity,
         "core_source_closure": core_source_closure,
     }
     result["binding_sha256"] = sha256_bytes(canonical_bytes(result))
@@ -627,10 +741,11 @@ def input_snapshot(source_root: Path, expected_tooling_commit: str,
 
 def validate_input_snapshot(value: object) -> dict[str, Any]:
     require(isinstance(value, dict) and set(value) == {
-        "git", "runner", "source", "build_runner", "build_validator",
+        "schema", "git", "runner", "source", "build_runner", "build_validator",
         "build_manifest", "build_attestation", "archive", "executable",
         "taskset", "python", "core_source_closure", "binding_sha256"},
         "input snapshot schema changed")
+    require(value["schema"] == INPUT_SCHEMA, "input snapshot version changed")
     payload = {key: value[key] for key in value if key != "binding_sha256"}
     require(isinstance(value["binding_sha256"], str) and
             SHA256_RE.fullmatch(value["binding_sha256"]) is not None and
@@ -638,62 +753,54 @@ def validate_input_snapshot(value: object) -> dict[str, Any]:
             "input snapshot binding changed")
     git = value["git"]
     require(isinstance(git, dict) and set(git) == {
-        "tooling_commit", "tooling_tree", "core_commit", "core_tree",
-        "core_is_ancestor", "clean", "tracked_tree_sha256"} and
-        all(isinstance(git[key], str) and
-            GIT_SHA_RE.fullmatch(git[key]) is not None for key in
-            ("tooling_commit", "tooling_tree", "core_commit", "core_tree")) and
-        git["core_is_ancestor"] is True and
-        git["clean"] is True and
-        isinstance(git["tracked_tree_sha256"], str) and
-        SHA256_RE.fullmatch(git["tracked_tree_sha256"]) is not None,
+        "tooling_commit", "core_commit"} and
+        all(isinstance(git[key], str) and GIT_SHA_RE.fullmatch(git[key]) is not None
+            for key in ("tooling_commit", "core_commit")),
         "retained Git identity is invalid")
-    expected_kinds = {
-        "runner": "runner", "source": "source",
-        "build_runner": "build-runner", "build_validator": "build-validator",
-        "build_manifest": "build-manifest", "archive": "archive",
-        "executable": "executable", "taskset": "taskset", "python": "python",
-    }
-    committed_paths = {
+    artifact_paths = {
         "runner": RUNNER_RELATIVE, "source": SOURCE_RELATIVE,
         "build_runner": BUILD_RUNNER_RELATIVE,
         "build_validator": BUILD_VALIDATOR_RELATIVE,
     }
-    for key in ("runner", "source", "build_runner", "build_validator",
-                "build_manifest", "archive", "executable", "taskset", "python"):
+    for key, expected_path in artifact_paths.items():
+        manifest_artifact(value[key], expected_path, f"retained {key}")
+    for key in ("archive", "executable"):
         record = value[key]
-        expected_fields = {"kind", "name", "size", "mode", "sha256"}
-        if key in committed_paths:
-            expected_fields.add("path")
-        require(isinstance(record, dict) and set(record) == expected_fields and
-            record["kind"] == expected_kinds[key] and
-            isinstance(record["name"], str) and record["name"] and
-            Path(record["name"]).name == record["name"] and
-            type(record["size"]) is int and record["size"] > 0 and
-            type(record["mode"]) is int and 0 <= record["mode"] <= 0o7777 and
+        require(isinstance(record, dict) and set(record) == {
+            "bytes", "path", "sha256"} and
+            type(record["bytes"]) is int and 0 < record["bytes"] <=
+                MAX_ARTIFACT_BYTES and
+            isinstance(record["path"], str) and record["path"] and
+            not os.path.isabs(record["path"]) and "\\" not in record["path"] and
+            ":" not in record["path"] and
+            Path(record["path"]).as_posix() == record["path"] and
+            all(part not in ("", ".", "..") for part in Path(record["path"]).parts) and
             isinstance(record["sha256"], str) and
             SHA256_RE.fullmatch(record["sha256"]) is not None,
             f"retained {key} identity is invalid")
-        if key in ("runner", "executable", "taskset", "python"):
-            require(record["mode"] & 0o111 != 0,
-                    f"retained {key} is not executable")
-        if key in ("build_runner", "build_validator"):
-            require(record["mode"] & 0o111 == 0,
-                    f"retained {key} differs from committed nonexecutable mode")
-        if key in committed_paths:
-            expected_path = committed_paths[key]
-            require(record["path"] == expected_path.as_posix() and
-                    record["name"] == expected_path.name,
-                    f"retained {key} committed path changed")
+    build_manifest = value["build_manifest"]
+    require(isinstance(build_manifest, dict) and set(build_manifest) == {
+        "bytes", "schema", "sha256"} and
+        type(build_manifest["bytes"]) is int and
+        0 < build_manifest["bytes"] <= MAX_ARTIFACT_BYTES and
+        build_manifest["schema"] == BUILD_MANIFEST_SCHEMA and
+        isinstance(build_manifest["sha256"], str) and
+        SHA256_RE.fullmatch(build_manifest["sha256"]) is not None,
+        "retained build manifest identity is invalid")
+    for key in ("taskset", "python"):
+        program = value[key]
+        require(isinstance(program, dict) and set(program) == {"path", "sha256"} and
+                isinstance(program["path"], str) and os.path.isabs(program["path"]) and
+                isinstance(program["sha256"], str) and
+                SHA256_RE.fullmatch(program["sha256"]) is not None,
+                f"retained {key} identity is invalid")
     attestation = value["build_attestation"]
     require(isinstance(attestation, dict) and set(attestation) == {
-        "schema", "validation", "manifest", "status", "scope",
+        "schema", "manifest", "status", "scope",
         "tooling_commit", "core_commit", "comparison_status", "source",
-        "build_runner", "build_validator", "avx2"} and
+        "build_runner", "build_validator", "taskset", "python",
+        "core_source_closure_sha256", "build_record_sha256", "avx2"} and
         attestation["schema"] == BUILD_ATTESTATION_SCHEMA and
-        typed_equal(attestation["validation"], {
-            "checkout_head_required": True, "mode": "live",
-            "validator_stdout": "C7 evidence validation passed (live)\n"}) and
         attestation["status"] == "pass" and attestation["scope"] == BUILD_SCOPE and
         attestation["tooling_commit"] == git["tooling_commit"] and
         attestation["core_commit"] == git["core_commit"] and
@@ -703,21 +810,31 @@ def validate_input_snapshot(value: object) -> dict[str, Any]:
     require(isinstance(manifest, dict) and set(manifest) == {
         "bytes", "schema", "sha256"} and
         manifest["schema"] == BUILD_MANIFEST_SCHEMA and
-        manifest["bytes"] == value["build_manifest"]["size"] and
+        manifest["bytes"] == value["build_manifest"]["bytes"] and
         manifest["sha256"] == value["build_manifest"]["sha256"],
         "retained C7 build manifest attestation changed")
     require(typed_equal(attestation["source"], {
-        "bytes": value["source"]["size"], "path": SOURCE_RELATIVE.as_posix(),
+        "bytes": value["source"]["bytes"], "path": SOURCE_RELATIVE.as_posix(),
         "sha256": value["source"]["sha256"]}) and
         typed_equal(attestation["build_runner"], {
-            "bytes": value["build_runner"]["size"],
+            "bytes": value["build_runner"]["bytes"],
             "path": BUILD_RUNNER_RELATIVE.as_posix(),
             "sha256": value["build_runner"]["sha256"]}) and
         typed_equal(attestation["build_validator"], {
-            "bytes": value["build_validator"]["size"],
+            "bytes": value["build_validator"]["bytes"],
             "path": BUILD_VALIDATOR_RELATIVE.as_posix(),
-            "sha256": value["build_validator"]["sha256"]}),
+            "sha256": value["build_validator"]["sha256"]}) and
+        typed_equal(attestation["taskset"], value["taskset"]) and
+        typed_equal(attestation["python"], value["python"]),
         "retained build tooling attestation changed")
+    require(isinstance(attestation["core_source_closure_sha256"], str) and
+            attestation["core_source_closure_sha256"] ==
+                sha256_bytes(canonical_bytes(value["core_source_closure"])) and
+            isinstance(attestation["build_record_sha256"], dict) and
+            set(attestation["build_record_sha256"]) == set(BUILD_NAMES) and
+            all(isinstance(item, str) and SHA256_RE.fullmatch(item) is not None
+                for item in attestation["build_record_sha256"].values()),
+            "retained build closure attestation changed")
     avx2 = attestation["avx2"]
     require(isinstance(avx2, dict) and set(avx2) == {
         "name", "backend", "sanitizer", "library", "executable",
@@ -729,12 +846,10 @@ def validate_input_snapshot(value: object) -> dict[str, Any]:
         SHA256_RE.fullmatch(avx2["compile_argv_sha256"]) is not None and
         isinstance(avx2["library"], dict) and
         set(avx2["library"]) == {"bytes", "path", "sha256"} and
-        avx2["library"]["bytes"] == value["archive"]["size"] and
-        avx2["library"]["sha256"] == value["archive"]["sha256"] and
+        typed_equal(avx2["library"], value["archive"]) and
         isinstance(avx2["executable"], dict) and
         set(avx2["executable"]) == {"bytes", "path", "sha256"} and
-        avx2["executable"]["bytes"] == value["executable"]["size"] and
-        avx2["executable"]["sha256"] == value["executable"]["sha256"] and
+        typed_equal(avx2["executable"], value["executable"]) and
         typed_equal(avx2["instrumentation"], {
             "required_compile_macro": False,
             "executable_counts": {"asan_lines": 0, "ubsan_lines": 0},
@@ -744,17 +859,7 @@ def validate_input_snapshot(value: object) -> dict[str, Any]:
     require(isinstance(closure, list) and len(closure) == len(CORE_SOURCE_CLOSURE),
             "core source closure length changed")
     for record, expected in zip(closure, CORE_SOURCE_CLOSURE):
-        expected_path = Path(expected)
-        require(isinstance(record, dict) and set(record) == {
-            "kind", "name", "path", "size", "mode", "sha256"} and
-            record["kind"] == "core-source" and
-            record["path"] == expected_path.as_posix() and
-            record["name"] == expected_path.name and
-            type(record["size"]) is int and record["size"] > 0 and
-            type(record["mode"]) is int and 0 <= record["mode"] <= 0o7777 and
-            isinstance(record["sha256"], str) and
-            SHA256_RE.fullmatch(record["sha256"]) is not None,
-            f"core source closure changed at {expected}")
+        manifest_artifact(record, Path(expected), f"core source {expected}")
     return value
 
 
@@ -762,11 +867,24 @@ def parse_cpu_list(text: str) -> set[int]:
     result: set[int] = set()
     for item in text.strip().split(","):
         if "-" in item:
-            first, last = map(int, item.split("-", 1))
-            require(first <= last, "invalid CPU list")
+            bounds = item.split("-", 1)
+            require(len(bounds) == 2 and all(
+                re.fullmatch(r"[0-9]+", bound) is not None and
+                len(bound) <= len(str(MAX_CPU_ID)) for bound in bounds),
+                "invalid CPU list")
+            first, last = map(int, bounds)
+            require(0 <= first <= last <= MAX_CPU_ID and
+                    len(result) + last - first + 1 <= MAX_CPU_SET_SIZE,
+                    "CPU list exceeds the supported bound")
             result.update(range(first, last + 1))
         elif item:
-            result.add(int(item))
+            require(re.fullmatch(r"[0-9]+", item) is not None and
+                    len(item) <= len(str(MAX_CPU_ID)),
+                    "invalid CPU list")
+            cpu = int(item)
+            require(cpu <= MAX_CPU_ID and len(result) < MAX_CPU_SET_SIZE,
+                    "CPU list exceeds the supported bound")
+            result.add(cpu)
     return result
 
 
@@ -816,7 +934,8 @@ def validate_host(value: object, cpu: int, sibling: int) -> dict[str, Any]:
         "host system identity is invalid")
     allowed = value["allowed_at_launch"]
     require(isinstance(allowed, list) and
-            all(type(item) is int and item >= 0 for item in allowed) and
+            len(allowed) <= MAX_CPU_SET_SIZE and
+            all(type(item) is int and 0 <= item <= MAX_CPU_ID for item in allowed) and
             allowed == sorted(set(allowed)) and cpu in allowed and sibling in allowed,
             "host launch affinity is invalid")
     topology_keys = {
@@ -832,7 +951,7 @@ def validate_host(value: object, cpu: int, sibling: int) -> dict[str, Any]:
         record = value[key]
         require(isinstance(record, dict) and set(record) == {
             "cpu", "online", "topology", "frequency_policy"} and
-            record["cpu"] == expected_cpu and
+            type(record["cpu"]) is int and record["cpu"] == expected_cpu and
             (record["online"] is None or isinstance(record["online"], str)) and
             isinstance(record["topology"], dict) and
             set(record["topology"]) == topology_keys and
@@ -861,7 +980,8 @@ def validate_host(value: object, cpu: int, sibling: int) -> dict[str, Any]:
 
 def validate_topology(cpu: int, sibling: int) -> tuple[set[int], set[int]]:
     require(type(cpu) is int and type(sibling) is int and
-            cpu >= 0 and sibling >= 0 and cpu != sibling, "invalid CPU pair")
+            0 <= cpu <= MAX_CPU_ID and 0 <= sibling <= MAX_CPU_ID and
+            cpu != sibling, "invalid CPU pair")
     allowed = set(os.sched_getaffinity(0))
     require(cpu in allowed and sibling in allowed,
             "timing CPU and sibling must both be in launch affinity")
@@ -874,7 +994,8 @@ def validate_topology(cpu: int, sibling: int) -> tuple[set[int], set[int]]:
 
 
 def cpu_stat_snapshot(cpu: int) -> dict[str, Any]:
-    require(type(cpu) is int and cpu >= 0, "CPU stat identity is invalid")
+    require(type(cpu) is int and 0 <= cpu <= MAX_CPU_ID,
+            "CPU stat identity is invalid")
     prefix = f"cpu{cpu} "
     for line in Path("/proc/stat").read_text(encoding="ascii").splitlines():
         if line.startswith(prefix):
@@ -938,6 +1059,10 @@ def cpu_stat_delta(before: Mapping[str, Any],
 
 def pair_lease_payload(cpu: int, sibling: int,
                        uid: int | None = None) -> dict[str, Any]:
+    require(type(cpu) is int and type(sibling) is int and
+            0 <= cpu <= MAX_CPU_ID and 0 <= sibling <= MAX_CPU_ID and
+            cpu != sibling,
+            "CPU pair lease CPUs are invalid")
     retained_uid = os.getuid() if uid is None else uid
     require(type(retained_uid) is int and retained_uid >= 0,
             "CPU pair lease UID is invalid")
@@ -946,6 +1071,10 @@ def pair_lease_payload(cpu: int, sibling: int,
 
 
 def pair_lease_name(cpu: int, sibling: int, uid: int | None = None) -> str:
+    require(type(cpu) is int and type(sibling) is int and
+            0 <= cpu <= MAX_CPU_ID and 0 <= sibling <= MAX_CPU_ID and
+            cpu != sibling,
+            "CPU pair lease CPUs are invalid")
     retained_uid = os.getuid() if uid is None else uid
     first, second = sorted((cpu, sibling))
     return f"leopard2-cpu-pair-{retained_uid}-{first}-{second}.lock"
@@ -966,7 +1095,8 @@ class PairLease:
     def __init__(self, cpu: int, sibling: int,
                  runtime_root: Path | None = None):
         require(type(cpu) is int and type(sibling) is int and
-                cpu >= 0 and sibling >= 0 and cpu != sibling,
+                0 <= cpu <= MAX_CPU_ID and 0 <= sibling <= MAX_CPU_ID and
+                cpu != sibling,
                 "pair lease requires two distinct non-negative CPUs")
         self.cpu = cpu
         self.sibling = sibling
@@ -1157,6 +1287,8 @@ def validate_isolation(value: object, cpu: int, sibling: int, *,
         "delta", "duration_ns", "pair_lease", "policy"},
         "isolation schema changed")
     require(value["schema"] == ISOLATION_SCHEMA and
+            type(value["timing_cpu"]) is int and
+            type(value["sibling_cpu"]) is int and
             value["timing_cpu"] == cpu and value["sibling_cpu"] == sibling,
             "isolation CPU pair changed")
     validate_pair_lease_identity(value["pair_lease"], cpu, sibling)
@@ -1292,10 +1424,7 @@ def validate_reservation_record(value: object, cpu: int, sibling: int) -> dict[s
 
 
 def finite(value: object, label: str) -> float:
-    require(type(value) in (int, float), f"{label} is not numeric")
-    result = float(value)
-    require(math.isfinite(result) and result > 0, f"{label} is not finite positive")
-    return result
+    return bounded_positive_number(value, label, 1e300)
 
 
 def validate_summary(cell: Mapping[str, Any], summary_key: str,
@@ -1426,35 +1555,100 @@ def read_artifact(root: Path, record: object, label: str,
     return data
 
 
+def artifact_inventory(root: Path) -> list[dict[str, Any]]:
+    """Return the exact retained regular-file inventory except failure.json."""
+    root = root.resolve(strict=True)
+    records: list[dict[str, Any]] = []
+    for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+        relative = path.relative_to(root).as_posix()
+        metadata = path.lstat()
+        require(not stat.S_ISLNK(metadata.st_mode),
+                f"retained artifact is a symbolic link: {relative}")
+        if stat.S_ISDIR(metadata.st_mode):
+            continue
+        require(stat.S_ISREG(metadata.st_mode),
+                f"retained artifact is not a regular file: {relative}")
+        if relative == "failure.json":
+            continue
+        records.append(artifact_record(root, path))
+    return records
+
+
+def validate_artifact_inventory(value: object, root: Path | None,
+                                check_files: bool) -> list[dict[str, Any]]:
+    require(isinstance(value, list), "failure artifact inventory is not a list")
+    records: list[dict[str, Any]] = []
+    previous = ""
+    for index, item in enumerate(value):
+        record = validate_artifact_record(item, f"failure inventory item {index}")
+        path = record["path"]
+        require(path != "failure.json" and (index == 0 or previous < path),
+                "failure artifact inventory is not strictly sorted and unique")
+        previous = path
+        records.append(record)
+    if check_files:
+        require(root is not None, "failure artifact root is absent")
+        require(typed_equal(records, artifact_inventory(root)),
+                "failure artifact inventory differs from retained files")
+    return records
+
+
+def inventory_contains(inventory: Sequence[Mapping[str, Any]],
+                       record: Mapping[str, Any], label: str) -> None:
+    require(any(typed_equal(item, record) for item in inventory),
+            f"{label} is absent from the exact artifact inventory")
+
+
 def retain_build_provenance(root: Path, build_manifest: Path,
                             inputs: Mapping[str, Any]) -> dict[str, Any]:
     data = read_bounded(build_manifest.resolve(strict=True))
     identity = inputs["build_manifest"]
-    require(len(data) == identity["size"] and
+    require(len(data) == identity["bytes"] and
             sha256_bytes(data) == identity["sha256"],
             "C7 build manifest changed before retention")
-    path = root / "provenance/build-run-manifest-v4.json"
-    write_exclusive(path, data)
-    return {"manifest": artifact_record(root, path),
+    manifest_path = root / "provenance/build-run-manifest-v4.json"
+    write_exclusive(manifest_path, data)
+    runner_data = read_bounded(Path(__file__).resolve(strict=True))
+    require(len(runner_data) == inputs["runner"]["bytes"] and
+            sha256_bytes(runner_data) == inputs["runner"]["sha256"],
+            "authoritative runner changed before retention")
+    runner_path = root / "provenance/run_authoritative.py"
+    write_exclusive(runner_path, runner_data)
+    return {"schema": BUILD_PROVENANCE_SCHEMA,
+            "manifest": artifact_record(root, manifest_path),
+            "runner": artifact_record(root, runner_path),
             "attestation": copy.deepcopy(inputs["build_attestation"])}
 
 
 def validate_build_provenance(value: object, root: Path,
                               inputs: Mapping[str, Any]) -> dict[str, Any]:
-    require(isinstance(value, dict) and set(value) == {"manifest", "attestation"},
+    require(isinstance(value, dict) and set(value) == {
+        "schema", "manifest", "runner", "attestation"} and
+        value["schema"] == BUILD_PROVENANCE_SCHEMA,
             "retained C7 build provenance schema changed")
+    require(isinstance(value["manifest"], dict) and
+            isinstance(value["runner"], dict) and
+            value["manifest"].get("path") ==
+                "provenance/build-run-manifest-v4.json" and
+            value["runner"].get("path") == "provenance/run_authoritative.py",
+            "retained C7 build provenance paths changed")
     data = read_artifact(root, value["manifest"], "C7 v4 build manifest")
     require(data == canonical_pretty_bytes(
         strict_json(data, "retained C7 v4 build manifest")),
         "retained C7 v4 build manifest is not canonical pretty JSON")
-    require(value["manifest"]["size"] == inputs["build_manifest"]["size"] and
+    require(value["manifest"]["size"] == inputs["build_manifest"]["bytes"] and
             value["manifest"]["sha256"] == inputs["build_manifest"]["sha256"],
             "retained C7 build manifest differs from the live-validated input")
+    runner_data = read_artifact(root, value["runner"], "authoritative runner")
+    require(len(runner_data) == inputs["runner"]["bytes"] and
+            value["runner"]["sha256"] == inputs["runner"]["sha256"],
+            "retained authoritative runner differs from its input identity")
     parsed = strict_json(data, "retained C7 v4 build manifest")
     expected = derive_build_attestation(
         parsed, inputs["build_manifest"], inputs["git"]["tooling_commit"],
         inputs["git"]["core_commit"], inputs["source"], inputs["build_runner"],
-        inputs["build_validator"], inputs["archive"], inputs["executable"])
+        inputs["build_validator"], inputs["archive"], inputs["executable"],
+        inputs["core_source_closure"], inputs["taskset"], inputs["python"])
     require(typed_equal(value["attestation"], expected) and
             typed_equal(inputs["build_attestation"], expected),
             "retained C7 v4 build attestation changed")
@@ -1464,6 +1658,18 @@ def validate_build_provenance(value: object, root: Path,
 def expected_stderr() -> bytes:
     return b"".join(f"C7 benchmark {index}/12\n".encode("ascii")
                     for index in range(1, 13))
+
+
+def bounded_positive_number(value: object, label: str,
+                            maximum: float) -> float:
+    require(type(value) in (int, float), f"{label} is not numeric")
+    try:
+        result = float(value)
+    except (OverflowError, TypeError, ValueError) as error:
+        raise EvidenceError(f"{label} cannot be represented") from error
+    require(math.isfinite(result) and 0 < result <= maximum,
+            f"{label} is outside the supported positive range")
+    return result
 
 
 def validate_request(value: object) -> dict[str, Any]:
@@ -1476,11 +1682,11 @@ def validate_request(value: object) -> dict[str, Any]:
         "authoritative request changed")
     cpu, sibling = value["cpu"], value["sibling"]
     require(type(cpu) is int and type(sibling) is int and
-            cpu >= 0 and sibling >= 0 and cpu != sibling and
-            type(value["timeout_seconds"]) in (int, float) and
-            math.isfinite(value["timeout_seconds"]) and
-            value["timeout_seconds"] > 0,
-            "authoritative request CPU or timeout is invalid")
+            0 <= cpu <= MAX_CPU_ID and 0 <= sibling <= MAX_CPU_ID and
+            cpu != sibling,
+            "authoritative request CPU is invalid")
+    bounded_positive_number(
+        value["timeout_seconds"], "authoritative timeout", MAX_TIMEOUT_SECONDS)
     require(typed_equal(value["command"], [
         "${TASKSET}", "-c", str(cpu), "${C7_EXECUTABLE}",
         "--backend", "avx2", "${RESULT_JSON}"]),
@@ -1573,10 +1779,15 @@ def validate_failure_child(value: object, request: Mapping[str, Any],
             "failure child invocation or outcome is invalid")
     validate_artifact_record(value["stdout"], "failure stdout", MAX_LOG_BYTES)
     validate_artifact_record(value["stderr"], "failure stderr", MAX_LOG_BYTES)
+    require(value["stdout"]["path"] == "child/stdout.bin" and
+            value["stderr"]["path"] == "child/stderr.bin",
+            "failure child stream paths changed")
     require(value["result"] is None or isinstance(value["result"], dict),
             "failure result artifact record changed")
     if value["result"] is not None:
         validate_artifact_record(value["result"], "failure result")
+        require(value["result"]["path"] == "child/result.json",
+                "failure child result path changed")
     if check_files:
         require(root is not None, "failure artifact root is absent")
         read_artifact(root, value["stdout"], "failure stdout", MAX_LOG_BYTES)
@@ -1586,138 +1797,271 @@ def validate_failure_child(value: object, request: Mapping[str, Any],
     return value
 
 
-def classify_failure(child: Mapping[str, Any] | None,
-                     error_type: str, error: str) -> str:
-    if child is None:
-        return "validation"
-    if (child["timed_out"] is True and child["returncode"] == 124 and
-            error_type == "EvidenceError" and error == "C7 child timed out"):
-        return "timeout"
-    if (child["timed_out"] is False and child["returncode"] != 0 and
-            error_type == "EvidenceError" and
-            error == f"C7 child exited {child['returncode']}"):
-        return "child-exit"
-    return "validation"
+def completed_failure_stage(index: int) -> dict[str, Any]:
+    require(type(index) is int and -1 <= index < len(FAILURE_STAGES),
+            "failure stage index is invalid")
+    return {"index": index,
+            "name": "none" if index == -1 else FAILURE_STAGES[index]}
 
 
-def validate_failure(value: object, root: Path | None = None,
-                     check_files: bool = False) -> dict[str, Any]:
+def validate_completed_failure_stage(value: object) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {"index", "name"} and
+            type(value["index"]) is int and
+            -1 <= value["index"] < len(FAILURE_STAGES) and
+            value["name"] == ("none" if value["index"] == -1 else
+                              FAILURE_STAGES[value["index"]]),
+            "failure completed stage changed")
+    return value
+
+
+def validate_arguments(value: object) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+        "cpu", "sibling", "timeout_seconds", "expected_tooling_commit",
+        "expected_core_commit"}, "failure argument record changed")
+    require(type(value["cpu"]) is int and type(value["sibling"]) is int and
+            0 <= value["cpu"] <= MAX_CPU_ID and
+            0 <= value["sibling"] <= MAX_CPU_ID and
+            value["cpu"] != value["sibling"] and
+            isinstance(value["expected_tooling_commit"], str) and
+            GIT_SHA_RE.fullmatch(value["expected_tooling_commit"]) is not None and
+            isinstance(value["expected_core_commit"], str) and
+            GIT_SHA_RE.fullmatch(value["expected_core_commit"]) is not None,
+            "failure arguments are invalid")
+    bounded_positive_number(
+        value["timeout_seconds"], "failure timeout", MAX_TIMEOUT_SECONDS)
+    return value
+
+
+def failure_state_payload(completed_stage: Mapping[str, Any],
+                          failure_code: str,
+                          context: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "schema": FAILURE_STATE_SCHEMA,
+        "completed_stage": copy.deepcopy(completed_stage),
+        "failure_code": failure_code,
+        **{key: copy.deepcopy(context[key]) for key in FAILURE_CONTEXT_FIELDS},
+    }
+
+
+def validate_failure_state(value: object) -> dict[str, Any]:
+    state = verify_signature(value, "C7 failure state")
+    require(set(state) == {
+        "schema", "completed_stage", "failure_code", "digest",
+        *FAILURE_CONTEXT_FIELDS} and state["schema"] == FAILURE_STATE_SCHEMA and
+        isinstance(state["failure_code"], str) and
+        state["failure_code"] in FAILURE_CODE_STAGE,
+        "failure state schema changed")
+    stage = validate_completed_failure_stage(state["completed_stage"])
+    require(FAILURE_CODE_STAGE[state["failure_code"]] == stage["index"],
+            "failure code does not identify the completed stage")
+    for index, key in enumerate(FAILURE_CONTEXT_FIELDS):
+        require((state[key] is not None) == (stage["index"] >= index),
+                f"failure state presence mask changed at {key}")
+    return state
+
+
+def _failure_result_bytes(root: Path, child: Mapping[str, Any]) -> bytes:
+    require(child["result"] is not None, "failure result artifact is absent")
+    return read_artifact(root, child["result"], "failure result")
+
+
+def _validate_failure(value: object, root: Path | None,
+                      check_files: bool) -> dict[str, Any]:
+    require(check_files and root is not None,
+            "v4 failure validation requires its retained artifact directory")
     failure = verify_signature(value, "C7 failure evidence")
-    require(isinstance(failure, dict) and set(failure) == {
-        "schema", "status", "failure_kind", "created_utc", "error_type",
-        "error", "traceback", "request", "inputs_before", "inputs_after",
-        "host_before", "host_after", "reservation", "pair_lease", "isolation",
-        "build_provenance", "child", "digest"} and
+    require(set(failure) == {
+        "schema", "status", "created_utc", "failure_code", "completed_stage",
+        "error_type", "error", "traceback", "state", "artifact_inventory",
+        "digest", *FAILURE_CONTEXT_FIELDS} and
         failure["schema"] == FAILURE_SCHEMA and failure["status"] == "failed" and
-        failure["failure_kind"] in ("validation", "timeout", "child-exit") and
+        isinstance(failure["failure_code"], str) and
+        failure["failure_code"] in FAILURE_CODE_STAGE and
         isinstance(failure["error_type"], str) and failure["error_type"] and
         isinstance(failure["error"], str) and failure["error"] and
         isinstance(failure["traceback"], str) and failure["traceback"],
         "failure evidence schema changed")
     validate_utc(failure["created_utc"], "failure creation time")
+    stage = validate_completed_failure_stage(failure["completed_stage"])
+    code = failure["failure_code"]
+    require(FAILURE_CODE_STAGE[code] == stage["index"],
+            "failure code does not identify the completed stage")
+    for index, key in enumerate(FAILURE_CONTEXT_FIELDS):
+        require((failure[key] is not None) == (stage["index"] >= index),
+                f"failure context presence mask changed at {key}")
 
-    request = failure["request"]
-    if request is not None:
-        request = validate_request(request)
-    inputs_before = failure["inputs_before"]
-    if inputs_before is not None:
-        inputs_before = validate_input_snapshot(inputs_before)
-    inputs_after = failure["inputs_after"]
-    if inputs_after is not None:
-        require(inputs_before is not None,
-                "failure inputs-after has no inputs-before context")
-        validate_input_snapshot(inputs_after)
+    inventory = validate_artifact_inventory(
+        failure["artifact_inventory"], root, check_files=True)
+    state_record = validate_artifact_record(
+        failure["state"], "failure state", MAX_TOP_LEVEL_JSON_BYTES)
+    require(state_record["path"] == "failure/state-v1.json",
+            "failure state path changed")
+    inventory_contains(inventory, state_record, "failure state")
+    state_bytes = read_artifact(
+        root, state_record, "failure state", MAX_TOP_LEVEL_JSON_BYTES)
+    state = strict_json(state_bytes, "C7 failure state")
+    require(state_bytes == canonical_bytes(state) + b"\n",
+            "failure state is not canonical JSON")
+    validate_failure_state(state)
+    expected_state = signed(failure_state_payload(
+        stage, code, {key: failure[key] for key in FAILURE_CONTEXT_FIELDS}))
+    require(typed_equal(state, expected_state),
+            "failure top-level context differs from retained state")
 
-    for key in ("host_before", "host_after"):
-        host = failure[key]
-        if host is not None:
-            require(request is not None,
-                    f"failure {key.replace('_', '-')} has no request context")
-            validate_host(host, request["cpu"], request["sibling"])
-    reservation = failure["reservation"]
-    if reservation is not None:
-        require(request is not None,
-                "failure reservation has no request context")
-        validate_reservation_record(
-            reservation, request["cpu"], request["sibling"])
-    pair_lease = failure["pair_lease"]
-    if pair_lease is not None:
-        require(request is not None,
-                "failure pair lease has no request context")
-        validate_pair_lease_identity(
-            pair_lease, request["cpu"], request["sibling"])
+    arguments = None
+    request = None
+    inputs_before = None
+    reservation = None
+    pair_lease = None
+    provenance = None
+    child = None
+    isolation = None
+    parsed_result: object | None = None
 
-    provenance = failure["build_provenance"]
-    if provenance is not None:
-        require(inputs_before is not None and isinstance(provenance, dict) and
-                set(provenance) == {"manifest", "attestation"},
-                "failure build provenance has no input context or changed schema")
-        validate_artifact_record(
-            provenance["manifest"], "failure C7 v4 build manifest")
-        require(typed_equal(provenance["attestation"],
-                            inputs_before["build_attestation"]) and
-                provenance["manifest"]["size"] ==
-                    inputs_before["build_manifest"]["size"] and
-                provenance["manifest"]["sha256"] ==
-                    inputs_before["build_manifest"]["sha256"],
-                "failure build provenance differs from its input attestation")
-        if check_files:
-            require(root is not None, "failure provenance root is absent")
-            validate_build_provenance(provenance, root, inputs_before)
+    if stage["index"] >= 0:
+        arguments = validate_arguments(failure["arguments"])
+    if stage["index"] >= 1:
+        request = validate_request(failure["request"])
+        require(request["cpu"] == arguments["cpu"] and
+                request["sibling"] == arguments["sibling"] and
+                typed_equal(request["timeout_seconds"],
+                            arguments["timeout_seconds"]),
+                "failure request differs from validated arguments")
+    if stage["index"] >= 2:
+        validate_host(failure["host_before"], request["cpu"], request["sibling"])
+    if stage["index"] >= 3:
+        reservation = validate_reservation_record(
+            failure["reservation"], request["cpu"], request["sibling"])
+    if stage["index"] >= 4:
+        pair_lease = validate_pair_lease_identity(
+            failure["pair_lease"], request["cpu"], request["sibling"])
+    if stage["index"] >= 5:
+        inputs_before = validate_input_snapshot(failure["inputs_before"])
+        require(inputs_before["git"]["tooling_commit"] ==
+                    arguments["expected_tooling_commit"] and
+                inputs_before["git"]["core_commit"] ==
+                    arguments["expected_core_commit"],
+                "failure inputs differ from expected Git commits")
+    if stage["index"] >= 6:
+        provenance = validate_build_provenance(
+            failure["build_provenance"], root, inputs_before)
+        inventory_contains(inventory, provenance["manifest"],
+                           "failure build manifest")
+        inventory_contains(inventory, provenance["runner"],
+                           "failure authoritative runner")
+    if stage["index"] >= 7:
+        child = validate_failure_child(
+            failure["child"], request, root, check_files=True)
+        inventory_contains(inventory, child["stdout"], "failure child stdout")
+        inventory_contains(inventory, child["stderr"], "failure child stderr")
+        if child["result"] is not None:
+            inventory_contains(inventory, child["result"], "failure child result")
+    if stage["index"] >= 8:
+        isolation = validate_isolation(
+            failure["isolation"], request["cpu"], request["sibling"],
+            require_accepted=False)
+        require(typed_equal(isolation["pair_lease"], pair_lease) and
+                child["duration_ns"] == isolation["duration_ns"],
+                "failure child/isolation/lease relationship changed")
 
-    isolation = failure["isolation"]
-    if isolation is not None:
-        require(request is not None,
-                "failure isolation has no request context")
-        validate_isolation(isolation, request["cpu"], request["sibling"],
-                           require_accepted=False)
-        require(pair_lease is not None and
-                typed_equal(isolation["pair_lease"], pair_lease),
-                "failure isolation differs from the held pair lease")
+        if code == "child-timeout":
+            require(child["timed_out"] is True and child["returncode"] == 124 and
+                    failure["error_type"] == "EvidenceError" and
+                    failure["error"] == "C7 child timed out",
+                    "timeout failure predicate changed")
+            return failure
+        require(child["timed_out"] is False,
+                "non-timeout failure retains a timed-out child")
+        if code == "child-exit":
+            require(child["returncode"] != 0 and
+                    failure["error_type"] == "EvidenceError" and
+                    failure["error"] == f"C7 child exited {child['returncode']}",
+                    "child-exit failure predicate changed")
+            return failure
+        require(child["returncode"] == 0,
+                "post-success failure retains a nonzero child exit")
+        if code == "child-result-missing":
+            require(child["result"] is None and
+                    failure["error"] == "C7 child did not write result JSON",
+                    "missing-result failure predicate changed")
+            return failure
+        require(child["result"] is not None,
+                "post-success failure has no retained result")
 
-    child = failure["child"]
-    if child is not None:
-        require(request is not None,
-                "failure child has no request context")
-        child = validate_failure_child(child, request, root, check_files)
-        require(inputs_before is not None and
-                failure["host_before"] is not None and reservation is not None and
-                pair_lease is not None and provenance is not None,
-                "failure child is missing launch provenance")
-        if isolation is not None:
-            require(child["duration_ns"] == isolation["duration_ns"],
-                    "failure child and isolation durations differ")
-    if isolation is not None:
-        require(child is not None,
-                "failure isolation has no child context")
+        stdout = read_artifact(root, child["stdout"], "failure stdout", MAX_LOG_BYTES)
+        if code == "child-stdout-invalid":
+            require(stdout != b"", "stdout failure predicate is false")
+            return failure
+        require(stdout == b"", "post-success failure has unexpected stdout")
+        stderr = read_artifact(root, child["stderr"], "failure stderr", MAX_LOG_BYTES)
+        if code == "child-stderr-invalid":
+            require(stderr != expected_stderr(), "stderr failure predicate is false")
+            return failure
+        require(stderr == expected_stderr(),
+                "post-success failure has invalid stderr progress")
+        if code == "isolation-rejected":
+            require(isolation["accepted"] is False,
+                    "isolation failure predicate is false")
+            return failure
+        require(isolation["accepted"] is True,
+                "post-success failure retains rejected isolation")
 
-    expected_kind = classify_failure(
-        child, failure["error_type"], failure["error"])
-    require(failure["failure_kind"] == expected_kind,
-            "failure kind differs from the child outcome")
-    if expected_kind == "timeout":
-        require(child is not None and child["returncode"] == 124 and
-                failure["error_type"] == "EvidenceError" and
-                failure["error"] == "C7 child timed out",
-                "timeout failure status or error relationship changed")
-    elif expected_kind == "child-exit":
-        require(child is not None and child["timed_out"] is False and
-                child["returncode"] != 0 and
-                failure["error_type"] == "EvidenceError" and
-                failure["error"] ==
-                    f"C7 child exited {child['returncode']}",
-                "child-exit failure status or error relationship changed")
-    else:
-        require(failure["error"] != "C7 child timed out" and
-                re.fullmatch(r"C7 child exited -?[0-9]+", failure["error"]) is None,
-                "validation failure uses a child-outcome error")
+        result_bytes = _failure_result_bytes(root, child)
+        if code == "child-result-json-invalid":
+            try:
+                strict_json(result_bytes, "C7 result")
+            except EvidenceError:
+                return failure
+            raise EvidenceError("result-JSON failure predicate is false")
+        parsed_result = strict_json(result_bytes, "C7 result")
+
+    if stage["index"] >= 9:
+        inputs_after = validate_input_snapshot(failure["inputs_after"])
+        if code == "inputs-drift":
+            require(not typed_equal(inputs_after, inputs_before),
+                    "input-drift failure predicate is false")
+            return failure
+        require(typed_equal(inputs_after, inputs_before),
+                "post-input failure retains input drift")
+    if stage["index"] >= 10:
+        validate_host(failure["host_after"], request["cpu"], request["sibling"])
+        if code == "host-drift":
+            require(not typed_equal(failure["host_after"], failure["host_before"]),
+                    "host-drift failure predicate is false")
+            return failure
+        require(typed_equal(failure["host_after"], failure["host_before"]),
+                "post-host failure retains host drift")
+        if code == "child-result-invalid":
+            try:
+                validate_child_result(parsed_result, request["cpu"], inputs_before)
+            except EvidenceError:
+                return failure
+            raise EvidenceError("child-result failure predicate is false")
+    if stage["index"] >= 11:
+        normalized = validate_child_result(
+            parsed_result, request["cpu"], inputs_before)
+        require(typed_equal(failure["validated_output"], normalized),
+                "failure validated output differs from the child result")
     return failure
+
+
+def validate_failure(value: object, root: Path | None = None,
+                     check_files: bool = False) -> dict[str, Any]:
+    try:
+        return _validate_failure(value, root, check_files)
+    except EvidenceError:
+        raise
+    except (AttributeError, IndexError, KeyError, OverflowError, RecursionError,
+            TypeError) as error:
+        raise EvidenceError(
+            f"malformed C7 failure evidence: {type(error).__name__}: {error}") from error
 
 
 def run_campaign(options: argparse.Namespace) -> int:
     output = options.output.resolve()
     require(not output.exists(), f"output already exists: {output}")
     output.mkdir(parents=True)
+    arguments: dict[str, Any] | None = None
     child_record: dict[str, Any] | None = None
     isolation: dict[str, Any] | None = None
     build_provenance: dict[str, Any] | None = None
@@ -1728,16 +2072,20 @@ def run_campaign(options: argparse.Namespace) -> int:
     host_after: dict[str, Any] | None = None
     reservation_record: dict[str, Any] | None = None
     pair_lease_record: dict[str, Any] | None = None
+    validated_output: dict[str, Any] | None = None
     original_affinity: set[int] | None = None
+    completed_stage_index = -1
+    failure_code = "arguments-invalid"
     try:
-        taskset = Path("/usr/bin/taskset").resolve(strict=True)
-        executable = options.executable.resolve(strict=True)
-        archive = options.archive.resolve(strict=True)
-        build_manifest = options.build_manifest.resolve(strict=True)
-        source_root = options.source_root.resolve(strict=True)
-        require(type(options.timeout) in (int, float) and
-                math.isfinite(options.timeout) and options.timeout > 0,
-                "--timeout must be positive and finite")
+        candidate_arguments = {
+            "cpu": options.cpu, "sibling": options.sibling,
+            "timeout_seconds": options.timeout,
+            "expected_tooling_commit": options.expected_tooling_commit,
+            "expected_core_commit": options.expected_core_commit,
+        }
+        arguments = validate_arguments(candidate_arguments)
+        completed_stage_index = 0
+        failure_code = "request-invalid"
         candidate_request = {
             "backend": "avx2",
             "cell_geometry": [list(cell) for cell in EXPECTED_CELLS],
@@ -1749,117 +2097,205 @@ def run_campaign(options: argparse.Namespace) -> int:
         }
         validate_request(candidate_request)
         request = candidate_request
+        completed_stage_index = 1
+        failure_code = "host-capture-failed"
         original_affinity = set(os.sched_getaffinity(0))
         allowed, housekeeping = validate_topology(options.cpu, options.sibling)
-        host_before = host_identity(options.cpu, options.sibling, allowed)
+        candidate_host = host_identity(options.cpu, options.sibling, allowed)
+        validate_host(candidate_host, options.cpu, options.sibling)
+        host_before = candidate_host
+        completed_stage_index = 2
+        failure_code = "reservation-failed"
         reservation_guard = Reservation(
             options.reservation_file, options.cpu, options.sibling)
         pair_guard = PairLease(options.cpu, options.sibling)
-        with reservation_guard as reservation_record, \
-                pair_guard as pair_lease_record:
-            os.sched_setaffinity(0, housekeeping)
-            inputs_before = input_snapshot(
-                source_root, options.expected_tooling_commit,
-                options.expected_core_commit, archive, executable, taskset,
-                build_manifest)
-            build_provenance = retain_build_provenance(
-                output, build_manifest, inputs_before)
-            result_path = output / "child/result.json"
-            stdout_path = output / "child/stdout.bin"
-            stderr_path = output / "child/stderr.bin"
-            result_path.parent.mkdir(parents=True, exist_ok=True)
-            before_cpu = cpu_stat_snapshot(options.cpu)
-            before_sibling = cpu_stat_snapshot(options.sibling)
-            started = time.monotonic_ns()
-            timed_out = False
-            command = [str(taskset), "-c", str(options.cpu), str(executable),
-                       "--backend", "avx2", str(result_path)]
-            try:
-                completed = subprocess.run(command, stdout=subprocess.PIPE,
-                                           stderr=subprocess.PIPE, check=False,
-                                           timeout=options.timeout,
-                                           env=dict(CHILD_ENVIRONMENT))
-            except subprocess.TimeoutExpired as error:
-                timed_out = True
-                completed = subprocess.CompletedProcess(
-                    command, 124, error.stdout or b"", error.stderr or b"")
-            ended = time.monotonic_ns()
-            after_cpu = cpu_stat_snapshot(options.cpu)
-            after_sibling = cpu_stat_snapshot(options.sibling)
-            write_exclusive(stdout_path, completed.stdout)
-            write_exclusive(stderr_path, completed.stderr)
-            result_record = (artifact_record(output, result_path)
-                             if result_path.is_file() else None)
-            child_record = {
-                "command": request["command"], "environment": dict(CHILD_ENVIRONMENT),
-                "returncode": completed.returncode, "timed_out": timed_out,
-                "duration_ns": ended - started,
-                "stdout": artifact_record(output, stdout_path),
-                "stderr": artifact_record(output, stderr_path),
-                "result": result_record,
-            }
-            isolation = isolation_record(
-                options.cpu, options.sibling, pair_lease_record,
-                before_cpu, after_cpu, before_sibling, after_sibling,
-                started, ended)
-            pair_guard.validate_current()
-            reservation_guard.validate_current()
-            require(not timed_out, "C7 child timed out")
-            require(completed.returncode == 0, f"C7 child exited {completed.returncode}")
-            require(result_record is not None, "C7 child did not write result JSON")
-            result_bytes = read_artifact(output, result_record, "result")
-            parsed = strict_json(result_bytes, "C7 result")
-            validate_isolation(isolation, options.cpu, options.sibling)
+        with reservation_guard as candidate_reservation:
             validate_reservation_record(
-                reservation_record, options.cpu, options.sibling)
-            inputs_after = input_snapshot(
-                source_root, options.expected_tooling_commit,
-                options.expected_core_commit, archive, executable, taskset,
-                build_manifest)
-            require(typed_equal(inputs_after, inputs_before),
-                    "source/archive/executable changed during C7 run")
-            host_after = host_identity(options.cpu, options.sibling, allowed)
-            require(typed_equal(host_after, host_before),
-                    "host topology/frequency policy changed during C7 run")
-            normalized = validate_child_result(parsed, options.cpu, inputs_before)
-            created = utc_now()
-            raw = signed({
-                "schema": RAW_SCHEMA, "created_utc": created, "request": request,
-                "inputs_before": inputs_before, "inputs_after": inputs_after,
-                "host_before": host_before, "host_after": host_after,
-                "reservation": reservation_record, "isolation": isolation,
-                "build_provenance": build_provenance,
-                "child": child_record, "validated_output": normalized,
-            })
-            validate_raw(raw, output, check_files=True)
-            raw_path = output / "raw.json"
-            write_json_exclusive(raw_path, raw)
-            manifest = signed({
-                "schema": MANIFEST_SCHEMA, "created_utc": created, "valid": True,
-                "raw": artifact_record(output, raw_path), "request": request,
-                "inputs": inputs_before, "reservation": reservation_record,
-                "isolation": isolation, "build_provenance": build_provenance,
-                "validated_output": normalized,
-            })
-            validate_manifest(manifest, output)
-            reservation_guard.validate_current()
-            pair_guard.validate_current()
-            write_json_exclusive(output / "manifest.json", manifest)
+                candidate_reservation, options.cpu, options.sibling)
+            reservation_record = candidate_reservation
+            completed_stage_index = 3
+            failure_code = "lease-failed"
+            with pair_guard as candidate_pair_lease:
+                validate_pair_lease_identity(
+                    candidate_pair_lease, options.cpu, options.sibling)
+                pair_lease_record = candidate_pair_lease
+                completed_stage_index = 4
+                failure_code = "inputs-capture-failed"
+                os.sched_setaffinity(0, housekeeping)
+                taskset = Path("/usr/bin/taskset").resolve(strict=True)
+                executable = options.executable.resolve(strict=True)
+                archive = options.archive.resolve(strict=True)
+                build_manifest = options.build_manifest.resolve(strict=True)
+                source_root = options.source_root.resolve(strict=True)
+                candidate_inputs = input_snapshot(
+                    source_root, options.expected_tooling_commit,
+                    options.expected_core_commit, archive, executable, taskset,
+                    build_manifest)
+                validate_input_snapshot(candidate_inputs)
+                candidate_provenance = retain_build_provenance(
+                    output, build_manifest, candidate_inputs)
+                validate_build_provenance(
+                    candidate_provenance, output, candidate_inputs)
+                inputs_before = candidate_inputs
+                completed_stage_index = 5
+                failure_code = "attestation-failed"
+                build_provenance = candidate_provenance
+                completed_stage_index = 6
+                failure_code = "child-capture-failed"
+
+                result_path = output / "child/result.json"
+                stdout_path = output / "child/stdout.bin"
+                stderr_path = output / "child/stderr.bin"
+                result_path.parent.mkdir(parents=True, exist_ok=True)
+                before_cpu = cpu_stat_snapshot(options.cpu)
+                before_sibling = cpu_stat_snapshot(options.sibling)
+                started = time.monotonic_ns()
+                timed_out = False
+                command = [str(taskset), "-c", str(options.cpu), str(executable),
+                           "--backend", "avx2", str(result_path)]
+                try:
+                    completed = subprocess.run(
+                        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                        check=False, timeout=options.timeout,
+                        env=dict(CHILD_ENVIRONMENT))
+                except subprocess.TimeoutExpired as error:
+                    timed_out = True
+                    completed = subprocess.CompletedProcess(
+                        command, 124, error.stdout or b"", error.stderr or b"")
+                ended = time.monotonic_ns()
+                after_cpu = cpu_stat_snapshot(options.cpu)
+                after_sibling = cpu_stat_snapshot(options.sibling)
+                write_exclusive(stdout_path, completed.stdout)
+                write_exclusive(stderr_path, completed.stderr)
+                result_record = (artifact_record(output, result_path)
+                                 if result_path.is_file() else None)
+                candidate_child = {
+                    "command": request["command"],
+                    "environment": dict(CHILD_ENVIRONMENT),
+                    "returncode": completed.returncode, "timed_out": timed_out,
+                    "duration_ns": ended - started,
+                    "stdout": artifact_record(output, stdout_path),
+                    "stderr": artifact_record(output, stderr_path),
+                    "result": result_record,
+                }
+                validate_failure_child(
+                    candidate_child, request, output, check_files=True)
+                child_record = candidate_child
+                completed_stage_index = 7
+                failure_code = "isolation-capture-failed"
+                candidate_isolation = isolation_record(
+                    options.cpu, options.sibling, pair_lease_record,
+                    before_cpu, after_cpu, before_sibling, after_sibling,
+                    started, ended)
+                validate_isolation(
+                    candidate_isolation, options.cpu, options.sibling,
+                    require_accepted=False)
+                isolation = candidate_isolation
+                completed_stage_index = 8
+
+                failure_code = "child-timeout"
+                require(not timed_out, "C7 child timed out")
+                failure_code = "child-exit"
+                require(completed.returncode == 0,
+                        f"C7 child exited {completed.returncode}")
+                failure_code = "child-result-missing"
+                require(result_record is not None,
+                        "C7 child did not write result JSON")
+                failure_code = "child-stdout-invalid"
+                require(completed.stdout == b"", "C7 child unexpectedly wrote stdout")
+                failure_code = "child-stderr-invalid"
+                require(completed.stderr == expected_stderr(),
+                        "C7 child stderr progress changed")
+                failure_code = "isolation-rejected"
+                validate_isolation(isolation, options.cpu, options.sibling)
+                failure_code = "reservation-post-child-invalid"
+                reservation_guard.validate_current()
+                failure_code = "lease-post-child-invalid"
+                pair_guard.validate_current()
+                failure_code = "child-result-json-invalid"
+                result_bytes = read_artifact(output, result_record, "result")
+                parsed = strict_json(result_bytes, "C7 result")
+
+                failure_code = "inputs-after-capture-failed"
+                candidate_inputs_after = input_snapshot(
+                    source_root, options.expected_tooling_commit,
+                    options.expected_core_commit, archive, executable, taskset,
+                    build_manifest)
+                validate_input_snapshot(candidate_inputs_after)
+                inputs_after = candidate_inputs_after
+                completed_stage_index = 9
+                failure_code = "inputs-drift"
+                require(typed_equal(inputs_after, inputs_before),
+                        "source/archive/executable changed during C7 run")
+                failure_code = "host-after-capture-failed"
+                candidate_host_after = host_identity(
+                    options.cpu, options.sibling, allowed)
+                validate_host(candidate_host_after, options.cpu, options.sibling)
+                host_after = candidate_host_after
+                completed_stage_index = 10
+                failure_code = "host-drift"
+                require(typed_equal(host_after, host_before),
+                        "host topology/frequency policy changed during C7 run")
+                failure_code = "child-result-invalid"
+                validated_output = validate_child_result(
+                    parsed, options.cpu, inputs_before)
+                completed_stage_index = 11
+                failure_code = "internal-validation-failed"
+                created = utc_now()
+                raw = signed({
+                    "schema": RAW_SCHEMA, "created_utc": created,
+                    "request": request, "inputs_before": inputs_before,
+                    "inputs_after": inputs_after, "host_before": host_before,
+                    "host_after": host_after, "reservation": reservation_record,
+                    "isolation": isolation,
+                    "build_provenance": build_provenance,
+                    "child": child_record,
+                    "validated_output": validated_output,
+                })
+                validate_raw(raw, output, check_files=True)
+                raw_path = output / "raw.json"
+                failure_code = "raw-write-failed"
+                write_json_exclusive(raw_path, raw)
+                failure_code = "manifest-validation-failed"
+                manifest = signed({
+                    "schema": MANIFEST_SCHEMA, "created_utc": created,
+                    "valid": True, "raw": artifact_record(output, raw_path),
+                    "request": request, "inputs": inputs_before,
+                    "reservation": reservation_record,
+                    "isolation": isolation,
+                    "build_provenance": build_provenance,
+                    "validated_output": validated_output,
+                })
+                validate_manifest(manifest, output)
+                failure_code = "reservation-final-invalid"
+                reservation_guard.validate_current()
+                failure_code = "lease-final-invalid"
+                pair_guard.validate_current()
+                failure_code = "manifest-write-failed"
+                write_json_exclusive(output / "manifest.json", manifest)
     except Exception as error:
-        error_type = type(error).__name__
-        error_text = str(error)
+        require(FAILURE_CODE_STAGE.get(failure_code) == completed_stage_index,
+                "internal failure-code/stage mismatch")
+        context = {
+            "arguments": arguments, "request": request,
+            "host_before": host_before, "reservation": reservation_record,
+            "pair_lease": pair_lease_record, "inputs_before": inputs_before,
+            "build_provenance": build_provenance, "child": child_record,
+            "isolation": isolation, "inputs_after": inputs_after,
+            "host_after": host_after, "validated_output": validated_output,
+        }
+        stage = completed_failure_stage(completed_stage_index)
+        state = signed(failure_state_payload(stage, failure_code, context))
+        state_path = output / "failure/state-v1.json"
+        write_json_exclusive(state_path, state)
         failure = signed({
             "schema": FAILURE_SCHEMA, "status": "failed",
-            "failure_kind": classify_failure(
-                child_record, error_type, error_text),
-            "created_utc": utc_now(), "error_type": error_type,
-            "error": error_text, "traceback": traceback.format_exc(),
-            "request": request, "inputs_before": inputs_before,
-            "inputs_after": inputs_after, "host_before": host_before,
-            "host_after": host_after, "reservation": reservation_record,
-            "pair_lease": pair_lease_record, "isolation": isolation,
-            "build_provenance": build_provenance,
-            "child": child_record,
+            "created_utc": utc_now(), "failure_code": failure_code,
+            "completed_stage": stage, "error_type": type(error).__name__,
+            "error": str(error), "traceback": traceback.format_exc(),
+            "state": artifact_record(output, state_path),
+            "artifact_inventory": artifact_inventory(output),
+            **context,
         })
         validate_failure(failure, output, check_files=True)
         failure_path = output / "failure.json"
@@ -1876,28 +2312,31 @@ def run_campaign(options: argparse.Namespace) -> int:
 def verify_campaign(options: argparse.Namespace) -> int:
     manifest_path = options.manifest.resolve(strict=True)
     root = manifest_path.parent
-    manifest_bytes = manifest_path.read_bytes()
+    manifest_bytes = read_bounded(manifest_path, MAX_TOP_LEVEL_JSON_BYTES)
     manifest = strict_json(manifest_bytes, "C7 manifest")
     require(manifest_bytes == canonical_bytes(manifest) + b"\n",
             "manifest is not canonical JSON")
     normalized = validate_manifest(manifest, root)
     print(json.dumps({"status": "PASS", "cells": normalized["cell_count"],
-                      "manifest_sha256": sha256_file(manifest_path)}, sort_keys=True))
+                      "manifest_sha256": sha256_bytes(manifest_bytes)},
+                     sort_keys=True))
     return 0
 
 
 def verify_failure_campaign(options: argparse.Namespace) -> int:
     failure_path = options.failure.resolve(strict=True)
+    require(failure_path.name == "failure.json",
+            "failure replay requires the canonical failure.json filename")
     root = failure_path.parent
-    failure_bytes = failure_path.read_bytes()
+    failure_bytes = read_bounded(failure_path, MAX_TOP_LEVEL_JSON_BYTES)
     failure = strict_json(failure_bytes, "C7 failure evidence")
     require(failure_bytes == canonical_bytes(failure) + b"\n",
             "failure evidence is not canonical JSON")
     validated = validate_failure(failure, root, check_files=True)
     print(json.dumps({
         "status": "VERIFIED_FAILURE",
-        "failure_kind": validated["failure_kind"],
-        "failure_sha256": sha256_file(failure_path),
+        "failure_code": validated["failure_code"],
+        "failure_sha256": sha256_bytes(failure_bytes),
     }, sort_keys=True))
     return 0
 
@@ -1934,21 +2373,27 @@ def synthetic_result(cpu: int, inputs: Mapping[str, Any]) -> dict[str, Any]:
 
 def synthetic_build_manifest(inputs: Mapping[str, Any]) -> dict[str, Any]:
     def artifact(key: str, path: Path) -> dict[str, Any]:
-        return {"bytes": inputs[key]["size"], "path": path.as_posix(),
+        return {"bytes": inputs[key]["bytes"], "path": path.as_posix(),
                 "sha256": inputs[key]["sha256"]}
 
     build_dir = Path(".research/fixture/build/core-avx2")
-    library = {"bytes": inputs["archive"]["size"],
+    library = {"bytes": inputs["archive"]["bytes"],
                "path": (build_dir / "liblibleopard.a").as_posix(),
                "sha256": inputs["archive"]["sha256"]}
-    executable = {"bytes": inputs["executable"]["size"],
+    executable = {"bytes": inputs["executable"]["bytes"],
                   "path": (build_dir.parent / "c7-avx2").as_posix(),
                   "sha256": inputs["executable"]["sha256"]}
     builds: list[dict[str, Any]] = []
     for name in BUILD_NAMES:
+        common = {
+            "name": name,
+            "source_closure": copy.deepcopy(inputs["core_source_closure"]),
+            "launcher_python": {
+                **copy.deepcopy(inputs["python"]), "version": "fixture-python"},
+        }
         if name == "avx2":
             builds.append({
-                "name": "avx2", "backend": "avx2", "sanitizer": False,
+                **common, "backend": "avx2", "sanitizer": False,
                 "build_dir": build_dir.as_posix(), "library": library,
                 "executable": executable,
                 "compile_argv": [
@@ -1963,7 +2408,7 @@ def synthetic_build_manifest(inputs: Mapping[str, Any]) -> dict[str, Any]:
                 },
             })
         else:
-            builds.append({"name": name})
+            builds.append(common)
     return {
         "schema": BUILD_MANIFEST_SCHEMA, "status": "pass", "scope": BUILD_SCOPE,
         "tooling_git_sha": inputs["git"]["tooling_commit"],
@@ -1971,6 +2416,8 @@ def synthetic_build_manifest(inputs: Mapping[str, Any]) -> dict[str, Any]:
         "source": artifact("source", SOURCE_RELATIVE),
         "runner": artifact("build_runner", BUILD_RUNNER_RELATIVE),
         "validator": artifact("build_validator", BUILD_VALIDATOR_RELATIVE),
+        "taskset": {**copy.deepcopy(inputs["taskset"]),
+                    "version": "fixture-taskset"},
         "builds": builds,
         "reproducibility": {
             "comparison": {"status": "pass"},
@@ -1983,43 +2430,41 @@ def synthetic_build_manifest(inputs: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def synthetic_inputs() -> dict[str, Any]:
-    def identity(kind: str, name: str, mode: int = 0o644) -> dict[str, Any]:
-        return {"kind": kind, "name": name, "size": 1,
-                "mode": mode, "sha256": "a" * 64}
+    synthetic_runner = read_bounded(Path(__file__).resolve(strict=True))
+
+    def artifact(path: str, digest: str = "a" * 64) -> dict[str, Any]:
+        return {"bytes": 1, "path": path, "sha256": digest}
 
     result = {
-        "git": {"tooling_commit": "b" * 40, "tooling_tree": "c" * 40,
-                "core_commit": "e" * 40, "core_tree": "f" * 40,
-                "core_is_ancestor": True, "clean": True,
-                "tracked_tree_sha256": "d" * 64},
-        "runner": {**identity("runner", RUNNER_RELATIVE.name, 0o755),
-                   "path": RUNNER_RELATIVE.as_posix()},
-        "source": {**identity("source", SOURCE_RELATIVE.name),
-                   "path": SOURCE_RELATIVE.as_posix()},
-        "build_runner": {**identity("build-runner", BUILD_RUNNER_RELATIVE.name),
-                         "path": BUILD_RUNNER_RELATIVE.as_posix()},
-        "build_validator": {
-            **identity("build-validator", BUILD_VALIDATOR_RELATIVE.name),
-            "path": BUILD_VALIDATOR_RELATIVE.as_posix()},
-        "archive": identity("archive", "liblibleopard.a"),
-        "executable": identity("executable", "c7-avx2", 0o755),
-        "taskset": identity("taskset", "taskset", 0o755),
-        "python": identity("python", "python3", 0o755),
+        "schema": INPUT_SCHEMA,
+        "git": {"tooling_commit": "b" * 40, "core_commit": "e" * 40},
+        "runner": {
+            "bytes": len(synthetic_runner), "path": RUNNER_RELATIVE.as_posix(),
+            "sha256": sha256_bytes(synthetic_runner)},
+        "source": artifact(SOURCE_RELATIVE.as_posix()),
+        "build_runner": artifact(BUILD_RUNNER_RELATIVE.as_posix()),
+        "build_validator": artifact(BUILD_VALIDATOR_RELATIVE.as_posix()),
+        "archive": artifact(
+            ".research/fixture/build/core-avx2/liblibleopard.a"),
+        "executable": artifact(".research/fixture/build/c7-avx2"),
+        "taskset": {"path": "/usr/bin/taskset", "sha256": "a" * 64},
+        "python": {"path": "/usr/bin/python3", "sha256": "a" * 64},
         "core_source_closure": [
-            {**identity("core-source", Path(path).name), "path": path}
+            artifact(path)
             for path in CORE_SOURCE_CLOSURE
         ],
     }
     build_data = canonical_pretty_bytes(synthetic_build_manifest(result))
     result["build_manifest"] = {
-        "kind": "build-manifest", "name": "build-run-manifest.json",
-        "size": len(build_data), "mode": 0o644, "sha256": sha256_bytes(build_data),
+        "bytes": len(build_data), "schema": BUILD_MANIFEST_SCHEMA,
+        "sha256": sha256_bytes(build_data),
     }
     result["build_attestation"] = derive_build_attestation(
         synthetic_build_manifest(result), result["build_manifest"],
         result["git"]["tooling_commit"], result["git"]["core_commit"],
         result["source"], result["build_runner"], result["build_validator"],
-        result["archive"], result["executable"])
+        result["archive"], result["executable"],
+        result["core_source_closure"], result["taskset"], result["python"])
     result["binding_sha256"] = sha256_bytes(canonical_bytes(result))
     return result
 
@@ -2080,8 +2525,12 @@ def synthetic_bundle(root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[s
     retained_build_manifest = root / "provenance/build-run-manifest-v4.json"
     write_exclusive(retained_build_manifest,
                     canonical_pretty_bytes(synthetic_build_manifest(inputs)))
+    retained_runner = root / "provenance/run_authoritative.py"
+    write_exclusive(retained_runner, read_bounded(Path(__file__).resolve(strict=True)))
     build_provenance = {
+        "schema": BUILD_PROVENANCE_SCHEMA,
         "manifest": artifact_record(root, retained_build_manifest),
+        "runner": artifact_record(root, retained_runner),
         "attestation": copy.deepcopy(inputs["build_attestation"]),
     }
     payload = {"benchmark_cpu": cpu, "nonce": "fixture-nonce", "owner": "self-test",
@@ -2260,7 +2709,9 @@ def main(arguments: Sequence[str] | None = None) -> int:
     options = parser().parse_args(arguments)
     try:
         return int(options.function(options))
-    except (EvidenceError, OSError, ValueError, subprocess.SubprocessError) as error:
+    except (EvidenceError, OSError, ValueError, OverflowError, RecursionError,
+            AttributeError, IndexError, KeyError, TypeError,
+            subprocess.SubprocessError) as error:
         print(f"C7 authoritative evidence error: {error}", file=sys.stderr)
         return 1
 
