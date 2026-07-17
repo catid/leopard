@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Checkpoint and portability tests for C7 evidence manifests v3/v4."""
+"""Checkpoint and portability tests for C7 evidence manifests v3/v4/v5."""
 
 from __future__ import annotations
 
@@ -74,9 +74,9 @@ class CheckpointTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_evidence.validate_manifest(failed_comparison)
 
-        # A schema edit cannot turn the historical pre-R1 proof into v4
-        # evidence: v4 adds an independent tooling identity and requires the
-        # post-R1 sanitizer attribution frozen below.
+        # A schema edit cannot turn the historical pre-R1 proof into v5
+        # evidence: v4/v5 require an independent tooling identity and the
+        # post-R1 sanitizer attribution, while v5 also binds canonical CMake.
         relabeled = json.loads(json.dumps(data))
         relabeled["schema"] = run_matrix.MANIFEST_SCHEMA
         relabeled["tooling_git_sha"] = relabeled["core_git_sha"]
@@ -86,10 +86,31 @@ class CheckpointTests(unittest.TestCase):
     def test_current_attestation_constants_are_exact(self) -> None:
         self.assertEqual(
             run_matrix.MANIFEST_SCHEMA,
+            "leopard2-c7-build-run-manifest/v5")
+        self.assertEqual(
+            run_matrix.HISTORICAL_MANIFEST_SCHEMA_V4,
             "leopard2-c7-build-run-manifest/v4")
         self.assertEqual(
             run_matrix.PEER_ATTESTATION_SCHEMA,
+            "leopard2-c7-peer-reproducibility/v4")
+        self.assertEqual(
+            run_matrix.CURRENT_ARCHIVE_MEMBERS[7:9],
+            ("LeopardFF8.cpp.o", "LeopardFF16.cpp.o"))
+        self.assertEqual(
+            run_matrix.HISTORICAL_PEER_ATTESTATION_SCHEMA_V3,
             "leopard2-c7-peer-reproducibility/v3")
+        self.assertEqual(
+            validate_evidence.cmake_identity_for_schema(
+                run_matrix.MANIFEST_SCHEMA),
+            {"target": "leopard", "archive": "libleopard.a",
+             "target_directory": "leopard.dir"})
+        for historical_schema in (
+                run_matrix.LEGACY_MANIFEST_SCHEMA,
+                run_matrix.HISTORICAL_MANIFEST_SCHEMA_V4):
+            self.assertEqual(
+                validate_evidence.cmake_identity_for_schema(historical_schema),
+                {"target": "libleopard", "archive": "liblibleopard.a",
+                 "target_directory": "libleopard.dir"})
         self.assertEqual(run_matrix.EXPECTED_TOOLING_CLOSURE, (
             "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp",
             "experiments/leopard2/non_power_of_two/c7/run_matrix.py",
@@ -138,7 +159,7 @@ class CheckpointTests(unittest.TestCase):
             validate_evidence.EXPECTED_CORRECTNESS[
                 "decode_read_only_input_alias_symbol_comparisons"], 6025)
 
-    def test_v3_sanitizer_scan_rejects_v4_relabel(self) -> None:
+    def test_v3_sanitizer_scan_rejects_current_relabel(self) -> None:
         data = json.loads(
             (RESULTS / "build-run-manifest.json").read_text(encoding="utf-8"))
         build = next(item for item in data["builds"]
@@ -228,7 +249,7 @@ class CheckpointTests(unittest.TestCase):
             with self.subTest(index=index, run=run_name):
                 rejected(run_name, mutation)
 
-    def test_optional_external_v4_manifest(self) -> None:
+    def test_optional_external_v5_manifest(self) -> None:
         requested = os.environ.get("LEO2_C7_TEST_MANIFEST")
         if not requested:
             self.skipTest("LEO2_C7_TEST_MANIFEST is not set")

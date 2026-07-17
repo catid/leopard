@@ -177,7 +177,7 @@ class AuthoritativeRunnerTests(unittest.TestCase):
             with self.assertRaises(runner.EvidenceError):
                 runner.validate_input_snapshot(inputs)
 
-    def test_v4_build_attestation_rejects_build_and_binary_mutations(self) -> None:
+    def test_v5_build_attestation_rejects_build_and_binary_mutations(self) -> None:
         inputs = runner.synthetic_inputs()
         original = runner.synthetic_build_manifest(inputs)
 
@@ -191,7 +191,8 @@ class AuthoritativeRunnerTests(unittest.TestCase):
                 inputs["python"])
 
         mutations = (
-            lambda value: value.update(schema="leopard2-c7-build-run-manifest/v3"),
+            lambda value: value.update(
+                schema=runner.HISTORICAL_BUILD_MANIFEST_SCHEMA),
             lambda value: value["reproducibility"].update(
                 comparison={"status": "not-run"}),
             lambda value: value["builds"][2]["compile_argv"].remove("-O2"),
@@ -260,7 +261,8 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         changed["child"]["stderr"]["size"] = True
         self.assert_raw_rejected(changed)
 
-        build_path = self.root / "snapshot/provenance/build-run-manifest-v4.json"
+        build_path = (self.root / "snapshot/provenance" /
+                      runner.retained_build_manifest_name("current"))
         build_original = build_path.read_bytes()
         build_path.write_bytes(b"{}\n")
         with self.assertRaises(runner.EvidenceError):
@@ -637,7 +639,7 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         validator = self.root / runner.BUILD_VALIDATOR_RELATIVE
         validator.parent.mkdir(parents=True)
         validator.write_text("fixture\n", encoding="utf-8")
-        build_manifest = self.root / "build-manifest-v4.json"
+        build_manifest = self.root / "build-manifest-v5.json"
         build_manifest.write_text("{}\n", encoding="utf-8")
         successful = subprocess.CompletedProcess(
             ["validator"], 0, b"C7 evidence validation passed (live)\n", b"")
@@ -664,7 +666,7 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         source = self.root / runner.SOURCE_RELATIVE
         build_runner = self.root / runner.BUILD_RUNNER_RELATIVE
         build_validator = self.root / runner.BUILD_VALIDATOR_RELATIVE
-        archive = self.root / ".research/fixture/build/core-avx2/liblibleopard.a"
+        archive = self.root / ".research/fixture/build/core-avx2/libleopard.a"
         executable = self.root / ".research/fixture/build/c7-avx2"
         for path, data in ((source, b"source\n"), (build_runner, b"runner\n"),
                            (build_validator, b"validator\n"),
@@ -699,7 +701,7 @@ class AuthoritativeRunnerTests(unittest.TestCase):
                 "path": runner.BUILD_VALIDATOR_RELATIVE.as_posix(),
                 "sha256": identities["build_validator"]["sha256"]},
             "archive": {"bytes": identities["archive"]["size"],
-                        "path": ".research/fixture/build/core-avx2/liblibleopard.a",
+                        "path": ".research/fixture/build/core-avx2/libleopard.a",
                         "sha256": identities["archive"]["sha256"]},
             "executable": {"bytes": identities["executable"]["size"],
                            "path": ".research/fixture/build/c7-avx2",
@@ -1520,6 +1522,70 @@ class AuthoritativeRunnerTests(unittest.TestCase):
             with self.subTest(index=index), self.assertRaises(runner.EvidenceError):
                 runner.validate_failure(
                     resign(changed), output, check_files=True)
+
+    def test_failure_rejects_rebound_historical_recipe_bytes(self) -> None:
+        failure, output = self._run_child_failure(timeout=True)
+        root = self.root / "rebound-historical-recipe"
+        shutil.copytree(output, root)
+        changed = copy.deepcopy(failure)
+        manifest_record = changed["build_provenance"]["manifest"]
+        manifest_path = root / manifest_record["path"]
+        build_manifest = runner.strict_json(
+            manifest_path.read_bytes(), "fixture build manifest")
+        old_identity = runner.HISTORICAL_CMAKE_IDENTITY
+        recipe_hashes: dict[str, str] = {}
+        for build in build_manifest["builds"]:
+            objects = [
+                f"CMakeFiles/{(
+                    'leopard2_backend_avx2.dir' if member ==
+                    'Leopard2BackendAVX2.cpp.o' else
+                    'leopard2_backend_ssse3.dir' if member ==
+                    'Leopard2BackendSSSE3.cpp.o' else
+                    old_identity['target_directory'])}/{member}"
+                for member in runner.HISTORICAL_CORE_ARCHIVE_MEMBERS
+            ]
+            text = (
+                f"{build['ar']['path']} qc {old_identity['archive']} "
+                f"{' '.join(objects)}\n"
+                f"{build['ranlib']['path']} {old_identity['archive']}\n")
+            encoded = text.encode("utf-8")
+            digest = runner.sha256_bytes(encoded)
+            build["archive_link_recipe"].update(
+                bytes=len(encoded), sha256=digest)
+            build["archive_link_recipe_content"] = {
+                "bytes": len(encoded), "encoding": "utf-8",
+                "sha256": digest, "text": text,
+            }
+            recipe_hashes[build["name"]] = digest
+        manifest_bytes = runner.canonical_pretty_bytes(build_manifest)
+        manifest_path.write_bytes(manifest_bytes)
+        new_manifest_record = runner.artifact_record(root, manifest_path)
+
+        inputs = changed["inputs_before"]
+        inputs["build_manifest"].update(
+            bytes=len(manifest_bytes), sha256=runner.sha256_bytes(manifest_bytes))
+        attestation = inputs["build_attestation"]
+        attestation["manifest"].update(
+            bytes=len(manifest_bytes), sha256=runner.sha256_bytes(manifest_bytes))
+        attestation["archive_link_recipe_sha256"] = recipe_hashes
+        attestation["build_record_sha256"] = {
+            build["name"]: runner.sha256_bytes(runner.canonical_bytes(build))
+            for build in build_manifest["builds"]
+        }
+        inputs["binding_sha256"] = runner.sha256_bytes(runner.canonical_bytes(
+            {key: value for key, value in inputs.items()
+             if key != "binding_sha256"}))
+        changed["build_provenance"]["manifest"] = new_manifest_record
+        changed["build_provenance"]["attestation"] = copy.deepcopy(attestation)
+        state = runner.signed(runner.failure_state_payload(
+            changed["completed_stage"], changed["failure_code"],
+            {key: changed[key] for key in runner.FAILURE_CONTEXT_FIELDS}))
+        state_path = root / "failure/state-v2.json"
+        state_path.write_bytes(runner.canonical_bytes(state) + b"\n")
+        changed["state"] = runner.artifact_record(root, state_path)
+        changed["artifact_inventory"] = runner.artifact_inventory(root)
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(resign(changed), root, check_files=True)
 
     def test_rebound_failure_rejects_mask_type_and_provenance_forgeries(self) -> None:
         failure, output = self._run_child_failure(timeout=True)

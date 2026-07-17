@@ -61,7 +61,7 @@ For a single JSON cell:
 Release artifacts with the expected compile, object, archive, link, source,
 runtime-library, and field/profile identities. Each cell runs three independent
 `baseline,candidate,candidate,baseline` rounds on one pinned logical CPU while
-the sibling is reserved. Version-2 evidence additionally holds a pair-wide,
+the sibling is reserved. Version-2 and version-3 evidence additionally hold a pair-wide,
 per-user lock at
 `/run/user/UID/leopard2-cpu-leases/leopard2-cpu-pair-UID-A-B.lock`, derived
 from both sorted logical CPU numbers. It validates the owned runtime and lease
@@ -113,7 +113,7 @@ field-inflation, and larger-parent cases. Custom cells use
         --baseline /tmp/leopard-main-compare/leopard_main_benchmark \
         --candidate /tmp/leopard2-production/bench_leopard2 \
         --baseline-archive /tmp/leopard-main-compare/libleopard_main_exact.a \
-        --candidate-archive /tmp/leopard2-production/liblibleopard.a \
+        --candidate-archive /tmp/leopard2-production/libleopard.a \
         --baseline-build-dir /tmp/leopard-main-compare \
         --candidate-build-dir /tmp/leopard2-production \
         --baseline-source-root /tmp/leopard-main-exact \
@@ -128,11 +128,27 @@ Verify while the exact build inputs still exist:
     python3 experiments/leopard2/main_compare/run_abba.py verify \
         --manifest /tmp/leopard2-vs-main/manifest.json
 
-The version-2 verifier recomputes the pair-lock identity, every per-field CPU
+The current version-3 verifier recomputes the pair-lock identity, every per-field CPU
 counter delta, the zero-non-idle-sibling decision, workload identities, and all
-statistics. Version-1 retained bundles remain structurally replayable for
-historical comparison, but they do not acquire version-2 isolation semantics
-retroactively. A sibling-activity or child failure produces signed
+statistics. Version 3 also binds the canonical CMake target `leopard`, archive
+`libleopard.a`, and `leopard.dir` dependency closure. It retains the exact,
+bounded UTF-8 archive link-recipe content, binds its byte length and SHA-256 to
+the recipe-file identity, and parses those bytes to require the declared
+archive, ordinary target directory, and matching `ranlib` command. Retained
+version-2 bundles replay with their original `libleopard`/`liblibleopard.a`
+identity, record shape, and isolation semantics; version-1 bundles remain
+structurally replayable without acquiring later isolation semantics
+retroactively. A schema/path relabel that leaves the historical recipe bytes
+unchanged is rejected.
+
+Bundle digests are unkeyed integrity checks, not an independent authenticity
+anchor. They detect edits relative to the retained evidence, and the semantic
+recipe binding prevents relabeling old recipe bytes under version 3. They
+cannot prevent a hostile writer from replacing every evidence byte and
+recomputing every internally consistent digest. Preserve evidence in an
+immutable or independently authenticated store, or add an external digital
+signature or transparency log, when adversarial provenance is in scope. A
+sibling-activity or child failure produces signed
 `failure.json` diagnostics that bind every retained invocation stream. Verify
 those diagnostics with:
 

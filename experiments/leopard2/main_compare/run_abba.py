@@ -38,13 +38,46 @@ from typing import Any, Iterable, Mapping, Sequence
 
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 RAW_SCHEMA_V1 = "leopard2-main-compare-raw/v1"
-RAW_SCHEMA = "leopard2-main-compare-raw/v2"
+RAW_SCHEMA_V2 = "leopard2-main-compare-raw/v2"
+RAW_SCHEMA = "leopard2-main-compare-raw/v3"
 MANIFEST_SCHEMA_V1 = "leopard2-main-compare-manifest/v1"
-MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v2"
-FAILURE_SCHEMA = "leopard2-main-compare-failure/v2"
+MANIFEST_SCHEMA_V2 = "leopard2-main-compare-manifest/v2"
+MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v3"
+FAILURE_SCHEMA_V2 = "leopard2-main-compare-failure/v2"
+FAILURE_SCHEMA = "leopard2-main-compare-failure/v3"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
 ISOLATION_SCHEMA = "leopard2-main-compare-isolation/v1"
+
+# CMake target and archive identity is evidence, not an interchangeable build
+# detail.  Historical v1/v2 records predate the canonical target rename and
+# must continue to replay against their exact old names.  New v3 records bind
+# the canonical target/archive. Verification selects one exact identity from
+# the signed schema; runtime backend selection cannot alter it.
+HISTORICAL_CMAKE_IDENTITY = {
+    "target": "libleopard",
+    "archive": "liblibleopard.a",
+    "target_directory": "libleopard.dir",
+}
+CANONICAL_CMAKE_IDENTITY = {
+    "target": "leopard",
+    "archive": "libleopard.a",
+    "target_directory": "leopard.dir",
+}
+RAW_TO_CMAKE_IDENTITY = {
+    RAW_SCHEMA_V1: HISTORICAL_CMAKE_IDENTITY,
+    RAW_SCHEMA_V2: HISTORICAL_CMAKE_IDENTITY,
+    RAW_SCHEMA: CANONICAL_CMAKE_IDENTITY,
+}
+MANIFEST_TO_RAW_SCHEMA = {
+    MANIFEST_SCHEMA_V1: RAW_SCHEMA_V1,
+    MANIFEST_SCHEMA_V2: RAW_SCHEMA_V2,
+    MANIFEST_SCHEMA: RAW_SCHEMA,
+}
+FAILURE_TO_RAW_SCHEMA = {
+    FAILURE_SCHEMA_V2: RAW_SCHEMA_V2,
+    FAILURE_SCHEMA: RAW_SCHEMA,
+}
 CPU_STAT_FIELDS = (
     "user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal",
 )
@@ -74,6 +107,7 @@ MAX_COMMAND_STDOUT_BYTES = 128 * 1024 * 1024
 MAX_COMMAND_STDERR_BYTES = 8 * 1024 * 1024
 MAX_COMMAND_TIMEOUT_SECONDS = 3600.0
 MAX_IDENTITY_FILE_BYTES = 256 * 1024 * 1024
+MAX_LINK_RECIPE_BYTES = 1024 * 1024
 CHILD_REAP_TIMEOUT_SECONDS = 5.0
 PR_SET_CHILD_SUBREAPER = 36
 PR_GET_CHILD_SUBREAPER = 37
@@ -1193,11 +1227,115 @@ def validate_compile_commands(
     }
 
 
+def cmake_identity_for_raw_schema(raw_schema: str) -> Mapping[str, str]:
+    require(isinstance(raw_schema, str),
+            "main-comparison build schema is not a string")
+    identity = RAW_TO_CMAKE_IDENTITY.get(raw_schema)
+    require(identity is not None, "unsupported main-comparison build schema")
+    return identity
+
+
+def exact_text_content(text: str, label: str) -> dict[str, Any]:
+    require(isinstance(text, str), f"{label} is not text")
+    encoded = text.encode("utf-8")
+    require(0 < len(encoded) <= MAX_LINK_RECIPE_BYTES and "\x00" not in text,
+            f"{label} is outside the retained byte bound")
+    return {"encoding": "utf-8", "size": len(encoded),
+            "sha256": sha256_bytes(encoded), "text": text}
+
+
+def validate_archive_link_recipe_content(
+    content: object,
+    recipe_identity: object,
+    expected_archive: str,
+    expected_target_directory: str,
+    label: str,
+    *,
+    expected_objects: Sequence[str],
+    expected_archiver: str,
+    expected_ranlib: str,
+) -> str:
+    """Validate retained CMake archive-link bytes and their path semantics.
+
+    This deliberately parses the retained bytes rather than trusting path
+    labels or a normalized derivative that can be coherently re-authored.
+    Backend object-library directories are distinct CMake targets and remain
+    valid, while every ordinary library object must use the declared target.
+    """
+    require(isinstance(content, dict) and set(content) == {
+                "encoding", "sha256", "size", "text"},
+            f"{label} retained content is incomplete")
+    require(content.get("encoding") == "utf-8",
+            f"{label} retained content has the wrong encoding")
+    text = content.get("text")
+    require(isinstance(text, str), f"{label} retained content is not text")
+    expected_content = exact_text_content(text, label)
+    require(content == expected_content,
+            f"{label} retained content identity is invalid")
+    require(isinstance(recipe_identity, dict) and
+            recipe_identity.get("size") == expected_content["size"] and
+            recipe_identity.get("sha256") == expected_content["sha256"],
+            f"{label} retained bytes differ from the recipe file identity")
+
+    commands: list[list[str]] = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            tokens = shlex.split(line, posix=True)
+        except ValueError as error:
+            raise EvidenceError(f"cannot parse {label}: {error}") from error
+        require(tokens, f"{label} contains an empty command")
+        commands.append(tokens)
+    require(len(commands) == 2,
+            f"{label} must contain exactly archive and ranlib commands")
+
+    require(isinstance(expected_archiver, str) and expected_archiver and
+            isinstance(expected_ranlib, str) and expected_ranlib and
+            isinstance(expected_objects, Sequence) and
+            not isinstance(expected_objects, (str, bytes)) and
+            expected_objects and all(isinstance(item, str) and item
+                                     for item in expected_objects),
+            f"{label} expected command closure is invalid")
+    archive_tokens, ranlib_tokens = commands
+    require(len(archive_tokens) >= 4 and
+            archive_tokens[0] == expected_archiver and
+            archive_tokens[1] in {"qc", "rc", "rcs"},
+            f"{label} archive tool or mode differs from its build identity")
+    archive_output = archive_tokens[2]
+    require(archive_output == expected_archive,
+            f"{label} archive output is not the canonical relative path")
+    objects = [token.replace("\\", "/") for token in archive_tokens[3:]]
+    require(objects == list(expected_objects) and
+            all(token.endswith(".o") and not token.startswith("/") and
+                "\\" not in token and "@" not in token for token in objects),
+            f"{label} object order or closure differs from compile provenance")
+    ordinary_prefix = f"CMakeFiles/{expected_target_directory}/"
+    ordinary = [token for token in objects if
+                "/leopard2_backend_" not in f"/{token}" and
+                "/leopard_backend_" not in f"/{token}"]
+    require(ordinary and all(ordinary_prefix in token for token in ordinary),
+            f"{label} ordinary objects use the wrong CMake target directory")
+    require(all(
+                ordinary_prefix in token or
+                re.search(r"(?:^|/)CMakeFiles/leopard2?_backend_[^/]+\.dir/", token)
+                is not None
+                for token in objects),
+            f"{label} contains an object from an undeclared CMake target")
+    require(len(ranlib_tokens) == 2 and
+            ranlib_tokens[0] == expected_ranlib and
+            ranlib_tokens[1] == archive_output,
+            f"{label} ranlib command does not identify the produced archive")
+    return text
+
+
 def build_provenance(
-    implementation: str, specification: Mapping[str, Any]
+    implementation: str, specification: Mapping[str, Any],
+    raw_schema: str = RAW_SCHEMA,
 ) -> dict[str, Any]:
     build = Path(specification[f"{implementation}_build_dir"]).resolve(strict=True)
     require(build.is_dir(), f"{implementation} build path is not a directory: {build}")
+    cmake_identity = cmake_identity_for_raw_schema(raw_schema)
     names = ({
         "executable": "leopard_main_benchmark",
         "archive": "libleopard_main_exact.a",
@@ -1205,9 +1343,10 @@ def build_provenance(
         "archive_link": "CMakeFiles/leopard_main_exact.dir/link.txt",
     } if implementation == "baseline" else {
         "executable": "bench_leopard2",
-        "archive": "liblibleopard.a",
+        "archive": cmake_identity["archive"],
         "executable_link": "CMakeFiles/bench_leopard2.dir/link.txt",
-        "archive_link": "CMakeFiles/libleopard.dir/link.txt",
+        "archive_link": "CMakeFiles/{}/link.txt".format(
+            cmake_identity["target_directory"]),
     })
     expected_executable = (build / names["executable"]).resolve(strict=True)
     expected_archive = (build / names["archive"]).resolve(strict=True)
@@ -1250,13 +1389,20 @@ def build_provenance(
             "LEO2_BUILD_TESTS": "OFF",
             "LEO2_ENABLE_CUDA": "OFF",
         }
-        expected_archive_name = "liblibleopard.a"
+        expected_archive_name = cmake_identity["archive"]
     for name, expected in required_cache.items():
         require(cache.get(name) == expected,
                 f"{implementation} CMake cache {name} is {cache.get(name)!r}, "
                 f"expected {expected!r}")
     executable_link = executable_link_path.read_text(encoding="utf-8")
-    archive_link = archive_link_path.read_text(encoding="utf-8")
+    archive_link_bytes = archive_link_path.read_bytes()
+    require(0 < len(archive_link_bytes) <= MAX_LINK_RECIPE_BYTES,
+            f"{implementation} archive recipe is outside the retained byte bound")
+    try:
+        archive_link = archive_link_bytes.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as error:
+        raise EvidenceError(
+            f"{implementation} archive recipe is not strict UTF-8") from error
     require(expected_archive_name in executable_link,
             f"{implementation} benchmark link recipe omits its declared archive")
     require(names["archive"] in archive_link,
@@ -1314,20 +1460,23 @@ def build_provenance(
             all(executable_identity["mtime_ns"] >= record["object"]["mtime_ns"]
                 for record in benchmark_records),
             f"{implementation} executable predates its link inputs")
-    ar = Path("/usr/bin/ar").resolve(strict=True)
+    ar = Path(cache.get("CMAKE_AR", "")).resolve(strict=True)
+    ranlib = Path(cache.get("CMAKE_RANLIB", "")).resolve(strict=True)
     members = run_checked((str(ar), "t", str(expected_archive)),
                           environment=CHILD_ENVIRONMENT).decode().splitlines()
     require(members == [path.name for path in archive_recipe_objects],
             f"{implementation} archive members differ from its link recipe")
     compiler_version = run_checked(
         (str(compiler), "--version"), environment=CHILD_ENVIRONMENT)
-    return {
+    archive_link_identity = artifact_identity(
+        archive_link_path, "build_metadata")
+    result = {
         "build_dir": str(build),
         "cmake_cache": artifact_identity(cache_path, "build_metadata"),
         "compile_commands": artifact_identity(commands_path, "build_metadata"),
         "executable_link_recipe": artifact_identity(
             executable_link_path, "build_metadata"),
-        "archive_link_recipe": artifact_identity(archive_link_path, "build_metadata"),
+        "archive_link_recipe": archive_link_identity,
         "compiler": artifact_identity(compiler, "compiler"),
         "compiler_version_stdout": {
             "sha256": sha256_bytes(compiler_version),
@@ -1345,6 +1494,21 @@ def build_provenance(
         },
         "validated_compile_commands": semantics,
     }
+    if raw_schema == RAW_SCHEMA:
+        content = exact_text_content(
+            archive_link, f"{implementation} archive link recipe")
+        require(content["size"] == archive_link_identity["size"] and
+                content["sha256"] == archive_link_identity["sha256"],
+                f"{implementation} archive recipe changed between reads")
+        result["archive_link_recipe_content"] = content
+        result["ranlib"] = artifact_identity(ranlib, "ranlib")
+        result["archive_link_tool_invocations"] = {
+            "archiver": {"invocation": cache["CMAKE_AR"],
+                         "resolved_path": str(ar)},
+            "ranlib": {"invocation": cache["CMAKE_RANLIB"],
+                       "resolved_path": str(ranlib)},
+        }
+    return result
 
 
 def runtime_closure(ldd: Path, executable: Path) -> dict[str, Any]:
@@ -1390,10 +1554,12 @@ def runtime_closure(ldd: Path, executable: Path) -> dict[str, Any]:
     }
 
 
-def input_snapshot(specification: Mapping[str, Any]) -> dict[str, Any]:
+def input_snapshot(
+    specification: Mapping[str, Any], raw_schema: str = RAW_SCHEMA,
+) -> dict[str, Any]:
     ldd = Path(specification["ldd"])
-    baseline_build = build_provenance("baseline", specification)
-    candidate_build = build_provenance("candidate", specification)
+    baseline_build = build_provenance("baseline", specification, raw_schema)
+    candidate_build = build_provenance("candidate", specification, raw_schema)
     require(baseline_build["compiler"] == candidate_build["compiler"] and
             baseline_build["compiler_version_stdout"] ==
             candidate_build["compiler_version_stdout"],
@@ -1422,6 +1588,103 @@ def input_snapshot(specification: Mapping[str, Any]) -> dict[str, Any]:
             Path(specification["candidate_source_root"]),
             str(specification["candidate_commit"]), False),
     }
+
+
+def validate_candidate_cmake_identity(
+    specification: Mapping[str, Any], snapshot: object, raw_schema: str,
+) -> None:
+    """Bind portable evidence to the schema's exact CMake identity.
+
+    Current evidence also retains and parses exact bounded recipe bytes.
+    Historical replay intentionally keeps its original record shape and does
+    not require old build paths to remain present on the current machine.
+    """
+    identity = cmake_identity_for_raw_schema(raw_schema)
+    require(isinstance(snapshot, dict), "input identity is not an object")
+    archive = snapshot.get("candidate_archive")
+    build = snapshot.get("candidate_build")
+    require(isinstance(archive, dict) and isinstance(build, dict),
+            "candidate archive/build identity is missing")
+    validated_archive = build.get("validated_archive")
+    archive_recipe = build.get("archive_link_recipe")
+    require(isinstance(validated_archive, dict) and
+            isinstance(archive_recipe, dict),
+            "candidate CMake archive provenance is incomplete")
+    expected_archive = identity["archive"]
+    expected_recipe_suffix = "/CMakeFiles/{}/link.txt".format(
+        identity["target_directory"])
+    paths = (
+        specification.get("candidate_archive"),
+        archive.get("path"),
+        validated_archive.get("path"),
+    )
+    require(all(isinstance(path, str) and Path(path).name == expected_archive
+                for path in paths),
+            "candidate archive name differs from its evidence schema")
+    recipe_path = archive_recipe.get("path")
+    require(isinstance(recipe_path, str) and
+            recipe_path.replace("\\", "/").endswith(expected_recipe_suffix),
+            "candidate CMake target directory differs from its evidence schema")
+    require(archive == validated_archive,
+            "candidate archive identity differs from validated build artifact")
+    if raw_schema == RAW_SCHEMA:
+        compiler_records = build.get("validated_compile_commands")
+        members = build.get("validated_archive_members")
+        build_dir = build.get("build_dir")
+        archiver = build.get("archiver")
+        ranlib = build.get("ranlib")
+        tool_invocations = build.get("archive_link_tool_invocations")
+        require(isinstance(compiler_records, dict) and
+                isinstance(compiler_records.get("required_source_object_pairs"), list) and
+                isinstance(members, list) and members and
+                len(members) == len(set(members)) and
+                all(isinstance(member, str) and member for member in members) and
+                isinstance(build_dir, str) and build_dir and
+                isinstance(archiver, dict) and isinstance(archiver.get("path"), str) and
+                isinstance(ranlib, dict) and isinstance(ranlib.get("path"), str) and
+                isinstance(tool_invocations, dict) and
+                set(tool_invocations) == {"archiver", "ranlib"} and
+                all(isinstance(tool_invocations.get(role), dict) and
+                    set(tool_invocations[role]) == {"invocation", "resolved_path"} and
+                    isinstance(tool_invocations[role]["invocation"], str) and
+                    tool_invocations[role]["invocation"] and
+                    tool_invocations[role]["resolved_path"] ==
+                        (archiver if role == "archiver" else ranlib)["path"]
+                    for role in ("archiver", "ranlib")),
+                "candidate archive command closure is incomplete")
+        objects_by_member: dict[str, str] = {}
+        for record in compiler_records["required_source_object_pairs"]:
+            require(isinstance(record, dict) and
+                    isinstance(record.get("source"), dict) and
+                    isinstance(record.get("object"), dict) and
+                    isinstance(record["source"].get("path"), str) and
+                    isinstance(record["object"].get("path"), str),
+                    "candidate compile-command closure is malformed")
+            if record["source"]["path"].endswith("/bench/leopard2/benchmark.cpp"):
+                continue
+            object_path = Path(record["object"]["path"])
+            try:
+                relative_object = object_path.relative_to(Path(build_dir)).as_posix()
+            except ValueError as error:
+                raise EvidenceError(
+                    "candidate archive object escapes its build directory") from error
+            require(object_path.name not in objects_by_member,
+                    "candidate archive object basenames are ambiguous")
+            objects_by_member[object_path.name] = relative_object
+        require(set(objects_by_member) == set(members),
+                "candidate archive members differ from compile-command closure")
+        validate_archive_link_recipe_content(
+            build.get("archive_link_recipe_content"), archive_recipe,
+            expected_archive, identity["target_directory"],
+            "candidate archive link recipe",
+            expected_objects=[objects_by_member[member] for member in members],
+            expected_archiver=tool_invocations["archiver"]["invocation"],
+            expected_ranlib=tool_invocations["ranlib"]["invocation"])
+    else:
+        require("archive_link_recipe_content" not in build and
+                "ranlib" not in build and
+                "archive_link_tool_invocations" not in build,
+                "historical build identity has a current-only recipe-content field")
 
 
 def parse_cpu_list(text: str) -> set[int]:
@@ -2509,7 +2772,8 @@ def validate_raw(
 ) -> dict[str, Any]:
     raw = verify_signature(raw, "raw bundle")
     raw_schema = raw.get("schema")
-    require(raw_schema in (RAW_SCHEMA_V1, RAW_SCHEMA),
+    require(isinstance(raw_schema, str) and
+            raw_schema in RAW_TO_CMAKE_IDENTITY,
             "wrong raw bundle schema")
     campaign = raw.get("campaign")
     require(isinstance(campaign, dict), "campaign is not an object")
@@ -2547,7 +2811,7 @@ def validate_raw(
     host_final = raw.get("host_final")
     require(host_initial == host_final, "host policy/topology changed during campaign")
     validate_host_record(host_initial, cpu, sibling, allowed)
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in (RAW_SCHEMA_V2, RAW_SCHEMA):
         validate_isolation(raw.get("isolation"), cpu, sibling)
     else:
         require("isolation" not in raw,
@@ -2576,6 +2840,7 @@ def validate_raw(
     require(re.fullmatch(r"[0-9a-f]{40}", input_spec["candidate_commit"]) is not None,
             "candidate commit is not a full lowercase SHA-1")
     require(initial == final, "input identities changed during the campaign")
+    validate_candidate_cmake_identity(input_spec, initial, raw_schema)
     reservation = raw.get("reservation")
     require(isinstance(reservation, dict) and
             reservation.get("lock") == "exclusive_nonblocking" and
@@ -2593,7 +2858,7 @@ def validate_raw(
             sha256_bytes(canonical_bytes(reservation_payload)),
             "retained CPU reservation hash does not match its canonical payload")
     if check_current_inputs:
-        require(input_snapshot(input_spec) == initial,
+        require(input_snapshot(input_spec, raw_schema) == initial,
                 "current executable/archive/source identity differs from retained evidence")
         validate_reservation_current(reservation)
     invocations = raw.get("invocations")
@@ -2676,7 +2941,7 @@ def validate_raw(
                         f"candidate backend changed within cell {expected[0]}")
             else:
                 candidate_backend_by_cell[expected[0]] = backend
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in (RAW_SCHEMA_V2, RAW_SCHEMA):
         isolation = raw["isolation"]
         elapsed_ns = isolation["after"]["monotonic_ns"] - \
             isolation["before"]["monotonic_ns"]
@@ -2824,7 +3089,9 @@ def validate_failure(
         "invocations", "isolation", "pair_lease", "reservation",
         "retained_files", "schema", "status", "traceback", "valid"},
         "failed campaign has unexpected or missing fields")
-    require(failure.get("schema") == FAILURE_SCHEMA and
+    failure_schema = failure.get("schema")
+    require(isinstance(failure_schema, str) and
+            failure_schema in FAILURE_TO_RAW_SCHEMA and
             failure.get("status") == "failed" and failure.get("valid") is False,
             "failed campaign status is invalid")
     require(all(isinstance(failure.get(name), str) and failure[name]
@@ -2873,6 +3140,11 @@ def validate_failure(
             "failed invocation prefix is too long")
     specification = failure.get("input_specification")
     initial = failure.get("identities_initial")
+    if isinstance(initial, dict):
+        require(isinstance(specification, dict),
+                "failed campaign identity lacks input specification")
+        validate_candidate_cmake_identity(
+            specification, initial, FAILURE_TO_RAW_SCHEMA[failure_schema])
     if invocations:
         require(isinstance(specification, dict) and isinstance(initial, dict) and
                 reservation is not None,
@@ -3121,7 +3393,8 @@ def verify_campaign(options: argparse.Namespace) -> int:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     verify_signature(manifest, "manifest")
     manifest_schema = manifest.get("schema")
-    require(manifest_schema in (MANIFEST_SCHEMA_V1, MANIFEST_SCHEMA) and
+    require(isinstance(manifest_schema, str) and
+            manifest_schema in MANIFEST_TO_RAW_SCHEMA and
             manifest.get("valid") is True,
             "manifest is not valid main-comparison evidence")
     output = manifest_path.parent
@@ -3133,8 +3406,7 @@ def verify_campaign(options: argparse.Namespace) -> int:
             raw_info.get("sha256") == sha256_file(raw_path),
             "raw bundle file identity mismatch")
     raw = json.loads(raw_path.read_text(encoding="utf-8"))
-    expected_raw_schema = (
-        RAW_SCHEMA if manifest_schema == MANIFEST_SCHEMA else RAW_SCHEMA_V1)
+    expected_raw_schema = MANIFEST_TO_RAW_SCHEMA[manifest_schema]
     require(isinstance(raw, dict) and raw.get("schema") == expected_raw_schema,
             "manifest/raw schema versions do not match")
     analysis = validate_raw(
@@ -3143,7 +3415,7 @@ def verify_campaign(options: argparse.Namespace) -> int:
     require(raw_info.get("payload_digest") == raw.get("digest"),
             "manifest/raw payload identity mismatch")
     names = ["campaign", "host", "reservation", "identities", "analysis"]
-    if manifest_schema == MANIFEST_SCHEMA:
+    if manifest_schema in (MANIFEST_SCHEMA_V2, MANIFEST_SCHEMA):
         names.append("isolation")
     else:
         require("isolation" not in manifest,

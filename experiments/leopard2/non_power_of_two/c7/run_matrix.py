@@ -4,8 +4,9 @@
 The retained checkpoint deliberately uses ordinary CPUs and labels its only
 timed cell non-authoritative.  A later authoritative runner may reuse the C++
 harness, but must produce a separate manifest against the integrated core.
-Manifest v4 binds clean committed tooling independently from its ancestor core
-closure; this runner never generates historical v3 evidence.
+Manifest v5 binds clean committed tooling independently from its ancestor core
+closure and the canonical CMake target/archive identity.  This runner never
+generates historical v3/v4 evidence.
 """
 
 from __future__ import annotations
@@ -44,9 +45,12 @@ GIT_SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 NORMALIZATION_SCHEMA = "leopard2-source-root-prefix/v1"
 NORMALIZATION_TOKEN = "${LEO2_SOURCE_ROOT}"
 PREFIX_MAP_TARGET = "LEO2_SOURCE_ROOT"
-MANIFEST_SCHEMA = "leopard2-c7-build-run-manifest/v4"
+MANIFEST_SCHEMA = "leopard2-c7-build-run-manifest/v5"
+HISTORICAL_MANIFEST_SCHEMA_V4 = "leopard2-c7-build-run-manifest/v4"
 LEGACY_MANIFEST_SCHEMA = "leopard2-c7-build-run-manifest/v3"
-PEER_ATTESTATION_SCHEMA = "leopard2-c7-peer-reproducibility/v3"
+PEER_ATTESTATION_SCHEMA = "leopard2-c7-peer-reproducibility/v4"
+HISTORICAL_PEER_ATTESTATION_SCHEMA_V3 = \
+    "leopard2-c7-peer-reproducibility/v3"
 LEGACY_PEER_ATTESTATION_SCHEMA = "leopard2-c7-peer-reproducibility/v2"
 PEER_BUNDLE_SCHEMA = "leopard2-c7-peer-evidence-bundle/v1"
 PEER_BUNDLE_MAX_MEMBERS = 256
@@ -55,6 +59,7 @@ PEER_BUNDLE_MAX_TOTAL_BYTES = 64 * 1024 * 1024
 PEER_BUNDLE_MAX_ARCHIVE_BYTES = (
     PEER_BUNDLE_MAX_TOTAL_BYTES + PEER_BUNDLE_MAX_MEMBERS * 2048 + 1024 * 1024)
 C7_BINARY_MAX_BYTES = 64 * 1024 * 1024
+MAX_LINK_RECIPE_BYTES = 1024 * 1024
 PREFIX_MAP_OPTIONS = (
     "-ffile-prefix-map", "-fdebug-prefix-map", "-fmacro-prefix-map")
 EXPECTED_EXECUTABLE_SANITIZER_COUNTS = {
@@ -74,8 +79,15 @@ EXPECTED_ARCHIVE_MEMBER_COUNTS = {
     "Leopard2BackendSSSE3.cpp.o": {"asan_lines": 26, "ubsan_lines": 8},
     "Leopard2BackendAVX2.cpp.o": {"asan_lines": 28, "ubsan_lines": 7},
 }
+CURRENT_ARCHIVE_MEMBERS = (
+    "leopard.cpp.o", "leopard2.cpp.o", "Leopard2Backend.cpp.o",
+    "Leopard2BackendScalar.cpp.o", "Leopard2CpuFeatures.cpp.o",
+    "Leopard2Plan.cpp.o", "LeopardCommon.cpp.o", "LeopardFF8.cpp.o",
+    "LeopardFF16.cpp.o", "Leopard2BackendSSSE3.cpp.o",
+    "Leopard2BackendAVX2.cpp.o",
+)
 # Retained v3 evidence remains verifiable under its original exact proof.  The
-# v4 runner never emits these values for a new build.
+# v5 runner never emits these values for a new build.
 LEGACY_EXPECTED_EXECUTABLE_SANITIZER_COUNTS = {
     "asan_lines": 320, "ubsan_lines": 54}
 LEGACY_EXPECTED_ARCHIVE_SANITIZER_COUNTS = {
@@ -231,6 +243,20 @@ def artifact(path: pathlib.Path) -> dict[str, Any]:
         "sha256": sha256(path),
         "bytes": path.stat().st_size,
     }
+
+
+def exact_text_content(path: pathlib.Path, label: str) -> dict[str, Any]:
+    data = path.read_bytes()
+    if not 0 < len(data) <= MAX_LINK_RECIPE_BYTES:
+        raise RuntimeError(f"{label} is outside the retained byte bound")
+    try:
+        text = data.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as error:
+        raise RuntimeError(f"{label} is not strict UTF-8") from error
+    if "\x00" in text:
+        raise RuntimeError(f"{label} contains a NUL byte")
+    return {"encoding": "utf-8", "bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(), "text": text}
 
 
 def normalize_checkout_root(
@@ -593,14 +619,23 @@ def cmake_build(
         cmake_cache_value(cache_path, "CMAKE_LINKER")).absolute()
     build_argv = [
         str(resolve_program("cmake")), "--build", str(build_dir),
-        "--target", "libleopard", "--verbose", "--", f"-j{jobs}",
+        "--target", "leopard", "--verbose", "--", f"-j{jobs}",
     ]
     run_logged(build_argv, build_stdout, build_stderr)
-    library = build_dir / "liblibleopard.a"
+    library = build_dir / "libleopard.a"
     if not library.is_file():
         raise RuntimeError(f"missing library output: {library}")
     source_closure, dependency_files = dependency_closure(
         build_dir, results, name)
+    archive_link_path = build_dir / "CMakeFiles/leopard.dir/link.txt"
+    archive_link_recipe = artifact(archive_link_path)
+    archive_link_recipe_content = exact_text_content(
+        archive_link_path, f"{name} archive link recipe")
+    if (archive_link_recipe["bytes"] !=
+            archive_link_recipe_content["bytes"] or
+            archive_link_recipe["sha256"] !=
+            archive_link_recipe_content["sha256"]):
+        raise RuntimeError("archive link recipe changed between identity reads")
     normalized_configure, configure_tokens = normalize_argv(configure_argv)
     normalized_build, build_tokens = normalize_argv(build_argv)
     return {
@@ -626,6 +661,8 @@ def cmake_build(
         "cmake_linker": program_record(cmake_linker),
         "launcher_python": program_record(launcher_python),
         "library": artifact(library),
+        "archive_link_recipe": archive_link_recipe,
+        "archive_link_recipe_content": archive_link_recipe_content,
         "source_closure": source_closure,
         "dependency_files": dependency_files,
         "build_dir": relative(build_dir),
@@ -676,8 +713,9 @@ def compile_experiment(
         [str(archive_program), "t", relative(library_path)], cwd=ROOT,
         check=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     ).stdout.splitlines()
-    if len(library_members) != len(set(library_members)) or not library_members:
-        raise RuntimeError("static archive member list is invalid")
+    if (len(library_members) != len(set(library_members)) or
+            tuple(library_members) != CURRENT_ARCHIVE_MEMBERS):
+        raise RuntimeError("static archive member list/order is invalid")
     executable_scan = results / "logs" / f"{name}-nm-executable-sanitizers.txt"
     archive_scan = results / "logs" / f"{name}-nm-core-archive-sanitizers.txt"
     executable_counts, executable_members = filtered_symbol_scan(

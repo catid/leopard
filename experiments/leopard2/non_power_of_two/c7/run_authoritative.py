@@ -3,7 +3,7 @@
 
 This tool never builds C7.  It binds an already-built standalone executable and
 its core archive to an exact core commit beneath a clean tooling revision,
-validates the final v4 A/B build provenance live, holds both a coordinator
+validates the final v5 A/B build provenance live, holds both a coordinator
 reservation and the shared per-user physical-core lease, pins the child to one
 SMT thread, and rejects the run when the sibling records any non-idle work.
 ``verify`` and ``verify-failure`` are portable: they replay canonical retained
@@ -27,6 +27,7 @@ import os
 import platform
 import re
 import resource
+import shlex
 import signal
 import socket
 import stat
@@ -40,21 +41,40 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
-RAW_SCHEMA = "leopard2-c7-authoritative-raw/v3"
-MANIFEST_SCHEMA = "leopard2-c7-authoritative-manifest/v3"
-FAILURE_SCHEMA = "leopard2-c7-authoritative-failure/v4"
+HISTORICAL_RAW_SCHEMA = "leopard2-c7-authoritative-raw/v3"
+RAW_SCHEMA = "leopard2-c7-authoritative-raw/v4"
+HISTORICAL_MANIFEST_SCHEMA = "leopard2-c7-authoritative-manifest/v3"
+MANIFEST_SCHEMA = "leopard2-c7-authoritative-manifest/v4"
+HISTORICAL_FAILURE_SCHEMA = "leopard2-c7-authoritative-failure/v4"
+FAILURE_SCHEMA = "leopard2-c7-authoritative-failure/v5"
 FAILURE_STATE_SCHEMA = "leopard2-c7-authoritative-failure-state/v2"
 PUBLICATION_STATE_SCHEMA = "leopard2-c7-authoritative-publication-state/v1"
 LIFECYCLE_SCHEMA = "leopard2-c7-authoritative-lifecycle/v1"
-INPUT_SCHEMA = "leopard2-c7-authoritative-input/v2"
-BUILD_PROVENANCE_SCHEMA = "leopard2-c7-authoritative-build-provenance/v2"
+HISTORICAL_INPUT_SCHEMA = "leopard2-c7-authoritative-input/v2"
+INPUT_SCHEMA = "leopard2-c7-authoritative-input/v3"
+HISTORICAL_BUILD_PROVENANCE_SCHEMA = \
+    "leopard2-c7-authoritative-build-provenance/v2"
+BUILD_PROVENANCE_SCHEMA = "leopard2-c7-authoritative-build-provenance/v3"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
 KERNEL_LEASE_SCHEMA = "leopard2-linux-abstract-lease/v1"
 ISOLATION_SCHEMA = "leopard2-c7-authoritative-isolation/v1"
-BUILD_MANIFEST_SCHEMA = "leopard2-c7-build-run-manifest/v4"
-BUILD_ATTESTATION_SCHEMA = "leopard2-c7-authoritative-build-attestation/v1"
+HISTORICAL_BUILD_MANIFEST_SCHEMA = "leopard2-c7-build-run-manifest/v4"
+BUILD_MANIFEST_SCHEMA = "leopard2-c7-build-run-manifest/v5"
+HISTORICAL_BUILD_ATTESTATION_SCHEMA = \
+    "leopard2-c7-authoritative-build-attestation/v1"
+BUILD_ATTESTATION_SCHEMA = "leopard2-c7-authoritative-build-attestation/v2"
 CHILD_SCHEMA = "leopard2-c7-exact-low/v1"
+HISTORICAL_CMAKE_IDENTITY = {
+    "target": "libleopard",
+    "archive": "liblibleopard.a",
+    "target_directory": "libleopard.dir",
+}
+CANONICAL_CMAKE_IDENTITY = {
+    "target": "leopard",
+    "archive": "libleopard.a",
+    "target_directory": "leopard.dir",
+}
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 GIT_SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 SAMPLE_COUNT = 7
@@ -69,6 +89,7 @@ MAX_ARTIFACT_DEPTH = 16
 MAX_ARTIFACT_PATH_BYTES = 4096
 MAX_REPORTED_SCRATCH_BYTES = 1 << 40
 MAX_DIAGNOSTIC_BYTES = 16 * 1024
+MAX_LINK_RECIPE_BYTES = 1024 * 1024
 CHILD_REAP_TIMEOUT_SECONDS = 5.0
 PR_SET_CHILD_SUBREAPER = 36
 PR_GET_CHILD_SUBREAPER = 37
@@ -91,6 +112,20 @@ CORE_SOURCE_CLOSURE = (
     "LeopardFF16.cpp", "LeopardFF16.h", "LeopardFF8.cpp", "LeopardFF8.h",
     "cmake/leopardConfig.cmake.in", "leopard.cpp", "leopard.h",
     "leopard2.cpp", "leopard2.h",
+)
+CORE_ARCHIVE_MEMBERS = (
+    "leopard.cpp.o", "leopard2.cpp.o", "Leopard2Backend.cpp.o",
+    "Leopard2BackendScalar.cpp.o", "Leopard2CpuFeatures.cpp.o",
+    "Leopard2Plan.cpp.o", "LeopardCommon.cpp.o", "LeopardFF8.cpp.o",
+    "LeopardFF16.cpp.o", "Leopard2BackendSSSE3.cpp.o",
+    "Leopard2BackendAVX2.cpp.o",
+)
+HISTORICAL_CORE_ARCHIVE_MEMBERS = (
+    "leopard.cpp.o", "leopard2.cpp.o", "Leopard2Backend.cpp.o",
+    "Leopard2BackendScalar.cpp.o", "Leopard2CpuFeatures.cpp.o",
+    "Leopard2Plan.cpp.o", "LeopardCommon.cpp.o", "LeopardFF16.cpp.o",
+    "LeopardFF8.cpp.o", "Leopard2BackendSSSE3.cpp.o",
+    "Leopard2BackendAVX2.cpp.o",
 )
 CHILD_ENVIRONMENT = {
     "LANG": "C", "LC_ALL": "C", "OMP_DYNAMIC": "FALSE",
@@ -250,6 +285,56 @@ class EvidenceError(RuntimeError):
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise EvidenceError(message)
+
+
+SCHEMAS_BY_FAMILY = {
+    "historical": {
+        "raw": HISTORICAL_RAW_SCHEMA,
+        "manifest": HISTORICAL_MANIFEST_SCHEMA,
+        "failure": HISTORICAL_FAILURE_SCHEMA,
+        "input": HISTORICAL_INPUT_SCHEMA,
+        "build_provenance": HISTORICAL_BUILD_PROVENANCE_SCHEMA,
+        "build_manifest": HISTORICAL_BUILD_MANIFEST_SCHEMA,
+        "build_attestation": HISTORICAL_BUILD_ATTESTATION_SCHEMA,
+    },
+    "current": {
+        "raw": RAW_SCHEMA,
+        "manifest": MANIFEST_SCHEMA,
+        "failure": FAILURE_SCHEMA,
+        "input": INPUT_SCHEMA,
+        "build_provenance": BUILD_PROVENANCE_SCHEMA,
+        "build_manifest": BUILD_MANIFEST_SCHEMA,
+        "build_attestation": BUILD_ATTESTATION_SCHEMA,
+    },
+}
+
+
+def schema_family(schema: object, role: str) -> str:
+    matches = [family for family, schemas in SCHEMAS_BY_FAMILY.items()
+               if schemas.get(role) == schema]
+    require(len(matches) == 1, f"C7 {role} schema changed")
+    return matches[0]
+
+
+def family_schema(family: str, role: str) -> str:
+    require(family in SCHEMAS_BY_FAMILY and
+            role in SCHEMAS_BY_FAMILY[family],
+            "C7 schema family changed")
+    return SCHEMAS_BY_FAMILY[family][role]
+
+
+def cmake_identity_for_family(family: str) -> Mapping[str, str]:
+    if family == "historical":
+        return HISTORICAL_CMAKE_IDENTITY
+    require(family == "current", "C7 CMake identity family changed")
+    return CANONICAL_CMAKE_IDENTITY
+
+
+def retained_build_manifest_name(family: str) -> str:
+    schema = family_schema(family, "build_manifest")
+    version = schema.rsplit("/v", 1)[-1]
+    require(version.isdigit(), "C7 build manifest version changed")
+    return f"build-run-manifest-v{version}.json"
 
 
 def bounded_diagnostic(value: object, label: str) -> str:
@@ -843,6 +928,61 @@ def manifest_program(value: object, label: str) -> dict[str, str]:
     return {"path": value["path"], "sha256": value["sha256"]}
 
 
+def manifest_archive_link_recipe(
+    build: Mapping[str, Any], name: str, build_dir: str,
+    cmake_identity: Mapping[str, str],
+) -> dict[str, Any]:
+    expected_path = (
+        Path(build_dir) / "CMakeFiles" /
+        cmake_identity["target_directory"] / "link.txt")
+    identity = manifest_artifact(
+        build.get("archive_link_recipe"), expected_path,
+        f"C7 {name} archive link recipe")
+    content = build.get("archive_link_recipe_content")
+    require(isinstance(content, dict) and set(content) == {
+                "bytes", "encoding", "sha256", "text"} and
+            content.get("encoding") == "utf-8" and
+            isinstance(content.get("text"), str) and
+            "\x00" not in content["text"],
+            f"C7 {name} retained archive link recipe changed")
+    encoded = content["text"].encode("utf-8")
+    digest = sha256_bytes(encoded)
+    require(0 < len(encoded) <= MAX_LINK_RECIPE_BYTES and
+            type(content.get("bytes")) is int and
+            content["bytes"] == len(encoded) and content["sha256"] == digest and
+            identity["bytes"] == len(encoded) and identity["sha256"] == digest,
+            f"C7 {name} archive link-recipe bytes are not bound")
+    commands: list[list[str]] = []
+    for line in content["text"].splitlines():
+        if not line.strip():
+            continue
+        try:
+            tokens = shlex.split(line, posix=True)
+        except ValueError as error:
+            raise EvidenceError(
+                f"C7 {name} archive link recipe is not parseable") from error
+        require(tokens, f"C7 {name} archive link recipe has an empty command")
+        commands.append(tokens)
+    require(len(commands) == 2,
+            f"C7 {name} archive link recipe command count changed")
+    ar = manifest_program(build.get("ar"), f"C7 {name} archiver")
+    ranlib = manifest_program(build.get("ranlib"), f"C7 {name} ranlib")
+    expected_objects = [
+        f"CMakeFiles/{(
+            'leopard2_backend_avx2.dir' if member == 'Leopard2BackendAVX2.cpp.o'
+            else 'leopard2_backend_ssse3.dir' if member ==
+            'Leopard2BackendSSSE3.cpp.o'
+            else cmake_identity['target_directory'])}/{member}"
+        for member in CORE_ARCHIVE_MEMBERS
+    ]
+    require(commands[0] == [ar["path"], "qc", cmake_identity["archive"],
+                            *expected_objects] and
+            commands[1] == [ranlib["path"], cmake_identity["archive"]],
+            f"C7 {name} archive recipe differs from its exact CMake closure")
+    return {"bytes": identity["bytes"], "path": identity["path"],
+            "sha256": digest}
+
+
 def derive_build_attestation(
     value: object, manifest_identity: Mapping[str, Any],
     expected_tooling_commit: str, expected_core_commit: str,
@@ -855,8 +995,10 @@ def derive_build_attestation(
     archive_path: Path | None = None, executable_path: Path | None = None,
 ) -> dict[str, Any]:
     require(isinstance(value, dict), "C7 build manifest is not an object")
-    require(value.get("schema") == BUILD_MANIFEST_SCHEMA and
-            value.get("status") == "pass" and value.get("scope") == BUILD_SCOPE and
+    family = schema_family(value.get("schema"), "build_manifest")
+    schemas = SCHEMAS_BY_FAMILY[family]
+    cmake_identity = cmake_identity_for_family(family)
+    require(value.get("status") == "pass" and value.get("scope") == BUILD_SCOPE and
             value.get("tooling_git_sha") == expected_tooling_commit and
             value.get("core_git_sha") == expected_core_commit,
             "C7 build manifest version, status, scope, or Git identity changed")
@@ -878,6 +1020,7 @@ def derive_build_attestation(
             len(core_source_closure) == len(CORE_SOURCE_CLOSURE),
             "retained core source closure changed")
     build_record_sha256: dict[str, str] = {}
+    archive_link_recipe_sha256: dict[str, str] = {}
     for build, name in zip(builds, BUILD_NAMES):
         require(typed_equal(build.get("source_closure"), core_source_closure),
                 f"C7 {name} build source closure differs")
@@ -885,6 +1028,48 @@ def derive_build_attestation(
             build.get("launcher_python"), f"C7 {name} launcher Python")
         require(typed_equal(launcher_python, python_identity),
                 f"C7 {name} launcher Python differs from the runner")
+        build_dir = build.get("build_dir")
+        require(isinstance(build_dir, str) and
+                build_dir.endswith(f"/core-{name}") and "\\" not in build_dir and
+                ":" not in build_dir and not os.path.isabs(build_dir) and
+                Path(build_dir).as_posix() == build_dir and
+                all(part not in ("", ".", "..") for part in Path(build_dir).parts),
+                f"C7 {name} build directory changed")
+        manifest_artifact(
+            build.get("library"), Path(build_dir) / cmake_identity["archive"],
+            f"C7 {name} archive")
+        build_argv = build.get("build_argv")
+        require(isinstance(build_argv, list) and
+                all(isinstance(item, str) for item in build_argv) and
+                build_argv.count("--target") == 1 and
+                build_argv.index("--target") + 1 < len(build_argv) and
+                build_argv[build_argv.index("--target") + 1] ==
+                    cmake_identity["target"],
+                f"C7 {name} CMake target identity changed")
+        dependency_files = build.get("dependency_files")
+        require(isinstance(dependency_files, list) and dependency_files,
+                f"C7 {name} dependency closure is absent")
+        ordinary_dependency_paths: list[str] = []
+        for dependency in dependency_files:
+            require(isinstance(dependency, dict) and
+                    isinstance(dependency.get("build_path"), str),
+                    f"C7 {name} dependency identity changed")
+            dependency_path = dependency["build_path"]
+            if ("/CMakeFiles/leopard2_backend_avx2.dir/" not in dependency_path and
+                    "/CMakeFiles/leopard2_backend_ssse3.dir/" not in dependency_path):
+                ordinary_dependency_paths.append(dependency_path)
+        require(ordinary_dependency_paths and all(
+            f"/CMakeFiles/{cmake_identity['target_directory']}/" in path
+            for path in ordinary_dependency_paths),
+            f"C7 {name} CMake target directory identity changed")
+        if family == "current":
+            recipe = manifest_archive_link_recipe(
+                build, name, build_dir, cmake_identity)
+            archive_link_recipe_sha256[name] = recipe["sha256"]
+        else:
+            require("archive_link_recipe" not in build and
+                    "archive_link_recipe_content" not in build,
+                    f"historical C7 {name} build gained current recipe fields")
         build_record_sha256[name] = sha256_bytes(canonical_bytes(build))
     taskset = manifest_program(value.get("taskset"), "C7 taskset")
     require(typed_equal(taskset, taskset_identity),
@@ -901,7 +1086,8 @@ def derive_build_attestation(
             all(part not in ("", ".", "..") for part in Path(build_dir).parts),
             "C7 AVX2 build directory changed")
     library = manifest_artifact(
-        avx2.get("library"), Path(build_dir) / "liblibleopard.a", "C7 AVX2 archive")
+        avx2.get("library"), Path(build_dir) / cmake_identity["archive"],
+        "C7 AVX2 archive")
     executable_record = manifest_artifact(
         avx2.get("executable"), Path(build_dir).parent / "c7-avx2",
         "C7 AVX2 executable")
@@ -953,10 +1139,10 @@ def derive_build_attestation(
             isinstance(manifest_identity.get("sha256"), str) and
             SHA256_RE.fullmatch(manifest_identity["sha256"]) is not None,
             "C7 build manifest file identity changed")
-    return {
-        "schema": BUILD_ATTESTATION_SCHEMA,
+    result = {
+        "schema": schemas["build_attestation"],
         "manifest": {"bytes": manifest_size,
-                     "schema": BUILD_MANIFEST_SCHEMA,
+                     "schema": schemas["build_manifest"],
                      "sha256": manifest_identity["sha256"]},
         "status": "pass", "scope": BUILD_SCOPE,
         "tooling_commit": expected_tooling_commit,
@@ -983,6 +1169,9 @@ def derive_build_attestation(
             },
         },
     }
+    if family == "current":
+        result["archive_link_recipe_sha256"] = archive_link_recipe_sha256
+    return result
 
 
 def run_build_validator(source_root: Path, build_manifest: Path) -> None:
@@ -993,10 +1182,10 @@ def run_build_validator(source_root: Path, build_manifest: Path) -> None:
          "--live", "--require-checkout-head"],
         cwd=None, timeout_seconds=300, environment=VALIDATOR_ENVIRONMENT)
     require(not timed_out and completed.returncode == 0,
-            "C7 v4 live build validation failed: " +
+            "C7 v5 live build validation failed: " +
             stderr.decode("utf-8", errors="replace").strip())
     require(stdout == b"C7 evidence validation passed (live)\n" and
-            stderr == b"", "C7 v4 live validator output changed")
+            stderr == b"", "C7 v5 live validator output changed")
 
 
 def verified_build_attestation(
@@ -1013,7 +1202,7 @@ def verified_build_attestation(
     try:
         build_manifest.relative_to(source_root.resolve())
     except ValueError as error:
-        raise EvidenceError("C7 v4 build manifest is outside the source checkout") from error
+        raise EvidenceError("C7 v5 build manifest is outside the source checkout") from error
     before = file_identity(build_manifest, "build-manifest")
     run_build_validator(source_root, build_manifest)
     after = file_identity(build_manifest, "build-manifest")
@@ -1021,9 +1210,11 @@ def verified_build_attestation(
     data = read_bounded(build_manifest)
     require(len(data) == before["size"] and sha256_bytes(data) == before["sha256"],
             "C7 build manifest changed after live validation")
-    parsed = strict_json(data, "C7 v4 build manifest")
+    parsed = strict_json(data, "C7 v5 build manifest")
     require(data == canonical_pretty_bytes(parsed),
-            "C7 v4 build manifest is not canonical pretty JSON")
+            "C7 v5 build manifest is not canonical pretty JSON")
+    require(parsed.get("schema") == BUILD_MANIFEST_SCHEMA,
+            "authoritative runs require the current C7 v5 build manifest")
     attestation = derive_build_attestation(
         parsed, before, expected_tooling_commit, expected_core_commit,
         source_identity, build_runner_identity, build_validator_identity,
@@ -1096,13 +1287,19 @@ def input_snapshot(source_root: Path, expected_tooling_commit: str,
     return result
 
 
-def validate_input_snapshot(value: object) -> dict[str, Any]:
+def validate_input_snapshot(value: object, *,
+                            expected_family: str | None = None) -> dict[str, Any]:
     require(isinstance(value, dict) and set(value) == {
         "schema", "git", "runner", "source", "build_runner", "build_validator",
         "build_manifest", "build_attestation", "archive", "executable",
         "taskset", "python", "core_source_closure", "binding_sha256"},
         "input snapshot schema changed")
-    require(value["schema"] == INPUT_SCHEMA, "input snapshot version changed")
+    family = schema_family(value["schema"], "input")
+    if expected_family is not None:
+        require(family == expected_family,
+                "input snapshot schema family changed")
+    schemas = SCHEMAS_BY_FAMILY[family]
+    cmake_identity = cmake_identity_for_family(family)
     payload = {key: value[key] for key in value if key != "binding_sha256"}
     require(isinstance(value["binding_sha256"], str) and
             SHA256_RE.fullmatch(value["binding_sha256"]) is not None and
@@ -1135,12 +1332,15 @@ def validate_input_snapshot(value: object) -> dict[str, Any]:
             isinstance(record["sha256"], str) and
             SHA256_RE.fullmatch(record["sha256"]) is not None,
             f"retained {key} identity is invalid")
+    require(Path(value["archive"]["path"]).name == cmake_identity["archive"] and
+            Path(value["archive"]["path"]).parent.name == "core-avx2",
+            "retained AVX2 CMake archive identity changed")
     build_manifest = value["build_manifest"]
     require(isinstance(build_manifest, dict) and set(build_manifest) == {
         "bytes", "schema", "sha256"} and
         type(build_manifest["bytes"]) is int and
         0 < build_manifest["bytes"] <= MAX_ARTIFACT_BYTES and
-        build_manifest["schema"] == BUILD_MANIFEST_SCHEMA and
+        build_manifest["schema"] == schemas["build_manifest"] and
         isinstance(build_manifest["sha256"], str) and
         SHA256_RE.fullmatch(build_manifest["sha256"]) is not None,
         "retained build manifest identity is invalid")
@@ -1152,21 +1352,25 @@ def validate_input_snapshot(value: object) -> dict[str, Any]:
                 SHA256_RE.fullmatch(program["sha256"]) is not None,
                 f"retained {key} identity is invalid")
     attestation = value["build_attestation"]
-    require(isinstance(attestation, dict) and set(attestation) == {
+    expected_attestation_keys = {
         "schema", "manifest", "status", "scope",
         "tooling_commit", "core_commit", "comparison_status", "source",
         "build_runner", "build_validator", "taskset", "python",
-        "core_source_closure_sha256", "build_record_sha256", "avx2"} and
-        attestation["schema"] == BUILD_ATTESTATION_SCHEMA and
+        "core_source_closure_sha256", "build_record_sha256", "avx2"}
+    if family == "current":
+        expected_attestation_keys.add("archive_link_recipe_sha256")
+    require(isinstance(attestation, dict) and
+        set(attestation) == expected_attestation_keys and
+        attestation["schema"] == schemas["build_attestation"] and
         attestation["status"] == "pass" and attestation["scope"] == BUILD_SCOPE and
         attestation["tooling_commit"] == git["tooling_commit"] and
         attestation["core_commit"] == git["core_commit"] and
         attestation["comparison_status"] == "pass",
-        "retained C7 v4 build attestation changed")
+        "retained C7 build attestation changed")
     manifest = attestation["manifest"]
     require(isinstance(manifest, dict) and set(manifest) == {
         "bytes", "schema", "sha256"} and
-        manifest["schema"] == BUILD_MANIFEST_SCHEMA and
+        manifest["schema"] == schemas["build_manifest"] and
         manifest["bytes"] == value["build_manifest"]["bytes"] and
         manifest["sha256"] == value["build_manifest"]["sha256"],
         "retained C7 build manifest attestation changed")
@@ -1192,6 +1396,14 @@ def validate_input_snapshot(value: object) -> dict[str, Any]:
             all(isinstance(item, str) and SHA256_RE.fullmatch(item) is not None
                 for item in attestation["build_record_sha256"].values()),
             "retained build closure attestation changed")
+    if family == "current":
+        recipe_hashes = attestation["archive_link_recipe_sha256"]
+        require(isinstance(recipe_hashes, dict) and
+                set(recipe_hashes) == set(BUILD_NAMES) and
+                all(isinstance(item, str) and
+                    SHA256_RE.fullmatch(item) is not None
+                    for item in recipe_hashes.values()),
+                "retained archive link-recipe attestation changed")
     avx2 = attestation["avx2"]
     require(isinstance(avx2, dict) and set(avx2) == {
         "name", "backend", "sanitizer", "library", "executable",
@@ -2455,12 +2667,14 @@ def inventory_contains(inventory: Sequence[Mapping[str, Any]],
 
 def retain_build_provenance(root: Path, build_manifest: Path,
                             inputs: Mapping[str, Any]) -> dict[str, Any]:
+    family = schema_family(inputs.get("schema"), "input")
+    schemas = SCHEMAS_BY_FAMILY[family]
     data = read_bounded(_lexical_absolute(build_manifest))
     identity = inputs["build_manifest"]
     require(len(data) == identity["bytes"] and
             sha256_bytes(data) == identity["sha256"],
             "C7 build manifest changed before retention")
-    manifest_path = root / "snapshot/provenance/build-run-manifest-v4.json"
+    manifest_path = root / "snapshot/provenance" / retained_build_manifest_name(family)
     write_exclusive(manifest_path, data)
     runner_data = read_bounded(_lexical_absolute(Path(__file__)))
     require(len(runner_data) == inputs["runner"]["bytes"] and
@@ -2468,7 +2682,7 @@ def retain_build_provenance(root: Path, build_manifest: Path,
             "authoritative runner changed before retention")
     runner_path = root / "snapshot/provenance/run_authoritative.py"
     write_exclusive(runner_path, runner_data)
-    return {"schema": BUILD_PROVENANCE_SCHEMA,
+    return {"schema": schemas["build_provenance"],
             "manifest": artifact_record(root, manifest_path),
             "runner": artifact_record(root, runner_path),
             "attestation": copy.deepcopy(inputs["build_attestation"])}
@@ -2476,21 +2690,25 @@ def retain_build_provenance(root: Path, build_manifest: Path,
 
 def validate_build_provenance(value: object, root: Path,
                               inputs: Mapping[str, Any]) -> dict[str, Any]:
+    family = schema_family(inputs.get("schema"), "input")
+    schemas = SCHEMAS_BY_FAMILY[family]
+    retained_name = retained_build_manifest_name(family)
     require(isinstance(value, dict) and set(value) == {
         "schema", "manifest", "runner", "attestation"} and
-        value["schema"] == BUILD_PROVENANCE_SCHEMA,
+        value["schema"] == schemas["build_provenance"],
             "retained C7 build provenance schema changed")
     require(isinstance(value["manifest"], dict) and
             isinstance(value["runner"], dict) and
             value["manifest"].get("path") ==
-                "snapshot/provenance/build-run-manifest-v4.json" and
+                f"snapshot/provenance/{retained_name}" and
             value["runner"].get("path") ==
                 "snapshot/provenance/run_authoritative.py",
             "retained C7 build provenance paths changed")
-    data = read_artifact(root, value["manifest"], "C7 v4 build manifest")
+    data = read_artifact(
+        root, value["manifest"], f"C7 {schemas['build_manifest']} build manifest")
     require(data == canonical_pretty_bytes(
-        strict_json(data, "retained C7 v4 build manifest")),
-        "retained C7 v4 build manifest is not canonical pretty JSON")
+        strict_json(data, "retained C7 build manifest")),
+        "retained C7 build manifest is not canonical pretty JSON")
     require(value["manifest"]["size"] == inputs["build_manifest"]["bytes"] and
             value["manifest"]["sha256"] == inputs["build_manifest"]["sha256"],
             "retained C7 build manifest differs from the live-validated input")
@@ -2498,7 +2716,9 @@ def validate_build_provenance(value: object, root: Path,
     require(len(runner_data) == inputs["runner"]["bytes"] and
             value["runner"]["sha256"] == inputs["runner"]["sha256"],
             "retained authoritative runner differs from its input identity")
-    parsed = strict_json(data, "retained C7 v4 build manifest")
+    parsed = strict_json(data, "retained C7 build manifest")
+    require(parsed.get("schema") == schemas["build_manifest"],
+            "retained C7 build manifest schema family changed")
     expected = derive_build_attestation(
         parsed, inputs["build_manifest"], inputs["git"]["tooling_commit"],
         inputs["git"]["core_commit"], inputs["source"], inputs["build_runner"],
@@ -2506,7 +2726,7 @@ def validate_build_provenance(value: object, root: Path,
         inputs["core_source_closure"], inputs["taskset"], inputs["python"])
     require(typed_equal(value["attestation"], expected) and
             typed_equal(inputs["build_attestation"], expected),
-            "retained C7 v4 build attestation changed")
+            "retained C7 build attestation changed")
     return value
 
 
@@ -3133,12 +3353,13 @@ def validate_publication_state(value: object) -> dict[str, Any]:
 def validate_raw(value: object, root: Path, check_files: bool = True,
                  result_override: object | None = None) -> dict[str, Any]:
     raw = verify_signature(value, "C7 raw evidence")
+    family = schema_family(raw.get("schema"), "raw")
     require(set(raw) == {"schema", "created_utc", "arguments", "request",
                          "publication_state", "pair_lease", "lifecycle", "inputs_before",
                          "inputs_after", "host_before", "host_after", "reservation",
                          "isolation", "build_provenance", "child",
-                         "validated_output", "digest"} and
-            raw["schema"] == RAW_SCHEMA, "raw evidence schema changed")
+                         "validated_output", "digest"},
+            "raw evidence schema changed")
     validate_utc(raw["created_utc"], "raw creation time")
     arguments = validate_arguments(raw["arguments"])
     request = validate_request(raw["request"])
@@ -3148,7 +3369,8 @@ def validate_raw(value: object, root: Path, check_files: bool = True,
                         arguments["timeout_seconds"]),
             "raw arguments differ from the request")
     validate_lifecycle(raw["lifecycle"], require_success=True)
-    inputs = validate_input_snapshot(raw["inputs_before"])
+    inputs = validate_input_snapshot(
+        raw["inputs_before"], expected_family=family)
     require(typed_equal(raw["inputs_after"], inputs), "input identity changed during run")
     validate_build_provenance(raw["build_provenance"], root, inputs)
     validate_host(raw["host_before"], cpu, sibling)
@@ -3206,18 +3428,21 @@ def validate_raw(value: object, root: Path, check_files: bool = True,
 def validate_manifest(value: object, root: Path) -> dict[str, Any]:
     _require_terminal_absent(root, "failure.json")
     manifest = verify_signature(value, "C7 manifest")
+    family = schema_family(manifest.get("schema"), "manifest")
     require(set(manifest) == {"schema", "created_utc", "valid", "raw",
                               "publication_state", "artifact_inventory",
                               "arguments", "request", "inputs", "reservation",
                               "pair_lease", "isolation", "build_provenance",
                               "lifecycle", "validated_output", "digest"} and
-            manifest["schema"] == MANIFEST_SCHEMA and manifest["valid"] is True,
+            manifest["valid"] is True,
             "C7 manifest schema changed")
     validate_utc(manifest["created_utc"], "manifest creation time")
     raw_bytes = read_artifact(root, manifest["raw"], "raw")
     raw = strict_json(raw_bytes, "C7 raw evidence")
     require(raw_bytes == canonical_bytes(raw) + b"\n",
             "raw evidence is not canonical JSON")
+    require(raw.get("schema") == family_schema(family, "raw"),
+            "manifest/raw schema pairing changed")
     normalized = validate_raw(raw, root, check_files=True)
     inventory = validate_artifact_inventory(
         manifest["artifact_inventory"], root, check_files=True)
@@ -3404,15 +3629,16 @@ def _failure_result_bytes(root: Path, child: Mapping[str, Any]) -> bytes:
 def _validate_failure(value: object, root: Path | None,
                       check_files: bool) -> dict[str, Any]:
     require(check_files and root is not None,
-            "v4 failure validation requires its retained artifact directory")
+            "failure validation requires its retained artifact directory")
     _require_terminal_absent(root, "manifest.json")
     failure = verify_signature(value, "C7 failure evidence")
+    family = schema_family(failure.get("schema"), "failure")
     require(set(failure) == {
         "schema", "status", "created_utc", "failure_code", "completed_stage",
         "error_type", "error", "traceback", "state", "artifact_inventory",
         "lifecycle", "publication", "snapshot_inventory", "digest",
         *FAILURE_CONTEXT_FIELDS} and
-        failure["schema"] == FAILURE_SCHEMA and failure["status"] == "failed" and
+        failure["status"] == "failed" and
         isinstance(failure["failure_code"], str) and
         failure["failure_code"] in FAILURE_CODE_STAGE and
         isinstance(failure["error_type"], str) and failure["error_type"] and
@@ -3515,7 +3741,8 @@ def _validate_failure(value: object, root: Path | None,
         pair_lease = validate_pair_lease_identity(
             failure["pair_lease"], request["cpu"], request["sibling"])
     if stage["index"] >= 5:
-        inputs_before = validate_input_snapshot(failure["inputs_before"])
+        inputs_before = validate_input_snapshot(
+            failure["inputs_before"], expected_family=family)
         require(inputs_before["git"]["tooling_commit"] ==
                     arguments["expected_tooling_commit"] and
                 inputs_before["git"]["core_commit"] ==
@@ -3656,7 +3883,8 @@ def _validate_failure(value: object, root: Path | None,
         parsed_result = strict_json(result_bytes, "C7 result")
 
     if stage["index"] >= 9:
-        inputs_after = validate_input_snapshot(failure["inputs_after"])
+        inputs_after = validate_input_snapshot(
+            failure["inputs_after"], expected_family=family)
         if code == "inputs-drift":
             require(not typed_equal(inputs_after, inputs_before),
                     "input-drift failure predicate is false")
@@ -4320,25 +4548,82 @@ def synthetic_result(cpu: int, inputs: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def synthetic_build_manifest(inputs: Mapping[str, Any]) -> dict[str, Any]:
+    family = schema_family(inputs.get("schema"), "input")
+    schemas = SCHEMAS_BY_FAMILY[family]
+    cmake_identity = cmake_identity_for_family(family)
+
     def artifact(key: str, path: Path) -> dict[str, Any]:
         return {"bytes": inputs[key]["bytes"], "path": path.as_posix(),
                 "sha256": inputs[key]["sha256"]}
 
     build_dir = Path(".research/fixture/build/core-avx2")
     library = {"bytes": inputs["archive"]["bytes"],
-               "path": (build_dir / "liblibleopard.a").as_posix(),
+               "path": (build_dir / cmake_identity["archive"]).as_posix(),
                "sha256": inputs["archive"]["sha256"]}
     executable = {"bytes": inputs["executable"]["bytes"],
                   "path": (build_dir.parent / "c7-avx2").as_posix(),
                   "sha256": inputs["executable"]["sha256"]}
     builds: list[dict[str, Any]] = []
     for name in BUILD_NAMES:
+        named_build_dir = Path(f".research/fixture/build/core-{name}")
+        named_library = {
+            "bytes": inputs["archive"]["bytes"],
+            "path": (named_build_dir / cmake_identity["archive"]).as_posix(),
+            "sha256": inputs["archive"]["sha256"],
+        }
         common = {
             "name": name,
+            "build_dir": named_build_dir.as_posix(),
+            "library": named_library,
+            "build_argv": [
+                "/usr/bin/cmake", "--build", named_build_dir.as_posix(),
+                "--target", cmake_identity["target"], "--verbose", "--", "-j1",
+            ],
+            "dependency_files": [{
+                "build_path": (
+                    named_build_dir / "CMakeFiles" /
+                    cmake_identity["target_directory"] / "leopard2.cpp.o.d"
+                ).as_posix(),
+            }],
             "source_closure": copy.deepcopy(inputs["core_source_closure"]),
             "launcher_python": {
                 **copy.deepcopy(inputs["python"]), "version": "fixture-python"},
         }
+        if family == "current":
+            ar = {"path": "/usr/bin/ar", "sha256": "c" * 64,
+                  "version": "fixture-ar"}
+            ranlib = {"path": "/usr/bin/ranlib", "sha256": "d" * 64,
+                      "version": "fixture-ranlib"}
+            objects = [
+                f"CMakeFiles/{(
+                    'leopard2_backend_avx2.dir' if member ==
+                    'Leopard2BackendAVX2.cpp.o' else
+                    'leopard2_backend_ssse3.dir' if member ==
+                    'Leopard2BackendSSSE3.cpp.o' else
+                    cmake_identity['target_directory'])}/{member}"
+                for member in CORE_ARCHIVE_MEMBERS
+            ]
+            text = (
+                f"{ar['path']} qc {cmake_identity['archive']} "
+                f"{' '.join(objects)}\n"
+                f"{ranlib['path']} {cmake_identity['archive']}\n")
+            encoded = text.encode("utf-8")
+            recipe_sha = sha256_bytes(encoded)
+            common.update({
+                "ar": ar,
+                "ranlib": ranlib,
+                "archive_link_recipe": {
+                    "bytes": len(encoded),
+                    "path": (named_build_dir / "CMakeFiles" /
+                             cmake_identity["target_directory"] /
+                             "link.txt").as_posix(),
+                    "sha256": recipe_sha,
+                },
+                "archive_link_recipe_content": {
+                    "bytes": len(encoded), "encoding": "utf-8",
+                    "sha256": recipe_sha, "text": text,
+                },
+            })
         if name == "avx2":
             builds.append({
                 **common, "backend": "avx2", "sanitizer": False,
@@ -4358,7 +4643,7 @@ def synthetic_build_manifest(inputs: Mapping[str, Any]) -> dict[str, Any]:
         else:
             builds.append(common)
     return {
-        "schema": BUILD_MANIFEST_SCHEMA, "status": "pass", "scope": BUILD_SCOPE,
+        "schema": schemas["build_manifest"], "status": "pass", "scope": BUILD_SCOPE,
         "tooling_git_sha": inputs["git"]["tooling_commit"],
         "core_git_sha": inputs["git"]["core_commit"],
         "source": artifact("source", SOURCE_RELATIVE),
@@ -4377,14 +4662,16 @@ def synthetic_build_manifest(inputs: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def synthetic_inputs() -> dict[str, Any]:
+def synthetic_inputs(family: str = "current") -> dict[str, Any]:
+    schemas = SCHEMAS_BY_FAMILY[family]
+    cmake_identity = cmake_identity_for_family(family)
     synthetic_runner = read_bounded(Path(__file__).resolve(strict=True))
 
     def artifact(path: str, digest: str = "a" * 64) -> dict[str, Any]:
         return {"bytes": 1, "path": path, "sha256": digest}
 
     result = {
-        "schema": INPUT_SCHEMA,
+        "schema": schemas["input"],
         "git": {"tooling_commit": "b" * 40, "core_commit": "e" * 40},
         "runner": {
             "bytes": len(synthetic_runner), "path": RUNNER_RELATIVE.as_posix(),
@@ -4393,7 +4680,7 @@ def synthetic_inputs() -> dict[str, Any]:
         "build_runner": artifact(BUILD_RUNNER_RELATIVE.as_posix()),
         "build_validator": artifact(BUILD_VALIDATOR_RELATIVE.as_posix()),
         "archive": artifact(
-            ".research/fixture/build/core-avx2/liblibleopard.a"),
+            f".research/fixture/build/core-avx2/{cmake_identity['archive']}"),
         "executable": artifact(".research/fixture/build/c7-avx2"),
         "taskset": {"path": "/usr/bin/taskset", "sha256": "a" * 64},
         "python": {"path": "/usr/bin/python3", "sha256": "a" * 64},
@@ -4404,7 +4691,7 @@ def synthetic_inputs() -> dict[str, Any]:
     }
     build_data = canonical_pretty_bytes(synthetic_build_manifest(result))
     result["build_manifest"] = {
-        "bytes": len(build_data), "schema": BUILD_MANIFEST_SCHEMA,
+        "bytes": len(build_data), "schema": schemas["build_manifest"],
         "sha256": sha256_bytes(build_data),
     }
     result["build_attestation"] = derive_build_attestation(
@@ -4468,9 +4755,11 @@ def synthetic_host(cpu: int, sibling: int) -> dict[str, Any]:
     }
 
 
-def synthetic_bundle(root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+def synthetic_bundle(root: Path, family: str = "current") -> \
+        tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     cpu, sibling = 0, 1
-    inputs = synthetic_inputs()
+    schemas = SCHEMAS_BY_FAMILY[family]
+    inputs = synthetic_inputs(family)
     result = synthetic_result(cpu, inputs)
     result_path = root / "snapshot/child/result.json"
     stdout_path = root / "snapshot/child/stdout.bin"
@@ -4478,13 +4767,14 @@ def synthetic_bundle(root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[s
     write_json_exclusive(result_path, result)
     write_exclusive(stdout_path, b"")
     write_exclusive(stderr_path, expected_stderr())
-    retained_build_manifest = root / "snapshot/provenance/build-run-manifest-v4.json"
+    retained_build_manifest = (
+        root / "snapshot/provenance" / retained_build_manifest_name(family))
     write_exclusive(retained_build_manifest,
                     canonical_pretty_bytes(synthetic_build_manifest(inputs)))
     retained_runner = root / "snapshot/provenance/run_authoritative.py"
     write_exclusive(retained_runner, read_bounded(Path(__file__).resolve(strict=True)))
     build_provenance = {
-        "schema": BUILD_PROVENANCE_SCHEMA,
+        "schema": schemas["build_provenance"],
         "manifest": artifact_record(root, retained_build_manifest),
         "runner": artifact_record(root, retained_runner),
         "attestation": copy.deepcopy(inputs["build_attestation"]),
@@ -4563,14 +4853,14 @@ def synthetic_bundle(root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[s
     state_path = root / "snapshot/publication-state.json"
     write_json_exclusive(state_path, state)
     raw = signed({
-        "schema": RAW_SCHEMA, "created_utc": created,
+        "schema": schemas["raw"], "created_utc": created,
         "publication_state": artifact_record(root, state_path),
         **success_context,
     })
     raw_path = root / "snapshot/raw.json"
     write_json_exclusive(raw_path, raw)
     manifest = signed({
-        "schema": MANIFEST_SCHEMA, "created_utc": created, "valid": True,
+        "schema": schemas["manifest"], "created_utc": created, "valid": True,
         "raw": artifact_record(root, raw_path),
         "publication_state": artifact_record(root, state_path),
         "artifact_inventory": artifact_inventory(root),
@@ -4585,7 +4875,7 @@ def synthetic_bundle(root: Path) -> tuple[dict[str, Any], dict[str, Any], dict[s
 
 def self_test() -> int:
     inputs = synthetic_inputs()
-    validate_input_snapshot(inputs)
+    validate_input_snapshot(inputs, expected_family="current")
     result = synthetic_result(0, inputs)
     validate_child_result(result, 0, inputs)
     rejected = 0
@@ -4598,6 +4888,17 @@ def self_test() -> int:
             rejected += 1
         else:
             raise EvidenceError(f"{label} mutation was accepted")
+
+    def derive_fixture(build_manifest: Mapping[str, Any],
+                       fixture_inputs: Mapping[str, Any]) -> dict[str, Any]:
+        return derive_build_attestation(
+            build_manifest, fixture_inputs["build_manifest"],
+            fixture_inputs["git"]["tooling_commit"],
+            fixture_inputs["git"]["core_commit"], fixture_inputs["source"],
+            fixture_inputs["build_runner"], fixture_inputs["build_validator"],
+            fixture_inputs["archive"], fixture_inputs["executable"],
+            fixture_inputs["core_source_closure"], fixture_inputs["taskset"],
+            fixture_inputs["python"])
 
     for label, mutate in (
         ("summary", lambda value: value["benchmarks"][0]["exact_encode"].update(
@@ -4629,6 +4930,103 @@ def self_test() -> int:
         synthetic_cpu_stat(1, user=1, idle=1), 1, 2)
     expect_rejected(lambda: validate_isolation(busy, 0, 1), "busy sibling")
 
+    for family, wrong_family in (("current", "historical"),
+                                 ("historical", "current")):
+        fixture_inputs = synthetic_inputs(family)
+        changed_build = synthetic_build_manifest(fixture_inputs)
+        for build in changed_build["builds"]:
+            target_index = build["build_argv"].index("--target") + 1
+            build["build_argv"][target_index] = \
+                cmake_identity_for_family(wrong_family)["target"]
+        expect_rejected(
+            lambda changed_build=changed_build,
+                   fixture_inputs=fixture_inputs: derive_fixture(
+                       changed_build, fixture_inputs),
+            f"{family} CMake target relabel")
+
+        changed_build = synthetic_build_manifest(fixture_inputs)
+        right_directory = cmake_identity_for_family(family)["target_directory"]
+        wrong_directory = cmake_identity_for_family(wrong_family)[
+            "target_directory"]
+        for build in changed_build["builds"]:
+            for dependency in build["dependency_files"]:
+                dependency["build_path"] = dependency["build_path"].replace(
+                    f"/CMakeFiles/{right_directory}/",
+                    f"/CMakeFiles/{wrong_directory}/")
+        expect_rejected(
+            lambda changed_build=changed_build,
+                   fixture_inputs=fixture_inputs: derive_fixture(
+                       changed_build, fixture_inputs),
+            f"{family} CMake target-directory relabel")
+
+        changed_build = synthetic_build_manifest(fixture_inputs)
+        wrong_archive = cmake_identity_for_family(wrong_family)["archive"]
+        for build in changed_build["builds"]:
+            build["library"]["path"] = (
+                Path(build["build_dir"]) / wrong_archive).as_posix()
+        expect_rejected(
+            lambda changed_build=changed_build,
+                   fixture_inputs=fixture_inputs: derive_fixture(
+                       changed_build, fixture_inputs),
+            f"{family} CMake archive relabel")
+
+    historical_inputs = synthetic_inputs("historical")
+    relabeled_inputs = copy.deepcopy(historical_inputs)
+    relabeled_inputs["schema"] = INPUT_SCHEMA
+    relabeled_inputs["build_manifest"]["schema"] = BUILD_MANIFEST_SCHEMA
+    relabeled_inputs["archive"]["path"] = relabeled_inputs["archive"][
+        "path"].replace("liblibleopard.a", "libleopard.a")
+    relabeled_build = synthetic_build_manifest(historical_inputs)
+    relabeled_build["schema"] = BUILD_MANIFEST_SCHEMA
+    old_identity = cmake_identity_for_family("historical")
+    for build in relabeled_build["builds"]:
+        build["build_argv"] = [
+            ("leopard" if item == "libleopard" else
+             item.replace("liblibleopard.a", "libleopard.a").replace(
+                 "CMakeFiles/libleopard.dir", "CMakeFiles/leopard.dir"))
+            for item in build["build_argv"]
+        ]
+        build["library"]["path"] = build["library"]["path"].replace(
+            "liblibleopard.a", "libleopard.a")
+        for dependency in build["dependency_files"]:
+            dependency["build_path"] = dependency["build_path"].replace(
+                "CMakeFiles/libleopard.dir", "CMakeFiles/leopard.dir")
+        ar = {"path": "/usr/bin/ar", "sha256": "c" * 64,
+              "version": "fixture-ar"}
+        ranlib = {"path": "/usr/bin/ranlib", "sha256": "d" * 64,
+                  "version": "fixture-ranlib"}
+        old_objects = [
+            f"CMakeFiles/{(
+                'leopard2_backend_avx2.dir' if member ==
+                'Leopard2BackendAVX2.cpp.o' else
+                'leopard2_backend_ssse3.dir' if member ==
+                'Leopard2BackendSSSE3.cpp.o' else
+                old_identity['target_directory'])}/{member}"
+            for member in HISTORICAL_CORE_ARCHIVE_MEMBERS
+        ]
+        old_text = (
+            f"{ar['path']} qc {old_identity['archive']} "
+            f"{' '.join(old_objects)}\n"
+            f"{ranlib['path']} {old_identity['archive']}\n")
+        encoded = old_text.encode("utf-8")
+        digest = sha256_bytes(encoded)
+        build.update({
+            "ar": ar, "ranlib": ranlib,
+            "archive_link_recipe": {
+                "bytes": len(encoded),
+                "path": (Path(build["build_dir"]) / "CMakeFiles" /
+                         "leopard.dir" / "link.txt").as_posix(),
+                "sha256": digest,
+            },
+            "archive_link_recipe_content": {
+                "bytes": len(encoded), "encoding": "utf-8",
+                "sha256": digest, "text": old_text,
+            },
+        })
+    expect_rejected(
+        lambda: derive_fixture(relabeled_build, relabeled_inputs),
+        "coherent historical recipe-byte relabel")
+
     with tempfile.TemporaryDirectory(prefix="leopard2-c7-authoritative-") as directory:
         root = Path(directory)
         manifest, raw, _fixture_result = synthetic_bundle(root)
@@ -4655,6 +5053,39 @@ def self_test() -> int:
                                    if key != "digest"})
         expect_rejected(lambda: validate_manifest(
             changed_manifest, root), "manifest summary")
+        changed_raw = signed({
+            **{key: value for key, value in raw.items() if key != "digest"},
+            "schema": HISTORICAL_RAW_SCHEMA,
+        })
+        expect_rejected(lambda: validate_raw(
+            changed_raw, root), "current-to-historical raw relabel")
+        changed_manifest = signed({
+            **{key: value for key, value in manifest.items() if key != "digest"},
+            "schema": HISTORICAL_MANIFEST_SCHEMA,
+        })
+        expect_rejected(lambda: validate_manifest(
+            changed_manifest, root), "current-to-historical manifest relabel")
+
+    with tempfile.TemporaryDirectory(
+            prefix="leopard2-c7-authoritative-historical-") as directory:
+        root = Path(directory)
+        historical_manifest, historical_raw, _ = synthetic_bundle(
+            root, "historical")
+        validate_manifest(historical_manifest, root)
+        changed_raw = signed({
+            **{key: value for key, value in historical_raw.items()
+               if key != "digest"},
+            "schema": RAW_SCHEMA,
+        })
+        expect_rejected(lambda: validate_raw(
+            changed_raw, root), "historical-to-current raw relabel")
+        changed_manifest = signed({
+            **{key: value for key, value in historical_manifest.items()
+               if key != "digest"},
+            "schema": MANIFEST_SCHEMA,
+        })
+        expect_rejected(lambda: validate_manifest(
+            changed_manifest, root), "historical-to-current manifest relabel")
 
     print(json.dumps({"status": "PASS", "cells": len(EXPECTED_CELLS),
                       "samples_per_metric": SAMPLE_COUNT,
@@ -4679,11 +5110,11 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--expected-core-commit", required=True,
                      help="full ancestor SHA-1 embedded in the C7 executable")
     run.add_argument("--archive", required=True, type=Path,
-                     help="exact AVX2 liblibleopard.a linked into the harness")
+                     help="exact AVX2 libleopard.a linked into the harness")
     run.add_argument("--executable", required=True, type=Path,
                      help="exact non-sanitized AVX2 c7_exact_low executable")
     run.add_argument("--build-manifest", required=True, type=Path,
-                     help=("final v4 A/B build manifest validated live and bound "
+                     help=("final v5 A/B build manifest validated live and bound "
                            "to the supplied AVX2 archive/executable"))
     run.add_argument("--reservation-file", required=True, type=Path,
                      help="canonical held v1 CPU-pair reservation to lock")

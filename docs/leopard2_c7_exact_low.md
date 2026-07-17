@@ -301,7 +301,7 @@ and the normalized build command must end in the corresponding exact `-jN`
 argument.  The checker parses those logs rather than accepting a success
 label.  In particular, the forced-scalar build must have empty stderr; its
 compile-time-only backend selection explicitly consumes the otherwise unused
-feature record without changing the selected scalar backend.  Manifest v4's
+feature record without changing the selected scalar backend.  Manifest v4/v5's
 post-R1 probe freezes 320 ASan and 54 UBSan references in
 the standalone harness and 425 ASan and 90 UBSan references across all 11 named
 core-archive members; normal builds contain none.  The exact sanitized archive
@@ -326,12 +326,12 @@ integrated backend and plan work: active-parent locator setup, context-selected
 and native fused XOR operations, SSSE3/AVX2/NEON additions, GF8/GF16 kernel
 refactoring, and the expanded immutable-plan implementation changed the
 compiler's instrumented sites.  These totals are not a
-range or minimum.  The v4 runner still compares the exact totals and every
+range or minimum.  The current v5 runner still compares the exact totals and every
 named member, aborting before correctness execution if any count changes.  The
 unchanged 320/54 standalone count independently confirms that the experimental
 harness instrumentation did not drift.
 The 425/90 counts were regenerated from the current 22-file integrated core
-closure and are frozen by both the runner and validator.  The v4 constants
+closure and are frozen by both the runner and validator.  The v4/v5 constants
 remain exact expectations, not an inference that a changed source closure
 preserves instrumentation; any later core change requires another fresh
 fail-closed scan before A/B generation.
@@ -365,7 +365,7 @@ compiler-launcher and source-prefix normalization path.
 
 ### Dual Git identity and historical evidence
 
-Manifest v4 separates two immutable Git identities:
+Manifest v4 introduced two immutable Git identities, retained by v5:
 
 - `tooling_git_sha` is the clean checked-out `HEAD` containing the exact
   committed C7 harness, runner, and validator.  Generation rejects staged,
@@ -381,15 +381,28 @@ binds all three tooling records to `tooling_git_sha`, every core record to
 `core_git_sha`, and checks ancestry again.  Trusted live validation also
 requires a clean checkout at `tooling_git_sha`.  A/B comparison requires both
 identities, tooling records, all five binary fingerprints, and all program
-records to agree.  Peer-attestation schema v3 records both identities and the
-clean-tooling-head/core-ancestor check.
+records to agree.  Current peer-attestation schema v4 records both identities,
+the clean-tooling-head/core-ancestor check, and the canonical CMake identity;
+retained v4 manifests use peer-attestation schema v3.
+
+Build-manifest v5 binds the canonical CMake target `leopard`, archive
+`libleopard.a`, and `leopard.dir` dependency paths. Each current build also
+retains the exact bounded strict-UTF-8 `link.txt` content, binds its byte length
+and SHA-256 to the recipe-file identity, and parses the exact archiver, ordered
+object closure, archive output, and `ranlib` command. The compact authoritative
+attestation cross-binds every parsed recipe digest. Retained v4 manifests replay
+only with their historical `libleopard`, `liblibleopard.a`, and
+`libleopard.dir` identities and exact historical record shape; their committed
+source bytes are read from their recorded Git objects rather than being
+required to match the current v5 checkout. A schema/path relabel that retains
+historical recipe bytes is rejected. New generation emits v5 only.
 
 The committed checkpoint under `results/` remains historical manifest v3 and
 peer-attestation v2 evidence for its pre-R1 core.  It is never rewritten or
-accepted by the v4 generator.  The validator retains a read-only v3 path that
-authenticates its tooling and core bytes directly from the recorded Git commit
+accepted by the v5 generator.  The validator retains read-only v3 and v4 paths that
+authenticate their tooling and core bytes directly from the recorded Git commit
 and applies its original exact 329 ASan / 87 UBSan archive proof.  Relabeling
-those bytes as v4 fails both the 425/90 member proof and the required separate
+those bytes as v4 or v5 fails both the 425/90 member proof and the required separate
 tooling identity.
 
 All nested identity and accounting comparisons are recursively type-strict.
@@ -405,7 +418,7 @@ ordinary-build sanitizer zeros,
 per-member counts, exact-field and profile identifiers, correctness zeros,
 affinity, sample summaries, A/B tooling records, and comparison scan counts.
 
-Manifest v4 normalizes only the exact checkout-root prefix to literal
+Manifests v4 and v5 normalize only the exact checkout-root prefix to literal
 `${LEO2_SOURCE_ROOT}` in retained text and argv.  All core and standalone
 compiles use supported `-ffile-prefix-map` and `-fdebug-prefix-map`, plus
 `-fmacro-prefix-map` when both the paired C and C++ drivers accept it.  Their
@@ -588,23 +601,23 @@ remaining runnable on smaller allowed CPU sets:
       --evidence-root "$SOURCE_ROOT" --live --require-checkout-head
 
 The separate authoritative runner consumes the resulting non-sanitized AVX2
-archive, standalone executable, and final v4 A/B build manifest.  It runs the
+archive, standalone executable, and final v5 A/B build manifest.  It runs the
 committed evidence validator in live, clean-HEAD mode before and after timing,
 requires the A/B comparison status to be `pass`, proves the exact `-O2`
 non-sanitized AVX2 compile record, and requires the supplied archive and
 executable paths and bytes to match that record.  A byte-identical copy of the
-v4 manifest, the exact authoritative runner, and a compact derived attestation
+v5 manifest, the exact authoritative runner, and a compact derived attestation
 are retained for portable replay.
 Its schedule is not configurable: all 12
 declared cells run in their frozen order, with seven retained samples for each
 setup and execution metric.  The runner supports distinct clean tooling and
 ancestor core commits, records the two exact commit IDs plus runner, harness,
 archive, executable, Python, and `taskset` hashes, proves the same fixed 22-file
-core source closure in every one of the five v4 build records, and checks the
+core source closure in every one of the five v5 build records, and checks the
 harness's embedded source, archive, and core identities.  Clean checkout, tree,
 and ancestry checks remain live preconditions; tree hashes are deliberately not
 claimed by portable evidence because no retained Git object database can derive
-them.  The compact portable claims are re-derived from the retained v4 build
+them.  The compact portable claims are re-derived from the retained v5 build
 manifest rather than trusted as free-standing metadata.  The committed
 `run_matrix.py` and `validate_evidence.py` tools remain nonexecutable Git mode
 `100644` files and
@@ -690,25 +703,28 @@ exact ignored build paths produced above:
     python3 experiments/leopard2/non_power_of_two/c7/run_authoritative.py run \
       --source-root "$SOURCE_ROOT" --expected-tooling-commit "$TOOLING_SHA" \
       --expected-core-commit "$CORE_SHA" \
-      --archive "$SOURCE_ROOT/$LAB_REL/build/core-avx2/liblibleopard.a" \
+      --archive "$SOURCE_ROOT/$LAB_REL/build/core-avx2/libleopard.a" \
       --executable "$SOURCE_ROOT/$LAB_REL/build/c7-avx2" \
       --build-manifest "$BUILD_MANIFEST" \
       --reservation-file "$RESERVATION" --output "$OUTPUT" \
       --cpu "$CPU" --sibling "$SIBLING"
 
-Success writes a terminal v3 canonical `manifest.json` only after staging v3
-`snapshot/raw.json`, signed `snapshot/publication-state.json`, the verified v4
+Success writes a terminal v4 canonical `manifest.json` only after staging v4
+`snapshot/raw.json`, signed `snapshot/publication-state.json`, the verified v5
 build manifest, exact authoritative runner, and exact child result and
 stdout/stderr bytes.  Both guards must have exited and the launch affinity must
 have been restored and read back exactly before success staging begins.  The
 manifest is the last fallible publication operation.  Any failure after
-output-directory creation retains a mutually exclusive v4 `failure.json`, a
+output-directory creation retains a mutually exclusive v5 `failure.json`, a
 separately checksummed canonical `failure/state-v2.json`, and
 an exact sorted inventory of every other regular file in the bundle.  The state
 machine has typed ordered stages (`arguments` through `validated`), requires an
 exact presence mask for all 12 context records, and binds each enumerated
 `failure_code` to the last completed stage, guard-check/teardown lifecycle,
 affinity restoration, exact stage-derived inventory, and canonical diagnostic.
+The same verifier retains exact replay for historical authoritative manifest/raw
+v3 and failure v4 bundles whose nested build manifest is v4; it does not
+reinterpret their historical CMake identity as canonical v5 evidence.
 Replay proves timeout, exit,
 missing-result, stream, isolation, input-drift, host-drift, invalid-JSON, and
 invalid-child-result predicates from retained bytes where those predicates are

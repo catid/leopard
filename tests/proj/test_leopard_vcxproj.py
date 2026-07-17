@@ -3914,10 +3914,10 @@ class CMakeGraphMutationTest(unittest.TestCase):
 
     def test_legacy_target_references_are_explicitly_classified(self):
         # These four experiment families authenticate the historical CMake
-        # target and archive names as evidence fields.  Rewriting them in
-        # place would invalidate replay, so they require a separately
-        # versioned migration.  No production tool or new experiment family
-        # may silently add another functional reference to those names.
+        # target and archive names only in explicit versioned replay maps (and
+        # their mutation fixtures). New evidence uses the canonical identity.
+        # No production tool or new experiment family may silently add another
+        # functional reference to the historical names.
         compatibility_contracts = {
             "CMakeLists.txt",
             "cmake/leopardConfig.cmake.in",
@@ -3928,12 +3928,9 @@ class CMakeGraphMutationTest(unittest.TestCase):
             "experiments/leopard2/backend_butterfly/run_abba.py",
             "experiments/leopard2/low_encode_copy/run_abba.py",
             "experiments/leopard2/main_compare/run_abba.py",
+            "experiments/leopard2/main_compare/test_run_abba.py",
             "experiments/leopard2/non_power_of_two/c7/run_authoritative.py",
-            "experiments/leopard2/non_power_of_two/c7/run_matrix.py",
-            "experiments/leopard2/non_power_of_two/c7/"
-            "test_evidence_portability.py",
-            "experiments/leopard2/non_power_of_two/c7/"
-            "test_run_authoritative.py",
+            "experiments/leopard2/non_power_of_two/c7/test_checkpoint.py",
             "experiments/leopard2/non_power_of_two/c7/validate_evidence.py",
         }
         legacy_reference = re.compile(

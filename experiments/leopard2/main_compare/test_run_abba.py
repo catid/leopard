@@ -18,6 +18,7 @@ import unittest
 from unittest import mock
 from dataclasses import asdict
 from pathlib import Path
+from typing import Mapping
 
 
 MODULE_PATH = Path(__file__).with_name("run_abba.py")
@@ -36,7 +37,7 @@ SPECIFICATION = {
     "baseline_executable": "/fixture/baseline",
     "candidate_executable": "/fixture/candidate",
     "baseline_archive": "/fixture/baseline.a",
-    "candidate_archive": "/fixture/candidate.a",
+    "candidate_archive": "/fixture/candidate-build/libleopard.a",
     "baseline_build_dir": "/fixture/baseline-build",
     "candidate_build_dir": "/fixture/candidate-build",
     "baseline_source_root": "/fixture/main",
@@ -250,8 +251,74 @@ def candidate_result(scale: float = 0.8) -> dict:
     }
 
 
-def synthetic_raw(candidate_scale: float = 0.8) -> dict:
-    identity = {"fixture": {"sha256": "a" * 64}}
+def archive_recipe_fixture_text(cmake: dict | Mapping[str, str]) -> str:
+    return (
+        f"/usr/bin/ar qc {cmake['archive']} "
+        f"CMakeFiles/{cmake['target_directory']}/LeopardCommon.cpp.o "
+        "CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o\n"
+        f"/usr/bin/ranlib {cmake['archive']}\n"
+    )
+
+
+def cmake_fixture_identity(raw_schema: str) -> tuple[dict, dict]:
+    cmake = runner.cmake_identity_for_raw_schema(raw_schema)
+    archive_path = f"/fixture/candidate-build/{cmake['archive']}"
+    archive = {"path": archive_path, "sha256": "a" * 64}
+    recipe_text = archive_recipe_fixture_text(cmake)
+    recipe_content = runner.exact_text_content(
+        recipe_text, "fixture archive link recipe")
+    recipe = {
+        "path": "/fixture/candidate-build/CMakeFiles/"
+                f"{cmake['target_directory']}/link.txt",
+        "size": recipe_content["size"],
+        "sha256": recipe_content["sha256"],
+    }
+    build = {
+        "build_dir": "/fixture/candidate-build",
+        "validated_archive": copy.deepcopy(archive),
+        "archive_link_recipe": recipe,
+        "archiver": {"path": "/usr/bin/ar"},
+        "validated_archive_members": [
+            "LeopardCommon.cpp.o", "Leopard2BackendAVX2.cpp.o"],
+        "validated_compile_commands": {
+            "required_source_object_pairs": [
+                {
+                    "source": {"path": "/fixture/source/LeopardCommon.cpp"},
+                    "object": {"path": "/fixture/candidate-build/CMakeFiles/"
+                               f"{cmake['target_directory']}/LeopardCommon.cpp.o"},
+                },
+                {
+                    "source": {"path": "/fixture/source/Leopard2BackendAVX2.cpp"},
+                    "object": {"path": "/fixture/candidate-build/CMakeFiles/"
+                               "leopard2_backend_avx2.dir/"
+                               "Leopard2BackendAVX2.cpp.o"},
+                },
+            ],
+        },
+    }
+    if raw_schema == runner.RAW_SCHEMA:
+        build["archive_link_recipe_content"] = recipe_content
+        build["ranlib"] = {"path": "/usr/bin/ranlib"}
+        build["archive_link_tool_invocations"] = {
+            "archiver": {"invocation": "/usr/bin/ar",
+                         "resolved_path": "/usr/bin/ar"},
+            "ranlib": {"invocation": "/usr/bin/ranlib",
+                       "resolved_path": "/usr/bin/ranlib"},
+        }
+    identity = {
+        "fixture": {"sha256": "a" * 64},
+        "candidate_archive": copy.deepcopy(archive),
+        "candidate_build": build,
+    }
+    specification = copy.deepcopy(SPECIFICATION)
+    specification["candidate_archive"] = archive_path
+    return identity, specification
+
+
+def synthetic_raw(
+    candidate_scale: float = 0.8, raw_schema: str = runner.RAW_SCHEMA,
+) -> dict:
+    identity, specification = cmake_fixture_identity(raw_schema)
     invocations = []
     for round_index in range(runner.ROUNDS):
         for slot, implementation in enumerate(runner.ORDER):
@@ -265,10 +332,10 @@ def synthetic_raw(candidate_scale: float = 0.8) -> dict:
                 "slot": slot,
                 "implementation": implementation,
                 "command": [
-                    SPECIFICATION["taskset"], "-c", "0",
+                    specification["taskset"], "-c", "0",
                     *runner.benchmark_arguments(
                         implementation,
-                        Path(SPECIFICATION[f"{implementation}_executable"]),
+                        Path(specification[f"{implementation}_executable"]),
                         CELL, CAMPAIGN),
                 ],
                 "environment": copy.deepcopy(runner.CHILD_ENVIRONMENT),
@@ -287,14 +354,14 @@ def synthetic_raw(candidate_scale: float = 0.8) -> dict:
             })
     analysis = runner.analyze(invocations, CAMPAIGN)
     return runner.signed({
-        "schema": runner.RAW_SCHEMA,
+        "schema": raw_schema,
         "created_utc": "2026-07-16T00:00:00Z",
         "validity_is_independent_of_speed": True,
         "campaign": copy.deepcopy(CAMPAIGN),
         "host_initial": copy.deepcopy(HOST),
         "isolation": copy.deepcopy(ISOLATION),
         "reservation": RESERVATION,
-        "input_specification": copy.deepcopy(SPECIFICATION),
+        "input_specification": specification,
         "identities_initial": identity,
         "invocations": invocations,
         "identities_final": identity,
@@ -307,6 +374,84 @@ def resign(value: dict) -> dict:
     payload = copy.deepcopy(value)
     payload.pop("digest", None)
     return runner.signed(payload)
+
+
+def recursively_replace_strings(value: object, replacements: tuple[tuple[str, str], ...]
+                                ) -> object:
+    if isinstance(value, str):
+        result = value
+        for before, after in replacements:
+            result = result.replace(before, after)
+        return result
+    if isinstance(value, list):
+        return [recursively_replace_strings(item, replacements) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: recursively_replace_strings(item, replacements)
+            for key, item in value.items()
+        }
+    return value
+
+
+def attach_recipe_content(value: object, content: dict) -> None:
+    if isinstance(value, list):
+        for item in value:
+            attach_recipe_content(item, content)
+        return
+    if not isinstance(value, dict):
+        return
+    build = value.get("candidate_build")
+    if isinstance(build, dict) and isinstance(build.get("archive_link_recipe"), dict):
+        build["archive_link_recipe"]["size"] = content["size"]
+        build["archive_link_recipe"]["sha256"] = content["sha256"]
+        build["archive_link_recipe_content"] = copy.deepcopy(content)
+        build["ranlib"] = {"path": "/usr/bin/ranlib"}
+        build["archive_link_tool_invocations"] = {
+            "archiver": {"invocation": "/usr/bin/ar",
+                         "resolved_path": "/usr/bin/ar"},
+            "ranlib": {"invocation": "/usr/bin/ranlib",
+                       "resolved_path": "/usr/bin/ranlib"},
+        }
+    for item in value.values():
+        attach_recipe_content(item, content)
+
+
+def replace_current_recipe_text(value: dict, text: str) -> None:
+    content = runner.exact_text_content(text, "mutated archive link recipe")
+    build = value["identities_initial"]["candidate_build"]
+    build["archive_link_recipe_content"] = content
+    build["archive_link_recipe"]["size"] = content["size"]
+    build["archive_link_recipe"]["sha256"] = content["sha256"]
+    value["identities_final"] = copy.deepcopy(value["identities_initial"])
+    for invocation in value["invocations"]:
+        invocation["identity_before"] = copy.deepcopy(value["identities_initial"])
+        invocation["identity_after"] = copy.deepcopy(value["identities_initial"])
+
+
+def synthetic_failure(raw_schema: str) -> dict:
+    raw = synthetic_raw(raw_schema=raw_schema)
+    failure_schema = (
+        runner.FAILURE_SCHEMA if raw_schema == runner.RAW_SCHEMA
+        else runner.FAILURE_SCHEMA_V2
+    )
+    return runner.signed({
+        "schema": failure_schema,
+        "created_utc": "2026-07-16T00:00:00Z",
+        "status": "failed",
+        "valid": False,
+        "error_type": "EvidenceError",
+        "error": "fixture failure",
+        "campaign": copy.deepcopy(raw["campaign"]),
+        "host_initial": copy.deepcopy(raw["host_initial"]),
+        "reservation": copy.deepcopy(raw["reservation"]),
+        "pair_lease": copy.deepcopy(PAIR_LEASE),
+        "isolation": copy.deepcopy(raw["isolation"]),
+        "input_specification": copy.deepcopy(raw["input_specification"]),
+        "identities_initial": copy.deepcopy(raw["identities_initial"]),
+        "invocations": [],
+        "retained_files": [],
+        "traceback": "fixture traceback",
+    })
 
 
 class MainCompareRunnerTests(unittest.TestCase):
@@ -328,12 +473,136 @@ class MainCompareRunnerTests(unittest.TestCase):
             self.assertTrue(result["performance_result_does_not_affect_evidence_validity"])
 
     def test_legacy_v1_raw_fixture_remains_replayable(self) -> None:
-        value = synthetic_raw()
-        value["schema"] = runner.RAW_SCHEMA_V1
+        value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V1)
         value.pop("isolation")
         value = resign(value)
         runner.validate_raw(
             value, None, check_files=False, check_current_inputs=False)
+
+    def test_legacy_v2_raw_fixture_remains_replayable(self) -> None:
+        value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V2)
+        runner.validate_raw(
+            value, None, check_files=False, check_current_inputs=False)
+
+    def test_cmake_identity_and_cross_schema_relabels_are_rejected(self) -> None:
+        value = synthetic_raw()
+        value["input_specification"]["candidate_archive"] = \
+            "/fixture/candidate-build/liblibleopard.a"
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
+        value["identities_initial"]["candidate_build"][
+            "archive_link_recipe"]["path"] = \
+            "/fixture/candidate-build/CMakeFiles/libleopard.dir/link.txt"
+        value["identities_final"] = copy.deepcopy(value["identities_initial"])
+        for invocation in value["invocations"]:
+            invocation["identity_before"] = copy.deepcopy(
+                value["identities_initial"])
+            invocation["identity_after"] = copy.deepcopy(
+                value["identities_initial"])
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
+        value["schema"] = runner.RAW_SCHEMA_V2
+        self.assert_rejected(value)
+
+        value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V2)
+        value["schema"] = runner.RAW_SCHEMA
+        self.assert_rejected(value)
+
+    def test_coherent_historical_recipe_relabel_is_rejected(self) -> None:
+        value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V2)
+        value = recursively_replace_strings(value, (
+            ("liblibleopard.a", "libleopard.a"),
+            ("CMakeFiles/libleopard.dir", "CMakeFiles/leopard.dir"),
+        ))
+        self.assertIsInstance(value, dict)
+        value["schema"] = runner.RAW_SCHEMA
+        historical = runner.cmake_identity_for_raw_schema(runner.RAW_SCHEMA_V2)
+        old_content = runner.exact_text_content(
+            archive_recipe_fixture_text(historical),
+            "historical fixture archive link recipe")
+        attach_recipe_content(value, old_content)
+        # Every path and every surrounding digest can be coherently relabeled,
+        # but the retained old recipe bytes still describe the old CMake target.
+        self.assert_rejected(value)
+
+    def test_recipe_content_and_identity_mutations_are_rejected(self) -> None:
+        value = synthetic_raw()
+        value["identities_initial"]["candidate_build"][
+            "archive_link_recipe_content"]["text"] += "\n"
+        value["identities_final"] = copy.deepcopy(value["identities_initial"])
+        for invocation in value["invocations"]:
+            invocation["identity_before"] = copy.deepcopy(
+                value["identities_initial"])
+            invocation["identity_after"] = copy.deepcopy(
+                value["identities_initial"])
+        self.assert_rejected(value)
+
+    def test_recipe_command_semantic_mutations_are_rejected(self) -> None:
+        canonical = archive_recipe_fixture_text(
+            runner.cmake_identity_for_raw_schema(runner.RAW_SCHEMA))
+        mutations = {
+            "noncanonical output path": canonical.replace(
+                "ar qc libleopard.a", "ar qc nested/libleopard.a", 1),
+            "different archiver": canonical.replace(
+                "/usr/bin/ar", "/tmp/ar", 1),
+            "response file": canonical.replace(
+                "LeopardCommon.cpp.o ", "LeopardCommon.cpp.o @objects.rsp ", 1),
+            "object order": canonical.replace(
+                "CMakeFiles/leopard.dir/LeopardCommon.cpp.o "
+                "CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o",
+                "CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o "
+                "CMakeFiles/leopard.dir/LeopardCommon.cpp.o"),
+            "different ranlib": canonical.replace(
+                "/usr/bin/ranlib", "/tmp/ranlib", 1),
+        }
+        for label, recipe in mutations.items():
+            with self.subTest(label=label):
+                value = synthetic_raw()
+                replace_current_recipe_text(value, recipe)
+                self.assert_rejected(value)
+
+        value = synthetic_raw()
+        value["identities_initial"]["candidate_build"][
+            "archive_link_recipe"]["sha256"] = "b" * 64
+        value["identities_final"] = copy.deepcopy(value["identities_initial"])
+        for invocation in value["invocations"]:
+            invocation["identity_before"] = copy.deepcopy(
+                value["identities_initial"])
+            invocation["identity_after"] = copy.deepcopy(
+                value["identities_initial"])
+        self.assert_rejected(value)
+
+    def test_coherent_failed_historical_recipe_relabel_is_rejected(self) -> None:
+        historical = synthetic_failure(runner.RAW_SCHEMA_V2)
+        runner.validate_failure(historical, Path("/unused"), check_files=False)
+        current = synthetic_failure(runner.RAW_SCHEMA)
+        runner.validate_failure(current, Path("/unused"), check_files=False)
+
+        relabeled = recursively_replace_strings(historical, (
+            ("liblibleopard.a", "libleopard.a"),
+            ("CMakeFiles/libleopard.dir", "CMakeFiles/leopard.dir"),
+        ))
+        self.assertIsInstance(relabeled, dict)
+        relabeled["schema"] = runner.FAILURE_SCHEMA
+        old_identity = runner.cmake_identity_for_raw_schema(runner.RAW_SCHEMA_V2)
+        attach_recipe_content(relabeled, runner.exact_text_content(
+            archive_recipe_fixture_text(old_identity),
+            "historical failed fixture archive link recipe"))
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(
+                resign(relabeled), Path("/unused"), check_files=False)
+
+    def test_non_string_schema_values_fail_closed(self) -> None:
+        value = synthetic_raw()
+        value["schema"] = {"unexpected": "object"}
+        self.assert_rejected(value)
+        failure = synthetic_failure(runner.RAW_SCHEMA)
+        failure["schema"] = [runner.FAILURE_SCHEMA]
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(
+                resign(failure), Path("/unused"), check_files=False)
 
     def test_slower_candidate_is_valid_evidence(self) -> None:
         value = synthetic_raw(candidate_scale=2.0)
@@ -528,7 +797,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 runner.validate_raw(
                     value, root, check_files=True, check_current_inputs=False)
 
-    def test_v2_manifest_binds_isolation_and_replays_portably(self) -> None:
+    def test_v3_manifest_binds_isolation_and_replays_portably(self) -> None:
         value = synthetic_raw()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -580,6 +849,14 @@ class MainCompareRunnerTests(unittest.TestCase):
             edited = resign(edited)
             manifest_path.unlink()
             runner.write_json_exclusive(manifest_path, edited)
+            with self.assertRaises(runner.EvidenceError):
+                runner.verify_campaign(options)
+
+            cross_schema = copy.deepcopy(manifest)
+            cross_schema["schema"] = runner.MANIFEST_SCHEMA_V2
+            cross_schema = resign(cross_schema)
+            manifest_path.unlink()
+            runner.write_json_exclusive(manifest_path, cross_schema)
             with self.assertRaises(runner.EvidenceError):
                 runner.verify_campaign(options)
 
@@ -639,6 +916,17 @@ class MainCompareRunnerTests(unittest.TestCase):
             stdout.write_bytes(b"edited")
             with self.assertRaises(runner.EvidenceError):
                 runner.validate_failure(failure, root, check_files=True)
+
+            legacy = copy.deepcopy(failure)
+            legacy["schema"] = runner.FAILURE_SCHEMA_V2
+            old_identity, old_specification = cmake_fixture_identity(
+                runner.RAW_SCHEMA_V2)
+            legacy["input_specification"] = old_specification
+            legacy["identities_initial"] = old_identity
+            legacy["invocations"] = []
+            legacy["retained_files"] = runner.retained_file_records(root)
+            legacy = resign(legacy)
+            runner.validate_failure(legacy, root, check_files=True)
 
     def test_bounded_file_snapshot_rejects_fifo_without_open_block(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

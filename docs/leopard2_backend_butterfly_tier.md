@@ -20,13 +20,25 @@ historical evidence for the pre-R1 candidate
 final-source evidence.
 Native NEON, AVX-512, GFNI, and wider fusion schedules remain separate work.
 
-The current v6 collector requires two distinct final-source campaigns, one
+The current v7 collector requires two distinct final-source campaigns, one
 with `--backend ssse3` and one with `--backend avx2`. Each campaign binds the
 requested and resolved backend reported by every benchmark process to the
-same passing forced-backend matrix variant. The v6 geometry has 26 cells,
+same passing forced-backend matrix variant. It retains the v6 geometry of 26 cells,
 1,664 process invocations, and 52 encode/decode gates per backend. In addition
 to the historical cells, it covers high- and low-profile GF8 at 1,025 bytes
 and GF16 at 130 bytes, immediately above the production fusion thresholds.
+For each build, v7 also retains the exact bounded strict-UTF-8 bytes from the
+library and benchmark `link.txt` files. Independent outer byte counts and
+SHA-256 identities bind those bytes to the parsed recipes. Replay requires the
+recorded tools, relative `libleopard.a` output, ordered ordinary/backend object
+closure, matching `ranlib` archive, and benchmark archive input to agree with
+the normalized CMake and archive records. Current order follows CMake's
+ordinary core, GF8, GF16, SSSE3-object, and AVX2-object sequence; it is not a
+sorted-set or inherited historical FF16/GF8 assumption. Every retained
+benchmark flag and argument is compared exactly; external file inputs
+additionally retain their raw path spelling and bind it to the normalized
+external identity and content digest. Historical v6 records retain their
+exact original shape and replay rules; these v7-only fields are not backfilled.
 
 ## Production architecture
 
@@ -308,10 +320,14 @@ The retained v5 runner revision passed path-independent replay plus 52
 adversarial mutations. These include missing/reordered ABBA slots, raw-output
 edits, compiler and build-graph substitutions, source-closure changes,
 topology and reservation changes, confidence-summary edits, and a high-
-variance fixture. The current v6 self-test additionally runs successful AVX2
+variance fixture. The current v7 self-test additionally runs successful AVX2
 and SSSE3 mock campaigns and rejects independent changes to raw requested or
 resolved backend identity and to manifest requested or resolved backend
-identity. It now reports 69 adversarial gates, including bidirectional
+identity. It also checks current recipe content/size/SHA, tool, output, object
+order, `ranlib`, and benchmark-link mutations. Canonical-v7 and historical-v6
+CMake target/archive replay tests include coherently rehashed passed and
+failed-policy relabel attempts that retain the historical recipe bytes. The
+suite additionally covers bidirectional
 same-pair rejection and disjoint-pair coexistence with Jerasure plus
 bidirectional stable-anchor exclusion with the exact-main and C7 runners.
 
@@ -457,9 +473,18 @@ collector therefore cannot overlap the same physical pair, while disjoint
 pair-only work remains possible. C7 and the exact-main collector also use the
 stable anchor, so replacement of the reservation inode or its containing
 directory cannot let a current peer acquire a disjoint file lock while a
-campaign is active. The v6 evidence schema and historical portable replay
-remain unchanged because these guards are execution authority, not retained
-benchmark data. The stable layer conservatively serializes all current
+campaign is active. New v7 evidence binds the canonical CMake target `leopard`,
+archive `libleopard.a`, and `leopard.dir` object closure, including the exact
+bounded recipe bytes and their independently recorded size/SHA identities.
+The same verifier
+replays retained v6 evidence against its exact historical
+`libleopard`/`liblibleopard.a` identity and rejects cross-schema or identity
+relabels that leave those retained recipe bytes unchanged. These SHA-256
+digests are unkeyed integrity checks, not an external authenticity anchor: a
+party able to rewrite every evidence byte and every dependent digest can
+author a new internally consistent record. Preventing that requires a trusted
+external signature, transparency log, or independently retained digest. The
+stable layer conservatively serializes all current
 Leopard2 evidence campaigns for the UID, including campaigns on disjoint pairs.
 
     python3 experiments/leopard2/backend_butterfly/run_abba.py run \
@@ -473,16 +498,16 @@ Leopard2 evidence campaigns for the UID, including campaigns on disjoint pairs.
       --candidate-compile-commands CANDIDATE_BUILD/compile_commands.json \
       --baseline-cmake-cache CONTROL_BUILD/CMakeCache.txt \
       --candidate-cmake-cache CANDIDATE_BUILD/CMakeCache.txt \
-      --baseline-library CONTROL_BUILD/liblibleopard.a \
-      --candidate-library CANDIDATE_BUILD/liblibleopard.a \
+      --baseline-library CONTROL_BUILD/libleopard.a \
+      --candidate-library CANDIDATE_BUILD/libleopard.a \
       --matrix FINAL_MATRIX/matrix.json --output ABBA_AVX2 \
       --cpu CPU --reserved-sibling SIBLING \
       --reservation-file RESERVATION_JSON --build-jobs "$JOBS" --timeout 120
 
 Repeat with `--backend ssse3 --output ABBA_SSSE3`. Do not run other memory-
 intensive jobs during either pinned phase. Each manifest can then be replayed
-with `run_abba.py verify`; v6 checks the embedded raw evidence and matrix and
-will not accept the historical v5 schema. A passed campaign prints success and
+with `run_abba.py verify`; v7 checks the embedded raw evidence and matrix,
+accepts exact v6 replay, and will not accept the older v5 schema. A passed campaign prints success and
 exits 0. A completely authenticated failed campaign reproduces at least one
 statistical-policy failure and exits 3. Evidence corruption or inconsistent
 status exits 1, while malformed command-line use remains argparse exit 2. The
@@ -497,7 +522,7 @@ at 128 bytes. Scalar and native-ARM performance remain separate evidence gates.
 
 Replay the historical evidence with the historical v5 collector from the
 named candidate commit, without substituting a different build-path binary.
-The current v6 collector intentionally rejects a v5 manifest. Successful replay
+The current v7 collector intentionally rejects a v5 manifest. Successful replay
 authenticates that historical campaign only:
 
     git worktree add --detach ../leopard-abba-v5 \

@@ -7,7 +7,7 @@ qualification; its scope and required rerun are documented in
 `docs/leopard2_backend_butterfly_tier.md`. Native NEON and additional
 platform/ISA gates remain open.
 
-The current evidence protocol uses separate explicit SSSE3 and AVX2 v6 ABBA
+The current evidence protocol uses separate explicit SSSE3 and AVX2 v7 ABBA
 campaigns. Each binds the benchmark's requested and resolved backend to a
 passing forced-backend matrix variant and includes high/low GF8 1,025-byte and
 GF16 130-byte neighbors above the production fusion cutoffs. Until both
@@ -360,7 +360,7 @@ Default build, static gate, and tests:
     ctest --test-dir build/portable-isa-release -j32 --output-on-failure
     sh tools/check_leopard2_portable_isa.sh \
       "$(command -v objdump)" \
-      build/portable-isa-release/liblibleopard.a \
+      build/portable-isa-release/libleopard.a \
       build/portable-isa-release \
       "$(command -v cc)" \
       "$(command -v ar)"
@@ -392,4 +392,4 @@ Compile-only AArch64/SSE2NEON preservation check:
       -DLEO2_BUILD_TESTS=OFF \
       -DLEO2_BUILD_BENCHMARKS=OFF \
       -DENABLE_OPENMP=OFF
-    cmake --build build/review-portable-aarch64 -j32 --target libleopard
+    cmake --build build/review-portable-aarch64 -j32 --target leopard

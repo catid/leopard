@@ -6,8 +6,33 @@ and candidate commit `6d3afee213b94d486cf5f8145ac18078883ebc20`.
 It does not build either side.  It accepts only the clean, tests-disabled,
 Release production builds described in the reproduction guide, verifies their
 source/object/archive/link/runtime closure, cleanly recompiles every retained
-source/object pair byte-for-byte, and then runs the fixed matrix. Successful
-evidence uses raw/manifest schema v3; failed-run diagnostics use schema v3.
+source/object pair byte-for-byte, and then runs the fixed matrix. New evidence
+uses raw/manifest schema v4 and failure schema v4, binding the canonical CMake
+target `leopard`, archive `libleopard.a`, and `leopard.dir` object closure.
+V4 retains the exact bounded UTF-8 archive `link.txt` content, binds its byte
+size and SHA-256 to the existing recipe-file identity, and parses those bytes
+to require the declared archive and ordinary-object target directory (backend
+object-library directories remain distinct allowed targets). Retained
+schema-v3 evidence replays against its exact historical
+`libleopard`/`liblibleopard.a` identity and record shape. A schema/path relabel
+that retains the old recipe bytes is rejected.
+
+The evidence digests are unkeyed integrity checks, not an external
+authenticity anchor. They detect edits relative to the retained evidence and
+the v4 semantic binding prevents re-signing only the schema and path labels
+around old recipe bytes. They cannot prevent an attacker from replacing every
+evidence byte and recomputing a completely internally consistent bundle.
+Preventing that stronger evidence re-authoring requires a trusted external
+signature, transparency log, or equivalent authenticity anchor.
+
+The frozen control and candidate commits both predate canonical-target commit
+`0a2a666`. They cannot produce a fresh v4 bundle while also satisfying the
+collector's exact-clean-commit rule: both source trees define only the
+historical target. Do not work around this with an unrecorded generated-build
+edit, copied archive, or dirty CMake overlay. Fresh v4 timing requires either
+new behavior-equivalent paired commits carrying the canonical rename or a
+separately versioned, fully authenticated external build wrapper. Until then,
+v3 replay is the reproducible evidence for this frozen comparison.
 
 The evidence exit statuses are deliberately distinct:
 

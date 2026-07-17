@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Portable and optional live validation for C7 v3/v4 manifests."""
+"""Portable and optional live validation for C7 v3/v4/v5 manifests."""
 
 from __future__ import annotations
 
@@ -24,16 +24,20 @@ from run_matrix import (
     BACKENDS,
     BUILD_NAMES,
     C7_BINARY_MAX_BYTES,
+    CURRENT_ARCHIVE_MEMBERS,
     EXPECTED_ARCHIVE_MEMBER_COUNTS,
     EXPECTED_ARCHIVE_SANITIZER_COUNTS,
     EXPECTED_EXECUTABLE_SANITIZER_COUNTS,
     EXPECTED_SOURCE_CLOSURE,
+    HISTORICAL_MANIFEST_SCHEMA_V4,
+    HISTORICAL_PEER_ATTESTATION_SCHEMA_V3,
     EXPECTED_TOOLING_CLOSURE,
     LEGACY_EXPECTED_ARCHIVE_MEMBER_COUNTS,
     LEGACY_EXPECTED_ARCHIVE_SANITIZER_COUNTS,
     LEGACY_EXPECTED_EXECUTABLE_SANITIZER_COUNTS,
     LEGACY_MANIFEST_SCHEMA,
     LEGACY_PEER_ATTESTATION_SCHEMA,
+    MAX_LINK_RECIPE_BYTES,
     MANIFEST_SCHEMA,
     NORMALIZATION_SCHEMA,
     NORMALIZATION_TOKEN,
@@ -49,6 +53,41 @@ from run_matrix import (
     peer_portable_artifact_records,
     typed_equal,
 )
+
+HISTORICAL_CMAKE_IDENTITY = {
+    "target": "libleopard",
+    "archive": "liblibleopard.a",
+    "target_directory": "libleopard.dir",
+}
+CANONICAL_CMAKE_IDENTITY = {
+    "target": "leopard",
+    "archive": "libleopard.a",
+    "target_directory": "leopard.dir",
+}
+SUPPORTED_MANIFEST_SCHEMAS = (
+    LEGACY_MANIFEST_SCHEMA, HISTORICAL_MANIFEST_SCHEMA_V4, MANIFEST_SCHEMA)
+
+
+def cmake_identity_for_schema(schema: str) -> dict[str, str]:
+    if not isinstance(schema, str):
+        raise ValueError("manifest schema is not a string")
+    if schema in (LEGACY_MANIFEST_SCHEMA, HISTORICAL_MANIFEST_SCHEMA_V4):
+        return HISTORICAL_CMAKE_IDENTITY
+    if schema == MANIFEST_SCHEMA:
+        return CANONICAL_CMAKE_IDENTITY
+    raise ValueError("manifest schema changed")
+
+
+def peer_attestation_schema_for_manifest(schema: str) -> str:
+    if not isinstance(schema, str):
+        raise ValueError("manifest schema is not a string")
+    if schema == LEGACY_MANIFEST_SCHEMA:
+        return LEGACY_PEER_ATTESTATION_SCHEMA
+    if schema == HISTORICAL_MANIFEST_SCHEMA_V4:
+        return HISTORICAL_PEER_ATTESTATION_SCHEMA_V3
+    if schema == MANIFEST_SCHEMA:
+        return PEER_ATTESTATION_SCHEMA
+    raise ValueError("manifest schema changed")
 
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -554,8 +593,8 @@ def validate_peer_attestation(
     expected_closures = {
         name: builds[name]["source_closure"] for name in BUILD_NAMES
     }
-    expected_attestation_schema = (
-        LEGACY_PEER_ATTESTATION_SCHEMA if legacy else PEER_ATTESTATION_SCHEMA)
+    expected_attestation_schema = peer_attestation_schema_for_manifest(
+        manifest["schema"])
     expected_checks = {
         "portable_semantics": "pass",
         "live_tools_and_outputs": "pass",
@@ -754,7 +793,8 @@ def normalize_checkout_text(
 
 def dependency_source_closure(
     entries: object, build_dir: str, source_root: pathlib.Path,
-    evidence_root: pathlib.Path, retained_directory: str, *, live: bool,
+    evidence_root: pathlib.Path, retained_directory: str,
+    library_target_directory: str, *, live: bool,
 ) -> tuple[str, ...]:
     if not isinstance(entries, list) or len(entries) != len(ARCHIVE_MEMBERS):
         raise ValueError("dependency-file matrix changed")
@@ -816,7 +856,7 @@ def dependency_source_closure(
             "leopard2_backend_avx2.dir" if member ==
             "Leopard2BackendAVX2.cpp.o" else
             "leopard2_backend_ssse3.dir" if member ==
-            "Leopard2BackendSSSE3.cpp.o" else "libleopard.dir"
+            "Leopard2BackendSSSE3.cpp.o" else library_target_directory
         ])
     if build_paths != expected_build_paths:
         raise ValueError("dependency-file build paths or identities changed")
@@ -833,6 +873,81 @@ def validate_source_closure_paths(closure: object) -> list[str]:
     if paths != list(EXPECTED_SOURCE_CLOSURE):
         raise ValueError("source closure exact set/order changed")
     return paths
+
+
+def validate_committed_source_artifact(
+    entry: object, label: str, source_root: pathlib.Path,
+    core_sha: str, *, current: bool,
+) -> None:
+    validate_artifact(
+        entry, label, source_root, required=current,
+        check_if_present=current)
+    if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+        raise ValueError(f"{label} source artifact changed")
+    relative = entry["path"]
+    if pathlib.Path(relative).is_absolute():
+        raise ValueError("source closure path is not portable")
+    validate_git_artifact(
+        core_sha, entry, relative, "source closure", source_root)
+
+
+def validate_archive_link_recipe(
+    build: dict[str, Any], name: str, build_dir: str,
+    cmake_identity: dict[str, str], records: dict[str, pathlib.Path],
+    evidence_root: pathlib.Path, *, live: bool,
+) -> None:
+    identity = build.get("archive_link_recipe")
+    content = build.get("archive_link_recipe_content")
+    expected_path = (
+        f"{build_dir}/CMakeFiles/{cmake_identity['target_directory']}/link.txt")
+    if not isinstance(identity, dict) or identity.get("path") != expected_path:
+        raise ValueError(f"{name} archive link-recipe identity changed")
+    validate_artifact(
+        identity, f"{name} archive link recipe", evidence_root,
+        required=live, check_if_present=live)
+    if not isinstance(content, dict) or set(content) != {
+            "bytes", "encoding", "sha256", "text"}:
+        raise ValueError(f"{name} retained archive link recipe changed")
+    text = content.get("text")
+    if (content.get("encoding") != "utf-8" or not isinstance(text, str) or
+            "\x00" in text):
+        raise ValueError(f"{name} retained archive link recipe is not UTF-8 text")
+    encoded = text.encode("utf-8")
+    digest = hashlib.sha256(encoded).hexdigest()
+    if (not 0 < len(encoded) <= MAX_LINK_RECIPE_BYTES or
+            type(content.get("bytes")) is not int or
+            content["bytes"] != len(encoded) or content.get("sha256") != digest or
+            identity.get("bytes") != len(encoded) or
+            identity.get("sha256") != digest):
+        raise ValueError(f"{name} archive link-recipe bytes are not bound")
+    commands: list[list[str]] = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            tokens = shlex.split(line, posix=True)
+        except ValueError as error:
+            raise ValueError(
+                f"{name} archive link recipe is not parseable") from error
+        if not tokens:
+            raise ValueError(f"{name} archive link recipe has an empty command")
+        commands.append(tokens)
+    if len(commands) != 2:
+        raise ValueError(f"{name} archive link recipe command count changed")
+    expected_objects = [
+        f"CMakeFiles/{(
+            'leopard2_backend_avx2.dir' if member == 'Leopard2BackendAVX2.cpp.o'
+            else 'leopard2_backend_ssse3.dir' if member ==
+            'Leopard2BackendSSSE3.cpp.o'
+            else cmake_identity['target_directory'])}/{member}"
+        for member in CURRENT_ARCHIVE_MEMBERS
+    ]
+    archive, ranlib = commands
+    if (archive != [str(records["ar"]), "qc", cmake_identity["archive"],
+                    *expected_objects] or
+            ranlib != [str(records["ranlib"]), cmake_identity["archive"]]):
+        raise ValueError(
+            f"{name} archive link recipe differs from its exact CMake closure")
 
 
 def compiler_identity(record: dict, family: str) -> tuple[str, str]:
@@ -1092,8 +1207,10 @@ def validate_manifest(
 ) -> None:
     schema = data.get("schema")
     legacy = schema == LEGACY_MANIFEST_SCHEMA
-    if schema not in (LEGACY_MANIFEST_SCHEMA, MANIFEST_SCHEMA):
+    current = schema == MANIFEST_SCHEMA
+    if not isinstance(schema, str) or schema not in SUPPORTED_MANIFEST_SCHEMAS:
         raise ValueError("manifest schema changed")
+    cmake_identity = cmake_identity_for_schema(schema)
     required_top = {
         "builds", "core_git_sha", "normalization", "reproducibility",
         "runner", "runs", "schema", "scope", "source", "status",
@@ -1131,12 +1248,12 @@ def validate_manifest(
         ("runner", EXPECTED_TOOLING_CLOSURE[1], "C7 runner"),
         ("validator", EXPECTED_TOOLING_CLOSURE[2], "C7 validator"),
     ):
-        # The current checkout contains v4 tooling, so historical v3 tooling
+        # The current checkout contains v5 tooling, so historical v3/v4 tooling
         # is authenticated from its immutable Git object rather than requiring
         # those old bytes to remain materialized at the same worktree path.
         validate_artifact(
-            data[key], label, source_root, required=not legacy,
-            check_if_present=not legacy)
+            data[key], label, source_root, required=current,
+            check_if_present=current)
         validate_git_artifact(
             tooling_sha, data[key], relative, label, source_root)
     taskset = validate_program_record(data["taskset"], "taskset")
@@ -1166,6 +1283,9 @@ def validate_manifest(
             "link_driver", "name", "nm", "prefix_map_flags", "ranlib",
             "sanitizer", "source_closure", "standalone_linker",
         }
+        if current:
+            required.update({
+                "archive_link_recipe", "archive_link_recipe_content"})
         if set(build) != required:
             raise ValueError("build record schema changed")
         name = build["name"]
@@ -1232,11 +1352,15 @@ def validate_manifest(
             build_root = candidate_root
         elif candidate_root != build_root:
             raise ValueError("builds do not share one output root")
-        expected_library = f"{build_dir}/liblibleopard.a"
+        expected_library = f"{build_dir}/{cmake_identity['archive']}"
         expected_executable = f"{build_root}/c7-{name}"
         if (build["library"]["path"] != expected_library or
                 build["executable"]["path"] != expected_executable):
             raise ValueError("build output path changed")
+        if current:
+            validate_archive_link_recipe(
+                build, name, build_dir, cmake_identity, records,
+                evidence_root, live=live)
         library = validate_artifact(
             build["library"], f"{name} archive", evidence_root, required=False,
             check_if_present=False)
@@ -1289,7 +1413,8 @@ def validate_manifest(
         ]
         expected_build = [
             str(records["cmake"]), "--build",
-            f"{NORMALIZATION_TOKEN}/{build_dir}", "--target", "libleopard",
+            f"{NORMALIZATION_TOKEN}/{build_dir}", "--target",
+            cmake_identity["target"],
             "--verbose", "--", f"-j{jobs}",
         ]
         expected_compile_prefix = [
@@ -1385,7 +1510,8 @@ def validate_manifest(
             f"{NORMALIZATION_TOKEN}/{data['runner']['path']}", *flags,
             "Built target leopard2_backend_ssse3",
             "Built target leopard2_backend_avx2",
-            "Linking CXX static library liblibleopard.a", "Built target libleopard",
+            "Linking CXX static library " + cmake_identity["archive"],
+            "Built target " + cmake_identity["target"],
         ):
             if required not in build_text:
                 raise ValueError("core build log lost an exact role or flag")
@@ -1395,7 +1521,7 @@ def validate_manifest(
         if compile_stdout != f"{linker_first}\n":
             raise ValueError("standalone linker output changed")
         for required in (
-            "c7_exact_low.cpp", "liblibleopard.a", "-std=c++11",
+            "c7_exact_low.cpp", cmake_identity["archive"], "-std=c++11",
             str(records["standalone_linker"]), NORMALIZATION_TOKEN,
             PREFIX_MAP_TARGET,
         ):
@@ -1425,12 +1551,15 @@ def validate_manifest(
             sanitizer_executable_proof if sanitizer else zero_counts)
         expected_archive_counts = (
             sanitizer_archive_proof if sanitizer else zero_counts)
+        expected_archive_members = (
+            CURRENT_ARCHIVE_MEMBERS if current else ARCHIVE_MEMBERS)
         expected_members = (
             sanitizer_member_proof if sanitizer else
-            {member: dict(zero_counts) for member in ARCHIVE_MEMBERS})
+            {member: dict(zero_counts) for member in expected_archive_members})
         if (instrumentation["required_compile_macro"] is not sanitizer or
                 not typed_equal(
-                    instrumentation["archive_members"], list(ARCHIVE_MEMBERS)) or
+                    instrumentation["archive_members"],
+                    list(expected_archive_members)) or
                 not typed_equal(
                     instrumentation["executable_counts"],
                     expected_executable_counts) or
@@ -1466,18 +1595,14 @@ def validate_manifest(
         closure = build["source_closure"]
         validate_source_closure_paths(closure)
         for index, entry in enumerate(closure):
-            validate_artifact(
+            validate_committed_source_artifact(
                 entry, f"{name} source closure {index}", source_root,
-                required=not legacy, check_if_present=not legacy)
-            relative = entry["path"]
-            if pathlib.Path(relative).is_absolute():
-                raise ValueError("source closure path is not portable")
-            validate_git_artifact(
-                core_sha, entry, relative, "source closure", source_root)
+                core_sha, current=current)
         derived_closure = dependency_source_closure(
             build["dependency_files"], build_dir, source_root, evidence_root,
             (pathlib.PurePosixPath(build["configure_stdout"]["path"]).parent /
-             f"{name}-dependencies").as_posix(), live=live)
+             f"{name}-dependencies").as_posix(),
+            cmake_identity["target_directory"], live=live)
         if derived_closure != EXPECTED_SOURCE_CLOSURE:
             raise ValueError("dependency files do not reproduce source closure")
         if by_name and not typed_equal(

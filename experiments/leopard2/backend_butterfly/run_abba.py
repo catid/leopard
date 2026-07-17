@@ -35,7 +35,8 @@ except ImportError:  # Verification remains usable on non-POSIX hosts.
     fcntl = None
 
 
-SCHEMA = "leopard2-backend-butterfly-abba/v6"
+LEGACY_SCHEMA = "leopard2-backend-butterfly-abba/v6"
+SCHEMA = "leopard2-backend-butterfly-abba/v7"
 RAW_SCHEMA = "leopard2-backend-butterfly-raw/v1"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
@@ -57,6 +58,7 @@ FRESH_BUILD_ENVIRONMENT = {
     "LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin"}
 MAX_BENCHMARK_STDOUT_BYTES = 64 * 1024 * 1024
 MAX_BENCHMARK_STDERR_BYTES = 8 * 1024 * 1024
+MAX_LINK_RECIPE_BYTES = 1024 * 1024
 CHILD_REAP_TIMEOUT_SECONDS = 5.0
 PR_SET_CHILD_SUBREAPER = 36
 PR_GET_CHILD_SUBREAPER = 37
@@ -139,6 +141,37 @@ BUILD_TRANSLATION_UNITS = (
     "LeopardFF8.cpp",
     "LeopardFF16.cpp",
     "bench/leopard2/benchmark.cpp",
+)
+
+# CMake appends GF8/GF16 and then the optional object-library sources to the
+# ordinary LIB_SOURCE_FILES list.  This is a semantic part of current v7's
+# retained archive recipe, not a sorted-set convention.
+CURRENT_ARCHIVE_TRANSLATION_UNITS = (
+    "leopard.cpp",
+    "leopard2.cpp",
+    "Leopard2Backend.cpp",
+    "Leopard2BackendScalar.cpp",
+    "Leopard2CpuFeatures.cpp",
+    "Leopard2Plan.cpp",
+    "LeopardCommon.cpp",
+    "LeopardFF8.cpp",
+    "LeopardFF16.cpp",
+    "Leopard2BackendSSSE3.cpp",
+    "Leopard2BackendAVX2.cpp",
+)
+
+HISTORICAL_ARCHIVE_TRANSLATION_UNITS = (
+    "leopard.cpp",
+    "leopard2.cpp",
+    "Leopard2Backend.cpp",
+    "Leopard2BackendScalar.cpp",
+    "Leopard2CpuFeatures.cpp",
+    "Leopard2Plan.cpp",
+    "LeopardCommon.cpp",
+    "LeopardFF16.cpp",
+    "LeopardFF8.cpp",
+    "Leopard2BackendSSSE3.cpp",
+    "Leopard2BackendAVX2.cpp",
 )
 
 MATRIX_SOURCE_FILES = (
@@ -348,12 +381,39 @@ CONFIGURED_TRANSLATION_UNITS = BUILD_TRANSLATION_UNITS + (
     "tests/experiments.cpp",
 )
 
-RELEVANT_TARGETS = (
-    "libleopard",
+HISTORICAL_CMAKE_IDENTITY = {
+    "target": "libleopard",
+    "archive": "liblibleopard.a",
+    "target_directory": "libleopard.dir",
+}
+CANONICAL_CMAKE_IDENTITY = {
+    "target": "leopard",
+    "archive": "libleopard.a",
+    "target_directory": "leopard.dir",
+}
+SCHEMA_TO_CMAKE_IDENTITY = {
+    LEGACY_SCHEMA: HISTORICAL_CMAKE_IDENTITY,
+    SCHEMA: CANONICAL_CMAKE_IDENTITY,
+}
+
+RELEVANT_NON_LIBRARY_TARGETS = (
     "leopard2_backend_ssse3",
     "leopard2_backend_avx2",
     "bench_leopard2",
 )
+
+
+def cmake_identity_for_schema(schema):
+    require(isinstance(schema, str),
+            "butterfly manifest schema must be a string")
+    identity = SCHEMA_TO_CMAKE_IDENTITY.get(schema)
+    require(identity is not None, "unsupported butterfly manifest schema")
+    return identity
+
+
+def relevant_targets_for_schema(schema):
+    return (cmake_identity_for_schema(schema)["target"],) + \
+        RELEVANT_NON_LIBRARY_TARGETS
 
 POWER_STATE_FILES = (
     ("scaling_driver", "cpu{cpu}/cpufreq/scaling_driver"),
@@ -1059,6 +1119,74 @@ def sha256_bytes(value):
 
 def sha256_file(path):
     return sha256_bytes(Path(path).read_bytes())
+
+
+def exact_utf8_file_content(path, label):
+    path = Path(path)
+    with path.open("rb") as input_file:
+        raw = input_file.read(MAX_LINK_RECIPE_BYTES + 1)
+    require(0 < len(raw) <= MAX_LINK_RECIPE_BYTES,
+            "{} must contain 1..{} bytes".format(
+                label, MAX_LINK_RECIPE_BYTES))
+    try:
+        text = raw.decode("utf-8", "strict")
+    except UnicodeDecodeError as error:
+        raise EvidenceError("{} is not strict UTF-8: {}".format(label, error))
+    return exact_utf8_text_content(text, label)
+
+
+def exact_utf8_text_content(text, label):
+    require(isinstance(text, str), label + " text must be a string")
+    try:
+        raw = text.encode("utf-8", "strict")
+    except UnicodeEncodeError as error:
+        raise EvidenceError("{} text is not strict UTF-8: {}".format(
+            label, error))
+    require(0 < len(raw) <= MAX_LINK_RECIPE_BYTES and "\x00" not in text,
+            "{} must contain 1..{} non-NUL UTF-8 bytes".format(
+                label, MAX_LINK_RECIPE_BYTES))
+    return {
+        "encoding": "utf-8",
+        "size": len(raw),
+        "sha256": sha256_bytes(raw),
+        "text": text,
+    }
+
+
+def parse_exact_recipe_content(content, expected_size, expected_sha256, label):
+    require(isinstance(expected_size, int) and
+            not isinstance(expected_size, bool) and
+            0 < expected_size <= MAX_LINK_RECIPE_BYTES,
+            label + " outer byte count")
+    require(isinstance(content, dict) and set(content) == {
+        "encoding", "size", "sha256", "text"},
+        label + " content key set")
+    require(content.get("encoding") == "utf-8" and
+            isinstance(content.get("size"), int) and
+            not isinstance(content.get("size"), bool) and
+            0 < content["size"] <= MAX_LINK_RECIPE_BYTES and
+            isinstance(content.get("text"), str),
+            label + " content identity")
+    try:
+        raw = content["text"].encode("utf-8", "strict")
+    except UnicodeEncodeError as error:
+        raise EvidenceError("{} text is not strict UTF-8: {}".format(
+            label, error))
+    require("\x00" not in content["text"] and
+            len(raw) == content["size"] == expected_size and
+            re.fullmatch(r"[0-9a-f]{64}", content.get("sha256") or "") is
+            not None and
+            sha256_bytes(raw) == content["sha256"] == expected_sha256,
+            label + " content size/SHA binding")
+    try:
+        lines = [shlex.split(value, posix=True)
+                 for value in content["text"].splitlines() if value.strip()]
+    except ValueError as error:
+        raise EvidenceError("{} shell syntax: {}".format(label, error))
+    require(lines and all(line and all(isinstance(value, str) and value
+                                       for value in line) for line in lines),
+            label + " parsed argv")
+    return lines
 
 
 def atomic_json(path, value):
@@ -1860,7 +1988,9 @@ def command_evidence(argv, cwd, label, logical_argv, environment=None):
     }
 
 
-def file_api_targets(source_root, build_root):
+def file_api_targets(source_root, build_root, schema=SCHEMA):
+    cmake_identity = cmake_identity_for_schema(schema)
+    relevant_targets = relevant_targets_for_schema(schema)
     reply = build_root / ".cmake/api/v1/reply"
     indexes = sorted(reply.glob("index-*.json"))
     require(len(indexes) == 1, "CMake File API must produce exactly one index")
@@ -1884,7 +2014,7 @@ def file_api_targets(source_root, build_root):
                 "malformed CMake target reference")
         require(name not in documents, "duplicate CMake target: " + name)
         documents[name] = read_json(reply / filename, "CMake target " + name)
-    require(set(RELEVANT_TARGETS) <= set(documents),
+    require(set(relevant_targets) <= set(documents),
             "CMake target graph omits evidence target")
 
     configured_units = set()
@@ -1906,7 +2036,7 @@ def file_api_targets(source_root, build_root):
     targets = {}
     artifact_paths = {}
     relevant_units = set()
-    for name in RELEVANT_TARGETS:
+    for name in relevant_targets:
         document = documents[name]
         artifacts = document.get("artifacts", [])
         require(isinstance(artifacts, list) and len(artifacts) == 1,
@@ -1971,10 +2101,11 @@ def file_api_targets(source_root, build_root):
     require(relevant_units == set(BUILD_TRANSLATION_UNITS),
             "evidence target translation-unit closure mismatch")
     require(targets["bench_leopard2"]["type"] == "EXECUTABLE" and
-            targets["bench_leopard2"]["dependencies"] == ["libleopard"],
+            targets["bench_leopard2"]["dependencies"] ==
+            [cmake_identity["target"]],
             "benchmark target dependency identity")
-    require(targets["libleopard"]["type"] == "STATIC_LIBRARY" and
-            targets["libleopard"]["dependencies"] ==
+    require(targets[cmake_identity["target"]]["type"] == "STATIC_LIBRARY" and
+            targets[cmake_identity["target"]]["dependencies"] ==
             ["leopard2_backend_avx2", "leopard2_backend_ssse3"],
             "library target dependency identity")
     require(all(targets[name]["type"] == "OBJECT_LIBRARY" and
@@ -2046,11 +2177,13 @@ def fresh_rebuild(source_root, template_cache, fresh_root, jobs):
     configure_record = command_evidence(
         configure, source_root, "fresh CMake configure", logical_configure,
         FRESH_BUILD_ENVIRONMENT)
-    artifacts, target_graph = file_api_targets(source_root, build_root)
+    artifacts, target_graph = file_api_targets(source_root, build_root, SCHEMA)
+    cmake_identity = cmake_identity_for_schema(SCHEMA)
     argv = [str(cmake), "--build", str(build_root), "--parallel", str(jobs),
-            "--target", "libleopard", "bench_leopard2"]
+            "--target", cmake_identity["target"], "bench_leopard2"]
     logical_argv = ["@tool/cmake", "--build", "@build", "--parallel",
-                    str(jobs), "--target", "libleopard", "bench_leopard2"]
+                    str(jobs), "--target", cmake_identity["target"],
+                    "bench_leopard2"]
     build_record = command_evidence(
         argv, build_root, "fresh evidence build", logical_argv,
         FRESH_BUILD_ENVIRONMENT)
@@ -2069,14 +2202,14 @@ def fresh_rebuild(source_root, template_cache, fresh_root, jobs):
         "build_root": build_root,
         "compile_commands": build_root / "compile_commands.json",
         "cmake_cache": build_root / "CMakeCache.txt",
-        "library": artifacts["libleopard"],
+        "library": artifacts[cmake_identity["target"]],
         "binary": artifacts["bench_leopard2"],
         "target_graph": target_graph,
         "rebuild": rebuild,
     }
 
 
-def self_test_rebuild_record(jobs, cache_path):
+def self_test_rebuild_record(jobs, cache_path, schema=SCHEMA):
     values = cache_values(cache_path)
     cmake_path = values["CMAKE_COMMAND"]
     configure_argv = ["@tool/cmake", "-S", "@source", "-B", "@build",
@@ -2092,8 +2225,10 @@ def self_test_rebuild_record(jobs, cache_path):
         "-DCMAKE_RANLIB=@tool/ranlib",
         "-DCMAKE_MAKE_PROGRAM=@tool/make",
     ])
+    cmake_identity = cmake_identity_for_schema(schema)
     build_argv = ["@tool/cmake", "--build", "@build", "--parallel",
-                  str(jobs), "--target", "libleopard", "bench_leopard2"]
+                  str(jobs), "--target", cmake_identity["target"],
+                  "bench_leopard2"]
     _, cmake = executable_identity(cmake_path, "cmake", "CMAKE_COMMAND")
     version = cmake["version"]
     empty_digest = sha256_bytes(b"")
@@ -2154,16 +2289,28 @@ def resolve_recipe_path(value, directory):
 
 
 def literal_link_recipes(source_root, build_root, tool_paths, compile_entries,
-                         library, binary):
-    library_recipe_path = build_root / "CMakeFiles/libleopard.dir/link.txt"
+                         library, binary, schema=SCHEMA):
+    cmake_identity = cmake_identity_for_schema(schema)
+    library_recipe_path = build_root / "CMakeFiles" / \
+        cmake_identity["target_directory"] / "link.txt"
     benchmark_recipe_path = build_root / "CMakeFiles/bench_leopard2.dir/link.txt"
     require(library_recipe_path.is_file() and benchmark_recipe_path.is_file(),
             "evidence collection requires CMake literal link.txt recipes")
-    library_lines = [shlex.split(value) for value in
-                     library_recipe_path.read_text(encoding="utf-8").splitlines()
+    library_content = exact_utf8_file_content(
+        library_recipe_path, "static-library link recipe") \
+        if schema == SCHEMA else None
+    benchmark_content = exact_utf8_file_content(
+        benchmark_recipe_path, "benchmark link recipe") \
+        if schema == SCHEMA else None
+    library_text = (library_content["text"] if library_content is not None else
+                    library_recipe_path.read_text(encoding="utf-8"))
+    benchmark_text = (benchmark_content["text"]
+                      if benchmark_content is not None else
+                      benchmark_recipe_path.read_text(encoding="utf-8"))
+    library_lines = [shlex.split(value) for value in library_text.splitlines()
                      if value.strip()]
     benchmark_lines = [shlex.split(value) for value in
-                       benchmark_recipe_path.read_text(encoding="utf-8").splitlines()
+                       benchmark_text.splitlines()
                        if value.strip()]
     require(len(library_lines) == 2 and len(benchmark_lines) == 1,
             "unexpected CMake archive/link recipe shape")
@@ -2177,10 +2324,10 @@ def literal_link_recipes(source_root, build_root, tool_paths, compile_entries,
         value[1].resolve() for relative, value in compile_entries.items()
         if relative != "bench/leopard2/benchmark.cpp"
     }
-    recipe_objects = {resolve_recipe_path(value, build_root)
-                      for value in archive[3:]}
-    require(len(recipe_objects) == len(archive[3:]) and
-            recipe_objects == expected_objects,
+    recipe_objects = [resolve_recipe_path(value, build_root)
+                      for value in archive[3:]]
+    require(len(set(recipe_objects)) == len(recipe_objects) and
+            set(recipe_objects) == expected_objects,
             "static-library recipe object set mismatch")
     require(len(index) == 2 and
             command_executable(index[0], build_root) == tool_paths["ranlib"] and
@@ -2213,8 +2360,11 @@ def literal_link_recipes(source_root, build_root, tool_paths, compile_entries,
         if relative_to(path, build_root) is None:
             require(relative_to(path, source_root) is None,
                     "benchmark links a source-tree file directly")
-            external_inputs.append({"path": tagged_path(path, source_root, build_root),
-                                    "sha256": sha256_file(path)})
+            external = {"path": tagged_path(path, source_root, build_root),
+                        "sha256": sha256_file(path)}
+            if schema == SCHEMA:
+                external["raw_path"] = value
+            external_inputs.append(external)
     require(resolved_file_inputs.count(benchmark_object) == 1 and
             resolved_file_inputs.count(library) == 1,
             "benchmark link inputs omit or duplicate target object/archive")
@@ -2242,11 +2392,20 @@ def literal_link_recipes(source_root, build_root, tool_paths, compile_entries,
         "benchmark": [normalized_recipe(link, "cxx")],
         "external_link_inputs": sorted(
             external_inputs, key=lambda value: value["path"]),
-        "library_recipe_sha256": sha256_file(library_recipe_path),
-        "benchmark_recipe_sha256": sha256_file(benchmark_recipe_path),
+        "library_recipe_sha256": (
+            library_content["sha256"] if library_content is not None else
+            sha256_file(library_recipe_path)),
+        "benchmark_recipe_sha256": (
+            benchmark_content["sha256"] if benchmark_content is not None else
+            sha256_file(benchmark_recipe_path)),
     }
+    if schema == SCHEMA:
+        recipes["library_recipe_size"] = library_content["size"]
+        recipes["benchmark_recipe_size"] = benchmark_content["size"]
+        recipes["library_recipe_content"] = library_content
+        recipes["benchmark_recipe_content"] = benchmark_content
     recipes["digest"] = sha256_bytes(canonical_bytes(recipes))
-    return recipes, expected_objects
+    return recipes, recipe_objects
 
 
 def archive_manifest(library, ar_tool, expected_objects):
@@ -2259,8 +2418,8 @@ def archive_manifest(library, ar_tool, expected_objects):
         require(path.name not in expected_by_name,
                 "expected archive objects have duplicate basenames")
         expected_by_name[path.name] = path
-    require(set(listing) == set(expected_by_name),
-            "archive member set differs from target object recipe")
+    require(listing == [path.name for path in expected_objects],
+            "archive member order differs from target object recipe")
     members = []
     for name in listing:
         raw = command_output([str(ar_tool), "p", str(library), name],
@@ -2277,8 +2436,102 @@ def archive_manifest(library, ar_tool, expected_objects):
     return result
 
 
+def validate_retained_link_recipe_semantics(recipes, tools, units):
+    library_lines = parse_exact_recipe_content(
+        recipes["library_recipe_content"],
+        recipes["library_recipe_size"],
+        recipes["library_recipe_sha256"], "static-library link recipe")
+    benchmark_lines = parse_exact_recipe_content(
+        recipes["benchmark_recipe_content"],
+        recipes["benchmark_recipe_size"],
+        recipes["benchmark_recipe_sha256"], "benchmark link recipe")
+    require(len(library_lines) == 2 and len(benchmark_lines) == 1,
+            "retained CMake archive/link recipe shape")
+    archive, index = library_lines
+    benchmark = benchmark_lines[0]
+    require(archive[0] == tools["ar"]["recipe_argv0"] and
+            index[0] == tools["ranlib"]["recipe_argv0"] and
+            benchmark[0] == tools["cxx"]["recipe_argv0"],
+            "retained recipe tool spelling differs from recorded tool")
+
+    normalized_archive = recipes["library"][0]
+    require(len(archive) == len(normalized_archive) and len(archive) >= 4 and
+            archive[1] == normalized_archive[1] and
+            archive[1] in ("qc", "rc", "rcs") and
+            archive[2] == "libleopard.a" and
+            normalized_archive[2] == "@build/libleopard.a",
+            "retained archive command/output semantics")
+    require(all(value.startswith("@build/")
+                for value in normalized_archive[3:]),
+            "normalized archive object location")
+    expected_raw_objects = [value[len("@build/"):]
+                            for value in normalized_archive[3:]]
+    require(archive[3:] == expected_raw_objects and
+            len(expected_raw_objects) == len(set(expected_raw_objects)),
+            "retained archive object closure/order")
+    for relative, entry in units.items():
+        if relative == "bench/leopard2/benchmark.cpp":
+            expected_prefix = "@build/CMakeFiles/bench_leopard2.dir/"
+        elif relative == "Leopard2BackendSSSE3.cpp":
+            expected_prefix = "@build/CMakeFiles/leopard2_backend_ssse3.dir/"
+        elif relative == "Leopard2BackendAVX2.cpp":
+            expected_prefix = "@build/CMakeFiles/leopard2_backend_avx2.dir/"
+        else:
+            expected_prefix = "@build/CMakeFiles/leopard.dir/"
+        require(entry["output"].startswith(expected_prefix),
+                "canonical CMake object directory: " + relative)
+    expected_library_outputs = [
+        units[relative]["output"]
+        for relative in CURRENT_ARCHIVE_TRANSLATION_UNITS]
+    require(normalized_archive[3:] == expected_library_outputs,
+            "retained archive translation-unit closure/order")
+    require(index == [tools["ranlib"]["recipe_argv0"], "libleopard.a"] and
+            recipes["library"][1] ==
+            ["@tool/ranlib", "@build/libleopard.a"],
+            "retained ranlib archive identity")
+
+    normalized_benchmark = recipes["benchmark"][0]
+    require(len(benchmark) == len(normalized_benchmark) and
+            all(not value.startswith("@") and ",@" not in value
+                for value in benchmark),
+            "retained benchmark response-file/argv shape")
+    external_by_path = {
+        value["path"]: value for value in recipes["external_link_inputs"]}
+    require(len(external_by_path) == len(recipes["external_link_inputs"]),
+            "retained benchmark external-input uniqueness")
+    for offset, normalized in enumerate(normalized_benchmark):
+        if offset == 0:
+            require(normalized == "@tool/cxx",
+                    "normalized benchmark tool identity")
+        elif normalized.startswith("@build/"):
+            require(benchmark[offset] == normalized[len("@build/"):],
+                    "retained benchmark build-path identity")
+        elif normalized.startswith("@external/"):
+            require(normalized in external_by_path and
+                    benchmark[offset] == external_by_path[normalized]["raw_path"] and
+                    Path(benchmark[offset]).name == Path(normalized).name,
+                    "retained benchmark external-path identity")
+        else:
+            require(benchmark[offset] == normalized,
+                    "retained benchmark flag/argument identity")
+    output_values = []
+    for offset, value in enumerate(benchmark):
+        if value == "-o":
+            require(offset + 1 < len(benchmark),
+                    "retained benchmark bare -o")
+            output_values.append(benchmark[offset + 1])
+        elif value.startswith("-o") and len(value) > 2:
+            output_values.append(value[2:])
+    benchmark_object = units["bench/leopard2/benchmark.cpp"]["output"]
+    require(output_values == ["bench_leopard2"] and
+            benchmark.count("libleopard.a") == 1 and
+            benchmark.count(benchmark_object[len("@build/"):]) == 1 and
+            normalized_benchmark.count("@build/libleopard.a") == 1,
+            "retained benchmark output/object/archive semantics")
+
+
 def build_record(source_root, source_identity, compile_commands, cmake_cache,
-                 library, binary, rebuild, target_graph):
+                 library, binary, rebuild, target_graph, schema=SCHEMA):
     source_root = Path(source_root).resolve()
     compile_commands = Path(compile_commands).resolve()
     cmake_cache = Path(cmake_cache).resolve()
@@ -2322,7 +2575,21 @@ def build_record(source_root, source_identity, compile_commands, cmake_cache,
     commands = {relative: by_file[relative][0]
                 for relative in sorted(by_file)}
     recipes, expected_objects = literal_link_recipes(
-        source_root, build_root, tool_paths, by_file, library, binary)
+        source_root, build_root, tool_paths, by_file, library, binary, schema)
+    if schema == SCHEMA:
+        retained_library = parse_exact_recipe_content(
+            recipes["library_recipe_content"],
+            recipes["library_recipe_size"],
+            recipes["library_recipe_sha256"], "static-library link recipe")
+        retained_benchmark = parse_exact_recipe_content(
+            recipes["benchmark_recipe_content"],
+            recipes["benchmark_recipe_size"],
+            recipes["benchmark_recipe_sha256"], "benchmark link recipe")
+        require(len(retained_library) == 2 and len(retained_benchmark) == 1,
+                "retained link recipe shape")
+        tools["ar"]["recipe_argv0"] = retained_library[0][0]
+        tools["ranlib"]["recipe_argv0"] = retained_library[1][0]
+        tools["cxx"]["recipe_argv0"] = retained_benchmark[0][0]
     archive = archive_manifest(library, tool_paths["ar"], expected_objects)
     record = {
         "source": source_identity,
@@ -2350,7 +2617,11 @@ def build_record(source_root, source_identity, compile_commands, cmake_cache,
     return record
 
 
-def validate_build_record(record, repo):
+def validate_build_record(record, repo, schema):
+    cmake_identity = cmake_identity_for_schema(schema)
+    relevant_targets = relevant_targets_for_schema(schema)
+    library_target = cmake_identity["target"]
+    library_artifact = "@build/" + cmake_identity["archive"]
     expected_keys = {
         "source", "configuration", "build_input_files", "tools",
         "translation_units", "configured_translation_units",
@@ -2387,13 +2658,20 @@ def validate_build_record(record, repo):
             "tool identity set")
     for logical_name, cache_key in TOOL_CACHE_KEYS:
         tool = record["tools"][logical_name]
-        require(set(tool) == {"logical_name", "cache_key", "basename",
-                             "binary_sha256", "version", "version_sha256"},
+        expected_tool_keys = {"logical_name", "cache_key", "basename",
+                              "binary_sha256", "version", "version_sha256"}
+        if schema == SCHEMA and logical_name in ("ar", "ranlib", "cxx"):
+            expected_tool_keys.add("recipe_argv0")
+        require(set(tool) == expected_tool_keys,
                 "tool identity keys: " + logical_name)
         require(tool["logical_name"] == logical_name and
                 tool["cache_key"] == cache_key and
                 isinstance(tool["basename"], str) and tool["basename"],
                 "tool logical identity: " + logical_name)
+        if "recipe_argv0" in expected_tool_keys:
+            require(isinstance(tool["recipe_argv0"], str) and
+                    tool["recipe_argv0"] and "\x00" not in tool["recipe_argv0"],
+                    "recipe tool spelling: " + logical_name)
         require(configuration[cache_key] == "@tool/" + logical_name,
                 "configuration/tool binding: " + logical_name)
         require(sha256_bytes(tool["version"].encode("utf-8")) ==
@@ -2490,15 +2768,15 @@ def validate_build_record(record, repo):
     require(sha256_bytes(canonical_bytes(graph_payload)) == graph_digest and
             target_graph["configured_translation_units"] ==
             sorted(CONFIGURED_TRANSLATION_UNITS) and
-            set(target_graph["targets"]) == set(RELEVANT_TARGETS),
+            set(target_graph["targets"]) == set(relevant_targets),
             "target graph identity")
     targets = target_graph["targets"]
     require(targets["bench_leopard2"]["type"] == "EXECUTABLE" and
             targets["bench_leopard2"]["artifact"] == "@build/bench_leopard2" and
-            targets["bench_leopard2"]["dependencies"] == ["libleopard"] and
-            targets["libleopard"]["type"] == "STATIC_LIBRARY" and
-            targets["libleopard"]["artifact"] == "@build/liblibleopard.a" and
-            targets["libleopard"]["dependencies"] ==
+            targets["bench_leopard2"]["dependencies"] == [library_target] and
+            targets[library_target]["type"] == "STATIC_LIBRARY" and
+            targets[library_target]["artifact"] == library_artifact and
+            targets[library_target]["dependencies"] ==
             ["leopard2_backend_avx2", "leopard2_backend_ssse3"],
             "target dependency graph")
     compiled_target_sources = set()
@@ -2520,9 +2798,14 @@ def validate_build_record(record, repo):
             "target compiled-source closure")
 
     recipes = record["link_recipes"]
-    require(set(recipes) == {"library", "benchmark", "external_link_inputs",
-                            "library_recipe_sha256", "benchmark_recipe_sha256",
-                            "digest"}, "link recipe key set")
+    expected_recipe_keys = {
+        "library", "benchmark", "external_link_inputs",
+        "library_recipe_sha256", "benchmark_recipe_sha256", "digest"}
+    if schema == SCHEMA:
+        expected_recipe_keys.update({
+            "library_recipe_content", "benchmark_recipe_content",
+            "library_recipe_size", "benchmark_recipe_size"})
+    require(set(recipes) == expected_recipe_keys, "link recipe key set")
     recipe_payload = dict(recipes)
     recipe_digest = recipe_payload.pop("digest")
     require(sha256_bytes(canonical_bytes(recipe_payload)) == recipe_digest and
@@ -2533,7 +2816,7 @@ def validate_build_record(record, repo):
             "literal archive/link recipe identity")
     library_command = recipes["library"][0]
     require(len(library_command) >= 4 and library_command[1] in ("qc", "rc", "rcs") and
-            library_command[2] == "@build/liblibleopard.a",
+            library_command[2] == library_artifact,
             "literal archive output recipe")
     expected_library_objects = {
         entry["output"] for relative, entry in units.items()
@@ -2541,21 +2824,28 @@ def validate_build_record(record, repo):
     require(len(library_command[3:]) == len(set(library_command[3:])) and
             set(library_command[3:]) == expected_library_objects and
             recipes["library"][1] ==
-            ["@tool/ranlib", "@build/liblibleopard.a"],
+            ["@tool/ranlib", library_artifact],
             "literal archive object/index closure")
     benchmark_command = recipes["benchmark"][0]
     expected_benchmark_object = units[
         "bench/leopard2/benchmark.cpp"]["output"]
     for external in recipes["external_link_inputs"]:
-        require(set(external) == {"path", "sha256"} and
+        expected_external_keys = {"path", "sha256"}
+        if schema == SCHEMA:
+            expected_external_keys.add("raw_path")
+        require(set(external) == expected_external_keys and
                 external["path"].startswith("@external/") and
-                re.fullmatch(r"[0-9a-f]{64}", external["sha256"]) is not None,
+                re.fullmatch(r"[0-9a-f]{64}", external["sha256"]) is not None and
+                (schema != SCHEMA or
+                 (isinstance(external["raw_path"], str) and
+                  external["raw_path"] and
+                  not external["raw_path"].startswith("@"))),
                 "external link input identity")
     file_api_libraries = [
         value["fragment"]
         for value in targets["bench_leopard2"]["link"]["fragments"]
         if value["role"] == "libraries"]
-    require(file_api_libraries.count("@build/liblibleopard.a") == 1,
+    require(file_api_libraries.count(library_artifact) == 1,
             "CMake File API benchmark library target binding")
     expected_external_links = sorted(
         value for value in file_api_libraries if value.startswith("@external/"))
@@ -2579,6 +2869,8 @@ def validate_build_record(record, repo):
     expected_benchmark_command.extend(file_api_libraries)
     require(benchmark_command == expected_benchmark_command,
             "literal benchmark recipe differs from CMake target metadata")
+    if schema == SCHEMA:
+        validate_retained_link_recipe_semantics(recipes, record["tools"], units)
 
     archive = record["archive"]
     require(set(archive) == {"members", "member_count", "digest"},
@@ -2605,7 +2897,8 @@ def validate_build_record(record, repo):
         member_names.append(member["name"])
         member_objects.append(member["object"])
     require(len(member_names) == len(set(member_names)) and
-            set(member_objects) == set(expected_archive_members),
+            set(member_objects) == set(expected_archive_members) and
+            member_objects == library_command[3:],
             "archive member/object closure")
     rebuild = record["rebuild"]
     require(set(rebuild) == {"isolation", "environment", "configure", "build",
@@ -2642,7 +2935,7 @@ def validate_build_record(record, repo):
             "fresh configure argv")
     build_argv = rebuild["build"]["argv"]
     require(build_argv[:4] == ["@tool/cmake", "--build", "@build", "--parallel"] and
-            build_argv[5:] == ["--target", "libleopard", "bench_leopard2"] and
+            build_argv[5:] == ["--target", library_target, "bench_leopard2"] and
             build_argv[4].isdigit() and 1 <= int(build_argv[4]) <= 128,
             "fresh build argv")
     require(sha256_bytes(rebuild["cmake_version"].encode("utf-8")) ==
@@ -3013,12 +3306,13 @@ def validate_matrix_document(document, repo, candidate_commit):
     require(recomputed_mismatches == [], "matrix backend outputs differ")
 
 
-def validate_declared_template_paths(args, build):
+def validate_declared_template_paths(args, build, schema=SCHEMA):
     cache = Path(getattr(args, build + "_cmake_cache")).resolve()
     root = cache.parent
+    cmake_identity = cmake_identity_for_schema(schema)
     expected = {
         build + "_compile_commands": root / "compile_commands.json",
-        build + "_library": root / "liblibleopard.a",
+        build + "_library": root / cmake_identity["archive"],
         build: root / "bench_leopard2",
     }
     for attribute, expected_path in expected.items():
@@ -3482,7 +3776,10 @@ def validate_manifest(manifest_path, repo, raw_bundle_path=None,
         "schema", "status", "provenance", "campaign", "entries",
         "raw_bundle_file", "raw_bundle_sha256", "raw_evidence_sha256",
         "summary"}, "manifest top-level key set")
-    require(manifest.get("schema") == SCHEMA, "unsupported manifest schema")
+    manifest_schema = manifest.get("schema")
+    require(isinstance(manifest_schema, str) and
+            manifest_schema in SCHEMA_TO_CMAKE_IDENTITY,
+            "unsupported manifest schema")
     require(manifest.get("status") in ("passed", "failed"),
             "campaign status")
     campaign = manifest.get("campaign", {})
@@ -3514,7 +3811,8 @@ def validate_manifest(manifest_path, repo, raw_bundle_path=None,
         "matrix provenance key set")
     for build in ("baseline", "candidate"):
         validate_git_record(repo, provenance["git"][build])
-        validate_build_record(provenance["builds"][build], repo)
+        validate_build_record(
+            provenance["builds"][build], repo, manifest_schema)
         require(provenance["builds"][build]["source"] ==
                 provenance["git"][build],
                 build + " build/source Git binding")
@@ -3692,7 +3990,12 @@ def validate_manifest(manifest_path, repo, raw_bundle_path=None,
     return manifest
 
 
-def run_campaign(args, repo, allow_dirty=False, self_test=False):
+def run_campaign(
+    args, repo, allow_dirty=False, self_test=False, evidence_schema=SCHEMA,
+):
+    require(evidence_schema == SCHEMA or self_test,
+            "new production campaigns must use the current butterfly schema")
+    cmake_identity_for_schema(evidence_schema)
     require(hasattr(os, "sched_getaffinity") and hasattr(os, "sched_setaffinity"),
             "Linux scheduler affinity APIs are required")
     require(isinstance(args.build_jobs, int) and 1 <= args.build_jobs <= 128,
@@ -3710,7 +4013,7 @@ def run_campaign(args, repo, allow_dirty=False, self_test=False):
         build: git_record(source_roots[build], commits[build], not allow_dirty)
         for build in ("baseline", "candidate")}
     for build in ("baseline", "candidate"):
-        validate_declared_template_paths(args, build)
+        validate_declared_template_paths(args, build, evidence_schema)
     shadow_context = tempfile.TemporaryDirectory(
         prefix="leo2-butterfly-fresh-builds-")
     shadow_root = Path(shadow_context.name)
@@ -3725,7 +4028,8 @@ def run_campaign(args, repo, allow_dirty=False, self_test=False):
                 "binary": Path(getattr(args, build)),
                 "target_graph": artifacts,
                 "rebuild": self_test_rebuild_record(
-                    args.build_jobs, getattr(args, build + "_cmake_cache")),
+                    args.build_jobs, getattr(args, build + "_cmake_cache"),
+                    evidence_schema),
             }
     else:
         isolated = {
@@ -3746,13 +4050,13 @@ def run_campaign(args, repo, allow_dirty=False, self_test=False):
             isolated["baseline"]["compile_commands"],
             isolated["baseline"]["cmake_cache"], isolated["baseline"]["library"],
             isolated["baseline"]["binary"], isolated["baseline"]["rebuild"],
-            isolated["baseline"]["target_graph"]),
+            isolated["baseline"]["target_graph"], evidence_schema),
         "candidate": build_record(
             source_roots["candidate"], git_records["candidate"],
             isolated["candidate"]["compile_commands"],
             isolated["candidate"]["cmake_cache"], isolated["candidate"]["library"],
             isolated["candidate"]["binary"], isolated["candidate"]["rebuild"],
-            isolated["candidate"]["target_graph"]),
+            isolated["candidate"]["target_graph"], evidence_schema),
     }
     binaries = {build: isolated[build]["binary"].resolve()
                 for build in ("baseline", "candidate")}
@@ -3866,7 +4170,7 @@ def run_campaign(args, repo, allow_dirty=False, self_test=False):
         atomic_json(raw_bundle_path, bundle)
         summary = summarize(entries, raw_by_name, args.backend)
         manifest = {
-            "schema": SCHEMA,
+            "schema": evidence_schema,
             "status": "pending",
             "provenance": {
                 "runner_sha256": sha256_file(Path(__file__).resolve()),
@@ -3967,7 +4271,8 @@ print(json.dumps(out,sort_keys=True,allow_nan=False))
     path.chmod(0o755)
 
 
-def write_self_test_build_files(root, source_root, binary):
+def write_self_test_build_files(root, source_root, binary, schema=SCHEMA):
+    cmake_identity = cmake_identity_for_schema(schema)
     compiler = Path(shutil.which("c++") or "/usr/bin/c++").resolve()
     cc = Path(shutil.which("cc") or "/usr/bin/cc").resolve()
     ar = Path(shutil.which("ar") or "/usr/bin/ar").resolve()
@@ -3975,7 +4280,19 @@ def write_self_test_build_files(root, source_root, binary):
     compile_commands = []
     outputs = {}
     for index, relative in enumerate(CONFIGURED_TRANSLATION_UNITS):
-        output = root / ("unit-{}.o".format(index))
+        if relative == "bench/leopard2/benchmark.cpp":
+            output = root / "CMakeFiles/bench_leopard2.dir" / \
+                (relative + ".o")
+        elif relative == "Leopard2BackendSSSE3.cpp":
+            output = root / "CMakeFiles/leopard2_backend_ssse3.dir" / \
+                (relative + ".o")
+        elif relative == "Leopard2BackendAVX2.cpp":
+            output = root / "CMakeFiles/leopard2_backend_avx2.dir" / \
+                (relative + ".o")
+        else:
+            output = root / "CMakeFiles" / \
+                cmake_identity["target_directory"] / (relative + ".o")
+        output.parent.mkdir(parents=True, exist_ok=True)
         outputs[relative] = output
         output.write_bytes((relative + " object").encode("utf-8"))
         Path(str(output) + ".d").write_text(
@@ -4030,27 +4347,36 @@ def write_self_test_build_files(root, source_root, binary):
         "LEO2_ENABLE_CUDA:BOOL=OFF",
     ])
     cache.write_text("\n".join(cache_lines) + "\n", encoding="utf-8")
-    library = root / "liblibleopard.a"
-    archive_objects = [outputs[value] for value in BUILD_TRANSLATION_UNITS
-                       if value != "bench/leopard2/benchmark.cpp"]
+    library = root / cmake_identity["archive"]
+    archive_order = (CURRENT_ARCHIVE_TRANSLATION_UNITS
+                     if schema == SCHEMA else
+                     HISTORICAL_ARCHIVE_TRANSLATION_UNITS)
+    archive_objects = [outputs[value] for value in archive_order]
     command_output([str(ar), "rcs", str(library)] +
                    [str(value) for value in archive_objects], root,
                    "self-test archive")
-    library_link = root / "CMakeFiles/libleopard.dir/link.txt"
+    external_library = root.parent / "butterfly-self-test-external.a"
+    if not external_library.exists():
+        external_library.write_bytes(b"butterfly external link fixture\n")
+    library_link = root / "CMakeFiles" / \
+        cmake_identity["target_directory"] / "link.txt"
     benchmark_link = root / "CMakeFiles/bench_leopard2.dir/link.txt"
-    library_link.parent.mkdir(parents=True)
-    benchmark_link.parent.mkdir(parents=True)
+    library_link.parent.mkdir(parents=True, exist_ok=True)
+    benchmark_link.parent.mkdir(parents=True, exist_ok=True)
     library_link.write_text(
         "{} qc {} {}\n{} {}\n".format(
-            shlex.quote(str(ar)), shlex.quote(str(library)),
-            " ".join(shlex.quote(str(value)) for value in archive_objects),
-            shlex.quote(str(ranlib)), shlex.quote(str(library))),
+            shlex.quote(str(ar)), shlex.quote(library.name),
+            " ".join(shlex.quote(value.relative_to(root).as_posix())
+                     for value in archive_objects),
+            shlex.quote(str(ranlib)), shlex.quote(library.name)),
         encoding="utf-8")
     benchmark_link.write_text(
-        "{} {} -o {} {}\n".format(
+        "{} -O3 {} -o {} {} {}\n".format(
             shlex.quote(str(compiler)),
-            shlex.quote(str(outputs["bench/leopard2/benchmark.cpp"])),
-            shlex.quote(str(binary)), shlex.quote(str(library))),
+            shlex.quote(outputs[
+                "bench/leopard2/benchmark.cpp"].relative_to(root).as_posix()),
+            shlex.quote(binary.relative_to(root).as_posix()),
+            shlex.quote(library.name), shlex.quote(str(external_library))),
         encoding="utf-8")
 
     core = set(BUILD_TRANSLATION_UNITS) - {
@@ -4063,21 +4389,28 @@ def write_self_test_build_files(root, source_root, binary):
                             for value in sorted(compiled)],
                 "link": None}
     targets = {
-        "libleopard": target("STATIC_LIBRARY", library,
-                             ["leopard2_backend_avx2", "leopard2_backend_ssse3"], core),
+        cmake_identity["target"]: target(
+            "STATIC_LIBRARY", library,
+            ["leopard2_backend_avx2", "leopard2_backend_ssse3"], core),
         "leopard2_backend_ssse3": target(
             "OBJECT_LIBRARY", outputs["Leopard2BackendSSSE3.cpp"], [],
             {"Leopard2BackendSSSE3.cpp"}),
         "leopard2_backend_avx2": target(
             "OBJECT_LIBRARY", outputs["Leopard2BackendAVX2.cpp"], [],
             {"Leopard2BackendAVX2.cpp"}),
-        "bench_leopard2": target("EXECUTABLE", binary, ["libleopard"],
-                                  {"bench/leopard2/benchmark.cpp"}),
+        "bench_leopard2": target(
+            "EXECUTABLE", binary, [cmake_identity["target"]],
+            {"bench/leopard2/benchmark.cpp"}),
     }
     targets["bench_leopard2"]["link"] = {
         "language": "CXX",
-        "fragments": [{"role": "libraries",
-                       "fragment": "@build/liblibleopard.a"}]}
+        "fragments": [
+            {"role": "flags", "fragment": "-O3"},
+            {"role": "libraries",
+             "fragment": "@build/" + cmake_identity["archive"]},
+            {"role": "libraries",
+             "fragment": tagged_path(external_library, source_root, root)},
+        ]}
     graph = {"configured_translation_units": sorted(CONFIGURED_TRANSLATION_UNITS),
              "targets": targets, "index_sha256": sha256_bytes(b"index"),
              "codemodel_sha256": sha256_bytes(b"codemodel")}
@@ -4135,6 +4468,153 @@ def rehash_nested_record(record):
     payload = dict(record)
     payload.pop("digest", None)
     record["digest"] = sha256_bytes(canonical_bytes(payload))
+
+
+def set_self_test_recipe_content(build, recipe, text):
+    recipes = build["link_recipes"]
+    content_key = recipe + "_recipe_content"
+    sha_key = recipe + "_recipe_sha256"
+    recipes[content_key] = exact_utf8_text_content(
+        text, "self-test {} link recipe".format(recipe))
+    recipes[recipe + "_recipe_size"] = recipes[content_key]["size"]
+    recipes[sha_key] = recipes[content_key]["sha256"]
+    rehash_nested_record(recipes)
+    rehash_build_record(build)
+
+
+def mutate_self_test_recipe_argv(build, recipe, callback):
+    text = build["link_recipes"][recipe + "_recipe_content"]["text"]
+    lines = [shlex.split(value, posix=True) for value in text.splitlines()
+             if value.strip()]
+    callback(lines)
+    set_self_test_recipe_content(
+        build, recipe, "\n".join(shlex.join(line) for line in lines) + "\n")
+
+
+def replace_identity_strings(value, replacements):
+    if isinstance(value, str):
+        for old, new in replacements:
+            if old in ("leopard", "libleopard"):
+                if value == old:
+                    return new
+            else:
+                value = value.replace(old, new)
+        return value
+    if isinstance(value, list):
+        return [replace_identity_strings(item, replacements) for item in value]
+    if isinstance(value, dict):
+        return {
+            replace_identity_strings(key, replacements):
+                replace_identity_strings(item, replacements)
+            for key, item in value.items()
+        }
+    return value
+
+
+def rehash_relabelled_build(build):
+    for entry in build["translation_units"].values():
+        rehash_compile_entry(entry)
+    rehash_dependency_closure(build["dependency_closure"])
+    rehash_nested_record(build["target_graph"])
+    rehash_nested_record(build["link_recipes"])
+    rehash_nested_record(build["archive"])
+    for phase in ("configure", "build"):
+        command = build["rebuild"][phase]
+        command["command_sha256"] = sha256_bytes(
+            canonical_bytes(command["argv"]))
+    rehash_build_record(build)
+
+
+def self_test_recipe_texts(build):
+    recipes = build["link_recipes"]
+    return {
+        recipe: recipes[recipe + "_recipe_content"]["text"]
+        for recipe in ("library", "benchmark")
+    }
+
+
+def relabel_historical_manifest_as_current(manifest, retained_texts_by_build):
+    replacements = (
+        ("liblibleopard.a", "libleopard.a"),
+        ("libleopard.dir", "leopard.dir"),
+        ("libleopard", "leopard"),
+    )
+    manifest["schema"] = SCHEMA
+    for name, build in list(manifest["provenance"]["builds"].items()):
+        build = replace_identity_strings(build, replacements)
+        manifest["provenance"]["builds"][name] = build
+        desired_objects = [
+            build["translation_units"][relative]["output"]
+            for relative in CURRENT_ARCHIVE_TRANSLATION_UNITS]
+        build["link_recipes"]["library"][0][3:] = desired_objects
+        members_by_object = {
+            member["object"]: member for member in build["archive"]["members"]}
+        require(set(members_by_object) == set(desired_objects),
+                "relabeled archive fixture closure")
+        build["archive"]["members"] = [
+            members_by_object[object_path] for object_path in desired_objects]
+        texts = retained_texts_by_build[name]
+        for recipe in ("library", "benchmark"):
+            content = exact_utf8_text_content(
+                texts[recipe], "retained historical {} recipe".format(recipe))
+            build["link_recipes"][recipe + "_recipe_content"] = content
+            build["link_recipes"][recipe + "_recipe_size"] = content["size"]
+            require(content["sha256"] ==
+                    build["link_recipes"][recipe + "_recipe_sha256"],
+                    "historical recipe fixture SHA")
+        retained_library = parse_exact_recipe_content(
+            build["link_recipes"]["library_recipe_content"],
+            build["link_recipes"]["library_recipe_size"],
+            build["link_recipes"]["library_recipe_sha256"],
+            "historical library fixture")
+        retained_benchmark = parse_exact_recipe_content(
+            build["link_recipes"]["benchmark_recipe_content"],
+            build["link_recipes"]["benchmark_recipe_size"],
+            build["link_recipes"]["benchmark_recipe_sha256"],
+            "historical benchmark fixture")
+        normalized_benchmark = build["link_recipes"]["benchmark"][0]
+        external_by_path = {
+            value["path"]: value
+            for value in build["link_recipes"]["external_link_inputs"]}
+        for offset, normalized in enumerate(normalized_benchmark):
+            if normalized.startswith("@external/"):
+                external_by_path[normalized]["raw_path"] = \
+                    retained_benchmark[0][offset]
+        build["tools"]["ar"]["recipe_argv0"] = retained_library[0][0]
+        build["tools"]["ranlib"]["recipe_argv0"] = retained_library[1][0]
+        build["tools"]["cxx"]["recipe_argv0"] = retained_benchmark[0][0]
+        rehash_relabelled_build(build)
+
+
+def downgrade_current_manifest_for_self_test(manifest):
+    replacements = (
+        ("libleopard.a", "liblibleopard.a"),
+        ("leopard.dir", "libleopard.dir"),
+        ("leopard", "libleopard"),
+    )
+    manifest["schema"] = LEGACY_SCHEMA
+    retained_texts = {}
+    for name, build in list(manifest["provenance"]["builds"].items()):
+        build = replace_identity_strings(build, replacements)
+        manifest["provenance"]["builds"][name] = build
+        retained_texts[name] = self_test_recipe_texts(build)
+        recipes = build["link_recipes"]
+        for recipe in ("library", "benchmark"):
+            recipes[recipe + "_recipe_content"] = exact_utf8_text_content(
+                retained_texts[name][recipe],
+                "downgraded historical {} recipe".format(recipe))
+            recipes[recipe + "_recipe_size"] = \
+                recipes[recipe + "_recipe_content"]["size"]
+            recipes[recipe + "_recipe_sha256"] = \
+                recipes[recipe + "_recipe_content"]["sha256"]
+            del recipes[recipe + "_recipe_content"]
+            del recipes[recipe + "_recipe_size"]
+        for logical_name in ("ar", "ranlib", "cxx"):
+            del build["tools"][logical_name]["recipe_argv0"]
+        for external in recipes["external_link_inputs"]:
+            external.pop("raw_path", None)
+        rehash_relabelled_build(build)
+    return retained_texts
 
 
 def recompute_self_test_summary(manifest, bundle):
@@ -4505,6 +4985,74 @@ def self_test(repo):
             ssse3_args.output / "abba_raw.json", None, matrix,
             allow_self_test=True)
 
+        legacy_baseline_root = root / "legacy-baseline-build"
+        legacy_candidate_root = root / "legacy-candidate-build"
+        legacy_baseline_root.mkdir()
+        legacy_candidate_root.mkdir()
+        legacy_baseline = legacy_baseline_root / "bench_leopard2"
+        legacy_candidate = legacy_candidate_root / "bench_leopard2"
+        write_mock(legacy_baseline, 1.0)
+        write_mock(legacy_candidate, 0.8)
+        legacy_baseline_build = write_self_test_build_files(
+            legacy_baseline_root, repo, legacy_baseline, LEGACY_SCHEMA)
+        legacy_candidate_build = write_self_test_build_files(
+            legacy_candidate_root, repo, legacy_candidate, LEGACY_SCHEMA)
+        legacy_args = copy.copy(args)
+        legacy_args.baseline = legacy_baseline
+        legacy_args.candidate = legacy_candidate
+        legacy_args.baseline_compile_commands = legacy_baseline_build[0]
+        legacy_args.candidate_compile_commands = legacy_candidate_build[0]
+        legacy_args.baseline_cmake_cache = legacy_baseline_build[1]
+        legacy_args.candidate_cmake_cache = legacy_candidate_build[1]
+        legacy_args.baseline_library = legacy_baseline_build[2]
+        legacy_args.candidate_library = legacy_candidate_build[2]
+        legacy_args.baseline_self_test_artifacts = legacy_baseline_build[3]
+        legacy_args.candidate_self_test_artifacts = legacy_candidate_build[3]
+        legacy_args.output = root / "legacy-v6-evidence"
+        run_campaign(
+            legacy_args, repo, allow_dirty=True, self_test=True,
+            evidence_schema=LEGACY_SCHEMA)
+        legacy_manifest_path = legacy_args.output / "abba_manifest.json"
+        legacy_bundle_path = legacy_args.output / "abba_raw.json"
+        validate_manifest(
+            legacy_manifest_path, repo, legacy_bundle_path, None, matrix,
+            allow_self_test=True)
+        legacy_manifest = read_json(
+            legacy_manifest_path, "legacy self-test manifest")
+        legacy_bundle = read_json(
+            legacy_bundle_path, "legacy self-test raw bundle")
+        legacy_recipe_texts = {
+            "baseline": {
+                "library": (legacy_baseline_root / "CMakeFiles" /
+                            HISTORICAL_CMAKE_IDENTITY["target_directory"] /
+                            "link.txt").read_text(encoding="utf-8"),
+                "benchmark": (legacy_baseline_root /
+                              "CMakeFiles/bench_leopard2.dir/link.txt").read_text(
+                                  encoding="utf-8"),
+            },
+            "candidate": {
+                "library": (legacy_candidate_root / "CMakeFiles" /
+                            HISTORICAL_CMAKE_IDENTITY["target_directory"] /
+                            "link.txt").read_text(encoding="utf-8"),
+                "benchmark": (legacy_candidate_root /
+                              "CMakeFiles/bench_leopard2.dir/link.txt").read_text(
+                                  encoding="utf-8"),
+            },
+        }
+        relabeled_root = root / "legacy-relabeled-current"
+        relabeled_root.mkdir()
+        relabeled_manifest_path, relabeled_bundle_path = \
+            coordinated_manifest_mutation(
+                legacy_manifest, legacy_bundle, relabeled_root,
+                lambda manifest, _bundle:
+                    relabel_historical_manifest_as_current(
+                        manifest, legacy_recipe_texts))
+        expect_failure(
+            lambda: validate_manifest(
+                relabeled_manifest_path, repo, relabeled_bundle_path,
+                None, matrix, allow_self_test=True),
+            "coherently re-signed historical v6 target/archive relabel retains old recipes")
+
         slow_root = root / "slow-candidate-build"
         slow_root.mkdir()
         slow_candidate = slow_root / "bench_leopard2"
@@ -4534,6 +5082,46 @@ def self_test(repo):
 
         failed_bundle = read_json(
             failed_bundle_path, "negative-performance raw bundle")
+        historical_failed_root = root / "failed-policy-v6"
+        historical_failed_root.mkdir()
+        historical_failed_texts = {}
+
+        def downgrade_failed_policy(manifest_value, _bundle_value):
+            historical_failed_texts.update(
+                downgrade_current_manifest_for_self_test(manifest_value))
+
+        historical_failed_manifest_path, historical_failed_bundle_path = \
+            coordinated_manifest_mutation(
+                failed_manifest, failed_bundle, historical_failed_root,
+                downgrade_failed_policy)
+        historical_failed_replay = validate_manifest(
+            historical_failed_manifest_path, repo,
+            historical_failed_bundle_path, None, matrix,
+            allow_self_test=True)
+        require(historical_failed_replay.get("status") == "failed" and
+                historical_failed_replay.get("schema") == LEGACY_SCHEMA,
+                "historical v6 failed-policy replay")
+        historical_failed_manifest = read_json(
+            historical_failed_manifest_path,
+            "historical failed-policy manifest")
+        historical_failed_bundle = read_json(
+            historical_failed_bundle_path,
+            "historical failed-policy raw bundle")
+        relabeled_failed_root = root / "failed-policy-v6-relabeled-v7"
+        relabeled_failed_root.mkdir()
+        relabeled_failed_manifest_path, relabeled_failed_bundle_path = \
+            coordinated_manifest_mutation(
+                historical_failed_manifest, historical_failed_bundle,
+                relabeled_failed_root,
+                lambda manifest_value, _bundle_value:
+                    relabel_historical_manifest_as_current(
+                        manifest_value, historical_failed_texts))
+        expect_failure(
+            lambda: validate_manifest(
+                relabeled_failed_manifest_path, repo,
+                relabeled_failed_bundle_path, None, matrix,
+                allow_self_test=True),
+            "coherently re-signed failed v6 relabel retains old recipes")
         failed_mutations = (
             ("failed raw", lambda m, b:
              b["raw"][m["entries"][0]["name"]].__setitem__(
@@ -4564,6 +5152,8 @@ def self_test(repo):
         validate(manifest_path, bundle_path)
 
         mutations = []
+        mutations.append(("current v7 target/archive relabeled as v6",
+                          lambda m, b: m.__setitem__("schema", LEGACY_SCHEMA)))
         mutations.append(("passed status", lambda m, b:
                           m.__setitem__("status", "failed")))
         mutations.append(("return code", lambda m, b:
@@ -4693,6 +5283,94 @@ def self_test(repo):
             rehash_nested_record(recipes)
             rehash_build_record(build)
         mutations.append(("archive recipe tool substitution", mutate_archive_tool))
+
+        def mutate_recipe_content_size(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+            recipes = build["link_recipes"]
+            recipes["library_recipe_size"] += 1
+            rehash_nested_record(recipes)
+            rehash_build_record(build)
+        mutations.append(("retained recipe outer size binding",
+                          mutate_recipe_content_size))
+
+        def mutate_recipe_content_sha(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+            recipes = build["link_recipes"]
+            recipes["library_recipe_sha256"] = "0" * 64
+            rehash_nested_record(recipes)
+            rehash_build_record(build)
+        mutations.append(("retained recipe outer SHA binding",
+                          mutate_recipe_content_sha))
+
+        def mutate_retained_archive_tool(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+            mutate_self_test_recipe_argv(
+                build, "library",
+                lambda lines: lines[0].__setitem__(0, "/forged/ar"))
+        mutations.append(("retained archive tool spelling",
+                          mutate_retained_archive_tool))
+
+        def mutate_retained_archive_output(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+            mutate_self_test_recipe_argv(
+                build, "library",
+                lambda lines: lines[0].__setitem__(2, "forged.a"))
+        mutations.append(("retained canonical archive output",
+                          mutate_retained_archive_output))
+
+        def mutate_retained_archive_object(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+            mutate_self_test_recipe_argv(
+                build, "library",
+                lambda lines: lines[0].__setitem__(
+                    3, "CMakeFiles/leopard.dir/forged.cpp.o"))
+        mutations.append(("retained archive object closure/order",
+                          mutate_retained_archive_object))
+
+        def mutate_retained_ranlib_output(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+            mutate_self_test_recipe_argv(
+                build, "library",
+                lambda lines: lines[1].__setitem__(1, "forged.a"))
+        mutations.append(("retained ranlib archive identity",
+                          mutate_retained_ranlib_output))
+
+        def mutate_retained_benchmark_archive(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+
+            def replace_archive(lines):
+                index = lines[0].index("libleopard.a")
+                lines[0][index] = "forged.a"
+
+            mutate_self_test_recipe_argv(
+                build, "benchmark", replace_archive)
+        mutations.append(("retained benchmark archive identity",
+                          mutate_retained_benchmark_archive))
+
+        def mutate_retained_benchmark_flag(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+
+            def replace_flag(lines):
+                index = lines[0].index("-O3")
+                lines[0][index] = "-O0"
+
+            mutate_self_test_recipe_argv(build, "benchmark", replace_flag)
+        mutations.append(("retained benchmark flag identity",
+                          mutate_retained_benchmark_flag))
+
+        def mutate_retained_benchmark_external(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+            raw_path = build["link_recipes"][
+                "external_link_inputs"][0]["raw_path"]
+
+            def replace_external(lines):
+                index = lines[0].index(raw_path)
+                lines[0][index] = "/forged/" + Path(raw_path).name
+
+            mutate_self_test_recipe_argv(
+                build, "benchmark", replace_external)
+        mutations.append(("retained benchmark external-path identity",
+                          mutate_retained_benchmark_external))
 
         def mutate_rebuild_target(m, b):
             build = m["provenance"]["builds"]["candidate"]
@@ -4973,6 +5651,17 @@ def self_test(repo):
                     "high-variance fixture unexpectedly passed confidence gate")
         mutations.append(("paired ABBA high-variance overlap", mutate_high_variance))
 
+        expect_failure(
+            lambda: exact_utf8_text_content("\ud800", "surrogate recipe"),
+            "retained recipe strict UTF-8")
+        expect_failure(
+            lambda: exact_utf8_text_content(
+                "x" * (MAX_LINK_RECIPE_BYTES + 1), "oversized recipe"),
+            "retained recipe byte bound")
+        expect_failure(
+            lambda: cmake_identity_for_schema({"schema": SCHEMA}),
+            "non-string butterfly schema")
+
         for index, (label, mutation) in enumerate(mutations):
             mutated = root / ("mutation-{}".format(index))
             mutated.mkdir()
@@ -4989,7 +5678,7 @@ def self_test(repo):
 
         injected_object = candidate_root / "injected.o"
         injected_object.write_bytes(b"injected archive object")
-        injected_archive = candidate_root / "injected-liblibleopard.a"
+        injected_archive = candidate_root / "injected-libleopard.a"
         shutil.copy2(str(candidate_build[2]), str(injected_archive))
         ar_tool = Path(cache_values(candidate_build[1])["CMAKE_AR"])
         command_output([str(ar_tool), "q", str(injected_archive),
@@ -5154,8 +5843,8 @@ def self_test(repo):
             # lease; otherwise this legacy probe would still be rejected.
             use_context(jerasure.PairLease(cpu, sibling, root=cross_runtime))
 
-        mutation_count = len(mutations) + len(failed_mutations) + 19
-    print("butterfly ABBA v6 self-test passed: path-independent replay + {} adversarial mutations".format(
+        mutation_count = len(mutations) + len(failed_mutations) + 23
+    print("butterfly ABBA v7 self-test passed: canonical and historical replay + {} adversarial mutations".format(
         mutation_count))
 
 
@@ -5200,7 +5889,7 @@ def main():
     try:
         if args.command == "run":
             run_campaign(args, repo)
-            print("butterfly ABBA v6 campaign passed: backend={} cells={} entries={}".format(
+            print("butterfly ABBA v7 campaign passed: backend={} cells={} entries={}".format(
                 args.backend,
                 len(CELLS), len(expected_jobs())))
         elif args.command == "verify":
@@ -5213,11 +5902,12 @@ def main():
                 args.manifest, repo, args.raw_bundle, supplied, args.matrix)
             if manifest["status"] == "failed":
                 print(
-                    "butterfly ABBA v6 evidence replay authenticated: "
+                    "butterfly ABBA evidence replay authenticated: "
                     "campaign failed its statistical policy",
                     file=sys.stderr)
                 return EXPECTED_POLICY_FAILURE_EXIT
-            print("butterfly ABBA v6 path-independent evidence replay passed")
+            print("butterfly ABBA path-independent evidence replay passed: schema={}".format(
+                manifest["schema"]))
         elif args.command == "self-test":
             self_test(repo)
         else:

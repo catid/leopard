@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for C7 v4 evidence portability primitives."""
+"""Unit tests for C7 v5 evidence portability primitives."""
 
 from __future__ import annotations
 
@@ -99,6 +99,101 @@ class PortabilityTests(unittest.TestCase):
                             label, commit, (filename,), root)
                 finally:
                     path.write_bytes(original)
+
+    def test_historical_v4_source_replay_uses_recorded_git_bytes(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="c7-v4-source-replay-") as directory:
+            root = pathlib.Path(directory)
+
+            def git(*arguments: str) -> str:
+                return subprocess.run(
+                    ["git", *arguments], cwd=root, check=True, text=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                ).stdout.strip()
+
+            git("init", "-q")
+            git("config", "user.name", "C7 test")
+            git("config", "user.email", "c7-test@example.invalid")
+            source = root / "leopard2.cpp"
+            historical_bytes = b"historical-v4-core\n"
+            source.write_bytes(historical_bytes)
+            git("add", source.name)
+            git("commit", "-q", "-m", "historical core")
+            core_sha = git("rev-parse", "HEAD")
+            record = {
+                "bytes": len(historical_bytes), "path": source.name,
+                "sha256": hashlib.sha256(historical_bytes).hexdigest(),
+            }
+            source.write_bytes(b"current-v5-checkout-bytes\n")
+            git("add", source.name)
+            git("commit", "-q", "-m", "current tooling checkout")
+
+            validate_evidence.validate_committed_source_artifact(
+                record, "historical v4 source", root, core_sha,
+                current=False)
+            with self.assertRaisesRegex(ValueError, "disagree with the manifest"):
+                validate_evidence.validate_committed_source_artifact(
+                    record, "current v5 source", root, core_sha,
+                    current=True)
+
+    def test_current_recipe_bytes_and_exact_semantics_are_bound(self) -> None:
+        identity = validate_evidence.CANONICAL_CMAKE_IDENTITY
+        build_dir = "build/core-avx2"
+        records = {"ar": pathlib.Path("/usr/bin/ar"),
+                   "ranlib": pathlib.Path("/usr/bin/ranlib")}
+        objects = [
+            f"CMakeFiles/{(
+                'leopard2_backend_avx2.dir' if member ==
+                'Leopard2BackendAVX2.cpp.o' else
+                'leopard2_backend_ssse3.dir' if member ==
+                'Leopard2BackendSSSE3.cpp.o' else
+                identity['target_directory'])}/{member}"
+            for member in validate_evidence.CURRENT_ARCHIVE_MEMBERS
+        ]
+        canonical = (
+            f"/usr/bin/ar qc {identity['archive']} {' '.join(objects)}\n"
+            f"/usr/bin/ranlib {identity['archive']}\n")
+
+        def fixture(text: str) -> dict:
+            data = text.encode("utf-8")
+            digest = hashlib.sha256(data).hexdigest()
+            return {
+                "archive_link_recipe": {
+                    "bytes": len(data),
+                    "path": f"{build_dir}/CMakeFiles/leopard.dir/link.txt",
+                    "sha256": digest,
+                },
+                "archive_link_recipe_content": {
+                    "bytes": len(data), "encoding": "utf-8",
+                    "sha256": digest, "text": text,
+                },
+            }
+
+        with tempfile.TemporaryDirectory(prefix="c7-recipe-") as directory:
+            root = pathlib.Path(directory)
+            validate_evidence.validate_archive_link_recipe(
+                fixture(canonical), "avx2", build_dir, identity, records,
+                root, live=False)
+            mutations = (
+                canonical.replace("qc libleopard.a", "qc nested/libleopard.a", 1),
+                canonical.replace("/usr/bin/ar", "/tmp/ar", 1),
+                canonical.replace("LeopardCommon.cpp.o ",
+                                  "LeopardCommon.cpp.o @objects.rsp ", 1),
+                canonical.replace(
+                    f"{objects[0]} {objects[1]}",
+                    f"{objects[1]} {objects[0]}", 1),
+                canonical.replace("/usr/bin/ranlib", "/tmp/ranlib", 1),
+            )
+            for text in mutations:
+                with self.subTest(text=text[:48]), self.assertRaises(ValueError):
+                    validate_evidence.validate_archive_link_recipe(
+                        fixture(text), "avx2", build_dir, identity, records,
+                        root, live=False)
+            stale = fixture(canonical)
+            stale["archive_link_recipe_content"]["text"] += "\n"
+            with self.assertRaises(ValueError):
+                validate_evidence.validate_archive_link_recipe(
+                    stale, "avx2", build_dir, identity, records,
+                    root, live=False)
 
     def test_normalizer_replaces_only_exact_root_prefix(self) -> None:
         root = str(run_matrix.ROOT)
@@ -211,7 +306,7 @@ class PortabilityTests(unittest.TestCase):
     def test_stale_unretained_output_is_ignored_only_portably(self) -> None:
         with tempfile.TemporaryDirectory(
                 prefix="c7-stale-", dir=run_matrix.ROOT) as directory:
-            path = pathlib.Path(directory) / "liblibleopard.a"
+            path = pathlib.Path(directory) / "libleopard.a"
             path.write_bytes(b"stale")
             record = {
                 "path": path.relative_to(run_matrix.ROOT).as_posix(),

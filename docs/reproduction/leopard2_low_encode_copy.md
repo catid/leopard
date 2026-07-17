@@ -23,10 +23,39 @@ executes the exact retained compiler command and working directory with only
 its output redirected to a private temporary file; a digest or size difference
 invalidates the run before measurement.
 
-The authoritative bundles use `leopard2-low-encode-copy-raw/v3` and
-`leopard2-low-encode-copy-manifest/v3`. Failed-run diagnostics use
-`leopard2-low-encode-copy-failure/v3`, whose signed lifecycle is an exact prefix
-of the declared phases and records the failed phase plus teardown result.
+New authoritative bundles use `leopard2-low-encode-copy-raw/v4` and
+`leopard2-low-encode-copy-manifest/v4`. Failed-run diagnostics use
+`leopard2-low-encode-copy-failure/v4`, whose signed lifecycle is an exact prefix
+of the declared phases and records the failed phase plus teardown result. These
+schemas bind the canonical CMake target `leopard`, archive `libleopard.a`, and
+`leopard.dir` object closure. V4 retains the exact bounded UTF-8 archive
+`link.txt` content, requires its byte size and SHA-256 to equal the existing
+recipe-file identity, and parses those bytes to require the declared archive
+and ordinary-object target directory while allowing only the separate backend
+object-library directories. The verifier retains exact read-only support for
+v3 bundles and their historical `libleopard`/`liblibleopard.a` identity and
+record shape. It rejects a schema/path relabel that retains the historical
+recipe bytes.
+
+This is an integrity boundary, not a standalone authenticity claim. Bundle
+digests are unkeyed. They expose changes relative to the retained bytes, and
+the semantic recipe check prevents relabeling those old bytes under v4, but a
+party able to replace every evidence byte can recompute a new internally
+consistent bundle. Resistance to that total evidence re-authoring requires an
+external trusted signature, transparency log, or comparable authenticity
+anchor.
+
+There is an intentional generation boundary. Both frozen experiment commits
+precede canonical-target commit `0a2a666` and their clean CMake graphs define
+only `libleopard`/`liblibleopard.a`. Therefore the current v4 validator can
+authenticate canonical evidence, but these exact two commits cannot generate
+such a bundle under the existing clean-source requirement. Renaming generated
+files, copying the archive, or applying an unrecorded CMake overlay would break
+the provenance claim and is not supported. A fresh v4 campaign needs either
+new behavior-equivalent control/candidate commits that include the canonical
+rename, or a separately versioned external build wrapper whose complete bytes
+and transformation are added to the authenticated closure. Historical v3
+replay remains exact and is not promoted to v4 by relabeling.
 
 The retained benchmark output is schema `leopard2-benchmark-v2`.  Every child
 must retain its raw timing samples, resolve the explicitly requested LOW_V1
