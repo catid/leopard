@@ -7,15 +7,16 @@ profiles, and requested decoded bytes are unchanged.
 
 ## Scratch geometry
 
-Let `B` be the physical shard byte count rounded up to a 64-byte kernel tile,
-and let `L` be the number of missing originals in an immutable decode plan.
-Ignoring the much smaller range and pointer arrays, full-shard data storage is:
+Let `B` be the physical shard byte count, `A=floor(B/64)*64`, and let `L` be
+the number of missing originals in an immutable decode plan.  Define
+`W=B` for an aligned shard and `W=max(A,64)` for a ragged shard.  Ignoring the
+much smaller range and pointer arrays, data storage is:
 
-| Execution path | Complete-tile data slots | Ragged-tail data slots |
+| Execution path | Aligned bytes | Ragged bytes |
 | --- | ---: | ---: |
-| Low Algorithm 4 | `min(N,2P)` | `K+R+min(N,2P)` |
-| High Algorithm 5 | `min(N,2T+L)` | `K+R+min(N,2T+L)` |
-| Generic fallback | `N` | `K+R+N` |
+| Low Algorithm 4 | `B*min(N,2P)` | `W*min(N,2P)+64*(K+R)` |
+| High Algorithm 5 | `B*min(N,2T+L)` | `W*min(N,2T+L)+64*(K+R)` |
+| Generic fallback | `B*N` | `W*N+64*(K+R)` |
 
 The pattern-independent one-shot high query substitutes `R` for `L`.  Since no
 valid erasure recovery can request more than `R` missing originals, the query
@@ -23,12 +24,16 @@ is conservative for every later pattern.  Low requested originals already live
 in the final `P`-slot accumulator and require no separate retention slots.  If
 the tiled count is greater than or equal to `N`, execution retains the regular
 materialized specialized kernel, so balanced codes never pay more scratch just
-to select the tiled traversal.
+to select the tiled traversal.  A ragged input stages only its final public
+coordinate tiles.  The aligned prefix executes directly from caller inputs;
+the same work slots are then reused for the one 64-byte tail execution.
 
 The public contract test measures the slope between 64- and 128-byte aligned
 shards.  Range and pointer metadata are constant across those two sizes, so the
 scratch delta divided by 64 is exactly the full-shard slot count.  It checks
-GF8 and GF16 low/high cases plus an `N`-slot forced-generic control.
+GF8 and GF16 low/high cases plus an `N`-slot forced-generic control.  A second
+slope test compares 65 with 129 bytes (66 with 130 for GF16): the fixed
+`64*(K+R)` staging term cancels, leaving exactly 64 bytes per work slot.
 
 ## Low-rate equivalence
 
@@ -63,12 +68,15 @@ schedule test.
 
 ## Validation and promotion state
 
-The current checkpoint has passed the full 50-test Release suite; strict GCC 13
-warning-as-error tests; focused Clang 18 ASan/UBSan and TSan tests; and an
-AArch64/SSE2NEON compile-only check.  It also directly compares tiled GF8/GF16
-kernels with the retained materialized planned kernels on sparse inputs and
-completely empty blocks.  The decode-plan schedule target cannot be linked with
-TSan because its pre-existing test-only global allocation replacements conflict
+The combined side-sized and fixed-tail checkpoint has passed the full 50-test
+Release suite; strict GCC 13 warning-as-error tests; focused Clang 18
+ASan/UBSan and TSan tests; and an AArch64/SSE2NEON compile-only check.  It also
+directly compares tiled GF8/GF16 kernels with the retained materialized planned
+kernels on sparse inputs and completely empty blocks.  Public contract tests
+execute 65/129-byte GF8 and 66/130-byte GF16 splits through low, high, and
+forced-generic paths and verify both recovered bytes and the fixed-staging
+scratch slope.  The decode-plan schedule target cannot be linked with TSan
+because its pre-existing test-only global allocation replacements conflict
 with the TSan runtime; the public plan, high/low acceptance, and shared-context
 tests cover the concurrent production entry points under TSan instead.
 

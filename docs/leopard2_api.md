@@ -88,10 +88,13 @@ scatter.  The public overlap checks are unchanged.
 
 `leo2_decode_plan_scratch_size` uses the exact `L` for its immutable pattern.
 The pattern-independent one-shot query uses `min(N,2T+R)` for a high profile,
-so it is safe for every valid pattern accepted later by `leo2_decode`.  Pointer
-and range-validation metadata are additional small terms; neither is a
-full-shard data slot.  See `leopard2_decode_tiled_workspace.md` for the execution
-equivalence and scratch formulas.
+so it is safe for every valid pattern accepted later by `leo2_decode`.  A
+ragged shard is executed as an aligned prefix plus one padded 64-byte tail.
+Its `K+R` staging term is therefore fixed at 64 bytes per public coordinate;
+it no longer scales with the full shard length.  Pointer and range-validation
+metadata are additional small terms; neither is a full-shard data slot.  See
+`leopard2_decode_tiled_workspace.md` for the execution equivalence and scratch
+formulas.
 
 The plan uses exactly `K` received public coordinates.  It keeps every surviving
 systematic shard, then keeps the lowest-index received parity shards needed to

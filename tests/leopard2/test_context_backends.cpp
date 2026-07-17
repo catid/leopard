@@ -371,7 +371,8 @@ void require_four_way_callsites(
     leo2_field field,
     size_t public_bytes,
     const std::string& operation,
-    bool expect_ff8_accumulating_ifft)
+    bool expect_ff8_accumulating_ifft,
+    bool split_ragged_decode)
 {
     if (field == LEO2_FIELD_GF8)
     {
@@ -413,10 +414,30 @@ void require_four_way_callsites(
             operation + " has a GF16 forward fused-dispatch mismatch");
 
         const size_t transform_bytes = (public_bytes + 63U) & ~size_t(63U);
-        const bool expect_fused = transform_bytes == 64U ||
+        const size_t prefix_bytes = public_bytes & ~size_t(63U);
+        const bool transform_fused = transform_bytes == 64U ||
             (transform_bytes == 128U &&
              execution_backend == LEO2_BACKEND_AVX2);
-        if (expect_fused)
+        const bool prefix_fused = prefix_bytes == 64U ||
+            (prefix_bytes == 128U &&
+             execution_backend == LEO2_BACKEND_AVX2);
+        const bool has_split_tail = split_ragged_decode &&
+            (public_bytes & 63U) != 0;
+        const bool mixed_split = has_split_tail && prefix_bytes != 0 &&
+            !prefix_fused;
+        const bool expect_all_fused = has_split_tail
+            ? prefix_bytes == 0 || prefix_fused
+            : transform_fused;
+        if (mixed_split)
+        {
+            require(callsites.ifft_dit4_fused != 0 &&
+                    callsites.ifft_dit4_split != 0,
+                operation + " did not classify split-prefix/tiled-tail inverse calls");
+            require(callsites.fft_dit4_fused != 0 &&
+                    callsites.fft_dit4_split != 0,
+                operation + " did not classify split-prefix/tiled-tail forward calls");
+        }
+        else if (expect_all_fused)
         {
             require(callsites.ifft_dit4_fused == callsites.ifft_dit4 &&
                     callsites.ifft_dit4_split == 0,
@@ -787,7 +808,8 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                 test_case.bytes,
                 profile_name + " encode",
                 test_case.field == LEO2_FIELD_GF8 &&
-                    test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1);
+                    test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1,
+                false);
 
             trace.reset();
             decode_case(codec, test_case, originals, recovery);
@@ -805,7 +827,7 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                 leo2_context_backend(contexts[context_i].context),
                 test_case.field,
                 test_case.bytes,
-                profile_name + " decode", false);
+                profile_name + " decode", false, true);
             require(trace.xor_four_calls() != 0,
                 "decode bypassed the context grouped-XOR table");
             leo2_codec_destroy(codec);
@@ -836,7 +858,7 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
             leo2_context_backend(contexts[context_i].context),
             generic_case.field,
             generic_case.bytes,
-            "generic high-profile decode", false);
+            "generic high-profile decode", false, true);
         require(trace.xor_four_calls() != 0,
             "generic decode bypassed the context grouped-XOR table");
         leo2_codec_destroy(generic_codec);

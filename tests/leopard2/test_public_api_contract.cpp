@@ -915,6 +915,146 @@ void test_tiled_decode_workspace_slopes(
     }
 }
 
+void test_ragged_decode_tail_staging_slopes(
+    leo2_context* context,
+    Counts* counts)
+{
+    struct Case
+    {
+        uint32_t k;
+        uint32_t r;
+        uint32_t missing;
+        leo2_profile profile;
+        leo2_field field;
+        uint32_t flags;
+        size_t small_bytes;
+        size_t large_bytes;
+    };
+    const Case cases[] = {
+        { 200, 9, 5, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          LEO2_CODEC_FORCE_SPECIALIZED_DECODE, 65, 129 },
+        { 9, 200, 5, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8,
+          LEO2_CODEC_FORCE_SPECIALIZED_DECODE, 65, 129 },
+        { 1000, 17, 7, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
+          LEO2_CODEC_FORCE_SPECIALIZED_DECODE, 66, 130 },
+        { 17, 1000, 7, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16,
+          LEO2_CODEC_FORCE_SPECIALIZED_DECODE, 66, 130 },
+        { 200, 9, 5, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          LEO2_CODEC_FORCE_GENERIC_DECODE, 65, 129 }
+    };
+
+    for (size_t case_i = 0;
+         case_i < sizeof(cases) / sizeof(cases[0]); ++case_i)
+    {
+        const Case& item = cases[case_i];
+        leo2_codec_options options;
+        memset(&options, 0, sizeof(options));
+        options.struct_size = sizeof(options);
+        options.flags = item.flags;
+        CodecOwner codec;
+        require_result(leo2_codec_create(context, item.k, item.r,
+            item.profile, item.field, &options, &codec.codec), LEO2_SUCCESS,
+            "ragged-tail codec create");
+
+        std::vector<uint8_t> original_present(item.k, 1);
+        std::vector<uint8_t> recovery_present(item.r, 1);
+        for (uint32_t i = 0; i < item.missing; ++i)
+            original_present[i] = 0;
+        PlanOwner plan;
+        require_result(leo2_decode_plan_create(codec.codec,
+            &original_present[0], &recovery_present[0], &plan.plan),
+            LEO2_SUCCESS, "ragged-tail plan create");
+
+        size_t small_plan = 0;
+        size_t large_plan = 0;
+        size_t small_one_shot = 0;
+        size_t large_one_shot = 0;
+        require_result(leo2_decode_plan_scratch_size(
+            plan.plan, item.small_bytes, &small_plan), LEO2_SUCCESS,
+            "ragged-tail small plan query");
+        require_result(leo2_decode_plan_scratch_size(
+            plan.plan, item.large_bytes, &large_plan), LEO2_SUCCESS,
+            "ragged-tail large plan query");
+        require_result(leo2_decode_scratch_size(
+            codec.codec, item.small_bytes, &small_one_shot), LEO2_SUCCESS,
+            "ragged-tail small one-shot query");
+        require_result(leo2_decode_scratch_size(
+            codec.codec, item.large_bytes, &large_one_shot), LEO2_SUCCESS,
+            "ragged-tail large one-shot query");
+
+        const size_t side = leo2_codec_padded_side(codec.codec);
+        const size_t parent = leo2_codec_parent_count(codec.codec);
+        const bool generic =
+            (item.flags & LEO2_CODEC_FORCE_GENERIC_DECODE) != 0;
+        const size_t tiled_plan_slots = item.profile == LEO2_PROFILE_LOW_V1
+            ? side * 2
+            : side * 2 + item.missing;
+        const size_t tiled_one_shot_slots =
+            item.profile == LEO2_PROFILE_LOW_V1
+                ? side * 2
+                : side * 2 + item.r;
+        const size_t plan_slots = generic
+            ? parent
+            : std::min(parent, tiled_plan_slots);
+        const size_t one_shot_slots = generic
+            ? parent
+            : std::min(parent, tiled_one_shot_slots);
+        require(large_plan > small_plan &&
+                large_plan - small_plan == plan_slots * 64,
+            "ragged plan scratch still scales K+R staging with shard bytes");
+        require(large_one_shot > small_one_shot &&
+                large_one_shot - small_one_shot == one_shot_slots * 64,
+            "ragged one-shot scratch still scales K+R staging with shard bytes");
+        counts->scratch_checks += 2;
+
+        const size_t byte_sizes[] = { item.small_bytes, item.large_bytes };
+        for (size_t size_i = 0;
+             size_i < sizeof(byte_sizes) / sizeof(byte_sizes[0]); ++size_i)
+        {
+            const size_t bytes = byte_sizes[size_i];
+            Shards source(item.k, Bytes(bytes, 0));
+            fill_shards(source, static_cast<uint32_t>(
+                0x72b41000u + case_i * 37u + size_i));
+            Shards recovery(item.r, Bytes(bytes, 0));
+            std::vector<const void*> source_pointers = const_pointers(source);
+            std::vector<void*> recovery_outputs = mutable_pointers(recovery);
+            size_t encode_scratch_bytes = 0;
+            require_result(leo2_encode_scratch_size(
+                codec.codec, bytes, &encode_scratch_bytes), LEO2_SUCCESS,
+                "ragged-tail encode scratch query");
+            AlignedBuffer encode_scratch(encode_scratch_bytes);
+            require_result(leo2_encode(codec.codec, bytes,
+                &source_pointers[0], &recovery_outputs[0],
+                encode_scratch.data(), encode_scratch.size()), LEO2_SUCCESS,
+                "ragged-tail fixture encode");
+
+            std::vector<const void*> decode_original =
+                const_pointers(source);
+            std::vector<const void*> decode_recovery =
+                const_pointers(recovery);
+            Shards restored(item.missing, Bytes(bytes, 0xcc));
+            std::vector<void*> restored_original(item.k, NULL);
+            for (uint32_t i = 0; i < item.missing; ++i)
+            {
+                decode_original[i] = NULL;
+                restored_original[i] = &restored[i][0];
+            }
+            const size_t execution_scratch_bytes =
+                size_i == 0 ? small_plan : large_plan;
+            AlignedBuffer execution_scratch(execution_scratch_bytes);
+            require_result(leo2_decode_plan_execute(plan.plan, bytes,
+                &decode_original[0], &decode_recovery[0],
+                &restored_original[0], execution_scratch.data(),
+                execution_scratch.size()), LEO2_SUCCESS,
+                "ragged-tail split decode");
+            for (uint32_t i = 0; i < item.missing; ++i)
+                require(restored[i] == source[i],
+                    "ragged-tail split decode restored wrong bytes");
+            ++counts->scratch_checks;
+        }
+    }
+}
+
 struct BatchFixture
 {
     BatchFixture(leo2_context* context, size_t bytes)
@@ -1232,6 +1372,7 @@ int main()
         test_alias_and_scratch_contracts(context.context, &counts);
         test_aligned_decode_input_staging_elision(context.context, &counts);
         test_tiled_decode_workspace_slopes(context.context, &counts);
+        test_ragged_decode_tail_staging_slopes(context.context, &counts);
         test_concurrent_shared_context_batches(context.context, &counts);
         test_deterministic_batch_failures(context.context, &counts);
         test_legacy_negative_contract(&counts);

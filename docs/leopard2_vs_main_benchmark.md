@@ -131,10 +131,11 @@ mismatch, but it confirmed these production gaps:
 3. Follow-up candidate `leopard-79h.26.2.2` removes the `N` full-shard
    specialized workspace where smaller: low uses `min(N,2P)` and high uses
    `min(N,2T+L)`. Forced generic retains `N`; the materialized specialized path
-   also remains when tiling would use at least `N`. Ragged tails add `K+R`
-   staged input slots. Correctness and scratch-slope tests pass; isolated
-   promotion timing remains open, so the benchmark numbers above do not yet
-   claim this candidate.
+   also remains when tiling would use at least `N`. Follow-up candidate
+   `leopard-79h.26.2.3` splits ragged execution so its `K+R` staging term is
+   fixed at one 64-byte tile per public coordinate instead of full-shard slots.
+   Correctness and scratch-slope tests pass; isolated promotion timing remains
+   open, so the benchmark numbers above do not yet claim these candidates.
 4. Runtime backend choice is process-global; lower scalar/SSSE3 contexts in the
    same production binary are not supported. Tracked as `leopard-79h.13.1`.
 
