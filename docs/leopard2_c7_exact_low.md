@@ -30,6 +30,12 @@ claim.
 Authoritative crossover timing must be rebuilt from the final integrated
 production commit.
 
+The v4 evidence tooling and post-R1 sanitizer contract are prepared, but final
+A/B artifacts are intentionally not regenerated in this change.  Pending core
+integration may still change CMake or another member of the frozen 22-file
+closure; generation must occur only after that integrated core identity is
+selected.
+
 ## Exact-low family 3/version 1/map 1
 
 For positive public counts `K,R` with `K+R` no greater than the selected field
@@ -263,13 +269,70 @@ side; preserving a basename while relabeling or swapping the file within or
 across builds is rejected.  The
 build job count is a typed integer in `1..8`,
 and the normalized build command must end in the corresponding exact `-jN`
-argument.  The checker
-parses those logs rather than accepting a success label.  The current-core
-probe freezes 320 ASan and 54 UBSan references in the standalone harness and
-329 ASan and 87 UBSan references across all 11 named core-archive members,
-with exact per-member attribution; normal builds contain none.
+argument.  The checker parses those logs rather than accepting a success
+label.  Manifest v4's post-R1 probe freezes 320 ASan and 54 UBSan references in
+the standalone harness and 348 ASan and 86 UBSan references across all 11 named
+core-archive members; normal builds contain none.  The exact sanitized archive
+attribution is:
 
-Manifest v3 normalizes only the exact checkout-root prefix to literal
+| Archive member | ASan | UBSan |
+| --- | ---: | ---: |
+| `leopard.cpp.o` | 13 | 7 |
+| `leopard2.cpp.o` | 141 | 15 |
+| `Leopard2Backend.cpp.o` | 40 | 9 |
+| `Leopard2BackendScalar.cpp.o` | 16 | 6 |
+| `Leopard2CpuFeatures.cpp.o` | 9 | 5 |
+| `Leopard2Plan.cpp.o` | 7 | 5 |
+| `LeopardCommon.cpp.o` | 13 | 5 |
+| `LeopardFF16.cpp.o` | 27 | 10 |
+| `LeopardFF8.cpp.o` | 28 | 9 |
+| `Leopard2BackendSSSE3.cpp.o` | 26 | 8 |
+| `Leopard2BackendAVX2.cpp.o` | 28 | 7 |
+
+The delta from retained v3's 329/87 archive attribution is expected after the
+integrated backend work: active-parent locator setup, context-selected and
+native fused XOR operations, SSSE3/AVX2/NEON additions, and GF8/GF16 kernel
+refactoring changed the compiler's instrumented sites.  These totals are not a
+range or minimum.  The v4 runner still compares the exact totals and every
+named member, aborting before correctness execution if any count changes.  The
+unchanged 320/54 standalone count independently confirms that the experimental
+harness instrumentation did not drift.
+The counts came from a fresh five-variant compile at post-R1 commit `808ca28`;
+the runner stopped on the old fail-closed constants before executing any child.
+Its exact 22-file core closure is byte-identical at this repair's `219831f`
+base, so no timing or correctness result is being inferred from that stopped
+run.
+
+### Dual Git identity and historical evidence
+
+Manifest v4 separates two immutable Git identities:
+
+- `tooling_git_sha` is the clean checked-out `HEAD` containing the exact
+  committed C7 harness, runner, and validator.  Generation rejects staged,
+  modified, or untracked non-ignored files.
+- `core_git_sha` is that commit or an ancestor.  Every byte of the exact
+  22-file `EXPECTED_SOURCE_CLOSURE` in the checkout and every build record must
+  equal the corresponding blob at this commit.
+
+This lets a tooling-only evidence repair describe an earlier frozen core
+without pretending that older commit contained the repaired tools.  The runner
+checks ancestry and both byte closures before configuring.  The validator
+binds all three tooling records to `tooling_git_sha`, every core record to
+`core_git_sha`, and checks ancestry again.  Trusted live validation also
+requires a clean checkout at `tooling_git_sha`.  A/B comparison requires both
+identities, tooling records, all five binary fingerprints, and all program
+records to agree.  Peer-attestation schema v3 records both identities and the
+clean-tooling-head/core-ancestor check.
+
+The committed checkpoint under `results/` remains historical manifest v3 and
+peer-attestation v2 evidence for its pre-R1 core.  It is never rewritten or
+accepted by the v4 generator.  The validator retains a read-only v3 path that
+authenticates its tooling and core bytes directly from the recorded Git commit
+and applies its original exact 329 ASan / 87 UBSan archive proof.  Relabeling
+those bytes as v4 fails both the 348/86 member proof and the required separate
+tooling identity.
+
+Manifest v4 normalizes only the exact checkout-root prefix to literal
 `${LEO2_SOURCE_ROOT}` in retained text and argv.  All core and standalone
 compiles use supported `-ffile-prefix-map` and `-fdebug-prefix-map`, plus
 `-fmacro-prefix-map` when both the paired C and C++ drivers accept it.  Their
@@ -296,8 +359,8 @@ indexed by size and SHA-256, and validation rejects traversal, links, devices,
 duplicates, noncanonical metadata, and bounded-size/decompression violations.
 It also retains a canonical peer-attestation JSON artifact that binds both
 retained peer artifacts, the peer's committed tooling and core closure, exact
-programs, binary records, normalized records, run records, Git HEAD, one-time
-live validation, and root-byte scan.
+programs, binary records, normalized records, run records, clean tooling Git
+HEAD, ancestor core identity, one-time live validation, and root-byte scan.
 
 The runner reads the original peer manifest once, captures all peer evidence
 into a private immutable snapshot, and uses those exact bytes for portable and
@@ -351,9 +414,10 @@ profile identity, allocation mode, OpenMP settings, and complete child schema.
 The smoke cell must retain exactly seven positive finite samples per metric and
 median/MAD summaries recomputed from those samples.
 
-Current-core attestation requires a v3 retained manifest whose A/B comparison
-status is `pass`; the checkpoint suite rejects historical v2 evidence and
-single-checkout v3 evidence.
+Final current-core attestation requires a v4 manifest whose A/B comparison
+status is `pass`; a single-checkout v4 manifest is only an intermediate A-side
+artifact.  The historical v3 checkpoint remains independently readable but is
+not current-core evidence.
 
 The Experiment-W Python suite passes 12 tests.  The strict C99 implementation
 passes 217 direct checks and the differential matrix covers 5 golden vectors,
@@ -383,14 +447,23 @@ before any crossover conclusion.
 
 Rebuild the four normal backend archives, the Clang ASan+UBSan archive, all five
 strict standalone executables, five independently pinned correctness runs, and
-the affinity-selected smoke from a committed source revision.  Omitting
+the affinity-selected smoke from a clean committed tooling revision.  Keep
+builds and results under ignored paths so final clean-HEAD validation remains
+meaningful.  Select the frozen integrated core explicitly; it must be an
+ancestor of tooling `HEAD`, and all 22 core-closure paths must still match it
+byte for byte.  Omitting
 `--cpus` chooses the lowest five IDs from `sched_getaffinity`; the smoke uses the
 first selected CPU.  An explicit `--cpus` still requires exactly five distinct
 allowed IDs:
 
+    test -z "$(git status --porcelain=v1 --untracked-files=all)"
+    CORE_SHA=<frozen-integrated-core-commit>
     PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -X dev \
       experiments/leopard2/non_power_of_two/c7/run_matrix.py \
-      --core-git-sha "$(git rev-parse HEAD)" --jobs-per-build 4
+      --core-git-sha "$CORE_SHA" --jobs-per-build 4 \
+      --build-dir .research/leopard2/c7-final/build \
+      --results-dir .research/leopard2/c7-final/results \
+      --manifest .research/leopard2/c7-final/results/build-run-manifest.json
 
 Regenerate independent algebra and validate retained evidence:
 
@@ -407,11 +480,13 @@ Regenerate independent algebra and validate retained evidence:
       experiments/leopard2/non_power_of_two/c7/validate_evidence.py --live \
       experiments/leopard2/non_power_of_two/c7/results/build-run-manifest.json
 
-The A/B gate runs the same committed revision in a second checkout, then gives
+The A/B gate runs the same clean tooling commit and core commit in a second
+checkout, then gives
 that checkout's manifest and root to the other runner with
 `--compare-reproducibility-manifest` and
-`--compare-reproducibility-root`.  Comparison fails on any backend hash
-difference or checkout-root byte leak, and the resulting local manifest records
+`--compare-reproducibility-root`.  Comparison fails when either Git identity,
+any tooling record, any backend hash, any program record, or a checkout-root
+byte differs, and the resulting local manifest records
 the path-free comparison attestation.  It writes the exact captured bytes to
 `results/peer-manifest.json`, the portable semantic inputs to
 `results/peer-evidence-bundle.tar.gz`, and their binding report to

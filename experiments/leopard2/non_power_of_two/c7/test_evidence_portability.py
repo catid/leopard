@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit tests for C7 v3 evidence portability primitives."""
+"""Unit tests for C7 v4 evidence portability primitives."""
 
 from __future__ import annotations
 
@@ -17,6 +17,77 @@ import validate_evidence
 
 
 class PortabilityTests(unittest.TestCase):
+    def test_dual_git_identity_preflight_rejects_mutations(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="c7-dual-git-") as directory:
+            root = pathlib.Path(directory)
+
+            def git(*arguments: str) -> str:
+                return subprocess.run(
+                    ["git", *arguments], cwd=root, check=True, text=True,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                ).stdout.strip()
+
+            git("init", "-q")
+            git("config", "user.name", "C7 test")
+            git("config", "user.email", "c7-test@example.invalid")
+            (root / "core.txt").write_text("core-v1\n", encoding="utf-8")
+            (root / "tool.txt").write_text("tool-v1\n", encoding="utf-8")
+            git("add", "core.txt", "tool.txt")
+            git("commit", "-q", "-m", "core")
+            core_sha = git("rev-parse", "HEAD")
+            (root / "tool.txt").write_text("tool-v2\n", encoding="utf-8")
+            git("add", "tool.txt")
+            git("commit", "-q", "-m", "tooling")
+            tooling_sha = git("rev-parse", "HEAD")
+
+            run_matrix.require_generation_identities(
+                tooling_sha, core_sha, source_root=root,
+                core_closure=("core.txt",), tooling_closure=("tool.txt",))
+            validate_evidence.validate_repository(
+                root, tooling_sha, core_sha, require_checkout_head=True)
+
+            git("checkout", "-q", "--detach", core_sha)
+            (root / "side.txt").write_text("side\n", encoding="utf-8")
+            git("add", "side.txt")
+            git("commit", "-q", "-m", "unrelated core candidate")
+            nonancestor_sha = git("rev-parse", "HEAD")
+            git("checkout", "-q", "--detach", tooling_sha)
+            with self.assertRaisesRegex(RuntimeError, "not an ancestor"):
+                run_matrix.require_generation_identities(
+                    tooling_sha, nonancestor_sha, source_root=root,
+                    core_closure=("core.txt",),
+                    tooling_closure=("tool.txt",))
+            with self.assertRaisesRegex(ValueError, "not an ancestor"):
+                validate_evidence.validate_repository(
+                    root, tooling_sha, nonancestor_sha,
+                    require_checkout_head=False)
+
+            (root / "untracked.txt").write_text("dirty\n", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "must be clean"):
+                run_matrix.require_generation_identities(
+                    tooling_sha, core_sha, source_root=root,
+                    core_closure=("core.txt",),
+                    tooling_closure=("tool.txt",))
+            with self.assertRaisesRegex(ValueError, "not clean"):
+                validate_evidence.validate_repository(
+                    root, tooling_sha, core_sha, require_checkout_head=True)
+            (root / "untracked.txt").unlink()
+
+            for label, commit, filename, changed in (
+                ("core", core_sha, "core.txt", "changed-core\n"),
+                ("tooling", tooling_sha, "tool.txt", "changed-tool\n"),
+            ):
+                path = root / filename
+                original = path.read_bytes()
+                try:
+                    path.write_text(changed, encoding="utf-8")
+                    with self.assertRaisesRegex(
+                            RuntimeError, f"{label} closure differs"):
+                        run_matrix.require_committed_closure(
+                            label, commit, (filename,), root)
+                finally:
+                    path.write_bytes(original)
+
     def test_normalizer_replaces_only_exact_root_prefix(self) -> None:
         root = str(run_matrix.ROOT)
         value = f"{root}/one {root} {root}=mapped {root}-sibling/two"
@@ -208,7 +279,8 @@ class PortabilityTests(unittest.TestCase):
             for index, name in enumerate(run_matrix.BUILD_NAMES, start=1)
         }
         base = {
-            "schema": "leopard2-c7-build-run-manifest/v3",
+            "schema": run_matrix.MANIFEST_SCHEMA,
+            "tooling_git_sha": "e" * 40,
             "core_git_sha": "a" * 40,
             "source": {"path": "s", "sha256": "b" * 64, "bytes": 1},
             "runner": {"path": "r", "sha256": "c" * 64, "bytes": 1},
@@ -230,6 +302,11 @@ class PortabilityTests(unittest.TestCase):
             "library_sha256"] = "f" * 64
         with self.assertRaises(RuntimeError):
             run_matrix.require_reproducible_peer(base, forged)
+        for key in ("tooling_git_sha", "core_git_sha"):
+            forged = copy.deepcopy(base)
+            forged[key] = "f" * 40
+            with self.assertRaisesRegex(RuntimeError, key):
+                run_matrix.require_reproducible_peer(base, forged)
 
     def test_comparison_attestation_is_machine_checkable(self) -> None:
         fingerprints = {

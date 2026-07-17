@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Portable and optional live validation for a C7 matrix v3 manifest."""
+"""Portable and optional live validation for C7 v3/v4 manifests."""
 
 from __future__ import annotations
 
@@ -28,6 +28,13 @@ from run_matrix import (
     EXPECTED_ARCHIVE_SANITIZER_COUNTS,
     EXPECTED_EXECUTABLE_SANITIZER_COUNTS,
     EXPECTED_SOURCE_CLOSURE,
+    EXPECTED_TOOLING_CLOSURE,
+    LEGACY_EXPECTED_ARCHIVE_MEMBER_COUNTS,
+    LEGACY_EXPECTED_ARCHIVE_SANITIZER_COUNTS,
+    LEGACY_EXPECTED_EXECUTABLE_SANITIZER_COUNTS,
+    LEGACY_MANIFEST_SCHEMA,
+    LEGACY_PEER_ATTESTATION_SCHEMA,
+    MANIFEST_SCHEMA,
     NORMALIZATION_SCHEMA,
     NORMALIZATION_TOKEN,
     PEER_ATTESTATION_SCHEMA,
@@ -446,10 +453,13 @@ def validate_peer_attestation(
     if peer.get("reproducibility", {}).get("comparison") != {
             "status": "not-run"}:
         raise ValueError("A/B peer manifest is not an initial independent run")
+    legacy = manifest.get("schema") == LEGACY_MANIFEST_SCHEMA
+    identity_keys = ("core_git_sha",) if legacy else (
+        "tooling_git_sha", "core_git_sha")
     try:
         identity_mismatch = (
             peer.get("schema") != manifest.get("schema") or
-            peer.get("core_git_sha") != manifest.get("core_git_sha") or
+            any(peer.get(key) != manifest.get(key) for key in identity_keys) or
             any(peer.get(key) != manifest.get(key) for key in (
                 "source", "runner", "validator", "normalization")) or
             peer.get("taskset") != manifest.get("taskset") or
@@ -496,6 +506,8 @@ def validate_peer_attestation(
         "program_records_sha256", "root_scan", "runs_sha256", "schema",
         "source_closures_sha256", "status", "tooling",
     }
+    if not legacy:
+        required.add("tooling_git_sha")
     if set(report) != required:
         raise ValueError("A/B peer attestation schema changed")
     builds = {build["name"]: build for build in manifest["builds"]}
@@ -503,9 +515,21 @@ def validate_peer_attestation(
     expected_closures = {
         name: builds[name]["source_closure"] for name in BUILD_NAMES
     }
-    if (report["schema"] != PEER_ATTESTATION_SCHEMA or
+    expected_attestation_schema = (
+        LEGACY_PEER_ATTESTATION_SCHEMA if legacy else PEER_ATTESTATION_SCHEMA)
+    expected_checks = {
+        "portable_semantics": "pass",
+        "live_tools_and_outputs": "pass",
+        ("git_toplevel_and_head" if legacy else
+         "clean_tooling_head_and_core_ancestor"): "pass",
+        "program_identity_match": "pass",
+        "binary_and_text_root_scan": "pass",
+    }
+    if (report["schema"] != expected_attestation_schema or
             report["status"] != "pass" or
             report["core_git_sha"] != manifest["core_git_sha"] or
+            (not legacy and report["tooling_git_sha"] !=
+             manifest["tooling_git_sha"]) or
             report["tooling"] != {
                 key: manifest[key] for key in ("source", "runner", "validator")
             } or report["fingerprints"] !=
@@ -516,13 +540,8 @@ def validate_peer_attestation(
             report["source_closures_sha256"] != canonical_json_sha256(
                 expected_closures) or report["root_scan"] !=
             comparison["peer_scan"] or
-            report["checks"] != {
-                "portable_semantics": "pass",
-                "live_tools_and_outputs": "pass",
-                "git_toplevel_and_head": "pass",
-                "program_identity_match": "pass",
-                "binary_and_text_root_scan": "pass",
-            } or report["peer_manifest_artifact"] != peer_manifest_record or
+            report["checks"] != expected_checks or
+            report["peer_manifest_artifact"] != peer_manifest_record or
             report["peer_evidence_bundle"] != bundle_record or
             report["normalized_text_records_sha256"] != canonical_json_sha256(
                 sorted(
@@ -666,9 +685,10 @@ def validate_git_artifact(
     completed = subprocess.run(
         ["git", "show", f"{commit}:{expected_relative}"], cwd=source_root,
         check=False, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    if completed.returncode != 0 or hashlib.sha256(
-            completed.stdout).hexdigest() != record["sha256"]:
-        raise ValueError(f"{label} is not bound to the core commit")
+    if (completed.returncode != 0 or
+            len(completed.stdout) != record["bytes"] or
+            hashlib.sha256(completed.stdout).hexdigest() != record["sha256"]):
+        raise ValueError(f"{label} is not bound to its declared commit")
 
 
 def parse_cache(text: str) -> dict[str, str]:
@@ -786,7 +806,8 @@ def compiler_identity(record: dict, family: str) -> tuple[str, str]:
 
 
 def validate_repository(
-    source_root: pathlib.Path, core_sha: str, *, require_checkout_head: bool,
+    source_root: pathlib.Path, tooling_sha: str, core_sha: str, *,
+    require_checkout_head: bool,
 ) -> pathlib.Path:
     root = source_root.resolve()
     top = subprocess.run(
@@ -794,12 +815,24 @@ def validate_repository(
         check=False, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if top.returncode != 0 or pathlib.Path(top.stdout.strip()).resolve() != root:
         raise ValueError("source root is not the exact Git worktree top level")
+    ancestor = subprocess.run(
+        ["git", "-C", str(root), "merge-base", "--is-ancestor", core_sha,
+         tooling_sha], check=False, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL)
+    if ancestor.returncode != 0:
+        raise ValueError("manifest core commit is not an ancestor of tooling")
     if require_checkout_head:
         head = subprocess.run(
             ["git", "-C", str(root), "rev-parse", "HEAD"], check=False,
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if head.returncode != 0 or head.stdout.strip() != core_sha:
-            raise ValueError("peer checkout HEAD differs from its core commit")
+        if head.returncode != 0 or head.stdout.strip() != tooling_sha:
+            raise ValueError("checkout HEAD differs from its tooling commit")
+        status = subprocess.run(
+            ["git", "-C", str(root), "status", "--porcelain=v1",
+             "--untracked-files=all"], check=False, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if status.returncode != 0 or status.stdout:
+            raise ValueError("tooling checkout is not clean")
     return root
 
 
@@ -975,15 +1008,20 @@ def validate_manifest(
     evidence_root: pathlib.Path | None = None, live: bool = False,
     require_checkout_head: bool = False,
 ) -> None:
+    schema = data.get("schema")
+    legacy = schema == LEGACY_MANIFEST_SCHEMA
+    if schema not in (LEGACY_MANIFEST_SCHEMA, MANIFEST_SCHEMA):
+        raise ValueError("manifest schema changed")
     required_top = {
         "builds", "core_git_sha", "normalization", "reproducibility",
         "runner", "runs", "schema", "scope", "source", "status",
         "taskset", "validator",
     }
+    if not legacy:
+        required_top.add("tooling_git_sha")
     if set(data) != required_top:
         raise ValueError("manifest keys changed")
-    if (data["schema"] != "leopard2-c7-build-run-manifest/v3" or
-            data["status"] != "pass" or data["scope"] !=
+    if (data["status"] != "pass" or data["scope"] !=
             "correctness plus one affinity-selected non-authoritative harness "
             "smoke; no promotion timing"):
         raise ValueError("manifest status or scope changed")
@@ -1001,19 +1039,24 @@ def validate_manifest(
             serialized):
         raise ValueError("manifest leaked an absolute checkout path")
     core_sha = validate_git_sha(data["core_git_sha"], "manifest core commit")
+    tooling_sha = (core_sha if legacy else validate_git_sha(
+        data["tooling_git_sha"], "manifest tooling commit"))
     validate_repository(
-        source_root, core_sha, require_checkout_head=require_checkout_head)
-    source_rel = "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp"
-    runner_rel = "experiments/leopard2/non_power_of_two/c7/run_matrix.py"
-    validator_rel = "experiments/leopard2/non_power_of_two/c7/validate_evidence.py"
+        source_root, tooling_sha, core_sha,
+        require_checkout_head=require_checkout_head)
     for key, relative, label in (
-        ("source", source_rel, "C7 source"),
-        ("runner", runner_rel, "C7 runner"),
-        ("validator", validator_rel, "C7 validator"),
+        ("source", EXPECTED_TOOLING_CLOSURE[0], "C7 source"),
+        ("runner", EXPECTED_TOOLING_CLOSURE[1], "C7 runner"),
+        ("validator", EXPECTED_TOOLING_CLOSURE[2], "C7 validator"),
     ):
-        validate_artifact(data[key], label, source_root, required=True)
+        # The current checkout contains v4 tooling, so historical v3 tooling
+        # is authenticated from its immutable Git object rather than requiring
+        # those old bytes to remain materialized at the same worktree path.
+        validate_artifact(
+            data[key], label, source_root, required=not legacy,
+            check_if_present=not legacy)
         validate_git_artifact(
-            core_sha, data[key], relative, label, source_root)
+            tooling_sha, data[key], relative, label, source_root)
     taskset = validate_program_record(data["taskset"], "taskset")
     if live:
         validate_program_live(data["taskset"], "taskset")
@@ -1284,12 +1327,21 @@ def validate_manifest(
         if set(instrumentation) != required_instrumentation:
             raise ValueError("instrumentation schema changed")
         zero_counts = {"asan_lines": 0, "ubsan_lines": 0}
+        sanitizer_executable_proof = (
+            LEGACY_EXPECTED_EXECUTABLE_SANITIZER_COUNTS if legacy else
+            EXPECTED_EXECUTABLE_SANITIZER_COUNTS)
+        sanitizer_archive_proof = (
+            LEGACY_EXPECTED_ARCHIVE_SANITIZER_COUNTS if legacy else
+            EXPECTED_ARCHIVE_SANITIZER_COUNTS)
+        sanitizer_member_proof = (
+            LEGACY_EXPECTED_ARCHIVE_MEMBER_COUNTS if legacy else
+            EXPECTED_ARCHIVE_MEMBER_COUNTS)
         expected_executable_counts = (
-            EXPECTED_EXECUTABLE_SANITIZER_COUNTS if sanitizer else zero_counts)
+            sanitizer_executable_proof if sanitizer else zero_counts)
         expected_archive_counts = (
-            EXPECTED_ARCHIVE_SANITIZER_COUNTS if sanitizer else zero_counts)
+            sanitizer_archive_proof if sanitizer else zero_counts)
         expected_members = (
-            EXPECTED_ARCHIVE_MEMBER_COUNTS if sanitizer else
+            sanitizer_member_proof if sanitizer else
             {member: dict(zero_counts) for member in ARCHIVE_MEMBERS})
         if (instrumentation["required_compile_macro"] is not sanitizer or
                 instrumentation["archive_members"] != list(ARCHIVE_MEMBERS) or
@@ -1323,7 +1375,8 @@ def validate_manifest(
         validate_source_closure_paths(closure)
         for index, entry in enumerate(closure):
             validate_artifact(
-                entry, f"{name} source closure {index}", source_root, required=True)
+                entry, f"{name} source closure {index}", source_root,
+                required=not legacy, check_if_present=not legacy)
             relative = entry["path"]
             if pathlib.Path(relative).is_absolute():
                 raise ValueError("source closure path is not portable")
@@ -1454,7 +1507,8 @@ def main() -> int:
         help="require exact recorded tools/build outputs and replay nm scans")
     parser.add_argument(
         "--require-checkout-head", action="store_true",
-        help="require source-root HEAD to equal the manifest core commit")
+        help=("require a clean source-root HEAD equal to the manifest tooling "
+              "commit"))
     arguments = parser.parse_args()
     data = strict_json_loads(
         arguments.manifest.read_text(encoding="utf-8"), "C7 manifest")

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Rebuild and run the hash-bound C7 correctness/smoke matrix.
+"""Rebuild and run the dual-Git-identity C7 correctness/smoke matrix.
 
 The retained checkpoint deliberately uses ordinary CPUs and labels its only
 timed cell non-authoritative.  A later authoritative runner may reuse the C++
 harness, but must produce a separate manifest against the integrated core.
+Manifest v4 binds clean committed tooling independently from its ancestor core
+closure; this runner never generates historical v3 evidence.
 """
 
 from __future__ import annotations
@@ -42,7 +44,10 @@ GIT_SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 NORMALIZATION_SCHEMA = "leopard2-source-root-prefix/v1"
 NORMALIZATION_TOKEN = "${LEO2_SOURCE_ROOT}"
 PREFIX_MAP_TARGET = "LEO2_SOURCE_ROOT"
-PEER_ATTESTATION_SCHEMA = "leopard2-c7-peer-reproducibility/v2"
+MANIFEST_SCHEMA = "leopard2-c7-build-run-manifest/v4"
+LEGACY_MANIFEST_SCHEMA = "leopard2-c7-build-run-manifest/v3"
+PEER_ATTESTATION_SCHEMA = "leopard2-c7-peer-reproducibility/v3"
+LEGACY_PEER_ATTESTATION_SCHEMA = "leopard2-c7-peer-reproducibility/v2"
 PEER_BUNDLE_SCHEMA = "leopard2-c7-peer-evidence-bundle/v1"
 PEER_BUNDLE_MAX_MEMBERS = 256
 PEER_BUNDLE_MAX_MEMBER_BYTES = 16 * 1024 * 1024
@@ -55,8 +60,27 @@ PREFIX_MAP_OPTIONS = (
 EXPECTED_EXECUTABLE_SANITIZER_COUNTS = {
     "asan_lines": 320, "ubsan_lines": 54}
 EXPECTED_ARCHIVE_SANITIZER_COUNTS = {
-    "asan_lines": 329, "ubsan_lines": 87}
+    "asan_lines": 348, "ubsan_lines": 86}
 EXPECTED_ARCHIVE_MEMBER_COUNTS = {
+    "leopard.cpp.o": {"asan_lines": 13, "ubsan_lines": 7},
+    "leopard2.cpp.o": {"asan_lines": 141, "ubsan_lines": 15},
+    "Leopard2Backend.cpp.o": {"asan_lines": 40, "ubsan_lines": 9},
+    "Leopard2BackendScalar.cpp.o": {"asan_lines": 16, "ubsan_lines": 6},
+    "Leopard2CpuFeatures.cpp.o": {"asan_lines": 9, "ubsan_lines": 5},
+    "Leopard2Plan.cpp.o": {"asan_lines": 7, "ubsan_lines": 5},
+    "LeopardCommon.cpp.o": {"asan_lines": 13, "ubsan_lines": 5},
+    "LeopardFF16.cpp.o": {"asan_lines": 27, "ubsan_lines": 10},
+    "LeopardFF8.cpp.o": {"asan_lines": 28, "ubsan_lines": 9},
+    "Leopard2BackendSSSE3.cpp.o": {"asan_lines": 26, "ubsan_lines": 8},
+    "Leopard2BackendAVX2.cpp.o": {"asan_lines": 28, "ubsan_lines": 7},
+}
+# Retained v3 evidence remains verifiable under its original exact proof.  The
+# v4 runner never emits these values for a new build.
+LEGACY_EXPECTED_EXECUTABLE_SANITIZER_COUNTS = {
+    "asan_lines": 320, "ubsan_lines": 54}
+LEGACY_EXPECTED_ARCHIVE_SANITIZER_COUNTS = {
+    "asan_lines": 329, "ubsan_lines": 87}
+LEGACY_EXPECTED_ARCHIVE_MEMBER_COUNTS = {
     "leopard.cpp.o": {"asan_lines": 13, "ubsan_lines": 7},
     "leopard2.cpp.o": {"asan_lines": 141, "ubsan_lines": 15},
     "Leopard2Backend.cpp.o": {"asan_lines": 35, "ubsan_lines": 9},
@@ -78,6 +102,11 @@ EXPECTED_SOURCE_CLOSURE = (
     "LeopardFF16.cpp", "LeopardFF16.h", "LeopardFF8.cpp", "LeopardFF8.h",
     "cmake/leopardConfig.cmake.in", "leopard.cpp", "leopard.h",
     "leopard2.cpp", "leopard2.h",
+)
+EXPECTED_TOOLING_CLOSURE = (
+    "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp",
+    "experiments/leopard2/non_power_of_two/c7/run_matrix.py",
+    "experiments/leopard2/non_power_of_two/c7/validate_evidence.py",
 )
 
 
@@ -273,10 +302,13 @@ def prefix_map_flags(
     return result
 
 
-def committed_sha256(commit: str, path: pathlib.Path) -> str:
-    relative_path = path.resolve().relative_to(ROOT).as_posix()
+def committed_sha256(
+    commit: str, path: pathlib.Path, source_root: pathlib.Path = ROOT,
+) -> str:
+    source_root = source_root.resolve()
+    relative_path = path.resolve().relative_to(source_root).as_posix()
     completed = subprocess.run(
-        ["git", "show", f"{commit}:{relative_path}"], cwd=ROOT,
+        ["git", "show", f"{commit}:{relative_path}"], cwd=source_root,
         check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     if completed.returncode != 0:
@@ -284,6 +316,52 @@ def committed_sha256(commit: str, path: pathlib.Path) -> str:
             f"cannot read {relative_path} from {commit}: "
             f"{completed.stderr.decode('utf-8', errors='replace').strip()}")
     return hashlib.sha256(completed.stdout).hexdigest()
+
+
+def require_committed_closure(
+    label: str, commit: str, closure: Iterable[str],
+    source_root: pathlib.Path = ROOT,
+) -> None:
+    source_root = source_root.resolve()
+    for relative_path in closure:
+        path = source_root / relative_path
+        if (not path.is_file() or committed_sha256(
+                commit, path, source_root) != sha256(path)):
+            raise RuntimeError(
+                f"{label} closure differs from {commit}: {relative_path}")
+
+
+def require_generation_identities(
+    tooling_git_sha: str, core_git_sha: str, *,
+    source_root: pathlib.Path = ROOT,
+    core_closure: Iterable[str] = EXPECTED_SOURCE_CLOSURE,
+    tooling_closure: Iterable[str] = EXPECTED_TOOLING_CLOSURE,
+) -> None:
+    """Require a clean tooling HEAD and an exact ancestor core closure."""
+    source_root = source_root.resolve()
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=source_root, check=True, text=True,
+        stdout=subprocess.PIPE,
+    ).stdout.strip()
+    if head != tooling_git_sha:
+        raise RuntimeError("tooling git SHA must equal the checked-out HEAD")
+    status = subprocess.run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        cwd=source_root, check=True, text=True, stdout=subprocess.PIPE,
+    ).stdout
+    if status:
+        raise RuntimeError("tooling checkout must be clean before generation")
+    ancestor = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", core_git_sha,
+         tooling_git_sha], cwd=source_root, check=False,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if ancestor.returncode != 0:
+        raise RuntimeError("core git SHA is not an ancestor of tooling HEAD")
+    for label, commit, closure in (
+        ("core", core_git_sha, core_closure),
+        ("tooling", tooling_git_sha, tooling_closure),
+    ):
+        require_committed_closure(label, commit, closure, source_root)
 
 
 def require_committed_artifact(commit: str, record: dict[str, Any]) -> None:
@@ -719,7 +797,7 @@ def manifest_program_records(manifest: dict[str, Any]) -> dict[str, Any]:
 
 
 def require_reproducible_peer(current: dict[str, Any], peer: dict[str, Any]) -> None:
-    for key in ("schema", "core_git_sha"):
+    for key in ("schema", "tooling_git_sha", "core_git_sha"):
         if peer.get(key) != current.get(key):
             raise RuntimeError(f"A/B manifest {key} differs")
     if (peer.get("source") != current.get("source") or
@@ -974,6 +1052,7 @@ def write_peer_attestation(
     report = {
         "schema": PEER_ATTESTATION_SCHEMA,
         "status": "pass",
+        "tooling_git_sha": peer["tooling_git_sha"],
         "core_git_sha": peer["core_git_sha"],
         "peer_manifest_artifact": peer_manifest,
         "peer_evidence_bundle": peer_evidence_bundle,
@@ -998,7 +1077,7 @@ def write_peer_attestation(
         "checks": {
             "portable_semantics": "pass",
             "live_tools_and_outputs": "pass",
-            "git_toplevel_and_head": "pass",
+            "clean_tooling_head_and_core_ancestor": "pass",
             "program_identity_match": "pass",
             "binary_and_text_root_scan": "pass",
         },
@@ -1037,23 +1116,19 @@ def main() -> int:
         raise SystemExit(str(error)) from error
     if arguments.jobs_per_build < 1 or arguments.jobs_per_build > 8:
         raise SystemExit("jobs per build must be in 1..8")
-    core_git_sha = arguments.core_git_sha or subprocess.run(
+    tooling_git_sha = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True, text=True,
         stdout=subprocess.PIPE,
     ).stdout.strip()
+    core_git_sha = arguments.core_git_sha or tooling_git_sha
+    if not GIT_SHA_RE.fullmatch(tooling_git_sha):
+        raise SystemExit("tooling git SHA must be 40 lowercase hexadecimal digits")
     if not GIT_SHA_RE.fullmatch(core_git_sha):
         raise SystemExit("core git SHA must be 40 lowercase hexadecimal digits")
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True, text=True,
-        stdout=subprocess.PIPE,
-    ).stdout.strip()
-    if head != core_git_sha:
-        raise SystemExit("--core-git-sha must equal the checked-out HEAD")
-    for committed_source in (SOURCE, pathlib.Path(__file__), VALIDATOR):
-        if committed_sha256(core_git_sha, committed_source) != sha256(
-                committed_source):
-            raise SystemExit(
-                f"source differs from {core_git_sha}: {relative(committed_source)}")
+    try:
+        require_generation_identities(tooling_git_sha, core_git_sha)
+    except RuntimeError as error:
+        raise SystemExit(str(error)) from error
     arguments.build_dir = arguments.build_dir.resolve()
     arguments.results_dir = arguments.results_dir.resolve()
     arguments.manifest = arguments.manifest.resolve()
@@ -1110,7 +1185,7 @@ def main() -> int:
         by_name["auto"], arguments.results_dir, arguments.smoke_cpu, True))
 
     manifest: dict[str, Any] = {
-        "schema": "leopard2-c7-build-run-manifest/v3",
+        "schema": MANIFEST_SCHEMA,
         "status": "pass",
         "scope": (
             "correctness plus one affinity-selected non-authoritative harness "
@@ -1121,6 +1196,7 @@ def main() -> int:
             "token": NORMALIZATION_TOKEN,
             "operation": "replace exact source-root prefix only",
         },
+        "tooling_git_sha": tooling_git_sha,
         "core_git_sha": core_git_sha,
         "source": artifact(SOURCE),
         "runner": artifact(pathlib.Path(__file__)),

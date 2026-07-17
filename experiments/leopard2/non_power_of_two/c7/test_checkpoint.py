@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Checkpoint and portability tests for C7 evidence manifest v3."""
+"""Checkpoint and portability tests for C7 evidence manifests v3/v4."""
 
 from __future__ import annotations
 
@@ -42,11 +42,11 @@ class CheckpointTests(unittest.TestCase):
             })
             self.assertEqual(regenerated.read_bytes(), retained.read_bytes())
 
-    def test_retained_manifest_is_current_v3_comparison_evidence(self) -> None:
+    def test_retained_manifest_is_read_only_v3_comparison_evidence(self) -> None:
         manifest_path = RESULTS / "build-run-manifest.json"
         data = json.loads(manifest_path.read_text(encoding="utf-8"))
         self.assertEqual(data.get("schema"),
-                         "leopard2-c7-build-run-manifest/v3")
+                         run_matrix.LEGACY_MANIFEST_SCHEMA)
         self.assertEqual(
             data.get("reproducibility", {}).get("comparison", {}).get("status"),
             "pass")
@@ -74,16 +74,63 @@ class CheckpointTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_evidence.validate_manifest(failed_comparison)
 
+        # A schema edit cannot turn the historical pre-R1 proof into v4
+        # evidence: v4 adds an independent tooling identity and requires the
+        # post-R1 sanitizer attribution frozen below.
+        relabeled = json.loads(json.dumps(data))
+        relabeled["schema"] = run_matrix.MANIFEST_SCHEMA
+        relabeled["tooling_git_sha"] = relabeled["core_git_sha"]
+        with self.assertRaises(ValueError):
+            validate_evidence.validate_manifest(relabeled)
+
     def test_current_attestation_constants_are_exact(self) -> None:
         self.assertEqual(
+            run_matrix.MANIFEST_SCHEMA,
+            "leopard2-c7-build-run-manifest/v4")
+        self.assertEqual(
+            run_matrix.PEER_ATTESTATION_SCHEMA,
+            "leopard2-c7-peer-reproducibility/v3")
+        self.assertEqual(run_matrix.EXPECTED_TOOLING_CLOSURE, (
+            "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp",
+            "experiments/leopard2/non_power_of_two/c7/run_matrix.py",
+            "experiments/leopard2/non_power_of_two/c7/validate_evidence.py",
+        ))
+        self.assertEqual(run_matrix.EXPECTED_ARCHIVE_MEMBER_COUNTS, {
+            "leopard.cpp.o": {"asan_lines": 13, "ubsan_lines": 7},
+            "leopard2.cpp.o": {"asan_lines": 141, "ubsan_lines": 15},
+            "Leopard2Backend.cpp.o": {"asan_lines": 40, "ubsan_lines": 9},
+            "Leopard2BackendScalar.cpp.o": {
+                "asan_lines": 16, "ubsan_lines": 6},
+            "Leopard2CpuFeatures.cpp.o": {"asan_lines": 9, "ubsan_lines": 5},
+            "Leopard2Plan.cpp.o": {"asan_lines": 7, "ubsan_lines": 5},
+            "LeopardCommon.cpp.o": {"asan_lines": 13, "ubsan_lines": 5},
+            "LeopardFF16.cpp.o": {"asan_lines": 27, "ubsan_lines": 10},
+            "LeopardFF8.cpp.o": {"asan_lines": 28, "ubsan_lines": 9},
+            "Leopard2BackendSSSE3.cpp.o": {
+                "asan_lines": 26, "ubsan_lines": 8},
+            "Leopard2BackendAVX2.cpp.o": {
+                "asan_lines": 28, "ubsan_lines": 7},
+        })
+        self.assertEqual(
             sum(item["asan_lines"] for item in
-                run_matrix.EXPECTED_ARCHIVE_MEMBER_COUNTS.values()), 329)
+                run_matrix.EXPECTED_ARCHIVE_MEMBER_COUNTS.values()), 348)
         self.assertEqual(
             sum(item["ubsan_lines"] for item in
-                run_matrix.EXPECTED_ARCHIVE_MEMBER_COUNTS.values()), 87)
+                run_matrix.EXPECTED_ARCHIVE_MEMBER_COUNTS.values()), 86)
+        self.assertEqual(
+            run_matrix.EXPECTED_ARCHIVE_SANITIZER_COUNTS,
+            {"asan_lines": 348, "ubsan_lines": 86})
         self.assertEqual(
             run_matrix.EXPECTED_EXECUTABLE_SANITIZER_COUNTS,
             {"asan_lines": 320, "ubsan_lines": 54})
+        self.assertEqual(
+            sum(item["asan_lines"] for item in
+                run_matrix.LEGACY_EXPECTED_ARCHIVE_MEMBER_COUNTS.values()),
+            329)
+        self.assertEqual(
+            sum(item["ubsan_lines"] for item in
+                run_matrix.LEGACY_EXPECTED_ARCHIVE_MEMBER_COUNTS.values()),
+            87)
         self.assertEqual(
             validate_evidence.EXPECTED_CORRECTNESS[
                 "decode_read_only_input_alias_calls"], 117)
@@ -91,12 +138,41 @@ class CheckpointTests(unittest.TestCase):
             validate_evidence.EXPECTED_CORRECTNESS[
                 "decode_read_only_input_alias_symbol_comparisons"], 6025)
 
-    def test_optional_external_v3_manifest(self) -> None:
+    def test_v3_sanitizer_scan_rejects_v4_relabel(self) -> None:
+        data = json.loads(
+            (RESULTS / "build-run-manifest.json").read_text(encoding="utf-8"))
+        build = next(item for item in data["builds"]
+                     if item["name"] == "asan-ubsan")
+        instrumentation = build["instrumentation"]
+        archive_scan = ROOT / instrumentation[
+            "core_archive_symbol_scan"]["path"]
+        executable_scan = ROOT / instrumentation[
+            "executable_symbol_scan"]["path"]
+        validate_evidence.validate_symbol_scan(
+            executable_scan.read_text(encoding="utf-8"),
+            pathlib.Path(build["executable"]["path"]).name, archive=False,
+            expected_counts=
+            run_matrix.LEGACY_EXPECTED_EXECUTABLE_SANITIZER_COUNTS,
+            expected_members={})
+        validate_evidence.validate_symbol_scan(
+            archive_scan.read_text(encoding="utf-8"),
+            pathlib.Path(build["library"]["path"]).name, archive=True,
+            expected_counts=run_matrix.LEGACY_EXPECTED_ARCHIVE_SANITIZER_COUNTS,
+            expected_members=run_matrix.LEGACY_EXPECTED_ARCHIVE_MEMBER_COUNTS)
+        with self.assertRaises(ValueError):
+            validate_evidence.validate_symbol_scan(
+                archive_scan.read_text(encoding="utf-8"),
+                pathlib.Path(build["library"]["path"]).name, archive=True,
+                expected_counts=run_matrix.EXPECTED_ARCHIVE_SANITIZER_COUNTS,
+                expected_members=run_matrix.EXPECTED_ARCHIVE_MEMBER_COUNTS)
+
+    def test_optional_external_v4_manifest(self) -> None:
         requested = os.environ.get("LEO2_C7_TEST_MANIFEST")
         if not requested:
             self.skipTest("LEO2_C7_TEST_MANIFEST is not set")
         path = pathlib.Path(requested)
         data = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(data.get("schema"), run_matrix.MANIFEST_SCHEMA)
         self.assertEqual(
             data.get("reproducibility", {}).get("comparison", {}).get("status"),
             "pass")
@@ -578,6 +654,7 @@ class CheckpointTests(unittest.TestCase):
                 "path": "fake", "bytes": 0, "sha256": "0" * 64,
                 "source_root_tokens": 0,
             }] * 64),
+            lambda item: item.update(tooling_git_sha="0" * 40),
             lambda item: item.update(core_git_sha="0" * 40),
             lambda item: item["runner"].update(sha256="0" * 64),
         ):
