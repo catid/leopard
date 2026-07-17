@@ -367,6 +367,29 @@ void test_public_r1(leo2_backend backend)
         "concurrent R=1 plan execution failed");
 }
 
+bool public_backend_available(leo2_backend requested)
+{
+    leo2_context_options options;
+    std::memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.backend = requested;
+    leo2_context* context = NULL;
+    const leo2_result result = leo2_context_create(&options, &context);
+    if (result == LEO2_UNSUPPORTED)
+    {
+        require(context == NULL,
+            "unsupported explicit backend returned a context");
+        return false;
+    }
+    require_result(result, LEO2_SUCCESS,
+        "explicit backend availability probe");
+    require(context != NULL, "available explicit backend omitted a context");
+    require(leo2_context_backend(context) == requested,
+        "explicit backend probe selected a different effective backend");
+    leo2_context_destroy(context);
+    return true;
+}
+
 } // namespace
 
 int main()
@@ -379,7 +402,7 @@ int main()
             LEO2_BACKEND_SSSE3,
             LEO2_BACKEND_AVX2
         };
-        unsigned tested = 0;
+        unsigned ops_tested = 0;
         for (size_t i = 0; i < sizeof(backends) / sizeof(backends[0]); ++i)
         {
             leopard::backend::QualificationStatus status =
@@ -399,11 +422,38 @@ int main()
                 "qualified backend omitted fused XOR");
             test_primitive(*ops);
             test_primitive_concurrency(*ops);
-            test_public_r1(backends[i]);
-            ++tested;
+            ++ops_tested;
         }
-        std::printf("Leopard2 R=1 fused XOR passed: backends=%u "
-            "tails=0..257 max_bytes=1048579 concurrency=pass\n", tested);
+
+        // Runtime NEON intentionally rejects lower x86/scalar context requests
+        // until its complete transform table is extracted.  Probe the public
+        // contract rather than assuming every directly qualified fixed-ops
+        // table is independently selectable on every architecture.
+        std::vector<leo2_backend> public_requests(
+            backends, backends + sizeof(backends) / sizeof(backends[0]));
+        const leo2_backend effective = leopard::backend::ExecutionBackend();
+        if (std::find(public_requests.begin(), public_requests.end(),
+                effective) == public_requests.end())
+            public_requests.push_back(effective);
+        unsigned public_tested = 0;
+        bool effective_tested = false;
+        for (size_t i = 0; i < public_requests.size(); ++i)
+        {
+            if (!public_backend_available(public_requests[i]))
+                continue;
+            test_public_r1(public_requests[i]);
+            ++public_tested;
+            effective_tested = effective_tested ||
+                public_requests[i] == effective;
+        }
+        require(public_tested != 0,
+            "no public R=1 backend was available for testing");
+        require(effective_tested,
+            "effective runtime backend lacked public R=1 coverage");
+        std::printf("Leopard2 R=1 fused XOR passed: ops_backends=%u "
+            "public_backends=%u tails=0..257 max_bytes=1048579 "
+            "fields=gf8,gf16 concurrency=pass\n",
+            ops_tested, public_tested);
         return 0;
     }
     catch (const std::exception& error)
