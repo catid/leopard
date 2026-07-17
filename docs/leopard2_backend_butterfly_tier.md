@@ -255,10 +255,12 @@ An independent replay authenticated all provenance and all 1,664 raw records,
 then reproduced the two policy failures. The current v6 `verify` command
 rejects a deliberately failed status before full replay, and its CPU
 reservation is advisory rather than a measurement of sibling activity. The
-current collector additionally holds the same pair-wide filesystem and Linux
-abstract-socket lease used by exact-main, low-copy, and Jerasure collectors, so
-distinct reservation files cannot cause overlapping measurements on one
-physical pair; those
+current collector additionally holds the common pair-wide filesystem lease and
+the legacy Linux abstract-socket namespace used by exact-main, low-copy, and
+Jerasure collectors, so distinct reservation files cannot cause overlapping
+measurements on one physical pair. It also retains the current shared stable
+directory anchor used by C7 and exact-main. Pair-only legacy collectors and
+anchor-aware current collectors therefore both intersect its authority. Those
 tooling limitations are tracked separately and are not a reason to resample
 this pair.
 
@@ -307,7 +309,9 @@ topology and reservation changes, confidence-summary edits, and a high-
 variance fixture. The current v6 self-test additionally runs successful AVX2
 and SSSE3 mock campaigns and rejects independent changes to raw requested or
 resolved backend identity and to manifest requested or resolved backend
-identity.
+identity. It now reports 69 adversarial gates, including bidirectional
+same-pair rejection and disjoint-pair coexistence with Jerasure plus
+bidirectional stable-anchor exclusion with the exact-main and C7 runners.
 
 ## Historical pre-R1 non-regression evidence
 
@@ -441,15 +445,20 @@ fresh final-source four-variant matrix, a canonical no-newline reservation
 file, and a physical core whose allowed SMT sibling is idle. Run the collector
 twice, using distinct output directories and otherwise identical arguments:
 
-The current collector first holds a nonblocking exclusive flock on the owned
-`/run/user/UID` directory inode and retains it until the reservation handle is
-closed.  C7 and the exact-main collector use the same stable anchor.  Therefore
-replacement of the reservation inode or its containing directory cannot let a
-current peer acquire a disjoint file lock while a campaign is active.  The v6
-evidence schema and historical portable replay remain unchanged because the
-anchor is execution authority, not retained benchmark data.  This stable layer
-conservatively serializes all current Leopard2 evidence campaigns for the UID,
-including campaigns on disjoint pairs.
+The current collector first acquires the common pair-wide filesystem lease
+beneath `/run/user/UID/leopard2-cpu-leases` and the legacy Linux abstract-socket
+namespace for that pair. It then takes a nonblocking exclusive flock on the
+owned `/run/user/UID` directory inode before opening the replaceable
+reservation. It retains both guard layers through the last child and closes the
+reservation, anchor, and pair lease under nested cleanup. Jerasure's pair-only
+collector therefore cannot overlap the same physical pair, while disjoint
+pair-only work remains possible. C7 and the exact-main collector also use the
+stable anchor, so replacement of the reservation inode or its containing
+directory cannot let a current peer acquire a disjoint file lock while a
+campaign is active. The v6 evidence schema and historical portable replay
+remain unchanged because these guards are execution authority, not retained
+benchmark data. The stable layer conservatively serializes all current
+Leopard2 evidence campaigns for the UID, including campaigns on disjoint pairs.
 
     python3 experiments/leopard2/backend_butterfly/run_abba.py run \
       --backend avx2 \

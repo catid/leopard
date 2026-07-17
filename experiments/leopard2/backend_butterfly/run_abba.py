@@ -10,6 +10,7 @@ import copy
 import ctypes
 import errno
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -19,6 +20,7 @@ import selectors
 import shlex
 import shutil
 import signal
+import socket
 import stat
 import statistics
 import subprocess
@@ -36,6 +38,7 @@ except ImportError:  # Verification remains usable on non-POSIX hosts.
 SCHEMA = "leopard2-backend-butterfly-abba/v6"
 RAW_SCHEMA = "leopard2-backend-butterfly-raw/v1"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
+PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
 SUPPORTED_BACKENDS = ("ssse3", "avx2")
 SEQUENCES = (("A1", "baseline"), ("B1", "candidate"),
              ("B2", "candidate"), ("A2", "baseline"))
@@ -3035,6 +3038,200 @@ def matrix_record(path, repo, candidate_commit):
     }
 
 
+def pair_lease_payload(cpu, sibling, uid=None):
+    retained_uid = os.getuid() if uid is None else uid
+    require(isinstance(cpu, int) and not isinstance(cpu, bool) and cpu >= 0 and
+            isinstance(sibling, int) and not isinstance(sibling, bool) and
+            sibling >= 0 and cpu != sibling and
+            isinstance(retained_uid, int) and not isinstance(retained_uid, bool) and
+            retained_uid >= 0,
+            "pair lease requires distinct non-negative CPUs and UID")
+    return {
+        "cpus": sorted((cpu, sibling)),
+        "schema": PAIR_LEASE_SCHEMA,
+        "uid": retained_uid,
+    }
+
+
+def pair_lease_name(cpu, sibling, uid=None):
+    payload = pair_lease_payload(cpu, sibling, uid)
+    return "leopard2-cpu-pair-{}-{}-{}.lock".format(
+        payload["uid"], payload["cpus"][0], payload["cpus"][1])
+
+
+def pair_lease_directory(uid=None):
+    retained_uid = os.getuid() if uid is None else uid
+    return pair_lease_runtime_root(retained_uid) / "leopard2-cpu-leases"
+
+
+class PairLease(object):
+    """Serialize legacy and current evidence runners by physical CPU pair."""
+
+    def __init__(self, cpu, sibling, root=None):
+        pair_lease_payload(cpu, sibling)
+        self.cpu = cpu
+        self.sibling = sibling
+        self.production_root = root is None
+        self.root = pair_lease_directory() if root is None else Path(root)
+        self.path = self.root / pair_lease_name(cpu, sibling)
+        self.descriptor = None
+        self.identity = None
+        self.kernel_socket = None
+        material = canonical_bytes({
+            "cpus": sorted((cpu, sibling)),
+            "root": os.path.abspath(os.fspath(self.root)),
+            "schema": PAIR_LEASE_SCHEMA,
+            "uid": os.getuid(),
+        })
+        self.kernel_name = b"\0leopard2-pair-v1-" + \
+            hashlib.sha256(material).hexdigest()[:40].encode("ascii")
+
+    def _acquire_kernel_lease(self):
+        require(sys.platform.startswith("linux") and hasattr(socket, "AF_UNIX"),
+                "Linux abstract Unix sockets are required for stable CPU leases")
+        lease = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        lease.set_inheritable(False)
+        try:
+            lease.bind(self.kernel_name)
+        except OSError as error:
+            lease.close()
+            if error.errno == errno.EADDRINUSE:
+                raise EvidenceError(
+                    "physical CPU pair already has a kernel lease")
+            raise EvidenceError(
+                "cannot bind stable CPU pair lease: {}".format(error))
+        self.kernel_socket = lease
+
+    def _release_kernel_lease(self):
+        if self.kernel_socket is not None:
+            self.kernel_socket.close()
+            self.kernel_socket = None
+
+    def _validate_directory(self):
+        if self.production_root:
+            runtime = os.lstat(self.root.parent)
+            require(stat.S_ISDIR(runtime.st_mode) and
+                    runtime.st_uid == os.getuid() and
+                    stat.S_IMODE(runtime.st_mode) == 0o700,
+                    "CPU pair runtime directory is not owned mode-0700")
+        directory = os.lstat(self.root)
+        require(stat.S_ISDIR(directory.st_mode) and
+                directory.st_uid == os.getuid() and
+                stat.S_IMODE(directory.st_mode) == 0o700,
+                "CPU pair lease directory is not owned mode-0700")
+        return directory
+
+    def validate_current(self):
+        require(self.descriptor is not None and self.identity is not None and
+                self.kernel_socket is not None and
+                self.kernel_socket.fileno() >= 0 and
+                self.kernel_socket.getsockname() == self.kernel_name,
+                "CPU pair lease is not held")
+        try:
+            directory = self._validate_directory()
+            descriptor = os.fstat(self.descriptor)
+            path = os.lstat(self.path)
+        except OSError as error:
+            raise EvidenceError(
+                "CPU pair lease path/descriptor revalidation failed: {}".format(
+                    error))
+        require(stat.S_ISREG(descriptor.st_mode) and
+                descriptor.st_uid == os.getuid() and descriptor.st_nlink == 1 and
+                stat.S_IMODE(descriptor.st_mode) == 0o600 and
+                (descriptor.st_dev, descriptor.st_ino) ==
+                (path.st_dev, path.st_ino) ==
+                (self.identity["device"], self.identity["inode"]),
+                "CPU pair lease path was replaced or changed")
+        require((directory.st_dev, directory.st_ino) ==
+                (self.identity["directory_device"],
+                 self.identity["directory_inode"]),
+                "CPU pair lease directory was replaced")
+        expected = canonical_bytes(pair_lease_payload(self.cpu, self.sibling))
+        os.lseek(self.descriptor, 0, os.SEEK_SET)
+        require(os.read(self.descriptor, 4096) == expected,
+                "CPU pair lease contents changed while held")
+        return self.identity
+
+    def __enter__(self):
+        require(fcntl is not None and sys.platform.startswith("linux"),
+                "stable CPU pair leases require Linux fcntl")
+        self._acquire_kernel_lease()
+        try:
+            try:
+                self.root.mkdir(mode=0o700)
+                os.chmod(self.root, 0o700)
+            except FileExistsError:
+                pass
+            self._validate_directory()
+            flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | \
+                getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+            created = False
+            before = None
+            try:
+                before = os.lstat(self.path)
+                require(stat.S_ISREG(before.st_mode),
+                        "CPU pair lease path is not regular")
+                self.descriptor = os.open(self.path, flags)
+            except FileNotFoundError:
+                self.descriptor = os.open(
+                    self.path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+                created = True
+            if created:
+                os.fchmod(self.descriptor, 0o600)
+            metadata = os.fstat(self.descriptor)
+            path = os.lstat(self.path)
+            require(stat.S_ISREG(metadata.st_mode) and
+                    metadata.st_uid == os.getuid() and metadata.st_nlink == 1 and
+                    stat.S_IMODE(metadata.st_mode) == 0o600 and
+                    (metadata.st_dev, metadata.st_ino) ==
+                    (path.st_dev, path.st_ino) and
+                    (before is None or (metadata.st_dev, metadata.st_ino) ==
+                     (before.st_dev, before.st_ino)),
+                    "CPU pair lease file has unsafe type, links, mode, or identity")
+            try:
+                fcntl.flock(self.descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise EvidenceError("physical CPU pair is already leased") from error
+            expected = canonical_bytes(pair_lease_payload(self.cpu, self.sibling))
+            os.lseek(self.descriptor, 0, os.SEEK_SET)
+            retained = os.read(self.descriptor, 4096)
+            if not retained:
+                require(os.write(self.descriptor, expected) == len(expected),
+                        "short CPU pair lease write")
+                os.fsync(self.descriptor)
+                retained = expected
+            require(retained == expected,
+                    "CPU pair lease has unexpected contents")
+            directory = self._validate_directory()
+            self.identity = {
+                "device": metadata.st_dev,
+                "directory_device": directory.st_dev,
+                "directory_inode": directory.st_ino,
+                "inode": metadata.st_ino,
+                "lock": "exclusive_nonblocking_pair_wide",
+                "path": str(self.path.absolute()),
+                "payload": pair_lease_payload(self.cpu, self.sibling),
+                "sha256": sha256_bytes(retained),
+            }
+            return self.validate_current()
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
+
+    def __exit__(self, exc_type, exc, tb):
+        descriptor = self.descriptor
+        self.descriptor = None
+        self.identity = None
+        try:
+            if descriptor is not None:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                finally:
+                    os.close(descriptor)
+        finally:
+            self._release_kernel_lease()
+
+
 def pair_lease_runtime_root(uid=None):
     """Return the user-owned, root-anchored runtime directory shared by runners."""
     retained_uid = os.getuid() if uid is None else uid
@@ -3107,11 +3304,20 @@ class StableLeaseAnchor(object):
 
 
 class ReservationHandle(object):
-    """Release the replaceable reservation inode and stable anchor together."""
+    """Release the reservation, stable anchor, and legacy pair lease together."""
 
-    def __init__(self, handle, anchor):
+    def __init__(self, handle, anchor, pair):
         self.handle = handle
         self.anchor = anchor
+        self.pair = pair
+
+    def validate_current(self):
+        require(self.handle is not None and not self.handle.closed,
+                "CPU reservation is not held")
+        require(self.anchor is not None and self.pair is not None,
+                "CPU reservation guards are not held")
+        self.anchor.validate_current()
+        self.pair.validate_current()
 
     def close(self):
         try:
@@ -3123,18 +3329,28 @@ class ReservationHandle(object):
                 finally:
                     handle.close()
         finally:
-            if self.anchor is not None:
-                anchor = self.anchor
-                self.anchor = None
-                anchor.release()
+            try:
+                if self.anchor is not None:
+                    anchor = self.anchor
+                    self.anchor = None
+                    anchor.release()
+            finally:
+                if self.pair is not None:
+                    pair = self.pair
+                    self.pair = None
+                    pair.__exit__(None, None, None)
 
 
 def reservation_record(path, cpu, sibling, runtime_root=None):
     require(fcntl is not None,
             "evidence collection requires Linux/POSIX fcntl file locking")
+    pair_root = None if runtime_root is None else \
+        Path(runtime_root) / "leopard2-cpu-leases"
+    pair = PairLease(cpu, sibling, root=pair_root)
     anchor = StableLeaseAnchor(runtime_root)
     handle = None
     try:
+        pair.__enter__()
         anchor.acquire()
         path = Path(path).resolve()
         require(path.is_file(), "reservation file missing")
@@ -3164,7 +3380,8 @@ def reservation_record(path, cpu, sibling, runtime_root=None):
                 len(document["nonce"]) >= 16,
                 "reservation nonce")
         anchor.validate_current()
-        return (ReservationHandle(handle, anchor),
+        pair.validate_current()
+        return (ReservationHandle(handle, anchor, pair),
                 {"sha256": sha256_bytes(canonical), "document": document})
     except BaseException:
         if handle is not None:
@@ -3172,7 +3389,10 @@ def reservation_record(path, cpu, sibling, runtime_root=None):
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
             finally:
                 handle.close()
-        anchor.release()
+        try:
+            anchor.release()
+        finally:
+            pair.__exit__(None, None, None)
         raise
 
 
@@ -3532,9 +3752,10 @@ def run_campaign(args, repo, allow_dirty=False, self_test=False):
     require(args.reserved_sibling in topology["cpus"] and
             args.reserved_sibling != args.cpu,
             "reserved CPU is not a distinct topology sibling")
-    reservation_handle, reservation = reservation_record(
-        args.reservation_file, args.cpu, args.reserved_sibling)
+    reservation_handle = None
     try:
+        reservation_handle, reservation = reservation_record(
+            args.reservation_file, args.cpu, args.reserved_sibling)
         output_directory = args.output.resolve()
         require(not output_directory.exists() or not any(output_directory.iterdir()),
                 "output directory must be absent or empty")
@@ -3605,6 +3826,7 @@ def run_campaign(args, repo, allow_dirty=False, self_test=False):
                 "stderr_sha256": sha256_bytes(completed.stderr),
                 "returncode": completed.returncode,
             })
+            reservation_handle.validate_current()
         campaign_end = time.time()
         require(reported_builds.get("baseline") == reported_builds.get("candidate"),
                 "baseline/candidate reported compiler identity mismatch")
@@ -3613,6 +3835,7 @@ def run_campaign(args, repo, allow_dirty=False, self_test=False):
         post_frequency = current_frequency(args.cpu)
         require(power_state(args.cpu) == static_power,
                 "CPU power/governor state changed during campaign")
+        reservation_handle.validate_current()
         execution["host"] = host_record(
             args.cpu, pre_frequency, post_frequency, static_power)
         validate_execution(execution)
@@ -3684,9 +3907,14 @@ def run_campaign(args, repo, allow_dirty=False, self_test=False):
         os.replace(str(validation_path), str(manifest_path))
         return manifest
     finally:
-        reservation_handle.close()
-        os.sched_setaffinity(0, set(initial_affinity))
-        shadow_context.cleanup()
+        try:
+            if reservation_handle is not None:
+                reservation_handle.close()
+        finally:
+            try:
+                os.sched_setaffinity(0, set(initial_affinity))
+            finally:
+                shadow_context.cleanup()
 
 
 def git_file_hashes(repo, commit, relatives):
@@ -4782,7 +5010,106 @@ def self_test(repo):
             anchored.unlink()
             anchored_old.rename(anchored)
             anchored_handle.close()
-        mutation_count = len(mutations) + 7
+
+        def load_interop_module(name, path):
+            specification = importlib.util.spec_from_file_location(name, path)
+            require(specification is not None and
+                    specification.loader is not None,
+                    "cannot load cross-runner lease oracle: " + name)
+            module = importlib.util.module_from_spec(specification)
+            sys.modules[name] = module
+            specification.loader.exec_module(module)
+            return module
+
+        def use_context(context):
+            with context:
+                pass
+
+        def expect_cross_failure(callback, expected, label):
+            try:
+                callback()
+            except expected:
+                return
+            raise EvidenceError("cross-runner lease overlap was accepted: " + label)
+
+        jerasure = load_interop_module(
+            "leopard2_butterfly_jerasure_lease_test",
+            repo / "tools/leopard2_jerasure_compare.py")
+        main_runner = load_interop_module(
+            "leopard2_butterfly_main_lease_test",
+            repo / "experiments/leopard2/main_compare/run_abba.py")
+        c7_runner = load_interop_module(
+            "leopard2_butterfly_c7_lease_test",
+            repo / "experiments/leopard2/non_power_of_two/c7/run_authoritative.py")
+
+        cross_runtime = root / "cross-runner-runtime"
+        cross_runtime.mkdir(mode=0o700)
+        cross_runtime.chmod(0o700)
+        cross_reservation = root / "cross-runner-reservation.json"
+        cross_reservation.write_bytes(canonical_bytes(reservation_document))
+
+        # The production acquisition owns both layers at once: legacy
+        # pair-only collectors are excluded by the file/socket lease, while
+        # current collectors are excluded by the non-replaceable anchor.
+        cross_handle, _cross_record = reservation_record(
+            cross_reservation, cpu, sibling, runtime_root=cross_runtime)
+        try:
+            expect_cross_failure(
+                lambda: use_context(jerasure.PairLease(
+                    sibling, cpu, root=cross_runtime)),
+                jerasure.ComparisonError,
+                "butterfly then Jerasure on the same pair")
+            expect_cross_failure(
+                lambda: use_context(main_runner.StableLeaseAnchor(cross_runtime)),
+                main_runner.EvidenceError,
+                "butterfly then exact-main stable anchor")
+            expect_cross_failure(
+                lambda: use_context(c7_runner.StableLeaseAnchor(cross_runtime)),
+                c7_runner.EvidenceError,
+                "butterfly then C7 stable anchor")
+
+            # A pair-only legacy collector on another core does not conflict
+            # with this pair.  The global anchor intentionally remains more
+            # conservative for current runners.
+            use_context(jerasure.PairLease(
+                cpu + 2000000, sibling + 2000000, root=cross_runtime))
+            cross_handle.validate_current()
+        finally:
+            cross_handle.close()
+
+        def acquire_backend(path, first, second):
+            handle, _record = reservation_record(
+                path, first, second, runtime_root=cross_runtime)
+            handle.close()
+
+        # Reverse acquisition is equally fail closed for both protocols.
+        with jerasure.PairLease(cpu, sibling, root=cross_runtime):
+            expect_cross_failure(
+                lambda: acquire_backend(cross_reservation, cpu, sibling),
+                EvidenceError,
+                "Jerasure then butterfly on the same pair")
+
+            disjoint_payload = dict(reservation_document)
+            disjoint_payload["benchmark_cpu"] = cpu + 2000000
+            disjoint_payload["reserved_sibling"] = sibling + 2000000
+            disjoint_reservation = root / "cross-runner-disjoint.json"
+            disjoint_reservation.write_bytes(canonical_bytes(disjoint_payload))
+            acquire_backend(
+                disjoint_reservation, cpu + 2000000, sibling + 2000000)
+
+        for label, anchor_type in (
+                ("exact-main", main_runner.StableLeaseAnchor),
+                ("C7", c7_runner.StableLeaseAnchor)):
+            with anchor_type(cross_runtime):
+                expect_cross_failure(
+                    lambda: acquire_backend(cross_reservation, cpu, sibling),
+                    EvidenceError,
+                    label + " stable anchor then butterfly")
+            # A failed second-stage anchor acquisition must unwind the pair
+            # lease; otherwise this legacy probe would still be rejected.
+            use_context(jerasure.PairLease(cpu, sibling, root=cross_runtime))
+
+        mutation_count = len(mutations) + 19
     print("butterfly ABBA v6 self-test passed: path-independent replay + {} adversarial mutations".format(
         mutation_count))
 
