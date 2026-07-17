@@ -367,6 +367,7 @@ private:
 
 void require_four_way_callsites(
     const TraceOpsGuard& trace,
+    leo2_backend execution_backend,
     leo2_field field,
     size_t public_bytes,
     const std::string& operation,
@@ -412,8 +413,9 @@ void require_four_way_callsites(
             operation + " has a GF16 forward fused-dispatch mismatch");
 
         const size_t transform_bytes = (public_bytes + 63U) & ~size_t(63U);
-        const bool expect_fused =
-            transform_bytes == 64U || transform_bytes == 128U;
+        const bool expect_fused = transform_bytes == 64U ||
+            (transform_bytes == 128U &&
+             execution_backend == LEO2_BACKEND_AVX2);
         if (expect_fused)
         {
             require(callsites.ifft_dit4_fused == callsites.ifft_dit4 &&
@@ -779,7 +781,9 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                 require(trace.ff16_calls() != 0,
                     "GF16 encode bypassed the context ops table");
             }
-            require_four_way_callsites(trace, test_case.field,
+            require_four_way_callsites(trace,
+                leo2_context_backend(contexts[context_i].context),
+                test_case.field,
                 test_case.bytes,
                 profile_name + " encode",
                 test_case.field == LEO2_FIELD_GF8 &&
@@ -797,7 +801,9 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                 require(trace.ff16_calls() != 0,
                     "GF16 decode bypassed the context ops table");
             }
-            require_four_way_callsites(trace, test_case.field,
+            require_four_way_callsites(trace,
+                leo2_context_backend(contexts[context_i].context),
+                test_case.field,
                 test_case.bytes,
                 profile_name + " decode", false);
             require(trace.xor_four_calls() != 0,
@@ -826,7 +832,9 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
             generic_recovery);
         require(trace.ff8_calls() != 0,
             "generic decode bypassed the context ops table");
-        require_four_way_callsites(trace, generic_case.field,
+        require_four_way_callsites(trace,
+            leo2_context_backend(contexts[context_i].context),
+            generic_case.field,
             generic_case.bytes,
             "generic high-profile decode", false);
         require(trace.xor_four_calls() != 0,

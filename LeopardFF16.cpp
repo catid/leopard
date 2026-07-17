@@ -52,12 +52,20 @@ static std::atomic<uint64_t> TestFFTDIT4FusedCalls(0);
 static std::atomic<uint64_t> TestFFTDIT4SplitCalls(0);
 #endif
 
-static inline bool UseFusedButterfly4(uint64_t bytes)
+static inline bool UseFusedButterfly4(
+    const backend::Ops& ops,
+    uint64_t bytes)
 {
-    // Whole-codec evidence qualifies only one or two complete ALTMAP tiles.
+    // Production retains the existing one-tile operation across backend
+    // tables.  Final-source x86 evidence also qualifies two tiles for AVX2,
+    // while the SSSE3 two-tile kernel regresses compact public tails that stage
+    // to 128 bytes.  A positive AVX2 check keeps the unmeasured native-ARM
+    // facade on the conservative schedule even though that facade currently
+    // carries a scalar Ops table.
     // Larger working sets retain the two-layer schedule, which has lower
-    // table/register pressure even though it performs more backend calls.
-    return bytes == 64 || bytes == 128;
+    // table/register pressure despite performing more backend calls.
+    return bytes == 64 ||
+        (bytes == 128 && ops.kind == LEO2_BACKEND_AVX2);
 }
 
 
@@ -846,7 +854,7 @@ static void IFFT_DIT4(
     const ffe_t log_m23,
     const ffe_t log_m02)
 {
-    const bool use_fused_four_way = UseFusedButterfly4(bytes);
+    const bool use_fused_four_way = UseFusedButterfly4(ops, bytes);
 #if defined(LEO2_ENABLE_TEST_HOOKS)
     TestIFFTDIT4Calls.fetch_add(1, std::memory_order_relaxed);
     (use_fused_four_way ? TestIFFTDIT4FusedCalls : TestIFFTDIT4SplitCalls)
@@ -1326,7 +1334,7 @@ static void FFT_DIT4(
     const ffe_t log_m23,
     const ffe_t log_m02)
 {
-    const bool use_fused_four_way = UseFusedButterfly4(bytes);
+    const bool use_fused_four_way = UseFusedButterfly4(ops, bytes);
 #if defined(LEO2_ENABLE_TEST_HOOKS)
     TestFFTDIT4Calls.fetch_add(1, std::memory_order_relaxed);
     (use_fused_four_way ? TestFFTDIT4FusedCalls : TestFFTDIT4SplitCalls)

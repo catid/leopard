@@ -51,14 +51,16 @@ The selected schedules are deliberately size-specific:
 - GF8 inverse butterflies remain fused for every shard size.
 - GF8 forward butterflies are fused through 1,024 bytes and use the qualified
   split two-way schedule above that size.
-- GF16 forward and inverse butterflies fuse only exact 64- and 128-byte
-  transform working sets. This includes a public 66-byte compact tail after
-  staging rounds it to 128 bytes. The field callsite classifies every radix-
-  four invocation before backend dispatch; a public 130-byte shard stages to
-  192 bytes and therefore uses the two-layer split schedule, as do all larger
-  working sets. Test-only counters independently prove total, fused, and split
-  inverse/forward selections for both profiles at 64, 66, 128, 130, and 1,026
-  public bytes.
+- GF16 forward and inverse butterflies dispatch exact 64-byte transform
+  working sets through the fused operation on every backend. AVX2 also fuses
+  exact 128-byte working sets. SSSE3 keeps the two-layer split schedule at
+  128 bytes because
+  final-source whole-codec evidence found regressions for public 66-byte compact
+  tails after staging rounded them to 128 bytes. A public 130-byte shard stages
+  to 192 bytes and therefore uses the split schedule on every backend, as do all
+  larger working sets. Test-only counters independently prove total, fused, and
+  split inverse/forward selections for each traced x86 context and both profiles
+  at 64, 66, 128, 130, and 1,026 public bytes.
 - Scalar kernels retain the straightforward reference-equivalent operation
   order.
 
@@ -86,8 +88,10 @@ instruction counts.
 - A field-side shortcut was rejected by the tracing test because it bypassed
   the selected context's four-way entry.
 
-Only exact 64-/128-byte GF16 fused tiles and the measured GF8 cutover remain in
-production.
+Only exact 64-byte GF16 fused tiles on every backend, exact 128-byte tiles on
+AVX2, and the measured GF8 cutover remain in production. The 64-byte route is
+covered for correctness across the available x86 backends; the final-source
+performance campaigns below cover explicit SSSE3 and AVX2 on this x86 host.
 
 ## Failed final-source AVX2 campaign and policy correction
 
@@ -108,9 +112,10 @@ four GF16 cells fell below the fixed `-2%` lower-confidence floor:
 The 130-byte result exposed the implementation error most directly: staging
 rounded it to a 192-byte transform buffer, but the field callsite sent every
 size through the fused four-way backend. The production correction now sends
-only 64 and 128 transform bytes through `ff16_*_butterfly4`; every larger size
-executes the historical two `ff16_*_butterfly2` layers with identical modulus
-XOR semantics. This is a measured size policy, not a field or wire change.
+64 transform bytes on every backend and 128 bytes only on AVX2 through
+`ff16_*_butterfly4`; every larger size executes the historical two
+`ff16_*_butterfly2` layers with identical modulus XOR semantics. This is a
+measured size/backend policy, not a field or wire change.
 
 The ignored failed artifacts are under
 `.research/leopard2/context-xor4/final-ca52c4e-v6-avx2-clean1/`:
@@ -122,6 +127,37 @@ The ignored failed artifacts are under
 
 These results are retained rather than resampled or excluded. They do not
 qualify either the old candidate or the corrected source.
+
+## Corrected final-source campaigns
+
+The corrected size cutoff was measured from commit `5433f88` against a matched
+control that disabled the remaining GF16 fusion and restored the historical
+GF8 split choices. Both explicit-backend campaigns completed all 1,664 planned
+ABBA invocations pinned to CPU 14 while the runner reserved SMT sibling 30.
+Neither failed campaign was resampled.
+
+The AVX2 candidate showed strong GF16 gains at the intended sizes: roughly
+29 percent for high-rate 64-byte encode/decode, 20/5 percent for low-rate
+64-byte encode/decode, and 10/8 percent for a high-rate public 66-byte tail.
+Its manifest nevertheless failed the declared whole-campaign gate because two
+large GF16 decode cells, whose candidate and control both selected the split
+schedule, had near-zero point estimates but one-sided confidence bounds just
+below the fixed -2 percent neighboring floor. The retained manifest SHA-256 is
+`8124004310308ad9d232ff0c56f66a4b87366497c1a382975ac7a17d83c67532`;
+the raw bundle SHA-256 is
+`0b4c2a6fe17b1466a90a2812220b3720af45bcff37e44e152ddb5b5a252f9e23`.
+
+The SSSE3 campaign exposed a real size-specific loss. Its exact 64-byte GF16
+cells improved, but the staged 128-byte treatment regressed high-rate decode by
+2.40 percent and low-rate encode by 5.92 percent for public 66-byte shards. The
+retained manifest SHA-256 is
+`86ac9698c9085b37db540796252dc90e909c1e068f0a24dac20d85bcf0353e29`;
+the raw bundle SHA-256 is
+`cc243b91e323405917cab0d969ac90111ce5850565915f26bd0171a6c2445b42`.
+Production therefore keeps SSSE3 fusion at exactly 64 transform bytes and uses
+the split schedule at 128 bytes. AVX2 retains both qualified sizes. A fresh
+source-bound matrix and matched-control campaign are required before closing
+the backend bead.
 
 ## Historical pre-R1 correctness, safety, and portability evidence
 
@@ -268,9 +304,10 @@ experiment has a single production-runtime treatment. The GF8 control retains
 the documented two-layer replacements. For GF16, leave the new >128-byte
 split schedule byte-identical and change only `UseFusedButterfly4()` to select
 no sizes in the control. Candidate and control therefore differ only for the
-still-enabled 64-/128-byte GF16 fused regime; 130-byte and larger cells execute
-the same split schedule in both. Configure clean tests-disabled Unix Makefiles
-Release builds for both trees with `LEO2_BACKEND_VARIANT=auto`,
+still-enabled backend-specific GF16 fused regime: 64/128 bytes for AVX2 and
+64 bytes for SSSE3. The 130-byte and larger cells execute the same split
+schedule in both. Configure clean tests-disabled Unix Makefiles Release builds
+for both trees with `LEO2_BACKEND_VARIANT=auto`,
 `LEO2_BUILD_BENCHMARKS=ON`, `LEO2_BUILD_TESTS=OFF`, and
 `CMAKE_EXPORT_COMPILE_COMMANDS=ON`.
 
@@ -300,6 +337,10 @@ Repeat with `--backend ssse3 --output ABBA_SSSE3`. Do not run other memory-
 intensive jobs during either pinned phase. Each manifest can then be replayed
 with `run_abba.py verify`; v6 checks the embedded raw evidence and matrix and
 will not accept the historical v5 schema.
+
+For AVX2, candidate and control differ at the 64- and 128-byte GF16 schedule
+choices. For SSSE3, they differ only at 64 bytes; both select the split schedule
+at 128 bytes. Scalar and native-ARM performance remain separate evidence gates.
 
 Replay the historical evidence with the historical v5 collector from the
 named candidate commit, without substituting a different build-path binary.
