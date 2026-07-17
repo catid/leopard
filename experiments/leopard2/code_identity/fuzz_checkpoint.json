@@ -1,7 +1,7 @@
 {
-  "schema": "leopard2-code-identity-fuzz-checkpoint-v1",
+  "schema": "leopard2-code-identity-fuzz-checkpoint-v2",
   "date_utc": "2026-07-17",
-  "implementation_commit": "d5d605bcb6e53fa96feec5e6c2e02d15b914c013",
+  "implementation_commit": "383b65e465e061191f291d8048278f3c9c35c113",
   "build": {
     "compiler": "Ubuntu clang 18.1.3 (1ubuntu1)",
     "sanitizers": [
@@ -18,22 +18,51 @@
     "initial_files": 178,
     "initial_bytes": 5803,
     "largest_initial_file_bytes": 273,
-    "final_files": 2458
+    "initial_content_sha256": "eba259c4080fc26794689cd746444583183fa2ae0fdb91d11a5ad90908dd27e2",
+    "canonical_seed_input_list_sha256": "0b329b7d3e824f2018566a7c0cf34f81fcb0a8521802079465fda444b4a5999d"
   },
   "campaign": {
+    "source_commit": "383b65e465e061191f291d8048278f3c9c35c113",
+    "source_dirty": false,
     "allowed_logical_cpus": 28,
-    "workers": 28,
+    "workers_per_campaign": 28,
+    "campaign_count": 2,
     "runs_per_worker": 50000,
-    "total_runs": 1400000,
-    "seed": 1279609156,
+    "total_runs_per_campaign": 1400000,
+    "total_runs_all_campaigns": 2800000,
+    "base_seed": 1279609156,
+    "seed_step": 2654435769,
+    "distinct_logged_seeds_per_campaign": 28,
     "max_input_bytes": 65535,
     "libfuzzer_rss_limit_mb": 8192,
-    "maximum_reported_worker_rss_mb": 60,
-    "maximum_edge_coverage": 455,
-    "maximum_feature_coverage": 1307,
+    "external_rss_limit_mb": 10240,
+    "maximum_reported_worker_rss_mb": 66,
+    "maximum_externally_observed_worker_rss_kib": 66256,
+    "maximum_edge_coverage": 454,
+    "maximum_feature_coverage": 1295,
     "crash_or_sanitizer_artifacts": 0,
-    "valid_for_independent_seed_requirement": false,
-    "rejection": "all workers reused one seed and concurrently mutated one shared corpus"
+    "canonical_seed_order": true,
+    "isolated_seed_corpora": true,
+    "isolated_mutable_corpora": true,
+    "isolated_artifact_directories": true,
+    "deterministic_content_addressed_merge_for_fixed_inputs": true,
+    "same_seed_repeat_output_byte_identical": false,
+    "same_seed_repeat_note": "the same-seed repeat varied after canonical input ordering; exact final-corpus replay is not claimed, while seeds, starting corpus/order, commands, and retained outputs remain fully bound",
+    "runner_unit_tests": 7,
+    "campaigns": [
+      {
+        "manifest_sha256": "b117e96b9fc66460383ea7c86b83b93b4ad1e81e2a64bafeedee8e30bdd7ae65",
+        "merged_corpus_files": 2368,
+        "merged_corpus_bytes": 123362,
+        "merged_corpus_content_sha256": "6efff7ac0f4e3fa434068ec65c9f65e2b11ca8620ab0f1c4bf83bdb50ff44aab"
+      },
+      {
+        "manifest_sha256": "6349ce0bc4303092322186e6eb111de6c0a75d9febe814953cd8e23ca1baa774",
+        "merged_corpus_files": 2367,
+        "merged_corpus_bytes": 122146,
+        "merged_corpus_content_sha256": "e18b41b8436c469377fd7fee6623001727a68acb4e6a4540b28e1c42a4d94b69"
+      }
+    ]
   },
   "native_differential": {
     "python_unittests": 12,
@@ -66,5 +95,5 @@
     "canonical_mutations": 1384,
     "mismatches": 0
   },
-  "disposition": "campaign-rejected-pending-distinct-seed-isolated-corpus-rerun"
+  "disposition": "experimental-default-off-pending-public-storage-contract"
 }

@@ -207,24 +207,42 @@ seed and execution counts, rejects sanitizer markers and timeouts, retains each
 log, enforces an externally observed resident-memory limit in addition to
 libFuzzer's own accounting, and merges successful corpora by content hash.  The
 runner supplies the seed files in explicit sorted order and disables startup
-shuffle and periodic reload, so a same-seed repeat is content-reproducible.  It
-refuses dirty source or nonempty result directories.  `test_fuzz_campaign.py`
+shuffle and periodic reload, making the starting state and order reproducible.
+The final libFuzzer corpora are not promised byte-identical across launches:
+the same-seed repeat below varied after canonical input ordering.  Here,
+deterministic merge means that a fixed set of retained worker corpora produces
+the same content-addressed result regardless of worker order; exact libFuzzer
+corpus replay is not assumed.  The runner refuses dirty source or nonempty
+result directories.  `test_fuzz_campaign.py`
 covers stable distinct seeds, isolated corpora, order-independent merging, stale
 directories, malformed logs, sanitizer markers, a bounded timeout, and the
-external RSS cap.  A replacement 28-worker campaign must update
-`fuzz_checkpoint.json` before the fuzz gate is considered satisfied.
+external RSS cap.
+
+At runner commit `383b65e`, two clean same-seed replacement campaigns each ran
+28 affinity-pinned workers for 50,000 executions: 1,400,000 executions and 28
+distinct logged seeds per campaign.  Every worker had a private canonical copy
+of the 178-file, 5,803-byte seed corpus, a private mutable corpus, and a private
+artifact directory.  Both campaigns completed with zero crash or sanitizer
+artifacts, maximum libFuzzer-reported RSS 66 MiB, maximum externally observed
+RSS 66,256 KiB, edge coverage 454, and feature coverage 1,295.  Their merged
+corpora contained 2,368 files / 123,362 bytes and 2,367 files / 122,146 bytes,
+respectively.  The expected final-corpus variation is retained rather than
+misrepresented as exact replay; both manifests bind every worker seed, CPU,
+execution count, log hash, seed-corpus hash, result-corpus hash, and the fuzzer
+binary.  Manifest SHA-256 values are
+`b117e96b9fc66460383ea7c86b83b93b4ad1e81e2a64bafeedee8e30bdd7ae65`
+and `6349ce0bc4303092322186e6eb111de6c0a75d9febe814953cd8e23ca1baa774`.
+The compact committed summary is `fuzz_checkpoint.json`; raw corpora and logs
+remain ignored build artifacts.
 
 The same 217 direct C checks and complete differential matrix passed in a
 statically linked s390x binary under QEMU 8.2.2 with zero mismatch, providing
-executed big-endian evidence rather than an inference from byte-wise loads.  Raw
-corpora and worker logs remain ignored build artifacts.
+executed big-endian evidence rather than an inference from byte-wise loads.
 
-The independent implementation, deterministic sanitized differential, and
-emulated big-endian research gates are satisfied, including the frozen
-experimental exact-low identity.  The coverage-guided target is implemented,
-but its independent-seed campaign gate remains pending the replacement run
-described above.  Public promotion still requires a concrete API/storage use
-case and a deliberate
+The independent implementation, deterministic sanitized differential,
+coverage-guided campaign, and emulated big-endian research gates are satisfied,
+including the frozen experimental exact-low identity.  Public promotion still
+requires a concrete API/storage use case and a deliberate
 decision that the remaining exact-profile mathematics are stable enough to
 justify a long-term wire promise.  Kill or revise this proposal if the fixed
 header cannot represent a frozen profile without profile-specific
