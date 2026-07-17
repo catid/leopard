@@ -292,6 +292,227 @@ class CheckpointTests(unittest.TestCase):
             finally:
                 path.write_bytes(original)
 
+    def test_optional_normalized_artifacts_are_verified_snapshots(self) -> None:
+        requested = os.environ.get("LEO2_C7_TEST_MANIFEST")
+        if not requested:
+            self.skipTest("LEO2_C7_TEST_MANIFEST is not set")
+        data = json.loads(pathlib.Path(requested).read_text(encoding="utf-8"))
+        record = data["builds"][0]["configure_stdout"]
+        path = (ROOT / record["path"]).resolve()
+        original = path.read_bytes()
+        forged = original + b"\npost-read unauthenticated replacement\n"
+        swapped = threading.Event()
+        real_read = validate_evidence._read_file_once
+
+        def read_then_swap(
+            candidate: pathlib.Path, maximum_bytes: int,
+        ) -> bytes:
+            contents = real_read(candidate, maximum_bytes)
+            if candidate.resolve() == path and not swapped.is_set():
+                worker = threading.Thread(
+                    target=path.write_bytes, args=(forged,))
+                worker.start()
+                worker.join()
+                swapped.set()
+            return contents
+
+        try:
+            with mock.patch.object(
+                    validate_evidence, "_read_file_once",
+                    side_effect=read_then_swap):
+                validate_evidence.validate_manifest(data)
+            self.assertTrue(swapped.is_set())
+            self.assertEqual(path.read_bytes(), forged)
+        finally:
+            path.write_bytes(original)
+
+    def test_optional_live_binary_scans_use_verified_snapshots(self) -> None:
+        requested = os.environ.get("LEO2_C7_TEST_MANIFEST")
+        if not requested:
+            self.skipTest("LEO2_C7_TEST_MANIFEST is not set")
+        data = json.loads(pathlib.Path(requested).read_text(encoding="utf-8"))
+        source_root = pathlib.Path(
+            os.environ.get("LEO2_C7_TEST_PEER_ROOT", ROOT)).resolve()
+        real_read = validate_evidence._read_file_once
+        for output_key in ("library", "executable"):
+            record = data["builds"][0][output_key]
+            path = (ROOT / record["path"]).resolve()
+            original = path.read_bytes()
+            forged = b"binary replaced after authenticated read\n"
+            swapped = False
+
+            def read_then_swap(
+                candidate: pathlib.Path, maximum_bytes: int,
+            ) -> bytes:
+                nonlocal swapped
+                contents = real_read(candidate, maximum_bytes)
+                if candidate.resolve() == path and not swapped:
+                    path.write_bytes(forged)
+                    swapped = True
+                return contents
+
+            try:
+                with mock.patch.object(
+                        validate_evidence, "_read_file_once",
+                        side_effect=read_then_swap):
+                    validate_evidence.validate_manifest(
+                        data, source_root=source_root, evidence_root=ROOT,
+                        live=True)
+                self.assertTrue(swapped)
+                self.assertEqual(path.read_bytes(), forged)
+            finally:
+                path.write_bytes(original)
+
+    def test_optional_peer_binary_records_are_fully_cross_bound(self) -> None:
+        requested = os.environ.get("LEO2_C7_TEST_MANIFEST")
+        if not requested:
+            self.skipTest("LEO2_C7_TEST_MANIFEST is not set")
+        main = json.loads(pathlib.Path(requested).read_text(encoding="utf-8"))
+        comparison = main["reproducibility"]["comparison"]
+        peer = json.loads(
+            (ROOT / comparison["peer_manifest"]["path"]).read_text(
+                encoding="utf-8"))
+        bundle_bytes = (
+            ROOT / comparison["peer_evidence_bundle"]["path"]).read_bytes()
+        original_report = json.loads(
+            (ROOT / comparison["peer_attestation"]["path"]).read_text(
+                encoding="utf-8"))
+
+        for build_index in range(len(run_matrix.BUILD_NAMES)):
+            for output_key in ("library", "executable"):
+                forged_peer = json.loads(json.dumps(peer))
+                forged_peer["builds"][build_index][output_key]["bytes"] += 1
+                peer_bytes = (
+                    json.dumps(forged_peer, indent=2, sort_keys=True) +
+                    "\n").encode()
+                with tempfile.TemporaryDirectory(
+                        prefix=".c7-binary-cross-bind-", dir=ROOT
+                ) as directory:
+                    root = pathlib.Path(directory)
+
+                    def retain(name: str, contents: bytes) -> dict:
+                        path = root / name
+                        path.write_bytes(contents)
+                        return {
+                            "path": path.relative_to(ROOT).as_posix(),
+                            "bytes": len(contents),
+                            "sha256": hashlib.sha256(contents).hexdigest(),
+                        }
+
+                    peer_record = retain("peer-manifest.json", peer_bytes)
+                    bundle_record = retain(
+                        "peer-evidence-bundle.tar.gz", bundle_bytes)
+                    report = json.loads(json.dumps(original_report))
+                    report["peer_manifest_artifact"] = peer_record
+                    report["peer_evidence_bundle"] = bundle_record
+                    report_bytes = (
+                        json.dumps(report, indent=2, sort_keys=True) +
+                        "\n").encode()
+                    attestation_record = retain(
+                        "peer-reproducibility-attestation.json", report_bytes)
+                    candidate = json.loads(json.dumps(main))
+                    candidate_comparison = candidate[
+                        "reproducibility"]["comparison"]
+                    candidate_comparison["peer_manifest"] = peer_record
+                    candidate_comparison["peer_manifest_sha256"] = (
+                        peer_record["sha256"])
+                    candidate_comparison["peer_evidence_bundle"] = bundle_record
+                    candidate_comparison[
+                        "peer_attestation"] = attestation_record
+                    with self.assertRaises(ValueError):
+                        validate_evidence.validate_manifest(candidate)
+
+    def test_optional_retained_json_is_unambiguous_and_canonical(self) -> None:
+        requested = os.environ.get("LEO2_C7_TEST_MANIFEST")
+        if not requested:
+            self.skipTest("LEO2_C7_TEST_MANIFEST is not set")
+        main = json.loads(pathlib.Path(requested).read_text(encoding="utf-8"))
+        comparison = main["reproducibility"]["comparison"]
+        peer_bytes = (
+            ROOT / comparison["peer_manifest"]["path"]).read_bytes()
+        peer = json.loads(peer_bytes)
+        bundle_bytes = (
+            ROOT / comparison["peer_evidence_bundle"]["path"]).read_bytes()
+        report_bytes = (
+            ROOT / comparison["peer_attestation"]["path"]).read_bytes()
+        report = json.loads(report_bytes)
+
+        def forged_peer_rejected(forged_peer_bytes: bytes) -> None:
+            with tempfile.TemporaryDirectory(
+                    prefix=".c7-json-cross-bind-", dir=ROOT
+            ) as directory:
+                root = pathlib.Path(directory)
+
+                def retain(name: str, contents: bytes) -> dict:
+                    path = root / name
+                    path.write_bytes(contents)
+                    return {
+                        "path": path.relative_to(ROOT).as_posix(),
+                        "bytes": len(contents),
+                        "sha256": hashlib.sha256(contents).hexdigest(),
+                    }
+
+                peer_record = retain("peer-manifest.json", forged_peer_bytes)
+                bundle_record = retain(
+                    "peer-evidence-bundle.tar.gz", bundle_bytes)
+                forged_report = json.loads(json.dumps(report))
+                forged_report["peer_manifest_artifact"] = peer_record
+                forged_report["peer_evidence_bundle"] = bundle_record
+                attestation_record = retain(
+                    "peer-reproducibility-attestation.json",
+                    (json.dumps(forged_report, indent=2, sort_keys=True) +
+                     "\n").encode())
+                candidate = json.loads(json.dumps(main))
+                candidate_comparison = candidate[
+                    "reproducibility"]["comparison"]
+                candidate_comparison["peer_manifest"] = peer_record
+                candidate_comparison[
+                    "peer_manifest_sha256"] = peer_record["sha256"]
+                candidate_comparison["peer_evidence_bundle"] = bundle_record
+                candidate_comparison[
+                    "peer_attestation"] = attestation_record
+                with self.assertRaises(ValueError):
+                    validate_evidence.validate_manifest(candidate)
+
+        self.assertTrue(peer_bytes.startswith(b"{\n"))
+        forged_peer_rejected(
+            b'{\n  "status": "failed",\n' + peer_bytes[2:])
+        forged_peer_rejected(
+            json.dumps(peer, separators=(",", ":")).encode())
+
+        attestation_path = ROOT / comparison["peer_attestation"]["path"]
+        duplicate_attestation = (
+            b'{\n  "status": "failed",\n' + report_bytes[2:])
+        candidate = json.loads(json.dumps(main))
+        candidate_record = candidate["reproducibility"]["comparison"][
+            "peer_attestation"]
+        try:
+            attestation_path.write_bytes(duplicate_attestation)
+            candidate_record["bytes"] = len(duplicate_attestation)
+            candidate_record["sha256"] = hashlib.sha256(
+                duplicate_attestation).hexdigest()
+            with self.assertRaises(ValueError):
+                validate_evidence.validate_manifest(candidate)
+        finally:
+            attestation_path.write_bytes(report_bytes)
+
+        result_record = main["runs"][0]["result"]
+        result_path = ROOT / result_record["path"]
+        result_bytes = result_path.read_bytes()
+        self.assertTrue(result_bytes.startswith(b"{\n"))
+        duplicate_result = b'{\n  "status":"failed",\n' + result_bytes[2:]
+        candidate = json.loads(json.dumps(main))
+        candidate_record = candidate["runs"][0]["result"]
+        try:
+            result_path.write_bytes(duplicate_result)
+            candidate_record["bytes"] = len(duplicate_result)
+            candidate_record["sha256"] = hashlib.sha256(
+                duplicate_result).hexdigest()
+            with self.assertRaises(ValueError):
+                validate_evidence.validate_manifest(candidate)
+        finally:
+            result_path.write_bytes(result_bytes)
+
     def test_optional_authenticated_peer_rejects_exploits(self) -> None:
         current_path = os.environ.get("LEO2_C7_TEST_MANIFEST")
         peer_path_text = os.environ.get("LEO2_C7_TEST_PEER_MANIFEST")
@@ -483,6 +704,9 @@ class CheckpointTests(unittest.TestCase):
                     substituted["builds"][0]["source_closure"])
 
         for build_index, build in enumerate(peer["builds"]):
+            retained_directory = (
+                pathlib.PurePosixPath(build["configure_stdout"]["path"]).parent /
+                f"{build['name']}-dependencies").as_posix()
             for bad_jobs in (0, 9, "4", True):
                 candidate = json.loads(json.dumps(peer))
                 candidate["builds"][build_index]["jobs"] = bad_jobs
@@ -494,9 +718,61 @@ class CheckpointTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate_evidence.validate_manifest(dry_run, source_root=peer_root)
 
+            for dependency_index, dependency in enumerate(
+                    build["dependency_files"]):
+                relabeled = json.loads(json.dumps(build["dependency_files"]))
+                relabeled[dependency_index]["build_path"] = (
+                    f".research/leopard2/forged-dependencies/{build['name']}/"
+                    f"{pathlib.PurePosixPath(dependency['build_path']).name}")
+                with self.assertRaises(ValueError):
+                    validate_evidence.dependency_source_closure(
+                        relabeled, build["build_dir"], peer_root, peer_root,
+                        retained_directory, live=False)
+
+            swapped = json.loads(json.dumps(build["dependency_files"]))
+            swapped[0]["retained"], swapped[1]["retained"] = (
+                swapped[1]["retained"], swapped[0]["retained"])
+            with self.assertRaises(ValueError):
+                validate_evidence.dependency_source_closure(
+                    swapped, build["build_dir"], peer_root, peer_root,
+                    retained_directory, live=False)
+
+            other_build = peer["builds"][
+                (build_index + 1) % len(peer["builds"])]
+            cross_build = json.loads(json.dumps(build["dependency_files"]))
+            cross_build[0]["retained"] = json.loads(json.dumps(
+                other_build["dependency_files"][0]["retained"]))
+            with self.assertRaises(ValueError):
+                validate_evidence.dependency_source_closure(
+                    cross_build, build["build_dir"], peer_root, peer_root,
+                    retained_directory, live=False)
+
         dependency = peer["builds"][0]["dependency_files"][0]
         retained_path = peer_root / dependency["retained"]["path"]
         original_retained = retained_path.read_bytes()
+        forged_target = (
+            b"CMakeFiles/forged.dir/forged.cpp.o:" +
+            original_retained.split(b":", 1)[1])
+        relabeled_target = json.loads(json.dumps(
+            peer["builds"][0]["dependency_files"]))
+        first_build = peer["builds"][0]
+        first_retained_directory = (
+            pathlib.PurePosixPath(
+                first_build["configure_stdout"]["path"]).parent /
+            f"{first_build['name']}-dependencies").as_posix()
+        relabeled_record = relabeled_target[0]["retained"]
+        try:
+            retained_path.write_bytes(forged_target)
+            relabeled_record["bytes"] = len(forged_target)
+            relabeled_record["sha256"] = hashlib.sha256(
+                forged_target).hexdigest()
+            with self.assertRaises(ValueError):
+                validate_evidence.dependency_source_closure(
+                    relabeled_target, first_build["build_dir"], peer_root,
+                    peer_root, first_retained_directory, live=False)
+        finally:
+            retained_path.write_bytes(original_retained)
+
         forged_retained = (
             f"object: {run_matrix.NORMALIZATION_TOKEN}/leopard.cpp\n".encode())
         candidate = json.loads(json.dumps(peer))

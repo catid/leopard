@@ -255,8 +255,15 @@ translation units, their complete project-header dependency set, top-level
 CMake input, and package-config template).  It also retains all 11 compiler
 dependency files after exact checkout-root normalization; the validator
 reparses those records and requires that they reconstruct precisely that
-closure.  The build job count is a typed integer in `1..8`, and the normalized
-build command must end in the corresponding exact `-jN` argument.  The checker
+closure.  Each raw dependency record must also use the exact CMake target path
+under its declared build directory, name the same retained dependency artifact,
+keep that artifact in the exact dependency directory for the declared build
+role, and declare that exact object target on the dependency file's left-hand
+side; preserving a basename while relabeling or swapping the file within or
+across builds is rejected.  The
+build job count is a typed integer in `1..8`,
+and the normalized build command must end in the corresponding exact `-jN`
+argument.  The checker
 parses those logs rather than accepting a success label.  The current-core
 probe freezes 320 ASan and 54 UBSan references in the standalone harness and
 329 ASan and 87 UBSan references across all 11 named core-archive members,
@@ -274,6 +281,8 @@ uses checkout-relative source, archive, and output arguments for the same
 reason.  A two-checkout
 proof requires every backend's archive and executable hashes to agree and
 scans both retained text and binary bytes for either checkout root.  The
+scan authenticates and examines the same one-read byte snapshot for each
+artifact, so a concurrent path replacement cannot alter what was scanned.  The
 final manifest retains a machine-checkable `comparison` attestation: the exact
 peer-manifest artifact and SHA-256, a deterministic peer-evidence bundle, the
 canonical matching-fingerprint SHA-256, the five build names, and the exact
@@ -281,7 +290,8 @@ normalized-text/archive/executable scan counts.  It stores no checkout path.
 The bundle contains only the normalized configure/build/compile logs, CMake
 caches, symbol scans, dependency records, and child result/stdout/stderr needed
 for portable semantic replay; it deliberately does not copy generated archives
-or executables.  Its gzip and tar metadata are canonical, every member is
+or executables.  Its gzip and tar metadata are canonical, exactly one gzip
+member is permitted with no trailing padding or data, every tar member is
 indexed by size and SHA-256, and validation rejects traversal, links, devices,
 duplicates, noncanonical metadata, and bounded-size/decompression violations.
 It also retains a canonical peer-attestation JSON artifact that binds both
@@ -295,7 +305,9 @@ live validation, equality comparison, hashing, scanning, bundling, and
 attestation.  Subsequent changes to the peer manifest, logs, dependency files,
 archives, or executables cannot change the result.  The trusted local validator
 first checks the snapshot portably, then requires exact program-record
-equality, and only then performs one-time live tool and output replay;
+equality and complete peer/current archive and executable record equality
+(path, byte count, and SHA-256), and only then performs one-time live tool and
+output replay;
 peer-controlled tool redirection is never executed.  Every non-tool artifact
 path is checkout-relative, contains no
 parent traversal, and resolves within the declared Git worktree even through
@@ -305,7 +317,9 @@ portable validator checks retained bytes, semantic logs, exact program records,
 sanitizer equality, and member attribution without executing or requiring the
 recorded tools or unretained peer build outputs.  `--live` explicitly requires
 the current checkout's exact tools and independently rebuilt outputs and
-byte-replays both current `nm` scans.  Because all five current output hashes
+byte-replays both current `nm` scans.  Each archive and executable is read and
+authenticated once, then `nm` scans a private file made from that exact byte
+snapshot rather than reopening the mutable build-output path.  Because all five current output hashes
 and all program records must equal the peer records, this rechecks equivalent
 bytes; it does not claim to recover or re-open the historical peer inodes after
 the private generation snapshot has been discarded.
@@ -313,6 +327,23 @@ The retained validator likewise reads the peer manifest, semantic bundle, and
 attestation only once each, authenticates the size and SHA-256 of that exact
 in-memory byte string, and parses those same bytes.  A concurrent replacement
 of any backing path after its read cannot redirect subsequent parsing.
+Every normalized log, dependency file, symbol scan, and child result is also
+interpreted from the exact authenticated byte snapshot rather than reopening
+its backing path after hashing.  Live archives and executables receive the same
+snapshot treatment before symbol replay.
+All retained JSON parsing rejects duplicate object keys, non-standard numeric
+constants, and finite-syntax numbers that overflow to non-finite values.  The
+exact peer manifest and peer attestation must also
+match the runner's canonical sorted, indented serialization, so alternative
+whitespace or ambiguous-but-hash-consistent encodings cannot be substituted.
+
+The provenance boundary is explicit.  Dependency reconstruction proves the
+complete in-checkout project-header closure; absolute compiler and system
+dependency roots are intentionally not a hermetic sysroot inventory.  Live
+validation hashes and versions the recorded system tools and requires exact
+peer/current program records, but it assumes those trusted system-tool paths
+remain stable while they are invoked.  Concurrent privileged replacement of a
+compiler, linker, `nm`, or `taskset` pathname is outside this evidence model.
 
 Run-result validation fixes the exact build role, correctness/smoke kind,
 sanitizer leak/undefined-behavior environment, selected runtime backend,

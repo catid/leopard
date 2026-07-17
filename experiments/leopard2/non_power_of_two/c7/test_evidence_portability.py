@@ -10,6 +10,7 @@ import pathlib
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 import run_matrix
 import validate_evidence
@@ -302,8 +303,84 @@ class PortabilityTests(unittest.TestCase):
             bundle[:10], b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff")
         self.assertEqual(
             validate_evidence._read_peer_bundle(bundle, records), files)
-        with self.assertRaises(ValueError):
-            validate_evidence._read_peer_bundle(bundle + bundle, records)
+        empty_member = (
+            b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x02\xff\x03\x00"
+            b"\x00\x00\x00\x00\x00\x00\x00\x00")
+        for forged in (
+                bundle + bundle, empty_member + bundle, bundle + empty_member,
+                bundle + b"\0", bundle + b"\0" * 512):
+            with self.assertRaises(ValueError):
+                validate_evidence._read_peer_bundle(forged, records)
+
+    def test_strict_json_rejects_ambiguous_objects_and_constants(self) -> None:
+        self.assertEqual(
+            validate_evidence.strict_json_loads('{"a":1,"b":2}', "test"),
+            {"a": 1, "b": 2})
+        for document in ('{"a":1,"a":1}', '{"nested":{"x":0,"x":0}}',
+                         '{"value":NaN}', '{"value":Infinity}',
+                         '{"value":1e9999}'):
+            with self.assertRaises(ValueError):
+                validate_evidence.strict_json_loads(document, "test")
+
+    def test_root_scan_uses_authenticated_single_read_snapshots(self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="c7-root-scan-", dir=run_matrix.ROOT
+        ) as directory:
+            root = pathlib.Path(directory)
+
+            def retain(name: str, contents: bytes, *, normalized: bool) -> dict:
+                path = root / name
+                path.write_bytes(contents)
+                record = {
+                    "path": path.relative_to(run_matrix.ROOT).as_posix(),
+                    "bytes": len(contents),
+                    "sha256": hashlib.sha256(contents).hexdigest(),
+                }
+                if normalized:
+                    record["source_root_tokens"] = 0
+                return record
+
+            text_record = retain("retained.txt", b"safe\n", normalized=True)
+            builds = []
+            for name in run_matrix.BUILD_NAMES:
+                builds.append({
+                    "name": name,
+                    "library": retain(
+                        f"{name}.a", f"archive-{name}\n".encode(),
+                        normalized=False),
+                    "executable": retain(
+                        f"{name}.exe", f"executable-{name}\n".encode(),
+                        normalized=False),
+                })
+            manifest = {"retained": text_record, "builds": builds}
+            forbidden = root / "forbidden-checkout"
+            forged = f"{forbidden}/leopard2.cpp\n".encode()
+            real_read = run_matrix._read_file_once
+            for record in (text_record, builds[0]["library"]):
+                target = run_matrix.ROOT / record["path"]
+                original = target.read_bytes()
+                swapped = False
+
+                def read_then_swap(
+                    candidate: pathlib.Path, maximum_bytes: int,
+                ) -> bytes:
+                    nonlocal swapped
+                    contents = real_read(candidate, maximum_bytes)
+                    if candidate.resolve() == target.resolve() and not swapped:
+                        target.write_bytes(forged)
+                        swapped = True
+                    return contents
+
+                try:
+                    with mock.patch.object(
+                            run_matrix, "_read_file_once",
+                            side_effect=read_then_swap):
+                        run_matrix.require_no_root_bytes(
+                            manifest, run_matrix.ROOT, (forbidden,))
+                    self.assertTrue(swapped)
+                    self.assertEqual(target.read_bytes(), forged)
+                finally:
+                    target.write_bytes(original)
 
 
 if __name__ == "__main__":

@@ -49,6 +49,7 @@ PEER_BUNDLE_MAX_MEMBER_BYTES = 16 * 1024 * 1024
 PEER_BUNDLE_MAX_TOTAL_BYTES = 64 * 1024 * 1024
 PEER_BUNDLE_MAX_ARCHIVE_BYTES = (
     PEER_BUNDLE_MAX_TOTAL_BYTES + PEER_BUNDLE_MAX_MEMBERS * 2048 + 1024 * 1024)
+C7_BINARY_MAX_BYTES = 64 * 1024 * 1024
 PREFIX_MAP_OPTIONS = (
     "-ffile-prefix-map", "-fdebug-prefix-map", "-fmacro-prefix-map")
 EXPECTED_EXECUTABLE_SANITIZER_COUNTS = {
@@ -782,9 +783,15 @@ def authenticate_peer(
     return peer
 
 
-def checkout_artifact_path(
-    record: dict[str, Any], source_root: pathlib.Path, label: str,
-) -> pathlib.Path:
+def _read_file_once(path: pathlib.Path, maximum_bytes: int) -> bytes:
+    with path.open("rb") as stream:
+        return stream.read(maximum_bytes + 1)
+
+
+def checkout_artifact_bytes(
+    record: dict[str, Any], source_root: pathlib.Path, label: str, *,
+    maximum_bytes: int,
+) -> bytes:
     if not isinstance(record, dict) or not isinstance(record.get("path"), str):
         raise RuntimeError(f"{label} artifact record is malformed")
     pure = pathlib.PurePosixPath(record["path"])
@@ -798,12 +805,19 @@ def checkout_artifact_path(
         path.resolve(strict=False).relative_to(root)
     except ValueError as error:
         raise RuntimeError(f"{label} artifact path escapes its checkout") from error
-    if (not path.is_file() or type(record.get("bytes")) is not int or
-            path.stat().st_size != record["bytes"] or
-            not isinstance(record.get("sha256"), str) or
-            sha256(path) != record["sha256"]):
+    size = record.get("bytes")
+    expected = record.get("sha256")
+    if (type(size) is not int or not 0 <= size <= maximum_bytes or
+            not isinstance(expected, str) or not SHA256_RE.fullmatch(expected)):
+        raise RuntimeError(f"{label} artifact record is malformed")
+    try:
+        contents = _read_file_once(path, maximum_bytes)
+    except OSError as error:
+        raise RuntimeError(f"{label} artifact cannot be read") from error
+    if (len(contents) != size or
+            hashlib.sha256(contents).hexdigest() != expected):
         raise RuntimeError(f"{label} artifact bytes differ from its record")
-    return path
+    return contents
 
 
 def peer_portable_artifact_records(
@@ -852,26 +866,30 @@ def capture_peer_snapshot(
             PEER_BUNDLE_MAX_TOTAL_BYTES):
         raise RuntimeError("peer snapshot exceeds its structural limits")
 
+    snapshot_bytes = 0
+
     def retain(path_text: str, contents: bytes) -> None:
+        nonlocal snapshot_bytes
         pure = pathlib.PurePosixPath(path_text)
         if (pure.is_absolute() or pure.as_posix() != path_text or
                 "\\" in path_text or ":" in path_text or
                 any(part in ("", ".", "..") for part in pure.parts) or
-                path_text in files):
-            raise RuntimeError("peer snapshot path is noncanonical or duplicated")
+                path_text in files or
+                len(contents) > PEER_BUNDLE_MAX_MEMBER_BYTES or
+                snapshot_bytes + len(contents) > PEER_BUNDLE_MAX_TOTAL_BYTES):
+            raise RuntimeError(
+                "peer snapshot path, identity, or size is invalid")
         destination = snapshot_root.joinpath(*pure.parts)
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(contents)
         destination.chmod(0o444)
         files[path_text] = contents
+        snapshot_bytes += len(contents)
 
     for index, record in enumerate(records):
-        source = checkout_artifact_path(
-            record, peer_root, f"peer snapshot artifact {index}")
-        contents = source.read_bytes()
-        if (len(contents) != record["bytes"] or
-                hashlib.sha256(contents).hexdigest() != record["sha256"]):
-            raise RuntimeError("peer artifact changed while being snapshotted")
+        contents = checkout_artifact_bytes(
+            record, peer_root, f"peer snapshot artifact {index}",
+            maximum_bytes=PEER_BUNDLE_MAX_MEMBER_BYTES)
         retain(record["path"], contents)
 
     for build in peer["builds"]:
@@ -887,10 +905,14 @@ def capture_peer_snapshot(
                 source.resolve(strict=False).relative_to(peer_root.resolve())
             except ValueError as error:
                 raise RuntimeError("peer dependency path escapes checkout") from error
-            if not source.is_file():
-                raise RuntimeError("peer dependency file is missing")
-            normalized = normalize_checkout_root(
-                source.read_text(encoding="utf-8", errors="strict"), peer_root)[0]
+            try:
+                raw = _read_file_once(source, PEER_BUNDLE_MAX_MEMBER_BYTES)
+                if len(raw) > PEER_BUNDLE_MAX_MEMBER_BYTES:
+                    raise RuntimeError("peer dependency file is too large")
+                text = raw.decode("utf-8", errors="strict")
+            except (OSError, UnicodeDecodeError) as error:
+                raise RuntimeError("peer dependency file cannot be read") from error
+            normalized = normalize_checkout_root(text, peer_root)[0]
             retained_path = entry["retained"]["path"]
             if files.get(retained_path) != normalized.encode("utf-8"):
                 raise RuntimeError("peer dependency snapshot differs from retained copy")
@@ -919,17 +941,17 @@ def require_no_root_bytes(
         raise RuntimeError("normalized manifest leaked an A/B checkout root")
     text_records = list(normalized_text_records(manifest))
     for index, record in enumerate(text_records):
-        path = checkout_artifact_path(
-            record, source_root, f"normalized text {index}")
-        contents = path.read_bytes()
+        contents = checkout_artifact_bytes(
+            record, source_root, f"normalized text {index}",
+            maximum_bytes=PEER_BUNDLE_MAX_MEMBER_BYTES)
         if any(needle in contents for needle in needles):
             raise RuntimeError("normalized retained text leaked an A/B checkout root")
     by_name = {build["name"]: build for build in manifest["builds"]}
     for name in BUILD_NAMES:
         for key in ("library", "executable"):
-            path = checkout_artifact_path(
-                by_name[name][key], source_root, f"{name} {key}")
-            contents = path.read_bytes()
+            contents = checkout_artifact_bytes(
+                by_name[name][key], source_root, f"{name} {key}",
+                maximum_bytes=C7_BINARY_MAX_BYTES)
             if any(needle in contents for needle in needles):
                 raise RuntimeError("A/B binary leaked a checkout root")
     return {
