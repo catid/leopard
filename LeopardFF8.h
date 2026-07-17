@@ -153,8 +153,10 @@ void PrepareDecode(
     ffe_t* locator_logs); // n elements
 
 // Reuses locator contributions for permanent erasures (for example punctured
-// parent coordinates) and adds only the pattern-specific erasures.  The base
-// array must have been produced by PrepareDecode for permanent_erasures.
+// parent coordinates) and adds the pattern-specific erasures.  erasures may
+// include or exclude permanent_erasures; both conventions produce the union.
+// The base array must have been produced by PrepareDecode for
+// permanent_erasures.
 void PrepareDecodeWithPermanent(
     unsigned n,
     const uint8_t* erasures,
@@ -163,8 +165,22 @@ void PrepareDecodeWithPermanent(
     ffe_t* locator_logs); // n elements
 
 // Full-field FWHT implementation retained as an independent differential
-// oracle for the sparse active-parent locator path.
+// oracle for the sparse and dense active-parent locator paths.
 void PrepareDecodeWalshReference(
+    unsigned n,
+    const uint8_t* erasures,
+    ffe_t* locator_logs); // n elements
+
+// Active-parent Walsh convolution used by the dense production setup path.
+// Its work and output storage are both proportional to n.
+void PrepareDecodeWalshActive(
+    unsigned n,
+    const uint8_t* erasures,
+    ffe_t* locator_logs); // n elements
+
+// Scalar active-parent direct product retained as the independent dense-path
+// oracle and selected for sparse erasure sets.
+void PrepareDecodeDirect(
     unsigned n,
     const uint8_t* erasures,
     ffe_t* locator_logs); // n elements

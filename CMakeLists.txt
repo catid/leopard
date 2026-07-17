@@ -316,6 +316,38 @@ if(LEO2_BUILD_BENCHMARKS)
     add_executable(bench_leopard2 bench/leopard2/benchmark.cpp)
     target_link_libraries(bench_leopard2 libleopard)
 
+    add_executable(bench_leopard2_locator
+        bench/leopard2/locator_benchmark.cpp)
+    target_link_libraries(bench_leopard2_locator libleopard)
+    set(LEO2_LOCATOR_SOURCE_GIT_SHA "unknown")
+    set(LEO2_LOCATOR_SOURCE_DIRTY 1)
+    find_program(LEO2_LOCATOR_GIT_EXECUTABLE NAMES git)
+    if(LEO2_LOCATOR_GIT_EXECUTABLE)
+        execute_process(
+            COMMAND ${LEO2_LOCATOR_GIT_EXECUTABLE} rev-parse HEAD
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            RESULT_VARIABLE LEO2_LOCATOR_GIT_RESULT
+            OUTPUT_VARIABLE LEO2_LOCATOR_GIT_OUTPUT
+            OUTPUT_STRIP_TRAILING_WHITESPACE)
+        if(LEO2_LOCATOR_GIT_RESULT EQUAL 0)
+            set(LEO2_LOCATOR_SOURCE_GIT_SHA ${LEO2_LOCATOR_GIT_OUTPUT})
+        endif()
+        execute_process(
+            COMMAND ${LEO2_LOCATOR_GIT_EXECUTABLE}
+                status --porcelain --untracked-files=normal
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            RESULT_VARIABLE LEO2_LOCATOR_STATUS_RESULT
+            OUTPUT_VARIABLE LEO2_LOCATOR_STATUS_OUTPUT
+            OUTPUT_STRIP_TRAILING_WHITESPACE)
+        if(LEO2_LOCATOR_STATUS_RESULT EQUAL 0 AND
+           LEO2_LOCATOR_STATUS_OUTPUT STREQUAL "")
+            set(LEO2_LOCATOR_SOURCE_DIRTY 0)
+        endif()
+    endif()
+    target_compile_definitions(bench_leopard2_locator PRIVATE
+        LEO2_LOCATOR_SOURCE_GIT_SHA="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
+        LEO2_LOCATOR_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
+
     add_executable(experiment_leopard ${EXPERIMENT_SOURCE_FILES})
 endif()
 
@@ -337,6 +369,7 @@ if(LEO2_BUILD_TESTS)
         target_compile_definitions(bench_leopard2_direct_encode PRIVATE
             LEO2_ENABLE_TEST_HOOKS=1)
         target_link_libraries(bench_leopard2_direct_encode libleopard)
+
     endif()
 
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
@@ -605,6 +638,13 @@ if(LEO2_BUILD_TESTS)
     endif()
     if(LEO2_PYTHON_EXECUTABLE)
         if(LEO2_BUILD_BENCHMARKS)
+            add_test(
+                NAME leopard2_locator_benchmark_smoke
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_locator_benchmark_json_test.py
+                    $<TARGET_FILE:bench_leopard2_locator>)
+            set_tests_properties(leopard2_locator_benchmark_smoke PROPERTIES
+                ENVIRONMENT "OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")
             add_test(
                 NAME leopard2_benchmark_json_regression
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}

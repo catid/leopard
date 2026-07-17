@@ -233,6 +233,42 @@ first preserves that calculation as a compatibility oracle, then compares an
 active-parent direct/product construction.  No full-field setup optimization is
 accepted unless its `Lambda` and derivative values match direct products.
 
+For a power-of-two active parent `N=2^n` embedded in `GF(2^m)`, dense locator
+setup can remain entirely inside the additive group `V_n`.  Let `q=2^m-1`, let
+`a[e]` be the erasure indicator, and define `ell[i]=log(omega_i)` with
+`ell[0]=0`.  Cantor-coordinate addition gives `omega_x+omega_e=omega_(x xor e)`,
+so the logarithmic locator evaluation, including the derivative convention at
+a root, is the XOR convolution
+
+    lambda[x] = sum over e in V_n of a[e] ell[x xor e]  (mod q).
+
+This is a new active-subspace derivation of the legacy convolution, not a
+truncation of its transformed full-field table.  If `H_N` is the unnormalized
+Walsh transform, then `H_N H_N = N I (mod q)`.  The full-field implementation
+needs no visible scale because `2^m = 1 (mod q)`.  A proper active parent does:
+
+    lambda = H_N( (N^-1 H_N(ell)) pointwise-multiplied-by H_N(a) ),
+    N^-1 = 2^(m-n) = 2^m / N  (mod q).
+
+Leopard2 precomputes the scaled fixed kernel `N^-1 H_N(ell)` once for every
+supported proper parent and transforms the caller-owned `N`-entry output buffer
+in place.  Dense setup therefore uses `O(N log N)` work and `O(N)` output storage
+without a full-field temporary.  Omitting the `N^-1` factor is correct only at
+full field size and is an active-parent normalization bug.  The derivation is
+checked exhaustively for every erasure subset of every parent in test-only
+`GF(2^4)`, exhaustively through `N=16` in production GF8 coordinates, and
+differentially against the retained full-field oracle for all GF8/GF16 parent
+sizes.  Dense large-GF16 tests additionally sample coordinates with the direct
+`O(E)` sum, so correctness does not rely only on two paths sharing Walsh and
+modular-add primitives.  The samples explicitly exercise sums that wrap modulo
+65,535 and canonicalize the legacy zero-log sentinel.
+
+The permanent-locator API accepts either the union bitmap used by current plans
+or a dynamic-only bitmap.  Its sparse path adds dynamic products to the cached
+permanent base; its dense path forms the explicit union before the active Walsh
+transform.  Thus the setup result does not depend on which calling convention
+crosses the measured direct/Walsh threshold.
+
 When a specialized decoder requires exactly `N-D` erasures but more than `D`
 coordinates are available, the plan marks deterministic surplus received
 coordinates as virtual erasures.  The baseline rule prefers surviving systematic
@@ -574,7 +610,7 @@ wire semantics.
 | normalized-basis derivative accumulation | R16 decoder lineage; product-rule derivation above |
 | shifted-block encode and IFFT summation | R10 Lemma 1, eqs. (15)-(21) |
 | full-parent direct systematic generator row `Z_S(q) / ((q+x_i) Z'_S(x_i))` | shared new Lagrange derivation in `docs/leopard2_direct_encode.md`; independently checked by `tests/leopard2/direct_oracle.cpp` and `test_direct_encode.cpp` for every bounded high/low GF8/GF16 profile |
-| generic locator/derivative erasure identity | R10 eqs. (22)-(29); R16 decoder; direct derivation above |
+| generic locator/derivative erasure identity and active-parent Walsh normalization | R10 eqs. (22)-(29); R16 decoder; new XOR-convolution derivation above |
 | low weighted block derivative combination | R10 Theorem 1, Corollary 1, Algorithm 4 |
 | high `h`, `z`, and message-only evaluation | R10 Corollary 2, eqs. (52)-(72), Algorithm 5 |
 | active-parent factor `c_n` in high recovery | new derivation above from congruence modulo `s_n`; direct tests required |

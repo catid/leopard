@@ -547,6 +547,11 @@ static ffe_t LchBasisNormalizerLog[kBits];
 // Factors used in the evaluation of the error locator polynomial
 static ffe_t LogWalsh[kOrder];
 
+// Walsh transforms of LogLUT restricted to each proper active additive
+// subspace.  A table of length n starts at n - 2, because the preceding
+// power-of-two lengths sum to n - 2.  The full-field table is LogWalsh.
+static ffe_t ActiveLogWalsh[kOrder - 2];
+
 
 static void FFTInitialize()
 {
@@ -599,6 +604,26 @@ static void FFTInitialize()
     LogWalsh[0] = 0;
 
     FWHT(LogWalsh, kOrder, kOrder);
+
+    // On V_n, XOR convolution is diagonalized by an n-point Walsh transform.
+    // Unlike the full-field case, applying that transform twice multiplies by
+    // n modulo kModulus rather than by kOrder == 1 (mod kModulus).  Scale the
+    // fixed transformed kernel by n^-1 = kOrder / n (mod kModulus) once here.
+    for (unsigned n = 2; n < kOrder; n <<= 1)
+    {
+        ffe_t* active = ActiveLogWalsh + n - 2;
+        for (unsigned i = 0; i < n; ++i)
+            active[i] = LogLUT[i];
+        active[0] = 0;
+        FWHT(active, n, n);
+
+        const unsigned inverse_n = kOrder / n;
+        for (unsigned i = 0; i < n; ++i)
+        {
+            active[i] = static_cast<ffe_t>(
+                (static_cast<unsigned>(active[i]) * inverse_n) % kModulus);
+        }
+    }
 }
 
 /*
@@ -2020,6 +2045,45 @@ void PrepareDecodeWalshReference(
 }
 
 
+static void PrepareDecodeWalshActiveCombined(
+    unsigned n,
+    const uint8_t* erasures,
+    const uint8_t* additional_erasures,
+    ffe_t* locator_logs)
+{
+    LEO_DEBUG_ASSERT(n >= 2 && n <= kOrder);
+
+    for (unsigned i = 0; i < n; ++i)
+    {
+        locator_logs[i] =
+            (erasures[i] || (additional_erasures && additional_erasures[i])) ?
+                1 : 0;
+    }
+
+    FWHT(locator_logs, n, n);
+
+    const ffe_t* transformed_kernel =
+        n == kOrder ? LogWalsh : ActiveLogWalsh + n - 2;
+    for (unsigned i = 0; i < n; ++i)
+    {
+        locator_logs[i] = static_cast<ffe_t>(
+            (static_cast<unsigned>(locator_logs[i]) *
+                static_cast<unsigned>(transformed_kernel[i])) % kModulus);
+    }
+
+    FWHT(locator_logs, n, n);
+}
+
+
+void PrepareDecodeWalshActive(
+    unsigned n,
+    const uint8_t* erasures,
+    ffe_t* locator_logs)
+{
+    PrepareDecodeWalshActiveCombined(n, erasures, nullptr, locator_logs);
+}
+
+
 static unsigned CountErasures(
     unsigned n,
     const uint8_t* erasures,
@@ -2035,13 +2099,22 @@ static unsigned CountErasures(
 
 bool IsDirectLocatorPreferred(unsigned n, unsigned erasure_count)
 {
-    // Whole-locator measurements show that the cache-friendly Walsh kernels
-    // cross the scalar direct loop well before their nominal operation counts
-    // meet.  Four direct contributions per field coordinate is a conservative
-    // portable cutoff; the codec-level calibration table may tighten it later.
-    const uint64_t direct_work = (uint64_t)n * erasure_count;
-    const uint64_t walsh_work = (uint64_t)kOrder * 4;
-    return direct_work <= walsh_work;
+    // Pinned multi-pattern whole-locator sweeps show that branch and transform
+    // overhead move the crossover for small parents.  Ambiguous cells remain
+    // direct: the first active cell had at least a 10% observed margin across
+    // the frozen layouts on the calibration host.
+    unsigned direct_cutoff;
+    if (n <= 8)
+        direct_cutoff = n;
+    else if (n == 16)
+        direct_cutoff = 8;
+    else if (n == 32 || n == 128)
+        direct_cutoff = 9;
+    else if (n == 64)
+        direct_cutoff = 8;
+    else
+        direct_cutoff = 7;
+    return erasure_count <= direct_cutoff;
 }
 
 
@@ -2066,6 +2139,18 @@ static void AddDirectLocatorContributions(
 }
 
 
+void PrepareDecodeDirect(
+    unsigned n,
+    const uint8_t* erasures,
+    ffe_t* locator_logs)
+{
+    LEO_DEBUG_ASSERT(n >= 2 && n <= kOrder);
+
+    memset(locator_logs, 0, n * sizeof(ffe_t));
+    AddDirectLocatorContributions(n, erasures, nullptr, locator_logs);
+}
+
+
 void PrepareDecode(
     unsigned n,
     const uint8_t* erasures,
@@ -2076,12 +2161,11 @@ void PrepareDecode(
     const unsigned erasure_count = CountErasures(n, erasures, nullptr);
     if (!IsDirectLocatorPreferred(n, erasure_count))
     {
-        PrepareDecodeWalshReference(n, erasures, locator_logs);
+        PrepareDecodeWalshActive(n, erasures, locator_logs);
         return;
     }
 
-    memset(locator_logs, 0, n * sizeof(ffe_t));
-    AddDirectLocatorContributions(n, erasures, nullptr, locator_logs);
+    PrepareDecodeDirect(n, erasures, locator_logs);
 }
 
 
@@ -2098,7 +2182,8 @@ void PrepareDecodeWithPermanent(
         n, erasures, permanent_erasures);
     if (!IsDirectLocatorPreferred(n, dynamic_count))
     {
-        PrepareDecode(n, erasures, locator_logs);
+        PrepareDecodeWalshActiveCombined(
+            n, erasures, permanent_erasures, locator_logs);
         return;
     }
 
