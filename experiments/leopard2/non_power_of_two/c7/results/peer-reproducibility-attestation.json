@@ -1,0 +1,132 @@
+{
+  "binary_artifacts": {
+    "asan-ubsan": {
+      "executable": {
+        "bytes": 5374816,
+        "path": ".research/leopard2/c7-proof-e1c9b5c/build/c7-asan-ubsan",
+        "sha256": "a710b6f4721f3a5cd82cf43b1f19b7aa8f90a0de9ea68dc30f314ca3a45162c5"
+      },
+      "library": {
+        "bytes": 3389750,
+        "path": ".research/leopard2/c7-proof-e1c9b5c/build/core-asan-ubsan/liblibleopard.a",
+        "sha256": "f4cba3339b4a3726b70961cc9fc973446acdd5b5fa85cf563a0a9c31ce0b3b19"
+      }
+    },
+    "auto": {
+      "executable": {
+        "bytes": 3071056,
+        "path": ".research/leopard2/c7-proof-e1c9b5c/build/c7-auto",
+        "sha256": "adebda85d1e0e9b7cfb3beecffad2ef3249c7123fb16b0ab6a91021b9f7612b7"
+      },
+      "library": {
+        "bytes": 2825484,
+        "path": ".research/leopard2/c7-proof-e1c9b5c/build/core-auto/liblibleopard.a",
+        "sha256": "913f23ab7860a5494ac723154918147a1a60512099d2e0d25a99eb53721dbfb4"
+      }
+    },
+    "avx2": {
+      "executable": {
+        "bytes": 3070848,
+        "path": ".research/leopard2/c7-proof-e1c9b5c/build/c7-avx2",
+        "sha256": "e2103842f97473b403d11aaa9dd4ecf8625bbfc99e8a1f36b5a43b5daf95f6b0"
+      },
+      "library": {
+        "bytes": 2825052,
+        "path": ".research/leopard2/c7-proof-e1c9b5c/build/core-avx2/liblibleopard.a",
+        "sha256": "1b3d9d5c494314c234de70a432945ada3cf9add1a41c36a39db53843d32dac52"
+      }
+    },
+    "scalar": {
+      "executable": {
+        "bytes": 3070792,
+        "path": ".research/leopard2/c7-proof-e1c9b5c/build/c7-scalar",
+        "sha256": "89cad5ce438033aad1a571782a4a2699aeed545086f057a6147ae0185bc827dc"
+      },
+      "library": {
+        "bytes": 2824876,
+        "path": ".research/leopard2/c7-proof-e1c9b5c/build/core-scalar/liblibleopard.a",
+        "sha256": "731794d3f9b00ae991dfca8d94ee5f379029892a2fd78ca9630551c30884adc6"
+      }
+    },
+    "ssse3": {
+      "executable": {
+        "bytes": 3070776,
+        "path": ".research/leopard2/c7-proof-e1c9b5c/build/c7-ssse3",
+        "sha256": "59993d511103fa292de7fd8adb9fe6a4d2d8536d6bc1c25ce2f857eba676c759"
+      },
+      "library": {
+        "bytes": 2824900,
+        "path": ".research/leopard2/c7-proof-e1c9b5c/build/core-ssse3/liblibleopard.a",
+        "sha256": "fe72ea11e592421207aca1d1413c6609f6102a83b903a5e80ef108842aaee547"
+      }
+    }
+  },
+  "checks": {
+    "binary_and_text_root_scan": "pass",
+    "git_toplevel_and_head": "pass",
+    "live_tools_and_outputs": "pass",
+    "portable_semantics": "pass",
+    "program_identity_match": "pass"
+  },
+  "core_git_sha": "e1c9b5cb3f830c089347fdd975e808a9eba52e3d",
+  "fingerprints": {
+    "asan-ubsan": {
+      "executable_sha256": "a710b6f4721f3a5cd82cf43b1f19b7aa8f90a0de9ea68dc30f314ca3a45162c5",
+      "library_sha256": "f4cba3339b4a3726b70961cc9fc973446acdd5b5fa85cf563a0a9c31ce0b3b19"
+    },
+    "auto": {
+      "executable_sha256": "adebda85d1e0e9b7cfb3beecffad2ef3249c7123fb16b0ab6a91021b9f7612b7",
+      "library_sha256": "913f23ab7860a5494ac723154918147a1a60512099d2e0d25a99eb53721dbfb4"
+    },
+    "avx2": {
+      "executable_sha256": "e2103842f97473b403d11aaa9dd4ecf8625bbfc99e8a1f36b5a43b5daf95f6b0",
+      "library_sha256": "1b3d9d5c494314c234de70a432945ada3cf9add1a41c36a39db53843d32dac52"
+    },
+    "scalar": {
+      "executable_sha256": "89cad5ce438033aad1a571782a4a2699aeed545086f057a6147ae0185bc827dc",
+      "library_sha256": "731794d3f9b00ae991dfca8d94ee5f379029892a2fd78ca9630551c30884adc6"
+    },
+    "ssse3": {
+      "executable_sha256": "59993d511103fa292de7fd8adb9fe6a4d2d8536d6bc1c25ce2f857eba676c759",
+      "library_sha256": "fe72ea11e592421207aca1d1413c6609f6102a83b903a5e80ef108842aaee547"
+    }
+  },
+  "normalized_text_records_sha256": "cec4db4aeb42669a1d928406eb41cb3c0fddd1d4a450bcdb13b66f2e8a2d1df5",
+  "peer_evidence_bundle": {
+    "bytes": 64902,
+    "path": "experiments/leopard2/non_power_of_two/c7/results/peer-evidence-bundle.tar.gz",
+    "sha256": "4397abb59be55e2983f69837ed4f046e0f326c9a32eabdcfc8e14c4936753f61"
+  },
+  "peer_manifest_artifact": {
+    "bytes": 119415,
+    "path": "experiments/leopard2/non_power_of_two/c7/results/peer-manifest.json",
+    "sha256": "d2eaf1c48827b51145ec6a0d773bc68a87cf964d5b51137755c560ddbd08bde1"
+  },
+  "program_records_sha256": "1f49e71782cf0b1a4a396c020a51a5d3dd16b1d2ae930f76f364c876a3f0e214",
+  "root_scan": {
+    "archives": 5,
+    "executables": 5,
+    "normalized_text_records": 118
+  },
+  "runs_sha256": "f54b96638d9fe2b0066a9657f39a8419f2c7adc8ba8221a6437b8ae926cc93b7",
+  "schema": "leopard2-c7-peer-reproducibility/v2",
+  "source_closures_sha256": "220f3ea528cc8219741188d606d1d2f41c46efd5c6e4d2e72edc581bf240ee5c",
+  "status": "pass",
+  "tooling": {
+    "runner": {
+      "bytes": 53257,
+      "path": "experiments/leopard2/non_power_of_two/c7/run_matrix.py",
+      "sha256": "f5d4852595a4a027fe159ca28e6654f7fe7205f1322e4acdd3699e2d6a12e45d"
+    },
+    "source": {
+      "bytes": 76657,
+      "path": "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp",
+      "sha256": "63c9bdda7b105787d080c6796d20c5b7244602af012ea101c5009b9abbf72c35"
+    },
+    "validator": {
+      "bytes": 68768,
+      "path": "experiments/leopard2/non_power_of_two/c7/validate_evidence.py",
+      "sha256": "d7937396d273f00e9cb8b346a1c086f25735e058ef6577fe6f15376c045d2e07"
+    }
+  }
+}

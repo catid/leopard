@@ -34,6 +34,8 @@
 -- Performing Test LEO2_FLAG_MAVX2 - Success
 -- Performing Test LEO2_FLAG_MNO_AVX512F
 -- Performing Test LEO2_FLAG_MNO_AVX512F - Success
--- Configuring done (1.6s)
+-- Performing Test LEO2_FLAG_FALIGN_FUNCTIONS_64
+-- Performing Test LEO2_FLAG_FALIGN_FUNCTIONS_64 - Success
+-- Configuring done (1.8s)
 -- Generating done (0.0s)
--- Build files have been written to: /home/catid/leopard-wt-c6/build/c7-matrix/core-asan-ubsan
+-- Build files have been written to: ${LEO2_SOURCE_ROOT}/.research/leopard2/c7-proof-e1c9b5c/build/core-asan-ubsan

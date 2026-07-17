@@ -6,27 +6,34 @@
         "sha256": "6452af2eea333b8c65e1adb92964fc8f97863ab003fa13f9d12bff5345cd7dbe",
         "version": "GNU ar (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
       },
+      "argv_source_root_tokens": {
+        "build": 1,
+        "compile": 4,
+        "configure": 9
+      },
       "backend": "scalar",
       "build_argv": [
         "/usr/bin/cmake",
         "--build",
-        "build/c7-matrix/core-scalar",
+        "${LEO2_SOURCE_ROOT}/.research/leopard2/c7-proof-e1c9b5c/build/core-scalar",
         "--target",
         "libleopard",
         "--verbose",
         "--",
-        "-j4"
+        "-j6"
       ],
-      "build_dir": "build/c7-matrix/core-scalar",
+      "build_dir": ".research/leopard2/c7-proof-e1c9b5c/build/core-scalar",
       "build_stderr": {
         "bytes": 0,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-core-build.stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_root_tokens": 0
       },
       "build_stdout": {
-        "bytes": 10680,
+        "bytes": 14261,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-core-build.stdout.txt",
-        "sha256": "f19ed56a213c18311d6ecba2ec8fb2be9f7ef2939b98e2431b070499278ad219"
+        "sha256": "a1a7b065ef5905888f3b4266cbb29a57307cfd7a72bc72868c1c21a8006c27d4",
+        "source_root_tokens": 107
       },
       "c_compiler": {
         "path": "/usr/bin/x86_64-linux-gnu-gcc-13",
@@ -39,9 +46,10 @@
         "version": "cmake version 3.28.3\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).\n"
       },
       "cmake_cache": {
-        "bytes": 20672,
+        "bytes": 21357,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-CMakeCache.txt",
-        "sha256": "618e3d188c3c2ed5d9334f18cbd74107a7ba411e1f353f7caeb8b6f82ece0c44"
+        "sha256": "12d4f37cf909d33555494cd64e0ea0535434047418c989a6ee32531814895227",
+        "source_root_tokens": 13
       },
       "cmake_linker": {
         "path": "/usr/bin/x86_64-linux-gnu-ld",
@@ -58,27 +66,32 @@
         "-Wextra",
         "-Wpedantic",
         "-Werror",
-        "-I.",
-        "-DLEO2_C7_SOURCE_SHA256=\"c2edae60a9d9b57826a0206532e0437a4f3fbe07d8d3978045ca75a78f92f604\"",
-        "-DLEO2_C7_CORE_GIT_SHA=\"09e1ccec9dfc84a33db965cbccea1f375fb9ff39\"",
-        "-DLEO2_C7_LIBRARY_SHA256=\"5c1ee539b3eeadf926ed21281468617ba43e56e76ba65e46e8337e69d7b1e85f\"",
+        "-ffile-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-fdebug-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-fmacro-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-I${LEO2_SOURCE_ROOT}",
+        "-DLEO2_C7_SOURCE_SHA256=\"63c9bdda7b105787d080c6796d20c5b7244602af012ea101c5009b9abbf72c35\"",
+        "-DLEO2_C7_CORE_GIT_SHA=\"e1c9b5cb3f830c089347fdd975e808a9eba52e3d\"",
+        "-DLEO2_C7_LIBRARY_SHA256=\"731794d3f9b00ae991dfca8d94ee5f379029892a2fd78ca9630551c30884adc6\"",
         "-O2",
         "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp",
-        "build/c7-matrix/core-scalar/liblibleopard.a",
+        ".research/leopard2/c7-proof-e1c9b5c/build/core-scalar/liblibleopard.a",
         "-pthread",
         "-fopenmp",
         "-o",
-        "build/c7-matrix/c7-scalar"
+        ".research/leopard2/c7-proof-e1c9b5c/build/c7-scalar"
       ],
       "compile_stderr": {
-        "bytes": 8990,
+        "bytes": 10313,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-compile.stderr.txt",
-        "sha256": "4478535f7b71e0a266db1b7c59d8d2e687db73d9e24a6484741152b075c38bd9"
+        "sha256": "8d215b0f32e2777344b85b8efc31e3a965ec0cfff8133a439bc85df005507a8e",
+        "source_root_tokens": 22
       },
       "compile_stdout": {
         "bytes": 38,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-compile.stdout.txt",
-        "sha256": "d3326e248ec71b75a9016c742a75e4a40f139e4126f659577553b8ee686507c9"
+        "sha256": "d3326e248ec71b75a9016c742a75e4a40f139e4126f659577553b8ee686507c9",
+        "source_root_tokens": 0
       },
       "compiler": {
         "path": "/usr/bin/x86_64-linux-gnu-g++-13",
@@ -88,9 +101,9 @@
       "configure_argv": [
         "/usr/bin/cmake",
         "-S",
-        ".",
+        "${LEO2_SOURCE_ROOT}",
         "-B",
-        "build/c7-matrix/core-scalar",
+        "${LEO2_SOURCE_ROOT}/.research/leopard2/c7-proof-e1c9b5c/build/core-scalar",
         "-G",
         "Unix Makefiles",
         "-DCMAKE_BUILD_TYPE=Release",
@@ -101,27 +114,134 @@
         "-DLEO2_BUILD_BENCHMARKS=OFF",
         "-DLEO2_BUILD_FUZZERS=OFF",
         "-DLEO2_ENABLE_CUDA=OFF",
-        "-DENABLE_OPENMP=ON"
+        "-DENABLE_OPENMP=ON",
+        "-DCMAKE_C_FLAGS=-ffile-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fdebug-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fmacro-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-DCMAKE_CXX_FLAGS=-ffile-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fdebug-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fmacro-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-DCMAKE_EXE_LINKER_FLAGS=",
+        "-DCMAKE_CXX_COMPILER_LAUNCHER=/usr/bin/python3.12;${LEO2_SOURCE_ROOT}/experiments/leopard2/non_power_of_two/c7/run_matrix.py;--compiler-launch"
       ],
       "configure_stderr": {
         "bytes": 0,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-configure.stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_root_tokens": 0
       },
       "configure_stdout": {
-        "bytes": 1668,
+        "bytes": 1796,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-configure.stdout.txt",
-        "sha256": "99da37acda8a3acdf8287910d0b13fec7c909bf550374466572e2ca813ce7908"
+        "sha256": "b62798a89faf404f159e1a2093b8d0e0ebae5fd22cb74081225ad00c8f08cd56",
+        "source_root_tokens": 1
       },
       "cxx_compiler": {
         "path": "/usr/bin/x86_64-linux-gnu-g++-13",
         "sha256": "1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769",
         "version": "x86_64-linux-gnu-g++-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
       },
+      "dependency_files": [
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-scalar/CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o.d",
+          "retained": {
+            "bytes": 8834,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-dependencies/Leopard2BackendAVX2.cpp.o.d",
+            "sha256": "0794e418025634b3e847010d69025546067daa029710ef3b58dd10a0cf13f3ce",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-scalar/CMakeFiles/leopard2_backend_ssse3.dir/Leopard2BackendSSSE3.cpp.o.d",
+          "retained": {
+            "bytes": 3574,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-dependencies/Leopard2BackendSSSE3.cpp.o.d",
+            "sha256": "2dbcd87827ff5f5f1a4abc83a709302d86b7aab6e983cb427a7ab78908ec5605",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-scalar/CMakeFiles/libleopard.dir/Leopard2Backend.cpp.o.d",
+          "retained": {
+            "bytes": 4610,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-dependencies/Leopard2Backend.cpp.o.d",
+            "sha256": "3c8f09ffb56abaf701e0f56a58f63dbc6dadcedc02b6b91310fe0a398c7d530c",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-scalar/CMakeFiles/libleopard.dir/Leopard2BackendScalar.cpp.o.d",
+          "retained": {
+            "bytes": 1614,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-dependencies/Leopard2BackendScalar.cpp.o.d",
+            "sha256": "d715971d799149f47255948e8df203f1c6270a1da940d83cad9ec2996b03eb66",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-scalar/CMakeFiles/libleopard.dir/Leopard2CpuFeatures.cpp.o.d",
+          "retained": {
+            "bytes": 1063,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-dependencies/Leopard2CpuFeatures.cpp.o.d",
+            "sha256": "1d0220ae79f5150710db4a488723332a2ad230b2c8264c6ee135eda8c8599846",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-scalar/CMakeFiles/libleopard.dir/Leopard2Plan.cpp.o.d",
+          "retained": {
+            "bytes": 1295,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-dependencies/Leopard2Plan.cpp.o.d",
+            "sha256": "73ccb94796574ecee27fa5fedb613f2c55a162f10e9b0291316d73be66095b74",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-scalar/CMakeFiles/libleopard.dir/LeopardCommon.cpp.o.d",
+          "retained": {
+            "bytes": 8323,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-dependencies/LeopardCommon.cpp.o.d",
+            "sha256": "078902bd8e68b17a36d2f3f8fc3b802b79a5b3785e75bd6578b8c7197946289c",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-scalar/CMakeFiles/libleopard.dir/LeopardFF16.cpp.o.d",
+          "retained": {
+            "bytes": 8428,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-dependencies/LeopardFF16.cpp.o.d",
+            "sha256": "30be73af7a2bfa167e6d62b025caca32e6fad0334ea2abb4c44c3939d7bfc028",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-scalar/CMakeFiles/libleopard.dir/LeopardFF8.cpp.o.d",
+          "retained": {
+            "bytes": 8422,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-dependencies/LeopardFF8.cpp.o.d",
+            "sha256": "01ea95dde96d49d63d9972dfd486d53d762a54fd1a94c9ffdd0af026a6eb80b6",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-scalar/CMakeFiles/libleopard.dir/leopard.cpp.o.d",
+          "retained": {
+            "bytes": 8448,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-dependencies/leopard.cpp.o.d",
+            "sha256": "98604dd9c06b0c30aea2df8c9dbedac34f74306a4b4a414f9f6fa9839a720087",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-scalar/CMakeFiles/libleopard.dir/leopard2.cpp.o.d",
+          "retained": {
+            "bytes": 8883,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-dependencies/leopard2.cpp.o.d",
+            "sha256": "3d268eb8f73b9ce45092964526b20350bed847df7893acd845c7d2e102e96ec7",
+            "source_root_tokens": 0
+          }
+        }
+      ],
       "executable": {
-        "bytes": 2844712,
-        "path": "build/c7-matrix/c7-scalar",
-        "sha256": "1a60e03641679e603db0614d4ecc566efbaf6915d4a174c0377cd55cbd5c3c42"
+        "bytes": 3070792,
+        "path": ".research/leopard2/c7-proof-e1c9b5c/build/c7-scalar",
+        "sha256": "89cad5ce438033aad1a571782a4a2699aeed545086f057a6147ae0185bc827dc"
       },
       "gmake": {
         "path": "/usr/bin/gmake",
@@ -195,7 +315,8 @@
         "core_archive_symbol_scan": {
           "bytes": 0,
           "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-nm-core-archive-sanitizers.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "source_root_tokens": 0
         },
         "executable_counts": {
           "asan_lines": 0,
@@ -204,14 +325,21 @@
         "executable_symbol_scan": {
           "bytes": 0,
           "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-nm-executable-sanitizers.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "source_root_tokens": 0
         },
         "required_compile_macro": false
       },
+      "jobs": 6,
+      "launcher_python": {
+        "path": "/usr/bin/python3.12",
+        "sha256": "1643dacd9feaedc58f3cc581e4d22577dfe25c09b10282936186ccf0f2e61118",
+        "version": "Python 3.12.3\n"
+      },
       "library": {
-        "bytes": 2633700,
-        "path": "build/c7-matrix/core-scalar/liblibleopard.a",
-        "sha256": "5c1ee539b3eeadf926ed21281468617ba43e56e76ba65e46e8337e69d7b1e85f"
+        "bytes": 2824876,
+        "path": ".research/leopard2/c7-proof-e1c9b5c/build/core-scalar/liblibleopard.a",
+        "sha256": "731794d3f9b00ae991dfca8d94ee5f379029892a2fd78ca9630551c30884adc6"
       },
       "link_driver": {
         "path": "/usr/bin/x86_64-linux-gnu-g++-13",
@@ -224,6 +352,11 @@
         "sha256": "3708df3d7ce16e2c1dcdcd722784ae382d4d582276a71ab7bbe2d542f5621202",
         "version": "GNU nm (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
       },
+      "prefix_map_flags": [
+        "-ffile-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-fdebug-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-fmacro-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT"
+      ],
       "ranlib": {
         "path": "/usr/bin/x86_64-linux-gnu-ranlib",
         "sha256": "60254978b8ee2c1b21b41d16a18a621dbbcc72e43eb2fa9f916818256c77e9ee",
@@ -232,34 +365,34 @@
       "sanitizer": false,
       "source_closure": [
         {
-          "bytes": 27399,
+          "bytes": 29401,
           "path": "CMakeLists.txt",
-          "sha256": "0a20669b0ddfedb875f542bca9f7d1e8c49d20caa57fc3e351222aa43d2e2984"
+          "sha256": "7168c233d9c37fb26f5d6ecd5143f01cc91222c99417e47d3c1f1209a560e3d3"
         },
         {
-          "bytes": 8320,
+          "bytes": 19970,
           "path": "Leopard2Backend.cpp",
-          "sha256": "51e4d9f437773f7755161f4e5bd4269f6bb95d50dd7d8f8bd1e1dbdfcf9ac900"
+          "sha256": "8f56c1c40bca037b3338da12b9569dedb5affa42f17fafbf95e8db76a8020974"
         },
         {
-          "bytes": 3752,
+          "bytes": 5668,
           "path": "Leopard2Backend.h",
-          "sha256": "d1dbaa13d2bb0fafc95e46ac3cd956b64e5c945d3f27ac8d2fb6b08bdbb90866"
+          "sha256": "2f7d7ffb388416c11b2cd6ebfd149b01850cc95e23f9d5fc8a3893d27c0a454d"
         },
         {
-          "bytes": 9083,
+          "bytes": 17804,
           "path": "Leopard2BackendAVX2.cpp",
-          "sha256": "2f18e711bdc6ab47d2513165efcfd0a8ec284b3fda806a92a9cce77a35b76b66"
+          "sha256": "4e1c21d9b431bb7f8f7a579c0abc998f3f46a11d5fd7b06611c9dfd2c5cab586"
         },
         {
-          "bytes": 9066,
+          "bytes": 18053,
           "path": "Leopard2BackendSSSE3.cpp",
-          "sha256": "48fec52c003df2d5dbc65db439fc64a7780191b4fcb58a7358cdb957c4ed36cd"
+          "sha256": "f2f42befe3ca077ecfd4ac6c9c1fff98ea4c6986cb570d909ac2cac1dd7141ef"
         },
         {
-          "bytes": 6253,
+          "bytes": 12929,
           "path": "Leopard2BackendScalar.cpp",
-          "sha256": "cffd8434ce177aa2fa28768ea91fbf30a937c50bc3a621c1466c2745f94f125e"
+          "sha256": "783f61495cc1be9d16771e41511bb997084d12feb6b5a11a0edbe7a165614fe2"
         },
         {
           "bytes": 3883,
@@ -277,44 +410,49 @@
           "sha256": "d5a9d7dd2d388c70eda36c31d4a643a51c6be633747c97284c03676084ad9144"
         },
         {
-          "bytes": 3846,
+          "bytes": 4228,
           "path": "Leopard2Plan.cpp",
-          "sha256": "f1cdb03ca4b5ed0fef3957ed62d2e85471953aca0064802d4a0ef8bc4df77673"
+          "sha256": "ea74901ec8d91c51265dade4d55f5e1a3adcec0aeb4d2a5e4241722949c81311"
         },
         {
-          "bytes": 3803,
+          "bytes": 3965,
           "path": "Leopard2Plan.h",
-          "sha256": "68a8a6fac34ae0b8e7c03e5a87fd67f20b993bded4440f3e0482cb90e7ca2c00"
+          "sha256": "7c9755c7dd4c98d5d5679b0026c2b84bc22c40a17f9433e9544cfe8e3485ba32"
         },
         {
-          "bytes": 23145,
+          "bytes": 24287,
           "path": "LeopardCommon.cpp",
-          "sha256": "d2519c8a1515914d86f756ab6f2c6be597dfd0548a4c9b2552411c6eabaeeda4"
+          "sha256": "b86e992bfbe833635bdeb6af7c2a098575e71461d45a9b734b2224aab5e618c1"
         },
         {
-          "bytes": 16178,
+          "bytes": 16743,
           "path": "LeopardCommon.h",
-          "sha256": "da762b045c6dc61ba7ba4320dcd6c69dca2b7789025ec597f36ac2674f0d21c0"
+          "sha256": "a2f48fe3ec827dca2e5c91353fd5f05fefc9960955808efd11e52efd99c8a2e1"
         },
         {
-          "bytes": 86539,
+          "bytes": 90043,
           "path": "LeopardFF16.cpp",
-          "sha256": "3580e7482c1c2bded950b4ee7e16e3e433de338013f001c494c7d97a347464ba"
+          "sha256": "79a655b0f06edbb9007931bf681fd342e359e6b35b9bcafb7b98493dd9695d22"
         },
         {
-          "bytes": 9281,
+          "bytes": 12737,
           "path": "LeopardFF16.h",
-          "sha256": "3dbb579882bd6bd6f16dbed8977b029b4b0d0078122e03fa73765d089dc57862"
+          "sha256": "df7105f8d4908149cceb258d9a719675bbdc40b2e1133fc7e7c931c233964895"
         },
         {
-          "bytes": 89340,
+          "bytes": 93404,
           "path": "LeopardFF8.cpp",
-          "sha256": "c8f5c6f7110df7d1df5e4ba729a9d043478eb9cb9ea56a4b4050442a7499ac16"
+          "sha256": "02d224c87e67c82e0b3a1eb71c86177bc36119adf4d01c29b703579e0628d6fd"
         },
         {
-          "bytes": 9248,
+          "bytes": 13176,
           "path": "LeopardFF8.h",
-          "sha256": "4d9acab5fe9de6ed676f119d39173fdedefd76879a153900f1243ac2e1c4f9f7"
+          "sha256": "d676fe7683033cc0e122f73096ce50aaf62f51e724784480d2ee5e6e8803151f"
+        },
+        {
+          "bytes": 1580,
+          "path": "cmake/leopardConfig.cmake.in",
+          "sha256": "f1a3e5598e3c5afc59c9df281540dcb5c6e7acc7764c589e62670f662962a8fb"
         },
         {
           "bytes": 10559,
@@ -327,14 +465,14 @@
           "sha256": "ca3083ce43a4727c89d9bb33479671af53efbedd41d0ba3ed748f1f464e33794"
         },
         {
-          "bytes": 92591,
+          "bytes": 94915,
           "path": "leopard2.cpp",
-          "sha256": "7105f2e5fbb1690849fbedb14353848440440428cca6c373dfaf052884f616f3"
+          "sha256": "3359deac453bc12ff78adbd9ace1ac259f1255b14188e93a7e498b6e5d6cd730"
         },
         {
-          "bytes": 11959,
+          "bytes": 12563,
           "path": "leopard2.h",
-          "sha256": "0023f28f9b9e1a6c97dfadead6bae97fbbb4ecb545e767648c535da534e12d0c"
+          "sha256": "5066ba731dc758ad0d0a7338aac237f6ce1bf185e8925c28311ff1d95ce6614f"
         }
       ],
       "standalone_linker": {
@@ -349,27 +487,34 @@
         "sha256": "6452af2eea333b8c65e1adb92964fc8f97863ab003fa13f9d12bff5345cd7dbe",
         "version": "GNU ar (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
       },
+      "argv_source_root_tokens": {
+        "build": 1,
+        "compile": 4,
+        "configure": 9
+      },
       "backend": "ssse3",
       "build_argv": [
         "/usr/bin/cmake",
         "--build",
-        "build/c7-matrix/core-ssse3",
+        "${LEO2_SOURCE_ROOT}/.research/leopard2/c7-proof-e1c9b5c/build/core-ssse3",
         "--target",
         "libleopard",
         "--verbose",
         "--",
-        "-j4"
+        "-j6"
       ],
-      "build_dir": "build/c7-matrix/core-ssse3",
+      "build_dir": ".research/leopard2/c7-proof-e1c9b5c/build/core-ssse3",
       "build_stderr": {
         "bytes": 0,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-core-build.stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_root_tokens": 0
       },
       "build_stdout": {
-        "bytes": 10638,
+        "bytes": 14219,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-core-build.stdout.txt",
-        "sha256": "375361a31660c0fa34a1b057f8bff5fbc9476ec7866c6cc8f9b6b8f95f41e753"
+        "sha256": "88d5186d6abbb3d98d08e0dfc0d73fd0f09e4fd05525c5fd039d460aa12f62e0",
+        "source_root_tokens": 107
       },
       "c_compiler": {
         "path": "/usr/bin/x86_64-linux-gnu-gcc-13",
@@ -382,9 +527,10 @@
         "version": "cmake version 3.28.3\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).\n"
       },
       "cmake_cache": {
-        "bytes": 20667,
+        "bytes": 21352,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-CMakeCache.txt",
-        "sha256": "638fd58a2ace2414a5de59076ea814bcd9a9c7445a06dce26b2b2d994d40751d"
+        "sha256": "cc16a671326c9611d95f6c1c4e7be024ef7e9ff4e67ee864ee300cde48b008ae",
+        "source_root_tokens": 13
       },
       "cmake_linker": {
         "path": "/usr/bin/x86_64-linux-gnu-ld",
@@ -401,27 +547,32 @@
         "-Wextra",
         "-Wpedantic",
         "-Werror",
-        "-I.",
-        "-DLEO2_C7_SOURCE_SHA256=\"c2edae60a9d9b57826a0206532e0437a4f3fbe07d8d3978045ca75a78f92f604\"",
-        "-DLEO2_C7_CORE_GIT_SHA=\"09e1ccec9dfc84a33db965cbccea1f375fb9ff39\"",
-        "-DLEO2_C7_LIBRARY_SHA256=\"236d4ff8c7dce9efb95620a86a7476cf574ad8ec90b1e7bf781f9faf308ba264\"",
+        "-ffile-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-fdebug-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-fmacro-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-I${LEO2_SOURCE_ROOT}",
+        "-DLEO2_C7_SOURCE_SHA256=\"63c9bdda7b105787d080c6796d20c5b7244602af012ea101c5009b9abbf72c35\"",
+        "-DLEO2_C7_CORE_GIT_SHA=\"e1c9b5cb3f830c089347fdd975e808a9eba52e3d\"",
+        "-DLEO2_C7_LIBRARY_SHA256=\"fe72ea11e592421207aca1d1413c6609f6102a83b903a5e80ef108842aaee547\"",
         "-O2",
         "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp",
-        "build/c7-matrix/core-ssse3/liblibleopard.a",
+        ".research/leopard2/c7-proof-e1c9b5c/build/core-ssse3/liblibleopard.a",
         "-pthread",
         "-fopenmp",
         "-o",
-        "build/c7-matrix/c7-ssse3"
+        ".research/leopard2/c7-proof-e1c9b5c/build/c7-ssse3"
       ],
       "compile_stderr": {
-        "bytes": 8977,
+        "bytes": 10300,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-compile.stderr.txt",
-        "sha256": "4d531c6191169697ac207489cd898175e43e93b3fcea0e7d5ab0c4976d24a63a"
+        "sha256": "8582b77fd290a6dd2fe5ca8861ce3ba592f245f4db02c958a7bc6498d13634c4",
+        "source_root_tokens": 22
       },
       "compile_stdout": {
         "bytes": 38,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-compile.stdout.txt",
-        "sha256": "d3326e248ec71b75a9016c742a75e4a40f139e4126f659577553b8ee686507c9"
+        "sha256": "d3326e248ec71b75a9016c742a75e4a40f139e4126f659577553b8ee686507c9",
+        "source_root_tokens": 0
       },
       "compiler": {
         "path": "/usr/bin/x86_64-linux-gnu-g++-13",
@@ -431,9 +582,9 @@
       "configure_argv": [
         "/usr/bin/cmake",
         "-S",
-        ".",
+        "${LEO2_SOURCE_ROOT}",
         "-B",
-        "build/c7-matrix/core-ssse3",
+        "${LEO2_SOURCE_ROOT}/.research/leopard2/c7-proof-e1c9b5c/build/core-ssse3",
         "-G",
         "Unix Makefiles",
         "-DCMAKE_BUILD_TYPE=Release",
@@ -444,27 +595,134 @@
         "-DLEO2_BUILD_BENCHMARKS=OFF",
         "-DLEO2_BUILD_FUZZERS=OFF",
         "-DLEO2_ENABLE_CUDA=OFF",
-        "-DENABLE_OPENMP=ON"
+        "-DENABLE_OPENMP=ON",
+        "-DCMAKE_C_FLAGS=-ffile-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fdebug-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fmacro-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-DCMAKE_CXX_FLAGS=-ffile-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fdebug-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fmacro-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-DCMAKE_EXE_LINKER_FLAGS=",
+        "-DCMAKE_CXX_COMPILER_LAUNCHER=/usr/bin/python3.12;${LEO2_SOURCE_ROOT}/experiments/leopard2/non_power_of_two/c7/run_matrix.py;--compiler-launch"
       ],
       "configure_stderr": {
         "bytes": 0,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-configure.stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_root_tokens": 0
       },
       "configure_stdout": {
-        "bytes": 1667,
+        "bytes": 1795,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-configure.stdout.txt",
-        "sha256": "e62a44e06dc9b607af294f829916cd1539aa04cad0af768a7a37a1dfcfb6ba4b"
+        "sha256": "ba22c9e247d304ea00daa32c2d939bb9dc949e933bba4b1600305310191ccb7e",
+        "source_root_tokens": 1
       },
       "cxx_compiler": {
         "path": "/usr/bin/x86_64-linux-gnu-g++-13",
         "sha256": "1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769",
         "version": "x86_64-linux-gnu-g++-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
       },
+      "dependency_files": [
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-ssse3/CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o.d",
+          "retained": {
+            "bytes": 8834,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-dependencies/Leopard2BackendAVX2.cpp.o.d",
+            "sha256": "0794e418025634b3e847010d69025546067daa029710ef3b58dd10a0cf13f3ce",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-ssse3/CMakeFiles/leopard2_backend_ssse3.dir/Leopard2BackendSSSE3.cpp.o.d",
+          "retained": {
+            "bytes": 3574,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-dependencies/Leopard2BackendSSSE3.cpp.o.d",
+            "sha256": "2dbcd87827ff5f5f1a4abc83a709302d86b7aab6e983cb427a7ab78908ec5605",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-ssse3/CMakeFiles/libleopard.dir/Leopard2Backend.cpp.o.d",
+          "retained": {
+            "bytes": 4610,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-dependencies/Leopard2Backend.cpp.o.d",
+            "sha256": "3c8f09ffb56abaf701e0f56a58f63dbc6dadcedc02b6b91310fe0a398c7d530c",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-ssse3/CMakeFiles/libleopard.dir/Leopard2BackendScalar.cpp.o.d",
+          "retained": {
+            "bytes": 1614,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-dependencies/Leopard2BackendScalar.cpp.o.d",
+            "sha256": "d715971d799149f47255948e8df203f1c6270a1da940d83cad9ec2996b03eb66",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-ssse3/CMakeFiles/libleopard.dir/Leopard2CpuFeatures.cpp.o.d",
+          "retained": {
+            "bytes": 1063,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-dependencies/Leopard2CpuFeatures.cpp.o.d",
+            "sha256": "1d0220ae79f5150710db4a488723332a2ad230b2c8264c6ee135eda8c8599846",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-ssse3/CMakeFiles/libleopard.dir/Leopard2Plan.cpp.o.d",
+          "retained": {
+            "bytes": 1295,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-dependencies/Leopard2Plan.cpp.o.d",
+            "sha256": "73ccb94796574ecee27fa5fedb613f2c55a162f10e9b0291316d73be66095b74",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-ssse3/CMakeFiles/libleopard.dir/LeopardCommon.cpp.o.d",
+          "retained": {
+            "bytes": 8323,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-dependencies/LeopardCommon.cpp.o.d",
+            "sha256": "078902bd8e68b17a36d2f3f8fc3b802b79a5b3785e75bd6578b8c7197946289c",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-ssse3/CMakeFiles/libleopard.dir/LeopardFF16.cpp.o.d",
+          "retained": {
+            "bytes": 8428,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-dependencies/LeopardFF16.cpp.o.d",
+            "sha256": "30be73af7a2bfa167e6d62b025caca32e6fad0334ea2abb4c44c3939d7bfc028",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-ssse3/CMakeFiles/libleopard.dir/LeopardFF8.cpp.o.d",
+          "retained": {
+            "bytes": 8422,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-dependencies/LeopardFF8.cpp.o.d",
+            "sha256": "01ea95dde96d49d63d9972dfd486d53d762a54fd1a94c9ffdd0af026a6eb80b6",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-ssse3/CMakeFiles/libleopard.dir/leopard.cpp.o.d",
+          "retained": {
+            "bytes": 8448,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-dependencies/leopard.cpp.o.d",
+            "sha256": "98604dd9c06b0c30aea2df8c9dbedac34f74306a4b4a414f9f6fa9839a720087",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-ssse3/CMakeFiles/libleopard.dir/leopard2.cpp.o.d",
+          "retained": {
+            "bytes": 8883,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-dependencies/leopard2.cpp.o.d",
+            "sha256": "3d268eb8f73b9ce45092964526b20350bed847df7893acd845c7d2e102e96ec7",
+            "source_root_tokens": 0
+          }
+        }
+      ],
       "executable": {
-        "bytes": 2872152,
-        "path": "build/c7-matrix/c7-ssse3",
-        "sha256": "56aaf48f7732c298b68ada047f3766f828da1cf9e4e98c23f548a0e41cad4916"
+        "bytes": 3070776,
+        "path": ".research/leopard2/c7-proof-e1c9b5c/build/c7-ssse3",
+        "sha256": "59993d511103fa292de7fd8adb9fe6a4d2d8536d6bc1c25ce2f857eba676c759"
       },
       "gmake": {
         "path": "/usr/bin/gmake",
@@ -538,7 +796,8 @@
         "core_archive_symbol_scan": {
           "bytes": 0,
           "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-nm-core-archive-sanitizers.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "source_root_tokens": 0
         },
         "executable_counts": {
           "asan_lines": 0,
@@ -547,14 +806,21 @@
         "executable_symbol_scan": {
           "bytes": 0,
           "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-nm-executable-sanitizers.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "source_root_tokens": 0
         },
         "required_compile_macro": false
       },
+      "jobs": 6,
+      "launcher_python": {
+        "path": "/usr/bin/python3.12",
+        "sha256": "1643dacd9feaedc58f3cc581e4d22577dfe25c09b10282936186ccf0f2e61118",
+        "version": "Python 3.12.3\n"
+      },
       "library": {
-        "bytes": 2633556,
-        "path": "build/c7-matrix/core-ssse3/liblibleopard.a",
-        "sha256": "236d4ff8c7dce9efb95620a86a7476cf574ad8ec90b1e7bf781f9faf308ba264"
+        "bytes": 2824900,
+        "path": ".research/leopard2/c7-proof-e1c9b5c/build/core-ssse3/liblibleopard.a",
+        "sha256": "fe72ea11e592421207aca1d1413c6609f6102a83b903a5e80ef108842aaee547"
       },
       "link_driver": {
         "path": "/usr/bin/x86_64-linux-gnu-g++-13",
@@ -567,6 +833,11 @@
         "sha256": "3708df3d7ce16e2c1dcdcd722784ae382d4d582276a71ab7bbe2d542f5621202",
         "version": "GNU nm (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
       },
+      "prefix_map_flags": [
+        "-ffile-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-fdebug-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-fmacro-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT"
+      ],
       "ranlib": {
         "path": "/usr/bin/x86_64-linux-gnu-ranlib",
         "sha256": "60254978b8ee2c1b21b41d16a18a621dbbcc72e43eb2fa9f916818256c77e9ee",
@@ -575,34 +846,34 @@
       "sanitizer": false,
       "source_closure": [
         {
-          "bytes": 27399,
+          "bytes": 29401,
           "path": "CMakeLists.txt",
-          "sha256": "0a20669b0ddfedb875f542bca9f7d1e8c49d20caa57fc3e351222aa43d2e2984"
+          "sha256": "7168c233d9c37fb26f5d6ecd5143f01cc91222c99417e47d3c1f1209a560e3d3"
         },
         {
-          "bytes": 8320,
+          "bytes": 19970,
           "path": "Leopard2Backend.cpp",
-          "sha256": "51e4d9f437773f7755161f4e5bd4269f6bb95d50dd7d8f8bd1e1dbdfcf9ac900"
+          "sha256": "8f56c1c40bca037b3338da12b9569dedb5affa42f17fafbf95e8db76a8020974"
         },
         {
-          "bytes": 3752,
+          "bytes": 5668,
           "path": "Leopard2Backend.h",
-          "sha256": "d1dbaa13d2bb0fafc95e46ac3cd956b64e5c945d3f27ac8d2fb6b08bdbb90866"
+          "sha256": "2f7d7ffb388416c11b2cd6ebfd149b01850cc95e23f9d5fc8a3893d27c0a454d"
         },
         {
-          "bytes": 9083,
+          "bytes": 17804,
           "path": "Leopard2BackendAVX2.cpp",
-          "sha256": "2f18e711bdc6ab47d2513165efcfd0a8ec284b3fda806a92a9cce77a35b76b66"
+          "sha256": "4e1c21d9b431bb7f8f7a579c0abc998f3f46a11d5fd7b06611c9dfd2c5cab586"
         },
         {
-          "bytes": 9066,
+          "bytes": 18053,
           "path": "Leopard2BackendSSSE3.cpp",
-          "sha256": "48fec52c003df2d5dbc65db439fc64a7780191b4fcb58a7358cdb957c4ed36cd"
+          "sha256": "f2f42befe3ca077ecfd4ac6c9c1fff98ea4c6986cb570d909ac2cac1dd7141ef"
         },
         {
-          "bytes": 6253,
+          "bytes": 12929,
           "path": "Leopard2BackendScalar.cpp",
-          "sha256": "cffd8434ce177aa2fa28768ea91fbf30a937c50bc3a621c1466c2745f94f125e"
+          "sha256": "783f61495cc1be9d16771e41511bb997084d12feb6b5a11a0edbe7a165614fe2"
         },
         {
           "bytes": 3883,
@@ -620,44 +891,49 @@
           "sha256": "d5a9d7dd2d388c70eda36c31d4a643a51c6be633747c97284c03676084ad9144"
         },
         {
-          "bytes": 3846,
+          "bytes": 4228,
           "path": "Leopard2Plan.cpp",
-          "sha256": "f1cdb03ca4b5ed0fef3957ed62d2e85471953aca0064802d4a0ef8bc4df77673"
+          "sha256": "ea74901ec8d91c51265dade4d55f5e1a3adcec0aeb4d2a5e4241722949c81311"
         },
         {
-          "bytes": 3803,
+          "bytes": 3965,
           "path": "Leopard2Plan.h",
-          "sha256": "68a8a6fac34ae0b8e7c03e5a87fd67f20b993bded4440f3e0482cb90e7ca2c00"
+          "sha256": "7c9755c7dd4c98d5d5679b0026c2b84bc22c40a17f9433e9544cfe8e3485ba32"
         },
         {
-          "bytes": 23145,
+          "bytes": 24287,
           "path": "LeopardCommon.cpp",
-          "sha256": "d2519c8a1515914d86f756ab6f2c6be597dfd0548a4c9b2552411c6eabaeeda4"
+          "sha256": "b86e992bfbe833635bdeb6af7c2a098575e71461d45a9b734b2224aab5e618c1"
         },
         {
-          "bytes": 16178,
+          "bytes": 16743,
           "path": "LeopardCommon.h",
-          "sha256": "da762b045c6dc61ba7ba4320dcd6c69dca2b7789025ec597f36ac2674f0d21c0"
+          "sha256": "a2f48fe3ec827dca2e5c91353fd5f05fefc9960955808efd11e52efd99c8a2e1"
         },
         {
-          "bytes": 86539,
+          "bytes": 90043,
           "path": "LeopardFF16.cpp",
-          "sha256": "3580e7482c1c2bded950b4ee7e16e3e433de338013f001c494c7d97a347464ba"
+          "sha256": "79a655b0f06edbb9007931bf681fd342e359e6b35b9bcafb7b98493dd9695d22"
         },
         {
-          "bytes": 9281,
+          "bytes": 12737,
           "path": "LeopardFF16.h",
-          "sha256": "3dbb579882bd6bd6f16dbed8977b029b4b0d0078122e03fa73765d089dc57862"
+          "sha256": "df7105f8d4908149cceb258d9a719675bbdc40b2e1133fc7e7c931c233964895"
         },
         {
-          "bytes": 89340,
+          "bytes": 93404,
           "path": "LeopardFF8.cpp",
-          "sha256": "c8f5c6f7110df7d1df5e4ba729a9d043478eb9cb9ea56a4b4050442a7499ac16"
+          "sha256": "02d224c87e67c82e0b3a1eb71c86177bc36119adf4d01c29b703579e0628d6fd"
         },
         {
-          "bytes": 9248,
+          "bytes": 13176,
           "path": "LeopardFF8.h",
-          "sha256": "4d9acab5fe9de6ed676f119d39173fdedefd76879a153900f1243ac2e1c4f9f7"
+          "sha256": "d676fe7683033cc0e122f73096ce50aaf62f51e724784480d2ee5e6e8803151f"
+        },
+        {
+          "bytes": 1580,
+          "path": "cmake/leopardConfig.cmake.in",
+          "sha256": "f1a3e5598e3c5afc59c9df281540dcb5c6e7acc7764c589e62670f662962a8fb"
         },
         {
           "bytes": 10559,
@@ -670,14 +946,14 @@
           "sha256": "ca3083ce43a4727c89d9bb33479671af53efbedd41d0ba3ed748f1f464e33794"
         },
         {
-          "bytes": 92591,
+          "bytes": 94915,
           "path": "leopard2.cpp",
-          "sha256": "7105f2e5fbb1690849fbedb14353848440440428cca6c373dfaf052884f616f3"
+          "sha256": "3359deac453bc12ff78adbd9ace1ac259f1255b14188e93a7e498b6e5d6cd730"
         },
         {
-          "bytes": 11959,
+          "bytes": 12563,
           "path": "leopard2.h",
-          "sha256": "0023f28f9b9e1a6c97dfadead6bae97fbbb4ecb545e767648c535da534e12d0c"
+          "sha256": "5066ba731dc758ad0d0a7338aac237f6ce1bf185e8925c28311ff1d95ce6614f"
         }
       ],
       "standalone_linker": {
@@ -692,27 +968,34 @@
         "sha256": "6452af2eea333b8c65e1adb92964fc8f97863ab003fa13f9d12bff5345cd7dbe",
         "version": "GNU ar (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
       },
+      "argv_source_root_tokens": {
+        "build": 1,
+        "compile": 4,
+        "configure": 9
+      },
       "backend": "avx2",
       "build_argv": [
         "/usr/bin/cmake",
         "--build",
-        "build/c7-matrix/core-avx2",
+        "${LEO2_SOURCE_ROOT}/.research/leopard2/c7-proof-e1c9b5c/build/core-avx2",
         "--target",
         "libleopard",
         "--verbose",
         "--",
-        "-j4"
+        "-j6"
       ],
-      "build_dir": "build/c7-matrix/core-avx2",
+      "build_dir": ".research/leopard2/c7-proof-e1c9b5c/build/core-avx2",
       "build_stderr": {
         "bytes": 0,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-core-build.stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_root_tokens": 0
       },
       "build_stdout": {
-        "bytes": 10596,
+        "bytes": 14177,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-core-build.stdout.txt",
-        "sha256": "eaab19b90f4847c27ea5fd86306e1e2b6c9cf83fe702e5c8de24e65b0c458ae4"
+        "sha256": "0e45376e68808cc28f379088277f70904b0905eef9ecce7b57b41236ecd5d91d",
+        "source_root_tokens": 107
       },
       "c_compiler": {
         "path": "/usr/bin/x86_64-linux-gnu-gcc-13",
@@ -725,9 +1008,10 @@
         "version": "cmake version 3.28.3\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).\n"
       },
       "cmake_cache": {
-        "bytes": 20662,
+        "bytes": 21347,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-CMakeCache.txt",
-        "sha256": "514a10b679f9d700ef8cc78a79b32708c89069eedc47cd773dd5c5a3a7c8aa91"
+        "sha256": "9acac64c716eddc25b6eeea21f7af99a4782503938b4b8a62c60daee9e5cc043",
+        "source_root_tokens": 13
       },
       "cmake_linker": {
         "path": "/usr/bin/x86_64-linux-gnu-ld",
@@ -744,27 +1028,32 @@
         "-Wextra",
         "-Wpedantic",
         "-Werror",
-        "-I.",
-        "-DLEO2_C7_SOURCE_SHA256=\"c2edae60a9d9b57826a0206532e0437a4f3fbe07d8d3978045ca75a78f92f604\"",
-        "-DLEO2_C7_CORE_GIT_SHA=\"09e1ccec9dfc84a33db965cbccea1f375fb9ff39\"",
-        "-DLEO2_C7_LIBRARY_SHA256=\"f88033e153e52b0cbed54c2adeabb1e5a17c66493c049155eea6ed5012d89799\"",
+        "-ffile-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-fdebug-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-fmacro-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-I${LEO2_SOURCE_ROOT}",
+        "-DLEO2_C7_SOURCE_SHA256=\"63c9bdda7b105787d080c6796d20c5b7244602af012ea101c5009b9abbf72c35\"",
+        "-DLEO2_C7_CORE_GIT_SHA=\"e1c9b5cb3f830c089347fdd975e808a9eba52e3d\"",
+        "-DLEO2_C7_LIBRARY_SHA256=\"1b3d9d5c494314c234de70a432945ada3cf9add1a41c36a39db53843d32dac52\"",
         "-O2",
         "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp",
-        "build/c7-matrix/core-avx2/liblibleopard.a",
+        ".research/leopard2/c7-proof-e1c9b5c/build/core-avx2/liblibleopard.a",
         "-pthread",
         "-fopenmp",
         "-o",
-        "build/c7-matrix/c7-avx2"
+        ".research/leopard2/c7-proof-e1c9b5c/build/c7-avx2"
       ],
       "compile_stderr": {
-        "bytes": 8964,
+        "bytes": 10287,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-compile.stderr.txt",
-        "sha256": "b90d4f61a3269b25ac99fb680c1180428fb359c0be6c3cb1d604c80c12b89d4f"
+        "sha256": "796dbb5344a9eb33ecd7bd2d27e2ae01d6ebcd2c014f3023df31cfb0da5a80ea",
+        "source_root_tokens": 22
       },
       "compile_stdout": {
         "bytes": 38,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-compile.stdout.txt",
-        "sha256": "d3326e248ec71b75a9016c742a75e4a40f139e4126f659577553b8ee686507c9"
+        "sha256": "d3326e248ec71b75a9016c742a75e4a40f139e4126f659577553b8ee686507c9",
+        "source_root_tokens": 0
       },
       "compiler": {
         "path": "/usr/bin/x86_64-linux-gnu-g++-13",
@@ -774,9 +1063,9 @@
       "configure_argv": [
         "/usr/bin/cmake",
         "-S",
-        ".",
+        "${LEO2_SOURCE_ROOT}",
         "-B",
-        "build/c7-matrix/core-avx2",
+        "${LEO2_SOURCE_ROOT}/.research/leopard2/c7-proof-e1c9b5c/build/core-avx2",
         "-G",
         "Unix Makefiles",
         "-DCMAKE_BUILD_TYPE=Release",
@@ -787,27 +1076,134 @@
         "-DLEO2_BUILD_BENCHMARKS=OFF",
         "-DLEO2_BUILD_FUZZERS=OFF",
         "-DLEO2_ENABLE_CUDA=OFF",
-        "-DENABLE_OPENMP=ON"
+        "-DENABLE_OPENMP=ON",
+        "-DCMAKE_C_FLAGS=-ffile-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fdebug-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fmacro-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-DCMAKE_CXX_FLAGS=-ffile-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fdebug-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fmacro-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-DCMAKE_EXE_LINKER_FLAGS=",
+        "-DCMAKE_CXX_COMPILER_LAUNCHER=/usr/bin/python3.12;${LEO2_SOURCE_ROOT}/experiments/leopard2/non_power_of_two/c7/run_matrix.py;--compiler-launch"
       ],
       "configure_stderr": {
         "bytes": 0,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-configure.stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_root_tokens": 0
       },
       "configure_stdout": {
-        "bytes": 1666,
+        "bytes": 1794,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-configure.stdout.txt",
-        "sha256": "72a1d1ae6e65ae9b799fc4c87d4133d0fe6a124a37ff32bed36d146a4eda6eca"
+        "sha256": "65de7dc7fac151f6b5b9135739438679908fd82d49fc16631110cea6b71283d2",
+        "source_root_tokens": 1
       },
       "cxx_compiler": {
         "path": "/usr/bin/x86_64-linux-gnu-g++-13",
         "sha256": "1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769",
         "version": "x86_64-linux-gnu-g++-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
       },
+      "dependency_files": [
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-avx2/CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o.d",
+          "retained": {
+            "bytes": 8834,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-dependencies/Leopard2BackendAVX2.cpp.o.d",
+            "sha256": "0794e418025634b3e847010d69025546067daa029710ef3b58dd10a0cf13f3ce",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-avx2/CMakeFiles/leopard2_backend_ssse3.dir/Leopard2BackendSSSE3.cpp.o.d",
+          "retained": {
+            "bytes": 3574,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-dependencies/Leopard2BackendSSSE3.cpp.o.d",
+            "sha256": "2dbcd87827ff5f5f1a4abc83a709302d86b7aab6e983cb427a7ab78908ec5605",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-avx2/CMakeFiles/libleopard.dir/Leopard2Backend.cpp.o.d",
+          "retained": {
+            "bytes": 4610,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-dependencies/Leopard2Backend.cpp.o.d",
+            "sha256": "3c8f09ffb56abaf701e0f56a58f63dbc6dadcedc02b6b91310fe0a398c7d530c",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-avx2/CMakeFiles/libleopard.dir/Leopard2BackendScalar.cpp.o.d",
+          "retained": {
+            "bytes": 1614,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-dependencies/Leopard2BackendScalar.cpp.o.d",
+            "sha256": "d715971d799149f47255948e8df203f1c6270a1da940d83cad9ec2996b03eb66",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-avx2/CMakeFiles/libleopard.dir/Leopard2CpuFeatures.cpp.o.d",
+          "retained": {
+            "bytes": 1063,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-dependencies/Leopard2CpuFeatures.cpp.o.d",
+            "sha256": "1d0220ae79f5150710db4a488723332a2ad230b2c8264c6ee135eda8c8599846",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-avx2/CMakeFiles/libleopard.dir/Leopard2Plan.cpp.o.d",
+          "retained": {
+            "bytes": 1295,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-dependencies/Leopard2Plan.cpp.o.d",
+            "sha256": "73ccb94796574ecee27fa5fedb613f2c55a162f10e9b0291316d73be66095b74",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-avx2/CMakeFiles/libleopard.dir/LeopardCommon.cpp.o.d",
+          "retained": {
+            "bytes": 8323,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-dependencies/LeopardCommon.cpp.o.d",
+            "sha256": "078902bd8e68b17a36d2f3f8fc3b802b79a5b3785e75bd6578b8c7197946289c",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-avx2/CMakeFiles/libleopard.dir/LeopardFF16.cpp.o.d",
+          "retained": {
+            "bytes": 8428,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-dependencies/LeopardFF16.cpp.o.d",
+            "sha256": "30be73af7a2bfa167e6d62b025caca32e6fad0334ea2abb4c44c3939d7bfc028",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-avx2/CMakeFiles/libleopard.dir/LeopardFF8.cpp.o.d",
+          "retained": {
+            "bytes": 8422,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-dependencies/LeopardFF8.cpp.o.d",
+            "sha256": "01ea95dde96d49d63d9972dfd486d53d762a54fd1a94c9ffdd0af026a6eb80b6",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-avx2/CMakeFiles/libleopard.dir/leopard.cpp.o.d",
+          "retained": {
+            "bytes": 8448,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-dependencies/leopard.cpp.o.d",
+            "sha256": "98604dd9c06b0c30aea2df8c9dbedac34f74306a4b4a414f9f6fa9839a720087",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-avx2/CMakeFiles/libleopard.dir/leopard2.cpp.o.d",
+          "retained": {
+            "bytes": 8883,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-dependencies/leopard2.cpp.o.d",
+            "sha256": "3d268eb8f73b9ce45092964526b20350bed847df7893acd845c7d2e102e96ec7",
+            "source_root_tokens": 0
+          }
+        }
+      ],
       "executable": {
-        "bytes": 2859256,
-        "path": "build/c7-matrix/c7-avx2",
-        "sha256": "e76a69ecc1042754766e8b490b263e70fe723c702192f87a5b0ece778c810d1b"
+        "bytes": 3070848,
+        "path": ".research/leopard2/c7-proof-e1c9b5c/build/c7-avx2",
+        "sha256": "e2103842f97473b403d11aaa9dd4ecf8625bbfc99e8a1f36b5a43b5daf95f6b0"
       },
       "gmake": {
         "path": "/usr/bin/gmake",
@@ -881,7 +1277,8 @@
         "core_archive_symbol_scan": {
           "bytes": 0,
           "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-nm-core-archive-sanitizers.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "source_root_tokens": 0
         },
         "executable_counts": {
           "asan_lines": 0,
@@ -890,14 +1287,21 @@
         "executable_symbol_scan": {
           "bytes": 0,
           "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-nm-executable-sanitizers.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "source_root_tokens": 0
         },
         "required_compile_macro": false
       },
+      "jobs": 6,
+      "launcher_python": {
+        "path": "/usr/bin/python3.12",
+        "sha256": "1643dacd9feaedc58f3cc581e4d22577dfe25c09b10282936186ccf0f2e61118",
+        "version": "Python 3.12.3\n"
+      },
       "library": {
-        "bytes": 2633540,
-        "path": "build/c7-matrix/core-avx2/liblibleopard.a",
-        "sha256": "f88033e153e52b0cbed54c2adeabb1e5a17c66493c049155eea6ed5012d89799"
+        "bytes": 2825052,
+        "path": ".research/leopard2/c7-proof-e1c9b5c/build/core-avx2/liblibleopard.a",
+        "sha256": "1b3d9d5c494314c234de70a432945ada3cf9add1a41c36a39db53843d32dac52"
       },
       "link_driver": {
         "path": "/usr/bin/x86_64-linux-gnu-g++-13",
@@ -910,6 +1314,11 @@
         "sha256": "3708df3d7ce16e2c1dcdcd722784ae382d4d582276a71ab7bbe2d542f5621202",
         "version": "GNU nm (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
       },
+      "prefix_map_flags": [
+        "-ffile-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-fdebug-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-fmacro-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT"
+      ],
       "ranlib": {
         "path": "/usr/bin/x86_64-linux-gnu-ranlib",
         "sha256": "60254978b8ee2c1b21b41d16a18a621dbbcc72e43eb2fa9f916818256c77e9ee",
@@ -918,34 +1327,34 @@
       "sanitizer": false,
       "source_closure": [
         {
-          "bytes": 27399,
+          "bytes": 29401,
           "path": "CMakeLists.txt",
-          "sha256": "0a20669b0ddfedb875f542bca9f7d1e8c49d20caa57fc3e351222aa43d2e2984"
+          "sha256": "7168c233d9c37fb26f5d6ecd5143f01cc91222c99417e47d3c1f1209a560e3d3"
         },
         {
-          "bytes": 8320,
+          "bytes": 19970,
           "path": "Leopard2Backend.cpp",
-          "sha256": "51e4d9f437773f7755161f4e5bd4269f6bb95d50dd7d8f8bd1e1dbdfcf9ac900"
+          "sha256": "8f56c1c40bca037b3338da12b9569dedb5affa42f17fafbf95e8db76a8020974"
         },
         {
-          "bytes": 3752,
+          "bytes": 5668,
           "path": "Leopard2Backend.h",
-          "sha256": "d1dbaa13d2bb0fafc95e46ac3cd956b64e5c945d3f27ac8d2fb6b08bdbb90866"
+          "sha256": "2f7d7ffb388416c11b2cd6ebfd149b01850cc95e23f9d5fc8a3893d27c0a454d"
         },
         {
-          "bytes": 9083,
+          "bytes": 17804,
           "path": "Leopard2BackendAVX2.cpp",
-          "sha256": "2f18e711bdc6ab47d2513165efcfd0a8ec284b3fda806a92a9cce77a35b76b66"
+          "sha256": "4e1c21d9b431bb7f8f7a579c0abc998f3f46a11d5fd7b06611c9dfd2c5cab586"
         },
         {
-          "bytes": 9066,
+          "bytes": 18053,
           "path": "Leopard2BackendSSSE3.cpp",
-          "sha256": "48fec52c003df2d5dbc65db439fc64a7780191b4fcb58a7358cdb957c4ed36cd"
+          "sha256": "f2f42befe3ca077ecfd4ac6c9c1fff98ea4c6986cb570d909ac2cac1dd7141ef"
         },
         {
-          "bytes": 6253,
+          "bytes": 12929,
           "path": "Leopard2BackendScalar.cpp",
-          "sha256": "cffd8434ce177aa2fa28768ea91fbf30a937c50bc3a621c1466c2745f94f125e"
+          "sha256": "783f61495cc1be9d16771e41511bb997084d12feb6b5a11a0edbe7a165614fe2"
         },
         {
           "bytes": 3883,
@@ -963,44 +1372,49 @@
           "sha256": "d5a9d7dd2d388c70eda36c31d4a643a51c6be633747c97284c03676084ad9144"
         },
         {
-          "bytes": 3846,
+          "bytes": 4228,
           "path": "Leopard2Plan.cpp",
-          "sha256": "f1cdb03ca4b5ed0fef3957ed62d2e85471953aca0064802d4a0ef8bc4df77673"
+          "sha256": "ea74901ec8d91c51265dade4d55f5e1a3adcec0aeb4d2a5e4241722949c81311"
         },
         {
-          "bytes": 3803,
+          "bytes": 3965,
           "path": "Leopard2Plan.h",
-          "sha256": "68a8a6fac34ae0b8e7c03e5a87fd67f20b993bded4440f3e0482cb90e7ca2c00"
+          "sha256": "7c9755c7dd4c98d5d5679b0026c2b84bc22c40a17f9433e9544cfe8e3485ba32"
         },
         {
-          "bytes": 23145,
+          "bytes": 24287,
           "path": "LeopardCommon.cpp",
-          "sha256": "d2519c8a1515914d86f756ab6f2c6be597dfd0548a4c9b2552411c6eabaeeda4"
+          "sha256": "b86e992bfbe833635bdeb6af7c2a098575e71461d45a9b734b2224aab5e618c1"
         },
         {
-          "bytes": 16178,
+          "bytes": 16743,
           "path": "LeopardCommon.h",
-          "sha256": "da762b045c6dc61ba7ba4320dcd6c69dca2b7789025ec597f36ac2674f0d21c0"
+          "sha256": "a2f48fe3ec827dca2e5c91353fd5f05fefc9960955808efd11e52efd99c8a2e1"
         },
         {
-          "bytes": 86539,
+          "bytes": 90043,
           "path": "LeopardFF16.cpp",
-          "sha256": "3580e7482c1c2bded950b4ee7e16e3e433de338013f001c494c7d97a347464ba"
+          "sha256": "79a655b0f06edbb9007931bf681fd342e359e6b35b9bcafb7b98493dd9695d22"
         },
         {
-          "bytes": 9281,
+          "bytes": 12737,
           "path": "LeopardFF16.h",
-          "sha256": "3dbb579882bd6bd6f16dbed8977b029b4b0d0078122e03fa73765d089dc57862"
+          "sha256": "df7105f8d4908149cceb258d9a719675bbdc40b2e1133fc7e7c931c233964895"
         },
         {
-          "bytes": 89340,
+          "bytes": 93404,
           "path": "LeopardFF8.cpp",
-          "sha256": "c8f5c6f7110df7d1df5e4ba729a9d043478eb9cb9ea56a4b4050442a7499ac16"
+          "sha256": "02d224c87e67c82e0b3a1eb71c86177bc36119adf4d01c29b703579e0628d6fd"
         },
         {
-          "bytes": 9248,
+          "bytes": 13176,
           "path": "LeopardFF8.h",
-          "sha256": "4d9acab5fe9de6ed676f119d39173fdedefd76879a153900f1243ac2e1c4f9f7"
+          "sha256": "d676fe7683033cc0e122f73096ce50aaf62f51e724784480d2ee5e6e8803151f"
+        },
+        {
+          "bytes": 1580,
+          "path": "cmake/leopardConfig.cmake.in",
+          "sha256": "f1a3e5598e3c5afc59c9df281540dcb5c6e7acc7764c589e62670f662962a8fb"
         },
         {
           "bytes": 10559,
@@ -1013,14 +1427,14 @@
           "sha256": "ca3083ce43a4727c89d9bb33479671af53efbedd41d0ba3ed748f1f464e33794"
         },
         {
-          "bytes": 92591,
+          "bytes": 94915,
           "path": "leopard2.cpp",
-          "sha256": "7105f2e5fbb1690849fbedb14353848440440428cca6c373dfaf052884f616f3"
+          "sha256": "3359deac453bc12ff78adbd9ace1ac259f1255b14188e93a7e498b6e5d6cd730"
         },
         {
-          "bytes": 11959,
+          "bytes": 12563,
           "path": "leopard2.h",
-          "sha256": "0023f28f9b9e1a6c97dfadead6bae97fbbb4ecb545e767648c535da534e12d0c"
+          "sha256": "5066ba731dc758ad0d0a7338aac237f6ce1bf185e8925c28311ff1d95ce6614f"
         }
       ],
       "standalone_linker": {
@@ -1035,27 +1449,34 @@
         "sha256": "6452af2eea333b8c65e1adb92964fc8f97863ab003fa13f9d12bff5345cd7dbe",
         "version": "GNU ar (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
       },
+      "argv_source_root_tokens": {
+        "build": 1,
+        "compile": 4,
+        "configure": 9
+      },
       "backend": "auto",
       "build_argv": [
         "/usr/bin/cmake",
         "--build",
-        "build/c7-matrix/core-auto",
+        "${LEO2_SOURCE_ROOT}/.research/leopard2/c7-proof-e1c9b5c/build/core-auto",
         "--target",
         "libleopard",
         "--verbose",
         "--",
-        "-j4"
+        "-j6"
       ],
-      "build_dir": "build/c7-matrix/core-auto",
+      "build_dir": ".research/leopard2/c7-proof-e1c9b5c/build/core-auto",
       "build_stderr": {
         "bytes": 0,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-core-build.stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_root_tokens": 0
       },
       "build_stdout": {
-        "bytes": 10344,
+        "bytes": 13925,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-core-build.stdout.txt",
-        "sha256": "0a4ae138371ee54548ad71fb6752da471fa8cd399dddc8769c633e1ae0c186d2"
+        "sha256": "ffa8c4dc2642584c89d81763f2105a532ceaa56561ead9fbd86ef6311d61c4bb",
+        "source_root_tokens": 107
       },
       "c_compiler": {
         "path": "/usr/bin/x86_64-linux-gnu-gcc-13",
@@ -1068,9 +1489,10 @@
         "version": "cmake version 3.28.3\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).\n"
       },
       "cmake_cache": {
-        "bytes": 20662,
+        "bytes": 21347,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-CMakeCache.txt",
-        "sha256": "b0af68f0434f82b5aebeaa0ae43219ac5b98df3c1dc70648c621b2f77712c331"
+        "sha256": "650e3155c733de24281ce7742b937ea89cd360b4cd372675f79fc202acb32a78",
+        "source_root_tokens": 13
       },
       "cmake_linker": {
         "path": "/usr/bin/x86_64-linux-gnu-ld",
@@ -1087,27 +1509,32 @@
         "-Wextra",
         "-Wpedantic",
         "-Werror",
-        "-I.",
-        "-DLEO2_C7_SOURCE_SHA256=\"c2edae60a9d9b57826a0206532e0437a4f3fbe07d8d3978045ca75a78f92f604\"",
-        "-DLEO2_C7_CORE_GIT_SHA=\"09e1ccec9dfc84a33db965cbccea1f375fb9ff39\"",
-        "-DLEO2_C7_LIBRARY_SHA256=\"c9dba912cbeb7c3115f7d2df8dd83fb0636e8ecbe420aa137c359a6480b5b172\"",
+        "-ffile-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-fdebug-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-fmacro-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-I${LEO2_SOURCE_ROOT}",
+        "-DLEO2_C7_SOURCE_SHA256=\"63c9bdda7b105787d080c6796d20c5b7244602af012ea101c5009b9abbf72c35\"",
+        "-DLEO2_C7_CORE_GIT_SHA=\"e1c9b5cb3f830c089347fdd975e808a9eba52e3d\"",
+        "-DLEO2_C7_LIBRARY_SHA256=\"913f23ab7860a5494ac723154918147a1a60512099d2e0d25a99eb53721dbfb4\"",
         "-O2",
         "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp",
-        "build/c7-matrix/core-auto/liblibleopard.a",
+        ".research/leopard2/c7-proof-e1c9b5c/build/core-auto/liblibleopard.a",
         "-pthread",
         "-fopenmp",
         "-o",
-        "build/c7-matrix/c7-auto"
+        ".research/leopard2/c7-proof-e1c9b5c/build/c7-auto"
       ],
       "compile_stderr": {
-        "bytes": 8964,
+        "bytes": 10287,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-compile.stderr.txt",
-        "sha256": "6da53d4dea33e25421d42ffeca84bc0f2a9c704747b8a93b3ac8d9580cc2ded8"
+        "sha256": "78ecabbe6e08be2ea78e684c083c07b8aa29cf7342bb2de8baa413e5df25888b",
+        "source_root_tokens": 22
       },
       "compile_stdout": {
         "bytes": 38,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-compile.stdout.txt",
-        "sha256": "d3326e248ec71b75a9016c742a75e4a40f139e4126f659577553b8ee686507c9"
+        "sha256": "d3326e248ec71b75a9016c742a75e4a40f139e4126f659577553b8ee686507c9",
+        "source_root_tokens": 0
       },
       "compiler": {
         "path": "/usr/bin/x86_64-linux-gnu-g++-13",
@@ -1117,9 +1544,9 @@
       "configure_argv": [
         "/usr/bin/cmake",
         "-S",
-        ".",
+        "${LEO2_SOURCE_ROOT}",
         "-B",
-        "build/c7-matrix/core-auto",
+        "${LEO2_SOURCE_ROOT}/.research/leopard2/c7-proof-e1c9b5c/build/core-auto",
         "-G",
         "Unix Makefiles",
         "-DCMAKE_BUILD_TYPE=Release",
@@ -1130,27 +1557,134 @@
         "-DLEO2_BUILD_BENCHMARKS=OFF",
         "-DLEO2_BUILD_FUZZERS=OFF",
         "-DLEO2_ENABLE_CUDA=OFF",
-        "-DENABLE_OPENMP=ON"
+        "-DENABLE_OPENMP=ON",
+        "-DCMAKE_C_FLAGS=-ffile-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fdebug-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fmacro-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-DCMAKE_CXX_FLAGS=-ffile-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fdebug-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fmacro-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-DCMAKE_EXE_LINKER_FLAGS=",
+        "-DCMAKE_CXX_COMPILER_LAUNCHER=/usr/bin/python3.12;${LEO2_SOURCE_ROOT}/experiments/leopard2/non_power_of_two/c7/run_matrix.py;--compiler-launch"
       ],
       "configure_stderr": {
         "bytes": 0,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-configure.stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_root_tokens": 0
       },
       "configure_stdout": {
-        "bytes": 1666,
+        "bytes": 1794,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-configure.stdout.txt",
-        "sha256": "3726f31f667b151a9aaa457a7e70237c25fec8237779200f29240d6cbb5140fc"
+        "sha256": "20295e2bd038d7eb4de49a31d5b51fba0bff1b5f236d2e4454b3855acf0cb35f",
+        "source_root_tokens": 1
       },
       "cxx_compiler": {
         "path": "/usr/bin/x86_64-linux-gnu-g++-13",
         "sha256": "1353e9bdd29a7295c7226bf6c63abccce056d8cac31f112e5cdbecc3f28c2769",
         "version": "x86_64-linux-gnu-g++-13 (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0\nCopyright (C) 2023 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
       },
+      "dependency_files": [
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-auto/CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o.d",
+          "retained": {
+            "bytes": 8834,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-dependencies/Leopard2BackendAVX2.cpp.o.d",
+            "sha256": "0794e418025634b3e847010d69025546067daa029710ef3b58dd10a0cf13f3ce",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-auto/CMakeFiles/leopard2_backend_ssse3.dir/Leopard2BackendSSSE3.cpp.o.d",
+          "retained": {
+            "bytes": 3574,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-dependencies/Leopard2BackendSSSE3.cpp.o.d",
+            "sha256": "2dbcd87827ff5f5f1a4abc83a709302d86b7aab6e983cb427a7ab78908ec5605",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-auto/CMakeFiles/libleopard.dir/Leopard2Backend.cpp.o.d",
+          "retained": {
+            "bytes": 4610,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-dependencies/Leopard2Backend.cpp.o.d",
+            "sha256": "3c8f09ffb56abaf701e0f56a58f63dbc6dadcedc02b6b91310fe0a398c7d530c",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-auto/CMakeFiles/libleopard.dir/Leopard2BackendScalar.cpp.o.d",
+          "retained": {
+            "bytes": 1614,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-dependencies/Leopard2BackendScalar.cpp.o.d",
+            "sha256": "d715971d799149f47255948e8df203f1c6270a1da940d83cad9ec2996b03eb66",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-auto/CMakeFiles/libleopard.dir/Leopard2CpuFeatures.cpp.o.d",
+          "retained": {
+            "bytes": 1063,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-dependencies/Leopard2CpuFeatures.cpp.o.d",
+            "sha256": "1d0220ae79f5150710db4a488723332a2ad230b2c8264c6ee135eda8c8599846",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-auto/CMakeFiles/libleopard.dir/Leopard2Plan.cpp.o.d",
+          "retained": {
+            "bytes": 1295,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-dependencies/Leopard2Plan.cpp.o.d",
+            "sha256": "73ccb94796574ecee27fa5fedb613f2c55a162f10e9b0291316d73be66095b74",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-auto/CMakeFiles/libleopard.dir/LeopardCommon.cpp.o.d",
+          "retained": {
+            "bytes": 8323,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-dependencies/LeopardCommon.cpp.o.d",
+            "sha256": "078902bd8e68b17a36d2f3f8fc3b802b79a5b3785e75bd6578b8c7197946289c",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-auto/CMakeFiles/libleopard.dir/LeopardFF16.cpp.o.d",
+          "retained": {
+            "bytes": 8428,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-dependencies/LeopardFF16.cpp.o.d",
+            "sha256": "30be73af7a2bfa167e6d62b025caca32e6fad0334ea2abb4c44c3939d7bfc028",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-auto/CMakeFiles/libleopard.dir/LeopardFF8.cpp.o.d",
+          "retained": {
+            "bytes": 8422,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-dependencies/LeopardFF8.cpp.o.d",
+            "sha256": "01ea95dde96d49d63d9972dfd486d53d762a54fd1a94c9ffdd0af026a6eb80b6",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-auto/CMakeFiles/libleopard.dir/leopard.cpp.o.d",
+          "retained": {
+            "bytes": 8448,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-dependencies/leopard.cpp.o.d",
+            "sha256": "98604dd9c06b0c30aea2df8c9dbedac34f74306a4b4a414f9f6fa9839a720087",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-auto/CMakeFiles/libleopard.dir/leopard2.cpp.o.d",
+          "retained": {
+            "bytes": 8883,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-dependencies/leopard2.cpp.o.d",
+            "sha256": "3d268eb8f73b9ce45092964526b20350bed847df7893acd845c7d2e102e96ec7",
+            "source_root_tokens": 0
+          }
+        }
+      ],
       "executable": {
-        "bytes": 2914392,
-        "path": "build/c7-matrix/c7-auto",
-        "sha256": "e71ca48a24a7841ed1da7d05413f695c2886ab678a3f440c9e1ee2864246ffe0"
+        "bytes": 3071056,
+        "path": ".research/leopard2/c7-proof-e1c9b5c/build/c7-auto",
+        "sha256": "adebda85d1e0e9b7cfb3beecffad2ef3249c7123fb16b0ab6a91021b9f7612b7"
       },
       "gmake": {
         "path": "/usr/bin/gmake",
@@ -1224,7 +1758,8 @@
         "core_archive_symbol_scan": {
           "bytes": 0,
           "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-nm-core-archive-sanitizers.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "source_root_tokens": 0
         },
         "executable_counts": {
           "asan_lines": 0,
@@ -1233,14 +1768,21 @@
         "executable_symbol_scan": {
           "bytes": 0,
           "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-nm-executable-sanitizers.txt",
-          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "source_root_tokens": 0
         },
         "required_compile_macro": false
       },
+      "jobs": 6,
+      "launcher_python": {
+        "path": "/usr/bin/python3.12",
+        "sha256": "1643dacd9feaedc58f3cc581e4d22577dfe25c09b10282936186ccf0f2e61118",
+        "version": "Python 3.12.3\n"
+      },
       "library": {
-        "bytes": 2634356,
-        "path": "build/c7-matrix/core-auto/liblibleopard.a",
-        "sha256": "c9dba912cbeb7c3115f7d2df8dd83fb0636e8ecbe420aa137c359a6480b5b172"
+        "bytes": 2825484,
+        "path": ".research/leopard2/c7-proof-e1c9b5c/build/core-auto/liblibleopard.a",
+        "sha256": "913f23ab7860a5494ac723154918147a1a60512099d2e0d25a99eb53721dbfb4"
       },
       "link_driver": {
         "path": "/usr/bin/x86_64-linux-gnu-g++-13",
@@ -1253,6 +1795,11 @@
         "sha256": "3708df3d7ce16e2c1dcdcd722784ae382d4d582276a71ab7bbe2d542f5621202",
         "version": "GNU nm (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
       },
+      "prefix_map_flags": [
+        "-ffile-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-fdebug-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-fmacro-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT"
+      ],
       "ranlib": {
         "path": "/usr/bin/x86_64-linux-gnu-ranlib",
         "sha256": "60254978b8ee2c1b21b41d16a18a621dbbcc72e43eb2fa9f916818256c77e9ee",
@@ -1261,34 +1808,34 @@
       "sanitizer": false,
       "source_closure": [
         {
-          "bytes": 27399,
+          "bytes": 29401,
           "path": "CMakeLists.txt",
-          "sha256": "0a20669b0ddfedb875f542bca9f7d1e8c49d20caa57fc3e351222aa43d2e2984"
+          "sha256": "7168c233d9c37fb26f5d6ecd5143f01cc91222c99417e47d3c1f1209a560e3d3"
         },
         {
-          "bytes": 8320,
+          "bytes": 19970,
           "path": "Leopard2Backend.cpp",
-          "sha256": "51e4d9f437773f7755161f4e5bd4269f6bb95d50dd7d8f8bd1e1dbdfcf9ac900"
+          "sha256": "8f56c1c40bca037b3338da12b9569dedb5affa42f17fafbf95e8db76a8020974"
         },
         {
-          "bytes": 3752,
+          "bytes": 5668,
           "path": "Leopard2Backend.h",
-          "sha256": "d1dbaa13d2bb0fafc95e46ac3cd956b64e5c945d3f27ac8d2fb6b08bdbb90866"
+          "sha256": "2f7d7ffb388416c11b2cd6ebfd149b01850cc95e23f9d5fc8a3893d27c0a454d"
         },
         {
-          "bytes": 9083,
+          "bytes": 17804,
           "path": "Leopard2BackendAVX2.cpp",
-          "sha256": "2f18e711bdc6ab47d2513165efcfd0a8ec284b3fda806a92a9cce77a35b76b66"
+          "sha256": "4e1c21d9b431bb7f8f7a579c0abc998f3f46a11d5fd7b06611c9dfd2c5cab586"
         },
         {
-          "bytes": 9066,
+          "bytes": 18053,
           "path": "Leopard2BackendSSSE3.cpp",
-          "sha256": "48fec52c003df2d5dbc65db439fc64a7780191b4fcb58a7358cdb957c4ed36cd"
+          "sha256": "f2f42befe3ca077ecfd4ac6c9c1fff98ea4c6986cb570d909ac2cac1dd7141ef"
         },
         {
-          "bytes": 6253,
+          "bytes": 12929,
           "path": "Leopard2BackendScalar.cpp",
-          "sha256": "cffd8434ce177aa2fa28768ea91fbf30a937c50bc3a621c1466c2745f94f125e"
+          "sha256": "783f61495cc1be9d16771e41511bb997084d12feb6b5a11a0edbe7a165614fe2"
         },
         {
           "bytes": 3883,
@@ -1306,44 +1853,49 @@
           "sha256": "d5a9d7dd2d388c70eda36c31d4a643a51c6be633747c97284c03676084ad9144"
         },
         {
-          "bytes": 3846,
+          "bytes": 4228,
           "path": "Leopard2Plan.cpp",
-          "sha256": "f1cdb03ca4b5ed0fef3957ed62d2e85471953aca0064802d4a0ef8bc4df77673"
+          "sha256": "ea74901ec8d91c51265dade4d55f5e1a3adcec0aeb4d2a5e4241722949c81311"
         },
         {
-          "bytes": 3803,
+          "bytes": 3965,
           "path": "Leopard2Plan.h",
-          "sha256": "68a8a6fac34ae0b8e7c03e5a87fd67f20b993bded4440f3e0482cb90e7ca2c00"
+          "sha256": "7c9755c7dd4c98d5d5679b0026c2b84bc22c40a17f9433e9544cfe8e3485ba32"
         },
         {
-          "bytes": 23145,
+          "bytes": 24287,
           "path": "LeopardCommon.cpp",
-          "sha256": "d2519c8a1515914d86f756ab6f2c6be597dfd0548a4c9b2552411c6eabaeeda4"
+          "sha256": "b86e992bfbe833635bdeb6af7c2a098575e71461d45a9b734b2224aab5e618c1"
         },
         {
-          "bytes": 16178,
+          "bytes": 16743,
           "path": "LeopardCommon.h",
-          "sha256": "da762b045c6dc61ba7ba4320dcd6c69dca2b7789025ec597f36ac2674f0d21c0"
+          "sha256": "a2f48fe3ec827dca2e5c91353fd5f05fefc9960955808efd11e52efd99c8a2e1"
         },
         {
-          "bytes": 86539,
+          "bytes": 90043,
           "path": "LeopardFF16.cpp",
-          "sha256": "3580e7482c1c2bded950b4ee7e16e3e433de338013f001c494c7d97a347464ba"
+          "sha256": "79a655b0f06edbb9007931bf681fd342e359e6b35b9bcafb7b98493dd9695d22"
         },
         {
-          "bytes": 9281,
+          "bytes": 12737,
           "path": "LeopardFF16.h",
-          "sha256": "3dbb579882bd6bd6f16dbed8977b029b4b0d0078122e03fa73765d089dc57862"
+          "sha256": "df7105f8d4908149cceb258d9a719675bbdc40b2e1133fc7e7c931c233964895"
         },
         {
-          "bytes": 89340,
+          "bytes": 93404,
           "path": "LeopardFF8.cpp",
-          "sha256": "c8f5c6f7110df7d1df5e4ba729a9d043478eb9cb9ea56a4b4050442a7499ac16"
+          "sha256": "02d224c87e67c82e0b3a1eb71c86177bc36119adf4d01c29b703579e0628d6fd"
         },
         {
-          "bytes": 9248,
+          "bytes": 13176,
           "path": "LeopardFF8.h",
-          "sha256": "4d9acab5fe9de6ed676f119d39173fdedefd76879a153900f1243ac2e1c4f9f7"
+          "sha256": "d676fe7683033cc0e122f73096ce50aaf62f51e724784480d2ee5e6e8803151f"
+        },
+        {
+          "bytes": 1580,
+          "path": "cmake/leopardConfig.cmake.in",
+          "sha256": "f1a3e5598e3c5afc59c9df281540dcb5c6e7acc7764c589e62670f662962a8fb"
         },
         {
           "bytes": 10559,
@@ -1356,14 +1908,14 @@
           "sha256": "ca3083ce43a4727c89d9bb33479671af53efbedd41d0ba3ed748f1f464e33794"
         },
         {
-          "bytes": 92591,
+          "bytes": 94915,
           "path": "leopard2.cpp",
-          "sha256": "7105f2e5fbb1690849fbedb14353848440440428cca6c373dfaf052884f616f3"
+          "sha256": "3359deac453bc12ff78adbd9ace1ac259f1255b14188e93a7e498b6e5d6cd730"
         },
         {
-          "bytes": 11959,
+          "bytes": 12563,
           "path": "leopard2.h",
-          "sha256": "0023f28f9b9e1a6c97dfadead6bae97fbbb4ecb545e767648c535da534e12d0c"
+          "sha256": "5066ba731dc758ad0d0a7338aac237f6ce1bf185e8925c28311ff1d95ce6614f"
         }
       ],
       "standalone_linker": {
@@ -1378,27 +1930,34 @@
         "sha256": "eedd2efbdee80acf60e17e10adeddf31be0347226245f935be95efa3ae00ec79",
         "version": "Ubuntu LLVM version 18.1.3\n  Optimized build.\n"
       },
+      "argv_source_root_tokens": {
+        "build": 1,
+        "compile": 4,
+        "configure": 9
+      },
       "backend": "auto",
       "build_argv": [
         "/usr/bin/cmake",
         "--build",
-        "build/c7-matrix/core-asan-ubsan",
+        "${LEO2_SOURCE_ROOT}/.research/leopard2/c7-proof-e1c9b5c/build/core-asan-ubsan",
         "--target",
         "libleopard",
         "--verbose",
         "--",
-        "-j4"
+        "-j6"
       ],
-      "build_dir": "build/c7-matrix/core-asan-ubsan",
+      "build_dir": ".research/leopard2/c7-proof-e1c9b5c/build/core-asan-ubsan",
       "build_stderr": {
         "bytes": 0,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-core-build.stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_root_tokens": 0
       },
       "build_stdout": {
-        "bytes": 10740,
+        "bytes": 14321,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-core-build.stdout.txt",
-        "sha256": "327f66269c629956afd1ff1e0a6e064e301bc3a736d94512332ee4e3bf8c0f3f"
+        "sha256": "a5e374fe154d73b42e3655404d736106d1b304ff20e12d3f7397b82067d91d3a",
+        "source_root_tokens": 107
       },
       "c_compiler": {
         "path": "/usr/bin/clang-18",
@@ -1411,9 +1970,10 @@
         "version": "cmake version 3.28.3\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).\n"
       },
       "cmake_cache": {
-        "bytes": 20580,
+        "bytes": 21267,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-CMakeCache.txt",
-        "sha256": "7ac24d40bcf2dfb795415002fa4ac788cd88ac6cad50ebbad5217ac4ddc6532d"
+        "sha256": "b5b6546d82f1b92a441fed17eca69303f44e5209774a83f3d20e9477f0198968",
+        "source_root_tokens": 13
       },
       "cmake_linker": {
         "path": "/usr/bin/ld",
@@ -1430,10 +1990,13 @@
         "-Wextra",
         "-Wpedantic",
         "-Werror",
-        "-I.",
-        "-DLEO2_C7_SOURCE_SHA256=\"c2edae60a9d9b57826a0206532e0437a4f3fbe07d8d3978045ca75a78f92f604\"",
-        "-DLEO2_C7_CORE_GIT_SHA=\"09e1ccec9dfc84a33db965cbccea1f375fb9ff39\"",
-        "-DLEO2_C7_LIBRARY_SHA256=\"6d04cea8448e45940dca73fde54b1cf949e5bfbe4ae0eebce31589a1774cdc42\"",
+        "-ffile-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-fdebug-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-fmacro-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-I${LEO2_SOURCE_ROOT}",
+        "-DLEO2_C7_SOURCE_SHA256=\"63c9bdda7b105787d080c6796d20c5b7244602af012ea101c5009b9abbf72c35\"",
+        "-DLEO2_C7_CORE_GIT_SHA=\"e1c9b5cb3f830c089347fdd975e808a9eba52e3d\"",
+        "-DLEO2_C7_LIBRARY_SHA256=\"f4cba3339b4a3726b70961cc9fc973446acdd5b5fa85cf563a0a9c31ce0b3b19\"",
         "-O1",
         "-fsanitize=address,undefined",
         "-fno-omit-frame-pointer",
@@ -1441,20 +2004,22 @@
         "-DLEO2_C7_SANITIZER_MODE=\"asan-ubsan\"",
         "-DLEO2_C7_REQUIRE_ASAN_UBSAN=1",
         "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp",
-        "build/c7-matrix/core-asan-ubsan/liblibleopard.a",
+        ".research/leopard2/c7-proof-e1c9b5c/build/core-asan-ubsan/liblibleopard.a",
         "-pthread",
         "-o",
-        "build/c7-matrix/c7-asan-ubsan"
+        ".research/leopard2/c7-proof-e1c9b5c/build/c7-asan-ubsan"
       ],
       "compile_stderr": {
-        "bytes": 5012,
+        "bytes": 5397,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-compile.stderr.txt",
-        "sha256": "c999b48eb26287e905aa300d05876ac2a22554d96dedaef23fc7df50dffc4e2d"
+        "sha256": "dfd197171f8f8e1a5d93b5966f26b69ef18bb2fe2e184266f0cdeb7c454e2f82",
+        "source_root_tokens": 9
       },
       "compile_stdout": {
         "bytes": 38,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-compile.stdout.txt",
-        "sha256": "d3326e248ec71b75a9016c742a75e4a40f139e4126f659577553b8ee686507c9"
+        "sha256": "d3326e248ec71b75a9016c742a75e4a40f139e4126f659577553b8ee686507c9",
+        "source_root_tokens": 0
       },
       "compiler": {
         "path": "/usr/bin/clang++-18",
@@ -1464,9 +2029,9 @@
       "configure_argv": [
         "/usr/bin/cmake",
         "-S",
-        ".",
+        "${LEO2_SOURCE_ROOT}",
         "-B",
-        "build/c7-matrix/core-asan-ubsan",
+        "${LEO2_SOURCE_ROOT}/.research/leopard2/c7-proof-e1c9b5c/build/core-asan-ubsan",
         "-G",
         "Unix Makefiles",
         "-DCMAKE_BUILD_TYPE=Debug",
@@ -1478,29 +2043,133 @@
         "-DLEO2_BUILD_FUZZERS=OFF",
         "-DLEO2_ENABLE_CUDA=OFF",
         "-DENABLE_OPENMP=OFF",
-        "-DCMAKE_C_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer",
-        "-DCMAKE_CXX_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer",
-        "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer"
+        "-DCMAKE_C_FLAGS=-ffile-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fdebug-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fmacro-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fsanitize=address,undefined -fno-omit-frame-pointer",
+        "-DCMAKE_CXX_FLAGS=-ffile-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fdebug-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fmacro-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT -fsanitize=address,undefined -fno-omit-frame-pointer",
+        "-DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined -fno-omit-frame-pointer",
+        "-DCMAKE_CXX_COMPILER_LAUNCHER=/usr/bin/python3.12;${LEO2_SOURCE_ROOT}/experiments/leopard2/non_power_of_two/c7/run_matrix.py;--compiler-launch"
       ],
       "configure_stderr": {
         "bytes": 0,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-configure.stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_root_tokens": 0
       },
       "configure_stdout": {
-        "bytes": 1662,
+        "bytes": 1790,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-configure.stdout.txt",
-        "sha256": "34cda1c924aa68e8dfdff50b890622f980398035962d2d35d95c86f48854b31f"
+        "sha256": "01718425f71fe255dbb1054627b757693c045927b0157fe0364f1610a17748dd",
+        "source_root_tokens": 1
       },
       "cxx_compiler": {
         "path": "/usr/bin/clang++-18",
         "sha256": "8ef402d453d1ba4902e4ee0f0f847f6cfa01400c95aa43c24e97818b9c0e3f45",
         "version": "Ubuntu clang version 18.1.3 (1ubuntu1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/bin\n"
       },
+      "dependency_files": [
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-asan-ubsan/CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o.d",
+          "retained": {
+            "bytes": 9496,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-dependencies/Leopard2BackendAVX2.cpp.o.d",
+            "sha256": "f502a3fb39dd63cccb90e7cf7fd5c8e974ca5f1e1a3420e436028b839e32b40c",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-asan-ubsan/CMakeFiles/leopard2_backend_ssse3.dir/Leopard2BackendSSSE3.cpp.o.d",
+          "retained": {
+            "bytes": 4226,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-dependencies/Leopard2BackendSSSE3.cpp.o.d",
+            "sha256": "0a9ea50a652b352180dad1ba29d55e8d64138fa0b226761eb926ccc1b9a288b6",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-asan-ubsan/CMakeFiles/libleopard.dir/Leopard2Backend.cpp.o.d",
+          "retained": {
+            "bytes": 6835,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-dependencies/Leopard2Backend.cpp.o.d",
+            "sha256": "92aa0a4cda84ca9c15949c358aa348baedd426a42196ad1e856073b362c3e399",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-asan-ubsan/CMakeFiles/libleopard.dir/Leopard2BackendScalar.cpp.o.d",
+          "retained": {
+            "bytes": 2299,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-dependencies/Leopard2BackendScalar.cpp.o.d",
+            "sha256": "55db643a169c81d0221892c02ffc28820dd927724539565f1d36aa0425b5016a",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-asan-ubsan/CMakeFiles/libleopard.dir/Leopard2CpuFeatures.cpp.o.d",
+          "retained": {
+            "bytes": 1568,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-dependencies/Leopard2CpuFeatures.cpp.o.d",
+            "sha256": "0bc1dfcfc2805de2b30a30caadafa83cd186c6c30a485b912ec8ac086039f638",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-asan-ubsan/CMakeFiles/libleopard.dir/Leopard2Plan.cpp.o.d",
+          "retained": {
+            "bytes": 1688,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-dependencies/Leopard2Plan.cpp.o.d",
+            "sha256": "07002bdb1d2980e2798ac7d356d3bac90ba77f1086bc89c5508189c8cf011c98",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-asan-ubsan/CMakeFiles/libleopard.dir/LeopardCommon.cpp.o.d",
+          "retained": {
+            "bytes": 13280,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-dependencies/LeopardCommon.cpp.o.d",
+            "sha256": "8c068f61dae3710ea15359663b29c8b197b37615b4661d22e138dad5da9294ea",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-asan-ubsan/CMakeFiles/libleopard.dir/LeopardFF16.cpp.o.d",
+          "retained": {
+            "bytes": 13121,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-dependencies/LeopardFF16.cpp.o.d",
+            "sha256": "1ace8b1d3365f2d7445a7950469d76000a357d239b7370dfd08e54fd01812b95",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-asan-ubsan/CMakeFiles/libleopard.dir/LeopardFF8.cpp.o.d",
+          "retained": {
+            "bytes": 13118,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-dependencies/LeopardFF8.cpp.o.d",
+            "sha256": "4b4fa512b348ebd31e3571f08d7e89babccc7fda2c6ed0ad30421314dfe3fce2",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-asan-ubsan/CMakeFiles/libleopard.dir/leopard.cpp.o.d",
+          "retained": {
+            "bytes": 13149,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-dependencies/leopard.cpp.o.d",
+            "sha256": "76bf756e3a708af69b1583b7ec9112e81c238c98ad02a83473f6c0c04348c9d7",
+            "source_root_tokens": 0
+          }
+        },
+        {
+          "build_path": ".research/leopard2/c7-proof-e1c9b5c/build/core-asan-ubsan/CMakeFiles/libleopard.dir/leopard2.cpp.o.d",
+          "retained": {
+            "bytes": 13921,
+            "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-dependencies/leopard2.cpp.o.d",
+            "sha256": "0d1da952c35552c83ed51ce6e6001a35ef69dd628bcc434e331134597021ef68",
+            "source_root_tokens": 0
+          }
+        }
+      ],
       "executable": {
-        "bytes": 5075272,
-        "path": "build/c7-matrix/c7-asan-ubsan",
-        "sha256": "d4677e30147b0e42cd5495d16713d66797af92d778b99577ccde6644717fd169"
+        "bytes": 5374816,
+        "path": ".research/leopard2/c7-proof-e1c9b5c/build/c7-asan-ubsan",
+        "sha256": "a710b6f4721f3a5cd82cf43b1f19b7aa8f90a0de9ea68dc30f314ca3a45162c5"
       },
       "gmake": {
         "path": "/usr/bin/gmake",
@@ -1522,20 +2191,20 @@
           "Leopard2BackendAVX2.cpp.o"
         ],
         "core_archive_counts": {
-          "asan_lines": 306,
-          "ubsan_lines": 86
+          "asan_lines": 329,
+          "ubsan_lines": 87
         },
         "core_archive_member_counts": {
           "Leopard2Backend.cpp.o": {
-            "asan_lines": 21,
-            "ubsan_lines": 8
+            "asan_lines": 35,
+            "ubsan_lines": 9
           },
           "Leopard2BackendAVX2.cpp.o": {
-            "asan_lines": 16,
+            "asan_lines": 20,
             "ubsan_lines": 7
           },
           "Leopard2BackendSSSE3.cpp.o": {
-            "asan_lines": 14,
+            "asan_lines": 18,
             "ubsan_lines": 8
           },
           "Leopard2BackendScalar.cpp.o": {
@@ -1567,30 +2236,38 @@
             "ubsan_lines": 7
           },
           "leopard2.cpp.o": {
-            "asan_lines": 140,
+            "asan_lines": 141,
             "ubsan_lines": 15
           }
         },
         "core_archive_symbol_scan": {
-          "bytes": 42710,
+          "bytes": 32033,
           "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-nm-core-archive-sanitizers.txt",
-          "sha256": "81b5a975e6561e57985fcaef8ccacfb164f108be250cbb75a591b6fcd29f89ed"
+          "sha256": "6fab17ce711d452248588a2981c028262574740703e013d4665fb4b883b6d923",
+          "source_root_tokens": 0
         },
         "executable_counts": {
           "asan_lines": 320,
           "ubsan_lines": 54
         },
         "executable_symbol_scan": {
-          "bytes": 28628,
+          "bytes": 22644,
           "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-nm-executable-sanitizers.txt",
-          "sha256": "40408affaa67c508a886e0a7e50eea4dcf74deb85ad046b55bb60c6a0b683064"
+          "sha256": "593b3fe224e56d087d25daf0027abd9ef5ee42145cd83a5315094ed4fc9e0ec6",
+          "source_root_tokens": 0
         },
         "required_compile_macro": true
       },
+      "jobs": 6,
+      "launcher_python": {
+        "path": "/usr/bin/python3.12",
+        "sha256": "1643dacd9feaedc58f3cc581e4d22577dfe25c09b10282936186ccf0f2e61118",
+        "version": "Python 3.12.3\n"
+      },
       "library": {
-        "bytes": 3040116,
-        "path": "build/c7-matrix/core-asan-ubsan/liblibleopard.a",
-        "sha256": "6d04cea8448e45940dca73fde54b1cf949e5bfbe4ae0eebce31589a1774cdc42"
+        "bytes": 3389750,
+        "path": ".research/leopard2/c7-proof-e1c9b5c/build/core-asan-ubsan/liblibleopard.a",
+        "sha256": "f4cba3339b4a3726b70961cc9fc973446acdd5b5fa85cf563a0a9c31ce0b3b19"
       },
       "link_driver": {
         "path": "/usr/bin/clang++-18",
@@ -1603,6 +2280,11 @@
         "sha256": "3708df3d7ce16e2c1dcdcd722784ae382d4d582276a71ab7bbe2d542f5621202",
         "version": "GNU nm (GNU Binutils for Ubuntu) 2.42\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis program is free software; you may redistribute it under the terms of\nthe GNU General Public License version 3 or (at your option) any later version.\nThis program has absolutely no warranty.\n"
       },
+      "prefix_map_flags": [
+        "-ffile-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-fdebug-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT",
+        "-fmacro-prefix-map=${LEO2_SOURCE_ROOT}=LEO2_SOURCE_ROOT"
+      ],
       "ranlib": {
         "path": "/usr/bin/llvm-ranlib-18",
         "sha256": "eedd2efbdee80acf60e17e10adeddf31be0347226245f935be95efa3ae00ec79",
@@ -1611,34 +2293,34 @@
       "sanitizer": true,
       "source_closure": [
         {
-          "bytes": 27399,
+          "bytes": 29401,
           "path": "CMakeLists.txt",
-          "sha256": "0a20669b0ddfedb875f542bca9f7d1e8c49d20caa57fc3e351222aa43d2e2984"
+          "sha256": "7168c233d9c37fb26f5d6ecd5143f01cc91222c99417e47d3c1f1209a560e3d3"
         },
         {
-          "bytes": 8320,
+          "bytes": 19970,
           "path": "Leopard2Backend.cpp",
-          "sha256": "51e4d9f437773f7755161f4e5bd4269f6bb95d50dd7d8f8bd1e1dbdfcf9ac900"
+          "sha256": "8f56c1c40bca037b3338da12b9569dedb5affa42f17fafbf95e8db76a8020974"
         },
         {
-          "bytes": 3752,
+          "bytes": 5668,
           "path": "Leopard2Backend.h",
-          "sha256": "d1dbaa13d2bb0fafc95e46ac3cd956b64e5c945d3f27ac8d2fb6b08bdbb90866"
+          "sha256": "2f7d7ffb388416c11b2cd6ebfd149b01850cc95e23f9d5fc8a3893d27c0a454d"
         },
         {
-          "bytes": 9083,
+          "bytes": 17804,
           "path": "Leopard2BackendAVX2.cpp",
-          "sha256": "2f18e711bdc6ab47d2513165efcfd0a8ec284b3fda806a92a9cce77a35b76b66"
+          "sha256": "4e1c21d9b431bb7f8f7a579c0abc998f3f46a11d5fd7b06611c9dfd2c5cab586"
         },
         {
-          "bytes": 9066,
+          "bytes": 18053,
           "path": "Leopard2BackendSSSE3.cpp",
-          "sha256": "48fec52c003df2d5dbc65db439fc64a7780191b4fcb58a7358cdb957c4ed36cd"
+          "sha256": "f2f42befe3ca077ecfd4ac6c9c1fff98ea4c6986cb570d909ac2cac1dd7141ef"
         },
         {
-          "bytes": 6253,
+          "bytes": 12929,
           "path": "Leopard2BackendScalar.cpp",
-          "sha256": "cffd8434ce177aa2fa28768ea91fbf30a937c50bc3a621c1466c2745f94f125e"
+          "sha256": "783f61495cc1be9d16771e41511bb997084d12feb6b5a11a0edbe7a165614fe2"
         },
         {
           "bytes": 3883,
@@ -1656,44 +2338,49 @@
           "sha256": "d5a9d7dd2d388c70eda36c31d4a643a51c6be633747c97284c03676084ad9144"
         },
         {
-          "bytes": 3846,
+          "bytes": 4228,
           "path": "Leopard2Plan.cpp",
-          "sha256": "f1cdb03ca4b5ed0fef3957ed62d2e85471953aca0064802d4a0ef8bc4df77673"
+          "sha256": "ea74901ec8d91c51265dade4d55f5e1a3adcec0aeb4d2a5e4241722949c81311"
         },
         {
-          "bytes": 3803,
+          "bytes": 3965,
           "path": "Leopard2Plan.h",
-          "sha256": "68a8a6fac34ae0b8e7c03e5a87fd67f20b993bded4440f3e0482cb90e7ca2c00"
+          "sha256": "7c9755c7dd4c98d5d5679b0026c2b84bc22c40a17f9433e9544cfe8e3485ba32"
         },
         {
-          "bytes": 23145,
+          "bytes": 24287,
           "path": "LeopardCommon.cpp",
-          "sha256": "d2519c8a1515914d86f756ab6f2c6be597dfd0548a4c9b2552411c6eabaeeda4"
+          "sha256": "b86e992bfbe833635bdeb6af7c2a098575e71461d45a9b734b2224aab5e618c1"
         },
         {
-          "bytes": 16178,
+          "bytes": 16743,
           "path": "LeopardCommon.h",
-          "sha256": "da762b045c6dc61ba7ba4320dcd6c69dca2b7789025ec597f36ac2674f0d21c0"
+          "sha256": "a2f48fe3ec827dca2e5c91353fd5f05fefc9960955808efd11e52efd99c8a2e1"
         },
         {
-          "bytes": 86539,
+          "bytes": 90043,
           "path": "LeopardFF16.cpp",
-          "sha256": "3580e7482c1c2bded950b4ee7e16e3e433de338013f001c494c7d97a347464ba"
+          "sha256": "79a655b0f06edbb9007931bf681fd342e359e6b35b9bcafb7b98493dd9695d22"
         },
         {
-          "bytes": 9281,
+          "bytes": 12737,
           "path": "LeopardFF16.h",
-          "sha256": "3dbb579882bd6bd6f16dbed8977b029b4b0d0078122e03fa73765d089dc57862"
+          "sha256": "df7105f8d4908149cceb258d9a719675bbdc40b2e1133fc7e7c931c233964895"
         },
         {
-          "bytes": 89340,
+          "bytes": 93404,
           "path": "LeopardFF8.cpp",
-          "sha256": "c8f5c6f7110df7d1df5e4ba729a9d043478eb9cb9ea56a4b4050442a7499ac16"
+          "sha256": "02d224c87e67c82e0b3a1eb71c86177bc36119adf4d01c29b703579e0628d6fd"
         },
         {
-          "bytes": 9248,
+          "bytes": 13176,
           "path": "LeopardFF8.h",
-          "sha256": "4d9acab5fe9de6ed676f119d39173fdedefd76879a153900f1243ac2e1c4f9f7"
+          "sha256": "d676fe7683033cc0e122f73096ce50aaf62f51e724784480d2ee5e6e8803151f"
+        },
+        {
+          "bytes": 1580,
+          "path": "cmake/leopardConfig.cmake.in",
+          "sha256": "f1a3e5598e3c5afc59c9df281540dcb5c6e7acc7764c589e62670f662962a8fb"
         },
         {
           "bytes": 10559,
@@ -1706,14 +2393,14 @@
           "sha256": "ca3083ce43a4727c89d9bb33479671af53efbedd41d0ba3ed748f1f464e33794"
         },
         {
-          "bytes": 92591,
+          "bytes": 94915,
           "path": "leopard2.cpp",
-          "sha256": "7105f2e5fbb1690849fbedb14353848440440428cca6c373dfaf052884f616f3"
+          "sha256": "3359deac453bc12ff78adbd9ace1ac259f1255b14188e93a7e498b6e5d6cd730"
         },
         {
-          "bytes": 11959,
+          "bytes": 12563,
           "path": "leopard2.h",
-          "sha256": "0023f28f9b9e1a6c97dfadead6bae97fbbb4ecb545e767648c535da534e12d0c"
+          "sha256": "5066ba731dc758ad0d0a7338aac237f6ce1bf185e8925c28311ff1d95ce6614f"
         }
       ],
       "standalone_linker": {
@@ -1723,11 +2410,79 @@
       }
     }
   ],
-  "core_git_sha": "09e1ccec9dfc84a33db965cbccea1f375fb9ff39",
+  "core_git_sha": "e1c9b5cb3f830c089347fdd975e808a9eba52e3d",
+  "normalization": {
+    "operation": "replace exact source-root prefix only",
+    "schema": "leopard2-source-root-prefix/v1",
+    "token": "${LEO2_SOURCE_ROOT}"
+  },
+  "reproducibility": {
+    "comparison": {
+      "build_names": [
+        "scalar",
+        "ssse3",
+        "avx2",
+        "auto",
+        "asan-ubsan"
+      ],
+      "checkout_roots_scanned": 2,
+      "current_scan": {
+        "archives": 5,
+        "executables": 5,
+        "normalized_text_records": 118
+      },
+      "fingerprints_sha256": "045a8c7e4f53809ceb58073d4d342ee2d2d4a7c816f94a1df3e81213497d28f9",
+      "peer_attestation": {
+        "bytes": 5307,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/peer-reproducibility-attestation.json",
+        "sha256": "75b57628179b57d78b0ca08b9c4d180b3013fcc7b4333b95db442d5979498a80"
+      },
+      "peer_evidence_bundle": {
+        "bytes": 64902,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/peer-evidence-bundle.tar.gz",
+        "sha256": "4397abb59be55e2983f69837ed4f046e0f326c9a32eabdcfc8e14c4936753f61"
+      },
+      "peer_manifest": {
+        "bytes": 119415,
+        "path": "experiments/leopard2/non_power_of_two/c7/results/peer-manifest.json",
+        "sha256": "d2eaf1c48827b51145ec6a0d773bc68a87cf964d5b51137755c560ddbd08bde1"
+      },
+      "peer_manifest_sha256": "d2eaf1c48827b51145ec6a0d773bc68a87cf964d5b51137755c560ddbd08bde1",
+      "peer_scan": {
+        "archives": 5,
+        "executables": 5,
+        "normalized_text_records": 118
+      },
+      "status": "pass"
+    },
+    "fingerprints": {
+      "asan-ubsan": {
+        "executable_sha256": "a710b6f4721f3a5cd82cf43b1f19b7aa8f90a0de9ea68dc30f314ca3a45162c5",
+        "library_sha256": "f4cba3339b4a3726b70961cc9fc973446acdd5b5fa85cf563a0a9c31ce0b3b19"
+      },
+      "auto": {
+        "executable_sha256": "adebda85d1e0e9b7cfb3beecffad2ef3249c7123fb16b0ab6a91021b9f7612b7",
+        "library_sha256": "913f23ab7860a5494ac723154918147a1a60512099d2e0d25a99eb53721dbfb4"
+      },
+      "avx2": {
+        "executable_sha256": "e2103842f97473b403d11aaa9dd4ecf8625bbfc99e8a1f36b5a43b5daf95f6b0",
+        "library_sha256": "1b3d9d5c494314c234de70a432945ada3cf9add1a41c36a39db53843d32dac52"
+      },
+      "scalar": {
+        "executable_sha256": "89cad5ce438033aad1a571782a4a2699aeed545086f057a6147ae0185bc827dc",
+        "library_sha256": "731794d3f9b00ae991dfca8d94ee5f379029892a2fd78ca9630551c30884adc6"
+      },
+      "ssse3": {
+        "executable_sha256": "59993d511103fa292de7fd8adb9fe6a4d2d8536d6bc1c25ce2f857eba676c759",
+        "library_sha256": "fe72ea11e592421207aca1d1413c6609f6102a83b903a5e80ef108842aaee547"
+      }
+    },
+    "prefix_map_target": "LEO2_SOURCE_ROOT"
+  },
   "runner": {
-    "bytes": 21866,
+    "bytes": 53257,
     "path": "experiments/leopard2/non_power_of_two/c7/run_matrix.py",
-    "sha256": "1f29919c4b51eb507e0317438fb0dd1b22ee3d87c53e54d4de37650d429847ba"
+    "sha256": "f5d4852595a4a027fe159ca28e6654f7fe7205f1322e4acdd3699e2d6a12e45d"
   },
   "runs": [
     {
@@ -1735,12 +2490,13 @@
         "/usr/bin/taskset",
         "-c",
         "0",
-        "build/c7-matrix/c7-scalar",
+        "${LEO2_SOURCE_ROOT}/.research/leopard2/c7-proof-e1c9b5c/build/c7-scalar",
         "--backend",
         "scalar",
-        "experiments/leopard2/non_power_of_two/c7/results/scalar.json",
+        "${LEO2_SOURCE_ROOT}/experiments/leopard2/non_power_of_two/c7/results/scalar.json",
         "--correctness-only"
       ],
+      "argv_source_root_tokens": 2,
       "build": "scalar",
       "environment": {
         "LC_ALL": "C",
@@ -1754,19 +2510,22 @@
       ],
       "requested_cpu": 0,
       "result": {
-        "bytes": 1701,
+        "bytes": 1807,
         "path": "experiments/leopard2/non_power_of_two/c7/results/scalar.json",
-        "sha256": "5349fa4496a5be1d60c5baca9fb8fd6fbb8d6b02659dec162706385535bf97b1"
+        "sha256": "f1d6bc12e2e23ecabffd50c8b225a9df65b96e06660b9b4ed642c48bc6a0a3a5",
+        "source_root_tokens": 0
       },
       "stderr": {
         "bytes": 0,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-run.stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_root_tokens": 0
       },
       "stdout": {
         "bytes": 0,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/scalar-run.stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_root_tokens": 0
       }
     },
     {
@@ -1774,12 +2533,13 @@
         "/usr/bin/taskset",
         "-c",
         "1",
-        "build/c7-matrix/c7-ssse3",
+        "${LEO2_SOURCE_ROOT}/.research/leopard2/c7-proof-e1c9b5c/build/c7-ssse3",
         "--backend",
         "ssse3",
-        "experiments/leopard2/non_power_of_two/c7/results/ssse3.json",
+        "${LEO2_SOURCE_ROOT}/experiments/leopard2/non_power_of_two/c7/results/ssse3.json",
         "--correctness-only"
       ],
+      "argv_source_root_tokens": 2,
       "build": "ssse3",
       "environment": {
         "LC_ALL": "C",
@@ -1793,19 +2553,22 @@
       ],
       "requested_cpu": 1,
       "result": {
-        "bytes": 1699,
+        "bytes": 1805,
         "path": "experiments/leopard2/non_power_of_two/c7/results/ssse3.json",
-        "sha256": "6a5369c897ea787db646de6823c16f03e48d91fa3056ba2e742ee306b3931e09"
+        "sha256": "015109d625ad5e8099d3f7b79cf9264f22e3a79319faff0f84dc1faccddf5aaa",
+        "source_root_tokens": 0
       },
       "stderr": {
         "bytes": 0,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-run.stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_root_tokens": 0
       },
       "stdout": {
         "bytes": 0,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/ssse3-run.stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_root_tokens": 0
       }
     },
     {
@@ -1813,12 +2576,13 @@
         "/usr/bin/taskset",
         "-c",
         "2",
-        "build/c7-matrix/c7-avx2",
+        "${LEO2_SOURCE_ROOT}/.research/leopard2/c7-proof-e1c9b5c/build/c7-avx2",
         "--backend",
         "avx2",
-        "experiments/leopard2/non_power_of_two/c7/results/avx2.json",
+        "${LEO2_SOURCE_ROOT}/experiments/leopard2/non_power_of_two/c7/results/avx2.json",
         "--correctness-only"
       ],
+      "argv_source_root_tokens": 2,
       "build": "avx2",
       "environment": {
         "LC_ALL": "C",
@@ -1832,19 +2596,22 @@
       ],
       "requested_cpu": 2,
       "result": {
-        "bytes": 1697,
+        "bytes": 1803,
         "path": "experiments/leopard2/non_power_of_two/c7/results/avx2.json",
-        "sha256": "641bd6e640f860cfdb50c7b78dca9149808680cb511e6c11934cc6b1014d7112"
+        "sha256": "7ee59608cb88bfb724b99190e1bd8d97ce496c47bc76be558dd296714ed68672",
+        "source_root_tokens": 0
       },
       "stderr": {
         "bytes": 0,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-run.stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_root_tokens": 0
       },
       "stdout": {
         "bytes": 0,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/avx2-run.stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_root_tokens": 0
       }
     },
     {
@@ -1852,12 +2619,13 @@
         "/usr/bin/taskset",
         "-c",
         "3",
-        "build/c7-matrix/c7-auto",
+        "${LEO2_SOURCE_ROOT}/.research/leopard2/c7-proof-e1c9b5c/build/c7-auto",
         "--backend",
         "auto",
-        "experiments/leopard2/non_power_of_two/c7/results/auto.json",
+        "${LEO2_SOURCE_ROOT}/experiments/leopard2/non_power_of_two/c7/results/auto.json",
         "--correctness-only"
       ],
+      "argv_source_root_tokens": 2,
       "build": "auto",
       "environment": {
         "LC_ALL": "C",
@@ -1871,19 +2639,22 @@
       ],
       "requested_cpu": 3,
       "result": {
-        "bytes": 1697,
+        "bytes": 1803,
         "path": "experiments/leopard2/non_power_of_two/c7/results/auto.json",
-        "sha256": "0fdfc26b4cacf5347d0123fac5235cb4a63d873e0c9039a9b5f17b4b965db630"
+        "sha256": "5933fa50c96a050dfb7abda695a78f8cbb2b2f83477d4ba7c28b736b2679da2c",
+        "source_root_tokens": 0
       },
       "stderr": {
         "bytes": 0,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-run.stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_root_tokens": 0
       },
       "stdout": {
         "bytes": 0,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/auto-run.stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_root_tokens": 0
       }
     },
     {
@@ -1891,12 +2662,13 @@
         "/usr/bin/taskset",
         "-c",
         "4",
-        "build/c7-matrix/c7-asan-ubsan",
+        "${LEO2_SOURCE_ROOT}/.research/leopard2/c7-proof-e1c9b5c/build/c7-asan-ubsan",
         "--backend",
         "auto",
-        "experiments/leopard2/non_power_of_two/c7/results/asan-ubsan.json",
+        "${LEO2_SOURCE_ROOT}/experiments/leopard2/non_power_of_two/c7/results/asan-ubsan.json",
         "--correctness-only"
       ],
+      "argv_source_root_tokens": 2,
       "build": "asan-ubsan",
       "environment": {
         "ASAN_OPTIONS": "detect_leaks=1:halt_on_error=1",
@@ -1912,19 +2684,22 @@
       ],
       "requested_cpu": 4,
       "result": {
-        "bytes": 1713,
+        "bytes": 1819,
         "path": "experiments/leopard2/non_power_of_two/c7/results/asan-ubsan.json",
-        "sha256": "a99e04b1ffef38e1f629061021e83dd67426aa5e66e33ea5b26038c35f5f77ba"
+        "sha256": "791cfbad0c09199238d0a76ef591bc4a62a194ebbc30c78df2f8fc078e6c207b",
+        "source_root_tokens": 0
       },
       "stderr": {
         "bytes": 0,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-run.stderr.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_root_tokens": 0
       },
       "stdout": {
         "bytes": 0,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/asan-ubsan-run.stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_root_tokens": 0
       }
     },
     {
@@ -1932,12 +2707,13 @@
         "/usr/bin/taskset",
         "-c",
         "0",
-        "build/c7-matrix/c7-auto",
+        "${LEO2_SOURCE_ROOT}/.research/leopard2/c7-proof-e1c9b5c/build/c7-auto",
         "--backend",
         "auto",
-        "experiments/leopard2/non_power_of_two/c7/results/smoke-nonauthoritative.json",
+        "${LEO2_SOURCE_ROOT}/experiments/leopard2/non_power_of_two/c7/results/smoke-nonauthoritative.json",
         "--benchmark-smoke"
       ],
+      "argv_source_root_tokens": 2,
       "build": "auto",
       "environment": {
         "LC_ALL": "C",
@@ -1951,33 +2727,41 @@
       ],
       "requested_cpu": 0,
       "result": {
-        "bytes": 3696,
+        "bytes": 3625,
         "path": "experiments/leopard2/non_power_of_two/c7/results/smoke-nonauthoritative.json",
-        "sha256": "0a0da58f3abcbaa75701731e2b030342a017b8cf767f53b051a6f776705b6b6c"
+        "sha256": "48313e290c02d88b0214c84f46de6fbcbb90a7d1e2373e799e309079f11d11e7",
+        "source_root_tokens": 0
       },
       "stderr": {
         "bytes": 17,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/smoke-nonauthoritative-run.stderr.txt",
-        "sha256": "66f01b765cd3cdcb54856314c8a0a9e66ff0759f418bc4c3ad2eebe26da8aad4"
+        "sha256": "66f01b765cd3cdcb54856314c8a0a9e66ff0759f418bc4c3ad2eebe26da8aad4",
+        "source_root_tokens": 0
       },
       "stdout": {
         "bytes": 0,
         "path": "experiments/leopard2/non_power_of_two/c7/results/logs/smoke-nonauthoritative-run.stdout.txt",
-        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "source_root_tokens": 0
       }
     }
   ],
-  "schema": "leopard2-c7-build-run-manifest/v2",
-  "scope": "correctness plus CPU0 non-authoritative harness smoke; no promotion timing",
+  "schema": "leopard2-c7-build-run-manifest/v3",
+  "scope": "correctness plus one affinity-selected non-authoritative harness smoke; no promotion timing",
   "source": {
-    "bytes": 73385,
+    "bytes": 76657,
     "path": "experiments/leopard2/non_power_of_two/c7/c7_exact_low.cpp",
-    "sha256": "c2edae60a9d9b57826a0206532e0437a4f3fbe07d8d3978045ca75a78f92f604"
+    "sha256": "63c9bdda7b105787d080c6796d20c5b7244602af012ea101c5009b9abbf72c35"
   },
   "status": "pass",
   "taskset": {
     "path": "/usr/bin/taskset",
     "sha256": "a9c851792e54e91fba7b827019380abee54e715b6817899c835e4f221354b260",
     "version": "taskset from util-linux 2.39.3\n"
+  },
+  "validator": {
+    "bytes": 68768,
+    "path": "experiments/leopard2/non_power_of_two/c7/validate_evidence.py",
+    "sha256": "d7937396d273f00e9cb8b346a1c086f25735e058ef6577fe6f15376c045d2e07"
   }
 }
