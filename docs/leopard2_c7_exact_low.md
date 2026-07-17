@@ -484,6 +484,57 @@ allowed IDs:
       --results-dir .research/leopard2/c7-final/results \
       --manifest .research/leopard2/c7-final/results/build-run-manifest.json
 
+The separate authoritative runner consumes the resulting non-sanitized AVX2
+archive and standalone executable.  Its schedule is not configurable: all 12
+declared cells run in their frozen order, with seven retained samples for each
+setup and execution metric.  The runner supports distinct clean tooling and
+ancestor core commits, records exact Git trees plus runner, harness, archive,
+executable, Python, and `taskset` hashes, proves the same fixed 22-file core
+source closure used by the build runner, and checks the harness's embedded
+source, archive, and core identities.  A coordinator must first reserve one allowed
+physical core and its SMT sibling using canonical
+`leopard2-cpu-reservation/v1` JSON.  The runner takes a nonblocking exclusive
+lock for the whole campaign, moves itself to housekeeping CPUs, pins the child
+to the timing CPU, and rejects evidence if `/proc/stat` reports any non-idle
+work on the sibling.  Do not run other performance work during this window.
+
+Run the synthetic validator and mutation suite before reserving a core:
+
+    PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -X dev \
+      experiments/leopard2/non_power_of_two/c7/run_authoritative.py self-test
+    PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -X dev -m unittest -v \
+      experiments.leopard2.non_power_of_two.c7.test_run_authoritative
+
+Then run one authoritative campaign, substituting an allowed SMT pair and the
+exact ignored build paths produced above:
+
+    TOOLING_SHA="$(git rev-parse HEAD)"
+    CPU=<isolated-logical-cpu>
+    SIBLING=<that-cpu-smt-sibling>
+    RESERVATION=.research/leopard2/c7-final/cpu-reservation.json
+    OUTPUT=.research/leopard2/c7-final/authoritative
+    # The coordinator writes RESERVATION as canonical JSON without a newline:
+    # {"benchmark_cpu":CPU,"nonce":"...","owner":"...",
+    #  "reserved_sibling":SIBLING,"schema":"leopard2-cpu-reservation/v1",
+    #  "status":"held"}
+    python3 experiments/leopard2/non_power_of_two/c7/run_authoritative.py run \
+      --source-root . --expected-tooling-commit "$TOOLING_SHA" \
+      --expected-core-commit "$CORE_SHA" \
+      --archive .research/leopard2/c7-final/build/core-avx2/liblibleopard.a \
+      --executable .research/leopard2/c7-final/build/c7-avx2 \
+      --reservation-file "$RESERVATION" --output "$OUTPUT" \
+      --cpu "$CPU" --sibling "$SIBLING"
+
+Success writes canonical `raw.json` and `manifest.json` plus the exact child
+result and stdout/stderr bytes.  Any failure after output-directory creation
+retains a signed `failure.json` and whatever child artifacts were available;
+an existing output directory is never replaced.  Verification is portable and
+does not reopen the original checkout, build, or reservation paths:
+
+    PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -X dev \
+      experiments/leopard2/non_power_of_two/c7/run_authoritative.py verify \
+      --manifest "$OUTPUT/manifest.json"
+
 Regenerate independent algebra and validate retained evidence:
 
     PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -X dev \
