@@ -2,7 +2,6 @@ cmake_minimum_required(VERSION 3.12)
 project(leopard2_jerasure_compare LANGUAGES C CXX)
 
 include(CTest)
-include(CheckCCompilerFlag)
 
 # This standalone project is intentionally absent from Leopard's production
 # CMake graph.  It builds the pinned third-party sources into private static
@@ -77,8 +76,10 @@ endif()
 set(GF_COMPLETE_INCLUDE "${LEO2_GF_COMPLETE_SOURCE_ROOT}/include")
 set(JERASURE_INCLUDE "${LEO2_JERASURE_SOURCE_ROOT}/include")
 
-# Match the upstream split: gf_method deliberately avoids broad SIMD flags,
-# while the arithmetic archive may use the host-supported x86 flags.
+# Compile GF-Complete at the compiler's portable target.  Testing whether a
+# compiler accepts an ISA flag does not prove that the eventual runtime CPU
+# supports it, and applying broad flags to this whole archive can introduce an
+# illegal instruction before GF-Complete's own dispatch runs.
 add_library(leopard2_gf_complete_util STATIC
     "${LEO2_GF_COMPLETE_SOURCE_ROOT}/src/gf_method.c")
 target_include_directories(leopard2_gf_complete_util PRIVATE "${GF_COMPLETE_INCLUDE}")
@@ -102,18 +103,7 @@ target_link_libraries(leopard2_gf_complete_external PUBLIC leopard2_gf_complete_
 target_compile_options(leopard2_gf_complete_external PRIVATE
     $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-O3;-fPIC;-Wsign-compare>)
 
-set(LEO2_GF_COMPLETE_SIMD_FLAGS "")
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i.86)$")
-    foreach(flag IN ITEMS -msse2 -msse3 -mssse3 -msse4.1 -msse4.2 -mpclmul)
-        string(MAKE_C_IDENTIFIER "${flag}" flag_id)
-        check_c_compiler_flag("${flag}" "LEO2_HAVE_${flag_id}")
-        if(LEO2_HAVE_${flag_id})
-            target_compile_options(leopard2_gf_complete_external PRIVATE "${flag}")
-            list(APPEND LEO2_GF_COMPLETE_SIMD_FLAGS "${flag}")
-        endif()
-    endforeach()
-endif()
-string(JOIN "," LEO2_GF_COMPLETE_SIMD_FLAGS_TEXT ${LEO2_GF_COMPLETE_SIMD_FLAGS})
+set(LEO2_GF_COMPLETE_SIMD_FLAGS_TEXT "portable-compiler-defaults")
 
 add_library(leopard2_jerasure_external STATIC
     "${LEO2_JERASURE_SOURCE_ROOT}/src/galois.c"

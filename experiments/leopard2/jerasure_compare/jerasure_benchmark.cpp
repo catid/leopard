@@ -41,6 +41,15 @@
 
 namespace {
 
+static_assert(sizeof(int) == 4,
+    "Jerasure comparison evidence defines matrix storage as 32-bit int");
+
+static const uint32_t kMaximumOriginals = 4096;
+static const uint32_t kMaximumRecovery = 4096;
+static const uint64_t kMaximumMatrixCoefficients = UINT64_C(1) << 24;
+static const uint64_t kMaximumApplicationBytes = UINT64_C(8) << 30;
+static const uint32_t kMaximumLeopardParent = 65536;
+
 struct Options
 {
     uint32_t k;
@@ -222,6 +231,13 @@ static Options ParseOptions(int argc, char** argv)
     const uint64_t total = static_cast<uint64_t>(options.k) + options.r;
     if (options.k == 0 || options.r == 0 || total > 65536)
         Fail("Jerasure comparison requires positive K,R and K+R <= 65536");
+    if (options.k > kMaximumOriginals || options.r > kMaximumRecovery)
+        Fail("bounded Jerasure comparison requires K,R <= 4096");
+    if (static_cast<uint64_t>(options.k) * options.r >
+            kMaximumMatrixCoefficients ||
+        (options.losses != 0 && static_cast<uint64_t>(options.k) * options.k >
+            kMaximumMatrixCoefficients))
+        Fail("bounded Jerasure comparison matrix domain exceeded");
     if (options.bytes == 0 || options.bytes > INT32_MAX ||
         options.bytes > std::numeric_limits<size_t>::max())
         Fail("--bytes must be in 1..INT32_MAX and fit size_t");
@@ -239,6 +255,11 @@ static Options ParseOptions(int argc, char** argv)
         Fail("--profile must be auto, high, legacy_high_v1, low, or low_v1");
     if (options.oracle != "full" && options.oracle != "projection")
         Fail("--oracle must be full or projection");
+    const uint64_t slots_per_stripe =
+        static_cast<uint64_t>(options.k) * 2 + options.r + options.losses;
+    if (slots_per_stripe > kMaximumApplicationBytes / options.batch ||
+        slots_per_stripe * options.batch > kMaximumApplicationBytes / options.bytes)
+        Fail("bounded Jerasure comparison application-buffer domain exceeded");
     return options;
 }
 
@@ -448,10 +469,10 @@ static DecodePlan BuildDecodePlan(
     const std::vector<uint32_t>& losses)
 {
     DecodePlan plan;
+    if (losses.empty()) return plan;
     plan.decoding_matrix.resize(static_cast<size_t>(k) * k);
     plan.selected_ids.resize(k);
     plan.missing_rows.reserve(losses.size());
-    if (losses.empty()) return plan;
     std::vector<int> erased(static_cast<size_t>(k) + r, 0);
     for (size_t i = 0; i < losses.size(); ++i) erased[losses[i]] = 1;
     std::vector<int> mutable_matrix(encode.matrix);
@@ -708,6 +729,10 @@ static int Run(const Options& options)
 {
     const int width = FieldWidth(options);
     const std::vector<uint32_t> losses = SelectLosses(options);
+    const std::string profile = ResolvedProfile(options);
+    const uint32_t parent = LeopardParent(options, profile);
+    if (parent > kMaximumLeopardParent)
+        Fail("paired Leopard2 parent exceeds 65536 coordinates");
     const EncodePlan encode = BuildEncodePlan(options.k, options.r, width);
     const std::vector<uint32_t> independent =
         BuildIndependentCodingMatrix(options.k, options.r, width);
@@ -799,10 +824,10 @@ static int Run(const Options& options)
             CheckedProduct(options.k, options.bytes, "encode input"), batch, "encode input");
         const uint64_t encode_output = CheckedProduct(
             CheckedProduct(options.r, options.bytes, "encode output"), batch, "encode output");
-        const uint64_t offered = CheckedProduct(
+        const uint64_t offered = losses.empty() ? 0 : CheckedProduct(
             CheckedProduct(options.k - options.losses + options.r, options.bytes,
                            "decode offered"), batch, "decode offered");
-        const uint64_t selected = CheckedProduct(
+        const uint64_t selected = losses.empty() ? 0 : CheckedProduct(
             CheckedProduct(options.k, options.bytes, "decode selected"), batch,
             "decode selected");
         const uint64_t decode_output = CheckedProduct(
@@ -814,8 +839,6 @@ static int Run(const Options& options)
         const uint64_t total_parity = CheckedProduct(
             CheckedProduct(options.bytes, options.r, "total parity"), batch,
             "total parity");
-        const std::string profile = ResolvedProfile(options);
-        const uint32_t parent = LeopardParent(options, profile);
         const char* leopard_field = parent <= 256 ? "gf8" : "gf16";
         const char* provider_field = width == 8 ? "gf8" : "gf16";
 
@@ -894,10 +917,12 @@ static int Run(const Options& options)
             plan_setup.median_us / static_cast<double>(options.reuse);
         json << ",\"decode_amortized_at_reuse\":{\"reuse_count\":" << options.reuse
              << ",\"derived_median_us_per_batch_call\":" << amortized
-             << ",\"offered_received_GB_per_s\":" << Rate(offered, amortized)
+             << ",\"offered_received_GB_per_s\":";
+        WriteRate(json, offered, amortized);
+        json
              << ",\"repaired_output_GB_per_s\":";
         WriteRate(json, decode_output, amortized);
-        json << "},\"rate_semantics\":\"offered_received counts all non-erased public shards; Jerasure reads the recorded deterministic K-row subset\"}\n}\n";
+        json << "},\"rate_semantics\":\"offered_received counts all non-erased public shards for repair; Jerasure reads the recorded deterministic K-row subset; no-loss decode is a true no-op with null throughput\"}\n}\n";
 
         if (options.output == "-") std::cout << json.str();
         else

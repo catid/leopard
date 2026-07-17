@@ -20,6 +20,7 @@ import json
 import math
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
@@ -38,6 +39,10 @@ CORRECTNESS_SCHEMA = "leopard2-jerasure-correctness/v1"
 CHILD_SCHEMA = "leopard2-jerasure-benchmark/v1"
 BUILD_SCHEMA = "leopard2-jerasure-build-closure/v1"
 PROVENANCE_SCHEMA = "leopard2-jerasure-toolchain/v1"
+RUN_MANIFEST_SCHEMA = "leopard2-jerasure-run-manifest/v1"
+CHILD_ARTIFACT_SCHEMA = "leopard2-jerasure-child-artifact/v1"
+GROUP_ARTIFACT_SCHEMA = "leopard2-jerasure-abba-pair/v1"
+HOST_GROUPS_SCHEMA = "leopard2-jerasure-host-groups/v1"
 
 JERASURE_URL = "https://github.com/ceph/jerasure"
 JERASURE_COMMIT = "de1739cc8483696506829b52e7fda4f6bb195e6a"
@@ -60,6 +65,12 @@ GF_COMPLETE_HEADER_SHA256 = (
 AUTHORITATIVE_CORRECTNESS_CASES = 128
 EVIDENCE_ITERATIONS = 9
 EVIDENCE_WARMUP = 2
+MAX_K = 4096
+MAX_R = 4096
+MAX_MATRIX_COEFFICIENTS = 1 << 24
+MAX_APPLICATION_BYTES = 8 << 30
+MAX_PARENT = 65536
+GF_COMPLETE_KERNEL_POLICY = "portable-compiler-defaults"
 ABBA = (("jerasure", "leopard2"), ("leopard2", "jerasure"),
         ("leopard2", "jerasure"), ("jerasure", "leopard2"))
 CHECKPOINT_CELLS = (
@@ -108,6 +119,32 @@ def canonical_digest(document: Mapping[str, Any]) -> str:
 def mapping_digest(document: Mapping[str, Any]) -> str:
     encoded = json.dumps(document, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def atomic_write_json(path: Path, document: Mapping[str, Any]) -> None:
+    """Durably replace a JSON artifact without exposing a partial document."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    try:
+        with temporary.open("w", encoding="utf-8") as output:
+            json.dump(document, output, indent=2, sort_keys=True)
+            output.write("\n")
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+        try:
+            directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        except OSError:
+            return
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def require_exact_keys(value: Mapping[str, Any], expected: set[str], label: str) -> None:
@@ -217,6 +254,44 @@ def leopard_tree_listing(root: Path, commit: str) -> tuple[str, int]:
     return hashlib.sha256(listing.encode("utf-8")).hexdigest(), len(lines)
 
 
+def verify_detached_leopard(
+        source: Path, expected: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    head, tree, dirty = git_identity(source)
+    symbolic = subprocess.run(
+        ["git", "-C", str(source), "symbolic-ref", "-q", "HEAD"],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    listing_hash, listing_count = leopard_tree_listing(source, "HEAD")
+    record = {
+        "commit": head, "tree": tree, "clean_at_build": True,
+        "materialization": "detached Git worktree", "detached_head": True,
+        "tracked_tree_listing_sha256": listing_hash,
+        "tracked_entry_count": listing_count,
+    }
+    if dirty or symbolic.returncode == 0:
+        raise ComparisonError("Leopard benchmark source is not clean and detached")
+    if expected is not None and record != expected:
+        raise ComparisonError("detached Leopard source identity changed after bootstrap")
+    return record
+
+
+def current_source_bindings(paths: Mapping[str, Path]) -> dict[str, Any]:
+    leopard = verify_detached_leopard(paths["leopard_source"])
+    bindings: dict[str, Any] = {
+        "leopard": {key: leopard[key] for key in (
+            "commit", "tree", "tracked_tree_listing_sha256", "tracked_entry_count")}}
+    for name, path in (("jerasure", paths["jerasure_source"]),
+                       ("gf_complete", paths["gf_source"])):
+        head, tree, dirty = git_identity(path)
+        listing_hash, listing_count = leopard_tree_listing(path, "HEAD")
+        if dirty:
+            raise ComparisonError(f"{name} source changed after bootstrap")
+        bindings[name] = {
+            "commit": head, "tree": tree,
+            "tracked_tree_listing_sha256": listing_hash,
+            "tracked_entry_count": listing_count}
+    return bindings
+
+
 def materialize_leopard(paths: Mapping[str, Path]) -> dict[str, Any]:
     root = repo_root().resolve()
     status = leopard_status(root)
@@ -237,20 +312,12 @@ def materialize_leopard(paths: Mapping[str, Path]) -> dict[str, Any]:
     run_checked([
         "git", "-C", str(root), "worktree", "add", "--detach", str(destination), head],
         timeout=120)
-    actual_head, actual_tree, dirty = git_identity(destination)
-    symbolic = subprocess.run([
-        "git", "-C", str(destination), "symbolic-ref", "-q", "HEAD"],
-        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
-    actual_listing, actual_count = leopard_tree_listing(destination, "HEAD")
-    if (actual_head != head or actual_tree != tree or dirty or symbolic.returncode == 0 or
-            actual_listing != listing_hash or actual_count != listing_count):
+    record = verify_detached_leopard(destination)
+    if (record["commit"] != head or record["tree"] != tree or
+            record["tracked_tree_listing_sha256"] != listing_hash or
+            record["tracked_entry_count"] != listing_count):
         raise ComparisonError("detached Leopard source differs from benchmark commit")
-    return {
-        "commit": head, "tree": tree, "clean_at_build": True,
-        "materialization": "detached Git worktree", "detached_head": True,
-        "tracked_tree_listing_sha256": listing_hash,
-        "tracked_entry_count": listing_count,
-    }
+    return record
 
 
 def cmake_cache(build: Path, key: str) -> str:
@@ -318,6 +385,7 @@ def build_identity(paths: Mapping[str, Path]) -> dict[str, Any]:
     }
     identity: dict[str, Any] = {
         "schema": BUILD_SCHEMA,
+        "source_bindings": current_source_bindings(paths),
         "recipe": {
             "adapter": {
                 "generator": cmake_cache(adapter, "CMAKE_GENERATOR"),
@@ -398,10 +466,7 @@ def configure_and_build(paths: Mapping[str, Path], jobs: int) -> dict[str, Any]:
     run_checked([
         "cmake", "--build", str(paths["leopard_build"]), "--target",
         "bench_leopard2", "-j", str(jobs)], timeout=600)
-    actual_head, actual_tree, dirty = git_identity(root)
-    if (actual_head != leopard_source["commit"] or
-            actual_tree != leopard_source["tree"] or dirty):
-        raise ComparisonError("detached Leopard source changed while building")
+    verify_detached_leopard(root, leopard_source)
     adapter_exe = paths["adapter_build"] / "leopard2_jerasure_benchmark"
     leopard_exe = paths["leopard_build"] / "bench_leopard2"
     if not adapter_exe.is_file() or not leopard_exe.is_file():
@@ -454,12 +519,17 @@ def bootstrap(cache: Path, jobs: int) -> dict[str, Any]:
             "execution_threads": 1, "region_multiple_bytes": 8,
             "application_alignment_bytes": 64,
             "maximum_bootstrap_jobs": 10,
+            "maximum_original_count": MAX_K,
+            "maximum_recovery_count": MAX_R,
+            "maximum_matrix_coefficients": MAX_MATRIX_COEFFICIENTS,
+            "maximum_application_bytes": MAX_APPLICATION_BYTES,
+            "maximum_leopard_parent": MAX_PARENT,
+            "gf_complete_kernel_policy": GF_COMPLETE_KERNEL_POLICY,
             "wire_compatible": False,
         },
     }
     provenance["provenance_sha256"] = mapping_digest(provenance)
-    paths["provenance"].parent.mkdir(parents=True, exist_ok=True)
-    paths["provenance"].write_text(json.dumps(provenance, indent=2, sort_keys=True) + "\n")
+    atomic_write_json(paths["provenance"], provenance)
     load_provenance(cache)
     return provenance
 
@@ -512,7 +582,7 @@ def validate_compile_manifest(value: Mapping[str, Any], label: str) -> None:
 
 def validate_build_identity(value: Mapping[str, Any]) -> None:
     require_exact_keys(value, {
-        "schema", "recipe", "tools", "compile_commands", "link_commands",
+        "schema", "source_bindings", "recipe", "tools", "compile_commands", "link_commands",
         "link_inputs", "static_inputs", "runtime_linkage", "identity_sha256"},
         "build identity")
     if value.get("schema") != BUILD_SCHEMA:
@@ -520,6 +590,21 @@ def validate_build_identity(value: Mapping[str, Any]) -> None:
     if value.get("identity_sha256") != mapping_digest(
             {key: item for key, item in value.items() if key != "identity_sha256"}):
         raise ComparisonError("build identity digest changed")
+    bindings = value.get("source_bindings", {})
+    require_exact_keys(bindings, {"leopard", "jerasure", "gf_complete"},
+                       "build source bindings")
+    for name, binding in bindings.items():
+        require_exact_keys(binding, {
+            "commit", "tree", "tracked_tree_listing_sha256", "tracked_entry_count"},
+            f"{name} build source binding")
+        require_hex(binding.get("commit"), 40, f"{name} build commit")
+        require_hex(binding.get("tree"), 40, f"{name} build tree")
+        require_hex(binding.get("tracked_tree_listing_sha256"), 64,
+                    f"{name} build tree listing")
+        if (isinstance(binding.get("tracked_entry_count"), bool) or
+                not isinstance(binding.get("tracked_entry_count"), int) or
+                binding["tracked_entry_count"] <= 0):
+            raise ComparisonError(f"{name} build source entry count is invalid")
     recipe = value.get("recipe", {})
     require_exact_keys(recipe, {"adapter", "leopard2"}, "build recipe")
     tools = value.get("tools", {})
@@ -535,6 +620,14 @@ def validate_build_identity(value: Mapping[str, Any]) -> None:
     require_exact_keys(compile_commands, {"adapter", "leopard2"}, "compile commands")
     for name, manifest in compile_commands.items():
         validate_compile_manifest(manifest, f"{name} compile commands")
+    forbidden_isa_flags = {
+        "-msse2", "-msse3", "-mssse3", "-msse4.1", "-msse4.2", "-mpclmul",
+        "-mavx", "-mavx2", "-mavx512f", "-march=native", "-mtune=native"}
+    for entry in compile_commands["adapter"]["entries"]:
+        if str(entry["file"]).startswith("${GF_COMPLETE_SOURCE}/"):
+            flags = set(shlex.split(str(entry["command"])))
+            if flags & forbidden_isa_flags:
+                raise ComparisonError("GF-Complete compile closure contains broad ISA flags")
     adapter_files = [entry["file"] for entry in compile_commands["adapter"]["entries"]]
     if (not any(path.startswith("${JERASURE_SOURCE}/") for path in adapter_files) or
             not any(path.startswith("${GF_COMPLETE_SOURCE}/") for path in adapter_files) or
@@ -597,6 +690,12 @@ def validate_portable_sources(value: Mapping[str, Any]) -> None:
             leopard.get("detached_head") is not True):
         raise ComparisonError("Leopard build source was not clean and detached")
     validate_build_identity(value["build_identity"])
+    source_records = {
+        "leopard": leopard, "jerasure": value["jerasure"],
+        "gf_complete": value["gf_complete"]}
+    for name, binding in value["build_identity"]["source_bindings"].items():
+        if binding != {key: source_records[name][key] for key in binding}:
+            raise ComparisonError(f"{name} build objects are not source-bound")
 
 
 def load_provenance(cache: Path) -> dict[str, Any]:
@@ -619,6 +718,12 @@ def load_provenance(cache: Path) -> dict[str, Any]:
         "production_dependency": False, "default_off": True,
         "execution_threads": 1, "region_multiple_bytes": 8,
         "application_alignment_bytes": 64, "maximum_bootstrap_jobs": 10,
+        "maximum_original_count": MAX_K,
+        "maximum_recovery_count": MAX_R,
+        "maximum_matrix_coefficients": MAX_MATRIX_COEFFICIENTS,
+        "maximum_application_bytes": MAX_APPLICATION_BYTES,
+        "maximum_leopard_parent": MAX_PARENT,
+        "gf_complete_kernel_policy": GF_COMPLETE_KERNEL_POLICY,
         "wire_compatible": False}
     if document.get("constraints") != expected_constraints:
         raise ComparisonError("provenance constraints changed")
@@ -633,6 +738,7 @@ def load_provenance(cache: Path) -> dict[str, Any]:
         runtime = document["build_identity"]["runtime_linkage"][provider]
         if runtime.get("executable_sha256") != record["sha256"]:
             raise ComparisonError(f"{provider} executable differs from runtime closure")
+    verify_detached_leopard(paths["leopard_source"], document["leopard_source"])
     current = build_identity(paths)
     if current != document["build_identity"]:
         raise ComparisonError("current build/link/runtime closure changed after bootstrap")
@@ -652,13 +758,37 @@ def ceil_pow2(value: int) -> int:
     return 1 << (value - 1).bit_length()
 
 
+def validate_cell_domain(cell: Mapping[str, Any]) -> None:
+    k, r = int(cell["K"]), int(cell["R"])
+    losses = int(cell.get("loss_count", 0))
+    batch = int(cell.get("batch", 1))
+    shard_bytes = int(cell.get("shard_bytes", 8))
+    if k < 1 or r < 1 or k > MAX_K or r > MAX_R:
+        raise ComparisonError(f"bounded adapter requires K,R in 1..{MAX_K}")
+    if losses < 0 or losses > min(k, r):
+        raise ComparisonError("bounded adapter loss count is invalid")
+    if batch < 1 or shard_bytes < 1 or shard_bytes > 0x7FFFFFFF:
+        raise ComparisonError("bounded adapter batch/shard size is invalid")
+    if shard_bytes % 8:
+        raise ComparisonError("bounded adapter requires an 8-byte shard multiple")
+    if k * r > MAX_MATRIX_COEFFICIENTS or (
+            losses and k * k > MAX_MATRIX_COEFFICIENTS):
+        raise ComparisonError("bounded adapter matrix coefficient domain exceeded")
+    application_bytes = (2 * k + r + losses) * shard_bytes * batch
+    if application_bytes > MAX_APPLICATION_BYTES:
+        raise ComparisonError("bounded adapter application-buffer domain exceeded")
+
+
 def resolved_identity(cell: Mapping[str, Any]) -> tuple[str, str, int, str]:
+    validate_cell_domain(cell)
     k, r = int(cell["K"]), int(cell["R"])
     requested = str(cell["profile"])
     profile = ("low_v1" if requested in ("low", "low_v1") or
                requested == "auto" and r > k else "legacy_high_v1")
     parent = (ceil_pow2(ceil_pow2(k) + r) if profile == "low_v1"
               else ceil_pow2(k + ceil_pow2(r)))
+    if parent > MAX_PARENT:
+        raise ComparisonError("paired Leopard2 parent exceeds 65,536 coordinates")
     leopard_field = "gf8" if parent <= 256 else "gf16"
     jerasure_field = "gf8" if k + r <= 256 else "gf16"
     return profile, leopard_field, parent, jerasure_field
@@ -738,6 +868,52 @@ def validate_summary(
         raise ComparisonError(str(error)) from error
 
 
+def validate_execution_summary(
+        summary: Mapping[str, Any], label: str, iterations: int,
+        input_bytes: int, output_bytes: int,
+        input_rate: str, output_rate: str) -> None:
+    suffix = "_per_batch_call"
+    require_exact_keys(summary, {
+        "median_us" + suffix, "mad_us" + suffix,
+        "minimum_us" + suffix, "maximum_us" + suffix,
+        "samples_us" + suffix, input_rate, output_rate}, label)
+    try:
+        values = {
+            name: common.finite_positive(
+                summary.get(name + suffix), f"{label}.{name + suffix}",
+                allow_zero=(name == "mad_us"))
+            for name in ("median_us", "mad_us", "minimum_us", "maximum_us")}
+        samples_raw = summary.get("samples_us" + suffix)
+        if not isinstance(samples_raw, list) or len(samples_raw) != iterations:
+            raise ComparisonError(f"{label} sample cardinality changed")
+        samples = [common.finite_positive(value, f"{label}.sample")
+                   for value in samples_raw]
+    except common.ComparisonError as error:
+        raise ComparisonError(str(error)) from error
+    if not (values["minimum_us"] <= values["median_us"] <= values["maximum_us"]):
+        raise ComparisonError(f"{label} min/median/max order is invalid")
+    derived = {
+        "median_us": common.median(samples), "mad_us": common.mad(samples),
+        "minimum_us": min(samples), "maximum_us": max(samples)}
+    if any(not common.close_enough(values[name], expected)
+           for name, expected in derived.items()):
+        raise ComparisonError(f"{label} summary is not raw-sample-derived")
+    for byte_count, rate_name in ((input_bytes, input_rate),
+                                  (output_bytes, output_rate)):
+        if byte_count == 0:
+            if summary.get(rate_name) is not None:
+                raise ComparisonError(f"{label}.{rate_name} must be null for zero bytes")
+            continue
+        expected_rate = byte_count / (values["median_us"] * 1000.0)
+        try:
+            observed = common.finite_positive(
+                summary.get(rate_name), f"{label}.{rate_name}")
+        except common.ComparisonError as error:
+            raise ComparisonError(str(error)) from error
+        if not common.close_enough(observed, expected_rate):
+            raise ComparisonError(f"{label}.{rate_name} is not byte/time-derived")
+
+
 def validate_child_result(
         document: Mapping[str, Any], cell: Mapping[str, Any],
         iterations: int, warmup: int, oracle: str = "full") -> list[int]:
@@ -770,8 +946,8 @@ def validate_child_result(
     }
     if any(provider.get(key) != value for key, value in required_provider.items()):
         raise ComparisonError("Jerasure provider identity changed")
-    if not isinstance(provider.get("gf_complete_simd_flags"), str):
-        raise ComparisonError("GF-Complete SIMD build identity is missing")
+    if provider.get("gf_complete_simd_flags") != GF_COMPLETE_KERNEL_POLICY:
+        raise ComparisonError("GF-Complete portable kernel policy changed")
     parameters = document.get("parameters", {})
     expected = expected_parameters(cell, iterations, warmup)
     require_exact_keys(parameters, set(expected) | {"missing_original_indices"},
@@ -832,17 +1008,19 @@ def validate_child_result(
         raise ComparisonError("Jerasure source/recovery digest is not workload-derived")
     losses = expected["loss_count"]
     memory = document.get("memory", {})
+    no_loss = losses == 0
     expected_memory = {
         "alignment_bytes": 64, "region_multiple_bytes": 8,
         "direct_application_buffers": True, "staging_copy_bytes_per_execution": 0,
         "encode_input_bytes_per_batch_call": k * shard_bytes * batch,
         "encode_output_bytes_per_batch_call": r * shard_bytes * batch,
-        "decode_offered_bytes_per_batch_call": (k - losses + r) * shard_bytes * batch,
-        "decode_selected_bytes_per_batch_call": k * shard_bytes * batch,
+        "decode_offered_bytes_per_batch_call": (
+            0 if no_loss else (k - losses + r) * shard_bytes * batch),
+        "decode_selected_bytes_per_batch_call": 0 if no_loss else k * shard_bytes * batch,
         "decode_output_bytes_per_batch_call": losses * shard_bytes * batch,
         "encode_matrix_bytes": k * r * 4,
-        "decode_matrix_bytes": k * k * 4,
-        "decode_id_bytes": k * 4,
+        "decode_matrix_bytes": 0 if no_loss else k * k * 4,
+        "decode_id_bytes": 0 if no_loss else k * 4,
     }
     require_exact_keys(memory, set(expected_memory), "Jerasure memory")
     if any(memory.get(key) != value for key, value in expected_memory.items()):
@@ -853,18 +1031,19 @@ def validate_child_result(
         "decode_execution", "decode_amortized_at_reuse", "rate_semantics"},
         "Jerasure metrics")
     if metrics.get("rate_semantics") != (
-            "offered_received counts all non-erased public shards; Jerasure reads "
-            "the recorded deterministic K-row subset"):
+            "offered_received counts all non-erased public shards for repair; "
+            "Jerasure reads the recorded deterministic K-row subset; no-loss decode "
+            "is a true no-op with null throughput"):
         raise ComparisonError("Jerasure rate semantics changed")
     validate_summary(metrics["codec_setup"], "codec setup", iterations, False)
-    validate_summary(
-        metrics["encode_execution"], "encode", iterations, True,
+    validate_execution_summary(
+        metrics["encode_execution"], "encode", iterations,
         expected_memory["encode_input_bytes_per_batch_call"],
         expected_memory["encode_output_bytes_per_batch_call"],
         "input_GB_per_s", "parity_output_GB_per_s")
     validate_summary(metrics["decode_plan_setup"], "decode setup", iterations, False)
-    validate_summary(
-        metrics["decode_execution"], "decode", iterations, True,
+    validate_execution_summary(
+        metrics["decode_execution"], "decode", iterations,
         expected_memory["decode_offered_bytes_per_batch_call"],
         expected_memory["decode_output_bytes_per_batch_call"],
         "offered_received_GB_per_s", "repaired_output_GB_per_s")
@@ -879,6 +1058,23 @@ def validate_child_result(
             not math.isclose(float(amortized.get("derived_median_us_per_batch_call", -1)),
                              expected_us, rel_tol=2e-6, abs_tol=2e-6)):
         raise ComparisonError("Jerasure amortized decode is not setup-derived")
+    for byte_count, name in (
+            (expected_memory["decode_offered_bytes_per_batch_call"],
+             "offered_received_GB_per_s"),
+            (expected_memory["decode_output_bytes_per_batch_call"],
+             "repaired_output_GB_per_s")):
+        if byte_count == 0:
+            if amortized.get(name) is not None:
+                raise ComparisonError(f"Jerasure zero-byte amortized {name} must be null")
+        else:
+            expected_rate = byte_count / (expected_us * 1000.0)
+            try:
+                observed = common.finite_positive(
+                    amortized.get(name), f"Jerasure amortized {name}")
+            except common.ComparisonError as error:
+                raise ComparisonError(str(error)) from error
+            if not common.close_enough(observed, expected_rate):
+                raise ComparisonError(f"Jerasure amortized {name} is not derived")
     return list(missing)
 
 
@@ -987,8 +1183,7 @@ def run_correctness(cache: Path, count: int, workers: int, output: Path) -> dict
     }
     artifact["artifact_sha256"] = canonical_digest(artifact)
     validate_correctness(artifact)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
+    atomic_write_json(output, artifact)
     return artifact
 
 
@@ -1112,6 +1307,352 @@ def correctness_binding(document: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def checkpoint_method() -> dict[str, Any]:
+    return {
+        "provider_order": "ABBA",
+        "provider_order_by_repetition": [list(order) for order in ABBA],
+        "repetitions": len(ABBA),
+        "iterations_per_child": EVIDENCE_ITERATIONS,
+        "warmups_per_child": EVIDENCE_WARMUP,
+        "raw_samples_retained_per_metric": EVIDENCE_ITERATIONS,
+        "setup_and_execution_separate": True,
+        "single_thread": True,
+        "region_contract_bytes": 8,
+        "alignment_bytes": 64,
+        "parity_wire_compatible": False,
+        "affinity_rechecked_after_each_child": True,
+        "durable_resume_unit": (
+            "one complete validated two-provider ABBA repetition; partial units discarded"),
+        "post_frequency_capture": (
+            "after the second child affinity check and before child JSON validation"),
+        "timing_oracle": "projection with exact FNV workload digests",
+        "full_correctness_oracle": (
+            "separate 128-case artifact checks every generated parity byte against "
+            "independent scalar systematic-Vandermonde algebra"),
+        "no_loss_decode_semantics": (
+            "latency/status only; zero offered/selected/output bytes and null throughput"),
+    }
+
+
+def checkpoint_limitations() -> list[str]:
+    return [
+        "Jerasure and Leopard2 parity bytes/generator matrices differ",
+        "GF8-vs-GF16 padding-boundary cells are not kernel-only comparisons",
+        "single-machine bounded cells do not establish the full required matrix",
+        "GF-Complete is compiled at portable compiler defaults without broad ISA flags",
+        "the adapter is bounded to K,R<=4096, 2^24 dense coefficients, 8 GiB "
+        "of application buffers, and a Leopard2 parent no larger than 65,536",
+    ]
+
+
+def validate_host_metadata(
+        host: Mapping[str, Any], requested_cpu: int, reserved_cpu: int,
+        original_allowed: Sequence[int]) -> None:
+    require_exact_keys(host, {
+        "requested_cpu", "allowed_cpu_count", "allowed_cpus",
+        "process_affinity_during_run", "child_affinity_preflight",
+        "thread_siblings_list", "thread_siblings", "reserved_idle_sibling_cpu",
+        "coordinator_lease", "scaling_driver", "scaling_governor",
+        "energy_performance_preference", "cpuinfo_min_freq_khz",
+        "cpuinfo_max_freq_khz", "scaling_min_freq_khz", "scaling_max_freq_khz",
+        "current_frequency_pre", "current_frequency_post", "amd_pstate_status",
+        "boost", "no_turbo", "cpuinfo_processor", "cpu_vendor",
+        "cpu_model_name", "cpu_family", "cpu_model", "cpu_stepping", "microcode",
+        "platform", "uname", "python", "pinning", "parallelism_note"},
+        "measurement host")
+    allowed = sorted(set(int(cpu) for cpu in original_allowed))
+    siblings = host.get("thread_siblings")
+    if (host.get("requested_cpu") != requested_cpu or
+            host.get("reserved_idle_sibling_cpu") != reserved_cpu or
+            host.get("allowed_cpus") != allowed or
+            host.get("allowed_cpu_count") != len(allowed) or
+            requested_cpu not in allowed or reserved_cpu not in allowed or
+            not isinstance(siblings, list) or requested_cpu not in siblings or
+            reserved_cpu not in siblings or
+            not isinstance(host.get("thread_siblings_list"), str) or
+            common.parse_cpu_list(host["thread_siblings_list"]) != siblings or
+            host.get("process_affinity_during_run") != [requested_cpu] or
+            host.get("child_affinity_preflight") != [requested_cpu] or
+            host.get("cpuinfo_processor") != requested_cpu or
+            host.get("pinning") !=
+            "runner sched_setaffinity singleton; all children inherit" or
+            host.get("parallelism_note") !=
+            "authoritative timings use one physical core; Jerasure bootstrap and "
+            "correctness are capped at ten workers"):
+        raise ComparisonError("measurement host affinity evidence is invalid")
+    try:
+        common.validate_advisory_lease(
+            host.get("coordinator_lease", {}), requested_cpu, reserved_cpu)
+        common.validate_frequency_snapshot(host.get("current_frequency_pre", {}), "pre")
+        common.validate_frequency_snapshot(host.get("current_frequency_post", {}), "post")
+    except common.ComparisonError as error:
+        raise ComparisonError(str(error)) from error
+    for name in ("scaling_driver", "scaling_governor",
+                 "energy_performance_preference", "amd_pstate_status",
+                 "boost", "no_turbo", "cpu_vendor", "cpu_model_name",
+                 "cpu_family", "cpu_model", "cpu_stepping", "microcode"):
+        value = host.get(name)
+        if value is not None and (not isinstance(value, str) or not value):
+            raise ComparisonError(f"measurement host {name} is not text or null")
+    for name in ("cpuinfo_min_freq_khz", "cpuinfo_max_freq_khz",
+                 "scaling_min_freq_khz", "scaling_max_freq_khz"):
+        value = host.get(name)
+        if (value is not None and (isinstance(value, bool) or
+                                   not isinstance(value, int) or value <= 0)):
+            raise ComparisonError(f"measurement host {name} is not positive kHz or null")
+    for minimum, maximum in ((host.get("cpuinfo_min_freq_khz"),
+                              host.get("cpuinfo_max_freq_khz")),
+                             (host.get("scaling_min_freq_khz"),
+                              host.get("scaling_max_freq_khz"))):
+        if minimum is not None and maximum is not None and minimum > maximum:
+            raise ComparisonError("measurement host frequency range is inverted")
+    if (not isinstance(host.get("platform"), str) or not host["platform"] or
+            not isinstance(host.get("uname"), list) or not host["uname"] or
+            any(not isinstance(value, str) for value in host["uname"]) or
+            not isinstance(host.get("python"), str) or not host["python"]):
+        raise ComparisonError("measurement host platform identity is invalid")
+
+
+def expected_run_manifest(
+        provenance: Mapping[str, Any], correctness: Mapping[str, Any],
+        output: Path, correctness_path: Path, cpu: int, reserved_cpu: int,
+        original_allowed: Sequence[int]) -> dict[str, Any]:
+    manifest: dict[str, Any] = {
+        "schema": RUN_MANIFEST_SCHEMA,
+        "output_path": str(output.resolve()),
+        "correctness_path": str(correctness_path.resolve()),
+        "cpu": cpu,
+        "reserved_idle_cpu": reserved_cpu,
+        "original_allowed_cpus": sorted(set(int(value) for value in original_allowed)),
+        "method": checkpoint_method(),
+        "cells": [dict(cell) for cell in CHECKPOINT_CELLS],
+        "sources_sha256": mapping_digest(portable_sources(provenance)),
+        "provenance_sha256": provenance["provenance_sha256"],
+        "executables": {
+            provider: record["sha256"]
+            for provider, record in provenance["executables"].items()},
+        "correctness_binding": correctness_binding(correctness),
+        "child_environment": common.child_environment_record(cpu),
+        "bounds": {
+            "maximum_original_count": MAX_K,
+            "maximum_recovery_count": MAX_R,
+            "maximum_matrix_coefficients": MAX_MATRIX_COEFFICIENTS,
+            "maximum_application_bytes": MAX_APPLICATION_BYTES,
+            "maximum_leopard_parent": MAX_PARENT,
+            "gf_complete_kernel_policy": GF_COMPLETE_KERNEL_POLICY,
+        },
+    }
+    manifest["artifact_sha256"] = canonical_digest(manifest)
+    return manifest
+
+
+def validate_run_manifest(
+        document: Mapping[str, Any], expected: Mapping[str, Any]) -> None:
+    require_exact_keys(document, set(expected), "run manifest")
+    if document.get("schema") != RUN_MANIFEST_SCHEMA:
+        raise ComparisonError("wrong run-manifest schema")
+    if document.get("artifact_sha256") != canonical_digest(document):
+        raise ComparisonError("run-manifest digest changed")
+    if document != expected:
+        raise ComparisonError("durable run state is bound to a different exact run")
+
+
+def state_directory(output: Path) -> Path:
+    return output.parent / f".{output.name}.state"
+
+
+def establish_run_manifest(state: Path, expected: Mapping[str, Any]) -> dict[str, Any]:
+    path = state / "manifest.json"
+    if path.exists():
+        try:
+            document = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            raise ComparisonError(f"invalid durable run manifest: {error}") from error
+        validate_run_manifest(document, expected)
+        return dict(document)
+    if state.exists() and any(state.iterdir()):
+        raise ComparisonError("durable run state has artifacts but no manifest")
+    atomic_write_json(path, expected)
+    return dict(expected)
+
+
+def make_child_artifact(
+        manifest_digest: str, cell_index: int, repetition: int, order_index: int,
+        provider: str, executable_sha256: str,
+        document: Mapping[str, Any]) -> dict[str, Any]:
+    artifact: dict[str, Any] = {
+        "schema": CHILD_ARTIFACT_SCHEMA,
+        "manifest_sha256": manifest_digest,
+        "cell_index": cell_index,
+        "repetition": repetition,
+        "order_index": order_index,
+        "provider": provider,
+        "executable_sha256": executable_sha256,
+        "document": dict(document),
+    }
+    artifact["artifact_sha256"] = canonical_digest(artifact)
+    return artifact
+
+
+def validate_child_artifact(
+        artifact: Mapping[str, Any], manifest_digest: str, cell_index: int,
+        repetition: int, order_index: int, provider: str,
+        executable_sha256: str, validate_payload: bool = True) -> list[int]:
+    require_exact_keys(artifact, {
+        "schema", "manifest_sha256", "cell_index", "repetition", "order_index",
+        "provider", "executable_sha256", "document", "artifact_sha256"},
+        "durable child artifact")
+    if (artifact.get("schema") != CHILD_ARTIFACT_SCHEMA or
+            artifact.get("manifest_sha256") != manifest_digest or
+            artifact.get("cell_index") != cell_index or
+            artifact.get("repetition") != repetition or
+            artifact.get("order_index") != order_index or
+            artifact.get("provider") != provider or
+            artifact.get("executable_sha256") != executable_sha256 or
+            artifact.get("artifact_sha256") != canonical_digest(artifact)):
+        raise ComparisonError("durable child artifact identity changed")
+    if not validate_payload:
+        return []
+    cell = CHECKPOINT_CELLS[cell_index]
+    if provider == "jerasure":
+        return validate_child_result(
+            artifact["document"], cell, EVIDENCE_ITERATIONS,
+            EVIDENCE_WARMUP, "projection")
+    return validate_leopard_result(
+        artifact["document"], cell, EVIDENCE_ITERATIONS, EVIDENCE_WARMUP)
+
+
+def group_directory(state: Path, cell_index: int, repetition: int) -> Path:
+    return state / "groups" / f"cell{cell_index}.rep{repetition}"
+
+
+def discard_partial_group(directory: Path) -> None:
+    if directory.exists():
+        shutil.rmtree(directory)
+
+
+def validate_group_artifacts(
+        directory: Path, manifest: Mapping[str, Any], cell_index: int,
+        repetition: int, original_allowed: Sequence[int],
+        validate_payload: bool = True) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    order = ABBA[repetition]
+    child_paths = [directory / f"order{index}.{provider}.json"
+                   for index, provider in enumerate(order)]
+    group_path = directory / "group.json"
+    required = child_paths + [group_path]
+    present = [path.exists() for path in required]
+    if not all(present):
+        if any(present) or (directory.exists() and any(directory.iterdir())):
+            discard_partial_group(directory)
+        raise FileNotFoundError("ABBA repetition is incomplete")
+    try:
+        children = [json.loads(path.read_text()) for path in child_paths]
+        group = json.loads(group_path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise ComparisonError(f"durable ABBA repetition is invalid: {error}") from error
+    require_exact_keys(group, {
+        "schema", "manifest_sha256", "cell_index", "repetition",
+        "provider_order", "child_artifact_sha256", "host", "artifact_sha256"},
+        "durable ABBA repetition")
+    manifest_digest = str(manifest["artifact_sha256"])
+    if (group.get("schema") != GROUP_ARTIFACT_SCHEMA or
+            group.get("manifest_sha256") != manifest_digest or
+            group.get("cell_index") != cell_index or
+            group.get("repetition") != repetition or
+            group.get("provider_order") != list(order) or
+            group.get("child_artifact_sha256") != [
+                child.get("artifact_sha256") for child in children] or
+            group.get("artifact_sha256") != canonical_digest(group)):
+        raise ComparisonError("durable ABBA repetition identity changed")
+    missing: dict[str, list[int]] = {}
+    digests: dict[str, Mapping[str, Any]] = {}
+    results: list[dict[str, Any]] = []
+    for order_index, (provider, child) in enumerate(zip(order, children)):
+        executable_sha = str(manifest["executables"][provider])
+        missing[provider] = validate_child_artifact(
+            child, manifest_digest, cell_index, repetition, order_index,
+            provider, executable_sha, validate_payload)
+        if validate_payload:
+            digests[provider] = digest_triplet(child["document"])
+        results.append({key: child[key] for key in (
+            "cell_index", "repetition", "order_index", "provider",
+            "executable_sha256", "document")})
+    if validate_payload:
+        if missing["jerasure"] != missing["leopard2"]:
+            raise ComparisonError("providers used different erasure patterns")
+        for key in ("algorithm", "original_data", "recovered_originals"):
+            if digests["jerasure"].get(key) != digests["leopard2"].get(key):
+                raise ComparisonError(f"provider workload digest mismatch: {key}")
+    validate_host_metadata(
+        group["host"], int(manifest["cpu"]), int(manifest["reserved_idle_cpu"]),
+        original_allowed)
+    return results, dict(group["host"])
+
+
+def load_completed_group(
+        state: Path, manifest: Mapping[str, Any], cell_index: int,
+        repetition: int, original_allowed: Sequence[int],
+        validate_payload: bool = True) -> tuple[list[dict[str, Any]], dict[str, Any]] | None:
+    directory = group_directory(state, cell_index, repetition)
+    try:
+        return validate_group_artifacts(
+            directory, manifest, cell_index, repetition, original_allowed,
+            validate_payload)
+    except FileNotFoundError:
+        return None
+
+
+def make_host_groups(
+        cpu: int, reserved_cpu: int, original_allowed: Sequence[int],
+        groups: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    return {
+        "schema": HOST_GROUPS_SCHEMA,
+        "requested_cpu": cpu,
+        "reserved_idle_sibling_cpu": reserved_cpu,
+        "allowed_cpus": sorted(set(int(value) for value in original_allowed)),
+        "allowed_cpu_count": len(set(int(value) for value in original_allowed)),
+        "group_count": len(groups),
+        "groups": [dict(group) for group in groups],
+    }
+
+
+def validate_host_groups(value: Mapping[str, Any]) -> None:
+    require_exact_keys(value, {
+        "schema", "requested_cpu", "reserved_idle_sibling_cpu", "allowed_cpus",
+        "allowed_cpu_count", "group_count", "groups"}, "checkpoint host groups")
+    cpu = value.get("requested_cpu")
+    reserved = value.get("reserved_idle_sibling_cpu")
+    allowed = value.get("allowed_cpus")
+    groups = value.get("groups")
+    if (value.get("schema") != HOST_GROUPS_SCHEMA or
+            isinstance(cpu, bool) or not isinstance(cpu, int) or
+            isinstance(reserved, bool) or not isinstance(reserved, int) or
+            cpu == reserved or not isinstance(allowed, list) or
+            allowed != sorted(set(allowed)) or cpu not in allowed or reserved not in allowed or
+            value.get("allowed_cpu_count") != len(allowed) or
+            not isinstance(groups, list) or
+            value.get("group_count") != len(CHECKPOINT_CELLS) * len(ABBA) or
+            len(groups) != value.get("group_count")):
+        raise ComparisonError("checkpoint host-group identity is invalid")
+    seen = set()
+    observed_order = []
+    for group in groups:
+        require_exact_keys(group, {"cell_index", "repetition", "host"},
+                           "checkpoint host group")
+        identity = (group.get("cell_index"), group.get("repetition"))
+        if (identity in seen or identity[0] not in range(len(CHECKPOINT_CELLS)) or
+                identity[1] not in range(len(ABBA))):
+            raise ComparisonError("checkpoint host-group order/identity changed")
+        seen.add(identity)
+        observed_order.append(identity)
+        validate_host_metadata(group["host"], cpu, reserved, allowed)
+    expected_order = [(cell_index, repetition)
+                      for cell_index in range(len(CHECKPOINT_CELLS))
+                      for repetition in range(len(ABBA))]
+    if observed_order != expected_order:
+        raise ComparisonError("checkpoint host groups are not deterministically ordered")
+
+
 def run_checkpoint(
         cache: Path, cpu: int, reserved_idle_cpu: int, output: Path,
         correctness_path: Path, iterations: int, warmup: int) -> dict[str, Any]:
@@ -1135,56 +1676,139 @@ def run_checkpoint(
     siblings = common.parse_cpu_list(sibling_text) if sibling_text else [cpu]
     if reserved_idle_cpu not in siblings:
         raise ComparisonError("reserved idle CPU is not the timed CPU's SMT sibling")
+    for cell in CHECKPOINT_CELLS:
+        resolved_identity(cell)
     executables = {name: Path(record["path"])
                    for name, record in provenance["executables"].items()}
     environment = common.controlled_child_environment(cpu)
+    manifest_expected = expected_run_manifest(
+        provenance, correctness, output, correctness_path, cpu,
+        reserved_idle_cpu, allowed_before)
+    durable_state = state_directory(output)
+    manifest = establish_run_manifest(durable_state, manifest_expected)
+    if output.exists():
+        try:
+            existing = json.loads(output.read_text())
+        except (OSError, json.JSONDecodeError) as error:
+            raise ComparisonError(f"existing checkpoint is invalid: {error}") from error
+        validate_checkpoint(existing, correctness, trusted_provenance=provenance)
+        host = existing["host"]
+        if (host["requested_cpu"] != cpu or
+                host["reserved_idle_sibling_cpu"] != reserved_idle_cpu or
+                host["allowed_cpus"] != sorted(allowed_before)):
+            raise ComparisonError("existing checkpoint is bound to another CPU reservation")
+        return existing
     results: list[dict[str, Any]] = []
-    pre_frequency: Mapping[str, Any]
-    post_frequency: Mapping[str, Any]
-    original_affinity = os.sched_getaffinity(0)
+    host_groups: list[dict[str, Any]] = []
+    original_affinity = set(allowed_before)
     with common.advisory_cpu_lease(cache, cpu, reserved_idle_cpu) as lease:
         os.sched_setaffinity(0, {cpu})
         try:
+            if common.allowed_cpus() != {cpu}:
+                raise ComparisonError("runner failed to establish singleton affinity")
             probe = run_checked([
                 sys.executable, "-c", "import json,os;print(json.dumps(sorted(os.sched_getaffinity(0))))"],
                 env=environment, timeout=30)
+            if probe.stderr:
+                raise ComparisonError("child-affinity preflight emitted stderr")
             inherited = json.loads(probe.stdout)
             if inherited != [cpu]:
                 raise ComparisonError("timing child did not inherit singleton affinity")
-            pre_frequency = common.current_frequency_snapshot(cpu, "pre")
-            with tempfile.TemporaryDirectory(prefix="leo2-jerasure-timing-", dir=str(cache)) as temp:
-                temporary = Path(temp)
-                for cell_index, cell in enumerate(CHECKPOINT_CELLS):
-                    for repetition, order in enumerate(ABBA):
-                        pair_digests: dict[str, Mapping[str, Any]] = {}
-                        pair_missing: dict[str, list[int]] = {}
+            for cell_index, cell in enumerate(CHECKPOINT_CELLS):
+                for repetition, order in enumerate(ABBA):
+                    completed_group = load_completed_group(
+                        durable_state, manifest, cell_index, repetition,
+                        original_affinity)
+                    if completed_group is None:
+                        directory = group_directory(
+                            durable_state, cell_index, repetition)
+                        discard_partial_group(directory)
+                        directory.mkdir(parents=True, exist_ok=True)
+                        pre_frequency = common.current_frequency_snapshot(cpu, "pre")
+                        child_artifacts: list[dict[str, Any]] = []
+                        missing_by_provider: dict[str, list[int]] = {}
+                        digests_by_provider: dict[str, Mapping[str, Any]] = {}
+                        post_frequency: Mapping[str, Any] | None = None
                         for order_index, provider in enumerate(order):
-                            result_path = temporary / (
-                                f"cell{cell_index}.rep{repetition}.order{order_index}.{provider}.json")
+                            raw_path = directory / f".pending.order{order_index}.{provider}.json"
                             command = child_command(
-                                provider, executables[provider], cell, iterations, warmup,
-                                result_path, oracle="projection" if provider == "jerasure" else None)
-                            completed = run_checked(command, env=environment, timeout=900)
+                                provider, executables[provider], cell,
+                                iterations, warmup, raw_path,
+                                oracle="projection" if provider == "jerasure" else None)
+                            completed = run_checked(
+                                command, env=environment, timeout=900)
+                            if common.allowed_cpus() != {cpu}:
+                                raise ComparisonError(
+                                    "runner affinity changed after a timing child")
+                            if order_index == len(order) - 1:
+                                post_frequency = common.current_frequency_snapshot(cpu, "post")
                             if completed.stdout or completed.stderr:
-                                raise ComparisonError(f"{provider} emitted unexpected output")
-                            document = json.loads(result_path.read_text())
+                                raise ComparisonError(
+                                    f"{provider} emitted unexpected output")
+                            try:
+                                document = json.loads(raw_path.read_text())
+                            except (OSError, json.JSONDecodeError) as error:
+                                raise ComparisonError(
+                                    f"invalid {provider} timing JSON: {error}") from error
                             missing = (validate_child_result(
                                 document, cell, iterations, warmup, "projection")
                                 if provider == "jerasure" else
-                                validate_leopard_result(document, cell, iterations, warmup))
-                            pair_digests[provider] = digest_triplet(document)
-                            pair_missing[provider] = missing
-                            results.append({
-                                "cell_index": cell_index, "repetition": repetition,
-                                "order_index": order_index, "provider": provider,
-                                "executable_sha256": provenance["executables"][provider]["sha256"],
-                                "document": document})
-                        if pair_missing["jerasure"] != pair_missing["leopard2"]:
+                                validate_leopard_result(
+                                    document, cell, iterations, warmup))
+                            missing_by_provider[provider] = missing
+                            digests_by_provider[provider] = digest_triplet(document)
+                            child = make_child_artifact(
+                                str(manifest["artifact_sha256"]), cell_index,
+                                repetition, order_index, provider,
+                                provenance["executables"][provider]["sha256"], document)
+                            atomic_write_json(
+                                directory / f"order{order_index}.{provider}.json", child)
+                            child_artifacts.append(child)
+                            raw_path.unlink()
+                        if post_frequency is None:
+                            raise ComparisonError("post-pair frequency was not captured")
+                        if missing_by_provider["jerasure"] != missing_by_provider["leopard2"]:
                             raise ComparisonError("providers used different erasure patterns")
                         for key in ("algorithm", "original_data", "recovered_originals"):
-                            if pair_digests["jerasure"].get(key) != pair_digests["leopard2"].get(key):
-                                raise ComparisonError(f"provider workload digest mismatch: {key}")
-            post_frequency = common.current_frequency_snapshot(cpu, "post")
+                            if (digests_by_provider["jerasure"].get(key) !=
+                                    digests_by_provider["leopard2"].get(key)):
+                                raise ComparisonError(
+                                    f"provider workload digest mismatch: {key}")
+                        host = common.cpu_metadata(
+                            cpu=cpu, original_allowed=original_affinity,
+                            reserved_idle_cpu=reserved_idle_cpu,
+                            child_affinity_preflight=inherited, lease=lease,
+                            pre_frequency=pre_frequency,
+                            post_frequency=post_frequency)
+                        host["parallelism_note"] = (
+                            "authoritative timings use one physical core; Jerasure "
+                            "bootstrap and correctness are capped at ten workers")
+                        validate_host_metadata(
+                            host, cpu, reserved_idle_cpu, original_affinity)
+                        group: dict[str, Any] = {
+                            "schema": GROUP_ARTIFACT_SCHEMA,
+                            "manifest_sha256": manifest["artifact_sha256"],
+                            "cell_index": cell_index,
+                            "repetition": repetition,
+                            "provider_order": list(order),
+                            "child_artifact_sha256": [
+                                child["artifact_sha256"] for child in child_artifacts],
+                            "host": host,
+                        }
+                        group["artifact_sha256"] = canonical_digest(group)
+                        atomic_write_json(directory / "group.json", group)
+                        for raw_path in directory.glob(".pending.*.json"):
+                            raw_path.unlink()
+                        completed_group = validate_group_artifacts(
+                            directory, manifest, cell_index, repetition,
+                            original_affinity)
+                    group_results, group_host = completed_group
+                    results.extend(group_results)
+                    host_groups.append({
+                        "cell_index": cell_index, "repetition": repetition,
+                        "host": group_host})
+            if common.allowed_cpus() != {cpu}:
+                raise ComparisonError("runner affinity changed during timing campaign")
             post_provenance = load_provenance(cache)
             if post_provenance != provenance:
                 raise ComparisonError("source/build/executable provenance changed during timing")
@@ -1193,28 +1817,13 @@ def run_checkpoint(
                 raise ComparisonError("correctness artifact changed during timing")
         finally:
             os.sched_setaffinity(0, original_affinity)
-    method = {
-        "provider_order": "ABBA", "provider_order_by_repetition": [list(x) for x in ABBA],
-        "repetitions": 4, "iterations_per_child": iterations,
-        "warmups_per_child": warmup, "retain_all_samples": True,
-        "setup_and_execution_separate": True, "single_thread": True,
-        "region_contract_bytes": 8, "alignment_bytes": 64,
-        "parity_wire_compatible": False,
-        "timing_oracle": "projection with exact FNV workload digests",
-        "full_correctness_oracle": (
-            "separate 128-case artifact checks every generated parity byte against "
-            "independent scalar systematic-Vandermonde algebra"),
-    }
-    host = common.cpu_metadata(
-        cpu=cpu,
-        original_allowed=original_affinity,
-        reserved_idle_cpu=reserved_idle_cpu,
-        child_affinity_preflight=inherited,
-        lease=lease,
-        pre_frequency=pre_frequency,
-        post_frequency=post_frequency)
+    if common.allowed_cpus() != original_affinity:
+        raise ComparisonError("runner failed to restore its original affinity")
+    host = make_host_groups(
+        cpu, reserved_idle_cpu, original_affinity, host_groups)
+    validate_host_groups(host)
     checkpoint: dict[str, Any] = {
-        "schema": SCHEMA, "method": method,
+        "schema": SCHEMA, "method": checkpoint_method(),
         "sources": portable_sources(provenance),
         "executables": {name: {"sha256": record["sha256"]}
                         for name, record in provenance["executables"].items()},
@@ -1222,15 +1831,12 @@ def run_checkpoint(
         "correctness_binding": correctness_binding(correctness),
         "host": host, "cells": [dict(cell) for cell in CHECKPOINT_CELLS],
         "results": results, "aggregate": aggregate_results(results),
-        "limitations": [
-            "Jerasure and Leopard2 parity bytes/generator matrices differ",
-            "GF8-vs-GF16 padding-boundary cells are not kernel-only comparisons",
-            "single-machine bounded cells do not establish the full required matrix"],
+        "limitations": checkpoint_limitations(),
     }
     checkpoint["artifact_sha256"] = canonical_digest(checkpoint)
-    validate_checkpoint(checkpoint, correctness)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(checkpoint, indent=2, sort_keys=True) + "\n")
+    validate_checkpoint(
+        checkpoint, correctness, trusted_provenance=post_provenance)
+    atomic_write_json(output, checkpoint)
     return checkpoint
 
 
@@ -1255,15 +1861,12 @@ def validate_checkpoint(
     if cells != [dict(cell) for cell in CHECKPOINT_CELLS]:
         raise ComparisonError("checkpoint cells changed")
     method = document.get("method", {})
-    if (method.get("provider_order_by_repetition") != [list(x) for x in ABBA] or
-            method.get("repetitions") != 4 or
-            method.get("iterations_per_child") != EVIDENCE_ITERATIONS or
-            method.get("warmups_per_child") != EVIDENCE_WARMUP or
-            method.get("single_thread") is not True or
-            method.get("region_contract_bytes") != 8 or
-            method.get("alignment_bytes") != 64 or
-            method.get("parity_wire_compatible") is not False):
+    require_exact_keys(method, set(checkpoint_method()), "checkpoint method")
+    if method != checkpoint_method():
         raise ComparisonError("checkpoint method changed")
+    if document.get("limitations") != checkpoint_limitations():
+        raise ComparisonError("checkpoint limitations changed")
+    validate_host_groups(document.get("host", {}))
     try:
         common.validate_child_environment_record(
             document["child_environment"], int(document["host"]["requested_cpu"]))
@@ -1284,6 +1887,7 @@ def validate_checkpoint(
     if not isinstance(results, list) or len(results) != expected_count:
         raise ComparisonError("checkpoint result cardinality changed")
     seen = set()
+    pair_evidence: dict[tuple[int, int], dict[str, tuple[list[int], Mapping[str, Any]]]] = {}
     for result in results:
         require_exact_keys(result, {
             "cell_index", "repetition", "order_index", "provider",
@@ -1303,12 +1907,22 @@ def validate_checkpoint(
             raise ComparisonError("timing result executable identity changed")
         cell = CHECKPOINT_CELLS[cell_index]
         if provider == "jerasure":
-            validate_child_result(
+            missing = validate_child_result(
                 result["document"], cell, EVIDENCE_ITERATIONS, EVIDENCE_WARMUP,
                 "projection")
         else:
-            validate_leopard_result(
+            missing = validate_leopard_result(
                 result["document"], cell, EVIDENCE_ITERATIONS, EVIDENCE_WARMUP)
+        pair_evidence.setdefault((cell_index, repetition), {})[provider] = (
+            missing, digest_triplet(result["document"]))
+    for identity, providers in pair_evidence.items():
+        if set(providers) != {"jerasure", "leopard2"}:
+            raise ComparisonError(f"timing pair {identity} is incomplete")
+        if providers["jerasure"][0] != providers["leopard2"][0]:
+            raise ComparisonError("paired erasure patterns differ")
+        for key in ("algorithm", "original_data", "recovered_originals"):
+            if providers["jerasure"][1].get(key) != providers["leopard2"][1].get(key):
+                raise ComparisonError(f"paired workload digest differs: {key}")
     expected_aggregate = aggregate_results(results)
     if document.get("aggregate") != expected_aggregate:
         raise ComparisonError("checkpoint aggregate is not result-derived")
@@ -1320,6 +1934,368 @@ def validate_checkpoint(
         for provider in executables:
             if executables[provider]["sha256"] != trusted_provenance["executables"][provider]["sha256"]:
                 raise ComparisonError("checkpoint executable differs from trusted cache")
+
+
+def fake_host_metadata(cpu: int, reserved_cpu: int, allowed: Sequence[int]) -> dict[str, Any]:
+    return {
+        "requested_cpu": cpu,
+        "allowed_cpu_count": len(set(allowed)),
+        "allowed_cpus": sorted(set(allowed)),
+        "process_affinity_during_run": [cpu],
+        "child_affinity_preflight": [cpu],
+        "thread_siblings_list": f"{cpu},{reserved_cpu}",
+        "thread_siblings": sorted((cpu, reserved_cpu)),
+        "reserved_idle_sibling_cpu": reserved_cpu,
+        "coordinator_lease": {
+            "schema": common.LEASE_SCHEMA,
+            "mechanism": "fcntl-flock-exclusive-advisory",
+            "scope": "cooperating Leopard2 lab jobs only; not an OS-exclusive CPU reservation",
+            "cpus": sorted((cpu, reserved_cpu)),
+            "lock_names": [f"cpu-{value}.lock" for value in sorted((cpu, reserved_cpu))],
+            "coordinator_pid": 123,
+            "acquired_before_affinity": True,
+            "held_through_measurement": True,
+            "held_through_post_timing_integrity": True,
+            "os_exclusive": False,
+        },
+        "scaling_driver": "test", "scaling_governor": "test",
+        "energy_performance_preference": None,
+        "cpuinfo_min_freq_khz": 1000000, "cpuinfo_max_freq_khz": 5000000,
+        "scaling_min_freq_khz": 1000000, "scaling_max_freq_khz": 5000000,
+        "current_frequency_pre": {
+            "captured_phase": "pre", "scaling_cur_freq_khz": 4000000,
+            "cpuinfo_cur_freq_khz": None},
+        "current_frequency_post": {
+            "captured_phase": "post", "scaling_cur_freq_khz": 4200000,
+            "cpuinfo_cur_freq_khz": None},
+        "amd_pstate_status": None, "boost": None, "no_turbo": None,
+        "cpuinfo_processor": cpu, "cpu_vendor": "test",
+        "cpu_model_name": "test", "cpu_family": "1", "cpu_model": "1",
+        "cpu_stepping": "1", "microcode": "1", "platform": "test",
+        "uname": ["test"], "python": "test",
+        "pinning": "runner sched_setaffinity singleton; all children inherit",
+        "parallelism_note": (
+            "authoritative timings use one physical core; Jerasure bootstrap and "
+            "correctness are capped at ten workers"),
+    }
+
+
+def run_state_self_test() -> dict[str, int]:
+    cpu, reserved, allowed = 7, 8, [7, 8]
+    host = fake_host_metadata(cpu, reserved, allowed)
+    validate_host_metadata(host, cpu, reserved, allowed)
+    manifest: dict[str, Any] = {
+        "schema": RUN_MANIFEST_SCHEMA,
+        "cpu": cpu, "reserved_idle_cpu": reserved,
+        "executables": {"jerasure": "1" * 64, "leopard2": "2" * 64},
+    }
+    manifest["artifact_sha256"] = canonical_digest(manifest)
+    with tempfile.TemporaryDirectory(prefix="leo2-jerasure-state-self-test-") as temp:
+        state = Path(temp) / "state"
+        establish_run_manifest(state, manifest)
+        validate_run_manifest(json.loads((state / "manifest.json").read_text()), manifest)
+        directory = group_directory(state, 0, 0)
+        directory.mkdir(parents=True)
+        first = make_child_artifact(
+            manifest["artifact_sha256"], 0, 0, 0, ABBA[0][0],
+            manifest["executables"][ABBA[0][0]], {})
+        atomic_write_json(directory / f"order0.{ABBA[0][0]}.json", first)
+        if load_completed_group(
+                state, manifest, 0, 0, allowed, validate_payload=False) is not None:
+            raise ComparisonError("partial ABBA repetition was resumed")
+        if directory.exists():
+            raise ComparisonError("partial ABBA repetition was not discarded")
+        directory.mkdir(parents=True)
+        children = []
+        for order_index, provider in enumerate(ABBA[0]):
+            child = make_child_artifact(
+                manifest["artifact_sha256"], 0, 0, order_index, provider,
+                manifest["executables"][provider], {})
+            atomic_write_json(directory / f"order{order_index}.{provider}.json", child)
+            children.append(child)
+        group: dict[str, Any] = {
+            "schema": GROUP_ARTIFACT_SCHEMA,
+            "manifest_sha256": manifest["artifact_sha256"],
+            "cell_index": 0, "repetition": 0,
+            "provider_order": list(ABBA[0]),
+            "child_artifact_sha256": [child["artifact_sha256"] for child in children],
+            "host": host,
+        }
+        group["artifact_sha256"] = canonical_digest(group)
+        atomic_write_json(directory / "group.json", group)
+        if load_completed_group(
+                state, manifest, 0, 0, allowed, validate_payload=False) is None:
+            raise ComparisonError("complete ABBA repetition was not resumed")
+        tampered = json.loads((directory / f"order0.{ABBA[0][0]}.json").read_text())
+        tampered["document"] = {"tampered": True}
+        atomic_write_json(directory / f"order0.{ABBA[0][0]}.json", tampered)
+        try:
+            load_completed_group(
+                state, manifest, 0, 0, allowed, validate_payload=False)
+        except ComparisonError:
+            pass
+        else:
+            raise ComparisonError("tampered durable child artifact was accepted")
+    return {"partial_groups_discarded": 1, "complete_groups_resumed": 1,
+            "state_mutations_rejected": 1}
+
+
+def fake_jerasure_result(
+        cell: Mapping[str, Any], iterations: int, warmup: int,
+        oracle: str = "projection") -> dict[str, Any]:
+    params = expected_parameters(cell, iterations, warmup)
+    params["missing_original_indices"] = expected_missing_indices(
+        params["K"], params["loss_count"], params["seed"])
+    k, r = params["K"], params["R"]
+    shard_bytes, batch = params["shard_bytes"], params["batch"]
+    losses = params["loss_count"]
+    profile, leopard_field, parent, jerasure_field = resolved_identity(cell)
+    encode_input = k * shard_bytes * batch
+    encode_output = r * shard_bytes * batch
+    decode_offered = 0 if losses == 0 else (k - losses + r) * shard_bytes * batch
+    decode_selected = 0 if losses == 0 else k * shard_bytes * batch
+    decode_output = losses * shard_bytes * batch
+    setup = common.fake_summary(False, iterations=iterations)
+    encode = common.fake_summary(
+        True, encode_input, encode_output, "input_GB_per_s",
+        "parity_output_GB_per_s", iterations)
+    plan = common.fake_summary(False, iterations=iterations)
+    decode = common.fake_summary(
+        True, decode_offered, decode_output, "offered_received_GB_per_s",
+        "repaired_output_GB_per_s", iterations)
+    if decode_offered == 0:
+        decode["offered_received_GB_per_s"] = None
+    amortized_us = (float(decode["median_us_per_batch_call"]) +
+                    float(plan["median_us"]) / params["reuse"])
+    original, recovered = expected_digests(cell)
+    return {
+        "schema": CHILD_SCHEMA,
+        "provider": {
+            "name": "Jerasure 2.0", "source_commit": JERASURE_COMMIT,
+            "source_tree": JERASURE_TREE, "header_sha256": JERASURE_HEADER_SHA256,
+            "reed_sol_header_sha256": REED_SOL_HEADER_SHA256,
+            "license": "BSD-3-Clause", "license_sha256": JERASURE_LICENSE_SHA256,
+            "gf_complete_commit": GF_COMPLETE_COMMIT,
+            "gf_complete_tree": GF_COMPLETE_TREE,
+            "gf_complete_header_sha256": GF_COMPLETE_HEADER_SHA256,
+            "gf_complete_license_sha256": GF_COMPLETE_LICENSE_SHA256,
+            "gf_complete_simd_flags": GF_COMPLETE_KERNEL_POLICY,
+            "field": jerasure_field,
+            "generator": "reed_sol_vandermonde_coding_matrix",
+            "wire_compatible": False,
+        },
+        "parameters": params,
+        "comparison_identity": {
+            "leopard2_profile": profile, "leopard2_parent": parent,
+            "leopard2_field": leopard_field,
+            "jerasure_field_advantage_from_padding": (
+                jerasure_field == "gf8" and leopard_field == "gf16"),
+            "scope": (
+                "public payload and repaired-output throughput only; field/basis "
+                "representation, coordinates, generator matrices, and parity bytes differ"),
+        },
+        "correctness": {
+            "direct_source_round_trip": True,
+            "systematic_sources_immutable": True,
+            "independent_systematic_vandermonde_coefficients_checked": k * r,
+            "independent_scalar_parity_mode": oracle,
+            "independent_scalar_parity_checked_bytes_per_validation": (
+                r * (shard_bytes if oracle == "full" else min(shard_bytes, 64)) * batch),
+            "independent_scalar_parity_total_bytes_per_validation": (
+                r * shard_bytes * batch),
+            "independent_scalar_parity_validation_passes": 2,
+        },
+        "workload_digests": {
+            "algorithm": "fnv1a64", "original_data": original,
+            "transmitted_parity": "4" * 16, "recovered_originals": recovered},
+        "memory": {
+            "alignment_bytes": 64, "region_multiple_bytes": 8,
+            "direct_application_buffers": True,
+            "staging_copy_bytes_per_execution": 0,
+            "encode_input_bytes_per_batch_call": encode_input,
+            "encode_output_bytes_per_batch_call": encode_output,
+            "decode_offered_bytes_per_batch_call": decode_offered,
+            "decode_selected_bytes_per_batch_call": decode_selected,
+            "decode_output_bytes_per_batch_call": decode_output,
+            "encode_matrix_bytes": k * r * 4,
+            "decode_matrix_bytes": 0 if losses == 0 else k * k * 4,
+            "decode_id_bytes": 0 if losses == 0 else k * 4,
+        },
+        "metrics": {
+            "codec_setup": setup, "encode_execution": encode,
+            "decode_plan_setup": plan, "decode_execution": decode,
+            "decode_amortized_at_reuse": {
+                "reuse_count": params["reuse"],
+                "derived_median_us_per_batch_call": amortized_us,
+                "offered_received_GB_per_s": (
+                    decode_offered / (amortized_us * 1000.0)
+                    if decode_offered else None),
+                "repaired_output_GB_per_s": (
+                    decode_output / (amortized_us * 1000.0)
+                    if decode_output else None),
+            },
+            "rate_semantics": (
+                "offered_received counts all non-erased public shards for repair; "
+                "Jerasure reads the recorded deterministic K-row subset; no-loss "
+                "decode is a true no-op with null throughput"),
+        },
+    }
+
+
+def fake_checkpoint(correctness: Mapping[str, Any]) -> dict[str, Any]:
+    jerasure_sha = correctness["executables"]["jerasure"]["sha256"]
+    leopard_sha = correctness["sources"]["build_identity"]["runtime_linkage"][
+        "leopard2"]["executable_sha256"]
+    results = []
+    hosts = []
+    for cell_index, cell in enumerate(CHECKPOINT_CELLS):
+        original, recovered = expected_digests(cell)
+        for repetition, order in enumerate(ABBA):
+            hosts.append({
+                "cell_index": cell_index, "repetition": repetition,
+                "host": fake_host_metadata(7, 8, [7, 8])})
+            for order_index, provider in enumerate(order):
+                if provider == "jerasure":
+                    document = fake_jerasure_result(
+                        cell, EVIDENCE_ITERATIONS, EVIDENCE_WARMUP, "projection")
+                    executable_sha = jerasure_sha
+                else:
+                    document = common.fake_leopard_result(
+                        cell, EVIDENCE_ITERATIONS, EVIDENCE_WARMUP,
+                        common.LEOPARD_SCHEMA_V2)
+                    document["workload_digests"].update(
+                        original_data=original, recovered_originals=recovered)
+                    executable_sha = leopard_sha
+                results.append({
+                    "cell_index": cell_index, "repetition": repetition,
+                    "order_index": order_index, "provider": provider,
+                    "executable_sha256": executable_sha, "document": document})
+    checkpoint: dict[str, Any] = {
+        "schema": SCHEMA, "method": checkpoint_method(),
+        "sources": copy.deepcopy(correctness["sources"]),
+        "executables": {
+            "jerasure": {"sha256": jerasure_sha},
+            "leopard2": {"sha256": leopard_sha}},
+        "child_environment": common.child_environment_record(7),
+        "correctness_binding": correctness_binding(correctness),
+        "host": make_host_groups(7, 8, [7, 8], hosts),
+        "cells": [dict(cell) for cell in CHECKPOINT_CELLS],
+        "results": results,
+        "limitations": checkpoint_limitations(),
+    }
+    checkpoint["aggregate"] = aggregate_results(results)
+    checkpoint["artifact_sha256"] = canonical_digest(checkpoint)
+    return checkpoint
+
+
+def run_mutation_tests(correctness_path: Path) -> dict[str, int]:
+    try:
+        correctness = json.loads(correctness_path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise ComparisonError(f"mutation test needs correctness artifact: {error}") from error
+    validate_correctness(correctness)
+    checkpoint = fake_checkpoint(correctness)
+    validate_checkpoint(checkpoint, correctness)
+    checkpoint_mutations = []
+    changed = copy.deepcopy(checkpoint)
+    changed["method"]["unvalidated_claim"] = True
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["method"]["no_loss_decode_semantics"] = "claims throughput"
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["limitations"].pop()
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["host"]["groups"][0]["host"]["process_affinity_during_run"] = [7, 8]
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["host"]["groups"][0]["host"]["current_frequency_post"][
+        "scaling_cur_freq_khz"] = -1
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["host"]["groups"][0]["host"]["coordinator_lease"][
+        "lock_names"] = ["forged"]
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    jerasure = next(result for result in changed["results"]
+                    if result["provider"] == "jerasure")
+    jerasure["document"]["provider"]["gf_complete_simd_flags"] = "-march=native"
+    changed["aggregate"] = aggregate_results(changed["results"])
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["results"][0]["executable_sha256"] = "f" * 64
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["aggregate"][0]["providers"]["jerasure"]["codec_setup"][
+        "median_of_run_medians_us"] = 999.0
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["child_environment"]["variables"]["LD_PRELOAD"] = "/tmp/inject.so"
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    for changed in checkpoint_mutations:
+        try:
+            validate_checkpoint(changed, correctness)
+        except ComparisonError:
+            pass
+        else:
+            raise ComparisonError("adversarial checkpoint mutation was accepted")
+    correctness_mutations = []
+    changed = copy.deepcopy(correctness)
+    changed["worker_count"] = 11
+    changed["artifact_sha256"] = canonical_digest(changed)
+    correctness_mutations.append(changed)
+    changed = copy.deepcopy(correctness)
+    changed["sources"]["leopard"]["commit"] = "0" * 40
+    changed["artifact_sha256"] = canonical_digest(changed)
+    correctness_mutations.append(changed)
+    changed = copy.deepcopy(correctness)
+    changed["child_environment"]["variables"]["LD_PRELOAD"] = "/tmp/inject.so"
+    changed["artifact_sha256"] = canonical_digest(changed)
+    correctness_mutations.append(changed)
+    changed = copy.deepcopy(correctness)
+    changed["results"][0]["document"]["provider"][
+        "gf_complete_simd_flags"] = "-mpclmul"
+    changed["artifact_sha256"] = canonical_digest(changed)
+    correctness_mutations.append(changed)
+    changed = copy.deepcopy(correctness)
+    changed["artifact_sha256"] = "0" * 64
+    correctness_mutations.append(changed)
+    for changed in correctness_mutations:
+        try:
+            validate_correctness(changed)
+        except ComparisonError:
+            pass
+        else:
+            raise ComparisonError("adversarial correctness mutation was accepted")
+    no_loss = fake_jerasure_result({
+        "K": 8, "R": 8, "profile": "high", "shard_bytes": 64,
+        "loss_count": 0, "batch": 1, "reuse": 8, "seed": 7}, 5, 0, "full")
+    validate_child_result(no_loss, {
+        "K": 8, "R": 8, "profile": "high", "shard_bytes": 64,
+        "loss_count": 0, "batch": 1, "reuse": 8, "seed": 7}, 5, 0, "full")
+    no_loss["metrics"]["decode_execution"]["offered_received_GB_per_s"] = 1.0
+    try:
+        validate_child_result(no_loss, {
+            "K": 8, "R": 8, "profile": "high", "shard_bytes": 64,
+            "loss_count": 0, "batch": 1, "reuse": 8, "seed": 7}, 5, 0, "full")
+    except ComparisonError:
+        pass
+    else:
+        raise ComparisonError("no-loss throughput claim was accepted")
+    return {"checkpoint_mutations_rejected": len(checkpoint_mutations),
+            "correctness_mutations_rejected": len(correctness_mutations),
+            "no_loss_mutations_rejected": 1}
 
 
 def self_test() -> None:
@@ -1347,6 +2323,21 @@ def self_test() -> None:
         "shard_bytes": 65, "thread_count": 1})
     if unaligned.get("status") != "excluded":
         raise ComparisonError("unaligned Jerasure workload did not fail closed")
+    outside = audit.classify("jerasure", {
+        "K": MAX_K + 1, "R": 1, "requested_profile": "legacy_high_v1",
+        "shard_bytes": 64, "loss_count": 1, "batch": 1, "thread_count": 1})
+    inflated = audit.classify("jerasure", {
+        "K": 40000, "R": 20000, "requested_profile": "legacy_high_v1",
+        "shard_bytes": 64, "loss_count": 1, "batch": 1, "thread_count": 1})
+    memory_bound = audit.classify("jerasure", {
+        "K": MAX_K, "R": MAX_R, "requested_profile": "legacy_high_v1",
+        "shard_bytes": 1048576, "loss_count": 1, "batch": 1,
+        "thread_count": 1})
+    if (outside.get("status") != "excluded" or
+            inflated.get("status") != "excluded" or
+            not any("parent exceeds" in reason for reason in inflated.get("reasons", [])) or
+            memory_bound.get("status") != "excluded"):
+        raise ComparisonError("bounded Jerasure classifications did not fail closed")
     cells = correctness_cells(32)
     if len(cells) != 32 or not any(resolved_identity(cell)[3] == "gf16" for cell in cells):
         raise ComparisonError("correctness generator lost GF16 coverage")
@@ -1354,33 +2345,13 @@ def self_test() -> None:
         original, recovered = expected_digests(cell)
         require_hex(original, 16, "synthetic original digest")
         require_hex(recovered, 16, "synthetic recovered digest")
-    allowed = common.allowed_cpus()
-    if not allowed:
-        raise ComparisonError("self-test requires at least one allowed CPU")
-    cpu = min(allowed)
-    sibling_text = common.optional_text(
-        Path(f"/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list"))
-    siblings = common.parse_cpu_list(sibling_text) if sibling_text else [cpu]
-    reserved_cpu = next(
-        (candidate for candidate in siblings
-         if candidate != cpu and candidate in allowed), cpu)
-    host = common.cpu_metadata(
-        cpu=cpu,
-        original_allowed=allowed,
-        reserved_idle_cpu=reserved_cpu,
-        child_affinity_preflight=[cpu],
-        lease={"schema": "self-test", "cpus": sorted({cpu, reserved_cpu})},
-        pre_frequency={"captured_phase": "self-test-pre"},
-        post_frequency={"captured_phase": "self-test-post"})
-    if (host.get("allowed_cpu_count") != len(allowed) or
-            host.get("allowed_cpus") != sorted(allowed) or
-            host.get("reserved_idle_sibling_cpu") != reserved_cpu or
-            host.get("child_affinity_preflight") != [cpu]):
-        raise ComparisonError("host-metadata argument binding changed")
+    state_counts = run_state_self_test()
     print(json.dumps({
         "status": "PASS", "normal_build_optional": True,
         "aligned_contract_bytes": 8, "synthetic_cells": len(cells),
-        "host_metadata_binding": True}, sort_keys=True))
+        "host_metadata_binding": True,
+        "bounded_domain_rejections": 3,
+        **state_counts}, sort_keys=True))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1413,6 +2384,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     validate_parser.add_argument("--correctness-artifact", type=Path, required=True)
     validate_parser.add_argument("--cache", type=Path, default=default_cache())
     validate_parser.add_argument("--require-local-build-match", action="store_true")
+    mutation_parser = subparsers.add_parser("mutation-test")
+    mutation_parser.add_argument("correctness_artifact", type=Path)
     subparsers.add_parser("self-test")
     arguments = parser.parse_args(argv)
     try:
@@ -1453,6 +2426,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(json.dumps({"status": "PASS", "results": len(checkpoint["results"]),
                               "artifact_sha256": checkpoint["artifact_sha256"]},
                              sort_keys=True))
+        elif arguments.command == "mutation-test":
+            counts = run_mutation_tests(arguments.correctness_artifact.resolve())
+            print(json.dumps({"status": "PASS", **counts}, sort_keys=True))
         else:
             self_test()
     except (ComparisonError, common.ComparisonError, OSError,

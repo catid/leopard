@@ -1,0 +1,177 @@
+# Leopard2 / Jerasure comparison protocol
+
+> **Evidence status:** the retained `correctness_result.json` is a bounded,
+> non-timing correctness artifact.  It is not a performance result.  No
+> Jerasure versus Leopard2 throughput claim is accepted until the separate
+> pinned ABBA timing command completes and its artifact passes both portable
+> and trusted-cache validation.
+
+This experiment compares equivalent public erasure workloads, not wire
+formats.  Jerasure and Leopard2 receive the same `K`, `R`, shard byte count,
+deterministic source bytes, missing-original indices, batch size, reuse count,
+and single-thread constraint.  Their fields/bases, coordinate sets, generator
+matrices, and parity bytes can differ.  Only application-payload,
+generated-output, and repaired-output rates are comparable.
+
+## Entirely optional production dependency
+
+The production CMake graph does not descend into
+`experiments/leopard2/jerasure_compare`.  Its only normal-build integrations
+are Python policy/parser and mutation tests; neither finds, compiles, links,
+installs, or loads either third-party library.  The
+standalone project must be configured explicitly and builds private static
+archives in the ignored research cache.  The full BSD-3-Clause notices are
+retained beside the adapter.
+
+The pinned sources are:
+
+| Component | Source identity | License identity |
+|---|---|---|
+| Jerasure 2.0 | https://github.com/ceph/jerasure at `de1739cc8483696506829b52e7fda4f6bb195e6a`, tree `fb98f85c548038a5ff294141f89603dda70dd423` | BSD-3-Clause, `License.txt` SHA-256 `83b6b3ff237848fbccfa889bb52cfb13c331c1f83544b907617c7f8f31eb1769` |
+| GF-Complete | https://github.com/ceph/gf-complete at `a6862d10c9db467148f20eef2c6445ac9afd94d8`, tree `5a13169b93b6e517184fbdf39033098b329d68a6` | BSD-3-Clause, `License.txt` SHA-256 `cb9790699b4a3d56a43bba1dd859f7f41361cd224e8745a24eef933ea134a280` |
+
+Bootstrap rejects dirty or mismatched source trees.  It creates a detached
+worktree at the exact clean Leopard commit and builds both benchmark
+executables from that materialization.  Provenance records normalized compile
+commands, actual CMake link commands, every object/archive input consumed by
+those commands, the three private static archive hashes, compiler and build
+tool identities, each executable hash, and the transitively closed ELF
+interpreter/`DT_NEEDED` graph.  A trusted-cache replay reconstructs and exact
+compares that closure.  Every replay also re-verifies the detached Leopard
+HEAD, tree, clean status, tracked-tree listing, and detached-HEAD state.  The
+source identities are included in the build identity whose object/archive and
+executable closure is checked, so a coordinated source relabel cannot stand in
+for the code that produced an executable.
+
+## Codec and fairness semantics
+
+The adapter uses Jerasure's documented
+`reed_sol_vandermonde_coding_matrix` and `jerasure_matrix_encode` path.  The
+field is GF(2^8) when `K+R <= 256` and GF(2^16) otherwise.  This comparison is
+deliberately bounded to `K <= 4096`, `R <= 4096`, at most `2^24` coefficients
+in any dense oracle/decode matrix, at most 8 GiB of application buffers, and a
+paired Leopard2 parent no larger than 65,536 coordinates.  Both the executable
+and matrix classifier reject cells outside that domain.  GF-Complete's
+standard polynomials are
+`0x11d` and `0x1100b`, respectively.
+
+The independent oracle does not call Jerasure or GF-Complete arithmetic.  It
+constructs the extended Vandermonde evaluations, independently inverts the
+systematic prefix, applies Jerasure's documented generalized-RS row
+normalizations, and checks all `K*R` coding coefficients.  It then recomputes
+every requested parity symbol using scalar polynomial-basis multiplication.
+The full correctness campaign checks every parity byte; timing children use a
+deterministic boundary/random projection and are gated by the separate full
+artifact.
+
+Decode-plan setup calls `jerasure_make_decoding_matrix` once, with surviving
+systematic rows followed by the lowest parity rows until exactly `K` rows are
+selected.  Execution calls `jerasure_matrix_dotprod` only for requested
+missing originals.  Parity rebuilding is excluded.  This separates matrix
+construction/inversion from byte-heavy execution in the same way Leopard2
+separates codec/plan setup from execution.  Offered received bytes and the
+selected `K`-row byte count are recorded separately.
+
+A no-loss decode constructs no decode matrix, selects and offers zero bytes,
+and executes no repair dot product.  Its timing is latency/status evidence
+only: input and output throughput fields are null, so the harness cannot claim
+an offered-byte rate for a no-op.
+
+Every application shard begins on a 64-byte boundary and shard length must be
+a multiple of eight bytes, satisfying Jerasure's documented longword region
+contract deterministically on the intended 64-bit comparison hosts.  Invalid
+lengths fail closed; they are not silently padded.  Both codecs operate
+directly on application buffers, and the adapter records zero staging or
+format-conversion bytes.  The benchmark emits exact FNV-1a-64 digests for
+original input, transmitted parity, and recovered originals.  Paired timing
+children must match original and recovered digests and their independently
+regenerated loss lists; parity digests are retained but intentionally need not
+match across the two different codes.
+
+Ambient loader, allocator, OpenMP, sanitizer, math-runtime, and
+`GF_COMPLETE_*` dispatch controls are rejected before collection.  Children
+receive a fixed one-thread environment.  Authoritative timing additionally
+requires singleton CPU affinity, an explicitly reserved SMT sibling, an
+advisory two-CPU lease, ABBA provider order, four independent repetitions, two
+warmups, and nine retained timing samples.  Setup, execution, and setup
+amortized at the declared reuse count remain separate.
+
+GF-Complete is compiled at portable compiler defaults.  The standalone build
+does not apply whole-archive `-msse*`, `-mavx*`, `-mpclmul`, or native-target
+flags merely because the compiler accepts them; doing so would not prove that
+the runtime CPU can execute instructions inserted before library dispatch.
+The normalized compile closure fails validation if these broad flags reappear.
+
+Timing state is durable and exact-bound to the output path, correctness
+artifact, source/build/executable identities, cells, CPU pair, environment,
+and method.  Each child document is validated and atomically persisted.  A
+repetition becomes resumable only after both providers, their matching loss
+and workload identities, per-pair pre/post frequency snapshots, singleton
+affinity evidence, and host/lease record are atomically bound.  A partial
+two-provider repetition is discarded and rerun; a complete but tampered one
+fails closed.  Affinity is rechecked after every timing child.  Final and
+correctness JSON files also use atomic replacement.
+
+## Correctness evidence lifecycle
+
+The committed artifact is regenerated whenever adapter executable semantics or
+the build/source-closure schema changes.  The authoritative campaign contains
+128 deterministic cases, uses ten parallel subprocess workers, includes
+no-loss and maximum-original-loss cases, exercises GF8 and GF16, and checks
+every parity byte against the independent scalar oracle.  Its canonical,
+serialized, Leopard-source, executable, and provenance hashes are reported in
+the commit that refreshes the artifact; hashes from an earlier adapter revision
+must never be reused.
+
+## Reproduction
+
+Normal-build optionality and synthetic policy checks require no external
+source:
+
+    cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release \
+      -DLEO2_BUILD_TESTS=ON -DLEO2_BUILD_BENCHMARKS=OFF \
+      -DLEO2_ENABLE_CUDA=OFF
+    cmake --build build/release -j 10
+    ctest --test-dir build/release \
+      -R 'leopard2_(external|jerasure)_comparison_(self|mutation)_test' \
+      --output-on-failure
+
+Bootstrap and replay use only the ignored cache for third-party source and
+build products:
+
+    python3 tools/leopard2_jerasure_compare.py bootstrap \
+      --cache .research/leopard2 --jobs 10
+    python3 tools/leopard2_jerasure_compare.py correctness \
+      --cache .research/leopard2 --cases 128 --workers 10 \
+      --output results/leopard2/jerasure/correctness.json
+    python3 tools/leopard2_jerasure_compare.py validate-correctness \
+      results/leopard2/jerasure/correctness.json
+    python3 tools/leopard2_jerasure_compare.py validate-correctness \
+      results/leopard2/jerasure/correctness.json \
+      --cache .research/leopard2 --require-local-build-match
+    python3 tools/leopard2_jerasure_compare.py mutation-test \
+      results/leopard2/jerasure/correctness.json
+
+Only after reserving one physical core and its SMT sibling may timing run:
+
+    python3 tools/leopard2_jerasure_compare.py run \
+      --cache .research/leopard2 \
+      --cpu <isolated-allowed-cpu> \
+      --reserved-idle-cpu <its-idle-smt-sibling> \
+      --correctness-artifact results/leopard2/jerasure/correctness.json \
+      --output results/leopard2/jerasure/checkpoint.json
+    python3 tools/leopard2_jerasure_compare.py validate \
+      results/leopard2/jerasure/checkpoint.json \
+      --correctness-artifact results/leopard2/jerasure/correctness.json
+    python3 tools/leopard2_jerasure_compare.py validate \
+      results/leopard2/jerasure/checkpoint.json \
+      --correctness-artifact results/leopard2/jerasure/correctness.json \
+      --cache .research/leopard2 --require-local-build-match
+
+The first checkpoint validation is portable and proves internal closure and
+derivation.  The second is the required trusted-cache replay: it re-hashes the
+local pinned sources, detached Leopard materialization, toolchain/build/link
+closure, and executables.  Both must pass before any timing value is cited.
+
+No performance number should be quoted from the correctness artifact or from
+an unpinned direct invocation of the standalone executable.

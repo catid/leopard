@@ -731,6 +731,12 @@ if(LEO2_BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_jerasure_compare.py
                 self-test)
         add_test(
+            NAME leopard2_jerasure_comparison_mutation_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_jerasure_compare.py
+                mutation-test
+                ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/jerasure_compare/correctness_result.json)
+        add_test(
             NAME leopard2_operation_counts_self_test
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_operation_counts.py

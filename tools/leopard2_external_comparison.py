@@ -34,6 +34,11 @@ RETRIEVED = "2026-07-16"
 # longword aligned.  Eight-byte regions are safe for the intended 64-bit
 # comparison builds and keep offline classifications reproducible.
 JERASURE_ADAPTER_REGION_BYTES = 8
+JERASURE_ADAPTER_MAX_K = 4096
+JERASURE_ADAPTER_MAX_R = 4096
+JERASURE_ADAPTER_MAX_MATRIX_COEFFICIENTS = 1 << 24
+JERASURE_ADAPTER_MAX_APPLICATION_BYTES = 8 << 30
+JERASURE_ADAPTER_MAX_LEOPARD_PARENT = 65536
 SOURCES = {
     "isa-l": {
         "name": "Intel ISA-L",
@@ -64,6 +69,11 @@ SOURCES = {
             "generator": "reed_sol_vandermonde_coding_matrix",
             "maximum_threads": 1,
             "region_multiple_bytes": JERASURE_ADAPTER_REGION_BYTES,
+            "maximum_original_count": JERASURE_ADAPTER_MAX_K,
+            "maximum_recovery_count": JERASURE_ADAPTER_MAX_R,
+            "maximum_matrix_coefficients": JERASURE_ADAPTER_MAX_MATRIX_COEFFICIENTS,
+            "maximum_application_bytes": JERASURE_ADAPTER_MAX_APPLICATION_BYTES,
+            "maximum_leopard_parent": JERASURE_ADAPTER_MAX_LEOPARD_PARENT,
             "production_dependency": False,
         },
     },
@@ -181,9 +191,25 @@ def classify(provider: str, cell: Mapping[str, object]) -> dict:
         provider_field = _binary_field_for_length(k + r)
         base["provider_field"] = provider_field
         reasons = []
+        losses = int(cell.get("loss_count", 0))
+        batch = int(cell.get("batch", 1))
         if provider_field not in ("gf8", "gf16"):
             reasons.append(
                 "public K+R exceeds Jerasure's selected GF8/GF16 evaluation-set bound")
+        if k < 1 or k > JERASURE_ADAPTER_MAX_K:
+            reasons.append("K is outside the bounded adapter range 1..4096")
+        if r < 1 or r > JERASURE_ADAPTER_MAX_R:
+            reasons.append("R is outside the bounded adapter range 1..4096")
+        if losses < 0 or losses > min(k, r):
+            reasons.append("loss count is outside 0..min(K,R)")
+        if k * r > JERASURE_ADAPTER_MAX_MATRIX_COEFFICIENTS or (
+                losses > 0 and k * k > JERASURE_ADAPTER_MAX_MATRIX_COEFFICIENTS):
+            reasons.append("scalar-oracle/decode matrix coefficient bound is exceeded")
+        if parent > JERASURE_ADAPTER_MAX_LEOPARD_PARENT:
+            reasons.append("paired Leopard2 parent exceeds 65,536 coordinates")
+        if batch < 1 or (2 * k + r + max(losses, 0)) * shard_bytes * batch > (
+                JERASURE_ADAPTER_MAX_APPLICATION_BYTES):
+            reasons.append("bounded application-buffer footprint exceeds 8 GiB")
         if shard_bytes % JERASURE_ADAPTER_REGION_BYTES:
             reasons.append(
                 "shard length is not a multiple of the deterministic 8-byte "
@@ -199,6 +225,11 @@ def classify(provider: str, cell: Mapping[str, object]) -> dict:
             "enforces the 8-byte region multiple, and records zero staging bytes",
             "the standalone adapter and private static archives are default-off; "
             "production Leopard has no Jerasure or GF-Complete dependency",
+            "GF-Complete is built at portable compiler defaults with no broad "
+            "whole-archive ISA flags",
+            "the adapter bounds K and R at 4096, each dense matrix at 2^24 "
+            "coefficients, application buffers at 8 GiB, and the paired Leopard2 "
+            "parent at 65,536 coordinates",
         ]
         if provider_field == "gf8" and field == "gf16":
             qualifications.append(
