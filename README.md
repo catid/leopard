@@ -32,6 +32,39 @@ catch accidental baseline-ISA increases.
 ctest --test-dir build -R '^leopard2_portable_isa$' --output-on-failure
 ```
 
+## Leopard2 field selection and reduced builds
+
+The new `leopard2.h` API lets an application select `LEO2_FIELD_GF8` or
+`LEO2_FIELD_GF16` explicitly when it creates a codec. `LEO2_FIELD_AUTO` is a
+wire-stable convenience, not a performance tuner: it uses GF8 when the selected
+profile's power-of-two parent has at most 256 coordinates and GF16 otherwise.
+That mapping does not depend on the CPU or on which fields were compiled. In
+particular, explicitly choosing GF16 for a small code changes the persisted
+field/code identity, and an AUTO codec whose canonical field was omitted
+returns `LEO2_UNSUPPORTED` instead of silently emitting different parity.
+
+Both fields are included by default. Applications which only need one may
+reduce code and table footprint with:
+
+```sh
+cmake -S . -B build-gf8 -DLEOPARD_ENABLE_GF16=OFF  # GF8 only
+cmake -S . -B build-gf16 -DLEOPARD_ENABLE_GF8=OFF  # GF16 only
+```
+
+At least one field must remain enabled. Non-CMake builds can use the equivalent
+`NO_LEO_HAS_FF8` and `NO_LEO_HAS_FF16` preprocessor controls. The installed
+CMake package reports `leopard_GF8_ENABLED` and `leopard_GF16_ENABLED`, while
+`leo2_context_field_mask()` reports the fields usable by a successfully created
+context. The legacy `leo_*` API retains its historical canonical field choice;
+if that field is absent, a nontrivial operation returns `Leopard_Platform`
+rather than switching wire formats.
+
+GF8 has much smaller initialization tables and accepts arbitrary positive shard
+byte lengths. GF16 supports larger parent codes and its native layout requires
+complete two-byte symbols (the separately identified padded-odd layout handles
+odd application payloads). Relative throughput depends on the code shape,
+shard size, backend, and target CPU; neither field is universally faster.
+
 ## MDS Reed-Solomon Erasure Correction Codes for Large Data in C
 
 Leopard-RS is a fast library for Erasure Correction Coding.

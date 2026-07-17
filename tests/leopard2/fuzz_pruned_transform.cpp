@@ -122,6 +122,7 @@ bool SamePlan(
     return true;
 }
 
+#ifdef LEO_HAS_FF8
 struct GF8
 {
     static unsigned Order() { return 256; }
@@ -150,7 +151,9 @@ struct GF8
                 ops, bytes, size, shift, size, work);
     }
 };
+#endif
 
+#ifdef LEO_HAS_FF16
 struct GF16
 {
     static unsigned Order() { return 65536; }
@@ -179,6 +182,7 @@ struct GF16
                 ops, bytes, size, shift, size, work);
     }
 };
+#endif
 
 template<class Field>
 void RunCase(
@@ -303,10 +307,22 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
     {
         Check(leo_init() == Leopard_Success);
         Random random(HashInput(data, size));
+#if defined(LEO_HAS_FF8) && defined(LEO_HAS_FF16)
         const bool gf16 = 0 != (data[0] & 1u);
+#elif defined(LEO_HAS_FF16)
+        const bool gf16 = true;
+#else
+        const bool gf16 = false;
+#endif
         const unsigned log_size = 1u + data[1] % 8u;
         const unsigned transform_size = 1u << log_size;
+#if defined(LEO_HAS_FF8) && defined(LEO_HAS_FF16)
         const unsigned order = gf16 ? GF16::Order() : GF8::Order();
+#elif defined(LEO_HAS_FF16)
+        const unsigned order = GF16::Order();
+#else
+        const unsigned order = GF8::Order();
+#endif
         const unsigned block_count = order / transform_size;
         const unsigned shift = static_cast<unsigned>(
             random.Next() % block_count) * transform_size;
@@ -333,6 +349,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
             Check(ops != NULL);
         }
 
+#if defined(LEO_HAS_FF8) && defined(LEO_HAS_FF16)
         if (gf16)
             RunCase<GF16>(
                 *ops, random, data, size, inverse, transform_size,
@@ -341,6 +358,15 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
             RunCase<GF8>(
                 *ops, random, data, size, inverse, transform_size,
                 shift, bytes);
+#elif defined(LEO_HAS_FF16)
+        RunCase<GF16>(
+            *ops, random, data, size, inverse, transform_size,
+            shift, bytes);
+#else
+        RunCase<GF8>(
+            *ops, random, data, size, inverse, transform_size,
+            shift, bytes);
+#endif
     }
     catch (...)
     {

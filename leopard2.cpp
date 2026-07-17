@@ -149,6 +149,8 @@ struct leo2_decode_plan
 namespace {
 
 static const size_t kScratchAlignment = 64;
+static const uint32_t kGF8Order = 256;
+static const uint32_t kGF16Order = 65536;
 static const uint32_t kDirectRecoveryTag = 0x80000000u;
 static const uint32_t kDirectMaxOriginals = 16;
 static const uint32_t kDirectMaxRecoveries = 16;
@@ -735,6 +737,7 @@ static bool PreparePlanExecutionMetadata(leo2_decode_plan* plan)
     return true;
 }
 
+#ifdef LEO_HAS_FF8
 struct DirectField8
 {
     typedef leopard::ff8::ffe_t Element;
@@ -771,7 +774,9 @@ struct DirectField8
             ops, destination, source, multiplier_log, byte_count);
     }
 };
+#endif
 
+#ifdef LEO_HAS_FF16
 struct DirectField16
 {
     typedef leopard::ff16::ffe_t Element;
@@ -808,6 +813,7 @@ struct DirectField16
             ops, destination, source, multiplier_log, byte_count);
     }
 };
+#endif
 
 static bool IsDirectEncodeShape(const leo2_codec* codec)
 {
@@ -1582,6 +1588,7 @@ static void ExecuteTransformDecodePass(
     void** const high_requested_output =
         work + static_cast<size_t>(codec->padded_side) * 2;
 
+#ifdef LEO_HAS_FF8
     if (codec->field == LEO2_FIELD_GF8)
     {
         if (use_generic)
@@ -1637,8 +1644,10 @@ static void ExecuteTransformDecodePass(
                 requested_coordinates, plan->high_output_blocks.data(),
                 static_cast<unsigned>(plan->high_output_blocks.size()),
                 &plan->locator8[0], &codec->fixed_factors8[0], work);
+        return;
     }
-    else
+#endif
+#ifdef LEO_HAS_FF16
     {
         if (use_generic)
         {
@@ -1694,6 +1703,7 @@ static void ExecuteTransformDecodePass(
                 static_cast<unsigned>(plan->high_output_blocks.size()),
                 &plan->locator16[0], &codec->fixed_factors16[0], work);
     }
+#endif
 }
 
 static void PopulateDecodeCoordinates(
@@ -1828,15 +1838,23 @@ static void ExecuteTransformEncodePass(
                     ops, output, padded_original[i], buffer_bytes);
         }
         else if (codec->field == LEO2_FIELD_GF8)
+#ifdef LEO_HAS_FF8
             leopard::ff8::ReedSolomonEncode(
                 ops, buffer_bytes, codec->original_count,
                 requested_recovery_prefix, codec->padded_side,
                 padded_original, work);
+#else
+            return;
+#endif
         else
+#ifdef LEO_HAS_FF16
             leopard::ff16::ReedSolomonEncode(
                 ops, buffer_bytes, codec->original_count,
                 requested_recovery_prefix, codec->padded_side,
                 padded_original, work);
+#else
+            return;
+#endif
         return;
     }
 
@@ -1848,15 +1866,23 @@ static void ExecuteTransformEncodePass(
         return;
     }
     if (codec->field == LEO2_FIELD_GF8)
+#ifdef LEO_HAS_FF8
         leopard::ff8::ReedSolomonEncodeLow(
             ops, buffer_bytes, codec->original_count,
             codec->recovery_count, codec->padded_side, padded_original,
             parity, work);
+#else
+        return;
+#endif
     else
+#ifdef LEO_HAS_FF16
         leopard::ff16::ReedSolomonEncodeLow(
             ops, buffer_bytes, codec->original_count,
             codec->recovery_count, codec->padded_side, padded_original,
             parity, work);
+#else
+        return;
+#endif
 }
 
 static leo2_result ValidateDecodeBuffers(
@@ -2007,13 +2033,19 @@ static leo2_result ExecuteDirectEncode(
 {
     if (!HasDirectGeneratorRows(codec))
         return LEO2_INTERNAL_ERROR;
+#ifdef LEO_HAS_FF8
     if (codec->field == LEO2_FIELD_GF8)
         return ExecuteDirectEncodeRows<DirectField8>(
             codec, shard_bytes, original, recovery,
             codec->direct_generator_logs8);
+#endif
+#ifdef LEO_HAS_FF16
     return ExecuteDirectEncodeRows<DirectField16>(
         codec, shard_bytes, original, recovery,
         codec->direct_generator_logs16);
+#else
+    return LEO2_INTERNAL_ERROR;
+#endif
 }
 
 static leo2_result ExecuteDirectRepair(
@@ -2048,20 +2080,36 @@ static leo2_result ExecuteDirectRepair(
                 if (term.multiplier_log == 0)
                     memcpy(output, source, shard_bytes);
                 else if (codec->field == LEO2_FIELD_GF8)
+#ifdef LEO_HAS_FF8
                     leopard::ff8::MultiplyBytes(ops, output, source,
                         static_cast<leopard::ff8::ffe_t>(term.multiplier_log), shard_bytes);
+#else
+                    return LEO2_INTERNAL_ERROR;
+#endif
                 else
+#ifdef LEO_HAS_FF16
                     leopard::ff16::MultiplyBytes(ops, output, source,
                         static_cast<leopard::ff16::ffe_t>(term.multiplier_log), shard_bytes);
+#else
+                    return LEO2_INTERNAL_ERROR;
+#endif
             }
             else if (term.multiplier_log == 0)
                 XorArbitraryBytes(ops, output, source, shard_bytes);
             else if (codec->field == LEO2_FIELD_GF8)
+#ifdef LEO_HAS_FF8
                 leopard::ff8::MultiplyAddBytes(ops, output, source,
                     static_cast<leopard::ff8::ffe_t>(term.multiplier_log), shard_bytes);
+#else
+                return LEO2_INTERNAL_ERROR;
+#endif
             else
+#ifdef LEO_HAS_FF16
                 leopard::ff16::MultiplyAddBytes(ops, output, source,
                     static_cast<leopard::ff16::ffe_t>(term.multiplier_log), shard_bytes);
+#else
+                return LEO2_INTERNAL_ERROR;
+#endif
         }
     }
     return LEO2_SUCCESS;
@@ -2117,6 +2165,20 @@ LEO2_EXPORT const char* leo2_result_string(int result)
     case LEO2_INTERNAL_ERROR: return "Internal initialization or execution error";
     }
     return "Unknown Leopard2 result";
+}
+
+LEO2_EXPORT uint32_t leo2_context_field_mask(const leo2_context* context)
+{
+    if (!context)
+        return 0;
+    uint32_t mask = 0;
+#ifdef LEO_HAS_FF8
+    mask |= LEO2_FIELD_MASK_GF8;
+#endif
+#ifdef LEO_HAS_FF16
+    mask |= LEO2_FIELD_MASK_GF16;
+#endif
+    return mask;
 }
 
 LEO2_EXPORT leo2_result leo2_context_create(
@@ -2305,13 +2367,21 @@ LEO2_EXPORT leo2_result leo2_codec_create(
         return LEO2_INVALID_COUNTS;
 
     if (field == LEO2_FIELD_AUTO)
-        field = parent <= leopard::ff8::kOrder ? LEO2_FIELD_GF8 : LEO2_FIELD_GF16;
-    if (field == LEO2_FIELD_GF8 && parent > leopard::ff8::kOrder)
+        field = parent <= kGF8Order ? LEO2_FIELD_GF8 : LEO2_FIELD_GF16;
+    if (field == LEO2_FIELD_GF8 && parent > kGF8Order)
         return LEO2_INVALID_COUNTS;
-    if (field == LEO2_FIELD_GF16 && parent > leopard::ff16::kOrder)
+    if (field == LEO2_FIELD_GF16 && parent > kGF16Order)
         return LEO2_INVALID_COUNTS;
     if (field != LEO2_FIELD_GF8 && field != LEO2_FIELD_GF16)
         return LEO2_INVALID_ARGUMENT;
+#ifndef LEO_HAS_FF8
+    if (field == LEO2_FIELD_GF8)
+        return LEO2_UNSUPPORTED;
+#endif
+#ifndef LEO_HAS_FF16
+    if (field == LEO2_FIELD_GF16)
+        return LEO2_UNSUPPORTED;
+#endif
 
     leo2_codec* codec = new (std::nothrow) leo2_codec;
     if (!codec)
@@ -2351,6 +2421,7 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                 ? padded - recovery_count
                 : parent - padded - recovery_count;
 
+#ifdef LEO_HAS_FF8
         if (field == LEO2_FIELD_GF8)
         {
             const bool prepare_direct_repair = CanPrepareDirectRepair(codec);
@@ -2390,7 +2461,9 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                 }
             }
         }
-        else
+#endif
+#ifdef LEO_HAS_FF16
+        if (field == LEO2_FIELD_GF16)
         {
             const bool prepare_direct_repair = CanPrepareDirectRepair(codec);
             const bool prepare_direct_encode = ShouldPrepareDirectEncode(codec);
@@ -2429,6 +2502,7 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                 }
             }
         }
+#endif
     }
     catch (const std::bad_alloc&)
     {
@@ -2855,18 +2929,22 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
         if (!plan->no_op && !plan->direct_xor && !plan->direct_copy &&
             missing_original_count <= kDirectMaxLosses)
         {
+#ifdef LEO_HAS_FF8
             if (codec->field == LEO2_FIELD_GF8 &&
                 !codec->direct_barycentric8.empty())
             {
                 plan->direct_repair = PrepareDirectRepairTerms<DirectField8>(
                     plan, codec->direct_barycentric8);
             }
-            else if (codec->field == LEO2_FIELD_GF16 &&
+#endif
+#ifdef LEO_HAS_FF16
+            if (codec->field == LEO2_FIELD_GF16 &&
                      !codec->direct_barycentric16.empty())
             {
                 plan->direct_repair = PrepareDirectRepairTerms<DirectField16>(
                     plan, codec->direct_barycentric16);
             }
+#endif
         }
 
         if (!plan->no_op && !plan->direct_xor && !plan->direct_copy &&
@@ -2877,6 +2955,7 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
                 delete plan;
                 return LEO2_INTERNAL_ERROR;
             }
+#ifdef LEO_HAS_FF8
             if (codec->field == LEO2_FIELD_GF8)
             {
                 plan->locator8.resize(codec->parent_count);
@@ -2889,7 +2968,9 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
                         &codec->permanent_erased[0], &codec->permanent_locator8[0],
                         &plan->locator8[0]);
             }
-            else
+#endif
+#ifdef LEO_HAS_FF16
+            if (codec->field == LEO2_FIELD_GF16)
             {
                 plan->locator16.resize(codec->parent_count);
                 if (codec->permanent_locator16.empty())
@@ -2901,6 +2982,7 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
                         &codec->permanent_erased[0], &codec->permanent_locator16[0],
                         &plan->locator16[0]);
             }
+#endif
         }
     }
     catch (const std::bad_alloc&)

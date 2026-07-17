@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <vector>
@@ -79,11 +80,16 @@ private:
     uint64_t state_;
 };
 
-static void Check(bool condition)
+static void CheckImpl(bool condition, int line)
 {
     if (!condition)
+    {
+        fprintf(stderr, "Leopard2 API fuzz invariant failed at line %d\n", line);
         abort();
+    }
 }
+
+#define Check(condition) CheckImpl((condition), __LINE__)
 
 static uint64_t HashInput(const uint8_t* data, size_t size)
 {
@@ -107,7 +113,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
     {
         const uint32_t k = 1u + data[0] % 32u;
         const uint32_t r = 1u + data[1] % 32u;
-        const size_t shard_bytes = 1u +
+        size_t shard_bytes = 1u +
             (static_cast<size_t>(data[2]) |
              (static_cast<size_t>(data[3]) << 8)) % 1025u;
         const leo2_profile profile = (data[4] & 1u)
@@ -120,6 +126,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
         leo2_context* context = NULL;
         Check(leo2_context_create(&context_options, &context) == LEO2_SUCCESS);
         Check(context != NULL);
+        const unsigned field_mask = leo2_context_field_mask(context);
+        Check(field_mask != 0);
+        const leo2_field field = (field_mask & LEO2_FIELD_MASK_GF8)
+            ? LEO2_FIELD_GF8 : LEO2_FIELD_GF16;
+        if (field == LEO2_FIELD_GF16)
+            shard_bytes = (shard_bytes + 1u) & ~static_cast<size_t>(1u);
 
         leo2_codec_options codec_options;
         memset(&codec_options, 0, sizeof(codec_options));
@@ -128,7 +140,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
             codec_options.flags = LEO2_CODEC_FORCE_GENERIC_DECODE;
         leo2_codec* codec = NULL;
         const leo2_result codec_result = leo2_codec_create(
-            context, k, r, profile, LEO2_FIELD_GF8, &codec_options, &codec);
+            context, k, r, profile, field, &codec_options, &codec);
         Check(codec_result == LEO2_SUCCESS);
         Check(codec != NULL);
 

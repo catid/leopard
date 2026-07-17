@@ -4,6 +4,7 @@
 */
 
 #include "Leopard2Backend.h"
+#include "LeopardCommon.h"
 
 #include <cstring>
 #include <memory>
@@ -17,9 +18,14 @@ namespace leopard {
 void xor_mem_baseline(void* destination, const void* source, uint64_t byte_count);
 namespace backend {
 
+#ifdef LEO_HAS_FF8
 static uint8_t* FF8Table = NULL;
+#endif
+#ifdef LEO_HAS_FF16
 static uint16_t* FF16Table = NULL;
+#endif
 
+#ifdef LEO_HAS_FF8
 template<bool Add>
 static void ScalarFF8Operation(
     void* destination,
@@ -207,6 +213,9 @@ static void ScalarFF8IFFTButterfly2Xor(
     }
 }
 
+#endif // LEO_HAS_FF8
+
+#ifdef LEO_HAS_FF16
 static uint16_t ScalarFF16Product(uint16_t multiplier_log, uint16_t value)
 {
     const uint16_t* table = FF16Table +
@@ -362,6 +371,8 @@ static void ScalarFF16FFTButterfly2(
     ScalarFF16Butterfly2<false>(x, y, multiplier_log, byte_count);
 }
 
+#endif // LEO_HAS_FF16
+
 static void ScalarXorMemory(
     void* destination,
     const void* source,
@@ -438,6 +449,7 @@ static void ScalarXorMemory4(
     ScalarXorMemory(destination3, source3, byte_count);
 }
 
+#ifdef LEO_HAS_FF8
 template<bool Inverse>
 static void ScalarFF8Butterfly4(
     void* value0, void* value1, void* value2, void* value3,
@@ -515,6 +527,9 @@ static void ScalarFF8FFTButterfly4(
         log01, log23, log02, byte_count);
 }
 
+#endif // LEO_HAS_FF8
+
+#ifdef LEO_HAS_FF16
 template<bool Inverse>
 static void ScalarFF16Butterfly4(
     void* value0, void* value1, void* value2, void* value3,
@@ -591,39 +606,80 @@ static void ScalarFF16FFTButterfly4(
     ScalarFF16Butterfly4<false>(value0, value1, value2, value3,
         log01, log23, log02, byte_count);
 }
+#endif // LEO_HAS_FF16
 
 static const Ops ScalarOps = {
     LEO2_BACKEND_SCALAR,
     "scalar",
+#ifdef LEO_HAS_FF8
     ScalarFF8Multiply,
     ScalarFF8MultiplyAdd,
+#else
+    NULL,
+    NULL,
+#endif
+#ifdef LEO_HAS_FF16
     ScalarFF16Multiply,
     ScalarFF16MultiplyAdd,
+#else
+    NULL,
+    NULL,
+#endif
     ScalarXorMemory,
     ScalarXorMemory2To1,
     ScalarXorMemory4,
+#ifdef LEO_HAS_FF8
     ScalarFF8IFFTButterfly2,
     ScalarFF8FFTButterfly2,
     ScalarFF8IFFTButterfly2Xor,
     ScalarFF8IFFTButterfly4,
     ScalarFF8FFTButterfly4,
+#else
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+#endif
+#ifdef LEO_HAS_FF16
     ScalarFF16IFFTButterfly2,
     ScalarFF16FFTButterfly2,
     ScalarFF16IFFTButterfly4,
     ScalarFF16FFTButterfly4
+#else
+    NULL,
+    NULL,
+    NULL,
+    NULL
+#endif
 };
 
 const Ops* InitializeScalar(const InitializeArgs& args)
 {
-    if (!args.ff8_multiply_log || !args.ff16_multiply_log)
+#ifdef LEO_HAS_FF8
+    if (!args.ff8_multiply_log)
         return NULL;
+#endif
+#ifdef LEO_HAS_FF16
+    if (!args.ff16_multiply_log)
+        return NULL;
+#endif
 
     // Tables are immutable and intentionally retained for process lifetime,
-    // but construction must be failure-atomic.  Build the complete pair in
-    // local owners and publish neither pointer until both allocations and all
-    // arithmetic have completed.
+    // but construction must be failure-atomic.  Build every enabled table in
+    // local owners and publish none until all allocations and arithmetic have
+    // completed.
+#if defined(LEO_HAS_FF8) && defined(LEO_HAS_FF16)
     if (FF8Table || FF16Table)
         return FF8Table && FF16Table ? &ScalarOps : NULL;
+#elif defined(LEO_HAS_FF8)
+    if (FF8Table)
+        return &ScalarOps;
+#else
+    if (FF16Table)
+        return &ScalarOps;
+#endif
+#ifdef LEO_HAS_FF8
 #ifdef LEO2_ENABLE_TEST_HOOKS
     if (TestShouldFailAllocation(LEO2_BACKEND_SCALAR, false))
         return NULL;
@@ -632,6 +688,8 @@ const Ops* InitializeScalar(const InitializeArgs& args)
         new (std::nothrow) uint8_t[256U * 256U]);
     if (!ff8)
         return NULL;
+#endif
+#ifdef LEO_HAS_FF16
 #ifdef LEO2_ENABLE_TEST_HOOKS
     if (TestShouldFailAllocation(LEO2_BACKEND_SCALAR, true))
         return NULL;
@@ -640,12 +698,16 @@ const Ops* InitializeScalar(const InitializeArgs& args)
         new (std::nothrow) uint16_t[65536U * 64U]);
     if (!ff16)
         return NULL;
+#endif
 
+#ifdef LEO_HAS_FF8
     for (unsigned log = 0; log < 256; ++log)
         for (unsigned value = 0; value < 256; ++value)
             ff8[log * 256U + value] = args.ff8_multiply_log(
                 static_cast<uint8_t>(value), static_cast<uint8_t>(log));
+#endif
 
+#ifdef LEO_HAS_FF16
     for (unsigned log = 0; log < 65536; ++log)
     {
         uint16_t* table = ff16.get() + static_cast<size_t>(log) * 64U;
@@ -655,18 +717,33 @@ const Ops* InitializeScalar(const InitializeArgs& args)
                     static_cast<uint16_t>(value << (nibble * 4)),
                     static_cast<uint16_t>(log));
     }
+#endif
+#ifdef LEO_HAS_FF8
     FF8Table = ff8.release();
+#endif
+#ifdef LEO_HAS_FF16
     FF16Table = ff16.release();
+#endif
     return &ScalarOps;
 }
 
 #ifdef LEO2_ENABLE_TEST_HOOKS
 void TestGetScalarTableState(TestBackendState* state)
 {
+#ifdef LEO_HAS_FF8
     state->ff8_published = FF8Table != NULL;
-    state->ff16_published = FF16Table != NULL;
     state->ff8_bytes = 256U * 256U * sizeof(uint8_t);
+#else
+    state->ff8_published = false;
+    state->ff8_bytes = 0;
+#endif
+#ifdef LEO_HAS_FF16
+    state->ff16_published = FF16Table != NULL;
     state->ff16_bytes = 65536U * 64U * sizeof(uint16_t);
+#else
+    state->ff16_published = false;
+    state->ff16_bytes = 0;
+#endif
 }
 #endif
 

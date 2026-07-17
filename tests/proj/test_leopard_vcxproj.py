@@ -518,6 +518,7 @@ class CMakeProductionGraph(object):
     }
     _protected_variable = re.compile(
         r"^(?:CMAKE_.+|WIN32|MSVC|LEOPARD_INSTALL_CMAKEDIR|"
+        r"LEOPARD_ENABLE_GF(?:8|16)|"
         r"ENABLE_OPENMP|LEO2_FLAG_ARCH_AVX2|"
         r"LEO2_(?:BACKEND_VARIANT(?:_NORMALIZED)?|BUILD_BENCHMARKS|BUILD_FUZZERS|"
         r"BUILD_TESTS|ENABLE_CUDA)|"
@@ -539,6 +540,10 @@ class CMakeProductionGraph(object):
             "PRIVATE", "LEO2_BACKEND_FORCE_SSSE3=1")),
         ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_BACKEND_FORCE_AVX2=1")),
+        ("leopard", "target_compile_definitions", (
+            "PRIVATE", "NO_LEO_HAS_FF8=1")),
+        ("leopard", "target_compile_definitions", (
+            "PRIVATE", "NO_LEO_HAS_FF16=1")),
         ("leopard", "target_include_directories", (
             "PUBLIC", "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>",
             "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")),
@@ -556,8 +561,16 @@ class CMakeProductionGraph(object):
             "PRIVATE", "/arch:AVX2")),
         ("leopard2_backend_ssse3", "target_compile_definitions", (
             "PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1")),
+        ("leopard2_backend_ssse3", "target_compile_definitions", (
+            "PRIVATE", "NO_LEO_HAS_FF8=1")),
+        ("leopard2_backend_ssse3", "target_compile_definitions", (
+            "PRIVATE", "NO_LEO_HAS_FF16=1")),
         ("leopard2_backend_avx2", "target_compile_definitions", (
             "PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1")),
+        ("leopard2_backend_avx2", "target_compile_definitions", (
+            "PRIVATE", "NO_LEO_HAS_FF8=1")),
+        ("leopard2_backend_avx2", "target_compile_definitions", (
+            "PRIVATE", "NO_LEO_HAS_FF16=1")),
     }
     _approved_protected_assignments = {
         ("CMAKE_CONFIGURATION_TYPES", "Debug;Release"),
@@ -642,6 +655,10 @@ class CMakeProductionGraph(object):
         ("option", (
             "LEO2_ENABLE_CUDA", "Build the optional Leopard2 CUDA backend",
             "OFF")): 1,
+        ("option", (
+            "LEOPARD_ENABLE_GF8", "Include the GF(2^8) codec", "ON")): 1,
+        ("option", (
+            "LEOPARD_ENABLE_GF16", "Include the GF(2^16) codec", "ON")): 1,
         ("string", (
             "TOLOWER", "${LEO2_BACKEND_VARIANT}",
             "LEO2_BACKEND_VARIANT_NORMALIZED")): 1,
@@ -700,6 +717,10 @@ class CMakeProductionGraph(object):
         ("trusted", ("option", (
             "LEO2_ENABLE_CUDA", "Build the optional Leopard2 CUDA backend",
             "OFF"))),
+        ("trusted", ("option", (
+            "LEOPARD_ENABLE_GF8", "Include the GF(2^8) codec", "ON"))),
+        ("trusted", ("option", (
+            "LEOPARD_ENABLE_GF16", "Include the GF(2^16) codec", "ON"))),
         ("protected", (
             "LEO2_BACKEND_VARIANT", "auto", "CACHE", "STRING",
             "Diagnostic backend variant: auto, scalar, ssse3, or avx2")),
@@ -739,6 +760,10 @@ class CMakeProductionGraph(object):
         ("trusted", ("add_library", (
             "libleopard", "ALIAS", "leopard"))),
         ("mutation", ("leopard", "target_compile_definitions", (
+            "PRIVATE", "NO_LEO_HAS_FF8=1"))),
+        ("mutation", ("leopard", "target_compile_definitions", (
+            "PRIVATE", "NO_LEO_HAS_FF16=1"))),
+        ("mutation", ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_DISABLE_SSSE3_CODEGEN=1",
             "LEO2_DISABLE_AVX2_CODEGEN=1"))),
         ("mutation", ("leopard", "target_include_directories", (
@@ -756,8 +781,20 @@ class CMakeProductionGraph(object):
                 "PRIVATE", "${CMAKE_CURRENT_SOURCE_DIR}"))),
         ("mutation", ("leopard2_backend_avx2", "target_compile_options", (
             "PRIVATE", "/arch:AVX2"))),
+        ("mutation", ("leopard2_backend_ssse3",
+            "target_compile_definitions", (
+                "PRIVATE", "NO_LEO_HAS_FF8=1"))),
+        ("mutation", ("leopard2_backend_ssse3",
+            "target_compile_definitions", (
+                "PRIVATE", "NO_LEO_HAS_FF16=1"))),
         ("mutation", ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_HAVE_SSSE3_BACKEND=1"))),
+        ("mutation", ("leopard2_backend_avx2",
+            "target_compile_definitions", (
+                "PRIVATE", "NO_LEO_HAS_FF8=1"))),
+        ("mutation", ("leopard2_backend_avx2",
+            "target_compile_definitions", (
+                "PRIVATE", "NO_LEO_HAS_FF16=1"))),
         ("mutation", ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_HAVE_AVX2_BACKEND=1"))),
         ("mutation", ("leopard", "target_link_libraries", (
@@ -1062,6 +1099,17 @@ class CMakeProductionGraph(object):
     @classmethod
     def _expected_production_mutation_guard(cls, key):
         target, command, specification = key
+        disabled_fields = {
+            ("PRIVATE", "NO_LEO_HAS_FF8=1"): "LEOPARD_ENABLE_GF8",
+            ("PRIVATE", "NO_LEO_HAS_FF16=1"): "LEOPARD_ENABLE_GF16",
+        }
+        if specification in disabled_fields:
+            guard = bool_not(bool_atom(
+                "option:" + disabled_fields[specification]))
+            if target == "leopard2_backend_avx2":
+                guard = bool_and(
+                    guard, bool_atom("probe:LEO2_FLAG_ARCH_AVX2"))
+            return guard
         forced_variants = {
             ("PRIVATE", "LEO2_BACKEND_FORCE_SCALAR=1"): "scalar",
             ("PRIVATE", "LEO2_BACKEND_FORCE_SSSE3=1"): "ssse3",
@@ -2221,8 +2269,18 @@ class CMakeProductionGraph(object):
                 "PRIVATE", "PUBLIC", "INTERFACE", "SYSTEM", "BEFORE"}]
             if (conditional_depth and target == "leopard" and any(
                     not self._target_objects.match(token) for token in sources)):
-                raise ContractError(
-                    "conditional direct leopard source attachment")
+                field_sources = {
+                    ("PRIVATE", "LeopardFF8.cpp", "LeopardFF8.h"):
+                        bool_atom("option:LEOPARD_ENABLE_GF8"),
+                    ("PRIVATE", "LeopardFF16.cpp", "LeopardFF16.h"):
+                        bool_atom("option:LEOPARD_ENABLE_GF16"),
+                }
+                specification = tuple(raw_tokens[1:])
+                expected_guard = field_sources.get(specification)
+                if (expected_guard is None or reasons or
+                        not self._formula_equivalent(guard, expected_guard)):
+                    raise ContractError(
+                        "conditional direct leopard source attachment")
             self.attachments.setdefault(target, []).extend(
                 (source, guard) for source in sources)
         elif command == "set_source_files_properties" and raw_tokens:
@@ -5006,8 +5064,8 @@ endif()""",
         text = self.cmake.replace(
             marker, "set(LIB_SOURCE_FILES tests.cpp)\n" + marker, 1)
         text = text.replace(
-            "        LeopardFF8.h)",
-            "        LeopardFF8.h PARENT_SCOPE)", 1)
+            "        LeopardCommon.h)",
+            "        LeopardCommon.h PARENT_SCOPE)", 1)
         self.assertNotEqual(text, self.cmake)
         with self.assertRaisesRegex(ContractError, "PARENT_SCOPE"):
             self.resolve_text(text, require_mutation_contract=True)

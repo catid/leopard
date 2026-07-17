@@ -166,9 +166,20 @@
 //------------------------------------------------------------------------------
 // Constants
 
-// Enable 8-bit or 16-bit fields
-#define LEO_HAS_FF8
-#define LEO_HAS_FF16
+// Enable 8-bit and 16-bit fields by default.  Manual builds may define either
+// NO_LEO_HAS_FF8 or NO_LEO_HAS_FF16; CMake's LEOPARD_ENABLE_GF8 and
+// LEOPARD_ENABLE_GF16 options set the same controls target-locally.  Keeping
+// the positive LEO_HAS_* definitions here preserves the historical internal
+// contract for source files which select a field with #ifdef.
+#if !defined(NO_LEO_HAS_FF8)
+    #define LEO_HAS_FF8
+#endif
+#if !defined(NO_LEO_HAS_FF16)
+    #define LEO_HAS_FF16
+#endif
+#if !defined(LEO_HAS_FF8) && !defined(LEO_HAS_FF16)
+    #error "Leopard requires at least one finite field"
+#endif
 
 // Enable using SIMD instructions.  The LEO2_BACKEND_FORCE_* definitions are
 // diagnostic build controls supplied target-locally by CMake.  With none set,

@@ -4,6 +4,7 @@
 */
 
 #include "Leopard2Backend.h"
+#include "LeopardCommon.h"
 
 #include <memory>
 #include <new>
@@ -11,21 +12,25 @@
 
 namespace leopard { namespace backend {
 
+#ifdef LEO_HAS_FF8
 struct FF8NibbleTable
 {
     uint8_t low[16];
     uint8_t high[16];
 };
+static FF8NibbleTable* FF8Tables = NULL;
+#endif
 
+#ifdef LEO_HAS_FF16
 struct FF16NibbleTable
 {
     uint8_t low[4][16];
     uint8_t high[4][16];
 };
-
-static FF8NibbleTable* FF8Tables = NULL;
 static FF16NibbleTable* FF16Tables = NULL;
+#endif
 
+#ifdef LEO_HAS_FF8
 static uint8_t FF8Product(uint16_t log, uint8_t value)
 {
     const FF8NibbleTable& table = FF8Tables[log];
@@ -222,6 +227,9 @@ static void SSSE3FF8IFFTButterfly2Xor(
     }
 }
 
+#endif // LEO_HAS_FF8
+
+#ifdef LEO_HAS_FF16
 static uint16_t FF16Product(uint16_t log, uint16_t value)
 {
     const FF16NibbleTable& table = FF16Tables[log];
@@ -462,6 +470,8 @@ static void SSSE3FF16FFTButterfly2(
     SSSE3FF16Butterfly2<false>(x, y, multiplier_log, byte_count);
 }
 
+#endif // LEO_HAS_FF16
+
 static void SSSE3XorMemory(
     void* destination, const void* source, uint64_t byte_count)
 {
@@ -579,6 +589,7 @@ static void SSSE3XorMemory4(
     }
 }
 
+#ifdef LEO_HAS_FF8
 static void SSSE3FF8IFFTButterfly4Nonzero(
     void* value0_pointer, void* value1_pointer,
     void* value2_pointer, void* value3_pointer,
@@ -911,6 +922,9 @@ static void SSSE3FF8FFTButterfly4(
         SSSE3FF8Butterfly2<false>(value2, value3, log23, byte_count);
 }
 
+#endif // LEO_HAS_FF8
+
+#ifdef LEO_HAS_FF16
 static void SSSE3FF16MultiplyAddPair(
     __m128i& destination_low,
     __m128i& destination_high,
@@ -1105,34 +1119,75 @@ static void SSSE3FF16FFTButterfly4(
     SSSE3FF16Butterfly4<false>(value0, value1, value2, value3,
         log01, log23, log02, byte_count);
 }
+#endif // LEO_HAS_FF16
 
 static const Ops SSSE3Ops = {
     LEO2_BACKEND_SSSE3,
     "ssse3",
+#ifdef LEO_HAS_FF8
     SSSE3FF8Multiply,
     SSSE3FF8MultiplyAdd,
+#else
+    NULL,
+    NULL,
+#endif
+#ifdef LEO_HAS_FF16
     SSSE3FF16Multiply,
     SSSE3FF16MultiplyAdd,
+#else
+    NULL,
+    NULL,
+#endif
     SSSE3XorMemory,
     SSSE3XorMemory2To1,
     SSSE3XorMemory4,
+#ifdef LEO_HAS_FF8
     SSSE3FF8IFFTButterfly2,
     SSSE3FF8FFTButterfly2,
     SSSE3FF8IFFTButterfly2Xor,
     SSSE3FF8IFFTButterfly4,
     SSSE3FF8FFTButterfly4,
+#else
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+#endif
+#ifdef LEO_HAS_FF16
     SSSE3FF16IFFTButterfly2,
     SSSE3FF16FFTButterfly2,
     SSSE3FF16IFFTButterfly4,
     SSSE3FF16FFTButterfly4
+#else
+    NULL,
+    NULL,
+    NULL,
+    NULL
+#endif
 };
 
 const Ops* InitializeSSSE3(const InitializeArgs& args)
 {
-    if (!args.ff8_multiply_log || !args.ff16_multiply_log)
+#ifdef LEO_HAS_FF8
+    if (!args.ff8_multiply_log)
         return NULL;
+#endif
+#ifdef LEO_HAS_FF16
+    if (!args.ff16_multiply_log)
+        return NULL;
+#endif
+#if defined(LEO_HAS_FF8) && defined(LEO_HAS_FF16)
     if (FF8Tables || FF16Tables)
         return FF8Tables && FF16Tables ? &SSSE3Ops : NULL;
+#elif defined(LEO_HAS_FF8)
+    if (FF8Tables)
+        return &SSSE3Ops;
+#else
+    if (FF16Tables)
+        return &SSSE3Ops;
+#endif
+#ifdef LEO_HAS_FF8
 #ifdef LEO2_ENABLE_TEST_HOOKS
     if (TestShouldFailAllocation(LEO2_BACKEND_SSSE3, false))
         return NULL;
@@ -1141,6 +1196,8 @@ const Ops* InitializeSSSE3(const InitializeArgs& args)
         new (std::nothrow) FF8NibbleTable[256]);
     if (!ff8)
         return NULL;
+#endif
+#ifdef LEO_HAS_FF16
 #ifdef LEO2_ENABLE_TEST_HOOKS
     if (TestShouldFailAllocation(LEO2_BACKEND_SSSE3, true))
         return NULL;
@@ -1149,7 +1206,9 @@ const Ops* InitializeSSSE3(const InitializeArgs& args)
         new (std::nothrow) FF16NibbleTable[65536]);
     if (!ff16)
         return NULL;
+#endif
 
+#ifdef LEO_HAS_FF8
     for (unsigned log = 0; log < 256; ++log)
     {
         for (unsigned value = 0; value < 16; ++value)
@@ -1160,7 +1219,9 @@ const Ops* InitializeSSSE3(const InitializeArgs& args)
                 static_cast<uint8_t>(value << 4), static_cast<uint8_t>(log));
         }
     }
+#endif
 
+#ifdef LEO_HAS_FF16
     for (int log = 0; log < 65536; ++log)
     {
         for (unsigned nibble = 0; nibble < 4; ++nibble)
@@ -1177,18 +1238,33 @@ const Ops* InitializeSSSE3(const InitializeArgs& args)
             }
         }
     }
+#endif
+#ifdef LEO_HAS_FF8
     FF8Tables = ff8.release();
+#endif
+#ifdef LEO_HAS_FF16
     FF16Tables = ff16.release();
+#endif
     return &SSSE3Ops;
 }
 
 #ifdef LEO2_ENABLE_TEST_HOOKS
 void TestGetSSSE3TableState(TestBackendState* state)
 {
+#ifdef LEO_HAS_FF8
     state->ff8_published = FF8Tables != NULL;
-    state->ff16_published = FF16Tables != NULL;
     state->ff8_bytes = 256U * sizeof(FF8NibbleTable);
+#else
+    state->ff8_published = false;
+    state->ff8_bytes = 0;
+#endif
+#ifdef LEO_HAS_FF16
+    state->ff16_published = FF16Tables != NULL;
     state->ff16_bytes = 65536U * sizeof(FF16NibbleTable);
+#else
+    state->ff16_published = false;
+    state->ff16_bytes = 0;
+#endif
 }
 #endif
 

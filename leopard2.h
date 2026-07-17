@@ -50,7 +50,7 @@
 extern "C" {
 #endif
 
-#define LEO2_API_VERSION 2u
+#define LEO2_API_VERSION 3u
 
 typedef struct leo2_context leo2_context;
 typedef struct leo2_codec leo2_codec;
@@ -87,6 +87,19 @@ typedef enum leo2_field {
     LEO2_FIELD_GF8 = 1,
     LEO2_FIELD_GF16 = 2
 } leo2_field;
+
+/* Bits returned by leo2_context_field_mask(). */
+#define LEO2_FIELD_MASK_GF8  0x00000001u
+#define LEO2_FIELD_MASK_GF16 0x00000002u
+
+/*
+    Reports mathematical field implementations usable by this initialized
+    context.  The value is independent of the selected CPU backend.
+    AUTO field selection remains canonical and build-independent: a code whose
+    canonical field is omitted is unsupported rather than silently changing
+    its wire representation.
+*/
+LEO2_EXPORT uint32_t leo2_context_field_mask(const leo2_context* context);
 
 /*
     Shard layout is part of persistent code identity.  Native V1 retains the
@@ -192,7 +205,7 @@ LEO2_EXPORT leo2_result leo2_context_create(
     const leo2_context_options* options,
     leo2_context** context_out);
 LEO2_EXPORT void leo2_context_destroy(leo2_context* context);
-/* Null context introspection returns AUTO and zero respectively. */
+/* Null context introspection returns AUTO or zero. */
 LEO2_EXPORT leo2_backend leo2_context_backend(const leo2_context* context);
 LEO2_EXPORT uint32_t leo2_context_thread_count(const leo2_context* context);
 

@@ -46,6 +46,8 @@ extern "C" {
 // Initialization API
 
 static bool m_Initialized = false;
+static const unsigned kLegacyFF8Order = 256;
+static const unsigned kLegacyFF16Order = 65536;
 
 LEO_EXPORT int leo_init_(int version)
 {
@@ -65,8 +67,16 @@ LEO_EXPORT int leo_init_(int version)
 #endif // LEO_HAS_FF16
 
     leopard::backend::InitializeArgs backend_args = {
+#ifdef LEO_HAS_FF8
         leopard::ff8::MultiplyLogElement,
+#else
+        NULL,
+#endif
+#ifdef LEO_HAS_FF16
         leopard::ff16::MultiplyLogElement
+#else
+        NULL
+#endif
     };
     if (!leopard::backend::Initialize(backend_args))
         return Leopard_Platform;
@@ -173,9 +183,9 @@ LEO_EXPORT LeopardResult leo_encode(
     if (work_count != m * 2)
         return Leopard_InvalidCounts;
 
-#ifdef LEO_HAS_FF8
-    if (n <= leopard::ff8::kOrder)
+    if (n <= kLegacyFF8Order)
     {
+#ifdef LEO_HAS_FF8
         leopard::ff8::ReedSolomonEncode(
             buffer_bytes,
             original_count,
@@ -183,12 +193,14 @@ LEO_EXPORT LeopardResult leo_encode(
             m,
             original_data,
             work_data);
-    }
-    else
+        return Leopard_Success;
+#else
+        return Leopard_Platform;
 #endif // LEO_HAS_FF8
-#ifdef LEO_HAS_FF16
-    if (n <= leopard::ff16::kOrder)
+    }
+    if (n <= kLegacyFF16Order)
     {
+#ifdef LEO_HAS_FF16
         leopard::ff16::ReedSolomonEncode(
             buffer_bytes,
             original_count,
@@ -196,12 +208,12 @@ LEO_EXPORT LeopardResult leo_encode(
             m,
             original_data,
             work_data);
-    }
-    else
+        return Leopard_Success;
+#else
+        return Leopard_Platform;
 #endif // LEO_HAS_FF16
-        return Leopard_TooMuchData;
-
-    return Leopard_Success;
+    }
+    return Leopard_TooMuchData;
 }
 
 
@@ -316,9 +328,9 @@ LEO_EXPORT LeopardResult leo_decode(
     if (work_count != n)
         return Leopard_InvalidCounts;
 
-#ifdef LEO_HAS_FF8
-    if (n <= leopard::ff8::kOrder)
+    if (n <= kLegacyFF8Order)
     {
+#ifdef LEO_HAS_FF8
         leopard::ff8::ReedSolomonDecode(
             buffer_bytes,
             original_count,
@@ -328,12 +340,14 @@ LEO_EXPORT LeopardResult leo_decode(
             original_data,
             recovery_data,
             work_data);
-    }
-    else
+        return Leopard_Success;
+#else
+        return Leopard_Platform;
 #endif // LEO_HAS_FF8
-#ifdef LEO_HAS_FF16
-    if (n <= leopard::ff16::kOrder)
+    }
+    if (n <= kLegacyFF16Order)
     {
+#ifdef LEO_HAS_FF16
         leopard::ff16::ReedSolomonDecode(
             buffer_bytes,
             original_count,
@@ -343,12 +357,12 @@ LEO_EXPORT LeopardResult leo_decode(
             original_data,
             recovery_data,
             work_data);
-    }
-    else
+        return Leopard_Success;
+#else
+        return Leopard_Platform;
 #endif // LEO_HAS_FF16
-        return Leopard_TooMuchData;
-
-    return Leopard_Success;
+    }
+    return Leopard_TooMuchData;
 }
 
 

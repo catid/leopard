@@ -4,6 +4,7 @@
 */
 
 #include "Leopard2Backend.h"
+#include "LeopardCommon.h"
 
 #include <atomic>
 #include <cstring>
@@ -75,6 +76,7 @@ static bool ConsumeTestFault(TestSetupFault expected)
 }
 #endif
 
+#ifdef LEO_HAS_FF8
 static bool TestFF8(const Ops& ops, FF8MultiplyLog reference)
 {
     static const size_t kBytes = 521;
@@ -365,6 +367,9 @@ static bool TestFF8Butterflies4(const Ops& ops, FF8MultiplyLog reference)
     return true;
 }
 
+#endif // LEO_HAS_FF8
+
+#ifdef LEO_HAS_FF16
 static void FillFF16(
     uint8_t* bytes,
     uint64_t byte_count,
@@ -705,6 +710,8 @@ static bool TestFF16Butterflies4(const Ops& ops, FF16MultiplyLog reference)
     return true;
 }
 
+#endif // LEO_HAS_FF16
+
 static bool TestXor(const Ops& ops)
 {
     static const uint64_t byte_counts[] = {
@@ -782,20 +789,41 @@ static bool TestXor(const Ops& ops)
 
 static bool TestOps(const Ops& ops, const InitializeArgs& args)
 {
-    return ops.name && ops.ff8_multiply && ops.ff8_multiply_add &&
-        ops.ff16_multiply && ops.ff16_multiply_add && ops.xor_memory &&
-        ops.xor_memory_2to1 && ops.xor_memory4 &&
-        ops.ff8_ifft_butterfly2 && ops.ff8_fft_butterfly2 &&
-        ops.ff8_ifft_butterfly2_xor && ops.ff8_ifft_butterfly4 &&
-        ops.ff8_fft_butterfly4 && ops.ff16_ifft_butterfly2 &&
-        ops.ff16_fft_butterfly2 && ops.ff16_ifft_butterfly4 &&
-        ops.ff16_fft_butterfly4 &&
-        TestFF8(ops, args.ff8_multiply_log) &&
-        TestFF8Butterflies(ops, args.ff8_multiply_log) &&
-        TestFF8Butterflies4(ops, args.ff8_multiply_log) &&
-        TestFF16(ops, args.ff16_multiply_log) &&
-        TestFF16Butterflies(ops, args.ff16_multiply_log) &&
-        TestFF16Butterflies4(ops, args.ff16_multiply_log) && TestXor(ops);
+    if (!ops.name || !ops.xor_memory || !ops.xor_memory_2to1 ||
+        !ops.xor_memory4 || !TestXor(ops))
+        return false;
+#ifdef LEO_HAS_FF8
+    if (!args.ff8_multiply_log || !ops.ff8_multiply ||
+        !ops.ff8_multiply_add || !ops.ff8_ifft_butterfly2 ||
+        !ops.ff8_fft_butterfly2 || !ops.ff8_ifft_butterfly2_xor ||
+        !ops.ff8_ifft_butterfly4 || !ops.ff8_fft_butterfly4 ||
+        !TestFF8(ops, args.ff8_multiply_log) ||
+        !TestFF8Butterflies(ops, args.ff8_multiply_log) ||
+        !TestFF8Butterflies4(ops, args.ff8_multiply_log))
+        return false;
+#else
+    if (ops.ff8_multiply || ops.ff8_multiply_add ||
+        ops.ff8_ifft_butterfly2 || ops.ff8_fft_butterfly2 ||
+        ops.ff8_ifft_butterfly2_xor || ops.ff8_ifft_butterfly4 ||
+        ops.ff8_fft_butterfly4)
+        return false;
+#endif
+#ifdef LEO_HAS_FF16
+    if (!args.ff16_multiply_log || !ops.ff16_multiply ||
+        !ops.ff16_multiply_add || !ops.ff16_ifft_butterfly2 ||
+        !ops.ff16_fft_butterfly2 || !ops.ff16_ifft_butterfly4 ||
+        !ops.ff16_fft_butterfly4 ||
+        !TestFF16(ops, args.ff16_multiply_log) ||
+        !TestFF16Butterflies(ops, args.ff16_multiply_log) ||
+        !TestFF16Butterflies4(ops, args.ff16_multiply_log))
+        return false;
+#else
+    if (ops.ff16_multiply || ops.ff16_multiply_add ||
+        ops.ff16_ifft_butterfly2 || ops.ff16_fft_butterfly2 ||
+        ops.ff16_ifft_butterfly4 || ops.ff16_fft_butterfly4)
+        return false;
+#endif
+    return true;
 }
 
 static std::mutex& GetQualificationMutex()

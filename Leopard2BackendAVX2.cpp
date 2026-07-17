@@ -4,6 +4,7 @@
 */
 
 #include "Leopard2Backend.h"
+#include "LeopardCommon.h"
 
 #include <immintrin.h>
 #include <memory>
@@ -11,27 +12,32 @@
 
 namespace leopard { namespace backend {
 
+#ifdef LEO_HAS_FF8
 struct FF8NibbleTable
 {
     uint8_t low[16];
     uint8_t high[16];
 };
+static FF8NibbleTable* FF8Tables = NULL;
+#endif
 
+#ifdef LEO_HAS_FF16
 struct FF16NibbleTable
 {
     uint8_t low[4][16];
     uint8_t high[4][16];
 };
-
-static FF8NibbleTable* FF8Tables = NULL;
 static FF16NibbleTable* FF16Tables = NULL;
+#endif
 
+#ifdef LEO_HAS_FF8
 static uint8_t FF8Product(uint16_t log, uint8_t value)
 {
     const FF8NibbleTable& table = FF8Tables[log];
     return static_cast<uint8_t>(
         table.low[value & 15U] ^ table.high[value >> 4]);
 }
+#endif
 
 static __m256i BroadcastTable(const uint8_t table[16])
 {
@@ -39,6 +45,7 @@ static __m256i BroadcastTable(const uint8_t table[16])
         reinterpret_cast<const __m128i*>(table)));
 }
 
+#ifdef LEO_HAS_FF8
 template<bool Add>
 static void AVX2FF8Operation(
     void* destination,
@@ -220,6 +227,9 @@ static void AVX2FF8IFFTButterfly2Xor(
     }
 }
 
+#endif // LEO_HAS_FF8
+
+#ifdef LEO_HAS_FF16
 static uint16_t FF16Product(uint16_t log, uint16_t value)
 {
     const FF16NibbleTable& table = FF16Tables[log];
@@ -442,6 +452,8 @@ static void AVX2FF16FFTButterfly2(
     AVX2FF16Butterfly2<false>(x, y, multiplier_log, byte_count);
 }
 
+#endif // LEO_HAS_FF16
+
 static void AVX2XorMemory(
     void* destination, const void* source, uint64_t byte_count)
 {
@@ -559,6 +571,13 @@ static void AVX2XorMemory4(
     }
 }
 
+#if defined(_MSC_VER)
+#define LEO2_AVX2_FORCE_INLINE __forceinline
+#else
+#define LEO2_AVX2_FORCE_INLINE inline __attribute__((always_inline))
+#endif
+
+#ifdef LEO_HAS_FF8
 static void AVX2FF8IFFTButterfly4Nonzero(
     void* value0_pointer, void* value1_pointer,
     void* value2_pointer, void* value3_pointer,
@@ -873,12 +892,9 @@ static void AVX2FF8FFTButterfly4(
         AVX2FF8Butterfly2<false>(value2, value3, log23, byte_count);
 }
 
-#if defined(_MSC_VER)
-#define LEO2_AVX2_FORCE_INLINE __forceinline
-#else
-#define LEO2_AVX2_FORCE_INLINE inline __attribute__((always_inline))
-#endif
+#endif // LEO_HAS_FF8
 
+#ifdef LEO_HAS_FF16
 static LEO2_AVX2_FORCE_INLINE void AVX2FF16MultiplyAddPair(
     __m256i& destination_low,
     __m256i& destination_high,
@@ -1079,34 +1095,75 @@ static void AVX2FF16FFTButterfly4(
     AVX2FF16Butterfly4<false>(value0, value1, value2, value3,
         log01, log23, log02, byte_count);
 }
+#endif // LEO_HAS_FF16
 
 static const Ops AVX2Ops = {
     LEO2_BACKEND_AVX2,
     "avx2",
+#ifdef LEO_HAS_FF8
     AVX2FF8Multiply,
     AVX2FF8MultiplyAdd,
+#else
+    NULL,
+    NULL,
+#endif
+#ifdef LEO_HAS_FF16
     AVX2FF16Multiply,
     AVX2FF16MultiplyAdd,
+#else
+    NULL,
+    NULL,
+#endif
     AVX2XorMemory,
     AVX2XorMemory2To1,
     AVX2XorMemory4,
+#ifdef LEO_HAS_FF8
     AVX2FF8IFFTButterfly2,
     AVX2FF8FFTButterfly2,
     AVX2FF8IFFTButterfly2Xor,
     AVX2FF8IFFTButterfly4,
     AVX2FF8FFTButterfly4,
+#else
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+#endif
+#ifdef LEO_HAS_FF16
     AVX2FF16IFFTButterfly2,
     AVX2FF16FFTButterfly2,
     AVX2FF16IFFTButterfly4,
     AVX2FF16FFTButterfly4
+#else
+    NULL,
+    NULL,
+    NULL,
+    NULL
+#endif
 };
 
 const Ops* InitializeAVX2(const InitializeArgs& args)
 {
-    if (!args.ff8_multiply_log || !args.ff16_multiply_log)
+#ifdef LEO_HAS_FF8
+    if (!args.ff8_multiply_log)
         return NULL;
+#endif
+#ifdef LEO_HAS_FF16
+    if (!args.ff16_multiply_log)
+        return NULL;
+#endif
+#if defined(LEO_HAS_FF8) && defined(LEO_HAS_FF16)
     if (FF8Tables || FF16Tables)
         return FF8Tables && FF16Tables ? &AVX2Ops : NULL;
+#elif defined(LEO_HAS_FF8)
+    if (FF8Tables)
+        return &AVX2Ops;
+#else
+    if (FF16Tables)
+        return &AVX2Ops;
+#endif
+#ifdef LEO_HAS_FF8
 #ifdef LEO2_ENABLE_TEST_HOOKS
     if (TestShouldFailAllocation(LEO2_BACKEND_AVX2, false))
         return NULL;
@@ -1115,6 +1172,8 @@ const Ops* InitializeAVX2(const InitializeArgs& args)
         new (std::nothrow) FF8NibbleTable[256]);
     if (!ff8)
         return NULL;
+#endif
+#ifdef LEO_HAS_FF16
 #ifdef LEO2_ENABLE_TEST_HOOKS
     if (TestShouldFailAllocation(LEO2_BACKEND_AVX2, true))
         return NULL;
@@ -1123,7 +1182,9 @@ const Ops* InitializeAVX2(const InitializeArgs& args)
         new (std::nothrow) FF16NibbleTable[65536]);
     if (!ff16)
         return NULL;
+#endif
 
+#ifdef LEO_HAS_FF8
     for (unsigned log = 0; log < 256; ++log)
     {
         for (unsigned value = 0; value < 16; ++value)
@@ -1134,7 +1195,9 @@ const Ops* InitializeAVX2(const InitializeArgs& args)
                 static_cast<uint8_t>(value << 4), static_cast<uint8_t>(log));
         }
     }
+#endif
 
+#ifdef LEO_HAS_FF16
     for (int log = 0; log < 65536; ++log)
     {
         for (unsigned nibble = 0; nibble < 4; ++nibble)
@@ -1151,18 +1214,33 @@ const Ops* InitializeAVX2(const InitializeArgs& args)
             }
         }
     }
+#endif
+#ifdef LEO_HAS_FF8
     FF8Tables = ff8.release();
+#endif
+#ifdef LEO_HAS_FF16
     FF16Tables = ff16.release();
+#endif
     return &AVX2Ops;
 }
 
 #ifdef LEO2_ENABLE_TEST_HOOKS
 void TestGetAVX2TableState(TestBackendState* state)
 {
+#ifdef LEO_HAS_FF8
     state->ff8_published = FF8Tables != NULL;
-    state->ff16_published = FF16Tables != NULL;
     state->ff8_bytes = 256U * sizeof(FF8NibbleTable);
+#else
+    state->ff8_published = false;
+    state->ff8_bytes = 0;
+#endif
+#ifdef LEO_HAS_FF16
+    state->ff16_published = FF16Tables != NULL;
     state->ff16_bytes = 65536U * sizeof(FF16NibbleTable);
+#else
+    state->ff16_published = false;
+    state->ff16_bytes = 0;
+#endif
 }
 #endif
 

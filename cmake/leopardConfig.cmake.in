@@ -1,5 +1,10 @@
 @PACKAGE_INIT@
 
+# Mathematical capabilities of this archive.  These describe compiled field
+# support, not the runtime CPU backend or an AUTO profile decision.
+set(leopard_GF8_ENABLED @LEOPARD_ENABLE_GF8@)
+set(leopard_GF16_ENABLED @LEOPARD_ENABLE_GF16@)
+
 # The public headers expose a C ABI, but the installed static archive is
 # implemented in C++.  Require the consuming project to enable CXX so CMake
 # selects the C++ link driver and supplies its runtime portably.  Silently

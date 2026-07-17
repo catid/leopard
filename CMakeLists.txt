@@ -23,11 +23,7 @@ set(LIB_SOURCE_FILES
         Leopard2Plan.cpp
         Leopard2Plan.h
         LeopardCommon.cpp
-        LeopardCommon.h
-        LeopardFF16.cpp
-        LeopardFF16.h
-        LeopardFF8.cpp
-        LeopardFF8.h)
+        LeopardCommon.h)
 
 set(BENCH_SOURCE_FILES
         tests/benchmark.cpp)
@@ -39,6 +35,13 @@ option(LEO2_BUILD_TESTS "Build Leopard2 correctness tests" ON)
 option(LEO2_BUILD_BENCHMARKS "Build Leopard benchmark programs" ON)
 option(LEO2_BUILD_FUZZERS "Build Leopard2 libFuzzer targets" OFF)
 option(LEO2_ENABLE_CUDA "Build the optional Leopard2 CUDA backend" OFF)
+option(LEOPARD_ENABLE_GF8 "Include the GF(2^8) codec" ON)
+option(LEOPARD_ENABLE_GF16 "Include the GF(2^16) codec" ON)
+
+if(NOT LEOPARD_ENABLE_GF8 AND NOT LEOPARD_ENABLE_GF16)
+    message(FATAL_ERROR
+        "At least one of LEOPARD_ENABLE_GF8 or LEOPARD_ENABLE_GF16 must be ON")
+endif()
 
 # Diagnostic-only backend selection.  auto is the portable default and does
 # not add definitions or target-local ISA options.  Forced variants hold the
@@ -177,6 +180,16 @@ add_library(leopard STATIC ${LIB_SOURCE_FILES})
 # conventional `leopard::leopard` export.  ALIAS targets do not create a
 # second archive.
 add_library(libleopard ALIAS leopard)
+if(LEOPARD_ENABLE_GF8)
+    target_sources(leopard PRIVATE LeopardFF8.cpp LeopardFF8.h)
+else()
+    target_compile_definitions(leopard PRIVATE NO_LEO_HAS_FF8=1)
+endif()
+if(LEOPARD_ENABLE_GF16)
+    target_sources(leopard PRIVATE LeopardFF16.cpp LeopardFF16.h)
+else()
+    target_compile_definitions(leopard PRIVATE NO_LEO_HAS_FF16=1)
+endif()
 if(LEO2_X86_TARGET)
     target_compile_definitions(leopard PRIVATE
         LEO2_DISABLE_SSSE3_CODEGEN=1
@@ -246,11 +259,27 @@ if(LEO2_X86_TARGET)
 endif()
 
 if(LEO2_HAVE_SSSE3_BACKEND)
+    if(NOT LEOPARD_ENABLE_GF8)
+        target_compile_definitions(leopard2_backend_ssse3 PRIVATE
+            NO_LEO_HAS_FF8=1)
+    endif()
+    if(NOT LEOPARD_ENABLE_GF16)
+        target_compile_definitions(leopard2_backend_ssse3 PRIVATE
+            NO_LEO_HAS_FF16=1)
+    endif()
     target_sources(leopard PRIVATE
         $<TARGET_OBJECTS:leopard2_backend_ssse3>)
     target_compile_definitions(leopard PRIVATE LEO2_HAVE_SSSE3_BACKEND=1)
 endif()
 if(LEO2_HAVE_AVX2_BACKEND)
+    if(NOT LEOPARD_ENABLE_GF8)
+        target_compile_definitions(leopard2_backend_avx2 PRIVATE
+            NO_LEO_HAS_FF8=1)
+    endif()
+    if(NOT LEOPARD_ENABLE_GF16)
+        target_compile_definitions(leopard2_backend_avx2 PRIVATE
+            NO_LEO_HAS_FF16=1)
+    endif()
     target_sources(leopard PRIVATE
         $<TARGET_OBJECTS:leopard2_backend_avx2>)
     target_compile_definitions(leopard PRIVATE LEO2_HAVE_AVX2_BACKEND=1)
@@ -328,6 +357,14 @@ if(LEO2_BUILD_BENCHMARKS)
     add_executable(bench_leopard2_locator
         bench/leopard2/locator_benchmark.cpp)
     target_link_libraries(bench_leopard2_locator leopard)
+    if(NOT LEOPARD_ENABLE_GF8)
+        target_compile_definitions(bench_leopard2_locator PRIVATE
+            NO_LEO_HAS_FF8=1)
+    endif()
+    if(NOT LEOPARD_ENABLE_GF16)
+        target_compile_definitions(bench_leopard2_locator PRIVATE
+            NO_LEO_HAS_FF16=1)
+    endif()
     set(LEO2_LOCATOR_SOURCE_GIT_SHA "unknown")
     set(LEO2_LOCATOR_SOURCE_DIRTY 1)
     find_program(LEO2_LOCATOR_GIT_EXECUTABLE NAMES git)
@@ -372,6 +409,33 @@ if(LEO2_BUILD_TESTS)
             LEO2_ENABLE_TEST_HOOKS=1)
     endif()
 
+    add_executable(leopard2_field_options_test
+        tests/leopard2/test_field_options.cpp)
+    if(LEOPARD_ENABLE_GF8)
+        target_compile_definitions(leopard2_field_options_test PRIVATE
+            LEO2_EXPECT_GF8=1)
+    else()
+        target_compile_definitions(leopard2_field_options_test PRIVATE
+            LEO2_EXPECT_GF8=0)
+    endif()
+    if(LEOPARD_ENABLE_GF16)
+        target_compile_definitions(leopard2_field_options_test PRIVATE
+            LEO2_EXPECT_GF16=1)
+    else()
+        target_compile_definitions(leopard2_field_options_test PRIVATE
+            LEO2_EXPECT_GF16=0)
+    endif()
+    target_link_libraries(leopard2_field_options_test leopard)
+    add_test(NAME leopard2_field_options COMMAND leopard2_field_options_test)
+    set_tests_properties(leopard2_field_options PROPERTIES
+        ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
+
+    # The exhaustive internal suite intentionally cross-checks both concrete
+    # field implementations in the same process.  Reduced archives instead
+    # build the focused public/legacy contract test above; the default dual
+    # build also runs a recursive install-and-consume matrix for both reduced
+    # configurations.
+    if(LEOPARD_ENABLE_GF8 AND LEOPARD_ENABLE_GF16)
     if(LEO2_BUILD_BENCHMARKS)
         add_executable(bench_leopard2_direct_encode
             bench/leopard2/direct_encode_benchmark.cpp)
@@ -726,6 +790,30 @@ if(LEO2_BUILD_TESTS)
             -DLEO2_STATIC_LIBRARY_SUFFIX=${CMAKE_STATIC_LIBRARY_SUFFIX}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_cuda_optional.cmake)
 
+    # GNU ar/nm command-line syntax is used only for a Linux-hosted proof that
+    # disabled field objects and symbols are absent.  Other tool families still
+    # run the complete reduced build/install/consumer matrix below.
+    set(LEO2_ARCHIVE_SYMBOL_CHECKS OFF)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND NOT MSVC AND
+       CMAKE_AR AND CMAKE_NM)
+        set(LEO2_ARCHIVE_SYMBOL_CHECKS ON)
+    endif()
+    add_test(
+        NAME leopard2_field_options_matrix
+        COMMAND ${CMAKE_COMMAND}
+            -DLEO2_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLEO2_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/field-options-test
+            -DLEO2_GENERATOR=${CMAKE_GENERATOR}
+            -DLEO2_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}
+            -DLEO2_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}
+            -DLEO2_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}
+            -DLEO2_ARCHIVE_SYMBOL_CHECKS=${LEO2_ARCHIVE_SYMBOL_CHECKS}
+            -DLEO2_AR_COMMAND=${CMAKE_AR}
+            -DLEO2_NM_COMMAND=${CMAKE_NM}
+            -DLEO2_STATIC_LIBRARY_PREFIX=${CMAKE_STATIC_LIBRARY_PREFIX}
+            -DLEO2_STATIC_LIBRARY_SUFFIX=${CMAKE_STATIC_LIBRARY_SUFFIX}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_field_options.cmake)
+
     if(CMAKE_VERSION VERSION_LESS 3.12)
         find_package(PythonInterp QUIET)
         set(LEO2_PYTHON_EXECUTABLE ${PYTHON_EXECUTABLE})
@@ -818,6 +906,7 @@ if(LEO2_BUILD_TESTS)
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/proj/test_leopard_vcxproj.py)
     endif()
+    endif()
 endif()
 
 if(LEO2_BUILD_FUZZERS)
@@ -869,6 +958,33 @@ if(LEO2_BUILD_FUZZERS)
             LEO2_DISABLE_AVX2_CODEGEN=1)
     endif()
 
+    # The fuzzer executables compile private sanitizer-instrumented copies of
+    # the core rather than linking leopard.  Mirror the library's field source
+    # and omission definitions so reduced-field builds exercise the same graph
+    # and never retain a disabled field by accident.
+    if(LEOPARD_ENABLE_GF8)
+        target_sources(leopard2_api_fuzzer PRIVATE
+            LeopardFF8.cpp LeopardFF8.h)
+        target_sources(leopard2_pruned_plan_fuzzer PRIVATE
+            LeopardFF8.cpp LeopardFF8.h)
+    else()
+        target_compile_definitions(leopard2_api_fuzzer PRIVATE
+            NO_LEO_HAS_FF8=1)
+        target_compile_definitions(leopard2_pruned_plan_fuzzer PRIVATE
+            NO_LEO_HAS_FF8=1)
+    endif()
+    if(LEOPARD_ENABLE_GF16)
+        target_sources(leopard2_api_fuzzer PRIVATE
+            LeopardFF16.cpp LeopardFF16.h)
+        target_sources(leopard2_pruned_plan_fuzzer PRIVATE
+            LeopardFF16.cpp LeopardFF16.h)
+    else()
+        target_compile_definitions(leopard2_api_fuzzer PRIVATE
+            NO_LEO_HAS_FF16=1)
+        target_compile_definitions(leopard2_pruned_plan_fuzzer PRIVATE
+            NO_LEO_HAS_FF16=1)
+    endif()
+
     # Experiment W's parser is deliberately absent from leopard and the
     # installed API.  This opt-in target nevertheless gives its complete C99
     # deserialize/validate/serialize boundary native libFuzzer, ASan, and
@@ -893,6 +1009,14 @@ if(LEO2_BUILD_FUZZERS)
             ${CMAKE_CURRENT_SOURCE_DIR})
         target_compile_definitions(leopard2_backend_ssse3_fuzz PRIVATE
             LEO2_ENABLE_TEST_HOOKS=1)
+        if(NOT LEOPARD_ENABLE_GF8)
+            target_compile_definitions(leopard2_backend_ssse3_fuzz PRIVATE
+                NO_LEO_HAS_FF8=1)
+        endif()
+        if(NOT LEOPARD_ENABLE_GF16)
+            target_compile_definitions(leopard2_backend_ssse3_fuzz PRIVATE
+                NO_LEO_HAS_FF16=1)
+        endif()
         target_compile_options(leopard2_backend_ssse3_fuzz PRIVATE
             ${LEO2_FUZZ_SANITIZER_FLAGS} -mssse3 -mno-avx)
         target_sources(leopard2_api_fuzzer PRIVATE
@@ -911,6 +1035,14 @@ if(LEO2_BUILD_FUZZERS)
             ${CMAKE_CURRENT_SOURCE_DIR})
         target_compile_definitions(leopard2_backend_avx2_fuzz PRIVATE
             LEO2_ENABLE_TEST_HOOKS=1)
+        if(NOT LEOPARD_ENABLE_GF8)
+            target_compile_definitions(leopard2_backend_avx2_fuzz PRIVATE
+                NO_LEO_HAS_FF8=1)
+        endif()
+        if(NOT LEOPARD_ENABLE_GF16)
+            target_compile_definitions(leopard2_backend_avx2_fuzz PRIVATE
+                NO_LEO_HAS_FF16=1)
+        endif()
         target_compile_options(leopard2_backend_avx2_fuzz PRIVATE
             ${LEO2_FUZZ_SANITIZER_FLAGS} -mavx2 -mno-avx512f)
         target_sources(leopard2_api_fuzzer PRIVATE
