@@ -1,10 +1,11 @@
 # Leopard2 / Jerasure comparison protocol
 
-> **Evidence status:** the retained `correctness_result.json` is a bounded,
-> non-timing correctness artifact.  It is not a performance result.  No
-> Jerasure versus Leopard2 throughput claim is accepted until the separate
-> pinned ABBA timing command completes and its artifact passes both portable
-> and trusted-cache validation.
+> **Evidence status:** no correctness or timing artifact is committed.  A
+> correctness campaign generated from the final integrated source belongs at
+> the ignored `results/leopard2/jerasure/correctness.json` path and is not a
+> performance result.  No Jerasure versus Leopard2 throughput claim is
+> accepted until the separate pinned ABBA timing command completes and its
+> artifact passes both portable and trusted-cache validation.
 
 This experiment compares equivalent public erasure workloads, not wire
 formats.  Jerasure and Leopard2 receive the same `K`, `R`, shard byte count,
@@ -17,9 +18,10 @@ generated-output, and repaired-output rates are comparable.
 
 The production CMake graph does not descend into
 `experiments/leopard2/jerasure_compare`.  Its only normal-build integrations
-are Python policy/parser and mutation tests; neither finds, compiles, links,
-installs, or loads either third-party library.  The
-standalone project must be configured explicitly and builds private static
+are dependency-free Python policy/parser tests; they neither find, compile,
+link, install, nor load either third-party library.  The full mutation campaign
+is a manual evidence gate because it consumes the ignored correctness artifact.
+The standalone project must be configured explicitly and builds private static
 archives in the ignored research cache.  The full BSD-3-Clause notices are
 retained beside the adapter.
 
@@ -42,6 +44,14 @@ HEAD, tree, clean status, tracked-tree listing, and detached-HEAD state.  The
 source identities are included in the build identity whose object/archive and
 executable closure is checked, so a coordinated source relabel cannot stand in
 for the code that produced an executable.
+
+Both standalone builds explicitly select the `Unix Makefiles` generator.  The
+build identity validates exact Release configuration definitions and exact
+adapter/Leopard2 targets, rejects extra recipe claims, and records nonempty
+absolute paths plus hashes and reported versions for every build/link
+inspection tool.  Each private static archive name is bound to one exact,
+distinct normalized path and to a `static-archive` input actually consumed by
+the adapter link.
 
 ## Codec and fairness semantics
 
@@ -114,14 +124,17 @@ correctness JSON files also use atomic replacement.
 
 ## Correctness evidence lifecycle
 
-The committed artifact is regenerated whenever adapter executable semantics or
-the build/source-closure schema changes.  The authoritative campaign contains
-128 deterministic cases, uses ten parallel subprocess workers, includes
-no-loss and maximum-original-loss cases, exercises GF8 and GF16, and checks
-every parity byte against the independent scalar oracle.  Its canonical,
-serialized, Leopard-source, executable, and provenance hashes are reported in
-the commit that refreshes the artifact; hashes from an earlier adapter revision
-must never be reused.
+Generated correctness evidence is never written into the source experiment
+directory and is never committed.  It belongs under the ignored
+`results/leopard2/jerasure/` tree; the correctness command defaults to
+`results/leopard2/jerasure/correctness.json`.  Evidence is regenerated whenever
+adapter executable semantics or the build/source-closure schema changes.  The
+authoritative campaign contains 128 deterministic cases, uses ten parallel
+subprocess workers, includes no-loss and maximum-original-loss cases, exercises
+GF8 and GF16, and checks every parity byte against the independent scalar
+oracle.  Its canonical, serialized, Leopard-source, executable, and provenance
+hashes are reported with the final evidence; hashes from an earlier adapter
+revision must never be reused.
 
 ## Reproduction
 

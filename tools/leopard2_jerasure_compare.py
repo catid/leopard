@@ -71,6 +71,8 @@ MAX_MATRIX_COEFFICIENTS = 1 << 24
 MAX_APPLICATION_BYTES = 8 << 30
 MAX_PARENT = 65536
 GF_COMPLETE_KERNEL_POLICY = "portable-compiler-defaults"
+CMAKE_GENERATOR_POLICY = "Unix Makefiles"
+CORRECTNESS_RESULTS_RELATIVE = Path("results/leopard2/jerasure/correctness.json")
 ABBA = (("jerasure", "leopard2"), ("leopard2", "jerasure"),
         ("leopard2", "jerasure"), ("jerasure", "leopard2"))
 CHECKPOINT_CELLS = (
@@ -366,8 +368,7 @@ def verify_source(
 def leopard_status(root: Path) -> str:
     return run_checked([
         "git", "-C", str(root), "status", "--porcelain", "--untracked-files=normal",
-        "--", ".", ":(exclude)experiments/leopard2/jerasure_compare/correctness_result.json",
-        ":(exclude)experiments/leopard2/jerasure_compare/checkpoint_result.json",
+        "--", ".",
     ]).stdout.strip()
 
 
@@ -462,6 +463,71 @@ def normalize_manifest_paths(paths: Mapping[str, Path]) -> dict[str, str]:
     }
 
 
+def expected_build_recipe() -> dict[str, Any]:
+    return {
+        "adapter": {
+            "generator": CMAKE_GENERATOR_POLICY,
+            "build_target": "leopard2_jerasure_benchmark",
+            "definitions": [
+                "CMAKE_BUILD_TYPE=Release",
+                "CMAKE_EXPORT_COMPILE_COMMANDS=ON",
+                "LEO2_JERASURE_EXPECTED_COMMIT=" + JERASURE_COMMIT,
+                "LEO2_GF_COMPLETE_EXPECTED_COMMIT=" + GF_COMPLETE_COMMIT,
+            ],
+        },
+        "leopard2": {
+            "generator": CMAKE_GENERATOR_POLICY,
+            "build_target": "bench_leopard2",
+            "definitions": [
+                "CMAKE_BUILD_TYPE=Release", "LEO2_BUILD_TESTS=OFF",
+                "LEO2_BUILD_BENCHMARKS=ON", "LEO2_BUILD_FUZZERS=OFF",
+                "LEO2_ENABLE_CUDA=OFF", "ENABLE_OPENMP=ON",
+                "CMAKE_EXPORT_COMPILE_COMMANDS=ON",
+            ],
+        },
+    }
+
+
+def validate_build_recipe(recipe: Mapping[str, Any]) -> None:
+    expected = expected_build_recipe()
+    require_exact_keys(recipe, set(expected), "build recipe")
+    for name, expected_record in expected.items():
+        record = recipe.get(name, {})
+        require_exact_keys(record, set(expected_record), f"{name} build recipe")
+        definitions = record.get("definitions")
+        if (not isinstance(definitions, list) or not definitions or
+                any(type(item) is not str or not item for item in definitions)):
+            raise ComparisonError(f"{name} build definitions are invalid")
+        if type(record.get("generator")) is not str:
+            raise ComparisonError(f"{name} build generator is not text")
+        if type(record.get("build_target")) is not str:
+            raise ComparisonError(f"{name} build target is not text")
+    require_exact_json_value(recipe, expected, "build recipe semantics")
+
+
+def validate_build_cache_recipe(
+        adapter: Path, leopard: Path, recipe: Mapping[str, Any]) -> None:
+    for name, build in (("adapter", adapter), ("leopard2", leopard)):
+        record = recipe[name]
+        if cmake_cache(build, "CMAKE_GENERATOR") != CMAKE_GENERATOR_POLICY:
+            raise ComparisonError(f"{name} build did not use the fixed generator")
+        for definition in record["definitions"]:
+            key, expected = definition.split("=", 1)
+            if cmake_cache(build, key) != expected:
+                raise ComparisonError(
+                    f"{name} CMake cache differs from recipe: {definition}")
+
+
+def expected_static_input_paths() -> dict[str, str]:
+    return {
+        "gf_complete_util_archive": (
+            "${ADAPTER_BUILD}/libleopard2_gf_complete_util.a"),
+        "gf_complete_archive": (
+            "${ADAPTER_BUILD}/libleopard2_gf_complete_external.a"),
+        "jerasure_archive": "${ADAPTER_BUILD}/libleopard2_jerasure_external.a",
+    }
+
+
 def build_identity(paths: Mapping[str, Path]) -> dict[str, Any]:
     adapter = paths["adapter_build"]
     leopard = paths["leopard_build"]
@@ -507,27 +573,12 @@ def build_identity(paths: Mapping[str, Path]) -> dict[str, Any]:
         "gf_complete_archive": adapter / "libleopard2_gf_complete_external.a",
         "jerasure_archive": adapter / "libleopard2_jerasure_external.a",
     }
+    recipe = expected_build_recipe()
+    validate_build_cache_recipe(adapter, leopard, recipe)
     identity: dict[str, Any] = {
         "schema": BUILD_SCHEMA,
         "source_bindings": current_source_bindings(paths),
-        "recipe": {
-            "adapter": {
-                "generator": cmake_cache(adapter, "CMAKE_GENERATOR"),
-                "build_target": "leopard2_jerasure_benchmark",
-                "definitions": ["CMAKE_BUILD_TYPE=Release",
-                    "CMAKE_EXPORT_COMPILE_COMMANDS=ON",
-                    "LEO2_JERASURE_EXPECTED_COMMIT=" + JERASURE_COMMIT,
-                    "LEO2_GF_COMPLETE_EXPECTED_COMMIT=" + GF_COMPLETE_COMMIT],
-            },
-            "leopard2": {
-                "generator": cmake_cache(leopard, "CMAKE_GENERATOR"),
-                "build_target": "bench_leopard2",
-                "definitions": ["CMAKE_BUILD_TYPE=Release", "LEO2_BUILD_TESTS=OFF",
-                    "LEO2_BUILD_BENCHMARKS=ON", "LEO2_BUILD_FUZZERS=OFF",
-                    "LEO2_ENABLE_CUDA=OFF", "ENABLE_OPENMP=ON",
-                    "CMAKE_EXPORT_COMPILE_COMMANDS=ON"],
-            },
-        },
+        "recipe": recipe,
         "tools": {
             "cmake": common._tool_identity(Path(shutil.which("cmake") or ""), ["--version"]),
             "cc": common._tool_identity(cc, ["--version"]),
@@ -573,7 +624,8 @@ def configure_and_build(paths: Mapping[str, Path], jobs: int) -> dict[str, Any]:
     for build in (paths["adapter_build"], paths["leopard_build"]):
         shutil.rmtree(build, ignore_errors=True)
     run_checked([
-        "cmake", "-S", str(root / "experiments/leopard2/jerasure_compare"),
+        "cmake", "-G", CMAKE_GENERATOR_POLICY,
+        "-S", str(root / "experiments/leopard2/jerasure_compare"),
         "-B", str(paths["adapter_build"]), "-DCMAKE_BUILD_TYPE=Release",
         f"-DLEO2_JERASURE_SOURCE_ROOT={paths['jerasure_source']}",
         f"-DLEO2_GF_COMPLETE_SOURCE_ROOT={paths['gf_source']}",
@@ -582,7 +634,8 @@ def configure_and_build(paths: Mapping[str, Path], jobs: int) -> dict[str, Any]:
         "cmake", "--build", str(paths["adapter_build"]), "--target",
         "leopard2_jerasure_benchmark", "-j", str(jobs)], timeout=600)
     run_checked([
-        "cmake", "-S", str(root), "-B", str(paths["leopard_build"]),
+        "cmake", "-G", CMAKE_GENERATOR_POLICY,
+        "-S", str(root), "-B", str(paths["leopard_build"]),
         "-DCMAKE_BUILD_TYPE=Release", "-DLEO2_BUILD_TESTS=OFF",
         "-DLEO2_BUILD_BENCHMARKS=ON", "-DLEO2_BUILD_FUZZERS=OFF",
         "-DLEO2_ENABLE_CUDA=OFF", "-DENABLE_OPENMP=ON",
@@ -732,15 +785,18 @@ def validate_build_identity(value: Mapping[str, Any]) -> None:
             binding.get("tracked_entry_count"),
             f"{name} build source entry count", 1)
     recipe = value.get("recipe", {})
-    require_exact_keys(recipe, {"adapter", "leopard2"}, "build recipe")
+    validate_build_recipe(recipe)
     tools = value.get("tools", {})
     require_exact_keys(tools, {
         "cmake", "cc", "cxx", "ar", "ranlib", "linker", "build_program",
         "ldd", "readelf"}, "build tools")
     for name, tool in tools.items():
         require_exact_keys(tool, {"path", "sha256", "reported_version"}, f"tool {name}")
+        path = tool.get("path")
+        if type(path) is not str or not path or not Path(path).is_absolute():
+            raise ComparisonError(f"tool {name} path is not nonempty absolute text")
         require_hex(tool.get("sha256"), 64, f"tool {name} digest")
-        if not isinstance(tool.get("reported_version"), str) or not tool["reported_version"]:
+        if type(tool.get("reported_version")) is not str or not tool["reported_version"]:
             raise ComparisonError(f"tool {name} version missing")
     compile_commands = value.get("compile_commands", {})
     require_exact_keys(compile_commands, {"adapter", "leopard2"}, "compile commands")
@@ -773,21 +829,28 @@ def validate_build_identity(value: Mapping[str, Any]) -> None:
         common._validate_link_manifest(links[name], f"{name} link command")
         common._validate_link_input_manifest(inputs[name], f"{name} link inputs")
     static = value.get("static_inputs", {})
-    expected_static = {"gf_complete_util_archive", "gf_complete_archive",
-                       "jerasure_archive"}
-    require_exact_keys(static, expected_static, "static provider inputs")
+    expected_static_paths = expected_static_input_paths()
+    require_exact_keys(static, set(expected_static_paths), "static provider inputs")
     adapter_inputs = {item["normalized_path"]: item
                       for item in inputs["adapter_executable"]["inputs"]}
+    observed_static_paths = []
     for name, record in static.items():
         require_exact_keys(record, {
             "normalized_path", "sha256", "required_by_adapter_link"},
             f"static input {name}")
+        require_exact_json_value(
+            record.get("normalized_path"), expected_static_paths[name],
+            f"static input {name} normalized path")
         require_hex(record.get("sha256"), 64, f"static input {name}")
         if record.get("required_by_adapter_link") is not True:
             raise ComparisonError(f"static input {name} not required by adapter")
         linked = adapter_inputs.get(record.get("normalized_path"))
-        if linked is None or linked.get("sha256") != record.get("sha256"):
+        if (linked is None or linked.get("kind") != "static-archive" or
+                linked.get("sha256") != record.get("sha256")):
             raise ComparisonError(f"static input {name} differs from actual adapter link")
+        observed_static_paths.append(record["normalized_path"])
+    if len(set(observed_static_paths)) != len(expected_static_paths):
+        raise ComparisonError("named static inputs do not have distinct paths")
     runtime = value.get("runtime_linkage", {})
     require_exact_keys(runtime, {"jerasure", "leopard2"}, "runtime linkage")
     for name, manifest in runtime.items():
@@ -2564,6 +2627,14 @@ def fake_checkpoint(correctness: Mapping[str, Any]) -> dict[str, Any]:
     return checkpoint
 
 
+def rehash_correctness_build_identity(document: dict[str, Any]) -> None:
+    build_identity = document["sources"]["build_identity"]
+    build_identity["identity_sha256"] = mapping_digest({
+        key: value for key, value in build_identity.items()
+        if key != "identity_sha256"})
+    document["artifact_sha256"] = canonical_digest(document)
+
+
 def run_mutation_tests(correctness_path: Path) -> dict[str, int]:
     try:
         correctness = strict_json_load(correctness_path, "mutation correctness artifact")
@@ -2677,11 +2748,7 @@ def run_mutation_tests(correctness_path: Path) -> dict[str, int]:
     compile_manifest["sha256"] = hashlib.sha256(json.dumps(
         compile_manifest["entries"], sort_keys=True,
         separators=(",", ":"), allow_nan=False).encode("utf-8")).hexdigest()
-    build_identity = changed["sources"]["build_identity"]
-    build_identity["identity_sha256"] = mapping_digest({
-        key: value for key, value in build_identity.items()
-        if key != "identity_sha256"})
-    changed["artifact_sha256"] = canonical_digest(changed)
+    rehash_correctness_build_identity(changed)
     correctness_mutations.append(changed)
     changed = copy.deepcopy(correctness)
     changed["artifact_sha256"] = "0" * 64
@@ -2702,6 +2769,33 @@ def run_mutation_tests(correctness_path: Path) -> dict[str, int]:
     changed["results"][0]["document"]["memory"][
         "staging_copy_bytes_per_execution"] = False
     changed["artifact_sha256"] = canonical_digest(changed)
+    correctness_mutations.append(changed)
+    changed = copy.deepcopy(correctness)
+    changed["sources"]["build_identity"]["recipe"]["adapter"][
+        "unvalidated_claim"] = True
+    rehash_correctness_build_identity(changed)
+    correctness_mutations.append(changed)
+    changed = copy.deepcopy(correctness)
+    changed["sources"]["build_identity"]["recipe"]["adapter"][
+        "definitions"][0] = "CMAKE_BUILD_TYPE=Debug"
+    rehash_correctness_build_identity(changed)
+    correctness_mutations.append(changed)
+    changed = copy.deepcopy(correctness)
+    changed["sources"]["build_identity"]["recipe"]["adapter"][
+        "build_target"] = True
+    rehash_correctness_build_identity(changed)
+    correctness_mutations.append(changed)
+    changed = copy.deepcopy(correctness)
+    changed["sources"]["build_identity"]["tools"]["cmake"]["path"] = True
+    rehash_correctness_build_identity(changed)
+    correctness_mutations.append(changed)
+    changed = copy.deepcopy(correctness)
+    static_inputs = changed["sources"]["build_identity"]["static_inputs"]
+    static_inputs["jerasure_archive"]["normalized_path"] = static_inputs[
+        "gf_complete_archive"]["normalized_path"]
+    static_inputs["jerasure_archive"]["sha256"] = static_inputs[
+        "gf_complete_archive"]["sha256"]
+    rehash_correctness_build_identity(changed)
     correctness_mutations.append(changed)
     for changed in correctness_mutations:
         try:
@@ -2730,9 +2824,39 @@ def run_mutation_tests(correctness_path: Path) -> dict[str, int]:
             "no_loss_mutations_rejected": 1}
 
 
+def run_build_recipe_self_test() -> dict[str, int]:
+    recipe = expected_build_recipe()
+    validate_build_recipe(recipe)
+    mutations = []
+    changed = copy.deepcopy(recipe)
+    changed["adapter"]["unvalidated_claim"] = True
+    mutations.append(changed)
+    changed = copy.deepcopy(recipe)
+    changed["adapter"]["definitions"][0] = "CMAKE_BUILD_TYPE=Debug"
+    mutations.append(changed)
+    changed = copy.deepcopy(recipe)
+    changed["adapter"]["build_target"] = True
+    mutations.append(changed)
+    changed = copy.deepcopy(recipe)
+    changed["adapter"]["generator"] = "Ninja"
+    mutations.append(changed)
+    changed = copy.deepcopy(recipe)
+    changed["adapter"]["definitions"][1] = True
+    mutations.append(changed)
+    for changed in mutations:
+        try:
+            validate_build_recipe(changed)
+        except ComparisonError:
+            pass
+        else:
+            raise ComparisonError("adversarial build-recipe mutation was accepted")
+    return {"build_recipe_mutations_rejected": len(mutations)}
+
+
 def optionality_test() -> dict[str, Any]:
     """Prove the default CMake/test graph needs no ignored/external inputs."""
-    production = (repo_root() / "CMakeLists.txt").read_text()
+    root = repo_root()
+    production = (root / "CMakeLists.txt").read_text(encoding="utf-8")
     forbidden = (
         "add_subdirectory(experiments/leopard2/jerasure_compare",
         "leo2_jerasure_source_root", "leo2_gf_complete_source_root",
@@ -2743,9 +2867,26 @@ def optionality_test() -> dict[str, Any]:
     if any(pattern in production.lower() for pattern in forbidden):
         raise ComparisonError(
             "default CMake unexpectedly requires Jerasure or generated evidence")
+    legacy_artifact = (
+        root / "experiments/leopard2/jerasure_compare/correctness_result.json")
+    if legacy_artifact.exists():
+        raise ComparisonError("obsolete source-tree correctness artifact still exists")
+    ignore_lines = {
+        line.strip() for line in (root / ".gitignore").read_text(
+            encoding="utf-8").splitlines()}
+    if "/results/" not in ignore_lines:
+        raise ComparisonError("generated correctness evidence root is not ignored")
+    documentation = (root / "docs/leopard2_jerasure_comparison.md").read_text(
+        encoding="utf-8")
+    if ("correctness_result.json" in documentation or
+            "committed artifact" in documentation.lower()):
+        raise ComparisonError("Jerasure documentation retains obsolete artifact claims")
     return {
         "default_cmake_external_dependencies": False,
         "default_ctest_generated_evidence_dependencies": False,
+        "correctness_evidence_path": str(CORRECTNESS_RESULTS_RELATIVE),
+        "correctness_evidence_ignored": True,
+        "legacy_source_artifact_absent": True,
         "manual_mutation_campaign_retained": True,
     }
 
@@ -2753,6 +2894,7 @@ def optionality_test() -> dict[str, Any]:
 def self_test() -> None:
     # Normal configuration must remain entirely independent of third parties.
     optionality = optionality_test()
+    recipe_counts = run_build_recipe_self_test()
     sys.path.insert(0, str(repo_root() / "tools"))
     try:
         import leopard2_external_comparison as audit
@@ -2796,7 +2938,8 @@ def self_test() -> None:
         "aligned_contract_bytes": 8, "synthetic_cells": len(cells),
         "host_metadata_binding": True,
         "bounded_domain_rejections": 3,
-        **optionality, **state_counts}, sort_keys=True, allow_nan=False))
+        **optionality, **recipe_counts, **state_counts},
+        sort_keys=True, allow_nan=False))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -2811,7 +2954,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                                     default=AUTHORITATIVE_CORRECTNESS_CASES)
     correctness_parser.add_argument("--workers", type=int,
                                     default=min(os.cpu_count() or 1, 10))
-    correctness_parser.add_argument("--output", type=Path, required=True)
+    correctness_parser.add_argument(
+        "--output", type=Path,
+        default=repo_root() / CORRECTNESS_RESULTS_RELATIVE)
     validate_correctness_parser = subparsers.add_parser("validate-correctness")
     validate_correctness_parser.add_argument("artifact", type=Path)
     validate_correctness_parser.add_argument("--cache", type=Path, default=default_cache())
