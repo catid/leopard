@@ -211,14 +211,19 @@ flat schedule because a dead slot may have served as that temporary. The
 caller must provide disjoint shard slots and keep masked-off inputs at
 mathematical zero; dead unrequested outputs are not preserved.
 
-`tests/leopard2/test_pruned_transform.cpp` compares requested outputs with the
-full padded production transform. The deterministic gate covers:
+`tests/leopard2/test_pruned_transform.cpp` compares requested outputs both with
+the full padded production transform and with the independent direct-polynomial
+oracle in `tests/leopard2/direct_oracle.cpp`. The latter constructs normalized
+LCH basis polynomials, converts to/from the monomial basis, evaluates by Horner,
+and interpolates by Lagrange; it shares neither the skew table nor butterfly
+graph with the candidate. The deterministic gate covers:
 
 | C++ check | Result |
 | --- | ---: |
 | Qualified backends | scalar, SSSE3, AVX2 |
-| Compiled/executed plans | 13,080 |
-| Requested bytes compared | 19,610,919 |
+| Compiled/executed plans | 19,728 |
+| Requested bytes compared | 19,630,575 |
+| Independent direct-polynomial symbols | 13,104 |
 | Exhaustive sparse masks | every input/output mask at N=2 and N=4, forward and inverse, first and last aligned cosets, GF8 and GF16 |
 | Larger parents | GF8 through N=256; GF16 through N=1,024 |
 | Real profile masks | high message-tail IFFT and transmitted/holey parity FFT; low shortened-message IFFT and final/holey parity-block FFT for GF8 (100,30), (17,100) and GF16 (1000,200), (257,700) |
@@ -228,7 +233,7 @@ full padded production transform. The deterministic gate covers:
 The complete Debug CTest graph passed 49/49 after initializing the checkout's
 `sse2neon` submodule. GCC 13.3 and Clang 18.1 strict Release builds passed with
 `-Werror -Wpedantic`. Clang 18 ASan+UBSan and TSan builds each repeated all
-13,080 prototype cases and the concurrency gate without a diagnostic.
+19,728 prototype cases and the concurrency gate without a diagnostic.
 
 These are correctness results, not timing evidence. Other workers were active
 on the host, so no cache-sensitive or authoritative crossover number was

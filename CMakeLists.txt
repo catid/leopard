@@ -650,9 +650,12 @@ if(LEO2_BUILD_TESTS)
         COMMAND leopard2_transform_differential_test)
 
     add_executable(leopard2_pruned_transform_test
-        tests/leopard2/test_pruned_transform.cpp)
+        tests/leopard2/test_pruned_transform.cpp
+        tests/leopard2/direct_oracle.cpp)
     target_compile_definitions(leopard2_pruned_transform_test PRIVATE
         LEO2_ENABLE_TEST_HOOKS=1)
+    target_include_directories(leopard2_pruned_transform_test
+        PRIVATE tests/leopard2)
     target_link_libraries(leopard2_pruned_transform_test libleopard)
     add_test(NAME leopard2_pruned_transform
         COMMAND leopard2_pruned_transform_test)

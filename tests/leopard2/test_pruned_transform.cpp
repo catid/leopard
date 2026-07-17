@@ -11,6 +11,7 @@
 #include "LeopardFF8.h"
 #include "LeopardFF16.h"
 #include "leopard.h"
+#include "direct_oracle.h"
 
 #include <atomic>
 #include <cstring>
@@ -27,9 +28,13 @@ struct TestCounts
     uint64_t plans;
     uint64_t executions;
     uint64_t compared_bytes;
+    uint64_t direct_symbols;
     uint64_t backends;
 
-    TestCounts() : plans(0), executions(0), compared_bytes(0), backends(0) {}
+    TestCounts()
+        : plans(0), executions(0), compared_bytes(0), direct_symbols(0)
+        , backends(0)
+    {}
 };
 
 void require(bool condition, const std::string& message)
@@ -122,9 +127,36 @@ unsigned ceil_power_of_two(unsigned value)
     return result;
 }
 
+unsigned exact_log2(unsigned value)
+{
+    unsigned result = 0;
+    while ((static_cast<unsigned>(1) << result) < value)
+        ++result;
+    require((static_cast<unsigned>(1) << result) == value,
+        "non-dyadic direct-oracle size");
+    return result;
+}
+
 struct GF8
 {
     static unsigned order() { return leopard::ff8::kOrder; }
+    static const leopard2_test::BinaryField& direct_field()
+    {
+        static const leopard2_test::BinaryField field =
+            leopard2_test::make_legacy_gf8();
+        return field;
+    }
+    static uint64_t symbol_bytes() { return 1; }
+    static void set_symbol(
+        std::vector<uint8_t>& shard, leopard2_test::Element value)
+    {
+        shard[0] = static_cast<uint8_t>(value);
+    }
+    static leopard2_test::Element get_symbol(
+        const std::vector<uint8_t>& shard)
+    {
+        return shard[0];
+    }
     static bool prepare(
         unsigned size, unsigned shift, bool inverse,
         const uint8_t* input, const uint8_t* output,
@@ -149,6 +181,25 @@ struct GF8
 struct GF16
 {
     static unsigned order() { return leopard::ff16::kOrder; }
+    static const leopard2_test::BinaryField& direct_field()
+    {
+        static const leopard2_test::BinaryField field =
+            leopard2_test::make_legacy_gf16();
+        return field;
+    }
+    static uint64_t symbol_bytes() { return 2; }
+    static void set_symbol(
+        std::vector<uint8_t>& shard, leopard2_test::Element value)
+    {
+        shard[0] = static_cast<uint8_t>(value);
+        shard[1] = static_cast<uint8_t>(value >> 8);
+    }
+    static leopard2_test::Element get_symbol(
+        const std::vector<uint8_t>& shard)
+    {
+        return static_cast<leopard2_test::Element>(shard[0] |
+            (static_cast<unsigned>(shard[1]) << 8));
+    }
     static bool prepare(
         unsigned size, unsigned shift, bool inverse,
         const uint8_t* input, const uint8_t* output,
@@ -219,6 +270,84 @@ void run_case(
             throw std::runtime_error(stream.str());
         }
         counts.compared_bytes += bytes;
+    }
+    ++counts.plans;
+    ++counts.executions;
+}
+
+template<class Field>
+void run_direct_oracle_case(
+    const leopard::backend::Ops& ops,
+    unsigned size,
+    unsigned shift,
+    bool inverse,
+    const std::vector<uint8_t>& input_mask,
+    const std::vector<uint8_t>& output_mask,
+    uint64_t seed,
+    TestCounts& counts)
+{
+    typedef leopard2_test::Element Element;
+    const leopard2_test::BinaryField& field = Field::direct_field();
+    std::vector<Element> input(size, 0);
+    std::vector<std::vector<uint8_t> > actual(
+        size, std::vector<uint8_t>(
+            static_cast<size_t>(Field::symbol_bytes()), 0));
+    for (unsigned i = 0; i < size; ++i)
+    {
+        if (!input_mask[i])
+            continue;
+        input[i] = static_cast<Element>(
+            mix64(seed ^ (static_cast<uint64_t>(i) << 24)) &
+            (Field::order() - 1U));
+        Field::set_symbol(actual[i], input[i]);
+    }
+
+    std::vector<Element> expected(size, 0);
+    const leopard2_test::LchBasis basis =
+        leopard2_test::make_lch_basis(field, exact_log2(size));
+    if (inverse)
+    {
+        std::vector<Element> points(size, 0);
+        for (unsigned i = 0; i < size; ++i)
+            points[i] = static_cast<Element>(shift ^ i);
+        const leopard2_test::Polynomial polynomial =
+            leopard2_test::lagrange_interpolate(field, points, input);
+        expected = leopard2_test::polynomial_to_lch_coefficients(
+            field, basis, polynomial);
+    }
+    else
+    {
+        const leopard2_test::Polynomial polynomial =
+            leopard2_test::lch_coefficients_to_polynomial(
+                field, basis, input);
+        for (unsigned i = 0; i < size; ++i)
+            expected[i] = leopard2_test::polynomial_evaluate(
+                field, polynomial, static_cast<Element>(shift ^ i));
+    }
+
+    leopard2_internal::PrunedTransformPlan plan;
+    require(Field::prepare(
+            size, shift, inverse, input_mask.data(), output_mask.data(), plan),
+        "direct-oracle plan construction failed");
+    std::vector<void*> actual_pointers = pointers(actual);
+    require(leopard2_internal::ExecutePrunedTransformPlan(
+            ops, Field::symbol_bytes(), plan, actual_pointers.data()),
+        "direct-oracle plan execution failed");
+    for (unsigned i = 0; i < size; ++i)
+    {
+        if (!output_mask[i])
+            continue;
+        if (Field::get_symbol(actual[i]) != expected[i])
+        {
+            std::ostringstream stream;
+            stream << "pruned transform differs from direct polynomial"
+                   << " backend=" << ops.name << " size=" << size
+                   << " shift=" << shift << " inverse=" << inverse
+                   << " coordinate=" << i;
+            throw std::runtime_error(stream.str());
+        }
+        ++counts.direct_symbols;
+        counts.compared_bytes += Field::symbol_bytes();
     }
     ++counts.plans;
     ++counts.executions;
@@ -316,6 +445,64 @@ void test_exhaustive_small_masks(
             }
         }
     }
+}
+
+template<class Field>
+void test_direct_oracle_masks(
+    const leopard::backend::Ops& ops,
+    TestCounts& counts)
+{
+    const unsigned sizes[] = { 2, 4 };
+    for (size_t s = 0; s < sizeof(sizes) / sizeof(sizes[0]); ++s)
+    {
+        const unsigned size = sizes[s];
+        const uint32_t mask_count = static_cast<uint32_t>(1U) << size;
+        const unsigned test_shifts[] = { 0, Field::order() - size };
+        for (size_t q = 0;
+             q < sizeof(test_shifts) / sizeof(test_shifts[0]); ++q)
+            for (unsigned inverse = 0; inverse < 2; ++inverse)
+                for (uint32_t input_bits = 0;
+                     input_bits < mask_count; ++input_bits)
+                    for (uint32_t output_bits = 0;
+                         output_bits < mask_count; ++output_bits)
+                    {
+                        std::vector<uint8_t> input(size, 0);
+                        std::vector<uint8_t> output(size, 0);
+                        for (unsigned i = 0; i < size; ++i)
+                        {
+                            input[i] = static_cast<uint8_t>(
+                                (input_bits >> i) & 1U);
+                            output[i] = static_cast<uint8_t>(
+                                (output_bits >> i) & 1U);
+                        }
+                        run_direct_oracle_case<Field>(
+                            ops, size, test_shifts[q], inverse != 0,
+                            input, output,
+                            UINT64_C(0x4449524543544c43) ^
+                                (static_cast<uint64_t>(size) << 48) ^
+                                (static_cast<uint64_t>(q) << 40) ^
+                                (static_cast<uint64_t>(input_bits) << 20) ^
+                                (static_cast<uint64_t>(output_bits) << 4) ^
+                                inverse,
+                            counts);
+                    }
+    }
+
+    const unsigned size = 8;
+    const std::vector<std::vector<uint8_t> > masks = make_masks(size);
+    const unsigned test_shifts[] = { 0, Field::order() - size };
+    for (size_t q = 0;
+         q < sizeof(test_shifts) / sizeof(test_shifts[0]); ++q)
+        for (unsigned inverse = 0; inverse < 2; ++inverse)
+            for (size_t pattern = 0; pattern < masks.size(); ++pattern)
+                run_direct_oracle_case<Field>(
+                    ops, size, test_shifts[q], inverse != 0,
+                    masks[pattern], masks[(pattern * 2U + q + inverse) %
+                        masks.size()],
+                    UINT64_C(0x4449524543544e38) ^
+                        (static_cast<uint64_t>(q) << 20) ^
+                        (static_cast<uint64_t>(pattern) << 4) ^ inverse,
+                    counts);
 }
 
 template<class Field>
@@ -570,6 +757,8 @@ int main()
                 bytes16, sizeof(bytes16) / sizeof(bytes16[0]), counts);
             test_exhaustive_small_masks<GF8>(*ops, 17, counts);
             test_exhaustive_small_masks<GF16>(*ops, 18, counts);
+            test_direct_oracle_masks<GF8>(*ops, counts);
+            test_direct_oracle_masks<GF16>(*ops, counts);
             test_profile_masks<GF8>(*ops, 100, 30, 65, counts);
             test_profile_masks<GF16>(*ops, 1000, 200, 130, counts);
             test_profile_masks<GF8>(*ops, 17, 100, 129, counts);
@@ -584,6 +773,7 @@ int main()
                   << " plans=" << counts.plans
                   << " executions=" << counts.executions
                   << " compared_bytes=" << counts.compared_bytes
+                  << " direct_symbols=" << counts.direct_symbols
                   << std::endl;
         return 0;
     }
