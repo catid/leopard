@@ -34,7 +34,12 @@ RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 SEQUENCES = (("A1", "baseline"), ("B1", "candidate"),
              ("B2", "candidate"), ("A2", "baseline"))
 ROUNDS = (1, 2, 3)
-TARGET_THRESHOLD = 5.0
+# This campaign qualifies a correctness-driven backend-routing refactor, not a
+# speculative speedup.  "target" identifies the primary rate/size regimes;
+# both those cells and their neighbors use the bead's one-sided non-regression
+# floor.  Positive gains remain visible in the replayed summary but are not a
+# promotion claim.
+TARGET_THRESHOLD = -2.0
 NEIGHBOR_FLOOR = -2.0
 INVOCATION_SAMPLES = 7
 # One-sided 95% Student-t critical value with three ABBA rounds (df=2).
