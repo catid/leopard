@@ -122,7 +122,84 @@ struct PrunedExecutionOps
     leopard::backend::FixedMultiply multiply;
     leopard::backend::FixedMultiply multiply_add;
     leopard::backend::Butterfly2 butterfly;
+    leopard::backend::Butterfly4 butterfly_four;
 };
+
+struct FusedFourMatch
+{
+    uint32_t value0;
+    uint32_t value1;
+    uint32_t value2;
+    uint32_t value3;
+    uint16_t multiplier_log01;
+    uint16_t multiplier_log23;
+    uint16_t multiplier_log02;
+};
+
+static bool MatchFusedFour(
+    const std::vector<leopard2_internal::PrunedTransformOperation>& operations,
+    size_t start,
+    bool inverse,
+    FusedFourMatch& match)
+{
+    if (start > operations.size() || operations.size() - start < 4)
+        return false;
+
+    const leopard2_internal::PrunedTransformOperation& first =
+        operations[start];
+    const leopard2_internal::PrunedTransformOperation& second =
+        operations[start + 1];
+    const leopard2_internal::PrunedTransformOperation& third =
+        operations[start + 2];
+    const leopard2_internal::PrunedTransformOperation& fourth =
+        operations[start + 3];
+    const uint8_t complete =
+        leopard2_internal::PrunedLiveX |
+        leopard2_internal::PrunedLiveY |
+        leopard2_internal::PrunedNeedX |
+        leopard2_internal::PrunedNeedY;
+    if ((first.flags & complete) != complete ||
+        (second.flags & complete) != complete ||
+        (third.flags & complete) != complete ||
+        (fourth.flags & complete) != complete)
+        return false;
+
+    if (inverse)
+    {
+        match.value0 = first.x;
+        match.value1 = first.y;
+        match.value2 = second.x;
+        match.value3 = second.y;
+        match.multiplier_log01 = first.multiplier_log;
+        match.multiplier_log23 = second.multiplier_log;
+        match.multiplier_log02 = third.multiplier_log;
+        if (third.x != match.value0 || third.y != match.value2 ||
+            fourth.x != match.value1 || fourth.y != match.value3 ||
+            fourth.multiplier_log != match.multiplier_log02)
+            return false;
+    }
+    else
+    {
+        match.value0 = first.x;
+        match.value2 = first.y;
+        match.value1 = second.x;
+        match.value3 = second.y;
+        match.multiplier_log02 = first.multiplier_log;
+        match.multiplier_log01 = third.multiplier_log;
+        match.multiplier_log23 = fourth.multiplier_log;
+        if (second.multiplier_log != match.multiplier_log02 ||
+            third.x != match.value0 || third.y != match.value1 ||
+            fourth.x != match.value2 || fourth.y != match.value3)
+            return false;
+    }
+
+    return match.value0 != match.value1 &&
+        match.value0 != match.value2 &&
+        match.value0 != match.value3 &&
+        match.value1 != match.value2 &&
+        match.value1 != match.value3 &&
+        match.value2 != match.value3;
+}
 
 static bool ExecutePrunedOperation(
     const leopard::backend::Ops& ops,
@@ -380,6 +457,19 @@ bool CompilePrunedTransformPlan(
                 ++candidate.one_multiplier_butterflies;
         }
 
+        for (size_t i = 0; i < candidate.operations.size();)
+        {
+            FusedFourMatch match;
+            if (MatchFusedFour(candidate.operations, i, inverse, match))
+            {
+                candidate.fused_four_starts.push_back(
+                    static_cast<uint32_t>(i));
+                i += 4;
+            }
+            else
+                ++i;
+        }
+
         plan = std::move(candidate);
         return true;
     }
@@ -416,20 +506,47 @@ bool ExecutePrunedTransformPlan(
         gf16 ? ops.ff16_multiply_add : ops.ff8_multiply_add,
         plan.inverse
             ? (gf16 ? ops.ff16_ifft_butterfly2 : ops.ff8_ifft_butterfly2)
-            : (gf16 ? ops.ff16_fft_butterfly2 : ops.ff8_fft_butterfly2)
+            : (gf16 ? ops.ff16_fft_butterfly2 : ops.ff8_fft_butterfly2),
+        plan.inverse
+            ? (gf16 ? ops.ff16_ifft_butterfly4 : ops.ff8_ifft_butterfly4)
+            : (gf16 ? ops.ff16_fft_butterfly4 : ops.ff8_fft_butterfly4)
     };
 
-    for (size_t i = 0; i < plan.operations.size(); ++i)
+    size_t fused_index = 0;
+    for (size_t i = 0; i < plan.operations.size();)
     {
+        if (fused_index < plan.fused_four_starts.size() &&
+            plan.fused_four_starts[fused_index] == i)
+        {
+            FusedFourMatch match;
+            if (!MatchFusedFour(plan.operations, i, plan.inverse, match) ||
+                match.value0 >= plan.size || match.value1 >= plan.size ||
+                match.value2 >= plan.size || match.value3 >= plan.size ||
+                match.multiplier_log01 > plan.zero_multiplier_log ||
+                match.multiplier_log23 > plan.zero_multiplier_log ||
+                match.multiplier_log02 > plan.zero_multiplier_log)
+                return false;
+            selected.butterfly_four(
+                work[match.value0], work[match.value1],
+                work[match.value2], work[match.value3],
+                match.multiplier_log01, match.multiplier_log23,
+                match.multiplier_log02, byte_count);
+            ++fused_index;
+            i += 4;
+            continue;
+        }
         const PrunedTransformOperation& operation = plan.operations[i];
         if (operation.x >= plan.size || operation.y >= plan.size ||
             operation.x == operation.y ||
-            (!gf16 && operation.multiplier_log > 255U) ||
+            operation.multiplier_log > plan.zero_multiplier_log ||
             !ExecutePrunedOperation(
                 ops, selected, plan.inverse, plan.zero_multiplier_log,
                 byte_count, operation, work[operation.x], work[operation.y]))
             return false;
+        ++i;
     }
+    if (fused_index != plan.fused_four_starts.size())
+        return false;
     for (size_t i = 0; i < plan.zero_outputs.size(); ++i)
         memset(work[plan.zero_outputs[i]], 0,
             static_cast<size_t>(byte_count));

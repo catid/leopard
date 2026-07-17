@@ -30,10 +30,12 @@ struct TestCounts
     uint64_t compared_bytes;
     uint64_t direct_symbols;
     uint64_t backends;
+    uint64_t fused_four_descriptors;
+    uint64_t execution_steps;
 
     TestCounts()
         : plans(0), executions(0), compared_bytes(0), direct_symbols(0)
-        , backends(0)
+        , backends(0), fused_four_descriptors(0), execution_steps(0)
     {}
 };
 
@@ -242,6 +244,9 @@ void run_case(
         "pruned plan identity mismatch");
     require(plan.operations.size() <= plan.full_butterfly_count,
         "pruned plan exceeds padded transform");
+    counts.fused_four_descriptors += plan.fused_four_starts.size();
+    counts.execution_steps += plan.operations.size() -
+        plan.fused_four_starts.size() * 3U;
 
     std::vector<std::vector<uint8_t> > initial =
         make_input(size, bytes, input_mask, seed);
@@ -585,6 +590,7 @@ bool same_plan(
         left.output_mask != right.output_mask ||
         left.zero_outputs != right.zero_outputs ||
         left.operations.size() != right.operations.size() ||
+        left.fused_four_starts != right.fused_four_starts ||
         left.full_butterfly_count != right.full_butterfly_count ||
         left.one_output_butterflies != right.one_output_butterflies ||
         left.input_zero_specializations != right.input_zero_specializations ||
@@ -620,6 +626,7 @@ void test_invalid_plan_construction()
     plan.output_mask.push_back(8);
     leopard2_internal::PrunedTransformOperation operation = { 4, 5, 6, 7 };
     plan.operations.push_back(operation);
+    plan.fused_four_starts.push_back(1);
     plan.zero_outputs.push_back(3);
     plan.full_butterfly_count = 11;
     plan.one_output_butterflies = 12;
@@ -666,6 +673,31 @@ void test_metrics()
     require(plan.one_output_butterflies != 0 ||
             plan.input_zero_specializations != 0,
         "illustrative ragged plan omitted boundary specialization");
+}
+
+template<class Field>
+void test_fused_four_descriptors()
+{
+    const unsigned size = 16;
+    const std::vector<uint8_t> all(size, 1);
+    for (unsigned inverse = 0; inverse < 2; ++inverse)
+    {
+        leopard2_internal::PrunedTransformPlan plan;
+        require(Field::prepare(
+                size, 0, inverse != 0, all.data(), all.data(), plan),
+            "complete fused plan construction failed");
+        require(plan.fused_four_starts.size() == size / 4,
+            "complete plan omitted leaf four-way descriptors");
+        for (size_t i = 0; i < plan.fused_four_starts.size(); ++i)
+        {
+            require(plan.fused_four_starts[i] + 3 < plan.operations.size(),
+                "fused descriptor exceeds operation schedule");
+            if (i != 0)
+                require(plan.fused_four_starts[i - 1] + 4 <=
+                        plan.fused_four_starts[i],
+                    "fused descriptors overlap or are unsorted");
+        }
+    }
 }
 
 void test_shared_plan_concurrency(const leopard::backend::Ops& ops)
@@ -725,6 +757,8 @@ int main()
         require(leo_init() == Leopard_Success, "Leopard initialization failed");
         test_invalid_plan_construction();
         test_metrics();
+        test_fused_four_descriptors<GF8>();
+        test_fused_four_descriptors<GF16>();
 
         const leo2_backend requested[] = {
             LEO2_BACKEND_SCALAR,
@@ -774,6 +808,8 @@ int main()
                   << " executions=" << counts.executions
                   << " compared_bytes=" << counts.compared_bytes
                   << " direct_symbols=" << counts.direct_symbols
+                  << " fused_four=" << counts.fused_four_descriptors
+                  << " execution_steps=" << counts.execution_steps
                   << std::endl;
         return 0;
     }

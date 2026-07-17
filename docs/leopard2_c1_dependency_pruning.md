@@ -1,8 +1,9 @@
 # Leopard2 C1 parent-preserving dependency pruning
 
-Status: scalar experiment and bounded C++/SIMD flat-schedule prototype
-complete. The C++ prototype is intentionally absent from production dispatch;
-encode/decode integration and an isolated end-to-end crossover gate remain.
+Status: scalar experiment plus bounded C++/SIMD flat-schedule and fused-leaf
+prototype complete. The C++ prototype is intentionally absent from production
+dispatch; encode/decode integration and an isolated end-to-end crossover gate
+remain.
 
 The implementation is
 `experiments/leopard2/non_power_of_two/c1/dependency_pruning.py`. It answers the
@@ -193,6 +194,20 @@ nothing. It calls the selected scalar, SSSE3, or AVX2 fixed-product and
 butterfly table explicitly, so a process-global default cannot leak into a
 lower-backend test.
 
+The follow-up hybrid compiler recognizes a complete live and requested
+four-coordinate leaf subtransform. It records a marker on the unchanged four
+radix-2 descriptors and executes them with the selected backend's mature
+`Butterfly4` kernel. Forward matching requires the two cross-half operations
+followed by the two child-pair operations; inverse matching requires the exact
+reverse stage order. Setup validates all four coordinates, multiplier equality,
+liveness, and output dependencies before emitting a marker. Execution validates
+each selected descriptor against the retained radix-2 entries. Ragged
+boundaries retain their specialized two-way descriptors. The sorted start-index
+list costs four bytes per fused group rather than one marker byte per radix-2
+operation. This first hybrid step fuses the bottom two layers only; grouping
+complete regions at larger strides and measuring the schedule/dispatch crossover
+remain open.
+
 Leopard stores `m` as a logarithm, with 255 and 65,535 as the GF8/GF16 zero
 sentinels and log zero representing field element one. Setup needs only the
 following coefficient predicates; it does not convert the whole skew table
@@ -224,11 +239,14 @@ graph with the candidate. The deterministic gate covers:
 | Compiled/executed plans | 19,728 |
 | Requested bytes compared | 19,630,575 |
 | Independent direct-polynomial symbols | 13,104 |
+| Fused four-way descriptors exercised | 50,832 |
+| Effective execution descriptors | 1,280,613 (four radix-2 entries count as one fused step) |
 | Exhaustive sparse masks | every input/output mask at N=2 and N=4, forward and inverse, first and last aligned cosets, GF8 and GF16 |
 | Larger parents | GF8 through N=256; GF16 through N=1,024 |
 | Real profile masks | high message-tail IFFT and transmitted/holey parity FFT; low shortened-message IFFT and final/holey parity-block FFT for GF8 (100,30), (17,100) and GF16 (1000,200), (257,700) |
 | Shard tails | GF8 1, 7, 17, 63, 64, 65, 129 bytes; GF16 2, 18, 62, 64, 66, 130 bytes |
 | Shared-plan concurrency | eight threads, sixteen executions each, per available backend |
+| Fused descriptor integrity | complete GF8/GF16 forward and inverse plans emit one sorted, non-overlapping descriptor per four-coordinate leaf |
 
 The complete Debug CTest graph passed 49/49 after initializing the checkout's
 `sse2neon` submodule. GCC 13.3 and Clang 18.1 strict Release builds passed with
@@ -248,7 +266,8 @@ dispatch:
 
 - exact forward-live/backward-needed plan construction;
 - flat boundary operation lists;
-- complete-subtransform descriptors that call existing fused kernels; and
+- complete-subtransform descriptors that call existing fused kernels (the
+  current bounded candidate covers complete two-layer leaves); and
 - zero/one multiplier plus identity-write specialization.
 
 Do not promote the Python executor, measured timing thresholds, or generated
@@ -263,6 +282,8 @@ backend-determinism, arbitrary-tail, immutable-plan-concurrency, and sanitizer
 gates. Production promotion remains blocked on:
 
 - encode/decode integration using real profile masks and shifted blocks;
+- larger-stride complete-subtransform grouping and a measured choice between
+  fused and boundary descriptors;
 - production aliasing/scatter validation and malformed-plan fuzz hardening;
 - end-to-end codec benchmarks with plan setup and reuse reported separately;
 - code/table footprint and instruction-cache measurement; and

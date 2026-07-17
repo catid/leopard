@@ -109,6 +109,11 @@ struct PrunedTransformPlan
     std::vector<uint8_t> input_mask;
     std::vector<uint8_t> output_mask;
     std::vector<PrunedTransformOperation> operations;
+    // Each sorted index replaces operations i..i+3 with one mature fused
+    // four-way backend call.  The compiler emits these descriptors only for a
+    // complete two-layer subtransform whose four inputs and four outputs are
+    // live; the radix-2 entries remain inspectable without a tagged union.
+    std::vector<uint32_t> fused_four_starts;
     // Requested coordinates that structural analysis proves are zero.  An
     // executor may use dead slots as temporary storage, then clears these at
     // final scatter so requested zero outputs remain exact.
