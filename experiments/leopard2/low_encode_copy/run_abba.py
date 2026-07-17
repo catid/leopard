@@ -690,6 +690,7 @@ def validate_support_contract() -> dict[str, Any]:
             "cpu_stat_fields": list(SUPPORT.CPU_STAT_FIELDS),
             "descendant_containment": (
                 "linux child subreaper plus procfs identities and pidfd signals; "
+                "independent bounded emergency cleanup and exact subreaper restore; "
                 "fail closed before spawn otherwise"),
             "max_cpu_id": SUPPORT.MAX_CPU_ID,
             "max_cpu_list_entries": SUPPORT.MAX_CPU_LIST_ENTRIES,
@@ -1906,6 +1907,9 @@ def run_bounded(
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, start_new_session=True,
                 pass_fds=tuple(pass_fds))
+            # Store the handle with no intervening injectable helper call.
+            containment.spawned_process = process
+            containment.observe_spawn(process)
             containment.attach(process.pid)
             require(process.stdout is not None and process.stderr is not None,
                     "cannot capture benchmark pipes")

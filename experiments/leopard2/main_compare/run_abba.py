@@ -401,6 +401,170 @@ def _process_identity(
     return None if record is None else (pid, record[3])
 
 
+def _emergency_linux_prctl(option: int, argument: object) -> None:
+    """Independent prctl path reserved for post-spawn emergency cleanup."""
+    if not sys.platform.startswith("linux"):
+        raise EvidenceError("emergency child cleanup requires Linux")
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        prctl = libc.prctl
+    except (AttributeError, OSError) as error:
+        raise EvidenceError(
+            f"emergency child-subreaper prctl is unavailable: {error}") from error
+    ctypes.set_errno(0)
+    result = prctl(ctypes.c_int(option), argument,
+                   ctypes.c_ulong(0), ctypes.c_ulong(0), ctypes.c_ulong(0))
+    if result != 0:
+        number = ctypes.get_errno()
+        raise EvidenceError(
+            "emergency child-subreaper prctl failed: " +
+            os.strerror(number or errno.EPERM))
+
+
+def _emergency_get_child_subreaper() -> int:
+    value = ctypes.c_int(-1)
+    _emergency_linux_prctl(PR_GET_CHILD_SUBREAPER, ctypes.byref(value))
+    if value.value not in (0, 1):
+        raise EvidenceError("emergency child-subreaper state is invalid")
+    return value.value
+
+
+def _emergency_restore_child_subreaper(value: int) -> None:
+    if value not in (0, 1):
+        raise EvidenceError("emergency restore state is invalid")
+    _emergency_linux_prctl(PR_SET_CHILD_SUBREAPER, ctypes.c_ulong(value))
+    if _emergency_get_child_subreaper() != value:
+        raise EvidenceError("emergency child-subreaper restore did not persist")
+
+
+def _emergency_proc_process_record(
+    pid: int,
+) -> tuple[int, int, int, int, str] | None:
+    """Read a Linux process identity without using the normal procfs helpers."""
+    path = f"/proc/{pid}/stat"
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+            getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        chunks = bytearray()
+        while len(chunks) <= 65536:
+            block = os.read(descriptor, min(4096, 65537 - len(chunks)))
+            if not block:
+                break
+            chunks.extend(block)
+        if len(chunks) > 65536:
+            raise EvidenceError(f"emergency procfs record {pid} is oversized")
+        data = bytes(chunks)
+    except OSError as error:
+        if error.errno in (errno.ENOENT, errno.ESRCH):
+            return None
+        raise EvidenceError(
+            f"cannot inspect emergency Linux process {pid}: {error}") from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    closing = data.rfind(b")")
+    if closing <= 0 or closing + 2 >= len(data):
+        raise EvidenceError(f"emergency Linux process {pid} has malformed stat data")
+    fields = data[closing + 2:].split()
+    if len(fields) < 20:
+        raise EvidenceError(f"emergency Linux process {pid} has truncated stat data")
+    try:
+        state = fields[0].decode("ascii")
+        ppid, pgrp, session = int(fields[1]), int(fields[2]), int(fields[3])
+        starttime = int(fields[19])
+    except (UnicodeDecodeError, ValueError) as error:
+        raise EvidenceError(
+            f"emergency Linux process {pid} has invalid stat fields") from error
+    if (len(state) != 1 or min(ppid, pgrp, session, starttime) < 0):
+        raise EvidenceError(f"emergency Linux process {pid} identity is invalid")
+    return ppid, pgrp, session, starttime, state
+
+
+def _emergency_proc_process_snapshot(
+) -> dict[int, tuple[int, int, int, int, str]]:
+    """Independent same-UID procfs snapshot for exception cleanup."""
+    try:
+        names = os.listdir("/proc")
+    except OSError as error:
+        raise EvidenceError(f"cannot enumerate emergency Linux procfs: {error}") from error
+    result: dict[int, tuple[int, int, int, int, str]] = {}
+    for name in names:
+        if not name.isascii() or not name.isdigit():
+            continue
+        pid = int(name)
+        try:
+            record = _emergency_proc_process_record(pid)
+        except EvidenceError:
+            try:
+                owner = os.stat(f"/proc/{name}", follow_symlinks=False).st_uid
+            except OSError:
+                continue
+            if owner == os.getuid():
+                raise
+            continue
+        if record is not None:
+            result[pid] = record
+    if os.getpid() not in result:
+        raise EvidenceError("emergency procfs does not expose the runner")
+    return result
+
+
+def _emergency_pidfd_open(pid: int) -> int | None:
+    """Independent pidfd open used only after the normal path faults."""
+    try:
+        function = ctypes.CDLL(None, use_errno=True).pidfd_open
+    except (AttributeError, OSError) as error:
+        raise EvidenceError(f"emergency pidfd_open is unavailable: {error}") from error
+    ctypes.set_errno(0)
+    descriptor = function(ctypes.c_int(pid), ctypes.c_uint(0))
+    if descriptor >= 0:
+        return descriptor
+    number = ctypes.get_errno()
+    if number == errno.ESRCH:
+        return None
+    raise EvidenceError(
+        f"emergency pidfd_open failed for {pid}: " +
+        os.strerror(number or errno.EPERM))
+
+
+def _emergency_pidfd_signal(descriptor: int, signal_number: int) -> None:
+    try:
+        function = ctypes.CDLL(None, use_errno=True).pidfd_send_signal
+    except (AttributeError, OSError) as error:
+        raise EvidenceError(
+            f"emergency pidfd_send_signal is unavailable: {error}") from error
+    ctypes.set_errno(0)
+    result = function(ctypes.c_int(descriptor), ctypes.c_int(signal_number),
+                      None, ctypes.c_uint(0))
+    if result != 0:
+        number = ctypes.get_errno()
+        if number == errno.ESRCH:
+            return
+        raise EvidenceError(
+            "emergency pidfd_send_signal failed: " +
+            os.strerror(number or errno.EPERM))
+
+
+def _emergency_signal_identity(identity: tuple[int, int]) -> None:
+    """SIGKILL exactly one still-matching process identity."""
+    pid, starttime = identity
+    record = _emergency_proc_process_record(pid)
+    if record is None or record[3] != starttime:
+        return
+    descriptor = _emergency_pidfd_open(pid)
+    if descriptor is None:
+        return
+    try:
+        record = _emergency_proc_process_record(pid)
+        if record is None or record[3] != starttime:
+            return
+        _emergency_pidfd_signal(descriptor, signal.SIGKILL)
+    finally:
+        os.close(descriptor)
+
+
 class LinuxDescendantContainment:
     """Own, kill, reap, and prove teardown of one complete Linux child tree.
 
@@ -416,6 +580,7 @@ class LinuxDescendantContainment:
         self.baseline_children: set[tuple[int, int]] = set()
         self.leader: tuple[int, int] | None = None
         self.known: set[tuple[int, int]] = set()
+        self.spawned_process: subprocess.Popen[bytes] | None = None
         self.active = False
         self.proven_empty = False
 
@@ -442,7 +607,9 @@ class LinuxDescendantContainment:
         require(task_count == 1,
                 "child descendant containment requires a single-threaded runner")
         _validate_linux_pidfd_support()
-        self.previous_subreaper = _get_child_subreaper()
+        self.previous_subreaper = _emergency_get_child_subreaper()
+        require(_get_child_subreaper() == self.previous_subreaper,
+                "normal and emergency child-subreaper reads disagree")
         try:
             _set_child_subreaper(1)
             snapshot = _proc_process_snapshot()
@@ -454,9 +621,18 @@ class LinuxDescendantContainment:
             return self
         except BaseException:
             if self.previous_subreaper is not None:
-                _set_child_subreaper(self.previous_subreaper)
+                _emergency_restore_child_subreaper(self.previous_subreaper)
             self.previous_subreaper = None
             raise
+
+    def observe_spawn(self, process: subprocess.Popen[bytes]) -> None:
+        """Record the Popen handle before any injectable normal attachment."""
+        require(self.active and self.spawned_process is process and process.pid > 0,
+                "invalid emergency child observation")
+        record = _emergency_proc_process_record(process.pid)
+        if record is not None and record[0] == self.runner_pid:
+            identity = (process.pid, record[3])
+            self.known.add(identity)
 
     def attach(self, pid: int) -> None:
         require(self.active and self.leader is None and type(pid) is int and pid > 0,
@@ -531,6 +707,9 @@ class LinuxDescendantContainment:
             for identity in sorted(self.known):
                 if identity == self.leader:
                     continue
+                record = _proc_process_record(identity[0])
+                if record is None or record[3] != identity[1]:
+                    continue
                 try:
                     os.waitpid(identity[0], os.WNOHANG)
                 except (ChildProcessError, ProcessLookupError):
@@ -553,30 +732,138 @@ class LinuxDescendantContainment:
                     "contained child descendants remained after SIGKILL")
             time.sleep(min(0.01, remaining))
 
+    def _emergency_discover(
+        self, snapshot: Mapping[int, tuple[int, int, int, int, str]]
+    ) -> set[tuple[int, int]]:
+        targets = {identity for identity in self.known
+                   if _process_identity(identity[0], snapshot) == identity}
+        targets.update(
+            identity for identity in self._direct_children(
+                snapshot, self.runner_pid)
+            if identity not in self.baseline_children)
+        changed = True
+        while changed:
+            changed = False
+            parents = {pid for pid, _starttime in targets}
+            for pid, record in snapshot.items():
+                identity = (pid, record[3])
+                if record[0] in parents and identity not in targets:
+                    targets.add(identity)
+                    changed = True
+        self.known.update(targets)
+        return targets
+
+    def emergency_terminate_and_reap(self) -> None:
+        """Exception-independent, bounded cleanup for every spawned child.
+
+        This deliberately does not call the normal procfs or pidfd helpers, so
+        a fault injected into attachment or primary teardown cannot disable the
+        final cleanup path.
+        """
+        process = self.spawned_process
+        if process is None:
+            return
+        deadline = time.monotonic() + CHILD_REAP_TIMEOUT_SECONDS
+        empty_scans = 0
+        while True:
+            snapshot = _emergency_proc_process_snapshot()
+            record = snapshot.get(process.pid)
+            if (record is not None and record[0] == self.runner_pid and
+                    process.poll() is None):
+                self.known.add((process.pid, record[3]))
+            targets = self._emergency_discover(snapshot)
+            for identity in sorted(targets, reverse=True):
+                _emergency_signal_identity(identity)
+
+            if process.poll() is None:
+                try:
+                    process.wait(timeout=max(
+                        0.001, min(0.05, deadline - time.monotonic())))
+                except subprocess.TimeoutExpired:
+                    pass
+
+            # No pre-existing direct child is permitted at entry, so every
+            # adopted child identity discovered above is safe to reap here.
+            for identity in sorted(self.known):
+                if identity[0] == process.pid:
+                    continue
+                record = _emergency_proc_process_record(identity[0])
+                if record is None or record[3] != identity[1]:
+                    continue
+                try:
+                    os.waitpid(identity[0], os.WNOHANG)
+                except (ChildProcessError, ProcessLookupError):
+                    pass
+                except OSError as error:
+                    raise EvidenceError(
+                        f"emergency child reap failed for {identity[0]}: {error}") \
+                        from error
+
+            snapshot = _emergency_proc_process_snapshot()
+            live = self._emergency_discover(snapshot)
+            if process.poll() is not None and not live:
+                empty_scans += 1
+                if empty_scans >= 2:
+                    self.proven_empty = True
+                    return
+            else:
+                empty_scans = 0
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise EvidenceError(
+                    "emergency child descendants remained after bounded SIGKILL")
+            time.sleep(min(0.01, remaining))
+
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        del exc, tb
+        del tb
         if not self.active:
             return
-        if self.leader is not None:
-            if not self.proven_empty:
-                # Keep subreaper ownership if teardown proof failed; restoring
-                # it could silently orphan an unproved child to init.
-                require(exc_type is not None,
-                        "child descendant containment closed without teardown proof")
-                return
-        else:
-            snapshot = _proc_process_snapshot()
-            if (self._direct_children(snapshot, self.runner_pid) !=
-                    self.baseline_children):
-                require(exc_type is not None,
-                        "unattached child appeared during descendant containment")
-                return
-        require(self.previous_subreaper is not None,
-                "previous child-subreaper state was lost")
+        cleanup_error: BaseException | None = None
+        restore_error: BaseException | None = None
         previous = self.previous_subreaper
-        self.active = False
-        self.previous_subreaper = None
-        _set_child_subreaper(previous)
+        try:
+            if (self.spawned_process is not None and
+                    (exc_type is not None or not self.proven_empty)):
+                try:
+                    self.emergency_terminate_and_reap()
+                except BaseException as error:
+                    cleanup_error = error
+            elif self.spawned_process is None:
+                # Popen was never reached.  A new direct child would still be
+                # an invariant violation, but it cannot be silently ignored.
+                try:
+                    snapshot = _emergency_proc_process_snapshot()
+                    current = self._direct_children(snapshot, self.runner_pid)
+                    if current != self.baseline_children:
+                        cleanup_error = EvidenceError(
+                            "unattached child appeared during containment")
+                except BaseException as error:
+                    cleanup_error = error
+        finally:
+            self.active = False
+            self.previous_subreaper = None
+            if previous is None:
+                restore_error = EvidenceError(
+                    "previous child-subreaper state was lost")
+            else:
+                try:
+                    _emergency_restore_child_subreaper(previous)
+                except BaseException as error:
+                    restore_error = error
+        if cleanup_error is not None or restore_error is not None:
+            parts = []
+            if cleanup_error is not None:
+                parts.append(
+                    "emergency cleanup failed: " +
+                    f"{type(cleanup_error).__name__}: {cleanup_error}")
+            if restore_error is not None:
+                parts.append(
+                    "subreaper restore failed: " +
+                    f"{type(restore_error).__name__}: {restore_error}")
+            if exc is not None:
+                parts.append(f"primary failure: {type(exc).__name__}: {exc}")
+            raise EvidenceError("; ".join(parts)) from (
+                cleanup_error or restore_error)
 
 
 def terminate_process_group_bounded(
@@ -628,6 +915,9 @@ def run_process_bounded(
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, start_new_session=True,
                 env=None if environment is None else dict(environment))
+            # Store the handle with no intervening injectable helper call.
+            containment.spawned_process = process
+            containment.observe_spawn(process)
             containment.attach(process.pid)
             require(process.stdout is not None and process.stderr is not None,
                     "cannot capture subprocess output")
