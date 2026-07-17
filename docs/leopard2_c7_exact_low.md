@@ -248,8 +248,8 @@ Each scalar, SSSE3, AVX2, and AUTO C++ artifact records the same:
 | Read-only input-alias calls / symbols checked | 13 / 2,139 |
 | Decode read-only input-alias calls / symbols checked | 117 / 6,025 |
 | Detached-codec plan executions / symbols checked | 14 / 3,598 |
-| Concurrent traced backend contexts / executions | 3 / 384 |
-| Traced fixed-multiply calls / cross-backend digest comparisons | 30,720 / 4 |
+| Concurrent traced backend contexts / executions (AUTO archive) | 3 / 384 |
+| Traced fixed-multiply calls / cross-backend digest comparisons (AUTO) | 30,720 / 4 |
 | Exhaustive small-code plans / executions / symbol checks | 163 / 4,720 / 8,192 |
 | Malformed plan rejections | 74 |
 | Hot-path allocations | 0 |
@@ -263,7 +263,10 @@ gate enumerates every valid missing-original/parity-presence pair and executes
 every one-byte GF8 basis message.  A single production archive also runs
 scalar, SSSE3, and AVX2 codec/plan execution concurrently through distinct
 tracing tables and requires identical wire digests with nonzero calls through
-each selected table.
+each selected table.  The deliberately forced scalar and SSSE3 diagnostic
+archives expose only the tables at or below their build ceiling, so their
+attested traced-context counts are one and two respectively; the ordinary AUTO
+production archive is the three-context gate.
 Combined ASan+UBSan with leak detection passes the same complete matrix.  The
 sanitized standalone source has a compile-time feature gate that fails unless
 both instruments are active; the retained build/run manifest also records the

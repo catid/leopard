@@ -113,6 +113,9 @@ for _new_correctness_key in (
 ):
     del LEGACY_EXPECTED_CORRECTNESS[_new_correctness_key]
 LEGACY_EXPECTED_CORRECTNESS["digest_fnv64"] = "0xec4179e9f2776a58"
+EXPECTED_TRACED_BACKENDS = {
+    "scalar": 1, "ssse3": 2, "avx2": 3, "auto": 3,
+}
 EXPECTED_PROFILE = {
     "family": 3, "version": 1, "coordinate_map": 1,
     "systematic": "0..K-1", "parity": "K..K+R-1",
@@ -944,6 +947,17 @@ def validate_cpp_result(
     data: dict[str, Any], backend: str, timing_scope: str,
     affinity: list[int], sanitizer: bool, *, legacy: bool = False,
 ) -> None:
+    expected_correctness = (LEGACY_EXPECTED_CORRECTNESS if legacy else
+                            dict(EXPECTED_CORRECTNESS))
+    if not legacy:
+        traced_backends = EXPECTED_TRACED_BACKENDS[backend]
+        expected_correctness["concurrent_backend_contexts"] = traced_backends
+        expected_correctness["concurrent_backend_executions"] = (
+            traced_backends * 128)
+        expected_correctness["concurrent_backend_trace_calls"] = (
+            traced_backends * 10240)
+        expected_correctness["concurrent_wire_digest_comparisons"] = (
+            (traced_backends - 1) * 2)
     required = {
         "affinity", "allocation_tracking", "benchmarks", "core_git_sha",
         "correctness", "library_sha256", "omp_dynamic", "omp_num_threads",
@@ -962,9 +976,7 @@ def validate_cpp_result(
             data["timing_scope"] != timing_scope or
             not typed_equal(data["affinity"], affinity) or
             data["omp_num_threads"] != "1" or data["omp_dynamic"] != "FALSE" or
-            not typed_equal(data["correctness"],
-                            LEGACY_EXPECTED_CORRECTNESS if legacy else
-                            EXPECTED_CORRECTNESS) or
+            not typed_equal(data["correctness"], expected_correctness) or
             not isinstance(data["benchmarks"], list)):
         raise ValueError("C7 child identity or correctness result changed")
     validate_sha(data["source_sha256"], "C7 child source hash")
