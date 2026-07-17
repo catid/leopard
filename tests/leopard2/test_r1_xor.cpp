@@ -201,7 +201,8 @@ struct R1Fixture
     const void* recovery[1];
 
     R1Fixture(leo2_backend backend, uint32_t original_count,
-        size_t shard_bytes, bool alias_inputs)
+        size_t shard_bytes, bool alias_inputs, leo2_field field,
+        leo2_shard_layout layout)
         : context(NULL)
         , codec(NULL)
         , plan(NULL)
@@ -217,15 +218,25 @@ struct R1Fixture
         options.backend = backend;
         require_result(leo2_context_create(&options, &context), LEO2_SUCCESS,
             "R=1 context create");
+        leo2_codec_options codec_options;
+        std::memset(&codec_options, 0, sizeof(codec_options));
+        codec_options.struct_size = sizeof(codec_options);
+        codec_options.shard_layout = layout;
         require_result(leo2_codec_create(context, k, 1,
-            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec),
+            LEO2_PROFILE_LEGACY_HIGH_V1, field, &codec_options, &codec),
             LEO2_SUCCESS, "R=1 codec create");
+        require(leo2_codec_field(codec) == field,
+            "R=1 codec selected the wrong explicit field");
+        require(leo2_codec_shard_layout(codec) == layout,
+            "R=1 codec selected the wrong shard layout");
         for (uint32_t shard = 0; shard < k; ++shard)
         {
             const size_t offset = 1U + shard % 13U;
             storage[shard].resize(bytes + offset + 8U);
             fill(storage[shard], shard * 97U + static_cast<uint32_t>(bytes));
             original[shard] = &storage[shard][offset];
+            if (layout == LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1)
+                storage[shard][offset + bytes - 1U] = 0;
         }
         if (alias_inputs && k >= 3)
             original[1] = original[0];
@@ -303,12 +314,37 @@ void test_public_r1(leo2_backend backend)
              size_i < sizeof(sizes) / sizeof(sizes[0]); ++size_i)
         {
             R1Fixture fixture(backend, counts[count_i], sizes[size_i],
-                counts[count_i] == 3);
+                counts[count_i] == 3, LEO2_FIELD_GF8,
+                LEO2_SHARD_LAYOUT_NATIVE_V1);
             execute_and_check_decode(fixture);
         }
 
+    // GF16 uses the same bytewise XOR identity, but exercises a distinct codec
+    // selection and shard-layout contract.  Even physical byte counts include
+    // vector tails; padded-odd physical sizes represent an odd payload with a
+    // required zero high byte in every field-symbol stream.
+    static const size_t gf16_native_sizes[] = {
+        2, 6, 34, 66, 1026, 65538
+    };
+    for (size_t size_i = 0;
+         size_i < sizeof(gf16_native_sizes) / sizeof(gf16_native_sizes[0]);
+         ++size_i)
+    {
+        R1Fixture fixture(backend, size_i % 2 == 0 ? 3U : 10U,
+            gf16_native_sizes[size_i], size_i == 0, LEO2_FIELD_GF16,
+            LEO2_SHARD_LAYOUT_NATIVE_V1);
+        execute_and_check_decode(fixture);
+    }
+    R1Fixture gf16_odd_payload(backend, 9, 34, true, LEO2_FIELD_GF16,
+        LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1);
+    execute_and_check_decode(gf16_odd_payload);
+    R1Fixture gf16_boundary(backend, 255, 66, false, LEO2_FIELD_GF16,
+        LEO2_SHARD_LAYOUT_NATIVE_V1);
+    execute_and_check_decode(gf16_boundary);
+
     // Shared immutable codec/plan execution must remain race-free.
-    R1Fixture fixture(backend, 9, 4097, true);
+    R1Fixture fixture(backend, 9, 4097, true, LEO2_FIELD_GF8,
+        LEO2_SHARD_LAYOUT_NATIVE_V1);
     std::atomic<bool> failed(false);
     std::vector<std::thread> threads;
     for (unsigned thread = 0; thread < 16; ++thread)
