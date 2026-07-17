@@ -248,7 +248,7 @@ graph with the candidate. The deterministic gate covers:
 | Independent direct-polynomial symbols | 13,104 |
 | Fused four-way descriptors exercised | 215,205 |
 | Effective execution descriptors | 787,494 (four radix-2 entries count as one fused step) |
-| Largest owned plan in the gate | 6,946,992 bytes for a complete GF16 N=65,536 plan |
+| Largest owned plan in the gate | 6,946,992 bytes on this libstdc++ host for a complete GF16 N=65,536 plan |
 | Exhaustive sparse masks | every input/output mask at N=2 and N=4, forward and inverse, first and last aligned cosets, GF8 and GF16 |
 | Larger parents | GF8 through N=256; GF16 through N=1,024 |
 | Real profile masks | high message-tail IFFT and transmitted/holey parity FFT; low shortened-message IFFT and final/holey parity-block FFT for GF8 (100,30), (17,100) and GF16 (1000,200), (257,700) |
@@ -274,6 +274,15 @@ no test hooks and passed portable ISA isolation. Independent review is still
 required before that follow-up can be integrated or benchmarked for promotion.
 The subsequent all-level grouping repeats these gates separately before it can
 supersede the leaf-only checkpoint.
+
+The all-level candidate repeated the 19,728-plan focused matrix and the maximum
+GF16 plan under GCC 13.3 strict Release, Clang 18.1 ASan+UBSan, and Clang 18.1
+TSan; all passed. Its fresh Release graph passed 49/49, including CUDA
+optionality and the Visual Studio project scanner after initializing the tracked
+submodule. A tests-off archive contained no test hooks and passed portable ISA
+isolation. This is candidate validation, not promotion: independent algebra and
+implementation review plus isolated end-to-end crossover evidence are still
+required.
 
 These are correctness results, not timing evidence. Other workers were active
 on the host, so no cache-sensitive or authoritative crossover number was
