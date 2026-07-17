@@ -11,9 +11,13 @@ butterfly layer.  The fixed comparison is:
 
 Both sides are Leopard2.  This is not the separate Leopard-main comparison.
 The collector rejects other commits, dirty source trees, non-Release builds,
-enabled tests/fuzzers/CUDA, mismatched compilers, missing compile commands,
-instrumentation, non-production backend flags, incomplete object/archive/link
-closure, or changed runtime dependencies.
+enabled tests/fuzzers/CUDA, mismatched compilers or effective flags, missing
+compile commands, instrumentation, non-production backend flags, incomplete
+object/archive/link closure, unreproducible linked executables, or changed
+runtime dependencies. Provenance validation binds the Python coordinator, Git,
+compiler, archiver, ranlib, every required source/object pair, each archive
+member's bytes, the exact normalized link recipe and external link inputs, and
+a byte-identical clean-room relink of each benchmark.
 
 The retained benchmark output is schema `leopard2-benchmark-v2`.  Every child
 must retain its raw timing samples, resolve the explicitly requested LOW_V1
@@ -60,8 +64,16 @@ The coordinator reservation is a canonical JSON file without a trailing
 newline.  Its parent must be owned mode 0700 and the file must be an owned,
 single-link mode-0600 regular file.  The collector takes an exclusive lock and
 binds the parent and file device/inode, mode, ownership, link count, payload,
-and digest.  Both reservation and pair lease are revalidated before and after
-every measured child.
+and digest. Both reservation and pair lease are revalidated before and after
+every measured child. The coordinator's affinity is also required to equal the
+housekeeping set at those boundaries and around evidence publication.
+
+After the initial attestation, the collector copies each benchmark into a
+private staged file, revalidates its bytes, opens it read-only, unlinks its
+name, and executes the inherited descriptor through `/proc/self/fd`. A source
+path replacement after attestation therefore cannot change the program that a
+child executes. Every invocation retains and revalidates that immutable
+execution identity.
 
 Pre/post `/proc/stat` evidence covers the first eight non-double-counted Linux
 CPU counters.  The measured CPU must accrue non-idle work, the reserved sibling
@@ -69,10 +81,13 @@ must accrue time, and the sibling must accrue exactly zero non-idle jiffies.
 These counters cannot attribute every jiffy to the child, so the external host
 reservation and an otherwise idle machine remain required.
 
-Children have bounded stdout/stderr collection and retained JSON has byte,
-depth, node, and string limits.  Output is first written under a private staging
-directory, fully validated and fsynced, and then published with Linux
-`renameat2(RENAME_NOREPLACE)`.  A run cannot replace an existing result.
+Children have separately bounded stdout and stderr collection. Retained JSON
+has byte, depth, node, string, integer, floating-point, and collection limits.
+The retained-file inventory rejects symlinks, unexpected names, empty
+directories, excess entries, and files outside the declared caps. Output is
+first written under a private staging directory, fully validated and fsynced,
+and then published with Linux `renameat2(RENAME_NOREPLACE)`. A run cannot
+replace an existing result.
 
 ## Build the exact inputs
 
@@ -176,14 +191,16 @@ Replay with live build/source closure checking:
     python3 experiments/leopard2/low_encode_copy/run_abba.py verify \
       --manifest "$OUTPUT/manifest.json"
 
-Portable structural replay after moving the evidence to another machine:
+Portable structural inspection after moving the evidence to another machine:
 
     python3 experiments/leopard2/low_encode_copy/run_abba.py verify \
       --manifest "$OUTPUT/manifest.json" --no-current-input-check
 
-Both commands exit 0 for a policy pass and 2 for authenticated negative
-evidence.  A malformed or inconsistent bundle exits 1.  A failed run publishes
-`failure.json`; verify it with:
+Live replay exits 0 for a policy pass and 2 for valid negative evidence.
+Portable inspection deliberately exits 1 even when internally consistent,
+because it cannot revalidate the declared source/build/tool closure and is not
+authoritative evidence. A malformed or inconsistent bundle also exits 1. A
+failed run publishes `failure.json`; verify it with:
 
     python3 experiments/leopard2/low_encode_copy/run_abba.py verify-failure \
       --failure "$OUTPUT/failure.json"

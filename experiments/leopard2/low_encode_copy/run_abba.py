@@ -22,6 +22,7 @@ import math
 import os
 import re
 import selectors
+import shlex
 import shutil
 import signal
 import stat
@@ -38,9 +39,10 @@ from typing import Any, Callable, Mapping, Sequence
 
 CONTROL_COMMIT = "4070e4e527935026fb87593567587558f0a08d51"
 CANDIDATE_COMMIT = "6d3afee213b94d486cf5f8145ac18078883ebc20"
-RAW_SCHEMA = "leopard2-low-encode-copy-raw/v1"
-MANIFEST_SCHEMA = "leopard2-low-encode-copy-manifest/v1"
-FAILURE_SCHEMA = "leopard2-low-encode-copy-failure/v1"
+RAW_SCHEMA = "leopard2-low-encode-copy-raw/v2"
+MANIFEST_SCHEMA = "leopard2-low-encode-copy-manifest/v2"
+FAILURE_SCHEMA = "leopard2-low-encode-copy-failure/v2"
+EXECUTION_SCHEMA = "leopard2-low-encode-copy-execution/v1"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 ROUNDS = 5
 SEQUENCE = (
@@ -65,10 +67,20 @@ MAX_STDERR_BYTES = 1024 * 1024
 MAX_JSON_DEPTH = 48
 MAX_JSON_NODES = 300_000
 MAX_JSON_STRING_BYTES = 8 * 1024 * 1024
+MAX_BUILD_METADATA_BYTES = 16 * 1024 * 1024
+MAX_BUILD_ARTIFACT_BYTES = 128 * 1024 * 1024
+MAX_INVENTORY_ENTRIES = 2048
+MAX_JSON_INTEGER = (1 << 64) - 1
+MAX_JSON_FLOAT = 1.0e15
+MAX_ITERATIONS = 1000
+MAX_REUSE = 1_000_000_000
+MAX_WARMUP = 1000
+MAX_TIMEOUT_SECONDS = 3600.0
 HEX64 = re.compile(r"^[0-9a-f]{16}$")
 HEX256 = re.compile(r"^[0-9a-f]{64}$")
 TARGET_SPEEDUP = 1.05
 NEIGHBOR_REGRESSION_FLOOR = 1.0 / 1.02
+_RELINK_CACHE: dict[str, str] = {}
 
 
 def _load_support() -> tuple[Any, Path]:
@@ -140,6 +152,24 @@ def require(condition: bool, message: str) -> None:
         raise EvidenceError(message)
 
 
+def exact_json_equal(actual: object, expected: object) -> bool:
+    if isinstance(expected, bool):
+        return isinstance(actual, bool) and actual is expected
+    if isinstance(expected, int):
+        return isinstance(actual, int) and not isinstance(actual, bool) and actual == expected
+    if isinstance(expected, float):
+        return isinstance(actual, float) and actual == expected
+    if isinstance(expected, str) or expected is None:
+        return type(actual) is type(expected) and actual == expected
+    if isinstance(expected, list):
+        return isinstance(actual, list) and len(actual) == len(expected) and all(
+            exact_json_equal(left, right) for left, right in zip(actual, expected))
+    if isinstance(expected, dict):
+        return isinstance(actual, dict) and set(actual) == set(expected) and all(
+            exact_json_equal(actual[name], expected[name]) for name in expected)
+    return type(actual) is type(expected) and actual == expected
+
+
 def utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -175,6 +205,21 @@ def sha256_file(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def sha256_descriptor(descriptor: int, limit: int) -> tuple[str, int]:
+    digest = hashlib.sha256()
+    retained = 0
+    offset = 0
+    while True:
+        block = os.pread(descriptor, min(1024 * 1024, limit + 1 - retained), offset)
+        if not block:
+            break
+        digest.update(block)
+        retained += len(block)
+        offset += len(block)
+        require(retained <= limit, f"file descriptor exceeds {limit} bytes")
+    return digest.hexdigest(), retained
 
 
 def signed(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -217,6 +262,12 @@ def validate_json_shape(value: object, what: str) -> None:
         else:
             require(current is None or isinstance(current, (bool, int, float)),
                     f"{what} contains a non-JSON value")
+            if isinstance(current, int) and not isinstance(current, bool):
+                require(abs(current) <= MAX_JSON_INTEGER,
+                        f"{what} contains an oversized integer")
+            if isinstance(current, float):
+                require(math.isfinite(current) and abs(current) <= MAX_JSON_FLOAT,
+                        f"{what} contains an invalid or oversized float")
 
 
 def parse_json_bytes(value: bytes, what: str, limit: int = MAX_JSON_BYTES) -> object:
@@ -231,11 +282,32 @@ def parse_json_bytes(value: bytes, what: str, limit: int = MAX_JSON_BYTES) -> ob
 
 
 def read_json_limited(path: Path, what: str, limit: int = MAX_JSON_BYTES) -> object:
-    metadata = os.lstat(path)
-    require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1,
-            f"{what} is not a single-link regular file")
-    require(metadata.st_size <= limit, f"{what} exceeds {limit} bytes")
-    return parse_json_bytes(path.read_bytes(), what, limit)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        path_metadata = os.lstat(path)
+        require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1 and
+                (metadata.st_dev, metadata.st_ino) ==
+                (path_metadata.st_dev, path_metadata.st_ino),
+                f"{what} is not an inode-bound single-link regular file")
+        require(metadata.st_size <= limit, f"{what} exceeds {limit} bytes")
+        chunks: list[bytes] = []
+        retained = 0
+        while True:
+            block = os.read(descriptor, min(1024 * 1024, limit + 1 - retained))
+            if not block:
+                break
+            chunks.append(block)
+            retained += len(block)
+            require(retained <= limit, f"{what} exceeds {limit} bytes")
+        final = os.fstat(descriptor)
+        require((final.st_size, final.st_mtime_ns, final.st_ctime_ns) ==
+                (metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns),
+                f"{what} changed while it was read")
+        return parse_json_bytes(b"".join(chunks), what, limit)
+    finally:
+        os.close(descriptor)
 
 
 def write_bytes_exclusive(path: Path, value: bytes) -> None:
@@ -279,11 +351,14 @@ def safe_evidence_path(root: Path, relative: object) -> Path:
     return resolved
 
 
-def artifact_record(root: Path, path: Path) -> dict[str, Any]:
+def artifact_record(
+    root: Path, path: Path, limit: int = MAX_JSON_BYTES
+) -> dict[str, Any]:
     path = path.resolve(strict=True)
     path.relative_to(root.resolve())
     metadata = os.lstat(path)
-    require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1,
+    require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1 and
+            metadata.st_size <= limit,
             f"retained artifact is not a single-link regular file: {path}")
     return {
         "path": str(path.relative_to(root.resolve())),
@@ -292,20 +367,34 @@ def artifact_record(root: Path, path: Path) -> dict[str, Any]:
     }
 
 
-def verify_artifact(root: Path, value: object, what: str) -> Path:
+def verify_artifact(
+    root: Path, value: object, what: str, limit: int = MAX_JSON_BYTES
+) -> Path:
     require(isinstance(value, dict) and set(value) == {"path", "sha256", "size"},
             f"{what} identity is incomplete")
     require(isinstance(value.get("sha256"), str) and
             HEX256.fullmatch(value["sha256"]) is not None and
             isinstance(value.get("size"), int) and not isinstance(value["size"], bool) and
-            0 <= value["size"] <= MAX_JSON_BYTES,
+            0 <= value["size"] <= limit,
             f"{what} identity is invalid")
     path = safe_evidence_path(root, value.get("path"))
-    metadata = os.lstat(path)
-    require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1 and
-            metadata.st_size == value["size"] and
-            sha256_file(path) == value["sha256"],
-            f"{what} is missing or changed")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        path_metadata = os.lstat(path)
+        digest, size = sha256_descriptor(descriptor, limit)
+        final = os.fstat(descriptor)
+        require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1 and
+                (metadata.st_dev, metadata.st_ino) ==
+                (path_metadata.st_dev, path_metadata.st_ino) and
+                (metadata.st_size, metadata.st_mtime_ns, metadata.st_ctime_ns) ==
+                (final.st_size, final.st_mtime_ns, final.st_ctime_ns) and
+                size == metadata.st_size == value["size"] and
+                digest == value["sha256"],
+                f"{what} is missing or changed")
+    finally:
+        os.close(descriptor)
     return path
 
 
@@ -320,6 +409,10 @@ def validate_cell(cell: Cell) -> None:
             f"invalid backend in {cell.identifier}")
     require(cell.field in {"gf8", "gf16"} and cell.role in {"target", "neighbor"},
             f"invalid field/role in {cell.identifier}")
+    for name in ("k", "r", "shard_bytes", "seed", "losses"):
+        item = getattr(cell, name)
+        require(isinstance(item, int) and not isinstance(item, bool),
+                f"{name} is not an exact integer in {cell.identifier}")
     require(cell.k > 0 and cell.r > 0 and 0 <= cell.losses <= min(cell.k, cell.r),
             f"invalid counts in {cell.identifier}")
     require(cell.shard_bytes in {64, 256, 1024, 4096, 16384, 65536, 262144, 1048576},
@@ -328,7 +421,7 @@ def validate_cell(cell: Cell) -> None:
     parent = ceil_power_of_two(padded + cell.r)
     require(parent <= 65536 and
             ((cell.field == "gf8" and parent <= 256) or
-             (cell.field == "gf16" and parent > 256)),
+             cell.field == "gf16"),
             f"field/parent mismatch in {cell.identifier}")
     require(0 <= cell.seed < (1 << 64), f"seed overflow in {cell.identifier}")
 
@@ -356,9 +449,13 @@ def statistics_policy() -> dict[str, Any]:
 def finite_number(value: object, what: str, positive: bool = True) -> float:
     require(isinstance(value, (int, float)) and not isinstance(value, bool),
             f"{what} is not numeric")
-    result = float(value)
-    require(math.isfinite(result), f"{what} is not finite")
-    require(result > 0 if positive else result >= 0,
+    try:
+        result = float(value)
+    except (OverflowError, ValueError) as error:
+        raise EvidenceError(f"{what} is not a bounded number") from error
+    require(math.isfinite(result) and abs(result) <= MAX_JSON_FLOAT,
+            f"{what} is not finite or bounded")
+    require(result >= 1.0e-12 if positive else result >= 0,
             f"{what} is {'not positive' if positive else 'negative'}")
     return result
 
@@ -442,6 +539,10 @@ def validate_support_contract() -> dict[str, Any]:
     require(tuple(SUPPORT.CPU_STAT_IDLE_FIELDS) == ("idle", "iowait") and
             SUPPORT.MAX_SIBLING_NONIDLE_JIFFIES == 0,
             "support sibling-idle contract changed")
+    require(SUPPORT.MAX_CPU_ID == 1_048_575 and
+            SUPPORT.MAX_CPU_LIST_ENTRIES == 4096 and
+            SUPPORT.MAX_CPU_LIST_TEXT_BYTES == 65_536,
+            "support bounded CPU-list contract changed")
     probe = {"b": 2, "a": 1}
     require(SUPPORT.canonical_bytes(probe) == canonical_bytes(probe),
             "support canonical JSON contract changed")
@@ -461,6 +562,8 @@ def validate_support_contract() -> dict[str, Any]:
         "contracts": {
             "canonical_json": "sort_keys compact UTF-8 without newline",
             "cpu_stat_fields": list(SUPPORT.CPU_STAT_FIELDS),
+            "max_cpu_id": SUPPORT.MAX_CPU_ID,
+            "max_cpu_list_entries": SUPPORT.MAX_CPU_LIST_ENTRIES,
             "pair_lease_schema": SUPPORT.PAIR_LEASE_SCHEMA,
             "reservation_schema": SUPPORT.RESERVATION_SCHEMA,
             "sibling_max_nonidle_jiffies": SUPPORT.MAX_SIBLING_NONIDLE_JIFFIES,
@@ -479,9 +582,282 @@ def side_build_specification(side: str, specification: Mapping[str, Any]) -> dic
     }
 
 
+def require_bounded_regular(path: Path, what: str, limit: int) -> None:
+    metadata = os.lstat(path)
+    require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1 and
+            0 <= metadata.st_size <= limit,
+            f"{what} is not a bounded single-link regular file")
+
+
+def strict_compile_recipes(
+    side: str, specification: Mapping[str, Any], provenance: Mapping[str, Any]
+) -> dict[str, list[str]]:
+    root = Path(specification[f"{side}_source_root"]).resolve(strict=True)
+    build = Path(specification[f"{side}_build_dir"]).resolve(strict=True)
+    compiler = Path(provenance["compiler"]["path"])
+    commands_path = build / "compile_commands.json"
+    entries = read_json_limited(
+        commands_path, f"{side} compile commands", MAX_BUILD_METADATA_BYTES)
+    require(isinstance(entries, list) and
+            len(entries) == provenance["validated_compile_commands"]["entry_count"] and
+            len(entries) <= 256,
+            f"{side} compile-command entry count is invalid")
+    by_source: dict[Path, Mapping[str, Any]] = {}
+    for entry in entries:
+        require(isinstance(entry, dict) and set(entry) == {
+            "command", "directory", "file", "output"},
+            f"{side} compile command has unexpected fields")
+        source = Path(entry["file"]).resolve(strict=True)
+        require(source not in by_source, f"{side} duplicate compile command for {source}")
+        by_source[source] = entry
+
+    allowed_literals = {
+        "-Wall", "-Wextra", "-fopenmp", "-g", "-O0", "-O3",
+        "-std=gnu++11", "-mavx2", "-mno-avx512f",
+        "-falign-functions=64", "-mssse3", "-mno-avx",
+        "-DLEO2_DISABLE_AVX2_CODEGEN=1", "-DLEO2_DISABLE_SSSE3_CODEGEN=1",
+        "-DLEO2_HAVE_AVX2_BACKEND=1", "-DLEO2_HAVE_SSSE3_BACKEND=1",
+        "-c", "-o",
+    }
+    result: dict[str, list[str]] = {}
+    pairs = provenance["validated_compile_commands"][
+        "required_source_object_pairs"]
+    for pair in pairs:
+        source = Path(pair["source"]["path"])
+        obj = Path(pair["object"]["path"])
+        entry = by_source.get(source)
+        require(entry is not None and
+                Path(entry["directory"]).resolve(strict=True) == build,
+                f"{side} compile command has the wrong build directory")
+        tokens = SUPPORT.compile_command_tokens(entry)
+        require(tokens and Path(tokens[0]).resolve(strict=True) == compiler,
+                f"{side} compile command uses another compiler")
+        normalized = ["<compiler>"]
+        index = 1
+        saw_source = False
+        saw_output = False
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "-o":
+                require(not saw_output and index + 1 < len(tokens),
+                        f"{side} compile command has an invalid output")
+                candidate = Path(tokens[index + 1])
+                if not candidate.is_absolute():
+                    candidate = build / candidate
+                require(candidate.resolve(strict=True) == obj,
+                        f"{side} compile command output differs from its object")
+                normalized.extend(("-o", "<object>"))
+                saw_output = True
+                index += 2
+                continue
+            if token == str(source):
+                require(not saw_source, f"{side} compile source is duplicated")
+                normalized.append("<source>")
+                saw_source = True
+            elif token == f"-I{root}":
+                normalized.append("-I<SOURCE_ROOT>")
+            else:
+                require(token in allowed_literals,
+                        f"{side} compile command has a noncanonical token: {token!r}")
+                normalized.append(token)
+            index += 1
+        require(saw_source and saw_output and normalized.count("-c") == 1 and
+                normalized.count("-O3") == 1,
+                f"{side} compile command is incomplete")
+        relative = str(source.relative_to(root))
+        require(entry["output"] and
+                (build / entry["output"]).resolve(strict=True) == obj,
+                f"{side} compile-command output metadata differs")
+        result[relative] = normalized
+    require(len(result) == len(pairs), f"{side} strict compile closure is incomplete")
+    return dict(sorted(result.items()))
+
+
+def strict_archive_and_link_provenance(
+    side: str, specification: Mapping[str, Any], provenance: Mapping[str, Any]
+) -> dict[str, Any]:
+    build = Path(specification[f"{side}_build_dir"]).resolve(strict=True)
+    archive = Path(specification[f"{side}_archive"]).resolve(strict=True)
+    executable = Path(specification[f"{side}_executable"]).resolve(strict=True)
+    compiler = Path(provenance["compiler"]["path"])
+    archive_recipe_path = Path(provenance["archive_link_recipe"]["path"])
+    executable_recipe_path = Path(provenance["executable_link_recipe"]["path"])
+    pairs = provenance["validated_compile_commands"][
+        "required_source_object_pairs"]
+    benchmark_pairs = [
+        pair for pair in pairs
+        if pair["source"]["path"].endswith("/bench/leopard2/benchmark.cpp")
+    ]
+    require(len(benchmark_pairs) == 1, f"{side} has no unique benchmark object")
+    benchmark_object = Path(benchmark_pairs[0]["object"]["path"])
+    archive_pairs = [pair for pair in pairs if pair not in benchmark_pairs]
+    archive_objects = [Path(pair["object"]["path"]) for pair in archive_pairs]
+
+    ar = Path(provenance["archiver"]["path"])
+    ranlib = Path("/usr/bin/ranlib").resolve(strict=True)
+    archive_lines = [
+        shlex.split(line) for line in archive_recipe_path.read_text(
+            encoding="utf-8").splitlines() if line.strip()
+    ]
+    require(len(archive_lines) == 2 and len(archive_lines[0]) >= 3 and
+            Path(archive_lines[0][0]).resolve(strict=True) == ar and
+            archive_lines[0][1] == "qc" and archive_lines[1] and
+            Path(archive_lines[1][0]).resolve(strict=True) == ranlib,
+            f"{side} archive recipe is not canonical ar/ranlib")
+
+    def resolve_build_token(token: str) -> Path:
+        path = Path(token)
+        if not path.is_absolute():
+            path = build / path
+        return path.resolve(strict=True)
+
+    recipe_archive_objects = [
+        resolve_build_token(token) for token in archive_lines[0][3:]
+    ]
+    require(resolve_build_token(archive_lines[0][2]) == archive and
+            len(recipe_archive_objects) == len(set(recipe_archive_objects)) and
+            set(recipe_archive_objects) == set(archive_objects) and
+            len(archive_lines[1]) == 2 and
+            resolve_build_token(archive_lines[1][1]) == archive,
+            f"{side} archive recipe differs from its exact object closure")
+    members = provenance["validated_archive_members"]
+    require(members == [path.name for path in recipe_archive_objects],
+            f"{side} archive member order differs from its objects")
+    pair_by_object = {
+        Path(pair["object"]["path"]): pair for pair in archive_pairs
+    }
+    ordered_archive_pairs = [pair_by_object[path] for path in recipe_archive_objects]
+    member_content: list[dict[str, Any]] = []
+    for member, pair in zip(members, ordered_archive_pairs):
+        content = SUPPORT.run_checked(
+            (str(ar), "p", str(archive), member), environment=CHILD_ENVIRONMENT)
+        require(len(content) <= MAX_BUILD_ARTIFACT_BYTES and
+                sha256_bytes(content) == pair["object"]["sha256"] and
+                len(content) == pair["object"]["size"],
+                f"{side} archive member {member} differs from its object file")
+        member_content.append({
+            "member": member,
+            "object_path": pair["object"]["path"],
+            "sha256": pair["object"]["sha256"],
+            "size": pair["object"]["size"],
+        })
+
+    link_lines = [
+        line for line in executable_recipe_path.read_text(
+            encoding="utf-8").splitlines() if line.strip()
+    ]
+    require(len(link_lines) == 1, f"{side} executable link recipe is not one command")
+    link_tokens = shlex.split(link_lines[0])
+    allowed_flags = {"-Wall", "-Wextra", "-fopenmp", "-g", "-O0", "-O3"}
+    normalized: list[str] = ["<compiler>"]
+    external_inputs: list[dict[str, Any]] = []
+    output_index: int | None = None
+    saw_object = False
+    saw_archive = False
+    require(link_tokens and Path(link_tokens[0]).resolve(strict=True) == compiler,
+            f"{side} executable link recipe uses another compiler")
+    index = 1
+    while index < len(link_tokens):
+        token = link_tokens[index]
+        if token == "-o":
+            require(output_index is None and index + 1 < len(link_tokens),
+                    f"{side} executable link output is invalid")
+            require(resolve_build_token(link_tokens[index + 1]) == executable,
+                    f"{side} executable link output path differs")
+            normalized.extend(("-o", "<executable>"))
+            output_index = index + 1
+            index += 2
+            continue
+        if token in allowed_flags:
+            normalized.append(token)
+            index += 1
+            continue
+        resolved = resolve_build_token(token)
+        if resolved == benchmark_object:
+            require(not saw_object, f"{side} benchmark object is duplicated")
+            normalized.append("<benchmark-object>")
+            saw_object = True
+        elif resolved == archive:
+            require(not saw_archive, f"{side} archive is duplicated")
+            normalized.append("<archive>")
+            saw_archive = True
+        else:
+            require_bounded_regular(resolved, f"{side} external link input",
+                                    MAX_BUILD_ARTIFACT_BYTES)
+            identity = SUPPORT.artifact_identity(resolved, "link_input")
+            external_inputs.append(identity)
+            normalized.append(f"<external:{identity['path']}>")
+        index += 1
+    require(output_index is not None and saw_object and saw_archive and
+            normalized.count("-O3") == 1,
+            f"{side} executable link recipe is incomplete")
+
+    cache_key = sha256_bytes(canonical_bytes({
+        "archive": provenance["validated_archive"],
+        "benchmark_object": benchmark_pairs[0]["object"],
+        "compiler": provenance["compiler"],
+        "external_inputs": external_inputs,
+        "normalized_link": normalized,
+    }))
+    expected_sha = _RELINK_CACHE.get(cache_key)
+    if expected_sha is None:
+        with tempfile.TemporaryDirectory(prefix="leo2-low-copy-relink-") as temporary:
+            relinked = Path(temporary) / "bench_leopard2"
+            command = list(link_tokens)
+            command[output_index] = str(relinked)
+            try:
+                completed = subprocess.run(
+                    command, cwd=str(build), env=dict(CHILD_ENVIRONMENT),
+                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, check=False, timeout=30)
+            except subprocess.TimeoutExpired as error:
+                raise EvidenceError(f"{side} reproducible relink timed out") from error
+            require(completed.returncode == 0 and
+                    len(completed.stdout) <= MAX_STDOUT_BYTES and
+                    len(completed.stderr) <= MAX_STDERR_BYTES,
+                    f"{side} reproducible relink failed: " +
+                    completed.stderr[:4096].decode("utf-8", errors="replace"))
+            require_bounded_regular(relinked, f"{side} relinked executable",
+                                    MAX_BUILD_ARTIFACT_BYTES)
+            expected_sha = sha256_file(relinked)
+        _RELINK_CACHE[cache_key] = expected_sha
+    validate_relinked_executable_sha(
+        provenance["validated_executable"]["sha256"], expected_sha, side)
+    return {
+        "archive_member_content": member_content,
+        "external_link_inputs": external_inputs,
+        "normalized_executable_link": normalized,
+        "ranlib": SUPPORT.artifact_identity(ranlib, "ranlib"),
+        "relink_cache_key": cache_key,
+        "reproducible_executable_sha256": expected_sha,
+    }
+
+
+def validate_relinked_executable_sha(
+    declared_sha: object, relinked_sha: object, side: str
+) -> None:
+    require(isinstance(declared_sha, str) and isinstance(relinked_sha, str) and
+            HEX256.fullmatch(declared_sha) is not None and
+            HEX256.fullmatch(relinked_sha) is not None and
+            declared_sha == relinked_sha,
+            f"{side} executable bytes are not the result of the retained link inputs")
+
+
 def validate_build_provenance(
     side: str, specification: Mapping[str, Any]
 ) -> dict[str, Any]:
+    build = Path(specification[f"{side}_build_dir"]).resolve(strict=True)
+    for relative in (
+        "CMakeCache.txt", "compile_commands.json",
+        "CMakeFiles/bench_leopard2.dir/link.txt",
+        "CMakeFiles/libleopard.dir/link.txt",
+    ):
+        require_bounded_regular(build / relative, f"{side} {relative}",
+                                MAX_BUILD_METADATA_BYTES)
+    require_bounded_regular(Path(specification[f"{side}_executable"]),
+                            f"{side} executable", MAX_BUILD_ARTIFACT_BYTES)
+    require_bounded_regular(Path(specification[f"{side}_archive"]),
+                            f"{side} archive", MAX_BUILD_ARTIFACT_BYTES)
     result = SUPPORT.build_provenance(
         "candidate", side_build_specification(side, specification))
     cache_path = Path(specification[f"{side}_build_dir"]) / "CMakeCache.txt"
@@ -493,13 +869,28 @@ def validate_build_provenance(
     result["validated_cache"]["CMAKE_GENERATOR"] = cache["CMAKE_GENERATOR"]
     result["validated_cache"]["CMAKE_EXPORT_COMPILE_COMMANDS"] = cache[
         "CMAKE_EXPORT_COMPILE_COMMANDS"]
+    for name in (
+        "CMAKE_CXX_FLAGS", "CMAKE_EXE_LINKER_FLAGS",
+        "CMAKE_EXE_LINKER_FLAGS_RELEASE", "CMAKE_STATIC_LINKER_FLAGS",
+        "CMAKE_STATIC_LINKER_FLAGS_RELEASE",
+    ):
+        require(cache.get(name) == "", f"{side} build has noncanonical {name}")
+        result["validated_cache"][name] = ""
+    for pair in result["validated_compile_commands"]["required_source_object_pairs"]:
+        require_bounded_regular(Path(pair["source"]["path"]), f"{side} source",
+                                MAX_BUILD_METADATA_BYTES)
+        require_bounded_regular(Path(pair["object"]["path"]), f"{side} object",
+                                MAX_BUILD_ARTIFACT_BYTES)
+    result["strict_compile_recipes"] = strict_compile_recipes(
+        side, specification, result)
+    result["strict_link_provenance"] = strict_archive_and_link_provenance(
+        side, specification, result)
     return result
 
 
-def input_snapshot(specification: Mapping[str, Any]) -> dict[str, Any]:
-    support_contract = validate_support_contract()
-    control_build = validate_build_provenance("control", specification)
-    candidate_build = validate_build_provenance("candidate", specification)
+def validate_equal_build_policy(
+    control_build: Mapping[str, Any], candidate_build: Mapping[str, Any]
+) -> None:
     require(control_build["compiler"] == candidate_build["compiler"] and
             control_build["compiler_version_stdout"] ==
             candidate_build["compiler_version_stdout"],
@@ -510,10 +901,29 @@ def input_snapshot(specification: Mapping[str, Any]) -> dict[str, Any]:
         "CMAKE_BUILD_TYPE", "CMAKE_CXX_COMPILER", "CMAKE_CXX_FLAGS_RELEASE",
         "CMAKE_GENERATOR", "CMAKE_EXPORT_COMPILE_COMMANDS", "ENABLE_OPENMP",
         "LEO2_BACKEND_VARIANT", "LEO2_BUILD_BENCHMARKS", "LEO2_BUILD_FUZZERS",
-        "LEO2_BUILD_TESTS", "LEO2_ENABLE_CUDA",
+        "LEO2_BUILD_TESTS", "LEO2_ENABLE_CUDA", "CMAKE_CXX_FLAGS",
+        "CMAKE_EXE_LINKER_FLAGS", "CMAKE_EXE_LINKER_FLAGS_RELEASE",
+        "CMAKE_STATIC_LINKER_FLAGS", "CMAKE_STATIC_LINKER_FLAGS_RELEASE",
     ):
         require(control_cache.get(name) == candidate_cache.get(name),
                 f"control/candidate CMake setting differs: {name}")
+    require(control_build["strict_compile_recipes"] ==
+            candidate_build["strict_compile_recipes"],
+            "control/candidate effective compile recipes differ")
+    for name in ("normalized_executable_link", "external_link_inputs", "ranlib"):
+        require(control_build["strict_link_provenance"][name] ==
+                candidate_build["strict_link_provenance"][name],
+                f"control/candidate link provenance differs: {name}")
+
+
+def input_snapshot(specification: Mapping[str, Any]) -> dict[str, Any]:
+    require(Path(sys.executable).resolve(strict=True) ==
+            Path(specification["python"]).resolve(strict=True),
+            "current Python interpreter differs from the declared coordinator")
+    support_contract = validate_support_contract()
+    control_build = validate_build_provenance("control", specification)
+    candidate_build = validate_build_provenance("candidate", specification)
+    validate_equal_build_policy(control_build, candidate_build)
     ldd = Path(specification["ldd"])
     control_root = Path(specification["control_source_root"])
     candidate_root = Path(specification["candidate_source_root"])
@@ -526,6 +936,10 @@ def input_snapshot(specification: Mapping[str, Any]) -> dict[str, Any]:
         "taskset": SUPPORT.artifact_identity(
             Path(specification["taskset"]), "executable"),
         "ldd": SUPPORT.artifact_identity(ldd, "executable"),
+        "git": SUPPORT.artifact_identity(
+            Path(specification["git"]), "executable"),
+        "python": SUPPORT.artifact_identity(
+            Path(specification["python"]), "executable"),
         "control_executable": SUPPORT.artifact_identity(
             Path(specification["control_executable"]), "executable"),
         "candidate_executable": SUPPORT.artifact_identity(
@@ -601,6 +1015,7 @@ def validate_build_identity(
         "compile_commands", "compiler", "compiler_version_stdout",
         "executable_link_recipe", "validated_archive", "validated_archive_members",
         "validated_cache", "validated_compile_commands", "validated_executable",
+        "strict_compile_recipes", "strict_link_provenance",
     }
     require(isinstance(value, dict) and set(value) == expected_keys,
             f"retained {side} build identity is incomplete")
@@ -635,7 +1050,10 @@ def validate_build_identity(
     expected_cache = {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_CXX_COMPILER": "/usr/bin/c++",
+        "CMAKE_CXX_FLAGS": "",
         "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
+        "CMAKE_EXE_LINKER_FLAGS": "",
+        "CMAKE_EXE_LINKER_FLAGS_RELEASE": "",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "CMAKE_GENERATOR": "Unix Makefiles",
         "ENABLE_OPENMP": "ON",
@@ -644,9 +1062,16 @@ def validate_build_identity(
         "LEO2_BUILD_FUZZERS": "OFF",
         "LEO2_BUILD_TESTS": "OFF",
         "LEO2_ENABLE_CUDA": "OFF",
+        "CMAKE_STATIC_LINKER_FLAGS": "",
+        "CMAKE_STATIC_LINKER_FLAGS_RELEASE": "",
     }
     require(cache == expected_cache,
             f"retained {side} CMake production configuration is invalid")
+    validate_file_identity(value.get("compiler"), f"{side} compiler",
+                           expected_path=cache["CMAKE_CXX_COMPILER"],
+                           expected_kind="compiler")
+    validate_file_identity(value.get("archiver"), f"{side} archiver",
+                           expected_path="/usr/bin/ar", expected_kind="archiver")
     members = value.get("validated_archive_members")
     require(isinstance(members, list) and members and len(members) == len(set(members)) and
             all(isinstance(item, str) and item and "/" not in item and "\\" not in item
@@ -686,6 +1111,49 @@ def validate_build_identity(
         observed_sources.append(source["path"])
     require(sorted(observed_sources) == sources,
             f"retained {side} source/object closure differs from required sources")
+    strict_recipes = value.get("strict_compile_recipes")
+    require(isinstance(strict_recipes, dict) and
+            set(strict_recipes) == {
+                str(Path(path).relative_to(
+                    Path(specification[f"{side}_source_root"]).resolve()))
+                for path in sources
+            } and
+            all(isinstance(tokens, list) and tokens and
+                all(isinstance(token, str) for token in tokens)
+                for tokens in strict_recipes.values()),
+            f"retained {side} strict compile recipes are invalid")
+    link = value.get("strict_link_provenance")
+    require(isinstance(link, dict) and set(link) == {
+        "archive_member_content", "external_link_inputs",
+        "normalized_executable_link", "ranlib", "relink_cache_key",
+        "reproducible_executable_sha256"},
+        f"retained {side} strict link provenance is incomplete")
+    require(isinstance(link.get("normalized_executable_link"), list) and
+            all(isinstance(token, str) for token in link["normalized_executable_link"]) and
+            isinstance(link.get("external_link_inputs"), list) and
+            isinstance(link.get("archive_member_content"), list) and
+            isinstance(link.get("relink_cache_key"), str) and
+            HEX256.fullmatch(link["relink_cache_key"]) is not None and
+            link.get("reproducible_executable_sha256") ==
+            value["validated_executable"]["sha256"],
+            f"retained {side} strict link values are invalid")
+    validate_file_identity(link.get("ranlib"), f"{side} ranlib",
+                           expected_path="/usr/bin/ranlib", expected_kind="ranlib")
+    object_by_path = {
+        pair["object"]["path"]: pair["object"] for pair in pairs
+    }
+    require(len(link["archive_member_content"]) == len(members),
+            f"retained {side} archive content proof is incomplete")
+    for item, member in zip(link["archive_member_content"], members):
+        require(isinstance(item, dict) and set(item) == {
+            "member", "object_path", "sha256", "size"} and
+            item.get("member") == member and item.get("object_path") in object_by_path and
+            item.get("sha256") == object_by_path[item["object_path"]]["sha256"] and
+            item.get("size") == object_by_path[item["object_path"]]["size"],
+            f"retained {side} archive member content is invalid")
+    for item in link["external_link_inputs"]:
+        validate_file_identity(item, f"{side} external link input",
+                               expected_kind="link_input")
     return value
 
 
@@ -710,7 +1178,9 @@ def validate_runtime_closure(
                     isinstance(dependency.get("loader_path"), str) and
                     Path(dependency["loader_path"]).is_absolute(),
                     f"retained {what} dependency path is invalid")
-            validate_file_identity(dependency.get("file"), f"{what} dependency")
+            validate_file_identity(
+                dependency.get("file"), f"{what} dependency",
+                expected_path=dependency["loader_path"])
     return value
 
 
@@ -721,13 +1191,14 @@ def validate_retained_snapshot(
         "candidate_archive", "candidate_build", "candidate_executable",
         "candidate_runtime_closure", "candidate_source", "control_archive",
         "control_build", "control_executable", "control_runtime_closure",
-        "control_source", "ldd", "runner", "support", "taskset",
+        "control_source", "git", "ldd", "python", "runner", "support", "taskset",
     }
     require(isinstance(value, dict) and set(value) == expected_keys,
             "retained source/build snapshot is incomplete")
     for name, spec_name, kind in (
         ("runner", "runner", "file"), ("taskset", "taskset", "executable"),
-        ("ldd", "ldd", "executable"),
+        ("ldd", "ldd", "executable"), ("git", "git", "executable"),
+        ("python", "python", "executable"),
         ("control_executable", "control_executable", "executable"),
         ("candidate_executable", "candidate_executable", "executable"),
         ("control_archive", "control_archive", "archive"),
@@ -803,6 +1274,10 @@ class HardenedReservation:
                 "CPU reservation must be canonical JSON without a trailing newline")
         require(payload.get("schema") == RESERVATION_SCHEMA and
                 payload.get("status") == "held" and
+                isinstance(payload.get("benchmark_cpu"), int) and
+                not isinstance(payload.get("benchmark_cpu"), bool) and
+                isinstance(payload.get("reserved_sibling"), int) and
+                not isinstance(payload.get("reserved_sibling"), bool) and
                 payload.get("benchmark_cpu") == cpu and
                 payload.get("reserved_sibling") == sibling,
                 "CPU reservation does not bind the requested pair")
@@ -952,13 +1427,136 @@ class BoundedChildError(EvidenceError):
         self.duration_ns = duration_ns
 
 
+class ImmutableExecutables:
+    """Copy attested executables to private unlinked read-only descriptors."""
+
+    def __init__(
+        self, stage: Path, specification: Mapping[str, Any],
+        initial: Mapping[str, Any],
+    ):
+        self.stage = stage
+        self.specification = specification
+        self.initial = initial
+        self.descriptors: dict[str, int] = {}
+        self.identities: dict[str, dict[str, Any]] = {}
+
+    def __enter__(self) -> tuple[dict[str, dict[str, Any]], dict[str, int]]:
+        temporary = Path(tempfile.mkdtemp(prefix=".execution-", dir=self.stage))
+        os.chmod(temporary, 0o700)
+        try:
+            for side in ("control", "candidate"):
+                source_path = Path(self.specification[f"{side}_executable"])
+                expected = self.initial[f"{side}_executable"]
+                source_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | \
+                    getattr(os, "O_NOFOLLOW", 0)
+                source = os.open(source_path, source_flags)
+                try:
+                    metadata = os.fstat(source)
+                    path_metadata = os.lstat(source_path)
+                    digest, size = sha256_descriptor(source, MAX_BUILD_ARTIFACT_BYTES)
+                    require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1 and
+                            (metadata.st_dev, metadata.st_ino) ==
+                            (path_metadata.st_dev, path_metadata.st_ino) and
+                            digest == expected["sha256"] and size == expected["size"] and
+                            stat.S_IMODE(metadata.st_mode) == expected["mode"] and
+                            os.access(source_path, os.X_OK),
+                            f"{side} executable changed before immutable staging")
+                    staged = temporary / side
+                    descriptor = os.open(
+                        staged, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                        getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+                        0o600)
+                    try:
+                        offset = 0
+                        while offset < size:
+                            block = os.pread(source, min(1024 * 1024, size - offset), offset)
+                            require(block, f"{side} executable shortened during staging")
+                            view = memoryview(block)
+                            while view:
+                                written = os.write(descriptor, view)
+                                require(written > 0, f"short immutable {side} executable write")
+                                view = view[written:]
+                            offset += len(block)
+                        os.fchmod(descriptor, 0o500)
+                        os.fsync(descriptor)
+                    finally:
+                        os.close(descriptor)
+                finally:
+                    os.close(source)
+                read_descriptor = os.open(
+                    staged, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+                    getattr(os, "O_NOFOLLOW", 0))
+                staged_metadata = os.fstat(read_descriptor)
+                staged_digest, staged_size = sha256_descriptor(
+                    read_descriptor, MAX_BUILD_ARTIFACT_BYTES)
+                require(staged_digest == expected["sha256"] and
+                        staged_size == expected["size"] and
+                        stat.S_IMODE(staged_metadata.st_mode) == 0o500,
+                        f"private {side} executable copy differs from attestation")
+                staged.unlink()
+                self.descriptors[side] = read_descriptor
+                self.identities[side] = {
+                    "command_path": f"/proc/self/fd/{read_descriptor}",
+                    "descriptor": read_descriptor,
+                    "logical_path": expected["path"],
+                    "mode": 0o500,
+                    "schema": EXECUTION_SCHEMA,
+                    "sha256": expected["sha256"],
+                    "size": expected["size"],
+                    "strategy": "private_unlinked_readonly_fd",
+                }
+            temporary.rmdir()
+            return copy.deepcopy(self.identities), dict(self.descriptors)
+        except Exception:
+            shutil.rmtree(temporary, ignore_errors=True)
+            self.__exit__(None, None, None)
+            raise
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        for descriptor in self.descriptors.values():
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        self.descriptors.clear()
+
+
+def validate_execution_identity(
+    value: object, initial: Mapping[str, Any]
+) -> dict[str, dict[str, Any]]:
+    require(isinstance(value, dict) and set(value) == {"control", "candidate"},
+            "immutable execution identity is incomplete")
+    descriptors: set[int] = set()
+    for side in ("control", "candidate"):
+        item = value.get(side)
+        expected = initial[f"{side}_executable"]
+        require(isinstance(item, dict) and set(item) == {
+            "command_path", "descriptor", "logical_path", "mode", "schema",
+            "sha256", "size", "strategy"},
+            f"immutable {side} execution identity is incomplete")
+        descriptor = item.get("descriptor")
+        require(item.get("schema") == EXECUTION_SCHEMA and
+                item.get("strategy") == "private_unlinked_readonly_fd" and
+                isinstance(descriptor, int) and not isinstance(descriptor, bool) and
+                0 <= descriptor <= 1_048_575 and descriptor not in descriptors and
+                item.get("command_path") == f"/proc/self/fd/{descriptor}" and
+                item.get("logical_path") == expected["path"] and
+                item.get("sha256") == expected["sha256"] and
+                item.get("size") == expected["size"] and item.get("mode") == 0o500,
+                f"immutable {side} execution identity differs from attestation")
+        descriptors.add(descriptor)
+    return value
+
+
 def run_bounded(
-    command: Sequence[str], environment: Mapping[str, str], timeout: float
+    command: Sequence[str], environment: Mapping[str, str], timeout: float,
+    pass_fds: Sequence[int] = (),
 ) -> tuple[int, bytes, bytes, int]:
     started = time.monotonic_ns()
     process = subprocess.Popen(
         list(command), cwd="/", env=dict(environment), stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+        pass_fds=tuple(pass_fds))
     require(process.stdout is not None and process.stderr is not None,
             "cannot capture benchmark pipes")
     selector = selectors.DefaultSelector()
@@ -1059,6 +1657,8 @@ def validate_digests(value: object) -> dict[str, str]:
         require(isinstance(digest, str) and HEX64.fullmatch(digest) is not None,
                 f"invalid workload digest {name}")
         result[name] = digest
+    require(result["original_data"] == result["recovered_originals"],
+            "recovered-original digest differs from original data")
     return result
 
 
@@ -1104,7 +1704,7 @@ def validate_result(
     require(set(parameters) == set(expected),
             "benchmark parameters have unexpected or missing fields")
     for name, expected_value in expected.items():
-        require(parameters.get(name) == expected_value,
+        require(exact_json_equal(parameters.get(name), expected_value),
                 f"benchmark parameter {name} differs: "
                 f"{parameters.get(name)!r} != {expected_value!r}")
     resolved = value.get("resolved")
@@ -1115,8 +1715,11 @@ def validate_result(
             resolved.get("profile") == "low_v1" and
             resolved.get("field") == cell.field and
             resolved.get("backend") == cell.backend and
+            type(resolved.get("thread_count")) is int and
             resolved.get("thread_count") == 1 and
+            type(resolved.get("parent_count")) is int and
             resolved.get("parent_count") == parent and
+            type(resolved.get("padded_side")) is int and
             resolved.get("padded_side") == padded,
             "benchmark resolved a different profile, field, backend, or parent")
     correctness = value.get("correctness")
@@ -1248,7 +1851,7 @@ def analyze_cell(records: Sequence[Mapping[str, Any]], cell: Cell) -> dict[str, 
                 control = normalized_median(group[control_index]["normalized"], metric)
                 candidate = normalized_median(
                     group[candidate_index]["normalized"], metric)
-                contrasts.append(math.log(control / candidate))
+                contrasts.append(math.log(control) - math.log(candidate))
             within[metric].append(contrasts)
             observations[metric].append(statistics.fmean(contrasts))
     result = {
@@ -1304,6 +1907,8 @@ def run_child(
     specification: Mapping[str, Any],
     initial_identity: Mapping[str, Any],
     reservation: Mapping[str, Any],
+    execution: Mapping[str, Mapping[str, Any]],
+    execution_descriptors: Mapping[str, int],
     output: Path,
     cpu: int,
     timeout: float,
@@ -1314,7 +1919,7 @@ def run_child(
     identity_before = snapshot()
     require(identity_before == initial_identity,
             "input identity changed before benchmark invocation")
-    executable = Path(specification[f"{implementation}_executable"])
+    executable = Path(execution[implementation]["command_path"])
     command = [
         specification["taskset"], "-c", str(cpu),
         *benchmark_arguments(executable, cell, campaign),
@@ -1322,9 +1927,15 @@ def run_child(
     stem = f"{cell.identifier}/r{round_index:02d}-{slot:02d}-{label}-{implementation}"
     stdout_path = output / "children" / f"{stem}.stdout.json"
     stderr_path = output / "children" / f"{stem}.stderr.txt"
+    children_root = output / "children"
+    children_root.mkdir(mode=0o700, exist_ok=True)
+    os.chmod(children_root, 0o700)
+    stdout_path.parent.mkdir(mode=0o700, exist_ok=True)
+    os.chmod(stdout_path.parent, 0o700)
     try:
         returncode, stdout, stderr, duration_ns = run_bounded(
-            command, CHILD_ENVIRONMENT, timeout)
+            command, CHILD_ENVIRONMENT, timeout,
+            (execution_descriptors[implementation],))
     except BoundedChildError as error:
         write_bytes_exclusive(stdout_path, error.stdout)
         write_bytes_exclusive(stderr_path, error.stderr)
@@ -1382,7 +1993,9 @@ def campaign_cells(
     require(len({cell.identifier for cell in cells}) == len(cells),
             "campaign cell identifiers are not unique")
     if allow_self_test:
-        require(campaign.get("mode") == "self_test" and len(cells) == 1,
+        require((campaign.get("mode") == "self_test" and len(cells) == 1) or
+                (campaign.get("mode") == "self_test_full" and
+                 tuple(cells) == FIXED_CELLS),
                 "self-test campaign identity is invalid")
     else:
         require(campaign.get("mode") == "authoritative" and
@@ -1401,19 +2014,27 @@ def validate_campaign(
         "rounds", "sequence", "statistics", "threads", "timeout_seconds", "warmup",
     }
     require(set(value) == expected_keys, "campaign has unexpected or missing fields")
-    require(value.get("rounds") == ROUNDS and
+    require(isinstance(value.get("rounds"), int) and
+            not isinstance(value.get("rounds"), bool) and
+            value.get("rounds") == ROUNDS and
             value.get("sequence") == [list(item) for item in SEQUENCE],
             "campaign does not use five A1/B1/B2/A2 rounds")
-    require(value.get("batch") == 1 and value.get("threads") == 1 and
+    require(type(value.get("batch")) is int and value.get("batch") == 1 and
+            type(value.get("threads")) is int and value.get("threads") == 1 and
             value.get("child_environment") == CHILD_ENVIRONMENT,
             "campaign is not a strict one-stripe, one-thread run")
-    for name, minimum in (("iterations", 5), ("reuse", 1), ("warmup", 1)):
+    for name, minimum, maximum in (
+        ("iterations", 5, MAX_ITERATIONS), ("reuse", 1, MAX_REUSE),
+        ("warmup", 1, MAX_WARMUP),
+    ):
         item = value.get(name)
-        require(isinstance(item, int) and not isinstance(item, bool) and item >= minimum,
+        require(isinstance(item, int) and not isinstance(item, bool) and
+                minimum <= item <= maximum,
                 f"campaign {name} is invalid")
     timeout = value.get("timeout_seconds")
     require(isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and
-            math.isfinite(timeout) and timeout > 0,
+            0 < timeout <= MAX_TIMEOUT_SECONDS and
+            math.isfinite(float(timeout)),
             "campaign timeout is invalid")
     require(value.get("statistics") == statistics_policy(),
             "campaign statistics or promotion policy was edited")
@@ -1425,7 +2046,9 @@ def validate_campaign(
             cpu != sibling and isinstance(allowed, list) and
             allowed == sorted(set(allowed)) and
             all(isinstance(item, int) and not isinstance(item, bool) and item >= 0
-                for item in allowed) and cpu in allowed and sibling in allowed and
+                and item <= SUPPORT.MAX_CPU_ID for item in allowed) and
+            len(allowed) <= SUPPORT.MAX_CPU_LIST_ENTRIES and
+            cpu in allowed and sibling in allowed and
             bool(set(allowed) - {cpu, sibling}),
             "campaign CPU pair, allowed set, or housekeeping set is invalid")
     return value, campaign_cells(value, allow_self_test)
@@ -1435,7 +2058,8 @@ def validate_input_specification(value: object) -> dict[str, str]:
     expected = {
         "candidate_archive", "candidate_build_dir", "candidate_executable",
         "candidate_source_root", "control_archive", "control_build_dir",
-        "control_executable", "control_source_root", "ldd", "runner", "taskset",
+        "control_executable", "control_source_root", "git", "ldd", "python",
+        "runner", "taskset",
     }
     require(isinstance(value, dict) and set(value) == expected and
             all(isinstance(item, str) and item for item in value.values()),
@@ -1459,6 +2083,7 @@ def validate_invocations(
     specification: Mapping[str, Any],
     initial: Mapping[str, Any],
     reservation: Mapping[str, Any],
+    execution: Mapping[str, Mapping[str, Any]],
     output: Path,
     complete: bool,
 ) -> list[dict[str, Any]]:
@@ -1483,22 +2108,27 @@ def validate_invocations(
             invocation.get("cell_id"), invocation.get("round"), invocation.get("slot"),
             invocation.get("label"), invocation.get("implementation"),
         )
-        require(observed == sequence,
+        require(type(invocation.get("round")) is int and
+                type(invocation.get("slot")) is int and
+                observed == sequence,
                 f"invocation order/relabel mismatch: {observed!r} != {sequence!r}")
         cell = cell_by_id[sequence[0]]
         implementation = sequence[4]
         expected_command = [
             specification["taskset"], "-c", str(cpu),
             *benchmark_arguments(
-                Path(specification[f"{implementation}_executable"]), cell, campaign),
+                Path(execution[implementation]["command_path"]), cell, campaign),
         ]
         require(invocation.get("command") == expected_command and
                 invocation.get("environment") == CHILD_ENVIRONMENT and
+                type(invocation.get("pinned_cpu")) is int and
                 invocation.get("pinned_cpu") == cpu and
+                type(invocation.get("returncode")) is int and
                 invocation.get("returncode") == 0,
                 "invocation execution contract was edited")
         duration = invocation.get("duration_ns")
-        require(isinstance(duration, int) and not isinstance(duration, bool) and duration > 0,
+        require(isinstance(duration, int) and not isinstance(duration, bool) and
+                0 < duration <= int((campaign["timeout_seconds"] + 6.0) * 1e9),
                 "invocation duration is invalid")
         initial_digest = sha256_bytes(canonical_bytes(initial))
         require(invocation.get("identity_before_digest") == initial_digest and
@@ -1506,8 +2136,10 @@ def validate_invocations(
                 invocation.get("reservation_before") == reservation and
                 invocation.get("reservation_after") == reservation,
                 "invocation source/build/reservation identity was edited")
-        stdout_path = verify_artifact(output, invocation.get("stdout"), "stdout")
-        verify_artifact(output, invocation.get("stderr"), "stderr")
+        stdout_path = verify_artifact(
+            output, invocation.get("stdout"), "stdout", MAX_STDOUT_BYTES)
+        verify_artifact(
+            output, invocation.get("stderr"), "stderr", MAX_STDERR_BYTES)
         referenced_artifacts.extend((invocation["stdout"], invocation["stderr"]))
         parsed = read_json_limited(stdout_path, "retained benchmark stdout", MAX_STDOUT_BYTES)
         require(parsed == invocation.get("result"),
@@ -1540,6 +2172,7 @@ def validate_raw(
     expected_keys = {
         "analysis", "campaign", "created_utc", "digest", "host_final", "host_initial",
         "identities_final", "identities_initial", "input_specification", "invocations",
+        "execution",
         "isolation", "reservation", "schema", "validity_is_independent_of_speed",
     }
     require(set(raw) == expected_keys and raw.get("schema") == RAW_SCHEMA and
@@ -1564,9 +2197,10 @@ def validate_raw(
     if check_current_inputs:
         require(input_snapshot(specification) == initial,
                 "current source/build/artifact closure differs from retained evidence")
+    execution = validate_execution_identity(raw.get("execution"), initial)
     invocations = validate_invocations(
         raw.get("invocations"), cells, campaign, specification, initial,
-        reservation, output, complete=True)
+        reservation, execution, output, complete=True)
     total_duration = sum(item["duration_ns"] for item in invocations)
     elapsed = isolation["after"]["monotonic_ns"] - isolation["before"]["monotonic_ns"]
     require(elapsed >= total_duration,
@@ -1580,15 +2214,52 @@ def retained_child_records(output: Path) -> list[dict[str, Any]]:
     root = output / "children"
     if not root.exists():
         return []
+    root_metadata = os.lstat(root)
+    require(stat.S_ISDIR(root_metadata.st_mode) and
+            root_metadata.st_uid == os.getuid() and
+            stat.S_IMODE(root_metadata.st_mode) == 0o700,
+            "children artifact root is not an owned mode-0700 directory")
     records: list[dict[str, Any]] = []
-    for path in sorted(root.rglob("*")):
-        metadata = os.lstat(path)
-        if stat.S_ISDIR(metadata.st_mode):
-            continue
-        require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1,
-                f"unexpected retained artifact type: {path}")
-        records.append(artifact_record(output, path))
-    return records
+    directories: set[str] = set()
+    stack = [root]
+    entries = 0
+    while stack:
+        directory = stack.pop()
+        with os.scandir(directory) as iterator:
+            children = sorted(iterator, key=lambda entry: entry.name)
+        for entry in children:
+            entries += 1
+            require(entries <= MAX_INVENTORY_ENTRIES,
+                    "child artifact inventory contains too many entries")
+            path = Path(entry.path)
+            metadata = entry.stat(follow_symlinks=False)
+            relative = str(path.relative_to(root))
+            if stat.S_ISDIR(metadata.st_mode):
+                require(metadata.st_uid == os.getuid() and
+                        stat.S_IMODE(metadata.st_mode) == 0o700,
+                        f"child artifact directory is not owned mode-0700: {path}")
+                directories.add(relative)
+                stack.append(path)
+                continue
+            require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1,
+                    f"unexpected retained artifact type: {path}")
+            if path.name.endswith(".stdout.json"):
+                limit = MAX_STDOUT_BYTES
+            elif path.name.endswith(".stderr.txt"):
+                limit = MAX_STDERR_BYTES
+            else:
+                raise EvidenceError(f"unexpected retained artifact name: {path}")
+            records.append(artifact_record(output, path, limit))
+    expected_directories: set[str] = set()
+    for record in records:
+        relative = Path(record["path"]).relative_to("children")
+        parent = relative.parent
+        while parent != Path("."):
+            expected_directories.add(str(parent))
+            parent = parent.parent
+    require(directories == expected_directories,
+            "child artifact tree contains an empty or unbound directory")
+    return sorted(records, key=lambda item: item["path"])
 
 
 def validate_failure(
@@ -1598,6 +2269,7 @@ def validate_failure(
     expected_keys = {
         "campaign", "created_utc", "digest", "error", "error_type", "host_initial",
         "identities_initial", "input_specification", "invocations", "isolation",
+        "execution",
         "pair_lease", "reservation", "retained_files", "schema", "status", "traceback",
         "valid",
     }
@@ -1630,16 +2302,22 @@ def validate_failure(
                 "failure isolation uses another pair lease")
     invocations = failure.get("invocations")
     initial = failure.get("identities_initial")
+    execution = failure.get("execution")
     if invocations:
         require(isinstance(initial, dict) and reservation is not None,
                 "failed invocation prefix lacks source/build/reservation identity")
+        validated_execution = validate_execution_identity(execution, initial)
         validate_invocations(
             invocations, cells, campaign, specification, initial,
-            reservation, output, complete=False)
+            reservation, validated_execution, output, complete=False)
     else:
         require(invocations == [], "failure invocation prefix is invalid")
         require(initial is None or isinstance(initial, dict),
                 "failure initial identity is invalid")
+        require(execution is None or
+                (isinstance(initial, dict) and
+                 validate_execution_identity(execution, initial)),
+                "failure execution identity is invalid")
     retained = failure.get("retained_files")
     require(isinstance(retained, list), "failure retained file list is invalid")
     seen: set[str] = set()
@@ -1670,6 +2348,16 @@ def raw_file_identity(path: Path, payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def manifest_exit_status(
+    expected_status: str, check_current_inputs: bool, allow_self_test: bool
+) -> int:
+    require(expected_status in {"passed", "policy_failed"},
+            "manifest policy status is invalid")
+    if not check_current_inputs and not allow_self_test:
+        return 1
+    return 0 if expected_status == "passed" else 2
+
+
 def validate_manifest(
     manifest: object,
     output: Path,
@@ -1679,7 +2367,7 @@ def validate_manifest(
     manifest = verify_signature(manifest, "manifest")
     expected_keys = {
         "analysis", "campaign", "created_utc", "digest", "host", "identities",
-        "isolation", "raw", "reservation", "schema", "status", "valid",
+        "isolation", "raw", "reservation", "schema", "status", "valid", "execution",
         "validity_is_independent_of_speed",
     }
     require(set(manifest) == expected_keys and manifest.get("schema") == MANIFEST_SCHEMA and
@@ -1705,6 +2393,7 @@ def validate_manifest(
         ("campaign", "campaign"), ("host", "host_initial"),
         ("identities", "identities_initial"), ("isolation", "isolation"),
         ("reservation", "reservation"), ("analysis", "analysis"),
+        ("execution", "execution"),
     ):
         require(manifest.get(manifest_name) == raw.get(raw_name),
                 f"manifest {manifest_name} differs from the raw bundle")
@@ -1716,7 +2405,8 @@ def validate_manifest(
     require(sorted(path.name for path in output.iterdir()) ==
             ["children", "manifest.json", "raw.json"],
             "successful output contains unbound top-level artifacts")
-    return manifest, 0 if expected_status == "passed" else 2
+    return manifest, manifest_exit_status(
+        expected_status, check_current_inputs, allow_self_test)
 
 
 def fsync_directory(path: Path) -> None:
@@ -1796,6 +2486,8 @@ def publish_failure(
 def authoritative_specification(options: argparse.Namespace) -> dict[str, str]:
     taskset = options.taskset.resolve(strict=True)
     ldd = options.ldd.resolve(strict=True)
+    git = Path("/usr/bin/git").resolve(strict=True)
+    python = Path(sys.executable).resolve(strict=True)
     require(taskset == Path("/usr/bin/taskset").resolve(strict=True),
             "authoritative evidence requires /usr/bin/taskset")
     require(ldd == Path("/usr/bin/ldd").resolve(strict=True),
@@ -1809,7 +2501,9 @@ def authoritative_specification(options: argparse.Namespace) -> dict[str, str]:
         "control_build_dir": str(options.control_build_dir.resolve(strict=True)),
         "control_executable": str(options.control.resolve(strict=True)),
         "control_source_root": str(options.control_source_root.resolve(strict=True)),
+        "git": str(git),
         "ldd": str(ldd),
+        "python": str(python),
         "runner": str(Path(__file__).resolve(strict=True)),
         "taskset": str(taskset),
     }
@@ -1817,13 +2511,24 @@ def authoritative_specification(options: argparse.Namespace) -> dict[str, str]:
     return specification
 
 
+def validate_exact_affinity(expected: set[int]) -> None:
+    require(expected and set(os.sched_getaffinity(0)) == expected,
+            "coordinator affinity left the exact housekeeping set")
+
+
 def run_campaign(options: argparse.Namespace) -> int:
-    require(options.iterations >= 5, "--iterations must be at least 5")
-    require(options.warmup >= 1 and options.reuse >= 1,
-            "--warmup and --reuse must be positive")
-    require(math.isfinite(options.timeout) and options.timeout > 0,
-            "--timeout must be positive and finite")
-    require(options.cpu >= 0 and options.reserved_sibling >= 0 and
+    require(type(options.iterations) is int and
+            5 <= options.iterations <= MAX_ITERATIONS,
+            "--iterations is out of bounds")
+    require(type(options.warmup) is int and 1 <= options.warmup <= MAX_WARMUP and
+            type(options.reuse) is int and 1 <= options.reuse <= MAX_REUSE,
+            "--warmup or --reuse is out of bounds")
+    require(isinstance(options.timeout, float) and math.isfinite(options.timeout) and
+            0 < options.timeout <= MAX_TIMEOUT_SECONDS,
+            "--timeout must be positive, finite, and bounded")
+    require(type(options.cpu) is int and type(options.reserved_sibling) is int and
+            0 <= options.cpu <= SUPPORT.MAX_CPU_ID and
+            0 <= options.reserved_sibling <= SUPPORT.MAX_CPU_ID and
             options.cpu != options.reserved_sibling,
             "benchmark CPU pair is invalid")
     allowed = set(os.sched_getaffinity(0))
@@ -1859,6 +2564,9 @@ def run_campaign(options: argparse.Namespace) -> int:
     pair_lease: dict[str, Any] | None = None
     initial: dict[str, Any] | None = None
     isolation: dict[str, Any] | None = None
+    execution_guard: ImmutableExecutables | None = None
+    execution: dict[str, dict[str, Any]] | None = None
+    execution_descriptors: dict[str, int] = {}
     invocations: list[dict[str, Any]] = []
     try:
         allowed_checked, housekeeping = SUPPORT.validate_topology(
@@ -1876,9 +2584,13 @@ def run_campaign(options: argparse.Namespace) -> int:
             def validate_guards() -> None:
                 pair_guard.validate_current()
                 reservation_guard.validate_current()
+                validate_exact_affinity(housekeeping)
 
             validate_guards()
             initial = input_snapshot(specification)
+            execution_guard = ImmutableExecutables(stage, specification, initial)
+            execution, execution_descriptors = execution_guard.__enter__()
+            validate_execution_identity(execution, initial)
 
             def snapshot() -> Mapping[str, Any]:
                 return input_snapshot(specification)
@@ -1892,7 +2604,8 @@ def run_campaign(options: argparse.Namespace) -> int:
                         for slot, (label, implementation) in enumerate(SEQUENCE):
                             invocation = run_child(
                                 implementation, label, cell, round_index, slot,
-                                campaign, specification, initial, reservation, stage,
+                                campaign, specification, initial, reservation,
+                                execution, execution_descriptors, stage,
                                 options.cpu, options.timeout, snapshot, validate_guards)
                             validate_guards()
                             invocations.append(invocation)
@@ -1922,6 +2635,7 @@ def run_campaign(options: argparse.Namespace) -> int:
                 "host_initial": host_initial,
                 "identities_final": final,
                 "identities_initial": initial,
+                "execution": execution,
                 "input_specification": specification,
                 "invocations": invocations,
                 "isolation": isolation,
@@ -1940,6 +2654,7 @@ def run_campaign(options: argparse.Namespace) -> int:
                 "created_utc": utc_now(),
                 "host": host_initial,
                 "identities": initial,
+                "execution": execution,
                 "isolation": isolation,
                 "raw": raw_file_identity(raw_path, raw),
                 "reservation": reservation,
@@ -1951,6 +2666,7 @@ def run_campaign(options: argparse.Namespace) -> int:
             write_json_exclusive(stage / "manifest.json", manifest)
             validate_guards()
             result = publish_manifest(stage, output, manifest)
+            validate_guards()
             stage = Path()
             print(output / "manifest.json")
             return result
@@ -1970,6 +2686,7 @@ def run_campaign(options: argparse.Namespace) -> int:
                 "error_type": type(error).__name__[:256],
                 "host_initial": host_initial,
                 "identities_initial": initial,
+                "execution": execution,
                 "input_specification": specification,
                 "invocations": invocations,
                 "isolation": isolation,
@@ -1993,6 +2710,8 @@ def run_campaign(options: argparse.Namespace) -> int:
             raise
         raise EvidenceError(f"campaign failed: {type(error).__name__}: {error}") from error
     finally:
+        if execution_guard is not None:
+            execution_guard.__exit__(None, None, None)
         try:
             os.sched_setaffinity(0, original_affinity)
         except OSError:
@@ -2007,6 +2726,11 @@ def verify_campaign(options: argparse.Namespace) -> int:
     _, status = validate_manifest(
         manifest, manifest_path.parent,
         check_current_inputs=not options.no_current_input_check)
+    if options.no_current_input_check:
+        print(
+            "low-encode-copy bundle is structurally consistent only; live input "
+            "provenance was not rebound, so this is not authoritative evidence")
+        return 1
     if status == 0:
         print("low-encode-copy evidence verified and promotion policy passed")
     else:
@@ -2088,16 +2812,16 @@ def synthetic_isolation(
 
 
 def self_test_campaign(
-    cell: Cell, cpu: int, sibling: int, allowed: set[int]
+    cells: Sequence[Cell], cpu: int, sibling: int, allowed: set[int]
 ) -> dict[str, Any]:
     return {
         "allowed_cpu_set_at_launch": sorted(allowed),
         "batch": 1,
         "benchmark_cpu": cpu,
-        "cells": [asdict(cell)],
+        "cells": [asdict(cell) for cell in cells],
         "child_environment": dict(CHILD_ENVIRONMENT),
         "iterations": 5,
-        "mode": "self_test",
+        "mode": "self_test" if len(cells) == 1 else "self_test_full",
         "reserved_sibling": sibling,
         "reuse": 2,
         "rounds": ROUNDS,
@@ -2115,11 +2839,12 @@ def build_self_test_bundle(
     cpu: int,
     sibling: int,
     allowed: set[int],
+    cells: Sequence[Cell] = (FIXED_CELLS[0],),
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     output = root
     output.mkdir(mode=0o700)
-    cell = copy.deepcopy(FIXED_CELLS[0])
-    campaign = self_test_campaign(cell, cpu, sibling, allowed)
+    retained_cells = tuple(copy.deepcopy(tuple(cells)))
+    campaign = self_test_campaign(retained_cells, cpu, sibling, allowed)
     validate_campaign(campaign, allow_self_test=True)
     control = root.parent / "control-mock"
     specification = {
@@ -2131,27 +2856,37 @@ def build_self_test_bundle(
         "control_build_dir": str(root.parent / "control-build"),
         "control_executable": str(control),
         "control_source_root": str(root.parent / "control-source"),
+        "git": str(Path("/usr/bin/git").resolve(strict=True)),
         "ldd": "/usr/bin/ldd",
+        "python": str(Path(sys.executable).resolve(strict=True)),
         "runner": str(Path(__file__).resolve()),
         "taskset": "/usr/bin/taskset",
     }
-    initial = {"mock_identity": "stable"}
+    initial = {
+        "mock_identity": "stable",
+        "control_executable": SUPPORT.artifact_identity(control, "executable"),
+        "candidate_executable": SUPPORT.artifact_identity(candidate, "executable"),
+    }
     reservation = synthetic_reservation(root.parent, cpu, sibling)
     invocations: list[dict[str, Any]] = []
     snapshot = lambda: initial
     validate_guards = lambda: None
-    for round_index in range(ROUNDS):
-        for slot, (label, implementation) in enumerate(SEQUENCE):
-            invocations.append(run_child(
-                implementation, label, cell, round_index, slot, campaign,
-                specification, initial, reservation, output, cpu, 10.0,
-                snapshot, validate_guards))
+    execution_guard = ImmutableExecutables(output, specification, initial)
+    with execution_guard as (execution, execution_descriptors):
+        for cell in retained_cells:
+            for round_index in range(ROUNDS):
+                for slot, (label, implementation) in enumerate(SEQUENCE):
+                    invocations.append(run_child(
+                        implementation, label, cell, round_index, slot, campaign,
+                        specification, initial, reservation, execution,
+                        execution_descriptors, output, cpu, 10.0,
+                        snapshot, validate_guards))
     pair_lease = synthetic_pair_lease(cpu, sibling)
     isolation = synthetic_isolation(
         cpu, sibling, pair_lease,
         sum(item["duration_ns"] for item in invocations) + 1)
     host = SUPPORT.host_identity(cpu, sibling, allowed)
-    analysis = analyze(invocations, (cell,))
+    analysis = analyze(invocations, retained_cells)
     raw = signed({
         "analysis": analysis,
         "campaign": campaign,
@@ -2160,6 +2895,7 @@ def build_self_test_bundle(
         "host_initial": host,
         "identities_final": initial,
         "identities_initial": initial,
+        "execution": execution,
         "input_specification": specification,
         "invocations": invocations,
         "isolation": isolation,
@@ -2177,6 +2913,7 @@ def build_self_test_bundle(
         "created_utc": "2000-01-01T00:00:00Z",
         "host": host,
         "identities": initial,
+        "execution": execution,
         "isolation": isolation,
         "raw": raw_file_identity(raw_path, raw),
         "reservation": reservation,
@@ -2210,6 +2947,8 @@ def resign(value: Mapping[str, Any]) -> dict[str, Any]:
 
 def run_self_test(_options: argparse.Namespace) -> int:
     validate_support_contract()
+    for cell in FIXED_CELLS:
+        validate_cell(cell)
     cpu, sibling, allowed = find_self_test_pair()
     with tempfile.TemporaryDirectory(prefix="leopard2-low-copy-selftest-") as temporary:
         root = Path(temporary)
@@ -2218,22 +2957,41 @@ def run_self_test(_options: argparse.Namespace) -> int:
         control = root / "control-mock"
         fast = root / "candidate-fast-mock"
         slow = root / "candidate-slow-mock"
-        for destination in (control, fast, slow):
-            shutil.copy2(mock, destination)
+        for destination, role in (
+            (control, "control"), (fast, "candidate-fast"),
+            (slow, "candidate-slow"),
+        ):
+            destination.write_bytes(
+                mock.read_bytes() + f"\n# MOCK_ROLE={role}\n".encode("ascii"))
             os.chmod(destination, 0o700)
         fast_raw, fast_manifest = build_self_test_bundle(
             root / "fast", fast, cpu, sibling, allowed)
         slow_raw, slow_manifest = build_self_test_bundle(
             root / "slow", slow, cpu, sibling, allowed)
+        full_raw, full_manifest = build_self_test_bundle(
+            root / "full-matrix", fast, cpu, sibling, allowed,
+            cells=FIXED_CELLS)
         require(fast_raw["analysis"]["policy"]["passed"] is True and
                 slow_raw["analysis"]["policy"]["passed"] is False,
                 "mock pass/fail policy separation failed")
+        require(len(full_raw["invocations"]) ==
+                len(FIXED_CELLS) * ROUNDS * len(SEQUENCE) and
+                full_raw["analysis"]["policy"]["passed"] is True,
+                "full 24-cell mock campaign did not execute or pass")
         _, fast_status = validate_manifest(
             fast_manifest, root / "fast", False, allow_self_test=True)
         _, slow_status = validate_manifest(
             slow_manifest, root / "slow", False, allow_self_test=True)
+        _, full_status = validate_manifest(
+            full_manifest, root / "full-matrix", False, allow_self_test=True)
         require((fast_status, slow_status) == (0, 2),
                 "pass/policy-failure exit semantics are not distinct")
+        require(full_status == 0, "full mock matrix has the wrong status")
+        require(manifest_exit_status("passed", False, False) == 1 and
+                manifest_exit_status("policy_failed", False, False) == 1 and
+                manifest_exit_status("passed", True, False) == 0 and
+                manifest_exit_status("policy_failed", True, False) == 2,
+                "portable replay was not downgraded to non-authoritative status")
 
         failed_root = root / "failed"
         failed_root.mkdir(mode=0o700)
@@ -2242,6 +3000,7 @@ def run_self_test(_options: argparse.Namespace) -> int:
             "created_utc": "2000-01-01T00:00:00Z",
             "error": "intentional self-test failure",
             "error_type": "EvidenceError",
+            "execution": None,
             "host_initial": None,
             "identities_initial": None,
             "input_specification": fast_raw["input_specification"],
@@ -2261,6 +3020,8 @@ def run_self_test(_options: argparse.Namespace) -> int:
         mutations: list[tuple[str, Callable[[dict[str, Any]], None]]] = [
             ("command", lambda value: value["invocations"][0]["command"].__setitem__(
                 2, str(sibling))),
+            ("boolean round", lambda value: value["invocations"][0].__setitem__(
+                "round", False)),
             ("duration", lambda value: value["invocations"][0].__setitem__(
                 "duration_ns", 0)),
             ("wire digest", lambda value: value["invocations"][0]["result"]
@@ -2303,11 +3064,78 @@ def run_self_test(_options: argparse.Namespace) -> int:
             lambda: parse_json_bytes(b"[" * 64 + b"0" + b"]" * 64,
                                      "deep JSON"),
             "bounded JSON depth")
+        huge_integer = ("{\"value\":" + "9" * 100 + "}").encode("ascii")
+        expect_evidence_error(
+            lambda: parse_json_bytes(huge_integer, "oversized integer"),
+            "bounded JSON integer")
+        expect_evidence_error(
+            lambda: SUPPORT.parse_cpu_list("0-1000000000"),
+            "bounded CPU range")
+        bad_cell = Cell(**{
+            **asdict(FIXED_CELLS[0]), "losses": True,
+        })
+        expect_evidence_error(lambda: validate_cell(bad_cell), "boolean cell integer")
+        bad_reservation = {
+            "benchmark_cpu": False,
+            "nonce": "f" * 32,
+            "owner": "self-test",
+            "reserved_sibling": 16,
+            "schema": RESERVATION_SCHEMA,
+            "status": "held",
+        }
+        expect_evidence_error(
+            lambda: HardenedReservation.parse(
+                canonical_bytes(bad_reservation), 0, 16),
+            "boolean reservation CPU")
+        bad_lease = synthetic_pair_lease(0, 16)
+        bad_lease["payload"]["cpus"][0] = False
+        bad_lease["sha256"] = sha256_bytes(canonical_bytes(bad_lease["payload"]))
+        expect_evidence_error(
+            lambda: SUPPORT.validate_pair_lease_identity(
+                bad_lease, 0, 16), "boolean pair-lease CPU")
+        expect_evidence_error(
+            lambda: validate_digests({
+                "algorithm": "fnv1a64", "original_data": "0" * 16,
+                "transmitted_parity": "1" * 16,
+                "recovered_originals": "2" * 16,
+            }), "recovery digest mismatch")
+        expect_evidence_error(
+            lambda: validate_relinked_executable_sha("0" * 64, "1" * 64, "mock"),
+            "stale executable relink")
+        control_policy = {
+            "compiler": {"sha256": "0" * 64},
+            "compiler_version_stdout": {"text": "mock"},
+            "validated_cache": {},
+            "strict_compile_recipes": {"mock.cpp": ["-O3"]},
+            "strict_link_provenance": {
+                "normalized_executable_link": ["-O3"],
+                "external_link_inputs": [], "ranlib": {"sha256": "0" * 64},
+            },
+        }
+        candidate_policy = copy.deepcopy(control_policy)
+        candidate_policy["strict_compile_recipes"]["mock.cpp"].append("-fno-inline")
+        expect_evidence_error(
+            lambda: validate_equal_build_policy(control_policy, candidate_policy),
+            "mismatched effective compile flags")
         symlink = root / "artifact-link"
         symlink.symlink_to(root / "fast" / "raw.json")
         expect_evidence_error(
             lambda: safe_evidence_path(root, "artifact-link"),
             "retained artifact symlink")
+        empty = root / "fast" / "children" / "unbound-empty-directory"
+        empty.mkdir(mode=0o700)
+        expect_evidence_error(
+            lambda: validate_manifest(
+                fast_manifest, root / "fast", False, allow_self_test=True),
+            "unbound empty artifact directory")
+        empty.rmdir()
+        oversized_stderr = root / "oversized.stderr.txt"
+        write_bytes_exclusive(oversized_stderr, b"x" * (MAX_STDERR_BYTES + 1))
+        oversized_record = artifact_record(root, oversized_stderr)
+        expect_evidence_error(
+            lambda: verify_artifact(
+                root, oversized_record, "oversized stderr", MAX_STDERR_BYTES),
+            "retained stderr cap")
         try:
             run_bounded(
                 ("/usr/bin/python3", "-c",
@@ -2355,6 +3183,40 @@ def run_self_test(_options: argparse.Namespace) -> int:
         with first:
             expect_evidence_error(lambda: second.__enter__(), "pair lease overlap")
 
+        immutable_root = root / "immutable"
+        immutable_root.mkdir(mode=0o700)
+        immutable_control = immutable_root / "control"
+        immutable_candidate = immutable_root / "candidate"
+        for destination in (immutable_control, immutable_candidate):
+            shutil.copy2("/bin/true", destination)
+            os.chmod(destination, 0o700)
+        immutable_initial = {
+            "control_executable": SUPPORT.artifact_identity(
+                immutable_control, "executable"),
+            "candidate_executable": SUPPORT.artifact_identity(
+                immutable_candidate, "executable"),
+        }
+        immutable_specification = {
+            "control_executable": str(immutable_control),
+            "candidate_executable": str(immutable_candidate),
+        }
+        immutable_guard = ImmutableExecutables(
+            immutable_root, immutable_specification, immutable_initial)
+        with immutable_guard as (immutable_execution, immutable_descriptors):
+            shutil.copy2(mock, immutable_candidate)
+            os.chmod(immutable_candidate, 0o700)
+            returncode, stdout, stderr, _ = run_bounded(
+                ("/usr/bin/taskset", "-c", str(cpu),
+                 immutable_execution["candidate"]["command_path"]),
+                CHILD_ENVIRONMENT, 5.0,
+                (immutable_descriptors["candidate"],))
+            require(returncode == 0 and stdout == b"" and stderr == b"",
+                    "immutable executable descriptor followed a transient path replacement")
+
+        expect_evidence_error(
+            lambda: validate_exact_affinity(set(allowed) | {SUPPORT.MAX_CPU_ID}),
+            "housekeeping affinity mutation")
+
         publish_root = root / "publish"
         publish_root.mkdir(mode=0o700)
         stage = publish_root / "stage"
@@ -2365,7 +3227,7 @@ def run_self_test(_options: argparse.Namespace) -> int:
         another.mkdir(mode=0o700)
         expect_evidence_error(
             lambda: publish_no_replace(another, final), "no-replace publication")
-    print("low-encode-copy runner self-test passed: mock ABBA, policy exits, 19 adversarial gates")
+    print("low-encode-copy runner self-test passed: full 24-cell mock ABBA and hardened adversarial gates")
     return 0
 
 
@@ -2445,10 +3307,13 @@ def main(arguments: Sequence[str] | None = None) -> int:
     try:
         options = parser().parse_args(arguments)
         return int(options.function(options))
+    except SystemExit as error:
+        return 0 if error.code == 0 else 1
     except EvidenceError as error:
         print(f"low-encode-copy evidence error: {error}", file=sys.stderr)
         return 1
     except (OSError, ValueError, TypeError, KeyError, AttributeError,
+            OverflowError, RecursionError, MemoryError, subprocess.SubprocessError,
             json.JSONDecodeError) as error:
         print(
             f"low-encode-copy evidence input error: {type(error).__name__}: {error}",

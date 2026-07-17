@@ -45,6 +45,9 @@ CPU_STAT_FIELDS = (
 )
 CPU_STAT_IDLE_FIELDS = ("idle", "iowait")
 MAX_SIBLING_NONIDLE_JIFFIES = 0
+MAX_CPU_ID = 1_048_575
+MAX_CPU_LIST_ENTRIES = 4096
+MAX_CPU_LIST_TEXT_BYTES = 65_536
 ROUNDS = 3
 ORDER = ("baseline", "candidate", "candidate", "baseline")
 FNV_OFFSET = 14695981039346656037
@@ -198,22 +201,25 @@ def run_checked(
 
 def git_identity(root: Path, expected_commit: str, detached: bool) -> dict[str, Any]:
     root = root.resolve(strict=True)
-    head = run_checked(("git", "-C", str(root), "rev-parse", "HEAD")).decode().strip()
+    git = Path("/usr/bin/git").resolve(strict=True)
+    head = run_checked((str(git), "-C", str(root), "rev-parse", "HEAD")) \
+        .decode().strip()
     require(head == expected_commit,
             f"source {root} is {head}, expected {expected_commit}")
-    tree = run_checked(("git", "-C", str(root), "rev-parse", "HEAD^{tree}")) \
+    tree = run_checked((str(git), "-C", str(root), "rev-parse", "HEAD^{tree}")) \
         .decode().strip()
     status = run_checked((
-        "git", "-C", str(root), "status", "--porcelain=v1",
+        str(git), "-C", str(root), "status", "--porcelain=v1",
         "--untracked-files=normal")).decode()
     require(status == "", f"source {root} is not clean: {status!r}")
     symbolic = subprocess.run(
-        ("git", "-C", str(root), "symbolic-ref", "-q", "HEAD"),
+        (str(git), "-C", str(root), "symbolic-ref", "-q", "HEAD"),
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False, timeout=30)
     is_detached = symbolic.returncode != 0
     if detached:
         require(is_detached, f"exact-main source {root} is not detached")
-    tracked = run_checked(("git", "-C", str(root), "ls-tree", "-r", "-z", "HEAD"))
+    tracked = run_checked((
+        str(git), "-C", str(root), "ls-tree", "-r", "-z", "HEAD"))
     return {
         "path": str(root),
         "head": head,
@@ -628,16 +634,40 @@ def input_snapshot(specification: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def parse_cpu_list(text: str) -> set[int]:
+    require(isinstance(text, str), "CPU list is not text")
+    try:
+        encoded = text.encode("ascii", errors="strict")
+    except UnicodeEncodeError as error:
+        raise EvidenceError("CPU list is not ASCII text") from error
+    require(len(encoded) <= MAX_CPU_LIST_TEXT_BYTES,
+            "CPU list is not bounded ASCII text")
+    max_digits = len(str(MAX_CPU_ID))
     result: set[int] = set()
     for component in text.strip().split(","):
         if not component:
             continue
         if "-" in component:
-            first, last = (int(item) for item in component.split("-", 1))
-            require(first <= last, f"invalid CPU range {component!r}")
+            require(re.fullmatch(r"[0-9]+-[0-9]+", component) is not None,
+                    f"invalid CPU range {component!r}")
+            bounds = component.split("-", 1)
+            require(all(len(item) <= max_digits for item in bounds),
+                    f"CPU range is out of bounds: {component!r}")
+            first, last = (int(item) for item in bounds)
+            require(0 <= first <= last <= MAX_CPU_ID and
+                    last - first + 1 <= MAX_CPU_LIST_ENTRIES,
+                    f"CPU range is out of bounds: {component!r}")
             result.update(range(first, last + 1))
         else:
-            result.add(int(component))
+            require(re.fullmatch(r"[0-9]+", component) is not None,
+                    f"invalid CPU identity {component!r}")
+            require(len(component) <= max_digits,
+                    f"CPU identity is out of bounds: {component!r}")
+            value = int(component)
+            require(0 <= value <= MAX_CPU_ID,
+                    f"CPU identity is out of bounds: {component!r}")
+            result.add(value)
+        require(len(result) <= MAX_CPU_LIST_ENTRIES,
+                "CPU list contains too many entries")
     return result
 
 
@@ -775,7 +805,8 @@ def cpu_stat_snapshot(cpu: int) -> dict[str, Any]:
 def cpu_stat_delta(before: Mapping[str, Any], after: Mapping[str, Any]) -> dict[str, Any]:
     require(isinstance(before, dict) and isinstance(after, dict) and
             before.get("cpu") == after.get("cpu") and
-            isinstance(before.get("cpu"), int),
+            isinstance(before.get("cpu"), int) and
+            not isinstance(before.get("cpu"), bool),
             "CPU stat snapshots refer to different CPUs")
     before_fields = before.get("fields")
     after_fields = after.get("fields")
@@ -972,6 +1003,9 @@ def validate_pair_lease_identity(
     payload = value.get("payload")
     require(isinstance(payload, dict) and set(payload) == {"cpus", "schema", "uid"} and
             payload.get("schema") == PAIR_LEASE_SCHEMA and
+            isinstance(payload.get("cpus"), list) and
+            all(isinstance(item, int) and not isinstance(item, bool) and
+                0 <= item <= MAX_CPU_ID for item in payload["cpus"]) and
             payload.get("cpus") == sorted((cpu, sibling)) and
             isinstance(payload.get("uid"), int) and
             not isinstance(payload.get("uid"), bool) and payload["uid"] >= 0,
@@ -1065,6 +1099,10 @@ def validate_isolation(
         "policy", "reserved_sibling", "schema"},
         "isolation evidence is incomplete")
     require(value.get("schema") == ISOLATION_SCHEMA and
+            isinstance(value.get("benchmark_cpu"), int) and
+            not isinstance(value.get("benchmark_cpu"), bool) and
+            isinstance(value.get("reserved_sibling"), int) and
+            not isinstance(value.get("reserved_sibling"), bool) and
             value.get("benchmark_cpu") == cpu and
             value.get("reserved_sibling") == sibling,
             "isolation evidence CPU identity is invalid")
@@ -1583,7 +1621,10 @@ def validate_host_record(
     for name, expected_cpu, expected_sibling in (
         ("benchmark_cpu", cpu, sibling), ("reserved_sibling", sibling, cpu)):
         record = value.get(name)
-        require(isinstance(record, dict) and record.get("cpu") == expected_cpu,
+        require(isinstance(record, dict) and
+                isinstance(record.get("cpu"), int) and
+                not isinstance(record.get("cpu"), bool) and
+                record.get("cpu") == expected_cpu,
                 f"host {name} identity is invalid")
         cpuinfo = record.get("cpuinfo")
         topology = record.get("topology")

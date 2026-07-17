@@ -90,6 +90,14 @@ def parser() -> argparse.ArgumentParser:
 def main() -> int:
     options = parser().parse_args()
     role_name = Path(sys.argv[0]).name
+    try:
+        contents = Path(__file__).read_text(encoding="utf-8")
+    except OSError:
+        contents = ""
+    for line in contents.splitlines():
+        if line.startswith("# MOCK_ROLE="):
+            role_name = line.split("=", 1)[1]
+            break
     candidate = "candidate" in role_name
     slow = "slow" in role_name
     encode = 11.0 if candidate and slow else (8.0 if candidate else 10.0)

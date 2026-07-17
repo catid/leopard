@@ -12,13 +12,17 @@ The evidence exit statuses are deliberately distinct:
 - `0`: valid evidence and every encode promotion/no-regression gate passed;
 - `2`: valid, reviewable evidence whose performance policy failed;
 - `1`: malformed input, invalid evidence, unsafe isolation, child failure, or
-  verified failed-run diagnostics (never a performance result).
+  verified failed-run diagnostics (never a performance result). Portable
+  `--no-current-input-check` replay also exits 1 because it is structural
+  inspection, not authoritative validation of the current inputs.
 
-The `self-test` command uses only `mock_benchmark.py`.  It exercises mock
-A1/B1/B2/A2 collection, raw-sample validation, pass and policy-failure replay,
-bounded JSON, mutation rejection, reservation replacement, pair-lease
-interoperability, and no-replace publication.  It does not execute either real
-benchmark binary and must not be cited as timing evidence.
+The `self-test` command uses only `mock_benchmark.py`. It executes all 24 fixed
+cells through five mock A1/B1/B2/A2 rounds, then exercises raw-sample
+validation, pass and policy-failure replay, bounded inputs and outputs,
+mutation rejection, immutable executable staging, reservation replacement,
+pair-lease interoperability, exact-affinity checking, and no-replace
+publication. It does not execute either real benchmark binary and must not be
+cited as timing evidence.
 
 See `docs/reproduction/leopard2_low_encode_copy.md` for the exact build,
 reservation, collection, and replay commands.
