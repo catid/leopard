@@ -826,6 +826,7 @@ static leo2_backend SelectBackend(const X86Features& features)
     leo2_backend selected_kind = LEO2_BACKEND_SCALAR;
 
 #if defined(LEO2_BACKEND_FORCE_SCALAR)
+    (void)features;
     selected_kind = LEO2_BACKEND_SCALAR;
 #elif defined(LEO2_BACKEND_FORCE_SSSE3)
 # if defined(LEO2_HAVE_SSSE3_BACKEND)
