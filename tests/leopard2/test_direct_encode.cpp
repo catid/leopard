@@ -688,6 +688,35 @@ void test_tail_allocation_and_contracts(
         require(output == expected, "tail direct encode differs from oracle");
         ++counts->allocation_checks;
 
+        require_result(leo2_test_codec_set_encode_mode(owner->codec,
+            LEO2_TEST_ENCODE_FORCE_TRANSFORM), "force transform tail");
+        output.assign(c.r, Bytes(c.bytes, 0xa5));
+        for (unsigned i = 0; i < c.r; ++i)
+            recovery[i] = &output[i][0];
+        g_tracked_allocations.store(0, std::memory_order_relaxed);
+        g_track_allocations.store(true, std::memory_order_release);
+        const leo2_result transform_result = leo2_encode(
+            owner->codec, c.bytes, &input[0], &recovery[0],
+            scratch.data(), scratch.size());
+        g_track_allocations.store(false, std::memory_order_release);
+        require_result(transform_result, "allocation-trapped transform tail encode");
+        require(g_tracked_allocations.load(std::memory_order_relaxed) == 0,
+            "transform tail encode allocated C++ storage");
+        require(output == expected,
+            "tail transform encode differs from direct generator oracle");
+        ++counts->allocation_checks;
+
+        std::vector<uint8_t> subset(c.r, 0);
+        subset[0] = subset[c.r / 2] = subset[c.r - 1] = 1;
+        const EncodeResult transform_subset = encode(
+            owner->codec, LEO2_TEST_ENCODE_FORCE_TRANSFORM,
+            original, subset);
+        require_result(transform_subset.result,
+            "requested transform tail encode");
+        compare_requested(
+            transform_subset.recovery, expected, subset, 0xa5,
+            "requested transform tail/oracle", counts);
+
         std::vector<void*> one_output(c.r, NULL);
         one_output[0] = const_cast<void*>(input[0]);
         require(leo2_encode(owner->codec, c.bytes, &input[0], &one_output[0],
@@ -793,6 +822,18 @@ void test_unaligned_guarded_buffers(
                         &expected[i][0], c.bytes) == 0,
                 "unaligned direct encode differs from the oracle");
 
+        require_result(leo2_test_codec_set_encode_mode(owner->codec,
+            LEO2_TEST_ENCODE_FORCE_TRANSFORM), "force transform unaligned");
+        for (unsigned i = 0; i < c.r; ++i)
+            std::fill(output_storage[i].begin() + output_prefix,
+                output_storage[i].begin() + output_prefix + c.bytes, canary);
+        require_result(leo2_encode(owner->codec, c.bytes, &input[0], &output[0],
+            scratch.data(), scratch.size()), "unaligned transform encode");
+        for (unsigned i = 0; i < c.r; ++i)
+            require(memcmp(&output_storage[i][output_prefix],
+                        &expected[i][0], c.bytes) == 0,
+                "unaligned transform encode differs from the oracle");
+
         if (case_i == 0)
         {
             Shards aliased_original = original;
@@ -805,11 +846,11 @@ void test_unaligned_guarded_buffers(
                     output_storage[i].begin() + output_prefix + c.bytes, canary);
             require_result(leo2_encode(owner->codec, c.bytes, &input[0],
                 &output[0], scratch.data(), scratch.size()),
-                "aliased-input direct encode");
+                "aliased-input transform encode");
             for (unsigned i = 0; i < c.r; ++i)
                 require(memcmp(&output_storage[i][output_prefix],
                             &aliased_expected[i][0], c.bytes) == 0,
-                    "allowed input alias changed direct parity");
+                    "allowed input alias changed transform parity");
             ++counts->contract_checks;
         }
 
@@ -821,7 +862,7 @@ void test_unaligned_guarded_buffers(
                     std::all_of(input_storage[i].begin() + input_prefix + c.bytes,
                         input_storage[i].end(),
                         [](uint8_t value) { return value == canary; }),
-                "unaligned direct encode changed an input guard");
+                "unaligned encode changed an input guard");
         }
         for (unsigned i = 0; i < c.r; ++i)
         {
@@ -831,7 +872,7 @@ void test_unaligned_guarded_buffers(
                     std::all_of(output_storage[i].begin() + output_prefix + c.bytes,
                         output_storage[i].end(),
                         [](uint8_t value) { return value == canary; }),
-                "unaligned direct encode changed an output guard");
+                "unaligned encode changed an output guard");
         }
         counts->unaligned_checks += c.k + c.r;
         delete owner;

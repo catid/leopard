@@ -372,7 +372,7 @@ void require_four_way_callsites(
     size_t public_bytes,
     const std::string& operation,
     bool expect_ff8_accumulating_ifft,
-    bool split_ragged_decode)
+    bool split_ragged_execution)
 {
     if (field == LEO2_FIELD_GF8)
     {
@@ -421,7 +421,7 @@ void require_four_way_callsites(
         const bool prefix_fused = prefix_bytes == 64U ||
             (prefix_bytes == 128U &&
              execution_backend == LEO2_BACKEND_AVX2);
-        const bool has_split_tail = split_ragged_decode &&
+        const bool has_split_tail = split_ragged_execution &&
             (public_bytes & 63U) != 0;
         const bool mixed_split = has_split_tail && prefix_bytes != 0 &&
             !prefix_fused;
@@ -809,7 +809,7 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                 profile_name + " encode",
                 test_case.field == LEO2_FIELD_GF8 &&
                     test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1,
-                false);
+                true);
 
             trace.reset();
             decode_case(codec, test_case, originals, recovery);

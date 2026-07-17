@@ -358,6 +358,17 @@ struct DecodeScratchGeometry
     size_t work_data_offset;
 };
 
+struct EncodeScratchGeometry
+{
+    ScratchLayout layout;
+    size_t rounded_bytes;
+    size_t aligned_prefix_bytes;
+    size_t tail_bytes;
+    size_t work_count;
+    size_t work_slot_bytes;
+    size_t work_data_offset;
+};
+
 static bool CheckedAdd(size_t a, size_t b, size_t& result)
 {
     if (a > std::numeric_limits<size_t>::max() - b)
@@ -450,7 +461,7 @@ static bool ComputeScratchLayout(
     return true;
 }
 
-static bool ComputeSplitDecodeScratchLayout(
+static bool ComputeSplitScratchLayout(
     size_t range_count,
     size_t pointer_count,
     size_t input_slot_count,
@@ -1208,24 +1219,31 @@ static leo2_result ValidateEncodeBuffers(
 static leo2_result EncodeLayout(
     const leo2_codec* codec,
     uint64_t shard_bytes,
-    ScratchLayout& layout,
-    size_t& rounded_bytes,
-    size_t& work_count)
+    EncodeScratchGeometry& geometry)
 {
-    if (!codec || !RoundShardBytes(shard_bytes, rounded_bytes))
+    geometry = EncodeScratchGeometry();
+    if (!codec || !RoundShardBytes(shard_bytes, geometry.rounded_bytes))
         return LEO2_INVALID_ARGUMENT;
     // GF16 shards contain complete two-byte symbols.  A partial final ALTMAP
     // tile is compactly scattered below; an unpaired byte has no GF16 symbol.
     if (codec->field == LEO2_FIELD_GF16 && (shard_bytes & 1u) != 0)
         return LEO2_UNSUPPORTED;
-    work_count = static_cast<size_t>(codec->padded_side) * 2;
+    geometry.work_count = static_cast<size_t>(codec->padded_side) * 2;
+    geometry.tail_bytes = static_cast<size_t>(shard_bytes) &
+        (kScratchAlignment - 1);
+    geometry.aligned_prefix_bytes =
+        static_cast<size_t>(shard_bytes) - geometry.tail_bytes;
+    geometry.work_slot_bytes = geometry.tail_bytes == 0
+        ? static_cast<size_t>(shard_bytes)
+        : std::max(geometry.aligned_prefix_bytes, kScratchAlignment);
     /*
         Transform kernels operate on complete 64-byte tiles.  Aligned shards
         can therefore be read from and written to the caller's disjoint
-        buffers directly.  A partial tile is staged for GF8 zero padding or
-        GF16 compact ALTMAP scatter/gather.
+        buffers directly.  A partial tile is executed separately: each source
+        and low-profile parity staging slot is one fixed 64-byte tile, while
+        transform work is reused after the aligned prefix.
     */
-    const bool stage_partial_tile = rounded_bytes != shard_bytes;
+    const bool stage_partial_tile = geometry.tail_bytes != 0;
     const size_t original_slots = stage_partial_tile ? codec->original_count : 0;
     const size_t parity_pointer_count = codec->profile == LEO2_PROFILE_LOW_V1
         ? codec->recovery_count : 0;
@@ -1233,9 +1251,13 @@ static leo2_result EncodeLayout(
         codec->profile == LEO2_PROFILE_LOW_V1 ? codec->recovery_count : 0;
     const size_t range_count = static_cast<size_t>(codec->original_count) + codec->recovery_count;
     const size_t pointer_count = static_cast<size_t>(codec->original_count) +
-        work_count + parity_pointer_count;
-    const size_t slot_count = original_slots + work_count + parity_slots;
-    if (!ComputeScratchLayout(range_count, pointer_count, slot_count, rounded_bytes, layout))
+        geometry.work_count + parity_pointer_count;
+    size_t staging_slot_count = 0;
+    if (!CheckedAdd(original_slots, parity_slots, staging_slot_count) ||
+        !ComputeSplitScratchLayout(
+            range_count, pointer_count, staging_slot_count,
+            geometry.work_count, geometry.work_slot_bytes,
+            geometry.layout, geometry.work_data_offset))
         return LEO2_INVALID_COUNTS;
     return LEO2_SUCCESS;
 }
@@ -1329,7 +1351,7 @@ static leo2_result DecodeLayout(
     const size_t input_slot_count = geometry.tail_bytes != 0
         ? static_cast<size_t>(codec->original_count) + codec->recovery_count
         : 0;
-    if (!ComputeSplitDecodeScratchLayout(
+    if (!ComputeSplitScratchLayout(
             range_count, pointer_count, input_slot_count,
             geometry.work_slot_count, geometry.work_slot_bytes,
             geometry.layout, geometry.work_data_offset))
@@ -1641,6 +1663,88 @@ static void GatherTransformDecodePass(
             destination_offset;
         GatherShardFromKernel(codec, destination, source, pass_bytes);
     }
+}
+
+static void PopulateEncodeInputs(
+    const leo2_codec* codec,
+    const void* const* original,
+    size_t source_offset,
+    size_t pass_bytes,
+    uint8_t* staging_slots,
+    void** pointers)
+{
+    const bool stage_inputs = staging_slots != NULL;
+    for (uint32_t i = 0; i < codec->original_count; ++i)
+    {
+        const uint8_t* const source =
+            static_cast<const uint8_t*>(original[i]) + source_offset;
+        if (stage_inputs)
+        {
+            uint8_t* const slot = staging_slots +
+                static_cast<size_t>(i) * kScratchAlignment;
+            StageShardForKernel(
+                codec, slot, source, pass_bytes, kScratchAlignment);
+            pointers[i] = slot;
+        }
+        else
+            pointers[i] = const_cast<uint8_t*>(source);
+    }
+}
+
+static void ExecuteTransformEncodePass(
+    const leo2_codec* codec,
+    size_t buffer_bytes,
+    uint32_t requested_recovery_prefix,
+    const void* const* padded_original,
+    void** parity,
+    void** work)
+{
+    const leopard::backend::Ops& ops = *codec->context->ops;
+    if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
+    {
+        if (codec->padded_side == 1)
+        {
+            uint8_t* const output = static_cast<uint8_t*>(work[0]);
+            memcpy(output, padded_original[0], buffer_bytes);
+            uint32_t i = 1;
+            for (; i + 1 < codec->original_count; i += 2)
+                leopard::xor_mem_2to1(
+                    ops, output, padded_original[i], padded_original[i + 1],
+                    buffer_bytes);
+            if (i < codec->original_count)
+                leopard::xor_mem(
+                    ops, output, padded_original[i], buffer_bytes);
+        }
+        else if (codec->field == LEO2_FIELD_GF8)
+            leopard::ff8::ReedSolomonEncode(
+                ops, buffer_bytes, codec->original_count,
+                requested_recovery_prefix, codec->padded_side,
+                padded_original, work);
+        else
+            leopard::ff16::ReedSolomonEncode(
+                ops, buffer_bytes, codec->original_count,
+                requested_recovery_prefix, codec->padded_side,
+                padded_original, work);
+        return;
+    }
+
+    if (codec->padded_side == 1)
+    {
+        for (uint32_t i = 0; i < codec->recovery_count; ++i)
+            if (parity[i])
+                memcpy(parity[i], padded_original[0], buffer_bytes);
+        return;
+    }
+    if (codec->field == LEO2_FIELD_GF8)
+        leopard::ff8::ReedSolomonEncodeLow(
+            ops, buffer_bytes, codec->original_count,
+            codec->recovery_count, codec->padded_side, padded_original,
+            parity, work);
+    else
+        leopard::ff16::ReedSolomonEncodeLow(
+            ops, buffer_bytes, codec->original_count,
+            codec->recovery_count, codec->padded_side, padded_original,
+            parity, work);
 }
 
 static leo2_result ValidateDecodeBuffers(
@@ -2281,11 +2385,9 @@ LEO2_EXPORT leo2_result leo2_test_codec_encode_path(
     *direct_out = 0;
     if (!codec || requested_recovery_count > codec->recovery_count)
         return LEO2_INVALID_ARGUMENT;
-    ScratchLayout layout;
-    size_t rounded = 0;
-    size_t work_count = 0;
+    EncodeScratchGeometry geometry;
     const leo2_result result = EncodeLayout(
-        codec, shard_bytes, layout, rounded, work_count);
+        codec, shard_bytes, geometry);
     if (result != LEO2_SUCCESS)
         return result;
     *direct_out = ShouldUseDirectEncode(
@@ -2361,13 +2463,11 @@ LEO2_EXPORT leo2_result leo2_encode_scratch_size(
     if (!scratch_bytes_out)
         return LEO2_INVALID_ARGUMENT;
     *scratch_bytes_out = 0;
-    ScratchLayout layout;
-    size_t rounded = 0;
-    size_t work_count = 0;
-    const leo2_result result = EncodeLayout(codec, shard_bytes, layout, rounded, work_count);
+    EncodeScratchGeometry geometry;
+    const leo2_result result = EncodeLayout(codec, shard_bytes, geometry);
     if (result != LEO2_SUCCESS)
         return result;
-    *scratch_bytes_out = layout.total_bytes;
+    *scratch_bytes_out = geometry.layout.total_bytes;
     return LEO2_SUCCESS;
 }
 
@@ -2379,14 +2479,13 @@ LEO2_EXPORT leo2_result leo2_encode(
     void* scratch,
     size_t scratch_bytes)
 {
-    ScratchLayout layout;
-    size_t rounded = 0;
-    size_t work_count = 0;
-    leo2_result result = EncodeLayout(codec, shard_bytes, layout, rounded, work_count);
+    EncodeScratchGeometry geometry;
+    leo2_result result = EncodeLayout(codec, shard_bytes, geometry);
     if (result != LEO2_SUCCESS)
         return result;
     AddressRange scratch_range;
-    result = CheckScratch(scratch, scratch_bytes, layout, scratch_range);
+    result = CheckScratch(
+        scratch, scratch_bytes, geometry.layout, scratch_range);
     if (result != LEO2_SUCCESS)
         return result;
     result = ValidateEncodeBuffers(
@@ -2405,7 +2504,6 @@ LEO2_EXPORT leo2_result leo2_encode(
     }
     if (requested_recovery_count == 0)
         return LEO2_SUCCESS;
-    const leopard::backend::Ops& ops = *codec->context->ops;
     if (ShouldUseDirectEncode(
             codec, shard_bytes, requested_recovery_count))
     {
@@ -2413,90 +2511,84 @@ LEO2_EXPORT leo2_result leo2_encode(
             original, recovery);
     }
 
-    uint8_t* base = static_cast<uint8_t*>(scratch);
-    void** pointers = reinterpret_cast<void**>(base + layout.pointer_offset);
-    uint8_t* slots = base + layout.data_offset;
-    const bool stage_partial_tile = rounded != shard_bytes;
-    size_t next_slot = 0;
-    for (uint32_t i = 0; i < codec->original_count; ++i)
-    {
-        if (stage_partial_tile)
-        {
-            pointers[i] = slots + next_slot++ * rounded;
-            StageShardForKernel(codec, pointers[i], original[i],
-                static_cast<size_t>(shard_bytes), rounded);
-        }
-        else
-            pointers[i] = const_cast<void*>(original[i]);
-    }
-    void** work = pointers + codec->original_count;
-    for (size_t i = 0; i < work_count; ++i)
-        work[i] = slots + next_slot++ * rounded;
+    uint8_t* const base = static_cast<uint8_t*>(scratch);
+    void** const pointers = reinterpret_cast<void**>(
+        base + geometry.layout.pointer_offset);
+    void** const work = pointers + codec->original_count;
+    void** const parity = codec->profile == LEO2_PROFILE_LOW_V1
+        ? work + geometry.work_count
+        : NULL;
+    uint8_t* const staging_slots = geometry.tail_bytes != 0
+        ? base + geometry.layout.data_offset
+        : NULL;
+    uint8_t* const parity_staging =
+        staging_slots && codec->profile == LEO2_PROFILE_LOW_V1
+            ? staging_slots +
+                static_cast<size_t>(codec->original_count) *
+                    kScratchAlignment
+            : NULL;
+    uint8_t* const work_storage = base + geometry.work_data_offset;
 
-    const void* const* padded_original = const_cast<const void* const*>(pointers);
-    if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
+    if (geometry.aligned_prefix_bytes != 0)
     {
-        if (!stage_partial_tile)
+        PopulateEncodeInputs(
+            codec, original, 0, geometry.aligned_prefix_bytes,
+            NULL, pointers);
+        for (size_t i = 0; i < geometry.work_count; ++i)
+            work[i] = work_storage + i * geometry.work_slot_bytes;
+        if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
         {
             for (uint32_t i = 0; i < requested_recovery_prefix; ++i)
                 if (recovery[i])
-                    work[i] = recovery[i];
+                    work[i] = static_cast<uint8_t*>(recovery[i]);
         }
-        if (codec->padded_side == 1)
-        {
-            uint8_t* parity = static_cast<uint8_t*>(work[0]);
-            memcpy(parity, pointers[0], rounded);
-            uint32_t i = 1;
-            for (; i + 1 < codec->original_count; i += 2)
-                leopard::xor_mem_2to1(
-                    ops, parity, pointers[i], pointers[i + 1], rounded);
-            if (i < codec->original_count)
-                leopard::xor_mem(ops, parity, pointers[i], rounded);
-        }
-        else if (codec->field == LEO2_FIELD_GF8)
-            leopard::ff8::ReedSolomonEncode(
-                ops, rounded, codec->original_count, requested_recovery_prefix,
-                codec->padded_side, padded_original, work);
         else
-            leopard::ff16::ReedSolomonEncode(
-                ops, rounded, codec->original_count, requested_recovery_prefix,
-                codec->padded_side, padded_original, work);
-
-        if (stage_partial_tile)
-            for (uint32_t i = 0; i < requested_recovery_prefix; ++i)
-                if (recovery[i])
-                    GatherShardFromKernel(codec, recovery[i], work[i],
-                        static_cast<size_t>(shard_bytes));
+        {
+            for (uint32_t i = 0; i < codec->recovery_count; ++i)
+                parity[i] = recovery[i];
+        }
+        const void* const* const padded_original =
+            const_cast<const void* const*>(pointers);
+        ExecuteTransformEncodePass(
+            codec, geometry.aligned_prefix_bytes,
+            requested_recovery_prefix, padded_original, parity, work);
     }
-    else
+
+    if (geometry.tail_bytes != 0)
     {
-        void** parity = work + work_count;
+        PopulateEncodeInputs(
+            codec, original, geometry.aligned_prefix_bytes,
+            geometry.tail_bytes, staging_slots, pointers);
+        for (size_t i = 0; i < geometry.work_count; ++i)
+            work[i] = work_storage + i * geometry.work_slot_bytes;
+        if (codec->profile == LEO2_PROFILE_LOW_V1)
+        {
+            for (uint32_t i = 0; i < codec->recovery_count; ++i)
+                parity[i] = recovery[i]
+                    ? parity_staging +
+                        static_cast<size_t>(i) * kScratchAlignment
+                    : NULL;
+        }
+        const void* const* const padded_original =
+            const_cast<const void* const*>(pointers);
+        ExecuteTransformEncodePass(
+            codec, kScratchAlignment, requested_recovery_prefix,
+            padded_original, parity, work);
+
         for (uint32_t i = 0; i < codec->recovery_count; ++i)
         {
-            parity[i] = recovery[i];
-            if (stage_partial_tile && recovery[i])
-                parity[i] = slots + next_slot++ * rounded;
+            if (!recovery[i])
+                continue;
+            const void* const source =
+                codec->profile == LEO2_PROFILE_LOW_V1
+                    ? parity[i]
+                    : work[i];
+            uint8_t* const destination =
+                static_cast<uint8_t*>(recovery[i]) +
+                geometry.aligned_prefix_bytes;
+            GatherShardFromKernel(
+                codec, destination, source, geometry.tail_bytes);
         }
-        if (codec->padded_side == 1)
-        {
-            for (uint32_t i = 0; i < codec->recovery_count; ++i)
-                if (recovery[i])
-                    memcpy(recovery[i], original[0], static_cast<size_t>(shard_bytes));
-            return LEO2_SUCCESS;
-        }
-        if (codec->field == LEO2_FIELD_GF8)
-            leopard::ff8::ReedSolomonEncodeLow(
-                ops, rounded, codec->original_count, codec->recovery_count,
-                codec->padded_side, padded_original, parity, work);
-        else
-            leopard::ff16::ReedSolomonEncodeLow(
-                ops, rounded, codec->original_count, codec->recovery_count,
-                codec->padded_side, padded_original, parity, work);
-        if (stage_partial_tile)
-            for (uint32_t i = 0; i < codec->recovery_count; ++i)
-                if (recovery[i])
-                    GatherShardFromKernel(codec, recovery[i], parity[i],
-                        static_cast<size_t>(shard_bytes));
     }
     return LEO2_SUCCESS;
 }

@@ -43,6 +43,13 @@ FFT and matches old Leopard in the compatibility test.  The low profile performs
 one padded-`P` IFFT followed by only the shifted parity blocks needed by the
 requested output prefix/subset.
 
+A ragged transform encode runs its aligned prefix directly from application
+buffers, then reuses the same `2P` or `2T` work slots for one staged 64-byte
+tail.  Source staging is fixed at `64*K` bytes; Low V1 additionally reserves
+`64*R` bytes for compact parity-tail scatter.  These fixed terms do not grow
+with shard length.  GF16 uses the same compact/ALTMAP tail conversion as the
+single-pass encoder, and requested null parity outputs remain unmaterialized.
+
 For bounded `K,R <= 16` codecs, setup can precompute exact full-parent
 systematic generator rows. AUTO uses this allocation-free direct evaluator only
 for the measured Low V1, one-output, regular-shard region; scalar requires
@@ -83,7 +90,7 @@ missing originals; its last `L` tiled slots retain outputs until
 application-layout scatter.  The retained materialized specialized kernel is
 used when its regular `N` slots are no larger, avoiding a balanced-rate scratch
 regression.  Forced generic decoding retains `N` work slots.  A ragged final
-tile adds `K+R` input slots for GF8 zero padding or GF16 compact-to-ALTMAP
+tile adds `64*(K+R)` bytes for GF8 zero padding or GF16 compact-to-ALTMAP
 scatter.  The public overlap checks are unchanged.
 
 `leo2_decode_plan_scratch_size` uses the exact `L` for its immutable pattern.

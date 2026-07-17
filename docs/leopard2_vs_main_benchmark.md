@@ -66,6 +66,9 @@ The comparison does not isolate a single cause. The measured policies include
 main's whole-build `-march=native`, Leopard2's portable core plus runtime AVX2
 fixed kernels, and Leopard2 API/schedule overhead. Profiling and the open
 pruned/tiled encoder work are required before attributing the regression.
+Candidate `leopard-79h.26.3` makes ragged source staging (and Low V1 parity-tail
+staging) fixed at one 64-byte tile per shard, but the table above used aligned
+shards and predates that candidate; it is not evidence of a throughput change.
 
 ## Decoding
 

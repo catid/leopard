@@ -1055,6 +1055,62 @@ void test_ragged_decode_tail_staging_slopes(
     }
 }
 
+void test_ragged_encode_tail_staging_slopes(
+    leo2_context* context,
+    Counts* counts)
+{
+    struct Case
+    {
+        uint32_t k;
+        uint32_t r;
+        leo2_profile profile;
+        leo2_field field;
+        size_t small_bytes;
+        size_t large_bytes;
+    };
+    const Case cases[] = {
+        { 200, 9, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 65, 129 },
+        { 9, 200, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, 65, 129 },
+        { 1000, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 66, 130 },
+        { 17, 1000, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 66, 130 }
+    };
+
+    for (size_t case_i = 0;
+         case_i < sizeof(cases) / sizeof(cases[0]); ++case_i)
+    {
+        const Case& item = cases[case_i];
+        CodecOwner codec;
+        require_result(leo2_codec_create(context, item.k, item.r,
+            item.profile, item.field, NULL, &codec.codec), LEO2_SUCCESS,
+            "ragged-encode codec create");
+
+        size_t aligned = 0;
+        size_t small = 0;
+        size_t large = 0;
+        require_result(leo2_encode_scratch_size(
+            codec.codec, 64, &aligned), LEO2_SUCCESS,
+            "ragged-encode aligned scratch query");
+        require_result(leo2_encode_scratch_size(
+            codec.codec, item.small_bytes, &small), LEO2_SUCCESS,
+            "ragged-encode small scratch query");
+        require_result(leo2_encode_scratch_size(
+            codec.codec, item.large_bytes, &large), LEO2_SUCCESS,
+            "ragged-encode large scratch query");
+
+        const size_t work_slots =
+            static_cast<size_t>(leo2_codec_padded_side(codec.codec)) * 2;
+        const size_t staging_slots = item.k +
+            (item.profile == LEO2_PROFILE_LOW_V1 ? item.r : 0);
+        require(small > aligned &&
+                small - aligned == staging_slots * 64,
+            "ragged encode did not use fixed one-tile staging");
+        require(large > small &&
+                large - small == work_slots * 64,
+            "ragged encode staging still scales with full shard bytes");
+        counts->scratch_checks += 2;
+    }
+}
+
 struct BatchFixture
 {
     BatchFixture(leo2_context* context, size_t bytes)
@@ -1373,6 +1429,7 @@ int main()
         test_aligned_decode_input_staging_elision(context.context, &counts);
         test_tiled_decode_workspace_slopes(context.context, &counts);
         test_ragged_decode_tail_staging_slopes(context.context, &counts);
+        test_ragged_encode_tail_staging_slopes(context.context, &counts);
         test_concurrent_shared_context_batches(context.context, &counts);
         test_deterministic_batch_failures(context.context, &counts);
         test_legacy_negative_contract(&counts);
