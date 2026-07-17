@@ -358,11 +358,11 @@ endif()
 if(LEO2_BUILD_TESTS)
     enable_testing()
     target_compile_definitions(libleopard PRIVATE LEO2_ENABLE_TEST_HOOKS=1)
-    if(TARGET leopard2_backend_ssse3)
+    if(LEO2_HAVE_SSSE3_BACKEND)
         target_compile_definitions(leopard2_backend_ssse3 PRIVATE
             LEO2_ENABLE_TEST_HOOKS=1)
     endif()
-    if(TARGET leopard2_backend_avx2)
+    if(LEO2_HAVE_AVX2_BACKEND)
         target_compile_definitions(leopard2_backend_avx2 PRIVATE
             LEO2_ENABLE_TEST_HOOKS=1)
     endif()
@@ -426,16 +426,35 @@ if(LEO2_BUILD_TESTS)
     target_compile_definitions(leopard2_backend_failures_test PRIVATE
         LEO2_ENABLE_TEST_HOOKS=1)
     target_link_libraries(leopard2_backend_failures_test libleopard)
-    foreach(backend scalar ssse3 avx2)
-        foreach(stage ff8-allocation ff16-allocation kat)
-            string(REPLACE "-" "_" stage_name "${stage}")
-            add_test(NAME leopard2_backend_failure_${backend}_${stage_name}
-                COMMAND leopard2_backend_failures_test ${backend} ${stage})
-            set_tests_properties(
-                leopard2_backend_failure_${backend}_${stage_name}
-                PROPERTIES ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
-        endforeach()
-    endforeach()
+    add_test(NAME leopard2_backend_failure_scalar_ff8_allocation
+        COMMAND leopard2_backend_failures_test scalar ff8-allocation)
+    add_test(NAME leopard2_backend_failure_scalar_ff16_allocation
+        COMMAND leopard2_backend_failures_test scalar ff16-allocation)
+    add_test(NAME leopard2_backend_failure_scalar_kat
+        COMMAND leopard2_backend_failures_test scalar kat)
+    add_test(NAME leopard2_backend_failure_ssse3_ff8_allocation
+        COMMAND leopard2_backend_failures_test ssse3 ff8-allocation)
+    add_test(NAME leopard2_backend_failure_ssse3_ff16_allocation
+        COMMAND leopard2_backend_failures_test ssse3 ff16-allocation)
+    add_test(NAME leopard2_backend_failure_ssse3_kat
+        COMMAND leopard2_backend_failures_test ssse3 kat)
+    add_test(NAME leopard2_backend_failure_avx2_ff8_allocation
+        COMMAND leopard2_backend_failures_test avx2 ff8-allocation)
+    add_test(NAME leopard2_backend_failure_avx2_ff16_allocation
+        COMMAND leopard2_backend_failures_test avx2 ff16-allocation)
+    add_test(NAME leopard2_backend_failure_avx2_kat
+        COMMAND leopard2_backend_failures_test avx2 kat)
+    set_tests_properties(
+        leopard2_backend_failure_scalar_ff8_allocation
+        leopard2_backend_failure_scalar_ff16_allocation
+        leopard2_backend_failure_scalar_kat
+        leopard2_backend_failure_ssse3_ff8_allocation
+        leopard2_backend_failure_ssse3_ff16_allocation
+        leopard2_backend_failure_ssse3_kat
+        leopard2_backend_failure_avx2_ff8_allocation
+        leopard2_backend_failure_avx2_ff16_allocation
+        leopard2_backend_failure_avx2_kat
+        PROPERTIES ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
 
     add_executable(leopard2_context_backends_test
         tests/leopard2/test_context_backends.cpp)

@@ -52,7 +52,11 @@ protected cache/control assignments are exact manifests rather than presence
 checks, and their evaluation order is pinned.  Project options and non-forced
 cache defaults remain symbolic so every supported command-line setting is
 checked, as are all x86 processor spellings recognized by the build.  When
-CUDA is off, tool discovery is limited to the checked objdump and shell probes;
+CUDA is off, tool discovery is limited to the checked objdump and shell probes
+plus the benchmark-only Git lookup used to stamp locator measurements.  That
+Git path admits exactly `rev-parse HEAD` and
+`status --porcelain --untracked-files=normal`, with fixed result/output
+variables, source working directory, guards, and evaluation order;
 CUDA source properties, toolkit commands in tests, and CUDA/NVIDIA markers
 anywhere in the reachable CPU source/header text are rejected.  The sole
 marker-bearing test is the exact checked CUDA-optional self-test manifest.  The

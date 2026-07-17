@@ -554,6 +554,10 @@ class CMakeProductionGraph(object):
             "PRIVATE", "${CMAKE_CURRENT_SOURCE_DIR}")),
         ("leopard2_backend_avx2", "target_compile_options", (
             "PRIVATE", "/arch:AVX2")),
+        ("leopard2_backend_ssse3", "target_compile_definitions", (
+            "PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1")),
+        ("leopard2_backend_avx2", "target_compile_definitions", (
+            "PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1")),
     }
     _approved_protected_assignments = {
         ("CMAKE_CONFIGURATION_TYPES", "Debug;Release"),
@@ -596,6 +600,26 @@ class CMakeProductionGraph(object):
         "cmake/leopardConfig.cmake.in",
         "${CMAKE_CURRENT_BINARY_DIR}/leopardConfig.cmake",
         "INSTALL_DESTINATION", "${LEOPARD_INSTALL_CMAKEDIR}")
+    _locator_git_find = (
+        "LEO2_LOCATOR_GIT_EXECUTABLE", "NAMES", "git")
+    _locator_git_revision = (
+        "COMMAND", "${LEO2_LOCATOR_GIT_EXECUTABLE}", "rev-parse", "HEAD",
+        "WORKING_DIRECTORY", "${CMAKE_CURRENT_SOURCE_DIR}",
+        "RESULT_VARIABLE", "LEO2_LOCATOR_GIT_RESULT",
+        "OUTPUT_VARIABLE", "LEO2_LOCATOR_GIT_OUTPUT",
+        "OUTPUT_STRIP_TRAILING_WHITESPACE")
+    _locator_git_status = (
+        "COMMAND", "${LEO2_LOCATOR_GIT_EXECUTABLE}", "status",
+        "--porcelain", "--untracked-files=normal",
+        "WORKING_DIRECTORY", "${CMAKE_CURRENT_SOURCE_DIR}",
+        "RESULT_VARIABLE", "LEO2_LOCATOR_STATUS_RESULT",
+        "OUTPUT_VARIABLE", "LEO2_LOCATOR_STATUS_OUTPUT",
+        "OUTPUT_STRIP_TRAILING_WHITESPACE")
+    _required_locator_provenance_commands = Counter({
+        ("find_program", _locator_git_find): 1,
+        ("execute_process", _locator_git_revision): 1,
+        ("execute_process", _locator_git_status): 1,
+    })
     _required_trusted_commands = Counter({
         ("cmake_minimum_required", ("VERSION", "3.7")): 1,
         ("project", ("leopard",)): 1,
@@ -764,8 +788,19 @@ class CMakeProductionGraph(object):
             "PRIVATE", "LEO2_BACKEND_FORCE_SSSE3=1"))),
         ("mutation", ("libleopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_BACKEND_FORCE_AVX2=1"))),
+        ("locator-provenance", ("find_program", _locator_git_find)),
+        ("locator-provenance", (
+            "execute_process", _locator_git_revision)),
+        ("locator-provenance", (
+            "execute_process", _locator_git_status)),
         ("mutation", ("libleopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1"))),
+        ("mutation", ("leopard2_backend_ssse3",
+            "target_compile_definitions", (
+                "PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1"))),
+        ("mutation", ("leopard2_backend_avx2",
+            "target_compile_definitions", (
+                "PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1"))),
     )
     _dangerous_build_properties = {
         "COMPILE_DEFINITIONS", "COMPILE_FEATURES", "COMPILE_FLAGS",
@@ -835,6 +870,7 @@ class CMakeProductionGraph(object):
         self.attachments = {}
         self.target_build_mutations = []
         self.trusted_command_counts = Counter()
+        self.locator_provenance_counts = Counter()
         self.protected_assignments = []
         self.contract_events = []
         self.require_mutation_contract = require_mutation_contract
@@ -978,6 +1014,22 @@ class CMakeProductionGraph(object):
         self.trusted_command_counts[key] += 1
         self.contract_events.append(("trusted", key))
 
+    def _record_locator_provenance_command(
+            self, command, tokens, guard, reasons):
+        key = (command, tuple(tokens))
+        if key not in self._required_locator_provenance_commands:
+            return False
+        expected_guard = bool_atom("option:LEO2_BUILD_BENCHMARKS")
+        if command == "execute_process":
+            expected_guard = bool_and(
+                expected_guard, bool_atom("locator-git-found"))
+        if reasons or not self._formula_equivalent(guard, expected_guard):
+            raise ContractError(
+                "locator provenance command guard drift: " + command)
+        self.locator_provenance_counts[key] += 1
+        self.contract_events.append(("locator-provenance", key))
+        return True
+
     @classmethod
     def _is_protected_variable(cls, name):
         return cls._protected_variable.match(name) is not None
@@ -1019,7 +1071,11 @@ class CMakeProductionGraph(object):
                 guard, bool_not(ssse3),
                 cls._backend_variant_comparison("avx2"))
         if specification == ("PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1"):
-            return bool_atom("option:LEO2_BUILD_TESTS")
+            guard = bool_atom("option:LEO2_BUILD_TESTS")
+            if target == "leopard2_backend_avx2":
+                guard = bool_and(
+                    guard, bool_atom("probe:LEO2_FLAG_ARCH_AVX2"))
+            return guard
         if (target == "leopard2_backend_avx2" or
                 specification == ("PRIVATE", "LEO2_HAVE_AVX2_BACKEND=1")):
             return bool_atom("probe:LEO2_FLAG_ARCH_AVX2")
@@ -1521,6 +1577,7 @@ class CMakeProductionGraph(object):
                         "unresolved tool discovery is reachable in the "
                         "CPU-only graph: " + str(error))
                 approved_program_searches = {
+                    self._locator_git_find,
                     ("LEO2_OBJDUMP_EXECUTABLE", "NAMES", "objdump",
                      "llvm-objdump"),
                     ("LEO2_SH_EXECUTABLE", "NAMES", "sh"),
@@ -1740,6 +1797,31 @@ class CMakeProductionGraph(object):
                 raise ContractError(
                     "CMake directory compile/link graph requires recursive "
                     "proof: " + command)
+            if (command == "find_program" and bool_satisfiable(guard) and
+                    self._record_locator_provenance_command(
+                        command, tokens, guard, reasons)):
+                self._assign(
+                    "LEO2_LOCATOR_GIT_EXECUTABLE",
+                    (BOOL_SYMBOL_PREFIX + "locator-git-found",), guard)
+                continue
+            if (command == "execute_process" and bool_satisfiable(guard) and
+                    self._record_locator_provenance_command(
+                        command, tokens, guard, reasons)):
+                if tuple(tokens) == self._locator_git_revision:
+                    result_variable = "LEO2_LOCATOR_GIT_RESULT"
+                    output_variable = "LEO2_LOCATOR_GIT_OUTPUT"
+                    symbol = "locator-git-revision"
+                else:
+                    result_variable = "LEO2_LOCATOR_STATUS_RESULT"
+                    output_variable = "LEO2_LOCATOR_STATUS_OUTPUT"
+                    symbol = "locator-git-status"
+                self._assign(
+                    result_variable,
+                    (BOOL_SYMBOL_PREFIX + symbol + "-result",), guard)
+                self._assign(
+                    output_variable,
+                    (BOOL_SYMBOL_PREFIX + symbol + "-output",), guard)
+                continue
             if (command in self._build_extension_commands and
                     bool_satisfiable(guard)):
                 raise ContractError(
@@ -2029,6 +2111,17 @@ class CMakeProductionGraph(object):
                 repr(sorted(missing.elements(), key=repr)) + " extra=" +
                 repr(sorted(extra.elements(), key=repr)))
         if self.require_mutation_contract:
+            if (self.locator_provenance_counts !=
+                    self._required_locator_provenance_commands):
+                missing = (self._required_locator_provenance_commands -
+                           self.locator_provenance_counts)
+                extra = (self.locator_provenance_counts -
+                         self._required_locator_provenance_commands)
+                raise ContractError(
+                    "missing or duplicate locator provenance command: "
+                    "missing=" +
+                    repr(sorted(missing.elements(), key=repr)) + " extra=" +
+                    repr(sorted(extra.elements(), key=repr)))
             self._validate_required_protected_assignments()
             expected_events = self._required_contract_event_order
             if (Counter(self.contract_events) == Counter(expected_events) and
@@ -4068,6 +4161,105 @@ target_compile_options(alias_backend PRIVATE /arch:AVX2)
                     self.resolve_text(
                         text, require_mutation_contract=True)
 
+    def test_locator_provenance_commands_are_exact_and_required(self):
+        find_command = (
+            "find_program(LEO2_LOCATOR_GIT_EXECUTABLE NAMES git)")
+        revision_command = """execute_process(
+            COMMAND ${LEO2_LOCATOR_GIT_EXECUTABLE} rev-parse HEAD
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            RESULT_VARIABLE LEO2_LOCATOR_GIT_RESULT
+            OUTPUT_VARIABLE LEO2_LOCATOR_GIT_OUTPUT
+            OUTPUT_STRIP_TRAILING_WHITESPACE)"""
+        status_command = """execute_process(
+            COMMAND ${LEO2_LOCATOR_GIT_EXECUTABLE}
+                status --porcelain --untracked-files=normal
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            RESULT_VARIABLE LEO2_LOCATOR_STATUS_RESULT
+            OUTPUT_VARIABLE LEO2_LOCATOR_STATUS_OUTPUT
+            OUTPUT_STRIP_TRAILING_WHITESPACE)"""
+        commands = (find_command, revision_command, status_command)
+        for command in commands:
+            with self.subTest(required=command.split("(", 1)[0]):
+                self.assertEqual(1, self.cmake.count(command))
+                removed = self.cmake.replace(command, "", 1)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "locator provenance command (?:guard drift|"
+                        "missing|duplicate)|missing or duplicate locator"):
+                    self.resolve_text(
+                        removed, require_mutation_contract=True)
+
+            with self.subTest(duplicate=command.split("(", 1)[0]):
+                duplicated = self.cmake.replace(
+                    command, command + "\n" + command, 1)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "missing or duplicate locator provenance command"):
+                    self.resolve_text(
+                        duplicated, require_mutation_contract=True)
+
+        mutations = (
+            ("NAMES git)", "NAMES git.exe)"),
+            ("rev-parse HEAD", "rev-parse --verify HEAD"),
+            ("RESULT_VARIABLE LEO2_LOCATOR_GIT_RESULT",
+             "RESULT_VARIABLE LEO2_LOCATOR_GIT_RC"),
+            ("OUTPUT_VARIABLE LEO2_LOCATOR_GIT_OUTPUT",
+             "OUTPUT_VARIABLE LEO2_LOCATOR_GIT_SHA"),
+            ("status --porcelain --untracked-files=normal",
+             "status --porcelain --untracked-files=no"),
+            ("RESULT_VARIABLE LEO2_LOCATOR_STATUS_RESULT",
+             "RESULT_VARIABLE LEO2_LOCATOR_STATUS_RC"),
+            ("OUTPUT_VARIABLE LEO2_LOCATOR_STATUS_OUTPUT",
+             "OUTPUT_VARIABLE LEO2_LOCATOR_STATUS_TEXT"),
+            ("OUTPUT_VARIABLE LEO2_LOCATOR_GIT_OUTPUT\n"
+             "            OUTPUT_STRIP_TRAILING_WHITESPACE)",
+             "OUTPUT_VARIABLE LEO2_LOCATOR_GIT_OUTPUT)"),
+            ("WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}\n"
+             "            RESULT_VARIABLE LEO2_LOCATOR_GIT_RESULT",
+             "WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}\n"
+             "            RESULT_VARIABLE LEO2_LOCATOR_GIT_RESULT"),
+        )
+        for original, replacement in mutations:
+            with self.subTest(mutation=replacement):
+                mutated = self.cmake.replace(original, replacement, 1)
+                self.assertNotEqual(mutated, self.cmake)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "unapproved tool discovery|generated/custom build "
+                        "extension"):
+                    self.resolve_text(
+                        mutated, require_mutation_contract=True)
+
+        benchmark_guard = (
+            "if(LEO2_BUILD_BENCHMARKS)\n"
+            "    add_executable(bench_leopard ${BENCH_SOURCE_FILES})")
+        moved_find = self.cmake.replace(
+            benchmark_guard,
+            "if(NOT LEO2_BUILD_BENCHMARKS)\n"
+            "    add_executable(bench_leopard ${BENCH_SOURCE_FILES})", 1)
+        self.assertNotEqual(moved_find, self.cmake)
+        with self.assertRaisesRegex(
+                ContractError, "locator provenance command guard drift"):
+            self.resolve_text(moved_find, require_mutation_contract=True)
+
+        inverted_probe = self.cmake.replace(
+            "if(LEO2_LOCATOR_GIT_EXECUTABLE)\n        execute_process(",
+            "if(NOT LEO2_LOCATOR_GIT_EXECUTABLE)\n        execute_process(",
+            1)
+        self.assertNotEqual(inverted_probe, self.cmake)
+        with self.assertRaisesRegex(
+                ContractError, "locator provenance command guard drift"):
+            self.resolve_text(inverted_probe, require_mutation_contract=True)
+
+        sentinel = "__LEO2_LOCATOR_PROVENANCE_SENTINEL__"
+        reordered = self.cmake.replace(revision_command, sentinel, 1)
+        reordered = reordered.replace(status_command, revision_command, 1)
+        reordered = reordered.replace(sentinel, status_command, 1)
+        self.assertNotEqual(reordered, self.cmake)
+        with self.assertRaisesRegex(
+                ContractError, "security-sensitive CMake command order drift"):
+            self.resolve_text(reordered, require_mutation_contract=True)
+
     def test_language_and_project_toolchain_mutations_are_rejected(self):
         mutations = (
             "enable_language(CXX)",
@@ -4376,6 +4568,10 @@ endif()'''
             "LEO2_HAVE_AVX2_BACKEND=1)",
             "target_compile_definitions(libleopard PRIVATE "
             "LEO2_ENABLE_TEST_HOOKS=1)",
+            "target_compile_definitions(leopard2_backend_ssse3 PRIVATE\n"
+            "            LEO2_ENABLE_TEST_HOOKS=1)",
+            "target_compile_definitions(leopard2_backend_avx2 PRIVATE\n"
+            "            LEO2_ENABLE_TEST_HOOKS=1)",
             "target_link_libraries(libleopard PUBLIC OpenMP::OpenMP_CXX)",
             "target_link_libraries(libleopard PUBLIC \"${OpenMP_CXX_FLAGS}\")",
         )
@@ -4447,6 +4643,7 @@ endif()'''
                 with self.assertRaisesRegex(
                         ContractError,
                         "missing or duplicate trusted CMake command|"
+                        "locator provenance command guard drift|"
                         "unsupported conditional CMake source graph|"
                         "reachable CMake language enablement|"
                         "CMake bootstrap must begin"):
