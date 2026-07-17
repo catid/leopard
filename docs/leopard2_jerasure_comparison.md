@@ -107,15 +107,21 @@ rejected before collection.  The runner then requires singleton CPU affinity
 for every timed child and an explicitly reserved SMT sibling.  Both
 logical CPUs must mutually report exactly that two-CPU pair through Linux
 `thread_siblings_list`, with matching core and package identities.  The runner
-holds both its cache-local coordinator locks and the cross-comparator,
-pair-wide lock at
+holds both its cache-local coordinator locks and a dual, cross-comparator
+pair-wide lease.  The first half is an exclusive nonblocking `flock` at
 `/run/user/UID/leopard2-cpu-leases/leopard2-cpu-pair-UID-A-B.lock`.  The
 per-user runtime root and child directory must be owned by that UID at mode
 0700; the canonical lease file must be an owned, single-link mode-0600 regular
 file.  Its device and inode are bound into evidence and the pathname, open
 descriptor, permissions, ownership, link count, and contents are rechecked
-before every accepted pair.  This closes the unlink-and-replace gap of a flat
-predictable advisory lock.  ABBA provider order, four independent repetitions,
+before every accepted pair.  The second half is an exclusive bind of a Linux
+abstract AF_UNIX socket.  Its deterministic name is derived from the canonical
+CPU pair, protected runtime directory, pair-lease schema, and UID; evidence
+records the kernel-lease schema, mechanism, and SHA-256 of that exact abstract
+name.  A pre-existing bind returns `EADDRINUSE` and fails the campaign closed.
+Together, the stable kernel name and revalidated file identity close the
+unlink-and-replace gap of a flat predictable advisory lock.  ABBA provider
+order, four independent repetitions,
 two warmups, and nine retained timing samples are still mandatory.  Setup,
 execution, and setup amortized at the declared reuse count remain separate.
 
@@ -130,8 +136,9 @@ artifact, source/build/executable identities, cells, CPU pair, environment,
 and method.  Each child document is validated and atomically persisted.  A
 repetition becomes resumable only after both providers, their matching loss
 and workload identities, per-pair pre/post frequency snapshots, singleton
-affinity evidence, exact SMT topology, lease inode, and CPU-activity audit are
-atomically bound.  Immediately around every two-child repetition the runner
+affinity evidence, exact SMT topology, file-lease inode, abstract-name digest,
+and CPU-activity audit are atomically bound.  Immediately around every
+two-child repetition the runner
 records the first eight non-double-counted fields for both logical CPUs from
 `/proc/stat`.  It accepts the pair only when the benchmark CPU accumulated
 non-idle work, the interval spans at least one sibling scheduler jiffy, and the
@@ -142,20 +149,24 @@ than resampling.  A partial two-provider repetition is discarded and rerun; a
 complete but tampered one fails closed.  Affinity is rechecked after every
 timing child.  Final and correctness JSON files also use atomic replacement.
 
-These controls are cooperative and unprivileged.  They cannot stop root-owned
-tasks or kernel work from being scheduled on the pair, and `/proc/stat` has
-scheduler-jiffy resolution.  Observed non-idle sibling activity therefore
-fails the campaign instead of being described as OS-exclusive isolation.
+These controls are cooperative and unprivileged.  The abstract socket is
+scoped to one Linux network namespace, is not an OS CPU reservation, and may
+be pre-bound by another process to deny collection; that condition fails
+closed rather than permitting concurrent evidence.  Neither lease can stop
+root-owned tasks or kernel work from being scheduled on the pair, and
+`/proc/stat` has scheduler-jiffy resolution.  Observed non-idle sibling
+activity therefore fails the campaign instead of being described as
+OS-exclusive isolation.
 The additional allowed CPU supplies a place outside the reserved core for
 ambient housekeeping but does not move or constrain kernel work by itself.
 Activity on the benchmark logical CPU cannot be separated from the intended
 child's work by these counters, so an external host reservation and an idle
-machine remain required.  Version-2 timing artifacts carry these semantics.
-Retained version-1 checkpoints remain
-portable-validation compatible, and version-1 durable manifests remain
-structurally parseable for diagnostics, but version 1 does not acquire the new
-isolation guarantee retroactively and cannot be resumed as a version-2
-campaign.
+machine remain required.  Version-3 timing artifacts carry the dual-lease
+semantics.  Retained version-2 checkpoints and durable manifests remain
+portable-validation compatible with their file-only lease evidence, and
+version-1 checkpoints/manifests retain their earlier compatibility.  Neither
+legacy version acquires the abstract-socket evidence retroactively, and neither
+can be resumed as a version-3 campaign.
 
 ## Correctness evidence lifecycle
 

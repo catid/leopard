@@ -45,21 +45,33 @@ sys.path.pop(0)
 
 
 SCHEMA_V1 = "leopard2-jerasure-comparison-checkpoint/v1"
-SCHEMA = "leopard2-jerasure-comparison-checkpoint/v2"
+SCHEMA_V2 = "leopard2-jerasure-comparison-checkpoint/v2"
+SCHEMA = "leopard2-jerasure-comparison-checkpoint/v3"
 CORRECTNESS_SCHEMA = "leopard2-jerasure-correctness/v1"
 CHILD_SCHEMA = "leopard2-jerasure-benchmark/v1"
 BUILD_SCHEMA = "leopard2-jerasure-build-closure/v1"
 PROVENANCE_SCHEMA = "leopard2-jerasure-toolchain/v1"
 RUN_MANIFEST_SCHEMA_V1 = "leopard2-jerasure-run-manifest/v1"
-RUN_MANIFEST_SCHEMA = "leopard2-jerasure-run-manifest/v2"
+RUN_MANIFEST_SCHEMA_V2 = "leopard2-jerasure-run-manifest/v2"
+RUN_MANIFEST_SCHEMA = "leopard2-jerasure-run-manifest/v3"
 CHILD_ARTIFACT_SCHEMA = "leopard2-jerasure-child-artifact/v1"
 GROUP_ARTIFACT_SCHEMA_V1 = "leopard2-jerasure-abba-pair/v1"
-GROUP_ARTIFACT_SCHEMA = "leopard2-jerasure-abba-pair/v2"
+GROUP_ARTIFACT_SCHEMA_V2 = "leopard2-jerasure-abba-pair/v2"
+GROUP_ARTIFACT_SCHEMA = "leopard2-jerasure-abba-pair/v3"
 HOST_GROUPS_SCHEMA_V1 = "leopard2-jerasure-host-groups/v1"
-HOST_GROUPS_SCHEMA = "leopard2-jerasure-host-groups/v2"
+HOST_GROUPS_SCHEMA_V2 = "leopard2-jerasure-host-groups/v2"
+HOST_GROUPS_SCHEMA = "leopard2-jerasure-host-groups/v3"
 PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
-ISOLATION_SCHEMA = "leopard2-jerasure-cpu-isolation/v1"
+KERNEL_PAIR_LEASE_SCHEMA = "leopard2-kernel-cpu-pair-lease/v1"
+ISOLATION_SCHEMA_V1 = "leopard2-jerasure-cpu-isolation/v1"
+ISOLATION_SCHEMA = "leopard2-jerasure-cpu-isolation/v2"
+ISOLATION_FAILURE_SCHEMA = "leopard2-jerasure-isolation-failure/v2"
 SMT_TOPOLOGY_SCHEMA = "leopard2-exact-smt-pair/v1"
+PAIR_LEASE_LOCK_V1 = "exclusive_nonblocking_pair_wide"
+PAIR_LEASE_LOCK = (
+    "dual_linux_abstract_af_unix_bind_and_fcntl_flock_"
+    "exclusive_nonblocking_pair_wide")
+KERNEL_PAIR_LEASE_MECHANISM = "linux-abstract-af-unix-bind-exclusive"
 CPU_STAT_FIELDS = (
     "user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal")
 CPU_STAT_IDLE_FIELDS = ("idle", "iowait")
@@ -522,6 +534,35 @@ def pair_lease_directory_name() -> str:
     return "leopard2-cpu-leases"
 
 
+def pair_lease_kernel_name(
+        cpu: int, sibling: int, root: Path | None = None,
+        uid: int | None = None) -> bytes:
+    """Return the stable Linux abstract-socket name for one physical pair."""
+    payload = pair_lease_payload(cpu, sibling, uid)
+    retained_root = (
+        pair_lease_runtime_root(payload["uid"]) if root is None else root)
+    directory = retained_root / pair_lease_directory_name()
+    material = canonical_bytes({
+        "cpus": payload["cpus"],
+        "root": os.path.abspath(directory),
+        "schema": PAIR_LEASE_SCHEMA,
+        "uid": payload["uid"],
+    })
+    return b"\0leopard2-pair-v1-" + \
+        hashlib.sha256(material).hexdigest()[:40].encode("ascii")
+
+
+def kernel_pair_lease_identity(
+        cpu: int, sibling: int, root: Path | None = None,
+        uid: int | None = None) -> dict[str, str]:
+    name = pair_lease_kernel_name(cpu, sibling, root=root, uid=uid)
+    return {
+        "schema": KERNEL_PAIR_LEASE_SCHEMA,
+        "mechanism": KERNEL_PAIR_LEASE_MECHANISM,
+        "name_sha256": hashlib.sha256(name).hexdigest(),
+    }
+
+
 class PairLease:
     """Serialize cooperating evidence runners by physical CPU pair."""
 
@@ -538,14 +579,8 @@ class PairLease:
         self.root_descriptor: int | None = None
         self.expected = canonical_bytes(pair_lease_payload(cpu, sibling))
         self.kernel_socket: socket.socket | None = None
-        material = canonical_bytes({
-            "cpus": sorted((cpu, sibling)),
-            "root": os.path.abspath(self.directory),
-            "schema": PAIR_LEASE_SCHEMA,
-            "uid": os.getuid(),
-        })
-        self.kernel_name = b"\0leopard2-pair-v1-" + \
-            hashlib.sha256(material).hexdigest()[:40].encode("ascii")
+        self.kernel_name = pair_lease_kernel_name(
+            cpu, sibling, root=self.root, uid=os.getuid())
 
     def _acquire_kernel_lease(self) -> None:
         lease = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -693,7 +728,7 @@ class PairLease:
         if retained != self.expected:
             raise ComparisonError("CPU pair lease contents changed while held")
         identity = {
-            "lock": "exclusive_nonblocking_pair_wide",
+            "lock": PAIR_LEASE_LOCK,
             "path": str(self.path.absolute()),
             "payload": pair_lease_payload(self.cpu, self.sibling),
             "sha256": hashlib.sha256(retained).hexdigest(),
@@ -701,6 +736,8 @@ class PairLease:
             "inode": file_fd.st_ino,
             "directory_device": directory_fd.st_dev,
             "directory_inode": directory_fd.st_ino,
+            "kernel_lease": kernel_pair_lease_identity(
+                self.cpu, self.sibling, root=self.root),
         }
         validate_pair_lease_identity(
             identity, self.cpu, self.sibling, expected_root=self.root)
@@ -745,13 +782,16 @@ class PairLease:
 
 def validate_pair_lease_identity(
         value: Any, cpu: int, sibling: int,
-        expected_root: Path | None = None) -> dict[str, Any]:
+        expected_root: Path | None = None,
+        legacy: bool = False) -> dict[str, Any]:
     if not isinstance(value, Mapping):
         raise ComparisonError("CPU pair lease identity is not an object")
-    require_exact_keys(value, {
+    expected_keys = {
         "lock", "path", "payload", "sha256", "device", "inode",
-        "directory_device", "directory_inode"},
-                       "CPU pair lease identity")
+        "directory_device", "directory_inode"}
+    if not legacy:
+        expected_keys.add("kernel_lease")
+    require_exact_keys(value, expected_keys, "CPU pair lease identity")
     payload = value.get("payload")
     if not isinstance(payload, Mapping):
         raise ComparisonError("CPU pair lease payload is not an object")
@@ -767,13 +807,28 @@ def validate_pair_lease_identity(
                      pair_lease_name(cpu, sibling, retained_uid)).absolute()
     for name in ("device", "inode", "directory_device", "directory_inode"):
         require_int(value.get(name), f"CPU pair lease {name}", 0)
+    expected_lock = PAIR_LEASE_LOCK_V1 if legacy else PAIR_LEASE_LOCK
     if (not isinstance(path, str) or not path or not Path(path).is_absolute() or
             Path(path) != expected_path or
             not exact_json_equal(payload, expected_payload) or
-            value.get("lock") != "exclusive_nonblocking_pair_wide" or
+            value.get("lock") != expected_lock or
             not isinstance(digest, str) or
             digest != hashlib.sha256(canonical_bytes(expected_payload)).hexdigest()):
         raise ComparisonError("CPU pair lease identity is invalid")
+    if not legacy:
+        kernel = value.get("kernel_lease")
+        if not isinstance(kernel, Mapping):
+            raise ComparisonError("CPU pair kernel lease identity is not an object")
+        expected_kernel = kernel_pair_lease_identity(
+            cpu, sibling, root=root, uid=retained_uid)
+        require_exact_keys(
+            kernel, set(expected_kernel), "CPU pair kernel lease identity")
+        require_hex(
+            kernel.get("name_sha256"), 64,
+            "CPU pair kernel lease name digest")
+        require_exact_json_value(
+            kernel, expected_kernel,
+            "CPU pair kernel lease identity derivation")
     return dict(value)
 
 
@@ -794,12 +849,14 @@ def isolation_record(
         before_monotonic_ns: int, after_monotonic_ns: int,
         before_cpu: Mapping[str, Any], after_cpu: Mapping[str, Any],
         before_sibling: Mapping[str, Any],
-        after_sibling: Mapping[str, Any]) -> dict[str, Any]:
+        after_sibling: Mapping[str, Any],
+        legacy: bool = False) -> dict[str, Any]:
     cpu = require_int(cpu, "isolation benchmark CPU", 0)
     sibling = require_int(sibling, "isolation sibling CPU", 0)
     before_ns = require_int(before_monotonic_ns, "isolation start time", 0)
     after_ns = require_int(after_monotonic_ns, "isolation end time", 0)
-    lease = validate_pair_lease_identity(pair_lease, cpu, sibling)
+    lease = validate_pair_lease_identity(
+        pair_lease, cpu, sibling, legacy=legacy)
     benchmark_delta = cpu_stat_delta(before_cpu, after_cpu)
     sibling_delta = cpu_stat_delta(before_sibling, after_sibling)
     if benchmark_delta["cpu"] != cpu or sibling_delta["cpu"] != sibling:
@@ -809,7 +866,7 @@ def isolation_record(
         sibling_delta["total_jiffies"] >= 1 and
         sibling_delta["nonidle_jiffies"] <= MAX_SIBLING_NONIDLE_JIFFIES)
     return {
-        "schema": ISOLATION_SCHEMA,
+        "schema": ISOLATION_SCHEMA_V1 if legacy else ISOLATION_SCHEMA,
         "accepted": accepted,
         "benchmark_cpu": cpu,
         "reserved_sibling": sibling,
@@ -840,7 +897,8 @@ def validate_isolation(
     require_exact_keys(value, {
         "schema", "accepted", "benchmark_cpu", "reserved_sibling", "before",
         "after", "delta", "pair_lease", "policy"}, "CPU isolation evidence")
-    if (value.get("schema") != ISOLATION_SCHEMA or
+    schema = value.get("schema")
+    if (schema not in (ISOLATION_SCHEMA_V1, ISOLATION_SCHEMA) or
             type(value.get("accepted")) is not bool or
             value.get("benchmark_cpu") != cpu or
             value.get("reserved_sibling") != sibling or
@@ -858,7 +916,8 @@ def validate_isolation(
         require_int(before.get("monotonic_ns"), "isolation start time", 0),
         require_int(after.get("monotonic_ns"), "isolation end time", 0),
         before["benchmark_cpu"], after["benchmark_cpu"],
-        before["reserved_sibling"], after["reserved_sibling"])
+        before["reserved_sibling"], after["reserved_sibling"],
+        legacy=schema == ISOLATION_SCHEMA_V1)
     require_exact_json_value(value, expected, "CPU isolation derivation")
     if type(require_accepted) is not bool:
         raise ComparisonError("CPU isolation acceptance policy is not Boolean")
@@ -2123,7 +2182,12 @@ def correctness_binding(document: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def checkpoint_method(legacy: bool = False) -> dict[str, Any]:
+def checkpoint_method(
+        legacy: bool = False,
+        legacy_pair_lease: bool = False) -> dict[str, Any]:
+    if legacy and legacy_pair_lease:
+        raise ComparisonError(
+            "v1 checkpoint methods cannot carry legacy-v2 pair-lease semantics")
     method = {
         "provider_order": "ABBA",
         "provider_order_by_repetition": [list(order) for order in ABBA],
@@ -2159,10 +2223,26 @@ def checkpoint_method(legacy: bool = False) -> dict[str, Any]:
                 MAX_SIBLING_NONIDLE_JIFFIES,
             "isolation_audit_unit": "one complete two-provider ABBA repetition",
         })
+        if not legacy_pair_lease:
+            method.update({
+                "pair_wide_lease_mechanism": PAIR_LEASE_LOCK,
+                "pair_wide_kernel_lease": {
+                    "schema": KERNEL_PAIR_LEASE_SCHEMA,
+                    "mechanism": KERNEL_PAIR_LEASE_MECHANISM,
+                    "name_derivation": (
+                        "SHA-256 of canonical CPU pair, protected runtime "
+                        "directory, pair-lease schema, and UID"),
+                },
+            })
     return method
 
 
-def checkpoint_limitations(legacy: bool = False) -> list[str]:
+def checkpoint_limitations(
+        legacy: bool = False,
+        legacy_pair_lease: bool = False) -> list[str]:
+    if legacy and legacy_pair_lease:
+        raise ComparisonError(
+            "v1 checkpoint limitations cannot carry legacy-v2 pair-lease semantics")
     limitations = [
         "Jerasure and Leopard2 parity bytes/generator matrices differ",
         "GF8-vs-GF16 padding-boundary cells are not kernel-only comparisons",
@@ -2177,6 +2257,11 @@ def checkpoint_limitations(legacy: bool = False) -> list[str]:
             "cannot prevent non-cooperating or kernel work at scheduler-jiffy resolution",
             "benchmark-CPU counters cannot distinguish benchmark work from unrelated "
             "same-CPU work; external host isolation remains required"))
+        if not legacy_pair_lease:
+            limitations.append(
+                "the abstract AF_UNIX lease is scoped to one Linux network namespace; "
+                "another process may pre-bind its deterministic name and fail the run "
+                "closed, but the lease is not OS-exclusive CPU isolation")
     return limitations
 
 
@@ -2336,7 +2421,9 @@ def validate_run_manifest(
         document: Mapping[str, Any], expected: Mapping[str, Any]) -> None:
     require_exact_keys(document, set(expected), "run manifest")
     manifest_schema = document.get("schema")
-    if manifest_schema not in (RUN_MANIFEST_SCHEMA_V1, RUN_MANIFEST_SCHEMA):
+    if manifest_schema not in (
+            RUN_MANIFEST_SCHEMA_V1, RUN_MANIFEST_SCHEMA_V2,
+            RUN_MANIFEST_SCHEMA):
         raise ComparisonError("wrong run-manifest schema")
     if document.get("artifact_sha256") != canonical_digest(document):
         raise ComparisonError("run-manifest digest changed")
@@ -2354,7 +2441,8 @@ def validate_run_manifest(
         require_housekeeping_cpu(cpu, reserved, allowed, "run manifest")
     method = document.get("method", {})
     expected_method = checkpoint_method(
-        legacy=manifest_schema == RUN_MANIFEST_SCHEMA_V1)
+        legacy=manifest_schema == RUN_MANIFEST_SCHEMA_V1,
+        legacy_pair_lease=manifest_schema == RUN_MANIFEST_SCHEMA_V2)
     require_exact_keys(method, set(expected_method), "run manifest method")
     for name in ("repetitions", "iterations_per_child", "warmups_per_child",
                  "raw_samples_retained_per_metric", "region_contract_bytes",
@@ -2516,9 +2604,13 @@ def validate_group_artifacts(
                 "durable ABBA artifact digest")
     manifest_digest = require_hex(
         manifest.get("artifact_sha256"), 64, "run manifest digest")
-    legacy = manifest.get("schema") == RUN_MANIFEST_SCHEMA_V1
+    manifest_schema = manifest.get("schema")
+    legacy = manifest_schema == RUN_MANIFEST_SCHEMA_V1
     expected_group_schema = (
-        GROUP_ARTIFACT_SCHEMA_V1 if legacy else GROUP_ARTIFACT_SCHEMA)
+        GROUP_ARTIFACT_SCHEMA_V1 if legacy else
+        GROUP_ARTIFACT_SCHEMA_V2
+        if manifest_schema == RUN_MANIFEST_SCHEMA_V2 else
+        GROUP_ARTIFACT_SCHEMA)
     if (group.get("schema") != expected_group_schema or
             group.get("manifest_sha256") != manifest_digest or
             group_cell != cell_index or
@@ -2553,6 +2645,14 @@ def validate_group_artifacts(
         require_int(manifest.get("reserved_idle_cpu"),
                     "run manifest reserved CPU", 0),
         original_allowed, legacy=legacy)
+    if not legacy:
+        expected_isolation_schema = (
+            ISOLATION_SCHEMA_V1
+            if manifest_schema == RUN_MANIFEST_SCHEMA_V2 else
+            ISOLATION_SCHEMA)
+        if group["host"]["cpu_isolation"].get("schema") != expected_isolation_schema:
+            raise ComparisonError(
+                "durable group isolation and manifest schema versions disagree")
     return results, dict(group["host"])
 
 
@@ -2571,9 +2671,16 @@ def load_completed_group(
 
 def make_host_groups(
         cpu: int, reserved_cpu: int, original_allowed: Sequence[int],
-        groups: Sequence[Mapping[str, Any]], legacy: bool = False) -> dict[str, Any]:
+        groups: Sequence[Mapping[str, Any]], legacy: bool = False,
+        legacy_pair_lease: bool = False) -> dict[str, Any]:
+    if legacy and legacy_pair_lease:
+        raise ComparisonError(
+            "v1 host groups cannot carry legacy-v2 pair-lease semantics")
     return {
-        "schema": HOST_GROUPS_SCHEMA_V1 if legacy else HOST_GROUPS_SCHEMA,
+        "schema": (
+            HOST_GROUPS_SCHEMA_V1 if legacy else
+            HOST_GROUPS_SCHEMA_V2 if legacy_pair_lease else
+            HOST_GROUPS_SCHEMA),
         "requested_cpu": cpu,
         "reserved_idle_sibling_cpu": reserved_cpu,
         "allowed_cpus": sorted(set(int(value) for value in original_allowed)),
@@ -2596,7 +2703,9 @@ def validate_host_groups(value: Mapping[str, Any]) -> None:
     allowed = value.get("allowed_cpus")
     groups = value.get("groups")
     host_schema = value.get("schema")
-    if host_schema not in (HOST_GROUPS_SCHEMA_V1, HOST_GROUPS_SCHEMA):
+    if host_schema not in (
+            HOST_GROUPS_SCHEMA_V1, HOST_GROUPS_SCHEMA_V2,
+            HOST_GROUPS_SCHEMA):
         raise ComparisonError("wrong checkpoint host-group schema")
     legacy = host_schema == HOST_GROUPS_SCHEMA_V1
     if (
@@ -2629,6 +2738,14 @@ def validate_host_groups(value: Mapping[str, Any]) -> None:
         validate_host_metadata(
             group["host"], cpu, reserved, allowed, legacy=legacy)
         if not legacy:
+            expected_isolation_schema = (
+                ISOLATION_SCHEMA_V1
+                if host_schema == HOST_GROUPS_SCHEMA_V2 else
+                ISOLATION_SCHEMA)
+            if group["host"]["cpu_isolation"].get(
+                    "schema") != expected_isolation_schema:
+                raise ComparisonError(
+                    "host-group and isolation schema versions disagree")
             topology = group["host"]["smt_topology"]
             if retained_topology is None:
                 retained_topology = topology
@@ -2783,7 +2900,7 @@ def run_checkpoint(
                             require_accepted=False)
                         if isolation["accepted"] is not True:
                             failure: dict[str, Any] = {
-                                "schema": "leopard2-jerasure-isolation-failure/v1",
+                                "schema": ISOLATION_FAILURE_SCHEMA,
                                 "manifest_sha256": manifest["artifact_sha256"],
                                 "cell_index": cell_index,
                                 "repetition": repetition,
@@ -2897,9 +3014,10 @@ def validate_checkpoint(
         "correctness_binding", "host", "cells", "results", "aggregate",
         "limitations", "artifact_sha256"}, "checkpoint")
     checkpoint_schema = document.get("schema")
-    if checkpoint_schema not in (SCHEMA_V1, SCHEMA):
+    if checkpoint_schema not in (SCHEMA_V1, SCHEMA_V2, SCHEMA):
         raise ComparisonError("wrong checkpoint schema")
     legacy = checkpoint_schema == SCHEMA_V1
+    legacy_pair_lease = checkpoint_schema == SCHEMA_V2
     validate_portable_sources(document["sources"])
     require_exact_json_value(
         document["sources"], correctness["sources"],
@@ -2919,7 +3037,8 @@ def validate_checkpoint(
     if cells != [dict(cell) for cell in CHECKPOINT_CELLS]:
         raise ComparisonError("checkpoint cells changed")
     method = document.get("method", {})
-    expected_method = checkpoint_method(legacy=legacy)
+    expected_method = checkpoint_method(
+        legacy=legacy, legacy_pair_lease=legacy_pair_lease)
     require_exact_keys(method, set(expected_method), "checkpoint method")
     for name in ("repetitions", "iterations_per_child", "warmups_per_child",
                  "raw_samples_retained_per_metric", "region_contract_bytes",
@@ -2927,11 +3046,14 @@ def validate_checkpoint(
         require_int(method.get(name), f"checkpoint method.{name}", 0)
     require_exact_json_value(method, expected_method, "checkpoint method")
     if not exact_json_equal(
-            document.get("limitations"), checkpoint_limitations(legacy=legacy)):
+            document.get("limitations"), checkpoint_limitations(
+                legacy=legacy, legacy_pair_lease=legacy_pair_lease)):
         raise ComparisonError("checkpoint limitations changed")
     host_groups = document.get("host", {})
     expected_host_schema = (
-        HOST_GROUPS_SCHEMA_V1 if legacy else HOST_GROUPS_SCHEMA)
+        HOST_GROUPS_SCHEMA_V1 if legacy else
+        HOST_GROUPS_SCHEMA_V2 if legacy_pair_lease else
+        HOST_GROUPS_SCHEMA)
     if not isinstance(host_groups, Mapping) or host_groups.get("schema") != expected_host_schema:
         raise ComparisonError("checkpoint/host-group schema versions do not match")
     validate_host_groups(host_groups)
@@ -3032,11 +3154,13 @@ def fake_smt_topology(cpu: int, reserved_cpu: int) -> dict[str, Any]:
     }
 
 
-def fake_pair_lease(cpu: int, reserved_cpu: int, uid: int = 123) -> dict[str, Any]:
+def fake_pair_lease(
+        cpu: int, reserved_cpu: int, uid: int = 123,
+        legacy: bool = False) -> dict[str, Any]:
     payload = pair_lease_payload(cpu, reserved_cpu, uid)
     directory = pair_lease_runtime_root(uid) / pair_lease_directory_name()
-    return {
-        "lock": "exclusive_nonblocking_pair_wide",
+    identity: dict[str, Any] = {
+        "lock": PAIR_LEASE_LOCK_V1 if legacy else PAIR_LEASE_LOCK,
         "path": str(directory / pair_lease_name(cpu, reserved_cpu, uid)),
         "payload": payload,
         "sha256": hashlib.sha256(canonical_bytes(payload)).hexdigest(),
@@ -3045,6 +3169,10 @@ def fake_pair_lease(cpu: int, reserved_cpu: int, uid: int = 123) -> dict[str, An
         "directory_device": 1,
         "directory_inode": 3,
     }
+    if not legacy:
+        identity["kernel_lease"] = kernel_pair_lease_identity(
+            cpu, reserved_cpu, root=pair_lease_runtime_root(uid), uid=uid)
+    return identity
 
 
 def fake_host_metadata(
@@ -3104,15 +3232,44 @@ def fake_host_metadata(
 
 def run_isolation_self_test() -> dict[str, int]:
     cpu, sibling = 1, 2
+    kernel_root = Path("/run/user/54321")
+    kernel_name = pair_lease_kernel_name(
+        cpu, sibling, root=kernel_root, uid=54321)
+    if (kernel_name != pair_lease_kernel_name(
+            sibling, cpu, root=kernel_root, uid=54321) or
+            kernel_name == pair_lease_kernel_name(
+                cpu, sibling, root=Path("/run/user/54322"), uid=54321) or
+            not kernel_name.startswith(b"\0leopard2-pair-v1-")):
+        raise ComparisonError("stable kernel pair-lease name derivation changed")
     topology = fake_smt_topology(cpu, sibling)
     validate_smt_topology(topology, cpu, sibling)
     lease = fake_pair_lease(cpu, sibling, uid=54321)
     validate_pair_lease_identity(lease, cpu, sibling)
+    kernel_mutations = 0
+    for field, value in (
+            ("mechanism", "filesystem-only"),
+            ("name_sha256", "f" * 64)):
+        changed_lease = copy.deepcopy(lease)
+        changed_lease["kernel_lease"][field] = value
+        try:
+            validate_pair_lease_identity(changed_lease, cpu, sibling)
+        except ComparisonError:
+            kernel_mutations += 1
+        else:
+            raise ComparisonError(
+                f"edited kernel pair-lease {field} was accepted")
     evidence = isolation_record(
         cpu, sibling, lease, 1000, 2000,
         fake_cpu_stat(cpu, 100, 100), fake_cpu_stat(cpu, 110, 110),
         fake_cpu_stat(sibling, 100, 100), fake_cpu_stat(sibling, 100, 120))
     validate_isolation(evidence, cpu, sibling)
+    legacy_lease = fake_pair_lease(cpu, sibling, uid=54321, legacy=True)
+    legacy_evidence = isolation_record(
+        cpu, sibling, legacy_lease, 1000, 2000,
+        fake_cpu_stat(cpu, 100, 100), fake_cpu_stat(cpu, 110, 110),
+        fake_cpu_stat(sibling, 100, 100), fake_cpu_stat(sibling, 100, 120),
+        legacy=True)
+    validate_isolation(legacy_evidence, cpu, sibling)
 
     rejected = 0
     changed = copy.deepcopy(evidence)
@@ -3155,6 +3312,9 @@ def run_isolation_self_test() -> dict[str, int]:
             "cpu_stat_parsers_checked": 1,
             "pair_lease_races_or_modes_rejected": 0,
             "portable_pair_lease_uid_replays": 1,
+            "legacy_isolation_v1_replays": 1,
+            "kernel_pair_lease_names_checked": 3,
+            "kernel_pair_lease_mutations_rejected": kernel_mutations,
         }
     lease_checks = 0
     with tempfile.TemporaryDirectory(prefix="leo2-jerasure-lease-test-") as temp:
@@ -3239,6 +3399,9 @@ def run_isolation_self_test() -> dict[str, int]:
         "cpu_stat_parsers_checked": 1,
         "pair_lease_races_or_modes_rejected": lease_checks,
         "portable_pair_lease_uid_replays": 1,
+        "legacy_isolation_v1_replays": 1,
+        "kernel_pair_lease_names_checked": 3,
+        "kernel_pair_lease_mutations_rejected": kernel_mutations,
     }
 
 
@@ -3291,6 +3454,13 @@ def run_state_self_test() -> dict[str, int]:
         },
     }
     manifest["artifact_sha256"] = canonical_digest(manifest)
+    legacy_v2_manifest = copy.deepcopy(manifest)
+    legacy_v2_manifest["schema"] = RUN_MANIFEST_SCHEMA_V2
+    legacy_v2_manifest["method"] = checkpoint_method(
+        legacy_pair_lease=True)
+    legacy_v2_manifest["artifact_sha256"] = canonical_digest(
+        legacy_v2_manifest)
+    validate_run_manifest(legacy_v2_manifest, legacy_v2_manifest)
     legacy_manifest = copy.deepcopy(manifest)
     legacy_manifest["schema"] = RUN_MANIFEST_SCHEMA_V1
     legacy_manifest["original_allowed_cpus"] = [cpu, reserved]
@@ -3309,7 +3479,7 @@ def run_state_self_test() -> dict[str, int]:
     except ComparisonError:
         pass
     else:
-        raise ComparisonError("v2 pair-only launch affinity was accepted")
+        raise ComparisonError("current pair-only launch affinity was accepted")
     pair_only_host = fake_host_metadata(cpu, reserved, [cpu, reserved])
     try:
         validate_host_metadata(
@@ -3317,7 +3487,7 @@ def run_state_self_test() -> dict[str, int]:
     except ComparisonError:
         pass
     else:
-        raise ComparisonError("v2 pair-only host affinity was accepted")
+        raise ComparisonError("current pair-only host affinity was accepted")
     ambiguous_manifest = copy.deepcopy(manifest)
     ambiguous_manifest["cells"][0]["batch"] = True
     ambiguous_manifest["artifact_sha256"] = canonical_digest(ambiguous_manifest)
@@ -3412,6 +3582,7 @@ def run_state_self_test() -> dict[str, int]:
             "state_mutations_rejected": 7,
             "strict_json_mutations_rejected": 4,
             "legacy_v1_manifests_replayed": 1,
+            "legacy_v2_manifests_replayed": 1,
             "legacy_v1_pair_only_hosts_replayed": 1}
 
 
@@ -3564,7 +3735,7 @@ def fake_checkpoint(correctness: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def legacy_checkpoint(checkpoint: Mapping[str, Any]) -> dict[str, Any]:
-    """Convert synthetic v2 evidence to the exact retained v1 shape."""
+    """Convert current synthetic evidence to the exact retained v1 shape."""
     legacy = copy.deepcopy(checkpoint)
     legacy["schema"] = SCHEMA_V1
     legacy["method"] = checkpoint_method(legacy=True)
@@ -3580,6 +3751,30 @@ def legacy_checkpoint(checkpoint: Mapping[str, Any]) -> dict[str, Any]:
         group["host"]["allowed_cpu_count"] = len(pair)
         group["host"].pop("smt_topology")
         group["host"].pop("cpu_isolation")
+    legacy["artifact_sha256"] = canonical_digest(legacy)
+    return legacy
+
+
+def legacy_v2_checkpoint(checkpoint: Mapping[str, Any]) -> dict[str, Any]:
+    """Convert current synthetic evidence to the retained v2 lease shape."""
+    legacy = copy.deepcopy(checkpoint)
+    legacy["schema"] = SCHEMA_V2
+    legacy["method"] = checkpoint_method(legacy_pair_lease=True)
+    legacy["limitations"] = checkpoint_limitations(legacy_pair_lease=True)
+    legacy["host"]["schema"] = HOST_GROUPS_SCHEMA_V2
+    for group in legacy["host"]["groups"]:
+        isolation = group["host"]["cpu_isolation"]
+        lease = copy.deepcopy(isolation["pair_lease"])
+        lease["lock"] = PAIR_LEASE_LOCK_V1
+        lease.pop("kernel_lease")
+        before = isolation["before"]
+        after = isolation["after"]
+        group["host"]["cpu_isolation"] = isolation_record(
+            isolation["benchmark_cpu"], isolation["reserved_sibling"], lease,
+            before["monotonic_ns"], after["monotonic_ns"],
+            before["benchmark_cpu"], after["benchmark_cpu"],
+            before["reserved_sibling"], after["reserved_sibling"],
+            legacy=True)
     legacy["artifact_sha256"] = canonical_digest(legacy)
     return legacy
 
@@ -3600,6 +3795,7 @@ def run_mutation_tests(correctness_path: Path) -> dict[str, int]:
     validate_correctness(correctness)
     checkpoint = fake_checkpoint(correctness)
     validate_checkpoint(checkpoint, correctness)
+    validate_checkpoint(legacy_v2_checkpoint(checkpoint), correctness)
     validate_checkpoint(legacy_checkpoint(checkpoint), correctness)
     checkpoint_mutations = []
     changed = copy.deepcopy(checkpoint)
@@ -3636,6 +3832,16 @@ def run_mutation_tests(correctness_path: Path) -> dict[str, int]:
     changed = copy.deepcopy(checkpoint)
     changed["host"]["groups"][0]["host"]["cpu_isolation"]["pair_lease"][
         "path"] = "/tmp/wrong-pair.lock"
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["host"]["groups"][0]["host"]["cpu_isolation"]["pair_lease"][
+        "kernel_lease"]["mechanism"] = "filesystem-only"
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
+    changed = copy.deepcopy(checkpoint)
+    changed["host"]["groups"][0]["host"]["cpu_isolation"]["pair_lease"][
+        "kernel_lease"]["name_sha256"] = "f" * 64
     changed["artifact_sha256"] = canonical_digest(changed)
     checkpoint_mutations.append(changed)
     changed = copy.deepcopy(checkpoint)
@@ -3811,7 +4017,8 @@ def run_mutation_tests(correctness_path: Path) -> dict[str, int]:
     return {"checkpoint_mutations_rejected": len(checkpoint_mutations),
             "correctness_mutations_rejected": len(correctness_mutations),
             "no_loss_mutations_rejected": 1,
-            "legacy_v1_checkpoints_replayed": 1}
+            "legacy_v1_checkpoints_replayed": 1,
+            "legacy_v2_checkpoints_replayed": 1}
 
 
 def run_build_recipe_self_test() -> dict[str, int]:
