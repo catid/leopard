@@ -18,8 +18,12 @@ Typical use::
       --result-dir .research/leopard2/r1-xor/pinned
 
 Compilation and unrelated workloads must be stopped during a pinned run.  The
-manifest records CPU topology and executable/build identities, but the operator
-remains responsible for reserving the physical core's SMT sibling.
+manifest records CPU topology plus SHA-256 identities for the executable and
+CMake cache files.  The recorded source commit and dirty flag are observations
+of the source path named by CMake at manifest creation time: the benchmark does
+not embed a commit identifier, so those fields do not cryptographically bind the
+executable to a source tree.  The operator also remains responsible for
+reserving the physical core's SMT sibling.
 """
 
 from __future__ import print_function
@@ -403,10 +407,15 @@ def command_for(manifest, job, variant, raw_path):
     ]
 
 
-def run_job(root, manifest, source_job):
+def job_with_settings(manifest, source_job):
     job = dict(source_job)
     job["iterations"] = manifest["settings"]["iterations"]
     job["warmup"] = manifest["settings"]["warmup"]
+    return job
+
+
+def run_job(root, manifest, source_job):
+    job = job_with_settings(manifest, source_job)
     log_dir = root / "logs" / job["job_id"]
     raw_dir = root / "raw" / job["job_id"]
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -496,20 +505,53 @@ def valid_existing(root, manifest, job):
                 value.get("job_id") != job["job_id"] or \
                 canonical(value.get("cell")) != canonical(job["cell"]):
             return False
+        if value.get("reuse") != job["reuse"] or \
+                value.get("seed") != job["seed"]:
+            return False
+        runtime_job = job_with_settings(manifest, job)
         measurements = value.get("measurements", [])
         if len(measurements) != len(job["order"]):
             return False
+        reference_digests = None
         for index, measurement in enumerate(measurements):
+            variant = job["order"][index]
+            stem = "{:02d}-{}".format(index, variant)
+            expected_paths = {
+                "benchmark_json": "raw/{}/{}.json".format(job["job_id"], stem),
+                "stdout": "logs/{}/{}.stdout".format(job["job_id"], stem),
+                "stderr": "logs/{}/{}.stderr".format(job["job_id"], stem),
+            }
             if measurement.get("sequence") != index or \
-                    measurement.get("variant") != job["order"][index]:
+                    measurement.get("variant") != variant:
                 return False
+            artifacts = {}
             for key in ("benchmark_json", "stdout", "stderr"):
+                if measurement.get(key) != expected_paths[key]:
+                    return False
                 artifact = safe_artifact(root, measurement[key])
                 data = artifact.read_bytes()
                 if digest_bytes(data) != measurement[key + "_sha256"]:
                     return False
+                artifacts[key] = (artifact, data)
+            raw_path, raw_bytes = artifacts["benchmark_json"]
+            raw = json.loads(raw_bytes.decode("utf-8"))
+            metrics, digests = validate_benchmark(raw, runtime_job)
+            if canonical(metrics) != canonical(measurement.get("metrics")):
+                return False
+            expected_argv = command_for(
+                manifest, runtime_job, variant, raw_path)
+            if canonical(expected_argv) != canonical(measurement.get("argv")):
+                return False
+            if reference_digests is None:
+                reference_digests = digests
+            elif canonical(reference_digests) != canonical(digests):
+                return False
+        if canonical(reference_digests) != \
+                canonical(value.get("workload_digests")):
+            return False
         return True
-    except (KeyError, OSError, UnicodeError, ValueError, CrossoverError):
+    except (KeyError, OSError, TypeError, UnicodeError, ValueError,
+            CrossoverError):
         return False
 
 
@@ -597,6 +639,197 @@ def analyze_metric(result, metric):
     }
 
 
+def evaluate_gate(cells, requested_backends):
+    target_wins = {
+        backend: {"decode": 0, "encode": 0}
+        for backend in requested_backends
+    }
+    regressions = []
+    for item in cells:
+        backend = item["cell"]["backend"]
+        if backend not in target_wins:
+            raise CrossoverError(
+                "analysis contains unrequested backend {}".format(backend))
+        for metric in ("decode", "encode"):
+            if item["cell"]["region"] == "target_r1" and \
+                    item[metric]["credible_improvement_at_least_5_percent"]:
+                target_wins[backend][metric] += 1
+            if item[metric]["observed_regression_over_2_percent"]:
+                regressions.append({
+                    "cell": item["cell"], "job_id": item["job_id"],
+                    "metric": metric,
+                    "median_improvement_percent":
+                        item[metric]["median_improvement_percent"],
+                    "credible": item[metric]["credible_regression_over_2_percent"],
+                })
+    every_group_wins = all(
+        target_wins[backend][metric] >= 1
+        for backend in requested_backends
+        for metric in ("decode", "encode"))
+    no_regressions = not regressions
+    return {
+        "backend_target_wins": target_wins,
+        "credible_target_win_for_every_requested_backend_and_metric":
+            every_group_wins,
+        "no_observed_neighbor_or_target_regression_over_2_percent":
+            no_regressions,
+        "observed_regressions": regressions,
+        "passed": every_group_wins and no_regressions,
+        "promotion_rule": (
+            "at least one credible >=5% target win for every requested backend "
+            "and both encode/decode; zero observed >2% target/neighbor regressions"),
+        "requested_backends": list(requested_backends),
+    }
+
+
+def enforce_gate(gate, reporting_only):
+    if not gate["passed"] and not reporting_only:
+        raise CrossoverError(
+            "promotion gate failed (use --reporting-only to retain a negative report)")
+
+
+def self_test_resume_validation():
+    with tempfile.TemporaryDirectory(prefix="leopard2-r1-xor-self-test-") as name:
+        root = Path(name).resolve()
+        source_job = {
+            "cell": cell("target_r1", "scalar", 3, 1, 17, 1),
+            "job_id": "resume-validation",
+            "order": ["baseline", "candidate", "candidate", "baseline"],
+            "reuse": 7,
+            "seed": 42,
+        }
+        manifest = {
+            "configuration_id": "self-test",
+            "executables": {
+                "baseline": {"executable": str(root / "baseline")},
+                "candidate": {"executable": str(root / "candidate")},
+            },
+            "settings": {
+                "backends": ["scalar"], "cpu": 0,
+                "iterations": 3, "warmup": 1,
+            },
+        }
+        job = job_with_settings(manifest, source_job)
+        records = []
+        digests = {
+            "algorithm": "fnv1a64",
+            "original_data": "01",
+            "recovered_originals": "02",
+            "transmitted_parity": "03",
+        }
+        for sequence, variant in enumerate(job["order"]):
+            stem = "{:02d}-{}".format(sequence, variant)
+            raw_path = root / "raw" / job["job_id"] / (stem + ".json")
+            stdout_path = root / "logs" / job["job_id"] / (stem + ".stdout")
+            stderr_path = root / "logs" / job["job_id"] / (stem + ".stderr")
+            raw = {
+                "schema": BENCHMARK_SCHEMA,
+                "parameters": {
+                    "K": 3, "R": 1, "batch": 1, "iterations": 3,
+                    "loss_count": 1, "requested_backend": "scalar",
+                    "requested_field": "gf8",
+                    "requested_profile": "legacy_high_v1",
+                    "retain_samples": True, "reuse": 7, "seed": 42,
+                    "shard_bytes": 17, "skip_legacy": True,
+                    "thread_count": 1, "warmup": 1,
+                },
+                "resolved": {
+                    "backend": "scalar", "field": "gf8",
+                    "profile": "legacy_high_v1",
+                },
+                "correctness": {"leopard2_round_trip": True},
+                "metrics": {
+                    "encode_execution": {
+                        "median_us_per_batch_call": 10.0,
+                        "mad_us_per_batch_call": 0.1,
+                    },
+                    "decode_execution": {
+                        "median_us_per_batch_call": 11.0,
+                        "mad_us_per_batch_call": 0.2,
+                    },
+                },
+                "workload_digests": digests,
+            }
+            atomic_json(raw_path, raw)
+            stdout_path.parent.mkdir(parents=True, exist_ok=True)
+            stdout_path.write_bytes(b"")
+            stderr_path.write_bytes(b"")
+            raw_bytes = raw_path.read_bytes()
+            metrics, parsed_digests = validate_benchmark(raw, job)
+            assert canonical(parsed_digests) == canonical(digests)
+            records.append({
+                "argv": command_for(manifest, job, variant, raw_path),
+                "benchmark_json": str(raw_path.relative_to(root)),
+                "benchmark_json_sha256": digest_bytes(raw_bytes),
+                "metrics": metrics,
+                "sequence": sequence,
+                "stderr": str(stderr_path.relative_to(root)),
+                "stderr_sha256": digest_bytes(b""),
+                "stdout": str(stdout_path.relative_to(root)),
+                "stdout_sha256": digest_bytes(b""),
+                "variant": variant,
+            })
+        result_path = root / "jobs" / (job["job_id"] + ".json")
+        pristine_result = {
+            "schema": JOB_SCHEMA,
+            "cell": job["cell"],
+            "configuration_id": manifest["configuration_id"],
+            "job_id": job["job_id"],
+            "measurements": records,
+            "reuse": job["reuse"],
+            "seed": job["seed"],
+            "status": "passed",
+            "workload_digests": digests,
+        }
+        atomic_json(result_path, pristine_result)
+        assert valid_existing(root, manifest, source_job)
+
+        def rejects_job_mutation(mutator):
+            mutated = json.loads(json.dumps(pristine_result))
+            mutator(mutated)
+            atomic_json(result_path, mutated)
+            assert not valid_existing(root, manifest, source_job)
+            atomic_json(result_path, pristine_result)
+
+        rejects_job_mutation(
+            lambda value: value["measurements"][0]["metrics"]
+                ["encode_execution"].update({"median_us": 9.0}))
+        rejects_job_mutation(
+            lambda value: value["measurements"][0]["argv"].append("--tampered"))
+        rejects_job_mutation(lambda value: value.update({"seed": 43}))
+        rejects_job_mutation(lambda value: value.update({"reuse": 8}))
+        rejects_job_mutation(
+            lambda value: value["measurements"][0].update({"variant": "candidate"}))
+        rejects_job_mutation(
+            lambda value: value["workload_digests"].update({"original_data": "ff"}))
+
+        raw_path = root / records[0]["benchmark_json"]
+        pristine_raw = json.loads(raw_path.read_text(encoding="utf-8"))
+
+        def rejects_raw_mutation(mutator):
+            mutated = json.loads(json.dumps(pristine_raw))
+            mutator(mutated)
+            atomic_json(raw_path, mutated)
+            mutated_result = json.loads(json.dumps(pristine_result))
+            mutated_result["measurements"][0]["benchmark_json_sha256"] = \
+                digest_bytes(raw_path.read_bytes())
+            atomic_json(result_path, mutated_result)
+            assert not valid_existing(root, manifest, source_job)
+            atomic_json(raw_path, pristine_raw)
+            atomic_json(result_path, pristine_result)
+
+        # Updating the cached file hash cannot conceal invalid benchmark
+        # parameters or a mismatch with cached derived metrics/digests.
+        rejects_raw_mutation(
+            lambda value: value["parameters"].update({"seed": 43}))
+        rejects_raw_mutation(
+            lambda value: value["metrics"]["encode_execution"].update(
+                {"median_us_per_batch_call": 9.0}))
+        rejects_raw_mutation(
+            lambda value: value["workload_digests"].update(
+                {"original_data": "ff"}))
+
+
 def command_analyze(args):
     root = Path(args.result_dir).resolve()
     try:
@@ -619,39 +852,16 @@ def command_analyze(args):
         })
     if missing:
         raise CrossoverError("incomplete jobs: {}".format(", ".join(missing)))
-    target_wins = {}
-    regressions = []
-    for item in cells:
-        backend = item["cell"]["backend"]
-        target_wins.setdefault(backend, {"decode": 0, "encode": 0})
-        for metric in ("decode", "encode"):
-            if item["cell"]["region"] == "target_r1" and \
-                    item[metric]["credible_improvement_at_least_5_percent"]:
-                target_wins[backend][metric] += 1
-            if item[metric]["observed_regression_over_2_percent"]:
-                regressions.append({
-                    "cell": item["cell"], "job_id": item["job_id"],
-                    "metric": metric,
-                    "median_improvement_percent":
-                        item[metric]["median_improvement_percent"],
-                    "credible": item[metric]["credible_regression_over_2_percent"],
-                })
+    gate = evaluate_gate(cells, manifest["settings"]["backends"])
     analysis = {
         "schema": ANALYSIS_SCHEMA,
         "cells": cells,
         "configuration_id": manifest["configuration_id"],
-        "gate": {
-            "backend_target_wins": target_wins,
-            "no_observed_neighbor_or_target_regression_over_2_percent":
-                not regressions,
-            "observed_regressions": regressions,
-            "promotion_rule": (
-                "at least one credible >=5% target win per affected backend "
-                "and metric; no unexplained observed >2% target/neighbor regression"),
-        },
+        "gate": gate,
     }
     atomic_json(root / "analysis.json", analysis)
-    print(json.dumps(analysis["gate"], indent=2, sort_keys=True))
+    print(json.dumps(gate, indent=2, sort_keys=True))
+    enforce_gate(gate, args.reporting_only)
 
 
 def command_self_test(_args):
@@ -679,6 +889,46 @@ def command_self_test(_args):
     result = analyze_metric(fake, "encode_execution")
     assert result["median_improvement_percent"] == 25.0
     assert result["credible_improvement_at_least_5_percent"]
+    positive_cells = []
+    for backend in BACKENDS:
+        metric = {
+            "credible_improvement_at_least_5_percent": True,
+            "credible_regression_over_2_percent": False,
+            "median_improvement_percent": 10.0,
+            "observed_regression_over_2_percent": False,
+        }
+        positive_cells.append({
+            "cell": cell("target_r1", backend, 3, 1, 17, 1),
+            "decode": dict(metric), "encode": dict(metric),
+            "job_id": backend,
+        })
+    positive_gate = evaluate_gate(positive_cells, BACKENDS)
+    assert positive_gate["passed"]
+
+    zero_win_cells = json.loads(json.dumps(positive_cells))
+    zero_win_cells[0]["encode"][
+        "credible_improvement_at_least_5_percent"] = False
+    zero_win_gate = evaluate_gate(zero_win_cells, BACKENDS)
+    assert not zero_win_gate["passed"]
+    try:
+        enforce_gate(zero_win_gate, False)
+        raise AssertionError("zero-win gate unexpectedly passed")
+    except CrossoverError:
+        pass
+    enforce_gate(zero_win_gate, True)
+
+    regression_cells = json.loads(json.dumps(positive_cells))
+    regression_cells[0]["decode"]["median_improvement_percent"] = -3.0
+    regression_cells[0]["decode"]["observed_regression_over_2_percent"] = True
+    regression_gate = evaluate_gate(regression_cells, BACKENDS)
+    assert not regression_gate["passed"]
+    try:
+        enforce_gate(regression_gate, False)
+        raise AssertionError("regression gate unexpectedly passed")
+    except CrossoverError:
+        pass
+    enforce_gate(regression_gate, True)
+    self_test_resume_validation()
     assert choose_reuse(cell("x", "scalar", 9, 1, 4096, 1),
                         1024 * 1024, 100000) > 1
     print("Leopard2 R=1 XOR crossover self-test passed: jobs={}".format(
@@ -704,6 +954,9 @@ def parser():
     run.set_defaults(function=command_run)
     analyze = subparsers.add_parser("analyze", help="validate and analyze jobs")
     analyze.add_argument("--result-dir", required=True)
+    analyze.add_argument(
+        "--reporting-only", action="store_true",
+        help="write a negative analysis without failing the command")
     analyze.set_defaults(function=command_analyze)
     self_test = subparsers.add_parser("self-test", help="test the runner")
     self_test.set_defaults(function=command_self_test)

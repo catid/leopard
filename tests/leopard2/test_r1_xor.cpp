@@ -338,7 +338,7 @@ void test_public_r1(leo2_backend backend)
     R1Fixture gf16_odd_payload(backend, 9, 34, true, LEO2_FIELD_GF16,
         LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1);
     execute_and_check_decode(gf16_odd_payload);
-    R1Fixture gf16_boundary(backend, 255, 66, false, LEO2_FIELD_GF16,
+    R1Fixture gf16_boundary(backend, 256, 66, false, LEO2_FIELD_GF16,
         LEO2_SHARD_LAYOUT_NATIVE_V1);
     execute_and_check_decode(gf16_boundary);
 
