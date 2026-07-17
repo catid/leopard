@@ -275,7 +275,8 @@ Evidence collected on 2026-07-16 with GCC 13.3.0 on an AMD Ryzen 9 9950X3D
 - explicit AVX2 build and CTest: 24/24 passed on CPUs 16-31;
 - compile-only AArch64/SSE2NEON check: pinned submodule commit
   `cad518a93b326f0f644b7972d488d04eaa2b0475` and GCC/G++ 13.3 cross-build of
-  `libleopard` completed 6/6 build steps; no runtime or performance claim;
+  the historical pre-rename `libleopard` target completed 6/6 build steps; no
+  runtime or performance claim;
 - four-variant backend matrix (`auto,scalar,ssse3,avx2`): passed with no
   mismatches using 4 concurrent workers and 8 build jobs per variant; both
   `auto` and `scalar` explicitly executed and passed the archive gate.  The

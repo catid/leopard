@@ -999,6 +999,10 @@ if(LEO2_BUILD_TESTS)
             NAME leopard2_visual_studio_project_self_test
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/proj/test_leopard_vcxproj.py)
+        add_test(
+            NAME leopard2_canonical_library_docs_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/proj/test_canonical_library_docs.py)
     endif()
     endif()
 endif()

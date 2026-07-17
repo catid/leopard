@@ -379,11 +379,11 @@ experiment from the current checkout.  Replace `VARIANT` with `auto`, `scalar`,
       -DLEO2_BUILD_TESTS=OFF -DLEO2_BUILD_BENCHMARKS=OFF \
       -DLEO2_BUILD_FUZZERS=OFF -DLEO2_ENABLE_CUDA=OFF \
       -DLEO2_BACKEND_VARIANT="$VARIANT"
-    cmake --build "build/c8/$VARIANT" -j "$JOBS" --target libleopard
+    cmake --build "build/c8/$VARIANT" -j "$JOBS" --target leopard
 
     SOURCE="$PWD/experiments/leopard2/non_power_of_two/c8/c8_exact_high.cpp"
     SOURCE_SHA="$(sha256sum "$SOURCE" | awk '{print $1}')"
-    LIBRARY="build/c8/$VARIANT/liblibleopard.a"
+    LIBRARY="build/c8/$VARIANT/libleopard.a"
     LIBRARY_SHA="$(sha256sum "$LIBRARY" | awk '{print $1}')"
     g++ -std=c++11 -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Werror \
       -DLEO2_C8_SOURCE_SHA256=\"$SOURCE_SHA\" \
@@ -408,9 +408,9 @@ sanitizer source and use `LEO2_C8_SANITIZER_MODE="asan-ubsan"`:
       -DLEO2_BUILD_FUZZERS=OFF -DLEO2_ENABLE_CUDA=OFF \
       -DLEO2_BACKEND_VARIANT=auto \
       -DCMAKE_CXX_FLAGS="$SAN_FLAGS"
-    cmake --build build/c8/asan -j "$JOBS" --target libleopard
+    cmake --build build/c8/asan -j "$JOBS" --target leopard
 
-    LIBRARY=build/c8/asan/liblibleopard.a
+    LIBRARY=build/c8/asan/libleopard.a
     LIBRARY_SHA="$(sha256sum "$LIBRARY" | awk '{print $1}')"
     g++ -std=c++11 -O1 -g -Wall -Wextra -Wpedantic -Werror $SAN_FLAGS \
       -DLEO2_C8_DISABLE_GLOBAL_NEW_TRACKING=1 \
@@ -452,14 +452,14 @@ sanitizer, benchmark, isolation, source, and rebuilt-library paths:
         --backend scalar=experiments/leopard2/non_power_of_two/c8/results/scalar.json \
         --backend ssse3=experiments/leopard2/non_power_of_two/c8/results/ssse3.json \
         --backend avx2=experiments/leopard2/non_power_of_two/c8/results/avx2.json \
-        --library auto=build/c8/auto/liblibleopard.a \
-        --library scalar=build/c8/scalar/liblibleopard.a \
-        --library ssse3=build/c8/ssse3/liblibleopard.a \
-        --library avx2=build/c8/avx2/liblibleopard.a \
+        --library auto=build/c8/auto/libleopard.a \
+        --library scalar=build/c8/scalar/libleopard.a \
+        --library ssse3=build/c8/ssse3/libleopard.a \
+        --library avx2=build/c8/avx2/libleopard.a \
         --sanitizer experiments/leopard2/non_power_of_two/c8/results/asan-ubsan.json \
-        --sanitizer-library build/c8/asan/liblibleopard.a \
+        --sanitizer-library build/c8/asan/libleopard.a \
         --benchmark experiments/leopard2/non_power_of_two/c8/results/benchmark.json \
-        --benchmark-library build/c8/avx2/liblibleopard.a \
+        --benchmark-library build/c8/avx2/libleopard.a \
         --isolation experiments/leopard2/non_power_of_two/c8/results/isolation.json \
         --source experiments/leopard2/non_power_of_two/c8/c8_exact_high.cpp \
         --repository . \

@@ -53,7 +53,7 @@ is copied into Leopard.  From the Leopard repository root:
       -I. -I.research/leopard2/xdrs/src \
       .research/leopard2/xdrs/src/P_function.cpp \
       experiments/leopard2/xdrs_compare.cpp \
-      build/release/liblibleopard.a -fopenmp -pthread \
+      build/release/libleopard.a -fopenmp -pthread \
       -o .research/leopard2/xdrs_compare
     taskset -c 0-15 .research/leopard2/xdrs_compare
 

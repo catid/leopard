@@ -328,8 +328,8 @@ archive identity across build directories.
             -DLEO2_BUILD_BENCHMARKS=OFF \
             -DLEO2_BACKEND_VARIANT="$variant"
         cmake --build "build/c2-checkpoint/$variant" \
-            -j "$JOBS" --target libleopard
-        LIBRARY="build/c2-checkpoint/$variant/liblibleopard.a"
+            -j "$JOBS" --target leopard
+        LIBRARY="build/c2-checkpoint/$variant/libleopard.a"
         LIBRARY_SHA="$(sha256sum "$LIBRARY" | awk '{print $1}')"
         g++ -std=c++11 -O3 -DNDEBUG -DLEO2_ENABLE_TEST_HOOKS=1 \
             -DLEO2_C2_SOURCE_SHA256="\"$SOURCE_SHA\"" \
@@ -370,8 +370,8 @@ instrumentation:
         -DLEO2_BUILD_BENCHMARKS=OFF \
         -DLEO2_BACKEND_VARIANT=auto
     cmake --build build/c2-checkpoint/asan \
-        -j "$JOBS" --target libleopard
-    ASAN_LIBRARY=build/c2-checkpoint/asan/liblibleopard.a
+        -j "$JOBS" --target leopard
+    ASAN_LIBRARY=build/c2-checkpoint/asan/libleopard.a
     ASAN_LIBRARY_SHA="$(sha256sum "$ASAN_LIBRARY" | awk '{print $1}')"
     g++ -std=c++11 -O1 -g -DLEO2_ENABLE_TEST_HOOKS=1 -I. \
         -DLEO2_C2_SOURCE_SHA256="\"$SOURCE_SHA\"" \
@@ -401,12 +401,12 @@ Validate the fail-closed merger and produce the retained machine summary:
         --backend experiments/leopard2/c2_truncated_cpp/results/scalar.json \
         --backend experiments/leopard2/c2_truncated_cpp/results/ssse3.json \
         --backend experiments/leopard2/c2_truncated_cpp/results/avx2.json \
-        --library auto=build/c2-checkpoint/auto/liblibleopard.a \
-        --library scalar=build/c2-checkpoint/scalar/liblibleopard.a \
-        --library ssse3=build/c2-checkpoint/ssse3/liblibleopard.a \
-        --library avx2=build/c2-checkpoint/avx2/liblibleopard.a \
+        --library auto=build/c2-checkpoint/auto/libleopard.a \
+        --library scalar=build/c2-checkpoint/scalar/libleopard.a \
+        --library ssse3=build/c2-checkpoint/ssse3/libleopard.a \
+        --library avx2=build/c2-checkpoint/avx2/libleopard.a \
         --sanitizer experiments/leopard2/c2_truncated_cpp/results/asan-ubsan.json \
-        --sanitizer-library build/c2-checkpoint/asan/liblibleopard.a \
+        --sanitizer-library build/c2-checkpoint/asan/libleopard.a \
         --benchmark experiments/leopard2/c2_truncated_cpp/results/benchmark.json \
         --source "$SOURCE" \
         --core-git-sha "$CORE_SHA" \

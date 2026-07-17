@@ -220,10 +220,10 @@ production code selects this path at this checkpoint.
 
 From a configured Release tree:
 
-    cmake --build build/release -j "$(nproc)" --target libleopard
+    cmake --build build/release -j "$(nproc)" --target leopard
     c++ -std=c++11 -O2 -Wall -Wextra -Wpedantic -I. \
       experiments/leopard2/locator_construction/locator_product_tree.cpp \
-      build/release/liblibleopard.a -fopenmp -pthread \
+      build/release/libleopard.a -fopenmp -pthread \
       -o build/release/leopard2_locator_product_tree
     build/release/leopard2_locator_product_tree --output \
       experiments/leopard2/locator_construction/results/algebra.json
@@ -243,11 +243,11 @@ The sanitizer replay used an independently instrumented library and prototype:
       -DLEO2_BUILD_BENCHMARKS=OFF \
       -DLEO2_ENABLE_CUDA=OFF
     cmake --build build/locator-asan -j "$(nproc)" \
-      --target libleopard leopard2_locator_test
+      --target leopard leopard2_locator_test
     clang++-18 -std=c++11 -O1 -g -fno-omit-frame-pointer \
       -fsanitize=address,undefined -Wall -Wextra -Wpedantic -I. \
       experiments/leopard2/locator_construction/locator_product_tree.cpp \
-      build/locator-asan/liblibleopard.a -fopenmp -pthread \
+      build/locator-asan/libleopard.a -fopenmp -pthread \
       -o build/locator-asan/leopard2_locator_product_tree
     ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
       UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \

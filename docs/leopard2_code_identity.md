@@ -167,7 +167,7 @@ and 20,000 deterministic mutation cases.  Unknown noncritical data is explicitly
 round-tripped.  The test has no third-party dependencies.
 
 The independent C99 implementation is `code_identity.c` with its deliberately
-experimental header `code_identity.h`.  It is not linked into `libleopard`,
+experimental header `code_identity.h`.  It is not linked into `leopard`,
 installed, or exposed through the Leopard public ABI.  Root CMake sees it only
 inside the default-off `leopard2_code_identity_fuzzer` target when
 `LEO2_BUILD_FUZZERS=ON`; a tests/benchmarks/fuzzers-off archive contains neither

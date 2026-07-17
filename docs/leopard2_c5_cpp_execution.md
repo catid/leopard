@@ -203,8 +203,8 @@ standalone source, baseline core revision, and each linked archive by SHA-256.
             -DLEO2_BUILD_TESTS=ON \
             -DLEO2_BUILD_BENCHMARKS=OFF \
             -DLEO2_BACKEND_VARIANT="$variant"
-        cmake --build "build/c5/$variant" -j8 --target libleopard
-        LIBRARY="build/c5/$variant/liblibleopard.a"
+        cmake --build "build/c5/$variant" -j8 --target leopard
+        LIBRARY="build/c5/$variant/libleopard.a"
         LIBRARY_SHA="$(sha256sum "$LIBRARY" | awk '{print $1}')"
         g++ -std=c++11 -O3 -DNDEBUG -Wall -Wextra -Wpedantic -Werror \
             -DLEO2_ENABLE_TEST_HOOKS=1 \
@@ -235,7 +235,7 @@ standalone source:
         -DCMAKE_CXX_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer' \
         -DLEO2_BUILD_TESTS=ON -DLEO2_BUILD_BENCHMARKS=OFF \
         -DLEO2_BACKEND_VARIANT=auto
-    cmake --build build/c5/asan -j8 --target libleopard
+    cmake --build build/c5/asan -j8 --target leopard
 
 Use the same compile command as above with the ASan archive, `-O1 -g`,
 `-fsanitize=address,undefined -fno-omit-frame-pointer
@@ -258,12 +258,12 @@ Validate the merger itself and regenerate the checkpoint:
         --backend scalar=experiments/leopard2/c5_dyadic_cpp/results/scalar.json \
         --backend ssse3=experiments/leopard2/c5_dyadic_cpp/results/ssse3.json \
         --backend avx2=experiments/leopard2/c5_dyadic_cpp/results/avx2.json \
-        --library auto=build/c5/auto/liblibleopard.a \
-        --library scalar=build/c5/scalar/liblibleopard.a \
-        --library ssse3=build/c5/ssse3/liblibleopard.a \
-        --library avx2=build/c5/avx2/liblibleopard.a \
+        --library auto=build/c5/auto/libleopard.a \
+        --library scalar=build/c5/scalar/libleopard.a \
+        --library ssse3=build/c5/ssse3/libleopard.a \
+        --library avx2=build/c5/avx2/libleopard.a \
         --sanitizer experiments/leopard2/c5_dyadic_cpp/results/asan-ubsan.json \
-        --sanitizer-library build/c5/asan/liblibleopard.a \
+        --sanitizer-library build/c5/asan/libleopard.a \
         --benchmark experiments/leopard2/c5_dyadic_cpp/results/benchmark.json \
         --source "$SOURCE" --repository . \
         --output experiments/leopard2/c5_dyadic_cpp/results/checkpoint.json

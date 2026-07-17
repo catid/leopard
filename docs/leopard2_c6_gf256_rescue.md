@@ -258,10 +258,12 @@ direct execution plans.
 
 ## Evidence binding and reproduction
 
-The retained benchmark manifest binds SHA-256 hashes of the exact executable,
-linked `liblibleopard.a`, C++ source, runner, raw result, stdout, and stderr.
-The checkpoint also freezes the exact executable and library hashes and rejects
-artifact relabeling.  The root default build remains unaffected.
+The retained, pre-rename benchmark manifest is historical evidence and binds
+SHA-256 hashes of the exact executable, its `liblibleopard.a` archive, C++
+source, runner, raw result, stdout, and stderr.  The checkpoint also freezes the
+exact executable and library hashes and rejects artifact relabeling.  A new run
+from current sources uses the canonical `leopard` target and `libleopard.a`
+archive.  The root default build remains unaffected.
 
 From the repository root, use at most eight build jobs.  Build forced variants
 as in the C5/C2 experiment docs, then compile `c6_gf256.cpp` against each static
@@ -285,7 +287,7 @@ then run only:
     PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -X dev \
       experiments/leopard2/non_power_of_two/c6/run_benchmark.py \
       --cpu 15 --executable build/c6/c6-avx2 \
-      --library build/c6/avx2/liblibleopard.a \
+      --library build/c6/avx2/libleopard.a \
       --result experiments/leopard2/non_power_of_two/c6/results/benchmark.json \
       --manifest experiments/leopard2/non_power_of_two/c6/results/benchmark-manifest.json \
       --stdout experiments/leopard2/non_power_of_two/c6/results/benchmark.stdout.txt \
