@@ -108,10 +108,14 @@ These counters cannot attribute every jiffy to the child, so the external host
 reservation and an otherwise idle machine remain required.
 
 Children and build/provenance helpers have timeouts and separately bounded
-stdout and stderr collection; overflow or timeout kills the whole child process
-group. Every subsequent reap attempt also has a finite timeout; an unkillable
-process is reported without an unbounded `wait`. Retained JSON has byte, depth,
-node, string, integer, floating-point,
+stdout and stderr collection. On Linux the runner temporarily becomes a child
+subreaper, follows process identities and ancestry through procfs, signals by
+pidfd, reaps adopted children, and requires two empty scans before restoring the
+prior subreaper state. This contains descendants that call `setsid()` or
+double-fork, not just the initial process group. Platforms without those Linux
+facilities fail closed before an authoritative child is spawned; portable
+evidence replay remains available. Every cleanup deadline is finite and no
+unbounded `wait` is used. Retained JSON has byte, depth, node, string, integer, floating-point,
 path, and collection limits. Retained-artifact hashing is bounded, rejects
 symlinks, hardlinks, FIFOs and other special files before a nonblocking open,
 binds the open descriptor to the named inode, and rejects concurrent

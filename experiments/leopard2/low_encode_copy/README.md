@@ -23,8 +23,9 @@ cells through five mock A1/B1/B2/A2 rounds, then exercises raw-sample
 validation, pass and policy-failure replay, bounded inputs and outputs,
 mutation rejection, immutable executable staging, reservation replacement,
 stable pair-lease interoperability (including path replacement), exact-affinity
-checking, independently fixed C++ loss vectors, and transactional no-replace
-publication preflight. It does not execute either real benchmark binary and
+checking, independently fixed C++ loss vectors, Linux subreaper/pidfd teardown
+of a `setsid()` double-fork daemon, and transactional no-replace publication
+preflight. It does not execute either real benchmark binary and
 must not be cited as timing evidence.
 
 `production-smoke` closes that mock/production boundary without creating

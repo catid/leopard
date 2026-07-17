@@ -646,7 +646,7 @@ def validate_support_contract() -> dict[str, Any]:
         "cpu_stat_snapshot", "git_identity", "host_identity", "isolation_record",
         "PairLease", "parse_cpu_list", "runtime_closure", "validate_host_record",
         "validate_isolation", "validate_topology", "run_process_bounded",
-        "terminate_process_group_bounded",
+        "terminate_process_group_bounded", "LinuxDescendantContainment",
     )
     for name in required_callables:
         require(callable(getattr(SUPPORT, name, None)),
@@ -688,6 +688,9 @@ def validate_support_contract() -> dict[str, Any]:
         "contracts": {
             "canonical_json": "sort_keys compact UTF-8 without newline",
             "cpu_stat_fields": list(SUPPORT.CPU_STAT_FIELDS),
+            "descendant_containment": (
+                "linux child subreaper plus procfs identities and pidfd signals; "
+                "fail closed before spawn otherwise"),
             "max_cpu_id": SUPPORT.MAX_CPU_ID,
             "max_cpu_list_entries": SUPPORT.MAX_CPU_LIST_ENTRIES,
             "pair_lease_schema": SUPPORT.PAIR_LEASE_SCHEMA,
@@ -1860,7 +1863,7 @@ def validate_execution_identity(
 def terminate_process_group_bounded(
     process: subprocess.Popen[bytes], timeout: float = 5.0
 ) -> tuple[bool, int]:
-    """SIGKILL a child process group and make one bounded reap attempt."""
+    """Bounded legacy process-group primitive; runners use full containment."""
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -1889,73 +1892,75 @@ def run_bounded(
         isinstance(item, int) and not isinstance(item, bool) and 0 <= item <= 1_048_575
         for item in pass_fds), "benchmark inherited descriptor list is invalid")
     started = time.monotonic_ns()
-    process = subprocess.Popen(
-        list(command), cwd="/", env=dict(environment), stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
-        pass_fds=tuple(pass_fds))
-    require(process.stdout is not None and process.stderr is not None,
-            "cannot capture benchmark pipes")
+    process: subprocess.Popen[bytes] | None = None
     selector = selectors.DefaultSelector()
-    stdout_fd = process.stdout.fileno()
-    stderr_fd = process.stderr.fileno()
-    outputs: dict[int, bytearray] = {stdout_fd: bytearray(), stderr_fd: bytearray()}
-    limits = {
-        process.stdout.fileno(): MAX_STDOUT_BYTES,
-        process.stderr.fileno(): MAX_STDERR_BYTES,
-    }
-    for stream in (process.stdout, process.stderr):
-        os.set_blocking(stream.fileno(), False)
-        selector.register(stream, selectors.EVENT_READ)
-    deadline = time.monotonic() + timeout
+    stdout_fd = -1
+    stderr_fd = -1
+    outputs: dict[int, bytearray] = {}
+    returncode = -int(signal.SIGKILL)
     failure: str | None = None
     try:
-        while selector.get_map():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                failure = f"benchmark exceeded {timeout:.3f} seconds"
-                break
-            events = selector.select(min(remaining, 0.1))
-            for key, _ in events:
-                descriptor = key.fileobj.fileno()
-                try:
-                    block = os.read(descriptor, 65536)
-                except BlockingIOError:
-                    continue
-                if not block:
-                    selector.unregister(key.fileobj)
-                    continue
-                outputs[descriptor].extend(block)
-                if len(outputs[descriptor]) > limits[descriptor]:
-                    failure = "benchmark output exceeded its retained byte limit"
-                    break
-            if failure is not None:
-                break
-        if failure is not None:
-            reaped, returncode = terminate_process_group_bounded(process)
-            if not reaped:
-                failure += "; process group was not reapable within five seconds"
-        else:
+        with SUPPORT.LinuxDescendantContainment() as containment:
+            process = subprocess.Popen(
+                list(command), cwd="/", env=dict(environment),
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, start_new_session=True,
+                pass_fds=tuple(pass_fds))
+            containment.attach(process.pid)
+            require(process.stdout is not None and process.stderr is not None,
+                    "cannot capture benchmark pipes")
+            stdout_fd = process.stdout.fileno()
+            stderr_fd = process.stderr.fileno()
+            outputs = {stdout_fd: bytearray(), stderr_fd: bytearray()}
+            limits = {stdout_fd: MAX_STDOUT_BYTES, stderr_fd: MAX_STDERR_BYTES}
+            for stream in (process.stdout, process.stderr):
+                os.set_blocking(stream.fileno(), False)
+                selector.register(stream, selectors.EVENT_READ)
+            deadline = time.monotonic() + timeout
             try:
-                returncode = process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                reaped, returncode = terminate_process_group_bounded(process)
-                failure = (
-                    "benchmark closed its output but did not terminate within five seconds"
-                )
-                if not reaped:
-                    failure += "; process group was not reapable within five seconds"
-    except subprocess.TimeoutExpired:
-        reaped, returncode = terminate_process_group_bounded(process)
-        failure = "benchmark process did not terminate within five seconds after SIGKILL"
-        if not reaped:
-            failure += "; bounded reap failed"
-    except BaseException:
-        terminate_process_group_bounded(process)
-        raise
+                while selector.get_map():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        failure = f"benchmark exceeded {timeout:.3f} seconds"
+                        break
+                    events = selector.select(min(remaining, 0.1))
+                    for key, _ in events:
+                        descriptor = key.fileobj.fileno()
+                        try:
+                            block = os.read(descriptor, 65536)
+                        except BlockingIOError:
+                            continue
+                        if not block:
+                            selector.unregister(key.fileobj)
+                            continue
+                        outputs[descriptor].extend(block)
+                        if len(outputs[descriptor]) > limits[descriptor]:
+                            failure = (
+                                "benchmark output exceeded its retained byte limit")
+                            break
+                    if failure is not None:
+                        break
+                if failure is None:
+                    try:
+                        returncode = process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        failure = (
+                            "benchmark closed its output but did not terminate "
+                            "within five seconds")
+            finally:
+                # Descendants may call setsid(), double-fork, or survive a
+                # successful leader.  The imported support proves the complete
+                # tree empty before restoring the prior subreaper state.
+                containment.terminate_and_reap(process)
+                if isinstance(process.returncode, int):
+                    returncode = process.returncode
     finally:
         selector.close()
-        process.stdout.close()
-        process.stderr.close()
+        if process is not None:
+            if process.stdout is not None:
+                process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
     duration = time.monotonic_ns() - started
     stdout = bytes(outputs[stdout_fd])
     stderr = bytes(outputs[stderr_fd])
@@ -3799,26 +3804,41 @@ def run_self_test(_options: argparse.Namespace) -> int:
         else:
             raise EvidenceError("child timeout was accepted")
         descendant_marker = root / "escaped-descendant"
+        descendant_ready = root / "escaped-descendant-ready"
         descendant_program = (
-            "import os,pathlib,time\n"
+            "import os,pathlib,sys,time\n"
             "child=os.fork()\n"
             "if child == 0:\n"
-            " time.sleep(.25);pathlib.Path(" + repr(str(descendant_marker)) +
-            ").write_text('escaped')\n"
+            " os.setsid()\n"
+            " daemon=os.fork()\n"
+            " if daemon != 0: os._exit(0)\n"
+            " pathlib.Path(sys.argv[2]).write_text(str(os.getpid()))\n"
+            " time.sleep(1.5);pathlib.Path(sys.argv[1]).write_text('escaped')\n"
+            " os._exit(0)\n"
             "else:\n"
-            " while True: pass\n"
+            " deadline=time.monotonic()+5\n"
+            " while not os.path.exists(sys.argv[2]) and time.monotonic()<deadline:\n"
+            "  time.sleep(.01)\n"
+            " while True: time.sleep(1)\n"
         )
+        subreaper_before = SUPPORT._get_child_subreaper()
         try:
             run_bounded(
-                (str(Path(sys.executable).resolve()), "-c", descendant_program),
-                CHILD_ENVIRONMENT, 0.05)
+                (str(Path(sys.executable).resolve()), "-c", descendant_program,
+                 str(descendant_marker), str(descendant_ready)),
+                CHILD_ENVIRONMENT, 0.8)
         except BoundedChildError:
             pass
         else:
             raise EvidenceError("descendant timeout was accepted")
-        time.sleep(0.4)
+        escaped_pid = int(descendant_ready.read_text(encoding="utf-8"))
+        require(SUPPORT._get_child_subreaper() == subreaper_before,
+                "benchmark cleanup did not restore child-subreaper state")
+        time.sleep(1.0)
         require(not descendant_marker.exists(),
-                "timed-out benchmark descendant escaped process-group cleanup")
+                "timed-out setsid/double-fork descendant escaped cleanup")
+        require(not Path("/proc", str(escaped_pid)).exists(),
+                "timed-out setsid/double-fork descendant process survived cleanup")
 
         class NeverReaps:
             pid = 999_999_999

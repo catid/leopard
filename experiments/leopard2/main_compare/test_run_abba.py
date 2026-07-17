@@ -13,6 +13,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 from dataclasses import asdict
@@ -665,6 +666,96 @@ class MainCompareRunnerTests(unittest.TestCase):
         self.assertEqual(returncode, -9)
         self.assertEqual(process.calls, [5.0])
         self.assertNotIn(None, process.calls)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "Linux descendant containment test")
+    def test_timeout_kills_setsid_double_fork_descendant(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = root / "escaped-marker"
+            ready = root / "escaped-ready"
+            subreaper_before = runner._get_child_subreaper()
+            child = (
+                "import os,sys,time\n"
+                "pid=os.fork()\n"
+                "if pid == 0:\n"
+                " os.setsid()\n"
+                " daemon=os.fork()\n"
+                " if daemon != 0: os._exit(0)\n"
+                " open(sys.argv[2], 'w').write(str(os.getpid()))\n"
+                " time.sleep(1.5)\n"
+                " open(sys.argv[1], 'w').write('escaped')\n"
+                " os._exit(0)\n"
+                "deadline=time.monotonic()+5\n"
+                "while not os.path.exists(sys.argv[2]) and time.monotonic()<deadline:\n"
+                " time.sleep(.01)\n"
+                "while True: time.sleep(1)\n"
+            )
+            with self.assertRaisesRegex(runner.EvidenceError, "exceeded"):
+                runner.run_process_bounded(
+                    [sys.executable, "-c", child, str(marker), str(ready)],
+                    timeout=0.8, max_stdout=1024, max_stderr=1024)
+            escaped_pid = int(ready.read_text(encoding="utf-8"))
+            self.assertEqual(runner._get_child_subreaper(), subreaper_before)
+            time.sleep(1.0)
+            self.assertFalse(marker.exists())
+            self.assertFalse(Path("/proc", str(escaped_pid)).exists())
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "Linux descendant containment test")
+    def test_successful_leader_cannot_leave_daemon_descendant(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            marker = root / "daemon-marker"
+            ready = root / "daemon-ready"
+            child = (
+                "import os,sys,time\n"
+                "pid=os.fork()\n"
+                "if pid == 0:\n"
+                " os.setsid()\n"
+                " daemon=os.fork()\n"
+                " if daemon != 0: os._exit(0)\n"
+                " null=os.open('/dev/null', os.O_WRONLY)\n"
+                " os.dup2(null, 1);os.dup2(null, 2);os.close(null)\n"
+                " open(sys.argv[2], 'w').write(str(os.getpid()))\n"
+                " time.sleep(1.0)\n"
+                " open(sys.argv[1], 'w').write('escaped')\n"
+                " os._exit(0)\n"
+                "deadline=time.monotonic()+5\n"
+                "while not os.path.exists(sys.argv[2]) and time.monotonic()<deadline:\n"
+                " time.sleep(.01)\n"
+            )
+            completed = runner.run_process_bounded(
+                [sys.executable, "-c", child, str(marker), str(ready)],
+                timeout=2.0, max_stdout=1024, max_stderr=1024)
+            self.assertEqual(completed.returncode, 0)
+            escaped_pid = int(ready.read_text(encoding="utf-8"))
+            time.sleep(1.1)
+            self.assertFalse(marker.exists())
+            self.assertFalse(Path("/proc", str(escaped_pid)).exists())
+
+    def test_descendant_containment_fails_closed_before_spawn(self) -> None:
+        with mock.patch.object(runner.sys, "platform", "not-linux"), \
+             mock.patch.object(runner.subprocess, "Popen") as popen, \
+             self.assertRaisesRegex(runner.EvidenceError, "requires Linux"):
+            runner.run_process_bounded(
+                [sys.executable, "-c", "pass"], timeout=1.0,
+                max_stdout=1024, max_stderr=1024)
+        popen.assert_not_called()
+
+        for unavailable in (
+                "_validate_linux_pidfd_support", "_get_child_subreaper",
+                "_proc_process_snapshot"):
+            with self.subTest(unavailable=unavailable), \
+                 mock.patch.object(
+                     runner, unavailable,
+                     side_effect=runner.EvidenceError(unavailable + " unavailable")), \
+                 mock.patch.object(runner.subprocess, "Popen") as popen, \
+                 self.assertRaisesRegex(runner.EvidenceError, "unavailable"):
+                runner.run_process_bounded(
+                    [sys.executable, "-c", "pass"], timeout=1.0,
+                    max_stdout=1024, max_stderr=1024)
+            popen.assert_not_called()
 
     def test_reservation_is_locked_and_canonical(self) -> None:
         payload = {

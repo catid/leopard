@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import ctypes
 import datetime as dt
 import errno
 import fcntl
@@ -73,6 +74,9 @@ MAX_COMMAND_STDOUT_BYTES = 128 * 1024 * 1024
 MAX_COMMAND_STDERR_BYTES = 8 * 1024 * 1024
 MAX_COMMAND_TIMEOUT_SECONDS = 3600.0
 MAX_IDENTITY_FILE_BYTES = 256 * 1024 * 1024
+CHILD_REAP_TIMEOUT_SECONDS = 5.0
+PR_SET_CHILD_SUBREAPER = 36
+PR_GET_CHILD_SUBREAPER = 37
 
 
 class EvidenceError(RuntimeError):
@@ -242,10 +246,343 @@ def write_bytes_exclusive(path: Path, value: bytes) -> None:
         raise EvidenceError(f"refusing to replace evidence file {path}") from error
 
 
+def _linux_prctl(option: int, argument: object) -> None:
+    """Invoke the Linux prctl needed for temporary child-subreaper ownership."""
+    require(sys.platform.startswith("linux"),
+            "child descendant containment requires Linux")
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        prctl = libc.prctl
+    except (AttributeError, OSError) as error:
+        raise EvidenceError(
+            f"Linux child-subreaper prctl is unavailable: {error}") from error
+    ctypes.set_errno(0)
+    result = prctl(ctypes.c_int(option), argument,
+                   ctypes.c_ulong(0), ctypes.c_ulong(0), ctypes.c_ulong(0))
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise EvidenceError(
+            "Linux child-subreaper prctl failed: " +
+            os.strerror(error_number or 1))
+
+
+def _get_child_subreaper() -> int:
+    value = ctypes.c_int(-1)
+    _linux_prctl(PR_GET_CHILD_SUBREAPER, ctypes.byref(value))
+    require(value.value in (0, 1),
+            "Linux returned an invalid child-subreaper state")
+    return value.value
+
+
+def _set_child_subreaper(value: int) -> None:
+    require(value in (0, 1), "invalid child-subreaper state")
+    _linux_prctl(PR_SET_CHILD_SUBREAPER, ctypes.c_ulong(value))
+    require(_get_child_subreaper() == value,
+            "Linux did not apply the requested child-subreaper state")
+
+
+def _linux_pidfd_open(pid: int) -> int | None:
+    """Open a race-free Linux process handle or report that the PID is gone."""
+    try:
+        pidfd_open = ctypes.CDLL(None, use_errno=True).pidfd_open
+    except (AttributeError, OSError) as error:
+        raise EvidenceError(f"Linux pidfd_open is unavailable: {error}") from error
+    ctypes.set_errno(0)
+    descriptor = pidfd_open(ctypes.c_int(pid), ctypes.c_uint(0))
+    if descriptor >= 0:
+        return descriptor
+    error_number = ctypes.get_errno()
+    if error_number == errno.ESRCH:
+        return None
+    raise EvidenceError(
+        f"cannot open Linux pidfd for process {pid}: " +
+        os.strerror(error_number or errno.EPERM))
+
+
+def _linux_pidfd_signal(descriptor: int, signal_number: int) -> None:
+    """Signal the exact process referenced by a pidfd, never a reused PID."""
+    try:
+        send_signal = ctypes.CDLL(None, use_errno=True).pidfd_send_signal
+    except (AttributeError, OSError) as error:
+        raise EvidenceError(
+            f"Linux pidfd_send_signal is unavailable: {error}") from error
+    ctypes.set_errno(0)
+    result = send_signal(
+        ctypes.c_int(descriptor), ctypes.c_int(signal_number), None,
+        ctypes.c_uint(0))
+    if result != 0:
+        error_number = ctypes.get_errno()
+        if error_number == errno.ESRCH:
+            return
+        raise EvidenceError(
+            "cannot signal contained Linux process through pidfd: " +
+            os.strerror(error_number or errno.EPERM))
+
+
+def _validate_linux_pidfd_support() -> None:
+    descriptor = _linux_pidfd_open(os.getpid())
+    require(descriptor is not None,
+            "Linux pidfd support cannot identify the runner process")
+    try:
+        _linux_pidfd_signal(descriptor, 0)
+    finally:
+        os.close(descriptor)
+
+
+def _proc_process_record(pid: int) -> tuple[int, int, int, int, str] | None:
+    """Return (ppid, pgrp, session, starttime, state) from Linux procfs."""
+    try:
+        data = (Path("/proc") / str(pid) / "stat").read_bytes()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    except OSError as error:
+        if error.errno in (errno.ENOENT, errno.ESRCH):
+            return None
+        raise EvidenceError(f"cannot inspect Linux process {pid}: {error}") from error
+    closing = data.rfind(b")")
+    require(closing > 0 and closing + 2 < len(data),
+            f"Linux process {pid} has malformed procfs stat data")
+    fields = data[closing + 2:].split()
+    require(len(fields) >= 20,
+            f"Linux process {pid} has truncated procfs stat data")
+    try:
+        state = fields[0].decode("ascii")
+        ppid = int(fields[1])
+        pgrp = int(fields[2])
+        session = int(fields[3])
+        starttime = int(fields[19])
+    except (UnicodeDecodeError, ValueError) as error:
+        raise EvidenceError(
+            f"Linux process {pid} has invalid procfs stat fields") from error
+    require(len(state) == 1 and ppid >= 0 and pgrp >= 0 and
+            session >= 0 and starttime >= 0,
+            f"Linux process {pid} has invalid procfs process identity")
+    return ppid, pgrp, session, starttime, state
+
+
+def _proc_process_snapshot() -> dict[int, tuple[int, int, int, int, str]]:
+    """Snapshot all procfs-visible processes, including every same-UID child."""
+    proc = Path("/proc")
+    require(proc.is_dir() and (proc / "self/stat").is_file(),
+            "child descendant containment requires mounted Linux procfs")
+    try:
+        names = os.listdir(proc)
+    except OSError as error:
+        raise EvidenceError(f"cannot enumerate Linux procfs: {error}") from error
+    result: dict[int, tuple[int, int, int, int, str]] = {}
+    for name in names:
+        if not name.isascii() or not name.isdigit():
+            continue
+        pid = int(name)
+        try:
+            record = _proc_process_record(pid)
+        except EvidenceError:
+            # hidepid may make unrelated processes unreadable.  Every same-UID
+            # child of this runner must remain inspectable or the run fails.
+            try:
+                owner = (proc / name).stat().st_uid
+            except OSError:
+                continue
+            if owner == os.getuid():
+                raise
+            continue
+        if record is not None:
+            result[pid] = record
+    self_record = _proc_process_record(os.getpid())
+    require(self_record is not None and os.getpid() in result,
+            "Linux procfs does not expose the runner process")
+    return result
+
+
+def _process_identity(
+    pid: int, snapshot: Mapping[int, tuple[int, int, int, int, str]]
+) -> tuple[int, int] | None:
+    record = snapshot.get(pid)
+    return None if record is None else (pid, record[3])
+
+
+class LinuxDescendantContainment:
+    """Own, kill, reap, and prove teardown of one complete Linux child tree.
+
+    A process can escape a start_new_session process group with setsid().  The
+    runner therefore becomes a temporary child subreaper.  Escaped and
+    double-forked descendants are adopted by this process and remain visible
+    through procfs until killed and explicitly reaped.
+    """
+
+    def __init__(self) -> None:
+        self.runner_pid = os.getpid()
+        self.previous_subreaper: int | None = None
+        self.baseline_children: set[tuple[int, int]] = set()
+        self.leader: tuple[int, int] | None = None
+        self.known: set[tuple[int, int]] = set()
+        self.active = False
+        self.proven_empty = False
+
+    @staticmethod
+    def _direct_children(
+        snapshot: Mapping[int, tuple[int, int, int, int, str]], parent: int
+    ) -> set[tuple[int, int]]:
+        return {(pid, record[3]) for pid, record in snapshot.items()
+                if record[0] == parent}
+
+    def __enter__(self) -> "LinuxDescendantContainment":
+        require(not self.active, "child descendant containment is already active")
+        require(sys.platform.startswith("linux"),
+                "child descendant containment requires Linux")
+        task_root = Path("/proc/self/task")
+        require(task_root.is_dir(),
+                "child descendant containment requires Linux procfs task data")
+        try:
+            task_count = sum(1 for name in os.listdir(task_root)
+                             if name.isascii() and name.isdigit())
+        except OSError as error:
+            raise EvidenceError(
+                f"cannot inspect runner threads for child containment: {error}") from error
+        require(task_count == 1,
+                "child descendant containment requires a single-threaded runner")
+        _validate_linux_pidfd_support()
+        self.previous_subreaper = _get_child_subreaper()
+        try:
+            _set_child_subreaper(1)
+            snapshot = _proc_process_snapshot()
+            self.baseline_children = self._direct_children(
+                snapshot, self.runner_pid)
+            require(not self.baseline_children,
+                    "child descendant containment found pre-existing children")
+            self.active = True
+            return self
+        except BaseException:
+            if self.previous_subreaper is not None:
+                _set_child_subreaper(self.previous_subreaper)
+            self.previous_subreaper = None
+            raise
+
+    def attach(self, pid: int) -> None:
+        require(self.active and self.leader is None and type(pid) is int and pid > 0,
+                "invalid child descendant containment attachment")
+        record = _proc_process_record(pid)
+        identity = None if record is None else (pid, record[3])
+        require(identity is not None and record is not None and
+                record[0] == self.runner_pid and
+                identity not in self.baseline_children,
+                "spawned process is not an owned direct child")
+        self.leader = identity
+        self.known.add(identity)
+
+    def _discover(
+        self, snapshot: Mapping[int, tuple[int, int, int, int, str]]
+    ) -> set[tuple[int, int]]:
+        targets = {identity for identity in self.known
+                   if _process_identity(identity[0], snapshot) == identity}
+        targets.update(
+            identity for identity in self._direct_children(
+                snapshot, self.runner_pid)
+            if identity not in self.baseline_children)
+        changed = True
+        while changed:
+            changed = False
+            parent_pids = {pid for pid, _starttime in targets}
+            for pid, record in snapshot.items():
+                identity = (pid, record[3])
+                if record[0] in parent_pids and identity not in targets:
+                    targets.add(identity)
+                    changed = True
+        self.known.update(targets)
+        return targets
+
+    @staticmethod
+    def _signal_identity(identity: tuple[int, int]) -> None:
+        pid, starttime = identity
+        record = _proc_process_record(pid)
+        if record is None or record[3] != starttime:
+            return
+        descriptor = _linux_pidfd_open(pid)
+        if descriptor is None:
+            return
+        try:
+            record = _proc_process_record(pid)
+            if record is None or record[3] != starttime:
+                return
+            _linux_pidfd_signal(descriptor, signal.SIGKILL)
+        finally:
+            os.close(descriptor)
+
+    def terminate_and_reap(self, process: subprocess.Popen[bytes]) -> None:
+        require(self.active and self.leader is not None and
+                self.leader[0] == process.pid,
+                "child descendant containment is not attached to this process")
+        deadline = time.monotonic() + CHILD_REAP_TIMEOUT_SECONDS
+        empty_scans = 0
+        while True:
+            snapshot = _proc_process_snapshot()
+            targets = self._discover(snapshot)
+            for identity in sorted(targets, reverse=True):
+                self._signal_identity(identity)
+
+            if process.poll() is None:
+                try:
+                    process.wait(timeout=max(
+                        0.001, min(0.05, deadline - time.monotonic())))
+                except subprocess.TimeoutExpired:
+                    pass
+
+            # Subreaper adoption makes every orphan a waitable direct child.
+            for identity in sorted(self.known):
+                if identity == self.leader:
+                    continue
+                try:
+                    os.waitpid(identity[0], os.WNOHANG)
+                except (ChildProcessError, ProcessLookupError):
+                    pass
+                except OSError as error:
+                    raise EvidenceError(
+                        f"cannot reap contained child {identity[0]}: {error}") from error
+
+            snapshot = _proc_process_snapshot()
+            live_targets = self._discover(snapshot)
+            if process.poll() is not None and not live_targets:
+                empty_scans += 1
+                if empty_scans >= 2:
+                    self.proven_empty = True
+                    return
+            else:
+                empty_scans = 0
+            remaining = deadline - time.monotonic()
+            require(remaining > 0,
+                    "contained child descendants remained after SIGKILL")
+            time.sleep(min(0.01, remaining))
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        del exc, tb
+        if not self.active:
+            return
+        if self.leader is not None:
+            if not self.proven_empty:
+                # Keep subreaper ownership if teardown proof failed; restoring
+                # it could silently orphan an unproved child to init.
+                require(exc_type is not None,
+                        "child descendant containment closed without teardown proof")
+                return
+        else:
+            snapshot = _proc_process_snapshot()
+            if (self._direct_children(snapshot, self.runner_pid) !=
+                    self.baseline_children):
+                require(exc_type is not None,
+                        "unattached child appeared during descendant containment")
+                return
+        require(self.previous_subreaper is not None,
+                "previous child-subreaper state was lost")
+        previous = self.previous_subreaper
+        self.active = False
+        self.previous_subreaper = None
+        _set_child_subreaper(previous)
+
+
 def terminate_process_group_bounded(
     process: subprocess.Popen[bytes], timeout: float = 5.0
 ) -> tuple[bool, int]:
-    """SIGKILL a child process group and make one bounded reap attempt."""
+    """Bounded legacy process-group primitive; runners use full containment."""
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -277,66 +614,70 @@ def run_process_bounded(
     require(type(max_stdout) is int and 0 <= max_stdout <= MAX_COMMAND_STDOUT_BYTES and
             type(max_stderr) is int and 0 <= max_stderr <= MAX_COMMAND_STDERR_BYTES,
             "subprocess output limits are invalid")
-    process = subprocess.Popen(
-        list(arguments), cwd=None if cwd is None else str(cwd),
-        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        start_new_session=True,
-        env=None if environment is None else dict(environment))
-    require(process.stdout is not None and process.stderr is not None,
-            "cannot capture subprocess output")
+    process: subprocess.Popen[bytes] | None = None
     selector = selectors.DefaultSelector()
-    stdout_fd = process.stdout.fileno()
-    stderr_fd = process.stderr.fileno()
-    outputs = {stdout_fd: bytearray(), stderr_fd: bytearray()}
-    limits = {
-        process.stdout.fileno(): max_stdout,
-        process.stderr.fileno(): max_stderr,
-    }
-    for stream in (process.stdout, process.stderr):
-        os.set_blocking(stream.fileno(), False)
-        selector.register(stream, selectors.EVENT_READ)
-    deadline = time.monotonic() + float(timeout)
+    stdout_fd = -1
+    stderr_fd = -1
+    outputs: dict[int, bytearray] = {}
+    returncode = -int(signal.SIGKILL)
     failure: str | None = None
     try:
-        while selector.get_map():
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                failure = f"command exceeded {float(timeout):.3f} seconds"
-                break
-            for key, _ in selector.select(min(remaining, 0.1)):
-                descriptor = key.fileobj.fileno()
-                try:
-                    block = os.read(descriptor, 65536)
-                except BlockingIOError:
-                    continue
-                if not block:
-                    selector.unregister(key.fileobj)
-                    continue
-                outputs[descriptor].extend(block)
-                if len(outputs[descriptor]) > limits[descriptor]:
-                    failure = "command output exceeded its byte limit"
-                    break
-            if failure is not None:
-                break
-        if failure is not None:
-            reaped, returncode = terminate_process_group_bounded(process)
-            if not reaped:
-                failure += "; process group was not reapable within five seconds"
-        else:
+        with LinuxDescendantContainment() as containment:
+            process = subprocess.Popen(
+                list(arguments), cwd=None if cwd is None else str(cwd),
+                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, start_new_session=True,
+                env=None if environment is None else dict(environment))
+            containment.attach(process.pid)
+            require(process.stdout is not None and process.stderr is not None,
+                    "cannot capture subprocess output")
+            stdout_fd = process.stdout.fileno()
+            stderr_fd = process.stderr.fileno()
+            outputs = {stdout_fd: bytearray(), stderr_fd: bytearray()}
+            limits = {stdout_fd: max_stdout, stderr_fd: max_stderr}
+            for stream in (process.stdout, process.stderr):
+                os.set_blocking(stream.fileno(), False)
+                selector.register(stream, selectors.EVENT_READ)
+            deadline = time.monotonic() + float(timeout)
             try:
-                returncode = process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                reaped, returncode = terminate_process_group_bounded(process)
-                failure = "command closed its output but did not terminate"
-                if not reaped:
-                    failure += "; process group was not reapable within five seconds"
-    except BaseException:
-        terminate_process_group_bounded(process)
-        raise
+                while selector.get_map():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        failure = f"command exceeded {float(timeout):.3f} seconds"
+                        break
+                    for key, _ in selector.select(min(remaining, 0.1)):
+                        descriptor = key.fileobj.fileno()
+                        try:
+                            block = os.read(descriptor, 65536)
+                        except BlockingIOError:
+                            continue
+                        if not block:
+                            selector.unregister(key.fileobj)
+                            continue
+                        outputs[descriptor].extend(block)
+                        if len(outputs[descriptor]) > limits[descriptor]:
+                            failure = "command output exceeded its byte limit"
+                            break
+                    if failure is not None:
+                        break
+                if failure is None:
+                    try:
+                        returncode = process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        failure = "command closed its output but did not terminate"
+            finally:
+                # This is required after successful commands too: a command may
+                # exit zero after daemonizing a descendant into a new session.
+                containment.terminate_and_reap(process)
+                if isinstance(process.returncode, int):
+                    returncode = process.returncode
     finally:
         selector.close()
-        process.stdout.close()
-        process.stderr.close()
+        if process is not None:
+            if process.stdout is not None:
+                process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
     stdout = bytes(outputs[stdout_fd])
     stderr = bytes(outputs[stderr_fd])
     if failure is not None:
