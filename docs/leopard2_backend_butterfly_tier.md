@@ -438,9 +438,7 @@ for both trees with `LEO2_BACKEND_VARIANT=auto`,
 
 The full campaign requires those clean baseline and candidate worktrees, a
 fresh final-source four-variant matrix, a canonical no-newline reservation
-file, and a physical core whose allowed SMT sibling is idle. The collector also
-acquires `/run/user/UID/leopard2-cpu-leases/leopard2-cpu-pair-UID-A-B.lock`
-plus its stable abstract-socket counterpart for the full run. Run the collector
+file, and a physical core whose allowed SMT sibling is idle. Run the collector
 twice, using distinct output directories and otherwise identical arguments:
 
 The current collector first holds a nonblocking exclusive flock on the owned
