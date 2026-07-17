@@ -1,8 +1,8 @@
 # Leopard2 C1 parent-preserving dependency pruning
 
-Status: scalar experiment complete; promote the flat schedule concept to a
-bounded C++/SIMD prototype, but do not enable this Python implementation or its
-thresholds in production dispatch.
+Status: scalar experiment and bounded C++/SIMD flat-schedule prototype
+complete. The C++ prototype is intentionally absent from production dispatch;
+encode/decode integration and an isolated end-to-end crossover gate remain.
 
 The implementation is
 `experiments/leopard2/non_power_of_two/c1/dependency_pruning.py`. It answers the
@@ -175,6 +175,64 @@ large gap between generated and generic single-symbol interpreters is mostly
 Python object/property overhead; it justifies specialization research, not a
 7-8x production claim.
 
+## Bounded C++ translation
+
+The parent-preserving flat form is now translated into the internal C++11
+implementation in `Leopard2Plan.cpp` and `Leopard2Plan.h`. GF8 and GF16 bind
+the shared compiler to their existing `FFTSkewStorage` tables through
+`PreparePrunedTransformPlan`; the experiment therefore consumes the exact
+legacy logarithms rather than regenerating constants in a second production
+path. It is not exposed by `leopard2.h` and no codec dispatcher calls it.
+
+Setup expands the existing radix-2 graph once, records input liveness before
+each operation, propagates exact output dependencies backward, removes
+identity writes, and publishes the candidate plan only after complete
+validation. The immutable plan owns only masks, flat operation descriptors,
+and requested structurally-zero output indices. Byte execution allocates
+nothing. It calls the selected scalar, SSSE3, or AVX2 fixed-product and
+butterfly table explicitly, so a process-global default cannot leak into a
+lower-backend test.
+
+Leopard stores `m` as a logarithm, with 255 and 65,535 as the GF8/GF16 zero
+sentinels and log zero representing field element one. Setup needs only the
+following coefficient predicates; it does not convert the whole skew table
+back to field elements:
+
+- `m == 0` iff the logarithm is the field sentinel;
+- `m == 1` iff the logarithm is zero;
+- `m + 1 == 0` iff `m == 1`; and
+- `m + 1 == 1` iff `m == 0`.
+
+When both inputs are live, execution uses the mature two-way backend butterfly.
+Zero and one multipliers reduce to XORs. A one-live-input boundary uses the
+dead peer as bounded temporary storage for copy, fixed multiply, or
+multiply-add. Requested outputs proven structurally zero are cleared after the
+flat schedule because a dead slot may have served as that temporary. The
+caller must provide disjoint shard slots and keep masked-off inputs at
+mathematical zero; dead unrequested outputs are not preserved.
+
+`tests/leopard2/test_pruned_transform.cpp` compares requested outputs with the
+full padded production transform. The deterministic gate covers:
+
+| C++ check | Result |
+| --- | ---: |
+| Qualified backends | scalar, SSSE3, AVX2 |
+| Compiled/executed plans | 13,008 |
+| Requested bytes compared | 18,116,076 |
+| Exhaustive sparse masks | every input/output mask at N=2 and N=4, forward and inverse, first and last aligned cosets, GF8 and GF16 |
+| Larger parents | GF8 through N=256; GF16 through N=1,024 |
+| Shard tails | GF8 1, 7, 17, 63, 64, 65, 129 bytes; GF16 2, 18, 62, 64, 66, 130 bytes |
+| Shared-plan concurrency | eight threads, sixteen executions each, per available backend |
+
+The complete Debug CTest graph passed 49/49 after initializing the checkout's
+`sse2neon` submodule. GCC 13.3 and Clang 18.1 strict Release builds passed with
+`-Werror -Wpedantic`. Clang 18 ASan+UBSan and TSan builds each repeated all
+13,008 prototype cases and the concurrency gate without a diagnostic.
+
+These are correctness results, not timing evidence. Other workers were active
+on the host, so no cache-sensitive or authoritative crossover number was
+collected for this checkpoint.
+
 ## Disposition
 
 Promote the following into a bounded C++ prototype behind tests and explicit
@@ -192,13 +250,12 @@ its production case depends on replacing complete groups with real radix-4 or
 SIMD kernels. Generated common-pair kernels remain a separate code-size-limited
 experiment.
 
-This clears the C1 scalar correctness and 10% experiment thresholds in the
-tested region, but production promotion remains blocked on:
+This clears the C1 scalar correctness threshold and the C++ translation,
+backend-determinism, arbitrary-tail, immutable-plan-concurrency, and sanitizer
+gates. Production promotion remains blocked on:
 
-- C++ GF8 and GF16 translation against existing scalar/SSSE3/AVX2 outputs;
 - encode/decode integration using real profile masks and shifted blocks;
-- arbitrary byte tails, aliasing, scratch, and immutable-plan concurrency tests;
-- sanitizer, fuzz, and backend-determinism gates;
+- production aliasing/scatter validation and malformed-plan fuzz hardening;
 - end-to-end codec benchmarks with plan setup and reuse reported separately;
 - code/table footprint and instruction-cache measurement; and
 - a dispatcher study covering neighboring regions where little work prunes.
@@ -227,3 +284,12 @@ host; mathematical counts and the self-test JSON are deterministic.
 
 No default CMake target imports this experiment, and it requires only the
 Python standard library.
+
+Build and run the default-off C++ prototype gate:
+
+    cmake -S . -B build/c1b -DCMAKE_BUILD_TYPE=Release \
+        -DLEO2_BUILD_TESTS=ON -DLEO2_BUILD_BENCHMARKS=OFF
+    cmake --build build/c1b --target leopard2_pruned_transform_test -j 128
+    OMP_NUM_THREADS=1 build/c1b/leopard2_pruned_transform_test
+
+Replace 128 with the allowed CPU count when fewer CPUs are available.

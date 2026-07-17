@@ -2366,6 +2366,29 @@ void PrepareHighDecode(
     }
 }
 
+static uint16_t PrunedMultiplierLog(
+    const void* context,
+    uint32_t storage_index)
+{
+    LEO_DEBUG_ASSERT(context != NULL && storage_index < kOrder);
+    return static_cast<const ffe_t*>(context)[storage_index];
+}
+
+
+bool PreparePrunedTransformPlan(
+    unsigned size,
+    unsigned shift,
+    bool inverse,
+    const uint8_t* input_mask,
+    const uint8_t* output_mask,
+    leopard2_internal::PrunedTransformPlan& plan)
+{
+    return leopard2_internal::CompilePrunedTransformPlan(
+        kOrder, kModulus, size, shift, inverse,
+        input_mask, output_mask, PrunedMultiplierLog,
+        FFTSkewStorage, plan);
+}
+
 
 #if defined(LEO2_ENABLE_TEST_HOOKS)
 
@@ -2435,6 +2458,7 @@ ffe_t TestOnlyLchNormalizer(unsigned index)
 
 
 void TestOnlyLchForward(
+    const backend::Ops& ops,
     uint64_t buffer_bytes,
     unsigned size,
     unsigned shift,
@@ -2445,8 +2469,37 @@ void TestOnlyLchForward(
     LEO_DEBUG_ASSERT((size & (size - 1)) == 0);
     LEO_DEBUG_ASSERT((shift & (size - 1)) == 0 && shift + size <= kOrder);
     LEO_DEBUG_ASSERT(requested_output_count <= size);
-    FFT_DIT(backend::GetDefaultOps(), buffer_bytes, work,
-        requested_output_count, size,
+    FFT_DIT(ops, buffer_bytes, work, requested_output_count, size,
+        FFTSkewStorage + shift);
+}
+
+
+void TestOnlyLchForward(
+    uint64_t buffer_bytes,
+    unsigned size,
+    unsigned shift,
+    unsigned requested_output_count,
+    void** work)
+{
+    TestOnlyLchForward(
+        backend::GetDefaultOps(), buffer_bytes, size, shift,
+        requested_output_count, work);
+}
+
+
+void TestOnlyLchInverse(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned size,
+    unsigned shift,
+    unsigned known_input_count,
+    void** work)
+{
+    LEO_DEBUG_ASSERT(size >= 1 && size <= kOrder);
+    LEO_DEBUG_ASSERT((size & (size - 1)) == 0);
+    LEO_DEBUG_ASSERT((shift & (size - 1)) == 0 && shift + size <= kOrder);
+    LEO_DEBUG_ASSERT(known_input_count <= size);
+    IFFT_DIT_Decoder(ops, buffer_bytes, known_input_count, work, size,
         FFTSkewStorage + shift);
 }
 
@@ -2458,13 +2511,9 @@ void TestOnlyLchInverse(
     unsigned known_input_count,
     void** work)
 {
-    LEO_DEBUG_ASSERT(size >= 1 && size <= kOrder);
-    LEO_DEBUG_ASSERT((size & (size - 1)) == 0);
-    LEO_DEBUG_ASSERT((shift & (size - 1)) == 0 && shift + size <= kOrder);
-    LEO_DEBUG_ASSERT(known_input_count <= size);
-    IFFT_DIT_Decoder(backend::GetDefaultOps(), buffer_bytes,
-        known_input_count, work, size,
-        FFTSkewStorage + shift);
+    TestOnlyLchInverse(
+        backend::GetDefaultOps(), buffer_bytes, size, shift,
+        known_input_count, work);
 }
 
 

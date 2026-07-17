@@ -2401,6 +2401,29 @@ void PrepareHighDecode(
     }
 }
 
+static uint16_t PrunedMultiplierLog(
+    const void* context,
+    uint32_t storage_index)
+{
+    LEO_DEBUG_ASSERT(context != NULL && storage_index < kOrder);
+    return static_cast<const ffe_t*>(context)[storage_index];
+}
+
+
+bool PreparePrunedTransformPlan(
+    unsigned size,
+    unsigned shift,
+    bool inverse,
+    const uint8_t* input_mask,
+    const uint8_t* output_mask,
+    leopard2_internal::PrunedTransformPlan& plan)
+{
+    return leopard2_internal::CompilePrunedTransformPlan(
+        kOrder, kModulus, size, shift, inverse,
+        input_mask, output_mask, PrunedMultiplierLog,
+        FFTSkewStorage, plan);
+}
+
 
 #if defined(LEO2_ENABLE_TEST_HOOKS)
 

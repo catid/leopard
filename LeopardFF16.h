@@ -106,6 +106,16 @@ void MultiplyAddBytes(
     ffe_t multiplier_log,
     uint64_t byte_count);
 
+// C1 experiment: compile an exact parent-preserving flat radix-2 schedule.
+// This remains internal and is not selected by the production dispatcher.
+bool PreparePrunedTransformPlan(
+    unsigned size,
+    unsigned shift,
+    bool inverse,
+    const uint8_t* input_mask,
+    const uint8_t* output_mask,
+    leopard2_internal::PrunedTransformPlan& plan);
+
 void ReedSolomonEncode(
     const backend::Ops& ops,
     uint64_t buffer_bytes,
@@ -262,10 +272,24 @@ ffe_t TestOnlySubspaceDerivative(unsigned size);
 ffe_t TestOnlySubspaceAt(unsigned size, unsigned shift);
 ffe_t TestOnlyLchNormalizer(unsigned index);
 void TestOnlyLchForward(
+    const backend::Ops& ops,
     uint64_t buffer_bytes,
     unsigned size,
     unsigned shift,
     unsigned requested_output_count,
+    void** work);
+void TestOnlyLchForward(
+    uint64_t buffer_bytes,
+    unsigned size,
+    unsigned shift,
+    unsigned requested_output_count,
+    void** work);
+void TestOnlyLchInverse(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned size,
+    unsigned shift,
+    unsigned known_input_count,
     void** work);
 void TestOnlyLchInverse(
     uint64_t buffer_bytes,

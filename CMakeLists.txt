@@ -649,6 +649,16 @@ if(LEO2_BUILD_TESTS)
     add_test(NAME leopard2_transform_differential
         COMMAND leopard2_transform_differential_test)
 
+    add_executable(leopard2_pruned_transform_test
+        tests/leopard2/test_pruned_transform.cpp)
+    target_compile_definitions(leopard2_pruned_transform_test PRIVATE
+        LEO2_ENABLE_TEST_HOOKS=1)
+    target_link_libraries(leopard2_pruned_transform_test libleopard)
+    add_test(NAME leopard2_pruned_transform
+        COMMAND leopard2_pruned_transform_test)
+    set_tests_properties(leopard2_pruned_transform PROPERTIES
+        ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
+
     add_executable(leopard2_fuzz_smoke
         tests/leopard2/fuzz_api.cpp
         tests/leopard2/fuzz_replay.cpp)

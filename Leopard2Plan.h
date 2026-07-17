@@ -30,6 +30,9 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <vector>
+
+namespace leopard { namespace backend { struct Ops; }}
 
 namespace leopard2_internal {
 
@@ -71,6 +74,92 @@ struct DecodeOutputBlock
     uint32_t requested_begin;
     uint32_t requested_end;
 };
+
+enum PrunedTransformOperationFlags
+{
+    PrunedLiveX = 1u << 0,
+    PrunedLiveY = 1u << 1,
+    PrunedNeedX = 1u << 2,
+    PrunedNeedY = 1u << 3,
+    PrunedWriteX = 1u << 4,
+    PrunedWriteY = 1u << 5
+};
+
+struct PrunedTransformOperation
+{
+    uint32_t x;
+    uint32_t y;
+    uint16_t multiplier_log;
+    uint8_t flags;
+};
+
+/*
+    Immutable flat schedule for one exact parent-preserving LCH transform.
+    input_mask marks the only coordinates allowed to be nonzero at execution;
+    output_mask marks the coordinates whose final values are observable.  The
+    executor may modify dead coordinates.  Plan construction is setup work and
+    execution performs no allocation or mask branching.
+*/
+struct PrunedTransformPlan
+{
+    uint32_t size;
+    uint32_t shift;
+    uint16_t zero_multiplier_log;
+    bool inverse;
+    std::vector<uint8_t> input_mask;
+    std::vector<uint8_t> output_mask;
+    std::vector<PrunedTransformOperation> operations;
+    // Requested coordinates that structural analysis proves are zero.  An
+    // executor may use dead slots as temporary storage, then clears these at
+    // final scatter so requested zero outputs remain exact.
+    std::vector<uint32_t> zero_outputs;
+    size_t full_butterfly_count;
+    size_t one_output_butterflies;
+    size_t input_zero_specializations;
+    size_t zero_multiplier_butterflies;
+    size_t one_multiplier_butterflies;
+
+    PrunedTransformPlan()
+        : size(0)
+        , shift(0)
+        , zero_multiplier_log(0)
+        , inverse(false)
+        , full_butterfly_count(0)
+        , one_output_butterflies(0)
+        , input_zero_specializations(0)
+        , zero_multiplier_butterflies(0)
+        , one_multiplier_butterflies(0)
+    {}
+};
+
+typedef uint16_t (*PrunedMultiplierLogProvider)(
+    const void* context,
+    uint32_t storage_index);
+
+// Builds into temporary storage and publishes only on success.  size and
+// field_order must be powers of two, shift must name an aligned in-field coset,
+// and both masks contain exactly size bytes with values in {0,1}.
+bool CompilePrunedTransformPlan(
+    uint32_t field_order,
+    uint16_t zero_multiplier_log,
+    uint32_t size,
+    uint32_t shift,
+    bool inverse,
+    const uint8_t* input_mask,
+    const uint8_t* output_mask,
+    PrunedMultiplierLogProvider multiplier_log,
+    const void* multiplier_context,
+    PrunedTransformPlan& plan);
+
+// Executes a trusted immutable schedule without allocating.  The caller must
+// provide size pairwise-disjoint shard buffers, keep every masked-off input at
+// mathematical zero, and use complete GF16 symbols for a GF16 plan.  Dead
+// coordinates may be used as temporary storage and are not preserved.
+bool ExecutePrunedTransformPlan(
+    const leopard::backend::Ops& ops,
+    uint64_t byte_count,
+    const PrunedTransformPlan& plan,
+    void** work);
 
 uint8_t Log2PowerOfTwo(uint32_t size);
 size_t OutputDependencyBitCount(uint32_t transform_size);
