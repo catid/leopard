@@ -30,6 +30,11 @@ interchange copy; `bd bootstrap` is the preferred history-preserving restore.
 - If an SSH push fails, inspect the currently forwarded agent and its identities
   (`SSH_AUTH_SOCK` and `ssh-add -l`), obtain or select the latest forwarded key,
   and retry the push.  Never place a private key in the repository or logs.
+- Treat forwarded-agent state as ephemeral: the client cycles SSH sessions
+  frequently, so an inherited `SSH_AUTH_SOCK` is usually stale. Before each
+  retry, reload the current shell environment, rediscover the newest forwarded
+  agent, and verify that it has a usable identity instead of trusting a socket
+  path saved by an earlier session.
 - A current explicit user or orchestrator instruction not to push still takes
   precedence over this standing policy.
 
