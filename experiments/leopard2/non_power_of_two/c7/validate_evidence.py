@@ -47,6 +47,7 @@ from run_matrix import (
     PROGRAM_ROLES,
     canonical_peer_tar,
     peer_portable_artifact_records,
+    typed_equal,
 )
 
 
@@ -172,7 +173,9 @@ def validate_comparison(
     comparison: object, fingerprints: dict[str, Any],
     normalized_text_records: int,
 ) -> None:
-    if comparison == {"status": "not-run"}:
+    if type(normalized_text_records) is not int or normalized_text_records < 0:
+        raise ValueError("normalized text record count is invalid")
+    if typed_equal(comparison, {"status": "not-run"}):
         return
     required = {
         "build_names", "checkout_roots_scanned", "current_scan",
@@ -182,7 +185,8 @@ def validate_comparison(
     if not isinstance(comparison, dict) or set(comparison) != required:
         raise ValueError("A/B comparison attestation schema changed")
     if (comparison["status"] != "pass" or
-            comparison["build_names"] != list(BUILD_NAMES) or
+            not typed_equal(comparison["build_names"], list(BUILD_NAMES)) or
+            type(comparison["checkout_roots_scanned"]) is not int or
             comparison["checkout_roots_scanned"] != 2):
         raise ValueError("A/B comparison attestation changed")
     validate_sha(comparison["peer_manifest_sha256"],
@@ -207,8 +211,8 @@ def validate_comparison(
         "archives": len(BUILD_NAMES),
         "executables": len(BUILD_NAMES),
     }
-    if (comparison["current_scan"] != expected_scan or
-            comparison["peer_scan"] != expected_scan):
+    if (not typed_equal(comparison["current_scan"], expected_scan) or
+            not typed_equal(comparison["peer_scan"], expected_scan)):
         raise ValueError("A/B root-byte scan attestation changed")
 
 
@@ -404,7 +408,7 @@ def _read_peer_bundle(
             for path, record in sorted(expected.items())
         ],
     }
-    if index != expected_index:
+    if not typed_equal(index, expected_index):
         raise ValueError("peer bundle index disagrees with peer manifest")
     files = {path: members[f"files/{path}"] for path in expected}
     for path, record in expected.items():
@@ -436,7 +440,7 @@ def validate_peer_attestation(
     comparison: dict[str, Any], manifest: dict[str, Any],
     source_root: pathlib.Path, evidence_root: pathlib.Path, *, live: bool,
 ) -> None:
-    if comparison == {"status": "not-run"}:
+    if typed_equal(comparison, {"status": "not-run"}):
         return
     peer_manifest_record = comparison["peer_manifest"]
     peer_manifest_bytes = read_verified_artifact_bytes(
@@ -450,23 +454,30 @@ def validate_peer_attestation(
         raise ValueError("A/B peer manifest is not an object")
     if peer_manifest_bytes != canonical_pretty_json_bytes(peer):
         raise ValueError("A/B peer manifest JSON is noncanonical")
-    if peer.get("reproducibility", {}).get("comparison") != {
-            "status": "not-run"}:
+    if not typed_equal(
+            peer.get("reproducibility", {}).get("comparison"),
+            {"status": "not-run"}):
         raise ValueError("A/B peer manifest is not an initial independent run")
     legacy = manifest.get("schema") == LEGACY_MANIFEST_SCHEMA
     identity_keys = ("core_git_sha",) if legacy else (
         "tooling_git_sha", "core_git_sha")
     try:
         identity_mismatch = (
-            peer.get("schema") != manifest.get("schema") or
-            any(peer.get(key) != manifest.get(key) for key in identity_keys) or
-            any(peer.get(key) != manifest.get(key) for key in (
+            not typed_equal(peer.get("schema"), manifest.get("schema")) or
+            any(not typed_equal(peer.get(key), manifest.get(key))
+                for key in identity_keys) or
+            any(not typed_equal(peer.get(key), manifest.get(key)) for key in (
                 "source", "runner", "validator", "normalization")) or
-            peer.get("taskset") != manifest.get("taskset") or
-            manifest_program_records(peer) != manifest_program_records(manifest) or
-            manifest_binary_records(peer) != manifest_binary_records(manifest) or
-            peer.get("reproducibility", {}).get("fingerprints") !=
-            manifest.get("reproducibility", {}).get("fingerprints"))
+            not typed_equal(peer.get("taskset"), manifest.get("taskset")) or
+            not typed_equal(
+                manifest_program_records(peer),
+                manifest_program_records(manifest)) or
+            not typed_equal(
+                manifest_binary_records(peer),
+                manifest_binary_records(manifest)) or
+            not typed_equal(
+                peer.get("reproducibility", {}).get("fingerprints"),
+                manifest.get("reproducibility", {}).get("fingerprints")))
     except (KeyError, TypeError) as error:
         raise ValueError("A/B peer identity graph is incomplete") from error
     if identity_mismatch:
@@ -530,19 +541,21 @@ def validate_peer_attestation(
             report["core_git_sha"] != manifest["core_git_sha"] or
             (not legacy and report["tooling_git_sha"] !=
              manifest["tooling_git_sha"]) or
-            report["tooling"] != {
+            not typed_equal(report["tooling"], {
                 key: manifest[key] for key in ("source", "runner", "validator")
-            } or report["fingerprints"] !=
-            manifest["reproducibility"]["fingerprints"] or
-            report["binary_artifacts"] != expected_binaries or
+            }) or not typed_equal(
+                report["fingerprints"],
+                manifest["reproducibility"]["fingerprints"]) or
+            not typed_equal(report["binary_artifacts"], expected_binaries) or
             report["program_records_sha256"] != canonical_json_sha256(
                 manifest_program_records(manifest)) or
             report["source_closures_sha256"] != canonical_json_sha256(
-                expected_closures) or report["root_scan"] !=
-            comparison["peer_scan"] or
-            report["checks"] != expected_checks or
-            report["peer_manifest_artifact"] != peer_manifest_record or
-            report["peer_evidence_bundle"] != bundle_record or
+                expected_closures) or not typed_equal(
+                    report["root_scan"], comparison["peer_scan"]) or
+            not typed_equal(report["checks"], expected_checks) or
+            not typed_equal(
+                report["peer_manifest_artifact"], peer_manifest_record) or
+            not typed_equal(report["peer_evidence_bundle"], bundle_record) or
             report["normalized_text_records_sha256"] != canonical_json_sha256(
                 sorted(
                     (dict(item) for item in peer_portable_artifact_records(peer)),
@@ -873,7 +886,8 @@ def validate_symbol_scan(
         if member is not None:
             members[member]["asan_lines"] += asan
             members[member]["ubsan_lines"] += ubsan
-    if counts != expected_counts or members != expected_members:
+    if (not typed_equal(counts, expected_counts) or
+            not typed_equal(members, expected_members)):
         raise ValueError("sanitizer counts or archive attribution changed")
     if expected_counts["asan_lines"]:
         for symbol in (
@@ -920,11 +934,13 @@ def validate_cpp_result(
     if set(data) != required:
         raise ValueError("unexpected C7 child result keys")
     if (data["schema"] != "leopard2-c7-exact-low/v1" or
-            data["status"] != "pass" or data["profile"] != EXPECTED_PROFILE or
+            data["status"] != "pass" or
+            not typed_equal(data["profile"], EXPECTED_PROFILE) or
             data["production_constructor_rejected"] is not True or
-            data["timing_scope"] != timing_scope or data["affinity"] != affinity or
+            data["timing_scope"] != timing_scope or
+            not typed_equal(data["affinity"], affinity) or
             data["omp_num_threads"] != "1" or data["omp_dynamic"] != "FALSE" or
-            data["correctness"] != EXPECTED_CORRECTNESS or
+            not typed_equal(data["correctness"], EXPECTED_CORRECTNESS) or
             not isinstance(data["benchmarks"], list)):
         raise ValueError("C7 child identity or correctness result changed")
     validate_sha(data["source_sha256"], "C7 child source hash")
@@ -935,17 +951,18 @@ def validate_cpp_result(
                 data["runtime_backend"] != EXPECTED_RUNTIME["auto"] or
                 data["sanitizer"] != "asan-ubsan" or
                 data["allocation_tracking"] != "disabled-for-sanitizer" or
-                data["sanitizer_features"] != {
-                    "address": True, "undefined": True}):
+                not typed_equal(data["sanitizer_features"], {
+                    "address": True, "undefined": True})):
             raise ValueError("sanitizer child provenance changed")
     elif (data["requested_backend"] != backend or
             data["runtime_backend"] != EXPECTED_RUNTIME[backend] or
             data["sanitizer"] != "none" or
             data["allocation_tracking"] != "global-new" or
-            data["sanitizer_features"] != {
-                "address": False, "undefined": False}):
+            not typed_equal(data["sanitizer_features"], {
+                "address": False, "undefined": False})):
         raise ValueError("ordinary child backend provenance changed")
-    if timing_scope == "none-correctness-only" and data["benchmarks"] != []:
+    if (timing_scope == "none-correctness-only" and
+            not typed_equal(data["benchmarks"], [])):
         raise ValueError("correctness child unexpectedly contains timing")
 
 
@@ -969,12 +986,21 @@ def validate_smoke(data: dict[str, Any], affinity: list[int]) -> None:
     }
     if set(cell) != required:
         raise ValueError("smoke benchmark cell schema changed")
-    if [cell[key] for key in ("K", "R", "bytes", "batch", "losses")] != [
-            3, 253, 64, 8, 3]:
+    if not typed_equal(
+            [cell[key] for key in ("K", "R", "bytes", "batch", "losses")],
+            [3, 253, 64, 8, 3]):
         raise ValueError("smoke benchmark geometry changed")
-    if (cell["exact_field"] != 1 or cell["padded_field"] != 2 or
-            cell["exact_coefficients"] != 759 or
-            cell["exact_decode_terms"] != 9):
+    if not typed_equal({
+        "exact_field": cell["exact_field"],
+        "padded_field": cell["padded_field"],
+        "exact_coefficients": cell["exact_coefficients"],
+        "exact_decode_terms": cell["exact_decode_terms"],
+    }, {
+        "exact_field": 1,
+        "padded_field": 2,
+        "exact_coefficients": 759,
+        "exact_decode_terms": 9,
+    }):
         raise ValueError("smoke field or exact accounting changed")
     for key in ("padded_encode_scratch", "padded_decode_scratch"):
         if type(cell[key]) is not int or cell[key] < 0:
@@ -998,8 +1024,16 @@ def validate_smoke(data: dict[str, Any], affinity: list[int]) -> None:
         summary = cell[summary_key]
         median = statistics.median(samples)
         mad = statistics.median(abs(value - median) for value in samples)
-        if (not isinstance(summary, dict) or
-                summary != {"median_us": median, "mad_us": mad}):
+        # Historical v3 evidence can serialize an exact zero MAD as integer 0
+        # even though recomputing it from floating samples produces 0.0.  That
+        # is a legitimate measurement representation difference, but bool is
+        # never a numeric measurement: reject False/True explicitly instead of
+        # relying on Python's bool-as-int equality.
+        if (type(summary) is not dict or
+                set(summary) != {"median_us", "mad_us"} or
+                any(type(summary[key]) not in (int, float) for key in summary) or
+                summary["median_us"] != median or
+                summary["mad_us"] != mad):
             raise ValueError("smoke summary differs from raw samples")
 
 
@@ -1025,11 +1059,11 @@ def validate_manifest(
             "correctness plus one affinity-selected non-authoritative harness "
             "smoke; no promotion timing"):
         raise ValueError("manifest status or scope changed")
-    if data["normalization"] != {
+    if not typed_equal(data["normalization"], {
         "schema": NORMALIZATION_SCHEMA,
         "token": NORMALIZATION_TOKEN,
         "operation": "replace exact source-root prefix only",
-    }:
+    }):
         raise ValueError("normalization identity changed")
     source_root = source_root.resolve()
     evidence_root = (
@@ -1062,8 +1096,8 @@ def validate_manifest(
         validate_program_live(data["taskset"], "taskset")
 
     builds = data["builds"]
-    if not isinstance(builds, list) or [item.get("name") for item in builds] != list(
-            BUILD_NAMES):
+    if (not isinstance(builds, list) or not typed_equal(
+            [item.get("name") for item in builds], list(BUILD_NAMES))):
         raise ValueError("build matrix changed")
     by_name: dict[str, dict] = {}
     build_root: str | None = None
@@ -1108,8 +1142,9 @@ def validate_manifest(
                 selected = pathlib.Path(found)
             if selected.resolve() != records["standalone_linker"].resolve():
                 raise ValueError("live compiler-selected linker role changed")
-        if (build["compiler"] != build["cxx_compiler"] or
-                build["link_driver"] != build["cxx_compiler"]):
+        if (not typed_equal(build["compiler"], build["cxx_compiler"]) or
+                not typed_equal(
+                    build["link_driver"], build["cxx_compiler"])):
             raise ValueError("standalone compiler/link-driver role changed")
         token_counts = build["argv_source_root_tokens"]
         if not isinstance(token_counts, dict) or set(token_counts) != {
@@ -1133,7 +1168,8 @@ def validate_manifest(
             f"-fdebug-prefix-map={NORMALIZATION_TOKEN}={PREFIX_MAP_TARGET}",
         ]
         optional = f"-fmacro-prefix-map={NORMALIZATION_TOKEN}={PREFIX_MAP_TARGET}"
-        if flags not in (mandatory, [*mandatory, optional]):
+        if not any(typed_equal(flags, expected) for expected in (
+                mandatory, [*mandatory, optional])):
             raise ValueError("prefix-map flag set changed")
         build_dir = build["build_dir"]
         if (not isinstance(build_dir, str) or pathlib.Path(build_dir).is_absolute() or
@@ -1233,8 +1269,9 @@ def validate_manifest(
             expected_compile_prefix += ["-fopenmp"]
         expected_compile_prefix += [
             "-o", expected_executable]
-        if (configure != expected_configure or build_argv != expected_build or
-                compile_argv != expected_compile_prefix):
+        if (not typed_equal(configure, expected_configure) or
+                not typed_equal(build_argv, expected_build) or
+                not typed_equal(compile_argv, expected_compile_prefix)):
             raise ValueError("exact normalized build command changed")
 
         cache = parse_cache(log_paths["cmake_cache"].read_text(encoding="utf-8"))
@@ -1344,10 +1381,17 @@ def validate_manifest(
             sanitizer_member_proof if sanitizer else
             {member: dict(zero_counts) for member in ARCHIVE_MEMBERS})
         if (instrumentation["required_compile_macro"] is not sanitizer or
-                instrumentation["archive_members"] != list(ARCHIVE_MEMBERS) or
-                instrumentation["executable_counts"] != expected_executable_counts or
-                instrumentation["core_archive_counts"] != expected_archive_counts or
-                instrumentation["core_archive_member_counts"] != expected_members):
+                not typed_equal(
+                    instrumentation["archive_members"], list(ARCHIVE_MEMBERS)) or
+                not typed_equal(
+                    instrumentation["executable_counts"],
+                    expected_executable_counts) or
+                not typed_equal(
+                    instrumentation["core_archive_counts"],
+                    expected_archive_counts) or
+                not typed_equal(
+                    instrumentation["core_archive_member_counts"],
+                    expected_members)):
             raise ValueError("sanitizer summary or member attribution changed")
         executable_scan = validate_normalized_text(
             instrumentation["executable_symbol_scan"],
@@ -1388,7 +1432,8 @@ def validate_manifest(
              f"{name}-dependencies").as_posix(), live=live)
         if derived_closure != EXPECTED_SOURCE_CLOSURE:
             raise ValueError("dependency files do not reproduce source closure")
-        if by_name and closure != next(iter(by_name.values()))["source_closure"]:
+        if by_name and not typed_equal(
+                closure, next(iter(by_name.values()))["source_closure"]):
             raise ValueError("equivalent builds have different source closures")
         by_name[name] = build
 
@@ -1404,7 +1449,7 @@ def validate_manifest(
         }
         for name in BUILD_NAMES
     }
-    if reproducibility["fingerprints"] != expected_fingerprints:
+    if not typed_equal(reproducibility["fingerprints"], expected_fingerprints):
         raise ValueError("reproducibility fingerprints changed")
     normalized_text_record_count = sum(
         1 for item in _walk_dicts(data)
@@ -1419,7 +1464,8 @@ def validate_manifest(
 
     runs = data["runs"]
     expected_runs = [*BUILD_NAMES, "smoke-nonauthoritative"]
-    if not isinstance(runs, list) or [run.get("name") for run in runs] != expected_runs:
+    if (not isinstance(runs, list) or not typed_equal(
+            [run.get("name") for run in runs], expected_runs)):
         raise ValueError("run matrix changed")
     correctness_cpus: list[int] = []
     for run in runs:
@@ -1436,7 +1482,8 @@ def validate_manifest(
                 "non-authoritative-smoke" if smoke else "correctness")):
             raise ValueError("run build or kind changed")
         cpu = run["requested_cpu"]
-        if type(cpu) is not int or cpu < 0 or run["observed_affinity"] != [cpu]:
+        if (type(cpu) is not int or cpu < 0 or
+                not typed_equal(run["observed_affinity"], [cpu])):
             raise ValueError("run CPU or observed affinity changed")
         if not smoke:
             correctness_cpus.append(cpu)
@@ -1448,7 +1495,7 @@ def validate_manifest(
                 "ASAN_OPTIONS": "detect_leaks=1:halt_on_error=1",
                 "UBSAN_OPTIONS": "halt_on_error=1:print_stacktrace=1",
             })
-        if run["environment"] != expected_environment:
+        if not typed_equal(run["environment"], expected_environment):
             raise ValueError("run environment changed")
         argv = validate_argv(
             run["argv"], run["argv_source_root_tokens"], f"{name} run",
@@ -1471,7 +1518,7 @@ def validate_manifest(
              else f"{NORMALIZATION_TOKEN}/{run['result']['path']}"),
             "--benchmark-smoke" if smoke else "--correctness-only",
         ]
-        if argv != expected_argv:
+        if not typed_equal(argv, expected_argv):
             raise ValueError("normalized run command changed")
         if stdout.read_bytes() or stderr.read_text(encoding="utf-8") != (
                 "C7 benchmark 1/1\n" if smoke else ""):

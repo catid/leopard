@@ -124,6 +124,30 @@ def canonical_json_sha256(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def typed_equal(left: Any, right: Any) -> bool:
+    """Recursively compare values without Python's bool/int coercion."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        if len(left) != len(right):
+            return False
+        unmatched = list(right.items())
+        for left_key, left_value in left.items():
+            for index, (right_key, right_value) in enumerate(unmatched):
+                if typed_equal(left_key, right_key):
+                    if not typed_equal(left_value, right_value):
+                        return False
+                    unmatched.pop(index)
+                    break
+            else:
+                return False
+        return not unmatched
+    if isinstance(left, (list, tuple)):
+        return (len(left) == len(right) and
+                all(typed_equal(a, b) for a, b in zip(left, right)))
+    return bool(left == right)
+
+
 def canonical_peer_tar(files: dict[str, bytes]) -> bytes:
     for path in files:
         pure = pathlib.PurePosixPath(path)
@@ -668,13 +692,14 @@ def compile_experiment(
     expected_archive = (EXPECTED_ARCHIVE_SANITIZER_COUNTS
                         if build["sanitizer"] else
                         {"asan_lines": 0, "ubsan_lines": 0})
-    if executable_counts != expected_executable or archive_counts != expected_archive:
+    if (not typed_equal(executable_counts, expected_executable) or
+            not typed_equal(archive_counts, expected_archive)):
         raise RuntimeError("sanitizer symbol family/count proof changed")
     expected_members = (
         EXPECTED_ARCHIVE_MEMBER_COUNTS if build["sanitizer"] else
         {member: {"asan_lines": 0, "ubsan_lines": 0}
          for member in library_members})
-    if archive_member_counts != expected_members:
+    if not typed_equal(archive_member_counts, expected_members):
         raise RuntimeError("sanitizer archive member attribution changed")
     instrumentation = {
         "required_compile_macro": bool(build["sanitizer"]),
@@ -729,7 +754,7 @@ def run_one(
         })
     run_logged(argv, stdout_path, stderr_path, env_additions=environment)
     data = json.loads(result_path.read_text(encoding="utf-8"))
-    if data.get("affinity") != [cpu]:
+    if not typed_equal(data.get("affinity"), [cpu]):
         raise RuntimeError(f"child affinity mismatch for {name}")
     if data.get("source_sha256") != sha256(SOURCE):
         raise RuntimeError(f"child source fingerprint mismatch for {name}")
@@ -798,20 +823,21 @@ def manifest_program_records(manifest: dict[str, Any]) -> dict[str, Any]:
 
 def require_reproducible_peer(current: dict[str, Any], peer: dict[str, Any]) -> None:
     for key in ("schema", "tooling_git_sha", "core_git_sha"):
-        if peer.get(key) != current.get(key):
+        if not typed_equal(peer.get(key), current.get(key)):
             raise RuntimeError(f"A/B manifest {key} differs")
-    if (peer.get("source") != current.get("source") or
-            peer.get("runner") != current.get("runner") or
-            peer.get("validator") != current.get("validator")):
+    if (not typed_equal(peer.get("source"), current.get("source")) or
+            not typed_equal(peer.get("runner"), current.get("runner")) or
+            not typed_equal(peer.get("validator"), current.get("validator"))):
         raise RuntimeError("A/B manifests do not bind the same committed tooling")
     try:
-        if manifest_program_records(peer) != manifest_program_records(current):
+        if not typed_equal(
+                manifest_program_records(peer), manifest_program_records(current)):
             raise RuntimeError("A/B manifests do not bind the same exact programs")
     except (KeyError, TypeError) as error:
         raise RuntimeError("A/B peer program records are incomplete") from error
     left = current.get("reproducibility", {}).get("fingerprints")
     right = peer.get("reproducibility", {}).get("fingerprints")
-    if left != right or set(left or ()) != set(BUILD_NAMES):
+    if not typed_equal(left, right) or set(left or ()) != set(BUILD_NAMES):
         raise RuntimeError("A/B archive or executable hashes differ")
 
 
@@ -849,8 +875,9 @@ def authenticate_peer(
         peer_manifest_snapshot, peer_root, evidence_root=evidence_snapshot,
         live=False)
     peer = json.loads(peer_bytes)
-    if peer.get("reproducibility", {}).get("comparison") != {
-            "status": "not-run"}:
+    if not typed_equal(
+            peer.get("reproducibility", {}).get("comparison"),
+            {"status": "not-run"}):
         raise RuntimeError("A/B peer must be an initial non-comparison manifest")
     require_reproducible_peer(current, peer)
     # Portable validation and exact-program equality happen before live replay
@@ -931,7 +958,8 @@ def capture_peer_snapshot(
         raise RuntimeError("peer evidence graph is incomplete") from error
     if (not isinstance(builds, list) or
             not all(isinstance(build, dict) for build in builds) or
-            [build.get("name") for build in builds] != list(BUILD_NAMES) or
+            not typed_equal(
+                [build.get("name") for build in builds], list(BUILD_NAMES)) or
             any(not isinstance(build.get("dependency_files"), list) or
                 len(build["dependency_files"]) != len(
                     EXPECTED_ARCHIVE_MEMBER_COUNTS) for build in builds) or
@@ -1228,10 +1256,9 @@ def main() -> int:
             peer_untrusted = json.loads(peer_bytes)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise RuntimeError("peer manifest is not canonical JSON") from error
-        if (not isinstance(peer_untrusted, dict) or
-                peer_untrusted.get("reproducibility", {}).get(
-                    "comparison") != {
-                "status": "not-run"}):
+        if (not isinstance(peer_untrusted, dict) or not typed_equal(
+                peer_untrusted.get("reproducibility", {}).get("comparison"),
+                {"status": "not-run"})):
             raise RuntimeError(
                 "A/B peer must be an initial non-comparison manifest")
         forbidden = (ROOT, peer_root)

@@ -31,10 +31,10 @@ Authoritative crossover timing must be rebuilt from the final integrated
 production commit.
 
 The v4 evidence tooling and post-R1 sanitizer contract are prepared, but final
-A/B artifacts are intentionally not regenerated in this change.  Pending core
-integration may still change CMake or another member of the frozen 22-file
-closure; generation must occur only after that integrated core identity is
-selected.
+A/B artifacts are intentionally not regenerated in this change.  Generation
+must use the final integrated core containing the forced-scalar warning fix and
+must first reconfirm the fail-closed sanitizer attribution for that exact
+22-file closure.
 
 ## Exact-low family 3/version 1/map 1
 
@@ -270,7 +270,10 @@ across builds is rejected.  The
 build job count is a typed integer in `1..8`,
 and the normalized build command must end in the corresponding exact `-jN`
 argument.  The checker parses those logs rather than accepting a success
-label.  Manifest v4's post-R1 probe freezes 320 ASan and 54 UBSan references in
+label.  In particular, the forced-scalar build must have empty stderr; its
+compile-time-only backend selection explicitly consumes the otherwise unused
+feature record without changing the selected scalar backend.  Manifest v4's
+post-R1 probe freezes 320 ASan and 54 UBSan references in
 the standalone harness and 348 ASan and 86 UBSan references across all 11 named
 core-archive members; normal builds contain none.  The exact sanitized archive
 attribution is:
@@ -297,11 +300,14 @@ range or minimum.  The v4 runner still compares the exact totals and every
 named member, aborting before correctness execution if any count changes.  The
 unchanged 320/54 standalone count independently confirms that the experimental
 harness instrumentation did not drift.
-The counts came from a fresh five-variant compile at post-R1 commit `808ca28`;
-the runner stopped on the old fail-closed constants before executing any child.
-Its exact 22-file core closure is byte-identical at this repair's `219831f`
-base, so no timing or correctness result is being inferred from that stopped
-run.
+The counts first came from a fresh five-variant compile at post-R1 commit
+`808ca28`; the runner stopped on the old fail-closed constants before executing
+any child.  That closure remained byte-identical through `219831f`.  The later
+one-line forced-scalar warning fix changes `Leopard2Backend.cpp`, however, so
+the final selected core must receive a fresh fail-closed sanitizer scan before
+A/B generation.  The v4 constants remain exact expectations, not an inference
+that a changed source closure preserves instrumentation.  No timing or
+correctness result is taken from the stopped run.
 
 ### Dual Git identity and historical evidence
 
@@ -331,6 +337,17 @@ authenticates its tooling and core bytes directly from the recorded Git commit
 and applies its original exact 329 ASan / 87 UBSan archive proof.  Relabeling
 those bytes as v4 fails both the 348/86 member proof and the required separate
 tooling identity.
+
+All nested semantic comparisons are recursively type-strict.  JSON `false`
+does not satisfy an expected integer zero, `true` does not satisfy field or
+profile identifier one, and Boolean values are never accepted as numeric sample
+summaries.  Historical v3 evidence may represent an exact-zero MAD as integer
+`0` rather than recomputed floating-point `0.0`; that sole numeric-representation
+compatibility is retained.  Artifact sizes, normalization-token counts, build
+jobs, CPU identifiers, scratch sizes, and raw sample arrays also retain explicit
+type and range checks.  Mutation tests cover ordinary-build sanitizer zeros,
+per-member counts, exact-field and profile identifiers, correctness zeros,
+affinity, sample summaries, A/B tooling records, and comparison scan counts.
 
 Manifest v4 normalizes only the exact checkout-root prefix to literal
 `${LEO2_SOURCE_ROOT}` in retained text and argv.  All core and standalone

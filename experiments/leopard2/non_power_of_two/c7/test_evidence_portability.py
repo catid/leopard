@@ -17,6 +17,18 @@ import validate_evidence
 
 
 class PortabilityTests(unittest.TestCase):
+    def test_recursive_typed_equality_rejects_numeric_coercion(self) -> None:
+        self.assertTrue(run_matrix.typed_equal(
+            {"a": [0, 1, 1.0, {"flag": True}]},
+            {"a": [0, 1, 1.0, {"flag": True}]}))
+        for left, right in (
+            (False, 0), (True, 1), (1, 1.0),
+            ({"count": False}, {"count": 0}),
+            ([{"field": True}], [{"field": 1}]),
+            ({False: "value"}, {0: "value"}),
+        ):
+            self.assertFalse(run_matrix.typed_equal(left, right))
+
     def test_dual_git_identity_preflight_rejects_mutations(self) -> None:
         with tempfile.TemporaryDirectory(prefix="c7-dual-git-") as directory:
             root = pathlib.Path(directory)
@@ -302,6 +314,10 @@ class PortabilityTests(unittest.TestCase):
             "library_sha256"] = "f" * 64
         with self.assertRaises(RuntimeError):
             run_matrix.require_reproducible_peer(base, forged)
+        forged = copy.deepcopy(base)
+        forged["source"]["bytes"] = True
+        with self.assertRaisesRegex(RuntimeError, "committed tooling"):
+            run_matrix.require_reproducible_peer(base, forged)
         for key in ("tooling_git_sha", "core_git_sha"):
             forged = copy.deepcopy(base)
             forged[key] = "f" * 40
@@ -361,6 +377,15 @@ class PortabilityTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_evidence.validate_comparison(
                 wrong_scan, fingerprints, 42)
+        boolean_one = copy.deepcopy(comparison)
+        boolean_one["current_scan"]["normalized_text_records"] = True
+        boolean_one["peer_scan"]["normalized_text_records"] = True
+        with self.assertRaises(ValueError):
+            validate_evidence.validate_comparison(
+                boolean_one, fingerprints, 1)
+        with self.assertRaises(ValueError):
+            validate_evidence.validate_comparison(
+                {"status": "not-run"}, fingerprints, False)
 
     def test_canonical_peer_bundle_round_trip(self) -> None:
         files = {

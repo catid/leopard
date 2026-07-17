@@ -166,6 +166,68 @@ class CheckpointTests(unittest.TestCase):
                 expected_counts=run_matrix.EXPECTED_ARCHIVE_SANITIZER_COUNTS,
                 expected_members=run_matrix.EXPECTED_ARCHIVE_MEMBER_COUNTS)
 
+    def test_boolean_sanitizer_zero_counts_are_rejected(self) -> None:
+        data = json.loads(
+            (RESULTS / "build-run-manifest.json").read_text(encoding="utf-8"))
+        mutations = (
+            ("executable_counts", "asan_lines"),
+            ("core_archive_counts", "ubsan_lines"),
+        )
+        for record, counter in mutations:
+            candidate = json.loads(json.dumps(data))
+            candidate["builds"][0]["instrumentation"][record][counter] = False
+            with self.subTest(record=record, counter=counter):
+                with self.assertRaises(ValueError):
+                    validate_evidence.validate_manifest(candidate)
+        candidate = json.loads(json.dumps(data))
+        members = candidate["builds"][0]["instrumentation"][
+            "core_archive_member_counts"]
+        members["leopard.cpp.o"]["asan_lines"] = False
+        with self.assertRaises(ValueError):
+            validate_evidence.validate_manifest(candidate)
+        candidate = json.loads(json.dumps(data))
+        candidate["runs"][0]["observed_affinity"] = [False]
+        with self.assertRaises(ValueError):
+            validate_evidence.validate_manifest(candidate)
+
+    def test_boolean_child_numeric_fields_are_rejected(self) -> None:
+        data = json.loads(
+            (RESULTS / "build-run-manifest.json").read_text(encoding="utf-8"))
+
+        def rejected(run_name: str, mutation) -> None:
+            candidate = json.loads(json.dumps(data))
+            run = next(item for item in candidate["runs"]
+                       if item["name"] == run_name)
+            record = run["result"]
+            path = ROOT / record["path"]
+            original = path.read_bytes()
+            child = json.loads(original)
+            mutation(child)
+            forged = (json.dumps(child, indent=2, sort_keys=True) + "\n").encode()
+            try:
+                path.write_bytes(forged)
+                record["bytes"] = len(forged)
+                record["sha256"] = hashlib.sha256(forged).hexdigest()
+                with self.assertRaises(ValueError):
+                    validate_evidence.validate_manifest(candidate)
+            finally:
+                path.write_bytes(original)
+
+        cases = (
+            ("smoke-nonauthoritative",
+             lambda child: child["benchmarks"][0].update(exact_field=True)),
+            ("smoke-nonauthoritative",
+             lambda child: child["benchmarks"][0]["exact_setup"].update(
+                 mad_us=False)),
+            ("scalar", lambda child: child["profile"].update(version=True)),
+            ("scalar", lambda child: child["correctness"].update(
+                hot_path_allocations=False)),
+            ("scalar", lambda child: child.update(affinity=[False])),
+        )
+        for index, (run_name, mutation) in enumerate(cases):
+            with self.subTest(index=index, run=run_name):
+                rejected(run_name, mutation)
+
     def test_optional_external_v4_manifest(self) -> None:
         requested = os.environ.get("LEO2_C7_TEST_MANIFEST")
         if not requested:
