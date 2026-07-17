@@ -233,6 +233,8 @@ def worker_result(worker: Worker, requested_runs: int) -> dict[str, object]:
         raise ValueError(f"worker {worker.index} has no coverage statistics")
     corpus = corpus_snapshot(worker.root / "corpus")
     corpus.pop("entries")
+    seed_input_corpus = corpus_snapshot(worker.root / "seed-inputs")
+    seed_input_corpus.pop("entries")
     return {
         "index": worker.index,
         "cpu": worker.cpu,
@@ -246,15 +248,27 @@ def worker_result(worker: Worker, requested_runs: int) -> dict[str, object]:
         "stdout_sha256": sha256_bytes(stdout),
         "stderr_sha256": sha256_bytes(stderr),
         "corpus": corpus,
+        "seed_input_corpus": seed_input_corpus,
+        "seed_input_list_sha256": sha256_file(
+            worker.root / "seed-inputs.txt"
+        ),
         "artifacts": 0,
     }
 
 
-def merge_corpora(workers: list[Worker], destination: pathlib.Path) -> dict[str, object]:
+def merge_corpora(workers: list[Worker], destination: pathlib.Path,
+                  base: dict[str, object] | None = None) -> dict[str, object]:
     destination.mkdir()
+    sources: list[pathlib.Path] = []
+    if base is not None:
+        source = base.get("source")
+        if not isinstance(source, pathlib.Path):
+            raise TypeError("base corpus source is malformed")
+        sources.append(source)
     for worker in workers:
-        for item in sorted((worker.root / "corpus").iterdir(),
-                           key=lambda value: value.name):
+        sources.append(worker.root / "corpus")
+    for source in sources:
+        for item in sorted(source.iterdir(), key=lambda value: value.name):
             require_regular_file(item)
             data = item.read_bytes()
             digest = sha256_bytes(data)
@@ -285,6 +299,8 @@ def main() -> int:
     results_path = arguments.results
     if not results_path.is_absolute():
         results_path = pathlib.Path.cwd() / results_path
+    if any(character in str(results_path) for character in (",", "\n", "\r")):
+        parser.error("results path cannot contain a comma or line break")
     require_regular_file(fuzzer, executable=True)
     allowed_cpus = sorted(os.sched_getaffinity(0))
     worker_count = arguments.workers or min(128, len(allowed_cpus))
@@ -315,24 +331,36 @@ def main() -> int:
         for index in range(worker_count):
             root = results_path / f"worker-{index:03d}"
             root.mkdir()
-            copy_corpus(base, root / "corpus")
+            copy_corpus(base, root / "seed-inputs")
+            (root / "corpus").mkdir()
             (root / "artifacts").mkdir()
+            seed_inputs = sorted(
+                (root / "seed-inputs").iterdir(), key=lambda value: value.name
+            )
+            (root / "seed-inputs.txt").write_text(
+                ",".join(f"seed-inputs/{item.name}" for item in seed_inputs),
+                encoding="ascii",
+            )
             stdout_file = (root / "stdout.txt").open("wb")
             stderr_file = (root / "stderr.txt").open("wb")
             command = [
-                str(fuzzer), str(root / "corpus"),
+                str(fuzzer), "corpus",
+                "-seed_inputs=@seed-inputs.txt",
+                "-keep_seed=1",
+                "-shuffle=0",
+                "-reload=0",
                 f"-runs={arguments.runs}",
                 f"-seed={seeds[index]}",
                 f"-max_len={arguments.max_len}",
                 f"-rss_limit_mb={arguments.rss_limit_mb}",
-                f"-artifact_prefix={root / 'artifacts'}/",
+                "-artifact_prefix=artifacts/",
                 "-print_final_stats=1",
             ]
             try:
                 process = subprocess.Popen(
                     command, stdin=subprocess.DEVNULL,
                     stdout=stdout_file, stderr=stderr_file,
-                    env=environment, start_new_session=True,
+                    env=environment, cwd=root, start_new_session=True,
                     preexec_fn=lambda cpu=allowed_cpus[index]: pin_to_cpu(cpu),
                 )
             except BaseException:
@@ -378,7 +406,9 @@ def main() -> int:
 
     worker_results = [worker_result(worker, arguments.runs)
                       for worker in workers]
-    merged = merge_corpora(workers, results_path / "merged-corpus")
+    merged = merge_corpora(
+        workers, results_path / "merged-corpus", base=base
+    )
     base_public = dict(base)
     base_public.pop("entries")
     base_public.pop("source")

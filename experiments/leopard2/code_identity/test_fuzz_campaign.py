@@ -154,6 +154,18 @@ class CampaignTests(unittest.TestCase):
                 one["workers"][0]["corpus"]["content_sha256"],
                 one["workers"][1]["corpus"]["content_sha256"],
             )
+            self.assertEqual(
+                one["workers"][0]["seed_input_corpus"],
+                one["workers"][1]["seed_input_corpus"],
+            )
+            self.assertEqual(
+                one["workers"][0]["seed_input_list_sha256"],
+                one["workers"][1]["seed_input_list_sha256"],
+            )
+            for worker_index in range(2):
+                worker = first / f"worker-{worker_index:03d}"
+                self.assertEqual(1, len(list((worker / "seed-inputs").iterdir())))
+                self.assertFalse((worker / "corpus" / "seed").exists())
 
     def test_malformed_log_and_sanitizer_marker_fail(self) -> None:
         if len(os.sched_getaffinity(0)) < 2:

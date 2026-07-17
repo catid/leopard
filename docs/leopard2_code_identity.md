@@ -201,10 +201,13 @@ all 28 workers reused seed `1279609156` while mutating one shared corpus.  It
 found no crash, but it was neither a set of reproducible independent campaigns
 nor compliant with the logged-distinct-seed requirement.  The replacement
 runner derives a stable nonzero seed per worker, gives every affinity-pinned
-worker an isolated input corpus and artifact directory, validates exact logged
+worker an isolated canonical seed-input corpus, empty mutable output corpus, and
+artifact directory, validates exact logged
 seed and execution counts, rejects sanitizer markers and timeouts, retains each
 log, enforces an externally observed resident-memory limit in addition to
-libFuzzer's own accounting, and merges successful corpora by content hash.  It
+libFuzzer's own accounting, and merges successful corpora by content hash.  The
+runner supplies the seed files in explicit sorted order and disables startup
+shuffle and periodic reload, so a same-seed repeat is content-reproducible.  It
 refuses dirty source or nonempty result directories.  `test_fuzz_campaign.py`
 covers stable distinct seeds, isolated corpora, order-independent merging, stale
 directories, malformed logs, sanitizer markers, a bounded timeout, and the
