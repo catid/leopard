@@ -1366,7 +1366,7 @@ void TestScalableDifferential(Fixture& fixture)
         const leo2_result compatibility = leo2_encode_batch(
             fixture.codec, &batch.items[0], batch.items.size());
         const Bytes compatibility_bytes = arena;
-        arena = initial;
+        std::copy(initial.begin(), initial.end(), arena.begin());
         const leo2_result scalable = batch.Execute();
         RequireResult(scalable, compatibility,
             "randomized scalable encode/fallback differential");
@@ -1395,7 +1395,7 @@ void TestScalableDifferential(Fixture& fixture)
             leo2_decode_plan_execute_batch(
                 fixture.plan, &batch.items[0], batch.items.size());
         const Bytes compatibility_bytes = arena;
-        arena = initial;
+        std::copy(initial.begin(), initial.end(), arena.begin());
         const leo2_result scalable = batch.Execute();
         RequireResult(scalable, compatibility,
             "randomized scalable decode/fallback differential");
@@ -1421,8 +1421,7 @@ void Run(uint32_t thread_count)
     TestScalableDecodeConflicts(fixture);
     TestScalableDifferential(fixture);
     TestScalableLargeBatch(fixture);
-    if (thread_count > 1)
-        TestConcurrentScalableCalls(fixture);
+    TestConcurrentScalableCalls(fixture);
 }
 
 } // namespace
@@ -1437,7 +1436,7 @@ int main()
                   << "valid_shared=4 conflict_checks=20 "
                   << "large_encode_items=514 large_decode_items=514"
                   << " scalable_batch_sizes=9,64,1024"
-                  << " allocation_audit=clean concurrent_scalable_calls=32"
+                  << " allocation_audit=clean concurrent_scalable_calls=64"
                   << std::endl;
         return 0;
     }
