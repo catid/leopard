@@ -73,16 +73,42 @@ struct CircuitStatistics
     double AverageDepth;
 };
 
+struct CircuitCost
+{
+    unsigned GateCount;
+    unsigned Depth;
+};
+
 void SetKernelMode(KernelMode mode);
 KernelMode GetKernelMode();
 KernelMode GetActiveKernelMode();
 bool IsKernelModeAvailable(KernelMode mode);
 const char* GetKernelBackendName();
 
+// Pure register-level predicate used by the runtime detector and tests.  Both
+// the processor feature bits and the OS-enabled XMM/YMM/ZMM/opmask state are
+// required before entering either AVX-512-targeted width.
+bool IsAVX512Supported(
+    uint32_t maximum_basic_leaf,
+    uint32_t leaf1_ecx,
+    uint32_t leaf7_ebx,
+    uint64_t xcr0);
+
 const char* GetCircuitChecksum();
 CircuitStatistics GetMultiplyCircuitStatistics();
 CircuitStatistics GetFFTCircuitStatistics();
 CircuitStatistics GetIFFTCircuitStatistics();
+CircuitCost GetMultiplyCircuitCost(ffe_t log_multiplier);
+CircuitCost GetFFTCircuitCost(ffe_t skew);
+CircuitCost GetIFFTCircuitCost(ffe_t skew);
+
+// Whole-buffer field addition.  This follows the selected experimental kernel
+// mode and is also used by the native API's M=1 and formal-derivative paths so
+// forced Portable never falls through to a -march=native packed helper.
+void XorBuffer(
+    uint64_t buffer_bytes,
+    void* destination,
+    const void* source);
 
 // The buffer byte count includes all eight equal contiguous planes.
 // Multiplier logarithms 0 and 255 both mean multiplication by one.  Exact

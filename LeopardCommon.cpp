@@ -72,7 +72,9 @@ bool CpuHasSSSE3 = false;
 #define CPUID_ECX_OSXSAVE 0x08000000
 #define CPUID_ECX_AVX     0x10000000
 
-static void _cpuid(unsigned int cpu_info[4U], const unsigned int cpu_info_type)
+static LEO_BASELINE_TARGET void _cpuid(
+    unsigned int cpu_info[4U],
+    const unsigned int cpu_info_type)
 {
 #if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_AMD64) || defined(_M_IX86))
     __cpuid((int *) cpu_info, cpu_info_type);
@@ -110,7 +112,7 @@ static void _cpuid(unsigned int cpu_info[4U], const unsigned int cpu_info_type)
 }
 
 #if defined(LEO_TRY_AVX2)
-static uint64_t _xgetbv0()
+static LEO_BASELINE_TARGET uint64_t _xgetbv0()
 {
 #if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_AMD64) || defined(_M_IX86))
     return static_cast<uint64_t>(_xgetbv(0));
@@ -132,7 +134,7 @@ bool CpuHasSSSE3 = true;
 #endif // defined(LEO_TARGET_MOBILE)
 
 
-bool IsAVX2Supported(
+LEO_BASELINE_TARGET bool IsAVX2Supported(
     uint32_t maximum_basic_leaf,
     uint32_t leaf1_ecx,
     uint32_t leaf7_ebx,
@@ -147,7 +149,7 @@ bool IsAVX2Supported(
 }
 
 
-void InitializeCPUArch()
+LEO_BASELINE_TARGET void InitializeCPUArch()
 {
 #if defined(LEO_TRY_NEON) && defined(HAVE_ANDROID_GETCPUFEATURES)
     AndroidCpuFamily family = android_getCpuFamily();

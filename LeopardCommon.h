@@ -305,6 +305,20 @@
     #define LEO_FORCE_INLINE inline __attribute__((always_inline))
 #endif
 
+// Runtime feature detection and scalar metadata initialization execute before
+// any SIMD dispatch decision is available.  Keep those selected functions at
+// the x86-64-v1/SSE2 baseline even when the legacy project build enables
+// -march=native for packed payload kernels in the same translation unit.
+#if (defined(__GNUC__) || defined(__clang__)) && defined(__x86_64__)
+    #define LEO_BASELINE_TARGET \
+        __attribute__((target( \
+            "sse2,no-sse3,no-ssse3,no-sse4.1,no-sse4.2," \
+            "no-avx,no-avx2,no-avx512f,no-bmi,no-bmi2," \
+            "no-lzcnt,no-popcnt")))
+#else
+    #define LEO_BASELINE_TARGET
+#endif
+
 // Compiler-specific alignment keyword
 // Note: Alignment only matters for ARM NEON where it should be 16
 #ifdef _MSC_VER
@@ -489,7 +503,7 @@ protected:
 
 static const unsigned kAlignmentBytes = LEO_ALIGN_BYTES;
 
-static LEO_FORCE_INLINE uint8_t* SIMDSafeAllocate(size_t size)
+static LEO_BASELINE_TARGET inline uint8_t* SIMDSafeAllocate(size_t size)
 {
     uint8_t* data = (uint8_t*)calloc(1, kAlignmentBytes + size);
     if (!data)
@@ -500,7 +514,7 @@ static LEO_FORCE_INLINE uint8_t* SIMDSafeAllocate(size_t size)
     return data;
 }
 
-static LEO_FORCE_INLINE void SIMDSafeFree(void* ptr)
+static LEO_BASELINE_TARGET inline void SIMDSafeFree(void* ptr)
 {
     if (!ptr)
         return;

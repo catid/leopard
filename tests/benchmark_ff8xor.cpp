@@ -2266,6 +2266,74 @@ struct CircuitCase
     const char* description;
 };
 
+typedef leopard::ff8xor::CircuitCost (*CircuitCostGetter)(
+    leopard::ff8xor::ffe_t coefficient);
+
+static CircuitCase SelectCircuitCase(
+    CircuitCostGetter get_cost,
+    unsigned begin,
+    unsigned end,
+    double target_gate_count,
+    bool select_minimum,
+    bool select_maximum,
+    const char* description)
+{
+    CircuitCase selected = { begin, 0, 0, description };
+    double selected_distance = std::numeric_limits<double>::max();
+    bool have_selected = false;
+
+    for (unsigned coefficient = begin; coefficient < end; ++coefficient)
+    {
+        const leopard::ff8xor::CircuitCost cost = get_cost(
+            static_cast<leopard::ff8xor::ffe_t>(coefficient));
+        const double distance = cost.GateCount > target_gate_count ?
+            cost.GateCount - target_gate_count :
+            target_gate_count - cost.GateCount;
+        const bool better = !have_selected ||
+            (select_minimum &&
+                (cost.GateCount < selected.gates ||
+                 (cost.GateCount == selected.gates &&
+                  (cost.Depth < selected.depth ||
+                   (cost.Depth == selected.depth &&
+                    coefficient < selected.coefficient))))) ||
+            (select_maximum &&
+                (cost.GateCount > selected.gates ||
+                 (cost.GateCount == selected.gates &&
+                  (cost.Depth > selected.depth ||
+                   (cost.Depth == selected.depth &&
+                    coefficient < selected.coefficient))))) ||
+            (!select_minimum && !select_maximum &&
+                (distance < selected_distance ||
+                 (distance == selected_distance &&
+                  (cost.Depth < selected.depth ||
+                   (cost.Depth == selected.depth &&
+                    coefficient < selected.coefficient)))));
+        if (better)
+        {
+            selected.coefficient = coefficient;
+            selected.gates = cost.GateCount;
+            selected.depth = cost.Depth;
+            selected_distance = distance;
+            have_selected = true;
+        }
+    }
+    return selected;
+}
+
+static double AverageCircuitGateCount(
+    CircuitCostGetter get_cost,
+    unsigned begin,
+    unsigned end)
+{
+    uint64_t sum = 0;
+    for (unsigned coefficient = begin; coefficient < end; ++coefficient)
+    {
+        sum += get_cost(static_cast<leopard::ff8xor::ffe_t>(coefficient))
+            .GateCount;
+    }
+    return static_cast<double>(sum) / (end - begin);
+}
+
 static std::string CircuitCaseNote(
     const char* coefficient_name,
     const CircuitCase& circuit,
@@ -2303,15 +2371,31 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
     }
 
     // Cover both logarithmic spellings of identity, the least expensive
-    // non-identity circuit, a near-average circuit, and the unique maximum.
-    // This guards the no-payload-access/copy fast paths as well as exposing
+    // non-identity circuit, a near-average circuit, and a maximum circuit.
+    // This guards both logarithmic identity spellings and their out-of-place
+    // copy fast path, while exposing
     // coefficient sensitivity rather than a favorable hand-picked case.
-    static const CircuitCase multiply_cases[] = {
-        { 0, 0, 0, "identity multiplier (canonical logarithm)" },
-        { 51, 19, 12, "minimum-gate non-identity multiplier" },
-        { 22, 32, 26, "near-average-gate multiplier" },
-        { 209, 43, 35, "maximum-gate multiplier" },
-        { 255, 0, 0, "identity multiplier (redundant logarithm 255)" }
+    const leopard::ff8xor::CircuitCost multiply_identity =
+        leopard::ff8xor::GetMultiplyCircuitCost(0);
+    const leopard::ff8xor::CircuitCost multiply_identity_255 =
+        leopard::ff8xor::GetMultiplyCircuitCost(255);
+    const double multiply_nonidentity_average = AverageCircuitGateCount(
+        &leopard::ff8xor::GetMultiplyCircuitCost, 1, 255);
+    const CircuitCase multiply_cases[] = {
+        { 0, multiply_identity.GateCount, multiply_identity.Depth,
+            "identity multiplier (canonical logarithm)" },
+        SelectCircuitCase(&leopard::ff8xor::GetMultiplyCircuitCost,
+            1, 255, 0., true, false,
+            "minimum-gate non-identity multiplier"),
+        SelectCircuitCase(&leopard::ff8xor::GetMultiplyCircuitCost,
+            1, 255, multiply_nonidentity_average, false, false,
+            "near-average-gate multiplier"),
+        SelectCircuitCase(&leopard::ff8xor::GetMultiplyCircuitCost,
+            1, 255, 0., false, true,
+            "maximum-gate multiplier"),
+        { 255, multiply_identity_255.GateCount,
+            multiply_identity_255.Depth,
+            "identity multiplier (redundant logarithm 255)" }
     };
 
     FillRandom(b, bytes, UINT64_C(0x6d6963726f5f6232));
@@ -2369,21 +2453,53 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
             return false;
         PrintMicro(options, reporter, "ff8xor_native", "multiply",
             CircuitCaseNote("log", circuit,
-                "generated multiplication-only whole-buffer kernel"),
+                circuit.coefficient == 0 || circuit.coefficient == 255 ?
+                    "out-of-place identity memmove fast path" :
+                    "generated multiplication-only whole-buffer kernel"),
             xor_timing, bytes, bytes, bytes, bytes * 2);
     }
 
-    static const CircuitCase butterfly_cases[] = {
-        { 255, 8, 1, "sentinel y^=x fast path" },
-        { 0, 16, 2, "minimum-gate non-sentinel butterfly" },
-        { 1, 40, 11, "average-gate butterfly" },
-        { 247, 51, 15, "maximum-gate butterfly" }
+    const leopard::ff8xor::CircuitCost sentinel_cost =
+        leopard::ff8xor::GetFFTCircuitCost(255);
+    const double fft_nonsentinel_average = AverageCircuitGateCount(
+        &leopard::ff8xor::GetFFTCircuitCost, 0, 255);
+    const CircuitCase butterfly_cases[] = {
+        { 255, sentinel_cost.GateCount, sentinel_cost.Depth,
+            "sentinel y^=x fast path" },
+        SelectCircuitCase(&leopard::ff8xor::GetFFTCircuitCost,
+            0, 255, 0., true, false,
+            "minimum-gate non-sentinel butterfly"),
+        SelectCircuitCase(&leopard::ff8xor::GetFFTCircuitCost,
+            0, 255, fft_nonsentinel_average, false, false,
+            "near-average-gate butterfly"),
+        SelectCircuitCase(&leopard::ff8xor::GetFFTCircuitCost,
+            0, 255, 0., false, true,
+            "maximum-gate butterfly")
+    };
+    const leopard::ff8xor::CircuitCost inverse_sentinel_cost =
+        leopard::ff8xor::GetIFFTCircuitCost(255);
+    const double ifft_nonsentinel_average = AverageCircuitGateCount(
+        &leopard::ff8xor::GetIFFTCircuitCost, 0, 255);
+    const CircuitCase inverse_butterfly_cases[] = {
+        { 255, inverse_sentinel_cost.GateCount,
+            inverse_sentinel_cost.Depth, "sentinel y^=x fast path" },
+        SelectCircuitCase(&leopard::ff8xor::GetIFFTCircuitCost,
+            0, 255, 0., true, false,
+            "minimum-gate non-sentinel inverse butterfly"),
+        SelectCircuitCase(&leopard::ff8xor::GetIFFTCircuitCost,
+            0, 255, ifft_nonsentinel_average, false, false,
+            "near-average-gate inverse butterfly"),
+        SelectCircuitCase(&leopard::ff8xor::GetIFFTCircuitCost,
+            0, 255, 0., false, true,
+            "maximum-gate inverse butterfly")
     };
     for (size_t case_index = 0;
          case_index < sizeof(butterfly_cases) / sizeof(butterfly_cases[0]);
          ++case_index)
     {
         const CircuitCase circuit = butterfly_cases[case_index];
+        const CircuitCase inverse_circuit =
+            inverse_butterfly_cases[case_index];
         FillRandom(a, bytes, UINT64_C(0x6d6963726f5f6100) ^
             circuit.coefficient);
         FillRandom(b, bytes, UINT64_C(0x6d6963726f5f6200) ^
@@ -2401,6 +2517,22 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
             std::cerr << "microbenchmark FFT/IFFT inverse check failed for skew="
                 << circuit.coefficient << '\n';
             return false;
+        }
+
+        if (inverse_circuit.coefficient != circuit.coefficient)
+        {
+            leopard::ff8xor::IFFTButterflyBuffer(
+                bytes, a[0], b[0],
+                static_cast<uint8_t>(inverse_circuit.coefficient));
+            leopard::ff8xor::FFTButterflyBuffer(
+                bytes, a[0], b[0],
+                static_cast<uint8_t>(inverse_circuit.coefficient));
+            if (!Equal(a[0], d[0], bytes) || !Equal(b[0], e[0], bytes))
+            {
+                std::cerr << "microbenchmark selected IFFT/FFT inverse check "
+                    "failed for skew=" << inverse_circuit.coefficient << '\n';
+                return false;
+            }
         }
         leopard::ff8xor::IFFTButterflyBuffer(
             bytes, a[0], b[0], static_cast<uint8_t>(circuit.coefficient));
@@ -2435,15 +2567,16 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
             [&]() -> LeopardResult {
                 leopard::ff8xor::IFFTButterflyBuffer(
                     bytes, a[0], b[0],
-                    static_cast<uint8_t>(circuit.coefficient));
+                    static_cast<uint8_t>(inverse_circuit.coefficient));
                 BenchmarkSink ^= b[0][0];
                 return Leopard_Success;
             }, ifft_timing, result))
             return false;
         PrintMicro(options, reporter, "ff8xor_native", "ifft_butterfly",
-            CircuitCaseNote("skew", circuit, "generated two-buffer kernel"),
+            CircuitCaseNote("skew", inverse_circuit,
+                "generated two-buffer kernel"),
             ifft_timing, bytes, bytes * 2, bytes * 2,
-            bytes * (circuit.coefficient == 255 ? 3 : 4));
+            bytes * (inverse_circuit.coefficient == 255 ? 3 : 4));
     }
 
     FillRandom(a, bytes, UINT64_C(0x7472616e73706f73));

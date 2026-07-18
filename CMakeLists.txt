@@ -32,6 +32,8 @@ set(LIB_SOURCE_FILES
         LeopardFF8.h
         LeopardFF8Xor.cpp
         LeopardFF8Xor.h
+        LeopardFF8XorAVX2.cpp
+        LeopardFF8XorAVX2.h
         LeopardFF8XorAVX512.cpp
         LeopardFF8XorAVX512.h
         leopard_ff8xor.cpp
@@ -53,46 +55,96 @@ if(COMPILER_SUPPORTS_MARCH_NATIVE)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
 endif()
 
-# Keep the experiment honest about its AVX2 register budget even when the host
-# compiler enables AVX-512 through -march=native.  GCC's reassociation pass also
-# lengthens live ranges across the generated CNOT sequence and spills the 16
-# plane registers, so preserve the generator's verified operation ordering.
-set(FF8XOR_COMPILE_FLAGS "")
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86)$")
-    check_cxx_compiler_flag("-mno-avx512f" COMPILER_SUPPORTS_NO_AVX512F)
-    if(COMPILER_SUPPORTS_NO_AVX512F)
-        set(FF8XOR_COMPILE_FLAGS "${FF8XOR_COMPILE_FLAGS} -mno-avx512f")
+# Compile the experimental dispatcher, portable uint64_t path, and 128-bit
+# tail for the baseline x86-64 ISA.  This trailing source flag resets the
+# inherited project-wide -march=native; AVX2 and AVX-512 are confined to the
+# separately targeted translation units below.
+set(FF8XOR_BASELINE_COMPILE_FLAGS "")
+set(FF8XOR_AVX2_COMPILE_FLAGS "")
+set(FF8XOR_BUILD_AVX2 OFF)
+option(LEO_FF8XOR_ENABLE_AVX2
+    "Build isolated experimental AVX2 FF8 XOR circuit kernels" ON)
+if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND
+   CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+       CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        set(FF8XOR_BASELINE_COMPILE_FLAGS "-march=x86-64")
+        check_cxx_compiler_flag("-mavx2" COMPILER_SUPPORTS_AVX2_FLAG)
+        if(LEO_FF8XOR_ENABLE_AVX2 AND COMPILER_SUPPORTS_AVX2_FLAG)
+            set(FF8XOR_BUILD_AVX2 ON)
+            set(FF8XOR_AVX2_COMPILE_FLAGS "-march=x86-64 -mavx2")
+        endif()
+    elseif(MSVC)
+        # MSVC x64 already has an SSE2 baseline.  Keep AVX2 in the isolated
+        # source so the public dispatcher remains safe on pre-AVX2 CPUs.
+        check_cxx_compiler_flag("/arch:AVX2" COMPILER_SUPPORTS_MSVC_AVX2_FLAG)
+        if(LEO_FF8XOR_ENABLE_AVX2 AND COMPILER_SUPPORTS_MSVC_AVX2_FLAG)
+            set(FF8XOR_BUILD_AVX2 ON)
+            set(FF8XOR_AVX2_COMPILE_FLAGS "/arch:AVX2")
+        endif()
     endif()
 endif()
+
+# GCC's reassociation pass lengthens live ranges across the generated CNOT
+# sequence and can spill the 16 plane registers.  Preserve the generator's
+# verified operation ordering in every circuit-bearing object.
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     check_cxx_compiler_flag("-fno-tree-reassoc" COMPILER_SUPPORTS_NO_TREE_REASSOC)
     if(COMPILER_SUPPORTS_NO_TREE_REASSOC)
-        set(FF8XOR_COMPILE_FLAGS "${FF8XOR_COMPILE_FLAGS} -fno-tree-reassoc")
+        set(FF8XOR_BASELINE_COMPILE_FLAGS
+            "${FF8XOR_BASELINE_COMPILE_FLAGS} -fno-tree-reassoc")
+        if(FF8XOR_BUILD_AVX2)
+            set(FF8XOR_AVX2_COMPILE_FLAGS
+                "${FF8XOR_AVX2_COMPILE_FLAGS} -fno-tree-reassoc")
+        endif()
     endif()
 endif()
-if(FF8XOR_COMPILE_FLAGS)
-    set_source_files_properties(LeopardFF8Xor.cpp PROPERTIES
-        COMPILE_FLAGS "${FF8XOR_COMPILE_FLAGS}")
+if(FF8XOR_BASELINE_COMPILE_FLAGS)
+    # Keep both public API gateways and the experimental dispatcher safe to
+    # enter before any runtime feature check has succeeded.
+    set_source_files_properties(
+        leopard.cpp
+        leopard_ff8xor.cpp
+        LeopardFF8Xor.cpp
+        PROPERTIES
+        COMPILE_FLAGS "${FF8XOR_BASELINE_COMPILE_FLAGS}")
 endif()
 
+if(FF8XOR_BUILD_AVX2)
+    set_source_files_properties(LeopardFF8XorAVX2.cpp PROPERTIES
+        COMPILE_FLAGS "${FF8XOR_AVX2_COMPILE_FLAGS}"
+        COMPILE_DEFINITIONS "LEO_FF8XOR_BUILD_AVX2=1")
+    set_property(SOURCE LeopardFF8Xor.cpp APPEND PROPERTY
+        COMPILE_DEFINITIONS "LEO_FF8XOR_HAS_AVX2_KERNELS=1")
+    message(STATUS "FF8 XOR AVX2 kernels: enabled (isolated object)")
+else()
+    if(FF8XOR_BASELINE_COMPILE_FLAGS)
+        set_source_files_properties(LeopardFF8XorAVX2.cpp PROPERTIES
+            COMPILE_FLAGS "${FF8XOR_BASELINE_COMPILE_FLAGS}")
+    endif()
+    message(STATUS "FF8 XOR AVX2 kernels: unavailable")
+endif()
+
+# Preserve the old metadata variable name for benchmark output and downstream
+# build scripts while making its baseline meaning explicit.
+set(FF8XOR_COMPILE_FLAGS "${FF8XOR_BASELINE_COMPILE_FLAGS}")
+
 # AVX-512 is kept in its own translation unit so the portable dispatcher and
-# the existing packed/AVX2 backends cannot acquire instructions that are unsafe
-# on older CPUs.  Unsupported compilers build small stubs from this source;
-# runtime CPUID/XCR0 checks still gate every call into a real kernel.
+# the AVX2 object cannot acquire instructions that are unsafe on older CPUs.
+# Unsupported compilers build small stubs from this source; runtime
+# CPUID/XCR0 checks still gate every call into a real kernel.
 option(LEO_FF8XOR_ENABLE_AVX512
     "Build experimental AVX-512VL/ZMM FF8 XOR circuit kernels" ON)
 set(FF8XOR_BUILD_AVX512 OFF)
-if(LEO_FF8XOR_ENABLE_AVX512 AND
+if(LEO_FF8XOR_ENABLE_AVX512 AND FF8XOR_BUILD_AVX2 AND
    CMAKE_SIZEOF_VOID_P EQUAL 8 AND
    CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$" AND
-   (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+    (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
     CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
     check_cxx_compiler_flag("-mavx512f" COMPILER_SUPPORTS_AVX512F)
     check_cxx_compiler_flag("-mavx512vl" COMPILER_SUPPORTS_AVX512VL)
-    check_cxx_compiler_flag("-mavx2" COMPILER_SUPPORTS_AVX2_FLAG)
     if(COMPILER_SUPPORTS_AVX512F AND
-       COMPILER_SUPPORTS_AVX512VL AND
-       COMPILER_SUPPORTS_AVX2_FLAG)
+       COMPILER_SUPPORTS_AVX512VL)
         set(FF8XOR_BUILD_AVX512 ON)
     endif()
 endif()
@@ -115,9 +167,9 @@ if(FF8XOR_BUILD_AVX512)
         COMPILE_DEFINITIONS "LEO_FF8XOR_HAS_AVX512_KERNELS=1")
     message(STATUS "FF8 XOR AVX-512VL/ZMM kernels: enabled")
 else()
-    if(FF8XOR_COMPILE_FLAGS)
+    if(FF8XOR_BASELINE_COMPILE_FLAGS)
         set_source_files_properties(LeopardFF8XorAVX512.cpp PROPERTIES
-            COMPILE_FLAGS "${FF8XOR_COMPILE_FLAGS}")
+            COMPILE_FLAGS "${FF8XOR_BASELINE_COMPILE_FLAGS}")
     endif()
     message(STATUS "FF8 XOR AVX-512VL/ZMM kernels: unavailable")
 endif()
@@ -232,7 +284,13 @@ add_test(NAME leopard_api_counts COMMAND test_leopard_api_counts)
 add_executable(bench_leopard_ff8xor tests/benchmark_ff8xor.cpp)
 target_link_libraries(bench_leopard_ff8xor libleopard)
 
-# These remain OFF/empty on builds without the isolated AVX-512 source.
+# These remain OFF/empty on builds without the isolated vector sources.
+if(NOT DEFINED FF8XOR_BUILD_AVX2)
+    set(FF8XOR_BUILD_AVX2 OFF)
+endif()
+if(NOT DEFINED FF8XOR_AVX2_COMPILE_FLAGS)
+    set(FF8XOR_AVX2_COMPILE_FLAGS "")
+endif()
 if(NOT DEFINED FF8XOR_BUILD_AVX512)
     set(FF8XOR_BUILD_AVX512 OFF)
 endif()
@@ -317,6 +375,10 @@ set(FF8XOR_BENCH_BUILD_FLAGS
 set(FF8XOR_BENCH_BUILD_FLAGS
     "${FF8XOR_BENCH_BUILD_FLAGS} ff8xor=[${FF8XOR_COMPILE_FLAGS}]")
 set(FF8XOR_BENCH_BUILD_FLAGS
+    "${FF8XOR_BENCH_BUILD_FLAGS} avx2_built=${FF8XOR_BUILD_AVX2}")
+set(FF8XOR_BENCH_BUILD_FLAGS
+    "${FF8XOR_BENCH_BUILD_FLAGS} avx2=[${FF8XOR_AVX2_COMPILE_FLAGS}]")
+set(FF8XOR_BENCH_BUILD_FLAGS
     "${FF8XOR_BENCH_BUILD_FLAGS} avx512_built=${FF8XOR_BUILD_AVX512}")
 set(FF8XOR_BENCH_BUILD_FLAGS
     "${FF8XOR_BENCH_BUILD_FLAGS} avx512=[${FF8XOR_AVX512_COMPILE_FLAGS}]")
@@ -340,18 +402,23 @@ else()
 endif()
 
 set(FF8XOR_ASSEMBLY_REQUIRE_ARGS "")
+if(FF8XOR_BUILD_AVX2)
+    list(APPEND FF8XOR_ASSEMBLY_REQUIRE_ARGS --require-avx2)
+endif()
 if(FF8XOR_BUILD_AVX512)
     list(APPEND FF8XOR_ASSEMBLY_REQUIRE_ARGS --require-avx512)
 endif()
 
 find_program(FF8XOR_NM_EXECUTABLE NAMES llvm-nm nm)
 find_program(FF8XOR_OBJDUMP_EXECUTABLE NAMES llvm-objdump objdump)
+find_program(FF8XOR_AR_EXECUTABLE NAMES llvm-ar ar)
 set(FF8XOR_CAN_INSPECT_X86_ASSEMBLY OFF)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
-   CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86)$" AND
+   CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$" AND
    (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
     CMAKE_CXX_COMPILER_ID MATCHES "Clang") AND
-   FF8XOR_NM_EXECUTABLE AND FF8XOR_OBJDUMP_EXECUTABLE)
+   FF8XOR_NM_EXECUTABLE AND FF8XOR_OBJDUMP_EXECUTABLE AND
+   FF8XOR_AR_EXECUTABLE)
     set(FF8XOR_CAN_INSPECT_X86_ASSEMBLY ON)
 endif()
 
@@ -396,6 +463,78 @@ if(FF8XOR_PYTHON_EXECUTABLE)
         COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
                 "${FF8XOR_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_assembly_inspector.py")
+
+    add_test(NAME ff8xor_synthesis
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8_xor_synthesis.py")
+
+    add_test(NAME ff8xor_xor3_schedule
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8_xor3_schedule.py")
+
+    add_test(NAME ff8xor_baseline_isa_inspector
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_baseline_isa_inspector.py")
+
+    if(FF8XOR_CAN_INSPECT_X86_ASSEMBLY)
+        # Debug and less aggressive compilers may leave baseline-attributed
+        # initialization helpers out of line.  Keep the complete helper set in
+        # the census instead of relying on Release inlining to hide omissions.
+        set(FF8XOR_BASELINE_COMMON_SYMBOLS
+            "leopard::(SIMDSafe(Allocate|Free)|InitializeCPUArch|IsAVX2Supported|_cpuid|_xgetbv0)")
+        set(FF8XOR_BASELINE_FF8_SYMBOLS
+            "leopard::(SIMDSafe(Allocate|Free)|ff8::(AddMod|SubMod|MultiplyLog|FWHT|FFTInitialize|Initialize))")
+        set(FF8XOR_BASELINE_FF16_SYMBOLS
+            "leopard::(SIMDSafe(Allocate|Free)|ff16::(AddMod|SubMod|MultiplyLog|FWHT|FFTInitialize|Initialize))")
+
+        add_test(NAME ff8xor_baseline_isa_census
+            COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                    "${FF8XOR_PYTHON_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_baseline_isa.py"
+                    "$<TARGET_FILE:libleopard>"
+                    --member leopard.cpp.o
+                    --member LeopardCommon.cpp.o
+                    --member LeopardFF8.cpp.o
+                    --member LeopardFF16.cpp.o
+                    --member LeopardFF8Xor.cpp.o
+                    --member leopard_ff8xor.cpp.o
+                    --member-symbol
+                        "LeopardCommon.cpp.o=${FF8XOR_BASELINE_COMMON_SYMBOLS}"
+                    --member-symbol
+                        "LeopardFF8.cpp.o=${FF8XOR_BASELINE_FF8_SYMBOLS}"
+                    --member-symbol
+                        "LeopardFF16.cpp.o=${FF8XOR_BASELINE_FF16_SYMBOLS}"
+                    --ar "${FF8XOR_AR_EXECUTABLE}"
+                    --objdump "${FF8XOR_OBJDUMP_EXECUTABLE}"
+                    --strict)
+
+        add_custom_target(check_ff8xor_baseline_isa
+            COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                    "${FF8XOR_PYTHON_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_baseline_isa.py"
+                    "$<TARGET_FILE:libleopard>"
+                    --member leopard.cpp.o
+                    --member LeopardCommon.cpp.o
+                    --member LeopardFF8.cpp.o
+                    --member LeopardFF16.cpp.o
+                    --member LeopardFF8Xor.cpp.o
+                    --member leopard_ff8xor.cpp.o
+                    --member-symbol
+                        "LeopardCommon.cpp.o=${FF8XOR_BASELINE_COMMON_SYMBOLS}"
+                    --member-symbol
+                        "LeopardFF8.cpp.o=${FF8XOR_BASELINE_FF8_SYMBOLS}"
+                    --member-symbol
+                        "LeopardFF16.cpp.o=${FF8XOR_BASELINE_FF16_SYMBOLS}"
+                    --ar "${FF8XOR_AR_EXECUTABLE}"
+                    --objdump "${FF8XOR_OBJDUMP_EXECUTABLE}"
+                    --strict
+                    --json
+            DEPENDS libleopard
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    endif()
 
     if(FF8XOR_BUILD_AVX512)
         if(FF8XOR_CAN_INSPECT_X86_ASSEMBLY)

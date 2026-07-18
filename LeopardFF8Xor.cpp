@@ -27,6 +27,7 @@
 */
 
 #include "LeopardFF8Xor.h"
+#include "LeopardFF8XorAVX2.h"
 #include "LeopardFF8XorAVX512.h"
 
 #ifdef LEO_HAS_FF8
@@ -35,11 +36,13 @@
 #include <limits.h>
 #include <string.h>
 
-#if defined(LEO_FF8XOR_HAS_AVX512_KERNELS) && \
+#if (defined(LEO_FF8XOR_HAS_AVX2_KERNELS) || \
+     defined(LEO_FF8XOR_HAS_AVX512_KERNELS)) && \
     defined(_MSC_VER) && \
     (defined(_M_X64) || defined(_M_AMD64) || defined(_M_IX86))
     #include <intrin.h>
-#elif defined(LEO_FF8XOR_HAS_AVX512_KERNELS) && \
+#elif (defined(LEO_FF8XOR_HAS_AVX2_KERNELS) || \
+       defined(LEO_FF8XOR_HAS_AVX512_KERNELS)) && \
     (defined(__i386__) || defined(__x86_64__))
     #include <cpuid.h>
 #endif
@@ -69,14 +72,6 @@ static LEO_FORCE_INLINE LEO_M128 XorValue(LEO_M128 x, LEO_M128 y)
 #endif
 }
 #endif
-
-#ifdef LEO_TRY_AVX2
-static LEO_FORCE_INLINE LEO_M256 XorValue(LEO_M256 x, LEO_M256 y)
-{
-    return _mm256_xor_si256(x, y);
-}
-#endif
-
 
 }} // namespace leopard::ff8xor
 
@@ -141,28 +136,6 @@ struct ValueIO<Simd128Tag>
 };
 #endif
 
-#ifdef LEO_TRY_AVX2
-struct Avx2Tag {};
-
-template <>
-struct ValueIO<Avx2Tag>
-{
-    typedef LEO_M256 Value;
-    static const unsigned kBytes = 32;
-
-    static LEO_FORCE_INLINE Value Load(const uint8_t* source)
-    {
-        return _mm256_loadu_si256(reinterpret_cast<const LEO_M256*>(source));
-    }
-
-    static LEO_FORCE_INLINE void Store(uint8_t* destination, Value value)
-    {
-        _mm256_storeu_si256(reinterpret_cast<LEO_M256*>(destination), value);
-    }
-};
-#endif
-
-
 //------------------------------------------------------------------------------
 // Kernel selection
 
@@ -172,28 +145,47 @@ static std::atomic<KernelMode> SelectedKernelMode(KernelMode::Auto);
 static thread_local unsigned LastLocatorShift = 0;
 static thread_local int LocatorShiftOverride = -1;
 
-#ifdef LEO_FF8XOR_HAS_AVX512_KERNELS
-
-struct AVX512Capabilities
+bool IsAVX512Supported(
+    uint32_t maximum_basic_leaf,
+    uint32_t leaf1_ecx,
+    uint32_t leaf7_ebx,
+    uint64_t xcr0)
 {
-    bool Vector256;
-    bool Foundation;
-    bool VectorLength;
+    const uint32_t required_leaf1 = UINT32_C(1) << 27 | // OSXSAVE
+        UINT32_C(1) << 28;                              // AVX
+    const uint32_t required_leaf7 = UINT32_C(1) << 5 |  // AVX2 tails
+        UINT32_C(1) << 16 |                             // AVX-512F
+        UINT32_C(1) << 31;                              // AVX-512VL
+    return maximum_basic_leaf >= 7 &&
+        (leaf1_ecx & required_leaf1) == required_leaf1 &&
+        (leaf7_ebx & required_leaf7) == required_leaf7 &&
+        (xcr0 & UINT64_C(0xe6)) == UINT64_C(0xe6);
+}
+
+#if defined(LEO_FF8XOR_HAS_AVX2_KERNELS) || \
+    defined(LEO_FF8XOR_HAS_AVX512_KERNELS)
+
+struct X86VectorCapabilities
+{
+    bool Avx2;
+    bool Avx512Foundation;
+    bool Avx512VectorLength;
 };
 
 // This detector is deliberately compiled in the baseline translation unit.
-// In particular, no function in the AVX-512-targeted object is entered until
-// CPUID and XCR0 prove that the CPU and operating system can preserve all ZMM,
-// opmask, XMM, and YMM state.
-static AVX512Capabilities DetectAVX512Capabilities()
+// No AVX-targeted object is entered until CPUID and XCR0 prove that both the
+// processor and operating system preserve the vector state that object needs.
+static X86VectorCapabilities DetectX86VectorCapabilities()
 {
-    AVX512Capabilities capabilities = { false, false, false };
+    X86VectorCapabilities capabilities = { false, false, false };
 
 #if defined(_MSC_VER) && \
     (defined(_M_X64) || defined(_M_AMD64) || defined(_M_IX86))
     int registers[4] = { 0, 0, 0, 0 };
     __cpuidex(registers, 0, 0);
-    if (registers[0] < 7)
+    const uint32_t maximum_basic_leaf =
+        static_cast<uint32_t>(registers[0]);
+    if (maximum_basic_leaf < 7)
         return capabilities;
 
     __cpuidex(registers, 1, 0);
@@ -202,17 +194,28 @@ static AVX512Capabilities DetectAVX512Capabilities()
         (leaf1_ecx & (1U << 28)) == 0)   // AVX
         return capabilities;
 
-    const uint64_t xcr0 = static_cast<uint64_t>(_xgetbv(0));
-    if ((xcr0 & UINT64_C(0xe6)) != UINT64_C(0xe6))
-        return capabilities;
-
     __cpuidex(registers, 7, 0);
     const unsigned leaf7_ebx = static_cast<unsigned>(registers[1]);
-    capabilities.Vector256 = (leaf7_ebx & (1U << 5)) != 0;
-    capabilities.Foundation = (leaf7_ebx & (1U << 16)) != 0;
-    capabilities.VectorLength = (leaf7_ebx & (1U << 31)) != 0;
+    const uint64_t xcr0 = static_cast<uint64_t>(_xgetbv(0));
+    capabilities.Avx2 = IsAVX2Supported(
+        maximum_basic_leaf,
+        leaf1_ecx,
+        leaf7_ebx,
+        xcr0);
+    if (IsAVX512Supported(
+            maximum_basic_leaf,
+            leaf1_ecx,
+            leaf7_ebx,
+            xcr0))
+    {
+        capabilities.Avx512Foundation =
+            (leaf7_ebx & (1U << 16)) != 0;
+        capabilities.Avx512VectorLength =
+            (leaf7_ebx & (1U << 31)) != 0;
+    }
 #elif defined(__i386__) || defined(__x86_64__)
-    if (__get_cpuid_max(0, NULL) < 7)
+    const uint32_t maximum_basic_leaf = __get_cpuid_max(0, NULL);
+    if (maximum_basic_leaf < 7)
         return capabilities;
 
     unsigned eax = 0;
@@ -220,45 +223,69 @@ static AVX512Capabilities DetectAVX512Capabilities()
     unsigned ecx = 0;
     unsigned edx = 0;
     __cpuid_count(1, 0, eax, ebx, ecx, edx);
-    if ((ecx & (1U << 27)) == 0 || // OSXSAVE
-        (ecx & (1U << 28)) == 0)   // AVX
+    const uint32_t leaf1_ecx = ecx;
+    if ((leaf1_ecx & (1U << 27)) == 0 || // OSXSAVE
+        (leaf1_ecx & (1U << 28)) == 0)   // AVX
         return capabilities;
 
     unsigned xcr0_low = 0;
     unsigned xcr0_high = 0;
+    // Raw encoding avoids requiring a compiler-wide -mxsave option.  This is
+    // reached only after CPUID reports both AVX and OSXSAVE.
     __asm__ __volatile__(
-        "xgetbv" : "=a"(xcr0_low), "=d"(xcr0_high) : "c"(0));
+        ".byte 0x0f, 0x01, 0xd0"
+        : "=a"(xcr0_low), "=d"(xcr0_high) : "c"(0));
     const uint64_t xcr0 = static_cast<uint64_t>(xcr0_low) |
         (static_cast<uint64_t>(xcr0_high) << 32);
-    if ((xcr0 & UINT64_C(0xe6)) != UINT64_C(0xe6))
-        return capabilities;
-
     __cpuid_count(7, 0, eax, ebx, ecx, edx);
-    capabilities.Vector256 = (ebx & (1U << 5)) != 0;
-    capabilities.Foundation = (ebx & (1U << 16)) != 0;
-    capabilities.VectorLength = (ebx & (1U << 31)) != 0;
+    capabilities.Avx2 = IsAVX2Supported(
+        maximum_basic_leaf, leaf1_ecx, ebx, xcr0);
+    if (IsAVX512Supported(
+            maximum_basic_leaf, leaf1_ecx, ebx, xcr0))
+    {
+        capabilities.Avx512Foundation = (ebx & (1U << 16)) != 0;
+        capabilities.Avx512VectorLength = (ebx & (1U << 31)) != 0;
+    }
 #endif
 
     return capabilities;
 }
 
-static const AVX512Capabilities& GetAVX512Capabilities()
+static const X86VectorCapabilities& GetX86VectorCapabilities()
 {
-    static const AVX512Capabilities capabilities =
-        DetectAVX512Capabilities();
+    static const X86VectorCapabilities capabilities =
+        DetectX86VectorCapabilities();
     return capabilities;
 }
 
+#endif
+
+static bool AreAVX2KernelsAvailable()
+{
+#ifdef LEO_FF8XOR_HAS_AVX2_KERNELS
+    // Cache the immutable result so whole-buffer coefficient dispatch never
+    // pays an extra cross-TU feature-query call.
+    static const bool available =
+        GetX86VectorCapabilities().Avx2 && avx2::KernelsBuilt();
+    return available;
+#else
+    return false;
+#endif
+}
+
+#ifdef LEO_FF8XOR_HAS_AVX512_KERNELS
+
 static bool DetectAVX512KernelAvailability()
 {
-    const AVX512Capabilities& capabilities = GetAVX512Capabilities();
+    const X86VectorCapabilities& capabilities =
+        GetX86VectorCapabilities();
 
     // The isolated TU is compiled with AVX2, F, and VL enabled.  Requiring all
     // three features for either width is conservative: It prevents a compiler
     // from using a permitted AVX2/VL instruction in an otherwise ZMM-only
     // function on a hypothetical AVX-512F CPU lacking either feature.
-    return capabilities.Vector256 && capabilities.Foundation &&
-        capabilities.VectorLength && avx512::KernelsBuilt();
+    return AreAVX2KernelsAvailable() && capabilities.Avx512Foundation &&
+        capabilities.Avx512VectorLength && avx512::KernelsBuilt();
 }
 
 #endif // LEO_FF8XOR_HAS_AVX512_KERNELS
@@ -291,11 +318,7 @@ bool IsKernelModeAvailable(KernelMode mode)
 #endif
 
     case KernelMode::Avx2:
-#ifdef LEO_TRY_AVX2
-        return CpuHasAVX2;
-#else
-        return false;
-#endif
+        return AreAVX2KernelsAvailable();
 
     case KernelMode::Avx512VL:
     case KernelMode::Avx512Zmm:
@@ -306,10 +329,8 @@ bool IsKernelModeAvailable(KernelMode mode)
 
 static KernelMode ResolveBaselineKernelMode()
 {
-#ifdef LEO_TRY_AVX2
-    if (CpuHasAVX2)
+    if (AreAVX2KernelsAvailable())
         return KernelMode::Avx2;
-#endif
 #ifdef LEO_FF8XOR_HAS_SIMD128
     return KernelMode::Simd128;
 #else
@@ -335,10 +356,8 @@ static KernelMode ResolveKernelMode()
 
     if (selected == KernelMode::Avx2)
     {
-#ifdef LEO_TRY_AVX2
-        if (CpuHasAVX2)
+        if (AreAVX2KernelsAvailable())
             return KernelMode::Avx2;
-#endif
 #ifdef LEO_FF8XOR_HAS_SIMD128
         return KernelMode::Simd128;
 #else
@@ -527,17 +546,12 @@ static void XorContiguousWholeBuffer(
         offset = avx512::Xor256(destination, source, buffer_bytes);
 #endif
 
-#ifdef LEO_TRY_AVX2
+#ifdef LEO_FF8XOR_HAS_AVX2_KERNELS
     if (mode == KernelMode::Avx2 ||
-        ((mode == KernelMode::Avx512VL ||
-          mode == KernelMode::Avx512Zmm) && CpuHasAVX2))
-    {
-        while (buffer_bytes - offset >= ValueIO<Avx2Tag>::kBytes)
-        {
-            XorContiguousChunk<Avx2Tag>(destination, source, offset);
-            offset += ValueIO<Avx2Tag>::kBytes;
-        }
-    }
+        mode == KernelMode::Avx512VL ||
+        mode == KernelMode::Avx512Zmm)
+        offset = avx2::Xor(
+            destination, source, buffer_bytes, offset);
 #endif
 
 #ifdef LEO_FF8XOR_HAS_SIMD128
@@ -555,6 +569,27 @@ static void XorContiguousWholeBuffer(
     {
         XorContiguousChunk<PortableTag>(destination, source, offset);
         offset += ValueIO<PortableTag>::kBytes;
+    }
+}
+
+void XorBuffer(
+    uint64_t buffer_bytes,
+    void* destination,
+    const void* source)
+{
+    XorContiguousWholeBuffer(destination, source, buffer_bytes);
+}
+
+static void XorBuffers(
+    uint64_t buffer_bytes,
+    unsigned count,
+    void** destination,
+    void** source)
+{
+    for (unsigned index = 0; index < count; ++index)
+    {
+        XorContiguousWholeBuffer(
+            destination[index], source[index], buffer_bytes);
     }
 }
 
@@ -583,18 +618,12 @@ static void MultiplyWholeBuffer(
     }
 #endif
 
-#ifdef LEO_TRY_AVX2
+#ifdef LEO_FF8XOR_HAS_AVX2_KERNELS
     if (mode == KernelMode::Avx2 ||
-        ((mode == KernelMode::Avx512VL ||
-          mode == KernelMode::Avx512Zmm) && CpuHasAVX2))
-    {
-        while (plane_bytes - offset >= ValueIO<Avx2Tag>::kBytes)
-        {
-            MultiplyChunk<Coefficient, Avx2Tag>(
-                destination, source, plane_bytes, offset);
-            offset += ValueIO<Avx2Tag>::kBytes;
-        }
-    }
+        mode == KernelMode::Avx512VL ||
+        mode == KernelMode::Avx512Zmm)
+        offset = avx2::Multiply<Coefficient>(
+            destination, source, buffer_bytes, offset);
 #endif
 
 #ifdef LEO_FF8XOR_HAS_SIMD128
@@ -650,18 +679,12 @@ static void ButterflyWholeBuffer(
     }
 #endif
 
-#ifdef LEO_TRY_AVX2
+#ifdef LEO_FF8XOR_HAS_AVX2_KERNELS
     if (mode == KernelMode::Avx2 ||
-        ((mode == KernelMode::Avx512VL ||
-          mode == KernelMode::Avx512Zmm) && CpuHasAVX2))
-    {
-        while (plane_bytes - offset >= ValueIO<Avx2Tag>::kBytes)
-        {
-            ButterflyChunk<Skew, Avx2Tag, Inverse>(
-                x_buffer, y_buffer, plane_bytes, offset);
-            offset += ValueIO<Avx2Tag>::kBytes;
-        }
-    }
+        mode == KernelMode::Avx512VL ||
+        mode == KernelMode::Avx512Zmm)
+        offset = avx2::Butterfly<Skew, Inverse>(
+            x_buffer, y_buffer, buffer_bytes, offset);
 #endif
 
 #ifdef LEO_FF8XOR_HAS_SIMD128
@@ -802,6 +825,35 @@ CircuitStatistics GetIFFTCircuitStatistics()
         generated::kIFFTMinDepth,
         generated::kIFFTMaxDepth,
         generated::kIFFTAverageDepth);
+}
+
+static CircuitCost MakeCircuitCost(unsigned gate_count, unsigned depth)
+{
+    CircuitCost cost;
+    cost.GateCount = gate_count;
+    cost.Depth = depth;
+    return cost;
+}
+
+CircuitCost GetMultiplyCircuitCost(ffe_t log_multiplier)
+{
+    return MakeCircuitCost(
+        generated::kMultiplyGateCounts[log_multiplier],
+        generated::kMultiplyDepths[log_multiplier]);
+}
+
+CircuitCost GetFFTCircuitCost(ffe_t skew)
+{
+    return MakeCircuitCost(
+        generated::kFFTGateCounts[skew],
+        generated::kFFTDepths[skew]);
+}
+
+CircuitCost GetIFFTCircuitCost(ffe_t skew)
+{
+    return MakeCircuitCost(
+        generated::kIFFTGateCounts[skew],
+        generated::kIFFTDepths[skew]);
 }
 
 
@@ -1264,7 +1316,7 @@ void ReedSolomonEncode(
             m + chunk_start);
 
         if (chunk_start != 0)
-            VectorXOR(buffer_bytes, m, work, chunk_work);
+            XorBuffers(buffer_bytes, m, work, chunk_work);
 
         chunk_start += m;
     }
@@ -1371,7 +1423,7 @@ void ReedSolomonDecode(
     for (unsigned index = 1; index < n; ++index)
     {
         const unsigned width = ((index ^ (index - 1)) + 1) >> 1;
-        VectorXOR(
+        XorBuffers(
             buffer_bytes,
             width,
             work + index - width,

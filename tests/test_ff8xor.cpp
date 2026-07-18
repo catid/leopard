@@ -1593,6 +1593,40 @@ static bool TestAVX2FeaturePredicate()
     return true;
 }
 
+static bool TestAVX512FeaturePredicate()
+{
+    const uint32_t osxsave = UINT32_C(1) << 27;
+    const uint32_t avx = UINT32_C(1) << 28;
+    const uint32_t avx2 = UINT32_C(1) << 5;
+    const uint32_t avx512f = UINT32_C(1) << 16;
+    const uint32_t avx512vl = UINT32_C(1) << 31;
+    const uint32_t leaf1 = osxsave | avx;
+    const uint32_t leaf7 = avx2 | avx512f | avx512vl;
+    const uint64_t xcr0 = UINT64_C(0xe6);
+
+    if (!leopard::ff8xor::IsAVX512Supported(7, leaf1, leaf7, xcr0) ||
+        !leopard::ff8xor::IsAVX512Supported(
+            UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT64_MAX) ||
+        leopard::ff8xor::IsAVX512Supported(6, leaf1, leaf7, xcr0) ||
+        leopard::ff8xor::IsAVX512Supported(7, avx, leaf7, xcr0) ||
+        leopard::ff8xor::IsAVX512Supported(7, osxsave, leaf7, xcr0) ||
+        leopard::ff8xor::IsAVX512Supported(
+            7, leaf1, leaf7 & ~avx2, xcr0) ||
+        leopard::ff8xor::IsAVX512Supported(
+            7, leaf1, leaf7 & ~avx512f, xcr0) ||
+        leopard::ff8xor::IsAVX512Supported(
+            7, leaf1, leaf7 & ~avx512vl, xcr0) ||
+        leopard::ff8xor::IsAVX512Supported(7, leaf1, leaf7, UINT64_C(0x6)) ||
+        leopard::ff8xor::IsAVX512Supported(7, leaf1, leaf7, xcr0 & ~UINT64_C(0x20)) ||
+        leopard::ff8xor::IsAVX512Supported(7, leaf1, leaf7, xcr0 & ~UINT64_C(0x40)) ||
+        leopard::ff8xor::IsAVX512Supported(7, leaf1, leaf7, xcr0 & ~UINT64_C(0x80)))
+    {
+        fprintf(stderr, "AVX-512 CPU/OS feature predicate failed\n");
+        return false;
+    }
+    return true;
+}
+
 static bool TestNextPow2Boundaries()
 {
     if (leopard::NextPow2(0) != 0 ||
@@ -1622,6 +1656,7 @@ int main()
         !TestWorkCounts() ||
         !TestCallInitialize() ||
         !TestAVX2FeaturePredicate() ||
+        !TestAVX512FeaturePredicate() ||
         !TestNextPow2Boundaries())
         return 1;
 

@@ -177,6 +177,9 @@ struct GeneratedStatistics
     double AverageDepth;
 };
 
+typedef leopard::ff8xor::CircuitCost (*CircuitCostGetter)(
+    leopard::ff8xor::ffe_t coefficient);
+
 static bool CheckUnsigned(
     const char* family,
     const char* field,
@@ -224,6 +227,7 @@ static bool CheckFamily(
     const CircuitObserver* observers,
     const uint8_t* generated_gate_counts,
     const uint8_t* generated_depths,
+    CircuitCostGetter published_cost,
     const GeneratedStatistics& generated,
     const leopard::ff8xor::CircuitStatistics& published,
     const FamilyFixture& fixture)
@@ -263,6 +267,23 @@ static bool CheckFamily(
                 family,
                 index,
                 static_cast<unsigned>(generated_depths[index]),
+                observed.Depth);
+            ok = false;
+        }
+
+        const leopard::ff8xor::CircuitCost cost = published_cost(
+            static_cast<leopard::ff8xor::ffe_t>(index));
+        if (cost.GateCount != observed.GateCount ||
+            cost.Depth != observed.Depth)
+        {
+            fprintf(stderr,
+                "%s circuit %u published cost mismatch: "
+                "published=%u/%u observed=%u/%u\n",
+                family,
+                index,
+                cost.GateCount,
+                cost.Depth,
+                observed.GateCount,
                 observed.Depth);
             ok = false;
         }
@@ -364,16 +385,34 @@ int main()
 
     // These fixtures were computed independently from the generated summaries.
     // Integer sums make the averages exact binary fractions when divided by 256.
-    const FamilyFixture multiply_fixture = { 0, 43, 8108, 0, 35, 6210 };
-    const FamilyFixture fft_fixture = { 8, 51, 10240, 1, 16, 3142 };
-    const FamilyFixture ifft_fixture = { 8, 51, 10240, 1, 16, 3142 };
+    const FamilyFixture multiply_fixture = { 0, 24, 4959, 0, 17, 2957 };
+    const FamilyFixture fft_fixture = { 8, 51, 10240, 1, 14, 2780 };
+    const FamilyFixture ifft_fixture = { 8, 51, 10240, 1, 14, 2780 };
 
     bool ok = true;
+    const leopard::ff8xor::CircuitCost identity_zero =
+        leopard::ff8xor::GetMultiplyCircuitCost(0);
+    const leopard::ff8xor::CircuitCost identity_redundant =
+        leopard::ff8xor::GetMultiplyCircuitCost(255);
+    if (identity_zero.GateCount != 0 || identity_zero.Depth != 0 ||
+        identity_redundant.GateCount != 0 ||
+        identity_redundant.Depth != 0)
+    {
+        fprintf(stderr,
+            "multiply identity costs must both be zero: log0=%u/%u "
+            "log255=%u/%u\n",
+            identity_zero.GateCount,
+            identity_zero.Depth,
+            identity_redundant.GateCount,
+            identity_redundant.Depth);
+        ok = false;
+    }
     ok = CheckFamily(
         "multiply",
         MultiplyObservers,
         kMultiplyGateCounts,
         kMultiplyDepths,
+        &leopard::ff8xor::GetMultiplyCircuitCost,
         multiply_generated,
         leopard::ff8xor::GetMultiplyCircuitStatistics(),
         multiply_fixture) && ok;
@@ -382,6 +421,7 @@ int main()
         FFTObservers,
         kFFTGateCounts,
         kFFTDepths,
+        &leopard::ff8xor::GetFFTCircuitCost,
         fft_generated,
         leopard::ff8xor::GetFFTCircuitStatistics(),
         fft_fixture) && ok;
@@ -390,6 +430,7 @@ int main()
         IFFTObservers,
         kIFFTGateCounts,
         kIFFTDepths,
+        &leopard::ff8xor::GetIFFTCircuitCost,
         ifft_generated,
         leopard::ff8xor::GetIFFTCircuitStatistics(),
         ifft_fixture) && ok;

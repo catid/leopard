@@ -58,7 +58,9 @@ static const ffe_t kCantorBasis[kBits] = {
 // Field Operations
 
 // z = x + y (mod kModulus)
-static inline ffe_t AddMod(const ffe_t a, const ffe_t b)
+static LEO_BASELINE_TARGET inline ffe_t AddMod(
+    const ffe_t a,
+    const ffe_t b)
 {
     const unsigned sum = (unsigned)a + b;
 
@@ -67,7 +69,9 @@ static inline ffe_t AddMod(const ffe_t a, const ffe_t b)
 }
 
 // z = x - y (mod kModulus)
-static inline ffe_t SubMod(const ffe_t a, const ffe_t b)
+static LEO_BASELINE_TARGET inline ffe_t SubMod(
+    const ffe_t a,
+    const ffe_t b)
 {
     const unsigned dif = (unsigned)a - b;
 
@@ -80,7 +84,9 @@ static inline ffe_t SubMod(const ffe_t a, const ffe_t b)
 // Fast Walsh-Hadamard Transform (FWHT) (mod kModulus)
 
 // {a, b} = {a + b, a - b} (Mod Q)
-static LEO_FORCE_INLINE void FWHT_2(ffe_t& LEO_RESTRICT a, ffe_t& LEO_RESTRICT b)
+static LEO_FORCE_INLINE LEO_BASELINE_TARGET void FWHT_2(
+    ffe_t& LEO_RESTRICT a,
+    ffe_t& LEO_RESTRICT b)
 {
     const ffe_t sum = AddMod(a, b);
     const ffe_t dif = SubMod(a, b);
@@ -88,7 +94,9 @@ static LEO_FORCE_INLINE void FWHT_2(ffe_t& LEO_RESTRICT a, ffe_t& LEO_RESTRICT b
     b = dif;
 }
 
-static LEO_FORCE_INLINE void FWHT_4(ffe_t* data, unsigned s)
+static LEO_FORCE_INLINE LEO_BASELINE_TARGET void FWHT_4(
+    ffe_t* data,
+    unsigned s)
 {
     const unsigned s2 = s << 1;
 
@@ -111,7 +119,10 @@ static LEO_FORCE_INLINE void FWHT_4(ffe_t* data, unsigned s)
 // Decimation in time (DIT) Fast Walsh-Hadamard Transform
 // Unrolls pairs of layers to perform cross-layer operations in registers
 // m_truncated: Number of elements that are non-zero at the front of data
-static void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated)
+static LEO_BASELINE_TARGET void FWHT(
+    ffe_t* data,
+    const unsigned m,
+    const unsigned m_truncated)
 {
     // Decimation in time: Unroll 2 layers at a time
     unsigned dist = 1, dist4 = 4;
@@ -144,7 +155,7 @@ static ffe_t ExpLUT[kOrder];
 
 
 // Returns a * Log(b)
-static ffe_t MultiplyLog(ffe_t a, ffe_t log_b)
+static LEO_BASELINE_TARGET ffe_t MultiplyLog(ffe_t a, ffe_t log_b)
 {
     /*
         Note that this operation is not a normal multiplication in a finite
@@ -161,7 +172,7 @@ static ffe_t MultiplyLog(ffe_t a, ffe_t log_b)
 
 
 // Initialize LogLUT[], ExpLUT[]
-static void InitializeLogarithmTables()
+static LEO_BASELINE_TARGET void InitializeLogarithmTables()
 {
     // LFSR table generation:
 
@@ -372,7 +383,7 @@ static LEO_FORCE_INLINE void RefMul(
 }
 
 
-static void InitializeMultiplyTables()
+static LEO_BASELINE_TARGET void InitializeMultiplyTables()
 {
     // If we cannot use the PSHUFB instruction, generate Multiply8LUT:
     if (!CpuHasSSSE3)
@@ -423,26 +434,35 @@ static void InitializeMultiplyTables()
                 prod_hi[x] = static_cast<uint8_t>(prod >> 8);
             }
 
-            const LEO_M128 value_lo = _mm_loadu_si128((LEO_M128*)prod_lo);
-            const LEO_M128 value_hi = _mm_loadu_si128((LEO_M128*)prod_hi);
-
             // Store in 128-bit wide table
 #if defined(LEO_TRY_AVX2)
             if (!CpuHasAVX2)
 #endif // LEO_TRY_AVX2
             {
-                _mm_storeu_si128((LEO_M128*)&Multiply128LUT[log_m].Lo[i], value_lo);
-                _mm_storeu_si128((LEO_M128*)&Multiply128LUT[log_m].Hi[i], value_hi);
+                uint8_t* destination_lo = reinterpret_cast<uint8_t*>(
+                    const_cast<LEO_M128*>(&Multiply128LUT[log_m].Lo[i]));
+                uint8_t* destination_hi = reinterpret_cast<uint8_t*>(
+                    const_cast<LEO_M128*>(&Multiply128LUT[log_m].Hi[i]));
+                for (unsigned byte = 0; byte < 16; ++byte)
+                {
+                    destination_lo[byte] = prod_lo[byte];
+                    destination_hi[byte] = prod_hi[byte];
+                }
             }
 
             // Store in 256-bit wide table
 #if defined(LEO_TRY_AVX2)
             if (CpuHasAVX2)
             {
-                _mm256_storeu_si256((LEO_M256*)&Multiply256LUT[log_m].Lo[i],
-                    _mm256_broadcastsi128_si256(value_lo));
-                _mm256_storeu_si256((LEO_M256*)&Multiply256LUT[log_m].Hi[i],
-                    _mm256_broadcastsi128_si256(value_hi));
+                uint8_t* destination_lo = reinterpret_cast<uint8_t*>(
+                    const_cast<LEO_M256*>(&Multiply256LUT[log_m].Lo[i]));
+                uint8_t* destination_hi = reinterpret_cast<uint8_t*>(
+                    const_cast<LEO_M256*>(&Multiply256LUT[log_m].Hi[i]));
+                for (unsigned byte = 0; byte < 32; ++byte)
+                {
+                    destination_lo[byte] = prod_lo[byte & 15];
+                    destination_hi[byte] = prod_hi[byte & 15];
+                }
             }
 #endif // LEO_TRY_AVX2
         }
@@ -530,7 +550,7 @@ static ffe_t* const FFTSkew = FFTSkewStorage + 1;
 static ffe_t LogWalsh[kOrder];
 
 
-static void FFTInitialize()
+static LEO_BASELINE_TARGET void FFTInitialize()
 {
     ffe_t temp[kBits - 1];
 
@@ -1783,7 +1803,7 @@ void ReedSolomonDecode(
 
 static bool IsInitialized = false;
 
-bool Initialize()
+LEO_BASELINE_TARGET bool Initialize()
 {
     if (IsInitialized)
         return true;

@@ -42,11 +42,11 @@ static void EncodeM1(
 {
     memcpy(recovery_data, original_data[0], static_cast<size_t>(buffer_bytes));
 
-    leopard::XORSummer summer;
-    summer.Initialize(recovery_data);
     for (unsigned i = 1; i < original_count; ++i)
-        summer.Add(original_data[i], buffer_bytes);
-    summer.Finalize(buffer_bytes);
+    {
+        leopard::ff8xor::XorBuffer(
+            buffer_bytes, recovery_data, original_data[i]);
+    }
 }
 
 static void DecodeM1(
@@ -58,12 +58,14 @@ static void DecodeM1(
 {
     memcpy(work_data, recovery_data, static_cast<size_t>(buffer_bytes));
 
-    leopard::XORSummer summer;
-    summer.Initialize(work_data);
     for (unsigned i = 0; i < original_count; ++i)
+    {
         if (original_data[i])
-            summer.Add(original_data[i], buffer_bytes);
-    summer.Finalize(buffer_bytes);
+        {
+            leopard::ff8xor::XorBuffer(
+                buffer_bytes, work_data, original_data[i]);
+        }
+    }
 }
 
 } // namespace

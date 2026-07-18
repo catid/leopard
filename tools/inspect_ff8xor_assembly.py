@@ -24,6 +24,7 @@ from pathlib import Path
 
 SCHEMA = "leopard.ff8xor.assembly-census.v2"
 BASE_FAMILIES = ("multiply", "fft", "ifft")
+AVX2_FAMILIES = ("multiply_avx2", "fft_avx2", "ifft_avx2")
 AVX512_FAMILIES = (
     "multiply_avx512vl", "fft_avx512vl", "ifft_avx512vl",
     "multiply_avx512zmm", "fft_avx512zmm", "ifft_avx512zmm",
@@ -39,6 +40,9 @@ BUTTERFLY_NAME = re.compile(
 AVX_MULTIPLY_NAME = re.compile(r"avx512::Multiply(256|512)<(\d+)u?>")
 AVX_BUTTERFLY_NAME = re.compile(
     r"avx512::Butterfly(256|512)<(\d+)u?,\s*(false|true)>")
+AVX2_MULTIPLY_NAME = re.compile(r"avx2::Multiply<(\d+)u?>")
+AVX2_BUTTERFLY_NAME = re.compile(
+    r"avx2::Butterfly<(\d+)u?,\s*(false|true)>")
 VECTOR_REGISTER = re.compile(r"%(?:[xyz]mm\d+|mm\d+)")
 
 XOR2_MNEMONICS = {
@@ -94,6 +98,8 @@ def parse_sizes(nm_output):
             continue
         name = match.group(3)
         if (MULTIPLY_NAME.search(name) or BUTTERFLY_NAME.search(name) or
+                AVX2_MULTIPLY_NAME.search(name) or
+                AVX2_BUTTERFLY_NAME.search(name) or
                 AVX_MULTIPLY_NAME.search(name) or
                 AVX_BUTTERFLY_NAME.search(name)):
             sizes[name] = int(match.group(2), 16)
@@ -197,6 +203,13 @@ def is_stack_memory(operand, frame_pointer_active=False):
 
 
 def family_and_coefficient(name):
+    match = AVX2_MULTIPLY_NAME.search(name)
+    if match:
+        return "multiply_avx2", int(match.group(1))
+    match = AVX2_BUTTERFLY_NAME.search(name)
+    if match:
+        operation = "ifft" if match.group(2) == "true" else "fft"
+        return operation + "_avx2", int(match.group(1))
     match = AVX_MULTIPLY_NAME.search(name)
     if match:
         width = "vl" if match.group(1) == "256" else "zmm"
@@ -847,6 +860,9 @@ def build_report(arguments):
     summary = aggregate(functions)
     required_families = set(BASE_FAMILIES)
     required_families.update(arguments.require_family)
+    if arguments.require_avx2 or any(
+            family in summary for family in AVX2_FAMILIES):
+        required_families.update(AVX2_FAMILIES)
     if arguments.require_avx512 or any(
             family in summary for family in AVX512_FAMILIES):
         required_families.update(AVX512_FAMILIES)
@@ -945,6 +961,9 @@ def parse_arguments():
     parser.add_argument(
         "--require-family", action="append", default=[],
         help="require a named family with all 256 specializations")
+    parser.add_argument(
+        "--require-avx2", action="store_true",
+        help="require complete isolated AVX2 multiply/FFT/IFFT families")
     parser.add_argument(
         "--require-avx512", action="store_true",
         help="require complete AVX-512VL and ZMM multiply/FFT/IFFT families")
