@@ -91,6 +91,15 @@ unsigned PrefixExtent(const std::vector<uint8_t>& mask)
     return extent;
 }
 
+std::vector<uint8_t> PackMask(const std::vector<uint8_t>& mask)
+{
+    std::vector<uint8_t> packed((mask.size() + 7u) / 8u, 0);
+    for (size_t i = 0; i < mask.size(); ++i)
+        if (mask[i])
+            packed[i >> 3] |= static_cast<uint8_t>(1u << (i & 7u));
+    return packed;
+}
+
 bool SamePlan(
     const leopard2_internal::PrunedTransformPlan& left,
     const leopard2_internal::PrunedTransformPlan& right)
@@ -136,6 +145,32 @@ struct GF8
         return leopard::ff8::PreparePrunedTransformPlan(
             size, shift, inverse, input, output, plan);
     }
+    static bool PrepareSparse(
+        unsigned size, unsigned shift, uint8_t* dependency,
+        size_t dependency_bytes, uint8_t* operations, size_t operation_bytes,
+        leopard2_internal::SparseForwardPlanStats& stats)
+    {
+        return leopard::ff8::PrepareSparseForwardPlan(
+            size, shift, dependency, dependency_bytes,
+            operations, operation_bytes, stats);
+    }
+    static bool ExecuteSparse(
+        const leopard::backend::Ops& ops, uint64_t bytes,
+        unsigned size, unsigned shift, const uint8_t* operations,
+        size_t operation_bytes, void** work)
+    {
+        return leopard::ff8::ExecuteSparseForwardPlan(
+            ops, bytes, size, shift, operations, operation_bytes, work);
+    }
+    static bool ExecuteSparseSources(
+        const leopard::backend::Ops& ops, uint64_t bytes,
+        unsigned size, unsigned shift, const uint8_t* operations,
+        size_t operation_bytes, void* const* source, void** work)
+    {
+        return leopard::ff8::ExecuteSparseForwardPlanFromSources(
+            ops, bytes, size, shift, operations, operation_bytes,
+            source, work);
+    }
     static void Full(
         const leopard::backend::Ops& ops,
         bool inverse,
@@ -166,6 +201,32 @@ struct GF16
     {
         return leopard::ff16::PreparePrunedTransformPlan(
             size, shift, inverse, input, output, plan);
+    }
+    static bool PrepareSparse(
+        unsigned size, unsigned shift, uint8_t* dependency,
+        size_t dependency_bytes, uint8_t* operations, size_t operation_bytes,
+        leopard2_internal::SparseForwardPlanStats& stats)
+    {
+        return leopard::ff16::PrepareSparseForwardPlan(
+            size, shift, dependency, dependency_bytes,
+            operations, operation_bytes, stats);
+    }
+    static bool ExecuteSparse(
+        const leopard::backend::Ops& ops, uint64_t bytes,
+        unsigned size, unsigned shift, const uint8_t* operations,
+        size_t operation_bytes, void** work)
+    {
+        return leopard::ff16::ExecuteSparseForwardPlan(
+            ops, bytes, size, shift, operations, operation_bytes, work);
+    }
+    static bool ExecuteSparseSources(
+        const leopard::backend::Ops& ops, uint64_t bytes,
+        unsigned size, unsigned shift, const uint8_t* operations,
+        size_t operation_bytes, void* const* source, void** work)
+    {
+        return leopard::ff16::ExecuteSparseForwardPlanFromSources(
+            ops, bytes, size, shift, operations, operation_bytes,
+            source, work);
     }
     static void Full(
         const leopard::backend::Ops& ops,
@@ -300,6 +361,38 @@ void RunCase(
         for (unsigned i = 0; i < size; ++i)
             if (output_mask[i])
                 Check(source_actual.shards[i] == source_expected.shards[i]);
+
+        std::vector<uint8_t> dependency = PackMask(output_mask);
+        std::vector<uint8_t> operation_masks(
+            leopard2_internal::SparseForwardRetainedBytes(size), 0xa5);
+        leopard2_internal::SparseForwardPlanStats sparse_stats;
+        Check(Field::PrepareSparse(
+            size, shift, dependency.data(), dependency.size(),
+            operation_masks.data(), operation_masks.size(), sparse_stats));
+        Check(sparse_stats.retained_butterfly_count ==
+            leopard2_internal::CountSparseForwardRetainedButterflies(
+                size, operation_masks.data(), operation_masks.size()));
+
+        Workspace sparse_in_place(source);
+        Workspace sparse_source(size, bytes);
+        for (unsigned i = 0; i < size; ++i)
+            sparse_in_place.pointers[i] = sparse_in_place.shards[i].data();
+        Check(Field::ExecuteSparse(
+            ops, bytes, size, shift, operation_masks.data(),
+            operation_masks.size(), sparse_in_place.pointers.data()));
+        Check(Field::ExecuteSparseSources(
+            ops, bytes, size, shift, operation_masks.data(),
+            operation_masks.size(), source.pointers.data(),
+            sparse_source.pointers.data()));
+        Check(source.shards == source_snapshot.shards);
+        for (unsigned i = 0; i < size; ++i)
+        {
+            if (output_mask[i])
+            {
+                Check(sparse_in_place.shards[i] == source_expected.shards[i]);
+                Check(sparse_source.shards[i] == source_expected.shards[i]);
+            }
+        }
 
         leopard2_internal::PrunedTransformPlan broken_source(source_plan);
         broken_source.inverse = true;

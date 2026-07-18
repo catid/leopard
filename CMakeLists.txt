@@ -900,6 +900,8 @@ if(LEO2_BUILD_TESTS)
     add_executable(leopard2_transform_differential_test
         tests/leopard2/test_transform_differential.cpp
         tests/leopard2/direct_oracle.cpp)
+    target_compile_definitions(leopard2_transform_differential_test PRIVATE
+        LEO2_ENABLE_TEST_HOOKS=1)
     target_link_libraries(leopard2_transform_differential_test leopard)
     add_test(NAME leopard2_transform_differential
         COMMAND leopard2_transform_differential_test)

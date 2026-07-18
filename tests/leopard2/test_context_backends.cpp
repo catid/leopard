@@ -378,6 +378,8 @@ public:
         leopard::ff16::TestOnlyResetTransformCallsiteCounts();
         leopard::ff8::TestOnlyResetLowEncodeCounts();
         leopard::ff16::TestOnlyResetLowEncodeCounts();
+        leopard::ff8::TestOnlyResetSparseEncodeCounts();
+        leopard::ff16::TestOnlyResetSparseEncodeCounts();
         leopard::ff8::TestOnlyResetHighDecodeCounts();
         leopard::ff16::TestOnlyResetHighDecodeCounts();
     }
@@ -708,7 +710,8 @@ Shards make_originals(const CodecCase& test_case, uint32_t seed)
 Shards execute_encode(
     const leo2_codec* codec,
     const CodecCase& test_case,
-    const Shards& originals)
+    const Shards& originals,
+    bool sparse = false)
 {
     size_t scratch_bytes = 0;
     require_result(leo2_encode_scratch_size(codec, test_case.bytes,
@@ -718,6 +721,10 @@ Shards execute_encode(
     const std::vector<const void*> original_pointers =
         const_pointers(originals);
     std::vector<void*> recovery_pointers = mutable_pointers(recovery);
+    if (sparse)
+        for (uint32_t i = 0; i < test_case.r; ++i)
+            if (i != 0 && i + 1 != test_case.r && i % 7U != 3U)
+                recovery_pointers[i] = NULL;
     require_result(leo2_encode(codec, test_case.bytes,
         &original_pointers[0], &recovery_pointers[0], scratch.data(),
         scratch_bytes), LEO2_SUCCESS, "encode");
@@ -1211,6 +1218,69 @@ void test_public_codecs(const std::vector<ContextEntry>& contexts)
     }
 }
 
+void test_sparse_encode_contexts(
+    const std::vector<ContextEntry>& contexts)
+{
+    const CodecCase cases[] = {
+        { 65, 63, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 257 },
+        { 17, 65, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, 129 },
+        { 257, 63, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 66 },
+        { 65, 129, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 130 }
+    };
+    for (size_t case_i = 0; case_i < sizeof(cases) / sizeof(cases[0]); ++case_i)
+    {
+        const CodecCase& test_case = cases[case_i];
+        const Shards originals = make_originals(test_case,
+            static_cast<uint32_t>(0x13198a2eU + case_i * 193U));
+        Shards reference;
+        for (size_t context_i = 0; context_i < contexts.size(); ++context_i)
+        {
+            leo2_codec* codec = NULL;
+            require_result(leo2_codec_create(contexts[context_i].context,
+                test_case.k, test_case.r, test_case.profile, test_case.field,
+                NULL, &codec), LEO2_SUCCESS, "sparse codec create");
+            require_result(leo2_test_codec_set_encode_mode(
+                codec, LEO2_TEST_ENCODE_FORCE_TRANSFORM),
+                LEO2_SUCCESS, "force sparse transform");
+            if (test_case.field == LEO2_FIELD_GF8)
+                leopard::ff8::TestOnlyResetSparseEncodeCounts();
+            else
+                leopard::ff16::TestOnlyResetSparseEncodeCounts();
+            const Shards actual = execute_encode(
+                codec, test_case, originals, true);
+            if (reference.empty())
+                reference = actual;
+            else
+                require(actual == reference,
+                    "sparse parity differs between context backends");
+
+            uint64_t exact_blocks = 0;
+            uint64_t prefix_butterflies = 0;
+            uint64_t retained_butterflies = 0;
+            if (test_case.field == LEO2_FIELD_GF8)
+            {
+                const leopard::ff8::TestOnlySparseEncodeCounts counts =
+                    leopard::ff8::TestOnlyGetSparseEncodeCounts();
+                exact_blocks = counts.exact_blocks;
+                prefix_butterflies = counts.prefix_butterflies;
+                retained_butterflies = counts.retained_butterflies;
+            }
+            else
+            {
+                const leopard::ff16::TestOnlySparseEncodeCounts counts =
+                    leopard::ff16::TestOnlyGetSparseEncodeCounts();
+                exact_blocks = counts.exact_blocks;
+                prefix_butterflies = counts.prefix_butterflies;
+                retained_butterflies = counts.retained_butterflies;
+            }
+            require(exact_blocks != 0 &&
+                    retained_butterflies < prefix_butterflies,
+                "forced sparse schedule did not reduce backend work");
+            leo2_codec_destroy(codec);
+        }
+    }
+}
+
 void test_concurrent_public_codecs(
     const std::vector<ContextEntry>& contexts)
 {
@@ -1291,6 +1361,11 @@ void test_shared_codec_and_plan(
             leo2_codec* codec = NULL;
             const Shards reference = encode_case(contexts[context_i].context,
                 test_case, originals, &codec);
+            require_result(leo2_test_codec_set_encode_mode(
+                codec, LEO2_TEST_ENCODE_FORCE_TRANSFORM),
+                LEO2_SUCCESS, "force shared transform");
+            const Shards sparse_reference = execute_encode(
+                codec, test_case, originals, true);
             leo2_decode_plan* plan = make_plan(codec, test_case);
             std::atomic<unsigned> ready(0);
             std::atomic<bool> go(false);
@@ -1299,8 +1374,8 @@ void test_shared_codec_and_plan(
             for (unsigned thread_i = 0; thread_i < thread_count; ++thread_i)
             {
                 threads.push_back(std::thread(
-                    [codec, plan, test_case, &originals, &reference, &ready,
-                     &go, &failures]() {
+                    [codec, plan, test_case, &originals, &reference,
+                     &sparse_reference, &ready, &go, &failures]() {
                     try
                     {
                         ready.fetch_add(1, std::memory_order_release);
@@ -1314,6 +1389,11 @@ void test_shared_codec_and_plan(
                             if (recovery != reference)
                                 throw std::runtime_error(
                                     "shared codec parity mismatch");
+                            const Shards sparse = execute_encode(
+                                codec, test_case, originals, true);
+                            if (sparse != sparse_reference)
+                                throw std::runtime_error(
+                                    "shared codec sparse parity mismatch");
                             execute_plan(
                                 plan, test_case, originals, recovery);
                         }
@@ -1455,6 +1535,7 @@ int main()
         test_process_default_immutable(process_default);
         test_traced_context_dispatch(contexts);
         test_public_codecs(contexts);
+        test_sparse_encode_contexts(contexts);
         test_shared_codec_and_plan(contexts);
         test_context_batches(contexts);
         test_concurrent_public_codecs(contexts);

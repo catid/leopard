@@ -7,6 +7,9 @@
 */
 
 #include "direct_oracle.h"
+#include "Leopard2Direct.h"
+#include "LeopardFF8.h"
+#include "LeopardFF16.h"
 #include "leopard2.h"
 
 #include <algorithm>
@@ -271,6 +274,9 @@ void run_profile(
     leo2_codec* codec = NULL;
     require_result(leo2_codec_create(context, test.k, test.r, test.profile,
         test.field, NULL, &codec), "transform codec create");
+    require_result(leo2_test_codec_set_encode_mode(
+        codec, LEO2_TEST_ENCODE_FORCE_TRANSFORM),
+        "force transform encoder");
     require(leo2_codec_parent_count(codec) == layout.parent_size &&
             leo2_codec_padded_side(codec) == layout.padded_side &&
             leo2_codec_field(codec) == test.field,
@@ -333,6 +339,8 @@ int main()
         leo2_context* context = NULL;
         require_result(leo2_context_create(NULL, &context),
             "transform context create");
+        leopard::ff8::TestOnlyResetSparseEncodeCounts();
+        leopard::ff16::TestOnlyResetSparseEncodeCounts();
         const ProfileCase cases[] = {
             { 3, 2, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8 },
             { 5, 3, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8 },
@@ -370,12 +378,28 @@ int main()
                 run_profile(context, cases[i], 66, &counts);
             }
         }
+        const leopard::ff8::TestOnlySparseEncodeCounts sparse8 =
+            leopard::ff8::TestOnlyGetSparseEncodeCounts();
+        const leopard::ff16::TestOnlySparseEncodeCounts sparse16 =
+            leopard::ff16::TestOnlyGetSparseEncodeCounts();
+        require(sparse8.exact_blocks != 0 &&
+                sparse8.retained_butterflies < sparse8.prefix_butterflies,
+            "GF8 forced sparse path did not prune transform work");
+        require(sparse16.exact_blocks != 0 &&
+                sparse16.retained_butterflies < sparse16.prefix_butterflies,
+            "GF16 forced sparse path did not prune transform work");
         leo2_context_destroy(context);
         std::cout << "leopard2 transform differential passed: profiles="
                   << counts.profiles << " executions=" << counts.executions
                   << " expected_symbols=" << counts.expected_symbols
                   << " compared_bytes=" << counts.compared_bytes
                   << " sparse_outputs=" << counts.sparse_outputs
+                  << " sparse8_exact_blocks=" << sparse8.exact_blocks
+                  << " sparse8_retained=" << sparse8.retained_butterflies
+                  << " sparse8_prefix=" << sparse8.prefix_butterflies
+                  << " sparse16_exact_blocks=" << sparse16.exact_blocks
+                  << " sparse16_retained=" << sparse16.retained_butterflies
+                  << " sparse16_prefix=" << sparse16.prefix_butterflies
                   << " generator_cross_checks=" << counts.generator_cross_checks
                   << std::endl;
         return 0;

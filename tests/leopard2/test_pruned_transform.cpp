@@ -13,6 +13,7 @@
 #include "leopard.h"
 #include "direct_oracle.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <iostream>
@@ -33,11 +34,19 @@ struct TestCounts
     uint64_t fused_four_descriptors;
     uint64_t execution_steps;
     uint64_t max_plan_bytes;
+    uint64_t sparse_plans;
+    uint64_t sparse_full_butterflies;
+    uint64_t sparse_retained_butterflies;
+    uint64_t sparse_one_output_butterflies;
+    uint64_t max_sparse_schedule_bytes;
+    uint64_t sparse_budget_fallback_geometries;
 
     TestCounts()
         : plans(0), executions(0), compared_bytes(0), direct_symbols(0)
         , backends(0), fused_four_descriptors(0), execution_steps(0)
-        , max_plan_bytes(0)
+        , max_plan_bytes(0), sparse_plans(0), sparse_full_butterflies(0)
+        , sparse_retained_butterflies(0), sparse_one_output_butterflies(0)
+        , max_sparse_schedule_bytes(0), sparse_budget_fallback_geometries(0)
     {}
 };
 
@@ -133,6 +142,15 @@ std::vector<std::vector<uint8_t> > make_masks(unsigned size)
     return masks;
 }
 
+std::vector<uint8_t> pack_mask(const std::vector<uint8_t>& mask)
+{
+    std::vector<uint8_t> packed((mask.size() + 7U) / 8U, 0);
+    for (size_t i = 0; i < mask.size(); ++i)
+        if (mask[i])
+            packed[i >> 3] |= static_cast<uint8_t>(1U << (i & 7U));
+    return packed;
+}
+
 std::vector<unsigned> shifts(unsigned order, unsigned size)
 {
     std::vector<unsigned> result;
@@ -190,6 +208,32 @@ struct GF8
         return leopard::ff8::PreparePrunedTransformPlan(
             size, shift, inverse, input, output, plan);
     }
+    static bool prepare_sparse(
+        unsigned size, unsigned shift, uint8_t* output_workspace,
+        size_t workspace_bytes,
+        uint8_t* retained, size_t retained_bytes,
+        leopard2_internal::SparseForwardPlanStats& stats)
+    {
+        return leopard::ff8::PrepareSparseForwardPlan(
+            size, shift, output_workspace, workspace_bytes,
+            retained, retained_bytes, stats);
+    }
+    static bool execute_sparse(
+        const leopard::backend::Ops& ops, uint64_t bytes,
+        unsigned size, unsigned shift, const uint8_t* retained,
+        size_t retained_bytes, void** work)
+    {
+        return leopard::ff8::ExecuteSparseForwardPlan(
+            ops, bytes, size, shift, retained, retained_bytes, work);
+    }
+    static bool execute_sparse_sources(
+        const leopard::backend::Ops& ops, uint64_t bytes,
+        unsigned size, unsigned shift, const uint8_t* retained,
+        size_t retained_bytes, void* const* source, void** work)
+    {
+        return leopard::ff8::ExecuteSparseForwardPlanFromSources(
+            ops, bytes, size, shift, retained, retained_bytes, source, work);
+    }
     static void full(
         const leopard::backend::Ops& ops, bool inverse, uint64_t bytes,
         unsigned size, unsigned shift, void** work)
@@ -232,6 +276,32 @@ struct GF16
     {
         return leopard::ff16::PreparePrunedTransformPlan(
             size, shift, inverse, input, output, plan);
+    }
+    static bool prepare_sparse(
+        unsigned size, unsigned shift, uint8_t* output_workspace,
+        size_t workspace_bytes,
+        uint8_t* retained, size_t retained_bytes,
+        leopard2_internal::SparseForwardPlanStats& stats)
+    {
+        return leopard::ff16::PrepareSparseForwardPlan(
+            size, shift, output_workspace, workspace_bytes,
+            retained, retained_bytes, stats);
+    }
+    static bool execute_sparse(
+        const leopard::backend::Ops& ops, uint64_t bytes,
+        unsigned size, unsigned shift, const uint8_t* retained,
+        size_t retained_bytes, void** work)
+    {
+        return leopard::ff16::ExecuteSparseForwardPlan(
+            ops, bytes, size, shift, retained, retained_bytes, work);
+    }
+    static bool execute_sparse_sources(
+        const leopard::backend::Ops& ops, uint64_t bytes,
+        unsigned size, unsigned shift, const uint8_t* retained,
+        size_t retained_bytes, void* const* source, void** work)
+    {
+        return leopard::ff16::ExecuteSparseForwardPlanFromSources(
+            ops, bytes, size, shift, retained, retained_bytes, source, work);
     }
     static void full(
         const leopard::backend::Ops& ops, bool inverse, uint64_t bytes,
@@ -331,6 +401,180 @@ void run_case(
             counts.compared_bytes += bytes;
         }
         ++counts.executions;
+    }
+}
+
+template<class Field>
+void run_sparse_forward_case(
+    const leopard::backend::Ops& ops,
+    unsigned size,
+    unsigned shift,
+    uint64_t bytes,
+    const std::vector<uint8_t>& output_mask,
+    uint64_t seed,
+    TestCounts& counts)
+{
+    const size_t retained_bytes =
+        leopard2_internal::SparseForwardRetainedBytes(size);
+    require(retained_bytes != 0, "sparse retained layout is empty");
+    std::vector<uint8_t> workspace = pack_mask(output_mask);
+    std::vector<uint8_t> retained(retained_bytes, 0xa5);
+    leopard2_internal::SparseForwardPlanStats stats;
+    require(Field::prepare_sparse(size, shift, workspace.data(),
+            workspace.size(),
+            retained.data(), retained.size(), stats),
+        "sparse forward plan construction failed");
+    require(stats.full_butterfly_count ==
+                leopard2_internal::SparseForwardButterflyCount(size) &&
+            stats.retained_butterfly_count ==
+                leopard2_internal::CountSparseForwardRetainedButterflies(
+                    size, retained.data(), retained.size()) &&
+            stats.retained_butterfly_count <= stats.full_butterfly_count,
+        "sparse forward plan metrics differ from retained bitmap");
+
+    const std::vector<uint8_t> all(size, 1);
+    std::vector<std::vector<uint8_t> > source =
+        make_input(size, bytes, all, seed);
+    const std::vector<std::vector<uint8_t> > source_snapshot(source);
+    std::vector<std::vector<uint8_t> > expected(source);
+    std::vector<std::vector<uint8_t> > in_place(source);
+    std::vector<std::vector<uint8_t> > from_source(
+        size, std::vector<uint8_t>(static_cast<size_t>(bytes), 0xa5));
+    std::vector<void*> expected_ptrs = pointers(expected);
+    std::vector<void*> in_place_ptrs = pointers(in_place);
+    std::vector<void*> source_ptrs = source_pointers(source);
+    std::vector<void*> from_source_ptrs = pointers(from_source);
+    Field::full(ops, false, bytes, size, shift, expected_ptrs.data());
+    require(Field::execute_sparse(ops, bytes, size, shift,
+            retained.data(), retained.size(), in_place_ptrs.data()),
+        "sparse in-place forward execution failed");
+    require(Field::execute_sparse_sources(ops, bytes, size, shift,
+            retained.data(), retained.size(), source_ptrs.data(),
+            from_source_ptrs.data()),
+        "sparse immutable-source forward execution failed");
+    require(source == source_snapshot,
+        "sparse immutable-source forward execution changed coefficients");
+    for (unsigned coordinate = 0; coordinate < size; ++coordinate)
+    {
+        if (!output_mask[coordinate])
+        {
+            if (size == 2)
+            {
+                require(in_place[coordinate] == source[coordinate],
+                    "one-row in-place operation wrote its dead peer");
+                require(static_cast<size_t>(std::count(
+                            from_source[coordinate].begin(),
+                            from_source[coordinate].end(), 0xa5)) ==
+                        from_source[coordinate].size(),
+                    "one-row source operation wrote its dead peer");
+            }
+            continue;
+        }
+        require(in_place[coordinate] == expected[coordinate],
+            "sparse in-place forward output differs from full transform");
+        require(from_source[coordinate] == expected[coordinate],
+            "sparse immutable-source output differs from full transform");
+        counts.compared_bytes += bytes * 2U;
+    }
+    ++counts.sparse_plans;
+    counts.sparse_full_butterflies += stats.full_butterfly_count;
+    counts.sparse_retained_butterflies += stats.retained_butterfly_count;
+    counts.sparse_one_output_butterflies += stats.one_output_butterflies;
+    counts.executions += 2;
+}
+
+template<class Field>
+void test_sparse_forward_matrix(
+    const leopard::backend::Ops& ops,
+    const unsigned* sizes,
+    size_t size_count,
+    const uint64_t* byte_counts,
+    size_t byte_count,
+    TestCounts& counts)
+{
+    for (size_t size_i = 0; size_i < size_count; ++size_i)
+    {
+        const unsigned size = sizes[size_i];
+        const std::vector<std::vector<uint8_t> > masks = make_masks(size);
+        const std::vector<unsigned> transform_shifts =
+            shifts(Field::order(), size);
+        for (size_t shift_i = 0; shift_i < transform_shifts.size(); ++shift_i)
+            for (size_t bytes_i = 0; bytes_i < byte_count; ++bytes_i)
+                for (size_t mask_i = 0; mask_i < masks.size(); ++mask_i)
+                    run_sparse_forward_case<Field>(
+                        ops, size, transform_shifts[shift_i],
+                        byte_counts[bytes_i], masks[mask_i],
+                        UINT64_C(0x5350415253454657) ^
+                            (static_cast<uint64_t>(size) << 40) ^
+                            (static_cast<uint64_t>(shift_i) << 32) ^
+                            (static_cast<uint64_t>(bytes_i) << 16) ^ mask_i,
+                        counts);
+    }
+}
+
+template<class Field>
+void test_sparse_forward_direct_oracle(
+    const leopard::backend::Ops& ops,
+    TestCounts& counts)
+{
+    typedef leopard2_test::Element Element;
+    const unsigned sizes[] = { 2, 4, 8 };
+    const leopard2_test::BinaryField& field = Field::direct_field();
+    for (size_t size_i = 0; size_i < sizeof(sizes) / sizeof(sizes[0]); ++size_i)
+    {
+        const unsigned size = sizes[size_i];
+        const std::vector<std::vector<uint8_t> > masks = make_masks(size);
+        const unsigned test_shifts[] = { 0, Field::order() - size };
+        for (size_t shift_i = 0;
+             shift_i < sizeof(test_shifts) / sizeof(test_shifts[0]); ++shift_i)
+            for (size_t mask_i = 0; mask_i < masks.size(); ++mask_i)
+            {
+                std::vector<Element> coefficients(size, 0);
+                std::vector<std::vector<uint8_t> > actual(
+                    size, std::vector<uint8_t>(
+                        static_cast<size_t>(Field::symbol_bytes()), 0));
+                for (unsigned i = 0; i < size; ++i)
+                {
+                    coefficients[i] = static_cast<Element>(mix64(
+                        UINT64_C(0x535041525345444f) ^
+                        (static_cast<uint64_t>(size) << 32) ^
+                        (static_cast<uint64_t>(shift_i) << 24) ^
+                        (static_cast<uint64_t>(mask_i) << 16) ^ i) &
+                        (Field::order() - 1U));
+                    Field::set_symbol(actual[i], coefficients[i]);
+                }
+                const leopard2_test::LchBasis basis =
+                    leopard2_test::make_lch_basis(field, exact_log2(size));
+                const leopard2_test::Polynomial polynomial =
+                    leopard2_test::lch_coefficients_to_polynomial(
+                        field, basis, coefficients);
+                std::vector<uint8_t> workspace = pack_mask(masks[mask_i]);
+                std::vector<uint8_t> retained(
+                    leopard2_internal::SparseForwardRetainedBytes(size), 0);
+                leopard2_internal::SparseForwardPlanStats stats;
+                require(Field::prepare_sparse(size, test_shifts[shift_i],
+                        workspace.data(), workspace.size(),
+                        retained.data(), retained.size(),
+                        stats),
+                    "direct sparse plan construction failed");
+                std::vector<void*> actual_ptrs = pointers(actual);
+                require(Field::execute_sparse(ops, Field::symbol_bytes(),
+                        size, test_shifts[shift_i], retained.data(),
+                        retained.size(), actual_ptrs.data()),
+                    "direct sparse plan execution failed");
+                for (unsigned i = 0; i < size; ++i)
+                {
+                    if (!masks[mask_i][i])
+                        continue;
+                    const Element expected =
+                        leopard2_test::polynomial_evaluate(
+                            field, polynomial,
+                            static_cast<Element>(test_shifts[shift_i] ^ i));
+                    require(Field::get_symbol(actual[i]) == expected,
+                        "sparse forward differs from direct polynomial");
+                    ++counts.direct_symbols;
+                }
+            }
     }
 }
 
@@ -707,6 +951,30 @@ void test_invalid_plan_construction()
             256, 255, 8, 0, false, valid, valid,
             invalid_log_provider, NULL, plan) && same_plan(plan, snapshot),
         "invalid multiplier changed caller plan");
+
+    uint8_t sparse_workspace[1] = { 0x89 };
+    uint8_t sparse_retained[3] = { 0x5a, 0xa5, 0x3c };
+    const uint8_t sparse_snapshot[3] = { 0x5a, 0xa5, 0x3c };
+    leopard2_internal::SparseForwardPlanStats sparse_stats;
+    require(!leopard2_internal::CompileSparseForwardPlan(
+            256, 255, 8, 1, sparse_workspace, sizeof(sparse_workspace),
+            sparse_retained, sizeof(sparse_retained),
+            invalid_log_provider, sparse_workspace, sparse_stats) &&
+            std::memcmp(sparse_retained, sparse_snapshot,
+                sizeof(sparse_retained)) == 0,
+        "invalid sparse shift changed retained bitmap");
+    require(!leopard2_internal::CompileSparseForwardPlan(
+            256, 255, 8, 0, sparse_workspace, 0,
+            sparse_retained, sizeof(sparse_retained),
+            invalid_log_provider, sparse_workspace, sparse_stats) &&
+            std::memcmp(sparse_retained, sparse_snapshot,
+                sizeof(sparse_retained)) == 0,
+        "invalid sparse dependency size changed operation masks");
+    require(!leopard2_internal::CompileSparseForwardPlan(
+            256, 255, 8, 0, sparse_workspace, sizeof(sparse_workspace),
+            sparse_retained, sizeof(sparse_retained),
+            invalid_log_provider, sparse_workspace, sparse_stats),
+        "invalid sparse multiplier was accepted");
 }
 
 void test_metrics()
@@ -777,6 +1045,28 @@ void test_max_parent_plan_footprint(TestCounts& counts)
         "maximum GF16 plan exceeds bounded metadata budget");
     if (bytes > counts.max_plan_bytes)
         counts.max_plan_bytes = bytes;
+}
+
+void test_sparse_schedule_scratch_bound(TestCounts& counts)
+{
+    for (uint32_t side = 2; side <= 32768; side <<= 1)
+    {
+        const size_t blocks =
+            (static_cast<size_t>(65536U - side) + side - 1U) / side;
+        const size_t bytes =
+            blocks * leopard2_internal::SparseForwardRetainedBytes(side) +
+            leopard2_internal::SparseForwardDependencyBytes(side);
+        if (bytes > 65536U)
+        {
+            ++counts.sparse_budget_fallback_geometries;
+            continue;
+        }
+        if (bytes > counts.max_sparse_schedule_bytes)
+            counts.max_sparse_schedule_bytes = bytes;
+    }
+    require(counts.max_sparse_schedule_bytes == 65536U &&
+            counts.sparse_budget_fallback_geometries != 0,
+        "sparse schedule budget/fallback boundary changed");
 }
 
 void test_shared_plan_concurrency(const leopard::backend::Ops& ops)
@@ -907,6 +1197,7 @@ int main()
         const uint64_t bytes16[] = { 2, 18, 62, 64, 66, 130 };
         TestCounts counts;
         test_max_parent_plan_footprint(counts);
+        test_sparse_schedule_scratch_bound(counts);
         for (size_t i = 0; i < sizeof(requested) / sizeof(requested[0]); ++i)
         {
             leopard::backend::QualificationStatus status =
@@ -926,10 +1217,18 @@ int main()
             test_matrix<GF16>(
                 *ops, sizes16, sizeof(sizes16) / sizeof(sizes16[0]),
                 bytes16, sizeof(bytes16) / sizeof(bytes16[0]), counts);
+            test_sparse_forward_matrix<GF8>(
+                *ops, sizes8, sizeof(sizes8) / sizeof(sizes8[0]),
+                bytes8, sizeof(bytes8) / sizeof(bytes8[0]), counts);
+            test_sparse_forward_matrix<GF16>(
+                *ops, sizes16, sizeof(sizes16) / sizeof(sizes16[0]),
+                bytes16, sizeof(bytes16) / sizeof(bytes16[0]), counts);
             test_exhaustive_small_masks<GF8>(*ops, 17, counts);
             test_exhaustive_small_masks<GF16>(*ops, 18, counts);
             test_direct_oracle_masks<GF8>(*ops, counts);
             test_direct_oracle_masks<GF16>(*ops, counts);
+            test_sparse_forward_direct_oracle<GF8>(*ops, counts);
+            test_sparse_forward_direct_oracle<GF16>(*ops, counts);
             test_profile_masks<GF8>(*ops, 100, 30, 65, counts);
             test_profile_masks<GF16>(*ops, 1000, 200, 130, counts);
             test_profile_masks<GF8>(*ops, 17, 100, 129, counts);
@@ -939,6 +1238,8 @@ int main()
             ++counts.backends;
         }
         require(counts.backends != 0, "no backend was available");
+        require(counts.sparse_one_output_butterflies != 0,
+            "sparse matrix did not exercise one-row operations");
 
         std::cout << "PASS pruned_transform"
                   << " backends=" << counts.backends
@@ -948,6 +1249,15 @@ int main()
                   << " direct_symbols=" << counts.direct_symbols
                   << " fused_four=" << counts.fused_four_descriptors
                   << " execution_steps=" << counts.execution_steps
+                  << " sparse_plans=" << counts.sparse_plans
+                  << " sparse_full=" << counts.sparse_full_butterflies
+                  << " sparse_retained=" << counts.sparse_retained_butterflies
+                  << " sparse_one_output="
+                  << counts.sparse_one_output_butterflies
+                  << " max_sparse_schedule_bytes="
+                  << counts.max_sparse_schedule_bytes
+                  << " sparse_budget_fallbacks="
+                  << counts.sparse_budget_fallback_geometries
                   << " max_plan_bytes=" << counts.max_plan_bytes
                   << std::endl;
         return 0;

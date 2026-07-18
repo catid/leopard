@@ -506,6 +506,33 @@ void test_capability_boundaries(leo2_context* context, Counts* counts)
             }
 }
 
+void test_sparse_schedule_budget_fallback(
+    leo2_context* context,
+    Counts* counts)
+{
+    const unsigned k = 513;
+    const unsigned r = 53000;
+    CodecOwner* owner = make_codec(
+        context, k, r, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16);
+    const Shards original = random_shards(
+        k, 2, UINT64_C(0x5350415253454244));
+    std::vector<uint8_t> requested(r, 0);
+    requested[0] = 1;
+    requested[r - 1] = 1;
+
+    const EncodeResult prefix = encode(
+        owner->codec, LEO2_TEST_ENCODE_AUTO, original, requested);
+    const EncodeResult bounded = encode(
+        owner->codec, LEO2_TEST_ENCODE_FORCE_TRANSFORM,
+        original, requested);
+    require_result(prefix.result, "schedule-budget prefix encode");
+    require_result(bounded.result, "schedule-budget forced encode");
+    require(prefix.recovery == bounded.recovery,
+        "bounded schedule fallback differs from mature prefix encode");
+    ++counts->boundary_profiles;
+    delete owner;
+}
+
 void test_low_transform_no_coefficient_copy(
     leo2_context* context,
     const BinaryField& gf8,
@@ -558,7 +585,7 @@ void test_low_transform_no_coefficient_copy(
         else
             leopard::ff16::TestOnlyResetLowEncodeCounts();
         const EncodeResult transformed = encode(owner->codec,
-            LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, requested);
+            LEO2_TEST_ENCODE_AUTO, original, requested);
         require_result(transformed.result, "no-copy low transform encode");
         require(original == original_before,
             "low transform modified a systematic source shard");
@@ -840,6 +867,25 @@ void test_tail_allocation_and_contracts(
 
         std::vector<uint8_t> subset(c.r, 0);
         subset[0] = subset[c.r / 2] = subset[c.r - 1] = 1;
+        output.assign(c.r, Bytes(c.bytes, 0xa5));
+        recovery.assign(c.r, NULL);
+        for (unsigned i = 0; i < c.r; ++i)
+            if (subset[i])
+                recovery[i] = &output[i][0];
+        g_tracked_allocations.store(0, std::memory_order_relaxed);
+        g_track_allocations.store(true, std::memory_order_release);
+        const leo2_result sparse_transform_result = leo2_encode(
+            owner->codec, c.bytes, &input[0], &recovery[0],
+            scratch.data(), scratch.size());
+        g_track_allocations.store(false, std::memory_order_release);
+        require_result(sparse_transform_result,
+            "allocation-trapped sparse transform encode");
+        require(g_tracked_allocations.load(std::memory_order_relaxed) == 0,
+            "sparse transform encode allocated C++ storage");
+        compare_requested(output, expected, subset, 0xa5,
+            "allocation-trapped sparse transform/oracle", counts);
+        ++counts->allocation_checks;
+
         const EncodeResult transform_subset = encode(
             owner->codec, LEO2_TEST_ENCODE_FORCE_TRANSFORM,
             original, subset);
@@ -1165,6 +1211,7 @@ int main()
         test_profile_matrix(context, gf16,
             LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, &counts);
         test_capability_boundaries(context, &counts);
+        test_sparse_schedule_budget_fallback(context, &counts);
         test_low_transform_no_coefficient_copy(
             context, gf8, gf16, &counts);
         test_auto_dispatch_threshold(context, &counts);
