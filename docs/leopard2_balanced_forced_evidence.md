@@ -4,6 +4,85 @@ The current protocol compares the generic active-parent decoder, materialized
 Algorithm 5, and tiled Algorithm 5 in one production binary. It is a
 measurement tool; it does not change production dispatch.
 
+## Staged promotion matrix
+
+`plan_balanced_promotion.py` makes the current-source promotion funnel
+deterministic without treating a large blind sweep as authoritative evidence.
+Its first stage contains only exact Leopard main versus current-source generic
+decoder cells, sharded by transform side. A `(K, shard_bytes)` cell advances
+only when the 95-percent lower confidence bounds for both first-use and
+reuse-amortized decode speedup are at least 1.05. The selector authenticates the
+schema-v4 exact-main bundles and derives the survivor set from their retained
+analysis; an edited or merely re-signed plan, threshold, matrix, or survivor
+file is rejected by canonical regeneration.
+
+The initial boundary set is
+`5,7,8,9,14,15,16,17,29,30,31,32,33,62,63,64,65,96,112,120,124,125,126,127,128`.
+The interior `T=128` points prevent an apparent win at `K=128` from being
+generalized across the whole transform bucket. The exact-main gate uses 256 B,
+4 KiB, and 64 KiB aligned shards, for 75 cells and 900 timed child invocations
+in five independently rerunnable transform-side shards. Exact-main runs three
+repeated ABBA rounds. The same-binary forced runner instead uses ABBA, BAAB,
+ABBA; the plan records these distinct order contracts explicitly.
+
+If adjacent measured outcomes within one transform side and byte size disagree,
+the boundary is resolved. If opposite outcomes still have unmeasured `K` values
+between them, selection emits exact `runner_cell` refinements for every missing
+integer and `advance` refuses to create later work. Once resolved, forced-mode
+matrices contain only exact surviving `(K, shard_bytes)` cells; one survivor
+does not activate its whole transform group.
+
+Generate and validate the immutable-input plan outside the source tree:
+
+    python3 experiments/leopard2/decoder_dispatch/plan_balanced_promotion.py \
+        generate --output /tmp/leopard2-balanced-promotion-plan
+    python3 experiments/leopard2/decoder_dispatch/plan_balanced_promotion.py \
+        validate --input /tmp/leopard2-balanced-promotion-plan
+
+Each generated gate JSON supplies the `runner_cell` strings for one invocation
+of `main_compare/run_abba.py run` with `--candidate-mode generic`; all the other
+source, binary, archive, build, CPU-pair, and reservation arguments remain the
+runner's required authoritative inputs. After the five gate bundles finish,
+derive the authenticated survivor set by repeating `--gate-manifest` once per
+manifest:
+
+    python3 experiments/leopard2/decoder_dispatch/plan_balanced_promotion.py \
+        select --plan /tmp/leopard2-balanced-promotion-plan \
+        --gate-manifest /results/t8/manifest.json \
+        --gate-manifest /results/t16/manifest.json \
+        --gate-manifest /results/t32/manifest.json \
+        --gate-manifest /results/t64/manifest.json \
+        --gate-manifest /results/t128/manifest.json \
+        --output /tmp/leopard2-balanced-survivors.json
+
+Run any `required_refinement_cells` through the same exact-main protocol and
+repeat selection with those additional manifests. A zero refinement count can
+advance to the conditional stage:
+
+    python3 experiments/leopard2/decoder_dispatch/plan_balanced_promotion.py \
+        advance --plan /tmp/leopard2-balanced-promotion-plan \
+        --survivors /tmp/leopard2-balanced-survivors.json \
+        --output /tmp/leopard2-balanced-confirmation-stage
+    python3 experiments/leopard2/decoder_dispatch/plan_balanced_promotion.py \
+        validate --plan /tmp/leopard2-balanced-promotion-plan \
+        --input /tmp/leopard2-balanced-confirmation-stage
+
+The conditional stage separates aligned current-source confirmation from true
+tails. Generic, AUTO, materialized, and tiled exact-main confirmation uses
+192 B, 4032 B, 4096 B, 64 KiB, and 1 MiB for every surviving `K`. The forced
+same-binary tail matrices use only the non-aligned sizes 193 B, 4033 B, 4097 B,
+and 1 MiB+1 on scalar, SSSE3, and AVX2. Exact Leopard main cannot execute those
+tails, so they are correctness and internal-kernel evidence rather than an
+external speedup claim.
+
+AUTO rejection timing covers `L=1,4,floor(K/2),K-1`, `R=K-1`, and
+`R=floor(K/2)` at 4 KiB and 64 KiB for every surviving `K`. Timing and workload
+digests do not prove which AUTO rule ran. Therefore `path-attestation.json`
+contains the exact same cells and explicit `--report-decode-path` invocations;
+promotion requires their same-binary output to reject both the generic path and
+the `balanced_generic` rule. Full-loss `R=K` is deliberately absent from these
+rejection cells because it is the candidate balanced region itself.
+
 This forced-path comparison answers only which Leopard2 decoder kernel is
 cheapest. Exact Leopard main remains the primary external baseline for release
 claims and dispatcher promotion. A forced-path winner must therefore be joined
