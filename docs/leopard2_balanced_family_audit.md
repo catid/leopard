@@ -159,11 +159,12 @@ attributed to dispatch.  Shared-host or saturated timings remain diagnostic.
 
 ## Tooling finding
 
-`tools/leopard2_operation_counts.py` still reports decode
-`api_scratch_data_slots` as `K+R+N` full rounded-shard slots.  Current execution
-references aligned caller inputs directly and stages only one 64-byte tile per
-public coordinate for a ragged tail, so that metric is historical and must not
-be used for this crossover.  The formulas above come from `DecodeLayout` and
-`ComputeSplitScratchLayout`.  A later tooling change should report exact data
-bytes plus pointer/range metadata rather than trying to express mixed 64-byte
-tail slots as whole rounded-shard slots.
+Schema v2 of `tools/leopard2_operation_counts.py` removes the historical
+`api_scratch_data_slots=K+R+N` metric.  It now mirrors `DecodeLayout`,
+`DirectDecodeLayout`, and `ComputeSplitScratchLayout` byte-for-byte for a
+declared pointer width: aligned caller inputs remain pointer mappings, ragged
+transform input reserves K+R fixed 64-byte slots while populating exactly K,
+and work is reported separately as N, 2P, or 2T+L slots.  A production-linked
+probe cross-checks plan and one-shot codec queries, including AUTO rows labeled
+with the host-selected backend.  Those exact scratch metrics may be used in
+this crossover; AUTO timing thresholds remain host/backend observations.

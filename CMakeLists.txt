@@ -471,6 +471,13 @@ endif()
 if(LEO2_BUILD_TESTS)
     enable_testing()
 
+    # Production-library public-query probe.  The Python operation model reads
+    # its JSONL output and independently reconstructs every byte of range,
+    # pointer-map, ragged-input, and path-specific work scratch.
+    add_executable(leopard2_decode_scratch_probe
+        tests/leopard2/test_decode_scratch_probe.cpp)
+    target_link_libraries(leopard2_decode_scratch_probe leopard)
+
     # Test hooks change codec construction, scratch sizing, backend setup, and
     # a few diagnostic dispatch decisions in addition to exporting symbols.
     # Keep the production/install target invariant when tests are enabled by
@@ -1307,6 +1314,13 @@ if(LEO2_BUILD_TESTS)
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_operation_counts.py
                 self-test)
+        if(LEOPARD_ENABLE_GF8)
+            add_test(
+                NAME leopard2_decode_scratch_crosscheck
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/operation_counts/test_decode_scratch_crosscheck.py
+                    --probe $<TARGET_FILE:leopard2_decode_scratch_probe>)
+        endif()
         add_test(
             NAME leopard2_direct_encode_crossover_self_test
             COMMAND ${LEO2_PYTHON_EXECUTABLE}

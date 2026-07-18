@@ -20,8 +20,9 @@ Every JSON/CSV metric carries a classification.
 
 - `exact_schedule` means the value is derived from the actual radix-4 loop
   topology, prefix/mask pruning, coordinate layout, copies, zero fills, or
-  scratch-slot formula.  Fused transforms are expanded into equivalent radix-2
-  butterfly counts.
+  public scratch-layout formula.  Fused transforms are expanded into equivalent
+  radix-2 butterfly counts.  Decode scratch bytes are exact for the pointer
+  width recorded in the report.
 - `derived_lower_bound` and `derived_upper_bound` bracket arithmetic affected
   by transform skew constants.  A nonzero-skew butterfly performs two field
   additions and one fixed multiplication; Leopard specializes a zero skew to
@@ -68,8 +69,58 @@ coordinate mask through `--transform-output-mask`.
 
 The current byte kernels execute complete 64-byte tiles, so reports include
 both requested shard bytes and `kernel_shard_bytes`.  GF16 reports reject odd
-byte counts because the current wire profile requires complete two-byte symbols.
-Scratch-slot counts exclude pointer/range metadata and alignment padding.
+physical byte counts because the native wire profile requires complete two-byte
+symbols.  A padded-odd GF16 application payload must be translated to its even
+physical wire size before it is passed to this model.
+
+## Decode copy, staging, and scratch accounting
+
+Schema version 2 corrects an important category error in the former model.  A
+transform decode owns an N-entry coordinate pointer map, but complete aligned
+passes point those entries directly at the selected K caller shards.  Mapping a
+pointer is metadata work; it is not a K-shard data copy.  The transform kernel
+may subsequently copy or multiply those selected rows into its work area, and
+the model charges that path-specific work separately.
+
+`logical_copy_vectors` now covers only complete kernel-work copies.  Public
+output and tail-boundary copies are reported in payload bytes so a one-byte
+tail is not misrepresented as another whole rounded shard.  Algorithm 5 gathers
+L complete requested payloads.  Algorithm 4 reveals every aligned prefix
+directly and gathers only `L * (shard_bytes mod 64)` tail bytes.  Generic decode
+reports its copy-first output baseline as an upper bound because qualified GF8
+SSSE3/AVX2 reveal fusion can remove the aligned-prefix gather.
+
+The exact public scratch metrics mirror `leo2_decode_plan_scratch_size()` and
+`leo2_decode_scratch_size()`:
+
+- validation reserves 2K+R `AddressRange` records;
+- transform plans reserve N coordinate pointers plus one pointer per work slot;
+- materialized and generic decoders use N work slots;
+- a forced tiled low decoder uses 2P work slots;
+- a forced tiled high plan uses 2T+L slots, while the pattern-independent
+  one-shot codec query conservatively uses 2T+R;
+- ordinary specialized AUTO retains N slots when N is no larger than its tiled
+  layout;
+- direct XOR, copy, and bounded-repair plans retain only range-validation
+  metadata and no shard-data or pointer-map storage; and
+- a no-loss plan reports zero scratch, although its codec's pattern-independent
+  one-shot query remains nonzero.
+
+For a ragged final 64-byte tile, transform scratch reserves K+R fixed 64-byte
+public-coordinate slots.  Exactly K selected coordinates are populated for a
+valid plan; absent, surplus, shortened, and punctured coordinates do not cause
+additional copies.  Reports therefore distinguish reserved tail bytes from
+selected payload bytes and zero-padding bytes.  Work slots are sized to
+`max(aligned_prefix_bytes, 64)` for a ragged shard, not to the rounded total
+shard length.  `--pointer-bytes` declares the 4- or 8-byte ABI used to account
+for `AddressRange`, pointer maps, and alignment.
+
+`--decode-workspace materialized|tiled` selects a forced, backend-independent
+accounting oracle for specialized reports.  The production-linked
+`leopard2_decode_scratch_probe` additionally emits AUTO rows.  Those rows record
+the context's selected backend and the actual deterministic policy path at each
+shard size; they are host/backend observations, never universal crossover
+claims.
 
 ## Usage
 
@@ -77,6 +128,12 @@ Run internal invariants and the independent test suite:
 
     python3 tools/leopard2_operation_counts.py self-test
     python3 experiments/leopard2/operation_counts/test_operation_counts.py
+
+The configured CTest suite also builds a production-linked public-query probe
+and compares it to the Python formulas, including adversarial source mutations:
+
+    ctest --test-dir build/release -R leopard2_decode_scratch_crosscheck \
+      --output-on-failure
 
 Report a full high-rate encode cell as deterministic JSON:
 
@@ -94,7 +151,7 @@ Compare specialized and generic decoding for the same loss pattern:
 
     python3 tools/leopard2_operation_counts.py report \
       --path legacy_high_decode --k 240 --r 16 --field gf8 \
-      --shard-bytes 1024 --loss-mask 0,15
+      --shard-bytes 1024 --loss-mask 0,15 --decode-workspace tiled
 
     python3 tools/leopard2_operation_counts.py report \
       --path generic_decode --profile high --k 240 --r 16 --field gf8 \
@@ -109,7 +166,9 @@ Model the generic parent FFT with a non-prefix output mask:
 
 The output is stable: JSON object keys and CSV metric rows are sorted, mask
 ranges are canonical, floating pass estimates are rounded, and the schema has
-an explicit version.  Use `--output FILE` to write either format directly.
+an explicit version.  Schema v2 intentionally replaces the ambiguous
+`api_scratch_data_slots` value with exact byte/component metrics.  Use
+`--output FILE` to write either format directly.
 
 ## Representative validated counts
 
@@ -133,9 +192,11 @@ The self-test fixes two useful schedule checks:
   directly.  The receive boundary copies 16 live rows and zeroes 16 absent
   rows, removing 224 logical copy vectors (224 shard reads and 224 shard
   writes) from the former copy-first schedule.  These are exact
-  boundary deltas, not an endorsement of the model's pre-existing absolute
-  decode copy total.  Scalar, NEON, exact-mask plans, and other unqualified
-  backends retain copy-first staging.
+  boundary deltas.  Schema v2's absolute accounting treats the K received
+  coordinate entries as pointer mappings, and charges Algorithm 5's separate
+  copy-first work staging before applying this qualified SIMD delta.  Scalar,
+  NEON, exact-mask plans, and other unqualified backends retain copy-first
+  staging.
 - GF16 reports retain the deterministic copy-first receive boundary.  The
   otherwise equivalent source-staging candidate was measured but did not meet
   the production promotion threshold, so GF16 reports charge every selected
@@ -152,7 +213,10 @@ stable JSON/CSV serialization, and covers production GF16 byte-length rejection.
 
 The operation model follows the current algorithms, not every possible backend
 micro-op.  It does not count locator-plan setup, field-table initialization,
-thread synchronization, pointer validation, range metadata, or NUMA effects.
+thread synchronization, validation instruction cost, or NUMA effects.  Exact
+decode scratch size does include the storage occupied by validation range
+metadata; logical byte-traffic estimates do not treat metadata scans as shard
+traffic.
 It does not infer exact zero/one multiplier counts from private skew and direct
 coefficient tables; those are explicitly bounded.  The model also assumes the
 current deterministic received-subset policy rather than optimizing the subset.

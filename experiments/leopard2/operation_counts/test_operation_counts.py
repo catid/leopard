@@ -89,6 +89,18 @@ class OperationCountTests(unittest.TestCase):
         self.assertEqual(
             high_decode_gf16.details["receive_copy_vectors_removed"], 0
         )
+        # Selected input coordinates are retained as pointers on aligned
+        # passes; they are not K shard copies.  High Algorithm 5 separately
+        # stages K rows into its transform workspace.
+        self.assertEqual(high_decode.details["coordinate_pointer_mappings"], 240)
+        self.assertEqual(high_decode.details["aligned_input_staging_copies"], 0)
+        self.assertEqual(high_decode.copies, 240)
+        self.assertEqual(high_decode.decode_output_gather_payload_bytes, 1024)
+
+        low_decode = COUNTS.model_low_decode(8, 248, 256, 8, 65, {0, 1})
+        self.assertEqual(low_decode.copies, 0)
+        self.assertEqual(low_decode.decode_output_gather_payload_bytes, 2)
+        self.assertEqual(low_decode.decode_coordinate_pointer_mappings, 8)
 
     def test_low_encode_source_guard_rejects_old_copy_loop(self) -> None:
         old_copy = """
@@ -219,6 +231,67 @@ class OperationCountTests(unittest.TestCase):
         with self.assertRaises(COUNTS.ModelError):
             COUNTS.model_direct_repair(17, 8, 32, 32, "low", {0})
 
+    def test_decode_scratch_exact_components(self) -> None:
+        tiled = COUNTS.decode_scratch_accounting(
+            240, 16, 256, 16, "high", 65, 1, "tiled", 8,
+            codec_workspace="tiled",
+        )
+        self.assertEqual(tiled.range_count, 496)
+        self.assertEqual(tiled.range_metadata_bytes, 7936)
+        self.assertEqual(tiled.plan_pointer_count, 256 + 2 * 16 + 1)
+        self.assertEqual(tiled.tail_reserved_slots, 256)
+        self.assertEqual(tiled.tail_selected_staged_slots, 240)
+        self.assertEqual(tiled.tail_staged_payload_bytes, 240)
+        self.assertEqual(tiled.tail_staged_zero_padding_bytes, 240 * 63)
+        self.assertEqual(tiled.work_slot_bytes, 64)
+        self.assertEqual(tiled.plan_work_slots, 33)
+        self.assertEqual(tiled.codec_work_slots, 48)
+        self.assertEqual(tiled.plan_total_bytes, 28800)
+        self.assertEqual(tiled.codec_total_bytes, 29824)
+
+        materialized = COUNTS.decode_scratch_accounting(
+            240, 16, 256, 16, "high", 128, 1, "materialized", 8,
+        )
+        self.assertEqual(materialized.tail_reserved_slots, 0)
+        self.assertEqual(materialized.plan_work_slots, 256)
+        self.assertEqual(materialized.work_slot_bytes, 128)
+        direct = COUNTS.decode_scratch_accounting(
+            16, 8, 32, 16, "low", 65, 4, "specialized", 8,
+            codec_workspace="specialized", direct=True,
+        )
+        self.assertEqual(direct.plan_work_slots, 0)
+        self.assertEqual(direct.plan_pointer_count, 0)
+        self.assertEqual(direct.plan_total_bytes, 640)
+        self.assertGreater(direct.codec_total_bytes, direct.plan_total_bytes)
+        no_op = COUNTS.decode_scratch_accounting(
+            240, 16, 256, 16, "high", 65, 0, "tiled", 8,
+            codec_workspace="tiled", no_op=True,
+        )
+        self.assertEqual(no_op.plan_total_bytes, 0)
+        self.assertGreater(no_op.codec_total_bytes, 0)
+
+    def test_decode_scratch_source_guard_rejects_layout_mutations(self) -> None:
+        filename = "leopard2.cpp"
+        source = (ROOT / filename).read_text(encoding="utf-8")
+        COUNTS.verify_decode_scratch_source(source, filename)
+        mutations = (
+            (
+                "static_cast<size_t>(codec->original_count) * 2 + "
+                "codec->recovery_count",
+                "static_cast<size_t>(codec->original_count) + "
+                "codec->recovery_count",
+            ),
+            (
+                "ComputeScratchLayout(range_count, 0, 0, rounded_bytes, layout)",
+                "ComputeScratchLayout(range_count, 1, 0, rounded_bytes, layout)",
+            ),
+        )
+        for old, new in mutations:
+            mutated = source.replace(old, new, 1)
+            self.assertNotEqual(mutated, source)
+            with self.assertRaises(COUNTS.ModelError):
+                COUNTS.verify_decode_scratch_source(mutated, filename + " mutation")
+
     def test_json_and_csv_are_deterministic(self) -> None:
         command = [
             sys.executable, str(TOOL), "report",
@@ -230,7 +303,11 @@ class OperationCountTests(unittest.TestCase):
         second = subprocess.check_output(command, text=True)
         self.assertEqual(first, second)
         document = json.loads(first)
-        self.assertEqual(document["schema_version"], 1)
+        self.assertEqual(document["schema_version"], 2)
+        self.assertEqual(
+            document["metrics"]["decode_plan_scratch_bytes"]["classification"],
+            "exact_schedule",
+        )
         self.assertEqual(
             document["metrics"]["transform_butterflies"]["classification"],
             "exact_schedule",

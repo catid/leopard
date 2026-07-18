@@ -17,12 +17,13 @@ import json
 import math
 import pathlib
 import re
+import struct
 import sys
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Set, TextIO, Tuple
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PATHS = (
     "legacy_high_encode",
     "legacy_high_decode",
@@ -34,6 +35,7 @@ PATHS = (
 )
 FIELDS = ("gf8", "gf16")
 PROFILES = ("high", "low")
+DECODE_WORKSPACES = ("materialized", "tiled")
 
 
 _LOW_COEFFICIENT_COPY_PATTERNS = (
@@ -276,6 +278,68 @@ def verify_low_decode_weighted_fusion_source(source: str, label: str) -> None:
         )
 
 
+def verify_decode_scratch_source(source: str, label: str) -> None:
+    """Guard the production layout boundaries mirrored by schema v2.
+
+    Runtime cross-checks compare public query bytes.  This scoped source guard
+    additionally makes the intended distinctions reviewable: N coordinate
+    pointers are metadata, ragged K+R input slots are fixed 64-byte staging,
+    and direct execution retains range metadata without shard-data slots.
+    """
+    compact = re.sub(r"\s+", "", source)
+    begin = compact.find("staticleo2_resultDecodeLayout(")
+    end = compact.find("staticleo2_resultDirectDecodeLayout(", begin)
+    direct_end = compact.find("staticboolUseSingleSideEncodeLayout(", end)
+    populate = compact.find("staticvoidPopulateDecodeCoordinates(")
+    populate_end = compact.find("staticLEO_FORCE_INLINEvoidGatherTransformDecodeOne(", populate)
+    if min(begin, end, direct_end, populate, populate_end) < 0:
+        raise ModelError("{} is missing a decode scratch boundary".format(label))
+    layout = compact[begin:end]
+    direct = compact[end:direct_end]
+    staging = compact[populate:populate_end]
+    required_layout = (
+        "geometry.work_slot_bytes=geometry.tail_bytes==0?"
+        "static_cast<size_t>(shard_bytes):"
+        "std::max(geometry.aligned_prefix_bytes,kScratchAlignment);",
+        "constsize_trange_count=static_cast<size_t>(codec->original_count)*2+"
+        "codec->recovery_count;",
+        "static_cast<size_t>(codec->parent_count),"
+        "geometry.work_slot_count,pointer_count",
+        "constsize_tinput_slot_count=geometry.tail_bytes!=0?"
+        "static_cast<size_t>(codec->original_count)+codec->recovery_count:0;",
+        "ComputeSplitScratchLayout(range_count,pointer_count,input_slot_count,"
+        "geometry.work_slot_count,geometry.work_slot_bytes,geometry.layout,"
+        "geometry.work_data_offset)",
+        "plan?plan->requested_coordinates.size():"
+        "static_cast<size_t>(codec->recovery_count)",
+    )
+    if any(token not in layout for token in required_layout):
+        raise ModelError(
+            "{} decode transform scratch formula diverged from schema v2".format(
+                label
+            )
+        )
+    required_direct = (
+        "constsize_trange_count=static_cast<size_t>(codec->original_count)*2+"
+        "codec->recovery_count;",
+        "ComputeScratchLayout(range_count,0,0,rounded_bytes,layout)",
+    )
+    if any(token not in direct for token in required_direct):
+        raise ModelError(
+            "{} direct decode no longer uses range-only scratch".format(label)
+        )
+    required_staging = (
+        "constboolstage_inputs=staging_slots!=NULL;",
+        "static_cast<size_t>(i)*kScratchAlignment",
+        "(static_cast<size_t>(codec->original_count)+i)*kScratchAlignment",
+        "StageShardForKernel(codec,slot,source,pass_bytes,kScratchAlignment);",
+    )
+    if any(token not in staging for token in required_staging):
+        raise ModelError(
+            "{} ragged decode staging map diverged from schema v2".format(label)
+        )
+
+
 @dataclass(frozen=True)
 class Metric:
     value: object
@@ -309,11 +373,225 @@ class Schedule:
     details: Dict[str, object] = field(default_factory=dict)
     arithmetic_classification: str = "derived_upper_bound"
     memory_override: Optional[Tuple[int, int, int, int]] = None
+    decode_scratch: Optional["DecodeScratchAccounting"] = None
+    decode_coordinate_pointer_mappings: Optional[int] = None
+    decode_output_gather_payload_bytes: Optional[int] = None
+    decode_output_gather_classification: str = "exact_schedule"
+    decode_output_gather_note: str = ""
 
     def add_transform(self, count: int, layers: int) -> None:
         self.butterflies += count
         self.transform_invocations += 1
         self.radix2_layers += layers
+
+
+@dataclass(frozen=True)
+class DecodeScratchAccounting:
+    """Exact public decode scratch layout for one declared ABI and path.
+
+    The production layout has three different kinds of storage that must not
+    be conflated: AddressRange validation records, coordinate/work pointer
+    maps, and shard-data slots.  A ragged final tile additionally reserves one
+    fixed 64-byte input slot per public coordinate, although exactly K selected
+    coordinates are populated by a valid decode plan.
+    """
+
+    workspace: str
+    pointer_bytes: int
+    range_count: int
+    range_metadata_bytes: int
+    plan_pointer_count: int
+    plan_pointer_map_bytes: int
+    plan_metadata_alignment_bytes: int
+    plan_data_offset: int
+    tail_reserved_slots: int
+    tail_reserved_bytes: int
+    tail_selected_staged_slots: int
+    tail_staged_payload_bytes: int
+    tail_staged_zero_padding_bytes: int
+    work_slot_bytes: int
+    plan_work_slots: int
+    plan_work_bytes: int
+    plan_total_bytes: int
+    codec_pointer_count: int
+    codec_range_count: int
+    codec_range_metadata_bytes: int
+    codec_pointer_map_bytes: int
+    codec_metadata_alignment_bytes: int
+    codec_data_offset: int
+    codec_tail_reserved_slots: int
+    codec_tail_reserved_bytes: int
+    codec_work_slots: int
+    codec_work_bytes: int
+    codec_total_bytes: int
+
+
+def align_up(value: int, alignment: int) -> int:
+    if value < 0 or alignment <= 0 or not is_power_of_two(alignment):
+        raise ModelError("invalid alignment input")
+    return (value + alignment - 1) & ~(alignment - 1)
+
+
+def _decode_transform_work_slots(
+    parent: int,
+    padded: int,
+    profile: str,
+    output_slots: int,
+    workspace: str,
+) -> int:
+    if workspace == "generic" or workspace == "materialized":
+        return parent
+    if workspace not in ("tiled", "specialized"):
+        raise ModelError("decode workspace must be materialized or tiled")
+    slots = 2 * padded
+    if profile == "high":
+        slots += output_slots
+    # AUTO specialized execution retains N slots whenever that is no larger
+    # than the side-sized form.  A forced tiled diagnostic intentionally does
+    # not apply this cap, so callers asking for `tiled` get the forced oracle.
+    return min(parent, slots) if workspace == "specialized" else slots
+
+
+def _scratch_components(
+    range_count: int,
+    pointer_count: int,
+    tail_reserved_slots: int,
+    work_slots: int,
+    work_slot_bytes: int,
+    pointer_bytes: int,
+) -> Tuple[int, int, int, int, int, int]:
+    range_bytes = range_count * 2 * pointer_bytes
+    pointer_offset = align_up(range_bytes, pointer_bytes)
+    pointer_bytes_total = pointer_count * pointer_bytes
+    data_offset = align_up(pointer_offset + pointer_bytes_total, 64)
+    alignment_bytes = data_offset - range_bytes - pointer_bytes_total
+    tail_bytes = tail_reserved_slots * 64
+    work_bytes = work_slots * work_slot_bytes
+    total = data_offset + tail_bytes + work_bytes
+    return (
+        range_bytes,
+        pointer_bytes_total,
+        alignment_bytes,
+        data_offset,
+        work_bytes,
+        total,
+    )
+
+
+def decode_scratch_accounting(
+    k: int,
+    r: int,
+    parent: int,
+    padded: int,
+    profile: str,
+    shard_bytes: int,
+    loss_count: int,
+    plan_workspace: str,
+    pointer_bytes: int = struct.calcsize("P"),
+    codec_workspace: Optional[str] = None,
+    no_op: bool = False,
+    direct: bool = False,
+) -> DecodeScratchAccounting:
+    """Mirror DecodeLayout/DirectDecodeLayout and both public queries.
+
+    `plan_workspace` is the path selected by an already-created plan.
+    `codec_workspace` is the conservative one-shot query path; for tiled high
+    decode it reserves R output slots because no erasure pattern is known yet.
+    Forced-path probes pass the same workspace for both.  Direct/no-op plans
+    still have an ordinary transform-capable codec query.
+    """
+    if pointer_bytes not in (4, 8):
+        raise ModelError("pointer bytes must be 4 or 8")
+    if loss_count < 0 or loss_count > min(k, r):
+        raise ModelError("invalid decode loss count")
+    if profile not in PROFILES:
+        raise ModelError("profile must be high or low")
+    if shard_bytes <= 0:
+        raise ModelError("shard bytes must be positive")
+
+    range_count = 2 * k + r
+    tail = shard_bytes & 63
+    prefix = shard_bytes - tail
+    work_slot_bytes = shard_bytes if tail == 0 else max(prefix, 64)
+    tail_reserved_slots = k + r if tail else 0
+    tail_selected_staged_slots = k if tail and not no_op and not direct else 0
+
+    if no_op:
+        plan_pointer_count = 0
+        plan_work_slots = 0
+        plan_values = (0, 0, 0, 0, 0, 0)
+        plan_range_count = 0
+        plan_tail_slots = 0
+    elif direct:
+        plan_pointer_count = 0
+        plan_work_slots = 0
+        plan_values = _scratch_components(
+            range_count, 0, 0, 0, work_slot_bytes, pointer_bytes
+        )
+        plan_range_count = range_count
+        plan_tail_slots = 0
+    else:
+        plan_work_slots = _decode_transform_work_slots(
+            parent, padded, profile, loss_count, plan_workspace
+        )
+        plan_pointer_count = parent + plan_work_slots
+        plan_values = _scratch_components(
+            range_count, plan_pointer_count, tail_reserved_slots,
+            plan_work_slots, work_slot_bytes, pointer_bytes
+        )
+        plan_range_count = range_count
+        plan_tail_slots = tail_reserved_slots
+
+    if codec_workspace is None:
+        codec_workspace = plan_workspace
+    codec_work_slots = _decode_transform_work_slots(
+        parent, padded, profile,
+        r if profile == "high" else loss_count,
+        codec_workspace,
+    )
+    codec_pointer_count = parent + codec_work_slots
+    codec_values = _scratch_components(
+        range_count, codec_pointer_count, tail_reserved_slots,
+        codec_work_slots, work_slot_bytes, pointer_bytes
+    )
+
+    (plan_range_bytes, plan_pointer_bytes, plan_alignment, plan_data_offset,
+     plan_work_bytes, plan_total) = plan_values
+    (codec_range_bytes, codec_pointer_bytes, codec_alignment,
+     codec_data_offset, codec_work_bytes, codec_total) = codec_values
+    if codec_range_bytes != range_count * 2 * pointer_bytes:
+        raise AssertionError("codec range accounting mismatch")
+
+    return DecodeScratchAccounting(
+        workspace=("no_op" if no_op else "direct" if direct else plan_workspace),
+        pointer_bytes=pointer_bytes,
+        range_count=plan_range_count,
+        range_metadata_bytes=plan_range_bytes,
+        plan_pointer_count=plan_pointer_count,
+        plan_pointer_map_bytes=plan_pointer_bytes,
+        plan_metadata_alignment_bytes=plan_alignment,
+        plan_data_offset=plan_data_offset,
+        tail_reserved_slots=plan_tail_slots,
+        tail_reserved_bytes=plan_tail_slots * 64,
+        tail_selected_staged_slots=tail_selected_staged_slots,
+        tail_staged_payload_bytes=tail_selected_staged_slots * tail,
+        tail_staged_zero_padding_bytes=tail_selected_staged_slots * (64 - tail),
+        work_slot_bytes=work_slot_bytes,
+        plan_work_slots=plan_work_slots,
+        plan_work_bytes=plan_work_bytes,
+        plan_total_bytes=plan_total,
+        codec_pointer_count=codec_pointer_count,
+        codec_range_count=range_count,
+        codec_range_metadata_bytes=codec_range_bytes,
+        codec_pointer_map_bytes=codec_pointer_bytes,
+        codec_metadata_alignment_bytes=codec_alignment,
+        codec_data_offset=codec_data_offset,
+        codec_tail_reserved_slots=tail_reserved_slots,
+        codec_tail_reserved_bytes=tail_reserved_slots * 64,
+        codec_work_slots=codec_work_slots,
+        codec_work_bytes=codec_work_bytes,
+        codec_total_bytes=codec_total,
+    )
 
 
 def is_power_of_two(value: int) -> bool:
@@ -657,15 +935,17 @@ def _decode_base(
     data, selected_parities = deterministic_decode_coordinates(
         k, r, profile, padded, losses
     )
-    schedule.api_scratch_slots = k + r + parent
-    schedule.execution_slots = parent
-    # leo2_decode_plan_execute stages exactly the selected K coordinates and
-    # gathers only the missing originals after transform execution.
-    schedule.copies = k + len(losses)
+    # The N coordinate entries are a pointer map, not shard-data storage.
+    # Complete tiles retain the selected K caller pointers directly.  Output
+    # gathers can be shorter than one rounded kernel vector, so decode paths
+    # report those boundary payload bytes separately.
+    schedule.decode_coordinate_pointer_mappings = len(data)
     schedule.details.update({
         "missing_originals": mask_to_ranges(losses),
         "selected_parity": mask_to_ranges(selected_parities),
         "received_coordinate_count": len(data),
+        "coordinate_pointer_mappings": len(data),
+        "aligned_input_staging_copies": 0,
         "kernel_rounding_bytes": rounded_kernel_bytes(shard_bytes) - shard_bytes,
     })
     return schedule, data, selected_parities
@@ -701,6 +981,12 @@ def model_generic_decode(
         fft_mask_butterflies(parent, requested), _transform_layers(parent)
     )
     schedule.fixed_multiply_vectors += len(losses)
+    schedule.decode_output_gather_payload_bytes = len(losses) * shard_bytes
+    schedule.decode_output_gather_classification = "estimated_upper_bound"
+    schedule.decode_output_gather_note = (
+        "Copy-first backend-neutral baseline. Qualified GF8 SSSE3/AVX2 "
+        "generic reveal fusion can remove the aligned-prefix gather."
+    )
     schedule.details.update({
         "input_prefix": input_prefix,
         "requested_coordinates": mask_to_ranges(requested),
@@ -721,7 +1007,7 @@ def model_low_decode(
         return Schedule(details={"no_op": True, "missing_originals": "none"})
     if padded == 1:
         return Schedule(
-            copies=1,
+            decode_output_gather_payload_bytes=shard_bytes,
             details={"direct_k1_copy": True, "missing_originals": "0"},
         )
     schedule, data, _ = _decode_base(
@@ -746,6 +1032,12 @@ def model_low_decode(
         fft_mask_butterflies(padded, set(losses)), _transform_layers(padded)
     )
     schedule.fixed_multiply_vectors += len(losses)
+    schedule.decode_output_gather_payload_bytes = (
+        shard_bytes & 63
+    ) * len(losses)
+    schedule.decode_output_gather_note = (
+        "Algorithm 4 reveals aligned output directly; only a ragged tail is gathered."
+    )
     schedule.details.update({
         "block_input_prefixes": prefixes,
         "derivative_xor_vectors": derivative,
@@ -771,7 +1063,7 @@ def model_high_decode(
             raise ModelError("R=1 cannot recover more than one original")
         return Schedule(
             nontransform_xor_vectors=k - 1,
-            copies=1,
+            decode_output_gather_payload_bytes=shard_bytes,
             details={"direct_r1_xor": True, "missing_originals": mask_to_ranges(losses)},
         )
     schedule, data, selected_parities = _decode_base(
@@ -841,6 +1133,10 @@ def model_high_decode(
             fft_prefix_butterflies(padded, prefix), _transform_layers(padded)
         )
     schedule.fixed_multiply_vectors += len(losses)
+    schedule.decode_output_gather_payload_bytes = len(losses) * shard_bytes
+    schedule.decode_output_gather_note = (
+        "Algorithm 5 gathers each requested original from its evaluator workspace."
+    )
     schedule.details.update({
         "block_input_prefixes": prefixes,
         "receive_source_fused_radix4_groups": receive_fused_groups,
@@ -976,8 +1272,9 @@ def schedule_metrics(
         "multiply; nonzero skew executes two XORs and one multiply."
     )
     memory_note = (
-        "Logical shard traffic only; excludes metadata, allocator effects, "
-        "cache-line amplification, and backend table loads."
+        "Logical full-kernel shard traffic only; excludes decode ragged/output "
+        "boundary payload metrics, metadata, allocator effects, cache-line "
+        "amplification, and backend table loads."
     )
     full_pass_denominator = max(schedule.execution_slots, 1)
     metrics = {
@@ -1003,7 +1300,9 @@ def schedule_metrics(
             "in one source/destination memory pass."
         ),
         "logical_copy_vectors": Metric(
-            schedule.copies, "shard_vectors", "exact_schedule"
+            schedule.copies, "shard_vectors", "exact_schedule",
+            "Full kernel-work copies only. Decode output/tail boundary copies "
+            "are reported as exact payload bytes because they may be ragged."
         ),
         "logical_zero_fill_vectors": Metric(
             schedule.zero_fills, "shard_vectors", "exact_schedule"
@@ -1055,10 +1354,6 @@ def schedule_metrics(
             round((reads_upper + writes_upper) / full_pass_denominator, 9),
             "workspace_equivalents", "estimated_upper_bound", memory_note
         ),
-        "api_scratch_data_slots": Metric(
-            schedule.api_scratch_slots, "rounded_shard_slots", "exact_schedule",
-            "Excludes pointer/range metadata and alignment padding."
-        ),
         "execution_working_slots": Metric(
             schedule.execution_slots, "rounded_shard_slots", "exact_schedule"
         ),
@@ -1067,7 +1362,120 @@ def schedule_metrics(
             "Current kernels round execution to complete 64-byte tiles."
         ),
     }
+    if schedule.decode_coordinate_pointer_mappings is not None:
+        metrics["decode_coordinate_pointer_mappings"] = Metric(
+            schedule.decode_coordinate_pointer_mappings, "pointer_entries",
+            "exact_schedule",
+            "Selected caller shards retained by address; this is metadata, not data traffic.",
+        )
+    if schedule.decode_output_gather_payload_bytes is not None:
+        metrics["decode_output_gather_payload_bytes"] = Metric(
+            schedule.decode_output_gather_payload_bytes, "bytes",
+            schedule.decode_output_gather_classification,
+            schedule.decode_output_gather_note,
+        )
+    scratch = schedule.decode_scratch
+    if scratch is not None:
+        scratch_note = (
+            "Exact for the declared pointer width; includes AddressRange and "
+            "pointer-map metadata, 64-byte alignment, ragged input staging, "
+            "and the selected decode workspace."
+        )
+        metrics.update({
+            "decode_plan_scratch_bytes": Metric(
+                scratch.plan_total_bytes, "bytes", "exact_schedule", scratch_note
+            ),
+            "decode_codec_scratch_bytes": Metric(
+                scratch.codec_total_bytes, "bytes", "exact_schedule",
+                "One-shot codec query; high tiled layout reserves R output slots "
+                "because an erasure pattern is not yet known. " + scratch_note,
+            ),
+            "decode_plan_range_metadata_bytes": Metric(
+                scratch.range_metadata_bytes, "bytes", "exact_schedule"
+            ),
+            "decode_plan_pointer_map_bytes": Metric(
+                scratch.plan_pointer_map_bytes, "bytes", "exact_schedule",
+                "Pointer mappings are metadata, not shard-data copies."
+            ),
+            "decode_plan_metadata_alignment_bytes": Metric(
+                scratch.plan_metadata_alignment_bytes, "bytes", "exact_schedule"
+            ),
+            "decode_plan_tail_reserved_bytes": Metric(
+                scratch.tail_reserved_bytes, "bytes", "exact_schedule",
+                "Ragged transform plans reserve K+R fixed 64-byte public-coordinate slots."
+            ),
+            "decode_tail_staged_payload_bytes": Metric(
+                scratch.tail_staged_payload_bytes, "bytes", "exact_schedule",
+                "Exactly K selected input coordinates are copied for a valid ragged pass."
+            ),
+            "decode_tail_staged_zero_padding_bytes": Metric(
+                scratch.tail_staged_zero_padding_bytes, "bytes", "exact_schedule"
+            ),
+            "decode_work_slot_bytes": Metric(
+                scratch.work_slot_bytes, "bytes", "exact_schedule"
+            ),
+            "decode_plan_work_slots": Metric(
+                scratch.plan_work_slots, "shard_slots", "exact_schedule"
+            ),
+            "decode_plan_work_bytes": Metric(
+                scratch.plan_work_bytes, "bytes", "exact_schedule"
+            ),
+            "decode_codec_work_slots": Metric(
+                scratch.codec_work_slots, "shard_slots", "exact_schedule"
+            ),
+            "decode_codec_work_bytes": Metric(
+                scratch.codec_work_bytes, "bytes", "exact_schedule"
+            ),
+            "decode_codec_range_metadata_bytes": Metric(
+                scratch.codec_range_metadata_bytes, "bytes", "exact_schedule"
+            ),
+            "decode_codec_pointer_map_bytes": Metric(
+                scratch.codec_pointer_map_bytes, "bytes", "exact_schedule"
+            ),
+            "decode_codec_metadata_alignment_bytes": Metric(
+                scratch.codec_metadata_alignment_bytes, "bytes", "exact_schedule"
+            ),
+            "decode_codec_tail_reserved_bytes": Metric(
+                scratch.codec_tail_reserved_bytes, "bytes", "exact_schedule",
+                "Pattern-independent ragged query reserves K+R fixed 64-byte slots."
+            ),
+        })
     return metrics
+
+
+def attach_decode_scratch(
+    schedule: Schedule,
+    k: int,
+    r: int,
+    parent: int,
+    padded: int,
+    profile: str,
+    shard_bytes: int,
+    losses: Set[int],
+    plan_workspace: str,
+    pointer_bytes: int,
+    codec_workspace: Optional[str] = None,
+    direct: bool = False,
+) -> None:
+    scratch = decode_scratch_accounting(
+        k, r, parent, padded, profile, shard_bytes, len(losses),
+        plan_workspace, pointer_bytes, codec_workspace=codec_workspace,
+        no_op=not losses, direct=direct and bool(losses),
+    )
+    schedule.decode_scratch = scratch
+    schedule.execution_slots = scratch.plan_work_slots
+    schedule.api_scratch_slots = 0
+    schedule.details.update({
+        "decode_workspace": scratch.workspace,
+        "pointer_bytes": pointer_bytes,
+        "coordinate_pointer_map_entries": (
+            parent if scratch.plan_work_slots != 0 else 0
+        ),
+        "work_pointer_entries": scratch.plan_work_slots,
+        "tail_reserved_input_slots": scratch.tail_reserved_slots,
+        "tail_selected_staged_slots": scratch.tail_selected_staged_slots,
+        "scratch_accounting": "exact_public_api_bytes",
+    })
 
 
 def build_report(args: argparse.Namespace) -> Dict[str, object]:
@@ -1121,6 +1529,26 @@ def build_report(args: argparse.Namespace) -> Dict[str, object]:
     else:
         raise ModelError("unsupported path: {}".format(path))
 
+    if path in ("legacy_high_decode", "low_decode", "generic_decode",
+                "direct_repair"):
+        if path == "generic_decode":
+            plan_workspace = "generic"
+            codec_workspace = "generic"
+            direct = padded == 1 and bool(losses)
+        elif path == "direct_repair":
+            plan_workspace = "specialized"
+            codec_workspace = "specialized"
+            direct = True
+        else:
+            plan_workspace = args.decode_workspace
+            codec_workspace = args.decode_workspace
+            direct = padded == 1 and bool(losses)
+        attach_decode_scratch(
+            schedule, args.k, args.r, parent, padded, profile,
+            args.shard_bytes, losses, plan_workspace, args.pointer_bytes,
+            codec_workspace=codec_workspace, direct=direct,
+        )
+
     metrics = schedule_metrics(schedule, args.field, args.shard_bytes)
     return {
         "schema_version": SCHEMA_VERSION,
@@ -1132,6 +1560,11 @@ def build_report(args: argparse.Namespace) -> Dict[str, object]:
             "profile": profile,
             "field": args.field,
             "shard_bytes": args.shard_bytes,
+            "pointer_bytes": args.pointer_bytes,
+            "decode_workspace": (
+                schedule.decode_scratch.workspace
+                if schedule.decode_scratch is not None else None
+            ),
             "requested_parity": mask_to_ranges(requested),
             "missing_originals": mask_to_ranges(losses),
         },
@@ -1160,8 +1593,8 @@ def write_csv(report: Dict[str, object], output: TextIO) -> None:
     assert isinstance(metrics, dict)
     columns = [
         "schema_version", "path", "K", "R", "profile", "field",
-        "shard_bytes", "parent_count", "padded_side", "metric", "value",
-        "unit", "classification", "note",
+        "shard_bytes", "pointer_bytes", "decode_workspace", "parent_count",
+        "padded_side", "metric", "value", "unit", "classification", "note",
     ]
     writer = csv.DictWriter(output, fieldnames=columns, lineterminator="\n")
     writer.writeheader()
@@ -1176,6 +1609,8 @@ def write_csv(report: Dict[str, object], output: TextIO) -> None:
             "profile": inputs["profile"],
             "field": inputs["field"],
             "shard_bytes": inputs["shard_bytes"],
+            "pointer_bytes": inputs["pointer_bytes"],
+            "decode_workspace": inputs["decode_workspace"],
             "parent_count": geometry["parent_count"],
             "padded_side": geometry["padded_side"],
             "metric": name,
@@ -1220,6 +1655,22 @@ def run_self_test(verbose: bool = True) -> None:
     assert high.execution_slots == 32
     checks += 3
 
+    high_decode = model_high_decode(240, 16, 256, 16, 1024, {0})
+    assert high_decode.decode_coordinate_pointer_mappings == 240
+    assert high_decode.copies == 240
+    assert high_decode.decode_output_gather_payload_bytes == 1024
+    low_decode_ragged = model_low_decode(8, 248, 256, 8, 65, {0, 1})
+    assert low_decode_ragged.decode_coordinate_pointer_mappings == 8
+    assert low_decode_ragged.copies == 0
+    assert low_decode_ragged.decode_output_gather_payload_bytes == 2
+    scratch = decode_scratch_accounting(
+        240, 16, 256, 16, "high", 65, 1, "tiled", 8,
+        codec_workspace="tiled",
+    )
+    assert scratch.plan_total_bytes == 28800
+    assert scratch.codec_total_bytes == 29824
+    checks += 8
+
     low = model_low_encode(8, 248, 8, 1024, set(range(248)))
     assert low.butterflies == 384
     assert low.details["active_parity_blocks"] == 31
@@ -1243,6 +1694,22 @@ def run_self_test(verbose: bool = True) -> None:
     cmake_source = (root / "CMakeLists.txt").read_text(encoding="utf-8")
     verify_high_pruned_hook_registration(cmake_source, "CMakeLists.txt")
     checks += 1
+    core_source = (root / "leopard2.cpp").read_text(encoding="utf-8")
+    verify_decode_scratch_source(core_source, "leopard2.cpp")
+    try:
+        verify_decode_scratch_source(
+            core_source.replace(
+                "ComputeScratchLayout(range_count, 0, 0, rounded_bytes, layout)",
+                "ComputeScratchLayout(range_count, 1, 0, rounded_bytes, layout)",
+                1,
+            ),
+            "leopard2.cpp direct-pointer mutation",
+        )
+    except ModelError:
+        pass
+    else:
+        raise AssertionError("direct decode scratch mutation escaped source guard")
+    checks += 2
     for filename in ("LeopardFF8.cpp", "LeopardFF16.cpp"):
         source = (root / filename).read_text(encoding="utf-8")
         verify_low_encode_no_copy_source(source, filename)
@@ -1296,7 +1763,8 @@ def run_self_test(verbose: bool = True) -> None:
         path="legacy_high_encode", k=9, r=7, profile=None, field="gf8",
         shard_bytes=65, requested_parity="0-3,6", loss_count=None,
         loss_mask=None, direction="forward", active_input_count=None,
-        transform_output_mask=None,
+        transform_output_mask=None, pointer_bytes=struct.calcsize("P"),
+        decode_workspace="materialized",
     )
     first = json.dumps(build_report(namespace), sort_keys=True)
     second = json.dumps(build_report(namespace), sort_keys=True)
@@ -1314,6 +1782,16 @@ def _add_model_arguments(parser: argparse.ArgumentParser) -> None:
                         help="required for generic/direct paths; inferred otherwise")
     parser.add_argument("--field", choices=FIELDS, required=True)
     parser.add_argument("--shard-bytes", type=int, required=True)
+    parser.add_argument(
+        "--pointer-bytes", type=int, choices=(4, 8),
+        default=struct.calcsize("P"),
+        help="ABI pointer width used for exact decode metadata accounting",
+    )
+    parser.add_argument(
+        "--decode-workspace", choices=DECODE_WORKSPACES,
+        default="materialized",
+        help="forced specialized decode workspace (default: materialized)",
+    )
     parser.add_argument(
         "--requested-parity", default=None,
         help="all, none, or comma-separated indices/ranges (default: all)",
