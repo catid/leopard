@@ -4476,10 +4476,12 @@ static leo2_result DecodePlanExecuteInternal(
     size_t protected_metadata_bytes,
     bool prevalidated)
 {
-    if (!plan || shard_bytes == 0)
+    if (!plan)
         return LEO2_INVALID_ARGUMENT;
     if (plan->no_op)
         return LEO2_SUCCESS;
+    if (shard_bytes == 0)
+        return LEO2_INVALID_ARGUMENT;
 
     ScratchLayout direct_layout;
     size_t direct_rounded = 0;

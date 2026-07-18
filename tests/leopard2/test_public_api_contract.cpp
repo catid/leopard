@@ -506,6 +506,13 @@ void test_introspection_and_null_contracts(
     require_result(leo2_decode_plan_create(high.codec,
         valid_original_present, valid_recovery_present, &valid_plan.plan),
         LEO2_SUCCESS, "valid no-loss plan for scratch contracts");
+    require_result(leo2_decode_plan_execute(valid_plan.plan, 0,
+        NULL, NULL, NULL, NULL, 0), LEO2_SUCCESS,
+        "zero-byte no-loss plan execute");
+    require_result(leo2_decode(high.codec, 0,
+        valid_original_present, valid_recovery_present,
+        NULL, NULL, NULL, NULL, 0), LEO2_SUCCESS,
+        "zero-byte one-shot no-loss decode");
 
     size_t scratch_bytes = 101;
     require_result(leo2_encode_scratch_size(NULL, 17, &scratch_bytes),
@@ -552,7 +559,7 @@ void test_introspection_and_null_contracts(
         NULL, 0), LEO2_INVALID_ARGUMENT, "null plan execute");
     require_result(leo2_decode_plan_execute_batch(NULL, NULL, 0),
         LEO2_INVALID_ARGUMENT, "null plan empty batch");
-    counts->introspection_checks += 21;
+    counts->introspection_checks += 23;
 }
 
 void test_default_affinity_thread_budget(Counts* counts)
