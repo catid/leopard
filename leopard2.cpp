@@ -43,6 +43,7 @@
 #include <limits>
 #include <mutex>
 #include <new>
+#include <stdlib.h>
 #include <string.h>
 #include <thread>
 #include <utility>
@@ -79,6 +80,56 @@ void TestSetContextOps(leo2_context* context, const Ops* ops)
         context->ops = ops;
 }
 }} // namespace leopard::backend
+
+#ifndef __has_feature
+#define __has_feature(feature) 0
+#endif
+
+extern "C" int leo2_test_core_address_sanitizer_compiled()
+{
+#if __has_feature(address_sanitizer) || defined(__SANITIZE_ADDRESS__)
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+extern "C" int leo2_test_core_undefined_sanitizer_compiled()
+{
+#if __has_feature(undefined_behavior_sanitizer)
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+#if defined(_MSC_VER)
+#define LEO2_TEST_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_TEST_NOINLINE __attribute__((noinline))
+#else
+#define LEO2_TEST_NOINLINE
+#endif
+
+extern "C" LEO2_TEST_NOINLINE size_t
+leo2_test_core_leak_sanitizer_canary()
+{
+    // Keep the allocation in the linked codec translation unit: A replay-only
+    // leak would prove the wrapper's sanitizer runtime, but not that the core
+    // object being exercised participates in the leak check.  Volatile stores
+    // make the allocation observable to the compiler without retaining a root
+    // that would make LeakSanitizer consider the object reachable.
+    static const size_t kCanaryBytes = 12345;
+    volatile unsigned char* allocation = static_cast<volatile unsigned char*>(
+        malloc(kCanaryBytes));
+    if (!allocation)
+        return 0;
+    allocation[0] = 0x4c;
+    allocation[kCanaryBytes - 1] = 0x32;
+    return kCanaryBytes;
+}
+
+#undef LEO2_TEST_NOINLINE
 #endif
 
 struct leo2_codec

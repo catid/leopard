@@ -936,6 +936,8 @@ if(LEO2_BUILD_TESTS)
     add_executable(leopard2_fuzz_smoke
         tests/leopard2/fuzz_api.cpp
         tests/leopard2/fuzz_replay.cpp)
+    target_compile_definitions(leopard2_fuzz_smoke PRIVATE
+        LEO2_FUZZ_REPLAY_ROLE="api")
     target_link_libraries(leopard2_fuzz_smoke leopard)
     add_test(NAME leopard2_fuzz_smoke COMMAND leopard2_fuzz_smoke)
 
@@ -943,7 +945,8 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/fuzz_pruned_transform.cpp
         tests/leopard2/fuzz_replay.cpp)
     target_compile_definitions(leopard2_pruned_fuzz_smoke PRIVATE
-        LEO2_ENABLE_TEST_HOOKS=1)
+        LEO2_ENABLE_TEST_HOOKS=1
+        LEO2_FUZZ_REPLAY_ROLE="pruned")
     target_link_libraries(leopard2_pruned_fuzz_smoke leopard)
     add_test(NAME leopard2_pruned_fuzz_smoke
         COMMAND leopard2_pruned_fuzz_smoke 0xc1f022d17 256)
@@ -1035,11 +1038,18 @@ if(LEO2_BUILD_TESTS)
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_lab.py
                 self-test)
-        add_test(
-            NAME leopard2_fuzz_campaign_self_test
-            COMMAND ${LEO2_PYTHON_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_fuzz_campaign.py
-                self-test)
+        # The strict sanitizer campaign attests ELF instrumentation with nm and
+        # its destructive-output guards exercise POSIX symlink semantics.
+        # Keep this host-tool self-test off platforms where those contracts do
+        # not exist (notably MSVC/Windows); ordinary codec fuzz smoke tests are
+        # registered independently above.
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            add_test(
+                NAME leopard2_fuzz_campaign_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_fuzz_campaign.py
+                    self-test)
+        endif()
         add_test(
             NAME leopard2_benchmark_matrix_self_test
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
