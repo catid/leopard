@@ -114,6 +114,8 @@ bool SamePlan(
         left.fused_four_starts != right.fused_four_starts ||
         left.zero_outputs != right.zero_outputs ||
         left.operations.size() != right.operations.size() ||
+        left.inverse_accumulation_flags !=
+            right.inverse_accumulation_flags ||
         left.full_butterfly_count != right.full_butterfly_count ||
         left.one_output_butterflies != right.one_output_butterflies ||
         left.input_zero_specializations != right.input_zero_specializations ||
@@ -329,6 +331,54 @@ void RunCase(
             Check(full.shards[i] == flat.shards[i]);
             Check(full.shards[i] == fused.shards[i]);
         }
+    }
+
+    if (inverse)
+    {
+        Workspace accumulating(initial);
+        Workspace accumulator(size, bytes);
+        Workspace expected_accumulator(size, bytes);
+        for (unsigned i = 0; i < size; ++i)
+        {
+            accumulating.pointers[i] = accumulating.shards[i].data();
+            for (size_t offset = 0; offset < bytes; ++offset)
+            {
+                const uint8_t value = static_cast<uint8_t>(random.Next());
+                accumulator.shards[i][offset] = value;
+                expected_accumulator.shards[i][offset] = value;
+                if (output_mask[i])
+                    expected_accumulator.shards[i][offset] ^=
+                        full.shards[i][offset];
+            }
+        }
+        Check(leopard2_internal::
+            ExecutePrunedInverseTransformPlanAccumulate(
+                ops, bytes, fused_plan, accumulating.pointers.data(),
+                accumulator.pointers.data()));
+        Check(accumulator.shards == expected_accumulator.shards);
+
+        leopard2_internal::PrunedTransformPlan broken_sink(fused_plan);
+        Check(!broken_sink.inverse_accumulation_flags.empty());
+        broken_sink.inverse_accumulation_flags[0] = 0xff;
+        Workspace rejected_work(initial);
+        Workspace rejected_accumulator(size, bytes);
+        for (unsigned i = 0; i < size; ++i)
+        {
+            rejected_work.pointers[i] = rejected_work.shards[i].data();
+            for (size_t offset = 0; offset < bytes; ++offset)
+                rejected_accumulator.shards[i][offset] =
+                    static_cast<uint8_t>(random.Next());
+        }
+        const std::vector<std::vector<uint8_t> > rejected_work_snapshot =
+            rejected_work.shards;
+        const std::vector<std::vector<uint8_t> > rejected_accumulator_snapshot =
+            rejected_accumulator.shards;
+        Check(!leopard2_internal::
+            ExecutePrunedInverseTransformPlanAccumulate(
+                ops, bytes, broken_sink, rejected_work.pointers.data(),
+                rejected_accumulator.pointers.data()));
+        Check(rejected_work.shards == rejected_work_snapshot);
+        Check(rejected_accumulator.shards == rejected_accumulator_snapshot);
     }
 
     if (!inverse)

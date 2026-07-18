@@ -107,13 +107,21 @@ struct PrunedTransformPlan
     uint16_t zero_multiplier_log;
     // Forward plans retain the root-layer multiplier so execution can begin
     // with an immutable-source out-of-place butterfly instead of copying the
-    // complete input block to a second workspace.  Inverse plans retain the
-    // same value for deterministic plan identity, but do not consume it.
+    // complete input block to a second workspace.  The inverse accumulating
+    // executor uses the same multiplier for its deferred root boundary;
+    // materialized inverse execution already carries it in root operations.
     uint16_t first_layer_multiplier_log;
     bool inverse;
     std::vector<uint8_t> input_mask;
     std::vector<uint8_t> output_mask;
     std::vector<PrunedTransformOperation> operations;
+    // Liveness/dependency flags for the complete inverse root layer, including
+    // identity rows omitted from the compact in-place operation list.  Root
+    // coordinates and the multiplier are implicit in the plan identity, so
+    // one byte per pair is sufficient.  An accumulating executor consumes
+    // this immutable boundary as its final sink instead of storing and
+    // rereading a complete syndrome block.  Forward plans leave it empty.
+    std::vector<uint8_t> inverse_accumulation_flags;
     // Each sorted index replaces operations i..i+3 with one mature fused
     // four-way backend call.  The compiler emits these descriptors only for a
     // complete two-layer subtransform whose four inputs and four outputs are
@@ -268,6 +276,20 @@ bool ExecutePrunedTransformPlan(
     uint64_t byte_count,
     const PrunedTransformPlan& plan,
     void** work);
+
+// Inverse-only companion that executes every non-root operation in work and
+// XORs the exact requested root outputs into accumulator.  The source work
+// buffers are dead after the call.  work[0..size) and
+// accumulator[0..size) must each be pairwise disjoint, and no work byte may
+// overlap an accumulator byte.  A rejected plan returns false before changing
+// either array; caller-owned materialize-then-XOR therefore remains a safe
+// fallback.  Masked-off outputs leave the corresponding accumulator unchanged.
+bool ExecutePrunedInverseTransformPlanAccumulate(
+    const leopard::backend::Ops& ops,
+    uint64_t byte_count,
+    const PrunedTransformPlan& plan,
+    void** work,
+    void** accumulator);
 
 // Forward-only companion for a plan whose input mask is completely live.
 // source is immutable and pairwise disjoint from every output buffer in work.

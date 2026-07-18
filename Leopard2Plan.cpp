@@ -172,6 +172,7 @@ struct PrunedExecutionOps
     leopard::backend::Butterfly2 butterfly;
     leopard::backend::Butterfly4 butterfly_four;
     leopard::backend::FFTButterfly2Out butterfly_out;
+    leopard::backend::IFFTButterfly2Xor inverse_butterfly_xor;
 };
 
 struct FusedFourMatch
@@ -338,6 +339,86 @@ static bool ExecutePrunedOperation(
     }
 
     return !write_x && !write_y;
+}
+
+static void ExecutePrunedInverseOperationAccumulate(
+    const leopard::backend::Ops& ops,
+    const PrunedExecutionOps& selected,
+    uint16_t zero_multiplier_log,
+    uint64_t byte_count,
+    const leopard2_internal::PrunedTransformOperation& operation,
+    const void* x,
+    const void* y,
+    void* x_accumulator,
+    void* y_accumulator)
+{
+    const uint8_t flags = operation.flags;
+    const bool live_x =
+        0 != (flags & leopard2_internal::PrunedLiveX);
+    const bool live_y =
+        0 != (flags & leopard2_internal::PrunedLiveY);
+    const bool need_x =
+        0 != (flags & leopard2_internal::PrunedNeedX);
+    const bool need_y =
+        0 != (flags & leopard2_internal::PrunedNeedY);
+    const uint16_t log_m = operation.multiplier_log;
+
+    // The common dense boundary consumes both rows with one product.  The
+    // sentinel denotes m=0 and is intentionally kept out of backend table
+    // lookup, while retaining the inverse butterfly's XOR edge.
+    if (live_x && live_y && need_x && need_y)
+    {
+        if (log_m == zero_multiplier_log)
+        {
+            ops.xor_memory(x_accumulator, x, byte_count);
+            ops.xor_memory_2to1(y_accumulator, x, y, byte_count);
+        }
+        else
+        {
+            selected.inverse_butterfly_xor(
+                x, y, x_accumulator, y_accumulator, log_m, byte_count);
+        }
+        return;
+    }
+
+    // y' = x + y.  Structural liveness makes the missing terms exact zero;
+    // no temporary materialization is needed for either sparse case.
+    if (need_y)
+    {
+        if (live_x && live_y)
+            ops.xor_memory_2to1(y_accumulator, x, y, byte_count);
+        else if (live_x)
+            ops.xor_memory(y_accumulator, x, byte_count);
+        else if (live_y)
+            ops.xor_memory(y_accumulator, y, byte_count);
+    }
+
+    if (!need_x)
+        return;
+
+    // x' = x + m * (x + y).  Specializing m=0 and m=1 avoids tables and,
+    // importantly, also covers identity rows that the compact in-place
+    // schedule deliberately omits.
+    if (log_m == zero_multiplier_log)
+    {
+        if (live_x)
+            ops.xor_memory(x_accumulator, x, byte_count);
+        return;
+    }
+    if (log_m == 0)
+    {
+        if (live_y)
+            ops.xor_memory(x_accumulator, y, byte_count);
+        return;
+    }
+    if (live_x)
+    {
+        ops.xor_memory(x_accumulator, x, byte_count);
+        selected.multiply_add(
+            x_accumulator, x, log_m, byte_count);
+    }
+    if (live_y)
+        selected.multiply_add(x_accumulator, y, log_m, byte_count);
 }
 
 static size_t SparseButterflyCountUnchecked(uint32_t size)
@@ -974,7 +1055,9 @@ static SparseExecuteContext MakeSparseExecuteContext(
         gf16 ? ops.ff16_multiply_add : ops.ff8_multiply_add,
         gf16 ? ops.ff16_fft_butterfly2 : ops.ff8_fft_butterfly2,
         gf16 ? ops.ff16_fft_butterfly4 : ops.ff8_fft_butterfly4,
-        gf16 ? ops.ff16_fft_butterfly2_out : ops.ff8_fft_butterfly2_out
+        gf16 ? ops.ff16_fft_butterfly2_out : ops.ff8_fft_butterfly2_out,
+        gf16 ? ops.ff16_ifft_butterfly2_xor
+             : ops.ff8_ifft_butterfly2_xor
     };
     SparseExecuteContext context = {
         &ops,
@@ -1196,6 +1279,32 @@ bool CompilePrunedTransformPlan(
                 (need_y && d_nonzero)));
         }
 
+        if (inverse)
+        {
+            const uint32_t root_distance = size >> 1;
+            candidate.inverse_accumulation_flags.assign(root_distance, 0);
+            std::vector<uint8_t> seen(root_distance, 0);
+            uint32_t root_operation_count = 0;
+            for (size_t i = 0; i < raw.size(); ++i)
+            {
+                if (raw[i].y > raw[i].x &&
+                    raw[i].y - raw[i].x == root_distance)
+                {
+                    if (raw[i].x >= root_distance || seen[raw[i].x] != 0)
+                        return false;
+                    candidate.inverse_accumulation_flags[raw[i].x] =
+                        planned[i].flags;
+                    seen[raw[i].x] = 1;
+                    ++root_operation_count;
+                }
+            }
+            if (root_operation_count != root_distance)
+                return false;
+            for (uint32_t i = 0; i < root_distance; ++i)
+                if (seen[i] == 0)
+                    return false;
+        }
+
         for (uint32_t i = 0; i < size; ++i)
             if (needed[i] != 0 && candidate.input_mask[i] == 0)
                 return false;
@@ -1283,7 +1392,9 @@ bool ExecutePrunedTransformPlan(
         plan.inverse
             ? (gf16 ? ops.ff16_ifft_butterfly4 : ops.ff8_ifft_butterfly4)
             : (gf16 ? ops.ff16_fft_butterfly4 : ops.ff8_fft_butterfly4),
-        gf16 ? ops.ff16_fft_butterfly2_out : ops.ff8_fft_butterfly2_out
+        gf16 ? ops.ff16_fft_butterfly2_out : ops.ff8_fft_butterfly2_out,
+        gf16 ? ops.ff16_ifft_butterfly2_xor
+             : ops.ff8_ifft_butterfly2_xor
     };
 
     size_t fused_index = 0;
@@ -1327,6 +1438,198 @@ bool ExecutePrunedTransformPlan(
     return true;
 }
 
+static bool ValidatePrunedOperationDescriptor(
+    const PrunedTransformOperation& operation,
+    uint32_t size,
+    uint16_t zero_multiplier_log)
+{
+    const uint8_t known_flags =
+        PrunedLiveX | PrunedLiveY | PrunedNeedX | PrunedNeedY |
+        PrunedWriteX | PrunedWriteY;
+    if (operation.x >= size || operation.y >= size ||
+        operation.x >= operation.y ||
+        operation.multiplier_log > zero_multiplier_log ||
+        (operation.flags & static_cast<uint8_t>(~known_flags)) != 0)
+        return false;
+    const bool live = 0 !=
+        (operation.flags & (PrunedLiveX | PrunedLiveY));
+    const bool needed = 0 !=
+        (operation.flags & (PrunedNeedX | PrunedNeedY));
+    const bool written = 0 !=
+        (operation.flags & (PrunedWriteX | PrunedWriteY));
+    if ((!live && (needed || written)) ||
+        ((operation.flags & PrunedWriteX) != 0 &&
+         (operation.flags & PrunedNeedX) == 0) ||
+        ((operation.flags & PrunedWriteY) != 0 &&
+         (operation.flags & PrunedNeedY) == 0))
+        return false;
+    return true;
+}
+
+bool ExecutePrunedInverseTransformPlanAccumulate(
+    const leopard::backend::Ops& ops,
+    uint64_t byte_count,
+    const PrunedTransformPlan& plan,
+    void** work,
+    void** accumulator)
+{
+    const bool gf16 = plan.zero_multiplier_log == 65535U;
+    if ((plan.zero_multiplier_log != 255U && !gf16) ||
+        !plan.inverse || plan.size < 2 || !IsPowerOfTwo(plan.size) ||
+        !work || !accumulator ||
+        plan.input_mask.size() != plan.size ||
+        plan.output_mask.size() != plan.size ||
+        plan.first_layer_multiplier_log > plan.zero_multiplier_log ||
+        plan.inverse_accumulation_flags.size() != (plan.size >> 1) ||
+        byte_count > static_cast<uint64_t>(SIZE_MAX) ||
+        (gf16 && (byte_count & 1U) != 0) ||
+        !ops.xor_memory || !ops.xor_memory_2to1)
+        return false;
+
+    const PrunedExecutionOps selected = {
+        gf16 ? ops.ff16_multiply : ops.ff8_multiply,
+        gf16 ? ops.ff16_multiply_add : ops.ff8_multiply_add,
+        gf16 ? ops.ff16_ifft_butterfly2 : ops.ff8_ifft_butterfly2,
+        gf16 ? ops.ff16_ifft_butterfly4 : ops.ff8_ifft_butterfly4,
+        gf16 ? ops.ff16_fft_butterfly2_out : ops.ff8_fft_butterfly2_out,
+        gf16 ? ops.ff16_ifft_butterfly2_xor
+             : ops.ff8_ifft_butterfly2_xor
+    };
+    if (!selected.multiply || !selected.multiply_add ||
+        !selected.butterfly || !selected.butterfly_four ||
+        !selected.inverse_butterfly_xor)
+        return false;
+
+    for (uint32_t i = 0; i < plan.size; ++i)
+    {
+        if (plan.input_mask[i] > 1 || plan.output_mask[i] > 1)
+            return false;
+        if (byte_count != 0 && (!work[i] || !accumulator[i]))
+            return false;
+    }
+    for (size_t i = 0; i < plan.zero_outputs.size(); ++i)
+        if (plan.zero_outputs[i] >= plan.size)
+            return false;
+    for (size_t i = 0; i < plan.operations.size(); ++i)
+        if (!ValidatePrunedOperationDescriptor(
+                plan.operations[i], plan.size,
+                plan.zero_multiplier_log))
+            return false;
+
+    const uint32_t root_distance = plan.size >> 1;
+    for (uint32_t i = 0; i < root_distance; ++i)
+    {
+        const PrunedTransformOperation operation = {
+            i,
+            i + root_distance,
+            plan.first_layer_multiplier_log,
+            plan.inverse_accumulation_flags[i]
+        };
+        if (!ValidatePrunedOperationDescriptor(
+                operation, plan.size, plan.zero_multiplier_log))
+            return false;
+    }
+    for (size_t i = 0; i < plan.operations.size(); ++i)
+    {
+        const PrunedTransformOperation& operation = plan.operations[i];
+        if (operation.y - operation.x != root_distance)
+            continue;
+        if (operation.multiplier_log !=
+                plan.first_layer_multiplier_log ||
+            operation.flags !=
+                plan.inverse_accumulation_flags[operation.x])
+            return false;
+    }
+
+    size_t previous_fused_end = 0;
+    for (size_t i = 0; i < plan.fused_four_starts.size(); ++i)
+    {
+        const size_t start = plan.fused_four_starts[i];
+        FusedFourMatch match;
+        if (start < previous_fused_end ||
+            !MatchFusedFour(plan.operations, start, true, match) ||
+            match.value0 >= plan.size || match.value1 >= plan.size ||
+            match.value2 >= plan.size || match.value3 >= plan.size ||
+            match.multiplier_log01 > plan.zero_multiplier_log ||
+            match.multiplier_log23 > plan.zero_multiplier_log ||
+            match.multiplier_log02 > plan.zero_multiplier_log)
+            return false;
+        previous_fused_end = start + 4;
+    }
+
+    // All rejection paths precede the first write, keeping the established
+    // materialize-then-XOR implementation a safe production fallback.
+    if (byte_count == 0)
+        return true;
+
+    size_t fused_index = 0;
+    for (size_t i = 0; i < plan.operations.size();)
+    {
+        if (fused_index < plan.fused_four_starts.size() &&
+            plan.fused_four_starts[fused_index] == i)
+        {
+            FusedFourMatch match;
+            const bool matched =
+                MatchFusedFour(plan.operations, i, true, match);
+            (void)matched;
+            if (match.value2 - match.value0 == root_distance)
+            {
+                // The first two rows form the root's quarter-distance layer;
+                // the final two rows are emitted read-only into accumulator
+                // after every independent quarter pair is ready.
+                const bool first = ExecutePrunedOperation(
+                    ops, selected, true, plan.zero_multiplier_log,
+                    byte_count, plan.operations[i],
+                    work[plan.operations[i].x],
+                    work[plan.operations[i].y]);
+                const bool second = ExecutePrunedOperation(
+                    ops, selected, true, plan.zero_multiplier_log,
+                    byte_count, plan.operations[i + 1],
+                    work[plan.operations[i + 1].x],
+                    work[plan.operations[i + 1].y]);
+                (void)first;
+                (void)second;
+            }
+            else
+            {
+                selected.butterfly_four(
+                    work[match.value0], work[match.value1],
+                    work[match.value2], work[match.value3],
+                    match.multiplier_log01, match.multiplier_log23,
+                    match.multiplier_log02, byte_count);
+            }
+            ++fused_index;
+            i += 4;
+            continue;
+        }
+
+        const PrunedTransformOperation& operation = plan.operations[i];
+        if (operation.y - operation.x != root_distance)
+        {
+            const bool executed = ExecutePrunedOperation(
+                ops, selected, true, plan.zero_multiplier_log,
+                byte_count, operation,
+                work[operation.x], work[operation.y]);
+            (void)executed;
+        }
+        ++i;
+    }
+    for (uint32_t i = 0; i < root_distance; ++i)
+    {
+        const PrunedTransformOperation operation = {
+            i,
+            i + root_distance,
+            plan.first_layer_multiplier_log,
+            plan.inverse_accumulation_flags[i]
+        };
+        ExecutePrunedInverseOperationAccumulate(
+            ops, selected, plan.zero_multiplier_log, byte_count, operation,
+            work[operation.x], work[operation.y],
+            accumulator[operation.x], accumulator[operation.y]);
+    }
+    return true;
+}
+
 bool ExecutePrunedForwardTransformPlanFromSources(
     const leopard::backend::Ops& ops,
     uint64_t byte_count,
@@ -1361,7 +1664,9 @@ bool ExecutePrunedForwardTransformPlanFromSources(
         gf16 ? ops.ff16_multiply_add : ops.ff8_multiply_add,
         gf16 ? ops.ff16_fft_butterfly2 : ops.ff8_fft_butterfly2,
         gf16 ? ops.ff16_fft_butterfly4 : ops.ff8_fft_butterfly4,
-        gf16 ? ops.ff16_fft_butterfly2_out : ops.ff8_fft_butterfly2_out
+        gf16 ? ops.ff16_fft_butterfly2_out : ops.ff8_fft_butterfly2_out,
+        gf16 ? ops.ff16_ifft_butterfly2_xor
+             : ops.ff8_ifft_butterfly2_xor
     };
     if (!selected.butterfly_out)
         return false;

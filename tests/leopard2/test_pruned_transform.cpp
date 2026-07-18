@@ -63,6 +63,8 @@ uint64_t plan_storage_bytes(
         plan.input_mask.capacity() * sizeof(plan.input_mask[0]) +
         plan.output_mask.capacity() * sizeof(plan.output_mask[0]) +
         plan.operations.capacity() * sizeof(plan.operations[0]) +
+        plan.inverse_accumulation_flags.capacity() *
+            sizeof(plan.inverse_accumulation_flags[0]) +
         plan.fused_four_starts.capacity() *
             sizeof(plan.fused_four_starts[0]) +
         plan.zero_outputs.capacity() * sizeof(plan.zero_outputs[0]);
@@ -337,6 +339,9 @@ void run_case(
         "pruned plan identity mismatch");
     require(plan.operations.size() <= plan.full_butterfly_count,
         "pruned plan exceeds padded transform");
+    require(plan.inverse_accumulation_flags.size() ==
+            (inverse ? size / 2U : 0U),
+        "pruned plan has an invalid inverse accumulation boundary");
     counts.fused_four_descriptors += plan.fused_four_starts.size();
     counts.execution_steps += plan.operations.size() -
         plan.fused_four_starts.size() * 3U;
@@ -374,6 +379,47 @@ void run_case(
     }
     ++counts.plans;
     ++counts.executions;
+
+    if (inverse)
+    {
+        std::vector<std::vector<uint8_t> > accumulating_work(initial);
+        std::vector<std::vector<uint8_t> > accumulator(
+            size, std::vector<uint8_t>(static_cast<size_t>(bytes), 0));
+        for (unsigned coordinate = 0; coordinate < size; ++coordinate)
+            for (uint64_t offset = 0; offset < bytes; ++offset)
+            {
+                accumulator[coordinate][static_cast<size_t>(offset)] =
+                    static_cast<uint8_t>(mix64(
+                        seed ^ UINT64_C(0x414343554d554c41) ^
+                        (static_cast<uint64_t>(coordinate) << 32) ^
+                        offset));
+            }
+        std::vector<std::vector<uint8_t> > expected_accumulator(accumulator);
+        for (unsigned coordinate = 0; coordinate < size; ++coordinate)
+            if (output_mask[coordinate])
+                for (uint64_t offset = 0; offset < bytes; ++offset)
+                    expected_accumulator[coordinate][static_cast<size_t>(
+                        offset)] ^= expected[coordinate][static_cast<size_t>(
+                            offset)];
+        std::vector<void*> accumulating_pointers = pointers(accumulating_work);
+        std::vector<void*> accumulator_pointers = pointers(accumulator);
+        require(
+            leopard2_internal::
+                ExecutePrunedInverseTransformPlanAccumulate(
+                    ops, bytes, plan, accumulating_pointers.data(),
+                    accumulator_pointers.data()),
+            "pruned inverse accumulation failed");
+        if (accumulator != expected_accumulator)
+        {
+            std::ostringstream stream;
+            stream << "pruned inverse accumulation mismatch backend="
+                   << ops.name << " size=" << size
+                   << " shift=" << shift << " bytes=" << bytes;
+            throw std::runtime_error(stream.str());
+        }
+        counts.compared_bytes += bytes * size;
+        ++counts.executions;
+    }
 
     bool complete_input = !inverse;
     for (unsigned coordinate = 0; coordinate < size; ++coordinate)
@@ -890,6 +936,8 @@ bool same_plan(
         left.output_mask != right.output_mask ||
         left.zero_outputs != right.zero_outputs ||
         left.operations.size() != right.operations.size() ||
+        left.inverse_accumulation_flags !=
+            right.inverse_accumulation_flags ||
         left.fused_four_starts != right.fused_four_starts ||
         left.full_butterfly_count != right.full_butterfly_count ||
         left.one_output_butterflies != right.one_output_butterflies ||
@@ -927,6 +975,7 @@ void test_invalid_plan_construction()
     plan.output_mask.push_back(8);
     leopard2_internal::PrunedTransformOperation operation = { 4, 5, 6, 7 };
     plan.operations.push_back(operation);
+    plan.inverse_accumulation_flags.push_back(operation.flags);
     plan.fused_four_starts.push_back(1);
     plan.zero_outputs.push_back(3);
     plan.full_butterfly_count = 11;
@@ -975,6 +1024,72 @@ void test_invalid_plan_construction()
             sparse_retained, sizeof(sparse_retained),
             invalid_log_provider, sparse_workspace, sparse_stats),
         "invalid sparse multiplier was accepted");
+}
+
+void test_accumulating_rejection_is_atomic(
+    const leopard::backend::Ops& ops)
+{
+    const unsigned size = 8;
+    const uint64_t bytes = 17;
+    std::vector<uint8_t> input(size, 0);
+    std::vector<uint8_t> output(size, 1);
+    input[0] = input[3] = input[7] = 1;
+    leopard2_internal::PrunedTransformPlan plan;
+    require(GF8::prepare(size, 0, true, input.data(), output.data(), plan),
+        "atomic rejection plan construction failed");
+    require(!plan.inverse_accumulation_flags.empty(),
+        "atomic rejection plan omitted inverse boundary");
+
+    const std::vector<uint8_t> live(size, 1);
+    const auto require_atomic_rejection = [&ops, &live](
+        const leopard2_internal::PrunedTransformPlan& broken,
+        uint64_t seed,
+        const std::string& label)
+    {
+        std::vector<std::vector<uint8_t> > work = make_input(
+            size, bytes, live, seed);
+        std::vector<std::vector<uint8_t> > accumulator = make_input(
+            size, bytes, live, seed ^ UINT64_C(0x414343554d554c41));
+        const std::vector<std::vector<uint8_t> > work_snapshot(work);
+        const std::vector<std::vector<uint8_t> > accumulator_snapshot(
+            accumulator);
+        std::vector<void*> work_pointers = pointers(work);
+        std::vector<void*> accumulator_pointers = pointers(accumulator);
+        require(!leopard2_internal::
+                ExecutePrunedInverseTransformPlanAccumulate(
+                    ops, bytes, broken, work_pointers.data(),
+                    accumulator_pointers.data()),
+            label + " was accepted");
+        require(work == work_snapshot &&
+                accumulator == accumulator_snapshot,
+            label + " changed caller storage before rejection");
+    };
+
+    leopard2_internal::PrunedTransformPlan broken_boundary(plan);
+    broken_boundary.inverse_accumulation_flags[0] = 0xff;
+    require_atomic_rejection(
+        broken_boundary, UINT64_C(0x41544f4d49434641),
+        "malformed inverse accumulation boundary");
+
+    require(!plan.operations.empty(),
+        "atomic rejection plan omitted retained operations");
+    leopard2_internal::PrunedTransformPlan broken_operation(plan);
+    broken_operation.operations[0].x = size;
+    require_atomic_rejection(
+        broken_operation, UINT64_C(0x41544f4d49434f50),
+        "out-of-range inverse operation");
+
+    leopard2_internal::PrunedTransformPlan fused_plan;
+    require(GF8::prepare(
+            size, 0, true, live.data(), live.data(), fused_plan),
+        "atomic fused rejection plan construction failed");
+    require(!fused_plan.fused_four_starts.empty(),
+        "atomic rejection plan omitted fused descriptors");
+    fused_plan.fused_four_starts[0] =
+        static_cast<uint32_t>(fused_plan.operations.size());
+    require_atomic_rejection(
+        fused_plan, UINT64_C(0x41544f4d49434655),
+        "out-of-range fused descriptor");
 }
 
 void test_metrics()
@@ -1174,6 +1289,58 @@ void test_shared_source_plan_concurrency(const leopard::backend::Ops& ops)
         "concurrent immutable-source execution changed coefficients");
 }
 
+template<class Field>
+void test_shared_accumulating_plan_concurrency(
+    const leopard::backend::Ops& ops)
+{
+    const unsigned size = 64;
+    const uint64_t bytes = Field::symbol_bytes() == 1 ? 129 : 130;
+    const std::vector<std::vector<uint8_t> > masks = make_masks(size);
+    const std::vector<uint8_t>& input = masks[3];
+    const std::vector<uint8_t> output(size, 1);
+    leopard2_internal::PrunedTransformPlan plan;
+    require(Field::prepare(
+            size, 128, true, input.data(), output.data(), plan),
+        "concurrent accumulating plan construction failed");
+
+    const std::vector<std::vector<uint8_t> > initial = make_input(
+        size, bytes, input, UINT64_C(0x414343554d504c4e));
+    std::vector<std::vector<uint8_t> > expected(initial);
+    std::vector<void*> expected_pointers = pointers(expected);
+    Field::full(ops, true, bytes, size, 128, expected_pointers.data());
+
+    std::atomic<bool> failed(false);
+    std::vector<std::thread> threads;
+    for (unsigned thread = 0; thread < 8; ++thread)
+    {
+        threads.push_back(std::thread([&, thread]() {
+            for (unsigned iteration = 0; iteration < 16; ++iteration)
+            {
+                std::vector<std::vector<uint8_t> > work(initial);
+                std::vector<std::vector<uint8_t> > accumulator(
+                    size, std::vector<uint8_t>(static_cast<size_t>(bytes), 0));
+                std::vector<void*> work_pointers = pointers(work);
+                std::vector<void*> accumulator_pointers = pointers(
+                    accumulator);
+                if (!leopard2_internal::
+                        ExecutePrunedInverseTransformPlanAccumulate(
+                            ops, bytes, plan, work_pointers.data(),
+                            accumulator_pointers.data()) ||
+                    accumulator != expected)
+                {
+                    (void)thread;
+                    failed.store(true, std::memory_order_relaxed);
+                    return;
+                }
+            }
+        }));
+    }
+    for (size_t i = 0; i < threads.size(); ++i)
+        threads[i].join();
+    require(!failed.load(std::memory_order_relaxed),
+        "shared immutable inverse plan failed accumulating execution");
+}
+
 } // namespace
 
 int main()
@@ -1233,8 +1400,11 @@ int main()
             test_profile_masks<GF16>(*ops, 1000, 200, 130, counts);
             test_profile_masks<GF8>(*ops, 17, 100, 129, counts);
             test_profile_masks<GF16>(*ops, 257, 700, 66, counts);
+            test_accumulating_rejection_is_atomic(*ops);
             test_shared_plan_concurrency(*ops);
             test_shared_source_plan_concurrency(*ops);
+            test_shared_accumulating_plan_concurrency<GF8>(*ops);
+            test_shared_accumulating_plan_concurrency<GF16>(*ops);
             ++counts.backends;
         }
         require(counts.backends != 0, "no backend was available");
