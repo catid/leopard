@@ -2091,6 +2091,44 @@ void test_legacy_negative_contract(Counts* counts)
         Leopard_TooMuchData, "legacy encode overflow counts");
     counts->legacy_checks += 12;
 
+    // Read-only input shards may alias.  Keep all work shards distinct from
+    // both the inputs and one another; invoking an unsupported work/input or
+    // work/work alias would itself be undefined behavior and is not a valid
+    // negative API test.
+    uint8_t duplicate_source[64];
+    uint8_t distinct_source[8][64];
+    uint8_t alias_encode_storage[16][64];
+    uint8_t distinct_encode_storage[16][64];
+    for (size_t i = 0; i < sizeof(duplicate_source); ++i)
+        duplicate_source[i] = static_cast<uint8_t>(i * 29u + 7u);
+    for (unsigned i = 0; i < 8; ++i)
+        memcpy(distinct_source[i], duplicate_source, sizeof(duplicate_source));
+    const void* alias_original[8];
+    const void* distinct_original[8];
+    void* alias_encode_work[16];
+    void* distinct_encode_work[16];
+    for (unsigned i = 0; i < 8; ++i)
+    {
+        alias_original[i] = duplicate_source;
+        distinct_original[i] = distinct_source[i];
+    }
+    for (unsigned i = 0; i < 16; ++i)
+    {
+        alias_encode_work[i] = alias_encode_storage[i];
+        distinct_encode_work[i] = distinct_encode_storage[i];
+    }
+    require_legacy_result(leo_encode(64, 8, 8, 16, alias_original,
+        alias_encode_work), Leopard_Success,
+        "legacy encode read-only input alias");
+    require_legacy_result(leo_encode(64, 8, 8, 16, distinct_original,
+        distinct_encode_work), Leopard_Success,
+        "legacy encode distinct-input control");
+    for (unsigned i = 0; i < 8; ++i)
+        require(memcmp(alias_encode_storage[i],
+                    distinct_encode_storage[i], 64) == 0,
+            "legacy read-only input alias changed parity");
+    counts->legacy_checks += 3;
+
     require(leo_decode_work_count(3, 2) == 8,
         "legacy decode work-count changed");
     require(leo_decode_work_count(1, 1) == 1 &&
@@ -2137,6 +2175,27 @@ void test_legacy_negative_contract(Counts* counts)
         std::numeric_limits<unsigned>::max(), 2, 0, NULL, NULL, NULL),
         Leopard_TooMuchData, "legacy decode overflow counts");
 
+    const unsigned missing_alias_original = 3;
+    const void* alias_decode_original[8];
+    const void* alias_decode_recovery[8];
+    uint8_t alias_decode_storage[16][64];
+    void* alias_decode_work[16];
+    for (unsigned i = 0; i < 8; ++i)
+    {
+        alias_decode_original[i] = i == missing_alias_original
+            ? NULL : duplicate_source;
+        alias_decode_recovery[i] = alias_encode_storage[i];
+    }
+    for (unsigned i = 0; i < 16; ++i)
+        alias_decode_work[i] = alias_decode_storage[i];
+    require_legacy_result(leo_decode(64, 8, 8, 16,
+        alias_decode_original, alias_decode_recovery, alias_decode_work),
+        Leopard_Success, "legacy decode read-only input alias");
+    require(memcmp(alias_decode_storage[missing_alias_original],
+                duplicate_source, sizeof(duplicate_source)) == 0,
+        "legacy read-only input alias changed recovered data");
+    counts->legacy_checks += 2;
+
     uint8_t single_source[64];
     uint8_t single_restored[64];
     for (size_t i = 0; i < sizeof(single_source); ++i)
@@ -2154,6 +2213,8 @@ void test_legacy_negative_contract(Counts* counts)
     memset(single_restored, 0xa5, sizeof(single_restored));
     const void* missing_single_original[1] = { NULL };
     const void* received_single_recovery[1] = { single_source };
+    // A missing original has no input range, so its reserved storage may be
+    // supplied as one disjoint work shard and populated directly.
     require_legacy_result(leo_decode(64, 1, 1, 1,
         missing_single_original, received_single_recovery, single_work),
         Leopard_Success, "legacy one-original recovery decode");

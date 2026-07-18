@@ -11,6 +11,13 @@ standards-valid consecutive `omp parallel for` loops over the same array.
 No Leopard data race was confirmed.  The GCC report is a libgomp
 happens-before false positive:
 
+This conclusion applies to valid legacy API calls under the nonaliasing
+contract in `leopard.h`: writable work shards are pairwise disjoint and do not
+overlap input shards or pointer-array storage.  Aliasing those ranges can create
+real concurrent accesses and also violates `memcpy`/restrict preconditions; it
+is undefined caller behavior and is outside this audit.  Read-only input shards
+may overlap one another because the encoder and decoder do not write them.
+
 - `LEO_OPENMP_PARALLEL_FOR` expands to `omp parallel for` without `nowait`.
   The implicit barrier completes before the calling thread starts the next
   region or advances the transform-stage loop.

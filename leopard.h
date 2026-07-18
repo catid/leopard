@@ -168,12 +168,23 @@ LEO_EXPORT unsigned leo_encode_work_count(
 
     As with standard C memory functions, the caller must provide accessible
     pointer arrays containing the stated number of pointer objects and valid
-    storage for every shard the operation accesses.  Each such shard range
-    must contain buffer_bytes bytes without wrapping the address space.
+    storage for every shard the operation accesses.  Each original_data entry
+    must point to a readable buffer_bytes-byte range.  Each work_data entry
+    must point to a writable buffer_bytes-byte range.  No shard range may wrap
+    the address space.  The work-data ranges must be pairwise disjoint, and
+    each must be disjoint from every original-data range and from the storage
+    occupied by the original_data and work_data pointer arrays.  Thus
+    leo_encode() is not an in-place API: even exact equality between a work
+    pointer and an original pointer is not supported.  Read-only original-data
+    ranges may overlap one another; they still represent distinct systematic
+    coordinates.
+
     Leopard rejects a top-level pointer-array span that numerically wraps
     uintptr_t, but cannot prove that an otherwise representable pointer names
-    an accessible object of sufficient size.  Violating these storage
-    preconditions is undefined behavior.
+    an accessible object of sufficient size.  The legacy API also does not
+    inspect shard ranges for overlap.  Violating any storage or nonaliasing
+    precondition is undefined behavior; it is not guaranteed to return an
+    error.
 
     Let buffer_bytes = The number of bytes in each buffer:
 
@@ -235,12 +246,30 @@ LEO_EXPORT unsigned leo_decode_work_count(
 
     As with standard C memory functions, the caller must provide accessible
     pointer arrays containing the stated number of pointer objects and valid
-    storage for every non-NULL input shard and every work shard the operation
-    accesses.  Each such shard range must contain buffer_bytes bytes without
-    wrapping the address space.  Leopard rejects a top-level pointer-array span
-    that numerically wraps uintptr_t, but cannot prove that an otherwise
-    representable pointer names an accessible object of sufficient size.
-    Violating these storage preconditions is undefined behavior.
+    storage for every shard the operation accesses.  Each non-NULL
+    original_data and recovery_data entry must point to a readable
+    buffer_bytes-byte range.  Each work_data entry must point to a writable
+    buffer_bytes-byte range.  No shard range may wrap the address space.  The
+    work-data ranges must be pairwise disjoint, and each must be disjoint from
+    every non-NULL input range and from the storage occupied by the
+    original_data, recovery_data, and work_data pointer arrays.  Thus a work
+    buffer may not reuse any shard also supplied as a non-NULL input, even at
+    exactly the same address.  Read-only input ranges may overlap one another;
+    they still represent distinct code coordinates.
+
+    On success, a missing original at index i is recovered into work_data[i].
+    The caller may therefore restore directly into storage reserved for that
+    missing shard: pass NULL in original_data[i] and use its storage as
+    work_data[i].  That range must appear in exactly one work_data entry, and
+    the usual work-data disjointness rules still apply.  In particular, this
+    permission does not make no-loss decoding in-place.
+
+    Leopard rejects a top-level pointer-array span that numerically wraps
+    uintptr_t, but cannot prove that an otherwise representable pointer names
+    an accessible object of sufficient size.  The legacy API also does not
+    inspect shard ranges for overlap.  Violating any storage or nonaliasing
+    precondition is undefined behavior; it is not guaranteed to return an
+    error.
 
     The sum of recovery_count + the number of non-NULL original data must be at
     least original_count in order to perform recovery.
