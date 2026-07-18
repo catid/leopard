@@ -1150,7 +1150,7 @@ def validate_snapshot_identity(value: object) -> dict[str, Any]:
     compiler_name = Path(compiler["path"]).name
     nm_name = Path(nm["path"]).name
     require(system_path(Path(compiler["path"])) and system_path(Path(nm["path"])) and
-            re.fullmatch(r"(?:[^/]+-)?(?:g\+\+|c\+\+|clang\+\+)(?:-\d+)?",
+            re.fullmatch(r"(?:[^/]+-)?(?:g\+\+|c\+\+|clang(?:\+\+)?)(?:-\d+)?",
                          compiler_name) is not None and
             re.fullmatch(r"(?:[^/]+-)?nm(?:-\d+)?", nm_name) is not None,
             "retained compiler/nm are outside system roots")
