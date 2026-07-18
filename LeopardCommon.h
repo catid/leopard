@@ -323,6 +323,15 @@ namespace leopard {
 // Initialize CPU architecture flags
 void InitializeCPUArch();
 
+// Pure register-level AVX2 predicate used by runtime detection and tests.
+// AVX2 instructions are safe only when both the CPU and the operating system
+// have enabled the XMM/YMM extended state.
+bool IsAVX2Supported(
+    uint32_t maximum_basic_leaf,
+    uint32_t leaf1_ecx,
+    uint32_t leaf7_ebx,
+    uint64_t xcr0);
+
 
 #if defined(LEO_TRY_NEON)
 # if defined(IOS) && defined(__ARM_NEON__)
@@ -368,10 +377,18 @@ LEO_FORCE_INLINE unsigned LastNonzeroBit32(unsigned x)
 #endif
 }
 
-// Returns next power of two at or above given value
+// Returns next power of two at or above the given value, or zero when the
+// input is zero or the result is not representable as an unsigned value.
 LEO_FORCE_INLINE unsigned NextPow2(unsigned n)
 {
-    return 2UL << LastNonzeroBit32(n - 1);
+    if (n == 0)
+        return 0;
+    if (n == 1)
+        return 1;
+    const unsigned highest = LastNonzeroBit32(n - 1);
+    if (highest >= 31)
+        return 0;
+    return 1U << (highest + 1);
 }
 
 

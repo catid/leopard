@@ -430,7 +430,11 @@ public:
                     strerror(errno));
             }
         }
-        for (size_t group_index = 0; group_index < Groups.size(); ++group_index)
+        // Enable the primary cycles/instructions/reference group last.  End()
+        // disables that group first, so its counter window brackets the same
+        // payload interval used for wall-clock frequency and IPC calculations
+        // instead of including ioctls for the auxiliary groups.
+        for (size_t group_index = Groups.size(); group_index-- > 0;)
         {
             CounterGroup& group = Groups[group_index];
             if (group.event_indices.empty() ||

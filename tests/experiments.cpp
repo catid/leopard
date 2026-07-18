@@ -249,7 +249,11 @@ static void formal_derivative(ffe_t* cos, const unsigned size)
 //------------------------------------------------------------------------------
 // Fast Fourier Transform
 
-static ffe_t skewVec[kModulus]; // twisted factors used in FFT
+// Reserve one defined sentinel element so the finite initialization smoke test
+// catches the historical one-extra iteration even without a sanitizer build.
+static const ffe_t kSkewGuard = static_cast<ffe_t>(0xa55a);
+static ffe_t SkewStorage[kFieldSize] = {};
+static ffe_t* const skewVec = SkewStorage; // first kModulus are FFT factors
 
 static LEO_FORCE_INLINE void ifft_butterfly(ffe_t& a, ffe_t& b, ffe_t skew)
 {
@@ -337,7 +341,7 @@ static void InitFieldOperations()
         }
     }
 
-    for (unsigned i = 0; i < kFieldSize; ++i)
+    for (unsigned i = 0; i < kModulus; ++i)
         skewVec[i] = GFLog[skewVec[i]];
 
 #ifdef LEO_EXPERIMENT_EXTRA_MULS
@@ -574,7 +578,7 @@ void test(unsigned original_count, unsigned recovery_count, unsigned seed)
         {
             if (data[i] != codeword[i])
             {
-                printf("Decoding Error with seed = %d!\n", seed);
+                printf("Decoding Error with seed = %u!\n", seed);
                 LEO_DEBUG_BREAK;
                 return;
             }
@@ -590,11 +594,30 @@ void test(unsigned original_count, unsigned recovery_count, unsigned seed)
 
 int main(int argc, char **argv)
 {
+    const bool init_only = argc == 2 && strcmp(argv[1], "--init-only") == 0;
+    if (argc != 1 && !init_only)
+    {
+        fprintf(stderr, "Usage: %s [--init-only]\n", argv[0]);
+        return 2;
+    }
+
     // Fill GFLog table and GFExp table
     InitField();
 
     // Compute factors used in erasure decoder
+    SkewStorage[kModulus] = kSkewGuard;
     InitFieldOperations();
+    if (SkewStorage[kModulus] != kSkewGuard)
+    {
+        fprintf(stderr, "Experiment skew initialization overran its table\n");
+        return 1;
+    }
+
+    if (init_only)
+    {
+        printf("Experiment field initialization passed\n");
+        return 0;
+    }
 
     unsigned seed = (unsigned)time(NULL);
     for (;;)

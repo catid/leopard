@@ -5,7 +5,8 @@ The inspector accepts either LeopardFF8Xor.cpp.o or the static Leopard archive.
 It recognizes every coefficient-specialized whole-buffer kernel and reports
 instruction shape, code size, calls, stack/vector spills, scaled stack indexing,
 and instructions that would violate the table-free XOR experiment.  `--strict`
-turns hard hot-loop regressions into a nonzero exit status.
+turns structural hot-loop regressions into a nonzero exit status;
+`--fail-on-spills` optionally enforces compiler code-generation quality too.
 """
 
 from __future__ import print_function
@@ -21,7 +22,7 @@ import sys
 from pathlib import Path
 
 
-SCHEMA = "leopard.ff8xor.assembly-census.v1"
+SCHEMA = "leopard.ff8xor.assembly-census.v2"
 BASE_FAMILIES = ("multiply", "fft", "ifft")
 AVX512_FAMILIES = (
     "multiply_avx512vl", "fft_avx512vl", "ifft_avx512vl",
@@ -38,15 +39,11 @@ BUTTERFLY_NAME = re.compile(
 AVX_MULTIPLY_NAME = re.compile(r"avx512::Multiply(256|512)<(\d+)u?>")
 AVX_BUTTERFLY_NAME = re.compile(
     r"avx512::Butterfly(256|512)<(\d+)u?,\s*(false|true)>")
-STACK_MEMORY = re.compile(r"\([^)]*%(?:r|e)?(?:sp|bp)[^)]*\)")
-SCALED_MEMORY = re.compile(r"\([^,]+,[^,]+,[1248]\)")
-SCALED_STACK_MEMORY = re.compile(
-    r"\([^)]*%(?:r|e)?(?:sp|bp)[^,]*,[^,]+,[1248]\)")
 VECTOR_REGISTER = re.compile(r"%(?:[xyz]mm\d+|mm\d+)")
 
 XOR2_MNEMONICS = {
     "xor", "xorb", "xorw", "xorl", "xorq", "pxor", "vpxor",
-    "vpxord", "vpxorq",
+    "vpxord", "vpxorq", "xorps", "xorpd", "vxorps", "vxorpd",
 }
 TERNARY_MNEMONICS = {"vpternlogd", "vpternlogq"}
 FORBIDDEN_PREFIXES = (
@@ -125,6 +122,80 @@ def split_operands(text):
     return operands
 
 
+def memory_address_parts(operand):
+    """Return AT&T base/index/scale parts for a real memory operand.
+
+    Demangled direct-branch targets contain parentheses too, for example a
+    function signature ending in ``(void*, unsigned long)``.  Requiring a
+    register base or index prevents those annotations from being mistaken for
+    payload memory references while still accepting index-only SIB operands.
+    """
+    for match in re.finditer(r"\(([^()]*)\)", operand):
+        parts = [part.strip() for part in match.group(1).split(",")]
+        if not parts or len(parts) > 3:
+            continue
+        base = parts[0]
+        index = parts[1] if len(parts) >= 2 else ""
+        if base and not re.match(r"^%[A-Za-z0-9]+$", base):
+            continue
+        if index and not re.match(r"^%[A-Za-z0-9]+$", index):
+            continue
+        if not base and not index:
+            continue
+        scale = 1
+        if len(parts) >= 3:
+            if not index:
+                continue
+            try:
+                scale = int(parts[2], 0)
+            except ValueError:
+                continue
+            if scale not in (1, 2, 4, 8):
+                continue
+        return base, index, scale
+    return None
+
+
+def canonical_gpr(register):
+    """Return the 64-bit family name for an x86 GPR spelling."""
+    register = register.strip().lower()
+    legacy = {
+        "%rax": "%rax", "%eax": "%rax", "%ax": "%rax",
+        "%al": "%rax", "%ah": "%rax",
+        "%rbx": "%rbx", "%ebx": "%rbx", "%bx": "%rbx",
+        "%bl": "%rbx", "%bh": "%rbx",
+        "%rcx": "%rcx", "%ecx": "%rcx", "%cx": "%rcx",
+        "%cl": "%rcx", "%ch": "%rcx",
+        "%rdx": "%rdx", "%edx": "%rdx", "%dx": "%rdx",
+        "%dl": "%rdx", "%dh": "%rdx",
+        "%rsi": "%rsi", "%esi": "%rsi", "%si": "%rsi",
+        "%sil": "%rsi",
+        "%rdi": "%rdi", "%edi": "%rdi", "%di": "%rdi",
+        "%dil": "%rdi",
+        "%rbp": "%rbp", "%ebp": "%rbp", "%bp": "%rbp",
+        "%bpl": "%rbp",
+        "%rsp": "%rsp", "%esp": "%rsp", "%sp": "%rsp",
+        "%spl": "%rsp",
+    }
+    result = legacy.get(register)
+    if result:
+        return result
+    match = re.match(r"^%r(8|9|1[0-5])(?:d|w|b)?$", register)
+    return ("%s%s" % ("%r", match.group(1))) if match else None
+
+
+def memory_address_registers(operand):
+    parts = memory_address_parts(operand)
+    if parts is None:
+        return None, None
+    return canonical_gpr(parts[0]), canonical_gpr(parts[1])
+
+
+def is_stack_memory(operand, frame_pointer_active=False):
+    base, unused_index = memory_address_registers(operand)
+    return base == "%rsp" or (frame_pointer_active and base == "%rbp")
+
+
 def family_and_coefficient(name):
     match = AVX_MULTIPLY_NAME.search(name)
     if match:
@@ -153,8 +224,8 @@ def direct_target(operand_text):
     return int(match.group(1), 16) if match else None
 
 
-def loop_instruction_addresses(instructions):
-    """Find instructions in cyclic CFG components, not address intervals.
+def cyclic_instruction_components(instructions):
+    """Return instruction-address sets for cyclic CFG components.
 
     Compilers commonly place cold dispatch blocks inside the address range of
     a backwards branch.  Treating that whole range as a loop falsely labels
@@ -162,7 +233,7 @@ def loop_instruction_addresses(instructions):
     direct-branch CFG and identify its cyclic strongly connected components.
     """
     if not instructions:
-        return set()
+        return []
     addresses = [item[0] for item in instructions]
     address_set = set(addresses)
     starts = {addresses[0]}
@@ -205,7 +276,7 @@ def loop_instruction_addresses(instructions):
     lowlink = [0] * len(blocks)
     stack = []
     on_stack = [False] * len(blocks)
-    cyclic_blocks = set()
+    cyclic_components = []
 
     def visit(vertex):
         indices[vertex] = index_counter[0]
@@ -228,14 +299,298 @@ def loop_instruction_addresses(instructions):
                 if member == vertex:
                     break
             if len(component) > 1 or vertex in edges[vertex]:
-                cyclic_blocks.update(component)
+                cyclic_components.append(set(
+                    address for block_index in component
+                    for address, unused_mnemonic, unused_operands
+                    in blocks[block_index]))
 
     for vertex in range(len(blocks)):
         if indices[vertex] < 0:
             visit(vertex)
 
-    return set(address for block_index in cyclic_blocks
-               for address, unused_mnemonic, unused_operands in blocks[block_index])
+    return cyclic_components
+
+
+def loop_instruction_addresses(instructions):
+    return set(address for component in
+               cyclic_instruction_components(instructions)
+               for address in component)
+
+
+def frame_pointer_states(instructions):
+    """Return whether %rbp is an established frame base at each address."""
+    states = {}
+    active = False
+    for address, mnemonic, operand_text in instructions:
+        states[address] = active
+        mnemonic = mnemonic.lower()
+        operands = split_operands(operand_text)
+        destination = operands[-1] if operands else ""
+        destination_gpr = canonical_gpr(destination)
+        source_gpr = canonical_gpr(operands[0]) if operands else None
+        if destination_gpr == "%rbp":
+            frame_source = (memory_address_registers(operands[0])
+                            if operands else (None, None))
+            if ((mnemonic.startswith("mov") and source_gpr == "%rsp") or
+                    (mnemonic.startswith("lea") and
+                     frame_source[0] == "%rsp")):
+                active = True
+            elif mnemonic.startswith(("pop", "leave")):
+                active = False
+            elif not mnemonic.startswith("push"):
+                active = False
+        elif mnemonic.startswith("leave"):
+            active = False
+    return states
+
+
+def instruction_successors(instructions):
+    """Build the direct instruction-level CFG used by loop taint analysis."""
+    successors = {address: set() for address, unused_mnemonic,
+                  unused_operands in instructions}
+    addresses = [item[0] for item in instructions]
+    address_set = set(addresses)
+    for index, (address, mnemonic, operand_text) in enumerate(instructions):
+        mnemonic = mnemonic.lower()
+        target = direct_target(operand_text) if mnemonic.startswith("j") else None
+        if target in address_set:
+            successors[address].add(target)
+        terminal = mnemonic in ("jmp", "jmpq") or mnemonic.startswith("ret")
+        if not terminal and index + 1 < len(instructions):
+            successors[address].add(addresses[index + 1])
+    return successors
+
+
+def static_address_transfer(mnemonic, operands, tainted):
+    """Transfer RIP-derived static-address provenance through one instruction.
+
+    This is a may-analysis: read-only or unfamiliar instructions retain the
+    incoming set.  Provenance is removed only for an explicit overwrite whose
+    result is known not to depend on a static address.  That conservative
+    default prevents comparisons, tests, pushes, and other flag/control
+    instructions from hiding a later static-table read.
+    """
+    result = set(tainted)
+    mnemonic = mnemonic.lower()
+    destination = operands[-1] if operands else ""
+    destination_gpr = canonical_gpr(destination)
+    source_operands = operands[:-1]
+    source_gprs = set(filter(None, (
+        canonical_gpr(operand) for operand in source_operands)))
+
+    def source_depends_on_static():
+        if source_gprs.intersection(tainted):
+            return True
+        for operand in source_operands:
+            base, index = memory_address_registers(operand)
+            if base in tainted or index in tainted:
+                return True
+        return False
+
+    if not destination_gpr:
+        return result
+
+    if mnemonic.startswith("lea") and operands:
+        if "%rip" in operands[0]:
+            result.add(destination_gpr)
+        else:
+            base, index = memory_address_registers(operands[0])
+            if base in tainted or index in tainted:
+                result.add(destination_gpr)
+            else:
+                result.discard(destination_gpr)
+    elif mnemonic.startswith("mov"):
+        # A full-width RIP load may fetch a stored static pointer.  Do not give
+        # the same provenance to 8/16/32-bit scalar globals such as feature
+        # flags or enum selectors merely because their storage is static.
+        rip_pointer_load = (
+            destination.lower() == destination_gpr and
+            any("%rip" in operand and
+                memory_address_parts(operand) is not None
+                for operand in source_operands))
+        if source_depends_on_static() or rip_pointer_load:
+            result.add(destination_gpr)
+        else:
+            result.discard(destination_gpr)
+    elif mnemonic.startswith("cmov"):
+        # A conditional move may retain the old destination or take its source.
+        if destination_gpr in tainted or source_depends_on_static():
+            result.add(destination_gpr)
+        else:
+            result.discard(destination_gpr)
+    elif mnemonic.startswith("xchg") and len(operands) == 2:
+        left = canonical_gpr(operands[0])
+        right = canonical_gpr(operands[1])
+        if left and right:
+            left_static = left in tainted
+            right_static = right in tainted
+            result.discard(left)
+            result.discard(right)
+            if right_static:
+                result.add(left)
+            if left_static:
+                result.add(right)
+    elif (mnemonic in ("pop", "popq", "popl", "popw") or
+          mnemonic.startswith("set")):
+        # These overwrite the explicit destination with a stack value or a
+        # boolean.  Stack-slot provenance is outside this register analysis.
+        result.discard(destination_gpr)
+    elif mnemonic.startswith((
+            "add", "adc", "sub", "sbb", "and", "or", "xor",
+            "shl", "shr", "sal", "sar", "rol", "ror", "inc",
+            "dec", "neg", "not", "imul")):
+        if (mnemonic.startswith(("xor", "sub")) and
+                len(source_gprs) == 1 and
+                destination_gpr in source_gprs):
+            result.discard(destination_gpr)
+        elif (destination_gpr in tainted or
+              source_depends_on_static()):
+            result.add(destination_gpr)
+        else:
+            result.discard(destination_gpr)
+    return result
+
+
+def static_address_entry_states(instructions):
+    """Return RIP-derived static-address provenance at each instruction.
+
+    A may-analysis over the complete direct CFG is required because a compiler
+    may merge a static-table path and a payload-pointer path before one loop.
+    A lexical scan can incorrectly forget the static path when the payload
+    overwrite happens to appear later in disassembly order.
+    """
+    if not instructions:
+        return {}
+    by_address = {item[0]: item for item in instructions}
+    successors = instruction_successors(instructions)
+    predecessors = {address: set() for address in by_address}
+    for address, targets in successors.items():
+        for target in targets:
+            predecessors[target].add(address)
+
+    entry = {address: set() for address in by_address}
+    outgoing = {address: set() for address in by_address}
+    worklist = list(item[0] for item in instructions)
+    queued = set(worklist)
+    while worklist:
+        address = worklist.pop(0)
+        queued.discard(address)
+        incoming = set()
+        for predecessor in predecessors[address]:
+            incoming.update(outgoing[predecessor])
+        unused_address, mnemonic, operand_text = by_address[address]
+        transferred = static_address_transfer(
+            mnemonic, split_operands(operand_text), incoming)
+        if incoming == entry[address] and transferred == outgoing[address]:
+            continue
+        entry[address] = incoming
+        outgoing[address] = transferred
+        for successor in successors.get(address, ()):
+            if successor not in queued:
+                worklist.append(successor)
+                queued.add(successor)
+    return entry
+
+
+def loaded_data_transfer(mnemonic, operands, tainted, frame_pointer_active):
+    """Transfer function for scalar values loaded from runtime memory."""
+    result = set(tainted)
+    mnemonic = mnemonic.lower()
+    destination = operands[-1] if operands else ""
+    destination_gpr = canonical_gpr(destination)
+    source_gpr = canonical_gpr(operands[0]) if operands else None
+    source_memory_operands = [
+        operand for operand in operands[:-1]
+        if memory_address_parts(operand) is not None]
+    if destination_gpr and mnemonic.startswith("mov"):
+        if source_memory_operands:
+            if any(not is_stack_memory(operand, frame_pointer_active)
+                   for operand in source_memory_operands):
+                result.add(destination_gpr)
+            else:
+                # Stack reloads normally hold loop bounds or payload pointers,
+                # not gate descriptors.  Tracking tainted spill slots would be
+                # a separate, more expensive alias analysis.
+                result.discard(destination_gpr)
+        elif source_gpr in tainted:
+            result.add(destination_gpr)
+        else:
+            result.discard(destination_gpr)
+    elif destination_gpr and mnemonic.startswith("lea"):
+        source_base, source_index = (
+            memory_address_registers(operands[0])
+            if operands else (None, None))
+        if source_base in tainted or source_index in tainted:
+            result.add(destination_gpr)
+        else:
+            result.discard(destination_gpr)
+    elif destination_gpr and mnemonic.startswith((
+            "add", "adc", "sub", "sbb", "and", "or", "xor",
+            "shl", "shr", "sal", "sar", "rol", "ror", "inc",
+            "dec", "neg", "not", "bswap", "cmov")):
+        if (mnemonic.startswith(("xor", "sub")) and
+                source_gpr == destination_gpr):
+            result.discard(destination_gpr)
+        elif (destination_gpr in tainted or source_gpr in tainted or
+              any(not is_stack_memory(operand, frame_pointer_active)
+                  for operand in source_memory_operands)):
+            result.add(destination_gpr)
+        else:
+            result.discard(destination_gpr)
+    return result
+
+
+def loaded_value_address_refs(instructions, components, frame_states):
+    """Count loop memory operands addressed by loop-loaded scalar data.
+
+    This is a forward may-analysis solved to a fixed point inside each cyclic
+    CFG component.  Fixed-point propagation is required because compilers can
+    load and decode the next gate descriptor at a loop latch, then consume its
+    src/dst indices at the next iteration's header.
+    """
+    by_address = {item[0]: item for item in instructions}
+    successors = instruction_successors(instructions)
+    total = 0
+    for component in components:
+        predecessors = {address: set() for address in component}
+        for address in component:
+            for successor in successors.get(address, ()):
+                if successor in component:
+                    predecessors[successor].add(address)
+
+        entry = {address: set() for address in component}
+        outgoing = {address: set() for address in component}
+        worklist = list(sorted(component))
+        queued = set(worklist)
+        while worklist:
+            address = worklist.pop(0)
+            queued.discard(address)
+            incoming = set()
+            for predecessor in predecessors[address]:
+                incoming.update(outgoing[predecessor])
+            unused_address, mnemonic, operand_text = by_address[address]
+            operands = split_operands(operand_text)
+            transferred = loaded_data_transfer(
+                mnemonic, operands, incoming,
+                frame_states.get(address, False))
+            if incoming == entry[address] and transferred == outgoing[address]:
+                continue
+            entry[address] = incoming
+            outgoing[address] = transferred
+            for successor in successors.get(address, ()):
+                if successor in component and successor not in queued:
+                    worklist.append(successor)
+                    queued.add(successor)
+
+        for address in component:
+            unused_address, unused_mnemonic, operand_text = by_address[address]
+            for operand in split_operands(operand_text):
+                if memory_address_parts(operand) is None:
+                    continue
+                base, index = memory_address_registers(operand)
+                if base in entry[address] or index in entry[address]:
+                    total += 1
+    return total
 
 
 def instruction_census(name, size, instructions):
@@ -243,15 +598,26 @@ def instruction_census(name, size, instructions):
     counts = collections.Counter()
     mnemonic_counts = collections.Counter()
 
-    loop_addresses = loop_instruction_addresses(instructions)
-    static_address_registers = set()
+    cyclic_components = cyclic_instruction_components(instructions)
+    loop_addresses = set(address for component in cyclic_components
+                         for address in component)
+    frame_states = frame_pointer_states(instructions)
+    static_address_states = static_address_entry_states(instructions)
 
     for address, mnemonic, operand_text in instructions:
         mnemonic = mnemonic.lower()
         mnemonic_counts[mnemonic] += 1
         counts["instructions"] += 1
         operands = split_operands(operand_text)
-        has_memory = "(" in operand_text
+        memory_operands = [operand for operand in operands
+                           if memory_address_parts(operand) is not None]
+        source_memory_operands = [operand for operand in operands[:-1]
+                                  if memory_address_parts(operand) is not None]
+        frame_pointer_active = frame_states.get(address, False)
+        stack_memory_operands = [
+            operand for operand in memory_operands
+            if is_stack_memory(operand, frame_pointer_active)]
+        has_memory = bool(memory_operands)
         has_vector = bool(VECTOR_REGISTER.search(operand_text))
 
         if mnemonic in XOR2_MNEMONICS:
@@ -269,13 +635,17 @@ def instruction_census(name, size, instructions):
             counts["calls"] += 1
             if address in loop_addresses:
                 counts["inner_loop_calls"] += 1
-        if STACK_MEMORY.search(operand_text):
+        if stack_memory_operands:
             counts["stack_memory_refs"] += 1
             if has_vector:
                 counts["vector_stack_refs"] += 1
-        if SCALED_MEMORY.search(operand_text):
+                if address in loop_addresses:
+                    counts["loop_vector_stack_refs"] += 1
+        if any(memory_address_parts(operand)[1]
+               for operand in memory_operands):
             counts["scaled_memory_refs"] += 1
-        if SCALED_STACK_MEMORY.search(operand_text):
+        if any(memory_address_parts(operand)[1]
+               for operand in stack_memory_operands):
             counts["scaled_stack_refs"] += 1
 
         if (mnemonic in FORBIDDEN_EXACT or
@@ -289,46 +659,42 @@ def instruction_census(name, size, instructions):
             counts["loop_rip_memory_refs"] += 1
         if (address in loop_addresses and
                 mnemonic.startswith(NARROW_LOAD_PREFIXES) and
-                SCALED_MEMORY.search(operand_text)):
+                any(memory_address_parts(operand)[1]
+                    for operand in source_memory_operands)):
             counts["loop_narrow_indexed_loads"] += 1
 
-        # Track simple static-table address provenance.  A generated payload
-        # loop should never form a RIP-relative table base and then index it by
-        # a runtime value; literal named-register circuits need only payload
-        # pointers.  Linear propagation covers the normal compiler idiom while
-        # invalidating a register as soon as another instruction overwrites it.
-        memory_operands = [operand for operand in operands if "(" in operand]
+        # x86 may fold a vector load into an arithmetic instruction.  Keep
+        # these reads separate from explicit mov/vmov loads so representative
+        # instruction-shape reports do not understate payload memory traffic.
+        if (has_vector and source_memory_operands and
+                not mnemonic.startswith(("mov", "vmov"))):
+            counts["folded_vector_memory_reads"] += len(
+                source_memory_operands)
+        elif (source_memory_operands and
+              not mnemonic.startswith(("lea", "mov", "vmov"))):
+            counts["folded_scalar_memory_reads"] += len(
+                source_memory_operands)
+
+        # A generated payload loop should never form a RIP-relative table base
+        # and then index it by a runtime value; literal named-register circuits
+        # need only payload pointers.  The CFG may-analysis preserves static
+        # provenance across branch merges instead of trusting lexical order.
         if address in loop_addresses:
             for operand in memory_operands:
-                inside = operand[operand.find("(") + 1:operand.rfind(")")]
-                parts = [part.strip() for part in inside.split(",")]
-                if len(parts) >= 2 and parts[0] in static_address_registers:
+                base, index = memory_address_registers(operand)
+                static_addresses = static_address_states.get(address, set())
+                if (base in static_addresses or index in static_addresses):
                     counts["static_table_indexed_refs"] += 1
-
-        destination = operands[-1] if operands else ""
-        destination_register = (destination
-                                if re.match(r"^%[A-Za-z0-9]+$", destination)
-                                else None)
-        source_register = (operands[0]
-                           if operands and
-                           re.match(r"^%[A-Za-z0-9]+$", operands[0])
-                           else None)
-        if destination_register:
-            if (mnemonic.startswith("lea") and operands and
-                    "%rip" in operands[0]):
-                static_address_registers.add(destination_register)
-            elif (mnemonic.startswith("mov") and source_register in
-                  static_address_registers):
-                static_address_registers.add(destination_register)
-            else:
-                static_address_registers.discard(destination_register)
 
         if has_memory and mnemonic.startswith(("mov", "vmov")):
             destination = operands[-1] if operands else ""
-            if "(" in destination:
+            if memory_address_parts(destination) is not None:
                 counts["memory_stores"] += 1
             else:
                 counts["memory_loads"] += 1
+
+    counts["loop_loaded_value_address_refs"] = loaded_value_address_refs(
+        instructions, cyclic_components, frame_states)
 
     return {
         "symbol": name,
@@ -337,11 +703,15 @@ def instruction_census(name, size, instructions):
         "code_bytes": size,
         "counts": {key: counts.get(key, 0) for key in (
             "instructions", "vector_xor2", "vector_xor3", "scalar_xor",
-            "memory_loads", "memory_stores", "calls", "stack_memory_refs",
+            "memory_loads", "folded_vector_memory_reads",
+            "folded_scalar_memory_reads", "memory_stores",
+            "calls", "stack_memory_refs",
             "inner_loop_calls",
-            "vector_stack_refs", "scaled_memory_refs", "scaled_stack_refs",
+            "vector_stack_refs", "loop_vector_stack_refs",
+            "scaled_memory_refs", "scaled_stack_refs",
             "vector_rip_memory_refs", "non_xor_ternary",
             "loop_rip_memory_refs", "loop_narrow_indexed_loads",
+            "loop_loaded_value_address_refs",
             "static_table_indexed_refs", "forbidden_instructions")},
         "mnemonics": dict(sorted(mnemonic_counts.items())),
     }
@@ -411,11 +781,11 @@ def hard_violations(functions, summary, required_families):
             })
     rules = (
         ("inner_loop_calls", "call_inside_payload_loop"),
-        ("vector_stack_refs", "possible_vector_spill_or_reload"),
         ("scaled_stack_refs", "dynamic_stack_array_indexing"),
-        ("vector_rip_memory_refs", "possible_payload_lookup_or_vector_constant"),
         ("loop_rip_memory_refs", "rip_relative_read_inside_payload_loop"),
         ("loop_narrow_indexed_loads", "narrow_indexed_payload_lookup"),
+        ("loop_loaded_value_address_refs",
+         "payload_or_gate_data_used_as_memory_address"),
         ("static_table_indexed_refs", "static_table_index_inside_payload_loop"),
         ("non_xor_ternary", "vpternlog_immediate_is_not_xor3_0x96"),
         ("forbidden_instructions", "shuffle_lookup_multiply_or_vector_and"),
@@ -431,6 +801,23 @@ def hard_violations(functions, summary, required_families):
                     "observed": function["counts"][field],
                 })
     return violations
+
+
+def spill_warnings(functions):
+    warnings = []
+    for function in functions:
+        observed = function["counts"]["vector_stack_refs"]
+        if observed:
+            warnings.append({
+                "family": function["family"],
+                "coefficient": function["coefficient"],
+                "symbol": function["symbol"],
+                "rule": "possible_vector_spill_or_reload",
+                "observed": observed,
+                "inside_loop":
+                    function["counts"]["loop_vector_stack_refs"],
+            })
+    return warnings
 
 
 def representative(functions):
@@ -464,6 +851,7 @@ def build_report(arguments):
             family in summary for family in AVX512_FAMILIES):
         required_families.update(AVX512_FAMILIES)
     violations = hard_violations(functions, summary, required_families)
+    spills = spill_warnings(functions)
     return {
         "schema": SCHEMA,
         "artifact": artifact.name,
@@ -477,6 +865,9 @@ def build_report(arguments):
         "hard_violation_count": len(violations),
         "hard_violations": violations,
         "strict_pass": not violations,
+        "spill_warning_count": len(spills),
+        "spill_warnings": spills,
+        "spill_check_pass": not spills,
     }
 
 
@@ -485,32 +876,54 @@ def human_report(report):
         "FF8 XOR assembly census: %s" % report["artifact"],
         "strict hot-loop checks: %s" %
         ("PASS" if report["strict_pass"] else "FAIL"),
+        "vector spill check: %s (%d specialized functions affected)" % (
+            "PASS" if report["spill_check_pass"] else "WARNING",
+            report["spill_warning_count"]),
     ]
     for family in sorted(report["summary"]):
         item = report["summary"][family]
         totals = item["totals"]
         lines.append(
             "%s: %d coefficients, %d bytes, xor2=%d xor3=%d, "
-            "vector-stack=%d calls=%d (inner=%d) forbidden=%d" % (
+            "vector-stack=%d (loop=%d) scaled-stack=%d vector-rip=%d "
+            "calls=%d (inner=%d) forbidden=%d" % (
                 family, item["coefficient_count"], totals.get("code_bytes", 0),
                 totals.get("vector_xor2", 0), totals.get("vector_xor3", 0),
-                totals.get("vector_stack_refs", 0), totals.get("calls", 0),
+                totals.get("vector_stack_refs", 0),
+                totals.get("loop_vector_stack_refs", 0),
+                totals.get("scaled_stack_refs", 0),
+                totals.get("vector_rip_memory_refs", 0),
+                totals.get("calls", 0),
                 totals.get("inner_loop_calls", 0),
                 totals.get("forbidden_instructions", 0)))
     for item in report["representative_coefficient_42"]:
         counts = item["counts"]
         lines.append(
             "representative %s<42>: %d bytes, %d instructions, xor2=%d "
-            "xor3=%d, loads=%d stores=%d, vector-stack=%d" % (
+            "xor3=%d, explicit-loads=%d folded-vector-reads=%d "
+            "folded-scalar-reads=%d total-load-reads=%d stores=%d, "
+            "vector-stack=%d (loop=%d)" % (
                 item["family"], item["code_bytes"], counts["instructions"],
                 counts["vector_xor2"], counts["vector_xor3"],
-                counts["memory_loads"], counts["memory_stores"],
-                counts["vector_stack_refs"]))
+                counts["memory_loads"],
+                counts["folded_vector_memory_reads"],
+                counts["folded_scalar_memory_reads"],
+                counts["memory_loads"] +
+                counts["folded_vector_memory_reads"] +
+                counts["folded_scalar_memory_reads"],
+                counts["memory_stores"],
+                counts["vector_stack_refs"],
+                counts["loop_vector_stack_refs"]))
     if report["hard_violations"]:
         lines.append("hard violations (first 20 of %d):" %
                      report["hard_violation_count"])
         for violation in report["hard_violations"][:20]:
             lines.append("  %s" % json.dumps(violation, sort_keys=True))
+    if report["spill_warnings"]:
+        lines.append("spill warnings (first 20 of %d):" %
+                     report["spill_warning_count"])
+        for warning in report["spill_warnings"][:20]:
+            lines.append("  %s" % json.dumps(warning, sort_keys=True))
     return "\n".join(lines) + "\n"
 
 
@@ -525,7 +938,10 @@ def parse_arguments():
     parser.add_argument("--output", type=Path,
                         help="write the selected output to this path")
     parser.add_argument("--strict", action="store_true",
-                        help="fail on spills, calls, lookups, or missing kernels")
+                        help="fail on structural hot-loop violations")
+    parser.add_argument(
+        "--fail-on-spills", action="store_true",
+        help="also fail when the selected compiler spills vector values")
     parser.add_argument(
         "--require-family", action="append", default=[],
         help="require a named family with all 256 specializations")
@@ -549,7 +965,10 @@ def main():
         arguments.output.write_text(output, encoding="utf-8")
     else:
         sys.stdout.write(output)
-    return 1 if arguments.strict and not report["strict_pass"] else 0
+    failed = arguments.strict and not report["strict_pass"]
+    failed = failed or (arguments.fail_on_spills and
+                        not report["spill_check_pass"])
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

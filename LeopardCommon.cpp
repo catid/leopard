@@ -69,6 +69,8 @@ bool CpuHasSSSE3 = false;
 
 #define CPUID_EBX_AVX2    0x00000020
 #define CPUID_ECX_SSSE3   0x00000200
+#define CPUID_ECX_OSXSAVE 0x08000000
+#define CPUID_ECX_AVX     0x10000000
 
 static void _cpuid(unsigned int cpu_info[4U], const unsigned int cpu_info_type)
 {
@@ -107,9 +109,42 @@ static void _cpuid(unsigned int cpu_info[4U], const unsigned int cpu_info_type)
 #endif
 }
 
+#if defined(LEO_TRY_AVX2)
+static uint64_t _xgetbv0()
+{
+#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_AMD64) || defined(_M_IX86))
+    return static_cast<uint64_t>(_xgetbv(0));
+#elif defined(__i386__) || defined(__x86_64__)
+    uint32_t eax, edx;
+    // Raw encoding avoids requiring a compiler-wide -mxsave flag.  The caller
+    // executes this only after CPUID reports both AVX and OSXSAVE.
+    __asm__ __volatile__ (
+        ".byte 0x0f, 0x01, 0xd0" : "=a" (eax), "=d" (edx) : "c" (0));
+    return (static_cast<uint64_t>(edx) << 32) | eax;
+#else
+    return 0;
+#endif
+}
+#endif
+
 #elif defined(LEO_USE_SSE2NEON)
 bool CpuHasSSSE3 = true;
 #endif // defined(LEO_TARGET_MOBILE)
+
+
+bool IsAVX2Supported(
+    uint32_t maximum_basic_leaf,
+    uint32_t leaf1_ecx,
+    uint32_t leaf7_ebx,
+    uint64_t xcr0)
+{
+    const uint32_t required_leaf1 = UINT32_C(0x08000000) |
+        UINT32_C(0x10000000); // OSXSAVE | AVX
+    return maximum_basic_leaf >= 7 &&
+        (leaf1_ecx & required_leaf1) == required_leaf1 &&
+        (xcr0 & UINT64_C(0x6)) == UINT64_C(0x6) &&
+        (leaf7_ebx & UINT32_C(0x00000020)) != 0; // AVX2
+}
 
 
 void InitializeCPUArch()
@@ -132,12 +167,31 @@ void InitializeCPUArch()
 #if !defined(LEO_TARGET_MOBILE)
     unsigned int cpu_info[4];
 
-    _cpuid(cpu_info, 1);
-    CpuHasSSSE3 = ((cpu_info[2] & CPUID_ECX_SSSE3) != 0);
+    _cpuid(cpu_info, 0);
+    const unsigned int maximum_basic_leaf = cpu_info[0];
+
+    unsigned int leaf1_ecx = 0;
+    if (maximum_basic_leaf >= 1)
+    {
+        _cpuid(cpu_info, 1);
+        leaf1_ecx = cpu_info[2];
+    }
+
+    CpuHasSSSE3 = ((leaf1_ecx & CPUID_ECX_SSSE3) != 0);
 
 #if defined(LEO_TRY_AVX2)
-    _cpuid(cpu_info, 7);
-    CpuHasAVX2 = ((cpu_info[1] & CPUID_EBX_AVX2) != 0);
+    unsigned int leaf7_ebx = 0;
+    if (maximum_basic_leaf >= 7)
+    {
+        _cpuid(cpu_info, 7);
+        leaf7_ebx = cpu_info[1];
+    }
+    const unsigned int required_leaf1 = CPUID_ECX_OSXSAVE | CPUID_ECX_AVX;
+    const uint64_t xcr0 = (leaf1_ecx & required_leaf1) == required_leaf1
+        ? _xgetbv0()
+        : 0;
+    CpuHasAVX2 = IsAVX2Supported(
+        maximum_basic_leaf, leaf1_ecx, leaf7_ebx, xcr0);
 #endif // LEO_TRY_AVX2
 
 #ifndef LEO_USE_SSSE3_OPT

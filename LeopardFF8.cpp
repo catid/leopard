@@ -569,8 +569,11 @@ void ExperimentalPackedMulAdd(
 //------------------------------------------------------------------------------
 // FFT
 
-// Twisted factors used in FFT
-static ffe_t FFTSkew[kModulus];
+// Twisted factors used in FFT.  Keep one real element before the logical
+// table so the transform's historical FFTSkew - 1 view remains within the
+// same array object instead of forming an invalid one-before-begin pointer.
+static ffe_t FFTSkewStorage[kOrder];
+static ffe_t* const FFTSkew = FFTSkewStorage + 1;
 
 // Factors used in the evaluation of the error locator polynomial
 static ffe_t LogWalsh[kOrder];

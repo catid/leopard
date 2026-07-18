@@ -6,6 +6,19 @@ include(CheckCXXCompilerFlag)
 
 set(CMAKE_CONFIGURATION_TYPES "Debug;Release" CACHE STRING "" FORCE)
 
+# CMAKE_CONFIGURATION_TYPES is intentionally populated above even for some
+# single-configuration generators, so use the generator identity where later
+# logic must distinguish configuration models.
+set(FF8XOR_MULTI_CONFIG OFF)
+if(CMAKE_GENERATOR MATCHES
+   "^(Visual Studio|Xcode|Ninja Multi-Config|Green Hills MULTI)")
+    set(FF8XOR_MULTI_CONFIG ON)
+endif()
+set(FF8XOR_RELEASE_TEST_CONFIG_ARGS "")
+if(FF8XOR_MULTI_CONFIG)
+    list(APPEND FF8XOR_RELEASE_TEST_CONFIG_ARGS CONFIGURATIONS Release)
+endif()
+
 set(CMAKE_CXX_STANDARD 11)
 
 set(LIB_SOURCE_FILES
@@ -33,6 +46,7 @@ set(EXPERIMENT_SOURCE_FILES
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
+string(TOUPPER "${CMAKE_BUILD_TYPE}" FF8XOR_BUILD_TYPE_UPPER)
 
 check_cxx_compiler_flag("-march=native" COMPILER_SUPPORTS_MARCH_NATIVE)
 if(COMPILER_SUPPORTS_MARCH_NATIVE)
@@ -130,14 +144,15 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W4")
     endif()
 elseif(CMAKE_CXX_COMPILER_ID STREQUAL "PGI")
-    check_cxx_compiler_flag("-G" CXX_FLAG_g)
+    check_cxx_compiler_flag("-g" CXX_FLAG_g)
     check_cxx_compiler_flag("-O0" CXX_FLAG_O0)
     check_cxx_compiler_flag("-O3" CXX_FLAG_O3)
     check_cxx_compiler_flag("-Minform=inform" CXX_FLAG_MINFORM_INFORM)
 
-    if(CXX_FLAG_g)
+    if(CXX_FLAG_g AND
+       NOT " ${CMAKE_CXX_FLAGS_DEBUG} " MATCHES " -g ")
         set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g")
-    endif(CXX_FLAG_g)
+    endif()
 
     if(CXX_FLAG_O0)
         set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0")
@@ -151,15 +166,16 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "PGI")
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Minform=inform")
     endif(CXX_FLAG_MINFORM_INFORM)
 else()
-    check_cxx_compiler_flag("-G" CXX_FLAG_g)
+    check_cxx_compiler_flag("-g" CXX_FLAG_g)
     check_cxx_compiler_flag("-O0" CXX_FLAG_O0)
     check_cxx_compiler_flag("-O3" CXX_FLAG_O3)
     check_cxx_compiler_flag("-Wall" CXX_FLAG_Wall)
     check_cxx_compiler_flag("-Wextra" CXX_FLAG_Wextra)
 
-    if(CXX_FLAG_g)
+    if(CXX_FLAG_g AND
+       NOT " ${CMAKE_CXX_FLAGS_DEBUG} " MATCHES " -g ")
         set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g")
-    endif(CXX_FLAG_g)
+    endif()
 
     if(CXX_FLAG_O0)
         set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0")
@@ -197,6 +213,10 @@ add_executable(experiment_leopard ${EXPERIMENT_SOURCE_FILES})
 
 enable_testing()
 
+add_test(NAME leopard_experiment_init
+    COMMAND experiment_leopard --init-only)
+set_tests_properties(leopard_experiment_init PROPERTIES TIMEOUT 30)
+
 add_executable(test_leopard_ff8xor tests/test_ff8xor.cpp)
 target_link_libraries(test_leopard_ff8xor libleopard)
 add_test(NAME leopard_ff8xor COMMAND test_leopard_ff8xor)
@@ -204,6 +224,10 @@ add_test(NAME leopard_ff8xor COMMAND test_leopard_ff8xor)
 add_executable(test_leopard_ff8xor_statistics tests/test_ff8xor_statistics.cpp)
 target_link_libraries(test_leopard_ff8xor_statistics libleopard)
 add_test(NAME leopard_ff8xor_statistics COMMAND test_leopard_ff8xor_statistics)
+
+add_executable(test_leopard_api_counts tests/test_api_counts.cpp)
+target_link_libraries(test_leopard_api_counts libleopard)
+add_test(NAME leopard_api_counts COMMAND test_leopard_api_counts)
 
 add_executable(bench_leopard_ff8xor tests/benchmark_ff8xor.cpp)
 target_link_libraries(bench_leopard_ff8xor libleopard)
@@ -249,15 +273,45 @@ endif()
 add_test(NAME leopard_ff8xor_xor3
     COMMAND bench_leopard_ff8xor_xor3 --verify-only)
 set_tests_properties(leopard_ff8xor_xor3 PROPERTIES SKIP_RETURN_CODE 77)
+add_test(NAME leopard_ff8xor_xor3_bad_cpu_empty
+    COMMAND "${CMAKE_COMMAND}"
+            -DPROGRAM=$<TARGET_FILE:bench_leopard_ff8xor_xor3>
+            -DCASE=empty
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_xor3_bad_cpu.cmake")
+add_test(NAME leopard_ff8xor_xor3_bad_cpu_whitespace
+    COMMAND "${CMAKE_COMMAND}"
+            -DPROGRAM=$<TARGET_FILE:bench_leopard_ff8xor_xor3>
+            -DCASE=whitespace
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_xor3_bad_cpu.cmake")
+add_test(NAME leopard_ff8xor_xor3_bad_cpu_overflow
+    COMMAND "${CMAKE_COMMAND}"
+            -DPROGRAM=$<TARGET_FILE:bench_leopard_ff8xor_xor3>
+            -DCASE=overflow
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_xor3_bad_cpu.cmake")
+add_test(NAME leopard_ff8xor_xor3_bad_cpu_erange
+    COMMAND "${CMAKE_COMMAND}"
+            -DPROGRAM=$<TARGET_FILE:bench_leopard_ff8xor_xor3>
+            -DCASE=erange
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_xor3_bad_cpu.cmake")
 
 # Embed a reproducible summary of the configured CMake flags in benchmark
 # metadata.  The source-specific FF8 XOR flags are included explicitly; a
 # verbose build remains authoritative for compiler-driver-added options.
-string(TOUPPER "${CMAKE_BUILD_TYPE}" FF8XOR_BUILD_TYPE_UPPER)
+# Select the actual configuration flags at generate/build time.  Multi-config
+# generators use the project's fixed Debug/Release set.  Single-config builds
+# retain dynamic lookup so custom configurations such as Coverage report their
+# real CMAKE_CXX_FLAGS_<CONFIG> value rather than an empty string.
+if(FF8XOR_MULTI_CONFIG)
+    set(FF8XOR_BENCH_CONFIG_FLAGS
+        "$<$<CONFIG:Debug>:${CMAKE_CXX_FLAGS_DEBUG}>$<$<CONFIG:Release>:${CMAKE_CXX_FLAGS_RELEASE}>")
+else()
+    set(FF8XOR_BENCH_CONFIG_FLAGS
+        "${CMAKE_CXX_FLAGS_${FF8XOR_BUILD_TYPE_UPPER}}")
+endif()
 set(FF8XOR_BENCH_BUILD_FLAGS
     "global=[${CMAKE_CXX_FLAGS}]")
 set(FF8XOR_BENCH_BUILD_FLAGS
-    "${FF8XOR_BENCH_BUILD_FLAGS} config=[${CMAKE_CXX_FLAGS_${FF8XOR_BUILD_TYPE_UPPER}}]")
+    "${FF8XOR_BENCH_BUILD_FLAGS} config=[${FF8XOR_BENCH_CONFIG_FLAGS}]")
 set(FF8XOR_BENCH_BUILD_FLAGS
     "${FF8XOR_BENCH_BUILD_FLAGS} cxx_standard=${CMAKE_CXX_STANDARD}")
 set(FF8XOR_BENCH_BUILD_FLAGS
@@ -290,6 +344,17 @@ if(FF8XOR_BUILD_AVX512)
     list(APPEND FF8XOR_ASSEMBLY_REQUIRE_ARGS --require-avx512)
 endif()
 
+find_program(FF8XOR_NM_EXECUTABLE NAMES llvm-nm nm)
+find_program(FF8XOR_OBJDUMP_EXECUTABLE NAMES llvm-objdump objdump)
+set(FF8XOR_CAN_INSPECT_X86_ASSEMBLY OFF)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+   CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86)$" AND
+   (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+    CMAKE_CXX_COMPILER_ID MATCHES "Clang") AND
+   FF8XOR_NM_EXECUTABLE AND FF8XOR_OBJDUMP_EXECUTABLE)
+    set(FF8XOR_CAN_INSPECT_X86_ASSEMBLY ON)
+endif()
+
 if(FF8XOR_PYTHON_EXECUTABLE)
     add_custom_target(generate_ff8_xor_circuits
         COMMAND "${FF8XOR_PYTHON_EXECUTABLE}"
@@ -301,6 +366,12 @@ if(FF8XOR_PYTHON_EXECUTABLE)
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_ff8_xor_circuits.py"
                 --check
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+    add_test(NAME ff8xor_circuits
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_ff8_xor_circuits.py"
+                --check)
 
     add_custom_target(generate_ff8xor_schedule_corpus
         COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
@@ -327,29 +398,28 @@ if(FF8XOR_PYTHON_EXECUTABLE)
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_assembly_inspector.py")
 
     if(FF8XOR_BUILD_AVX512)
-        find_program(FF8XOR_XOR3_NM_EXECUTABLE NAMES llvm-nm nm)
-        find_program(FF8XOR_XOR3_OBJDUMP_EXECUTABLE
-            NAMES llvm-objdump objdump)
-        if(FF8XOR_XOR3_NM_EXECUTABLE AND FF8XOR_XOR3_OBJDUMP_EXECUTABLE)
+        if(FF8XOR_CAN_INSPECT_X86_ASSEMBLY)
             # Register the spill/code-shape gate only for optimized builds.
             # Debug deliberately materializes vector arguments on the stack.
-            if(CMAKE_BUILD_TYPE STREQUAL "Release")
+            if(FF8XOR_MULTI_CONFIG OR
+               FF8XOR_BUILD_TYPE_UPPER STREQUAL "RELEASE")
                 add_test(NAME ff8xor_xor3_assembly
                     COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
                             "${FF8XOR_PYTHON_EXECUTABLE}"
                             "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_xor3.py"
                             "$<TARGET_FILE:bench_leopard_ff8xor_xor3>"
-                            --nm "${FF8XOR_XOR3_NM_EXECUTABLE}"
-                            --objdump "${FF8XOR_XOR3_OBJDUMP_EXECUTABLE}"
-                            --strict)
+                            --nm "${FF8XOR_NM_EXECUTABLE}"
+                            --objdump "${FF8XOR_OBJDUMP_EXECUTABLE}"
+                            --strict
+                    ${FF8XOR_RELEASE_TEST_CONFIG_ARGS})
 
                 add_custom_target(check_ff8xor_xor3_assembly
                     COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
                             "${FF8XOR_PYTHON_EXECUTABLE}"
                             "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_xor3.py"
                             "$<TARGET_FILE:bench_leopard_ff8xor_xor3>"
-                            --nm "${FF8XOR_XOR3_NM_EXECUTABLE}"
-                            --objdump "${FF8XOR_XOR3_OBJDUMP_EXECUTABLE}"
+                            --nm "${FF8XOR_NM_EXECUTABLE}"
+                            --objdump "${FF8XOR_OBJDUMP_EXECUTABLE}"
                             --strict
                             --json
                     DEPENDS bench_leopard_ff8xor_xor3
@@ -376,7 +446,23 @@ if(FF8XOR_PYTHON_EXECUTABLE)
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_assembly.py"
                 "$<TARGET_FILE:libleopard>"
                 --strict
+                --fail-on-spills
                 ${FF8XOR_ASSEMBLY_REQUIRE_ARGS}
         DEPENDS libleopard
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+    if(FF8XOR_CAN_INSPECT_X86_ASSEMBLY AND
+       (FF8XOR_MULTI_CONFIG OR
+        FF8XOR_BUILD_TYPE_UPPER STREQUAL "RELEASE"))
+        add_test(NAME ff8xor_assembly_census
+            COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                    "${FF8XOR_PYTHON_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_assembly.py"
+                    "$<TARGET_FILE:libleopard>"
+                    --nm "${FF8XOR_NM_EXECUTABLE}"
+                    --objdump "${FF8XOR_OBJDUMP_EXECUTABLE}"
+                    --strict
+                    ${FF8XOR_ASSEMBLY_REQUIRE_ARGS}
+                    ${FF8XOR_RELEASE_TEST_CONFIG_ARGS})
+    endif()
 endif()

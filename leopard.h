@@ -157,7 +157,7 @@ LEO_EXPORT unsigned leo_encode_work_count(
     work_data:      Array of pointers to work data buffers.
 
     The sum of original_count + recovery_count must not exceed 65536.
-    The recovery_count <= original_count.
+    recovery_count must not exceed original_count.
 
     The buffer_bytes must be a multiple of 64.
     Each buffer should have the same number of bytes.
@@ -196,7 +196,7 @@ LEO_EXPORT LeopardResult leo_encode(
 
     The sum of original_count + recovery_count must not exceed 65536.
 
-    Returns the work_count value to pass into leo_encode().
+    Returns the work_count value to pass into leo_decode().
     Returns 0 on invalid input.
 */
 LEO_EXPORT unsigned leo_decode_work_count(
@@ -217,6 +217,9 @@ LEO_EXPORT unsigned leo_decode_work_count(
     work_data:      Array of pointers to recovery data buffers.
 
     Lost original/recovery data should be set to NULL.
+
+    The sum of original_count + recovery_count must not exceed 65536.
+    recovery_count must not exceed original_count.
 
     The sum of recovery_count + the number of non-NULL original data must be at
     least original_count in order to perform recovery.

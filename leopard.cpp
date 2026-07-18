@@ -38,6 +38,28 @@
 
 #include <string.h>
 
+namespace {
+
+static const uint64_t kMaximumBufferCount = 65536;
+
+static bool InvalidBufferCounts(
+    unsigned original_count,
+    unsigned recovery_count)
+{
+    return original_count == 0 || recovery_count == 0 ||
+        recovery_count > original_count;
+}
+
+static bool TooManyBuffers(
+    unsigned original_count,
+    unsigned recovery_count)
+{
+    return static_cast<uint64_t>(original_count) + recovery_count >
+        kMaximumBufferCount;
+}
+
+} // namespace
+
 extern "C" {
 
 
@@ -102,6 +124,10 @@ LEO_EXPORT unsigned leo_encode_work_count(
     unsigned original_count,
     unsigned recovery_count)
 {
+    if (InvalidBufferCounts(original_count, recovery_count) ||
+        TooManyBuffers(original_count, recovery_count))
+        return 0;
+
     if (original_count == 1)
         return recovery_count;
     if (recovery_count == 1)
@@ -138,7 +164,7 @@ LEO_EXPORT LeopardResult leo_encode(
     if (buffer_bytes <= 0 || buffer_bytes % 64 != 0)
         return Leopard_InvalidSize;
 
-    if (recovery_count <= 0 || recovery_count > original_count)
+    if (InvalidBufferCounts(original_count, recovery_count))
         return Leopard_InvalidCounts;
 
     if (!original_data || !work_data)
@@ -146,6 +172,18 @@ LEO_EXPORT LeopardResult leo_encode(
 
     if (!m_Initialized)
         return Leopard_CallInitialize;
+
+    // Reject unsupported counts before the k = 1 / m = 1 shortcuts can walk
+    // caller-provided arrays.  Use a widened sum so malformed large values
+    // cannot wrap into the supported range.
+    if (TooManyBuffers(original_count, recovery_count))
+        return Leopard_TooMuchData;
+
+    // Validate this before every shortcut as well as the general transform.
+    // All successful paths index work_data according to the public helper.
+    if (work_count != leo_encode_work_count(
+            original_count, recovery_count))
+        return Leopard_InvalidCounts;
 
     // Handle k = 1 case
     if (original_count == 1)
@@ -168,9 +206,6 @@ LEO_EXPORT LeopardResult leo_encode(
 
     const unsigned m = leopard::NextPow2(recovery_count);
     const unsigned n = leopard::NextPow2(m + original_count);
-
-    if (work_count != m * 2)
-        return Leopard_InvalidCounts;
 
 #ifdef LEO_HAS_FF8
     if (n <= leopard::ff8::kOrder)
@@ -211,6 +246,10 @@ LEO_EXPORT unsigned leo_decode_work_count(
     unsigned original_count,
     unsigned recovery_count)
 {
+    if (InvalidBufferCounts(original_count, recovery_count) ||
+        TooManyBuffers(original_count, recovery_count))
+        return 0;
+
     if (original_count == 1 || recovery_count == 1)
         return original_count;
     const unsigned m = leopard::NextPow2(recovery_count);
@@ -249,7 +288,7 @@ LEO_EXPORT LeopardResult leo_decode(
     if (buffer_bytes <= 0 || buffer_bytes % 64 != 0)
         return Leopard_InvalidSize;
 
-    if (recovery_count <= 0 || recovery_count > original_count)
+    if (InvalidBufferCounts(original_count, recovery_count))
         return Leopard_InvalidCounts;
 
     if (!original_data || !recovery_data || !work_data)
@@ -257,6 +296,12 @@ LEO_EXPORT LeopardResult leo_decode(
 
     if (!m_Initialized)
         return Leopard_CallInitialize;
+
+    // This must precede the pointer-array scans below.  Apart from bounding
+    // the work, it ensures m + original_count cannot overflow before the
+    // later NextPow2 calculation.
+    if (TooManyBuffers(original_count, recovery_count))
+        return Leopard_TooMuchData;
 
     // Check if not enough recovery data arrived
     unsigned original_loss_count = 0;
@@ -282,18 +327,26 @@ LEO_EXPORT LeopardResult leo_decode(
     if (recovery_got_count < original_loss_count)
         return Leopard_NeedMoreData;
 
-    // Handle k = 1 case
-    if (original_count == 1)
-    {
-        memcpy(work_data[0], recovery_data[recovery_got_i], buffer_bytes);
-        return Leopard_Success;
-    }
-    
+    // Match the experimental backend's validation order: insufficient input
+    // remains the first data-state error, but every successful special path
+    // requires the documented number of work buffers.
+    if (work_count != leo_decode_work_count(
+            original_count, recovery_count))
+        return Leopard_InvalidCounts;
+
     // Handle case original_loss_count = 0
     if (original_loss_count == 0)
     {
         for(unsigned i = 0; i < original_count; i++)
             memcpy(work_data[i], original_data[i], buffer_bytes);
+        return Leopard_Success;
+    }
+
+    // Handle k = 1 case.  The no-loss case must remain above this branch:
+    // callers may omit all recovery pointers when the original is present.
+    if (original_count == 1)
+    {
+        memcpy(work_data[0], recovery_data[recovery_got_i], buffer_bytes);
         return Leopard_Success;
     }
 
@@ -311,9 +364,6 @@ LEO_EXPORT LeopardResult leo_decode(
 
     const unsigned m = leopard::NextPow2(recovery_count);
     const unsigned n = leopard::NextPow2(m + original_count);
-
-    if (work_count != n)
-        return Leopard_InvalidCounts;
 
 #ifdef LEO_HAS_FF8
     if (n <= leopard::ff8::kOrder)

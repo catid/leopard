@@ -195,10 +195,12 @@ int main(int argc, char** argv)
         }
         else if (strcmp(argv[i], "--cpu") == 0 && i + 1 < argc)
         {
+            const char* const text = argv[++i];
             char* end = 0;
             errno = 0;
-            const unsigned long value = strtoul(argv[++i], &end, 10);
-            if (errno != 0 || !end || *end != '\0' || value > 65535UL)
+            const unsigned long value = strtoul(text, &end, 10);
+            if (errno != 0 || end == text || *end != '\0' ||
+                value > 65535UL)
             {
                 PrintUsage(argv[0]);
                 return 2;

@@ -1569,6 +1569,47 @@ static bool TestAllAVX512Specializations()
     return true;
 }
 
+static bool TestAVX2FeaturePredicate()
+{
+    const uint32_t osxsave = UINT32_C(1) << 27;
+    const uint32_t avx = UINT32_C(1) << 28;
+    const uint32_t avx2 = UINT32_C(1) << 5;
+    const uint32_t leaf1 = osxsave | avx;
+
+    if (!leopard::IsAVX2Supported(7, leaf1, avx2, UINT64_C(0x6)) ||
+        !leopard::IsAVX2Supported(0xffffffffU, 0xffffffffU,
+            0xffffffffU, UINT64_MAX) ||
+        leopard::IsAVX2Supported(6, leaf1, avx2, UINT64_C(0x6)) ||
+        leopard::IsAVX2Supported(7, avx, avx2, UINT64_C(0x6)) ||
+        leopard::IsAVX2Supported(7, osxsave, avx2, UINT64_C(0x6)) ||
+        leopard::IsAVX2Supported(7, leaf1, 0, UINT64_C(0x6)) ||
+        leopard::IsAVX2Supported(7, leaf1, avx2, UINT64_C(0x0)) ||
+        leopard::IsAVX2Supported(7, leaf1, avx2, UINT64_C(0x2)) ||
+        leopard::IsAVX2Supported(7, leaf1, avx2, UINT64_C(0x4)))
+    {
+        fprintf(stderr, "AVX2 CPU/OS feature predicate failed\n");
+        return false;
+    }
+    return true;
+}
+
+static bool TestNextPow2Boundaries()
+{
+    if (leopard::NextPow2(0) != 0 ||
+        leopard::NextPow2(1) != 1 ||
+        leopard::NextPow2(2) != 2 ||
+        leopard::NextPow2(3) != 4 ||
+        leopard::NextPow2(UINT32_C(0x80000000)) !=
+            UINT32_C(0x80000000) ||
+        leopard::NextPow2(UINT32_C(0x80000001)) != 0 ||
+        leopard::NextPow2(UINT32_MAX) != 0)
+    {
+        fprintf(stderr, "NextPow2 boundary handling failed\n");
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 int main()
@@ -1579,7 +1620,9 @@ int main()
         !TestButterflyCircuits() ||
         !TestTransposeHelpers() ||
         !TestWorkCounts() ||
-        !TestCallInitialize())
+        !TestCallInitialize() ||
+        !TestAVX2FeaturePredicate() ||
+        !TestNextPow2Boundaries())
         return 1;
 
     if (!ExpectResult(

@@ -5,8 +5,12 @@
 This branch adds a separate, experimental CPU backend for Leopard's FF8 path.
 It preserves the existing FFT-based encoder and decoder, but replaces fixed
 GF(256) payload multiplication with generated binary XOR circuits. It is not
-the default backend, does not change `leo_encode()` or `leo_decode()`, and does
-not implement FF16, CUDA, or AVX-512 four-buffer fusion.
+the default backend and does not change the data output of valid
+`leo_encode()` or `leo_decode()` calls. This branch also hardens the packed
+APIs' documented count/work-count validation and fixes a `k=1` no-loss decode
+null-recovery bug; those changes affect invalid or formerly crashing calls,
+not valid packed codewords. The experimental backend does not implement FF16,
+CUDA, or AVX-512 four-buffer fusion.
 
 The payload loops use loads, stores, XORs, copies, zeroing, and address/loop
 arithmetic. They do not use payload-indexed multiplication tables, byte
@@ -110,21 +114,24 @@ called once for a whole-buffer operation. Inside that function, the loop loads
 eight named plane values for multiplication or sixteen named plane values for
 a butterfly, executes literal XOR expressions, and stores them.
 
-The available chunk order is:
+`Auto` deliberately retains the established baseline selection while the
+AVX-512 modes remain opt-in. For a selected mode, the available chunk order is:
 
-1. AVX2, 32 bytes from each plane;
-2. 128-bit SIMD, 16 bytes from each plane;
-3. portable `uint64_t`, 8 bytes from each plane.
+1. AVX-512 ZMM (64 bytes) or AVX-512VL YMM (32 bytes), when explicitly selected;
+2. AVX2, 32 bytes from each plane;
+3. 128-bit SIMD, 16 bytes from each plane;
+4. portable `uint64_t`, 8 bytes from each plane.
 
 Each smaller path handles only the exact remainder of one plane. Multiplication
 loads all eight source planes before any store, so `source == destination` is
 supported.
 
 The backend copies Leopard's FF8 metadata initialization and uses a padded skew
-array to avoid constructing the packed implementation's one-before-begin
-pointer. Encoder chunking, zero padding, transform truncation, work ordering,
-formal derivative, decoder ErrorBitfield selection, and the `k=1`/`r=1`
-special cases remain intact.
+array so the transform's historical one-before-logical-begin view remains a
+valid pointer. The packed FF8 and FF16 tables now use the same safety pattern.
+Encoder chunking, zero padding, transform truncation, work ordering, formal
+derivative, decoder ErrorBitfield selection, and the `k=1`/`r=1` special cases
+remain intact.
 
 This first experiment executes two-way butterflies. It intentionally does not
 use the packed backend's fused two-layer four-buffer path: four plane-sliced
@@ -359,21 +366,30 @@ AVX-512VL, and AVX-512 ZMM family, including code size, XOR2, XOR3
 mnemonics. Direct-branch control-flow analysis distinguishes one-per-buffer
 dispatch calls from calls inside cyclic payload loops. Strict mode fails on
 missing mandatory families or specializations, payload-loop calls, possible
-vector spills, scaled stack indexing, direct or indexed static-table reads,
+scaled stack indexing, direct or indexed static-table reads,
 narrow dynamically indexed loads, shuffle/permute/blend/shift/gather/GFNI/
 CLMUL/integer-multiply/vector-mask instructions, or non-XOR3 ternary truth
-tables. AVX-512-enabled CMake builds require the complete VL and ZMM family set.
+tables. Possible compiler-generated vector spills are reported separately;
+`--fail-on-spills` makes those warnings fatal for a code-generation quality
+gate. AVX-512-enabled CMake builds require the complete VL and ZMM family set.
 
 ```sh
-python3 tools/inspect_ff8xor_assembly.py build/liblibleopard.a --strict
+python3 tools/inspect_ff8xor_assembly.py build/liblibleopard.a \
+    --strict --fail-on-spills
 cmake --build build --target inspect_ff8xor_assembly
 cmake --build build --target check_ff8xor_assembly
 ```
 
 The non-strict target writes `ff8xor_assembly_census.json` in the build
-directory. Strict inspection is a developer/CI target instead of part of the
-ordinary build because a new compiler may require a documented code-generation
-adjustment before satisfying the hot-loop contract.
+directory. Supported x86 Linux Release builds run the structural strict check
+under CTest. The developer `check_ff8xor_assembly` target additionally requires
+zero spills. On this machine, GCC's Release kernels pass that stronger gate.
+Clang 18 produced genuine base-path loop spills in 104 of 256 FFT and 251 of
+256 IFFT specializations, while its generated AVX-512VL and ZMM families had
+none. Disabling Clang's loop and SLP vectorizers reduced code size and some
+spills but did not eliminate those FFT/IFFT spills, so the experimental branch
+reports them rather than treating correct code from that compiler as a failed
+implementation.
 
 ### Standalone AVX-512 XOR3 experiment
 
@@ -523,6 +539,10 @@ the experiment with AVX-512VL `vpternlog` and high vector registers.
   packed-only benchmark at 762 KiB, so packed-only static clients do not pull
   the generated object.
 - Packed compatibility requires explicit 8x8 transposes.
+- The inherited CMake build still applies `-march=native` globally. The
+  `uint64_t` implementation is a functional fallback on the build host, but a
+  binary built this way is not yet guaranteed to run on an older x86 host;
+  baseline-ISA object isolation is tracked as a required follow-up.
 - This backend is FF8-only and CPU-only.
 
 The highest-value next optimization is AVX-512 four-buffer fused generation:
