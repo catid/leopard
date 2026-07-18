@@ -230,6 +230,7 @@ and output MB/s.
 ./build/bench_leopard_ff8xor --include-transpose
 ./build/bench_leopard_ff8xor --csv
 ./build/bench_leopard_ff8xor --quick --json --abba --counters
+./build/bench_leopard_ff8xor --quick --json --abba --cache-color
 ```
 
 Native rows exclude transpose time. Rows named `ff8xor_packed_boundary`
@@ -250,6 +251,58 @@ optional packed-boundary rows remain sequential and are labeled as such. ABBA
 rows report twice the requested sample count because each round contains two
 samples of each backend. Allocation and equivalence checks remain outside the
 timed regions.
+
+### Optional transform-buffer cache coloring
+
+`--cache-color` tests an allocation-only mitigation for the native layout's
+worst plane-stride conflict. When `plane_bytes` is a multiple of 4096, all
+eight plane starts in one shard have the same conventional 64-byte-line L1D
+set index. A two-buffer butterfly can therefore present sixteen live lines to
+one set; this exceeds the 12-way L1D associativity of the implementation host.
+The benchmark leaves other sizes on the normal compact allocator because
+extra coloring can add page/TLB cost without addressing a conflict.
+
+[`tests/FF8XorCacheColoredBuffers.h`](../tests/FF8XorCacheColoredBuffers.h)
+over-allocates a selected shard and exposes a 64-byte-aligned, still-contiguous
+`buffer_bytes` region at a deterministic offset within a 4 KiB period. The
+rank-six linear color map uses masks `1,2,4,8,16,32,21,42`; every index-bit
+column is nonzero, so every radix-2 partner through transform size 256 has a
+different color. Decode work uses salt 5. Exhaustive startup checks cover every
+transform-path recovery padding (`m=2..128`) and valid original count,
+source-to-work copies, final
+recovery scaling pairs, all bounded radix-2 partners, address bounds, and all
+eight plane-start colors. The previously considered salt 63 is not used: it
+collides for `m=64`, original index 64.
+
+This option changes benchmark allocation only. It does not alter
+`leo_ff8xor_encode()`, `leo_ff8xor_decode()`, caller pointers, or the native
+eight-plane format. Each exposed shard remains one contiguous allocation view;
+the owner can reserve up to 8127 extra bytes, and allocation stays outside the
+timed region. JSON metadata records `cache_coloring_requested`, while both JSON
+and CSV rows expose the per-result `cache_coloring_applied` field. In
+particular, microbenchmarks and non-aliasing sizes are never labeled colored.
+
+On the implementation host, 12 outer rounds alternated uncolored-colored-
+colored-uncolored and the reverse order, yielding 24 colored and 24 uncolored
+process observations for every quick-mode row. Each process was pinned to CPU
+0 and used the benchmark's internal packed/native ABBA order, one warm-up,
+three iterations, and a 250 us minimum sample. The following values are the
+ratio of aggregate median native `median_us` (uncolored / colored), exclude
+transposes, and use the corrected decode salt 5:
+
+| k,r | Encode | Decode loss 1 | Decode middle loss | Decode loss r |
+|---|---:|---:|---:|---:|
+| 8,2 | 1.220x | 1.193x | - | 1.220x |
+| 32,8 | 1.356x | 1.171x | 1.204x (loss 4) | 1.205x |
+
+Packed-normalized double ratios were 1.171x to 1.360x, supporting that the
+gain was not merely process-to-process frequency drift. PMU events were
+unavailable because this host has `perf_event_paranoid=4`, so this evidence is
+elapsed-time only. The page-relative model and benefit must be rechecked on
+CPUs with different L1 geometry. Reverse-store ordering and narrower chunk
+schedules did not help in isolated trials. An internally padded layout helped
+microkernels, but conversion-inclusive full-codec evidence was not strong
+enough to retain it; persistent or tiled layouts remain separate experiments.
 
 `--json` emits newline-delimited JSON with one environment record, three
 circuit records, and one record per result. CSV and JSON include the generated

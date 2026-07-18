@@ -8,6 +8,7 @@
 #include "../LeopardFF8Xor.h"
 #include "../leopard.h"
 #include "../leopard_ff8xor.h"
+#include "FF8XorCacheColoredBuffers.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -45,6 +46,7 @@ struct Options
     bool counters;
     bool abba;
     bool pin;
+    bool cache_color;
     int pin_cpu;
     unsigned warmups;
     unsigned iterations;
@@ -58,6 +60,7 @@ struct Options
         , counters(false)
         , abba(false)
         , pin(true)
+        , cache_color(false)
         , pin_cpu(-1)
         , warmups(2)
         , iterations(7)
@@ -119,6 +122,7 @@ struct Result
     std::string backend;
     std::string operation;
     bool transpose_included;
+    bool cache_coloring_applied;
     unsigned original_count;
     unsigned recovery_count;
     uint64_t buffer_bytes;
@@ -137,6 +141,7 @@ struct Result
 
     Result()
         : transpose_included(false)
+        , cache_coloring_applied(false)
         , original_count(0)
         , recovery_count(0)
         , buffer_bytes(0)
@@ -152,85 +157,7 @@ struct Result
     }
 };
 
-class BufferSet
-{
-public:
-    BufferSet() {}
-    ~BufferSet() { Clear(); }
-
-    BufferSet(const BufferSet&) = delete;
-    BufferSet& operator=(const BufferSet&) = delete;
-
-    bool Allocate(unsigned count, size_t bytes)
-    {
-        Clear();
-        try
-        {
-            Buffers.reserve(count);
-            for (unsigned i = 0; i < count; ++i)
-            {
-                uint8_t* buffer = leopard::SIMDSafeAllocate(bytes);
-                if (!buffer)
-                {
-                    Clear();
-                    return false;
-                }
-                Buffers.push_back(buffer);
-            }
-        }
-        catch (const std::bad_alloc&)
-        {
-            Clear();
-            return false;
-        }
-        return true;
-    }
-
-    void Clear()
-    {
-        for (size_t i = 0; i < Buffers.size(); ++i)
-            leopard::SIMDSafeFree(Buffers[i]);
-        Buffers.clear();
-    }
-
-    bool TransferFirst(unsigned count, BufferSet& destination)
-    {
-        if (count > Buffers.size())
-            return false;
-        destination.Clear();
-        try
-        {
-            destination.Buffers.reserve(count);
-        }
-        catch (const std::bad_alloc&)
-        {
-            return false;
-        }
-        for (unsigned i = 0; i < count; ++i)
-        {
-            destination.Buffers.push_back(Buffers[i]);
-            Buffers[i] = NULL;
-        }
-        Clear();
-        return true;
-    }
-
-    uint8_t* operator[](size_t index)
-    {
-        return static_cast<uint8_t*>(Buffers[index]);
-    }
-
-    const uint8_t* operator[](size_t index) const
-    {
-        return static_cast<const uint8_t*>(Buffers[index]);
-    }
-
-    void** Data() { return Buffers.empty() ? NULL : &Buffers[0]; }
-    unsigned Count() const { return static_cast<unsigned>(Buffers.size()); }
-
-private:
-    std::vector<void*> Buffers;
-};
+typedef leopard_ff8xor_test::BufferSet BufferSet;
 
 class Random
 {
@@ -983,7 +910,8 @@ public:
         if (CSV)
         {
             std::cout
-                << "record,backend,operation,transpose_included,k,r,buffer_bytes,loss_count,"
+                << "record,backend,operation,transpose_included,cache_coloring_applied,"
+                << "k,r,buffer_bytes,loss_count,"
                 << "warmups,iterations,calls_per_sample,median_us,best_us,median_input_MBps,"
                 << "best_input_MBps,median_output_MBps,best_output_MBps,"
                 << "speed_ratio_vs_packed,compiler,build_type,cpu,simd,checksum,gate_min,"
@@ -1033,6 +961,8 @@ public:
                 << (options.include_transpose ? "true" : "false")
                 << ',' << Json("pmu_requested") << ':'
                 << (options.counters ? "true" : "false")
+                << ',' << Json("cache_coloring_requested") << ':'
+                << (options.cache_color ? "true" : "false")
                 << ',' << Json("measurement_order") << ':'
                 << Json(options.abba
                     ? "ABBA for paired end-to-end rows; micro/boundary sequential"
@@ -1065,6 +995,10 @@ public:
                 : "packed then ff8xor") << '\n'
             << "PMU counters: "
             << (options.counters ? "requested" : "disabled") << '\n'
+            << "ff8xor allocations: "
+            << (options.cache_color
+                ? "4-KiB-relative colors for fully aliasing plane strides"
+                : "allocator default (uncolored)") << '\n'
             << "timing: calls/sample is auto-calibrated and each result is per call\n"
             << "circuit checksum: "
             << leopard::ff8xor::GetCircuitChecksum() << '\n'
@@ -1097,6 +1031,7 @@ public:
             std::cout << Csv(result.record) << ','
                 << Csv(result.backend) << ',' << Csv(result.operation) << ','
                 << (result.transpose_included ? 1 : 0) << ','
+                << (result.cache_coloring_applied ? 1 : 0) << ','
                 << result.original_count << ',' << result.recovery_count << ','
                 << result.buffer_bytes << ',' << result.loss_count << ','
                 << result.warmups << ',' << result.iterations << ','
@@ -1146,6 +1081,8 @@ public:
                 << ',' << Json("operation") << ':' << Json(result.operation)
                 << ',' << Json("transpose_included") << ':'
                 << (result.transpose_included ? "true" : "false")
+                << ',' << Json("cache_coloring_applied") << ':'
+                << (result.cache_coloring_applied ? "true" : "false")
                 << ',' << Json("k") << ':' << result.original_count
                 << ',' << Json("r") << ':' << result.recovery_count
                 << ',' << Json("buffer_bytes") << ':' << result.buffer_bytes
@@ -1213,6 +1150,8 @@ public:
             << " samples=" << std::setw(2) << result.iterations
             << " calls/sample=" << std::setw(6) << result.timing.calls_per_sample
             << " transpose=" << (result.transpose_included ? "yes" : "no ")
+            << " cache-color="
+            << (result.cache_coloring_applied ? "yes" : "no ")
             << std::fixed << std::setprecision(3)
             << " median=" << std::setw(10) << result.timing.median_usec << " us"
             << " best=" << std::setw(10) << result.timing.best_usec << " us"
@@ -1272,7 +1211,7 @@ private:
     void GateCSV(const char* operation, unsigned minimum, unsigned maximum, double average)
     {
         std::cout << Csv("metadata") << ',' << Csv("generated") << ','
-            << Csv(operation) << ",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,"
+            << Csv(operation) << ",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,"
             << Csv(Env.compiler) << ',' << Csv(Env.build_type) << ','
             << Csv(Env.cpu) << ',' << Csv(Env.simd) << ','
             << Csv(leopard::ff8xor::GetCircuitChecksum()) << ','
@@ -1662,13 +1601,15 @@ static Result MakeResult(
     uint64_t input_bytes,
     uint64_t output_bytes,
     double ratio,
-    const char* note = "")
+    const char* note = "",
+    bool cache_coloring_applied = false)
 {
     Result result;
     result.record = "benchmark";
     result.backend = backend;
     result.operation = operation;
     result.transpose_included = transpose;
+    result.cache_coloring_applied = cache_coloring_applied;
     result.original_count = original_count;
     result.recovery_count = recovery_count;
     result.buffer_bytes = buffer_bytes;
@@ -1702,6 +1643,12 @@ static Result MakeResult(
         }
     }
     result.note = note;
+    if (result.cache_coloring_applied)
+    {
+        if (!result.note.empty())
+            result.note += "; ";
+        result.note += "cache-colored transform buffers";
+    }
     return result;
 }
 
@@ -1749,6 +1696,162 @@ static bool CheckTransposeHelper()
     return Equal(packed[0], roundtrip[0], 64);
 }
 
+static bool CheckCacheColorHelper()
+{
+    using leopard_ff8xor_test::BufferSet;
+    using leopard_ff8xor_test::SaltedTransformCacheColor;
+    using leopard_ff8xor_test::TransformCacheColor;
+
+    // Decode copies original i to work slot m + i.  Cover every valid FF8
+    // padded recovery size and original count, including additions that carry
+    // across transform-index bits.  A salt of 63, for example, collides at
+    // m=64 and i=64; the selected salt must survive the complete domain.
+    for (unsigned index = 0; index < 256; ++index)
+    {
+        if (TransformCacheColor(index) ==
+            SaltedTransformCacheColor(
+                index, leopard_ff8xor_test::kDecodeWorkCacheColorSalt))
+        {
+            std::cerr << "decode recovery/work cache-color collision: index="
+                << index << '\n';
+            return false;
+        }
+    }
+
+    for (unsigned m = 2; m <= 128; m <<= 1)
+    {
+        for (unsigned original_count = 1;
+             original_count + m <= 256;
+             ++original_count)
+        {
+            for (unsigned index = 0; index < original_count; ++index)
+            {
+                if (TransformCacheColor(index) ==
+                    SaltedTransformCacheColor(
+                        m + index,
+                        leopard_ff8xor_test::kDecodeWorkCacheColorSalt))
+                {
+                    std::cerr << "decode source/work cache-color collision: m="
+                        << m << " k=" << original_count
+                        << " index=" << index << '\n';
+                    return false;
+                }
+                if (SaltedTransformCacheColor(
+                        index,
+                        leopard_ff8xor_test::kDecodeWorkCacheColorSalt) ==
+                    SaltedTransformCacheColor(
+                        m + index,
+                        leopard_ff8xor_test::kDecodeWorkCacheColorSalt))
+                {
+                    std::cerr << "decode output/input work cache-color collision: m="
+                        << m << " k=" << original_count
+                        << " index=" << index << '\n';
+                    return false;
+                }
+            }
+        }
+    }
+
+    // Radix-2 partners differ in one transform-index bit.  Check every such
+    // pair for every bounded prefix rather than only the power-of-two sizes
+    // used by the codec, so a future truncated schedule cannot invalidate the
+    // allocation invariant silently.
+    for (unsigned count = 1; count <= 256; ++count)
+    {
+        for (unsigned distance = 1; distance < 256; distance <<= 1)
+        {
+            for (unsigned index = 0; index < count; ++index)
+            {
+                const unsigned partner = index ^ distance;
+                if (partner < count &&
+                    TransformCacheColor(index) == TransformCacheColor(partner))
+                {
+                    std::cerr << "cache-color collision: n=" << count
+                        << " distance=" << distance
+                        << " index=" << index
+                        << " partner=" << partner << '\n';
+                    return false;
+                }
+            }
+        }
+    }
+
+    bool seen[leopard_ff8xor_test::kCacheColorCount] = {};
+    for (unsigned index = 0; index < 64; ++index)
+        seen[TransformCacheColor(index)] = true;
+    for (unsigned color = 0;
+         color < leopard_ff8xor_test::kCacheColorCount;
+         ++color)
+    {
+        if (!seen[color])
+        {
+            std::cerr << "cache-color map does not cover color " << color << '\n';
+            return false;
+        }
+    }
+
+    static const size_t kSizes[] = { 64, 1024, 64 * 1024 };
+    static const unsigned kSalts[] = {
+        0, leopard_ff8xor_test::kDecodeWorkCacheColorSalt
+    };
+    for (size_t size_index = 0;
+         size_index < sizeof(kSizes) / sizeof(kSizes[0]);
+         ++size_index)
+    {
+        for (size_t salt_index = 0;
+             salt_index < sizeof(kSalts) / sizeof(kSalts[0]);
+             ++salt_index)
+        {
+            BufferSet buffers;
+            if (!buffers.Allocate(256, kSizes[size_index], true, 0,
+                    kSalts[salt_index]))
+            {
+                std::cerr << "cache-color allocation self-test failed\n";
+                return false;
+            }
+            for (unsigned index = 0; index < 256; ++index)
+            {
+                if (!buffers.ValidateColoredAllocation(
+                        index, kSizes[size_index], index, kSalts[salt_index]))
+                {
+                    std::cerr << "invalid cache-colored allocation: index="
+                        << index << " bytes=" << kSizes[size_index]
+                        << " salt=" << kSalts[salt_index] << '\n';
+                    return false;
+                }
+                const unsigned expected_color = SaltedTransformCacheColor(
+                    index, kSalts[salt_index]);
+                const uintptr_t address =
+                    reinterpret_cast<uintptr_t>(buffers[index]);
+                if ((address / leopard_ff8xor_test::kCacheLineBytes) %
+                        leopard_ff8xor_test::kCacheColorCount != expected_color)
+                    return false;
+                if (leopard_ff8xor_test::PlaneStartsFullyCacheAlias(
+                        kSizes[size_index]))
+                {
+                    const size_t plane_bytes = kSizes[size_index] / 8;
+                    for (unsigned plane = 0; plane < 8; ++plane)
+                    {
+                        if ((address + plane * plane_bytes) %
+                                leopard_ff8xor_test::kCacheColorPeriod !=
+                            expected_color *
+                                leopard_ff8xor_test::kCacheLineBytes)
+                        {
+                            std::cerr << "plane-start color mismatch: index="
+                                << index << " plane=" << plane << '\n';
+                            return false;
+                        }
+                    }
+                }
+                buffers[index][0] = static_cast<uint8_t>(index);
+                buffers[index][kSizes[size_index] - 1] =
+                    static_cast<uint8_t>(index ^ 0xff);
+            }
+        }
+    }
+    return true;
+}
+
 static bool VerifyPackedRecovery(
     const BufferSet& packed_recovery,
     const BufferSet& plane_work,
@@ -1776,6 +1879,9 @@ static bool RunParameter(
     unsigned recovery_count,
     uint64_t buffer_bytes)
 {
+    const bool use_cache_color = options.cache_color &&
+        leopard_ff8xor_test::PlaneStartsFullyCacheAlias(
+            static_cast<size_t>(buffer_bytes));
     const unsigned packed_encode_count =
         leo_encode_work_count(original_count, recovery_count);
     const unsigned xor_encode_count =
@@ -1791,7 +1897,8 @@ static bool RunParameter(
     BufferSet plane_original;
     BufferSet scratch;
     if (!packed_original.Allocate(original_count, static_cast<size_t>(buffer_bytes)) ||
-        !plane_original.Allocate(original_count, static_cast<size_t>(buffer_bytes)) ||
+        !plane_original.Allocate(original_count, static_cast<size_t>(buffer_bytes),
+            use_cache_color, 0, 0) ||
         !scratch.Allocate(1, static_cast<size_t>(buffer_bytes)))
     {
         reporter.Skip(original_count, recovery_count, buffer_bytes, 0,
@@ -1822,7 +1929,8 @@ static bool RunParameter(
     if (!packed_encode_work.Allocate(
             packed_encode_count, static_cast<size_t>(buffer_bytes)) ||
         !xor_encode_work.Allocate(
-            xor_encode_count, static_cast<size_t>(buffer_bytes)))
+            xor_encode_count, static_cast<size_t>(buffer_bytes),
+            use_cache_color, 0, 0))
     {
         reporter.Skip(original_count, recovery_count, buffer_bytes, 0,
             "allocation failed for encode work");
@@ -1875,7 +1983,8 @@ static bool RunParameter(
     reporter.Print(MakeResult(options, "ff8xor_native", "encode", false,
         original_count, recovery_count, buffer_bytes, 0,
         xor_encode_timing, encode_input_bytes, encode_output_bytes,
-        packed_encode_timing.median_usec / xor_encode_timing.median_usec));
+        packed_encode_timing.median_usec / xor_encode_timing.median_usec,
+        "", use_cache_color));
 
     if (options.include_transpose)
     {
@@ -1920,7 +2029,8 @@ static bool RunParameter(
             reporter.Print(MakeResult(options, "ff8xor_packed_boundary", "encode", true,
                 original_count, recovery_count, buffer_bytes, 0,
                 included_timing, encode_input_bytes, encode_output_bytes,
-                packed_encode_timing.median_usec / included_timing.median_usec));
+                packed_encode_timing.median_usec / included_timing.median_usec,
+                "", use_cache_color));
         }
     }
 
@@ -1983,7 +2093,9 @@ static bool RunParameter(
         if (!packed_decode_work.Allocate(
                 packed_decode_count, static_cast<size_t>(buffer_bytes)) ||
             !xor_decode_work.Allocate(
-                xor_decode_count, static_cast<size_t>(buffer_bytes)))
+                xor_decode_count, static_cast<size_t>(buffer_bytes),
+                use_cache_color, 0,
+                leopard_ff8xor_test::kDecodeWorkCacheColorSalt))
         {
             reporter.Skip(original_count, recovery_count, buffer_bytes, loss_count,
                 "allocation failed for decode work");
@@ -2047,7 +2159,8 @@ static bool RunParameter(
             options, "ff8xor_native", "decode", false,
             original_count, recovery_count, buffer_bytes, loss_count,
             xor_decode_timing, decode_input_bytes, decode_output_bytes,
-            packed_decode_timing.median_usec / xor_decode_timing.median_usec);
+            packed_decode_timing.median_usec / xor_decode_timing.median_usec,
+            "", use_cache_color);
         xor_decode_result.locator_shift =
             leopard::ff8xor::GetLastLocatorShiftForTesting();
         reporter.Print(xor_decode_result);
@@ -2107,7 +2220,8 @@ static bool RunParameter(
                     options, "ff8xor_packed_boundary", "decode", true,
                     original_count, recovery_count, buffer_bytes, loss_count,
                     included_timing, decode_input_bytes, decode_output_bytes,
-                    packed_decode_timing.median_usec / included_timing.median_usec);
+                    packed_decode_timing.median_usec / included_timing.median_usec,
+                    "", use_cache_color);
                 included_result.locator_shift =
                     leopard::ff8xor::GetLastLocatorShiftForTesting();
                 reporter.Print(included_result);
@@ -2370,7 +2484,7 @@ static void Usage(const char* program)
 {
     std::cout << "Usage: " << program
         << " [--quick] [--csv|--json] [--include-transpose] [--counters]"
-        << " [--abba] [--cpu N|--no-pin]\n"
+        << " [--abba] [--cache-color] [--cpu N|--no-pin]\n"
         << "  --quick              Run a bounded development/CI subset.\n"
         << "  --csv                Emit machine-readable CSV.\n"
         << "  --json               Emit newline-delimited machine-readable JSON.\n"
@@ -2378,6 +2492,8 @@ static void Usage(const char* program)
         << "  --counters           Request Linux perf_event PMU counters; unavailable"
         << " events remain null.\n"
         << "  --abba               Measure paired end-to-end rows in A-B-B-A order.\n"
+        << "  --cache-color        Color native transform buffers by page-relative"
+        << " L1D set when all eight plane starts alias.\n"
         << "  --cpu N              Pin the benchmark to allowed logical CPU N.\n"
         << "  --no-pin             Disable default pinning to the first allowed CPU.\n";
 }
@@ -2399,6 +2515,8 @@ static bool ParseOptions(int argc, char** argv, Options& options)
             options.counters = true;
         else if (argument == "--abba")
             options.abba = true;
+        else if (argument == "--cache-color")
+            options.cache_color = true;
         else if (argument == "--no-pin")
             options.pin = false;
         else if (argument == "--cpu")
@@ -2475,6 +2593,11 @@ int main(int argc, char** argv)
     if (!CheckTransposeHelper())
     {
         std::cerr << "8x8 transpose self-test failed\n";
+        return 1;
+    }
+    if (!CheckCacheColorHelper())
+    {
+        std::cerr << "cache-color allocator self-test failed\n";
         return 1;
     }
 
