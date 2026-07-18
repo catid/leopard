@@ -30,6 +30,14 @@ registers `leopard2_portable_isa` to audit the x86-64 archive and any available
 build metadata.  Missing audit tools remain non-fatal for ordinary developer,
 cross-platform, and dependency-light builds.
 
+Sanitizer instrumentation is not production ISA evidence: compiler-generated
+ASan/UBSan helpers may use instructions outside the codec object's declared
+floor.  A sanitizer-instrumented build therefore registers
+`leopard2_portable_isa_checker_self_test` to retain all adversarial classifier
+controls, while the archive audit remains exclusive to a clean build.  The
+strict release-audit option below rejects sanitizer flags instead of silently
+substituting the weaker mode.
+
 ```sh
 ctest --test-dir build -R '^leopard2_portable_isa$' --output-on-failure
 ```

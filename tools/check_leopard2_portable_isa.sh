@@ -5,47 +5,63 @@ set -eu
 usage()
 {
     echo "usage: $0 OBJDUMP STATIC_ARCHIVE [BUILD_DIRECTORY [EXPECTED_CLASSES] | [BUILD_DIRECTORY CC AR [EXPECTED_CLASSES [optional|required]]]]" >&2
+    echo "       $0 --self-test-only OBJDUMP CC AR" >&2
     exit 2
 }
 
-case "$#" in
-    2|3|4|5|6|7) ;;
-    *) usage ;;
-esac
+self_test_only=0
+if [ "${1:-}" = --self-test-only ]; then
+    [ "$#" -eq 4 ] || usage
+    self_test_only=1
+    objdump_bin=$2
+    cc_bin=$3
+    ar_bin=$4
+    archive=
+    build_dir=
+    expected_classes=
+    metadata_mode=optional
+else
+    case "$#" in
+        2|3|4|5|6|7) ;;
+        *) usage ;;
+    esac
 
-objdump_bin=$1
-archive=$2
-build_dir=${3:-}
-cc_bin=
-ar_bin=
-expected_classes=
-metadata_mode=optional
-case "$#" in
-    4)
-        expected_classes=$4
-        ;;
-    5)
-        cc_bin=$4
-        ar_bin=$5
-        ;;
-    6)
-        cc_bin=$4
-        ar_bin=$5
-        expected_classes=$6
-        ;;
-    7)
-        cc_bin=$4
-        ar_bin=$5
-        expected_classes=$6
-        metadata_mode=$7
-        ;;
-esac
+    objdump_bin=$1
+    archive=$2
+    build_dir=${3:-}
+    cc_bin=
+    ar_bin=
+    expected_classes=
+    metadata_mode=optional
+fi
+if [ "$self_test_only" -eq 0 ]; then
+    case "$#" in
+        4)
+            expected_classes=$4
+            ;;
+        5)
+            cc_bin=$4
+            ar_bin=$5
+            ;;
+        6)
+            cc_bin=$4
+            ar_bin=$5
+            expected_classes=$6
+            ;;
+        7)
+            cc_bin=$4
+            ar_bin=$5
+            expected_classes=$6
+            metadata_mode=$7
+            ;;
+    esac
+fi
 case "$metadata_mode" in
     optional|required) ;;
     *) usage ;;
 esac
 
-if [ ! -f "$archive" ]; then
+if [ "$self_test_only" -eq 0 ] && [ ! -f "$archive" ]; then
     echo "portable ISA check: archive not found: $archive" >&2
     exit 2
 fi
@@ -787,6 +803,11 @@ run_negative_controls()
 
 if [ -n "$cc_bin" ] && [ -n "$ar_bin" ]; then
     run_negative_controls
+fi
+
+if [ "$self_test_only" -eq 1 ]; then
+    echo "portable ISA checker self-test-only: PASS (archive scan intentionally not requested)"
+    exit 0
 fi
 
 if ! scan_archive "$archive" "${ar_bin:-}" "$expected_classes"; then

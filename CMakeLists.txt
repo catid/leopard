@@ -646,6 +646,39 @@ if(LEO2_BUILD_TESTS)
             COMMAND leopard2_legacy_simd_init_failure_test ff16)
     endif()
 
+    # Static ISA auditing is meaningful only for production code generation.
+    # Sanitizers may insert target-specific helper sequences (Clang ASan/UBSan
+    # has emitted LAHF in an otherwise SSSE3-only object), so scanning an
+    # instrumented archive can report the sanitizer runtime as a codec ISA
+    # leak.  Keep this classification in the test-registration scope so it
+    # cannot affect the production target/source graph audited by the Visual
+    # Studio project verifier.
+    set(LEO2_PRODUCTION_ARCHIVE_SANITIZED OFF)
+    set(LEO2_SANITIZER_FLAG_PATTERN
+        "(^|[ \t;])-fsanitize=[^ \t;]+")
+    if("${CMAKE_CXX_FLAGS}" MATCHES "${LEO2_SANITIZER_FLAG_PATTERN}" OR
+       (CMAKE_BUILD_TYPE STREQUAL "Debug" AND
+        "${CMAKE_CXX_FLAGS_DEBUG}" MATCHES
+            "${LEO2_SANITIZER_FLAG_PATTERN}") OR
+       (CMAKE_BUILD_TYPE STREQUAL "Release" AND
+        "${CMAKE_CXX_FLAGS_RELEASE}" MATCHES
+            "${LEO2_SANITIZER_FLAG_PATTERN}") OR
+       (CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo" AND
+        "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}" MATCHES
+            "${LEO2_SANITIZER_FLAG_PATTERN}") OR
+       (CMAKE_BUILD_TYPE STREQUAL "MinSizeRel" AND
+        "${CMAKE_CXX_FLAGS_MINSIZEREL}" MATCHES
+            "${LEO2_SANITIZER_FLAG_PATTERN}"))
+        set(LEO2_PRODUCTION_ARCHIVE_SANITIZED ON)
+    endif()
+    if(LEO2_PORTABLE_ISA_RELEASE_AUDIT AND
+       LEO2_PRODUCTION_ARCHIVE_SANITIZED)
+        message(FATAL_ERROR
+            "LEO2_PORTABLE_ISA_RELEASE_AUDIT requires an unsanitized Release "
+            "archive; run sanitizer correctness and portable-ISA release "
+            "audits in separate build directories")
+    endif()
+
     # The portable archive audit is useful for reduced-field archives too, so
     # keep it outside the dual-field-only exhaustive-test graph below.
     if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" OR
@@ -693,15 +726,35 @@ if(LEO2_BUILD_TESTS)
             if(LEO2_PORTABLE_ISA_RELEASE_AUDIT)
                 list(APPEND LEO2_PORTABLE_ISA_METADATA_ARGS required)
             endif()
-            add_test(NAME leopard2_portable_isa
-                COMMAND "${LEO2_SH_EXECUTABLE}"
-                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_leopard2_portable_isa.sh"
-                    "${LEO2_OBJDUMP_EXECUTABLE}"
-                    "$<TARGET_FILE:leopard>"
-                    "${CMAKE_CURRENT_BINARY_DIR}"
-                    ${LEO2_PORTABLE_ISA_SELF_TEST_ARGS}
-                    "${LEO2_PORTABLE_ISA_EXPECTED_CLASSES_ARG}"
-                    ${LEO2_PORTABLE_ISA_METADATA_ARGS})
+            if(LEO2_PRODUCTION_ARCHIVE_SANITIZED)
+                # Keep the checker executable and its adversarial fixtures in
+                # sanitizer CTest matrices, but do not mislabel sanitizer-
+                # generated instructions as production archive evidence.
+                add_test(NAME leopard2_portable_isa_checker_self_test
+                    COMMAND "${LEO2_SH_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_leopard2_portable_isa.sh"
+                        --self-test-only
+                        "${LEO2_OBJDUMP_EXECUTABLE}"
+                        "${CMAKE_C_COMPILER}" "${CMAKE_AR}")
+                set(LEO2_PORTABLE_ISA_EXPECTED_TEST controls)
+            else()
+                add_test(NAME leopard2_portable_isa
+                    COMMAND "${LEO2_SH_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_leopard2_portable_isa.sh"
+                        "${LEO2_OBJDUMP_EXECUTABLE}"
+                        "$<TARGET_FILE:leopard>"
+                        "${CMAKE_CURRENT_BINARY_DIR}"
+                        ${LEO2_PORTABLE_ISA_SELF_TEST_ARGS}
+                        "${LEO2_PORTABLE_ISA_EXPECTED_CLASSES_ARG}"
+                        ${LEO2_PORTABLE_ISA_METADATA_ARGS})
+                set(LEO2_PORTABLE_ISA_EXPECTED_TEST archive)
+            endif()
+            add_test(NAME leopard2_portable_isa_registration
+                COMMAND ${CMAKE_COMMAND}
+                    -DLEO2_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}
+                    -DLEO2_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+                    -DLEO2_EXPECTED_TEST=${LEO2_PORTABLE_ISA_EXPECTED_TEST}
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_portable_isa_registration.cmake)
         endif()
     endif()
 
