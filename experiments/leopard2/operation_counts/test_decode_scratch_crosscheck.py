@@ -104,6 +104,18 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
             accounting.codec_work_slots == int(row["codec_work_slots"]),
             name + " codec work-slot mismatch",
         )
+        maximum = COUNTS.size_t_max(int(row["pointer_bytes"]))
+        require(
+            accounting.plan_total_bytes <= maximum and
+            accounting.codec_total_bytes <= maximum,
+            name + " public query escaped declared size_t",
+        )
+        require(
+            COUNTS.round_shard_bytes(
+                int(row["shard_bytes"]), int(row["pointer_bytes"])
+            ) == ((int(row["shard_bytes"]) + 63) & ~63),
+            name + " valid probe control did not round like production",
+        )
         tail = int(row["shard_bytes"]) & 63
         if tail and not (direct or no_op):
             require(
@@ -127,7 +139,7 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
                 str(row["backend"]) in ("scalar", "ssse3", "avx2", "neon"),
                 name + " did not record the selected production backend",
             )
-        checks += 8
+        checks += 10
 
     required = {
         "noop_ragged", "forced_high_materialized_aligned",
@@ -199,11 +211,75 @@ def mutation_checks() -> int:
     return checks + 4
 
 
+def abi_boundary_checks() -> int:
+    checks = 0
+    for pointer_bytes in (4, 8):
+        maximum = COUNTS.size_t_max(pointer_bytes)
+        largest_roundable = maximum - 63
+        require(
+            COUNTS.round_shard_bytes(largest_roundable, pointer_bytes) ==
+            largest_roundable,
+            "{}-bit largest roundable shard mismatch".format(pointer_bytes * 8),
+        )
+        checks += 1
+        rejected_boundaries = dict.fromkeys(
+            (maximum - 62, maximum - 1, maximum, COUNTS.UINT64_MAX)
+        )
+        for rejected in rejected_boundaries:
+            try:
+                COUNTS.round_shard_bytes(rejected, pointer_bytes)
+            except COUNTS.ModelError:
+                checks += 1
+            else:
+                raise AssertionError(
+                    "{}-bit shard boundary was accepted: {}".format(
+                        pointer_bytes * 8, rejected
+                    )
+                )
+
+        control = COUNTS.decode_scratch_accounting(
+            1, 1, 2, 1, "low", 64, 1, "specialized", pointer_bytes,
+            codec_workspace="specialized", direct=True,
+        )
+        largest_layout_shard = (
+            (maximum - control.codec_data_offset) // control.codec_work_slots
+        ) & ~63
+        boundary = COUNTS.decode_scratch_accounting(
+            1, 1, 2, 1, "low", largest_layout_shard, 1, "specialized",
+            pointer_bytes, codec_workspace="specialized", direct=True,
+        )
+        require(
+            boundary.codec_total_bytes <= maximum,
+            "{}-bit valid layout boundary overflowed".format(pointer_bytes * 8),
+        )
+        try:
+            COUNTS.decode_scratch_accounting(
+                1, 1, 2, 1, "low", largest_layout_shard + 64, 1,
+                "specialized", pointer_bytes,
+                codec_workspace="specialized", direct=True,
+            )
+        except COUNTS.ModelError:
+            checks += 2
+        else:
+            raise AssertionError(
+                "{}-bit layout overflow neighbor was accepted".format(
+                    pointer_bytes * 8
+                )
+            )
+
+    try:
+        COUNTS.round_shard_bytes(COUNTS.UINT64_MAX + 1, 8)
+    except COUNTS.ModelError:
+        return checks + 1
+    raise AssertionError("value above uint64_t was accepted")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--probe", type=pathlib.Path, required=True)
     args = parser.parse_args()
-    checks = cross_check_rows(load_rows(args.probe)) + mutation_checks()
+    checks = (cross_check_rows(load_rows(args.probe)) + mutation_checks() +
+              abi_boundary_checks())
     print("decode scratch cross-check passed: {} checks".format(checks))
     return 0
 

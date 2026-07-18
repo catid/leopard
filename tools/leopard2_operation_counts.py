@@ -24,6 +24,9 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set, TextIO, Tuple
 
 
 SCHEMA_VERSION = 2
+UINT32_MAX = (1 << 32) - 1
+UINT64_MAX = (1 << 64) - 1
+SCRATCH_ALIGNMENT = 64
 PATHS = (
     "legacy_high_encode",
     "legacy_high_decode",
@@ -426,10 +429,46 @@ class DecodeScratchAccounting:
     codec_total_bytes: int
 
 
-def align_up(value: int, alignment: int) -> int:
-    if value < 0 or alignment <= 0 or not is_power_of_two(alignment):
+def size_t_max(pointer_bytes: int) -> int:
+    if pointer_bytes not in (4, 8):
+        raise ModelError("pointer bytes must be 4 or 8")
+    return (1 << (pointer_bytes * 8)) - 1
+
+
+def checked_size_add(a: int, b: int, maximum: int) -> int:
+    if a < 0 or b < 0 or maximum < 0 or a > maximum or b > maximum - a:
+        raise ModelError("decode scratch arithmetic exceeds declared ABI size_t")
+    return a + b
+
+
+def checked_size_multiply(a: int, b: int, maximum: int) -> int:
+    if a < 0 or b < 0 or maximum < 0 or a > maximum or b > maximum:
+        raise ModelError("decode scratch arithmetic exceeds declared ABI size_t")
+    if a != 0 and b > maximum // a:
+        raise ModelError("decode scratch arithmetic exceeds declared ABI size_t")
+    return a * b
+
+
+def checked_size_align_up(value: int, alignment: int, maximum: int) -> int:
+    if alignment <= 0 or not is_power_of_two(alignment):
         raise ModelError("invalid alignment input")
-    return (value + alignment - 1) & ~(alignment - 1)
+    summed = checked_size_add(value, alignment - 1, maximum)
+    return summed & ~(alignment - 1)
+
+
+def round_shard_bytes(shard_bytes: int, pointer_bytes: int) -> int:
+    """Mirror production RoundShardBytes for a declared size_t width."""
+    maximum = size_t_max(pointer_bytes)
+    if shard_bytes <= 0 or shard_bytes > UINT64_MAX or shard_bytes > maximum:
+        raise ModelError("shard bytes do not fit the declared ABI size_t")
+    try:
+        return checked_size_align_up(
+            shard_bytes, SCRATCH_ALIGNMENT, maximum
+        )
+    except ModelError as error:
+        raise ModelError(
+            "shard bytes cannot be rounded within the declared ABI size_t"
+        ) from error
 
 
 def _decode_transform_work_slots(
@@ -438,14 +477,15 @@ def _decode_transform_work_slots(
     profile: str,
     output_slots: int,
     workspace: str,
+    maximum: int,
 ) -> int:
     if workspace == "generic" or workspace == "materialized":
         return parent
     if workspace not in ("tiled", "specialized"):
         raise ModelError("decode workspace must be materialized or tiled")
-    slots = 2 * padded
+    slots = checked_size_multiply(2, padded, maximum)
     if profile == "high":
-        slots += output_slots
+        slots = checked_size_add(slots, output_slots, maximum)
     # AUTO specialized execution retains N slots whenever that is no larger
     # than the side-sized form.  A forced tiled diagnostic intentionally does
     # not apply this cap, so callers asking for `tiled` get the forced oracle.
@@ -459,20 +499,37 @@ def _scratch_components(
     work_slots: int,
     work_slot_bytes: int,
     pointer_bytes: int,
-) -> Tuple[int, int, int, int, int, int]:
-    range_bytes = range_count * 2 * pointer_bytes
-    pointer_offset = align_up(range_bytes, pointer_bytes)
-    pointer_bytes_total = pointer_count * pointer_bytes
-    data_offset = align_up(pointer_offset + pointer_bytes_total, 64)
+) -> Tuple[int, int, int, int, int, int, int]:
+    maximum = size_t_max(pointer_bytes)
+    address_range_bytes = checked_size_multiply(2, pointer_bytes, maximum)
+    range_bytes = checked_size_multiply(
+        range_count, address_range_bytes, maximum
+    )
+    pointer_offset = checked_size_align_up(
+        range_bytes, pointer_bytes, maximum
+    )
+    pointer_bytes_total = checked_size_multiply(
+        pointer_count, pointer_bytes, maximum
+    )
+    end_pointers = checked_size_add(
+        pointer_offset, pointer_bytes_total, maximum
+    )
+    data_offset = checked_size_align_up(
+        end_pointers, SCRATCH_ALIGNMENT, maximum
+    )
     alignment_bytes = data_offset - range_bytes - pointer_bytes_total
-    tail_bytes = tail_reserved_slots * 64
-    work_bytes = work_slots * work_slot_bytes
-    total = data_offset + tail_bytes + work_bytes
+    tail_bytes = checked_size_multiply(
+        tail_reserved_slots, SCRATCH_ALIGNMENT, maximum
+    )
+    work_data_offset = checked_size_add(data_offset, tail_bytes, maximum)
+    work_bytes = checked_size_multiply(work_slots, work_slot_bytes, maximum)
+    total = checked_size_add(work_data_offset, work_bytes, maximum)
     return (
         range_bytes,
         pointer_bytes_total,
         alignment_bytes,
         data_offset,
+        tail_bytes,
         work_bytes,
         total,
     )
@@ -500,26 +557,44 @@ def decode_scratch_accounting(
     Forced-path probes pass the same workspace for both.  Direct/no-op plans
     still have an ordinary transform-capable codec query.
     """
-    if pointer_bytes not in (4, 8):
-        raise ModelError("pointer bytes must be 4 or 8")
+    maximum = size_t_max(pointer_bytes)
+    if not (0 < k <= UINT32_MAX and 0 < r <= UINT32_MAX):
+        raise ModelError("decode counts must fit positive uint32_t values")
     if loss_count < 0 or loss_count > min(k, r):
         raise ModelError("invalid decode loss count")
     if profile not in PROFILES:
         raise ModelError("profile must be high or low")
-    if shard_bytes <= 0:
-        raise ModelError("shard bytes must be positive")
+    expected_geometry = parent_geometry(k, r, profile)
+    if (parent != expected_geometry["parent_count"] or
+            padded != expected_geometry["padded_side"] or
+            parent > 65536 or parent > UINT32_MAX or padded > UINT32_MAX):
+        raise ModelError("decode geometry does not match a public codec")
+    if no_op and loss_count != 0:
+        raise ModelError("a no-op decode plan cannot contain losses")
+    if direct and (no_op or loss_count == 0):
+        raise ModelError("a direct decode plan requires a loss")
 
-    range_count = 2 * k + r
-    tail = shard_bytes & 63
+    # Production rejects the public uint64_t input if it cannot first be
+    # represented and rounded in size_t, even when a direct layout owns no
+    # shard-data slots.  The rounded value is a validation result here; the
+    # split layout below deliberately sizes ragged work from the aligned prefix.
+    round_shard_bytes(shard_bytes, pointer_bytes)
+
+    range_count = checked_size_add(
+        checked_size_multiply(2, k, maximum), r, maximum
+    )
+    tail = shard_bytes & (SCRATCH_ALIGNMENT - 1)
     prefix = shard_bytes - tail
-    work_slot_bytes = shard_bytes if tail == 0 else max(prefix, 64)
-    tail_reserved_slots = k + r if tail else 0
+    work_slot_bytes = shard_bytes if tail == 0 else max(
+        prefix, SCRATCH_ALIGNMENT
+    )
+    tail_reserved_slots = checked_size_add(k, r, maximum) if tail else 0
     tail_selected_staged_slots = k if tail and not no_op and not direct else 0
 
     if no_op:
         plan_pointer_count = 0
         plan_work_slots = 0
-        plan_values = (0, 0, 0, 0, 0, 0)
+        plan_values = (0, 0, 0, 0, 0, 0, 0)
         plan_range_count = 0
         plan_tail_slots = 0
     elif direct:
@@ -532,9 +607,11 @@ def decode_scratch_accounting(
         plan_tail_slots = 0
     else:
         plan_work_slots = _decode_transform_work_slots(
-            parent, padded, profile, loss_count, plan_workspace
+            parent, padded, profile, loss_count, plan_workspace, maximum
         )
-        plan_pointer_count = parent + plan_work_slots
+        plan_pointer_count = checked_size_add(
+            parent, plan_work_slots, maximum
+        )
         plan_values = _scratch_components(
             range_count, plan_pointer_count, tail_reserved_slots,
             plan_work_slots, work_slot_bytes, pointer_bytes
@@ -548,19 +625,31 @@ def decode_scratch_accounting(
         parent, padded, profile,
         r if profile == "high" else loss_count,
         codec_workspace,
+        maximum,
     )
-    codec_pointer_count = parent + codec_work_slots
+    codec_pointer_count = checked_size_add(parent, codec_work_slots, maximum)
     codec_values = _scratch_components(
         range_count, codec_pointer_count, tail_reserved_slots,
         codec_work_slots, work_slot_bytes, pointer_bytes
     )
 
     (plan_range_bytes, plan_pointer_bytes, plan_alignment, plan_data_offset,
-     plan_work_bytes, plan_total) = plan_values
+     plan_tail_bytes, plan_work_bytes, plan_total) = plan_values
     (codec_range_bytes, codec_pointer_bytes, codec_alignment,
-     codec_data_offset, codec_work_bytes, codec_total) = codec_values
-    if codec_range_bytes != range_count * 2 * pointer_bytes:
+     codec_data_offset, codec_tail_bytes, codec_work_bytes,
+     codec_total) = codec_values
+    expected_range_bytes = checked_size_multiply(
+        range_count, checked_size_multiply(2, pointer_bytes, maximum), maximum
+    )
+    if codec_range_bytes != expected_range_bytes:
         raise AssertionError("codec range accounting mismatch")
+
+    tail_payload_bytes = checked_size_multiply(
+        tail_selected_staged_slots, tail, maximum
+    )
+    tail_zero_padding_bytes = checked_size_multiply(
+        tail_selected_staged_slots, SCRATCH_ALIGNMENT - tail, maximum
+    )
 
     return DecodeScratchAccounting(
         workspace=("no_op" if no_op else "direct" if direct else plan_workspace),
@@ -572,10 +661,10 @@ def decode_scratch_accounting(
         plan_metadata_alignment_bytes=plan_alignment,
         plan_data_offset=plan_data_offset,
         tail_reserved_slots=plan_tail_slots,
-        tail_reserved_bytes=plan_tail_slots * 64,
+        tail_reserved_bytes=plan_tail_bytes,
         tail_selected_staged_slots=tail_selected_staged_slots,
-        tail_staged_payload_bytes=tail_selected_staged_slots * tail,
-        tail_staged_zero_padding_bytes=tail_selected_staged_slots * (64 - tail),
+        tail_staged_payload_bytes=tail_payload_bytes,
+        tail_staged_zero_padding_bytes=tail_zero_padding_bytes,
         work_slot_bytes=work_slot_bytes,
         plan_work_slots=plan_work_slots,
         plan_work_bytes=plan_work_bytes,
@@ -587,7 +676,7 @@ def decode_scratch_accounting(
         codec_metadata_alignment_bytes=codec_alignment,
         codec_data_offset=codec_data_offset,
         codec_tail_reserved_slots=tail_reserved_slots,
-        codec_tail_reserved_bytes=tail_reserved_slots * 64,
+        codec_tail_reserved_bytes=codec_tail_bytes,
         codec_work_slots=codec_work_slots,
         codec_work_bytes=codec_work_bytes,
         codec_total_bytes=codec_total,
@@ -609,9 +698,9 @@ def ceil_div(numerator: int, denominator: int) -> int:
 
 
 def rounded_kernel_bytes(shard_bytes: int) -> int:
-    if shard_bytes <= 0:
-        raise ModelError("shard bytes must be positive")
-    return ceil_div(shard_bytes, 64) * 64
+    # Operation reports model a uint64_t public shard length.  Decode scratch
+    # accounting applies the stricter declared-ABI size_t limit separately.
+    return round_shard_bytes(shard_bytes, 8)
 
 
 def parent_geometry(k: int, r: int, profile: str) -> Dict[str, int]:
@@ -1670,6 +1759,55 @@ def run_self_test(verbose: bool = True) -> None:
     assert scratch.plan_total_bytes == 28800
     assert scratch.codec_total_bytes == 29824
     checks += 8
+
+    for pointer_bytes in (4, 8):
+        maximum = size_t_max(pointer_bytes)
+        largest_roundable = maximum - (SCRATCH_ALIGNMENT - 1)
+        assert round_shard_bytes(largest_roundable, pointer_bytes) == \
+            largest_roundable
+        try:
+            round_shard_bytes(maximum, pointer_bytes)
+        except ModelError:
+            pass
+        else:
+            raise AssertionError("SIZE_MAX shard escaped round-up rejection")
+        try:
+            round_shard_bytes(UINT64_MAX, pointer_bytes)
+        except ModelError:
+            pass
+        else:
+            raise AssertionError("UINT64_MAX shard escaped round-up rejection")
+
+        control = decode_scratch_accounting(
+            1, 1, 2, 1, "low", 64, 1, "specialized", pointer_bytes,
+            codec_workspace="specialized", direct=True,
+        )
+        largest_layout_shard = (
+            (maximum - control.codec_data_offset) // control.codec_work_slots
+        ) & ~(SCRATCH_ALIGNMENT - 1)
+        boundary = decode_scratch_accounting(
+            1, 1, 2, 1, "low", largest_layout_shard, 1, "specialized",
+            pointer_bytes, codec_workspace="specialized", direct=True,
+        )
+        assert boundary.codec_total_bytes <= maximum
+        try:
+            decode_scratch_accounting(
+                1, 1, 2, 1, "low",
+                largest_layout_shard + SCRATCH_ALIGNMENT, 1, "specialized",
+                pointer_bytes, codec_workspace="specialized", direct=True,
+            )
+        except ModelError:
+            pass
+        else:
+            raise AssertionError("decode scratch overflow neighbor was accepted")
+        checks += 5
+    try:
+        round_shard_bytes(UINT64_MAX + 1, 8)
+    except ModelError:
+        pass
+    else:
+        raise AssertionError("shard length above uint64_t was accepted")
+    checks += 1
 
     low = model_low_encode(8, 248, 8, 1024, set(range(248)))
     assert low.butterflies == 384

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -29,6 +30,18 @@ void require_result(leo2_result actual, const char* operation)
     if (actual != LEO2_SUCCESS)
         throw std::runtime_error(
             std::string(operation) + ": " + leo2_result_string(actual));
+}
+
+void require_result(
+    leo2_result actual,
+    leo2_result expected,
+    const char* operation)
+{
+    if (actual != expected)
+        throw std::runtime_error(
+            std::string(operation) + ": expected " +
+            leo2_result_string(expected) + ", got " +
+            leo2_result_string(actual));
 }
 
 size_t align_up(size_t value, size_t alignment)
@@ -232,6 +245,50 @@ void emit_case(leo2_context* context, const ProbeCase& test)
     leo2_codec_destroy(codec);
 }
 
+void verify_query_boundaries(leo2_context* context, leo2_field field)
+{
+    ProbeCase test = {
+        "abi_boundary_control", 1, 1, LEO2_PROFILE_LOW_V1,
+        field, 0, 64, 1, false
+    };
+    leo2_codec* codec = NULL;
+    require_result(leo2_codec_create(
+        context, test.k, test.r, test.profile, test.field, NULL, &codec),
+        "boundary codec create");
+    const uint32_t parent = leo2_codec_parent_count(codec);
+    const uint32_t padded = leo2_codec_padded_side(codec);
+    if (parent != 2 || padded != 1)
+        throw std::runtime_error("unexpected boundary-control geometry");
+
+    const size_t maximum = std::numeric_limits<size_t>::max();
+    const size_t work_slots = 2;
+    const size_t data_offset = transform_scratch_bytes(
+        test, parent, work_slots) - work_slots * test.shard_bytes;
+    const size_t largest_layout_shard =
+        ((maximum - data_offset) / work_slots) & ~static_cast<size_t>(63);
+    test.shard_bytes = static_cast<uint64_t>(largest_layout_shard);
+    size_t scratch_bytes = 0;
+    require_result(leo2_decode_scratch_size(
+        codec, test.shard_bytes, &scratch_bytes), "boundary codec scratch");
+    if (scratch_bytes != transform_scratch_bytes(test, parent, work_slots))
+        throw std::runtime_error("boundary codec scratch byte mismatch");
+
+    require_result(leo2_decode_scratch_size(
+        codec, static_cast<uint64_t>(largest_layout_shard) + 64,
+        &scratch_bytes), LEO2_INVALID_COUNTS,
+        "overflow-neighbor codec scratch");
+    require_result(leo2_decode_scratch_size(
+        codec, static_cast<uint64_t>(maximum) - 63, &scratch_bytes),
+        LEO2_INVALID_COUNTS, "largest-roundable codec scratch");
+    require_result(leo2_decode_scratch_size(
+        codec, static_cast<uint64_t>(maximum), &scratch_bytes),
+        LEO2_INVALID_ARGUMENT, "SIZE_MAX codec scratch");
+    require_result(leo2_decode_scratch_size(
+        codec, UINT64_MAX, &scratch_bytes),
+        LEO2_INVALID_ARGUMENT, "UINT64_MAX codec scratch");
+    leo2_codec_destroy(codec);
+}
+
 } // namespace
 
 int main()
@@ -295,6 +352,9 @@ int main()
               LEO2_FIELD_GF8, 0, 4096, 8, true },
         };
         const uint32_t fields = leo2_context_field_mask(context);
+        verify_query_boundaries(context,
+            (fields & LEO2_FIELD_MASK_GF8) != 0
+                ? LEO2_FIELD_GF8 : LEO2_FIELD_GF16);
         for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
         {
             const uint32_t bit = cases[i].field == LEO2_FIELD_GF16

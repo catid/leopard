@@ -270,6 +270,76 @@ class OperationCountTests(unittest.TestCase):
         self.assertEqual(no_op.plan_total_bytes, 0)
         self.assertGreater(no_op.codec_total_bytes, 0)
 
+    def test_decode_scratch_declared_abi_boundaries(self) -> None:
+        for pointer_bytes in (4, 8):
+            maximum = COUNTS.size_t_max(pointer_bytes)
+            largest_roundable = maximum - 63
+            self.assertEqual(
+                COUNTS.round_shard_bytes(largest_roundable, pointer_bytes),
+                largest_roundable,
+            )
+            self.assertEqual(
+                COUNTS.checked_size_add(maximum - 1, 1, maximum), maximum
+            )
+            self.assertEqual(
+                COUNTS.checked_size_multiply(maximum, 1, maximum), maximum
+            )
+            with self.assertRaises(COUNTS.ModelError):
+                COUNTS.checked_size_add(maximum, 1, maximum)
+            with self.assertRaises(COUNTS.ModelError):
+                COUNTS.checked_size_multiply(maximum, 2, maximum)
+            for rejected in (maximum - 62, maximum - 1, maximum):
+                with self.assertRaises(COUNTS.ModelError):
+                    COUNTS.round_shard_bytes(rejected, pointer_bytes)
+
+            # K=R=1 is a direct plan, but the pattern-independent codec query
+            # still owns two transform work slots.  Pin the largest aligned
+            # shard whose complete query fits size_t and reject its +64 neighbor.
+            control = COUNTS.decode_scratch_accounting(
+                1, 1, 2, 1, "low", 64, 1, "specialized",
+                pointer_bytes, codec_workspace="specialized", direct=True,
+            )
+            largest_layout_shard = (
+                (maximum - control.codec_data_offset) // control.codec_work_slots
+            ) & ~63
+            boundary = COUNTS.decode_scratch_accounting(
+                1, 1, 2, 1, "low", largest_layout_shard, 1, "specialized",
+                pointer_bytes, codec_workspace="specialized", direct=True,
+            )
+            self.assertLessEqual(boundary.codec_total_bytes, maximum)
+            with self.assertRaises(COUNTS.ModelError):
+                COUNTS.decode_scratch_accounting(
+                    1, 1, 2, 1, "low", largest_layout_shard + 64, 1,
+                    "specialized", pointer_bytes,
+                    codec_workspace="specialized", direct=True,
+                )
+
+            with self.assertRaises(COUNTS.ModelError):
+                COUNTS.decode_scratch_accounting(
+                    1, 1, 2, 1, "low", COUNTS.UINT64_MAX, 1,
+                    "specialized", pointer_bytes,
+                    codec_workspace="specialized", direct=True,
+                )
+
+        with self.assertRaises(COUNTS.ModelError):
+            COUNTS.round_shard_bytes(COUNTS.UINT64_MAX + 1, 8)
+        with self.assertRaises(COUNTS.ModelError):
+            COUNTS.decode_scratch_accounting(
+                1, 1, 4, 1, "low", 64, 1, "specialized", 8,
+                codec_workspace="specialized", direct=True,
+            )
+
+        completed = subprocess.run(
+            [sys.executable, str(TOOL), "report", "--path", "low_decode",
+             "--k", "1", "--r", "1", "--field", "gf8",
+             "--shard-bytes", str(COUNTS.UINT64_MAX), "--loss-count", "1",
+             "--pointer-bytes", "8"],
+            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            check=False,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("declared ABI size_t", completed.stderr)
+
     def test_decode_scratch_source_guard_rejects_layout_mutations(self) -> None:
         filename = "leopard2.cpp"
         source = (ROOT / filename).read_text(encoding="utf-8")

@@ -113,7 +113,12 @@ additional copies.  Reports therefore distinguish reserved tail bytes from
 selected payload bytes and zero-padding bytes.  Work slots are sized to
 `max(aligned_prefix_bytes, 64)` for a ragged shard, not to the rounded total
 shard length.  `--pointer-bytes` declares the 4- or 8-byte ABI used to account
-for `AddressRange`, pointer maps, and alignment.
+for `AddressRange`, pointer maps, alignment, and the corresponding `size_t`
+limit.  The model mirrors production's checked add, multiply, and alignment
+operations: it rejects a zero shard length, a value outside `uint64_t`, a value
+that cannot round up to 64 bytes in the declared `size_t`, or a complete scratch
+layout that overflows.  It never labels an unrepresentable Python integer as an
+exact public-query byte count.
 
 `--decode-workspace materialized|tiled` selects a forced, backend-independent
 accounting oracle for specialized reports.  The production-linked
