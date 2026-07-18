@@ -140,6 +140,31 @@ iterations, not a two-test smoke sample:
       --output-dir build/fuzz-campaign/leak-results \
       --output build/fuzz-campaign/leak-audited-results.json
 
+### Integrated evidence checkpoint (2026-07-18)
+
+The tree at commit `72597bf` was rebuilt with Clang 18.1.3 and
+ASan+UBSan, then exercised on the 30-CPU allowed set. The parallel v4 phase
+passed and audited 60 of 60 distinct jobs (30 API and 30 pruned-transform),
+8,192 iterations per job and 491,520 iterations total. A second run resumed
+all 60 results without execution. Its manifest digest is
+`33dc9e4450f57dca3c3c18f8beed31cfc02d5cd1c5ec17a1df285edfd7e592da`;
+the manifest and audit file SHA-256 values are respectively
+`582af8d51b28e95f5c8555a3279617a175dd4a52d1a88284c50ade25f44308d1`
+and
+`343a034fad04a4df87906961b824cb8797c58f41f127b456a8a27ea144070a43`.
+
+The exact serial LSan v3 companion then passed and audited the same 60 jobs
+and 491,520 iterations, followed by a 60-of-60 zero-execution resume. It signed
+both LSan control hooks as undefined. Its manifest digest is
+`2c7a5a11cb1e13eebe7e4184b798a5ff7d4105801469ad18e07757126fb8ded0`;
+the leak manifest and audit file SHA-256 values are respectively
+`59e9688312a4b1cdf85add16d407d3de895382469fc83e76990a53fd91b9a390`
+and
+`47e6e82cb76feb50507417657e391505777ddb08472a56fecc5eeaccb6a208c5`.
+The ignored local artifacts are under
+`build/fuzz-campaign-integrated-72597bf/`; regenerate them after any codec or
+instrumentation change rather than treating these hashes as current forever.
+
 `leak-create` repeats the live role/core ASan+UBSan attestation and independent
 ELF symbol probe before signing the companion. It then invokes a separate
 linked-core canary that deliberately leaves one unreachable 12,345-byte
