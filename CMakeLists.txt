@@ -16,7 +16,11 @@ set(LIB_SOURCE_FILES
         LeopardFF16.cpp
         LeopardFF16.h
         LeopardFF8.cpp
-        LeopardFF8.h)
+        LeopardFF8.h
+        LeopardFF8Xor.cpp
+        LeopardFF8Xor.h
+        leopard_ff8xor.cpp
+        leopard_ff8xor.h)
 
 set(BENCH_SOURCE_FILES
         tests/benchmark.cpp)
@@ -119,3 +123,28 @@ add_executable(bench_leopard ${BENCH_SOURCE_FILES})
 target_link_libraries(bench_leopard libleopard)
 
 add_executable(experiment_leopard ${EXPERIMENT_SOURCE_FILES})
+
+enable_testing()
+
+add_executable(test_leopard_ff8xor tests/test_ff8xor.cpp)
+target_link_libraries(test_leopard_ff8xor libleopard)
+add_test(NAME leopard_ff8xor COMMAND test_leopard_ff8xor)
+
+add_executable(bench_leopard_ff8xor tests/benchmark_ff8xor.cpp)
+target_link_libraries(bench_leopard_ff8xor libleopard)
+
+# The normal build consumes the checked-in generated source and does not need
+# Python.  These optional targets only regenerate or verify it for developers.
+find_package(PythonInterp 3 QUIET)
+if(PYTHONINTERP_FOUND)
+    add_custom_target(generate_ff8_xor_circuits
+        COMMAND "${PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_ff8_xor_circuits.py"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+    add_custom_target(check_ff8_xor_circuits
+        COMMAND "${PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_ff8_xor_circuits.py"
+                --check
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+endif()

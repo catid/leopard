@@ -31,6 +31,7 @@
 
 #ifdef LEO_HAS_FF8
     #include "LeopardFF8.h"
+    #include "LeopardFF8Xor.h"
 #endif // LEO_HAS_FF8
 #ifdef LEO_HAS_FF16
     #include "LeopardFF16.h"
@@ -63,6 +64,10 @@ LEO_EXPORT int leo_init_(int version)
         return Leopard_Platform;
 #endif // LEO_HAS_FF16
 
+#ifdef LEO_HAS_FF8
+    if (!leopard::ff8xor::Initialize())
+        return Leopard_Platform;
+#endif // LEO_HAS_FF8
 
     m_Initialized = true;
     return Leopard_Success;

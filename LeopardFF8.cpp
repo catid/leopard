@@ -483,6 +483,89 @@ static void mul_mem(
 }
 
 
+// Existing packed payload multiply-add, exposed only for the experimental
+// old-versus-new microbenchmark.  This does not participate in leo_encode()
+// or leo_decode().
+void ExperimentalPackedMulAdd(
+    uint64_t bytes,
+    void* x,
+    const void* y,
+    ffe_t log_m)
+{
+#if defined(LEO_TRY_AVX2)
+    if (CpuHasAVX2)
+    {
+        const LEO_M256 table_lo_y =
+            _mm256_loadu_si256(&Multiply256LUT[log_m].Value[0]);
+        const LEO_M256 table_hi_y =
+            _mm256_loadu_si256(&Multiply256LUT[log_m].Value[1]);
+        const LEO_M256 clr_mask = _mm256_set1_epi8(0x0f);
+        LEO_M256* x32 = reinterpret_cast<LEO_M256*>(x);
+        const LEO_M256* y32 = reinterpret_cast<const LEO_M256*>(y);
+
+        do
+        {
+            LEO_M256 x0 = _mm256_loadu_si256(x32);
+            const LEO_M256 y0 = _mm256_loadu_si256(y32);
+            LEO_MULADD_256(x0, y0, table_lo_y, table_hi_y);
+            _mm256_storeu_si256(x32, x0);
+
+            LEO_M256 x1 = _mm256_loadu_si256(x32 + 1);
+            const LEO_M256 y1 = _mm256_loadu_si256(y32 + 1);
+            LEO_MULADD_256(x1, y1, table_lo_y, table_hi_y);
+            _mm256_storeu_si256(x32 + 1, x1);
+
+            x32 += 2;
+            y32 += 2;
+            bytes -= 64;
+        } while (bytes > 0);
+        return;
+    }
+#endif // LEO_TRY_AVX2
+
+    if (CpuHasSSSE3)
+    {
+        const LEO_M128 table_lo_y =
+            _mm_loadu_si128(&Multiply128LUT[log_m].Value[0]);
+        const LEO_M128 table_hi_y =
+            _mm_loadu_si128(&Multiply128LUT[log_m].Value[1]);
+        const LEO_M128 clr_mask = _mm_set1_epi8(0x0f);
+        LEO_M128* x16 = reinterpret_cast<LEO_M128*>(x);
+        const LEO_M128* y16 = reinterpret_cast<const LEO_M128*>(y);
+
+        do
+        {
+            LEO_M128 x0 = _mm_loadu_si128(x16);
+            const LEO_M128 y0 = _mm_loadu_si128(y16);
+            LEO_MULADD_128(x0, y0, table_lo_y, table_hi_y);
+            _mm_storeu_si128(x16, x0);
+
+            LEO_M128 x1 = _mm_loadu_si128(x16 + 1);
+            const LEO_M128 y1 = _mm_loadu_si128(y16 + 1);
+            LEO_MULADD_128(x1, y1, table_lo_y, table_hi_y);
+            _mm_storeu_si128(x16 + 1, x1);
+
+            LEO_M128 x2 = _mm_loadu_si128(x16 + 2);
+            const LEO_M128 y2 = _mm_loadu_si128(y16 + 2);
+            LEO_MULADD_128(x2, y2, table_lo_y, table_hi_y);
+            _mm_storeu_si128(x16 + 2, x2);
+
+            LEO_M128 x3 = _mm_loadu_si128(x16 + 3);
+            const LEO_M128 y3 = _mm_loadu_si128(y16 + 3);
+            LEO_MULADD_128(x3, y3, table_lo_y, table_hi_y);
+            _mm_storeu_si128(x16 + 3, x3);
+
+            x16 += 4;
+            y16 += 4;
+            bytes -= 64;
+        } while (bytes > 0);
+        return;
+    }
+
+    RefMulAdd(x, y, log_m, bytes);
+}
+
+
 //------------------------------------------------------------------------------
 // FFT
 
