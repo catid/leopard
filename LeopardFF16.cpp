@@ -60,6 +60,8 @@ static std::atomic<uint64_t> TestHighFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighCompatibilityCopyFallbacks(0);
 static std::atomic<uint64_t> TestHighSyndromeAccumulatedBlocks(0);
 static std::atomic<uint64_t> TestHighSyndromeMaterializedBlocks(0);
+static std::atomic<uint64_t> TestHighSyndromePrunedAccumulatedBlocks(0);
+static std::atomic<uint64_t> TestHighSyndromePrunedFallbackBlocks(0);
 static std::atomic<uint64_t> TestSparseExactBlocks(0);
 static std::atomic<uint64_t> TestSparsePrefixButterflies(0);
 static std::atomic<uint64_t> TestSparseRetainedButterflies(0);
@@ -3119,6 +3121,10 @@ void TestOnlyResetHighDecodeCounts()
     TestHighCompatibilityCopyFallbacks.store(0, std::memory_order_relaxed);
     TestHighSyndromeAccumulatedBlocks.store(0, std::memory_order_relaxed);
     TestHighSyndromeMaterializedBlocks.store(0, std::memory_order_relaxed);
+    TestHighSyndromePrunedAccumulatedBlocks.store(
+        0, std::memory_order_relaxed);
+    TestHighSyndromePrunedFallbackBlocks.store(
+        0, std::memory_order_relaxed);
 }
 
 
@@ -3136,6 +3142,12 @@ TestOnlyHighDecodeCounts TestOnlyGetHighDecodeCounts()
         TestHighSyndromeAccumulatedBlocks.load(std::memory_order_relaxed);
     result.syndrome_materialized_blocks =
         TestHighSyndromeMaterializedBlocks.load(std::memory_order_relaxed);
+    result.syndrome_pruned_accumulated_blocks =
+        TestHighSyndromePrunedAccumulatedBlocks.load(
+            std::memory_order_relaxed);
+    result.syndrome_pruned_fallback_blocks =
+        TestHighSyndromePrunedFallbackBlocks.load(
+            std::memory_order_relaxed);
     return result;
 }
 
@@ -3875,6 +3887,18 @@ void ReedSolomonDecodeHighPrepared(
 }
 
 
+static bool ShouldUsePrunedHighSyndromeSink(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes)
+{
+    // Pinned production ABBA measurements promote AVX2 from the safe 1-KiB
+    // crossover.  SSSE3 was faster, but its 64-KiB target cell improved only
+    // 4.86%, below the project's default 5% complexity threshold, so it keeps
+    // the mature materialized schedule.
+    return ops.kind == LEO2_BACKEND_AVX2 && buffer_bytes >= 1024;
+}
+
+
 void ReedSolomonDecodeHighPrunedPlanned(
     const backend::Ops& ops,
     uint64_t buffer_bytes,
@@ -3928,6 +3952,30 @@ void ReedSolomonDecodeHighPrunedPlanned(
         {
             LEO_DEBUG_ASSERT(pruned->size == t &&
                 pruned->shift == offset && pruned->inverse);
+            const bool use_accumulating_sink =
+                ShouldUsePrunedHighSyndromeSink(ops, buffer_bytes);
+            if (block != 0 && use_accumulating_sink)
+            {
+                const bool accumulated = leopard2_internal::
+                    ExecutePrunedInverseTransformPlanAccumulate(
+                        ops, buffer_bytes, *pruned,
+                        work + offset, work);
+                if (accumulated)
+                {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+                    TestHighSyndromeAccumulatedBlocks.fetch_add(
+                        1, std::memory_order_relaxed);
+                    TestHighSyndromePrunedAccumulatedBlocks.fetch_add(
+                        1, std::memory_order_relaxed);
+#endif
+                    continue;
+                }
+            }
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            if (block != 0 && use_accumulating_sink)
+                TestHighSyndromePrunedFallbackBlocks.fetch_add(
+                    1, std::memory_order_relaxed);
+#endif
             const bool executed =
                 leopard2_internal::ExecutePrunedTransformPlan(
                     ops, buffer_bytes, *pruned, work + offset);
@@ -4181,6 +4229,27 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
         {
             LEO_DEBUG_ASSERT(pruned->size == t &&
                 pruned->shift == offset && pruned->inverse);
+            const bool use_accumulating_sink =
+                ShouldUsePrunedHighSyndromeSink(ops, buffer_bytes);
+            const bool accumulated = use_accumulating_sink &&
+                leopard2_internal::
+                    ExecutePrunedInverseTransformPlanAccumulate(
+                        ops, buffer_bytes, *pruned, tile, accumulator);
+            if (accumulated)
+            {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+                TestHighSyndromeAccumulatedBlocks.fetch_add(
+                    1, std::memory_order_relaxed);
+                TestHighSyndromePrunedAccumulatedBlocks.fetch_add(
+                    1, std::memory_order_relaxed);
+#endif
+                continue;
+            }
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            if (use_accumulating_sink)
+                TestHighSyndromePrunedFallbackBlocks.fetch_add(
+                    1, std::memory_order_relaxed);
+#endif
             const bool executed =
                 leopard2_internal::ExecutePrunedTransformPlan(
                     ops, buffer_bytes, *pruned, tile);

@@ -339,6 +339,8 @@ struct TestOnlyHighDecodeCounts
     uint64_t compatibility_copy_fallbacks;
     uint64_t syndrome_accumulated_blocks;
     uint64_t syndrome_materialized_blocks;
+    uint64_t syndrome_pruned_accumulated_blocks;
+    uint64_t syndrome_pruned_fallback_blocks;
 };
 void TestOnlyResetTransformCallsiteCounts();
 TestOnlyTransformCallsiteCounts TestOnlyGetTransformCallsiteCounts();

@@ -751,17 +751,34 @@ static bool PrepareCodecPrunedTransform(
     const uint8_t* output_mask,
     leopard2_internal::PrunedTransformPlan& result)
 {
+    bool prepared = false;
 #ifdef LEO_HAS_FF8
     if (codec->field == LEO2_FIELD_GF8)
-        return leopard::ff8::PreparePrunedTransformPlan(
+        prepared = leopard::ff8::PreparePrunedTransformPlan(
             size, shift, inverse, input_mask, output_mask, result);
 #endif
 #ifdef LEO_HAS_FF16
     if (codec->field == LEO2_FIELD_GF16)
-        return leopard::ff16::PreparePrunedTransformPlan(
+        prepared = leopard::ff16::PreparePrunedTransformPlan(
             size, shift, inverse, input_mask, output_mask, result);
 #endif
-    return false;
+    if (!prepared)
+        return false;
+
+    // Pinned crossover measurements promote the exact inverse sink for AVX2
+    // in both fields and for GF8 SSSE3.  GF16 SSSE3 did not clear the 5%
+    // production threshold.  Do not retain unused root metadata in rejected
+    // or unmeasured plans: besides wasting setup storage, it can evict the
+    // materialized schedule those backends continue to execute.
+    const leo2_backend backend = codec->context->ops->kind;
+    const bool sink_backend = backend == LEO2_BACKEND_AVX2 ||
+        (codec->field == LEO2_FIELD_GF8 &&
+         backend == LEO2_BACKEND_SSSE3);
+    if (inverse && !sink_backend)
+    {
+        std::vector<uint8_t>().swap(result.inverse_accumulation_flags);
+    }
+    return true;
 }
 
 static bool PrunedPlanSavesByteHeavyWork(

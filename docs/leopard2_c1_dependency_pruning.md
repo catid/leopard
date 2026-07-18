@@ -2,8 +2,10 @@
 
 Status: scalar experiment plus bounded C++/SIMD flat-schedule and all-level
 fused implementation complete. Immutable exact-mask schedules are consumed by
-the production high Algorithm 5 and low Algorithm 4 decoders. Encoder
-integration and an isolated end-to-end crossover gate remain.
+the production high Algorithm 5 and low Algorithm 4 decoders. The Algorithm 5
+inverse schedules also have a promoted GF8 SSSE3 and GF8/GF16 AVX2 accumulating
+boundary; rejected or unmeasured backends retain the materialized oracle.
+Encoder integration and the broader end-to-end crossover map remain.
 
 The original scalar experiment is
 `experiments/leopard2/non_power_of_two/c1/dependency_pruning.py`. It answers the
@@ -189,9 +191,10 @@ immutable schedules without changing profile identity or the public ABI.
 Setup expands the existing radix-2 graph once, records input liveness before
 each operation, propagates exact output dependencies backward, removes
 identity writes, and publishes the candidate plan only after complete
-validation. The immutable plan owns only masks, flat operation descriptors,
-and requested structurally-zero output indices. Byte execution allocates
-nothing. It calls the selected scalar, SSSE3, or AVX2 fixed-product and
+validation. The immutable plan owns masks, flat operation descriptors, fused
+start indices, requested structurally-zero output indices, and, for inverse
+plans, the compact root dependency flags described below. Byte execution
+allocates nothing. It calls the selected scalar, SSSE3, or AVX2 fixed-product and
 butterfly table explicitly, so a process-global default cannot leak into a
 lower-backend test.
 
@@ -211,7 +214,10 @@ subspaces are disjoint, so this reordering preserves the same radix-2 DAG while
 making complete groups contiguous at every pair of transform layers. Setup
 validates all four coordinates, multiplier equality, liveness, and output
 dependencies before emitting a descriptor. Execution validates each selected
-descriptor against the retained radix-2 entries. Ragged boundaries and an odd
+descriptor against the retained radix-2 entries. Inverse plans additionally
+retain one liveness/dependency byte for each root pair so an accumulating sink
+can reproduce identity rows that the compact in-place operation vector omits.
+Ragged boundaries and an odd
 unpaired transform layer retain their specialized two-way descriptors. The
 sorted start-index list costs four bytes per fused group rather than one marker
 byte per radix-2 operation.
@@ -245,8 +251,8 @@ graph with the candidate. The deterministic gate covers:
 | --- | ---: |
 | Qualified backends | scalar, SSSE3, AVX2 |
 | Compiled/executed plans | 19,728 |
-| Requested bytes compared | 19,630,575 |
-| Independent direct-polynomial symbols | 13,104 |
+| Requested bytes compared | 67,095,177 |
+| Independent direct-polynomial symbols | 13,512 |
 | Fused four-way descriptors exercised | 215,205 |
 | Effective execution descriptors | 787,494 (four radix-2 entries count as one fused step) |
 | Largest owned plan in the gate | 6,946,992 bytes on this libstdc++ host for a complete GF16 N=65,536 plan |
@@ -254,7 +260,7 @@ graph with the candidate. The deterministic gate covers:
 | Larger parents | GF8 through N=256; GF16 through N=1,024 |
 | Real profile masks | high message-tail IFFT and transmitted/holey parity FFT; low shortened-message IFFT and final/holey parity-block FFT for GF8 (100,30), (17,100) and GF16 (1000,200), (257,700) |
 | Shard tails | GF8 1, 7, 17, 63, 64, 65, 129 bytes; GF16 2, 18, 62, 64, 66, 130 bytes |
-| Shared-plan concurrency | eight threads, sixteen executions each, per available backend |
+| Shared-plan concurrency | eight threads, sixteen executions each, including read-only accumulating execution for GF8 and GF16 per available backend |
 | Fused descriptor integrity | complete GF8/GF16 forward and inverse plans emit `(N/4)*floor(log2(N)/2)` sorted, non-overlapping descriptors across all paired layers |
 
 The complete Debug CTest graph passed 49/49 after initializing the checkout's
@@ -322,8 +328,175 @@ direct interpolation across materialized/tiled modes, byte tails, GF8/GF16,
 one-shot and reused plans, batch execution, parity re-encoding, legal aliases,
 guards, and concurrent use. Context-backend tracing exercises the integrated
 low path under every qualified scalar/SSSE3/AVX2 table. These are correctness
-and structural operation-count results; an authoritative isolated end-to-end
-crossover measurement is still required before claiming a throughput gain.
+and structural operation-count results; the separate exact inverse-sink
+crossover below applies only to Algorithm 5 syndrome construction.
+
+### Exact Algorithm 5 inverse accumulation boundary
+
+Later nonempty Algorithm 5 input blocks are dead immediately after their
+inverse transform is XOR-reduced into the T-shard syndrome accumulator. The
+original exact-mask integration nevertheless materialized every requested root
+output and then made a separate T-shard XOR pass. The inverse executor now
+stops before that root layer and applies the exact rows directly to the
+accumulator. For one root pair the normalized inverse butterfly is
+
+    y' = x + y
+    x' = x + m * (x + y)
+
+The executor specializes structural zero inputs and multipliers zero and one.
+When both inputs and outputs are live it calls the selected backend's mature
+read-only `IFFTButterfly2Xor`; sparse rows use its fixed multiply-add and XOR
+primitives. A complete fused-four descriptor that crosses the root is split
+into its two independent child butterflies and two accumulating root rows;
+complete groups below the root remain fused. This also covers T=2 and an odd
+number of transform layers without a special algebra.
+
+Plan setup records the full root's flags separately because an identity row
+may be correct but absent from the compact write schedule. Execution validates
+the masks, every buffer pointer, operation descriptor, fused-four descriptor,
+root flags, field, byte count, and required backend entries before its first
+write. Rejection therefore leaves both work and accumulator untouched and the
+existing materialize-then-XOR path remains an atomic fallback. The plan and
+executor allocate nothing and are immutable under concurrent use.
+
+The production crossover is deliberately narrower than executor correctness.
+Pinned measurements promote the sink for GF8 AVX2 at 1 KiB and above, GF8
+SSSE3 at 64 KiB and above, and GF16 AVX2 at 1 KiB and above. Smaller vector
+shards keep the materialized schedule because the fixed plan preflight
+otherwise dominates. GF16 SSSE3 improved by 4.86% at its 64-KiB target, but
+that does not clear the project's default 5% complexity threshold, so it also
+keeps materialization. Scalar initially regressed by 2.44% for GF8 and 1.78%
+for GF16, so scalar plans discard the unused root metadata and keep the prior
+materialized schedule. Rejected GF16 SSSE3 and unmeasured NEON plans discard it
+as well. The final GF8 scalar confirmation was 0.41% faster than the matched
+control, which is effectively neutral. NEON is left on the materialized path
+until native hardware can establish an end-to-end crossover; cross-compilation
+alone is not a performance claim.
+
+The deterministic C++ gate now executes both materialized and accumulating
+forms for every inverse case. It covers every input/output mask at T=2 and T=4,
+prefixes and deterministic holes through GF8 T=256 and GF16 T=1,024, shifted
+cosets, arbitrary requested outputs, GF8 byte tails, GF16 compact tails,
+scalar/SSSE3/AVX2 tables, malformed-boundary atomic rejection, and shared-plan
+concurrency. Atomic rejection covers corrupt root flags, out-of-range retained
+operations, and invalid fused descriptors without changing either caller
+workspace. The final candidate passed the complete Release graph (73/73),
+focused Clang 18 ASan+UBSan and TSan builds, and strict Clang 18 and GCC 13
+builds. Tests-off dual-field, GF8-only, and GF16-only archives built cleanly and
+exported no test-hook symbols. A fresh Clang 18 ASan+UBSan libFuzzer campaign
+completed 2,000 inputs with 6,119 covered edges and no crash. After the final
+dispatcher cleanup, another 2,000-run continuation rebuilt the exact source,
+reused that corpus, reached 6,132 edges, and also found no crash.
+
+The authoritative crossover used physical core 14 on the 2026-07-18 host with
+SMT sibling 30 reserved and idle. Both CPUs were 100% idle in the before/after
+`mpstat` samples. The governor was `powersave` under `amd-pstate-epp`; perf
+counters were unavailable because `perf_event_paranoid` was 4. Candidate and
+control ran in ABBA order with one context thread, OpenMP dynamic teams
+disabled, two or three warmups, nine, eleven, or fifteen retained samples per
+outer run, and four outer runs per side. The control was commit
+`354274b2765d79ad`.
+Pooled medians below are decode execution only; setup remained separately
+reported by the benchmark JSON. The crossover-candidate and control executable
+SHA-256 values were `8b5a2a85ef85895988def2b44682537c79ee76cae776cb6cff103501981b8df0`
+and `64bba105f60b7968daa5d783a502dfbaf8b377212c5f017e6b685d353c3b4a99`.
+The two R=32 AVX2 target cells and scalar fallback were repeated after the
+final scalar metadata policy; the broader vector matrix preceded that
+metadata-only correction and exercises the same vector execution path.
+
+| Field/backend | K,R,loss | Bytes | Kernel | Control | Candidate | Delta |
+| --- | --- | ---: | --- | ---: | ---: | ---: |
+| GF8 AVX2 | 224,32,16 | 64 KiB | tiled | 1,670.6 us | 1,577.0 us | -5.60% |
+| GF8 AVX2 | 192,64,32 | 64 KiB | tiled | 2,014.7 us | 1,936.3 us | -3.89% |
+| GF8 AVX2 | 240,16,8 | 64 KiB | tiled | 1,108.8 us | 1,060.7 us | -4.33% |
+| GF8 AVX2 | 240,16,8 | 64 KiB | materialized | 1,120.6 us | 1,084.5 us | -3.22% |
+| GF8 AVX2 | 240,16,8 | 4 KiB | tiled | 60.35 us | 59.27 us | -1.79% |
+| GF8 AVX2 | 129,2,1 | 64 KiB | tiled | 198.11 us | 197.24 us | -0.44% |
+| GF16 AVX2 | 257,32,16 | 64 KiB | tiled | 2,369.8 us | 2,191.9 us | -7.51% |
+| GF16 AVX2 | 1000,200,100 | 64 KiB | tiled | 19,926.4 us | 19,336.6 us | -2.96% |
+| GF8 SSSE3 | 224,32,16 | 64 KiB | tiled | 2,719.3 us | 2,597.0 us | -4.50% |
+| GF16 SSSE3 | 257,32,16 | 64 KiB | tiled | 4,433.3 us | 4,211.7 us | -5.00% |
+| GF8 scalar, final policy | 224,32,16 | 64 KiB | tiled | 11,964.2 us | 11,915.3 us | -0.41% |
+
+Negative deltas are improvements. The qualified vector cells range from
+neutral at T=2 to 7.51% faster, with no decode regression greater than 2% in
+the measured neighbors. Encode is not changed by this dispatch; its pooled
+medians stayed within 1.73% of control in the same alternating runs. The
+strongest meaningful region clears the project's 5% promotion rule, while the
+deterministic backend gate avoids the measured scalar loss.
+
+The independent review then challenged the unmeasured tiny-shard region. The
+same ABBA runner repeated 64 B through 64 KiB with longer reuse. These rows show
+the raw sink candidate before its byte threshold; positive deltas are
+regressions and therefore select the materialized fallback in production.
+
+| Field/backend | Bytes | Control | Raw sink | Delta |
+| --- | ---: | ---: | ---: | ---: |
+| GF8 AVX2 | 64 B | 6.450 us | 7.659 us | +18.73% |
+| GF8 AVX2 | 256 B | 9.658 us | 10.749 us | +11.31% |
+| GF8 AVX2 | 512 B | 13.980 us | 14.905 us | +6.61% |
+| GF8 AVX2 | 1 KiB | 25.994 us | 25.748 us | -0.95% |
+| GF8 SSSE3 | 64 B | 7.469 us | 8.701 us | +16.49% |
+| GF8 SSSE3 | 4 KiB | 165.603 us | 170.280 us | +2.82% |
+| GF8 SSSE3 | 32 KiB | 1,324.258 us | 1,327.051 us | +0.21% |
+| GF8 SSSE3 | 64 KiB | 2,719.269 us | 2,596.995 us | -4.50% |
+| GF16 AVX2 | 64 B | 12.964 us | 14.112 us | +8.86% |
+| GF16 AVX2 | 256 B | 18.769 us | 19.764 us | +5.30% |
+| GF16 AVX2 | 512 B | 27.198 us | 27.497 us | +1.10% |
+| GF16 AVX2 | 1 KiB | 44.089 us | 42.782 us | -2.96% |
+| GF16 SSSE3 | 64 B | 14.200 us | 15.120 us | +6.48% |
+| GF16 SSSE3 | 256 B | 25.496 us | 25.844 us | +1.36% |
+| GF16 SSSE3 | 512 B | 42.880 us | 42.588 us | -0.68% |
+| GF16 SSSE3 | 1 KiB | 76.767 us | 74.774 us | -2.60% |
+
+The deterministic thresholds above exclude every credible regression. The
+T=2 64-KiB edge was repeated separately and ranged from neutral to 3.01%
+faster across GF8/GF16 and SSSE3/AVX2, so the small transform shape does not
+require another dispatcher dimension.
+
+A final ABBA confirmation rebuilt both sides with tests disabled, so the
+measured archives were the production library rather than the test-instrumented
+counter build. The candidate and control executable SHA-256 values were
+`a7606bfe7410363ae715245798679c3c7eaca5e6d9de8fdd8975248d39d5f67d`
+and
+`1776039cfcce03b25e9a62be49e2a81d33262124fe80d9089602d453ef51044f`.
+The crossover manifest SHA-256 was
+`4d9c8ea08bf15feec4ea4d2cb0e3409833abd5e7c5e8dc70d5227c2f8640bc67`;
+the ordered raw-result-set SHA-256 was
+`b912a6c09600144e8aea78d4c7c4e2d102df03b7c33cd422bfed6e4db8163761`.
+All candidate/control original, parity, and recovered-output digests matched.
+
+| Production crossover cell | Measured path | Control | Candidate | Delta |
+| --- | --- | ---: | ---: | ---: |
+| GF8 AVX2, 256 B | materialized | 10.116 us | 10.084 us | -0.31% |
+| GF8 AVX2, 1 KiB | sink | 26.993 us | 26.730 us | -0.97% |
+| GF8 SSSE3, 4 KiB | materialized | 175.867 us | 169.519 us | -3.61% |
+| GF8 SSSE3, 64 KiB | sink | 2,875.195 us | 2,650.424 us | -7.82% |
+| GF16 AVX2, 256 B | materialized | 19.035 us | 19.040 us | +0.03% |
+| GF16 AVX2, 1 KiB | sink | 44.063 us | 42.219 us | -4.19% |
+| GF16 SSSE3, 64 B | materialized | 14.413 us | 14.103 us | -2.15% |
+| GF16 SSSE3, 1 KiB | raw sink, rejected | 76.854 us | 74.580 us | -2.96% |
+
+The boundary sink rows establish a safe crossover only; they are not promotion
+evidence by themselves. Separate tests-off 64-KiB target cells applied the
+project's default 5% rule per backend. Their manifest SHA-256 was
+`0d5d192fda0257a9cd980c3958918d22d5ffb4b9e90180c3da72d0545e182f80`
+and ordered raw-result-set SHA-256 was
+`ac26c5592fbeec51e58c52b774c4d0223221e837128f704bea37d00674a566da`.
+
+| Production target cell | Control | Sink | Delta | Decision |
+| --- | ---: | ---: | ---: | --- |
+| GF8 AVX2, 64 KiB | 1,759.390 us | 1,638.989 us | -6.84% | promote |
+| GF8 SSSE3, 64 KiB | 2,875.195 us | 2,650.424 us | -7.82% | promote |
+| GF16 AVX2, 64 KiB | 2,256.830 us | 2,098.504 us | -7.02% | promote |
+| GF16 SSSE3, 64 KiB | 4,404.303 us | 4,190.257 us | -4.86% | reject |
+
+The retained target wins are all above 5%; deterministic field/backend/byte
+gates avoid every rejected region. Tests-off fallback cells had no decode
+regression greater than 0.03%. The unchanged encode path stayed within 1% of
+control in every corresponding production cell, confirming that larger
+variations seen in test-hook executables were instrumentation-layout effects
+rather than a production regression.
 
 ## C++ transform benchmark checkpoint
 
@@ -437,19 +610,23 @@ crash, and the strict GCC plus Clang sanitizer replay each completed 1,024
 deterministic inputs.  The process affinity exposed 28 CPUs rather than the
 requested 128; all 28 ran distinct ASan+UBSan seeds concurrently for another
 7,168 inputs.  The 45,312 KiB fixed-input measurement is a control, not a claim
-about peak campaign memory.  These are fuzz/correctness results, not the still-
-open performance or production-integration gates.
+about peak campaign memory. These earlier campaigns are fuzz/correctness
+evidence; the later Algorithm 5 sink crossover and production policy are
+reported separately above.
 
 ## Disposition
 
-Promote the following into a bounded C++ prototype behind tests and explicit
-dispatch:
+The following are now promoted behind tests and explicit production dispatch:
 
 - exact forward-live/backward-needed plan construction;
 - flat boundary operation lists;
 - complete-subtransform descriptors that call existing fused kernels at every
   paired transform layer; and
-- zero/one multiplier plus identity-write specialization.
+- zero/one multiplier plus identity-write specialization;
+- exact input/output schedules in the Algorithm 4 and Algorithm 5 decoders;
+  and
+- the GF8 SSSE3 and GF8/GF16 AVX2 exact Algorithm 5 inverse accumulation
+  boundary.
 
 Do not promote the Python executor, measured timing thresholds, or generated
 source. Keep recursive execution as an oracle/debug form. The hybrid form is
@@ -458,17 +635,18 @@ its production case depends on replacing complete groups with real radix-4 or
 SIMD kernels. Generated common-pair kernels remain a separate code-size-limited
 experiment.
 
-This clears the C1 scalar correctness threshold and the C++ translation,
-backend-determinism, arbitrary-tail, immutable-plan-concurrency, and sanitizer
-gates. Production promotion remains blocked on:
+This clears the C1 scalar correctness threshold, C++ translation, decoder
+integration, backend determinism, arbitrary tails, immutable-plan concurrency,
+sanitizers, fuzzing, and the bounded Algorithm 5 sink crossover. Remaining C1
+work is:
 
-- encode/decode integration using real profile masks and shifted blocks;
-- a measured choice between fused and boundary descriptors by backend, shard
-  size, and plan sparsity;
-- production aliasing/scatter validation and malformed-plan fuzz hardening;
-- end-to-end codec benchmarks with plan setup and reuse reported separately;
+- encoder integration using real profile masks and shifted blocks;
+- a broader measured choice between fused and boundary descriptors by backend,
+  shard size, and plan sparsity;
+- native NEON measurement before enabling its exact inverse sink;
 - code/table footprint and instruction-cache measurement; and
-- a dispatcher study covering neighboring regions where little work prunes.
+- the full region dispatcher study covering neighboring parameters where
+  little work prunes.
 
 ## Reproduction
 

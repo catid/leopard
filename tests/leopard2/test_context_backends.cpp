@@ -906,6 +906,7 @@ void require_high_decode_no_copy(
     const TraceOpsGuard& trace,
     leo2_backend execution_backend,
     leo2_field field,
+    bool expect_pruned_accumulation,
     bool expect_gf16_accumulation,
     bool expect_gf16_materialization,
     const std::string& operation)
@@ -918,6 +919,8 @@ void require_high_decode_no_copy(
     uint64_t traced_butterfly4 = 0;
     uint64_t syndrome_accumulated_blocks = 0;
     uint64_t syndrome_materialized_blocks = 0;
+    uint64_t syndrome_pruned_accumulated_blocks = 0;
+    uint64_t syndrome_pruned_fallback_blocks = 0;
     if (field == LEO2_FIELD_GF8)
     {
         const leopard::ff8::TestOnlyHighDecodeCounts counts =
@@ -930,6 +933,10 @@ void require_high_decode_no_copy(
         traced_butterfly4 = trace.ff8_fft_four_out_calls();
         syndrome_accumulated_blocks = counts.syndrome_accumulated_blocks;
         syndrome_materialized_blocks = counts.syndrome_materialized_blocks;
+        syndrome_pruned_accumulated_blocks =
+            counts.syndrome_pruned_accumulated_blocks;
+        syndrome_pruned_fallback_blocks =
+            counts.syndrome_pruned_fallback_blocks;
     }
     else
     {
@@ -943,6 +950,10 @@ void require_high_decode_no_copy(
         traced_butterfly4 = trace.ff16_fft_four_out_calls();
         syndrome_accumulated_blocks = counts.syndrome_accumulated_blocks;
         syndrome_materialized_blocks = counts.syndrome_materialized_blocks;
+        syndrome_pruned_accumulated_blocks =
+            counts.syndrome_pruned_accumulated_blocks;
+        syndrome_pruned_fallback_blocks =
+            counts.syndrome_pruned_fallback_blocks;
     }
     const uint64_t out_of_place_calls = butterfly2 + butterfly4;
     require(output_blocks != 0,
@@ -954,6 +965,14 @@ void require_high_decode_no_copy(
     require(traced_butterfly2 == butterfly2 &&
             traced_butterfly4 == butterfly4,
         operation + " bypassed the selected context out-of-place table");
+    require(syndrome_pruned_fallback_blocks == 0,
+        operation + " rejected a compiled exact inverse sink");
+    if (expect_pruned_accumulation)
+        require(syndrome_pruned_accumulated_blocks != 0,
+            operation + " did not select an eligible exact inverse sink");
+    else
+        require(syndrome_pruned_accumulated_blocks == 0,
+            operation + " bypassed the measured materialized policy");
     if (field == LEO2_FIELD_GF8)
     {
         require(syndrome_accumulated_blocks != 0,
@@ -1313,6 +1332,10 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
         { 33, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 64 },
         { 33, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 129 },
         { 33, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 257 },
+        // Crossover boundaries: AVX2 selects the exact sink at 1 KiB, while
+        // SSSE3 retains materialization until 64 KiB.
+        { 33, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 1024 },
+        { 33, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 65536 },
         // Algorithm 5 final-layer shapes: T=2 exercises the accumulating
         // radix-two boundary, T=4 the distance-one accumulating radix-four
         // boundary, and T=8 odd-log2 final radix two.
@@ -1328,6 +1351,10 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
         { 17, 4, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 194 },
         { 17, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 258 },
         { 33, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 1026 },
+        // The 64-KiB production target remains materialized on GF16 SSSE3
+        // because its measured 4.86% win did not clear the 5% promotion rule;
+        // AVX2 still selects the sink for the same case.
+        { 33, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 65536 },
         { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 64 },
         { 17, 33, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 64 },
         { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 66 },
@@ -1473,7 +1500,19 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                     final_inverse_layer_is_radix_four(side),
                 true,
                 true);
-            if (side >= 4)
+            uint64_t exact_pruned_syndrome_blocks = 0;
+            if (test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1)
+            {
+                if (test_case.field == LEO2_FIELD_GF8)
+                    exact_pruned_syndrome_blocks = leopard::ff8::
+                        TestOnlyGetHighDecodeCounts().
+                            syndrome_pruned_accumulated_blocks;
+                else
+                    exact_pruned_syndrome_blocks = leopard::ff16::
+                        TestOnlyGetHighDecodeCounts().
+                            syndrome_pruned_accumulated_blocks;
+            }
+            if (side >= 4 && exact_pruned_syndrome_blocks == 0)
                 require(trace.xor_four_calls() != 0,
                     "decode bypassed the context grouped-XOR table");
             if (test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1)
@@ -1484,14 +1523,24 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                       (test_case.r == 2 || test_case.r == 4 ||
                        test_case.r == 8)) ||
                      (test_case.k == 33 && test_case.r == 16));
+                const leo2_backend execution_backend =
+                    leo2_context_backend(contexts[context_i].context);
+                const bool expect_pruned_accumulation =
+                    (execution_backend == LEO2_BACKEND_AVX2 &&
+                     test_case.bytes >= 1024) ||
+                    (execution_backend == LEO2_BACKEND_SSSE3 &&
+                     test_case.field == LEO2_FIELD_GF8 &&
+                     test_case.bytes >= 65536);
                 const bool expect_gf16_materialization =
                     test_case.field == LEO2_FIELD_GF16 &&
                     ((test_case.k == 17 && test_case.r == 4) ||
-                     (test_case.k == 33 && test_case.r == 16));
+                     (test_case.k == 33 && test_case.r == 16)) &&
+                    (!expect_pruned_accumulation ||
+                     (test_case.bytes & 63U) != 0);
                 require_high_decode_no_copy(
                     trace,
-                    leo2_context_backend(contexts[context_i].context),
-                    test_case.field, expect_gf16_accumulation,
+                    execution_backend, test_case.field,
+                    expect_pruned_accumulation, expect_gf16_accumulation,
                     expect_gf16_materialization,
                     profile_name + " decode backend=" +
                         std::to_string(static_cast<unsigned>(
