@@ -127,7 +127,11 @@ foreach(test_mode tests-on tests-off)
                     "Could not inspect ${hook_library}: ${hook_nm_stderr}")
             endif()
             if(NOT hook_symbols MATCHES "TestOnly" OR
-               NOT hook_symbols MATCHES "leo2_test_")
+               NOT hook_symbols MATCHES "leo2_test_" OR
+               NOT hook_symbols MATCHES
+                   "TestOnlySetHighDecodeCopyFallback" OR
+               NOT hook_symbols MATCHES
+                   "TestOnlyHighDecodeCopyFallbackEnabled")
                 message(FATAL_ERROR
                     "Hook archive does not contain its expected diagnostics")
             endif()
@@ -151,7 +155,9 @@ foreach(test_mode tests-on tests-off)
     foreach(installed_file ${installed_files})
         get_filename_component(installed_name "${installed_file}" NAME)
         if(installed_name STREQUAL "${hook_library_name}" OR
-           installed_file MATCHES "leopard_test_hooks")
+           installed_file MATCHES "leopard_test_hooks" OR
+           installed_file MATCHES
+               "bench_leopard2_high_decode_copy_attribution")
             message(FATAL_ERROR
                 "${test_mode} installed private hook artifact ${installed_file}")
         endif()

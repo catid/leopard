@@ -29,6 +29,10 @@
 #include "leopard.h"
 #include "leopard2.h"
 #include "Leopard2Dispatch.h"
+#if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
+#include "LeopardFF8.h"
+#include "LeopardFF16.h"
+#endif
 
 #include <algorithm>
 #include <cerrno>
@@ -97,6 +101,14 @@ struct Options
     bool skip_legacy;
     bool retain_samples;
     bool report_decode_path;
+#if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
+    enum HighEvaluatorMode
+    {
+        HighEvaluatorUnset,
+        HighEvaluatorNoCopy,
+        HighEvaluatorCopyFallback
+    } high_evaluator_mode;
+#endif
     std::string output;
 
     Options()
@@ -120,6 +132,9 @@ struct Options
         , skip_legacy(false)
         , retain_samples(false)
         , report_decode_path(false)
+#if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
+        , high_evaluator_mode(HighEvaluatorUnset)
+#endif
         , output("-")
     {}
 };
@@ -374,6 +389,10 @@ static void Usage(std::ostream& output, const char* program)
         << "  --skip-legacy         Do not run the in-tree legacy comparison\n"
         << "  --retain-samples      Emit raw timing samples using benchmark schema v2\n"
         << "  --report-decode-path  Emit internal selected-path metadata using schema v3\n"
+#if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
+        << "  --high-evaluator-mode NAME\n"
+        << "                         Attribution-only: no-copy or copy-fallback\n"
+#endif
         << "  --json PATH           JSON output path, or - for stdout\n"
         << "  --help                 Show this message\n";
 }
@@ -409,6 +428,18 @@ static Options ParseOptions(int argc, char** argv)
         else if (argument == "--skip-legacy") options.skip_legacy = true;
         else if (argument == "--retain-samples") options.retain_samples = true;
         else if (argument == "--report-decode-path") options.report_decode_path = true;
+#if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
+        else if (argument == "--high-evaluator-mode")
+        {
+            const std::string mode = NeedValue(argc, argv, i);
+            if (mode == "no-copy")
+                options.high_evaluator_mode = Options::HighEvaluatorNoCopy;
+            else if (mode == "copy-fallback")
+                options.high_evaluator_mode = Options::HighEvaluatorCopyFallback;
+            else
+                Fail("invalid --high-evaluator-mode: " + mode);
+        }
+#endif
         else if (argument == "--json" || argument == "--output") options.output = NeedValue(argc, argv, i);
         else Fail("unknown argument: " + argument);
     }
@@ -430,8 +461,110 @@ static Options ParseOptions(int argc, char** argv)
     if (options.force_generic_decode &&
         (options.force_tiled_decode || options.force_materialized_decode))
         Fail("--force-generic cannot select a specialized workspace kernel");
+#if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
+    if (options.high_evaluator_mode == Options::HighEvaluatorUnset)
+        Fail("the attribution benchmark requires --high-evaluator-mode");
+    if (options.profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        (options.field != LEO2_FIELD_GF8 && options.field != LEO2_FIELD_GF16) ||
+        !options.force_specialized_decode || options.force_generic_decode ||
+        options.force_tiled_decode == options.force_materialized_decode ||
+        !options.skip_legacy || !options.retain_samples ||
+        !options.report_decode_path || options.threads != 1)
+        Fail("the attribution benchmark requires explicit high profile/field, "
+             "one forced specialized workspace, --skip-legacy, "
+             "--retain-samples, --report-decode-path, and one thread");
+#endif
     return options;
 }
+
+#if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
+static const char* HighEvaluatorModeName(Options::HighEvaluatorMode mode)
+{
+    switch (mode)
+    {
+    case Options::HighEvaluatorNoCopy: return "no-copy";
+    case Options::HighEvaluatorCopyFallback: return "copy-fallback";
+    case Options::HighEvaluatorUnset: break;
+    }
+    return "unset";
+}
+
+struct HighEvaluatorAttribution
+{
+    uint64_t output_blocks;
+    uint64_t butterfly2_out_of_place;
+    uint64_t butterfly4_out_of_place;
+    uint64_t compatibility_copy_fallbacks;
+};
+
+static void PrepareHighEvaluatorAttribution(const Options& options)
+{
+    const bool copy = options.high_evaluator_mode ==
+        Options::HighEvaluatorCopyFallback;
+    leopard::ff8::TestOnlySetHighDecodeCopyFallback(copy);
+    leopard::ff16::TestOnlySetHighDecodeCopyFallback(copy);
+    leopard::ff8::TestOnlyResetHighDecodeCounts();
+    leopard::ff16::TestOnlyResetHighDecodeCounts();
+    if (leopard::ff8::TestOnlyHighDecodeCopyFallbackEnabled() != copy ||
+        leopard::ff16::TestOnlyHighDecodeCopyFallbackEnabled() != copy)
+        Fail("high evaluator attribution selector did not latch");
+}
+
+static HighEvaluatorAttribution ReadHighEvaluatorAttribution(
+    leo2_field field,
+    const Options& options)
+{
+    const leopard::ff8::TestOnlyHighDecodeCounts ff8 =
+        leopard::ff8::TestOnlyGetHighDecodeCounts();
+    const leopard::ff16::TestOnlyHighDecodeCounts ff16 =
+        leopard::ff16::TestOnlyGetHighDecodeCounts();
+    const bool selected_ff8 = field == LEO2_FIELD_GF8;
+    const uint64_t inactive_output_blocks = selected_ff8
+        ? ff16.output_blocks : ff8.output_blocks;
+    const uint64_t inactive_copy_fallbacks = selected_ff8
+        ? ff16.compatibility_copy_fallbacks
+        : ff8.compatibility_copy_fallbacks;
+    const uint64_t inactive_out_of_place = selected_ff8
+        ? ff16.fft_butterfly2_out_of_place +
+            ff16.fft_butterfly4_out_of_place
+        : ff8.fft_butterfly2_out_of_place +
+            ff8.fft_butterfly4_out_of_place;
+    if (inactive_output_blocks != 0 || inactive_copy_fallbacks != 0 ||
+        inactive_out_of_place != 0)
+        Fail("inactive field recorded high evaluator work");
+
+    HighEvaluatorAttribution result;
+    if (selected_ff8)
+    {
+        result.output_blocks = ff8.output_blocks;
+        result.butterfly2_out_of_place = ff8.fft_butterfly2_out_of_place;
+        result.butterfly4_out_of_place = ff8.fft_butterfly4_out_of_place;
+        result.compatibility_copy_fallbacks =
+            ff8.compatibility_copy_fallbacks;
+    }
+    else
+    {
+        result.output_blocks = ff16.output_blocks;
+        result.butterfly2_out_of_place = ff16.fft_butterfly2_out_of_place;
+        result.butterfly4_out_of_place = ff16.fft_butterfly4_out_of_place;
+        result.compatibility_copy_fallbacks =
+            ff16.compatibility_copy_fallbacks;
+    }
+    const uint64_t out_of_place = result.butterfly2_out_of_place +
+        result.butterfly4_out_of_place;
+    if (result.output_blocks == 0)
+        Fail("attribution benchmark executed no Algorithm 5 output blocks");
+    if (options.high_evaluator_mode == Options::HighEvaluatorNoCopy)
+    {
+        if (result.compatibility_copy_fallbacks != 0 || out_of_place == 0)
+            Fail("no-copy attribution did not exclusively use out-of-place evaluation");
+    }
+    else if (result.compatibility_copy_fallbacks != result.output_blocks ||
+             out_of_place != 0)
+        Fail("copy attribution did not force one fallback per output block");
+    return result;
+}
+#endif
 
 static const char* ProfileName(leo2_profile profile)
 {
@@ -896,6 +1029,10 @@ static int Run(const Options& options)
             "decode path introspection");
     }
 
+#if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
+    PrepareHighEvaluatorAttribution(options);
+#endif
+
     std::vector<std::unique_ptr<Stripe> > stripes;
     stripes.reserve(options.batch);
     std::vector<leo2_encode_batch_item> encode_items(options.batch);
@@ -921,8 +1058,12 @@ static int Run(const Options& options)
 
     const bool extended_schema = options.skip_legacy || options.retain_samples ||
         options.report_decode_path;
-    const unsigned schema_version = options.report_decode_path
-        ? 3 : (extended_schema ? 2 : 1);
+    const unsigned schema_version =
+#if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
+        4;
+#else
+        options.report_decode_path ? 3 : (extended_schema ? 2 : 1);
+#endif
     static const uint64_t kFnv1a64Offset = UINT64_C(14695981039346656037);
     uint64_t original_digest = kFnv1a64Offset;
     uint64_t parity_digest = kFnv1a64Offset;
@@ -1072,6 +1213,11 @@ static int Run(const Options& options)
         });
     }
 
+#if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
+    const HighEvaluatorAttribution high_evaluator =
+        ReadHighEvaluatorAttribution(leo2_codec_field(codec), options);
+#endif
+
     const uint64_t batch = static_cast<uint64_t>(options.batch);
     const uint64_t encode_input_bytes = CheckedU64Product(
         CheckedU64Product(options.k, options.bytes, "encode input byte count"),
@@ -1117,6 +1263,10 @@ static int Run(const Options& options)
          << (options.force_tiled_decode ? "true" : "false") << ",\n"
          << "    \"force_materialized_decode\": "
          << (options.force_materialized_decode ? "true" : "false") << ",\n";
+#if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
+    json << "    \"high_evaluator_mode\": \""
+         << HighEvaluatorModeName(options.high_evaluator_mode) << "\",\n";
+#endif
     if (extended_schema)
     {
         json << "    \"skip_legacy\": "
@@ -1170,6 +1320,11 @@ static int Run(const Options& options)
              << "    \"decode_multi_item_batch\": "
              << (decode_path_info.multi_item_batch ? "true" : "false");
     }
+#if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
+    json << ",\n"
+         << "    \"high_evaluator_mode\": \""
+         << HighEvaluatorModeName(options.high_evaluator_mode) << "\"";
+#endif
     json << "\n"
          << "  },\n"
          << "  \"correctness\": {\n"
@@ -1189,6 +1344,20 @@ static int Run(const Options& options)
              << "    \"recovered_originals\": \"" << HexU64(recovered_digest) << "\"\n"
              << "  },\n";
     }
+#if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
+    json << "  \"high_evaluator_attribution\": {\n"
+         << "    \"mode\": \""
+         << HighEvaluatorModeName(options.high_evaluator_mode) << "\",\n"
+         << "    \"output_blocks\": " << high_evaluator.output_blocks << ",\n"
+         << "    \"fft_butterfly2_out_of_place\": "
+         << high_evaluator.butterfly2_out_of_place << ",\n"
+         << "    \"fft_butterfly4_out_of_place\": "
+         << high_evaluator.butterfly4_out_of_place << ",\n"
+         << "    \"compatibility_copy_fallbacks\": "
+         << high_evaluator.compatibility_copy_fallbacks << ",\n"
+         << "    \"invariant_passed\": true\n"
+         << "  },\n";
+#endif
     json << "  \"memory\": {\n"
          << "    \"scratch_alignment\": " << leo2_scratch_alignment() << ",\n"
          << "    \"encode_scratch_bytes_per_stripe\": " << encode_scratch_bytes << ",\n"

@@ -59,6 +59,7 @@ static std::atomic<uint64_t> TestHighOutputBlocks(0);
 static std::atomic<uint64_t> TestHighFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestHighFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighCompatibilityCopyFallbacks(0);
+static std::atomic<bool> TestForceHighDecodeCopyFallback(false);
 static std::atomic<uint64_t> TestHighSyndromeAccumulatedBlocks(0);
 static std::atomic<uint64_t> TestHighSyndromeMaterializedBlocks(0);
 static std::atomic<uint64_t> TestHighSyndromePrunedAccumulatedBlocks(0);
@@ -2138,6 +2139,18 @@ static void FFT_DIT_FromCoefficients(
 {
     (void)callsite;
     LEO_DEBUG_ASSERT(m >= 2);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    if (callsite == SourceEvaluationHighDecode &&
+        TestForceHighDecodeCopyFallback.load(std::memory_order_relaxed))
+    {
+        for (unsigned i = 0; i < m; ++i)
+            memcpy(evaluation_work[i], coefficients[i], bytes);
+        TestHighCompatibilityCopyFallbacks.fetch_add(
+            1, std::memory_order_relaxed);
+        FFT_DIT(ops, bytes, evaluation_work, m_truncated, m, skewLUT);
+        return;
+    }
+#endif
     if (m == 2)
     {
 #if defined(LEO2_ENABLE_TEST_HOOKS)
@@ -3195,6 +3208,18 @@ void TestOnlyResetHighDecodeCounts()
 }
 
 
+void TestOnlySetHighDecodeCopyFallback(bool enabled)
+{
+    TestForceHighDecodeCopyFallback.store(enabled, std::memory_order_relaxed);
+}
+
+
+bool TestOnlyHighDecodeCopyFallbackEnabled()
+{
+    return TestForceHighDecodeCopyFallback.load(std::memory_order_relaxed);
+}
+
+
 TestOnlyHighDecodeCounts TestOnlyGetHighDecodeCounts()
 {
     TestOnlyHighDecodeCounts result;
@@ -4113,13 +4138,22 @@ void ReedSolomonDecodeHighPrunedPlanned(
             LEO_DEBUG_ASSERT(pruned->size == t &&
                 pruned->shift == offset && !pruned->inverse);
 #if defined(LEO2_ENABLE_TEST_HOOKS)
-            TestHighFFTButterfly2OutCalls.fetch_add(
-                t / 2, std::memory_order_relaxed);
-#endif
+            const bool force_copy_fallback =
+                TestForceHighDecodeCopyFallback.load(
+                std::memory_order_relaxed);
+            if (!force_copy_fallback)
+                TestHighFFTButterfly2OutCalls.fetch_add(
+                    t / 2, std::memory_order_relaxed);
+            const bool executed = !force_copy_fallback &&
+                leopard2_internal::ExecutePrunedForwardTransformPlanFromSources(
+                    ops, buffer_bytes, *pruned, work, work + offset);
+            LEO_DEBUG_ASSERT(executed || force_copy_fallback);
+#else
             const bool executed =
                 leopard2_internal::ExecutePrunedForwardTransformPlanFromSources(
                     ops, buffer_bytes, *pruned, work, work + offset);
             LEO_DEBUG_ASSERT(executed);
+#endif
             if (!executed)
             {
 #if defined(LEO2_ENABLE_TEST_HOOKS)
@@ -4356,13 +4390,22 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
             LEO_DEBUG_ASSERT(pruned->size == t &&
                 pruned->shift == offset && !pruned->inverse);
 #if defined(LEO2_ENABLE_TEST_HOOKS)
-            TestHighFFTButterfly2OutCalls.fetch_add(
-                t / 2, std::memory_order_relaxed);
-#endif
+            const bool force_copy_fallback =
+                TestForceHighDecodeCopyFallback.load(
+                std::memory_order_relaxed);
+            if (!force_copy_fallback)
+                TestHighFFTButterfly2OutCalls.fetch_add(
+                    t / 2, std::memory_order_relaxed);
+            const bool executed = !force_copy_fallback &&
+                leopard2_internal::ExecutePrunedForwardTransformPlanFromSources(
+                    ops, buffer_bytes, *pruned, accumulator, tile);
+            LEO_DEBUG_ASSERT(executed || force_copy_fallback);
+#else
             const bool executed =
                 leopard2_internal::ExecutePrunedForwardTransformPlanFromSources(
                     ops, buffer_bytes, *pruned, accumulator, tile);
             LEO_DEBUG_ASSERT(executed);
+#endif
             if (!executed)
             {
 #if defined(LEO2_ENABLE_TEST_HOOKS)

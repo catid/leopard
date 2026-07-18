@@ -356,6 +356,11 @@ void TestOnlyResetSparseEncodeCounts();
 TestOnlySparseEncodeCounts TestOnlyGetSparseEncodeCounts();
 void TestOnlyResetHighDecodeCounts();
 TestOnlyHighDecodeCounts TestOnlyGetHighDecodeCounts();
+// Attribution-only selector.  This changes only the test-hooks archive and
+// forces the retained whole-coefficient-block copy path for every Algorithm 5
+// output block.  Production archives do not contain the selector or branch.
+void TestOnlySetHighDecodeCopyFallback(bool enabled);
+bool TestOnlyHighDecodeCopyFallbackEnabled();
 ffe_t TestOnlyFFTMultiplier(unsigned logical_index);
 ffe_t TestOnlySubspaceDerivative(unsigned size);
 ffe_t TestOnlySubspaceAt(unsigned size, unsigned shift);

@@ -56,6 +56,71 @@ _LOW_COEFFICIENT_COPY_PATTERNS = (
 )
 
 
+_PREPROCESSOR_DIRECTIVE = re.compile(
+    r"^[ \t]*#[ \t]*(if|ifdef|ifndef|elif|else|endif)\b([^\r\n]*)",
+    re.MULTILINE,
+)
+
+
+def _compact_source_with_offsets(source: str) -> Tuple[str, List[int]]:
+    """Return whitespace-free source and each retained character's offset."""
+    characters: List[str] = []
+    offsets: List[int] = []
+    for offset, character in enumerate(source):
+        if character.isspace():
+            continue
+        characters.append(character)
+        offsets.append(offset)
+    return "".join(characters), offsets
+
+
+def _canonical_test_hook_guard_start(source: str, offset: int) -> Optional[int]:
+    """Find an enclosing positive, canonical test-hook preprocessor branch.
+
+    This is intentionally a small structural preprocessor parser rather than a
+    nearby-text heuristic.  In particular, an unrelated nested ``#endif`` must
+    not hide the still-active outer test-hook guard, while a copy after the
+    outer ``#endif`` (or in its ``#else`` arm) must never be exempted.
+    """
+    stack: List[Tuple[bool, bool, int]] = []
+    for directive in _PREPROCESSOR_DIRECTIVE.finditer(source):
+        if directive.start() >= offset:
+            break
+        operation = directive.group(1)
+        expression = directive.group(2).strip()
+        if operation in ("if", "ifdef", "ifndef"):
+            canonical = (
+                operation == "if" and
+                re.fullmatch(
+                    r"defined[ \t]*\([ \t]*LEO2_ENABLE_TEST_HOOKS[ \t]*\)",
+                    expression,
+                ) is not None
+            )
+            stack.append((canonical, canonical, directive.start()))
+        elif operation in ("elif", "else"):
+            if stack:
+                canonical, _, start = stack[-1]
+                stack[-1] = (canonical, False, start)
+        elif operation == "endif" and stack:
+            stack.pop()
+    starts = [start for canonical, active, start in stack
+              if canonical and active]
+    return max(starts) if starts else None
+
+
+def _is_forced_high_decode_test_copy(
+    source: str, original_offset: int
+) -> bool:
+    guard_start = _canonical_test_hook_guard_start(source, original_offset)
+    if guard_start is None:
+        return False
+    guarded_prefix = re.sub(r"\s+", "", source[guard_start:original_offset])
+    return (
+        "callsite==SourceEvaluationHighDecode&&" in guarded_prefix and
+        "TestForceHighDecodeCopyFallback" in guarded_prefix
+    )
+
+
 class ModelError(ValueError):
     """Invalid or unsupported model input."""
 
@@ -69,9 +134,21 @@ def verify_low_encode_no_copy_source(source: str, label: str) -> None:
     Whitespace is removed so the known loop cannot evade the check through
     formatting changes.
     """
-    compact = re.sub(r"\s+", "", source)
-    for pattern in _LOW_COEFFICIENT_COPY_PATTERNS:
-        if pattern.search(compact):
+    compact, offsets = _compact_source_with_offsets(source)
+    for pattern_index, pattern in enumerate(_LOW_COEFFICIENT_COPY_PATTERNS):
+        for match in pattern.finditer(compact):
+            # The private Algorithm-5 attribution build deliberately restores
+            # this copy behind the test-hooks preprocessor boundary.  It is a
+            # high-decode control, not the low encoder regression guarded
+            # here; test_hook_isolation.cmake separately proves it is absent
+            # from the production archive.
+            forced_high_decode_test_copy = (
+                pattern_index == 1 and
+                _is_forced_high_decode_test_copy(
+                    source, offsets[match.start()])
+            )
+            if forced_high_decode_test_copy:
+                continue
             raise ModelError(
                 "{} contains a whole-P low-encode coefficient copy".format(label)
             )
@@ -2707,6 +2784,54 @@ def run_self_test(verbose: bool = True) -> None:
         else:
             raise AssertionError("decode fusion mutation escaped source guard")
     checks += 1 + len(fusion_mutations)
+
+    low_call_fixture = """
+        FFT_DIT_FromCoefficients(
+            ops, buffer_bytes, work, work + p, requested_count, p,
+            FFTSkewStorage + p, SourceEvaluationLowEncode);
+    """
+    nested_hook_fixture = low_call_fixture + """
+        #if defined(LEO2_ENABLE_TEST_HOOKS)
+        if (callsite == SourceEvaluationHighDecode &&
+            TestForceHighDecodeCopyFallback.load())
+        {
+        #if defined(LEO2_NESTED_TEST_FIXTURE)
+            (void)callsite;
+        #endif
+            memcpy(evaluation_work[i], coefficients[i], bytes);
+        }
+        #endif
+    """
+    verify_low_encode_no_copy_source(
+        nested_hook_fixture, "nested test-hook fixture")
+    escaped_hook_fixtures = (
+        low_call_fixture + """
+            #if defined(LEO2_ENABLE_TEST_HOOKS)
+            if (callsite == SourceEvaluationHighDecode &&
+                TestForceHighDecodeCopyFallback.load()) {}
+            #endif
+            memcpy(evaluation_work[i], coefficients[i], bytes);
+        """,
+        low_call_fixture + """
+            #if defined(LEO2_ENABLE_TEST_HOOKS)
+            (void)callsite;
+            #else
+            if (callsite == SourceEvaluationHighDecode &&
+                TestForceHighDecodeCopyFallback.load())
+                memcpy(evaluation_work[i], coefficients[i], bytes);
+            #endif
+        """,
+    )
+    for fixture in escaped_hook_fixtures:
+        try:
+            verify_low_encode_no_copy_source(fixture, "escaped hook fixture")
+        except ModelError:
+            pass
+        else:
+            raise AssertionError(
+                "copy outside the canonical positive hook branch escaped")
+    checks += 3
+
     for filename in ("LeopardFF8.cpp", "LeopardFF16.cpp"):
         source = ff8_source if filename == "LeopardFF8.cpp" else ff16_source
         verify_low_encode_no_copy_source(source, filename)
