@@ -83,10 +83,20 @@ for every systematic and parity coordinate.  A systematic shard is packed as
     wire[B]        = 0
 
 The complete `W` bytes are then interpreted by the existing compact even-byte
-GF16 representation.  Parity also contains `W` bytes, but parity byte `B` is an
-ordinary encoded byte and is generally nonzero.  It must be stored and
-transmitted.  Only recovered systematic coordinates may be unpacked by dropping
-their verified-zero final byte.
+GF16 representation.  More explicitly, if the active length of the final
+64-byte tile is `w = 2q` bytes (taking `w=64` at an aligned boundary), bytes
+`0..q-1` in that tile are the low halves of `q` GF16 symbols and bytes
+`q..2q-1` are their high halves.  The appended zero is
+therefore the high half of the last active symbol; it is not an unused SIMD
+lane.  This is the direct ALTMAP representation of the trailing application
+byte that retains a complete GF16 symbol without changing the preceding
+even-byte wire mapping.
+
+Parity also contains `W` bytes, but parity byte `B` is an ordinary encoded byte
+and is generally nonzero.  It must be stored and transmitted.  Only recovered
+systematic coordinates may be unpacked by dropping their verified-zero final
+byte.  Omitting that parity byte would project a GF16 result to eight bits and
+destroy the MDS guarantee in otherwise legal codes.
 
 Let `G` be the current systematic GF16 generator matrix and let `E(x)=x || 0`
 be the injective padded representation.  Encoding applies each row of `G`
@@ -179,7 +189,8 @@ Before enabling compact tails in production:
 - verify all `K`-coordinate subsets in a small direct-oracle profile;
 - verify complete 64-byte tiles remain byte-identical to old Leopard;
 - run guard-page or canary checks plus ASan and UBSan; and
-- retain odd-length rejection tests at 1, 3, 33, 63, 65, 1023, and 1025.
+- retain native and padded-core odd-physical-length rejection tests at
+  1, 3, 17, 33, 65, 129, 257, and 1025 bytes.
 
 The compact scatter/gather must occur only in caller-to-scratch and
 scratch-to-caller staging.  The GF16 FFT, multiplication, locator, and decode
@@ -188,11 +199,22 @@ wire coefficients do not change.
 
 Padded-odd validation additionally covers every application size 1 through 65
 and 1023 through 1025, using padded-odd for odd sizes and native GF16 for even
-sizes.  Both high and low parity are compared with the independent scalar GF16
-generator; public `K`-subset invertibility, specialized recovery, the physical
-nonzero parity pad, overlap in both pack/unpack directions, overflow, malformed
-options, corrupted systematic pads, and native even-byte identity are tested.
-Representative high/low padded recovery also covers AUTO direct repair, AUTO
-transform dispatch, forced generic, and forced specialized execution.  The
-batch and concurrent encoder tests reuse immutable padded codecs with distinct
-outputs and scratch and compare every result with a serial reference.
+sizes.  The explicit odd regression matrix is `1,3,17,33,65,129,257,1025`
+application bytes, each represented by a physical `B+1` byte shard.  Small high
+and low profiles enumerate every mixed original/parity erasure pattern through
+`R` at each of those sizes.  Their encode, recovery, and parity-rebuild results
+are compared with the independent scalar generator while unaligned caller
+buffers retain prefix and suffix guards.  The same matrix executes through
+scalar and every host-qualified SIMD context.
+
+Public `K`-subset invertibility, specialized recovery, the physical nonzero
+parity pad, overlap in both pack/unpack directions, overflow, malformed options,
+corrupted systematic pads, and native even-byte identity are also tested.
+Representative high/low padded recovery covers AUTO direct repair, AUTO
+transform dispatch, forced generic, and forced specialized execution.  Native
+GF16 scratch queries and executions deterministically return
+`LEO2_UNSUPPORTED` for the explicit odd matrix, except that a no-loss decode is
+still a zero-scratch no-op.  A small AUTO codec is separately checked to resolve
+to native GF8 and accept odd physical lengths.  The batch and concurrent encoder
+tests reuse immutable padded codecs with distinct outputs and scratch and compare
+every result with a serial reference.

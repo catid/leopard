@@ -60,12 +60,16 @@ struct Counts
     uint64_t direct_symbols;
     uint64_t restored_shards;
     uint64_t mds_basis_recoveries;
+    uint64_t exhaustive_patterns;
+    uint64_t guard_checks;
 
     Counts()
         : payload_cases(0)
         , direct_symbols(0)
         , restored_shards(0)
         , mds_basis_recoveries(0)
+        , exhaustive_patterns(0)
+        , guard_checks(0)
     {}
 };
 
@@ -139,6 +143,79 @@ struct CodecOwner
 private:
     CodecOwner(const CodecOwner&);
     CodecOwner& operator=(const CodecOwner&);
+};
+
+class GuardedShards
+{
+public:
+    GuardedShards(size_t count, size_t bytes, uint8_t guard, uint8_t fill)
+        : bytes_(bytes)
+        , guard_(guard)
+        , storage_(count, Bytes(kPrefix + bytes + kSuffix, guard))
+    {
+        for (size_t i = 0; i < storage_.size(); ++i)
+            std::fill(storage_[i].begin() + kPrefix,
+                storage_[i].begin() + kPrefix + bytes_, fill);
+    }
+
+    GuardedShards(const Shards& shards, uint8_t guard)
+        : bytes_(shards.empty() ? 0 : shards[0].size())
+        , guard_(guard)
+        , storage_(shards.size(), Bytes(kPrefix + bytes_ + kSuffix, guard))
+    {
+        for (size_t i = 0; i < shards.size(); ++i)
+        {
+            require(shards[i].size() == bytes_,
+                "guarded shards have inconsistent lengths");
+            std::copy(shards[i].begin(), shards[i].end(),
+                storage_[i].begin() + kPrefix);
+        }
+    }
+
+    const void* data(size_t index) const
+    {
+        return &storage_[index][kPrefix];
+    }
+
+    void* mutable_data(size_t index)
+    {
+        return &storage_[index][kPrefix];
+    }
+
+    Bytes shard(size_t index) const
+    {
+        return Bytes(storage_[index].begin() + kPrefix,
+            storage_[index].begin() + kPrefix + bytes_);
+    }
+
+    Shards shards() const
+    {
+        Shards result(storage_.size());
+        for (size_t i = 0; i < result.size(); ++i)
+            result[i] = shard(i);
+        return result;
+    }
+
+    bool guards_intact() const
+    {
+        for (size_t i = 0; i < storage_.size(); ++i)
+        {
+            for (size_t j = 0; j < kPrefix; ++j)
+                if (storage_[i][j] != guard_)
+                    return false;
+            for (size_t j = kPrefix + bytes_; j < storage_[i].size(); ++j)
+                if (storage_[i][j] != guard_)
+                    return false;
+        }
+        return true;
+    }
+
+private:
+    enum { kPrefix = 3, kSuffix = 5 };
+
+    size_t bytes_;
+    uint8_t guard_;
+    std::vector<Bytes> storage_;
 };
 
 std::vector<const void*> const_pointers(const Shards& shards)
@@ -290,6 +367,28 @@ Shards direct_parity(
     return result;
 }
 
+Shards direct_gf8_parity(
+    const BinaryField& field,
+    const Matrix& generator,
+    unsigned k,
+    unsigned r,
+    const Shards& original)
+{
+    const size_t bytes = original[0].size();
+    Shards result(r, Bytes(bytes, 0));
+    for (size_t byte = 0; byte < bytes; ++byte)
+    {
+        std::vector<Element> message(k, 0);
+        for (unsigned i = 0; i < k; ++i)
+            message[i] = original[i][byte];
+        const std::vector<Element> codeword =
+            leopard2_test::matrix_vector_multiply(field, generator, message);
+        for (unsigned i = 0; i < r; ++i)
+            result[i][byte] = static_cast<uint8_t>(codeword[k + i]);
+    }
+    return result;
+}
+
 Shards encode(const leo2_codec* codec, const Shards& wire)
 {
     const size_t bytes = wire[0].size();
@@ -304,6 +403,51 @@ Shards encode(const leo2_codec* codec, const Shards& wire)
     require_result(leo2_encode(codec, bytes, &originals[0], &recoveries[0],
         scratch.data, scratch.bytes), "encode");
     return parity;
+}
+
+Shards encode_guarded(
+    const leo2_codec* codec,
+    const Shards& wire,
+    Counts* counts)
+{
+    const size_t bytes = wire[0].size();
+    const unsigned r = leo2_codec_recovery_count(codec);
+    GuardedShards original(wire, 0xa7);
+    GuardedShards parity(r, bytes, 0xd3, 0x5c);
+    std::vector<const void*> original_pointers(wire.size(), NULL);
+    std::vector<void*> recovery_pointers(r, NULL);
+    for (size_t i = 0; i < wire.size(); ++i)
+        original_pointers[i] = original.data(i);
+    for (unsigned i = 0; i < r; ++i)
+        recovery_pointers[i] = parity.mutable_data(i);
+
+    size_t scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(codec, bytes, &scratch_bytes),
+        "guarded encode scratch query");
+    AlignedBuffer scratch(scratch_bytes);
+    require_result(leo2_encode(codec, bytes, &original_pointers[0],
+        &recovery_pointers[0], scratch.data, scratch.bytes),
+        "guarded encode");
+    require(original.guards_intact(),
+        "guarded encode changed an input guard");
+    require(original.shards() == wire,
+        "guarded encode changed an input payload");
+    require(parity.guards_intact(),
+        "guarded encode changed an output guard");
+    if (counts)
+        counts->guard_checks += wire.size() + r;
+    return parity.shards();
+}
+
+unsigned popcount32(uint32_t value)
+{
+    unsigned count = 0;
+    while (value != 0)
+    {
+        count += value & 1u;
+        value >>= 1;
+    }
+    return count;
 }
 
 std::vector<std::vector<unsigned> > coordinate_subsets(unsigned n, unsigned k)
@@ -434,6 +578,183 @@ void recover_missing(
     leo2_decode_plan_destroy(plan);
 }
 
+void recover_erasure_pattern_guarded(
+    const leo2_codec* codec,
+    const Shards& payload,
+    const Shards& wire,
+    const Shards& parity,
+    uint32_t loss_mask,
+    Counts* counts)
+{
+    const unsigned k = static_cast<unsigned>(wire.size());
+    const unsigned r = static_cast<unsigned>(parity.size());
+    const size_t bytes = wire[0].size();
+    std::vector<uint8_t> original_present(k, 1);
+    std::vector<uint8_t> recovery_present(r, 1);
+    unsigned missing_originals = 0;
+    for (unsigned i = 0; i < k; ++i)
+        if ((loss_mask & (UINT32_C(1) << i)) != 0)
+        {
+            original_present[i] = 0;
+            ++missing_originals;
+        }
+    for (unsigned i = 0; i < r; ++i)
+        if ((loss_mask & (UINT32_C(1) << (k + i))) != 0)
+            recovery_present[i] = 0;
+
+    leo2_decode_plan* plan = NULL;
+    require_result(leo2_decode_plan_create(codec, &original_present[0],
+        &recovery_present[0], &plan), "guarded erasure plan create");
+    require(plan != NULL, "guarded erasure plan create returned null");
+    size_t scratch_bytes = 99;
+    require_result(leo2_decode_plan_scratch_size(plan, bytes, &scratch_bytes),
+        "guarded erasure scratch query");
+
+    if (missing_originals == 0)
+    {
+        require(scratch_bytes == 0,
+            "parity-only loss unexpectedly requires decode scratch");
+        require_result(leo2_decode_plan_execute(
+            plan, bytes, NULL, NULL, NULL, NULL, 0),
+            "parity-only loss no-op decode");
+        leo2_decode_plan_destroy(plan);
+        if (counts)
+            ++counts->exhaustive_patterns;
+        return;
+    }
+
+    GuardedShards guarded_original(wire, 0xb5);
+    GuardedShards guarded_parity(parity, 0x6d);
+    GuardedShards restored(k, bytes, 0xe7, 0xcc);
+    std::vector<const void*> original_input(k, NULL);
+    std::vector<const void*> parity_input(r, NULL);
+    std::vector<void*> restored_output(k, NULL);
+    for (unsigned i = 0; i < k; ++i)
+    {
+        if (original_present[i])
+            original_input[i] = guarded_original.data(i);
+        else
+            restored_output[i] = restored.mutable_data(i);
+    }
+    for (unsigned i = 0; i < r; ++i)
+        if (recovery_present[i])
+            parity_input[i] = guarded_parity.data(i);
+
+    AlignedBuffer scratch(scratch_bytes);
+    require_result(leo2_decode_plan_execute(plan, bytes,
+        &original_input[0], &parity_input[0], &restored_output[0],
+        scratch.data, scratch.bytes), "guarded erasure decode");
+    require(guarded_original.guards_intact(),
+        "guarded decode changed an original input guard");
+    require(guarded_parity.guards_intact(),
+        "guarded decode changed a parity input guard");
+    require(guarded_original.shards() == wire,
+        "guarded decode changed an original input payload");
+    require(guarded_parity.shards() == parity,
+        "guarded decode changed a parity input payload");
+    require(restored.guards_intact(),
+        "guarded decode changed a restored-output guard");
+
+    Shards complete_wire = wire;
+    for (unsigned i = 0; i < k; ++i)
+        if (!original_present[i])
+        {
+            complete_wire[i] = restored.shard(i);
+            require(complete_wire[i] == wire[i],
+                "guarded erasure recovery differs from the physical systematic shard");
+            Bytes unpacked(payload[i].size(), 0);
+            require_result(leo2_unpack_systematic_shard(codec,
+                payload[i].size(), &complete_wire[i][0], bytes,
+                &unpacked[0]), "guarded recovered systematic unpack");
+            require(unpacked == payload[i],
+                "guarded erasure recovery differs from the payload");
+        }
+    require(encode_guarded(codec, complete_wire, NULL) == parity,
+        "guarded parity rebuild differs after erasure recovery");
+
+    if (counts)
+    {
+        ++counts->exhaustive_patterns;
+        counts->restored_shards += missing_originals;
+        counts->guard_checks += static_cast<uint64_t>(k) * 2 + r;
+    }
+    leo2_decode_plan_destroy(plan);
+}
+
+void test_requested_odd_matrix(
+    leo2_context* context,
+    const BinaryField& field,
+    Counts* counts)
+{
+    const size_t payload_sizes[] = {
+        1, 3, 17, 33, 65, 129, 257, 1025
+    };
+    struct ProfileCase
+    {
+        leo2_profile profile;
+        unsigned k;
+        unsigned r;
+    };
+    const ProfileCase cases[] = {
+        { LEO2_PROFILE_LEGACY_HIGH_V1, 3, 2 },
+        { LEO2_PROFILE_LOW_V1, 2, 3 }
+    };
+
+    for (size_t case_i = 0; case_i < sizeof(cases) / sizeof(cases[0]);
+         ++case_i)
+    {
+        const ProfileCase& test = cases[case_i];
+        CodecOwner codec;
+        codec.codec = create_codec(context, test.k, test.r, test.profile,
+            LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1, 0);
+        const ProfileLayout layout = leopard2_test::make_profile_layout(
+            test.profile == LEO2_PROFILE_LEGACY_HIGH_V1
+                ? leopard2_test::kLegacyHigh : leopard2_test::kLow,
+            test.k, test.r);
+        const Matrix generator =
+            leopard2_test::direct_systematic_generator(field, layout);
+        if (counts)
+            verify_generator_mds(field, generator, test.k, *counts);
+
+        for (size_t size_i = 0;
+             size_i < sizeof(payload_sizes) / sizeof(payload_sizes[0]);
+             ++size_i)
+        {
+            const size_t payload_bytes = payload_sizes[size_i];
+            uint64_t wire_bytes_u64 = 0;
+            require_result(leo2_codec_wire_shard_bytes(codec.codec,
+                payload_bytes, &wire_bytes_u64),
+                "requested odd-matrix wire-size query");
+            require(wire_bytes_u64 == payload_bytes + 1,
+                "requested odd-matrix physical length is not B+1");
+            const size_t wire_bytes = static_cast<size_t>(wire_bytes_u64);
+            const Shards payload = deterministic_payloads(test.k,
+                payload_bytes, UINT64_C(0x6f64646d61747269) ^
+                (static_cast<uint64_t>(case_i) << 56) ^ payload_bytes);
+            const Shards wire = pack_payloads(
+                codec.codec, payload, wire_bytes);
+            const Shards expected = direct_parity(
+                field, generator, test.k, test.r, wire);
+            const Shards actual = encode_guarded(codec.codec, wire, counts);
+            require(actual == expected,
+                "requested odd-matrix parity differs from the direct GF16 oracle");
+            if (counts)
+            {
+                ++counts->payload_cases;
+                counts->direct_symbols += static_cast<uint64_t>(test.r) *
+                    (wire_bytes / 2);
+            }
+
+            const unsigned transmitted = test.k + test.r;
+            const uint32_t mask_limit = UINT32_C(1) << transmitted;
+            for (uint32_t loss_mask = 0; loss_mask < mask_limit; ++loss_mask)
+                if (popcount32(loss_mask) <= test.r)
+                    recover_erasure_pattern_guarded(codec.codec, payload,
+                        wire, actual, loss_mask, counts);
+        }
+    }
+}
+
 void test_profile_payloads(
     leo2_context* context,
     const BinaryField& field,
@@ -462,6 +783,8 @@ void test_profile_payloads(
     std::vector<size_t> payload_sizes;
     for (size_t bytes = 1; bytes <= 65; ++bytes)
         payload_sizes.push_back(bytes);
+    payload_sizes.push_back(129);
+    payload_sizes.push_back(257);
     payload_sizes.push_back(1023);
     payload_sizes.push_back(1024);
     payload_sizes.push_back(1025);
@@ -642,7 +965,9 @@ void test_pack_unpack_contract(leo2_context* context)
     padded.codec = create_codec(context, 5, 3, LEO2_PROFILE_LEGACY_HIGH_V1,
         LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1, 0);
 
-    const size_t sizes[] = { 1, 3, 33, 63, 65, 1023, 1025 };
+    const size_t sizes[] = {
+        1, 3, 17, 33, 63, 65, 129, 257, 1023, 1025
+    };
     for (size_t size_i = 0; size_i < sizeof(sizes) / sizeof(sizes[0]); ++size_i)
     {
         const size_t payload_bytes = sizes[size_i];
@@ -738,6 +1063,165 @@ void test_pack_unpack_contract(leo2_context* context)
         LEO2_INVALID_ARGUMENT, "nonzero systematic pad was accepted");
     require(leo2_unpack_systematic_shard(padded.codec, 1, wire, 1, &unpacked) ==
         LEO2_INVALID_ARGUMENT, "undersized unpack was accepted");
+}
+
+void test_native_odd_rejection_matrix(leo2_context* context)
+{
+    const size_t odd_sizes[] = { 1, 3, 17, 33, 65, 129, 257, 1025 };
+    const leo2_profile profiles[] = {
+        LEO2_PROFILE_LEGACY_HIGH_V1,
+        LEO2_PROFILE_LOW_V1
+    };
+    for (size_t profile_i = 0;
+         profile_i < sizeof(profiles) / sizeof(profiles[0]); ++profile_i)
+    {
+        CodecOwner native;
+        CodecOwner padded;
+        native.codec = create_codec(context, 3, 2, profiles[profile_i],
+            LEO2_SHARD_LAYOUT_NATIVE_V1, 0);
+        padded.codec = create_codec(context, 3, 2, profiles[profile_i],
+            LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1, 0);
+        std::vector<uint8_t> original_present(3, 1);
+        std::vector<uint8_t> recovery_present(2, 1);
+        original_present[0] = 0;
+        leo2_decode_plan* loss_plan = NULL;
+        leo2_decode_plan* padded_loss_plan = NULL;
+        require_result(leo2_decode_plan_create(native.codec,
+            &original_present[0], &recovery_present[0], &loss_plan),
+            "native odd-rejection loss plan create");
+        require_result(leo2_decode_plan_create(padded.codec,
+            &original_present[0], &recovery_present[0], &padded_loss_plan),
+            "padded odd-physical rejection loss plan create");
+
+        for (size_t size_i = 0;
+             size_i < sizeof(odd_sizes) / sizeof(odd_sizes[0]); ++size_i)
+        {
+            const size_t bytes = odd_sizes[size_i];
+            uint64_t wire_bytes = 77;
+            require(leo2_codec_wire_shard_bytes(native.codec, bytes,
+                &wire_bytes) == LEO2_UNSUPPORTED && wire_bytes == 0,
+                "native GF16 odd wire query was not rejected deterministically");
+            size_t scratch_bytes = 77;
+            require(leo2_encode_scratch_size(native.codec, bytes,
+                &scratch_bytes) == LEO2_UNSUPPORTED && scratch_bytes == 0,
+                "native GF16 odd encode query was not rejected deterministically");
+            require(leo2_encode(native.codec, bytes, NULL, NULL, NULL, 0) ==
+                LEO2_UNSUPPORTED,
+                "native GF16 odd encode execution disagrees with its query");
+            scratch_bytes = 77;
+            require(leo2_decode_scratch_size(native.codec, bytes,
+                &scratch_bytes) == LEO2_UNSUPPORTED && scratch_bytes == 0,
+                "native GF16 odd one-shot decode query was not rejected deterministically");
+            require(leo2_decode(native.codec, bytes,
+                &original_present[0], &recovery_present[0],
+                NULL, NULL, NULL, NULL, 0) == LEO2_UNSUPPORTED,
+                "native GF16 odd one-shot decode disagrees with its query");
+            scratch_bytes = 77;
+            require(leo2_decode_plan_scratch_size(loss_plan, bytes,
+                &scratch_bytes) == LEO2_UNSUPPORTED && scratch_bytes == 0,
+                "native GF16 odd plan query was not rejected deterministically");
+            require(leo2_decode_plan_execute(loss_plan, bytes,
+                NULL, NULL, NULL, NULL, 0) == LEO2_UNSUPPORTED,
+                "native GF16 odd plan execution disagrees with its query");
+
+            wire_bytes = 0;
+            require_result(leo2_codec_wire_shard_bytes(padded.codec, bytes,
+                &wire_bytes), "padded odd payload wire query");
+            require(wire_bytes == bytes + 1,
+                "padded odd payload query did not return physical B+1");
+            scratch_bytes = 77;
+            require(leo2_encode_scratch_size(padded.codec, bytes,
+                &scratch_bytes) == LEO2_UNSUPPORTED && scratch_bytes == 0,
+                "padded GF16 accepted an odd physical encode length");
+            require(leo2_encode(padded.codec, bytes,
+                NULL, NULL, NULL, 0) == LEO2_UNSUPPORTED,
+                "padded GF16 odd physical encode disagrees with its query");
+            scratch_bytes = 77;
+            require(leo2_decode_plan_scratch_size(padded_loss_plan, bytes,
+                &scratch_bytes) == LEO2_UNSUPPORTED && scratch_bytes == 0,
+                "padded GF16 accepted an odd physical decode length");
+            require(leo2_decode_plan_execute(padded_loss_plan, bytes,
+                NULL, NULL, NULL, NULL, 0) == LEO2_UNSUPPORTED,
+                "padded GF16 odd physical decode disagrees with its query");
+        }
+        leo2_decode_plan_destroy(padded_loss_plan);
+        leo2_decode_plan_destroy(loss_plan);
+
+        original_present[0] = 1;
+        std::fill(recovery_present.begin(), recovery_present.end(), 0);
+        leo2_decode_plan* no_loss_plan = NULL;
+        leo2_decode_plan* padded_no_loss_plan = NULL;
+        require_result(leo2_decode_plan_create(native.codec,
+            &original_present[0], &recovery_present[0], &no_loss_plan),
+            "native odd-rejection no-loss plan create");
+        require_result(leo2_decode_plan_create(padded.codec,
+            &original_present[0], &recovery_present[0],
+            &padded_no_loss_plan),
+            "padded odd-physical no-loss plan create");
+        for (size_t size_i = 0;
+             size_i < sizeof(odd_sizes) / sizeof(odd_sizes[0]); ++size_i)
+        {
+            size_t scratch_bytes = 77;
+            require_result(leo2_decode_plan_scratch_size(no_loss_plan,
+                odd_sizes[size_i], &scratch_bytes),
+                "native odd no-loss scratch query");
+            require(scratch_bytes == 0,
+                "native odd no-loss plan unexpectedly requires scratch");
+            require_result(leo2_decode_plan_execute(no_loss_plan,
+                odd_sizes[size_i], NULL, NULL, NULL, NULL, 0),
+                "native odd no-loss execution");
+            scratch_bytes = 77;
+            require_result(leo2_decode_plan_scratch_size(padded_no_loss_plan,
+                odd_sizes[size_i], &scratch_bytes),
+                "padded odd-physical no-loss scratch query");
+            require(scratch_bytes == 0,
+                "padded odd-physical no-loss plan requires scratch");
+            require_result(leo2_decode_plan_execute(padded_no_loss_plan,
+                odd_sizes[size_i], NULL, NULL, NULL, NULL, 0),
+                "padded odd-physical no-loss execution");
+        }
+        leo2_decode_plan_destroy(padded_no_loss_plan);
+        leo2_decode_plan_destroy(no_loss_plan);
+    }
+}
+
+void test_auto_uses_gf8_for_legal_odd_code(
+    leo2_context* context,
+    Counts& counts)
+{
+    const unsigned k = 5;
+    const unsigned r = 3;
+    CodecOwner codec;
+    require_result(leo2_codec_create(context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_AUTO, NULL, &codec.codec),
+        "AUTO odd codec create");
+    require(leo2_codec_field(codec.codec) == LEO2_FIELD_GF8,
+        "AUTO did not select GF8 for a legal odd-byte code");
+    require(leo2_codec_shard_layout(codec.codec) ==
+            LEO2_SHARD_LAYOUT_NATIVE_V1,
+        "AUTO changed shard layout for a legal odd-byte code");
+
+    const size_t bytes = 17;
+    uint64_t wire_bytes = 0;
+    require_result(leo2_codec_wire_shard_bytes(
+        codec.codec, bytes, &wire_bytes), "AUTO GF8 wire-size query");
+    require(wire_bytes == bytes,
+        "AUTO GF8 changed the native odd physical length");
+    const Shards payload = deterministic_payloads(
+        k, bytes, UINT64_C(0x6175746f67663831));
+    const Shards wire = pack_payloads(codec.codec, payload, bytes);
+    const Shards parity = encode_guarded(codec.codec, wire, &counts);
+    const BinaryField field = leopard2_test::make_legacy_gf8();
+    const ProfileLayout layout = leopard2_test::make_profile_layout(
+        leopard2_test::kLegacyHigh, k, r);
+    const Matrix generator =
+        leopard2_test::direct_systematic_generator(field, layout);
+    require(parity == direct_gf8_parity(field, generator, k, r, wire),
+        "AUTO GF8 odd parity differs from the direct oracle");
+    recover_missing(codec.codec, payload, wire, parity,
+        std::vector<unsigned>{ 0, 2, 4 }, counts);
+    ++counts.payload_cases;
+    counts.direct_symbols += static_cast<uint64_t>(r) * bytes;
 }
 
 void test_layout_creation_and_core_enforcement(leo2_context* context)
@@ -854,6 +1338,43 @@ void test_native_even_identity(leo2_context* context)
         "explicit native layout changed existing even-byte parity");
 }
 
+void test_requested_matrix_on_other_available_backends(
+    leo2_backend already_tested,
+    const BinaryField& field)
+{
+    const leo2_backend backends[] = {
+        LEO2_BACKEND_SCALAR,
+        LEO2_BACKEND_SSSE3,
+        LEO2_BACKEND_AVX2
+    };
+    for (size_t backend_i = 0;
+         backend_i < sizeof(backends) / sizeof(backends[0]); ++backend_i)
+    {
+        if (backends[backend_i] == already_tested)
+            continue;
+        leo2_context_options options;
+        memset(&options, 0, sizeof(options));
+        options.struct_size = sizeof(options);
+        options.backend = backends[backend_i];
+        options.thread_count = 1;
+        leo2_context* context = NULL;
+        const leo2_result result = leo2_context_create(&options, &context);
+        require(result == LEO2_SUCCESS || result == LEO2_UNSUPPORTED,
+            "explicit backend returned an unexpected qualification result");
+        if (result == LEO2_UNSUPPORTED)
+        {
+            require(context == NULL,
+                "unsupported explicit backend returned a context");
+            continue;
+        }
+        require(context != NULL &&
+                leo2_context_backend(context) == backends[backend_i],
+            "explicit backend context reports the wrong backend");
+        test_requested_odd_matrix(context, field, NULL);
+        leo2_context_destroy(context);
+    }
+}
+
 } // namespace
 
 int main()
@@ -872,7 +1393,10 @@ int main()
         const BinaryField field = leopard2_test::make_legacy_gf16();
         test_layout_creation_and_core_enforcement(context);
         test_pack_unpack_contract(context);
+        test_native_odd_rejection_matrix(context);
         test_native_even_identity(context);
+        test_auto_uses_gf8_for_legal_odd_code(context, counts);
+        test_requested_odd_matrix(context, field, &counts);
         test_profile_payloads(context, field,
             LEO2_PROFILE_LEGACY_HIGH_V1, 5, 3,
             std::vector<unsigned>{ 0, 2, 4 }, counts);
@@ -883,6 +1407,8 @@ int main()
         test_default_direct_repair(context, field, counts);
         test_parity_pad_is_physical(context, field,
             LEO2_PROFILE_LOW_V1, 2, 256);
+        test_requested_matrix_on_other_available_backends(
+            leo2_context_backend(context), field);
         leo2_context_destroy(context);
 
         std::cout << "GF16 padded-odd passed: payload_cases="
@@ -890,6 +1416,8 @@ int main()
                   << " direct_symbols=" << counts.direct_symbols
                   << " restored_shards=" << counts.restored_shards
                   << " mds_basis_recoveries=" << counts.mds_basis_recoveries
+                  << " exhaustive_patterns=" << counts.exhaustive_patterns
+                  << " guard_checks=" << counts.guard_checks
                   << std::endl;
         return 0;
     }
