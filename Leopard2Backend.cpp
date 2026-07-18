@@ -12,6 +12,52 @@
 
 namespace leopard { namespace backend {
 
+static bool RangesOverlap(
+    const void* first, const void* second, uint64_t byte_count)
+{
+    if (byte_count == 0)
+        return false;
+    if (!first || !second)
+        return false;
+    const uintptr_t a = reinterpret_cast<uintptr_t>(first);
+    const uintptr_t b = reinterpret_cast<uintptr_t>(second);
+    return a <= b ? b - a < byte_count : a - b < byte_count;
+}
+
+bool IsWeightedIFFTButterfly4AliasingValid(
+    const void* const inputs[4],
+    const void* const outputs[4],
+    uint8_t live_mask,
+    uint64_t byte_count)
+{
+    if (byte_count == 0)
+        return true;
+    for (unsigned output = 0; output < 4; ++output)
+    {
+        if (!outputs[output])
+            return false;
+        for (unsigned other = output + 1; other < 4; ++other)
+            if (RangesOverlap(outputs[output], outputs[other], byte_count))
+                return false;
+    }
+
+    bool wholly_disjoint = true;
+    bool exact_in_place = true;
+    for (unsigned input = 0; input < 4; ++input)
+    {
+        if ((live_mask & (1U << input)) == 0)
+            continue;
+        if (!inputs[input])
+            return false;
+        if (inputs[input] != outputs[input])
+            exact_in_place = false;
+        for (unsigned output = 0; output < 4; ++output)
+            if (RangesOverlap(inputs[input], outputs[output], byte_count))
+                wholly_disjoint = false;
+    }
+    return wholly_disjoint || exact_in_place;
+}
+
 static const Ops* SelectedOps = NULL;
 static const Ops* QualifiedOps[LEO2_BACKEND_NEON + 1] = {};
 enum QualificationState
@@ -451,6 +497,110 @@ static bool TestFF8Butterflies4(const Ops& ops, FF8MultiplyLog reference)
                 std::memcmp(inputs, original_inputs, sizeof(inputs)) != 0)
                 return false;
         }
+    return true;
+}
+
+static bool TestFF8WeightedIFFTButterfly4(
+    const Ops& ops, FF8MultiplyLog reference)
+{
+    static const uint16_t weight_sets[][4] = {
+        { 0, 255, 17, 129 },
+        { 254, 1, 255, 0 }
+    };
+    static const uint16_t skew_sets[][3] = {
+        { 255, 0, 7 },
+        { 3, 255, 255 },
+        { 1, 2, 3 }
+    };
+    static const uint64_t byte_counts[] = { 0, 1, 15, 16, 17, 31, 32, 37 };
+    uint8_t inputs[4][40];
+    uint8_t original_inputs[4][40];
+    uint8_t outputs[4][40];
+    uint8_t expected[4][40];
+    uint8_t in_place[4][40];
+    for (size_t weight_i = 0;
+         weight_i < sizeof(weight_sets) / sizeof(weight_sets[0]); ++weight_i)
+        for (size_t skew_i = 0;
+             skew_i < sizeof(skew_sets) / sizeof(skew_sets[0]); ++skew_i)
+            for (size_t count_i = 0;
+                 count_i < sizeof(byte_counts) / sizeof(byte_counts[0]);
+                 ++count_i)
+                for (unsigned mask = 0; mask < 16; ++mask)
+                {
+                    const uint64_t bytes = byte_counts[count_i];
+                    for (unsigned lane = 0; lane < 4; ++lane)
+                    {
+                        for (size_t i = 0; i < sizeof(inputs[lane]); ++i)
+                        {
+                            inputs[lane][i] = static_cast<uint8_t>(
+                                i * (31U + lane * 14U) +
+                                weight_i * 19U + skew_i * 23U +
+                                count_i * 29U + mask * 7U + lane);
+                            outputs[lane][i] = expected[lane][i] =
+                                static_cast<uint8_t>(0xa1U + lane * 11U);
+                        }
+                        std::memcpy(original_inputs[lane], inputs[lane],
+                            sizeof(inputs[lane]));
+                        std::memcpy(in_place[lane], inputs[lane],
+                            sizeof(inputs[lane]));
+                        if ((mask & (1U << lane)) == 0)
+                            std::memset(expected[lane] + 1, 0, bytes);
+                        else
+                        {
+                            std::memcpy(expected[lane] + 1,
+                                inputs[lane] + 1, bytes);
+                            const uint16_t weight = weight_sets[weight_i][lane];
+                            if (weight != 0 && weight != 255)
+                                for (uint64_t i = 0; i < bytes; ++i)
+                                    expected[lane][i + 1] = reference(
+                                        expected[lane][i + 1],
+                                        static_cast<uint8_t>(weight));
+                        }
+                    }
+                    ReferenceFF8Butterfly4<true>(
+                        expected[0] + 1, expected[1] + 1,
+                        expected[2] + 1, expected[3] + 1,
+                        skew_sets[skew_i][0], skew_sets[skew_i][1],
+                        skew_sets[skew_i][2], bytes, reference);
+                    ops.ff8_weighted_ifft_butterfly4(
+                        (mask & 1U) ? inputs[0] + 1 : NULL,
+                        (mask & 2U) ? inputs[1] + 1 : NULL,
+                        (mask & 4U) ? inputs[2] + 1 : NULL,
+                        (mask & 8U) ? inputs[3] + 1 : NULL,
+                        outputs[0] + 1, outputs[1] + 1,
+                        outputs[2] + 1, outputs[3] + 1,
+                        weight_sets[weight_i][0], weight_sets[weight_i][1],
+                        weight_sets[weight_i][2], weight_sets[weight_i][3],
+                        static_cast<uint8_t>(mask),
+                        skew_sets[skew_i][0], skew_sets[skew_i][1],
+                        skew_sets[skew_i][2], bytes);
+                    if (std::memcmp(outputs, expected, sizeof(outputs)) != 0 ||
+                        std::memcmp(inputs, original_inputs,
+                            sizeof(inputs)) != 0)
+                        return false;
+
+                    ops.ff8_weighted_ifft_butterfly4(
+                        in_place[0] + 1, in_place[1] + 1,
+                        in_place[2] + 1, in_place[3] + 1,
+                        in_place[0] + 1, in_place[1] + 1,
+                        in_place[2] + 1, in_place[3] + 1,
+                        weight_sets[weight_i][0], weight_sets[weight_i][1],
+                        weight_sets[weight_i][2], weight_sets[weight_i][3],
+                        static_cast<uint8_t>(mask),
+                        skew_sets[skew_i][0], skew_sets[skew_i][1],
+                        skew_sets[skew_i][2], bytes);
+                    for (unsigned lane = 0; lane < 4; ++lane)
+                    {
+                        if (std::memcmp(in_place[lane] + 1,
+                                expected[lane] + 1, bytes) != 0 ||
+                            in_place[lane][0] != inputs[lane][0] ||
+                            std::memcmp(in_place[lane] + bytes + 1,
+                                inputs[lane] + bytes + 1,
+                                sizeof(in_place[lane]) -
+                                    static_cast<size_t>(bytes) - 1) != 0)
+                            return false;
+                    }
+                }
     return true;
 }
 
@@ -1049,6 +1199,110 @@ static bool TestFF16Butterflies4(const Ops& ops, FF16MultiplyLog reference)
     return true;
 }
 
+static bool TestFF16WeightedIFFTButterfly4(
+    const Ops& ops, FF16MultiplyLog reference)
+{
+    static const uint16_t weight_sets[][4] = {
+        { 0, 65535, 257, 32767 },
+        { 65534, 1, 65535, 0 }
+    };
+    static const uint16_t skew_sets[][3] = {
+        { 65535, 0, 17 },
+        { 4095, 65535, 65535 },
+        { 1, 256, 32767 }
+    };
+    static const uint64_t byte_counts[] = { 0, 2, 62, 64, 66, 128, 130 };
+    uint8_t inputs[4][134];
+    uint8_t original_inputs[4][134];
+    uint8_t outputs[4][134];
+    uint8_t expected[4][134];
+    uint8_t in_place[4][134];
+    for (size_t weight_i = 0;
+         weight_i < sizeof(weight_sets) / sizeof(weight_sets[0]); ++weight_i)
+        for (size_t skew_i = 0;
+             skew_i < sizeof(skew_sets) / sizeof(skew_sets[0]); ++skew_i)
+            for (size_t count_i = 0;
+                 count_i < sizeof(byte_counts) / sizeof(byte_counts[0]);
+                 ++count_i)
+                for (unsigned mask = 0; mask < 16; ++mask)
+                {
+                    const uint64_t bytes = byte_counts[count_i];
+                    for (unsigned lane = 0; lane < 4; ++lane)
+                    {
+                        std::memset(inputs[lane], 0x61U + lane,
+                            sizeof(inputs[lane]));
+                        FillFF16(inputs[lane] + 1, bytes,
+                            static_cast<uint32_t>(weight_i * 101U +
+                                skew_i * 53U + count_i * 31U +
+                                mask * 7U + lane * 13U));
+                        std::memcpy(original_inputs[lane], inputs[lane],
+                            sizeof(inputs[lane]));
+                        std::memcpy(in_place[lane], inputs[lane],
+                            sizeof(inputs[lane]));
+                        std::memset(outputs[lane], 0x91U + lane,
+                            sizeof(outputs[lane]));
+                        std::memcpy(expected[lane], outputs[lane],
+                            sizeof(outputs[lane]));
+                        if ((mask & (1U << lane)) == 0)
+                            std::memset(expected[lane] + 1, 0, bytes);
+                        else
+                        {
+                            std::memcpy(expected[lane] + 1,
+                                inputs[lane] + 1, bytes);
+                            const uint16_t weight = weight_sets[weight_i][lane];
+                            if (weight != 0 && weight != 65535)
+                                ReferenceFF16<false>(expected[lane] + 1,
+                                    expected[lane] + 1, weight,
+                                    bytes, reference);
+                        }
+                    }
+                    ReferenceFF16Butterfly4<true>(
+                        expected[0] + 1, expected[1] + 1,
+                        expected[2] + 1, expected[3] + 1,
+                        skew_sets[skew_i][0], skew_sets[skew_i][1],
+                        skew_sets[skew_i][2], bytes, reference);
+                    ops.ff16_weighted_ifft_butterfly4(
+                        (mask & 1U) ? inputs[0] + 1 : NULL,
+                        (mask & 2U) ? inputs[1] + 1 : NULL,
+                        (mask & 4U) ? inputs[2] + 1 : NULL,
+                        (mask & 8U) ? inputs[3] + 1 : NULL,
+                        outputs[0] + 1, outputs[1] + 1,
+                        outputs[2] + 1, outputs[3] + 1,
+                        weight_sets[weight_i][0], weight_sets[weight_i][1],
+                        weight_sets[weight_i][2], weight_sets[weight_i][3],
+                        static_cast<uint8_t>(mask),
+                        skew_sets[skew_i][0], skew_sets[skew_i][1],
+                        skew_sets[skew_i][2], bytes);
+                    if (std::memcmp(outputs, expected, sizeof(outputs)) != 0 ||
+                        std::memcmp(inputs, original_inputs,
+                            sizeof(inputs)) != 0)
+                        return false;
+
+                    ops.ff16_weighted_ifft_butterfly4(
+                        in_place[0] + 1, in_place[1] + 1,
+                        in_place[2] + 1, in_place[3] + 1,
+                        in_place[0] + 1, in_place[1] + 1,
+                        in_place[2] + 1, in_place[3] + 1,
+                        weight_sets[weight_i][0], weight_sets[weight_i][1],
+                        weight_sets[weight_i][2], weight_sets[weight_i][3],
+                        static_cast<uint8_t>(mask),
+                        skew_sets[skew_i][0], skew_sets[skew_i][1],
+                        skew_sets[skew_i][2], bytes);
+                    for (unsigned lane = 0; lane < 4; ++lane)
+                    {
+                        if (std::memcmp(in_place[lane] + 1,
+                                expected[lane] + 1, bytes) != 0 ||
+                            in_place[lane][0] != inputs[lane][0] ||
+                            std::memcmp(in_place[lane] + bytes + 1,
+                                inputs[lane] + bytes + 1,
+                                sizeof(in_place[lane]) -
+                                    static_cast<size_t>(bytes) - 1) != 0)
+                            return false;
+                    }
+                }
+    return true;
+}
+
 static bool TestFF16ButterflyRanges(const Ops& ops)
 {
     static const unsigned kDistance = 3;
@@ -1187,10 +1441,70 @@ static bool TestXor(const Ops& ops)
     return true;
 }
 
+static bool TestWeightedIFFTAliasingContract()
+{
+    uint8_t storage[8][32] = {};
+    const void* disjoint_inputs[4] = {
+        storage[0], storage[1], storage[2], storage[3]
+    };
+    const void* disjoint_outputs[4] = {
+        storage[4], storage[5], storage[6], storage[7]
+    };
+    if (!IsWeightedIFFTButterfly4AliasingValid(
+            disjoint_inputs, disjoint_outputs, 15, 16))
+        return false;
+
+    const void* exact_outputs[4] = {
+        storage[0], storage[1], storage[2], storage[3]
+    };
+    if (!IsWeightedIFFTButterfly4AliasingValid(
+            disjoint_inputs, exact_outputs, 15, 16))
+        return false;
+
+    const void* shared_inputs[4] = {
+        storage[0], storage[0], storage[0], storage[0]
+    };
+    if (!IsWeightedIFFTButterfly4AliasingValid(
+            shared_inputs, disjoint_outputs, 15, 16))
+        return false;
+
+    const void* masked_inputs[4] = {
+        storage[0], NULL, storage[2], NULL
+    };
+    if (!IsWeightedIFFTButterfly4AliasingValid(
+            masked_inputs, disjoint_outputs, 5, 16))
+        return false;
+
+    const void* partial_input_overlap[4] = {
+        storage[4] + 1, storage[1], storage[2], storage[3]
+    };
+    if (IsWeightedIFFTButterfly4AliasingValid(
+            partial_input_overlap, disjoint_outputs, 1, 16))
+        return false;
+
+    const void* cross_row_overlap[4] = {
+        storage[5], storage[4], storage[2], storage[3]
+    };
+    if (IsWeightedIFFTButterfly4AliasingValid(
+            cross_row_overlap, disjoint_outputs, 3, 16))
+        return false;
+
+    const void* overlapping_outputs[4] = {
+        storage[4], storage[4] + 8, storage[6], storage[7]
+    };
+    if (IsWeightedIFFTButterfly4AliasingValid(
+            disjoint_inputs, overlapping_outputs, 15, 16))
+        return false;
+
+    const void* nulls[4] = { NULL, NULL, NULL, NULL };
+    return IsWeightedIFFTButterfly4AliasingValid(nulls, nulls, 15, 0);
+}
+
 static bool TestOps(const Ops& ops, const InitializeArgs& args)
 {
     if (!ops.name || !ops.xor_memory || !ops.xor_memory_2to1 ||
-        !ops.xor_memory4 || !TestXor(ops))
+        !ops.xor_memory4 || !TestXor(ops) ||
+        !TestWeightedIFFTAliasingContract())
         return false;
 #ifdef LEO_HAS_FF8
     if (!args.ff8_multiply_log || !ops.ff8_multiply ||
@@ -1198,6 +1512,7 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         !ops.ff8_fft_butterfly2 || !ops.ff8_fft_butterfly2_out ||
         !ops.ff8_ifft_butterfly2_xor || !ops.ff8_ifft_butterfly4 ||
         !ops.ff8_fft_butterfly4 || !ops.ff8_ifft_butterfly4_out ||
+        !ops.ff8_weighted_ifft_butterfly4 ||
         !ops.ff8_fft_butterfly4_out ||
         !ops.ff8_ifft_butterfly4_range ||
         !ops.ff8_fft_butterfly4_range ||
@@ -1205,6 +1520,7 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         !TestFF8(ops, args.ff8_multiply_log) ||
         !TestFF8Butterflies(ops, args.ff8_multiply_log) ||
         !TestFF8Butterflies4(ops, args.ff8_multiply_log) ||
+        !TestFF8WeightedIFFTButterfly4(ops, args.ff8_multiply_log) ||
         !TestFF8ButterflyRanges(ops))
         return false;
 #else
@@ -1212,7 +1528,9 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         ops.ff8_ifft_butterfly2 || ops.ff8_fft_butterfly2 ||
         ops.ff8_fft_butterfly2_out || ops.ff8_ifft_butterfly2_xor ||
         ops.ff8_ifft_butterfly4 || ops.ff8_fft_butterfly4 ||
-        ops.ff8_ifft_butterfly4_out || ops.ff8_fft_butterfly4_out ||
+        ops.ff8_ifft_butterfly4_out ||
+        ops.ff8_weighted_ifft_butterfly4 ||
+        ops.ff8_fft_butterfly4_out ||
         ops.ff8_ifft_butterfly4_range ||
         ops.ff8_fft_butterfly4_range ||
         ops.ff8_ifft_butterfly4_xor_range)
@@ -1224,12 +1542,15 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         !ops.ff16_fft_butterfly2 || !ops.ff16_fft_butterfly2_out ||
         !ops.ff16_ifft_butterfly2_xor ||
         !ops.ff16_ifft_butterfly4 || !ops.ff16_fft_butterfly4 ||
-        !ops.ff16_ifft_butterfly4_out || !ops.ff16_fft_butterfly4_out ||
+        !ops.ff16_ifft_butterfly4_out ||
+        !ops.ff16_weighted_ifft_butterfly4 ||
+        !ops.ff16_fft_butterfly4_out ||
         !ops.ff16_ifft_butterfly4_range ||
         !ops.ff16_fft_butterfly4_range ||
         !TestFF16(ops, args.ff16_multiply_log) ||
         !TestFF16Butterflies(ops, args.ff16_multiply_log) ||
         !TestFF16Butterflies4(ops, args.ff16_multiply_log) ||
+        !TestFF16WeightedIFFTButterfly4(ops, args.ff16_multiply_log) ||
         !TestFF16ButterflyRanges(ops))
         return false;
 #else
@@ -1238,6 +1559,7 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         ops.ff16_fft_butterfly2_out || ops.ff16_ifft_butterfly2_xor ||
         ops.ff16_ifft_butterfly4 ||
         ops.ff16_fft_butterfly4 || ops.ff16_ifft_butterfly4_out ||
+        ops.ff16_weighted_ifft_butterfly4 ||
         ops.ff16_fft_butterfly4_out ||
         ops.ff16_ifft_butterfly4_range ||
         ops.ff16_fft_butterfly4_range)

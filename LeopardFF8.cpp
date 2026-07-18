@@ -62,6 +62,9 @@ static std::atomic<uint64_t> TestHighSyndromePrunedFallbackBlocks(0);
 static std::atomic<uint64_t> TestHighReceiveIFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighReceiveCopyShards(0);
 static std::atomic<uint64_t> TestHighReceiveZeroShards(0);
+static std::atomic<uint64_t> TestHighLocatorWeightedIFFTButterfly4Calls(0);
+static std::atomic<uint64_t> TestHighLocatorScaleRowsElided(0);
+static std::atomic<uint64_t> TestHighLocatorInactiveRows(0);
 static std::atomic<uint64_t> TestSparseExactBlocks(0);
 static std::atomic<uint64_t> TestSparsePrefixButterflies(0);
 static std::atomic<uint64_t> TestSparseRetainedButterflies(0);
@@ -71,6 +74,12 @@ static std::atomic<uint64_t> TestSparseRequestedOutputCopies(0);
 static uint16_t PrunedMultiplierLog(
     const void* context,
     uint32_t storage_index);
+
+static void mul_mem_inplace(
+    const backend::Ops& ops,
+    void* data,
+    ffe_t log_m,
+    uint64_t bytes);
 
 #if defined(LEO2_ENABLE_TEST_HOOKS)
 static void TestRecordSparseEncodeBlock(
@@ -1554,6 +1563,65 @@ static void IFFT_DIT_DecoderAccumulate(
     LEO_DEBUG_ASSERT(xor_result != NULL);
     IFFT_DIT_DecoderImpl(
         ops, bytes, m_truncated, work, m, skewLUT, xor_result, 1);
+}
+
+
+// Algorithm 5's h*Lambda boundary is immediately followed by an inverse LCH
+// transform.  Fold the four independent locator weights (or masked zeros) into
+// the first two inverse layers so the workspace is read and written once
+// instead of once for scaling and again for the boundary butterfly.
+static void IFFT_DIT_DecoderWeightedLocator(
+    const backend::Ops& ops,
+    const uint64_t bytes,
+    const void* const* coordinate_data,
+    const ffe_t* locator_logs,
+    void** work,
+    const unsigned m,
+    const ffe_t* skewLUT)
+{
+    if (m < 4)
+    {
+        for (unsigned i = 0; i < m; ++i)
+        {
+            if (coordinate_data[i])
+                mul_mem_inplace(ops, work[i], locator_logs[i], bytes);
+            else
+                memset(work[i], 0, bytes);
+        }
+        IFFT_DIT_Decoder(ops, bytes, m, work, m, skewLUT);
+        return;
+    }
+
+    LEO_DEBUG_ASSERT((m & 3U) == 0);
+    uint64_t inactive_rows = 0;
+    for (unsigned r = 0; r < m; r += 4)
+    {
+        uint8_t live_mask = 0;
+        for (unsigned lane = 0; lane < 4; ++lane)
+        {
+            if (coordinate_data[r + lane])
+                live_mask |= static_cast<uint8_t>(1U << lane);
+            else
+                ++inactive_rows;
+        }
+        ops.ff8_weighted_ifft_butterfly4(
+            work[r], work[r + 1], work[r + 2], work[r + 3],
+            work[r], work[r + 1], work[r + 2], work[r + 3],
+            locator_logs[r], locator_logs[r + 1],
+            locator_logs[r + 2], locator_logs[r + 3], live_mask,
+            skewLUT[r + 1], skewLUT[r + 3], skewLUT[r + 2], bytes);
+    }
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    TestHighLocatorWeightedIFFTButterfly4Calls.fetch_add(
+        m / 4, std::memory_order_relaxed);
+    TestHighLocatorScaleRowsElided.fetch_add(m, std::memory_order_relaxed);
+    TestHighLocatorInactiveRows.fetch_add(
+        inactive_rows, std::memory_order_relaxed);
+#else
+    (void)inactive_rows;
+#endif
+    IFFT_DIT_DecoderImpl(
+        ops, bytes, m, work, m, skewLUT, NULL, 4);
 }
 
 
@@ -3078,6 +3146,10 @@ void TestOnlyResetHighDecodeCounts()
         0, std::memory_order_relaxed);
     TestHighReceiveCopyShards.store(0, std::memory_order_relaxed);
     TestHighReceiveZeroShards.store(0, std::memory_order_relaxed);
+    TestHighLocatorWeightedIFFTButterfly4Calls.store(
+        0, std::memory_order_relaxed);
+    TestHighLocatorScaleRowsElided.store(0, std::memory_order_relaxed);
+    TestHighLocatorInactiveRows.store(0, std::memory_order_relaxed);
 }
 
 
@@ -3108,6 +3180,13 @@ TestOnlyHighDecodeCounts TestOnlyGetHighDecodeCounts()
         TestHighReceiveCopyShards.load(std::memory_order_relaxed);
     result.receive_zero_shards =
         TestHighReceiveZeroShards.load(std::memory_order_relaxed);
+    result.locator_weighted_ifft_butterfly4 =
+        TestHighLocatorWeightedIFFTButterfly4Calls.load(
+            std::memory_order_relaxed);
+    result.locator_scale_rows_elided =
+        TestHighLocatorScaleRowsElided.load(std::memory_order_relaxed);
+    result.locator_inactive_rows =
+        TestHighLocatorInactiveRows.load(std::memory_order_relaxed);
     return result;
 }
 
@@ -3788,14 +3867,9 @@ void ReedSolomonDecodeHighPrepared(
 
     // h on V_t, then z = h * Lambda on V_t.
     FFT_DIT(ops, buffer_bytes, work, t, t, FFTSkewStorage);
-    for (unsigned i = 0; i < t; ++i)
-    {
-        if (coordinate_data[i])
-            mul_mem_inplace(ops, work[i], locator_logs[i], buffer_bytes);
-        else
-            memset(work[i], 0, buffer_bytes);
-    }
-    IFFT_DIT_Decoder(ops, buffer_bytes, t, work, t, FFTSkewStorage);
+    IFFT_DIT_DecoderWeightedLocator(
+        ops, buffer_bytes, coordinate_data, locator_logs,
+        work, t, FFTSkewStorage);
 
     // Evaluate z only on message blocks that contain a requested original.
     for (unsigned block = 1; block < block_count; ++block)
@@ -3966,14 +4040,9 @@ void ReedSolomonDecodeHighPrunedPlanned(
     LEO_DEBUG_ASSERT(input_plan_index == input_plan_count);
 
     FFT_DIT(ops, buffer_bytes, work, t, t, FFTSkewStorage);
-    for (unsigned i = 0; i < t; ++i)
-    {
-        if (coordinate_data[i])
-            mul_mem_inplace(ops, work[i], locator_logs[i], buffer_bytes);
-        else
-            memset(work[i], 0, buffer_bytes);
-    }
-    IFFT_DIT_Decoder(ops, buffer_bytes, t, work, t, FFTSkewStorage);
+    IFFT_DIT_DecoderWeightedLocator(
+        ops, buffer_bytes, coordinate_data, locator_logs,
+        work, t, FFTSkewStorage);
 
     for (unsigned output_block = 0;
          output_block < output_block_count;
@@ -4214,16 +4283,9 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
     LEO_DEBUG_ASSERT(input_plan_index == input_plan_count);
 
     FFT_DIT(ops, buffer_bytes, accumulator, t, t, FFTSkewStorage);
-    for (unsigned i = 0; i < t; ++i)
-    {
-        if (coordinate_data[i])
-            mul_mem_inplace(
-                ops, accumulator[i], locator_logs[i], buffer_bytes);
-        else
-            memset(accumulator[i], 0, buffer_bytes);
-    }
-    IFFT_DIT_Decoder(
-        ops, buffer_bytes, t, accumulator, t, FFTSkewStorage);
+    IFFT_DIT_DecoderWeightedLocator(
+        ops, buffer_bytes, coordinate_data, locator_logs,
+        accumulator, t, FFTSkewStorage);
 
     for (unsigned output_block = 0;
          output_block < output_block_count;

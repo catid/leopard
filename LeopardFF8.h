@@ -341,6 +341,9 @@ struct TestOnlyHighDecodeCounts
     uint64_t receive_ifft_butterfly4_out_of_place;
     uint64_t receive_copy_shards;
     uint64_t receive_zero_shards;
+    uint64_t locator_weighted_ifft_butterfly4;
+    uint64_t locator_scale_rows_elided;
+    uint64_t locator_inactive_rows;
 };
 void TestOnlyResetTransformCallsiteCounts();
 TestOnlyTransformCallsiteCounts TestOnlyGetTransformCallsiteCounts();

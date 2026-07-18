@@ -190,6 +190,46 @@ typedef void (*FFTButterfly4Out)(
 // pass first.
 typedef FFTButterfly4Out IFFTButterfly4Out;
 
+// Applies four independent nonzero fixed multipliers to the selected input
+// rows and immediately executes the first two inverse LCH layers.  weight_log
+// values are ordinary field logarithms: both zero and the field modulus denote
+// the multiplicative identity.  This differs deliberately from the butterfly
+// logs, where the field modulus remains the zero-skew sentinel.  A cleared bit
+// in live_mask supplies mathematical zero and permits the corresponding input
+// pointer to be null.
+//
+// Outputs must be pairwise disjoint.  The inputs may either be wholly disjoint
+// from every output (and may alias one another), or every output must exactly
+// equal its corresponding input for a four-row in-place operation.  Partial
+// and cross-row overlap are not supported.  Implementations load all live
+// inputs for one byte/symbol group before storing any result.
+typedef void (*WeightedIFFTButterfly4)(
+    const void* input0,
+    const void* input1,
+    const void* input2,
+    const void* input3,
+    void* output0,
+    void* output1,
+    void* output2,
+    void* output3,
+    uint16_t weight_log0,
+    uint16_t weight_log1,
+    uint16_t weight_log2,
+    uint16_t weight_log3,
+    uint8_t live_mask,
+    uint16_t multiplier_log01,
+    uint16_t multiplier_log23,
+    uint16_t multiplier_log02,
+    uint64_t byte_count);
+
+// Shared debug/test oracle for the weighted boundary's deliberately narrow
+// alias contract.  A zero-byte operation accesses no range.
+bool IsWeightedIFFTButterfly4AliasingValid(
+    const void* const inputs[4],
+    const void* const outputs[4],
+    uint8_t live_mask,
+    uint64_t byte_count);
+
 // This table is private to the implementation and immutable.  A backend owns
 // any tables referenced by its functions and publishes this object only after
 // initialization and the startup known-answer tests have succeeded.
@@ -211,6 +251,7 @@ struct Ops
     Butterfly4 ff8_ifft_butterfly4;
     Butterfly4 ff8_fft_butterfly4;
     IFFTButterfly4Out ff8_ifft_butterfly4_out;
+    WeightedIFFTButterfly4 ff8_weighted_ifft_butterfly4;
     FFTButterfly4Out ff8_fft_butterfly4_out;
     Butterfly4Range ff8_ifft_butterfly4_range;
     Butterfly4Range ff8_fft_butterfly4_range;
@@ -222,6 +263,7 @@ struct Ops
     Butterfly4 ff16_ifft_butterfly4;
     Butterfly4 ff16_fft_butterfly4;
     IFFTButterfly4Out ff16_ifft_butterfly4_out;
+    WeightedIFFTButterfly4 ff16_weighted_ifft_butterfly4;
     FFTButterfly4Out ff16_fft_butterfly4_out;
     Butterfly4Range ff16_ifft_butterfly4_range;
     Butterfly4Range ff16_fft_butterfly4_range;
