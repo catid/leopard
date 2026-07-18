@@ -525,18 +525,68 @@ static LEO_FORCE_INLINE void XorContiguousChunk(
     ValueIO<ValueTag>::Store(destination + offset, result);
 }
 
+template <typename ValueTag>
+static LEO_FORCE_INLINE void XorContiguous2Chunk(
+    uint8_t* destination0,
+    const uint8_t* source0,
+    uint8_t* destination1,
+    const uint8_t* source1,
+    uint64_t offset)
+{
+    typedef typename ValueIO<ValueTag>::Value Value;
+    const Value result0 = XorValue(
+        ValueIO<ValueTag>::Load(destination0 + offset),
+        ValueIO<ValueTag>::Load(source0 + offset));
+    const Value result1 = XorValue(
+        ValueIO<ValueTag>::Load(destination1 + offset),
+        ValueIO<ValueTag>::Load(source1 + offset));
+    ValueIO<ValueTag>::Store(destination0 + offset, result0);
+    ValueIO<ValueTag>::Store(destination1 + offset, result1);
+}
+
+template <typename ValueTag>
+static LEO_FORCE_INLINE void XorContiguous4Chunk(
+    uint8_t* destination0,
+    const uint8_t* source0,
+    uint8_t* destination1,
+    const uint8_t* source1,
+    uint8_t* destination2,
+    const uint8_t* source2,
+    uint8_t* destination3,
+    const uint8_t* source3,
+    uint64_t offset)
+{
+    typedef typename ValueIO<ValueTag>::Value Value;
+    const Value result0 = XorValue(
+        ValueIO<ValueTag>::Load(destination0 + offset),
+        ValueIO<ValueTag>::Load(source0 + offset));
+    const Value result1 = XorValue(
+        ValueIO<ValueTag>::Load(destination1 + offset),
+        ValueIO<ValueTag>::Load(source1 + offset));
+    const Value result2 = XorValue(
+        ValueIO<ValueTag>::Load(destination2 + offset),
+        ValueIO<ValueTag>::Load(source2 + offset));
+    const Value result3 = XorValue(
+        ValueIO<ValueTag>::Load(destination3 + offset),
+        ValueIO<ValueTag>::Load(source3 + offset));
+    ValueIO<ValueTag>::Store(destination0 + offset, result0);
+    ValueIO<ValueTag>::Store(destination1 + offset, result1);
+    ValueIO<ValueTag>::Store(destination2 + offset, result2);
+    ValueIO<ValueTag>::Store(destination3 + offset, result3);
+}
+
 // Skew 255 is not a multiplier.  It means that the multiply-add term is
 // omitted, leaving x unchanged and y ^= x.  Process that operation as one
 // contiguous buffer so the payload loop never stores x and does not pay the
 // eight-plane address-arithmetic overhead of a general butterfly.
 static void XorContiguousWholeBuffer(
+    KernelMode mode,
     void* destination_void,
     const void* source_void,
     uint64_t buffer_bytes)
 {
     uint8_t* destination = reinterpret_cast<uint8_t*>(destination_void);
     const uint8_t* source = reinterpret_cast<const uint8_t*>(source_void);
-    const KernelMode mode = ResolveKernelMode();
     uint64_t offset = 0;
 
 #ifdef LEO_FF8XOR_HAS_AVX512_KERNELS
@@ -572,6 +622,140 @@ static void XorContiguousWholeBuffer(
     }
 }
 
+static void XorContiguousWholeBuffer(
+    void* destination,
+    const void* source,
+    uint64_t buffer_bytes)
+{
+    XorContiguousWholeBuffer(
+        ResolveKernelMode(), destination, source, buffer_bytes);
+}
+
+static void XorContiguous2WholeBuffers(
+    KernelMode mode,
+    void* destination0_void,
+    const void* source0_void,
+    void* destination1_void,
+    const void* source1_void,
+    uint64_t buffer_bytes)
+{
+    uint8_t* destination0 = reinterpret_cast<uint8_t*>(destination0_void);
+    const uint8_t* source0 = reinterpret_cast<const uint8_t*>(source0_void);
+    uint8_t* destination1 = reinterpret_cast<uint8_t*>(destination1_void);
+    const uint8_t* source1 = reinterpret_cast<const uint8_t*>(source1_void);
+    uint64_t offset = 0;
+
+#ifdef LEO_FF8XOR_HAS_AVX512_KERNELS
+    if (mode == KernelMode::Avx512Zmm)
+        offset = avx512::Xor2_512(
+            destination0, source0, destination1, source1, buffer_bytes);
+    else if (mode == KernelMode::Avx512VL)
+        offset = avx512::Xor2_256(
+            destination0, source0, destination1, source1, buffer_bytes);
+#endif
+
+#ifdef LEO_FF8XOR_HAS_AVX2_KERNELS
+    if (mode == KernelMode::Avx2 ||
+        mode == KernelMode::Avx512VL ||
+        mode == KernelMode::Avx512Zmm)
+    {
+        offset = avx2::Xor2(
+            destination0, source0, destination1, source1,
+            buffer_bytes, offset);
+    }
+#endif
+
+#ifdef LEO_FF8XOR_HAS_SIMD128
+    if (mode != KernelMode::Portable)
+    {
+        while (buffer_bytes - offset >= ValueIO<Simd128Tag>::kBytes)
+        {
+            XorContiguous2Chunk<Simd128Tag>(
+                destination0, source0, destination1, source1, offset);
+            offset += ValueIO<Simd128Tag>::kBytes;
+        }
+    }
+#endif
+
+    while (offset < buffer_bytes)
+    {
+        XorContiguous2Chunk<PortableTag>(
+            destination0, source0, destination1, source1, offset);
+        offset += ValueIO<PortableTag>::kBytes;
+    }
+}
+
+static void XorContiguous4WholeBuffers(
+    KernelMode mode,
+    void* destination0_void,
+    const void* source0_void,
+    void* destination1_void,
+    const void* source1_void,
+    void* destination2_void,
+    const void* source2_void,
+    void* destination3_void,
+    const void* source3_void,
+    uint64_t buffer_bytes)
+{
+    uint8_t* destination0 = reinterpret_cast<uint8_t*>(destination0_void);
+    const uint8_t* source0 = reinterpret_cast<const uint8_t*>(source0_void);
+    uint8_t* destination1 = reinterpret_cast<uint8_t*>(destination1_void);
+    const uint8_t* source1 = reinterpret_cast<const uint8_t*>(source1_void);
+    uint8_t* destination2 = reinterpret_cast<uint8_t*>(destination2_void);
+    const uint8_t* source2 = reinterpret_cast<const uint8_t*>(source2_void);
+    uint8_t* destination3 = reinterpret_cast<uint8_t*>(destination3_void);
+    const uint8_t* source3 = reinterpret_cast<const uint8_t*>(source3_void);
+    uint64_t offset = 0;
+
+#ifdef LEO_FF8XOR_HAS_AVX512_KERNELS
+    if (mode == KernelMode::Avx512Zmm)
+    {
+        offset = avx512::Xor4_512(
+            destination0, source0, destination1, source1,
+            destination2, source2, destination3, source3, buffer_bytes);
+    }
+    else if (mode == KernelMode::Avx512VL)
+    {
+        offset = avx512::Xor4_256(
+            destination0, source0, destination1, source1,
+            destination2, source2, destination3, source3, buffer_bytes);
+    }
+#endif
+
+#ifdef LEO_FF8XOR_HAS_AVX2_KERNELS
+    if (mode == KernelMode::Avx2 ||
+        mode == KernelMode::Avx512VL ||
+        mode == KernelMode::Avx512Zmm)
+    {
+        offset = avx2::Xor4(
+            destination0, source0, destination1, source1,
+            destination2, source2, destination3, source3,
+            buffer_bytes, offset);
+    }
+#endif
+
+#ifdef LEO_FF8XOR_HAS_SIMD128
+    if (mode != KernelMode::Portable)
+    {
+        while (buffer_bytes - offset >= ValueIO<Simd128Tag>::kBytes)
+        {
+            XorContiguous4Chunk<Simd128Tag>(
+                destination0, source0, destination1, source1,
+                destination2, source2, destination3, source3, offset);
+            offset += ValueIO<Simd128Tag>::kBytes;
+        }
+    }
+#endif
+
+    while (offset < buffer_bytes)
+    {
+        XorContiguous4Chunk<PortableTag>(
+            destination0, source0, destination1, source1,
+            destination2, source2, destination3, source3, offset);
+        offset += ValueIO<PortableTag>::kBytes;
+    }
+}
+
 void XorBuffer(
     uint64_t buffer_bytes,
     void* destination,
@@ -580,16 +764,72 @@ void XorBuffer(
     XorContiguousWholeBuffer(destination, source, buffer_bytes);
 }
 
-static void XorBuffers(
+void XorBuffers(
     uint64_t buffer_bytes,
     unsigned count,
     void** destination,
     void** source)
 {
-    for (unsigned index = 0; index < count; ++index)
+    if (count == 0)
+        return;
+
+    const KernelMode mode = ResolveKernelMode();
+    unsigned index = 0;
+    for (; count - index >= 4; index += 4)
+    {
+        if (buffer_bytes <= 1024)
+        {
+            XorContiguous4WholeBuffers(
+                mode,
+                destination[index], source[index],
+                destination[index + 1], source[index + 1],
+                destination[index + 2], source[index + 2],
+                destination[index + 3], source[index + 3],
+                buffer_bytes);
+        }
+        else
+        {
+            XorContiguousWholeBuffer(
+                mode, destination[index], source[index], buffer_bytes);
+            XorContiguousWholeBuffer(
+                mode,
+                destination[index + 1], source[index + 1], buffer_bytes);
+            XorContiguousWholeBuffer(
+                mode,
+                destination[index + 2], source[index + 2], buffer_bytes);
+            XorContiguousWholeBuffer(
+                mode,
+                destination[index + 3], source[index + 3], buffer_bytes);
+        }
+    }
+    if (count - index >= 2)
+    {
+        // The two-stream loop removes dispatch overhead for small buffers, but
+        // on this implementation host it slightly reduced sustained bandwidth
+        // once each stream exceeded 1 KiB.  Preserve the single mode lookup
+        // while using the independently tuned loop shape in each region.
+        if (buffer_bytes <= 1024)
+        {
+            XorContiguous2WholeBuffers(
+                mode,
+                destination[index], source[index],
+                destination[index + 1], source[index + 1],
+                buffer_bytes);
+        }
+        else
+        {
+            XorContiguousWholeBuffer(
+                mode, destination[index], source[index], buffer_bytes);
+            XorContiguousWholeBuffer(
+                mode,
+                destination[index + 1], source[index + 1], buffer_bytes);
+        }
+        index += 2;
+    }
+    if (index < count)
     {
         XorContiguousWholeBuffer(
-            destination[index], source[index], buffer_bytes);
+            mode, destination[index], source[index], buffer_bytes);
     }
 }
 

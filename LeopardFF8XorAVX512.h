@@ -79,5 +79,41 @@ uint64_t Xor512(
     const void* source,
     uint64_t buffer_bytes);
 
+uint64_t Xor2_256(
+    void* destination0,
+    const void* source0,
+    void* destination1,
+    const void* source1,
+    uint64_t buffer_bytes);
+
+uint64_t Xor2_512(
+    void* destination0,
+    const void* source0,
+    void* destination1,
+    const void* source1,
+    uint64_t buffer_bytes);
+
+uint64_t Xor4_256(
+    void* destination0,
+    const void* source0,
+    void* destination1,
+    const void* source1,
+    void* destination2,
+    const void* source2,
+    void* destination3,
+    const void* source3,
+    uint64_t buffer_bytes);
+
+uint64_t Xor4_512(
+    void* destination0,
+    const void* source0,
+    void* destination1,
+    const void* source1,
+    void* destination2,
+    const void* source2,
+    void* destination3,
+    const void* source3,
+    uint64_t buffer_bytes);
+
 
 }}} // namespace leopard::ff8xor::avx512

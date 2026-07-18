@@ -15,8 +15,10 @@ if(CMAKE_GENERATOR MATCHES
     set(FF8XOR_MULTI_CONFIG ON)
 endif()
 set(FF8XOR_RELEASE_TEST_CONFIG_ARGS "")
+set(FF8XOR_BUILD_CONFIG_ARGS "")
 if(FF8XOR_MULTI_CONFIG)
     list(APPEND FF8XOR_RELEASE_TEST_CONFIG_ARGS CONFIGURATIONS Release)
+    list(APPEND FF8XOR_BUILD_CONFIG_ARGS --config "$<CONFIG>")
 endif()
 
 set(CMAKE_CXX_STANDARD 11)
@@ -83,6 +85,44 @@ if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND
             set(FF8XOR_AVX2_COMPILE_FLAGS "/arch:AVX2")
         endif()
     endif()
+endif()
+
+# A caller may add an extension flag such as -mssse3 globally after choosing a
+# generic -march.  Explicitly negate every extension this baseline object must
+# not inherit; probe each spelling so older GCC/Clang versions are not rejected
+# merely because they predate a newer extension.
+if(FF8XOR_BASELINE_COMPILE_FLAGS AND
+   (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+    CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
+    set(FF8XOR_BASELINE_DISABLE_FLAGS
+        -mno-sse3
+        -mno-ssse3
+        -mno-sse4.1
+        -mno-sse4.2
+        -mno-avx
+        -mno-avx2
+        -mno-avx512f
+        -mno-avx512vl
+        -mno-bmi
+        -mno-bmi2
+        -mno-lzcnt
+        -mno-popcnt
+        -mno-aes
+        -mno-pclmul
+        -mno-fma
+        -mno-gfni)
+    foreach(FF8XOR_BASELINE_DISABLE_FLAG ${FF8XOR_BASELINE_DISABLE_FLAGS})
+        string(MAKE_C_IDENTIFIER
+            "FF8XOR_SUPPORTS_${FF8XOR_BASELINE_DISABLE_FLAG}"
+            FF8XOR_BASELINE_DISABLE_VARIABLE)
+        check_cxx_compiler_flag(
+            "${FF8XOR_BASELINE_DISABLE_FLAG}"
+            ${FF8XOR_BASELINE_DISABLE_VARIABLE})
+        if(${FF8XOR_BASELINE_DISABLE_VARIABLE})
+            set(FF8XOR_BASELINE_COMPILE_FLAGS
+                "${FF8XOR_BASELINE_COMPILE_FLAGS} ${FF8XOR_BASELINE_DISABLE_FLAG}")
+        endif()
+    endforeach()
 endif()
 
 # GCC's reassociation pass lengthens live ranges across the generated CNOT
@@ -409,6 +449,32 @@ if(FF8XOR_BUILD_AVX512)
     list(APPEND FF8XOR_ASSEMBLY_REQUIRE_ARGS --require-avx512)
 endif()
 
+# Sanitizers deliberately inject helper instructions and runtime calls that do
+# not describe the production ISA contract (Clang ASan, for example, inserts
+# LAHF into these objects).  Functional sanitizer coverage remains registered;
+# run the opcode census on a corresponding unsanitized build.  Multi-config
+# generators can instrument one configuration without changing the configure-
+# time CMAKE_BUILD_TYPE, so inspect every configured flag set.  Conservatively
+# omit artifact-shape targets when any configuration is instrumented: this
+# avoids a Release target silently inspecting a Debug artifact, and parser unit
+# tests remain available in every configuration.
+set(FF8XOR_SANITIZER_INSTRUMENTED OFF)
+set(FF8XOR_CONFIGURED_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+if(FF8XOR_MULTI_CONFIG)
+    foreach(FF8XOR_CONFIGURATION ${CMAKE_CONFIGURATION_TYPES})
+        string(TOUPPER "${FF8XOR_CONFIGURATION}"
+            FF8XOR_CONFIGURATION_UPPER)
+        set(FF8XOR_CONFIGURED_CXX_FLAGS
+            "${FF8XOR_CONFIGURED_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${FF8XOR_CONFIGURATION_UPPER}}")
+    endforeach()
+else()
+    set(FF8XOR_CONFIGURED_CXX_FLAGS
+        "${FF8XOR_CONFIGURED_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${FF8XOR_BUILD_TYPE_UPPER}}")
+endif()
+if(FF8XOR_CONFIGURED_CXX_FLAGS MATCHES "fsanitize")
+    set(FF8XOR_SANITIZER_INSTRUMENTED ON)
+endif()
+
 find_program(FF8XOR_NM_EXECUTABLE NAMES llvm-nm nm)
 find_program(FF8XOR_OBJDUMP_EXECUTABLE NAMES llvm-objdump objdump)
 find_program(FF8XOR_AR_EXECUTABLE NAMES llvm-ar ar)
@@ -426,13 +492,15 @@ if(FF8XOR_PYTHON_EXECUTABLE)
     add_custom_target(generate_ff8_xor_circuits
         COMMAND "${FF8XOR_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_ff8_xor_circuits.py"
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        VERBATIM)
 
     add_custom_target(check_ff8_xor_circuits
         COMMAND "${FF8XOR_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_ff8_xor_circuits.py"
                 --check
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        VERBATIM)
 
     add_test(NAME ff8xor_circuits
         COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
@@ -444,14 +512,16 @@ if(FF8XOR_PYTHON_EXECUTABLE)
         COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
                 "${FF8XOR_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_ff8xor_schedule_corpus.py"
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        VERBATIM)
 
     add_custom_target(check_ff8xor_schedule_corpus
         COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
                 "${FF8XOR_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_ff8xor_schedule_corpus.py"
                 --check
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        VERBATIM)
 
     add_test(NAME ff8xor_schedule_corpus
         COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
@@ -459,10 +529,21 @@ if(FF8XOR_PYTHON_EXECUTABLE)
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_ff8xor_schedule_corpus.py"
                 --check)
 
+    add_test(NAME ff8xor_benchmark_metadata
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_benchmark_metadata.py"
+                "$<TARGET_FILE:bench_leopard_ff8xor>")
+
     add_test(NAME ff8xor_assembly_inspector
         COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
                 "${FF8XOR_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_assembly_inspector.py")
+
+    add_test(NAME ff8xor_xor_batch_inspector
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_xor_batch_inspector.py")
 
     add_test(NAME ff8xor_synthesis
         COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
@@ -480,6 +561,14 @@ if(FF8XOR_PYTHON_EXECUTABLE)
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_baseline_isa_inspector.py")
 
     if(FF8XOR_CAN_INSPECT_X86_ASSEMBLY)
+        add_test(NAME ff8xor_cmake_sanitizer_gating
+            COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                    "${FF8XOR_PYTHON_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_cmake_sanitizer_gating.py")
+    endif()
+
+    if(FF8XOR_CAN_INSPECT_X86_ASSEMBLY AND
+       NOT FF8XOR_SANITIZER_INSTRUMENTED)
         # Debug and less aggressive compilers may leave baseline-attributed
         # initialization helpers out of line.  Keep the complete helper set in
         # the census instead of relying on Release inlining to hide omissions.
@@ -533,11 +622,22 @@ if(FF8XOR_PYTHON_EXECUTABLE)
                     --strict
                     --json
             DEPENDS libleopard
-            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            VERBATIM)
+
+        add_test(NAME ff8xor_baseline_isa_custom_target
+            COMMAND "${CMAKE_COMMAND}" --build
+                    "${CMAKE_CURRENT_BINARY_DIR}"
+                    ${FF8XOR_BUILD_CONFIG_ARGS}
+                    --target check_ff8xor_baseline_isa)
+    elseif(FF8XOR_CAN_INSPECT_X86_ASSEMBLY)
+        message(STATUS
+            "FF8 XOR baseline ISA census: skipped for sanitizer-instrumented objects")
     endif()
 
     if(FF8XOR_BUILD_AVX512)
-        if(FF8XOR_CAN_INSPECT_X86_ASSEMBLY)
+        if(FF8XOR_CAN_INSPECT_X86_ASSEMBLY AND
+           NOT FF8XOR_SANITIZER_INSTRUMENTED)
             # Register the spill/code-shape gate only for optimized builds.
             # Debug deliberately materializes vector arguments on the stack.
             if(FF8XOR_MULTI_CONFIG OR
@@ -562,35 +662,70 @@ if(FF8XOR_PYTHON_EXECUTABLE)
                             --strict
                             --json
                     DEPENDS bench_leopard_ff8xor_xor3
-                    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+                    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                    VERBATIM)
             endif()
-        else()
+        elseif(NOT FF8XOR_CAN_INSPECT_X86_ASSEMBLY)
             message(STATUS
                 "FF8 XOR3 assembly inspection: nm/objdump unavailable")
         endif()
     endif()
 
-    add_custom_target(inspect_ff8xor_assembly
-        COMMAND "${FF8XOR_PYTHON_EXECUTABLE}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_assembly.py"
-                "$<TARGET_FILE:libleopard>"
-                --json
-                --output "${CMAKE_CURRENT_BINARY_DIR}/ff8xor_assembly_census.json"
-                ${FF8XOR_ASSEMBLY_REQUIRE_ARGS}
-        DEPENDS libleopard
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(NOT FF8XOR_SANITIZER_INSTRUMENTED)
+        add_custom_target(inspect_ff8xor_assembly
+            COMMAND "${FF8XOR_PYTHON_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_assembly.py"
+                    "$<TARGET_FILE:libleopard>"
+                    --json
+                    --output "${CMAKE_CURRENT_BINARY_DIR}/ff8xor_assembly_census.json"
+                    ${FF8XOR_ASSEMBLY_REQUIRE_ARGS}
+            DEPENDS libleopard
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            VERBATIM)
 
-    add_custom_target(check_ff8xor_assembly
-        COMMAND "${FF8XOR_PYTHON_EXECUTABLE}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_assembly.py"
-                "$<TARGET_FILE:libleopard>"
-                --strict
-                --fail-on-spills
-                ${FF8XOR_ASSEMBLY_REQUIRE_ARGS}
-        DEPENDS libleopard
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+        add_custom_target(check_ff8xor_assembly
+            COMMAND "${FF8XOR_PYTHON_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_assembly.py"
+                    "$<TARGET_FILE:libleopard>"
+                    --strict
+                    --fail-on-spills
+                    ${FF8XOR_ASSEMBLY_REQUIRE_ARGS}
+            DEPENDS libleopard
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            VERBATIM)
+    endif()
+
+    if(FF8XOR_CAN_INSPECT_X86_ASSEMBLY AND FF8XOR_BUILD_AVX2 AND
+       NOT FF8XOR_SANITIZER_INSTRUMENTED AND
+       (FF8XOR_MULTI_CONFIG OR
+        FF8XOR_BUILD_TYPE_UPPER STREQUAL "RELEASE"))
+        add_test(NAME ff8xor_xor_batch_assembly
+            COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                    "${FF8XOR_PYTHON_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_xor_batch.py"
+                    "$<TARGET_FILE:libleopard>"
+                    --nm "${FF8XOR_NM_EXECUTABLE}"
+                    --objdump "${FF8XOR_OBJDUMP_EXECUTABLE}"
+                    --strict
+                    ${FF8XOR_ASSEMBLY_REQUIRE_ARGS}
+                    ${FF8XOR_RELEASE_TEST_CONFIG_ARGS})
+
+        add_custom_target(check_ff8xor_xor_batch_assembly
+            COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                    "${FF8XOR_PYTHON_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_xor_batch.py"
+                    "$<TARGET_FILE:libleopard>"
+                    --nm "${FF8XOR_NM_EXECUTABLE}"
+                    --objdump "${FF8XOR_OBJDUMP_EXECUTABLE}"
+                    --strict
+                    ${FF8XOR_ASSEMBLY_REQUIRE_ARGS}
+            DEPENDS libleopard
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            VERBATIM)
+    endif()
 
     if(FF8XOR_CAN_INSPECT_X86_ASSEMBLY AND
+       NOT FF8XOR_SANITIZER_INSTRUMENTED AND
        (FF8XOR_MULTI_CONFIG OR
         FF8XOR_BUILD_TYPE_UPPER STREQUAL "RELEASE"))
         add_test(NAME ff8xor_assembly_census
@@ -603,5 +738,10 @@ if(FF8XOR_PYTHON_EXECUTABLE)
                     --strict
                     ${FF8XOR_ASSEMBLY_REQUIRE_ARGS}
                     ${FF8XOR_RELEASE_TEST_CONFIG_ARGS})
+    endif()
+
+    if(FF8XOR_SANITIZER_INSTRUMENTED)
+        message(STATUS
+            "FF8 XOR production assembly checks: skipped for sanitizer-instrumented objects")
     endif()
 endif()

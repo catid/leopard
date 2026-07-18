@@ -75,12 +75,16 @@ deterministic synthesis portfolio varies column order, pivot choice,
 elimination direction, inverse/transpose orientation, commuting cancellation,
 and exact shortest rewrites for windows touching at most four wires. An
 in-place Boyar-Paar-style bidirectional greedy search uses legal CNOTs on both
-sides of the matrix plus bounded two-gate lookahead. It is retained for the
-eight-wire multipliers. Applying it to 16-wire butterflies reduced source XORs
-but made GCC spill 380 portable/SIMD128/AVX2 specializations, so those wider
-circuits deliberately retain the verified zero-spill portfolio. Selection is
-by gate count, dependency depth, then lexical order, subject to that compiled
-register-pressure gate. Every emitted specialization names its live wires
+sides of the matrix plus bounded two-gate lookahead. Multiplier candidates also
+use a complete radius-three GL(8,2) breadth-first ball (52,277 maps) in a
+meet-in-the-middle search that proves optimality through six CNOTs and rewrites
+full eight-wire windows. A deterministic SSA linear-form cost rejects shorter
+source programs that compile to more XOR work. Applying the greedy search to
+16-wire butterflies reduced source XORs but made GCC spill 380
+portable/SIMD128/AVX2 specializations, so those wider circuits deliberately
+retain the verified zero-spill portfolio. Selection is by gate count,
+dependency depth, then lexical order, subject to the compiled-work and
+register-pressure gates. Every emitted specialization names its live wires
 `x0` through `x7` and `y0` through `y7`; there is no runtime gate array.
 
 The checked-in generated file is
@@ -88,23 +92,28 @@ The checked-in generated file is
 checksum is:
 
 ```text
-4300215ee838d45cecb0587964e3b958f3c87d6e8b5b32136645786f1aa938a4
+f03cc4d1230d128c6900745f3372b6ce946ede037904b887bc760abd557b8028
 ```
 
 Generated gate statistics:
 
 | Circuit family | Minimum | Maximum | Average | Maximum depth | Average depth |
 |---|---:|---:|---:|---:|---:|
-| Multiply | 0 | 24 | 19.371094 | 17 | 11.550781 |
+| Multiply | 0 | 23 | 19.152344 | 17 | 11.375000 |
 | Forward FFT | 8 | 51 | 40.000000 | 14 | 10.859375 |
 | Inverse FFT | 8 | 51 | 40.000000 | 14 | 10.859375 |
 
-There are 4,959 multiplier gates, 10,240 forward gates, and 10,240 inverse
-gates in total. Checked-in regeneration takes about 18.8 seconds and 32 MiB on
+There are 4,903 multiplier gates, 10,240 forward gates, and 10,240 inverse
+gates in total. Checked-in regeneration takes about 43.7 seconds and 59 MiB on
 the implementation host. Compared with the original single-row-reduction
-generator, multiplier gates fell from 8,108 to 4,959 (38.84%) and multiplier
-depth from 6,210 to 2,957 (52.38%). The generated file is 1,282,692 bytes,
-6.61% smaller than the original 1,373,440-byte file.
+generator, multiplier gates fell from 8,108 to 4,903 (39.53%) and multiplier
+depth from 6,210 to 2,912 (53.11%). The generated file is 1,280,185 bytes,
+6.79% smaller than the original 1,373,440-byte file. Relative to the preceding
+greedy portfolio, bounded exact search reduced source multiplier gates by
+1.13% and depth by 1.52%. A representative GCC AVX2 corpus compile reduced
+`vpxor` instructions from 4,060 to 4,027 and text from 43,758 to 43,566 bytes,
+with no stack spills; the guard rejects exact rewrites that do not improve its
+deterministic compiled-work proxy.
 
 ### The two meanings of 255
 
@@ -149,6 +158,17 @@ AVX2 path and the AVX-512 path that depends on its tails.
 Each smaller path handles only the exact remainder of one plane. Multiplication
 loads all eight source planes before any store, so `source == destination` is
 supported.
+
+Encoder accumulation and formal-derivative additions resolve the SIMD mode
+once for the complete batch, then group independent buffers four, two, and one
+at a time. For buffers through 1 KiB, named two- and four-stream loops expose
+independent load/XOR/store chains in portable, SIMD128, AVX2, AVX-512VL, and
+AVX-512-ZMM forms. Larger buffers retain the one-time mode lookup but use the
+better measured sequential vector-loop shape; interleaving at 4 KiB and above
+was neutral to slower on the implementation host. Each individual
+`source == destination` pair is supported, including odd batch tails. The
+internal transform helper accepts independent stream pairs; ranges belonging
+to different entries must not overlap, as at both production call sites.
 
 The backend copies Leopard's FF8 metadata initialization and uses a padded skew
 array so the transform's historical one-before-logical-begin view remains a
@@ -271,18 +291,20 @@ mode covers `(k,r)` values `(8,2)`, `(16,4)`, `(32,8)`, `(64,16)`, `(128,32)`,
 and `(128,128)`; buffer sizes 1 KiB, 4 KiB, 64 KiB, and 1 MiB; and each unique
 loss count in `1`, `min(4,r)`, `max(1,r/2)`, and `r`.
 Microbenchmarks report packed multiply-add, XOR-circuit multiply, forward and
-inverse two-way butterflies, and both transpose directions. The reported
-speed ratio is `packed time / ff8xor time`, so a value greater than one means
-the XOR backend is faster.
+inverse two-way butterflies, both transpose directions, and sequential versus
+two/four-stream batched plain XOR. The reported speed ratio is
+`packed time / ff8xor time`, so a value greater than one means the XOR backend
+is faster.
 
 For repeatable optimization work, the benchmark attempts to pin itself to the
 first CPU in its allowed affinity set. `--cpu N` selects a specific allowed
 logical CPU and `--no-pin` disables pinning. `--abba` measures matched packed
-and native end-to-end calls in A-B-B-A order; standalone microbenchmarks and
-optional packed-boundary rows remain sequential and are labeled as such. ABBA
-rows report twice the requested sample count because each round contains two
-samples of each backend. Allocation and equivalence checks remain outside the
-timed regions.
+and native end-to-end calls in A-B-B-A order. The paired sequential/batched
+XOR microbenchmarks always use A-B-B-A to control drift; other standalone
+microbenchmarks and optional packed-boundary rows remain sequential. Every row
+labels the actual order. ABBA rows report twice the requested sample count
+because each round contains two samples of each implementation. Allocation and
+equivalence checks remain outside the timed regions.
 
 ### Optional transform-buffer cache coloring
 
@@ -405,6 +427,13 @@ cmake --build build --target inspect_ff8xor_assembly
 cmake --build build --target check_ff8xor_assembly
 ```
 
+`tools/inspect_ff8xor_xor_batch.py` separately requires the two- and
+four-stream plain-XOR loops, the selected YMM/ZMM width, at least two or four
+independent vector XORs in the cyclic component, and no calls, vector spills,
+scaled stack indexing, RIP-relative tables, shuffles, or multiplication. It is
+registered as `ff8xor_xor_batch_assembly` for supported Release builds and is
+also available as `check_ff8xor_xor_batch_assembly`.
+
 The non-strict target writes `ff8xor_assembly_census.json` in the build
 directory. Supported x86 Linux Release builds run the structural strict check
 under CTest. The developer `check_ff8xor_assembly` target additionally requires
@@ -435,6 +464,22 @@ ctest --test-dir build --output-on-failure \
 cmake -S . -B build-portable -DCMAKE_BUILD_TYPE=Release \
     -DLEO_FF8XOR_ENABLE_AVX2=OFF -DLEO_FF8XOR_ENABLE_AVX512=OFF
 ```
+
+The unsanitized suite also builds `check_ff8xor_baseline_isa` as a CTest case,
+which protects the shell quoting of its demangled-symbol regular expressions
+in addition to exercising the inspector directly.
+
+The baseline sources append individually compiler-probed `-mno-*` feature
+flags after `-march=x86-64`, so a caller's global `-mssse3` or host-native flag
+cannot silently contaminate the dispatcher. Clang 18 Release with an
+adversarial global `-mssse3` passed the strict artifact census with zero
+violations. A separate Clang 18 Debug ASan+UBSan build passed all 18 registered
+functional and parser tests. Sanitizers intentionally inject helper opcodes
+and calls (Clang ASan inserts `lahf`), so CMake omits all production-shape
+artifact assembly tests and custom targets when any single- or multi-config
+C++ flag set enables a sanitizer. It prints that decision; parser unit tests
+and all functional coverage remain enabled. A configure-only regression test
+covers both Release single-config and Debug Ninja Multi-Config sanitizer flags.
 
 ### Standalone AVX-512 XOR3 experiment
 
@@ -496,7 +541,7 @@ must still pass the full codec benchmark and assembly census before retention.
 
 These results were collected on an AMD Ryzen Threadripper PRO 9985WX
 (64 cores, 128 threads), Linux 6.8, GCC 13.3.0, and CMake 3.28.3.
-The retained build used GCC Release flags `-O3 -DNDEBUG`, C++11, global
+The full reference build used GCC Release flags `-O3 -DNDEBUG`, C++11, global
 `-march=native -Wall -Wextra -fopenmp`, baseline ff8xor flags
 `-march=x86-64 -fno-tree-reassoc`, isolated AVX2 flags
 `-march=x86-64 -mavx2 -fno-tree-reassoc`, and isolated AVX-512 flags
@@ -535,6 +580,31 @@ factor was 1.78x. No measured end-to-end ff8xor case was faster. These are
 summaries from one run rather than raw-sample confidence intervals, so they do
 not establish a causal improvement versus an older generated-circuit build.
 
+The exact-synthesis/batched-XOR checkpoint was then measured in quick mode
+against a frozen executable using checksum `4300215e...`, alternating old/new
+process order while each executable retained its internal packed/native ABBA
+order. Across nine outer repetitions, packed-drift-normalized median speedup
+was 1.017x for the four encode cases and 1.014x for the ten decode cases.
+Shorter repeats, including best-time comparisons, moved to either side of
+1.0, so this is not claimed as a reproducible codec-level speedup. Five
+same-binary microbenchmark repetitions did establish the intended retained
+region:
+
+| Batched kernel | Bytes per stream | Median speedup | Best-time speedup |
+|---|---:|---:|---:|
+| XOR2 | 64 | 1.355x | 1.367x |
+| XOR2 | 1,024 | 1.057x | 1.046x |
+| XOR4 | 64 | 1.793x | 1.794x |
+| XOR4 | 1,024 | 1.117x | 1.096x |
+
+At 4 KiB and 64 KiB the selected implementation was effectively neutral
+because it deliberately returns to sequential vector loops after one hoisted
+mode lookup. True interleaving and a manual four-vector AVX2 unroll were both
+slower there and were rejected. Allocation and correctness checks were outside
+timing, modeled traffic counted two loads plus one store, and transposes were
+excluded. The current quick old-versus-packed ratios remained well below one,
+so these local gains do not change the experiment's overall slower result.
+
 Representative 1 MiB microbenchmarks were:
 
 | Operation | Coefficient/circuit | Median/best us | Median input/output MB/s |
@@ -562,7 +632,10 @@ gates at depth 10 for multiply and 43 source gates at depth 11 for each
 butterfly. Its AVX2 loops compiled to 16 `vpxor` for multiply, 41 for FFT, and
 40 for IFFT, with the expected plane loads/stores and scalar loop control.
 There were no calls inside vector loops, `pshufb`, integer multiply, `pand`,
-gathers, payload-table accesses, or dynamic gate indexing.
+gathers, payload-table accesses, or dynamic gate indexing. The separate batch
+census reported AVX2 XOR2/XOR4 kernels of 116/188 bytes with 2/4 loop XORs;
+AVX-512VL used 99/159 bytes and AVX-512 ZMM used 99/175 bytes. All six had zero
+calls, vector-stack references, static-table reads, and forbidden operations.
 
 The wider greedy candidate was rejected after the same gate found spills in
 380 GCC butterfly functions. With the retained circuits, Clang 18 passes all
@@ -579,9 +652,10 @@ experiment.
 - Each whole-buffer operation incurs one coefficient function-pointer dispatch.
 - Two-way butterflies lose the packed backend's existing fused two-layer
   memory pass.
-- Encoder chunk accumulation and the decoder formal-derivative sweep currently
-  process independent whole-buffer XOR streams sequentially, losing the packed
-  backend's four-stream XOR instruction-level parallelism.
+- Encoder chunk accumulation and the decoder formal-derivative sweep expose
+  two/four-stream XOR instruction-level parallelism only through 1 KiB. Larger
+  buffers use the measured faster sequential-loop shape and still lack fusion
+  into adjacent transform passes.
 - Sixteen live AVX2 vectors leave no spare vector register, so compiler spills
   remain possible for some generated circuits.
 - Static specialization of all multiplier and butterfly coefficients increases

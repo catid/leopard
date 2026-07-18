@@ -226,6 +226,72 @@ uint64_t Xor(
     return offset;
 }
 
+uint64_t Xor2(
+    void* destination0_void,
+    const void* source0_void,
+    void* destination1_void,
+    const void* source1_void,
+    uint64_t buffer_bytes,
+    uint64_t offset)
+{
+    uint8_t* destination0 = reinterpret_cast<uint8_t*>(destination0_void);
+    const uint8_t* source0 = reinterpret_cast<const uint8_t*>(source0_void);
+    uint8_t* destination1 = reinterpret_cast<uint8_t*>(destination1_void);
+    const uint8_t* source1 = reinterpret_cast<const uint8_t*>(source1_void);
+
+    while (buffer_bytes - offset >= kVectorBytes)
+    {
+        const __m256i result0 = _mm256_xor_si256(
+            Load(destination0 + offset), Load(source0 + offset));
+        const __m256i result1 = _mm256_xor_si256(
+            Load(destination1 + offset), Load(source1 + offset));
+        Store(destination0 + offset, result0);
+        Store(destination1 + offset, result1);
+        offset += kVectorBytes;
+    }
+    return offset;
+}
+
+uint64_t Xor4(
+    void* destination0_void,
+    const void* source0_void,
+    void* destination1_void,
+    const void* source1_void,
+    void* destination2_void,
+    const void* source2_void,
+    void* destination3_void,
+    const void* source3_void,
+    uint64_t buffer_bytes,
+    uint64_t offset)
+{
+    uint8_t* destination0 = reinterpret_cast<uint8_t*>(destination0_void);
+    const uint8_t* source0 = reinterpret_cast<const uint8_t*>(source0_void);
+    uint8_t* destination1 = reinterpret_cast<uint8_t*>(destination1_void);
+    const uint8_t* source1 = reinterpret_cast<const uint8_t*>(source1_void);
+    uint8_t* destination2 = reinterpret_cast<uint8_t*>(destination2_void);
+    const uint8_t* source2 = reinterpret_cast<const uint8_t*>(source2_void);
+    uint8_t* destination3 = reinterpret_cast<uint8_t*>(destination3_void);
+    const uint8_t* source3 = reinterpret_cast<const uint8_t*>(source3_void);
+
+    while (buffer_bytes - offset >= kVectorBytes)
+    {
+        const __m256i result0 = _mm256_xor_si256(
+            Load(destination0 + offset), Load(source0 + offset));
+        const __m256i result1 = _mm256_xor_si256(
+            Load(destination1 + offset), Load(source1 + offset));
+        const __m256i result2 = _mm256_xor_si256(
+            Load(destination2 + offset), Load(source2 + offset));
+        const __m256i result3 = _mm256_xor_si256(
+            Load(destination3 + offset), Load(source3 + offset));
+        Store(destination0 + offset, result0);
+        Store(destination1 + offset, result1);
+        Store(destination2 + offset, result2);
+        Store(destination3 + offset, result3);
+        offset += kVectorBytes;
+    }
+    return offset;
+}
+
 
 }}} // namespace leopard::ff8xor::avx2
 
@@ -240,6 +306,19 @@ bool KernelsBuilt()
 }
 
 uint64_t Xor(void*, const void*, uint64_t, uint64_t start_offset)
+{
+    return start_offset;
+}
+
+uint64_t Xor2(
+    void*, const void*, void*, const void*, uint64_t, uint64_t start_offset)
+{
+    return start_offset;
+}
+
+uint64_t Xor4(
+    void*, const void*, void*, const void*, void*, const void*,
+    void*, const void*, uint64_t, uint64_t start_offset)
 {
     return start_offset;
 }

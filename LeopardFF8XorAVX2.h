@@ -64,5 +64,28 @@ uint64_t Xor(
     uint64_t buffer_bytes,
     uint64_t start_offset);
 
+// Batched contiguous XOR keeps independent streams in one vector loop so the
+// core can overlap their load/XOR/store chains.  Pointers are named explicitly
+// to prevent a dynamically indexed hot-path register array.
+uint64_t Xor2(
+    void* destination0,
+    const void* source0,
+    void* destination1,
+    const void* source1,
+    uint64_t buffer_bytes,
+    uint64_t start_offset);
+
+uint64_t Xor4(
+    void* destination0,
+    const void* source0,
+    void* destination1,
+    const void* source1,
+    void* destination2,
+    const void* source2,
+    void* destination3,
+    const void* source3,
+    uint64_t buffer_bytes,
+    uint64_t start_offset);
+
 
 }}} // namespace leopard::ff8xor::avx2

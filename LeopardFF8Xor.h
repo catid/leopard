@@ -110,6 +110,16 @@ void XorBuffer(
     void* destination,
     const void* source);
 
+// Internal/test-visible batched addition used by encoder accumulation and the
+// formal derivative.  SIMD mode resolution occurs once for the full batch.
+// A source may equal its destination within one pair.  Different pairs are
+// independent and their memory ranges must not overlap.
+void XorBuffers(
+    uint64_t buffer_bytes,
+    unsigned count,
+    void** destination,
+    void** source);
+
 // The buffer byte count includes all eight equal contiguous planes.
 // Multiplier logarithms 0 and 255 both mean multiplication by one.  Exact
 // in-place identity performs no payload access; out-of-place identity has

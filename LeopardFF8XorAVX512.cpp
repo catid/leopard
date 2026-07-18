@@ -246,6 +246,80 @@ static uint64_t XorWhole(
     return offset;
 }
 
+template <typename Tag>
+static uint64_t Xor2Whole(
+    void* destination0_void,
+    const void* source0_void,
+    void* destination1_void,
+    const void* source1_void,
+    uint64_t buffer_bytes)
+{
+    uint8_t* destination0 = reinterpret_cast<uint8_t*>(destination0_void);
+    const uint8_t* source0 = reinterpret_cast<const uint8_t*>(source0_void);
+    uint8_t* destination1 = reinterpret_cast<uint8_t*>(destination1_void);
+    const uint8_t* source1 = reinterpret_cast<const uint8_t*>(source1_void);
+    uint64_t offset = 0;
+
+    while (buffer_bytes - offset >= ValueIO<Tag>::kBytes)
+    {
+        const typename ValueIO<Tag>::Value result0 = XorValue(
+            ValueIO<Tag>::Load(destination0 + offset),
+            ValueIO<Tag>::Load(source0 + offset));
+        const typename ValueIO<Tag>::Value result1 = XorValue(
+            ValueIO<Tag>::Load(destination1 + offset),
+            ValueIO<Tag>::Load(source1 + offset));
+        ValueIO<Tag>::Store(destination0 + offset, result0);
+        ValueIO<Tag>::Store(destination1 + offset, result1);
+        offset += ValueIO<Tag>::kBytes;
+    }
+    return offset;
+}
+
+template <typename Tag>
+static uint64_t Xor4Whole(
+    void* destination0_void,
+    const void* source0_void,
+    void* destination1_void,
+    const void* source1_void,
+    void* destination2_void,
+    const void* source2_void,
+    void* destination3_void,
+    const void* source3_void,
+    uint64_t buffer_bytes)
+{
+    uint8_t* destination0 = reinterpret_cast<uint8_t*>(destination0_void);
+    const uint8_t* source0 = reinterpret_cast<const uint8_t*>(source0_void);
+    uint8_t* destination1 = reinterpret_cast<uint8_t*>(destination1_void);
+    const uint8_t* source1 = reinterpret_cast<const uint8_t*>(source1_void);
+    uint8_t* destination2 = reinterpret_cast<uint8_t*>(destination2_void);
+    const uint8_t* source2 = reinterpret_cast<const uint8_t*>(source2_void);
+    uint8_t* destination3 = reinterpret_cast<uint8_t*>(destination3_void);
+    const uint8_t* source3 = reinterpret_cast<const uint8_t*>(source3_void);
+    uint64_t offset = 0;
+
+    while (buffer_bytes - offset >= ValueIO<Tag>::kBytes)
+    {
+        const typename ValueIO<Tag>::Value result0 = XorValue(
+            ValueIO<Tag>::Load(destination0 + offset),
+            ValueIO<Tag>::Load(source0 + offset));
+        const typename ValueIO<Tag>::Value result1 = XorValue(
+            ValueIO<Tag>::Load(destination1 + offset),
+            ValueIO<Tag>::Load(source1 + offset));
+        const typename ValueIO<Tag>::Value result2 = XorValue(
+            ValueIO<Tag>::Load(destination2 + offset),
+            ValueIO<Tag>::Load(source2 + offset));
+        const typename ValueIO<Tag>::Value result3 = XorValue(
+            ValueIO<Tag>::Load(destination3 + offset),
+            ValueIO<Tag>::Load(source3 + offset));
+        ValueIO<Tag>::Store(destination0 + offset, result0);
+        ValueIO<Tag>::Store(destination1 + offset, result1);
+        ValueIO<Tag>::Store(destination2 + offset, result2);
+        ValueIO<Tag>::Store(destination3 + offset, result3);
+        offset += ValueIO<Tag>::kBytes;
+    }
+    return offset;
+}
+
 bool KernelsBuilt()
 {
     return true;
@@ -324,6 +398,60 @@ uint64_t Xor512(
     return XorWhole<ZmmTag>(destination, source, buffer_bytes);
 }
 
+uint64_t Xor2_256(
+    void* destination0,
+    const void* source0,
+    void* destination1,
+    const void* source1,
+    uint64_t buffer_bytes)
+{
+    return Xor2Whole<YmmTag>(
+        destination0, source0, destination1, source1, buffer_bytes);
+}
+
+uint64_t Xor2_512(
+    void* destination0,
+    const void* source0,
+    void* destination1,
+    const void* source1,
+    uint64_t buffer_bytes)
+{
+    return Xor2Whole<ZmmTag>(
+        destination0, source0, destination1, source1, buffer_bytes);
+}
+
+uint64_t Xor4_256(
+    void* destination0,
+    const void* source0,
+    void* destination1,
+    const void* source1,
+    void* destination2,
+    const void* source2,
+    void* destination3,
+    const void* source3,
+    uint64_t buffer_bytes)
+{
+    return Xor4Whole<YmmTag>(
+        destination0, source0, destination1, source1,
+        destination2, source2, destination3, source3, buffer_bytes);
+}
+
+uint64_t Xor4_512(
+    void* destination0,
+    const void* source0,
+    void* destination1,
+    const void* source1,
+    void* destination2,
+    const void* source2,
+    void* destination3,
+    const void* source3,
+    uint64_t buffer_bytes)
+{
+    return Xor4Whole<ZmmTag>(
+        destination0, source0, destination1, source1,
+        destination2, source2, destination3, source3, buffer_bytes);
+}
+
 
 }}} // namespace leopard::ff8xor::avx512
 
@@ -343,6 +471,30 @@ uint64_t Xor256(void*, const void*, uint64_t)
 }
 
 uint64_t Xor512(void*, const void*, uint64_t)
+{
+    return 0;
+}
+
+uint64_t Xor2_256(void*, const void*, void*, const void*, uint64_t)
+{
+    return 0;
+}
+
+uint64_t Xor2_512(void*, const void*, void*, const void*, uint64_t)
+{
+    return 0;
+}
+
+uint64_t Xor4_256(
+    void*, const void*, void*, const void*, void*, const void*,
+    void*, const void*, uint64_t)
+{
+    return 0;
+}
+
+uint64_t Xor4_512(
+    void*, const void*, void*, const void*, void*, const void*,
+    void*, const void*, uint64_t)
 {
     return 0;
 }

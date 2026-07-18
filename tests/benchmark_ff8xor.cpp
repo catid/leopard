@@ -909,8 +909,8 @@ public:
         const leopard::ff8xor::CircuitStatistics ifft =
             leopard::ff8xor::GetIFFTCircuitStatistics();
         MeasurementOrder = options.abba
-            ? "ABBA end-to-end; micro/boundary sequential"
-            : "packed-then-ff8xor";
+            ? "ABBA end-to-end and XOR-batch pairs; other micro/boundary sequential"
+            : "packed-then-ff8xor end-to-end; XOR-batch pairs ABBA; other micro/boundary sequential";
         if (CSV)
         {
             std::cout
@@ -969,8 +969,8 @@ public:
                 << (options.cache_color ? "true" : "false")
                 << ',' << Json("measurement_order") << ':'
                 << Json(options.abba
-                    ? "ABBA for paired end-to-end rows; micro/boundary sequential"
-                    : "packed-then-ff8xor")
+                    ? "ABBA for paired end-to-end rows and XOR-batch pairs; other micro/boundary sequential"
+                    : "packed-then-ff8xor end-to-end; XOR-batch pairs ABBA; other micro/boundary sequential")
                 << "}\n";
             GateJSON("multiply", multiply);
             GateJSON("fft", fft);
@@ -995,8 +995,8 @@ public:
             << (options.include_transpose ? "included" : "disabled") << '\n'
             << "measurement order: "
             << (options.abba
-                ? "ABBA for paired end-to-end rows; micro/boundary sequential"
-                : "packed then ff8xor") << '\n'
+                ? "ABBA for paired end-to-end rows and XOR-batch pairs; other micro/boundary sequential"
+                : "packed then ff8xor end-to-end; XOR-batch pairs ABBA; other micro/boundary sequential") << '\n'
             << "PMU counters: "
             << (options.counters ? "requested" : "disabled") << '\n'
             << "ff8xor allocations: "
@@ -2248,13 +2248,15 @@ static void PrintMicro(
     uint64_t buffer_bytes,
     uint64_t input_bytes,
     uint64_t output_bytes,
-    uint64_t modeled_payload_bytes)
+    uint64_t modeled_payload_bytes,
+    const char* measurement_order = "sequential")
 {
     Result result = MakeResult(options, backend, operation, false,
         0, 0, buffer_bytes, 0, timing, input_bytes, output_bytes, 0,
         note.c_str());
     result.record = "microbenchmark";
     result.modeled_payload_bytes = modeled_payload_bytes;
+    result.measurement_order = measurement_order;
     reporter.Print(result);
 }
 
@@ -2360,14 +2362,135 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
     BufferSet c;
     BufferSet d;
     BufferSet e;
+    BufferSet xor_destination;
+    BufferSet xor_source;
+    BufferSet xor_initial;
     if (!a.Allocate(1, static_cast<size_t>(bytes)) ||
         !b.Allocate(1, static_cast<size_t>(bytes)) ||
         !c.Allocate(1, static_cast<size_t>(bytes)) ||
         !d.Allocate(1, static_cast<size_t>(bytes)) ||
-        !e.Allocate(1, static_cast<size_t>(bytes)))
+        !e.Allocate(1, static_cast<size_t>(bytes)) ||
+        !xor_destination.Allocate(4, static_cast<size_t>(bytes)) ||
+        !xor_source.Allocate(4, static_cast<size_t>(bytes)) ||
+        !xor_initial.Allocate(4, static_cast<size_t>(bytes)))
     {
         reporter.Skip(0, 0, bytes, 0, "allocation failed for microbenchmarks");
         return true;
+    }
+
+    FillRandom(
+        xor_destination, bytes, UINT64_C(0x786f725f64657374));
+    FillRandom(xor_source, bytes, UINT64_C(0x786f725f736f7572));
+    for (unsigned stream = 0; stream < 4; ++stream)
+    {
+        memcpy(
+            xor_initial[stream], xor_destination[stream],
+            static_cast<size_t>(bytes));
+    }
+
+    LeopardResult result = Leopard_Success;
+    const uint64_t xor_sizes[] = {
+        64, 1024, 4096, 64 * 1024, 1024 * 1024
+    };
+    const size_t xor_size_count = base_options.quick ? 4 : 5;
+    const unsigned xor_counts[] = { 2, 4 };
+    for (size_t count_index = 0;
+         count_index < sizeof(xor_counts) / sizeof(xor_counts[0]);
+         ++count_index)
+    {
+        const unsigned xor_count = xor_counts[count_index];
+        for (size_t size_index = 0; size_index < xor_size_count; ++size_index)
+        {
+            const uint64_t xor_bytes = xor_sizes[size_index];
+            for (unsigned stream = 0; stream < xor_count; ++stream)
+            {
+                memcpy(
+                    xor_destination[stream], xor_initial[stream],
+                    static_cast<size_t>(xor_bytes));
+            }
+
+            // Validate every measured size/count outside timing.  The paired
+            // A-B-B-A loop then uses the same buffers: each XOR toggles them,
+            // and each complete round returns to its starting contents.
+            leopard::ff8xor::XorBuffers(
+                xor_bytes, xor_count,
+                xor_destination.Data(), xor_source.Data());
+            for (unsigned stream = 0; stream < xor_count; ++stream)
+            {
+                for (uint64_t offset = 0; offset < xor_bytes; ++offset)
+                {
+                    if (xor_destination[stream][offset] !=
+                        static_cast<uint8_t>(
+                            xor_initial[stream][offset] ^
+                            xor_source[stream][offset]))
+                    {
+                        std::cerr
+                            << "microbenchmark batched XOR mismatch: count="
+                            << xor_count << " bytes=" << xor_bytes
+                            << " stream=" << stream
+                            << " offset=" << offset << '\n';
+                        return false;
+                    }
+                }
+                memcpy(
+                    xor_destination[stream], xor_initial[stream],
+                    static_cast<size_t>(xor_bytes));
+            }
+
+            const auto sequential_xor = [&]() -> LeopardResult {
+                    for (unsigned stream = 0; stream < xor_count; ++stream)
+                    {
+                        leopard::ff8xor::XorBuffer(
+                            xor_bytes,
+                            xor_destination[stream],
+                            xor_source[stream]);
+                    }
+                    BenchmarkSink ^= xor_destination[0][0];
+                    return Leopard_Success;
+                };
+            const auto batched_xor = [&]() -> LeopardResult {
+                    leopard::ff8xor::XorBuffers(
+                        xor_bytes, xor_count,
+                        xor_destination.Data(), xor_source.Data());
+                    BenchmarkSink ^= xor_destination[0][0];
+                    return Leopard_Success;
+                };
+            Timing sequential_timing;
+            Timing batched_timing;
+            if (!MeasurePairABBA(
+                    options,
+                    sequential_xor,
+                    batched_xor,
+                    sequential_timing,
+                    batched_timing,
+                    result))
+                return false;
+
+            const char* sequential_operation = xor_count == 2 ?
+                "xor2_sequential" : "xor4_sequential";
+            const char* batched_operation = xor_count == 2 ?
+                "xor2_batched" : "xor4_batched";
+            std::ostringstream sequential_note;
+            sequential_note << xor_count
+                << " independent whole-buffer XOR calls; paired ABBA control";
+            std::ostringstream batched_note;
+            batched_note << "one SIMD-mode resolution; ";
+            if (xor_bytes > 1024)
+                batched_note << "tuned sequential vector loops";
+            else
+                batched_note << xor_count << "-stream vector loop";
+            batched_note << "; paired ABBA";
+            PrintMicro(
+                options, reporter, "ff8xor_native", sequential_operation,
+                sequential_note.str(), sequential_timing, xor_bytes,
+                xor_bytes * xor_count * 2, xor_bytes * xor_count,
+                xor_bytes * xor_count * 3, "ABBA");
+            PrintMicro(
+                options, reporter, "ff8xor_native", batched_operation,
+                batched_note.str(), batched_timing, xor_bytes,
+                xor_bytes * xor_count * 2, xor_bytes * xor_count,
+                xor_bytes * xor_count * 3, "ABBA");
+        }
     }
 
     // Cover both logarithmic spellings of identity, the least expensive
@@ -2401,7 +2524,6 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
     FillRandom(b, bytes, UINT64_C(0x6d6963726f5f6232));
     PackedToPlane(b[0], d[0], bytes);
 
-    LeopardResult result = Leopard_Success;
     for (size_t case_index = 0;
          case_index < sizeof(multiply_cases) / sizeof(multiply_cases[0]);
          ++case_index)

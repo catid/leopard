@@ -1389,6 +1389,93 @@ static bool CheckButterflyKernel(uint64_t buffer_bytes, unsigned skew)
            CheckEqual(plane_y, expected_plane_y, "direct IFFT y", skew);
 }
 
+static bool CheckXorBuffersKernel(uint64_t buffer_bytes)
+{
+    const size_t bytes = static_cast<size_t>(buffer_bytes);
+
+    // Count zero must not resolve a mode or dereference either pointer array.
+    leopard::ff8xor::XorBuffers(buffer_bytes, 0, NULL, NULL);
+
+    for (unsigned count = 1; count <= 9; ++count)
+    {
+        uint32_t state = static_cast<uint32_t>(
+            0x584f5234U ^ count ^ static_cast<unsigned>(buffer_bytes));
+        std::vector<Buffer> destinations(count, Buffer(bytes));
+        std::vector<Buffer> sources(count, Buffer(bytes));
+        std::vector<Buffer> expected(count, Buffer(bytes));
+        std::vector<void*> destination_pointers(count);
+        std::vector<void*> source_pointers(count);
+
+        for (unsigned stream = 0; stream < count; ++stream)
+        {
+            FillRandom(destinations[stream], state);
+            FillRandom(sources[stream], state);
+            expected[stream] = destinations[stream];
+            for (size_t offset = 0; offset < bytes; ++offset)
+                expected[stream][offset] ^= sources[stream][offset];
+            destination_pointers[stream] = destinations[stream].data();
+            source_pointers[stream] = sources[stream].data();
+        }
+
+        const std::vector<Buffer> original_sources = sources;
+        leopard::ff8xor::XorBuffers(
+            buffer_bytes,
+            count,
+            destination_pointers.data(),
+            source_pointers.data());
+
+        for (unsigned stream = 0; stream < count; ++stream)
+        {
+            if (!CheckEqual(
+                    destinations[stream], expected[stream],
+                    "batched XOR destination", stream) ||
+                !CheckEqual(
+                    sources[stream], original_sources[stream],
+                    "batched XOR source", stream))
+            {
+                fprintf(stderr,
+                    "batched XOR failed: bytes=%llu count=%u stream=%u\n",
+                    static_cast<unsigned long long>(buffer_bytes),
+                    count,
+                    stream);
+                return false;
+            }
+        }
+
+        // Per-stream source == destination is well-defined and must zero every
+        // byte, including groups of four, groups of two, and the odd tail.
+        for (unsigned stream = 0; stream < count; ++stream)
+        {
+            FillRandom(destinations[stream], state);
+            destination_pointers[stream] = destinations[stream].data();
+            source_pointers[stream] = destinations[stream].data();
+        }
+        leopard::ff8xor::XorBuffers(
+            buffer_bytes,
+            count,
+            destination_pointers.data(),
+            source_pointers.data());
+        for (unsigned stream = 0; stream < count; ++stream)
+        {
+            if (std::find_if(
+                    destinations[stream].begin(),
+                    destinations[stream].end(),
+                    [](uint8_t value) { return value != 0; }) !=
+                destinations[stream].end())
+            {
+                fprintf(stderr,
+                    "in-place batched XOR did not zero: "
+                    "bytes=%llu count=%u stream=%u\n",
+                    static_cast<unsigned long long>(buffer_bytes),
+                    count,
+                    stream);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 static bool TestKernelModes()
 {
     typedef leopard::ff8xor::KernelMode KernelMode;
@@ -1427,7 +1514,8 @@ static bool TestKernelModes()
             leopard::ff8xor::SetKernelMode(mode);
             if (leopard::ff8xor::GetActiveKernelMode() == mode ||
                 !CheckMultiplyKernel(512, 51) ||
-                !CheckButterflyKernel(512, 51))
+                !CheckButterflyKernel(512, 51) ||
+                !CheckXorBuffersKernel(512))
             {
                 fprintf(stderr,
                     "unavailable forced kernel mode did not fall back safely\n");
@@ -1456,6 +1544,12 @@ static bool TestKernelModes()
              size_index < sizeof(kSizes) / sizeof(kSizes[0]);
              ++size_index)
         {
+            if (!CheckXorBuffersKernel(kSizes[size_index]))
+            {
+                leopard::ff8xor::SetKernelMode(saved_mode);
+                return false;
+            }
+
             for (unsigned coefficient_index = 0;
                  coefficient_index <
                     sizeof(kCoefficients) / sizeof(kCoefficients[0]);
