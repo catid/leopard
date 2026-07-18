@@ -229,6 +229,7 @@ and output MB/s.
 ./build/bench_leopard_ff8xor
 ./build/bench_leopard_ff8xor --include-transpose
 ./build/bench_leopard_ff8xor --csv
+./build/bench_leopard_ff8xor --quick --json --abba --counters
 ```
 
 Native rows exclude transpose time. Rows named `ff8xor_packed_boundary`
@@ -241,15 +242,94 @@ inverse two-way butterflies, and both transpose directions. The reported
 speed ratio is `packed time / ff8xor time`, so a value greater than one means
 the XOR backend is faster.
 
+For repeatable optimization work, the benchmark attempts to pin itself to the
+first CPU in its allowed affinity set. `--cpu N` selects a specific allowed
+logical CPU and `--no-pin` disables pinning. `--abba` measures matched packed
+and native end-to-end calls in A-B-B-A order; standalone microbenchmarks and
+optional packed-boundary rows remain sequential and are labeled as such. ABBA
+rows report twice the requested sample count because each round contains two
+samples of each backend. Allocation and equivalence checks remain outside the
+timed regions.
+
+`--json` emits newline-delimited JSON with one environment record, three
+circuit records, and one record per result. CSV and JSON include the exact
+CMake build type and effective compiler flags, OS, affinity, SIMD selection,
+deterministic schedule ID, modeled payload traffic, and selected decoder
+locator shift. The traffic model counts expected payload loads and stores,
+including the three-buffer-byte skew-sentinel butterfly fast path; it does not
+claim to measure cache-line transfers.
+
+On Linux, `--counters` requests cycles, instructions, reference cycles, cache
+references/misses, front- and back-end stalled cycles, L1D load misses, DTLB
+load misses, and ITLB load misses through `perf_event_open`. PMU samples use
+separate repetitions after wall-clock timing, so counter ioctls do not
+contaminate reported times. Events are collected in PMU groups of at most three
+so each group can schedule as a unit even on CPUs with a small programmable
+counter file. Cycles, instructions, and reference cycles share one exact
+payload window for IPC and frequency calculations; enabled/running time scales
+multiplexed groups. IPC and effective GHz are derived only when their source
+counters are available. Kernel policy, unsupported events, and
+permission failures are represented as JSON `null`/empty CSV fields plus the
+actual error string; the benchmark never substitutes invented zeroes.
+
+### Deterministic schedule-frequency corpus
+
+[`generated/FF8XorScheduleCorpus.json`](../generated/FF8XorScheduleCorpus.json)
+is a checked-in 104-record corpus covering the full benchmark matrix. An
+independent Python model reproduces the Cantor field tables, FFT skew table,
+encoder chunking, deterministic erasures, locator construction, locator-shift
+selection, natural FFT/IFFT calls, and decoder ErrorBitfield pruning. Records
+contain input-scaling and recovery-scaling multiplier-log frequencies, FFT and
+IFFT skew frequencies, direction-separated complete two-layer four-buffer
+tuple frequencies, exact erasure indices, and modeled payload traffic. Combined
+multiplier and tuple histograms are retained for aggregate weighting. Benchmark
+`schedule_id` values join directly to corpus record IDs.
+
+```sh
+python3 tools/generate_ff8xor_schedule_corpus.py
+python3 tools/generate_ff8xor_schedule_corpus.py --check
+cmake --build build --target check_ff8xor_schedule_corpus
+```
+
+The corpus contains checksums of both its ordered schedule records and the
+generated circuits. Fixed seeds and stable JSON key ordering make `--check`
+detect changes to either schedule semantics or workload order.
+
+### Assembly regression census
+
+`tools/inspect_ff8xor_assembly.py` accepts the FF8 XOR object or Leopard static
+archive. It inventories all 256 specializations in each available base,
+AVX-512VL, and AVX-512 ZMM family, including code size, XOR2, XOR3
+(`vpternlog[dq]` immediate `0x96`), loads/stores, calls, stack references, and
+mnemonics. Direct-branch control-flow analysis distinguishes one-per-buffer
+dispatch calls from calls inside cyclic payload loops. Strict mode fails on
+missing specializations, payload-loop calls, possible vector spills, scaled
+stack indexing, vector RIP-relative lookup loads, shuffle/gather/GFNI/CLMUL/
+integer-multiply/vector-AND instructions, or non-XOR3 ternary truth tables.
+
+```sh
+python3 tools/inspect_ff8xor_assembly.py build/liblibleopard.a --strict
+cmake --build build --target inspect_ff8xor_assembly
+cmake --build build --target check_ff8xor_assembly
+```
+
+The non-strict target writes `ff8xor_assembly_census.json` in the build
+directory. Strict inspection is a developer/CI target instead of part of the
+ordinary build because a new compiler may require a documented code-generation
+adjustment before satisfying the hot-loop contract.
+
 ## Measurements from the implementation host
 
 These results were collected on an AMD Ryzen Threadripper PRO 9985WX
 (64 cores, 128 threads), Linux 6.8, GCC 13.3.0, and CMake 3.28.3. The CMake
-Release configuration produced `-march=native -Wall -Wextra -fopenmp -g -O0
--O3 -std=gnu++11`; the experimental translation unit additionally used
-`-mno-avx512f -fno-tree-reassoc`. The last `-O3` takes precedence, but this
-repository's existing Release flags do not define `NDEBUG`, which the
-benchmark reports explicitly.
+Historical measurements below used `-march=native -Wall -Wextra -fopenmp -g
+-O0 -O3 -std=gnu++11`; the experimental translation unit additionally used
+`-mno-avx512f -fno-tree-reassoc`. A CMake typo had copied Debug flags into the
+Release flags before appending `-O3`, so `NDEBUG` was unset. The guardrail work
+now preserves the toolchain's standard Release flags (`-O3 -DNDEBUG`) and
+embeds the exact resulting flags in every CSV/JSON run. Treat the table below
+as the pre-guardrail historical baseline rather than a result from the fixed
+Release configuration.
 
 Full-mode end-to-end rows used two warm-ups, seven measured samples, and enough
 repeated calls per sample to reach at least 1 ms; microbenchmarks used three

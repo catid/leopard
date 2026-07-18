@@ -10,6 +10,7 @@
 #include "../leopard_ff8xor.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -22,6 +23,15 @@
 #include <string>
 #include <vector>
 
+#if defined(__linux__)
+    #include <linux/perf_event.h>
+    #include <sched.h>
+    #include <sys/ioctl.h>
+    #include <sys/syscall.h>
+    #include <sys/utsname.h>
+    #include <unistd.h>
+#endif
+
 namespace {
 
 static volatile uint64_t BenchmarkSink = 0;
@@ -30,7 +40,12 @@ struct Options
 {
     bool quick;
     bool csv;
+    bool json;
     bool include_transpose;
+    bool counters;
+    bool abba;
+    bool pin;
+    int pin_cpu;
     unsigned warmups;
     unsigned iterations;
     double minimum_sample_usec;
@@ -38,7 +53,12 @@ struct Options
     Options()
         : quick(false)
         , csv(false)
+        , json(false)
         , include_transpose(false)
+        , counters(false)
+        , abba(false)
+        , pin(true)
+        , pin_cpu(-1)
         , warmups(2)
         , iterations(7)
         , minimum_sample_usec(1000.)
@@ -50,8 +70,26 @@ struct Environment
 {
     std::string compiler;
     std::string build_type;
+    std::string build_flags;
     std::string cpu;
     std::string simd;
+    std::string operating_system;
+    std::string affinity;
+    std::string counter_backend;
+};
+
+struct CounterMetric
+{
+    std::string name;
+    bool available;
+    double median_per_call;
+    std::string status;
+
+    CounterMetric()
+        : available(false)
+        , median_per_call(0)
+    {
+    }
 };
 
 struct Timing
@@ -59,8 +97,20 @@ struct Timing
     double median_usec;
     double best_usec;
     unsigned calls_per_sample;
+    unsigned sample_count;
+    std::vector<CounterMetric> counters;
+    double median_ipc;
+    double median_effective_ghz;
 
-    Timing() : median_usec(0), best_usec(0), calls_per_sample(0) {}
+    Timing()
+        : median_usec(0)
+        , best_usec(0)
+        , calls_per_sample(0)
+        , sample_count(0)
+        , median_ipc(0)
+        , median_effective_ghz(0)
+    {
+    }
 };
 
 struct Result
@@ -78,7 +128,11 @@ struct Result
     Timing timing;
     uint64_t input_bytes;
     uint64_t output_bytes;
+    uint64_t modeled_payload_bytes;
     double ratio_vs_packed;
+    unsigned locator_shift;
+    std::string schedule_id;
+    std::string measurement_order;
     std::string note;
 
     Result()
@@ -91,7 +145,9 @@ struct Result
         , iterations(0)
         , input_bytes(0)
         , output_bytes(0)
+        , modeled_payload_bytes(0)
         , ratio_vs_packed(0)
+        , locator_shift(std::numeric_limits<unsigned>::max())
     {
     }
 };
@@ -260,6 +316,303 @@ static bool Equal(const void* a, const void* b, uint64_t bytes)
     return memcmp(a, b, static_cast<size_t>(bytes)) == 0;
 }
 
+static double Median(std::vector<double> values)
+{
+    if (values.empty())
+        return 0;
+    std::sort(values.begin(), values.end());
+    const size_t middle = values.size() / 2;
+    if ((values.size() & 1) != 0)
+        return values[middle];
+    return (values[middle - 1] + values[middle]) * 0.5;
+}
+
+struct PerfDescriptor
+{
+    const char* name;
+    uint32_t type;
+    uint64_t config;
+};
+
+static std::vector<PerfDescriptor> PerfDescriptors()
+{
+    std::vector<PerfDescriptor> result;
+#if defined(__linux__)
+    const uint64_t read_miss =
+        static_cast<uint64_t>(PERF_COUNT_HW_CACHE_OP_READ) << 8 |
+        static_cast<uint64_t>(PERF_COUNT_HW_CACHE_RESULT_MISS) << 16;
+    result.push_back({ "cycles", PERF_TYPE_HARDWARE,
+        PERF_COUNT_HW_CPU_CYCLES });
+    result.push_back({ "instructions", PERF_TYPE_HARDWARE,
+        PERF_COUNT_HW_INSTRUCTIONS });
+    result.push_back({ "reference_cycles", PERF_TYPE_HARDWARE,
+        PERF_COUNT_HW_REF_CPU_CYCLES });
+    result.push_back({ "cache_references", PERF_TYPE_HARDWARE,
+        PERF_COUNT_HW_CACHE_REFERENCES });
+    result.push_back({ "cache_misses", PERF_TYPE_HARDWARE,
+        PERF_COUNT_HW_CACHE_MISSES });
+    result.push_back({ "frontend_stalled_cycles", PERF_TYPE_HARDWARE,
+        PERF_COUNT_HW_STALLED_CYCLES_FRONTEND });
+    result.push_back({ "backend_stalled_cycles", PERF_TYPE_HARDWARE,
+        PERF_COUNT_HW_STALLED_CYCLES_BACKEND });
+    result.push_back({ "l1d_load_misses", PERF_TYPE_HW_CACHE,
+        PERF_COUNT_HW_CACHE_L1D | read_miss });
+    result.push_back({ "dtlb_load_misses", PERF_TYPE_HW_CACHE,
+        PERF_COUNT_HW_CACHE_DTLB | read_miss });
+    result.push_back({ "itlb_load_misses", PERF_TYPE_HW_CACHE,
+        PERF_COUNT_HW_CACHE_ITLB | read_miss });
+#else
+    // Keep the schema identical on non-Linux hosts.
+    static const char* names[] = {
+        "cycles", "instructions", "reference_cycles", "cache_references",
+        "cache_misses", "frontend_stalled_cycles", "backend_stalled_cycles",
+        "l1d_load_misses", "dtlb_load_misses", "itlb_load_misses"
+    };
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
+        result.push_back({ names[i], 0, 0 });
+#endif
+    return result;
+}
+
+class PerfCounterSet
+{
+    struct Event
+    {
+        PerfDescriptor descriptor;
+        int fd;
+        bool available;
+        std::string status;
+        std::vector<double> samples;
+
+        Event()
+            : fd(-1)
+            , available(false)
+        {
+        }
+    };
+
+    struct CounterGroup
+    {
+        int leader_fd;
+        std::vector<size_t> event_indices;
+
+        CounterGroup()
+            : leader_fd(-1)
+        {
+        }
+    };
+
+public:
+    explicit PerfCounterSet(bool requested)
+    {
+        const std::vector<PerfDescriptor> descriptors = PerfDescriptors();
+        Events.resize(descriptors.size());
+        for (size_t i = 0; i < descriptors.size(); ++i)
+        {
+            Events[i].descriptor = descriptors[i];
+            if (!requested)
+                Events[i].status = "disabled (pass --counters)";
+        }
+        if (!requested)
+            return;
+#if defined(__linux__)
+        // A perf group is scheduled only when all of its members fit on the
+        // PMU at once.  Typical x86 CPUs expose fewer than ten programmable
+        // counters, so one group containing this complete descriptor set may
+        // never run.  Use small groups that can multiplex as units.  The first
+        // group deliberately keeps cycles, instructions, and reference cycles
+        // together so IPC and frequency ratios share an exact payload window.
+        static const size_t kMaximumEventsPerGroup = 3;
+        for (size_t group_begin = 0;
+             group_begin < descriptors.size();
+             group_begin += kMaximumEventsPerGroup)
+        {
+            CounterGroup group;
+            const size_t group_end = std::min(
+                descriptors.size(), group_begin + kMaximumEventsPerGroup);
+            for (size_t i = group_begin; i < group_end; ++i)
+            {
+                const bool leader = group.leader_fd < 0;
+                struct perf_event_attr attributes;
+                memset(&attributes, 0, sizeof(attributes));
+                attributes.type = descriptors[i].type;
+                attributes.size = sizeof(attributes);
+                attributes.config = descriptors[i].config;
+                attributes.disabled = leader ? 1 : 0;
+                attributes.exclude_kernel = 1;
+                attributes.exclude_hv = 1;
+                if (leader)
+                {
+                    attributes.read_format = PERF_FORMAT_GROUP |
+                        PERF_FORMAT_TOTAL_TIME_ENABLED |
+                        PERF_FORMAT_TOTAL_TIME_RUNNING;
+                }
+                const int fd = static_cast<int>(syscall(
+                    __NR_perf_event_open, &attributes, 0, -1,
+                    leader ? -1 : group.leader_fd, 0));
+                if (fd < 0)
+                {
+                    Events[i].status = std::string("unavailable: ") +
+                        strerror(errno);
+                    continue;
+                }
+
+                Events[i].fd = fd;
+                Events[i].available = true;
+                Events[i].status = "available";
+                group.event_indices.push_back(i);
+                if (leader)
+                    group.leader_fd = fd;
+            }
+            if (group.leader_fd >= 0)
+                Groups.push_back(group);
+        }
+#else
+        for (size_t i = 0; i < descriptors.size(); ++i)
+            Events[i].status = "unavailable: perf_event_open is Linux-only";
+#endif
+    }
+
+    ~PerfCounterSet()
+    {
+#if defined(__linux__)
+        for (size_t i = 0; i < Events.size(); ++i)
+        {
+            if (Events[i].fd >= 0)
+                close(Events[i].fd);
+        }
+#endif
+    }
+
+    void Begin()
+    {
+#if defined(__linux__)
+        for (size_t group_index = 0; group_index < Groups.size(); ++group_index)
+        {
+            CounterGroup& group = Groups[group_index];
+            if (group.event_indices.empty() ||
+                !Events[group.event_indices[0]].available)
+                continue;
+            if (ioctl(group.leader_fd, PERF_EVENT_IOC_RESET,
+                    PERF_IOC_FLAG_GROUP) != 0 ||
+                ioctl(group.leader_fd, PERF_EVENT_IOC_ENABLE,
+                    PERF_IOC_FLAG_GROUP) != 0)
+            {
+                MarkUnavailable(group,
+                    std::string("unavailable while enabling PMU group: ") +
+                    strerror(errno));
+            }
+        }
+#endif
+    }
+
+    void End(unsigned calls_per_sample, double usec_per_call)
+    {
+        std::vector<double> values(Events.size(), 0);
+#if defined(__linux__)
+        for (size_t group_index = 0; group_index < Groups.size(); ++group_index)
+        {
+            CounterGroup& counter_group = Groups[group_index];
+            if (counter_group.event_indices.empty() ||
+                !Events[counter_group.event_indices[0]].available)
+                continue;
+
+            if (ioctl(counter_group.leader_fd, PERF_EVENT_IOC_DISABLE,
+                    PERF_IOC_FLAG_GROUP) != 0)
+            {
+                MarkUnavailable(counter_group,
+                    std::string("unavailable while disabling PMU group: ") +
+                    strerror(errno));
+                continue;
+            }
+
+            // PERF_FORMAT_GROUP returns nr, enabled, running, then values in
+            // group-open order.  Each group is small enough to schedule as a
+            // unit; enabled/running scaling accounts for multiplexing between
+            // the independent groups.
+            std::vector<uint64_t> group(
+                3 + counter_group.event_indices.size(), 0);
+            const size_t expected_bytes = group.size() * sizeof(uint64_t);
+            const ssize_t bytes = read(
+                counter_group.leader_fd, &group[0], expected_bytes);
+            if (bytes != static_cast<ssize_t>(expected_bytes) ||
+                group[0] != counter_group.event_indices.size() ||
+                group[2] == 0)
+            {
+                MarkUnavailable(counter_group,
+                    "unavailable while reading PMU group");
+                continue;
+            }
+
+            const double scale = group[1] == group[2]
+                ? 1. : static_cast<double>(group[1]) /
+                    static_cast<double>(group[2]);
+            for (size_t i = 0;
+                 i < counter_group.event_indices.size(); ++i)
+            {
+                const size_t event_index =
+                    counter_group.event_indices[i];
+                values[event_index] =
+                    static_cast<double>(group[3 + i]) * scale /
+                    calls_per_sample;
+                Events[event_index].samples.push_back(values[event_index]);
+            }
+        }
+#else
+        (void)calls_per_sample;
+#endif
+        if (Events.size() >= 2 && Events[0].available && Events[1].available &&
+            values[0] > 0)
+            IPCSamples.push_back(values[1] / values[0]);
+        if (!Events.empty() && Events[0].available && usec_per_call > 0)
+            FrequencySamples.push_back(values[0] / usec_per_call / 1000.);
+    }
+
+    void Finish(Timing& timing) const
+    {
+        timing.counters.clear();
+        timing.counters.reserve(Events.size());
+        for (size_t i = 0; i < Events.size(); ++i)
+        {
+            CounterMetric metric;
+            metric.name = Events[i].descriptor.name;
+            metric.available = Events[i].available && !Events[i].samples.empty();
+            metric.status = Events[i].status;
+            if (metric.available)
+                metric.median_per_call = Median(Events[i].samples);
+            timing.counters.push_back(metric);
+        }
+        timing.median_ipc = Median(IPCSamples);
+        timing.median_effective_ghz = Median(FrequencySamples);
+    }
+
+    bool AnyAvailable() const
+    {
+        for (size_t i = 0; i < Events.size(); ++i)
+        {
+            if (Events[i].available)
+                return true;
+        }
+        return false;
+    }
+
+private:
+    void MarkUnavailable(CounterGroup& group, const std::string& status)
+    {
+        for (size_t i = 0; i < group.event_indices.size(); ++i)
+        {
+            Event& event = Events[group.event_indices[i]];
+            event.available = false;
+            event.status = status;
+        }
+    }
+
+    std::vector<Event> Events;
+    std::vector<CounterGroup> Groups;
+    std::vector<double> IPCSamples;
+    std::vector<double> FrequencySamples;
+};
+
 template <typename Function>
 static bool Measure(
     const Options& options,
@@ -301,6 +654,8 @@ static bool Measure(
                 static_cast<unsigned>(wanted + 0.999999));
     }
     timing.calls_per_sample = calls_per_sample;
+    timing.sample_count = options.iterations;
+    PerfCounterSet counters(options.counters);
 
     std::vector<double> samples;
     samples.reserve(options.iterations);
@@ -316,7 +671,7 @@ static bool Measure(
         const Clock::time_point end = Clock::now();
         const double usec =
             std::chrono::duration_cast<std::chrono::duration<double, std::micro> >(
-                end - begin).count() / calls_per_sample;
+            end - begin).count() / calls_per_sample;
         samples.push_back(usec);
     }
 
@@ -327,6 +682,177 @@ static bool Measure(
         timing.median_usec = samples[middle];
     else
         timing.median_usec = (samples[middle - 1] + samples[middle]) * 0.5;
+    if (counters.AnyAvailable())
+    {
+        for (unsigned i = 0; i < options.iterations; ++i)
+        {
+            counters.Begin();
+            const Clock::time_point begin = Clock::now();
+            for (unsigned call = 0; call < calls_per_sample; ++call)
+            {
+                result = function();
+                if (result != Leopard_Success)
+                    return false;
+            }
+            const Clock::time_point end = Clock::now();
+            const double usec =
+                std::chrono::duration_cast<
+                    std::chrono::duration<double, std::micro> >(
+                        end - begin).count() / calls_per_sample;
+            counters.End(calls_per_sample, usec);
+        }
+    }
+    counters.Finish(timing);
+    return true;
+}
+
+template <typename Function>
+static bool CalibrateCalls(
+    const Options& options,
+    Function function,
+    unsigned& calls_per_sample,
+    LeopardResult& result)
+{
+    typedef std::chrono::steady_clock Clock;
+    const Clock::time_point begin = Clock::now();
+    result = function();
+    const Clock::time_point end = Clock::now();
+    if (result != Leopard_Success)
+        return false;
+    const double usec =
+        std::chrono::duration_cast<std::chrono::duration<double, std::micro> >(
+            end - begin).count();
+    static const unsigned kMaximumCallsPerSample = 1U << 20;
+    calls_per_sample = 1;
+    if (usec > 0. && usec < options.minimum_sample_usec)
+    {
+        const double wanted = options.minimum_sample_usec / usec;
+        calls_per_sample = wanted >= kMaximumCallsPerSample
+            ? kMaximumCallsPerSample
+            : std::max(1U, static_cast<unsigned>(wanted + 0.999999));
+    }
+    return true;
+}
+
+template <typename Function>
+static bool MeasureBlock(
+    Function function,
+    unsigned calls_per_sample,
+    std::vector<double>& samples,
+    LeopardResult& result)
+{
+    typedef std::chrono::steady_clock Clock;
+    const Clock::time_point begin = Clock::now();
+    for (unsigned call = 0; call < calls_per_sample; ++call)
+    {
+        result = function();
+        if (result != Leopard_Success)
+            return false;
+    }
+    const Clock::time_point end = Clock::now();
+    const double usec =
+        std::chrono::duration_cast<std::chrono::duration<double, std::micro> >(
+            end - begin).count() / calls_per_sample;
+    samples.push_back(usec);
+    return true;
+}
+
+template <typename Function>
+static bool CountBlock(
+    Function function,
+    unsigned calls_per_sample,
+    PerfCounterSet& counters,
+    LeopardResult& result)
+{
+    typedef std::chrono::steady_clock Clock;
+    counters.Begin();
+    const Clock::time_point begin = Clock::now();
+    for (unsigned call = 0; call < calls_per_sample; ++call)
+    {
+        result = function();
+        if (result != Leopard_Success)
+            return false;
+    }
+    const Clock::time_point end = Clock::now();
+    const double usec =
+        std::chrono::duration_cast<std::chrono::duration<double, std::micro> >(
+            end - begin).count() / calls_per_sample;
+    counters.End(calls_per_sample, usec);
+    return true;
+}
+
+static void FinishTiming(
+    std::vector<double> samples,
+    unsigned calls_per_sample,
+    const PerfCounterSet& counters,
+    Timing& timing)
+{
+    std::sort(samples.begin(), samples.end());
+    timing.best_usec = samples.front();
+    timing.median_usec = Median(samples);
+    timing.calls_per_sample = calls_per_sample;
+    timing.sample_count = static_cast<unsigned>(samples.size());
+    counters.Finish(timing);
+}
+
+template <typename FunctionA, typename FunctionB>
+static bool MeasurePairABBA(
+    const Options& options,
+    FunctionA function_a,
+    FunctionB function_b,
+    Timing& timing_a,
+    Timing& timing_b,
+    LeopardResult& result)
+{
+    for (unsigned warmup = 0; warmup < options.warmups; ++warmup)
+    {
+        result = function_a();
+        if (result != Leopard_Success)
+            return false;
+        result = function_b();
+        if (result != Leopard_Success)
+            return false;
+        result = function_b();
+        if (result != Leopard_Success)
+            return false;
+        result = function_a();
+        if (result != Leopard_Success)
+            return false;
+    }
+
+    unsigned calls_a = 1;
+    unsigned calls_b = 1;
+    if (!CalibrateCalls(options, function_a, calls_a, result) ||
+        !CalibrateCalls(options, function_b, calls_b, result))
+        return false;
+
+    PerfCounterSet counters_a(options.counters);
+    PerfCounterSet counters_b(options.counters);
+    std::vector<double> samples_a;
+    std::vector<double> samples_b;
+    samples_a.reserve(options.iterations * 2);
+    samples_b.reserve(options.iterations * 2);
+    for (unsigned round = 0; round < options.iterations; ++round)
+    {
+        if (!MeasureBlock(function_a, calls_a, samples_a, result) ||
+            !MeasureBlock(function_b, calls_b, samples_b, result) ||
+            !MeasureBlock(function_b, calls_b, samples_b, result) ||
+            !MeasureBlock(function_a, calls_a, samples_a, result))
+            return false;
+    }
+    if (counters_a.AnyAvailable() || counters_b.AnyAvailable())
+    {
+        for (unsigned round = 0; round < options.iterations; ++round)
+        {
+            if (!CountBlock(function_a, calls_a, counters_a, result) ||
+                !CountBlock(function_b, calls_b, counters_b, result) ||
+                !CountBlock(function_b, calls_b, counters_b, result) ||
+                !CountBlock(function_a, calls_a, counters_a, result))
+                return false;
+        }
+    }
+    FinishTiming(samples_a, calls_a, counters_a, timing_a);
+    FinishTiming(samples_b, calls_b, counters_b, timing_b);
     return true;
 }
 
@@ -353,13 +879,71 @@ static std::string Csv(const std::string& text)
     return escaped;
 }
 
+static std::string Json(const std::string& text)
+{
+    std::ostringstream output;
+    output << '"';
+    for (size_t i = 0; i < text.size(); ++i)
+    {
+        const unsigned char value = static_cast<unsigned char>(text[i]);
+        switch (value)
+        {
+        case '"': output << "\\\""; break;
+        case '\\': output << "\\\\"; break;
+        case '\b': output << "\\b"; break;
+        case '\f': output << "\\f"; break;
+        case '\n': output << "\\n"; break;
+        case '\r': output << "\\r"; break;
+        case '\t': output << "\\t"; break;
+        default:
+            if (value < 0x20)
+            {
+                output << "\\u" << std::hex << std::setw(4)
+                    << std::setfill('0') << static_cast<unsigned>(value)
+                    << std::dec << std::setfill(' ');
+            }
+            else
+                output << static_cast<char>(value);
+        }
+    }
+    output << '"';
+    return output.str();
+}
+
+static const CounterMetric* FindCounter(
+    const Timing& timing,
+    const char* name)
+{
+    for (size_t i = 0; i < timing.counters.size(); ++i)
+    {
+        if (timing.counters[i].name == name)
+            return &timing.counters[i];
+    }
+    return NULL;
+}
+
+static std::string CounterStatus(const Timing& timing)
+{
+    std::ostringstream status;
+    for (size_t i = 0; i < timing.counters.size(); ++i)
+    {
+        if (i != 0)
+            status << "; ";
+        status << timing.counters[i].name << '=' << timing.counters[i].status;
+    }
+    return status.str();
+}
+
 class Reporter
 {
 public:
-    Reporter(bool csv, const Environment& environment)
+    Reporter(bool csv, bool json, const Environment& environment)
         : CSV(csv), Env(environment)
+        , JSON(json)
     {
     }
+
+    bool MachineReadable() const { return CSV || JSON; }
 
     void Begin(const Options& options)
     {
@@ -369,6 +953,9 @@ public:
             leopard::ff8xor::GetFFTCircuitStatistics();
         const leopard::ff8xor::CircuitStatistics ifft =
             leopard::ff8xor::GetIFFTCircuitStatistics();
+        MeasurementOrder = options.abba
+            ? "ABBA end-to-end; micro/boundary sequential"
+            : "packed-then-ff8xor";
         if (CSV)
         {
             std::cout
@@ -376,7 +963,12 @@ public:
                 << "warmups,iterations,calls_per_sample,median_us,best_us,median_input_MBps,"
                 << "best_input_MBps,median_output_MBps,best_output_MBps,"
                 << "speed_ratio_vs_packed,compiler,build_type,cpu,simd,checksum,gate_min,"
-                << "gate_max,gate_average,note\n";
+                << "gate_max,gate_average,note,schedule_id,modeled_payload_bytes,"
+                << "locator_shift,measurement_order,operating_system,affinity,build_flags,"
+                << "counter_backend,cycles,instructions,reference_cycles,cache_references,"
+                << "cache_misses,frontend_stalled_cycles,backend_stalled_cycles,"
+                << "l1d_load_misses,dtlb_load_misses,itlb_load_misses,ipc,effective_ghz,"
+                << "counter_status\n";
             GateCSV("multiply",
                 multiply.MinimumGateCount,
                 multiply.MaximumGateCount,
@@ -392,17 +984,63 @@ public:
             return;
         }
 
+        if (JSON)
+        {
+            std::cout << "{" << Json("record") << ':' << Json("metadata")
+                << ',' << Json("schema") << ':'
+                << Json("leopard.ff8xor.benchmark.jsonl.v1")
+                << ',' << Json("compiler") << ':' << Json(Env.compiler)
+                << ',' << Json("build_type") << ':' << Json(Env.build_type)
+                << ',' << Json("build_flags") << ':' << Json(Env.build_flags)
+                << ',' << Json("cpu") << ':' << Json(Env.cpu)
+                << ',' << Json("simd") << ':' << Json(Env.simd)
+                << ',' << Json("operating_system") << ':'
+                << Json(Env.operating_system)
+                << ',' << Json("affinity") << ':' << Json(Env.affinity)
+                << ',' << Json("counter_backend") << ':'
+                << Json(Env.counter_backend)
+                << ',' << Json("quick") << ':'
+                << (options.quick ? "true" : "false")
+                << ',' << Json("warmups") << ':' << options.warmups
+                << ',' << Json("iterations") << ':' << options.iterations
+                << ',' << Json("minimum_sample_usec") << ':'
+                << options.minimum_sample_usec
+                << ',' << Json("transpose_included") << ':'
+                << (options.include_transpose ? "true" : "false")
+                << ',' << Json("pmu_requested") << ':'
+                << (options.counters ? "true" : "false")
+                << ',' << Json("measurement_order") << ':'
+                << Json(options.abba
+                    ? "ABBA for paired end-to-end rows; micro/boundary sequential"
+                    : "packed-then-ff8xor")
+                << "}\n";
+            GateJSON("multiply", multiply);
+            GateJSON("fft", fft);
+            GateJSON("ifft", ifft);
+            return;
+        }
+
         std::cout << "FF8 XOR-circuit comparative benchmark\n"
             << "compiler: " << Env.compiler << '\n'
             << "build: " << Env.build_type << '\n'
             << "cpu: " << Env.cpu << '\n'
             << "simd: " << Env.simd << '\n'
+            << "os: " << Env.operating_system << '\n'
+            << "affinity: " << Env.affinity << '\n'
+            << "build flags: " << Env.build_flags << '\n'
+            << "counter backend: " << Env.counter_backend << '\n'
             << "mode: " << (options.quick ? "quick" : "full")
             << ", warmups=" << options.warmups
             << ", iterations=" << options.iterations
             << ", minimum sample=" << options.minimum_sample_usec << " us"
             << ", packed-boundary transpose measurements="
             << (options.include_transpose ? "included" : "disabled") << '\n'
+            << "measurement order: "
+            << (options.abba
+                ? "ABBA for paired end-to-end rows; micro/boundary sequential"
+                : "packed then ff8xor") << '\n'
+            << "PMU counters: "
+            << (options.counters ? "requested" : "disabled") << '\n'
             << "timing: calls/sample is auto-calibrated and each result is per call\n"
             << "circuit checksum: "
             << leopard::ff8xor::GetCircuitChecksum() << '\n'
@@ -446,7 +1084,98 @@ public:
                 << result.ratio_vs_packed << ','
                 << Csv(Env.compiler) << ',' << Csv(Env.build_type) << ','
                 << Csv(Env.cpu) << ',' << Csv(Env.simd) << ','
-                << Csv("") << ",,,," << Csv(result.note) << '\n';
+                << Csv("") << ",,,," << Csv(result.note) << ','
+                << Csv(result.schedule_id) << ',' << result.modeled_payload_bytes << ',';
+            if (result.locator_shift != std::numeric_limits<unsigned>::max())
+                std::cout << result.locator_shift;
+            std::cout << ',' << Csv(result.measurement_order) << ','
+                << Csv(Env.operating_system) << ',' << Csv(Env.affinity) << ','
+                << Csv(Env.build_flags) << ',' << Csv(Env.counter_backend);
+            static const char* counter_names[] = {
+                "cycles", "instructions", "reference_cycles", "cache_references",
+                "cache_misses", "frontend_stalled_cycles", "backend_stalled_cycles",
+                "l1d_load_misses", "dtlb_load_misses", "itlb_load_misses"
+            };
+            for (size_t i = 0;
+                 i < sizeof(counter_names) / sizeof(counter_names[0]); ++i)
+            {
+                std::cout << ',';
+                const CounterMetric* metric =
+                    FindCounter(result.timing, counter_names[i]);
+                if (metric && metric->available)
+                    std::cout << metric->median_per_call;
+            }
+            std::cout << ',';
+            if (result.timing.median_ipc > 0)
+                std::cout << result.timing.median_ipc;
+            std::cout << ',';
+            if (result.timing.median_effective_ghz > 0)
+                std::cout << result.timing.median_effective_ghz;
+            std::cout << ',' << Csv(CounterStatus(result.timing)) << '\n';
+            return;
+        }
+
+        if (JSON)
+        {
+            std::cout << "{" << Json("record") << ':' << Json(result.record)
+                << ',' << Json("backend") << ':' << Json(result.backend)
+                << ',' << Json("operation") << ':' << Json(result.operation)
+                << ',' << Json("transpose_included") << ':'
+                << (result.transpose_included ? "true" : "false")
+                << ',' << Json("k") << ':' << result.original_count
+                << ',' << Json("r") << ':' << result.recovery_count
+                << ',' << Json("buffer_bytes") << ':' << result.buffer_bytes
+                << ',' << Json("loss_count") << ':' << result.loss_count
+                << ',' << Json("schedule_id") << ':' << Json(result.schedule_id)
+                << ',' << Json("measurement_order") << ':'
+                << Json(result.measurement_order)
+                << ',' << Json("warmups") << ':' << result.warmups
+                << ',' << Json("iterations") << ':' << result.iterations
+                << ',' << Json("calls_per_sample") << ':'
+                << result.timing.calls_per_sample
+                << ',' << Json("median_us") << ':'
+                << result.timing.median_usec
+                << ',' << Json("best_us") << ':' << result.timing.best_usec
+                << ',' << Json("median_input_MBps") << ':' << median_input
+                << ',' << Json("best_input_MBps") << ':' << best_input
+                << ',' << Json("median_output_MBps") << ':' << median_output
+                << ',' << Json("best_output_MBps") << ':' << best_output
+                << ',' << Json("speed_ratio_vs_packed") << ':'
+                << result.ratio_vs_packed
+                << ',' << Json("modeled_payload_bytes") << ':'
+                << result.modeled_payload_bytes
+                << ',' << Json("locator_shift") << ':';
+            if (result.locator_shift == std::numeric_limits<unsigned>::max())
+                std::cout << "null";
+            else
+                std::cout << result.locator_shift;
+            std::cout << ',' << Json("counters") << ":{";
+            for (size_t i = 0; i < result.timing.counters.size(); ++i)
+            {
+                const CounterMetric& metric = result.timing.counters[i];
+                if (i != 0)
+                    std::cout << ',';
+                std::cout << Json(metric.name) << ":{" << Json("value_per_call")
+                    << ':';
+                if (metric.available)
+                    std::cout << metric.median_per_call;
+                else
+                    std::cout << "null";
+                std::cout << ',' << Json("status") << ':' << Json(metric.status)
+                    << '}';
+            }
+            std::cout << "}," << Json("ipc") << ':';
+            if (result.timing.median_ipc > 0)
+                std::cout << result.timing.median_ipc;
+            else
+                std::cout << "null";
+            std::cout << ',' << Json("effective_ghz") << ':';
+            if (result.timing.median_effective_ghz > 0)
+                std::cout << result.timing.median_effective_ghz;
+            else
+                std::cout << "null";
+            std::cout << ',' << Json("note") << ':' << Json(result.note)
+                << "}\n";
             return;
         }
 
@@ -465,6 +1194,12 @@ public:
             << " best=" << std::setw(10) << result.timing.best_usec << " us"
             << " input=" << std::setw(10) << median_input << " MB/s"
             << " output=" << std::setw(10) << median_output << " MB/s";
+        if (result.modeled_payload_bytes != 0)
+            std::cout << " modeled=" << result.modeled_payload_bytes << " B";
+        if (result.timing.median_ipc > 0)
+            std::cout << " IPC=" << result.timing.median_ipc;
+        if (result.timing.median_effective_ghz > 0)
+            std::cout << " GHz=" << result.timing.median_effective_ghz;
         if (result.ratio_vs_packed > 0)
             std::cout << " speed=" << result.ratio_vs_packed << "x packed";
         if (!result.note.empty())
@@ -492,6 +1227,24 @@ public:
     }
 
 private:
+    void GateJSON(
+        const char* operation,
+        const leopard::ff8xor::CircuitStatistics& statistics)
+    {
+        std::cout << "{" << Json("record") << ':' << Json("circuit_metadata")
+            << ',' << Json("family") << ':' << Json(operation)
+            << ',' << Json("checksum") << ':'
+            << Json(leopard::ff8xor::GetCircuitChecksum())
+            << ',' << Json("gate_min") << ':' << statistics.MinimumGateCount
+            << ',' << Json("gate_max") << ':' << statistics.MaximumGateCount
+            << ',' << Json("gate_average") << ':'
+            << statistics.AverageGateCount
+            << ',' << Json("depth_min") << ':' << statistics.MinimumDepth
+            << ',' << Json("depth_max") << ':' << statistics.MaximumDepth
+            << ',' << Json("depth_average") << ':' << statistics.AverageDepth
+            << "}\n";
+    }
+
     void GateCSV(const char* operation, unsigned minimum, unsigned maximum, double average)
     {
         std::cout << Csv("metadata") << ',' << Csv("generated") << ','
@@ -500,11 +1253,22 @@ private:
             << Csv(Env.cpu) << ',' << Csv(Env.simd) << ','
             << Csv(leopard::ff8xor::GetCircuitChecksum()) << ','
             << minimum << ',' << maximum << ',' << std::fixed
-            << std::setprecision(6) << average << ',' << Csv("") << '\n';
+            << std::setprecision(6) << average << ',' << Csv("") << ','
+            << Csv("") << ",0,," << Csv(MeasurementOrder) << ','
+            << Csv(Env.operating_system) << ',' << Csv(Env.affinity) << ','
+            << Csv(Env.build_flags) << ',' << Csv(Env.counter_backend)
+            ;
+        // Ten PMU values plus IPC and effective GHz are unavailable for
+        // circuit-metadata rows.  Keep the CSV schema rectangular.
+        for (unsigned i = 0; i < 12; ++i)
+            std::cout << ',';
+        std::cout << ',' << Csv("") << '\n';
     }
 
     bool CSV;
     Environment Env;
+    bool JSON;
+    std::string MeasurementOrder;
 };
 
 static std::string CompilerName()
@@ -524,12 +1288,32 @@ static std::string CompilerName()
 
 static std::string BuildType()
 {
+#if defined(LEO_BENCH_CMAKE_BUILD_TYPE)
+    std::string result = LEO_BENCH_CMAKE_BUILD_TYPE;
+    result += " (";
+    result +=
 #if defined(NDEBUG)
-    return "Release (NDEBUG)";
+        "NDEBUG";
+#else
+        "NDEBUG unset";
+#endif
+    result += ')';
+    return result;
+#elif defined(NDEBUG)
+    return "optimized (NDEBUG)";
 #elif defined(__OPTIMIZE__) || (defined(_MSC_VER) && !defined(_DEBUG))
     return "optimized (NDEBUG unset)";
 #else
     return "Debug/unoptimized";
+#endif
+}
+
+static std::string BuildFlags()
+{
+#if defined(LEO_BENCH_BUILD_FLAGS)
+    return LEO_BENCH_BUILD_FLAGS;
+#else
+    return "unavailable (build system did not provide flags)";
 #endif
 }
 
@@ -582,14 +1366,263 @@ static std::string SIMDName()
         leopard::ff8xor::GetKernelBackendName();
 }
 
-static Environment GetEnvironment()
+static std::string OperatingSystemName()
+{
+#if defined(__linux__)
+    struct utsname name;
+    if (uname(&name) == 0)
+    {
+        std::ostringstream result;
+        result << name.sysname << ' ' << name.release << ' ' << name.machine;
+        return result.str();
+    }
+#elif defined(_WIN32)
+    return "Windows";
+#endif
+    return "unavailable";
+}
+
+static std::string CounterBackendName()
+{
+#if defined(__linux__)
+    std::ifstream input("/proc/sys/kernel/perf_event_paranoid");
+    int paranoid = 0;
+    if (input >> paranoid)
+    {
+        std::ostringstream result;
+        result << "Linux perf_event_open; perf_event_paranoid=" << paranoid;
+        return result.str();
+    }
+    return "Linux perf_event_open; perf_event_paranoid unavailable";
+#else
+    return "unavailable: perf_event_open is Linux-only";
+#endif
+}
+
+static std::string ConfigureAffinity(const Options& options)
+{
+    if (!options.pin)
+        return "not pinned (--no-pin)";
+#if defined(__linux__)
+    cpu_set_t allowed;
+    CPU_ZERO(&allowed);
+    if (sched_getaffinity(0, sizeof(allowed), &allowed) != 0)
+        return std::string("pinning unavailable: sched_getaffinity: ") +
+            strerror(errno);
+
+    int cpu = options.pin_cpu;
+    if (cpu < 0)
+    {
+        for (int candidate = 0; candidate < CPU_SETSIZE; ++candidate)
+        {
+            if (CPU_ISSET(candidate, &allowed))
+            {
+                cpu = candidate;
+                break;
+            }
+        }
+    }
+    if (cpu < 0 || cpu >= CPU_SETSIZE || !CPU_ISSET(cpu, &allowed))
+    {
+        std::ostringstream result;
+        result << "pinning unavailable: requested CPU " << cpu
+            << " is outside the allowed affinity set";
+        return result.str();
+    }
+
+    cpu_set_t selected;
+    CPU_ZERO(&selected);
+    CPU_SET(cpu, &selected);
+    if (sched_setaffinity(0, sizeof(selected), &selected) != 0)
+        return std::string("pinning unavailable: sched_setaffinity: ") +
+            strerror(errno);
+    std::ostringstream result;
+    result << "pinned to logical CPU " << cpu;
+    return result.str();
+#else
+    return "pinning unavailable on this platform";
+#endif
+}
+
+static Environment GetEnvironment(const std::string& affinity)
 {
     Environment environment;
     environment.compiler = CompilerName();
     environment.build_type = BuildType();
+    environment.build_flags = BuildFlags();
     environment.cpu = CPUName();
     environment.simd = SIMDName();
+    environment.operating_system = OperatingSystemName();
+    environment.affinity = affinity;
+    environment.counter_backend = CounterBackendName();
     return environment;
+}
+
+static std::vector<unsigned> ShuffledIndices(unsigned count, uint64_t seed);
+
+static unsigned NextPowerOfTwo(unsigned value)
+{
+    unsigned result = 1;
+    while (result < value)
+        result <<= 1;
+    return result;
+}
+
+static bool IsPowerOfTwo(unsigned value)
+{
+    return value != 0 && (value & (value - 1)) == 0;
+}
+
+static uint64_t TransformMemoryUnits(
+    unsigned count_truncated,
+    unsigned count,
+    unsigned skew_base)
+{
+    uint64_t units = 0;
+    for (unsigned distance = 1; distance < count; distance <<= 1)
+    {
+        const unsigned span = distance << 1;
+        for (unsigned range = 0; range < count_truncated; range += span)
+        {
+            // FFTSkewPadded is the sentinel at padded indices 1,2,4,...128.
+            // The sentinel specialization reads x/y and writes y (3B), while
+            // a general butterfly reads and writes both buffers (4B).
+            const bool sentinel =
+                IsPowerOfTwo(skew_base + range + distance);
+            units += static_cast<uint64_t>(distance) * (sentinel ? 3 : 4);
+        }
+    }
+    return units;
+}
+
+static uint64_t ErrorFFTMemoryUnits(
+    unsigned count_truncated,
+    unsigned count,
+    unsigned skew_base,
+    const std::vector<unsigned>& missing_locations)
+{
+    uint64_t units = 0;
+    for (unsigned distance = count >> 1; distance != 0; distance >>= 1)
+    {
+        const unsigned span = distance << 1;
+        for (unsigned range = 0; range < count_truncated; range += span)
+        {
+            bool needed = false;
+            for (size_t i = 0; i < missing_locations.size(); ++i)
+            {
+                if (missing_locations[i] >= range &&
+                    missing_locations[i] < range + span)
+                {
+                    needed = true;
+                    break;
+                }
+            }
+            if (needed)
+            {
+                const bool sentinel =
+                    IsPowerOfTwo(skew_base + range + distance);
+                units += static_cast<uint64_t>(distance) *
+                    (sentinel ? 3 : 4);
+            }
+        }
+    }
+    return units;
+}
+
+static uint64_t ModeledEncodePayloadBytes(
+    unsigned original_count,
+    unsigned recovery_count,
+    uint64_t buffer_bytes,
+    bool transpose)
+{
+    const unsigned m = NextPowerOfTwo(recovery_count);
+    unsigned chunks = 0;
+    unsigned zero_buffers = 0;
+    uint64_t transform_units = 0;
+    for (unsigned chunk_start = 0; chunk_start < original_count;
+         chunk_start += m)
+    {
+        const unsigned chunk_count = std::min(m, original_count - chunk_start);
+        ++chunks;
+        zero_buffers += m - chunk_count;
+        transform_units += TransformMemoryUnits(
+            chunk_count, m, m + chunk_start);
+    }
+    transform_units += TransformMemoryUnits(recovery_count, m, 0);
+
+    uint64_t units = 0;
+    units += static_cast<uint64_t>(original_count) * 2; // copy
+    units += zero_buffers; // zero store
+    units += static_cast<uint64_t>(m) * (chunks - 1) * 3; // XOR load/load/store
+    units += transform_units;
+    if (transpose)
+        units += static_cast<uint64_t>(original_count + recovery_count) * 2;
+    return units * buffer_bytes;
+}
+
+static uint64_t ModeledDecodePayloadBytes(
+    unsigned original_count,
+    unsigned recovery_count,
+    uint64_t buffer_bytes,
+    unsigned loss_count,
+    bool transpose)
+{
+    const unsigned m = NextPowerOfTwo(recovery_count);
+    const unsigned n = NextPowerOfTwo(m + original_count);
+    const uint64_t seed = UINT64_C(0xff8c000000000000) ^
+        (static_cast<uint64_t>(original_count) << 40) ^
+        (static_cast<uint64_t>(recovery_count) << 24) ^ buffer_bytes;
+    const uint64_t loss_seed = seed ^
+        (static_cast<uint64_t>(loss_count) << 8) ^ UINT64_C(0xd3c0de);
+    const std::vector<unsigned> original_order =
+        ShuffledIndices(original_count, loss_seed);
+    std::vector<unsigned> missing_locations;
+    for (unsigned i = 0; i < loss_count; ++i)
+        missing_locations.push_back(m + original_order[i]);
+
+    // The deterministic benchmark supplies one available recovery for every
+    // missing original, so (k-loss) originals + loss recoveries == k inputs.
+    const unsigned present_originals = original_count - loss_count;
+    const unsigned available_recoveries = loss_count;
+    const unsigned present_inputs = present_originals + available_recoveries;
+    const unsigned zero_buffers = n - present_inputs;
+    uint64_t derivative_buffers = 0;
+    for (unsigned index = 1; index < n; ++index)
+        derivative_buffers += ((index ^ (index - 1)) + 1) >> 1;
+    const uint64_t transform_units =
+        TransformMemoryUnits(m + original_count, n, 0) +
+        ErrorFFTMemoryUnits(
+            m + original_count, n, 0, missing_locations);
+
+    uint64_t units = 0;
+    units += static_cast<uint64_t>(present_inputs + loss_count) * 2;
+    units += zero_buffers;
+    units += derivative_buffers * 3;
+    units += transform_units;
+    if (transpose)
+    {
+        // Present originals and recoveries are transposed into the native
+        // layout; recovered originals are transposed out.
+        units += static_cast<uint64_t>(original_count + loss_count) * 2;
+    }
+    return units * buffer_bytes;
+}
+
+static std::string ScheduleID(
+    const char* operation,
+    unsigned original_count,
+    unsigned recovery_count,
+    uint64_t buffer_bytes,
+    unsigned loss_count)
+{
+    if (original_count == 0 || recovery_count == 0)
+        return "";
+    std::ostringstream id;
+    id << operation << "-k" << original_count << "-r" << recovery_count
+        << "-b" << buffer_bytes;
+    if (strcmp(operation, "decode") == 0)
+        id << "-loss" << loss_count;
+    return id.str();
 }
 
 static Result MakeResult(
@@ -617,11 +1650,33 @@ static Result MakeResult(
     result.buffer_bytes = buffer_bytes;
     result.loss_count = loss_count;
     result.warmups = options.warmups;
-    result.iterations = options.iterations;
+    result.iterations = timing.sample_count != 0
+        ? timing.sample_count : options.iterations;
     result.timing = timing;
     result.input_bytes = input_bytes;
     result.output_bytes = output_bytes;
     result.ratio_vs_packed = ratio;
+    result.schedule_id = ScheduleID(operation, original_count, recovery_count,
+        buffer_bytes, loss_count);
+    result.measurement_order = options.abba && !transpose &&
+        original_count != 0 && recovery_count != 0 &&
+        (strcmp(backend, "packed_ff8") == 0 ||
+         strcmp(backend, "ff8xor_native") == 0)
+            ? "ABBA" : "sequential";
+    if (strncmp(backend, "ff8xor", 6) == 0)
+    {
+        if (strcmp(operation, "encode") == 0)
+        {
+            result.modeled_payload_bytes = ModeledEncodePayloadBytes(
+                original_count, recovery_count, buffer_bytes, transpose);
+        }
+        else if (strcmp(operation, "decode") == 0)
+        {
+            result.modeled_payload_bytes = ModeledDecodePayloadBytes(
+                original_count, recovery_count, buffer_bytes, loss_count,
+                transpose);
+        }
+    }
     result.note = note;
     return result;
 }
@@ -737,28 +1792,42 @@ static bool RunParameter(
 
     LeopardResult api_result = Leopard_Success;
     Timing packed_encode_timing;
+    Timing xor_encode_timing;
     BufferSet packed_encode_work;
+    BufferSet xor_encode_work;
     if (!packed_encode_work.Allocate(
-            packed_encode_count, static_cast<size_t>(buffer_bytes)))
+            packed_encode_count, static_cast<size_t>(buffer_bytes)) ||
+        !xor_encode_work.Allocate(
+            xor_encode_count, static_cast<size_t>(buffer_bytes)))
     {
         reporter.Skip(original_count, recovery_count, buffer_bytes, 0,
-            "allocation failed for packed encode work");
+            "allocation failed for encode work");
         return true;
     }
-    if (!Measure(options,
-        [&]() -> LeopardResult {
+    const auto packed_encode = [&]() -> LeopardResult {
             return leo_encode(buffer_bytes, original_count, recovery_count,
                 packed_encode_count, &packed_original_ptrs[0],
                 packed_encode_work.Data());
-        }, packed_encode_timing, api_result))
+        };
+    const auto xor_encode = [&]() -> LeopardResult {
+            return leo_ff8xor_encode(buffer_bytes, original_count, recovery_count,
+                xor_encode_count, &plane_original_ptrs[0],
+                xor_encode_work.Data());
+        };
+    const bool encode_measured = options.abba
+        ? MeasurePairABBA(options, packed_encode, xor_encode,
+            packed_encode_timing, xor_encode_timing, api_result)
+        : (Measure(options, packed_encode, packed_encode_timing, api_result) &&
+           Measure(options, xor_encode, xor_encode_timing, api_result));
+    if (!encode_measured)
     {
         if (api_result == Leopard_TooMuchData)
         {
             reporter.Skip(original_count, recovery_count, buffer_bytes, 0,
-                "packed backend reports unsupported parameters");
+                "backend reports unsupported parameters");
             return true;
         }
-        std::cerr << "packed encode failed: " << leo_result_string(api_result) << '\n';
+        std::cerr << "encode failed: " << leo_result_string(api_result) << '\n';
         return false;
     }
 
@@ -775,31 +1844,6 @@ static bool RunParameter(
         return false;
     }
 
-    Timing xor_encode_timing;
-    BufferSet xor_encode_work;
-    if (!xor_encode_work.Allocate(
-            xor_encode_count, static_cast<size_t>(buffer_bytes)))
-    {
-        reporter.Skip(original_count, recovery_count, buffer_bytes, 0,
-            "allocation failed for ff8xor encode work");
-        return true;
-    }
-    if (!Measure(options,
-        [&]() -> LeopardResult {
-            return leo_ff8xor_encode(buffer_bytes, original_count, recovery_count,
-                xor_encode_count, &plane_original_ptrs[0],
-                xor_encode_work.Data());
-        }, xor_encode_timing, api_result))
-    {
-        if (api_result == Leopard_TooMuchData)
-        {
-            reporter.Skip(original_count, recovery_count, buffer_bytes, 0,
-                "ff8xor backend reports unsupported parameters");
-            return true;
-        }
-        std::cerr << "ff8xor encode failed: " << leo_result_string(api_result) << '\n';
-        return false;
-    }
     if (!VerifyPackedRecovery(packed_recovery, xor_encode_work,
             recovery_count, buffer_bytes, scratch[0]))
         return false;
@@ -911,22 +1955,36 @@ static bool RunParameter(
         }
 
         BufferSet packed_decode_work;
+        BufferSet xor_decode_work;
         if (!packed_decode_work.Allocate(
-                packed_decode_count, static_cast<size_t>(buffer_bytes)))
+                packed_decode_count, static_cast<size_t>(buffer_bytes)) ||
+            !xor_decode_work.Allocate(
+                xor_decode_count, static_cast<size_t>(buffer_bytes)))
         {
             reporter.Skip(original_count, recovery_count, buffer_bytes, loss_count,
-                "allocation failed for packed decode work");
+                "allocation failed for decode work");
             continue;
         }
         Timing packed_decode_timing;
-        if (!Measure(options,
-            [&]() -> LeopardResult {
+        Timing xor_decode_timing;
+        const auto packed_decode = [&]() -> LeopardResult {
                 return leo_decode(buffer_bytes, original_count, recovery_count,
                     packed_decode_count, &packed_decode_original[0],
                     &packed_decode_recovery[0], packed_decode_work.Data());
-            }, packed_decode_timing, api_result))
+            };
+        const auto xor_decode = [&]() -> LeopardResult {
+                return leo_ff8xor_decode(buffer_bytes, original_count, recovery_count,
+                    xor_decode_count, &plane_decode_original[0],
+                    &plane_decode_recovery[0], xor_decode_work.Data());
+            };
+        const bool decode_measured = options.abba
+            ? MeasurePairABBA(options, packed_decode, xor_decode,
+                packed_decode_timing, xor_decode_timing, api_result)
+            : (Measure(options, packed_decode, packed_decode_timing, api_result) &&
+               Measure(options, xor_decode, xor_decode_timing, api_result));
+        if (!decode_measured)
         {
-            std::cerr << "packed decode failed: " << leo_result_string(api_result) << '\n';
+            std::cerr << "decode failed: " << leo_result_string(api_result) << '\n';
             return false;
         }
         for (unsigned i = 0; i < loss_count; ++i)
@@ -944,27 +2002,6 @@ static bool RunParameter(
         reporter.Print(MakeResult(options, "packed_ff8", "decode", false,
             original_count, recovery_count, buffer_bytes, loss_count,
             packed_decode_timing, decode_input_bytes, decode_output_bytes, 1.0));
-        packed_decode_work.Clear();
-
-        BufferSet xor_decode_work;
-        if (!xor_decode_work.Allocate(
-                xor_decode_count, static_cast<size_t>(buffer_bytes)))
-        {
-            reporter.Skip(original_count, recovery_count, buffer_bytes, loss_count,
-                "allocation failed for ff8xor decode work");
-            continue;
-        }
-        Timing xor_decode_timing;
-        if (!Measure(options,
-            [&]() -> LeopardResult {
-                return leo_ff8xor_decode(buffer_bytes, original_count, recovery_count,
-                    xor_decode_count, &plane_decode_original[0],
-                    &plane_decode_recovery[0], xor_decode_work.Data());
-            }, xor_decode_timing, api_result))
-        {
-            std::cerr << "ff8xor decode failed: " << leo_result_string(api_result) << '\n';
-            return false;
-        }
         for (unsigned i = 0; i < loss_count; ++i)
         {
             const unsigned index = original_order[i];
@@ -982,10 +2019,14 @@ static bool RunParameter(
                 return false;
             }
         }
-        reporter.Print(MakeResult(options, "ff8xor_native", "decode", false,
+        Result xor_decode_result = MakeResult(
+            options, "ff8xor_native", "decode", false,
             original_count, recovery_count, buffer_bytes, loss_count,
             xor_decode_timing, decode_input_bytes, decode_output_bytes,
-            packed_decode_timing.median_usec / xor_decode_timing.median_usec));
+            packed_decode_timing.median_usec / xor_decode_timing.median_usec);
+        xor_decode_result.locator_shift =
+            leopard::ff8xor::GetLastLocatorShiftForTesting();
+        reporter.Print(xor_decode_result);
 
         if (options.include_transpose)
         {
@@ -1038,15 +2079,19 @@ static bool RunParameter(
                         return false;
                     }
                 }
-                reporter.Print(MakeResult(options, "ff8xor_packed_boundary", "decode", true,
+                Result included_result = MakeResult(
+                    options, "ff8xor_packed_boundary", "decode", true,
                     original_count, recovery_count, buffer_bytes, loss_count,
                     included_timing, decode_input_bytes, decode_output_bytes,
-                    packed_decode_timing.median_usec / included_timing.median_usec));
+                    packed_decode_timing.median_usec / included_timing.median_usec);
+                included_result.locator_shift =
+                    leopard::ff8xor::GetLastLocatorShiftForTesting();
+                reporter.Print(included_result);
             }
         }
     }
 
-    if (!options.csv)
+    if (!options.csv && !options.json)
         std::cout << '\n';
     return true;
 }
@@ -1113,13 +2158,16 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
         return true;
     }
 
-    // Cover the least expensive non-identity circuit, a near-average circuit,
-    // and the unique maximum-gate circuit.  This exposes coefficient
-    // sensitivity rather than reporting only a favorable hand-picked case.
+    // Cover both logarithmic spellings of identity, the least expensive
+    // non-identity circuit, a near-average circuit, and the unique maximum.
+    // This guards the no-payload-access/copy fast paths as well as exposing
+    // coefficient sensitivity rather than a favorable hand-picked case.
     static const CircuitCase multiply_cases[] = {
+        { 0, 0, 0, "identity multiplier (canonical logarithm)" },
         { 51, 19, 12, "minimum-gate non-identity multiplier" },
         { 22, 32, 26, "near-average-gate multiplier" },
-        { 209, 43, 35, "maximum-gate multiplier" }
+        { 209, 43, 35, "maximum-gate multiplier" },
+        { 255, 0, 0, "identity multiplier (redundant logarithm 255)" }
     };
 
     FillRandom(b, bytes, UINT64_C(0x6d6963726f5f6232));
@@ -1182,6 +2230,7 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
     }
 
     static const CircuitCase butterfly_cases[] = {
+        { 255, 8, 1, "sentinel y^=x fast path" },
         { 0, 16, 2, "minimum-gate non-sentinel butterfly" },
         { 1, 40, 11, "average-gate butterfly" },
         { 247, 51, 15, "maximum-gate butterfly" }
@@ -1284,7 +2333,7 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
         "standalone 8x8 bit transpose; no allocation", timing,
         bytes, bytes, bytes);
 
-    if (!base_options.csv)
+    if (!base_options.csv && !base_options.json)
         std::cout << '\n';
     return true;
 }
@@ -1292,10 +2341,17 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
 static void Usage(const char* program)
 {
     std::cout << "Usage: " << program
-        << " [--quick] [--csv] [--include-transpose]\n"
+        << " [--quick] [--csv|--json] [--include-transpose] [--counters]"
+        << " [--abba] [--cpu N|--no-pin]\n"
         << "  --quick              Run a bounded development/CI subset.\n"
         << "  --csv                Emit machine-readable CSV.\n"
-        << "  --include-transpose  Also time packed boundary transposes around ff8xor.\n";
+        << "  --json               Emit newline-delimited machine-readable JSON.\n"
+        << "  --include-transpose  Also time packed boundary transposes around ff8xor.\n"
+        << "  --counters           Request Linux perf_event PMU counters; unavailable"
+        << " events remain null.\n"
+        << "  --abba               Measure paired end-to-end rows in A-B-B-A order.\n"
+        << "  --cpu N              Pin the benchmark to allowed logical CPU N.\n"
+        << "  --no-pin             Disable default pinning to the first allowed CPU.\n";
 }
 
 static bool ParseOptions(int argc, char** argv, Options& options)
@@ -1307,8 +2363,35 @@ static bool ParseOptions(int argc, char** argv, Options& options)
             options.quick = true;
         else if (argument == "--csv")
             options.csv = true;
+        else if (argument == "--json")
+            options.json = true;
         else if (argument == "--include-transpose")
             options.include_transpose = true;
+        else if (argument == "--counters")
+            options.counters = true;
+        else if (argument == "--abba")
+            options.abba = true;
+        else if (argument == "--no-pin")
+            options.pin = false;
+        else if (argument == "--cpu")
+        {
+            if (i + 1 >= argc)
+            {
+                std::cerr << "--cpu requires a logical CPU number\n";
+                return false;
+            }
+            char* end = NULL;
+            errno = 0;
+            const long value = strtol(argv[++i], &end, 10);
+            if (errno != 0 || end == argv[i] || *end != '\0' ||
+                value < 0 || value > std::numeric_limits<int>::max())
+            {
+                std::cerr << "Invalid --cpu value: " << argv[i] << '\n';
+                return false;
+            }
+            options.pin = true;
+            options.pin_cpu = static_cast<int>(value);
+        }
         else if (argument == "--help" || argument == "-h")
         {
             Usage(argv[0]);
@@ -1320,6 +2403,11 @@ static bool ParseOptions(int argc, char** argv, Options& options)
             Usage(argv[0]);
             return false;
         }
+    }
+    if (options.csv && options.json)
+    {
+        std::cerr << "--csv and --json are mutually exclusive\n";
+        return false;
     }
     if (options.quick)
     {
@@ -1344,6 +2432,8 @@ int main(int argc, char** argv)
     if (!ParseOptions(argc, argv, options))
         return 2;
 
+    const std::string affinity = ConfigureAffinity(options);
+
     const LeopardResult init_result = static_cast<LeopardResult>(leo_init());
     if (init_result != Leopard_Success)
     {
@@ -1351,7 +2441,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    Reporter reporter(options.csv, GetEnvironment());
+    Reporter reporter(options.csv, options.json, GetEnvironment(affinity));
     reporter.Begin(options);
 
     if (!CheckTransposeHelper())
@@ -1405,7 +2495,7 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    if (!options.csv)
+    if (!options.csv && !options.json)
         std::cout << "Benchmark complete. sink=" << BenchmarkSink << '\n';
     return 0;
 }
