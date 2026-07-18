@@ -375,6 +375,62 @@ directory. Strict inspection is a developer/CI target instead of part of the
 ordinary build because a new compiler may require a documented code-generation
 adjustment before satisfying the hot-loop contract.
 
+### Standalone AVX-512 XOR3 experiment
+
+`bench_leopard_ff8xor_xor3` isolates the question of whether one AVX-512
+`vpternlogd` can profitably replace the two instructions needed for
+`a XOR b XOR c`. It tests XMM, YMM, and ZMM widths and keeps three forms
+separate: a forced control containing exactly two XOR instructions, ordinary
+two-XOR intrinsic source whose lowering is left to the compiler, and an
+explicit ternary-logic intrinsic with truth-table immediate `0x96`. The
+compiler-auto form is important because an optimizing compiler may already
+select `vpternlogd`; the forced form measures the actual two-instruction
+counterfactual.
+
+```sh
+./build/bench_leopard_ff8xor_xor3 --verify-only
+./build/bench_leopard_ff8xor_xor3 --quick
+./build/bench_leopard_ff8xor_xor3
+cmake --build build --target check_ff8xor_xor3_assembly
+```
+
+Runtime entry requires AVX2, AVX-512F, AVX-512VL, and matching OS-enabled
+extended state. Unsupported builds or hosts report a CTest skip rather than
+executing the isolated AVX-512 translation unit. `--verify-only` checks all
+eight truth-table inputs, 10,000 deterministic random vectors for every form
+and width, and streaming results without reporting timings.
+
+Timed mode covers a dependent latency chain, four independent chains, and
+four-array streaming working sets. Each explicit-versus-control comparison is
+warmed first and sampled in A-B-B-A order on a pinned logical CPU. Wall-clock
+time comes from `steady_clock`; fenced TSC samples provide a reference-clock
+cross-check, and RDPRU APERF samples are printed when supported. TSC GHz is not
+core frequency, and even APERF cannot remove thermal, scheduler, or wide-vector
+frequency effects, so repeat runs and compare medians, best times, and the
+reported clock samples rather than treating one best sample as authoritative.
+Streaming `logical_GiB/s` counts output bytes; the printed traffic estimate is
+four times that value for three loads and one store.
+
+The strict assembly target inspects stable noinline probes. It requires two
+XORs for the forced control, one `vpternlog[dq] 0x96` for the explicit form,
+the requested vector width, and no calls or stack references. On the GCC 13.3
+implementation host the complete probe sizes, including `endbr64` and `ret`,
+were 13/13/17 bytes for forced XMM/YMM/ZMM and 12 bytes for each explicit
+probe. These sizes are compiler-, ABI-, and hardening-dependent; they are a
+regression signal, not a portable encoding-size guarantee.
+
+The corrected full Release run on the implementation host found explicit
+VPTERNLOG 1.903x--2.203x faster than forced XOR2 and 1.497x--1.552x faster than
+compiler auto on the dependent chains. With four independent chains the
+corresponding ranges were 2.094x--2.103x and 1.361x--1.451x. In contrast, the
+15 streaming ratios against compiler auto ranged from 0.994x to 1.021x; the
+largest stream gain against forced XOR2 was 1.114x for YMM at a 4 KiB aggregate
+working set. Pairwise APERF was generally unchanged, so the streaming result
+was not explained by systematic downclocking. Thus the register-only
+microbenchmark confirms that ternary XOR can reduce dependency depth, but it
+does not establish an end-to-end ff8xor codec gain. Generated-circuit changes
+must still pass the full codec benchmark and assembly census before retention.
+
 ## Measurements from the implementation host
 
 These results were collected on an AMD Ryzen Threadripper PRO 9985WX

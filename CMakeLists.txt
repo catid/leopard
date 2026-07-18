@@ -216,6 +216,40 @@ if(NOT DEFINED FF8XOR_AVX512_COMPILE_FLAGS)
     set(FF8XOR_AVX512_COMPILE_FLAGS "")
 endif()
 
+# Isolated AVX-512 XOR3 experiment.  The scalar driver is forced back to the
+# baseline x86-64 ISA before runtime feature detection; only the second
+# translation unit may contain VPTERNLOG or ZMM instructions.
+add_executable(bench_leopard_ff8xor_xor3
+    tests/benchmark_ff8xor_xor3.cpp
+    tests/benchmark_ff8xor_xor3.h
+    tests/benchmark_ff8xor_xor3_avx512.cpp)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$" AND
+   (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+    CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
+    # The trailing -march replaces the project-wide -march=native and is also
+    # understood by older compilers that may not recognize -mno-avx512vl.
+    set(FF8XOR_XOR3_BASELINE_FLAGS "-march=x86-64")
+    set_source_files_properties(tests/benchmark_ff8xor_xor3.cpp PROPERTIES
+        COMPILE_FLAGS "${FF8XOR_XOR3_BASELINE_FLAGS}")
+    if(NOT FF8XOR_BUILD_AVX512)
+        set_source_files_properties(
+            tests/benchmark_ff8xor_xor3_avx512.cpp PROPERTIES
+            COMPILE_FLAGS "${FF8XOR_XOR3_BASELINE_FLAGS}")
+    endif()
+endif()
+if(FF8XOR_BUILD_AVX512)
+    set_source_files_properties(tests/benchmark_ff8xor_xor3_avx512.cpp PROPERTIES
+        COMPILE_FLAGS "${FF8XOR_AVX512_COMPILE_FLAGS}"
+        COMPILE_DEFINITIONS "LEO_FF8XOR_XOR3_AVX512=1")
+    # This definition only tells the baseline driver that the guarded entry
+    # point exists.  It does not enable any vector ISA in that translation unit.
+    set_source_files_properties(tests/benchmark_ff8xor_xor3.cpp PROPERTIES
+        COMPILE_DEFINITIONS "LEO_FF8XOR_XOR3_AVX512_BUILT=1")
+endif()
+add_test(NAME leopard_ff8xor_xor3
+    COMMAND bench_leopard_ff8xor_xor3 --verify-only)
+set_tests_properties(leopard_ff8xor_xor3 PROPERTIES SKIP_RETURN_CODE 77)
+
 # Embed a reproducible summary of the configured CMake flags in benchmark
 # metadata.  The source-specific FF8 XOR flags are included explicitly; a
 # verbose build remains authoritative for compiler-driver-added options.
@@ -291,6 +325,41 @@ if(FF8XOR_PYTHON_EXECUTABLE)
         COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
                 "${FF8XOR_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_assembly_inspector.py")
+
+    if(FF8XOR_BUILD_AVX512)
+        find_program(FF8XOR_XOR3_NM_EXECUTABLE NAMES llvm-nm nm)
+        find_program(FF8XOR_XOR3_OBJDUMP_EXECUTABLE
+            NAMES llvm-objdump objdump)
+        if(FF8XOR_XOR3_NM_EXECUTABLE AND FF8XOR_XOR3_OBJDUMP_EXECUTABLE)
+            # Register the spill/code-shape gate only for optimized builds.
+            # Debug deliberately materializes vector arguments on the stack.
+            if(CMAKE_BUILD_TYPE STREQUAL "Release")
+                add_test(NAME ff8xor_xor3_assembly
+                    COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                            "${FF8XOR_PYTHON_EXECUTABLE}"
+                            "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_xor3.py"
+                            "$<TARGET_FILE:bench_leopard_ff8xor_xor3>"
+                            --nm "${FF8XOR_XOR3_NM_EXECUTABLE}"
+                            --objdump "${FF8XOR_XOR3_OBJDUMP_EXECUTABLE}"
+                            --strict)
+
+                add_custom_target(check_ff8xor_xor3_assembly
+                    COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                            "${FF8XOR_PYTHON_EXECUTABLE}"
+                            "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_xor3.py"
+                            "$<TARGET_FILE:bench_leopard_ff8xor_xor3>"
+                            --nm "${FF8XOR_XOR3_NM_EXECUTABLE}"
+                            --objdump "${FF8XOR_XOR3_OBJDUMP_EXECUTABLE}"
+                            --strict
+                            --json
+                    DEPENDS bench_leopard_ff8xor_xor3
+                    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+            endif()
+        else()
+            message(STATUS
+                "FF8 XOR3 assembly inspection: nm/objdump unavailable")
+        endif()
+    endif()
 
     add_custom_target(inspect_ff8xor_assembly
         COMMAND "${FF8XOR_PYTHON_EXECUTABLE}"
