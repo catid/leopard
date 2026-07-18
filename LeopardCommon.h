@@ -566,6 +566,8 @@ bool TestConsumeSIMDSafeAllocationFailure();
 
 static LEO_FORCE_INLINE uint8_t* SIMDSafeAllocate(size_t size)
 {
+    if (size > SIZE_MAX - kAlignmentBytes)
+        return nullptr;
 #if defined(LEO2_ENABLE_TEST_HOOKS)
     if (TestConsumeSIMDSafeAllocationFailure())
         return nullptr;

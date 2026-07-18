@@ -1776,6 +1776,25 @@ void require_legacy_result(
 
 void test_legacy_negative_contract(Counts* counts)
 {
+    require(leopard::SIMDSafeAllocate(SIZE_MAX) == NULL,
+        "legacy aligned allocator accepted maximum overflowing size");
+    require(leopard::SIMDSafeAllocate(
+                SIZE_MAX - leopard::kAlignmentBytes + 1) == NULL,
+        "legacy aligned allocator accepted first overflowing size");
+
+    const size_t aligned_probe_bytes = leopard::kAlignmentBytes + 1;
+    uint8_t* aligned_probe = leopard::SIMDSafeAllocate(aligned_probe_bytes);
+    require(aligned_probe != NULL,
+        "legacy aligned allocator rejected a normal size");
+    require(reinterpret_cast<uintptr_t>(aligned_probe) %
+                leopard::kAlignmentBytes == 0,
+        "legacy aligned allocator returned a misaligned pointer");
+    for (size_t i = 0; i < aligned_probe_bytes; ++i)
+        require(aligned_probe[i] == 0,
+            "legacy aligned allocator did not zero-fill its payload");
+    aligned_probe[aligned_probe_bytes - 1] = 0x5a;
+    leopard::SIMDSafeFree(aligned_probe);
+
     const uint64_t simulated_32bit_limit = UINT32_MAX;
     const uint64_t largest_32bit_aligned =
         simulated_32bit_limit & ~UINT64_C(63);
