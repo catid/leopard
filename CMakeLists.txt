@@ -1036,6 +1036,11 @@ if(LEO2_BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_lab.py
                 self-test)
         add_test(
+            NAME leopard2_fuzz_campaign_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_fuzz_campaign.py
+                self-test)
+        add_test(
             NAME leopard2_benchmark_matrix_self_test
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_benchmark_matrix.py
