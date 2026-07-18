@@ -62,7 +62,11 @@ Portable verification with `--no-current-input-check` still validates the
 exact signed source/build snapshot schemas and every retained relationship from
 source and compile command through object, archive member/recipe, executable
 link input/recipe, deterministic relink, clean-rebuild hashes, and runtime
-closure.  It does not claim that those files still exist on the audit machine.
+closure.  Compiler, linker-driver, archiver, ranlib, and CMake command spellings
+are bound to their resolved executable identities and the corresponding CMake
+cache settings; runtime loader paths are normalized to and equal their resolved
+file identities.  It does not claim that those files still exist on the audit
+machine.
 Verification without that option additionally reconstructs the same closure
 from the current filesystem and requires exact equality.  Raw and manifest
 creation times are canonical timezone-aware UTC (`...Z`), and the manifest may

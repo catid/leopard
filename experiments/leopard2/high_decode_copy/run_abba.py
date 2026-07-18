@@ -281,7 +281,8 @@ def diagnostic_specifications(
 
 
 def diagnostic_compile_closure(
-    source_root: Path, build: Path, commands_path: Path, compiler: Path
+    source_root: Path, build: Path, commands_path: Path, compiler: Path,
+    compiler_invocation: str, compiler_identity: Mapping[str, Any],
 ) -> tuple[list[dict[str, Any]], Path, list[Path], str]:
     try:
         commands_text = commands_path.read_text(encoding="utf-8", errors="strict")
@@ -323,7 +324,8 @@ def diagnostic_compile_closure(
                 Path(directory_value).resolve(strict=True) == build and
                 isinstance(source_value, str) and
                 Path(source_value).resolve(strict=True) == expected_source and
-                tokens and Path(tokens[0]).resolve(strict=True) == compiler and
+                tokens and tokens[0] == compiler_invocation and
+                Path(tokens[0]).resolve(strict=True) == compiler and
                 tokens.count("-c") == 1 and
                 tokens.index("-c") + 1 < len(tokens) and
                 Path(tokens[tokens.index("-c") + 1]).resolve(strict=True) ==
@@ -343,7 +345,9 @@ def diagnostic_compile_closure(
         records.append({
             "source": source_identity, "object": object_identity,
             "directory": str(build), "command_tokens": list(tokens),
-            "compiler_path": str(compiler),
+            "compiler_invocation": compiler_invocation,
+            "compiler_resolved_path": str(compiler),
+            "compiler_invocation_identity": copy.deepcopy(compiler_identity),
             "required_definitions": sorted(definitions),
         })
     archive_objects = [output.resolve() for _, output, _ in specifications[:-1]]
@@ -353,7 +357,8 @@ def diagnostic_compile_closure(
 
 def validate_archive_closure(
     build: Path, archive: Path, recipe_path: Path, archive_objects: Sequence[Path],
-    archiver: Path, ranlib: Path
+    archiver: Path, ranlib: Path, archiver_invocation: str,
+    ranlib_invocation: str,
 ) -> dict[str, Any]:
     recipe = recipe_path.read_text(encoding="utf-8", errors="strict")
     commands = [shlex.split(line) for line in recipe.splitlines() if line.strip()]
@@ -361,6 +366,7 @@ def validate_archive_closure(
             "hooks archive recipe must contain exactly ar and ranlib commands")
     archive_tokens, ranlib_tokens = commands
     require(len(archive_tokens) == 3 + len(archive_objects) and
+            archive_tokens[0] == archiver_invocation and
             Path(archive_tokens[0]).resolve(strict=True) == archiver and
             archive_tokens[1] in ("qc", "rc", "rcs"),
             "hooks archive archiver recipe changed")
@@ -378,6 +384,7 @@ def validate_archive_closure(
             len(set(recipe_objects)) == len(recipe_objects),
             "hooks archive object order/closure differs from compile commands")
     require(len(ranlib_tokens) == 2 and
+            ranlib_tokens[0] == ranlib_invocation and
             Path(ranlib_tokens[0]).resolve(strict=True) == ranlib and
             ranlib_tokens[1] == archive_tokens[2],
             "hooks archive ranlib recipe changed")
@@ -409,20 +416,26 @@ def validate_archive_closure(
         "recipe": recipe_identity,
         "recipe_text": recipe,
         "recipe_tokens": [archive_tokens, ranlib_tokens],
-        "archiver_invocation": archive_tokens[0],
-        "ranlib_invocation": ranlib_tokens[0],
+        "archiver_invocation": archiver_invocation,
+        "ranlib_invocation": ranlib_invocation,
         "archive": archive_identity,
         "members": member_digests,
         "archiver": SUPPORT.artifact_identity(archiver, "archiver"),
         "ranlib": SUPPORT.artifact_identity(ranlib, "ranlib"),
+        "archiver_invocation_identity": SUPPORT.artifact_identity(
+            Path(archiver_invocation), "archiver"),
+        "ranlib_invocation_identity": SUPPORT.artifact_identity(
+            Path(ranlib_invocation), "ranlib"),
     }
 
 
 def validate_executable_link_inputs(
     tokens: Sequence[str], build: Path, source_root: Path, compiler: Path,
+    compiler_invocation: str, compiler_identity: Mapping[str, Any],
     binary: Path, benchmark_object: Path, hook_archive: Path
 ) -> dict[str, Any]:
-    require(tokens and Path(tokens[0]).resolve(strict=True) == compiler and
+    require(tokens and tokens[0] == compiler_invocation and
+            Path(tokens[0]).resolve(strict=True) == compiler and
             tokens.count("-o") == 1,
             "diagnostic executable link compiler/output shape changed")
     output_index = tokens.index("-o")
@@ -470,8 +483,9 @@ def validate_executable_link_inputs(
             "diagnostic executable has an undeclared external link input")
     return {
         "recipe_tokens": list(tokens),
-        "compiler_invocation": tokens[0],
+        "compiler_invocation": compiler_invocation,
         "compiler_resolved_path": str(compiler),
+        "compiler_invocation_identity": copy.deepcopy(compiler_identity),
         "output_token": tokens[output_index + 1],
         "output_path": str(binary),
         "build_inputs": [
@@ -486,9 +500,11 @@ def validate_executable_link_inputs(
 def validate_clean_rebuild(
     source_root: Path, cache: Mapping[str, str],
     binary_identity: Mapping[str, Any], archive_identity: Mapping[str, Any],
-    executable_recipe: str, archive_recipe: str
+    executable_recipe: str, archive_recipe: str, cmake_invocation: str,
+    cmake: Path,
 ) -> dict[str, Any]:
-    cmake = Path("/usr/bin/cmake").resolve(strict=True)
+    require(Path(cmake_invocation).resolve(strict=True) == cmake,
+            "diagnostic CMake invocation resolves to another executable")
     generator = cache.get("CMAKE_GENERATOR")
     require(isinstance(generator, str) and generator,
             "diagnostic build omitted its CMake generator")
@@ -575,6 +591,10 @@ def validate_clean_rebuild(
                 "diagnostic link/archive recipes differ from a clean source rebuild")
     return {
         "cmake": SUPPORT.artifact_identity(cmake, "build_tool"),
+        "cmake_invocation": cmake_invocation,
+        "cmake_resolved_path": str(cmake),
+        "cmake_invocation_identity": SUPPORT.artifact_identity(
+            Path(cmake_invocation), "build_tool"),
         "generator": generator,
         "retained_options": retained_options,
         "archive_sha256": archive_identity["sha256"],
@@ -614,16 +634,27 @@ def build_identity(source_root: Path, binary: Path, hook_archive: Path) -> dict[
             "diagnostic CMake cache is not a Release tests/hooks build")
     commands_path = build / "compile_commands.json"
     require(commands_path.is_file(), "diagnostic build omitted compile_commands.json")
-    compiler = Path(cache.get("CMAKE_CXX_COMPILER", "")).resolve(strict=True)
-    archiver = Path(cache.get("CMAKE_AR", "")).resolve(strict=True)
-    ranlib = Path(cache.get("CMAKE_RANLIB", "")).resolve(strict=True)
+    compiler_invocation = cache.get("CMAKE_CXX_COMPILER", "")
+    archiver_invocation = cache.get("CMAKE_AR", "")
+    ranlib_invocation = cache.get("CMAKE_RANLIB", "")
+    cmake_invocation = cache.get("CMAKE_COMMAND", "")
+    require(all(type(item) is str and item for item in (
+                compiler_invocation, archiver_invocation, ranlib_invocation,
+                cmake_invocation)),
+            "diagnostic CMake cache omitted a build-tool invocation")
+    compiler = Path(compiler_invocation).resolve(strict=True)
+    archiver = Path(archiver_invocation).resolve(strict=True)
+    ranlib = Path(ranlib_invocation).resolve(strict=True)
+    cmake = Path(cmake_invocation).resolve(strict=True)
     system_tool_roots = (Path("/usr/bin"), Path("/usr/lib"), Path("/lib"))
     require(all(any(tool.is_relative_to(root) for root in system_tool_roots)
-                for tool in (compiler, archiver, ranlib)),
+                for tool in (compiler, archiver, ranlib, cmake)),
             "diagnostic compiler/archive tools are outside system roots")
+    compiler_identity = SUPPORT.artifact_identity(compiler, "compiler")
     compile_records, benchmark_object, archive_objects, commands_text = \
         diagnostic_compile_closure(
-            source_root, build, commands_path, compiler)
+            source_root, build, commands_path, compiler,
+            compiler_invocation, compiler_identity)
     commands_identity = SUPPORT.artifact_identity(commands_path, "build_metadata")
     require(commands_identity["sha256"] ==
             SUPPORT.sha256_bytes(commands_text.encode("utf-8")),
@@ -631,7 +662,8 @@ def build_identity(source_root: Path, binary: Path, hook_archive: Path) -> dict[
     archive_recipe = build / "CMakeFiles/leopard_test_hooks.dir/link.txt"
     require(archive_recipe.is_file(), "hooks archive recipe is missing")
     archive_closure = validate_archive_closure(
-        build, hook_archive, archive_recipe, archive_objects, archiver, ranlib)
+        build, hook_archive, archive_recipe, archive_objects, archiver, ranlib,
+        archiver_invocation, ranlib_invocation)
     link_recipe = build / "CMakeFiles" / f"{TARGET_NAME}.dir" / "link.txt"
     require(link_recipe.is_file(), "diagnostic benchmark link recipe is missing")
     link_text = link_recipe.read_text(encoding="utf-8", errors="strict")
@@ -644,7 +676,8 @@ def build_identity(source_root: Path, binary: Path, hook_archive: Path) -> dict[
     tokens = shlex.split(link_lines[0])
     SUPPORT.validate_effective_flags(tokens, "diagnostic executable link recipe")
     link_closure = validate_executable_link_inputs(
-        tokens, build, source_root, compiler, binary, benchmark_object, hook_archive)
+        tokens, build, source_root, compiler, compiler_invocation,
+        compiler_identity, binary, benchmark_object, hook_archive)
     binary_identity = SUPPORT.artifact_identity(binary, "executable")
     require(binary_identity["mtime_ns"] >= archive_closure["archive"]["mtime_ns"] and
             binary_identity["mtime_ns"] >=
@@ -652,7 +685,7 @@ def build_identity(source_root: Path, binary: Path, hook_archive: Path) -> dict[
             "diagnostic executable predates a retained link input")
     clean_rebuild = validate_clean_rebuild(
         source_root, cache, binary_identity, archive_closure["archive"],
-        link_text, archive_closure["recipe_text"])
+        link_text, archive_closure["recipe_text"], cmake_invocation, cmake)
     with tempfile.TemporaryDirectory(prefix="leo2-high-copy-relink-") as temp_root:
         relinked = Path(temp_root) / binary.name
         relink_tokens = list(tokens)
@@ -688,7 +721,14 @@ def build_identity(source_root: Path, binary: Path, hook_archive: Path) -> dict[
         "validated_clean_rebuild": clean_rebuild,
         "binary": binary_identity,
         "hook_archive": archive_closure["archive"],
-        "compiler": SUPPORT.artifact_identity(compiler, "compiler"),
+        "compiler_invocation": compiler_invocation,
+        "compiler_invocation_identity": SUPPORT.artifact_identity(
+            Path(compiler_invocation), "compiler"),
+        "compiler": compiler_identity,
+        "cmake_invocation": cmake_invocation,
+        "cmake_invocation_identity": SUPPORT.artifact_identity(
+            Path(cmake_invocation), "build_tool"),
+        "cmake": SUPPORT.artifact_identity(cmake, "build_tool"),
         "system_link_inputs": [
             SUPPORT.artifact_identity(
                 Path(item["resolved_path"]), "system_link_dependency")
@@ -697,6 +737,14 @@ def build_identity(source_root: Path, binary: Path, hook_archive: Path) -> dict[
         "nm": SUPPORT.artifact_identity(nm, "executable"),
         "selector_symbols_present_in_hook_archive_and_binary": True,
     }
+
+
+def normalized_runtime_closure(ldd: Path, binary: Path) -> dict[str, Any]:
+    closure = SUPPORT.runtime_closure(ldd, binary)
+    for dependency in closure["dependencies"]:
+        if "file" in dependency:
+            dependency["loader_path"] = dependency["file"]["path"]
+    return closure
 
 
 def snapshot(source_root: Path, commit: str, binary: Path,
@@ -711,7 +759,7 @@ def snapshot(source_root: Path, commit: str, binary: Path,
         "matrix": SUPPORT.artifact_identity(matrix_path, "source_file"),
         "support": SUPPORT.artifact_identity(
             ROOT / "experiments/leopard2/main_compare/run_abba.py", "source_file"),
-        "runtime": SUPPORT.runtime_closure(Path("/usr/bin/ldd"), binary),
+        "runtime": normalized_runtime_closure(Path("/usr/bin/ldd"), binary),
     }
 
 
@@ -733,6 +781,23 @@ def system_path(path: Path) -> bool:
     return any(path.is_relative_to(root)
                for root in (Path("/usr/bin"), Path("/usr/lib"),
                              Path("/usr/lib64"), Path("/lib"), Path("/lib64")))
+
+
+def cxx_driver_path(path: Path) -> bool:
+    return system_path(path) and re.fullmatch(
+        r"(?:[^/]+-)?(?:g\+\+|c\+\+|clang(?:\+\+)?)(?:-\d+)?",
+        path.name) is not None
+
+
+def archive_tool_path(path: Path, name: str) -> bool:
+    require(name in ("ar", "ranlib"), "unknown archive tool class")
+    return system_path(path) and re.fullmatch(
+        rf"(?:[^/]+-)?(?:llvm-)?{name}(?:-\d+)?", path.name) is not None
+
+
+def cmake_tool_path(path: Path) -> bool:
+    return system_path(path) and re.fullmatch(r"cmake(?:-\d+(?:\.\d+)*)?", path.name) \
+        is not None
 
 
 def validate_artifact_record(
@@ -781,7 +846,7 @@ def validate_source_identity(value: object) -> dict[str, Any]:
 
 def validate_compile_snapshot(
     build_value: Mapping[str, Any], source_root: Path, build: Path,
-    compiler: Mapping[str, Any],
+    compiler: Mapping[str, Any], compiler_invocation: str,
 ) -> tuple[list[dict[str, Any]], Path]:
     commands_path = build / "compile_commands.json"
     commands_artifact = validate_artifact_record(
@@ -811,7 +876,8 @@ def validate_compile_snapshot(
     for record, (source, output, definitions) in zip(records, specifications):
         require(set(record) == {
                     "source", "object", "directory", "command_tokens",
-                    "compiler_path", "required_definitions"},
+                    "compiler_invocation", "compiler_resolved_path",
+                    "compiler_invocation_identity", "required_definitions"},
                 "retained compile action shape changed")
         source_artifact = validate_artifact_record(
             record.get("source"), "compile source",
@@ -824,7 +890,9 @@ def validate_compile_snapshot(
                 "retained compile object is stale or duplicated")
         seen_objects.add(output)
         require(record.get("directory") == str(build) and
-                record.get("compiler_path") == str(compiler_path) and
+                record.get("compiler_invocation") == compiler_invocation and
+                record.get("compiler_resolved_path") == str(compiler_path) and
+                record.get("compiler_invocation_identity") == compiler and
                 record.get("required_definitions") == sorted(definitions),
                 "retained compile action directory/compiler/definitions changed")
         tokens = record.get("command_tokens")
@@ -838,7 +906,8 @@ def validate_compile_snapshot(
         require(source_index + 1 < len(tokens) and output_index + 1 < len(tokens) and
                 lexical_path(tokens[source_index + 1], build) == source and
                 lexical_path(tokens[output_index + 1], build) == output and
-                system_path(canonical_absolute_path(
+                tokens[0] == compiler_invocation and
+                cxx_driver_path(canonical_absolute_path(
                     tokens[0], "compile compiler invocation")),
                 "retained compile action source/output/compiler changed")
         SUPPORT.validate_effective_flags(tokens, f"retained compile action {output}")
@@ -874,7 +943,8 @@ def validate_archive_snapshot(
     require(isinstance(value, dict) and set(value) == {
                 "recipe", "recipe_text", "recipe_tokens",
                 "archiver_invocation", "ranlib_invocation", "archive",
-                "members", "archiver", "ranlib"},
+                "members", "archiver", "ranlib",
+                "archiver_invocation_identity", "ranlib_invocation_identity"},
             "retained archive closure shape changed")
     recipe_path = build / "CMakeFiles/leopard_test_hooks.dir/link.txt"
     recipe = validate_artifact_record(
@@ -902,10 +972,10 @@ def validate_archive_snapshot(
             len(ranlib_tokens) == 2 and
             ranlib_tokens[0] == value.get("ranlib_invocation") and
             ranlib_tokens[1] == archive_tokens[2] and
-            system_path(canonical_absolute_path(
-                archive_tokens[0], "archiver invocation")) and
-            system_path(canonical_absolute_path(
-                ranlib_tokens[0], "ranlib invocation")),
+            archive_tool_path(canonical_absolute_path(
+                archive_tokens[0], "archiver invocation"), "ar") and
+            archive_tool_path(canonical_absolute_path(
+                ranlib_tokens[0], "ranlib invocation"), "ranlib"),
             "retained archive/ranlib command shape changed")
     archive_path = build / "libleopard_test_hooks.a"
     require(lexical_path(archive_tokens[2], build) == archive_path,
@@ -922,8 +992,11 @@ def validate_archive_snapshot(
         value.get("archiver"), "archiver", expected_kind="archiver")
     ranlib = validate_artifact_record(
         value.get("ranlib"), "ranlib", expected_kind="ranlib")
-    require(system_path(Path(archiver["path"])) and
-            system_path(Path(ranlib["path"])),
+    require(value.get("archiver_invocation_identity") == archiver and
+            value.get("ranlib_invocation_identity") == ranlib and
+            archive_tool_path(Path(archiver["path"]), "ar") and
+            (archive_tool_path(Path(ranlib["path"]), "ranlib") or
+             archive_tool_path(Path(ranlib["path"]), "ar")),
             "retained archive tools are outside system roots")
     members = value.get("members")
     require(type(members) is list and len(members) == len(expected_objects),
@@ -945,7 +1018,7 @@ def validate_archive_snapshot(
 def validate_link_snapshot(
     build_value: Mapping[str, Any], build: Path,
     benchmark_object: Path, archive: Mapping[str, Any],
-    compiler: Mapping[str, Any],
+    compiler: Mapping[str, Any], compiler_invocation: str,
 ) -> None:
     binary_path = build / TARGET_NAME
     link_path = build / "CMakeFiles" / f"{TARGET_NAME}.dir" / "link.txt"
@@ -966,6 +1039,7 @@ def validate_link_snapshot(
     closure = build_value.get("validated_link_closure")
     require(isinstance(closure, dict) and set(closure) == {
                 "recipe_tokens", "compiler_invocation", "compiler_resolved_path",
+                "compiler_invocation_identity",
                 "output_token", "output_path", "build_inputs", "system_inputs"},
             "retained executable link closure shape changed")
     tokens = closure.get("recipe_tokens")
@@ -975,9 +1049,11 @@ def validate_link_snapshot(
             "retained executable link tokenization changed")
     output_index = tokens.index("-o")
     require(output_index + 1 < len(tokens) and
-            tokens[0] == closure.get("compiler_invocation") and
+            tokens[0] == compiler_invocation and
+            closure.get("compiler_invocation") == compiler_invocation and
             closure.get("compiler_resolved_path") == compiler["path"] and
-            system_path(canonical_absolute_path(
+            closure.get("compiler_invocation_identity") == compiler and
+            cxx_driver_path(canonical_absolute_path(
                 tokens[0], "link compiler invocation")) and
             tokens[output_index + 1] == closure.get("output_token") and
             lexical_path(tokens[output_index + 1], build) == binary_path and
@@ -1043,15 +1119,23 @@ def validate_link_snapshot(
 
 
 def validate_clean_rebuild_snapshot(
-    value: object, build_value: Mapping[str, Any], archive: Mapping[str, Any]
+    value: object, build_value: Mapping[str, Any], archive: Mapping[str, Any],
+    cmake: Mapping[str, Any], cmake_invocation: str,
 ) -> None:
     require(isinstance(value, dict) and set(value) == {
-                "cmake", "generator", "retained_options",
+                "cmake", "cmake_invocation", "cmake_resolved_path",
+                "cmake_invocation_identity", "generator", "retained_options",
                 "archive_sha256", "binary_sha256"},
             "retained clean-rebuild identity shape changed")
-    cmake = validate_artifact_record(
+    clean_cmake = validate_artifact_record(
         value.get("cmake"), "clean-rebuild CMake", expected_kind="build_tool")
-    require(system_path(Path(cmake["path"])) and
+    require(clean_cmake == cmake and
+            value.get("cmake_invocation") == cmake_invocation and
+            value.get("cmake_resolved_path") == cmake["path"] and
+            value.get("cmake_invocation_identity") == cmake and
+            cmake_tool_path(canonical_absolute_path(
+                cmake_invocation, "CMake invocation")) and
+            cmake_tool_path(Path(cmake["path"])) and
             type(value.get("generator")) is str and value["generator"],
             "retained clean-rebuild tool/generator is invalid")
     options = value.get("retained_options")
@@ -1078,8 +1162,7 @@ def validate_clean_rebuild_snapshot(
             options["LEOPARD_ENABLE_GF16"] == "ON" and
             options["CMAKE_AR"] == archive["archiver_invocation"] and
             options["CMAKE_RANLIB"] == archive["ranlib_invocation"] and
-            options["CMAKE_CXX_COMPILER"] ==
-                build_value["validated_link_closure"]["compiler_invocation"] and
+            options["CMAKE_CXX_COMPILER"] == build_value["compiler_invocation"] and
             value.get("archive_sha256") == archive["archive"]["sha256"] and
             value.get("binary_sha256") == build_value["binary"]["sha256"],
             "retained clean-rebuild options or output hashes changed")
@@ -1113,7 +1196,8 @@ def validate_runtime_snapshot(value: object, binary: Path) -> None:
             (soname.startswith("ld-linux") or "ld-" in soname) \
             else "shared_library"
         file_artifact = validate_artifact_record(
-            item.get("file"), "runtime dependency", expected_kind=kind)
+            item.get("file"), "runtime dependency", expected_path=path,
+            expected_kind=kind)
         file_path = Path(file_artifact["path"])
         require(system_path(path) and system_path(file_path) and
                 (file_path.name == soname or file_path.name.startswith(soname + ".")),
@@ -1133,6 +1217,8 @@ def validate_snapshot_identity(value: object) -> dict[str, Any]:
         "validated_compile_closure", "link_recipe", "link_recipe_text",
         "validated_link_closure", "validated_archive_closure",
         "validated_clean_rebuild", "binary", "hook_archive", "compiler",
+        "compiler_invocation", "compiler_invocation_identity",
+        "cmake", "cmake_invocation", "cmake_invocation_identity",
         "system_link_inputs", "deterministic_relink_sha256", "nm",
         "selector_symbols_present_in_hook_archive_and_binary",
     }
@@ -1145,25 +1231,40 @@ def validate_snapshot_identity(value: object) -> dict[str, Any]:
         expected_path=build / "CMakeCache.txt", expected_kind="build_metadata")
     compiler = validate_artifact_record(
         build_value.get("compiler"), "compiler", expected_kind="compiler")
+    compiler_invocation = build_value.get("compiler_invocation")
+    require(type(compiler_invocation) is str and
+            cxx_driver_path(canonical_absolute_path(
+                compiler_invocation, "primary compiler invocation")) and
+            build_value.get("compiler_invocation_identity") == compiler,
+            "retained primary compiler invocation is invalid")
+    cmake = validate_artifact_record(
+        build_value.get("cmake"), "primary CMake", expected_kind="build_tool")
+    cmake_invocation = build_value.get("cmake_invocation")
+    require(type(cmake_invocation) is str and
+            cmake_tool_path(canonical_absolute_path(
+                cmake_invocation, "primary CMake invocation")) and
+            cmake_tool_path(Path(cmake["path"])) and
+            build_value.get("cmake_invocation_identity") == cmake,
+            "retained primary CMake invocation/identity is invalid")
     nm = validate_artifact_record(
         build_value.get("nm"), "nm", expected_kind="executable")
-    compiler_name = Path(compiler["path"]).name
     nm_name = Path(nm["path"]).name
-    require(system_path(Path(compiler["path"])) and system_path(Path(nm["path"])) and
-            re.fullmatch(r"(?:[^/]+-)?(?:g\+\+|c\+\+|clang(?:\+\+)?)(?:-\d+)?",
-                         compiler_name) is not None and
+    require(cxx_driver_path(Path(compiler["path"])) and
+            system_path(Path(nm["path"])) and
             re.fullmatch(r"(?:[^/]+-)?nm(?:-\d+)?", nm_name) is not None,
             "retained compiler/nm are outside system roots")
     compile_records, benchmark_object = validate_compile_snapshot(
-        build_value, source_root, build, compiler)
+        build_value, source_root, build, compiler, compiler_invocation)
     archive = validate_archive_snapshot(
         build_value.get("validated_archive_closure"), build, compile_records)
     require(build_value.get("hook_archive") == archive["archive"],
             "top-level hooks archive differs from the validated archive closure")
     validate_link_snapshot(
-        build_value, build, benchmark_object, archive, compiler)
+        build_value, build, benchmark_object, archive, compiler,
+        compiler_invocation)
     validate_clean_rebuild_snapshot(
-        build_value.get("validated_clean_rebuild"), build_value, archive)
+        build_value.get("validated_clean_rebuild"), build_value, archive,
+        cmake, cmake_invocation)
     binary = Path(build_value["binary"]["path"])
     for name, relative in (
         ("runner", RUNNER_RELATIVE), ("contract", CONTRACT_RELATIVE),
@@ -1457,7 +1558,8 @@ def validate_campaign_environment(
             "host topology/frequency policy changed during campaign")
     allowed = host_initial.get("allowed_cpu_set_at_launch")
     require(type(allowed) is list and allowed == sorted(set(allowed)) and
-            all(type(item) is int and item >= 0 for item in allowed) and
+            all(type(item) is int and 0 <= item <= SUPPORT.MAX_CPU_ID
+                for item in allowed) and
             cpu in allowed and sibling in allowed,
             "host launch affinity record is invalid")
     SUPPORT.validate_host_record(host_initial, cpu, sibling, allowed)
@@ -1526,9 +1628,10 @@ def validate_raw(raw: object, output: Path, *, current: bool) -> dict[str, Any]:
                 "child_environment", "invocation_count"} and
             campaign.get("round_orders") == matrix["round_orders"] and
             campaign.get("child_environment") == SUPPORT.CHILD_ENVIRONMENT and
-            type(campaign.get("cpu")) is int and campaign["cpu"] >= 0 and
+            type(campaign.get("cpu")) is int and
+            0 <= campaign["cpu"] <= SUPPORT.MAX_CPU_ID and
             type(campaign.get("reserved_sibling")) is int and
-            campaign["reserved_sibling"] >= 0 and
+            0 <= campaign["reserved_sibling"] <= SUPPORT.MAX_CPU_ID and
             campaign["cpu"] != campaign["reserved_sibling"] and
             type(campaign.get("reuse")) is int and campaign["reuse"] >= 1 and
             type(campaign.get("iterations")) is int and
@@ -1847,6 +1950,7 @@ def synthetic_snapshot_identity() -> dict[str, Any]:
     compiler_invocation = "/usr/bin/c++"
     archiver_invocation = "/usr/bin/ar"
     ranlib_invocation = "/usr/bin/ranlib"
+    cmake_invocation = "/usr/bin/cmake"
 
     def artifact(
         path: Path, kind: str, *, payload: bytes | None = None,
@@ -1861,6 +1965,7 @@ def synthetic_snapshot_identity() -> dict[str, Any]:
         }
 
     compiler = artifact(Path(compiler_invocation), "compiler", executable=True)
+    cmake = artifact(Path(cmake_invocation), "build_tool", executable=True)
     specifications = diagnostic_specifications(source_root, build)
     compile_records: list[dict[str, Any]] = []
     compile_entries: list[dict[str, Any]] = []
@@ -1872,7 +1977,9 @@ def synthetic_snapshot_identity() -> dict[str, Any]:
             "source": artifact(source, "source_file", mtime_ns=1),
             "object": artifact(output, "object_file", mtime_ns=2),
             "directory": str(build), "command_tokens": tokens,
-            "compiler_path": str(Path(compiler["path"])),
+            "compiler_invocation": compiler_invocation,
+            "compiler_resolved_path": compiler["path"],
+            "compiler_invocation_identity": copy.deepcopy(compiler),
             "required_definitions": sorted(definitions),
         })
         compile_entries.append({
@@ -1909,6 +2016,10 @@ def synthetic_snapshot_identity() -> dict[str, Any]:
         "ranlib": artifact(
             Path(ranlib_invocation), "ranlib", executable=True),
     }
+    archive_closure["archiver_invocation_identity"] = copy.deepcopy(
+        archive_closure["archiver"])
+    archive_closure["ranlib_invocation_identity"] = copy.deepcopy(
+        archive_closure["ranlib"])
 
     binary_path = build / TARGET_NAME
     benchmark_object = specifications[-1][1]
@@ -1924,6 +2035,7 @@ def synthetic_snapshot_identity() -> dict[str, Any]:
         "recipe_tokens": link_tokens,
         "compiler_invocation": compiler_invocation,
         "compiler_resolved_path": compiler["path"],
+        "compiler_invocation_identity": copy.deepcopy(compiler),
         "output_token": str(binary_path), "output_path": str(binary_path),
         "build_inputs": [
             {"token": str(benchmark_object),
@@ -1958,14 +2070,22 @@ def synthetic_snapshot_identity() -> dict[str, Any]:
         "validated_link_closure": link_closure,
         "validated_archive_closure": archive_closure,
         "validated_clean_rebuild": {
-            "cmake": artifact(
-                Path("/usr/bin/cmake"), "build_tool", executable=True),
+            "cmake": copy.deepcopy(cmake),
+            "cmake_invocation": cmake_invocation,
+            "cmake_resolved_path": cmake["path"],
+            "cmake_invocation_identity": copy.deepcopy(cmake),
             "generator": "Unix Makefiles", "retained_options": retained_options,
             "archive_sha256": archive_artifact["sha256"],
             "binary_sha256": binary["sha256"],
         },
         "binary": binary, "hook_archive": copy.deepcopy(archive_artifact),
-        "compiler": compiler, "system_link_inputs": [system_link],
+        "compiler_invocation": compiler_invocation,
+        "compiler_invocation_identity": copy.deepcopy(compiler),
+        "compiler": compiler,
+        "cmake_invocation": cmake_invocation,
+        "cmake_invocation_identity": copy.deepcopy(cmake),
+        "cmake": cmake,
+        "system_link_inputs": [system_link],
         "deterministic_relink_sha256": binary["sha256"],
         "nm": artifact(Path("/usr/bin/nm"), "executable", executable=True),
         "selector_symbols_present_in_hook_archive_and_binary": True,
@@ -2124,14 +2244,17 @@ def self_test() -> None:
         compiler = Path("/usr/bin/true").resolve(strict=True)
         tokens = [str(compiler), "obj/benchmark.cpp.o", "-o", TARGET_NAME,
                   "libleopard_test_hooks.a"]
+        compiler_identity = SUPPORT.artifact_identity(compiler, "compiler")
         validate_executable_link_inputs(
-            tokens, build, source, compiler, binary, benchmark_object, hook_archive)
+            tokens, build, source, compiler, str(compiler), compiler_identity,
+            binary, benchmark_object, hook_archive)
         impostor = build / "obj/impostor.o"
         impostor.write_bytes(b"impostor")
         tampered = [*tokens, "obj/impostor.o"]
         try:
             validate_executable_link_inputs(
-                tampered, build, source, compiler, binary,
+                tampered, build, source, compiler, str(compiler),
+                compiler_identity, binary,
                 benchmark_object, hook_archive)
         except EvidenceError:
             pass
@@ -2323,6 +2446,11 @@ def self_test() -> None:
     bad_timestamp = copy.deepcopy(raw_fixture_payload)
     bad_timestamp["created_utc"] = "fixture"
     raw_mutations.append(bad_timestamp)
+    oversized_allowed_cpu = copy.deepcopy(raw_fixture_payload)
+    for name in ("host_initial", "host_final"):
+        oversized_allowed_cpu[name]["allowed_cpu_set_at_launch"].append(
+            SUPPORT.MAX_CPU_ID + 1)
+    raw_mutations.append(oversized_allowed_cpu)
 
     def add_identity_mutation(editor: Any) -> None:
         mutation = copy.deepcopy(raw_fixture_payload)
@@ -2330,6 +2458,119 @@ def self_test() -> None:
         mutation["identities_final"] = copy.deepcopy(
             mutation["identities_initial"])
         raw_mutations.append(mutation)
+
+    def substitute_artifact(
+        original: Mapping[str, Any], path: str
+    ) -> dict[str, Any]:
+        result = copy.deepcopy(original)
+        payload = (str(result["kind"]) + ":" + path).encode("utf-8")
+        result.update({
+            "path": path, "size": len(payload),
+            "sha256": SUPPORT.sha256_bytes(payload),
+        })
+        return result
+
+    def bind_text(identity: dict[str, Any], name: str, text: str) -> None:
+        identity[name + "_text"] = text
+        artifact_value = identity[name]
+        encoded = text.encode("utf-8")
+        artifact_value["size"] = len(encoded)
+        artifact_value["sha256"] = SUPPORT.sha256_bytes(encoded)
+
+    def substitute_compile_action(identity: dict[str, Any]) -> None:
+        build_value = identity["build"]
+        record = build_value["validated_compile_closure"][0]
+        false_path = "/usr/bin/false"
+        false_identity = substitute_artifact(
+            record["compiler_invocation_identity"], false_path)
+        record["command_tokens"][0] = false_path
+        record["compiler_invocation"] = false_path
+        record["compiler_resolved_path"] = false_path
+        record["compiler_invocation_identity"] = false_identity
+        entries = json.loads(build_value["compile_commands_text"])
+        entries[0]["arguments"][0] = false_path
+        text = json.dumps(entries, sort_keys=True, separators=(",", ":"))
+        build_value["compile_commands_text"] = text
+        encoded = text.encode("utf-8")
+        build_value["compile_commands"]["size"] = len(encoded)
+        build_value["compile_commands"]["sha256"] = \
+            SUPPORT.sha256_bytes(encoded)
+
+    def substitute_link_driver(identity: dict[str, Any]) -> None:
+        build_value = identity["build"]
+        false_path = "/usr/bin/false"
+        false_identity = substitute_artifact(build_value["compiler"], false_path)
+        closure = build_value["validated_link_closure"]
+        closure["recipe_tokens"][0] = false_path
+        closure["compiler_invocation"] = false_path
+        closure["compiler_resolved_path"] = false_path
+        closure["compiler_invocation_identity"] = false_identity
+        bind_text(build_value, "link_recipe",
+                  " ".join(closure["recipe_tokens"]) + "\n")
+        build_value["validated_clean_rebuild"]["retained_options"] \
+            ["CMAKE_CXX_COMPILER"] = false_path
+
+    def substitute_complete_compiler(identity: dict[str, Any]) -> None:
+        build_value = identity["build"]
+        false_path = "/usr/bin/false"
+        false_identity = substitute_artifact(build_value["compiler"], false_path)
+        build_value["compiler"] = false_identity
+        build_value["compiler_invocation"] = false_path
+        build_value["compiler_invocation_identity"] = copy.deepcopy(false_identity)
+        entries = json.loads(build_value["compile_commands_text"])
+        for record, entry in zip(
+                build_value["validated_compile_closure"], entries):
+            record["command_tokens"][0] = false_path
+            record["compiler_invocation"] = false_path
+            record["compiler_resolved_path"] = false_path
+            record["compiler_invocation_identity"] = copy.deepcopy(false_identity)
+            entry["arguments"][0] = false_path
+        compile_text = json.dumps(entries, sort_keys=True, separators=(",", ":"))
+        build_value["compile_commands_text"] = compile_text
+        encoded = compile_text.encode("utf-8")
+        build_value["compile_commands"]["size"] = len(encoded)
+        build_value["compile_commands"]["sha256"] = \
+            SUPPORT.sha256_bytes(encoded)
+        closure = build_value["validated_link_closure"]
+        closure["recipe_tokens"][0] = false_path
+        closure["compiler_invocation"] = false_path
+        closure["compiler_resolved_path"] = false_path
+        closure["compiler_invocation_identity"] = copy.deepcopy(false_identity)
+        bind_text(build_value, "link_recipe",
+                  " ".join(closure["recipe_tokens"]) + "\n")
+        build_value["validated_clean_rebuild"]["retained_options"] \
+            ["CMAKE_CXX_COMPILER"] = false_path
+
+    def substitute_archiver(identity: dict[str, Any]) -> None:
+        build_value = identity["build"]
+        closure = build_value["validated_archive_closure"]
+        true_path = "/usr/bin/true"
+        true_identity = substitute_artifact(closure["archiver"], true_path)
+        closure["archiver"] = true_identity
+        closure["archiver_invocation_identity"] = copy.deepcopy(true_identity)
+        closure["archiver_invocation"] = true_path
+        closure["recipe_tokens"][0][0] = true_path
+        recipe_text = "\n".join(
+            " ".join(command) for command in closure["recipe_tokens"]) + "\n"
+        closure["recipe_text"] = recipe_text
+        encoded = recipe_text.encode("utf-8")
+        closure["recipe"]["size"] = len(encoded)
+        closure["recipe"]["sha256"] = SUPPORT.sha256_bytes(encoded)
+        build_value["validated_clean_rebuild"]["retained_options"] \
+            ["CMAKE_AR"] = true_path
+
+    def substitute_cmake(identity: dict[str, Any]) -> None:
+        build_value = identity["build"]
+        true_path = "/usr/bin/true"
+        true_identity = substitute_artifact(build_value["cmake"], true_path)
+        build_value["cmake"] = true_identity
+        build_value["cmake_invocation"] = true_path
+        build_value["cmake_invocation_identity"] = copy.deepcopy(true_identity)
+        clean = build_value["validated_clean_rebuild"]
+        clean["cmake"] = copy.deepcopy(true_identity)
+        clean["cmake_invocation"] = true_path
+        clean["cmake_resolved_path"] = true_path
+        clean["cmake_invocation_identity"] = copy.deepcopy(true_identity)
 
     add_identity_mutation(lambda identity: identity["source"].pop("tree"))
     add_identity_mutation(lambda identity: identity["build"].pop("cache"))
@@ -2342,6 +2583,8 @@ def self_test() -> None:
     add_identity_mutation(lambda identity: identity["build"]
                           ["validated_compile_closure"][0]["command_tokens"]
                           .append("-DUNRETAINED=1"))
+    add_identity_mutation(substitute_compile_action)
+    add_identity_mutation(substitute_complete_compiler)
     add_identity_mutation(lambda identity: identity["build"]
                           ["validated_archive_closure"]
                           .__setitem__("recipe_text", "substituted\n"))
@@ -2354,8 +2597,10 @@ def self_test() -> None:
     add_identity_mutation(lambda identity: identity["build"]
                           ["validated_archive_closure"]
                           .__setitem__("archiver_invocation", "/usr/bin/true"))
+    add_identity_mutation(substitute_archiver)
     add_identity_mutation(lambda identity: identity["build"]
                           .__setitem__("link_recipe_text", "substituted\n"))
+    add_identity_mutation(substitute_link_driver)
     add_identity_mutation(lambda identity: identity["build"]
                           ["validated_link_closure"]["build_inputs"][0]
                           .__setitem__("resolved_path", "/fixture/build/impostor.o"))
@@ -2373,6 +2618,7 @@ def self_test() -> None:
                           .__setitem__("path", "/usr/bin/false"))
     add_identity_mutation(lambda identity: identity["build"]["nm"]
                           .__setitem__("path", "/usr/bin/false"))
+    add_identity_mutation(substitute_cmake)
     for component in ("runner", "contract", "matrix", "support"):
         add_identity_mutation(
             lambda identity, name=component: identity[name].__setitem__(
@@ -2380,6 +2626,9 @@ def self_test() -> None:
     add_identity_mutation(lambda identity: identity["runtime"]
                           ["dependencies"][1]["file"]
                           .__setitem__("path", "/usr/lib/libm.so.6"))
+    add_identity_mutation(lambda identity: identity["runtime"]
+                          ["dependencies"][1]
+                          .__setitem__("loader_path", "/lib/libc.so.6"))
     for mutation in raw_mutations:
         try:
             validate_raw(SUPPORT.signed(mutation), Path("."), current=False)
