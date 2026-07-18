@@ -46,6 +46,8 @@ FORCE_TRANSFORM diagnostic. Promotion requires authoritative
 pinned, same-source crossover measurements that include schedule setup for
 one-shot and reused calls, followed by deterministic size/mask dispatcher cells.
 The current evidence is structural and diagnostic, not a throughput claim.
+The experiment design and fail-closed runner are documented in
+`docs/leopard2_sparse_encode_crossover.md`.
 
 Correctness is checked in three independent ways:
 
