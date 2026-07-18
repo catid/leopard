@@ -124,6 +124,7 @@ struct TraceState
     std::atomic<uint64_t> ff8_fft_four_calls;
     std::atomic<uint64_t> ff8_fft_two_out_calls;
     std::atomic<uint64_t> ff8_fft_four_out_calls;
+    std::atomic<uint64_t> ff8_ifft_two_xor_calls;
     std::atomic<uint64_t> ff16_ifft_four_calls;
     std::atomic<uint64_t> ff16_fft_four_calls;
     std::atomic<uint64_t> ff16_fft_two_out_calls;
@@ -230,6 +231,7 @@ void trace_ff8_ifft_xor(const void* x, const void* y, void* x_output,
     void* y_output, uint16_t log, uint64_t bytes)
 {
     g_trace.ff8_calls.fetch_add(1, std::memory_order_relaxed);
+    g_trace.ff8_ifft_two_xor_calls.fetch_add(1, std::memory_order_relaxed);
     trace_delegate()->ff8_ifft_butterfly2_xor(
         x, y, x_output, y_output, log, bytes);
 }
@@ -454,6 +456,7 @@ public:
         g_trace.ff8_fft_four_calls.store(0, std::memory_order_relaxed);
         g_trace.ff8_fft_two_out_calls.store(0, std::memory_order_relaxed);
         g_trace.ff8_fft_four_out_calls.store(0, std::memory_order_relaxed);
+        g_trace.ff8_ifft_two_xor_calls.store(0, std::memory_order_relaxed);
         g_trace.ff16_ifft_four_calls.store(0, std::memory_order_relaxed);
         g_trace.ff16_fft_four_calls.store(0, std::memory_order_relaxed);
         g_trace.ff16_fft_two_out_calls.store(0, std::memory_order_relaxed);
@@ -511,6 +514,11 @@ public:
     uint64_t ff8_fft_four_out_calls() const
     {
         return g_trace.ff8_fft_four_out_calls.load(std::memory_order_relaxed);
+    }
+    uint64_t ff8_ifft_two_xor_calls() const
+    {
+        return g_trace.ff8_ifft_two_xor_calls.load(
+            std::memory_order_relaxed);
     }
     uint64_t ff16_ifft_four_calls() const
     {
@@ -811,6 +819,7 @@ void require_high_decode_no_copy(
     uint64_t copy_fallbacks = 0;
     uint64_t traced_butterfly2 = 0;
     uint64_t traced_butterfly4 = 0;
+    uint64_t syndrome_accumulated_blocks = 0;
     if (field == LEO2_FIELD_GF8)
     {
         const leopard::ff8::TestOnlyHighDecodeCounts counts =
@@ -821,6 +830,7 @@ void require_high_decode_no_copy(
         copy_fallbacks = counts.compatibility_copy_fallbacks;
         traced_butterfly2 = trace.ff8_fft_two_out_calls();
         traced_butterfly4 = trace.ff8_fft_four_out_calls();
+        syndrome_accumulated_blocks = counts.syndrome_accumulated_blocks;
     }
     else
     {
@@ -843,6 +853,14 @@ void require_high_decode_no_copy(
     require(traced_butterfly2 == butterfly2 &&
             traced_butterfly4 == butterfly4,
         operation + " bypassed the selected context out-of-place table");
+    if (field == LEO2_FIELD_GF8)
+    {
+        require(syndrome_accumulated_blocks != 0,
+            operation + " did not fuse any later syndrome input block");
+        require(trace.ff8_ifft_two_xor_calls() +
+                    trace.ff8_ifft_four_xor_range_calls() != 0,
+            operation + " bypassed the accumulating IFFT backend boundary");
+    }
 }
 
 struct CodecCase
@@ -853,6 +871,24 @@ struct CodecCase
     leo2_field field;
     size_t bytes;
 };
+
+uint32_t transform_side(const CodecCase& test_case)
+{
+    const uint32_t active = test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1
+        ? test_case.r : test_case.k;
+    uint32_t result = 1;
+    while (result < active)
+        result <<= 1;
+    return result;
+}
+
+bool final_inverse_layer_is_radix_four(uint32_t side)
+{
+    unsigned log2_side = 0;
+    while ((uint32_t(1) << log2_side) < side)
+        ++log2_side;
+    return side >= 4 && (log2_side & 1U) == 0;
+}
 
 std::vector<const void*> const_pointers(const Shards& shards)
 {
@@ -1153,6 +1189,12 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
         { 33, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 64 },
         { 33, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 129 },
         { 33, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 257 },
+        // Algorithm 5 final-layer shapes: T=2 exercises the accumulating
+        // radix-two boundary, T=4 the distance-one accumulating radix-four
+        // boundary, and T=8 odd-log2 final radix two.
+        { 17, 2, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 129 },
+        { 17, 4, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 193 },
+        { 17, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 257 },
         { 17, 33, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, 129 },
         { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 64 },
         { 17, 33, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 64 },
@@ -1186,6 +1228,7 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
             const std::string profile_name =
                 test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1 ?
                     "high-profile" : "low-profile";
+            const uint32_t side = transform_side(test_case);
             const Shards originals = make_originals(test_case,
                 static_cast<uint32_t>(0x243f6a88U + case_i * 977U));
             leo2_codec* codec = NULL;
@@ -1207,16 +1250,28 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                 require(trace.ff16_calls() != 0,
                     "GF16 encode bypassed the context ops table");
             }
-            require_four_way_callsites(trace,
-                leo2_context_backend(contexts[context_i].context),
-                test_case.field,
-                test_case.bytes,
-                profile_name + " encode",
-                test_case.field == LEO2_FIELD_GF8 &&
-                    test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1,
-                true);
-            require_coarse_stage_reduction(
-                trace, test_case.field, profile_name + " encode");
+            if (side >= 4)
+            {
+                require_four_way_callsites(trace,
+                    leo2_context_backend(contexts[context_i].context),
+                    test_case.field,
+                    test_case.bytes,
+                    profile_name + " encode",
+                    test_case.field == LEO2_FIELD_GF8 &&
+                        test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+                        final_inverse_layer_is_radix_four(side),
+                    true);
+                if (side >= 16)
+                    require_coarse_stage_reduction(
+                        trace, test_case.field, profile_name + " encode");
+            }
+            else
+            {
+                require(test_case.field == LEO2_FIELD_GF8 &&
+                        test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+                        trace.ff8_ifft_two_xor_calls() != 0,
+                    profile_name + " T=2 encode missed accumulating IFFT2");
+            }
             if (test_case.profile == LEO2_PROFILE_LOW_V1)
                 require_low_encode_no_copy(
                     trace,
@@ -1240,10 +1295,15 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                 leo2_context_backend(contexts[context_i].context),
                 test_case.field,
                 test_case.bytes,
-                profile_name + " decode", false, true,
+                profile_name + " decode",
+                test_case.field == LEO2_FIELD_GF8 &&
+                    test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+                    final_inverse_layer_is_radix_four(side),
+                true,
                 true);
-            require(trace.xor_four_calls() != 0,
-                "decode bypassed the context grouped-XOR table");
+            if (side >= 4)
+                require(trace.xor_four_calls() != 0,
+                    "decode bypassed the context grouped-XOR table");
             if (test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1)
                 require_high_decode_no_copy(
                     trace, test_case.field, profile_name + " decode");
