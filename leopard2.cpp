@@ -135,6 +135,12 @@ struct leo2_decode_plan
     std::vector<uint64_t> generic_output_dependencies;
     std::vector<uint64_t> specialized_output_dependencies;
     std::vector<uint16_t> block_input_counts;
+    // Algorithm 4 schedules are compiled during immutable plan setup.  Input
+    // entries exist only for incomplete nonempty P-blocks that actually save
+    // work.  An empty output plan selects the mature dependency-pruned FFT.
+    std::vector<leopard2_internal::PrunedTransformBlock>
+        low_pruned_input_blocks;
+    leopard2_internal::PrunedTransformPlan low_pruned_output_plan;
     std::vector<leopard2_internal::DecodeOutputBlock> high_output_blocks;
     // Algorithm 5 schedules are compiled during immutable plan setup.  Input
     // entries exist only for incomplete nonempty T-blocks that actually save
@@ -701,7 +707,7 @@ static bool PreparePlanExecutionMetadata(leo2_decode_plan* plan)
 
     plan->generic_input_count = 0;
     std::vector<uint8_t> selected_coordinates;
-    if (needs_specialized && codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
+    if (needs_specialized)
         selected_coordinates.assign(codec->parent_count, 0);
     if (needs_specialized)
     {
@@ -767,6 +773,55 @@ static bool PreparePlanExecutionMetadata(leo2_decode_plan* plan)
                 plan->specialized_output_dependencies.data(),
                 plan->specialized_output_dependencies.size()))
             return false;
+
+        const uint32_t side = codec->padded_side;
+        const uint32_t block_count = codec->parent_count / side;
+        std::vector<uint8_t> input_mask(side, 0);
+        std::vector<uint8_t> output_mask(side, 1);
+        for (uint32_t block = 0; block < block_count; ++block)
+        {
+            const uint32_t offset = block * side;
+            uint32_t live_count = 0;
+            for (uint32_t i = 0; i < side; ++i)
+            {
+                input_mask[i] = selected_coordinates[offset + i];
+                live_count += input_mask[i];
+            }
+            if (live_count == 0 || live_count == side)
+                continue;
+            leopard2_internal::PrunedTransformPlan candidate;
+            if (PrepareCodecPrunedTransform(
+                    codec, side, offset, true, input_mask.data(),
+                    output_mask.data(), candidate) &&
+                PrunedPlanSavesByteHeavyWork(candidate))
+            {
+                leopard2_internal::PrunedTransformBlock entry;
+                entry.block = block;
+                entry.plan = std::move(candidate);
+                plan->low_pruned_input_blocks.push_back(std::move(entry));
+            }
+        }
+
+        input_mask.assign(side, 1);
+        output_mask.assign(side, 0);
+        for (size_t i = 0; i < plan->requested_coordinates.size(); ++i)
+        {
+            const uint32_t coordinate = plan->requested_coordinates[i];
+            if (coordinate >= side)
+                return false;
+            output_mask[coordinate] = 1;
+        }
+        // A complete requested message block is exactly the mature transform;
+        // avoid expanding its full graph merely to discard the candidate.
+        if (plan->requested_coordinates.size() < side)
+        {
+            leopard2_internal::PrunedTransformPlan candidate;
+            if (PrepareCodecPrunedTransform(
+                    codec, side, 0, false, input_mask.data(),
+                    output_mask.data(), candidate) &&
+                PrunedPlanSavesByteHeavyWork(candidate))
+                plan->low_pruned_output_plan = std::move(candidate);
+        }
     }
     else if (needs_specialized)
     {
@@ -1817,6 +1872,14 @@ static void ExecuteTransformDecodePass(
             ? NULL : plan->high_pruned_output_plans.data();
     const unsigned high_output_plan_count = static_cast<unsigned>(
         plan->high_pruned_output_plans.size());
+    const leopard2_internal::PrunedTransformBlock* const low_input_plans =
+        plan->low_pruned_input_blocks.empty()
+            ? NULL : plan->low_pruned_input_blocks.data();
+    const unsigned low_input_plan_count = static_cast<unsigned>(
+        plan->low_pruned_input_blocks.size());
+    const leopard2_internal::PrunedTransformPlan* const low_output_plan =
+        plan->low_pruned_output_plan.size == 0
+            ? NULL : &plan->low_pruned_output_plan;
     void** const high_requested_output =
         work + static_cast<size_t>(codec->padded_side) * 2;
 
@@ -1842,11 +1905,12 @@ static void ExecuteTransformDecodePass(
                     codec->padded_side,
                     plan->specialized_output_dependencies.data(),
                     plan->specialized_output_dependencies.size());
-            leopard::ff8::ReedSolomonDecodeLowTiledPlanned(
+            leopard::ff8::ReedSolomonDecodeLowTiledPrunedPlanned(
                 ops, buffer_bytes, codec->parent_count, codec->padded_side,
                 coordinate_input, plan->block_input_counts.data(),
                 requested_coordinates, requested_count, dependencies,
-                &plan->locator8[0], &codec->fixed_factors8[0], work);
+                &plan->locator8[0], &codec->fixed_factors8[0],
+                low_input_plans, low_input_plan_count, low_output_plan, work);
         }
         else if (use_tiled)
             leopard::ff8::ReedSolomonDecodeHighTiledPrunedPlanned(
@@ -1865,11 +1929,12 @@ static void ExecuteTransformDecodePass(
                     codec->padded_side,
                     plan->specialized_output_dependencies.data(),
                     plan->specialized_output_dependencies.size());
-            leopard::ff8::ReedSolomonDecodeLowPlanned(
+            leopard::ff8::ReedSolomonDecodeLowPrunedPlanned(
                 ops, buffer_bytes, codec->parent_count, codec->padded_side,
                 coordinate_input, plan->block_input_counts.data(),
                 requested_coordinates, requested_count, dependencies,
-                &plan->locator8[0], &codec->fixed_factors8[0], work);
+                &plan->locator8[0], &codec->fixed_factors8[0],
+                low_input_plans, low_input_plan_count, low_output_plan, work);
         }
         else
             leopard::ff8::ReedSolomonDecodeHighPrunedPlanned(
@@ -1904,11 +1969,12 @@ static void ExecuteTransformDecodePass(
                     codec->padded_side,
                     plan->specialized_output_dependencies.data(),
                     plan->specialized_output_dependencies.size());
-            leopard::ff16::ReedSolomonDecodeLowTiledPlanned(
+            leopard::ff16::ReedSolomonDecodeLowTiledPrunedPlanned(
                 ops, buffer_bytes, codec->parent_count, codec->padded_side,
                 coordinate_input, plan->block_input_counts.data(),
                 requested_coordinates, requested_count, dependencies,
-                &plan->locator16[0], &codec->fixed_factors16[0], work);
+                &plan->locator16[0], &codec->fixed_factors16[0],
+                low_input_plans, low_input_plan_count, low_output_plan, work);
         }
         else if (use_tiled)
             leopard::ff16::ReedSolomonDecodeHighTiledPrunedPlanned(
@@ -1927,11 +1993,12 @@ static void ExecuteTransformDecodePass(
                     codec->padded_side,
                     plan->specialized_output_dependencies.data(),
                     plan->specialized_output_dependencies.size());
-            leopard::ff16::ReedSolomonDecodeLowPlanned(
+            leopard::ff16::ReedSolomonDecodeLowPrunedPlanned(
                 ops, buffer_bytes, codec->parent_count, codec->padded_side,
                 coordinate_input, plan->block_input_counts.data(),
                 requested_coordinates, requested_count, dependencies,
-                &plan->locator16[0], &codec->fixed_factors16[0], work);
+                &plan->locator16[0], &codec->fixed_factors16[0],
+                low_input_plans, low_input_plan_count, low_output_plan, work);
         }
         else
             leopard::ff16::ReedSolomonDecodeHighPrunedPlanned(

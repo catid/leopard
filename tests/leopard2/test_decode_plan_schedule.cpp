@@ -680,6 +680,16 @@ static uint64_t CheckFieldKernels(
         unsigned, const void* const*, const uint16_t*, const uint32_t*,
         unsigned, const leopard2_internal::OutputDependencyView&, const Ffe*,
         const Ffe*, void**),
+    void (*low_pruned)(const leopard::backend::Ops&, uint64_t, unsigned,
+        unsigned, const void* const*, const uint16_t*, const uint32_t*,
+        unsigned, const leopard2_internal::OutputDependencyView&, const Ffe*,
+        const Ffe*, const leopard2_internal::PrunedTransformBlock*, unsigned,
+        const leopard2_internal::PrunedTransformPlan*, void**),
+    void (*low_tiled_pruned)(const leopard::backend::Ops&, uint64_t, unsigned,
+        unsigned, const void* const*, const uint16_t*, const uint32_t*,
+        unsigned, const leopard2_internal::OutputDependencyView&, const Ffe*,
+        const Ffe*, const leopard2_internal::PrunedTransformBlock*, unsigned,
+        const leopard2_internal::PrunedTransformPlan*, void**),
     void (*prepare_high)(unsigned, unsigned, Ffe*),
     void (*high_prepared)(uint64_t, unsigned, unsigned, const void* const*,
         const uint8_t*, const Ffe*, const Ffe*, void**),
@@ -704,8 +714,10 @@ static uint64_t CheckFieldKernels(
         const Ffe*, void* const*,
         const leopard2_internal::PrunedTransformBlock*, unsigned,
         const leopard2_internal::PrunedTransformPlan*, unsigned, void**),
-    uint64_t& pruned_full_butterflies,
-    uint64_t& pruned_retained_operations)
+    uint64_t& low_pruned_full_butterflies,
+    uint64_t& low_pruned_retained_operations,
+    uint64_t& high_pruned_full_butterflies,
+    uint64_t& high_pruned_retained_operations)
 {
     AlignedBytes sources(static_cast<size_t>(n) * kBytes);
     Require(sources.valid(), "aligned source allocation");
@@ -785,6 +797,69 @@ static uint64_t CheckFieldKernels(
         static_cast<size_t>(side) * kBytes) == 0,
         "low tiled/planned mismatch");
 
+    std::vector<leopard2_internal::PrunedTransformBlock> low_input_plans;
+    std::vector<uint8_t> low_input_mask(side), low_output_mask(side, 1);
+    for (unsigned block = 0; block < n / side; ++block)
+    {
+        unsigned live_count = 0;
+        for (unsigned i = 0; i < side; ++i)
+        {
+            low_input_mask[i] =
+                coordinate_data[block * side + i] != NULL;
+            live_count += low_input_mask[i];
+        }
+        if (live_count == 0 || live_count == side)
+            continue;
+        leopard2_internal::PrunedTransformBlock entry;
+        entry.block = block;
+        Require(prepare_pruned(side, block * side, true,
+            &low_input_mask[0], &low_output_mask[0], entry.plan),
+            "low input pruned schedule build");
+        if (entry.plan.operations.size() < entry.plan.full_butterfly_count ||
+            entry.plan.input_zero_specializations != 0 ||
+            entry.plan.one_output_butterflies != 0)
+        {
+            low_pruned_full_butterflies += entry.plan.full_butterfly_count;
+            low_pruned_retained_operations += entry.plan.operations.size();
+            low_input_plans.push_back(std::move(entry));
+        }
+    }
+    low_input_mask.assign(side, 1);
+    low_output_mask.assign(side, 0);
+    for (size_t i = 0; i < low_coordinates.size(); ++i)
+        low_output_mask[low_coordinates[i]] = 1;
+    leopard2_internal::PrunedTransformPlan low_output_plan;
+    Require(prepare_pruned(side, 0, false, &low_input_mask[0],
+        &low_output_mask[0], low_output_plan),
+        "low output pruned schedule build");
+    Require(low_output_plan.operations.size() <
+            low_output_plan.full_butterfly_count ||
+            low_output_plan.input_zero_specializations != 0 ||
+            low_output_plan.one_output_butterflies != 0,
+        "low output test schedule did not prune");
+    low_pruned_full_butterflies += low_output_plan.full_butterfly_count;
+    low_pruned_retained_operations += low_output_plan.operations.size();
+
+    low_pruned(leopard::backend::GetDefaultOps(), kBytes, n, side,
+        &coordinate_data[0], &block_inputs[0], &low_coordinates[0],
+        low_coordinates.size(), low_view, &locator[0], &low_factors[0],
+        low_input_plans.empty() ? NULL : &low_input_plans[0],
+        low_input_plans.size(), &low_output_plan, &actual_work[0]);
+    for (size_t i = 0; i < low_coordinates.size(); ++i)
+        Require(memcmp(expected_work[low_coordinates[i]],
+                actual_work[low_coordinates[i]], kBytes) == 0,
+            "low pruned/planned requested output mismatch");
+
+    low_tiled_pruned(leopard::backend::GetDefaultOps(), kBytes, n, side,
+        &coordinate_data[0], &block_inputs[0], &low_coordinates[0],
+        low_coordinates.size(), low_view, &locator[0], &low_factors[0],
+        low_input_plans.empty() ? NULL : &low_input_plans[0],
+        low_input_plans.size(), &low_output_plan, &low_tiled_work[0]);
+    for (size_t i = 0; i < low_coordinates.size(); ++i)
+        Require(memcmp(expected_work[low_coordinates[i]],
+                low_tiled_work[low_coordinates[i]], kBytes) == 0,
+            "low tiled-pruned/planned requested output mismatch");
+
     std::vector<uint8_t> high_requested(n, 0);
     high_requested[side + 1] = high_requested[side * 3 + side / 2] =
         high_requested[n - 2] = 1;
@@ -823,8 +898,8 @@ static uint64_t CheckFieldKernels(
             entry.plan.input_zero_specializations != 0 ||
             entry.plan.one_output_butterflies != 0)
         {
-            pruned_full_butterflies += entry.plan.full_butterfly_count;
-            pruned_retained_operations += entry.plan.operations.size();
+            high_pruned_full_butterflies += entry.plan.full_butterfly_count;
+            high_pruned_retained_operations += entry.plan.operations.size();
             high_input_plans.push_back(std::move(entry));
         }
     }
@@ -845,8 +920,8 @@ static uint64_t CheckFieldKernels(
             candidate.input_zero_specializations != 0 ||
             candidate.one_output_butterflies != 0)
         {
-            pruned_full_butterflies += candidate.full_butterfly_count;
-            pruned_retained_operations += candidate.operations.size();
+            high_pruned_full_butterflies += candidate.full_butterfly_count;
+            high_pruned_retained_operations += candidate.operations.size();
             high_output_plans.push_back(std::move(candidate));
         }
         else
@@ -912,8 +987,10 @@ int main()
     const uint64_t builder_contract_cases = CheckDependencyBuilderContract();
     const uint64_t concurrent_builds = CheckDependencyBuilderConcurrency();
     uint64_t kernel_slots = 0;
-    uint64_t pruned_full_butterflies = 0;
-    uint64_t pruned_retained_operations = 0;
+    uint64_t low_pruned_full_butterflies = 0;
+    uint64_t low_pruned_retained_operations = 0;
+    uint64_t high_pruned_full_butterflies = 0;
+    uint64_t high_pruned_retained_operations = 0;
     kernel_slots += CheckFieldKernels<leopard::ff8::ffe_t>(
         256, 32, leopard::ff8::kModulus,
         leopard::ff8::ReedSolomonDecodePrepared,
@@ -922,6 +999,8 @@ int main()
         leopard::ff8::ReedSolomonDecodeLowPrepared,
         leopard::ff8::ReedSolomonDecodeLowPlanned,
         leopard::ff8::ReedSolomonDecodeLowTiledPlanned,
+        leopard::ff8::ReedSolomonDecodeLowPrunedPlanned,
+        leopard::ff8::ReedSolomonDecodeLowTiledPrunedPlanned,
         leopard::ff8::PrepareHighDecode,
         leopard::ff8::ReedSolomonDecodeHighPrepared,
         leopard::ff8::ReedSolomonDecodeHighPlanned,
@@ -929,7 +1008,8 @@ int main()
         leopard::ff8::PreparePrunedTransformPlan,
         leopard::ff8::ReedSolomonDecodeHighPrunedPlanned,
         leopard::ff8::ReedSolomonDecodeHighTiledPrunedPlanned,
-        pruned_full_butterflies, pruned_retained_operations);
+        low_pruned_full_butterflies, low_pruned_retained_operations,
+        high_pruned_full_butterflies, high_pruned_retained_operations);
     kernel_slots += CheckFieldKernels<leopard::ff16::ffe_t>(
         1024, 128, leopard::ff16::kModulus,
         leopard::ff16::ReedSolomonDecodePrepared,
@@ -938,6 +1018,8 @@ int main()
         leopard::ff16::ReedSolomonDecodeLowPrepared,
         leopard::ff16::ReedSolomonDecodeLowPlanned,
         leopard::ff16::ReedSolomonDecodeLowTiledPlanned,
+        leopard::ff16::ReedSolomonDecodeLowPrunedPlanned,
+        leopard::ff16::ReedSolomonDecodeLowTiledPrunedPlanned,
         leopard::ff16::PrepareHighDecode,
         leopard::ff16::ReedSolomonDecodeHighPrepared,
         leopard::ff16::ReedSolomonDecodeHighPlanned,
@@ -945,8 +1027,11 @@ int main()
         leopard::ff16::PreparePrunedTransformPlan,
         leopard::ff16::ReedSolomonDecodeHighPrunedPlanned,
         leopard::ff16::ReedSolomonDecodeHighTiledPrunedPlanned,
-        pruned_full_butterflies, pruned_retained_operations);
-    Require(pruned_retained_operations < pruned_full_butterflies,
+        low_pruned_full_butterflies, low_pruned_retained_operations,
+        high_pruned_full_butterflies, high_pruned_retained_operations);
+    Require(low_pruned_retained_operations < low_pruned_full_butterflies,
+        "production low pruning did not remove padded operations");
+    Require(high_pruned_retained_operations < high_pruned_full_butterflies,
         "production high pruning did not remove padded operations");
     CheckPublicPlanReuseAndAllocation();
 
@@ -956,9 +1041,14 @@ int main()
               << " dependency_builder_contract_cases=" << builder_contract_cases
               << " concurrent_dependency_builds=" << concurrent_builds
               << " execution_cpp_allocations=0 gf16_max_schedule_bytes=2736"
-              << " pruned_full_butterflies=" << pruned_full_butterflies
-              << " pruned_retained_operations="
-              << pruned_retained_operations
+              << " low_pruned_full_butterflies="
+              << low_pruned_full_butterflies
+              << " low_pruned_retained_operations="
+              << low_pruned_retained_operations
+              << " high_pruned_full_butterflies="
+              << high_pruned_full_butterflies
+              << " high_pruned_retained_operations="
+              << high_pruned_retained_operations
               << std::endl;
     return 0;
 }

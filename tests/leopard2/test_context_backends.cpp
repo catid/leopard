@@ -455,7 +455,7 @@ void require_four_way_callsites(
     {
         const leopard::ff8::TestOnlyTransformCallsiteCounts callsites =
             leopard::ff8::TestOnlyGetTransformCallsiteCounts();
-        require(callsites.ifft_dit4 != 0,
+        require(allow_pruned_schedule_calls || callsites.ifft_dit4 != 0,
             operation + " did not exercise GF8 IFFT_DIT4");
         if (expect_ff8_accumulating_ifft)
             require(callsites.ifft_dit4_xor != 0,
@@ -463,7 +463,7 @@ void require_four_way_callsites(
         else
             require(callsites.ifft_dit4_xor == 0,
                 operation + " unexpectedly exercised GF8 IFFT_DIT4_xor");
-        require(callsites.fft_dit4 != 0,
+        require(allow_pruned_schedule_calls || callsites.fft_dit4 != 0,
             operation + " did not exercise GF8 FFT_DIT4");
         const uint64_t classified_ifft_calls =
             callsites.ifft_dit4 + callsites.ifft_dit4_xor;
@@ -480,9 +480,9 @@ void require_four_way_callsites(
     {
         const leopard::ff16::TestOnlyTransformCallsiteCounts callsites =
             leopard::ff16::TestOnlyGetTransformCallsiteCounts();
-        require(callsites.ifft_dit4 != 0,
+        require(allow_pruned_schedule_calls || callsites.ifft_dit4 != 0,
             operation + " did not exercise GF16 IFFT_DIT4");
-        require(callsites.fft_dit4 != 0,
+        require(allow_pruned_schedule_calls || callsites.fft_dit4 != 0,
             operation + " did not exercise GF16 FFT_DIT4");
         require(callsites.ifft_dit4 ==
                 callsites.ifft_dit4_fused + callsites.ifft_dit4_split,
@@ -498,6 +498,14 @@ void require_four_way_callsites(
                 ? trace.ff16_fft_four_calls() >= callsites.fft_dit4_fused
                 : trace.ff16_fft_four_calls() == callsites.fft_dit4_fused,
             operation + " has a GF16 forward fused-dispatch mismatch");
+
+        // A C1 exact-mask schedule can replace every mature radix-four
+        // callsite in one direction.  The tracing table above still proves
+        // that the context-selected backend handled the pruned butterflies;
+        // the fused/split counters below classify only mature calls.
+        if (allow_pruned_schedule_calls &&
+            (callsites.ifft_dit4 == 0 || callsites.fft_dit4 == 0))
+            return;
 
         const size_t transform_bytes = (public_bytes + 63U) & ~size_t(63U);
         const size_t prefix_bytes = public_bytes & ~size_t(63U);
@@ -994,7 +1002,7 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                 test_case.field,
                 test_case.bytes,
                 profile_name + " decode", false, true,
-                test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1);
+                true);
             require(trace.xor_four_calls() != 0,
                 "decode bypassed the context grouped-XOR table");
             leo2_codec_destroy(codec);

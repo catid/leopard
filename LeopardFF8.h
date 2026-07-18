@@ -345,6 +345,25 @@ void ReedSolomonDecodeLowPlanned(
     const ffe_t* locator_logs,
     const ffe_t* block_factors,
     void** work);
+// Algorithm 4 with immutable C1 schedules prepared by
+// leo2_decode_plan_create.  Missing schedules select the mature prefix/input
+// and dependency/output fallbacks.
+void ReedSolomonDecodeLowPrunedPlanned(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned p,
+    const void* const * const coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    unsigned requested_count,
+    const leopard2_internal::OutputDependencyView& output_dependencies,
+    const ffe_t* locator_logs,
+    const ffe_t* block_factors,
+    const leopard2_internal::PrunedTransformBlock* input_plans,
+    unsigned input_plan_count,
+    const leopard2_internal::PrunedTransformPlan* output_plan,
+    void** work);
 void ReedSolomonDecodeLowPlanned(
     uint64_t buffer_bytes,
     unsigned n,
@@ -375,6 +394,22 @@ void ReedSolomonDecodeLowTiledPlanned(
     const leopard2_internal::OutputDependencyView& output_dependencies,
     const ffe_t* locator_logs,
     const ffe_t* block_factors,
+    void** work);
+void ReedSolomonDecodeLowTiledPrunedPlanned(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned p,
+    const void* const * const coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    unsigned requested_count,
+    const leopard2_internal::OutputDependencyView& output_dependencies,
+    const ffe_t* locator_logs,
+    const ffe_t* block_factors,
+    const leopard2_internal::PrunedTransformBlock* input_plans,
+    unsigned input_plan_count,
+    const leopard2_internal::PrunedTransformPlan* output_plan,
     void** work);
 
 void ReedSolomonDecodeHighPrepared(
