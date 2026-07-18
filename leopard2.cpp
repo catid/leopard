@@ -4198,28 +4198,26 @@ static leo2_result EncodeInternal(
 
     if (geometry.aligned_prefix_bytes != 0)
     {
-        PopulateEncodeInputs(
-            codec, original, 0, geometry.aligned_prefix_bytes,
-            NULL, pointers);
-        for (size_t i = 0; i < geometry.work_count; ++i)
-            work[i] = work_storage + i * geometry.work_slot_bytes;
         if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
         {
-            for (uint32_t i = 0; i < requested_recovery_prefix; ++i)
-                if (recovery[i])
-                    work[i] = static_cast<uint8_t*>(recovery[i]);
+            for (size_t i = 0; i < geometry.work_count; ++i)
+            {
+                work[i] = i < requested_recovery_prefix && recovery[i]
+                    ? static_cast<uint8_t*>(recovery[i])
+                    : work_storage + i * geometry.work_slot_bytes;
+            }
         }
         else
         {
+            for (size_t i = 0; i < geometry.work_count; ++i)
+                work[i] = work_storage + i * geometry.work_slot_bytes;
             for (uint32_t i = 0; i < codec->recovery_count; ++i)
                 parity[i] = recovery[i];
         }
-        const void* const* const padded_original =
-            const_cast<const void* const*>(pointers);
         ExecuteTransformEncodePass(
             codec, geometry.aligned_prefix_bytes,
-            requested_recovery_count,
-            requested_recovery_prefix, padded_original, parity, work,
+            requested_recovery_count, requested_recovery_prefix,
+            original, parity, work,
             &sparse_plans);
     }
 
@@ -4294,6 +4292,19 @@ LEO2_EXPORT leo2_result leo2_encode_batch(
         (!CheckedMultiply(item_count, sizeof(*items), item_bytes) ||
          !MakeRange(items, static_cast<uint64_t>(item_bytes), item_range)))
         return LEO2_INVALID_ARGUMENT;
+    /*
+        A one-item batch has no cross-item aliasing to validate.  Route it
+        through the ordinary one-shot validator while protecting the batch
+        descriptor itself.  This preserves the batch metadata-overlap
+        contract and avoids repeating the K/R addressability scans, overlap
+        scans, and range sorts performed by the general batch preflight.
+    */
+    if (item_count == 1)
+    {
+        return EncodeInternal(codec, items[0].shard_bytes,
+            items[0].original, items[0].recovery, items[0].scratch,
+            items[0].scratch_bytes, items, item_bytes, false);
+    }
     EncodeBatchTaskContext batch = {
         codec, items, item_bytes, item_range
     };
