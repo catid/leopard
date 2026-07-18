@@ -990,10 +990,13 @@ static bool RegisterQualifiedOps(
 
 static leo2_backend SelectBackend(const X86Features& features)
 {
+    // Some diagnostic-only builds compile this dispatcher without any
+    // separately linked x86 backend.  Keep those reviewed configurations
+    // warning-clean while the feature-dependent branches compile away.
+    (void)features;
     leo2_backend selected_kind = LEO2_BACKEND_SCALAR;
 
 #if defined(LEO2_BACKEND_FORCE_SCALAR)
-    (void)features;
     selected_kind = LEO2_BACKEND_SCALAR;
 #elif defined(LEO2_BACKEND_FORCE_SSSE3)
 # if defined(LEO2_HAVE_SSSE3_BACKEND)
