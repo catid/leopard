@@ -133,11 +133,12 @@ checks remained isolated and pinned as required.
   first-use requests and verifies that lazy lower-table qualification never
   changes the process default.
 - ASan plus UBSan passed the focused 9/9 suite with no memory or undefined-
-  behavior report.  The full sanitizer suite passed 33/34; its sole failure was
-  the static portable-ISA classifier rejecting sanitizer-generated `lahf` in an
-  SSSE3 archive member.  The non-instrumented GCC and Clang archive gates pass,
-  and the failing instruction is compiler sanitizer instrumentation rather than
-  codec code.  TSan without OpenMP passed the available focused 8/8 concurrency
+  behavior report.  The historical full sanitizer suite passed 33/34; its sole
+  failure was the static portable-ISA classifier rejecting sanitizer-generated
+  `lahf` in an SSSE3 archive member.  Sanitizer CTest matrices now run the
+  classifier's complete adversarial self-test without scanning instrumented
+  archives; clean GCC and Clang Release archives retain the production-object
+  gate.  TSan without OpenMP passed the available focused 8/8 concurrency
   tests with no race report.  Tests that intentionally override global
   `new`/`delete` cannot link with compiler-rt TSan and are covered separately.
 - A tests-disabled Release archive was rebuilt after the final production
