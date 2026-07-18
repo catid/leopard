@@ -122,8 +122,12 @@ struct TraceState
     std::atomic<uint64_t> xor_two_to_one_calls;
     std::atomic<uint64_t> ff8_ifft_four_calls;
     std::atomic<uint64_t> ff8_fft_four_calls;
+    std::atomic<uint64_t> ff8_fft_two_out_calls;
+    std::atomic<uint64_t> ff8_fft_four_out_calls;
     std::atomic<uint64_t> ff16_ifft_four_calls;
     std::atomic<uint64_t> ff16_fft_four_calls;
+    std::atomic<uint64_t> ff16_fft_two_out_calls;
+    std::atomic<uint64_t> ff16_fft_four_out_calls;
     std::atomic<uint64_t> xor_four_calls;
 };
 
@@ -208,6 +212,15 @@ void trace_ff8_fft(void* x, void* y, uint16_t log, uint64_t bytes)
     trace_delegate()->ff8_fft_butterfly2(x, y, log, bytes);
 }
 
+void trace_ff8_fft_out(const void* x, const void* y,
+    void* x_output, void* y_output, uint16_t log, uint64_t bytes)
+{
+    g_trace.ff8_calls.fetch_add(1, std::memory_order_relaxed);
+    g_trace.ff8_fft_two_out_calls.fetch_add(1, std::memory_order_relaxed);
+    trace_delegate()->ff8_fft_butterfly2_out(
+        x, y, x_output, y_output, log, bytes);
+}
+
 void trace_ff8_ifft_xor(const void* x, const void* y, void* x_output,
     void* y_output, uint16_t log, uint64_t bytes)
 {
@@ -226,6 +239,15 @@ void trace_ff16_fft(void* x, void* y, uint16_t log, uint64_t bytes)
 {
     g_trace.ff16_calls.fetch_add(1, std::memory_order_relaxed);
     trace_delegate()->ff16_fft_butterfly2(x, y, log, bytes);
+}
+
+void trace_ff16_fft_out(const void* x, const void* y,
+    void* x_output, void* y_output, uint16_t log, uint64_t bytes)
+{
+    g_trace.ff16_calls.fetch_add(1, std::memory_order_relaxed);
+    g_trace.ff16_fft_two_out_calls.fetch_add(1, std::memory_order_relaxed);
+    trace_delegate()->ff16_fft_butterfly2_out(
+        x, y, x_output, y_output, log, bytes);
 }
 
 void trace_ff8_ifft4(
@@ -247,6 +269,20 @@ void trace_ff8_fft4(
     g_trace.ff8_fft_four_calls.fetch_add(1, std::memory_order_relaxed);
     trace_delegate()->ff8_fft_butterfly4(
         value0, value1, value2, value3,
+        log01, log23, log02, bytes);
+}
+
+void trace_ff8_fft4_out(
+    const void* input0, const void* input1,
+    const void* input2, const void* input3,
+    void* output0, void* output1, void* output2, void* output3,
+    uint16_t log01, uint16_t log23, uint16_t log02, uint64_t bytes)
+{
+    g_trace.ff8_calls.fetch_add(1, std::memory_order_relaxed);
+    g_trace.ff8_fft_four_out_calls.fetch_add(1, std::memory_order_relaxed);
+    trace_delegate()->ff8_fft_butterfly4_out(
+        input0, input1, input2, input3,
+        output0, output1, output2, output3,
         log01, log23, log02, bytes);
 }
 
@@ -272,6 +308,20 @@ void trace_ff16_fft4(
         log01, log23, log02, bytes);
 }
 
+void trace_ff16_fft4_out(
+    const void* input0, const void* input1,
+    const void* input2, const void* input3,
+    void* output0, void* output1, void* output2, void* output3,
+    uint16_t log01, uint16_t log23, uint16_t log02, uint64_t bytes)
+{
+    g_trace.ff16_calls.fetch_add(1, std::memory_order_relaxed);
+    g_trace.ff16_fft_four_out_calls.fetch_add(1, std::memory_order_relaxed);
+    trace_delegate()->ff16_fft_butterfly4_out(
+        input0, input1, input2, input3,
+        output0, output1, output2, output3,
+        log01, log23, log02, bytes);
+}
+
 class TraceOpsGuard
 {
 public:
@@ -287,13 +337,17 @@ public:
         tracing_.xor_memory4 = trace_xor4;
         tracing_.ff8_ifft_butterfly2 = trace_ff8_ifft;
         tracing_.ff8_fft_butterfly2 = trace_ff8_fft;
+        tracing_.ff8_fft_butterfly2_out = trace_ff8_fft_out;
         tracing_.ff8_ifft_butterfly2_xor = trace_ff8_ifft_xor;
         tracing_.ff8_ifft_butterfly4 = trace_ff8_ifft4;
         tracing_.ff8_fft_butterfly4 = trace_ff8_fft4;
+        tracing_.ff8_fft_butterfly4_out = trace_ff8_fft4_out;
         tracing_.ff16_ifft_butterfly2 = trace_ff16_ifft;
         tracing_.ff16_fft_butterfly2 = trace_ff16_fft;
+        tracing_.ff16_fft_butterfly2_out = trace_ff16_fft_out;
         tracing_.ff16_ifft_butterfly4 = trace_ff16_ifft4;
         tracing_.ff16_fft_butterfly4 = trace_ff16_fft4;
+        tracing_.ff16_fft_butterfly4_out = trace_ff16_fft4_out;
         g_trace.delegate.store(entry.table, std::memory_order_release);
         reset();
         leopard::backend::TestSetContextOps(entry.context, &tracing_);
@@ -313,11 +367,17 @@ public:
         g_trace.xor_two_to_one_calls.store(0, std::memory_order_relaxed);
         g_trace.ff8_ifft_four_calls.store(0, std::memory_order_relaxed);
         g_trace.ff8_fft_four_calls.store(0, std::memory_order_relaxed);
+        g_trace.ff8_fft_two_out_calls.store(0, std::memory_order_relaxed);
+        g_trace.ff8_fft_four_out_calls.store(0, std::memory_order_relaxed);
         g_trace.ff16_ifft_four_calls.store(0, std::memory_order_relaxed);
         g_trace.ff16_fft_four_calls.store(0, std::memory_order_relaxed);
+        g_trace.ff16_fft_two_out_calls.store(0, std::memory_order_relaxed);
+        g_trace.ff16_fft_four_out_calls.store(0, std::memory_order_relaxed);
         g_trace.xor_four_calls.store(0, std::memory_order_relaxed);
         leopard::ff8::TestOnlyResetTransformCallsiteCounts();
         leopard::ff16::TestOnlyResetTransformCallsiteCounts();
+        leopard::ff8::TestOnlyResetLowEncodeCounts();
+        leopard::ff16::TestOnlyResetLowEncodeCounts();
     }
 
     uint64_t ff8_calls() const
@@ -345,6 +405,14 @@ public:
     {
         return g_trace.ff8_fft_four_calls.load(std::memory_order_relaxed);
     }
+    uint64_t ff8_fft_two_out_calls() const
+    {
+        return g_trace.ff8_fft_two_out_calls.load(std::memory_order_relaxed);
+    }
+    uint64_t ff8_fft_four_out_calls() const
+    {
+        return g_trace.ff8_fft_four_out_calls.load(std::memory_order_relaxed);
+    }
     uint64_t ff16_ifft_four_calls() const
     {
         return g_trace.ff16_ifft_four_calls.load(std::memory_order_relaxed);
@@ -352,6 +420,14 @@ public:
     uint64_t ff16_fft_four_calls() const
     {
         return g_trace.ff16_fft_four_calls.load(std::memory_order_relaxed);
+    }
+    uint64_t ff16_fft_two_out_calls() const
+    {
+        return g_trace.ff16_fft_two_out_calls.load(std::memory_order_relaxed);
+    }
+    uint64_t ff16_fft_four_out_calls() const
+    {
+        return g_trace.ff16_fft_four_out_calls.load(std::memory_order_relaxed);
     }
     uint64_t xor_four_calls() const
     {
@@ -454,6 +530,73 @@ void require_four_way_callsites(
             require(callsites.fft_dit4_split == callsites.fft_dit4 &&
                     callsites.fft_dit4_fused == 0,
                 operation + " fused an unqualified GF16 forward size");
+        }
+    }
+}
+
+void require_low_encode_no_copy(
+    const TraceOpsGuard& trace,
+    leo2_backend execution_backend,
+    leo2_field field,
+    size_t public_bytes,
+    const std::string& operation)
+{
+    if (field == LEO2_FIELD_GF8)
+    {
+        const leopard::ff8::TestOnlyLowEncodeCounts counts =
+            leopard::ff8::TestOnlyGetLowEncodeCounts();
+        require(counts.fft_butterfly2_out_of_place +
+                counts.fft_butterfly4_out_of_place != 0,
+            operation + " did not enter an out-of-place first layer");
+        require(trace.ff8_fft_two_out_calls() ==
+                    counts.fft_butterfly2_out_of_place &&
+                trace.ff8_fft_four_out_calls() ==
+                    counts.fft_butterfly4_out_of_place,
+            operation + " bypassed the context out-of-place ops table");
+    }
+    else
+    {
+        const leopard::ff16::TestOnlyLowEncodeCounts counts =
+            leopard::ff16::TestOnlyGetLowEncodeCounts();
+        require(counts.fft_butterfly2_out_of_place +
+                counts.fft_butterfly4_out_of_place != 0,
+            operation + " did not enter an out-of-place first layer");
+        require(trace.ff16_fft_two_out_calls() ==
+                    counts.fft_butterfly2_out_of_place &&
+                trace.ff16_fft_four_out_calls() ==
+                    counts.fft_butterfly4_out_of_place,
+            operation + " bypassed the context out-of-place ops table");
+
+        const size_t prefix_bytes = public_bytes & ~size_t(63U);
+        const bool has_tail = (public_bytes & 63U) != 0;
+        const bool prefix_fused = prefix_bytes == 64U ||
+            (prefix_bytes == 128U &&
+             execution_backend == LEO2_BACKEND_AVX2);
+        // A ragged tail is a separate padded 64-byte transform and therefore
+        // always uses the qualified fused first layer.  The aligned prefix
+        // retains its own size/backend policy.
+        const bool expect_all_fused = has_tail
+            ? prefix_bytes == 0 || prefix_fused
+            : prefix_fused;
+        const bool expect_mixed = has_tail && prefix_bytes != 0 &&
+            !prefix_fused;
+        if (expect_mixed)
+        {
+            require(counts.fft_butterfly2_out_of_place != 0 &&
+                    counts.fft_butterfly4_out_of_place != 0,
+                operation + " did not preserve the split-prefix/tail policy");
+        }
+        else if (expect_all_fused)
+        {
+            require(counts.fft_butterfly2_out_of_place == 0 &&
+                    counts.fft_butterfly4_out_of_place != 0,
+                operation + " split a qualified GF16 first layer");
+        }
+        else
+        {
+            require(counts.fft_butterfly2_out_of_place != 0 &&
+                    counts.fft_butterfly4_out_of_place == 0,
+                operation + " fused an unqualified GF16 first layer");
         }
     }
 }
@@ -767,6 +910,8 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
         { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 1026 },
         { 17, 33, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 1026 }
     };
+    std::vector<Shards> reference_recovery(
+        sizeof(transform_cases) / sizeof(transform_cases[0]));
 
     for (size_t context_i = 0; context_i < contexts.size(); ++context_i)
     {
@@ -792,6 +937,11 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
             trace.reset();
             const Shards recovery = encode_case(contexts[context_i].context,
                 test_case, originals, &codec);
+            if (reference_recovery[case_i].empty())
+                reference_recovery[case_i] = recovery;
+            else
+                require(recovery == reference_recovery[case_i],
+                    "encode output changed across context backends");
             if (test_case.field == LEO2_FIELD_GF8)
             {
                 require(trace.ff8_calls() != 0,
@@ -810,6 +960,12 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                 test_case.field == LEO2_FIELD_GF8 &&
                     test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1,
                 true);
+            if (test_case.profile == LEO2_PROFILE_LOW_V1)
+                require_low_encode_no_copy(
+                    trace,
+                    leo2_context_backend(contexts[context_i].context),
+                    test_case.field, test_case.bytes,
+                    profile_name + " encode");
 
             trace.reset();
             decode_case(codec, test_case, originals, recovery);

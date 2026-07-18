@@ -27,6 +27,8 @@
 */
 
 #include "Leopard2Direct.h"
+#include "LeopardFF16.h"
+#include "LeopardFF8.h"
 #include "direct_oracle.h"
 #include "leopard2.h"
 
@@ -123,12 +125,13 @@ struct Counts
     uint64_t dispatch_checks;
     uint64_t unaligned_checks;
     uint64_t batch_executions;
+    uint64_t no_copy_checks;
 
     Counts()
         : profiles(0), basis_messages(0), random_messages(0), parity_symbols(0)
         , mask_executions(0), boundary_profiles(0), allocation_checks(0)
         , concurrent_executions(0), contract_checks(0), dispatch_checks(0)
-        , unaligned_checks(0), batch_executions(0)
+        , unaligned_checks(0), batch_executions(0), no_copy_checks(0)
     {}
 };
 
@@ -501,6 +504,135 @@ void test_capability_boundaries(leo2_context* context, Counts* counts)
                 ++counts->boundary_profiles;
                 delete owner;
             }
+}
+
+void test_low_transform_no_coefficient_copy(
+    leo2_context* context,
+    const BinaryField& gf8,
+    const BinaryField& gf16,
+    Counts* counts)
+{
+    struct Case
+    {
+        leo2_field field;
+        unsigned k;
+        unsigned r;
+        size_t bytes;
+    };
+    const Case cases[] = {
+        { LEO2_FIELD_GF8, 1, 5, 65 },
+        { LEO2_FIELD_GF8, 2, 5, 65 },
+        { LEO2_FIELD_GF8, 5, 19, 129 },
+        { LEO2_FIELD_GF16, 1, 5, 66 },
+        { LEO2_FIELD_GF16, 2, 5, 66 },
+        { LEO2_FIELD_GF16, 5, 19, 130 }
+    };
+    for (unsigned case_i = 0;
+         case_i < sizeof(cases) / sizeof(cases[0]); ++case_i)
+    {
+        const Case& c = cases[case_i];
+        CodecOwner* owner = make_codec(context, c.k, c.r,
+            LEO2_PROFILE_LOW_V1, c.field);
+        const Shards original = random_shards(c.k, c.bytes,
+            UINT64_C(0x4e4f434f50590000) + case_i);
+        const Shards original_before = original;
+        const BinaryField& field = c.field == LEO2_FIELD_GF8 ? gf8 : gf16;
+        const ProfileLayout layout = leopard2_test::make_profile_layout(
+            leopard2_test::kLow, c.k, c.r);
+        const Matrix generator =
+            leopard2_test::direct_systematic_generator(field, layout);
+        const Shards expected = oracle_parity(
+            field, generator, original, c.r, c.field);
+
+        std::vector<uint8_t> requested(c.r, 0);
+        requested[0] = 1;
+        requested[c.k > 2 ? 2 : 1] = 1;
+        const unsigned p = leo2_codec_padded_side(owner->codec);
+        requested[p - 1] = 1;
+        if (p < c.r)
+            requested[p] = 1;
+        requested[c.r - 1] = 1;
+
+        if (c.field == LEO2_FIELD_GF8)
+            leopard::ff8::TestOnlyResetLowEncodeCounts();
+        else
+            leopard::ff16::TestOnlyResetLowEncodeCounts();
+        const EncodeResult transformed = encode(owner->codec,
+            LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, requested);
+        require_result(transformed.result, "no-copy low transform encode");
+        require(original == original_before,
+            "low transform modified a systematic source shard");
+        compare_requested(transformed.recovery, expected, requested, 0xa5,
+            "no-copy low transform/oracle", counts);
+
+        uint64_t nonempty_blocks = 0;
+        for (unsigned offset = 0; offset < c.r; offset += p)
+        {
+            const unsigned end = std::min(c.r, offset + p);
+            for (unsigned i = offset; i < end; ++i)
+                if (requested[i])
+                {
+                    ++nonempty_blocks;
+                    break;
+                }
+        }
+        // Ragged public shards execute the aligned prefix and one padded tail
+        // tile as independent transform passes.  Count both without treating
+        // the padding bytes as a second public shard.
+        const uint64_t transform_passes =
+            (c.bytes >= 64 ? 1U : 0U) + ((c.bytes & 63U) != 0 ? 1U : 0U);
+        const uint64_t executed_blocks = nonempty_blocks * transform_passes;
+        if (c.field == LEO2_FIELD_GF8)
+        {
+            const leopard::ff8::TestOnlyLowEncodeCounts actual =
+                leopard::ff8::TestOnlyGetLowEncodeCounts();
+            if (p == 1)
+                require(actual.fft_butterfly2_out_of_place == 0 &&
+                        actual.fft_butterfly4_out_of_place == 0,
+                    "GF8 P=1 entered a transform first layer");
+            else if (p == 2)
+                require(actual.fft_butterfly2_out_of_place == executed_blocks &&
+                        actual.fft_butterfly4_out_of_place == 0,
+                    "GF8 P=2 out-of-place call count mismatch");
+            else
+                require(actual.fft_butterfly2_out_of_place == 0 &&
+                        actual.fft_butterfly4_out_of_place ==
+                            executed_blocks * (p / 4),
+                    "GF8 fused out-of-place call count mismatch");
+        }
+        else
+        {
+            const leopard::ff16::TestOnlyLowEncodeCounts actual =
+                leopard::ff16::TestOnlyGetLowEncodeCounts();
+            if (p == 1)
+                require(actual.fft_butterfly2_out_of_place == 0 &&
+                        actual.fft_butterfly4_out_of_place == 0,
+                    "GF16 P=1 entered a transform first layer");
+            else if (p == 2)
+                require(actual.fft_butterfly2_out_of_place == executed_blocks &&
+                        actual.fft_butterfly4_out_of_place == 0,
+                    "GF16 P=2 out-of-place call count mismatch");
+            else
+            {
+                const size_t prefix_bytes = c.bytes & ~size_t(63);
+                const bool prefix_fused = prefix_bytes == 64 ||
+                    (prefix_bytes == 128 &&
+                     leo2_context_backend(context) == LEO2_BACKEND_AVX2);
+                const uint64_t fused_passes =
+                    ((c.bytes & 63U) != 0 ? 1U : 0U) +
+                    (prefix_bytes != 0 && prefix_fused ? 1U : 0U);
+                const uint64_t split_passes =
+                    prefix_bytes != 0 && !prefix_fused ? 1U : 0U;
+                require(actual.fft_butterfly2_out_of_place ==
+                            nonempty_blocks * split_passes * (p / 2) &&
+                        actual.fft_butterfly4_out_of_place ==
+                            nonempty_blocks * fused_passes * (p / 4),
+                    "GF16 out-of-place first-layer call count mismatch");
+            }
+        }
+        ++counts->no_copy_checks;
+        delete owner;
+    }
 }
 
 void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
@@ -1033,6 +1165,8 @@ int main()
         test_profile_matrix(context, gf16,
             LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, &counts);
         test_capability_boundaries(context, &counts);
+        test_low_transform_no_coefficient_copy(
+            context, gf8, gf16, &counts);
         test_auto_dispatch_threshold(context, &counts);
         test_tail_allocation_and_contracts(context, gf8, gf16, &counts);
         test_unaligned_guarded_buffers(context, gf8, gf16, &counts);
@@ -1051,7 +1185,8 @@ int main()
                   << " contract_checks=" << counts.contract_checks
                   << " dispatch_checks=" << counts.dispatch_checks
                   << " unaligned_checks=" << counts.unaligned_checks
-                  << " batch_executions=" << counts.batch_executions << std::endl;
+                  << " batch_executions=" << counts.batch_executions
+                  << " no_copy_checks=" << counts.no_copy_checks << std::endl;
         return 0;
     }
     catch (const std::exception& error)

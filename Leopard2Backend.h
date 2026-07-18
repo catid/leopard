@@ -93,6 +93,20 @@ typedef void (*Butterfly2)(
     uint16_t multiplier_log,
     uint64_t byte_count);
 
+// Out-of-place forward two-way LCH butterfly.  The input ranges are read-only
+// and must be disjoint from the two disjoint output ranges.  The field's
+// all-ones logarithm value is accepted as the zero-skew sentinel: in that case
+// the multiplication is suppressed but the XOR edge is retained.  This form
+// lets low-rate encoding preserve its coefficient block while combining the
+// former coefficient copy with the first transform layer.
+typedef void (*FFTButterfly2Out)(
+    const void* x_input,
+    const void* y_input,
+    void* x_output,
+    void* y_output,
+    uint16_t multiplier_log,
+    uint64_t byte_count);
+
 // Accumulating inverse two-way butterfly used by the GF8 encoder.  All four
 // buffers must be pairwise disjoint.  Inputs are read-only; outputs are XORed
 // with the inverse-butterfly result.
@@ -118,6 +132,25 @@ typedef void (*Butterfly4)(
     uint16_t multiplier_log02,
     uint64_t byte_count);
 
+// Out-of-place forward fused two-layer LCH butterfly.  All input ranges are
+// read-only, all output ranges are disjoint, and inputs must not overlap any
+// output.  Sentinel behavior matches Butterfly4.  Sources are loaded directly
+// into registers and transformed before the first store; this is not a
+// copy-then-in-place compatibility wrapper.
+typedef void (*FFTButterfly4Out)(
+    const void* input0,
+    const void* input1,
+    const void* input2,
+    const void* input3,
+    void* output0,
+    void* output1,
+    void* output2,
+    void* output3,
+    uint16_t multiplier_log01,
+    uint16_t multiplier_log23,
+    uint16_t multiplier_log02,
+    uint64_t byte_count);
+
 // This table is private to the implementation and immutable.  A backend owns
 // any tables referenced by its functions and publishes this object only after
 // initialization and the startup known-answer tests have succeeded.
@@ -134,13 +167,17 @@ struct Ops
     XorMemory4 xor_memory4;
     Butterfly2 ff8_ifft_butterfly2;
     Butterfly2 ff8_fft_butterfly2;
+    FFTButterfly2Out ff8_fft_butterfly2_out;
     IFFTButterfly2Xor ff8_ifft_butterfly2_xor;
     Butterfly4 ff8_ifft_butterfly4;
     Butterfly4 ff8_fft_butterfly4;
+    FFTButterfly4Out ff8_fft_butterfly4_out;
     Butterfly2 ff16_ifft_butterfly2;
     Butterfly2 ff16_fft_butterfly2;
+    FFTButterfly2Out ff16_fft_butterfly2_out;
     Butterfly4 ff16_ifft_butterfly4;
     Butterfly4 ff16_fft_butterfly4;
+    FFTButterfly4Out ff16_fft_butterfly4_out;
 };
 
 struct X86Features

@@ -108,6 +108,21 @@ void run_kernel_check(unsigned seed)
                 sizeof(butterfly_y8)) == 0,
         "concurrent GF8 butterfly round trip mismatch");
 
+    uint8_t out_x8[259];
+    uint8_t out_y8[259];
+    uint8_t expected_out_x8[259];
+    uint8_t expected_out_y8[259];
+    const uint8_t out_log8 = log8 == 255 ? 254 : log8;
+    std::memcpy(expected_out_x8, original_x8, sizeof(original_x8));
+    std::memcpy(expected_out_y8, original_y8, sizeof(original_y8));
+    ops.ff8_fft_butterfly2(expected_out_x8, expected_out_y8,
+        out_log8, sizeof(expected_out_x8));
+    ops.ff8_fft_butterfly2_out(original_x8, original_y8, out_x8, out_y8,
+        out_log8, sizeof(out_x8));
+    require(std::memcmp(out_x8, expected_out_x8, sizeof(out_x8)) == 0 &&
+            std::memcmp(out_y8, expected_out_y8, sizeof(out_y8)) == 0,
+        "concurrent GF8 out-of-place butterfly mismatch");
+
     uint8_t source16[130];
     uint8_t product16[130];
     uint8_t expected16[130];
@@ -159,6 +174,21 @@ void run_kernel_check(unsigned seed)
     require(std::memcmp(butterfly_x16, source16, sizeof(source16)) == 0 &&
             std::memcmp(butterfly_y16, product16, sizeof(product16)) == 0,
         "concurrent GF16 butterfly round trip mismatch");
+
+    uint8_t out_x16[130];
+    uint8_t out_y16[130];
+    uint8_t expected_out_x16[130];
+    uint8_t expected_out_y16[130];
+    const uint16_t out_log16 = log16 == 65535 ? 65534 : log16;
+    std::memcpy(expected_out_x16, source16, sizeof(source16));
+    std::memcpy(expected_out_y16, product16, sizeof(product16));
+    ops.ff16_fft_butterfly2(expected_out_x16, expected_out_y16,
+        out_log16, sizeof(expected_out_x16));
+    ops.ff16_fft_butterfly2_out(source16, product16, out_x16, out_y16,
+        out_log16, sizeof(out_x16));
+    require(std::memcmp(out_x16, expected_out_x16, sizeof(out_x16)) == 0 &&
+            std::memcmp(out_y16, expected_out_y16, sizeof(out_y16)) == 0,
+        "concurrent GF16 out-of-place butterfly mismatch");
 }
 
 void test_concurrent_immutable_ops()

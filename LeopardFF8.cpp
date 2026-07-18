@@ -47,6 +47,8 @@ namespace leopard { namespace ff8 {
 static std::atomic<uint64_t> TestIFFTDIT4Calls(0);
 static std::atomic<uint64_t> TestIFFTDIT4XorCalls(0);
 static std::atomic<uint64_t> TestFFTDIT4Calls(0);
+static std::atomic<uint64_t> TestLowFFTButterfly2OutCalls(0);
+static std::atomic<uint64_t> TestLowFFTButterfly4OutCalls(0);
 #endif
 
 
@@ -1669,6 +1671,84 @@ static void FFT_DIT(
     }
 }
 
+// Out-of-place first FFT layer(s) for low-rate parity evaluation.  The
+// coefficient pointers remain read-only and reusable across every parity
+// coset.  The backend combines the former copy pass with the first butterfly
+// pass, after which the remaining layers operate in-place on evaluation_work.
+static void FFT_DIT_FromCoefficients(
+    const backend::Ops& ops,
+    const uint64_t bytes,
+    void* const* coefficients,
+    void** evaluation_work,
+    const unsigned m_truncated,
+    const unsigned m,
+    const ffe_t* skewLUT)
+{
+    LEO_DEBUG_ASSERT(m >= 2);
+    if (m == 2)
+    {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        TestLowFFTButterfly2OutCalls.fetch_add(1, std::memory_order_relaxed);
+#endif
+        ops.ff8_fft_butterfly2_out(
+            coefficients[0], coefficients[1],
+            evaluation_work[0], evaluation_work[1],
+            skewLUT[1], bytes);
+        return;
+    }
+
+    const unsigned first_dist = m >> 2;
+    const ffe_t log_m01 = skewLUT[first_dist];
+    const ffe_t log_m02 = skewLUT[first_dist * 2];
+    const ffe_t log_m23 = skewLUT[first_dist * 3];
+    for (unsigned i = 0; i < first_dist; ++i)
+    {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        TestLowFFTButterfly4OutCalls.fetch_add(1, std::memory_order_relaxed);
+#endif
+        ops.ff8_fft_butterfly4_out(
+            coefficients[i], coefficients[i + first_dist],
+            coefficients[i + first_dist * 2],
+            coefficients[i + first_dist * 3],
+            evaluation_work[i], evaluation_work[i + first_dist],
+            evaluation_work[i + first_dist * 2],
+            evaluation_work[i + first_dist * 3],
+            log_m01, log_m23, log_m02, bytes);
+    }
+
+    unsigned dist4 = first_dist;
+    unsigned dist = first_dist >> 2;
+    for (; dist != 0; dist4 = dist, dist >>= 2)
+    {
+        for (unsigned r = 0; r < m_truncated; r += dist4)
+        {
+            const unsigned i_end = r + dist;
+            const ffe_t remaining_log_m01 = skewLUT[i_end];
+            const ffe_t remaining_log_m02 = skewLUT[i_end + dist];
+            const ffe_t remaining_log_m23 = skewLUT[i_end + dist * 2];
+            for (unsigned i = r; i < i_end; ++i)
+            {
+                FFT_DIT4(
+                    ops, bytes, evaluation_work + i, dist,
+                    remaining_log_m01, remaining_log_m23,
+                    remaining_log_m02);
+            }
+        }
+    }
+    if (dist4 == 2)
+    {
+        for (unsigned r = 0; r < m_truncated; r += 2)
+        {
+            const ffe_t log_m = skewLUT[r + 1];
+            if (log_m == kModulus)
+                xor_mem(ops, evaluation_work[r + 1], evaluation_work[r], bytes);
+            else
+                FFT_DIT2(ops, evaluation_work[r], evaluation_work[r + 1],
+                    log_m, bytes);
+        }
+    }
+}
+
 
 //------------------------------------------------------------------------------
 // Reed-Solomon Encode
@@ -1791,8 +1871,9 @@ void ReedSolomonEncodeLow(
         p,
         FFTSkewStorage);
 
-    // Evaluate the coefficient block on each requested parity coset.  The
-    // coefficient copy keeps work[0..p-1] reusable across all parity blocks.
+    // Evaluate the immutable coefficient block on each requested parity coset.
+    // The out-of-place first layer writes work[p..2p) directly, avoiding the
+    // former whole-P coefficient-copy pass for every nonempty parity block.
     for (unsigned recovery_offset = 0;
         recovery_offset < recovery_count;
         recovery_offset += p)
@@ -1809,12 +1890,10 @@ void ReedSolomonEncodeLow(
         if (requested_count == 0)
             continue;
 
-        for (unsigned i = 0; i < p; ++i)
-            memcpy(work[p + i], work[i], buffer_bytes);
-
-        FFT_DIT(
+        FFT_DIT_FromCoefficients(
             ops,
             buffer_bytes,
+            work,
             work + p,
             requested_count,
             p,
@@ -2442,6 +2521,24 @@ TestOnlyTransformCallsiteCounts TestOnlyGetTransformCallsiteCounts()
     result.ifft_dit4_xor =
         TestIFFTDIT4XorCalls.load(std::memory_order_relaxed);
     result.fft_dit4 = TestFFTDIT4Calls.load(std::memory_order_relaxed);
+    return result;
+}
+
+
+void TestOnlyResetLowEncodeCounts()
+{
+    TestLowFFTButterfly2OutCalls.store(0, std::memory_order_relaxed);
+    TestLowFFTButterfly4OutCalls.store(0, std::memory_order_relaxed);
+}
+
+
+TestOnlyLowEncodeCounts TestOnlyGetLowEncodeCounts()
+{
+    TestOnlyLowEncodeCounts result;
+    result.fft_butterfly2_out_of_place =
+        TestLowFFTButterfly2OutCalls.load(std::memory_order_relaxed);
+    result.fft_butterfly4_out_of_place =
+        TestLowFFTButterfly4OutCalls.load(std::memory_order_relaxed);
     return result;
 }
 

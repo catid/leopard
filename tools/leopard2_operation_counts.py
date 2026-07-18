@@ -16,6 +16,7 @@ import io
 import json
 import math
 import pathlib
+import re
 import sys
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Set, TextIO, Tuple
@@ -35,8 +36,45 @@ FIELDS = ("gf8", "gf16")
 PROFILES = ("high", "low")
 
 
+_LOW_COEFFICIENT_COPY_PATTERNS = (
+    re.compile(
+        r"(?:std::)?memcpy\(work\[p\+[^\]]+\],work\[[^\]]+\],buffer_bytes\)"
+    ),
+    re.compile(
+        r"(?:std::)?memcpy\(evaluation_work\[[^\]]+\],"
+        r"coefficients\[[^\]]+\],bytes\)"
+    ),
+)
+
+
 class ModelError(ValueError):
     """Invalid or unsupported model input."""
+
+
+def verify_low_encode_no_copy_source(source: str, label: str) -> None:
+    """Reject the former whole-P coefficient-copy pass.
+
+    The executable backend-call tests prove which first-layer implementation
+    ran.  This independent source guard covers the otherwise unobservable
+    regression where a whole coefficient block is copied before that call.
+    Whitespace is removed so the known loop cannot evade the check through
+    formatting changes.
+    """
+    compact = re.sub(r"\s+", "", source)
+    for pattern in _LOW_COEFFICIENT_COPY_PATTERNS:
+        if pattern.search(compact):
+            raise ModelError(
+                "{} contains a whole-P low-encode coefficient copy".format(label)
+            )
+    call = (
+        "FFT_DIT_FromCoefficients(ops,buffer_bytes,work,work+p,"
+        "requested_count,p,"
+    )
+    if call not in compact:
+        raise ModelError(
+            "{} no longer routes low parity evaluation through the "
+            "out-of-place first layer".format(label)
+        )
 
 
 @dataclass(frozen=True)
@@ -388,7 +426,10 @@ def model_low_encode(
         prefix = max(block_mask) + 1
         active_blocks += 1
         block_prefixes.append(prefix)
-        schedule.copies += padded
+        # Production backends load the immutable coefficient block directly
+        # into an out-of-place first FFT layer.  The transform traffic below
+        # therefore accounts for those reads and evaluation-work writes; there
+        # is no separate padded-shard copy to charge here.
         schedule.add_transform(
             fft_prefix_butterflies(padded, prefix), _transform_layers(padded)
         )
@@ -398,6 +439,7 @@ def model_low_encode(
     schedule.details.update({
         "active_parity_blocks": active_blocks,
         "parity_block_prefixes": block_prefixes,
+        "out_of_place_first_fft_layer": True,
     })
     return schedule
 
@@ -931,6 +973,23 @@ def run_self_test(verbose: bool = True) -> None:
     assert low.butterflies == 384
     assert low.details["active_parity_blocks"] == 31
     checks += 2
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    for filename in ("LeopardFF8.cpp", "LeopardFF16.cpp"):
+        source = (root / filename).read_text(encoding="utf-8")
+        verify_low_encode_no_copy_source(source, filename)
+        try:
+            verify_low_encode_no_copy_source(
+                source +
+                "\nfor (unsigned i = 0; i < p; ++i) "
+                "memcpy(work[p + i], work[i], buffer_bytes);\n",
+                filename + " mutation",
+            )
+        except ModelError:
+            pass
+        else:
+            raise AssertionError("whole-P copy mutation escaped source guard")
+        checks += 2
 
     direct = model_direct_repair(16, 8, 16, 16, "low", set(range(4)))
     assert direct.nontransform_xor_vectors == 60

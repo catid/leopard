@@ -225,6 +225,39 @@ static bool TestFF8Butterflies(const Ops& ops, FF8MultiplyLog reference)
                 if (x[i] != original_x || y[i] != original_y)
                     return false;
             }
+
+            for (size_t i = 0; i < sizeof(x); ++i)
+            {
+                x[i] = expected_x[i] = static_cast<uint8_t>(
+                    i * 53U + log * 23U + count_i * 17U);
+                y[i] = expected_y[i] = static_cast<uint8_t>(
+                    i * 79U + log * 31U + count_i * 19U);
+                output_x[i] = expected_output_x[i] = 0xa5;
+                output_y[i] = expected_output_y[i] = 0x5a;
+            }
+            std::memcpy(expected_output_x + 1, x + 1, bytes);
+            std::memcpy(expected_output_y + 1, y + 1, bytes);
+            if (log == 255)
+            {
+                for (uint64_t i = 0; i < bytes; ++i)
+                    expected_output_y[i + 1] ^= expected_output_x[i + 1];
+            }
+            else
+            {
+                ReferenceFF8Butterfly2<false>(
+                    expected_output_x + 1, expected_output_y + 1,
+                    static_cast<uint8_t>(log), bytes, reference);
+            }
+            ops.ff8_fft_butterfly2_out(
+                x + 1, y + 1, output_x + 1, output_y + 1,
+                static_cast<uint16_t>(log), bytes);
+            if (std::memcmp(output_x, expected_output_x,
+                    sizeof(output_x)) != 0 ||
+                std::memcmp(output_y, expected_output_y,
+                    sizeof(output_y)) != 0 ||
+                std::memcmp(x, expected_x, sizeof(x)) != 0 ||
+                std::memcmp(y, expected_y, sizeof(y)) != 0)
+                return false;
         }
     }
     return true;
@@ -321,6 +354,9 @@ static bool TestFF8Butterflies4(const Ops& ops, FF8MultiplyLog reference)
     };
     uint8_t values[4][1028];
     uint8_t expected[4][1028];
+    uint8_t inputs[4][1028];
+    uint8_t original_inputs[4][1028];
+    uint8_t outputs[4][1028];
     for (size_t set_i = 0;
          set_i < sizeof(log_sets) / sizeof(log_sets[0]); ++set_i)
         for (size_t count_i = 0;
@@ -362,6 +398,33 @@ static bool TestFF8Butterflies4(const Ops& ops, FF8MultiplyLog reference)
                 log_sets[set_i][0], log_sets[set_i][1],
                 log_sets[set_i][2], bytes);
             if (std::memcmp(values, expected, sizeof(values)) != 0)
+                return false;
+
+            for (unsigned lane = 0; lane < 4; ++lane)
+                for (size_t i = 0; i < sizeof(inputs[lane]); ++i)
+                {
+                    inputs[lane][i] = original_inputs[lane][i] =
+                        static_cast<uint8_t>(i * (59U + lane * 14U) +
+                            set_i * 37U + count_i * 23U + lane * 5U);
+                    outputs[lane][i] = expected[lane][i] =
+                        static_cast<uint8_t>(0x91U + lane * 13U);
+                }
+            for (unsigned lane = 0; lane < 4; ++lane)
+                std::memcpy(expected[lane] + 1, inputs[lane] + 1, bytes);
+            ReferenceFF8Butterfly4<false>(
+                expected[0] + 1, expected[1] + 1,
+                expected[2] + 1, expected[3] + 1,
+                log_sets[set_i][0], log_sets[set_i][1],
+                log_sets[set_i][2], bytes, reference);
+            ops.ff8_fft_butterfly4_out(
+                inputs[0] + 1, inputs[1] + 1,
+                inputs[2] + 1, inputs[3] + 1,
+                outputs[0] + 1, outputs[1] + 1,
+                outputs[2] + 1, outputs[3] + 1,
+                log_sets[set_i][0], log_sets[set_i][1],
+                log_sets[set_i][2], bytes);
+            if (std::memcmp(outputs, expected, sizeof(outputs)) != 0 ||
+                std::memcmp(inputs, original_inputs, sizeof(inputs)) != 0)
                 return false;
         }
     return true;
@@ -523,6 +586,10 @@ static bool TestFF16Butterflies(const Ops& ops, FF16MultiplyLog reference)
     uint8_t y[198];
     uint8_t expected_x[198];
     uint8_t expected_y[198];
+    uint8_t output_x[198];
+    uint8_t output_y[198];
+    uint8_t expected_output_x[198];
+    uint8_t expected_output_y[198];
     for (size_t size_i = 0;
          size_i < sizeof(byte_counts) / sizeof(byte_counts[0]);
          ++size_i)
@@ -558,6 +625,41 @@ static bool TestFF16Butterflies(const Ops& ops, FF16MultiplyLog reference)
                 log, bytes, reference);
             ops.ff16_fft_butterfly2(x + 1, y + 1, log, bytes);
             if (std::memcmp(x, expected_x, sizeof(x)) != 0 ||
+                std::memcmp(y, expected_y, sizeof(y)) != 0)
+                return false;
+
+            std::memset(x, 0x96, sizeof(x));
+            std::memset(y, 0x69, sizeof(y));
+            FillFF16(x + 1, bytes,
+                static_cast<uint32_t>(size_i * 97U + log_i * 11U));
+            FillFF16(y + 1, bytes,
+                static_cast<uint32_t>(size_i * 103U + log_i * 13U));
+            std::memcpy(expected_x, x, sizeof(x));
+            std::memcpy(expected_y, y, sizeof(y));
+            std::memset(output_x, 0xa5, sizeof(output_x));
+            std::memset(output_y, 0x5a, sizeof(output_y));
+            std::memcpy(expected_output_x, output_x, sizeof(output_x));
+            std::memcpy(expected_output_y, output_y, sizeof(output_y));
+            std::memcpy(expected_output_x + 1, x + 1, bytes);
+            std::memcpy(expected_output_y + 1, y + 1, bytes);
+            if (log == 65535)
+            {
+                for (uint64_t i = 0; i < bytes; ++i)
+                    expected_output_y[i + 1] ^= expected_output_x[i + 1];
+            }
+            else
+            {
+                ReferenceFF16Butterfly2<false>(
+                    expected_output_x + 1, expected_output_y + 1,
+                    log, bytes, reference);
+            }
+            ops.ff16_fft_butterfly2_out(
+                x + 1, y + 1, output_x + 1, output_y + 1, log, bytes);
+            if (std::memcmp(output_x, expected_output_x,
+                    sizeof(output_x)) != 0 ||
+                std::memcmp(output_y, expected_output_y,
+                    sizeof(output_y)) != 0 ||
+                std::memcmp(x, expected_x, sizeof(x)) != 0 ||
                 std::memcmp(y, expected_y, sizeof(y)) != 0)
                 return false;
         }
@@ -654,6 +756,9 @@ static bool TestFF16Butterflies4(const Ops& ops, FF16MultiplyLog reference)
     };
     uint8_t values[4][198];
     uint8_t expected[4][198];
+    uint8_t inputs[4][198];
+    uint8_t original_inputs[4][198];
+    uint8_t outputs[4][198];
     for (size_t set_i = 0;
          set_i < sizeof(log_sets) / sizeof(log_sets[0]); ++set_i)
         for (size_t count_i = 0;
@@ -705,6 +810,36 @@ static bool TestFF16Butterflies4(const Ops& ops, FF16MultiplyLog reference)
                 log_sets[set_i][0], log_sets[set_i][1],
                 log_sets[set_i][2], bytes);
             if (std::memcmp(values, expected, sizeof(values)) != 0)
+                return false;
+
+            for (unsigned lane = 0; lane < 4; ++lane)
+            {
+                std::memset(inputs[lane], 0x71U + lane, sizeof(inputs[lane]));
+                FillFF16(inputs[lane] + 1, bytes,
+                    static_cast<uint32_t>(
+                        set_i * 173U + count_i * 31U + lane * 19U));
+                std::memcpy(original_inputs[lane], inputs[lane],
+                    sizeof(inputs[lane]));
+                std::memset(outputs[lane], 0x91U + lane,
+                    sizeof(outputs[lane]));
+                std::memcpy(expected[lane], outputs[lane],
+                    sizeof(outputs[lane]));
+                std::memcpy(expected[lane] + 1, inputs[lane] + 1, bytes);
+            }
+            ReferenceFF16Butterfly4<false>(
+                expected[0] + 1, expected[1] + 1,
+                expected[2] + 1, expected[3] + 1,
+                log_sets[set_i][0], log_sets[set_i][1],
+                log_sets[set_i][2], bytes, reference);
+            ops.ff16_fft_butterfly4_out(
+                inputs[0] + 1, inputs[1] + 1,
+                inputs[2] + 1, inputs[3] + 1,
+                outputs[0] + 1, outputs[1] + 1,
+                outputs[2] + 1, outputs[3] + 1,
+                log_sets[set_i][0], log_sets[set_i][1],
+                log_sets[set_i][2], bytes);
+            if (std::memcmp(outputs, expected, sizeof(outputs)) != 0 ||
+                std::memcmp(inputs, original_inputs, sizeof(inputs)) != 0)
                 return false;
         }
     return true;
@@ -795,8 +930,9 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
 #ifdef LEO_HAS_FF8
     if (!args.ff8_multiply_log || !ops.ff8_multiply ||
         !ops.ff8_multiply_add || !ops.ff8_ifft_butterfly2 ||
-        !ops.ff8_fft_butterfly2 || !ops.ff8_ifft_butterfly2_xor ||
-        !ops.ff8_ifft_butterfly4 || !ops.ff8_fft_butterfly4 ||
+        !ops.ff8_fft_butterfly2 || !ops.ff8_fft_butterfly2_out ||
+        !ops.ff8_ifft_butterfly2_xor || !ops.ff8_ifft_butterfly4 ||
+        !ops.ff8_fft_butterfly4 || !ops.ff8_fft_butterfly4_out ||
         !TestFF8(ops, args.ff8_multiply_log) ||
         !TestFF8Butterflies(ops, args.ff8_multiply_log) ||
         !TestFF8Butterflies4(ops, args.ff8_multiply_log))
@@ -804,15 +940,17 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
 #else
     if (ops.ff8_multiply || ops.ff8_multiply_add ||
         ops.ff8_ifft_butterfly2 || ops.ff8_fft_butterfly2 ||
-        ops.ff8_ifft_butterfly2_xor || ops.ff8_ifft_butterfly4 ||
-        ops.ff8_fft_butterfly4)
+        ops.ff8_fft_butterfly2_out || ops.ff8_ifft_butterfly2_xor ||
+        ops.ff8_ifft_butterfly4 || ops.ff8_fft_butterfly4 ||
+        ops.ff8_fft_butterfly4_out)
         return false;
 #endif
 #ifdef LEO_HAS_FF16
     if (!args.ff16_multiply_log || !ops.ff16_multiply ||
         !ops.ff16_multiply_add || !ops.ff16_ifft_butterfly2 ||
-        !ops.ff16_fft_butterfly2 || !ops.ff16_ifft_butterfly4 ||
-        !ops.ff16_fft_butterfly4 ||
+        !ops.ff16_fft_butterfly2 || !ops.ff16_fft_butterfly2_out ||
+        !ops.ff16_ifft_butterfly4 || !ops.ff16_fft_butterfly4 ||
+        !ops.ff16_fft_butterfly4_out ||
         !TestFF16(ops, args.ff16_multiply_log) ||
         !TestFF16Butterflies(ops, args.ff16_multiply_log) ||
         !TestFF16Butterflies4(ops, args.ff16_multiply_log))
@@ -820,7 +958,8 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
 #else
     if (ops.ff16_multiply || ops.ff16_multiply_add ||
         ops.ff16_ifft_butterfly2 || ops.ff16_fft_butterfly2 ||
-        ops.ff16_ifft_butterfly4 || ops.ff16_fft_butterfly4)
+        ops.ff16_fft_butterfly2_out || ops.ff16_ifft_butterfly4 ||
+        ops.ff16_fft_butterfly4 || ops.ff16_fft_butterfly4_out)
         return false;
 #endif
     return true;

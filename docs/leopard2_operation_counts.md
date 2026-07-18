@@ -119,7 +119,13 @@ The self-test fixes two useful schedule checks:
   16-point forward transform = 512 radix-2 butterfly equivalents, with 224
   fused accumulation XOR vectors;
 - low K=8, R=248 encode: one 8-point inverse transform plus 31 full 8-point
-  forward transforms = 384 radix-2 butterfly equivalents.
+  forward transforms = 384 radix-2 butterfly equivalents.  Its immutable
+  coefficient block is read directly by each parity block's out-of-place first
+  FFT layer, so the model charges no separate 8-shard coefficient copy per
+  block.  A source-level mutation guard rejects the former whole-P copy loop
+  before that zero-copy model is accepted.  The remaining 256 logical copies
+  are the 8 systematic inputs staged for interpolation and the 248 requested
+  parity outputs scattered to caller buffers.
 
 It also checks every full transform size from 1 through 65,536 against the
 closed form N log2(N) / 2, compares prefix schedules with independently built

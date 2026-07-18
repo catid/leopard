@@ -59,12 +59,28 @@ class OperationCountTests(unittest.TestCase):
         low = COUNTS.model_low_encode(8, 248, 8, 1024, set(range(248)))
         self.assertEqual(low.butterflies, 384)
         self.assertEqual(low.details["active_parity_blocks"], 31)
+        self.assertEqual(low.copies, 8 + 248)
+        self.assertTrue(low.details["out_of_place_first_fft_layer"])
+
+    def test_low_encode_source_guard_rejects_old_copy_loop(self) -> None:
+        old_copy = """
+            for (unsigned i = 0; i < p; ++i)
+                memcpy(work[p + i], work[i], buffer_bytes);
+        """
+        for filename in ("LeopardFF8.cpp", "LeopardFF16.cpp"):
+            source = (ROOT / filename).read_text(encoding="utf-8")
+            COUNTS.verify_low_encode_no_copy_source(source, filename)
+            with self.assertRaises(COUNTS.ModelError):
+                COUNTS.verify_low_encode_no_copy_source(
+                    source + old_copy, filename + " mutation"
+                )
 
     def test_sparse_requested_parity_reduces_low_work(self) -> None:
         all_outputs = COUNTS.model_low_encode(8, 248, 8, 1024, set(range(248)))
         sparse = COUNTS.model_low_encode(8, 248, 8, 1024, {0, 247})
         self.assertLess(sparse.butterflies, all_outputs.butterflies)
         self.assertEqual(sparse.details["active_parity_blocks"], 2)
+        self.assertEqual(sparse.copies, 8 + 2)
 
     def test_deterministic_received_subset(self) -> None:
         high_data, parity = COUNTS.deterministic_decode_coordinates(

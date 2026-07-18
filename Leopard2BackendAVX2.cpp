@@ -178,6 +178,56 @@ static void AVX2FF8FFTButterfly2(
     AVX2FF8Butterfly2<false>(x, y, multiplier_log, byte_count);
 }
 
+static void AVX2FF8FFTButterfly2Out(
+    const void* x_input_pointer,
+    const void* y_input_pointer,
+    void* x_output_pointer,
+    void* y_output_pointer,
+    uint16_t multiplier_log,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 255;
+    const uint8_t* x_input = static_cast<const uint8_t*>(x_input_pointer);
+    const uint8_t* y_input = static_cast<const uint8_t*>(y_input_pointer);
+    uint8_t* x_output = static_cast<uint8_t*>(x_output_pointer);
+    uint8_t* y_output = static_cast<uint8_t*>(y_output_pointer);
+    __m256i low_table = _mm256_setzero_si256();
+    __m256i high_table = _mm256_setzero_si256();
+    if (multiplier_log != kZeroSkew)
+    {
+        low_table = BroadcastTable(FF8Tables[multiplier_log].low);
+        high_table = BroadcastTable(FF8Tables[multiplier_log].high);
+    }
+    while (byte_count >= 32)
+    {
+        __m256i x_value = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(x_input));
+        __m256i y_value = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(y_input));
+        if (multiplier_log != kZeroSkew)
+            x_value = _mm256_xor_si256(x_value,
+                AVX2FF8ProductVector(y_value, low_table, high_table));
+        y_value = _mm256_xor_si256(y_value, x_value);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(x_output), x_value);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(y_output), y_value);
+        x_input += 32;
+        y_input += 32;
+        x_output += 32;
+        y_output += 32;
+        byte_count -= 32;
+    }
+    while (byte_count-- != 0)
+    {
+        uint8_t x_value = *x_input++;
+        uint8_t y_value = *y_input++;
+        if (multiplier_log != kZeroSkew)
+            x_value ^= FF8Product(multiplier_log, y_value);
+        y_value ^= x_value;
+        *x_output++ = x_value;
+        *y_output++ = y_value;
+    }
+}
+
 static void AVX2FF8IFFTButterfly2Xor(
     const void* x_input_pointer,
     const void* y_input_pointer,
@@ -450,6 +500,79 @@ static void AVX2FF16FFTButterfly2(
     void* x, void* y, uint16_t multiplier_log, uint64_t byte_count)
 {
     AVX2FF16Butterfly2<false>(x, y, multiplier_log, byte_count);
+}
+
+static void AVX2FF16FFTButterfly2Out(
+    const void* x_input_pointer,
+    const void* y_input_pointer,
+    void* x_output_pointer,
+    void* y_output_pointer,
+    uint16_t multiplier_log,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 65535;
+    const uint8_t* x_input = static_cast<const uint8_t*>(x_input_pointer);
+    const uint8_t* y_input = static_cast<const uint8_t*>(y_input_pointer);
+    uint8_t* x_output = static_cast<uint8_t*>(x_output_pointer);
+    uint8_t* y_output = static_cast<uint8_t*>(y_output_pointer);
+    __m256i low_tables[4];
+    __m256i high_tables[4];
+    if (multiplier_log != kZeroSkew)
+    {
+        const FF16NibbleTable& table = FF16Tables[multiplier_log];
+        for (unsigned i = 0; i < 4; ++i)
+        {
+            low_tables[i] = BroadcastTable(table.low[i]);
+            high_tables[i] = BroadcastTable(table.high[i]);
+        }
+    }
+    uint64_t offset = 0;
+    while (byte_count - offset >= 64)
+    {
+        __m256i x_low = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(x_input + offset));
+        __m256i x_high = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(x_input + offset + 32));
+        __m256i y_low = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(y_input + offset));
+        __m256i y_high = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(y_input + offset + 32));
+        if (multiplier_log != kZeroSkew)
+        {
+            __m256i product_low;
+            __m256i product_high;
+            AVX2FF16ProductVectors(y_low, y_high, low_tables, high_tables,
+                product_low, product_high);
+            x_low = _mm256_xor_si256(x_low, product_low);
+            x_high = _mm256_xor_si256(x_high, product_high);
+        }
+        y_low = _mm256_xor_si256(y_low, x_low);
+        y_high = _mm256_xor_si256(y_high, x_high);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(x_output + offset), x_low);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(x_output + offset + 32), x_high);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(y_output + offset), y_low);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(y_output + offset + 32), y_high);
+        offset += 64;
+    }
+    const uint64_t symbols = (byte_count - offset) / 2;
+    for (uint64_t i = 0; i < symbols; ++i)
+    {
+        uint16_t x_value = static_cast<uint16_t>(x_input[offset + i] |
+            (static_cast<unsigned>(x_input[offset + symbols + i]) << 8));
+        uint16_t y_value = static_cast<uint16_t>(y_input[offset + i] |
+            (static_cast<unsigned>(y_input[offset + symbols + i]) << 8));
+        if (multiplier_log != kZeroSkew)
+            x_value ^= FF16Product(multiplier_log, y_value);
+        y_value ^= x_value;
+        x_output[offset + i] = static_cast<uint8_t>(x_value);
+        x_output[offset + symbols + i] = static_cast<uint8_t>(x_value >> 8);
+        y_output[offset + i] = static_cast<uint8_t>(y_value);
+        y_output[offset + symbols + i] = static_cast<uint8_t>(y_value >> 8);
+    }
 }
 
 #endif // LEO_HAS_FF16
@@ -892,6 +1015,111 @@ static void AVX2FF8FFTButterfly4(
         AVX2FF8Butterfly2<false>(value2, value3, log23, byte_count);
 }
 
+static void AVX2FF8FFTButterfly4Out(
+    const void* input0_pointer, const void* input1_pointer,
+    const void* input2_pointer, const void* input3_pointer,
+    void* output0_pointer, void* output1_pointer,
+    void* output2_pointer, void* output3_pointer,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 255;
+    const uint8_t* input0 = static_cast<const uint8_t*>(input0_pointer);
+    const uint8_t* input1 = static_cast<const uint8_t*>(input1_pointer);
+    const uint8_t* input2 = static_cast<const uint8_t*>(input2_pointer);
+    const uint8_t* input3 = static_cast<const uint8_t*>(input3_pointer);
+    uint8_t* output0 = static_cast<uint8_t*>(output0_pointer);
+    uint8_t* output1 = static_cast<uint8_t*>(output1_pointer);
+    uint8_t* output2 = static_cast<uint8_t*>(output2_pointer);
+    uint8_t* output3 = static_cast<uint8_t*>(output3_pointer);
+    __m256i low01 = _mm256_setzero_si256();
+    __m256i high01 = _mm256_setzero_si256();
+    __m256i low23 = _mm256_setzero_si256();
+    __m256i high23 = _mm256_setzero_si256();
+    __m256i low02 = _mm256_setzero_si256();
+    __m256i high02 = _mm256_setzero_si256();
+    if (log01 != kZeroSkew)
+    {
+        low01 = BroadcastTable(FF8Tables[log01].low);
+        high01 = BroadcastTable(FF8Tables[log01].high);
+    }
+    if (log23 != kZeroSkew)
+    {
+        low23 = BroadcastTable(FF8Tables[log23].low);
+        high23 = BroadcastTable(FF8Tables[log23].high);
+    }
+    if (log02 != kZeroSkew)
+    {
+        low02 = BroadcastTable(FF8Tables[log02].low);
+        high02 = BroadcastTable(FF8Tables[log02].high);
+    }
+    while (byte_count >= 32)
+    {
+        __m256i x0 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input0));
+        __m256i x1 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input1));
+        __m256i x2 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input2));
+        __m256i x3 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input3));
+        if (log02 != kZeroSkew)
+        {
+            x0 = _mm256_xor_si256(x0,
+                AVX2FF8ProductVector(x2, low02, high02));
+            x1 = _mm256_xor_si256(x1,
+                AVX2FF8ProductVector(x3, low02, high02));
+        }
+        x2 = _mm256_xor_si256(x2, x0);
+        x3 = _mm256_xor_si256(x3, x1);
+        if (log01 != kZeroSkew)
+            x0 = _mm256_xor_si256(x0,
+                AVX2FF8ProductVector(x1, low01, high01));
+        x1 = _mm256_xor_si256(x1, x0);
+        if (log23 != kZeroSkew)
+            x2 = _mm256_xor_si256(x2,
+                AVX2FF8ProductVector(x3, low23, high23));
+        x3 = _mm256_xor_si256(x3, x2);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(output0), x0);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(output1), x1);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(output2), x2);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(output3), x3);
+        input0 += 32;
+        input1 += 32;
+        input2 += 32;
+        input3 += 32;
+        output0 += 32;
+        output1 += 32;
+        output2 += 32;
+        output3 += 32;
+        byte_count -= 32;
+    }
+    while (byte_count-- != 0)
+    {
+        uint8_t x0 = *input0++;
+        uint8_t x1 = *input1++;
+        uint8_t x2 = *input2++;
+        uint8_t x3 = *input3++;
+        if (log02 != kZeroSkew)
+        {
+            x0 ^= FF8Product(log02, x2);
+            x1 ^= FF8Product(log02, x3);
+        }
+        x2 ^= x0;
+        x3 ^= x1;
+        if (log01 != kZeroSkew)
+            x0 ^= FF8Product(log01, x1);
+        x1 ^= x0;
+        if (log23 != kZeroSkew)
+            x2 ^= FF8Product(log23, x3);
+        x3 ^= x2;
+        *output0++ = x0;
+        *output1++ = x1;
+        *output2++ = x2;
+        *output3++ = x3;
+    }
+}
+
 #endif // LEO_HAS_FF8
 
 #ifdef LEO_HAS_FF16
@@ -1095,6 +1323,99 @@ static void AVX2FF16FFTButterfly4(
     AVX2FF16Butterfly4<false>(value0, value1, value2, value3,
         log01, log23, log02, byte_count);
 }
+
+static void AVX2FF16FFTButterfly4Out(
+    const void* input0_pointer, const void* input1_pointer,
+    const void* input2_pointer, const void* input3_pointer,
+    void* output0_pointer, void* output1_pointer,
+    void* output2_pointer, void* output3_pointer,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 65535;
+    const uint8_t* inputs[4] = {
+        static_cast<const uint8_t*>(input0_pointer),
+        static_cast<const uint8_t*>(input1_pointer),
+        static_cast<const uint8_t*>(input2_pointer),
+        static_cast<const uint8_t*>(input3_pointer)
+    };
+    uint8_t* outputs[4] = {
+        static_cast<uint8_t*>(output0_pointer),
+        static_cast<uint8_t*>(output1_pointer),
+        static_cast<uint8_t*>(output2_pointer),
+        static_cast<uint8_t*>(output3_pointer)
+    };
+    uint64_t offset = 0;
+    while (byte_count - offset >= 64)
+    {
+        __m256i low[4];
+        __m256i high[4];
+        for (unsigned lane = 0; lane < 4; ++lane)
+        {
+            low[lane] = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(inputs[lane] + offset));
+            high[lane] = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(
+                    inputs[lane] + offset + 32));
+        }
+        if (log02 != kZeroSkew)
+        {
+            AVX2FF16MultiplyAddPair(low[0], high[0], low[2], high[2],
+                FF16Tables[log02]);
+            AVX2FF16MultiplyAddPair(low[1], high[1], low[3], high[3],
+                FF16Tables[log02]);
+        }
+        low[2] = _mm256_xor_si256(low[2], low[0]);
+        high[2] = _mm256_xor_si256(high[2], high[0]);
+        low[3] = _mm256_xor_si256(low[3], low[1]);
+        high[3] = _mm256_xor_si256(high[3], high[1]);
+        if (log01 != kZeroSkew)
+            AVX2FF16MultiplyAddPair(low[0], high[0], low[1], high[1],
+                FF16Tables[log01]);
+        low[1] = _mm256_xor_si256(low[1], low[0]);
+        high[1] = _mm256_xor_si256(high[1], high[0]);
+        if (log23 != kZeroSkew)
+            AVX2FF16MultiplyAddPair(low[2], high[2], low[3], high[3],
+                FF16Tables[log23]);
+        low[3] = _mm256_xor_si256(low[3], low[2]);
+        high[3] = _mm256_xor_si256(high[3], high[2]);
+        for (unsigned lane = 0; lane < 4; ++lane)
+        {
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(outputs[lane] + offset), low[lane]);
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(
+                outputs[lane] + offset + 32), high[lane]);
+        }
+        offset += 64;
+    }
+    const uint64_t symbols = (byte_count - offset) / 2;
+    for (uint64_t i = 0; i < symbols; ++i)
+    {
+        uint16_t x[4];
+        for (unsigned lane = 0; lane < 4; ++lane)
+            x[lane] = static_cast<uint16_t>(inputs[lane][offset + i] |
+                (static_cast<unsigned>(inputs[lane][offset + symbols + i]) << 8));
+        if (log02 != kZeroSkew)
+        {
+            x[0] ^= FF16Product(log02, x[2]);
+            x[1] ^= FF16Product(log02, x[3]);
+        }
+        x[2] ^= x[0];
+        x[3] ^= x[1];
+        if (log01 != kZeroSkew)
+            x[0] ^= FF16Product(log01, x[1]);
+        x[1] ^= x[0];
+        if (log23 != kZeroSkew)
+            x[2] ^= FF16Product(log23, x[3]);
+        x[3] ^= x[2];
+        for (unsigned lane = 0; lane < 4; ++lane)
+        {
+            outputs[lane][offset + i] = static_cast<uint8_t>(x[lane]);
+            outputs[lane][offset + symbols + i] =
+                static_cast<uint8_t>(x[lane] >> 8);
+        }
+    }
+}
 #endif // LEO_HAS_FF16
 
 static const Ops AVX2Ops = {
@@ -1120,10 +1441,14 @@ static const Ops AVX2Ops = {
 #ifdef LEO_HAS_FF8
     AVX2FF8IFFTButterfly2,
     AVX2FF8FFTButterfly2,
+    AVX2FF8FFTButterfly2Out,
     AVX2FF8IFFTButterfly2Xor,
     AVX2FF8IFFTButterfly4,
     AVX2FF8FFTButterfly4,
+    AVX2FF8FFTButterfly4Out,
 #else
+    NULL,
+    NULL,
     NULL,
     NULL,
     NULL,
@@ -1133,9 +1458,13 @@ static const Ops AVX2Ops = {
 #ifdef LEO_HAS_FF16
     AVX2FF16IFFTButterfly2,
     AVX2FF16FFTButterfly2,
+    AVX2FF16FFTButterfly2Out,
     AVX2FF16IFFTButterfly4,
-    AVX2FF16FFTButterfly4
+    AVX2FF16FFTButterfly4,
+    AVX2FF16FFTButterfly4Out
 #else
+    NULL,
+    NULL,
     NULL,
     NULL,
     NULL,
