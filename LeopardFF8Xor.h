@@ -54,7 +54,13 @@ enum class KernelMode
     Auto,
     Portable,
     Simd128,
-    Avx2
+    Avx2,
+    // AVX-512VL uses 256-bit YMM values while exposing the extended register
+    // file.  Avx512Zmm uses 512-bit values.  Both are forced experiment modes;
+    // Auto remains on the established AVX2/128/portable selection until a
+    // complete-codec benchmark justifies changing it.
+    Avx512VL,
+    Avx512Zmm
 };
 
 struct CircuitStatistics

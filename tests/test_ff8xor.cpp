@@ -1385,9 +1385,22 @@ static bool TestKernelModes()
     static const KernelMode kModes[] = {
         KernelMode::Portable,
         KernelMode::Simd128,
-        KernelMode::Avx2
+        KernelMode::Avx2,
+        KernelMode::Avx512VL,
+        KernelMode::Avx512Zmm
     };
-    static const uint64_t kSizes[] = { 64, 128, 192, 256, 320 };
+    static const char* kModeNames[] = {
+        "portable uint64 XOR circuits",
+        "128-bit SIMD XOR circuits",
+        "AVX2 XOR circuits",
+        "AVX-512VL YMM XOR circuits",
+        "AVX-512 ZMM XOR circuits"
+    };
+    // The larger sizes force both AVX-512 widths, portable and 128-bit tails,
+    // and an AVX2 tail after a 512-bit ZMM chunk.
+    static const uint64_t kSizes[] = {
+        64, 128, 192, 256, 320, 512, 576, 640, 768
+    };
     static const unsigned kCoefficients[] = { 0, 1, 51, 254, 255 };
     static const unsigned kSkews[] = { 0, 51, 254, 255 };
     const KernelMode saved_mode = leopard::ff8xor::GetKernelMode();
@@ -1398,11 +1411,33 @@ static bool TestKernelModes()
     {
         const KernelMode mode = kModes[mode_index];
         if (!leopard::ff8xor::IsKernelModeAvailable(mode))
+        {
+            // An unavailable forced mode must resolve to a safe baseline mode,
+            // never remain selected and risk an illegal instruction.
+            leopard::ff8xor::SetKernelMode(mode);
+            if (leopard::ff8xor::GetActiveKernelMode() == mode ||
+                !CheckMultiplyKernel(512, 51) ||
+                !CheckButterflyKernel(512, 51))
+            {
+                fprintf(stderr,
+                    "unavailable forced kernel mode did not fall back safely\n");
+                leopard::ff8xor::SetKernelMode(saved_mode);
+                return false;
+            }
             continue;
+        }
         leopard::ff8xor::SetKernelMode(mode);
         if (leopard::ff8xor::GetActiveKernelMode() != mode)
         {
             fprintf(stderr, "requested kernel mode did not become active\n");
+            leopard::ff8xor::SetKernelMode(saved_mode);
+            return false;
+        }
+        if (strcmp(
+                leopard::ff8xor::GetKernelBackendName(),
+                kModeNames[mode_index]) != 0)
+        {
+            fprintf(stderr, "active kernel mode name mismatch\n");
             leopard::ff8xor::SetKernelMode(saved_mode);
             return false;
         }
@@ -1454,6 +1489,75 @@ static bool TestKernelModes()
     return true;
 }
 
+static bool TestAllAVX512Specializations()
+{
+    typedef leopard::ff8xor::KernelMode KernelMode;
+    static const KernelMode kModes[] = {
+        KernelMode::Avx512VL,
+        KernelMode::Avx512Zmm
+    };
+    const KernelMode saved_mode = leopard::ff8xor::GetKernelMode();
+
+    for (unsigned mode_index = 0;
+         mode_index < sizeof(kModes) / sizeof(kModes[0]);
+         ++mode_index)
+    {
+        const KernelMode mode = kModes[mode_index];
+        if (!leopard::ff8xor::IsKernelModeAvailable(mode))
+            continue;
+
+        leopard::ff8xor::SetKernelMode(mode);
+
+        // 768 bytes gives 96 bytes per plane: Three YMM chunks, or one ZMM
+        // chunk followed by an AVX2 tail.  Identity multipliers 0 and 255 and
+        // butterfly sentinel 255 are intentionally handled by the separately
+        // tested no-op/contiguous-XOR fast paths.
+        for (unsigned coefficient = 1;
+             coefficient < kFieldModulus;
+             ++coefficient)
+        {
+            if (!CheckMultiplyKernel(768, coefficient))
+            {
+                fprintf(stderr,
+                    "AVX-512 multiply specialization failed: mode=%u log=%u\n",
+                    static_cast<unsigned>(mode), coefficient);
+                leopard::ff8xor::SetKernelMode(saved_mode);
+                return false;
+            }
+        }
+
+        for (unsigned skew = 0; skew < kFieldModulus; ++skew)
+        {
+            if (!CheckButterflyKernel(768, skew))
+            {
+                fprintf(stderr,
+                    "AVX-512 butterfly specialization failed: mode=%u skew=%u\n",
+                    static_cast<unsigned>(mode), skew);
+                leopard::ff8xor::SetKernelMode(saved_mode);
+                return false;
+            }
+        }
+
+        // Exercise the complete encode/decode control flow with the forced
+        // mode rather than validating only isolated whole-buffer operations.
+        CodecCase codec_case = {
+            16, 4, 768,
+            static_cast<uint32_t>(0xa5120000U + mode_index),
+            "forced AVX-512 packed equivalence"
+        };
+        EncodedData encoded;
+        if (!BuildEncodedData(codec_case, encoded) ||
+            !TestDecodePatterns(encoded))
+        {
+            leopard::ff8xor::SetKernelMode(saved_mode);
+            return false;
+        }
+    }
+
+    leopard::ff8xor::SetKernelMode(saved_mode);
+    return true;
+}
+
 } // namespace
 
 int main()
@@ -1469,16 +1573,22 @@ int main()
 
     if (!ExpectResult(
             static_cast<LeopardResult>(leo_init()),
-            Leopard_Success,
-            "leo_init") ||
+        Leopard_Success,
+        "leo_init") ||
         !TestAPIValidation() ||
         !TestKernelModes() ||
+        !TestAllAVX512Specializations() ||
         !TestPackedEquivalence() ||
         !TestForcedLocatorShifts() ||
         !TestNativeRoundTrips())
         return 1;
 
     printf("FF8 XOR circuit tests passed\n");
+    printf("avx512vl=%s avx512zmm=%s\n",
+        leopard::ff8xor::IsKernelModeAvailable(
+            leopard::ff8xor::KernelMode::Avx512VL) ? "available" : "unavailable",
+        leopard::ff8xor::IsKernelModeAvailable(
+            leopard::ff8xor::KernelMode::Avx512Zmm) ? "available" : "unavailable");
     printf("checksum=%s\n", leopard::ff8xor::generated::kCircuitChecksum);
     printf("multiply_gates=%u..%u avg=%.6f\n",
         leopard::ff8xor::generated::kMultiplyMinGateCount,

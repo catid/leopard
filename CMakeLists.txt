@@ -19,6 +19,8 @@ set(LIB_SOURCE_FILES
         LeopardFF8.h
         LeopardFF8Xor.cpp
         LeopardFF8Xor.h
+        LeopardFF8XorAVX512.cpp
+        LeopardFF8XorAVX512.h
         leopard_ff8xor.cpp
         leopard_ff8xor.h)
 
@@ -57,6 +59,53 @@ endif()
 if(FF8XOR_COMPILE_FLAGS)
     set_source_files_properties(LeopardFF8Xor.cpp PROPERTIES
         COMPILE_FLAGS "${FF8XOR_COMPILE_FLAGS}")
+endif()
+
+# AVX-512 is kept in its own translation unit so the portable dispatcher and
+# the existing packed/AVX2 backends cannot acquire instructions that are unsafe
+# on older CPUs.  Unsupported compilers build small stubs from this source;
+# runtime CPUID/XCR0 checks still gate every call into a real kernel.
+option(LEO_FF8XOR_ENABLE_AVX512
+    "Build experimental AVX-512VL/ZMM FF8 XOR circuit kernels" ON)
+set(FF8XOR_BUILD_AVX512 OFF)
+if(LEO_FF8XOR_ENABLE_AVX512 AND
+   CMAKE_SIZEOF_VOID_P EQUAL 8 AND
+   CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$" AND
+   (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+    CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
+    check_cxx_compiler_flag("-mavx512f" COMPILER_SUPPORTS_AVX512F)
+    check_cxx_compiler_flag("-mavx512vl" COMPILER_SUPPORTS_AVX512VL)
+    check_cxx_compiler_flag("-mavx2" COMPILER_SUPPORTS_AVX2_FLAG)
+    if(COMPILER_SUPPORTS_AVX512F AND
+       COMPILER_SUPPORTS_AVX512VL AND
+       COMPILER_SUPPORTS_AVX2_FLAG)
+        set(FF8XOR_BUILD_AVX512 ON)
+    endif()
+endif()
+
+if(FF8XOR_BUILD_AVX512)
+    # Reset the global -march=native before enabling the exact features checked
+    # by the runtime dispatcher.  Otherwise an AVX-512-capable build host could
+    # leak BW/DQ/VBMI/BITALG instructions into this isolated object.
+    set(FF8XOR_AVX512_COMPILE_FLAGS
+        "-march=x86-64 -mavx2 -mavx512f -mavx512vl")
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND
+       COMPILER_SUPPORTS_NO_TREE_REASSOC)
+        set(FF8XOR_AVX512_COMPILE_FLAGS
+            "${FF8XOR_AVX512_COMPILE_FLAGS} -fno-tree-reassoc")
+    endif()
+    set_source_files_properties(LeopardFF8XorAVX512.cpp PROPERTIES
+        COMPILE_FLAGS "${FF8XOR_AVX512_COMPILE_FLAGS}"
+        COMPILE_DEFINITIONS "LEO_FF8XOR_BUILD_AVX512=1")
+    set_property(SOURCE LeopardFF8Xor.cpp APPEND PROPERTY
+        COMPILE_DEFINITIONS "LEO_FF8XOR_HAS_AVX512_KERNELS=1")
+    message(STATUS "FF8 XOR AVX-512VL/ZMM kernels: enabled")
+else()
+    if(FF8XOR_COMPILE_FLAGS)
+        set_source_files_properties(LeopardFF8XorAVX512.cpp PROPERTIES
+            COMPILE_FLAGS "${FF8XOR_COMPILE_FLAGS}")
+    endif()
+    message(STATUS "FF8 XOR AVX-512VL/ZMM kernels: unavailable")
 endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
