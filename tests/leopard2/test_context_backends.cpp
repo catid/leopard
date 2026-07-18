@@ -829,7 +829,10 @@ void require_coarse_stage_reduction(
 
 void require_high_decode_no_copy(
     const TraceOpsGuard& trace,
+    leo2_backend execution_backend,
     leo2_field field,
+    bool expect_gf16_accumulation,
+    bool expect_gf16_materialization,
     const std::string& operation)
 {
     uint64_t output_blocks = 0;
@@ -839,6 +842,7 @@ void require_high_decode_no_copy(
     uint64_t traced_butterfly2 = 0;
     uint64_t traced_butterfly4 = 0;
     uint64_t syndrome_accumulated_blocks = 0;
+    uint64_t syndrome_materialized_blocks = 0;
     if (field == LEO2_FIELD_GF8)
     {
         const leopard::ff8::TestOnlyHighDecodeCounts counts =
@@ -850,6 +854,7 @@ void require_high_decode_no_copy(
         traced_butterfly2 = trace.ff8_fft_two_out_calls();
         traced_butterfly4 = trace.ff8_fft_four_out_calls();
         syndrome_accumulated_blocks = counts.syndrome_accumulated_blocks;
+        syndrome_materialized_blocks = counts.syndrome_materialized_blocks;
     }
     else
     {
@@ -861,6 +866,8 @@ void require_high_decode_no_copy(
         copy_fallbacks = counts.compatibility_copy_fallbacks;
         traced_butterfly2 = trace.ff16_fft_two_out_calls();
         traced_butterfly4 = trace.ff16_fft_four_out_calls();
+        syndrome_accumulated_blocks = counts.syndrome_accumulated_blocks;
+        syndrome_materialized_blocks = counts.syndrome_materialized_blocks;
     }
     const uint64_t out_of_place_calls = butterfly2 + butterfly4;
     require(output_blocks != 0,
@@ -879,6 +886,29 @@ void require_high_decode_no_copy(
         require(trace.ff8_ifft_two_xor_calls() +
                     trace.ff8_ifft_four_xor_range_calls() != 0,
             operation + " bypassed the accumulating IFFT backend boundary");
+    }
+    else if (execution_backend == LEO2_BACKEND_SCALAR)
+    {
+        require(syndrome_accumulated_blocks == 0 &&
+                syndrome_materialized_blocks != 0,
+            operation + " did not retain the qualified scalar fallback");
+        require(trace.ff16_ifft_two_xor_calls() == 0,
+            operation + " unexpectedly used vector accumulation on scalar");
+    }
+    else
+    {
+        require(syndrome_accumulated_blocks != 0 ||
+                syndrome_materialized_blocks != 0,
+            operation + " did not classify any later GF16 syndrome block");
+        if (expect_gf16_accumulation)
+            require(syndrome_accumulated_blocks != 0,
+                operation + " did not fuse any GF16 syndrome input block");
+        if (expect_gf16_materialization)
+            require(syndrome_materialized_blocks != 0,
+                operation + " did not retain its GF16 materialized fallback");
+        require((trace.ff16_ifft_two_xor_calls() != 0) ==
+                    (syndrome_accumulated_blocks != 0),
+            operation + " misclassified the GF16 accumulating IFFT route");
     }
 }
 
@@ -1215,6 +1245,14 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
         { 17, 4, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 193 },
         { 17, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 257 },
         { 17, 33, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, 129 },
+        // GF16 Algorithm 5 syndrome accumulation covers both possible final
+        // layer shapes.  T=4 uses a split 192-byte prefix plus a compact
+        // fused tail; T=16 similarly mixes a 1024-byte split prefix with a
+        // padded tail.  Scalar remains the measured materialized fallback.
+        { 17, 2, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 130 },
+        { 17, 4, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 194 },
+        { 17, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 258 },
+        { 33, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 1026 },
         { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 64 },
         { 17, 33, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 64 },
         { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 66 },
@@ -1305,10 +1343,28 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
             }
             else
             {
-                require(test_case.field == LEO2_FIELD_GF8 &&
-                        test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
-                        trace.ff8_ifft_two_xor_calls() != 0,
-                    profile_name + " T=2 encode missed accumulating IFFT2");
+                require(test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1,
+                    profile_name + " T=2 encode has an invalid profile");
+                if (test_case.field == LEO2_FIELD_GF8)
+                {
+                    require(trace.ff8_ifft_two_xor_calls() != 0,
+                        profile_name +
+                            " T=2 encode missed accumulating GF8 IFFT2");
+                }
+                else if (leo2_context_backend(
+                             contexts[context_i].context) ==
+                         LEO2_BACKEND_SCALAR)
+                {
+                    require(trace.ff16_ifft_two_xor_calls() == 0,
+                        profile_name +
+                            " T=2 scalar encode used vector accumulation");
+                }
+                else
+                {
+                    require(trace.ff16_ifft_two_xor_calls() != 0,
+                        profile_name +
+                            " T=2 encode missed accumulating GF16 IFFT2");
+                }
             }
             if (test_case.profile == LEO2_PROFILE_LOW_V1)
                 require_low_encode_no_copy(
@@ -1343,8 +1399,30 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                 require(trace.xor_four_calls() != 0,
                     "decode bypassed the context grouped-XOR table");
             if (test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1)
+            {
+                const bool expect_gf16_accumulation =
+                    test_case.field == LEO2_FIELD_GF16 &&
+                    ((test_case.k == 17 &&
+                      (test_case.r == 2 || test_case.r == 4 ||
+                       test_case.r == 8)) ||
+                     (test_case.k == 33 && test_case.r == 16));
+                const bool expect_gf16_materialization =
+                    test_case.field == LEO2_FIELD_GF16 &&
+                    ((test_case.k == 17 && test_case.r == 4) ||
+                     (test_case.k == 33 && test_case.r == 16));
                 require_high_decode_no_copy(
-                    trace, test_case.field, profile_name + " decode");
+                    trace,
+                    leo2_context_backend(contexts[context_i].context),
+                    test_case.field, expect_gf16_accumulation,
+                    expect_gf16_materialization,
+                    profile_name + " decode backend=" +
+                        std::to_string(static_cast<unsigned>(
+                            leo2_context_backend(
+                                contexts[context_i].context))) +
+                        " K=" + std::to_string(test_case.k) +
+                        " R=" + std::to_string(test_case.r) +
+                        " bytes=" + std::to_string(test_case.bytes));
+            }
             leo2_codec_destroy(codec);
         }
 

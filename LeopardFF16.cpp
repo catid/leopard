@@ -56,6 +56,8 @@ static std::atomic<uint64_t> TestHighOutputBlocks(0);
 static std::atomic<uint64_t> TestHighFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestHighFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighCompatibilityCopyFallbacks(0);
+static std::atomic<uint64_t> TestHighSyndromeAccumulatedBlocks(0);
+static std::atomic<uint64_t> TestHighSyndromeMaterializedBlocks(0);
 static std::atomic<uint64_t> TestSparseExactBlocks(0);
 static std::atomic<uint64_t> TestSparsePrefixButterflies(0);
 static std::atomic<uint64_t> TestSparseRetainedButterflies(0);
@@ -1329,19 +1331,29 @@ static void IFFT_DIT_Encoder(
 }
 
 
-// Basic no-frills version for decoder
-static void IFFT_DIT_Decoder(
+// Basic no-frills version for decoder.  When xor_result is non-null, qualified
+// vector backends accumulate the final inverse layer directly into those
+// disjoint buffers.  The source workspace is dead after that layer.  Scalar
+// and compact fused-radix-four cases retain the established materialize-then-
+// XOR schedule because that is their measured crossover winner.
+template<bool FuseAccumulation>
+static bool IFFT_DIT_DecoderImpl(
     const backend::Ops& ops,
     const uint64_t bytes,
     const unsigned m_truncated,
     void** work,
     const unsigned m,
-    const ffe_t* skewLUT)
+    const ffe_t* skewLUT,
+    void** xor_result)
 {
     // Decimation in time: Unroll 2 layers at a time
     unsigned dist = 1, dist4 = 4;
+    bool accumulated = false;
     for (; dist4 <= m; dist = dist4, dist4 <<= 2)
     {
+        const bool accumulate_split_stage = xor_result &&
+            FuseAccumulation && dist4 == m &&
+            !UseFusedButterfly4(ops, bytes);
         // For each set of dist*4 elements:
 #pragma omp parallel for
         for (int r = 0; r < (int)m_truncated; r += dist4)
@@ -1351,10 +1363,21 @@ static void IFFT_DIT_Decoder(
             const ffe_t log_m02 = skewLUT[i_end + dist];
             const ffe_t log_m23 = skewLUT[i_end + dist * 2];
 
-            IFFT_DIT4_Range(
-                ops, bytes, work + r, dist,
-                log_m01, log_m23, log_m02);
+            if (accumulate_split_stage)
+            {
+                IFFT_DIT4_xor_Split_Range(
+                    ops, bytes, work + r, xor_result + r, dist,
+                    log_m01, log_m23, log_m02);
+            }
+            else
+            {
+                IFFT_DIT4_Range(
+                    ops, bytes, work + r, dist,
+                    log_m01, log_m23, log_m02);
+            }
         }
+        if (accumulate_split_stage && m_truncated != 0)
+            accumulated = true;
     }
 
     // If there is one layer left:
@@ -1365,7 +1388,19 @@ static void IFFT_DIT_Decoder(
 
         const ffe_t log_m = skewLUT[dist];
 
-        if (log_m == kModulus)
+        if (xor_result && FuseAccumulation)
+        {
+#pragma omp parallel for
+            for (int i = 0; i < (int)dist; ++i)
+            {
+                IFFT_DIT2_xor(ops,
+                    work[i], work[i + dist],
+                    xor_result[i], xor_result[i + dist],
+                    log_m, bytes);
+            }
+            accumulated = true;
+        }
+        else if (log_m == kModulus)
             VectorXOR_Threads(ops, bytes, dist, work + dist, work);
         else
         {
@@ -1381,6 +1416,48 @@ static void IFFT_DIT_Decoder(
             }
         }
     }
+
+    if (xor_result && !accumulated)
+    {
+        if (m < 8)
+            VectorXOR(ops, bytes, m, xor_result, work);
+        else
+            VectorXOR_Threads(ops, bytes, m, xor_result, work);
+    }
+    return accumulated;
+}
+
+
+static void IFFT_DIT_Decoder(
+    const backend::Ops& ops,
+    const uint64_t bytes,
+    const unsigned m_truncated,
+    void** work,
+    const unsigned m,
+    const ffe_t* skewLUT)
+{
+    (void)IFFT_DIT_DecoderImpl<false>(
+        ops, bytes, m_truncated, work, m, skewLUT, NULL);
+}
+
+
+static bool IFFT_DIT_DecoderAccumulate(
+    const backend::Ops& ops,
+    const uint64_t bytes,
+    const unsigned m_truncated,
+    void** work,
+    void** xor_result,
+    const unsigned m,
+    const ffe_t* skewLUT)
+{
+    LEO_DEBUG_ASSERT(xor_result != NULL);
+    if (ops.kind == LEO2_BACKEND_SSSE3 || ops.kind == LEO2_BACKEND_AVX2)
+    {
+        return IFFT_DIT_DecoderImpl<true>(
+            ops, bytes, m_truncated, work, m, skewLUT, xor_result);
+    }
+    return IFFT_DIT_DecoderImpl<false>(
+        ops, bytes, m_truncated, work, m, skewLUT, xor_result);
 }
 
 /*
@@ -2960,6 +3037,8 @@ void TestOnlyResetHighDecodeCounts()
     TestHighFFTButterfly2OutCalls.store(0, std::memory_order_relaxed);
     TestHighFFTButterfly4OutCalls.store(0, std::memory_order_relaxed);
     TestHighCompatibilityCopyFallbacks.store(0, std::memory_order_relaxed);
+    TestHighSyndromeAccumulatedBlocks.store(0, std::memory_order_relaxed);
+    TestHighSyndromeMaterializedBlocks.store(0, std::memory_order_relaxed);
 }
 
 
@@ -2973,6 +3052,10 @@ TestOnlyHighDecodeCounts TestOnlyGetHighDecodeCounts()
         TestHighFFTButterfly4OutCalls.load(std::memory_order_relaxed);
     result.compatibility_copy_fallbacks =
         TestHighCompatibilityCopyFallbacks.load(std::memory_order_relaxed);
+    result.syndrome_accumulated_blocks =
+        TestHighSyndromeAccumulatedBlocks.load(std::memory_order_relaxed);
+    result.syndrome_materialized_blocks =
+        TestHighSyndromeMaterializedBlocks.load(std::memory_order_relaxed);
     return result;
 }
 
@@ -3630,17 +3713,26 @@ void ReedSolomonDecodeHighPrepared(
         unsigned input_count = t;
         while (input_count > 0 && !coordinate_data[offset + input_count - 1])
             --input_count;
-        IFFT_DIT_Decoder(
-            ops,
-            buffer_bytes, input_count, work + offset, t,
-            FFTSkewStorage + offset);
-        if (block != 0)
+        if (input_count == 0)
+            continue;
+        if (block == 0)
         {
-            if (t < 8)
-                VectorXOR(ops, buffer_bytes, t, work, work + offset);
-            else
-                VectorXOR_Threads(
-                    ops, buffer_bytes, t, work, work + offset);
+            IFFT_DIT_Decoder(
+                ops, buffer_bytes, input_count, work, t,
+                FFTSkewStorage);
+        }
+        else
+        {
+            const bool accumulated = IFFT_DIT_DecoderAccumulate(
+                ops, buffer_bytes, input_count, work + offset, work, t,
+                FFTSkewStorage + offset);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            (accumulated ? TestHighSyndromeAccumulatedBlocks
+                         : TestHighSyndromeMaterializedBlocks)
+                .fetch_add(1, std::memory_order_relaxed);
+#else
+            (void)accumulated;
+#endif
         }
     }
 
@@ -3743,37 +3835,55 @@ void ReedSolomonDecodeHighPrunedPlanned(
         const unsigned offset = block * t;
         const unsigned input_count = block_input_counts[block];
         LEO_DEBUG_ASSERT(input_count <= t);
-        if (input_count != 0)
+        if (input_count == 0)
+            continue;
+        const leopard2_internal::PrunedTransformPlan* pruned = NULL;
+        if (input_plan_index < input_plan_count && input_plans &&
+            input_plans[input_plan_index].block == block)
         {
-            const leopard2_internal::PrunedTransformPlan* pruned = NULL;
-            if (input_plan_index < input_plan_count && input_plans &&
-                input_plans[input_plan_index].block == block)
-            {
-                pruned = &input_plans[input_plan_index].plan;
-                ++input_plan_index;
-            }
-            if (pruned)
-            {
-                LEO_DEBUG_ASSERT(pruned->size == t &&
-                    pruned->shift == offset && pruned->inverse);
-                const bool executed =
-                    leopard2_internal::ExecutePrunedTransformPlan(
-                        ops, buffer_bytes, *pruned, work + offset);
-                LEO_DEBUG_ASSERT(executed);
-                (void)executed;
-            }
-            else
-                IFFT_DIT_Decoder(
-                    ops, buffer_bytes, input_count, work + offset, t,
-                    FFTSkewStorage + offset);
+            pruned = &input_plans[input_plan_index].plan;
+            ++input_plan_index;
         }
-        if (block != 0 && input_count != 0)
+        if (pruned)
         {
-            if (t < 8)
-                VectorXOR(ops, buffer_bytes, t, work, work + offset);
-            else
-                VectorXOR_Threads(
-                    ops, buffer_bytes, t, work, work + offset);
+            LEO_DEBUG_ASSERT(pruned->size == t &&
+                pruned->shift == offset && pruned->inverse);
+            const bool executed =
+                leopard2_internal::ExecutePrunedTransformPlan(
+                    ops, buffer_bytes, *pruned, work + offset);
+            LEO_DEBUG_ASSERT(executed);
+            (void)executed;
+            if (block != 0)
+            {
+                if (t < 8)
+                    VectorXOR(ops, buffer_bytes, t, work, work + offset);
+                else
+                    VectorXOR_Threads(
+                        ops, buffer_bytes, t, work, work + offset);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+                TestHighSyndromeMaterializedBlocks.fetch_add(
+                    1, std::memory_order_relaxed);
+#endif
+            }
+        }
+        else if (block == 0)
+        {
+            IFFT_DIT_Decoder(
+                ops, buffer_bytes, input_count, work, t,
+                FFTSkewStorage);
+        }
+        else
+        {
+            const bool accumulated = IFFT_DIT_DecoderAccumulate(
+                ops, buffer_bytes, input_count, work + offset, work, t,
+                FFTSkewStorage + offset);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            (accumulated ? TestHighSyndromeAccumulatedBlocks
+                         : TestHighSyndromeMaterializedBlocks)
+                .fetch_add(1, std::memory_order_relaxed);
+#else
+            (void)accumulated;
+#endif
         }
     }
     LEO_DEBUG_ASSERT(input_plan_index == input_plan_count);
@@ -3996,11 +4106,25 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
                     ops, buffer_bytes, *pruned, tile);
             LEO_DEBUG_ASSERT(executed);
             (void)executed;
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            TestHighSyndromeMaterializedBlocks.fetch_add(
+                1, std::memory_order_relaxed);
+#endif
         }
         else
-            IFFT_DIT_Decoder(
-                ops, buffer_bytes, input_count, tile, t,
+        {
+            const bool accumulated = IFFT_DIT_DecoderAccumulate(
+                ops, buffer_bytes, input_count, tile, accumulator, t,
                 FFTSkewStorage + offset);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            (accumulated ? TestHighSyndromeAccumulatedBlocks
+                         : TestHighSyndromeMaterializedBlocks)
+                .fetch_add(1, std::memory_order_relaxed);
+#else
+            (void)accumulated;
+#endif
+            continue;
+        }
         if (t < 8)
             VectorXOR(ops, buffer_bytes, t, accumulator, tile);
         else
