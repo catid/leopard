@@ -40,16 +40,19 @@ MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 RAW_SCHEMA_V1 = "leopard2-main-compare-raw/v1"
 RAW_SCHEMA_V2 = "leopard2-main-compare-raw/v2"
 RAW_SCHEMA_V3 = "leopard2-main-compare-raw/v3"
-RAW_SCHEMA = "leopard2-main-compare-raw/v4"
+RAW_SCHEMA_V4 = "leopard2-main-compare-raw/v4"
+RAW_SCHEMA = "leopard2-main-compare-raw/v5"
 HARDENED_HISTORICAL_BUILD_SCHEMA = \
     "leopard2-main-compare-build/hardened-historical-v1"
 MANIFEST_SCHEMA_V1 = "leopard2-main-compare-manifest/v1"
 MANIFEST_SCHEMA_V2 = "leopard2-main-compare-manifest/v2"
 MANIFEST_SCHEMA_V3 = "leopard2-main-compare-manifest/v3"
-MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v4"
+MANIFEST_SCHEMA_V4 = "leopard2-main-compare-manifest/v4"
+MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v5"
 FAILURE_SCHEMA_V2 = "leopard2-main-compare-failure/v2"
 FAILURE_SCHEMA_V3 = "leopard2-main-compare-failure/v3"
-FAILURE_SCHEMA = "leopard2-main-compare-failure/v4"
+FAILURE_SCHEMA_V4 = "leopard2-main-compare-failure/v4"
+FAILURE_SCHEMA = "leopard2-main-compare-failure/v5"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
 ISOLATION_SCHEMA = "leopard2-main-compare-isolation/v1"
@@ -73,6 +76,7 @@ RAW_TO_CMAKE_IDENTITY = {
     RAW_SCHEMA_V1: HISTORICAL_CMAKE_IDENTITY,
     RAW_SCHEMA_V2: HISTORICAL_CMAKE_IDENTITY,
     RAW_SCHEMA_V3: CANONICAL_CMAKE_IDENTITY,
+    RAW_SCHEMA_V4: CANONICAL_CMAKE_IDENTITY,
     RAW_SCHEMA: CANONICAL_CMAKE_IDENTITY,
 }
 # This internal build-only schema lets another evidence family authenticate an
@@ -85,6 +89,7 @@ BUILD_SCHEMA_TO_CMAKE_IDENTITY = {
 }
 HARDENED_BUILD_SCHEMAS = frozenset((
     RAW_SCHEMA_V3,
+    RAW_SCHEMA_V4,
     RAW_SCHEMA,
     HARDENED_HISTORICAL_BUILD_SCHEMA,
 ))
@@ -92,13 +97,22 @@ MANIFEST_TO_RAW_SCHEMA = {
     MANIFEST_SCHEMA_V1: RAW_SCHEMA_V1,
     MANIFEST_SCHEMA_V2: RAW_SCHEMA_V2,
     MANIFEST_SCHEMA_V3: RAW_SCHEMA_V3,
+    MANIFEST_SCHEMA_V4: RAW_SCHEMA_V4,
     MANIFEST_SCHEMA: RAW_SCHEMA,
 }
 FAILURE_TO_RAW_SCHEMA = {
     FAILURE_SCHEMA_V2: RAW_SCHEMA_V2,
     FAILURE_SCHEMA_V3: RAW_SCHEMA_V3,
+    FAILURE_SCHEMA_V4: RAW_SCHEMA_V4,
     FAILURE_SCHEMA: RAW_SCHEMA,
 }
+CANDIDATE_MODE_SCHEMAS = frozenset((RAW_SCHEMA_V4, RAW_SCHEMA))
+WORKSPACE_SELECTOR_SCHEMAS = frozenset((
+    RAW_SCHEMA_V3, RAW_SCHEMA_V4, RAW_SCHEMA,
+))
+ISOLATION_SCHEMAS = frozenset((
+    RAW_SCHEMA_V2, RAW_SCHEMA_V3, RAW_SCHEMA_V4, RAW_SCHEMA,
+))
 CPU_STAT_FIELDS = (
     "user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal",
 )
@@ -1548,6 +1562,19 @@ def build_provenance(
             "ranlib": {"invocation": cache["CMAKE_RANLIB"],
                        "resolved_path": str(ranlib)},
         }
+    if raw_schema == RAW_SCHEMA:
+        executable_content = exact_text_content(
+            executable_link, f"{implementation} executable link recipe")
+        require(executable_content["size"] ==
+                    result["executable_link_recipe"]["size"] and
+                executable_content["sha256"] ==
+                    result["executable_link_recipe"]["sha256"],
+                f"{implementation} executable recipe changed between reads")
+        result["executable_link_recipe_content"] = executable_content
+        result["compiler_invocation"] = {
+            "invocation": cache["CMAKE_CXX_COMPILER"],
+            "resolved_path": str(compiler),
+        }
     return result
 
 
@@ -1628,6 +1655,386 @@ def input_snapshot(
             Path(specification["candidate_source_root"]),
             str(specification["candidate_commit"]), False),
     }
+
+
+def validate_complete_artifact_identity(
+    value: object, label: str, expected_kind: str | None = None,
+) -> dict[str, Any]:
+    """Validate the complete, portable file identity retained by schema v5."""
+    require(isinstance(value, dict) and set(value) == {
+                "path", "kind", "size", "mode", "mtime_ns", "sha256"},
+            f"{label} file identity shape differs")
+    path = value["path"]
+    kind = value["kind"]
+    require(isinstance(path, str) and path and Path(path).is_absolute() and
+            isinstance(kind, str) and kind and
+            (expected_kind is None or kind == expected_kind) and
+            type(value["size"]) is int and value["size"] >= 0 and
+            type(value["mode"]) is int and 0 <= value["mode"] <= 0o7777 and
+            type(value["mtime_ns"]) is int and value["mtime_ns"] >= 0 and
+            isinstance(value["sha256"], str) and
+            HEX256.fullmatch(value["sha256"]) is not None,
+            f"{label} file identity is invalid")
+    return value
+
+
+def validate_complete_text_identity(value: object, label: str) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+                "encoding", "size", "sha256", "text"},
+            f"{label} retained text shape differs")
+    require(value.get("encoding") == "utf-8" and
+            isinstance(value.get("text"), str),
+            f"{label} retained text is invalid")
+    require(value == exact_text_content(value["text"], label),
+            f"{label} retained text identity differs")
+    return value
+
+
+def validate_complete_git_identity(
+    value: object, label: str, expected_path: str, expected_head: str,
+    *, require_detached: bool,
+) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+                "path", "head", "tree", "detached",
+                "tracked_tree_listing_sha256", "tracked_status"},
+            f"{label} source identity shape differs")
+    require(Path(expected_path).is_absolute() and
+            value.get("path") == expected_path and
+            value.get("head") == expected_head and
+            isinstance(value.get("tree"), str) and
+            re.fullmatch(r"[0-9a-f]{40}", value["tree"]) is not None and
+            type(value.get("detached")) is bool and
+            (not require_detached or value["detached"] is True) and
+            isinstance(value.get("tracked_tree_listing_sha256"), str) and
+            HEX256.fullmatch(value["tracked_tree_listing_sha256"]) is not None and
+            value.get("tracked_status") == "clean",
+            f"{label} source identity is invalid")
+    return value
+
+
+def validate_complete_runtime_closure(
+    value: object, label: str, expected_executable: str,
+) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+                "executable", "dependencies"} and
+            value.get("executable") == expected_executable and
+            isinstance(value.get("dependencies"), list) and
+            value["dependencies"],
+            f"{label} runtime closure shape differs")
+    sonames: list[str] = []
+    loader_paths: list[str] = []
+    file_paths: list[str] = []
+    for index, dependency in enumerate(value["dependencies"]):
+        require(isinstance(dependency, dict),
+                f"{label} runtime dependency {index} is not an object")
+        soname = dependency.get("soname")
+        require(isinstance(soname, str) and soname,
+                f"{label} runtime dependency {index} has no soname")
+        sonames.append(soname)
+        if set(dependency) == {"soname", "virtual"}:
+            require(soname == "linux-vdso.so.1" and
+                    dependency.get("virtual") is True,
+                    f"{label} virtual runtime dependency is invalid")
+            continue
+        require(set(dependency) == {"soname", "loader_path", "file"},
+                f"{label} runtime dependency {soname} variant differs")
+        loader_path = dependency.get("loader_path")
+        require(isinstance(loader_path, str) and
+                Path(loader_path).is_absolute(),
+                f"{label} runtime dependency {soname} loader path is invalid")
+        file_record = validate_complete_artifact_identity(
+            dependency.get("file"), f"{label} runtime dependency {soname}")
+        require(file_record["kind"] in {"shared_library", "dynamic_loader"},
+                f"{label} runtime dependency {soname} has the wrong file kind")
+        loader_paths.append(loader_path)
+        file_paths.append(file_record["path"])
+    require(sonames == sorted(sonames) and len(sonames) == len(set(sonames)) and
+            len(loader_paths) == len(set(loader_paths)) and
+            len(file_paths) == len(set(file_paths)),
+            f"{label} runtime dependency closure is not sorted and unique")
+    return value
+
+
+def validate_complete_executable_recipe(
+    content: object, identity: object, compiler_invocation: str,
+    archive_name: str, executable_name: str, benchmark_object: str, label: str,
+) -> None:
+    retained = validate_complete_text_identity(content, label)
+    recipe = validate_complete_artifact_identity(
+        identity, f"{label} file", "build_metadata")
+    require(recipe["size"] == retained["size"] and
+            recipe["sha256"] == retained["sha256"],
+            f"{label} bytes differ from its file identity")
+    try:
+        tokens = shlex.split(retained["text"], posix=True)
+    except ValueError as error:
+        raise EvidenceError(f"cannot parse {label}: {error}") from error
+    require(tokens and tokens[0] == compiler_invocation and
+            not any(token.startswith("@") for token in tokens),
+            f"{label} compiler or response-file semantics differ")
+    require(any(Path(token).name == archive_name for token in tokens),
+            f"{label} omits its exact archive")
+    objects = [token.replace("\\", "/") for token in tokens
+               if token.endswith(".o")]
+    require(objects == [benchmark_object],
+            f"{label} benchmark object closure differs")
+    outputs = [tokens[index + 1] for index, token in enumerate(tokens[:-1])
+               if token == "-o"]
+    require(len(outputs) == 1 and Path(outputs[0]).name == executable_name,
+            f"{label} output differs from its exact executable")
+
+
+def validate_complete_build_identity(
+    build: object, implementation: str, specification: Mapping[str, Any],
+) -> dict[str, Any]:
+    require(implementation in {"baseline", "candidate"} and
+            isinstance(build, dict),
+            f"{implementation} build identity is not an object")
+    require(set(build) == {
+                "build_dir", "cmake_cache", "compile_commands",
+                "executable_link_recipe", "archive_link_recipe", "compiler",
+                "compiler_version_stdout", "archiver", "ranlib",
+                "validated_archive_members", "validated_executable",
+                "validated_archive", "validated_cache",
+                "validated_compile_commands", "archive_link_recipe_content",
+                "executable_link_recipe_content",
+                "archive_link_tool_invocations", "compiler_invocation"},
+            f"{implementation} build identity shape differs")
+    build_dir = build.get("build_dir")
+    require(isinstance(build_dir, str) and Path(build_dir).is_absolute() and
+            build_dir == specification[f"{implementation}_build_dir"],
+            f"{implementation} build directory identity differs")
+    cmake = CANONICAL_CMAKE_IDENTITY
+    if implementation == "baseline":
+        archive_name = "libleopard_main_exact.a"
+        executable_name = "leopard_main_benchmark"
+        archive_target_directory = "leopard_main_exact.dir"
+        executable_recipe_relative = \
+            "CMakeFiles/leopard_main_benchmark.dir/link.txt"
+        required_cache = {
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_CXX_COMPILER": None,
+            "CMAKE_CXX_FLAGS_RELEASE": None,
+            "LEO_MAIN_HAS_MARCH_NATIVE": "1",
+        }
+        benchmark_suffix = \
+            "/experiments/leopard2/main_compare/legacy_main_benchmark.cpp"
+        isa_policy = "whole-build -march=native"
+    else:
+        archive_name = cmake["archive"]
+        executable_name = "bench_leopard2"
+        archive_target_directory = cmake["target_directory"]
+        executable_recipe_relative = "CMakeFiles/bench_leopard2.dir/link.txt"
+        required_cache = {
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_CXX_COMPILER": None,
+            "CMAKE_CXX_FLAGS_RELEASE": None,
+            "ENABLE_OPENMP": "ON",
+            "LEO2_BACKEND_VARIANT": "auto",
+            "LEO2_BUILD_BENCHMARKS": "ON",
+            "LEO2_BUILD_FUZZERS": "OFF",
+            "LEO2_BUILD_TESTS": "OFF",
+            "LEO2_ENABLE_CUDA": "OFF",
+        }
+        benchmark_suffix = "/bench/leopard2/benchmark.cpp"
+        isa_policy = (
+            "portable core with ISA flags only on SSSE3, AVX2, and "
+            "AVX-512VL translation units")
+
+    expected_metadata = {
+        "cmake_cache": str(Path(build_dir) / "CMakeCache.txt"),
+        "compile_commands": str(Path(build_dir) / "compile_commands.json"),
+        "executable_link_recipe": str(
+            Path(build_dir) / executable_recipe_relative),
+        "archive_link_recipe": str(
+            Path(build_dir) / "CMakeFiles" / archive_target_directory / "link.txt"),
+    }
+    for name, expected_path in expected_metadata.items():
+        record = validate_complete_artifact_identity(
+            build.get(name), f"{implementation} {name}", "build_metadata")
+        require(record["path"] == expected_path,
+                f"{implementation} {name} path differs")
+    compiler = validate_complete_artifact_identity(
+        build.get("compiler"), f"{implementation} compiler", "compiler")
+    archiver = validate_complete_artifact_identity(
+        build.get("archiver"), f"{implementation} archiver", "archiver")
+    ranlib = validate_complete_artifact_identity(
+        build.get("ranlib"), f"{implementation} ranlib", "ranlib")
+    executable = validate_complete_artifact_identity(
+        build.get("validated_executable"),
+        f"{implementation} validated executable", "executable")
+    archive = validate_complete_artifact_identity(
+        build.get("validated_archive"),
+        f"{implementation} validated archive", "archive")
+    require(executable["path"] == str(Path(build_dir) / executable_name) and
+            archive["path"] == str(Path(build_dir) / archive_name),
+            f"{implementation} validated output paths differ")
+
+    version = build.get("compiler_version_stdout")
+    require(isinstance(version, dict) and set(version) == {"sha256", "text"} and
+            isinstance(version.get("text"), str) and version["text"] and
+            isinstance(version.get("sha256"), str) and
+            version["sha256"] == sha256_bytes(version["text"].encode("utf-8")),
+            f"{implementation} compiler version identity differs")
+    cache = build.get("validated_cache")
+    require(isinstance(cache, dict) and set(cache) == set(required_cache),
+            f"{implementation} validated CMake cache shape differs")
+    require(cache.get("CMAKE_BUILD_TYPE") == "Release" and
+            isinstance(cache.get("CMAKE_CXX_COMPILER"), str) and
+            cache["CMAKE_CXX_COMPILER"] and
+            isinstance(cache.get("CMAKE_CXX_FLAGS_RELEASE"), str) and
+            "-O3" in shlex.split(cache["CMAKE_CXX_FLAGS_RELEASE"]) and
+            all(cache.get(name) == expected for name, expected in
+                required_cache.items() if expected is not None),
+            f"{implementation} validated CMake cache semantics differ")
+    compiler_invocation = build.get("compiler_invocation")
+    require(isinstance(compiler_invocation, dict) and
+            set(compiler_invocation) == {"invocation", "resolved_path"} and
+            compiler_invocation.get("invocation") ==
+                cache["CMAKE_CXX_COMPILER"] and
+            compiler_invocation.get("resolved_path") == compiler["path"],
+            f"{implementation} compiler invocation identity differs")
+
+    compile_record = build.get("validated_compile_commands")
+    require(isinstance(compile_record, dict) and set(compile_record) == {
+                "entry_count", "required_sources", "validated_optimization",
+                "validated_openmp", "required_source_object_pairs", "isa_policy"},
+            f"{implementation} compile-command identity shape differs")
+    pairs = compile_record.get("required_source_object_pairs")
+    sources = compile_record.get("required_sources")
+    require(type(compile_record.get("entry_count")) is int and
+            compile_record["entry_count"] >= 1 and
+            compile_record.get("validated_optimization") == "-O3" and
+            compile_record.get("validated_openmp") is True and
+            compile_record.get("isa_policy") == isa_policy and
+            isinstance(sources, list) and sources and
+            sources == sorted(set(sources)) and
+            isinstance(pairs, list) and pairs,
+            f"{implementation} compile-command identity is invalid")
+    pair_sources: list[str] = []
+    pair_objects: list[str] = []
+    for index, pair in enumerate(pairs):
+        require(isinstance(pair, dict) and set(pair) == {"source", "object"},
+                f"{implementation} compile pair {index} shape differs")
+        source = validate_complete_artifact_identity(
+            pair["source"], f"{implementation} source {index}", "source_file")
+        obj = validate_complete_artifact_identity(
+            pair["object"], f"{implementation} object {index}", "object_file")
+        require(Path(obj["path"]).is_relative_to(Path(build_dir)),
+                f"{implementation} object {index} escapes its build directory")
+        pair_sources.append(source["path"])
+        pair_objects.append(obj["path"])
+    require(pair_sources == sorted(pair_sources) and
+            pair_sources == sources and len(pair_sources) == len(set(pair_sources)) and
+            len(pair_objects) == len(set(pair_objects)) and
+            compile_record["entry_count"] >= len(pair_sources),
+            f"{implementation} compile-command source/object closure differs")
+    benchmark_pairs = [pair for pair in pairs
+                       if pair["source"]["path"].endswith(benchmark_suffix)]
+    require(len(benchmark_pairs) == 1,
+            f"{implementation} benchmark object is not unique")
+    archive_pairs = [pair for pair in pairs if pair not in benchmark_pairs]
+    require(archive_pairs,
+            f"{implementation} archive compile closure is empty")
+    candidate_source_root = Path(specification["candidate_source_root"])
+    implementation_source_root = Path(
+        specification[f"{implementation}_source_root"])
+    require(all(Path(pair["source"]["path"]).is_relative_to(
+                    candidate_source_root)
+                for pair in benchmark_pairs) and
+            all(Path(pair["source"]["path"]).is_relative_to(
+                    implementation_source_root)
+                for pair in archive_pairs),
+            f"{implementation} compile sources escape their declared source roots")
+    members = build.get("validated_archive_members")
+    require(isinstance(members, list) and members and
+            len(members) == len(set(members)) and
+            all(isinstance(member, str) and member and "/" not in member
+                for member in members),
+            f"{implementation} archive member identity is invalid")
+    objects_by_member: dict[str, str] = {}
+    for pair in archive_pairs:
+        object_path = Path(pair["object"]["path"])
+        require(object_path.name not in objects_by_member,
+                f"{implementation} archive member basenames are ambiguous")
+        objects_by_member[object_path.name] = object_path.relative_to(
+            Path(build_dir)).as_posix()
+    require(set(members) == set(objects_by_member),
+            f"{implementation} archive members differ from compile closure")
+
+    tools = build.get("archive_link_tool_invocations")
+    require(isinstance(tools, dict) and set(tools) == {"archiver", "ranlib"},
+            f"{implementation} archive tool invocation shape differs")
+    for name, artifact in (("archiver", archiver), ("ranlib", ranlib)):
+        invocation = tools.get(name)
+        require(isinstance(invocation, dict) and set(invocation) == {
+                    "invocation", "resolved_path"} and
+                isinstance(invocation.get("invocation"), str) and
+                invocation["invocation"] and
+                invocation.get("resolved_path") == artifact["path"],
+                f"{implementation} {name} invocation identity differs")
+    validate_archive_link_recipe_content(
+        build.get("archive_link_recipe_content"),
+        build["archive_link_recipe"], archive_name, archive_target_directory,
+        f"{implementation} archive link recipe",
+        expected_objects=[objects_by_member[member] for member in members],
+        expected_archiver=tools["archiver"]["invocation"],
+        expected_ranlib=tools["ranlib"]["invocation"])
+    validate_complete_executable_recipe(
+        build.get("executable_link_recipe_content"),
+        build["executable_link_recipe"], cache["CMAKE_CXX_COMPILER"],
+        archive_name, executable_name,
+        Path(benchmark_pairs[0]["object"]["path"]).relative_to(
+            Path(build_dir)).as_posix(),
+        f"{implementation} executable link recipe")
+    return build
+
+
+def validate_complete_input_snapshot(
+    specification: Mapping[str, Any], snapshot: object,
+) -> dict[str, Any]:
+    require(isinstance(snapshot, dict) and set(snapshot) == {
+                "runner", "taskset", "ldd", "baseline_executable",
+                "candidate_executable", "baseline_archive", "candidate_archive",
+                "baseline_build", "candidate_build", "baseline_runtime_closure",
+                "candidate_runtime_closure", "baseline_source", "candidate_source"},
+            "schema-v5 input identity shape differs")
+    for name, kind in (("runner", "file"), ("taskset", "executable"),
+                       ("ldd", "executable")):
+        record = validate_complete_artifact_identity(
+            snapshot.get(name), name, kind)
+        require(record["path"] == specification[name],
+                f"{name} identity differs from the input specification")
+    for role in ("baseline", "candidate"):
+        executable = validate_complete_artifact_identity(
+            snapshot.get(f"{role}_executable"), f"{role} executable", "executable")
+        archive = validate_complete_artifact_identity(
+            snapshot.get(f"{role}_archive"), f"{role} archive", "archive")
+        require(executable["path"] == specification[f"{role}_executable"] and
+                archive["path"] == specification[f"{role}_archive"],
+                f"{role} output identity differs from the input specification")
+        build = validate_complete_build_identity(
+            snapshot.get(f"{role}_build"), role, specification)
+        require(executable == build["validated_executable"] and
+                archive == build["validated_archive"],
+                f"{role} top-level/build output identity differs")
+        validate_complete_runtime_closure(
+            snapshot.get(f"{role}_runtime_closure"), role,
+            executable["path"])
+    validate_complete_git_identity(
+        snapshot.get("baseline_source"), "baseline",
+        specification["baseline_source_root"], MAIN_COMMIT,
+        require_detached=True)
+    validate_complete_git_identity(
+        snapshot.get("candidate_source"), "candidate",
+        specification["candidate_source_root"], specification["candidate_commit"],
+        require_detached=False)
+    require(snapshot["baseline_build"]["compiler"] ==
+                snapshot["candidate_build"]["compiler"] and
+            snapshot["baseline_build"]["compiler_version_stdout"] ==
+                snapshot["candidate_build"]["compiler_version_stdout"],
+            "baseline and candidate compiler identities differ")
+    return snapshot
 
 
 def validate_candidate_cmake_identity(
@@ -1834,12 +2241,48 @@ def cpu_policy_identity(cpu: int) -> dict[str, Any]:
             "scaling_min_freq", "scaling_max_freq", "cpuinfo_min_freq",
             "cpuinfo_max_freq")
     }
+    cache_fields = (
+        "level", "type", "size", "coherency_line_size", "number_of_sets",
+        "ways_of_associativity", "physical_line_partition",
+        "shared_cpu_list", "shared_cpu_map", "allocation_policy",
+        "write_policy",
+    )
+    caches = []
+    for index_root in sorted(
+            (root / "cache").glob("index*"),
+            key=lambda path: int(path.name.removeprefix("index"))):
+        suffix = index_root.name.removeprefix("index")
+        require(suffix.isdigit(), f"CPU {cpu} has an invalid cache index")
+        record = {
+            "index": int(suffix),
+            **{name: read_text_optional(index_root / name)
+               for name in cache_fields},
+        }
+        require(all(record[name] is not None for name in (
+                    "level", "type", "size", "coherency_line_size",
+                    "shared_cpu_list", "shared_cpu_map")),
+                f"CPU {cpu} cache index {suffix} lacks domain identity")
+        require(cpu in parse_cpu_list(str(record["shared_cpu_list"])),
+                f"CPU {cpu} cache index {suffix} excludes its own CPU")
+        caches.append(record)
+    require(caches, f"CPU {cpu} has no retained cache hierarchy")
+    numa_nodes = sorted(
+        int(path.name.removeprefix("node"))
+        for path in root.glob("node*")
+        if path.name.removeprefix("node").isdigit())
+    core_class = {
+        "core_type": read_text_optional(topology_root / "core_type"),
+        "cpu_capacity": read_text_optional(root / "cpu_capacity"),
+    }
     return {
         "cpu": cpu,
         "online": read_text_optional(root / "online"),
         "cpuinfo": cpuinfo_identity(cpu),
         "topology": topology,
         "frequency_policy": frequency,
+        "cache_hierarchy": caches,
+        "numa_nodes": numa_nodes,
+        "core_class": core_class,
     }
 
 
@@ -2495,7 +2938,7 @@ def validate_cell(cell: Cell) -> None:
 
 
 def candidate_mode_for_campaign(campaign: Mapping[str, Any]) -> str:
-    """Return the explicit v4 mode, or AUTO for replay-only older bundles."""
+    """Return the explicit v4+ mode, or AUTO for replay-only older bundles."""
     mode = campaign.get("candidate_mode", "auto")
     require(isinstance(mode, str) and mode in CANDIDATE_MODES,
             "campaign candidate mode is invalid")
@@ -2505,9 +2948,9 @@ def candidate_mode_for_campaign(campaign: Mapping[str, Any]) -> str:
 def validate_candidate_mode_schema(
     campaign: Mapping[str, Any], raw_schema: str
 ) -> str:
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in CANDIDATE_MODE_SCHEMAS:
         require("candidate_mode" in campaign,
-                "v4 campaign does not bind its candidate mode")
+                "current campaign does not bind its candidate mode")
     else:
         require("candidate_mode" not in campaign,
                 "historical campaign contains an unversioned candidate mode")
@@ -2669,7 +3112,7 @@ def validate_result(
                     f"candidate option {name} is not comparison-safe")
         selector_names = (
             "force_tiled_decode", "force_materialized_decode")
-        if raw_schema in (RAW_SCHEMA_V3, RAW_SCHEMA):
+        if raw_schema in WORKSPACE_SELECTOR_SCHEMAS:
             for name in selector_names:
                 require(type(parameters.get(name)) is bool and
                         parameters[name] is mode_flags[name],
@@ -2821,10 +3264,133 @@ def safe_evidence_path(root: Path, relative: object) -> Path:
     return path
 
 
+def validate_complete_cpu_policy_record(
+    record: object, label: str, expected_cpu: int, expected_sibling: int,
+) -> dict[str, Any]:
+    require(isinstance(record, dict) and set(record) == {
+                "cpu", "online", "cpuinfo", "topology", "frequency_policy",
+                "cache_hierarchy", "numa_nodes", "core_class"},
+            f"host {label} policy identity shape differs")
+    require(type(record.get("cpu")) is int and record["cpu"] == expected_cpu and
+            (record.get("online") is None or isinstance(record["online"], str)),
+            f"host {label} CPU identity is invalid")
+    cpuinfo = record.get("cpuinfo")
+    allowed_cpuinfo = {
+        "processor", "vendor_id", "cpu family", "model", "model name",
+        "stepping", "microcode", "flags", "Features", "CPU implementer",
+        "CPU architecture", "CPU variant", "CPU part", "CPU revision",
+    }
+    require(isinstance(cpuinfo, dict) and cpuinfo and
+            set(cpuinfo).issubset(allowed_cpuinfo) and
+            cpuinfo.get("processor") == str(expected_cpu) and
+            any(key in cpuinfo for key in ("model name", "CPU part")) and
+            all(isinstance(item, str) for item in cpuinfo.values()),
+            f"host {label} processor identity is invalid")
+    topology = record.get("topology")
+    topology_names = {
+        "core_id", "physical_package_id", "die_id", "cluster_id",
+        "thread_siblings_list", "core_siblings_list",
+    }
+    require(isinstance(topology, dict) and set(topology) == topology_names and
+            all(item is None or isinstance(item, str)
+                for item in topology.values()) and
+            isinstance(topology["thread_siblings_list"], str) and
+            parse_cpu_list(topology["thread_siblings_list"]) == {
+                expected_cpu, expected_sibling} and
+            isinstance(topology["core_siblings_list"], str) and
+            {expected_cpu, expected_sibling}.issubset(
+                parse_cpu_list(topology["core_siblings_list"])),
+            f"host {label} topology is not the exact reserved SMT pair")
+    policy = record.get("frequency_policy")
+    policy_names = {
+        "scaling_driver", "scaling_governor", "energy_performance_preference",
+        "scaling_min_freq", "scaling_max_freq", "cpuinfo_min_freq",
+        "cpuinfo_max_freq",
+    }
+    require(isinstance(policy, dict) and set(policy) == policy_names and
+            all(item is None or isinstance(item, str) for item in policy.values()),
+            f"host {label} frequency policy identity differs")
+    caches = record.get("cache_hierarchy")
+    cache_names = {
+        "index", "level", "type", "size", "coherency_line_size",
+        "number_of_sets", "ways_of_associativity", "physical_line_partition",
+        "shared_cpu_list", "shared_cpu_map", "allocation_policy", "write_policy",
+    }
+    require(isinstance(caches, list) and caches,
+            f"host {label} cache hierarchy is absent")
+    indices: list[int] = []
+    for cache in caches:
+        require(isinstance(cache, dict) and set(cache) == cache_names and
+                type(cache.get("index")) is int and cache["index"] >= 0 and
+                all(cache.get(name) is None or isinstance(cache[name], str)
+                    for name in cache_names - {"index"}) and
+                all(isinstance(cache.get(name), str) and cache[name]
+                    for name in ("level", "type", "size",
+                                 "coherency_line_size", "shared_cpu_list",
+                                 "shared_cpu_map")) and
+                expected_cpu in parse_cpu_list(cache["shared_cpu_list"]),
+                f"host {label} cache identity is invalid")
+        indices.append(cache["index"])
+    require(indices == sorted(indices) and len(indices) == len(set(indices)),
+            f"host {label} cache indices are not sorted and unique")
+    nodes = record.get("numa_nodes")
+    require(isinstance(nodes, list) and nodes == sorted(set(nodes)) and
+            all(type(node) is int and node >= 0 for node in nodes),
+            f"host {label} NUMA identity is invalid")
+    core_class = record.get("core_class")
+    require(isinstance(core_class, dict) and set(core_class) == {
+                "core_type", "cpu_capacity"} and
+            all(item is None or isinstance(item, str)
+                for item in core_class.values()),
+            f"host {label} core-class identity differs")
+    return record
+
+
 def validate_host_record(
-    value: object, cpu: int, sibling: int, allowed: Sequence[int]
+    value: object, cpu: int, sibling: int, allowed: Sequence[int], raw_schema: str,
 ) -> None:
     require(isinstance(value, dict), "host identity is not an object")
+    if raw_schema == RAW_SCHEMA:
+        require(set(value) == {
+                    "system", "allowed_cpu_set_at_launch", "online_cpu_set",
+                    "benchmark_cpu", "reserved_sibling", "turbo_and_pstate"},
+                "schema-v5 host identity shape differs")
+        system = value.get("system")
+        require(isinstance(system, dict) and set(system) == {
+                    "system", "node", "release", "version", "machine",
+                    "python", "page_size"} and
+                all(isinstance(system.get(name), str) and system[name]
+                    for name in ("system", "node", "release", "version",
+                                 "machine", "python")) and
+                type(system.get("page_size")) is int and system["page_size"] > 0,
+                "schema-v5 host system identity differs")
+        launch = value.get("allowed_cpu_set_at_launch")
+        online = value.get("online_cpu_set")
+        require(isinstance(launch, list) and launch == list(allowed) and
+                launch == sorted(set(launch)) and
+                all(type(item) is int and item >= 0 for item in launch) and
+                isinstance(online, list) and online == sorted(set(online)) and
+                all(type(item) is int and item >= 0 for item in online),
+                "schema-v5 host CPU-set identity differs")
+        benchmark_record = validate_complete_cpu_policy_record(
+            value.get("benchmark_cpu"), "benchmark_cpu", cpu, sibling)
+        sibling_record = validate_complete_cpu_policy_record(
+            value.get("reserved_sibling"), "reserved_sibling", sibling, cpu)
+        require(benchmark_record["cache_hierarchy"] ==
+                    sibling_record["cache_hierarchy"] and
+                benchmark_record["numa_nodes"] == sibling_record["numa_nodes"] and
+                benchmark_record["core_class"] == sibling_record["core_class"],
+                "reserved SMT pair differs in cache, NUMA, or core-class identity")
+        turbo = value.get("turbo_and_pstate")
+        turbo_paths = {
+            "/sys/devices/system/cpu/intel_pstate/no_turbo",
+            "/sys/devices/system/cpu/amd_pstate/status",
+            "/sys/devices/system/cpu/cpufreq/boost",
+        }
+        require(isinstance(turbo, dict) and set(turbo) == turbo_paths and
+                all(item is None or isinstance(item, str)
+                    for item in turbo.values()),
+                "schema-v5 host turbo/pstate identity differs")
     require(value.get("allowed_cpu_set_at_launch") == list(allowed),
             "host identity has the wrong launch affinity")
     require(isinstance(value.get("online_cpu_set"), list) and
@@ -2908,8 +3474,8 @@ def validate_raw(
     host_initial = raw.get("host_initial")
     host_final = raw.get("host_final")
     require(host_initial == host_final, "host policy/topology changed during campaign")
-    validate_host_record(host_initial, cpu, sibling, allowed)
-    if raw_schema in (RAW_SCHEMA_V2, RAW_SCHEMA_V3, RAW_SCHEMA):
+    validate_host_record(host_initial, cpu, sibling, allowed, raw_schema)
+    if raw_schema in ISOLATION_SCHEMAS:
         validate_isolation(raw.get("isolation"), cpu, sibling)
     else:
         require("isolation" not in raw,
@@ -2938,6 +3504,8 @@ def validate_raw(
     require(re.fullmatch(r"[0-9a-f]{40}", input_spec["candidate_commit"]) is not None,
             "candidate commit is not a full lowercase SHA-1")
     require(initial == final, "input identities changed during the campaign")
+    if raw_schema == RAW_SCHEMA:
+        validate_complete_input_snapshot(input_spec, initial)
     validate_candidate_cmake_identity(input_spec, initial, raw_schema)
     reservation = raw.get("reservation")
     require(isinstance(reservation, dict) and
@@ -3039,7 +3607,7 @@ def validate_raw(
                         f"candidate backend changed within cell {expected[0]}")
             else:
                 candidate_backend_by_cell[expected[0]] = backend
-    if raw_schema in (RAW_SCHEMA_V2, RAW_SCHEMA_V3, RAW_SCHEMA):
+    if raw_schema in ISOLATION_SCHEMAS:
         isolation = raw["isolation"]
         elapsed_ns = isolation["after"]["monotonic_ns"] - \
             isolation["before"]["monotonic_ns"]
@@ -3246,6 +3814,8 @@ def validate_failure(
     if isinstance(initial, dict):
         require(isinstance(specification, dict),
                 "failed campaign identity lacks input specification")
+        if raw_schema == RAW_SCHEMA:
+            validate_complete_input_snapshot(specification, initial)
         validate_candidate_cmake_identity(
             specification, initial, raw_schema)
     if invocations:
@@ -3521,7 +4091,8 @@ def verify_campaign(options: argparse.Namespace) -> int:
             "manifest/raw payload identity mismatch")
     names = ["campaign", "host", "reservation", "identities", "analysis"]
     if manifest_schema in (
-        MANIFEST_SCHEMA_V2, MANIFEST_SCHEMA_V3, MANIFEST_SCHEMA
+        MANIFEST_SCHEMA_V2, MANIFEST_SCHEMA_V3, MANIFEST_SCHEMA_V4,
+        MANIFEST_SCHEMA
     ):
         names.append("isolation")
     else:

@@ -172,9 +172,9 @@ Verify while the exact build inputs still exist:
     python3 experiments/leopard2/main_compare/run_abba.py verify \
         --manifest /tmp/leopard2-vs-main/manifest.json
 
-The current version-4 verifier recomputes the pair-lock identity, every per-field CPU
+The current version-5 verifier recomputes the pair-lock identity, every per-field CPU
 counter delta, the zero-non-idle-sibling decision, workload identities, and all
-statistics. Versions 3 and 4 also bind the canonical CMake target `leopard`, archive
+statistics. Versions 3 through 5 also bind the canonical CMake target `leopard`, archive
 `libleopard.a`, and `leopard.dir` dependency closure. It retains the exact,
 bounded UTF-8 archive link-recipe content, binds its byte length and SHA-256 to
 the recipe-file identity, and parses those bytes to require the declared
@@ -182,14 +182,20 @@ archive, ordinary target directory, and matching `ranlib` command. Retained
 version-2 bundles replay with their original `libleopard`/`liblibleopard.a`
 identity, record shape, and isolation semantics. Version-3 bundles replay as
 AUTO-only evidence without retroactively acquiring the decoder-mode field;
-version-1 bundles remain
+version-4 bundles retain their original hardened archive closure. Version 5
+additionally requires exact source, compiler, CMake, compile/object, archive,
+member, executable-link, output, tool, and runtime-dependency record shapes in
+offline verification. Its host identity includes every enumerated cache level
+and shared-CPU domain, NUMA placement, and heterogeneous-core class. Uniformly
+removing a field from both raw and manifest records therefore fails even with
+`--no-current-input-check`. Version-1 bundles remain
 structurally replayable without acquiring later isolation semantics
 retroactively. A schema/path relabel that leaves the historical recipe bytes
 unchanged is rejected.
 
 Bundle digests are unkeyed integrity checks, not an independent authenticity
 anchor. They detect edits relative to the retained evidence, and the semantic
-recipe binding prevents relabeling old recipe bytes under versions 3 and 4. They
+recipe binding prevents relabeling old recipe bytes under versions 3 through 5. They
 cannot prevent a hostile writer from replacing every evidence byte and
 recomputing every internally consistent digest. Preserve evidence in an
 immutable or independently authenticated store, or add an external digital

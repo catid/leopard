@@ -99,6 +99,24 @@ def host_cpu(cpu: int) -> dict:
             "scaling_min_freq": "1", "scaling_max_freq": "2",
             "cpuinfo_min_freq": "1", "cpuinfo_max_freq": "2",
         },
+        "cache_hierarchy": [
+            {
+                "index": 0, "level": "1", "type": "Data", "size": "32K",
+                "coherency_line_size": "64", "number_of_sets": "64",
+                "ways_of_associativity": "8", "physical_line_partition": "1",
+                "shared_cpu_list": "0-1", "shared_cpu_map": "00000003",
+                "allocation_policy": None, "write_policy": "WriteBack",
+            },
+            {
+                "index": 1, "level": "3", "type": "Unified", "size": "8M",
+                "coherency_line_size": "64", "number_of_sets": "16384",
+                "ways_of_associativity": "8", "physical_line_partition": "1",
+                "shared_cpu_list": "0-2", "shared_cpu_map": "00000007",
+                "allocation_policy": None, "write_policy": "WriteBack",
+            },
+        ],
+        "numa_nodes": [0],
+        "core_class": {"core_type": None, "cpu_capacity": None},
     }
 
 
@@ -112,7 +130,11 @@ HOST = {
     "online_cpu_set": [0, 1, 2],
     "benchmark_cpu": host_cpu(0),
     "reserved_sibling": host_cpu(1),
-    "turbo_and_pstate": {"fixture": "0"},
+    "turbo_and_pstate": {
+        "/sys/devices/system/cpu/intel_pstate/no_turbo": "0",
+        "/sys/devices/system/cpu/amd_pstate/status": None,
+        "/sys/devices/system/cpu/cpufreq/boost": None,
+    },
 }
 
 
@@ -216,7 +238,7 @@ def candidate_result(
         "force_generic_decode": flags["force_generic_decode"],
         "force_specialized_decode": flags["force_specialized_decode"],
     })
-    if raw_schema in (runner.RAW_SCHEMA_V3, runner.RAW_SCHEMA):
+    if raw_schema in runner.WORKSPACE_SELECTOR_SCHEMAS:
         parameters.update({name: flags[name] for name in (
             "force_tiled_decode", "force_materialized_decode")})
     codec = summary([3.0, 3.1, 3.2], setup=True)
@@ -271,7 +293,208 @@ def archive_recipe_fixture_text(cmake: dict | Mapping[str, str]) -> str:
     )
 
 
+def complete_artifact(path: str, kind: str, character: str,
+                      *, content: str | None = None) -> dict:
+    encoded = None if content is None else content.encode("utf-8")
+    return {
+        "path": path,
+        "kind": kind,
+        "size": 1 if encoded is None else len(encoded),
+        "mode": 0o755 if kind in {"executable", "compiler", "archiver",
+                                   "ranlib"} else 0o644,
+        "mtime_ns": 1,
+        "sha256": (character * 64 if encoded is None else
+                   runner.sha256_bytes(encoded)),
+    }
+
+
+def complete_build_fixture(role: str) -> dict:
+    baseline = role == "baseline"
+    build_dir = SPECIFICATION[f"{role}_build_dir"]
+    source_root = SPECIFICATION[f"{role}_source_root"]
+    if baseline:
+        archive_name = "libleopard_main_exact.a"
+        executable_name = "leopard_main_benchmark"
+        target_directory = "leopard_main_exact.dir"
+        benchmark_source = (SPECIFICATION["candidate_source_root"] +
+            "/experiments/leopard2/main_compare/legacy_main_benchmark.cpp")
+        benchmark_object = (build_dir +
+            "/CMakeFiles/leopard_main_benchmark.dir/legacy_main_benchmark.cpp.o")
+        cache = {
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_CXX_COMPILER": "/usr/bin/compiler",
+            "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
+            "LEO_MAIN_HAS_MARCH_NATIVE": "1",
+        }
+        isa_policy = "whole-build -march=native"
+    else:
+        archive_name = runner.CANONICAL_CMAKE_IDENTITY["archive"]
+        executable_name = "bench_leopard2"
+        target_directory = runner.CANONICAL_CMAKE_IDENTITY["target_directory"]
+        benchmark_source = source_root + "/bench/leopard2/benchmark.cpp"
+        benchmark_object = (build_dir +
+            "/CMakeFiles/bench_leopard2.dir/benchmark.cpp.o")
+        cache = {
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_CXX_COMPILER": "/usr/bin/compiler",
+            "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
+            "ENABLE_OPENMP": "ON",
+            "LEO2_BACKEND_VARIANT": "auto",
+            "LEO2_BUILD_BENCHMARKS": "ON",
+            "LEO2_BUILD_FUZZERS": "OFF",
+            "LEO2_BUILD_TESTS": "OFF",
+            "LEO2_ENABLE_CUDA": "OFF",
+        }
+        isa_policy = (
+            "portable core with ISA flags only on SSSE3, AVX2, and "
+            "AVX-512VL translation units")
+    library_source = source_root + "/LeopardCommon.cpp"
+    library_object = (build_dir + f"/CMakeFiles/{target_directory}/"
+                      "LeopardCommon.cpp.o")
+    pairs = sorted([
+        {
+            "source": complete_artifact(
+                library_source, "source_file", "1" if baseline else "2"),
+            "object": complete_artifact(
+                library_object, "object_file", "3" if baseline else "4"),
+        },
+        {
+            "source": complete_artifact(
+                benchmark_source, "source_file", "5" if baseline else "6"),
+            "object": complete_artifact(
+                benchmark_object, "object_file", "7" if baseline else "8"),
+        },
+    ], key=lambda record: record["source"]["path"])
+    archive_recipe_text = (
+        f"/usr/bin/ar qc {archive_name} "
+        f"CMakeFiles/{target_directory}/LeopardCommon.cpp.o\n"
+        f"/usr/bin/ranlib {archive_name}\n")
+    archive_recipe_content = runner.exact_text_content(
+        archive_recipe_text, f"fixture {role} archive recipe")
+    executable_recipe_text = (
+        f"/usr/bin/compiler -O3 -fopenmp {archive_name} "
+        f"{Path(benchmark_object).relative_to(Path(build_dir)).as_posix()} "
+        f"-o {executable_name}\n")
+    executable_recipe_content = runner.exact_text_content(
+        executable_recipe_text, f"fixture {role} executable recipe")
+    archive_path = build_dir + "/" + archive_name
+    executable_path = build_dir + "/" + executable_name
+    executable_recipe_path = (
+        build_dir + f"/CMakeFiles/{executable_name}.dir/link.txt")
+    archive_recipe_path = (
+        build_dir + f"/CMakeFiles/{target_directory}/link.txt")
+    compiler_text = "fixture compiler 1.0\n"
+    return {
+        "build_dir": build_dir,
+        "cmake_cache": complete_artifact(
+            build_dir + "/CMakeCache.txt", "build_metadata", "9"),
+        "compile_commands": complete_artifact(
+            build_dir + "/compile_commands.json", "build_metadata", "a"),
+        "executable_link_recipe": complete_artifact(
+            executable_recipe_path, "build_metadata", "b",
+            content=executable_recipe_text),
+        "archive_link_recipe": complete_artifact(
+            archive_recipe_path, "build_metadata", "c",
+            content=archive_recipe_text),
+        "compiler": complete_artifact("/usr/bin/compiler", "compiler", "d"),
+        "compiler_invocation": {
+            "invocation": "/usr/bin/compiler",
+            "resolved_path": "/usr/bin/compiler",
+        },
+        "compiler_version_stdout": {
+            "sha256": runner.sha256_bytes(compiler_text.encode("utf-8")),
+            "text": compiler_text,
+        },
+        "archiver": complete_artifact("/usr/bin/ar", "archiver", "e"),
+        "ranlib": complete_artifact("/usr/bin/ranlib", "ranlib", "f"),
+        "validated_archive_members": ["LeopardCommon.cpp.o"],
+        "validated_executable": complete_artifact(
+            executable_path, "executable", "0" if baseline else "1"),
+        "validated_archive": complete_artifact(
+            archive_path, "archive", "2" if baseline else "3"),
+        "validated_cache": cache,
+        "validated_compile_commands": {
+            "entry_count": len(pairs),
+            "required_sources": sorted(pair["source"]["path"] for pair in pairs),
+            "validated_optimization": "-O3",
+            "validated_openmp": True,
+            "required_source_object_pairs": pairs,
+            "isa_policy": isa_policy,
+        },
+        "archive_link_recipe_content": archive_recipe_content,
+        "executable_link_recipe_content": executable_recipe_content,
+        "archive_link_tool_invocations": {
+            "archiver": {"invocation": "/usr/bin/ar",
+                         "resolved_path": "/usr/bin/ar"},
+            "ranlib": {"invocation": "/usr/bin/ranlib",
+                       "resolved_path": "/usr/bin/ranlib"},
+        },
+    }
+
+
+def complete_runtime_fixture(executable: str, character: str) -> dict:
+    return {
+        "executable": executable,
+        "dependencies": [{
+            "soname": "libc.so.6",
+            "loader_path": "/lib/libc.so.6",
+            "file": complete_artifact(
+                f"/usr/lib/{character}/libc.so.6", "shared_library", character),
+        }],
+    }
+
+
 def cmake_fixture_identity(raw_schema: str) -> tuple[dict, dict]:
+    if raw_schema == runner.RAW_SCHEMA:
+        baseline_build = complete_build_fixture("baseline")
+        candidate_build = complete_build_fixture("candidate")
+        baseline_executable = baseline_build["validated_executable"]
+        candidate_executable = candidate_build["validated_executable"]
+        baseline_archive = baseline_build["validated_archive"]
+        candidate_archive = candidate_build["validated_archive"]
+        compiler = baseline_build["compiler"]
+        candidate_build["compiler"] = copy.deepcopy(compiler)
+        candidate_build["compiler_version_stdout"] = copy.deepcopy(
+            baseline_build["compiler_version_stdout"])
+        identity = {
+            "runner": complete_artifact(
+                SPECIFICATION["runner"], "file", "1"),
+            "taskset": complete_artifact(
+                SPECIFICATION["taskset"], "executable", "2"),
+            "ldd": complete_artifact(
+                SPECIFICATION["ldd"], "executable", "3"),
+            "baseline_executable": copy.deepcopy(baseline_executable),
+            "candidate_executable": copy.deepcopy(candidate_executable),
+            "baseline_archive": copy.deepcopy(baseline_archive),
+            "candidate_archive": copy.deepcopy(candidate_archive),
+            "baseline_build": baseline_build,
+            "candidate_build": candidate_build,
+            "baseline_runtime_closure": complete_runtime_fixture(
+                baseline_executable["path"], "4"),
+            "candidate_runtime_closure": complete_runtime_fixture(
+                candidate_executable["path"], "5"),
+            "baseline_source": {
+                "path": SPECIFICATION["baseline_source_root"],
+                "head": runner.MAIN_COMMIT, "tree": "6" * 40,
+                "detached": True, "tracked_tree_listing_sha256": "7" * 64,
+                "tracked_status": "clean",
+            },
+            "candidate_source": {
+                "path": SPECIFICATION["candidate_source_root"],
+                "head": SPECIFICATION["candidate_commit"], "tree": "8" * 40,
+                "detached": False, "tracked_tree_listing_sha256": "9" * 64,
+                "tracked_status": "clean",
+            },
+        }
+        specification = copy.deepcopy(SPECIFICATION)
+        specification.update({
+            "baseline_executable": baseline_executable["path"],
+            "candidate_executable": candidate_executable["path"],
+            "baseline_archive": baseline_archive["path"],
+            "candidate_archive": candidate_archive["path"],
+        })
+        return identity, specification
+
     cmake = runner.cmake_identity_for_raw_schema(raw_schema)
     archive_path = f"/fixture/candidate-build/{cmake['archive']}"
     archive = {"path": archive_path, "sha256": "a" * 64}
@@ -332,7 +555,7 @@ def synthetic_raw(
 ) -> dict:
     identity, specification = cmake_fixture_identity(raw_schema)
     campaign = copy.deepcopy(CAMPAIGN)
-    if raw_schema == runner.RAW_SCHEMA:
+    if raw_schema in runner.CANDIDATE_MODE_SCHEMAS:
         campaign["candidate_mode"] = candidate_mode
     else:
         campaign.pop("candidate_mode", None)
@@ -394,6 +617,58 @@ def resign(value: dict) -> dict:
     return runner.signed(payload)
 
 
+def synchronize_identity(value: dict) -> None:
+    value["identities_final"] = copy.deepcopy(value["identities_initial"])
+    for invocation in value["invocations"]:
+        invocation["identity_before"] = copy.deepcopy(value["identities_initial"])
+        invocation["identity_after"] = copy.deepcopy(value["identities_initial"])
+
+
+def write_complete_evidence_bundle(
+    root: Path, value: dict, manifest_schema: str = runner.MANIFEST_SCHEMA,
+) -> Path:
+    for index, invocation in enumerate(value["invocations"]):
+        stdout = json.dumps(invocation["result"]).encode("utf-8")
+        stdout_path = root / f"{index}.stdout"
+        stderr_path = root / f"{index}.stderr"
+        stdout_path.write_bytes(stdout)
+        stderr_path.write_bytes(b"")
+        invocation["stdout"] = {
+            "path": stdout_path.name,
+            "size": len(stdout),
+            "sha256": runner.sha256_bytes(stdout),
+        }
+        invocation["stderr"] = {
+            "path": stderr_path.name,
+            "size": 0,
+            "sha256": runner.sha256_bytes(b""),
+        }
+    value = resign(value)
+    raw_path = root / "raw.json"
+    runner.write_json_exclusive(raw_path, value)
+    manifest = runner.signed({
+        "schema": manifest_schema,
+        "created_utc": "2026-07-16T00:00:00Z",
+        "valid": True,
+        "validity_is_independent_of_speed": True,
+        "raw": {
+            "path": raw_path.name,
+            "size": raw_path.stat().st_size,
+            "sha256": runner.sha256_file(raw_path),
+            "payload_digest": value["digest"],
+        },
+        "campaign": value["campaign"],
+        "host": value["host_initial"],
+        "isolation": value["isolation"],
+        "reservation": value["reservation"],
+        "identities": value["identities_initial"],
+        "analysis": value["analysis"],
+    })
+    manifest_path = root / "manifest.json"
+    runner.write_json_exclusive(manifest_path, manifest)
+    return manifest_path
+
+
 def recursively_replace_strings(value: object, replacements: tuple[tuple[str, str], ...]
                                 ) -> object:
     if isinstance(value, str):
@@ -451,6 +726,7 @@ def synthetic_failure(raw_schema: str) -> dict:
     failure_schema = {
         runner.RAW_SCHEMA_V2: runner.FAILURE_SCHEMA_V2,
         runner.RAW_SCHEMA_V3: runner.FAILURE_SCHEMA_V3,
+        runner.RAW_SCHEMA_V4: runner.FAILURE_SCHEMA_V4,
         runner.RAW_SCHEMA: runner.FAILURE_SCHEMA,
     }[raw_schema]
     return runner.signed({
@@ -491,6 +767,87 @@ class MainCompareRunnerTests(unittest.TestCase):
             self.assertTrue(math.isfinite(result["ci95_lower"]))
             self.assertTrue(result["performance_result_does_not_affect_evidence_validity"])
 
+    def test_uniformly_incomplete_v5_identities_fail_offline_verify_and_select(self) -> None:
+        plan_runner = (MODULE_PATH.parents[1] / "decoder_dispatch" /
+                       "plan_balanced_promotion.py")
+
+        def missing_sources(value: dict) -> None:
+            for role in ("baseline", "candidate"):
+                value["identities_initial"][f"{role}_source"].pop("tree")
+            synchronize_identity(value)
+
+        def incomplete_runtime_files(value: dict) -> None:
+            for role in ("baseline", "candidate"):
+                dependency = value["identities_initial"][
+                    f"{role}_runtime_closure"]["dependencies"][0]
+                dependency["file"] = {"path": dependency["file"]["path"]}
+            synchronize_identity(value)
+
+        def path_only_compile_pairs(value: dict) -> None:
+            for role in ("baseline", "candidate"):
+                pairs = value["identities_initial"][f"{role}_build"][
+                    "validated_compile_commands"]["required_source_object_pairs"]
+                for pair in pairs:
+                    pair["source"] = {"path": pair["source"]["path"]}
+                    pair["object"] = {"path": pair["object"]["path"]}
+            synchronize_identity(value)
+
+        def empty_toolchain_records(value: dict) -> None:
+            for role in ("baseline", "candidate"):
+                build = value["identities_initial"][f"{role}_build"]
+                for name in ("compiler", "cmake_cache", "compile_commands",
+                             "executable_link_recipe", "archive_link_recipe"):
+                    build[name] = {}
+            synchronize_identity(value)
+
+        def reduced_outputs(value: dict) -> None:
+            identities = value["identities_initial"]
+            for role in ("baseline", "candidate"):
+                for output in ("archive", "executable"):
+                    key = f"{role}_{output}"
+                    old = identities[key]
+                    reduced = {
+                        "path": old["path"], "kind": old["kind"],
+                        "sha256": old["sha256"],
+                    }
+                    identities[key] = copy.deepcopy(reduced)
+                    identities[f"{role}_build"][f"validated_{output}"] = \
+                        copy.deepcopy(reduced)
+            synchronize_identity(value)
+
+        def topology_only_host(value: dict) -> None:
+            for name in ("benchmark_cpu", "reserved_sibling"):
+                record = value["host_initial"][name]
+                value["host_initial"][name] = {
+                    "cpu": record["cpu"], "topology": record["topology"]}
+            value["host_final"] = copy.deepcopy(value["host_initial"])
+
+        mutations = {
+            "sources": missing_sources,
+            "runtime-files": incomplete_runtime_files,
+            "path-only-compile-pairs": path_only_compile_pairs,
+            "empty-toolchain-records": empty_toolchain_records,
+            "reduced-outputs": reduced_outputs,
+            "topology-only-host": topology_only_host,
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                value = synthetic_raw()
+                mutate(value)
+                manifest_path = write_complete_evidence_bundle(root, value)
+                with self.assertRaises(runner.EvidenceError):
+                    runner.verify_campaign(argparse.Namespace(
+                        manifest=manifest_path, no_current_input_check=True))
+                completed = subprocess.run([
+                    sys.executable, str(plan_runner), "select",
+                    "--plan", str(root / "unused-plan"),
+                    "--gate-manifest", str(manifest_path),
+                    "--output", str(root / "survivors.json"),
+                ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertFalse((root / "survivors.json").exists())
+
     def test_legacy_v1_raw_fixture_remains_replayable(self) -> None:
         value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V1)
         value.pop("isolation")
@@ -507,6 +864,19 @@ class MainCompareRunnerTests(unittest.TestCase):
         value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V3)
         runner.validate_raw(
             value, None, check_files=False, check_current_inputs=False)
+
+    def test_legacy_v4_raw_fixture_remains_replayable(self) -> None:
+        value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V4)
+        runner.validate_raw(
+            value, None, check_files=False, check_current_inputs=False)
+
+    def test_legacy_v4_manifest_fixture_remains_replayable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = write_complete_evidence_bundle(
+                Path(directory), synthetic_raw(raw_schema=runner.RAW_SCHEMA_V4),
+                runner.MANIFEST_SCHEMA_V4)
+            self.assertEqual(runner.verify_campaign(argparse.Namespace(
+                manifest=manifest, no_current_input_check=True)), 0)
 
     def test_candidate_modes_bind_flags_and_exact_argv(self) -> None:
         expected_arguments = {
@@ -913,7 +1283,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 runner.validate_raw(
                     value, root, check_files=True, check_current_inputs=False)
 
-    def test_v4_manifest_binds_mode_isolation_and_replays_portably(self) -> None:
+    def test_v5_manifest_binds_complete_identity_and_replays_portably(self) -> None:
         value = synthetic_raw()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -998,12 +1368,12 @@ class MainCompareRunnerTests(unittest.TestCase):
                 "created_utc": "2026-07-16T00:00:00Z",
                 "status": "failed", "valid": False,
                 "error_type": "EvidenceError", "error": "fixture failure",
-                "campaign": copy.deepcopy(CAMPAIGN),
+                "campaign": copy.deepcopy(value["campaign"]),
                 "host_initial": copy.deepcopy(HOST),
                 "reservation": copy.deepcopy(RESERVATION),
                 "pair_lease": copy.deepcopy(PAIR_LEASE),
                 "isolation": copy.deepcopy(ISOLATION),
-                "input_specification": copy.deepcopy(SPECIFICATION),
+                "input_specification": copy.deepcopy(value["input_specification"]),
                 "identities_initial": copy.deepcopy(invocation["identity_before"]),
                 "invocations": [invocation],
                 "retained_files": runner.retained_file_records(root),
