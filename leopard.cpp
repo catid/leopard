@@ -116,6 +116,23 @@ static LegacyGeometryResult GetLegacyGeometry(
     return LegacyGeometryValid;
 }
 
+static bool LegacyPointerArraySpanRepresentable(
+    const void* pointer_array,
+    unsigned pointer_count)
+{
+    if (!pointer_array || pointer_count == 0)
+        return false;
+
+    // Counts are bounded by GetLegacyGeometry(), so this multiplication is
+    // representable even on a 32-bit target.  This check deliberately proves
+    // only that indexing the top-level pointer array cannot wrap uintptr_t; it
+    // cannot prove that the pointer names an accessible C object.
+    const uintptr_t address = reinterpret_cast<uintptr_t>(pointer_array);
+    const uintptr_t span_minus_one =
+        static_cast<uintptr_t>(pointer_count) * sizeof(void*) - 1;
+    return address <= UINTPTR_MAX - span_minus_one;
+}
+
 namespace leopard {
 
 int InitializeLibrary(
@@ -263,6 +280,11 @@ LEO_EXPORT LeopardResult leo_encode(
     if (work_count != geometry.encode_work_count)
         return Leopard_InvalidCounts;
 
+    if (!LegacyPointerArraySpanRepresentable(
+            original_data, original_count) ||
+        !LegacyPointerArraySpanRepresentable(work_data, work_count))
+        return Leopard_InvalidInput;
+
     // Handle k = 1 case
     if (original_count == 1)
     {
@@ -379,6 +401,15 @@ LEO_EXPORT LeopardResult leo_decode(
     if (!m_Initialized.load(std::memory_order_acquire))
         return Leopard_CallInitialize;
 
+    // Validate arrays that are scanned below before reading their elements.
+    // The work array is checked after its count, preserving the legacy error
+    // precedence for an incorrect work_count.
+    if (!LegacyPointerArraySpanRepresentable(
+            original_data, original_count) ||
+        !LegacyPointerArraySpanRepresentable(
+            recovery_data, recovery_count))
+        return Leopard_InvalidInput;
+
     // Check if not enough recovery data arrived
     unsigned original_loss_count = 0;
     unsigned original_loss_i = 0;
@@ -405,6 +436,9 @@ LEO_EXPORT LeopardResult leo_decode(
 
     if (work_count != geometry.decode_work_count)
         return Leopard_InvalidCounts;
+
+    if (!LegacyPointerArraySpanRepresentable(work_data, work_count))
+        return Leopard_InvalidInput;
 
     // Handle case original_loss_count = 0
     if (original_loss_count == 0)

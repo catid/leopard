@@ -2068,6 +2068,20 @@ void test_legacy_negative_contract(Counts* counts)
         Leopard_InvalidInput, "legacy encode null input");
     require_legacy_result(leo_encode(64, 3, 2, 3, original, encode_work),
         Leopard_InvalidCounts, "legacy encode wrong work count");
+    const uintptr_t overflowing_pointer_array_address =
+        UINTPTR_MAX & ~(static_cast<uintptr_t>(alignof(void*)) - 1);
+    const void* const* overflowing_const_pointer_array =
+        reinterpret_cast<const void* const*>(
+            overflowing_pointer_array_address);
+    void** overflowing_mutable_pointer_array = reinterpret_cast<void**>(
+        overflowing_pointer_array_address);
+    require_legacy_result(leo_encode(64, 3, 2, 4,
+        overflowing_const_pointer_array, encode_work),
+        Leopard_InvalidInput,
+        "legacy encode overflowing original pointer-array span");
+    require_legacy_result(leo_encode(64, 3, 2, 4, original,
+        overflowing_mutable_pointer_array), Leopard_InvalidInput,
+        "legacy encode overflowing work pointer-array span");
     require_legacy_result(leo_encode(64, 65536, 1, 0, NULL, NULL),
         Leopard_TooMuchData, "legacy encode transmitted-count limit");
     require_legacy_result(leo_encode(64, 32769, 32767, 0, NULL, NULL),
@@ -2075,7 +2089,7 @@ void test_legacy_negative_contract(Counts* counts)
     require_legacy_result(leo_encode(64,
         std::numeric_limits<unsigned>::max(), 2, 0, NULL, NULL),
         Leopard_TooMuchData, "legacy encode overflow counts");
-    counts->legacy_checks += 10;
+    counts->legacy_checks += 12;
 
     require(leo_decode_work_count(3, 2) == 8,
         "legacy decode work-count changed");
@@ -2100,6 +2114,17 @@ void test_legacy_negative_contract(Counts* counts)
         Leopard_InvalidCounts, "legacy decode R > K restriction");
     require_legacy_result(leo_decode(64, 3, 2, 8, NULL, recovery,
         decode_work), Leopard_InvalidInput, "legacy decode null input");
+    require_legacy_result(leo_decode(64, 3, 2, 8,
+        overflowing_const_pointer_array, recovery, decode_work),
+        Leopard_InvalidInput,
+        "legacy decode overflowing original pointer-array span");
+    require_legacy_result(leo_decode(64, 3, 2, 8, original,
+        overflowing_const_pointer_array, decode_work),
+        Leopard_InvalidInput,
+        "legacy decode overflowing recovery pointer-array span");
+    require_legacy_result(leo_decode(64, 3, 2, 8, original, recovery,
+        overflowing_mutable_pointer_array), Leopard_InvalidInput,
+        "legacy decode overflowing work pointer-array span");
     const void* incomplete_original[3] = { NULL, NULL, shard };
     require_legacy_result(leo_decode(64, 3, 2, 8, incomplete_original,
         recovery, decode_work), Leopard_NeedMoreData,
@@ -2149,7 +2174,7 @@ void test_legacy_negative_contract(Counts* counts)
     require_legacy_result(leo_encode(64, 65535, 32768, 65536,
         one_original, one_work), Leopard_TooMuchData,
         "legacy encode field-order limit");
-    counts->legacy_checks += 21;
+    counts->legacy_checks += 24;
 #if SIZE_MAX < UINT64_MAX
     counts->legacy_checks += 2;
 #endif

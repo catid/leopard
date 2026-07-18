@@ -166,6 +166,15 @@ LEO_EXPORT unsigned leo_encode_work_count(
     Each buffer should have the same number of bytes.
     Even the last piece must be rounded up to the block size.
 
+    As with standard C memory functions, the caller must provide accessible
+    pointer arrays containing the stated number of pointer objects and valid
+    storage for every shard the operation accesses.  Each such shard range
+    must contain buffer_bytes bytes without wrapping the address space.
+    Leopard rejects a top-level pointer-array span that numerically wraps
+    uintptr_t, but cannot prove that an otherwise representable pointer names
+    an accessible object of sufficient size.  Violating these storage
+    preconditions is undefined behavior.
+
     Let buffer_bytes = The number of bytes in each buffer:
 
         original_count = static_cast<unsigned>(
@@ -223,6 +232,15 @@ LEO_EXPORT unsigned leo_decode_work_count(
 
     The buffer_bytes must be a positive multiple of 64 representable by
     size_t on the target platform.
+
+    As with standard C memory functions, the caller must provide accessible
+    pointer arrays containing the stated number of pointer objects and valid
+    storage for every non-NULL input shard and every work shard the operation
+    accesses.  Each such shard range must contain buffer_bytes bytes without
+    wrapping the address space.  Leopard rejects a top-level pointer-array span
+    that numerically wraps uintptr_t, but cannot prove that an otherwise
+    representable pointer names an accessible object of sufficient size.
+    Violating these storage preconditions is undefined behavior.
 
     The sum of recovery_count + the number of non-NULL original data must be at
     least original_count in order to perform recovery.
