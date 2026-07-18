@@ -67,9 +67,13 @@ scalar/SSSE3/AVX2 builds, GF8/GF16 configuration builds, aliasing tests, and a
 no-OpenMP ThreadSanitizer concurrent-plan run.  On this host, ThreadSanitizer
 occasionally failed during runtime startup with `unexpected memory mapping`;
 rerunning the affected no-OpenMP binaries produced clean results.  An
-OpenMP-enabled ThreadSanitizer run also reports a pre-existing libgomp-visible
-race between consecutive GF16 encoder parallel regions, outside this decode
-change.
+OpenMP-enabled GCC ThreadSanitizer initially reported races between consecutive
+GF16 encoder parallel regions, outside this decode change.  The follow-up audit
+in `docs/leopard2_openmp_tsan_audit.md` reproduced the same report with two
+standards-valid consecutive OpenMP loops, verified the implicit barriers and
+disjoint iteration ranges, and found no codec race.  Clang ThreadSanitizer with
+its documented non-instrumented-OpenMP-runtime setting passed the focused
+encoder and concurrency programs.
 
 ## Performance gate
 
