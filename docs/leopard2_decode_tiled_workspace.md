@@ -97,7 +97,7 @@ materialized traversal in that case.
 
 ## Isolated performance evidence
 
-The retained machine-readable summary is
+The retained machine-readable summary is historical v1 evidence:
 `experiments/leopard2/decoder_dispatch/results/tiled_high_amd_9950x3d.json`.
 Its file SHA-256 is
 `812332d2edee285b59adb0a45751b111df91bc6fbd1a2294f5ad94b4037d3283` and its
@@ -107,7 +107,7 @@ The identity-recorded raw manifest is intentionally kept in the ignored research
 cache; its SHA-256 is
 `011b9c2815d320a558c4b802eacd4f29819dfa5d3c565f2978768a0744d87bf3`.
 
-The run compared clean detached control commit
+That v1 run compared clean detached control commit
 `3c75ec7131b5eb36bb4e07cb8e40cc6dc1620703` with tiled candidate commit
 `bc7162a16b93fae4e66179cb477e3532176d8405`.  It contains 117 cells and 1,404
 benchmark invocations: three independent paired-log ABBA/BAAB rounds, 11
@@ -125,22 +125,48 @@ gained 1.92% to 18.27%.  At batch size two, AVX2 `T=32` tied or won throughout
 and gained roughly 20% to 50% in the 64-to-80-KiB cells.  These results support
 a region dispatcher rather than rolling back the bounded workspace globally.
 
-Reproduce the collection and validated reduction with:
+Replay the retained v1 manifest with the version-aware analyzer using:
+
+    python3 experiments/leopard2/decoder_dispatch/analyze_tiled_high.py \
+        --manifest HISTORICAL_V1_MANIFEST.json \
+        --output /tmp/tiled-high-summary.json --require-rounds 3
+
+New authoritative collection uses the v2 same-binary contract.  Build the
+benchmark from the clean commit to be measured, then run:
 
     python3 experiments/leopard2/decoder_dispatch/run_tiled_high_abba.py \
-        --control-root CONTROL_WORKTREE \
-        --candidate-root CANDIDATE_WORKTREE \
-        --control-commit 3c75ec7131b5eb36bb4e07cb8e40cc6dc1620703 \
-        --candidate-commit bc7162a16b93fae4e66179cb477e3532176d8405 \
+        --source-root CLEAN_WORKTREE \
+        --source-commit FULL_40_HEX_HEAD \
+        --binary build-audit/bench_leopard2 \
         --output OUTPUT_DIRECTORY --cpu 14 --sibling 30
     python3 experiments/leopard2/decoder_dispatch/analyze_tiled_high.py \
         --manifest OUTPUT_DIRECTORY/manifest.json \
-        --output /tmp/tiled-high-summary.json --require-rounds 3
+        --output /tmp/tiled-high-v2-summary.json --require-rounds 3
+
+V2 invokes the exact same executable for both roles.  Control adds only
+`--force-materialized`; candidate adds only `--force-tiled`.  Benchmark JSON
+must report the corresponding boolean pair (`false,true` and `true,false`,
+respectively).  Both keys must be present and boolean in v2.  Historical/mixed
+v1 replay accepts either both absent (the retained campaign) or both present as
+boolean false; its retained commands remain selector-free.  Partial presence,
+an active v1 selector, both active, or a v2 role/selector mismatch is rejected.
+
+The v2 manifest binds the clean source HEAD and tree, benchmark and CMake-cache
+bytes, runner and pair-lease source bytes, exact argv including executable,
+mode, iteration count, seed, and JSON destination, retained raw/stdout/stderr
+hashes, workload digests, lease identity, and per-invocation plus campaign CPU
+and sibling counter deltas.  Analysis recomputes median, MAD, minimum, maximum,
+execution rates, and amortized decode rates from retained samples.  The current
+schema fails closed on unknown fields or versions.  `--source-root` on the
+analyzer permits relocation to another clean checkout only when the Git tree,
+binary, cache, runner, and lease-source bytes still match the manifest, and the
+analyzer itself is executed from its canonical path in that clean tree.
 
 The logical CPU pair must be replaced by an allowed physical-core/sibling pair
-on another host.  Absolute timings are host-specific; source/binary identity,
-round-trip digests, scratch geometry, and evidence validation are the
-reproducible contract.
+on another host.  The runner moves itself to housekeeping CPUs while each child
+is pinned to the measured CPU and records both SMT siblings.  Absolute timings
+are host-specific; source/binary identity, round-trip digests, scratch geometry,
+raw samples, and evidence validation are the reproducible contract.
 
 ## Correctness validation
 
