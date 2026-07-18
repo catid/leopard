@@ -3562,6 +3562,15 @@ LEO2_EXPORT leo2_result leo2_codec_create(
             profile == LEO2_PROFILE_LEGACY_HIGH_V1
                 ? padded - recovery_count
                 : parent - padded - recovery_count;
+        /*
+            Every transform plan later retains exactly K of K+R transmitted
+            coordinates, so its non-permanent missing plus virtual count is
+            exactly recovery_count.  Cache the permanent coordinate-domain
+            locator precisely when that dynamic contribution will use direct
+            construction.  Dense Walsh construction from the explicit union
+            avoids the extra N-entry modular-add pass required by either a
+            coordinate- or transform-domain permanent cache.
+        */
 
 #ifdef LEO_HAS_FF8
         if (field == LEO2_FIELD_GF8)
@@ -4141,6 +4150,25 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
             delete plan;
             return LEO2_NEED_MORE_DATA;
         }
+
+#ifdef LEO_DEBUG
+        /*
+            The transmitted code has K + R coordinates and the deterministic
+            selection above retains exactly K of them.  Consequently the
+            pattern-specific missing plus virtual coordinates outside the
+            codec's permanent shortening/puncturing mask must always total R.
+            Permanent-locator cache policy relies on this invariant when it
+            predicts the direct/Walsh crossover from recovery_count at codec
+            setup rather than rescanning each future plan.
+        */
+        uint32_t dynamic_erasure_count = 0;
+        for (uint32_t i = 0; i < codec->parent_count; ++i)
+        {
+            if (plan->coordinate_erased[i] && !codec->permanent_erased[i])
+                ++dynamic_erasure_count;
+        }
+        LEO_DEBUG_ASSERT(dynamic_erasure_count == codec->recovery_count);
+#endif
 
         if (plan->direct_copy)
         {
