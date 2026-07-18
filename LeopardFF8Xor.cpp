@@ -30,6 +30,7 @@
 #include "LeopardFF8XorAVX2.h"
 #include "LeopardFF8XorAVX512.h"
 #include "LeopardFF8XorAVX512Four.h"
+#include "LeopardFF8XorDerivative.h"
 
 #ifdef LEO_HAS_FF8
 
@@ -136,6 +137,33 @@ struct ValueIO<Simd128Tag>
     }
 };
 #endif
+
+template <typename ValueTag>
+struct BaselineDerivativeOps
+{
+    typedef typename ValueIO<ValueTag>::Value Value;
+    static const unsigned kBytes = ValueIO<ValueTag>::kBytes;
+
+    static LEO_FORCE_INLINE Value Load(const uint8_t* source)
+    {
+        return ValueIO<ValueTag>::Load(source);
+    }
+
+    static LEO_FORCE_INLINE void Store(uint8_t* destination, Value value)
+    {
+        ValueIO<ValueTag>::Store(destination, value);
+    }
+
+    static LEO_FORCE_INLINE Value Xor(Value a, Value b)
+    {
+        return XorValue(a, b);
+    }
+
+    static LEO_FORCE_INLINE Value Xor3(Value a, Value b, Value c)
+    {
+        return XorValue(XorValue(a, b), c);
+    }
+};
 
 //------------------------------------------------------------------------------
 // Kernel selection
@@ -881,6 +909,130 @@ void XorBuffers(
     }
 }
 
+static void ApplyFormalDerivativeBoundaryRow(
+    KernelMode mode,
+    unsigned extra_count,
+    void* left,
+    void* right,
+    const void* extra0,
+    const void* extra1,
+    const void* extra2,
+    const void* extra3,
+    const void* extra4,
+    const void* extra5,
+    const void* extra6,
+    uint64_t buffer_bytes)
+{
+    uint64_t offset = 0;
+
+#ifdef LEO_FF8XOR_HAS_AVX512_KERNELS
+    if (mode == KernelMode::Avx512Zmm)
+    {
+        offset = avx512::FormalDerivativeBoundaryRow512(
+            extra_count, left, right,
+            extra0, extra1, extra2, extra3, extra4, extra5, extra6,
+            buffer_bytes);
+    }
+    else if (mode == KernelMode::Avx512VL)
+    {
+        offset = avx512::FormalDerivativeBoundaryRow256(
+            extra_count, left, right,
+            extra0, extra1, extra2, extra3, extra4, extra5, extra6,
+            buffer_bytes);
+    }
+#endif
+
+#ifdef LEO_FF8XOR_HAS_AVX2_KERNELS
+    if (mode == KernelMode::Avx2 ||
+        mode == KernelMode::Avx512VL ||
+        mode == KernelMode::Avx512Zmm)
+    {
+        offset = avx2::FormalDerivativeBoundaryRow(
+            extra_count, left, right,
+            extra0, extra1, extra2, extra3, extra4, extra5, extra6,
+            buffer_bytes, offset);
+    }
+#endif
+
+#ifdef LEO_FF8XOR_HAS_SIMD128
+    if (mode != KernelMode::Portable)
+    {
+        offset = derivative_detail::ApplyRow<
+            BaselineDerivativeOps<Simd128Tag> >(
+                extra_count, left, right,
+                extra0, extra1, extra2, extra3, extra4, extra5, extra6,
+                buffer_bytes, offset);
+    }
+#endif
+
+    derivative_detail::ApplyRow<BaselineDerivativeOps<PortableTag> >(
+        extra_count, left, right,
+        extra0, extra1, extra2, extra3, extra4, extra5, extra6,
+        buffer_bytes, offset);
+}
+
+// A is the already-computed derivative of the left half and R is the original
+// right half.  The old schedule next computed D(R), XORed R into A, then ran
+// the top FFT butterfly.  Its skew is sentinel 255 for every supported power
+// of two.  The exact combined map is:
+//
+//   left[q]  = A[q] ^ R[q]
+//   right[q] = A[q] ^ XOR(R[q | (1 << b)]) for every zero bit b of q
+//
+// Higher right-half indices are the only extra sources, so ascending q is
+// safely in place.  Arity dispatch and pointer selection happen once per
+// whole-buffer row, outside every payload loop.
+static void ApplyFormalDerivativeTopFFTBoundary(
+    uint64_t buffer_bytes,
+    unsigned half_count,
+    void** work)
+{
+    const KernelMode mode = ResolveKernelMode();
+    for (unsigned q = 0; q < half_count; ++q)
+    {
+        const void* extra0 = NULL;
+        const void* extra1 = NULL;
+        const void* extra2 = NULL;
+        const void* extra3 = NULL;
+        const void* extra4 = NULL;
+        const void* extra5 = NULL;
+        const void* extra6 = NULL;
+        unsigned extra_count = 0;
+
+        for (unsigned bit = 1; bit < half_count; bit <<= 1)
+        {
+            if ((q & bit) != 0)
+                continue;
+            const void* source = work[half_count + (q | bit)];
+            switch (extra_count++)
+            {
+            case 0: extra0 = source; break;
+            case 1: extra1 = source; break;
+            case 2: extra2 = source; break;
+            case 3: extra3 = source; break;
+            case 4: extra4 = source; break;
+            case 5: extra5 = source; break;
+            case 6: extra6 = source; break;
+            default: break;
+            }
+        }
+
+        ApplyFormalDerivativeBoundaryRow(
+            mode,
+            extra_count,
+            work[q],
+            work[half_count + q],
+            extra0,
+            extra1,
+            extra2,
+            extra3,
+            extra4,
+            extra5,
+            extra6,
+            buffer_bytes);
+    }
+}
+
 template <unsigned Coefficient>
 static void MultiplyWholeBuffer(
     void* destination_void,
@@ -1503,6 +1655,32 @@ bool FourBufferButterflyBufferForTesting(
         skew01, skew23, skew02);
 }
 
+static void FormalDerivativeLeftUntracked(
+    uint64_t buffer_bytes,
+    unsigned half_count,
+    void** work)
+{
+    for (unsigned index = 1; index < half_count; ++index)
+    {
+        const unsigned width = ((index ^ (index - 1)) + 1) >> 1;
+        XorBuffers(
+            buffer_bytes,
+            width,
+            work + index - width,
+            work + index);
+    }
+}
+
+void FormalDerivativeTopFFTForTesting(
+    uint64_t buffer_bytes,
+    unsigned count,
+    void** work)
+{
+    const unsigned half_count = count >> 1;
+    FormalDerivativeLeftUntracked(buffer_bytes, half_count, work);
+    ApplyFormalDerivativeTopFFTBoundary(buffer_bytes, half_count, work);
+}
+
 static void IFFT_DIT_Untracked(
     uint64_t buffer_bytes,
     unsigned count_truncated,
@@ -1582,14 +1760,16 @@ static void IFFT_DIT_Untracked(
     }
 }
 
-static void FFT_DIT_Untracked(
+static void FFT_DIT_UntrackedFrom(
     uint64_t buffer_bytes,
     void** work,
     unsigned count_truncated,
     unsigned count,
-    unsigned skew_base)
+    unsigned skew_base,
+    unsigned initial_high_distance)
 {
-    unsigned high_distance = count >> 1;
+    (void)count;
+    unsigned high_distance = initial_high_distance;
     for (; high_distance >= 2; high_distance >>= 2)
     {
         const unsigned distance = high_distance >> 1;
@@ -1658,6 +1838,22 @@ static void FFT_DIT_Untracked(
             }
         }
     }
+}
+
+static void FFT_DIT_Untracked(
+    uint64_t buffer_bytes,
+    void** work,
+    unsigned count_truncated,
+    unsigned count,
+    unsigned skew_base)
+{
+    FFT_DIT_UntrackedFrom(
+        buffer_bytes,
+        work,
+        count_truncated,
+        count,
+        skew_base,
+        count >> 1);
 }
 
 static void TrackedButterfly(
@@ -1970,17 +2166,19 @@ static void IFFT_DIT(
     }
 }
 
-static void FFT_DIT(
+static void FFT_DIT_From(
     uint64_t buffer_bytes,
     void** work,
     BufferState* states,
     MaterializationContext& context,
     unsigned count_truncated,
     unsigned count,
-    unsigned skew_base)
+    unsigned skew_base,
+    unsigned initial_high_distance)
 {
     (void)buffer_bytes;
-    unsigned high_distance = count >> 1;
+    (void)count;
+    unsigned high_distance = initial_high_distance;
     for (; high_distance >= 2; high_distance >>= 2)
     {
         const unsigned distance = high_distance >> 1;
@@ -2064,6 +2262,26 @@ static void FFT_DIT(
             }
         }
     }
+}
+
+static void FFT_DIT(
+    uint64_t buffer_bytes,
+    void** work,
+    BufferState* states,
+    MaterializationContext& context,
+    unsigned count_truncated,
+    unsigned count,
+    unsigned skew_base)
+{
+    FFT_DIT_From(
+        buffer_bytes,
+        work,
+        states,
+        context,
+        count_truncated,
+        count,
+        skew_base,
+        count >> 1);
 }
 
 static void TrackedXorBuffers(
@@ -2204,16 +2422,20 @@ void ErrorBitfield::Prepare()
     }
 }
 
-static void FFT_DIT_ErrorBits_Untracked(
+static void FFT_DIT_ErrorBits_UntrackedFrom(
     uint64_t buffer_bytes,
     void** work,
     unsigned count_truncated,
     unsigned count,
     unsigned skew_base,
-    const ErrorBitfield& error_bits)
+    const ErrorBitfield& error_bits,
+    unsigned initial_high_distance)
 {
-    unsigned mip_level = LastNonzeroBit32(count);
-    unsigned high_distance = count >> 1;
+    (void)count;
+    unsigned mip_level = initial_high_distance == 0
+        ? 0
+        : LastNonzeroBit32(initial_high_distance) + 1;
+    unsigned high_distance = initial_high_distance;
     for (; high_distance >= 2;
         high_distance >>= 2, mip_level -= 2)
     {
@@ -2300,7 +2522,7 @@ static void FFT_DIT_ErrorBits_Untracked(
     }
 }
 
-static void FFT_DIT_ErrorBits(
+static void FFT_DIT_ErrorBits_From(
     uint64_t buffer_bytes,
     void** work,
     BufferState* states,
@@ -2308,11 +2530,15 @@ static void FFT_DIT_ErrorBits(
     unsigned count_truncated,
     unsigned count,
     unsigned skew_base,
-    const ErrorBitfield& error_bits)
+    const ErrorBitfield& error_bits,
+    unsigned initial_high_distance)
 {
     (void)buffer_bytes;
-    unsigned mip_level = LastNonzeroBit32(count);
-    unsigned high_distance = count >> 1;
+    (void)count;
+    unsigned mip_level = initial_high_distance == 0
+        ? 0
+        : LastNonzeroBit32(initial_high_distance) + 1;
+    unsigned high_distance = initial_high_distance;
     for (; high_distance >= 2;
         high_distance >>= 2, mip_level -= 2)
     {
@@ -2734,28 +2960,26 @@ void ReedSolomonDecode(
 
         IFFT_DIT_Untracked(
             buffer_bytes, m + original_count, work, n, 0);
-        for (unsigned index = 1; index < n; ++index)
-        {
-            const unsigned width = ((index ^ (index - 1)) + 1) >> 1;
-            XorBuffers(
-                buffer_bytes,
-                width,
-                work + index - width,
-                work + index);
-        }
+        const unsigned half_count = n >> 1;
+        LEO_DEBUG_ASSERT(FFTSkewPadded[half_count] == kModulus);
+        FormalDerivativeLeftUntracked(
+            buffer_bytes, half_count, work);
+        ApplyFormalDerivativeTopFFTBoundary(
+            buffer_bytes, half_count, work);
 
         const unsigned output_count = m + original_count;
 #ifdef LEO_ERROR_BITFIELD_OPT
-        FFT_DIT_ErrorBits_Untracked(
+        FFT_DIT_ErrorBits_UntrackedFrom(
             buffer_bytes,
             work,
             output_count,
             n,
             0,
-            error_bits);
+            error_bits,
+            n >> 2);
 #else
-        FFT_DIT_Untracked(
-            buffer_bytes, work, output_count, n, 0);
+        FFT_DIT_UntrackedFrom(
+            buffer_bytes, work, output_count, n, 0, n >> 2);
 #endif
         for (unsigned index = 0; index < original_count; ++index)
         {
@@ -2817,7 +3041,8 @@ void ReedSolomonDecode(
         n,
         0);
 
-    for (unsigned index = 1; index < n; ++index)
+    const unsigned half_count = n >> 1;
+    for (unsigned index = 1; index < half_count; ++index)
     {
         const unsigned width = ((index ^ (index - 1)) + 1) >> 1;
         TrackedXorBuffers(
@@ -2829,9 +3054,22 @@ void ReedSolomonDecode(
             states + index);
     }
 
+    // The direct boundary reads every logical A/R input at least once.  Any
+    // deferred zero must therefore be materialized before the static row
+    // kernels enter their payload loops.  Every output is conservatively given
+    // a fresh identity afterward; later ErrorBitfield pruning and zero handling
+    // remain valid without assuming an unproved symbolic cancellation.
+    for (unsigned index = 0; index < n; ++index)
+        context.MaterializeZero(work[index], states[index]);
+    LEO_DEBUG_ASSERT(FFTSkewPadded[half_count] == kModulus);
+    ApplyFormalDerivativeTopFFTBoundary(
+        buffer_bytes, half_count, work);
+    for (unsigned index = 0; index < n; ++index)
+        context.SetFresh(states[index]);
+
     const unsigned output_count = m + original_count;
 #ifdef LEO_ERROR_BITFIELD_OPT
-    FFT_DIT_ErrorBits(
+    FFT_DIT_ErrorBits_From(
         buffer_bytes,
         work,
         states,
@@ -2839,16 +3077,18 @@ void ReedSolomonDecode(
         output_count,
         n,
         0,
-        error_bits);
+        error_bits,
+        n >> 2);
 #else
-    FFT_DIT(
+    FFT_DIT_From(
         buffer_bytes,
         work,
         states,
         context,
         output_count,
         n,
-        0);
+        0,
+        n >> 2);
 #endif
 
     for (unsigned index = 0; index < original_count; ++index)

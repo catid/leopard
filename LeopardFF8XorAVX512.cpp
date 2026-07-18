@@ -28,6 +28,7 @@
 
 #include "LeopardCommon.h"
 #include "LeopardFF8XorAVX512.h"
+#include "LeopardFF8XorDerivative.h"
 
 #if defined(LEO_HAS_FF8) && defined(LEO_FF8XOR_BUILD_AVX512)
 
@@ -96,6 +97,58 @@ struct ValueIO<ZmmTag>
     static LEO_FORCE_INLINE void Store(uint8_t* destination, Value value)
     {
         _mm512_storeu_si512(reinterpret_cast<void*>(destination), value);
+    }
+};
+
+struct YmmDerivativeOps
+{
+    typedef __m256i Value;
+    static const unsigned kBytes = 32;
+
+    static LEO_FORCE_INLINE Value Load(const uint8_t* source)
+    {
+        return ValueIO<YmmTag>::Load(source);
+    }
+
+    static LEO_FORCE_INLINE void Store(uint8_t* destination, Value value)
+    {
+        ValueIO<YmmTag>::Store(destination, value);
+    }
+
+    static LEO_FORCE_INLINE Value Xor(Value a, Value b)
+    {
+        return _mm256_xor_si256(a, b);
+    }
+
+    static LEO_FORCE_INLINE Value Xor3(Value a, Value b, Value c)
+    {
+        return _mm256_ternarylogic_epi32(a, b, c, 0x96);
+    }
+};
+
+struct ZmmDerivativeOps
+{
+    typedef __m512i Value;
+    static const unsigned kBytes = 64;
+
+    static LEO_FORCE_INLINE Value Load(const uint8_t* source)
+    {
+        return ValueIO<ZmmTag>::Load(source);
+    }
+
+    static LEO_FORCE_INLINE void Store(uint8_t* destination, Value value)
+    {
+        ValueIO<ZmmTag>::Store(destination, value);
+    }
+
+    static LEO_FORCE_INLINE Value Xor(Value a, Value b)
+    {
+        return _mm512_xor_si512(a, b);
+    }
+
+    static LEO_FORCE_INLINE Value Xor3(Value a, Value b, Value c)
+    {
+        return _mm512_ternarylogic_epi32(a, b, c, 0x96);
     }
 };
 
@@ -452,6 +505,44 @@ uint64_t Xor4_512(
         destination2, source2, destination3, source3, buffer_bytes);
 }
 
+uint64_t FormalDerivativeBoundaryRow256(
+    unsigned extra_count,
+    void* left,
+    void* right,
+    const void* extra0,
+    const void* extra1,
+    const void* extra2,
+    const void* extra3,
+    const void* extra4,
+    const void* extra5,
+    const void* extra6,
+    uint64_t buffer_bytes)
+{
+    return derivative_detail::ApplyRow<YmmDerivativeOps>(
+        extra_count, left, right,
+        extra0, extra1, extra2, extra3, extra4, extra5, extra6,
+        buffer_bytes, 0);
+}
+
+uint64_t FormalDerivativeBoundaryRow512(
+    unsigned extra_count,
+    void* left,
+    void* right,
+    const void* extra0,
+    const void* extra1,
+    const void* extra2,
+    const void* extra3,
+    const void* extra4,
+    const void* extra5,
+    const void* extra6,
+    uint64_t buffer_bytes)
+{
+    return derivative_detail::ApplyRow<ZmmDerivativeOps>(
+        extra_count, left, right,
+        extra0, extra1, extra2, extra3, extra4, extra5, extra6,
+        buffer_bytes, 0);
+}
+
 
 }}} // namespace leopard::ff8xor::avx512
 
@@ -495,6 +586,38 @@ uint64_t Xor4_256(
 uint64_t Xor4_512(
     void*, const void*, void*, const void*, void*, const void*,
     void*, const void*, uint64_t)
+{
+    return 0;
+}
+
+uint64_t FormalDerivativeBoundaryRow256(
+    unsigned,
+    void*,
+    void*,
+    const void*,
+    const void*,
+    const void*,
+    const void*,
+    const void*,
+    const void*,
+    const void*,
+    uint64_t)
+{
+    return 0;
+}
+
+uint64_t FormalDerivativeBoundaryRow512(
+    unsigned,
+    void*,
+    void*,
+    const void*,
+    const void*,
+    const void*,
+    const void*,
+    const void*,
+    const void*,
+    const void*,
+    uint64_t)
 {
     return 0;
 }

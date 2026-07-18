@@ -87,5 +87,21 @@ uint64_t Xor4(
     uint64_t buffer_bytes,
     uint64_t start_offset);
 
+// One source-arity-specialized row of the combined formal-derivative/top-FFT
+// boundary.  The arity switch occurs before the YMM payload loop.
+uint64_t FormalDerivativeBoundaryRow(
+    unsigned extra_count,
+    void* left,
+    void* right,
+    const void* extra0,
+    const void* extra1,
+    const void* extra2,
+    const void* extra3,
+    const void* extra4,
+    const void* extra5,
+    const void* extra6,
+    uint64_t buffer_bytes,
+    uint64_t start_offset);
+
 
 }}} // namespace leopard::ff8xor::avx2

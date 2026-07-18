@@ -23,6 +23,96 @@ def next_power_of_two(value):
     return result
 
 
+MASK64 = (1 << 64) - 1
+
+
+def shuffled_indices(count, seed):
+    indices = list(range(count))
+    state = seed if seed else 1
+    for i in range(count, 1, -1):
+        value = state
+        value ^= value >> 12
+        value ^= (value << 25) & MASK64
+        value ^= value >> 27
+        state = value & MASK64
+        random_value = (state * 2685821657736338717) & MASK64
+        other = random_value % i
+        indices[i - 1], indices[other] = indices[other], indices[i - 1]
+    return indices
+
+
+def is_power_of_two(value):
+    return value != 0 and value & (value - 1) == 0
+
+
+def transform_memory_units(count_truncated, count, skew_base):
+    units = 0
+    distance = 1
+    while distance < count:
+        span = distance * 2
+        for range_start in range(0, count_truncated, span):
+            sentinel = is_power_of_two(
+                skew_base + range_start + distance)
+            units += distance * (3 if sentinel else 4)
+        distance *= 2
+    return units
+
+
+def error_fft_memory_units(count_truncated, initial_distance,
+                           skew_base, missing_locations):
+    units = 0
+    distance = initial_distance
+    while distance:
+        span = distance * 2
+        for range_start in range(0, count_truncated, span):
+            needed = any(range_start <= location < range_start + span
+                         for location in missing_locations)
+            if needed:
+                sentinel = is_power_of_two(
+                    skew_base + range_start + distance)
+                units += distance * (3 if sentinel else 4)
+        distance //= 2
+    return units
+
+
+def fused_derivative_boundary_units(count):
+    half_count = count // 2
+    units = 0
+    for q in range(half_count):
+        units += 4  # Read A/R and write X/Y.
+        bit = 1
+        while bit < half_count:
+            if not q & bit:
+                units += 1
+            bit *= 2
+    return units
+
+
+def modeled_fused_decode_bytes(original_count, recovery_count,
+                               buffer_bytes, loss_count):
+    m = next_power_of_two(recovery_count)
+    n = next_power_of_two(m + original_count)
+    seed = (0xff8c000000000000 ^ (original_count << 40) ^
+            (recovery_count << 24) ^ buffer_bytes)
+    loss_seed = seed ^ (loss_count << 8) ^ 0xd3c0de
+    order = shuffled_indices(original_count, loss_seed)
+    missing_locations = [m + order[i] for i in range(loss_count)]
+
+    half_count = n // 2
+    left_derivative_buffers = sum(
+        ((index ^ (index - 1)) + 1) >> 1
+        for index in range(1, half_count))
+    units = 0
+    units += (original_count + loss_count) * 2
+    units += n - original_count
+    units += transform_memory_units(m + original_count, n, 0)
+    units += left_derivative_buffers * 3
+    units += fused_derivative_boundary_units(n)
+    units += error_fft_memory_units(
+        m + original_count, n // 4, 0, missing_locations)
+    return units * buffer_bytes
+
+
 def main():
     require(len(sys.argv) == 2, "expected benchmark executable path")
     repository_root = Path(__file__).resolve().parents[1]
@@ -138,6 +228,14 @@ def main():
 
         require(scheduled > 0,
                 "native end-to-end row omitted scheduled traffic")
+        if record["operation"] == "decode":
+            expected = modeled_fused_decode_bytes(
+                record["k"], record["r"], record["buffer_bytes"],
+                record["loss_count"])
+            require(scheduled == expected,
+                    "native decode fused-traffic model is stale: "
+                    "expected %d, observed %d for %s" %
+                    (expected, scheduled, record["schedule_id"]))
         full_chunk_encode = (record["operation"] == "encode" and
                              record["k"] %
                              next_power_of_two(record["r"]) == 0)
@@ -217,6 +315,14 @@ def main():
         buffer_bytes = int(record["buffer_bytes"])
         require(scheduled > 0,
                 "CSV native row omitted scheduled traffic")
+        if record["operation"] == "decode":
+            expected = modeled_fused_decode_bytes(
+                int(record["k"]), int(record["r"]), buffer_bytes,
+                int(record["loss_count"]))
+            require(scheduled == expected,
+                    "CSV native decode fused-traffic model is stale: "
+                    "expected %d, observed %d for %s" %
+                    (expected, scheduled, record["schedule_id"]))
         full_chunk_encode = (record["operation"] == "encode" and
                              int(record["k"]) %
                              next_power_of_two(int(record["r"])) == 0)

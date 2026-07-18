@@ -40,6 +40,7 @@ set(LIB_SOURCE_FILES
         LeopardFF8XorAVX512.h
         LeopardFF8XorAVX512Four.cpp
         LeopardFF8XorAVX512Four.h
+        LeopardFF8XorDerivative.h
         LeopardFF8XorTranspose.cpp
         LeopardFF8XorTranspose.h
         LeopardFF8XorTransposeAVX2.cpp
@@ -520,6 +521,14 @@ add_test(NAME leopard_ff8xor_four_buffer_runtime
 set_tests_properties(leopard_ff8xor_four_buffer_runtime PROPERTIES
     SKIP_RETURN_CODE 77)
 
+add_executable(test_leopard_ff8xor_derivative_boundary
+    tests/test_ff8xor_derivative_boundary.cpp)
+target_include_directories(test_leopard_ff8xor_derivative_boundary PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(test_leopard_ff8xor_derivative_boundary libleopard)
+add_test(NAME leopard_ff8xor_derivative_boundary
+    COMMAND test_leopard_ff8xor_derivative_boundary)
+
 add_executable(test_leopard_api_counts tests/test_api_counts.cpp)
 target_link_libraries(test_leopard_api_counts libleopard)
 add_test(NAME leopard_api_counts COMMAND test_leopard_api_counts)
@@ -835,6 +844,11 @@ if(FF8XOR_PYTHON_EXECUTABLE)
                 "${FF8XOR_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_four_buffer_production_inspector.py")
 
+    add_test(NAME ff8xor_derivative_boundary_inspector
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_derivative_boundary_inspector.py")
+
     add_test(NAME ff8xor_visual_studio_project
         COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
                 "${FF8XOR_PYTHON_EXECUTABLE}"
@@ -1049,6 +1063,29 @@ if(FF8XOR_PYTHON_EXECUTABLE)
                         --archive "$<TARGET_FILE:libleopard>"
                         --ar "${FF8XOR_AR_EXECUTABLE}"
                         --nm "${FF8XOR_NM_EXECUTABLE}"
+                        --objdump "${FF8XOR_OBJDUMP_EXECUTABLE}"
+                        --strict
+                        --json
+                DEPENDS libleopard
+                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                VERBATIM)
+
+            add_test(NAME ff8xor_derivative_boundary_assembly
+                COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                        "${FF8XOR_PYTHON_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_derivative_boundary.py"
+                        --archive "$<TARGET_FILE:libleopard>"
+                        --ar "${FF8XOR_AR_EXECUTABLE}"
+                        --objdump "${FF8XOR_OBJDUMP_EXECUTABLE}"
+                        --strict
+                ${FF8XOR_RELEASE_TEST_CONFIG_ARGS})
+
+            add_custom_target(check_ff8xor_derivative_boundary_assembly
+                COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                        "${FF8XOR_PYTHON_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_derivative_boundary.py"
+                        --archive "$<TARGET_FILE:libleopard>"
+                        --ar "${FF8XOR_AR_EXECUTABLE}"
                         --objdump "${FF8XOR_OBJDUMP_EXECUTABLE}"
                         --strict
                         --json

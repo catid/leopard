@@ -1581,10 +1581,14 @@ static uint64_t ErrorFFTMemoryUnits(
     unsigned count_truncated,
     unsigned count,
     unsigned skew_base,
-    const std::vector<unsigned>& missing_locations)
+    const std::vector<unsigned>& missing_locations,
+    unsigned initial_distance)
 {
+    (void)count;
     uint64_t units = 0;
-    for (unsigned distance = count >> 1; distance != 0; distance >>= 1)
+    for (unsigned distance = initial_distance;
+        distance != 0;
+        distance >>= 1)
     {
         const unsigned span = distance << 1;
         for (unsigned range = 0; range < count_truncated; range += span)
@@ -1606,6 +1610,25 @@ static uint64_t ErrorFFTMemoryUnits(
                 units += static_cast<uint64_t>(distance) *
                     (sentinel ? 3 : 4);
             }
+        }
+    }
+    return units;
+}
+
+static uint64_t FusedDerivativeBoundaryMemoryUnits(unsigned count)
+{
+    const unsigned half_count = count >> 1;
+    uint64_t units = 0;
+    for (unsigned q = 0; q < half_count; ++q)
+    {
+        // The direct row reads A[q] and R[q], writes both outputs, and reads
+        // one higher right-half source for every zero bit of q.  This models
+        // memory operands folded into VPTERNLOG as reads too.
+        units += 4;
+        for (unsigned bit = 1; bit < half_count; bit <<= 1)
+        {
+            if ((q & bit) == 0)
+                ++units;
         }
     }
     return units;
@@ -1668,18 +1691,26 @@ static uint64_t ModeledDecodePayloadBytes(
     const unsigned available_recoveries = loss_count;
     const unsigned present_inputs = present_originals + available_recoveries;
     const unsigned zero_buffers = n - present_inputs;
-    uint64_t derivative_buffers = 0;
-    for (unsigned index = 1; index < n; ++index)
-        derivative_buffers += ((index ^ (index - 1)) + 1) >> 1;
+    const unsigned half_count = n >> 1;
+    uint64_t left_derivative_buffers = 0;
+    for (unsigned index = 1; index < half_count; ++index)
+        left_derivative_buffers += ((index ^ (index - 1)) + 1) >> 1;
+    const uint64_t derivative_boundary_units =
+        FusedDerivativeBoundaryMemoryUnits(n);
     const uint64_t transform_units =
         TransformMemoryUnits(m + original_count, n, 0) +
         ErrorFFTMemoryUnits(
-            m + original_count, n, 0, missing_locations);
+            m + original_count,
+            n,
+            0,
+            missing_locations,
+            n >> 2);
 
     uint64_t units = 0;
     units += static_cast<uint64_t>(present_inputs + loss_count) * 2;
     units += zero_buffers;
-    units += derivative_buffers * 3;
+    units += left_derivative_buffers * 3;
+    units += derivative_boundary_units;
     units += transform_units;
     if (transpose)
     {

@@ -201,6 +201,14 @@ void TrackedButterflyBufferForTesting(
     bool equal_nonzero,
     ffe_t skew);
 
+// Compare the direct combined boundary against an independently staged formal
+// derivative plus top sentinel FFT.  count must be a power of two in [2, 256]
+// and the buffers must be distinct; the operation is naturally in place.
+void FormalDerivativeTopFFTForTesting(
+    uint64_t buffer_bytes,
+    unsigned count,
+    void** work);
+
 // Apply one generated four-buffer map through the same runtime gates used by
 // production transforms.  False reports an unavailable mode, unknown tuple,
 // or a plane size requiring the narrower two-way fallback.

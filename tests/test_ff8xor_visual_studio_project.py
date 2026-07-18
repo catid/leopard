@@ -24,7 +24,10 @@ def includes(path: Path, item: str):
 
 def main() -> int:
     required = {
-        "ClInclude": {r"..\LeopardFF8XorAVX512Four.h"},
+        "ClInclude": {
+            r"..\LeopardFF8XorAVX512Four.h",
+            r"..\LeopardFF8XorDerivative.h",
+        },
         "ClCompile": {r"..\LeopardFF8XorAVX512Four.cpp"},
     }
     failures = []

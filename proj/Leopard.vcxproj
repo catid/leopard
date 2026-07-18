@@ -25,6 +25,7 @@
     <ClInclude Include="..\LeopardFF8.h" />
     <ClInclude Include="..\LeopardFF8Xor.h" />
     <ClInclude Include="..\LeopardFF8XorAVX512Four.h" />
+    <ClInclude Include="..\LeopardFF8XorDerivative.h" />
     <ClInclude Include="..\leopard_ff8xor.h" />
     <ClInclude Include="..\generated\LeopardFF8XorCircuits.inl" />
   </ItemGroup>

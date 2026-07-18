@@ -28,6 +28,7 @@
 
 #include "LeopardCommon.h"
 #include "LeopardFF8XorAVX2.h"
+#include "LeopardFF8XorDerivative.h"
 
 #if defined(LEO_HAS_FF8) && defined(LEO_FF8XOR_BUILD_AVX2)
 
@@ -63,6 +64,32 @@ static LEO_FORCE_INLINE void Store(uint8_t* destination, __m256i value)
 {
     _mm256_storeu_si256(reinterpret_cast<__m256i*>(destination), value);
 }
+
+struct DerivativeOps
+{
+    typedef __m256i Value;
+    static const unsigned kBytes = kVectorBytes;
+
+    static LEO_FORCE_INLINE Value Load(const uint8_t* source)
+    {
+        return avx2::Load(source);
+    }
+
+    static LEO_FORCE_INLINE void Store(uint8_t* destination, Value value)
+    {
+        avx2::Store(destination, value);
+    }
+
+    static LEO_FORCE_INLINE Value Xor(Value a, Value b)
+    {
+        return _mm256_xor_si256(a, b);
+    }
+
+    static LEO_FORCE_INLINE Value Xor3(Value a, Value b, Value c)
+    {
+        return _mm256_xor_si256(_mm256_xor_si256(a, b), c);
+    }
+};
 
 template <unsigned Coefficient>
 static LEO_FORCE_INLINE void MultiplyChunk(
@@ -292,6 +319,26 @@ uint64_t Xor4(
     return offset;
 }
 
+uint64_t FormalDerivativeBoundaryRow(
+    unsigned extra_count,
+    void* left,
+    void* right,
+    const void* extra0,
+    const void* extra1,
+    const void* extra2,
+    const void* extra3,
+    const void* extra4,
+    const void* extra5,
+    const void* extra6,
+    uint64_t buffer_bytes,
+    uint64_t start_offset)
+{
+    return derivative_detail::ApplyRow<DerivativeOps>(
+        extra_count, left, right,
+        extra0, extra1, extra2, extra3, extra4, extra5, extra6,
+        buffer_bytes, start_offset);
+}
+
 
 }}} // namespace leopard::ff8xor::avx2
 
@@ -319,6 +366,23 @@ uint64_t Xor2(
 uint64_t Xor4(
     void*, const void*, void*, const void*, void*, const void*,
     void*, const void*, uint64_t, uint64_t start_offset)
+{
+    return start_offset;
+}
+
+uint64_t FormalDerivativeBoundaryRow(
+    unsigned,
+    void*,
+    void*,
+    const void*,
+    const void*,
+    const void*,
+    const void*,
+    const void*,
+    const void*,
+    const void*,
+    uint64_t,
+    uint64_t start_offset)
 {
     return start_offset;
 }

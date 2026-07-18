@@ -115,5 +115,34 @@ uint64_t Xor4_512(
     const void* source3,
     uint64_t buffer_bytes);
 
+// AVX-512VL and ZMM lower the three-input XORs in the combined
+// formal-derivative/top-FFT boundary with VPTERNLOGD immediate 0x96.  The
+// source-arity switch is outside the vector loop.
+uint64_t FormalDerivativeBoundaryRow256(
+    unsigned extra_count,
+    void* left,
+    void* right,
+    const void* extra0,
+    const void* extra1,
+    const void* extra2,
+    const void* extra3,
+    const void* extra4,
+    const void* extra5,
+    const void* extra6,
+    uint64_t buffer_bytes);
+
+uint64_t FormalDerivativeBoundaryRow512(
+    unsigned extra_count,
+    void* left,
+    void* right,
+    const void* extra0,
+    const void* extra1,
+    const void* extra2,
+    const void* extra3,
+    const void* extra4,
+    const void* extra5,
+    const void* extra6,
+    uint64_t buffer_bytes);
+
 
 }}} // namespace leopard::ff8xor::avx512

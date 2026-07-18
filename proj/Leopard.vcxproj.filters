@@ -33,6 +33,9 @@
     <ClInclude Include="..\LeopardFF8XorAVX512Four.h">
       <Filter>Source Files</Filter>
     </ClInclude>
+    <ClInclude Include="..\LeopardFF8XorDerivative.h">
+      <Filter>Source Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\leopard_ff8xor.h">
       <Filter>Header Files</Filter>
     </ClInclude>
