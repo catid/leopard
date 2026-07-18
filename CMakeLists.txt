@@ -1040,6 +1040,11 @@ if(LEO2_BUILD_TESTS)
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_benchmark_matrix.py
                 self-test)
+        add_test(
+            NAME leopard2_sparse_encode_crossover_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_sparse_encode_crossover.py
+                self-test)
 
         add_test(
             NAME leopard2_r1_xor_crossover_self_test
