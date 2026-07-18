@@ -4,7 +4,15 @@
 the mature prefix forward transform. Both paths are linked into the same
 binary, use the same field tables and selected backend, consume the same source
 shards, and are checked byte-for-byte before and after timing. The benchmark is
-diagnostic, test-hook-only, and is not installed.
+diagnostic, links the ordinary production `leopard` archive, and is not
+installed. It is available when benchmarks are enabled even if the test suite
+is disabled.
+
+The benchmark-v3 schema reports `build.library_test_hooks=false`. The CMake
+target sets that marker only while linking production `leopard`; manual builds
+default to `true`, and the pinned runner rejects a true or missing marker. This
+matters because atomic test counters perturb the mature and candidate paths by
+different amounts and can bias a crossover result.
 
 The cell benchmark reports four measurements separately:
 
@@ -62,6 +70,7 @@ The runner fails closed:
   the run;
 - every benchmark result must report the Git SHA and dirty state embedded at
   CMake configure time;
+- benchmark-v3 must report that its linked library has no test hooks;
 - pinned mode rejects a dirty source tree and a binary whose embedded SHA does
   not equal the current clean source SHA;
 - pinned mode requires one worker, `taskset`, an allowed CPU, and an explicit
@@ -95,7 +104,7 @@ identity.
 
     cmake -S . -B build/release \
       -DCMAKE_BUILD_TYPE=Release \
-      -DLEO2_BUILD_TESTS=ON \
+      -DLEO2_BUILD_TESTS=OFF \
       -DLEO2_BUILD_BENCHMARKS=ON
     cmake --build build/release --target bench_leopard2_sparse_encode -j 128
 

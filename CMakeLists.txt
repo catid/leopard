@@ -451,6 +451,20 @@ if(LEO2_BUILD_BENCHMARKS)
         LEO2_LOCATOR_SOURCE_GIT_SHA="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
         LEO2_LOCATOR_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
 
+    # This diagnostic uses ordinary internal transform entry points only.  It
+    # deliberately links the production archive even when the test suite is
+    # enabled: test-hook counters perturb the compared encoder paths by
+    # different amounts and therefore invalidate crossover measurements.
+    if(LEOPARD_ENABLE_GF8 AND LEOPARD_ENABLE_GF16)
+        add_executable(bench_leopard2_sparse_encode
+            bench/leopard2/sparse_encode_benchmark.cpp)
+        target_compile_definitions(bench_leopard2_sparse_encode PRIVATE
+            LEO2_SPARSE_ENCODE_SOURCE_GIT_SHA="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
+            LEO2_SPARSE_ENCODE_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY}
+            LEO2_SPARSE_ENCODE_LIBRARY_TEST_HOOKS=0)
+        target_link_libraries(bench_leopard2_sparse_encode leopard)
+    endif()
+
     add_executable(experiment_leopard ${EXPERIMENT_SOURCE_FILES})
 endif()
 
@@ -782,18 +796,6 @@ if(LEO2_BUILD_TESTS)
             LEO2_PRUNED_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
         target_link_libraries(bench_leopard2_pruned_transform
             leopard_test_hooks)
-
-        # Same-binary, same-source comparison of exact requested-output masks
-        # against the mature prefix encoder transforms.  Schedule setup,
-        # prepared execution, and the current call-local total are all retained
-        # separately; the executable is diagnostic and is never installed.
-        add_executable(bench_leopard2_sparse_encode
-            bench/leopard2/sparse_encode_benchmark.cpp)
-        target_compile_definitions(bench_leopard2_sparse_encode PRIVATE
-            LEO2_ENABLE_TEST_HOOKS=1
-            LEO2_SPARSE_ENCODE_SOURCE_GIT_SHA="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
-            LEO2_SPARSE_ENCODE_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
-        target_link_libraries(bench_leopard2_sparse_encode leopard_test_hooks)
 
     endif()
 
@@ -1163,6 +1165,25 @@ if(LEO2_BUILD_TESTS)
             -DLEO2_STATIC_LIBRARY_SUFFIX=${CMAKE_STATIC_LIBRARY_SUFFIX}
             -DLEO2_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_hook_isolation.cmake)
+
+    if(LEO2_BUILD_BENCHMARKS)
+        add_test(
+            NAME leopard2_sparse_encode_benchmark_registration
+            COMMAND ${CMAKE_COMMAND}
+                -DLEO2_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DLEO2_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/sparse-encode-registration
+                -DLEO2_C_COMPILER=${CMAKE_C_COMPILER}
+                -DLEO2_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+                -DLEO2_GENERATOR=${CMAKE_GENERATOR}
+                -DLEO2_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}
+                -DLEO2_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}
+                -DLEO2_ARCHIVE_SYMBOL_CHECKS=${LEO2_ARCHIVE_SYMBOL_CHECKS}
+                -DLEO2_NM_COMMAND=${CMAKE_NM}
+                -DLEO2_STATIC_LIBRARY_PREFIX=${CMAKE_STATIC_LIBRARY_PREFIX}
+                -DLEO2_STATIC_LIBRARY_SUFFIX=${CMAKE_STATIC_LIBRARY_SUFFIX}
+                -DLEO2_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_sparse_encode_benchmark_registration.cmake)
+    endif()
 
     if(CMAKE_VERSION VERSION_LESS 3.12)
         find_package(PythonInterp QUIET)

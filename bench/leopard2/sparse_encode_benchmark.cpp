@@ -6,8 +6,10 @@
     BSD license are met.  See the repository LICENSE file.
 */
 
-#ifndef LEO2_ENABLE_TEST_HOOKS
-#error "sparse_encode_benchmark requires LEO2_ENABLE_TEST_HOOKS"
+#ifndef LEO2_SPARSE_ENCODE_LIBRARY_TEST_HOOKS
+// Fail closed for manually compiled binaries.  The production CMake target
+// sets this to zero only while linking the uninstrumented leopard archive.
+#define LEO2_SPARSE_ENCODE_LIBRARY_TEST_HOOKS 1
 #endif
 
 #include "Leopard2Backend.h"
@@ -911,13 +913,16 @@ void run(const leopard::backend::Ops& ops, const Options& options,
     std::cout.imbue(std::locale::classic());
     std::cout << std::fixed << std::setprecision(3)
         << "{\n"
-        << "  \"schema\": \"leopard2-sparse-encode-benchmark-v1\",\n"
+        << "  \"schema\": \"leopard2-sparse-encode-benchmark-v3\",\n"
         << "  \"authoritative\": false,\n"
         << "  \"authority_note\": \"requires the fail-closed pinned runner "
         << "and host isolation attestation\",\n"
         << "  \"build\": {\"source_git_sha\": \""
         << LEO2_SPARSE_ENCODE_SOURCE_GIT_SHA << "\", \"source_dirty\": "
-        << LEO2_SPARSE_ENCODE_SOURCE_DIRTY << ", \"compiler\": \""
+        << LEO2_SPARSE_ENCODE_SOURCE_DIRTY
+        << ", \"library_test_hooks\": "
+        << (LEO2_SPARSE_ENCODE_LIBRARY_TEST_HOOKS ? "true" : "false")
+        << ", \"compiler\": \""
         << compiler_name() << "\", \"compiler_version\": \""
         << json_escape(compiler_version()) << "\", \"cplusplus\": " << __cplusplus
         << "},\n"

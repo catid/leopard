@@ -27,7 +27,7 @@ from typing import Any
 
 SCHEMA = "leopard2-sparse-encode-crossover/v1"
 JOB_SCHEMA = "leopard2-sparse-encode-crossover-job/v1"
-BENCHMARK_SCHEMA = "leopard2-sparse-encode-benchmark-v1"
+BENCHMARK_SCHEMA = "leopard2-sparse-encode-benchmark-v3"
 ATTESTATION_SCHEMA = "leopard2-benchmark-isolation-attestation/v1"
 SOURCE_FILES = (
     "CMakeLists.txt",
@@ -52,6 +52,7 @@ SOURCE_FILES = (
     "leopard2.cpp",
     "leopard2.h",
     "bench/leopard2/sparse_encode_benchmark.cpp",
+    "tests/cmake/test_sparse_encode_benchmark_registration.cmake",
     "tools/leopard2_sparse_encode_benchmark_json_test.py",
     "tools/leopard2_sparse_encode_crossover.py",
 )
@@ -327,14 +328,20 @@ def validate_metric(metric: Any, samples: int, name: str) -> None:
         isinstance(value, (int, float)) and value > 0 for value in values
     ):
         raise CrossoverError(f"invalid samples for {name}")
-    if abs(float(metric.get("median", -1)) - statistics.median(values)) > 0.002:
+    median = statistics.median(values)
+    if abs(float(metric.get("median", -1)) - median) > 0.002:
         raise CrossoverError(f"wrong median for {name}")
     if abs(float(metric.get("minimum", -1)) - min(values)) > 0.002 or (
         abs(float(metric.get("maximum", -1)) - max(values)) > 0.002
     ):
         raise CrossoverError(f"wrong extrema for {name}")
-    if not isinstance(metric.get("mad"), (int, float)) or metric["mad"] < 0:
-        raise CrossoverError(f"invalid MAD for {name}")
+    expected_mad = statistics.median(
+        abs(float(value) - median) for value in values
+    )
+    if not isinstance(metric.get("mad"), (int, float)) or (
+        metric["mad"] < 0 or abs(float(metric["mad"]) - expected_mad) > 0.002
+    ):
+        raise CrossoverError(f"wrong MAD for {name}")
 
 
 def validate_benchmark_result(
@@ -354,6 +361,11 @@ def validate_benchmark_result(
         raise CrossoverError("benchmark binary source SHA differs from runner source")
     if build.get("source_dirty") != int(expected_git["dirty"]):
         raise CrossoverError("benchmark binary dirty marker differs from runner source")
+    if build.get("library_test_hooks") is not False:
+        raise CrossoverError(
+            "benchmark library contains test-hook instrumentation; "
+            "link bench_leopard2_sparse_encode against production leopard"
+        )
     if not isinstance(build.get("compiler"), str) or not build["compiler"]:
         raise CrossoverError("benchmark binary omitted compiler identity")
     if not isinstance(build.get("compiler_version"), str) or not build["compiler_version"]:
@@ -860,6 +872,7 @@ def self_test() -> int:
         "authoritative": False,
         "build": {
             "source_git_sha": state["sha"], "source_dirty": 0,
+            "library_test_hooks": False,
             "compiler": "self-test", "compiler_version": "1", "cplusplus": 201103,
         },
         "parameters": {
@@ -921,7 +934,30 @@ def self_test() -> int:
         pass
     else:
         raise CrossoverError("mismatched binary dirty marker was accepted")
-    print("PASS sparse encode crossover self-test cells=32 identity_mutations=4")
+    benchmark["build"]["source_dirty"] = 0
+    benchmark["build"]["library_test_hooks"] = True
+    try:
+        validate_benchmark_result(benchmark, cell, settings, state)
+    except CrossoverError:
+        pass
+    else:
+        raise CrossoverError("instrumented benchmark archive was accepted")
+    del benchmark["build"]["library_test_hooks"]
+    try:
+        validate_benchmark_result(benchmark, cell, settings, state)
+    except CrossoverError:
+        pass
+    else:
+        raise CrossoverError("benchmark without hook identity was accepted")
+    benchmark["build"]["library_test_hooks"] = False
+    benchmark["metrics"]["prefix_execution_ns"]["mad"] = 1
+    try:
+        validate_benchmark_result(benchmark, cell, settings, state)
+    except CrossoverError:
+        pass
+    else:
+        raise CrossoverError("malformed benchmark MAD was accepted")
+    print("PASS sparse encode crossover self-test cells=32 identity_mutations=7")
     return 0
 
 

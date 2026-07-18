@@ -53,11 +53,21 @@ def validate_metric(metric: object, samples: int, name: str) -> None:
         all(isinstance(value, (int, float)) and value > 0 for value in values),
         f"invalid samples for {name}",
     )
+    expected_median = statistics.median(values)
     median = metric.get("median")
     require(
         isinstance(median, (int, float))
-        and math.isclose(float(median), statistics.median(values), abs_tol=0.001),
+        and math.isclose(float(median), expected_median, abs_tol=0.002),
         f"wrong median for {name}",
+    )
+    expected_mad = statistics.median(
+        abs(float(value) - expected_median) for value in values
+    )
+    mad = metric.get("mad")
+    require(
+        isinstance(mad, (int, float))
+        and math.isclose(float(mad), expected_mad, abs_tol=0.002),
+        f"wrong MAD for {name}",
     )
     require(metric.get("minimum") == min(values), f"wrong minimum for {name}")
     require(metric.get("maximum") == max(values), f"wrong maximum for {name}")
@@ -69,7 +79,7 @@ def validate(raw: str, expected: dict[str, object]) -> None:
     except json.JSONDecodeError as error:
         raise SmokeError(f"benchmark output is not JSON: {error}") from error
     require(
-        result.get("schema") == "leopard2-sparse-encode-benchmark-v1",
+        result.get("schema") == "leopard2-sparse-encode-benchmark-v3",
         "unexpected schema",
     )
     require(result.get("authoritative") is False, "cell claimed authority")
@@ -85,6 +95,10 @@ def validate(raw: str, expected: dict[str, object]) -> None:
         "missing source SHA",
     )
     require(build.get("source_dirty") in (0, 1), "invalid dirty marker")
+    require(
+        build.get("library_test_hooks") is False,
+        "benchmark linked test-hook instrumentation",
+    )
     require(
         isinstance(build.get("compiler"), str) and build["compiler"],
         "missing compiler identity",
