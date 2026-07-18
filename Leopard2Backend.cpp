@@ -1208,9 +1208,13 @@ static bool TestFF16ButterflyRanges(const Ops& ops)
     static const unsigned kDistance = 3;
     static const unsigned kLaneCount = kDistance * 4;
     static const uint16_t log_sets[][3] = {
-        { 65535, 0, 17 }, { 1, 256, 4095 }
+        { 65535, 0, 17 },
+        { 0, 65535, 17 },
+        { 0, 17, 65535 },
+        { 65535, 65535, 65535 },
+        { 1, 256, 4095 }
     };
-    static const uint64_t byte_counts[] = { 64, 128, 130 };
+    static const uint64_t byte_counts[] = { 2, 62, 64, 128, 130 };
     uint8_t actual[kLaneCount][198];
     uint8_t expected[kLaneCount][198];
     void* actual_pointers[kLaneCount];
