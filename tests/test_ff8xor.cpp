@@ -7,6 +7,7 @@
 #include "../leopard_ff8xor.h"
 
 #include <algorithm>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -651,6 +652,9 @@ static bool TestAPIValidation()
     // here so the operation reaches and reports the FF8 range check.
     std::vector<void*> large_encode_work(1, dummy.data());
     std::vector<void*> large_decode_work(1, dummy.data());
+    const void* bounded_original[] = { dummy.data() };
+    const void* bounded_recovery[] = { dummy.data() };
+    void* bounded_work[] = { dummy.data() };
 
     return ExpectResult(
                leo_ff8xor_encode(
@@ -666,7 +670,13 @@ static bool TestAPIValidation()
                    large_original.data(), large_recovery.data(),
                    large_decode_work.data()),
                Leopard_TooMuchData,
-               "decode n greater than 256");
+               "decode n greater than 256") &&
+           ExpectResult(
+               leo_ff8xor_decode(
+                   64, UINT_MAX, 1, 0,
+                   bounded_original, bounded_recovery, bounded_work),
+               Leopard_TooMuchData,
+               "decode rejects unbounded count before pointer traversal");
 }
 
 

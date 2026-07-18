@@ -155,6 +155,12 @@ LEO_EXPORT LeopardResult leo_ff8xor_decode(
         return Leopard_CallInitialize;
     if (!EnsureExperimentalInitialized())
         return Leopard_Platform;
+    // Reject unbounded caller counts before walking either pointer array.
+    // Besides matching the FF8-only contract, this guarantees that malformed
+    // out-of-range counts return TooMuchData instead of causing an array read
+    // proportional to an unsupported count.
+    if (!IsSupportedFF8Transform(original_count, recovery_count))
+        return Leopard_TooMuchData;
 
     unsigned original_loss_count = 0;
     unsigned original_loss_i = 0;
@@ -179,8 +185,6 @@ LEO_EXPORT LeopardResult leo_ff8xor_decode(
     }
     if (recovery_got_count < original_loss_count)
         return Leopard_NeedMoreData;
-    if (!IsSupportedFF8Transform(original_count, recovery_count))
-        return Leopard_TooMuchData;
     if (work_count != leo_ff8xor_decode_work_count(
             original_count, recovery_count))
         return Leopard_InvalidCounts;
