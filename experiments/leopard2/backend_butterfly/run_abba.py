@@ -201,9 +201,14 @@ MATRIX_SOURCE_FILES = (
     "tests/leopard2/test_backend_ops.cpp",
     "tests/leopard2/test_context_backends.cpp",
     "tests/leopard2/test_r1_xor.cpp",
+    "tests/leopard2/test_field_options.cpp",
+    "tests/leopard2/test_concurrent_initialization.cpp",
+    "tests/leopard2/test_legacy_simd_init_failure.cpp",
+    "tests/leopard2/test_initialization_threads.cpp",
     "tests/leopard2/legacy_golden_vectors.h",
     "tests/leopard2/test_api.cpp",
     "tests/leopard2/test_public_api_contract.cpp",
+    "tests/leopard2/test_batch_aliasing.cpp",
     "tests/leopard2/test_random.cpp",
     "tests/leopard2/test_locator.cpp",
     "tests/leopard2/test_boundaries.cpp",
@@ -213,6 +218,7 @@ MATRIX_SOURCE_FILES = (
     "tests/leopard2/test_encoder_gf16_legacy_matrix.cpp",
     "tests/leopard2/test_low_gf16_direct_rows.cpp",
     "tests/leopard2/test_decode_high_acceptance.cpp",
+    "tests/leopard2/test_high_pruned_legacy.cpp",
     "tests/leopard2/test_decode_low_acceptance.cpp",
     "tests/leopard2/test_decode_plan_schedule.cpp",
     "tests/leopard2/test_direct_encode.cpp",
@@ -221,6 +227,7 @@ MATRIX_SOURCE_FILES = (
     "tests/leopard2/test_encode_concurrency.cpp",
     "tests/leopard2/test_codec_options_abi.c",
     "tests/leopard2/test_transform_differential.cpp",
+    "tests/leopard2/test_pruned_transform.cpp",
     "tests/leopard2/direct_oracle.cpp",
     "tests/leopard2/direct_oracle.h",
     "tests/leopard2/test_direct_oracle.cpp",
@@ -228,6 +235,7 @@ MATRIX_SOURCE_FILES = (
     "tests/leopard2/direct_repair.h",
     "tests/leopard2/test_direct_repair.cpp",
     "tests/leopard2/fuzz_api.cpp",
+    "tests/leopard2/fuzz_pruned_transform.cpp",
     "tests/leopard2/fuzz_replay.cpp",
     "tests/cmake/test_cuda_optional.cmake",
     "cmake/leopardConfig.cmake.in",
@@ -236,16 +244,48 @@ MATRIX_SOURCE_FILES = (
 )
 
 MATRIX_COMPARE_TESTS = (
-    "direct_oracle", "backend_ops", "context_backends", "r1_xor",
-    "legacy_golden", "api",
-    "public_api_contract", "random", "locator", "active_lch", "gf16_tails",
-    "gf16_padded_odd", "gf16_legacy_encoder_matrix",
-    "low_gf16_direct_rows", "decode_high_acceptance",
-    "decode_low_acceptance", "decode_plan_schedule", "direct_encode",
-    "arbitrary_counts_acceptance", "max_counts", "encode_concurrency",
-    "codec_options_abi", "direct_repair", "boundaries",
-    "transform_differential", "fuzz_smoke",
+    "field_options",
+    "direct_oracle",
+    "backend_ops",
+    "context_backends",
+    "r1_xor",
+    "legacy_golden",
+    "api",
+    "public_api_contract",
+    "initialization_threads_legacy",
+    "initialization_threads_explicit",
+    "initialization_threads_default",
+    "initialization_threads_gf16_high_codec",
+    "initialization_threads_gf16_high_plan",
+    "initialization_threads_gf16_low_plan",
+    "random",
+    "locator",
+    "active_lch",
+    "gf16_tails",
+    "gf16_padded_odd",
+    "gf16_legacy_encoder_matrix",
+    "low_gf16_direct_rows",
+    "decode_high_acceptance",
+    "high_pruned_legacy",
+    "decode_low_acceptance",
+    "decode_plan_schedule",
+    "direct_encode",
+    "arbitrary_counts_acceptance",
+    "max_counts",
+    "encode_concurrency",
+    "codec_options_abi",
+    "direct_repair",
+    "boundaries",
+    "transform_differential",
+    "fuzz_smoke",
+    "pruned_fuzz_smoke",
 )
+
+# This test intentionally reports which qualified backends were enumerated, so
+# its stdout differs between forced variants even though every byte check must
+# pass.  Preserve execution and provenance without requiring identical output.
+MATRIX_RUN_ONLY_TESTS = ("pruned_transform",)
+MATRIX_RUN_TESTS = MATRIX_COMPARE_TESTS + MATRIX_RUN_ONLY_TESTS
 
 MATRIX_BACKEND_FAILURE_TESTS = (
     "leopard2_backend_failure_scalar_ff8_allocation",
@@ -260,6 +300,7 @@ MATRIX_BACKEND_FAILURE_TESTS = (
 )
 
 MATRIX_TEST_SPECS = {
+    "field_options": ("leopard2_field_options_test", []),
     "direct_oracle": ("leopard2_direct_oracle_test", []),
     "backend_ops": ("leopard2_backend_ops_test", []),
     "context_backends": ("leopard2_context_backends_test", []),
@@ -267,6 +308,18 @@ MATRIX_TEST_SPECS = {
     "legacy_golden": ("leopard2_legacy_golden_test", []),
     "api": ("leopard2_api_test", []),
     "public_api_contract": ("leopard2_public_api_contract_test", []),
+    "initialization_threads_legacy": (
+        "leopard2_initialization_threads_test", ["legacy"]),
+    "initialization_threads_explicit": (
+        "leopard2_initialization_threads_test", ["explicit"]),
+    "initialization_threads_default": (
+        "leopard2_initialization_threads_test", ["default"]),
+    "initialization_threads_gf16_high_codec": (
+        "leopard2_initialization_threads_test", ["gf16-high-codec"]),
+    "initialization_threads_gf16_high_plan": (
+        "leopard2_initialization_threads_test", ["gf16-high-plan"]),
+    "initialization_threads_gf16_low_plan": (
+        "leopard2_initialization_threads_test", ["gf16-low-plan"]),
     "random": ("leopard2_random_test", [
         "--seed", "0x4c656f7061726432", "--cases", "64", "--threads", "1"]),
     "locator": ("leopard2_locator_test", []),
@@ -277,6 +330,7 @@ MATRIX_TEST_SPECS = {
         "leopard2_gf16_legacy_encoder_matrix_test", []),
     "low_gf16_direct_rows": ("leopard2_low_gf16_direct_rows_test", []),
     "decode_high_acceptance": ("leopard2_decode_high_acceptance_test", []),
+    "high_pruned_legacy": ("leopard2_high_pruned_legacy_test", []),
     "decode_low_acceptance": ("leopard2_decode_low_acceptance_test", []),
     "decode_plan_schedule": ("leopard2_decode_plan_schedule_test", []),
     "direct_encode": ("leopard2_direct_encode_test", []),
@@ -288,14 +342,45 @@ MATRIX_TEST_SPECS = {
     "direct_repair": ("leopard2_direct_repair_test", []),
     "boundaries": ("leopard2_boundaries_test", []),
     "transform_differential": ("leopard2_transform_differential_test", []),
+    "pruned_transform": ("leopard2_pruned_transform_test", []),
     "fuzz_smoke": ("leopard2_fuzz_smoke", []),
+    "pruned_fuzz_smoke": ("leopard2_pruned_fuzz_smoke", []),
 }
 
-MATRIX_BUILD_TARGETS = tuple(MATRIX_TEST_SPECS[name][0]
-                             for name in MATRIX_COMPARE_TESTS)
 MATRIX_BUILD_TARGETS = (
-    MATRIX_BUILD_TARGETS[:2] + ("leopard2_backend_failures_test",) +
-    MATRIX_BUILD_TARGETS[2:])
+    "leopard2_field_options_test",
+    "leopard2_direct_oracle_test",
+    "leopard2_backend_ops_test",
+    "leopard2_backend_failures_test",
+    "leopard2_context_backends_test",
+    "leopard2_r1_xor_test",
+    "leopard2_legacy_golden_test",
+    "leopard2_api_test",
+    "leopard2_public_api_contract_test",
+    "leopard2_initialization_threads_test",
+    "leopard2_random_test",
+    "leopard2_locator_test",
+    "leopard2_active_lch_test",
+    "leopard2_gf16_tails_test",
+    "leopard2_gf16_padded_odd_test",
+    "leopard2_gf16_legacy_encoder_matrix_test",
+    "leopard2_low_gf16_direct_rows_test",
+    "leopard2_decode_high_acceptance_test",
+    "leopard2_high_pruned_legacy_test",
+    "leopard2_decode_low_acceptance_test",
+    "leopard2_decode_plan_schedule_test",
+    "leopard2_direct_encode_test",
+    "leopard2_arbitrary_counts_acceptance_test",
+    "leopard2_max_counts_test",
+    "leopard2_encode_concurrency_test",
+    "leopard2_codec_options_abi_test",
+    "leopard2_direct_repair_test",
+    "leopard2_boundaries_test",
+    "leopard2_transform_differential_test",
+    "leopard2_pruned_transform_test",
+    "leopard2_fuzz_smoke",
+    "leopard2_pruned_fuzz_smoke",
+)
 
 MATRIX_BUILD_CACHE_KEYS = (
     "CMAKE_BUILD_TYPE", "CMAKE_GENERATOR", "CMAKE_C_FLAGS",
@@ -308,19 +393,29 @@ MATRIX_BUILD_CACHE_KEYS = (
 )
 
 MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS = {
-    "Leopard2Backend.cpp": 1, "Leopard2BackendAVX2.cpp": 1,
-    "Leopard2BackendSSSE3.cpp": 1, "Leopard2BackendScalar.cpp": 1,
-    "Leopard2CpuFeatures.cpp": 1, "Leopard2Plan.cpp": 1,
-    "LeopardCommon.cpp": 1, "LeopardFF16.cpp": 1, "LeopardFF8.cpp": 1,
-    "leopard.cpp": 1, "leopard2.cpp": 1,
-    "tests/leopard2/direct_oracle.cpp": 13,
+    "Leopard2Backend.cpp": 2,
+    "Leopard2BackendAVX2.cpp": 1,
+    "Leopard2BackendSSSE3.cpp": 1,
+    "Leopard2BackendScalar.cpp": 2,
+    "Leopard2CpuFeatures.cpp": 2,
+    "Leopard2Plan.cpp": 2,
+    "LeopardCommon.cpp": 2,
+    "LeopardFF16.cpp": 2,
+    "LeopardFF8.cpp": 2,
+    "leopard.cpp": 2,
+    "leopard2.cpp": 2,
+    "tests/leopard2/direct_oracle.cpp": 14,
     "tests/leopard2/direct_repair.cpp": 1,
-    "tests/leopard2/fuzz_api.cpp": 1, "tests/leopard2/fuzz_replay.cpp": 1,
+    "tests/leopard2/fuzz_api.cpp": 1,
+    "tests/leopard2/fuzz_pruned_transform.cpp": 1,
+    "tests/leopard2/fuzz_replay.cpp": 2,
     "tests/leopard2/test_active_lch.cpp": 1,
     "tests/leopard2/test_api.cpp": 1,
     "tests/leopard2/test_arbitrary_counts_acceptance.cpp": 1,
     "tests/leopard2/test_backend_failures.cpp": 1,
     "tests/leopard2/test_backend_ops.cpp": 1,
+    "tests/leopard2/test_batch_aliasing.cpp": 1,
+    "tests/leopard2/test_concurrent_initialization.cpp": 1,
     "tests/leopard2/test_context_backends.cpp": 1,
     "tests/leopard2/test_r1_xor.cpp": 1,
     "tests/leopard2/test_boundaries.cpp": 1,
@@ -333,12 +428,17 @@ MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS = {
     "tests/leopard2/test_direct_repair.cpp": 1,
     "tests/leopard2/test_encode_concurrency.cpp": 1,
     "tests/leopard2/test_encoder_gf16_legacy_matrix.cpp": 1,
+    "tests/leopard2/test_field_options.cpp": 1,
     "tests/leopard2/test_gf16_padded_odd.cpp": 1,
     "tests/leopard2/test_gf16_tails.cpp": 1,
+    "tests/leopard2/test_high_pruned_legacy.cpp": 1,
+    "tests/leopard2/test_initialization_threads.cpp": 1,
     "tests/leopard2/test_legacy_golden.cpp": 1,
+    "tests/leopard2/test_legacy_simd_init_failure.cpp": 1,
     "tests/leopard2/test_locator.cpp": 1,
     "tests/leopard2/test_low_gf16_direct_rows.cpp": 1,
     "tests/leopard2/test_max_counts.cpp": 1,
+    "tests/leopard2/test_pruned_transform.cpp": 1,
     "tests/leopard2/test_public_api_contract.cpp": 1,
     "tests/leopard2/test_random.cpp": 1,
     "tests/leopard2/test_transform_differential.cpp": 1,
@@ -3183,7 +3283,7 @@ def validate_matrix_document(document, repo, candidate_commit):
                 "matrix compile source multiset")
 
         commands = value["commands"]
-        require(len(commands) == 2 + len(MATRIX_COMPARE_TESTS) + 2 +
+        require(len(commands) == 2 + len(MATRIX_RUN_TESTS) + 2 +
                 (1 if variant == "auto" else 0),
                 "matrix command count: " + variant)
         configure = commands[0]
@@ -3227,17 +3327,17 @@ def validate_matrix_document(document, repo, candidate_commit):
         require(value.get("source_fingerprint") == fingerprint["digest"],
                 "matrix variant source mismatch")
         tests = value.get("tests")
-        required_tests = set(MATRIX_COMPARE_TESTS) | {
+        required_tests = set(MATRIX_RUN_TESTS) | {
             "backend_failures", "portable_isa"}
         if value.get("variant") == "auto":
             required_tests.add("cuda_optional")
         require(isinstance(tests, dict) and set(tests) == required_tests,
                 "matrix test set: " + str(value.get("variant")))
         executables = identity["test_executables"]
-        require(set(executables) == set(MATRIX_COMPARE_TESTS),
+        require(set(executables) == set(MATRIX_RUN_TESTS),
                 "matrix executable set: " + variant)
         command_index = 2
-        for test_name in MATRIX_COMPARE_TESTS:
+        for test_name in MATRIX_RUN_TESTS:
             test = tests[test_name]
             validate_matrix_command(test, "test_" + test_name,
                                     {"executable_sha256"})
@@ -4888,7 +4988,7 @@ def self_test(repo):
             test_executables = {
                 name: {"path": "@build/" + MATRIX_TEST_SPECS[name][0],
                        "sha256": empty_digest}
-                for name in MATRIX_COMPARE_TESTS
+                for name in MATRIX_RUN_TESTS
             }
             build_identity = {
                 "cache": build_cache,
@@ -4928,7 +5028,7 @@ def self_test(repo):
                 matrix_cmake, "--build", matrix_build_root, "--config", "Release",
                 "-j", "1", "--target"] + list(MATRIX_BUILD_TARGETS)))
             tests = {}
-            for name in MATRIX_COMPARE_TESTS:
+            for name in MATRIX_RUN_TESTS:
                 target, arguments = MATRIX_TEST_SPECS[name]
                 test = matrix_command(
                     "test_" + name,
@@ -5489,6 +5589,13 @@ def self_test(repo):
                 document["variants"][0]["tests"]["backend_ops"]["returncode"] = 1
             mutate_embedded_matrix(m, b, callback)
         mutations.append(("coordinated matrix test", mutate_matrix_test))
+
+        def mutate_matrix_run_only_omission(m, b):
+            def callback(document):
+                document["variants"][0]["tests"].pop("pruned_transform")
+            mutate_embedded_matrix(m, b, callback)
+        mutations.append(("matrix run-only test omission",
+                          mutate_matrix_run_only_omission))
 
         def mutate_matrix_output_mismatch(m, b):
             def callback(document):

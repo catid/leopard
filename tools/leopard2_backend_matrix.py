@@ -91,17 +91,21 @@ BUILD_CACHE_KEYS = (
 )
 
 EXPECTED_COMPILE_SOURCE_COUNTS = {
-    "Leopard2Backend.cpp": 1,
+    # The default dual-field test configuration builds both the production
+    # archive and the legacy whole-TU SIMD initialization fixture.  Core
+    # sources therefore appear twice, while ISA object libraries remain a
+    # single compile each.
+    "Leopard2Backend.cpp": 2,
     "Leopard2BackendAVX2.cpp": 1,
     "Leopard2BackendSSSE3.cpp": 1,
-    "Leopard2BackendScalar.cpp": 1,
-    "Leopard2CpuFeatures.cpp": 1,
-    "Leopard2Plan.cpp": 1,
-    "LeopardCommon.cpp": 1,
-    "LeopardFF16.cpp": 1,
-    "LeopardFF8.cpp": 1,
-    "leopard.cpp": 1,
-    "leopard2.cpp": 1,
+    "Leopard2BackendScalar.cpp": 2,
+    "Leopard2CpuFeatures.cpp": 2,
+    "Leopard2Plan.cpp": 2,
+    "LeopardCommon.cpp": 2,
+    "LeopardFF16.cpp": 2,
+    "LeopardFF8.cpp": 2,
+    "leopard.cpp": 2,
+    "leopard2.cpp": 2,
     "tests/leopard2/direct_oracle.cpp": 14,
     "tests/leopard2/direct_repair.cpp": 1,
     "tests/leopard2/fuzz_api.cpp": 1,
@@ -112,6 +116,8 @@ EXPECTED_COMPILE_SOURCE_COUNTS = {
     "tests/leopard2/test_arbitrary_counts_acceptance.cpp": 1,
     "tests/leopard2/test_backend_failures.cpp": 1,
     "tests/leopard2/test_backend_ops.cpp": 1,
+    "tests/leopard2/test_batch_aliasing.cpp": 1,
+    "tests/leopard2/test_concurrent_initialization.cpp": 1,
     "tests/leopard2/test_context_backends.cpp": 1,
     "tests/leopard2/test_r1_xor.cpp": 1,
     "tests/leopard2/test_boundaries.cpp": 1,
@@ -130,6 +136,7 @@ EXPECTED_COMPILE_SOURCE_COUNTS = {
     "tests/leopard2/test_high_pruned_legacy.cpp": 1,
     "tests/leopard2/test_initialization_threads.cpp": 1,
     "tests/leopard2/test_legacy_golden.cpp": 1,
+    "tests/leopard2/test_legacy_simd_init_failure.cpp": 1,
     "tests/leopard2/test_locator.cpp": 1,
     "tests/leopard2/test_low_gf16_direct_rows.cpp": 1,
     "tests/leopard2/test_max_counts.cpp": 1,
@@ -166,10 +173,13 @@ SOURCE_FILES = (
     "tests/leopard2/test_context_backends.cpp",
     "tests/leopard2/test_r1_xor.cpp",
     "tests/leopard2/test_field_options.cpp",
+    "tests/leopard2/test_concurrent_initialization.cpp",
+    "tests/leopard2/test_legacy_simd_init_failure.cpp",
     "tests/leopard2/test_initialization_threads.cpp",
     "tests/leopard2/legacy_golden_vectors.h",
     "tests/leopard2/test_api.cpp",
     "tests/leopard2/test_public_api_contract.cpp",
+    "tests/leopard2/test_batch_aliasing.cpp",
     "tests/leopard2/test_random.cpp",
     "tests/leopard2/test_locator.cpp",
     "tests/leopard2/test_boundaries.cpp",
@@ -225,6 +235,12 @@ def digest_value(value):
 
 def normalized_output(value):
     return value.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
+
+
+def require_compile_source_counts(counts):
+    """Fail closed when CMake's configured translation-unit graph changes."""
+    if dict(counts) != EXPECTED_COMPILE_SOURCE_COUNTS:
+        raise MatrixError("compile-command source multiset mismatch")
 
 
 CTEST_RESULT_LINE = re.compile(
@@ -580,8 +596,7 @@ def normalized_build_identity(build, source, c_compiler, compiler, cmake, ctest)
                                     "argv": normalized_argv})
     normalized_commands.sort(key=lambda value: (value["file"], value["argv"]))
     counts = collections.Counter(value["file"] for value in normalized_commands)
-    if dict(counts) != EXPECTED_COMPILE_SOURCE_COUNTS:
-        raise MatrixError("compile-command source multiset mismatch")
+    require_compile_source_counts(counts)
 
     def identity(path, name):
         resolved = Path(path).resolve()
@@ -1151,6 +1166,24 @@ def self_test():
         {"architecture": "x86_64", "cpu_flags": []},
         {"executable": "not-needed-for-empty-flags"},
     ) == (True, "")
+    require_compile_source_counts(EXPECTED_COMPILE_SOURCE_COUNTS)
+    contract_mutations = []
+    missing = dict(EXPECTED_COMPILE_SOURCE_COUNTS)
+    missing.pop("tests/leopard2/test_batch_aliasing.cpp")
+    contract_mutations.append(missing)
+    duplicated = dict(EXPECTED_COMPILE_SOURCE_COUNTS)
+    duplicated["Leopard2Backend.cpp"] += 1
+    contract_mutations.append(duplicated)
+    unexpected = dict(EXPECTED_COMPILE_SOURCE_COUNTS)
+    unexpected["tests/leopard2/untracked_backend_test.cpp"] = 1
+    contract_mutations.append(unexpected)
+    for mutation in contract_mutations:
+        try:
+            require_compile_source_counts(mutation)
+        except MatrixError as error:
+            assert str(error) == "compile-command source multiset mismatch"
+        else:
+            raise AssertionError("mutated compile-source contract was accepted")
     with tempfile.TemporaryDirectory(prefix="leo2-backend-self-test-") as directory:
         path = Path(directory) / "result.json"
         value = {"z": [3, 2, 1], "a": "stable"}
