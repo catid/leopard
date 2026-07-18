@@ -5,7 +5,8 @@ using historical issue closure as proof. The plan checkpoint has SHA-256
 `670ce14053ec528bea1cf72ba70b8fcd90eec7349bec03c80332adbb318ef753`.
 The first complete source pass was made at `cdf2211` on 2026-07-18, and this
 revision was independently rechecked against integrated source through
-`1962218`. The repeated bug campaign continued changing source after the
+`1962218`, then reconciled with the Algorithm 4 pruning integration at
+`122d7de`. The repeated bug campaign continued changing source after the
 historical test snapshots cited below, so a final current-HEAD test repeat is
 still required. The durable work items cited below are Beads issues; this
 document is an evidence map, not a second task list.
@@ -41,9 +42,9 @@ sparse setup have passed their production gates.
 |---|---|---|
 | Stable API and identity | `leopard2.h` exposes an opaque, thread-safe context and immutable codecs/decode plans; profile, field, layout, parent and padded-side introspection; scratch queries; one-shot/reusable decode; batch calls; result strings; and per-context scalar/SSSE3/AVX2 selection. Legacy `leo_*` signatures and contracts remain preserved, although `leopard.h` itself has received additive documentation changes. AUTO is deterministic and never selects a CPU-dependent wire profile. | The context is not immutable: its pool starts and grows lazily. Endian-stable serialized identity remains experimental under `leopard-79h.18.23`; without it, profile/field identity lives in the in-memory codec and caller metadata. |
 | Allocation and aliases | Scalar encode and reusable plan execution use caller scratch and perform no allocation. Inputs may alias inputs; outputs and the full supplied scratch range are rejected on overlap. No-loss decode is a true zero-scratch no-op. R=1 and K=1 direct paths use range-only scratch after `8f24962`. | A batch call can lazily create/grow context workers, and no caller-executor adapter exists. The strict setup-only allocation guarantee remains `leopard-79h.14.2`. The one-shot decode wrapper intentionally allocates plan setup state. |
-| Arbitrary byte lengths | GF8 accepts all positive physical lengths. Native GF16 accepts complete two-byte symbols. The separately versioned padded-odd layout plus pack/unpack helpers maps every positive application payload to an even physical shard without silently changing native wire identity. SIMD and ragged 64-byte tails are tested. | Native GF16 `leo2_encode`/decode still rejects an odd physical `shard_bytes`. The padded layout changes physical wire size, so this is a deliberate alternate contract, not literal native-V1 satisfaction of the plan's arbitrary-positive-byte requirement. The project must either record that interpretation as accepted or track native odd-length execution separately. |
+| Arbitrary byte lengths | GF8 accepts all positive physical lengths. Native GF16 accepts complete two-byte symbols. The separately versioned padded-odd layout plus pack/unpack helpers maps every positive application payload to an even physical shard without silently changing native wire identity. SIMD and ragged 64-byte tails are tested. | Native GF16 `leo2_encode`/decode rejects an odd physical `shard_bytes` by design. Decision `leopard-79h.39.1` accepts the versioned padded-odd wire layout as the arbitrary-positive-application-payload contract while retaining complete-symbol native GF16 semantics. |
 | Scratch target | Specialized decode uses `min(N,2P)` low slots or `min(N,2T+L)` high slots where profitable; aligned caller inputs are referenced directly and only a ragged 64-byte tail stages public coordinates. Direct repair has no shard-data scratch. Encode reuses 2P/2T work and bounds tail staging. | High Algorithm 5 still copies T shards for each requested output block (`leopard-79h.26.5`). Further encoder/output pruning is `leopard-79h.26.4`. Ragged staging retains fixed `O(K+R)` one-tile terms. |
-| Parity subsets and rebuild | Null recovery outputs are never written. Missing parity is not rebuilt during decode; tests explicitly call `leo2_encode` after combining surviving and restored originals and compare rebuilt parity byte-for-byte. | There is no dedicated parity-rebuild entry point. Treating ordinary encode as the plan's “optional parity rebuild” is a reasonable design interpretation, not a literal second API. It should be explicitly accepted or tracked. Sparse masks also compute unused prefixes inside encoder transform blocks (`leopard-79h.26.4`). |
+| Parity subsets and rebuild | Null recovery outputs are never written. Missing parity is not rebuilt during decode; tests explicitly call `leo2_encode` after combining surviving and restored originals and compare rebuilt parity byte-for-byte. | Decision `leopard-79h.39.1` accepts ordinary `leo2_encode` as the explicit parity-rebuild operation instead of duplicating codec logic in a second entry point. Sparse masks still compute unused prefixes inside encoder transform blocks (`leopard-79h.26.4`). |
 | Runtime backends | Baseline objects are portable; SSSE3 and AVX2 live in qualified members behind immutable context ops tables and startup KATs. Different contexts can select lower qualified backends concurrently. Compile-time GF8/GF16 options and default CUDA absence are tested. | Required native NEON remains production work in `leopard-79h.13`; Windows compiler isolation is `leopard-79h.13.5`; exact-main throughput lost by out-of-line portable granularity is `leopard-79h.38.1`. PMULL/SVE/SVE2 in `leopard-79h.18.25` are separate optional research and must not be presented as the native-NEON production gate. |
 | Batch and multicore | Batch encode/decode use a context pool after lazy start, deterministic error selection, per-item caller scratch and immutable shared codecs/plans. Commit `1e69cd5` already makes default sizing honor the allowed CPU set and avoids starting workers for unused/single-item contexts. The lab runner records affinity/topology, stable seeds, resumable jobs and per-job output. | The pool uses a shared atomic `fetch_add` task queue rather than the planned static schedule for regular work. A caller executor/prewarm path, worker pinning, first-touch/node partitioning, per-NUMA pools or accumulators, and final scaling evidence remain under `leopard-79h.14`, `.14.2`, `.23`, and `.24`. `leopard-79h.14.1` is now chiefly a timing/non-regression evidence gate, not an unimplemented allowed-CPU/lazy-start feature. |
 
@@ -51,9 +52,9 @@ The production dispatcher is deterministic, but it is not yet the plan's full
 region model. Current decisions use selected combinations of K, R, N, loss
 count, shard bytes, field and backend, with one measured batch exception. Plan
 reuse and thread count are not general runtime inputs, and batch size does not
-inform every direct/generic/specialized choice. `leopard-79h.38` must own the
-production existing-path crossover map independently of exact-profile C10
-research (`leopard-79h.18.1.11`).
+inform every direct/generic/specialized choice. `leopard-79h.38.4` owns the
+production existing-path dispatcher independently of exact-profile C10 research
+(`leopard-79h.18.1.11`).
 
 ## Correctness and evidence check
 
@@ -148,13 +149,14 @@ remain in `leopard-79h.16`, `.23`, and `.24`.
 | Dense active-locator permanent-contribution reuse | `leopard-79h.11.1` |
 | Sparse high/low encoder output pruning | `leopard-79h.26.4` |
 | Algorithm 5 no-copy output evaluation and reveal/scatter fusion | `leopard-79h.26.5` |
+| Algorithm 4 C1 isolated crossover and promotion evidence | `leopard-79h.18.1.12`, `.18.1.12.1` |
 | Provisional low-copy isolated final A/B | `leopard-79h.26.1`, `.26.1.1` |
-| Production all-K existing-path dispatch and exact-main gaps | `leopard-79h.38`, `.38.1`, `.38.2` |
-| Native GF16 odd physical lengths and dedicated parity-rebuild interpretation | No dedicated Bead at this checkpoint; `leopard-79h.39` must record explicit acceptance or create focused follow-up coverage. |
+| Production all-K existing-path dispatch and exact-main gaps | `leopard-79h.38`, `.38.1`, `.38.2`, `.38.4` |
+| GF16 padded-odd and explicit encode-as-parity-rebuild API decision | `leopard-79h.39.1` |
 | Required native NEON and Windows validation | `leopard-79h.13`, `.13.5` |
 | Optional PMULL/SVE/SVE2 research | `leopard-79h.18.25` |
-| Allocation-free executor setup, static scheduling, affinity, 128-core and NUMA | `leopard-79h.14`, `.14.1`, `.14.2`, `.23`, `.24`; static scheduling/NUMA execution details should be made explicit in a child acceptance contract. |
-| Full benchmark matrix, counters and footprint | `leopard-79h.16`, `.16.2`, `.23`, `.24` |
+| Allocation-free executor setup, cross-item alias safety, static scheduling, affinity, 128-core and NUMA | `leopard-79h.14`, `.14.1`, `.14.2`, `.14.3`, `.14.4`, `.23`, `.24` |
+| Full Leopard1-centric benchmark matrix, counters and footprint | `leopard-79h.16`, `.16.2`, `.16.4`, `.23`, `.24` |
 | Full sanitizer/fuzz/compatibility and release gates | `leopard-79h.15`, `.17`, `.40` |
 | Product-tree/epsilon locator comparison | `leopard-79h.29`, as an unpromoted experiment rather than a CPU-release blocker |
 | Incremental locator correctness comparison | `leopard-79h.18.5` |
@@ -165,29 +167,27 @@ remain in `leopard-79h.16`, `.23`, and `.24`.
 
 ## Dependency hygiene and priority
 
-The Beads graph at `1962218` did not fully match the user's core-codec and
-Leopard1-first priority:
+The Beads graph was reconciled after `1962218` with the user's core-codec and
+Leopard1-first priority. `bd dep cycles` reports no cycles:
 
-- final exact-main refresh `leopard-79h.16.2` was blocked by optional Jerasure
-  `leopard-79h.16.3` and exact-profile research `leopard-79h.18.1.8`. Those
-  blockers should be removed and replaced by the actual production source
-  freeze, `leopard-79h.38` and `leopard-79h.26`;
-- CPU release `leopard-79h.17` should depend on the focused exact-main result
-  `.16.2`, not the broad `.16` parent or locator experiment `.29`;
-- production `.26` and `.18.1.12` should not wait for broad unfinished `.16`
-  or for all remaining native-NEON/platform work in `.13`. Narrow closed
-  prerequisites such as `.16.1`/`.36` and `.13.2` express the actual runner and
-  backend requirements without blocking Algorithm 4/5 work; and
-- scheduler `.14`, scaling `.23`, formula gate `.27`, and later crossover
-  experiments should likewise depend on the narrow artifacts they consume,
-  rather than inheriting optional Jerasure state through broad `.16`.
+- final exact-main refresh `leopard-79h.16.2` now waits for the production
+  dispatcher and pruned/tiled work (`.38` and `.26`), not optional Jerasure or
+  exact-profile research;
+- CPU release `leopard-79h.17` now waits for the focused exact-main refresh
+  `.16.2` and the full Leopard1-centric matrix `.16.4`, not the broad benchmark
+  parent or locator experiment;
+- production `.26` and `.18.1.12` use the narrow closed runner/backend
+  prerequisites `.16.1`, `.36`, and `.13.2` rather than broad unfinished
+  parents; and
+- scheduler `.14`, scaling `.23`, formula gate `.27`, product-tree/epsilon
+  `.29`, and exact C10 crossover work use the narrow artifacts they actually
+  consume.
 
-Jerasure is intended to be end-stage work. At this checkpoint, however, parent
-`leopard-79h.16.3` was still P1/in progress and directly blocked `.16.2`; only
-child `.16.3.2` was P4 and explicitly paused. The dependency and parent priority
-must be corrected before claiming that Jerasure is out of the core path.
-Unknown-error correction remains correctly isolated under
-`leopard-79h.18.14` and must not enter the production erasure hot path.
+Jerasure is end-stage optional comparison work: `leopard-79h.16.3` is open at
+P4 and no longer blocks exact-main or CPU release work. Product-tree/epsilon and
+the exact low profile are open P3 experiments. Unknown-error correction remains
+correctly isolated under `leopard-79h.18.14` and must not enter the production
+erasure hot path.
 
 ## Audit conclusion
 
@@ -197,8 +197,9 @@ decode execution are present. The definition of done is not yet met. Remaining
 production source work includes no-copy/fused high output evaluation, sparse
 encoder pruning, a complete existing-path dispatcher,
 restoring exact-main backend throughput, native NEON, and allocation-free/static/
-NUMA-aware batch execution. Native-GF16 odd lengths and a dedicated parity-
-rebuild entry point need explicit API decisions rather than implicit claims.
+NUMA-aware batch execution. Decision `leopard-79h.39.1` freezes odd application
+payloads as the explicit padded-GF16 wire layout and parity rebuild as an
+ordinary encode after original recovery; neither requires a duplicate hot path.
 
 Production evidence also remains incomplete: current-HEAD compatibility and
 sanitizer/fuzz repeats, authoritative exact-main and full benchmark matrices,
