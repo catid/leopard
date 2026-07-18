@@ -149,7 +149,7 @@ crossovers, setup separation, PMU/cache/TLB or memory-bandwidth counters where
 available, scratch and code/table footprint, and 1-to-128 scaling. Those gates
 remain in `leopard-79h.16`, `.23`, and `.24`.
 
-## Open production gates represented in Beads
+## Production gates and dispositions represented in Beads
 
 | Requirement family | Durable Beads coverage |
 |---|---|
