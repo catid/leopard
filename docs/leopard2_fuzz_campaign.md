@@ -159,10 +159,11 @@ sanitizer or thread settings cannot weaken those values.
 
 The intentional canary uses its own separately signed probe environment:
 `ASAN_OPTIONS=abort_on_error=0:detect_leaks=1:halt_on_error=1:suppressions=` and
-`LSAN_OPTIONS=detect_leaks=1:exitcode=86:suppressions=`. Disabling abort is
-deliberate: an expected leak must not create a core file or invoke a host crash
-reporter. The replay flushes the diagnostic and exits directly with 86 after
-the recoverable check, avoiding a second teardown report. The manifest stores the canonical
+`LSAN_OPTIONS=detect_leaks=1:exitcode=86:suppressions=`, together with
+`UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1:suppressions=`. Disabling
+abort is deliberate: an expected leak must not create a core file or invoke a
+host crash reporter. The replay flushes the diagnostic and exits directly with
+86 after the recoverable check, avoiding a second teardown report. The manifest stores the canonical
 exit, stdout hash/size, allocation size, required diagnostic markers, and a
 normalized diagnostic-evidence hash. Actual replay jobs retain
 `abort_on_error=1` and fail on any sanitizer diagnostic.
