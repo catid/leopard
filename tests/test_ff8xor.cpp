@@ -1399,7 +1399,7 @@ static bool TestKernelModes()
     // The larger sizes force both AVX-512 widths, portable and 128-bit tails,
     // and an AVX2 tail after a 512-bit ZMM chunk.
     static const uint64_t kSizes[] = {
-        64, 128, 192, 256, 320, 512, 576, 640, 768
+        64, 128, 192, 256, 320, 512, 576, 640, 768, 1024, 1536
     };
     static const unsigned kCoefficients[] = { 0, 1, 51, 254, 255 };
     static const unsigned kSkews[] = { 0, 51, 254, 255 };
@@ -1508,15 +1508,16 @@ static bool TestAllAVX512Specializations()
 
         leopard::ff8xor::SetKernelMode(mode);
 
-        // 768 bytes gives 96 bytes per plane: Three YMM chunks, or one ZMM
-        // chunk followed by an AVX2 tail.  Identity multipliers 0 and 255 and
-        // butterfly sentinel 255 are intentionally handled by the separately
-        // tested no-op/contiguous-XOR fast paths.
+        // 1536 bytes gives 192 bytes per plane: Six YMM chunks or three ZMM
+        // chunks.  The size sweep above separately exercises AVX2, 128-bit,
+        // and uint64_t tails.  Identity multipliers 0 and 255 and butterfly
+        // sentinel 255 are intentionally handled by the separately tested
+        // no-op/contiguous-XOR fast paths.
         for (unsigned coefficient = 1;
              coefficient < kFieldModulus;
              ++coefficient)
         {
-            if (!CheckMultiplyKernel(768, coefficient))
+            if (!CheckMultiplyKernel(1536, coefficient))
             {
                 fprintf(stderr,
                     "AVX-512 multiply specialization failed: mode=%u log=%u\n",
@@ -1528,7 +1529,7 @@ static bool TestAllAVX512Specializations()
 
         for (unsigned skew = 0; skew < kFieldModulus; ++skew)
         {
-            if (!CheckButterflyKernel(768, skew))
+            if (!CheckButterflyKernel(1536, skew))
             {
                 fprintf(stderr,
                     "AVX-512 butterfly specialization failed: mode=%u skew=%u\n",
@@ -1541,7 +1542,7 @@ static bool TestAllAVX512Specializations()
         // Exercise the complete encode/decode control flow with the forced
         // mode rather than validating only isolated whole-buffer operations.
         CodecCase codec_case = {
-            16, 4, 768,
+            16, 4, 1536,
             static_cast<uint32_t>(0xa5120000U + mode_index),
             "forced AVX-512 packed equivalence"
         };
