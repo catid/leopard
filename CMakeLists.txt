@@ -37,6 +37,28 @@ if(COMPILER_SUPPORTS_MARCH_NATIVE)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
 endif()
 
+# Keep the experiment honest about its AVX2 register budget even when the host
+# compiler enables AVX-512 through -march=native.  GCC's reassociation pass also
+# lengthens live ranges across the generated CNOT sequence and spills the 16
+# plane registers, so preserve the generator's verified operation ordering.
+set(FF8XOR_COMPILE_FLAGS "")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i[3-6]86)$")
+    check_cxx_compiler_flag("-mno-avx512f" COMPILER_SUPPORTS_NO_AVX512F)
+    if(COMPILER_SUPPORTS_NO_AVX512F)
+        set(FF8XOR_COMPILE_FLAGS "${FF8XOR_COMPILE_FLAGS} -mno-avx512f")
+    endif()
+endif()
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    check_cxx_compiler_flag("-fno-tree-reassoc" COMPILER_SUPPORTS_NO_TREE_REASSOC)
+    if(COMPILER_SUPPORTS_NO_TREE_REASSOC)
+        set(FF8XOR_COMPILE_FLAGS "${FF8XOR_COMPILE_FLAGS} -fno-tree-reassoc")
+    endif()
+endif()
+if(FF8XOR_COMPILE_FLAGS)
+    set_source_files_properties(LeopardFF8Xor.cpp PROPERTIES
+        COMPILE_FLAGS "${FF8XOR_COMPILE_FLAGS}")
+endif()
+
 if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     check_cxx_compiler_flag("/O2" CXX_FLAG_O2)
     check_cxx_compiler_flag("/Oy" CXX_FLAG_Oy)
@@ -135,15 +157,23 @@ target_link_libraries(bench_leopard_ff8xor libleopard)
 
 # The normal build consumes the checked-in generated source and does not need
 # Python.  These optional targets only regenerate or verify it for developers.
-find_package(PythonInterp 3 QUIET)
-if(PYTHONINTERP_FOUND)
+# FindPython3 was added after this project's CMake 3.7 minimum.
+if(CMAKE_VERSION VERSION_LESS 3.12)
+    find_package(PythonInterp 3 QUIET)
+    set(FF8XOR_PYTHON_EXECUTABLE "${PYTHON_EXECUTABLE}")
+else()
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    set(FF8XOR_PYTHON_EXECUTABLE "${Python3_EXECUTABLE}")
+endif()
+
+if(FF8XOR_PYTHON_EXECUTABLE)
     add_custom_target(generate_ff8_xor_circuits
-        COMMAND "${PYTHON_EXECUTABLE}"
+        COMMAND "${FF8XOR_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_ff8_xor_circuits.py"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
     add_custom_target(check_ff8_xor_circuits
-        COMMAND "${PYTHON_EXECUTABLE}"
+        COMMAND "${FF8XOR_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_ff8_xor_circuits.py"
                 --check
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

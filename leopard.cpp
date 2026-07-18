@@ -31,7 +31,6 @@
 
 #ifdef LEO_HAS_FF8
     #include "LeopardFF8.h"
-    #include "LeopardFF8Xor.h"
 #endif // LEO_HAS_FF8
 #ifdef LEO_HAS_FF16
     #include "LeopardFF16.h"
@@ -46,6 +45,14 @@ extern "C" {
 // Initialization API
 
 static bool m_Initialized = false;
+
+// Internal query used by optional backends that must preserve leo_init() as
+// the public initialization boundary without being linked into packed-only
+// static-library clients.
+int leo_internal_is_initialized()
+{
+    return m_Initialized ? 1 : 0;
+}
 
 LEO_EXPORT int leo_init_(int version)
 {
@@ -63,11 +70,6 @@ LEO_EXPORT int leo_init_(int version)
     if (!leopard::ff16::Initialize())
         return Leopard_Platform;
 #endif // LEO_HAS_FF16
-
-#ifdef LEO_HAS_FF8
-    if (!leopard::ff8xor::Initialize())
-        return Leopard_Platform;
-#endif // LEO_HAS_FF8
 
     m_Initialized = true;
     return Leopard_Success;

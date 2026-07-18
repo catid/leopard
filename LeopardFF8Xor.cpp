@@ -30,6 +30,7 @@
 
 #ifdef LEO_HAS_FF8
 
+#include <atomic>
 #include <limits.h>
 #include <string.h>
 
@@ -80,31 +81,37 @@ namespace leopard { namespace ff8xor {
 template <typename Value>
 struct ValueIO;
 
+struct PortableTag {};
+
 template <>
-struct ValueIO<uint64_t>
+struct ValueIO<PortableTag>
 {
+    typedef uint64_t Value;
     static const unsigned kBytes = 8;
 
-    static LEO_FORCE_INLINE uint64_t Load(const uint8_t* source)
+    static LEO_FORCE_INLINE Value Load(const uint8_t* source)
     {
-        uint64_t value;
+        Value value;
         memcpy(&value, source, sizeof(value));
         return value;
     }
 
-    static LEO_FORCE_INLINE void Store(uint8_t* destination, uint64_t value)
+    static LEO_FORCE_INLINE void Store(uint8_t* destination, Value value)
     {
         memcpy(destination, &value, sizeof(value));
     }
 };
 
 #ifdef LEO_FF8XOR_HAS_SIMD128
+struct Simd128Tag {};
+
 template <>
-struct ValueIO<LEO_M128>
+struct ValueIO<Simd128Tag>
 {
+    typedef LEO_M128 Value;
     static const unsigned kBytes = 16;
 
-    static LEO_FORCE_INLINE LEO_M128 Load(const uint8_t* source)
+    static LEO_FORCE_INLINE Value Load(const uint8_t* source)
     {
 #if defined(LEO_TRY_NEON) && !defined(LEO_USE_SSE2NEON)
         return vld1q_u8(source);
@@ -113,7 +120,7 @@ struct ValueIO<LEO_M128>
 #endif
     }
 
-    static LEO_FORCE_INLINE void Store(uint8_t* destination, LEO_M128 value)
+    static LEO_FORCE_INLINE void Store(uint8_t* destination, Value value)
     {
 #if defined(LEO_TRY_NEON) && !defined(LEO_USE_SSE2NEON)
         vst1q_u8(destination, value);
@@ -125,17 +132,20 @@ struct ValueIO<LEO_M128>
 #endif
 
 #ifdef LEO_TRY_AVX2
+struct Avx2Tag {};
+
 template <>
-struct ValueIO<LEO_M256>
+struct ValueIO<Avx2Tag>
 {
+    typedef LEO_M256 Value;
     static const unsigned kBytes = 32;
 
-    static LEO_FORCE_INLINE LEO_M256 Load(const uint8_t* source)
+    static LEO_FORCE_INLINE Value Load(const uint8_t* source)
     {
         return _mm256_loadu_si256(reinterpret_cast<const LEO_M256*>(source));
     }
 
-    static LEO_FORCE_INLINE void Store(uint8_t* destination, LEO_M256 value)
+    static LEO_FORCE_INLINE void Store(uint8_t* destination, Value value)
     {
         _mm256_storeu_si256(reinterpret_cast<LEO_M256*>(destination), value);
     }
@@ -146,9 +156,11 @@ struct ValueIO<LEO_M256>
 //------------------------------------------------------------------------------
 // Kernel selection
 
-static KernelMode SelectedKernelMode = KernelMode::Auto;
-static unsigned LastLocatorShift = 0;
-static int LocatorShiftOverride = -1;
+// Test inspection and overrides must not introduce shared mutable state into
+// otherwise independent codec calls.
+static std::atomic<KernelMode> SelectedKernelMode(KernelMode::Auto);
+static thread_local unsigned LastLocatorShift = 0;
+static thread_local int LocatorShiftOverride = -1;
 
 bool IsKernelModeAvailable(KernelMode mode)
 {
@@ -177,10 +189,13 @@ bool IsKernelModeAvailable(KernelMode mode)
 
 static KernelMode ResolveKernelMode()
 {
-    if (SelectedKernelMode == KernelMode::Portable)
+    const KernelMode selected =
+        SelectedKernelMode.load(std::memory_order_relaxed);
+
+    if (selected == KernelMode::Portable)
         return KernelMode::Portable;
 
-    if (SelectedKernelMode == KernelMode::Avx2)
+    if (selected == KernelMode::Avx2)
     {
 #ifdef LEO_TRY_AVX2
         if (CpuHasAVX2)
@@ -193,7 +208,7 @@ static KernelMode ResolveKernelMode()
 #endif
     }
 
-    if (SelectedKernelMode == KernelMode::Simd128)
+    if (selected == KernelMode::Simd128)
     {
 #ifdef LEO_FF8XOR_HAS_SIMD128
         return KernelMode::Simd128;
@@ -215,12 +230,12 @@ static KernelMode ResolveKernelMode()
 
 void SetKernelMode(KernelMode mode)
 {
-    SelectedKernelMode = mode;
+    SelectedKernelMode.store(mode, std::memory_order_relaxed);
 }
 
 KernelMode GetKernelMode()
 {
-    return SelectedKernelMode;
+    return SelectedKernelMode.load(std::memory_order_relaxed);
 }
 
 KernelMode GetActiveKernelMode()
@@ -254,58 +269,60 @@ void SetLocatorShiftForTesting(int shift)
 //------------------------------------------------------------------------------
 // Named-register circuit chunks
 
-template <unsigned Coefficient, typename Value>
+template <unsigned Coefficient, typename ValueTag>
 static LEO_FORCE_INLINE void MultiplyChunk(
     uint8_t* destination,
     const uint8_t* source,
     uint64_t plane_bytes,
     uint64_t offset)
 {
-    Value x0 = ValueIO<Value>::Load(source + offset);
-    Value x1 = ValueIO<Value>::Load(source + plane_bytes + offset);
-    Value x2 = ValueIO<Value>::Load(source + plane_bytes * 2 + offset);
-    Value x3 = ValueIO<Value>::Load(source + plane_bytes * 3 + offset);
-    Value x4 = ValueIO<Value>::Load(source + plane_bytes * 4 + offset);
-    Value x5 = ValueIO<Value>::Load(source + plane_bytes * 5 + offset);
-    Value x6 = ValueIO<Value>::Load(source + plane_bytes * 6 + offset);
-    Value x7 = ValueIO<Value>::Load(source + plane_bytes * 7 + offset);
+    typedef typename ValueIO<ValueTag>::Value Value;
+    Value x0 = ValueIO<ValueTag>::Load(source + offset);
+    Value x1 = ValueIO<ValueTag>::Load(source + plane_bytes + offset);
+    Value x2 = ValueIO<ValueTag>::Load(source + plane_bytes * 2 + offset);
+    Value x3 = ValueIO<ValueTag>::Load(source + plane_bytes * 3 + offset);
+    Value x4 = ValueIO<ValueTag>::Load(source + plane_bytes * 4 + offset);
+    Value x5 = ValueIO<ValueTag>::Load(source + plane_bytes * 5 + offset);
+    Value x6 = ValueIO<ValueTag>::Load(source + plane_bytes * 6 + offset);
+    Value x7 = ValueIO<ValueTag>::Load(source + plane_bytes * 7 + offset);
 
     generated::MultiplyCircuit<Coefficient>::Apply(
         x0, x1, x2, x3, x4, x5, x6, x7);
 
-    ValueIO<Value>::Store(destination + offset, x0);
-    ValueIO<Value>::Store(destination + plane_bytes + offset, x1);
-    ValueIO<Value>::Store(destination + plane_bytes * 2 + offset, x2);
-    ValueIO<Value>::Store(destination + plane_bytes * 3 + offset, x3);
-    ValueIO<Value>::Store(destination + plane_bytes * 4 + offset, x4);
-    ValueIO<Value>::Store(destination + plane_bytes * 5 + offset, x5);
-    ValueIO<Value>::Store(destination + plane_bytes * 6 + offset, x6);
-    ValueIO<Value>::Store(destination + plane_bytes * 7 + offset, x7);
+    ValueIO<ValueTag>::Store(destination + offset, x0);
+    ValueIO<ValueTag>::Store(destination + plane_bytes + offset, x1);
+    ValueIO<ValueTag>::Store(destination + plane_bytes * 2 + offset, x2);
+    ValueIO<ValueTag>::Store(destination + plane_bytes * 3 + offset, x3);
+    ValueIO<ValueTag>::Store(destination + plane_bytes * 4 + offset, x4);
+    ValueIO<ValueTag>::Store(destination + plane_bytes * 5 + offset, x5);
+    ValueIO<ValueTag>::Store(destination + plane_bytes * 6 + offset, x6);
+    ValueIO<ValueTag>::Store(destination + plane_bytes * 7 + offset, x7);
 }
 
-template <unsigned Skew, typename Value, bool Inverse>
+template <unsigned Skew, typename ValueTag, bool Inverse>
 static LEO_FORCE_INLINE void ButterflyChunk(
     uint8_t* x_buffer,
     uint8_t* y_buffer,
     uint64_t plane_bytes,
     uint64_t offset)
 {
-    Value x0 = ValueIO<Value>::Load(x_buffer + offset);
-    Value x1 = ValueIO<Value>::Load(x_buffer + plane_bytes + offset);
-    Value x2 = ValueIO<Value>::Load(x_buffer + plane_bytes * 2 + offset);
-    Value x3 = ValueIO<Value>::Load(x_buffer + plane_bytes * 3 + offset);
-    Value x4 = ValueIO<Value>::Load(x_buffer + plane_bytes * 4 + offset);
-    Value x5 = ValueIO<Value>::Load(x_buffer + plane_bytes * 5 + offset);
-    Value x6 = ValueIO<Value>::Load(x_buffer + plane_bytes * 6 + offset);
-    Value x7 = ValueIO<Value>::Load(x_buffer + plane_bytes * 7 + offset);
-    Value y0 = ValueIO<Value>::Load(y_buffer + offset);
-    Value y1 = ValueIO<Value>::Load(y_buffer + plane_bytes + offset);
-    Value y2 = ValueIO<Value>::Load(y_buffer + plane_bytes * 2 + offset);
-    Value y3 = ValueIO<Value>::Load(y_buffer + plane_bytes * 3 + offset);
-    Value y4 = ValueIO<Value>::Load(y_buffer + plane_bytes * 4 + offset);
-    Value y5 = ValueIO<Value>::Load(y_buffer + plane_bytes * 5 + offset);
-    Value y6 = ValueIO<Value>::Load(y_buffer + plane_bytes * 6 + offset);
-    Value y7 = ValueIO<Value>::Load(y_buffer + plane_bytes * 7 + offset);
+    typedef typename ValueIO<ValueTag>::Value Value;
+    Value x0 = ValueIO<ValueTag>::Load(x_buffer + offset);
+    Value x1 = ValueIO<ValueTag>::Load(x_buffer + plane_bytes + offset);
+    Value x2 = ValueIO<ValueTag>::Load(x_buffer + plane_bytes * 2 + offset);
+    Value x3 = ValueIO<ValueTag>::Load(x_buffer + plane_bytes * 3 + offset);
+    Value x4 = ValueIO<ValueTag>::Load(x_buffer + plane_bytes * 4 + offset);
+    Value x5 = ValueIO<ValueTag>::Load(x_buffer + plane_bytes * 5 + offset);
+    Value x6 = ValueIO<ValueTag>::Load(x_buffer + plane_bytes * 6 + offset);
+    Value x7 = ValueIO<ValueTag>::Load(x_buffer + plane_bytes * 7 + offset);
+    Value y0 = ValueIO<ValueTag>::Load(y_buffer + offset);
+    Value y1 = ValueIO<ValueTag>::Load(y_buffer + plane_bytes + offset);
+    Value y2 = ValueIO<ValueTag>::Load(y_buffer + plane_bytes * 2 + offset);
+    Value y3 = ValueIO<ValueTag>::Load(y_buffer + plane_bytes * 3 + offset);
+    Value y4 = ValueIO<ValueTag>::Load(y_buffer + plane_bytes * 4 + offset);
+    Value y5 = ValueIO<ValueTag>::Load(y_buffer + plane_bytes * 5 + offset);
+    Value y6 = ValueIO<ValueTag>::Load(y_buffer + plane_bytes * 6 + offset);
+    Value y7 = ValueIO<ValueTag>::Load(y_buffer + plane_bytes * 7 + offset);
 
     if (Inverse)
     {
@@ -320,22 +337,22 @@ static LEO_FORCE_INLINE void ButterflyChunk(
             y0, y1, y2, y3, y4, y5, y6, y7);
     }
 
-    ValueIO<Value>::Store(x_buffer + offset, x0);
-    ValueIO<Value>::Store(x_buffer + plane_bytes + offset, x1);
-    ValueIO<Value>::Store(x_buffer + plane_bytes * 2 + offset, x2);
-    ValueIO<Value>::Store(x_buffer + plane_bytes * 3 + offset, x3);
-    ValueIO<Value>::Store(x_buffer + plane_bytes * 4 + offset, x4);
-    ValueIO<Value>::Store(x_buffer + plane_bytes * 5 + offset, x5);
-    ValueIO<Value>::Store(x_buffer + plane_bytes * 6 + offset, x6);
-    ValueIO<Value>::Store(x_buffer + plane_bytes * 7 + offset, x7);
-    ValueIO<Value>::Store(y_buffer + offset, y0);
-    ValueIO<Value>::Store(y_buffer + plane_bytes + offset, y1);
-    ValueIO<Value>::Store(y_buffer + plane_bytes * 2 + offset, y2);
-    ValueIO<Value>::Store(y_buffer + plane_bytes * 3 + offset, y3);
-    ValueIO<Value>::Store(y_buffer + plane_bytes * 4 + offset, y4);
-    ValueIO<Value>::Store(y_buffer + plane_bytes * 5 + offset, y5);
-    ValueIO<Value>::Store(y_buffer + plane_bytes * 6 + offset, y6);
-    ValueIO<Value>::Store(y_buffer + plane_bytes * 7 + offset, y7);
+    ValueIO<ValueTag>::Store(x_buffer + offset, x0);
+    ValueIO<ValueTag>::Store(x_buffer + plane_bytes + offset, x1);
+    ValueIO<ValueTag>::Store(x_buffer + plane_bytes * 2 + offset, x2);
+    ValueIO<ValueTag>::Store(x_buffer + plane_bytes * 3 + offset, x3);
+    ValueIO<ValueTag>::Store(x_buffer + plane_bytes * 4 + offset, x4);
+    ValueIO<ValueTag>::Store(x_buffer + plane_bytes * 5 + offset, x5);
+    ValueIO<ValueTag>::Store(x_buffer + plane_bytes * 6 + offset, x6);
+    ValueIO<ValueTag>::Store(x_buffer + plane_bytes * 7 + offset, x7);
+    ValueIO<ValueTag>::Store(y_buffer + offset, y0);
+    ValueIO<ValueTag>::Store(y_buffer + plane_bytes + offset, y1);
+    ValueIO<ValueTag>::Store(y_buffer + plane_bytes * 2 + offset, y2);
+    ValueIO<ValueTag>::Store(y_buffer + plane_bytes * 3 + offset, y3);
+    ValueIO<ValueTag>::Store(y_buffer + plane_bytes * 4 + offset, y4);
+    ValueIO<ValueTag>::Store(y_buffer + plane_bytes * 5 + offset, y5);
+    ValueIO<ValueTag>::Store(y_buffer + plane_bytes * 6 + offset, y6);
+    ValueIO<ValueTag>::Store(y_buffer + plane_bytes * 7 + offset, y7);
 }
 
 
@@ -357,11 +374,11 @@ static void MultiplyWholeBuffer(
 #ifdef LEO_TRY_AVX2
     if (mode == KernelMode::Avx2)
     {
-        while (plane_bytes - offset >= ValueIO<LEO_M256>::kBytes)
+        while (plane_bytes - offset >= ValueIO<Avx2Tag>::kBytes)
         {
-            MultiplyChunk<Coefficient, LEO_M256>(
+            MultiplyChunk<Coefficient, Avx2Tag>(
                 destination, source, plane_bytes, offset);
-            offset += ValueIO<LEO_M256>::kBytes;
+            offset += ValueIO<Avx2Tag>::kBytes;
         }
     }
 #endif
@@ -369,20 +386,20 @@ static void MultiplyWholeBuffer(
 #ifdef LEO_FF8XOR_HAS_SIMD128
     if (mode != KernelMode::Portable)
     {
-        while (plane_bytes - offset >= ValueIO<LEO_M128>::kBytes)
+        while (plane_bytes - offset >= ValueIO<Simd128Tag>::kBytes)
         {
-            MultiplyChunk<Coefficient, LEO_M128>(
+            MultiplyChunk<Coefficient, Simd128Tag>(
                 destination, source, plane_bytes, offset);
-            offset += ValueIO<LEO_M128>::kBytes;
+            offset += ValueIO<Simd128Tag>::kBytes;
         }
     }
 #endif
 
     while (offset < plane_bytes)
     {
-        MultiplyChunk<Coefficient, uint64_t>(
+        MultiplyChunk<Coefficient, PortableTag>(
             destination, source, plane_bytes, offset);
-        offset += ValueIO<uint64_t>::kBytes;
+        offset += ValueIO<PortableTag>::kBytes;
     }
 }
 
@@ -401,11 +418,11 @@ static void ButterflyWholeBuffer(
 #ifdef LEO_TRY_AVX2
     if (mode == KernelMode::Avx2)
     {
-        while (plane_bytes - offset >= ValueIO<LEO_M256>::kBytes)
+        while (plane_bytes - offset >= ValueIO<Avx2Tag>::kBytes)
         {
-            ButterflyChunk<Skew, LEO_M256, Inverse>(
+            ButterflyChunk<Skew, Avx2Tag, Inverse>(
                 x_buffer, y_buffer, plane_bytes, offset);
-            offset += ValueIO<LEO_M256>::kBytes;
+            offset += ValueIO<Avx2Tag>::kBytes;
         }
     }
 #endif
@@ -413,20 +430,20 @@ static void ButterflyWholeBuffer(
 #ifdef LEO_FF8XOR_HAS_SIMD128
     if (mode != KernelMode::Portable)
     {
-        while (plane_bytes - offset >= ValueIO<LEO_M128>::kBytes)
+        while (plane_bytes - offset >= ValueIO<Simd128Tag>::kBytes)
         {
-            ButterflyChunk<Skew, LEO_M128, Inverse>(
+            ButterflyChunk<Skew, Simd128Tag, Inverse>(
                 x_buffer, y_buffer, plane_bytes, offset);
-            offset += ValueIO<LEO_M128>::kBytes;
+            offset += ValueIO<Simd128Tag>::kBytes;
         }
     }
 #endif
 
     while (offset < plane_bytes)
     {
-        ButterflyChunk<Skew, uint64_t, Inverse>(
+        ButterflyChunk<Skew, PortableTag, Inverse>(
             x_buffer, y_buffer, plane_bytes, offset);
-        offset += ValueIO<uint64_t>::kBytes;
+        offset += ValueIO<PortableTag>::kBytes;
     }
 }
 

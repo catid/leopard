@@ -4,7 +4,9 @@
     This API is intentionally separate from leopard.h.  It uses Leopard's
     existing FF8 algebra and transform schedule, but each B-byte shard is laid
     out as eight contiguous B/8-byte coordinate-bit planes.  It does not
-    transpose packed Leopard shards at the API boundary.
+    transpose packed Leopard shards at the API boundary.  Native recovery
+    shards require an 8x8 bit transpose before comparison with packed Leopard
+    recovery shards.
 */
 
 #ifndef CAT_LEOPARD_FF8_XOR_H
@@ -18,7 +20,8 @@ extern "C" {
 
 /*
     Return the number of B-byte work buffers required by leo_ff8xor_encode().
-    The count rules are identical to leo_encode_work_count().
+    The valid-case count rules are identical to leo_encode_work_count().
+    Returns zero for invalid counts or an FF8 transform larger than 256.
 */
 LEO_EXPORT unsigned leo_ff8xor_encode_work_count(
     unsigned original_count,
@@ -44,7 +47,8 @@ LEO_EXPORT LeopardResult leo_ff8xor_encode(
 
 /*
     Return the number of B-byte work buffers required by leo_ff8xor_decode().
-    The count rules are identical to leo_decode_work_count().
+    The valid-case count rules are identical to leo_decode_work_count().
+    Returns zero for invalid counts or an FF8 transform larger than 256.
 */
 LEO_EXPORT unsigned leo_ff8xor_decode_work_count(
     unsigned original_count,

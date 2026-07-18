@@ -6,12 +6,27 @@
 
 #include <string.h>
 
+extern "C" int leo_internal_is_initialized();
+
 namespace {
+
+static bool EnsureExperimentalInitialized()
+{
+    // C++11 function-local static initialization provides a one-time,
+    // thread-safe lazy boundary.  Keeping this reference out of leopard.cpp
+    // avoids pulling generated circuit code into packed-only static clients.
+    static const bool initialized = leopard::ff8xor::Initialize();
+    return initialized;
+}
 
 static bool IsSupportedFF8Transform(
     unsigned original_count,
     unsigned recovery_count)
 {
+    if (original_count == 0 || original_count >= leopard::ff8xor::kOrder ||
+        recovery_count == 0 || recovery_count > original_count)
+        return false;
+
     const unsigned m = recovery_count == 1
         ? 1
         : leopard::NextPow2(recovery_count);
@@ -59,6 +74,8 @@ LEO_EXPORT unsigned leo_ff8xor_encode_work_count(
     unsigned original_count,
     unsigned recovery_count)
 {
+    if (!IsSupportedFF8Transform(original_count, recovery_count))
+        return 0;
     return leo_encode_work_count(original_count, recovery_count);
 }
 
@@ -76,10 +93,15 @@ LEO_EXPORT LeopardResult leo_ff8xor_encode(
         return Leopard_InvalidCounts;
     if (!original_data || !work_data)
         return Leopard_InvalidInput;
-    if (!leopard::ff8xor::IsInitialized())
+    if (!leo_internal_is_initialized())
         return Leopard_CallInitialize;
+    if (!EnsureExperimentalInitialized())
+        return Leopard_Platform;
     if (!IsSupportedFF8Transform(original_count, recovery_count))
         return Leopard_TooMuchData;
+    if (work_count != leo_ff8xor_encode_work_count(
+            original_count, recovery_count))
+        return Leopard_InvalidCounts;
 
     if (original_count == 1)
     {
@@ -95,9 +117,6 @@ LEO_EXPORT LeopardResult leo_ff8xor_encode(
     }
 
     const unsigned m = leopard::NextPow2(recovery_count);
-    if (work_count != m * 2)
-        return Leopard_InvalidCounts;
-
     leopard::ff8xor::ReedSolomonEncode(
         buffer_bytes,
         original_count,
@@ -112,6 +131,8 @@ LEO_EXPORT unsigned leo_ff8xor_decode_work_count(
     unsigned original_count,
     unsigned recovery_count)
 {
+    if (!IsSupportedFF8Transform(original_count, recovery_count))
+        return 0;
     return leo_decode_work_count(original_count, recovery_count);
 }
 
@@ -130,8 +151,10 @@ LEO_EXPORT LeopardResult leo_ff8xor_decode(
         return Leopard_InvalidCounts;
     if (!original_data || !recovery_data || !work_data)
         return Leopard_InvalidInput;
-    if (!leopard::ff8xor::IsInitialized())
+    if (!leo_internal_is_initialized())
         return Leopard_CallInitialize;
+    if (!EnsureExperimentalInitialized())
+        return Leopard_Platform;
 
     unsigned original_loss_count = 0;
     unsigned original_loss_i = 0;
@@ -158,19 +181,22 @@ LEO_EXPORT LeopardResult leo_ff8xor_decode(
         return Leopard_NeedMoreData;
     if (!IsSupportedFF8Transform(original_count, recovery_count))
         return Leopard_TooMuchData;
-
-    if (original_count == 1)
-    {
-        memcpy(work_data[0], recovery_data[recovery_got_i],
-            static_cast<size_t>(buffer_bytes));
-        return Leopard_Success;
-    }
+    if (work_count != leo_ff8xor_decode_work_count(
+            original_count, recovery_count))
+        return Leopard_InvalidCounts;
 
     if (original_loss_count == 0)
     {
         for (unsigned i = 0; i < original_count; ++i)
             memcpy(work_data[i], original_data[i],
                 static_cast<size_t>(buffer_bytes));
+        return Leopard_Success;
+    }
+
+    if (original_count == 1)
+    {
+        memcpy(work_data[0], recovery_data[recovery_got_i],
+            static_cast<size_t>(buffer_bytes));
         return Leopard_Success;
     }
 
@@ -187,9 +213,6 @@ LEO_EXPORT LeopardResult leo_ff8xor_decode(
 
     const unsigned m = leopard::NextPow2(recovery_count);
     const unsigned n = leopard::NextPow2(m + original_count);
-    if (work_count != n)
-        return Leopard_InvalidCounts;
-
     leopard::ff8xor::ReedSolomonDecode(
         buffer_bytes,
         original_count,

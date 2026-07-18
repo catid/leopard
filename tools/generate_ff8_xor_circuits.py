@@ -141,7 +141,9 @@ def linear_map(width, function):
 def apply_matrix(rows, value):
     output = 0
     for row, mask in enumerate(rows):
-        output |= ((mask & value).bit_count() & 1) << row
+        # Keep regeneration compatible with the older Python 3 versions that
+        # may accompany this project's CMake 3.7 minimum.
+        output |= (bin(mask & value).count("1") & 1) << row
     return output
 
 

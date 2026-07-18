@@ -23,12 +23,17 @@
     <ClInclude Include="..\LeopardCommon.h" />
     <ClInclude Include="..\LeopardFF16.h" />
     <ClInclude Include="..\LeopardFF8.h" />
+    <ClInclude Include="..\LeopardFF8Xor.h" />
+    <ClInclude Include="..\leopard_ff8xor.h" />
+    <ClInclude Include="..\generated\LeopardFF8XorCircuits.inl" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\leopard.cpp" />
     <ClCompile Include="..\LeopardCommon.cpp" />
     <ClCompile Include="..\LeopardFF16.cpp" />
     <ClCompile Include="..\LeopardFF8.cpp" />
+    <ClCompile Include="..\LeopardFF8Xor.cpp" />
+    <ClCompile Include="..\leopard_ff8xor.cpp" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{32176592-2F30-4BD5-B645-EB11C8D3453E}</ProjectGuid>
