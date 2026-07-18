@@ -38,6 +38,8 @@ set(LIB_SOURCE_FILES
         LeopardFF8XorAVX2.h
         LeopardFF8XorAVX512.cpp
         LeopardFF8XorAVX512.h
+        LeopardFF8XorAVX512Four.cpp
+        LeopardFF8XorAVX512Four.h
         LeopardFF8XorTranspose.cpp
         LeopardFF8XorTranspose.h
         LeopardFF8XorTransposeAVX2.cpp
@@ -237,12 +239,17 @@ if(FF8XOR_BUILD_AVX512)
     set_source_files_properties(LeopardFF8XorAVX512.cpp PROPERTIES
         COMPILE_FLAGS "${FF8XOR_AVX512_COMPILE_FLAGS}"
         COMPILE_DEFINITIONS "LEO_FF8XOR_BUILD_AVX512=1")
+    set_source_files_properties(LeopardFF8XorAVX512Four.cpp PROPERTIES
+        COMPILE_FLAGS "${FF8XOR_AVX512_COMPILE_FLAGS}"
+        COMPILE_DEFINITIONS "LEO_FF8XOR_BUILD_AVX512_FOUR=1")
     set_property(SOURCE LeopardFF8Xor.cpp APPEND PROPERTY
         COMPILE_DEFINITIONS "LEO_FF8XOR_HAS_AVX512_KERNELS=1")
     message(STATUS "FF8 XOR AVX-512VL/ZMM kernels: enabled")
 else()
     if(FF8XOR_BASELINE_COMPILE_FLAGS)
         set_source_files_properties(LeopardFF8XorAVX512.cpp PROPERTIES
+            COMPILE_FLAGS "${FF8XOR_BASELINE_COMPILE_FLAGS}")
+        set_source_files_properties(LeopardFF8XorAVX512Four.cpp PROPERTIES
             COMPILE_FLAGS "${FF8XOR_BASELINE_COMPILE_FLAGS}")
     endif()
     message(STATUS "FF8 XOR AVX-512VL/ZMM kernels: unavailable")
@@ -502,6 +509,16 @@ add_test(NAME leopard_ff8xor COMMAND test_leopard_ff8xor)
 add_executable(test_leopard_ff8xor_statistics tests/test_ff8xor_statistics.cpp)
 target_link_libraries(test_leopard_ff8xor_statistics libleopard)
 add_test(NAME leopard_ff8xor_statistics COMMAND test_leopard_ff8xor_statistics)
+
+add_executable(test_leopard_ff8xor_four_buffer_runtime
+    tests/test_ff8xor_four_buffer_runtime.cpp)
+target_include_directories(test_leopard_ff8xor_four_buffer_runtime PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(test_leopard_ff8xor_four_buffer_runtime libleopard)
+add_test(NAME leopard_ff8xor_four_buffer_runtime
+    COMMAND test_leopard_ff8xor_four_buffer_runtime)
+set_tests_properties(leopard_ff8xor_four_buffer_runtime PROPERTIES
+    SKIP_RETURN_CODE 77)
 
 add_executable(test_leopard_api_counts tests/test_api_counts.cpp)
 target_link_libraries(test_leopard_api_counts libleopard)
@@ -813,6 +830,11 @@ if(FF8XOR_PYTHON_EXECUTABLE)
                 "${FF8XOR_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_xor_batch_inspector.py")
 
+    add_test(NAME ff8xor_four_buffer_production_inspector
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_four_buffer_production_inspector.py")
+
     add_test(NAME ff8xor_synthesis
         COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
                 "${FF8XOR_PYTHON_EXECUTABLE}"
@@ -996,6 +1018,36 @@ if(FF8XOR_PYTHON_EXECUTABLE)
                         --objdump "${FF8XOR_OBJDUMP_EXECUTABLE}"
                         --strict
                         --json
+                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                VERBATIM)
+        endif()
+
+        if(FF8XOR_CAN_INSPECT_X86_ASSEMBLY AND
+           NOT FF8XOR_SANITIZER_INSTRUMENTED AND
+           (FF8XOR_MULTI_CONFIG OR
+            FF8XOR_BUILD_TYPE_UPPER STREQUAL "RELEASE"))
+            add_test(NAME ff8xor_four_buffer_production_assembly
+                COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                        "${FF8XOR_PYTHON_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_four_buffer_production.py"
+                        --archive "$<TARGET_FILE:libleopard>"
+                        --ar "${FF8XOR_AR_EXECUTABLE}"
+                        --nm "${FF8XOR_NM_EXECUTABLE}"
+                        --objdump "${FF8XOR_OBJDUMP_EXECUTABLE}"
+                        --strict
+                ${FF8XOR_RELEASE_TEST_CONFIG_ARGS})
+
+            add_custom_target(check_ff8xor_four_buffer_production_assembly
+                COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                        "${FF8XOR_PYTHON_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_four_buffer_production.py"
+                        --archive "$<TARGET_FILE:libleopard>"
+                        --ar "${FF8XOR_AR_EXECUTABLE}"
+                        --nm "${FF8XOR_NM_EXECUTABLE}"
+                        --objdump "${FF8XOR_OBJDUMP_EXECUTABLE}"
+                        --strict
+                        --json
+                DEPENDS libleopard
                 WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
                 VERBATIM)
         endif()

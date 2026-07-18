@@ -60,6 +60,8 @@ def main():
             "metadata omitted the circuit checksum")
     require(metadata[0].get("ff8xor_mode_requested") == "auto",
             "metadata omitted the requested default kernel mode")
+    require(metadata[0].get("four_buffer_mode_requested") == "disabled",
+            "metadata omitted the requested default four-buffer mode")
     circuit_metadata = [record for record in records
                         if record.get("record") == "circuit_metadata"]
     require(len(circuit_metadata) == 3,
@@ -102,6 +104,8 @@ def main():
         "materialization_xors_skipped",
         "materialization_xors_replaced_by_copies",
         "materialization_identity_operations_elided",
+        "four_buffer_fused_units",
+        "four_buffer_payload_bytes_elided",
     }
     end_to_end = [record for record in records
                   if record.get("record") == "benchmark" and
@@ -164,11 +168,16 @@ def main():
             "CSV header omitted circuit profile provenance")
     require("ff8xor_mode_requested" in reader.fieldnames,
             "CSV header omitted the requested kernel mode")
+    require("four_buffer_mode_requested" in reader.fieldnames,
+            "CSV header omitted the requested four-buffer mode")
     csv_records = list(reader)
     require(csv_records, "CSV benchmark emitted no records")
     require(all(record["ff8xor_mode_requested"] == "auto"
                 for record in csv_records),
             "CSV rows disagree about the requested kernel mode")
+    require(all(record["four_buffer_mode_requested"] == "disabled"
+                for record in csv_records),
+            "CSV rows disagree about the requested four-buffer mode")
     require(all(None not in record for record in csv_records),
             "CSV benchmark emitted a row wider than its header")
     require(all(len(record) == len(reader.fieldnames) and
@@ -226,6 +235,22 @@ def main():
     require(invalid_mode.returncode == 2 and
             "Invalid --ff8xor-mode value" in invalid_mode.stderr,
             "benchmark accepted or misreported an invalid kernel mode")
+
+    invalid_four_buffer_mode = subprocess.run(
+        [sys.argv[1], "--four-buffer-mode", "not-a-mode", "--no-pin"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    require(invalid_four_buffer_mode.returncode == 2 and
+            "Invalid --four-buffer-mode value" in
+            invalid_four_buffer_mode.stderr,
+            "benchmark accepted or misreported an invalid four-buffer mode")
+
+    mislabeled_four_buffer_mode = subprocess.run(
+        [sys.argv[1], "--four-buffer-mode", "xor2", "--no-pin"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    require(mislabeled_four_buffer_mode.returncode == 2 and
+            "requires --ff8xor-mode avx512zmm" in
+            mislabeled_four_buffer_mode.stderr,
+            "benchmark allowed a four-buffer label on a non-ZMM run")
 
     print("FF8 XOR benchmark metadata tests passed")
     return 0

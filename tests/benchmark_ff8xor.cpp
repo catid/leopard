@@ -53,6 +53,8 @@ struct Options
     bool cache_color;
     leopard::ff8xor::KernelMode ff8xor_mode;
     std::string ff8xor_mode_name;
+    leopard::ff8xor::FourBufferMode four_buffer_mode;
+    std::string four_buffer_mode_name;
     int pin_cpu;
     unsigned warmups;
     unsigned iterations;
@@ -70,6 +72,8 @@ struct Options
         , cache_color(false)
         , ff8xor_mode(leopard::ff8xor::KernelMode::Auto)
         , ff8xor_mode_name("auto")
+        , four_buffer_mode(leopard::ff8xor::FourBufferMode::Disabled)
+        , four_buffer_mode_name("disabled")
         , pin_cpu(-1)
         , warmups(2)
         , iterations(7)
@@ -86,6 +90,7 @@ struct Environment
     std::string cpu;
     std::string simd;
     std::string ff8xor_mode_requested;
+    std::string four_buffer_mode_requested;
     std::string operating_system;
     std::string affinity;
     std::string counter_backend;
@@ -150,6 +155,7 @@ struct Result
     int64_t modeled_payload_bytes_elided;
     int64_t modeled_payload_bytes_adjusted;
     leopard::ff8xor::MaterializationStatistics materialization_statistics;
+    leopard::ff8xor::FourBufferStatistics four_buffer_statistics;
     double ratio_vs_packed;
     unsigned locator_shift;
     std::string schedule_id;
@@ -171,6 +177,7 @@ struct Result
         , modeled_payload_bytes_elided(0)
         , modeled_payload_bytes_adjusted(0)
         , materialization_statistics()
+        , four_buffer_statistics()
         , ratio_vs_packed(0)
         , locator_shift(std::numeric_limits<unsigned>::max())
     {
@@ -930,7 +937,7 @@ public:
                 << "warmups,iterations,calls_per_sample,median_us,best_us,median_input_MBps,"
                 << "best_input_MBps,median_output_MBps,best_output_MBps,"
                 << "speed_ratio_vs_packed,compiler,build_type,cpu,simd,"
-                << "ff8xor_mode_requested,checksum,"
+                << "ff8xor_mode_requested,four_buffer_mode_requested,checksum,"
                 << "cost_profile_id,cost_profile_checksum,gate_min,"
                 << "gate_max,gate_average,note,schedule_id,"
                 << "modeled_payload_bytes_scheduled,modeled_payload_bytes_elided,"
@@ -942,6 +949,8 @@ public:
                 << "materialization_xors_skipped,"
                 << "materialization_xors_replaced_by_copies,"
                 << "materialization_identity_operations_elided,"
+                << "four_buffer_fused_units,"
+                << "four_buffer_payload_bytes_elided,"
                 << "locator_shift,measurement_order,operating_system,affinity,build_flags,"
                 << "counter_backend,cycles,instructions,reference_cycles,cache_references,"
                 << "cache_misses,frontend_stalled_cycles,backend_stalled_cycles,"
@@ -974,6 +983,8 @@ public:
                 << ',' << Json("simd") << ':' << Json(Env.simd)
                 << ',' << Json("ff8xor_mode_requested") << ':'
                 << Json(Env.ff8xor_mode_requested)
+                << ',' << Json("four_buffer_mode_requested") << ':'
+                << Json(Env.four_buffer_mode_requested)
                 << ',' << Json("circuit_checksum") << ':'
                 << Json(leopard::ff8xor::GetCircuitChecksum())
                 << ',' << Json("circuit_cost_profile_id") << ':'
@@ -1014,6 +1025,8 @@ public:
             << "cpu: " << Env.cpu << '\n'
             << "simd: " << Env.simd << '\n'
             << "ff8xor mode requested: " << Env.ff8xor_mode_requested << '\n'
+            << "four-buffer mode requested: "
+            << Env.four_buffer_mode_requested << '\n'
             << "os: " << Env.operating_system << '\n'
             << "affinity: " << Env.affinity << '\n'
             << "build flags: " << Env.build_flags << '\n'
@@ -1082,6 +1095,7 @@ public:
                 << Csv(Env.compiler) << ',' << Csv(Env.build_type) << ','
                 << Csv(Env.cpu) << ',' << Csv(Env.simd) << ','
                 << Csv(Env.ff8xor_mode_requested) << ','
+                << Csv(Env.four_buffer_mode_requested) << ','
                 << Csv("") << ",,,,,," << Csv(result.note) << ','
                 << Csv(result.schedule_id) << ','
                 << result.modeled_payload_bytes << ','
@@ -1093,7 +1107,9 @@ public:
                 << result.materialization_statistics.ButterfliesReduced << ','
                 << result.materialization_statistics.XorsSkipped << ','
                 << result.materialization_statistics.XorsReplacedByCopies << ','
-                << result.materialization_statistics.IdentityOperationsElided << ',';
+                << result.materialization_statistics.IdentityOperationsElided << ','
+                << result.four_buffer_statistics.FusedUnits << ','
+                << result.four_buffer_statistics.EstimatedPayloadBytesElided << ',';
             if (result.locator_shift != std::numeric_limits<unsigned>::max())
                 std::cout << result.locator_shift;
             std::cout << ',' << Csv(result.measurement_order) << ','
@@ -1172,6 +1188,10 @@ public:
                 << result.materialization_statistics.XorsReplacedByCopies
                 << ',' << Json("materialization_identity_operations_elided") << ':'
                 << result.materialization_statistics.IdentityOperationsElided
+                << ',' << Json("four_buffer_fused_units") << ':'
+                << result.four_buffer_statistics.FusedUnits
+                << ',' << Json("four_buffer_payload_bytes_elided") << ':'
+                << result.four_buffer_statistics.EstimatedPayloadBytesElided
                 << ',' << Json("locator_shift") << ':';
             if (result.locator_shift == std::numeric_limits<unsigned>::max())
                 std::cout << "null";
@@ -1243,6 +1263,10 @@ public:
                 << result.materialization_statistics.XorsReplacedByCopies
                 << ",identity:"
                 << result.materialization_statistics.IdentityOperationsElided
+                << "} four_buffer={units:"
+                << result.four_buffer_statistics.FusedUnits
+                << ",bytes_elided:"
+                << result.four_buffer_statistics.EstimatedPayloadBytesElided
                 << '}';
         }
         if (result.timing.median_ipc > 0)
@@ -1305,12 +1329,13 @@ private:
             << Csv(Env.compiler) << ',' << Csv(Env.build_type) << ','
             << Csv(Env.cpu) << ',' << Csv(Env.simd) << ','
             << Csv(Env.ff8xor_mode_requested) << ','
+            << Csv(Env.four_buffer_mode_requested) << ','
             << Csv(leopard::ff8xor::GetCircuitChecksum()) << ','
             << Csv(leopard::ff8xor::GetCircuitCostProfileId()) << ','
             << Csv(leopard::ff8xor::GetCircuitCostProfileChecksum()) << ','
             << minimum << ',' << maximum << ',' << std::fixed
             << std::setprecision(6) << average << ',' << Csv("") << ','
-            << Csv("") << ",0,0,0,0,0,0,0,0,0,0,,"
+            << Csv("") << ",0,0,0,0,0,0,0,0,0,0,0,0,,"
             << Csv(MeasurementOrder) << ','
             << Csv(Env.operating_system) << ',' << Csv(Env.affinity) << ','
             << Csv(Env.build_flags) << ',' << Csv(Env.counter_backend)
@@ -1741,8 +1766,12 @@ static Result MakeResult(
         {
             result.materialization_statistics =
                 leopard::ff8xor::GetLastMaterializationStatistics();
+            result.four_buffer_statistics =
+                leopard::ff8xor::GetLastFourBufferStatistics();
             result.modeled_payload_bytes_elided =
-                result.materialization_statistics.EstimatedPayloadBytesElided;
+                result.materialization_statistics.EstimatedPayloadBytesElided +
+                static_cast<int64_t>(result.four_buffer_statistics.
+                    EstimatedPayloadBytesElided);
         }
         result.modeled_payload_bytes_adjusted =
             static_cast<int64_t>(result.modeled_payload_bytes) -
@@ -3007,12 +3036,28 @@ static bool ParseFF8XorMode(
     return true;
 }
 
+static bool ParseFourBufferMode(
+    const std::string& text,
+    leopard::ff8xor::FourBufferMode& mode)
+{
+    if (text == "disabled")
+        mode = leopard::ff8xor::FourBufferMode::Disabled;
+    else if (text == "xor2")
+        mode = leopard::ff8xor::FourBufferMode::Xor2;
+    else if (text == "xor3")
+        mode = leopard::ff8xor::FourBufferMode::Xor3;
+    else
+        return false;
+    return true;
+}
+
 static void Usage(const char* program)
 {
     std::cout << "Usage: " << program
         << " [--quick] [--csv|--json] [--include-transpose] [--counters]"
         << " [--portable-transpose] [--abba] [--cache-color]"
         << " [--ff8xor-mode MODE]"
+        << " [--four-buffer-mode MODE]"
         << " [--cpu N|--no-pin]\n"
         << "  --quick              Run a bounded development/CI subset.\n"
         << "  --csv                Emit machine-readable CSV.\n"
@@ -3026,6 +3071,8 @@ static void Usage(const char* program)
         << " L1D set when all eight plane starts alias.\n"
         << "  --ff8xor-mode MODE   Force auto, portable, simd128, avx2,"
         << " avx512vl, or avx512zmm; unavailable modes skip.\n"
+        << "  --four-buffer-mode MODE  Select disabled, xor2, or xor3"
+        << " AVX-512 radix-4 circuits (default: disabled).\n"
         << "  --cpu N              Pin the benchmark to allowed logical CPU N.\n"
         << "  --no-pin             Disable default pinning to the first allowed CPU.\n";
 }
@@ -3064,6 +3111,23 @@ static bool ParseOptions(int argc, char** argv, Options& options)
             {
                 std::cerr << "Invalid --ff8xor-mode value: "
                     << options.ff8xor_mode_name << '\n';
+                return false;
+            }
+        }
+        else if (argument == "--four-buffer-mode")
+        {
+            if (i + 1 >= argc)
+            {
+                std::cerr << "--four-buffer-mode requires a mode name\n";
+                return false;
+            }
+            options.four_buffer_mode_name = argv[++i];
+            if (!ParseFourBufferMode(
+                    options.four_buffer_mode_name,
+                    options.four_buffer_mode))
+            {
+                std::cerr << "Invalid --four-buffer-mode value: "
+                    << options.four_buffer_mode_name << '\n';
                 return false;
             }
         }
@@ -3128,6 +3192,14 @@ int main(int argc, char** argv)
     if (!ParseOptions(argc, argv, options))
         return 2;
 
+    if (options.four_buffer_mode !=
+            leopard::ff8xor::FourBufferMode::Disabled &&
+        options.ff8xor_mode != leopard::ff8xor::KernelMode::Avx512Zmm)
+    {
+        std::cerr << "--four-buffer-mode requires --ff8xor-mode avx512zmm\n";
+        return 2;
+    }
+
     BoundaryTransposeMode = options.portable_transpose ?
         leopard::ff8xor::transpose::Mode::Portable :
         leopard::ff8xor::transpose::Mode::Auto;
@@ -3149,9 +3221,11 @@ int main(int argc, char** argv)
         return 77;
     }
     leopard::ff8xor::SetKernelMode(options.ff8xor_mode);
+    leopard::ff8xor::SetFourBufferMode(options.four_buffer_mode);
 
     Environment environment = GetEnvironment(affinity);
     environment.ff8xor_mode_requested = options.ff8xor_mode_name;
+    environment.four_buffer_mode_requested = options.four_buffer_mode_name;
     Reporter reporter(options.csv, options.json, environment);
     reporter.Begin(options);
 

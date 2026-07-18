@@ -29,6 +29,7 @@
 #include "LeopardFF8Xor.h"
 #include "LeopardFF8XorAVX2.h"
 #include "LeopardFF8XorAVX512.h"
+#include "LeopardFF8XorAVX512Four.h"
 
 #ifdef LEO_HAS_FF8
 
@@ -142,9 +143,12 @@ struct ValueIO<Simd128Tag>
 // Test inspection and overrides must not introduce shared mutable state into
 // otherwise independent codec calls.
 static std::atomic<KernelMode> SelectedKernelMode(KernelMode::Auto);
+static std::atomic<FourBufferMode> SelectedFourBufferMode(
+    FourBufferMode::Disabled);
 static thread_local unsigned LastLocatorShift = 0;
 static thread_local int LocatorShiftOverride = -1;
 static thread_local MaterializationStatistics LastMaterializationStatistics = {};
+static thread_local FourBufferStatistics LastFourBufferStatistics = {};
 
 bool IsAVX512Supported(
     uint32_t maximum_basic_leaf,
@@ -396,6 +400,16 @@ void SetKernelMode(KernelMode mode)
     SelectedKernelMode.store(mode, std::memory_order_relaxed);
 }
 
+void SetFourBufferMode(FourBufferMode mode)
+{
+    SelectedFourBufferMode.store(mode, std::memory_order_relaxed);
+}
+
+FourBufferMode GetFourBufferMode()
+{
+    return SelectedFourBufferMode.load(std::memory_order_relaxed);
+}
+
 KernelMode GetKernelMode()
 {
     return SelectedKernelMode.load(std::memory_order_relaxed);
@@ -439,6 +453,17 @@ void ResetMaterializationStatistics()
 {
     const MaterializationStatistics empty = {};
     LastMaterializationStatistics = empty;
+}
+
+FourBufferStatistics GetLastFourBufferStatistics()
+{
+    return LastFourBufferStatistics;
+}
+
+void ResetFourBufferStatistics()
+{
+    const FourBufferStatistics empty = {};
+    LastFourBufferStatistics = empty;
 }
 
 
@@ -1409,6 +1434,75 @@ static LEO_FORCE_INLINE ffe_t OnePlusMultiplierLog(ffe_t skew)
     return LogLUT[static_cast<ffe_t>(ExpLUT[skew] ^ 1)];
 }
 
+static bool TryFourBufferButterfly(
+    uint64_t buffer_bytes,
+    void* a,
+    void* b,
+    void* c,
+    void* d,
+    bool inverse,
+    ffe_t skew01,
+    ffe_t skew23,
+    ffe_t skew02)
+{
+    // Disabled is the public/default experiment state.  Check it before the
+    // comparatively heavier kernel-resolution path so the established
+    // two-way backend does not pay AVX-512 feature/translation-unit probes for
+    // every complete radix-4 unit.
+    const FourBufferMode four_mode =
+        SelectedFourBufferMode.load(std::memory_order_relaxed);
+    if (four_mode == FourBufferMode::Disabled)
+        return false;
+
+    // ResolveKernelMode performs the exact CPUID/XCR0 gate before this
+    // baseline object can enter the separately targeted AVX-512 object.
+    if (ResolveKernelMode() != KernelMode::Avx512Zmm ||
+        !avx512four::KernelsBuilt())
+    {
+        return false;
+    }
+
+    const int tuple_index = avx512four::FindTupleIndex(
+        skew01, skew23, skew02);
+    if (tuple_index < 0 ||
+        !avx512four::Apply512(
+            static_cast<unsigned>(tuple_index),
+            a, b, c, d, buffer_bytes, inverse,
+            four_mode == FourBufferMode::Xor3))
+    {
+        return false;
+    }
+
+    ++LastFourBufferStatistics.FusedUnits;
+    const uint64_t original_factor =
+        (skew01 == kModulus ? 3 : 4) +
+        (skew23 == kModulus ? 3 : 4) +
+        (skew02 == kModulus ? 6 : 8);
+    // Conservatively charge one fused pass as reading and writing all four
+    // buffers: eight scheduled payload bytes per logical shard byte.  The
+    // sentinel-bearing generated map can leave one buffer unchanged and the
+    // compiler may elide those stores, so observed traffic can be lower.
+    LastFourBufferStatistics.EstimatedPayloadBytesElided +=
+        buffer_bytes * (original_factor - 8);
+    return true;
+}
+
+bool FourBufferButterflyBufferForTesting(
+    uint64_t buffer_bytes,
+    void* a,
+    void* b,
+    void* c,
+    void* d,
+    bool inverse,
+    ffe_t skew01,
+    ffe_t skew23,
+    ffe_t skew02)
+{
+    return TryFourBufferButterfly(
+        buffer_bytes, a, b, c, d, inverse,
+        skew01, skew23, skew02);
+}
+
 static void IFFT_DIT_Untracked(
     uint64_t buffer_bytes,
     unsigned count_truncated,
@@ -1416,21 +1510,73 @@ static void IFFT_DIT_Untracked(
     unsigned count,
     unsigned skew_base)
 {
-    for (unsigned distance = 1; distance < count; distance <<= 1)
+    unsigned distance = 1;
+    for (; distance <= count >> 2; distance <<= 2)
+    {
+        const unsigned span = distance << 2;
+        for (unsigned range = 0;
+            range < count_truncated;
+            range += span)
+        {
+            const ffe_t skew01 =
+                FFTSkewPadded[skew_base + range + distance];
+            const ffe_t skew23 =
+                FFTSkewPadded[skew_base + range + distance * 3];
+            const ffe_t skew02 =
+                FFTSkewPadded[skew_base + range + distance * 2];
+            const bool complete =
+                range + distance * 2 < count_truncated;
+            for (unsigned index = range; index < range + distance; ++index)
+            {
+                if (complete && TryFourBufferButterfly(
+                        buffer_bytes,
+                        work[index],
+                        work[index + distance],
+                        work[index + distance * 2],
+                        work[index + distance * 3],
+                        true,
+                        skew01,
+                        skew23,
+                        skew02))
+                {
+                    continue;
+                }
+
+                // Preserve the exact two-layer IFFT ordering for every unit
+                // that is truncated, narrow, unavailable, or not generated.
+                IFFTButterflyBuffer(buffer_bytes,
+                    work[index], work[index + distance], skew01);
+                if (complete)
+                {
+                    IFFTButterflyBuffer(buffer_bytes,
+                        work[index + distance * 2],
+                        work[index + distance * 3], skew23);
+                }
+                IFFTButterflyBuffer(buffer_bytes,
+                    work[index], work[index + distance * 2], skew02);
+                IFFTButterflyBuffer(buffer_bytes,
+                    work[index + distance],
+                    work[index + distance * 3], skew02);
+            }
+        }
+    }
+
+    // A power-of-two transform has at most one unpaired layer.
+    if (distance < count)
     {
         const unsigned span = distance << 1;
         for (unsigned range = 0;
             range < count_truncated;
             range += span)
         {
-            const ffe_t skew = FFTSkewPadded[skew_base + range + distance];
-            for (unsigned index = range; index < range + distance; ++index)
+            const ffe_t skew = FFTSkewPadded[
+                skew_base + range + distance];
+            for (unsigned index = range;
+                index < range + distance;
+                ++index)
             {
-                IFFTButterflyBuffer(
-                    buffer_bytes,
-                    work[index],
-                    work[index + distance],
-                    skew);
+                IFFTButterflyBuffer(buffer_bytes,
+                    work[index], work[index + distance], skew);
             }
         }
     }
@@ -1443,21 +1589,72 @@ static void FFT_DIT_Untracked(
     unsigned count,
     unsigned skew_base)
 {
-    for (unsigned distance = count >> 1; distance != 0; distance >>= 1)
+    unsigned high_distance = count >> 1;
+    for (; high_distance >= 2; high_distance >>= 2)
     {
-        const unsigned span = distance << 1;
+        const unsigned distance = high_distance >> 1;
+        const unsigned span = high_distance << 1;
         for (unsigned range = 0;
             range < count_truncated;
             range += span)
         {
-            const ffe_t skew = FFTSkewPadded[skew_base + range + distance];
+            const ffe_t skew01 =
+                FFTSkewPadded[skew_base + range + distance];
+            const ffe_t skew23 =
+                FFTSkewPadded[skew_base + range + distance * 3];
+            const ffe_t skew02 =
+                FFTSkewPadded[skew_base + range + high_distance];
+            const bool complete =
+                range + high_distance < count_truncated;
             for (unsigned index = range; index < range + distance; ++index)
             {
-                FFTButterflyBuffer(
-                    buffer_bytes,
-                    work[index],
+                if (complete && TryFourBufferButterfly(
+                        buffer_bytes,
+                        work[index],
+                        work[index + distance],
+                        work[index + high_distance],
+                        work[index + high_distance + distance],
+                        false,
+                        skew01,
+                        skew23,
+                        skew02))
+                {
+                    continue;
+                }
+
+                FFTButterflyBuffer(buffer_bytes,
+                    work[index], work[index + high_distance], skew02);
+                FFTButterflyBuffer(buffer_bytes,
                     work[index + distance],
-                    skew);
+                    work[index + high_distance + distance], skew02);
+                FFTButterflyBuffer(buffer_bytes,
+                    work[index], work[index + distance], skew01);
+                if (complete)
+                {
+                    FFTButterflyBuffer(buffer_bytes,
+                        work[index + high_distance],
+                        work[index + high_distance + distance], skew23);
+                }
+            }
+        }
+    }
+
+
+    if (high_distance != 0)
+    {
+        const unsigned span = high_distance << 1;
+        for (unsigned range = 0;
+            range < count_truncated;
+            range += span)
+        {
+            const ffe_t skew = FFTSkewPadded[
+                skew_base + range + high_distance];
+            for (unsigned index = range;
+                index < range + high_distance;
+                ++index)
+            {
+                FFTButterflyBuffer(buffer_bytes,
+                    work[index], work[index + high_distance], skew);
             }
         }
     }
@@ -1626,6 +1823,59 @@ void TrackedButterflyBufferForTesting(
     LastMaterializationStatistics = context.Statistics;
 }
 
+static LEO_FORCE_INLINE bool FourStatesAreFusionSafe(
+    const BufferState& a,
+    const BufferState& b,
+    const BufferState& c,
+    const BufferState& d)
+{
+    return !IsZero(a) && !IsZero(b) && !IsZero(c) && !IsZero(d) &&
+        a.Materialized && b.Materialized && c.Materialized && d.Materialized &&
+        a.Identity != b.Identity && a.Identity != c.Identity &&
+        a.Identity != d.Identity && b.Identity != c.Identity &&
+        b.Identity != d.Identity && c.Identity != d.Identity;
+}
+
+static LEO_FORCE_INLINE void AdvanceGenericButterflyStates(
+    MaterializationContext& context,
+    BufferState& x,
+    BufferState& y,
+    ffe_t skew)
+{
+    // The sentinel preserves x and writes only y.  Every non-sentinel generic
+    // butterfly writes two values whose equality is not statically known.
+    if (skew != kModulus)
+        context.SetFresh(x);
+    context.SetFresh(y);
+}
+
+static void AdvanceFourBufferStates(
+    MaterializationContext& context,
+    bool inverse,
+    BufferState& a,
+    BufferState& b,
+    BufferState& c,
+    BufferState& d,
+    ffe_t skew01,
+    ffe_t skew23,
+    ffe_t skew02)
+{
+    if (inverse)
+    {
+        AdvanceGenericButterflyStates(context, a, b, skew01);
+        AdvanceGenericButterflyStates(context, c, d, skew23);
+        AdvanceGenericButterflyStates(context, a, c, skew02);
+        AdvanceGenericButterflyStates(context, b, d, skew02);
+    }
+    else
+    {
+        AdvanceGenericButterflyStates(context, a, c, skew02);
+        AdvanceGenericButterflyStates(context, b, d, skew02);
+        AdvanceGenericButterflyStates(context, a, b, skew01);
+        AdvanceGenericButterflyStates(context, c, d, skew23);
+    }
+}
+
 static void IFFT_DIT(
     uint64_t buffer_bytes,
     unsigned count_truncated,
@@ -1636,24 +1886,85 @@ static void IFFT_DIT(
     unsigned skew_base)
 {
     (void)buffer_bytes;
-    for (unsigned distance = 1; distance < count; distance <<= 1)
+    unsigned distance = 1;
+    for (; distance <= count >> 2; distance <<= 2)
+    {
+        const unsigned span = distance << 2;
+        for (unsigned range = 0;
+            range < count_truncated;
+            range += span)
+        {
+            const ffe_t skew01 =
+                FFTSkewPadded[skew_base + range + distance];
+            const ffe_t skew23 =
+                FFTSkewPadded[skew_base + range + distance * 3];
+            const ffe_t skew02 =
+                FFTSkewPadded[skew_base + range + distance * 2];
+            const bool complete =
+                range + distance * 2 < count_truncated;
+            for (unsigned index = range; index < range + distance; ++index)
+            {
+                BufferState& a_state = states[index];
+                BufferState& b_state = states[index + distance];
+                BufferState& c_state = states[index + distance * 2];
+                BufferState& d_state = states[index + distance * 3];
+                if (complete && FourStatesAreFusionSafe(
+                        a_state, b_state, c_state, d_state) &&
+                    TryFourBufferButterfly(
+                        context.BufferBytes,
+                        work[index],
+                        work[index + distance],
+                        work[index + distance * 2],
+                        work[index + distance * 3],
+                        true,
+                        skew01,
+                        skew23,
+                        skew02))
+                {
+                    AdvanceFourBufferStates(
+                        context, true,
+                        a_state, b_state, c_state, d_state,
+                        skew01, skew23, skew02);
+                    continue;
+                }
+
+                TrackedButterfly(context, true,
+                    work[index], work[index + distance],
+                    a_state, b_state, skew01);
+                if (complete)
+                {
+                    TrackedButterfly(context, true,
+                        work[index + distance * 2],
+                        work[index + distance * 3],
+                        c_state, d_state, skew23);
+                }
+                TrackedButterfly(context, true,
+                    work[index], work[index + distance * 2],
+                    a_state, c_state, skew02);
+                TrackedButterfly(context, true,
+                    work[index + distance],
+                    work[index + distance * 3],
+                    b_state, d_state, skew02);
+            }
+        }
+    }
+
+    if (distance < count)
     {
         const unsigned span = distance << 1;
         for (unsigned range = 0;
             range < count_truncated;
             range += span)
         {
-            const ffe_t skew = FFTSkewPadded[skew_base + range + distance];
-            for (unsigned index = range; index < range + distance; ++index)
+            const ffe_t skew = FFTSkewPadded[
+                skew_base + range + distance];
+            for (unsigned index = range;
+                index < range + distance;
+                ++index)
             {
-                TrackedButterfly(
-                    context,
-                    true,
-                    work[index],
-                    work[index + distance],
-                    states[index],
-                    states[index + distance],
-                    skew);
+                TrackedButterfly(context, true,
+                    work[index], work[index + distance],
+                    states[index], states[index + distance], skew);
             }
         }
     }
@@ -1669,24 +1980,87 @@ static void FFT_DIT(
     unsigned skew_base)
 {
     (void)buffer_bytes;
-    for (unsigned distance = count >> 1; distance != 0; distance >>= 1)
+    unsigned high_distance = count >> 1;
+    for (; high_distance >= 2; high_distance >>= 2)
     {
-        const unsigned span = distance << 1;
+        const unsigned distance = high_distance >> 1;
+        const unsigned span = high_distance << 1;
         for (unsigned range = 0;
             range < count_truncated;
             range += span)
         {
-            const ffe_t skew = FFTSkewPadded[skew_base + range + distance];
+            const ffe_t skew01 =
+                FFTSkewPadded[skew_base + range + distance];
+            const ffe_t skew23 =
+                FFTSkewPadded[skew_base + range + distance * 3];
+            const ffe_t skew02 =
+                FFTSkewPadded[skew_base + range + high_distance];
+            const bool complete =
+                range + high_distance < count_truncated;
             for (unsigned index = range; index < range + distance; ++index)
             {
-                TrackedButterfly(
-                    context,
-                    false,
-                    work[index],
+                BufferState& a_state = states[index];
+                BufferState& b_state = states[index + distance];
+                BufferState& c_state = states[index + high_distance];
+                BufferState& d_state =
+                    states[index + high_distance + distance];
+                if (complete && FourStatesAreFusionSafe(
+                        a_state, b_state, c_state, d_state) &&
+                    TryFourBufferButterfly(
+                        context.BufferBytes,
+                        work[index],
+                        work[index + distance],
+                        work[index + high_distance],
+                        work[index + high_distance + distance],
+                        false,
+                        skew01,
+                        skew23,
+                        skew02))
+                {
+                    AdvanceFourBufferStates(
+                        context, false,
+                        a_state, b_state, c_state, d_state,
+                        skew01, skew23, skew02);
+                    continue;
+                }
+
+                TrackedButterfly(context, false,
+                    work[index], work[index + high_distance],
+                    a_state, c_state, skew02);
+                TrackedButterfly(context, false,
                     work[index + distance],
-                    states[index],
-                    states[index + distance],
-                    skew);
+                    work[index + high_distance + distance],
+                    b_state, d_state, skew02);
+                TrackedButterfly(context, false,
+                    work[index], work[index + distance],
+                    a_state, b_state, skew01);
+                if (complete)
+                {
+                    TrackedButterfly(context, false,
+                        work[index + high_distance],
+                        work[index + high_distance + distance],
+                        c_state, d_state, skew23);
+                }
+            }
+        }
+    }
+
+    if (high_distance != 0)
+    {
+        const unsigned span = high_distance << 1;
+        for (unsigned range = 0;
+            range < count_truncated;
+            range += span)
+        {
+            const ffe_t skew = FFTSkewPadded[
+                skew_base + range + high_distance];
+            for (unsigned index = range;
+                index < range + high_distance;
+                ++index)
+            {
+                TrackedButterfly(context, false,
+                    work[index], work[index + high_distance],
+                    states[index], states[index + high_distance], skew);
             }
         }
     }
@@ -1839,25 +2213,88 @@ static void FFT_DIT_ErrorBits_Untracked(
     const ErrorBitfield& error_bits)
 {
     unsigned mip_level = LastNonzeroBit32(count);
-    for (unsigned distance = count >> 1;
-        distance != 0;
-        distance >>= 1, --mip_level)
+    unsigned high_distance = count >> 1;
+    for (; high_distance >= 2;
+        high_distance >>= 2, mip_level -= 2)
     {
-        const unsigned span = distance << 1;
+        const unsigned distance = high_distance >> 1;
+        const unsigned span = high_distance << 1;
+        for (unsigned range = 0;
+            range < count_truncated;
+            range += span)
+        {
+            const bool complete =
+                range + high_distance < count_truncated;
+            const bool high_needed =
+                error_bits.IsNeeded(mip_level, range);
+            const bool low01_needed =
+                error_bits.IsNeeded(mip_level - 1, range);
+            const bool low23_needed = complete &&
+                error_bits.IsNeeded(mip_level - 1,
+                    range + high_distance);
+            const ffe_t skew01 =
+                FFTSkewPadded[skew_base + range + distance];
+            const ffe_t skew23 =
+                FFTSkewPadded[skew_base + range + distance * 3];
+            const ffe_t skew02 =
+                FFTSkewPadded[skew_base + range + high_distance];
+            for (unsigned index = range; index < range + distance; ++index)
+            {
+                if (complete && high_needed && low01_needed && low23_needed &&
+                    TryFourBufferButterfly(
+                        buffer_bytes,
+                        work[index],
+                        work[index + distance],
+                        work[index + high_distance],
+                        work[index + high_distance + distance],
+                        false,
+                        skew01,
+                        skew23,
+                        skew02))
+                {
+                    continue;
+                }
+
+                if (high_needed)
+                {
+                    FFTButterflyBuffer(buffer_bytes,
+                        work[index], work[index + high_distance], skew02);
+                    FFTButterflyBuffer(buffer_bytes,
+                        work[index + distance],
+                        work[index + high_distance + distance], skew02);
+                }
+                if (low01_needed)
+                {
+                    FFTButterflyBuffer(buffer_bytes,
+                        work[index], work[index + distance], skew01);
+                }
+                if (low23_needed)
+                {
+                    FFTButterflyBuffer(buffer_bytes,
+                        work[index + high_distance],
+                        work[index + high_distance + distance], skew23);
+                }
+            }
+        }
+    }
+
+    if (high_distance != 0)
+    {
+        const unsigned span = high_distance << 1;
         for (unsigned range = 0;
             range < count_truncated;
             range += span)
         {
             if (!error_bits.IsNeeded(mip_level, range))
                 continue;
-            const ffe_t skew = FFTSkewPadded[skew_base + range + distance];
-            for (unsigned index = range; index < range + distance; ++index)
+            const ffe_t skew = FFTSkewPadded[
+                skew_base + range + high_distance];
+            for (unsigned index = range;
+                index < range + high_distance;
+                ++index)
             {
-                FFTButterflyBuffer(
-                    buffer_bytes,
-                    work[index],
-                    work[index + distance],
-                    skew);
+                FFTButterflyBuffer(buffer_bytes,
+                    work[index], work[index + high_distance], skew);
             }
         }
     }
@@ -1875,29 +2312,104 @@ static void FFT_DIT_ErrorBits(
 {
     (void)buffer_bytes;
     unsigned mip_level = LastNonzeroBit32(count);
-    for (unsigned distance = count >> 1;
-        distance != 0;
-        distance >>= 1, --mip_level)
+    unsigned high_distance = count >> 1;
+    for (; high_distance >= 2;
+        high_distance >>= 2, mip_level -= 2)
     {
-        const unsigned span = distance << 1;
+        const unsigned distance = high_distance >> 1;
+        const unsigned span = high_distance << 1;
+        for (unsigned range = 0;
+            range < count_truncated;
+            range += span)
+        {
+            const bool complete =
+                range + high_distance < count_truncated;
+            const bool high_needed =
+                error_bits.IsNeeded(mip_level, range);
+            const bool low01_needed =
+                error_bits.IsNeeded(mip_level - 1, range);
+            const bool low23_needed = complete &&
+                error_bits.IsNeeded(mip_level - 1,
+                    range + high_distance);
+            const ffe_t skew01 =
+                FFTSkewPadded[skew_base + range + distance];
+            const ffe_t skew23 =
+                FFTSkewPadded[skew_base + range + distance * 3];
+            const ffe_t skew02 =
+                FFTSkewPadded[skew_base + range + high_distance];
+            for (unsigned index = range; index < range + distance; ++index)
+            {
+                BufferState& a_state = states[index];
+                BufferState& b_state = states[index + distance];
+                BufferState& c_state = states[index + high_distance];
+                BufferState& d_state =
+                    states[index + high_distance + distance];
+                if (complete && high_needed && low01_needed && low23_needed &&
+                    FourStatesAreFusionSafe(
+                        a_state, b_state, c_state, d_state) &&
+                    TryFourBufferButterfly(
+                        context.BufferBytes,
+                        work[index],
+                        work[index + distance],
+                        work[index + high_distance],
+                        work[index + high_distance + distance],
+                        false,
+                        skew01,
+                        skew23,
+                        skew02))
+                {
+                    AdvanceFourBufferStates(
+                        context, false,
+                        a_state, b_state, c_state, d_state,
+                        skew01, skew23, skew02);
+                    continue;
+                }
+
+                if (high_needed)
+                {
+                    TrackedButterfly(context, false,
+                        work[index], work[index + high_distance],
+                        a_state, c_state, skew02);
+                    TrackedButterfly(context, false,
+                        work[index + distance],
+                        work[index + high_distance + distance],
+                        b_state, d_state, skew02);
+                }
+                if (low01_needed)
+                {
+                    TrackedButterfly(context, false,
+                        work[index], work[index + distance],
+                        a_state, b_state, skew01);
+                }
+                if (low23_needed)
+                {
+                    TrackedButterfly(context, false,
+                        work[index + high_distance],
+                        work[index + high_distance + distance],
+                        c_state, d_state, skew23);
+                }
+            }
+        }
+    }
+
+    if (high_distance != 0)
+    {
+        const unsigned span = high_distance << 1;
         for (unsigned range = 0;
             range < count_truncated;
             range += span)
         {
             if (!error_bits.IsNeeded(mip_level, range))
                 continue;
-
-            const ffe_t skew = FFTSkewPadded[skew_base + range + distance];
-            for (unsigned index = range; index < range + distance; ++index)
+            const ffe_t skew = FFTSkewPadded[
+                skew_base + range + high_distance];
+            for (unsigned index = range;
+                index < range + high_distance;
+                ++index)
             {
-                TrackedButterfly(
-                    context,
-                    false,
-                    work[index],
-                    work[index + distance],
-                    states[index],
-                    states[index + distance],
-                    skew);
+                TrackedButterfly(context, false,
+                    work[index], work[index + high_distance],
+                    states[index], states[index + high_distance], skew);
             }
         }
     }
@@ -2038,6 +2550,7 @@ void ReedSolomonEncode(
     const void* const* data,
     void** work)
 {
+    ResetFourBufferStatistics();
     // Full chunks contain no structural zeros or copy identities, so tracking
     // can only add schedule overhead.  Small payloads likewise cannot amortize
     // the state machine; preserve the established schedule in both cases.
@@ -2131,6 +2644,7 @@ void ReedSolomonDecode(
     const void* const* recovery,
     void** work)
 {
+    ResetFourBufferStatistics();
     MaterializationContext context(buffer_bytes);
     BufferState states[kOrder];
 #ifdef LEO_ERROR_BITFIELD_OPT

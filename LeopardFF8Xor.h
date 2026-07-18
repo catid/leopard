@@ -63,6 +63,17 @@ enum class KernelMode
     Avx512Zmm
 };
 
+// The four-buffer path is intentionally independent of KernelMode.  Auto
+// continues to resolve to the established backend; these controls select the
+// lowering only when a caller explicitly selects AVX-512 ZMM and a complete
+// two-layer radix-4 unit is safe to fuse.
+enum class FourBufferMode
+{
+    Disabled,
+    Xor2,
+    Xor3
+};
+
 struct CircuitStatistics
 {
     unsigned MinimumGateCount;
@@ -94,11 +105,19 @@ struct MaterializationStatistics
     int64_t EstimatedPayloadBytesElided;
 };
 
+struct FourBufferStatistics
+{
+    uint64_t FusedUnits;
+    uint64_t EstimatedPayloadBytesElided;
+};
+
 void SetKernelMode(KernelMode mode);
 KernelMode GetKernelMode();
 KernelMode GetActiveKernelMode();
 bool IsKernelModeAvailable(KernelMode mode);
 const char* GetKernelBackendName();
+void SetFourBufferMode(FourBufferMode mode);
+FourBufferMode GetFourBufferMode();
 
 // Pure register-level predicate used by the runtime detector and tests.  Both
 // the processor feature bits and the OS-enabled XMM/YMM/ZMM/opmask state are
@@ -120,6 +139,8 @@ CircuitCost GetFFTCircuitCost(ffe_t skew);
 CircuitCost GetIFFTCircuitCost(ffe_t skew);
 MaterializationStatistics GetLastMaterializationStatistics();
 void ResetMaterializationStatistics();
+FourBufferStatistics GetLastFourBufferStatistics();
+void ResetFourBufferStatistics();
 
 // Whole-buffer field addition.  This follows the selected experimental kernel
 // mode and is also used by the native API's M=1 and formal-derivative paths so
@@ -179,6 +200,20 @@ void TrackedButterflyBufferForTesting(
     bool y_is_zero,
     bool equal_nonzero,
     ffe_t skew);
+
+// Apply one generated four-buffer map through the same runtime gates used by
+// production transforms.  False reports an unavailable mode, unknown tuple,
+// or a plane size requiring the narrower two-way fallback.
+bool FourBufferButterflyBufferForTesting(
+    uint64_t buffer_bytes,
+    void* a,
+    void* b,
+    void* c,
+    void* d,
+    bool inverse,
+    ffe_t skew01,
+    ffe_t skew23,
+    ffe_t skew02);
 
 
 //------------------------------------------------------------------------------

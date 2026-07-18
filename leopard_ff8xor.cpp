@@ -93,6 +93,7 @@ LEO_EXPORT LeopardResult leo_ff8xor_encode(
     // call boundary so per-thread diagnostic statistics can never describe a
     // stale prior transform after k=1, r=1, or a rejected request.
     leopard::ff8xor::ResetMaterializationStatistics();
+    leopard::ff8xor::ResetFourBufferStatistics();
 
     if (buffer_bytes == 0 || buffer_bytes % 64 != 0)
         return Leopard_InvalidSize;
@@ -154,6 +155,7 @@ LEO_EXPORT LeopardResult leo_ff8xor_decode(
 {
     // This also covers no-loss, k=1, and r=1 exits that bypass the transform.
     leopard::ff8xor::ResetMaterializationStatistics();
+    leopard::ff8xor::ResetFourBufferStatistics();
 
     if (buffer_bytes == 0 || buffer_bytes % 64 != 0)
         return Leopard_InvalidSize;
