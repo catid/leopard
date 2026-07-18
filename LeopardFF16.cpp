@@ -62,6 +62,8 @@ static std::atomic<uint64_t> TestHighSyndromeAccumulatedBlocks(0);
 static std::atomic<uint64_t> TestHighSyndromeMaterializedBlocks(0);
 static std::atomic<uint64_t> TestHighSyndromePrunedAccumulatedBlocks(0);
 static std::atomic<uint64_t> TestHighSyndromePrunedFallbackBlocks(0);
+static std::atomic<uint64_t> TestHighReceiveCopyShards(0);
+static std::atomic<uint64_t> TestHighReceiveZeroShards(0);
 static std::atomic<uint64_t> TestSparseExactBlocks(0);
 static std::atomic<uint64_t> TestSparsePrefixButterflies(0);
 static std::atomic<uint64_t> TestSparseRetainedButterflies(0);
@@ -1518,6 +1520,35 @@ static bool IFFT_DIT_DecoderAccumulate(
     }
     return IFFT_DIT_DecoderImpl<false>(
         ops, bytes, m_truncated, work, m, skewLUT, xor_result);
+}
+
+
+// GF16 source fusion was below the production threshold.  Keep the measured
+// copy-first schedule, while centralizing test accounting: materialized decode
+// calls this once for N rows and tiled decode once per visited T-row tile.
+static void StageHighDecodeSources(
+    const uint64_t bytes,
+    const void* const* sources,
+    void** work,
+    const unsigned count)
+{
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    uint64_t copy_count = 0;
+    for (unsigned i = 0; i < count; ++i)
+        copy_count += sources[i] != NULL;
+    TestHighReceiveCopyShards.fetch_add(
+        copy_count, std::memory_order_relaxed);
+    TestHighReceiveZeroShards.fetch_add(
+        count - copy_count, std::memory_order_relaxed);
+#endif
+#pragma omp parallel for
+    for (int i = 0; i < (int)count; ++i)
+    {
+        if (sources[i])
+            memcpy(work[i], sources[i], bytes);
+        else
+            memset(work[i], 0, bytes);
+    }
 }
 
 /*
@@ -3125,6 +3156,8 @@ void TestOnlyResetHighDecodeCounts()
         0, std::memory_order_relaxed);
     TestHighSyndromePrunedFallbackBlocks.store(
         0, std::memory_order_relaxed);
+    TestHighReceiveCopyShards.store(0, std::memory_order_relaxed);
+    TestHighReceiveZeroShards.store(0, std::memory_order_relaxed);
 }
 
 
@@ -3148,6 +3181,11 @@ TestOnlyHighDecodeCounts TestOnlyGetHighDecodeCounts()
     result.syndrome_pruned_fallback_blocks =
         TestHighSyndromePrunedFallbackBlocks.load(
             std::memory_order_relaxed);
+    result.receive_ifft_butterfly4_out_of_place = 0;
+    result.receive_copy_shards =
+        TestHighReceiveCopyShards.load(std::memory_order_relaxed);
+    result.receive_zero_shards =
+        TestHighReceiveZeroShards.load(std::memory_order_relaxed);
     return result;
 }
 
@@ -3789,14 +3827,7 @@ void ReedSolomonDecodeHighPrepared(
 {
     LEO_DEBUG_ASSERT(t >= 2 && t < n && n <= kOrder);
 
-#pragma omp parallel for
-    for (int i = 0; i < (int)n; ++i)
-    {
-        if (coordinate_data[i])
-            memcpy(work[i], coordinate_data[i], buffer_bytes);
-        else
-            memset(work[i], 0, buffer_bytes);
-    }
+    StageHighDecodeSources(buffer_bytes, coordinate_data, work, n);
 
     const unsigned block_count = n / t;
     for (unsigned block = 0; block < block_count; ++block)
@@ -3923,14 +3954,7 @@ void ReedSolomonDecodeHighPrunedPlanned(
     LEO_DEBUG_ASSERT(output_plan_count == 0 ||
         output_plan_count == output_block_count);
 
-#pragma omp parallel for
-    for (int i = 0; i < (int)n; ++i)
-    {
-        if (coordinate_data[i])
-            memcpy(work[i], coordinate_data[i], buffer_bytes);
-        else
-            memset(work[i], 0, buffer_bytes);
-    }
+    StageHighDecodeSources(buffer_bytes, coordinate_data, work, n);
 
     const unsigned block_count = n / t;
     unsigned input_plan_index = 0;
@@ -4168,14 +4192,8 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
 
     const unsigned first_input_count = block_input_counts[0];
     LEO_DEBUG_ASSERT(first_input_count <= t);
-#pragma omp parallel for
-    for (int i = 0; i < (int)t; ++i)
-    {
-        if (coordinate_data[i])
-            memcpy(accumulator[i], coordinate_data[i], buffer_bytes);
-        else
-            memset(accumulator[i], 0, buffer_bytes);
-    }
+    StageHighDecodeSources(
+        buffer_bytes, coordinate_data, accumulator, t);
     unsigned input_plan_index = 0;
     if (first_input_count != 0)
     {
@@ -4209,15 +4227,8 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
         if (input_count == 0)
             continue;
         const unsigned offset = block * t;
-#pragma omp parallel for
-        for (int i = 0; i < (int)t; ++i)
-        {
-            const void* const source = coordinate_data[offset + i];
-            if (source)
-                memcpy(tile[i], source, buffer_bytes);
-            else
-                memset(tile[i], 0, buffer_bytes);
-        }
+        StageHighDecodeSources(
+            buffer_bytes, coordinate_data + offset, tile, t);
         const leopard2_internal::PrunedTransformPlan* pruned = NULL;
         if (input_plan_index < input_plan_count && input_plans &&
             input_plans[input_plan_index].block == block)

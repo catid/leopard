@@ -907,6 +907,7 @@ void require_high_decode_no_copy(
     leo2_backend execution_backend,
     leo2_field field,
     bool expect_pruned_accumulation,
+    bool expect_receive_fusion,
     bool expect_gf16_accumulation,
     bool expect_gf16_materialization,
     const std::string& operation)
@@ -921,6 +922,10 @@ void require_high_decode_no_copy(
     uint64_t syndrome_materialized_blocks = 0;
     uint64_t syndrome_pruned_accumulated_blocks = 0;
     uint64_t syndrome_pruned_fallback_blocks = 0;
+    uint64_t receive_butterfly4 = 0;
+    uint64_t receive_copy_shards = 0;
+    uint64_t receive_zero_shards = 0;
+    uint64_t traced_receive_butterfly4 = 0;
     if (field == LEO2_FIELD_GF8)
     {
         const leopard::ff8::TestOnlyHighDecodeCounts counts =
@@ -937,6 +942,11 @@ void require_high_decode_no_copy(
             counts.syndrome_pruned_accumulated_blocks;
         syndrome_pruned_fallback_blocks =
             counts.syndrome_pruned_fallback_blocks;
+        receive_butterfly4 =
+            counts.receive_ifft_butterfly4_out_of_place;
+        receive_copy_shards = counts.receive_copy_shards;
+        receive_zero_shards = counts.receive_zero_shards;
+        traced_receive_butterfly4 = trace.ff8_ifft_four_out_calls();
     }
     else
     {
@@ -954,6 +964,11 @@ void require_high_decode_no_copy(
             counts.syndrome_pruned_accumulated_blocks;
         syndrome_pruned_fallback_blocks =
             counts.syndrome_pruned_fallback_blocks;
+        receive_butterfly4 =
+            counts.receive_ifft_butterfly4_out_of_place;
+        receive_copy_shards = counts.receive_copy_shards;
+        receive_zero_shards = counts.receive_zero_shards;
+        traced_receive_butterfly4 = trace.ff16_ifft_four_out_calls();
     }
     const uint64_t out_of_place_calls = butterfly2 + butterfly4;
     require(output_blocks != 0,
@@ -965,6 +980,17 @@ void require_high_decode_no_copy(
     require(traced_butterfly2 == butterfly2 &&
             traced_butterfly4 == butterfly4,
         operation + " bypassed the selected context out-of-place table");
+    require(traced_receive_butterfly4 == receive_butterfly4,
+        operation + " bypassed the selected context inverse source table");
+    if (expect_receive_fusion)
+        require(receive_butterfly4 != 0,
+            operation + " did not fuse a complete unpruned receive group");
+    else
+        require(receive_butterfly4 == 0,
+            operation + " widened receive fusion beyond qualified backends");
+    require(receive_butterfly4 != 0 ||
+            receive_copy_shards + receive_zero_shards != 0,
+        operation + " did not account for receive staging");
     require(syndrome_pruned_fallback_blocks == 0,
         operation + " rejected a compiled exact inverse sink");
     if (expect_pruned_accumulation)
@@ -1540,7 +1566,12 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                 require_high_decode_no_copy(
                     trace,
                     execution_backend, test_case.field,
-                    expect_pruned_accumulation, expect_gf16_accumulation,
+                    expect_pruned_accumulation,
+                    test_case.field == LEO2_FIELD_GF8 &&
+                        side > 4 && test_case.r == side &&
+                        (execution_backend == LEO2_BACKEND_SSSE3 ||
+                         execution_backend == LEO2_BACKEND_AVX2),
+                    expect_gf16_accumulation,
                     expect_gf16_materialization,
                     profile_name + " decode backend=" +
                         std::to_string(static_cast<unsigned>(

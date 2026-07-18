@@ -59,6 +59,9 @@ static std::atomic<uint64_t> TestHighSyndromeAccumulatedBlocks(0);
 static std::atomic<uint64_t> TestHighSyndromeMaterializedBlocks(0);
 static std::atomic<uint64_t> TestHighSyndromePrunedAccumulatedBlocks(0);
 static std::atomic<uint64_t> TestHighSyndromePrunedFallbackBlocks(0);
+static std::atomic<uint64_t> TestHighReceiveIFFTButterfly4OutCalls(0);
+static std::atomic<uint64_t> TestHighReceiveCopyShards(0);
+static std::atomic<uint64_t> TestHighReceiveZeroShards(0);
 static std::atomic<uint64_t> TestSparseExactBlocks(0);
 static std::atomic<uint64_t> TestSparsePrefixButterflies(0);
 static std::atomic<uint64_t> TestSparseRetainedButterflies(0);
@@ -1441,10 +1444,11 @@ static void IFFT_DIT_DecoderImpl(
     void** work,
     const unsigned m,
     const ffe_t* skewLUT,
-    void** xor_result)
+    void** xor_result,
+    const unsigned initial_dist)
 {
     // Decimation in time: Unroll 2 layers at a time
-    unsigned dist = 1, dist4 = 4;
+    unsigned dist = initial_dist, dist4 = initial_dist << 2;
     for (; dist4 <= m; dist = dist4, dist4 <<= 2)
     {
         // For each set of dist*4 elements:
@@ -1534,7 +1538,7 @@ static void IFFT_DIT_Decoder(
     const ffe_t* skewLUT)
 {
     IFFT_DIT_DecoderImpl(
-        ops, bytes, m_truncated, work, m, skewLUT, NULL);
+        ops, bytes, m_truncated, work, m, skewLUT, NULL, 1);
 }
 
 
@@ -1549,7 +1553,111 @@ static void IFFT_DIT_DecoderAccumulate(
 {
     LEO_DEBUG_ASSERT(xor_result != NULL);
     IFFT_DIT_DecoderImpl(
-        ops, bytes, m_truncated, work, m, skewLUT, xor_result);
+        ops, bytes, m_truncated, work, m, skewLUT, xor_result, 1);
+}
+
+
+static void StageHighDecodeSources(
+    const uint64_t bytes,
+    const void* const* sources,
+    void** work,
+    const unsigned count)
+{
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    uint64_t copy_count = 0;
+#endif
+    for (unsigned i = 0; i < count; ++i)
+    {
+        if (sources[i])
+        {
+            memcpy(work[i], sources[i], bytes);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            ++copy_count;
+#endif
+        }
+        else
+            memset(work[i], 0, bytes);
+    }
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    TestHighReceiveCopyShards.fetch_add(
+        copy_count, std::memory_order_relaxed);
+    TestHighReceiveZeroShards.fetch_add(
+        count - copy_count, std::memory_order_relaxed);
+#endif
+}
+
+
+// Complete live GF8 receive groups enter the first two inverse layers without
+// a staging pass only on the isolated and qualified SSSE3/AVX2 backends.
+// Pruned blocks are staged separately so their exact sink schedule remains
+// authoritative; scalar, NEON, and other unmeasured backends copy first.
+static void IFFT_DIT_DecoderFromSources(
+    const backend::Ops& ops,
+    const uint64_t bytes,
+    const unsigned m_truncated,
+    const void* const* sources,
+    void** work,
+    void** xor_result,
+    const unsigned m,
+    const ffe_t* skewLUT)
+{
+    LEO_DEBUG_ASSERT(m_truncated <= m);
+    LEO_DEBUG_ASSERT(m <= 4 || (m & 3U) == 0);
+    const bool qualified_source_backend =
+        ops.kind == LEO2_BACKEND_SSSE3 || ops.kind == LEO2_BACKEND_AVX2;
+    if (m <= 4 || !qualified_source_backend)
+    {
+        StageHighDecodeSources(bytes, sources, work, m);
+        IFFT_DIT_DecoderImpl(
+            ops, bytes, m_truncated, work, m, skewLUT, xor_result, 1);
+        return;
+    }
+
+    for (unsigned r = 0; r < m; r += 4)
+    {
+        const bool live0 = sources[r] != NULL;
+        const bool live1 = sources[r + 1] != NULL;
+        const bool live2 = sources[r + 2] != NULL;
+        const bool live3 = sources[r + 3] != NULL;
+        if (live0 && live1 && live2 && live3)
+        {
+            ops.ff8_ifft_butterfly4_out(
+                sources[r], sources[r + 1], sources[r + 2], sources[r + 3],
+                work[r], work[r + 1], work[r + 2], work[r + 3],
+                skewLUT[r + 1], skewLUT[r + 3], skewLUT[r + 2], bytes);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            TestHighReceiveIFFTButterfly4OutCalls.fetch_add(
+                1, std::memory_order_relaxed);
+#endif
+            continue;
+        }
+
+        const bool live[4] = { live0, live1, live2, live3 };
+        unsigned live_count = 0;
+        for (unsigned lane = 0; lane < 4; ++lane)
+        {
+            if (live[lane])
+            {
+                memcpy(work[r + lane], sources[r + lane], bytes);
+                ++live_count;
+            }
+            else
+                memset(work[r + lane], 0, bytes);
+        }
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        TestHighReceiveCopyShards.fetch_add(
+            live_count, std::memory_order_relaxed);
+        TestHighReceiveZeroShards.fetch_add(
+            4U - live_count, std::memory_order_relaxed);
+#endif
+        if (live_count != 0)
+            IFFT_DIT4_Range(
+                ops, bytes, work + r, 1,
+                skewLUT[r + 1], skewLUT[r + 3], skewLUT[r + 2]);
+    }
+
+    IFFT_DIT_DecoderImpl(
+        ops, bytes, m_truncated, work, m, skewLUT, xor_result, 4);
 }
 
 /*
@@ -2966,6 +3074,10 @@ void TestOnlyResetHighDecodeCounts()
         0, std::memory_order_relaxed);
     TestHighSyndromePrunedFallbackBlocks.store(
         0, std::memory_order_relaxed);
+    TestHighReceiveIFFTButterfly4OutCalls.store(
+        0, std::memory_order_relaxed);
+    TestHighReceiveCopyShards.store(0, std::memory_order_relaxed);
+    TestHighReceiveZeroShards.store(0, std::memory_order_relaxed);
 }
 
 
@@ -2989,6 +3101,13 @@ TestOnlyHighDecodeCounts TestOnlyGetHighDecodeCounts()
     result.syndrome_pruned_fallback_blocks =
         TestHighSyndromePrunedFallbackBlocks.load(
             std::memory_order_relaxed);
+    result.receive_ifft_butterfly4_out_of_place =
+        TestHighReceiveIFFTButterfly4OutCalls.load(
+            std::memory_order_relaxed);
+    result.receive_copy_shards =
+        TestHighReceiveCopyShards.load(std::memory_order_relaxed);
+    result.receive_zero_shards =
+        TestHighReceiveZeroShards.load(std::memory_order_relaxed);
     return result;
 }
 
@@ -3764,14 +3883,6 @@ void ReedSolomonDecodeHighPrunedPlanned(
     LEO_DEBUG_ASSERT(output_plan_count == 0 ||
         output_plan_count == output_block_count);
 
-    for (unsigned i = 0; i < n; ++i)
-    {
-        if (coordinate_data[i])
-            memcpy(work[i], coordinate_data[i], buffer_bytes);
-        else
-            memset(work[i], 0, buffer_bytes);
-    }
-
     const unsigned block_count = n / t;
     unsigned input_plan_index = 0;
     for (unsigned block = 0; block < block_count; ++block)
@@ -3779,75 +3890,78 @@ void ReedSolomonDecodeHighPrunedPlanned(
         const unsigned offset = block * t;
         const unsigned input_count = block_input_counts[block];
         LEO_DEBUG_ASSERT(input_count <= t);
-        if (input_count != 0)
+        if (input_count == 0)
         {
-            const leopard2_internal::PrunedTransformPlan* pruned = NULL;
-            if (input_plan_index < input_plan_count && input_plans &&
-                input_plans[input_plan_index].block == block)
+            if (block == 0)
+                StageHighDecodeSources(
+                    buffer_bytes, coordinate_data, work, t);
+            continue;
+        }
+        const leopard2_internal::PrunedTransformPlan* pruned = NULL;
+        if (input_plan_index < input_plan_count && input_plans &&
+            input_plans[input_plan_index].block == block)
+        {
+            pruned = &input_plans[input_plan_index].plan;
+            ++input_plan_index;
+        }
+        if (pruned)
+        {
+            StageHighDecodeSources(
+                buffer_bytes, coordinate_data + offset, work + offset, t);
+            LEO_DEBUG_ASSERT(pruned->size == t &&
+                pruned->shift == offset && pruned->inverse);
+            const bool use_accumulating_sink =
+                ShouldUsePrunedHighSyndromeSink(ops, buffer_bytes);
+            if (block != 0 && use_accumulating_sink)
             {
-                pruned = &input_plans[input_plan_index].plan;
-                ++input_plan_index;
-            }
-            if (pruned)
-            {
-                LEO_DEBUG_ASSERT(pruned->size == t &&
-                    pruned->shift == offset && pruned->inverse);
-                const bool use_accumulating_sink =
-                    ShouldUsePrunedHighSyndromeSink(ops, buffer_bytes);
-                if (block != 0 && use_accumulating_sink)
+                const bool accumulated = leopard2_internal::
+                    ExecutePrunedInverseTransformPlanAccumulate(
+                        ops, buffer_bytes, *pruned,
+                        work + offset, work);
+                if (accumulated)
                 {
-                    const bool accumulated = leopard2_internal::
-                        ExecutePrunedInverseTransformPlanAccumulate(
-                            ops, buffer_bytes, *pruned,
-                            work + offset, work);
-                    if (accumulated)
-                    {
 #if defined(LEO2_ENABLE_TEST_HOOKS)
-                        TestHighSyndromeAccumulatedBlocks.fetch_add(
-                            1, std::memory_order_relaxed);
-                        TestHighSyndromePrunedAccumulatedBlocks.fetch_add(
-                            1, std::memory_order_relaxed);
+                    TestHighSyndromeAccumulatedBlocks.fetch_add(
+                        1, std::memory_order_relaxed);
+                    TestHighSyndromePrunedAccumulatedBlocks.fetch_add(
+                        1, std::memory_order_relaxed);
 #endif
-                        continue;
-                    }
+                    continue;
                 }
-#if defined(LEO2_ENABLE_TEST_HOOKS)
-                if (block != 0 && use_accumulating_sink)
-                    TestHighSyndromePrunedFallbackBlocks.fetch_add(
-                        1, std::memory_order_relaxed);
-#endif
-                const bool executed =
-                    leopard2_internal::ExecutePrunedTransformPlan(
-                        ops, buffer_bytes, *pruned, work + offset);
-                LEO_DEBUG_ASSERT(executed);
-                (void)executed;
-#if defined(LEO2_ENABLE_TEST_HOOKS)
-                if (block != 0)
-                    TestHighSyndromeMaterializedBlocks.fetch_add(
-                        1, std::memory_order_relaxed);
-#endif
             }
-            else if (block != 0)
-            {
-                // An unpruned later block is dead after syndrome reduction.
-                IFFT_DIT_DecoderAccumulate(
-                    ops, buffer_bytes, input_count, work + offset, work, t,
-                    FFTSkewStorage + offset);
 #if defined(LEO2_ENABLE_TEST_HOOKS)
+            if (block != 0 && use_accumulating_sink)
+                TestHighSyndromePrunedFallbackBlocks.fetch_add(
+                    1, std::memory_order_relaxed);
+#endif
+            const bool executed =
+                leopard2_internal::ExecutePrunedTransformPlan(
+                    ops, buffer_bytes, *pruned, work + offset);
+            LEO_DEBUG_ASSERT(executed);
+            (void)executed;
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            if (block != 0)
+                TestHighSyndromeMaterializedBlocks.fetch_add(
+                    1, std::memory_order_relaxed);
+#endif
+            if (block != 0)
+                VectorXOR(ops, buffer_bytes, t, work, work + offset);
+        }
+        else
+        {
+            // Source fusion is intentionally confined to unpruned blocks;
+            // exact plans above retain their independently qualified sink.
+            IFFT_DIT_DecoderFromSources(
+                ops, buffer_bytes, input_count, coordinate_data + offset,
+                work + offset, block == 0 ? NULL : work, t,
+                FFTSkewStorage + offset);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            if (block != 0)
                 TestHighSyndromeAccumulatedBlocks.fetch_add(
                     1, std::memory_order_relaxed);
 #endif
-                continue;
-            }
-            else
-            {
-                IFFT_DIT_Decoder(
-                    ops, buffer_bytes, input_count, work + offset, t,
-                    FFTSkewStorage + offset);
-            }
+            continue;
         }
-        if (block != 0 && input_count != 0)
-            VectorXOR(ops, buffer_bytes, t, work, work + offset);
     }
     LEO_DEBUG_ASSERT(input_plan_index == input_plan_count);
 
@@ -4001,15 +4115,11 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
 
     const unsigned first_input_count = block_input_counts[0];
     LEO_DEBUG_ASSERT(first_input_count <= t);
-    for (unsigned i = 0; i < t; ++i)
-    {
-        if (coordinate_data[i])
-            memcpy(accumulator[i], coordinate_data[i], buffer_bytes);
-        else
-            memset(accumulator[i], 0, buffer_bytes);
-    }
     unsigned input_plan_index = 0;
-    if (first_input_count != 0)
+    if (first_input_count == 0)
+        StageHighDecodeSources(
+            buffer_bytes, coordinate_data, accumulator, t);
+    else
     {
         const leopard2_internal::PrunedTransformPlan* pruned = NULL;
         if (input_plan_index < input_plan_count && input_plans &&
@@ -4020,6 +4130,8 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
         }
         if (pruned)
         {
+            StageHighDecodeSources(
+                buffer_bytes, coordinate_data, accumulator, t);
             LEO_DEBUG_ASSERT(pruned->size == t &&
                 pruned->shift == 0 && pruned->inverse);
             const bool executed =
@@ -4029,9 +4141,9 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
             (void)executed;
         }
         else
-            IFFT_DIT_Decoder(
-                ops, buffer_bytes, first_input_count, accumulator, t,
-                FFTSkewStorage);
+            IFFT_DIT_DecoderFromSources(
+                ops, buffer_bytes, first_input_count, coordinate_data,
+                accumulator, NULL, t, FFTSkewStorage);
     }
 
     for (unsigned block = 1; block < block_count; ++block)
@@ -4041,14 +4153,6 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
         if (input_count == 0)
             continue;
         const unsigned offset = block * t;
-        for (unsigned i = 0; i < t; ++i)
-        {
-            const void* const source = coordinate_data[offset + i];
-            if (source)
-                memcpy(tile[i], source, buffer_bytes);
-            else
-                memset(tile[i], 0, buffer_bytes);
-        }
         const leopard2_internal::PrunedTransformPlan* pruned = NULL;
         if (input_plan_index < input_plan_count && input_plans &&
             input_plans[input_plan_index].block == block)
@@ -4058,6 +4162,8 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
         }
         if (pruned)
         {
+            StageHighDecodeSources(
+                buffer_bytes, coordinate_data + offset, tile, t);
             LEO_DEBUG_ASSERT(pruned->size == t &&
                 pruned->shift == offset && pruned->inverse);
             const bool use_accumulating_sink =
@@ -4094,9 +4200,9 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
         else
         {
             // tile is dead until an out-of-place evaluator overwrites it.
-            IFFT_DIT_DecoderAccumulate(
-                ops, buffer_bytes, input_count, tile, accumulator, t,
-                FFTSkewStorage + offset);
+            IFFT_DIT_DecoderFromSources(
+                ops, buffer_bytes, input_count, coordinate_data + offset,
+                tile, accumulator, t, FFTSkewStorage + offset);
 #if defined(LEO2_ENABLE_TEST_HOOKS)
             TestHighSyndromeAccumulatedBlocks.fetch_add(
                 1, std::memory_order_relaxed);

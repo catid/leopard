@@ -338,6 +338,9 @@ struct TestOnlyHighDecodeCounts
     uint64_t syndrome_materialized_blocks;
     uint64_t syndrome_pruned_accumulated_blocks;
     uint64_t syndrome_pruned_fallback_blocks;
+    uint64_t receive_ifft_butterfly4_out_of_place;
+    uint64_t receive_copy_shards;
+    uint64_t receive_zero_shards;
 };
 void TestOnlyResetTransformCallsiteCounts();
 TestOnlyTransformCallsiteCounts TestOnlyGetTransformCallsiteCounts();

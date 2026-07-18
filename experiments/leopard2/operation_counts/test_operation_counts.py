@@ -62,6 +62,34 @@ class OperationCountTests(unittest.TestCase):
         self.assertEqual(low.copies, 8 + 248)
         self.assertTrue(low.details["out_of_place_first_fft_layer"])
 
+        high_decode = COUNTS.model_high_decode(
+            240, 16, 256, 16, 1024, {0}
+        )
+        self.assertEqual(
+            high_decode.details["receive_source_fused_radix4_groups"], 56
+        )
+        self.assertEqual(high_decode.details["receive_copy_vectors"], 16)
+        self.assertEqual(high_decode.details["receive_zero_vectors"], 16)
+        self.assertEqual(
+            high_decode.details["receive_copy_vectors_removed"], 224
+        )
+        self.assertEqual(
+            high_decode.details["receive_exact_pruned_staged_blocks"], 2
+        )
+        # These are exact deltas at the new receive boundary.  The broader
+        # model's pre-existing absolute copy total is tracked separately and
+        # is not an oracle for aligned coordinate-pointer retention.
+        high_decode_gf16 = COUNTS.model_high_decode(
+            240, 16, 256, 16, 1024, {0}, "gf16"
+        )
+        self.assertEqual(
+            high_decode_gf16.details["receive_source_fused_radix4_groups"], 0
+        )
+        self.assertEqual(high_decode_gf16.details["receive_copy_vectors"], 240)
+        self.assertEqual(
+            high_decode_gf16.details["receive_copy_vectors_removed"], 0
+        )
+
     def test_low_encode_source_guard_rejects_old_copy_loop(self) -> None:
         old_copy = """
             for (unsigned i = 0; i < p; ++i)
@@ -74,6 +102,98 @@ class OperationCountTests(unittest.TestCase):
                 COUNTS.verify_low_encode_no_copy_source(
                     source + old_copy, filename + " mutation"
                 )
+
+    def test_high_decode_source_boundary_guard(self) -> None:
+        filename = "LeopardFF8.cpp"
+        source = (ROOT / filename).read_text(encoding="utf-8")
+        COUNTS.verify_high_decode_receive_fusion_source(source, filename)
+        decoder_call = (
+            "ops.ff8_ifft_butterfly4_out(\n"
+            "                sources[r], sources[r + 1], sources[r + 2], "
+            "sources[r + 3],"
+        )
+        mutated_decoder = source.replace(
+            decoder_call,
+            decoder_call.replace(
+                "ops.ff8_ifft_butterfly4_out(",
+                "ops.ff8_ifft_butterfly4_out_removed(",
+            ),
+            1,
+        )
+        self.assertNotEqual(mutated_decoder, source)
+        with self.assertRaises(COUNTS.ModelError):
+            COUNTS.verify_high_decode_receive_fusion_source(
+                mutated_decoder, filename + " decoder-call mutation"
+            )
+        mutated_sink = source.replace(
+            "ExecutePrunedInverseTransformPlanAccumulate(",
+            "ExecutePrunedInverseTransformPlanAccumulateRemoved(",
+            1,
+        )
+        self.assertNotEqual(mutated_sink, source)
+        with self.assertRaises(COUNTS.ModelError):
+            COUNTS.verify_high_decode_receive_fusion_source(
+                mutated_sink, filename + " pruned-sink mutation"
+            )
+        mutated = source.replace(
+            "IFFT_DIT_DecoderFromSources(",
+            "IFFT_DIT_DecoderCopyFirst(",
+        )
+        with self.assertRaises(COUNTS.ModelError):
+            COUNTS.verify_high_decode_receive_fusion_source(
+                mutated, filename + " mutation"
+            )
+
+        filename = "LeopardFF16.cpp"
+        source = (ROOT / filename).read_text(encoding="utf-8")
+        COUNTS.verify_high_decode_gf16_copy_first_source(source, filename)
+        mutated = source.replace(
+            "StageHighDecodeSources(buffer_bytes, coordinate_data, work, n);",
+            "StageHighDecodeSources(buffer_bytes, coordinate_data, work, t);",
+        )
+        self.assertNotEqual(mutated, source)
+        with self.assertRaises(COUNTS.ModelError):
+            COUNTS.verify_high_decode_gf16_copy_first_source(
+                mutated, filename + " per-block mutation"
+            )
+
+    def test_high_decode_integration_keeps_both_counter_families(self) -> None:
+        tokens = (
+            "syndrome_pruned_accumulated_blocks",
+            "syndrome_pruned_fallback_blocks",
+            "receive_ifft_butterfly4_out_of_place",
+            "receive_copy_shards",
+            "receive_zero_shards",
+        )
+        for stem in ("LeopardFF8", "LeopardFF16"):
+            source = (ROOT / (stem + ".cpp")).read_text(encoding="utf-8")
+            header = (ROOT / (stem + ".h")).read_text(encoding="utf-8")
+            for token in tokens:
+                self.assertIn(token, header, stem + " header lost " + token)
+            self.assertIn(
+                "TestHighSyndromePrunedAccumulatedBlocks", source,
+                stem + " source lost exact-pruned accounting",
+            )
+            self.assertIn(
+                "TestHighReceiveCopyShards", source,
+                stem + " source lost receive-stage accounting",
+            )
+
+    def test_high_pruned_stage_hook_target_cannot_compile_out(self) -> None:
+        filename = "CMakeLists.txt"
+        source = (ROOT / filename).read_text(encoding="utf-8")
+        COUNTS.verify_high_pruned_hook_registration(source, filename)
+        mutated = source.replace(
+            "        LEO2_ENABLE_TEST_HOOKS=1\n"
+            "        LEO2_REQUIRE_HIGH_PRUNED_STAGE_HOOKS=1)",
+            "        LEO2_REQUIRE_HIGH_PRUNED_STAGE_HOOKS=1)",
+            1,
+        )
+        self.assertNotEqual(mutated, source)
+        with self.assertRaises(COUNTS.ModelError):
+            COUNTS.verify_high_pruned_hook_registration(
+                mutated, filename + " hook-definition mutation"
+            )
 
     def test_sparse_requested_parity_reduces_low_work(self) -> None:
         all_outputs = COUNTS.model_low_encode(8, 248, 8, 1024, set(range(248)))

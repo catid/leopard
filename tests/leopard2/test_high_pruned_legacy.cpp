@@ -14,6 +14,14 @@
 
 #include "leopard.h"
 #include "leopard2.h"
+#if defined(LEO2_REQUIRE_HIGH_PRUNED_STAGE_HOOKS) && \
+    !defined(LEO2_ENABLE_TEST_HOOKS)
+#error "high-pruned stage counter target requires Leopard2 test hooks"
+#endif
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+#include "LeopardFF16.h"
+#include "LeopardFF8.h"
+#endif
 
 #include <algorithm>
 #include <cstdlib>
@@ -98,6 +106,76 @@ struct Case
     leo2_field field;
     size_t bytes;
 };
+
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+void verify_gf8_one_loss_receive_stage(
+    leo2_context* context,
+    const leo2_codec* codec,
+    const Case& test,
+    const std::vector<const void*>& original_input,
+    const std::vector<void*>& recovery_output)
+{
+    if (test.field != LEO2_FIELD_GF8 || test.k != 240 || test.r != 16 ||
+        test.bytes != 64)
+        return;
+
+    std::vector<uint8_t> original_present(test.k, 1);
+    std::vector<uint8_t> recovery_present(test.r, 1);
+    original_present[0] = 0;
+    leo2_decode_plan* plan = NULL;
+    require_result(leo2_decode_plan_create(codec, &original_present[0],
+        &recovery_present[0], &plan), "one-loss plan create");
+
+    size_t scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+        plan, test.bytes, &scratch_bytes), "one-loss scratch query");
+    AlignedBytes scratch(scratch_bytes);
+    AlignedBytes restored_storage((test.bytes + 63u) & ~size_t(63u));
+    std::vector<const void*> original = original_input;
+    original[0] = NULL;
+    std::vector<const void*> recovery(test.r);
+    for (uint32_t i = 0; i < test.r; ++i)
+        recovery[i] = recovery_output[i];
+    std::vector<void*> restored(test.k, NULL);
+    restored[0] = restored_storage.data();
+
+    leopard::ff8::TestOnlyResetHighDecodeCounts();
+    require_result(leo2_decode_plan_execute(plan, test.bytes,
+        &original[0], &recovery[0], &restored[0],
+        scratch.data(), scratch.size()), "one-loss decode");
+    const leopard::ff8::TestOnlyHighDecodeCounts counts =
+        leopard::ff8::TestOnlyGetHighDecodeCounts();
+    std::cout << "COUNTERS high_receive_gf8_k240_r16_l1 backend="
+              << static_cast<unsigned>(leo2_context_backend(context))
+              << " fused4=" << counts.receive_ifft_butterfly4_out_of_place
+              << " copies=" << counts.receive_copy_shards
+              << " zeros=" << counts.receive_zero_shards << std::endl;
+    require(memcmp(restored[0], original_input[0], test.bytes) == 0,
+        "one-loss restored original mismatch");
+
+    const leo2_backend selected = leo2_context_backend(context);
+    if (selected == LEO2_BACKEND_SSSE3 || selected == LEO2_BACKEND_AVX2)
+    {
+        require(counts.receive_ifft_butterfly4_out_of_place == 56,
+            "qualified GF8 one-loss fused-group count drifted");
+        require(counts.receive_copy_shards == 16,
+            "qualified GF8 one-loss staged-copy count drifted");
+        require(counts.receive_zero_shards == 16,
+            "qualified GF8 one-loss staged-zero count drifted");
+    }
+    else
+    {
+        require(counts.receive_ifft_butterfly4_out_of_place == 0,
+            "unqualified GF8 backend fused receive rows");
+        require(counts.receive_copy_shards == test.k,
+            "copy-first GF8 one-loss staged-copy count drifted");
+        require(counts.receive_zero_shards ==
+                leo2_codec_parent_count(codec) - test.k,
+            "copy-first GF8 one-loss staged-zero count drifted");
+    }
+    leo2_decode_plan_destroy(plan);
+}
+#endif
 
 void run_case(leo2_context* context, const Case& test, size_t case_index,
     uint64_t& parity_bytes, uint64_t& restored_bytes)
@@ -202,9 +280,29 @@ void run_case(leo2_context* context, const Case& test, size_t case_index,
     std::vector<const void*> new_recovery(test.r);
     for (uint32_t i = 0; i < test.r; ++i)
         new_recovery[i] = new_recovery_output[i];
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    const bool verify_parent_wide_stage =
+        test.field == LEO2_FIELD_GF16 && (case_index & 1u) == 0;
+    if (verify_parent_wide_stage)
+        leopard::ff16::TestOnlyResetHighDecodeCounts();
+#endif
     require_result(leo2_decode_plan_execute(plan, test.bytes,
         &old_original[0], &new_recovery[0], &restored[0],
         decode_scratch.data(), decode_scratch.size()), "new decode");
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    if (verify_parent_wide_stage)
+    {
+        const leopard::ff16::TestOnlyHighDecodeCounts stage_counts =
+            leopard::ff16::TestOnlyGetHighDecodeCounts();
+        require(stage_counts.receive_ifft_butterfly4_out_of_place == 0,
+            "materialized GF16 unexpectedly fused receive rows");
+        require(stage_counts.receive_copy_shards == test.k,
+            "materialized GF16 did not copy each selected row exactly once");
+        require(stage_counts.receive_zero_shards ==
+                leo2_codec_parent_count(codec) - test.k,
+            "materialized GF16 did not zero the complete parent complement");
+    }
+#endif
     for (uint32_t i = 0; i < loss_count; ++i)
     {
         const uint32_t shard = missing[i];
@@ -214,6 +312,11 @@ void run_case(leo2_context* context, const Case& test, size_t case_index,
             test.bytes) == 0, "restored original mismatch");
         restored_bytes += test.bytes;
     }
+
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    verify_gf8_one_loss_receive_stage(
+        context, codec, test, original_input, new_recovery_output);
+#endif
 
     leo2_decode_plan_destroy(plan);
     leo2_codec_destroy(codec);

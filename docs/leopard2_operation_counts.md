@@ -126,6 +126,22 @@ The self-test fixes two useful schedule checks:
   before that zero-copy model is accepted.  The remaining 256 logical copies
   are the 8 systematic inputs staged for interpolation and the 248 requested
   parity outputs scattered to caller buffers.
+- GF8 high K=240, R=16 decode with original 0 missing: on qualified SSSE3 and
+  AVX2 backends, the incomplete parity and first-message blocks retain their
+  two exact-pruned T=16 staging workspaces.  The remaining full blocks provide
+  56 complete four-row receive groups that enter the first two inverse layers
+  directly.  The receive boundary copies 16 live rows and zeroes 16 absent
+  rows, removing 224 logical copy vectors (224 shard reads and 224 shard
+  writes) from the former copy-first schedule.  These are exact
+  boundary deltas, not an endorsement of the model's pre-existing absolute
+  decode copy total.  Scalar, NEON, exact-mask plans, and other unqualified
+  backends retain copy-first staging.
+- GF16 reports retain the deterministic copy-first receive boundary.  The
+  otherwise equivalent source-staging candidate was measured but did not meet
+  the production promotion threshold, so GF16 reports charge every selected
+  receive-row copy and report zero removed copy vectors.  Materialized decode
+  stages the full parent in one regular pass; tiled decode stages only live
+  tiles and skips completely empty later blocks.
 
 It also checks every full transform size from 1 through 65,536 against the
 closed form N log2(N) / 2, compares prefix schedules with independently built

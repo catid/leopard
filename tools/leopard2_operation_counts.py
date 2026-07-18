@@ -109,6 +109,155 @@ def verify_high_decode_no_copy_source(source: str, label: str) -> None:
         )
 
 
+def verify_high_decode_receive_fusion_source(source: str, label: str) -> None:
+    """Require mature Algorithm 5 input blocks to use source staging."""
+    compact = re.sub(r"\s+", "", source)
+    begin = compact.find("staticvoidIFFT_DIT_DecoderFromSources(")
+    end = compact.find("/*DecimationintimeFFT:", begin)
+    if begin < 0 or end < 0:
+        raise ModelError(
+            "{} no longer defines the Algorithm 5 source-boundary inverse "
+            "transform".format(label)
+        )
+    helper = compact[begin:end]
+    if "ops.ff8_ifft_butterfly4_out(" not in helper:
+        raise ModelError(
+            "{} no longer enters the GF8 out-of-place inverse boundary".format(
+                label
+            )
+        )
+    if "ops.kind==LEO2_BACKEND_SSSE3" not in helper or \
+            "ops.kind==LEO2_BACKEND_AVX2" not in helper or \
+            "!qualified_source_backend" not in helper:
+        raise ModelError(
+            "{} no longer confines GF8 receive fusion to qualified SIMD "
+            "backends".format(label)
+        )
+    materialized = compact.find(
+        "voidReedSolomonDecodeHighPrunedPlanned(constbackend::Ops&"
+    )
+    tiled = compact.find(
+        "voidReedSolomonDecodeHighTiledPrunedPlanned(constbackend::Ops&"
+    )
+    if materialized < 0 or tiled < 0:
+        raise ModelError("{} is missing a planned Algorithm 5 path".format(label))
+    materialized_end = compact.find(
+        "voidReedSolomonDecodeHighPlanned(", materialized
+    )
+    tiled_end = compact.find("voidReedSolomonDecodeHighTiledPlanned(", tiled)
+    if materialized_end < 0 or tiled_end < 0:
+        raise ModelError("{} has an unbounded Algorithm 5 source check".format(label))
+    for name, segment in (
+        ("materialized", compact[materialized:materialized_end]),
+        ("tiled", compact[tiled:tiled_end]),
+    ):
+        if "IFFT_DIT_DecoderFromSources(" not in segment:
+            raise ModelError(
+                "{} {} Algorithm 5 path restored copy-first receive staging".format(
+                    label, name
+                )
+            )
+        if "ExecutePrunedInverseTransformPlanAccumulate(" not in segment or \
+                "StageHighDecodeSources(" not in segment:
+            raise ModelError(
+                "{} {} Algorithm 5 path lost the exact-pruned sink union".format(
+                    label, name
+                )
+            )
+
+
+def verify_high_decode_gf16_copy_first_source(source: str, label: str) -> None:
+    """Reject promotion of the measured-below-threshold GF16 candidate."""
+    compact = re.sub(r"\s+", "", source)
+    begin = compact.find("staticvoidStageHighDecodeSources(")
+    end = compact.find("/*DecimationintimeFFT:", begin)
+    if begin < 0 or end < 0:
+        raise ModelError("{} is missing the GF16 staging helper".format(label))
+    segment = compact[begin:end]
+    if "ff16_ifft_butterfly4_out(" in segment:
+        raise ModelError(
+            "{} promoted the below-threshold GF16 source candidate".format(label)
+        )
+
+    materialized = compact.find(
+        "voidReedSolomonDecodeHighPrunedPlanned(constbackend::Ops&"
+    )
+    materialized_end = compact.find(
+        "voidReedSolomonDecodeHighPlanned(", materialized
+    )
+    if materialized < 0 or materialized_end < 0:
+        raise ModelError("{} is missing materialized Algorithm 5".format(label))
+    materialized_segment = compact[materialized:materialized_end]
+    stage = "StageHighDecodeSources(buffer_bytes,coordinate_data,work,n);"
+    loop = materialized_segment.find("for(unsignedblock=0;")
+    stage_at = materialized_segment.find(stage)
+    if stage_at < 0 or loop < 0 or stage_at > loop or \
+            materialized_segment.count("StageHighDecodeSources(") != 1:
+        raise ModelError(
+            "{} no longer stages materialized GF16 in one parent-wide pass".format(
+                label
+            )
+        )
+    if "IFFT_DIT_DecoderFromSources(" in materialized_segment:
+        raise ModelError(
+            "{} reopened per-block staging in materialized GF16".format(label)
+        )
+
+    tiled = compact.find(
+        "voidReedSolomonDecodeHighTiledPrunedPlanned(constbackend::Ops&"
+    )
+    tiled_end = compact.find("voidReedSolomonDecodeHighTiledPlanned(", tiled)
+    if tiled < 0 or tiled_end < 0:
+        raise ModelError("{} is missing tiled Algorithm 5".format(label))
+    tiled_segment = compact[tiled:tiled_end]
+    if "StageHighDecodeSources(buffer_bytes,coordinate_data,accumulator,t);" \
+            not in tiled_segment or \
+            "StageHighDecodeSources(buffer_bytes,coordinate_data+offset,tile,t);" \
+            not in tiled_segment:
+        raise ModelError(
+            "{} no longer retains per-tile GF16 copy-first staging".format(label)
+        )
+    if "ExecutePrunedInverseTransformPlanAccumulate(" not in tiled_segment:
+        raise ModelError(
+            "{} tiled GF16 path lost the exact-pruned sink".format(label)
+        )
+
+
+def verify_high_pruned_hook_registration(source: str, label: str) -> None:
+    """Require the GF16 parent-wide counter gate to execute with hooks."""
+    compact = re.sub(r"\s+", "", source)
+    begin = compact.find(
+        "add_executable(leopard2_high_pruned_stage_test"
+    )
+    end = compact.find(
+        "add_executable(leopard2_decode_low_acceptance_test", begin
+    )
+    if begin < 0 or end < 0:
+        raise ModelError(
+            "{} no longer registers the high-pruned stage counter target".format(
+                label
+            )
+        )
+    segment = compact[begin:end]
+    required = (
+        "target_compile_definitions(leopard2_high_pruned_stage_testPRIVATE"
+        "LEO2_ENABLE_TEST_HOOKS=1",
+        "LEO2_REQUIRE_HIGH_PRUNED_STAGE_HOOKS=1)",
+        "target_link_libraries(leopard2_high_pruned_stage_test"
+        "leopard_test_hooks)",
+        "add_test(NAMEleopard2_high_pruned_stageCOMMAND"
+        "leopard2_high_pruned_stage_test)",
+    )
+    if any(token not in segment for token in required):
+        raise ModelError(
+            "{} can compile out or bypass the high-pruned stage counters".format(
+                label
+            )
+        )
+    if "install(TARGETSleopard2_high_pruned_stage_test" in compact:
+        raise ModelError("{} installs a private hook executable".format(label))
+
+
 def verify_low_decode_weighted_fusion_source(source: str, label: str) -> None:
     """Require Algorithm 4's weighted reduction to use one mul-add pass."""
     compact = re.sub(r"\s+", "", source)
@@ -613,6 +762,7 @@ def model_high_decode(
     padded: int,
     shard_bytes: int,
     losses: Set[int],
+    field_name: str = "gf8",
 ) -> Schedule:
     if not losses:
         return Schedule(details={"no_op": True, "missing_originals": "none"})
@@ -627,17 +777,45 @@ def model_high_decode(
     schedule, data, selected_parities = _decode_base(
         k, r, parent, padded, "high", shard_bytes, losses
     )
-    # High decoder copies the weighted-input workspace without an initial
-    # locator multiplication.
-    schedule.copies += k
-    schedule.zero_fills += parent - k
+    # The mature Algorithm 5 input schedule consumes complete live blocks in
+    # four-row groups through the first two inverse layers.  A partial block
+    # owns an exact pruned input plan and is staged as a whole before that plan
+    # executes; source fusion must not be credited inside it.  An empty later
+    # block is skipped.  This is an execution-boundary change: butterfly
+    # counts are identical to the former stage-then-transform schedule.
+    receive_copy_vectors = 0
+    receive_zero_vectors = 0
+    receive_fused_groups = 0
+    receive_exact_pruned_blocks = 0
+    receive_skipped_blocks = 0
     prefixes: List[int] = []
     for offset in range(0, parent, padded):
         prefix = _block_prefix(data, offset, padded)
         prefixes.append(prefix)
+        live = {coordinate - offset for coordinate in data
+                if offset <= coordinate < offset + padded}
+        if not live and offset != 0:
+            receive_skipped_blocks += 1
+            continue
+        if padded <= 4 or field_name != "gf8":
+            receive_copy_vectors += len(live)
+            receive_zero_vectors += padded - len(live)
+        elif len(live) != padded:
+            receive_copy_vectors += len(live)
+            receive_zero_vectors += padded - len(live)
+            if live:
+                receive_exact_pruned_blocks += 1
+        else:
+            receive_fused_groups += padded // 4
         schedule.add_transform(
             ifft_prefix_butterflies(padded, prefix), _transform_layers(padded)
         )
+    # Keep the ISA-independent schedule totals on the original copy-first
+    # contract.  The source-boundary values below are a qualified
+    # SSSE3/AVX2 delta, not a backend-neutral replacement for those totals.
+    # A future backend-aware model can apply the delta to absolute traffic.
+    schedule.copies += k
+    schedule.zero_fills += parent - k
     reduction = (parent // padded - 1) * padded
     schedule.nontransform_xor_vectors += reduction
     schedule.add_transform(
@@ -665,6 +843,17 @@ def model_high_decode(
     schedule.fixed_multiply_vectors += len(losses)
     schedule.details.update({
         "block_input_prefixes": prefixes,
+        "receive_source_fused_radix4_groups": receive_fused_groups,
+        "receive_copy_vectors": receive_copy_vectors,
+        "receive_zero_vectors": receive_zero_vectors,
+        "receive_copy_vectors_removed": 4 * receive_fused_groups,
+        "receive_exact_pruned_staged_blocks": receive_exact_pruned_blocks,
+        "receive_skipped_empty_blocks": receive_skipped_blocks,
+        "receive_source_fusion_scope": (
+            "GF8 qualified SSSE3/AVX2 mature unpruned schedule delta"
+            if field_name == "gf8" else
+            "GF16 deterministic copy-first policy"
+        ),
         "syndrome_reduction_vectors": reduction,
         "evaluation_block_prefixes": evaluation_prefixes,
         "out_of_place_evaluator_first_layer": True,
@@ -908,7 +1097,7 @@ def build_report(args: argparse.Namespace) -> Dict[str, object]:
         schedule = model_low_encode(args.k, args.r, padded, args.shard_bytes, requested)
     elif path == "legacy_high_decode":
         schedule = model_high_decode(
-            args.k, args.r, parent, padded, args.shard_bytes, losses
+            args.k, args.r, parent, padded, args.shard_bytes, losses, args.field
         )
     elif path == "low_decode":
         schedule = model_low_decode(
@@ -1051,10 +1240,17 @@ def run_self_test(verbose: bool = True) -> None:
     checks += 3
 
     root = pathlib.Path(__file__).resolve().parent.parent
+    cmake_source = (root / "CMakeLists.txt").read_text(encoding="utf-8")
+    verify_high_pruned_hook_registration(cmake_source, "CMakeLists.txt")
+    checks += 1
     for filename in ("LeopardFF8.cpp", "LeopardFF16.cpp"):
         source = (root / filename).read_text(encoding="utf-8")
         verify_low_encode_no_copy_source(source, filename)
         verify_high_decode_no_copy_source(source, filename)
+        if filename == "LeopardFF8.cpp":
+            verify_high_decode_receive_fusion_source(source, filename)
+        else:
+            verify_high_decode_gf16_copy_first_source(source, filename)
         verify_low_decode_weighted_fusion_source(source, filename)
         try:
             verify_low_encode_no_copy_source(
@@ -1077,7 +1273,7 @@ def run_self_test(verbose: bool = True) -> None:
             pass
         else:
             raise AssertionError("whole-T copy mutation escaped source guard")
-        checks += 4
+        checks += 5
 
     direct = model_direct_repair(16, 8, 16, 16, "low", set(range(4)))
     assert direct.nontransform_xor_vectors == 60

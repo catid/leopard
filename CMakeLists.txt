@@ -1000,6 +1000,21 @@ if(LEO2_BUILD_TESTS)
     set_tests_properties(leopard2_high_pruned_legacy PROPERTIES
         ENVIRONMENT "OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
+    # Preserve the production-library compatibility gate above, and execute
+    # the same matrix once against the private hook archive so the
+    # parent-wide GF16 receive-stage counters are not compiled out.  The hook
+    # archive is never installed and cannot contaminate the production target.
+    add_executable(leopard2_high_pruned_stage_test
+        tests/leopard2/test_high_pruned_legacy.cpp)
+    target_compile_definitions(leopard2_high_pruned_stage_test PRIVATE
+        LEO2_ENABLE_TEST_HOOKS=1
+        LEO2_REQUIRE_HIGH_PRUNED_STAGE_HOOKS=1)
+    target_link_libraries(leopard2_high_pruned_stage_test leopard_test_hooks)
+    add_test(NAME leopard2_high_pruned_stage
+        COMMAND leopard2_high_pruned_stage_test)
+    set_tests_properties(leopard2_high_pruned_stage PROPERTIES
+        ENVIRONMENT "OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+
     add_executable(leopard2_decode_low_acceptance_test
         tests/leopard2/direct_oracle.cpp
         tests/leopard2/test_decode_low_acceptance.cpp)
