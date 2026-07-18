@@ -539,6 +539,8 @@ class CMakeProductionGraph(object):
         ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_BACKEND_FORCE_AVX2=1")),
         ("leopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_BACKEND_FORCE_AVX512=1")),
+        ("leopard", "target_compile_definitions", (
             "PRIVATE", "NO_LEO_HAS_FF8=1")),
         ("leopard", "target_compile_definitions", (
             "PRIVATE", "NO_LEO_HAS_FF16=1")),
@@ -598,10 +600,11 @@ class CMakeProductionGraph(object):
          "${CMAKE_INSTALL_LIBDIR}/cmake/leopard", "CACHE", "STRING",
          "Install directory for Leopard CMake package files"),
         ("LEO2_BACKEND_VARIANT", "auto", "CACHE", "STRING",
-         "Diagnostic backend variant: auto, scalar, ssse3, or avx2"),
+         "Diagnostic backend variant: auto, scalar, ssse3, avx2, or avx512"),
         ("LEO2_BACKEND_VARIANT", "${LEO2_BACKEND_VARIANT_NORMALIZED}",
          "CACHE", "STRING",
-         "Diagnostic backend variant: auto, scalar, ssse3, or avx2", "FORCE"),
+         "Diagnostic backend variant: auto, scalar, ssse3, avx2, or avx512",
+         "FORCE"),
     }
     _approved_package_configure = (
         "cmake/leopardConfig.cmake.in",
@@ -754,14 +757,14 @@ class CMakeProductionGraph(object):
             "Require the strict x86-64 portable-ISA release audit", "OFF"))),
         ("protected", (
             "LEO2_BACKEND_VARIANT", "auto", "CACHE", "STRING",
-            "Diagnostic backend variant: auto, scalar, ssse3, or avx2")),
+            "Diagnostic backend variant: auto, scalar, ssse3, avx2, or avx512")),
         ("trusted", ("string", (
             "TOLOWER", "${LEO2_BACKEND_VARIANT}",
             "LEO2_BACKEND_VARIANT_NORMALIZED"))),
         ("protected", (
             "LEO2_BACKEND_VARIANT", "${LEO2_BACKEND_VARIANT_NORMALIZED}",
             "CACHE", "STRING",
-            "Diagnostic backend variant: auto, scalar, ssse3, or avx2",
+            "Diagnostic backend variant: auto, scalar, ssse3, avx2, or avx512",
             "FORCE")),
         ("guarded", ("enable_language", ("CUDA",))),
         ("protected", ("CMAKE_BUILD_TYPE", "Release")),
@@ -859,6 +862,8 @@ class CMakeProductionGraph(object):
             "PRIVATE", "LEO2_BACKEND_FORCE_SSSE3=1"))),
         ("mutation", ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_BACKEND_FORCE_AVX2=1"))),
+        ("mutation", ("leopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_BACKEND_FORCE_AVX512=1"))),
         ("locator-provenance", ("find_program", _locator_git_find)),
         ("locator-provenance", (
             "execute_process", _locator_git_revision)),
@@ -914,7 +919,7 @@ class CMakeProductionGraph(object):
     _approved_nontarget_property_commands = {
         ("set_property", (
             "CACHE", "LEO2_BACKEND_VARIANT", "PROPERTY", "STRINGS",
-            "auto", "scalar", "ssse3", "avx2")),
+            "auto", "scalar", "ssse3", "avx2", "avx512")),
     }
 
     def __init__(self, text, processor="AMD64", pointer_size="8",
@@ -1158,11 +1163,13 @@ class CMakeProductionGraph(object):
             ("PRIVATE", "LEO2_BACKEND_FORCE_SCALAR=1"): "scalar",
             ("PRIVATE", "LEO2_BACKEND_FORCE_SSSE3=1"): "ssse3",
             ("PRIVATE", "LEO2_BACKEND_FORCE_AVX2=1"): "avx2",
+            ("PRIVATE", "LEO2_BACKEND_FORCE_AVX512=1"): "avx512",
         }
         if specification in forced_variants:
             auto = cls._backend_variant_comparison("auto")
             scalar = cls._backend_variant_comparison("scalar")
             ssse3 = cls._backend_variant_comparison("ssse3")
+            avx2 = cls._backend_variant_comparison("avx2")
             guard = bool_not(auto)
             variant = forced_variants[specification]
             if variant == "scalar":
@@ -1170,9 +1177,12 @@ class CMakeProductionGraph(object):
             guard = bool_and(guard, bool_not(scalar))
             if variant == "ssse3":
                 return bool_and(guard, ssse3)
+            guard = bool_and(guard, bool_not(ssse3))
+            if variant == "avx2":
+                return bool_and(guard, avx2)
             return bool_and(
-                guard, bool_not(ssse3),
-                cls._backend_variant_comparison("avx2"))
+                guard, bool_not(avx2),
+                cls._backend_variant_comparison("avx512"))
         if (target == "leopard2_backend_avx2" or
                 specification == ("PRIVATE", "LEO2_HAVE_AVX2_BACKEND=1")):
             return bool_atom("probe:LEO2_FLAG_ARCH_AVX2")
@@ -2453,7 +2463,8 @@ class CMakeProductionGraph(object):
             if specification in {
                     ("PRIVATE", "LEO2_BACKEND_FORCE_SCALAR=1"),
                     ("PRIVATE", "LEO2_BACKEND_FORCE_SSSE3=1"),
-                    ("PRIVATE", "LEO2_BACKEND_FORCE_AVX2=1")}:
+                    ("PRIVATE", "LEO2_BACKEND_FORCE_AVX2=1"),
+                    ("PRIVATE", "LEO2_BACKEND_FORCE_AVX512=1")}:
                 allowed_reasons = (
                     "unsupported comparison of symbolic CMake boolean",)
             if (command == "target_link_libraries" and specification in {
@@ -5216,9 +5227,9 @@ endif()""",
     "${CMAKE_INSTALL_LIBDIR}/cmake/leopard"
     CACHE STRING "Install directory for Leopard CMake package files")""",
             """set(LEO2_BACKEND_VARIANT "auto" CACHE STRING
-    "Diagnostic backend variant: auto, scalar, ssse3, or avx2")""",
+    "Diagnostic backend variant: auto, scalar, ssse3, avx2, or avx512")""",
             """set(LEO2_BACKEND_VARIANT "${LEO2_BACKEND_VARIANT_NORMALIZED}" CACHE STRING
-    "Diagnostic backend variant: auto, scalar, ssse3, or avx2" FORCE)""",
+    "Diagnostic backend variant: auto, scalar, ssse3, avx2, or avx512" FORCE)""",
         )
         for command in commands:
             with self.subTest(variable=command.split("(", 1)[1].split()[0]):

@@ -79,17 +79,8 @@ leopard::backend::TestSetupFault fault_for(
 
 bool runtime_can_select(leo2_backend backend, leo2_backend default_backend)
 {
-    const leopard::backend::X86Features features =
-        leopard::backend::DetectX86Features();
-    if (backend == LEO2_BACKEND_SCALAR)
-        return default_backend >= LEO2_BACKEND_SCALAR;
-    if (backend == LEO2_BACKEND_SSSE3)
-        return features.ssse3 && default_backend >= LEO2_BACKEND_SSSE3;
-    if (backend == LEO2_BACKEND_AVX2)
-        return features.avx2 && default_backend >= LEO2_BACKEND_AVX2;
-    if (backend == LEO2_BACKEND_AVX512)
-        return features.avx512;
-    return false;
+    (void)default_backend;
+    return leopard::backend::TestBackendCanQualifyForHost(backend);
 }
 
 void check_table_accounting(
@@ -129,6 +120,19 @@ void run_failure_case(leo2_backend backend, const char* stage)
     const leo2_backend default_backend = TestDefaultBackendForHost();
     require(default_backend != LEO2_BACKEND_AUTO,
         "host has no selectable process default");
+    if (default_backend == LEO2_BACKEND_AVX512 &&
+        backend == LEO2_BACKEND_AVX2 &&
+        std::strcmp(stage, "kat") != 0)
+    {
+        // The AVX-512VL table deliberately reuses the AVX2 field tables.
+        // In a forced-AVX512 process an AVX2 allocation fault is therefore a
+        // startup dependency failure attributed to the selected AVX-512
+        // backend, not a lazy AVX2 qualification failure.  AUTO/AVX2 builds
+        // retain the dedicated AVX2 allocation-failure coverage.
+        std::printf("Backend failure case skipped: AVX2 tables are an "
+            "AVX-512 startup dependency\n");
+        return;
+    }
     if (!runtime_can_select(backend, default_backend))
     {
         std::printf("Backend failure case skipped: backend unavailable on host\n");

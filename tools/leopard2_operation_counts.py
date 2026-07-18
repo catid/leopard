@@ -41,7 +41,7 @@ PATHS = (
 FIELDS = ("gf8", "gf16")
 PROFILES = ("high", "low")
 DECODE_WORKSPACES = ("materialized", "tiled")
-BACKENDS = ("scalar", "ssse3", "avx2", "neon")
+BACKENDS = ("scalar", "ssse3", "avx2", "avx512", "neon")
 DECODE_SELECTIONS = ("path", "auto", "specialized")
 
 
@@ -135,8 +135,13 @@ def verify_high_decode_receive_fusion_source(source: str, label: str) -> None:
                 label
             )
         )
-    if "ops.kind==LEO2_BACKEND_SSSE3" not in helper or \
-            "ops.kind==LEO2_BACKEND_AVX2" not in helper or \
+    qualified_backends = (
+        "constboolqualified_source_backend="
+        "ops.kind==LEO2_BACKEND_SSSE3||"
+        "ops.kind==LEO2_BACKEND_AVX2||"
+        "ops.kind==LEO2_BACKEND_AVX512;"
+    )
+    if qualified_backends not in helper or \
             "!qualified_source_backend" not in helper:
         raise ModelError(
             "{} no longer confines GF8 receive fusion to qualified SIMD "
@@ -188,7 +193,8 @@ def verify_high_decode_weighted_locator_source(source: str, label: str) -> None:
         )
     helper = compact[begin:end]
     required = (
-        "ops.kind==LEO2_BACKEND_AVX2",
+        "(ops.kind==LEO2_BACKEND_AVX2||"
+        "ops.kind==LEO2_BACKEND_AVX512)",
         "ops.ff8_weighted_ifft_butterfly4!=NULL",
         "m>=64",
         "bytes>=16U*1024U",
@@ -441,6 +447,62 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
         )
 
 
+def verify_decode_policy_source(source: str, label: str) -> None:
+    """Bind the selector mirror to backend-qualified production predicates."""
+    compact = re.sub(r"\s+", "", source)
+    balanced_begin = compact.find(
+        "staticinlineboolShouldUseBalancedGenericDecode("
+    )
+    materialized_begin = compact.find(
+        "staticinlineboolShouldUseMaterializedHighDecode("
+    )
+    geometry_begin = compact.find(
+        "staticinlineboolIsDecodeByteGeometryConsistent("
+    )
+    selector_begin = compact.find("staticinlineboolSelectDecodePath(")
+    selector_end = compact.find(
+        "staticinlineconstchar*DecodePathName(", selector_begin
+    )
+    if min(balanced_begin, materialized_begin, geometry_begin,
+           selector_begin, selector_end) < 0 or \
+            not (balanced_begin < materialized_begin < geometry_begin):
+        raise ModelError("{} is missing a decode policy boundary".format(label))
+
+    balanced = compact[balanced_begin:materialized_begin]
+    materialized = compact[materialized_begin:geometry_begin]
+    selector = compact[selector_begin:selector_end]
+    balanced_backend = (
+        "backend==LEO2_BACKEND_SCALAR||"
+        "backend==LEO2_BACKEND_SSSE3||"
+        "backend==LEO2_BACKEND_AVX2||"
+        "backend==LEO2_BACKEND_AVX512);"
+    )
+    materialized_backend = (
+        "if(backend==LEO2_BACKEND_AVX2||"
+        "backend==LEO2_BACKEND_AVX512)"
+        "returnrounded_shard_bytes>=24*1024;"
+    )
+    batch_backend = (
+        "if(input.multi_item_batch&&"
+        "(input.backend==LEO2_BACKEND_AVX2||"
+        "input.backend==LEO2_BACKEND_AVX512)){"
+    )
+    if balanced_backend not in balanced:
+        raise ModelError(
+            "{} balanced decode backends diverged from schema v3".format(label)
+        )
+    if materialized_backend not in materialized:
+        raise ModelError(
+            "{} materialized decode backends diverged from schema v3".format(
+                label
+            )
+        )
+    if batch_backend not in selector:
+        raise ModelError(
+            "{} batch decode backends diverged from schema v3".format(label)
+        )
+
+
 def verify_decode_fusion_sources(
     core_source: str,
     ff8_source: str,
@@ -459,7 +521,8 @@ def verify_decode_fusion_sources(
         "returncodec->field==LEO2_FIELD_GF8&&"
         "aligned_prefix_bytes>=4096&&"
         "(codec->context->backend==LEO2_BACKEND_SSSE3||"
-        "codec->context->backend==LEO2_BACKEND_AVX2);",
+        "codec->context->backend==LEO2_BACKEND_AVX2||"
+        "codec->context->backend==LEO2_BACKEND_AVX512);",
         "returncodec->profile==LEO2_PROFILE_LOW_V1&&"
         "aligned_prefix_bytes!=0;",
         "constboolfuse_generic_reveal_scatter=use_generic&&"
@@ -485,7 +548,8 @@ def verify_decode_fusion_sources(
             "leopard2.cpp decode reveal-fusion policy diverged from schema v3"
         )
     ff8_tokens = (
-        "if(ops.kind==LEO2_BACKEND_AVX2)returnbuffer_bytes>=1024;",
+        "if(ops.kind==LEO2_BACKEND_AVX2||"
+        "ops.kind==LEO2_BACKEND_AVX512)returnbuffer_bytes>=1024;",
         "if(ops.kind==LEO2_BACKEND_SSSE3)returnbuffer_bytes>=65536;",
         "IFFT_DIT_DecoderImpl(ops,bytes,m_truncated,work,m,skewLUT,"
         "xor_result,1);",
@@ -503,10 +567,14 @@ def verify_decode_fusion_sources(
             "LeopardFF8.cpp pruned syndrome-sink wiring diverged from schema v3"
         )
     ff16_tokens = (
-        "returnbytes==64||(bytes==128&&ops.kind==LEO2_BACKEND_AVX2);",
-        "returnops.kind==LEO2_BACKEND_AVX2&&buffer_bytes>=1024;",
+        "returnbytes==64||(bytes==128&&"
+        "(ops.kind==LEO2_BACKEND_AVX2||"
+        "ops.kind==LEO2_BACKEND_AVX512));",
+        "return(ops.kind==LEO2_BACKEND_AVX2||"
+        "ops.kind==LEO2_BACKEND_AVX512)&&buffer_bytes>=1024;",
         "if(ops.kind==LEO2_BACKEND_SSSE3||"
-        "ops.kind==LEO2_BACKEND_AVX2){"
+        "ops.kind==LEO2_BACKEND_AVX2||"
+        "ops.kind==LEO2_BACKEND_AVX512){"
         "returnIFFT_DIT_DecoderImpl<true>(",
     )
     if any(token not in ff16 for token in ff16_tokens):
@@ -1157,13 +1225,13 @@ def select_decode_execution(
         profile == "high" and field_name == "gf8" and
         k == 128 and r == 128 and padded == 128 and parent == 256 and
         loss_count == 128 and 256 <= rounded <= 1024 * 1024 and
-        backend in ("scalar", "ssse3", "avx2")
+        backend in ("scalar", "ssse3", "avx2", "avx512")
     )
     measured_materialized = (
         profile == "high" and field_name == "gf8" and
         k == 224 and r == 32 and padded == 32 and parent == 256 and
         0 < loss_count <= 8 and rounded <= 64 * 1024 and
-        ((backend == "avx2" and rounded >= 24 * 1024) or
+        ((backend in ("avx2", "avx512") and rounded >= 24 * 1024) or
          (backend == "ssse3" and rounded >= 32 * 1024))
     )
     matching = (1 if balanced else 0) | (2 if measured_materialized else 0)
@@ -1184,7 +1252,7 @@ def select_decode_execution(
             "generic", "balanced_generic", matching, materialized_slots
         )
     if measured_materialized:
-        if multi_item_batch and backend == "avx2":
+        if multi_item_batch and backend in ("avx2", "avx512"):
             return DecodeSelection(
                 "tiled", "measured_batch_tiled", matching, tiled_slots
             )
@@ -1222,7 +1290,7 @@ def select_codec_transform_execution(
         profile == "high" and field_name == "gf8" and
         k == 224 and r == 32 and padded == 32 and parent == 256 and
         rounded <= 64 * 1024 and
-        ((backend == "avx2" and rounded >= 24 * 1024) or
+        ((backend in ("avx2", "avx512") and rounded >= 24 * 1024) or
          (backend == "ssse3" and rounded >= 32 * 1024))
     )
     matching = 2 if measured_materialized else 0
@@ -1246,7 +1314,7 @@ def select_codec_transform_execution(
 def _gf16_mature_syndrome_fuses(
     padded: int, backend: str, pass_bytes: int
 ) -> bool:
-    if backend not in ("ssse3", "avx2"):
+    if backend not in ("ssse3", "avx2", "avx512"):
         return False
     # An odd transform depth ends in a two-way layer, which the qualified
     # vector decoder always accumulates.  Even depths end in a four-way layer;
@@ -1255,7 +1323,7 @@ def _gf16_mature_syndrome_fuses(
         return True
     if pass_bytes == 64:
         return False
-    if pass_bytes == 128 and backend == "avx2":
+    if pass_bytes == 128 and backend in ("avx2", "avx512"):
         return False
     return True
 
@@ -1263,7 +1331,7 @@ def _gf16_mature_syndrome_fuses(
 def _pruned_syndrome_fuses(
     field_name: str, backend: str, pass_bytes: int
 ) -> bool:
-    if backend == "avx2":
+    if backend in ("avx2", "avx512"):
         return pass_bytes >= 1024
     return field_name == "gf8" and backend == "ssse3" and pass_bytes >= 65536
 
@@ -1305,7 +1373,7 @@ def apply_decode_backend_accounting(
         aligned != 0 and
         (use_low_specialized or
          (use_generic and field_name == "gf8" and aligned >= 4096 and
-          backend in ("ssse3", "avx2")))
+          backend in ("ssse3", "avx2", "avx512")))
     )
 
     if use_generic or use_low_specialized:
@@ -1540,7 +1608,8 @@ def model_generic_decode(
     schedule.decode_output_gather_payload_bytes = len(losses) * shard_bytes
     schedule.decode_output_gather_classification = "estimated_upper_bound"
     schedule.decode_output_gather_note = (
-        "Copy-first backend-neutral baseline. Qualified GF8 SSSE3/AVX2 "
+        "Copy-first backend-neutral baseline. Qualified GF8 "
+        "SSSE3/AVX2/AVX512 "
         "generic reveal fusion can remove the aligned-prefix gather."
     )
     schedule.details.update({
@@ -1663,7 +1732,8 @@ def model_high_decode(
         )
     # Keep the ISA-independent schedule totals on the original copy-first
     # contract.  The source-boundary values below are a qualified
-    # SSSE3/AVX2 delta, not a backend-neutral replacement for those totals.
+    # SSSE3/AVX2/AVX512 delta, not a backend-neutral replacement for those
+    # totals.
     # A future backend-aware model can apply the delta to absolute traffic.
     schedule.copies += k
     schedule.zero_fills += parent - k
@@ -1706,18 +1776,19 @@ def model_high_decode(
         "receive_skipped_empty_blocks": receive_skipped_blocks,
         "active_later_syndrome_blocks": active_later_blocks,
         "receive_source_fusion_scope": (
-            "GF8 qualified SSSE3/AVX2 mature unpruned schedule delta"
+            "GF8 qualified SSSE3/AVX2/AVX512 mature unpruned schedule delta"
             if field_name == "gf8" else
             "GF16 deterministic copy-first policy"
         ),
         "syndrome_reduction_vectors": reduction,
         "locator_scale_vectors": len(selected_parities),
         "locator_weighted_fusion_scope": (
-            "qualified GF8 AVX2 delta only: T>=64, live_count>=ceil(T/2), "
+            "qualified GF8 AVX2/AVX512 delta only: T>=64, "
+            "live_count>=ceil(T/2), "
             "and each kernel pass in [16 KiB, 256 KiB]"
         ),
         "locator_weighted_live_scan_scope": (
-            "statically qualified GF8 AVX2 passes scan receive pointers "
+            "statically qualified GF8 AVX2/AVX512 passes scan receive pointers "
             "until ceil(T/2) live rows are found; sparse fallback scans all T"
         ),
         "locator_weighted_fusion_applied_to_isa_independent_totals": False,
@@ -2419,7 +2490,7 @@ def run_self_test(verbose: bool = True) -> None:
     assert high_decode.copies == 240
     assert high_decode.decode_output_gather_payload_bytes == 1024
     assert high_decode.details["locator_weighted_live_scan_scope"] == (
-        "statically qualified GF8 AVX2 passes scan receive pointers "
+        "statically qualified GF8 AVX2/AVX512 passes scan receive pointers "
         "until ceil(T/2) live rows are found; sparse fallback scans all T"
     )
     low_decode_ragged = model_low_decode(8, 248, 256, 8, 65, {0, 1})
@@ -2522,6 +2593,33 @@ def run_self_test(verbose: bool = True) -> None:
     else:
         raise AssertionError("direct decode scratch mutation escaped source guard")
     checks += 2
+    policy_source = (root / "Leopard2Dispatch.h").read_text(encoding="utf-8")
+    verify_decode_policy_source(policy_source, "Leopard2Dispatch.h")
+    policy_mutations = (
+        (
+            "backend == LEO2_BACKEND_AVX2 ||\n"
+            "         backend == LEO2_BACKEND_AVX512",
+            "backend == LEO2_BACKEND_AVX2",
+        ),
+        (
+            "input.backend == LEO2_BACKEND_AVX2 ||\n"
+            "             input.backend == LEO2_BACKEND_AVX512",
+            "input.backend == LEO2_BACKEND_AVX2",
+        ),
+    )
+    for old, new in policy_mutations:
+        mutated = policy_source.replace(old, new, 1)
+        if mutated == policy_source:
+            raise AssertionError("decode policy mutation did not apply")
+        try:
+            verify_decode_policy_source(
+                mutated, "Leopard2Dispatch.h backend mutation"
+            )
+        except ModelError:
+            pass
+        else:
+            raise AssertionError("decode policy mutation escaped source guard")
+    checks += 1 + len(policy_mutations)
     ff8_source = (root / "LeopardFF8.cpp").read_text(encoding="utf-8")
     ff16_source = (root / "LeopardFF16.cpp").read_text(encoding="utf-8")
     verify_decode_fusion_sources(core_source, ff8_source, ff16_source)

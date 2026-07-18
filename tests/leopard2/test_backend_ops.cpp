@@ -317,6 +317,24 @@ void verify_expected_backend(leo2_backend backend)
         throw std::runtime_error("invalid expected backend");
 }
 
+void verify_forced_avx512_qualification_cap()
+{
+    const char* expected = std::getenv("LEO2_EXPECT_BACKEND");
+    if (!expected || expected[0] == '\0')
+        return;
+    const bool forced_lower = std::strcmp(expected, "scalar") == 0 ||
+        std::strcmp(expected, "ssse3") == 0 ||
+        std::strcmp(expected, "avx2") == 0;
+    const leopard::backend::Ops* avx512 =
+        leopard::backend::GetQualifiedOps(LEO2_BACKEND_AVX512);
+    if (forced_lower)
+        require(avx512 == NULL,
+            "lower forced variant exposed explicit AVX-512");
+    else if (std::strcmp(expected, "avx512") == 0)
+        require(avx512 != NULL,
+            "forced AVX-512 variant did not qualify its selected table");
+}
+
 } // namespace
 
 int main()
@@ -374,6 +392,7 @@ int main()
         require(leo2_context_backend(context) == execution,
             "public introspection differs from effective execution backend");
         verify_expected_backend(execution);
+        verify_forced_avx512_qualification_cap();
         leo2_context_destroy(context);
 
         test_vector_xor_count_tail();

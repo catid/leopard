@@ -163,6 +163,17 @@ class OperationCountTests(unittest.TestCase):
             COUNTS.verify_high_decode_receive_fusion_source(
                 mutated_decoder, filename + " decoder-call mutation"
             )
+        mutated_backend = source.replace(
+            "        ops.kind == LEO2_BACKEND_AVX2 ||\n"
+            "        ops.kind == LEO2_BACKEND_AVX512;",
+            "        ops.kind == LEO2_BACKEND_AVX2;",
+            1,
+        )
+        self.assertNotEqual(mutated_backend, source)
+        with self.assertRaises(COUNTS.ModelError):
+            COUNTS.verify_high_decode_receive_fusion_source(
+                mutated_backend, filename + " backend mutation"
+            )
         mutated_sink = source.replace(
             "ExecutePrunedInverseTransformPlanAccumulate(",
             "ExecutePrunedInverseTransformPlanAccumulateRemoved(",
@@ -261,6 +272,44 @@ class OperationCountTests(unittest.TestCase):
             ),
             (
                 core.replace(
+                    "         codec->context->backend == "
+                    "LEO2_BACKEND_AVX2 ||\n"
+                    "         codec->context->backend == "
+                    "LEO2_BACKEND_AVX512",
+                    "         codec->context->backend == "
+                    "LEO2_BACKEND_AVX2",
+                    1,
+                ),
+                ff8,
+                ff16,
+                "generic reveal AVX512 qualification",
+            ),
+            (
+                core,
+                ff8.replace(
+                    "    if (ops.kind == LEO2_BACKEND_AVX2 ||\n"
+                    "        ops.kind == LEO2_BACKEND_AVX512)\n"
+                    "        return buffer_bytes >= 1024;",
+                    "    if (ops.kind == LEO2_BACKEND_AVX2)\n"
+                    "        return buffer_bytes >= 1024;",
+                    1,
+                ),
+                ff16,
+                "GF8 pruned sink AVX512 qualification",
+            ),
+            (
+                core,
+                ff8,
+                ff16.replace(
+                    "         (ops.kind == LEO2_BACKEND_AVX2 ||\n"
+                    "          ops.kind == LEO2_BACKEND_AVX512));",
+                    "         ops.kind == LEO2_BACKEND_AVX2);",
+                    1,
+                ),
+                "GF16 compact AVX512 qualification",
+            ),
+            (
+                core.replace(
                     "const bool reveal_aligned_outputs_in_place =\n"
                     "        !(fuse_generic_reveal_scatter || "
                     "fuse_low_reveal_scatter);",
@@ -326,18 +375,21 @@ class OperationCountTests(unittest.TestCase):
                     )
 
     def test_decode_selection_matches_promoted_boundaries(self) -> None:
-        balanced = build_decode_report(
-            k=128, r=128, loss_count=128, shard_bytes=256,
-        )
-        self.assertEqual(
-            balanced["selection"],
-            {
-                "path": "generic",
-                "rule": "balanced_generic",
-                "matching_auto_rules": 1,
-                "required_work_slots": 256,
-            },
-        )
+        for backend in ("scalar", "ssse3", "avx2", "avx512"):
+            with self.subTest(balanced_backend=backend):
+                balanced = build_decode_report(
+                    k=128, r=128, loss_count=128, shard_bytes=256,
+                    backend=backend,
+                )
+                self.assertEqual(
+                    balanced["selection"],
+                    {
+                        "path": "generic",
+                        "rule": "balanced_generic",
+                        "matching_auto_rules": 1,
+                        "required_work_slots": 256,
+                    },
+                )
         below_balanced = build_decode_report(
             k=128, r=128, loss_count=128, shard_bytes=192,
         )
@@ -386,6 +438,15 @@ class OperationCountTests(unittest.TestCase):
             (batch["selection"]["path"], batch["selection"]["rule"]),
             ("tiled", "measured_batch_tiled"),
         )
+        avx512_batch = build_decode_report(
+            k=224, r=32, loss_count=8, shard_bytes=32 * 1024,
+            backend="avx512", multi_item_batch=True,
+        )
+        self.assertEqual(
+            (avx512_batch["selection"]["path"],
+             avx512_batch["selection"]["rule"]),
+            ("tiled", "measured_batch_tiled"),
+        )
         below_materialized = build_decode_report(
             k=224, r=32, loss_count=8, shard_bytes=16 * 1024,
             backend="avx2",
@@ -396,6 +457,7 @@ class OperationCountTests(unittest.TestCase):
             ("tiled", "workspace_tiled"),
         )
         for backend, threshold in (("avx2", 24 * 1024),
+                                   ("avx512", 24 * 1024),
                                    ("ssse3", 32 * 1024)):
             with self.subTest(backend=backend):
                 below = build_decode_report(
@@ -479,6 +541,17 @@ class OperationCountTests(unittest.TestCase):
         self.assertEqual(
             fused["decode_reveal_scatter_payload_bytes"]["value"], 0
         )
+        avx512_fused = build_decode_report(
+            path="generic_decode", profile="high", k=240, r=16,
+            loss_count=2, shard_bytes=4096, backend="avx512",
+            decode_selection="path",
+        )["metrics"]
+        for metric in (
+            "decode_reveal_direct_payload_bytes",
+            "decode_reveal_inplace_temporary_payload_bytes",
+            "decode_reveal_scatter_payload_bytes",
+        ):
+            self.assertEqual(avx512_fused[metric], fused[metric])
 
         ragged = build_decode_report(
             path="generic_decode", profile="high", k=240, r=16,
@@ -596,6 +669,15 @@ class OperationCountTests(unittest.TestCase):
         self.assertEqual(
             scalar["decode_syndrome_materialized_xor_payload_bytes"]["value"],
             4 * 256 * 192,
+        )
+        avx512 = metrics(192, "avx512")
+        self.assertEqual(
+            avx512["decode_syndrome_fused_accumulation_payload_bytes"],
+            split["decode_syndrome_fused_accumulation_payload_bytes"],
+        )
+        self.assertEqual(
+            avx512["decode_syndrome_materialized_xor_payload_bytes"],
+            split["decode_syndrome_materialized_xor_payload_bytes"],
         )
 
     def test_sparse_requested_parity_reduces_low_work(self) -> None:
@@ -752,6 +834,30 @@ class OperationCountTests(unittest.TestCase):
             self.assertNotEqual(mutated, source)
             with self.assertRaises(COUNTS.ModelError):
                 COUNTS.verify_decode_scratch_source(mutated, filename + " mutation")
+
+    def test_decode_policy_source_guard_rejects_backend_mutations(self) -> None:
+        filename = "Leopard2Dispatch.h"
+        source = (ROOT / filename).read_text(encoding="utf-8")
+        COUNTS.verify_decode_policy_source(source, filename)
+        mutations = (
+            (
+                "backend == LEO2_BACKEND_AVX2 ||\n"
+                "         backend == LEO2_BACKEND_AVX512",
+                "backend == LEO2_BACKEND_AVX2",
+            ),
+            (
+                "input.backend == LEO2_BACKEND_AVX2 ||\n"
+                "             input.backend == LEO2_BACKEND_AVX512",
+                "input.backend == LEO2_BACKEND_AVX2",
+            ),
+        )
+        for old, new in mutations:
+            mutated = source.replace(old, new, 1)
+            self.assertNotEqual(mutated, source)
+            with self.assertRaises(COUNTS.ModelError):
+                COUNTS.verify_decode_policy_source(
+                    mutated, filename + " backend mutation"
+                )
 
     def test_json_and_csv_are_deterministic(self) -> None:
         command = [

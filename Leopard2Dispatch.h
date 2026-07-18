@@ -294,7 +294,9 @@ static inline bool SelectDecodePath(
     }
     if (measured_materialized)
     {
-        if (input.multi_item_batch && input.backend == LEO2_BACKEND_AVX2)
+        if (input.multi_item_batch &&
+            (input.backend == LEO2_BACKEND_AVX2 ||
+             input.backend == LEO2_BACKEND_AVX512))
         {
             selection.path = kDecodePathTiled;
             selection.rule = kDecodeRuleMeasuredBatchTiled;

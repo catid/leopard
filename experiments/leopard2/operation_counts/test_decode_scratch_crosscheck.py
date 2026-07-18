@@ -224,7 +224,8 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
         if observed:
             auto_rows += 1
             require(
-                str(row["backend"]) in ("scalar", "ssse3", "avx2", "neon"),
+                str(row["backend"]) in
+                ("scalar", "ssse3", "avx2", "avx512", "neon"),
                 name + " did not record the selected production backend",
             )
         require(str(row["selected_rule"]) and str(row["scratch_rule"]) and

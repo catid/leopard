@@ -371,6 +371,7 @@ bool TestSetupFaultPending();
 unsigned TestSetupFaultConsumptions();
 bool TestShouldFailAllocation(leo2_backend backend, bool ff16);
 leo2_backend TestDefaultBackendForHost();
+bool TestBackendCanQualifyForHost(leo2_backend backend);
 bool TestGetBackendState(leo2_backend backend, TestBackendState* state);
 
 void TestGetScalarTableState(TestBackendState* state);

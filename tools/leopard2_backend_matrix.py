@@ -25,7 +25,7 @@ from pathlib import Path
 
 
 SCHEMA = "leopard2-backend-matrix/v1"
-VARIANTS = ("auto", "scalar", "ssse3", "avx2")
+VARIANTS = ("auto", "scalar", "ssse3", "avx2", "avx512")
 COMPARE_TESTS = (
     "field_options",
     "direct_oracle",
@@ -69,7 +69,7 @@ COMPARE_TESTS = (
 # variant without requiring identical stdout.
 RUN_ONLY_TESTS = ("pruned_transform",)
 RUN_TESTS = COMPARE_TESTS + RUN_ONLY_TESTS
-BACKEND_FAILURE_TESTS = (
+BASE_BACKEND_FAILURE_TESTS = (
     "leopard2_backend_failure_scalar_ff8_allocation",
     "leopard2_backend_failure_scalar_ff16_allocation",
     "leopard2_backend_failure_scalar_kat",
@@ -79,6 +79,14 @@ BACKEND_FAILURE_TESTS = (
     "leopard2_backend_failure_avx2_ff8_allocation",
     "leopard2_backend_failure_avx2_ff16_allocation",
     "leopard2_backend_failure_avx2_kat",
+)
+AVX512_BACKEND_FAILURE_TESTS = (
+    "leopard2_backend_failure_avx512_ff8_allocation",
+    "leopard2_backend_failure_avx512_ff16_allocation",
+    "leopard2_backend_failure_avx512_kat",
+)
+BACKEND_FAILURE_TESTS = (
+    BASE_BACKEND_FAILURE_TESTS + AVX512_BACKEND_FAILURE_TESTS
 )
 BUILD_CACHE_KEYS = (
     "CMAKE_BUILD_TYPE", "CMAKE_GENERATOR",
@@ -91,21 +99,22 @@ BUILD_CACHE_KEYS = (
 )
 
 EXPECTED_COMPILE_SOURCE_COUNTS = {
-    # The default dual-field test configuration builds both the production
-    # archive and the legacy whole-TU SIMD initialization fixture.  Core
-    # sources therefore appear twice, while ISA object libraries remain a
-    # single compile each.
-    "Leopard2Backend.cpp": 2,
-    "Leopard2BackendAVX2.cpp": 1,
-    "Leopard2BackendSSSE3.cpp": 1,
-    "Leopard2BackendScalar.cpp": 2,
-    "Leopard2CpuFeatures.cpp": 2,
-    "Leopard2Plan.cpp": 2,
-    "LeopardCommon.cpp": 2,
-    "LeopardFF16.cpp": 2,
-    "LeopardFF8.cpp": 2,
-    "leopard.cpp": 2,
-    "leopard2.cpp": 2,
+    # The default dual-field test configuration builds the production
+    # archive, the test-hook archive, and the legacy whole-TU SIMD
+    # initialization fixture.  ISA sources appear in the production and
+    # test-hook object libraries when their compiler probes succeed.
+    "Leopard2Backend.cpp": 3,
+    "Leopard2BackendAVX2.cpp": 2,
+    "Leopard2BackendAVX512.cpp": 2,
+    "Leopard2BackendSSSE3.cpp": 2,
+    "Leopard2BackendScalar.cpp": 3,
+    "Leopard2CpuFeatures.cpp": 3,
+    "Leopard2Plan.cpp": 3,
+    "LeopardCommon.cpp": 3,
+    "LeopardFF16.cpp": 3,
+    "LeopardFF8.cpp": 3,
+    "leopard.cpp": 3,
+    "leopard2.cpp": 3,
     "tests/leopard2/direct_oracle.cpp": 14,
     "tests/leopard2/direct_repair.cpp": 1,
     "tests/leopard2/fuzz_api.cpp": 1,
@@ -125,6 +134,7 @@ EXPECTED_COMPILE_SOURCE_COUNTS = {
     "tests/leopard2/test_decode_high_acceptance.cpp": 1,
     "tests/leopard2/test_decode_low_acceptance.cpp": 1,
     "tests/leopard2/test_decode_plan_schedule.cpp": 1,
+    "tests/leopard2/test_decode_scratch_probe.cpp": 1,
     "tests/leopard2/test_direct_encode.cpp": 1,
     "tests/leopard2/test_direct_oracle.cpp": 1,
     "tests/leopard2/test_direct_repair.cpp": 1,
@@ -133,7 +143,7 @@ EXPECTED_COMPILE_SOURCE_COUNTS = {
     "tests/leopard2/test_field_options.cpp": 1,
     "tests/leopard2/test_gf16_padded_odd.cpp": 1,
     "tests/leopard2/test_gf16_tails.cpp": 1,
-    "tests/leopard2/test_high_pruned_legacy.cpp": 1,
+    "tests/leopard2/test_high_pruned_legacy.cpp": 2,
     "tests/leopard2/test_initialization_threads.cpp": 1,
     "tests/leopard2/test_legacy_golden.cpp": 1,
     "tests/leopard2/test_legacy_simd_init_failure.cpp": 1,
@@ -154,6 +164,7 @@ SOURCE_FILES = (
     "Leopard2BackendScalar.cpp",
     "Leopard2BackendSSSE3.cpp",
     "Leopard2BackendAVX2.cpp",
+    "Leopard2BackendAVX512.cpp",
     "Leopard2CpuFeatures.cpp",
     "LeopardFF8.cpp",
     "LeopardFF8.h",
@@ -238,9 +249,47 @@ def normalized_output(value):
     return value.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
 
 
-def require_compile_source_counts(counts):
+def cmake_cache_true(cache, name):
+    return cache.get(name, "").upper() in ("1", "ON", "TRUE", "YES", "Y")
+
+
+def expected_compile_source_counts(cache):
+    """Bind optional ISA objects to the compiler probes from this build."""
+    expected = dict(EXPECTED_COMPILE_SOURCE_COUNTS)
+
+    # GCC, Clang, and AppleClang use the paired isolation flags below.  MSVC
+    # always has the x64 SSSE3 object and records its AVX2 probe in
+    # LEO2_FLAG_ARCH_AVX2.  AVX-512VL is deliberately unavailable in the
+    # current MSVC graph, so an unsupported compiler remains a clean AUTO
+    # build instead of failing the compile-command identity check.
+    msvc_x86 = "LEO2_FLAG_ARCH_AVX2" in cache
+    have_ssse3 = msvc_x86 or (
+        cmake_cache_true(cache, "LEO2_FLAG_MSSSE3") and
+        cmake_cache_true(cache, "LEO2_FLAG_MNO_AVX")
+    )
+    have_avx2 = cmake_cache_true(cache, "LEO2_FLAG_ARCH_AVX2") or (
+        cmake_cache_true(cache, "LEO2_FLAG_MAVX2") and
+        cmake_cache_true(cache, "LEO2_FLAG_MNO_AVX512F")
+    )
+    have_avx512 = (
+        have_avx2 and
+        cmake_cache_true(cache, "LEO2_FLAG_MAVX512F") and
+        cmake_cache_true(cache, "LEO2_FLAG_MAVX512BW") and
+        cmake_cache_true(cache, "LEO2_FLAG_MAVX512VL") and
+        cmake_cache_true(cache, "LEO2_FLAG_MPREFER_VECTOR_WIDTH_256")
+    )
+    for source, available in (
+            ("Leopard2BackendSSSE3.cpp", have_ssse3),
+            ("Leopard2BackendAVX2.cpp", have_avx2),
+            ("Leopard2BackendAVX512.cpp", have_avx512)):
+        if not available:
+            expected.pop(source)
+    return expected
+
+
+def require_compile_source_counts(counts, expected):
     """Fail closed when CMake's configured translation-unit graph changes."""
-    if dict(counts) != EXPECTED_COMPILE_SOURCE_COUNTS:
+    if dict(counts) != dict(expected):
         raise MatrixError("compile-command source multiset mismatch")
 
 
@@ -262,12 +311,23 @@ def named_ctest_executed(stdout, test_name, stderr=b""):
     return ctest_executed_test_names(stdout, stderr) == (test_name,)
 
 
-def backend_failure_ctest_executed(stdout, stderr=b""):
+def backend_failure_ctest_executed(
+    stdout, stderr=b"", expected=BACKEND_FAILURE_TESTS
+):
     executed = ctest_executed_test_names(stdout, stderr)
     return (
-        len(executed) == len(BACKEND_FAILURE_TESTS)
-        and collections.Counter(executed) == collections.Counter(BACKEND_FAILURE_TESTS)
+        len(executed) == len(expected)
+        and collections.Counter(executed) == collections.Counter(expected)
     )
+
+
+def backend_failure_tests_for_build(build_identity):
+    sources = {
+        command["file"] for command in build_identity["compile_commands"]
+    }
+    if "Leopard2BackendAVX512.cpp" in sources:
+        return BACKEND_FAILURE_TESTS
+    return BASE_BACKEND_FAILURE_TESTS
 
 
 def portable_ctest_executed(stdout, stderr=b""):
@@ -388,6 +448,11 @@ def variant_flags(variant):
         return ["-mssse3", "-mno-avx"]
     if variant == "avx2":
         return ["-mavx2", "-mno-avx512f"]
+    if variant == "avx512":
+        return [
+            "-mavx2", "-mavx512f", "-mavx512bw", "-mavx512vl",
+            "-mprefer-vector-width=256",
+        ]
     return []
 
 
@@ -414,9 +479,16 @@ def availability(variant, machine, compiler):
         return False, "forced variants are x86-only on this implementation"
     if variant == "scalar":
         return True, ""
-    required = "avx2" if variant == "avx2" else "ssse3"
-    if required not in machine["cpu_flags"]:
-        return False, "host CPU does not advertise {}".format(required)
+    required = {
+        "ssse3": ("ssse3",),
+        "avx2": ("avx2",),
+        "avx512": ("avx2", "avx512f", "avx512bw", "avx512vl"),
+    }[variant]
+    missing = [flag for flag in required if flag not in machine["cpu_flags"]]
+    if missing:
+        return False, "host CPU does not advertise {}".format(
+            ",".join(missing)
+        )
     supported, message = compiler_accepts(compiler["executable"], variant_flags(variant))
     if not supported:
         detail = ": " + message if message else ""
@@ -597,7 +669,7 @@ def normalized_build_identity(build, source, c_compiler, compiler, cmake, ctest)
                                     "argv": normalized_argv})
     normalized_commands.sort(key=lambda value: (value["file"], value["argv"]))
     counts = collections.Counter(value["file"] for value in normalized_commands)
-    require_compile_source_counts(counts)
+    require_compile_source_counts(counts, expected_compile_source_counts(cache))
 
     def identity(path, name):
         resolved = Path(path).resolve()
@@ -879,11 +951,15 @@ def run_variant(context, variant, index):
     executed_failure_tests = ctest_executed_test_names(
         failure_stdout, failure_stderr
     )
+    expected_failure_tests = backend_failure_tests_for_build(
+        base["build_identity"]
+    )
     failure_was_run = backend_failure_ctest_executed(
-        failure_stdout, failure_stderr
+        failure_stdout, failure_stderr, expected_failure_tests
     )
     command["ctest_executed"] = failure_was_run
     command["ctest_executed_tests"] = sorted(executed_failure_tests)
+    command["ctest_expected_tests"] = sorted(expected_failure_tests)
     seal_command(command)
     if command["returncode"] != 0 or not failure_was_run:
         base.update({
@@ -1104,6 +1180,14 @@ def matrix_run(arguments):
 
 
 def self_test():
+    def failure_output_for(names):
+        return b"".join(
+            "{}/{} Test #{}: {} ... Passed\n".format(
+                index, len(names), index, name
+            ).encode("ascii")
+            for index, name in enumerate(names, 1)
+        )
+
     assert compact_cpu_list([3, 2, 1, 7, 9, 8]) == "1-3,7-9"
     assert compact_cpu_list([]) == ""
     assert normalized_output(b"a\r\nb\rc\n") == b"a\nb\nc\n"
@@ -1123,14 +1207,19 @@ def self_test():
     )
     assert ctest_executed_test_names(failure_output) == BACKEND_FAILURE_TESTS
     assert backend_failure_ctest_executed(failure_output)
-
-    def failure_output_for(names):
-        return b"".join(
-            "{}/{} Test #{}: {} ... Passed\n".format(
-                index, len(names), index, name
-            ).encode("ascii")
-            for index, name in enumerate(names, 1)
-        )
+    assert backend_failure_ctest_executed(
+        failure_output_for(BASE_BACKEND_FAILURE_TESTS),
+        expected=BASE_BACKEND_FAILURE_TESTS,
+    )
+    assert not backend_failure_ctest_executed(
+        failure_output_for(BASE_BACKEND_FAILURE_TESTS),
+    )
+    assert backend_failure_tests_for_build({"compile_commands": []}) == (
+        BASE_BACKEND_FAILURE_TESTS
+    )
+    assert backend_failure_tests_for_build({"compile_commands": [
+        {"file": "Leopard2BackendAVX512.cpp"},
+    ]}) == BACKEND_FAILURE_TESTS
 
     assert backend_failure_ctest_executed(
         failure_output_for(tuple(reversed(BACKEND_FAILURE_TESTS)))
@@ -1162,12 +1251,52 @@ def self_test():
     assert digest_value({"b": 2, "a": 1}) == digest_value({"a": 1, "b": 2})
     assert variant_flags("scalar") == []
     assert variant_flags("ssse3") == ["-mssse3", "-mno-avx"]
+    assert variant_flags("avx2") == ["-mavx2", "-mno-avx512f"]
+    assert variant_flags("avx512") == [
+        "-mavx2", "-mavx512f", "-mavx512bw", "-mavx512vl",
+        "-mprefer-vector-width=256",
+    ]
     assert availability(
         "scalar",
         {"architecture": "x86_64", "cpu_flags": []},
         {"executable": "not-needed-for-empty-flags"},
     ) == (True, "")
-    require_compile_source_counts(EXPECTED_COMPILE_SOURCE_COUNTS)
+    assert availability(
+        "avx512",
+        {"architecture": "x86_64", "cpu_flags": ["avx2"]},
+        {"executable": "not-reached-when-host-flags-are-missing"},
+    ) == (
+        False,
+        "host CPU does not advertise avx512f,avx512bw,avx512vl",
+    )
+    require_compile_source_counts(
+        EXPECTED_COMPILE_SOURCE_COUNTS,
+        EXPECTED_COMPILE_SOURCE_COUNTS,
+    )
+    no_isa = expected_compile_source_counts({})
+    assert "Leopard2BackendSSSE3.cpp" not in no_isa
+    assert "Leopard2BackendAVX2.cpp" not in no_isa
+    assert "Leopard2BackendAVX512.cpp" not in no_isa
+    avx2_only = expected_compile_source_counts({
+        "LEO2_FLAG_MSSSE3": "1",
+        "LEO2_FLAG_MNO_AVX": "1",
+        "LEO2_FLAG_MAVX2": "1",
+        "LEO2_FLAG_MNO_AVX512F": "1",
+    })
+    assert avx2_only["Leopard2BackendSSSE3.cpp"] == 2
+    assert avx2_only["Leopard2BackendAVX2.cpp"] == 2
+    assert "Leopard2BackendAVX512.cpp" not in avx2_only
+    all_isa = expected_compile_source_counts({
+        "LEO2_FLAG_MSSSE3": "1",
+        "LEO2_FLAG_MNO_AVX": "1",
+        "LEO2_FLAG_MAVX2": "1",
+        "LEO2_FLAG_MNO_AVX512F": "1",
+        "LEO2_FLAG_MAVX512F": "1",
+        "LEO2_FLAG_MAVX512BW": "1",
+        "LEO2_FLAG_MAVX512VL": "1",
+        "LEO2_FLAG_MPREFER_VECTOR_WIDTH_256": "1",
+    })
+    assert all_isa == EXPECTED_COMPILE_SOURCE_COUNTS
     contract_mutations = []
     missing = dict(EXPECTED_COMPILE_SOURCE_COUNTS)
     missing.pop("tests/leopard2/test_batch_aliasing.cpp")
@@ -1180,7 +1309,10 @@ def self_test():
     contract_mutations.append(unexpected)
     for mutation in contract_mutations:
         try:
-            require_compile_source_counts(mutation)
+            require_compile_source_counts(
+                mutation,
+                EXPECTED_COMPILE_SOURCE_COUNTS,
+            )
         except MatrixError as error:
             assert str(error) == "compile-command source multiset mismatch"
         else:

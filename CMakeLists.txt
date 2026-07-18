@@ -50,20 +50,23 @@ endif()
 # wire format fixed while making backend determinism testable in isolated
 # builds.
 set(LEO2_BACKEND_VARIANT "auto" CACHE STRING
-    "Diagnostic backend variant: auto, scalar, ssse3, or avx2")
-set_property(CACHE LEO2_BACKEND_VARIANT PROPERTY STRINGS auto scalar ssse3 avx2)
+    "Diagnostic backend variant: auto, scalar, ssse3, avx2, or avx512")
+set_property(CACHE LEO2_BACKEND_VARIANT PROPERTY STRINGS
+    auto scalar ssse3 avx2 avx512)
 string(TOLOWER "${LEO2_BACKEND_VARIANT}" LEO2_BACKEND_VARIANT_NORMALIZED)
 if(NOT LEO2_BACKEND_VARIANT_NORMALIZED STREQUAL "auto" AND
    NOT LEO2_BACKEND_VARIANT_NORMALIZED STREQUAL "scalar" AND
    NOT LEO2_BACKEND_VARIANT_NORMALIZED STREQUAL "ssse3" AND
-   NOT LEO2_BACKEND_VARIANT_NORMALIZED STREQUAL "avx2")
+   NOT LEO2_BACKEND_VARIANT_NORMALIZED STREQUAL "avx2" AND
+   NOT LEO2_BACKEND_VARIANT_NORMALIZED STREQUAL "avx512")
     message(FATAL_ERROR
         "Invalid LEO2_BACKEND_VARIANT='${LEO2_BACKEND_VARIANT}'. "
-        "Expected auto, scalar, ssse3, or avx2")
+        "Expected auto, scalar, ssse3, avx2, or avx512")
 endif()
 set(LEO2_BACKEND_VARIANT "${LEO2_BACKEND_VARIANT_NORMALIZED}" CACHE STRING
-    "Diagnostic backend variant: auto, scalar, ssse3, or avx2" FORCE)
-set_property(CACHE LEO2_BACKEND_VARIANT PROPERTY STRINGS auto scalar ssse3 avx2)
+    "Diagnostic backend variant: auto, scalar, ssse3, avx2, or avx512" FORCE)
+set_property(CACHE LEO2_BACKEND_VARIANT PROPERTY STRINGS
+    auto scalar ssse3 avx2 avx512)
 
 # CUDA is deliberately opt-in.  In particular, the default configuration must
 # not probe for a CUDA compiler or make CUDA a transitive build dependency.
@@ -442,6 +445,13 @@ if(NOT LEO2_BACKEND_VARIANT STREQUAL "auto")
         endif()
         target_compile_definitions(leopard PRIVATE
             LEO2_BACKEND_FORCE_AVX2=1)
+    elseif(LEO2_BACKEND_VARIANT STREQUAL "avx512")
+        if(NOT LEO2_HAVE_AVX512_BACKEND)
+            message(FATAL_ERROR
+                "LEO2_BACKEND_VARIANT=avx512 is unavailable for this compiler")
+        endif()
+        target_compile_definitions(leopard PRIVATE
+            LEO2_BACKEND_FORCE_AVX512=1)
     endif()
 endif()
 
@@ -698,6 +708,9 @@ if(LEO2_BUILD_TESTS)
     elseif(LEO2_BACKEND_VARIANT STREQUAL "avx2")
         target_compile_definitions(leopard_test_hooks PRIVATE
             LEO2_BACKEND_FORCE_AVX2=1)
+    elseif(LEO2_BACKEND_VARIANT STREQUAL "avx512")
+        target_compile_definitions(leopard_test_hooks PRIVATE
+            LEO2_BACKEND_FORCE_AVX512=1)
     endif()
 
     add_executable(leopard2_field_options_test
@@ -1686,6 +1699,11 @@ if(LEO2_BUILD_FUZZERS)
                 LEO2_BACKEND_FORCE_AVX2=1)
             target_compile_definitions(leopard2_pruned_plan_fuzzer PRIVATE
                 LEO2_BACKEND_FORCE_AVX2=1)
+        elseif(LEO2_BACKEND_VARIANT STREQUAL "avx512")
+            target_compile_definitions(leopard2_api_fuzzer PRIVATE
+                LEO2_BACKEND_FORCE_AVX512=1)
+            target_compile_definitions(leopard2_pruned_plan_fuzzer PRIVATE
+                LEO2_BACKEND_FORCE_AVX512=1)
         endif()
     endif()
 endif()

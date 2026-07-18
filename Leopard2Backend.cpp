@@ -1542,6 +1542,36 @@ static leo2_backend SelectBackend(const X86Features& features)
     return selected_kind;
 }
 
+static uint32_t QualifiableBackendMaskFor(
+    const X86Features& features,
+    leo2_backend selected_kind)
+{
+    (void)features;
+    (void)selected_kind;
+    uint32_t mask = 1U << LEO2_BACKEND_SCALAR;
+#if defined(LEO2_HAVE_SSSE3_BACKEND)
+    if (features.ssse3 && selected_kind >= LEO2_BACKEND_SSSE3)
+        mask |= 1U << LEO2_BACKEND_SSSE3;
+#endif
+#if defined(LEO2_HAVE_AVX2_BACKEND)
+    if (features.avx2 && selected_kind >= LEO2_BACKEND_AVX2)
+        mask |= 1U << LEO2_BACKEND_AVX2;
+#endif
+#if defined(LEO2_HAVE_AVX512_BACKEND)
+    // Keep the candidate explicit until the whole-codec crossover gate has
+    // passed.  Lower forced variants intentionally cap explicit context
+    // requests as well as AUTO; the normal production AUTO build and the
+    // forced AVX-512 diagnostic build retain the explicit candidate.
+# if !defined(LEO2_BACKEND_FORCE_SCALAR) && \
+     !defined(LEO2_BACKEND_FORCE_SSSE3) && \
+     !defined(LEO2_BACKEND_FORCE_AVX2)
+    if (features.avx512)
+        mask |= 1U << LEO2_BACKEND_AVX512;
+# endif
+#endif
+    return mask;
+}
+
 bool Initialize(const InitializeArgs& args)
 {
     if (SelectedOps)
@@ -1589,21 +1619,8 @@ bool Initialize(const InitializeArgs& args)
         return false;
     }
 
-    uint32_t qualifiable_mask = 1U << LEO2_BACKEND_SCALAR;
-#if defined(LEO2_HAVE_SSSE3_BACKEND)
-    if (features.ssse3 && selected_kind >= LEO2_BACKEND_SSSE3)
-        qualifiable_mask |= 1U << LEO2_BACKEND_SSSE3;
-#endif
-#if defined(LEO2_HAVE_AVX2_BACKEND)
-    if (features.avx2 && selected_kind >= LEO2_BACKEND_AVX2)
-        qualifiable_mask |= 1U << LEO2_BACKEND_AVX2;
-#endif
-#if defined(LEO2_HAVE_AVX512_BACKEND)
-    // Keep the candidate explicit until the whole-codec crossover gate has
-    // passed.  ISA kernels may change without changing the wire profile.
-    if (features.avx512)
-        qualifiable_mask |= 1U << LEO2_BACKEND_AVX512;
-#endif
+    const uint32_t qualifiable_mask =
+        QualifiableBackendMaskFor(features, selected_kind);
 
     {
         std::lock_guard<std::mutex> lock(GetQualificationMutex());
@@ -1744,6 +1761,17 @@ bool TestShouldFailAllocation(leo2_backend backend, bool ff16)
 leo2_backend TestDefaultBackendForHost()
 {
     return SelectBackend(DetectX86Features());
+}
+
+bool TestBackendCanQualifyForHost(leo2_backend backend)
+{
+    const X86Features features = DetectX86Features();
+    const leo2_backend selected = SelectBackend(features);
+    if (selected == LEO2_BACKEND_AUTO ||
+        backend <= LEO2_BACKEND_AUTO || backend > LEO2_BACKEND_AVX512)
+        return false;
+    return (QualifiableBackendMaskFor(features, selected) &
+        (1U << static_cast<unsigned>(backend))) != 0;
 }
 
 bool TestGetBackendState(leo2_backend backend, TestBackendState* state)

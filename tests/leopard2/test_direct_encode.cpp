@@ -666,9 +666,11 @@ void test_low_transform_no_coefficient_copy(
             else
             {
                 const size_t prefix_bytes = c.bytes & ~size_t(63);
+                const leo2_backend backend = leo2_context_backend(context);
                 const bool prefix_fused = prefix_bytes == 64 ||
                     (prefix_bytes == 128 &&
-                     leo2_context_backend(context) == LEO2_BACKEND_AVX2);
+                     (backend == LEO2_BACKEND_AVX2 ||
+                      backend == LEO2_BACKEND_AVX512));
                 const uint64_t fused_passes =
                     ((c.bytes & 63U) != 0 ? 1U : 0U) +
                     (prefix_bytes != 0 && prefix_fused ? 1U : 0U);
@@ -803,10 +805,13 @@ void test_high_transform_source_staging(
         require_result(fallback.result, "GF16 source-staging fallback encode");
         const leopard::ff16::TestOnlyHighEncodeCounts fallback_counts =
             leopard::ff16::TestOnlyGetHighEncodeCounts();
-        const bool avx2 = leo2_context_backend(context) == LEO2_BACKEND_AVX2;
+        const leo2_backend backend = leo2_context_backend(context);
+        const bool avx2_family = backend == LEO2_BACKEND_AVX2 ||
+            backend == LEO2_BACKEND_AVX512;
         require(fallback_counts.ifft_butterfly4_out_of_place ==
-                    (avx2 ? 0U : 128U) &&
-                fallback_counts.input_copy_shards == (avx2 ? 512U : 0U),
+                    (avx2_family ? 0U : 128U) &&
+                fallback_counts.input_copy_shards ==
+                    (avx2_family ? 512U : 0U),
             "GF16 source-staging fallback route mismatch: backend=" +
                 std::to_string(static_cast<unsigned>(
                     leo2_context_backend(context))) +

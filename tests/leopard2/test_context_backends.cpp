@@ -1487,6 +1487,15 @@ void test_concurrent_first_use()
         for (unsigned lane = 1; lane < lanes_per_request; ++lane)
             require(results[request_i][lane] == results[request_i][0],
                 "first-use qualification result was nondeterministic");
+    const char* forced = std::getenv("LEO2_EXPECT_BACKEND");
+    if (forced && (std::strcmp(forced, "scalar") == 0 ||
+                   std::strcmp(forced, "ssse3") == 0 ||
+                   std::strcmp(forced, "avx2") == 0))
+        require(results[3][0] == LEO2_UNSUPPORTED,
+            "lower forced variant accepted an explicit AVX-512 context");
+    else if (forced && std::strcmp(forced, "avx512") == 0)
+        require(results[3][0] == LEO2_SUCCESS,
+            "forced AVX-512 variant rejected its selected context");
 }
 
 std::vector<ContextEntry> create_contexts()

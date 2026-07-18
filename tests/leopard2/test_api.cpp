@@ -1145,7 +1145,9 @@ void test_tiled_materialized_execution(leo2_context* context)
             plans[i], bytes, false, &path_info[i]),
             "workspace path introspection");
     const leopard2_internal::DecodePath expected_auto =
-        backend == LEO2_BACKEND_AVX2 || backend == LEO2_BACKEND_SSSE3
+        backend == LEO2_BACKEND_AVX2 ||
+        backend == LEO2_BACKEND_AVX512 ||
+        backend == LEO2_BACKEND_SSSE3
             ? leopard2_internal::kDecodePathMaterialized
             : leopard2_internal::kDecodePathTiled;
     require(path_info[0].path == expected_auto &&
@@ -1238,6 +1240,28 @@ void test_tiled_materialized_execution(leo2_context* context)
     leo2_codec_destroy(materialized_codec);
     leo2_codec_destroy(tiled_codec);
     leo2_codec_destroy(auto_codec);
+}
+
+void test_available_avx512_batch_dispatch()
+{
+    leo2_context_options options;
+    memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.backend = LEO2_BACKEND_AVX512;
+    options.thread_count = 1;
+    leo2_context* context = NULL;
+    const leo2_result result = leo2_context_create(&options, &context);
+    if (result == LEO2_UNSUPPORTED)
+    {
+        require(context == NULL,
+            "unsupported AVX-512 context did not clear its output");
+        return;
+    }
+    require_result(result, "AVX-512 batch-dispatch context create");
+    require(leo2_context_backend(context) == LEO2_BACKEND_AVX512,
+        "explicit AVX-512 context selected a different backend");
+    test_tiled_materialized_execution(context);
+    leo2_context_destroy(context);
 }
 
 void test_batch_materialized_capacity(leo2_context* context)
@@ -1542,6 +1566,13 @@ void test_unified_decode_path_selector()
         kDecodeRuleMeasuredBatchTiled, "AVX2 multi-item exception");
     require(selection.required_work_slots == 72,
         "batch tiled selector did not account for L outputs");
+    high.backend = LEO2_BACKEND_AVX512;
+    selection = require_decode_path(high, kDecodePathTiled,
+        kDecodeRuleMeasuredBatchTiled, "AVX-512 multi-item exception");
+    require(selection.required_work_slots == 72 &&
+            selection.matching_auto_rules ==
+                kDecodeAutoRuleMeasuredMaterialized,
+        "AVX-512 batch exception lost workspace or measured-rule state");
     high.backend = LEO2_BACKEND_SSSE3;
     require_decode_path(high, kDecodePathMaterialized,
         kDecodeRuleMeasuredMaterialized,
@@ -1621,7 +1652,7 @@ void test_unified_decode_path_selector()
     };
     const leo2_backend backends[] = {
         LEO2_BACKEND_SCALAR, LEO2_BACKEND_SSSE3,
-        LEO2_BACKEND_AVX2, LEO2_BACKEND_NEON
+        LEO2_BACKEND_AVX2, LEO2_BACKEND_AVX512, LEO2_BACKEND_NEON
     };
     for (size_t k_i = 0; k_i < sizeof(counts) / sizeof(counts[0]); ++k_i)
     for (size_t r_i = 0; r_i < sizeof(counts) / sizeof(counts[0]); ++r_i)
@@ -1790,6 +1821,7 @@ int main()
         test_balanced_family_forced_equivalence(context);
         test_tiled_high_dispatch_policy();
         test_tiled_materialized_execution(context);
+        test_available_avx512_batch_dispatch();
         test_low_reveal_fusion(context);
         test_batch_materialized_capacity(context);
 
