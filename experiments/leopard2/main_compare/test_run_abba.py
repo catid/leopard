@@ -1008,6 +1008,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                     if item["source"]["path"].endswith(suffix))
                 semantics["required_source_object_pairs"].remove(pair)
                 semantics["required_sources"].remove(pair["source"]["path"])
+                semantics["entry_count"] -= 1
                 member = Path(pair["object"]["path"]).name
                 build["validated_archive_members"].remove(member)
                 relative = Path(pair["object"]["path"]).relative_to(

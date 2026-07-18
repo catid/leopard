@@ -2931,6 +2931,7 @@ def self_test() -> None:
                                     "/" + names[-1]))
                     semantics["required_source_object_pairs"].remove(pair)
                     semantics["required_sources"].remove(pair["source"]["path"])
+                    semantics["entry_count"] -= 1
                     member = Path(pair["object"]["path"]).name
                     build["validated_archive_members"].remove(member)
                     relative = pair["object"]["path"][
