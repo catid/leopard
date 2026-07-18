@@ -81,8 +81,9 @@ swap plans remain an experiment under `leopard-79h.18.5`.
 
 Compact golden vectors and exact-main adapter digests protect legacy parity and
 recovery. Compile-time GF8-only/GF16-only matrices verify that omission does not
-silently select a different canonical field. The operation-count model's 331
-self-checks are directly reproducible and distinguish butterflies, fixed
+silently select a different canonical field. Running
+`python3 tools/leopard2_operation_counts.py self-test` executes 363 checks that
+distinguish butterflies, fixed
 multiplications, XORs and byte traffic from ISA changes; the low-copy source
 guard prevents the former whole-P copy from returning unnoticed.
 
