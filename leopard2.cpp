@@ -217,6 +217,12 @@ int InitializeLibrary(
     backend::QualificationStatus* qualification_failure_out);
 }
 
+struct ProtectedMetadataSpan
+{
+    const void* data;
+    size_t bytes;
+};
+
 static leo2_result DecodePlanExecuteInternal(
     const leo2_decode_plan* plan,
     uint64_t shard_bytes,
@@ -226,8 +232,8 @@ static leo2_result DecodePlanExecuteInternal(
     void* scratch,
     size_t scratch_bytes,
     bool multi_item_batch,
-    const void* protected_metadata,
-    size_t protected_metadata_bytes,
+    const ProtectedMetadataSpan* protected_metadata,
+    size_t protected_metadata_count,
     bool prevalidated);
 
 static leo2_result EncodeInternal(
@@ -2702,14 +2708,17 @@ static leo2_result ValidateDecodeBuffers(
     void* const* restored,
     void* scratch,
     size_t scratch_bytes,
-    const void* protected_metadata,
-    size_t protected_metadata_bytes)
+    const ProtectedMetadataSpan* protected_metadata,
+    size_t protected_metadata_count)
 {
     const leo2_codec* codec = plan->codec;
     if (!original || !recovery || !restored)
         return LEO2_INVALID_ARGUMENT;
 
-    AddressRange metadata_ranges[4];
+    /* Three pointer arrays plus the one-shot presence arrays (or one batch
+       item-array span).  All are immutable metadata that writable scratch
+       and restored shard ranges must not overlap. */
+    AddressRange metadata_ranges[5];
     size_t metadata_count = 3;
     if (!MakeArrayRange(original, codec->original_count,
             sizeof(*original), metadata_ranges[0]) ||
@@ -2718,11 +2727,14 @@ static leo2_result ValidateDecodeBuffers(
         !MakeArrayRange(restored, codec->original_count,
             sizeof(*restored), metadata_ranges[2]))
         return LEO2_INVALID_ARGUMENT;
-    if (protected_metadata)
+    if (protected_metadata_count > 2 ||
+        (protected_metadata_count != 0 && !protected_metadata))
+        return LEO2_INVALID_ARGUMENT;
+    for (size_t i = 0; i < protected_metadata_count; ++i)
     {
-        if (protected_metadata_bytes == 0 ||
-            !MakeRange(protected_metadata,
-                static_cast<uint64_t>(protected_metadata_bytes),
+        if (!protected_metadata[i].data || protected_metadata[i].bytes == 0 ||
+            !MakeRange(protected_metadata[i].data,
+                static_cast<uint64_t>(protected_metadata[i].bytes),
                 metadata_ranges[metadata_count]))
             return LEO2_INVALID_ARGUMENT;
         ++metadata_count;
@@ -3489,10 +3501,11 @@ static leo2_result ValidateDecodeBatchAliases(
     for (size_t item_i = 0; item_i < item_count; ++item_i)
     {
         const leo2_decode_batch_item& item = items[item_i];
+        const ProtectedMetadataSpan item_metadata = { items, item_bytes };
         result = ValidateDecodeBuffers(plan,
             item.shard_bytes, item.original, item.recovery,
             item.restored_original, item.scratch, item.scratch_bytes,
-            items, item_bytes);
+            &item_metadata, 1);
         if (result != LEO2_SUCCESS)
             return result;
     }
@@ -3619,7 +3632,7 @@ static leo2_result RunDecodeBatchItem(void* context, size_t index)
     return DecodePlanExecuteInternal(
         batch->plan, item.shard_bytes, item.original, item.recovery,
         item.restored_original, item.scratch, item.scratch_bytes,
-        batch->multi_item_batch, batch->items, batch->item_bytes, true);
+        batch->multi_item_batch, NULL, 0, true);
 }
 
 } // namespace
@@ -4753,8 +4766,8 @@ static leo2_result DecodePlanExecuteInternal(
     void* scratch,
     size_t scratch_bytes,
     bool multi_item_batch,
-    const void* protected_metadata,
-    size_t protected_metadata_bytes,
+    const ProtectedMetadataSpan* protected_metadata,
+    size_t protected_metadata_count,
     bool prevalidated)
 {
     if (!plan)
@@ -4787,7 +4800,7 @@ static leo2_result DecodePlanExecuteInternal(
         result = ValidateDecodeBuffers(
             plan, shard_bytes, original, recovery, restored_original,
             scratch, scratch_bytes, protected_metadata,
-            protected_metadata_bytes);
+            protected_metadata_count);
         if (result != LEO2_SUCCESS)
             return result;
     }
@@ -4996,8 +5009,15 @@ LEO2_EXPORT leo2_result leo2_decode(
         codec, original_present, recovery_present, &plan);
     if (result != LEO2_SUCCESS)
         return result;
-    result = leo2_decode_plan_execute(
-        plan, shard_bytes, original, recovery, restored_original, scratch, scratch_bytes);
+    const ProtectedMetadataSpan protected_metadata[2] = {
+        { original_present,
+          codec->original_count * sizeof(*original_present) },
+        { recovery_present,
+          codec->recovery_count * sizeof(*recovery_present) }
+    };
+    result = DecodePlanExecuteInternal(
+        plan, shard_bytes, original, recovery, restored_original, scratch,
+        scratch_bytes, false, protected_metadata, 2, false);
     leo2_decode_plan_destroy(plan);
     return result;
 }

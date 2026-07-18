@@ -895,6 +895,197 @@ void test_alias_and_scratch_contracts(leo2_context* context, Counts* counts)
     require(restored == source[0], "valid decode restored wrong bytes");
 }
 
+void test_one_shot_presence_alias_contracts(
+    leo2_context* context,
+    Counts* counts)
+{
+    const size_t bytes = 17;
+    CodecOwner codec;
+    require_result(leo2_codec_create(context, 4, 3,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec.codec),
+        LEO2_SUCCESS, "one-shot presence codec create");
+
+    Shards source(4, Bytes(bytes, 0));
+    fill_shards(source, 0xc001d00du);
+    std::vector<const void*> source_pointers = const_pointers(source);
+    Shards encoded(3, Bytes(bytes, 0));
+    std::vector<void*> encoded_pointers = mutable_pointers(encoded);
+    size_t encode_scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(codec.codec, bytes,
+        &encode_scratch_bytes), LEO2_SUCCESS,
+        "one-shot presence encode scratch query");
+    AlignedBuffer encode_scratch(encode_scratch_bytes);
+    require_result(leo2_encode(codec.codec, bytes, &source_pointers[0],
+        &encoded_pointers[0], encode_scratch.data(), encode_scratch.size()),
+        LEO2_SUCCESS, "one-shot presence fixture encode");
+
+    const uint8_t exact_original_present[4] = { 0, 0, 1, 1 };
+    const uint8_t exact_recovery_present[3] = { 1, 1, 0 };
+    const void* decode_original[4] = {
+        NULL, NULL, source_pointers[2], source_pointers[3]
+    };
+    const void* decode_recovery[3] = {
+        encoded_pointers[0], encoded_pointers[1], NULL
+    };
+    Bytes restored0(bytes, 0x91);
+    Bytes restored1(bytes, 0x92);
+    void* restored_original[4] = {
+        &restored0[0], &restored1[0], NULL, NULL
+    };
+    size_t decode_scratch_bytes = 0;
+    require_result(leo2_decode_scratch_size(codec.codec, bytes,
+        &decode_scratch_bytes), LEO2_SUCCESS,
+        "one-shot presence decode scratch query");
+    AlignedBuffer decode_scratch(decode_scratch_bytes);
+
+    /* A disjoint one-shot call remains legal and treats both presence arrays
+       as immutable setup metadata. */
+    uint8_t original_present[4];
+    uint8_t recovery_present[3];
+    memcpy(original_present, exact_original_present, sizeof(original_present));
+    memcpy(recovery_present, exact_recovery_present, sizeof(recovery_present));
+    require_result(leo2_decode(codec.codec, bytes, original_present,
+        recovery_present, decode_original, decode_recovery,
+        restored_original, decode_scratch.data(), decode_scratch.size()),
+        LEO2_SUCCESS, "disjoint one-shot presence decode");
+    require(restored0 == source[0] && restored1 == source[1],
+        "disjoint one-shot presence decode restored wrong bytes");
+    require(memcmp(original_present, exact_original_present,
+                sizeof(original_present)) == 0 &&
+            memcmp(recovery_present, exact_recovery_present,
+                sizeof(recovery_present)) == 0,
+        "disjoint one-shot decode changed presence metadata");
+    ++counts->alias_checks;
+
+    std::fill(restored0.begin(), restored0.end(), 0x81);
+    std::fill(restored1.begin(), restored1.end(), 0x82);
+    const Bytes exact_restored0 = restored0;
+    const Bytes exact_restored1 = restored1;
+
+    /* Multi-output validation uses scratch for sorted address ranges.  Reject
+       before those writes when either presence array resides in scratch. */
+    AlignedBuffer original_presence_scratch(decode_scratch_bytes + 1);
+    memset(original_presence_scratch.data(), 0x6b,
+        original_presence_scratch.size());
+    uint8_t* const original_presence_inside_scratch =
+        static_cast<uint8_t*>(original_presence_scratch.data()) + 1;
+    memcpy(original_presence_inside_scratch, exact_original_present,
+        sizeof(exact_original_present));
+    Bytes original_presence_scratch_before(
+        original_presence_scratch.size(), 0);
+    memcpy(&original_presence_scratch_before[0],
+        original_presence_scratch.data(), original_presence_scratch.size());
+    require_result(leo2_decode(codec.codec, bytes,
+        original_presence_inside_scratch,
+        exact_recovery_present, decode_original, decode_recovery,
+        restored_original, original_presence_scratch.data(),
+        original_presence_scratch.size()), LEO2_OVERLAP,
+        "one-shot scratch/original-presence overlap");
+    require(memcmp(original_presence_scratch.data(),
+                &original_presence_scratch_before[0],
+                original_presence_scratch.size()) == 0 &&
+            restored0 == exact_restored0 && restored1 == exact_restored1,
+        "rejected scratch/original-presence overlap changed storage");
+
+    AlignedBuffer recovery_presence_scratch(decode_scratch_bytes);
+    memset(recovery_presence_scratch.data(), 0x7c,
+        recovery_presence_scratch.size());
+    memcpy(recovery_presence_scratch.data(), exact_recovery_present,
+        sizeof(exact_recovery_present));
+    Bytes recovery_presence_scratch_before(
+        recovery_presence_scratch.size(), 0);
+    memcpy(&recovery_presence_scratch_before[0],
+        recovery_presence_scratch.data(), recovery_presence_scratch.size());
+    require_result(leo2_decode(codec.codec, bytes, exact_original_present,
+        static_cast<const uint8_t*>(recovery_presence_scratch.data()),
+        decode_original, decode_recovery, restored_original,
+        recovery_presence_scratch.data(), recovery_presence_scratch.size()),
+        LEO2_OVERLAP, "one-shot scratch/recovery-presence overlap");
+    require(memcmp(recovery_presence_scratch.data(),
+                &recovery_presence_scratch_before[0],
+                recovery_presence_scratch.size()) == 0 &&
+            restored0 == exact_restored0 && restored1 == exact_restored1,
+        "rejected scratch/recovery-presence overlap changed storage");
+
+    /* A restored shard may not overwrite either presence bitmap.  Use a
+       shard-sized backing allocation so the rejected range itself is valid. */
+    Bytes original_presence_output(bytes, 0x4d);
+    memcpy(&original_presence_output[0], exact_original_present,
+        sizeof(exact_original_present));
+    const Bytes original_presence_output_before = original_presence_output;
+    void* output_on_original_presence[4] = {
+        &original_presence_output[0], &restored1[0], NULL, NULL
+    };
+    require_result(leo2_decode(codec.codec, bytes,
+        &original_presence_output[0], exact_recovery_present,
+        decode_original, decode_recovery, output_on_original_presence,
+        decode_scratch.data(), decode_scratch.size()), LEO2_OVERLAP,
+        "one-shot output/original-presence overlap");
+    require(original_presence_output == original_presence_output_before &&
+            restored1 == exact_restored1,
+        "rejected output/original-presence overlap changed storage");
+
+    Bytes recovery_presence_output(bytes, 0x5e);
+    memcpy(&recovery_presence_output[0], exact_recovery_present,
+        sizeof(exact_recovery_present));
+    const Bytes recovery_presence_output_before = recovery_presence_output;
+    void* output_on_recovery_presence[4] = {
+        &recovery_presence_output[0], &restored1[0], NULL, NULL
+    };
+    require_result(leo2_decode(codec.codec, bytes, exact_original_present,
+        &recovery_presence_output[0], decode_original, decode_recovery,
+        output_on_recovery_presence, decode_scratch.data(),
+        decode_scratch.size()), LEO2_OVERLAP,
+        "one-shot output/recovery-presence overlap");
+    require(recovery_presence_output == recovery_presence_output_before &&
+            restored1 == exact_restored1,
+        "rejected output/recovery-presence overlap changed storage");
+
+    /* Presence metadata joins, rather than replaces, the existing protected
+       pointer-array metadata.  Exercise both scratch and output rejection in
+       the one-shot wrapper and verify all caller-owned metadata is preserved. */
+    AlignedBuffer descriptor_scratch(decode_scratch_bytes);
+    memset(descriptor_scratch.data(), 0xa6, descriptor_scratch.size());
+    const void** scratch_original =
+        static_cast<const void**>(descriptor_scratch.data());
+    for (size_t i = 0; i < 4; ++i)
+        scratch_original[i] = decode_original[i];
+    Bytes descriptor_scratch_before(descriptor_scratch.size(), 0);
+    memcpy(&descriptor_scratch_before[0], descriptor_scratch.data(),
+        descriptor_scratch.size());
+    require_result(leo2_decode(codec.codec, bytes, exact_original_present,
+        exact_recovery_present, scratch_original, decode_recovery,
+        restored_original, descriptor_scratch.data(),
+        descriptor_scratch.size()), LEO2_OVERLAP,
+        "one-shot scratch/pointer-metadata overlap");
+    require(memcmp(descriptor_scratch.data(), &descriptor_scratch_before[0],
+                descriptor_scratch.size()) == 0 &&
+            restored0 == exact_restored0 && restored1 == exact_restored1,
+        "rejected scratch/pointer-metadata overlap changed storage");
+
+    const void* decode_original_before[4];
+    const void* decode_recovery_before[3];
+    memcpy(decode_original_before, decode_original, sizeof(decode_original));
+    memcpy(decode_recovery_before, decode_recovery, sizeof(decode_recovery));
+    void* output_on_pointer_metadata[4] = {
+        const_cast<void*>(static_cast<const void*>(decode_original)),
+        &restored1[0], NULL, NULL
+    };
+    require_result(leo2_decode(codec.codec, bytes, exact_original_present,
+        exact_recovery_present, decode_original, decode_recovery,
+        output_on_pointer_metadata, decode_scratch.data(),
+        decode_scratch.size()), LEO2_OVERLAP,
+        "one-shot output/pointer-metadata overlap");
+    require(memcmp(decode_original_before, decode_original,
+                sizeof(decode_original)) == 0 &&
+            memcmp(decode_recovery_before, decode_recovery,
+                sizeof(decode_recovery)) == 0 &&
+            restored1 == exact_restored1,
+        "rejected output/pointer-metadata overlap changed storage");
+
+    counts->alias_checks += 6;
+}
+
 void test_aligned_decode_input_staging_elision(
     leo2_context* context,
     Counts* counts)
@@ -1956,6 +2147,7 @@ int main()
         test_introspection_and_null_contracts(context.context, &counts);
         test_default_affinity_thread_budget(&counts);
         test_alias_and_scratch_contracts(context.context, &counts);
+        test_one_shot_presence_alias_contracts(context.context, &counts);
         test_aligned_decode_input_staging_elision(context.context, &counts);
         test_tiled_decode_workspace_slopes(context.context, &counts);
         test_ragged_decode_tail_staging_slopes(context.context, &counts);
