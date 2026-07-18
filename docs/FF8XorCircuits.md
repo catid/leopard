@@ -12,9 +12,14 @@ null-recovery bug; those changes affect invalid or formerly crashing calls,
 not valid packed codewords. The experimental backend does not implement FF16
 or CUDA. Its generated AVX-512 four-buffer circuit corpus is now integrated
 into the production transform path behind an explicit experimental selector.
-The selector defaults to disabled; normal ff8xor and packed-Leopard behavior
-therefore remains unchanged unless a caller deliberately enables the fused
-path.
+The selector defaults to disabled, so normal ff8xor calls retain the two-way
+transform schedule unless a caller deliberately enables the four-buffer path;
+packed Leopard remains unchanged. The decoder also combines the
+formal-derivative/right-half sweep with
+the following sentinel top FFT layer. That algebraic boundary fusion is
+enabled on every payload ISA: its traffic reduction is ISA-independent, and
+the counterbalanced AVX2/AVX-512 measurements reported below are uniformly
+favorable.
 
 The payload loops use loads, stores, XORs, copies, zeroing, and address/loop
 arithmetic. They do not use payload-indexed multiplication tables, byte
@@ -168,16 +173,19 @@ Each smaller path handles only the exact remainder of one plane. Multiplication
 loads all eight source planes before any store, so `source == destination` is
 supported.
 
-Encoder accumulation and formal-derivative additions resolve the SIMD mode
-once for the complete batch, then group independent buffers four, two, and one
-at a time. For buffers through 1 KiB, named two- and four-stream loops expose
-independent load/XOR/store chains in portable, SIMD128, AVX2, AVX-512VL, and
-AVX-512-ZMM forms. Larger buffers retain the one-time mode lookup but use the
-better measured sequential vector-loop shape; interleaving at 4 KiB and above
-was neutral to slower on the implementation host. Each individual
-`source == destination` pair is supported, including odd batch tails. The
-internal transform helper accepts independent stream pairs; ranges belonging
-to different entries must not overlap, as at both production call sites.
+Encoder accumulation and the remaining left-half formal-derivative additions
+resolve the SIMD mode once for the complete batch, then group independent
+buffers four, two, and one at a time. For buffers through 1 KiB, named two- and
+four-stream loops expose independent load/XOR/store chains in portable,
+SIMD128, AVX2, AVX-512VL, and AVX-512-ZMM forms. Larger buffers retain the
+one-time mode lookup but use the better measured sequential vector-loop shape;
+interleaving at 4 KiB and above was neutral to slower on the implementation
+host. Each individual `source == destination` pair is supported, including odd
+batch tails. The internal transform helper accepts independent stream pairs;
+ranges belonging to different entries must not overlap, as at both production
+call sites. The direct derivative/top-FFT boundary instead dispatches one of
+eight source-arity-specialized row kernels before each whole-buffer loop, as
+described in its performance checkpoint below.
 
 The backend copies Leopard's FF8 metadata initialization and uses a padded skew
 array so the transform's historical one-before-logical-begin view remains a
@@ -573,9 +581,10 @@ CPU detection and packed FF8/FF16 metadata initialization functions reached by
 filters also include compiler-created FWHT/OpenMP clones. The check rejects
 SSE3, SSSE3, SSE4, AVX/AVX-512, GFNI, CLMUL, BMI, and other post-v1 opcodes.
 The only deliberate exception is `xgetbv` inside a named CPUID/OSXSAVE-guarded
-feature probe. The M=1, encoder accumulation, and formal-derivative additions
-call the experimental XOR dispatcher directly, so forced Portable does not
-reach the packed `-march=native` XOR helpers.
+feature probe. The M=1 path, encoder accumulation, remaining left-half
+formal-derivative additions, and direct derivative/top-FFT boundary call the
+experimental XOR dispatcher directly, so forced Portable does not reach the
+packed `-march=native` XOR helpers.
 
 ```sh
 cmake --build build --target check_ff8xor_baseline_isa
@@ -801,6 +810,82 @@ ranges from a modest XOR2 win to an approximately neutral XOR3 result.
 Consequently all builds still default to `FourBufferMode::Disabled`. A
 possible policy restricted to payloads at or below 4 KiB is a separate tuning
 experiment, not enabled by this checkpoint.
+
+### Fused formal-derivative/top-FFT boundary
+
+For a power-of-two transform of size `n`, let `h = n / 2`, let `A` be the
+already-computed formal derivative of the left half, and let `R` be the
+unmodified right half. The remaining old work was the cross-half derivative
+XOR and right-half derivative, followed by the top FFT layer. The top layer's
+skew is always the `255` sentinel, so the stages reduce exactly to:
+
+```text
+left[q]  = A[q] XOR R[q]
+right[q] = A[q] XOR (XOR over zero bits b of q: R[q | (1 << b)])
+```
+
+Every extra right source has an index greater than `q`; processing rows in
+ascending order is therefore safely in-place. The old full derivative and top
+layer are replaced by the left-half derivative plus this direct boundary, and
+the remaining FFT resumes at distance `n / 4`. The tracked decoder
+materializes deferred zeros before the direct reads and assigns fresh state
+identities afterward, preserving ErrorBitfield pruning without relying on an
+unproved symbolic cancellation.
+
+Each row chooses one of eight source arities before entering its whole-buffer
+loop. The payload variables are statically named `a`, `r0`, and `s0..s6`; the
+loop has neither a source array nor a gate interpreter. Portable and SIMD128
+use ordinary pairwise XOR. AVX2 uses the same static schedule at YMM width;
+AVX-512VL and ZMM combine triples with `VPTERNLOGD 0x96`. Exact tests compare
+the direct map against an independently staged derivative plus top butterfly
+for every transform size from 2 through 256, all basis rows, deterministic
+random data, forced ISA modes, canary tails, tracked poisoned zeros, and native
+end-to-end loss cases.
+
+The replacement schedule (left-half derivative plus direct boundary) uses
+exactly two-thirds of the scheduled memory traffic of the full derivative plus
+top FFT stages it replaces. For `n = 2..256`, the old/new combined-stage unit
+counts are `6/4`, `18/12`, `48/32`, `120/80`, `288/192`, `672/448`,
+`1536/1024`, and `3456/2304`. Across the benchmark's complete 80-schedule
+decode matrix (within 104 total encode/decode schedules), the geometric mean
+of the new/old whole-decode scheduled-payload model is
+0.856475x (14.35% less), with a per-row range of 0.83634x--0.88159x.
+
+GCC 13.3 Release inspection of each complete YMM and ZMM `ApplyRow`
+specialization found 227 instructions total, 67 vector instructions, and 12
+ternary XORs across its dispatch and eight static arity loops. Each had zero
+vector stack references, zero calls, and no forbidden field or table
+instructions; its one indirect arity dispatch is before the vector code. The
+strict inspector also accepts a comparison-tree lowering a compiler may
+choose, although Clang was not available on this implementation host for a
+production-object check.
+
+Clean counterbalanced timings used native plane buffers, disabled four-buffer
+fusion, two warm-ups, seven measured ABBA rounds (14 samples per backend per
+schedule), and the full finite benchmark matrix. Allocation, verification, and
+transposes were excluded. Ratios below are candidate time divided by the
+detached pre-change control. Because the derivative change cannot affect
+encode, the last column also divides each decode ratio by its matching encode
+ratio to expose residual run/code-layout bias.
+
+| ISA / shard bytes | Decode candidate/control | Encode-normalized decode |
+|---|---:|---:|
+| AVX-512 ZMM / 1 KiB | 0.926238x | 0.961853x |
+| AVX-512 ZMM / 4 KiB | 0.892163x | 0.916730x |
+| AVX-512 ZMM / 64 KiB | 0.882675x | 0.899067x |
+| AVX-512 ZMM / 1 MiB | 0.897237x | 0.913055x |
+| AVX2 / 1 KiB | 0.952255x | 0.989300x |
+| AVX2 / 4 KiB | 0.943239x | 0.940637x |
+| AVX2 / 64 KiB | 0.910595x | 0.908548x |
+| AVX2 / 1 MiB | 0.909065x | 0.910866x |
+
+The AVX2 geometric mean over all decode rows was 0.928589x raw and 0.936781x
+after encode normalization. Both the raw and bias-adjusted AVX2/AVX-512
+comparisons favor the direct boundary at every measured size. Together with
+the ISA-independent traffic reduction and portable/SIMD128 correctness tests,
+this supports enabling the optimization for all ff8xor payload modes. Earlier
+overlapping and accidentally relinked control runs were discarded rather than
+included in these aggregates.
 
 ### Offline ISA-aware circuit costing
 
@@ -1218,17 +1303,18 @@ are recorded in the four-buffer section above.
 - Each two-way whole-buffer operation incurs one coefficient function-pointer
   dispatch; each successful radix-4 unit incurs one tuple-specialized
   whole-buffer dispatch.
-- The fused path requires AVX-512 ZMM and a complete 64-byte-chunked plane.
-  AVX2, partial/truncated radix-4 units, tails, and pruned decoder layers retain
-  the extra two-way intermediate memory pass.
+- The four-buffer fused path requires AVX-512 ZMM and a complete
+  64-byte-chunked plane. AVX2, partial/truncated radix-4 units, tails, and
+  pruned decoder layers retain the extra two-way intermediate memory pass.
 - The integrated four-buffer path is opt-in and default-disabled. Its current
   checkpoint improves the broad 1--4 KiB matrix but regresses large encode and
   does not provide a uniform large-decode win, so enabling it unconditionally
   would make the experiment worse on the implementation host.
-- Encoder chunk accumulation and the decoder formal-derivative sweep expose
-  two/four-stream XOR instruction-level parallelism only through 1 KiB. Larger
-  buffers use the measured faster sequential-loop shape and still lack fusion
-  into adjacent transform passes.
+- Encoder chunk accumulation exposes two/four-stream XOR instruction-level
+  parallelism only through 1 KiB. Larger buffers use the measured faster
+  sequential-loop shape and still lack fusion into the first IFFT or final FFT
+  boundary. The decoder derivative/top-FFT boundary is now fused separately;
+  its remaining left-half derivative retains the batched XOR path.
 - Sixteen live AVX2 vectors leave no spare vector register, so compiler spills
   remain possible for some generated circuits.
 - Static specialization of all multiplier, two-way butterfly, and 256 radix-4
@@ -1248,12 +1334,18 @@ are recorded in the four-buffer section above.
   broader packed-code multiversioning change.
 - This backend is FF8-only and CPU-only.
 
-The highest-value next optimization for this path is a separately validated
-small-payload policy and schedule tuned for the region at or below 4 KiB where
-fusion currently wins. That experiment must repeat correctness, production
-assembly inspection, and counterbalanced full-matrix timing before changing
-the default; this checkpoint deliberately does not enable such a policy.
-Other follow-ups include fusing the formal derivative with its adjacent FFT
-layer, CUDA plane kernels, persistent plane pipelines, packed-boundary
-transpose/scaling fusion, and synthesis optimized for depth and register
-pressure rather than gate count alone.
+The highest-value next optimization is to make the exact 255-way locator-scale
+selection substantially cheaper while preserving its gate-count/depth/numeric
+tie break. That keeps the user's algebraically free constant choice at the
+simplest available circuits without letting small-payload scalar metadata
+dominate. The next payload experiment is encoder-boundary fusion: combine
+original copy/first IFFT work and chunk accumulation/final FFT work without
+changing transform order. A separately validated per-call four-buffer policy
+for the favorable small-payload and cache-geometry regions must repeat
+correctness, production assembly inspection, and counterbalanced full-matrix
+timing before changing the disabled default.
+
+Other follow-ups include AVX-512 tuple scheduling optimized for dependency
+depth and register pressure, CUDA plane kernels, persistent plane pipelines,
+packed-boundary transpose/scaling fusion, and synthesis optimized for depth
+and register pressure rather than gate count alone.
