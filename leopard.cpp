@@ -49,6 +49,74 @@ static bool m_Initialized = false;
 static const unsigned kLegacyFF8Order = 256;
 static const unsigned kLegacyFF16Order = 65536;
 
+enum LegacyGeometryResult
+{
+    LegacyGeometryValid,
+    LegacyGeometryInvalidCounts,
+    LegacyGeometryTooMuchData
+};
+
+struct LegacyGeometry
+{
+    unsigned m;
+    unsigned n;
+    unsigned encode_work_count;
+    unsigned decode_work_count;
+};
+
+static unsigned LegacyNextPow2(unsigned value)
+{
+    // All callers bound value to [2, 65536], avoiding NextPow2's zero-input
+    // precondition and any overflowing intermediate shift.
+    unsigned result = 1;
+    while (result < value)
+        result <<= 1;
+    return result;
+}
+
+static LegacyGeometryResult GetLegacyGeometry(
+    unsigned original_count,
+    unsigned recovery_count,
+    LegacyGeometry& geometry)
+{
+    geometry = LegacyGeometry();
+    if (original_count == 0 || recovery_count == 0 ||
+        recovery_count > original_count)
+        return LegacyGeometryInvalidCounts;
+
+    const uint64_t transmitted_count =
+        static_cast<uint64_t>(original_count) + recovery_count;
+    if (transmitted_count > kLegacyFF16Order)
+        return LegacyGeometryTooMuchData;
+
+    if (original_count == 1)
+    {
+        geometry.m = 1;
+        geometry.n = 1;
+        geometry.encode_work_count = recovery_count;
+        geometry.decode_work_count = original_count;
+        return LegacyGeometryValid;
+    }
+    if (recovery_count == 1)
+    {
+        geometry.m = 1;
+        geometry.n = original_count;
+        geometry.encode_work_count = 1;
+        geometry.decode_work_count = original_count;
+        return LegacyGeometryValid;
+    }
+
+    geometry.m = LegacyNextPow2(recovery_count);
+    const uint64_t parent_input =
+        static_cast<uint64_t>(geometry.m) + original_count;
+    if (parent_input > kLegacyFF16Order)
+        return LegacyGeometryTooMuchData;
+    geometry.n = LegacyNextPow2(static_cast<unsigned>(parent_input));
+    geometry.encode_work_count = geometry.m * 2;
+    geometry.decode_work_count = geometry.n;
+    return LegacyGeometryValid;
+}
+
 LEO_EXPORT int leo_init_(int version)
 {
     if (version != LEO_VERSION)
@@ -113,11 +181,11 @@ LEO_EXPORT unsigned leo_encode_work_count(
     unsigned original_count,
     unsigned recovery_count)
 {
-    if (original_count == 1)
-        return recovery_count;
-    if (recovery_count == 1)
-        return 1;
-    return leopard::NextPow2(recovery_count) * 2;
+    LegacyGeometry geometry;
+    return GetLegacyGeometry(original_count, recovery_count, geometry) ==
+            LegacyGeometryValid
+        ? geometry.encode_work_count
+        : 0;
 }
 
 // recovery_data = parity of original_data (xor sum)
@@ -149,14 +217,22 @@ LEO_EXPORT LeopardResult leo_encode(
     if (buffer_bytes <= 0 || buffer_bytes % 64 != 0)
         return Leopard_InvalidSize;
 
-    if (recovery_count <= 0 || recovery_count > original_count)
+    LegacyGeometry geometry;
+    const LegacyGeometryResult geometry_result = GetLegacyGeometry(
+        original_count, recovery_count, geometry);
+    if (geometry_result == LegacyGeometryInvalidCounts)
         return Leopard_InvalidCounts;
+    if (geometry_result == LegacyGeometryTooMuchData)
+        return Leopard_TooMuchData;
 
     if (!original_data || !work_data)
         return Leopard_InvalidInput;
 
     if (!m_Initialized)
         return Leopard_CallInitialize;
+
+    if (work_count != geometry.encode_work_count)
+        return Leopard_InvalidCounts;
 
     // Handle k = 1 case
     if (original_count == 1)
@@ -177,11 +253,8 @@ LEO_EXPORT LeopardResult leo_encode(
         return Leopard_Success;
     }
 
-    const unsigned m = leopard::NextPow2(recovery_count);
-    const unsigned n = leopard::NextPow2(m + original_count);
-
-    if (work_count != m * 2)
-        return Leopard_InvalidCounts;
+    const unsigned m = geometry.m;
+    const unsigned n = geometry.n;
 
     if (n <= kLegacyFF8Order)
     {
@@ -224,11 +297,11 @@ LEO_EXPORT unsigned leo_decode_work_count(
     unsigned original_count,
     unsigned recovery_count)
 {
-    if (original_count == 1 || recovery_count == 1)
-        return original_count;
-    const unsigned m = leopard::NextPow2(recovery_count);
-    const unsigned n = leopard::NextPow2(m + original_count);
-    return n;
+    LegacyGeometry geometry;
+    return GetLegacyGeometry(original_count, recovery_count, geometry) ==
+            LegacyGeometryValid
+        ? geometry.decode_work_count
+        : 0;
 }
 
 static void DecodeM1(
@@ -262,8 +335,13 @@ LEO_EXPORT LeopardResult leo_decode(
     if (buffer_bytes <= 0 || buffer_bytes % 64 != 0)
         return Leopard_InvalidSize;
 
-    if (recovery_count <= 0 || recovery_count > original_count)
+    LegacyGeometry geometry;
+    const LegacyGeometryResult geometry_result = GetLegacyGeometry(
+        original_count, recovery_count, geometry);
+    if (geometry_result == LegacyGeometryInvalidCounts)
         return Leopard_InvalidCounts;
+    if (geometry_result == LegacyGeometryTooMuchData)
+        return Leopard_TooMuchData;
 
     if (!original_data || !recovery_data || !work_data)
         return Leopard_InvalidInput;
@@ -295,6 +373,9 @@ LEO_EXPORT LeopardResult leo_decode(
     if (recovery_got_count < original_loss_count)
         return Leopard_NeedMoreData;
 
+    if (work_count != geometry.decode_work_count)
+        return Leopard_InvalidCounts;
+
     // Handle case original_loss_count = 0
     if (original_loss_count == 0)
     {
@@ -323,11 +404,8 @@ LEO_EXPORT LeopardResult leo_decode(
         return Leopard_Success;
     }
 
-    const unsigned m = leopard::NextPow2(recovery_count);
-    const unsigned n = leopard::NextPow2(m + original_count);
-
-    if (work_count != n)
-        return Leopard_InvalidCounts;
+    const unsigned m = geometry.m;
+    const unsigned n = geometry.n;
 
     if (n <= kLegacyFF8Order)
     {

@@ -1536,6 +1536,16 @@ void test_legacy_negative_contract(Counts* counts)
     void* encode_work[4] = { shard, shard, shard, shard };
     require(leo_encode_work_count(3, 2) == 4,
         "legacy encode work-count changed");
+    require(leo_encode_work_count(1, 1) == 1 &&
+            leo_encode_work_count(65535, 1) == 1 &&
+            leo_encode_work_count(32768, 32768) == 65536,
+        "legacy encode work-count rejected a valid boundary");
+    require(leo_encode_work_count(0, 1) == 0 &&
+            leo_encode_work_count(2, 3) == 0 &&
+            leo_encode_work_count(65536, 1) == 0 &&
+            leo_encode_work_count(32769, 32767) == 0 &&
+            leo_encode_work_count(std::numeric_limits<unsigned>::max(), 2) == 0,
+        "legacy encode work-count accepted invalid counts");
     require_legacy_result(leo_encode(17, 3, 2, 4, original, encode_work),
         Leopard_InvalidSize, "legacy encode 64-byte restriction");
     require_legacy_result(leo_encode(64, 3, 4, 0, NULL, NULL),
@@ -1544,10 +1554,27 @@ void test_legacy_negative_contract(Counts* counts)
         Leopard_InvalidInput, "legacy encode null input");
     require_legacy_result(leo_encode(64, 3, 2, 3, original, encode_work),
         Leopard_InvalidCounts, "legacy encode wrong work count");
-    counts->legacy_checks += 5;
+    require_legacy_result(leo_encode(64, 65536, 1, 0, NULL, NULL),
+        Leopard_TooMuchData, "legacy encode transmitted-count limit");
+    require_legacy_result(leo_encode(64, 32769, 32767, 0, NULL, NULL),
+        Leopard_TooMuchData, "legacy encode parent-count limit");
+    require_legacy_result(leo_encode(64,
+        std::numeric_limits<unsigned>::max(), 2, 0, NULL, NULL),
+        Leopard_TooMuchData, "legacy encode overflow counts");
+    counts->legacy_checks += 10;
 
     require(leo_decode_work_count(3, 2) == 8,
         "legacy decode work-count changed");
+    require(leo_decode_work_count(1, 1) == 1 &&
+            leo_decode_work_count(65535, 1) == 65535 &&
+            leo_decode_work_count(32768, 32768) == 65536,
+        "legacy decode work-count rejected a valid boundary");
+    require(leo_decode_work_count(0, 1) == 0 &&
+            leo_decode_work_count(2, 3) == 0 &&
+            leo_decode_work_count(65536, 1) == 0 &&
+            leo_decode_work_count(32769, 32767) == 0 &&
+            leo_decode_work_count(std::numeric_limits<unsigned>::max(), 2) == 0,
+        "legacy decode work-count accepted invalid counts");
     const void* recovery[2] = { shard, NULL };
     void* decode_work[8] = {
         shard, shard, shard, shard, shard, shard, shard, shard
@@ -1563,6 +1590,13 @@ void test_legacy_negative_contract(Counts* counts)
     require_legacy_result(leo_decode(64, 3, 2, 8, incomplete_original,
         recovery, decode_work), Leopard_NeedMoreData,
         "legacy decode insufficient recovery");
+    require_legacy_result(leo_decode(64, 65536, 1, 0, NULL, NULL, NULL),
+        Leopard_TooMuchData, "legacy decode transmitted-count limit");
+    require_legacy_result(leo_decode(64, 32769, 32767, 0, NULL, NULL, NULL),
+        Leopard_TooMuchData, "legacy decode parent-count limit");
+    require_legacy_result(leo_decode(64,
+        std::numeric_limits<unsigned>::max(), 2, 0, NULL, NULL, NULL),
+        Leopard_TooMuchData, "legacy decode overflow counts");
 
     uint8_t single_source[64];
     uint8_t single_restored[64];
@@ -1589,13 +1623,19 @@ void test_legacy_negative_contract(Counts* counts)
     require_legacy_result(leo_decode(64, 1, 1, 1,
         missing_single_original, single_recovery, single_work),
         Leopard_NeedMoreData, "legacy one-original insufficient recovery");
+    require_legacy_result(leo_decode(64, 1, 1, 0, single_original,
+        single_recovery, single_work), Leopard_InvalidCounts,
+        "legacy one-original wrong work count");
+    require_legacy_result(leo_encode(64, 1, 1, 0, single_original,
+        single_work), Leopard_InvalidCounts,
+        "legacy one-original encode wrong work count");
 
     const void* one_original[1] = { shard };
     void* one_work[1] = { shard };
     require_legacy_result(leo_encode(64, 65535, 32768, 65536,
         one_original, one_work), Leopard_TooMuchData,
         "legacy encode field-order limit");
-    counts->legacy_checks += 11;
+    counts->legacy_checks += 18;
 }
 
 } // namespace

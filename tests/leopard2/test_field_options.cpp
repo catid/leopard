@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <vector>
 
@@ -224,6 +225,18 @@ void check_legacy_no_loss()
 void check_legacy_selection()
 {
     require(leo_init() == Leopard_Success, "legacy initialization");
+    require(leo_encode_work_count(1, 1) == 1 &&
+            leo_decode_work_count(1, 1) == 1 &&
+            leo_encode_work_count(32768, 32768) == 65536 &&
+            leo_decode_work_count(32768, 32768) == 65536,
+        "legacy valid count boundaries");
+    require(leo_encode_work_count(0, 1) == 0 &&
+            leo_decode_work_count(2, 3) == 0 &&
+            leo_encode_work_count(65536, 1) == 0 &&
+            leo_decode_work_count(32769, 32767) == 0 &&
+            leo_decode_work_count(
+                std::numeric_limits<unsigned>::max(), 2) == 0,
+        "legacy invalid count boundaries");
 #if LEO2_EXPECT_GF8
     require(legacy_encode(3, 2) == Leopard_Success,
         "legacy canonical GF8 enabled");
