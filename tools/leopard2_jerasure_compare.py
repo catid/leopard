@@ -2121,11 +2121,13 @@ def validate_correctness(
 
 def validate_leopard_result(
         document: Mapping[str, Any], cell: Mapping[str, Any],
-        iterations: int, warmup: int) -> list[int]:
+        iterations: int, warmup: int,
+        selector_policy: str = "current") -> list[int]:
     validate_cell_domain(cell)
     validate_child_integer_types(document, "Leopard2 child", leopard=True)
     try:
-        return common.validate_leopard_result(document, cell, iterations, warmup)
+        return common.validate_leopard_result(
+            document, cell, iterations, warmup, selector_policy)
     except common.ComparisonError as error:
         raise ComparisonError(str(error)) from error
 
@@ -2513,7 +2515,8 @@ def make_child_artifact(
 def validate_child_artifact(
         artifact: Mapping[str, Any], manifest_digest: str, cell_index: int,
         repetition: int, order_index: int, provider: str,
-        executable_sha256: str, validate_payload: bool = True) -> list[int]:
+        executable_sha256: str, validate_payload: bool = True,
+        selector_policy: str = "current") -> list[int]:
     require_exact_keys(artifact, {
         "schema", "manifest_sha256", "cell_index", "repetition", "order_index",
         "provider", "executable_sha256", "document", "artifact_sha256"},
@@ -2551,7 +2554,8 @@ def validate_child_artifact(
             artifact["document"], cell, EVIDENCE_ITERATIONS,
             EVIDENCE_WARMUP, "projection")
     return validate_leopard_result(
-        artifact["document"], cell, EVIDENCE_ITERATIONS, EVIDENCE_WARMUP)
+        artifact["document"], cell, EVIDENCE_ITERATIONS, EVIDENCE_WARMUP,
+        selector_policy)
 
 
 def group_directory(state: Path, cell_index: int, repetition: int) -> Path:
@@ -2607,6 +2611,8 @@ def validate_group_artifacts(
         manifest.get("artifact_sha256"), 64, "run manifest digest")
     manifest_schema = manifest.get("schema")
     legacy = manifest_schema == RUN_MANIFEST_SCHEMA_V1
+    selector_policy = (
+        "current" if manifest_schema == RUN_MANIFEST_SCHEMA else "historical")
     expected_group_schema = (
         GROUP_ARTIFACT_SCHEMA_V1 if legacy else
         GROUP_ARTIFACT_SCHEMA_V2
@@ -2628,7 +2634,7 @@ def validate_group_artifacts(
         executable_sha = str(manifest["executables"][provider])
         missing[provider] = validate_child_artifact(
             child, manifest_digest, cell_index, repetition, order_index,
-            provider, executable_sha, validate_payload)
+            provider, executable_sha, validate_payload, selector_policy)
         if validate_payload:
             digests[provider] = digest_triplet(child["document"])
         results.append({key: child[key] for key in (
@@ -3105,7 +3111,8 @@ def validate_checkpoint(
                 "projection")
         else:
             missing = validate_leopard_result(
-                result["document"], cell, EVIDENCE_ITERATIONS, EVIDENCE_WARMUP)
+                result["document"], cell, EVIDENCE_ITERATIONS, EVIDENCE_WARMUP,
+                "current" if checkpoint_schema == SCHEMA else "historical")
         pair_evidence.setdefault((cell_index, repetition), {})[provider] = (
             missing, digest_triplet(result["document"]))
     for identity, providers in pair_evidence.items():
@@ -3752,6 +3759,11 @@ def legacy_checkpoint(checkpoint: Mapping[str, Any]) -> dict[str, Any]:
         group["host"]["allowed_cpu_count"] = len(pair)
         group["host"].pop("smt_topology")
         group["host"].pop("cpu_isolation")
+    for result in legacy["results"]:
+        if result["provider"] == "leopard2":
+            result["document"]["parameters"].pop("force_tiled_decode")
+            result["document"]["parameters"].pop("force_materialized_decode")
+    legacy["aggregate"] = aggregate_results(legacy["results"])
     legacy["artifact_sha256"] = canonical_digest(legacy)
     return legacy
 
@@ -3776,6 +3788,11 @@ def legacy_v2_checkpoint(checkpoint: Mapping[str, Any]) -> dict[str, Any]:
             before["benchmark_cpu"], after["benchmark_cpu"],
             before["reserved_sibling"], after["reserved_sibling"],
             legacy=True)
+    for result in legacy["results"]:
+        if result["provider"] == "leopard2":
+            result["document"]["parameters"].pop("force_tiled_decode")
+            result["document"]["parameters"].pop("force_materialized_decode")
+    legacy["aggregate"] = aggregate_results(legacy["results"])
     legacy["artifact_sha256"] = canonical_digest(legacy)
     return legacy
 
@@ -3799,6 +3816,34 @@ def run_mutation_tests(correctness_path: Path) -> dict[str, int]:
     validate_checkpoint(legacy_v2_checkpoint(checkpoint), correctness)
     validate_checkpoint(legacy_checkpoint(checkpoint), correctness)
     checkpoint_mutations = []
+    for selector in ("force_tiled_decode", "force_materialized_decode"):
+        changed = copy.deepcopy(checkpoint)
+        leopard = next(
+            result for result in changed["results"]
+            if result["provider"] == "leopard2")
+        leopard["document"]["parameters"].pop(selector)
+        changed["aggregate"] = aggregate_results(changed["results"])
+        changed["artifact_sha256"] = canonical_digest(changed)
+        checkpoint_mutations.append(changed)
+        changed = copy.deepcopy(checkpoint)
+        leopard = next(
+            result for result in changed["results"]
+            if result["provider"] == "leopard2")
+        leopard["document"]["parameters"][selector] = True
+        changed["aggregate"] = aggregate_results(changed["results"])
+        changed["artifact_sha256"] = canonical_digest(changed)
+        checkpoint_mutations.append(changed)
+    changed = legacy_v2_checkpoint(checkpoint)
+    leopard = next(
+        result for result in changed["results"]
+        if result["provider"] == "leopard2")
+    leopard["document"]["parameters"].update({
+        "force_tiled_decode": False,
+        "force_materialized_decode": False,
+    })
+    changed["aggregate"] = aggregate_results(changed["results"])
+    changed["artifact_sha256"] = canonical_digest(changed)
+    checkpoint_mutations.append(changed)
     changed = copy.deepcopy(checkpoint)
     changed["method"]["unvalidated_claim"] = True
     changed["artifact_sha256"] = canonical_digest(changed)

@@ -2156,8 +2156,11 @@ def validate_digests(value: object) -> dict[str, str]:
 
 
 def validate_result(
-    value: object, cell: Cell, campaign: Mapping[str, Any]
+    value: object, cell: Cell, campaign: Mapping[str, Any],
+    raw_schema: str = RAW_SCHEMA,
 ) -> dict[str, Any]:
+    require(raw_schema in RAW_TO_SUPPORT_SCHEMA,
+            "unsupported benchmark container schema")
     require(isinstance(value, dict) and set(value) == {
         "build", "correctness", "legacy", "memory", "metrics", "parameters",
         "resolved", "schema", "workload_digests"} and
@@ -2194,6 +2197,11 @@ def validate_result(
         "thread_count": 1,
         "seed": cell.seed,
     }
+    if raw_schema == RAW_SCHEMA:
+        expected.update({
+            "force_tiled_decode": False,
+            "force_materialized_decode": False,
+        })
     require(set(parameters) == set(expected),
             "benchmark parameters have unexpected or missing fields")
     for name, expected_value in expected.items():
@@ -2581,6 +2589,7 @@ def validate_invocations(
     execution: Mapping[str, Mapping[str, Any]],
     output: Path,
     complete: bool,
+    raw_schema: str = RAW_SCHEMA,
 ) -> list[dict[str, Any]]:
     require(isinstance(invocations, list), "invocations are not a list")
     expected = expected_invocation_sequence(cells)
@@ -2639,7 +2648,7 @@ def validate_invocations(
         parsed = read_json_limited(stdout_path, "retained benchmark stdout", MAX_STDOUT_BYTES)
         require(parsed == invocation.get("result"),
                 "retained stdout differs from embedded benchmark result")
-        normalized = validate_result(parsed, cell, campaign)
+        normalized = validate_result(parsed, cell, campaign, raw_schema)
         require(invocation.get("normalized") == normalized,
                 "normalized benchmark result was edited")
         digests = normalized["digests"]
@@ -2697,7 +2706,7 @@ def validate_raw(
     execution = validate_execution_identity(raw.get("execution"), initial)
     invocations = validate_invocations(
         raw.get("invocations"), cells, campaign, specification, initial,
-        reservation, execution, output, complete=True)
+        reservation, execution, output, complete=True, raw_schema=raw_schema)
     total_duration = sum(item["duration_ns"] for item in invocations)
     elapsed = isolation["after"]["monotonic_ns"] - isolation["before"]["monotonic_ns"]
     require(elapsed >= total_duration,
@@ -2864,7 +2873,8 @@ def validate_failure(
         validated_execution = validate_execution_identity(execution, initial)
         validate_invocations(
             invocations, cells, campaign, specification, initial,
-            reservation, validated_execution, output, complete=False)
+            reservation, validated_execution, output, complete=False,
+            raw_schema=FAILURE_TO_RAW_SCHEMA[failure_schema])
     else:
         require(invocations == [], "failure invocation prefix is invalid")
         require(initial is None or isinstance(initial, dict),
@@ -3694,12 +3704,32 @@ def run_self_test(_options: argparse.Namespace) -> int:
         shutil.copytree(root / "fast", legacy_root)
         legacy_raw = copy.deepcopy(fast_raw)
         legacy_raw["schema"] = RAW_SCHEMA_V3
+        legacy_cells = {
+            item.identifier: item
+            for item in campaign_cells(legacy_raw["campaign"], allow_self_test=True)
+        }
+        for invocation in legacy_raw["invocations"]:
+            parameters = invocation["result"]["parameters"]
+            parameters.pop("force_tiled_decode")
+            parameters.pop("force_materialized_decode")
+            cell = legacy_cells[invocation["cell_id"]]
+            invocation["normalized"] = validate_result(
+                invocation["result"], cell, legacy_raw["campaign"],
+                RAW_SCHEMA_V3)
+            stdout_path = legacy_root / invocation["stdout"]["path"]
+            stdout_path.write_bytes(
+                canonical_bytes(invocation["result"]) + b"\n")
+            invocation["stdout"] = artifact_record(
+                legacy_root, stdout_path, MAX_STDOUT_BYTES)
+        legacy_raw["analysis"] = analyze(
+            legacy_raw["invocations"], tuple(legacy_cells.values()))
         legacy_raw = resign(legacy_raw)
         legacy_raw_path = legacy_root / "raw.json"
         legacy_raw_path.unlink()
         write_json_exclusive(legacy_raw_path, legacy_raw)
         legacy_manifest = copy.deepcopy(fast_manifest)
         legacy_manifest["schema"] = MANIFEST_SCHEMA_V3
+        legacy_manifest["analysis"] = legacy_raw["analysis"]
         legacy_manifest["raw"] = raw_file_identity(
             legacy_raw_path, legacy_raw)
         legacy_manifest = resign(legacy_manifest)
@@ -4012,6 +4042,33 @@ def run_self_test(_options: argparse.Namespace) -> int:
                     "tracked teardown obscured the primary failure")
         else:
             raise EvidenceError("tracked context suppressed a primary failure")
+
+        selector_cell = FIXED_CELLS[0]
+        current_result = fast_raw["invocations"][0]["result"]
+        for selector in ("force_tiled_decode", "force_materialized_decode"):
+            changed_result = copy.deepcopy(current_result)
+            changed_result["parameters"].pop(selector)
+            expect_evidence_error(
+                lambda changed_result=changed_result: validate_result(
+                    changed_result, selector_cell, fast_raw["campaign"], RAW_SCHEMA),
+                "current selector omission " + selector)
+            changed_result = copy.deepcopy(current_result)
+            changed_result["parameters"][selector] = True
+            expect_evidence_error(
+                lambda changed_result=changed_result: validate_result(
+                    changed_result, selector_cell, fast_raw["campaign"], RAW_SCHEMA),
+                "current selector activation " + selector)
+        legacy_result = legacy_raw["invocations"][0]["result"]
+        changed_result = copy.deepcopy(legacy_result)
+        changed_result["parameters"].update({
+            "force_tiled_decode": False,
+            "force_materialized_decode": False,
+        })
+        expect_evidence_error(
+            lambda: validate_result(
+                changed_result, selector_cell, legacy_raw["campaign"],
+                RAW_SCHEMA_V3),
+            "historical selector injection")
 
         mutations: list[tuple[str, Callable[[dict[str, Any]], None]]] = [
             ("command", lambda value: value["invocations"][0]["command"].__setitem__(

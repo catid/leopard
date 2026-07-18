@@ -348,8 +348,19 @@ def validate_benchmark(raw, job):
         raise CrossoverError("benchmark emitted an unknown schema")
     item = job["cell"]
     parameters = raw.get("parameters", {})
+    selector_names = ("force_tiled_decode", "force_materialized_decode")
+    selector_presence = tuple(name in parameters for name in selector_names)
+    if selector_presence == (True, True):
+        for name in selector_names:
+            if type(parameters[name]) is not bool or parameters[name] is not False:
+                raise CrossoverError(
+                    "benchmark workspace selector {} is not false Boolean".format(name))
+    elif selector_presence != (False, False):
+        raise CrossoverError("benchmark workspace selector pair is partial")
     expected = {
         "K": item["k"], "R": item["r"], "batch": item["batch"],
+        "force_generic_decode": False,
+        "force_specialized_decode": False,
         "iterations": job["iterations"], "loss_count": item["losses"],
         "requested_backend": item["backend"],
         "requested_field": item["field"],
@@ -360,10 +371,13 @@ def validate_benchmark(raw, job):
         "warmup": job["warmup"],
     }
     for key, value in expected.items():
-        if parameters.get(key) != value:
+        actual = parameters.get(key)
+        if ((type(value) is bool and
+             (type(actual) is not bool or actual is not value)) or
+                (type(value) is not bool and actual != value)):
             raise CrossoverError(
                 "benchmark parameter {} is {!r}, expected {!r}".format(
-                    key, parameters.get(key), value))
+                    key, actual, value))
     resolved = raw.get("resolved", {})
     if resolved.get("backend") != item["backend"]:
         raise CrossoverError("benchmark resolved the wrong backend")
@@ -726,6 +740,8 @@ def self_test_resume_validation():
                 "schema": BENCHMARK_SCHEMA,
                 "parameters": {
                     "K": 3, "R": 1, "batch": 1, "iterations": 3,
+                    "force_generic_decode": False,
+                    "force_specialized_decode": False,
                     "loss_count": 1, "requested_backend": "scalar",
                     "requested_field": "gf8",
                     "requested_profile": "legacy_high_v1",
@@ -750,6 +766,11 @@ def self_test_resume_validation():
                 },
                 "workload_digests": digests,
             }
+            if variant == "candidate":
+                raw["parameters"].update({
+                    "force_tiled_decode": False,
+                    "force_materialized_decode": False,
+                })
             atomic_json(raw_path, raw)
             stdout_path.parent.mkdir(parents=True, exist_ok=True)
             stdout_path.write_bytes(b"")
@@ -805,6 +826,51 @@ def self_test_resume_validation():
 
         raw_path = root / records[0]["benchmark_json"]
         pristine_raw = json.loads(raw_path.read_text(encoding="utf-8"))
+
+        for force_selector in (
+                "force_generic_decode", "force_specialized_decode"):
+            for mutation in ("missing", "active", "integer"):
+                changed = json.loads(json.dumps(pristine_raw))
+                if mutation == "missing":
+                    changed["parameters"].pop(force_selector)
+                elif mutation == "active":
+                    changed["parameters"][force_selector] = True
+                else:
+                    changed["parameters"][force_selector] = 0
+                try:
+                    validate_benchmark(changed, job)
+                except CrossoverError:
+                    pass
+                else:
+                    raise CrossoverError(
+                        "{} {} mutation was accepted".format(
+                            force_selector, mutation))
+
+        selector_fixture = json.loads(json.dumps(pristine_raw))
+        selector_fixture["parameters"].update({
+            "force_tiled_decode": False,
+            "force_materialized_decode": False,
+        })
+        validate_benchmark(selector_fixture, job)
+        for selector in ("force_tiled_decode", "force_materialized_decode"):
+            changed = json.loads(json.dumps(selector_fixture))
+            changed["parameters"].pop(selector)
+            try:
+                validate_benchmark(changed, job)
+            except CrossoverError:
+                pass
+            else:
+                raise CrossoverError(
+                    "partial workspace selector pair was accepted")
+            changed = json.loads(json.dumps(selector_fixture))
+            changed["parameters"][selector] = True
+            try:
+                validate_benchmark(changed, job)
+            except CrossoverError:
+                pass
+            else:
+                raise CrossoverError(
+                    "active workspace selector was accepted")
 
         def rejects_raw_mutation(mutator):
             mutated = json.loads(json.dumps(pristine_raw))

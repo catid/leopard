@@ -1576,27 +1576,19 @@ def validate_common_parameters(
     expected = expected_parameters(cell, iterations, warmup)
     if extra_expected:
         expected.update(extra_expected)
-    # The workspace diagnostic selectors were appended to benchmark schema v1
-    # as false-by-default metadata.  Retained pre-selector artifacts remain
-    # valid when both keys are absent; present keys are still type/value bound.
-    optional_false = {
-        name for name in ("force_tiled_decode", "force_materialized_decode")
-        if expected.get(name) is False
-    }
     actual_keys = set(parameters)
-    required_keys = (set(expected) - optional_false) | {
-        "missing_original_indices"}
-    allowed_keys = set(expected) | {"missing_original_indices"}
-    if not required_keys.issubset(actual_keys) or not actual_keys.issubset(allowed_keys):
+    required_keys = set(expected) | {"missing_original_indices"}
+    if actual_keys != required_keys:
         raise ComparisonError(
             f"result parameters keys changed: got {sorted(actual_keys)!r}, "
-            f"required {sorted(required_keys)!r}, allowed {sorted(allowed_keys)!r}")
+            f"expected {sorted(required_keys)!r}")
     for name, value in expected.items():
-        if name in optional_false and name not in parameters:
-            continue
-        if parameters.get(name) != value:
+        actual = parameters.get(name)
+        if ((type(value) is bool and
+             (type(actual) is not bool or actual is not value)) or
+                (type(value) is not bool and actual != value)):
             raise ComparisonError(
-                f"result parameter {name}={parameters.get(name)!r}, expected {value!r}")
+                f"result parameter {name}={actual!r}, expected {value!r}")
     missing = parameters.get("missing_original_indices")
     if (not isinstance(missing, list) or len(missing) != expected["loss_count"] or
             missing != sorted(set(missing)) or
@@ -1764,7 +1756,8 @@ def validate_isal_result(
 
 def validate_leopard_result(
         document: Mapping[str, Any], cell: Mapping[str, Any],
-        iterations: int, warmup: int) -> list[int]:
+        iterations: int, warmup: int,
+        selector_policy: str = "mixed") -> list[int]:
     schema = document.get("schema")
     if schema not in (LEOPARD_SCHEMA_V1, LEOPARD_SCHEMA_V2):
         raise ComparisonError("wrong Leopard2 result schema")
@@ -1776,10 +1769,24 @@ def validate_leopard_result(
     require_exact_keys(document, top_level_keys, "Leopard2 child result")
     if schema == LEOPARD_SCHEMA_V2:
         validate_workload_digests(document.get("workload_digests", {}))
+    if selector_policy not in ("current", "historical", "mixed"):
+        raise ComparisonError("invalid Leopard2 selector schema policy")
     extra_parameters = {
         "force_generic_decode": False, "force_specialized_decode": False,
-        "force_tiled_decode": False, "force_materialized_decode": False,
         "skip_legacy": True}
+    selector_names = ("force_tiled_decode", "force_materialized_decode")
+    selector_presence = tuple(
+        name in document.get("parameters", {}) for name in selector_names)
+    if selector_policy == "current":
+        extra_parameters.update({name: False for name in selector_names})
+    elif selector_policy == "historical":
+        if any(selector_presence):
+            raise ComparisonError(
+                "historical Leopard2 result contains workspace selectors")
+    elif selector_presence == (True, True):
+        extra_parameters.update({name: False for name in selector_names})
+    elif selector_presence != (False, False):
+        raise ComparisonError("Leopard2 workspace selector pair is partial")
     if schema == LEOPARD_SCHEMA_V2:
         extra_parameters["retain_samples"] = True
     missing = validate_common_parameters(
@@ -2547,7 +2554,8 @@ def run_checkpoint(
                                 "projection")
                                 if provider == "isa-l" else
                                 validate_leopard_result(
-                                    document, cell, iterations, warmup))
+                                    document, cell, iterations, warmup,
+                                    selector_policy="current"))
                             missing_by_provider[provider] = missing
                             results.append({
                                 "cell_index": cell_index, "repetition": repetition,
@@ -2629,7 +2637,8 @@ def run_checkpoint(
     checkpoint["artifact_sha256"] = canonical_digest(checkpoint)
     validate_checkpoint(
         checkpoint, correctness=correctness,
-        trusted_provenance=post_timing_provenance)
+        trusted_provenance=post_timing_provenance,
+        leopard_selector_policy="current")
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(checkpoint, indent=2, sort_keys=True) + "\n")
     return checkpoint
@@ -2677,7 +2686,8 @@ def validate_checkpoint(
         document: Mapping[str, Any], verify_local: bool = False,
         correctness: Mapping[str, Any] | None = None,
         trusted_provenance: Mapping[str, Any] | None = None,
-        _self_test_allow_reduced_correctness: bool = False) -> None:
+        _self_test_allow_reduced_correctness: bool = False,
+        leopard_selector_policy: str = "mixed") -> None:
     if correctness is None:
         raise ComparisonError(
             "checkpoint validation requires its bound correctness artifact")
@@ -2854,7 +2864,9 @@ def validate_checkpoint(
                 sources["isa_l"]["library_sha256"],
                 sources["nasm"]["executable_sha256"], "projection")
         else:
-            validate_leopard_result(result.get("document", {}), cell, iterations, warmup)
+            validate_leopard_result(
+                result.get("document", {}), cell, iterations, warmup,
+                selector_policy=leopard_selector_policy)
             leopard_backends.add(result["document"]["resolved"]["backend"])
     if len(leopard_backends) != 1:
         raise ComparisonError("Leopard2 resolved backend changed across repetitions")
@@ -2979,6 +2991,9 @@ def fake_leopard_result(
     params = expected_parameters(cell, iterations, warmup)
     params["force_generic_decode"] = False
     params["force_specialized_decode"] = False
+    if schema == LEOPARD_SCHEMA_V2:
+        params["force_tiled_decode"] = False
+        params["force_materialized_decode"] = False
     params["skip_legacy"] = True
     if schema == LEOPARD_SCHEMA_V2:
         params["retain_samples"] = True
@@ -3528,27 +3543,92 @@ def self_test() -> None:
         validate_isal_result(
             fake_isal_result(cell), cell, 5, 1, "1" * 64, "4" * 64)
         validate_leopard_result(
-            fake_leopard_result(cell, schema=LEOPARD_SCHEMA_V1), cell, 5, 1)
+            fake_leopard_result(cell, schema=LEOPARD_SCHEMA_V1), cell, 5, 1,
+            selector_policy="historical")
         validate_leopard_result(
-            fake_leopard_result(cell, schema=LEOPARD_SCHEMA_V2), cell, 5, 1)
-    leopard_schema_mutations = []
+            fake_leopard_result(cell, schema=LEOPARD_SCHEMA_V2), cell, 5, 1,
+            selector_policy="current")
+
+    selector_cell = CHECKPOINT_CELLS[0]
+    current_v1 = fake_leopard_result(
+        selector_cell, schema=LEOPARD_SCHEMA_V1)
+    current_v1["parameters"].update({
+        "force_tiled_decode": False,
+        "force_materialized_decode": False,
+    })
+    validate_leopard_result(
+        current_v1, selector_cell, 5, 1, selector_policy="current")
+    historical_v2 = fake_leopard_result(
+        selector_cell, schema=LEOPARD_SCHEMA_V2)
+    historical_v2["parameters"].pop("force_tiled_decode")
+    historical_v2["parameters"].pop("force_materialized_decode")
+    validate_leopard_result(
+        historical_v2, selector_cell, 5, 1,
+        selector_policy="historical")
+    for schema in (LEOPARD_SCHEMA_V1, LEOPARD_SCHEMA_V2):
+        absent = fake_leopard_result(selector_cell, schema=schema)
+        absent["parameters"].pop("force_tiled_decode", None)
+        absent["parameters"].pop("force_materialized_decode", None)
+        validate_leopard_result(
+            absent, selector_cell, 5, 1, selector_policy="mixed")
+        complete = copy.deepcopy(absent)
+        complete["parameters"].update({
+            "force_tiled_decode": False,
+            "force_materialized_decode": False,
+        })
+        validate_leopard_result(
+            complete, selector_cell, 5, 1, selector_policy="mixed")
+
+    leopard_schema_mutations: list[tuple[dict[str, Any], str]] = []
     changed = fake_leopard_result(
         CHECKPOINT_CELLS[0], schema=LEOPARD_SCHEMA_V2)
     changed["workload_digests"]["algorithm"] = "sha256"
-    leopard_schema_mutations.append(changed)
+    leopard_schema_mutations.append((changed, "current"))
     changed = fake_leopard_result(
         CHECKPOINT_CELLS[0], schema=LEOPARD_SCHEMA_V2)
     changed["parameters"].pop("retain_samples")
-    leopard_schema_mutations.append(changed)
+    leopard_schema_mutations.append((changed, "current"))
+    for selector in ("force_tiled_decode", "force_materialized_decode"):
+        changed = fake_leopard_result(
+            CHECKPOINT_CELLS[0], schema=LEOPARD_SCHEMA_V2)
+        changed["parameters"].pop(selector)
+        leopard_schema_mutations.append((changed, "current"))
+        changed = fake_leopard_result(
+            CHECKPOINT_CELLS[0], schema=LEOPARD_SCHEMA_V2)
+        changed["parameters"][selector] = True
+        leopard_schema_mutations.append((changed, "current"))
+    changed = fake_leopard_result(
+        CHECKPOINT_CELLS[0], schema=LEOPARD_SCHEMA_V1)
+    changed["parameters"].update({
+        "force_tiled_decode": False,
+        "force_materialized_decode": False,
+    })
+    leopard_schema_mutations.append((changed, "historical"))
     changed = fake_leopard_result(
         CHECKPOINT_CELLS[0], schema=LEOPARD_SCHEMA_V1)
     changed["workload_digests"] = {
         "algorithm": "fnv1a64", "original_data": "1" * 16,
         "transmitted_parity": "2" * 16, "recovered_originals": "3" * 16}
-    leopard_schema_mutations.append(changed)
-    for changed in leopard_schema_mutations:
+    leopard_schema_mutations.append((changed, "historical"))
+    for schema in (LEOPARD_SCHEMA_V1, LEOPARD_SCHEMA_V2):
+        for selector in ("force_tiled_decode", "force_materialized_decode"):
+            partial = fake_leopard_result(selector_cell, schema=schema)
+            partial["parameters"].pop("force_tiled_decode", None)
+            partial["parameters"].pop("force_materialized_decode", None)
+            partial["parameters"][selector] = False
+            leopard_schema_mutations.append((partial, "mixed"))
+            active = fake_leopard_result(selector_cell, schema=schema)
+            active["parameters"].update({
+                "force_tiled_decode": False,
+                "force_materialized_decode": False,
+            })
+            active["parameters"][selector] = True
+            leopard_schema_mutations.append((active, "mixed"))
+    for changed, selector_policy in leopard_schema_mutations:
         try:
-            validate_leopard_result(changed, CHECKPOINT_CELLS[0], 5, 1)
+            validate_leopard_result(
+                changed, CHECKPOINT_CELLS[0], 5, 1,
+                selector_policy=selector_policy)
         except ComparisonError:
             pass
         else:
@@ -3604,7 +3684,8 @@ def self_test() -> None:
     checkpoint = fake_checkpoint(correctness)
     try:
         validate_checkpoint(
-            checkpoint, verify_local=False, correctness=correctness)
+            checkpoint, verify_local=False, correctness=correctness,
+            leopard_selector_policy="historical")
     except ComparisonError as error:
         if f"{AUTHORITATIVE_CORRECTNESS_CASES}-case" not in str(error):
             raise
@@ -3614,9 +3695,12 @@ def self_test() -> None:
     validate_checkpoint(
         checkpoint, verify_local=False, correctness=correctness,
         trusted_provenance=trusted_provenance,
-        _self_test_allow_reduced_correctness=True)
+        _self_test_allow_reduced_correctness=True,
+        leopard_selector_policy="historical")
     try:
-        validate_checkpoint(checkpoint, verify_local=False)
+        validate_checkpoint(
+            checkpoint, verify_local=False,
+            leopard_selector_policy="historical")
     except ComparisonError:
         pass
     else:
@@ -3831,7 +3915,8 @@ def self_test() -> None:
         try:
             validate_checkpoint(
                 changed, verify_local=False, correctness=correctness,
-                _self_test_allow_reduced_correctness=True)
+                _self_test_allow_reduced_correctness=True,
+                leopard_selector_policy="historical")
         except ComparisonError:
             pass
         else:
@@ -3880,7 +3965,8 @@ def self_test() -> None:
     validate_checkpoint(
         coordinated_checkpoint, verify_local=False,
         correctness=coordinated_correctness,
-        _self_test_allow_reduced_correctness=True)
+        _self_test_allow_reduced_correctness=True,
+        leopard_selector_policy="historical")
     coordinated_relabels_rejected = 0
     for artifact_kind in ("correctness", "checkpoint"):
         try:
@@ -3893,7 +3979,8 @@ def self_test() -> None:
                     coordinated_checkpoint,
                     correctness=coordinated_correctness,
                     trusted_provenance=trusted_provenance,
-                    _self_test_allow_reduced_correctness=True)
+                    _self_test_allow_reduced_correctness=True,
+                    leopard_selector_policy="historical")
         except ComparisonError:
             coordinated_relabels_rejected += 1
         else:
@@ -3990,7 +4077,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             validate_checkpoint(
                 document, verify_local=arguments.require_local_build_match,
                 correctness=correctness,
-                trusted_provenance=trusted_provenance)
+                trusted_provenance=trusted_provenance,
+                leopard_selector_policy="mixed")
             print(json.dumps({
                 "artifact_sha256": document["artifact_sha256"],
                 "cells": len(document["cells"]), "results": len(document["results"]),

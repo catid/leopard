@@ -197,7 +197,9 @@ def baseline_result(scale: float = 1.0) -> dict:
     }
 
 
-def candidate_result(scale: float = 0.8) -> dict:
+def candidate_result(
+    scale: float = 0.8, raw_schema: str = runner.RAW_SCHEMA,
+) -> dict:
     parameters = common_parameters()
     parameters.update({
         "requested_profile": "legacy_high_v1",
@@ -208,6 +210,11 @@ def candidate_result(scale: float = 0.8) -> dict:
         "skip_legacy": True,
         "retain_samples": True,
     })
+    if raw_schema == runner.RAW_SCHEMA:
+        parameters.update({
+            "force_tiled_decode": False,
+            "force_materialized_decode": False,
+        })
     codec = summary([3.0, 3.1, 3.2], setup=True)
     plan = summary([4.0, 4.1, 4.2], setup=True)
     encode = summary([10.0 * scale, 11.0 * scale, 12.0 * scale])
@@ -323,9 +330,9 @@ def synthetic_raw(
     for round_index in range(runner.ROUNDS):
         for slot, implementation in enumerate(runner.ORDER):
             result = (baseline_result() if implementation == "baseline"
-                      else candidate_result(candidate_scale))
+                      else candidate_result(candidate_scale, raw_schema))
             normalized = runner.validate_result(
-                implementation, result, CELL, CAMPAIGN)
+                implementation, result, CELL, CAMPAIGN, raw_schema)
             invocations.append({
                 "cell_id": CELL.identifier,
                 "round": round_index,
@@ -483,6 +490,30 @@ class MainCompareRunnerTests(unittest.TestCase):
         value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V2)
         runner.validate_raw(
             value, None, check_files=False, check_current_inputs=False)
+
+    def test_workspace_selector_schema_boundary_is_fail_closed(self) -> None:
+        for name in ("force_tiled_decode", "force_materialized_decode"):
+            value = synthetic_raw()
+            for invocation in value["invocations"]:
+                if invocation["implementation"] == "candidate":
+                    invocation["result"]["parameters"].pop(name)
+            self.assert_rejected(value)
+
+            value = synthetic_raw()
+            for invocation in value["invocations"]:
+                if invocation["implementation"] == "candidate":
+                    invocation["result"]["parameters"][name] = True
+            self.assert_rejected(value)
+
+        for raw_schema in (runner.RAW_SCHEMA_V1, runner.RAW_SCHEMA_V2):
+            value = synthetic_raw(raw_schema=raw_schema)
+            for invocation in value["invocations"]:
+                if invocation["implementation"] == "candidate":
+                    invocation["result"]["parameters"].update({
+                        "force_tiled_decode": False,
+                        "force_materialized_decode": False,
+                    })
+            self.assert_rejected(value)
 
     def test_cmake_identity_and_cross_schema_relabels_are_rejected(self) -> None:
         value = synthetic_raw()

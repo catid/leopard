@@ -2537,7 +2537,10 @@ def validate_result(
     value: object,
     cell: Cell,
     campaign: Mapping[str, Any],
+    raw_schema: str = RAW_SCHEMA,
 ) -> dict[str, Any]:
+    require(raw_schema in RAW_TO_CMAKE_IDENTITY,
+            "unsupported result-container schema")
     require(isinstance(value, dict), "benchmark output is not a JSON object")
     expected_schema = (
         "leopard-main-benchmark-v1" if implementation == "baseline"
@@ -2581,6 +2584,16 @@ def validate_result(
         for name, expected in required_candidate.items():
             require(parameters.get(name) == expected,
                     f"candidate option {name} is not comparison-safe")
+        selector_names = (
+            "force_tiled_decode", "force_materialized_decode")
+        if raw_schema == RAW_SCHEMA:
+            for name in selector_names:
+                require(type(parameters.get(name)) is bool and
+                        parameters[name] is False,
+                        f"candidate option {name} is not current-schema safe")
+        else:
+            require(all(name not in parameters for name in selector_names),
+                    "historical candidate result contains unversioned workspace selectors")
         require(resolved.get("thread_count") == 1,
                 "candidate resolved more than one thread")
         require(resolved.get("backend") in {"scalar", "ssse3", "avx2", "neon"},
@@ -2925,7 +2938,7 @@ def validate_raw(
                         raise EvidenceError(f"retained stdout is not JSON: {error}") from error
                     require(parsed == result, "parsed retained stdout differs from raw result")
         normalized = validate_result(
-            expected[3], result, cell, campaign)
+            expected[3], result, cell, campaign, raw_schema)
         require(invocation.get("normalized") == normalized,
                 "retained normalized benchmark data was edited")
         digests = normalized["digests"]
@@ -3012,7 +3025,8 @@ def run_child(
         result = json.loads(completed.stdout.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise EvidenceError(f"{implementation} stdout is not one JSON value: {error}") from error
-    normalized = validate_result(implementation, result, cell, campaign)
+    normalized = validate_result(
+        implementation, result, cell, campaign, RAW_SCHEMA)
     return {
         "cell_id": cell.identifier,
         "round": round_index,
@@ -3176,7 +3190,8 @@ def validate_failure(
                 invocation.get("reservation_after") == reservation,
                 "failed campaign invocation execution identity was edited")
         normalized = validate_result(
-            implementation, invocation.get("result"), cell, campaign)
+            implementation, invocation.get("result"), cell, campaign,
+            FAILURE_TO_RAW_SCHEMA[failure_schema])
         require(invocation.get("normalized") == normalized,
                 "failed campaign invocation result was edited")
     retained = failure.get("retained_files")

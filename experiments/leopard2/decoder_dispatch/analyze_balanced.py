@@ -39,6 +39,16 @@ def load_result(path: Path, backend: str, shard_bytes: int, mode: str) -> dict:
     parameters = value.get("parameters", {})
     resolved = value.get("resolved", {})
     expected_generic = mode == "generic"
+    selectors = ("force_tiled_decode", "force_materialized_decode")
+    selector_presence = [selector in parameters for selector in selectors]
+    if any(selector_presence):
+        if (not all(selector_presence) or
+                any(type(parameters[selector]) is not bool or
+                    parameters[selector] is not False
+                    for selector in selectors)):
+            raise EvidenceError(
+                f"{path}: decode workspace selector pair must be absent or "
+                "both exact false")
     checks = {
         "K": 128,
         "R": 128,
@@ -56,9 +66,12 @@ def load_result(path: Path, backend: str, shard_bytes: int, mode: str) -> dict:
         "seed": 2129325312,
     }
     for key, expected in checks.items():
-        if parameters.get(key) != expected:
+        actual = parameters.get(key)
+        if ((type(expected) is bool and
+             (type(actual) is not bool or actual is not expected)) or
+                (type(expected) is not bool and actual != expected)):
             raise EvidenceError(
-                f"{path}: parameter {key}={parameters.get(key)!r}, expected {expected!r}")
+                f"{path}: parameter {key}={actual!r}, expected {expected!r}")
     if parameters.get("missing_original_indices") != list(range(128)):
         raise EvidenceError(f"{path}: full-loss coordinate list is not canonical")
     if (resolved.get("profile"), resolved.get("field"), resolved.get("backend"),

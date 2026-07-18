@@ -1497,9 +1497,13 @@ def validate_setup_metric(metric, label):
             label + " setup metric ordering")
 
 
-def check_raw(raw, item, label, requested_backend, missing_indices=None):
+def check_raw(
+        raw, item, label, requested_backend, missing_indices=None,
+        evidence_schema=SCHEMA):
     require(requested_backend in SUPPORTED_BACKENDS,
             label + " unsupported requested backend")
+    require(evidence_schema in SCHEMA_TO_CMAKE_IDENTITY,
+            label + " unsupported evidence schema")
     require(set(raw) == {"schema", "build", "parameters", "resolved",
                          "correctness", "memory", "metrics", "legacy"},
             label + " top-level key set")
@@ -1521,6 +1525,9 @@ def check_raw(raw, item, label, requested_backend, missing_indices=None):
         "missing_original_indices", "batch", "reuse", "iterations",
         "warmup", "thread_count", "seed",
     }
+    if evidence_schema == SCHEMA:
+        required_parameter_keys.update({
+            "force_tiled_decode", "force_materialized_decode"})
     require(set(parameters) == required_parameter_keys,
             label + " parameter key set")
     expected = {
@@ -1533,10 +1540,20 @@ def check_raw(raw, item, label, requested_backend, missing_indices=None):
         "batch": 1, "reuse": 8, "iterations": 7, "warmup": 3,
         "thread_count": 1, "seed": 42,
     }
+    if evidence_schema == SCHEMA:
+        expected.update({
+            "force_tiled_decode": False,
+            "force_materialized_decode": False,
+        })
     for key, expected_value in expected.items():
-        require(parameters[key] == expected_value,
+        actual_value = parameters[key]
+        matches = (
+            type(actual_value) is bool and actual_value is expected_value
+            if type(expected_value) is bool else
+            actual_value == expected_value)
+        require(matches,
                 "{} parameter {} expected {!r}, got {!r}".format(
-                    label, key, expected_value, parameters[key]))
+                    label, key, expected_value, actual_value))
     missing = parameters["missing_original_indices"]
     require(isinstance(missing, list) and len(missing) == item["loss"],
             label + " missing-index count")
@@ -3955,7 +3972,7 @@ def validate_manifest(manifest_path, repo, raw_bundle_path=None,
             raise EvidenceError("invalid benchmark JSON {}: {}".format(name, error))
         parsed = check_raw(
             raw, item, name, requested_backend,
-            missing_by_cell.get(item["name"]))
+            missing_by_cell.get(item["name"]), manifest_schema)
         missing_by_cell.setdefault(item["name"], parsed[2])
         require(build not in reported_builds or reported_builds[build] == parsed[3],
                 "benchmark build identity changed: " + name)
@@ -4126,7 +4143,7 @@ def run_campaign(
             raw = parse_json_bytes(completed.stdout, "benchmark output " + name)
             parsed = check_raw(
                 raw, item, name, args.backend,
-                missing_by_cell.get(item["name"]))
+                missing_by_cell.get(item["name"]), evidence_schema)
             missing_by_cell.setdefault(item["name"], parsed[2])
             require(build not in reported_builds or
                     reported_builds[build] == parsed[3],
@@ -4240,7 +4257,10 @@ def git_file_hashes(repo, commit, relatives):
     return {"digest": sha256_bytes(canonical_bytes(files)), "files": files}
 
 
-def write_mock(path, factor):
+def write_mock(path, factor, historical=False):
+    selector_fields = ("" if historical else
+                       "'force_tiled_decode':False,"
+                       "'force_materialized_decode':False,")
     source = """#!/usr/bin/env python3
 import json,sys
 a=sys.argv[1:]
@@ -4264,9 +4284,9 @@ parent=1<<(parent_input-1).bit_length()
 encode=rated(base*factor,'input_GB_per_s','parity_output_GB_per_s')
 decode=rated(base*2*factor,'offered_received_GB_per_s','repaired_output_GB_per_s')
 legacy_reason=None if legacy_comparison else ('old Leopard only defines the legacy high wire profile' if profile!='high' else 'old Leopard requires shard bytes divisible by 64')
-out={'schema':'leopard2-benchmark-v1','build':{'compiler':'mock','compiler_version':'1','cplusplus':201103},'parameters':{'K':k,'R':r,'requested_profile':resolved_profile,'requested_field':field,'requested_backend':backend,'force_generic_decode':False,'force_specialized_decode':False,'shard_bytes':byte_count,'loss_count':loss,'missing_original_indices':missing,'batch':int(v('--batch')),'reuse':int(v('--reuse')),'iterations':int(v('--iterations')),'warmup':int(v('--warmup')),'thread_count':int(v('--threads')),'seed':int(v('--seed'))},'resolved':{'profile':resolved_profile,'field':field,'backend':backend,'thread_count':1,'parent_count':parent,'padded_side':padded},'correctness':{'leopard2_round_trip':True,'legacy_comparison':legacy_comparison},'memory':{'scratch_alignment':64,'encode_scratch_bytes_per_stripe':64,'decode_scratch_bytes_per_stripe':128,'encode_scratch_bytes_batch':64,'decode_scratch_bytes_batch':128},'metrics':{'codec_setup':setup(1.0),'encode_execution':encode,'decode_plan_setup':setup(2.0),'decode_execution':decode,'decode_amortized_at_reuse':{'reuse_count':8,'derived_median_us_per_batch_call':base*2*factor+.25,'offered_received_GB_per_s':1.0/(base*2*factor+.25),'repaired_output_GB_per_s':2.0/(base*2*factor+.25)},'rate_semantics':'offered_received counts all non-null shard pointers supplied; a plan may read a deterministic subset'},'legacy':{'available':legacy_comparison is not None,'unavailable_reason':legacy_reason,'codec_setup':None,'decode_timing_includes_setup':True,'encode_execution':rated(base*1.1,'input_GB_per_s','parity_output_GB_per_s') if legacy_comparison else None,'decode_including_setup':rated(base*2.2,'offered_received_GB_per_s','repaired_output_GB_per_s') if legacy_comparison else None}}
+out={'schema':'leopard2-benchmark-v1','build':{'compiler':'mock','compiler_version':'1','cplusplus':201103},'parameters':{'K':k,'R':r,'requested_profile':resolved_profile,'requested_field':field,'requested_backend':backend,'force_generic_decode':False,'force_specialized_decode':False,%s'shard_bytes':byte_count,'loss_count':loss,'missing_original_indices':missing,'batch':int(v('--batch')),'reuse':int(v('--reuse')),'iterations':int(v('--iterations')),'warmup':int(v('--warmup')),'thread_count':int(v('--threads')),'seed':int(v('--seed'))},'resolved':{'profile':resolved_profile,'field':field,'backend':backend,'thread_count':1,'parent_count':parent,'padded_side':padded},'correctness':{'leopard2_round_trip':True,'legacy_comparison':legacy_comparison},'memory':{'scratch_alignment':64,'encode_scratch_bytes_per_stripe':64,'decode_scratch_bytes_per_stripe':128,'encode_scratch_bytes_batch':64,'decode_scratch_bytes_batch':128},'metrics':{'codec_setup':setup(1.0),'encode_execution':encode,'decode_plan_setup':setup(2.0),'decode_execution':decode,'decode_amortized_at_reuse':{'reuse_count':8,'derived_median_us_per_batch_call':base*2*factor+.25,'offered_received_GB_per_s':1.0/(base*2*factor+.25),'repaired_output_GB_per_s':2.0/(base*2*factor+.25)},'rate_semantics':'offered_received counts all non-null shard pointers supplied; a plan may read a deterministic subset'},'legacy':{'available':legacy_comparison is not None,'unavailable_reason':legacy_reason,'codec_setup':None,'decode_timing_includes_setup':True,'encode_execution':rated(base*1.1,'input_GB_per_s','parity_output_GB_per_s') if legacy_comparison else None,'decode_including_setup':rated(base*2.2,'offered_received_GB_per_s','repaired_output_GB_per_s') if legacy_comparison else None}}
 print(json.dumps(out,sort_keys=True,allow_nan=False))
-""" % factor
+""" % (factor, selector_fields)
     path.write_text(source, encoding="utf-8")
     path.chmod(0o755)
 
@@ -4586,7 +4606,7 @@ def relabel_historical_manifest_as_current(manifest, retained_texts_by_build):
         rehash_relabelled_build(build)
 
 
-def downgrade_current_manifest_for_self_test(manifest):
+def downgrade_current_manifest_for_self_test(manifest, bundle):
     replacements = (
         ("libleopard.a", "liblibleopard.a"),
         ("leopard.dir", "libleopard.dir"),
@@ -4614,6 +4634,27 @@ def downgrade_current_manifest_for_self_test(manifest):
         for external in recipes["external_link_inputs"]:
             external.pop("raw_path", None)
         rehash_relabelled_build(build)
+    entries = {entry["name"]: entry for entry in manifest["entries"]}
+    require(set(entries) == set(bundle["raw"]),
+            "downgraded historical raw geometry")
+    for name, record in bundle["raw"].items():
+        stdout = base64.b64decode(record["stdout_base64"], validate=True)
+        raw = parse_json_bytes(stdout, "downgraded historical raw " + name)
+        parameters = raw.get("parameters")
+        require(isinstance(parameters, dict),
+                "downgraded historical parameters " + name)
+        for selector in ("force_tiled_decode", "force_materialized_decode"):
+            require(type(parameters.get(selector)) is bool and
+                    parameters[selector] is False,
+                    "downgraded current selector " + name)
+            del parameters[selector]
+        encoded = canonical_bytes(raw) + b"\n"
+        digest = sha256_bytes(encoded)
+        record["stdout_base64"] = base64.b64encode(encoded).decode("ascii")
+        record["stdout_sha256"] = digest
+        entries[name]["stdout_sha256"] = digest
+    manifest["raw_evidence_sha256"] = stable_raw_digest(manifest["entries"])
+    recompute_self_test_summary(manifest, bundle)
     return retained_texts
 
 
@@ -4627,7 +4668,7 @@ def recompute_self_test_summary(manifest, bundle):
         parsed = check_raw(
             parse_json_bytes(stdout, "self-test summary " + name), item, name,
             backend,
-            missing_by_cell.get(item["name"]))
+            missing_by_cell.get(item["name"]), manifest["schema"])
         missing_by_cell.setdefault(item["name"], parsed[2])
         raw_by_name[name] = parsed[:2]
     manifest["summary"] = summarize(
@@ -4991,8 +5032,8 @@ def self_test(repo):
         legacy_candidate_root.mkdir()
         legacy_baseline = legacy_baseline_root / "bench_leopard2"
         legacy_candidate = legacy_candidate_root / "bench_leopard2"
-        write_mock(legacy_baseline, 1.0)
-        write_mock(legacy_candidate, 0.8)
+        write_mock(legacy_baseline, 1.0, historical=True)
+        write_mock(legacy_candidate, 0.8, historical=True)
         legacy_baseline_build = write_self_test_build_files(
             legacy_baseline_root, repo, legacy_baseline, LEGACY_SCHEMA)
         legacy_candidate_build = write_self_test_build_files(
@@ -5021,6 +5062,42 @@ def self_test(repo):
             legacy_manifest_path, "legacy self-test manifest")
         legacy_bundle = read_json(
             legacy_bundle_path, "legacy self-test raw bundle")
+        selector_name, selector_item, _, _, _ = expected_jobs()[0]
+        current_bundle = read_json(
+            args.output / "abba_raw.json", "current self-test raw bundle")
+        current_stdout, _ = decode_raw_record(
+            current_bundle["raw"][selector_name], selector_name)
+        current_selector_result = parse_json_bytes(
+            current_stdout, "current selector self-test")
+        for selector in ("force_tiled_decode", "force_materialized_decode"):
+            changed = copy.deepcopy(current_selector_result)
+            changed["parameters"].pop(selector)
+            expect_failure(
+                lambda changed=changed: check_raw(
+                    changed, selector_item, "current selector omission",
+                    "avx2", evidence_schema=SCHEMA),
+                "current selector omission " + selector)
+            changed = copy.deepcopy(current_selector_result)
+            changed["parameters"][selector] = True
+            expect_failure(
+                lambda changed=changed: check_raw(
+                    changed, selector_item, "current selector activation",
+                    "avx2", evidence_schema=SCHEMA),
+                "current selector activation " + selector)
+        legacy_stdout, _ = decode_raw_record(
+            legacy_bundle["raw"][selector_name], selector_name)
+        legacy_selector_result = parse_json_bytes(
+            legacy_stdout, "historical selector self-test")
+        legacy_selector_result["parameters"].update({
+            "force_tiled_decode": False,
+            "force_materialized_decode": False,
+        })
+        expect_failure(
+            lambda: check_raw(
+                legacy_selector_result, selector_item,
+                "historical selector injection", "avx2",
+                evidence_schema=LEGACY_SCHEMA),
+            "historical selector injection")
         legacy_recipe_texts = {
             "baseline": {
                 "library": (legacy_baseline_root / "CMakeFiles" /
@@ -5088,7 +5165,8 @@ def self_test(repo):
 
         def downgrade_failed_policy(manifest_value, _bundle_value):
             historical_failed_texts.update(
-                downgrade_current_manifest_for_self_test(manifest_value))
+                downgrade_current_manifest_for_self_test(
+                    manifest_value, _bundle_value))
 
         historical_failed_manifest_path, historical_failed_bundle_path = \
             coordinated_manifest_mutation(
