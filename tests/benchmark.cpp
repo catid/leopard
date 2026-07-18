@@ -31,6 +31,7 @@
 #include "../LeopardFF16.h"
 #include "../leopard.h"
 
+#include <cstring>
 #include <memory>
 #include <vector>
 #include <iostream>
@@ -177,8 +178,9 @@ static void WriteRandomSelfCheckingPacket(PCGRandom& prng, void* packet, unsigne
     }
     else
     {
-        uint32_t crc = bytes;
-        *(uint32_t*)(buffer + 4) = bytes;
+        const uint32_t stored_bytes = bytes;
+        uint32_t crc = stored_bytes;
+        std::memcpy(buffer + 4, &stored_bytes, sizeof(stored_bytes));
         for (unsigned i = 8; i < bytes; ++i)
         {
             uint8_t v = (uint8_t)prng.Next();
@@ -186,13 +188,13 @@ static void WriteRandomSelfCheckingPacket(PCGRandom& prng, void* packet, unsigne
             crc = (crc << 3) | (crc >> (32 - 3));
             crc += v;
         }
-        *(uint32_t*)buffer = crc;
+        std::memcpy(buffer, &crc, sizeof(crc));
     }
 }
 
 static bool CheckPacket(const void* packet, unsigned bytes)
 {
-    uint8_t* buffer = (uint8_t*)packet;
+    const uint8_t* buffer = static_cast<const uint8_t*>(packet);
 #ifdef TEST_DATA_ALL_SAME
     if (bytes != 0)
 #else
@@ -212,7 +214,8 @@ static bool CheckPacket(const void* packet, unsigned bytes)
     else
     {
         uint32_t crc = bytes;
-        uint32_t readBytes = *(uint32_t*)(buffer + 4);
+        uint32_t readBytes;
+        std::memcpy(&readBytes, buffer + 4, sizeof(readBytes));
         if (readBytes != bytes)
             return false;
         for (unsigned i = 8; i < bytes; ++i)
@@ -221,7 +224,8 @@ static bool CheckPacket(const void* packet, unsigned bytes)
             crc = (crc << 3) | (crc >> (32 - 3));
             crc += v;
         }
-        uint32_t readCRC = *(uint32_t*)buffer;
+        uint32_t readCRC;
+        std::memcpy(&readCRC, buffer, sizeof(readCRC));
         if (readCRC != crc)
             return false;
     }
