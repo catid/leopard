@@ -28,12 +28,16 @@
 #define LEO2_FUZZ_REPLAY_ROLE "unknown"
 #endif
 
-#if defined(__GNUC__) || defined(__clang__)
+#if defined(__linux__) && (defined(__GNUC__) || defined(__clang__))
 extern "C" int __asan_address_is_poisoned(const void*) __attribute__((weak));
-extern "C" void __ubsan_handle_type_mismatch_v1() __attribute__((weak));
+// GCC treats the runtime handler's public spelling as a builtin and rejects
+// taking its address.  Give the C++ identifier a private name while retaining
+// an undefined weak reference to the exact ELF symbol used by compiler-rt.
+extern "C" void leo2_ubsan_runtime_probe(void*, void*)
+    __asm__("__ubsan_handle_type_mismatch_v1") __attribute__((weak));
 extern "C" int __lsan_do_recoverable_leak_check() __attribute__((weak));
 #define LEO2_REPLAY_ASAN_RUNTIME (__asan_address_is_poisoned != NULL)
-#define LEO2_REPLAY_UBSAN_RUNTIME (__ubsan_handle_type_mismatch_v1 != NULL)
+#define LEO2_REPLAY_UBSAN_RUNTIME (leo2_ubsan_runtime_probe != NULL)
 #define LEO2_REPLAY_LSAN_RUNTIME \
     (__lsan_do_recoverable_leak_check != NULL)
 #else
@@ -67,7 +71,7 @@ static LEO2_REPLAY_NOINLINE void scrub_leak_canary_roots()
 
 static int recoverable_leak_check()
 {
-#if defined(__GNUC__) || defined(__clang__)
+#if defined(__linux__) && (defined(__GNUC__) || defined(__clang__))
     if (!LEO2_REPLAY_LSAN_RUNTIME)
         return 0;
     return __lsan_do_recoverable_leak_check();
