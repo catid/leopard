@@ -39,21 +39,24 @@ from typing import Any, Iterable, Mapping, Sequence
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 RAW_SCHEMA_V1 = "leopard2-main-compare-raw/v1"
 RAW_SCHEMA_V2 = "leopard2-main-compare-raw/v2"
-RAW_SCHEMA = "leopard2-main-compare-raw/v3"
+RAW_SCHEMA_V3 = "leopard2-main-compare-raw/v3"
+RAW_SCHEMA = "leopard2-main-compare-raw/v4"
 HARDENED_HISTORICAL_BUILD_SCHEMA = \
     "leopard2-main-compare-build/hardened-historical-v1"
 MANIFEST_SCHEMA_V1 = "leopard2-main-compare-manifest/v1"
 MANIFEST_SCHEMA_V2 = "leopard2-main-compare-manifest/v2"
-MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v3"
+MANIFEST_SCHEMA_V3 = "leopard2-main-compare-manifest/v3"
+MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v4"
 FAILURE_SCHEMA_V2 = "leopard2-main-compare-failure/v2"
-FAILURE_SCHEMA = "leopard2-main-compare-failure/v3"
+FAILURE_SCHEMA_V3 = "leopard2-main-compare-failure/v3"
+FAILURE_SCHEMA = "leopard2-main-compare-failure/v4"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
 ISOLATION_SCHEMA = "leopard2-main-compare-isolation/v1"
 
 # CMake target and archive identity is evidence, not an interchangeable build
 # detail.  Historical v1/v2 records predate the canonical target rename and
-# must continue to replay against their exact old names.  New v3 records bind
+# must continue to replay against their exact old names.  Version 3 and later bind
 # the canonical target/archive. Verification selects one exact identity from
 # the signed schema; runtime backend selection cannot alter it.
 HISTORICAL_CMAKE_IDENTITY = {
@@ -69,6 +72,7 @@ CANONICAL_CMAKE_IDENTITY = {
 RAW_TO_CMAKE_IDENTITY = {
     RAW_SCHEMA_V1: HISTORICAL_CMAKE_IDENTITY,
     RAW_SCHEMA_V2: HISTORICAL_CMAKE_IDENTITY,
+    RAW_SCHEMA_V3: CANONICAL_CMAKE_IDENTITY,
     RAW_SCHEMA: CANONICAL_CMAKE_IDENTITY,
 }
 # This internal build-only schema lets another evidence family authenticate an
@@ -80,16 +84,19 @@ BUILD_SCHEMA_TO_CMAKE_IDENTITY = {
     HARDENED_HISTORICAL_BUILD_SCHEMA: HISTORICAL_CMAKE_IDENTITY,
 }
 HARDENED_BUILD_SCHEMAS = frozenset((
+    RAW_SCHEMA_V3,
     RAW_SCHEMA,
     HARDENED_HISTORICAL_BUILD_SCHEMA,
 ))
 MANIFEST_TO_RAW_SCHEMA = {
     MANIFEST_SCHEMA_V1: RAW_SCHEMA_V1,
     MANIFEST_SCHEMA_V2: RAW_SCHEMA_V2,
+    MANIFEST_SCHEMA_V3: RAW_SCHEMA_V3,
     MANIFEST_SCHEMA: RAW_SCHEMA,
 }
 FAILURE_TO_RAW_SCHEMA = {
     FAILURE_SCHEMA_V2: RAW_SCHEMA_V2,
+    FAILURE_SCHEMA_V3: RAW_SCHEMA_V3,
     FAILURE_SCHEMA: RAW_SCHEMA,
 }
 CPU_STAT_FIELDS = (
@@ -102,6 +109,7 @@ MAX_CPU_LIST_ENTRIES = 4096
 MAX_CPU_LIST_TEXT_BYTES = 65_536
 ROUNDS = 3
 ORDER = ("baseline", "candidate", "candidate", "baseline")
+CANDIDATE_MODES = ("auto", "generic", "materialized", "tiled")
 FNV_OFFSET = 14695981039346656037
 FNV_PRIME = 1099511628211
 MASK64 = (1 << 64) - 1
@@ -1649,7 +1657,7 @@ def validate_candidate_cmake_identity(
             "candidate CMake target directory differs from its evidence schema")
     require(archive == validated_archive,
             "candidate archive identity differs from validated build artifact")
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in HARDENED_BUILD_SCHEMAS:
         compiler_records = build.get("validated_compile_commands")
         members = build.get("validated_archive_members")
         build_dir = build.get("build_dir")
@@ -2476,6 +2484,47 @@ def validate_cell(cell: Cell) -> None:
     require(0 <= cell.seed <= MASK64, f"cell {cell.identifier} seed exceeds uint64")
 
 
+def candidate_mode_for_campaign(campaign: Mapping[str, Any]) -> str:
+    """Return the explicit v4 mode, or AUTO for replay-only older bundles."""
+    mode = campaign.get("candidate_mode", "auto")
+    require(isinstance(mode, str) and mode in CANDIDATE_MODES,
+            "campaign candidate mode is invalid")
+    return mode
+
+
+def validate_candidate_mode_schema(
+    campaign: Mapping[str, Any], raw_schema: str
+) -> str:
+    if raw_schema == RAW_SCHEMA:
+        require("candidate_mode" in campaign,
+                "v4 campaign does not bind its candidate mode")
+    else:
+        require("candidate_mode" not in campaign,
+                "historical campaign contains an unversioned candidate mode")
+    return candidate_mode_for_campaign(campaign)
+
+
+def candidate_mode_flags(mode: str) -> dict[str, bool]:
+    require(mode in CANDIDATE_MODES, "candidate mode is invalid")
+    return {
+        "force_generic_decode": mode == "generic",
+        "force_specialized_decode": mode in {"materialized", "tiled"},
+        "force_tiled_decode": mode == "tiled",
+        "force_materialized_decode": mode == "materialized",
+    }
+
+
+def candidate_mode_arguments(mode: str) -> tuple[str, ...]:
+    require(mode in CANDIDATE_MODES, "candidate mode is invalid")
+    if mode == "auto":
+        return ()
+    if mode == "generic":
+        return ("--force-generic",)
+    if mode == "materialized":
+        return ("--force-specialized", "--force-materialized")
+    return ("--force-specialized", "--force-tiled")
+
+
 def finite_number(value: object, what: str, positive: bool = True) -> float:
     require(isinstance(value, (int, float)) and not isinstance(value, bool),
             f"{what} is not numeric")
@@ -2594,24 +2643,26 @@ def validate_result(
         require(value.get("correctness", {}).get("round_trip") is True,
                 "baseline round trip failed")
     else:
+        candidate_mode = validate_candidate_mode_schema(campaign, raw_schema)
+        mode_flags = candidate_mode_flags(candidate_mode)
         required_candidate = {
             "requested_profile": "legacy_high_v1",
             "requested_field": "auto",
             "requested_backend": "auto",
-            "force_generic_decode": False,
-            "force_specialized_decode": False,
             "skip_legacy": True,
             "retain_samples": True,
+            "force_generic_decode": mode_flags["force_generic_decode"],
+            "force_specialized_decode": mode_flags["force_specialized_decode"],
         }
         for name, expected in required_candidate.items():
             require(parameters.get(name) == expected,
                     f"candidate option {name} is not comparison-safe")
         selector_names = (
             "force_tiled_decode", "force_materialized_decode")
-        if raw_schema == RAW_SCHEMA:
+        if raw_schema in (RAW_SCHEMA_V3, RAW_SCHEMA):
             for name in selector_names:
                 require(type(parameters.get(name)) is bool and
-                        parameters[name] is False,
+                        parameters[name] is mode_flags[name],
                         f"candidate option {name} is not current-schema safe")
         else:
             require(all(name not in parameters for name in selector_names),
@@ -2812,6 +2863,7 @@ def validate_raw(
             "wrong raw bundle schema")
     campaign = raw.get("campaign")
     require(isinstance(campaign, dict), "campaign is not an object")
+    validate_candidate_mode_schema(campaign, raw_schema)
     require(campaign.get("rounds") == ROUNDS and
             tuple(campaign.get("order", ())) == ORDER,
             "campaign does not contain exactly three ABBA rounds")
@@ -2846,7 +2898,7 @@ def validate_raw(
     host_final = raw.get("host_final")
     require(host_initial == host_final, "host policy/topology changed during campaign")
     validate_host_record(host_initial, cpu, sibling, allowed)
-    if raw_schema in (RAW_SCHEMA_V2, RAW_SCHEMA):
+    if raw_schema in (RAW_SCHEMA_V2, RAW_SCHEMA_V3, RAW_SCHEMA):
         validate_isolation(raw.get("isolation"), cpu, sibling)
     else:
         require("isolation" not in raw,
@@ -2976,7 +3028,7 @@ def validate_raw(
                         f"candidate backend changed within cell {expected[0]}")
             else:
                 candidate_backend_by_cell[expected[0]] = backend
-    if raw_schema in (RAW_SCHEMA_V2, RAW_SCHEMA):
+    if raw_schema in (RAW_SCHEMA_V2, RAW_SCHEMA_V3, RAW_SCHEMA):
         isolation = raw["isolation"]
         elapsed_ns = isolation["after"]["monotonic_ns"] - \
             isolation["before"]["monotonic_ns"]
@@ -3003,6 +3055,8 @@ def benchmark_arguments(
             "--profile", "high", "--field", "auto", "--backend", "auto",
             "--skip-legacy", "--retain-samples",
         ))
+        arguments.extend(candidate_mode_arguments(
+            candidate_mode_for_campaign(campaign)))
     arguments.extend(("--json", "-"))
     return arguments
 
@@ -3135,6 +3189,8 @@ def validate_failure(
             "failed campaign diagnostic fields are invalid")
     campaign = failure.get("campaign")
     require(isinstance(campaign, dict), "failed campaign metadata is missing")
+    raw_schema = FAILURE_TO_RAW_SCHEMA[failure_schema]
+    validate_candidate_mode_schema(campaign, raw_schema)
     cpu = campaign.get("benchmark_cpu")
     sibling = campaign.get("reserved_sibling")
     require(isinstance(cpu, int) and not isinstance(cpu, bool) and cpu >= 0 and
@@ -3180,7 +3236,7 @@ def validate_failure(
         require(isinstance(specification, dict),
                 "failed campaign identity lacks input specification")
         validate_candidate_cmake_identity(
-            specification, initial, FAILURE_TO_RAW_SCHEMA[failure_schema])
+            specification, initial, raw_schema)
     if invocations:
         require(isinstance(specification, dict) and isinstance(initial, dict) and
                 reservation is not None,
@@ -3213,7 +3269,7 @@ def validate_failure(
                 "failed campaign invocation execution identity was edited")
         normalized = validate_result(
             implementation, invocation.get("result"), cell, campaign,
-            FAILURE_TO_RAW_SCHEMA[failure_schema])
+            raw_schema)
         require(invocation.get("normalized") == normalized,
                 "failed campaign invocation result was edited")
     retained = failure.get("retained_files")
@@ -3288,6 +3344,7 @@ def run_campaign(options: argparse.Namespace) -> int:
         "rounds": ROUNDS,
         "order": list(ORDER),
         "cells": [asdict(cell) for cell in cells],
+        "candidate_mode": options.candidate_mode,
         "batch": 1,
         "reuse": options.reuse,
         "iterations": options.iterations,
@@ -3452,7 +3509,9 @@ def verify_campaign(options: argparse.Namespace) -> int:
     require(raw_info.get("payload_digest") == raw.get("digest"),
             "manifest/raw payload identity mismatch")
     names = ["campaign", "host", "reservation", "identities", "analysis"]
-    if manifest_schema in (MANIFEST_SCHEMA_V2, MANIFEST_SCHEMA):
+    if manifest_schema in (
+        MANIFEST_SCHEMA_V2, MANIFEST_SCHEMA_V3, MANIFEST_SCHEMA
+    ):
         names.append("isolation")
     else:
         require("isolation" not in manifest,
@@ -3503,6 +3562,9 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--baseline-source-root", required=True, type=Path)
     run.add_argument("--candidate-source-root", required=True, type=Path)
     run.add_argument("--candidate-commit", required=True)
+    run.add_argument("--candidate-mode", choices=CANDIDATE_MODES,
+                     default="auto",
+                     help="candidate decoder path: auto, generic, materialized, or tiled")
     run.add_argument("--reservation-file", required=True, type=Path)
     run.add_argument("--output", required=True, type=Path)
     run.add_argument("--cpu", required=True, type=int)

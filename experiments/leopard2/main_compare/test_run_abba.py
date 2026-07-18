@@ -48,6 +48,7 @@ CAMPAIGN = {
     "rounds": runner.ROUNDS,
     "order": list(runner.ORDER),
     "cells": [asdict(CELL)],
+    "candidate_mode": "auto",
     "batch": 1,
     "reuse": 8,
     "iterations": 3,
@@ -199,22 +200,25 @@ def baseline_result(scale: float = 1.0) -> dict:
 
 def candidate_result(
     scale: float = 0.8, raw_schema: str = runner.RAW_SCHEMA,
+    campaign: Mapping[str, object] = CAMPAIGN,
 ) -> dict:
     parameters = common_parameters()
     parameters.update({
         "requested_profile": "legacy_high_v1",
         "requested_field": "auto",
         "requested_backend": "auto",
-        "force_generic_decode": False,
-        "force_specialized_decode": False,
         "skip_legacy": True,
         "retain_samples": True,
     })
-    if raw_schema == runner.RAW_SCHEMA:
-        parameters.update({
-            "force_tiled_decode": False,
-            "force_materialized_decode": False,
-        })
+    flags = runner.candidate_mode_flags(
+        runner.candidate_mode_for_campaign(campaign))
+    parameters.update({
+        "force_generic_decode": flags["force_generic_decode"],
+        "force_specialized_decode": flags["force_specialized_decode"],
+    })
+    if raw_schema in (runner.RAW_SCHEMA_V3, runner.RAW_SCHEMA):
+        parameters.update({name: flags[name] for name in (
+            "force_tiled_decode", "force_materialized_decode")})
     codec = summary([3.0, 3.1, 3.2], setup=True)
     plan = summary([4.0, 4.1, 4.2], setup=True)
     encode = summary([10.0 * scale, 11.0 * scale, 12.0 * scale])
@@ -303,7 +307,7 @@ def cmake_fixture_identity(raw_schema: str) -> tuple[dict, dict]:
             ],
         },
     }
-    if raw_schema == runner.RAW_SCHEMA:
+    if raw_schema in runner.HARDENED_BUILD_SCHEMAS:
         build["archive_link_recipe_content"] = recipe_content
         build["ranlib"] = {"path": "/usr/bin/ranlib"}
         build["archive_link_tool_invocations"] = {
@@ -324,15 +328,22 @@ def cmake_fixture_identity(raw_schema: str) -> tuple[dict, dict]:
 
 def synthetic_raw(
     candidate_scale: float = 0.8, raw_schema: str = runner.RAW_SCHEMA,
+    candidate_mode: str = "auto",
 ) -> dict:
     identity, specification = cmake_fixture_identity(raw_schema)
+    campaign = copy.deepcopy(CAMPAIGN)
+    if raw_schema == runner.RAW_SCHEMA:
+        campaign["candidate_mode"] = candidate_mode
+    else:
+        campaign.pop("candidate_mode", None)
     invocations = []
     for round_index in range(runner.ROUNDS):
         for slot, implementation in enumerate(runner.ORDER):
             result = (baseline_result() if implementation == "baseline"
-                      else candidate_result(candidate_scale, raw_schema))
+                      else candidate_result(
+                          candidate_scale, raw_schema, campaign))
             normalized = runner.validate_result(
-                implementation, result, CELL, CAMPAIGN, raw_schema)
+                implementation, result, CELL, campaign, raw_schema)
             invocations.append({
                 "cell_id": CELL.identifier,
                 "round": round_index,
@@ -343,7 +354,7 @@ def synthetic_raw(
                     *runner.benchmark_arguments(
                         implementation,
                         Path(specification[f"{implementation}_executable"]),
-                        CELL, CAMPAIGN),
+                        CELL, campaign),
                 ],
                 "environment": copy.deepcopy(runner.CHILD_ENVIRONMENT),
                 "pinned_cpu": 0,
@@ -359,12 +370,12 @@ def synthetic_raw(
                 "reservation_before": RESERVATION,
                 "reservation_after": RESERVATION,
             })
-    analysis = runner.analyze(invocations, CAMPAIGN)
+    analysis = runner.analyze(invocations, campaign)
     return runner.signed({
         "schema": raw_schema,
         "created_utc": "2026-07-16T00:00:00Z",
         "validity_is_independent_of_speed": True,
-        "campaign": copy.deepcopy(CAMPAIGN),
+        "campaign": campaign,
         "host_initial": copy.deepcopy(HOST),
         "isolation": copy.deepcopy(ISOLATION),
         "reservation": RESERVATION,
@@ -437,10 +448,11 @@ def replace_current_recipe_text(value: dict, text: str) -> None:
 
 def synthetic_failure(raw_schema: str) -> dict:
     raw = synthetic_raw(raw_schema=raw_schema)
-    failure_schema = (
-        runner.FAILURE_SCHEMA if raw_schema == runner.RAW_SCHEMA
-        else runner.FAILURE_SCHEMA_V2
-    )
+    failure_schema = {
+        runner.RAW_SCHEMA_V2: runner.FAILURE_SCHEMA_V2,
+        runner.RAW_SCHEMA_V3: runner.FAILURE_SCHEMA_V3,
+        runner.RAW_SCHEMA: runner.FAILURE_SCHEMA,
+    }[raw_schema]
     return runner.signed({
         "schema": failure_schema,
         "created_utc": "2026-07-16T00:00:00Z",
@@ -490,6 +502,62 @@ class MainCompareRunnerTests(unittest.TestCase):
         value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V2)
         runner.validate_raw(
             value, None, check_files=False, check_current_inputs=False)
+
+    def test_legacy_v3_raw_fixture_remains_replayable(self) -> None:
+        value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V3)
+        runner.validate_raw(
+            value, None, check_files=False, check_current_inputs=False)
+
+    def test_candidate_modes_bind_flags_and_exact_argv(self) -> None:
+        expected_arguments = {
+            "auto": (),
+            "generic": ("--force-generic",),
+            "materialized": ("--force-specialized", "--force-materialized"),
+            "tiled": ("--force-specialized", "--force-tiled"),
+        }
+        for mode in runner.CANDIDATE_MODES:
+            with self.subTest(mode=mode):
+                value = synthetic_raw(candidate_mode=mode)
+                runner.validate_raw(
+                    value, None, check_files=False,
+                    check_current_inputs=False)
+                flags = runner.candidate_mode_flags(mode)
+                invocation = next(item for item in value["invocations"]
+                                  if item["implementation"] == "candidate")
+                parameters = invocation["result"]["parameters"]
+                for name, expected in flags.items():
+                    self.assertIs(parameters[name], expected)
+                command = invocation["command"]
+                for argument in expected_arguments[mode]:
+                    self.assertIn(argument, command)
+
+        value = synthetic_raw(candidate_mode="generic")
+        value["campaign"]["candidate_mode"] = "auto"
+        self.assert_rejected(value)
+
+        value = synthetic_raw(candidate_mode="generic")
+        invocation = next(item for item in value["invocations"]
+                          if item["implementation"] == "candidate")
+        invocation["command"].remove("--force-generic")
+        self.assert_rejected(value)
+
+        value = synthetic_raw(candidate_mode="tiled")
+        invocation = next(item for item in value["invocations"]
+                          if item["implementation"] == "candidate")
+        invocation["result"]["parameters"]["force_tiled_decode"] = False
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
+        value["campaign"].pop("candidate_mode")
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
+        value["campaign"]["candidate_mode"] = ["auto"]
+        self.assert_rejected(value)
+
+        value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V3)
+        value["campaign"]["candidate_mode"] = "auto"
+        self.assert_rejected(value)
 
     def test_workspace_selector_schema_boundary_is_fail_closed(self) -> None:
         for name in ("force_tiled_decode", "force_materialized_decode"):
@@ -845,7 +913,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 runner.validate_raw(
                     value, root, check_files=True, check_current_inputs=False)
 
-    def test_v3_manifest_binds_isolation_and_replays_portably(self) -> None:
+    def test_v4_manifest_binds_mode_isolation_and_replays_portably(self) -> None:
         value = synthetic_raw()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -967,6 +1035,7 @@ class MainCompareRunnerTests(unittest.TestCase):
 
             legacy = copy.deepcopy(failure)
             legacy["schema"] = runner.FAILURE_SCHEMA_V2
+            legacy["campaign"].pop("candidate_mode", None)
             old_identity, old_specification = cmake_fixture_identity(
                 runner.RAW_SCHEMA_V2)
             legacy["input_specification"] = old_specification

@@ -59,9 +59,11 @@ For a single JSON cell:
 
 `run_abba.py` supplies the other half of the comparison. It accepts only fresh
 Release artifacts with the expected compile, object, archive, link, source,
-runtime-library, and field/profile identities. Each cell runs three independent
+runtime-library, field/profile, and requested decoder-path identities. Each cell
+runs three independent
 `baseline,candidate,candidate,baseline` rounds on one pinned logical CPU while
-the sibling is reserved. Version-2 and version-3 evidence additionally hold a pair-wide,
+the sibling is reserved. Version-2 through version-4 evidence additionally hold
+a pair-wide,
 per-user lock at
 `/run/user/UID/leopard2-cpu-leases/leopard2-cpu-pair-UID-A-B.lock`, derived
 from both sorted logical CPU numbers. It validates the owned runtime and lease
@@ -108,6 +110,12 @@ field-inflation, and larger-parent cases. Custom cells use
 `ID:K:R:BYTES:LOSSES:SEED` and must remain within the exact-main API's
 `R <= K` and 64-byte-size restrictions.
 
+Version 4 binds one explicit `--candidate-mode`: `auto`, `generic`,
+`materialized`, or `tiled` (the default is `auto`). The two forced workspace
+modes also force the specialized decoder. The runner verifies the exact child
+arguments and all four emitted force booleans, so evidence for one path cannot
+be relabeled as another.
+
     taskset -c 0-31 python3 \
         experiments/leopard2/main_compare/run_abba.py run \
         --baseline /tmp/leopard-main-compare/leopard_main_benchmark \
@@ -119,6 +127,7 @@ field-inflation, and larger-parent cases. Custom cells use
         --baseline-source-root /tmp/leopard-main-exact \
         --candidate-source-root "$PWD" \
         --candidate-commit "$(git rev-parse HEAD)" \
+        --candidate-mode auto \
         --reservation-file build/leopard2-main-reservation.json \
         --output /tmp/leopard2-vs-main --cpu 15 --reserved-sibling 31 \
         --preset representative --reuse 8 --iterations 9 --warmup 2
@@ -128,22 +137,24 @@ Verify while the exact build inputs still exist:
     python3 experiments/leopard2/main_compare/run_abba.py verify \
         --manifest /tmp/leopard2-vs-main/manifest.json
 
-The current version-3 verifier recomputes the pair-lock identity, every per-field CPU
+The current version-4 verifier recomputes the pair-lock identity, every per-field CPU
 counter delta, the zero-non-idle-sibling decision, workload identities, and all
-statistics. Version 3 also binds the canonical CMake target `leopard`, archive
+statistics. Versions 3 and 4 also bind the canonical CMake target `leopard`, archive
 `libleopard.a`, and `leopard.dir` dependency closure. It retains the exact,
 bounded UTF-8 archive link-recipe content, binds its byte length and SHA-256 to
 the recipe-file identity, and parses those bytes to require the declared
 archive, ordinary target directory, and matching `ranlib` command. Retained
 version-2 bundles replay with their original `libleopard`/`liblibleopard.a`
-identity, record shape, and isolation semantics; version-1 bundles remain
+identity, record shape, and isolation semantics. Version-3 bundles replay as
+AUTO-only evidence without retroactively acquiring the decoder-mode field;
+version-1 bundles remain
 structurally replayable without acquiring later isolation semantics
 retroactively. A schema/path relabel that leaves the historical recipe bytes
 unchanged is rejected.
 
 Bundle digests are unkeyed integrity checks, not an independent authenticity
 anchor. They detect edits relative to the retained evidence, and the semantic
-recipe binding prevents relabeling old recipe bytes under version 3. They
+recipe binding prevents relabeling old recipe bytes under versions 3 and 4. They
 cannot prevent a hostile writer from replacing every evidence byte and
 recomputing every internally consistent digest. Preserve evidence in an
 immutable or independently authenticated store, or add an external digital
