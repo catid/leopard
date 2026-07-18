@@ -32,6 +32,15 @@ sample with observed affinity. RSS is sampled at the same time (and may read as
 zero if a very short process has already become a zombie). A campaign cannot
 pass merely on the launch floor.
 
+The auditor also reconstructs the complete versioned campaign contract before
+reading results. It binds the exact API and pruned job IDs, stable seeds,
+content-addressed executable assigned to each role, `{seed}` and iteration
+arguments, sanitizer environment, timeout, memory policy, one-thread runtime
+policy, and deterministic CPU assignment. A generic lab manifest cannot become
+sanitizer evidence merely by copying campaign-looking metadata. Campaign
+manifests and audit outputs use `leopard2-fuzz-campaign/v2` and
+`leopard2-fuzz-campaign-audit/v2`; earlier v1 artifacts must be regenerated.
+
 ## Reproduce a 30-by-2 campaign
 
 First build `leopard2_fuzz_smoke` and `leopard2_pruned_fuzz_smoke` with Clang
@@ -55,11 +64,12 @@ ASan and UBSan applied to both the codec and executables. Then run:
       --output-dir build/fuzz-campaign/results \
       --output build/fuzz-campaign/audited-results.json
 
-The final output uses `leopard2-fuzz-campaign-audit/v1` and embeds the ordinary
+The final output uses `leopard2-fuzz-campaign-audit/v2` and embeds the ordinary
 deterministic lab merge. It is written atomically only after every stricter
-campaign gate passes; a failed audit removes the requested output rather than
-leaving a newly generated artifact that could be mistaken for accepted fuzz
-evidence.
+campaign gate passes. The destination is cleared before manifest validation,
+so a failed audit cannot leave a stale artifact that could be mistaken for
+accepted fuzz evidence. The destination may not overwrite the manifest or any
+per-job result.
 
 The 60 stable seeds are distinct. CPU assignment may repeat between jobs, but
 the scheduler never runs jobs with overlapping CPU sets simultaneously. Even
