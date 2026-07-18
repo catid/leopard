@@ -185,9 +185,21 @@ AUTO-only evidence without retroactively acquiring the decoder-mode field;
 version-4 bundles retain their original hardened archive closure. Version 5
 additionally requires exact source, compiler, CMake, compile/object, archive,
 member, executable-link, output, tool, and runtime-dependency record shapes in
-offline verification. Its host identity includes every enumerated cache level
-and shared-CPU domain, NUMA placement, and heterogeneous-core class. Uniformly
-removing a field from both raw and manifest records therefore fails even with
+offline verification. The producer-known translation-unit sets are exact: the
+baseline archive has its four codec members plus the adapter command and the
+candidate archive has its twelve production members plus the benchmark command;
+a coherent source/object/member/link truncation is rejected. Each source retains
+the bounded raw Git commit object, whose Git SHA-1 and named tree are recomputed
+offline. Each runtime closure retains the bounded raw `ldd` output, which is
+parsed independently to prove the complete summarized dependency set and exactly
+one dynamic loader rather than trusting a mutually truncated list.
+
+Its host identity includes the exact sysfs online CPU/node list bytes, every
+enumerated cache index and cache record, NUMA-node directory inventory and
+placement, shared-CPU domain, and heterogeneous-core class. Campaign, cell,
+CPU, reservation, and host count fields are bounded exact integers; JSON
+booleans are never accepted as integer values. Uniformly removing a field or
+record from both raw and manifest records therefore fails even with
 `--no-current-input-check`. Version-1 bundles remain
 structurally replayable without acquiring later isolation semantics
 retroactively. A schema/path relabel that leaves the historical recipe bytes

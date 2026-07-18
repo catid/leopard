@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
+import hashlib
 import importlib.util
 import json
 import math
@@ -29,6 +31,40 @@ sys.modules[SPEC.name] = runner
 SPEC.loader.exec_module(runner)
 
 
+BASELINE_TREE = "b7c8830d96a978f6ec14fe747095f066e351ae72"
+BASELINE_COMMIT_BASE64 = (
+    "dHJlZSBiN2M4ODMwZDk2YTk3OGY2ZWMxNGZlNzQ3MDk1ZjA2NmUzNTFhZTcyCnBhcmVudCAy"
+    "MmRkYzc4MDQ5OThkMzFjOGYxYTI2MTdlZTcyMGUwNjNiMWZhNmNkCnBhcmVudCAzNjQyN2Rk"
+    "MjViZjY2NWY0MTA1MjVhMDNhMWYwYTBlYTkyNzUxNTBiCmF1dGhvciBDaHJpcyBUYXlsb3Ig"
+    "PG1yY2F0aWRAZ21haWwuY29tPiAxNzExMTkyODE2IC0wNzAwCmNvbW1pdHRlciBHaXRIdWIg"
+    "PG5vcmVwbHlAZ2l0aHViLmNvbT4gMTcxMTE5MjgxNiAtMDcwMApncGdzaWcgLS0tLS1CRUdJ"
+    "TiBQR1AgU0lHTkFUVVJFLS0tLS0KIAogd3NGY0JBQUJDQUFRQlFKbC9ycndDUkMxYVE3dXU1"
+    "VWhsQUFBWUVVUUFKQkh1ZjBtUWRxQW9mclZTR3ZHT2ZRZwogSllQQVNZTmh5azhoUEs0N3E3"
+    "REhPWVI0UUN3eHZySC9VaVpYcGMyZndSK3FlNUxSRkhqUjFaNE43K3AvK0J6cgogMnd6cXBZ"
+    "NmR1SUt5NzVvdjFNR0RGa0FocmpPdlBXbDFCR2RlcTNCYnRQL0NzQ0JVSVEyOCtNZG5OVGRq"
+    "dGprVwogMkJMWUFYN3VnU2pKWGQ1OEE0eTJ2MHJvUDZKeVRWbHR3b0NRcUtlYUlTVkNDa0Y0"
+    "amcvcmJTZHRUck9WeE1oZAogenlPdmtTMzlzcGVOUk9UaUlsTTB4N3VESkR6ZFZja2draEV2"
+    "N2dDN3Z6VWdzRFRHYUh6WXkwTU5ISDlmaHhBaAogcEdNQXEzV3p4ZGgxdjJLQTF5cExvZ1VV"
+    "ekwwSzNFRFpvRjREL1RZMG96SDdESm1TUytzV1BVRWpUSHNXQzg5eAogdFR2bk8vSzhLNjZj"
+    "SkZDQ1N1LzBvSm4yVFdhQnZUdldnNXJ5WFN2RlNibmVjNGRzQlAzczBZVS9odGJRbDN4Tgog"
+    "TTkvMmw3M21ra2NJNHIxOVRHQU0zV0JzYTVxKzBrUHk5QnE2SHloeTM5ampOV2pkTnVzZFFG"
+    "a3p0dXNSVFJsNwogYUx5SlNRTXB4cWVzeHRacWVEMjRmQmZYUmFRMlhhYkxFUytsTThBd0ly"
+    "dytMUFFScWcrQ20rb3Rxb21BeG9QaQogemVmcUU3OGxXVkJRenVESkpLZnNHaERGY1BFaWJJ"
+    "UXYyN0hOT3BsaTBtWkFJbGFnckJiOEF4cjRkbytVS0d6cAogMkhYYlprTjZFTWVGYVRKNzY4"
+    "MUhLZHlQRFdiWUM3STVPRFBJNktkUW1kaWFJNmZldUJ4QTgybjU2R3laQ2w1OQogclFHZnFM"
+    "dGU3VFVvRnVMTE53c1YKID00MTBSCiAtLS0tLUVORCBQR1AgU0lHTkFUVVJFLS0tLS0KIAoK"
+    "TWVyZ2UgcHVsbCByZXF1ZXN0ICMyMyBmcm9tIGdibGV0cjQyL21hc3RlcgoKSGFuZGxlIHRo"
+    "ZSBjYXNlIHdoZW4gbm8gb3JpZ2luYWwgZGF0YSB3YXMgbG9zdA==")
+CANDIDATE_TREE = "8" * 40
+CANDIDATE_COMMIT_RAW = (
+    f"tree {CANDIDATE_TREE}\nauthor Fixture <fixture@example.com> 1 +0000\n"
+    "committer Fixture <fixture@example.com> 1 +0000\n\nfixture\n"
+).encode("utf-8")
+CANDIDATE_COMMIT = hashlib.sha1(
+    f"commit {len(CANDIDATE_COMMIT_RAW)}\0".encode("ascii") +
+    CANDIDATE_COMMIT_RAW).hexdigest()
+
+
 CELL = runner.Cell("fixture", 8, 4, 64, 2, 7)
 SPECIFICATION = {
     "runner": "/fixture/run_abba.py",
@@ -42,7 +78,7 @@ SPECIFICATION = {
     "candidate_build_dir": "/fixture/candidate-build",
     "baseline_source_root": "/fixture/main",
     "candidate_source_root": "/fixture/candidate-source",
-    "candidate_commit": "a" * 40,
+    "candidate_commit": CANDIDATE_COMMIT,
 }
 CAMPAIGN = {
     "rounds": runner.ROUNDS,
@@ -115,7 +151,9 @@ def host_cpu(cpu: int) -> dict:
                 "allocation_policy": None, "write_policy": "WriteBack",
             },
         ],
+        "cache_index_inventory": ["index0", "index1"],
         "numa_nodes": [0],
+        "numa_node_inventory": ["node0"],
         "core_class": {"core_type": None, "cpu_capacity": None},
     }
 
@@ -128,6 +166,10 @@ HOST = {
     },
     "allowed_cpu_set_at_launch": [0, 1, 2],
     "online_cpu_set": [0, 1, 2],
+    "online_cpu_list_text": runner.exact_text_content(
+        "0-2\n", "fixture online CPU list"),
+    "online_node_list_text": runner.exact_text_content(
+        "0\n", "fixture online node list"),
     "benchmark_cpu": host_cpu(0),
     "reserved_sibling": host_cpu(1),
     "turbo_and_pstate": {
@@ -327,6 +369,8 @@ def complete_build_fixture(role: str) -> dict:
             "LEO_MAIN_HAS_MARCH_NATIVE": "1",
         }
         isa_policy = "whole-build -march=native"
+        library_names = runner.BASELINE_LIBRARY_SOURCES
+        entry_count = 5
     else:
         archive_name = runner.CANONICAL_CMAKE_IDENTITY["archive"]
         executable_name = "bench_leopard2"
@@ -348,16 +392,31 @@ def complete_build_fixture(role: str) -> dict:
         isa_policy = (
             "portable core with ISA flags only on SSSE3, AVX2, and "
             "AVX-512VL translation units")
-    library_source = source_root + "/LeopardCommon.cpp"
-    library_object = (build_dir + f"/CMakeFiles/{target_directory}/"
-                      "LeopardCommon.cpp.o")
-    pairs = sorted([
-        {
+        library_names = runner.CANDIDATE_LIBRARY_SOURCES
+        entry_count = 20
+    library_pairs = []
+    archive_objects = []
+    for index, name in enumerate(library_names):
+        if not baseline and name in {
+                "Leopard2BackendSSSE3.cpp", "Leopard2BackendAVX2.cpp",
+                "Leopard2BackendAVX512.cpp"}:
+            backend = name.removeprefix("Leopard2Backend").removesuffix(
+                ".cpp").lower()
+            object_relative = (
+                f"CMakeFiles/leopard2_backend_{backend}.dir/{name}.o")
+        else:
+            object_relative = f"CMakeFiles/{target_directory}/{name}.o"
+        archive_objects.append(object_relative)
+        library_pairs.append({
             "source": complete_artifact(
-                library_source, "source_file", "1" if baseline else "2"),
+                source_root + "/" + name, "source_file",
+                format((index % 9) + 1, "x")),
             "object": complete_artifact(
-                library_object, "object_file", "3" if baseline else "4"),
-        },
+                build_dir + "/" + object_relative, "object_file",
+                format(((index + 3) % 9) + 1, "x")),
+        })
+    pairs = sorted([
+        *library_pairs,
         {
             "source": complete_artifact(
                 benchmark_source, "source_file", "5" if baseline else "6"),
@@ -367,8 +426,8 @@ def complete_build_fixture(role: str) -> dict:
     ], key=lambda record: record["source"]["path"])
     archive_recipe_text = (
         f"/usr/bin/ar qc {archive_name} "
-        f"CMakeFiles/{target_directory}/LeopardCommon.cpp.o\n"
-        f"/usr/bin/ranlib {archive_name}\n")
+        + " ".join(archive_objects) + "\n"
+        + f"/usr/bin/ranlib {archive_name}\n")
     archive_recipe_content = runner.exact_text_content(
         archive_recipe_text, f"fixture {role} archive recipe")
     executable_recipe_text = (
@@ -407,14 +466,15 @@ def complete_build_fixture(role: str) -> dict:
         },
         "archiver": complete_artifact("/usr/bin/ar", "archiver", "e"),
         "ranlib": complete_artifact("/usr/bin/ranlib", "ranlib", "f"),
-        "validated_archive_members": ["LeopardCommon.cpp.o"],
+        "validated_archive_members": [Path(name).name + ".o"
+                                       for name in library_names],
         "validated_executable": complete_artifact(
             executable_path, "executable", "0" if baseline else "1"),
         "validated_archive": complete_artifact(
             archive_path, "archive", "2" if baseline else "3"),
         "validated_cache": cache,
         "validated_compile_commands": {
-            "entry_count": len(pairs),
+            "entry_count": entry_count,
             "required_sources": sorted(pair["source"]["path"] for pair in pairs),
             "validated_optimization": "-O3",
             "validated_openmp": True,
@@ -433,14 +493,48 @@ def complete_build_fixture(role: str) -> dict:
 
 
 def complete_runtime_fixture(executable: str, character: str) -> dict:
+    raw = (
+        "linux-vdso.so.1 (0x00000000)\n"
+        "libc.so.6 => /lib/libc.so.6 (0x00000000)\n"
+        "/lib64/ld-linux-x86-64.so.2 (0x00000000)\n")
     return {
         "executable": executable,
-        "dependencies": [{
-            "soname": "libc.so.6",
-            "loader_path": "/lib/libc.so.6",
-            "file": complete_artifact(
-                f"/usr/lib/{character}/libc.so.6", "shared_library", character),
-        }],
+        "raw_ldd_output": runner.exact_text_content(
+            raw, "fixture raw ldd output"),
+        "dependencies": [
+            {
+                "soname": "ld-linux-x86-64.so.2",
+                "loader_path": "/lib64/ld-linux-x86-64.so.2",
+                "file": complete_artifact(
+                    f"/usr/lib/{character}/ld-linux-x86-64.so.2",
+                    "dynamic_loader", character),
+            },
+            {
+                "soname": "libc.so.6",
+                "loader_path": "/lib/libc.so.6",
+                "file": complete_artifact(
+                    f"/usr/lib/{character}/libc.so.6",
+                    "shared_library", character),
+            },
+            {"soname": "linux-vdso.so.1", "virtual": True},
+        ],
+    }
+
+
+def complete_source_fixture(role: str) -> dict:
+    baseline = role == "baseline"
+    raw = (base64.b64decode(BASELINE_COMMIT_BASE64)
+           if baseline else CANDIDATE_COMMIT_RAW)
+    head = runner.MAIN_COMMIT if baseline else CANDIDATE_COMMIT
+    tree = BASELINE_TREE if baseline else CANDIDATE_TREE
+    commit_object = runner.git_commit_object_identity(raw, head)
+    runner.validate_git_commit_object_identity(
+        commit_object, head, tree, f"fixture {role}")
+    return {
+        "path": SPECIFICATION[f"{role}_source_root"],
+        "head": head, "tree": tree, "detached": baseline,
+        "tracked_tree_listing_sha256": "7" * 64 if baseline else "9" * 64,
+        "tracked_status": "clean", "commit_object": commit_object,
     }
 
 
@@ -473,18 +567,8 @@ def cmake_fixture_identity(raw_schema: str) -> tuple[dict, dict]:
                 baseline_executable["path"], "4"),
             "candidate_runtime_closure": complete_runtime_fixture(
                 candidate_executable["path"], "5"),
-            "baseline_source": {
-                "path": SPECIFICATION["baseline_source_root"],
-                "head": runner.MAIN_COMMIT, "tree": "6" * 40,
-                "detached": True, "tracked_tree_listing_sha256": "7" * 64,
-                "tracked_status": "clean",
-            },
-            "candidate_source": {
-                "path": SPECIFICATION["candidate_source_root"],
-                "head": SPECIFICATION["candidate_commit"], "tree": "8" * 40,
-                "detached": False, "tracked_tree_listing_sha256": "9" * 64,
-                "tracked_status": "clean",
-            },
+            "baseline_source": complete_source_fixture("baseline"),
+            "candidate_source": complete_source_fixture("candidate"),
         }
         specification = copy.deepcopy(SPECIFICATION)
         specification.update({
@@ -767,6 +851,97 @@ class MainCompareRunnerTests(unittest.TestCase):
             self.assertTrue(math.isfinite(result["ci95_lower"]))
             self.assertTrue(result["performance_result_does_not_affect_evidence_validity"])
 
+    def test_count_and_cpu_fields_require_bounded_non_boolean_integers(self) -> None:
+        for key, replacement in (
+            ("rounds", True), ("batch", True), ("threads", True),
+            ("iterations", True), ("iterations", runner.MAX_CAMPAIGN_COUNT + 1),
+            ("reuse", True), ("reuse", runner.MAX_CAMPAIGN_COUNT + 1),
+            ("warmup", True), ("warmup", runner.MAX_CAMPAIGN_COUNT + 1),
+            ("benchmark_cpu", False),
+            ("benchmark_cpu", runner.MAX_CPU_ID + 1),
+            ("reserved_sibling", True),
+            ("reserved_sibling", runner.MAX_CPU_ID + 1),
+        ):
+            with self.subTest(kind="raw-campaign", key=key, value=replacement):
+                value = synthetic_raw()
+                value["campaign"][key] = replacement
+                self.assert_rejected(value)
+
+        for key, replacement in (
+            ("rounds", True), ("batch", True), ("threads", True),
+            ("iterations", True), ("iterations", runner.MAX_CAMPAIGN_COUNT + 1),
+            ("reuse", True), ("reuse", runner.MAX_CAMPAIGN_COUNT + 1),
+            ("warmup", True), ("warmup", runner.MAX_CAMPAIGN_COUNT + 1),
+            ("benchmark_cpu", False),
+            ("benchmark_cpu", runner.MAX_CPU_ID + 1),
+            ("reserved_sibling", True),
+            ("reserved_sibling", runner.MAX_CPU_ID + 1),
+        ):
+            with self.subTest(kind="failed-campaign", key=key, value=replacement):
+                failure = synthetic_failure(runner.RAW_SCHEMA)
+                failure["campaign"][key] = replacement
+                with self.assertRaises(runner.EvidenceError):
+                    runner.validate_failure(
+                        resign(failure), Path("/unused"), check_files=False)
+
+        for invalid in (False, runner.MAX_CPU_ID + 1):
+            with self.subTest(kind="topology", value=invalid), \
+                 self.assertRaises(runner.EvidenceError):
+                runner.validate_topology(invalid, 1)
+            with self.subTest(kind="reservation-request", value=invalid), \
+                 self.assertRaises(runner.EvidenceError):
+                runner.parse_reservation(
+                    runner.canonical_bytes(RESERVATION_PAYLOAD), invalid, 1)
+
+        for key in ("benchmark_cpu", "reserved_sibling"):
+            for invalid in (False, runner.MAX_CPU_ID + 1):
+                with self.subTest(kind="reservation-payload", key=key,
+                                  value=invalid):
+                    payload = copy.deepcopy(RESERVATION_PAYLOAD)
+                    payload[key] = invalid
+                    with self.assertRaises(runner.EvidenceError):
+                        runner.parse_reservation(
+                            runner.canonical_bytes(payload), 0, 1)
+
+        for field in ("allowed_cpu_set_at_launch", "online_cpu_set"):
+            for invalid in (False, runner.MAX_CPU_ID + 1):
+                with self.subTest(kind="host", field=field, value=invalid):
+                    host = copy.deepcopy(HOST)
+                    host[field][0] = invalid
+                    with self.assertRaises(runner.EvidenceError):
+                        runner.validate_host_record(
+                            host, 0, 1, CAMPAIGN["allowed_cpu_set_at_launch"],
+                            runner.RAW_SCHEMA)
+
+        for invalid in (False, runner.MAX_CPU_ID + 1):
+            with self.subTest(kind="campaign-allowed", value=invalid):
+                value = synthetic_raw()
+                value["campaign"]["allowed_cpu_set_at_launch"][0] = invalid
+                self.assert_rejected(value)
+            with self.subTest(kind="failed-campaign-allowed", value=invalid):
+                failure = synthetic_failure(runner.RAW_SCHEMA)
+                failure["campaign"]["allowed_cpu_set_at_launch"][0] = invalid
+                with self.assertRaises(runner.EvidenceError):
+                    runner.validate_failure(
+                        resign(failure), Path("/unused"), check_files=False)
+            with self.subTest(kind="failed-host-online", value=invalid):
+                failure = synthetic_failure(runner.RAW_SCHEMA)
+                failure["host_initial"]["online_cpu_set"][0] = invalid
+                with self.assertRaises(runner.EvidenceError):
+                    runner.validate_failure(
+                        resign(failure), Path("/unused"), check_files=False)
+
+        for field, replacement in (
+            ("k", True), ("r", True), ("shard_bytes", True),
+            ("shard_bytes", runner.MAX_SHARD_BYTES + 64),
+            ("losses", True), ("seed", True), ("seed", runner.MASK64 + 1),
+        ):
+            with self.subTest(kind="cell", field=field, value=replacement):
+                values = asdict(CELL)
+                values[field] = replacement
+                with self.assertRaises(runner.EvidenceError):
+                    runner.validate_cell(runner.Cell(**values))
+
     def test_uniformly_incomplete_v5_identities_fail_offline_verify_and_select(self) -> None:
         plan_runner = (MODULE_PATH.parents[1] / "decoder_dispatch" /
                        "plan_balanced_promotion.py")
@@ -822,6 +997,61 @@ class MainCompareRunnerTests(unittest.TestCase):
                     "cpu": record["cpu"], "topology": record["topology"]}
             value["host_final"] = copy.deepcopy(value["host_initial"])
 
+        def truncated_tu_closure(value: dict) -> None:
+            for role, names in (("baseline", runner.BASELINE_LIBRARY_SOURCES),
+                                ("candidate", runner.CANDIDATE_LIBRARY_SOURCES)):
+                build = value["identities_initial"][f"{role}_build"]
+                semantics = build["validated_compile_commands"]
+                suffix = "/" + names[-1]
+                pair = next(item for item in semantics[
+                    "required_source_object_pairs"]
+                    if item["source"]["path"].endswith(suffix))
+                semantics["required_source_object_pairs"].remove(pair)
+                semantics["required_sources"].remove(pair["source"]["path"])
+                member = Path(pair["object"]["path"]).name
+                build["validated_archive_members"].remove(member)
+                relative = Path(pair["object"]["path"]).relative_to(
+                    Path(build["build_dir"])).as_posix()
+                text = build["archive_link_recipe_content"]["text"].replace(
+                    " " + relative, "", 1)
+                content = runner.exact_text_content(
+                    text, f"truncated {role} archive recipe")
+                build["archive_link_recipe_content"] = content
+                build["archive_link_recipe"]["size"] = content["size"]
+                build["archive_link_recipe"]["sha256"] = content["sha256"]
+            synchronize_identity(value)
+
+        def coherently_truncated_runtime(value: dict) -> None:
+            for role in ("baseline", "candidate"):
+                closure = value["identities_initial"][f"{role}_runtime_closure"]
+                closure["dependencies"] = [item for item in closure["dependencies"]
+                    if item["soname"] != "libc.so.6"]
+                text = "\n".join(line for line in
+                    closure["raw_ldd_output"]["text"].splitlines()
+                    if not line.startswith("libc.so.6")) + "\n"
+                closure["raw_ldd_output"] = runner.exact_text_content(
+                    text, f"truncated {role} ldd output")
+            synchronize_identity(value)
+
+        def truncated_cache_inventory(value: dict) -> None:
+            for name in ("benchmark_cpu", "reserved_sibling"):
+                value["host_initial"][name]["cache_hierarchy"].pop()
+            value["host_final"] = copy.deepcopy(value["host_initial"])
+
+        def empty_numa_summary(value: dict) -> None:
+            for name in ("benchmark_cpu", "reserved_sibling"):
+                value["host_initial"][name]["numa_nodes"] = []
+                value["host_initial"][name]["numa_node_inventory"] = []
+            value["host_final"] = copy.deepcopy(value["host_initial"])
+
+        def source_tree_commit_mismatch(value: dict) -> None:
+            for role in ("baseline", "candidate"):
+                value["identities_initial"][f"{role}_source"]["tree"] = "f" * 40
+            synchronize_identity(value)
+
+        def boolean_campaign_counts(value: dict) -> None:
+            value["campaign"]["iterations"] = True
+
         mutations = {
             "sources": missing_sources,
             "runtime-files": incomplete_runtime_files,
@@ -829,6 +1059,12 @@ class MainCompareRunnerTests(unittest.TestCase):
             "empty-toolchain-records": empty_toolchain_records,
             "reduced-outputs": reduced_outputs,
             "topology-only-host": topology_only_host,
+            "truncated-tu-closure": truncated_tu_closure,
+            "coherently-truncated-runtime": coherently_truncated_runtime,
+            "truncated-cache-inventory": truncated_cache_inventory,
+            "empty-numa-summary": empty_numa_summary,
+            "source-tree-commit-mismatch": source_tree_commit_mismatch,
+            "boolean-campaign-counts": boolean_campaign_counts,
         }
         for label, mutate in mutations.items():
             with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:

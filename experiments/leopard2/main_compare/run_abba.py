@@ -10,6 +10,8 @@ workload and build identities match the signed request.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import copy
 import ctypes
 import datetime as dt
@@ -144,6 +146,22 @@ MAX_COMMAND_STDERR_BYTES = 8 * 1024 * 1024
 MAX_COMMAND_TIMEOUT_SECONDS = 3600.0
 MAX_IDENTITY_FILE_BYTES = 256 * 1024 * 1024
 MAX_LINK_RECIPE_BYTES = 1024 * 1024
+MAX_GIT_COMMIT_BYTES = 1024 * 1024
+MAX_CAMPAIGN_COUNT = 1_000_000
+MAX_CAMPAIGN_CELLS = 4096
+MAX_SHARD_BYTES = 1 << 40
+BASELINE_LIBRARY_SOURCES = (
+    "leopard.cpp", "LeopardCommon.cpp", "LeopardFF8.cpp", "LeopardFF16.cpp",
+)
+CANDIDATE_LIBRARY_SOURCES = (
+    "leopard.cpp", "leopard2.cpp", "Leopard2Backend.cpp",
+    "Leopard2BackendScalar.cpp", "Leopard2CpuFeatures.cpp", "Leopard2Plan.cpp",
+    "LeopardCommon.cpp", "LeopardFF8.cpp", "LeopardFF16.cpp",
+    "Leopard2BackendSSSE3.cpp", "Leopard2BackendAVX2.cpp",
+    "Leopard2BackendAVX512.cpp",
+)
+BASELINE_EXPECTED_COMPILE_COMMAND_COUNT = 5
+CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT = 20
 CHILD_REAP_TIMEOUT_SECONDS = 5.0
 PR_SET_CHILD_SUBREAPER = 36
 PR_GET_CHILD_SUBREAPER = 37
@@ -1062,7 +1080,60 @@ def run_checked(
     return completed.stdout
 
 
-def git_identity(root: Path, expected_commit: str, detached: bool) -> dict[str, Any]:
+def git_commit_object_identity(raw: bytes, expected_commit: str) -> dict[str, Any]:
+    require(isinstance(raw, bytes) and 0 < len(raw) <= MAX_GIT_COMMIT_BYTES,
+            "Git commit object is outside the retained byte bound")
+    object_id = hashlib.sha1(
+        f"commit {len(raw)}\0".encode("ascii") + raw).hexdigest()
+    require(object_id == expected_commit,
+            "Git commit object bytes do not match the retained commit ID")
+    encoded = base64.b64encode(raw).decode("ascii")
+    return {
+        "encoding": "base64", "size": len(raw),
+        "sha256": sha256_bytes(raw), "object_id": object_id,
+        "base64": encoded,
+    }
+
+
+def validate_git_commit_object_identity(
+    value: object, expected_commit: str, expected_tree: str, label: str,
+) -> dict[str, Any]:
+    require(isinstance(expected_commit, str) and
+            re.fullmatch(r"[0-9a-f]{40}", expected_commit) is not None and
+            isinstance(expected_tree, str) and
+            re.fullmatch(r"[0-9a-f]{40}", expected_tree) is not None,
+            f"{label} expected Git identity is invalid")
+    require(isinstance(value, dict) and set(value) == {
+                "encoding", "size", "sha256", "object_id", "base64"} and
+            value.get("encoding") == "base64" and
+            isinstance(value.get("base64"), str),
+            f"{label} Git commit-object identity shape differs")
+    try:
+        raw = base64.b64decode(value["base64"], validate=True)
+    except (ValueError, binascii.Error) as error:
+        raise EvidenceError(f"{label} Git commit object is not canonical base64") from error
+    require(base64.b64encode(raw).decode("ascii") == value["base64"] and
+            type(value.get("size")) is int and value["size"] == len(raw) and
+            0 < len(raw) <= MAX_GIT_COMMIT_BYTES and
+            value.get("sha256") == sha256_bytes(raw) and
+            value.get("object_id") == expected_commit and
+            git_commit_object_identity(raw, expected_commit) == value,
+            f"{label} Git commit-object byte identity differs")
+    require(b"\n\n" in raw,
+            f"{label} Git commit object has no header/message boundary")
+    header_lines = raw.split(b"\n\n", 1)[0].splitlines()
+    expected_tree_line = b"tree " + expected_tree.encode("ascii")
+    trees = [line for line in header_lines if line.startswith(b"tree ")]
+    require(header_lines and header_lines[0] == expected_tree_line and
+            trees == [expected_tree_line],
+            f"{label} Git commit object names a different tree")
+    return value
+
+
+def git_identity(
+    root: Path, expected_commit: str, detached: bool,
+    include_commit_object: bool = False,
+) -> dict[str, Any]:
     root = root.resolve(strict=True)
     git = Path("/usr/bin/git").resolve(strict=True)
     head = run_checked((str(git), "-C", str(root), "rev-parse", "HEAD")) \
@@ -1083,7 +1154,7 @@ def git_identity(root: Path, expected_commit: str, detached: bool) -> dict[str, 
         require(is_detached, f"exact-main source {root} is not detached")
     tracked = run_checked((
         str(git), "-C", str(root), "ls-tree", "-r", "-z", "HEAD"))
-    return {
+    result = {
         "path": str(root),
         "head": head,
         "tree": tree,
@@ -1091,6 +1162,15 @@ def git_identity(root: Path, expected_commit: str, detached: bool) -> dict[str, 
         "tracked_tree_listing_sha256": sha256_bytes(tracked),
         "tracked_status": "clean",
     }
+    if include_commit_object:
+        commit_object = run_checked((
+            str(git), "-C", str(root), "cat-file", "commit", head),
+            max_stdout=MAX_GIT_COMMIT_BYTES, max_stderr=65536)
+        result["commit_object"] = git_commit_object_identity(
+            commit_object, head)
+        validate_git_commit_object_identity(
+            result["commit_object"], head, tree, f"source {root}")
+    return result
 
 
 def artifact_identity(path: Path, kind: str) -> dict[str, Any]:
@@ -1194,18 +1274,12 @@ def validate_compile_commands(
     candidate_root = Path(specification["candidate_source_root"]).resolve(strict=True)
     if implementation == "baseline":
         required = {
-            *(baseline_root / name for name in (
-                "leopard.cpp", "LeopardCommon.cpp", "LeopardFF8.cpp", "LeopardFF16.cpp")),
+            *(baseline_root / name for name in BASELINE_LIBRARY_SOURCES),
             candidate_root / "experiments/leopard2/main_compare/legacy_main_benchmark.cpp",
         }
     else:
         required = {
-            *(candidate_root / name for name in (
-                "leopard.cpp", "leopard2.cpp", "Leopard2Backend.cpp",
-                "Leopard2BackendScalar.cpp", "Leopard2CpuFeatures.cpp",
-                "Leopard2Plan.cpp", "LeopardCommon.cpp", "LeopardFF8.cpp",
-                "LeopardFF16.cpp", "Leopard2BackendSSSE3.cpp",
-                "Leopard2BackendAVX2.cpp", "Leopard2BackendAVX512.cpp")),
+            *(candidate_root / name for name in CANDIDATE_LIBRARY_SOURCES),
             candidate_root / "bench/leopard2/benchmark.cpp",
         }
     required = {path.resolve(strict=True) for path in required}
@@ -1578,12 +1652,10 @@ def build_provenance(
     return result
 
 
-def runtime_closure(ldd: Path, executable: Path) -> dict[str, Any]:
-    ldd = ldd.resolve(strict=True)
-    executable = executable.resolve(strict=True)
-    output = run_checked(
-        (str(ldd), str(executable)), environment=CHILD_ENVIRONMENT
-    ).decode("utf-8", errors="strict")
+def parse_ldd_output_text(output: str, label: str) -> list[dict[str, Any]]:
+    require(isinstance(output, str) and output and
+            len(output.encode("utf-8")) <= MAX_LINK_RECIPE_BYTES,
+            f"{label} raw ldd output is outside the retained byte bound")
     entries: list[dict[str, Any]] = []
     for raw_line in output.splitlines():
         line = raw_line.strip()
@@ -1598,7 +1670,7 @@ def runtime_closure(ldd: Path, executable: Path) -> dict[str, Any]:
             entries.append({
                 "soname": soname,
                 "loader_path": target,
-                "file": artifact_identity(Path(target), "shared_library"),
+                "file_kind": "shared_library",
             })
             continue
         token = line.split(" (", 1)[0]
@@ -1606,19 +1678,52 @@ def runtime_closure(ldd: Path, executable: Path) -> dict[str, Any]:
             entries.append({
                 "soname": Path(token).name,
                 "loader_path": token,
-                "file": artifact_identity(Path(token), "dynamic_loader"),
+                "file_kind": "dynamic_loader",
             })
         elif token == "linux-vdso.so.1":
             entries.append({"soname": token, "virtual": True})
         else:
             raise EvidenceError(f"unrecognized ldd output: {line}")
-    require(entries, f"ldd returned no runtime closure for {executable}")
+    require(entries, f"{label} contains no runtime closure")
     require(len({entry["soname"] for entry in entries}) == len(entries),
-            f"duplicate runtime dependency in ldd output for {executable}")
-    return {
+            f"duplicate runtime dependency in {label}")
+    require(sum(entry.get("file_kind") == "dynamic_loader" for entry in entries) == 1,
+            f"{label} does not contain exactly one dynamic loader")
+    require(any(entry.get("file_kind") == "shared_library" for entry in entries),
+            f"{label} contains no shared-library dependency")
+    require(sum(entry.get("virtual") is True for entry in entries) <= 1,
+            f"{label} contains duplicate virtual loader records")
+    return sorted(entries, key=lambda item: item["soname"])
+
+
+def runtime_closure(
+    ldd: Path, executable: Path, include_raw_output: bool = False,
+) -> dict[str, Any]:
+    ldd = ldd.resolve(strict=True)
+    executable = executable.resolve(strict=True)
+    output = run_checked(
+        (str(ldd), str(executable)), environment=CHILD_ENVIRONMENT,
+        max_stdout=MAX_LINK_RECIPE_BYTES,
+    ).decode("utf-8", errors="strict")
+    parsed = parse_ldd_output_text(output, f"ldd output for {executable}")
+    entries = []
+    for entry in parsed:
+        if entry.get("virtual") is True:
+            entries.append(dict(entry))
+            continue
+        retained = dict(entry)
+        kind = retained.pop("file_kind")
+        retained["file"] = artifact_identity(
+            Path(retained["loader_path"]), kind)
+        entries.append(retained)
+    result = {
         "executable": str(executable),
-        "dependencies": sorted(entries, key=lambda item: item["soname"]),
+        "dependencies": entries,
     }
+    if include_raw_output:
+        result["raw_ldd_output"] = exact_text_content(
+            output, f"ldd output for {executable}")
+    return result
 
 
 def input_snapshot(
@@ -1646,14 +1751,18 @@ def input_snapshot(
         "baseline_build": baseline_build,
         "candidate_build": candidate_build,
         "baseline_runtime_closure": runtime_closure(
-            ldd, Path(specification["baseline_executable"])),
+            ldd, Path(specification["baseline_executable"]),
+            include_raw_output=raw_schema == RAW_SCHEMA),
         "candidate_runtime_closure": runtime_closure(
-            ldd, Path(specification["candidate_executable"])),
+            ldd, Path(specification["candidate_executable"]),
+            include_raw_output=raw_schema == RAW_SCHEMA),
         "baseline_source": git_identity(
-            Path(specification["baseline_source_root"]), MAIN_COMMIT, True),
+            Path(specification["baseline_source_root"]), MAIN_COMMIT, True,
+            include_commit_object=raw_schema == RAW_SCHEMA),
         "candidate_source": git_identity(
             Path(specification["candidate_source_root"]),
-            str(specification["candidate_commit"]), False),
+            str(specification["candidate_commit"]), False,
+            include_commit_object=raw_schema == RAW_SCHEMA),
     }
 
 
@@ -1696,7 +1805,8 @@ def validate_complete_git_identity(
 ) -> dict[str, Any]:
     require(isinstance(value, dict) and set(value) == {
                 "path", "head", "tree", "detached",
-                "tracked_tree_listing_sha256", "tracked_status"},
+                "tracked_tree_listing_sha256", "tracked_status",
+                "commit_object"},
             f"{label} source identity shape differs")
     require(Path(expected_path).is_absolute() and
             value.get("path") == expected_path and
@@ -1709,6 +1819,8 @@ def validate_complete_git_identity(
             HEX256.fullmatch(value["tracked_tree_listing_sha256"]) is not None and
             value.get("tracked_status") == "clean",
             f"{label} source identity is invalid")
+    validate_git_commit_object_identity(
+        value.get("commit_object"), expected_head, value["tree"], label)
     return value
 
 
@@ -1716,11 +1828,15 @@ def validate_complete_runtime_closure(
     value: object, label: str, expected_executable: str,
 ) -> dict[str, Any]:
     require(isinstance(value, dict) and set(value) == {
-                "executable", "dependencies"} and
+                "executable", "dependencies", "raw_ldd_output"} and
             value.get("executable") == expected_executable and
             isinstance(value.get("dependencies"), list) and
             value["dependencies"],
             f"{label} runtime closure shape differs")
+    raw_output = validate_complete_text_identity(
+        value.get("raw_ldd_output"), f"{label} raw ldd output")
+    parsed = parse_ldd_output_text(
+        raw_output["text"], f"{label} retained raw ldd output")
     sonames: list[str] = []
     loader_paths: list[str] = []
     file_paths: list[str] = []
@@ -1752,6 +1868,18 @@ def validate_complete_runtime_closure(
             len(loader_paths) == len(set(loader_paths)) and
             len(file_paths) == len(set(file_paths)),
             f"{label} runtime dependency closure is not sorted and unique")
+    normalized_dependencies = []
+    for dependency in value["dependencies"]:
+        if dependency.get("virtual") is True:
+            normalized_dependencies.append(dict(dependency))
+        else:
+            normalized_dependencies.append({
+                "soname": dependency["soname"],
+                "loader_path": dependency["loader_path"],
+                "file_kind": dependency["file"]["kind"],
+            })
+    require(normalized_dependencies == parsed,
+            f"{label} dependency summary differs from retained raw ldd output")
     return value
 
 
@@ -1820,6 +1948,8 @@ def validate_complete_build_identity(
         benchmark_suffix = \
             "/experiments/leopard2/main_compare/legacy_main_benchmark.cpp"
         isa_policy = "whole-build -march=native"
+        library_sources = BASELINE_LIBRARY_SOURCES
+        expected_entry_count = BASELINE_EXPECTED_COMPILE_COMMAND_COUNT
     else:
         archive_name = cmake["archive"]
         executable_name = "bench_leopard2"
@@ -1840,6 +1970,8 @@ def validate_complete_build_identity(
         isa_policy = (
             "portable core with ISA flags only on SSSE3, AVX2, and "
             "AVX-512VL translation units")
+        library_sources = CANDIDATE_LIBRARY_SOURCES
+        expected_entry_count = CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT
 
     expected_metadata = {
         "cmake_cache": str(Path(build_dir) / "CMakeCache.txt"),
@@ -1903,7 +2035,7 @@ def validate_complete_build_identity(
     pairs = compile_record.get("required_source_object_pairs")
     sources = compile_record.get("required_sources")
     require(type(compile_record.get("entry_count")) is int and
-            compile_record["entry_count"] >= 1 and
+            compile_record["entry_count"] == expected_entry_count and
             compile_record.get("validated_optimization") == "-O3" and
             compile_record.get("validated_openmp") is True and
             compile_record.get("isa_policy") == isa_policy and
@@ -1924,7 +2056,13 @@ def validate_complete_build_identity(
                 f"{implementation} object {index} escapes its build directory")
         pair_sources.append(source["path"])
         pair_objects.append(obj["path"])
-    require(pair_sources == sorted(pair_sources) and
+    expected_sources = sorted([
+        *(str(Path(specification[f"{implementation}_source_root"]) / name)
+          for name in library_sources),
+        str(Path(specification["candidate_source_root"]) /
+            benchmark_suffix.removeprefix("/")),
+    ])
+    require(pair_sources == expected_sources and
             pair_sources == sources and len(pair_sources) == len(set(pair_sources)) and
             len(pair_objects) == len(set(pair_objects)) and
             compile_record["entry_count"] >= len(pair_sources),
@@ -1947,10 +2085,9 @@ def validate_complete_build_identity(
                 for pair in archive_pairs),
             f"{implementation} compile sources escape their declared source roots")
     members = build.get("validated_archive_members")
-    require(isinstance(members, list) and members and
-            len(members) == len(set(members)) and
-            all(isinstance(member, str) and member and "/" not in member
-                for member in members),
+    expected_members = [Path(name).name + ".o" for name in library_sources]
+    require(isinstance(members, list) and members == expected_members and
+            len(members) == len(set(members)),
             f"{implementation} archive member identity is invalid")
     objects_by_member: dict[str, str] = {}
     for pair in archive_pairs:
@@ -2173,7 +2310,9 @@ def parse_cpu_list(text: str) -> set[int]:
 
 
 def validate_topology(cpu: int, sibling: int) -> tuple[set[int], set[int]]:
-    require(cpu >= 0 and sibling >= 0 and cpu != sibling,
+    require(type(cpu) is int and type(sibling) is int and
+            0 <= cpu <= MAX_CPU_ID and 0 <= sibling <= MAX_CPU_ID and
+            cpu != sibling,
             "benchmark CPU and reserved sibling must be distinct non-negative CPUs")
     require(hasattr(os, "sched_getaffinity") and hasattr(os, "sched_setaffinity"),
             "Linux scheduling affinity is required")
@@ -2247,10 +2386,12 @@ def cpu_policy_identity(cpu: int) -> dict[str, Any]:
         "shared_cpu_list", "shared_cpu_map", "allocation_policy",
         "write_policy",
     )
+    cache_roots = sorted(
+        (root / "cache").glob("index*"),
+        key=lambda path: int(path.name.removeprefix("index")))
+    cache_index_inventory = [path.name for path in cache_roots]
     caches = []
-    for index_root in sorted(
-            (root / "cache").glob("index*"),
-            key=lambda path: int(path.name.removeprefix("index"))):
+    for index_root in cache_roots:
         suffix = index_root.name.removeprefix("index")
         require(suffix.isdigit(), f"CPU {cpu} has an invalid cache index")
         record = {
@@ -2266,10 +2407,11 @@ def cpu_policy_identity(cpu: int) -> dict[str, Any]:
                 f"CPU {cpu} cache index {suffix} excludes its own CPU")
         caches.append(record)
     require(caches, f"CPU {cpu} has no retained cache hierarchy")
-    numa_nodes = sorted(
-        int(path.name.removeprefix("node"))
-        for path in root.glob("node*")
+    numa_node_inventory = sorted(
+        path.name for path in root.glob("node*")
         if path.name.removeprefix("node").isdigit())
+    numa_nodes = [int(name.removeprefix("node"))
+                  for name in numa_node_inventory]
     core_class = {
         "core_type": read_text_optional(topology_root / "core_type"),
         "cpu_capacity": read_text_optional(root / "cpu_capacity"),
@@ -2281,7 +2423,9 @@ def cpu_policy_identity(cpu: int) -> dict[str, Any]:
         "topology": topology,
         "frequency_policy": frequency,
         "cache_hierarchy": caches,
+        "cache_index_inventory": cache_index_inventory,
         "numa_nodes": numa_nodes,
+        "numa_node_inventory": numa_node_inventory,
         "core_class": core_class,
     }
 
@@ -2295,8 +2439,10 @@ def host_identity(cpu: int, sibling: int, allowed_at_launch: set[int]) -> dict[s
         Path("/sys/devices/system/cpu/cpufreq/boost"),
     )
     uname = platform.uname()
-    online = read_text_optional(Path("/sys/devices/system/cpu/online"))
-    require(online is not None, "cannot read online CPU set")
+    online_path = Path("/sys/devices/system/cpu/online")
+    node_online_path = Path("/sys/devices/system/node/online")
+    online = online_path.read_text(encoding="ascii")
+    node_online = node_online_path.read_text(encoding="ascii")
     return {
         "system": {
             "system": uname.system,
@@ -2309,6 +2455,10 @@ def host_identity(cpu: int, sibling: int, allowed_at_launch: set[int]) -> dict[s
         },
         "allowed_cpu_set_at_launch": sorted(allowed_at_launch),
         "online_cpu_set": sorted(parse_cpu_list(online)),
+        "online_cpu_list_text": exact_text_content(
+            online, "sysfs online CPU list"),
+        "online_node_list_text": exact_text_content(
+            node_online, "sysfs online NUMA-node list"),
         "benchmark_cpu": cpu_policy_identity(cpu),
         "reserved_sibling": cpu_policy_identity(sibling),
         "turbo_and_pstate": {
@@ -2863,6 +3013,10 @@ class Reservation:
 
 
 def parse_reservation(raw: bytes, cpu: int, sibling: int) -> dict[str, Any]:
+    require(type(cpu) is int and type(sibling) is int and
+            0 <= cpu <= MAX_CPU_ID and 0 <= sibling <= MAX_CPU_ID and
+            cpu != sibling,
+            "CPU reservation request pair is invalid")
     try:
         payload = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -2876,7 +3030,13 @@ def parse_reservation(raw: bytes, cpu: int, sibling: int) -> dict[str, Any]:
             "CPU reservation is not canonical JSON without a trailing newline")
     require(payload["schema"] == RESERVATION_SCHEMA and payload["status"] == "held",
             "CPU reservation is not a held v1 reservation")
-    require(payload["benchmark_cpu"] == cpu and payload["reserved_sibling"] == sibling,
+    require(type(payload["benchmark_cpu"]) is int and
+            type(payload["reserved_sibling"]) is int and
+            0 <= payload["benchmark_cpu"] <= MAX_CPU_ID and
+            0 <= payload["reserved_sibling"] <= MAX_CPU_ID and
+            payload["benchmark_cpu"] != payload["reserved_sibling"] and
+            payload["benchmark_cpu"] == cpu and
+            payload["reserved_sibling"] == sibling,
             "CPU reservation pair does not match the run request")
     require(isinstance(payload["owner"], str) and payload["owner"].strip(),
             "CPU reservation owner is empty")
@@ -2924,11 +3084,16 @@ def ceil_power_of_two(value: int) -> int:
 
 
 def validate_cell(cell: Cell) -> None:
+    require(type(cell.identifier) is str and
+            all(type(value) is int for value in (
+                cell.k, cell.r, cell.shard_bytes, cell.losses, cell.seed)),
+            "cell fields have invalid types")
     require(re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", cell.identifier) is not None,
             f"invalid cell identifier {cell.identifier!r}")
     require(cell.k > 0 and cell.r > 0 and cell.r <= cell.k,
             f"cell {cell.identifier} is outside exact-main R <= K")
-    require(cell.shard_bytes > 0 and cell.shard_bytes % 64 == 0,
+    require(0 < cell.shard_bytes <= MAX_SHARD_BYTES and
+            cell.shard_bytes % 64 == 0,
             f"cell {cell.identifier} shard bytes are not a positive multiple of 64")
     require(0 <= cell.losses <= cell.r,
             f"cell {cell.identifier} has invalid loss count")
@@ -3269,7 +3434,8 @@ def validate_complete_cpu_policy_record(
 ) -> dict[str, Any]:
     require(isinstance(record, dict) and set(record) == {
                 "cpu", "online", "cpuinfo", "topology", "frequency_policy",
-                "cache_hierarchy", "numa_nodes", "core_class"},
+                "cache_hierarchy", "cache_index_inventory", "numa_nodes",
+                "numa_node_inventory", "core_class"},
             f"host {label} policy identity shape differs")
     require(type(record.get("cpu")) is int and record["cpu"] == expected_cpu and
             (record.get("online") is None or isinstance(record["online"], str)),
@@ -3333,10 +3499,18 @@ def validate_complete_cpu_policy_record(
         indices.append(cache["index"])
     require(indices == sorted(indices) and len(indices) == len(set(indices)),
             f"host {label} cache indices are not sorted and unique")
+    cache_inventory = record.get("cache_index_inventory")
+    require(isinstance(cache_inventory, list) and
+            cache_inventory == [f"index{index}" for index in indices],
+            f"host {label} cache index inventory differs from retained caches")
     nodes = record.get("numa_nodes")
-    require(isinstance(nodes, list) and nodes == sorted(set(nodes)) and
+    node_inventory = record.get("numa_node_inventory")
+    require(isinstance(nodes, list) and nodes and nodes == sorted(set(nodes)) and
             all(type(node) is int and node >= 0 for node in nodes),
             f"host {label} NUMA identity is invalid")
+    require(isinstance(node_inventory, list) and
+            node_inventory == [f"node{node}" for node in nodes],
+            f"host {label} NUMA-node inventory differs")
     core_class = record.get("core_class")
     require(isinstance(core_class, dict) and set(core_class) == {
                 "core_type", "cpu_capacity"} and
@@ -3353,6 +3527,7 @@ def validate_host_record(
     if raw_schema == RAW_SCHEMA:
         require(set(value) == {
                     "system", "allowed_cpu_set_at_launch", "online_cpu_set",
+                    "online_cpu_list_text", "online_node_list_text",
                     "benchmark_cpu", "reserved_sibling", "turbo_and_pstate"},
                 "schema-v5 host identity shape differs")
         system = value.get("system")
@@ -3368,10 +3543,22 @@ def validate_host_record(
         online = value.get("online_cpu_set")
         require(isinstance(launch, list) and launch == list(allowed) and
                 launch == sorted(set(launch)) and
-                all(type(item) is int and item >= 0 for item in launch) and
+                3 <= len(launch) <= MAX_CPU_LIST_ENTRIES and
+                all(type(item) is int and 0 <= item <= MAX_CPU_ID
+                    for item in launch) and
                 isinstance(online, list) and online == sorted(set(online)) and
-                all(type(item) is int and item >= 0 for item in online),
+                1 <= len(online) <= MAX_CPU_LIST_ENTRIES and
+                all(type(item) is int and 0 <= item <= MAX_CPU_ID
+                    for item in online),
                 "schema-v5 host CPU-set identity differs")
+        online_cpu_text = validate_complete_text_identity(
+            value.get("online_cpu_list_text"), "host online CPU list")
+        online_node_text = validate_complete_text_identity(
+            value.get("online_node_list_text"), "host online NUMA-node list")
+        online_nodes = parse_cpu_list(online_node_text["text"])
+        require(parse_cpu_list(online_cpu_text["text"]) == set(online) and
+                online_nodes,
+                "schema-v5 host online CPU/node summaries differ from sysfs text")
         benchmark_record = validate_complete_cpu_policy_record(
             value.get("benchmark_cpu"), "benchmark_cpu", cpu, sibling)
         sibling_record = validate_complete_cpu_policy_record(
@@ -3379,6 +3566,7 @@ def validate_host_record(
         require(benchmark_record["cache_hierarchy"] ==
                     sibling_record["cache_hierarchy"] and
                 benchmark_record["numa_nodes"] == sibling_record["numa_nodes"] and
+                set(benchmark_record["numa_nodes"]).issubset(online_nodes) and
                 benchmark_record["core_class"] == sibling_record["core_class"],
                 "reserved SMT pair differs in cache, NUMA, or core-class identity")
         turbo = value.get("turbo_and_pstate")
@@ -3393,15 +3581,16 @@ def validate_host_record(
                 "schema-v5 host turbo/pstate identity differs")
     require(value.get("allowed_cpu_set_at_launch") == list(allowed),
             "host identity has the wrong launch affinity")
-    require(isinstance(value.get("online_cpu_set"), list) and
-            cpu in value["online_cpu_set"] and sibling in value["online_cpu_set"],
+    online = value.get("online_cpu_set")
+    require(type(online) is list and online == sorted(set(online)) and
+            all(type(item) is int and 0 <= item <= MAX_CPU_ID for item in online) and
+            cpu in online and sibling in online,
             "reserved CPUs were not retained as online")
     for name, expected_cpu, expected_sibling in (
         ("benchmark_cpu", cpu, sibling), ("reserved_sibling", sibling, cpu)):
         record = value.get(name)
         require(isinstance(record, dict) and
-                isinstance(record.get("cpu"), int) and
-                not isinstance(record.get("cpu"), bool) and
+                type(record.get("cpu")) is int and
                 record.get("cpu") == expected_cpu,
                 f"host {name} identity is invalid")
         cpuinfo = record.get("cpuinfo")
@@ -3441,34 +3630,40 @@ def validate_raw(
     campaign = raw.get("campaign")
     require(isinstance(campaign, dict), "campaign is not an object")
     validate_candidate_mode_schema(campaign, raw_schema)
-    require(campaign.get("rounds") == ROUNDS and
+    require(type(campaign.get("rounds")) is int and
+            campaign["rounds"] == ROUNDS and
             tuple(campaign.get("order", ())) == ORDER,
             "campaign does not contain exactly three ABBA rounds")
-    require(campaign.get("batch") == 1 and campaign.get("threads") == 1,
+    require(type(campaign.get("batch")) is int and campaign["batch"] == 1 and
+            type(campaign.get("threads")) is int and campaign["threads"] == 1,
             "campaign is not a one-stripe, one-thread comparison")
     require(campaign.get("child_environment") == CHILD_ENVIRONMENT,
             "campaign child environment is not the strict comparison environment")
     cpu = campaign.get("benchmark_cpu")
     sibling = campaign.get("reserved_sibling")
-    require(isinstance(cpu, int) and isinstance(sibling, int) and
-            cpu >= 0 and sibling >= 0 and cpu != sibling,
+    require(type(cpu) is int and type(sibling) is int and
+            0 <= cpu <= MAX_CPU_ID and 0 <= sibling <= MAX_CPU_ID and
+            cpu != sibling,
             "campaign has no valid reserved CPU pair")
-    require(isinstance(campaign.get("iterations"), int) and
-            campaign["iterations"] >= 3,
+    require(type(campaign.get("iterations")) is int and
+            3 <= campaign["iterations"] <= MAX_CAMPAIGN_COUNT,
             "campaign has too few timing samples")
-    require(isinstance(campaign.get("reuse"), int) and campaign["reuse"] >= 1,
+    require(type(campaign.get("reuse")) is int and
+            1 <= campaign["reuse"] <= MAX_CAMPAIGN_COUNT,
             "campaign reuse is invalid")
-    require(isinstance(campaign.get("warmup"), int) and campaign["warmup"] >= 1,
+    require(type(campaign.get("warmup")) is int and
+            1 <= campaign["warmup"] <= MAX_CAMPAIGN_COUNT,
             "campaign warmup is invalid")
     timeout = campaign.get("timeout_seconds")
     require(isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and
-            math.isfinite(timeout) and timeout > 0,
+            math.isfinite(timeout) and 0 < timeout <= MAX_COMMAND_TIMEOUT_SECONDS,
             "campaign timeout is invalid")
     require(campaign.get("statistics") == statistics_policy(),
             "campaign statistics policy is not the authoritative clustered ABBA policy")
     allowed = campaign.get("allowed_cpu_set_at_launch")
-    require(isinstance(allowed, list) and allowed == sorted(set(allowed)) and
-            all(isinstance(item, int) and item >= 0 for item in allowed) and
+    require(type(allowed) is list and allowed == sorted(set(allowed)) and
+            3 <= len(allowed) <= MAX_CPU_LIST_ENTRIES and
+            all(type(item) is int and 0 <= item <= MAX_CPU_ID for item in allowed) and
             cpu in allowed and sibling in allowed and len(set(allowed) - {cpu, sibling}) > 0,
             "campaign launch affinity is invalid")
     host_initial = raw.get("host_initial")
@@ -3481,7 +3676,12 @@ def validate_raw(
         require("isolation" not in raw,
                 "legacy raw schema contains unversioned isolation evidence")
     cells_value = campaign.get("cells")
-    require(isinstance(cells_value, list) and cells_value, "campaign has no cells")
+    require(type(cells_value) is list and
+            1 <= len(cells_value) <= MAX_CAMPAIGN_CELLS and
+            all(isinstance(value, dict) and set(value) == {
+                "identifier", "k", "r", "shard_bytes", "losses", "seed"}
+                for value in cells_value),
+            "campaign cell list is incomplete or invalid")
     cells = [Cell(**value) for value in cells_value]
     require(len({cell.identifier for cell in cells}) == len(cells),
             "campaign cell identifiers are not unique")
@@ -3770,12 +3970,44 @@ def validate_failure(
     require(isinstance(campaign, dict), "failed campaign metadata is missing")
     raw_schema = FAILURE_TO_RAW_SCHEMA[failure_schema]
     validate_candidate_mode_schema(campaign, raw_schema)
+    require(type(campaign.get("rounds")) is int and
+            campaign["rounds"] == ROUNDS and
+            tuple(campaign.get("order", ())) == ORDER and
+            type(campaign.get("batch")) is int and campaign["batch"] == 1 and
+            type(campaign.get("threads")) is int and campaign["threads"] == 1 and
+            type(campaign.get("iterations")) is int and
+            3 <= campaign["iterations"] <= MAX_CAMPAIGN_COUNT and
+            type(campaign.get("reuse")) is int and
+            1 <= campaign["reuse"] <= MAX_CAMPAIGN_COUNT and
+            type(campaign.get("warmup")) is int and
+            1 <= campaign["warmup"] <= MAX_CAMPAIGN_COUNT,
+            "failed campaign scalar counts are invalid")
+    timeout = campaign.get("timeout_seconds")
+    require(isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and
+            math.isfinite(timeout) and 0 < timeout <= MAX_COMMAND_TIMEOUT_SECONDS,
+            "failed campaign timeout is invalid")
     cpu = campaign.get("benchmark_cpu")
     sibling = campaign.get("reserved_sibling")
-    require(isinstance(cpu, int) and not isinstance(cpu, bool) and cpu >= 0 and
-            isinstance(sibling, int) and not isinstance(sibling, bool) and
-            sibling >= 0 and cpu != sibling,
+    require(type(cpu) is int and type(sibling) is int and
+            0 <= cpu <= MAX_CPU_ID and 0 <= sibling <= MAX_CPU_ID and
+            cpu != sibling,
             "failed campaign CPU pair is invalid")
+    allowed_value = campaign.get("allowed_cpu_set_at_launch")
+    if allowed_value is not None:
+        require(type(allowed_value) is list and
+                allowed_value == sorted(set(allowed_value)) and
+                3 <= len(allowed_value) <= MAX_CPU_LIST_ENTRIES and
+                all(type(item) is int and 0 <= item <= MAX_CPU_ID
+                    for item in allowed_value) and
+                cpu in allowed_value and sibling in allowed_value and
+                len(set(allowed_value) - {cpu, sibling}) > 0,
+                "failed campaign launch affinity is invalid")
+    host_initial = failure.get("host_initial")
+    if host_initial is not None:
+        require(allowed_value is not None,
+                "failed campaign host identity lacks launch affinity")
+        validate_host_record(
+            host_initial, cpu, sibling, allowed_value, raw_schema)
     pair_lease = failure.get("pair_lease")
     isolation = failure.get("isolation")
     if pair_lease is not None:
@@ -3797,7 +4029,11 @@ def validate_failure(
     invocations = failure.get("invocations")
     require(isinstance(invocations, list), "failed invocation prefix is not a list")
     cells_value = campaign.get("cells")
-    require(isinstance(cells_value, list) and cells_value,
+    require(type(cells_value) is list and
+            1 <= len(cells_value) <= MAX_CAMPAIGN_CELLS and
+            all(isinstance(item, dict) and set(item) == {
+                "identifier", "k", "r", "shard_bytes", "losses", "seed"}
+                for item in cells_value),
             "failed campaign cells are missing")
     cells = [Cell(**item) for item in cells_value]
     for cell in cells:
