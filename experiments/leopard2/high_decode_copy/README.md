@@ -19,6 +19,14 @@ GF8/GF16 compact tails, and balanced fully erased message blocks that must use
 the nonpruned mature evaluator.  Adversarial mode, counter, path, and digest
 mutations must be rejected.
 
+The campaign and manifest use the fail-closed `v2` evidence schemas.  The
+runner independently reproduces the exact sorted loss set from K, loss count,
+and seed; requires the global cell/round/slot sequence to be precisely
+ABBA/BAAB/ABBA; binds batch, reuse, sample count, warmup, and thread count; and
+recomputes medians, MAD, extrema, rates, and amortized decode time from retained
+samples.  It also validates the host record, coordinator reservation,
+pair-wide lease, per-child monotonic intervals, and per-child CPU deltas.
+
 ## Build
 
 Use a clean committed source tree.  The attribution build is diagnostic only:
@@ -41,6 +49,14 @@ in the private archive and executable.  The recursive
 is present in the production archive.  Its benchmarks-enabled recursive mode
 first builds the attribution executable and then proves that neither it nor the
 private hook archive is installed.
+
+Build identity is a source-to-binary closure rather than a filename check.  It
+binds every hooks/benchmark source to its exact compile action and object,
+requires the archive recipe/member order and member bytes to match those
+objects, rejects undeclared executable objects/archives and non-system link
+inputs, byte-compares the retained executable with a deterministic relink, and
+requires both the archive and executable to match a clean temporary rebuild
+from the committed source and retained compiler/options.
 
 Build an independent production candidate from the identical commit with test
 hooks disabled, following `experiments/leopard2/main_compare/README.md`.  Build

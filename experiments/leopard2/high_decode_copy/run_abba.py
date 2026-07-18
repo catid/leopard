@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import importlib.util
 import json
 import math
 import os
+import re
 import shlex
 import statistics
 import subprocess
@@ -20,14 +22,21 @@ from types import ModuleType
 from typing import Any, Mapping, Sequence
 
 
-RAW_SCHEMA = "leopard2-high-decode-copy-raw/v1"
-MANIFEST_SCHEMA = "leopard2-high-decode-copy-manifest/v1"
-FAILURE_SCHEMA = "leopard2-high-decode-copy-failure/v1"
+RAW_SCHEMA = "leopard2-high-decode-copy-raw/v2"
+MANIFEST_SCHEMA = "leopard2-high-decode-copy-manifest/v2"
+FAILURE_SCHEMA = "leopard2-high-decode-copy-failure/v2"
 MATRIX_SCHEMA = "leopard2-high-decode-copy-matrix/v1"
 RUNNER_RELATIVE = "experiments/leopard2/high_decode_copy/run_abba.py"
 CONTRACT_RELATIVE = "experiments/leopard2/high_decode_copy/benchmark_contract.py"
 MATRIX_RELATIVE = "experiments/leopard2/high_decode_copy/matrix.json"
 TARGET_NAME = "bench_leopard2_high_decode_copy_attribution"
+MASK64 = (1 << 64) - 1
+RECORD_KEYS = {
+    "cell", "mode", "round", "slot", "command", "command_sha256",
+    "started_monotonic_ns", "ended_monotonic_ns",
+    "cpu_before", "cpu_after", "cpu_delta",
+    "sibling_before", "sibling_after", "sibling_delta", "result",
+}
 
 
 def load_module(name: str, path: Path) -> ModuleType:
@@ -121,6 +130,79 @@ def load_matrix(path: Path) -> dict[str, Any]:
     return value
 
 
+class XorShift64:
+    """Exact unsigned generator used by bench/leopard2/benchmark.cpp."""
+
+    def __init__(self, seed: int):
+        self.state = seed if seed else 0x9E3779B97F4A7C15
+
+    def next(self) -> int:
+        value = self.state
+        value ^= (value << 13) & MASK64
+        value ^= value >> 7
+        value ^= (value << 17) & MASK64
+        self.state = value & MASK64
+        return self.state
+
+
+def expected_missing_original_indices(cell: Mapping[str, Any]) -> list[int]:
+    """Reproduce SelectLosses without trusting benchmark-emitted coordinates."""
+    k = cell.get("k")
+    losses = cell.get("losses")
+    seed = cell.get("seed")
+    require(all(type(value) is int for value in (k, losses, seed)) and
+            0 < k and 0 < losses <= k and 0 <= seed <= MASK64,
+            "loss-set inputs are not exact bounded integers")
+    order = list(range(k))
+    random = XorShift64(seed ^ 0xD1B54A32D192ED03)
+    for remaining in range(len(order), 1, -1):
+        selected = random.next() % remaining
+        order[remaining - 1], order[selected] = \
+            order[selected], order[remaining - 1]
+    return sorted(order[:losses])
+
+
+def validate_missing_original_indices(
+    value: object, cell: Mapping[str, Any]
+) -> list[int]:
+    expected = expected_missing_original_indices(cell)
+    require(type(value) is list and len(value) == cell["losses"] and
+            all(type(index) is int and 0 <= index < cell["k"]
+                for index in value) and
+            value == sorted(set(value)) and value == expected,
+            "benchmark loss set is not the deterministic matrix loss set")
+    return value
+
+
+def expected_record_sequence(
+    matrix: Mapping[str, Any]
+) -> list[tuple[str, int, int, str]]:
+    return [
+        (cell["id"], round_index, slot, mode)
+        for cell in matrix["cells"]
+        for round_index, order in enumerate(matrix["round_orders"])
+        for slot, mode in enumerate(order)
+    ]
+
+
+def validate_record_sequence(
+    records: object, matrix: Mapping[str, Any]
+) -> list[Mapping[str, Any]]:
+    expected = expected_record_sequence(matrix)
+    require(type(records) is list and len(records) == len(expected) and
+            all(isinstance(record, dict) for record in records),
+            "raw campaign does not contain its exact record sequence")
+    for record, coordinate in zip(records, expected):
+        require(type(record.get("cell")) is str and
+                type(record.get("round")) is int and
+                type(record.get("slot")) is int and
+                type(record.get("mode")) is str and
+                (record["cell"], record["round"], record["slot"],
+                 record["mode"]) == coordinate,
+                "record order, round, slot, or ABBA role was relabeled")
+    return records
+
+
 def checked_output(arguments: list[str]) -> str:
     output = SUPPORT.run_checked(
         arguments, environment=SUPPORT.CHILD_ENVIRONMENT, timeout=30,
@@ -138,58 +220,388 @@ def find_build_root(binary: Path) -> Path:
     raise EvidenceError("diagnostic benchmark has no enclosing CMake cache")
 
 
+def diagnostic_compile_closure(
+    source_root: Path, build: Path, commands_path: Path, compiler: Path
+) -> tuple[list[dict[str, Any]], Path, list[Path], str]:
+    try:
+        commands_text = commands_path.read_text(encoding="utf-8", errors="strict")
+        entries = json.loads(commands_text)
+    except json.JSONDecodeError as error:
+        raise EvidenceError(f"invalid diagnostic compile_commands.json: {error}") from error
+    require(isinstance(entries, list) and entries,
+            "diagnostic compile_commands.json is empty")
+    ordinary = (
+        "leopard.cpp", "leopard2.cpp", "Leopard2Backend.cpp",
+        "Leopard2BackendScalar.cpp", "Leopard2CpuFeatures.cpp",
+        "Leopard2Plan.cpp", "LeopardCommon.cpp", "LeopardFF8.cpp",
+        "LeopardFF16.cpp",
+    )
+    backends = (
+        ("Leopard2BackendSSSE3.cpp", "leopard2_backend_ssse3_test_hooks"),
+        ("Leopard2BackendAVX2.cpp", "leopard2_backend_avx2_test_hooks"),
+        ("Leopard2BackendAVX512.cpp", "leopard2_backend_avx512_test_hooks"),
+    )
+    specifications: list[tuple[Path, Path, set[str]]] = [
+        (source_root / name,
+         build / "CMakeFiles/leopard_test_hooks.dir" / f"{name}.o",
+         {"LEO2_ENABLE_TEST_HOOKS=1"})
+        for name in ordinary
+    ]
+    specifications.extend(
+        (source_root / name,
+         build / "CMakeFiles" / f"{target}.dir" / f"{name}.o",
+         {"LEO2_ENABLE_TEST_HOOKS=1"})
+        for name, target in backends
+    )
+    benchmark_source = source_root / "bench/leopard2/benchmark.cpp"
+    benchmark_object = build / "CMakeFiles" / f"{TARGET_NAME}.dir" / \
+        "bench/leopard2/benchmark.cpp.o"
+    specifications.append((
+        benchmark_source, benchmark_object,
+        {"LEO2_ENABLE_TEST_HOOKS=1", "LEO2_HIGH_DECODE_COPY_ATTRIBUTION=1"}))
+    expected_outputs = {output.resolve(): (source.resolve(), definitions)
+                        for source, output, definitions in specifications}
+    selected: dict[Path, tuple[Mapping[str, Any], list[str]]] = {}
+    for entry in entries:
+        require(isinstance(entry, dict), "diagnostic compile entry is not an object")
+        output_value = entry.get("output")
+        directory_value = entry.get("directory")
+        if not isinstance(output_value, str) or not isinstance(directory_value, str):
+            continue
+        candidate = Path(output_value)
+        candidate = candidate if candidate.is_absolute() \
+            else Path(directory_value) / candidate
+        if candidate.resolve() not in expected_outputs:
+            continue
+        tokens = SUPPORT.compile_command_tokens(entry)
+        output = SUPPORT.command_output_path(entry, tokens)
+        require(output not in selected,
+                f"duplicate diagnostic compile action for {output}")
+        selected[output] = (entry, tokens)
+    require(set(selected) == set(expected_outputs),
+            "diagnostic compile commands omit a required hooks object")
+
+    records: list[dict[str, Any]] = []
+    for output, (expected_source, definitions) in expected_outputs.items():
+        entry, tokens = selected[output]
+        source_value = entry.get("file")
+        require(isinstance(source_value, str) and
+                Path(source_value).resolve(strict=True) == expected_source and
+                tokens and Path(tokens[0]).resolve(strict=True) == compiler and
+                tokens.count("-c") == 1 and
+                tokens.index("-c") + 1 < len(tokens) and
+                Path(tokens[tokens.index("-c") + 1]).resolve(strict=True) ==
+                    expected_source and
+                not any(token.startswith("@") for token in tokens),
+                f"diagnostic compile action source/compiler differs for {output}")
+        SUPPORT.validate_effective_flags(tokens, f"diagnostic compile action {output}")
+        require("-fopenmp" in tokens or "-fopenmp=libomp" in tokens,
+                f"diagnostic compile action lacks OpenMP: {output}")
+        define_tokens = {token[2:] for token in tokens if token.startswith("-D")}
+        require(definitions.issubset(define_tokens),
+                f"diagnostic compile action lacks private gates: {output}")
+        source_identity = SUPPORT.artifact_identity(expected_source, "source_file")
+        object_identity = SUPPORT.artifact_identity(output, "object_file")
+        require(object_identity["mtime_ns"] >= source_identity["mtime_ns"],
+                f"diagnostic object predates source: {output}")
+        records.append({"source": source_identity, "object": object_identity,
+                        "required_definitions": sorted(definitions)})
+    archive_objects = [output.resolve() for _, output, _ in specifications[:-1]]
+    return (records, benchmark_object.resolve(strict=True), archive_objects,
+            SUPPORT.sha256_bytes(commands_text.encode("utf-8")))
+
+
+def validate_archive_closure(
+    build: Path, archive: Path, recipe_path: Path, archive_objects: Sequence[Path],
+    archiver: Path, ranlib: Path
+) -> dict[str, Any]:
+    recipe = recipe_path.read_text(encoding="utf-8", errors="strict")
+    commands = [shlex.split(line) for line in recipe.splitlines() if line.strip()]
+    require(len(commands) == 2,
+            "hooks archive recipe must contain exactly ar and ranlib commands")
+    archive_tokens, ranlib_tokens = commands
+    require(len(archive_tokens) == 3 + len(archive_objects) and
+            Path(archive_tokens[0]).resolve(strict=True) == archiver and
+            archive_tokens[1] in ("qc", "rc", "rcs"),
+            "hooks archive archiver recipe changed")
+    archive_output = Path(archive_tokens[2])
+    archive_output = archive_output if archive_output.is_absolute() \
+        else build / archive_output
+    recipe_objects = []
+    for token in archive_tokens[3:]:
+        require(not token.startswith(("@", "-")) and token.endswith(".o"),
+                "hooks archive contains an indirect or non-object input")
+        item = Path(token)
+        recipe_objects.append((item if item.is_absolute() else build / item).resolve(strict=True))
+    require(archive_output.resolve(strict=True) == archive and
+            recipe_objects == list(archive_objects) and
+            len(set(recipe_objects)) == len(recipe_objects),
+            "hooks archive object order/closure differs from compile commands")
+    require(len(ranlib_tokens) == 2 and
+            Path(ranlib_tokens[0]).resolve(strict=True) == ranlib and
+            ranlib_tokens[1] == archive_tokens[2],
+            "hooks archive ranlib recipe changed")
+    members = checked_output([str(archiver), "t", str(archive)]).splitlines()
+    expected_members = [path.name for path in recipe_objects]
+    require(len(set(expected_members)) == len(expected_members) and
+            members == expected_members,
+            "hooks archive member list/order differs from its object closure")
+    member_digests = []
+    for member, object_path in zip(members, recipe_objects):
+        member_bytes = SUPPORT.run_checked(
+            [str(archiver), "p", str(archive), member],
+            environment=SUPPORT.CHILD_ENVIRONMENT, timeout=30,
+            max_stdout=16 * 1024 * 1024, max_stderr=1024 * 1024)
+        require(SUPPORT.sha256_bytes(member_bytes) == SUPPORT.sha256_file(object_path),
+                f"hooks archive member differs from retained object: {member}")
+        member_digests.append({"member": member,
+                               "sha256": SUPPORT.sha256_bytes(member_bytes)})
+    archive_identity = SUPPORT.artifact_identity(archive, "archive")
+    require(all(archive_identity["mtime_ns"] >=
+                SUPPORT.artifact_identity(path, "object_file")["mtime_ns"]
+                for path in recipe_objects),
+            "hooks archive predates one of its retained objects")
+    recipe_identity = SUPPORT.artifact_identity(recipe_path, "build_metadata")
+    require(recipe_identity["sha256"] ==
+            SUPPORT.sha256_bytes(recipe.encode("utf-8")),
+            "hooks archive recipe changed while it was validated")
+    return {
+        "recipe": recipe_identity,
+        "recipe_text": recipe,
+        "archive": archive_identity,
+        "members": member_digests,
+        "archiver": SUPPORT.artifact_identity(archiver, "archiver"),
+        "ranlib": SUPPORT.artifact_identity(ranlib, "ranlib"),
+    }
+
+
+def validate_executable_link_inputs(
+    tokens: Sequence[str], build: Path, source_root: Path, compiler: Path,
+    binary: Path, benchmark_object: Path, hook_archive: Path
+) -> list[Path]:
+    require(tokens and Path(tokens[0]).resolve(strict=True) == compiler and
+            tokens.count("-o") == 1,
+            "diagnostic executable link compiler/output shape changed")
+    output_index = tokens.index("-o")
+    require(output_index + 1 < len(tokens), "diagnostic link output is absent")
+    output = Path(tokens[output_index + 1])
+    output = output if output.is_absolute() else build / output
+    require(output.resolve(strict=True) == binary,
+            "diagnostic link recipe does not produce the declared executable")
+    explicit_inputs: list[Path] = []
+    for index, token in enumerate(tokens[1:], start=1):
+        if index == output_index or index == output_index + 1:
+            continue
+        require(not token.startswith("@"),
+                "diagnostic link recipe uses an undeclared response file")
+        if token.startswith("-"):
+            require(not token.startswith(("-L", "-l", "-Xlinker")) and
+                    (not token.startswith("-Wl,") or
+                     token.startswith("-Wl,-rpath,")),
+                    "diagnostic link recipe contains an undeclared linker input flag")
+            if token.startswith("-Wl,-rpath,"):
+                rpath = Path(token.split(",", 2)[2]).resolve(strict=True)
+                require(rpath.is_relative_to(Path("/usr/lib")) or
+                        rpath.is_relative_to(Path("/lib")),
+                        "diagnostic link rpath is outside system library roots")
+            continue
+        item = Path(token)
+        explicit_inputs.append(
+            (item if item.is_absolute() else build / item).resolve(strict=True))
+    build_inputs = [path for path in explicit_inputs if path.is_relative_to(build)]
+    require(build_inputs == [benchmark_object, hook_archive],
+            "diagnostic executable has an extra/substituted build-tree input")
+    require(not any(path.is_relative_to(source_root) and
+                    not path.is_relative_to(build) for path in explicit_inputs),
+            "diagnostic executable links a source-tree artifact")
+    system_inputs = [path for path in explicit_inputs if path not in build_inputs]
+    allowed_system_names = re.compile(r"lib(?:gomp|omp|pthread)\.(?:a|so(?:\..*)?)$")
+    require(all((path.is_relative_to(Path("/usr/lib")) or
+                 path.is_relative_to(Path("/lib"))) and
+                allowed_system_names.fullmatch(path.name) is not None
+                for path in system_inputs),
+            "diagnostic executable has an undeclared external link input")
+    return system_inputs
+
+
+def validate_clean_rebuild(
+    source_root: Path, cache: Mapping[str, str],
+    binary_identity: Mapping[str, Any], archive_identity: Mapping[str, Any],
+    executable_recipe: str, archive_recipe: str
+) -> dict[str, Any]:
+    cmake = Path("/usr/bin/cmake").resolve(strict=True)
+    generator = cache.get("CMAKE_GENERATOR")
+    require(isinstance(generator, str) and generator,
+            "diagnostic build omitted its CMake generator")
+    retained_options = {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_AR": cache.get("CMAKE_AR", ""),
+        "CMAKE_CXX_COMPILER": cache.get("CMAKE_CXX_COMPILER", ""),
+        "CMAKE_CXX_FLAGS": cache.get("CMAKE_CXX_FLAGS", ""),
+        "CMAKE_CXX_FLAGS_RELEASE": cache.get("CMAKE_CXX_FLAGS_RELEASE", ""),
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_RANLIB": cache.get("CMAKE_RANLIB", ""),
+        "ENABLE_OPENMP": "ON",
+        "LEO2_BACKEND_VARIANT": cache.get("LEO2_BACKEND_VARIANT", "auto"),
+        "LEO2_BUILD_BENCHMARKS": "ON", "LEO2_BUILD_FUZZERS": "OFF",
+        "LEO2_BUILD_TESTS": "ON", "LEO2_ENABLE_CUDA": "OFF",
+        "LEOPARD_ENABLE_GF8": "ON", "LEOPARD_ENABLE_GF16": "ON",
+    }
+    require(all(retained_options[name]
+                for name in ("CMAKE_AR", "CMAKE_CXX_COMPILER", "CMAKE_RANLIB")),
+            "diagnostic build omitted a compiler/archive tool")
+    with tempfile.TemporaryDirectory(prefix="leo2-high-copy-clean-build-") as root_text:
+        clean = Path(root_text)
+        configure = [str(cmake), "-S", str(source_root), "-B", str(clean),
+                     "-G", generator]
+        platform_value = cache.get("CMAKE_GENERATOR_PLATFORM", "")
+        toolset_value = cache.get("CMAKE_GENERATOR_TOOLSET", "")
+        if platform_value:
+            configure.extend(("-A", platform_value))
+        if toolset_value:
+            configure.extend(("-T", toolset_value))
+        configure.extend(f"-D{name}={value}"
+                         for name, value in retained_options.items())
+        SUPPORT.run_checked(
+            configure, environment=SUPPORT.CHILD_ENVIRONMENT, timeout=120,
+            max_stdout=4 * 1024 * 1024, max_stderr=4 * 1024 * 1024)
+        SUPPORT.run_checked(
+            [str(cmake), "--build", str(clean), "--target", TARGET_NAME,
+             "--parallel", str(min(128, os.cpu_count() or 1))],
+            environment=SUPPORT.CHILD_ENVIRONMENT, timeout=300,
+            max_stdout=16 * 1024 * 1024, max_stderr=4 * 1024 * 1024)
+        clean_binary = clean / TARGET_NAME
+        clean_archive = clean / "libleopard_test_hooks.a"
+        require(SUPPORT.sha256_file(clean_binary) == binary_identity["sha256"] and
+                SUPPORT.sha256_file(clean_archive) == archive_identity["sha256"],
+                "diagnostic archive/executable differ from a clean source rebuild")
+        clean_executable_recipe = (clean / "CMakeFiles" / f"{TARGET_NAME}.dir" /
+                                   "link.txt").read_text(
+                                       encoding="utf-8", errors="strict")
+        clean_archive_recipe = (clean / "CMakeFiles/leopard_test_hooks.dir/link.txt") \
+            .read_text(encoding="utf-8", errors="strict")
+        def normalized_recipe(text: str, root: Path) -> list[list[str]]:
+            commands = []
+            for line in text.splitlines():
+                if not line.strip():
+                    continue
+                normalized = []
+                for token in shlex.split(line):
+                    if token.startswith("-Wl,-rpath,"):
+                        path = Path(token.split(",", 2)[2]).resolve(strict=True)
+                        normalized.append(f"-Wl,-rpath,{path}")
+                        continue
+                    if token.startswith("-") or token in ("qc", "rc", "rcs"):
+                        normalized.append(token)
+                        continue
+                    item = Path(token)
+                    candidate = item if item.is_absolute() else root / item
+                    if not candidate.exists():
+                        normalized.append(token)
+                        continue
+                    resolved = candidate.resolve(strict=True)
+                    if resolved.is_relative_to(root):
+                        normalized.append(
+                            "BUILD/" + resolved.relative_to(root).as_posix())
+                    else:
+                        normalized.append(str(resolved))
+                commands.append(normalized)
+            return commands
+
+        current_root = Path(str(binary_identity["path"])).parent
+        require(normalized_recipe(clean_executable_recipe, clean) ==
+                    normalized_recipe(executable_recipe, current_root) and
+                normalized_recipe(clean_archive_recipe, clean) ==
+                    normalized_recipe(archive_recipe, current_root),
+                "diagnostic link/archive recipes differ from a clean source rebuild")
+    return {
+        "cmake": SUPPORT.artifact_identity(cmake, "build_tool"),
+        "generator": generator,
+        "retained_options": retained_options,
+        "archive_sha256": archive_identity["sha256"],
+        "binary_sha256": binary_identity["sha256"],
+    }
+
+
 def build_identity(source_root: Path, binary: Path, hook_archive: Path) -> dict[str, Any]:
     source_root = source_root.resolve(strict=True)
     binary = binary.resolve(strict=True)
     hook_archive = hook_archive.resolve(strict=True)
     require(os.access(binary, os.X_OK), "diagnostic benchmark is not executable")
     build = find_build_root(binary)
-    require(hook_archive.is_relative_to(build),
-            "hook archive and diagnostic benchmark are not in one build tree")
+    require(binary == (build / TARGET_NAME).resolve(strict=True) and
+            hook_archive == (build / "libleopard_test_hooks.a").resolve(strict=True),
+            "diagnostic executable/archive are not the canonical target outputs")
     cache_path = build / "CMakeCache.txt"
+    cache_bytes = cache_path.read_bytes()
     cache = SUPPORT.parse_cmake_cache(cache_path)
+    cache_identity = SUPPORT.artifact_identity(cache_path, "build_metadata")
+    require(cache_identity["sha256"] == SUPPORT.sha256_bytes(cache_bytes),
+            "diagnostic CMake cache changed while it was validated")
+    global_flags = shlex.split(cache.get("CMAKE_CXX_FLAGS", ""))
     require(Path(cache.get("CMAKE_HOME_DIRECTORY", "")).resolve() == source_root and
             cache.get("CMAKE_BUILD_TYPE") == "Release" and
+            cache.get("CMAKE_CXX_FLAGS_RELEASE") == "-O3 -DNDEBUG" and
+            all(flag in ("-Wall", "-Wextra", "-Werror")
+                for flag in global_flags) and
+            cache.get("ENABLE_OPENMP") == "ON" and
+            cache.get("LEO2_BACKEND_VARIANT") == "auto" and
             cache.get("LEO2_BUILD_TESTS") == "ON" and
             cache.get("LEO2_BUILD_BENCHMARKS") == "ON" and
+            cache.get("LEO2_BUILD_FUZZERS") == "OFF" and
             cache.get("LEO2_ENABLE_CUDA") == "OFF" and
             cache.get("LEOPARD_ENABLE_GF8") == "ON" and
             cache.get("LEOPARD_ENABLE_GF16") == "ON",
             "diagnostic CMake cache is not a Release tests/hooks build")
+    commands_path = build / "compile_commands.json"
+    require(commands_path.is_file(), "diagnostic build omitted compile_commands.json")
+    compiler = Path(cache.get("CMAKE_CXX_COMPILER", "")).resolve(strict=True)
+    archiver = Path(cache.get("CMAKE_AR", "")).resolve(strict=True)
+    ranlib = Path(cache.get("CMAKE_RANLIB", "")).resolve(strict=True)
+    system_tool_roots = (Path("/usr/bin"), Path("/usr/lib"), Path("/lib"))
+    require(all(any(tool.is_relative_to(root) for root in system_tool_roots)
+                for tool in (compiler, archiver, ranlib)),
+            "diagnostic compiler/archive tools are outside system roots")
+    compile_records, benchmark_object, archive_objects, commands_sha256 = \
+        diagnostic_compile_closure(
+            source_root, build, commands_path, compiler)
+    commands_identity = SUPPORT.artifact_identity(commands_path, "build_metadata")
+    require(commands_identity["sha256"] == commands_sha256,
+            "diagnostic compile commands changed while they were validated")
+    archive_recipe = build / "CMakeFiles/leopard_test_hooks.dir/link.txt"
+    require(archive_recipe.is_file(), "hooks archive recipe is missing")
+    archive_closure = validate_archive_closure(
+        build, hook_archive, archive_recipe, archive_objects, archiver, ranlib)
     link_recipe = build / "CMakeFiles" / f"{TARGET_NAME}.dir" / "link.txt"
     require(link_recipe.is_file(), "diagnostic benchmark link recipe is missing")
     link_text = link_recipe.read_text(encoding="utf-8", errors="strict")
-    tokens = [token for line in link_text.splitlines() for token in shlex.split(line)]
-    linked_paths: list[Path] = []
-    for token in tokens:
-        if token.startswith("-"):
-            continue
-        candidate = Path(token)
-        candidate = candidate if candidate.is_absolute() else build / candidate
-        try:
-            linked_paths.append(candidate.resolve(strict=True))
-        except OSError:
-            continue
-    require(linked_paths.count(hook_archive) == 1 and
-            not any(path.name in ("libleopard.a", "leopard.lib")
-                    for path in linked_paths),
-            "diagnostic benchmark is not linked exactly once and exclusively "
-            "to the hooks archive")
-    commands_path = build / "compile_commands.json"
-    require(commands_path.is_file(), "diagnostic build omitted compile_commands.json")
-    commands = json.loads(commands_path.read_text(encoding="utf-8"))
-    matching = [entry for entry in commands
-                if isinstance(entry, dict) and
-                TARGET_NAME in str(entry.get("output", "")) and
-                str(entry.get("file", "")).endswith("/bench/leopard2/benchmark.cpp")]
-    require(len(matching) == 1, "cannot identify the diagnostic benchmark compile action")
-    compile_text = matching[0].get("command") or " ".join(matching[0].get("arguments", []))
-    object_path = Path(str(matching[0].get("output", "")))
-    object_path = object_path if object_path.is_absolute() else build / object_path
-    require("LEO2_ENABLE_TEST_HOOKS=1" in compile_text and
-            "LEO2_HIGH_DECODE_COPY_ATTRIBUTION=1" in compile_text and
-            object_path.resolve(strict=True) in linked_paths,
-            "diagnostic benchmark compile action lacks its two private gates")
+    link_identity = SUPPORT.artifact_identity(link_recipe, "build_metadata")
+    require(link_identity["sha256"] ==
+            SUPPORT.sha256_bytes(link_text.encode("utf-8")),
+            "diagnostic executable link recipe changed while it was validated")
+    link_lines = [line for line in link_text.splitlines() if line.strip()]
+    require(len(link_lines) == 1, "diagnostic benchmark has multiple link commands")
+    tokens = shlex.split(link_lines[0])
+    SUPPORT.validate_effective_flags(tokens, "diagnostic executable link recipe")
+    system_inputs = validate_executable_link_inputs(
+        tokens, build, source_root, compiler, binary, benchmark_object, hook_archive)
+    binary_identity = SUPPORT.artifact_identity(binary, "executable")
+    require(binary_identity["mtime_ns"] >= archive_closure["archive"]["mtime_ns"] and
+            binary_identity["mtime_ns"] >=
+                SUPPORT.artifact_identity(benchmark_object, "object_file")["mtime_ns"],
+            "diagnostic executable predates a retained link input")
+    clean_rebuild = validate_clean_rebuild(
+        source_root, cache, binary_identity, archive_closure["archive"],
+        link_text, archive_closure["recipe_text"])
+    with tempfile.TemporaryDirectory(prefix="leo2-high-copy-relink-") as temp_root:
+        relinked = Path(temp_root) / binary.name
+        relink_tokens = list(tokens)
+        relink_tokens[relink_tokens.index("-o") + 1] = str(relinked)
+        SUPPORT.run_checked(
+            relink_tokens, cwd=build, environment=SUPPORT.CHILD_ENVIRONMENT,
+            timeout=120, max_stdout=1024 * 1024, max_stderr=1024 * 1024)
+        require(SUPPORT.sha256_file(relinked) == binary_identity["sha256"],
+                "diagnostic executable bytes differ from a deterministic relink")
     nm = Path("/usr/bin/nm").resolve(strict=True)
     required_symbols = tuple(
         f"leopard::{field}::{name}" for field in ("ff8", "ff16")
@@ -205,12 +617,19 @@ def build_identity(source_root: Path, binary: Path, hook_archive: Path) -> dict[
             "diagnostic executable did not retain both fields' copy selectors")
     return {
         "build_root": str(build),
-        "cache": SUPPORT.artifact_identity(cache_path, "build_metadata"),
-        "compile_commands": SUPPORT.artifact_identity(
-            commands_path, "build_metadata"),
-        "link_recipe": SUPPORT.artifact_identity(link_recipe, "build_metadata"),
-        "binary": SUPPORT.artifact_identity(binary, "executable"),
-        "hook_archive": SUPPORT.artifact_identity(hook_archive, "archive"),
+        "cache": cache_identity,
+        "compile_commands": commands_identity,
+        "validated_compile_closure": compile_records,
+        "link_recipe": link_identity,
+        "validated_archive_closure": archive_closure,
+        "validated_clean_rebuild": clean_rebuild,
+        "binary": binary_identity,
+        "hook_archive": archive_closure["archive"],
+        "compiler": SUPPORT.artifact_identity(compiler, "compiler"),
+        "system_link_inputs": [
+            SUPPORT.artifact_identity(path, "system_link_dependency")
+            for path in system_inputs],
+        "deterministic_relink_sha256": binary_identity["sha256"],
         "nm": SUPPORT.artifact_identity(nm, "executable"),
         "selector_symbols_present_in_hook_archive_and_binary": True,
     }
@@ -249,20 +668,116 @@ def benchmark_command(binary: Path, cell: Mapping[str, Any], mode: str,
     ]
 
 
-def validate_result(document: object, cell: Mapping[str, Any], mode: str) -> dict[str, Any]:
+def expected_rate(byte_count: int, microseconds: float) -> float:
+    return byte_count / (microseconds * 1000.0)
+
+
+def validate_rate(value: object, expected: float, name: str) -> None:
+    actual = SUPPORT.finite_number(value, name)
+    require(SUPPORT.close_enough(actual, expected),
+            f"{name} is not derived from bytes and retained median")
+
+
+def validate_timing_metrics(
+    metrics: object, cell: Mapping[str, Any], controls: Mapping[str, Any]
+) -> dict[str, float]:
+    require(isinstance(metrics, dict) and set(metrics) == {
+                "codec_setup", "encode_execution", "decode_plan_setup",
+                "decode_execution", "decode_amortized_at_reuse", "rate_semantics"},
+            "benchmark timing metrics are incomplete or contain unbound claims")
+    iterations = controls.get("iterations")
+    reuse = controls.get("reuse")
+    require(type(iterations) is int and iterations >= 3 and
+            type(reuse) is int and reuse >= 1,
+            "timing controls are not exact bounded integers")
+    SUPPORT.validate_summary(metrics["codec_setup"], iterations, setup=True)
+    encode_samples = SUPPORT.validate_summary(
+        metrics["encode_execution"], iterations)
+    plan_samples = SUPPORT.validate_summary(
+        metrics["decode_plan_setup"], iterations, setup=True)
+    decode_samples = SUPPORT.validate_summary(
+        metrics["decode_execution"], iterations)
+    del encode_samples, plan_samples, decode_samples
+    encode_median = SUPPORT.finite_number(
+        metrics["encode_execution"].get("median_us_per_batch_call"),
+        "encode execution median")
+    plan_median = SUPPORT.finite_number(
+        metrics["decode_plan_setup"].get("median_us"), "decode plan median")
+    decode_median = SUPPORT.finite_number(
+        metrics["decode_execution"].get("median_us_per_batch_call"),
+        "decode execution median")
+    encode_input_bytes = cell["k"] * cell["shard_bytes"]
+    encode_output_bytes = cell["r"] * cell["shard_bytes"]
+    decode_input_bytes = (cell["k"] - cell["losses"] + cell["r"]) * \
+        cell["shard_bytes"]
+    decode_output_bytes = cell["losses"] * cell["shard_bytes"]
+    validate_rate(metrics["encode_execution"].get("input_GB_per_s"),
+                  expected_rate(encode_input_bytes, encode_median),
+                  "encode input rate")
+    validate_rate(metrics["encode_execution"].get("parity_output_GB_per_s"),
+                  expected_rate(encode_output_bytes, encode_median),
+                  "encode parity rate")
+    validate_rate(metrics["decode_execution"].get("offered_received_GB_per_s"),
+                  expected_rate(decode_input_bytes, decode_median),
+                  "decode offered-input rate")
+    validate_rate(metrics["decode_execution"].get("repaired_output_GB_per_s"),
+                  expected_rate(decode_output_bytes, decode_median),
+                  "decode repaired-output rate")
+    amortized = metrics["decode_amortized_at_reuse"]
+    require(isinstance(amortized, dict) and set(amortized) == {
+                "reuse_count", "derived_median_us_per_batch_call",
+                "offered_received_GB_per_s", "repaired_output_GB_per_s"} and
+            type(amortized.get("reuse_count")) is int and
+            amortized["reuse_count"] == reuse,
+            "amortized decode timing shape/reuse changed")
+    derived_amortized = decode_median + plan_median / reuse
+    actual_amortized = SUPPORT.finite_number(
+        amortized.get("derived_median_us_per_batch_call"),
+        "amortized decode median")
+    require(SUPPORT.close_enough(actual_amortized, derived_amortized),
+            "amortized decode median is not plan/reuse plus execution")
+    validate_rate(amortized.get("offered_received_GB_per_s"),
+                  expected_rate(decode_input_bytes, derived_amortized),
+                  "amortized offered-input rate")
+    validate_rate(amortized.get("repaired_output_GB_per_s"),
+                  expected_rate(decode_output_bytes, derived_amortized),
+                  "amortized repaired-output rate")
+    require(metrics["rate_semantics"] ==
+            "offered_received counts all non-null shard pointers supplied; "
+            "a plan may read a deterministic subset",
+            "decode rate semantics changed")
+    return {
+        "decode_execution_median_us": decode_median,
+        "decode_amortized_median_us": actual_amortized,
+    }
+
+
+def validate_result(
+    document: object, cell: Mapping[str, Any], mode: str,
+    controls: Mapping[str, Any]
+) -> dict[str, Any]:
     result = CONTRACT.validate_document(
         document, mode=mode, workspace=cell["workspace"], field=cell["field"],
         tail_bytes=cell["shard_bytes"] % 64,
         evaluator="mature" if cell["role"] == "full-block" else None)
     parameters = result["parameters"]
     resolved = result["resolved"]
-    require(parameters.get("K") == cell["k"] and parameters.get("R") == cell["r"] and
+    numeric_parameters = {
+        "K": cell["k"], "R": cell["r"],
+        "shard_bytes": cell["shard_bytes"], "loss_count": cell["losses"],
+        "seed": cell["seed"], "batch": 1,
+        "reuse": controls["reuse"], "iterations": controls["iterations"],
+        "warmup": controls["warmup"], "thread_count": 1,
+    }
+    require(all(type(parameters.get(name)) is int and
+                parameters[name] == expected
+                for name, expected in numeric_parameters.items()) and
             parameters.get("requested_backend") == cell["backend"] and
-            parameters.get("shard_bytes") == cell["shard_bytes"] and
-            parameters.get("loss_count") == cell["losses"] and
-            parameters.get("seed") == cell["seed"] and
             resolved.get("backend") == cell["backend"],
             "benchmark output does not attest the matrix cell")
+    validate_missing_original_indices(
+        parameters.get("missing_original_indices"), cell)
+    validate_timing_metrics(result.get("metrics"), cell, controls)
     return result
 
 
@@ -293,7 +808,8 @@ def run_child(binary: Path, cell: Mapping[str, Any], mode: str, cpu: int,
         document = json.loads(completed.stdout.decode("utf-8", errors="strict"))
     except (UnicodeError, ValueError) as error:
         raise EvidenceError(f"benchmark stdout is not JSON: {error}") from error
-    result = validate_result(document, cell, mode)
+    controls = {"reuse": reuse, "iterations": iterations, "warmup": warmup}
+    result = validate_result(document, cell, mode, controls)
     return {
         "cell": cell["id"], "mode": mode, "round": round_index, "slot": slot,
         "command": command, "command_sha256": SUPPORT.sha256_bytes(
@@ -302,8 +818,7 @@ def run_child(binary: Path, cell: Mapping[str, Any], mode: str, cpu: int,
         "cpu_before": before_cpu, "cpu_after": after_cpu, "cpu_delta": cpu_delta,
         "sibling_before": before_sibling, "sibling_after": after_sibling,
         "sibling_delta": sibling_delta,
-        "stdout_sha256": SUPPORT.sha256_bytes(completed.stdout),
-        "stdout_size": len(completed.stdout), "result": result,
+        "result": result,
     }
 
 
@@ -317,19 +832,24 @@ def grouped_records(records: Sequence[Mapping[str, Any]],
     return result
 
 
-def analyze(records: Sequence[Mapping[str, Any]], matrix: Mapping[str, Any]) -> dict[str, Any]:
+def analyze(
+    records: object, matrix: Mapping[str, Any], campaign: Mapping[str, Any]
+) -> dict[str, Any]:
+    records = validate_record_sequence(records, matrix)
     grouped = grouped_records(records, matrix["cells"])
     output: dict[str, Any] = {}
     metrics = {
-        "decode_execution": ("metrics", "decode_execution", "median_us"),
+        "decode_execution": (
+            "metrics", "decode_execution", "median_us_per_batch_call"),
         "decode_amortized": (
             "metrics", "decode_amortized_at_reuse", "derived_median_us_per_batch_call"),
     }
     for cell in matrix["cells"]:
         cell_records = grouped[cell["id"]]
         require(len(cell_records) == 12, "cell does not have three four-slot rounds")
-        documents = {mode: [record["result"] for record in cell_records
-                            if record["mode"] == mode]
+        documents = {mode: [validate_result(
+                                record.get("result"), cell, mode, campaign)
+                            for record in cell_records if record["mode"] == mode]
                      for mode in ("no-copy", "copy-fallback")}
         CONTRACT.validate_pair(
             documents["no-copy"][0], documents["copy-fallback"][0],
@@ -337,7 +857,7 @@ def analyze(records: Sequence[Mapping[str, Any]], matrix: Mapping[str, Any]) -> 
             tail_bytes=cell["shard_bytes"] % 64,
             evaluator="mature" if cell["role"] == "full-block" else None)
         digest = documents["no-copy"][0]["workload_digests"]
-        missing = documents["no-copy"][0]["parameters"]["missing_original_indices"]
+        missing = expected_missing_original_indices(cell)
         require(all(document["workload_digests"] == digest and
                     document["parameters"]["missing_original_indices"] == missing
                     for values in documents.values() for document in values),
@@ -401,57 +921,152 @@ def validate_campaign_isolation(
     return SUPPORT.validate_isolation(isolation, cpu, sibling)
 
 
+def validate_campaign_environment(
+    raw: Mapping[str, Any], campaign: Mapping[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    cpu = campaign["cpu"]
+    sibling = campaign["reserved_sibling"]
+    host_initial = raw.get("host_initial")
+    host_final = raw.get("host_final")
+    require(host_initial == host_final and isinstance(host_initial, dict),
+            "host topology/frequency policy changed during campaign")
+    allowed = host_initial.get("allowed_cpu_set_at_launch")
+    require(type(allowed) is list and allowed == sorted(set(allowed)) and
+            all(type(item) is int and item >= 0 for item in allowed) and
+            cpu in allowed and sibling in allowed,
+            "host launch affinity record is invalid")
+    SUPPORT.validate_host_record(host_initial, cpu, sibling, allowed)
+    isolation = validate_campaign_isolation(raw.get("isolation"), campaign)
+    pair_lease = raw.get("pair_lease")
+    SUPPORT.validate_pair_lease_identity(pair_lease, cpu, sibling)
+    require(pair_lease == isolation["pair_lease"],
+            "top-level pair lease differs from isolation evidence")
+    reservation = raw.get("reservation")
+    require(isinstance(reservation, dict) and set(reservation) == {
+                "path", "sha256", "payload", "lock"} and
+            reservation.get("lock") == "exclusive_nonblocking" and
+            type(reservation.get("path")) is str and reservation["path"] and
+            isinstance(reservation.get("payload"), dict) and
+            SUPPORT.parse_reservation(
+                SUPPORT.canonical_bytes(reservation["payload"]), cpu, sibling) ==
+                reservation["payload"] and
+            reservation.get("sha256") == SUPPORT.sha256_bytes(
+                SUPPORT.canonical_bytes(reservation["payload"])),
+            "coordinator reservation identity/semantics are invalid")
+    return isolation, reservation
+
+
+def validate_record_execution_attestation(
+    record: Mapping[str, Any], *, interval_begin: int, interval_end: int,
+    previous_end: int, cpu: int, sibling: int
+) -> tuple[int, int]:
+    started = record.get("started_monotonic_ns")
+    ended = record.get("ended_monotonic_ns")
+    require(type(started) is int and type(ended) is int and
+            interval_begin <= started < ended <= interval_end and
+            started >= previous_end,
+            "child monotonic interval is invalid, overlapping, or out of order")
+    cpu_delta = SUPPORT.cpu_stat_delta(
+        record.get("cpu_before"), record.get("cpu_after"))
+    sibling_delta = SUPPORT.cpu_stat_delta(
+        record.get("sibling_before"), record.get("sibling_after"))
+    require(record.get("cpu_delta") == cpu_delta and cpu_delta["cpu"] == cpu and
+            cpu_delta["nonidle_jiffies"] > 0 and
+            record.get("sibling_delta") == sibling_delta and
+            sibling_delta["cpu"] == sibling and
+            sibling_delta["nonidle_jiffies"] == 0,
+            "per-child CPU/timestamp attestation differs")
+    return ended, ended - started
+
+
 def validate_raw(raw: object, output: Path, *, current: bool) -> dict[str, Any]:
     SUPPORT.verify_signature(raw, "high-decode copy raw evidence")
     require(isinstance(raw, dict) and raw.get("schema") == RAW_SCHEMA and
+            set(raw) == {
+                "schema", "created_utc", "validity_is_independent_of_speed",
+                "matrix", "campaign", "host_initial", "host_final",
+                "reservation", "pair_lease", "isolation",
+                "identities_initial", "identities_final", "records",
+                "analysis", "digest"} and
+            type(raw.get("created_utc")) is str and raw["created_utc"] and
             raw.get("validity_is_independent_of_speed") is True,
             "raw high-decode copy evidence schema changed")
     matrix = raw.get("matrix")
     require(matrix == load_matrix(ROOT / MATRIX_RELATIVE),
             "raw matrix differs from the canonical checked-in matrix")
     campaign = raw.get("campaign")
-    require(isinstance(campaign, dict) and
+    require(isinstance(campaign, dict) and set(campaign) == {
+                "cpu", "reserved_sibling", "reuse", "iterations", "warmup",
+                "thread_count", "timeout_seconds", "round_orders",
+                "child_environment", "invocation_count"} and
             campaign.get("round_orders") == matrix["round_orders"] and
             campaign.get("child_environment") == SUPPORT.CHILD_ENVIRONMENT and
-            campaign.get("thread_count") == 1,
+            type(campaign.get("cpu")) is int and campaign["cpu"] >= 0 and
+            type(campaign.get("reserved_sibling")) is int and
+            campaign["reserved_sibling"] >= 0 and
+            campaign["cpu"] != campaign["reserved_sibling"] and
+            type(campaign.get("reuse")) is int and campaign["reuse"] >= 1 and
+            type(campaign.get("iterations")) is int and
+            campaign["iterations"] >= 3 and
+            type(campaign.get("warmup")) is int and campaign["warmup"] >= 1 and
+            type(campaign.get("thread_count")) is int and
+            campaign["thread_count"] == 1 and
+            isinstance(campaign.get("timeout_seconds"), (int, float)) and
+            not isinstance(campaign["timeout_seconds"], bool) and
+            math.isfinite(campaign["timeout_seconds"]) and
+            0 < campaign["timeout_seconds"] <= 3600,
             "raw campaign contract is incomplete")
     records = raw.get("records")
     invocation_count = sum(len(order) for order in matrix["round_orders"]) * \
         len(matrix["cells"])
-    require(campaign.get("invocation_count") == invocation_count and
-            isinstance(records, list) and len(records) == invocation_count,
+    require(type(campaign.get("invocation_count")) is int and
+            campaign["invocation_count"] == invocation_count,
             "raw campaign does not contain the exact bounded invocation count")
-    binary = Path(raw["identities_initial"]["build"]["binary"]["path"])
-    for cell in matrix["cells"]:
-        matching = [record for record in records if record.get("cell") == cell["id"]]
-        require(len(matching) == 12, "raw cell record count changed")
-        for record in matching:
-            command = benchmark_command(
-                binary, cell, record["mode"], campaign["cpu"], campaign["reuse"],
-                campaign["iterations"], campaign["warmup"])
-            require(record.get("command") == command and
-                    record.get("command_sha256") == SUPPORT.sha256_bytes(
-                        SUPPORT.canonical_bytes(command)) and
-                    record.get("cpu_delta", {}).get("cpu") == campaign["cpu"] and
-                    record.get("sibling_delta", {}).get("cpu") ==
-                        campaign["reserved_sibling"] and
-                    record.get("sibling_delta", {}).get("nonidle_jiffies") == 0 and
-                    record.get("cpu_delta", {}).get("nonidle_jiffies", 0) > 0,
-                    "raw command or per-child CPU isolation attestation differs")
-            validate_result(record.get("result"), cell, record["mode"])
-    require(raw.get("analysis") == analyze(records, matrix),
-            "raw analysis differs from retained invocations")
-    validate_campaign_isolation(raw.get("isolation"), campaign)
-    require(raw.get("identities_initial") == raw.get("identities_final"),
+    records = validate_record_sequence(records, matrix)
+    cpu = campaign["cpu"]
+    sibling = campaign["reserved_sibling"]
+    isolation, reservation = validate_campaign_environment(raw, campaign)
+    initial = raw.get("identities_initial")
+    require(isinstance(initial, dict) and initial == raw.get("identities_final"),
             "source/build identity changed during the campaign")
+    binary_value = initial.get("build", {}).get("binary", {}).get("path")
+    require(type(binary_value) is str and binary_value,
+            "diagnostic binary identity path is absent")
+    binary = Path(binary_value)
+    cell_by_id = {cell["id"]: cell for cell in matrix["cells"]}
+    interval_begin = isolation["before"]["monotonic_ns"]
+    interval_end = isolation["after"]["monotonic_ns"]
+    previous_end = interval_begin
+    total_child_duration = 0
+    for record in records:
+        require(set(record) == RECORD_KEYS,
+                "raw record contains an omitted or unverifiable claim")
+        cell = cell_by_id[record["cell"]]
+        command = benchmark_command(
+            binary, cell, record["mode"], cpu, campaign["reuse"],
+            campaign["iterations"], campaign["warmup"])
+        previous_end, duration = validate_record_execution_attestation(
+            record, interval_begin=interval_begin, interval_end=interval_end,
+            previous_end=previous_end, cpu=cpu, sibling=sibling)
+        total_child_duration += duration
+        require(record.get("command") == command and
+                record.get("command_sha256") == SUPPORT.sha256_bytes(
+                    SUPPORT.canonical_bytes(command)),
+                "raw benchmark command attestation differs")
+        validate_result(record.get("result"), cell, record["mode"], campaign)
+    require(interval_end - interval_begin >= total_child_duration,
+            "campaign isolation interval does not cover child durations")
+    require(raw.get("analysis") == analyze(records, matrix, campaign),
+            "raw analysis differs from retained invocations")
     if current:
-        source = raw["identities_initial"]["source"]
+        source = initial["source"]
         rebuilt = snapshot(
             Path(source["path"]), source["head"], binary,
-            Path(raw["identities_initial"]["build"]["hook_archive"]["path"]),
+            Path(initial["build"]["hook_archive"]["path"]),
             ROOT / MATRIX_RELATIVE)
-        require(rebuilt == raw["identities_initial"],
+        require(rebuilt == initial,
                 "current source/build closure differs from retained evidence")
+        SUPPORT.validate_reservation_current(reservation)
     return raw["analysis"]
 
 
@@ -536,7 +1151,7 @@ def run_campaign(options: argparse.Namespace) -> int:
                 "identities_initial": initial,
                 "identities_final": final,
                 "records": records,
-                "analysis": analyze(records, matrix),
+                "analysis": analyze(records, matrix, campaign),
             })
             validate_raw(raw, output, current=True)
             raw_path = output / "raw.json"
@@ -551,6 +1166,10 @@ def run_campaign(options: argparse.Namespace) -> int:
                         "payload_digest": raw["digest"]},
                 "matrix": matrix,
                 "campaign": campaign,
+                "host_initial": host_initial,
+                "host_final": host_final,
+                "reservation": reservation,
+                "pair_lease": pair_lease,
                 "identities": initial,
                 "isolation": isolation,
                 "analysis": raw["analysis"],
@@ -576,7 +1195,15 @@ def verify_campaign(options: argparse.Namespace) -> int:
     path = options.manifest.resolve(strict=True)
     manifest = json.loads(path.read_text(encoding="utf-8"))
     SUPPORT.verify_signature(manifest, "high-decode copy manifest")
-    require(manifest.get("schema") == MANIFEST_SCHEMA and manifest.get("valid") is True,
+    require(manifest.get("schema") == MANIFEST_SCHEMA and
+            set(manifest) == {
+                "schema", "created_utc", "valid",
+                "validity_is_independent_of_speed", "raw", "matrix", "campaign",
+                "host_initial", "host_final", "reservation", "pair_lease",
+                "identities", "isolation", "analysis", "digest"} and
+            type(manifest.get("created_utc")) is str and manifest["created_utc"] and
+            manifest.get("valid") is True and
+            manifest.get("validity_is_independent_of_speed") is True,
             "manifest is not valid high-decode copy evidence")
     raw_info = manifest.get("raw")
     require(isinstance(raw_info, dict), "manifest has no raw identity")
@@ -589,6 +1216,10 @@ def verify_campaign(options: argparse.Namespace) -> int:
     require(raw.get("digest") == raw_info.get("payload_digest") and
             manifest.get("matrix") == raw.get("matrix") and
             manifest.get("campaign") == raw.get("campaign") and
+            manifest.get("host_initial") == raw.get("host_initial") and
+            manifest.get("host_final") == raw.get("host_final") and
+            manifest.get("reservation") == raw.get("reservation") and
+            manifest.get("pair_lease") == raw.get("pair_lease") and
             manifest.get("identities") == raw.get("identities_initial") and
             manifest.get("isolation") == raw.get("isolation") and
             manifest.get("analysis") == analysis,
@@ -605,6 +1236,79 @@ def build_smoke(options: argparse.Namespace) -> int:
         "diagnostic selector symbol gate did not pass")
     print("high-decode copy diagnostic build identity verified")
     return 0
+
+
+def synthetic_summary(samples: Sequence[float], *, setup: bool) -> dict[str, Any]:
+    retained = list(samples)
+    middle = statistics.median(retained)
+    deviations = [abs(value - middle) for value in retained]
+    suffix = "" if setup else "_per_batch_call"
+    return {
+        f"median_us{suffix}": middle,
+        f"mad_us{suffix}": statistics.median(deviations),
+        f"minimum_us{suffix}": min(retained),
+        f"maximum_us{suffix}": max(retained),
+        "samples_us" if setup else "samples_us_per_batch_call": retained,
+    }
+
+
+def synthetic_result(
+    cell: Mapping[str, Any], controls: Mapping[str, Any], mode: str = "no-copy"
+) -> dict[str, Any]:
+    document = CONTRACT.synthetic_document(mode)
+    document["parameters"].update({
+        "K": cell["k"], "R": cell["r"],
+        "requested_field": cell["field"],
+        "requested_backend": cell["backend"],
+        "force_materialized_decode": cell["workspace"] == "materialized",
+        "force_tiled_decode": cell["workspace"] == "tiled",
+        "shard_bytes": cell["shard_bytes"], "loss_count": cell["losses"],
+        "missing_original_indices": expected_missing_original_indices(cell),
+        "batch": 1, "reuse": controls["reuse"],
+        "iterations": controls["iterations"], "warmup": controls["warmup"],
+        "thread_count": 1, "seed": cell["seed"],
+    })
+    document["resolved"].update({
+        "field": cell["field"], "backend": cell["backend"],
+        "selected_decode_path": cell["workspace"],
+        "selected_decode_rule": "forced_" + cell["workspace"],
+        "decode_tail_bytes": cell["shard_bytes"] % 64,
+    })
+    encode = synthetic_summary((1.0, 2.0, 3.0), setup=False)
+    plan = synthetic_summary((3.0, 4.0, 5.0), setup=True)
+    decode = synthetic_summary((5.0, 6.0, 7.0), setup=False)
+    codec = synthetic_summary((2.0, 3.0, 4.0), setup=True)
+    encode_median = encode["median_us_per_batch_call"]
+    decode_median = decode["median_us_per_batch_call"]
+    plan_median = plan["median_us"]
+    amortized = decode_median + plan_median / controls["reuse"]
+    encode_input = cell["k"] * cell["shard_bytes"]
+    encode_output = cell["r"] * cell["shard_bytes"]
+    decode_input = (cell["k"] - cell["losses"] + cell["r"]) * \
+        cell["shard_bytes"]
+    decode_output = cell["losses"] * cell["shard_bytes"]
+    encode.update({
+        "input_GB_per_s": expected_rate(encode_input, encode_median),
+        "parity_output_GB_per_s": expected_rate(encode_output, encode_median),
+    })
+    decode.update({
+        "offered_received_GB_per_s": expected_rate(decode_input, decode_median),
+        "repaired_output_GB_per_s": expected_rate(decode_output, decode_median),
+    })
+    document["metrics"] = {
+        "codec_setup": codec, "encode_execution": encode,
+        "decode_plan_setup": plan, "decode_execution": decode,
+        "decode_amortized_at_reuse": {
+            "reuse_count": controls["reuse"],
+            "derived_median_us_per_batch_call": amortized,
+            "offered_received_GB_per_s": expected_rate(decode_input, amortized),
+            "repaired_output_GB_per_s": expected_rate(decode_output, amortized),
+        },
+        "rate_semantics":
+            "offered_received counts all non-null shard pointers supplied; "
+            "a plan may read a deterministic subset",
+    }
+    return document
 
 
 def self_test() -> None:
@@ -628,6 +1332,100 @@ def self_test() -> None:
             else:
                 raise AssertionError(
                     "invalid field/full-block matrix mutation was accepted")
+    tail_cell = next(cell for cell in matrix["cells"]
+                     if cell["id"] == "gf8-mat-tail")
+    controls = {"reuse": 8, "iterations": 3, "warmup": 2}
+    result = synthetic_result(tail_cell, controls)
+    validate_result(result, tail_cell, "no-copy", controls)
+    result_mutations = []
+    duplicate_loss = copy.deepcopy(result)
+    duplicate_loss["parameters"]["missing_original_indices"][1] = \
+        duplicate_loss["parameters"]["missing_original_indices"][0]
+    result_mutations.append(duplicate_loss)
+    out_of_range_loss = copy.deepcopy(result)
+    out_of_range_loss["parameters"]["missing_original_indices"][0] = tail_cell["k"]
+    result_mutations.append(out_of_range_loss)
+    reordered_losses = copy.deepcopy(result)
+    reordered_losses["parameters"]["missing_original_indices"].reverse()
+    result_mutations.append(reordered_losses)
+    bool_loss = copy.deepcopy(result)
+    bool_loss["parameters"]["missing_original_indices"][0] = True
+    result_mutations.append(bool_loss)
+    wrong_median = copy.deepcopy(result)
+    wrong_median["metrics"]["decode_execution"][
+        "median_us_per_batch_call"] += 1
+    result_mutations.append(wrong_median)
+    wrong_sample = copy.deepcopy(result)
+    wrong_sample["metrics"]["decode_execution"][
+        "samples_us_per_batch_call"][2] += 1
+    result_mutations.append(wrong_sample)
+    wrong_control = copy.deepcopy(result)
+    wrong_control["parameters"]["reuse"] += 1
+    result_mutations.append(wrong_control)
+    wrong_amortized = copy.deepcopy(result)
+    wrong_amortized["metrics"]["decode_amortized_at_reuse"][
+        "derived_median_us_per_batch_call"] += 1
+    result_mutations.append(wrong_amortized)
+    for mutation in result_mutations:
+        try:
+            validate_result(mutation, tail_cell, "no-copy", controls)
+        except (EvidenceError, CONTRACT.ContractError):
+            continue
+        raise AssertionError("adversarial loss/timing/control mutation was accepted")
+
+    sequence = [
+        {"cell": cell, "round": round_index, "slot": slot, "mode": mode}
+        for cell, round_index, slot, mode in expected_record_sequence(matrix)]
+    validate_record_sequence(sequence, matrix)
+    sequence_mutations = []
+    all_zero_slots = copy.deepcopy(sequence)
+    for record in all_zero_slots:
+        record["slot"] = 0
+    sequence_mutations.append(all_zero_slots)
+    reordered = copy.deepcopy(sequence)
+    reordered[0], reordered[1] = reordered[1], reordered[0]
+    sequence_mutations.append(reordered)
+    wrong_role = copy.deepcopy(sequence)
+    wrong_role[0]["mode"] = "no-copy"
+    sequence_mutations.append(wrong_role)
+    bool_round = copy.deepcopy(sequence)
+    bool_round[0]["round"] = False
+    sequence_mutations.append(bool_round)
+    for mutation in sequence_mutations:
+        try:
+            validate_record_sequence(mutation, matrix)
+        except EvidenceError:
+            continue
+        raise AssertionError("adversarial ABBA round/slot mutation was accepted")
+
+    with tempfile.TemporaryDirectory(prefix="leo2-high-copy-link-") as root_text:
+        root = Path(root_text)
+        source = root / "source"
+        build = root / "build"
+        source.mkdir()
+        (build / "obj").mkdir(parents=True)
+        benchmark_object = build / "obj/benchmark.cpp.o"
+        hook_archive = build / "libleopard_test_hooks.a"
+        binary = build / TARGET_NAME
+        for path, payload in ((benchmark_object, b"object"),
+                              (hook_archive, b"archive"), (binary, b"binary")):
+            path.write_bytes(payload)
+        compiler = Path("/usr/bin/true").resolve(strict=True)
+        tokens = [str(compiler), "obj/benchmark.cpp.o", "-o", TARGET_NAME,
+                  "libleopard_test_hooks.a"]
+        validate_executable_link_inputs(
+            tokens, build, source, compiler, binary, benchmark_object, hook_archive)
+        impostor = build / "obj/impostor.o"
+        impostor.write_bytes(b"impostor")
+        tampered = [*tokens, "obj/impostor.o"]
+        try:
+            validate_executable_link_inputs(
+                tampered, build, source, compiler, binary,
+                benchmark_object, hook_archive)
+        except EvidenceError:
+            pass
+        else:
+            raise AssertionError("undeclared executable link object was accepted")
     command_a = benchmark_command(
         Path("/tmp/bench"), matrix["cells"][0], "copy-fallback", 7, 8, 9, 2)
     command_b = benchmark_command(
@@ -666,6 +1464,160 @@ def self_test() -> None:
     SUPPORT.verify_signature(envelope, "nested isolation fixture")
     validate_campaign_isolation(
         envelope["isolation"], {"cpu": 0, "reserved_sibling": 1})
+    def host_cpu(cpu: int) -> dict[str, Any]:
+        return {
+            "cpu": cpu, "cpuinfo": {"model name": "fixture"}, "online": "1",
+            "topology": {"thread_siblings_list": "0-1"},
+            "frequency_policy": {
+                "scaling_driver": "fixture", "scaling_governor": "fixture",
+                "energy_performance_preference": "fixture"},
+        }
+
+    host = {
+        "system": {"release": "fixture"},
+        "allowed_cpu_set_at_launch": [0, 1], "online_cpu_set": [0, 1],
+        "benchmark_cpu": host_cpu(0), "reserved_sibling": host_cpu(1),
+        "turbo_and_pstate": {},
+    }
+    reservation_payload = {
+        "benchmark_cpu": 0, "nonce": "fixture-nonce", "owner": "fixture",
+        "reserved_sibling": 1, "schema": SUPPORT.RESERVATION_SCHEMA,
+        "status": "held",
+    }
+    reservation = {
+        "path": "/tmp/fixture-reservation",
+        "sha256": SUPPORT.sha256_bytes(
+            SUPPORT.canonical_bytes(reservation_payload)),
+        "payload": reservation_payload, "lock": "exclusive_nonblocking",
+    }
+    environment_fixture = {
+        "host_initial": host, "host_final": copy.deepcopy(host),
+        "isolation": nested, "pair_lease": lease, "reservation": reservation,
+    }
+    campaign_fixture = {"cpu": 0, "reserved_sibling": 1}
+    validate_campaign_environment(environment_fixture, campaign_fixture)
+    environment_mutations = []
+    wrong_host = copy.deepcopy(environment_fixture)
+    wrong_host["host_final"]["system"]["release"] = "changed"
+    environment_mutations.append(wrong_host)
+    wrong_lease = copy.deepcopy(environment_fixture)
+    wrong_lease["pair_lease"]["inode"] += 1
+    environment_mutations.append(wrong_lease)
+    wrong_reservation = copy.deepcopy(environment_fixture)
+    wrong_reservation["reservation"]["payload"]["benchmark_cpu"] = 1
+    environment_mutations.append(wrong_reservation)
+    for mutation in environment_mutations:
+        try:
+            validate_campaign_environment(mutation, campaign_fixture)
+        except EvidenceError:
+            continue
+        raise AssertionError("adversarial host/lease/reservation mutation was accepted")
+
+    execution_fixture = {
+        "started_monotonic_ns": 1_100, "ended_monotonic_ns": 1_200,
+        "cpu_before": cpu_stat(0, user=100, idle=100),
+        "cpu_after": cpu_stat(0, user=110, idle=110),
+        "sibling_before": cpu_stat(1, user=100, idle=100),
+        "sibling_after": cpu_stat(1, user=100, idle=110),
+    }
+    execution_fixture["cpu_delta"] = SUPPORT.cpu_stat_delta(
+        execution_fixture["cpu_before"], execution_fixture["cpu_after"])
+    execution_fixture["sibling_delta"] = SUPPORT.cpu_stat_delta(
+        execution_fixture["sibling_before"], execution_fixture["sibling_after"])
+    validate_record_execution_attestation(
+        execution_fixture, interval_begin=1_000, interval_end=2_000,
+        previous_end=1_000, cpu=0, sibling=1)
+    execution_mutations = []
+    bool_timestamp = copy.deepcopy(execution_fixture)
+    bool_timestamp["started_monotonic_ns"] = True
+    execution_mutations.append(bool_timestamp)
+    overlapping = copy.deepcopy(execution_fixture)
+    overlapping["started_monotonic_ns"] = 1_050
+    execution_mutations.append(overlapping)
+    wrong_delta = copy.deepcopy(execution_fixture)
+    wrong_delta["cpu_delta"]["nonidle_jiffies"] += 1
+    execution_mutations.append(wrong_delta)
+    for mutation in execution_mutations:
+        try:
+            validate_record_execution_attestation(
+                mutation, interval_begin=1_000, interval_end=2_000,
+                previous_end=1_075, cpu=0, sibling=1)
+        except EvidenceError:
+            continue
+        raise AssertionError("adversarial timestamp/CPU mutation was accepted")
+
+    raw_campaign = {
+        "cpu": 0, "reserved_sibling": 1, "reuse": controls["reuse"],
+        "iterations": controls["iterations"], "warmup": controls["warmup"],
+        "thread_count": 1, "timeout_seconds": 120.0,
+        "round_orders": matrix["round_orders"],
+        "child_environment": dict(SUPPORT.CHILD_ENVIRONMENT),
+        "invocation_count": len(expected_record_sequence(matrix)),
+    }
+    fixture_binary = Path("/tmp/leo2-high-copy-fixture-bench")
+    raw_records = []
+    for index, (identifier, round_index, slot, mode) in enumerate(
+            expected_record_sequence(matrix)):
+        cell = next(item for item in matrix["cells"] if item["id"] == identifier)
+        command = benchmark_command(
+            fixture_binary, cell, mode, 0, controls["reuse"],
+            controls["iterations"], controls["warmup"])
+        started = 1_001 + index * 3
+        record = {
+            "cell": identifier, "mode": mode, "round": round_index, "slot": slot,
+            "command": command,
+            "command_sha256": SUPPORT.sha256_bytes(
+                SUPPORT.canonical_bytes(command)),
+            "started_monotonic_ns": started, "ended_monotonic_ns": started + 1,
+            "cpu_before": cpu_stat(0, user=100, idle=100),
+            "cpu_after": cpu_stat(0, user=110, idle=110),
+            "sibling_before": cpu_stat(1, user=100, idle=100),
+            "sibling_after": cpu_stat(1, user=100, idle=110),
+            "result": synthetic_result(cell, controls, mode),
+        }
+        record["cpu_delta"] = SUPPORT.cpu_stat_delta(
+            record["cpu_before"], record["cpu_after"])
+        record["sibling_delta"] = SUPPORT.cpu_stat_delta(
+            record["sibling_before"], record["sibling_after"])
+        raw_records.append(record)
+    fixture_identity = {
+        "source": {"path": str(ROOT), "head": "a" * 40},
+        "build": {"binary": {"path": str(fixture_binary)},
+                  "hook_archive": {"path": "/tmp/fixture-hooks.a"}},
+    }
+    raw_fixture_payload = {
+        "schema": RAW_SCHEMA, "created_utc": "fixture",
+        "validity_is_independent_of_speed": True, "matrix": matrix,
+        "campaign": raw_campaign, "host_initial": host,
+        "host_final": copy.deepcopy(host), "reservation": reservation,
+        "pair_lease": lease, "isolation": nested,
+        "identities_initial": fixture_identity,
+        "identities_final": copy.deepcopy(fixture_identity),
+        "records": raw_records,
+        "analysis": analyze(raw_records, matrix, raw_campaign),
+    }
+    raw_fixture = SUPPORT.signed(raw_fixture_payload)
+    validate_raw(raw_fixture, Path("."), current=False)
+    raw_mutations = []
+    missing_host = copy.deepcopy(raw_fixture_payload)
+    del missing_host["host_final"]
+    raw_mutations.append(missing_host)
+    extra_stdout_claim = copy.deepcopy(raw_fixture_payload)
+    extra_stdout_claim["records"][0]["stdout_sha256"] = "0" * 64
+    raw_mutations.append(extra_stdout_claim)
+    overlapping_record = copy.deepcopy(raw_fixture_payload)
+    overlapping_record["records"][1]["started_monotonic_ns"] = \
+        overlapping_record["records"][0]["started_monotonic_ns"]
+    raw_mutations.append(overlapping_record)
+    bool_control = copy.deepcopy(raw_fixture_payload)
+    bool_control["campaign"]["reuse"] = True
+    raw_mutations.append(bool_control)
+    for mutation in raw_mutations:
+        try:
+            validate_raw(SUPPORT.signed(mutation), Path("."), current=False)
+        except (EvidenceError, CONTRACT.ContractError):
+            continue
+        raise AssertionError("adversarial integrated raw mutation was accepted")
     flat = {"accepted": True, "reserved_sibling_nonidle_jiffies": 0}
     try:
         validate_campaign_isolation(flat, {"cpu": 0, "reserved_sibling": 1})
@@ -675,7 +1627,8 @@ def self_test() -> None:
         raise AssertionError("obsolete flat isolation fixture was accepted")
     CONTRACT.self_test()
     print("high-decode copy/no-copy runner self-test passed: "
-          "16 cells, 192 invocations, canonical full-block, field, and nested isolation")
+          "16 cells, 192 invocations, deterministic losses/timings, exact ABBA "
+          "slots, canonical build inputs, field, and nested isolation")
 
 
 def parser() -> argparse.ArgumentParser:

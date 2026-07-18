@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import math
 import re
+import statistics
 import subprocess
 import tempfile
 from pathlib import Path
@@ -23,6 +25,129 @@ class ContractError(ValueError):
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise ContractError(message)
+
+
+def finite_number(value: object, name: str, *, positive: bool = True) -> float:
+    require(isinstance(value, (int, float)) and not isinstance(value, bool),
+            f"{name} is not numeric")
+    result = float(value)
+    require(math.isfinite(result) and (result > 0 if positive else result >= 0),
+            f"{name} is not finite and bounded")
+    return result
+
+
+def close_enough(actual: float, expected: float) -> bool:
+    return abs(actual - expected) <= max(0.000002, abs(expected) * 0.000002)
+
+
+def validate_summary(summary: object, iterations: int, *, setup: bool) -> float:
+    require(isinstance(summary, dict), "timing summary is not an object")
+    suffix = "" if setup else "_per_batch_call"
+    sample_name = "samples_us" if setup else "samples_us_per_batch_call"
+    timing_keys = {
+        f"median_us{suffix}", f"mad_us{suffix}", f"minimum_us{suffix}",
+        f"maximum_us{suffix}", sample_name}
+    if setup:
+        require(set(summary) == timing_keys,
+                "setup timing summary contains an unbound claim")
+    samples_value = summary.get(sample_name)
+    require(type(samples_value) is list and len(samples_value) == iterations,
+            "timing summary has the wrong retained sample count")
+    samples = [finite_number(value, sample_name) for value in samples_value]
+    median = statistics.median(samples)
+    expected = {
+        f"median_us{suffix}": median,
+        f"mad_us{suffix}": statistics.median(
+            abs(value - median) for value in samples),
+        f"minimum_us{suffix}": min(samples),
+        f"maximum_us{suffix}": max(samples),
+    }
+    for name, derived in expected.items():
+        actual = finite_number(summary.get(name), name, positive="mad_us" not in name)
+        require(close_enough(actual, derived),
+                f"{name} is not derived from retained samples")
+    return median
+
+
+def validate_rate(value: object, byte_count: int, median_us: float, name: str) -> None:
+    actual = finite_number(value, name)
+    expected = byte_count / (median_us * 1000.0)
+    require(close_enough(actual, expected), f"{name} is not derived from its median")
+
+
+def validate_metrics(result: dict[str, Any], parameters: dict[str, Any]) -> None:
+    names = ("K", "R", "shard_bytes", "loss_count", "batch", "reuse",
+             "iterations", "warmup", "thread_count", "seed")
+    require(all(type(parameters.get(name)) is int for name in names) and
+            parameters["K"] > 0 and parameters["R"] > 0 and
+            parameters["shard_bytes"] > 0 and
+            0 < parameters["loss_count"] <= min(parameters["K"], parameters["R"]) and
+            parameters["batch"] == 1 and parameters["reuse"] >= 1 and
+            parameters["iterations"] >= 1 and parameters["warmup"] >= 0 and
+            parameters["thread_count"] == 1 and parameters["seed"] >= 0,
+            "benchmark numeric controls are not exact bounded integers")
+    missing = parameters.get("missing_original_indices")
+    require(type(missing) is list and len(missing) == parameters["loss_count"] and
+            all(type(index) is int and 0 <= index < parameters["K"]
+                for index in missing) and missing == sorted(set(missing)),
+            "benchmark loss set is not a sorted unique integer array")
+    metrics = result.get("metrics")
+    require(isinstance(metrics, dict) and set(metrics) == {
+                "codec_setup", "encode_execution", "decode_plan_setup",
+                "decode_execution", "decode_amortized_at_reuse", "rate_semantics"},
+            "benchmark timing metrics are incomplete")
+    require(set(metrics["encode_execution"]) == {
+                "median_us_per_batch_call", "mad_us_per_batch_call",
+                "minimum_us_per_batch_call", "maximum_us_per_batch_call",
+                "samples_us_per_batch_call", "input_GB_per_s",
+                "parity_output_GB_per_s"} and
+            set(metrics["decode_execution"]) == {
+                "median_us_per_batch_call", "mad_us_per_batch_call",
+                "minimum_us_per_batch_call", "maximum_us_per_batch_call",
+                "samples_us_per_batch_call", "offered_received_GB_per_s",
+                "repaired_output_GB_per_s"},
+            "execution timing summary contains an unbound claim")
+    iterations = parameters["iterations"]
+    validate_summary(metrics["codec_setup"], iterations, setup=True)
+    encode_median = validate_summary(
+        metrics["encode_execution"], iterations, setup=False)
+    plan_median = validate_summary(metrics["decode_plan_setup"], iterations, setup=True)
+    decode_median = validate_summary(
+        metrics["decode_execution"], iterations, setup=False)
+    k = parameters["K"]
+    r = parameters["R"]
+    shard_bytes = parameters["shard_bytes"]
+    losses = parameters["loss_count"]
+    validate_rate(metrics["encode_execution"].get("input_GB_per_s"),
+                  k * shard_bytes, encode_median, "encode input rate")
+    validate_rate(metrics["encode_execution"].get("parity_output_GB_per_s"),
+                  r * shard_bytes, encode_median, "encode parity rate")
+    decode_input = (k - losses + r) * shard_bytes
+    decode_output = losses * shard_bytes
+    validate_rate(metrics["decode_execution"].get("offered_received_GB_per_s"),
+                  decode_input, decode_median, "decode input rate")
+    validate_rate(metrics["decode_execution"].get("repaired_output_GB_per_s"),
+                  decode_output, decode_median, "decode output rate")
+    amortized = metrics["decode_amortized_at_reuse"]
+    require(isinstance(amortized, dict) and set(amortized) == {
+                "reuse_count", "derived_median_us_per_batch_call",
+                "offered_received_GB_per_s", "repaired_output_GB_per_s"} and
+            type(amortized.get("reuse_count")) is int and
+            amortized["reuse_count"] == parameters["reuse"],
+            "amortized decode summary has the wrong shape/reuse")
+    derived = decode_median + plan_median / parameters["reuse"]
+    actual = finite_number(
+        amortized.get("derived_median_us_per_batch_call"), "amortized median")
+    require(close_enough(actual, derived),
+            "amortized median is not plan/reuse plus execution")
+    validate_rate(amortized.get("offered_received_GB_per_s"),
+                  decode_input, derived, "amortized input rate")
+    validate_rate(amortized.get("repaired_output_GB_per_s"),
+                  decode_output, derived, "amortized output rate")
+    require(metrics["rate_semantics"] ==
+            "offered_received counts all non-null shard pointers supplied; "
+            "a plan may read a deterministic subset",
+            "rate semantics changed")
 
 
 def validate_document(
@@ -100,6 +225,7 @@ def validate_document(
         require(evaluator == "mature" and pruned_blocks == 0 and
                 mature_blocks == output_blocks,
                 "full-block role did not exclusively use the mature evaluator")
+    validate_metrics(result, parameters)
     return result
 
 
@@ -231,7 +357,7 @@ def smoke(executable: Path) -> None:
 
 def synthetic_document(mode: str) -> dict[str, Any]:
     copy_mode = mode == "copy-fallback"
-    return {
+    document = {
         "schema": "leopard2-benchmark-v4",
         "parameters": {
             "requested_profile": "legacy_high_v1", "requested_field": "gf8",
@@ -239,7 +365,10 @@ def synthetic_document(mode: str) -> dict[str, Any]:
             "force_materialized_decode": True, "force_tiled_decode": False,
             "skip_legacy": True, "retain_samples": True,
             "report_decode_path": True, "high_evaluator_mode": mode,
+            "K": 8, "R": 8, "shard_bytes": 1, "loss_count": 1,
             "missing_original_indices": [7],
+            "batch": 1, "reuse": 1, "iterations": 1, "warmup": 0,
+            "thread_count": 1, "seed": 1,
         },
         "resolved": {
             "profile": "legacy_high_v1", "field": "gf8",
@@ -265,6 +394,33 @@ def synthetic_document(mode: str) -> dict[str, Any]:
         },
         "memory": {"decode_scratch_bytes_per_stripe": 64},
     }
+    document["metrics"] = {
+        "codec_setup": {"median_us": 2.0, "mad_us": 0.0,
+                        "minimum_us": 2.0, "maximum_us": 2.0,
+                        "samples_us": [2.0]},
+        "encode_execution": {
+            "median_us_per_batch_call": 1.0, "mad_us_per_batch_call": 0.0,
+            "minimum_us_per_batch_call": 1.0, "maximum_us_per_batch_call": 1.0,
+            "samples_us_per_batch_call": [1.0],
+            "input_GB_per_s": 0.008, "parity_output_GB_per_s": 0.008},
+        "decode_plan_setup": {"median_us": 3.0, "mad_us": 0.0,
+                              "minimum_us": 3.0, "maximum_us": 3.0,
+                              "samples_us": [3.0]},
+        "decode_execution": {
+            "median_us_per_batch_call": 4.0, "mad_us_per_batch_call": 0.0,
+            "minimum_us_per_batch_call": 4.0, "maximum_us_per_batch_call": 4.0,
+            "samples_us_per_batch_call": [4.0],
+            "offered_received_GB_per_s": 0.00375,
+            "repaired_output_GB_per_s": 0.00025},
+        "decode_amortized_at_reuse": {
+            "reuse_count": 1, "derived_median_us_per_batch_call": 7.0,
+            "offered_received_GB_per_s": 15.0 / 7000.0,
+            "repaired_output_GB_per_s": 1.0 / 7000.0},
+        "rate_semantics":
+            "offered_received counts all non-null shard pointers supplied; "
+            "a plan may read a deterministic subset",
+    }
+    return document
 
 
 def self_test() -> None:
@@ -289,6 +445,15 @@ def self_test() -> None:
     wrong_evaluator["high_evaluator_attribution"]["pruned_output_blocks"] = 1
     wrong_evaluator["high_evaluator_attribution"]["mature_output_blocks"] = 1
     mutations.append(wrong_evaluator)
+    wrong_timing = copy.deepcopy(no_copy)
+    wrong_timing["metrics"]["decode_execution"]["median_us_per_batch_call"] = 5.0
+    mutations.append(wrong_timing)
+    bool_control = copy.deepcopy(no_copy)
+    bool_control["parameters"]["reuse"] = True
+    mutations.append(bool_control)
+    bool_loss = copy.deepcopy(no_copy)
+    bool_loss["parameters"]["missing_original_indices"] = [True]
+    mutations.append(bool_loss)
     for mutation in mutations:
         try:
             validate_pair(mutation, fallback, workspace="materialized", field="gf8",
@@ -297,7 +462,7 @@ def self_test() -> None:
             continue
         raise ContractError(
             "adversarial mode/counter/path/digest/evaluator mutation passed")
-    print("high-decode copy attribution contract self-test passed: 5 mutations rejected")
+    print("high-decode copy attribution contract self-test passed: 8 mutations rejected")
 
 
 def main() -> int:

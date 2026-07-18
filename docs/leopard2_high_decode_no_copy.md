@@ -230,6 +230,9 @@ mature evaluator in both workspaces.  A separate composite step binds only the a
 independent production-versus-exact-main campaigns at the identical source
 commit; it explicitly refuses to infer exact-main evidence for tails.  No new
 timing claim is made until those isolated campaigns are collected.
+The evidence verifier reproduces each seeded loss set, recomputes retained
+timing summaries, enforces the exact ABBA round/slot sequence, and binds host,
+CPU-reservation, lease, and source/object/archive/link/executable provenance.
 
 The source-boundary candidate at `a09d705` was compared with its immediate
 control `3a00fd8` using three independent ABBA rounds on one pinned physical

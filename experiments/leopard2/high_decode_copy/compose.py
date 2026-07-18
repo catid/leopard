@@ -132,7 +132,9 @@ def cross_validate(
         cells = campaign.get("cells")
         require(isinstance(cells, list) and
                 all(isinstance(cell, dict) and
-                    set(cell) == {"identifier", *metadata_names}
+                    set(cell) == {"identifier", *metadata_names} and
+                    type(cell["identifier"]) is str and cell["identifier"] and
+                    all(type(cell[name]) is int for name in metadata_names)
                     for cell in cells),
                 f"exact-main {workspace} cell metadata shape changed")
         actual_cells = {cell["identifier"]: cell for cell in cells}
@@ -180,6 +182,9 @@ def cross_validate(
             digest = ab_documents[0].get("workload_digests")
             missing = ab_documents[0].get("parameters", {}).get(
                 "missing_original_indices")
+            require(type(missing) is list and
+                    all(type(index) is int for index in missing),
+                    f"{identifier} A/B loss set is not an exact integer array")
             all_documents = ab_documents + main_candidates + main_baselines
             expected_parameters = {
                 "K": cell["k"], "R": cell["r"],
@@ -189,7 +194,12 @@ def cross_validate(
             require(all(document.get("workload_digests") == digest and
                         document.get("parameters", {}).get(
                             "missing_original_indices") == missing and
-                        all(document.get("parameters", {}).get(name) == expected
+                        type(document.get("parameters", {}).get(
+                            "missing_original_indices")) is list and
+                        all(type(index) is int for index in
+                            document["parameters"]["missing_original_indices"]) and
+                        all(type(document.get("parameters", {}).get(name)) is int and
+                            document["parameters"][name] == expected
                             for name, expected in expected_parameters.items())
                         for document in all_documents),
                     f"{identifier} exact-main and A/B cell metadata, workload, "
@@ -415,6 +425,15 @@ def self_test() -> None:
                  if record["implementation"] == "candidate")["result"][
                      "parameters"][result_name] += 1
             mutations.append(wrong_result_metadata)
+            bool_metadata = copy.deepcopy(exact)
+            bool_metadata[workspace]["campaign"]["cells"][0][campaign_name] = True
+            mutations.append(bool_metadata)
+            bool_result_metadata = copy.deepcopy(exact)
+            next(record for record in
+                 bool_result_metadata[workspace]["invocations"]
+                 if record["implementation"] == "candidate")["result"][
+                     "parameters"][result_name] = True
+            mutations.append(bool_result_metadata)
     for mutation in mutations:
         try:
             cross_validate(ab, mutation)
@@ -454,7 +473,7 @@ def self_test() -> None:
             continue
         raise EvidenceError(
             "adversarial full-block path/counter/digest mutation passed")
-    print("high-decode copy composite self-test passed: 28 mutations rejected")
+    print("high-decode copy composite self-test passed: 48 mutations rejected")
 
 
 def parser() -> argparse.ArgumentParser:
