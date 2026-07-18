@@ -252,10 +252,12 @@ samples of each backend. Allocation and equivalence checks remain outside the
 timed regions.
 
 `--json` emits newline-delimited JSON with one environment record, three
-circuit records, and one record per result. CSV and JSON include the exact
-CMake build type and effective compiler flags, OS, affinity, SIMD selection,
+circuit records, and one record per result. CSV and JSON include the generated
+CMake configuration and a configured-flag summary (global, configuration,
+C++ standard, FF8 XOR, and isolated AVX-512 flags), OS, affinity, SIMD selection,
 deterministic schedule ID, modeled payload traffic, and selected decoder
-locator shift. The traffic model counts expected payload loads and stores,
+locator shift. A verbose build log remains authoritative for implicit compiler
+driver flags. The traffic model counts expected payload loads and stores,
 including the three-buffer-byte skew-sentinel butterfly fast path; it does not
 claim to measure cache-line transfers.
 
@@ -303,9 +305,11 @@ AVX-512VL, and AVX-512 ZMM family, including code size, XOR2, XOR3
 (`vpternlog[dq]` immediate `0x96`), loads/stores, calls, stack references, and
 mnemonics. Direct-branch control-flow analysis distinguishes one-per-buffer
 dispatch calls from calls inside cyclic payload loops. Strict mode fails on
-missing specializations, payload-loop calls, possible vector spills, scaled
-stack indexing, vector RIP-relative lookup loads, shuffle/gather/GFNI/CLMUL/
-integer-multiply/vector-AND instructions, or non-XOR3 ternary truth tables.
+missing mandatory families or specializations, payload-loop calls, possible
+vector spills, scaled stack indexing, direct or indexed static-table reads,
+narrow dynamically indexed loads, shuffle/permute/blend/shift/gather/GFNI/
+CLMUL/integer-multiply/vector-mask instructions, or non-XOR3 ternary truth
+tables. AVX-512-enabled CMake builds require the complete VL and ZMM family set.
 
 ```sh
 python3 tools/inspect_ff8xor_assembly.py build/liblibleopard.a --strict
@@ -321,13 +325,13 @@ adjustment before satisfying the hot-loop contract.
 ## Measurements from the implementation host
 
 These results were collected on an AMD Ryzen Threadripper PRO 9985WX
-(64 cores, 128 threads), Linux 6.8, GCC 13.3.0, and CMake 3.28.3. The CMake
+(64 cores, 128 threads), Linux 6.8, GCC 13.3.0, and CMake 3.28.3.
 Historical measurements below used `-march=native -Wall -Wextra -fopenmp -g
 -O0 -O3 -std=gnu++11`; the experimental translation unit additionally used
 `-mno-avx512f -fno-tree-reassoc`. A CMake typo had copied Debug flags into the
 Release flags before appending `-O3`, so `NDEBUG` was unset. The guardrail work
 now preserves the toolchain's standard Release flags (`-O3 -DNDEBUG`) and
-embeds the exact resulting flags in every CSV/JSON run. Treat the table below
+embeds the configured flag summary in every CSV/JSON run. Treat the table below
 as the pre-guardrail historical baseline rather than a result from the fixed
 Release configuration.
 

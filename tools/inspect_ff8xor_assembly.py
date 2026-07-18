@@ -22,6 +22,11 @@ from pathlib import Path
 
 
 SCHEMA = "leopard.ff8xor.assembly-census.v1"
+BASE_FAMILIES = ("multiply", "fft", "ifft")
+AVX512_FAMILIES = (
+    "multiply_avx512vl", "fft_avx512vl", "ifft_avx512vl",
+    "multiply_avx512zmm", "fft_avx512zmm", "ifft_avx512zmm",
+)
 FUNCTION_HEADER = re.compile(r"^\s*[0-9a-fA-F]+ <(.+)>:$")
 INSTRUCTION = re.compile(
     r"^\s*([0-9a-fA-F]+):\s+([A-Za-z0-9_.]+)(?:\s+(.*))?$")
@@ -45,13 +50,20 @@ XOR2_MNEMONICS = {
 }
 TERNARY_MNEMONICS = {"vpternlogd", "vpternlogq"}
 FORBIDDEN_PREFIXES = (
-    "pshufb", "vpshufb", "vpermb", "vpermw", "vpgather", "vgather",
+    "pshuf", "vpshuf", "shuf", "vshuf", "perm", "vperm",
+    "palignr", "vpalignr", "pblend", "vpblend", "blend", "vblend",
+    "pand", "vpand", "andps", "andpd", "andnps", "andnpd", "vand",
+    "kand", "por", "vpor", "orps", "orpd", "vorps", "vorpd",
+    "psll", "vpsll", "psrl", "vpsrl", "psra", "vpsra", "vprol",
+    "vpror", "vpgather", "vgather",
     "gf2p8", "vgf2p8", "pclmul", "vpclmul", "pmull", "vpmull",
+    "mulx",
 )
 FORBIDDEN_EXACT = {
     "imul", "imulb", "imulw", "imull", "imulq", "mul", "mulb",
-    "mulw", "mull", "mulq", "pand", "vpand", "vpandd", "vpandq",
+    "mulw", "mull", "mulq",
 }
+NARROW_LOAD_PREFIXES = ("movzb", "movzw", "movsb", "movsw")
 
 
 def find_tool(explicit, candidates):
@@ -232,6 +244,7 @@ def instruction_census(name, size, instructions):
     mnemonic_counts = collections.Counter()
 
     loop_addresses = loop_instruction_addresses(instructions)
+    static_address_registers = set()
 
     for address, mnemonic, operand_text in instructions:
         mnemonic = mnemonic.lower()
@@ -271,6 +284,44 @@ def instruction_census(name, size, instructions):
 
         if has_memory and "%rip" in operand_text and has_vector:
             counts["vector_rip_memory_refs"] += 1
+        if (address in loop_addresses and has_memory and
+                "%rip" in operand_text):
+            counts["loop_rip_memory_refs"] += 1
+        if (address in loop_addresses and
+                mnemonic.startswith(NARROW_LOAD_PREFIXES) and
+                SCALED_MEMORY.search(operand_text)):
+            counts["loop_narrow_indexed_loads"] += 1
+
+        # Track simple static-table address provenance.  A generated payload
+        # loop should never form a RIP-relative table base and then index it by
+        # a runtime value; literal named-register circuits need only payload
+        # pointers.  Linear propagation covers the normal compiler idiom while
+        # invalidating a register as soon as another instruction overwrites it.
+        memory_operands = [operand for operand in operands if "(" in operand]
+        if address in loop_addresses:
+            for operand in memory_operands:
+                inside = operand[operand.find("(") + 1:operand.rfind(")")]
+                parts = [part.strip() for part in inside.split(",")]
+                if len(parts) >= 2 and parts[0] in static_address_registers:
+                    counts["static_table_indexed_refs"] += 1
+
+        destination = operands[-1] if operands else ""
+        destination_register = (destination
+                                if re.match(r"^%[A-Za-z0-9]+$", destination)
+                                else None)
+        source_register = (operands[0]
+                           if operands and
+                           re.match(r"^%[A-Za-z0-9]+$", operands[0])
+                           else None)
+        if destination_register:
+            if (mnemonic.startswith("lea") and operands and
+                    "%rip" in operands[0]):
+                static_address_registers.add(destination_register)
+            elif (mnemonic.startswith("mov") and source_register in
+                  static_address_registers):
+                static_address_registers.add(destination_register)
+            else:
+                static_address_registers.discard(destination_register)
 
         if has_memory and mnemonic.startswith(("mov", "vmov")):
             destination = operands[-1] if operands else ""
@@ -290,7 +341,8 @@ def instruction_census(name, size, instructions):
             "inner_loop_calls",
             "vector_stack_refs", "scaled_memory_refs", "scaled_stack_refs",
             "vector_rip_memory_refs", "non_xor_ternary",
-            "forbidden_instructions")},
+            "loop_rip_memory_refs", "loop_narrow_indexed_loads",
+            "static_table_indexed_refs", "forbidden_instructions")},
         "mnemonics": dict(sorted(mnemonic_counts.items())),
     }
 
@@ -345,20 +397,26 @@ def aggregate(functions):
     return result
 
 
-def hard_violations(functions, summary):
+def hard_violations(functions, summary, required_families):
     violations = []
-    for family in sorted(summary):
-        if summary[family]["coefficient_count"] != 256:
+    all_families = set(summary) | set(required_families)
+    for family in sorted(all_families):
+        observed = (summary[family]["coefficient_count"]
+                    if family in summary else 0)
+        if observed != 256:
             violations.append({
                 "family": family,
                 "rule": "all_256_specializations_present",
-                "observed": summary[family]["coefficient_count"],
+                "observed": observed,
             })
     rules = (
         ("inner_loop_calls", "call_inside_payload_loop"),
         ("vector_stack_refs", "possible_vector_spill_or_reload"),
         ("scaled_stack_refs", "dynamic_stack_array_indexing"),
         ("vector_rip_memory_refs", "possible_payload_lookup_or_vector_constant"),
+        ("loop_rip_memory_refs", "rip_relative_read_inside_payload_loop"),
+        ("loop_narrow_indexed_loads", "narrow_indexed_payload_lookup"),
+        ("static_table_indexed_refs", "static_table_index_inside_payload_loop"),
         ("non_xor_ternary", "vpternlog_immediate_is_not_xor3_0x96"),
         ("forbidden_instructions", "shuffle_lookup_multiply_or_vector_and"),
     )
@@ -400,7 +458,12 @@ def build_report(arguments):
         objdump_tool, "-drwC", "--no-show-raw-insn", str(artifact)])
     functions = parse_disassembly(disassembly, sizes)
     summary = aggregate(functions)
-    violations = hard_violations(functions, summary)
+    required_families = set(BASE_FAMILIES)
+    required_families.update(arguments.require_family)
+    if arguments.require_avx512 or any(
+            family in summary for family in AVX512_FAMILIES):
+        required_families.update(AVX512_FAMILIES)
+    violations = hard_violations(functions, summary, required_families)
     return {
         "schema": SCHEMA,
         "artifact": artifact.name,
@@ -409,6 +472,7 @@ def build_report(arguments):
             "objdump": os.path.basename(objdump_tool),
         },
         "summary": summary,
+        "required_families": sorted(required_families),
         "representative_coefficient_42": representative(functions),
         "hard_violation_count": len(violations),
         "hard_violations": violations,
@@ -462,6 +526,12 @@ def parse_arguments():
                         help="write the selected output to this path")
     parser.add_argument("--strict", action="store_true",
                         help="fail on spills, calls, lookups, or missing kernels")
+    parser.add_argument(
+        "--require-family", action="append", default=[],
+        help="require a named family with all 256 specializations")
+    parser.add_argument(
+        "--require-avx512", action="store_true",
+        help="require complete AVX-512VL and ZMM multiply/FFT/IFFT families")
     return parser.parse_args()
 
 

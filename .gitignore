@@ -12,3 +12,5 @@ msvc/LHC_RS.vcxproj.user
 *.iobj
 *.ipdb
 *.vspx
+__pycache__/
+*.pyc

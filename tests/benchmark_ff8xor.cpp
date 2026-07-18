@@ -487,6 +487,8 @@ public:
     void Begin()
     {
 #if defined(__linux__)
+        // Reset every group before enabling any of them, then enable all
+        // groups in a tight pass immediately before the payload region.
         for (size_t group_index = 0; group_index < Groups.size(); ++group_index)
         {
             CounterGroup& group = Groups[group_index];
@@ -494,8 +496,20 @@ public:
                 !Events[group.event_indices[0]].available)
                 continue;
             if (ioctl(group.leader_fd, PERF_EVENT_IOC_RESET,
-                    PERF_IOC_FLAG_GROUP) != 0 ||
-                ioctl(group.leader_fd, PERF_EVENT_IOC_ENABLE,
+                    PERF_IOC_FLAG_GROUP) != 0)
+            {
+                MarkUnavailable(group,
+                    std::string("unavailable while resetting PMU group: ") +
+                    strerror(errno));
+            }
+        }
+        for (size_t group_index = 0; group_index < Groups.size(); ++group_index)
+        {
+            CounterGroup& group = Groups[group_index];
+            if (group.event_indices.empty() ||
+                !Events[group.event_indices[0]].available)
+                continue;
+            if (ioctl(group.leader_fd, PERF_EVENT_IOC_ENABLE,
                     PERF_IOC_FLAG_GROUP) != 0)
             {
                 MarkUnavailable(group,
@@ -508,8 +522,10 @@ public:
 
     void End(unsigned calls_per_sample, double usec_per_call)
     {
-        std::vector<double> values(Events.size(), 0);
+        std::vector<double> values;
 #if defined(__linux__)
+        // Stop every group before allocating or reading result buffers.  This
+        // keeps counter post-processing out of all payload measurement windows.
         for (size_t group_index = 0; group_index < Groups.size(); ++group_index)
         {
             CounterGroup& counter_group = Groups[group_index];
@@ -523,9 +539,16 @@ public:
                 MarkUnavailable(counter_group,
                     std::string("unavailable while disabling PMU group: ") +
                     strerror(errno));
-                continue;
             }
+        }
 
+        values.assign(Events.size(), 0);
+        for (size_t group_index = 0; group_index < Groups.size(); ++group_index)
+        {
+            CounterGroup& counter_group = Groups[group_index];
+            if (counter_group.event_indices.empty() ||
+                !Events[counter_group.event_indices[0]].available)
+                continue;
             // PERF_FORMAT_GROUP returns nr, enabled, running, then values in
             // group-open order.  Each group is small enough to schedule as a
             // unit; enabled/running scaling accounts for multiplexing between
@@ -560,6 +583,7 @@ public:
         }
 #else
         (void)calls_per_sample;
+        values.assign(Events.size(), 0);
 #endif
         if (Events.size() >= 2 && Events[0].available && Events[1].available &&
             values[0] > 0)
@@ -2105,12 +2129,14 @@ static void PrintMicro(
     const Timing& timing,
     uint64_t buffer_bytes,
     uint64_t input_bytes,
-    uint64_t output_bytes)
+    uint64_t output_bytes,
+    uint64_t modeled_payload_bytes)
 {
     Result result = MakeResult(options, backend, operation, false,
         0, 0, buffer_bytes, 0, timing, input_bytes, output_bytes, 0,
         note.c_str());
     result.record = "microbenchmark";
+    result.modeled_payload_bytes = modeled_payload_bytes;
     reporter.Print(result);
 }
 
@@ -2211,7 +2237,7 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
         PrintMicro(options, reporter, "packed_ff8", "multiply_add",
             CircuitCaseNote("log", circuit,
                 "existing packed lookup multiply-add; gate metadata is for ff8xor"),
-            packed_timing, bytes, bytes * 2, bytes);
+            packed_timing, bytes, bytes * 2, bytes, bytes * 3);
 
         Timing xor_timing;
         if (!Measure(options,
@@ -2226,7 +2252,7 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
         PrintMicro(options, reporter, "ff8xor_native", "multiply",
             CircuitCaseNote("log", circuit,
                 "generated multiplication-only whole-buffer kernel"),
-            xor_timing, bytes, bytes, bytes);
+            xor_timing, bytes, bytes, bytes, bytes * 2);
     }
 
     static const CircuitCase butterfly_cases[] = {
@@ -2281,7 +2307,8 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
             return false;
         PrintMicro(options, reporter, "ff8xor_native", "fft_butterfly",
             CircuitCaseNote("skew", circuit, "generated two-buffer kernel"),
-            fft_timing, bytes, bytes * 2, bytes * 2);
+            fft_timing, bytes, bytes * 2, bytes * 2,
+            bytes * (circuit.coefficient == 255 ? 3 : 4));
 
         memcpy(a[0], d[0], static_cast<size_t>(bytes));
         memcpy(b[0], e[0], static_cast<size_t>(bytes));
@@ -2297,7 +2324,8 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
             return false;
         PrintMicro(options, reporter, "ff8xor_native", "ifft_butterfly",
             CircuitCaseNote("skew", circuit, "generated two-buffer kernel"),
-            ifft_timing, bytes, bytes * 2, bytes * 2);
+            ifft_timing, bytes, bytes * 2, bytes * 2,
+            bytes * (circuit.coefficient == 255 ? 3 : 4));
     }
 
     FillRandom(a, bytes, UINT64_C(0x7472616e73706f73));
@@ -2319,7 +2347,7 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
         return false;
     PrintMicro(options, reporter, "transpose", "packed_to_plane",
         "standalone 8x8 bit transpose; no allocation", timing,
-        bytes, bytes, bytes);
+        bytes, bytes, bytes, bytes * 2);
 
     timing = Timing();
     if (!Measure(options,
@@ -2331,7 +2359,7 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
         return false;
     PrintMicro(options, reporter, "transpose", "plane_to_packed",
         "standalone 8x8 bit transpose; no allocation", timing,
-        bytes, bytes, bytes);
+        bytes, bytes, bytes, bytes * 2);
 
     if (!base_options.csv && !base_options.json)
         std::cout << '\n';

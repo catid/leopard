@@ -159,18 +159,36 @@ add_test(NAME leopard_ff8xor_statistics COMMAND test_leopard_ff8xor_statistics)
 add_executable(bench_leopard_ff8xor tests/benchmark_ff8xor.cpp)
 target_link_libraries(bench_leopard_ff8xor libleopard)
 
-# Embed the CMake configuration and effective flags in machine-readable
-# benchmark metadata.  This avoids guessing Release/Debug from NDEBUG when a
-# toolchain or downstream project customizes the standard configuration flags.
+# These remain OFF/empty on builds without the isolated AVX-512 source.
+if(NOT DEFINED FF8XOR_BUILD_AVX512)
+    set(FF8XOR_BUILD_AVX512 OFF)
+endif()
+if(NOT DEFINED FF8XOR_AVX512_COMPILE_FLAGS)
+    set(FF8XOR_AVX512_COMPILE_FLAGS "")
+endif()
+
+# Embed a reproducible summary of the configured CMake flags in benchmark
+# metadata.  The source-specific FF8 XOR flags are included explicitly; a
+# verbose build remains authoritative for compiler-driver-added options.
 string(TOUPPER "${CMAKE_BUILD_TYPE}" FF8XOR_BUILD_TYPE_UPPER)
 set(FF8XOR_BENCH_BUILD_FLAGS
-    "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${FF8XOR_BUILD_TYPE_UPPER}}")
+    "global=[${CMAKE_CXX_FLAGS}]")
+set(FF8XOR_BENCH_BUILD_FLAGS
+    "${FF8XOR_BENCH_BUILD_FLAGS} config=[${CMAKE_CXX_FLAGS_${FF8XOR_BUILD_TYPE_UPPER}}]")
+set(FF8XOR_BENCH_BUILD_FLAGS
+    "${FF8XOR_BENCH_BUILD_FLAGS} cxx_standard=${CMAKE_CXX_STANDARD}")
+set(FF8XOR_BENCH_BUILD_FLAGS
+    "${FF8XOR_BENCH_BUILD_FLAGS} ff8xor=[${FF8XOR_COMPILE_FLAGS}]")
+set(FF8XOR_BENCH_BUILD_FLAGS
+    "${FF8XOR_BENCH_BUILD_FLAGS} avx512_built=${FF8XOR_BUILD_AVX512}")
+set(FF8XOR_BENCH_BUILD_FLAGS
+    "${FF8XOR_BENCH_BUILD_FLAGS} avx512=[${FF8XOR_AVX512_COMPILE_FLAGS}]")
 string(REPLACE "\\" "\\\\" FF8XOR_BENCH_BUILD_FLAGS_ESCAPED
     "${FF8XOR_BENCH_BUILD_FLAGS}")
 string(REPLACE "\"" "\\\"" FF8XOR_BENCH_BUILD_FLAGS_ESCAPED
     "${FF8XOR_BENCH_BUILD_FLAGS_ESCAPED}")
 target_compile_definitions(bench_leopard_ff8xor PRIVATE
-    LEO_BENCH_CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
+    LEO_BENCH_CMAKE_BUILD_TYPE="$<CONFIG>"
     LEO_BENCH_BUILD_FLAGS="${FF8XOR_BENCH_BUILD_FLAGS_ESCAPED}")
 
 # The normal build consumes the checked-in generated source and does not need
@@ -182,6 +200,11 @@ if(CMAKE_VERSION VERSION_LESS 3.12)
 else()
     find_package(Python3 COMPONENTS Interpreter QUIET)
     set(FF8XOR_PYTHON_EXECUTABLE "${Python3_EXECUTABLE}")
+endif()
+
+set(FF8XOR_ASSEMBLY_REQUIRE_ARGS "")
+if(FF8XOR_BUILD_AVX512)
+    list(APPEND FF8XOR_ASSEMBLY_REQUIRE_ARGS --require-avx512)
 endif()
 
 if(FF8XOR_PYTHON_EXECUTABLE)
@@ -197,20 +220,28 @@ if(FF8XOR_PYTHON_EXECUTABLE)
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
     add_custom_target(generate_ff8xor_schedule_corpus
-        COMMAND "${FF8XOR_PYTHON_EXECUTABLE}"
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_ff8xor_schedule_corpus.py"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
     add_custom_target(check_ff8xor_schedule_corpus
-        COMMAND "${FF8XOR_PYTHON_EXECUTABLE}"
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_ff8xor_schedule_corpus.py"
                 --check
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
     add_test(NAME ff8xor_schedule_corpus
-        COMMAND "${FF8XOR_PYTHON_EXECUTABLE}"
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_ff8xor_schedule_corpus.py"
                 --check)
+
+    add_test(NAME ff8xor_assembly_inspector
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_assembly_inspector.py")
 
     add_custom_target(inspect_ff8xor_assembly
         COMMAND "${FF8XOR_PYTHON_EXECUTABLE}"
@@ -218,6 +249,7 @@ if(FF8XOR_PYTHON_EXECUTABLE)
                 "$<TARGET_FILE:libleopard>"
                 --json
                 --output "${CMAKE_CURRENT_BINARY_DIR}/ff8xor_assembly_census.json"
+                ${FF8XOR_ASSEMBLY_REQUIRE_ARGS}
         DEPENDS libleopard
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
@@ -226,6 +258,7 @@ if(FF8XOR_PYTHON_EXECUTABLE)
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_assembly.py"
                 "$<TARGET_FILE:libleopard>"
                 --strict
+                ${FF8XOR_ASSEMBLY_REQUIRE_ARGS}
         DEPENDS libleopard
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
