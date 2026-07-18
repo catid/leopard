@@ -1,0 +1,257 @@
+{
+  "backend": "avx2",
+  "batch": 1,
+  "cells": [
+    {
+      "K": 1000,
+      "R": 200,
+      "id": "high-1000-200-4k",
+      "iterations": 9,
+      "loss_count": 200,
+      "profile": "high",
+      "reuse": 4,
+      "role": "high_neighbor",
+      "seed": 7938304,
+      "shard_bytes": 4096,
+      "warmup": 2
+    },
+    {
+      "K": 1000,
+      "R": 200,
+      "id": "high-1000-200-64k",
+      "iterations": 9,
+      "loss_count": 200,
+      "profile": "high",
+      "reuse": 1,
+      "role": "high_neighbor",
+      "seed": 7938305,
+      "shard_bytes": 65536,
+      "warmup": 2
+    },
+    {
+      "K": 4096,
+      "R": 512,
+      "id": "high-4096-512-4k",
+      "iterations": 9,
+      "loss_count": 512,
+      "profile": "high",
+      "reuse": 2,
+      "role": "target_recheck",
+      "seed": 7938306,
+      "shard_bytes": 4096,
+      "warmup": 2
+    },
+    {
+      "K": 4096,
+      "R": 512,
+      "id": "high-4096-512-4098",
+      "iterations": 9,
+      "loss_count": 512,
+      "profile": "high",
+      "reuse": 2,
+      "role": "ragged_neighbor",
+      "seed": 7938307,
+      "shard_bytes": 4098,
+      "warmup": 2
+    },
+    {
+      "K": 512,
+      "R": 1536,
+      "id": "low-512-1536-4k",
+      "iterations": 9,
+      "loss_count": 512,
+      "profile": "low",
+      "reuse": 4,
+      "role": "low_neighbor",
+      "seed": 7938308,
+      "shard_bytes": 4096,
+      "warmup": 2
+    },
+    {
+      "K": 1600,
+      "R": 2496,
+      "id": "low-1600-2496-4k",
+      "iterations": 9,
+      "loss_count": 1600,
+      "profile": "low",
+      "reuse": 2,
+      "role": "low_neighbor",
+      "seed": 7938309,
+      "shard_bytes": 4096,
+      "warmup": 2
+    },
+    {
+      "K": 2032,
+      "R": 2064,
+      "id": "low-2032-2064-4k",
+      "iterations": 9,
+      "loss_count": 2032,
+      "profile": "low",
+      "reuse": 2,
+      "role": "low_neighbor",
+      "seed": 7938310,
+      "shard_bytes": 4096,
+      "warmup": 2
+    },
+    {
+      "K": 1000,
+      "R": 200,
+      "id": "high-tail-64",
+      "iterations": 9,
+      "loss_count": 200,
+      "profile": "high",
+      "reuse": 64,
+      "role": "tail_control",
+      "seed": 7938311,
+      "shard_bytes": 64,
+      "warmup": 2
+    },
+    {
+      "K": 1000,
+      "R": 200,
+      "id": "high-tail-66",
+      "iterations": 9,
+      "loss_count": 200,
+      "profile": "high",
+      "reuse": 64,
+      "role": "tail_split",
+      "seed": 7938312,
+      "shard_bytes": 66,
+      "warmup": 2
+    },
+    {
+      "K": 1000,
+      "R": 200,
+      "id": "high-tail-128",
+      "iterations": 9,
+      "loss_count": 200,
+      "profile": "high",
+      "reuse": 64,
+      "role": "tail_control",
+      "seed": 7938313,
+      "shard_bytes": 128,
+      "warmup": 2
+    },
+    {
+      "K": 1000,
+      "R": 200,
+      "id": "high-tail-130",
+      "iterations": 9,
+      "loss_count": 200,
+      "profile": "high",
+      "reuse": 64,
+      "role": "tail_split",
+      "seed": 7938314,
+      "shard_bytes": 130,
+      "warmup": 2
+    },
+    {
+      "K": 512,
+      "R": 1536,
+      "id": "low-tail-66",
+      "iterations": 9,
+      "loss_count": 512,
+      "profile": "low",
+      "reuse": 32,
+      "role": "tail_split",
+      "seed": 7938315,
+      "shard_bytes": 66,
+      "warmup": 2
+    },
+    {
+      "K": 512,
+      "R": 1536,
+      "id": "low-tail-130",
+      "iterations": 9,
+      "loss_count": 512,
+      "profile": "low",
+      "reuse": 32,
+      "role": "tail_split",
+      "seed": 7938316,
+      "shard_bytes": 130,
+      "warmup": 2
+    }
+  ],
+  "created_utc": "2026-07-18T18:29:06.071708Z",
+  "field": "gf16",
+  "metrics": [
+    "encode_execution",
+    "decode_execution"
+  ],
+  "order_by_round": [
+    [
+      "control",
+      "candidate",
+      "candidate",
+      "control"
+    ],
+    [
+      "candidate",
+      "control",
+      "control",
+      "candidate"
+    ],
+    [
+      "control",
+      "candidate",
+      "candidate",
+      "control"
+    ]
+  ],
+  "promotion_policy": {
+    "contamination_policy": "abort campaign; do not summarize timings",
+    "metrics_judged_separately": true,
+    "regression_definition": "candidate time exceeds control by more than 2 percent",
+    "regression_floor_control_over_candidate": 0.9803921568627451,
+    "statistical_method": "one mean log contrast per independent ABBA round; two-sided Student-t 95 percent CI with df=2"
+  },
+  "schema": "leopard2-gf16-avx2-neighbor-manifest/v1",
+  "source": {
+    "candidate": {
+      "archive_sha256": "b3150b17397f87cdfa493151a15d0ea916e5fe4583c6e46f275b90fb9e0c8ddf",
+      "avx2_object_sha256": "d153cc0d9b6ff3f7b5d19fc4cdff635deae0e2d1f862f71eb7a2f73d0f5cef92",
+      "cmake_cache_sha256": "973d64cb26ffe8bbde711e43e70ea6d210a33e16ac77723d20776cb4a20399aa",
+      "commit": "7921998a599994d063617faf831624551fd63255",
+      "executable": "/home/catid/leopard-worktrees/gf16-neighbor-candidate-7921998/build/neighbor-release/bench_leopard2",
+      "executable_sha256": "62974bc9f3000ee375ba3ec632b633e9ba8f610399287363f0732c1cad781674",
+      "link_recipe_sha256": "659c43329dab220187eb24695fd9c8abb0ababe508610d23550fa75c8e229329",
+      "root": "/home/catid/leopard-worktrees/gf16-neighbor-candidate-7921998"
+    },
+    "control": {
+      "archive_sha256": "7d50378f00696627076c11ee44d534dac333762f6d5f8ae4dd6bc400b5d56bd7",
+      "avx2_object_sha256": "26ac2971d682ecc448b4636087332e239b1c7f39cc2f750994136f5fd15c0b03",
+      "cmake_cache_sha256": "0a9a70419a20e36d47b1c0329fdeeffea4735a17df5f98d333942d55e24db972",
+      "commit": "a725bf46846714c4f1e438e5a6a43c2e29b37613",
+      "executable": "/home/catid/leopard-worktrees/gf16-neighbor-control-a725bf4/build/neighbor-release/bench_leopard2",
+      "executable_sha256": "a4c21f3c7e5e7d7f4cceb026f54f8d748f5725472d046dff78d051962caba2a3",
+      "link_recipe_sha256": "659c43329dab220187eb24695fd9c8abb0ababe508610d23550fa75c8e229329",
+      "root": "/home/catid/leopard-worktrees/gf16-neighbor-control-a725bf4"
+    }
+  },
+  "threads": 1,
+  "topology": {
+    "records": [
+      {
+        "core_id": 12,
+        "cpu": 12,
+        "package_id": 0,
+        "thread_siblings": [
+          12,
+          28
+        ]
+      },
+      {
+        "core_id": 12,
+        "cpu": 28,
+        "package_id": 0,
+        "thread_siblings": [
+          12,
+          28
+        ]
+      }
+    ],
+    "runner_affinity": [
+      12
+    ]
+  }
+}
