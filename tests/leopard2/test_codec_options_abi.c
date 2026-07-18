@@ -334,6 +334,21 @@ int main(void)
             return 1;
         }
 
+        memset(original_alias.bytes, 1, sizeof(original_alias.bytes));
+        memcpy(original_snapshot, original_alias.bytes,
+            sizeof(original_snapshot));
+        if (!require_result(leo2_decode_plan_create(plan_codec,
+                original_alias.bytes, NULL,
+                (leo2_decode_plan **)(void *)original_alias.bytes),
+                LEO2_OVERLAP,
+                "C ABI original-presence/output overlap with null recovery") ||
+            memcmp(original_alias.bytes, original_snapshot,
+                sizeof(original_snapshot)) != 0) {
+            leo2_codec_destroy(plan_codec);
+            leo2_context_destroy(context);
+            return 1;
+        }
+
         memset(recovery_alias.bytes, 0xa5, sizeof(recovery_alias.bytes));
         memset(recovery_alias.bytes, 1, sizeof(recovery_present));
         memcpy(recovery_snapshot, recovery_alias.bytes,
@@ -342,6 +357,22 @@ int main(void)
                 original_present, recovery_alias.bytes,
                 (leo2_decode_plan **)(void *)recovery_alias.bytes),
                 LEO2_OVERLAP, "C ABI recovery-presence/output overlap") ||
+            memcmp(recovery_alias.bytes, recovery_snapshot,
+                sizeof(recovery_snapshot)) != 0) {
+            leo2_codec_destroy(plan_codec);
+            leo2_context_destroy(context);
+            return 1;
+        }
+
+        memset(recovery_alias.bytes, 0xa5, sizeof(recovery_alias.bytes));
+        memset(recovery_alias.bytes, 1, sizeof(recovery_present));
+        memcpy(recovery_snapshot, recovery_alias.bytes,
+            sizeof(recovery_snapshot));
+        if (!require_result(leo2_decode_plan_create(plan_codec,
+                NULL, recovery_alias.bytes,
+                (leo2_decode_plan **)(void *)recovery_alias.bytes),
+                LEO2_OVERLAP,
+                "C ABI recovery-presence/output overlap with null original") ||
             memcmp(recovery_alias.bytes, recovery_snapshot,
                 sizeof(recovery_snapshot)) != 0) {
             leo2_codec_destroy(plan_codec);
