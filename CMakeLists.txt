@@ -458,16 +458,40 @@ if(LEO2_BUILD_BENCHMARKS)
     # the compared encoder paths by different amounts and invalidate crossover
     # measurements.
     if(LEOPARD_ENABLE_GF8 AND LEOPARD_ENABLE_GF16)
-        add_executable(bench_leopard2_sparse_encode
-            bench/leopard2/sparse_encode_benchmark.cpp
+        add_library(leopard2_sparse_encode_benchmark_object OBJECT
+            bench/leopard2/sparse_encode_benchmark.cpp)
+        add_library(leopard2_sparse_encode_oracle_object OBJECT
             tests/leopard2/direct_oracle.cpp)
-        target_include_directories(bench_leopard2_sparse_encode PRIVATE
+        target_include_directories(leopard2_sparse_encode_benchmark_object PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}
             tests/leopard2)
-        target_compile_definitions(bench_leopard2_sparse_encode PRIVATE
+        target_include_directories(leopard2_sparse_encode_oracle_object PRIVATE
+            tests/leopard2)
+        target_compile_definitions(leopard2_sparse_encode_benchmark_object PRIVATE
             LEO2_SPARSE_ENCODE_SOURCE_GIT_SHA="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
             LEO2_SPARSE_ENCODE_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY}
             LEO2_SPARSE_ENCODE_LIBRARY_TEST_HOOKS=0)
+        add_executable(bench_leopard2_sparse_encode
+            $<TARGET_OBJECTS:leopard2_sparse_encode_benchmark_object>
+            $<TARGET_OBJECTS:leopard2_sparse_encode_oracle_object>)
         target_link_libraries(bench_leopard2_sparse_encode leopard)
+        set_property(TARGET bench_leopard2_sparse_encode APPEND PROPERTY
+            LINK_DEPENDS
+            ${CMAKE_CURRENT_SOURCE_DIR}/cmake/WriteSparseEncodeEvidenceSidecar.cmake)
+        add_custom_command(TARGET bench_leopard2_sparse_encode POST_BUILD
+            COMMAND ${CMAKE_COMMAND}
+                -DOUTPUT=$<TARGET_FILE:bench_leopard2_sparse_encode>.leopard2-evidence
+                -DEXECUTABLE=$<TARGET_FILE:bench_leopard2_sparse_encode>
+                -DPRODUCTION_ARCHIVE=$<TARGET_FILE:leopard>
+                -DBENCHMARK_OBJECT=$<TARGET_OBJECTS:leopard2_sparse_encode_benchmark_object>
+                -DORACLE_OBJECT=$<TARGET_OBJECTS:leopard2_sparse_encode_oracle_object>
+                -DBENCHMARK_LINK_RECIPE=${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/bench_leopard2_sparse_encode.dir/link.txt
+                -DPRODUCTION_LINK_RECIPE=${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/leopard.dir/link.txt
+                -DBUILD_PROGRAM=${CMAKE_MAKE_PROGRAM}
+                -DBUILD_ROOT=${CMAKE_CURRENT_BINARY_DIR}
+                -DBUILD_GENERATOR=${CMAKE_GENERATOR}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/WriteSparseEncodeEvidenceSidecar.cmake
+            VERBATIM)
     endif()
 
     add_executable(experiment_leopard ${EXPERIMENT_SOURCE_FILES})

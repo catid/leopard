@@ -19,6 +19,7 @@ import json
 import math
 import os
 import platform
+import shlex
 import shutil
 import socket
 import stat
@@ -40,8 +41,10 @@ SCHEMA = "leopard2-sparse-encode-crossover/v2"
 JOB_SCHEMA = "leopard2-sparse-encode-crossover-job/v2"
 BENCHMARK_SCHEMA = "leopard2-sparse-encode-benchmark-v4"
 ATTESTATION_SCHEMA = "leopard2-benchmark-isolation-attestation/v1"
+LINK_SIDECAR_SCHEMA = "leopard2-sparse-encode-link-sidecar/v1"
 SOURCE_FILES = (
     "CMakeLists.txt",
+    "cmake/WriteSparseEncodeEvidenceSidecar.cmake",
     "LeopardCommon.cpp",
     "LeopardCommon.h",
     "Leopard2Backend.cpp",
@@ -149,6 +152,14 @@ def parse_backends(text: str) -> list[str]:
     if invalid:
         raise CrossoverError(f"unsupported backends: {','.join(invalid)}")
     return result
+
+
+def validate_resume_policy(mode: str, no_resume: bool) -> None:
+    if mode == "pinned" and not no_resume:
+        raise CrossoverError(
+            "pinned evidence requires --no-resume so every retained timing "
+            "belongs to the measured isolation interval"
+        )
 
 
 def allowed_cpus() -> list[int]:
@@ -443,7 +454,116 @@ def file_identity(path: Path) -> dict[str, Any]:
         "path": str(resolved),
         "sha256": digest_bytes(resolved.read_bytes()),
         "size": stat_result.st_size,
+        "mtime_ns": stat_result.st_mtime_ns,
     }
+
+
+def parse_link_sidecar(path: Path) -> dict[str, str]:
+    try:
+        lines = path.read_text(encoding="ascii").splitlines()
+    except (OSError, UnicodeError) as error:
+        raise CrossoverError(f"cannot read build-time link sidecar: {error}") from error
+    values: dict[str, str] = {}
+    for line in lines:
+        if line.count("=") != 1:
+            raise CrossoverError("build-time link sidecar is malformed")
+        key, value = line.split("=", 1)
+        if not key or not value or key in values:
+            raise CrossoverError("build-time link sidecar has invalid fields")
+        values[key] = value
+    expected = {
+        "schema", "executable_sha256", "executable_size",
+        "production_archive_sha256", "production_archive_size",
+        "benchmark_object_sha256", "benchmark_object_size",
+        "oracle_object_sha256", "oracle_object_size", "link_recipe_kind",
+        "benchmark_link_recipe_sha256", "benchmark_link_recipe_size",
+        "production_link_recipe_sha256", "production_link_recipe_size",
+    }
+    if set(values) != expected or values.get("schema") != LINK_SIDECAR_SCHEMA:
+        raise CrossoverError("build-time link sidecar has an unknown schema")
+    for prefix in (
+        "executable", "production_archive", "benchmark_object", "oracle_object"
+    ):
+        digest = values[f"{prefix}_sha256"]
+        size = values[f"{prefix}_size"]
+        if (len(digest) != 64
+                or any(character not in "0123456789abcdef" for character in digest)
+                or not size.isdigit()):
+            raise CrossoverError("build-time link sidecar has invalid artifact identity")
+    if values["link_recipe_kind"] not in (
+        "cmake-link-txt-v1", "ninja-tool-commands-v1", "missing"
+    ):
+        raise CrossoverError("build-time link sidecar has invalid recipe kind")
+    for prefix in ("benchmark_link_recipe", "production_link_recipe"):
+        digest = values[f"{prefix}_sha256"]
+        size = values[f"{prefix}_size"]
+        if (digest, size) == ("missing", "missing"):
+            continue
+        if (len(digest) != 64
+                or any(character not in "0123456789abcdef" for character in digest)
+                or not size.isdigit()):
+            raise CrossoverError("build-time link sidecar has invalid recipe identity")
+    return values
+
+
+def recipe_file_tokens(recipe: bytes, build_root: Path) -> list[Path]:
+    try:
+        tokens = shlex.split(recipe.decode("utf-8"), posix=True)
+    except (UnicodeError, ValueError) as error:
+        raise CrossoverError(f"cannot parse CMake link recipe: {error}") from error
+    result: list[Path] = []
+    for token in tokens:
+        candidate = Path(token)
+        if not candidate.is_absolute():
+            candidate = build_root / candidate
+        try:
+            resolved = candidate.resolve(strict=True)
+        except OSError:
+            continue
+        if resolved.is_file():
+            result.append(resolved)
+    return result
+
+
+def capture_link_recipes(
+    fields: dict[str, str], build_root: Path,
+    benchmark_recipe: Path, production_recipes: list[Path],
+) -> tuple[str, bytes, bytes, dict[str, Any]]:
+    if benchmark_recipe.is_file() and len(production_recipes) == 1:
+        production_recipe = production_recipes[0]
+        benchmark_bytes = benchmark_recipe.read_bytes()
+        production_bytes = production_recipe.read_bytes()
+        return (
+            "cmake-link-txt-v1", benchmark_bytes, production_bytes,
+            {
+                "benchmark": file_identity(benchmark_recipe),
+                "production_archive": file_identity(production_recipe),
+            },
+        )
+    generator = fields.get("CMAKE_GENERATOR", "")
+    make_program = fields.get("CMAKE_MAKE_PROGRAM", "")
+    if "Ninja" not in generator or not make_program:
+        return "missing", b"", b"", {}
+    program = Path(make_program).resolve(strict=True)
+
+    def commands(target: str) -> bytes:
+        completed = subprocess.run(
+            [str(program), "-C", str(build_root), "-t", "commands", target],
+            check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30,
+        )
+        if completed.returncode != 0 or not completed.stdout:
+            raise CrossoverError(
+                f"cannot capture Ninja command graph for {target}: "
+                + completed.stderr.decode("utf-8", errors="replace").strip()
+            )
+        return completed.stdout
+
+    return (
+        "ninja-tool-commands-v1",
+        commands("bench_leopard2_sparse_encode"),
+        commands("leopard"),
+        {"build_program": file_identity(program)},
+    )
 
 
 def build_metadata(executable: Path, source: Path) -> dict[str, Any]:
@@ -466,6 +586,7 @@ def build_metadata(executable: Path, source: Path) -> dict[str, Any]:
         if key in (
             "CMAKE_BUILD_TYPE", "CMAKE_CXX_COMPILER", "CMAKE_CXX_FLAGS",
             "CMAKE_CXX_FLAGS_RELEASE", "CMAKE_HOME_DIRECTORY",
+            "CMAKE_GENERATOR", "CMAKE_MAKE_PROGRAM",
             "LEO2_BACKEND_VARIANT", "LEO2_BUILD_BENCHMARKS",
             "LEOPARD_ENABLE_GF8", "LEOPARD_ENABLE_GF16",
         ):
@@ -480,18 +601,23 @@ def build_metadata(executable: Path, source: Path) -> dict[str, Any]:
         executable.relative_to(build_root)
     except ValueError as error:
         raise CrossoverError("benchmark executable is outside its build root") from error
-    target_dir = build_root / "CMakeFiles" / "bench_leopard2_sparse_encode.dir"
+    benchmark_target_dir = (
+        build_root / "CMakeFiles" / "leopard2_sparse_encode_benchmark_object.dir"
+    )
+    oracle_target_dir = (
+        build_root / "CMakeFiles" / "leopard2_sparse_encode_oracle_object.dir"
+    )
     objects = sorted(
-        list(target_dir.rglob("sparse_encode_benchmark.cpp.o"))
-        + list(target_dir.rglob("sparse_encode_benchmark.cpp.obj"))
+        list(benchmark_target_dir.rglob("sparse_encode_benchmark.cpp.o"))
+        + list(benchmark_target_dir.rglob("sparse_encode_benchmark.cpp.obj"))
     )
     if len(objects) != 1:
         raise CrossoverError(
             "expected exactly one sparse benchmark object in the current build root"
         )
     oracle_objects = sorted(
-        list(target_dir.rglob("direct_oracle.cpp.o"))
-        + list(target_dir.rglob("direct_oracle.cpp.obj"))
+        list(oracle_target_dir.rglob("direct_oracle.cpp.o"))
+        + list(oracle_target_dir.rglob("direct_oracle.cpp.obj"))
     )
     if len(oracle_objects) != 1:
         raise CrossoverError(
@@ -506,17 +632,117 @@ def build_metadata(executable: Path, source: Path) -> dict[str, Any]:
         raise CrossoverError(
             "expected exactly one production leopard archive in the current build root"
         )
+    archive = archives[0].resolve(strict=True)
+    benchmark_recipe = (
+        build_root / "CMakeFiles" / "bench_leopard2_sparse_encode.dir" / "link.txt"
+    )
+    production_recipe_candidates = [
+        build_root / "CMakeFiles" / "leopard.dir" / "link.txt",
+        build_root / "CMakeFiles" / "libleopard.dir" / "link.txt",
+    ]
+    production_recipes = [path for path in production_recipe_candidates if path.is_file()]
+    sidecar_path = Path(str(executable) + ".leopard2-evidence")
+    if not sidecar_path.is_file():
+        raise CrossoverError("build-time sparse evidence sidecar is missing")
+    sidecar = parse_link_sidecar(sidecar_path)
+    executable_identity = file_identity(executable)
+    archive_identity = file_identity(archive)
+    benchmark_objects = [file_identity(objects[0]), file_identity(oracle_objects[0])]
+    if (sidecar["executable_sha256"] != executable_identity["sha256"]
+            or int(sidecar["executable_size"]) != executable_identity["size"]
+            or sidecar["production_archive_sha256"] != archive_identity["sha256"]
+            or int(sidecar["production_archive_size"]) != archive_identity["size"]
+            or sidecar["benchmark_object_sha256"] != benchmark_objects[0]["sha256"]
+            or int(sidecar["benchmark_object_size"]) != benchmark_objects[0]["size"]
+            or sidecar["oracle_object_sha256"] != benchmark_objects[1]["sha256"]
+            or int(sidecar["oracle_object_size"]) != benchmark_objects[1]["size"]):
+        raise CrossoverError("build artifacts differ from their post-link sidecar")
+
+    recipe_kind, benchmark_recipe_bytes, production_recipe_bytes, \
+        recipe_identities = capture_link_recipes(
+            fields, build_root, benchmark_recipe, production_recipes
+        )
+    recipes_attested = recipe_kind != "missing"
+    production_objects: list[dict[str, Any]] = []
+    if recipes_attested:
+        if (sidecar["link_recipe_kind"] != recipe_kind
+                or sidecar["benchmark_link_recipe_sha256"] !=
+                    digest_bytes(benchmark_recipe_bytes)
+                or int(sidecar["benchmark_link_recipe_size"]) !=
+                    len(benchmark_recipe_bytes)
+                or sidecar["production_link_recipe_sha256"] !=
+                    digest_bytes(production_recipe_bytes)
+                or int(sidecar["production_link_recipe_size"]) !=
+                    len(production_recipe_bytes)):
+            raise CrossoverError("link graph differs from its post-link sidecar")
+
+        def command_segments(recipe: bytes) -> list[list[Path]]:
+            segments: list[list[Path]] = []
+            for line in recipe.splitlines():
+                for segment in line.split(b" && "):
+                    tokens = recipe_file_tokens(segment, build_root)
+                    if tokens:
+                        segments.append(tokens)
+            return segments
+
+        required_benchmark_inputs = [objects[0].resolve(), oracle_objects[0].resolve(), archive]
+        benchmark_matches = [
+            tokens for tokens in command_segments(benchmark_recipe_bytes)
+            if executable in tokens
+            and all(tokens.count(path) == 1 for path in required_benchmark_inputs)
+        ]
+        if len(benchmark_matches) != 1:
+            raise CrossoverError(
+                "benchmark link recipe does not bind its two objects and production archive"
+            )
+        production_matches = []
+        for tokens in command_segments(production_recipe_bytes):
+            object_paths = sorted(set(
+                path for path in tokens if path.suffix in (".o", ".obj")
+            ))
+            if tokens.count(archive) == 1 and object_paths:
+                production_matches.append((tokens, object_paths))
+        if len(production_matches) != 1:
+            raise CrossoverError(
+                "production archive recipe does not bind its object graph and output"
+            )
+        object_paths = production_matches[0][1]
+        production_objects = [file_identity(path) for path in object_paths]
+        if archive_identity["mtime_ns"] < max(
+            identity["mtime_ns"] for identity in production_objects
+        ):
+            raise CrossoverError("production archive is older than a recipe-bound object")
+    elif sidecar["link_recipe_kind"] != "missing" or any(
+        sidecar[name] != "missing" for name in (
+        "benchmark_link_recipe_sha256", "benchmark_link_recipe_size",
+        "production_link_recipe_sha256", "production_link_recipe_size",
+    )):
+        raise CrossoverError("post-link sidecar names a link recipe that is now missing")
+
+    newest_direct_input = max(
+        [archive_identity["mtime_ns"]]
+        + [identity["mtime_ns"] for identity in benchmark_objects]
+    )
+    if executable_identity["mtime_ns"] < newest_direct_input:
+        raise CrossoverError("benchmark executable is older than a direct link input")
     return {
         "build_root": str(build_root),
         "cmake_cache": {
             "path": str(cache.resolve()), "sha256": digest_bytes(data),
             "selected_fields": fields,
         },
-        "executable": file_identity(executable),
+        "executable": executable_identity,
+        "link_graph_attested": recipes_attested,
+        "link_recipes": recipe_identities,
+        "post_link_sidecar": {
+            "file": file_identity(sidecar_path),
+            "values": sidecar,
+        },
         "linked_inputs": {
-            "benchmark_object": file_identity(objects[0]),
-            "direct_oracle_object": file_identity(oracle_objects[0]),
-            "production_archive": file_identity(archives[0]),
+            "benchmark_object": benchmark_objects[0],
+            "direct_oracle_object": benchmark_objects[1],
+            "production_archive": archive_identity,
+            "production_objects": production_objects,
         },
     }
 
@@ -1059,29 +1285,46 @@ def run_job(
         command = [taskset, "-c", str(manifest["pin_cpu"]), *command]
     environment = os.environ.copy()
     environment.update(OMP_DYNAMIC="FALSE", OMP_NUM_THREADS="1")
-    completed = subprocess.run(
-        command, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        timeout=timeout, env=environment,
-    )
+    invocation_error = None
+    try:
+        completed = subprocess.run(
+            command, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            timeout=timeout, env=environment,
+        )
+        returncode = completed.returncode
+        stdout_bytes = completed.stdout
+        stderr_bytes = completed.stderr
+    except subprocess.TimeoutExpired as caught:
+        returncode = None
+        stdout_bytes = caught.stdout or b""
+        stderr_bytes = caught.stderr or b""
+        invocation_error = f"benchmark timed out after {timeout} seconds"
+    except OSError as caught:
+        returncode = None
+        stdout_bytes = b""
+        stderr_bytes = str(caught).encode("utf-8", errors="replace")
+        invocation_error = f"cannot execute benchmark: {caught}"
     validate_static_identity(manifest)
     stdout_relative = f"jobs/{job['job_id']}.stdout"
     stderr_relative = f"jobs/{job['job_id']}.stderr"
-    atomic_write(result_dir / stdout_relative, completed.stdout)
-    atomic_write(result_dir / stderr_relative, completed.stderr)
+    atomic_write(result_dir / stdout_relative, stdout_bytes)
+    atomic_write(result_dir / stderr_relative, stderr_bytes)
     benchmark = None
     error = None
     status = "failed"
-    if completed.returncode == 0:
+    if returncode == 0:
         try:
-            benchmark = json.loads(completed.stdout.decode("utf-8"))
+            benchmark = json.loads(stdout_bytes.decode("utf-8"))
             validate_benchmark_result(
                 benchmark, job["cell"], manifest["settings"], manifest["git"], executable
             )
             status = "passed"
         except (UnicodeError, ValueError, CrossoverError) as caught:
             error = str(caught)
+    elif invocation_error is not None:
+        error = invocation_error
     else:
-        error = f"benchmark exited {completed.returncode}"
+        error = f"benchmark exited {returncode}"
     result = {
         "benchmark": benchmark,
         "cell": job["cell"],
@@ -1089,13 +1332,13 @@ def run_job(
         "configuration_id": manifest["configuration_id"],
         "error": error,
         "job_id": job["job_id"],
-        "returncode": completed.returncode,
+        "returncode": returncode,
         "schema": JOB_SCHEMA,
         "status": status,
         "stderr_path": stderr_relative,
-        "stderr_sha256": digest_bytes(completed.stderr),
+        "stderr_sha256": digest_bytes(stderr_bytes),
         "stdout_path": stdout_relative,
-        "stdout_sha256": digest_bytes(completed.stdout),
+        "stdout_sha256": digest_bytes(stdout_bytes),
     }
     atomic_write_json(result_path, result)
     return result
@@ -1235,6 +1478,9 @@ def summarize_jobs(jobs: list[dict[str, Any]], reuse: list[int]) -> dict[str, An
             ],
             "passed": complete and bool(candidate_wins) and not suspicious_neighbors
                 and not credible_regressions,
+            "production_promotion_sufficient": False,
+            "scope": "preliminary kernel evidence only; neighboring K/R and "
+                "end-to-end public encoder gates remain external",
             "primary_only": "call-local exact versus prefix paired log contrast; "
                 "prepared and modeled metrics excluded",
             "rule": "at least one sparse lower 95% Student-t bound >=5%; "
@@ -1334,6 +1580,7 @@ def _run_matrix_impl(
     taskset: str | None = None
     attestation = None
     state = git_state(source)
+    validate_resume_policy(arguments.command, arguments.no_resume)
     if arguments.command == "pinned":
         if state["dirty"]:
             raise CrossoverError("pinned evidence requires a clean source tree")
@@ -1381,6 +1628,13 @@ def _run_matrix_impl(
         source, executable, arguments.command, cells, settings,
         pin_cpu, attestation, protected_isolation, cpus,
     )
+    if arguments.command == "pinned" and not manifest[
+        "build_metadata"
+    ].get("link_graph_attested"):
+        raise CrossoverError(
+            "pinned evidence requires a generator-specific link graph bound "
+            "by the post-link sidecar"
+        )
     require_compatible_directory(result_dir, manifest)
     atomic_write_json(result_dir / "manifest.json", manifest)
     expected_job_ids = {job["job_id"] for job in manifest["jobs"]}
@@ -1622,6 +1876,14 @@ def self_test() -> int:
         raise CrossoverError("cell generation is not deterministic")
     if parse_csv_unsigned("64,1,8", "reuse", 100) != [1, 8, 64]:
         raise CrossoverError("numeric list normalization failed")
+    validate_resume_policy("screen", False)
+    validate_resume_policy("pinned", True)
+    try:
+        validate_resume_policy("pinned", False)
+    except CrossoverError:
+        pass
+    else:
+        raise CrossoverError("pinned timing reuse was accepted")
     idle_snapshot = {"cpu": 8, "fields": [0] * 8}
     idle_after = {"cpu": 8, "fields": [0, 0, 0, 10, 0, 0, 0, 0]}
     one_busy_jiffy = {"cpu": 8, "fields": [1, 0, 0, 10, 0, 0, 0, 0]}
@@ -1687,31 +1949,107 @@ def self_test() -> int:
     with tempfile.TemporaryDirectory(prefix="leopard2-sparse-build-id-") as directory:
         fixture = Path(directory).resolve()
         fixture_source = fixture / "source"
-        fixture_build = fixture / "build"
         fixture_source.mkdir()
-        target = fixture_build / "CMakeFiles/bench_leopard2_sparse_encode.dir"
-        (target / "bench/leopard2").mkdir(parents=True)
-        (target / "tests/leopard2").mkdir(parents=True)
-        fixture_executable = fixture_build / "bench_leopard2_sparse_encode"
-        fixture_executable.write_bytes(b"executable")
-        (fixture_build / "libleopard.a").write_bytes(b"archive")
-        (target / "bench/leopard2/sparse_encode_benchmark.cpp.o").write_bytes(
-            b"benchmark object"
-        )
-        oracle_object = target / "tests/leopard2/direct_oracle.cpp.o"
-        oracle_object.write_bytes(b"oracle object")
-        (fixture_build / "CMakeCache.txt").write_text(
-            "CMAKE_HOME_DIRECTORY:INTERNAL=" + str(fixture_source) + "\n"
-            "CMAKE_BUILD_TYPE:STRING=Release\n"
-            "LEO2_BUILD_BENCHMARKS:BOOL=ON\n",
-            encoding="utf-8",
-        )
-        build_before = build_metadata(fixture_executable, fixture_source)
-        oracle_object.write_bytes(b"mutated oracle object")
-        if build_metadata(fixture_executable, fixture_source) == build_before:
-            raise CrossoverError("build identity ignored an object mutation")
+        def make_build(name: str) -> dict[str, Path]:
+            fixture_build = fixture / name
+            benchmark_target = fixture_build / (
+                "CMakeFiles/leopard2_sparse_encode_benchmark_object.dir/"
+                "bench/leopard2"
+            )
+            oracle_target = fixture_build / (
+                "CMakeFiles/leopard2_sparse_encode_oracle_object.dir/tests/leopard2"
+            )
+            production_target = fixture_build / "CMakeFiles/leopard.dir"
+            link_target = fixture_build / "CMakeFiles/bench_leopard2_sparse_encode.dir"
+            for path in (benchmark_target, oracle_target, production_target, link_target):
+                path.mkdir(parents=True)
+            paths = {
+                "executable": fixture_build / "bench_leopard2_sparse_encode",
+                "archive": fixture_build / "libleopard.a",
+                "benchmark_object": benchmark_target /
+                    "sparse_encode_benchmark.cpp.o",
+                "oracle_object": oracle_target / "direct_oracle.cpp.o",
+                "production_object": production_target / "leopard2.cpp.o",
+                "benchmark_recipe": link_target / "link.txt",
+                "production_recipe": production_target / "link.txt",
+            }
+            paths["benchmark_object"].write_bytes(b"benchmark object")
+            paths["oracle_object"].write_bytes(b"oracle object")
+            paths["production_object"].write_bytes(b"production object")
+            paths["archive"].write_bytes(b"archive")
+            paths["executable"].write_bytes(b"executable")
+            paths["benchmark_recipe"].write_text(
+                "cc {} {} -o {} {}\n".format(
+                    paths["benchmark_object"], paths["oracle_object"],
+                    paths["executable"], paths["archive"]
+                ), encoding="utf-8",
+            )
+            paths["production_recipe"].write_text(
+                "ar qc {} {}\n".format(
+                    paths["archive"], paths["production_object"]
+                ), encoding="utf-8",
+            )
+            (fixture_build / "CMakeCache.txt").write_text(
+                "CMAKE_HOME_DIRECTORY:INTERNAL=" + str(fixture_source) + "\n"
+                "CMAKE_BUILD_TYPE:STRING=Release\n"
+                "CMAKE_GENERATOR:INTERNAL=Unix Makefiles\n"
+                "LEO2_BUILD_BENCHMARKS:BOOL=ON\n",
+                encoding="utf-8",
+            )
+            sidecar = Path(str(paths["executable"]) + ".leopard2-evidence")
+            identities = {
+                key: file_identity(paths[key])
+                for key in (
+                    "executable", "archive", "benchmark_object", "oracle_object",
+                    "benchmark_recipe", "production_recipe",
+                )
+            }
+            sidecar.write_text(
+                "schema=" + LINK_SIDECAR_SCHEMA + "\n"
+                "executable_sha256=" + identities["executable"]["sha256"] + "\n"
+                "executable_size=" + str(identities["executable"]["size"]) + "\n"
+                "production_archive_sha256=" + identities["archive"]["sha256"] + "\n"
+                "production_archive_size=" + str(identities["archive"]["size"]) + "\n"
+                "benchmark_object_sha256=" +
+                    identities["benchmark_object"]["sha256"] + "\n"
+                "benchmark_object_size=" +
+                    str(identities["benchmark_object"]["size"]) + "\n"
+                "oracle_object_sha256=" + identities["oracle_object"]["sha256"] + "\n"
+                "oracle_object_size=" + str(identities["oracle_object"]["size"]) + "\n"
+                "link_recipe_kind=cmake-link-txt-v1\n"
+                "benchmark_link_recipe_sha256=" +
+                    identities["benchmark_recipe"]["sha256"] + "\n"
+                "benchmark_link_recipe_size=" +
+                    str(identities["benchmark_recipe"]["size"]) + "\n"
+                "production_link_recipe_sha256=" +
+                    identities["production_recipe"]["sha256"] + "\n"
+                "production_link_recipe_size=" +
+                    str(identities["production_recipe"]["size"]) + "\n",
+                encoding="ascii",
+            )
+            paths["sidecar"] = sidecar
+            return paths
+
+        pristine_paths = make_build("pristine")
+        build_metadata(pristine_paths["executable"], fixture_source)
+
+        def reject_build_mutation(name: str, key: str, value: bytes) -> None:
+            paths = make_build(name)
+            paths[key].write_bytes(value)
+            try:
+                build_metadata(paths["executable"], fixture_source)
+            except CrossoverError:
+                return
+            raise CrossoverError(f"build identity accepted a mutated {key}")
+
+        reject_build_mutation("bad-oracle", "oracle_object", b"mutated oracle")
+        reject_build_mutation("bad-benchmark", "benchmark_object", b"mutated benchmark")
+        reject_build_mutation("bad-archive", "archive", b"unrelated archive")
+        reject_build_mutation("bad-executable", "executable", b"manual relink")
+        reject_build_mutation("bad-link", "benchmark_recipe", b"cc unrelated.a\n")
+        reject_build_mutation("bad-archive-link", "production_recipe", b"ar unrelated.a\n")
         try:
-            build_metadata(fixture_executable, fixture / "other-source")
+            build_metadata(pristine_paths["executable"], fixture / "other-source")
         except CrossoverError:
             pass
         else:
@@ -1966,7 +2304,7 @@ def self_test() -> int:
         else:
             raise CrossoverError("rehashing a runtime-affinity mutation was accepted")
 
-    print("PASS sparse encode crossover self-test cells=48 identity_mutations=18")
+    print("PASS sparse encode crossover self-test cells=48 identity_mutations=23")
     return 0
 
 

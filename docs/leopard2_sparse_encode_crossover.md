@@ -85,10 +85,15 @@ The runner fails closed:
   the CMake cache, production archive/object inputs, and executable;
 - job IDs and merged ordering are deterministic;
 - stdout and stderr are retained and hashed for every job;
-- resume rejects stale configurations, path escapes, modified artifacts, and
-  artifacts from a different current root;
+- screen resume rejects stale configurations, path escapes, modified artifacts,
+  and artifacts from a different current root; pinned evidence deliberately
+  requires a fresh `--no-resume` run so old timing samples cannot be certified
+  by a later idle isolation interval;
 - source, archive/object, executable, and runtime identity are checked before
-  every retained invocation and rechecked after the run;
+  every retained invocation and rechecked after the run; a CMake post-link
+  sidecar binds the executable, production archive, benchmark object, and
+  oracle object hashes, while `link.txt` recipes or the exact Ninja command
+  graph bind the object and archive edges;
 - every benchmark result must report the Git SHA and dirty state embedded at
   CMake configure time;
 - benchmark-v4 must report that its linked library has no test hooks;
@@ -163,6 +168,7 @@ matrix with an attestation covering the complete sibling set:
       --backends avx2 \
       --cpu 16 \
       --workers 1 \
+      --no-resume \
       --isolation-attestation /absolute/path/isolation.json
 
 Revalidate and summarize retained artifacts without rerunning jobs:
@@ -182,3 +188,10 @@ dense/prefix negative controls show no implausible blanket speedup, no
 unexplained neighboring regression exceeds 2%, and the end-to-end public encoder
 confirms the gain. Prepared-only wins do not justify promotion when call-local
 setup erases them; they instead motivate a separate reusable encode-plan design.
+
+The JSON `promotion_gate` is deliberately only a preliminary kernel-evidence
+screen. Its dense/prefix controls are a conservative veto for an unexplained
+blanket advantage; a real control win must be investigated rather than assumed
+to be bias. The fixed matrix does not itself cover neighboring K/R values, and
+the gate explicitly reports `production_promotion_sufficient=false`. Production
+selection still requires neighboring-regime and public-encoder evidence.

@@ -111,6 +111,23 @@ if(NOT benchmark_count EQUAL 1)
         "expected one sparse benchmark executable, found ${benchmark_count}")
 endif()
 list(GET benchmark_candidates 0 benchmark)
+set(evidence_sidecar "${benchmark}.leopard2-evidence")
+if(NOT EXISTS "${evidence_sidecar}")
+    message(FATAL_ERROR "sparse benchmark omitted its post-link evidence sidecar")
+endif()
+file(READ "${evidence_sidecar}" evidence_sidecar_text)
+foreach(required_sidecar_text
+    "schema=leopard2-sparse-encode-link-sidecar/v1"
+    "benchmark_object_sha256="
+    "oracle_object_sha256="
+    "production_archive_sha256=")
+    string(FIND "${evidence_sidecar_text}" "${required_sidecar_text}"
+        sidecar_position)
+    if(sidecar_position EQUAL -1)
+        message(FATAL_ERROR
+            "sparse evidence sidecar omitted '${required_sidecar_text}'")
+    endif()
+endforeach()
 execute_process(
     COMMAND "${CMAKE_COMMAND}" -E env
         OMP_DYNAMIC=FALSE OMP_NUM_THREADS=1
