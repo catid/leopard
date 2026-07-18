@@ -32,6 +32,7 @@
 #include "LeopardFF16.h"
 #include "leopard.h"
 #include "leopard2.h"
+#include "allocation_audit_config.h"
 
 #include <algorithm>
 #include <atomic>
@@ -47,6 +48,7 @@
 #include <malloc.h>
 #endif
 
+#if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
 static std::atomic<bool> gTrackAllocations(false);
 static std::atomic<uint64_t> gTrackedAllocations(0);
 
@@ -117,6 +119,25 @@ LEO2_TEST_NOINLINE void operator delete[](
 }
 
 #undef LEO2_TEST_NOINLINE
+#endif
+
+static void BeginAllocationAudit()
+{
+#if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
+    gTrackedAllocations.store(0, std::memory_order_relaxed);
+    gTrackAllocations.store(true, std::memory_order_release);
+#endif
+}
+
+static uint64_t EndAllocationAudit()
+{
+#if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
+    gTrackAllocations.store(false, std::memory_order_release);
+    return gTrackedAllocations.load(std::memory_order_relaxed);
+#else
+    return 0;
+#endif
+}
 
 namespace {
 
@@ -549,15 +570,18 @@ static void CheckPublicPlanReuseAndAllocation()
             originals.data() + static_cast<size_t>(i) * kBytes, kBytes) == 0,
             "warm decode output mismatch");
 
-    gTrackedAllocations.store(0, std::memory_order_relaxed);
-    gTrackAllocations.store(true, std::memory_order_release);
+    BeginAllocationAudit();
     const leo2_result allocation_result = leo2_decode_plan_execute(
         objects.plan, kBytes, &decode_original[0], &decode_recovery[0],
         &warmup.restored[0], warmup.scratch.data(), warmup.scratch.size());
-    gTrackAllocations.store(false, std::memory_order_release);
+    const uint64_t execution_allocations = EndAllocationAudit();
     RequireResult(allocation_result, "allocation-trapped decode execute");
-    Require(gTrackedAllocations.load(std::memory_order_relaxed) == 0,
+#if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
+    Require(execution_allocations == 0,
         "decode execution allocated C++ storage");
+#else
+    (void)execution_allocations;
+#endif
 
     const unsigned worker_count = 8;
     std::vector<ConcurrentInvocation*> invocations(worker_count, NULL);
@@ -1040,7 +1064,12 @@ int main()
               << kernel_slots << " concurrent_plan_executions=128"
               << " dependency_builder_contract_cases=" << builder_contract_cases
               << " concurrent_dependency_builds=" << concurrent_builds
-              << " execution_cpp_allocations=0 gf16_max_schedule_bytes=2736"
+#if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
+              << " execution_cpp_allocations=0"
+#else
+              << " execution_cpp_allocations=not-audited-thread-sanitizer"
+#endif
+              << " gf16_max_schedule_bytes=2736"
               << " low_pruned_full_butterflies="
               << low_pruned_full_butterflies
               << " low_pruned_retained_operations="

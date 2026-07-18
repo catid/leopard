@@ -32,6 +32,7 @@
 #include "direct_oracle.h"
 #include "leopard.h"
 #include "leopard2.h"
+#include "allocation_audit_config.h"
 
 #include <algorithm>
 #include <atomic>
@@ -52,6 +53,7 @@
 #error "The direct-encode test requires LEO2_ENABLE_TEST_HOOKS"
 #endif
 
+#if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
 static std::atomic<bool> g_track_allocations(false);
 static std::atomic<uint64_t> g_tracked_allocations(0);
 
@@ -101,6 +103,25 @@ LEO2_TEST_NOINLINE void operator delete[](void* pointer, const std::nothrow_t&) 
 }
 
 #undef LEO2_TEST_NOINLINE
+#endif
+
+static void begin_allocation_audit()
+{
+#if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
+    g_tracked_allocations.store(0, std::memory_order_relaxed);
+    g_track_allocations.store(true, std::memory_order_release);
+#endif
+}
+
+static uint64_t end_allocation_audit()
+{
+#if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
+    g_track_allocations.store(false, std::memory_order_release);
+    return g_tracked_allocations.load(std::memory_order_relaxed);
+#else
+    return 0;
+#endif
+}
 
 namespace {
 
@@ -1045,34 +1066,40 @@ void test_tail_allocation_and_contracts(
             owner->codec, c.bytes, &scratch_bytes), "tail scratch query");
         AlignedBuffer scratch(scratch_bytes);
 
-        g_tracked_allocations.store(0, std::memory_order_relaxed);
-        g_track_allocations.store(true, std::memory_order_release);
+        begin_allocation_audit();
         const leo2_result result = leo2_encode(owner->codec, c.bytes, &input[0],
             &recovery[0], scratch.data(), scratch.size());
-        g_track_allocations.store(false, std::memory_order_release);
+        const uint64_t direct_allocations = end_allocation_audit();
         require_result(result, "allocation-trapped tail encode");
-        require(g_tracked_allocations.load(std::memory_order_relaxed) == 0,
+#if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
+        require(direct_allocations == 0,
             "direct encode allocated C++ storage");
-        require(output == expected, "tail direct encode differs from oracle");
         ++counts->allocation_checks;
+#else
+        (void)direct_allocations;
+#endif
+        require(output == expected, "tail direct encode differs from oracle");
 
         require_result(leo2_test_codec_set_encode_mode(owner->codec,
             LEO2_TEST_ENCODE_FORCE_TRANSFORM), "force transform tail");
         output.assign(c.r, Bytes(c.bytes, 0xa5));
         for (unsigned i = 0; i < c.r; ++i)
             recovery[i] = &output[i][0];
-        g_tracked_allocations.store(0, std::memory_order_relaxed);
-        g_track_allocations.store(true, std::memory_order_release);
+        begin_allocation_audit();
         const leo2_result transform_result = leo2_encode(
             owner->codec, c.bytes, &input[0], &recovery[0],
             scratch.data(), scratch.size());
-        g_track_allocations.store(false, std::memory_order_release);
+        const uint64_t transform_allocations = end_allocation_audit();
         require_result(transform_result, "allocation-trapped transform tail encode");
-        require(g_tracked_allocations.load(std::memory_order_relaxed) == 0,
+#if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
+        require(transform_allocations == 0,
             "transform tail encode allocated C++ storage");
+        ++counts->allocation_checks;
+#else
+        (void)transform_allocations;
+#endif
         require(output == expected,
             "tail transform encode differs from direct generator oracle");
-        ++counts->allocation_checks;
 
         std::vector<uint8_t> subset(c.r, 0);
         subset[0] = subset[c.r / 2] = subset[c.r - 1] = 1;
@@ -1081,19 +1108,22 @@ void test_tail_allocation_and_contracts(
         for (unsigned i = 0; i < c.r; ++i)
             if (subset[i])
                 recovery[i] = &output[i][0];
-        g_tracked_allocations.store(0, std::memory_order_relaxed);
-        g_track_allocations.store(true, std::memory_order_release);
+        begin_allocation_audit();
         const leo2_result sparse_transform_result = leo2_encode(
             owner->codec, c.bytes, &input[0], &recovery[0],
             scratch.data(), scratch.size());
-        g_track_allocations.store(false, std::memory_order_release);
+        const uint64_t sparse_transform_allocations = end_allocation_audit();
         require_result(sparse_transform_result,
             "allocation-trapped sparse transform encode");
-        require(g_tracked_allocations.load(std::memory_order_relaxed) == 0,
+#if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
+        require(sparse_transform_allocations == 0,
             "sparse transform encode allocated C++ storage");
+        ++counts->allocation_checks;
+#else
+        (void)sparse_transform_allocations;
+#endif
         compare_requested(output, expected, subset, 0xa5,
             "allocation-trapped sparse transform/oracle", counts);
-        ++counts->allocation_checks;
 
         const EncodeResult transform_subset = encode(
             owner->codec, LEO2_TEST_ENCODE_FORCE_TRANSFORM,
@@ -1446,7 +1476,13 @@ int main()
                   << " batch_executions=" << counts.batch_executions
                   << " no_copy_checks=" << counts.no_copy_checks
                   << " high_source_staging_checks="
-                  << counts.high_source_staging_checks << std::endl;
+                  << counts.high_source_staging_checks
+#if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
+                  << " allocation_audit=enabled"
+#else
+                  << " allocation_audit=disabled-thread-sanitizer"
+#endif
+                  << std::endl;
         return 0;
     }
     catch (const std::exception& error)

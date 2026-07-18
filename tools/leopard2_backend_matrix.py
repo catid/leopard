@@ -167,6 +167,7 @@ SOURCE_FILES = (
     "leopard.h",
     "leopard2.cpp",
     "leopard2.h",
+    "tests/leopard2/allocation_audit_config.h",
     "tests/leopard2/test_legacy_golden.cpp",
     "tests/leopard2/test_backend_failures.cpp",
     "tests/leopard2/test_backend_ops.cpp",
