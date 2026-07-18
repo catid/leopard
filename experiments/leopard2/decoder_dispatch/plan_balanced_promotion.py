@@ -707,7 +707,8 @@ def _validate_scope_build(build: object, role: str) -> dict[str, Any]:
         *(f"{implementation_source}/{name}" for name in library_sources),
         "$CANDIDATE_SOURCE" + benchmark_suffix,
     ])
-    require(sources == expected_sources,
+    require(len(sources) == len(expected_sources) and
+            set(sources) == set(expected_sources),
             f"{role} normalized translation-unit set differs from the producer")
     benchmark_pairs = [
         pair for pair in semantics["required_source_object_pairs"]
@@ -2811,6 +2812,18 @@ def self_test() -> None:
                     ("scalar", "ssse3") and
                 forced_backends_for_scope(fake_evidence_scope("avx2")) == BACKENDS,
                 "forced backend prefix does not match resolved AUTO tier")
+        reordered_scope = json.loads(json.dumps(fake_evidence_scope()))
+        baseline_semantics = reordered_scope["builds"]["baseline"][
+            "validated_compile_commands"]
+        baseline_pairs = baseline_semantics["required_source_object_pairs"]
+        benchmark_pair = next(pair for pair in baseline_pairs
+                              if pair["source"]["path"].endswith(
+                                  "/legacy_main_benchmark.cpp"))
+        baseline_pairs.remove(benchmark_pair)
+        baseline_pairs.insert(0, benchmark_pair)
+        baseline_semantics["required_sources"] = [
+            pair["source"]["path"] for pair in baseline_pairs]
+        validate_evidence_scope(reordered_scope)
 
         def reject_scope_mutation(label: str, mutate) -> None:
             forged_scopes = json.loads(json.dumps(scopes))
