@@ -968,15 +968,18 @@ leo2_codec* make_flagged_codec(
 void run_low_reveal_fusion_case(
     leo2_context* context,
     leo2_field field,
-    uint32_t workspace_flag,
+    uint32_t codec_flags,
     size_t bytes,
     unsigned missing_count)
 {
-    const unsigned k = 8;
-    const unsigned r = 16;
+    // K > the direct-repair limit ensures that the one-loss AUTO case reaches
+    // Algorithm 4 instead of the small matrix solver.  K is also the complete
+    // padded side, so the dense case covers the full final transform while the
+    // one-loss case covers the C1-pruned final-output schedule.
+    const unsigned k = 32;
+    const unsigned r = 33;
     leo2_codec* codec = make_flagged_codec(context, k, r,
-        LEO2_PROFILE_LOW_V1, field,
-        LEO2_CODEC_FORCE_SPECIALIZED_DECODE | workspace_flag);
+        LEO2_PROFILE_LOW_V1, field, codec_flags);
     const Shards source = make_originals(k, bytes,
         UINT64_C(0x89ef342100000000) + bytes + field + missing_count);
     const Shards parity = encode_new(codec, source, bytes);
@@ -1010,8 +1013,11 @@ void run_low_reveal_fusion_case(
         require(memcmp(&restored[i][1], &source[i][0], bytes) == 0,
             "low reveal decode output mismatch");
 
-    const uint64_t expected_direct = bytes >= 64 ? missing_count : 0;
-    const uint64_t expected_scratch = (bytes & 63u) != 0 ? missing_count : 0;
+    const size_t aligned_prefix = bytes & ~static_cast<size_t>(63u);
+    const uint64_t expected_direct =
+        aligned_prefix != 0 ? missing_count : 0;
+    const uint64_t expected_scratch =
+        (bytes & 63u) != 0 ? missing_count : 0;
     require(leo2_test_low_direct_reveal_shards() == expected_direct,
         "low direct reveal counter disagrees with complete-tile policy");
     require(leo2_test_low_scratch_reveal_shards() == expected_scratch,
@@ -1023,30 +1029,32 @@ void run_low_reveal_fusion_case(
 
 void test_low_reveal_fusion(leo2_context* context)
 {
-    const uint32_t workspace_flags[] = {
-        LEO2_CODEC_FORCE_TILED_DECODE,
-        LEO2_CODEC_FORCE_MATERIALIZED_DECODE
+    const uint32_t codec_flags[] = {
+        0,
+        LEO2_CODEC_FORCE_SPECIALIZED_DECODE |
+            LEO2_CODEC_FORCE_TILED_DECODE,
+        LEO2_CODEC_FORCE_SPECIALIZED_DECODE |
+            LEO2_CODEC_FORCE_MATERIALIZED_DECODE
     };
-    for (size_t workspace = 0;
-         workspace < sizeof(workspace_flags) / sizeof(workspace_flags[0]);
-         ++workspace)
+    for (size_t mode = 0;
+         mode < sizeof(codec_flags) / sizeof(codec_flags[0]); ++mode)
     {
-        const unsigned losses[] = { 1, 8 };
+        const unsigned losses[] = { 1, 32 };
         for (size_t loss = 0; loss < sizeof(losses) / sizeof(losses[0]); ++loss)
         {
             run_low_reveal_fusion_case(context, LEO2_FIELD_GF8,
-                workspace_flags[workspace], 17, losses[loss]);
+                codec_flags[mode], 17, losses[loss]);
             run_low_reveal_fusion_case(context, LEO2_FIELD_GF8,
-                workspace_flags[workspace], 64, losses[loss]);
+                codec_flags[mode], 64, losses[loss]);
             run_low_reveal_fusion_case(context, LEO2_FIELD_GF8,
-                workspace_flags[workspace], 65, losses[loss]);
+                codec_flags[mode], 65, losses[loss]);
 #ifdef LEO_HAS_FF16
             run_low_reveal_fusion_case(context, LEO2_FIELD_GF16,
-                workspace_flags[workspace], 34, losses[loss]);
+                codec_flags[mode], 34, losses[loss]);
             run_low_reveal_fusion_case(context, LEO2_FIELD_GF16,
-                workspace_flags[workspace], 64, losses[loss]);
+                codec_flags[mode], 64, losses[loss]);
             run_low_reveal_fusion_case(context, LEO2_FIELD_GF16,
-                workspace_flags[workspace], 66, losses[loss]);
+                codec_flags[mode], 66, losses[loss]);
 #endif
         }
     }
