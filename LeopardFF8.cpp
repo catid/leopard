@@ -3009,15 +3009,14 @@ void ReedSolomonDecodeLowPrepared(
     AddFormalDerivative(ops, buffer_bytes, p, work);
 
     // Weighted block reduction by c_k / s_k(omega_(block*P)).
+    // Each source block is dead after this reduction, so accumulate the
+    // scaled value directly instead of scaling and XORing in two memory passes.
     for (unsigned block = 1; block < block_count; ++block)
     {
         const unsigned offset = block * p;
         for (unsigned i = 0; i < p; ++i)
-        {
-            mul_mem_inplace(
-                ops, work[offset + i], block_factors[block - 1], buffer_bytes);
-            xor_mem(ops, work[i], work[offset + i], buffer_bytes);
-        }
+            muladd_mem(ops, work[i], work[offset + i],
+                block_factors[block - 1], buffer_bytes);
     }
 
 #ifdef LEO_ERROR_BITFIELD_OPT
@@ -3115,17 +3114,15 @@ void ReedSolomonDecodeLowPrunedPlanned(
 
     AddFormalDerivative(ops, buffer_bytes, p, work);
 
+    // The transformed nonzero block is dead after its weighted contribution.
     for (unsigned block = 1; block < block_count; ++block)
     {
         if (block_input_counts[block] == 0)
             continue;
         const unsigned offset = block * p;
         for (unsigned i = 0; i < p; ++i)
-        {
-            mul_mem_inplace(
-                ops, work[offset + i], block_factors[block - 1], buffer_bytes);
-            xor_mem(ops, work[i], work[offset + i], buffer_bytes);
-        }
+            muladd_mem(ops, work[i], work[offset + i],
+                block_factors[block - 1], buffer_bytes);
     }
 
     if (output_plan && output_plan->size != 0)
@@ -3265,6 +3262,7 @@ void ReedSolomonDecodeLowTiledPrunedPlanned(
 
     AddFormalDerivative(ops, buffer_bytes, p, accumulator);
 
+    // Reuse the tile as an immutable multiply-add source for one memory pass.
     for (unsigned block = 1; block < block_count; ++block)
     {
         const unsigned input_count = block_input_counts[block];
@@ -3304,11 +3302,8 @@ void ReedSolomonDecodeLowTiledPrunedPlanned(
                 ops, buffer_bytes, input_count, tile, p,
                 FFTSkewStorage + offset);
         for (unsigned i = 0; i < p; ++i)
-        {
-            mul_mem_inplace(
-                ops, tile[i], block_factors[block - 1], buffer_bytes);
-            xor_mem(ops, accumulator[i], tile[i], buffer_bytes);
-        }
+            muladd_mem(ops, accumulator[i], tile[i],
+                block_factors[block - 1], buffer_bytes);
     }
     LEO_DEBUG_ASSERT(input_plan_index == input_plan_count);
 

@@ -109,6 +109,24 @@ def verify_high_decode_no_copy_source(source: str, label: str) -> None:
         )
 
 
+def verify_low_decode_weighted_fusion_source(source: str, label: str) -> None:
+    """Require Algorithm 4's weighted reduction to use one mul-add pass."""
+    compact = re.sub(r"\s+", "", source)
+    materialized = (
+        "muladd_mem(ops,work[i],work[offset+i],"
+        "block_factors[block-1],buffer_bytes);"
+    )
+    tiled = (
+        "muladd_mem(ops,accumulator[i],tile[i],"
+        "block_factors[block-1],buffer_bytes);"
+    )
+    if compact.count(materialized) < 2 or tiled not in compact:
+        raise ModelError(
+            "{} no longer fuses every Algorithm 4 weighted block reduction "
+            "into multiply-add".format(label)
+        )
+
+
 @dataclass(frozen=True)
 class Metric:
     value: object
@@ -134,6 +152,7 @@ class Schedule:
     radix2_layers: int = 0
     nontransform_xor_vectors: int = 0
     fixed_multiply_vectors: int = 0
+    fused_multiply_add_vectors: int = 0
     copies: int = 0
     zero_fills: int = 0
     api_scratch_slots: int = 0
@@ -573,6 +592,7 @@ def model_low_decode(
     reduction = (parent // padded - 1) * padded
     schedule.fixed_multiply_vectors += reduction
     schedule.nontransform_xor_vectors += reduction
+    schedule.fused_multiply_add_vectors += reduction
     schedule.add_transform(
         fft_mask_butterflies(padded, set(losses)), _transform_layers(padded)
     )
@@ -581,6 +601,7 @@ def model_low_decode(
         "block_input_prefixes": prefixes,
         "derivative_xor_vectors": derivative,
         "weighted_reduction_vectors": reduction,
+        "fused_weighted_multiply_add_vectors": reduction,
     })
     return schedule
 
@@ -740,6 +761,7 @@ def schedule_metrics(
             + 2 * schedule.nontransform_xor_vectors
             + schedule.fixed_multiply_vectors
             + schedule.copies
+            - schedule.fused_multiply_add_vectors
         )
         writes_lower = (
             2 * schedule.butterflies
@@ -747,12 +769,14 @@ def schedule_metrics(
             + schedule.fixed_multiply_vectors
             + schedule.copies
             + schedule.zero_fills
+            - schedule.fused_multiply_add_vectors
         )
         reads_upper = (
             4 * schedule.butterflies
             + 2 * schedule.nontransform_xor_vectors
             + schedule.fixed_multiply_vectors
             + schedule.copies
+            - schedule.fused_multiply_add_vectors
         )
         writes_upper = writes_lower
     else:
@@ -782,6 +806,12 @@ def schedule_metrics(
         "nontransform_xor_vectors": Metric(
             schedule.nontransform_xor_vectors, "shard_vectors",
             schedule.arithmetic_classification
+        ),
+        "fused_multiply_add_vectors": Metric(
+            schedule.fused_multiply_add_vectors, "shard_vectors",
+            "exact_schedule",
+            "Each vector combines a fixed multiplication and accumulator XOR "
+            "in one source/destination memory pass."
         ),
         "logical_copy_vectors": Metric(
             schedule.copies, "shard_vectors", "exact_schedule"
@@ -1006,11 +1036,26 @@ def run_self_test(verbose: bool = True) -> None:
     assert low.details["active_parity_blocks"] == 31
     checks += 2
 
+    low_decode = model_low_decode(8, 248, 256, 8, 1024, {0, 1})
+    assert low_decode.fused_multiply_add_vectors == 248
+    assert low_decode.details["fused_weighted_multiply_add_vectors"] == 248
+    low_decode_metrics = schedule_metrics(low_decode, "gf8", 1024)
+    unfused_reads = (
+        2 * low_decode.butterflies
+        + 2 * low_decode.nontransform_xor_vectors
+        + low_decode.fixed_multiply_vectors
+        + low_decode.copies
+    ) * 1024
+    assert (low_decode_metrics["estimated_bytes_read_lower"].value ==
+            unfused_reads - 248 * 1024)
+    checks += 3
+
     root = pathlib.Path(__file__).resolve().parent.parent
     for filename in ("LeopardFF8.cpp", "LeopardFF16.cpp"):
         source = (root / filename).read_text(encoding="utf-8")
         verify_low_encode_no_copy_source(source, filename)
         verify_high_decode_no_copy_source(source, filename)
+        verify_low_decode_weighted_fusion_source(source, filename)
         try:
             verify_low_encode_no_copy_source(
                 source +
