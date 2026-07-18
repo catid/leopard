@@ -77,11 +77,50 @@ external speedup claim.
 
 AUTO rejection timing covers `L=1,4,floor(K/2),K-1`, `R=K-1`, and
 `R=floor(K/2)` at 4 KiB and 64 KiB for every surviving `K`. Timing and workload
-digests do not prove which AUTO rule ran. Therefore `path-attestation.json`
-contains the exact same cells and explicit `--report-decode-path` invocations;
-promotion requires their same-binary output to reject both the generic path and
-the `balanced_generic` rule. Full-loss `R=K` is deliberately absent from these
-rejection cells because it is the candidate balanced region itself.
+digests do not prove which AUTO rule ran. `path-attestation.json` is therefore
+an exact-cell policy, not a command sketch or a transform-bucket inference. It
+contains every evaluated full-loss gate cell, the loss/rate controls above,
+the additional aligned confirmation sizes, and every true tail. Only an exact
+`(K, shard_bytes)` gate cell whose two external confidence bounds passed may
+select `generic/balanced_generic`. Rejected full-loss gates, all loss/rate
+neighbors, the aligned sizes not present in the original gate, and every true
+tail must select neither. A later promotion may change those expectations only
+by generating a new canonically authenticated stage from evidence for those
+exact cells.
+
+The path result is collected rather than inferred from timing. The collector
+refreshes `bench_leopard2`, requires a clean source at the survivor candidate
+commit, records the benchmark source/object/archive/executable identity, runs
+every canonical AUTO command, and validates exact K, R, seed, profile, field,
+requested and resolved backend, byte count, loss coordinates, and selected
+path/rule from schema-v3 benchmark JSON. The retained result binds the candidate
+commit plus the plan, stage, survivor, and attestation digests. Verification
+requires the same live source/build identity, exact raw file set, and a
+deterministic reconstruction of every record; missing, duplicate, extra,
+stale, edited, or merely re-signed outputs fail closed.
+
+After the conditional timing work, collect and independently verify AUTO
+selection from the exact candidate commit named by the stage. A dispatcher edit
+changes that identity, so it requires regenerated exact-main evidence and a new
+stage rather than reusing evidence for its predecessor:
+
+    python3 experiments/leopard2/decoder_dispatch/plan_balanced_promotion.py \
+        collect-attestation \
+        --plan /tmp/leopard2-balanced-promotion-plan \
+        --stage /tmp/leopard2-balanced-confirmation-stage \
+        --source-root "$PWD" --binary build-release/bench_leopard2 \
+        --output /tmp/leopard2-balanced-path-result
+    python3 experiments/leopard2/decoder_dispatch/plan_balanced_promotion.py \
+        verify-attestation \
+        --plan /tmp/leopard2-balanced-promotion-plan \
+        --stage /tmp/leopard2-balanced-confirmation-stage \
+        --source-root "$PWD" --binary build-release/bench_leopard2 \
+        --manifest /tmp/leopard2-balanced-path-result/manifest.json
+
+An output directory placed inside the checkout must already be ignored. The
+collector intentionally has no resume or online-tuning mode: path selection is
+cheap and deterministic, so a partial directory is discarded and recollected
+after fixing the cause. Timing still uses the isolated runners described below.
 
 This forced-path comparison answers only which Leopard2 decoder kernel is
 cheapest. Exact Leopard main remains the primary external baseline for release
