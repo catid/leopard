@@ -533,8 +533,6 @@ class CMakeProductionGraph(object):
         ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_HAVE_AVX2_BACKEND=1")),
         ("leopard", "target_compile_definitions", (
-            "PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1")),
-        ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_BACKEND_FORCE_SCALAR=1")),
         ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_BACKEND_FORCE_SSSE3=1")),
@@ -560,13 +558,9 @@ class CMakeProductionGraph(object):
         ("leopard2_backend_avx2", "target_compile_options", (
             "PRIVATE", "/arch:AVX2")),
         ("leopard2_backend_ssse3", "target_compile_definitions", (
-            "PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1")),
-        ("leopard2_backend_ssse3", "target_compile_definitions", (
             "PRIVATE", "NO_LEO_HAS_FF8=1")),
         ("leopard2_backend_ssse3", "target_compile_definitions", (
             "PRIVATE", "NO_LEO_HAS_FF16=1")),
-        ("leopard2_backend_avx2", "target_compile_definitions", (
-            "PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1")),
         ("leopard2_backend_avx2", "target_compile_definitions", (
             "PRIVATE", "NO_LEO_HAS_FF8=1")),
         ("leopard2_backend_avx2", "target_compile_definitions", (
@@ -839,14 +833,6 @@ class CMakeProductionGraph(object):
             "execute_process", _locator_git_revision)),
         ("locator-provenance", (
             "execute_process", _locator_git_status)),
-        ("mutation", ("leopard", "target_compile_definitions", (
-            "PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1"))),
-        ("mutation", ("leopard2_backend_ssse3",
-            "target_compile_definitions", (
-                "PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1"))),
-        ("mutation", ("leopard2_backend_avx2",
-            "target_compile_definitions", (
-                "PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1"))),
     )
     _dangerous_build_properties = {
         "COMPILE_DEFINITIONS", "COMPILE_FEATURES", "COMPILE_FLAGS",
@@ -1135,12 +1121,6 @@ class CMakeProductionGraph(object):
             return bool_and(
                 guard, bool_not(ssse3),
                 cls._backend_variant_comparison("avx2"))
-        if specification == ("PRIVATE", "LEO2_ENABLE_TEST_HOOKS=1"):
-            guard = bool_atom("option:LEO2_BUILD_TESTS")
-            if target == "leopard2_backend_avx2":
-                guard = bool_and(
-                    guard, bool_atom("probe:LEO2_FLAG_ARCH_AVX2"))
-            return guard
         if (target == "leopard2_backend_avx2" or
                 specification == ("PRIVATE", "LEO2_HAVE_AVX2_BACKEND=1")):
             return bool_atom("probe:LEO2_FLAG_ARCH_AVX2")
@@ -4245,6 +4225,22 @@ target_sources(leopard PRIVATE $<TARGET_OBJECTS:injected_backend>)
                         "unsupported condition guards production target mutation"):
                     self.resolve(mutation)
 
+    def test_test_hooks_cannot_reenter_production_targets(self):
+        mutations = (
+            "target_compile_definitions(leopard PRIVATE "
+            "LEO2_ENABLE_TEST_HOOKS=1)",
+            "target_compile_definitions(leopard2_backend_ssse3 PRIVATE "
+            "LEO2_ENABLE_TEST_HOOKS=1)",
+            "target_compile_definitions(leopard2_backend_avx2 PRIVATE "
+            "LEO2_ENABLE_TEST_HOOKS=1)",
+        )
+        for mutation in mutations:
+            with self.subTest(target=mutation.split("(", 1)[1].split()[0]):
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "unapproved production target compile/link mutation"):
+                    self.resolve(mutation)
+
     def test_target_alias_cannot_hide_production_mutation(self):
         mutations = (
             """
@@ -4874,12 +4870,6 @@ endif()'''
             "LEO2_HAVE_SSSE3_BACKEND=1)",
             "target_compile_definitions(leopard PRIVATE "
             "LEO2_HAVE_AVX2_BACKEND=1)",
-            "target_compile_definitions(leopard PRIVATE "
-            "LEO2_ENABLE_TEST_HOOKS=1)",
-            "target_compile_definitions(leopard2_backend_ssse3 PRIVATE\n"
-            "            LEO2_ENABLE_TEST_HOOKS=1)",
-            "target_compile_definitions(leopard2_backend_avx2 PRIVATE\n"
-            "            LEO2_ENABLE_TEST_HOOKS=1)",
             "target_link_libraries(leopard PUBLIC OpenMP::OpenMP_CXX)",
             "target_link_libraries(leopard PUBLIC \"${OpenMP_CXX_FLAGS}\")",
         )
