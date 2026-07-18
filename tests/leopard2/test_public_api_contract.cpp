@@ -553,6 +553,33 @@ void test_introspection_and_null_contracts(
         "failed zero-byte plan scratch query retained output");
     require_result(leo2_decode_plan_scratch_size(valid_plan.plan, 17, NULL),
         LEO2_INVALID_ARGUMENT, "null plan scratch output");
+
+    const uintptr_t invalid_size_address =
+        std::numeric_limits<uintptr_t>::max() - (sizeof(size_t) - 1u);
+    size_t* const invalid_size_output =
+        reinterpret_cast<size_t*>(invalid_size_address);
+    const uintptr_t invalid_u64_address =
+        std::numeric_limits<uintptr_t>::max() - (sizeof(uint64_t) - 1u);
+    uint64_t* const invalid_u64_output =
+        reinterpret_cast<uint64_t*>(invalid_u64_address);
+    require_result(leo2_codec_wire_shard_bytes(
+        padded.codec, 1, invalid_u64_output), LEO2_INVALID_ARGUMENT,
+        "unrepresentable wire-size output span");
+    require_result(leo2_encode_scratch_size(
+        high.codec, 17, invalid_size_output), LEO2_INVALID_ARGUMENT,
+        "unrepresentable encode scratch output span");
+    require_result(leo2_encode_batch_preflight_scratch_size(
+        high.codec, 9, invalid_size_output), LEO2_INVALID_ARGUMENT,
+        "unrepresentable encode-batch scratch output span");
+    require_result(leo2_decode_plan_scratch_size(
+        valid_plan.plan, 17, invalid_size_output), LEO2_INVALID_ARGUMENT,
+        "unrepresentable plan scratch output span");
+    require_result(leo2_decode_plan_batch_preflight_scratch_size(
+        valid_plan.plan, 9, invalid_size_output), LEO2_INVALID_ARGUMENT,
+        "unrepresentable decode-batch scratch output span");
+    require_result(leo2_decode_scratch_size(
+        high.codec, 17, invalid_size_output), LEO2_INVALID_ARGUMENT,
+        "unrepresentable one-shot scratch output span");
     require_result(leo2_encode(NULL, 17, NULL, NULL, NULL, 0),
         LEO2_INVALID_ARGUMENT, "null codec encode");
     require_result(leo2_encode_batch(NULL, NULL, 0),
@@ -561,7 +588,7 @@ void test_introspection_and_null_contracts(
         NULL, 0), LEO2_INVALID_ARGUMENT, "null plan execute");
     require_result(leo2_decode_plan_execute_batch(NULL, NULL, 0),
         LEO2_INVALID_ARGUMENT, "null plan empty batch");
-    counts->introspection_checks += 23;
+    counts->introspection_checks += 29;
 }
 
 void test_default_affinity_thread_budget(Counts* counts)

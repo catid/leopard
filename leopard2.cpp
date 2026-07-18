@@ -1538,6 +1538,13 @@ static bool MakeArrayRange(
         MakeRange(pointer, static_cast<uint64_t>(bytes), range);
 }
 
+template <typename T>
+static bool IsRepresentableOutput(T* output)
+{
+    AddressRange range;
+    return MakeArrayRange(output, 1, sizeof(*output), range);
+}
+
 static bool RangesOverlap(const AddressRange& a, const AddressRange& b)
 {
     return a.begin < b.end && b.begin < a.end;
@@ -4054,7 +4061,7 @@ leo2_result GetDecodePlanPathInfo(
     bool multi_item_batch,
     DecodePathInfo* info_out)
 {
-    if (!info_out)
+    if (!IsRepresentableOutput(info_out))
         return LEO2_INVALID_ARGUMENT;
     FillTerminalDecodePathInfo(kDecodePathNoOp, kDecodeRuleNoOp,
         0, multi_item_batch, *info_out);
@@ -4094,7 +4101,7 @@ leo2_result GetDecodeCodecScratchPathInfo(
     uint64_t shard_bytes,
     DecodePathInfo* info_out)
 {
-    if (!info_out)
+    if (!IsRepresentableOutput(info_out))
         return LEO2_INVALID_ARGUMENT;
     FillTerminalDecodePathInfo(kDecodePathNoOp, kDecodeRuleNoOp,
         0, false, *info_out);
@@ -4640,7 +4647,7 @@ LEO2_EXPORT leo2_result leo2_test_codec_encode_path(
     uint32_t requested_recovery_count,
     int* direct_out)
 {
-    if (!direct_out)
+    if (!IsRepresentableOutput(direct_out))
         return LEO2_INVALID_ARGUMENT;
     *direct_out = 0;
     if (!codec || requested_recovery_count > codec->recovery_count)
@@ -4661,7 +4668,7 @@ LEO2_EXPORT leo2_result leo2_codec_wire_shard_bytes(
     uint64_t payload_bytes,
     uint64_t* wire_shard_bytes_out)
 {
-    if (!wire_shard_bytes_out)
+    if (!IsRepresentableOutput(wire_shard_bytes_out))
         return LEO2_INVALID_ARGUMENT;
     *wire_shard_bytes_out = 0;
     return ResolveWireShardBytes(codec, payload_bytes, *wire_shard_bytes_out);
@@ -4730,7 +4737,7 @@ LEO2_EXPORT leo2_result leo2_encode_scratch_size(
     uint64_t shard_bytes,
     size_t* scratch_bytes_out)
 {
-    if (!scratch_bytes_out)
+    if (!IsRepresentableOutput(scratch_bytes_out))
         return LEO2_INVALID_ARGUMENT;
     *scratch_bytes_out = 0;
     if (UseSingleSideEncodeLayout(codec))
@@ -4993,7 +5000,7 @@ LEO2_EXPORT leo2_result leo2_encode_batch_preflight_scratch_size(
     size_t item_count,
     size_t* scratch_bytes_out)
 {
-    if (!scratch_bytes_out)
+    if (!IsRepresentableOutput(scratch_bytes_out))
         return LEO2_INVALID_ARGUMENT;
     *scratch_bytes_out = 0;
     return EncodeBatchPreflightScratchBytes(
@@ -5275,7 +5282,7 @@ LEO2_EXPORT leo2_result leo2_decode_plan_scratch_size(
     uint64_t shard_bytes,
     size_t* scratch_bytes_out)
 {
-    if (!scratch_bytes_out)
+    if (!IsRepresentableOutput(scratch_bytes_out))
         return LEO2_INVALID_ARGUMENT;
     *scratch_bytes_out = 0;
     if (!plan || shard_bytes == 0)
@@ -5526,7 +5533,7 @@ LEO2_EXPORT leo2_result leo2_decode_plan_batch_preflight_scratch_size(
     size_t item_count,
     size_t* scratch_bytes_out)
 {
-    if (!scratch_bytes_out)
+    if (!IsRepresentableOutput(scratch_bytes_out))
         return LEO2_INVALID_ARGUMENT;
     *scratch_bytes_out = 0;
     return DecodeBatchPreflightScratchBytes(
@@ -5583,7 +5590,7 @@ LEO2_EXPORT leo2_result leo2_decode_scratch_size(
     uint64_t shard_bytes,
     size_t* scratch_bytes_out)
 {
-    if (!scratch_bytes_out)
+    if (!IsRepresentableOutput(scratch_bytes_out))
         return LEO2_INVALID_ARGUMENT;
     *scratch_bytes_out = 0;
     DecodeScratchGeometry geometry;

@@ -216,7 +216,9 @@ LEO2_EXPORT const char* leo2_result_string(int result);
     declared spans must not overlap the output handle.  Such overlap returns
     LEO2_OVERLAP without modifying the handle, because clearing it would modify
     immutable input.  An unrepresentable input or output span similarly returns
-    LEO2_INVALID_ARGUMENT before the handle is written.
+    LEO2_INVALID_ARGUMENT before the handle is written.  Scalar size-query
+    outputs follow the same rule: their complete size_t or uint64_t object span
+    must be representable before the function clears or fills it.
 */
 LEO2_EXPORT leo2_result leo2_context_create(
     const leo2_context_options* options,
@@ -275,8 +277,9 @@ LEO2_EXPORT leo2_result leo2_unpack_systematic_shard(
     void* payload);
 
 /*
-    Scratch-size output is set to zero before validation and remains zero on
-    failure.  Scratch must start at leo2_scratch_alignment() alignment.  Scratch
+    After its complete object span is validated, a scratch-size output is set
+    to zero before ordinary argument validation and remains zero on failure.
+    Scratch must start at leo2_scratch_alignment() alignment.  Scratch
     and all non-null shard ranges must be mutually disjoint, except that input
     shards may alias other input shards.  Pointer arrays and a batch's item array
     are immutable call metadata: they may share immutable input storage or each

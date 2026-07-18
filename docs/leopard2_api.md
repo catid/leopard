@@ -18,9 +18,10 @@ plan execution do not.
 
 Setup functions clear a non-null output handle before validating the remaining
 arguments, so a failed create never leaves a stale object pointer.  Scratch-size
-queries similarly clear a non-null size output to zero before validation.  Null
-introspection arguments return their documented zero, AUTO, or native-layout
-sentinel.
+queries similarly clear a non-null size output to zero before validation, after
+first proving that the complete scalar output object span is representable.
+The wire-size query follows the same rule.  Null introspection arguments return
+their documented zero, AUTO, or native-layout sentinel.
 
 Option structures must be zero-initialized, `struct_size` set, and every
 `reserved` field left zero.  A nonzero reserved field is rejected.  A
