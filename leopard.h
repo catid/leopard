@@ -97,7 +97,9 @@ extern "C" {
     leo_init()
 
     Perform static initialization for the library, verifying that the platform
-    is supported.
+    is supported.  This operation is thread-safe and idempotent; concurrent
+    legacy initialization and Leopard2 context creation are supported.  A
+    failed attempt does not prevent a later caller from retrying.
 
     Returns 0 on success and other values on failure.
 */

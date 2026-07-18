@@ -37,6 +37,8 @@
     #include "LeopardFF16.h"
 #endif // LEO_HAS_FF16
 
+#include <atomic>
+#include <mutex>
 #include <string.h>
 
 extern "C" {
@@ -45,7 +47,7 @@ extern "C" {
 //------------------------------------------------------------------------------
 // Initialization API
 
-static bool m_Initialized = false;
+static std::atomic<bool> m_Initialized(false);
 static const unsigned kLegacyFF8Order = 256;
 static const unsigned kLegacyFF16Order = 65536;
 
@@ -122,6 +124,16 @@ LEO_EXPORT int leo_init_(int version)
     if (version != LEO_VERSION)
         return Leopard_InvalidInput;
 
+    // Initialization publishes process-global CPU features, field tables, and
+    // backend tables.  Serialize the complete transaction so legacy callers
+    // and Leopard2 context creation may safely contend in a fresh process.
+    // Do not cache failures: a later call may succeed after transient resource
+    // pressure, while a successfully published state remains idempotent.
+    static std::mutex initialize_mutex;
+    std::lock_guard<std::mutex> lock(initialize_mutex);
+    if (m_Initialized.load(std::memory_order_acquire))
+        return Leopard_Success;
+
     leopard::InitializeCPUArch();
 
 #ifdef LEO_HAS_FF8
@@ -150,7 +162,7 @@ LEO_EXPORT int leo_init_(int version)
         return Leopard_Platform;
 
 
-    m_Initialized = true;
+    m_Initialized.store(true, std::memory_order_release);
     return Leopard_Success;
 }
 
@@ -228,7 +240,7 @@ LEO_EXPORT LeopardResult leo_encode(
     if (!original_data || !work_data)
         return Leopard_InvalidInput;
 
-    if (!m_Initialized)
+    if (!m_Initialized.load(std::memory_order_acquire))
         return Leopard_CallInitialize;
 
     if (work_count != geometry.encode_work_count)
@@ -346,7 +358,7 @@ LEO_EXPORT LeopardResult leo_decode(
     if (!original_data || !recovery_data || !work_data)
         return Leopard_InvalidInput;
 
-    if (!m_Initialized)
+    if (!m_Initialized.load(std::memory_order_acquire))
         return Leopard_CallInitialize;
 
     // Check if not enough recovery data arrived

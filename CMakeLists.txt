@@ -487,6 +487,14 @@ if(LEO2_BUILD_TESTS)
     set_tests_properties(leopard2_field_options PROPERTIES
         ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
 
+    add_executable(leopard2_concurrent_initialization_test
+        tests/leopard2/test_concurrent_initialization.cpp)
+    target_link_libraries(leopard2_concurrent_initialization_test leopard)
+    add_test(NAME leopard2_concurrent_initialization
+        COMMAND leopard2_concurrent_initialization_test)
+    set_tests_properties(leopard2_concurrent_initialization PROPERTIES
+        ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
+
     # The portable archive audit is useful for reduced-field archives too, so
     # keep it outside the dual-field-only exhaustive-test graph below.
     if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" OR

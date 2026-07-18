@@ -1283,15 +1283,10 @@ static leo2_backend RuntimeBackend()
 
 static leo2_result EnsureInitialized()
 {
-    static std::mutex mutex;
-    static bool attempted = false;
-    static int result = Leopard_CallInitialize;
-    std::lock_guard<std::mutex> lock(mutex);
-    if (!attempted)
-    {
-        result = leo_init();
-        attempted = true;
-    }
+    // leo_init() serializes and publishes all process-global setup.  Calling
+    // it on each context construction preserves retry semantics after a
+    // transient setup failure while remaining cheap after the first success.
+    const int result = leo_init();
     if (result == Leopard_Success)
         return LEO2_SUCCESS;
     if (leopard::backend::StartupQualificationFailure() ==
