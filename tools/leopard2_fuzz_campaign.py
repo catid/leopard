@@ -161,7 +161,14 @@ def audit_campaign(arguments):
             "campaign has non-success results: {}".format(merged["summary"]))
     for result in merged["results"]:
         observation = result["thread_runtime"]["observation"]
-        if (observation["peak_thread_count"] > 1 or
+        # The generic lab runner seeds one launch observation after its
+        # affinity-setting pre-exec hook succeeds so sub-millisecond commands
+        # can still be resumed.  Fuzz evidence is held to a stronger gate: at
+        # least one subsequent /proc session sample must observe affinity and
+        # resident memory while the workload is live.
+        if (observation["sample_count"] < 2 or
+                observation["affinity_sample_count"] < 2 or
+                observation["peak_thread_count"] > 1 or
                 observation["peak_process_count"] > 1 or
                 observation["oversubscribed"] or
                 observation["outside_cpu_set"] or

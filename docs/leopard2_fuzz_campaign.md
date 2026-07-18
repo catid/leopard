@@ -25,6 +25,13 @@ CPU allocation. A sampled RSS cap is available separately from `RLIMIT_AS`;
 this matters for ASan because its shadow memory reserves a very large virtual
 address range.
 
+The generic runner retains a launch-floor observation after its affinity hook
+successfully reaches `exec`, which keeps sub-millisecond utility jobs resumable.
+The fuzz campaign auditor is stricter: it requires at least one later `/proc`
+sample with observed affinity. RSS is sampled at the same time (and may read as
+zero if a very short process has already become a zombie). A campaign cannot
+pass merely on the launch floor.
+
 ## Reproduce a 30-by-2 campaign
 
 First build `leopard2_fuzz_smoke` and `leopard2_pruned_fuzz_smoke` with Clang
