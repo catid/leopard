@@ -1,0 +1,103 @@
+{
+  "schema": "leopard2-gf16-avx2-same-source-abba/v1",
+  "status": "accepted_same_source_evidence",
+  "host": {
+    "model": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpus": 32,
+    "benchmark_cpu": 12,
+    "reserved_smt_sibling": 28,
+    "reserved_sibling_nonidle_jiffies": 0
+  },
+  "source_identity": {
+    "control_commit": "a725bf46846714c4f1e438e5a6a43c2e29b37613",
+    "measured_candidate_commit": "8adaf6bb96c409c006db1746b38f26e49c01cf3b",
+    "production_candidate_commit": "7921998a599994d063617faf831624551fd63255",
+    "transfer_to_production_candidate": "The prepared range kernels have identical symbol addresses, sizes, and disassembly in the measured and production objects; total AVX2 object section sizes are also identical. The remaining ordinary-tail differences are equivalent commutative LEA and NOP encodings."
+  },
+  "harness": {
+    "source": "experiments/leopard2/gf16_high_encode/attribution.cpp",
+    "backend": "avx2",
+    "threads": 1,
+    "warmups": 2,
+    "samples_per_process": 9,
+    "encode_repetitions_per_sample": 2,
+    "metric": "public_one_us",
+    "parity_oracle": "Each process compared public encode output byte-for-byte with both split-output and contiguous-work direct production encodes before timing.",
+    "order": ["control", "candidate", "candidate", "control"],
+    "command_template": "taskset -c 12 BUILD/bench_leopard2_gf16_high_attribution K R SHARD_BYTES avx2"
+  },
+  "target": {
+    "parameters": {
+      "K": 4096,
+      "R": 512,
+      "shard_bytes": 4096
+    },
+    "rounds": [
+      {
+        "round": 0,
+        "process_medians_us": [
+          {"slot": 0, "implementation": "control", "value": 2178.630},
+          {"slot": 1, "implementation": "candidate", "value": 2062.938},
+          {"slot": 2, "implementation": "candidate", "value": 2067.468},
+          {"slot": 3, "implementation": "control", "value": 2185.385}
+        ],
+        "control_over_candidate": 1.0565577322504702
+      },
+      {
+        "round": 1,
+        "process_medians_us": [
+          {"slot": 0, "implementation": "candidate", "value": 2071.278},
+          {"slot": 1, "implementation": "control", "value": 2207.914},
+          {"slot": 2, "implementation": "control", "value": 2194.555},
+          {"slot": 3, "implementation": "candidate", "value": 2086.419}
+        ],
+        "control_over_candidate": 1.058874161346275
+      },
+      {
+        "round": 2,
+        "process_medians_us": [
+          {"slot": 0, "implementation": "control", "value": 2191.680},
+          {"slot": 1, "implementation": "candidate", "value": 2087.744},
+          {"slot": 2, "implementation": "candidate", "value": 2071.198},
+          {"slot": 3, "implementation": "control", "value": 2191.459}
+        ],
+        "control_over_candidate": 1.053915558943768
+      }
+    ],
+    "statistics": {
+      "method": "one mean log contrast per independent ABBA round",
+      "confidence": 0.95,
+      "distribution": "Student-t",
+      "degrees_of_freedom": 2,
+      "speedup": 1.0564472083587466,
+      "confidence_interval": [1.0503013253812905, 1.0626290542324301],
+      "promotion_threshold": 1.05,
+      "threshold_cleared_by_lower_bound": true
+    },
+    "correctness": {
+      "processes": 12,
+      "parity_checks_passed": 12,
+      "parity_mismatches": 0
+    }
+  },
+  "neighbor": {
+    "parameters": {
+      "K": 1000,
+      "R": 200,
+      "shard_bytes": 65536
+    },
+    "process_medians_us": [
+      {"slot": 0, "implementation": "control", "value": 9778.499},
+      {"slot": 1, "implementation": "candidate", "value": 9780.924},
+      {"slot": 2, "implementation": "candidate", "value": 9724.678},
+      {"slot": 3, "implementation": "control", "value": 9804.305}
+    ],
+    "control_over_candidate": 1.003961242157108,
+    "interpretation": "Directional one-round screen only; no confidence interval or promotion claim.",
+    "correctness": {
+      "processes": 4,
+      "parity_checks_passed": 4,
+      "parity_mismatches": 0
+    }
+  }
+}

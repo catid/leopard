@@ -1,0 +1,135 @@
+{
+  "schema": "leopard2-gf16-avx2-range-evidence/v1",
+  "status": "production_change_validated_exact_main_confirmation_open",
+  "bead": {
+    "id": "leopard-79h.38.5.4",
+    "status": "open",
+    "blocker": "The host could not keep the reserved SMT sibling at zero non-idle jiffies for a complete exact-main campaign. Re-run on an exclusive or otherwise fully isolated host."
+  },
+  "source_identity": {
+    "base": "a725bf46846714c4f1e438e5a6a43c2e29b37613",
+    "measured_candidate": "8adaf6bb96c409c006db1746b38f26e49c01cf3b",
+    "production_candidate": "7921998a599994d063617faf831624551fd63255",
+    "exact_leopard_main": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "change": {
+    "file": "Leopard2BackendAVX2.cpp",
+    "summary": "Prepare the eight GF16 nibble rows once per non-fused radix-four transform range, then reuse them over all disjoint shard pairs.",
+    "wire_format_changed": false,
+    "public_api_changed": false,
+    "auto_backend_policy_changed": false,
+    "avx512_schedule_changed": false,
+    "fused_schedule_changed": false
+  },
+  "accepted_same_source_evidence": {
+    "raw_artifact": "experiments/leopard2/gf16_high_encode/results/7921998-amd9950x3d/raw_same_source_abba.json",
+    "target": "GF16 legacy-high K=4096 R=512, 4096-byte shards, explicit AVX2",
+    "speedup": 1.0564472083587466,
+    "confidence_interval_95": [1.0503013253812905, 1.0626290542324301],
+    "independent_rounds": 3,
+    "process_medians_per_implementation": 6,
+    "parity_checks": 12,
+    "reserved_sibling_nonidle_jiffies": 0,
+    "neighbor": "K=1000 R=200, 65536-byte shards: 1.003961x directional speedup, four parity-checked processes, one ABBA round, no formal CI."
+  },
+  "factoring_equivalence": {
+    "measured_object": ".research/leopard2/gf16-main-gap/duplicate-8adaf6b/Leopard2BackendAVX2.cpp.o",
+    "production_object": "build/release/CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o",
+    "section_sizes": {"text": 44961, "data": 256, "bss": 16},
+    "range_symbols": [
+      {"name": "AVX2FF16Butterfly2RangePrepared<false>", "address": "0x5000", "size": "0x4a2", "disassembly_identical": true},
+      {"name": "AVX2FF16Butterfly2RangePrepared<true>", "address": "0x54c0", "size": "0x4d2", "disassembly_identical": true}
+    ],
+    "ordinary_wrapper_difference": "Only equivalent commutative LEA operand ordering and NOP encoding differ after factoring.",
+    "portable_isa_check": "No ZMM, opmask, or YMM16-31 instructions occur in the AVX2 object."
+  },
+  "exact_main_preflight": {
+    "ignored_bundle": ".research/leopard2/gf16-main-gap/exact-main-8adaf6b/failure.json",
+    "failure_digest": "d322fe4902088e9306b5856652ce9b829b1c55a887d4bc9ab9f0c7448d927665",
+    "reason": "baseline CMake source is not the adapter directory",
+    "invocations": 0,
+    "interpretation": "Fail-closed provenance check; the baseline was rebuilt from the correct adapter before any timed campaign."
+  },
+  "rejected_exact_main_campaigns": [
+    {
+      "id": "r1",
+      "candidate_commit": "8adaf6bb96c409c006db1746b38f26e49c01cf3b",
+      "ignored_bundle": ".research/leopard2/gf16-main-gap/exact-main-8adaf6b-r1/failure.json",
+      "failure_digest": "8733d579a5d5e1995c1b175db235de641d089fab82eb66586b189ba024490edd",
+      "cpu_pair": [14, 30],
+      "invocations": 36,
+      "digest_and_round_trip_checks": "passed",
+      "reserved_sibling_jiffies": {"user": 22, "system": 8, "nonidle": 30},
+      "benchmark_cpu_nonidle_jiffies": 5304,
+      "affinity_shield": "none",
+      "bundle_verifier": "passed",
+      "rejection_reason": "reserved SMT sibling performed non-idle work during the campaign",
+      "timing_reusable": false
+    },
+    {
+      "id": "r3",
+      "candidate_commit": "8adaf6bb96c409c006db1746b38f26e49c01cf3b",
+      "ignored_bundle": ".research/leopard2/gf16-main-gap/exact-main-8adaf6b-r3/failure.json",
+      "failure_digest": "0103ee892ae05dfc73c09e369ace74dc2c9e551ab57d4fa9a2b9e996ec6ce1ee",
+      "cpu_pair": [13, 29],
+      "invocations": 36,
+      "digest_and_round_trip_checks": "passed",
+      "reserved_sibling_jiffies": {"user": 8, "system": 3, "nonidle": 11},
+      "benchmark_cpu_nonidle_jiffies": 5263,
+      "affinity_shield": "reversible session and UID-process shield; protected user-systemd excluded after fail-closed preflight",
+      "restoration": {"restored_processes": 24, "errors": 0, "vanished": 0},
+      "bundle_verifier": "passed",
+      "rejection_reason": "reserved SMT sibling performed non-idle work during the campaign",
+      "timing_reusable": false
+    },
+    {
+      "id": "r4",
+      "candidate_commit": "7921998a599994d063617faf831624551fd63255",
+      "ignored_bundle": ".research/leopard2/gf16-main-gap/exact-main-7921998-r4/failure.json",
+      "failure_digest": "459c4a274e0a9c0c24c6de6b2c1315774679a94f3b7074b7067371cdb38dd3ea",
+      "cpu_pair": [4, 20],
+      "invocations": 36,
+      "digest_and_round_trip_checks": "passed",
+      "quiet_presample": {"duration_seconds": 5.25, "benchmark_nonidle_jiffies": 0, "sibling_nonidle_jiffies": 0, "idle_jiffies_each": 525},
+      "reserved_sibling_jiffies": {"user": 8, "system": 1, "nonidle": 9},
+      "benchmark_cpu_nonidle_jiffies": 4154,
+      "affinity_shield": "same verified reversible shield as r3",
+      "restoration": {"restored_processes": 24, "errors": 0, "vanished": 0},
+      "bundle_verifier": "passed",
+      "rejection_reason": "reserved SMT sibling performed non-idle work during the campaign",
+      "timing_reusable": false
+    }
+  ],
+  "exact_main_workload": {
+    "cells": [
+      {"id": "gf16-large-eight", "K": 4096, "R": 512, "shard_bytes": 4096, "losses": 8, "seed": 137},
+      {"id": "gf16-high-4k", "K": 1000, "R": 200, "shard_bytes": 4096, "losses": 8, "seed": 139},
+      {"id": "gf16-high-64k", "K": 1000, "R": 200, "shard_bytes": 65536, "losses": 8, "seed": 141}
+    ],
+    "order": ["exact_main", "candidate", "candidate", "exact_main"],
+    "rounds": 3,
+    "iterations": 9,
+    "warmups": 2,
+    "reuse": 8,
+    "threads": 1,
+    "matched_workload_digests": {
+      "gf16-large-eight": {"original_data": "6f3156dce1278d19", "transmitted_parity": "747f5e1455d18a69", "recovered_originals": "3efc079595ac7e3e"},
+      "gf16-high-4k": {"original_data": "e0def0e8dc71f141", "transmitted_parity": "8be2ffefedda0349", "recovered_originals": "350c2617df552cd8"},
+      "gf16-high-64k": {"original_data": "fb3785b08d01189f", "transmitted_parity": "2978c57e0cca60f5", "recovered_originals": "b5b9d62e32a8c397"}
+    }
+  },
+  "validation": {
+    "release_ctest": "83/83 effective pass; the only initial failure was an uninitialized sse2neon submodule in the isolated worktree, and the isolated Visual Studio test passed after submodule initialization.",
+    "fresh_backend_matrix": {"variants": ["auto", "scalar", "ssse3", "avx2", "avx512"], "status": "passed", "test_invocations": 191},
+    "clang_asan_ubsan": "72/72 passed with leak detection, halt-on-error, strict string checks, -Wall -Wextra -Wpedantic -Werror.",
+    "gcc_strict": "Full strict build passed and 15 focused tests passed with -Wall -Wextra -Wpedantic -Werror.",
+    "post_factoring_focused_release": "16/16 passed, including API, oracle, GF16 tails/odd/legacy matrix, high decode/pruning, concurrency, golden, transform differential, boundaries, backend, and portable-ISA tests.",
+    "baseline_adapter": "3/3 tests passed: smoke, runner self-test, containment faults."
+  },
+  "reproduction": {
+    "same_source": "taskset -c CPU BUILD/bench_leopard2_gf16_high_attribution K R SHARD_BYTES avx2",
+    "exact_main_runner": "python3 experiments/leopard2/main_compare/run_abba.py run --baseline BASELINE_BUILD/leopard_main_benchmark --candidate CANDIDATE_BUILD/bench_leopard2 --baseline-archive BASELINE_BUILD/libleopard_main_exact.a --candidate-archive CANDIDATE_BUILD/libleopard.a --baseline-build-dir BASELINE_BUILD --candidate-build-dir CANDIDATE_BUILD --baseline-source-root EXACT_MAIN_WORKTREE --candidate-source-root CANDIDATE_WORKTREE --candidate-commit CANDIDATE_COMMIT --candidate-mode auto --reservation-file RESERVATION_JSON --output OUTPUT_DIR --cpu CPU --reserved-sibling SIBLING --cell gf16-large-eight:4096:512:4096:8:137 --cell gf16-high-4k:1000:200:4096:8:139 --cell gf16-high-64k:1000:200:65536:8:141 --reuse 8 --iterations 9 --warmup 2 --timeout 600",
+    "verify_rejected_bundle": "python3 experiments/leopard2/main_compare/run_abba.py verify-failure OUTPUT_DIR"
+  },
+  "conclusion": "The bounded AVX2 change clears the same-source 5% target gate and is correctness/ISA validated. No exact-main speedup claim is made. Keep leopard-79h.38.5.4 open until the exact-main campaign passes unchanged isolation policy on an exclusive host."
+}
