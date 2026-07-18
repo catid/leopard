@@ -543,6 +543,17 @@ protected:
 //------------------------------------------------------------------------------
 // SIMD-Safe Aligned Memory Allocations
 
+// Legacy entry points expose a uint64_t byte count, while C library copy/fill
+// primitives take size_t.  Keep this predicate parameterized so tests can
+// exercise a 32-bit address ceiling on a 64-bit build.
+static LEO_FORCE_INLINE bool LegacyBufferBytesValidForAddressLimit(
+    uint64_t buffer_bytes,
+    uint64_t addressable_limit)
+{
+    return buffer_bytes != 0 && (buffer_bytes & 63u) == 0 &&
+        buffer_bytes <= addressable_limit;
+}
+
 static const unsigned kAlignmentBytes = LEO_ALIGN_BYTES;
 
 #if defined(LEO2_ENABLE_TEST_HOOKS)

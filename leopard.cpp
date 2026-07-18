@@ -242,7 +242,8 @@ LEO_EXPORT LeopardResult leo_encode(
     const void* const * const original_data,  // Array of pointers to original data buffers
     void** work_data)                         // Array of work buffers
 {
-    if (buffer_bytes <= 0 || buffer_bytes % 64 != 0)
+    if (!leopard::LegacyBufferBytesValidForAddressLimit(
+            buffer_bytes, static_cast<uint64_t>(SIZE_MAX)))
         return Leopard_InvalidSize;
 
     LegacyGeometry geometry;
@@ -360,7 +361,8 @@ LEO_EXPORT LeopardResult leo_decode(
     const void* const * const recovery_data,  // Array of recovery data buffers
     void** work_data)                         // Array of work data buffers
 {
-    if (buffer_bytes <= 0 || buffer_bytes % 64 != 0)
+    if (!leopard::LegacyBufferBytesValidForAddressLimit(
+            buffer_bytes, static_cast<uint64_t>(SIZE_MAX)))
         return Leopard_InvalidSize;
 
     LegacyGeometry geometry;

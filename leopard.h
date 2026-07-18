@@ -118,7 +118,7 @@ typedef enum LeopardResultT
 
     Leopard_NeedMoreData      = -1, // Not enough recovery data received
     Leopard_TooMuchData       = -2, // Buffer counts are too high
-    Leopard_InvalidSize       = -3, // Buffer size must be a multiple of 64 bytes
+    Leopard_InvalidSize       = -3, // Invalid or unaddressable buffer size
     Leopard_InvalidCounts     = -4, // Invalid counts provided
     Leopard_InvalidInput      = -5, // A function parameter was invalid
     Leopard_Platform          = -6, // Platform is unsupported
@@ -161,7 +161,8 @@ LEO_EXPORT unsigned leo_encode_work_count(
     The sum of original_count + recovery_count must not exceed 65536.
     The recovery_count <= original_count.
 
-    The buffer_bytes must be a multiple of 64.
+    The buffer_bytes must be a positive multiple of 64 representable by
+    size_t on the target platform.
     Each buffer should have the same number of bytes.
     Even the last piece must be rounded up to the block size.
 
@@ -219,6 +220,9 @@ LEO_EXPORT unsigned leo_decode_work_count(
     work_data:      Array of pointers to recovery data buffers.
 
     Lost original/recovery data should be set to NULL.
+
+    The buffer_bytes must be a positive multiple of 64 representable by
+    size_t on the target platform.
 
     The sum of recovery_count + the number of non-NULL original data must be at
     least original_count in order to perform recovery.

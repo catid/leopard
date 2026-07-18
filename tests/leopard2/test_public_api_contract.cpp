@@ -28,6 +28,7 @@
 
 #include "leopard.h"
 #include "leopard2.h"
+#include "LeopardCommon.h"
 
 #include <algorithm>
 #include <atomic>
@@ -1527,6 +1528,32 @@ void require_legacy_result(
 
 void test_legacy_negative_contract(Counts* counts)
 {
+    const uint64_t simulated_32bit_limit = UINT32_MAX;
+    const uint64_t largest_32bit_aligned =
+        simulated_32bit_limit & ~UINT64_C(63);
+    require(leopard::LegacyBufferBytesValidForAddressLimit(
+                largest_32bit_aligned, simulated_32bit_limit),
+        "legacy simulated 32-bit aligned size rejected");
+    require(!leopard::LegacyBufferBytesValidForAddressLimit(
+                simulated_32bit_limit + 1, simulated_32bit_limit),
+        "legacy simulated 32-bit overflow size accepted");
+    require(!leopard::LegacyBufferBytesValidForAddressLimit(
+                0, simulated_32bit_limit) &&
+            !leopard::LegacyBufferBytesValidForAddressLimit(
+                65, simulated_32bit_limit),
+        "legacy size predicate accepted invalid granularity");
+
+#if SIZE_MAX < UINT64_MAX
+    const uint64_t unaddressable_bytes =
+        static_cast<uint64_t>(SIZE_MAX) + 1;
+    require_legacy_result(leo_encode(
+        unaddressable_bytes, 1, 1, 1, NULL, NULL),
+        Leopard_InvalidSize, "legacy 32-bit encode size-width rejection");
+    require_legacy_result(leo_decode(
+        unaddressable_bytes, 1, 1, 1, NULL, NULL, NULL),
+        Leopard_InvalidSize, "legacy 32-bit decode size-width rejection");
+#endif
+
     require(LEO_VERSION == 2, "unexpected legacy API version");
     require(leo_init() == Leopard_Success, "legacy reinitialization failed");
     ++counts->legacy_checks;
@@ -1635,7 +1662,10 @@ void test_legacy_negative_contract(Counts* counts)
     require_legacy_result(leo_encode(64, 65535, 32768, 65536,
         one_original, one_work), Leopard_TooMuchData,
         "legacy encode field-order limit");
-    counts->legacy_checks += 18;
+    counts->legacy_checks += 21;
+#if SIZE_MAX < UINT64_MAX
+    counts->legacy_checks += 2;
+#endif
 }
 
 } // namespace
