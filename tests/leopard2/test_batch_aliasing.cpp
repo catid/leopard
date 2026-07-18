@@ -378,11 +378,21 @@ void TestEncodeConflicts(Fixture& fixture)
     const void* original_metadata_before[3] = {
         original_metadata[0], original_metadata[1], original_metadata[2]
     };
+    Bytes metadata_other_output(Fixture::kShortBytes, 0x4d);
     void* metadata_output[2] = {
-        const_cast<void*>(static_cast<const void*>(original_metadata)), NULL
+        const_cast<void*>(static_cast<const void*>(original_metadata)),
+        &metadata_other_output[0]
     };
     AlignedBuffer metadata_scratch_a(fixture.encode_short);
     AlignedBuffer metadata_scratch_b(fixture.encode_long);
+    memset(metadata_scratch_a.data(), 0xa3, metadata_scratch_a.size());
+    memset(metadata_scratch_b.data(), 0xb4, metadata_scratch_b.size());
+    Bytes metadata_scratch_a_before(metadata_scratch_a.size());
+    Bytes metadata_scratch_b_before(metadata_scratch_b.size());
+    memcpy(&metadata_scratch_a_before[0], metadata_scratch_a.data(),
+        metadata_scratch_a.size());
+    memcpy(&metadata_scratch_b_before[0], metadata_scratch_b.data(),
+        metadata_scratch_b.size());
     leo2_encode_batch_item metadata_items[2] = {
         { Fixture::kShortBytes, &fixture.original_a[0], metadata_output,
           metadata_scratch_a.data(), metadata_scratch_a.size() },
@@ -394,6 +404,11 @@ void TestEncodeConflicts(Fixture& fixture)
     Require(memcmp(original_metadata, original_metadata_before,
                 sizeof(original_metadata)) == 0,
         "rejected encode metadata overlap changed pointer metadata");
+    Require(memcmp(metadata_scratch_a.data(),
+                &metadata_scratch_a_before[0], metadata_scratch_a.size()) == 0 &&
+            memcmp(metadata_scratch_b.data(),
+                &metadata_scratch_b_before[0], metadata_scratch_b.size()) == 0,
+        "rejected encode metadata overlap changed scratch");
 
     Bytes untouched(Fixture::kLongBytes, 0xa5);
     const Bytes untouched_before = untouched;
@@ -494,31 +509,77 @@ void TestDecodeConflicts(Fixture& fixture)
         fixture.plan, scratch_items, 2), LEO2_OVERLAP,
         "decode partial scratch/scratch overlap");
 
+    const uint8_t metadata_original_present[3] = { 0, 0, 1 };
+    const uint8_t metadata_recovery_present[2] = { 1, 1 };
+    leo2_decode_plan* metadata_plan = NULL;
+    RequireResult(leo2_decode_plan_create(fixture.codec,
+        metadata_original_present, metadata_recovery_present,
+        &metadata_plan), LEO2_SUCCESS, "metadata-overlap plan create");
+    size_t metadata_decode_short = 0;
+    size_t metadata_decode_long = 0;
+    RequireResult(leo2_decode_plan_scratch_size(metadata_plan,
+        Fixture::kShortBytes, &metadata_decode_short), LEO2_SUCCESS,
+        "metadata-overlap short scratch query");
+    RequireResult(leo2_decode_plan_scratch_size(metadata_plan,
+        Fixture::kLongBytes, &metadata_decode_long), LEO2_SUCCESS,
+        "metadata-overlap long scratch query");
+
+    const void* metadata_original_a[3] = {
+        NULL, NULL, fixture.original_a[2]
+    };
+    const void* metadata_recovery_a[2] = {
+        &fixture.parity_a[0][0], &fixture.parity_a[1][0]
+    };
     const void* original_metadata[3] = {
-        NULL, fixture.original_b[1], fixture.original_b[2]
+        NULL, NULL, fixture.original_b[2]
+    };
+    const void* metadata_recovery_b[2] = {
+        &fixture.parity_b[0][0], &fixture.parity_b[1][0]
     };
     const void* original_metadata_before[3] = {
         original_metadata[0], original_metadata[1], original_metadata[2]
     };
+    Bytes metadata_other_output(Fixture::kShortBytes, 0x5e);
     void* metadata_output[3] = {
         const_cast<void*>(static_cast<const void*>(original_metadata)),
-        NULL, NULL
+        &metadata_other_output[0], NULL
     };
-    AlignedBuffer metadata_scratch_a(fixture.decode_short);
-    AlignedBuffer metadata_scratch_b(fixture.decode_long);
+    Bytes metadata_output_b0(Fixture::kLongBytes, 0x6f);
+    Bytes metadata_output_b1(Fixture::kLongBytes, 0x70);
+    void* metadata_output_b[3] = {
+        &metadata_output_b0[0], &metadata_output_b1[0], NULL
+    };
+    AlignedBuffer metadata_scratch_a(metadata_decode_short);
+    AlignedBuffer metadata_scratch_b(metadata_decode_long);
+    memset(metadata_scratch_a.data(), 0xc5, metadata_scratch_a.size());
+    memset(metadata_scratch_b.data(), 0xd6, metadata_scratch_b.size());
+    Bytes metadata_scratch_a_before(metadata_scratch_a.size());
+    Bytes metadata_scratch_b_before(metadata_scratch_b.size());
+    memcpy(&metadata_scratch_a_before[0], metadata_scratch_a.data(),
+        metadata_scratch_a.size());
+    memcpy(&metadata_scratch_b_before[0], metadata_scratch_b.data(),
+        metadata_scratch_b.size());
     leo2_decode_batch_item metadata_items[2] = {
-        { Fixture::kShortBytes, original_a, recovery_a, metadata_output,
+        { Fixture::kShortBytes, metadata_original_a, metadata_recovery_a,
+          metadata_output,
           metadata_scratch_a.data(), metadata_scratch_a.size() },
-        { Fixture::kLongBytes, original_metadata, recovery_b,
-          ordinary_output_ptr, metadata_scratch_b.data(),
+        { Fixture::kLongBytes, original_metadata, metadata_recovery_b,
+          metadata_output_b, metadata_scratch_b.data(),
           metadata_scratch_b.size() }
     };
-    RequireResult(leo2_decode_plan_execute_batch(
-        fixture.plan, metadata_items, 2), LEO2_OVERLAP,
+    const leo2_result metadata_result = leo2_decode_plan_execute_batch(
+        metadata_plan, metadata_items, 2);
+    leo2_decode_plan_destroy(metadata_plan);
+    RequireResult(metadata_result, LEO2_OVERLAP,
         "decode cross-item output/metadata overlap");
     Require(memcmp(original_metadata, original_metadata_before,
                 sizeof(original_metadata)) == 0,
         "rejected decode metadata overlap changed pointer metadata");
+    Require(memcmp(metadata_scratch_a.data(),
+                &metadata_scratch_a_before[0], metadata_scratch_a.size()) == 0 &&
+            memcmp(metadata_scratch_b.data(),
+                &metadata_scratch_b_before[0], metadata_scratch_b.size()) == 0,
+        "rejected decode metadata overlap changed scratch");
 
     Bytes untouched(Fixture::kLongBytes, 0xcc);
     const Bytes untouched_before = untouched;

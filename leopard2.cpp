@@ -2624,17 +2624,6 @@ static bool SortedRangeListsOverlap(
     return false;
 }
 
-static bool SortedRangesOverlapRange(
-    const AddressRange* ranges,
-    size_t count,
-    const AddressRange& range)
-{
-    for (size_t i = 0; i < count && ranges[i].begin < range.end; ++i)
-        if (RangesOverlap(ranges[i], range))
-            return true;
-    return false;
-}
-
 static bool SortedRangesOverlapEachOther(
     const AddressRange* ranges,
     size_t count)
@@ -2908,6 +2897,93 @@ static void PrepareDecodeBatchRanges(
     std::sort(outputs, outputs + output_i, RangeLess);
 }
 
+static leo2_result ValidateEncodeBatchOutputMetadataAliases(
+    const leo2_codec* codec,
+    const leo2_encode_batch_item* items,
+    size_t item_count,
+    const AddressRange& item_range)
+{
+    /* This pass must remain read-only.  ValidateEncodeBuffers may use scratch
+       as a range table, so reject every cross-item output/metadata alias before
+       invoking even the first ordinary per-item validator. */
+    for (size_t item_i = 0; item_i < item_count; ++item_i)
+    {
+        for (uint32_t output_i = 0;
+             output_i < codec->recovery_count;
+             ++output_i)
+        {
+            if (!items[item_i].recovery[output_i])
+                continue;
+            AddressRange output_range;
+            if (!MakeRange(items[item_i].recovery[output_i],
+                    items[item_i].shard_bytes, output_range))
+                return LEO2_INVALID_ARGUMENT;
+            if (RangesOverlap(output_range, item_range))
+                return LEO2_OVERLAP;
+            for (size_t other_i = 0; other_i < item_count; ++other_i)
+            {
+                AddressRange metadata_range;
+                if ((MakeArrayRange(items[other_i].original,
+                         codec->original_count,
+                         sizeof(*items[other_i].original), metadata_range) &&
+                     RangesOverlap(output_range, metadata_range)) ||
+                    (MakeArrayRange(items[other_i].recovery,
+                         codec->recovery_count,
+                         sizeof(*items[other_i].recovery), metadata_range) &&
+                     RangesOverlap(output_range, metadata_range)))
+                    return LEO2_OVERLAP;
+            }
+        }
+    }
+    return LEO2_SUCCESS;
+}
+
+static leo2_result ValidateDecodeBatchOutputMetadataAliases(
+    const leo2_decode_plan* plan,
+    const leo2_decode_batch_item* items,
+    size_t item_count,
+    const AddressRange& item_range)
+{
+    const leo2_codec* codec = plan->codec;
+    /* As above, preserve the public guarantee that metadata-overlap rejection
+       happens before any scratch byte is modified. */
+    for (size_t item_i = 0; item_i < item_count; ++item_i)
+    {
+        for (uint32_t output_i = 0;
+             output_i < codec->original_count;
+             ++output_i)
+        {
+            if (items[item_i].original[output_i])
+                continue;
+            AddressRange output_range;
+            if (!MakeRange(items[item_i].restored_original[output_i],
+                    items[item_i].shard_bytes, output_range))
+                return LEO2_INVALID_ARGUMENT;
+            if (RangesOverlap(output_range, item_range))
+                return LEO2_OVERLAP;
+            for (size_t other_i = 0; other_i < item_count; ++other_i)
+            {
+                AddressRange metadata_range;
+                if ((MakeArrayRange(items[other_i].original,
+                         codec->original_count,
+                         sizeof(*items[other_i].original), metadata_range) &&
+                     RangesOverlap(output_range, metadata_range)) ||
+                    (MakeArrayRange(items[other_i].recovery,
+                         codec->recovery_count,
+                         sizeof(*items[other_i].recovery), metadata_range) &&
+                     RangesOverlap(output_range, metadata_range)) ||
+                    (MakeArrayRange(items[other_i].restored_original,
+                         codec->original_count,
+                         sizeof(*items[other_i].restored_original),
+                         metadata_range) &&
+                     RangesOverlap(output_range, metadata_range)))
+                    return LEO2_OVERLAP;
+            }
+        }
+    }
+    return LEO2_SUCCESS;
+}
+
 static leo2_result ValidateEncodeBatchAliases(
     const leo2_codec* codec,
     const leo2_encode_batch_item* items,
@@ -2915,6 +2991,11 @@ static leo2_result ValidateEncodeBatchAliases(
     const AddressRange& item_range,
     size_t item_bytes)
 {
+    leo2_result result = ValidateEncodeBatchOutputMetadataAliases(
+        codec, items, item_count, item_range);
+    if (result != LEO2_SUCCESS)
+        return result;
+
     for (size_t item_i = 0; item_i < item_count; ++item_i)
     {
         AddressRange scratch_range = { 0, 0 };
@@ -2934,7 +3015,7 @@ static leo2_result ValidateEncodeBatchAliases(
     for (size_t item_i = 0; item_i < item_count; ++item_i)
     {
         const leo2_encode_batch_item& item = items[item_i];
-        const leo2_result result = ValidateEncodeBuffers(codec,
+        result = ValidateEncodeBuffers(codec,
             item.shard_bytes, item.original, item.recovery, item.scratch,
             item.scratch_bytes, items, item_bytes);
         if (result != LEO2_SUCCESS)
@@ -2956,25 +3037,9 @@ static leo2_result ValidateEncodeBatchAliases(
         if (SortedRangesOverlapEachOther(
                 item_outputs, item_output_count))
             return LEO2_OVERLAP;
-        if (SortedRangesOverlapRange(
-                item_outputs, item_output_count, item_range))
-            return LEO2_OVERLAP;
 
         for (size_t other_i = 0; other_i < item_count; ++other_i)
         {
-            AddressRange metadata_range;
-            if ((MakeArrayRange(items[other_i].original,
-                     codec->original_count,
-                     sizeof(*items[other_i].original), metadata_range) &&
-                 SortedRangesOverlapRange(item_outputs,
-                     item_output_count, metadata_range)) ||
-                (MakeArrayRange(items[other_i].recovery,
-                     codec->recovery_count,
-                     sizeof(*items[other_i].recovery), metadata_range) &&
-                 SortedRangesOverlapRange(item_outputs,
-                     item_output_count, metadata_range)))
-                return LEO2_OVERLAP;
-
             AddressRange* const other_inputs =
                 static_cast<AddressRange*>(items[other_i].scratch);
             if (SortedRangeListsOverlap(item_outputs, item_output_count,
@@ -3005,7 +3070,11 @@ static leo2_result ValidateDecodeBatchAliases(
     const AddressRange& item_range,
     size_t item_bytes)
 {
-    const leo2_codec* codec = plan->codec;
+    leo2_result result = ValidateDecodeBatchOutputMetadataAliases(
+        plan, items, item_count, item_range);
+    if (result != LEO2_SUCCESS)
+        return result;
+
     for (size_t item_i = 0; item_i < item_count; ++item_i)
     {
         AddressRange scratch_range = { 0, 0 };
@@ -3023,7 +3092,7 @@ static leo2_result ValidateDecodeBatchAliases(
     for (size_t item_i = 0; item_i < item_count; ++item_i)
     {
         const leo2_decode_batch_item& item = items[item_i];
-        const leo2_result result = ValidateDecodeBuffers(plan,
+        result = ValidateDecodeBuffers(plan,
             item.shard_bytes, item.original, item.recovery,
             item.restored_original, item.scratch, item.scratch_bytes,
             items, item_bytes);
@@ -3042,32 +3111,11 @@ static leo2_result ValidateDecodeBatchAliases(
         AddressRange* const item_inputs =
             static_cast<AddressRange*>(items[item_i].scratch);
         AddressRange* const item_outputs = item_inputs + input_count;
-        if (SortedRangesOverlapEachOther(item_outputs, output_count) ||
-            SortedRangesOverlapRange(
-                item_outputs, output_count, item_range))
+        if (SortedRangesOverlapEachOther(item_outputs, output_count))
             return LEO2_OVERLAP;
 
         for (size_t other_i = 0; other_i < item_count; ++other_i)
         {
-            AddressRange metadata_range;
-            if ((MakeArrayRange(items[other_i].original,
-                     codec->original_count,
-                     sizeof(*items[other_i].original), metadata_range) &&
-                 SortedRangesOverlapRange(item_outputs,
-                     output_count, metadata_range)) ||
-                (MakeArrayRange(items[other_i].recovery,
-                     codec->recovery_count,
-                     sizeof(*items[other_i].recovery), metadata_range) &&
-                 SortedRangesOverlapRange(item_outputs,
-                     output_count, metadata_range)) ||
-                (MakeArrayRange(items[other_i].restored_original,
-                     codec->original_count,
-                     sizeof(*items[other_i].restored_original),
-                     metadata_range) &&
-                 SortedRangesOverlapRange(item_outputs,
-                     output_count, metadata_range)))
-                return LEO2_OVERLAP;
-
             AddressRange* const other_inputs =
                 static_cast<AddressRange*>(items[other_i].scratch);
             if (SortedRangeListsOverlap(item_outputs, output_count,
