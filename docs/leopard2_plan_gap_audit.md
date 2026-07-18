@@ -16,7 +16,7 @@ document is an evidence map, not a second task list.
 |---|---|---|
 | Legacy high wire profile | `leo2_codec_create` derives `T=ceil_pow2(R)`, `N=ceil_pow2(K+T)`, and the parity/message/shortened coordinate map. `ReedSolomonEncode` retains the block-IFFT accumulator and truncated final FFT. Legacy golden, API, arbitrary-count, GF16 matrix, and exact-main diagnostic tests compare parity bytes. | The profile and encoder are implemented. Final current-HEAD compatibility repetition remains part of `leopard-79h.15`/`.40`. |
 | Low wire profile | Codec setup derives `P=ceil_pow2(K)`, `N=ceil_pow2(P+R)`, with the systematic prefix and punctured parity suffix. `ReedSolomonEncodeLow` performs one padded-P inverse transform and shifted evaluations, including `R>K`. | The profile and arithmetic are implemented. Commit `bd681a7` removes the former whole-P coefficient copy, but its default-production performance promotion remains provisional pending `leopard-79h.26.1.1`. |
-| R10 Algorithm 4 | `ReedSolomonDecodeLowPlanned` and its tiled form perform P-point block inverse transforms, the active-parent derivative/weighted reduction, one P-point output transform, and original-only recovery from plan-owned locator factors. | Arithmetic and active-parent behavior are implemented and independently tested. Exact sparse C1 input/output schedules are not yet consumed; see `leopard-79h.18.1.12.1`. |
+| R10 Algorithm 4 | `ReedSolomonDecodeLowPrunedPlanned` and its tiled form perform exact-mask P-point block inverse transforms, the active-parent derivative/weighted reduction, an exact requested-output P-point transform, and original-only recovery from plan-owned locator factors. The immutable GF8/GF16 schedules retain the mature prefix/dependency transforms as fallbacks when pruning does not save byte-heavy work. | Arithmetic and active-parent behavior are implemented and independently tested against direct interpolation, materialized/tiled fallbacks, byte tails, repeated/concurrent plans, and qualified context backends. Production performance promotion remains provisional pending isolated crossover evidence under `leopard-79h.18.1.12.1`. |
 | R10 Algorithm 5 message-only form | `ReedSolomonDecodeHighPrunedPlanned` and its tiled form construct the T-wide accumulator, apply locator factors, invert to the evaluator, and evaluate only output blocks containing missing originals. Commit `e2ce390` adds immutable exact-mask C1 schedules for GF8/GF16 input and output transforms. | Algorithm 5 is implemented. The C1 integration is correctness-tested but its production performance promotion remains provisional. A whole-T copy before each output-block evaluation and unfused reveal/scatter remain under `leopard-79h.26.5`. |
 | Active-parent derivation | `docs/leopard2_math_and_sources.md` defines active N, shifts, normalization, coordinate maps, shortening/puncturing, locator and reveal factors. Direct GF(2^4), GF8/GF16 transform, locator, arbitrary-count, high/low acceptance, and XDRS differential evidence exercise those identities. | This pass found no arithmetic or coordinate-map contradiction. That is not a final proof or source audit: formula traceability and the final literature refresh remain `leopard-79h.27`. |
 | Independent fallback/oracle | The retained generic active-parent decoder remains selectable. Direct field, generator/interpolation, repair, transform-differential, GF(2^4), GF8 and GF16 tests do not use the optimized path as their only oracle. | Implemented. |
@@ -145,7 +145,6 @@ remain in `leopard-79h.16`, `.23`, and `.24`.
 
 | Requirement family | Durable Beads coverage |
 |---|---|
-| Exact-mask Algorithm 4 production pruning | `leopard-79h.18.1.12.1` |
 | Dense active-locator permanent-contribution reuse | `leopard-79h.11.1` |
 | Sparse high/low encoder output pruning | `leopard-79h.26.4` |
 | Algorithm 5 no-copy output evaluation and reveal/scatter fusion | `leopard-79h.26.5` |
@@ -195,8 +194,8 @@ Unknown-error correction remains correctly isolated under
 The high and low mathematical codecs, active-parent normalization, systematic
 wire profiles, reusable locators/plans, direct fallback paths and side-sized
 decode execution are present. The definition of done is not yet met. Remaining
-production source work includes exact-mask low decoding, no-copy/fused high
-output evaluation, sparse encoder pruning, a complete existing-path dispatcher,
+production source work includes no-copy/fused high output evaluation, sparse
+encoder pruning, a complete existing-path dispatcher,
 restoring exact-main backend throughput, native NEON, and allocation-free/static/
 NUMA-aware batch execution. Native-GF16 odd lengths and a dedicated parity-
 rebuild entry point need explicit API decisions rather than implicit claims.

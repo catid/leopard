@@ -1,11 +1,11 @@
 # Leopard2 C1 parent-preserving dependency pruning
 
 Status: scalar experiment plus bounded C++/SIMD flat-schedule and all-level
-fused prototype complete. The C++ prototype is intentionally absent from
-production dispatch; encode/decode integration and an isolated end-to-end
-crossover gate remain.
+fused implementation complete. Immutable exact-mask schedules are consumed by
+the production high Algorithm 5 and low Algorithm 4 decoders. Encoder
+integration and an isolated end-to-end crossover gate remain.
 
-The implementation is
+The original scalar experiment is
 `experiments/leopard2/non_power_of_two/c1/dependency_pruning.py`. It answers the
 C1 question left open by the symbolic C0 model: can Leopard omit work caused by
 shortened inputs and punctured outputs while computing the exact existing
@@ -183,7 +183,8 @@ implementation in `Leopard2Plan.cpp` and `Leopard2Plan.h`. GF8 and GF16 bind
 the shared compiler to their existing `FFTSkewStorage` tables through
 `PreparePrunedTransformPlan`; the experiment therefore consumes the exact
 legacy logarithms rather than regenerating constants in a second production
-path. It is not exposed by `leopard2.h` and no codec dispatcher calls it.
+path. It is not exposed by `leopard2.h`; decode plans own and dispatch the
+immutable schedules without changing profile identity or the public ABI.
 
 Setup expands the existing radix-2 graph once, records input liveness before
 each operation, propagates exact output dependencies backward, removes
@@ -287,6 +288,39 @@ required.
 These are correctness results, not timing evidence. Other workers were active
 on the host, so no cache-sensitive or authoritative crossover number was
 collected for this checkpoint.
+
+## Production decoder integration
+
+`leo2_decode_plan_create` records the exact parent coordinates selected for a
+specialized decode. For each incomplete nonempty P- or T-sized input block it
+compiles an inverse schedule with the exact selected-input mask and all block
+outputs requested. Complete and empty blocks retain their simpler mature
+paths. Algorithm 4 additionally compiles one P-point forward schedule with all
+accumulator inputs live and exactly the missing systematic coordinates
+requested. Algorithm 5 compiles one shifted T-point output schedule for each
+block containing a missing original. A schedule is retained only when its
+operation count or zero/one specialization removes byte-heavy work; otherwise
+execution falls back to the mature prefix/dependency transform.
+
+Both the materialized and side-sized tiled Algorithm 4/5 kernels consume the
+same immutable schedules for GF8 and GF16. Execution does not allocate, and
+the selected context backend is passed explicitly through every retained
+butterfly. The decode-plan schedule gate compares the pruned kernels with the
+unpruned prepared kernels and reports, for its deterministic GF8/GF16 sparse
+patterns:
+
+| Decoder | Retained / padded-equivalent operations |
+|---|---:|
+| Low Algorithm 4 | 3,330 / 3,696 |
+| High Algorithm 5 | 3,608 / 4,752 |
+
+The low acceptance gate independently compares the public production path to
+direct interpolation across materialized/tiled modes, byte tails, GF8/GF16,
+one-shot and reused plans, batch execution, parity re-encoding, legal aliases,
+guards, and concurrent use. Context-backend tracing exercises the integrated
+low path under every qualified scalar/SSSE3/AVX2 table. These are correctness
+and structural operation-count results; an authoritative isolated end-to-end
+crossover measurement is still required before claiming a throughput gain.
 
 ## C++ transform benchmark checkpoint
 
