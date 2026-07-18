@@ -265,6 +265,8 @@ void ReedSolomonDecodePrepared(
 
 // Allocation-free execution companion for an immutable Leopard2 decode plan.
 // All pattern-dependent traversal and prefix values are prepared by the plan.
+// If reveal_outputs is false, requested work rows remain locator-weighted so
+// the caller can fuse inverse-locator multiplication with output scatter.
 void ReedSolomonDecodePlanned(
     const backend::Ops& ops,
     uint64_t buffer_bytes,
@@ -275,6 +277,7 @@ void ReedSolomonDecodePlanned(
     unsigned requested_count,
     const leopard2_internal::OutputDependencyView& output_dependencies,
     const ffe_t* locator_logs, // n elements
+    bool reveal_outputs,
     void** work); // n elements
 void ReedSolomonDecodePlanned(
     uint64_t buffer_bytes,

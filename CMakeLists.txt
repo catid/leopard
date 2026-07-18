@@ -721,6 +721,8 @@ if(LEO2_BUILD_TESTS)
     add_executable(leopard2_api_test
         tests/leopard2/direct_oracle.cpp
         tests/leopard2/test_api.cpp)
+    target_compile_definitions(leopard2_api_test PRIVATE
+        LEO2_ENABLE_TEST_HOOKS=1)
     target_include_directories(leopard2_api_test PRIVATE tests/leopard2)
     target_link_libraries(leopard2_api_test leopard)
     add_test(NAME leopard2_api COMMAND leopard2_api_test)

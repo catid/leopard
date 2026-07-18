@@ -30,6 +30,7 @@
 #include "LeopardFF8.h"
 #include "LeopardFF16.h"
 #include "Leopard2Dispatch.h"
+#include "Leopard2Direct.h"
 #include "leopard.h"
 #include "leopard2.h"
 
@@ -1296,9 +1297,19 @@ int main()
         std::vector<unsigned> balanced_full_recovery(128);
         for (size_t i = 0; i < balanced_full_recovery.size(); ++i)
             balanced_full_recovery[i] = static_cast<unsigned>(i);
+        leo2_test_reset_generic_reveal_counts();
         run_decode_case(context, 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1,
             LEO2_FIELD_GF8, 257, balanced_full_recovery,
             std::vector<unsigned>(), &counts);
+        require(leo2_test_generic_direct_reveal_shards() == 0,
+            "small balanced decode unexpectedly fused reveal/scatter");
+
+        leo2_test_reset_generic_reveal_counts();
+        run_decode_case(context, 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1,
+            LEO2_FIELD_GF8, 4097, balanced_full_recovery,
+            std::vector<unsigned>(), &counts);
+        require(leo2_test_generic_direct_reveal_shards() == 128 * 3,
+            "balanced generic decode did not fuse complete-tile reveal/scatter");
 
         const size_t direct_gf16_boundaries[] = { 2, 34, 64, 66, 1026 };
         for (size_t count_i = 0;

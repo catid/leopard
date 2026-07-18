@@ -2497,6 +2497,7 @@ void ReedSolomonDecodePlanned(
     unsigned requested_count,
     const leopard2_internal::OutputDependencyView& output_dependencies,
     const ffe_t* locator_logs,
+    bool reveal_outputs,
     void** work)
 {
     LEO_DEBUG_ASSERT(n >= 2 && n <= kOrder);
@@ -2526,13 +2527,16 @@ void ReedSolomonDecodePlanned(
     FFT_DIT(ops, buffer_bytes, work, n, n, FFTSkewStorage);
 #endif
 
-#pragma omp parallel for
-    for (int i = 0; i < (int)requested_count; ++i)
+    if (reveal_outputs)
     {
-        const uint32_t coordinate = requested_coordinates[i];
-        LEO_DEBUG_ASSERT(coordinate < n);
-        mul_mem_inplace(ops, work[coordinate],
-            kModulus - locator_logs[coordinate], buffer_bytes);
+#pragma omp parallel for
+        for (int i = 0; i < (int)requested_count; ++i)
+        {
+            const uint32_t coordinate = requested_coordinates[i];
+            LEO_DEBUG_ASSERT(coordinate < n);
+            mul_mem_inplace(ops, work[coordinate],
+                kModulus - locator_logs[coordinate], buffer_bytes);
+        }
     }
 }
 
@@ -2550,7 +2554,7 @@ void ReedSolomonDecodePlanned(
 {
     ReedSolomonDecodePlanned(backend::GetDefaultOps(), buffer_bytes, n,
         coordinate_data, input_count, requested_coordinates, requested_count,
-        output_dependencies, locator_logs, work);
+        output_dependencies, locator_logs, true, work);
 }
 
 

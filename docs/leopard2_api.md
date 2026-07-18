@@ -105,7 +105,10 @@ Its `K+R` staging term is therefore fixed at 64 bytes per public coordinate;
 it no longer scales with the full shard length.  Pointer and range-validation
 metadata are additional small terms; neither is a full-shard data slot.  See
 `leopard2_decode_tiled_workspace.md` for the execution equivalence and scratch
-formulas.
+formulas.  In the measured GF8 generic-fallback region, aligned SSSE3/AVX2
+prefixes of at least 4 KiB also reveal directly from the `N`-slot workspace into
+caller outputs, eliminating the separate in-scratch reveal and public scatter
+passes without changing scratch size or wire identity.
 
 The plan uses exactly `K` received public coordinates.  It keeps every surviving
 systematic shard, then keeps the lowest-index received parity shards needed to

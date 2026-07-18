@@ -61,6 +61,10 @@ LEO2_EXPORT leo2_result leo2_test_codec_encode_path(
     uint32_t requested_recovery_count,
     int* direct_out);
 
+LEO2_EXPORT void leo2_test_reset_generic_reveal_counts(void);
+
+LEO2_EXPORT uint64_t leo2_test_generic_direct_reveal_shards(void);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

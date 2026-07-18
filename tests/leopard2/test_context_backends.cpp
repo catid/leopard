@@ -1065,35 +1065,46 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
             leo2_codec_destroy(codec);
         }
 
-        const CodecCase generic_case = {
-            33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 257
+        const CodecCase generic_cases[] = {
+            { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 257 },
+            { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 258 }
         };
-        const Shards generic_originals = make_originals(
-            generic_case, 0xa4093822U);
-        leo2_codec_options generic_options;
-        std::memset(&generic_options, 0, sizeof(generic_options));
-        generic_options.struct_size = sizeof(generic_options);
-        generic_options.flags = LEO2_CODEC_FORCE_GENERIC_DECODE;
-        leo2_codec* generic_codec = NULL;
-        require_result(leo2_codec_create(contexts[context_i].context,
-            generic_case.k, generic_case.r, generic_case.profile,
-            generic_case.field, &generic_options, &generic_codec),
-            LEO2_SUCCESS, "traced generic codec create");
-        const Shards generic_recovery = execute_encode(
-            generic_codec, generic_case, generic_originals);
-        trace.reset();
-        decode_case(generic_codec, generic_case, generic_originals,
-            generic_recovery);
-        require(trace.ff8_calls() != 0,
-            "generic decode bypassed the context ops table");
-        require_four_way_callsites(trace,
-            leo2_context_backend(contexts[context_i].context),
-            generic_case.field,
-            generic_case.bytes,
-            "generic high-profile decode", false, true);
-        require(trace.xor_four_calls() != 0,
-            "generic decode bypassed the context grouped-XOR table");
-        leo2_codec_destroy(generic_codec);
+        for (size_t generic_i = 0;
+             generic_i < sizeof(generic_cases) / sizeof(generic_cases[0]);
+             ++generic_i)
+        {
+            const CodecCase& generic_case = generic_cases[generic_i];
+            const Shards generic_originals = make_originals(
+                generic_case, static_cast<uint32_t>(0xa4093822U + generic_i));
+            leo2_codec_options generic_options;
+            std::memset(&generic_options, 0, sizeof(generic_options));
+            generic_options.struct_size = sizeof(generic_options);
+            generic_options.flags = LEO2_CODEC_FORCE_GENERIC_DECODE;
+            leo2_codec* generic_codec = NULL;
+            require_result(leo2_codec_create(contexts[context_i].context,
+                generic_case.k, generic_case.r, generic_case.profile,
+                generic_case.field, &generic_options, &generic_codec),
+                LEO2_SUCCESS, "traced generic codec create");
+            const Shards generic_recovery = execute_encode(
+                generic_codec, generic_case, generic_originals);
+            trace.reset();
+            decode_case(generic_codec, generic_case, generic_originals,
+                generic_recovery);
+            if (generic_case.field == LEO2_FIELD_GF8)
+                require(trace.ff8_calls() != 0,
+                    "generic GF8 decode bypassed the context ops table");
+            else
+                require(trace.ff16_calls() != 0,
+                    "generic GF16 decode bypassed the context ops table");
+            require_four_way_callsites(trace,
+                leo2_context_backend(contexts[context_i].context),
+                generic_case.field,
+                generic_case.bytes,
+                "generic high-profile decode", false, true);
+            require(trace.xor_four_calls() != 0,
+                "generic decode bypassed the context grouped-XOR table");
+            leo2_codec_destroy(generic_codec);
+        }
 
         const leo2_field direct_fields[] = {
             LEO2_FIELD_GF8, LEO2_FIELD_GF16

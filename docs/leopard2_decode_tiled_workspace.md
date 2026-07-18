@@ -35,6 +35,32 @@ GF8 and GF16 low/high cases plus an `N`-slot forced-generic control.  A second
 slope test compares 65 with 129 bytes (66 with 130 for GF16): the fixed
 `64*(K+R)` staging term cancels, leaving exactly 64 bytes per work slot.
 
+## Generic reveal/scatter pass reduction
+
+The retained generic decoder formerly revealed every requested output in its
+scratch coordinate and then copied that complete shard to the caller.  Because
+the fixed-multiply backend requires disjoint source and destination ranges, the
+in-place reveal itself also copied each 64-byte tile through a temporary.  For
+complete aligned GF8 tiles, Leopard2 can instead apply the unchanged inverse
+locator factor from the scratch coordinate directly into the disjoint public
+output.  This fuses reveal and scatter and removes both extra output writes.
+
+The dispatcher is deliberately conservative.  It uses the fused form only for
+SSSE3 and AVX2 with an aligned prefix of at least 4 KiB.  Scalar, NEON, GF16,
+smaller aligned prefixes, and every ragged final tile retain scratch reveal plus
+the established gather.  A selected-path test covers both sides of the 4 KiB
+boundary, while explicit-context tests exercise the generic GF8 and GF16 paths
+through scalar, SSSE3, and AVX2 operation tables.  This changes neither the
+generic transform nor its `N`-slot scratch geometry.
+
+A same-host diagnostic ABBA screen against the immediately preceding binary
+found whole-decode reductions of about 11% for SSSE3 and 26% for AVX2 at 4 KiB,
+with larger wins retained at 64 KiB.  The pre-threshold 256-byte AVX2 cell had
+regressed in the unconditional prototype, which is why it remains on the old
+path.  These screens justify the conservative local gate but are not a
+replacement for the still-open independently linked exact-main all-K campaign
+in `leopard-79h.38.2`.
+
 ## Low-rate equivalence
 
 The retained planned decoder first materialized every one of the `N/P` parent
