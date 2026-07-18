@@ -50,7 +50,7 @@
 extern "C" {
 #endif
 
-#define LEO2_API_VERSION 3u
+#define LEO2_API_VERSION 4u
 
 typedef struct leo2_context leo2_context;
 typedef struct leo2_codec leo2_codec;
@@ -312,6 +312,40 @@ LEO2_EXPORT leo2_result leo2_encode_batch(
     size_t item_count);
 
 /*
+    The ordinary batch entry point above retains its allocation-free
+    compatibility preflight, whose work is quadratic in item_count.  These
+    additive entry points accept one caller-owned, batch-wide preflight scratch
+    span and flatten the same alias contract into an O(M log M) interval sweep,
+    where M is proportional to item_count * (K+R).  The queried span is aligned
+    to leo2_scratch_alignment(), is independent of shard_bytes and parity-subset
+    choices, and may be reused for later calls with the same or smaller item
+    count.  Its contents are unspecified on return.
+
+    For fewer than nine items the query returns zero and the execution entry
+    point preserves the ordinary compatibility path without inspecting
+    preflight_scratch; this deterministic cutoff avoids penalizing small
+    batches.  A caller can invoke the ordinary entry point when the query
+    returns zero to retain its exact call-wrapper overhead.  Otherwise the full
+    supplied preflight scratch span must be
+    disjoint from the item array, all pointer arrays, all shard ranges, and
+    every per-item scratch span.  An overlap between this span and metadata is
+    rejected before this span is modified.  The interval preflight and item
+    codec execution allocate no
+    memory; a context pool can still start or grow workers lazily as documented
+    in leo2_context_options.
+*/
+LEO2_EXPORT leo2_result leo2_encode_batch_preflight_scratch_size(
+    const leo2_codec* codec,
+    size_t item_count,
+    size_t* scratch_bytes_out);
+LEO2_EXPORT leo2_result leo2_encode_batch_with_preflight_scratch(
+    const leo2_codec* codec,
+    const leo2_encode_batch_item* items,
+    size_t item_count,
+    void* preflight_scratch,
+    size_t preflight_scratch_bytes);
+
+/*
     Presence arrays contain one for a received shard and zero for an erasure.
     They are copied into the immutable plan.  The codec and its context must
     outlive the plan.  Execution restores missing originals only; parity rebuild
@@ -342,6 +376,16 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute_batch(
     const leo2_decode_plan* plan,
     const leo2_decode_batch_item* items,
     size_t item_count);
+LEO2_EXPORT leo2_result leo2_decode_plan_batch_preflight_scratch_size(
+    const leo2_decode_plan* plan,
+    size_t item_count,
+    size_t* scratch_bytes_out);
+LEO2_EXPORT leo2_result leo2_decode_plan_execute_batch_with_preflight_scratch(
+    const leo2_decode_plan* plan,
+    const leo2_decode_batch_item* items,
+    size_t item_count,
+    void* preflight_scratch,
+    size_t preflight_scratch_bytes);
 
 /* One-shot convenience wrapper.  It allocates and destroys plan setup state. */
 LEO2_EXPORT leo2_result leo2_decode_scratch_size(
