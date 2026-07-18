@@ -4120,6 +4120,23 @@ def run_campaign(
     require(args.backend in SUPPORTED_BACKENDS,
             "campaign backend must be one of: " +
             ",".join(SUPPORTED_BACKENDS))
+    initial_affinity = sorted(os.sched_getaffinity(0))
+    require(args.cpu in initial_affinity and
+            args.reserved_sibling in initial_affinity,
+            "isolated core pair is not initially allowed")
+    if not self_test:
+        # Fresh provenance rebuilds precede the measured campaign.  Keep every
+        # configure/compiler/link descendant off both reserved SMT siblings so
+        # setup cannot perturb the core immediately before timing.  Restore the
+        # declared launch mask after the rebuild; the measured phase below then
+        # narrows it to the benchmark CPU as before.
+        setup_affinity = set(initial_affinity) - {
+            args.cpu, args.reserved_sibling}
+        require(setup_affinity,
+                "no housekeeping CPU remains outside the reserved pair")
+        os.sched_setaffinity(0, setup_affinity)
+        require(set(os.sched_getaffinity(0)) == setup_affinity,
+                "failed to isolate provenance rebuilds from reserved pair")
     source_roots = {
         "baseline": Path(args.baseline_source_root).resolve(),
         "candidate": Path(args.candidate_source_root).resolve(),
@@ -4179,9 +4196,10 @@ def run_campaign(
                 for build in ("baseline", "candidate")}
     matrix_raw, matrix_info = matrix_record(
         args.matrix, repo, commits["candidate"])
-    initial_affinity = sorted(os.sched_getaffinity(0))
-    require(args.cpu in initial_affinity and args.reserved_sibling in initial_affinity,
-            "isolated core pair is not initially allowed")
+    if not self_test:
+        os.sched_setaffinity(0, set(initial_affinity))
+        require(sorted(os.sched_getaffinity(0)) == initial_affinity,
+                "failed to restore declared launch affinity after rebuilds")
     topology = sibling_topology(args.cpu)
     require(args.reserved_sibling in topology["cpus"] and
             args.reserved_sibling != args.cpu,
