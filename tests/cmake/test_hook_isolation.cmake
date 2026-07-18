@@ -18,11 +18,16 @@ set(hook_library_name
     "${LEO2_STATIC_LIBRARY_PREFIX}leopard_test_hooks${LEO2_STATIC_LIBRARY_SUFFIX}")
 set(production_fingerprints)
 
-foreach(test_mode tests-on tests-off)
-    if(test_mode STREQUAL "tests-on")
+foreach(test_mode tests-on tests-off tests-and-benchmarks-on)
+    if(NOT test_mode STREQUAL "tests-off")
         set(build_tests ON)
     else()
         set(build_tests OFF)
+    endif()
+    if(test_mode STREQUAL "tests-and-benchmarks-on")
+        set(build_benchmarks ON)
+    else()
+        set(build_benchmarks OFF)
     endif()
     set(build_dir "${LEO2_BINARY_DIR}/${test_mode}-build")
     set(install_dir "${LEO2_BINARY_DIR}/${test_mode}-install")
@@ -36,7 +41,7 @@ foreach(test_mode tests-on tests-off)
     endif()
     list(APPEND configure_command
         -DLEO2_BUILD_TESTS=${build_tests}
-        -DLEO2_BUILD_BENCHMARKS=OFF
+        -DLEO2_BUILD_BENCHMARKS=${build_benchmarks}
         -DLEO2_BUILD_FUZZERS=OFF
         -DLEO2_ENABLE_CUDA=OFF
         -DENABLE_OPENMP=${LEO2_ENABLE_OPENMP}
@@ -76,7 +81,7 @@ foreach(test_mode tests-on tests-off)
     endif()
     list(GET production_libraries 0 production_library)
 
-    if(test_mode STREQUAL "tests-on")
+    if(build_tests)
         execute_process(
             COMMAND "${CMAKE_COMMAND}" --build . --target leopard_test_hooks
                 --config Release
@@ -99,6 +104,36 @@ foreach(test_mode tests-on tests-off)
         list(GET hook_libraries 0 hook_library)
     endif()
 
+    if(build_benchmarks)
+        execute_process(
+            COMMAND "${CMAKE_COMMAND}" --build . --target
+                bench_leopard2_high_decode_copy_attribution --config Release
+            WORKING_DIRECTORY "${build_dir}"
+            RESULT_VARIABLE diagnostic_build_result
+            OUTPUT_VARIABLE diagnostic_build_stdout
+            ERROR_VARIABLE diagnostic_build_stderr)
+        if(NOT diagnostic_build_result EQUAL 0)
+            message(FATAL_ERROR
+                "Diagnostic benchmark build failed (${diagnostic_build_result})\n"
+                "${diagnostic_build_stdout}\n${diagnostic_build_stderr}")
+        endif()
+        set(diagnostic_name
+            "bench_leopard2_high_decode_copy_attribution${LEO2_EXECUTABLE_SUFFIX}")
+        file(GLOB_RECURSE diagnostic_executables
+            "${build_dir}/${diagnostic_name}")
+        list(LENGTH diagnostic_executables diagnostic_executable_count)
+        if(NOT diagnostic_executable_count EQUAL 1)
+            message(FATAL_ERROR
+                "Expected one built ${diagnostic_name}, found "
+                "${diagnostic_executable_count}: ${diagnostic_executables}")
+        endif()
+        list(GET diagnostic_executables 0 diagnostic_executable)
+        if(NOT EXISTS "${diagnostic_executable}")
+            message(FATAL_ERROR
+                "Diagnostic benchmark install probe did not build its input")
+        endif()
+    endif()
+
     if(LEO2_ARCHIVE_SYMBOL_CHECKS)
         execute_process(
             COMMAND "${LEO2_NM_COMMAND}" -C --defined-only
@@ -115,7 +150,7 @@ foreach(test_mode tests-on tests-off)
             message(FATAL_ERROR
                 "${test_mode} production archive exports test-hook symbols")
         endif()
-        if(test_mode STREQUAL "tests-on")
+        if(build_tests)
             execute_process(
                 COMMAND "${LEO2_NM_COMMAND}" -C --defined-only
                     "${hook_library}"
@@ -234,11 +269,12 @@ foreach(test_mode tests-on tests-off)
     list(APPEND production_fingerprints "${consumer_fingerprint}")
 endforeach()
 
-list(GET production_fingerprints 0 tests_on_fingerprint)
-list(GET production_fingerprints 1 tests_off_fingerprint)
-if(NOT tests_on_fingerprint STREQUAL tests_off_fingerprint)
-    message(FATAL_ERROR
-        "Production API changed with LEO2_BUILD_TESTS:\n"
-        "tests ON:\n${tests_on_fingerprint}\n"
-        "tests OFF:\n${tests_off_fingerprint}")
-endif()
+list(GET production_fingerprints 0 reference_fingerprint)
+foreach(production_fingerprint ${production_fingerprints})
+    if(NOT production_fingerprint STREQUAL reference_fingerprint)
+        message(FATAL_ERROR
+            "Production API changed across tests/benchmarks isolation modes:\n"
+            "reference:\n${reference_fingerprint}\n"
+            "different:\n${production_fingerprint}")
+    endif()
+endforeach()
