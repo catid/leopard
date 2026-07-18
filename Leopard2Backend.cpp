@@ -771,6 +771,53 @@ static bool TestFF16Butterflies(const Ops& ops, FF16MultiplyLog reference)
                 std::memcmp(x, expected_x, sizeof(x)) != 0 ||
                 std::memcmp(y, expected_y, sizeof(y)) != 0)
                 return false;
+
+            // The all-ones logarithm is a transform-schedule sentinel rather
+            // than an ordinary multiplier for accumulating inverse kernels.
+            if (log != 65535)
+            {
+                std::memset(x, 0x87, sizeof(x));
+                std::memset(y, 0x78, sizeof(y));
+                FillFF16(x + 1, bytes,
+                    static_cast<uint32_t>(size_i * 109U + log_i * 17U));
+                FillFF16(y + 1, bytes,
+                    static_cast<uint32_t>(size_i * 127U + log_i * 19U));
+                std::memcpy(expected_x, x, sizeof(x));
+                std::memcpy(expected_y, y, sizeof(y));
+                std::memset(output_x, 0x4b, sizeof(output_x));
+                std::memset(output_y, 0xb4, sizeof(output_y));
+                std::memcpy(expected_output_x, output_x, sizeof(output_x));
+                std::memcpy(expected_output_y, output_y, sizeof(output_y));
+                ReferenceFF16Butterfly2<true>(
+                    expected_x + 1, expected_y + 1,
+                    log, bytes, reference);
+                for (uint64_t i = 0; i < bytes; ++i)
+                {
+                    expected_output_x[i + 1] ^= expected_x[i + 1];
+                    expected_output_y[i + 1] ^= expected_y[i + 1];
+                }
+                ops.ff16_ifft_butterfly2_xor(
+                    x + 1, y + 1, output_x + 1, output_y + 1,
+                    log, bytes);
+                if (std::memcmp(output_x, expected_output_x,
+                        sizeof(output_x)) != 0 ||
+                    std::memcmp(output_y, expected_output_y,
+                        sizeof(output_y)) != 0)
+                    return false;
+                // The encoder reuses this temporary allocation after the
+                // stage, but the private op contract remains read-only and
+                // protects callers from hidden aliasing assumptions.  Compare
+                // the complete input including guards against its seed.
+                std::memset(expected_x, 0x87, sizeof(expected_x));
+                std::memset(expected_y, 0x78, sizeof(expected_y));
+                FillFF16(expected_x + 1, bytes,
+                    static_cast<uint32_t>(size_i * 109U + log_i * 17U));
+                FillFF16(expected_y + 1, bytes,
+                    static_cast<uint32_t>(size_i * 127U + log_i * 19U));
+                if (std::memcmp(x, expected_x, sizeof(x)) != 0 ||
+                    std::memcmp(y, expected_y, sizeof(y)) != 0)
+                    return false;
+            }
         }
     }
     return true;
@@ -1125,6 +1172,7 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
     if (!args.ff16_multiply_log || !ops.ff16_multiply ||
         !ops.ff16_multiply_add || !ops.ff16_ifft_butterfly2 ||
         !ops.ff16_fft_butterfly2 || !ops.ff16_fft_butterfly2_out ||
+        !ops.ff16_ifft_butterfly2_xor ||
         !ops.ff16_ifft_butterfly4 || !ops.ff16_fft_butterfly4 ||
         !ops.ff16_fft_butterfly4_out ||
         !ops.ff16_ifft_butterfly4_range ||
@@ -1137,7 +1185,8 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
 #else
     if (ops.ff16_multiply || ops.ff16_multiply_add ||
         ops.ff16_ifft_butterfly2 || ops.ff16_fft_butterfly2 ||
-        ops.ff16_fft_butterfly2_out || ops.ff16_ifft_butterfly4 ||
+        ops.ff16_fft_butterfly2_out || ops.ff16_ifft_butterfly2_xor ||
+        ops.ff16_ifft_butterfly4 ||
         ops.ff16_fft_butterfly4 || ops.ff16_fft_butterfly4_out ||
         ops.ff16_ifft_butterfly4_range ||
         ops.ff16_fft_butterfly4_range)

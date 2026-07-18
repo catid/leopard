@@ -575,6 +575,82 @@ static void AVX2FF16FFTButterfly2Out(
     }
 }
 
+static void AVX2FF16IFFTButterfly2Xor(
+    const void* x_input_pointer,
+    const void* y_input_pointer,
+    void* x_output_pointer,
+    void* y_output_pointer,
+    uint16_t multiplier_log,
+    uint64_t byte_count)
+{
+    const uint8_t* x_input = static_cast<const uint8_t*>(x_input_pointer);
+    const uint8_t* y_input = static_cast<const uint8_t*>(y_input_pointer);
+    uint8_t* x_output = static_cast<uint8_t*>(x_output_pointer);
+    uint8_t* y_output = static_cast<uint8_t*>(y_output_pointer);
+    const FF16NibbleTable& table = FF16Tables[multiplier_log];
+    const __m256i low_tables[4] = {
+        BroadcastTable(table.low[0]), BroadcastTable(table.low[1]),
+        BroadcastTable(table.low[2]), BroadcastTable(table.low[3])
+    };
+    const __m256i high_tables[4] = {
+        BroadcastTable(table.high[0]), BroadcastTable(table.high[1]),
+        BroadcastTable(table.high[2]), BroadcastTable(table.high[3])
+    };
+    uint64_t offset = 0;
+    while (byte_count - offset >= 64)
+    {
+        __m256i x_low = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(x_input + offset));
+        __m256i x_high = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(x_input + offset + 32));
+        __m256i y_low = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(y_input + offset));
+        __m256i y_high = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(y_input + offset + 32));
+        y_low = _mm256_xor_si256(y_low, x_low);
+        y_high = _mm256_xor_si256(y_high, x_high);
+        __m256i product_low;
+        __m256i product_high;
+        AVX2FF16ProductVectors(y_low, y_high, low_tables, high_tables,
+            product_low, product_high);
+        x_low = _mm256_xor_si256(x_low, product_low);
+        x_high = _mm256_xor_si256(x_high, product_high);
+        x_low = _mm256_xor_si256(x_low, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(x_output + offset)));
+        x_high = _mm256_xor_si256(x_high, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(x_output + offset + 32)));
+        y_low = _mm256_xor_si256(y_low, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(y_output + offset)));
+        y_high = _mm256_xor_si256(y_high, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(y_output + offset + 32)));
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(x_output + offset), x_low);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(x_output + offset + 32), x_high);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(y_output + offset), y_low);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(y_output + offset + 32), y_high);
+        offset += 64;
+    }
+    const uint64_t symbols = (byte_count - offset) / 2;
+    for (uint64_t i = 0; i < symbols; ++i)
+    {
+        uint16_t x_value = static_cast<uint16_t>(x_input[offset + i] |
+            (static_cast<unsigned>(x_input[offset + symbols + i]) << 8));
+        uint16_t y_value = static_cast<uint16_t>(y_input[offset + i] |
+            (static_cast<unsigned>(y_input[offset + symbols + i]) << 8));
+        y_value ^= x_value;
+        x_value ^= FF16Product(multiplier_log, y_value);
+        x_output[offset + i] ^= static_cast<uint8_t>(x_value);
+        x_output[offset + symbols + i] ^=
+            static_cast<uint8_t>(x_value >> 8);
+        y_output[offset + i] ^= static_cast<uint8_t>(y_value);
+        y_output[offset + symbols + i] ^=
+            static_cast<uint8_t>(y_value >> 8);
+    }
+}
+
 #endif // LEO_HAS_FF16
 
 static void AVX2XorMemory(
@@ -1686,12 +1762,14 @@ static const Ops AVX2Ops = {
     AVX2FF16IFFTButterfly2,
     AVX2FF16FFTButterfly2,
     AVX2FF16FFTButterfly2Out,
+    AVX2FF16IFFTButterfly2Xor,
     AVX2FF16IFFTButterfly4,
     AVX2FF16FFTButterfly4,
     AVX2FF16FFTButterfly4Out,
     AVX2FF16IFFTButterfly4Range,
     AVX2FF16FFTButterfly4Range
 #else
+    NULL,
     NULL,
     NULL,
     NULL,

@@ -107,9 +107,10 @@ typedef void (*FFTButterfly2Out)(
     uint16_t multiplier_log,
     uint64_t byte_count);
 
-// Accumulating inverse two-way butterfly used by the GF8 encoder.  All four
+// Accumulating inverse two-way butterfly used by the encoders.  All four
 // buffers must be pairwise disjoint.  Inputs are read-only; outputs are XORed
-// with the inverse-butterfly result.
+// with the inverse-butterfly result.  Transform callers specialize the
+// field's all-ones zero-skew sentinel before entering this function.
 typedef void (*IFFTButterfly2Xor)(
     const void* x_input,
     const void* y_input,
@@ -209,6 +210,7 @@ struct Ops
     Butterfly2 ff16_ifft_butterfly2;
     Butterfly2 ff16_fft_butterfly2;
     FFTButterfly2Out ff16_fft_butterfly2_out;
+    IFFTButterfly2Xor ff16_ifft_butterfly2_xor;
     Butterfly4 ff16_ifft_butterfly4;
     Butterfly4 ff16_fft_butterfly4;
     FFTButterfly4Out ff16_fft_butterfly4_out;

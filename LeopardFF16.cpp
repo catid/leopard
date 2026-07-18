@@ -1130,8 +1130,79 @@ static void IFFT_DIT4_Range(
 }
 
 
-// Unrolled IFFT for encoder
-static void IFFT_DIT_Encoder(
+// {x_out, y_out} ^= IFFT_DIT2({x_in, y_in}).  The transform workspace is
+// dead after the encoder's final stage, so retaining the transformed values
+// there only creates a store/reload pass before accumulation.
+static void IFFT_DIT2_xor(
+    const backend::Ops& ops,
+    const void* x_in,
+    const void* y_in,
+    void* x_out,
+    void* y_out,
+    const ffe_t log_m,
+    const uint64_t bytes)
+{
+    if (log_m == kModulus)
+    {
+        // Zero skew suppresses multiplication but retains y ^= x.
+        ops.xor_memory(x_out, x_in, bytes);
+        ops.xor_memory_2to1(y_out, x_in, y_in, bytes);
+        return;
+    }
+    ops.ff16_ifft_butterfly2_xor(
+        x_in, y_in, x_out, y_out, log_m, bytes);
+}
+
+
+// Accumulating form of the established two-layer GF16 schedule.  This is
+// selected only where UseFusedButterfly4() already rejects the four-way
+// kernel.  The first layer remains in place; the second layer writes directly
+// into the accumulator and avoids materializing its dead workspace result.
+static void IFFT_DIT4_xor_Split_Range(
+    const backend::Ops& ops,
+    const uint64_t bytes,
+    void** work,
+    void** xor_output,
+    const unsigned dist,
+    const ffe_t log_m01,
+    const ffe_t log_m23,
+    const ffe_t log_m02)
+{
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    TestIFFTDIT4Calls.fetch_add(dist, std::memory_order_relaxed);
+    TestIFFTDIT4SplitCalls.fetch_add(dist, std::memory_order_relaxed);
+#endif
+    for (unsigned i = 0; i < dist; ++i)
+    {
+        if (log_m01 == kModulus)
+            xor_mem(ops, work[i + dist], work[i], bytes);
+        else
+            IFFT_DIT2(ops, work[i], work[i + dist], log_m01, bytes);
+
+        if (log_m23 == kModulus)
+            xor_mem(ops, work[i + dist * 3U], work[i + dist * 2U], bytes);
+        else
+            IFFT_DIT2(ops,
+                work[i + dist * 2U], work[i + dist * 3U],
+                log_m23, bytes);
+
+        IFFT_DIT2_xor(ops,
+            work[i], work[i + dist * 2U],
+            xor_output[i], xor_output[i + dist * 2U],
+            log_m02, bytes);
+        IFFT_DIT2_xor(ops,
+            work[i + dist], work[i + dist * 3U],
+            xor_output[i + dist], xor_output[i + dist * 3U],
+            log_m02, bytes);
+    }
+}
+
+
+// Unrolled IFFT for encoder.  The compile-time accumulation choice keeps the
+// scalar oracle's stage loop identical after optimization while sharing one
+// source definition with the qualified vector schedule.
+template<bool FuseAccumulation>
+static void IFFT_DIT_Encoder_Impl(
     const backend::Ops& ops,
     const uint64_t bytes,
     const void* const* data,
@@ -1157,8 +1228,12 @@ static void IFFT_DIT_Encoder(
 
     // Decimation in time: Unroll 2 layers at a time
     unsigned dist = 1, dist4 = 4;
+    bool accumulated = false;
     for (; dist4 <= m; dist = dist4, dist4 <<= 2)
     {
+        const bool accumulate_split_stage = xor_result &&
+            FuseAccumulation && dist4 == m &&
+            !UseFusedButterfly4(ops, bytes);
         // For each set of dist*4 elements:
 #pragma omp parallel for
         for (int r = 0; r < (int)m_truncated; r += dist4)
@@ -1168,10 +1243,21 @@ static void IFFT_DIT_Encoder(
             const ffe_t log_m02 = skewLUT[i_end + dist];
             const ffe_t log_m23 = skewLUT[i_end + dist * 2];
 
-            IFFT_DIT4_Range(
-                ops, bytes, work + r, dist,
-                log_m01, log_m23, log_m02);
+            if (accumulate_split_stage)
+            {
+                IFFT_DIT4_xor_Split_Range(
+                    ops, bytes, work + r, xor_result + r, dist,
+                    log_m01, log_m23, log_m02);
+            }
+            else
+            {
+                IFFT_DIT4_Range(
+                    ops, bytes, work + r, dist,
+                    log_m01, log_m23, log_m02);
+            }
         }
+        if (accumulate_split_stage)
+            accumulated = true;
 
         // I tried alternating sweeps left->right and right->left to reduce cache misses.
         // It provides about 1% performance boost when done for both FFT and IFFT, so it
@@ -1186,27 +1272,60 @@ static void IFFT_DIT_Encoder(
 
         const ffe_t log_m = skewLUT[dist];
 
-        if (log_m == kModulus)
+        if (xor_result && FuseAccumulation)
+        {
+#pragma omp parallel for
+            for (int i = 0; i < (int)dist; ++i)
+            {
+                IFFT_DIT2_xor(ops,
+                    work[i], work[i + dist],
+                    xor_result[i], xor_result[i + dist],
+                    log_m, bytes);
+            }
+            accumulated = true;
+        }
+        else if (log_m == kModulus)
             VectorXOR_Threads(ops, bytes, dist, work + dist, work);
         else
         {
 #pragma omp parallel for
             for (int i = 0; i < (int)dist; ++i)
-            {
-                IFFT_DIT2(
-                    ops,
-                    work[i],
-                    work[i + dist],
-                    log_m,
-                    bytes);
-            }
+                IFFT_DIT2(ops, work[i], work[i + dist], log_m, bytes);
         }
     }
 
     // I tried unrolling this but it does not provide more than 5% performance
     // improvement for 16-bit finite fields, so it's not worth the complexity.
-    if (xor_result)
+    if (xor_result && !accumulated)
         VectorXOR_Threads(ops, bytes, m, xor_result, work);
+}
+
+
+static void IFFT_DIT_Encoder(
+    const backend::Ops& ops,
+    const uint64_t bytes,
+    const void* const* data,
+    const unsigned m_truncated,
+    void** work,
+    void** xor_result,
+    const unsigned m,
+    const ffe_t* skewLUT)
+{
+    // Matched-source crossover evidence qualifies the accumulating schedule
+    // for the isolated x86 vector tables.  The scalar implementation remains
+    // a correctness oracle and retains the materialize-then-XOR schedule,
+    // which is faster for its table arithmetic.  Future native vector tables
+    // require their own end-to-end qualification before opting in.
+    if (ops.kind == LEO2_BACKEND_SSSE3 || ops.kind == LEO2_BACKEND_AVX2)
+    {
+        IFFT_DIT_Encoder_Impl<true>(ops, bytes, data, m_truncated,
+            work, xor_result, m, skewLUT);
+    }
+    else
+    {
+        IFFT_DIT_Encoder_Impl<false>(ops, bytes, data, m_truncated,
+            work, xor_result, m, skewLUT);
+    }
 }
 
 
