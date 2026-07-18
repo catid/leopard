@@ -10,9 +10,11 @@ the default backend and does not change the data output of valid
 APIs' documented count/work-count validation and fixes a `k=1` no-loss decode
 null-recovery bug; those changes affect invalid or formerly crashing calls,
 not valid packed codewords. The experimental backend does not implement FF16
-or CUDA. A generated AVX-512 four-buffer circuit corpus now exists, but it is
-not integrated into the production transform path; the codec still executes
-two-buffer butterflies.
+or CUDA. Its generated AVX-512 four-buffer circuit corpus is now integrated
+into the production transform path behind an explicit experimental selector.
+The selector defaults to disabled; normal ff8xor and packed-Leopard behavior
+therefore remains unchanged unless a caller deliberately enables the fused
+path.
 
 The payload loops use loads, stores, XORs, copies, zeroing, and address/loop
 arithmetic. They do not use payload-indexed multiplication tables, byte
@@ -184,14 +186,42 @@ Encoder chunking, zero padding, transform truncation, work ordering, formal
 derivative, decoder ErrorBitfield selection, and the `k=1`/`r=1` special cases
 remain intact.
 
-The production transform still executes two-way butterflies. It does not yet
-use the packed backend's fused two-layer four-buffer path: four plane-sliced
-FF8 buffers require 32 live vector registers, while AVX2 provides 16. A
-separately generated 64-tuple AVX-512 corpus now proves the required radix-4
-maps and their named-register lowering, but production dispatch and transform
-integration remain future work. Until that integration is complete, the extra
-intermediate load/store passes remain an important performance disadvantage,
-not a benchmark artifact.
+The production transform has an opt-in AVX-512 ZMM radix-4 path for the 64
+generated reachable skew tuples. `FourBufferMode::Disabled`, the default,
+always retains the established two-way schedule. `FourBufferMode::Xor2`
+selects literal two-input XOR circuits and `FourBufferMode::Xor3` selects the
+generated mix of two-input XOR and `VPTERNLOGD 0x96`. This selector is
+independent of `KernelMode`; fusion is attempted only when the resolved payload
+mode is `KernelMode::Avx512Zmm`. AVX2 still has only the 16 vector registers
+needed by one plane-sliced two-buffer butterfly and therefore remains two-way.
+`FourBufferMode` is currently a developer-facing C++ control used by the test
+and benchmark programs; it does not add a selector to the experimental C ABI.
+Ordinary `leo_ff8xor_encode()` and `leo_ff8xor_decode()` calls therefore retain
+the disabled default unless an embedding C++ experiment explicitly changes
+that internal control.
+
+The transform resolves one reachable tuple and calls one tuple-specialized
+whole-buffer function before entering its offset loop. The loop itself has no
+coefficient or gate dispatch: it loads the 32 named plane registers, executes
+the literal generated circuit, and stores those 32 registers. A fused unit is
+used only when both layers are complete, equivalently
+`range + 2 * low_distance < count_truncated`, and every plane consists of one
+or more complete 64-byte ZMM chunks. A partial truncated unit, an unknown
+tuple, a sub-ZMM or non-64-byte plane tail, an unavailable build/CPU/OS state,
+an unsafe tracked-buffer state, or a decoder layer omitted by its
+`ErrorBitfield` falls back for the whole unit to the exact existing two-way
+schedule. It never applies a four-buffer map to only part of a plane.
+
+Forward fusion composes the natural higher-distance layer followed by its two
+lower-distance pairs; inverse fusion uses the reverse natural ordering. The
+tracked deferred-zero planner advances the same logical buffer states only
+after a fused call succeeds. Decoder `ErrorBitfield` decisions remain distinct
+for the higher layer and each lower pair, and fusion requires all applicable
+decisions to select the complete unit. These constraints preserve transform
+truncation, zero materialization, state identities, work ordering, and the
+decoder's per-layer pruning. When fusion does not apply, its extra intermediate
+load/store pass remains the same performance disadvantage documented for the
+two-way implementation.
 
 ### Choosing lower-cost locator constants
 
@@ -301,11 +331,14 @@ python3 tools/generate_ff8_xor_four_buffer_circuits.py --check
 python3 tests/test_ff8xor_four_buffer_circuits.py
 python3 tools/inspect_ff8xor_four_buffer_avx512.py \
     --compiler g++ --compiler clang++-18 --strict
+python3 tools/inspect_ff8xor_four_buffer_production.py \
+    --archive build/liblibleopard.a --strict
 python3 tools/evaluate_ff8xor_locator_boundary.py --check
 cmake --build build --target check_ff8_xor_four_buffer_circuits
+cmake --build build --target check_ff8xor_four_buffer_production_assembly
 cmake --build build --target check_ff8xor_locator_boundary_evidence
 ctest --test-dir build --output-on-failure \
-    -R 'ff8xor_(generated_xor3|four_buffer_circuits|locator_boundary_evidence)'
+    -R '(leopard_ff8xor_four_buffer_runtime|ff8xor_(generated_xor3|four_buffer_circuits|four_buffer_production|locator_boundary_evidence))'
 ```
 
 Build and run the finite automated test with:
@@ -345,6 +378,10 @@ and output MB/s.
 ./build/bench_leopard_ff8xor --quick --json --abba --cache-color
 ./build/bench_leopard_ff8xor --quick --json --abba \
     --ff8xor-mode avx512zmm
+./build/bench_leopard_ff8xor --quick --json --abba \
+    --ff8xor-mode avx512zmm --four-buffer-mode xor2
+./build/bench_leopard_ff8xor --quick --json --abba \
+    --ff8xor-mode avx512zmm --four-buffer-mode xor3
 ```
 
 `--ff8xor-mode` accepts `auto`, `portable`, `simd128`, `avx2`, `avx512vl`,
@@ -352,7 +389,20 @@ or `avx512zmm`. Selection occurs before timing and the requested value is
 printed in human, CSV, and JSON metadata. A forced mode that is unavailable in
 the build, on the CPU, or in the OS-enabled extended state exits with status
 77; it never silently benchmarks a fallback. `auto` retains normal runtime
-selection.
+selection. `--four-buffer-mode` accepts `disabled`, `xor2`, or `xor3` and
+defaults to `disabled`. Either active fusion mode requires an explicit
+`--ff8xor-mode avx512zmm`; the benchmark rejects a non-ZMM combination instead
+of printing a misleading fusion label. A requested ZMM mode that is not
+available retains the status-77 behavior.
+
+Human, CSV, and JSON results report the requested four-buffer mode, successful
+fused-unit count, and its estimated payload bytes elided. The latter models
+the intermediate loads and stores removed by successful complete radix-4
+units; it is combined with, but remains separately visible from, the existing
+deferred-materialization traffic estimate. Public ff8xor entry points reset
+both diagnostic structures on every call, including validation errors and
+special-case/no-loss returns, so benchmark rows cannot inherit stale fusion
+counts.
 
 Native rows exclude transpose time. Rows named `ff8xor_packed_boundary`
 include packed-to-plane input transposes and plane-to-packed outputs. The full
@@ -641,14 +691,15 @@ The compiler already forms legal XOR3 instructions from the historical XOR2
 source. Explicit scheduling reduced FFT code and instruction count, but grew
 the multiplier and IFFT production census; all control and candidate assembly
 variants nevertheless passed strict inspection with zero spills or inner-loop
-calls. Production therefore continues to include only the historical XOR2
-artifact. Checked evaluation checksum
+calls. Two-buffer production therefore continues to include only the
+historical XOR2 artifact. This negative result does not apply to the separately
+generated radix-4 XOR3 schedules documented below. Checked evaluation checksum
 `03412e947d515369eae7ca9929687e8f54fb89362e272f872e38fcee866420ba`
 binds the artifacts, build, assembly totals, timings, and decision. Its raw
 temporary JSONL and assembly reports were not retained, so their manifest
 hashes authenticate the summary but cannot make those inputs reparsable.
 
-### Generated AVX-512 four-buffer corpus
+### Generated and integrated AVX-512 four-buffer corpus
 
 `tools/generate_ff8_xor_four_buffer_circuits.py` exhaustively enumerates all
 21,845 valid FF8 `(k,r)` parameter pairs and finds 64 reachable three-skew
@@ -682,15 +733,74 @@ outside the vector-chunk loop.
 
 All 32 ZMM registers are live, so the lowering contract matters. Ordinary
 intrinsic wrappers let GCC and Clang reassociate the circuit DAG and were
-observed to spill. The inspection harness therefore uses destructive
+observed to spill. The production translation unit therefore uses destructive
 read/write `+v` inline-assembly wrappers for `vpxord` and
-`vpternlogd $0x96`. With the production AVX-512 flags, GCC 13.3.0 and Clang
-18.1.3 each compiled frequency-representative and maximum-operation stress
-kernels for FFT/IFFT and XOR2/XOR3 with zero vector-stack references, calls,
-or forbidden field instructions. This is spill-free evidence for the eight
-synthetic representative/stress kernels per compiler, not for a production
-translation unit. The corpus is generated and tested, but production transform
-integration and end-to-end benchmarking are still pending.
+`vpternlogd $0x96`. The same wrappers were first proved on synthetic
+frequency-representative and maximum-operation stress kernels, then the strict
+production inspector was extended to all 256 compiled specializations: 64
+tuples, both FFT directions, and both XOR2/XOR3 lowerings.
+
+That full-object inspection found a subtler residency bug which the synthetic
+stress sample had missed. Although all 32 values were initially loaded, GCC
+kept their equivalence to the backing payload addresses and rematerialized
+late circuit sources, producing 32 through 48 payload loads in a
+specialization. Four zero-instruction barriers, each tying one group of eight
+named registers with `+v`, make every loaded value opaque while staying below
+GCC's inline-assembly operand limit. After that fix, both GCC 13 and Clang 18
+compile all 256 production specializations with exactly 32 payload vector
+loads and 32 stores, zero vector-stack references, zero calls, zero excess
+reloads, the exact generated `vpxord`/`vpternlogd` counts, and no RIP-relative
+tables, byte shuffles, GFNI, or CLMUL field operations. Tuple 63 could
+legitimately let the compiler elide unchanged stores before the opacity
+barrier; the production traffic model deliberately and conservatively charges
+all four output buffers.
+
+The GCC 13 object is 417,744 bytes (SHA-256
+`72c9aa10a3ad41db4dccf6ef1474d47a41ca4408f12953b0c962241e34b224cf`).
+Its per-specialization code sizes are 897--1,681 bytes (average 1,509.5) for
+FFT and IFFT XOR2, 849--1,329 bytes (average 1,241.75) for FFT XOR3, and
+833--1,305 bytes (average 1,221.625) for IFFT XOR3. The independently checked
+Clang 18 object is 559,288 bytes (SHA-256
+`f41bc4b79a47e9ff9738342f3798f9b6c7f68f99c9d46a5e0c16797dfe825311`)
+and has the same exact memory/call/operation census. Only GCC
+per-specialization code ranges were retained at this checkpoint; no Clang
+range is inferred.
+
+Production runtime tests compare every tuple/direction/lowering against the
+two-way reference, cover unavailable/narrow/unknown/disabled fallbacks, and
+exercise native encode/decode equivalence through truncation, tracked-buffer,
+mixed-loss, and maximum-loss cases. These checks convert the earlier generated
+corpus from synthetic evidence into an opt-in production implementation; they
+do not make it the default.
+
+#### Four-buffer performance checkpoint
+
+The following is an integration checkpoint, not a broad promotion result.
+GCC 13 Release runs used native plane buffers, pinned logical CPU 24, two
+warm-ups and seven measured iterations per row, with adaptive inner calls
+reaching at least 1 ms. Each size aggregates the full six encode `(k,r)` rows
+or all 20 distinct decode `(k,r,loss)` rows by geometric mean. Ratios are
+candidate time divided by the disabled two-way control time, so values below
+1 are faster. Allocation, checking, and transposes were excluded.
+
+| Shard bytes | Repeated XOR2 encode | Repeated XOR2 decode | Repeated XOR3 encode | Repeated XOR3 decode |
+|---:|---:|---:|---:|---:|
+| 1 KiB | 0.755x | 0.907x | 0.739x | 0.936x |
+| 4 KiB | 0.784x | 0.901x | 0.793x | 0.907x |
+| 64 KiB | 1.090x | 0.953x | 1.177x | 0.993x |
+| 1 MiB | 1.086x | 0.988x | 1.136x | 1.001x |
+
+For each lowering, the cells are the geometric mean of matching row times
+from two disabled and two candidate reports before the cross-row aggregation.
+These reports were regenerated after the final default-disabled fast-reject
+ordering, so the control and candidate describe the checked-in code. The
+result is useful but not uniformly favorable: XOR3 is best for 1 KiB encode,
+while XOR2 is slightly better in the other aggregated small cells and in the
+large decode cells. Both lowerings clearly regress large encode; large decode
+ranges from a modest XOR2 win to an approximately neutral XOR3 result.
+Consequently all builds still default to `FourBufferMode::Disabled`. A
+possible policy restricted to payloads at or below 4 KiB is a separate tuning
+experiment, not enabled by this checkpoint.
 
 ### Offline ISA-aware circuit costing
 
@@ -1092,26 +1202,42 @@ optional `--fail-on-spills` gate. GCC AVX-512 output also combines some XORs
 into `vpternlog[dq] 0x96`; the separately generated explicit-XOR3 schedules
 were measured and rejected for production as documented above.
 
+`tools/inspect_ff8xor_four_buffer_production.py` complements that coefficient
+census by extracting the actual `LeopardFF8XorAVX512Four.cpp.o` archive member
+and checking all 256 radix-4 functions. Its strict contract requires exact
+generated XOR2/XOR3 counts, exactly 32 loads, and at most 32 stores, while
+rejecting payload vector spills, calls, non-move vector memory operands,
+non-`0x96` ternary immediates, excess reloads, RIP-relative tables, and field
+shuffle/GFNI/CLMUL instructions. Both current compilers emit all 32 stores.
+The production-object sizes, residency-barrier fix, and current GCC code ranges
+are recorded in the four-buffer section above.
+
 ## Known disadvantages and next experiment
 
 - Applications must retain the plane layout to avoid boundary transpose cost.
-- Each whole-buffer operation incurs one coefficient function-pointer dispatch.
-- Production still uses two-way butterflies and loses the packed backend's
-  existing fused two-layer memory pass. The verified 64-tuple AVX-512 corpus
-  has not yet been integrated.
+- Each two-way whole-buffer operation incurs one coefficient function-pointer
+  dispatch; each successful radix-4 unit incurs one tuple-specialized
+  whole-buffer dispatch.
+- The fused path requires AVX-512 ZMM and a complete 64-byte-chunked plane.
+  AVX2, partial/truncated radix-4 units, tails, and pruned decoder layers retain
+  the extra two-way intermediate memory pass.
+- The integrated four-buffer path is opt-in and default-disabled. Its current
+  checkpoint improves the broad 1--4 KiB matrix but regresses large encode and
+  does not provide a uniform large-decode win, so enabling it unconditionally
+  would make the experiment worse on the implementation host.
 - Encoder chunk accumulation and the decoder formal-derivative sweep expose
   two/four-stream XOR instruction-level parallelism only through 1 KiB. Larger
   buffers use the measured faster sequential-loop shape and still lack fusion
   into adjacent transform passes.
 - Sixteen live AVX2 vectors leave no spare vector register, so compiler spills
   remain possible for some generated circuits.
-- Static specialization of all multiplier and butterfly coefficients increases
-  source, object, and instruction-cache footprint.
-- The current GCC Release/OpenMP artifacts are about 3.30 MiB for the static
-  archive and 2.55 MiB for the experimental benchmark executable, versus about
-  99.5 KiB for the packed benchmark. Static specialization remains a material
-  code-size cost, though packed-only static clients do not pull the generated
-  circuit objects.
+- Static specialization of all multiplier, two-way butterfly, and 256 radix-4
+  functions increases source, object, and instruction-cache footprint. The
+  current GCC Release/OpenMP checkpoint is about 3.70 MiB for the static archive
+  and 2.95 MiB for the experimental benchmark executable, versus about
+  93.4 KiB for the packed benchmark. The radix-4 object alone is 417,744 bytes
+  with GCC and 559,288 bytes with Clang. Packed-only static clients do not pull
+  the generated circuit objects.
 - Packed compatibility requires explicit 8x8 transposes.
 - The inherited packed payload objects still use the project's global
   `-march=native`; this experiment does not make the existing packed codec a
@@ -1122,12 +1248,12 @@ were measured and rejected for production as documented above.
   broader packed-code multiversioning change.
 - This backend is FF8-only and CPU-only.
 
-The highest-value next optimization is integrating the generated AVX-512
-four-buffer circuits behind one tuple dispatch per whole-buffer operation,
-then validating the actual production object and end-to-end codec benchmark.
-The 32 architectural vector registers can hold four plane-sliced FF8 buffers
-and potentially recover the fused two-layer memory behavior, but the synthetic
-spill-free inspection is not yet that proof. Other follow-ups include CUDA
-plane kernels, persistent plane pipelines, packed-boundary transpose/scaling
-fusion, and synthesis optimized for depth and register pressure rather than
-gate count alone.
+The highest-value next optimization for this path is a separately validated
+small-payload policy and schedule tuned for the region at or below 4 KiB where
+fusion currently wins. That experiment must repeat correctness, production
+assembly inspection, and counterbalanced full-matrix timing before changing
+the default; this checkpoint deliberately does not enable such a policy.
+Other follow-ups include fusing the formal derivative with its adjacent FFT
+layer, CUDA plane kernels, persistent plane pipelines, packed-boundary
+transpose/scaling fusion, and synthesis optimized for depth and register
+pressure rather than gate count alone.
