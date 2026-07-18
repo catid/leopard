@@ -1,0 +1,57 @@
+{
+  "cases": [
+    {
+      "K": 128,
+      "R": 128,
+      "backend": "scalar",
+      "batch": 1,
+      "candidate_mode": "materialized",
+      "control_mode": "generic",
+      "field": "gf8",
+      "iterations": 3,
+      "loss_count": 128,
+      "name": "k128-generic-v-materialized-smoke",
+      "profile": "legacy_high_v1",
+      "reuse": 1,
+      "seed": 31415901,
+      "shard_bytes": 256,
+      "warmup": 1
+    },
+    {
+      "K": 128,
+      "R": 128,
+      "backend": "scalar",
+      "batch": 1,
+      "candidate_mode": "tiled",
+      "control_mode": "generic",
+      "field": "gf8",
+      "iterations": 3,
+      "loss_count": 128,
+      "name": "k128-generic-v-tiled-smoke",
+      "profile": "legacy_high_v1",
+      "reuse": 1,
+      "seed": 31415902,
+      "shard_bytes": 256,
+      "warmup": 1
+    },
+    {
+      "K": 128,
+      "R": 128,
+      "backend": "scalar",
+      "batch": 1,
+      "candidate_mode": "tiled",
+      "control_mode": "materialized",
+      "field": "gf8",
+      "iterations": 3,
+      "loss_count": 128,
+      "name": "k128-materialized-v-tiled-smoke",
+      "profile": "legacy_high_v1",
+      "reuse": 1,
+      "seed": 31415903,
+      "shard_bytes": 256,
+      "warmup": 1
+    }
+  ],
+  "name": "balanced-forced-three-mode-smoke",
+  "schema": "leopard2-balanced-forced-matrix/v1"
+}

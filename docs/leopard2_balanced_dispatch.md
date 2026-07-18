@@ -28,7 +28,7 @@ at this point, with estimated upper workspace traffic of 46.5 versus 51.5
 passes. Algorithm 5 still saves one transform level because `T = N/2`, but full
 original recovery removes its message-only output pruning.
 
-## Isolated evidence
+## Historical isolated evidence
 
 The retained summary is
 `experiments/leopard2/decoder_dispatch/results/balanced_amd_9950x3d.json`; its
@@ -38,8 +38,13 @@ file SHA-256 is:
 
 It contains decode-execution and decode-plan-setup medians and MADs separately,
 SHA-256 identities of the raw benchmark JSON inputs, build identities, exact
-run ordering and parameters, and a canonical content digest. The analyzer is
-`experiments/leopard2/decoder_dispatch/analyze_balanced.py`.
+run ordering and parameters, and a canonical content digest. It predates the
+current authenticated three-mode protocol. The former analyzer inferred
+specialized execution from `force_generic_decode=false`; that is insufficient
+after AUTO can select generic and after materialized and tiled Algorithm 5
+became separate paths. The retained artifact is historical provenance for this
+already-narrow rule only. It cannot be replayed through the current analyzer,
+relabeled as current evidence, or used to widen dispatch.
 
 Three separate Release binaries were built from pre-dispatch commit `50e7858`,
 so `force_generic=false` unambiguously selected the specialized path. Their
@@ -101,10 +106,17 @@ Regenerate that ignored correctness artifact with:
 
     python3 tools/leopard2_backend_matrix.py run --jobs "$(nproc)" --no-resume
 
-## Reproduction
+## Current reproduction contract
 
-Create a detached worktree at the recorded pre-dispatch commit, then configure
-one benchmark per backend:
+Fresh promotion evidence uses the same-binary external-matrix runner described
+in `leopard2_balanced_forced_evidence.md`. It authenticates exact generic,
+materialized, and tiled force tuples in benchmark argv and output, performs
+three clustered ABBA/BAAB/ABBA rounds, binds source/object/executable/runtime
+identity, and rejects an active SMT sibling. The committed smoke matrix is a
+protocol check, not a replacement for the full matrix.
+
+To reconstruct the historical input only, create a detached worktree at the
+recorded pre-dispatch commit, then configure one benchmark per backend:
 
     git worktree add --detach /tmp/leopard2-pre-dispatch 50e7858
     for backend in scalar ssse3 avx2; do
@@ -121,15 +133,8 @@ one benchmark per backend:
 For every backend and size `64 256 4096 65536 1048576`, run both the default
 pre-dispatch specialized codec and `--force-generic`, using the parameters
 retained under `method` in the JSON summary. Reverse mode and size order for the
-second run. Then regenerate the summary, substituting the newly built binary
-hashes:
-
-    python3 experiments/leopard2/decoder_dispatch/analyze_balanced.py \
-        --input-root /tmp/leopard2-dispatch-isolated \
-        --output /tmp/balanced-dispatch.json \
-        --source-commit 50e7858 \
-        --binary scalar=SHA256 --binary ssse3=SHA256 --binary avx2=SHA256
-
-Host-specific medians are expected to vary. Result validation, source and
-binary identity, relative path comparison, and dispatch boundaries are the
-reproducible contract.
+second run. The historical raw format has intentionally not been grandfathered
+into the new analyzer because doing so would permit the ambiguous
+AUTO-as-specialized classification. Host-specific medians are expected to
+vary; exact forced path, clean build closure, raw observations, and isolation
+are now the reproducible contract.

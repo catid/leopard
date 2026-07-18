@@ -1337,6 +1337,16 @@ if(LEO2_BUILD_TESTS)
                 ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/decoder_dispatch/analyze_tiled_high.py
                 --self-test)
         add_test(
+            NAME leopard2_balanced_forced_runner_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/decoder_dispatch/run_balanced_abba.py
+                --self-test)
+        add_test(
+            NAME leopard2_balanced_forced_analyzer_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/decoder_dispatch/analyze_balanced.py
+                --self-test)
+        add_test(
             NAME leopard2_visual_studio_project_self_test
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/tests/proj/test_leopard_vcxproj.py)

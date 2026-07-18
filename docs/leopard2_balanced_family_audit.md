@@ -3,7 +3,10 @@
 Status: source and correctness audit at `d9ef32e`.  No production dispatch
 change is proposed from the retained diagnostic timings.  The current
 singleton policy remains intact pending a fresh, isolated comparison of the
-current generic, materialized Algorithm 5, and tiled Algorithm 5 kernels.
+current generic, materialized Algorithm 5, and tiled Algorithm 5 kernels. The
+authenticated external-matrix protocol for that comparison is implemented in
+`leopard2_balanced_forced_evidence.md`; no broad authoritative timing has yet
+been run with it.
 
 ## Outcome
 
