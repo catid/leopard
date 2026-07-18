@@ -2300,9 +2300,11 @@ def self_test():
 
         oversubscribe_code = (
             "import threading,time; "
-            "threads=[threading.Thread(target=lambda:time.sleep(0.3)) "
+            "gate=threading.Event(); "
+            "threads=[threading.Thread(target=gate.wait) "
             "for _ in range(3)]; "
-            "[thread.start() for thread in threads]; time.sleep(0.2); "
+            "[thread.start() for thread in threads]; time.sleep(0.8); "
+            "gate.set(); "
             "[thread.join() for thread in threads]")
         oversubscribe_manifest = build_manifest({
             "root": str(root), "workers": 1,
