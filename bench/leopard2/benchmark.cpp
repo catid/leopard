@@ -495,6 +495,8 @@ struct HighEvaluatorAttribution
     uint64_t butterfly2_out_of_place;
     uint64_t butterfly4_out_of_place;
     uint64_t compatibility_copy_fallbacks;
+    uint64_t pruned_output_blocks;
+    uint64_t mature_output_blocks;
 };
 
 static void PrepareHighEvaluatorAttribution(const Options& options)
@@ -529,8 +531,11 @@ static HighEvaluatorAttribution ReadHighEvaluatorAttribution(
             ff16.fft_butterfly4_out_of_place
         : ff8.fft_butterfly2_out_of_place +
             ff8.fft_butterfly4_out_of_place;
+    const uint64_t inactive_classified_blocks = selected_ff8
+        ? ff16.pruned_output_blocks + ff16.mature_output_blocks
+        : ff8.pruned_output_blocks + ff8.mature_output_blocks;
     if (inactive_output_blocks != 0 || inactive_copy_fallbacks != 0 ||
-        inactive_out_of_place != 0)
+        inactive_out_of_place != 0 || inactive_classified_blocks != 0)
         Fail("inactive field recorded high evaluator work");
 
     HighEvaluatorAttribution result;
@@ -541,6 +546,8 @@ static HighEvaluatorAttribution ReadHighEvaluatorAttribution(
         result.butterfly4_out_of_place = ff8.fft_butterfly4_out_of_place;
         result.compatibility_copy_fallbacks =
             ff8.compatibility_copy_fallbacks;
+        result.pruned_output_blocks = ff8.pruned_output_blocks;
+        result.mature_output_blocks = ff8.mature_output_blocks;
     }
     else
     {
@@ -549,11 +556,16 @@ static HighEvaluatorAttribution ReadHighEvaluatorAttribution(
         result.butterfly4_out_of_place = ff16.fft_butterfly4_out_of_place;
         result.compatibility_copy_fallbacks =
             ff16.compatibility_copy_fallbacks;
+        result.pruned_output_blocks = ff16.pruned_output_blocks;
+        result.mature_output_blocks = ff16.mature_output_blocks;
     }
     const uint64_t out_of_place = result.butterfly2_out_of_place +
         result.butterfly4_out_of_place;
     if (result.output_blocks == 0)
         Fail("attribution benchmark executed no Algorithm 5 output blocks");
+    if (result.pruned_output_blocks + result.mature_output_blocks !=
+        result.output_blocks)
+        Fail("Algorithm 5 output-block classification is incomplete");
     if (options.high_evaluator_mode == Options::HighEvaluatorNoCopy)
     {
         if (result.compatibility_copy_fallbacks != 0 || out_of_place == 0)
@@ -1355,6 +1367,10 @@ static int Run(const Options& options)
          << high_evaluator.butterfly4_out_of_place << ",\n"
          << "    \"compatibility_copy_fallbacks\": "
          << high_evaluator.compatibility_copy_fallbacks << ",\n"
+         << "    \"pruned_output_blocks\": "
+         << high_evaluator.pruned_output_blocks << ",\n"
+         << "    \"mature_output_blocks\": "
+         << high_evaluator.mature_output_blocks << ",\n"
          << "    \"invariant_passed\": true\n"
          << "  },\n";
 #endif

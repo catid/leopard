@@ -100,15 +100,20 @@ def cross_validate(
             "A/B source commit is absent")
     ab_records = ab_raw.get("records")
     require(isinstance(ab_records, list), "A/B records are absent")
-    expected_main = {
-        workspace: {cell["id"] for cell in matrix["cells"]
-                    if cell["workspace"] == workspace and
-                    cell["exact_main_eligible"]}
+    metadata_names = ("k", "r", "shard_bytes", "losses", "seed")
+    expected_main_cells = {
+        workspace: {
+            cell["id"]: {
+                "identifier": cell["id"],
+                **{name: cell[name] for name in metadata_names},
+            }
+            for cell in matrix["cells"]
+            if cell["workspace"] == workspace and cell["exact_main_eligible"]}
         for workspace in ("materialized", "tiled")
     }
     output: dict[str, Any] = {}
     for workspace, raw in exact_raws.items():
-        require(workspace in expected_main,
+        require(workspace in expected_main_cells,
                 "unexpected exact-main workspace bundle")
         campaign = raw.get("campaign")
         identities = raw.get("identities_initial")
@@ -126,9 +131,15 @@ def cross_validate(
                 "at the identical Leopard2 source commit")
         cells = campaign.get("cells")
         require(isinstance(cells, list) and
-                {cell.get("identifier") for cell in cells
-                 if isinstance(cell, dict)} == expected_main[workspace],
-                f"exact-main {workspace} cells differ from the eligible matrix subset")
+                all(isinstance(cell, dict) and
+                    set(cell) == {"identifier", *metadata_names}
+                    for cell in cells),
+                f"exact-main {workspace} cell metadata shape changed")
+        actual_cells = {cell["identifier"]: cell for cell in cells}
+        require(len(actual_cells) == len(cells) and
+                actual_cells == expected_main_cells[workspace],
+                f"exact-main {workspace} cells differ from the exact eligible "
+                "K/R/shard-bytes/loss/seed matrix subset")
         for cell in matrix["cells"]:
             if cell["workspace"] != workspace or not cell["exact_main_eligible"]:
                 continue
@@ -141,15 +152,48 @@ def cross_validate(
             require(len(ab_documents) == 6 and len(main_candidates) == 6 and
                     len(main_baselines) == 6,
                     f"{identifier} does not have six observations per compared provider")
+            require(all(document.get("resolved", {}).get("backend") ==
+                            cell["backend"] and
+                        document.get("resolved", {}).get("field") ==
+                            cell["field"] and
+                        document.get("resolved", {}).get(
+                            "selected_decode_path") == workspace
+                        for document in ab_documents),
+                    f"{identifier} A/B role did not attest its exact "
+                    "backend, field, and workspace")
+            if cell["role"] == "full-block":
+                require(all(
+                            document.get(
+                                "high_evaluator_attribution", {}).get(
+                                    "pruned_output_blocks") == 0 and
+                            document.get(
+                                "high_evaluator_attribution", {}).get(
+                                    "mature_output_blocks") ==
+                                document.get(
+                                    "high_evaluator_attribution", {}).get(
+                                        "output_blocks", -1) and
+                            document.get(
+                                "high_evaluator_attribution", {}).get(
+                                    "output_blocks", 0) > 0
+                            for document in ab_documents),
+                        f"{identifier} did not attest a nonpruned full-block evaluator")
             digest = ab_documents[0].get("workload_digests")
             missing = ab_documents[0].get("parameters", {}).get(
                 "missing_original_indices")
             all_documents = ab_documents + main_candidates + main_baselines
+            expected_parameters = {
+                "K": cell["k"], "R": cell["r"],
+                "shard_bytes": cell["shard_bytes"],
+                "loss_count": cell["losses"], "seed": cell["seed"],
+            }
             require(all(document.get("workload_digests") == digest and
                         document.get("parameters", {}).get(
-                            "missing_original_indices") == missing
+                            "missing_original_indices") == missing and
+                        all(document.get("parameters", {}).get(name) == expected
+                            for name, expected in expected_parameters.items())
                         for document in all_documents),
-                    f"{identifier} exact-main and A/B workload/path digests differ")
+                    f"{identifier} exact-main and A/B cell metadata, workload, "
+                    "path, or digests differ")
             require(all(document.get("correctness", {}).get(
                         "leopard2_round_trip") is True
                         for document in main_candidates) and
@@ -170,7 +214,8 @@ def cross_validate(
                 "missing_original_indices": missing,
                 "exact_main_workspace": workspace,
             }
-    require(set(output) == expected_main["materialized"] | expected_main["tiled"],
+    require(set(output) == set(expected_main_cells["materialized"]) |
+            set(expected_main_cells["tiled"]),
             "composite omitted an exact-main-eligible cell")
     for cell in matrix["cells"]:
         if cell["exact_main_eligible"]:
@@ -262,7 +307,21 @@ def synthetic_raws() -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
                     "workload_digests": {"algorithm": "fnv1a64",
                         "original_data": cell["id"], "transmitted_parity": "p",
                         "recovered_originals": "r"},
-                    "parameters": {"missing_original_indices": [cell["losses"]]},
+                    "parameters": {
+                        "K": cell["k"], "R": cell["r"],
+                        "shard_bytes": cell["shard_bytes"],
+                        "loss_count": cell["losses"], "seed": cell["seed"],
+                        "missing_original_indices": [cell["losses"]]},
+                    "resolved": {"backend": cell["backend"],
+                                 "field": cell["field"],
+                                 "selected_decode_path": cell["workspace"]},
+                    "high_evaluator_attribution": {
+                        "output_blocks": 2,
+                        "pruned_output_blocks":
+                            0 if cell["role"] == "full-block" else 1,
+                        "mature_output_blocks":
+                            2 if cell["role"] == "full-block" else 1,
+                    },
                 }
                 ab_records.append({"cell": cell["id"], "mode": mode,
                                    "result": document})
@@ -289,12 +348,21 @@ def synthetic_raws() -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
                                     "implementation": implementation,
                                     "result": {"workload_digests": digest,
                                         "parameters": {
+                                            "K": cell["k"], "R": cell["r"],
+                                            "shard_bytes": cell["shard_bytes"],
+                                            "loss_count": cell["losses"],
+                                            "seed": cell["seed"],
                                             "missing_original_indices": missing},
                                         "correctness": correctness,
                                         "resolved": resolved}})
         exact[workspace] = {
             "campaign": {"candidate_mode": workspace,
-                         "cells": [{"identifier": cell["id"]} for cell in cells]},
+                         "cells": [
+                             {"identifier": cell["id"],
+                              "k": cell["k"], "r": cell["r"],
+                              "shard_bytes": cell["shard_bytes"],
+                              "losses": cell["losses"], "seed": cell["seed"]}
+                             for cell in cells]},
             "identities_initial": {
                 "candidate_source": {"head": commit},
                 "baseline_source": {"head": SUPPORT.MAIN_COMMIT,
@@ -333,14 +401,60 @@ def self_test() -> None:
          if record["implementation"] == "candidate")["result"]["resolved"][
              "backend"] = "scalar"
     mutations.append(wrong_backend)
+    for workspace in ("materialized", "tiled"):
+        for campaign_name, result_name in (
+            ("k", "K"), ("r", "R"), ("shard_bytes", "shard_bytes"),
+            ("losses", "loss_count"), ("seed", "seed"),
+        ):
+            wrong_metadata = copy.deepcopy(exact)
+            wrong_metadata[workspace]["campaign"]["cells"][0][campaign_name] += 1
+            mutations.append(wrong_metadata)
+            wrong_result_metadata = copy.deepcopy(exact)
+            next(record for record in
+                 wrong_result_metadata[workspace]["invocations"]
+                 if record["implementation"] == "candidate")["result"][
+                     "parameters"][result_name] += 1
+            mutations.append(wrong_result_metadata)
     for mutation in mutations:
         try:
             cross_validate(ab, mutation)
         except EvidenceError:
             continue
         raise EvidenceError(
-            "adversarial commit/mode/digest/tail/backend mutation passed")
-    print("high-decode copy composite self-test passed: 5 mutations rejected")
+            "adversarial commit/mode/digest/tail/backend/cell-metadata mutation passed")
+    full_identifier = next(
+        cell["id"] for cell in ab["matrix"]["cells"]
+        if cell["role"] == "full-block" and
+        cell["workspace"] == "materialized")
+    ab_mutations = []
+    wrong_ab_path = copy.deepcopy(ab)
+    next(record for record in wrong_ab_path["records"]
+         if record["cell"] == full_identifier and
+         record["mode"] == "no-copy")["result"]["resolved"][
+             "selected_decode_path"] = "tiled"
+    ab_mutations.append(wrong_ab_path)
+    wrong_ab_counter = copy.deepcopy(ab)
+    attribution = next(record for record in wrong_ab_counter["records"]
+                       if record["cell"] == full_identifier and
+                       record["mode"] == "no-copy")["result"][
+                           "high_evaluator_attribution"]
+    attribution["pruned_output_blocks"] = 1
+    attribution["mature_output_blocks"] -= 1
+    ab_mutations.append(wrong_ab_counter)
+    wrong_ab_digest = copy.deepcopy(ab)
+    next(record for record in wrong_ab_digest["records"]
+         if record["cell"] == full_identifier and
+         record["mode"] == "no-copy")["result"]["workload_digests"][
+             "recovered_originals"] = "changed"
+    ab_mutations.append(wrong_ab_digest)
+    for mutation in ab_mutations:
+        try:
+            cross_validate(mutation, exact)
+        except EvidenceError:
+            continue
+        raise EvidenceError(
+            "adversarial full-block path/counter/digest mutation passed")
+    print("high-decode copy composite self-test passed: 28 mutations rejected")
 
 
 def parser() -> argparse.ArgumentParser:

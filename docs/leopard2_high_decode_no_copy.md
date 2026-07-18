@@ -224,8 +224,9 @@ non-installed evidence harness under
 `experiments/leopard2/high_decode_copy/`.  It can force the retained copy
 fallback for every materialized or tiled Algorithm 5 output block in the same
 test-hooks-only executable, while counter attestation proves which path ran.
-Its bounded matrix covers GF8/GF16, aligned and compact-tail shards, targets
-and neighbors.  A separate composite step binds only the aligned cells to
+Its bounded matrix covers GF8/GF16, aligned and compact-tail shards, targets,
+neighbors, and balanced fully erased message blocks that prove the nonpruned
+mature evaluator in both workspaces.  A separate composite step binds only the aligned cells to
 independent production-versus-exact-main campaigns at the identical source
 commit; it explicitly refuses to infer exact-main evidence for tails.  No new
 timing claim is made until those isolated campaigns are collected.

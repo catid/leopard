@@ -32,6 +32,7 @@ def validate_document(
     workspace: str,
     field: str,
     tail_bytes: int,
+    evaluator: str | None = None,
 ) -> dict[str, Any]:
     require(isinstance(document, dict), "benchmark result is not an object")
     result = document
@@ -77,11 +78,15 @@ def validate_document(
     two_way = attribution.get("fft_butterfly2_out_of_place")
     four_way = attribution.get("fft_butterfly4_out_of_place")
     fallbacks = attribution.get("compatibility_copy_fallbacks")
+    pruned_blocks = attribution.get("pruned_output_blocks")
+    mature_blocks = attribution.get("mature_output_blocks")
     require(attribution.get("mode") == mode and
             attribution.get("invariant_passed") is True and
             all(type(value) is int and value >= 0 for value in
-                (output_blocks, two_way, four_way, fallbacks)) and
-            output_blocks > 0,
+                (output_blocks, two_way, four_way, fallbacks,
+                 pruned_blocks, mature_blocks)) and
+            output_blocks > 0 and
+            pruned_blocks + mature_blocks == output_blocks,
             "high-evaluator counter attestation is malformed")
     if mode == "no-copy":
         require(fallbacks == 0 and two_way + four_way > 0,
@@ -91,6 +96,10 @@ def validate_document(
                 "copy role did not force exactly one fallback per output block")
     else:
         raise ContractError("unknown signed high-evaluator mode")
+    if evaluator is not None:
+        require(evaluator == "mature" and pruned_blocks == 0 and
+                mature_blocks == output_blocks,
+                "full-block role did not exclusively use the mature evaluator")
     return result
 
 
@@ -101,13 +110,14 @@ def validate_pair(
     workspace: str,
     field: str,
     tail_bytes: int,
+    evaluator: str | None = None,
 ) -> None:
     first = validate_document(
         no_copy, mode="no-copy", workspace=workspace, field=field,
-        tail_bytes=tail_bytes)
+        tail_bytes=tail_bytes, evaluator=evaluator)
     second = validate_document(
         copy_fallback, mode="copy-fallback", workspace=workspace, field=field,
-        tail_bytes=tail_bytes)
+        tail_bytes=tail_bytes, evaluator=evaluator)
     require(first["workload_digests"] == second["workload_digests"] and
             first["parameters"]["missing_original_indices"] ==
                 second["parameters"]["missing_original_indices"] and
@@ -173,19 +183,23 @@ def run_checked(arguments: list[str], *, expect_success: bool = True) -> None:
 def smoke(executable: Path) -> None:
     executable = executable.resolve(strict=True)
     cases = (
-        ("gf8", "materialized", 192, 64, 64, 4, 101, 0),
-        ("gf8", "materialized", 192, 64, 65, 4, 103, 1),
-        ("gf8", "tiled", 240, 16, 256, 8, 107, 0),
-        ("gf8", "tiled", 240, 16, 257, 8, 109, 1),
-        ("gf16", "materialized", 257, 63, 64, 4, 113, 0),
-        ("gf16", "materialized", 257, 63, 66, 4, 127, 2),
-        ("gf16", "tiled", 1000, 200, 256, 8, 131, 0),
-        ("gf16", "tiled", 1000, 200, 258, 8, 137, 2),
+        ("gf8", "materialized", 192, 64, 64, 4, 101, 0, None),
+        ("gf8", "materialized", 192, 64, 65, 4, 103, 1, None),
+        ("gf8", "tiled", 240, 16, 256, 8, 107, 0, None),
+        ("gf8", "tiled", 240, 16, 257, 8, 109, 1, None),
+        ("gf16", "materialized", 257, 63, 64, 4, 113, 0, None),
+        ("gf16", "materialized", 257, 63, 66, 4, 127, 2, None),
+        ("gf16", "tiled", 1000, 200, 256, 8, 131, 0, None),
+        ("gf16", "tiled", 1000, 200, 258, 8, 137, 2, None),
+        ("gf8", "materialized", 128, 128, 64, 128, 139, 0, "mature"),
+        ("gf8", "tiled", 128, 128, 64, 128, 149, 0, "mature"),
+        ("gf16", "materialized", 256, 256, 64, 256, 151, 0, "mature"),
+        ("gf16", "tiled", 256, 256, 64, 256, 157, 0, "mature"),
     )
     with tempfile.TemporaryDirectory(prefix="leo2-high-copy-contract-") as root_text:
         root = Path(root_text)
         for index, (field, workspace, k, r, byte_count, losses, seed,
-                    tail_bytes) in enumerate(cases):
+                    tail_bytes, evaluator) in enumerate(cases):
             documents: dict[str, object] = {}
             for mode in ("no-copy", "copy-fallback"):
                 output = root / f"{index}-{mode}.json"
@@ -196,7 +210,8 @@ def smoke(executable: Path) -> None:
                 documents[mode] = json.loads(output.read_text(encoding="utf-8"))
             validate_pair(
                 documents["no-copy"], documents["copy-fallback"],
-                workspace=workspace, field=field, tail_bytes=tail_bytes)
+                workspace=workspace, field=field, tail_bytes=tail_bytes,
+                evaluator=evaluator)
 
         base = benchmark_command(
             executable, root / "invalid.json", k=192, r=64, shard_bytes=64,
@@ -211,7 +226,7 @@ def smoke(executable: Path) -> None:
         run_checked(invalid_mode, expect_success=False)
         missing_path = [item for item in base if item != "--force-materialized"]
         run_checked(missing_path, expect_success=False)
-    print("high-decode copy attribution benchmark contract passed: 8 paired cells")
+    print("high-decode copy attribution benchmark contract passed: 12 paired cells")
 
 
 def synthetic_document(mode: str) -> dict[str, Any]:
@@ -237,6 +252,8 @@ def synthetic_document(mode: str) -> dict[str, Any]:
             "fft_butterfly2_out_of_place": 0 if copy_mode else 16,
             "fft_butterfly4_out_of_place": 0,
             "compatibility_copy_fallbacks": 2 if copy_mode else 0,
+            "pruned_output_blocks": 0,
+            "mature_output_blocks": 2,
             "invariant_passed": True,
         },
         "correctness": {"leopard2_round_trip": True,
@@ -254,7 +271,7 @@ def self_test() -> None:
     no_copy = synthetic_document("no-copy")
     fallback = synthetic_document("copy-fallback")
     validate_pair(no_copy, fallback, workspace="materialized", field="gf8",
-                  tail_bytes=1)
+                  tail_bytes=1, evaluator="mature")
     mutations = []
     wrong_mode = copy.deepcopy(no_copy)
     wrong_mode["resolved"]["high_evaluator_mode"] = "copy-fallback"
@@ -268,14 +285,19 @@ def self_test() -> None:
     wrong_digest = copy.deepcopy(no_copy)
     wrong_digest["workload_digests"]["recovered_originals"] = "g" * 16
     mutations.append(wrong_digest)
+    wrong_evaluator = copy.deepcopy(no_copy)
+    wrong_evaluator["high_evaluator_attribution"]["pruned_output_blocks"] = 1
+    wrong_evaluator["high_evaluator_attribution"]["mature_output_blocks"] = 1
+    mutations.append(wrong_evaluator)
     for mutation in mutations:
         try:
             validate_pair(mutation, fallback, workspace="materialized", field="gf8",
-                          tail_bytes=1)
+                          tail_bytes=1, evaluator="mature")
         except ContractError:
             continue
-        raise ContractError("adversarial mode/counter/path/digest mutation passed")
-    print("high-decode copy attribution contract self-test passed: 4 mutations rejected")
+        raise ContractError(
+            "adversarial mode/counter/path/digest/evaluator mutation passed")
+    print("high-decode copy attribution contract self-test passed: 5 mutations rejected")
 
 
 def main() -> int:

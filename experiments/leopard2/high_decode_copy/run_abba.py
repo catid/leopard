@@ -64,8 +64,8 @@ def load_matrix(path: Path) -> dict[str, Any]:
             set(value) == {"schema", "cells", "round_orders", "comparison_policy"},
             "high-decode copy matrix schema or shape changed")
     cells = value["cells"]
-    require(isinstance(cells, list) and len(cells) == 12,
-            "high-decode copy matrix must contain exactly 12 bounded cells")
+    require(isinstance(cells, list) and len(cells) == 16,
+            "high-decode copy matrix must contain exactly 16 bounded cells")
     expected_keys = {"id", "backend", "field", "k", "r", "shard_bytes",
                      "losses", "seed", "workspace", "role",
                      "exact_main_eligible"}
@@ -81,7 +81,7 @@ def load_matrix(path: Path) -> dict[str, Any]:
         require(cell["backend"] in ("scalar", "ssse3", "avx2") and
                 cell["field"] in ("gf8", "gf16") and
                 cell["workspace"] in ("materialized", "tiled") and
-                cell["role"] in ("target", "neighbor", "tail") and
+                cell["role"] in ("target", "neighbor", "full-block", "tail") and
                 all(type(cell[name]) is int and cell[name] > 0
                     for name in ("k", "r", "shard_bytes", "losses", "seed")) and
                 cell["losses"] <= min(cell["k"], cell["r"]) and
@@ -91,8 +91,12 @@ def load_matrix(path: Path) -> dict[str, Any]:
         parent = 1 << (cell["k"] + padded_recovery - 1).bit_length()
         expected_field = "gf8" if parent <= 256 else "gf16"
         tail = cell["shard_bytes"] % 64
+        full_dimensions = (128, 128, 128) if cell["field"] == "gf8" \
+            else (256, 256, 256)
         require(parent <= 65536 and cell["field"] == expected_field and
                 (cell["role"] == "tail") == (tail != 0) and
+                (cell["role"] != "full-block" or
+                 (cell["k"], cell["r"], cell["losses"]) == full_dimensions) and
                 (cell["field"] != "gf16" or cell["shard_bytes"] % 2 == 0) and
                 cell["exact_main_eligible"] == (tail == 0),
                 f"cell {identifier} misclassifies its field or exact-main/tail eligibility")
@@ -100,8 +104,8 @@ def load_matrix(path: Path) -> dict[str, Any]:
     require(coverage == {(field, workspace, role)
                          for field in ("gf8", "gf16")
                          for workspace in ("materialized", "tiled")
-                         for role in ("target", "neighbor", "tail")},
-            "matrix lost field/workspace/target-neighbor-tail coverage")
+                         for role in ("target", "neighbor", "full-block", "tail")},
+            "matrix lost field/workspace/target-neighbor-full-block-tail coverage")
     orders = value["round_orders"]
     require(orders == [
         ["copy-fallback", "no-copy", "no-copy", "copy-fallback"],
@@ -248,7 +252,8 @@ def benchmark_command(binary: Path, cell: Mapping[str, Any], mode: str,
 def validate_result(document: object, cell: Mapping[str, Any], mode: str) -> dict[str, Any]:
     result = CONTRACT.validate_document(
         document, mode=mode, workspace=cell["workspace"], field=cell["field"],
-        tail_bytes=cell["shard_bytes"] % 64)
+        tail_bytes=cell["shard_bytes"] % 64,
+        evaluator="mature" if cell["role"] == "full-block" else None)
     parameters = result["parameters"]
     resolved = result["resolved"]
     require(parameters.get("K") == cell["k"] and parameters.get("R") == cell["r"] and
@@ -329,7 +334,8 @@ def analyze(records: Sequence[Mapping[str, Any]], matrix: Mapping[str, Any]) -> 
         CONTRACT.validate_pair(
             documents["no-copy"][0], documents["copy-fallback"][0],
             workspace=cell["workspace"], field=cell["field"],
-            tail_bytes=cell["shard_bytes"] % 64)
+            tail_bytes=cell["shard_bytes"] % 64,
+            evaluator="mature" if cell["role"] == "full-block" else None)
         digest = documents["no-copy"][0]["workload_digests"]
         missing = documents["no-copy"][0]["parameters"]["missing_original_indices"]
         require(all(document["workload_digests"] == digest and
@@ -410,8 +416,11 @@ def validate_raw(raw: object, output: Path, *, current: bool) -> dict[str, Any]:
             campaign.get("thread_count") == 1,
             "raw campaign contract is incomplete")
     records = raw.get("records")
-    require(isinstance(records, list) and len(records) == 144,
-            "raw campaign does not contain exactly 144 bounded invocations")
+    invocation_count = sum(len(order) for order in matrix["round_orders"]) * \
+        len(matrix["cells"])
+    require(campaign.get("invocation_count") == invocation_count and
+            isinstance(records, list) and len(records) == invocation_count,
+            "raw campaign does not contain the exact bounded invocation count")
     binary = Path(raw["identities_initial"]["build"]["binary"]["path"])
     for cell in matrix["cells"]:
         matching = [record for record in records if record.get("cell") == cell["id"]]
@@ -468,7 +477,8 @@ def run_campaign(options: argparse.Namespace) -> int:
         "timeout_seconds": options.timeout,
         "round_orders": matrix["round_orders"],
         "child_environment": dict(SUPPORT.CHILD_ENVIRONMENT),
-        "invocation_count": 144,
+        "invocation_count": sum(len(order) for order in matrix["round_orders"]) *
+            len(matrix["cells"]),
     }
     try:
         allowed, housekeeping = SUPPORT.validate_topology(
@@ -603,15 +613,21 @@ def self_test() -> None:
     tail = next(cell for cell in wrong_field["cells"]
                 if cell["id"] == "gf8-mat-tail")
     tail["k"] = 193
+    wrong_full_block = json.loads(json.dumps(matrix))
+    full_block = next(cell for cell in wrong_full_block["cells"]
+                      if cell["id"] == "gf8-mat-full-block")
+    full_block["losses"] = 127
     with tempfile.TemporaryDirectory(prefix="leo2-high-copy-matrix-") as root:
-        path = Path(root) / "matrix.json"
-        path.write_text(json.dumps(wrong_field), encoding="utf-8")
-        try:
-            load_matrix(path)
-        except EvidenceError:
-            pass
-        else:
-            raise AssertionError("GF16-inflated cell was accepted as GF8")
+        for index, mutation in enumerate((wrong_field, wrong_full_block)):
+            path = Path(root) / f"matrix-{index}.json"
+            path.write_text(json.dumps(mutation), encoding="utf-8")
+            try:
+                load_matrix(path)
+            except EvidenceError:
+                pass
+            else:
+                raise AssertionError(
+                    "invalid field/full-block matrix mutation was accepted")
     command_a = benchmark_command(
         Path("/tmp/bench"), matrix["cells"][0], "copy-fallback", 7, 8, 9, 2)
     command_b = benchmark_command(
@@ -659,7 +675,7 @@ def self_test() -> None:
         raise AssertionError("obsolete flat isolation fixture was accepted")
     CONTRACT.self_test()
     print("high-decode copy/no-copy runner self-test passed: "
-          "12 cells, 144 invocations, canonical field and nested isolation")
+          "16 cells, 192 invocations, canonical full-block, field, and nested isolation")
 
 
 def parser() -> argparse.ArgumentParser:

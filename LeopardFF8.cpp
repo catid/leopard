@@ -59,6 +59,8 @@ static std::atomic<uint64_t> TestHighOutputBlocks(0);
 static std::atomic<uint64_t> TestHighFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestHighFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighCompatibilityCopyFallbacks(0);
+static std::atomic<uint64_t> TestHighPrunedOutputBlocks(0);
+static std::atomic<uint64_t> TestHighMatureOutputBlocks(0);
 static std::atomic<bool> TestForceHighDecodeCopyFallback(false);
 static std::atomic<uint64_t> TestHighSyndromeAccumulatedBlocks(0);
 static std::atomic<uint64_t> TestHighSyndromeMaterializedBlocks(0);
@@ -2140,6 +2142,9 @@ static void FFT_DIT_FromCoefficients(
     (void)callsite;
     LEO_DEBUG_ASSERT(m >= 2);
 #if defined(LEO2_ENABLE_TEST_HOOKS)
+    if (callsite == SourceEvaluationHighDecode)
+        TestHighMatureOutputBlocks.fetch_add(
+            1, std::memory_order_relaxed);
     if (callsite == SourceEvaluationHighDecode &&
         TestForceHighDecodeCopyFallback.load(std::memory_order_relaxed))
     {
@@ -3190,6 +3195,8 @@ void TestOnlyResetHighDecodeCounts()
     TestHighFFTButterfly2OutCalls.store(0, std::memory_order_relaxed);
     TestHighFFTButterfly4OutCalls.store(0, std::memory_order_relaxed);
     TestHighCompatibilityCopyFallbacks.store(0, std::memory_order_relaxed);
+    TestHighPrunedOutputBlocks.store(0, std::memory_order_relaxed);
+    TestHighMatureOutputBlocks.store(0, std::memory_order_relaxed);
     TestHighSyndromeAccumulatedBlocks.store(0, std::memory_order_relaxed);
     TestHighSyndromeMaterializedBlocks.store(0, std::memory_order_relaxed);
     TestHighSyndromePrunedAccumulatedBlocks.store(
@@ -3230,6 +3237,10 @@ TestOnlyHighDecodeCounts TestOnlyGetHighDecodeCounts()
         TestHighFFTButterfly4OutCalls.load(std::memory_order_relaxed);
     result.compatibility_copy_fallbacks =
         TestHighCompatibilityCopyFallbacks.load(std::memory_order_relaxed);
+    result.pruned_output_blocks =
+        TestHighPrunedOutputBlocks.load(std::memory_order_relaxed);
+    result.mature_output_blocks =
+        TestHighMatureOutputBlocks.load(std::memory_order_relaxed);
     result.syndrome_accumulated_blocks =
         TestHighSyndromeAccumulatedBlocks.load(std::memory_order_relaxed);
     result.syndrome_materialized_blocks =
@@ -4135,6 +4146,10 @@ void ReedSolomonDecodeHighPrunedPlanned(
                 : NULL;
         if (pruned)
         {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            TestHighPrunedOutputBlocks.fetch_add(
+                1, std::memory_order_relaxed);
+#endif
             LEO_DEBUG_ASSERT(pruned->size == t &&
                 pruned->shift == offset && !pruned->inverse);
 #if defined(LEO2_ENABLE_TEST_HOOKS)
@@ -4387,6 +4402,10 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
                 : NULL;
         if (pruned)
         {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            TestHighPrunedOutputBlocks.fetch_add(
+                1, std::memory_order_relaxed);
+#endif
             LEO_DEBUG_ASSERT(pruned->size == t &&
                 pruned->shift == offset && !pruned->inverse);
 #if defined(LEO2_ENABLE_TEST_HOOKS)

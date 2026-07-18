@@ -334,6 +334,8 @@ struct TestOnlyHighDecodeCounts
     uint64_t fft_butterfly2_out_of_place;
     uint64_t fft_butterfly4_out_of_place;
     uint64_t compatibility_copy_fallbacks;
+    uint64_t pruned_output_blocks;
+    uint64_t mature_output_blocks;
     uint64_t syndrome_accumulated_blocks;
     uint64_t syndrome_materialized_blocks;
     uint64_t syndrome_pruned_accumulated_blocks;
