@@ -3177,7 +3177,7 @@ void ReedSolomonDecodeLowPrepared(
 }
 
 
-void ReedSolomonDecodeLowPrunedPlanned(
+static void ReedSolomonDecodeLowPrunedPlannedImpl(
     const backend::Ops& ops,
     uint64_t buffer_bytes,
     unsigned n,
@@ -3192,6 +3192,7 @@ void ReedSolomonDecodeLowPrunedPlanned(
     const leopard2_internal::PrunedTransformBlock* input_plans,
     unsigned input_plan_count,
     const leopard2_internal::PrunedTransformPlan* output_plan,
+    bool reveal_outputs,
     void** work)
 {
     LEO_DEBUG_ASSERT(p >= 2 && p <= n && n <= kOrder);
@@ -3275,14 +3276,67 @@ void ReedSolomonDecodeLowPrunedPlanned(
 #endif
     }
 
-#pragma omp parallel for
-    for (int i = 0; i < (int)requested_count; ++i)
+    if (reveal_outputs)
     {
-        const uint32_t coordinate = requested_coordinates[i];
-        LEO_DEBUG_ASSERT(coordinate < p);
-        mul_mem_inplace(ops, work[coordinate],
-            kModulus - locator_logs[coordinate], buffer_bytes);
+#pragma omp parallel for
+        for (int i = 0; i < (int)requested_count; ++i)
+        {
+            const uint32_t coordinate = requested_coordinates[i];
+            LEO_DEBUG_ASSERT(coordinate < p);
+            mul_mem_inplace(ops, work[coordinate],
+                kModulus - locator_logs[coordinate], buffer_bytes);
+        }
     }
+}
+
+
+void ReedSolomonDecodeLowPrunedPlanned(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned p,
+    const void* const* coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    unsigned requested_count,
+    const leopard2_internal::OutputDependencyView& output_dependencies,
+    const ffe_t* locator_logs,
+    const ffe_t* block_factors,
+    const leopard2_internal::PrunedTransformBlock* input_plans,
+    unsigned input_plan_count,
+    const leopard2_internal::PrunedTransformPlan* output_plan,
+    void** work)
+{
+    ReedSolomonDecodeLowPrunedPlannedImpl(
+        ops, buffer_bytes, n, p, coordinate_data, block_input_counts,
+        requested_coordinates, requested_count, output_dependencies,
+        locator_logs, block_factors, input_plans, input_plan_count,
+        output_plan, true, work);
+}
+
+
+void ReedSolomonDecodeLowPrunedPlannedUnrevealed(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned p,
+    const void* const* coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    unsigned requested_count,
+    const leopard2_internal::OutputDependencyView& output_dependencies,
+    const ffe_t* locator_logs,
+    const ffe_t* block_factors,
+    const leopard2_internal::PrunedTransformBlock* input_plans,
+    unsigned input_plan_count,
+    const leopard2_internal::PrunedTransformPlan* output_plan,
+    void** work)
+{
+    ReedSolomonDecodeLowPrunedPlannedImpl(
+        ops, buffer_bytes, n, p, coordinate_data, block_input_counts,
+        requested_coordinates, requested_count, output_dependencies,
+        locator_logs, block_factors, input_plans, input_plan_count,
+        output_plan, false, work);
 }
 
 
@@ -3327,7 +3381,7 @@ void ReedSolomonDecodeLowPlanned(
 }
 
 
-void ReedSolomonDecodeLowTiledPrunedPlanned(
+static void ReedSolomonDecodeLowTiledPrunedPlannedImpl(
     const backend::Ops& ops,
     uint64_t buffer_bytes,
     unsigned n,
@@ -3342,6 +3396,7 @@ void ReedSolomonDecodeLowTiledPrunedPlanned(
     const leopard2_internal::PrunedTransformBlock* input_plans,
     unsigned input_plan_count,
     const leopard2_internal::PrunedTransformPlan* output_plan,
+    bool reveal_outputs,
     void** work)
 {
     LEO_DEBUG_ASSERT(p >= 2 && p <= n && n <= kOrder);
@@ -3460,15 +3515,68 @@ void ReedSolomonDecodeLowTiledPrunedPlanned(
 #endif
     }
 
-#pragma omp parallel for
-    for (int i = 0; i < (int)requested_count; ++i)
+    if (reveal_outputs)
     {
-        const uint32_t coordinate = requested_coordinates[i];
-        LEO_DEBUG_ASSERT(coordinate < p);
-        mul_mem_inplace(
-            ops, accumulator[coordinate], kModulus - locator_logs[coordinate],
-            buffer_bytes);
+#pragma omp parallel for
+        for (int i = 0; i < (int)requested_count; ++i)
+        {
+            const uint32_t coordinate = requested_coordinates[i];
+            LEO_DEBUG_ASSERT(coordinate < p);
+            mul_mem_inplace(
+                ops, accumulator[coordinate],
+                kModulus - locator_logs[coordinate], buffer_bytes);
+        }
     }
+}
+
+
+void ReedSolomonDecodeLowTiledPrunedPlanned(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned p,
+    const void* const* coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    unsigned requested_count,
+    const leopard2_internal::OutputDependencyView& output_dependencies,
+    const ffe_t* locator_logs,
+    const ffe_t* block_factors,
+    const leopard2_internal::PrunedTransformBlock* input_plans,
+    unsigned input_plan_count,
+    const leopard2_internal::PrunedTransformPlan* output_plan,
+    void** work)
+{
+    ReedSolomonDecodeLowTiledPrunedPlannedImpl(
+        ops, buffer_bytes, n, p, coordinate_data, block_input_counts,
+        requested_coordinates, requested_count, output_dependencies,
+        locator_logs, block_factors, input_plans, input_plan_count,
+        output_plan, true, work);
+}
+
+
+void ReedSolomonDecodeLowTiledPrunedPlannedUnrevealed(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned p,
+    const void* const* coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    unsigned requested_count,
+    const leopard2_internal::OutputDependencyView& output_dependencies,
+    const ffe_t* locator_logs,
+    const ffe_t* block_factors,
+    const leopard2_internal::PrunedTransformBlock* input_plans,
+    unsigned input_plan_count,
+    const leopard2_internal::PrunedTransformPlan* output_plan,
+    void** work)
+{
+    ReedSolomonDecodeLowTiledPrunedPlannedImpl(
+        ops, buffer_bytes, n, p, coordinate_data, block_input_counts,
+        requested_coordinates, requested_count, output_dependencies,
+        locator_logs, block_factors, input_plans, input_plan_count,
+        output_plan, false, work);
 }
 
 

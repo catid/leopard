@@ -65,6 +65,12 @@ LEO2_EXPORT void leo2_test_reset_generic_reveal_counts(void);
 
 LEO2_EXPORT uint64_t leo2_test_generic_direct_reveal_shards(void);
 
+LEO2_EXPORT void leo2_test_reset_low_reveal_counts(void);
+
+LEO2_EXPORT uint64_t leo2_test_low_direct_reveal_shards(void);
+
+LEO2_EXPORT uint64_t leo2_test_low_scratch_reveal_shards(void);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

@@ -965,6 +965,93 @@ leo2_codec* make_flagged_codec(
     return codec;
 }
 
+void run_low_reveal_fusion_case(
+    leo2_context* context,
+    leo2_field field,
+    uint32_t workspace_flag,
+    size_t bytes,
+    unsigned missing_count)
+{
+    const unsigned k = 8;
+    const unsigned r = 16;
+    leo2_codec* codec = make_flagged_codec(context, k, r,
+        LEO2_PROFILE_LOW_V1, field,
+        LEO2_CODEC_FORCE_SPECIALIZED_DECODE | workspace_flag);
+    const Shards source = make_originals(k, bytes,
+        UINT64_C(0x89ef342100000000) + bytes + field + missing_count);
+    const Shards parity = encode_new(codec, source, bytes);
+    std::vector<uint8_t> original_present(k, 1);
+    std::vector<uint8_t> recovery_present(r, 1);
+    std::vector<const void*> original_input = const_pointers(source);
+    const std::vector<const void*> recovery_input = const_pointers(parity);
+    for (unsigned i = 0; i < missing_count; ++i)
+    {
+        original_present[i] = 0;
+        original_input[i] = NULL;
+    }
+
+    leo2_decode_plan* plan = NULL;
+    require_result(leo2_decode_plan_create(codec, &original_present[0],
+        &recovery_present[0], &plan), "low reveal plan create");
+    size_t scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(plan, bytes, &scratch_bytes),
+        "low reveal scratch query");
+    AlignedBuffer scratch(scratch_bytes);
+    Shards restored(k, std::vector<uint8_t>(bytes + 1, 0));
+    std::vector<void*> output(k, NULL);
+    for (unsigned i = 0; i < missing_count; ++i)
+        output[i] = &restored[i][1]; // Exercise unaligned caller outputs.
+
+    leo2_test_reset_low_reveal_counts();
+    require_result(leo2_decode_plan_execute(plan, bytes, &original_input[0],
+        &recovery_input[0], &output[0], scratch.data, scratch.bytes),
+        "low reveal decode execute");
+    for (unsigned i = 0; i < missing_count; ++i)
+        require(memcmp(&restored[i][1], &source[i][0], bytes) == 0,
+            "low reveal decode output mismatch");
+
+    const uint64_t expected_direct = bytes >= 64 ? missing_count : 0;
+    const uint64_t expected_scratch = (bytes & 63u) != 0 ? missing_count : 0;
+    require(leo2_test_low_direct_reveal_shards() == expected_direct,
+        "low direct reveal counter disagrees with complete-tile policy");
+    require(leo2_test_low_scratch_reveal_shards() == expected_scratch,
+        "low scratch reveal counter disagrees with tail policy");
+
+    leo2_decode_plan_destroy(plan);
+    leo2_codec_destroy(codec);
+}
+
+void test_low_reveal_fusion(leo2_context* context)
+{
+    const uint32_t workspace_flags[] = {
+        LEO2_CODEC_FORCE_TILED_DECODE,
+        LEO2_CODEC_FORCE_MATERIALIZED_DECODE
+    };
+    for (size_t workspace = 0;
+         workspace < sizeof(workspace_flags) / sizeof(workspace_flags[0]);
+         ++workspace)
+    {
+        const unsigned losses[] = { 1, 8 };
+        for (size_t loss = 0; loss < sizeof(losses) / sizeof(losses[0]); ++loss)
+        {
+            run_low_reveal_fusion_case(context, LEO2_FIELD_GF8,
+                workspace_flags[workspace], 17, losses[loss]);
+            run_low_reveal_fusion_case(context, LEO2_FIELD_GF8,
+                workspace_flags[workspace], 64, losses[loss]);
+            run_low_reveal_fusion_case(context, LEO2_FIELD_GF8,
+                workspace_flags[workspace], 65, losses[loss]);
+#ifdef LEO_HAS_FF16
+            run_low_reveal_fusion_case(context, LEO2_FIELD_GF16,
+                workspace_flags[workspace], 34, losses[loss]);
+            run_low_reveal_fusion_case(context, LEO2_FIELD_GF16,
+                workspace_flags[workspace], 64, losses[loss]);
+            run_low_reveal_fusion_case(context, LEO2_FIELD_GF16,
+                workspace_flags[workspace], 66, losses[loss]);
+#endif
+        }
+    }
+}
+
 void test_tiled_materialized_execution(leo2_context* context)
 {
     const unsigned k = 224;
@@ -1345,6 +1432,7 @@ int main()
         test_balanced_family_forced_equivalence(context);
         test_tiled_high_dispatch_policy();
         test_tiled_materialized_execution(context);
+        test_low_reveal_fusion(context);
         test_batch_materialized_capacity(context);
 
         test_profile_metadata(context);

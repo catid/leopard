@@ -433,6 +433,25 @@ void ReedSolomonDecodeLowPrunedPlanned(
     unsigned input_plan_count,
     const leopard2_internal::PrunedTransformPlan* output_plan,
     void** work);
+// Identical Algorithm 4 execution, but leaves requested outputs in evaluator
+// form so the caller can combine inverse-locator multiplication with scatter.
+// This is only valid when the caller supplies a distinct full-tile destination.
+void ReedSolomonDecodeLowPrunedPlannedUnrevealed(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned p,
+    const void* const * const coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    unsigned requested_count,
+    const leopard2_internal::OutputDependencyView& output_dependencies,
+    const ffe_t* locator_logs,
+    const ffe_t* block_factors,
+    const leopard2_internal::PrunedTransformBlock* input_plans,
+    unsigned input_plan_count,
+    const leopard2_internal::PrunedTransformPlan* output_plan,
+    void** work);
 void ReedSolomonDecodeLowPlanned(
     uint64_t buffer_bytes,
     unsigned n,
@@ -465,6 +484,22 @@ void ReedSolomonDecodeLowTiledPlanned(
     const ffe_t* block_factors,
     void** work);
 void ReedSolomonDecodeLowTiledPrunedPlanned(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned p,
+    const void* const * const coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    unsigned requested_count,
+    const leopard2_internal::OutputDependencyView& output_dependencies,
+    const ffe_t* locator_logs,
+    const ffe_t* block_factors,
+    const leopard2_internal::PrunedTransformBlock* input_plans,
+    unsigned input_plan_count,
+    const leopard2_internal::PrunedTransformPlan* output_plan,
+    void** work);
+void ReedSolomonDecodeLowTiledPrunedPlannedUnrevealed(
     const backend::Ops& ops,
     uint64_t buffer_bytes,
     unsigned n,
