@@ -1,14 +1,49 @@
 # Leopard2 versus exact Leopard main
 
-Date: 2026-07-16
+## Current checkpoint: 2026-07-18
 
-This comparison measures Leopard2 commit
-`620667c93fad4eb9d97c8c5ccf7dcf6994914346` against the exact detached
-Leopard default-branch baseline
-`6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198`. The result is mixed: reusable
-Leopard2 decoding is materially faster in the intended high-rate GF16 region,
-but the legacy-compatible Leopard2 encoder is slower in every measured cell.
-XOR and balanced full-loss decode also regress.
+The current authoritative comparison measures detached, test-hooks-off
+Leopard2 commit `a1fa5bf02641f0af8c344b21c879b9da0bbd133a` against the
+independently linked exact Leopard default-branch commit
+`6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198`.  Ratios are exact-main time
+divided by Leopard2 time, so values above one favor Leopard2.  Each cell is an
+independent three-round ABBA bundle.  All eight bundles passed source/build
+closure, original/parity/recovery digest, retained-stream, affinity, and
+statistics verification, with zero non-idle jiffies on the reserved SMT
+sibling.
+
+| Cell | Encode, 95% CI | Decode first use, 95% CI | Decode reuse 8, 95% CI |
+| --- | ---: | ---: | ---: |
+| GF8 XOR, K=129 R=1 | 0.975 [0.958,0.992] | 0.977 [0.965,0.989] | 0.978 [0.966,0.991] |
+| GF8 high, K=240 R=16, one loss | 1.172 [1.164,1.181] | 2.212 [2.196,2.228] | 2.218 [2.202,2.234] |
+| GF8 high, K=240 R=16, full loss | 1.194 [1.172,1.217] | 1.666 [1.655,1.676] | 1.679 [1.669,1.689] |
+| GF8 balanced, K=128 R=128 | 1.037 [1.035,1.039] | 1.049 [1.049,1.049] | 1.052 [1.052,1.052] |
+| GF16 inflation, K=200 R=50 | 1.023 [1.020,1.027] | 1.932 [1.932,1.932] | 1.946 [1.945,1.946] |
+| GF16 high, K=1000 R=200, one loss | 0.894 [0.888,0.900] | 3.383 [3.373,3.393] | 3.396 [3.387,3.406] |
+| GF16 high, K=1000 R=200, full loss | 0.895 [0.890,0.900] | 2.283 [2.271,2.295] | 2.295 [2.283,2.307] |
+| GF16 large, K=4096 R=512 | 0.949 [0.939,0.959] | 2.022 [1.962,2.085] | 2.212 [2.140,2.288] |
+
+The planned high-rate decoder now provides credible speedups at every
+nontrivial transform cell: about 1.05x at balanced GF8, 1.67-2.22x at GF8
+high rate, and 1.93-3.40x at the measured GF16 first-use cells.  This includes
+plan setup; reuse is slightly better.  GF8 high-rate encoding is now 1.17-1.19x
+faster than main, and balanced/field-inflation encoding is modestly faster.
+The remaining production priorities are explicit rather than hidden: the GF8
+XOR cell is about 2.2-2.5% slower, GF16 K=1000/R=200 encode is about 10.5%
+slower, and the larger GF16 encode cell is about 5.1% slower.  Those residuals
+are tracked under the exact-main encoder gap work.
+
+Verified current manifests are retained in the ignored research cache at
+`.research/leopard2/exact-main-a1fa5bf-cpu4-cells-20260718/`.  Their individual
+SHA-256 identities are recorded in the corresponding Beads evidence and can be
+recomputed with the verifier while the detached source/build closure exists.
+
+## Earlier checkpoint: 2026-07-16
+
+The historical comparison below measures Leopard2 commit
+`620667c93fad4eb9d97c8c5ccf7dcf6994914346` against the same exact detached
+baseline.  It is retained to show the measured progression; its slower encode
+and decode results must not be quoted as the current implementation.
 
 ## Method
 

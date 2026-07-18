@@ -130,3 +130,35 @@ cells improved by 1.122x for GF16 K=4096/R=16 at 4 KiB and 1.268x for GF8
 K=240/R=16 at 4 KiB. The bound manifest and summary are under
 `.research/leopard2/high-source-staging-final-policy/` in the ignored research
 cache.
+
+## Exact Leopard-main gate
+
+Commit `a1fa5bf` was rebuilt from a clean detached, test-hooks-off tree and
+compared with the independently linked exact Leopard-main commit
+`6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198`.  To preserve the runner's strict
+zero-work rule on the reserved SMT sibling, each representative cell was a
+separate three-round ABBA bundle.  All eight bundles passed source, build,
+runtime, parity, recovered-data, affinity, and retained-result verification;
+every sibling non-idle delta was zero.  Ratios are Leopard main time divided by
+Leopard2 time, so values above one favor Leopard2:
+
+| Cell | Encode speedup | 95% confidence interval |
+| --- | ---: | ---: |
+| GF8 XOR, K=129 R=1 | 0.975x | 0.958-0.992 |
+| GF8 high, K=240 R=16, one loss | 1.172x | 1.164-1.181 |
+| GF8 high, K=240 R=16, full loss | 1.194x | 1.172-1.217 |
+| GF8 balanced, K=128 R=128 | 1.037x | 1.035-1.039 |
+| GF16 inflation, K=200 R=50 | 1.023x | 1.020-1.027 |
+| GF16 high, K=1000 R=200, one loss | 0.894x | 0.888-0.900 |
+| GF16 high, K=1000 R=200, full loss | 0.895x | 0.890-0.900 |
+| GF16 large, K=4096 R=512 | 0.949x | 0.939-0.959 |
+
+The source-staging change closes the prior GF8 high-rate deficit and makes the
+balanced and field-inflation cells modestly faster.  It does not close the
+remaining GF16 encode gap: the measured large-shard AVX2 fallback is necessary
+to avoid an even larger regression, but its mature copy-first path remains
+about 5-11% behind exact main in these cells.  That residual work remains under
+the parent high-encode optimization bead rather than being hidden by this
+milestone.  The verified manifests are retained under the ignored research
+cache at
+`.research/leopard2/exact-main-a1fa5bf-cpu4-cells-20260718/`.
