@@ -4942,9 +4942,34 @@ def verified_campaign_bundle(
 
 
 def verify_campaign(options: argparse.Namespace) -> int:
+    manifest_path = options.manifest.resolve(strict=True)
     manifest, _, _, _ = verified_campaign_bundle(
-        options.manifest, options.no_current_input_check)
+        manifest_path, options.no_current_input_check)
     manifest_schema = manifest["schema"]
+    affinity_binding = getattr(options, "affinity_binding", None)
+    if affinity_binding is not None:
+        try:
+            affinity_binding = affinity_binding.resolve(strict=True)
+            binding = json.loads(affinity_binding.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise EvidenceError(
+                f"cannot read affinity binding: {error}") from error
+        supervisor = Path(__file__).resolve().parents[3] / \
+            "tools/leopard2_affinity_supervisor.py"
+        require(supervisor.is_file(), "affinity binding verifier is missing")
+        completed = run_process_bounded(
+            [sys.executable, str(supervisor), "verify-binding", "--binding",
+             str(affinity_binding)],
+            timeout=30.0, max_stdout=1024 * 1024, max_stderr=1024 * 1024)
+        require(completed.returncode == 0,
+                "affinity binding verification failed: {}".format(
+                    completed.stderr.decode("utf-8", errors="replace")))
+        # The binding verifier authenticates its own retained manifest path.
+        # Require that it is this invocation's manifest as well.
+        require(isinstance(binding, dict) and
+                isinstance(binding.get("manifest"), dict) and
+                Path(binding["manifest"].get("path", "")).resolve() == manifest_path,
+                "affinity binding refers to another main-comparison manifest")
     if manifest_schema == MANIFEST_SCHEMA_V1:
         print("legacy exact-main v1 bundle verified; it has no v2 CPU-isolation "
               "qualification")
@@ -5003,6 +5028,9 @@ def parser() -> argparse.ArgumentParser:
     verify.add_argument("--manifest", required=True, type=Path)
     verify.add_argument("--no-current-input-check", action="store_true",
                         help="structural-only replay without revalidating original build paths")
+    verify.add_argument(
+        "--affinity-binding", type=Path,
+        help="also require a verified accepted affinity-supervisor binding")
     verify.set_defaults(function=verify_campaign)
     verify_failure = commands.add_parser(
         "verify-failure", help="verify a retained failed campaign bundle")
