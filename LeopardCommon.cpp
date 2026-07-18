@@ -33,6 +33,30 @@
 
 namespace leopard {
 
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+static std::atomic<unsigned> TestSIMDSafeFailureIndex(0);
+static std::atomic<unsigned> TestSIMDSafeAttempts(0);
+
+void TestSetSIMDSafeAllocationFailure(unsigned allocation_index)
+{
+    TestSIMDSafeAttempts.store(0, std::memory_order_relaxed);
+    TestSIMDSafeFailureIndex.store(
+        allocation_index, std::memory_order_release);
+}
+
+unsigned TestSIMDSafeAllocationAttempts()
+{
+    return TestSIMDSafeAttempts.load(std::memory_order_acquire);
+}
+
+bool TestConsumeSIMDSafeAllocationFailure()
+{
+    const unsigned attempt =
+        TestSIMDSafeAttempts.fetch_add(1, std::memory_order_relaxed) + 1;
+    return attempt == TestSIMDSafeFailureIndex.load(std::memory_order_acquire);
+}
+#endif
+
 
 //------------------------------------------------------------------------------
 // Runtime CPU Architecture Check

@@ -545,8 +545,20 @@ protected:
 
 static const unsigned kAlignmentBytes = LEO_ALIGN_BYTES;
 
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+// One-based deterministic fault injection for the legacy aligned allocator.
+// A zero index disables the fault and resets attempt accounting.
+void TestSetSIMDSafeAllocationFailure(unsigned allocation_index);
+unsigned TestSIMDSafeAllocationAttempts();
+bool TestConsumeSIMDSafeAllocationFailure();
+#endif
+
 static LEO_FORCE_INLINE uint8_t* SIMDSafeAllocate(size_t size)
 {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    if (TestConsumeSIMDSafeAllocationFailure())
+        return nullptr;
+#endif
     uint8_t* data = (uint8_t*)calloc(1, kAlignmentBytes + size);
     if (!data)
         return nullptr;

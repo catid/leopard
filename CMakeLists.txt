@@ -506,6 +506,42 @@ if(LEO2_BUILD_TESTS)
             -DLEO2_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_release_flags.cmake)
 
+    # The installed archive keeps optional ISAs in isolated object files, but
+    # historical/manual whole-translation-unit SSSE3 builds remain supported.
+    # Build that path explicitly so aligned-table OOM behavior cannot regress
+    # merely because the production target no longer executes it.
+    if(LEO2_X86_TARGET AND LEOPARD_ENABLE_GF8 AND LEOPARD_ENABLE_GF16 AND
+       (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+        CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
+        CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang") AND
+       LEO2_FLAG_MSSSE3 AND LEO2_FLAG_MNO_AVX)
+        add_library(leopard_legacy_simd_init_test_lib STATIC
+            ${LIB_SOURCE_FILES}
+            LeopardFF8.cpp LeopardFF8.h
+            LeopardFF16.cpp LeopardFF16.h)
+        target_include_directories(leopard_legacy_simd_init_test_lib PUBLIC
+            ${CMAKE_CURRENT_SOURCE_DIR})
+        target_compile_definitions(leopard_legacy_simd_init_test_lib PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1)
+        target_compile_options(leopard_legacy_simd_init_test_lib PRIVATE
+            -mssse3 -mno-avx)
+        target_link_libraries(leopard_legacy_simd_init_test_lib PUBLIC
+            Threads::Threads)
+
+        add_executable(leopard2_legacy_simd_init_failure_test
+            tests/leopard2/test_legacy_simd_init_failure.cpp)
+        target_compile_definitions(leopard2_legacy_simd_init_failure_test PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1)
+        target_compile_options(leopard2_legacy_simd_init_failure_test PRIVATE
+            -mssse3 -mno-avx)
+        target_link_libraries(leopard2_legacy_simd_init_failure_test
+            leopard_legacy_simd_init_test_lib)
+        add_test(NAME leopard2_legacy_simd_init_failure_ff8
+            COMMAND leopard2_legacy_simd_init_failure_test ff8)
+        add_test(NAME leopard2_legacy_simd_init_failure_ff16
+            COMMAND leopard2_legacy_simd_init_failure_test ff16)
+    endif()
+
     # The portable archive audit is useful for reduced-field archives too, so
     # keep it outside the dual-field-only exhaustive-test graph below.
     if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" OR

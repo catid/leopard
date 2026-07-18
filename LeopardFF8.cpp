@@ -253,24 +253,33 @@ static const Multiply256LUT_t* Multiply256LUT = nullptr;
 #endif // LEO_TRY_AVX2
 #endif // LEO_TRY_SSSE3
 
-static void InitializeMultiplyTables()
+static bool InitializeMultiplyTables()
 {
 #if !defined(LEO_TRY_SSSE3)
     // Portable CMake builds route scalar multiplication through the immutable
     // backend ops table.  The former 64-KiB legacy scalar table had no reader.
-    return;
+    return true;
 #else
     // Whole-translation-unit diagnostic/legacy SIMD builds retain their
     // existing nibble tables.  A CPU without PSHUFB falls through to ops.
     if (!CpuHasSSSE3)
-        return;
+        return true;
 
+    void* table = nullptr;
 #ifdef LEO_TRY_AVX2
     if (CpuHasAVX2)
-        Multiply256LUT = reinterpret_cast<const Multiply256LUT_t*>(SIMDSafeAllocate(sizeof(Multiply256LUT_t) * kOrder));
+        table = SIMDSafeAllocate(sizeof(Multiply256LUT_t) * kOrder);
     else
 #endif // LEO_TRY_AVX2
-        Multiply128LUT = reinterpret_cast<const Multiply128LUT_t*>(SIMDSafeAllocate(sizeof(Multiply128LUT_t) * kOrder));
+        table = SIMDSafeAllocate(sizeof(Multiply128LUT_t) * kOrder);
+    if (!table)
+        return false;
+#ifdef LEO_TRY_AVX2
+    if (CpuHasAVX2)
+        Multiply256LUT = reinterpret_cast<const Multiply256LUT_t*>(table);
+    else
+#endif // LEO_TRY_AVX2
+        Multiply128LUT = reinterpret_cast<const Multiply128LUT_t*>(table);
 
     // For each value we could multiply by:
     for (unsigned log_m = 0; log_m < kOrder; ++log_m)
@@ -302,6 +311,7 @@ static void InitializeMultiplyTables()
 #endif // LEO_TRY_AVX2
         }
     }
+    return true;
 #endif // LEO_TRY_SSSE3
 }
 
@@ -3526,7 +3536,8 @@ bool Initialize()
         return true;
 
     InitializeLogarithmTables();
-    InitializeMultiplyTables();
+    if (!InitializeMultiplyTables())
+        return false;
     FFTInitialize();
 
     IsInitialized = true;
