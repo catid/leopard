@@ -120,7 +120,7 @@ typedef enum leo2_backend {
     LEO2_BACKEND_SSSE3 = 2,
     LEO2_BACKEND_AVX2 = 3,
     LEO2_BACKEND_NEON = 4,
-    /* Explicit experimental AVX-512F/BW/VL acceleration. */
+    /* Explicit AVX-512F/BW/VL acceleration. */
     LEO2_BACKEND_AVX512 = 5
 } leo2_backend;
 
@@ -139,9 +139,10 @@ typedef enum leo2_backend {
     it, capped at 128; explicit nonzero values retain their requested budget.
     backend selects an immutable execution table for this context.  AUTO uses
     the production-default startup-qualified runtime backend.  On production
-    x86 builds, SCALAR, SSSE3, AVX2, and experimental AVX512 may explicitly
+    x86 builds, SCALAR, SSSE3, AVX2, and AVX512 may explicitly
     select any compiled, host-qualified table.  AUTO deliberately remains AVX2
-    while AVX512 whole-codec promotion evidence is collected.  A non-default
+    because AVX512 whole-codec evidence supports only a bounded large-parent
+    region rather than a universal default.  A non-default
     table is allocated and known-answer-tested on its first explicit context
     request.  Results are cached: unavailable
     ISAs return LEO2_UNSUPPORTED, allocation failure returns

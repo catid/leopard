@@ -237,7 +237,7 @@ parallelism across batch items, not the wire profile or the result bytes.
 The context `backend` option selects an immutable execution table.  `AUTO` uses
 the production-default table that passed the startup capability checks and
 known-answer tests.  In one ordinary production x86 binary, explicit `SCALAR`,
-`SSSE3`, `AVX2`, and experimental `AVX512` requests select that table when it
+`SSSE3`, `AVX2`, and `AVX512` requests select that table when it
 was compiled and supported by the
 host.  Lower tables are allocated and known-answer-tested once, on the first
 explicit context request, so legacy and `AUTO`-only applications do not pay
@@ -247,8 +247,10 @@ returns `LEO2_OUT_OF_MEMORY`, and a known-answer-test failure returns
 `LEO2_INTERNAL_ERROR`.  A context never changes the process-default table
 used by the legacy `leo_*` API, and independent contexts selecting different
 tables can execute concurrently.
-`AUTO` deliberately remains AVX2 on qualifying x86 hosts while the AVX-512VL
-complete-codec promotion evidence is collected.  The explicit AVX-512 request
+`AUTO` deliberately remains AVX2 on qualifying x86 hosts.  Isolated
+complete-codec evidence supports AVX-512VL for a bounded large-parent region,
+but did not justify selecting it universally; see
+`docs/leopard2_avx512_codec.md`.  The explicit AVX-512 request
 requires AVX2 plus AVX-512F/BW/VL and operating-system support for opmask and
 ZMM state; its current kernels retain 256-bit data operations and use the
 expanded architectural register file.  Unsupported hosts return

@@ -17,7 +17,8 @@ the additional ISA contract is used for registers YMM16 through YMM31.  Runtime
 qualification requires the corresponding CPUID bits and XCR0 state.  The
 candidate shares the immutable AVX2 GF8/GF16 nibble tables, so it does not add
 a second roughly 8 MiB GF16 table.  `AUTO` remains AVX2 and the candidate must
-be selected explicitly while promotion evidence is collected.
+be selected explicitly.  The isolated evidence below supports it in a
+large-parent region, but not as a universal default.
 
 The backend startup KAT, explicit-context concurrency tests, odd-byte GF16,
 R=1, direct-encode, pruned-transform, decode-schedule, failure-injection, and
@@ -37,9 +38,51 @@ Leopard2 code and data.
 | K=1000 R=200, 64 KiB | 8407 us | 7486 us | 11.0% |
 | K=4096 R=512, 4 KiB | 2255 us | 1961 us | 13.0% |
 
-Exact-Leopard-main ABBA evidence on an isolated core remains the promotion
-gate.  Until it is recorded, this full-operation candidate is experimental and
-does not alter `AUTO`.
+### Exact-main disposition
+
+Three separately retained exact-main ABBA campaigns used an AMD Ryzen 9
+9950X3D, CPU 15, reserved SMT sibling 31, three independent rounds, nine
+retained samples per child, two warmups, loss count 8, and plan reuse 8.  Each
+campaign recorded zero non-idle jiffies on CPU 31 and passed a subsequent
+full build/source-closure replay.  Ratios are exact-main time divided by
+Leopard2 time, so values above one favor Leopard2.  Exact main was commit
+`6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198`; the full-operation candidate and
+evidence-runner commit was
+`97b835cf339b78a073f07dc9a6f6d2c269fb125b`.
+
+| Cell | Encode, 95% CI | Decode first use, 95% CI | Decode reuse 8, 95% CI |
+| --- | ---: | ---: | ---: |
+| K=1000 R=200, 64 KiB | 1.032 [1.000,1.065] | 3.942 [3.907,3.977] | 3.966 [3.931,4.002] |
+| K=4096 R=512, 4 KiB | 1.079 [1.067,1.092] | 3.054 [3.011,3.097] | 3.379 [3.328,3.430] |
+| K=1000 R=200, 32 KiB neighbor | 0.995 [0.980,1.010] | 4.171 [4.116,4.228] | 4.235 [4.178,4.292] |
+
+The expanded-register implementation therefore closes the primary
+K=1000/R=200 encode deficit and meets the project's 5% lower-confidence-bound
+rule at K=4096/R=512.  It does not meet that rule at K=1000/R=200, and the
+32 KiB neighbor is statistically tied.  Because backend selection currently
+belongs to an immutable context rather than a per-codec size dispatcher,
+promoting AVX-512VL in `AUTO` would also select it outside the proven region.
+The evidence supports promoting the explicit backend as an opt-in production
+choice, but not changing `AUTO` from AVX2.  The backend adds a 49,728-byte
+archive member in the measured GCC release build and no duplicate arithmetic
+table; this is acceptable for a full operation table that shares the reviewed
+AVX2 algorithm source.  A future context/backend-policy refactor may use a
+deterministic large-parent threshold after broader CPU coverage.
+
+The ignored research cache retains two deliberately rejected combined runs.
+The CPU 15/31 run accumulated four non-idle sibling jiffies, and an attempted
+CPU 14/30 run accumulated 89; neither contributes performance evidence.  The
+three independently replayed manifests are:
+
+- `.research/leopard2/gf16-avx512-k1000-r200-64k-97b835c-authoritative-20260718-run6/manifest.json`
+  (SHA-256
+  `8f1526b400b4eeae7dbd3a92a67c780c7748fad6141aaf42843d1636d0e8db62`);
+- `.research/leopard2/gf16-avx512-k4096-r512-4k-97b835c-authoritative-20260718-run7/manifest.json`
+  (SHA-256
+  `23db25a64f2892d1995cf929e0275f7112ecd298256a441bf36cfe1b1bd3ed5b`);
+- `.research/leopard2/gf16-avx512-k1000-r200-32k-97b835c-authoritative-20260718-run8/manifest.json`
+  (SHA-256
+  `6ff4cbcc6069dbf6db7b3dc8ce72af596ab9ad0ed8196521fdff400e05402e6c`).
 
 Two alternative AVX2 table layouts were rejected during attribution.  Direct
 32-byte row loads duplicated the fixed table and caused 3.5% to 4.5%

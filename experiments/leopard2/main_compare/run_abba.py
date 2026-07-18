@@ -1254,7 +1254,8 @@ def validate_compile_commands(
             object_records, key=lambda record: record["source"]["path"]),
         "isa_policy": (
             "whole-build -march=native" if implementation == "baseline" else
-            "portable core with ISA flags only on SSSE3/AVX2 translation units"),
+            "portable core with ISA flags only on SSSE3, AVX2, and "
+            "AVX-512VL translation units"),
     }
 
 
