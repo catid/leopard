@@ -49,6 +49,10 @@ static std::atomic<uint64_t> TestIFFTDIT4XorCalls(0);
 static std::atomic<uint64_t> TestFFTDIT4Calls(0);
 static std::atomic<uint64_t> TestLowFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestLowFFTButterfly4OutCalls(0);
+static std::atomic<uint64_t> TestHighOutputBlocks(0);
+static std::atomic<uint64_t> TestHighFFTButterfly2OutCalls(0);
+static std::atomic<uint64_t> TestHighFFTButterfly4OutCalls(0);
+static std::atomic<uint64_t> TestHighCompatibilityCopyFallbacks(0);
 #endif
 
 
@@ -1681,8 +1685,14 @@ static void FFT_DIT(
     }
 }
 
-// Out-of-place first FFT layer(s) for low-rate parity evaluation.  The
-// coefficient pointers remain read-only and reusable across every parity
+enum SourceEvaluationCallsite
+{
+    SourceEvaluationLowEncode,
+    SourceEvaluationHighDecode
+};
+
+// Out-of-place first FFT layer(s) for evaluation from reusable coefficients.
+// The coefficient pointers remain read-only across every parity or message
 // coset.  The backend combines the former copy pass with the first butterfly
 // pass, after which the remaining layers operate in-place on evaluation_work.
 static void FFT_DIT_FromCoefficients(
@@ -1692,13 +1702,18 @@ static void FFT_DIT_FromCoefficients(
     void** evaluation_work,
     const unsigned m_truncated,
     const unsigned m,
-    const ffe_t* skewLUT)
+    const ffe_t* skewLUT,
+    SourceEvaluationCallsite callsite)
 {
+    (void)callsite;
     LEO_DEBUG_ASSERT(m >= 2);
     if (m == 2)
     {
 #if defined(LEO2_ENABLE_TEST_HOOKS)
-        TestLowFFTButterfly2OutCalls.fetch_add(1, std::memory_order_relaxed);
+        (callsite == SourceEvaluationLowEncode
+            ? TestLowFFTButterfly2OutCalls
+            : TestHighFFTButterfly2OutCalls).fetch_add(
+                1, std::memory_order_relaxed);
 #endif
         ops.ff8_fft_butterfly2_out(
             coefficients[0], coefficients[1],
@@ -1714,7 +1729,10 @@ static void FFT_DIT_FromCoefficients(
     for (unsigned i = 0; i < first_dist; ++i)
     {
 #if defined(LEO2_ENABLE_TEST_HOOKS)
-        TestLowFFTButterfly4OutCalls.fetch_add(1, std::memory_order_relaxed);
+        (callsite == SourceEvaluationLowEncode
+            ? TestLowFFTButterfly4OutCalls
+            : TestHighFFTButterfly4OutCalls).fetch_add(
+                1, std::memory_order_relaxed);
 #endif
         ops.ff8_fft_butterfly4_out(
             coefficients[i], coefficients[i + first_dist],
@@ -1907,7 +1925,8 @@ void ReedSolomonEncodeLow(
             work + p,
             requested_count,
             p,
-            FFTSkewStorage + p + recovery_offset);
+            FFTSkewStorage + p + recovery_offset,
+            SourceEvaluationLowEncode);
 
         for (unsigned i = 0; i < requested_count; ++i)
         {
@@ -2552,6 +2571,29 @@ TestOnlyLowEncodeCounts TestOnlyGetLowEncodeCounts()
     return result;
 }
 
+
+void TestOnlyResetHighDecodeCounts()
+{
+    TestHighOutputBlocks.store(0, std::memory_order_relaxed);
+    TestHighFFTButterfly2OutCalls.store(0, std::memory_order_relaxed);
+    TestHighFFTButterfly4OutCalls.store(0, std::memory_order_relaxed);
+    TestHighCompatibilityCopyFallbacks.store(0, std::memory_order_relaxed);
+}
+
+
+TestOnlyHighDecodeCounts TestOnlyGetHighDecodeCounts()
+{
+    TestOnlyHighDecodeCounts result;
+    result.output_blocks = TestHighOutputBlocks.load(std::memory_order_relaxed);
+    result.fft_butterfly2_out_of_place =
+        TestHighFFTButterfly2OutCalls.load(std::memory_order_relaxed);
+    result.fft_butterfly4_out_of_place =
+        TestHighFFTButterfly4OutCalls.load(std::memory_order_relaxed);
+    result.compatibility_copy_fallbacks =
+        TestHighCompatibilityCopyFallbacks.load(std::memory_order_relaxed);
+    return result;
+}
+
 static ffe_t NonzeroElementFromLog(ffe_t value_log)
 {
     return ExpLUT[value_log];
@@ -3131,11 +3173,12 @@ void ReedSolomonDecodeHighPrepared(
             --requested_count;
         if (requested_count == 0)
             continue;
-        for (unsigned i = 0; i < t; ++i)
-            memcpy(work[offset + i], work[i], buffer_bytes);
-        FFT_DIT(
-            ops, buffer_bytes, work + offset, requested_count, t,
-            FFTSkewStorage + offset);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        TestHighOutputBlocks.fetch_add(1, std::memory_order_relaxed);
+#endif
+        FFT_DIT_FromCoefficients(
+            ops, buffer_bytes, work, work + offset, requested_count, t,
+            FFTSkewStorage + offset, SourceEvaluationHighDecode);
         for (unsigned i = 0; i < requested_count; ++i)
         {
             const unsigned coordinate = offset + i;
@@ -3258,8 +3301,9 @@ void ReedSolomonDecodeHighPrunedPlanned(
             descriptor.requested_prefix <= t);
         LEO_DEBUG_ASSERT(descriptor.requested_begin < descriptor.requested_end);
         const unsigned offset = descriptor.block * t;
-        for (unsigned i = 0; i < t; ++i)
-            memcpy(work[offset + i], work[i], buffer_bytes);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        TestHighOutputBlocks.fetch_add(1, std::memory_order_relaxed);
+#endif
         const leopard2_internal::PrunedTransformPlan* pruned =
             output_plans && output_plan_count == output_block_count &&
             output_plans[output_block].size != 0
@@ -3269,18 +3313,35 @@ void ReedSolomonDecodeHighPrunedPlanned(
         {
             LEO_DEBUG_ASSERT(pruned->size == t &&
                 pruned->shift == offset && !pruned->inverse);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            TestHighFFTButterfly2OutCalls.fetch_add(
+                t / 2, std::memory_order_relaxed);
+#endif
             const bool executed =
-                leopard2_internal::ExecutePrunedTransformPlan(
-                    ops, buffer_bytes, *pruned, work + offset);
+                leopard2_internal::ExecutePrunedForwardTransformPlanFromSources(
+                    ops, buffer_bytes, *pruned, work, work + offset);
             LEO_DEBUG_ASSERT(executed);
-            (void)executed;
+            if (!executed)
+            {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+                TestHighCompatibilityCopyFallbacks.fetch_add(
+                    1, std::memory_order_relaxed);
+#endif
+                for (unsigned i = 0; i < t; ++i)
+                    memcpy(work[offset + i], work[i], buffer_bytes);
+                const bool fallback =
+                    leopard2_internal::ExecutePrunedTransformPlan(
+                        ops, buffer_bytes, *pruned, work + offset);
+                LEO_DEBUG_ASSERT(fallback);
+                (void)fallback;
+            }
         }
         else
         {
-            FFT_DIT(
-                ops, buffer_bytes, work + offset,
+            FFT_DIT_FromCoefficients(
+                ops, buffer_bytes, work, work + offset,
                 descriptor.requested_prefix, t,
-                FFTSkewStorage + offset);
+                FFTSkewStorage + offset, SourceEvaluationHighDecode);
         }
         for (uint32_t i = descriptor.requested_begin;
              i < descriptor.requested_end;
@@ -3465,8 +3526,9 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
             descriptor.requested_prefix <= t);
         LEO_DEBUG_ASSERT(descriptor.requested_begin < descriptor.requested_end);
         const unsigned offset = descriptor.block * t;
-        for (unsigned i = 0; i < t; ++i)
-            memcpy(tile[i], accumulator[i], buffer_bytes);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        TestHighOutputBlocks.fetch_add(1, std::memory_order_relaxed);
+#endif
         const leopard2_internal::PrunedTransformPlan* pruned =
             output_plans && output_plan_count == output_block_count &&
             output_plans[output_block].size != 0
@@ -3476,16 +3538,34 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
         {
             LEO_DEBUG_ASSERT(pruned->size == t &&
                 pruned->shift == offset && !pruned->inverse);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            TestHighFFTButterfly2OutCalls.fetch_add(
+                t / 2, std::memory_order_relaxed);
+#endif
             const bool executed =
-                leopard2_internal::ExecutePrunedTransformPlan(
-                    ops, buffer_bytes, *pruned, tile);
+                leopard2_internal::ExecutePrunedForwardTransformPlanFromSources(
+                    ops, buffer_bytes, *pruned, accumulator, tile);
             LEO_DEBUG_ASSERT(executed);
-            (void)executed;
+            if (!executed)
+            {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+                TestHighCompatibilityCopyFallbacks.fetch_add(
+                    1, std::memory_order_relaxed);
+#endif
+                for (unsigned i = 0; i < t; ++i)
+                    memcpy(tile[i], accumulator[i], buffer_bytes);
+                const bool fallback =
+                    leopard2_internal::ExecutePrunedTransformPlan(
+                        ops, buffer_bytes, *pruned, tile);
+                LEO_DEBUG_ASSERT(fallback);
+                (void)fallback;
+            }
         }
         else
-            FFT_DIT(
-                ops, buffer_bytes, tile, descriptor.requested_prefix, t,
-                FFTSkewStorage + offset);
+            FFT_DIT_FromCoefficients(
+                ops, buffer_bytes, accumulator, tile,
+                descriptor.requested_prefix, t,
+                FFTSkewStorage + offset, SourceEvaluationHighDecode);
         for (uint32_t i = descriptor.requested_begin;
              i < descriptor.requested_end;
              ++i)

@@ -77,6 +77,38 @@ def verify_low_encode_no_copy_source(source: str, label: str) -> None:
         )
 
 
+_HIGH_EVALUATOR_COPY_PATTERNS = (
+    re.compile(r"memcpy\(work\[offset\+i\],work\[i\],buffer_bytes\)"),
+    re.compile(r"memcpy\(tile\[i\],accumulator\[i\],buffer_bytes\)"),
+)
+
+
+def verify_high_decode_no_copy_source(source: str, label: str) -> None:
+    """Reject an unconditional whole-T Algorithm 5 evaluator copy."""
+    compact = re.sub(r"\s+", "", source)
+    # The compatibility fallback is deliberately retained after a failed
+    # trusted-plan execution.  Only copies before selection of the immutable-
+    # source executor would restore the former production hot path.
+    for pattern in _HIGH_EVALUATOR_COPY_PATTERNS:
+        for match in pattern.finditer(compact):
+            nearby = compact[max(0, match.start() - 256):match.start()]
+            if "if(!executed){" not in nearby:
+                raise ModelError(
+                    "{} contains an unconditional whole-T high-decode "
+                    "evaluator copy".format(label)
+                )
+    if "ExecutePrunedForwardTransformPlanFromSources(" not in compact:
+        raise ModelError(
+            "{} no longer routes sparse Algorithm 5 evaluation through the "
+            "immutable-source executor".format(label)
+        )
+    if "FFT_DIT_FromCoefficients(" not in compact:
+        raise ModelError(
+            "{} no longer routes mature Algorithm 5 evaluation through the "
+            "out-of-place first layer".format(label)
+        )
+
+
 @dataclass(frozen=True)
 class Metric:
     value: object
@@ -606,7 +638,6 @@ def model_high_decode(
             continue
         prefix = max(local) + 1
         evaluation_prefixes.append((offset // padded, prefix))
-        schedule.copies += padded
         schedule.add_transform(
             fft_prefix_butterflies(padded, prefix), _transform_layers(padded)
         )
@@ -615,6 +646,7 @@ def model_high_decode(
         "block_input_prefixes": prefixes,
         "syndrome_reduction_vectors": reduction,
         "evaluation_block_prefixes": evaluation_prefixes,
+        "out_of_place_evaluator_first_layer": True,
         "requested_coordinates": mask_to_ranges(requested_coordinates),
     })
     return schedule
@@ -978,6 +1010,7 @@ def run_self_test(verbose: bool = True) -> None:
     for filename in ("LeopardFF8.cpp", "LeopardFF16.cpp"):
         source = (root / filename).read_text(encoding="utf-8")
         verify_low_encode_no_copy_source(source, filename)
+        verify_high_decode_no_copy_source(source, filename)
         try:
             verify_low_encode_no_copy_source(
                 source +
@@ -989,7 +1022,17 @@ def run_self_test(verbose: bool = True) -> None:
             pass
         else:
             raise AssertionError("whole-P copy mutation escaped source guard")
-        checks += 2
+        try:
+            verify_high_decode_no_copy_source(
+                source + "\nfor (unsigned i = 0; i < t; ++i) "
+                "memcpy(tile[i], accumulator[i], buffer_bytes);\n",
+                filename + " high mutation",
+            )
+        except ModelError:
+            pass
+        else:
+            raise AssertionError("whole-T copy mutation escaped source guard")
+        checks += 4
 
     direct = model_direct_repair(16, 8, 16, 16, "low", set(range(4)))
     assert direct.nontransform_xor_vectors == 60

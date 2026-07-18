@@ -76,6 +76,15 @@ std::vector<void*> pointers(std::vector<std::vector<uint8_t> >& shards)
     return result;
 }
 
+std::vector<void*> source_pointers(
+    std::vector<std::vector<uint8_t> >& shards)
+{
+    // The internal executor accepts mutable pointer values for compatibility
+    // with the existing transform plumbing, but treats every pointed-to byte
+    // as immutable.
+    return pointers(shards);
+}
+
 std::vector<std::vector<uint8_t> > make_input(
     unsigned size,
     uint64_t bytes,
@@ -295,6 +304,34 @@ void run_case(
     }
     ++counts.plans;
     ++counts.executions;
+
+    bool complete_input = !inverse;
+    for (unsigned coordinate = 0; coordinate < size; ++coordinate)
+        complete_input = complete_input && input_mask[coordinate] != 0;
+    if (complete_input)
+    {
+        const std::vector<std::vector<uint8_t> > source_snapshot(initial);
+        std::vector<std::vector<uint8_t> > from_source(
+            size, std::vector<uint8_t>(static_cast<size_t>(bytes), 0xa5));
+        std::vector<void*> immutable_source = source_pointers(initial);
+        std::vector<void*> from_source_pointers = pointers(from_source);
+        require(
+            leopard2_internal::ExecutePrunedForwardTransformPlanFromSources(
+                ops, bytes, plan, immutable_source.data(),
+                from_source_pointers.data()),
+            "immutable-source pruned transform execution failed");
+        require(initial == source_snapshot,
+            "immutable-source pruned transform changed its coefficients");
+        for (unsigned coordinate = 0; coordinate < size; ++coordinate)
+        {
+            if (!output_mask[coordinate])
+                continue;
+            require(from_source[coordinate] == expected[coordinate],
+                "immutable-source pruned transform output mismatch");
+            counts.compared_bytes += bytes;
+        }
+        ++counts.executions;
+    }
 }
 
 template<class Field>
@@ -602,6 +639,8 @@ bool same_plan(
 {
     if (left.size != right.size || left.shift != right.shift ||
         left.zero_multiplier_log != right.zero_multiplier_log ||
+        left.first_layer_multiplier_log !=
+            right.first_layer_multiplier_log ||
         left.inverse != right.inverse ||
         left.input_mask != right.input_mask ||
         left.output_mask != right.output_mask ||
@@ -638,6 +677,7 @@ void test_invalid_plan_construction()
     plan.size = 77;
     plan.shift = 33;
     plan.zero_multiplier_log = 19;
+    plan.first_layer_multiplier_log = 18;
     plan.inverse = true;
     plan.input_mask.push_back(9);
     plan.output_mask.push_back(8);
@@ -787,6 +827,63 @@ void test_shared_plan_concurrency(const leopard::backend::Ops& ops)
         "shared immutable plan failed concurrent execution");
 }
 
+void test_shared_source_plan_concurrency(const leopard::backend::Ops& ops)
+{
+    const unsigned size = 64;
+    const uint64_t bytes = 129;
+    const std::vector<uint8_t> input(size, 1);
+    const std::vector<std::vector<uint8_t> > masks = make_masks(size);
+    const std::vector<uint8_t>& output = masks[3];
+    leopard2_internal::PrunedTransformPlan plan;
+    require(leopard::ff8::PreparePrunedTransformPlan(
+            size, 128, false, input.data(), output.data(), plan),
+        "concurrent immutable-source plan construction failed");
+
+    std::vector<std::vector<uint8_t> > source = make_input(
+        size, bytes, input, UINT64_C(0x534f55524345504c));
+    const std::vector<std::vector<uint8_t> > source_snapshot(source);
+    std::vector<void*> source_values = source_pointers(source);
+    std::vector<std::vector<uint8_t> > expected(source);
+    std::vector<void*> expected_pointers = pointers(expected);
+    GF8::full(ops, false, bytes, size, 128, expected_pointers.data());
+
+    std::atomic<bool> failed(false);
+    std::vector<std::thread> threads;
+    for (unsigned thread = 0; thread < 8; ++thread)
+    {
+        threads.push_back(std::thread([&, thread]() {
+            for (unsigned iteration = 0; iteration < 16; ++iteration)
+            {
+                std::vector<std::vector<uint8_t> > actual(
+                    size, std::vector<uint8_t>(bytes, 0));
+                std::vector<void*> actual_pointers = pointers(actual);
+                if (!leopard2_internal::
+                        ExecutePrunedForwardTransformPlanFromSources(
+                            ops, bytes, plan, source_values.data(),
+                            actual_pointers.data()))
+                {
+                    failed.store(true, std::memory_order_relaxed);
+                    return;
+                }
+                for (unsigned coordinate = 0; coordinate < size; ++coordinate)
+                    if (output[coordinate] &&
+                        actual[coordinate] != expected[coordinate])
+                    {
+                        (void)thread;
+                        failed.store(true, std::memory_order_relaxed);
+                        return;
+                    }
+            }
+        }));
+    }
+    for (size_t i = 0; i < threads.size(); ++i)
+        threads[i].join();
+    require(!failed.load(std::memory_order_relaxed),
+        "shared immutable-source plan failed concurrent execution");
+    require(source == source_snapshot,
+        "concurrent immutable-source execution changed coefficients");
+}
+
 } // namespace
 
 int main()
@@ -838,6 +935,7 @@ int main()
             test_profile_masks<GF8>(*ops, 17, 100, 129, counts);
             test_profile_masks<GF16>(*ops, 257, 700, 66, counts);
             test_shared_plan_concurrency(*ops);
+            test_shared_source_plan_concurrency(*ops);
             ++counts.backends;
         }
         require(counts.backends != 0, "no backend was available");

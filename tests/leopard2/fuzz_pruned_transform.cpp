@@ -97,6 +97,8 @@ bool SamePlan(
 {
     if (left.size != right.size || left.shift != right.shift ||
         left.zero_multiplier_log != right.zero_multiplier_log ||
+        left.first_layer_multiplier_log !=
+            right.first_layer_multiplier_log ||
         left.inverse != right.inverse ||
         left.input_mask != right.input_mask ||
         left.output_mask != right.output_mask ||
@@ -266,6 +268,49 @@ void RunCase(
             Check(full.shards[i] == flat.shards[i]);
             Check(full.shards[i] == fused.shards[i]);
         }
+    }
+
+    if (!inverse)
+    {
+        std::vector<uint8_t> complete_input(size, 1);
+        leopard2_internal::PrunedTransformPlan source_plan;
+        Check(Field::Prepare(
+            size, shift, false, complete_input.data(), output_mask.data(),
+            source_plan));
+        Workspace source(size, bytes);
+        for (unsigned shard = 0; shard < size; ++shard)
+            for (size_t offset = 0; offset < bytes; ++offset)
+                source.shards[shard][offset] =
+                    static_cast<uint8_t>(random.Next());
+        Workspace source_snapshot(source);
+        Workspace source_expected(source);
+        Workspace source_actual(size, bytes);
+        for (unsigned i = 0; i < size; ++i)
+        {
+            source_snapshot.pointers[i] = source_snapshot.shards[i].data();
+            source_expected.pointers[i] = source_expected.shards[i].data();
+        }
+        Field::Full(
+            ops, false, bytes, size, shift, size,
+            source_expected.pointers.data());
+        Check(leopard2_internal::ExecutePrunedForwardTransformPlanFromSources(
+            ops, bytes, source_plan, source.pointers.data(),
+            source_actual.pointers.data()));
+        Check(source.shards == source_snapshot.shards);
+        for (unsigned i = 0; i < size; ++i)
+            if (output_mask[i])
+                Check(source_actual.shards[i] == source_expected.shards[i]);
+
+        leopard2_internal::PrunedTransformPlan broken_source(source_plan);
+        broken_source.inverse = true;
+        Check(!leopard2_internal::ExecutePrunedForwardTransformPlanFromSources(
+            ops, bytes, broken_source, source.pointers.data(),
+            source_actual.pointers.data()));
+        broken_source = source_plan;
+        broken_source.input_mask[random.Next() % size] = 0;
+        Check(!leopard2_internal::ExecutePrunedForwardTransformPlanFromSources(
+            ops, bytes, broken_source, source.pointers.data(),
+            source_actual.pointers.data()));
     }
 
     // The executor validates every stored index and multiplier before using

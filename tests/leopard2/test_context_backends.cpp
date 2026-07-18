@@ -378,6 +378,8 @@ public:
         leopard::ff16::TestOnlyResetTransformCallsiteCounts();
         leopard::ff8::TestOnlyResetLowEncodeCounts();
         leopard::ff16::TestOnlyResetLowEncodeCounts();
+        leopard::ff8::TestOnlyResetHighDecodeCounts();
+        leopard::ff16::TestOnlyResetHighDecodeCounts();
     }
 
     uint64_t ff8_calls() const
@@ -617,6 +619,51 @@ void require_low_encode_no_copy(
                 operation + " fused an unqualified GF16 first layer");
         }
     }
+}
+
+void require_high_decode_no_copy(
+    const TraceOpsGuard& trace,
+    leo2_field field,
+    const std::string& operation)
+{
+    uint64_t output_blocks = 0;
+    uint64_t butterfly2 = 0;
+    uint64_t butterfly4 = 0;
+    uint64_t copy_fallbacks = 0;
+    uint64_t traced_butterfly2 = 0;
+    uint64_t traced_butterfly4 = 0;
+    if (field == LEO2_FIELD_GF8)
+    {
+        const leopard::ff8::TestOnlyHighDecodeCounts counts =
+            leopard::ff8::TestOnlyGetHighDecodeCounts();
+        output_blocks = counts.output_blocks;
+        butterfly2 = counts.fft_butterfly2_out_of_place;
+        butterfly4 = counts.fft_butterfly4_out_of_place;
+        copy_fallbacks = counts.compatibility_copy_fallbacks;
+        traced_butterfly2 = trace.ff8_fft_two_out_calls();
+        traced_butterfly4 = trace.ff8_fft_four_out_calls();
+    }
+    else
+    {
+        const leopard::ff16::TestOnlyHighDecodeCounts counts =
+            leopard::ff16::TestOnlyGetHighDecodeCounts();
+        output_blocks = counts.output_blocks;
+        butterfly2 = counts.fft_butterfly2_out_of_place;
+        butterfly4 = counts.fft_butterfly4_out_of_place;
+        copy_fallbacks = counts.compatibility_copy_fallbacks;
+        traced_butterfly2 = trace.ff16_fft_two_out_calls();
+        traced_butterfly4 = trace.ff16_fft_four_out_calls();
+    }
+    const uint64_t out_of_place_calls = butterfly2 + butterfly4;
+    require(output_blocks != 0,
+        operation + " did not evaluate a requested output block");
+    require(out_of_place_calls != 0,
+        operation + " did not enter an immutable-source first layer");
+    require(copy_fallbacks == 0,
+        operation + " unexpectedly entered the whole-block copy fallback");
+    require(traced_butterfly2 == butterfly2 &&
+            traced_butterfly4 == butterfly4,
+        operation + " bypassed the selected context out-of-place table");
 }
 
 struct CodecCase
@@ -1005,6 +1052,9 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                 true);
             require(trace.xor_four_calls() != 0,
                 "decode bypassed the context grouped-XOR table");
+            if (test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1)
+                require_high_decode_no_copy(
+                    trace, test_case.field, profile_name + " decode");
             leo2_codec_destroy(codec);
         }
 

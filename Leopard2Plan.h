@@ -105,6 +105,11 @@ struct PrunedTransformPlan
     uint32_t size;
     uint32_t shift;
     uint16_t zero_multiplier_log;
+    // Forward plans retain the root-layer multiplier so execution can begin
+    // with an immutable-source out-of-place butterfly instead of copying the
+    // complete input block to a second workspace.  Inverse plans retain the
+    // same value for deterministic plan identity, but do not consume it.
+    uint16_t first_layer_multiplier_log;
     bool inverse;
     std::vector<uint8_t> input_mask;
     std::vector<uint8_t> output_mask;
@@ -128,6 +133,7 @@ struct PrunedTransformPlan
         : size(0)
         , shift(0)
         , zero_multiplier_log(0)
+        , first_layer_multiplier_log(0)
         , inverse(false)
         , full_butterfly_count(0)
         , one_output_butterflies(0)
@@ -173,6 +179,19 @@ bool ExecutePrunedTransformPlan(
     const leopard::backend::Ops& ops,
     uint64_t byte_count,
     const PrunedTransformPlan& plan,
+    void** work);
+
+// Forward-only companion for a plan whose input mask is completely live.
+// source is immutable and pairwise disjoint from every output buffer in work.
+// The root radix-2 layer is executed directly out of place, and the exact
+// sparse schedule resumes in work without a whole-size input copy.  This is
+// used by high-rate Algorithm 5 to evaluate one reusable coefficient block on
+// multiple requested message cosets.
+bool ExecutePrunedForwardTransformPlanFromSources(
+    const leopard::backend::Ops& ops,
+    uint64_t byte_count,
+    const PrunedTransformPlan& plan,
+    void* const* source,
     void** work);
 
 uint8_t Log2PowerOfTwo(uint32_t size);

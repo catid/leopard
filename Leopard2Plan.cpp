@@ -171,6 +171,7 @@ struct PrunedExecutionOps
     leopard::backend::FixedMultiply multiply_add;
     leopard::backend::Butterfly2 butterfly;
     leopard::backend::Butterfly4 butterfly_four;
+    leopard::backend::FFTButterfly2Out butterfly_out;
 };
 
 struct FusedFourMatch
@@ -386,6 +387,12 @@ bool CompilePrunedTransformPlan(
             multiplier_log, multiplier_context, raw);
         if (raw.size() != candidate.full_butterfly_count)
             return false;
+        if (raw.empty())
+            return false;
+        candidate.first_layer_multiplier_log = multiplier_log(
+            multiplier_context, shift + (size >> 1));
+        if (candidate.first_layer_multiplier_log > zero_multiplier_log)
+            return false;
         for (size_t i = 0; i < raw.size(); ++i)
             if (raw[i].multiplier_log > zero_multiplier_log)
                 return false;
@@ -564,7 +571,8 @@ bool ExecutePrunedTransformPlan(
             : (gf16 ? ops.ff16_fft_butterfly2 : ops.ff8_fft_butterfly2),
         plan.inverse
             ? (gf16 ? ops.ff16_ifft_butterfly4 : ops.ff8_ifft_butterfly4)
-            : (gf16 ? ops.ff16_fft_butterfly4 : ops.ff8_fft_butterfly4)
+            : (gf16 ? ops.ff16_fft_butterfly4 : ops.ff8_fft_butterfly4),
+        gf16 ? ops.ff16_fft_butterfly2_out : ops.ff8_fft_butterfly2_out
     };
 
     size_t fused_index = 0;
@@ -597,6 +605,112 @@ bool ExecutePrunedTransformPlan(
             !ExecutePrunedOperation(
                 ops, selected, plan.inverse, plan.zero_multiplier_log,
                 byte_count, operation, work[operation.x], work[operation.y]))
+            return false;
+        ++i;
+    }
+    if (fused_index != plan.fused_four_starts.size())
+        return false;
+    for (size_t i = 0; i < plan.zero_outputs.size(); ++i)
+        memset(work[plan.zero_outputs[i]], 0,
+            static_cast<size_t>(byte_count));
+    return true;
+}
+
+bool ExecutePrunedForwardTransformPlanFromSources(
+    const leopard::backend::Ops& ops,
+    uint64_t byte_count,
+    const PrunedTransformPlan& plan,
+    void* const* source,
+    void** work)
+{
+    const bool gf16 = plan.zero_multiplier_log == 65535U;
+    if ((plan.zero_multiplier_log != 255U && !gf16) ||
+        plan.size < 2 || !IsPowerOfTwo(plan.size) || plan.inverse ||
+        !source || !work ||
+        plan.input_mask.size() != plan.size ||
+        plan.first_layer_multiplier_log > plan.zero_multiplier_log ||
+        byte_count > static_cast<uint64_t>(SIZE_MAX) ||
+        (gf16 && (byte_count & 1U) != 0))
+        return false;
+
+    for (uint32_t i = 0; i < plan.size; ++i)
+        if (plan.input_mask[i] != 1)
+            return false;
+    if (byte_count == 0)
+        return true;
+    for (uint32_t i = 0; i < plan.size; ++i)
+        if (!source[i] || !work[i])
+            return false;
+    for (size_t i = 0; i < plan.zero_outputs.size(); ++i)
+        if (plan.zero_outputs[i] >= plan.size)
+            return false;
+
+    const PrunedExecutionOps selected = {
+        gf16 ? ops.ff16_multiply : ops.ff8_multiply,
+        gf16 ? ops.ff16_multiply_add : ops.ff8_multiply_add,
+        gf16 ? ops.ff16_fft_butterfly2 : ops.ff8_fft_butterfly2,
+        gf16 ? ops.ff16_fft_butterfly4 : ops.ff8_fft_butterfly4,
+        gf16 ? ops.ff16_fft_butterfly2_out : ops.ff8_fft_butterfly2_out
+    };
+    if (!selected.butterfly_out)
+        return false;
+
+    // The forward LCH schedule begins with the root radix-2 layer.  Execute
+    // it directly from the immutable coefficient block.  All remaining
+    // operations have a smaller coordinate distance and can resume in place.
+    const uint32_t half = plan.size >> 1;
+    for (uint32_t i = 0; i < half; ++i)
+        selected.butterfly_out(
+            source[i], source[i + half], work[i], work[i + half],
+            plan.first_layer_multiplier_log, byte_count);
+
+    size_t fused_index = 0;
+    for (size_t i = 0; i < plan.operations.size();)
+    {
+        // A complete fused descriptor at the root contains the two operations
+        // already executed above plus the following radix-2 layer.  Consume
+        // the descriptor metadata, skip only the root operations, and execute
+        // its second layer through the ordinary audited operation path.
+        if (fused_index < plan.fused_four_starts.size() &&
+            plan.fused_four_starts[fused_index] == i &&
+            plan.operations[i].x < plan.operations[i].y &&
+            plan.operations[i].y - plan.operations[i].x == half)
+            ++fused_index;
+
+        const PrunedTransformOperation& operation = plan.operations[i];
+        if (operation.x >= plan.size || operation.y >= plan.size ||
+            operation.x >= operation.y ||
+            operation.multiplier_log > plan.zero_multiplier_log)
+            return false;
+        if (operation.y - operation.x == half)
+        {
+            ++i;
+            continue;
+        }
+
+        if (fused_index < plan.fused_four_starts.size() &&
+            plan.fused_four_starts[fused_index] == i)
+        {
+            FusedFourMatch match;
+            if (!MatchFusedFour(plan.operations, i, false, match) ||
+                match.value0 >= plan.size || match.value1 >= plan.size ||
+                match.value2 >= plan.size || match.value3 >= plan.size ||
+                match.multiplier_log01 > plan.zero_multiplier_log ||
+                match.multiplier_log23 > plan.zero_multiplier_log ||
+                match.multiplier_log02 > plan.zero_multiplier_log)
+                return false;
+            selected.butterfly_four(
+                work[match.value0], work[match.value1],
+                work[match.value2], work[match.value3],
+                match.multiplier_log01, match.multiplier_log23,
+                match.multiplier_log02, byte_count);
+            ++fused_index;
+            i += 4;
+            continue;
+        }
+        if (!ExecutePrunedOperation(
+                ops, selected, false, plan.zero_multiplier_log, byte_count,
+                operation, work[operation.x], work[operation.y]))
             return false;
         ++i;
     }

@@ -267,10 +267,19 @@ struct TestOnlyLowEncodeCounts
     uint64_t fft_butterfly2_out_of_place;
     uint64_t fft_butterfly4_out_of_place;
 };
+struct TestOnlyHighDecodeCounts
+{
+    uint64_t output_blocks;
+    uint64_t fft_butterfly2_out_of_place;
+    uint64_t fft_butterfly4_out_of_place;
+    uint64_t compatibility_copy_fallbacks;
+};
 void TestOnlyResetTransformCallsiteCounts();
 TestOnlyTransformCallsiteCounts TestOnlyGetTransformCallsiteCounts();
 void TestOnlyResetLowEncodeCounts();
 TestOnlyLowEncodeCounts TestOnlyGetLowEncodeCounts();
+void TestOnlyResetHighDecodeCounts();
+TestOnlyHighDecodeCounts TestOnlyGetHighDecodeCounts();
 ffe_t TestOnlyFFTMultiplier(unsigned logical_index);
 ffe_t TestOnlySubspaceDerivative(unsigned size);
 ffe_t TestOnlySubspaceAt(unsigned size, unsigned shift);
