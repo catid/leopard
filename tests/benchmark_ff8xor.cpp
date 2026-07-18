@@ -33,6 +33,7 @@ struct Options
     bool include_transpose;
     unsigned warmups;
     unsigned iterations;
+    double minimum_sample_usec;
 
     Options()
         : quick(false)
@@ -40,6 +41,7 @@ struct Options
         , include_transpose(false)
         , warmups(2)
         , iterations(7)
+        , minimum_sample_usec(1000.)
     {
     }
 };
@@ -56,8 +58,9 @@ struct Timing
 {
     double median_usec;
     double best_usec;
+    unsigned calls_per_sample;
 
-    Timing() : median_usec(0), best_usec(0) {}
+    Timing() : median_usec(0), best_usec(0), calls_per_sample(0) {}
 };
 
 struct Result
@@ -259,32 +262,61 @@ static bool Equal(const void* a, const void* b, uint64_t bytes)
 
 template <typename Function>
 static bool Measure(
-    unsigned warmups,
-    unsigned iterations,
+    const Options& options,
     Function function,
     Timing& timing,
     LeopardResult& result)
 {
     typedef std::chrono::steady_clock Clock;
-    for (unsigned i = 0; i < warmups; ++i)
+    for (unsigned i = 0; i < options.warmups; ++i)
     {
         result = function();
         if (result != Leopard_Success)
             return false;
     }
 
+    // Measure one untimed calibration call, then batch fast operations so a
+    // measured sample is long enough that clock overhead does not dominate.
+    // Reported times below are divided back down to one whole-buffer call.
+    const Clock::time_point calibration_begin = Clock::now();
+    result = function();
+    const Clock::time_point calibration_end = Clock::now();
+    if (result != Leopard_Success)
+        return false;
+    const double calibration_usec =
+        std::chrono::duration_cast<std::chrono::duration<double, std::micro> >(
+            calibration_end - calibration_begin).count();
+
+    static const unsigned kMaximumCallsPerSample = 1U << 20;
+    unsigned calls_per_sample = 1;
+    if (calibration_usec > 0. &&
+        calibration_usec < options.minimum_sample_usec)
+    {
+        const double wanted =
+            options.minimum_sample_usec / calibration_usec;
+        if (wanted >= static_cast<double>(kMaximumCallsPerSample))
+            calls_per_sample = kMaximumCallsPerSample;
+        else
+            calls_per_sample = std::max(1U,
+                static_cast<unsigned>(wanted + 0.999999));
+    }
+    timing.calls_per_sample = calls_per_sample;
+
     std::vector<double> samples;
-    samples.reserve(iterations);
-    for (unsigned i = 0; i < iterations; ++i)
+    samples.reserve(options.iterations);
+    for (unsigned i = 0; i < options.iterations; ++i)
     {
         const Clock::time_point begin = Clock::now();
-        result = function();
+        for (unsigned call = 0; call < calls_per_sample; ++call)
+        {
+            result = function();
+            if (result != Leopard_Success)
+                return false;
+        }
         const Clock::time_point end = Clock::now();
-        if (result != Leopard_Success)
-            return false;
         const double usec =
             std::chrono::duration_cast<std::chrono::duration<double, std::micro> >(
-                end - begin).count();
+                end - begin).count() / calls_per_sample;
         samples.push_back(usec);
     }
 
@@ -341,9 +373,10 @@ public:
         {
             std::cout
                 << "record,backend,operation,transpose_included,k,r,buffer_bytes,loss_count,"
-                << "warmups,iterations,median_us,best_us,median_input_MBps,best_input_MBps,"
-                << "median_output_MBps,best_output_MBps,ratio_vs_packed,compiler,build_type,"
-                << "cpu,simd,checksum,gate_min,gate_max,gate_average,note\n";
+                << "warmups,iterations,calls_per_sample,median_us,best_us,median_input_MBps,"
+                << "best_input_MBps,median_output_MBps,best_output_MBps,"
+                << "speed_ratio_vs_packed,compiler,build_type,cpu,simd,checksum,gate_min,"
+                << "gate_max,gate_average,note\n";
             GateCSV("multiply",
                 multiply.MinimumGateCount,
                 multiply.MaximumGateCount,
@@ -367,8 +400,10 @@ public:
             << "mode: " << (options.quick ? "quick" : "full")
             << ", warmups=" << options.warmups
             << ", iterations=" << options.iterations
+            << ", minimum sample=" << options.minimum_sample_usec << " us"
             << ", packed-boundary transpose measurements="
             << (options.include_transpose ? "included" : "disabled") << '\n'
+            << "timing: calls/sample is auto-calibrated and each result is per call\n"
             << "circuit checksum: "
             << leopard::ff8xor::GetCircuitChecksum() << '\n'
             << std::fixed << std::setprecision(3)
@@ -403,6 +438,7 @@ public:
                 << result.original_count << ',' << result.recovery_count << ','
                 << result.buffer_bytes << ',' << result.loss_count << ','
                 << result.warmups << ',' << result.iterations << ','
+                << result.timing.calls_per_sample << ','
                 << std::fixed << std::setprecision(3)
                 << result.timing.median_usec << ',' << result.timing.best_usec << ','
                 << median_input << ',' << best_input << ','
@@ -420,6 +456,9 @@ public:
             << " r=" << std::setw(3) << result.recovery_count
             << " B=" << std::setw(8) << result.buffer_bytes
             << " loss=" << std::setw(3) << result.loss_count
+            << " warmups=" << std::setw(2) << result.warmups
+            << " samples=" << std::setw(2) << result.iterations
+            << " calls/sample=" << std::setw(6) << result.timing.calls_per_sample
             << " transpose=" << (result.transpose_included ? "yes" : "no ")
             << std::fixed << std::setprecision(3)
             << " median=" << std::setw(10) << result.timing.median_usec << " us"
@@ -427,7 +466,7 @@ public:
             << " input=" << std::setw(10) << median_input << " MB/s"
             << " output=" << std::setw(10) << median_output << " MB/s";
         if (result.ratio_vs_packed > 0)
-            std::cout << " ratio=" << result.ratio_vs_packed << 'x';
+            std::cout << " speed=" << result.ratio_vs_packed << "x packed";
         if (!result.note.empty())
             std::cout << " (" << result.note << ')';
         std::cout << '\n';
@@ -456,7 +495,7 @@ private:
     void GateCSV(const char* operation, unsigned minimum, unsigned maximum, double average)
     {
         std::cout << Csv("metadata") << ',' << Csv("generated") << ','
-            << Csv(operation) << ",0,0,0,0,0,0,0,0,0,0,0,0,0,0,"
+            << Csv(operation) << ",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,"
             << Csv(Env.compiler) << ',' << Csv(Env.build_type) << ','
             << Csv(Env.cpu) << ',' << Csv(Env.simd) << ','
             << Csv(leopard::ff8xor::GetCircuitChecksum()) << ','
@@ -706,7 +745,7 @@ static bool RunParameter(
             "allocation failed for packed encode work");
         return true;
     }
-    if (!Measure(options.warmups, options.iterations,
+    if (!Measure(options,
         [&]() -> LeopardResult {
             return leo_encode(buffer_bytes, original_count, recovery_count,
                 packed_encode_count, &packed_original_ptrs[0],
@@ -745,7 +784,7 @@ static bool RunParameter(
             "allocation failed for ff8xor encode work");
         return true;
     }
-    if (!Measure(options.warmups, options.iterations,
+    if (!Measure(options,
         [&]() -> LeopardResult {
             return leo_ff8xor_encode(buffer_bytes, original_count, recovery_count,
                 xor_encode_count, &plane_original_ptrs[0],
@@ -782,7 +821,7 @@ static bool RunParameter(
         else
         {
             Timing included_timing;
-            if (!Measure(options.warmups, options.iterations,
+            if (!Measure(options,
                 [&]() -> LeopardResult {
                     for (unsigned i = 0; i < original_count; ++i)
                         PackedToPlane(packed_original[i], plane_original[i], buffer_bytes);
@@ -880,7 +919,7 @@ static bool RunParameter(
             continue;
         }
         Timing packed_decode_timing;
-        if (!Measure(options.warmups, options.iterations,
+        if (!Measure(options,
             [&]() -> LeopardResult {
                 return leo_decode(buffer_bytes, original_count, recovery_count,
                     packed_decode_count, &packed_decode_original[0],
@@ -916,7 +955,7 @@ static bool RunParameter(
             continue;
         }
         Timing xor_decode_timing;
-        if (!Measure(options.warmups, options.iterations,
+        if (!Measure(options,
             [&]() -> LeopardResult {
                 return leo_ff8xor_decode(buffer_bytes, original_count, recovery_count,
                     xor_decode_count, &plane_decode_original[0],
@@ -960,7 +999,7 @@ static bool RunParameter(
             else
             {
                 Timing included_timing;
-                if (!Measure(options.warmups, options.iterations,
+                if (!Measure(options,
                     [&]() -> LeopardResult {
                         for (unsigned i = 0; i < original_count; ++i)
                             if (!original_missing[i])
@@ -1017,16 +1056,39 @@ static void PrintMicro(
     Reporter& reporter,
     const char* backend,
     const char* operation,
-    const char* note,
+    const std::string& note,
     const Timing& timing,
     uint64_t buffer_bytes,
     uint64_t input_bytes,
     uint64_t output_bytes)
 {
     Result result = MakeResult(options, backend, operation, false,
-        0, 0, buffer_bytes, 0, timing, input_bytes, output_bytes, 0, note);
+        0, 0, buffer_bytes, 0, timing, input_bytes, output_bytes, 0,
+        note.c_str());
     result.record = "microbenchmark";
     reporter.Print(result);
+}
+
+struct CircuitCase
+{
+    unsigned coefficient;
+    unsigned gates;
+    unsigned depth;
+    const char* description;
+};
+
+static std::string CircuitCaseNote(
+    const char* coefficient_name,
+    const CircuitCase& circuit,
+    const char* suffix)
+{
+    std::ostringstream note;
+    note << coefficient_name << '=' << circuit.coefficient
+        << "; gates=" << circuit.gates
+        << "; depth=" << circuit.depth
+        << "; " << circuit.description
+        << "; " << suffix;
+    return note.str();
 }
 
 static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
@@ -1039,64 +1101,167 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
     BufferSet a;
     BufferSet b;
     BufferSet c;
+    BufferSet d;
+    BufferSet e;
     if (!a.Allocate(1, static_cast<size_t>(bytes)) ||
         !b.Allocate(1, static_cast<size_t>(bytes)) ||
-        !c.Allocate(1, static_cast<size_t>(bytes)))
+        !c.Allocate(1, static_cast<size_t>(bytes)) ||
+        !d.Allocate(1, static_cast<size_t>(bytes)) ||
+        !e.Allocate(1, static_cast<size_t>(bytes)))
     {
         reporter.Skip(0, 0, bytes, 0, "allocation failed for microbenchmarks");
         return true;
     }
-    FillRandom(a, bytes, UINT64_C(0x6d6963726f5f6131));
+
+    // Cover the least expensive non-identity circuit, a near-average circuit,
+    // and the unique maximum-gate circuit.  This exposes coefficient
+    // sensitivity rather than reporting only a favorable hand-picked case.
+    static const CircuitCase multiply_cases[] = {
+        { 51, 19, 12, "minimum-gate non-identity multiplier" },
+        { 22, 32, 26, "near-average-gate multiplier" },
+        { 209, 43, 35, "maximum-gate multiplier" }
+    };
+
     FillRandom(b, bytes, UINT64_C(0x6d6963726f5f6232));
+    PackedToPlane(b[0], d[0], bytes);
 
     LeopardResult result = Leopard_Success;
+    for (size_t case_index = 0;
+         case_index < sizeof(multiply_cases) / sizeof(multiply_cases[0]);
+         ++case_index)
+    {
+        const CircuitCase circuit = multiply_cases[case_index];
+
+        // Verify packed and plane multiplication equivalence once, outside the
+        // timed regions.  A zero packed destination turns multiply-add into a
+        // multiplication-only reference result.
+        memset(a[0], 0, static_cast<size_t>(bytes));
+        leopard::ff8::ExperimentalPackedMulAdd(
+            bytes, a[0], b[0], static_cast<uint8_t>(circuit.coefficient));
+        leopard::ff8xor::MultiplyBuffer(
+            bytes, e[0], d[0], static_cast<uint8_t>(circuit.coefficient));
+        PlaneToPacked(e[0], c[0], bytes);
+        if (!Equal(a[0], c[0], bytes))
+        {
+            std::cerr << "microbenchmark multiply equivalence failed for log="
+                << circuit.coefficient << '\n';
+            return false;
+        }
+
+        FillRandom(a, bytes, UINT64_C(0x6d6963726f5f7800) ^
+            circuit.coefficient);
+        Timing packed_timing;
+        if (!Measure(options,
+            [&]() -> LeopardResult {
+                leopard::ff8::ExperimentalPackedMulAdd(
+                    bytes, a[0], b[0],
+                    static_cast<uint8_t>(circuit.coefficient));
+                BenchmarkSink ^= a[0][0];
+                return Leopard_Success;
+            }, packed_timing, result))
+            return false;
+        PrintMicro(options, reporter, "packed_ff8", "multiply_add",
+            CircuitCaseNote("log", circuit,
+                "existing packed lookup multiply-add; gate metadata is for ff8xor"),
+            packed_timing, bytes, bytes * 2, bytes);
+
+        Timing xor_timing;
+        if (!Measure(options,
+            [&]() -> LeopardResult {
+                leopard::ff8xor::MultiplyBuffer(
+                    bytes, e[0], d[0],
+                    static_cast<uint8_t>(circuit.coefficient));
+                BenchmarkSink ^= e[0][0];
+                return Leopard_Success;
+            }, xor_timing, result))
+            return false;
+        PrintMicro(options, reporter, "ff8xor_native", "multiply",
+            CircuitCaseNote("log", circuit,
+                "generated multiplication-only whole-buffer kernel"),
+            xor_timing, bytes, bytes, bytes);
+    }
+
+    static const CircuitCase butterfly_cases[] = {
+        { 0, 16, 2, "minimum-gate non-sentinel butterfly" },
+        { 1, 40, 11, "average-gate butterfly" },
+        { 247, 51, 15, "maximum-gate butterfly" }
+    };
+    for (size_t case_index = 0;
+         case_index < sizeof(butterfly_cases) / sizeof(butterfly_cases[0]);
+         ++case_index)
+    {
+        const CircuitCase circuit = butterfly_cases[case_index];
+        FillRandom(a, bytes, UINT64_C(0x6d6963726f5f6100) ^
+            circuit.coefficient);
+        FillRandom(b, bytes, UINT64_C(0x6d6963726f5f6200) ^
+            circuit.coefficient);
+        memcpy(d[0], a[0], static_cast<size_t>(bytes));
+        memcpy(e[0], b[0], static_cast<size_t>(bytes));
+
+        // Verify both circuit orders are mutual inverses outside timing.
+        leopard::ff8xor::FFTButterflyBuffer(
+            bytes, a[0], b[0], static_cast<uint8_t>(circuit.coefficient));
+        leopard::ff8xor::IFFTButterflyBuffer(
+            bytes, a[0], b[0], static_cast<uint8_t>(circuit.coefficient));
+        if (!Equal(a[0], d[0], bytes) || !Equal(b[0], e[0], bytes))
+        {
+            std::cerr << "microbenchmark FFT/IFFT inverse check failed for skew="
+                << circuit.coefficient << '\n';
+            return false;
+        }
+        leopard::ff8xor::IFFTButterflyBuffer(
+            bytes, a[0], b[0], static_cast<uint8_t>(circuit.coefficient));
+        leopard::ff8xor::FFTButterflyBuffer(
+            bytes, a[0], b[0], static_cast<uint8_t>(circuit.coefficient));
+        if (!Equal(a[0], d[0], bytes) || !Equal(b[0], e[0], bytes))
+        {
+            std::cerr << "microbenchmark IFFT/FFT inverse check failed for skew="
+                << circuit.coefficient << '\n';
+            return false;
+        }
+
+        Timing fft_timing;
+        if (!Measure(options,
+            [&]() -> LeopardResult {
+                leopard::ff8xor::FFTButterflyBuffer(
+                    bytes, a[0], b[0],
+                    static_cast<uint8_t>(circuit.coefficient));
+                BenchmarkSink ^= a[0][0];
+                return Leopard_Success;
+            }, fft_timing, result))
+            return false;
+        PrintMicro(options, reporter, "ff8xor_native", "fft_butterfly",
+            CircuitCaseNote("skew", circuit, "generated two-buffer kernel"),
+            fft_timing, bytes, bytes * 2, bytes * 2);
+
+        memcpy(a[0], d[0], static_cast<size_t>(bytes));
+        memcpy(b[0], e[0], static_cast<size_t>(bytes));
+        Timing ifft_timing;
+        if (!Measure(options,
+            [&]() -> LeopardResult {
+                leopard::ff8xor::IFFTButterflyBuffer(
+                    bytes, a[0], b[0],
+                    static_cast<uint8_t>(circuit.coefficient));
+                BenchmarkSink ^= b[0][0];
+                return Leopard_Success;
+            }, ifft_timing, result))
+            return false;
+        PrintMicro(options, reporter, "ff8xor_native", "ifft_butterfly",
+            CircuitCaseNote("skew", circuit, "generated two-buffer kernel"),
+            ifft_timing, bytes, bytes * 2, bytes * 2);
+    }
+
+    FillRandom(a, bytes, UINT64_C(0x7472616e73706f73));
+    PackedToPlane(a[0], c[0], bytes);
+    PlaneToPacked(c[0], b[0], bytes);
+    if (!Equal(a[0], b[0], bytes))
+    {
+        std::cerr << "microbenchmark transpose round trip failed\n";
+        return false;
+    }
+
     Timing timing;
-    if (!Measure(options.warmups, options.iterations,
-        [&]() -> LeopardResult {
-            leopard::ff8::ExperimentalPackedMulAdd(bytes, a[0], b[0], 1);
-            BenchmarkSink ^= a[0][0];
-            return Leopard_Success;
-        }, timing, result))
-        return false;
-    PrintMicro(options, reporter, "packed_ff8", "multiply_add",
-        "log=1; existing packed multiply-add", timing, bytes, bytes * 2, bytes);
-
-    timing = Timing();
-    if (!Measure(options.warmups, options.iterations,
-        [&]() -> LeopardResult {
-            leopard::ff8xor::MultiplyBuffer(bytes, c[0], b[0], 1);
-            BenchmarkSink ^= c[0][0];
-            return Leopard_Success;
-        }, timing, result))
-        return false;
-    PrintMicro(options, reporter, "ff8xor_native", "multiply",
-        "log=1; generated whole-buffer kernel", timing, bytes, bytes, bytes);
-
-    timing = Timing();
-    if (!Measure(options.warmups, options.iterations,
-        [&]() -> LeopardResult {
-            leopard::ff8xor::FFTButterflyBuffer(bytes, a[0], b[0], 1);
-            BenchmarkSink ^= a[0][0];
-            return Leopard_Success;
-        }, timing, result))
-        return false;
-    PrintMicro(options, reporter, "ff8xor_native", "fft_butterfly",
-        "skew=1; generated two-buffer kernel", timing, bytes,
-        bytes * 2, bytes * 2);
-
-    timing = Timing();
-    if (!Measure(options.warmups, options.iterations,
-        [&]() -> LeopardResult {
-            leopard::ff8xor::IFFTButterflyBuffer(bytes, a[0], b[0], 1);
-            BenchmarkSink ^= b[0][0];
-            return Leopard_Success;
-        }, timing, result))
-        return false;
-    PrintMicro(options, reporter, "ff8xor_native", "ifft_butterfly",
-        "skew=1; generated two-buffer kernel", timing, bytes,
-        bytes * 2, bytes * 2);
-    timing = Timing();
-    if (!Measure(options.warmups, options.iterations,
+    if (!Measure(options,
         [&]() -> LeopardResult {
             PackedToPlane(a[0], c[0], bytes);
             BenchmarkSink ^= c[0][0];
@@ -1104,10 +1269,11 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
         }, timing, result))
         return false;
     PrintMicro(options, reporter, "transpose", "packed_to_plane",
-        "8x8 bit transpose", timing, bytes, bytes, bytes);
+        "standalone 8x8 bit transpose; no allocation", timing,
+        bytes, bytes, bytes);
 
     timing = Timing();
-    if (!Measure(options.warmups, options.iterations,
+    if (!Measure(options,
         [&]() -> LeopardResult {
             PlaneToPacked(c[0], a[0], bytes);
             BenchmarkSink ^= a[0][0];
@@ -1115,7 +1281,8 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
         }, timing, result))
         return false;
     PrintMicro(options, reporter, "transpose", "plane_to_packed",
-        "8x8 bit transpose", timing, bytes, bytes, bytes);
+        "standalone 8x8 bit transpose; no allocation", timing,
+        bytes, bytes, bytes);
 
     if (!base_options.csv)
         std::cout << '\n';
@@ -1158,6 +1325,7 @@ static bool ParseOptions(int argc, char** argv, Options& options)
     {
         options.warmups = 1;
         options.iterations = 3;
+        options.minimum_sample_usec = 250.;
     }
     return true;
 }

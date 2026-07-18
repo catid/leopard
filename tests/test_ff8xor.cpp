@@ -461,6 +461,28 @@ static bool TestWorkCounts()
             return false;
         }
     }
+
+    static const unsigned kInvalidCounts[][2] = {
+        { 0, 0 }, { 4, 0 }, { 4, 5 }, { 129, 128 }, { 256, 1 }
+    };
+    for (unsigned index = 0;
+         index < sizeof(kInvalidCounts) / sizeof(kInvalidCounts[0]);
+         ++index)
+    {
+        const unsigned original_count = kInvalidCounts[index][0];
+        const unsigned recovery_count = kInvalidCounts[index][1];
+        if (leo_ff8xor_encode_work_count(
+                original_count, recovery_count) != 0 ||
+            leo_ff8xor_decode_work_count(
+                original_count, recovery_count) != 0)
+        {
+            fprintf(stderr,
+                "invalid work count was nonzero: k=%u r=%u\n",
+                original_count,
+                recovery_count);
+            return false;
+        }
+    }
     return true;
 }
 
@@ -527,7 +549,17 @@ static bool TestAPIValidation()
             leo_ff8xor_encode(
                 64, 4, 2, 3, original_ptrs.data(), work_ptrs.data()),
             Leopard_InvalidCounts,
-            "encode wrong work count"))
+            "encode wrong work count") ||
+        !ExpectResult(
+            leo_ff8xor_encode(
+                64, 4, 1, 0, original_ptrs.data(), work_ptrs.data()),
+            Leopard_InvalidCounts,
+            "encode r=1 wrong work count") ||
+        !ExpectResult(
+            leo_ff8xor_encode(
+                64, 1, 1, 0, original_ptrs.data(), work_ptrs.data()),
+            Leopard_InvalidCounts,
+            "encode k=1 wrong work count"))
         return false;
 
     if (!ExpectResult(
@@ -559,7 +591,13 @@ static bool TestAPIValidation()
                 64, 4, 2, 8,
                 original_ptrs.data(), recovery_ptrs.data(), NULL),
             Leopard_InvalidInput,
-            "decode null work"))
+            "decode null work") ||
+        !ExpectResult(
+            leo_ff8xor_decode(
+                64, 4, 2, 7,
+                original_ptrs.data(), recovery_ptrs.data(), work_ptrs.data()),
+            Leopard_InvalidCounts,
+            "decode no-loss wrong work count"))
         return false;
 
     // Force the general decoder path so the work count is checked.
@@ -573,13 +611,46 @@ static bool TestAPIValidation()
         return false;
     original_ptrs[0] = original[0].data();
 
+    // A no-loss decode does not require any recovery shard.  In particular,
+    // k=1 must copy the available original instead of dereferencing a missing
+    // recovery pointer.
+    Buffers singleton_original = AllocateBuffers(1, 64);
+    Buffers singleton_work = AllocateBuffers(1, 64);
+    uint32_t singleton_seed = 0x1dec0deU;
+    FillRandom(singleton_original[0], singleton_seed);
+    std::vector<const void*> singleton_original_ptrs =
+        GetConstPointers(singleton_original);
+    std::vector<const void*> singleton_recovery_ptrs(1, NULL);
+    std::vector<void*> singleton_work_ptrs =
+        GetMutablePointers(singleton_work);
+    if (!ExpectResult(
+            leo_ff8xor_decode(
+                64, 1, 1, 0,
+                singleton_original_ptrs.data(),
+                singleton_recovery_ptrs.data(),
+                singleton_work_ptrs.data()),
+            Leopard_InvalidCounts,
+            "decode k=1 wrong work count") ||
+        !ExpectResult(
+            leo_ff8xor_decode(
+                64, 1, 1, 1,
+                singleton_original_ptrs.data(),
+                singleton_recovery_ptrs.data(),
+                singleton_work_ptrs.data()),
+            Leopard_Success,
+            "decode k=1 no loss with missing recovery") ||
+        !CheckEqual(
+            singleton_work[0], singleton_original[0],
+            "decode k=1 no loss with missing recovery", 0))
+        return false;
+
     Buffer dummy(64, 0);
     std::vector<const void*> large_original(129, dummy.data());
     std::vector<const void*> large_recovery(128, dummy.data());
-    std::vector<void*> large_encode_work(
-        leo_ff8xor_encode_work_count(129, 128), dummy.data());
-    std::vector<void*> large_decode_work(
-        leo_ff8xor_decode_work_count(129, 128), dummy.data());
+    // Unsupported helper queries return zero.  Supply one non-null dummy slot
+    // here so the operation reaches and reports the FF8 range check.
+    std::vector<void*> large_encode_work(1, dummy.data());
+    std::vector<void*> large_decode_work(1, dummy.data());
 
     return ExpectResult(
                leo_ff8xor_encode(
@@ -823,8 +894,9 @@ static bool TestDecodePatterns(const EncodedData& encoded)
             encoded, none, none, Leopard_Success, "decode no loss"))
         return false;
 
-    std::vector<unsigned> one = SelectIndices(
-        p.OriginalCount, 1, p.Seed ^ 0x11111111U);
+    // Keep one fixed loss in every case in addition to the seeded-random
+    // subsets below.  This makes the deterministic edge case explicit.
+    std::vector<unsigned> one(1, p.OriginalCount / 2);
     if (!RunDecodePattern(
             encoded, one, none, Leopard_Success, "decode one loss"))
         return false;
@@ -904,8 +976,10 @@ static bool TestPackedEquivalence()
         {   1,   1,    64, 0x10010001U, "encode k=1 r=1 bytes=64" },
         {   8,   1,  1024, 0x10080001U, "encode k=8 r=1 bytes=1024" },
         {   4,   2,    64, 0x20040002U, "encode k=4 r=2 bytes=64" },
+        {   7,   3,  1024, 0x30070003U, "encode k=7 r=3 bytes=1024" },
         {   8,   2,  1024, 0x20080002U, "encode k=8 r=2 bytes=1024" },
         {  16,   4,  4096, 0x40160004U, "encode k=16 r=4 bytes=4096" },
+        {  17,   5,  4096, 0x50170005U, "encode k=17 r=5 bytes=4096" },
         {  32,   8, 65536, 0x80320008U, "encode k=32 r=8 bytes=65536" },
         {  64,  16,  1024, 0x10640010U, "encode k=64 r=16 bytes=1024" },
         { 128,  32,  4096, 0x20800020U, "encode k=128 r=32 bytes=4096" },
@@ -922,6 +996,112 @@ static bool TestPackedEquivalence()
             return false;
     }
     return true;
+}
+
+static bool TestForcedLocatorShifts()
+{
+    const CodecCase parameters = {
+        8, 4, 64, 0x25510ca7U, "forced locator shift"
+    };
+    EncodedData encoded;
+    if (!BuildEncodedData(parameters, encoded))
+        return false;
+
+    // Two unavailable originals and one unavailable recovery exercise all
+    // three locator-scaling sites: available inputs, unavailable inputs, and
+    // final inverse scaling of recovered originals.
+    static const unsigned kOriginalLosses[] = { 1, 6 };
+    static const unsigned kRecoveryLosses[] = { 2 };
+    std::vector<const void*> original_ptrs =
+        GetConstPointers(encoded.PlaneOriginal);
+    std::vector<const void*> recovery_ptrs =
+        GetConstPointers(encoded.PlaneRecovery);
+    for (unsigned index = 0;
+         index < sizeof(kOriginalLosses) / sizeof(kOriginalLosses[0]);
+         ++index)
+        original_ptrs[kOriginalLosses[index]] = NULL;
+    for (unsigned index = 0;
+         index < sizeof(kRecoveryLosses) / sizeof(kRecoveryLosses[0]);
+         ++index)
+        recovery_ptrs[kRecoveryLosses[index]] = NULL;
+
+    const unsigned work_count = leo_ff8xor_decode_work_count(
+        parameters.OriginalCount, parameters.RecoveryCount);
+    Buffers work = AllocateBuffers(work_count, parameters.BufferBytes);
+    std::vector<void*> work_ptrs = GetMutablePointers(work);
+
+    bool success = true;
+    for (unsigned shift = 0; shift < kFieldModulus; ++shift)
+    {
+        for (unsigned index = 0; index < work_count; ++index)
+        {
+            std::fill(
+                work[index].begin(),
+                work[index].end(),
+                static_cast<uint8_t>(0x5aU ^ shift));
+        }
+
+        leopard::ff8xor::SetLocatorShiftForTesting(
+            static_cast<int>(shift));
+        const LeopardResult result = leo_ff8xor_decode(
+            parameters.BufferBytes,
+            parameters.OriginalCount,
+            parameters.RecoveryCount,
+            work_count,
+            original_ptrs.data(),
+            recovery_ptrs.data(),
+            work_ptrs.data());
+        if (!ExpectResult(result, Leopard_Success, parameters.Label))
+        {
+            success = false;
+            break;
+        }
+        if (leopard::ff8xor::GetLastLocatorShiftForTesting() != shift)
+        {
+            fprintf(stderr,
+                "forced locator shift mismatch: requested=%u observed=%u\n",
+                shift,
+                leopard::ff8xor::GetLastLocatorShiftForTesting());
+            success = false;
+            break;
+        }
+
+        for (unsigned loss_index = 0;
+             loss_index <
+                sizeof(kOriginalLosses) / sizeof(kOriginalLosses[0]);
+             ++loss_index)
+        {
+            const unsigned original_index = kOriginalLosses[loss_index];
+            if (!CheckEqual(
+                    work[original_index],
+                    encoded.PlaneOriginal[original_index],
+                    parameters.Label,
+                    original_index))
+            {
+                fprintf(stderr, "failed forced locator shift %u\n", shift);
+                success = false;
+                break;
+            }
+
+            Buffer packed_from_plane;
+            PlaneToPacked(work[original_index], packed_from_plane);
+            if (!CheckEqual(
+                    packed_from_plane,
+                    encoded.PackedOriginal[original_index],
+                    parameters.Label,
+                    original_index))
+            {
+                fprintf(stderr, "failed forced locator shift %u\n", shift);
+                success = false;
+                break;
+            }
+        }
+        if (!success)
+            break;
+    }
+
+    leopard::ff8xor::SetLocatorShiftForTesting(-1);
+    return success;
 }
 
 
@@ -1014,6 +1194,7 @@ static bool TestNativeRoundTrips()
 {
     static const CodecCase kCases[] = {
         {  4, 2,   64, 0x64040002U, "native k=4 r=2 bytes=64" },
+        {  7, 3,  192, 0x19070003U, "native k=7 r=3 bytes=192" },
         {  8, 2,  192, 0x19080002U, "native k=8 r=2 bytes=192" },
         { 16, 4,  320, 0x32160004U, "native k=16 r=4 bytes=320" },
         { 32, 8, 1024, 0x10320008U, "native k=32 r=8 bytes=1024" }
@@ -1223,6 +1404,7 @@ int main()
         !TestAPIValidation() ||
         !TestKernelModes() ||
         !TestPackedEquivalence() ||
+        !TestForcedLocatorShifts() ||
         !TestNativeRoundTrips())
         return 1;
 

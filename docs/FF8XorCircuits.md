@@ -1,0 +1,340 @@
+# Experimental FF8 XOR-circuit backend
+
+## Status and goal
+
+This branch adds a separate, experimental CPU backend for Leopard's FF8 path.
+It preserves the existing FFT-based encoder and decoder, but replaces fixed
+GF(256) payload multiplication with generated binary XOR circuits. It is not
+the default backend, does not change `leo_encode()` or `leo_decode()`, and does
+not implement FF16, CUDA, or AVX-512 four-buffer fusion.
+
+The payload loops use loads, stores, XORs, copies, zeroing, and address/loop
+arithmetic. They do not use payload-indexed multiplication tables, byte
+shuffles, GFNI, CLMUL, integer field multiplication, AND-based general field
+multiplication, or a dynamically indexed gate interpreter. These circuits
+implement fixed coefficients; they are not a variable-by-variable GF(256)
+multiplier. Scalar field operations remain in initialization and decoder
+metadata calculations.
+
+## Native eight-plane shard layout
+
+An experimental B-byte shard is one ordinary contiguous allocation divided
+into eight equal planes:
+
+```text
+plane_bytes = B / 8
+plane j     = shard + j * plane_bytes, j = 0..7
+```
+
+For group byte `g`, bit lane `lane`, and coordinate bit `j`:
+
+```text
+packed[8*g + lane] bit j = plane[j][g] bit lane
+```
+
+Thus one byte position across the eight planes represents eight parallel
+GF(256) elements. `B` retains Leopard's positive multiple-of-64 requirement,
+so every plane is a multiple of eight bytes and the portable `uint64_t` tail is
+always exact.
+
+The API does not transpose at its boundary. Original shards remain systematic:
+their bytes are not modified or rearranged by encoding. Recovery bytes in the
+native plane layout are not directly byte-compatible with packed Leopard
+recovery bytes. Applying the documented 8x8 bit transpose converts between the
+two layouts. Tests and the optional packed-boundary benchmark perform this
+transpose outside the native hot path.
+
+Both representations use Leopard's existing Cantor-basis coordinate bits, so
+no field-basis conversion is involved.
+
+## Field model and generated circuits
+
+The generator reproduces `LeopardFF8.cpp` exactly:
+
+- polynomial: `0x11D`;
+- Cantor basis: `1, 214, 152, 146, 86, 200, 88, 230`;
+- 256-entry logarithm and exponent tables, including Leopard's redundant log
+  representation of exponent zero.
+
+For a fixed nonzero coefficient, GF(256) multiplication is an 8x8 binary
+linear map. Column `j` is the coordinate byte produced by multiplying `1 << j`
+by the coefficient. The generator reduces each invertible matrix to identity
+with reversible row additions and reverses those additions to obtain literal
+CNOT operations:
+
+```text
+wire[destination] ^= wire[source]
+```
+
+It also constructs the complete 16x16 forward and inverse butterfly maps. For
+each butterfly it compares the synthesized full-map circuit with the direct
+construction, then chooses by gate count, dependency depth, and lexical order.
+Adjacent duplicate gates cancel. Every emitted specialization names its live
+wires `x0` through `x7` and `y0` through `y7`; there is no runtime gate array.
+
+The checked-in generated file is
+`generated/LeopardFF8XorCircuits.inl`. Its deterministic SHA-256 circuit
+checksum is:
+
+```text
+e6947bc7968024941c1ed95dc1b7f607e2c44d9c1a55abaeb7cb528c4ce42ff7
+```
+
+Generated gate statistics:
+
+| Circuit family | Minimum | Maximum | Average | Maximum depth | Average depth |
+|---|---:|---:|---:|---:|---:|
+| Multiply | 0 | 43 | 31.671875 | 35 | 24.2578125 |
+| Forward FFT | 8 | 51 | 40.000000 | 16 | 12.2734375 |
+| Inverse FFT | 8 | 51 | 40.000000 | 16 | 12.2734375 |
+
+### The two meanings of 255
+
+The dispatch tables deliberately remain separate:
+
+- multiplication log `255` is the same nonzero multiplier as log `0`, namely
+  multiplication by one; its circuit has zero gates but still copies when the
+  source and destination differ;
+- butterfly skew `255` is a sentinel that omits the multiply-add term, while
+  retaining the eight `y ^= x` gates in the appropriate forward or inverse
+  order.
+
+Conflating these meanings would corrupt both decoding and sentinel
+butterflies.
+
+## Kernel and transform architecture
+
+There are three coefficient-specialized whole-buffer dispatch tables: multiply,
+forward butterfly, and inverse butterfly. The selected function pointer is
+called once for a whole-buffer operation. Inside that function, the loop loads
+eight named plane values for multiplication or sixteen named plane values for
+a butterfly, executes literal XOR expressions, and stores them.
+
+The available chunk order is:
+
+1. AVX2, 32 bytes from each plane;
+2. 128-bit SIMD, 16 bytes from each plane;
+3. portable `uint64_t`, 8 bytes from each plane.
+
+Each smaller path handles only the exact remainder of one plane. Multiplication
+loads all eight source planes before any store, so `source == destination` is
+supported.
+
+The backend copies Leopard's FF8 metadata initialization and uses a padded skew
+array to avoid constructing the packed implementation's one-before-begin
+pointer. Encoder chunking, zero padding, transform truncation, work ordering,
+formal derivative, decoder ErrorBitfield selection, and the `k=1`/`r=1`
+special cases remain intact.
+
+This first experiment executes two-way butterflies. It intentionally does not
+use the packed backend's fused two-layer four-buffer path: four plane-sliced
+FF8 buffers would require 32 live vector registers, while AVX2 provides 16.
+This adds intermediate load/store passes and is an important performance
+disadvantage, not a benchmark artifact.
+
+### Choosing lower-cost locator constants
+
+The decoder's evaluated error locator is defined only up to one common nonzero
+scale. The backend scans all 255 possible common logarithmic shifts after
+locator evaluation and minimizes:
+
+```text
+(total multiplier gate count, total multiplier depth, numeric shift)
+```
+
+The score includes present recovery inputs, present original inputs, and final
+inverse-locator multipliers for missing originals. Missing and padded zero
+buffers are excluded. Applying the same field factor to every received input
+passes unchanged through the linear IFFT, formal derivative, and truncated
+FFT; the inverse shifted locator cancels it at reveal. Transform skew constants
+are fixed and are never changed by this optimization. This reduces generated
+XOR gate counts and dependency depth where the algebra leaves a free choice;
+it does not reduce the fixed eight-plane loads and stores. Even an identity
+multiplier copies eight planes when source and destination differ.
+
+## Experimental C API
+
+Include `leopard_ff8xor.h` and call `leo_init()` before using the backend:
+
+```c
+unsigned work_count = leo_ff8xor_encode_work_count(k, r);
+LeopardResult result = leo_ff8xor_encode(
+    buffer_bytes, k, r, work_count, original_data, work_data);
+```
+
+The corresponding decode functions are
+`leo_ff8xor_decode_work_count()` and `leo_ff8xor_decode()`. Work counts and
+recovered-output indices match the existing Leopard API rules. The caller
+provides an array of `work_count` work pointers, and every work allocation is
+`buffer_bytes` bytes. Encode recovery shards occupy `work_data[0..r-1]`.
+Decode marks unavailable original or recovery inputs with `NULL`; recovered
+original `i` is returned in `work_data[i]`. All original, recovery, and work
+pointers refer to native eight-plane shards.
+
+The first experimental encode or decode call after `leo_init()` initializes
+ff8xor metadata through a C++11 thread-safe lazy boundary. This keeps the
+generated circuit object out of packed-only static-library clients; it does
+not relax the requirement to call `leo_init()` first. Work-count helpers
+return zero for invalid counts or transforms outside the FF8 range.
+
+The experimental API accepts only parameter sets whose padded FF8 transform
+size is at most 256 and returns `Leopard_TooMuchData` otherwise. It retains the
+existing count, pointer-array, insufficient-recovery, initialization, and
+multiple-of-64 size validation conventions.
+
+## Regeneration and tests
+
+The normal library build consumes checked-in generated code and does not
+require Python. With Python 3 available:
+
+```sh
+python3 tools/generate_ff8_xor_circuits.py
+python3 tools/generate_ff8_xor_circuits.py --check
+cmake --build build --target generate_ff8_xor_circuits
+cmake --build build --target check_ff8_xor_circuits
+```
+
+`--check` returns nonzero when the checked-in output differs from regenerated
+output.
+
+Build and run the finite automated test with:
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
+
+The test exhaustively checks all 256 logarithmic multipliers against all 256
+coordinate bytes. It validates all butterfly skews on basis, edge, and
+deterministic random states in both directions and proves the two operations
+are mutual inverses. It verifies transpose helpers, API errors, every forced
+common locator shift from 0 through 254, Portable/SIMD128/AVX2 modes and tails,
+in-place multiplication, packed parity and decode equivalence, native round
+trips, and packed-backend regression cases. End-to-end coverage includes
+`(k,r)` values `(4,2)`, `(8,2)`, `(16,4)`, `(32,8)`, `(64,16)`, `(128,32)`,
+and `(128,128)` at 64, 1024, 4096, and 65536 bytes, plus the `k=1`, `r=1`,
+non-power-of-two recovery counts, no-loss, mixed-loss, and
+insufficient-recovery edge cases.
+
+## Benchmarking
+
+The finite benchmark compares the packed backend and native ff8xor in the same
+process with identical deterministic data. Allocation and correctness checks
+are outside encode/decode timing. It reports median and best time plus input
+and output MB/s.
+
+```sh
+./build/bench_leopard_ff8xor --quick
+./build/bench_leopard_ff8xor
+./build/bench_leopard_ff8xor --include-transpose
+./build/bench_leopard_ff8xor --csv
+```
+
+Native rows exclude transpose time. Rows named `ff8xor_packed_boundary`
+include packed-to-plane input transposes and plane-to-packed outputs. The full
+mode covers `(k,r)` values `(8,2)`, `(16,4)`, `(32,8)`, `(64,16)`, `(128,32)`,
+and `(128,128)`; buffer sizes 1 KiB, 4 KiB, 64 KiB, and 1 MiB; and each unique
+loss count in `1`, `min(4,r)`, `max(1,r/2)`, and `r`.
+Microbenchmarks report packed multiply-add, XOR-circuit multiply, forward and
+inverse two-way butterflies, and both transpose directions. The reported
+speed ratio is `packed time / ff8xor time`, so a value greater than one means
+the XOR backend is faster.
+
+## Measurements from the implementation host
+
+These results were collected on an AMD Ryzen Threadripper PRO 9985WX
+(64 cores, 128 threads), Linux 6.8, GCC 13.3.0, and CMake 3.28.3. The CMake
+Release configuration produced `-march=native -Wall -Wextra -fopenmp -g -O0
+-O3 -std=gnu++11`; the experimental translation unit additionally used
+`-mno-avx512f -fno-tree-reassoc`. The last `-O3` takes precedence, but this
+repository's existing Release flags do not define `NDEBUG`, which the
+benchmark reports explicitly.
+
+Full-mode end-to-end rows used two warm-ups, seven measured samples, and enough
+repeated calls per sample to reach at least 1 ms; microbenchmarks used three
+warm-ups and 31 samples. The table reports median/best. Allocation and
+correctness checks were outside timed regions. These 1 MiB rows use the native
+plane layout and exclude transposes. Ratio is packed median time divided by
+ff8xor median time.
+
+| k/r/op/loss | Packed us | ff8xor us | ff8xor input MB/s | ff8xor output MB/s | Ratio |
+|---|---:|---:|---:|---:|---:|
+| 8/2/encode/0 | 262.272/257.813 | 710.877/677.106 | 11800.365/12388.914 | 2950.091/3097.228 | 0.369 |
+| 8/2/decode/1 | 1237.686/1154.329 | 2851.991/2657.015 | 2941.316/3157.155 | 367.665/394.644 | 0.434 |
+| 16/4/encode/0 | 591.707/552.136 | 2158.510/2144.689 | 7772.591/7822.680 | 1943.148/1955.670 | 0.274 |
+| 16/4/decode/1 | 5519.352/5327.431 | 8056.096/7792.927 | 2082.549/2152.877 | 130.159/134.555 | 0.685 |
+| 32/8/encode/0 | 2341.047/2069.966 | 5689.580/5516.548 | 5897.524/6082.505 | 1474.381/1520.626 | 0.411 |
+| 32/8/decode/1 | 14807.675/14198.862 | 20530.905/20124.109 | 1634.338/1667.375 | 51.073/52.105 | 0.721 |
+| 64/16/encode/0 | 6711.959/6606.179 | 13837.755/13727.067 | 4849.693/4888.798 | 1212.423/1222.200 | 0.485 |
+| 64/16/decode/1 | 36589.695/36320.658 | 50921.519/49906.401 | 1317.888/1344.695 | 20.592/21.011 | 0.719 |
+| 128/32/encode/0 | 20211.210/19872.827 | 35336.324/34073.130 | 3798.293/3939.108 | 949.573/984.777 | 0.572 |
+| 128/32/decode/1 | 85031.532/83478.469 | 123994.538/118312.521 | 1082.449/1134.434 | 8.457/8.863 | 0.686 |
+| 128/128/encode/0 | 36628.827/36064.503 | 72663.957/71723.351 | 1847.102/1871.325 | 1847.102/1871.325 | 0.504 |
+| 128/128/decode/1 | 92633.997/92134.921 | 141694.073/139725.591 | 947.236/960.581 | 7.400/7.505 | 0.654 |
+
+Across all 104 matched end-to-end cases, native encode ratios ranged from
+0.239 to 0.887 (mean 0.585), or 1.13x to 4.18x slower. Native decode ratios
+ranged from 0.376 to 0.721 (mean 0.557), or 1.39x to 2.66x slower. With both
+packed-boundary transposes included, encode ranged from 0.052 to 0.291 (mean
+0.129) and decode from 0.191 to 0.525 (mean 0.332). No measured end-to-end
+ff8xor case was faster than packed Leopard.
+
+Representative 1 MiB microbenchmarks were:
+
+| Operation | Coefficient/circuit | Median/best us | Median input/output MB/s |
+|---|---|---:|---:|
+| Packed multiply-add | log 22; 32 gates in corresponding XOR circuit | 15.849/15.668 | 132320.115/66160.057 |
+| ff8xor multiply | log 22; 32 gates, depth 26 | 19.463/19.359 | 53875.842/53875.842 |
+| ff8xor FFT butterfly | skew 1; 40 gates, depth 11 | 98.409/97.988 | 21310.552/21310.552 |
+| ff8xor IFFT butterfly | skew 1; 40 gates, depth 11 | 98.846/98.485 | 21216.337/21216.337 |
+| Packed to plane transpose | standalone | 260.158/258.899 | 4030.540/4030.540 |
+| Plane to packed transpose | standalone | 42.797/42.638 | 24501.204/24501.204 |
+
+The packed microkernel is multiply-add while the circuit kernel is
+multiply-only, so their input-byte rates are not directly equivalent. The
+sampled low/average/high gate circuits also show that these large-buffer
+microbenchmarks are dominated by memory behavior and instruction scheduling,
+not monotonically by source gate count.
+
+## Representative optimized code inspection
+
+`objdump -dr -C` inspection used strict AVX2 (`-march=haswell`) and the final
+native flags above. Representative multiplier/skew 42 has 34 gates at depth 26
+for multiply and 43 gates at depth 13 for each butterfly. With GCC's default
+reassociation, 217 of 256 FFT and 241 of 256 IFFT specializations spilled;
+`-fno-tree-reassoc` eliminated vector stack spills in all 256 multiply, FFT,
+and IFFT specializations inspected.
+
+The final pure-AVX2 loops for coefficient/skew 42 contained 23 `vpxor` plus
+eight stores for multiply, and 42 `vpxor` plus sixteen stores for each
+butterfly, along with vector loads and scalar pointer/loop control. There were
+no vector stack references, calls inside the chunk loop, `pshufb`, integer
+multiply, `pand`, gathers, payload-table accesses, or dynamic gate indexing.
+Dispatch compiled to one indexed function-pointer load and tail jump before
+the whole-buffer loop. `-mno-avx512f` prevents the Zen 5 compiler from replacing
+the experiment with AVX-512VL `vpternlog` and high vector registers.
+
+## Known disadvantages and next experiment
+
+- Applications must retain the plane layout to avoid boundary transpose cost.
+- Each whole-buffer operation incurs one coefficient function-pointer dispatch.
+- Two-way butterflies lose the packed backend's existing fused two-layer
+  memory pass.
+- Sixteen live AVX2 vectors leave no spare vector register, so compiler spills
+  remain possible for some generated circuits.
+- Static specialization of all multiplier and butterfly coefficients increases
+  source, object, and instruction-cache footprint.
+- The implementation-host static archive was 62 MiB and the experimental
+  benchmark executable was 30 MiB. Lazy experimental initialization kept the
+  packed-only benchmark at 762 KiB, so packed-only static clients do not pull
+  the generated object.
+- Packed compatibility requires explicit 8x8 transposes.
+- This backend is FF8-only and CPU-only.
+
+The highest-value next optimization is AVX-512 four-buffer fused generation:
+32 architectural vector registers can hold four plane-sliced FF8 buffers and
+recover the fused two-layer memory behavior. Other follow-ups include
+tuple-specialized four-way circuits, CUDA plane kernels, persistent plane
+pipelines, packed-boundary transpose/locator fusion, and synthesis optimized
+for depth and register pressure rather than gate count alone.
