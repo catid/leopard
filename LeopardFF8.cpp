@@ -53,6 +53,8 @@ static std::atomic<uint64_t> TestHighOutputBlocks(0);
 static std::atomic<uint64_t> TestHighFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestHighFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighCompatibilityCopyFallbacks(0);
+static std::atomic<uint64_t> TestHighSyndromeAccumulatedBlocks(0);
+static std::atomic<uint64_t> TestHighSyndromeMaterializedBlocks(0);
 static std::atomic<uint64_t> TestSparseExactBlocks(0);
 static std::atomic<uint64_t> TestSparsePrefixButterflies(0);
 static std::atomic<uint64_t> TestSparseRetainedButterflies(0);
@@ -1079,7 +1081,10 @@ static void IFFT_DIT2_xor(
 }
 
 
-// xor_result ^= IFFT_DIT4(work)
+#if defined(LEO_TRY_AVX2) || defined(LEO_TRY_SSSE3)
+// Legacy in-field SIMD route for xor_result ^= IFFT_DIT4(work).  Portable
+// builds use the context-selected accumulating range backend, including the
+// distance-one T=4 case.
 static void IFFT_DIT4_xor(
     const backend::Ops& ops,
     uint64_t bytes,
@@ -1242,6 +1247,7 @@ static void IFFT_DIT4_xor(
         xor_out[dist * 2], work_in[dist * 2],
         xor_out[dist * 3], work_in[dist * 3], bytes);
 }
+#endif
 
 static void IFFT_DIT4_xor_Range(
     const backend::Ops& ops,
@@ -1253,12 +1259,6 @@ static void IFFT_DIT4_xor_Range(
     const ffe_t log_m23,
     const ffe_t log_m02)
 {
-    if (dist == 1)
-    {
-        IFFT_DIT4_xor(ops, bytes, work, xor_output, dist,
-            log_m01, log_m23, log_m02);
-        return;
-    }
 #if defined(LEO_TRY_AVX2) || defined(LEO_TRY_SSSE3)
     if (&ops == &backend::GetDefaultOps())
     {
@@ -1383,14 +1383,18 @@ static void IFFT_DIT_Encoder(
 }
 
 
-// Basic no-frills version for decoder
-static void IFFT_DIT_Decoder(
+// Basic no-frills version for decoder.  When xor_result is non-null, the
+// final inverse layer accumulates directly into those disjoint buffers.  The
+// caller must not observe work afterwards: the accumulating backend need not
+// materialize the final transformed values back into work.
+static void IFFT_DIT_DecoderImpl(
     const backend::Ops& ops,
     const uint64_t bytes,
     const unsigned m_truncated,
     void** work,
     const unsigned m,
-    const ffe_t* skewLUT)
+    const ffe_t* skewLUT,
+    void** xor_result)
 {
     // Decimation in time: Unroll 2 layers at a time
     unsigned dist = 1, dist4 = 4;
@@ -1404,9 +1408,18 @@ static void IFFT_DIT_Decoder(
             const ffe_t log_m02 = skewLUT[i_end + dist];
             const ffe_t log_m23 = skewLUT[i_end + dist * 2];
 
-            IFFT_DIT4_Range(
-                ops, bytes, work + r, dist,
-                log_m01, log_m23, log_m02);
+            if (dist4 == m && xor_result)
+            {
+                IFFT_DIT4_xor_Range(
+                    ops, bytes, work + r, xor_result + r, dist,
+                    log_m01, log_m23, log_m02);
+            }
+            else
+            {
+                IFFT_DIT4_Range(
+                    ops, bytes, work + r, dist,
+                    log_m01, log_m23, log_m02);
+            }
         }
     }
 
@@ -1418,7 +1431,34 @@ static void IFFT_DIT_Decoder(
 
         const ffe_t log_m = skewLUT[dist];
 
-        if (log_m == kModulus)
+        if (xor_result)
+        {
+            if (log_m == kModulus)
+            {
+                for (unsigned i = 0; i < dist; ++i)
+                {
+                    xor_mem(ops, xor_result[i], work[i], bytes);
+                    xor_mem_2to1(
+                        ops, xor_result[i + dist],
+                        work[i], work[i + dist], bytes);
+                }
+            }
+            else
+            {
+                for (unsigned i = 0; i < dist; ++i)
+                {
+                    IFFT_DIT2_xor(
+                        ops,
+                        work[i],
+                        work[i + dist],
+                        xor_result[i],
+                        xor_result[i + dist],
+                        log_m,
+                        bytes);
+                }
+            }
+        }
+        else if (log_m == kModulus)
             VectorXOR(ops, bytes, dist, work + dist, work);
         else
         {
@@ -1433,6 +1473,36 @@ static void IFFT_DIT_Decoder(
             }
         }
     }
+    else if (xor_result && m == 1 && m_truncated != 0)
+        xor_mem(ops, xor_result[0], work[0], bytes);
+}
+
+
+static void IFFT_DIT_Decoder(
+    const backend::Ops& ops,
+    const uint64_t bytes,
+    const unsigned m_truncated,
+    void** work,
+    const unsigned m,
+    const ffe_t* skewLUT)
+{
+    IFFT_DIT_DecoderImpl(
+        ops, bytes, m_truncated, work, m, skewLUT, NULL);
+}
+
+
+static void IFFT_DIT_DecoderAccumulate(
+    const backend::Ops& ops,
+    const uint64_t bytes,
+    const unsigned m_truncated,
+    void** work,
+    void** xor_result,
+    const unsigned m,
+    const ffe_t* skewLUT)
+{
+    LEO_DEBUG_ASSERT(xor_result != NULL);
+    IFFT_DIT_DecoderImpl(
+        ops, bytes, m_truncated, work, m, skewLUT, xor_result);
 }
 
 /*
@@ -2825,6 +2895,8 @@ void TestOnlyResetHighDecodeCounts()
     TestHighFFTButterfly2OutCalls.store(0, std::memory_order_relaxed);
     TestHighFFTButterfly4OutCalls.store(0, std::memory_order_relaxed);
     TestHighCompatibilityCopyFallbacks.store(0, std::memory_order_relaxed);
+    TestHighSyndromeAccumulatedBlocks.store(0, std::memory_order_relaxed);
+    TestHighSyndromeMaterializedBlocks.store(0, std::memory_order_relaxed);
 }
 
 
@@ -2838,6 +2910,10 @@ TestOnlyHighDecodeCounts TestOnlyGetHighDecodeCounts()
         TestHighFFTButterfly4OutCalls.load(std::memory_order_relaxed);
     result.compatibility_copy_fallbacks =
         TestHighCompatibilityCopyFallbacks.load(std::memory_order_relaxed);
+    result.syndrome_accumulated_blocks =
+        TestHighSyndromeAccumulatedBlocks.load(std::memory_order_relaxed);
+    result.syndrome_materialized_blocks =
+        TestHighSyndromeMaterializedBlocks.load(std::memory_order_relaxed);
     return result;
 }
 
@@ -3388,11 +3464,28 @@ void ReedSolomonDecodeHighPrepared(
         unsigned input_count = t;
         while (input_count > 0 && !coordinate_data[offset + input_count - 1])
             --input_count;
-        IFFT_DIT_Decoder(
-            ops, buffer_bytes, input_count, work + offset, t,
-            FFTSkewStorage + offset);
-        if (block != 0)
-            VectorXOR(ops, buffer_bytes, t, work, work + offset);
+        if (input_count == 0)
+            continue;
+        if (block == 0)
+        {
+            IFFT_DIT_Decoder(
+                ops, buffer_bytes, input_count, work, t,
+                FFTSkewStorage);
+        }
+        else
+        {
+            // The source block is dead after this reduction.  Requested output
+            // blocks are later produced out of place before any read from
+            // work[offset..offset+t), so the final IFFT layer may accumulate
+            // directly without materializing its result.
+            IFFT_DIT_DecoderAccumulate(
+                ops, buffer_bytes, input_count, work + offset, work, t,
+                FFTSkewStorage + offset);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            TestHighSyndromeAccumulatedBlocks.fetch_add(
+                1, std::memory_order_relaxed);
+#endif
+        }
     }
 
     // h on V_t, then z = h * Lambda on V_t.
@@ -3509,6 +3602,26 @@ void ReedSolomonDecodeHighPrunedPlanned(
                         ops, buffer_bytes, *pruned, work + offset);
                 LEO_DEBUG_ASSERT(executed);
                 (void)executed;
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+                if (block != 0)
+                    TestHighSyndromeMaterializedBlocks.fetch_add(
+                        1, std::memory_order_relaxed);
+#endif
+            }
+            else if (block != 0)
+            {
+                // An unpruned later block is dead after syndrome reduction.
+                // Exact C1 plans retain their mature materialized fallback
+                // above because their irregular final operation is not yet an
+                // accumulating backend boundary.
+                IFFT_DIT_DecoderAccumulate(
+                    ops, buffer_bytes, input_count, work + offset, work, t,
+                    FFTSkewStorage + offset);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+                TestHighSyndromeAccumulatedBlocks.fetch_add(
+                    1, std::memory_order_relaxed);
+#endif
+                continue;
             }
             else
             {
@@ -3736,11 +3849,23 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
                     ops, buffer_bytes, *pruned, tile);
             LEO_DEBUG_ASSERT(executed);
             (void)executed;
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            TestHighSyndromeMaterializedBlocks.fetch_add(
+                1, std::memory_order_relaxed);
+#endif
         }
         else
-            IFFT_DIT_Decoder(
-                ops, buffer_bytes, input_count, tile, t,
+        {
+            // tile is dead until an out-of-place evaluator overwrites it.
+            IFFT_DIT_DecoderAccumulate(
+                ops, buffer_bytes, input_count, tile, accumulator, t,
                 FFTSkewStorage + offset);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            TestHighSyndromeAccumulatedBlocks.fetch_add(
+                1, std::memory_order_relaxed);
+#endif
+            continue;
+        }
         VectorXOR(ops, buffer_bytes, t, accumulator, tile);
     }
     LEO_DEBUG_ASSERT(input_plan_index == input_plan_count);
