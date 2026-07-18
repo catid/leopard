@@ -2657,6 +2657,10 @@ LEO2_EXPORT leo2_result leo2_context_create(
     size_t options_size = 0;
     if (options)
     {
+        AddressRange options_prefix_range;
+        if (!MakeRange(options, sizeof(options->struct_size),
+                options_prefix_range))
+            return LEO2_INVALID_ARGUMENT;
         options_size = options->struct_size;
         const size_t protected_size = std::max(
             options_size, sizeof(options->struct_size));
@@ -2807,6 +2811,10 @@ LEO2_EXPORT leo2_result leo2_codec_create(
     size_t options_size = 0;
     if (options)
     {
+        AddressRange options_prefix_range;
+        if (!MakeRange(options, sizeof(options->struct_size),
+                options_prefix_range))
+            return LEO2_INVALID_ARGUMENT;
         options_size = options->struct_size;
         const size_t protected_size = std::max(
             options_size, sizeof(options->struct_size));

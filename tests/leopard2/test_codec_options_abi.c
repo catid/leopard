@@ -109,6 +109,15 @@ int main(void)
             leo2_context_destroy(context);
             return 1;
         }
+        if (!require_result(leo2_context_create(
+                (const leo2_context_options *)(uintptr_t)(UINTPTR_MAX -
+                    sizeof(size_t) + 1), &untouched),
+                LEO2_INVALID_ARGUMENT,
+                "C ABI unrepresentable context options prefix") ||
+            untouched != (leo2_context *)(uintptr_t)1) {
+            leo2_context_destroy(context);
+            return 1;
+        }
         if (!require_result(leo2_context_create(NULL,
                 (leo2_context **)(uintptr_t)(UINTPTR_MAX -
                     sizeof(leo2_context *) + 1)), LEO2_INVALID_ARGUMENT,
@@ -241,6 +250,15 @@ int main(void)
             LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
             &options, &codec), LEO2_INVALID_ARGUMENT,
             "C ABI unrepresentable codec options span") ||
+        codec != (leo2_codec *)(uintptr_t)1) {
+        leo2_context_destroy(context);
+        return 1;
+    }
+    if (!require_result(leo2_codec_create(context, 5, 3,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+            (const leo2_codec_options *)(uintptr_t)(UINTPTR_MAX -
+                sizeof(size_t) + 1), &codec), LEO2_INVALID_ARGUMENT,
+            "C ABI unrepresentable codec options prefix") ||
         codec != (leo2_codec *)(uintptr_t)1 ||
         !require_result(leo2_codec_create(context, 5, 3,
             LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL,
