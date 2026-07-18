@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Run resumable exact-mask versus mature-prefix encoder experiments.
 
-The C++ cell benchmark contains both paths in one binary and interleaves their
-samples.  This runner adds deterministic manifests, source/binary identity,
+The C++ cell benchmark contains both paths in one binary and measures their
+setup-inclusive pair in independent ABBA rounds. This runner adds deterministic
+manifests, source/object/executable/runtime identity,
 resumable per-cell artifacts, CPU pinning, and fail-closed authority rules.
 It never configures or builds Leopard: a pinned measurement must consume a
 clean, already-built executable whose embedded Git SHA matches the source tree.
@@ -12,22 +13,32 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import errno
 import hashlib
 import json
+import math
 import os
 import platform
 import shutil
+import socket
+import stat
 import statistics
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - pinned evidence is Linux-only.
+    fcntl = None
 
-SCHEMA = "leopard2-sparse-encode-crossover/v1"
-JOB_SCHEMA = "leopard2-sparse-encode-crossover-job/v1"
-BENCHMARK_SCHEMA = "leopard2-sparse-encode-benchmark-v3"
+
+SCHEMA = "leopard2-sparse-encode-crossover/v2"
+JOB_SCHEMA = "leopard2-sparse-encode-crossover-job/v2"
+BENCHMARK_SCHEMA = "leopard2-sparse-encode-benchmark-v4"
 ATTESTATION_SCHEMA = "leopard2-benchmark-isolation-attestation/v1"
 SOURCE_FILES = (
     "CMakeLists.txt",
@@ -52,6 +63,8 @@ SOURCE_FILES = (
     "leopard2.cpp",
     "leopard2.h",
     "bench/leopard2/sparse_encode_benchmark.cpp",
+    "tests/leopard2/direct_oracle.cpp",
+    "tests/leopard2/direct_oracle.h",
     "tests/cmake/test_sparse_encode_benchmark_registration.cmake",
     "tools/leopard2_sparse_encode_benchmark_json_test.py",
     "tools/leopard2_sparse_encode_crossover.py",
@@ -165,6 +178,229 @@ def compact_cpu_list(cpus: list[int]) -> str:
     return ",".join(ranges)
 
 
+def parse_cpu_list(text: str) -> list[int]:
+    values: list[int] = []
+    for item in text.split(","):
+        bounds = item.strip().split("-")
+        if len(bounds) == 1 and bounds[0].isdigit():
+            first = last = int(bounds[0])
+        elif len(bounds) == 2 and all(value.isdigit() for value in bounds):
+            first, last = map(int, bounds)
+            if last < first:
+                raise CrossoverError("descending CPU topology range")
+        else:
+            raise CrossoverError("invalid CPU topology list")
+        values.extend(range(first, last + 1))
+    if not values or len(values) != len(set(values)):
+        raise CrossoverError("CPU topology list is empty or duplicated")
+    return sorted(values)
+
+
+def exact_smt_pair(cpu: int, allowed: list[int]) -> dict[str, Any]:
+    records = []
+    root = Path(f"/sys/devices/system/cpu/cpu{cpu}/topology")
+    sibling_text = read_optional(root / "thread_siblings_list")
+    if sibling_text is None:
+        raise CrossoverError("pinned evidence requires Linux SMT topology")
+    siblings = parse_cpu_list(sibling_text)
+    if len(siblings) != 2 or cpu not in siblings:
+        raise CrossoverError("pinned evidence requires an exact two-thread SMT pair")
+    if any(value not in allowed for value in siblings):
+        raise CrossoverError("the complete SMT pair is outside process affinity")
+    if not set(allowed).difference(siblings):
+        raise CrossoverError("no housekeeping CPU remains outside the timed SMT pair")
+    for logical_cpu in siblings:
+        topology = Path(f"/sys/devices/system/cpu/cpu{logical_cpu}/topology")
+        text = read_optional(topology / "thread_siblings_list")
+        core = read_optional(topology / "core_id")
+        package = read_optional(topology / "physical_package_id")
+        if text is None or core is None or package is None or parse_cpu_list(text) != siblings:
+            raise CrossoverError("SMT siblings do not report mutual exact topology")
+        records.append({
+            "cpu": logical_cpu, "core_id": core,
+            "physical_package_id": package,
+            "thread_siblings_list": text,
+        })
+    if records[0]["core_id"] != records[1]["core_id"] or (
+        records[0]["physical_package_id"] != records[1]["physical_package_id"]
+    ):
+        raise CrossoverError("SMT pair disagrees on core/package identity")
+    return {"cpus": siblings, "records": records}
+
+
+def cpu_stat(cpu: int) -> dict[str, Any]:
+    prefix = f"cpu{cpu} "
+    text_value = read_optional(Path("/proc/stat"))
+    if text_value is None:
+        raise CrossoverError("cannot read /proc/stat isolation counters")
+    for line in text_value.splitlines():
+        if line.startswith(prefix):
+            tokens = line.split()
+            if len(tokens) < 9:
+                raise CrossoverError("CPU scheduler counter record is incomplete")
+            try:
+                fields = [int(value) for value in tokens[1:9]]
+            except ValueError as error:
+                raise CrossoverError("CPU scheduler counters are not integers") from error
+            return {"cpu": cpu, "fields": fields}
+    raise CrossoverError(f"CPU {cpu} is absent from /proc/stat")
+
+
+def cpu_stat_delta(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    for label, snapshot in (("before", before), ("after", after)):
+        fields = snapshot.get("fields") if isinstance(snapshot, dict) else None
+        if (not isinstance(snapshot, dict) or not isinstance(snapshot.get("cpu"), int)
+                or not isinstance(fields, list) or len(fields) != 8
+                or any(not isinstance(value, int) or isinstance(value, bool)
+                       or value < 0 for value in fields)):
+            raise CrossoverError(f"{label} CPU scheduler snapshot is malformed")
+    if before.get("cpu") != after.get("cpu"):
+        raise CrossoverError("CPU scheduler snapshots use different CPUs")
+    differences = [last - first for first, last in zip(before["fields"], after["fields"])]
+    if any(value < 0 for value in differences):
+        raise CrossoverError("CPU scheduler counter moved backwards")
+    # /proc/stat fields 3 and 4 (zero based) are idle and iowait.
+    nonidle = sum(value for index, value in enumerate(differences) if index not in (3, 4))
+    return {"cpu": before["cpu"], "fields": differences,
+            "nonidle_jiffies": nonidle, "total_jiffies": sum(differences)}
+
+
+def sibling_delta_is_idle(delta: dict[str, Any]) -> bool:
+    return (
+        isinstance(delta, dict)
+        and isinstance(delta.get("total_jiffies"), int)
+        and delta["total_jiffies"] > 0
+        and delta.get("nonidle_jiffies") == 0
+    )
+
+
+class CpuPairLease:
+    def __init__(self, cpus: list[int], root: Path | None = None):
+        if len(cpus) != 2 or cpus != sorted(set(cpus)):
+            raise CrossoverError("CPU pair lease requires two distinct sorted CPUs")
+        self.cpus = cpus
+        self.root = root or (Path("/run/user") / str(os.getuid()))
+        self.directory = self.root / "leopard2-cpu-leases"
+        self.path = self.directory / (
+            f"leopard2-cpu-pair-{os.getuid()}-{cpus[0]}-{cpus[1]}.lock"
+        )
+        self.descriptor: int | None = None
+        self.kernel_socket: socket.socket | None = None
+
+    def payload(self) -> dict[str, Any]:
+        return {
+            "cpus": self.cpus, "schema": "leopard2-cpu-pair-lease/v1",
+            "uid": os.getuid(),
+        }
+
+    def kernel_name(self) -> bytes:
+        material = canonical_bytes({
+            "cpus": self.cpus, "root": os.path.abspath(self.directory),
+            "schema": "leopard2-cpu-pair-lease/v1", "uid": os.getuid(),
+        })
+        return b"\0leopard2-pair-v1-" + hashlib.sha256(material).hexdigest()[
+            :40
+        ].encode("ascii")
+
+    def __enter__(self) -> "CpuPairLease":
+        if fcntl is None or not sys.platform.startswith("linux"):
+            raise CrossoverError("protected CPU pair leases require Linux fcntl")
+        self.kernel_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.kernel_socket.set_inheritable(False)
+        try:
+            self.kernel_socket.bind(self.kernel_name())
+        except OSError as error:
+            self.close()
+            if error.errno == errno.EADDRINUSE:
+                raise CrossoverError("physical CPU pair already has a kernel lease") from error
+            raise CrossoverError(f"cannot bind CPU pair kernel lease: {error}") from error
+        try:
+            root_stat = self.root.stat()
+        except OSError as error:
+            self.close()
+            raise CrossoverError(f"cannot inspect per-user runtime directory: {error}") from error
+        if (not stat.S_ISDIR(root_stat.st_mode) or root_stat.st_uid != os.getuid()
+                or stat.S_IMODE(root_stat.st_mode) != 0o700):
+            self.close()
+            raise CrossoverError("per-user runtime directory is not private and owned")
+        self.directory.mkdir(mode=0o700, exist_ok=True)
+        if self.directory.is_symlink():
+            self.close()
+            raise CrossoverError("CPU lease directory must not be a symlink")
+        directory_stat = self.directory.stat()
+        if (directory_stat.st_uid != os.getuid()
+                or stat.S_IMODE(directory_stat.st_mode) != 0o700):
+            self.close()
+            raise CrossoverError("CPU lease directory is not private and owned")
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        try:
+            self.descriptor = os.open(self.path, flags, 0o600)
+        except OSError as error:
+            self.close()
+            raise CrossoverError(f"cannot open CPU pair lease: {error}") from error
+        os.fchmod(self.descriptor, 0o600)
+        file_stat = os.fstat(self.descriptor)
+        if (not stat.S_ISREG(file_stat.st_mode) or file_stat.st_uid != os.getuid()
+                or file_stat.st_nlink != 1):
+            self.close()
+            raise CrossoverError("CPU pair lease file has unsafe identity")
+        try:
+            fcntl.flock(self.descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            self.close()
+            raise CrossoverError("physical CPU pair is already leased") from error
+        except OSError as error:
+            self.close()
+            raise CrossoverError(f"cannot lock physical CPU pair: {error}") from error
+        payload = canonical_bytes(self.payload())
+        os.lseek(self.descriptor, 0, os.SEEK_SET)
+        retained = os.read(self.descriptor, max(4096, len(payload) + 1))
+        if not retained:
+            if os.write(self.descriptor, payload) != len(payload):
+                self.close()
+                raise CrossoverError("short write to CPU pair lease")
+            os.fsync(self.descriptor)
+        elif retained != payload:
+            self.close()
+            raise CrossoverError("CPU pair lease has noncanonical contents")
+        return self
+
+    def identity(self) -> dict[str, Any]:
+        if (self.descriptor is None or self.kernel_socket is None
+                or self.kernel_socket.fileno() < 0
+                or self.kernel_socket.getsockname() != self.kernel_name()):
+            raise CrossoverError("CPU pair lease is not held")
+        file_stat = os.fstat(self.descriptor)
+        path_stat = self.path.stat()
+        if ((file_stat.st_dev, file_stat.st_ino) !=
+                (path_stat.st_dev, path_stat.st_ino)):
+            raise CrossoverError("CPU pair lease path identity changed")
+        os.lseek(self.descriptor, 0, os.SEEK_SET)
+        if os.read(self.descriptor, 4096) != canonical_bytes(self.payload()):
+            raise CrossoverError("CPU pair lease payload changed")
+        return {
+            "cpus": self.cpus, "device": file_stat.st_dev,
+            "inode": file_stat.st_ino, "path": str(self.path.resolve()),
+            "mechanism": "abstract-af-unix-bind-plus-fcntl-flock",
+            "payload": self.payload(),
+            "kernel_name_sha256": hashlib.sha256(self.kernel_name()).hexdigest(),
+        }
+
+    def close(self) -> None:
+        if self.descriptor is not None:
+            descriptor, self.descriptor = self.descriptor, None
+            if fcntl is not None:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+        if self.kernel_socket is not None:
+            kernel_socket, self.kernel_socket = self.kernel_socket, None
+            kernel_socket.close()
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self.close()
+
+
 def read_optional(path: Path) -> str | None:
     try:
         return path.read_text(encoding="utf-8").strip()
@@ -198,12 +434,28 @@ def machine_identity(cpus: list[int]) -> dict[str, Any]:
     }
 
 
-def build_metadata(executable: Path) -> dict[str, Any]:
-    result: dict[str, Any] = {"executable_sha256": digest_bytes(executable.read_bytes())}
-    cache = executable.parent / "CMakeCache.txt"
-    if not cache.is_file():
-        result["cmake_cache"] = None
-        return result
+def file_identity(path: Path) -> dict[str, Any]:
+    resolved = path.resolve(strict=True)
+    stat_result = resolved.stat()
+    if not resolved.is_file():
+        raise CrossoverError(f"build input is not a regular file: {resolved}")
+    return {
+        "path": str(resolved),
+        "sha256": digest_bytes(resolved.read_bytes()),
+        "size": stat_result.st_size,
+    }
+
+
+def build_metadata(executable: Path, source: Path) -> dict[str, Any]:
+    executable = executable.resolve(strict=True)
+    cache = None
+    for directory in (executable.parent, *list(executable.parents)[1:4]):
+        candidate = directory / "CMakeCache.txt"
+        if candidate.is_file():
+            cache = candidate
+            break
+    if cache is None:
+        raise CrossoverError("CMakeCache.txt was not found near the executable")
     data = cache.read_bytes()
     fields: dict[str, str] = {}
     for raw in data.decode("utf-8", errors="replace").splitlines():
@@ -213,14 +465,60 @@ def build_metadata(executable: Path) -> dict[str, Any]:
         key = key_type.split(":", 1)[0]
         if key in (
             "CMAKE_BUILD_TYPE", "CMAKE_CXX_COMPILER", "CMAKE_CXX_FLAGS",
-            "CMAKE_CXX_FLAGS_RELEASE", "LEO2_BACKEND_VARIANT",
+            "CMAKE_CXX_FLAGS_RELEASE", "CMAKE_HOME_DIRECTORY",
+            "LEO2_BACKEND_VARIANT", "LEO2_BUILD_BENCHMARKS",
             "LEOPARD_ENABLE_GF8", "LEOPARD_ENABLE_GF16",
         ):
             fields[key] = value
-    result["cmake_cache"] = {
-        "path": str(cache), "sha256": digest_bytes(data), "selected_fields": fields,
+    home = fields.get("CMAKE_HOME_DIRECTORY")
+    if not home or Path(home).resolve() != source.resolve():
+        raise CrossoverError(
+            "benchmark build cache belongs to a different source root"
+        )
+    build_root = cache.parent.resolve()
+    try:
+        executable.relative_to(build_root)
+    except ValueError as error:
+        raise CrossoverError("benchmark executable is outside its build root") from error
+    target_dir = build_root / "CMakeFiles" / "bench_leopard2_sparse_encode.dir"
+    objects = sorted(
+        list(target_dir.rglob("sparse_encode_benchmark.cpp.o"))
+        + list(target_dir.rglob("sparse_encode_benchmark.cpp.obj"))
+    )
+    if len(objects) != 1:
+        raise CrossoverError(
+            "expected exactly one sparse benchmark object in the current build root"
+        )
+    oracle_objects = sorted(
+        list(target_dir.rglob("direct_oracle.cpp.o"))
+        + list(target_dir.rglob("direct_oracle.cpp.obj"))
+    )
+    if len(oracle_objects) != 1:
+        raise CrossoverError(
+            "expected exactly one direct-oracle object in the current build root"
+        )
+    direct_archives = [
+        build_root / "libleopard.a", build_root / "leopard.lib",
+        build_root / "Release" / "leopard.lib",
+    ]
+    archives = [path for path in direct_archives if path.is_file()]
+    if len(archives) != 1:
+        raise CrossoverError(
+            "expected exactly one production leopard archive in the current build root"
+        )
+    return {
+        "build_root": str(build_root),
+        "cmake_cache": {
+            "path": str(cache.resolve()), "sha256": digest_bytes(data),
+            "selected_fields": fields,
+        },
+        "executable": file_identity(executable),
+        "linked_inputs": {
+            "benchmark_object": file_identity(objects[0]),
+            "direct_oracle_object": file_identity(oracle_objects[0]),
+            "production_archive": file_identity(archives[0]),
+        },
     }
-    return result
 
 
 def source_fingerprint(source: Path) -> dict[str, Any]:
@@ -259,21 +557,41 @@ def git_state(source: Path) -> dict[str, Any]:
 def base_cells() -> list[dict[str, Any]]:
     return [
         {"profile": "high", "field": "gf8", "K": 192, "R": 64,
-         "mask_name": "edge_sparse", "requested_parity": [0, 31, 63]},
+         "cell_kind": "sparse_candidate", "mask_name": "edge_sparse",
+         "requested_parity": [0, 31, 63]},
         {"profile": "high", "field": "gf8", "K": 192, "R": 64,
-         "mask_name": "scattered_sparse", "requested_parity": [3, 15, 39, 63]},
+         "cell_kind": "sparse_candidate", "mask_name": "scattered_sparse",
+         "requested_parity": [3, 15, 39, 63]},
+        {"profile": "high", "field": "gf8", "K": 192, "R": 64,
+         "cell_kind": "prefix_neighbor", "mask_name": "dense_prefix_neighbor",
+         "requested_parity": list(range(64))},
         {"profile": "low", "field": "gf8", "K": 32, "R": 192,
-         "mask_name": "edge_sparse", "requested_parity": [0, 31, 32, 95, 191]},
+         "cell_kind": "sparse_candidate", "mask_name": "edge_sparse",
+         "requested_parity": [0, 31, 32, 95, 191]},
         {"profile": "low", "field": "gf8", "K": 32, "R": 192,
-         "mask_name": "scattered_sparse", "requested_parity": [3, 23, 47, 111, 191]},
+         "cell_kind": "sparse_candidate", "mask_name": "scattered_sparse",
+         "requested_parity": [3, 23, 47, 111, 191]},
+        {"profile": "low", "field": "gf8", "K": 32, "R": 192,
+         "cell_kind": "prefix_neighbor", "mask_name": "dense_prefix_neighbor",
+         "requested_parity": list(range(32))},
         {"profile": "high", "field": "gf16", "K": 1000, "R": 200,
-         "mask_name": "edge_sparse", "requested_parity": [0, 63, 127, 199]},
+         "cell_kind": "sparse_candidate", "mask_name": "edge_sparse",
+         "requested_parity": [0, 63, 127, 199]},
         {"profile": "high", "field": "gf16", "K": 1000, "R": 200,
-         "mask_name": "scattered_sparse", "requested_parity": [3, 31, 95, 159, 199]},
+         "cell_kind": "sparse_candidate", "mask_name": "scattered_sparse",
+         "requested_parity": [3, 31, 95, 159, 199]},
+        {"profile": "high", "field": "gf16", "K": 1000, "R": 200,
+         "cell_kind": "prefix_neighbor", "mask_name": "dense_prefix_neighbor",
+         "requested_parity": list(range(200))},
         {"profile": "low", "field": "gf16", "K": 128, "R": 896,
-         "mask_name": "edge_sparse", "requested_parity": [0, 127, 128, 383, 895]},
+         "cell_kind": "sparse_candidate", "mask_name": "edge_sparse",
+         "requested_parity": [0, 127, 128, 383, 895]},
         {"profile": "low", "field": "gf16", "K": 128, "R": 896,
-         "mask_name": "scattered_sparse", "requested_parity": [7, 63, 135, 255, 519, 895]},
+         "cell_kind": "sparse_candidate", "mask_name": "scattered_sparse",
+         "requested_parity": [7, 63, 135, 255, 519, 895]},
+        {"profile": "low", "field": "gf16", "K": 128, "R": 896,
+         "cell_kind": "prefix_neighbor", "mask_name": "dense_prefix_neighbor",
+         "requested_parity": list(range(128))},
     ]
 
 
@@ -311,7 +629,7 @@ def benchmark_command(
         "--requested-parity", mask_text(cell["requested_parity"]),
         "--backend", cell["backend"],
         "--iterations", str(settings["iterations"]),
-        "--samples", str(settings["samples"]),
+        "--rounds", str(settings["rounds"]),
         "--warmups", str(settings["warmups"]),
         "--setup-iterations", str(settings["setup_iterations"]),
         "--reuse", mask_text(settings["reuse"]),
@@ -320,12 +638,15 @@ def benchmark_command(
     ]
 
 
-def validate_metric(metric: Any, samples: int, name: str) -> None:
+def validate_metric(
+    metric: Any, samples: int, name: str, require_positive: bool = True
+) -> None:
     if not isinstance(metric, dict) or not isinstance(metric.get("samples"), list):
         raise CrossoverError(f"missing metric {name}")
     values = metric["samples"]
     if len(values) != samples or not all(
-        isinstance(value, (int, float)) and value > 0 for value in values
+        isinstance(value, (int, float)) and math.isfinite(value)
+        and (value > 0 if require_positive else True) for value in values
     ):
         raise CrossoverError(f"invalid samples for {name}")
     median = statistics.median(values)
@@ -349,6 +670,7 @@ def validate_benchmark_result(
     cell: dict[str, Any],
     settings: dict[str, Any],
     expected_git: dict[str, Any],
+    expected_executable: Path | None = None,
 ) -> None:
     if not isinstance(result, dict) or result.get("schema") != BENCHMARK_SCHEMA:
         raise CrossoverError("benchmark emitted an unknown schema")
@@ -372,6 +694,29 @@ def validate_benchmark_result(
         raise CrossoverError("benchmark binary omitted compiler version")
     if not isinstance(build.get("cplusplus"), int):
         raise CrossoverError("benchmark binary omitted C++ language identity")
+    runtime = result.get("runtime")
+    if not isinstance(runtime, dict):
+        raise CrossoverError("benchmark omitted runtime identity")
+    runtime_path = runtime.get("executable_path")
+    runtime_cpus = runtime.get("allowed_cpus")
+    linux_runtime = sys.platform.startswith("linux")
+    if runtime.get("linux_procfs_affinity_attested") is not linux_runtime:
+        raise CrossoverError("benchmark runtime-attestation platform differs")
+    if linux_runtime and (
+        not isinstance(runtime_path, str) or not Path(runtime_path).is_absolute()
+    ):
+        raise CrossoverError("benchmark emitted an invalid runtime executable path")
+    if linux_runtime and expected_executable is not None:
+        try:
+            same_executable = Path(runtime_path).samefile(expected_executable)
+        except OSError as error:
+            raise CrossoverError(f"cannot compare runtime executable: {error}") from error
+        if not same_executable:
+            raise CrossoverError("runtime executable differs from the manifest")
+    if not linux_runtime and (runtime_path != "" or runtime_cpus != []):
+        raise CrossoverError("non-Linux runtime identity did not fail closed")
+    if runtime_cpus != settings.get("runtime_allowed_cpus"):
+        raise CrossoverError("benchmark runtime affinity differs from the manifest")
     parameters = result.get("parameters")
     expected_parameters = {
         "profile": cell["profile"], "field": cell["field"],
@@ -379,7 +724,7 @@ def validate_benchmark_result(
         "shard_bytes": cell["shard_bytes"],
         "requested_parity": cell["requested_parity"],
         "requested_backend": cell["backend"],
-        "iterations": settings["iterations"], "samples": settings["samples"],
+        "iterations": settings["iterations"], "rounds": settings["rounds"],
         "warmups": settings["warmups"],
         "setup_iterations": settings["setup_iterations"],
         "reuse": settings["reuse"], "memory_mib": settings["memory_mib"],
@@ -401,27 +746,108 @@ def validate_benchmark_result(
     if not (
         isinstance(plan.get("retained_butterflies"), int)
         and isinstance(plan.get("prefix_butterflies"), int)
-        and 0 < plan["retained_butterflies"] < plan["prefix_butterflies"]
-        <= plan.get("full_butterflies", -1)
+        and isinstance(plan.get("full_butterflies"), int)
+        and 0 < plan["retained_butterflies"] <= plan["full_butterflies"]
+        and 0 < plan["prefix_butterflies"] <= plan["full_butterflies"]
     ):
-        raise CrossoverError("sparse cell did not reduce prefix work")
+        raise CrossoverError("benchmark emitted invalid transform accounting")
+    if cell.get("cell_kind") == "sparse_candidate" and not (
+        plan["retained_butterflies"] < plan["prefix_butterflies"]
+    ):
+        raise CrossoverError("sparse candidate did not reduce prefix work")
+    if cell.get("cell_kind") not in ("sparse_candidate", "prefix_neighbor"):
+        raise CrossoverError("cell has an unknown inference role")
     correctness = result.get("correctness")
     if not isinstance(correctness, dict) or (
         correctness.get("exact_prefix_parity_match") is not True
     ):
         raise CrossoverError("exact parity differs from mature prefix parity")
+    for name in (
+        "direct_generator_parity_match", "encode_decode_recovery_match",
+        "input_immutable", "allocation_guards_match", "post_timing_recheck_match",
+    ):
+        if correctness.get(name) is not True:
+            raise CrossoverError(f"benchmark correctness closure failed: {name}")
+    expected_symbols = len(cell["requested_parity"]) * min(
+        8, cell["shard_bytes"] if cell["field"] == "gf8"
+        else cell["shard_bytes"] // 2
+    )
+    if correctness.get("direct_generator_symbols_checked") != expected_symbols:
+        raise CrossoverError("benchmark checked the wrong direct-generator sample set")
+    canary = correctness.get("unrequested_output_canary")
+    if not isinstance(canary, dict) or canary.get("match") is not True or (
+        canary.get("applicable") is not (cell["profile"] == "low")
+    ):
+        raise CrossoverError("benchmark output-canary evidence is invalid")
+    for name in (
+        "direct_generator_sample_sha256", "input_sha256", "parity_sha256",
+        "recovery_source_sha256", "recovered_original_sha256",
+    ):
+        value = correctness.get(name)
+        if not isinstance(value, str) or len(value) != 64 or any(
+            character not in "0123456789abcdef" for character in value
+        ):
+            raise CrossoverError(f"benchmark emitted an invalid {name}")
+    if correctness["recovery_source_sha256"] != correctness["recovered_original_sha256"]:
+        raise CrossoverError("recovery SHA-256 differs from the missing source shard")
     digest = correctness.get("digest_fnv1a64")
     if not isinstance(digest, str) or len(digest) != 18 or not digest.startswith("0x"):
         raise CrossoverError("benchmark emitted an invalid parity digest")
     metrics = result.get("metrics")
     if not isinstance(metrics, dict):
         raise CrossoverError("benchmark omitted metrics")
+    primary = result.get("primary_abba")
+    if not isinstance(primary, dict) or (
+        primary.get("design") != "pairwise_prefix_call_local_ABBA"
+        or primary.get("order_policy") != "alternating_ABBA_BAAB"
+    ):
+        raise CrossoverError("benchmark primary comparison is not pairwise ABBA")
+    rounds = primary.get("rounds")
+    if not isinstance(rounds, list) or len(rounds) != settings["rounds"]:
+        raise CrossoverError("benchmark emitted the wrong ABBA round count")
+    round_gains = []
+    for index, round_value in enumerate(rounds):
+        if not isinstance(round_value, dict) or round_value.get("round") != index:
+            raise CrossoverError("benchmark emitted malformed ABBA round identity")
+        observations = round_value.get("observations_ns")
+        order = round_value.get("order")
+        expected_order = (["prefix", "call_local", "call_local", "prefix"]
+                          if index % 2 == 0 else
+                          ["call_local", "prefix", "prefix", "call_local"])
+        if order != expected_order or not isinstance(observations, list) or len(observations) != 4 or not all(
+            isinstance(value, (int, float)) and value > 0 for value in observations
+        ):
+            raise CrossoverError("benchmark emitted malformed ABBA observations")
+        prefix_values = [float(value) for value, form in zip(observations, order)
+                         if form == "prefix"]
+        call_values = [float(value) for value, form in zip(observations, order)
+                       if form == "call_local"]
+        prefix_round = statistics.median(prefix_values)
+        call_round = statistics.median(call_values)
+        log_contrast = (statistics.mean(map(math.log, prefix_values)) -
+                        statistics.mean(map(math.log, call_values)))
+        gain = math.expm1(log_contrast) * 100.0
+        if abs(float(round_value.get("prefix_median_ns", -1)) - prefix_round) > 0.002:
+            raise CrossoverError("benchmark emitted wrong round prefix median")
+        if abs(float(round_value.get("call_local_median_ns", -1)) - call_round) > 0.002:
+            raise CrossoverError("benchmark emitted wrong round call-local median")
+        if abs(float(round_value.get("log_contrast", -999)) - log_contrast) > 0.000002:
+            raise CrossoverError("benchmark emitted wrong paired log contrast")
+        if abs(float(round_value.get("candidate_gain_percent", -1)) - gain) > 0.002:
+            raise CrossoverError("benchmark emitted wrong round gain")
+        round_gains.append(gain)
+    validate_metric(primary.get("round_gain_percent"), settings["rounds"],
+                    "round_gain_percent", False)
+    reported_round_gains = primary["round_gain_percent"]["samples"]
+    if any(abs(float(reported) - expected) > 0.002
+           for reported, expected in zip(reported_round_gains, round_gains)):
+        raise CrossoverError("benchmark round-gain summary differs from ABBA rounds")
     names = (
         "schedule_setup_ns", "prefix_execution_ns",
         "exact_prepared_execution_ns", "exact_call_local_total_ns",
     )
     for name in names:
-        validate_metric(metrics.get(name), settings["samples"], name)
+        validate_metric(metrics.get(name), settings["rounds"], name)
     amortized = metrics.get("amortized_exact")
     if not isinstance(amortized, list) or (
         [row.get("reuse") for row in amortized] != settings["reuse"]
@@ -443,12 +869,14 @@ def validate_benchmark_result(
             raise CrossoverError("benchmark emitted wrong amortized ratio")
 
 
-def load_attestation(path: Path, cpu: int) -> dict[str, Any]:
+def load_attestation(path: Path, cpu: int, reserved_cpus: list[int]) -> dict[str, Any]:
     value = read_json(path)
     if not isinstance(value, dict) or value.get("schema") != ATTESTATION_SCHEMA:
         raise CrossoverError("isolation attestation has an unknown schema")
     if value.get("cpu") != cpu:
         raise CrossoverError("isolation attestation names a different CPU")
+    if value.get("reserved_cpus") != reserved_cpus:
+        raise CrossoverError("isolation attestation omits the exact SMT sibling set")
     if value.get("smt_sibling_idle") is not True or (
         value.get("competing_work_idle") is not True
     ):
@@ -468,12 +896,14 @@ def make_manifest(
     settings: dict[str, Any],
     pin_cpu: int | None,
     attestation: dict[str, Any] | None,
+    protected_isolation: dict[str, Any] | None = None,
+    allowed_override: list[int] | None = None,
 ) -> dict[str, Any]:
-    cpus = allowed_cpus()
+    cpus = list(allowed_override) if allowed_override is not None else allowed_cpus()
     fingerprint = source_fingerprint(source)
     state = git_state(source)
     executable_sha = digest_bytes(executable.read_bytes())
-    build = build_metadata(executable)
+    build = build_metadata(executable, source)
     machine = machine_identity(cpus)
     identity = {
         "cells": cells,
@@ -485,6 +915,7 @@ def make_manifest(
         "settings": settings,
         "source_fingerprint": fingerprint,
         "attestation": attestation,
+        "protected_isolation": protected_isolation,
         "build_metadata": build,
     }
     configuration_id = digest_value(identity)
@@ -512,11 +943,50 @@ def make_manifest(
         "machine": machine,
         "mode": mode,
         "pin_cpu": pin_cpu,
+        "protected_isolation": protected_isolation,
         "schema": SCHEMA,
         "settings": settings,
         "source": str(source),
         "source_fingerprint": fingerprint,
     }
+
+
+def safe_artifact(result_dir: Path, relative: str, label: str) -> Path:
+    if Path(relative).is_absolute():
+        raise CrossoverError(f"{label} path is absolute")
+    root = result_dir.resolve()
+    path = (root / relative).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as error:
+        raise CrossoverError(f"{label} path escapes the result directory") from error
+    return path
+
+
+def expected_job_command(manifest: dict[str, Any], expected: dict[str, Any]) -> list[str]:
+    executable = Path(manifest["executable"])
+    command = benchmark_command(executable, expected["cell"], manifest["settings"])
+    if manifest["mode"] == "pinned":
+        command = [
+            manifest["settings"]["taskset"], "-c", str(manifest["pin_cpu"]),
+            *command,
+        ]
+    return command
+
+
+def validate_static_identity(manifest: dict[str, Any]) -> None:
+    source = Path(manifest["source"])
+    executable = Path(manifest["executable"])
+    if source_fingerprint(source) != manifest.get("source_fingerprint"):
+        raise CrossoverError("source fingerprint changed before an invocation")
+    if git_state(source) != manifest.get("git"):
+        raise CrossoverError("Git identity changed before an invocation")
+    if not executable.is_file() or (
+        digest_bytes(executable.read_bytes()) != manifest.get("executable_sha256")
+    ):
+        raise CrossoverError("executable identity changed before an invocation")
+    if build_metadata(executable, source) != manifest.get("build_metadata"):
+        raise CrossoverError("object/archive identity changed before an invocation")
 
 
 def validate_job_artifacts(
@@ -525,34 +995,65 @@ def validate_job_artifacts(
     expected: dict[str, Any],
     manifest: dict[str, Any],
 ) -> None:
+    expected_keys = {
+        "benchmark", "cell", "command", "configuration_id", "error",
+        "job_id", "returncode", "schema", "status", "stderr_path",
+        "stderr_sha256", "stdout_path", "stdout_sha256",
+    }
+    if not isinstance(job, dict) or set(job) != expected_keys:
+        raise CrossoverError("job artifact keys changed")
     if job.get("schema") != JOB_SCHEMA or job.get("job_id") != expected["job_id"]:
         raise CrossoverError("job artifact has stale identity")
     if job.get("configuration_id") != manifest["configuration_id"]:
         raise CrossoverError("job artifact belongs to another manifest")
+    if canonical_bytes(job.get("cell")) != canonical_bytes(expected["cell"]):
+        raise CrossoverError("job artifact cell differs from the manifest")
+    if job.get("command") != expected_job_command(manifest, expected):
+        raise CrossoverError("job command differs from the manifest")
+    if job.get("status") != "passed" or job.get("returncode") != 0 or (
+        job.get("error") is not None
+    ):
+        raise CrossoverError("only passed jobs can be resumed")
     for stream in ("stdout", "stderr"):
         relative = job.get(f"{stream}_path")
         expected_digest = job.get(f"{stream}_sha256")
         if not isinstance(relative, str) or not isinstance(expected_digest, str):
             raise CrossoverError("job artifact omits retained streams")
-        path = result_dir / relative
+        expected_relative = f"jobs/{expected['job_id']}.{stream}"
+        if relative != expected_relative:
+            raise CrossoverError(f"job {stream} path differs from its identity")
+        path = safe_artifact(result_dir, relative, f"job {stream}")
         if not path.is_file() or digest_bytes(path.read_bytes()) != expected_digest:
             raise CrossoverError(f"job {stream} artifact changed")
-    if job.get("status") == "passed":
-        validate_benchmark_result(
-            job.get("benchmark"), expected["cell"], manifest["settings"], manifest["git"]
-        )
+    stdout = safe_artifact(result_dir, job["stdout_path"], "job stdout")
+    try:
+        retained_benchmark = json.loads(stdout.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as error:
+        raise CrossoverError(f"cannot parse retained benchmark stdout: {error}") from error
+    if canonical_bytes(retained_benchmark) != canonical_bytes(job.get("benchmark")):
+        raise CrossoverError("job JSON snapshot differs from retained stdout")
+    validate_benchmark_result(
+        retained_benchmark, expected["cell"], manifest["settings"], manifest["git"],
+        Path(manifest["executable"]),
+    )
 
 
 def run_job(
     job: dict[str, Any], manifest: dict[str, Any], result_dir: Path,
     executable: Path, taskset: str | None, timeout: int, resume: bool,
 ) -> dict[str, Any]:
+    validate_static_identity(manifest)
     job_dir = result_dir / "jobs"
     result_path = job_dir / f"{job['job_id']}.json"
     if resume and result_path.is_file():
         existing = read_json(result_path)
-        validate_job_artifacts(result_dir, existing, job, manifest)
-        return existing
+        try:
+            validate_job_artifacts(result_dir, existing, job, manifest)
+        except CrossoverError:
+            pass
+        else:
+            validate_static_identity(manifest)
+            return existing
     command = benchmark_command(executable, job["cell"], manifest["settings"])
     if taskset is not None:
         command = [taskset, "-c", str(manifest["pin_cpu"]), *command]
@@ -562,6 +1063,7 @@ def run_job(
         command, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         timeout=timeout, env=environment,
     )
+    validate_static_identity(manifest)
     stdout_relative = f"jobs/{job['job_id']}.stdout"
     stderr_relative = f"jobs/{job['job_id']}.stderr"
     atomic_write(result_dir / stdout_relative, completed.stdout)
@@ -573,7 +1075,7 @@ def run_job(
         try:
             benchmark = json.loads(completed.stdout.decode("utf-8"))
             validate_benchmark_result(
-                benchmark, job["cell"], manifest["settings"], manifest["git"]
+                benchmark, job["cell"], manifest["settings"], manifest["git"], executable
             )
             status = "passed"
         except (UnicodeError, ValueError, CrossoverError) as caught:
@@ -599,19 +1101,81 @@ def run_job(
     return result
 
 
+def paired_log_inference(rounds: list[dict[str, Any]]) -> dict[str, Any]:
+    contrasts = []
+    for value in rounds:
+        order = value.get("order")
+        observations = value.get("observations_ns")
+        if not isinstance(order, list) or not isinstance(observations, list):
+            raise CrossoverError("paired-log inference requires raw ABBA observations")
+        prefix = [float(sample) for sample, form in zip(observations, order)
+                  if form == "prefix"]
+        call_local = [float(sample) for sample, form in zip(observations, order)
+                      if form == "call_local"]
+        if len(prefix) != 2 or len(call_local) != 2:
+            raise CrossoverError("paired-log inference found an unpaired round")
+        contrasts.append(
+            statistics.mean(map(math.log, prefix)) -
+            statistics.mean(map(math.log, call_local))
+        )
+    if len(contrasts) != 3:
+        raise CrossoverError("promotion inference requires exactly three rounds")
+    mean = statistics.mean(contrasts)
+    standard_error = statistics.stdev(contrasts) / math.sqrt(len(contrasts))
+    # Two-sided 95% Student-t critical value for df=3-1.
+    critical = 4.302652729911275
+    lower = mean - critical * standard_error
+    upper = mean + critical * standard_error
+    return {
+        "confidence": 0.95,
+        "degrees_of_freedom": 2,
+        "log_contrast_mean": mean,
+        "log_contrast_standard_error": standard_error,
+        "log_contrast_student_t_interval": [lower, upper],
+        "speedup_geometric_mean": math.exp(mean),
+        "speedup_student_t_interval": [math.exp(lower), math.exp(upper)],
+        "gain_geometric_mean_percent": math.expm1(mean) * 100.0,
+        "gain_student_t_interval_percent": [
+            math.expm1(lower) * 100.0, math.expm1(upper) * 100.0
+        ],
+        "credible_gain_at_least_5_percent": math.expm1(lower) * 100.0 >= 5.0,
+        "credible_regression_below_minus_2_percent":
+            math.expm1(upper) * 100.0 < -2.0,
+    }
+
+
 def summarize_jobs(jobs: list[dict[str, Any]], reuse: list[int]) -> dict[str, Any]:
     passed = [job for job in jobs if job.get("status") == "passed"]
+    complete = bool(jobs) and len(passed) == len(jobs)
     prepared: list[float] = []
     call_local: list[float] = []
+    sparse_candidate: list[dict[str, Any]] = []
+    prefix_neighbor: list[dict[str, Any]] = []
     amortized: dict[int, list[float]] = {value: [] for value in reuse}
     for job in passed:
         metrics = job["benchmark"]["metrics"]
+        primary_rounds = job["benchmark"]["primary_abba"]["rounds"]
+        round_gains = [
+            float(round_value["candidate_gain_percent"])
+            for round_value in primary_rounds
+        ]
+        inference_result = paired_log_inference(primary_rounds)
         prefix = float(metrics["prefix_execution_ns"]["median"])
         exact = float(metrics["exact_prepared_execution_ns"]["median"])
         setup = float(metrics["schedule_setup_ns"]["median"])
-        call = float(metrics["exact_call_local_total_ns"]["median"])
         prepared.append((prefix / exact - 1.0) * 100.0)
-        call_local.append((prefix / call - 1.0) * 100.0)
+        call_local.append(statistics.median(round_gains))
+        inference = {
+            "all_rounds_positive": all(value > 0 for value in round_gains),
+            "job_id": job["job_id"],
+            "paired_log_student_t": inference_result,
+            "round_gain_percent": round_gains,
+            "round_gain_median_percent": statistics.median(round_gains),
+        }
+        if job["cell"].get("cell_kind") == "sparse_candidate":
+            sparse_candidate.append(inference)
+        else:
+            prefix_neighbor.append(inference)
         for reuse_count in reuse:
             modeled = exact + setup / reuse_count
             amortized[reuse_count].append((prefix / modeled - 1.0) * 100.0)
@@ -619,23 +1183,62 @@ def summarize_jobs(jobs: list[dict[str, Any]], reuse: list[int]) -> dict[str, An
     def summary(values: list[float]) -> dict[str, Any]:
         return {
             "cells": len(values),
-            "gain_max_percent": max(values) if values else None,
-            "gain_median_percent": statistics.median(values) if values else None,
-            "gain_min_percent": min(values) if values else None,
+            "descriptive_gain_max_percent": max(values) if values else None,
+            "descriptive_gain_median_percent": statistics.median(values) if values else None,
+            "descriptive_gain_min_percent": min(values) if values else None,
             "regressions": sum(value < 0 for value in values),
-            "promotions_at_5_percent": sum(value >= 5.0 for value in values),
+            "cells_at_descriptive_5_percent": sum(value >= 5.0 for value in values),
             "severe_regressions_below_minus_2_percent":
                 sum(value < -2.0 for value in values),
         }
 
+    candidate_wins = [
+        value for value in sparse_candidate
+        if value["paired_log_student_t"]["credible_gain_at_least_5_percent"]
+    ]
+    suspicious_neighbors = [
+        value for value in prefix_neighbor
+        if value["paired_log_student_t"]["credible_gain_at_least_5_percent"]
+    ]
+    credible_regressions = [
+        value for value in sparse_candidate + prefix_neighbor
+        if value["paired_log_student_t"]["credible_regression_below_minus_2_percent"]
+    ]
     return {
         "call_local_total": summary(call_local),
+        "round_level_inference": {
+            "prefix_neighbors": prefix_neighbor,
+            "prefix_neighbors_with_blanket_5_percent_gain": sum(
+                value["paired_log_student_t"]["credible_gain_at_least_5_percent"]
+                for value in prefix_neighbor
+            ),
+            "sparse_candidates": sparse_candidate,
+            "sparse_candidates_with_lower_ci_at_least_5_percent": sum(
+                value["paired_log_student_t"]["credible_gain_at_least_5_percent"]
+                for value in sparse_candidate
+            ),
+        },
         "exact_prepared_execution": summary(prepared),
         "jobs_failed": len(jobs) - len(passed),
         "jobs_passed": len(passed),
         "jobs_total": len(jobs),
         "modeled_amortized": {
             str(value): summary(amortized[value]) for value in reuse
+        },
+        "promotion_gate": {
+            "eligible_sparse_job_ids": [value["job_id"] for value in candidate_wins],
+            "credible_regression_job_ids": [
+                value["job_id"] for value in credible_regressions
+            ],
+            "suspicious_prefix_neighbor_job_ids": [
+                value["job_id"] for value in suspicious_neighbors
+            ],
+            "passed": complete and bool(candidate_wins) and not suspicious_neighbors
+                and not credible_regressions,
+            "primary_only": "call-local exact versus prefix paired log contrast; "
+                "prepared and modeled metrics excluded",
+            "rule": "at least one sparse lower 95% Student-t bound >=5%; "
+                "no prefix-neighbor lower bound >=5%; no upper bound below -2%",
         },
     }
 
@@ -646,12 +1249,55 @@ def load_manifest(result_dir: Path) -> dict[str, Any]:
         raise CrossoverError("manifest has an unknown schema")
     if not isinstance(manifest.get("jobs"), list) or not manifest.get("configuration_id"):
         raise CrossoverError("manifest is incomplete")
+    expected_keys = {
+        "attestation", "authoritative_requested", "build_metadata",
+        "configuration_id", "executable", "executable_sha256", "git",
+        "jobs", "machine", "mode", "pin_cpu", "protected_isolation",
+        "schema", "settings", "source", "source_fingerprint",
+    }
+    if set(manifest) != expected_keys:
+        raise CrossoverError("manifest keys changed")
+    identity = {
+        "cells": [job.get("cell") for job in manifest["jobs"]],
+        "executable_sha256": manifest["executable_sha256"],
+        "git": manifest["git"], "machine": manifest["machine"],
+        "mode": manifest["mode"], "pin_cpu": manifest["pin_cpu"],
+        "settings": manifest["settings"],
+        "source_fingerprint": manifest["source_fingerprint"],
+        "attestation": manifest["attestation"],
+        "protected_isolation": manifest["protected_isolation"],
+        "build_metadata": manifest["build_metadata"],
+    }
+    if digest_value(identity) != manifest["configuration_id"]:
+        raise CrossoverError("manifest configuration digest is invalid")
+    seen = set()
+    for job in manifest["jobs"]:
+        if not isinstance(job, dict) or set(job) != {
+            "cell", "configuration_id", "job_id"
+        } or job.get("configuration_id") != manifest["configuration_id"]:
+            raise CrossoverError("manifest job identity is invalid")
+        expected_job_id = digest_value({
+            "cell": job["cell"],
+            "configuration_id": manifest["configuration_id"],
+            "executable_sha256": manifest["executable_sha256"],
+        })[:20]
+        if job.get("job_id") != expected_job_id or expected_job_id in seen:
+            raise CrossoverError("manifest job digest is invalid or duplicated")
+        seen.add(expected_job_id)
     return manifest
 
 
 def load_jobs(result_dir: Path, manifest: dict[str, Any]) -> list[dict[str, Any]]:
     expected = {job["job_id"]: job for job in manifest["jobs"]}
-    paths = {path.stem: path for path in sorted((result_dir / "jobs").glob("*.json"))}
+    job_dir = result_dir / "jobs"
+    expected_names = {
+        f"{job_id}{suffix}" for job_id in expected
+        for suffix in (".json", ".stdout", ".stderr")
+    }
+    retained_names = {path.name for path in job_dir.iterdir()} if job_dir.is_dir() else set()
+    if retained_names != expected_names:
+        raise CrossoverError("retained job artifact set differs from manifest")
+    paths = {path.stem: path for path in sorted(job_dir.glob("*.json"))}
     if set(paths) != set(expected):
         raise CrossoverError("job file set differs from manifest")
     jobs = []
@@ -673,13 +1319,17 @@ def require_compatible_directory(result_dir: Path, manifest: dict[str, Any]) -> 
         raise CrossoverError("result directory belongs to a different configuration")
 
 
-def run_matrix(arguments: argparse.Namespace) -> int:
+def _run_matrix_impl(
+    arguments: argparse.Namespace,
+    protected_isolation: dict[str, Any] | None = None,
+    allowed_override: list[int] | None = None,
+) -> int:
     source = Path(arguments.source).resolve()
     executable = Path(arguments.executable).resolve()
     result_dir = Path(arguments.result_dir).resolve()
     if not executable.is_file():
         raise CrossoverError(f"benchmark executable is missing: {executable}")
-    cpus = allowed_cpus()
+    cpus = list(allowed_override) if allowed_override is not None else allowed_cpus()
     pin_cpu: int | None = None
     taskset: str | None = None
     attestation = None
@@ -699,8 +1349,10 @@ def run_matrix(arguments: argparse.Namespace) -> int:
             raise CrossoverError("pinned measurements require taskset")
         if not arguments.isolation_attestation:
             raise CrossoverError("pinned measurements require --isolation-attestation")
+        topology = exact_smt_pair(pin_cpu, cpus)
         attestation = load_attestation(
-            Path(arguments.isolation_attestation).resolve(), pin_cpu
+            Path(arguments.isolation_attestation).resolve(), pin_cpu,
+            topology["cpus"],
         )
     shard_bytes = parse_csv_unsigned(arguments.bytes, "bytes", 1 << 30)
     reuse = parse_csv_unsigned(arguments.reuse, "reuse", 1000000)
@@ -714,16 +1366,20 @@ def run_matrix(arguments: argparse.Namespace) -> int:
         "placement_policy": "taskset single CPU" if pin_cpu is not None
             else "inherited allowed affinity with independent worker processes",
         "reuse": reuse,
-        "samples": arguments.samples,
+        "rounds": arguments.rounds,
+        "runtime_allowed_cpus": (
+            [pin_cpu] if pin_cpu is not None else cpus
+        ) if sys.platform.startswith("linux") else [],
         "seed": arguments.seed,
         "setup_iterations": arguments.setup_iterations,
+        "taskset": str(Path(taskset).resolve()) if taskset is not None else None,
         "timeout_seconds": arguments.timeout,
         "warmups": arguments.warmups,
         "workers": arguments.workers,
     }
     manifest = make_manifest(
         source, executable, arguments.command, cells, settings,
-        pin_cpu, attestation,
+        pin_cpu, attestation, protected_isolation, cpus,
     )
     require_compatible_directory(result_dir, manifest)
     atomic_write_json(result_dir / "manifest.json", manifest)
@@ -737,6 +1393,19 @@ def run_matrix(arguments: argparse.Namespace) -> int:
             "result directory contains stale job artifacts: "
             + ",".join(extra_job_ids)
         )
+    if (result_dir / "jobs").is_dir():
+        expected_names = {
+            f"{job_id}{suffix}" for job_id in expected_job_ids
+            for suffix in (".json", ".stdout", ".stderr")
+        }
+        extra_names = sorted(
+            path.name for path in (result_dir / "jobs").iterdir()
+            if path.name not in expected_names
+        )
+        if extra_names:
+            raise CrossoverError(
+                "result directory contains stale streams: " + ",".join(extra_names)
+            )
     print(
         f"sparse encode crossover: mode={arguments.command} cells={len(cells)} "
         f"allowed={manifest['machine']['allowed_cpu_list']}"
@@ -761,21 +1430,26 @@ def run_matrix(arguments: argparse.Namespace) -> int:
     fingerprint_after = source_fingerprint(source)
     git_after = git_state(source)
     executable_after = digest_bytes(executable.read_bytes())
+    build_after = build_metadata(executable, source)
     source_changed = (
         fingerprint_after["digest"] != manifest["source_fingerprint"]["digest"]
         or git_after != manifest["git"]
     )
     executable_changed = executable_after != manifest["executable_sha256"]
+    build_changed = build_after != manifest["build_metadata"]
     failed = any(job["status"] != "passed" for job in jobs)
-    authoritative = (
-        arguments.command == "pinned" and not failed and not source_changed
-        and not executable_changed and attestation is not None
-    )
-    status = "passed" if not failed and not source_changed and not executable_changed else "failed"
+    # The outer pinned wrapper elevates authority only after the post-run sibling
+    # scheduler counters and held pair lease validate. Intermediate artifacts
+    # therefore remain fail-closed if the run is interrupted.
+    authoritative = False
+    status = "passed" if (
+        not failed and not source_changed and not executable_changed and not build_changed
+    ) else "failed"
     summary = summarize_jobs(jobs, reuse)
     matrix = {
         "attestation": attestation,
         "authoritative": authoritative,
+        "build_inputs_changed_during_run": build_changed,
         "executable_changed_during_run": executable_changed,
         "jobs": jobs,
         "manifest_configuration_id": manifest["configuration_id"],
@@ -793,6 +1467,74 @@ def run_matrix(arguments: argparse.Namespace) -> int:
     return 0 if status == "passed" else 1
 
 
+def run_matrix(arguments: argparse.Namespace) -> int:
+    if arguments.command != "pinned":
+        return _run_matrix_impl(arguments)
+    if arguments.cpu is None:
+        raise CrossoverError("pinned measurements require --cpu")
+    if not hasattr(os, "sched_setaffinity"):
+        raise CrossoverError("pinned isolation requires Linux scheduler affinity")
+    original_affinity = allowed_cpus()
+    topology = exact_smt_pair(arguments.cpu, original_affinity)
+    sibling = next(value for value in topology["cpus"] if value != arguments.cpu)
+    housekeeping = sorted(set(original_affinity).difference(topology["cpus"]))
+    with CpuPairLease(topology["cpus"]) as lease:
+        protected = {"pair_lease": lease.identity(), "topology": topology}
+        os.sched_setaffinity(0, housekeeping)
+        try:
+            before = cpu_stat(sibling)
+            before_ns = time.monotonic_ns()
+            result = _run_matrix_impl(
+                arguments, protected, original_affinity
+            )
+            after_ns = time.monotonic_ns()
+            after = cpu_stat(sibling)
+            if lease.identity() != protected["pair_lease"]:
+                raise CrossoverError("CPU pair lease identity changed during the run")
+            if exact_smt_pair(arguments.cpu, original_affinity) != topology:
+                raise CrossoverError("SMT topology changed during the run")
+            delta = cpu_stat_delta(before, after)
+            accepted = (
+                result == 0 and after_ns > before_ns
+                and sibling_delta_is_idle(delta)
+            )
+            isolation = {
+                "accepted": accepted,
+                "benchmark_cpu": arguments.cpu,
+                "reserved_sibling": sibling,
+                "runner_housekeeping_cpus": housekeeping,
+                "before_monotonic_ns": before_ns,
+                "after_monotonic_ns": after_ns,
+                "before_sibling_stat": before,
+                "after_sibling_stat": after,
+                "sibling_delta": delta,
+                "maximum_sibling_nonidle_jiffies": 0,
+                "protected_identity": protected,
+            }
+            result_dir = Path(arguments.result_dir).resolve()
+            manifest = load_manifest(result_dir)
+            if manifest.get("protected_isolation") != protected:
+                raise CrossoverError("manifest lost the held CPU pair identity")
+            matrix = read_json(result_dir / "matrix.json")
+            matrix["isolation"] = isolation
+            matrix["authoritative"] = bool(
+                accepted and matrix.get("status") == "passed"
+            )
+            if not accepted:
+                matrix["status"] = "failed"
+            atomic_write_json(result_dir / "matrix.json", matrix)
+            print(
+                "pinned isolation: "
+                f"accepted={str(accepted).lower()} sibling_nonidle_jiffies="
+                f"{delta['nonidle_jiffies']} authoritative="
+                f"{str(matrix['authoritative']).lower()}",
+                flush=True,
+            )
+            return 0 if matrix["status"] == "passed" else 1
+        finally:
+            os.sched_setaffinity(0, original_affinity)
+
+
 def analyze(arguments: argparse.Namespace) -> int:
     result_dir = Path(arguments.result_dir).resolve()
     manifest = load_manifest(result_dir)
@@ -806,17 +1548,69 @@ def analyze(arguments: argparse.Namespace) -> int:
         digest_bytes(executable.read_bytes()) != manifest.get("executable_sha256")
     ):
         raise CrossoverError("current executable identity differs from the manifest")
+    if build_metadata(executable, source) != manifest.get("build_metadata"):
+        raise CrossoverError("current object/archive identity differs from the manifest")
     jobs = load_jobs(result_dir, manifest)
     matrix = read_json(result_dir / "matrix.json")
     if not isinstance(matrix, dict) or matrix.get("schema") != SCHEMA:
         raise CrossoverError("matrix has an unknown schema")
+    expected_matrix_keys = {
+        "attestation", "authoritative", "build_inputs_changed_during_run",
+        "executable_changed_during_run", "jobs", "manifest_configuration_id",
+        "schema", "source_changed_during_run", "status", "summary",
+    }
+    if manifest.get("mode") == "pinned":
+        expected_matrix_keys.add("isolation")
+    if set(matrix) != expected_matrix_keys or (
+        matrix.get("attestation") != manifest.get("attestation")
+    ):
+        raise CrossoverError("matrix identity keys differ from the manifest")
     if matrix.get("manifest_configuration_id") != manifest["configuration_id"]:
         raise CrossoverError("matrix belongs to another manifest")
     if canonical_bytes(matrix.get("jobs")) != canonical_bytes(jobs):
         raise CrossoverError("matrix job snapshot differs from retained jobs")
+    if (matrix.get("source_changed_during_run") is not False
+            or matrix.get("executable_changed_during_run") is not False
+            or matrix.get("build_inputs_changed_during_run") is not False
+            or matrix.get("status") != "passed"):
+        raise CrossoverError("matrix retained a failed identity/status derivation")
     summary = summarize_jobs(jobs, manifest["settings"]["reuse"])
     if canonical_bytes(summary) != canonical_bytes(matrix.get("summary")):
         raise CrossoverError("matrix summary differs from validated jobs")
+    if canonical_bytes(read_json(result_dir / "summary.json")) != canonical_bytes(summary):
+        raise CrossoverError("retained summary differs from validated jobs")
+    if manifest.get("mode") == "pinned":
+        isolation = matrix.get("isolation")
+        if not isinstance(isolation, dict) or (
+            isolation.get("protected_identity") != manifest.get("protected_isolation")
+            or isolation.get("maximum_sibling_nonidle_jiffies") != 0
+        ):
+            raise CrossoverError("pinned matrix isolation identity is invalid")
+        retained_pair = manifest["protected_isolation"]["topology"]["cpus"]
+        expected_housekeeping = sorted(set(parse_cpu_list(
+            manifest["machine"]["allowed_cpu_list"]
+        )).difference(retained_pair))
+        if isolation.get("runner_housekeeping_cpus") != expected_housekeeping:
+            raise CrossoverError("runner housekeeping affinity is invalid")
+        expected_delta = cpu_stat_delta(
+            isolation.get("before_sibling_stat", {}),
+            isolation.get("after_sibling_stat", {}),
+        )
+        accepted = (
+            isolation.get("after_monotonic_ns", 0)
+            > isolation.get("before_monotonic_ns", 0)
+            and sibling_delta_is_idle(expected_delta)
+        )
+        if (isolation.get("sibling_delta") != expected_delta
+                or isolation.get("accepted") is not accepted
+                or matrix.get("authoritative") is not (
+                    accepted and matrix.get("status") == "passed"
+                )):
+            raise CrossoverError("pinned matrix isolation derivation is invalid")
+        if not accepted or matrix.get("authoritative") is not True:
+            raise CrossoverError("pinned matrix did not retain authoritative isolation")
+    elif matrix.get("authoritative") is not False:
+        raise CrossoverError("screen matrix improperly claimed authority")
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0 if matrix.get("status") == "passed" else 1
 
@@ -824,10 +1618,29 @@ def analyze(arguments: argparse.Namespace) -> int:
 def self_test() -> int:
     cells_a = make_cells(["avx2", "scalar"], [1024, 64])
     cells_b = make_cells(["scalar", "avx2"], [64, 1024])
-    if canonical_bytes(cells_a) != canonical_bytes(cells_b) or len(cells_a) != 32:
+    if canonical_bytes(cells_a) != canonical_bytes(cells_b) or len(cells_a) != 48:
         raise CrossoverError("cell generation is not deterministic")
     if parse_csv_unsigned("64,1,8", "reuse", 100) != [1, 8, 64]:
         raise CrossoverError("numeric list normalization failed")
+    idle_snapshot = {"cpu": 8, "fields": [0] * 8}
+    idle_after = {"cpu": 8, "fields": [0, 0, 0, 10, 0, 0, 0, 0]}
+    one_busy_jiffy = {"cpu": 8, "fields": [1, 0, 0, 10, 0, 0, 0, 0]}
+    if not sibling_delta_is_idle(cpu_stat_delta(idle_snapshot, idle_after)):
+        raise CrossoverError("idle sibling scheduler evidence was rejected")
+    if sibling_delta_is_idle(cpu_stat_delta(idle_snapshot, one_busy_jiffy)):
+        raise CrossoverError("one busy sibling jiffy was accepted")
+    inference_probe = paired_log_inference([
+        {"order": ["prefix", "call_local", "call_local", "prefix"],
+         "observations_ns": [ratio, 1.0, 1.0, ratio]}
+        for ratio in (1.10, 1.20, 1.30)
+    ])
+    if (inference_probe["degrees_of_freedom"] != 2
+            or inference_probe["confidence"] != 0.95
+            or inference_probe["speedup_student_t_interval"][0]
+            >= inference_probe["speedup_geometric_mean"]
+            or inference_probe["speedup_student_t_interval"][1]
+            <= inference_probe["speedup_geometric_mean"]):
+        raise CrossoverError("paired-log Student-t inference is malformed")
     with tempfile.TemporaryDirectory(prefix="leopard2-sparse-crossover-") as directory:
         root = Path(directory)
         for relative in SOURCE_FILES:
@@ -841,27 +1654,116 @@ def self_test() -> int:
             raise CrossoverError("source fingerprint ignored a mutation")
         attestation = {
             "schema": ATTESTATION_SCHEMA, "cpu": 7,
+            "reserved_cpus": [7, 8],
             "smt_sibling_idle": True, "competing_work_idle": True,
             "operator": "self-test", "timestamp_utc": "2000-01-01T00:00:00Z",
         }
         path = root / "attestation.json"
         atomic_write_json(path, attestation)
-        if load_attestation(path, 7) != attestation:
+        if load_attestation(path, 7, [7, 8]) != attestation:
             raise CrossoverError("attestation round trip failed")
         attestation["smt_sibling_idle"] = False
         atomic_write_json(path, attestation)
         try:
-            load_attestation(path, 7)
+            load_attestation(path, 7, [7, 8])
         except CrossoverError:
             pass
         else:
             raise CrossoverError("unsafe isolation attestation was accepted")
+        with CpuPairLease([7, 8], root=root) as held:
+            identity = held.identity()
+            if identity["payload"]["cpus"] != [7, 8]:
+                raise CrossoverError("CPU pair lease identity is malformed")
+            try:
+                with CpuPairLease([7, 8], root=root):
+                    pass
+            except CrossoverError:
+                pass
+            else:
+                raise CrossoverError("overlapping CPU pair lease was accepted")
+        with CpuPairLease([7, 8], root=root) as reacquired:
+            reacquired.identity()
+
+    with tempfile.TemporaryDirectory(prefix="leopard2-sparse-build-id-") as directory:
+        fixture = Path(directory).resolve()
+        fixture_source = fixture / "source"
+        fixture_build = fixture / "build"
+        fixture_source.mkdir()
+        target = fixture_build / "CMakeFiles/bench_leopard2_sparse_encode.dir"
+        (target / "bench/leopard2").mkdir(parents=True)
+        (target / "tests/leopard2").mkdir(parents=True)
+        fixture_executable = fixture_build / "bench_leopard2_sparse_encode"
+        fixture_executable.write_bytes(b"executable")
+        (fixture_build / "libleopard.a").write_bytes(b"archive")
+        (target / "bench/leopard2/sparse_encode_benchmark.cpp.o").write_bytes(
+            b"benchmark object"
+        )
+        oracle_object = target / "tests/leopard2/direct_oracle.cpp.o"
+        oracle_object.write_bytes(b"oracle object")
+        (fixture_build / "CMakeCache.txt").write_text(
+            "CMAKE_HOME_DIRECTORY:INTERNAL=" + str(fixture_source) + "\n"
+            "CMAKE_BUILD_TYPE:STRING=Release\n"
+            "LEO2_BUILD_BENCHMARKS:BOOL=ON\n",
+            encoding="utf-8",
+        )
+        build_before = build_metadata(fixture_executable, fixture_source)
+        oracle_object.write_bytes(b"mutated oracle object")
+        if build_metadata(fixture_executable, fixture_source) == build_before:
+            raise CrossoverError("build identity ignored an object mutation")
+        try:
+            build_metadata(fixture_executable, fixture / "other-source")
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError("build from another source root was accepted")
+
+    with tempfile.TemporaryDirectory(prefix="leopard2-sparse-manifest-") as directory:
+        manifest_root = Path(directory)
+        manifest_cell = dict(base_cells()[0])
+        identity = {
+            "cells": [manifest_cell], "executable_sha256": "1" * 64,
+            "git": {"dirty": False, "sha": "a" * 40},
+            "machine": {"allowed_cpu_list": "0-2"}, "mode": "screen",
+            "pin_cpu": None, "settings": {"rounds": 3},
+            "source_fingerprint": {"digest": "2" * 64},
+            "attestation": None, "protected_isolation": None,
+            "build_metadata": {"fixture": True},
+        }
+        configuration_id = digest_value(identity)
+        job_id = digest_value({
+            "cell": manifest_cell, "configuration_id": configuration_id,
+            "executable_sha256": "1" * 64,
+        })[:20]
+        manifest_fixture = {
+            "attestation": None, "authoritative_requested": False,
+            "build_metadata": identity["build_metadata"],
+            "configuration_id": configuration_id,
+            "executable": "/fixture/benchmark", "executable_sha256": "1" * 64,
+            "git": identity["git"],
+            "jobs": [{"cell": manifest_cell, "configuration_id": configuration_id,
+                      "job_id": job_id}],
+            "machine": identity["machine"], "mode": "screen", "pin_cpu": None,
+            "protected_isolation": None, "schema": SCHEMA,
+            "settings": identity["settings"], "source": "/fixture/source",
+            "source_fingerprint": identity["source_fingerprint"],
+        }
+        atomic_write_json(manifest_root / "manifest.json", manifest_fixture)
+        load_manifest(manifest_root)
+        manifest_fixture["settings"]["rounds"] = 4
+        atomic_write_json(manifest_root / "manifest.json", manifest_fixture)
+        try:
+            load_manifest(manifest_root)
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError("manifest mutation retained a stale digest")
 
     cell = dict(base_cells()[0])
     cell.update(backend="scalar", shard_bytes=64)
     settings = {
         "iterations": 2, "memory_mib": 16, "reuse": [1, 8, 64],
-        "samples": 3, "seed": 7, "setup_iterations": 2, "warmups": 1,
+        "rounds": 3, "runtime_allowed_cpus": [0], "seed": 7,
+        "setup_iterations": 2, "warmups": 1,
     }
     state = {"dirty": False, "sha": "a" * 40}
     setup = 10.0
@@ -875,11 +1777,14 @@ def self_test() -> int:
             "library_test_hooks": False,
             "compiler": "self-test", "compiler_version": "1", "cplusplus": 201103,
         },
+        "runtime": {"linux_procfs_affinity_attested": True,
+                    "executable_path": "/self-test/benchmark",
+                    "allowed_cpus": [0]},
         "parameters": {
             "profile": cell["profile"], "field": cell["field"],
             "K": cell["K"], "R": cell["R"], "shard_bytes": 64,
             "requested_parity": cell["requested_parity"],
-            "requested_backend": "scalar", "iterations": 2, "samples": 3,
+            "requested_backend": "scalar", "iterations": 2, "rounds": 3,
             "warmups": 1, "setup_iterations": 2, "reuse": [1, 8, 64],
             "memory_mib": 16, "seed": 7,
         },
@@ -890,7 +1795,42 @@ def self_test() -> int:
         },
         "correctness": {
             "exact_prefix_parity_match": True,
+            "direct_generator_parity_match": True,
+            "direct_generator_symbols_checked": 24,
+            "direct_generator_sample_sha256": "1" * 64,
+            "encode_decode_recovery_match": True,
+            "input_immutable": True,
+            "allocation_guards_match": True,
+            "unrequested_output_canary": {"applicable": False, "match": True},
+            "post_timing_recheck_match": True,
+            "input_sha256": "2" * 64,
+            "parity_sha256": "3" * 64,
+            "recovery_source_sha256": "4" * 64,
+            "recovered_original_sha256": "4" * 64,
             "digest_fnv1a64": "0x0123456789abcdef",
+        },
+        "primary_abba": {
+            "design": "pairwise_prefix_call_local_ABBA",
+            "order_policy": "alternating_ABBA_BAAB",
+            "rounds": [
+                {
+                    "round": index,
+                    "order": (["prefix", "call_local", "call_local", "prefix"]
+                              if index % 2 == 0 else
+                              ["call_local", "prefix", "prefix", "call_local"]),
+                    "observations_ns": ([30, 25, 25, 30]
+                                        if index % 2 == 0 else [25, 30, 30, 25]),
+                    "prefix_median_ns": 30,
+                    "call_local_median_ns": 25,
+                    "log_contrast": math.log(30) - math.log(25),
+                    "candidate_gain_percent": 20,
+                }
+                for index in range(3)
+            ],
+            "round_gain_percent": {
+                "median": 20, "mad": 0, "minimum": 20, "maximum": 20,
+                "samples": [20, 20, 20],
+            },
         },
         "metrics": {
             "schedule_setup_ns": {
@@ -957,7 +1897,76 @@ def self_test() -> int:
         pass
     else:
         raise CrossoverError("malformed benchmark MAD was accepted")
-    print("PASS sparse encode crossover self-test cells=32 identity_mutations=7")
+    benchmark["metrics"]["prefix_execution_ns"]["mad"] = 0
+
+    with tempfile.TemporaryDirectory(prefix="leopard2-sparse-resume-") as directory:
+        result_root = Path(directory).resolve()
+        executable = result_root / "bench_leopard2_sparse_encode"
+        executable.write_bytes(b"self-test executable")
+        executable.chmod(0o700)
+        resume_settings = dict(settings)
+        resume_settings["taskset"] = None
+        resume_manifest = {
+            "configuration_id": "resume-self-test",
+            "executable": str(executable), "git": state,
+            "mode": "screen", "pin_cpu": None,
+            "settings": resume_settings,
+        }
+        expected = {
+            "cell": cell, "configuration_id": "resume-self-test",
+            "job_id": "resume-job",
+        }
+        retained = json.loads(json.dumps(benchmark))
+        retained["runtime"]["executable_path"] = str(executable)
+        stdout_path = result_root / "jobs/resume-job.stdout"
+        stderr_path = result_root / "jobs/resume-job.stderr"
+        atomic_write_json(stdout_path, retained)
+        atomic_write(stderr_path, b"")
+        pristine = {
+            "benchmark": retained, "cell": cell,
+            "command": expected_job_command(resume_manifest, expected),
+            "configuration_id": "resume-self-test", "error": None,
+            "job_id": "resume-job", "returncode": 0,
+            "schema": JOB_SCHEMA, "status": "passed",
+            "stderr_path": "jobs/resume-job.stderr",
+            "stderr_sha256": digest_bytes(b""),
+            "stdout_path": "jobs/resume-job.stdout",
+            "stdout_sha256": digest_bytes(stdout_path.read_bytes()),
+        }
+        validate_job_artifacts(result_root, pristine, expected, resume_manifest)
+
+        def reject_resume_mutation(mutator: Any) -> None:
+            changed = json.loads(json.dumps(pristine))
+            mutator(changed)
+            try:
+                validate_job_artifacts(result_root, changed, expected, resume_manifest)
+            except CrossoverError:
+                return
+            raise CrossoverError("resume mutation was accepted")
+
+        reject_resume_mutation(lambda value: value["command"].append("--tampered"))
+        reject_resume_mutation(lambda value: value.update(
+            {"stdout_path": "../resume-job.stdout"}))
+        reject_resume_mutation(lambda value: value.update({"stdout_sha256": "0" * 64}))
+        reject_resume_mutation(lambda value: value.update({"status": "failed"}))
+        reject_resume_mutation(lambda value: value["cell"].update({"K": cell["K"] + 1}))
+        reject_resume_mutation(lambda value: value["benchmark"]["runtime"].update(
+            {"allowed_cpus": [1]}))
+
+        mutated_stdout = json.loads(json.dumps(retained))
+        mutated_stdout["runtime"]["allowed_cpus"] = [1]
+        atomic_write_json(stdout_path, mutated_stdout)
+        changed = json.loads(json.dumps(pristine))
+        changed["benchmark"] = mutated_stdout
+        changed["stdout_sha256"] = digest_bytes(stdout_path.read_bytes())
+        try:
+            validate_job_artifacts(result_root, changed, expected, resume_manifest)
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError("rehashing a runtime-affinity mutation was accepted")
+
+    print("PASS sparse encode crossover self-test cells=48 identity_mutations=18")
     return 0
 
 
@@ -983,7 +1992,7 @@ def build_parser() -> argparse.ArgumentParser:
         )
         sub.add_argument("--reuse", default="1,8,64")
         sub.add_argument("--iterations", type=positive, default=8 if command == "screen" else 64)
-        sub.add_argument("--samples", type=positive, default=3 if command == "screen" else 9)
+        sub.add_argument("--rounds", type=positive, default=3)
         sub.add_argument("--warmups", type=positive, default=1 if command == "screen" else 4)
         sub.add_argument(
             "--setup-iterations", type=positive,
@@ -1006,8 +2015,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     arguments = build_parser().parse_args()
     if arguments.command in ("screen", "pinned"):
-        if arguments.samples < 3 or arguments.samples > 101 or arguments.samples % 2 == 0:
-            raise CrossoverError("samples must be odd and in 3..101")
+        if arguments.rounds != 3:
+            raise CrossoverError("the promotion design requires exactly 3 rounds")
         if arguments.command == "screen" and (
             arguments.cpu is not None or arguments.isolation_attestation is not None
         ):

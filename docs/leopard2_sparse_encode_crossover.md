@@ -1,20 +1,33 @@
 # Exact sparse-output encoder crossover experiment
 
 `bench_leopard2_sparse_encode` compares exact requested-output schedules with
-the mature prefix forward transform. Both paths are linked into the same
-binary, use the same field tables and selected backend, consume the same source
-shards, and are checked byte-for-byte before and after timing. The benchmark is
+the mature prefix forward transform. Both internal kernel paths are linked into
+the same binary, use the same field tables and selected backend, consume the
+same source shards, and are checked byte-for-byte before and after timing. The
+benchmark is
 diagnostic, links the ordinary production `leopard` archive, and is not
 installed. It is available when benchmarks are enabled even if the test suite
-is disabled.
+is disabled. This does not mean exact scheduling is wired into the production
+public encoder: public scratch reservation, schedule compilation, and selection
+remain `LEO2_ENABLE_TEST_HOOKS`-only. Production `AUTO` still selects the mature
+prefix path.
 
-The benchmark-v3 schema reports `build.library_test_hooks=false`. The CMake
+The benchmark-v4 schema reports `build.library_test_hooks=false`. The CMake
 target sets that marker only while linking production `leopard`; manual builds
 default to `true`, and the pinned runner rejects a true or missing marker. This
 matters because atomic test counters perturb the mature and candidate paths by
 different amounts and can bias a crossover result.
 
-The cell benchmark reports four measurements separately:
+The benchmark-v4 primary comparison is pairwise and setup-inclusive. Each cell
+retains exactly three independent rounds in ABBA, BAAB, ABBA order. For each
+round it computes the paired log-time contrast
+`mean(log(prefix)) - mean(log(call_local))`. The runner estimates the mean
+contrast across rounds with a two-sided 95% Student-t interval (`df=2`) and
+exponentiates the estimate and interval to speedup/gain space. Endpoint medians,
+gain medians, and MAD are descriptive only; pooled rotating three-way samples
+and ratios of global medians are not promotion evidence.
+
+Prepared execution remains a separate diagnostic block. The cell reports:
 
 - exact schedule setup, including mask scanning and compilation;
 - mature prefix transform execution;
@@ -25,15 +38,20 @@ The cell benchmark reports four measurements separately:
 It also models setup amortization at explicit reuse counts. The model is
 `prepared_execution + setup / reuse`; it is labeled as a model and does not
 pretend that the current public encoder persists an output-mask plan. The
-measured call-local total is the relevant comparison for the implementation as
-it exists today.
+measured call-local total is the only candidate in the primary ABBA pair for the
+implementation as it exists today. Prepared-only wins can motivate a separate
+immutable encode-plan API but cannot promote call-local plumbing.
 
 The harness calls the existing GF8/GF16 high- and low-profile encoder kernels
-directly. It therefore isolates schedule setup and byte-heavy transform work,
-but does not include public-API validation, arbitrary-tail staging, batch
-scheduling, or application copies. A promotion decision still requires the
-ordinary end-to-end Leopard2 benchmark matrix after a kernel threshold is
-selected.
+directly. Before and after timing it checks deterministic symbols from every
+requested output against an independent direct-generator construction,
+performs a production public-decode recovery using candidate parity, records
+SHA-256 digests, verifies immutable inputs, and checks allocation guards and
+applicable unrequested-output canaries.
+Timing still isolates schedule setup and byte-heavy transform work and does not
+include public-API validation, arbitrary-tail staging, batch scheduling, or
+application copies. A promotion decision still requires the ordinary end-to-end
+Leopard2 benchmark matrix after a kernel threshold is selected.
 
 ## Matrix
 
@@ -48,8 +66,10 @@ each of:
 The screen defaults to 64-byte and 1-KiB shards. The pinned matrix defaults to
 64 B, 1 KiB, 64 KiB, and 256 KiB. Reuse points default to 1, 8, and 64. The
 backend list is selectable; every raw result records both the requested and
-resolved backend. Each cell uses rotating three-way order for mature prefix,
-prepared exact, and call-local exact samples.
+resolved backend. Sparse candidate masks are accompanied by dense/prefix
+negative controls. Candidate cells must reduce the mature prefix graph;
+controls are retained precisely so the runner can detect an implausible blanket
+advantage.
 
 Structural accounting includes full, mature-prefix, retained, one-output, and
 fused-four butterfly counts plus schedule and dependency-workspace bytes. A
@@ -61,21 +81,23 @@ The runner fails closed:
 
 - a deterministic manifest hashes every source file that can affect the
   experiment, the executable, settings, machine identity, and cells;
-- compiler identity is reported by the cell and the runner retains the CMake
-  cache hash plus selected build/field/backend flags when available;
+- compiler identity is reported by the cell and the runner retains and hashes
+  the CMake cache, production archive/object inputs, and executable;
 - job IDs and merged ordering are deterministic;
 - stdout and stderr are retained and hashed for every job;
-- resume rejects stale configurations or modified artifacts;
-- the source fingerprint, Git state, and executable hash are rechecked after
-  the run;
+- resume rejects stale configurations, path escapes, modified artifacts, and
+  artifacts from a different current root;
+- source, archive/object, executable, and runtime identity are checked before
+  every retained invocation and rechecked after the run;
 - every benchmark result must report the Git SHA and dirty state embedded at
   CMake configure time;
-- benchmark-v3 must report that its linked library has no test hooks;
+- benchmark-v4 must report that its linked library has no test hooks;
 - pinned mode rejects a dirty source tree and a binary whose embedded SHA does
   not equal the current clean source SHA;
-- pinned mode requires one worker, `taskset`, an allowed CPU, and an explicit
-  isolation attestation naming that CPU and affirming that its SMT sibling and
-  competing work were idle.
+- pinned mode requires one worker, an allowed CPU, reservation of that CPU and
+  every topology-reported SMT sibling, runtime affinity proof from the cell,
+  and an explicit isolation attestation naming the whole reserved sibling set
+  and affirming that competing work was idle.
 
 The standalone C++ benchmark always says `authoritative: false`. Only the
 runner may elevate a complete pinned matrix, and only after every identity and
@@ -86,6 +108,7 @@ An isolation attestation has this shape:
     {
       "schema": "leopard2-benchmark-isolation-attestation/v1",
       "cpu": 16,
+      "reserved_cpus": [16, 80],
       "smt_sibling_idle": true,
       "competing_work_idle": true,
       "operator": "operator name or automation identity",
@@ -93,8 +116,11 @@ An isolation attestation has this shape:
     }
 
 The attestation is evidence, not a mechanism that makes the host idle. The
-operator remains responsible for checking topology, sibling placement,
-governor/turbo state, and concurrent workloads.
+runner holds the project-wide abstract-socket plus `flock` CPU-pair lease,
+constrains its own orchestration to housekeeping CPUs outside that pair, checks
+sibling scheduler counters, requires exactly zero non-idle sibling jiffies, and
+fails if the benchmark's runtime affinity or observed topology differs, but the
+operator remains responsible for governor/turbo state and concurrent workloads.
 
 ## Reproduction
 
@@ -124,7 +150,10 @@ Run a parallel, non-authoritative screen:
       --backends scalar,ssse3,avx2 \
       --workers 128
 
-Run an isolated pinned matrix after preparing the attestation:
+Do not run an authoritative sparse matrix while the weighted matched-layout
+benchmark owns the isolation lease. After that campaign releases the host and
+the experiment owner explicitly authorizes timing, run an isolated pinned
+matrix with an attestation covering the complete sibling set:
 
     OMP_DYNAMIC=FALSE OMP_NUM_THREADS=1 \
     python3 tools/leopard2_sparse_encode_crossover.py pinned \
@@ -147,8 +176,9 @@ hashes, rather than committing an incidental screen.
 
 ## Promotion rule
 
-Exact schedules remain outside `AUTO` until a clean pinned matrix shows at
-least a credible 5% gain in a useful region, no unexplained regression greater
-than 2% in neighboring cells, and the end-to-end public encoder confirms the
-gain. Prepared-only wins do not justify promotion when call-local setup erases
-them; they instead motivate a separate reusable encode-plan design.
+Exact schedules remain outside `AUTO` until the lower endpoint of the
+exponentiated 95% Student-t interval clears a 5% gain in a useful sparse region,
+dense/prefix negative controls show no implausible blanket speedup, no
+unexplained neighboring regression exceeds 2%, and the end-to-end public encoder
+confirms the gain. Prepared-only wins do not justify promotion when call-local
+setup erases them; they instead motivate a separate reusable encode-plan design.

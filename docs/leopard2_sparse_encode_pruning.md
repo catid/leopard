@@ -5,8 +5,12 @@ pointers to `leo2_encode`.  The legacy high encoder and the first production
 low encoder trimmed only the unused suffix: a request for parity 0 and parity
 R-1 still executed the same forward-transform prefix as a dense request.
 
-An experimental encoder path now compiles an exact forward dependency schedule
-into caller-provided encode scratch.  The schedule has a two-bit requested-row
+The internal transform experiment can compile an exact forward dependency
+schedule into caller-provided encode scratch. All public plumbing that reserves
+that scratch, compiles the schedule, or selects the exact path is currently
+guarded by `LEO2_ENABLE_TEST_HOOKS`; it is absent from the production archive.
+Production `AUTO` therefore continues to run the mature prefix transform for
+every requested-parity mask. The schedule has a two-bit requested-row
 mask per radix-2 butterfly in the ordinary parent-preserving LCH traversal.
 This distinguishes x-only, y-only, and two-row operations so a one-row
 dependency does not write its dead peer. Compilation walks
@@ -30,8 +34,9 @@ out of place, then the remaining exact schedule runs in place.  High-profile
 evaluation applies the same schedule directly to its accumulated coefficient
 block.
 
-The schedule is compiled once per forced experimental `leo2_encode` call and
-reused for both the aligned prefix and a staged final 64-byte tile.  It does not
+In the hook-enabled diagnostic build, the schedule is compiled once per forced
+experimental `leo2_encode` call and reused for both the aligned prefix and a
+staged final 64-byte tile.  It does not
 mutate the codec, does not allocate, and is therefore safe for concurrent
 executions that use independent caller scratch.  The worst legal GF16 geometry
 adds at most 65,536 bytes of schedule storage: one packed operation-mask array
@@ -39,10 +44,13 @@ per parity block and one reusable packed P/T-bit dependency workspace. Mid-size
 low-profile geometries whose many parity-coset masks would exceed that bound
 fall back to the mature prefix transform pending a compact measured schedule.
 
-Normal AUTO execution retains the mature fused-prefix kernel for dense and
-sparse requests and does not pay schedule compilation or extra scratch. Exact
-mask execution is currently selected only by the existing test-only
-FORCE_TRANSFORM diagnostic. Promotion requires authoritative
+Production `AUTO` retains the mature fused-prefix kernel for dense and sparse
+requests and does not reserve schedule scratch. Exact-mask execution through
+`leo2_encode` is currently possible only in the separate hook-enabled test
+archive through the test-only FORCE_TRANSFORM diagnostic. The production-linked
+crossover benchmark invokes the same internal kernel substrate directly; it is
+not evidence that the public production call path can select that substrate.
+Promotion requires authoritative
 pinned, same-source crossover measurements that include schedule setup for
 one-shot and reused calls, followed by deterministic size/mask dispatcher cells.
 The current evidence is structural and diagnostic, not a throughput claim.

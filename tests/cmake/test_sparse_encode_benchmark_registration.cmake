@@ -117,7 +117,7 @@ execute_process(
         "${benchmark}"
         --profile high --field gf8 --k 48 --r 16 --bytes 64
         --requested-parity 0,7,15 --backend scalar --iterations 1
-        --samples 3 --warmups 1 --setup-iterations 1 --reuse 1,8,64
+        --rounds 3 --warmups 1 --setup-iterations 1 --reuse 1,8,64
         --memory-mib 16
     RESULT_VARIABLE run_result
     OUTPUT_VARIABLE benchmark_json
@@ -127,9 +127,11 @@ if(NOT run_result EQUAL 0)
         "benchmark-only executable failed (${run_result}): ${run_stderr}")
 endif()
 foreach(required_text
-    "\"schema\": \"leopard2-sparse-encode-benchmark-v3\""
+    "\"schema\": \"leopard2-sparse-encode-benchmark-v4\""
     "\"library_test_hooks\": false"
-    "\"exact_prefix_parity_match\": true")
+    "\"exact_prefix_parity_match\": true"
+    "\"direct_generator_parity_match\": true"
+    "\"encode_decode_recovery_match\": true")
     string(FIND "${benchmark_json}" "${required_text}" required_position)
     if(required_position EQUAL -1)
         message(FATAL_ERROR

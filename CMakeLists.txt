@@ -451,13 +451,18 @@ if(LEO2_BUILD_BENCHMARKS)
         LEO2_LOCATOR_SOURCE_GIT_SHA="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
         LEO2_LOCATOR_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
 
-    # This diagnostic uses ordinary internal transform entry points only.  It
-    # deliberately links the production archive even when the test suite is
-    # enabled: test-hook counters perturb the compared encoder paths by
-    # different amounts and therefore invalidate crossover measurements.
+    # The timed paths use ordinary internal transform entry points; untimed
+    # closure also links the independent direct-generator oracle and exercises
+    # production public decode. The target deliberately links the production
+    # archive even when the test suite is enabled: test-hook counters perturb
+    # the compared encoder paths by different amounts and invalidate crossover
+    # measurements.
     if(LEOPARD_ENABLE_GF8 AND LEOPARD_ENABLE_GF16)
         add_executable(bench_leopard2_sparse_encode
-            bench/leopard2/sparse_encode_benchmark.cpp)
+            bench/leopard2/sparse_encode_benchmark.cpp
+            tests/leopard2/direct_oracle.cpp)
+        target_include_directories(bench_leopard2_sparse_encode PRIVATE
+            tests/leopard2)
         target_compile_definitions(bench_leopard2_sparse_encode PRIVATE
             LEO2_SPARSE_ENCODE_SOURCE_GIT_SHA="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
             LEO2_SPARSE_ENCODE_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY}
