@@ -27,19 +27,103 @@
 */
 
 #include "leopard2.h"
+#include "allocation_audit_config.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <new>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(_MSC_VER)
 #include <malloc.h>
 #endif
+
+#if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
+static std::atomic<bool> g_track_allocations(false);
+static std::atomic<uint64_t> g_tracked_allocations(0);
+
+#if defined(_MSC_VER)
+#define LEO2_BATCH_TEST_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_BATCH_TEST_NOINLINE __attribute__((noinline))
+#else
+#define LEO2_BATCH_TEST_NOINLINE
+#endif
+
+LEO2_BATCH_TEST_NOINLINE void* operator new(size_t bytes)
+{
+    if (g_track_allocations.load(std::memory_order_relaxed))
+        g_tracked_allocations.fetch_add(1, std::memory_order_relaxed);
+    void* result = malloc(bytes == 0 ? 1 : bytes);
+    if (!result)
+        throw std::bad_alloc();
+    return result;
+}
+
+LEO2_BATCH_TEST_NOINLINE void* operator new[](size_t bytes)
+{
+    return ::operator new(bytes);
+}
+
+LEO2_BATCH_TEST_NOINLINE void* operator new(
+    size_t bytes, const std::nothrow_t&) noexcept
+{
+    try { return ::operator new(bytes); }
+    catch (...) { return NULL; }
+}
+
+LEO2_BATCH_TEST_NOINLINE void* operator new[](
+    size_t bytes, const std::nothrow_t&) noexcept
+{
+    return ::operator new(bytes, std::nothrow);
+}
+
+LEO2_BATCH_TEST_NOINLINE void operator delete(void* pointer) noexcept
+{
+    free(pointer);
+}
+LEO2_BATCH_TEST_NOINLINE void operator delete[](void* pointer) noexcept
+{
+    free(pointer);
+}
+LEO2_BATCH_TEST_NOINLINE void operator delete(
+    void* pointer, const std::nothrow_t&) noexcept
+{
+    ::operator delete(pointer);
+}
+LEO2_BATCH_TEST_NOINLINE void operator delete[](
+    void* pointer, const std::nothrow_t&) noexcept
+{
+    ::operator delete[](pointer);
+}
+
+#undef LEO2_BATCH_TEST_NOINLINE
+#endif
+
+static void BeginAllocationAudit()
+{
+#if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
+    g_tracked_allocations.store(0, std::memory_order_relaxed);
+    g_track_allocations.store(true, std::memory_order_release);
+#endif
+}
+
+static uint64_t EndAllocationAudit()
+{
+#if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
+    g_track_allocations.store(false, std::memory_order_release);
+    return g_tracked_allocations.load(std::memory_order_relaxed);
+#else
+    return 0;
+#endif
+}
 
 namespace {
 
@@ -94,6 +178,7 @@ public:
     }
 
     void* data() { return data_; }
+    const void* data() const { return data_; }
     size_t size() const { return bytes_; }
 
 private:
@@ -208,6 +293,159 @@ struct Fixture
 private:
     Fixture(const Fixture&);
     Fixture& operator=(const Fixture&);
+};
+
+static size_t BatchItemBytes(size_t item)
+{
+    return (item & 1u) == 0
+        ? Fixture::kShortBytes : Fixture::kLongBytes;
+}
+
+struct ScalableEncodeBatch
+{
+    ScalableEncodeBatch(Fixture& fixture, size_t item_count)
+        : fixture(fixture)
+        , outputs(item_count, Shards(2, Bytes(Fixture::kLongBytes, 0xa5)))
+        , original_pointers(item_count, fixture.original_a)
+        , recovery_pointers(item_count, std::vector<void*>(2, NULL))
+        , scratches(item_count)
+        , items(item_count)
+        , preflight_bytes(0)
+    {
+        for (size_t item = 0; item < item_count; ++item)
+        {
+            const size_t bytes = BatchItemBytes(item);
+            recovery_pointers[item][0] = &outputs[item][0][0];
+            recovery_pointers[item][1] = &outputs[item][1][0];
+            const size_t scratch_bytes = bytes == Fixture::kShortBytes
+                ? fixture.encode_short : fixture.encode_long;
+            scratches[item].reset(new AlignedBuffer(scratch_bytes));
+            items[item].shard_bytes = bytes;
+            items[item].original = &original_pointers[item][0];
+            items[item].recovery = &recovery_pointers[item][0];
+            items[item].scratch = scratches[item]->data();
+            items[item].scratch_bytes = scratches[item]->size();
+        }
+        RequireResult(leo2_encode_batch_preflight_scratch_size(
+            fixture.codec, item_count, &preflight_bytes), LEO2_SUCCESS,
+            "scalable encode preflight scratch query");
+        preflight.reset(new AlignedBuffer(preflight_bytes));
+    }
+
+    leo2_result Execute()
+    {
+        return leo2_encode_batch_with_preflight_scratch(fixture.codec,
+            items.empty() ? NULL : &items[0], items.size(),
+            preflight->data(), preflight->size());
+    }
+
+    void Check() const
+    {
+        for (size_t item = 0; item < items.size(); ++item)
+        {
+            const size_t bytes = static_cast<size_t>(items[item].shard_bytes);
+            for (size_t parity = 0; parity < outputs[item].size(); ++parity)
+            {
+                Require(std::equal(outputs[item][parity].begin(),
+                            outputs[item][parity].begin() + bytes,
+                            fixture.parity_a[parity].begin()),
+                    "scalable encode parity mismatch");
+            }
+        }
+    }
+
+    Fixture& fixture;
+    std::vector<Shards> outputs;
+    std::vector<std::vector<const void*> > original_pointers;
+    std::vector<std::vector<void*> > recovery_pointers;
+    std::vector<std::unique_ptr<AlignedBuffer> > scratches;
+    std::vector<leo2_encode_batch_item> items;
+    size_t preflight_bytes;
+    std::unique_ptr<AlignedBuffer> preflight;
+
+private:
+    ScalableEncodeBatch(const ScalableEncodeBatch&);
+    ScalableEncodeBatch& operator=(const ScalableEncodeBatch&);
+};
+
+struct ScalableDecodeBatch
+{
+    ScalableDecodeBatch(
+        Fixture& fixture,
+        const ScalableEncodeBatch& encoded)
+        : fixture(fixture)
+        , restored(encoded.items.size(),
+              Bytes(Fixture::kLongBytes, 0xcc))
+        , original_pointers(encoded.items.size(),
+              std::vector<const void*>(3, NULL))
+        , recovery_pointers(encoded.items.size(),
+              std::vector<const void*>(2, NULL))
+        , restored_pointers(encoded.items.size(),
+              std::vector<void*>(3, NULL))
+        , scratches(encoded.items.size())
+        , items(encoded.items.size())
+        , preflight_bytes(0)
+    {
+        for (size_t item = 0; item < items.size(); ++item)
+        {
+            const size_t bytes =
+                static_cast<size_t>(encoded.items[item].shard_bytes);
+            original_pointers[item][0] = NULL;
+            original_pointers[item][1] = fixture.original_a[1];
+            original_pointers[item][2] = fixture.original_a[2];
+            recovery_pointers[item][0] = &encoded.outputs[item][0][0];
+            recovery_pointers[item][1] = NULL;
+            restored_pointers[item][0] = &restored[item][0];
+            size_t scratch_bytes = 0;
+            RequireResult(leo2_decode_plan_scratch_size(
+                fixture.plan, bytes, &scratch_bytes), LEO2_SUCCESS,
+                "scalable decode item scratch query");
+            scratches[item].reset(new AlignedBuffer(scratch_bytes));
+            items[item].shard_bytes = bytes;
+            items[item].original = &original_pointers[item][0];
+            items[item].recovery = &recovery_pointers[item][0];
+            items[item].restored_original = &restored_pointers[item][0];
+            items[item].scratch = scratches[item]->data();
+            items[item].scratch_bytes = scratches[item]->size();
+        }
+        RequireResult(leo2_decode_plan_batch_preflight_scratch_size(
+            fixture.plan, items.size(), &preflight_bytes), LEO2_SUCCESS,
+            "scalable decode preflight scratch query");
+        preflight.reset(new AlignedBuffer(preflight_bytes));
+    }
+
+    leo2_result Execute()
+    {
+        return leo2_decode_plan_execute_batch_with_preflight_scratch(
+            fixture.plan, items.empty() ? NULL : &items[0], items.size(),
+            preflight->data(), preflight->size());
+    }
+
+    void Check() const
+    {
+        for (size_t item = 0; item < items.size(); ++item)
+        {
+            const size_t bytes = static_cast<size_t>(items[item].shard_bytes);
+            Require(std::equal(restored[item].begin(),
+                        restored[item].begin() + bytes,
+                        fixture.source_a[0].begin()),
+                "scalable decode result mismatch");
+        }
+    }
+
+    Fixture& fixture;
+    std::vector<Bytes> restored;
+    std::vector<std::vector<const void*> > original_pointers;
+    std::vector<std::vector<const void*> > recovery_pointers;
+    std::vector<std::vector<void*> > restored_pointers;
+    std::vector<std::unique_ptr<AlignedBuffer> > scratches;
+    std::vector<leo2_decode_batch_item> items;
+    size_t preflight_bytes;
+    std::unique_ptr<AlignedBuffer> preflight;
+
+private:
+    ScalableDecodeBatch(const ScalableDecodeBatch&);
+    ScalableDecodeBatch& operator=(const ScalableDecodeBatch&);
 };
 
 void TestValidSharedInputs(Fixture& fixture)
@@ -696,6 +934,477 @@ void TestDecodeConflicts(Fixture& fixture)
         "decode executed an earlier item before later validation failed");
 }
 
+void TestScalableQueriesAndNoOp(Fixture& fixture)
+{
+    size_t bytes = 123;
+    RequireResult(leo2_encode_batch_preflight_scratch_size(
+        fixture.codec, 1, &bytes), LEO2_SUCCESS,
+        "single-item encode preflight query");
+    Require(bytes == 0, "single-item encode preflight was not zero");
+    RequireResult(leo2_encode_batch_preflight_scratch_size(
+        fixture.codec, 8, &bytes), LEO2_SUCCESS,
+        "eight-item encode preflight query");
+    Require(bytes == 0, "small encode batch did not retain compatibility path");
+    RequireResult(leo2_encode_batch_preflight_scratch_size(
+        fixture.codec, 9, &bytes), LEO2_SUCCESS,
+        "nine-item encode preflight query");
+    Require(bytes != 0 && bytes % leo2_scratch_alignment() == 0,
+        "scalable encode preflight size is not aligned");
+    const size_t encode_nine = bytes;
+    RequireResult(leo2_encode_batch_preflight_scratch_size(
+        fixture.codec, 64, &bytes), LEO2_SUCCESS,
+        "64-item encode preflight query");
+    Require(bytes > encode_nine,
+        "encode preflight scratch did not scale with batch size");
+
+    RequireResult(leo2_decode_plan_batch_preflight_scratch_size(
+        fixture.plan, 8, &bytes), LEO2_SUCCESS,
+        "eight-item decode preflight query");
+    Require(bytes == 0, "small decode batch did not retain compatibility path");
+    RequireResult(leo2_decode_plan_batch_preflight_scratch_size(
+        fixture.plan, 9, &bytes), LEO2_SUCCESS,
+        "nine-item decode preflight query");
+    Require(bytes != 0 && bytes % leo2_scratch_alignment() == 0,
+        "scalable decode preflight size is not aligned");
+
+    bytes = 123;
+    RequireResult(leo2_encode_batch_preflight_scratch_size(
+        NULL, 9, &bytes), LEO2_INVALID_ARGUMENT,
+        "null-codec encode preflight query");
+    Require(bytes == 0, "failed encode preflight query did not clear output");
+    bytes = 123;
+    RequireResult(leo2_decode_plan_batch_preflight_scratch_size(
+        NULL, 9, &bytes), LEO2_INVALID_ARGUMENT,
+        "null-plan decode preflight query");
+    Require(bytes == 0, "failed decode preflight query did not clear output");
+    RequireResult(leo2_encode_batch_preflight_scratch_size(
+        fixture.codec, 9, NULL), LEO2_INVALID_ARGUMENT,
+        "null encode preflight output");
+    RequireResult(leo2_decode_plan_batch_preflight_scratch_size(
+        fixture.plan, 9, NULL), LEO2_INVALID_ARGUMENT,
+        "null decode preflight output");
+
+    if (sizeof(size_t) > sizeof(uint32_t))
+    {
+        const size_t too_many =
+            static_cast<size_t>(0xffffffffu) + 1;
+        RequireResult(leo2_encode_batch_preflight_scratch_size(
+            fixture.codec, too_many, &bytes), LEO2_INVALID_ARGUMENT,
+            "oversized encode batch preflight query");
+        RequireResult(leo2_decode_plan_batch_preflight_scratch_size(
+            fixture.plan, too_many, &bytes), LEO2_INVALID_ARGUMENT,
+            "oversized decode batch preflight query");
+    }
+
+    const uint8_t all_original[3] = { 1, 1, 1 };
+    const uint8_t all_recovery[2] = { 1, 1 };
+    leo2_decode_plan* no_loss = NULL;
+    RequireResult(leo2_decode_plan_create(fixture.codec,
+        all_original, all_recovery, &no_loss), LEO2_SUCCESS,
+        "scalable no-loss plan create");
+    RequireResult(leo2_decode_plan_batch_preflight_scratch_size(
+        no_loss, 1024, &bytes), LEO2_SUCCESS,
+        "no-loss preflight scratch query");
+    Require(bytes == 0, "no-loss batch requested preflight scratch");
+    leo2_decode_batch_item junk[9];
+    memset(junk, 0, sizeof(junk));
+    for (size_t i = 0; i < 9; ++i)
+    {
+        junk[i].shard_bytes = 0;
+        junk[i].original = reinterpret_cast<const void* const*>(
+            static_cast<uintptr_t>(1));
+        junk[i].recovery = reinterpret_cast<const void* const*>(
+            static_cast<uintptr_t>(1));
+        junk[i].restored_original = reinterpret_cast<void* const*>(
+            static_cast<uintptr_t>(1));
+        junk[i].scratch = reinterpret_cast<void*>(
+            static_cast<uintptr_t>(1));
+        junk[i].scratch_bytes = 1;
+    }
+    const leo2_result no_loss_result =
+        leo2_decode_plan_execute_batch_with_preflight_scratch(
+            no_loss, junk, 9, NULL, 0);
+    leo2_decode_plan_destroy(no_loss);
+    RequireResult(no_loss_result, LEO2_SUCCESS,
+        "scalable no-loss batch inspected item state");
+}
+
+void TestScalableValidAndAllocationFree(Fixture& fixture)
+{
+    const size_t compatibility_counts[2] = { 1, 8 };
+    for (size_t i = 0; i < 2; ++i)
+    {
+        ScalableEncodeBatch small(fixture, compatibility_counts[i]);
+        RequireResult(small.Execute(), LEO2_SUCCESS,
+            "small scalable encode compatibility path");
+        small.Check();
+        ScalableDecodeBatch small_decode(fixture, small);
+        RequireResult(small_decode.Execute(), LEO2_SUCCESS,
+            "small scalable decode compatibility path");
+        small_decode.Check();
+    }
+
+    ScalableEncodeBatch encoded(fixture, 64);
+    RequireResult(encoded.Execute(), LEO2_SUCCESS,
+        "scalable encode batch");
+    encoded.Check();
+
+    BeginAllocationAudit();
+    const leo2_result encode_result = encoded.Execute();
+    const uint64_t encode_allocations = EndAllocationAudit();
+    RequireResult(encode_result, LEO2_SUCCESS,
+        "allocation-audited scalable encode");
+    Require(encode_allocations == 0,
+        "scalable encode preflight allocated memory");
+
+    ScalableDecodeBatch decoded(fixture, encoded);
+    RequireResult(decoded.Execute(), LEO2_SUCCESS,
+        "scalable decode batch");
+    decoded.Check();
+    BeginAllocationAudit();
+    const leo2_result decode_result = decoded.Execute();
+    const uint64_t decode_allocations = EndAllocationAudit();
+    RequireResult(decode_result, LEO2_SUCCESS,
+        "allocation-audited scalable decode");
+    Require(decode_allocations == 0,
+        "scalable decode preflight allocated memory");
+}
+
+void TestScalableLargeBatch(Fixture& fixture)
+{
+    ScalableEncodeBatch encoded(fixture, 1024);
+    RequireResult(encoded.Execute(), LEO2_SUCCESS,
+        "1024-item scalable encode batch");
+    encoded.Check();
+    ScalableDecodeBatch decoded(fixture, encoded);
+    RequireResult(decoded.Execute(), LEO2_SUCCESS,
+        "1024-item scalable decode batch");
+    decoded.Check();
+}
+
+void TestScalableEncodeConflicts(Fixture& fixture)
+{
+    {
+        ScalableEncodeBatch batch(fixture, 9);
+        batch.original_pointers[7] = fixture.original_b;
+        batch.items[7].original = &batch.original_pointers[7][0];
+        batch.recovery_pointers[0][0] = &fixture.source_b[0][16];
+        const Shards before = fixture.source_b;
+        RequireResult(batch.Execute(), LEO2_OVERLAP,
+            "scalable encode output/input overlap");
+        Require(fixture.source_b == before,
+            "rejected scalable encode changed shared input");
+    }
+    {
+        ScalableEncodeBatch batch(fixture, 9);
+        Bytes collision(64, 0x5a);
+        const Bytes before = collision;
+        batch.recovery_pointers[0][0] = &collision[0];
+        batch.recovery_pointers[1][0] = &collision[16];
+        RequireResult(batch.Execute(), LEO2_OVERLAP,
+            "scalable encode partial output/output overlap");
+        Require(collision == before,
+            "rejected scalable encode changed colliding outputs");
+        batch.recovery_pointers[1][0] = batch.recovery_pointers[0][0];
+        RequireResult(batch.Execute(), LEO2_OVERLAP,
+            "scalable encode duplicate outputs");
+    }
+    {
+        ScalableEncodeBatch batch(fixture, 9);
+        AlignedBuffer shared(std::max(fixture.encode_short,
+            fixture.encode_long) + leo2_scratch_alignment());
+        batch.items[0].scratch = shared.data();
+        batch.items[0].scratch_bytes = fixture.encode_short;
+        batch.items[1].scratch = static_cast<uint8_t*>(shared.data()) +
+            leo2_scratch_alignment();
+        batch.items[1].scratch_bytes = fixture.encode_long;
+        RequireResult(batch.Execute(), LEO2_OVERLAP,
+            "scalable encode partial scratch overlap");
+    }
+    {
+        ScalableEncodeBatch batch(fixture, 9);
+        const std::vector<const void*> before = batch.original_pointers[8];
+        batch.recovery_pointers[0][0] =
+            const_cast<void*>(static_cast<const void*>(
+                batch.original_pointers[8].data()));
+        RequireResult(batch.Execute(), LEO2_OVERLAP,
+            "scalable encode output/metadata overlap");
+        Require(batch.original_pointers[8] == before,
+            "rejected scalable encode changed metadata");
+    }
+    {
+        /* A long immutable range contains a short immutable range, while a
+           later writable range overlaps only the long one.  An adjacent-only
+           sorted check misses this shape; the max-end sweep must reject it. */
+        ScalableEncodeBatch batch(fixture, 9);
+        Bytes backing(64, 0x3c);
+        std::swap(batch.items[0].scratch, batch.items[1].scratch);
+        std::swap(batch.items[0].scratch_bytes,
+            batch.items[1].scratch_bytes);
+        batch.items[0].shard_bytes = Fixture::kLongBytes;
+        batch.items[1].shard_bytes = Fixture::kShortBytes;
+        batch.original_pointers[0][0] = &backing[0];
+        batch.original_pointers[1][0] = &backing[8];
+        batch.recovery_pointers[2][0] = &backing[26];
+        const Bytes before = backing;
+        RequireResult(batch.Execute(), LEO2_OVERLAP,
+            "scalable encode containing-input overlap");
+        Require(backing == before,
+            "containing-input rejection changed bytes");
+    }
+    {
+        ScalableEncodeBatch batch(fixture, 9);
+        Require(batch.preflight_bytes > 1,
+            "scalable encode preflight unexpectedly tiny");
+        RequireResult(leo2_encode_batch_with_preflight_scratch(
+            fixture.codec, &batch.items[0], batch.items.size(), NULL,
+            batch.preflight_bytes), LEO2_INVALID_ARGUMENT,
+            "null scalable encode preflight scratch");
+        RequireResult(leo2_encode_batch_with_preflight_scratch(
+            fixture.codec, &batch.items[0], batch.items.size(),
+            batch.preflight->data(), batch.preflight_bytes - 1),
+            LEO2_SCRATCH_TOO_SMALL,
+            "short scalable encode preflight scratch");
+        AlignedBuffer unaligned(batch.preflight_bytes +
+            leo2_scratch_alignment());
+        RequireResult(leo2_encode_batch_with_preflight_scratch(
+            fixture.codec, &batch.items[0], batch.items.size(),
+            static_cast<uint8_t*>(unaligned.data()) + 1,
+            batch.preflight_bytes), LEO2_BAD_ALIGNMENT,
+            "unaligned scalable encode preflight scratch");
+        const uintptr_t overflowing_workspace =
+            (UINTPTR_MAX - batch.preflight_bytes / 2) &
+            ~(static_cast<uintptr_t>(leo2_scratch_alignment()) - 1);
+        RequireResult(leo2_encode_batch_with_preflight_scratch(
+            fixture.codec, &batch.items[0], batch.items.size(),
+            reinterpret_cast<void*>(overflowing_workspace),
+            batch.preflight_bytes), LEO2_INVALID_ARGUMENT,
+            "overflowing scalable encode preflight span");
+        const uintptr_t overflowing_items = UINTPTR_MAX -
+            sizeof(leo2_encode_batch_item) * 4;
+        RequireResult(leo2_encode_batch_with_preflight_scratch(
+            fixture.codec,
+            reinterpret_cast<const leo2_encode_batch_item*>(
+                overflowing_items),
+            batch.items.size(), batch.preflight->data(),
+            batch.preflight->size()), LEO2_INVALID_ARGUMENT,
+            "overflowing scalable encode item span");
+    }
+    {
+        ScalableEncodeBatch batch(fixture, 9);
+        AlignedBuffer shared(std::max(
+            batch.preflight_bytes, fixture.encode_short));
+        memset(shared.data(), 0x91, shared.size());
+        Bytes before(shared.size());
+        memcpy(&before[0], shared.data(), shared.size());
+        batch.items[0].scratch = shared.data();
+        batch.items[0].scratch_bytes = fixture.encode_short;
+        RequireResult(leo2_encode_batch_with_preflight_scratch(
+            fixture.codec, &batch.items[0], batch.items.size(),
+            shared.data(), batch.preflight_bytes), LEO2_OVERLAP,
+            "scalable encode preflight/item-scratch overlap");
+        Require(memcmp(shared.data(), &before[0], shared.size()) == 0,
+            "workspace-overlap rejection modified workspace metadata");
+    }
+    {
+        ScalableEncodeBatch batch(fixture, 9);
+        AlignedBuffer shared(batch.preflight_bytes);
+        const void** metadata = static_cast<const void**>(shared.data());
+        for (size_t i = 0; i < fixture.original_a.size(); ++i)
+            metadata[i] = fixture.original_a[i];
+        const void* before[3] = {
+            metadata[0], metadata[1], metadata[2]
+        };
+        batch.items[0].original = metadata;
+        RequireResult(leo2_encode_batch_with_preflight_scratch(
+            fixture.codec, &batch.items[0], batch.items.size(),
+            shared.data(), shared.size()), LEO2_OVERLAP,
+            "scalable encode preflight/metadata overlap");
+        Require(metadata[0] == before[0] && metadata[1] == before[1] &&
+                metadata[2] == before[2],
+            "preflight/metadata rejection changed metadata");
+    }
+    {
+        ScalableEncodeBatch batch(fixture, 9);
+        const Bytes first_before = batch.outputs[0][0];
+        Bytes preflight_before(batch.preflight->size());
+        memcpy(&preflight_before[0], batch.preflight->data(),
+            batch.preflight->size());
+        --batch.items[8].scratch_bytes;
+        RequireResult(batch.Execute(), LEO2_SCRATCH_TOO_SMALL,
+            "scalable encode later-item validation failure");
+        Require(batch.outputs[0][0] == first_before,
+            "scalable encode ran an earlier item before rejection");
+        Require(memcmp(batch.preflight->data(), &preflight_before[0],
+                    preflight_before.size()) == 0,
+            "read-only validation failure modified preflight scratch");
+    }
+}
+
+void TestScalableDecodeConflicts(Fixture& fixture)
+{
+    ScalableEncodeBatch encoded(fixture, 9);
+    RequireResult(encoded.Execute(), LEO2_SUCCESS,
+        "decode-conflict source encode");
+    {
+        ScalableDecodeBatch batch(fixture, encoded);
+        batch.original_pointers[7][1] = fixture.original_b[1];
+        batch.original_pointers[7][2] = fixture.original_b[2];
+        batch.restored_pointers[0][0] = &fixture.source_b[1][16];
+        const Shards before = fixture.source_b;
+        RequireResult(batch.Execute(), LEO2_OVERLAP,
+            "scalable decode output/input overlap");
+        Require(fixture.source_b == before,
+            "rejected scalable decode changed input");
+    }
+    {
+        ScalableDecodeBatch batch(fixture, encoded);
+        Bytes collision(64, 0x6d);
+        const Bytes before = collision;
+        batch.restored_pointers[0][0] = &collision[0];
+        batch.restored_pointers[1][0] = &collision[16];
+        RequireResult(batch.Execute(), LEO2_OVERLAP,
+            "scalable decode partial output/output overlap");
+        Require(collision == before,
+            "rejected scalable decode changed outputs");
+    }
+    {
+        ScalableDecodeBatch batch(fixture, encoded);
+        batch.restored_pointers[0][0] =
+            const_cast<void*>(static_cast<const void*>(
+                batch.original_pointers[8].data()));
+        const std::vector<const void*> before = batch.original_pointers[8];
+        RequireResult(batch.Execute(), LEO2_OVERLAP,
+            "scalable decode output/metadata overlap");
+        Require(batch.original_pointers[8] == before,
+            "rejected scalable decode changed metadata");
+    }
+    {
+        ScalableDecodeBatch batch(fixture, encoded);
+        AlignedBuffer shared(batch.preflight_bytes);
+        memset(shared.data(), 0x73, shared.size());
+        Bytes before(shared.size());
+        memcpy(&before[0], shared.data(), shared.size());
+        batch.restored_pointers[0][0] = shared.data();
+        RequireResult(
+            leo2_decode_plan_execute_batch_with_preflight_scratch(
+                fixture.plan, &batch.items[0], batch.items.size(),
+                shared.data(), shared.size()), LEO2_OVERLAP,
+            "scalable decode preflight/output overlap");
+        Require(memcmp(shared.data(), &before[0], shared.size()) == 0,
+            "decode workspace-overlap rejection modified bytes");
+    }
+    {
+        ScalableDecodeBatch batch(fixture, encoded);
+        const Bytes first_before = batch.restored[0];
+        --batch.items[8].scratch_bytes;
+        RequireResult(batch.Execute(), LEO2_SCRATCH_TOO_SMALL,
+            "scalable decode later-item validation failure");
+        Require(batch.restored[0] == first_before,
+            "scalable decode ran an earlier item before rejection");
+    }
+}
+
+void TestConcurrentScalableCalls(Fixture& fixture)
+{
+    static const size_t kCallers = 4;
+    std::atomic<size_t> ready(0);
+    std::atomic<bool> start(false);
+    std::vector<std::string> errors(kCallers);
+    std::vector<std::thread> threads;
+    for (size_t caller = 0; caller < kCallers; ++caller)
+    {
+        threads.push_back(std::thread([&, caller]() {
+            try
+            {
+                ScalableEncodeBatch encoded(fixture, 9);
+                ScalableDecodeBatch decoded(fixture, encoded);
+                ready.fetch_add(1, std::memory_order_release);
+                while (!start.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                for (unsigned repetition = 0; repetition < 4; ++repetition)
+                {
+                    RequireResult(encoded.Execute(), LEO2_SUCCESS,
+                        "concurrent scalable encode");
+                    encoded.Check();
+                    RequireResult(decoded.Execute(), LEO2_SUCCESS,
+                        "concurrent scalable decode");
+                    decoded.Check();
+                }
+            }
+            catch (const std::exception& error)
+            {
+                errors[caller] = error.what();
+            }
+        }));
+    }
+    while (ready.load(std::memory_order_acquire) != kCallers)
+        std::this_thread::yield();
+    start.store(true, std::memory_order_release);
+    for (size_t i = 0; i < threads.size(); ++i)
+        threads[i].join();
+    for (size_t i = 0; i < errors.size(); ++i)
+        Require(errors[i].empty(), errors[i]);
+}
+
+void TestScalableDifferential(Fixture& fixture)
+{
+    uint32_t state = 0x31415926u;
+    for (unsigned trial = 0; trial < 128; ++trial)
+    {
+        ScalableEncodeBatch batch(fixture, 9);
+        Bytes arena(640, 0x4a);
+        for (size_t item = 0; item < batch.items.size(); ++item)
+        {
+            state = state * 1664525u + 1013904223u;
+            const size_t offset = (trial & 1u) == 0
+                ? item * 64 + ((state >> 24) & 7u)
+                : (state >> 24) % 96;
+            batch.recovery_pointers[item][0] = &arena[offset];
+        }
+        const Bytes initial = arena;
+        const leo2_result compatibility = leo2_encode_batch(
+            fixture.codec, &batch.items[0], batch.items.size());
+        const Bytes compatibility_bytes = arena;
+        arena = initial;
+        const leo2_result scalable = batch.Execute();
+        RequireResult(scalable, compatibility,
+            "randomized scalable encode/fallback differential");
+        if (scalable == LEO2_SUCCESS)
+            Require(arena == compatibility_bytes,
+                "randomized scalable encode bytes differ from fallback");
+    }
+
+    ScalableEncodeBatch encoded(fixture, 9);
+    RequireResult(encoded.Execute(), LEO2_SUCCESS,
+        "randomized decode differential source encode");
+    for (unsigned trial = 0; trial < 128; ++trial)
+    {
+        ScalableDecodeBatch batch(fixture, encoded);
+        Bytes arena(640, 0x6b);
+        for (size_t item = 0; item < batch.items.size(); ++item)
+        {
+            state = state * 1664525u + 1013904223u;
+            const size_t offset = (trial & 1u) == 0
+                ? item * 64 + ((state >> 24) & 7u)
+                : (state >> 24) % 96;
+            batch.restored_pointers[item][0] = &arena[offset];
+        }
+        const Bytes initial = arena;
+        const leo2_result compatibility =
+            leo2_decode_plan_execute_batch(
+                fixture.plan, &batch.items[0], batch.items.size());
+        const Bytes compatibility_bytes = arena;
+        arena = initial;
+        const leo2_result scalable = batch.Execute();
+        RequireResult(scalable, compatibility,
+            "randomized scalable decode/fallback differential");
+        if (scalable == LEO2_SUCCESS)
+            Require(arena == compatibility_bytes,
+                "randomized scalable decode bytes differ from fallback");
+    }
+}
+
 void Run(uint32_t thread_count)
 {
     Fixture fixture(thread_count);
@@ -706,6 +1415,14 @@ void Run(uint32_t thread_count)
     TestValidSharedInputs(fixture);
     TestLargeBatchCount(fixture);
     TestNoLossBatchIsTrueNoOp(fixture);
+    TestScalableQueriesAndNoOp(fixture);
+    TestScalableValidAndAllocationFree(fixture);
+    TestScalableEncodeConflicts(fixture);
+    TestScalableDecodeConflicts(fixture);
+    TestScalableDifferential(fixture);
+    TestScalableLargeBatch(fixture);
+    if (thread_count > 1)
+        TestConcurrentScalableCalls(fixture);
 }
 
 } // namespace
@@ -719,6 +1436,8 @@ int main()
         std::cout << "leopard2 batch aliasing passed: contexts=2 "
                   << "valid_shared=4 conflict_checks=20 "
                   << "large_encode_items=514 large_decode_items=514"
+                  << " scalable_batch_sizes=9,64,1024"
+                  << " allocation_audit=clean concurrent_scalable_calls=32"
                   << std::endl;
         return 0;
     }
