@@ -118,7 +118,7 @@ elseif(CMAKE_CXX_COMPILER_ID STREQUAL "PGI")
     endif(CXX_FLAG_O0)
 
     if(CXX_FLAG_O3)
-        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_DEBUG} -O3")
+        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
     endif(CXX_FLAG_O3)
 
     if(CXX_FLAG_MINFORM_INFORM)
@@ -140,7 +140,7 @@ else()
     endif(CXX_FLAG_O0)
 
     if(CXX_FLAG_O3)
-        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_DEBUG} -O3")
+        set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
     endif(CXX_FLAG_O3)
 
     if(CXX_FLAG_Wall)
@@ -494,6 +494,17 @@ if(LEO2_BUILD_TESTS)
         COMMAND leopard2_concurrent_initialization_test)
     set_tests_properties(leopard2_concurrent_initialization PROPERTIES
         ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
+
+    add_test(NAME leopard2_release_flag_isolation
+        COMMAND ${CMAKE_COMMAND}
+            -DLEO2_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLEO2_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/release_flag_isolation
+            -DLEO2_C_COMPILER=${CMAKE_C_COMPILER}
+            -DLEO2_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+            -DLEO2_GENERATOR=${CMAKE_GENERATOR}
+            -DLEO2_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}
+            -DLEO2_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_release_flags.cmake)
 
     # The portable archive audit is useful for reduced-field archives too, so
     # keep it outside the dual-field-only exhaustive-test graph below.
