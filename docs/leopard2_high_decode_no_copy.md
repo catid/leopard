@@ -133,6 +133,25 @@ because a one-size special case was not worth the extra policy surface.
 Scalar, SSSE3, and GF16 candidate implementations were removed rather than
 retained as unqualified symmetry code.  Algorithm 4 remains unchanged.
 
+After that trim, the production archive grew from 599,646 to 610,672 bytes
+(11,026 bytes, 1.84%).  Summed object text grew from 401,036 to 410,108 bytes
+(9,072 bytes, 2.26%); 5,784 bytes are the independent startup KAT/reference
+logic, 2,672 bytes are the AVX2 operation, and 616 bytes are the selector and
+Algorithm 5 integration.  Static data/BSS tables did not grow materially.
+The production archive SHA-256 for this comparison was
+`44e5a321e3263a0dc250cb3a6c6d595bfc7cefaf4342995407168d0c376ea65c`;
+the immediate control at `271801c` was
+`70bb8bdeed10f5999bac734eab0686ecf1a4489a0aa3e76bfe38ac6e72378830`.
+
+The added AVX2 KAT is a one-time qualification cost.  Three rounds of 102
+fresh processes per path measured `leo_init` at approximately 13.20 ms for the
+control and 13.40 ms for the candidate: control/candidate was 0.9854 with a
+round-level 95% interval of [0.9834, 0.9875], about 196 microseconds or 1.48%
+slower.  The subsequent AUTO context creation remained 410--420 ns.  The SMT
+sibling recorded zero busy jiffies in every startup round.  The accepted
+tradeoff is bounded to initialization; encode/decode hot paths allocate
+nothing and do not repeat backend qualification.
+
 For qualified GF8 K=240, R=16 with original zero missing, the incomplete
 parity block and incomplete first message block both own exact-pruned input
 plans, so their complete T=16 workspaces remain staged.  The other 14 full
