@@ -16,7 +16,9 @@
 #include "Leopard2Plan.h"
 #include "LeopardFF8.h"
 #include "LeopardFF16.h"
+#include "direct_oracle.h"
 #include "leopard.h"
+#include "leopard2.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -34,6 +36,11 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#if defined(__linux__)
+#include <sched.h>
+#include <unistd.h>
+#endif
 
 #if defined(_MSC_VER)
 #include <malloc.h>
@@ -78,7 +85,7 @@ struct Options
     std::string requested_text;
     leo2_backend backend;
     unsigned iterations;
-    unsigned samples;
+    unsigned rounds;
     unsigned warmups;
     unsigned setup_iterations;
     uint64_t memory_mib;
@@ -94,7 +101,7 @@ struct Options
         , requested_text("0,7,15")
         , backend(LEO2_BACKEND_AUTO)
         , iterations(32)
-        , samples(7)
+        , rounds(3)
         , warmups(2)
         , setup_iterations(32)
         , memory_mib(512)
@@ -113,6 +120,16 @@ struct Summary
     double minimum;
     double maximum;
     std::vector<double> samples;
+};
+
+struct AbbaRound
+{
+    Form order[4];
+    double observations[4];
+    double prefix_median;
+    double call_local_median;
+    double log_contrast;
+    double candidate_gain_percent;
 };
 
 void fail(const std::string& message)
@@ -225,6 +242,35 @@ std::string json_escape(const char* text)
     return output.str();
 }
 
+std::vector<unsigned> runtime_affinity()
+{
+    std::vector<unsigned> result;
+#if defined(__linux__)
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    if (sched_getaffinity(0, sizeof(set), &set) != 0)
+        fail("cannot read runtime CPU affinity");
+    for (unsigned cpu = 0; cpu < CPU_SETSIZE; ++cpu)
+        if (CPU_ISSET(cpu, &set))
+            result.push_back(cpu);
+#endif
+    return result;
+}
+
+std::string runtime_executable_path()
+{
+#if defined(__linux__)
+    std::vector<char> buffer(4096, 0);
+    const ssize_t length = readlink("/proc/self/exe", &buffer[0], buffer.size() - 1);
+    if (length <= 0 || static_cast<size_t>(length) >= buffer.size())
+        fail("cannot resolve runtime executable");
+    buffer[static_cast<size_t>(length)] = '\0';
+    return std::string(&buffer[0]);
+#else
+    return std::string();
+#endif
+}
+
 void usage(const char* executable)
 {
     std::cerr
@@ -236,7 +282,7 @@ void usage(const char* executable)
         << "  --requested-parity MASK   comma-separated indices/ranges\n"
         << "  --backend auto|scalar|ssse3|avx2\n"
         << "  --iterations N            calls per timing sample\n"
-        << "  --samples N               odd retained sample count\n"
+        << "  --rounds 3                independent ABBA/BAAB/ABBA rounds\n"
         << "  --warmups N\n"
         << "  --setup-iterations N\n"
         << "  --reuse N[,N...]          setup amortization points\n"
@@ -310,8 +356,8 @@ Options parse_options(int argc, char** argv)
             options.backend = parse_backend(value);
         else if (argument == "--iterations")
             options.iterations = parse_unsigned32(value, "iterations");
-        else if (argument == "--samples")
-            options.samples = parse_unsigned32(value, "samples");
+        else if (argument == "--rounds" || argument == "--samples")
+            options.rounds = parse_unsigned32(value, "rounds");
         else if (argument == "--warmups")
             options.warmups = parse_unsigned32(value, "warmups");
         else if (argument == "--setup-iterations")
@@ -372,8 +418,8 @@ Geometry validate_options(const Options& options)
     if (options.field_bits == 16 && (options.shard_bytes & 1) != 0)
         fail("raw GF16 transform measurements require an even byte count");
     if (options.iterations == 0 || options.iterations > 1000000 ||
-        options.samples < 3 || options.samples > 101 ||
-        (options.samples & 1) == 0 || options.warmups > 1000 ||
+        options.rounds != 3 ||
+        options.warmups > 1000 ||
         options.setup_iterations == 0 || options.setup_iterations > 1000000 ||
         options.memory_mib == 0 || options.memory_mib > 1048576)
         fail("invalid timing or memory bounds");
@@ -462,30 +508,48 @@ void* aligned_allocate(size_t bytes)
 class AlignedBuffer
 {
 public:
-    AlignedBuffer() : data_(NULL), size_(0) {}
-    ~AlignedBuffer() { aligned_free(data_); }
+    AlignedBuffer() : allocation_(NULL), data_(NULL), size_(0) {}
+    ~AlignedBuffer() { aligned_free(allocation_); }
 
     void reset(size_t bytes)
     {
-        aligned_free(data_);
+        aligned_free(allocation_);
+        allocation_ = NULL;
         data_ = NULL;
         size_ = 0;
         if (bytes == 0)
             return;
-        data_ = aligned_allocate(bytes);
-        if (!data_)
+        if (bytes > std::numeric_limits<size_t>::max() - 128u)
+            fail("guarded allocation overflows size_t");
+        allocation_ = aligned_allocate(bytes + 128u);
+        if (!allocation_)
             throw std::bad_alloc();
+        data_ = static_cast<uint8_t*>(allocation_) + 64u;
         size_ = bytes;
+        std::memset(allocation_, 0xd3, 64u);
         std::memset(data_, 0, bytes);
+        std::memset(static_cast<uint8_t*>(data_) + bytes, 0xd3, 64u);
     }
 
     uint8_t* bytes() { return static_cast<uint8_t*>(data_); }
     const uint8_t* bytes() const { return static_cast<const uint8_t*>(data_); }
     size_t size() const { return size_; }
 
+    void verify_guards(const char* name) const
+    {
+        if (!allocation_)
+            return;
+        const uint8_t* prefix = static_cast<const uint8_t*>(allocation_);
+        const uint8_t* suffix = static_cast<const uint8_t*>(data_) + size_;
+        for (size_t i = 0; i < 64u; ++i)
+            if (prefix[i] != 0xd3 || suffix[i] != 0xd3)
+                fail(std::string(name) + " allocation guard changed");
+    }
+
 private:
     AlignedBuffer(const AlignedBuffer&);
     AlignedBuffer& operator=(const AlignedBuffer&);
+    void* allocation_;
     void* data_;
     size_t size_;
 };
@@ -507,6 +571,146 @@ public:
 private:
     uint64_t state_;
 };
+
+class Sha256
+{
+public:
+    Sha256() : total_bytes_(0), buffered_(0)
+    {
+        state_[0] = UINT32_C(0x6a09e667);
+        state_[1] = UINT32_C(0xbb67ae85);
+        state_[2] = UINT32_C(0x3c6ef372);
+        state_[3] = UINT32_C(0xa54ff53a);
+        state_[4] = UINT32_C(0x510e527f);
+        state_[5] = UINT32_C(0x9b05688c);
+        state_[6] = UINT32_C(0x1f83d9ab);
+        state_[7] = UINT32_C(0x5be0cd19);
+    }
+
+    void update(const void* input, size_t bytes)
+    {
+        const uint8_t* data = static_cast<const uint8_t*>(input);
+        total_bytes_ += bytes;
+        while (bytes != 0)
+        {
+            const size_t count = std::min<size_t>(bytes, 64u - buffered_);
+            std::memcpy(block_ + buffered_, data, count);
+            buffered_ += count;
+            data += count;
+            bytes -= count;
+            if (buffered_ == 64u)
+            {
+                transform(block_);
+                buffered_ = 0;
+            }
+        }
+    }
+
+    std::string finish()
+    {
+        const uint64_t bit_count = total_bytes_ * UINT64_C(8);
+        block_[buffered_++] = 0x80;
+        if (buffered_ > 56u)
+        {
+            std::memset(block_ + buffered_, 0, 64u - buffered_);
+            transform(block_);
+            buffered_ = 0;
+        }
+        std::memset(block_ + buffered_, 0, 56u - buffered_);
+        for (unsigned i = 0; i < 8; ++i)
+            block_[56u + i] = static_cast<uint8_t>(bit_count >> (56u - 8u * i));
+        transform(block_);
+        std::ostringstream text;
+        text << std::hex << std::setfill('0');
+        for (unsigned i = 0; i < 8; ++i)
+            text << std::setw(8) << state_[i];
+        return text.str();
+    }
+
+private:
+    static uint32_t rotate_right(uint32_t value, unsigned count)
+    {
+        return (value >> count) | (value << (32u - count));
+    }
+
+    void transform(const uint8_t* input)
+    {
+        static const uint32_t constants[64] = {
+            0x428a2f98u,0x71374491u,0xb5c0fbcfu,0xe9b5dba5u,
+            0x3956c25bu,0x59f111f1u,0x923f82a4u,0xab1c5ed5u,
+            0xd807aa98u,0x12835b01u,0x243185beu,0x550c7dc3u,
+            0x72be5d74u,0x80deb1feu,0x9bdc06a7u,0xc19bf174u,
+            0xe49b69c1u,0xefbe4786u,0x0fc19dc6u,0x240ca1ccu,
+            0x2de92c6fu,0x4a7484aau,0x5cb0a9dcu,0x76f988dau,
+            0x983e5152u,0xa831c66du,0xb00327c8u,0xbf597fc7u,
+            0xc6e00bf3u,0xd5a79147u,0x06ca6351u,0x14292967u,
+            0x27b70a85u,0x2e1b2138u,0x4d2c6dfcu,0x53380d13u,
+            0x650a7354u,0x766a0abbu,0x81c2c92eu,0x92722c85u,
+            0xa2bfe8a1u,0xa81a664bu,0xc24b8b70u,0xc76c51a3u,
+            0xd192e819u,0xd6990624u,0xf40e3585u,0x106aa070u,
+            0x19a4c116u,0x1e376c08u,0x2748774cu,0x34b0bcb5u,
+            0x391c0cb3u,0x4ed8aa4au,0x5b9cca4fu,0x682e6ff3u,
+            0x748f82eeu,0x78a5636fu,0x84c87814u,0x8cc70208u,
+            0x90befffau,0xa4506cebu,0xbef9a3f7u,0xc67178f2u
+        };
+        uint32_t words[64];
+        for (unsigned i = 0; i < 16; ++i)
+            words[i] = (static_cast<uint32_t>(input[i * 4]) << 24) |
+                (static_cast<uint32_t>(input[i * 4 + 1]) << 16) |
+                (static_cast<uint32_t>(input[i * 4 + 2]) << 8) |
+                static_cast<uint32_t>(input[i * 4 + 3]);
+        for (unsigned i = 16; i < 64; ++i)
+        {
+            const uint32_t s0 = rotate_right(words[i - 15], 7) ^
+                rotate_right(words[i - 15], 18) ^ (words[i - 15] >> 3);
+            const uint32_t s1 = rotate_right(words[i - 2], 17) ^
+                rotate_right(words[i - 2], 19) ^ (words[i - 2] >> 10);
+            words[i] = words[i - 16] + s0 + words[i - 7] + s1;
+        }
+        uint32_t a = state_[0], b = state_[1], c = state_[2], d = state_[3];
+        uint32_t e = state_[4], f = state_[5], g = state_[6], h = state_[7];
+        for (unsigned i = 0; i < 64; ++i)
+        {
+            const uint32_t upper = rotate_right(e, 6) ^ rotate_right(e, 11) ^
+                rotate_right(e, 25);
+            const uint32_t choose = (e & f) ^ ((~e) & g);
+            const uint32_t first = h + upper + choose + constants[i] + words[i];
+            const uint32_t lower = rotate_right(a, 2) ^ rotate_right(a, 13) ^
+                rotate_right(a, 22);
+            const uint32_t majority = (a & b) ^ (a & c) ^ (b & c);
+            const uint32_t second = lower + majority;
+            h = g; g = f; f = e; e = d + first;
+            d = c; c = b; b = a; a = first + second;
+        }
+        state_[0] += a; state_[1] += b; state_[2] += c; state_[3] += d;
+        state_[4] += e; state_[5] += f; state_[6] += g; state_[7] += h;
+    }
+
+    uint32_t state_[8];
+    uint64_t total_bytes_;
+    uint8_t block_[64];
+    size_t buffered_;
+};
+
+std::string sha256(const void* data, size_t bytes)
+{
+    Sha256 hash;
+    hash.update(data, bytes);
+    return hash.finish();
+}
+
+void verify_sha256_implementation()
+{
+    static const char empty[] = "";
+    static const char abc[] = "abc";
+    if (sha256(empty, 0) !=
+            "e3b0c44298fc1c149afbf4c8996fb924"
+            "27ae41e4649b934ca495991b7852b855" ||
+        sha256(abc, 3) !=
+            "ba7816bf8f01cfea414140de5dae2223"
+            "b00361a396177a9cb410ff61f20015ad")
+        fail("internal SHA-256 known-answer test failed");
+}
 
 struct PlanStorage
 {
@@ -653,6 +857,7 @@ struct Buffers
     AlignedBuffer exact_work_storage;
     AlignedBuffer prefix_output_storage;
     AlignedBuffer exact_output_storage;
+    std::vector<uint8_t> original_snapshot;
     std::vector<const void*> original;
     std::vector<void*> prefix_work;
     std::vector<void*> exact_work;
@@ -666,10 +871,8 @@ struct Buffers
         const size_t original_bytes = checked_size(options.k, shard_bytes, "original");
         const size_t work_bytes = checked_size(
             static_cast<uint64_t>(geometry.side) * 2u, shard_bytes, "work");
-        const size_t requested_count = static_cast<size_t>(std::count(
-            requested.begin(), requested.end(), static_cast<uint8_t>(1)));
         const size_t output_bytes = options.profile == ProfileLow
-            ? checked_size(requested_count, shard_bytes, "requested output") : 0;
+            ? checked_size(options.r, shard_bytes, "parity output") : 0;
         uint64_t total = static_cast<uint64_t>(original_bytes);
         total = checked_add(total, static_cast<uint64_t>(work_bytes), "memory total");
         total = checked_add(total, static_cast<uint64_t>(work_bytes), "memory total");
@@ -684,6 +887,11 @@ struct Buffers
         exact_work_storage.reset(work_bytes);
         prefix_output_storage.reset(output_bytes);
         exact_output_storage.reset(output_bytes);
+        if (output_bytes != 0)
+        {
+            std::memset(prefix_output_storage.bytes(), 0xa5, output_bytes);
+            std::memset(exact_output_storage.bytes(), 0xa5, output_bytes);
+        }
         original.resize(options.k);
         prefix_work.resize(static_cast<size_t>(geometry.side) * 2u);
         exact_work.resize(static_cast<size_t>(geometry.side) * 2u);
@@ -693,6 +901,8 @@ struct Buffers
         Random random(options.seed);
         for (size_t i = 0; i < original_bytes; ++i)
             original_storage.bytes()[i] = static_cast<uint8_t>(random.next() >> 56);
+        original_snapshot.assign(
+            original_storage.bytes(), original_storage.bytes() + original_bytes);
         for (unsigned i = 0; i < options.k; ++i)
             original[i] = original_storage.bytes() + static_cast<size_t>(i) * shard_bytes;
         for (unsigned i = 0; i < geometry.side * 2u; ++i)
@@ -702,7 +912,6 @@ struct Buffers
             exact_work[i] = exact_work_storage.bytes() +
                 static_cast<size_t>(i) * shard_bytes;
         }
-        size_t output_index = 0;
         for (unsigned i = 0; i < options.r; ++i)
         {
             if (!requested[i])
@@ -710,11 +919,10 @@ struct Buffers
             if (options.profile == ProfileLow)
             {
                 prefix_recovery[i] = prefix_output_storage.bytes() +
-                    output_index * shard_bytes;
+                    static_cast<size_t>(i) * shard_bytes;
                 exact_recovery[i] = exact_output_storage.bytes() +
-                    output_index * shard_bytes;
+                    static_cast<size_t>(i) * shard_bytes;
             }
-            ++output_index;
         }
     }
 };
@@ -766,13 +974,251 @@ const uint8_t* output_pointer(const Options& options, const Geometry& geometry,
             ? buffers.exact_work : buffers.prefix_work;
         return static_cast<const uint8_t*>(work[recovery]);
     }
-    size_t output_index = 0;
-    for (unsigned i = 0; i < recovery; ++i)
-        output_index += requested[i] != 0;
     const AlignedBuffer& storage = exact
         ? buffers.exact_output_storage : buffers.prefix_output_storage;
     (void)geometry;
-    return storage.bytes() + output_index * static_cast<size_t>(options.shard_bytes);
+    (void)requested;
+    return storage.bytes() + static_cast<size_t>(recovery) *
+        static_cast<size_t>(options.shard_bytes);
+}
+
+void verify_buffer_integrity(const Options& options,
+    const std::vector<uint8_t>& requested, const Buffers& buffers)
+{
+    if (buffers.original_snapshot.size() != buffers.original_storage.size() ||
+        std::memcmp(&buffers.original_snapshot[0], buffers.original_storage.bytes(),
+            buffers.original_snapshot.size()) != 0)
+        fail("encoder modified immutable source input");
+    buffers.original_storage.verify_guards("original");
+    buffers.prefix_work_storage.verify_guards("prefix work");
+    buffers.exact_work_storage.verify_guards("exact work");
+    buffers.prefix_output_storage.verify_guards("prefix output");
+    buffers.exact_output_storage.verify_guards("exact output");
+    if (options.profile != ProfileLow)
+        return;
+    const size_t bytes = static_cast<size_t>(options.shard_bytes);
+    for (unsigned recovery = 0; recovery < options.r; ++recovery)
+    {
+        if (requested[recovery])
+            continue;
+        const size_t offset = static_cast<size_t>(recovery) * bytes;
+        for (size_t i = 0; i < bytes; ++i)
+            if (buffers.prefix_output_storage.bytes()[offset + i] != 0xa5 ||
+                buffers.exact_output_storage.bytes()[offset + i] != 0xa5)
+                fail("encoder modified an unrequested low-profile parity canary");
+    }
+}
+
+typedef leopard2_test::Element OracleElement;
+typedef std::vector<std::vector<OracleElement> > OracleRows;
+
+OracleElement read_symbol(
+    const uint8_t* shard, unsigned field_bits, size_t bytes, size_t symbol)
+{
+    if (field_bits == 8)
+        return shard[symbol];
+    const size_t total_symbols = bytes / 2u;
+    const size_t tile_symbol = symbol & 31u;
+    const size_t tile_first = symbol - tile_symbol;
+    const size_t tile_symbols = std::min<size_t>(32u, total_symbols - tile_first);
+    const size_t tile_byte = tile_first * 2u;
+    return static_cast<OracleElement>(shard[tile_byte + tile_symbol] |
+        (static_cast<unsigned>(shard[tile_byte + tile_symbols + tile_symbol]) << 8));
+}
+
+OracleRows independent_generator_rows(const Options& options,
+    const std::vector<uint8_t>& requested,
+    const leopard2_test::BinaryField& field)
+{
+    const leopard2_test::ProfileLayout layout =
+        leopard2_test::make_profile_layout(
+            options.profile == ProfileHigh
+                ? leopard2_test::kLegacyHigh : leopard2_test::kLow,
+            options.k, options.r);
+    if (layout.parent_size > field.order())
+        fail("oracle profile exceeds field order");
+    std::vector<OracleElement> weights(options.k, 0);
+    for (unsigned original = 0; original < options.k; ++original)
+    {
+        const OracleElement x = static_cast<OracleElement>(
+            layout.systematic_coordinates[original]);
+        OracleElement denominator = 1;
+        for (unsigned other = 0; other < layout.parent_dimension; ++other)
+        {
+            const OracleElement y = static_cast<OracleElement>(
+                layout.systematic_coordinates[other]);
+            if (x != y)
+                denominator = field.multiply(denominator, field.add(x, y));
+        }
+        weights[original] = field.inverse(denominator);
+    }
+    OracleRows rows;
+    for (unsigned parity = 0; parity < options.r; ++parity)
+    {
+        if (!requested[parity])
+            continue;
+        const OracleElement point = static_cast<OracleElement>(
+            layout.parity_coordinates[parity]);
+        OracleElement vanishing = 1;
+        for (unsigned systematic = 0;
+             systematic < layout.parent_dimension; ++systematic)
+        {
+            vanishing = field.multiply(vanishing, field.add(point,
+                static_cast<OracleElement>(
+                    layout.systematic_coordinates[systematic])));
+        }
+        rows.push_back(std::vector<OracleElement>(options.k, 0));
+        for (unsigned original = 0; original < options.k; ++original)
+        {
+            const OracleElement difference = field.add(point,
+                static_cast<OracleElement>(
+                    layout.systematic_coordinates[original]));
+            rows.back()[original] = field.multiply(
+                field.multiply(vanishing, field.inverse(difference)),
+                weights[original]);
+        }
+    }
+    return rows;
+}
+
+struct CorrectnessResult
+{
+    unsigned direct_generator_symbols;
+    std::string direct_generator_sha256;
+    std::string input_sha256;
+    std::string parity_sha256;
+    std::string recovery_source_sha256;
+    std::string recovered_original_sha256;
+};
+
+void require_leo2(leo2_result result, const char* operation)
+{
+    if (result == LEO2_SUCCESS)
+        return;
+    std::ostringstream stream;
+    stream << operation << ": " << leo2_result_string(result);
+    fail(stream.str());
+}
+
+CorrectnessResult verify_independent_generator_and_recovery(
+    const Options& options, const Geometry& geometry,
+    const std::vector<uint8_t>& requested, Buffers& buffers)
+{
+    const leopard2_test::BinaryField field = options.field_bits == 8
+        ? leopard2_test::make_legacy_gf8()
+        : leopard2_test::make_legacy_gf16();
+    const OracleRows rows = independent_generator_rows(options, requested, field);
+    const size_t bytes = static_cast<size_t>(options.shard_bytes);
+    const size_t symbols = options.field_bits == 8 ? bytes : bytes / 2u;
+    const size_t sample_count = std::min<size_t>(symbols, 8u);
+    Sha256 direct_digest;
+    unsigned row_index = 0;
+    unsigned checked = 0;
+    for (unsigned parity = 0; parity < options.r; ++parity)
+    {
+        if (!requested[parity])
+            continue;
+        const uint8_t* actual = output_pointer(
+            options, geometry, requested, buffers, parity, true);
+        for (size_t sample = 0; sample < sample_count; ++sample)
+        {
+            const size_t symbol = sample_count == 1 ? 0 :
+                sample * (symbols - 1u) / (sample_count - 1u);
+            OracleElement expected = 0;
+            for (unsigned original = 0; original < options.k; ++original)
+            {
+                expected ^= field.multiply(rows[row_index][original],
+                    read_symbol(static_cast<const uint8_t*>(buffers.original[original]),
+                        options.field_bits, bytes, symbol));
+            }
+            if (read_symbol(actual, options.field_bits, bytes, symbol) != expected)
+                fail("exact parity differs from independent direct generator");
+            const uint8_t encoded[2] = {
+                static_cast<uint8_t>(expected),
+                static_cast<uint8_t>(expected >> 8)
+            };
+            direct_digest.update(encoded, options.field_bits == 8 ? 1u : 2u);
+            ++checked;
+        }
+        ++row_index;
+    }
+
+    Sha256 input_digest;
+    input_digest.update(buffers.original_storage.bytes(),
+        buffers.original_storage.size());
+    Sha256 parity_digest;
+    for (unsigned parity = 0; parity < options.r; ++parity)
+        if (requested[parity])
+            parity_digest.update(output_pointer(
+                options, geometry, requested, buffers, parity, true), bytes);
+
+    unsigned selected_parity = 0;
+    while (selected_parity < options.r && !requested[selected_parity])
+        ++selected_parity;
+    if (selected_parity == options.r)
+        fail("no requested parity is available for recovery");
+    const unsigned missing = options.k / 2u;
+    leo2_context_options context_options = {};
+    context_options.struct_size = sizeof(context_options);
+    context_options.backend = options.backend;
+    context_options.thread_count = 1;
+    leo2_context* context = NULL;
+    require_leo2(leo2_context_create(&context_options, &context), "context create");
+    leo2_codec_options codec_options = {};
+    codec_options.struct_size = sizeof(codec_options);
+    codec_options.shard_layout = LEO2_SHARD_LAYOUT_NATIVE_V1;
+    leo2_codec* codec = NULL;
+    require_leo2(leo2_codec_create(context, options.k, options.r,
+        options.profile == ProfileHigh
+            ? LEO2_PROFILE_LEGACY_HIGH_V1 : LEO2_PROFILE_LOW_V1,
+        options.field_bits == 8 ? LEO2_FIELD_GF8 : LEO2_FIELD_GF16,
+        &codec_options, &codec), "codec create");
+    std::vector<uint8_t> original_present(options.k, 1);
+    std::vector<uint8_t> recovery_present(options.r, 0);
+    original_present[missing] = 0;
+    recovery_present[selected_parity] = 1;
+    leo2_decode_plan* decode_plan = NULL;
+    require_leo2(leo2_decode_plan_create(codec, &original_present[0],
+        &recovery_present[0], &decode_plan), "decode plan create");
+    size_t scratch_bytes = 0;
+    require_leo2(leo2_decode_plan_scratch_size(
+        decode_plan, options.shard_bytes, &scratch_bytes), "decode scratch query");
+    AlignedBuffer scratch;
+    AlignedBuffer restored;
+    scratch.reset(scratch_bytes);
+    restored.reset(bytes);
+    std::memset(restored.bytes(), 0x6c, bytes);
+    std::vector<const void*> decode_original = buffers.original;
+    std::vector<const void*> decode_recovery(options.r, static_cast<const void*>(NULL));
+    std::vector<void*> restored_original(options.k, static_cast<void*>(NULL));
+    decode_original[missing] = NULL;
+    decode_recovery[selected_parity] = output_pointer(
+        options, geometry, requested, buffers, selected_parity, true);
+    restored_original[missing] = restored.bytes();
+    require_leo2(leo2_decode_plan_execute(decode_plan, options.shard_bytes,
+        &decode_original[0], &decode_recovery[0], &restored_original[0],
+        scratch.bytes(), scratch.size()), "decode execute");
+    if (std::memcmp(restored.bytes(), buffers.original[missing], bytes) != 0)
+        fail("candidate parity did not recover the missing original");
+    scratch.verify_guards("decode scratch");
+    restored.verify_guards("restored original");
+    const std::string restored_digest = sha256(restored.bytes(), bytes);
+    const std::string source_digest = sha256(buffers.original[missing], bytes);
+    if (restored_digest != source_digest)
+        fail("recovered-original SHA-256 differs from source");
+    leo2_decode_plan_destroy(decode_plan);
+    leo2_codec_destroy(codec);
+    leo2_context_destroy(context);
+    verify_buffer_integrity(options, requested, buffers);
+
+    CorrectnessResult result;
+    result.direct_generator_symbols = checked;
+    result.direct_generator_sha256 = direct_digest.finish();
+    result.input_sha256 = input_digest.finish();
+    result.parity_sha256 = parity_digest.finish();
+    result.recovery_source_sha256 = source_digest;
+    result.recovered_original_sha256 = restored_digest;
+    return result;
 }
 
 uint64_t verify_and_digest(const Options& options, const Geometry& geometry,
@@ -803,7 +1249,12 @@ double median(std::vector<double> values)
 {
     const size_t middle = values.size() / 2;
     std::nth_element(values.begin(), values.begin() + middle, values.end());
-    return values[middle];
+    const double upper = values[middle];
+    if ((values.size() & 1u) != 0)
+        return upper;
+    std::nth_element(
+        values.begin(), values.begin() + middle - 1, values.begin() + middle);
+    return (values[middle - 1] + upper) * 0.5;
 }
 
 Summary summarize(const std::vector<double>& samples)
@@ -852,32 +1303,80 @@ void run(const leopard::backend::Ops& ops, const Options& options,
     execute<Field>(ops, options, geometry, requested, buffers, plan, true);
     const uint64_t digest = verify_and_digest(
         options, geometry, requested, buffers);
+    verify_buffer_integrity(options, requested, buffers);
+    const CorrectnessResult correctness =
+        verify_independent_generator_and_recovery(
+            options, geometry, requested, buffers);
 
     for (unsigned warmup = 0; warmup < options.warmups; ++warmup)
     {
-        for (unsigned form = 0; form < FormCount; ++form)
-        {
-            if (form == FormExactCallLocal)
-                compile_plan<Field>(options, geometry, requested, plan, false);
-            execute<Field>(ops, options, geometry, requested, buffers, plan,
-                form != FormPrefix);
-        }
+        time_form<Field>(FormPrefix, ops, options, geometry,
+            requested, buffers, plan);
+        time_form<Field>(FormExactCallLocal, ops, options, geometry,
+            requested, buffers, plan);
+        time_form<Field>(FormExactPrepared, ops, options, geometry,
+            requested, buffers, plan);
     }
 
-    std::vector<double> form_samples[FormCount];
-    for (unsigned sample = 0; sample < options.samples; ++sample)
+    // Promotion inference uses only the setup-inclusive pair.  Each independent
+    // round is drift-balanced, alternating A/B/B/A with B/A/A/B; prepared
+    // execution is measured later in a separate diagnostic block and cannot
+    // influence the primary comparison.
+    std::vector<AbbaRound> rounds;
+    std::vector<double> prefix_round_medians;
+    std::vector<double> call_local_round_medians;
+    std::vector<double> round_gains;
+    rounds.reserve(options.rounds);
+    for (unsigned round_index = 0; round_index < options.rounds; ++round_index)
     {
-        for (unsigned offset = 0; offset < FormCount; ++offset)
+        AbbaRound round;
+        if ((round_index & 1u) == 0)
         {
-            const Form form = static_cast<Form>((sample + offset) % FormCount);
-            form_samples[form].push_back(time_form<Field>(
-                form, ops, options, geometry, requested, buffers, plan));
+            round.order[0] = FormPrefix;
+            round.order[1] = FormExactCallLocal;
+            round.order[2] = FormExactCallLocal;
+            round.order[3] = FormPrefix;
         }
+        else
+        {
+            round.order[0] = FormExactCallLocal;
+            round.order[1] = FormPrefix;
+            round.order[2] = FormPrefix;
+            round.order[3] = FormExactCallLocal;
+        }
+        std::vector<double> prefix_values;
+        std::vector<double> candidate_values;
+        for (unsigned position = 0; position < 4; ++position)
+        {
+            round.observations[position] = time_form<Field>(
+                round.order[position], ops, options, geometry,
+                requested, buffers, plan);
+            if (round.order[position] == FormPrefix)
+                prefix_values.push_back(round.observations[position]);
+            else
+                candidate_values.push_back(round.observations[position]);
+        }
+        round.prefix_median = median(prefix_values);
+        round.call_local_median = median(candidate_values);
+        round.log_contrast = 0.5 * (
+            std::log(prefix_values[0]) + std::log(prefix_values[1]) -
+            std::log(candidate_values[0]) - std::log(candidate_values[1]));
+        round.candidate_gain_percent =
+            (std::exp(round.log_contrast) - 1.0) * 100.0;
+        rounds.push_back(round);
+        prefix_round_medians.push_back(round.prefix_median);
+        call_local_round_medians.push_back(round.call_local_median);
+        round_gains.push_back(round.candidate_gain_percent);
     }
+
+    std::vector<double> prepared_samples;
+    for (unsigned round_index = 0; round_index < options.rounds; ++round_index)
+        prepared_samples.push_back(time_form<Field>(FormExactPrepared,
+            ops, options, geometry, requested, buffers, plan));
 
     std::vector<double> setup_samples;
     uint64_t setup_digest = 0;
-    for (unsigned sample = 0; sample < options.samples; ++sample)
+    for (unsigned round_index = 0; round_index < options.rounds; ++round_index)
     {
         const Clock::time_point begin = Clock::now();
         for (unsigned i = 0; i < options.setup_iterations; ++i)
@@ -898,10 +1397,26 @@ void run(const leopard::backend::Ops& ops, const Options& options,
     execute<Field>(ops, options, geometry, requested, buffers, plan, true);
     if (verify_and_digest(options, geometry, requested, buffers) != digest)
         fail("parity changed during timing");
+    verify_buffer_integrity(options, requested, buffers);
+    const CorrectnessResult after_correctness =
+        verify_independent_generator_and_recovery(
+            options, geometry, requested, buffers);
+    if (after_correctness.direct_generator_symbols !=
+            correctness.direct_generator_symbols ||
+        after_correctness.direct_generator_sha256 !=
+            correctness.direct_generator_sha256 ||
+        after_correctness.input_sha256 != correctness.input_sha256 ||
+        after_correctness.parity_sha256 != correctness.parity_sha256 ||
+        after_correctness.recovery_source_sha256 !=
+            correctness.recovery_source_sha256 ||
+        after_correctness.recovered_original_sha256 !=
+            correctness.recovered_original_sha256)
+        fail("correctness digests changed during timing");
 
-    const Summary prefix = summarize(form_samples[FormPrefix]);
-    const Summary exact = summarize(form_samples[FormExactPrepared]);
-    const Summary call_local = summarize(form_samples[FormExactCallLocal]);
+    const Summary prefix = summarize(prefix_round_medians);
+    const Summary exact = summarize(prepared_samples);
+    const Summary call_local = summarize(call_local_round_medians);
+    const Summary gains = summarize(round_gains);
     const Summary setup = summarize(setup_samples);
     if (prefix.median <= 0 || exact.median <= 0 ||
         call_local.median <= 0 || setup.median <= 0)
@@ -910,10 +1425,12 @@ void run(const leopard::backend::Ops& ops, const Options& options,
     std::ostringstream digest_text;
     digest_text << "0x" << std::hex << std::setw(16) << std::setfill('0')
                 << digest;
+    const std::vector<unsigned> affinity = runtime_affinity();
+    const std::string executable_path = runtime_executable_path();
     std::cout.imbue(std::locale::classic());
-    std::cout << std::fixed << std::setprecision(3)
+    std::cout << std::fixed << std::setprecision(6)
         << "{\n"
-        << "  \"schema\": \"leopard2-sparse-encode-benchmark-v3\",\n"
+        << "  \"schema\": \"leopard2-sparse-encode-benchmark-v4\",\n"
         << "  \"authoritative\": false,\n"
         << "  \"authority_note\": \"requires the fail-closed pinned runner "
         << "and host isolation attestation\",\n"
@@ -926,6 +1443,20 @@ void run(const leopard::backend::Ops& ops, const Options& options,
         << compiler_name() << "\", \"compiler_version\": \""
         << json_escape(compiler_version()) << "\", \"cplusplus\": " << __cplusplus
         << "},\n"
+        << "  \"runtime\": {\"linux_procfs_affinity_attested\": "
+#if defined(__linux__)
+        << "true"
+#else
+        << "false"
+#endif
+        << ", \"executable_path\": \"" << json_escape(executable_path.c_str())
+        << "\", \"allowed_cpus\": [";
+    for (size_t cpu_index = 0; cpu_index < affinity.size(); ++cpu_index)
+    {
+        if (cpu_index) std::cout << ',';
+        std::cout << affinity[cpu_index];
+    }
+    std::cout << "]},\n"
         << "  \"parameters\": {\"profile\": \""
         << (options.profile == ProfileHigh ? "high" : "low")
         << "\", \"field\": \"gf" << options.field_bits
@@ -942,7 +1473,7 @@ void run(const leopard::backend::Ops& ops, const Options& options,
     }
     std::cout << "], \"requested_backend\": \"" << backend_name(options.backend)
         << "\", \"iterations\": " << options.iterations
-        << ", \"samples\": " << options.samples
+        << ", \"rounds\": " << options.rounds
         << ", \"warmups\": " << options.warmups
         << ", \"setup_iterations\": " << options.setup_iterations
         << ", \"reuse\": [";
@@ -964,7 +1495,59 @@ void run(const leopard::backend::Ops& ops, const Options& options,
         << ", \"one_output_butterflies\": " << plan.one_output_butterflies
         << ", \"fused_four_groups\": " << plan.fused_four_groups << "},\n"
         << "  \"correctness\": {\"exact_prefix_parity_match\": true, "
-        << "\"digest_fnv1a64\": \"" << digest_text.str() << "\"},\n"
+        << "\"direct_generator_parity_match\": true, "
+        << "\"direct_generator_symbols_checked\": "
+        << correctness.direct_generator_symbols
+        << ", \"direct_generator_sample_sha256\": \""
+        << correctness.direct_generator_sha256
+        << "\", \"encode_decode_recovery_match\": true, "
+        << "\"input_immutable\": true, \"allocation_guards_match\": true, "
+        << "\"unrequested_output_canary\": {\"applicable\": "
+        << (options.profile == ProfileLow ? "true" : "false")
+        << ", \"match\": true}, \"post_timing_recheck_match\": true, "
+        << "\"input_sha256\": \"" << correctness.input_sha256
+        << "\", \"parity_sha256\": \"" << correctness.parity_sha256
+        << "\", \"recovery_source_sha256\": \""
+        << correctness.recovery_source_sha256
+        << "\", \"recovered_original_sha256\": \""
+        << correctness.recovered_original_sha256
+        << "\", \"digest_fnv1a64\": \"" << digest_text.str() << "\"},\n"
+        << "  \"primary_abba\": {\n"
+        << "    \"design\": \"pairwise_prefix_call_local_ABBA\",\n"
+        << "    \"order_policy\": \"alternating_ABBA_BAAB\",\n"
+        << "    \"rounds\": [\n";
+    for (size_t round_index = 0; round_index < rounds.size(); ++round_index)
+    {
+        const AbbaRound& round = rounds[round_index];
+        std::cout << "      {\"round\": " << round_index
+            << ", \"order\": [";
+        for (unsigned position = 0; position < 4; ++position)
+        {
+            if (position) std::cout << ',';
+            std::cout << (round.order[position] == FormPrefix
+                ? "\"prefix\"" : "\"call_local\"");
+        }
+        std::cout << "], \"observations_ns\": ["
+            << round.observations[0] << ',' << round.observations[1] << ','
+            << round.observations[2] << ',' << round.observations[3]
+            << "], \"prefix_median_ns\": " << round.prefix_median
+            << ", \"call_local_median_ns\": " << round.call_local_median
+            << ", \"log_contrast\": " << round.log_contrast
+            << ", \"candidate_gain_percent\": "
+            << round.candidate_gain_percent << '}';
+        std::cout << (round_index + 1 == rounds.size() ? "\n" : ",\n");
+    }
+    std::cout << "    ],\n"
+        << "    \"round_gain_percent\": {\"median\": " << gains.median
+        << ", \"mad\": " << gains.mad
+        << ", \"minimum\": " << gains.minimum
+        << ", \"maximum\": " << gains.maximum << ", \"samples\": [";
+    for (size_t i = 0; i < gains.samples.size(); ++i)
+    {
+        if (i) std::cout << ',';
+        std::cout << gains.samples[i];
+    }
+    std::cout << "]}\n  },\n"
         << "  \"metrics\": {\n";
 
     const Summary summaries[] = { setup, prefix, exact, call_local };
@@ -1015,6 +1598,7 @@ int main(int argc, char** argv)
         const std::vector<uint8_t> requested = parse_requested(options);
         if (leo_init() != Leopard_Success)
             fail("Leopard initialization failed");
+        verify_sha256_implementation();
         leopard::backend::QualificationStatus status =
             leopard::backend::QualificationAvailable;
         const leopard::backend::Ops* ops =
