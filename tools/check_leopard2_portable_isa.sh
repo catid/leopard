@@ -272,9 +272,96 @@ scan_build_metadata()
         fi
     fi
     if [ -f "$compile_commands" ]; then
+        # A diagnostic-only target compiles the historical whole-translation-
+        # unit SIMD path with SSSE3 so allocation-failure handling can be
+        # exercised.  It is not linked into the installed archive.  Admit that
+        # one fixture only when a unique CMake definition, the exact target,
+        # the reviewed source/object mapping, and the exact SSSE3-only flag
+        # contract all agree.  This is intentionally narrower than filtering
+        # by a target-name substring: a lookalike target or a newly added
+        # source must fail closed until it is reviewed here.
+        is_legacy_simd_fixture_command()
+        {
+            command_line=$1
+            case "$command_line" in
+                *-DLEO2_PORTABLE_ISA_PRIVILEGED_FIXTURE=1*) ;;
+                *) return 1 ;;
+            esac
+
+            mssse3_count=$(printf '%s\n' "$command_line" |
+                grep -o -- '-mssse3' | wc -l | tr -d '[:space:]')
+            mno_avx_count=$(printf '%s\n' "$command_line" |
+                grep -o -- '-mno-avx' | wc -l | tr -d '[:space:]')
+            if [ "$mssse3_count" -ne 1 ] || [ "$mno_avx_count" -ne 1 ]; then
+                return 1
+            fi
+
+            fixture_without_ssse3=$(printf '%s\n' "$command_line" |
+                sed 's/[[:space:]]-mssse3[[:space:]]/ /')
+            if printf '%s\n' "$fixture_without_ssse3" |
+               LC_ALL=C grep -Eq -- "$forbidden_metadata"
+            then
+                return 1
+            fi
+
+            fixture_target=leopard_legacy_simd_init_test_lib
+            for fixture_source in \
+                leopard.cpp \
+                leopard2.cpp \
+                Leopard2Backend.cpp \
+                Leopard2BackendScalar.cpp \
+                Leopard2CpuFeatures.cpp \
+                Leopard2Plan.cpp \
+                LeopardCommon.cpp \
+                LeopardFF8.cpp \
+                LeopardFF16.cpp
+            do
+                fixture_object="CMakeFiles/$fixture_target.dir/$fixture_source.o"
+                case "$command_line" in
+                    *" -o $fixture_object -c "*"/$fixture_source\""*)
+                        return 0 ;;
+                esac
+            done
+
+            fixture_source=tests/leopard2/test_legacy_simd_init_failure.cpp
+            fixture_object="CMakeFiles/leopard2_legacy_simd_init_failure_test.dir/$fixture_source.o"
+            case "$command_line" in
+                *" -o $fixture_object -c "*"/$fixture_source\""*)
+                    return 0 ;;
+            esac
+            return 1
+        }
+
+        # Every use of the privileged marker must itself satisfy the exact
+        # fixture contract, even if a future edit accidentally drops the
+        # otherwise-forbidden -mssse3 flag from that command.
+        fixture_lines="$scratch_root/fixture-lines"
+        LC_ALL=C grep -F -- \
+            '-DLEO2_PORTABLE_ISA_PRIVILEGED_FIXTURE=1' \
+            "$compile_commands" > "$fixture_lines" || true
+        while IFS= read -r fixture_line
+        do
+            [ -n "$fixture_line" ] || continue
+            if ! is_legacy_simd_fixture_command "$fixture_line"; then
+                printf '%s\n' "$fixture_line" >&2
+                echo "portable ISA check: invalid privileged diagnostic compile command" >&2
+                return 1
+            fi
+        done < "$fixture_lines"
+
         violating_lines="$scratch_root/metadata-violations"
+        candidate_lines="$scratch_root/metadata-candidates"
         LC_ALL=C grep -Ein -- "$forbidden_metadata" "$compile_commands" |
-            grep -Ev 'Leopard2Backend(SSSE3|AVX2)[.]cpp' > "$violating_lines" || true
+            grep -Ev 'Leopard2Backend(SSSE3|AVX2)[.]cpp' > \
+                "$candidate_lines" || true
+        : > "$violating_lines"
+        while IFS= read -r candidate_line
+        do
+            [ -n "$candidate_line" ] || continue
+            if ! is_legacy_simd_fixture_command "$candidate_line"; then
+                printf '%s\n' "$candidate_line" >> "$violating_lines"
+            fi
+        done < "$candidate_lines"
         if [ -s "$violating_lines" ]; then
             cat "$violating_lines" >&2
             echo "portable ISA check: baseline compile command raises the ISA floor" >&2
@@ -546,6 +633,57 @@ expect_required_metadata_rejected()
     fi
 }
 
+write_compile_command_fixture()
+{
+    fixture_dir=$1
+    fixture_command=$2
+    fixture_file=$3
+    fixture_output=$4
+    mkdir -p "$fixture_dir"
+    printf '%s\n' \
+        '[' \
+        '  {' \
+        '    "directory": "/tmp/leopard-build",' \
+        "    \"command\": \"$fixture_command\"," \
+        "    \"file\": \"$fixture_file\"," \
+        "    \"output\": \"$fixture_output\"" \
+        '  }' \
+        ']' > "$fixture_dir/compile_commands.json"
+}
+
+expect_fixture_metadata_accepted()
+{
+    fixture_name=$1
+    fixture_command=$2
+    fixture_file=$3
+    fixture_output=$4
+    fixture_dir="$scratch_root/fixture-metadata-$fixture_name"
+    write_compile_command_fixture "$fixture_dir" "$fixture_command" \
+        "$fixture_file" "$fixture_output"
+    fixture_log="$scratch_root/fixture-metadata-$fixture_name.log"
+    if ! scan_build_metadata "$fixture_dir" > "$fixture_log" 2>&1; then
+        cat "$fixture_log" >&2
+        echo "portable ISA checker self-test: valid fixture $fixture_name was rejected" >&2
+        return 1
+    fi
+}
+
+expect_fixture_metadata_rejected()
+{
+    fixture_name=$1
+    fixture_command=$2
+    fixture_file=$3
+    fixture_output=$4
+    fixture_dir="$scratch_root/fixture-metadata-$fixture_name"
+    write_compile_command_fixture "$fixture_dir" "$fixture_command" \
+        "$fixture_file" "$fixture_output"
+    fixture_log="$scratch_root/fixture-metadata-$fixture_name.log"
+    if scan_build_metadata "$fixture_dir" > "$fixture_log" 2>&1; then
+        echo "portable ISA checker self-test: invalid fixture $fixture_name was accepted" >&2
+        return 1
+    fi
+}
+
 run_negative_controls()
 {
     baseline_archive=$(write_assembly_archive baseline_sse2 'pxor %xmm0, %xmm0')
@@ -607,6 +745,39 @@ run_negative_controls()
     expect_metadata_rejected flag_compile_sse41 compile_commands '-msse4.1'
     expect_metadata_rejected flag_march make '-march=native'
     expect_metadata_rejected flag_lto make '-flto=auto'
+
+    fixture_prefix='c++ -DLEO2_ENABLE_TEST_HOOKS=1 -DLEO2_PORTABLE_ISA_PRIVILEGED_FIXTURE=1 -mssse3 -mno-avx'
+    expect_fixture_metadata_accepted exact_legacy_fixture \
+        "$fixture_prefix -o CMakeFiles/leopard_legacy_simd_init_test_lib.dir/LeopardFF8.cpp.o -c /src/LeopardFF8.cpp" \
+        /src/LeopardFF8.cpp \
+        CMakeFiles/leopard_legacy_simd_init_test_lib.dir/LeopardFF8.cpp.o
+    expect_fixture_metadata_accepted exact_legacy_fixture_driver \
+        "$fixture_prefix -o CMakeFiles/leopard2_legacy_simd_init_failure_test.dir/tests/leopard2/test_legacy_simd_init_failure.cpp.o -c /src/tests/leopard2/test_legacy_simd_init_failure.cpp" \
+        /src/tests/leopard2/test_legacy_simd_init_failure.cpp \
+        CMakeFiles/leopard2_legacy_simd_init_failure_test.dir/tests/leopard2/test_legacy_simd_init_failure.cpp.o
+    expect_fixture_metadata_rejected lookalike_legacy_fixture \
+        "$fixture_prefix -o CMakeFiles/not_leopard_legacy_simd_init_test_lib.dir/LeopardFF8.cpp.o -c /src/LeopardFF8.cpp" \
+        /src/LeopardFF8.cpp \
+        CMakeFiles/not_leopard_legacy_simd_init_test_lib.dir/LeopardFF8.cpp.o
+    expect_fixture_metadata_rejected wrong_fixture_source \
+        "$fixture_prefix -o CMakeFiles/leopard_legacy_simd_init_test_lib.dir/LeopardFF8.cpp.o -c /src/LeopardFF16.cpp" \
+        /src/LeopardFF16.cpp \
+        CMakeFiles/leopard_legacy_simd_init_test_lib.dir/LeopardFF8.cpp.o
+    expect_fixture_metadata_rejected unreviewed_fixture_source \
+        "$fixture_prefix -o CMakeFiles/leopard_legacy_simd_init_test_lib.dir/NewProductionSource.cpp.o -c /src/NewProductionSource.cpp" \
+        /src/NewProductionSource.cpp \
+        CMakeFiles/leopard_legacy_simd_init_test_lib.dir/NewProductionSource.cpp.o
+    expect_fixture_metadata_rejected production_isa_leak \
+        "$fixture_prefix -o CMakeFiles/leopard.dir/LeopardFF8.cpp.o -c /src/LeopardFF8.cpp" \
+        /src/LeopardFF8.cpp CMakeFiles/leopard.dir/LeopardFF8.cpp.o
+    expect_fixture_metadata_rejected fixture_unrelated_isa \
+        "$fixture_prefix -msse4.1 -o CMakeFiles/leopard_legacy_simd_init_test_lib.dir/LeopardFF8.cpp.o -c /src/LeopardFF8.cpp" \
+        /src/LeopardFF8.cpp \
+        CMakeFiles/leopard_legacy_simd_init_test_lib.dir/LeopardFF8.cpp.o
+    expect_fixture_metadata_rejected fixture_missing_marker \
+        'c++ -DLEO2_ENABLE_TEST_HOOKS=1 -mssse3 -mno-avx -o CMakeFiles/leopard_legacy_simd_init_test_lib.dir/LeopardFF8.cpp.o -c /src/LeopardFF8.cpp' \
+        /src/LeopardFF8.cpp \
+        CMakeFiles/leopard_legacy_simd_init_test_lib.dir/LeopardFF8.cpp.o
     expect_required_metadata_rejected missing_compile_commands missing
     expect_required_metadata_rejected empty_compile_commands empty
     expect_required_metadata_rejected unrelated_compile_commands unrelated

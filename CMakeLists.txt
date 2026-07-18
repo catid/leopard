@@ -522,7 +522,8 @@ if(LEO2_BUILD_TESTS)
         target_include_directories(leopard_legacy_simd_init_test_lib PUBLIC
             ${CMAKE_CURRENT_SOURCE_DIR})
         target_compile_definitions(leopard_legacy_simd_init_test_lib PRIVATE
-            LEO2_ENABLE_TEST_HOOKS=1)
+            LEO2_ENABLE_TEST_HOOKS=1
+            LEO2_PORTABLE_ISA_PRIVILEGED_FIXTURE=1)
         target_compile_options(leopard_legacy_simd_init_test_lib PRIVATE
             -mssse3 -mno-avx)
         target_link_libraries(leopard_legacy_simd_init_test_lib PUBLIC
@@ -531,7 +532,8 @@ if(LEO2_BUILD_TESTS)
         add_executable(leopard2_legacy_simd_init_failure_test
             tests/leopard2/test_legacy_simd_init_failure.cpp)
         target_compile_definitions(leopard2_legacy_simd_init_failure_test PRIVATE
-            LEO2_ENABLE_TEST_HOOKS=1)
+            LEO2_ENABLE_TEST_HOOKS=1
+            LEO2_PORTABLE_ISA_PRIVILEGED_FIXTURE=1)
         target_compile_options(leopard2_legacy_simd_init_failure_test PRIVATE
             -mssse3 -mno-avx)
         target_link_libraries(leopard2_legacy_simd_init_failure_test
