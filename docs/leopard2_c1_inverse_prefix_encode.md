@@ -52,7 +52,7 @@ Release validation on GCC 13.3.0 passed:
   unaligned inputs, batches, and concurrent calls;
 - deterministic pruned-transform fuzz replay: 16,384 iterations, seed
   `14627333968358193854`; and
-- all 73 ordinary CTest entries passed after initializing the clean worktree's
+- all 74 ordinary CTest entries passed after initializing the clean worktree's
   `sse2neon` submodule; the initial missing-submodule project-test failure was
   a worktree setup issue, not a codec mismatch;
 - focused Clang 18 ASan, UBSan, and leak-sanitizer runs passed the pruned-plan,
@@ -112,14 +112,51 @@ zero pass on AVX2.  High rate also loses the mature fused final-layer
 accumulation because the current C1 candidate materializes the partial block
 before XORing it into the accumulator.
 
-## Preliminary decision
+## Production-linked authoritative evidence
 
-Do not promote this candidate to `AUTO` from the initial screen.  Even with a
-measurement bias in its favor it did not clear the experiment's 10% rule on
-the intended mature-prefix comparison, while AVX2 and high-rate neighbors
-regressed.  The isolated 10.1% exact-output cell also combines two experimental
-optimizations and is not evidence for inverse pruning alone.  Production-linked
-timing is required before treating any crossover percentage as quantitative.
+The corrected benchmark is buildable with `LEO2_BUILD_TESTS=OFF`, reports
+`library_test_hooks=false`, and is rejected by the pinned runner if that marker
+is true or missing.  Commit `67eb32957824fe2b9a2a51945a6e1980aaef73a1`
+was clean before and after the run.  The runner pinned one worker to CPU 4,
+verified CPU 20 was its idle SMT sibling, used 15 rotated samples of 32
+iterations with three warmups, and produced `authoritative=true` for all five
+cells.  Candidate/control is elapsed time, so less than one favors C1;
+control/candidate and the amortized columns are speed ratios, so greater than
+one favors C1.
+
+| Field/backend | Profile `(K,R)` | Bytes | Candidate/control | Control/candidate | Amortized control/candidate at reuse 1 / 8 / 64 | Setup median |
+|---|---:|---:|---:|---:|---:|---:|
+| GF8 scalar | low `(17,18)` | 64 KiB | 0.9158 | 1.0919 | 1.0912 / 1.0918 / 1.0919 | 0.793 us |
+| GF8 AVX2 | low `(33,34)` | 64 KiB | 1.0805 | 0.9255 | 0.9195 / 0.9247 / 0.9254 | 2.003 us |
+| GF8 AVX2 | low `(65,66)` | 1 MiB | 0.9665 | 1.0347 | 1.0346 / 1.0347 / 1.0347 | 4.015 us |
+| GF8 AVX2 | high `(33,32)` | 64 KiB | 1.0938 | 0.9143 | 0.9115 / 0.9139 / 0.9142 | 0.685 us |
+| GF16 AVX2 | low `(129,130)` | 64 KiB | 0.9968 | 1.0032 | 0.9988 / 1.0026 / 1.0031 | 9.346 us |
+
+Across the five cells, median execution gain was 0.316%, ranging from an 8.57%
+regression to a 9.19% gain.  Reuse-one setup amortization changes the median to
+a 0.119% regression.  The exact-output combination ranged from an 8.28%
+regression to a 9.91% gain, also below the 10% C1 threshold and not attributable
+to inverse pruning alone.
+
+The artifact retains every raw sample plus median/MAD.  Dispersion is small in
+the decisive cells: for scalar `(17,18)`, mature and candidate medians/MADs are
+1,289,759.844/307.812 ns and 1,181,192.344/333.156 ns; for AVX2 high `(33,32)`
+they are 206,631.062/95.000 ns and 226,005.344/49.969 ns.  The harness does not
+claim a confidence interval, so no stronger statistical claim is made.  That
+limitation cannot rescue promotion: the best observed mature-prefix gain is
+already below 10%, while two neighboring AVX2 cells regress by more than 2%.
+
+Machine-readable results, including the isolation attestation, complete build
+identity, parity digests, samples, medians, MADs, and merged summary, are in
+`experiments/leopard2/non_power_of_two/c1/results/inverse_prefix_pinned_amd_9950x3d.json`.
+
+## Final disposition
+
+Reject production promotion.  The authoritative run did not clear the 10%
+rule in any mature-prefix cell, and the AVX2 low `(33,34)` and high `(33,32)`
+neighbors regress by 7.45% and 8.57%, respectively.  `AUTO` remains unchanged
+on the mature encoder.  This is a negative promotion result, not an
+inconclusive result.
 
 Retain the correct executor, tests, counters, and benchmark form as an
 experimental building block.  The next worthwhile implementation is a compact
@@ -129,7 +166,8 @@ neighboring counts and backends before production dispatch changes.
 
 ## Reproduction
 
-From a Release build with tests and benchmarks enabled:
+For correctness and raw diagnostic output from a Release build with tests and
+benchmarks enabled:
 
     OMP_NUM_THREADS=1 ./build/leopard2_pruned_transform_test
     OMP_NUM_THREADS=1 ./build/leopard2_direct_encode_test
@@ -138,3 +176,20 @@ From a Release build with tests and benchmarks enabled:
       --profile low --field gf8 --k 17 --r 18 --bytes 65536 \
       --requested-parity 0-17 --backend scalar --iterations 32 \
       --samples 15 --warmups 3 --setup-iterations 8 --reuse 1,8,64
+
+For production-linked pinned evidence, configure the benchmark without test
+hooks, then provide a current isolation attestation to the fail-closed runner:
+
+    cmake -S . -B build/benchprod -G Ninja -DCMAKE_BUILD_TYPE=Release \
+      -DLEO2_BUILD_TESTS=OFF -DLEO2_BUILD_BENCHMARKS=ON
+    cmake --build build/benchprod -j 128 \
+      --target bench_leopard2_sparse_encode
+    python3 tools/leopard2_sparse_encode_crossover.py pinned \
+      --source . \
+      --executable build/benchprod/bench_leopard2_sparse_encode \
+      --result-dir build/inverse-prefix-pinned \
+      --cell-manifest \
+        experiments/leopard2/non_power_of_two/c1/inverse_prefix_cells.json \
+      --iterations 32 --samples 15 --warmups 3 --setup-iterations 8 \
+      --reuse 1,8,64 --memory-mib 1024 --workers 1 --cpu 4 \
+      --isolation-attestation PATH_TO_ATTESTATION.json --no-resume
