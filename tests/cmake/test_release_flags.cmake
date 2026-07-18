@@ -1,10 +1,11 @@
 # Verify that Leopard's compiler branches never derive Release flags from the
 # Debug cache entry, then exercise the active compiler branch through a nested
-# Release configure and inspect its compile database.
+# OpenMP-disabled Release build.  GNU-family builds make unknown pragmas fatal
+# so an unguarded OpenMP directive cannot silently re-enter the serial build.
 
 if(NOT DEFINED LEO2_SOURCE_DIR OR NOT DEFINED LEO2_BINARY_DIR OR
    NOT DEFINED LEO2_C_COMPILER OR NOT DEFINED LEO2_CXX_COMPILER OR
-   NOT DEFINED LEO2_GENERATOR)
+   NOT DEFINED LEO2_GENERATOR OR NOT DEFINED LEO2_CXX_COMPILER_ID)
     message(FATAL_ERROR "release flag isolation test arguments are incomplete")
 endif()
 
@@ -34,6 +35,12 @@ set(configure_command
     -DLEO2_BUILD_BENCHMARKS=OFF
     -DLEO2_ENABLE_CUDA=OFF
     -DENABLE_OPENMP=OFF)
+if(LEO2_CXX_COMPILER_ID STREQUAL "GNU" OR
+   LEO2_CXX_COMPILER_ID STREQUAL "Clang" OR
+   LEO2_CXX_COMPILER_ID STREQUAL "AppleClang")
+    list(APPEND configure_command
+        "-DCMAKE_CXX_FLAGS=-Werror=unknown-pragmas")
+endif()
 if(DEFINED LEO2_GENERATOR_PLATFORM AND NOT LEO2_GENERATOR_PLATFORM STREQUAL "")
     list(APPEND configure_command -A "${LEO2_GENERATOR_PLATFORM}")
 endif()
@@ -67,4 +74,17 @@ if(release_marker EQUAL -1)
 endif()
 if(NOT debug_marker EQUAL -1)
     message(FATAL_ERROR "caller-supplied Debug flags leaked into Release")
+endif()
+
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" --build "${LEO2_BINARY_DIR}"
+        --target leopard --parallel 2
+    RESULT_VARIABLE build_result
+    OUTPUT_VARIABLE build_stdout
+    ERROR_VARIABLE build_stderr)
+if(NOT build_result EQUAL 0)
+    message(FATAL_ERROR
+        "OpenMP-disabled strict Release build failed (${build_result})\n"
+        "stdout:\n${build_stdout}\n"
+        "stderr:\n${build_stderr}")
 endif()

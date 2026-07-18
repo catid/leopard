@@ -198,7 +198,7 @@ static void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated)
     for (; dist4 <= m; dist = dist4, dist4 <<= 2)
     {
         // For each set of dist*4 elements:
-#pragma omp parallel for if(EnableParallel)
+        LEO_OPENMP_PARALLEL_FOR_IF(EnableParallel)
         for (int r = 0; r < (int)m_truncated; r += dist4)
         {
             // For each set of dist elements:
@@ -210,7 +210,7 @@ static void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated)
 
     // If there is one layer left:
     if (dist < m)
-#pragma omp parallel for if(EnableParallel)
+        LEO_OPENMP_PARALLEL_FOR_IF(EnableParallel)
         for (int i = 0; i < (int)dist; ++i)
             FWHT_2(data[i], data[i + dist]);
 }
@@ -1238,12 +1238,12 @@ static void IFFT_DIT_Encoder_Impl(
         // two inverse layers.  This replaces the former whole-active-prefix
         // copy plus first transform read/write with one read and one store.
         // Later layers still require the inactive suffix to contain zeros.
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int i = m_truncated; i < (int)m; ++i)
             memset(work[i], 0, bytes);
 
         const unsigned full_group_count = m_truncated / 4;
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int group = 0; group < (int)full_group_count; ++group)
         {
             const unsigned r = static_cast<unsigned>(group) * 4U;
@@ -1283,10 +1283,10 @@ static void IFFT_DIT_Encoder_Impl(
         TestHighInputCopyShards.fetch_add(
             m_truncated, std::memory_order_relaxed);
 #endif
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int i = 0; i < (int)m_truncated; ++i)
             memcpy(work[i], data[i], bytes);
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int i = m_truncated; i < (int)m; ++i)
             memset(work[i], 0, bytes);
     }
@@ -1298,7 +1298,7 @@ static void IFFT_DIT_Encoder_Impl(
             FuseAccumulation && dist4 == m &&
             !UseFusedButterfly4(ops, bytes);
         // For each set of dist*4 elements:
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int r = 0; r < (int)m_truncated; r += dist4)
         {
             const unsigned i_end = r + dist;
@@ -1337,7 +1337,7 @@ static void IFFT_DIT_Encoder_Impl(
 
         if (xor_result && FuseAccumulation)
         {
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
             for (int i = 0; i < (int)dist; ++i)
             {
                 IFFT_DIT2_xor(ops,
@@ -1351,7 +1351,7 @@ static void IFFT_DIT_Encoder_Impl(
             VectorXOR_Threads(ops, bytes, dist, work + dist, work);
         else
         {
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
             for (int i = 0; i < (int)dist; ++i)
                 IFFT_DIT2(ops, work[i], work[i + dist], log_m, bytes);
         }
@@ -1417,7 +1417,7 @@ static bool IFFT_DIT_DecoderImpl(
             FuseAccumulation && dist4 == m &&
             !UseFusedButterfly4(ops, bytes);
         // For each set of dist*4 elements:
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int r = 0; r < (int)m_truncated; r += dist4)
         {
             const unsigned i_end = r + dist;
@@ -1452,7 +1452,7 @@ static bool IFFT_DIT_DecoderImpl(
 
         if (xor_result && FuseAccumulation)
         {
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
             for (int i = 0; i < (int)dist; ++i)
             {
                 IFFT_DIT2_xor(ops,
@@ -1466,7 +1466,7 @@ static bool IFFT_DIT_DecoderImpl(
             VectorXOR_Threads(ops, bytes, dist, work + dist, work);
         else
         {
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
             for (int i = 0; i < (int)dist; ++i)
             {
                 IFFT_DIT2(
@@ -1541,7 +1541,7 @@ static void StageHighDecodeSources(
     TestHighReceiveZeroShards.fetch_add(
         count - copy_count, std::memory_order_relaxed);
 #endif
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
     for (int i = 0; i < (int)count; ++i)
     {
         if (sources[i])
@@ -1903,7 +1903,7 @@ static void FFT_DIT(
     for (; dist != 0; dist4 = dist, dist >>= 2)
     {
         // For each set of dist*4 elements:
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int r = 0; r < (int)m_truncated; r += dist4)
         {
             const unsigned i_end = r + dist;
@@ -1920,7 +1920,7 @@ static void FFT_DIT(
     // If there is one layer left:
     if (dist4 == 2)
     {
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int r = 0; r < (int)m_truncated; r += 2)
         {
             const ffe_t log_m = skewLUT[r + 1];
@@ -2016,7 +2016,7 @@ static void FFT_DIT_FromCoefficients(
     const ffe_t log_m02 = skewLUT[first_dist * 2];
     const ffe_t log_m23 = skewLUT[first_dist * 3];
     const bool use_fused_four_way = UseFusedButterfly4(ops, bytes);
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
     for (int i = 0; i < (int)first_dist; ++i)
     {
         if (use_fused_four_way)
@@ -2077,7 +2077,7 @@ static void FFT_DIT_FromCoefficients(
     unsigned dist = first_dist >> 2;
     for (; dist != 0; dist4 = dist, dist >>= 2)
     {
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int r = 0; r < (int)m_truncated; r += dist4)
         {
             const unsigned i_end = r + dist;
@@ -2092,7 +2092,7 @@ static void FFT_DIT_FromCoefficients(
     }
     if (dist4 == 2)
     {
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int r = 0; r < (int)m_truncated; r += 2)
         {
             const ffe_t log_m = skewLUT[r + 1];
@@ -2321,7 +2321,7 @@ void ReedSolomonEncodeLow(
                 SourceEvaluationLowEncode);
         }
 
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int i = 0; i < (int)requested_count; ++i)
         {
             void* const output = recovery[recovery_offset + i];
@@ -2488,7 +2488,7 @@ static void FFT_DIT_ErrorBits(
     for (; dist != 0; dist4 = dist, dist >>= 2, mip_level -=2)
     {
         // For each set of dist*4 elements:
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int r = 0; r < (int)n_truncated; r += dist4)
         {
             if (!error_bits.IsNeeded(mip_level, r))
@@ -2500,7 +2500,7 @@ static void FFT_DIT_ErrorBits(
             const ffe_t log_m23 = skewLUT[i_end + dist * 2];
 
             // For each set of dist elements:
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
             for (int i = r; i < (int)i_end; ++i)
             {
                 FFT_DIT4(
@@ -2518,7 +2518,7 @@ static void FFT_DIT_ErrorBits(
     // If there is one layer left:
     if (dist4 == 2)
     {
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int r = 0; r < (int)n_truncated; r += 2)
         {
             if (!error_bits.IsNeeded(mip_level, r))
@@ -2787,7 +2787,7 @@ void ReedSolomonDecodePrepared(
     error_bits.Prepare();
 #endif // LEO_ERROR_BITFIELD_OPT
 
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
     for (int i = 0; i < (int)n; ++i)
     {
         if (coordinate_data[i])
@@ -2809,7 +2809,7 @@ void ReedSolomonDecodePrepared(
     FFT_DIT(ops, buffer_bytes, work, n, n, FFTSkewStorage);
 #endif // LEO_ERROR_BITFIELD_OPT
 
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
     for (int i = 0; i < (int)n; ++i)
     {
         if (requested_outputs[i])
@@ -2848,7 +2848,7 @@ void ReedSolomonDecodePlanned(
     LEO_DEBUG_ASSERT(n >= 2 && n <= kOrder);
     LEO_DEBUG_ASSERT(input_count <= n);
 
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
     for (int i = 0; i < (int)n; ++i)
     {
         if (coordinate_data[i])
@@ -2874,7 +2874,7 @@ void ReedSolomonDecodePlanned(
 
     if (reveal_outputs)
     {
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int i = 0; i < (int)requested_count; ++i)
         {
             const uint32_t coordinate = requested_coordinates[i];
@@ -3319,7 +3319,7 @@ void ReedSolomonDecodeLowPrepared(
     error_bits.Prepare();
 #endif
 
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
     for (int i = 0; i < (int)n; ++i)
     {
         if (coordinate_data[i])
@@ -3353,7 +3353,7 @@ void ReedSolomonDecodeLowPrepared(
     for (unsigned block = 1; block < block_count; ++block)
     {
         const unsigned offset = block * p;
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int i = 0; i < (int)p; ++i)
             muladd_mem(ops, work[i], work[offset + i],
                 block_factors[block - 1], buffer_bytes);
@@ -3366,7 +3366,7 @@ void ReedSolomonDecodeLowPrepared(
     FFT_DIT(ops, buffer_bytes, work, p, p, FFTSkewStorage);
 #endif
 
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
     for (int i = 0; i < (int)p; ++i)
         if (requested_outputs[i])
             mul_mem_inplace(
@@ -3411,7 +3411,7 @@ static void ReedSolomonDecodeLowPrunedPlannedImpl(
     LEO_DEBUG_ASSERT(p >= 2 && p <= n && n <= kOrder);
     LEO_DEBUG_ASSERT(input_plan_count == 0 || input_plans != NULL);
 
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
     for (int i = 0; i < (int)n; ++i)
     {
         if (coordinate_data[i])
@@ -3463,7 +3463,7 @@ static void ReedSolomonDecodeLowPrunedPlannedImpl(
         if (block_input_counts[block] == 0)
             continue;
         const unsigned offset = block * p;
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int i = 0; i < (int)p; ++i)
             muladd_mem(ops, work[i], work[offset + i],
                 block_factors[block - 1], buffer_bytes);
@@ -3491,7 +3491,7 @@ static void ReedSolomonDecodeLowPrunedPlannedImpl(
 
     if (reveal_outputs)
     {
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int i = 0; i < (int)requested_count; ++i)
         {
             const uint32_t coordinate = requested_coordinates[i];
@@ -3622,7 +3622,7 @@ static void ReedSolomonDecodeLowTiledPrunedPlannedImpl(
 
     const unsigned first_input_count = block_input_counts[0];
     LEO_DEBUG_ASSERT(first_input_count <= p);
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
     for (int i = 0; i < (int)p; ++i)
     {
         if (coordinate_data[i])
@@ -3668,7 +3668,7 @@ static void ReedSolomonDecodeLowTiledPrunedPlannedImpl(
         if (input_count == 0)
             continue;
         const unsigned offset = block * p;
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int i = 0; i < (int)p; ++i)
         {
             const unsigned coordinate = offset + i;
@@ -3700,7 +3700,7 @@ static void ReedSolomonDecodeLowTiledPrunedPlannedImpl(
             IFFT_DIT_Decoder(
                 ops, buffer_bytes, input_count, tile, p,
                 FFTSkewStorage + offset);
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int i = 0; i < (int)p; ++i)
             muladd_mem(ops, accumulator[i], tile[i],
                 block_factors[block - 1], buffer_bytes);
@@ -3730,7 +3730,7 @@ static void ReedSolomonDecodeLowTiledPrunedPlannedImpl(
 
     if (reveal_outputs)
     {
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int i = 0; i < (int)requested_count; ++i)
         {
             const uint32_t coordinate = requested_coordinates[i];
@@ -3861,7 +3861,7 @@ void ReedSolomonDecodeHighPrepared(
 
     // h on V_t, then z = h * Lambda on V_t.
     FFT_DIT(ops, buffer_bytes, work, t, t, FFTSkewStorage);
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
     for (int i = 0; i < (int)t; ++i)
     {
         if (coordinate_data[i])
@@ -3886,7 +3886,7 @@ void ReedSolomonDecodeHighPrepared(
         FFT_DIT_FromCoefficients(
             ops, buffer_bytes, work, work + offset, requested_count, t,
             FFTSkewStorage + offset, SourceEvaluationHighDecode);
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int i = 0; i < (int)requested_count; ++i)
         {
             const unsigned coordinate = offset + i;
@@ -4041,7 +4041,7 @@ void ReedSolomonDecodeHighPrunedPlanned(
     LEO_DEBUG_ASSERT(input_plan_index == input_plan_count);
 
     FFT_DIT(ops, buffer_bytes, work, t, t, FFTSkewStorage);
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
     for (int i = 0; i < (int)t; ++i)
     {
         if (coordinate_data[i])
@@ -4088,7 +4088,7 @@ void ReedSolomonDecodeHighPrunedPlanned(
                 TestHighCompatibilityCopyFallbacks.fetch_add(
                     1, std::memory_order_relaxed);
 #endif
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
                 for (int i = 0; i < (int)t; ++i)
                     memcpy(work[offset + i], work[i], buffer_bytes);
                 const bool fallback =
@@ -4103,7 +4103,7 @@ void ReedSolomonDecodeHighPrunedPlanned(
                 ops, buffer_bytes, work, work + offset,
                 descriptor.requested_prefix, t,
                 FFTSkewStorage + offset, SourceEvaluationHighDecode);
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int i = (int)descriptor.requested_begin;
              i < (int)descriptor.requested_end;
              ++i)
@@ -4293,7 +4293,7 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
     LEO_DEBUG_ASSERT(input_plan_index == input_plan_count);
 
     FFT_DIT(ops, buffer_bytes, accumulator, t, t, FFTSkewStorage);
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
     for (int i = 0; i < (int)t; ++i)
     {
         if (coordinate_data[i])
@@ -4342,7 +4342,7 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
                 TestHighCompatibilityCopyFallbacks.fetch_add(
                     1, std::memory_order_relaxed);
 #endif
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
                 for (int i = 0; i < (int)t; ++i)
                     memcpy(tile[i], accumulator[i], buffer_bytes);
                 const bool fallback =
@@ -4357,7 +4357,7 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
                 ops, buffer_bytes, accumulator, tile,
                 descriptor.requested_prefix, t,
                 FFTSkewStorage + offset, SourceEvaluationHighDecode);
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int i = (int)descriptor.requested_begin;
              i < (int)descriptor.requested_end;
              ++i)
@@ -4439,7 +4439,7 @@ void ReedSolomonDecode(
 
     FWHT<true>(error_locations, kOrder, m + original_count);
 
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
     for (int i = 0; i < (int)kOrder; ++i)
         error_locations[i] = ((unsigned)error_locations[i] * (unsigned)LogWalsh[i]) % kModulus;
 
@@ -4447,7 +4447,7 @@ void ReedSolomonDecode(
 
     // work <- recovery data
 
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
     for (int i = 0; i < (int)recovery_count; ++i)
     {
         if (recovery[i])
@@ -4456,13 +4456,13 @@ void ReedSolomonDecode(
         else
             memset(work[i], 0, buffer_bytes);
     }
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
     for (int i = recovery_count; i < (int)m; ++i)
         memset(work[i], 0, buffer_bytes);
 
     // work <- original data
 
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
     for (int i = 0; i < (int)original_count; ++i)
     {
         if (original[i])
@@ -4471,7 +4471,7 @@ void ReedSolomonDecode(
         else
             memset(work[m + i], 0, buffer_bytes);
     }
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
     for (int i = m + original_count; i < (int)n; ++i)
         memset(work[i], 0, buffer_bytes);
 

@@ -163,6 +163,29 @@
 #include <condition_variable>
 
 
+// Keep OpenMP-disabled builds warning-clean without relying on compilers to
+// silently discard unknown pragmas.  These wrappers expand to the native
+// pragma syntax only when the compiler has enabled OpenMP; otherwise they are
+// deliberate no-ops and the following loop remains serial.
+#if defined(_OPENMP)
+    #if defined(_MSC_VER)
+        #define LEO_OPENMP_PARALLEL_FOR __pragma(omp parallel for)
+        #define LEO_OPENMP_PARALLEL_FOR_IF(condition) \
+            __pragma(omp parallel for if(condition))
+    #else
+        #define LEO_OPENMP_PRAGMA_IMPL(value) _Pragma(#value)
+        #define LEO_OPENMP_PRAGMA(value) LEO_OPENMP_PRAGMA_IMPL(value)
+        #define LEO_OPENMP_PARALLEL_FOR \
+            LEO_OPENMP_PRAGMA(omp parallel for)
+        #define LEO_OPENMP_PARALLEL_FOR_IF(condition) \
+            LEO_OPENMP_PRAGMA(omp parallel for if(condition))
+    #endif
+#else
+    #define LEO_OPENMP_PARALLEL_FOR
+    #define LEO_OPENMP_PARALLEL_FOR_IF(condition)
+#endif
+
+
 //------------------------------------------------------------------------------
 // Constants
 

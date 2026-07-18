@@ -398,7 +398,7 @@ void VectorXOR_Threads(
     if (count >= 4)
     {
         int i_end = count - 4;
-#pragma omp parallel for
+LEO_OPENMP_PARALLEL_FOR
         for (int i = 0; i <= i_end; i += 4)
         {
             xor_mem4(
