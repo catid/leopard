@@ -465,10 +465,14 @@ def validate_benchmark_result(
     if not (
         isinstance(plan.get("retained_butterflies"), int)
         and isinstance(plan.get("prefix_butterflies"), int)
-        and 0 < plan["retained_butterflies"] < plan["prefix_butterflies"]
+        and 0 < plan["retained_butterflies"] <= plan["prefix_butterflies"]
         <= plan.get("full_butterflies", -1)
     ):
-        raise CrossoverError("sparse cell did not reduce prefix work")
+        raise CrossoverError("cell emitted invalid forward-plan accounting")
+    if plan["retained_butterflies"] == plan["prefix_butterflies"] and (
+        cell["requested_parity"] != list(range(cell["R"]))
+    ):
+        raise CrossoverError("sparse requested-output cell retained prefix work")
     available = plan.get("inverse_candidate_available")
     inverse_operations = plan.get("inverse_operations")
     inverse_groups = plan.get("inverse_source_groups")
