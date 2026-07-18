@@ -464,6 +464,56 @@ static void ScalarFF16FFTButterfly2Out(
     }
 }
 
+static void ScalarFF16IFFTButterfly2Xor(
+    const void* x_input_pointer,
+    const void* y_input_pointer,
+    void* x_output_pointer,
+    void* y_output_pointer,
+    uint16_t multiplier_log,
+    uint64_t byte_count)
+{
+    const uint8_t* x_input = static_cast<const uint8_t*>(x_input_pointer);
+    const uint8_t* y_input = static_cast<const uint8_t*>(y_input_pointer);
+    uint8_t* x_output = static_cast<uint8_t*>(x_output_pointer);
+    uint8_t* y_output = static_cast<uint8_t*>(y_output_pointer);
+    uint64_t offset = 0;
+    while (byte_count - offset >= 64)
+    {
+        for (unsigned i = 0; i < 32; ++i)
+        {
+            uint16_t x_value = static_cast<uint16_t>(x_input[offset + i] |
+                (static_cast<unsigned>(x_input[offset + 32 + i]) << 8));
+            uint16_t y_value = static_cast<uint16_t>(y_input[offset + i] |
+                (static_cast<unsigned>(y_input[offset + 32 + i]) << 8));
+            y_value ^= x_value;
+            x_value ^= ScalarFF16Product(multiplier_log, y_value);
+            x_output[offset + i] ^= static_cast<uint8_t>(x_value);
+            x_output[offset + 32 + i] ^=
+                static_cast<uint8_t>(x_value >> 8);
+            y_output[offset + i] ^= static_cast<uint8_t>(y_value);
+            y_output[offset + 32 + i] ^=
+                static_cast<uint8_t>(y_value >> 8);
+        }
+        offset += 64;
+    }
+    const uint64_t symbols = (byte_count - offset) / 2;
+    for (uint64_t i = 0; i < symbols; ++i)
+    {
+        uint16_t x_value = static_cast<uint16_t>(x_input[offset + i] |
+            (static_cast<unsigned>(x_input[offset + symbols + i]) << 8));
+        uint16_t y_value = static_cast<uint16_t>(y_input[offset + i] |
+            (static_cast<unsigned>(y_input[offset + symbols + i]) << 8));
+        y_value ^= x_value;
+        x_value ^= ScalarFF16Product(multiplier_log, y_value);
+        x_output[offset + i] ^= static_cast<uint8_t>(x_value);
+        x_output[offset + symbols + i] ^=
+            static_cast<uint8_t>(x_value >> 8);
+        y_output[offset + i] ^= static_cast<uint8_t>(y_value);
+        y_output[offset + symbols + i] ^=
+            static_cast<uint8_t>(y_value >> 8);
+    }
+}
+
 #endif // LEO_HAS_FF16
 
 static void ScalarXorMemory(
@@ -1086,12 +1136,14 @@ static const Ops ScalarOps = {
     ScalarFF16IFFTButterfly2,
     ScalarFF16FFTButterfly2,
     ScalarFF16FFTButterfly2Out,
+    ScalarFF16IFFTButterfly2Xor,
     ScalarFF16IFFTButterfly4,
     ScalarFF16FFTButterfly4,
     ScalarFF16FFTButterfly4Out,
     ScalarFF16IFFTButterfly4Range,
     ScalarFF16FFTButterfly4Range
 #else
+    NULL,
     NULL,
     NULL,
     NULL,

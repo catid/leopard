@@ -592,6 +592,86 @@ static void SSSE3FF16FFTButterfly2Out(
     }
 }
 
+static void SSSE3FF16IFFTButterfly2Xor(
+    const void* x_input_pointer,
+    const void* y_input_pointer,
+    void* x_output_pointer,
+    void* y_output_pointer,
+    uint16_t multiplier_log,
+    uint64_t byte_count)
+{
+    const uint8_t* x_input = static_cast<const uint8_t*>(x_input_pointer);
+    const uint8_t* y_input = static_cast<const uint8_t*>(y_input_pointer);
+    uint8_t* x_output = static_cast<uint8_t*>(x_output_pointer);
+    uint8_t* y_output = static_cast<uint8_t*>(y_output_pointer);
+    const FF16NibbleTable& table = FF16Tables[multiplier_log];
+    uint64_t offset = 0;
+    while (byte_count - offset >= 64)
+    {
+        for (unsigned vector_offset = 0; vector_offset < 32;
+             vector_offset += 16)
+        {
+            __m128i x_low = _mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(
+                    x_input + offset + vector_offset));
+            __m128i x_high = _mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(
+                    x_input + offset + 32 + vector_offset));
+            __m128i y_low = _mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(
+                    y_input + offset + vector_offset));
+            __m128i y_high = _mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(
+                    y_input + offset + 32 + vector_offset));
+            y_low = _mm_xor_si128(y_low, x_low);
+            y_high = _mm_xor_si128(y_high, x_high);
+            __m128i product_low;
+            __m128i product_high;
+            SSSE3FF16ProductVectors(
+                y_low, y_high, table, product_low, product_high);
+            x_low = _mm_xor_si128(x_low, product_low);
+            x_high = _mm_xor_si128(x_high, product_high);
+            x_low = _mm_xor_si128(x_low, _mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(
+                    x_output + offset + vector_offset)));
+            x_high = _mm_xor_si128(x_high, _mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(
+                    x_output + offset + 32 + vector_offset)));
+            y_low = _mm_xor_si128(y_low, _mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(
+                    y_output + offset + vector_offset)));
+            y_high = _mm_xor_si128(y_high, _mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(
+                    y_output + offset + 32 + vector_offset)));
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(
+                x_output + offset + vector_offset), x_low);
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(
+                x_output + offset + 32 + vector_offset), x_high);
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(
+                y_output + offset + vector_offset), y_low);
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(
+                y_output + offset + 32 + vector_offset), y_high);
+        }
+        offset += 64;
+    }
+    const uint64_t symbols = (byte_count - offset) / 2;
+    for (uint64_t i = 0; i < symbols; ++i)
+    {
+        uint16_t x_value = static_cast<uint16_t>(x_input[offset + i] |
+            (static_cast<unsigned>(x_input[offset + symbols + i]) << 8));
+        uint16_t y_value = static_cast<uint16_t>(y_input[offset + i] |
+            (static_cast<unsigned>(y_input[offset + symbols + i]) << 8));
+        y_value ^= x_value;
+        x_value ^= FF16Product(multiplier_log, y_value);
+        x_output[offset + i] ^= static_cast<uint8_t>(x_value);
+        x_output[offset + symbols + i] ^=
+            static_cast<uint8_t>(x_value >> 8);
+        y_output[offset + i] ^= static_cast<uint8_t>(y_value);
+        y_output[offset + symbols + i] ^=
+            static_cast<uint8_t>(y_value >> 8);
+    }
+}
+
 #endif // LEO_HAS_FF16
 
 static void SSSE3XorMemory(
@@ -1721,12 +1801,14 @@ static const Ops SSSE3Ops = {
     SSSE3FF16IFFTButterfly2,
     SSSE3FF16FFTButterfly2,
     SSSE3FF16FFTButterfly2Out,
+    SSSE3FF16IFFTButterfly2Xor,
     SSSE3FF16IFFTButterfly4,
     SSSE3FF16FFTButterfly4,
     SSSE3FF16FFTButterfly4Out,
     SSSE3FF16IFFTButterfly4Range,
     SSSE3FF16FFTButterfly4Range
 #else
+    NULL,
     NULL,
     NULL,
     NULL,

@@ -128,6 +128,7 @@ struct TraceState
     std::atomic<uint64_t> ff16_ifft_four_calls;
     std::atomic<uint64_t> ff16_fft_four_calls;
     std::atomic<uint64_t> ff16_fft_two_out_calls;
+    std::atomic<uint64_t> ff16_ifft_two_xor_calls;
     std::atomic<uint64_t> ff16_fft_four_out_calls;
     std::atomic<uint64_t> xor_four_calls;
     std::atomic<uint64_t> ff8_ifft_four_range_calls;
@@ -240,6 +241,16 @@ void trace_ff16_ifft(void* x, void* y, uint16_t log, uint64_t bytes)
 {
     g_trace.ff16_calls.fetch_add(1, std::memory_order_relaxed);
     trace_delegate()->ff16_ifft_butterfly2(x, y, log, bytes);
+}
+
+void trace_ff16_ifft_xor(const void* x, const void* y,
+    void* x_output, void* y_output, uint16_t log, uint64_t bytes)
+{
+    g_trace.ff16_calls.fetch_add(1, std::memory_order_relaxed);
+    g_trace.ff16_ifft_two_xor_calls.fetch_add(1,
+        std::memory_order_relaxed);
+    trace_delegate()->ff16_ifft_butterfly2_xor(
+        x, y, x_output, y_output, log, bytes);
 }
 
 void trace_ff16_fft(void* x, void* y, uint16_t log, uint64_t bytes)
@@ -430,6 +441,7 @@ public:
         tracing_.ff16_ifft_butterfly2 = trace_ff16_ifft;
         tracing_.ff16_fft_butterfly2 = trace_ff16_fft;
         tracing_.ff16_fft_butterfly2_out = trace_ff16_fft_out;
+        tracing_.ff16_ifft_butterfly2_xor = trace_ff16_ifft_xor;
         tracing_.ff16_ifft_butterfly4 = trace_ff16_ifft4;
         tracing_.ff16_fft_butterfly4 = trace_ff16_fft4;
         tracing_.ff16_fft_butterfly4_out = trace_ff16_fft4_out;
@@ -460,6 +472,8 @@ public:
         g_trace.ff16_ifft_four_calls.store(0, std::memory_order_relaxed);
         g_trace.ff16_fft_four_calls.store(0, std::memory_order_relaxed);
         g_trace.ff16_fft_two_out_calls.store(0, std::memory_order_relaxed);
+        g_trace.ff16_ifft_two_xor_calls.store(
+            0, std::memory_order_relaxed);
         g_trace.ff16_fft_four_out_calls.store(0, std::memory_order_relaxed);
         g_trace.xor_four_calls.store(0, std::memory_order_relaxed);
         g_trace.ff8_ifft_four_range_calls.store(
@@ -531,6 +545,11 @@ public:
     uint64_t ff16_fft_two_out_calls() const
     {
         return g_trace.ff16_fft_two_out_calls.load(std::memory_order_relaxed);
+    }
+    uint64_t ff16_ifft_two_xor_calls() const
+    {
+        return g_trace.ff16_ifft_two_xor_calls.load(
+            std::memory_order_relaxed);
     }
     uint64_t ff16_fft_four_out_calls() const
     {
@@ -1205,6 +1224,11 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
         { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 130 },
         { 17, 33, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 130 },
         { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 1026 },
+        // A 64-wide redundancy side ends on radix four rather than the odd
+        // final layer above.  The unqualified 1024-byte prefix must retain
+        // the split policy while fusing its second layer with accumulation;
+        // the final two public bytes separately cover the padded tail.
+        { 65, 63, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 1026 },
         { 17, 33, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 1026 }
     };
     std::vector<Shards> reference_recovery(
@@ -1249,6 +1273,20 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
             {
                 require(trace.ff16_calls() != 0,
                     "GF16 encode bypassed the context ops table");
+                if (test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+                    leo2_context_backend(contexts[context_i].context) !=
+                        LEO2_BACKEND_SCALAR)
+                {
+                    require(trace.ff16_ifft_two_xor_calls() != 0,
+                        "GF16 high encode did not fuse its final inverse "
+                        "layer with accumulation: backend=" +
+                        std::to_string(static_cast<unsigned>(
+                            leo2_context_backend(
+                                contexts[context_i].context))) +
+                        " K=" + std::to_string(test_case.k) +
+                        " R=" + std::to_string(test_case.r) +
+                        " bytes=" + std::to_string(test_case.bytes));
+                }
             }
             if (side >= 4)
             {
