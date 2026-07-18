@@ -192,10 +192,13 @@ a coherent source/object/member/link truncation is rejected. Each source retains
 the bounded raw Git commit object, whose Git SHA-1 and named tree are recomputed
 offline. Each runtime closure retains the bounded raw `ldd` output, which is
 parsed independently to prove the complete summarized dependency set and exactly
-one dynamic loader rather than trusting a mutually truncated list.
+one dynamic loader rather than trusting a mutually truncated list. Every hashed
+dependency file retains the exact loader-declared path through which it was read,
+so swapping two otherwise valid shared-library records is rejected offline.
 
 Its host identity includes the exact sysfs online CPU/node list bytes, every
-enumerated cache index and cache record, NUMA-node directory inventory and
+enumerated cache index and cache record, an independently retained canonical
+listing of each CPU's sysfs cache directory, NUMA-node directory inventory and
 placement, shared-CPU domain, and heterogeneous-core class. Campaign, cell,
 CPU, reservation, and host count fields are bounded exact integers; JSON
 booleans are never accepted as integer values. Uniformly removing a field or

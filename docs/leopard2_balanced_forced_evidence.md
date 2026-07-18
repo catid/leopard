@@ -34,7 +34,9 @@ the scope requires the producer's exact four-member/adapter baseline and
 twelve-member/benchmark candidate translation-unit sets; re-parses retained raw
 `ldd` bytes and requires exactly one loader; recomputes each retained raw Git
 commit object's object ID and tree; and matches cache/NUMA summaries against
-their exact sysfs inventories and online-list bytes. A coherent deletion from
+their exact sysfs inventories and online-list bytes. Runtime file records retain
+and must equal their raw loader paths, while cache summaries must match a
+separately retained canonical sysfs directory listing. A coherent deletion from
 both sides is therefore not an equivalent environment.
 
 Baseline source/build roots and candidate

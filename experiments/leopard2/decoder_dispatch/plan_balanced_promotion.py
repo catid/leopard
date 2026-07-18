@@ -521,6 +521,21 @@ def _validate_scope_text(value: object, label: str) -> dict[str, Any]:
     return value
 
 
+def _validate_scope_numeric_directory_inventory(
+    value: object, prefix: str, label: str,
+) -> list[str]:
+    retained = _validate_scope_text(value, label)
+    text = retained["text"]
+    names = text.splitlines()
+    require(names and text == "".join(name + "\n" for name in names) and
+            all(name.startswith(prefix) and
+                name.removeprefix(prefix).isdigit() for name in names) and
+            names == sorted(set(names),
+                            key=lambda name: int(name.removeprefix(prefix))),
+            f"{label} is not a canonical numeric directory inventory")
+    return names
+
+
 def _validate_scope_commit_object(
     value: object, expected_commit: str, expected_tree: str, label: str,
 ) -> dict[str, Any]:
@@ -866,8 +881,9 @@ def _validate_runtime_closure(value: object, label: str) -> dict[str, Any]:
                 f"{label} normalized runtime dependency variant differs")
         file_record = _validate_scope_artifact(
             dependency["file"], f"{label} runtime {dependency['soname']}")
-        require(file_record["kind"] in {"shared_library", "dynamic_loader"},
-                f"{label} normalized runtime dependency kind differs")
+        require(file_record["kind"] in {"shared_library", "dynamic_loader"} and
+                file_record["path"] == dependency["loader_path"],
+                f"{label} normalized runtime dependency kind/loader path differs")
         loader_paths.append(dependency["loader_path"])
         file_paths.append(file_record["path"])
     require(sonames == sorted(sonames) and len(sonames) == len(set(sonames)) and
@@ -894,7 +910,8 @@ def _validate_scope_cpu_policy(
 ) -> dict[str, Any]:
     require(isinstance(value, dict) and set(value) == {
                 "cpu", "online", "cpuinfo", "topology", "frequency_policy",
-                "cache_hierarchy", "cache_index_inventory", "numa_nodes",
+                "cache_hierarchy", "cache_index_inventory",
+                "cache_directory_inventory_text", "numa_nodes",
                 "numa_node_inventory", "core_class"} and
             type(value.get("cpu")) is int and
             0 <= value["cpu"] <= MAX_CPU_ID and
@@ -957,8 +974,12 @@ def _validate_scope_cpu_policy(
     require(indices == sorted(indices) and len(indices) == len(set(indices)),
             f"{label} normalized cache indices differ")
     cache_inventory = value.get("cache_index_inventory")
+    raw_cache_inventory = _validate_scope_numeric_directory_inventory(
+        value.get("cache_directory_inventory_text"), "index",
+        f"{label} raw cache-directory inventory")
     require(isinstance(cache_inventory, list) and
-            cache_inventory == [f"index{index}" for index in indices],
+            cache_inventory == [f"index{index}" for index in indices] and
+            cache_inventory == raw_cache_inventory,
             f"{label} normalized cache inventory differs")
     numa = value.get("numa_nodes")
     node_inventory = value.get("numa_node_inventory")
@@ -2500,6 +2521,7 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
         raw_text = (
             "linux-vdso.so.1 (0x0000000000000000)\n"
             "libc.so.6 => /lib/libc.so.6 (0x0000000000000000)\n"
+            "libm.so.6 => /lib/libm.so.6 (0x0000000000000000)\n"
             "/lib/ld-linux-x86-64.so.2 (0x0000000000000000)\n")
         return {
             "executable": executable,
@@ -2509,14 +2531,20 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
                     "soname": "ld-linux-x86-64.so.2",
                     "loader_path": "/lib/ld-linux-x86-64.so.2",
                     "file": fixture_artifact(
-                        f"/usr/lib/{character}/ld-linux-x86-64.so.2",
+                        "/lib/ld-linux-x86-64.so.2",
                         "dynamic_loader", character),
                 },
                 {
                     "soname": "libc.so.6", "loader_path": "/lib/libc.so.6",
                     "file": fixture_artifact(
-                        f"/usr/lib/{character}/libc.so.6",
+                        "/lib/libc.so.6",
                         "shared_library", character),
+                },
+                {
+                    "soname": "libm.so.6", "loader_path": "/lib/libm.so.6",
+                    "file": fixture_artifact(
+                        "/lib/libm.so.6", "shared_library",
+                        "a" if character != "a" else "b"),
                 },
                 {"soname": "linux-vdso.so.1", "virtual": True},
             ],
@@ -2545,6 +2573,7 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
                 "allocation_policy": None, "write_policy": "WriteBack",
             }],
             "cache_index_inventory": ["index0"],
+            "cache_directory_inventory_text": fixture_text("index0\n"),
             "numa_nodes": [0],
             "numa_node_inventory": ["node0"],
             "core_class": {"core_type": None, "cpu_capacity": None},
@@ -2956,11 +2985,12 @@ def self_test() -> None:
                     closure = value["runtime_closures"][role]
                     closure["dependencies"] = [
                         item for item in closure["dependencies"]
-                        if item["soname"] != "libc.so.6"]
+                        if item["soname"] != "ld-linux-x86-64.so.2"]
                     text = "\n".join(
                         line for line in
                         closure["raw_ldd_output"]["text"].splitlines()
-                        if not line.lstrip().startswith("libc.so.6")) + "\n"
+                        if not line.lstrip().startswith(
+                            "/lib/ld-linux-x86-64.so.2")) + "\n"
                     closure["raw_ldd_output"] = {
                         "encoding": "utf-8", "text": text,
                         "size": len(text.encode("utf-8")),
@@ -2970,10 +3000,23 @@ def self_test() -> None:
         reject_scope_mutation(
             "uniform coherent runtime truncation",
             truncate_all_runtime_closures)
+        def swap_all_runtime_file_records(values) -> None:
+            for value in values:
+                for role in ("baseline", "candidate"):
+                    dependencies = value["runtime_closures"][role]["dependencies"]
+                    libc = next(item for item in dependencies
+                                if item["soname"] == "libc.so.6")
+                    libm = next(item for item in dependencies
+                                if item["soname"] == "libm.so.6")
+                    libc["file"], libm["file"] = libm["file"], libc["file"]
+        reject_scope_mutation(
+            "uniform swapped runtime file records",
+            swap_all_runtime_file_records)
         def truncate_all_cache_records(values) -> None:
             for value in values:
                 for name in ("benchmark_cpu", "reserved_sibling"):
                     value["host"][name]["cache_hierarchy"].pop()
+                    value["host"][name]["cache_index_inventory"].pop()
         reject_scope_mutation(
             "uniform cache-record truncation", truncate_all_cache_records)
         def empty_all_numa_records(values) -> None:

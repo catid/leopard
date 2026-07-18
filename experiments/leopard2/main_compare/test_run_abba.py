@@ -152,6 +152,8 @@ def host_cpu(cpu: int) -> dict:
             },
         ],
         "cache_index_inventory": ["index0", "index1"],
+        "cache_directory_inventory_text": runner.exact_text_content(
+            "index0\nindex1\n", "fixture cache-directory inventory"),
         "numa_nodes": [0],
         "numa_node_inventory": ["node0"],
         "core_class": {"core_type": None, "cpu_capacity": None},
@@ -496,6 +498,7 @@ def complete_runtime_fixture(executable: str, character: str) -> dict:
     raw = (
         "linux-vdso.so.1 (0x00000000)\n"
         "libc.so.6 => /lib/libc.so.6 (0x00000000)\n"
+        "libm.so.6 => /lib/libm.so.6 (0x00000000)\n"
         "/lib64/ld-linux-x86-64.so.2 (0x00000000)\n")
     return {
         "executable": executable,
@@ -506,15 +509,22 @@ def complete_runtime_fixture(executable: str, character: str) -> dict:
                 "soname": "ld-linux-x86-64.so.2",
                 "loader_path": "/lib64/ld-linux-x86-64.so.2",
                 "file": complete_artifact(
-                    f"/usr/lib/{character}/ld-linux-x86-64.so.2",
+                    "/lib64/ld-linux-x86-64.so.2",
                     "dynamic_loader", character),
             },
             {
                 "soname": "libc.so.6",
                 "loader_path": "/lib/libc.so.6",
                 "file": complete_artifact(
-                    f"/usr/lib/{character}/libc.so.6",
+                    "/lib/libc.so.6",
                     "shared_library", character),
+            },
+            {
+                "soname": "libm.so.6",
+                "loader_path": "/lib/libm.so.6",
+                "file": complete_artifact(
+                    "/lib/libm.so.6", "shared_library",
+                    hex((int(character, 16) + 1) & 15)[2:]),
             },
             {"soname": "linux-vdso.so.1", "virtual": True},
         ],
@@ -1026,17 +1036,29 @@ class MainCompareRunnerTests(unittest.TestCase):
             for role in ("baseline", "candidate"):
                 closure = value["identities_initial"][f"{role}_runtime_closure"]
                 closure["dependencies"] = [item for item in closure["dependencies"]
-                    if item["soname"] != "libc.so.6"]
+                    if item["soname"] != "ld-linux-x86-64.so.2"]
                 text = "\n".join(line for line in
                     closure["raw_ldd_output"]["text"].splitlines()
-                    if not line.startswith("libc.so.6")) + "\n"
+                    if not line.startswith("/lib64/ld-linux")) + "\n"
                 closure["raw_ldd_output"] = runner.exact_text_content(
                     text, f"truncated {role} ldd output")
+            synchronize_identity(value)
+
+        def swapped_runtime_file_records(value: dict) -> None:
+            for role in ("baseline", "candidate"):
+                dependencies = value["identities_initial"][
+                    f"{role}_runtime_closure"]["dependencies"]
+                libc = next(item for item in dependencies
+                            if item["soname"] == "libc.so.6")
+                libm = next(item for item in dependencies
+                            if item["soname"] == "libm.so.6")
+                libc["file"], libm["file"] = libm["file"], libc["file"]
             synchronize_identity(value)
 
         def truncated_cache_inventory(value: dict) -> None:
             for name in ("benchmark_cpu", "reserved_sibling"):
                 value["host_initial"][name]["cache_hierarchy"].pop()
+                value["host_initial"][name]["cache_index_inventory"].pop()
             value["host_final"] = copy.deepcopy(value["host_initial"])
 
         def empty_numa_summary(value: dict) -> None:
@@ -1062,6 +1084,7 @@ class MainCompareRunnerTests(unittest.TestCase):
             "topology-only-host": topology_only_host,
             "truncated-tu-closure": truncated_tu_closure,
             "coherently-truncated-runtime": coherently_truncated_runtime,
+            "swapped-runtime-file-records": swapped_runtime_file_records,
             "truncated-cache-inventory": truncated_cache_inventory,
             "empty-numa-summary": empty_numa_summary,
             "source-tree-commit-mismatch": source_tree_commit_mismatch,

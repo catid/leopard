@@ -1713,8 +1713,16 @@ def runtime_closure(
             continue
         retained = dict(entry)
         kind = retained.pop("file_kind")
-        retained["file"] = artifact_identity(
-            Path(retained["loader_path"]), kind)
+        loader_path = retained["loader_path"]
+        require(os.path.normpath(loader_path) == loader_path,
+                f"ldd returned a non-canonical loader path: {loader_path}")
+        file_identity = artifact_identity(Path(loader_path), kind)
+        # The loader may report a symlinked namespace such as /lib while
+        # Path.resolve() names /usr/lib.  Hash through the reported path, but
+        # retain that exact path so offline validation can bind this file record
+        # to its originating ldd line rather than accepting a swapped record.
+        file_identity["path"] = loader_path
+        retained["file"] = file_identity
         entries.append(retained)
     result = {
         "executable": str(executable),
@@ -1860,8 +1868,9 @@ def validate_complete_runtime_closure(
                 f"{label} runtime dependency {soname} loader path is invalid")
         file_record = validate_complete_artifact_identity(
             dependency.get("file"), f"{label} runtime dependency {soname}")
-        require(file_record["kind"] in {"shared_library", "dynamic_loader"},
-                f"{label} runtime dependency {soname} has the wrong file kind")
+        require(file_record["kind"] in {"shared_library", "dynamic_loader"} and
+                file_record["path"] == loader_path,
+                f"{label} runtime dependency {soname} has the wrong kind or loader path")
         loader_paths.append(loader_path)
         file_paths.append(file_record["path"])
     require(sonames == sorted(sonames) and len(sonames) == len(set(sonames)) and
@@ -2363,6 +2372,34 @@ def cpuinfo_identity(cpu: int) -> dict[str, str]:
     return retained
 
 
+def sysfs_numeric_directory_inventory(
+    root: Path, prefix: str, label: str,
+) -> dict[str, Any]:
+    """Retain a canonical raw directory listing independent of summaries."""
+    require(root.is_dir(), f"{label} sysfs directory is absent")
+    names = [name for name in os.listdir(root) if name.startswith(prefix)]
+    require(names and all(name.removeprefix(prefix).isdigit() for name in names),
+            f"{label} sysfs directory has an invalid indexed entry")
+    names.sort(key=lambda name: int(name.removeprefix(prefix)))
+    text = "".join(name + "\n" for name in names)
+    return exact_text_content(text, f"{label} sysfs directory inventory")
+
+
+def validate_sysfs_numeric_directory_inventory(
+    value: object, prefix: str, label: str,
+) -> list[str]:
+    retained = validate_complete_text_identity(value, label)
+    text = retained["text"]
+    names = text.splitlines()
+    require(names and text == "".join(name + "\n" for name in names) and
+            all(name.startswith(prefix) and
+                name.removeprefix(prefix).isdigit() for name in names) and
+            names == sorted(set(names),
+                            key=lambda name: int(name.removeprefix(prefix))),
+            f"{label} is not a canonical numeric directory inventory")
+    return names
+
+
 def cpu_policy_identity(cpu: int) -> dict[str, Any]:
     root = Path(f"/sys/devices/system/cpu/cpu{cpu}")
     topology_root = root / "topology"
@@ -2386,6 +2423,8 @@ def cpu_policy_identity(cpu: int) -> dict[str, Any]:
         "shared_cpu_list", "shared_cpu_map", "allocation_policy",
         "write_policy",
     )
+    cache_directory_inventory_text = sysfs_numeric_directory_inventory(
+        root / "cache", "index", f"CPU {cpu} cache")
     cache_roots = list((root / "cache").glob("index*"))
     require(all(path.name.removeprefix("index").isdigit()
                 for path in cache_roots),
@@ -2393,6 +2432,9 @@ def cpu_policy_identity(cpu: int) -> dict[str, Any]:
     cache_roots.sort(
         key=lambda path: int(path.name.removeprefix("index")))
     cache_index_inventory = [path.name for path in cache_roots]
+    require(cache_index_inventory ==
+                cache_directory_inventory_text["text"].splitlines(),
+            f"CPU {cpu} cache directory changed during identity capture")
     caches = []
     for index_root in cache_roots:
         suffix = index_root.name.removeprefix("index")
@@ -2430,6 +2472,7 @@ def cpu_policy_identity(cpu: int) -> dict[str, Any]:
         "frequency_policy": frequency,
         "cache_hierarchy": caches,
         "cache_index_inventory": cache_index_inventory,
+        "cache_directory_inventory_text": cache_directory_inventory_text,
         "numa_nodes": numa_nodes,
         "numa_node_inventory": numa_node_inventory,
         "core_class": core_class,
@@ -3440,7 +3483,8 @@ def validate_complete_cpu_policy_record(
 ) -> dict[str, Any]:
     require(isinstance(record, dict) and set(record) == {
                 "cpu", "online", "cpuinfo", "topology", "frequency_policy",
-                "cache_hierarchy", "cache_index_inventory", "numa_nodes",
+                "cache_hierarchy", "cache_index_inventory",
+                "cache_directory_inventory_text", "numa_nodes",
                 "numa_node_inventory", "core_class"},
             f"host {label} policy identity shape differs")
     require(type(record.get("cpu")) is int and record["cpu"] == expected_cpu and
@@ -3506,8 +3550,12 @@ def validate_complete_cpu_policy_record(
     require(indices == sorted(indices) and len(indices) == len(set(indices)),
             f"host {label} cache indices are not sorted and unique")
     cache_inventory = record.get("cache_index_inventory")
+    raw_cache_inventory = validate_sysfs_numeric_directory_inventory(
+        record.get("cache_directory_inventory_text"), "index",
+        f"host {label} raw cache-directory inventory")
     require(isinstance(cache_inventory, list) and
-            cache_inventory == [f"index{index}" for index in indices],
+            cache_inventory == [f"index{index}" for index in indices] and
+            cache_inventory == raw_cache_inventory,
             f"host {label} cache index inventory differs from retained caches")
     nodes = record.get("numa_nodes")
     node_inventory = record.get("numa_node_inventory")
