@@ -776,30 +776,82 @@ def _validate_lab_thread_evidence(job: dict, result: dict) -> dict:
         "sample_count", "affinity_sample_count", "peak_process_count",
         "peak_thread_count",
         "peak_rss_bytes", "rss_limit_bytes")
+    outside_cpu_set = (
+        observation.get("outside_cpu_set")
+        if isinstance(observation, dict) else None)
+    oversubscribed = (
+        observation.get("oversubscribed")
+        if isinstance(observation, dict) else None)
+    rss_exceeded = (
+        observation.get("rss_exceeded")
+        if isinstance(observation, dict) else None)
     if (not isinstance(observation, dict) or
             not required.issubset(observation) or
             not set(observation).issubset(required | {"detail"}) or
             observation.get("schema") != LAB_THREAD_OBSERVATION_SCHEMA or
-            observation.get("status") != "observed" or
+            observation.get("status") not in {
+                "pending", "not_run", "observed", "unavailable"} or
             observation.get("declared_max_threads") !=
                 job["thread_runtime"]["max_threads"] or
             observation.get("allocated_cpu_count") != len(job["cpu_set"]) or
             any(isinstance(observation.get(key), bool) or
                 not isinstance(observation.get(key), int) or
                 observation[key] < 0 for key in numeric) or
-            observation.get("sample_count", 0) < 1 or
-            observation.get("affinity_sample_count", 0) < 1 or
-            observation.get("peak_process_count", 0) < 1 or
-            observation.get("peak_thread_count", 0) < 1 or
-            observation.get("peak_thread_count") >
-                job["thread_runtime"]["max_threads"] or
+            not isinstance(outside_cpu_set, list) or
+            not all(isinstance(cpu, int) and not isinstance(cpu, bool) and
+                    cpu >= 0 for cpu in outside_cpu_set) or
+            outside_cpu_set != sorted(set(outside_cpu_set)) or
+            not isinstance(oversubscribed, bool) or
+            not isinstance(rss_exceeded, bool) or
             observation.get("rss_limit_bytes") !=
                 job.get("rss_limit_mb", 0) * 1024 * 1024 or
-            observation.get("rss_exceeded") is not False or
-            observation.get("outside_cpu_set") != [] or
-            observation.get("oversubscribed") is not False):
+            ("detail" in observation and
+             (not isinstance(observation["detail"], str) or
+              not observation["detail"])) or
+            oversubscribed != (
+                observation.get("peak_thread_count") >
+                job["thread_runtime"]["max_threads"]) or
+            rss_exceeded != bool(
+                observation.get("rss_limit_bytes") and
+                observation.get("peak_rss_bytes") >
+                observation.get("rss_limit_bytes"))):
         raise MatrixError(
             f"job {job['id']} lacks valid thread-allocation evidence")
+
+    outcome = result.get("outcome")
+    never_launched = outcome in {"launch_error", "unavailable"}
+    launched = outcome in {
+        "success", "failed", "timeout", "memory_limit",
+        "evidence_invalid", "interrupted",
+    }
+    if not never_launched and not launched:
+        raise MatrixError(f"job {job['id']} has an invalid terminal outcome")
+    if never_launched:
+        if (observation["status"] != "not_run" or
+                any(observation[key] != 0 for key in (
+                    "sample_count", "affinity_sample_count",
+                    "peak_process_count", "peak_thread_count",
+                    "peak_rss_bytes")) or
+                observation["outside_cpu_set"] or
+                observation["oversubscribed"] or
+                observation["rss_exceeded"]):
+            raise MatrixError(
+                f"job {job['id']} has invalid never-launched runtime evidence")
+        return runtime
+
+    if (observation["status"] != "observed" or
+            observation["sample_count"] < 1 or
+            observation["affinity_sample_count"] < 1 or
+            observation["peak_process_count"] < 1 or
+            observation["peak_thread_count"] < 1):
+        raise MatrixError(
+            f"job {job['id']} lacks observed launched-runtime evidence")
+    if (outcome == "success" and
+            (observation["oversubscribed"] or
+             observation["rss_exceeded"] or
+             observation["outside_cpu_set"])):
+        raise MatrixError(
+            f"job {job['id']} accepted invalid successful runtime evidence")
     return runtime
 
 
@@ -1565,6 +1617,72 @@ def self_test() -> None:
                     "automatic_ratio_to_best_forced"] != 1.2 or
                 collected["source_spec"]["metadata"]["preset"] != "self-test"):
             raise MatrixError("collector pairing invariant failed")
+
+        def set_first_never_launched(
+                manifest, results, benchmarks, outcome="unavailable"):
+            del manifest, benchmarks
+            result = results[sorted(results)[0]]
+            result.update(outcome=outcome, exit_code=None)
+            result["thread_runtime"]["observation"] = {
+                "schema": LAB_THREAD_OBSERVATION_SCHEMA,
+                "status": "not_run",
+                "declared_max_threads": 1,
+                "allocated_cpu_count": 1,
+                "sample_count": 0,
+                "affinity_sample_count": 0,
+                "peak_process_count": 0,
+                "peak_thread_count": 0,
+                "peak_rss_bytes": 0,
+                "rss_limit_bytes": 0,
+                "rss_exceeded": False,
+                "outside_cpu_set": [],
+                "oversubscribed": False,
+                "detail": "job did not reach runtime observation",
+            }
+
+        unavailable_fixture = write_fixture(
+            "never-launched-unavailable", set_first_never_launched)
+        unavailable_collected = collect(*unavailable_fixture)
+        unavailable_records = [
+            record for record in unavailable_collected["records"]
+            if record["outcome"] == "unavailable"]
+        if (unavailable_collected["summary"] != {
+                "success": 4, "unavailable": 1} or
+                len(unavailable_records) != 1 or
+                unavailable_records[0]["thread_runtime"]["observation"][
+                    "status"] != "not_run"):
+            raise MatrixError(
+                "collector did not preserve valid never-launched evidence")
+
+        invalid_unavailable = write_fixture(
+            "never-launched-with-runtime-sample",
+            lambda manifest, results, benchmarks: (
+                set_first_never_launched(manifest, results, benchmarks),
+                results[sorted(results)[0]]["thread_runtime"]["observation"].update(
+                    sample_count=1)))
+        expect_error(
+            "never-launched result with a runtime sample",
+            lambda: collect(*invalid_unavailable))
+
+        def set_first_failed(manifest, results, benchmarks):
+            del manifest, benchmarks
+            results[sorted(results)[0]].update(outcome="failed", exit_code=7)
+
+        failed_fixture = write_fixture("launched-failure", set_first_failed)
+        failed_collected = collect(*failed_fixture)
+        if failed_collected["summary"] != {"failed": 1, "success": 4}:
+            raise MatrixError(
+                "collector did not preserve observed launched failure evidence")
+
+        invalid_failed = write_fixture(
+            "launched-failure-without-observation",
+            lambda manifest, results, benchmarks: (
+                set_first_failed(manifest, results, benchmarks),
+                set_first_never_launched(
+                    manifest, results, benchmarks, outcome="failed")))
+        expect_error(
+            "launched result without runtime observation",
+            lambda: collect(*invalid_failed))
 
         def forge_oversubscribed_result(manifest, results, benchmarks):
             del manifest, benchmarks
