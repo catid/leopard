@@ -173,5 +173,40 @@ the requested balanced-GF8 forced-generic versus forced-specialized residual
 remain open.
 
 Remaining implementation opportunities include radix-two stage grouping,
-out-of-place coefficient-stage grouping, pruned-schedule batching, and fully
-inlined or generated per-size backend loops.
+out-of-place coefficient-stage grouping through a different execution layout,
+pruned-schedule batching, and fully inlined or generated per-size backend
+loops.
+
+## Rejected out-of-place range follow-up
+
+A July 2026 follow-up tested a private range callback around the first
+out-of-place forward radix-four group used by low-profile evaluation and the
+mature high-profile evaluator.  The first version moved the lane loop into
+each backend and called its qualified leaf directly.  Two subsequent variants
+forced the leaf inline and then duplicated the SSSE3/AVX2 GF8 vector body so
+the fixed multiplication tables were loaded once per range.  The initial
+implementation passed the full Release suite, strict GCC and Clang sanitizer
+builds, GF8-only and GF16-only builds, and the AUTO/scalar/SSSE3/AVX2 backend
+matrix.  Each follow-up rebuilt and passed the focused backend qualification
+and explicit-context tests before its timing screen.
+
+The variants were nevertheless rejected.  CPU-0-pinned, single-thread,
+reversed-order diagnostics compared the candidate with its immediate parent
+`d9ef32e` using 51 samples, 1,024 reuses per sample, and eight warmups.  The
+final table-hoisted AVX2 candidate measured as follows; ranges show the two
+counterbalanced process runs in microseconds per encode call:
+
+| Cell | Parent | Candidate | Result |
+| --- | ---: | ---: | --- |
+| low GF8 (17,33), 64 B | 0.520-0.523 | 0.531-0.543 | 2-4% slower |
+| low GF8 (64,192), 64 B | 2.450-2.476 | 2.647-2.657 | 7-8% slower |
+| high GF8 (192,64), 64 B | 2.431-2.438 | 2.508-2.512 | about 3% slower |
+| low GF8 (64,192), 1 KiB | 14.556-14.607 | 14.648-14.688 | neutral/slower |
+
+GF16 screens were likewise neutral or slightly slower.  The callback reduced
+the number of indirect calls, but that structural count did not translate to
+a whole-codec win and violated the neighboring-regression gate.  The code was
+therefore reverted rather than hidden behind production dispatch.  A future
+attempt should change the data traversal or generate a complete first-stage
+kernel, and must repeat immediate-parent whole-codec measurements instead of
+assuming dispatch-count reduction is sufficient.
