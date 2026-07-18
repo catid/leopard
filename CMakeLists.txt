@@ -411,6 +411,12 @@ if(LEO2_BUILD_BENCHMARKS)
     add_executable(bench_leopard2 bench/leopard2/benchmark.cpp)
     target_link_libraries(bench_leopard2 leopard)
 
+    if(LEOPARD_ENABLE_GF8)
+        add_executable(bench_leopard2_batch_preflight
+            bench/leopard2/batch_preflight_benchmark.cpp)
+        target_link_libraries(bench_leopard2_batch_preflight leopard)
+    endif()
+
     add_executable(bench_leopard2_locator
         bench/leopard2/locator_benchmark.cpp)
     target_link_libraries(bench_leopard2_locator leopard)
