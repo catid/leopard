@@ -295,18 +295,19 @@ LEO_EXPORT LeopardResult leo_decode(
     if (recovery_got_count < original_loss_count)
         return Leopard_NeedMoreData;
 
-    // Handle k = 1 case
-    if (original_count == 1)
-    {
-        memcpy(work_data[0], recovery_data[recovery_got_i], buffer_bytes);
-        return Leopard_Success;
-    }
-    
     // Handle case original_loss_count = 0
     if (original_loss_count == 0)
     {
         for(unsigned i = 0; i < original_count; i++)
             memcpy(work_data[i], original_data[i], buffer_bytes);
+        return Leopard_Success;
+    }
+
+    // Handle k = 1 case.  This must follow the no-loss path: no recovery
+    // shard is required when the sole original is already available.
+    if (original_count == 1)
+    {
+        memcpy(work_data[0], recovery_data[recovery_got_i], buffer_bytes);
         return Leopard_Success;
     }
 

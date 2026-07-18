@@ -1563,12 +1563,39 @@ void test_legacy_negative_contract(Counts* counts)
     require_legacy_result(leo_decode(64, 3, 2, 8, incomplete_original,
         recovery, decode_work), Leopard_NeedMoreData,
         "legacy decode insufficient recovery");
+
+    uint8_t single_source[64];
+    uint8_t single_restored[64];
+    for (size_t i = 0; i < sizeof(single_source); ++i)
+        single_source[i] = static_cast<uint8_t>(i * 17u + 3u);
+    memset(single_restored, 0xa5, sizeof(single_restored));
+    const void* single_original[1] = { single_source };
+    const void* single_recovery[1] = { NULL };
+    void* single_work[1] = { single_restored };
+    require_legacy_result(leo_decode(64, 1, 1, 1, single_original,
+        single_recovery, single_work), Leopard_Success,
+        "legacy one-original no-loss decode");
+    require(memcmp(single_source, single_restored, sizeof(single_source)) == 0,
+        "legacy one-original no-loss decode changed data");
+
+    memset(single_restored, 0xa5, sizeof(single_restored));
+    const void* missing_single_original[1] = { NULL };
+    const void* received_single_recovery[1] = { single_source };
+    require_legacy_result(leo_decode(64, 1, 1, 1,
+        missing_single_original, received_single_recovery, single_work),
+        Leopard_Success, "legacy one-original recovery decode");
+    require(memcmp(single_source, single_restored, sizeof(single_source)) == 0,
+        "legacy one-original recovery decode changed data");
+    require_legacy_result(leo_decode(64, 1, 1, 1,
+        missing_single_original, single_recovery, single_work),
+        Leopard_NeedMoreData, "legacy one-original insufficient recovery");
+
     const void* one_original[1] = { shard };
     void* one_work[1] = { shard };
     require_legacy_result(leo_encode(64, 65535, 32768, 65536,
         one_original, one_work), Leopard_TooMuchData,
         "legacy encode field-order limit");
-    counts->legacy_checks += 6;
+    counts->legacy_checks += 11;
 }
 
 } // namespace

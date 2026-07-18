@@ -204,6 +204,21 @@ void check_legacy_no_loss()
     for (unsigned i = 0; i < originals; ++i)
         require(work_storage[i] == original_storage[i],
             "legacy no-loss output bytes");
+
+    // K=1 has its own recovery fast path.  With no loss it must still use the
+    // available original rather than dereferencing an absent recovery shard.
+    std::vector<uint8_t> single_original(64);
+    std::vector<uint8_t> single_work(64, 0xa5);
+    for (unsigned i = 0; i < 64; ++i)
+        single_original[i] = static_cast<uint8_t>(i * 17U + 3U);
+    const void* single_original_pointer[1] = { single_original.data() };
+    const void* single_recovery_pointer[1] = { NULL };
+    void* single_work_pointer[1] = { single_work.data() };
+    require(leo_decode(64, 1, 1, 1, single_original_pointer,
+        single_recovery_pointer, single_work_pointer) == Leopard_Success,
+        "field-independent one-original no-loss decode");
+    require(single_work == single_original,
+        "legacy one-original no-loss output bytes");
 }
 
 void check_legacy_selection()
