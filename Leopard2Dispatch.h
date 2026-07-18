@@ -82,6 +82,20 @@ struct DecodePathInput
     size_t tail_bytes;
     size_t rounded_shard_bytes;
     bool plan_known;
+    /*
+        Execution intentionally exposes only the stable single-item versus
+        multi-item class to this selector.  The batch entry point already
+        knows its exact item count, but callers size each item's decode
+        scratch through the ordinary plan query.  A batch-only rule must
+        therefore retain or reduce that conservative one-item allocation.
+
+        Expected plan reuse is not a selector input.  Setup is complete before
+        this byte-heavy decision, immutable plans may be shared by callers
+        with different reuse behavior, and benchmarks report setup separately
+        at several amortization counts.  A future caller hint, if evidence
+        justifies one, requires an additive versioned API rather than changing
+        this V1 default or consuming a reserved public field.
+    */
     bool multi_item_batch;
 };
 

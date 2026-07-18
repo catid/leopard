@@ -1063,6 +1063,52 @@ void test_pack_unpack_contract(leo2_context* context)
         LEO2_INVALID_ARGUMENT, "nonzero systematic pad was accepted");
     require(leo2_unpack_systematic_shard(padded.codec, 1, wire, 1, &unpacked) ==
         LEO2_INVALID_ARGUMENT, "undersized unpack was accepted");
+
+    const uintptr_t invalid_address =
+        std::numeric_limits<uintptr_t>::max() - 31u;
+    void* const invalid_mutable = reinterpret_cast<void*>(invalid_address);
+    const void* const invalid_const =
+        reinterpret_cast<const void*>(invalid_address);
+    Bytes span_payload(65, 0x42);
+    Bytes span_wire(66, 0x5a);
+    const Bytes untouched_wire = span_wire;
+    require(leo2_pack_systematic_shard(padded.codec, span_payload.size(),
+        invalid_const, &span_wire[0], span_wire.size()) ==
+        LEO2_INVALID_ARGUMENT,
+        "unrepresentable pack source span was accepted");
+    require(span_wire == untouched_wire,
+        "rejected pack source span modified its valid destination");
+    require(leo2_pack_systematic_shard(padded.codec, span_payload.size(),
+        &span_payload[0], invalid_mutable, span_wire.size()) ==
+        LEO2_INVALID_ARGUMENT,
+        "unrepresentable pack destination span was accepted");
+
+    span_wire.assign(66, 0x24);
+    span_wire.back() = 0;
+    Bytes span_output(65, 0xa5);
+    const Bytes untouched_output = span_output;
+    require(leo2_unpack_systematic_shard(padded.codec, span_output.size(),
+        invalid_const, span_wire.size(), &span_output[0]) ==
+        LEO2_INVALID_ARGUMENT,
+        "unrepresentable unpack source span was accepted");
+    require(span_output == untouched_output,
+        "rejected unpack source span modified its valid destination");
+    require(leo2_unpack_systematic_shard(padded.codec, span_output.size(),
+        &span_wire[0], span_wire.size(), invalid_mutable) ==
+        LEO2_INVALID_ARGUMENT,
+        "unrepresentable unpack destination span was accepted");
+
+    Bytes native_payload(64, 0x39);
+    Bytes native_wire(64, 0);
+    Bytes native_output(64, 0);
+    require_result(leo2_pack_systematic_shard(native.codec,
+        native_payload.size(), &native_payload[0], &native_wire[0],
+        native_wire.size()), "native representable-span pack control");
+    require_result(leo2_unpack_systematic_shard(native.codec,
+        native_output.size(), &native_wire[0], native_wire.size(),
+        &native_output[0]), "native representable-span unpack control");
+    require(native_output == native_payload,
+        "native representable-span control did not round-trip");
 }
 
 void test_native_odd_rejection_matrix(leo2_context* context)

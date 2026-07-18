@@ -252,9 +252,10 @@ LEO2_EXPORT leo2_shard_layout leo2_codec_shard_layout(const leo2_codec* codec);
 
     Pack/unpack are allocation-free and use memmove semantics, so source and
     destination may overlap.  wire_shard_bytes must equal the queried size.
-    Padded-odd unpack rejects a nonzero systematic pad byte.  These helpers are
-    for systematic/original coordinates; parity shards must retain all physical
-    bytes and must not be unpacked or truncated.
+    An unrepresentable payload or wire span returns LEO2_INVALID_ARGUMENT before
+    either range is accessed.  Padded-odd unpack rejects a nonzero systematic
+    pad byte.  These helpers are for systematic/original coordinates; parity
+    shards must retain all physical bytes and must not be unpacked or truncated.
 */
 LEO2_EXPORT leo2_result leo2_codec_wire_shard_bytes(
     const leo2_codec* codec,
@@ -369,6 +370,13 @@ LEO2_EXPORT leo2_result leo2_decode_plan_scratch_size(
     const leo2_decode_plan* plan,
     uint64_t shard_bytes,
     size_t* scratch_bytes_out);
+/*
+    Batch items use this same per-item scratch query.  An internal batch-aware
+    kernel choice never requires more per-item storage than the ordinary
+    single-item result.  The exact item count affects scheduling and may select
+    an equal-or-smaller execution layout; it is not a persistent code or plan
+    hint.
+*/
 LEO2_EXPORT leo2_result leo2_decode_plan_execute(
     const leo2_decode_plan* plan,
     uint64_t shard_bytes,

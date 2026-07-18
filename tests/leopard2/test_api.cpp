@@ -1468,6 +1468,23 @@ leopard2_internal::DecodePathInfo require_decode_path(
     return selection;
 }
 
+void require_batch_decode_scratch_bound(
+    leopard2_internal::DecodePathInput input,
+    const char* operation)
+{
+    leopard2_internal::DecodePathInfo single;
+    leopard2_internal::DecodePathInfo batch;
+    input.multi_item_batch = false;
+    require(leopard2_internal::SelectDecodePath(input, single),
+        std::string(operation) + " rejected the single-item input");
+    input.multi_item_batch = true;
+    require(leopard2_internal::SelectDecodePath(input, batch),
+        std::string(operation) + " rejected the multi-item input");
+    require(batch.required_work_slots <= single.required_work_slots,
+        std::string(operation) +
+        " made batch execution exceed one-item scratch");
+}
+
 void test_unified_decode_path_selector()
 {
     using namespace leopard2_internal;
@@ -1680,6 +1697,20 @@ void test_unified_decode_path_selector()
                     (kDecodeAutoRuleBalancedGeneric |
                      kDecodeAutoRuleMeasuredMaterialized),
                 "evidence-scoped AUTO rules overlap");
+            require_batch_decode_scratch_bound(
+                input, "high-profile batch scratch invariant");
+
+            const uint32_t low_padded = test_ceil_pow2(k);
+            const uint32_t low_parent = test_ceil_pow2(low_padded + r);
+            if (low_parent <= 256)
+            {
+                DecodePathInput low_input = make_decode_path_input(
+                    LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8,
+                    backends[backend_i], k, r, low_padded, low_parent,
+                    missing, byte_counts[byte_i]);
+                require_batch_decode_scratch_bound(
+                    low_input, "low-profile batch scratch invariant");
+            }
         }
     }
 }

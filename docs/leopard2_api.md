@@ -137,6 +137,33 @@ Normal applications should leave all four flags clear and use deterministic
 AUTO dispatch.  See `leopard2_decode_tiled_workspace.md` for the calibrated
 region and its authenticated evidence.
 
+### Dispatch inputs and plan reuse
+
+The V1 API deliberately has no caller-supplied expected-plan-reuse hint and no
+persistent batch-count hint.  A batch call already supplies its exact
+`item_count`; current byte-kernel policy distinguishes a single item from a
+multi-item batch only where isolated evidence supports that stable class.  Each
+decode item continues to use the storage returned by
+`leo2_decode_plan_scratch_size`.  A batch-specific path must fit that
+conservative single-item allocation, so callers never need a second per-item
+scratch query merely because the next call is a larger batch.
+
+Plan construction is complete before byte-heavy execution.  The same immutable
+plan may safely be shared by callers whose actual reuse differs, so a mutable or
+guessed reuse count would make otherwise identical calls depend on application
+forecasting without changing the underlying arithmetic.  Benchmarks therefore
+report setup separately and amortize it at multiple reuse counts, while normal
+execution selects a deterministic kernel and never benchmarks online.  A
+future measured setup strategy that genuinely needs a reuse promise must use a
+new versioned plan-options/create entry point; it must not reinterpret a
+reserved field or alter an existing plan after construction.
+
+This decision changes neither ABI nor defaults.  Backend and execution-layout
+choices do not alter the selected profile, field, coordinates, parity ordering
+or wire bytes.  Exact batch count remains available internally to the
+scheduler, and a future internal exact-count rule is compatible only if it
+preserves the documented scratch bound and deterministic results.
+
 `leo2_decode` is a convenience wrapper that allocates and destroys a plan.  Use a
 reusable plan when setup amortization matters.
 
@@ -201,11 +228,13 @@ which verifies their final zero before returning the first `B` bytes.
 
 Pack and unpack allocate nothing and have `memmove` overlap semantics, including
 in-place operation.  Their wire-size argument must exactly match the size query.
-Padded codecs reject even application-size queries, odd physical core lengths,
-and nonzero final bytes in systematic inputs.  Native layout remains the only
-layout for even payloads, so all legacy-valid and existing compact-even parity
-bytes remain unchanged.  The no-loss decoder intentionally performs no buffer
-or pad validation because its contract is a true no-op.
+An unrepresentable payload or wire address span returns
+`LEO2_INVALID_ARGUMENT` before either range is accessed.  Padded codecs reject
+even application-size queries, odd physical core lengths, and nonzero final
+bytes in systematic inputs.  Native layout remains the only layout for even
+payloads, so all legacy-valid and existing compact-even parity bytes remain
+unchanged.  The no-loss decoder intentionally performs no buffer or pad
+validation because its contract is a true no-op.
 
 The batch entry points execute independent items using each item's own buffers and
 scratch.  `item_count` may not exceed `UINT32_MAX`; larger counts return

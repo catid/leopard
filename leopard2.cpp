@@ -4681,6 +4681,11 @@ LEO2_EXPORT leo2_result leo2_pack_systematic_shard(
         return result;
     if (!payload || !wire_shard || wire_shard_bytes != expected_wire_bytes)
         return LEO2_INVALID_ARGUMENT;
+    AddressRange payload_range;
+    AddressRange wire_range;
+    if (!MakeRange(payload, payload_bytes, payload_range) ||
+        !MakeRange(wire_shard, expected_wire_bytes, wire_range))
+        return LEO2_INVALID_ARGUMENT;
 
     memmove(wire_shard, payload, static_cast<size_t>(payload_bytes));
     if (codec->shard_layout == LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1)
@@ -4701,6 +4706,11 @@ LEO2_EXPORT leo2_result leo2_unpack_systematic_shard(
     if (result != LEO2_SUCCESS)
         return result;
     if (!wire_shard || !payload || wire_shard_bytes != expected_wire_bytes)
+        return LEO2_INVALID_ARGUMENT;
+    AddressRange wire_range;
+    AddressRange payload_range;
+    if (!MakeRange(wire_shard, expected_wire_bytes, wire_range) ||
+        !MakeRange(payload, payload_bytes, payload_range))
         return LEO2_INVALID_ARGUMENT;
     if (codec->shard_layout == LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1 &&
         static_cast<const uint8_t*>(wire_shard)[static_cast<size_t>(payload_bytes)] != 0)

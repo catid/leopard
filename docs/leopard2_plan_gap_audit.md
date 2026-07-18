@@ -57,11 +57,16 @@ sparse setup have passed their production gates.
 
 The production dispatcher is deterministic, but it is not yet the plan's full
 region model. Current decisions use selected combinations of K, R, N, loss
-count, shard bytes, field and backend, with one measured batch exception. Plan
-reuse and thread count are not general runtime inputs, and batch size does not
-inform every direct/generic/specialized choice. `leopard-79h.38.4` owns the
-production existing-path dispatcher independently of exact-profile C10 research
-(`leopard-79h.18.1.11`).
+count, shard bytes, field and backend, with one measured single-versus-multiple
+batch exception. Decision `leopard-79h.38.4.2` intentionally does not add a V1
+expected-reuse or persistent exact-batch-count hint: the batch call already
+knows its exact count, every item must fit the ordinary plan scratch query, and
+an immutable plan may be shared across callers with different actual reuse.
+Reuse and exact batch count remain benchmark/reporting axes; a future measured
+setup policy needs an additive versioned plan-options API. Thread count and
+most batch shapes do not yet inform direct/generic/specialized selection.
+`leopard-79h.38.4` owns the production existing-path dispatcher independently
+of exact-profile C10 research (`leopard-79h.18.1.11`).
 
 ## Correctness and evidence check
 
