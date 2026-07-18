@@ -1146,6 +1146,12 @@ void test_process_default_immutable(
 void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
 {
     const CodecCase transform_cases[] = {
+        // Multiple high-rate message blocks force the final GF8 IFFT layer to
+        // accumulate into the first block.  Cover an exact vector tile and a
+        // ragged public tail so scalar, SSSE3, and AVX2 must agree through the
+        // fused IFFT-plus-XOR backend boundary.
+        { 33, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 64 },
+        { 33, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 129 },
         { 33, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 257 },
         { 17, 33, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, 129 },
         { 33, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 64 },

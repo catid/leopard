@@ -150,8 +150,10 @@ typedef void (*Butterfly4Range)(
     bool prefer_fused);
 
 // GF8 encoder variant that accumulates a completed inverse radix-four group
-// into four corresponding output ranges.  Inputs are transformed in place;
-// output ranges are XORed and must be disjoint from the work ranges.
+// into four corresponding output ranges.  The output ranges are XORed and
+// must be disjoint from the work ranges.  Work contents are unspecified after
+// the call: a backend may transform them in place or consume them read-only
+// while fusing the final butterfly with output accumulation.
 typedef void (*IFFTButterfly4XorRange)(
     void* const* work,
     void* const* xor_output,
