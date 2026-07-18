@@ -1191,7 +1191,7 @@ def validate_compile_commands(
                 "Leopard2BackendScalar.cpp", "Leopard2CpuFeatures.cpp",
                 "Leopard2Plan.cpp", "LeopardCommon.cpp", "LeopardFF8.cpp",
                 "LeopardFF16.cpp", "Leopard2BackendSSSE3.cpp",
-                "Leopard2BackendAVX2.cpp")),
+                "Leopard2BackendAVX2.cpp", "Leopard2BackendAVX512.cpp")),
             candidate_root / "bench/leopard2/benchmark.cpp",
         }
     required = {path.resolve(strict=True) for path in required}
@@ -1211,9 +1211,18 @@ def validate_compile_commands(
                             token.startswith("-DLEO2_ENABLE_TEST_HOOKS")
                             for token in tokens),
                     f"candidate production source {source} has native/test-hook flags")
-            if source.name not in {"Leopard2BackendAVX2.cpp", "Leopard2BackendSSSE3.cpp"}:
+            if source.name not in {
+                    "Leopard2BackendAVX2.cpp", "Leopard2BackendAVX512.cpp",
+                    "Leopard2BackendSSSE3.cpp"}:
                 require("-mavx2" not in tokens and "-mssse3" not in tokens,
                         f"candidate portable source {source} has an ISA-specific flag")
+            if source.name == "Leopard2BackendAVX512.cpp":
+                required_avx512_flags = {
+                    "-mavx2", "-mavx512f", "-mavx512bw", "-mavx512vl",
+                    "-mprefer-vector-width=256",
+                }
+                require(required_avx512_flags.issubset(tokens),
+                        "candidate AVX-512VL source lacks its exact ISA flags")
         source_identity = artifact_identity(source, "source_file")
         object_identity = artifact_identity(output, "object_file")
         require(object_identity["mtime_ns"] >= source_identity["mtime_ns"],
