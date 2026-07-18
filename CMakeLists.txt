@@ -1409,6 +1409,12 @@ if(LEO2_BUILD_TESTS)
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_fuzz_campaign.py
                     self-test)
+            # The retained GF16 neighbor-evidence replay imports the Linux
+            # affinity/lease support used by its fail-closed runner.
+            add_test(
+                NAME leopard2_gf16_neighbor_evidence_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf16_high_encode/test_run_neighbor_abba.py)
         endif()
         add_test(
             NAME leopard2_benchmark_matrix_self_test
