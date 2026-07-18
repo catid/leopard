@@ -1,8 +1,10 @@
 # Leopard2 coarse transform backend boundary
 
-Status: implemented and correctness-qualified.  Performance promotion remains
-pending an isolated, exact-source comparison with the main-branch codec.  This
-change does not select a new codec path, profile, field, or wire format.
+Status: implemented and correctness-qualified.  The exact-main comparison is
+complete; the smaller matched-parent performance effect of this boundary is
+not yet qualified because system activity repeatedly reached the measured
+core's SMT sibling.  This change does not select a new codec path, profile,
+field, or wire format.
 
 ## Problem and scope
 
@@ -81,7 +83,7 @@ larger split-policy tail.
 
 The implementation passed these source gates before integration:
 
-- GCC 13 Release: 66/66 tests, including the complete legacy golden-vector,
+- GCC 13 Release: 70/70 tests, including the complete legacy golden-vector,
   field-option, CUDA-optionality, and project-graph gates.
 - GCC 13 with `-Wall -Wextra -Wpedantic -Werror`: build clean and 9/9 focused
   tests.
@@ -97,15 +99,79 @@ high/low acceptance, legacy-high pruning and parity, GF16 legacy encoding,
 arbitrary-count profiles, transform differential testing, and concurrent
 encoding.
 
-After rebasing onto coordinator commit `866dd3a`, a fresh Release build passed
-70/70 tests with `OMP_NUM_THREADS=1` and 30-way CTest scheduling.  This includes
-the newly integrated batch-aliasing coverage.  Limiting each test's implicit
-OpenMP team avoided nested oversubscription while the independent test
-processes used every allowed CPU.
+The final code commit is `07816757` on coordinator parent `049331e8`.  A fresh
+Release build passed 70/70 tests with `OMP_NUM_THREADS=1` and 30-way CTest
+scheduling.  This includes batch-aliasing coverage.  Limiting each test's
+implicit OpenMP team avoided nested oversubscription while independent test
+processes used the available CPUs.
 
-No authoritative timing was collected while other workers occupied the host.
-The candidate must be compared against exact main and a matched parent control
-on an isolated physical core before any throughput claim or wider promotion.
-Remaining optimization opportunities include radix-two stage grouping,
+The backend matrix then rebuilt and tested `auto`, `scalar`, `ssse3`, and
+`avx2` variants.  All four passed, with 39, 38, 38, and 38 recorded tests
+respectively and no source mismatch.  The generated matrix is
+`.research/leopard2/coarse_transform/backend-matrix-5fd34d0/matrix.json`, has
+SHA-256
+`fc818df4479970121895e6395962ee40c23b0b1ff87d56c14fdcf75633dd0ab6`,
+and records source fingerprint
+`0deecf762e4e634d14e844b98c67ac51c61b851aa0c26e5baa9ea8b8e3486822`.
+The associated evidence-contract tests passed their canonical and historical
+replays plus 89 adversarial manifest mutations.
+
+## Exact-main comparison
+
+An isolated ABBA campaign compared exact main `6e5725eb` with Leopard2 code
+`07816757` on CPU 14.  CPU 30, its SMT sibling, recorded zero non-idle jiffies
+over the measurement interval.  At capture, the independent verifier accepted
+the build, source, executable, affinity, and sample closure.  The generated
+manifest is
+`.research/leopard2/coarse_transform/exact-main-0781675-final-cpu14-v4/manifest.json`,
+has file SHA-256
+`e09c484c79659f1fe2691b52153e2efea995add63d7dc2f745c7b9ca4174c2f9`,
+and records internal digest
+`2bbd414819cce46efa64d6e3c93a317ebf77416ff0e62a0b2c7e66615c2fc8b1`.
+
+The following values are exact-main time divided by Leopard2 time, so a value
+above one means Leopard2 was faster.  Parentheses give the 95 percent
+bootstrap confidence interval.
+
+| Cell | Encode | First decode | Reused-plan decode |
+| --- | ---: | ---: | ---: |
+| GF8 XOR | 1.006 (0.972-1.042) | 1.016 (0.982-1.051) | 1.018 (0.984-1.053) |
+| GF8 high, one loss | 0.798 (0.787-0.808) | 2.040 (2.009-2.071) | 2.045 (2.014-2.076) |
+| GF8 high, full loss | 0.795 (0.780-0.810) | 1.683 (1.658-1.710) | 1.696 (1.670-1.723) |
+| GF8 balanced, full loss | 0.940 (0.937-0.943) | 0.767 (0.754-0.781) | 0.769 (0.755-0.782) |
+| GF16 inflation, eight losses | 0.927 (0.918-0.936) | 2.770 (2.760-2.781) | 2.790 (2.780-2.801) |
+| GF16 high, one loss | 0.899 (0.888-0.910) | 3.814 (3.806-3.822) | 3.826 (3.819-3.834) |
+| GF16 high, full loss | 0.899 (0.896-0.901) | 2.741 (2.728-2.755) | 2.753 (2.739-2.767) |
+| GF16 large, eight losses | 0.852 (0.846-0.858) | 2.818 (2.798-2.838) | 3.079 (3.058-3.100) |
+
+This supports the specialized high-rate decode advantage over exact main, but
+not a broad speedup claim.  Transform encoding was 6.0 to 20.5 percent slower
+in the listed non-XOR cells, and balanced GF8 full-loss decoding was about 23
+percent slower.  Those gaps remain production optimization targets.
+
+## Matched-parent qualification
+
+The coarse-callback change itself must be measured against its immediate
+parent, not inferred from the exact-main comparison.  Three matched-parent
+attempts were deliberately rejected:
+
+- v1 completed but CPU 30 recorded two non-idle jiffies, and it exposed a
+  benchmark-provenance bug involving resolved external-library symlinks;
+- v2 was terminated after later-disclosed overlapping compile and smoke-test
+  work invalidated isolation; and
+- v3 completed all 1,664 invocations and passed the corrected provenance
+  checks, but CPU 30 recorded 36 non-idle jiffies out of 36,262 while an
+  account-wide affinity watchdog continually moved visible user processes away
+  from the benchmark pair.
+
+The v3 diagnostic is retained at
+`.research/leopard2/coarse_transform/matched-parent-a30ec74-cpu14-v3/EXTERNAL_ISOLATION_INVALIDATED.json`.
+No v3 ratio is authoritative or used for promotion.  A valid retry requires
+system-wide or privileged isolation that can also exclude activity outside the
+current account.  Consequently, an authoritative matched-parent residual and
+the requested balanced-GF8 forced-generic versus forced-specialized residual
+remain open.
+
+Remaining implementation opportunities include radix-two stage grouping,
 out-of-place coefficient-stage grouping, pruned-schedule batching, and fully
-inlined/generated per-size backend loops.
+inlined or generated per-size backend loops.
