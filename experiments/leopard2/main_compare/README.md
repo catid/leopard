@@ -104,7 +104,9 @@ exclusive authority.
     python3 -c 'import json,sys; sys.stdout.write(json.dumps({"benchmark_cpu":15,"nonce":"replace-with-unique-value","owner":"benchmark coordinator","reserved_sibling":31,"schema":"leopard2-cpu-reservation/v1","status":"held"},sort_keys=True,separators=(",",":")))' \
         > build/leopard2-main-reservation.json
 
-Run from an initial affinity that contains both reserved CPUs. The
+Run from an initial affinity that contains both reserved CPUs.  Create the
+report's parent directory first; the supervisor refuses to begin if it cannot
+durably fsync both the report and its directory entry.  The
 `--preset representative` matrix covers exact-wire GF8 and GF16 high-rate, balanced, XOR,
 field-inflation, and larger-parent cases. Custom cells use
 `ID:K:R:BYTES:LOSSES:SEED` and must remain within the exact-main API's
@@ -117,6 +119,10 @@ arguments and all four emitted force booleans, so evidence for one path cannot
 be relabeled as another.
 
     taskset -c 0-31 python3 \
+        tools/leopard2_affinity_supervisor.py run \
+        --report /tmp/leopard2-vs-main-affinity.json \
+        --reserved-cpus 15,31 -- \
+        python3 \
         experiments/leopard2/main_compare/run_abba.py run \
         --baseline /tmp/leopard-main-compare/leopard_main_benchmark \
         --candidate /tmp/leopard2-production/bench_leopard2 \
@@ -132,10 +138,68 @@ be relabeled as another.
         --output /tmp/leopard2-vs-main --cpu 15 --reserved-sibling 31 \
         --preset representative --reuse 8 --iterations 9 --warmup 2
 
+The supervisor is an unprivileged, same-user aid, not an OS-exclusive CPU
+shield. Before its first mutation it requires every existing process to have a
+uniform original mask across that process's threads. It journals every mask
+before changing it. A new thread may be restored only when its exact original
+mask follows from that uniform process or a still-identifiable uniform creator.
+A newcomer whose already-restricted mask has
+no such provenance invalidates the run and is boundedly terminated, rather
+than being left with a guessed or widened mask.
+
+The runner is launched through a fork/pipe gate. The child creates its new
+session but cannot execute `taskset` or benchmark code until its PID,
+start-time, session, command, boot ID, and PID-namespace identity are durable in
+the report. Parent EOF aborts the gate, which closes the SIGKILL window before
+that journal entry. On every ordinary exit the supervisor boundedly signals,
+then SIGKILLs if necessary, every surviving process in the recorded child
+session and every still-traceable descendant that created another session
+before restoring any same-user mask. This lets the main runner use its own
+bounded per-invocation sessions without those timed children being mistaken for
+unrelated work. SIGINT, SIGTERM, and SIGHUP always
+invalidate evidence and use the same bounded cleanup.
+The 25 ms monitor is read-only on an unchanged scan. It does not rewrite or
+fsync the journal for each poll, for ordinary child-process churn, or merely to
+retain audit-only provenance; it writes only when recovery-relevant state or an
+actual anomaly changes.
+
+The wrapper must finish with an accepted v2 report and the ordinary ABBA
+manifest must independently pass its unchanged zero-sibling-jiffy verifier
+before timings are usable. If the supervisor itself is killed with SIGKILL,
+restore its journal before continuing:
+
+    python3 tools/leopard2_affinity_supervisor.py restore \
+        --report /tmp/leopard2-vs-main-affinity.json
+
+Recovery is deliberately limited to the same kernel boot and PID namespace.
+It first verifies and empties the recorded child session, then retries both
+pending and previously failed restores. A reboot or namespace transition is a
+hard refusal: numeric PIDs/TIDs no longer name the journaled objects. The tool
+never changes another UID's threads and deliberately does not weaken the
+runner's rejection of kernel, other-user, or otherwise unexcluded sibling
+activity. Linux has no pidfd affinity operation for non-leader TIDs; a detected
+identity change across a numeric-TID affinity syscall therefore leaves an
+explicit unrecoverable uncertainty and can never produce accepted evidence.
+
+After both files verify, create a canonical joint binding. It authenticates the
+accepted supervisor report hash and schema, the exact command identity, the
+main manifest and raw-bundle hashes, the runner source identity, CPU pair, all
+numeric campaign parameters, build/source paths, reservation, and output path:
+
+    python3 tools/leopard2_affinity_supervisor.py verify-report \
+        --report /tmp/leopard2-vs-main-affinity.json
+    python3 tools/leopard2_affinity_supervisor.py bind \
+        --report /tmp/leopard2-vs-main-affinity.json \
+        --manifest /tmp/leopard2-vs-main/manifest.json \
+        --output /tmp/leopard2-vs-main/affinity-binding.json
+    python3 tools/leopard2_affinity_supervisor.py verify-binding \
+        --binding /tmp/leopard2-vs-main/affinity-binding.json
+
 Verify while the exact build inputs still exist:
 
     python3 experiments/leopard2/main_compare/run_abba.py verify \
-        --manifest /tmp/leopard2-vs-main/manifest.json
+        --manifest /tmp/leopard2-vs-main/manifest.json \
+        --affinity-binding /tmp/leopard2-vs-main/affinity-binding.json
 
 The current version-4 verifier recomputes the pair-lock identity, every per-field CPU
 counter delta, the zero-non-idle-sibling decision, workload identities, and all

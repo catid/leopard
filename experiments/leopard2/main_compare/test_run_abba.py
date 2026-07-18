@@ -960,6 +960,11 @@ class MainCompareRunnerTests(unittest.TestCase):
                 manifest=manifest_path, no_current_input_check=True)
             self.assertEqual(runner.verify_campaign(options), 0)
 
+            options.affinity_binding = root / "missing-affinity-binding.json"
+            with self.assertRaises(runner.EvidenceError):
+                runner.verify_campaign(options)
+            options.affinity_binding = None
+
             edited = copy.deepcopy(manifest)
             edited["isolation"]["accepted"] = False
             edited = resign(edited)
