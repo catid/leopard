@@ -667,6 +667,56 @@ void test_alias_and_scratch_contracts(leo2_context* context, Counts* counts)
         "encode supplied scratch-tail/output overlap");
     counts->scratch_checks += 3;
 
+    AlignedBuffer encode_metadata_scratch(encode_scratch_bytes);
+    const void** scratch_original =
+        static_cast<const void**>(encode_metadata_scratch.data());
+    for (size_t i = 0; i < 3; ++i)
+        scratch_original[i] = original[i];
+    require_result(leo2_encode(xor_codec.codec, bytes, scratch_original,
+        recovery, encode_metadata_scratch.data(),
+        encode_metadata_scratch.size()), LEO2_OVERLAP,
+        "encode scratch/original-descriptor overlap");
+    void** scratch_recovery =
+        static_cast<void**>(encode_metadata_scratch.data());
+    scratch_recovery[0] = recovery[0];
+    require_result(leo2_encode(xor_codec.codec, bytes, original,
+        scratch_recovery, encode_metadata_scratch.data(),
+        encode_metadata_scratch.size()), LEO2_OVERLAP,
+        "encode scratch/recovery-descriptor overlap");
+
+    void* output_overlaps_original_metadata[1] = {
+        const_cast<void*>(static_cast<const void*>(original))
+    };
+    require_result(leo2_encode(xor_codec.codec, bytes, original,
+        output_overlaps_original_metadata, encode_scratch.data(),
+        encode_scratch_bytes), LEO2_OVERLAP,
+        "encode output/original-descriptor overlap");
+    void* output_overlaps_recovery_metadata[1];
+    output_overlaps_recovery_metadata[0] =
+        output_overlaps_recovery_metadata;
+    require_result(leo2_encode(xor_codec.codec, bytes, original,
+        output_overlaps_recovery_metadata, encode_scratch.data(),
+        encode_scratch_bytes), LEO2_OVERLAP,
+        "encode output/recovery-descriptor overlap");
+
+    const uintptr_t near_address_end =
+        std::numeric_limits<uintptr_t>::max() - sizeof(void*) + 1;
+    const void* const* overflowing_original_metadata =
+        reinterpret_cast<const void* const*>(near_address_end);
+    require_result(leo2_encode(xor_codec.codec, bytes,
+        overflowing_original_metadata, recovery, encode_scratch.data(),
+        encode_scratch_bytes), LEO2_INVALID_ARGUMENT,
+        "encode overflowing original-descriptor span");
+    void* const* overflowing_recovery_metadata =
+        reinterpret_cast<void* const*>(near_address_end);
+    require_result(leo2_encode(xor_codec.codec, bytes, original,
+        overflowing_recovery_metadata, encode_scratch.data(),
+        encode_scratch_bytes), LEO2_INVALID_ARGUMENT,
+        "encode overflowing recovery-descriptor span");
+    require(parity == c,
+        "rejected encode metadata overlap changed exact parity");
+    counts->alias_checks += 7;
+
     CodecOwner codec;
     require_result(leo2_codec_create(context, 3, 2,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec.codec),
@@ -683,6 +733,24 @@ void test_alias_and_scratch_contracts(leo2_context* context, Counts* counts)
     require_result(leo2_encode(codec.codec, bytes, &source_pointers[0],
         &encoded_pointers[0], source_scratch.data(), source_scratch.size()),
         LEO2_SUCCESS, "decode fixture encode");
+
+    const Shards exact_encoded = encoded;
+    AlignedBuffer general_metadata_scratch(source_scratch_bytes);
+    const void** general_scratch_original =
+        static_cast<const void**>(general_metadata_scratch.data());
+    void** general_scratch_recovery = reinterpret_cast<void**>(
+        static_cast<uint8_t*>(general_metadata_scratch.data()) + 64);
+    for (size_t i = 0; i < source_pointers.size(); ++i)
+        general_scratch_original[i] = source_pointers[i];
+    for (size_t i = 0; i < encoded_pointers.size(); ++i)
+        general_scratch_recovery[i] = encoded_pointers[i];
+    require_result(leo2_encode(codec.codec, bytes,
+        general_scratch_original, general_scratch_recovery,
+        general_metadata_scratch.data(), general_metadata_scratch.size()),
+        LEO2_OVERLAP, "multi-output encode metadata/scratch overlap");
+    require(encoded == exact_encoded,
+        "rejected multi-output metadata overlap changed exact parity");
+    counts->alias_checks += 2;
 
     uint8_t original_present[3] = { 0, 1, 1 };
     uint8_t recovery_present[2] = { 1, 0 };
@@ -743,6 +811,76 @@ void test_alias_and_scratch_contracts(leo2_context* context, Counts* counts)
         decode_tail_collision.size()), LEO2_OVERLAP,
         "decode supplied scratch-tail/output overlap");
     counts->scratch_checks += 3;
+
+    AlignedBuffer decode_metadata_scratch(decode_scratch_bytes);
+    const void** scratch_decode_original =
+        static_cast<const void**>(decode_metadata_scratch.data());
+    for (size_t i = 0; i < 3; ++i)
+        scratch_decode_original[i] = decode_original[i];
+    require_result(leo2_decode_plan_execute(plan.plan, bytes,
+        scratch_decode_original, decode_recovery, restored_original,
+        decode_metadata_scratch.data(), decode_metadata_scratch.size()),
+        LEO2_OVERLAP, "decode scratch/original-descriptor overlap");
+    const void** scratch_decode_recovery =
+        static_cast<const void**>(decode_metadata_scratch.data());
+    for (size_t i = 0; i < 2; ++i)
+        scratch_decode_recovery[i] = decode_recovery[i];
+    require_result(leo2_decode_plan_execute(plan.plan, bytes,
+        decode_original, scratch_decode_recovery, restored_original,
+        decode_metadata_scratch.data(), decode_metadata_scratch.size()),
+        LEO2_OVERLAP, "decode scratch/recovery-descriptor overlap");
+    void** scratch_decode_restored =
+        static_cast<void**>(decode_metadata_scratch.data());
+    for (size_t i = 0; i < 3; ++i)
+        scratch_decode_restored[i] = restored_original[i];
+    require_result(leo2_decode_plan_execute(plan.plan, bytes,
+        decode_original, decode_recovery, scratch_decode_restored,
+        decode_metadata_scratch.data(), decode_metadata_scratch.size()),
+        LEO2_OVERLAP, "decode scratch/restored-descriptor overlap");
+
+    void* restored_overlaps_original_metadata[3] = {
+        const_cast<void*>(static_cast<const void*>(decode_original)),
+        NULL, NULL
+    };
+    require_result(leo2_decode_plan_execute(plan.plan, bytes,
+        decode_original, decode_recovery,
+        restored_overlaps_original_metadata, decode_scratch.data(),
+        decode_scratch_bytes), LEO2_OVERLAP,
+        "decode output/original-descriptor overlap");
+    void* restored_overlaps_recovery_metadata[3] = {
+        const_cast<void*>(static_cast<const void*>(decode_recovery)),
+        NULL, NULL
+    };
+    require_result(leo2_decode_plan_execute(plan.plan, bytes,
+        decode_original, decode_recovery,
+        restored_overlaps_recovery_metadata, decode_scratch.data(),
+        decode_scratch_bytes), LEO2_OVERLAP,
+        "decode output/recovery-descriptor overlap");
+    void* restored_overlaps_own_metadata[3] = { NULL, NULL, NULL };
+    restored_overlaps_own_metadata[0] = restored_overlaps_own_metadata;
+    require_result(leo2_decode_plan_execute(plan.plan, bytes,
+        decode_original, decode_recovery, restored_overlaps_own_metadata,
+        decode_scratch.data(), decode_scratch_bytes), LEO2_OVERLAP,
+        "decode output/restored-descriptor overlap");
+
+    require_result(leo2_decode_plan_execute(plan.plan, bytes,
+        reinterpret_cast<const void* const*>(near_address_end),
+        decode_recovery, restored_original, decode_scratch.data(),
+        decode_scratch_bytes), LEO2_INVALID_ARGUMENT,
+        "decode overflowing original-descriptor span");
+    require_result(leo2_decode_plan_execute(plan.plan, bytes,
+        decode_original,
+        reinterpret_cast<const void* const*>(near_address_end),
+        restored_original, decode_scratch.data(), decode_scratch_bytes),
+        LEO2_INVALID_ARGUMENT,
+        "decode overflowing recovery-descriptor span");
+    require_result(leo2_decode_plan_execute(plan.plan, bytes,
+        decode_original, decode_recovery,
+        reinterpret_cast<void* const*>(near_address_end),
+        decode_scratch.data(), decode_scratch_bytes),
+        LEO2_INVALID_ARGUMENT,
+        "decode overflowing restored-descriptor span");
+    counts->alias_checks += 9;
 
     require_result(leo2_decode_plan_execute(plan.plan, bytes, decode_original,
         decode_recovery, restored_original, decode_scratch.data(),
@@ -1453,6 +1591,22 @@ void test_deterministic_batch_failures(leo2_context* context, Counts* counts)
     counts->batch_failure_checks += 2;
 #endif
 
+    const uintptr_t encode_item_address_end =
+        std::numeric_limits<uintptr_t>::max() -
+        sizeof(leo2_encode_batch_item) + 1;
+    require_result(leo2_encode_batch(fixture.codec,
+        reinterpret_cast<const leo2_encode_batch_item*>(
+            encode_item_address_end), 1), LEO2_INVALID_ARGUMENT,
+        "overflowing encode batch-item span");
+    const uintptr_t decode_item_address_end =
+        std::numeric_limits<uintptr_t>::max() -
+        sizeof(leo2_decode_batch_item) + 1;
+    require_result(leo2_decode_plan_execute_batch(fixture.plan,
+        reinterpret_cast<const leo2_decode_batch_item*>(
+            decode_item_address_end), 1), LEO2_INVALID_ARGUMENT,
+        "overflowing decode batch-item span");
+    counts->batch_failure_checks += 2;
+
     Shards encode_output(2, Bytes(fixture.bytes, 0));
     std::vector<void*> encode_output_pointers = mutable_pointers(encode_output);
     AlignedBuffer encode_short(fixture.encode_scratch_bytes);
@@ -1480,6 +1634,32 @@ void test_deterministic_batch_failures(leo2_context* context, Counts* counts)
             "lowest-index encode batch failure");
         ++counts->batch_failure_checks;
     }
+
+    leo2_encode_batch_item* encode_item_in_scratch =
+        static_cast<leo2_encode_batch_item*>(encode_valid.data());
+    encode_item_in_scratch->shard_bytes = fixture.bytes;
+    encode_item_in_scratch->original = &fixture.original_pointers[0];
+    encode_item_in_scratch->recovery = &encode_output_pointers[0];
+    encode_item_in_scratch->scratch = encode_valid.data();
+    encode_item_in_scratch->scratch_bytes = fixture.encode_scratch_bytes;
+    require_result(leo2_encode_batch(
+        fixture.codec, encode_item_in_scratch, 1), LEO2_OVERLAP,
+        "encode batch-item/scratch overlap");
+    leo2_encode_batch_item encode_item_output_overlap;
+    memset(&encode_item_output_overlap, 0, sizeof(encode_item_output_overlap));
+    void* encode_item_self_output[2] = {
+        &encode_item_output_overlap, NULL
+    };
+    encode_item_output_overlap.shard_bytes = fixture.bytes;
+    encode_item_output_overlap.original = &fixture.original_pointers[0];
+    encode_item_output_overlap.recovery = encode_item_self_output;
+    encode_item_output_overlap.scratch = encode_valid.data();
+    encode_item_output_overlap.scratch_bytes =
+        fixture.encode_scratch_bytes;
+    require_result(leo2_encode_batch(
+        fixture.codec, &encode_item_output_overlap, 1), LEO2_OVERLAP,
+        "encode batch-item/output overlap");
+    counts->batch_failure_checks += 2;
 
     const void* decode_original[3] = {
         NULL, fixture.original_pointers[1], fixture.original_pointers[2]
@@ -1513,6 +1693,67 @@ void test_deterministic_batch_failures(leo2_context* context, Counts* counts)
             "lowest-index decode batch failure");
         ++counts->batch_failure_checks;
     }
+
+    leo2_decode_batch_item* decode_item_in_scratch =
+        static_cast<leo2_decode_batch_item*>(decode_valid.data());
+    decode_item_in_scratch->shard_bytes = fixture.bytes;
+    decode_item_in_scratch->original = decode_original;
+    decode_item_in_scratch->recovery = decode_recovery;
+    decode_item_in_scratch->restored_original = restored_pointers;
+    decode_item_in_scratch->scratch = decode_valid.data();
+    decode_item_in_scratch->scratch_bytes = fixture.decode_scratch_bytes;
+    require_result(leo2_decode_plan_execute_batch(
+        fixture.plan, decode_item_in_scratch, 1), LEO2_OVERLAP,
+        "decode batch-item/scratch overlap");
+    leo2_decode_batch_item decode_item_output_overlap;
+    memset(&decode_item_output_overlap, 0, sizeof(decode_item_output_overlap));
+    void* decode_item_self_output[3] = {
+        &decode_item_output_overlap, NULL, NULL
+    };
+    decode_item_output_overlap.shard_bytes = fixture.bytes;
+    decode_item_output_overlap.original = decode_original;
+    decode_item_output_overlap.recovery = decode_recovery;
+    decode_item_output_overlap.restored_original =
+        decode_item_self_output;
+    decode_item_output_overlap.scratch = decode_valid.data();
+    decode_item_output_overlap.scratch_bytes =
+        fixture.decode_scratch_bytes;
+    require_result(leo2_decode_plan_execute_batch(
+        fixture.plan, &decode_item_output_overlap, 1), LEO2_OVERLAP,
+        "decode batch-item/output overlap");
+    counts->batch_failure_checks += 2;
+
+    Shards exact_batch_output(2, Bytes(fixture.bytes, 0xa5));
+    std::vector<void*> exact_batch_output_pointers =
+        mutable_pointers(exact_batch_output);
+    leo2_encode_batch_item valid_encode_item;
+    valid_encode_item.shard_bytes = fixture.bytes;
+    valid_encode_item.original = &fixture.original_pointers[0];
+    valid_encode_item.recovery = &exact_batch_output_pointers[0];
+    valid_encode_item.scratch = encode_valid.data();
+    valid_encode_item.scratch_bytes = fixture.encode_scratch_bytes;
+    require_result(leo2_encode_batch(
+        fixture.codec, &valid_encode_item, 1), LEO2_SUCCESS,
+        "valid encode batch after metadata rejections");
+    require(exact_batch_output == fixture.recovery,
+        "valid encode batch parity changed after metadata rejections");
+
+    Bytes exact_batch_restored(fixture.bytes, 0xcc);
+    void* exact_batch_restored_pointers[3] = {
+        &exact_batch_restored[0], NULL, NULL
+    };
+    leo2_decode_batch_item valid_decode_item;
+    valid_decode_item.shard_bytes = fixture.bytes;
+    valid_decode_item.original = decode_original;
+    valid_decode_item.recovery = decode_recovery;
+    valid_decode_item.restored_original = exact_batch_restored_pointers;
+    valid_decode_item.scratch = decode_valid.data();
+    valid_decode_item.scratch_bytes = fixture.decode_scratch_bytes;
+    require_result(leo2_decode_plan_execute_batch(
+        fixture.plan, &valid_decode_item, 1), LEO2_SUCCESS,
+        "valid decode batch after metadata rejections");
+    require(exact_batch_restored == fixture.original[0],
+        "valid decode batch changed after metadata rejections");
 }
 
 void require_legacy_result(

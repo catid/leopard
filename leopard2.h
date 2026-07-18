@@ -267,14 +267,18 @@ LEO2_EXPORT leo2_result leo2_unpack_systematic_shard(
     Scratch-size output is set to zero before validation and remains zero on
     failure.  Scratch must start at leo2_scratch_alignment() alignment.  Scratch
     and all non-null shard ranges must be mutually disjoint, except that input
-    shards may alias other input shards.  Recovery output entries may be null to
-    request a parity subset.  Encode/decode execution performs no allocation.  shard_bytes
-    always describes the physical buffers.  GF8 accepts every positive native
-    length.  GF16 core execution accepts positive even physical lengths and
-    returns LEO2_UNSUPPORTED for odd physical lengths.  A padded-odd codec also
-    requires the last byte of every systematic physical input to be zero.  Use
-    leo2_codec_wire_shard_bytes and the pack/unpack helpers to map an odd payload
-    B to physical W=B+1.  A no-loss plan remains a zero-scratch no-op.
+    shards may alias other input shards.  Pointer arrays and a batch's item array
+    are immutable call metadata: they may share immutable input storage or each
+    other, but must not overlap scratch or a writable shard range.  Unsupported
+    metadata overlap is rejected before scratch is modified.  Recovery output
+    entries may be null to request a parity subset.  Encode/decode execution
+    performs no allocation.  shard_bytes always describes the physical buffers.
+    GF8 accepts every positive native length.  GF16 core execution accepts
+    positive even physical lengths and returns LEO2_UNSUPPORTED for odd physical
+    lengths.  A padded-odd codec also requires the last byte of every systematic
+    physical input to be zero.  Use leo2_codec_wire_shard_bytes and the
+    pack/unpack helpers to map an odd payload B to physical W=B+1.  A no-loss
+    plan remains a zero-scratch no-op.
 */
 LEO2_EXPORT size_t leo2_scratch_alignment(void);
 LEO2_EXPORT leo2_result leo2_encode_scratch_size(
