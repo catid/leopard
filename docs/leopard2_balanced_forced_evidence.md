@@ -16,6 +16,17 @@ schema-v4 exact-main bundles and derives the survivor set from their retained
 analysis; an edited or merely re-signed plan, threshold, matrix, or survivor
 file is rejected by canonical regeneration.
 
+Selection also requires every input bundle to have one identical normalized
+evidence scope. The retained scope binds the host and CPU/topology class,
+allowed and online CPU sets, compiler bytes/version, canonical CMake cache,
+Release `-O3` compile semantics, exact production archive/link recipe and
+object closure, candidate source identity, and the resolved AUTO backend.
+Logical benchmark/sibling CPU numbers and per-file timestamps/inodes are
+normalized because independently pinned shards may use different cores; their
+topology cardinality and frequency policy remain bound. Valid bundles from
+different hosts, compilers, CMake configurations, builds, or resolved backends
+cannot be combined into one survivor set.
+
 The initial boundary set is
 `5,7,8,9,14,15,16,17,29,30,31,32,33,62,63,64,65,96,112,120,124,125,126,127,128`.
 The interior `T=128` points prevent an apparent win at `K=128` from being
@@ -71,7 +82,12 @@ The conditional stage separates aligned current-source confirmation from true
 tails. Generic, AUTO, materialized, and tiled exact-main confirmation uses
 192 B, 4032 B, 4096 B, 64 KiB, and 1 MiB for every surviving `K`. The forced
 same-binary tail matrices use only the non-aligned sizes 193 B, 4033 B, 4097 B,
-and 1 MiB+1 on scalar, SSSE3, and AVX2. Exact Leopard main cannot execute those
+and 1 MiB+1 on the supported forced-backend prefix through the resolved AUTO
+tier (scalar; scalar+SSSE3; or scalar+SSSE3+AVX2). These are the only backends
+in this campaign schema. An exact-main bundle that resolves AUTO to AVX-512 or NEON is
+rejected rather than being promoted without matching forced confirmation;
+adding either backend requires a new schema and dedicated forced matrices.
+Exact Leopard main cannot execute those
 tails, so they are correctness and internal-kernel evidence rather than an
 external speedup claim.
 
@@ -90,7 +106,12 @@ exact cells.
 
 The path result is collected rather than inferred from timing. The collector
 refreshes `bench_leopard2`, requires a clean source at the survivor candidate
-commit, records the benchmark source/object/archive/executable identity, runs
+commit, and reuses exact-main's hardened schema-v4 build validator. Thus the
+attested binary must be a canonical CMake Release build with
+`LEO2_BACKEND_VARIANT=auto`, portable core translation units, exact SSSE3,
+AVX2, and AVX-512 translation-unit flags, OpenMP, canonical archive membership,
+and exact compile/link recipes. Hashes alone are insufficient. The collector
+also records the benchmark source/object/archive/executable identity and runs
 every canonical AUTO command, and validates exact K, R, seed, profile, field,
 requested and resolved backend, byte count, loss coordinates, and selected
 path/rule from schema-v3 benchmark JSON. The retained result binds the candidate
@@ -111,6 +132,12 @@ matching workspace pair. Only an exact passing gate may instead use
 `generic/balanced_generic`. The mirrored direct limits are source-bound through
 the retained `leopard2.cpp` identity, so changing them requires updating and
 revalidating this protocol.
+
+The same attestation validates workspace geometry rather than merely accepting
+a nonnegative count: no-op/direct paths require zero shard slots,
+generic/materialized paths require parent `N`, and legacy-high tiled paths
+require exactly `2*T + L`, where `L` is the number of requested missing
+originals. A path/rule/workspace cross-pair is rejected.
 
 After the conditional timing work, collect and independently verify AUTO
 selection from the exact candidate commit named by the stage. A dispatcher edit

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 from pathlib import Path
 import re
@@ -19,10 +20,10 @@ import balanced_evidence_common as common
 
 PLAN_SCHEMA = "leopard2-balanced-promotion-plan/v2"
 MAIN_CELL_SCHEMA = "leopard2-main-compare-cell-list/v2"
-SURVIVOR_SCHEMA = "leopard2-balanced-promotion-survivors/v1"
-STAGE_SCHEMA = "leopard2-balanced-promotion-stage/v2"
-ATTESTATION_SCHEMA = "leopard2-balanced-auto-path-attestation/v2"
-ATTESTATION_RESULT_SCHEMA = "leopard2-balanced-auto-path-result/v1"
+SURVIVOR_SCHEMA = "leopard2-balanced-promotion-survivors/v2"
+STAGE_SCHEMA = "leopard2-balanced-promotion-stage/v3"
+ATTESTATION_SCHEMA = "leopard2-balanced-auto-path-attestation/v3"
+ATTESTATION_RESULT_SCHEMA = "leopard2-balanced-auto-path-result/v2"
 EXACT_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v4"
 EXACT_MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 PROMOTION_GATE = 1.05
@@ -42,7 +43,26 @@ FORCED_ORDERS = (
     ("candidate", "control", "control", "candidate"),
     ("control", "candidate", "candidate", "control"),
 )
-AUTO_BACKENDS = ("scalar", "ssse3", "avx2", "avx512", "neon")
+# This promotion campaign has same-binary forced confirmation for exactly these
+# backends.  AVX-512 and NEON are intentionally rejected rather than borrowing
+# generic speed evidence collected under a kernel that the confirmation runner
+# cannot force.  A later schema can add them with their own forced matrices.
+CAMPAIGN_BACKENDS = ("scalar", "ssse3", "avx2")
+AUTO_BACKENDS = CAMPAIGN_BACKENDS
+EXACT_RAW_SCHEMA = "leopard2-main-compare-raw/v4"
+REQUIRED_CANDIDATE_CACHE = {
+    "CMAKE_BUILD_TYPE": "Release",
+    "ENABLE_OPENMP": "ON",
+    "LEO2_BACKEND_VARIANT": "auto",
+    "LEO2_BUILD_BENCHMARKS": "ON",
+    "LEO2_BUILD_FUZZERS": "OFF",
+    "LEO2_BUILD_TESTS": "OFF",
+    "LEO2_ENABLE_CUDA": "OFF",
+}
+EXCLUDED_CAMPAIGN_BACKENDS = {
+    "avx512": "no forced AVX-512 runner coverage in this campaign schema",
+    "neon": "no native NEON forced-runner coverage in this campaign schema",
+}
 # Exact string pairs emitted by DecodePathName/DecodePathRuleName in
 # Leopard2Dispatch.h.  This list is deliberately complete: it prevents a
 # negative predicate ("not generic") from accepting unknown or cross-paired
@@ -348,7 +368,188 @@ def planned_gate_cells(root: Path, plan: dict[str, Any]) -> dict[tuple[int, int]
     return result
 
 
-def verify_exact_manifest(path: Path) -> dict[str, Any]:
+def _cpu_list_count(value: object, label: str) -> int:
+    require(isinstance(value, str), f"{label} is not a CPU-list string")
+    result = set()
+    for component in value.split(","):
+        component = component.strip()
+        require(component and re.fullmatch(r"[0-9]+(?:-[0-9]+)?", component),
+                f"{label} is malformed")
+        bounds = [int(item) for item in component.split("-", 1)]
+        first, last = (bounds[0], bounds[-1])
+        require(first <= last, f"{label} range is reversed")
+        result.update(range(first, last + 1))
+    return len(result)
+
+
+def _normalized_cpu_policy(value: object, label: str) -> dict[str, Any]:
+    require(isinstance(value, dict), f"{label} is not an object")
+    cpuinfo = value.get("cpuinfo")
+    topology = value.get("topology")
+    frequency = value.get("frequency_policy")
+    require(isinstance(cpuinfo, dict) and isinstance(topology, dict) and
+            isinstance(frequency, dict), f"{label} policy is incomplete")
+    # Logical CPU and core identifiers vary between the independently pinned
+    # shards.  Retain the CPU signature, sibling cardinality,
+    # frequency policy, and online state instead of those incidental IDs.
+    normalized_cpuinfo = {
+        key: item for key, item in cpuinfo.items() if key != "processor"
+    }
+    thread_list = topology.get("thread_siblings_list")
+    core_list = topology.get("core_siblings_list")
+    return {
+        "online": value.get("online"),
+        "cpuinfo": normalized_cpuinfo,
+        "topology": {
+            "thread_sibling_count": _cpu_list_count(
+                thread_list, f"{label} thread siblings"),
+            "core_sibling_count": _cpu_list_count(
+                core_list, f"{label} core siblings"),
+        },
+        "frequency_policy": frequency,
+    }
+
+
+def _normalize_bound_paths(value: object, replacements: tuple[tuple[str, str], ...]) -> object:
+    """Remove volatile filesystem metadata while retaining exact byte identity."""
+    if isinstance(value, dict):
+        return {
+            key: _normalize_bound_paths(item, replacements)
+            for key, item in sorted(value.items())
+            if key not in {"device", "inode", "mtime_ns"}
+        }
+    if isinstance(value, list):
+        return [_normalize_bound_paths(item, replacements) for item in value]
+    if isinstance(value, str):
+        result = value
+        for original, marker in replacements:
+            result = result.replace(original, marker)
+        return result
+    return value
+
+
+def selection_scope_from_verified_bundle(
+    manifest: dict[str, Any], raw: dict[str, Any]
+) -> dict[str, Any]:
+    """Derive the one environment in which every gate cell is meaningful."""
+    require(raw.get("schema") == EXACT_RAW_SCHEMA,
+            "exact-main raw bundle is not hardened schema v4")
+    identities = manifest.get("identities")
+    host = manifest.get("host")
+    require(isinstance(identities, dict) and isinstance(host, dict),
+            "exact-main scope identity is incomplete")
+    candidate_build = identities.get("candidate_build")
+    candidate_source = identities.get("candidate_source")
+    require(isinstance(candidate_build, dict) and isinstance(candidate_source, dict),
+            "exact-main candidate build/source scope is absent")
+    cache = candidate_build.get("validated_cache")
+    compile_semantics = candidate_build.get("validated_compile_commands")
+    require(isinstance(cache, dict) and all(
+        cache.get(key) == expected
+        for key, expected in REQUIRED_CANDIDATE_CACHE.items()),
+        "exact-main candidate is not the canonical Release AUTO build")
+    require(isinstance(compile_semantics, dict) and
+            compile_semantics.get("validated_optimization") == "-O3" and
+            compile_semantics.get("validated_openmp") is True and
+            isinstance(compile_semantics.get("required_source_object_pairs"), list) and
+            compile_semantics["required_source_object_pairs"] and
+            isinstance(candidate_build.get("archive_link_recipe_content"), dict) and
+            isinstance(candidate_build.get("archive_link_tool_invocations"), dict) and
+            isinstance(candidate_build.get("ranlib"), dict),
+            "exact-main candidate lacks hardened compile/link provenance")
+    source_root = candidate_source.get("path")
+    build_root = candidate_build.get("build_dir")
+    require(isinstance(source_root, str) and isinstance(build_root, str),
+            "exact-main candidate path roots are absent")
+
+    backends = {
+        invocation.get("normalized", {}).get("backend")
+        for invocation in raw.get("invocations", [])
+        if isinstance(invocation, dict) and
+           invocation.get("implementation") == "candidate" and
+           isinstance(invocation.get("normalized"), dict)
+    }
+    require(len(backends) == 1, "exact-main candidate resolved multiple/no backends")
+    resolved_backend = next(iter(backends))
+    require(resolved_backend in CAMPAIGN_BACKENDS,
+            "resolved AUTO backend lacks forced confirmation coverage; "
+            "AVX-512 and NEON are outside this campaign")
+
+    allowed = host.get("allowed_cpu_set_at_launch")
+    online = host.get("online_cpu_set")
+    require(isinstance(allowed, list) and allowed and
+            all(type(item) is int and item >= 0 for item in allowed) and
+            isinstance(online, list) and online and
+            all(type(item) is int and item >= 0 for item in online),
+            "exact-main CPU-set scope is invalid")
+    replacements = ((source_root, "$SOURCE"), (build_root, "$BUILD"))
+    build_scope = _normalize_bound_paths(candidate_build, replacements)
+    require(isinstance(build_scope, dict), "normalized build scope is invalid")
+    scope = {
+        "schema": "leopard2-balanced-evidence-scope/v1",
+        "host": {
+            "system": host.get("system"),
+            "allowed_cpu_set_at_launch": allowed,
+            "online_cpu_set": online,
+            "benchmark_cpu_class": _normalized_cpu_policy(
+                host.get("benchmark_cpu"), "benchmark CPU"),
+            "reserved_sibling_class": _normalized_cpu_policy(
+                host.get("reserved_sibling"), "reserved sibling"),
+            "turbo_and_pstate": host.get("turbo_and_pstate"),
+        },
+        "compiler_and_build": build_scope,
+        "candidate_source": _normalize_bound_paths(candidate_source, replacements),
+        "resolved_auto_backend": resolved_backend,
+        "forced_confirmation_backends": list(
+            BACKENDS[:BACKENDS.index(resolved_backend) + 1]),
+        "excluded_backends": dict(EXCLUDED_CAMPAIGN_BACKENDS),
+    }
+    return scope
+
+
+def validate_evidence_scope(scope: object) -> dict[str, Any]:
+    require(isinstance(scope, dict) and set(scope) == {
+        "schema", "host", "compiler_and_build", "candidate_source",
+        "resolved_auto_backend", "forced_confirmation_backends",
+        "excluded_backends",
+    } and scope.get("schema") == "leopard2-balanced-evidence-scope/v1",
+            "gate evidence scope shape differs")
+    backend = scope.get("resolved_auto_backend")
+    require(backend in CAMPAIGN_BACKENDS and
+            scope.get("forced_confirmation_backends") ==
+                list(BACKENDS[:BACKENDS.index(backend) + 1]) and
+            scope.get("excluded_backends") == EXCLUDED_CAMPAIGN_BACKENDS,
+            "gate evidence backend coverage declaration differs")
+    host = scope.get("host")
+    build = scope.get("compiler_and_build")
+    source = scope.get("candidate_source")
+    require(isinstance(host, dict) and set(host) == {
+        "system", "allowed_cpu_set_at_launch", "online_cpu_set",
+        "benchmark_cpu_class", "reserved_sibling_class", "turbo_and_pstate",
+    } and isinstance(host["system"], dict) and
+            isinstance(host["benchmark_cpu_class"], dict) and
+            isinstance(host["reserved_sibling_class"], dict) and
+            isinstance(host["allowed_cpu_set_at_launch"], list) and
+            host["allowed_cpu_set_at_launch"] and
+            isinstance(host["online_cpu_set"], list) and host["online_cpu_set"],
+            "gate evidence host/topology scope differs")
+    require(isinstance(build, dict) and isinstance(source, dict) and
+            isinstance(build.get("validated_cache"), dict) and
+            all(build["validated_cache"].get(key) == expected
+                for key, expected in REQUIRED_CANDIDATE_CACHE.items()) and
+            isinstance(build.get("compiler"), dict) and
+            isinstance(build.get("validated_compile_commands"), dict) and
+            build["validated_compile_commands"].get(
+                "validated_optimization") == "-O3" and
+            build["validated_compile_commands"].get("validated_openmp") is True and
+            isinstance(build.get("archive_link_recipe_content"), dict) and
+            isinstance(source.get("head"), str) and
+            re.fullmatch(r"[0-9a-f]{40}", source["head"]) is not None,
+            "gate evidence compiler/CMake/build scope differs")
+    return scope
+
+
+def verify_exact_manifest(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     runner = Path(__file__).resolve().parents[1] / "main_compare" / "run_abba.py"
     command = [sys.executable, str(runner), "verify", "--manifest", str(path),
                "--no-current-input-check"]
@@ -361,7 +562,18 @@ def verify_exact_manifest(path: Path) -> dict[str, Any]:
             document.get("schema") == EXACT_MANIFEST_SCHEMA and
             document.get("valid") is True,
             f"exact-main manifest is not valid schema v4: {path}")
-    return document
+    raw_record = document.get("raw")
+    require(isinstance(raw_record, dict) and
+            isinstance(raw_record.get("path"), str),
+            f"exact-main manifest raw identity is incomplete: {path}")
+    relative = Path(raw_record["path"])
+    require(not relative.is_absolute() and ".." not in relative.parts,
+            "exact-main raw path escapes its evidence directory")
+    raw_path = path.parent / relative
+    raw = load_json(raw_path)
+    require(isinstance(raw, dict), "exact-main raw bundle is not an object")
+    return document, validate_evidence_scope(
+        selection_scope_from_verified_bundle(document, raw))
 
 
 def manifest_cell(cell: object) -> dict[str, Any]:
@@ -406,8 +618,16 @@ def refinement_cells(evaluated: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def derive_survivors(plan_root: Path, manifests: list[dict[str, Any]],
-                     references: list[dict[str, Any]]) -> dict[str, Any]:
+                     references: list[dict[str, Any]],
+                     scopes: list[dict[str, Any]]) -> dict[str, Any]:
     plan = validate_plan(plan_root)
+    require(len(manifests) == len(references) == len(scopes) and manifests,
+            "gate manifests, references, and evidence scopes differ")
+    scope = validate_evidence_scope(scopes[0])
+    for candidate_scope in scopes[1:]:
+        validate_evidence_scope(candidate_scope)
+    require(all(candidate == scope for candidate in scopes),
+            "gate manifests do not share one normalized evidence environment")
     planned = planned_gate_cells(plan_root, plan)
     evaluated = []
     seen = set()
@@ -433,6 +653,8 @@ def derive_survivors(plan_root: Path, manifests: list[dict[str, Any]],
             candidate_commit = candidate["head"]
         require(candidate["head"] == candidate_commit,
                 "gate manifests use different candidate commits")
+        require(scope["candidate_source"]["head"] == candidate_commit,
+                "normalized evidence scope names a different candidate commit")
         raw_cells = campaign.get("cells")
         require(isinstance(raw_cells, list), "gate campaign cells are absent")
         for raw_cell in raw_cells:
@@ -481,6 +703,8 @@ def derive_survivors(plan_root: Path, manifests: list[dict[str, Any]],
         "exact_main_commit": EXACT_MAIN_COMMIT,
         "candidate_commit": candidate_commit,
         "promotion_minimum_ci95_lower": PROMOTION_GATE,
+        "evidence_scope": scope,
+        "evidence_scope_sha256": canonical_sha256(scope),
         "gate_manifests": references,
         "evaluated_cells": evaluated,
         "survivor_cells": survivors,
@@ -492,32 +716,37 @@ def derive_survivors(plan_root: Path, manifests: list[dict[str, Any]],
 def select_survivors(plan_root: Path, paths: list[Path], output: Path) -> dict[str, Any]:
     require(not output.exists(), f"refusing to replace {output}")
     manifests = []
+    scopes = []
     references = []
     for path in paths:
         resolved = path.resolve(strict=True)
-        manifest = verify_exact_manifest(resolved)
+        manifest, scope = verify_exact_manifest(resolved)
         manifests.append(manifest)
+        scopes.append(scope)
         references.append({
             "path": str(resolved), "size": resolved.stat().st_size,
             "sha256": file_sha256(resolved), "payload_digest": manifest["digest"],
         })
-    result = derive_survivors(plan_root, manifests, references)
+    result = derive_survivors(plan_root, manifests, references, scopes)
     write_json(output, result)
     return result
 
 
 def validate_survivors(plan_root: Path, path: Path,
-                       manifests: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                       manifests: list[dict[str, Any]] | None = None,
+                       scopes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     retained = load_json(path)
     value = unsigned(retained, SURVIVOR_SCHEMA, "survivor set")
     require(set(value) == {
         "schema", "plan_content_sha256", "exact_main_commit", "candidate_commit",
         "promotion_minimum_ci95_lower", "gate_manifests", "evaluated_cells",
         "survivor_cells", "rejected_cells", "required_refinement_cells",
+        "evidence_scope", "evidence_scope_sha256",
     }, "survivor fields differ")
     references = value["gate_manifests"]
     if manifests is None:
         manifests = []
+        scopes = []
         require(isinstance(references, list) and references,
                 "survivor gate references are absent")
         for reference in references:
@@ -529,11 +758,13 @@ def validate_survivors(plan_root: Path, path: Path,
                     manifest_path.stat().st_size == reference["size"] and
                     file_sha256(manifest_path) == reference["sha256"],
                     "survivor gate manifest bytes changed")
-            manifest = verify_exact_manifest(manifest_path)
+            manifest, scope = verify_exact_manifest(manifest_path)
             require(manifest["digest"] == reference["payload_digest"],
                     "survivor gate payload changed")
             manifests.append(manifest)
-    expected = derive_survivors(plan_root, manifests, references)
+            scopes.append(scope)
+    require(scopes is not None, "verified evidence scopes are absent")
+    expected = derive_survivors(plan_root, manifests, references, scopes)
     require(canonical_bytes(retained) == canonical_bytes(expected),
             "survivor set is not the deterministic verified result")
     return value
@@ -551,6 +782,12 @@ def forced_case(k: int, shard_bytes: int, backend: str,
             common.MODES.index(control), common.MODES.index(candidate)),
         "control_mode": control, "candidate_mode": candidate,
     }
+
+
+def forced_backends_for_scope(scope: dict[str, Any]) -> tuple[str, ...]:
+    backend = scope.get("resolved_auto_backend")
+    require(backend in BACKENDS, "evidence backend has no forced-runner tier")
+    return BACKENDS[:BACKENDS.index(backend) + 1]
 
 
 def forced_matrix(name: str, cases: list[dict[str, Any]]) -> dict[str, Any]:
@@ -671,6 +908,9 @@ def path_attestation(survivor_signed: dict[str, Any]) -> dict[str, Any]:
             "unproven aligned size, and true tail."),
         "candidate_commit": survivor["candidate_commit"],
         "survivor_content_sha256": survivor_signed["content_sha256"],
+        "evidence_scope_sha256": survivor["evidence_scope_sha256"],
+        "expected_resolved_backend": survivor["evidence_scope"][
+            "resolved_auto_backend"],
         "cases": cases,
     })
 
@@ -685,12 +925,13 @@ def materialize_stage(plan_root: Path, survivor_signed: dict[str, Any],
     write_json(root / "survivors.json", survivor_signed)
     survivor_cells = survivor["survivor_cells"]
     survivor_k = sorted({cell["K"] for cell in survivor_cells})
+    forced_backends = forced_backends_for_scope(survivor["evidence_scope"])
     artifacts = []
 
     by_side: dict[int, list[dict[str, Any]]] = {}
     for cell in survivor_cells:
         by_side.setdefault(1 << (cell["K"] - 1).bit_length(), []).append(cell)
-    for backend in BACKENDS:
+    for backend in forced_backends:
         for side, cells in sorted(by_side.items()):
             cases = [
                 forced_case(cell["K"], cell["shard_bytes"], backend,
@@ -735,7 +976,7 @@ def materialize_stage(plan_root: Path, survivor_signed: dict[str, Any],
         attest, root, len(attestation["cases"]), 0,
         "same_binary_selected_path_attestation"))
 
-    for backend in BACKENDS:
+    for backend in forced_backends:
         for k in survivor_k:
             cases = [
                 forced_case(k, shard_bytes, backend, control, candidate, "tail")
@@ -754,6 +995,11 @@ def materialize_stage(plan_root: Path, survivor_signed: dict[str, Any],
         "plan_content_sha256": (load_json(plan_root / "plan.json"))["content_sha256"],
         "survivor_content_sha256": survivor_signed["content_sha256"],
         "candidate_commit": survivor["candidate_commit"],
+        "evidence_scope_sha256": survivor["evidence_scope_sha256"],
+        "expected_resolved_backend": survivor["evidence_scope"][
+            "resolved_auto_backend"],
+        "forced_confirmation_backends": list(forced_backends),
+        "excluded_backends": survivor["evidence_scope"]["excluded_backends"],
         "survivor_K": survivor_k,
         "surviving_gate_cell_count": len(survivor_cells),
         "true_tail_bytes": list(TRUE_TAIL_BYTES),
@@ -773,10 +1019,11 @@ def materialize_stage(plan_root: Path, survivor_signed: dict[str, Any],
 
 
 def validate_stage(plan_root: Path, root: Path,
-                   manifests: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+                   manifests: list[dict[str, Any]] | None = None,
+                   scopes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     retained_survivor = load_json(root / "survivors.json")
     survivor_path = root / "survivors.json"
-    survivor = validate_survivors(plan_root, survivor_path, manifests)
+    survivor = validate_survivors(plan_root, survivor_path, manifests, scopes)
     stage = unsigned(load_json(root / "stage.json"), STAGE_SCHEMA, "stage")
     require(stage["candidate_commit"] == survivor["candidate_commit"],
             "stage candidate commit differs")
@@ -842,6 +1089,71 @@ def stable_build_identity(value: dict[str, Any]) -> dict[str, Any]:
         },
         "archive": stable_file_identity(value.get("archive"), "archive"),
         "binary": stable_file_identity(value.get("binary"), "benchmark binary"),
+    }
+
+
+def load_exact_main_runner() -> Any:
+    path = Path(__file__).resolve().parents[1] / "main_compare" / "run_abba.py"
+    name = "leopard2_exact_main_build_validator"
+    module = sys.modules.get(name)
+    if module is not None:
+        return module
+    module_spec = importlib.util.spec_from_file_location(name, path)
+    require(module_spec is not None and module_spec.loader is not None,
+            "cannot load exact-main build validator")
+    module = importlib.util.module_from_spec(module_spec)
+    sys.modules[name] = module
+    module_spec.loader.exec_module(module)
+    return module
+
+
+def canonical_candidate_build_identity(
+    source_root: Path, binary_relative: str
+) -> dict[str, Any]:
+    """Run the exact-main schema-v4 compile/archive/link semantic validator."""
+    source_root = source_root.resolve(strict=True)
+    relative = Path(binary_relative)
+    require(not relative.is_absolute() and ".." not in relative.parts,
+            "canonical benchmark path must be source-root-relative")
+    binary = (source_root / relative).resolve(strict=True)
+    build_root = common.find_build_root(binary).resolve(strict=True)
+    archive = (build_root / "libleopard.a").resolve(strict=True)
+    runner = load_exact_main_runner()
+    specification = {
+        "candidate_build_dir": str(build_root),
+        "candidate_executable": str(binary),
+        "candidate_archive": str(archive),
+        "candidate_source_root": str(source_root),
+        # Candidate validation resolves this root but does not consume baseline
+        # sources.  Supplying the same clean root avoids inventing a second tree.
+        "baseline_source_root": str(source_root),
+    }
+    try:
+        provenance = runner.build_provenance(
+            "candidate", specification, runner.RAW_SCHEMA)
+    except Exception as error:
+        raise PlanError(
+            f"canonical Release/AUTO build validation failed: {error}") from error
+    cache = provenance.get("validated_cache")
+    semantics = provenance.get("validated_compile_commands")
+    require(isinstance(cache, dict) and all(
+        cache.get(key) == expected
+        for key, expected in REQUIRED_CANDIDATE_CACHE.items()) and
+            isinstance(semantics, dict) and
+            semantics.get("validated_optimization") == "-O3" and
+            semantics.get("validated_openmp") is True and
+            isinstance(provenance.get("archive_link_recipe_content"), dict),
+            "canonical build provenance does not bind Release AUTO semantics")
+    normalized = _normalize_bound_paths(
+        provenance,
+        ((str(source_root), "$SOURCE"), (str(build_root), "$BUILD")),
+    )
+    require(isinstance(normalized, dict), "canonical build scope is invalid")
+    return {
+        "schema": "leopard2-canonical-production-build/v1",
+        "validator": "exact-main/run_abba.py build_provenance schema v4",
+        "provenance": normalized,
+        "provenance_sha256": canonical_sha256(normalized),
     }
 
 
@@ -934,6 +1246,29 @@ def expected_auto_decode_pair(case: dict[str, Any], backend: str) -> tuple[str, 
     return "materialized", "workspace_materialized"
 
 
+def expected_required_work_slots(case: dict[str, Any], path: str) -> int:
+    """Mirror GetDecodePlanPathInfo workspace geometry for production paths."""
+    cell = case["cell"]
+    if cell["profile"] == "legacy_high_v1":
+        padded = ceil_power_of_two(cell["R"])
+        parent = ceil_power_of_two(cell["K"] + padded)
+    else:
+        require(cell["profile"] == "low_v1", "unknown decode profile")
+        padded = ceil_power_of_two(cell["K"])
+        parent = ceil_power_of_two(padded + cell["R"])
+    if path in {"no_op", "direct"}:
+        return 0
+    if path in {"generic", "materialized"}:
+        return parent
+    require(path == "tiled", "cannot derive workspace for unknown decode path")
+    # All campaign cells use legacy_high_v1.  Low-profile tiled execution uses
+    # 2*P, while legacy high additionally retains one locator/output slot for
+    # each requested missing original.
+    if cell["profile"] == "legacy_high_v1":
+        return 2 * padded + cell["loss_count"]
+    return 2 * padded
+
+
 def validate_attestation_output(document: object, case: dict[str, Any],
                                 expected_backend: str | None = None) -> dict[str, Any]:
     require(isinstance(document, dict) and
@@ -1003,8 +1338,6 @@ def validate_attestation_output(document: object, case: dict[str, Any],
             resolved.get("parent_count") == parent and
             type(resolved.get("padded_side")) is int and
             resolved.get("padded_side") == transform and
-            type(resolved.get("decode_required_work_slots")) is int and
-            resolved.get("decode_required_work_slots") >= 0 and
             type(resolved.get("decode_aligned_prefix_bytes")) is int and
             resolved.get("decode_aligned_prefix_bytes") ==
                 cell["shard_bytes"] & ~63 and
@@ -1024,6 +1357,12 @@ def validate_attestation_output(document: object, case: dict[str, Any],
     require((selected_path, selected_rule) == expected_pair,
             f"attestation selected path/rule differs for {cell['identifier']}: "
             f"expected {expected_pair!r}, got {(selected_path, selected_rule)!r}")
+    required_slots = expected_required_work_slots(case, selected_path)
+    require(type(resolved.get("decode_required_work_slots")) is int and
+            resolved["decode_required_work_slots"] == required_slots,
+            f"attestation required work slots differ for {cell['identifier']}: "
+            f"expected {required_slots}, got "
+            f"{resolved.get('decode_required_work_slots')!r}")
     require(isinstance(correctness, dict) and set(correctness) == {
         "leopard2_round_trip", "legacy_comparison",
     } and correctness.get("leopard2_round_trip") is True and
@@ -1098,7 +1437,12 @@ def attestation_identities(source_root: Path, candidate_commit: str,
     validate_selector_pair_contract(source_root)
     source = stable_source_identity(
         common.git_identity(source_root, candidate_commit), candidate_commit)
-    build = stable_build_identity(common.build_identity(source_root, binary_relative))
+    build = {
+        "artifact_closure": stable_build_identity(
+            common.build_identity(source_root, binary_relative)),
+        "canonical_production": canonical_candidate_build_identity(
+            source_root, binary_relative),
+    }
     collector = stable_file_identity(
         common.file_identity(Path(__file__), source_root, "attestation collector"),
         "attestation collector")
@@ -1117,8 +1461,17 @@ def derive_attestation_result(
     stage = unsigned(stage_signed, STAGE_SCHEMA, "stage")
     spec_signed = load_json(stage_root / "path-attestation.json")
     spec = unsigned(spec_signed, ATTESTATION_SCHEMA, "path attestation")
+    survivor_signed = load_json(stage_root / "survivors.json")
+    survivor = unsigned(survivor_signed, SURVIVOR_SCHEMA, "survivor set")
     require(spec["candidate_commit"] == stage["candidate_commit"] and
-            spec["survivor_content_sha256"] == stage["survivor_content_sha256"],
+            spec["survivor_content_sha256"] == stage["survivor_content_sha256"] and
+            survivor_signed["content_sha256"] == stage["survivor_content_sha256"] and
+            spec["evidence_scope_sha256"] == survivor["evidence_scope_sha256"] and
+            stage["evidence_scope_sha256"] == survivor["evidence_scope_sha256"] and
+            spec["expected_resolved_backend"] ==
+                survivor["evidence_scope"]["resolved_auto_backend"] and
+            stage["expected_resolved_backend"] == spec["expected_resolved_backend"] and
+            spec["expected_resolved_backend"] in CAMPAIGN_BACKENDS,
             "attestation specification is stale")
     require(isinstance(source, dict) and set(source) == {
         "head", "tree", "status", "status_sha256",
@@ -1128,17 +1481,43 @@ def derive_attestation_result(
             source.get("status_sha256") == common.EMPTY_SHA256,
             "attestation source is not the exact clean candidate commit")
     require(isinstance(build, dict) and set(build) == {
+        "artifact_closure", "canonical_production",
+    }, "attestation benchmark build identity shape differs")
+    artifacts = build.get("artifact_closure")
+    canonical = build.get("canonical_production")
+    require(isinstance(artifacts, dict) and set(artifacts) == {
         "cache", "graph", "sources", "objects", "archive", "binary",
-    } and isinstance(build.get("sources"), dict) and
-            set(build["sources"]) == {"benchmark", "decoder", "dispatch"} and
-            isinstance(build.get("objects"), dict) and
-            set(build["objects"]) == {"benchmark", "decoder"},
+    } and isinstance(artifacts.get("sources"), dict) and
+            set(artifacts["sources"]) == {"benchmark", "decoder", "dispatch"} and
+            isinstance(artifacts.get("objects"), dict) and
+            set(artifacts["objects"]) == {"benchmark", "decoder"} and
+            isinstance(canonical, dict) and set(canonical) == {
+                "schema", "validator", "provenance", "provenance_sha256",
+            } and canonical["schema"] == "leopard2-canonical-production-build/v1" and
+            canonical["validator"] ==
+                "exact-main/run_abba.py build_provenance schema v4" and
+            isinstance(canonical["provenance"], dict) and
+            canonical_sha256(canonical["provenance"]) ==
+                canonical["provenance_sha256"] and
+            isinstance(canonical["provenance"].get("validated_cache"), dict) and
+            all(canonical["provenance"]["validated_cache"].get(key) == expected
+                for key, expected in REQUIRED_CANDIDATE_CACHE.items()) and
+            isinstance(canonical["provenance"].get(
+                "validated_compile_commands"), dict) and
+            canonical["provenance"]["validated_compile_commands"].get(
+                "validated_optimization") == "-O3" and
+            canonical["provenance"]["validated_compile_commands"].get(
+                "validated_openmp") is True and
+            isinstance(canonical["provenance"].get(
+                "archive_link_recipe_content"), dict),
             "attestation benchmark build identity shape differs")
     for label, identity in [
-        ("CMake cache", build["cache"]), ("build graph", build["graph"]),
-        ("archive", build["archive"]), ("benchmark binary", build["binary"]),
-        *[(f"{key} source", value) for key, value in build["sources"].items()],
-        *[(f"{key} object", value) for key, value in build["objects"].items()],
+        ("CMake cache", artifacts["cache"]),
+        ("build graph", artifacts["graph"]),
+        ("archive", artifacts["archive"]),
+        ("benchmark binary", artifacts["binary"]),
+        *[(f"{key} source", value) for key, value in artifacts["sources"].items()],
+        *[(f"{key} object", value) for key, value in artifacts["objects"].items()],
         ("collector", collector),
     ]:
         require(isinstance(identity, dict) and set(identity) == {
@@ -1158,13 +1537,11 @@ def derive_attestation_result(
             set(raw_artifacts) == set(expected_ids),
             "attestation result set is missing, duplicated, or extra")
     records = []
-    resolved_backend = None
+    resolved_backend = spec["expected_resolved_backend"]
     for case in spec["cases"]:
         identifier = case["cell"]["identifier"]
         observed = validate_attestation_output(
             raw_documents[identifier], case, resolved_backend)
-        if resolved_backend is None:
-            resolved_backend = observed["resolved_backend"]
         artifact_value = raw_artifacts[identifier]
         require(isinstance(artifact_value, dict) and set(artifact_value) == {
             "path", "size", "sha256",
@@ -1236,7 +1613,8 @@ def collect_attestation(plan_root: Path, stage_root: Path, source_root: Path,
                 not completed.stderr and result_path.is_file(),
                 f"attestation benchmark failed for {identifier}")
         document = load_json(result_path)
-        validate_attestation_output(document, case)
+        validate_attestation_output(
+            document, case, spec["expected_resolved_backend"])
         raw_documents[identifier] = document
         raw_artifacts[identifier] = {
             "path": str(result_path.relative_to(output)),
@@ -1333,10 +1711,41 @@ def adversarial_resign(path: Path, mutator) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def fake_gate_manifests(plan_root: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
+    require(backend in CAMPAIGN_BACKENDS, "fixture backend is outside campaign")
+    return {
+        "schema": "leopard2-balanced-evidence-scope/v1",
+        "host": {
+            "system": {"system": "Linux", "machine": "x86_64"},
+            "allowed_cpu_set_at_launch": list(range(8)),
+            "online_cpu_set": list(range(8)),
+            "benchmark_cpu_class": {"cpuinfo": {"model": "fixture"}},
+            "reserved_sibling_class": {"cpuinfo": {"model": "fixture"}},
+            "turbo_and_pstate": {"fixture": "stable"},
+        },
+        "compiler_and_build": {
+            "validated_cache": dict(REQUIRED_CANDIDATE_CACHE),
+            "compiler": {"sha256": "a" * 64},
+            "validated_compile_commands": {
+                "validated_optimization": "-O3", "validated_openmp": True,
+            },
+            "archive_link_recipe_content": {"sha256": "b" * 64},
+        },
+        "candidate_source": {"head": "1" * 40, "tree": "c" * 40},
+        "resolved_auto_backend": backend,
+        "forced_confirmation_backends": list(
+            BACKENDS[:BACKENDS.index(backend) + 1]),
+        "excluded_backends": dict(EXCLUDED_CAMPAIGN_BACKENDS),
+    }
+
+
+def fake_gate_manifests(
+    plan_root: Path, backend: str = "avx2"
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     plan = validate_plan(plan_root)
     manifests = []
     references = []
+    scopes = []
     for item in plan["artifacts"]:
         gate = validate_main_document(load_json(plan_root / item["path"]), item["path"])
         campaign_cells = []
@@ -1373,12 +1782,13 @@ def fake_gate_manifests(plan_root: Path) -> tuple[list[dict[str, Any]], list[dic
             "path": "/fixture/" + Path(item["path"]).name,
             "size": 1, "sha256": "2" * 64, "payload_digest": "3" * 64,
         })
-    return manifests, references
+        scopes.append(fake_evidence_scope(backend))
+    return manifests, references, scopes
 
 
 def fake_attestation_output(case: dict[str, Any], selected_path: str | None = None,
                             selected_rule: str | None = None,
-                            backend: str = "scalar") -> dict[str, Any]:
+                            backend: str = "avx2") -> dict[str, Any]:
     cell = case["cell"]
     expected_path, expected_rule = expected_auto_decode_pair(case, backend)
     if selected_path is None:
@@ -1387,6 +1797,7 @@ def fake_attestation_output(case: dict[str, Any], selected_path: str | None = No
         selected_rule = expected_rule
     transform = ceil_power_of_two(cell["R"])
     parent = ceil_power_of_two(cell["K"] + transform)
+    required_slots = expected_required_work_slots(case, selected_path)
     return {
         "schema": common.BENCHMARK_SCHEMA,
         "build": {
@@ -1411,7 +1822,7 @@ def fake_attestation_output(case: dict[str, Any], selected_path: str | None = No
             "thread_count": 1, "parent_count": parent,
             "padded_side": transform, "selected_decode_path": selected_path,
             "selected_decode_rule": selected_rule,
-            "decode_required_work_slots": parent,
+            "decode_required_work_slots": required_slots,
             "decode_aligned_prefix_bytes": cell["shard_bytes"] & ~63,
             "decode_tail_bytes": cell["shard_bytes"] & 63,
             "decode_rounded_bytes": (cell["shard_bytes"] + 63) & ~63,
@@ -1488,14 +1899,53 @@ def self_test() -> None:
         else:
             raise PlanError("re-signed gate forgery passed canonical validation")
 
-        manifests, references = fake_gate_manifests(first)
-        survivor_signed = derive_survivors(first, manifests, references)
+        manifests, references, scopes = fake_gate_manifests(first)
+        survivor_signed = derive_survivors(first, manifests, references, scopes)
         require(not survivor_signed["required_refinement_cells"] and
                 [(cell["K"], cell["shard_bytes"])
                  for cell in survivor_signed["survivor_cells"]] == [
                     (128, 4096), (127, 65536),
                  ],
                 "fixture survivor selection differs")
+        require(forced_backends_for_scope(fake_evidence_scope("scalar")) ==
+                    ("scalar",) and
+                forced_backends_for_scope(fake_evidence_scope("ssse3")) ==
+                    ("scalar", "ssse3") and
+                forced_backends_for_scope(fake_evidence_scope("avx2")) == BACKENDS,
+                "forced backend prefix does not match resolved AUTO tier")
+
+        def reject_scope_mutation(label: str, mutate) -> None:
+            forged_scopes = json.loads(json.dumps(scopes))
+            mutate(forged_scopes)
+            try:
+                derive_survivors(first, manifests, references, forged_scopes)
+            except PlanError:
+                return
+            raise PlanError(f"mixed/invalid evidence scope accepted {label}")
+
+        reject_scope_mutation("host", lambda values:
+                              values[-1]["host"]["system"].update({
+                                  "machine": "aarch64"}))
+        reject_scope_mutation("compiler", lambda values:
+                              values[-1]["compiler_and_build"]["compiler"].update({
+                                  "sha256": "d" * 64}))
+        reject_scope_mutation("CMake", lambda values:
+                              values[-1]["compiler_and_build"][
+                                  "validated_cache"].update({
+                                      "LEO2_BACKEND_VARIANT": "scalar"}))
+        reject_scope_mutation("uniform noncanonical CMake", lambda values:
+                              [value["compiler_and_build"][
+                                  "validated_cache"].update({
+                                      "LEO2_BACKEND_VARIANT": "scalar"})
+                               for value in values])
+        reject_scope_mutation("resolved backend", lambda values:
+                              values[-1].update({
+                                  "resolved_auto_backend": "ssse3"}))
+        for excluded_backend in ("avx512", "neon"):
+            reject_scope_mutation(excluded_backend, lambda values, backend=excluded_backend:
+                                  [value.update({
+                                      "resolved_auto_backend": backend})
+                                   for value in values])
 
         unsolicited_manifests = json.loads(json.dumps(manifests))
         unsolicited = main_cell(
@@ -1514,7 +1964,7 @@ def self_test() -> None:
             for metric in ("decode_first_use", "decode_reuse_amortized")
         }
         try:
-            derive_survivors(first, unsolicited_manifests, references)
+            derive_survivors(first, unsolicited_manifests, references, scopes)
         except PlanError:
             pass
         else:
@@ -1527,7 +1977,8 @@ def self_test() -> None:
                     for metric in ("decode_first_use", "decode_reuse_amortized"):
                         manifest["analysis"][cell["identifier"]][metric][
                             "ci95_lower"] = 1.06
-        refinement = derive_survivors(first, refinement_manifests, references)
+        refinement = derive_survivors(
+            first, refinement_manifests, references, scopes)
         expected_refinement_k = list(range(97, 112)) + list(range(113, 120))
         require([cell["K"] for cell in
                  refinement["required_refinement_cells"]] == expected_refinement_k,
@@ -1541,7 +1992,7 @@ def self_test() -> None:
 
         survivor_path = root / "survivors.json"
         write_json(survivor_path, survivor_signed)
-        validate_survivors(first, survivor_path, manifests)
+        validate_survivors(first, survivor_path, manifests, scopes)
 
         forged_survivor = root / "forged-survivor.json"
         shutil.copy2(survivor_path, forged_survivor)
@@ -1550,7 +2001,7 @@ def self_test() -> None:
             value["survivor_cells"].append(rejected)
         adversarial_resign(forged_survivor, add_rejected)
         try:
-            validate_survivors(first, forged_survivor, manifests)
+            validate_survivors(first, forged_survivor, manifests, scopes)
         except PlanError:
             pass
         else:
@@ -1558,9 +2009,12 @@ def self_test() -> None:
 
         stage_root = root / "stage"
         materialize_stage(first, survivor_signed, stage_root)
-        stage = validate_stage(first, stage_root, manifests)
+        stage = validate_stage(first, stage_root, manifests, scopes)
         require(stage["survivor_K"] == [127, 128] and
-                stage["promotion_requires_path_attestation"] is True,
+                stage["promotion_requires_path_attestation"] is True and
+                stage["expected_resolved_backend"] == "avx2" and
+                stage["forced_confirmation_backends"] == list(BACKENDS) and
+                set(stage["excluded_backends"]) == {"avx512", "neon"},
                 "stage survivor/path-attestation semantics differ")
         survivor_pairs = {(128, 4096), (127, 65536)}
         for path in (stage_root / "forced-survivors").glob("*.json"):
@@ -1678,6 +2132,17 @@ def self_test() -> None:
                 expected_auto_decode_pair(tiled_case, "scalar") ==
                 ("tiled", "workspace_tiled"),
                 "terminal/workspace fixture predictions differ")
+        low_workspace_case = {"cell": {
+            "K": 33, "R": 7, "profile": "low_v1", "loss_count": 7,
+        }}
+        require(expected_required_work_slots(direct_case, "no_op") == 0 and
+                expected_required_work_slots(direct_case, "direct") == 0 and
+                expected_required_work_slots(tiled_case, "tiled") ==
+                    2 * ceil_power_of_two(63) + 63 and
+                expected_required_work_slots(tiled_case, "materialized") == 256 and
+                expected_required_work_slots(low_workspace_case, "tiled") == 128 and
+                expected_required_work_slots(low_workspace_case, "generic") == 128,
+                "production workspace formulas differ")
         validate_attestation_output(fake_attestation_output(direct_case), direct_case)
         validate_attestation_output(fake_attestation_output(tiled_case), tiled_case)
 
@@ -1689,12 +2154,30 @@ def self_test() -> None:
             "relative_path": "fixture", "sha256": "5" * 64,
             "size": 1, "mode": 0o644,
         }
-        build = {
+        artifact_closure = {
             "cache": identity, "graph": identity,
             "sources": {key: identity for key in (
                 "benchmark", "decoder", "dispatch")},
             "objects": {key: identity for key in ("benchmark", "decoder")},
             "archive": identity, "binary": identity,
+        }
+        canonical_provenance = {
+            "validated_cache": dict(REQUIRED_CANDIDATE_CACHE),
+            "validated_compile_commands": {
+                "validated_optimization": "-O3",
+                "validated_openmp": True,
+            },
+            "archive_link_recipe_content": {"sha256": "6" * 64},
+        }
+        build = {
+            "artifact_closure": artifact_closure,
+            "canonical_production": {
+                "schema": "leopard2-canonical-production-build/v1",
+                "validator":
+                    "exact-main/run_abba.py build_provenance schema v4",
+                "provenance": canonical_provenance,
+                "provenance_sha256": canonical_sha256(canonical_provenance),
+            },
         }
         collector = {
             **identity, "relative_path":
@@ -1717,6 +2200,19 @@ def self_test() -> None:
             }
         result = derive_attestation_result(
             stage_root, source, build, collector, raw_documents, raw_artifacts)
+        noncanonical_build = json.loads(json.dumps(build))
+        provenance = noncanonical_build["canonical_production"]["provenance"]
+        provenance["validated_cache"]["LEO2_BACKEND_VARIANT"] = "scalar"
+        noncanonical_build["canonical_production"][
+            "provenance_sha256"] = canonical_sha256(provenance)
+        try:
+            derive_attestation_result(
+                stage_root, source, noncanonical_build, collector,
+                raw_documents, raw_artifacts)
+        except PlanError:
+            pass
+        else:
+            raise PlanError("noncanonical scalar-only build attested as AUTO")
         manifest_path = result_root / "manifest.json"
         write_json(manifest_path, result)
         validate_attestation_result_files(
@@ -1737,6 +2233,9 @@ def self_test() -> None:
                 "requested_backend": "scalar"}),
             "resolved-backend": lambda value: value["resolved"].update({
                 "backend": "auto"}),
+            "required-work-slots": lambda value: value["resolved"].update({
+                "decode_required_work_slots":
+                    value["resolved"]["decode_required_work_slots"] + 1}),
             "bytes": lambda value: value["parameters"].update({
                 "shard_bytes": value["parameters"]["shard_bytes"] + 1}),
             "loss": lambda value: value["parameters"].update({
@@ -1751,6 +2250,18 @@ def self_test() -> None:
             except PlanError:
                 continue
             raise PlanError(f"attestation accepted wrong {label}")
+
+        for excluded_backend in ("avx512", "neon"):
+            forged_output = fake_attestation_output(
+                probe_case, backend="scalar")
+            forged_output["resolved"]["backend"] = excluded_backend
+            try:
+                validate_attestation_output(forged_output, probe_case)
+            except PlanError:
+                pass
+            else:
+                raise PlanError(
+                    f"attestation accepted excluded backend {excluded_backend}")
 
         def reject_output_mutation(label: str, mutate) -> None:
             fixture = root / ("bad-" + label)
@@ -1816,7 +2327,8 @@ def self_test() -> None:
         reject_output_mutation("source-identity", wrong_source_identity)
         def wrong_benchmark_identity(path: Path) -> None:
             adversarial_resign(path / "manifest.json", lambda value:
-                               value["build_identity"]["binary"].update({
+                               value["build_identity"]["artifact_closure"][
+                                   "binary"].update({
                                    "sha256": "9" * 64,
                                }))
         reject_output_mutation("benchmark-identity", wrong_benchmark_identity)
@@ -1848,7 +2360,7 @@ def self_test() -> None:
             target["sha256"] = file_sha256(spec_path)
         adversarial_resign(stage_path, reseal_stage)
         try:
-            validate_stage(first, broadened, manifests)
+            validate_stage(first, broadened, manifests, scopes)
         except PlanError:
             pass
         else:
