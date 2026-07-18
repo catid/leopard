@@ -65,6 +65,16 @@ int main(void)
         leo2_codec_options base;
         uint64_t future_words[2];
     } extended_options;
+    struct short_codec_v1 {
+        size_t struct_size;
+        uint32_t flags;
+        uint32_t reserved;
+        leo2_codec *output;
+    };
+    union short_codec_options_storage {
+        leo2_codec_options current;
+        struct short_codec_v1 v1;
+    } short_options;
     const size_t version1_size = offsetof(leo2_codec_options, shard_layout);
     const size_t layout_field_end = version1_size + sizeof(options.shard_layout);
 
@@ -75,6 +85,37 @@ int main(void)
         !require_result(leo2_context_create(&context_options, &context), LEO2_SUCCESS,
             "C ABI context create")) {
         return 1;
+    }
+
+    {
+        leo2_context_options aliased_options = context_options;
+        leo2_context_options snapshot = aliased_options;
+        if (!require_result(leo2_context_create(&aliased_options,
+                (leo2_context **)(void *)&aliased_options), LEO2_OVERLAP,
+                "C ABI context options/output overlap") ||
+            memcmp(&aliased_options, &snapshot, sizeof(snapshot)) != 0) {
+            leo2_context_destroy(context);
+            return 1;
+        }
+    }
+    {
+        leo2_context *untouched = (leo2_context *)(uintptr_t)1;
+        leo2_context_options impossible_options = context_options;
+        impossible_options.struct_size = SIZE_MAX;
+        if (!require_result(leo2_context_create(&impossible_options,
+                &untouched), LEO2_INVALID_ARGUMENT,
+                "C ABI unrepresentable context options span") ||
+            untouched != (leo2_context *)(uintptr_t)1) {
+            leo2_context_destroy(context);
+            return 1;
+        }
+        if (!require_result(leo2_context_create(NULL,
+                (leo2_context **)(uintptr_t)(UINTPTR_MAX -
+                    sizeof(leo2_context *) + 1)), LEO2_INVALID_ARGUMENT,
+                "C ABI unrepresentable context output span")) {
+            leo2_context_destroy(context);
+            return 1;
+        }
     }
 
     /* Leave trailing struct padding nonzero.  A short-enum C caller must still
@@ -96,6 +137,20 @@ int main(void)
     leo2_codec_destroy(codec);
     codec = NULL;
 
+    {
+        leo2_codec_options aliased_options = options;
+        leo2_codec_options snapshot = aliased_options;
+        if (!require_result(leo2_codec_create(context, 5, 3,
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
+                &aliased_options,
+                (leo2_codec **)(void *)&aliased_options), LEO2_OVERLAP,
+                "C ABI codec options/output overlap") ||
+            memcmp(&aliased_options, &snapshot, sizeof(snapshot)) != 0) {
+            leo2_context_destroy(context);
+            return 1;
+        }
+    }
+
     /* A future caller may append fields.  The known current prefix remains
        valid and unknown trailing storage is ignored. */
     memset(&extended_options, 0xa5, sizeof(extended_options));
@@ -114,6 +169,20 @@ int main(void)
     }
     leo2_codec_destroy(codec);
     codec = NULL;
+
+    {
+        struct extended_codec_options snapshot = extended_options;
+        if (!require_result(leo2_codec_create(context, 5, 3,
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                &extended_options.base,
+                (leo2_codec **)(void *)&extended_options.future_words[0]),
+                LEO2_OVERLAP,
+                "C ABI extension/output overlap") ||
+            memcmp(&extended_options, &snapshot, sizeof(snapshot)) != 0) {
+            leo2_context_destroy(context);
+            return 1;
+        }
+    }
 
     memset(&options, 0, sizeof(options));
     options.struct_size = sizeof(options);
@@ -143,6 +212,45 @@ int main(void)
     leo2_codec_destroy(codec);
     codec = NULL;
 
+    /* The output immediately after an exact v1 prefix is not part of the
+       declared immutable input and remains a valid forward-compatible use. */
+    memset(&short_options, 0, sizeof(short_options));
+    if (offsetof(struct short_codec_v1, output) != version1_size) {
+        leo2_context_destroy(context);
+        return 1;
+    }
+    short_options.v1.struct_size = version1_size;
+    if (!require_result(leo2_codec_create(context, 5, 3,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
+            &short_options.current, &short_options.v1.output),
+            LEO2_SUCCESS, "C ABI adjacent v1-prefix output") ||
+        short_options.v1.output == NULL ||
+        leo2_codec_shard_layout(short_options.v1.output) !=
+            LEO2_SHARD_LAYOUT_NATIVE_V1) {
+        leo2_codec_destroy(short_options.v1.output);
+        leo2_context_destroy(context);
+        return 1;
+    }
+    leo2_codec_destroy(short_options.v1.output);
+    short_options.v1.output = NULL;
+
+    memset(&options, 0, sizeof(options));
+    options.struct_size = SIZE_MAX;
+    codec = (leo2_codec *)(uintptr_t)1;
+    if (!require_result(leo2_codec_create(context, 5, 3,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+            &options, &codec), LEO2_INVALID_ARGUMENT,
+            "C ABI unrepresentable codec options span") ||
+        codec != (leo2_codec *)(uintptr_t)1 ||
+        !require_result(leo2_codec_create(context, 5, 3,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL,
+            (leo2_codec **)(uintptr_t)(UINTPTR_MAX -
+                sizeof(leo2_codec *) + 1)), LEO2_INVALID_ARGUMENT,
+            "C ABI unrepresentable codec output span")) {
+        leo2_context_destroy(context);
+        return 1;
+    }
+
     memset(&options, 0, sizeof(options));
     options.struct_size = layout_field_end - 1;
     if (!require_result(leo2_codec_create(context, 5, 3,
@@ -168,9 +276,107 @@ int main(void)
         return 1;
     }
 
+    {
+        leo2_codec *plan_codec = NULL;
+        uint8_t original_present[9];
+        uint8_t recovery_present[7];
+        union original_presence_alias {
+            void *alignment;
+            uint8_t bytes[9];
+        } original_alias;
+        union recovery_presence_alias {
+            void *alignment;
+            uint8_t bytes[sizeof(void *) > 7 ? sizeof(void *) : 7];
+        } recovery_alias;
+        uint8_t original_snapshot[sizeof(original_alias.bytes)];
+        uint8_t recovery_snapshot[sizeof(recovery_alias.bytes)];
+        leo2_decode_plan *plan = NULL;
+
+        memset(original_present, 1, sizeof(original_present));
+        memset(recovery_present, 1, sizeof(recovery_present));
+        if (!require_result(leo2_codec_create(context, 9, 7,
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL,
+                &plan_codec), LEO2_SUCCESS,
+                "C ABI presence-alias codec create")) {
+            leo2_context_destroy(context);
+            return 1;
+        }
+
+        memset(original_alias.bytes, 1, sizeof(original_alias.bytes));
+        memcpy(original_snapshot, original_alias.bytes,
+            sizeof(original_snapshot));
+        if (!require_result(leo2_decode_plan_create(plan_codec,
+                original_alias.bytes, recovery_present,
+                (leo2_decode_plan **)(void *)original_alias.bytes),
+                LEO2_OVERLAP, "C ABI original-presence/output overlap") ||
+            memcmp(original_alias.bytes, original_snapshot,
+                sizeof(original_snapshot)) != 0) {
+            leo2_codec_destroy(plan_codec);
+            leo2_context_destroy(context);
+            return 1;
+        }
+
+        memset(recovery_alias.bytes, 0xa5, sizeof(recovery_alias.bytes));
+        memset(recovery_alias.bytes, 1, sizeof(recovery_present));
+        memcpy(recovery_snapshot, recovery_alias.bytes,
+            sizeof(recovery_snapshot));
+        if (!require_result(leo2_decode_plan_create(plan_codec,
+                original_present, recovery_alias.bytes,
+                (leo2_decode_plan **)(void *)recovery_alias.bytes),
+                LEO2_OVERLAP, "C ABI recovery-presence/output overlap") ||
+            memcmp(recovery_alias.bytes, recovery_snapshot,
+                sizeof(recovery_snapshot)) != 0) {
+            leo2_codec_destroy(plan_codec);
+            leo2_context_destroy(context);
+            return 1;
+        }
+
+        plan = (leo2_decode_plan *)(uintptr_t)1;
+        if (!require_result(leo2_decode_plan_create(plan_codec,
+                (const uint8_t *)(uintptr_t)(UINTPTR_MAX - 4),
+                recovery_present, &plan), LEO2_INVALID_ARGUMENT,
+                "C ABI unrepresentable original-presence span") ||
+            plan != (leo2_decode_plan *)(uintptr_t)1) {
+            leo2_codec_destroy(plan_codec);
+            leo2_context_destroy(context);
+            return 1;
+        }
+        plan = (leo2_decode_plan *)(uintptr_t)1;
+        if (!require_result(leo2_decode_plan_create(plan_codec,
+                original_present,
+                (const uint8_t *)(uintptr_t)(UINTPTR_MAX - 3),
+                &plan), LEO2_INVALID_ARGUMENT,
+                "C ABI unrepresentable recovery-presence span") ||
+            plan != (leo2_decode_plan *)(uintptr_t)1 ||
+            !require_result(leo2_decode_plan_create(plan_codec,
+                original_present, recovery_present,
+                (leo2_decode_plan **)(uintptr_t)(UINTPTR_MAX -
+                    sizeof(leo2_decode_plan *) + 1)),
+                LEO2_INVALID_ARGUMENT,
+                "C ABI unrepresentable plan output span")) {
+            leo2_codec_destroy(plan_codec);
+            leo2_context_destroy(context);
+            return 1;
+        }
+
+        original_present[0] = 2;
+        plan = (leo2_decode_plan *)(uintptr_t)1;
+        if (!require_result(leo2_decode_plan_create(plan_codec,
+                original_present, recovery_present, &plan),
+                LEO2_INVALID_ARGUMENT,
+                "C ABI ordinary invalid presence rejection") ||
+            plan != NULL) {
+            leo2_codec_destroy(plan_codec);
+            leo2_context_destroy(context);
+            return 1;
+        }
+        leo2_codec_destroy(plan_codec);
+    }
+
 #if (defined(__unix__) || defined(__APPLE__)) && defined(MAP_ANONYMOUS)
     {
         const long page_size_value = sysconf(_SC_PAGESIZE);
+        leo2_codec *guard_codec = NULL;
         if (page_size_value <= 0) {
             leo2_context_destroy(context);
             return 1;
@@ -186,21 +392,79 @@ int main(void)
             return 1;
         }
 
+        if (!require_result(leo2_codec_create(context, 16, 8,
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL,
+                &guard_codec), LEO2_SUCCESS,
+                "C ABI guard-presence codec create")) {
+            munmap(mapping, page_size * 2);
+            leo2_context_destroy(context);
+            return 1;
+        }
+
         /* Only struct_size is mapped.  Reading flags before checking this
            deliberately short prefix crosses into the protected page. */
         leo2_codec_options *guarded_options = (leo2_codec_options *)(
             mapping + page_size - sizeof(size_t));
         guarded_options->struct_size = sizeof(size_t);
+        {
+            leo2_context *guarded_context =
+                (leo2_context *)(uintptr_t)1;
+            if (!require_result(leo2_context_create(
+                    (const leo2_context_options *)guarded_options,
+                    &guarded_context), LEO2_INVALID_ARGUMENT,
+                    "C ABI guard-page context prefix rejection") ||
+                guarded_context != NULL) {
+                leo2_codec_destroy(guard_codec);
+                munmap(mapping, page_size * 2);
+                leo2_context_destroy(context);
+                return 1;
+            }
+        }
         codec = (leo2_codec *)(uintptr_t)1;
         if (!require_result(leo2_codec_create(context, 5, 3,
                 LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
                 guarded_options, &codec), LEO2_INVALID_ARGUMENT,
                 "C ABI guard-page prefix rejection") || codec != NULL) {
+            leo2_codec_destroy(guard_codec);
             munmap(mapping, page_size * 2);
             leo2_codec_destroy(codec);
             leo2_context_destroy(context);
             return 1;
         }
+
+        {
+            uint8_t *guarded_original = mapping + page_size - 16;
+            uint8_t *guarded_recovery = guarded_original - 8;
+            uint8_t original_snapshot[16];
+            leo2_decode_plan *guarded_plan = NULL;
+            memset(guarded_original, 1, 16);
+            memset(guarded_recovery, 1, 8);
+            if (!require_result(leo2_decode_plan_create(guard_codec,
+                    guarded_original, guarded_recovery, &guarded_plan),
+                    LEO2_SUCCESS,
+                    "C ABI exact guard-page presence spans")) {
+                leo2_codec_destroy(guard_codec);
+                munmap(mapping, page_size * 2);
+                leo2_context_destroy(context);
+                return 1;
+            }
+            leo2_decode_plan_destroy(guarded_plan);
+            memcpy(original_snapshot, guarded_original,
+                sizeof(original_snapshot));
+            if (!require_result(leo2_decode_plan_create(guard_codec,
+                    guarded_original, guarded_recovery,
+                    (leo2_decode_plan **)(void *)guarded_original),
+                    LEO2_OVERLAP,
+                    "C ABI guard-page presence/output overlap") ||
+                memcmp(guarded_original, original_snapshot,
+                    sizeof(original_snapshot)) != 0) {
+                leo2_codec_destroy(guard_codec);
+                munmap(mapping, page_size * 2);
+                leo2_context_destroy(context);
+                return 1;
+            }
+        }
+        leo2_codec_destroy(guard_codec);
         if (munmap(mapping, page_size * 2) != 0) {
             leo2_context_destroy(context);
             return 1;

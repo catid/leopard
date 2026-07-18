@@ -206,7 +206,12 @@ LEO2_EXPORT const char* leo2_result_string(int result);
 /*
     Successful setup returns immutable objects.  A context must outlive all of
     its codecs, and a codec must outlive all of its decode plans.  A non-null
-    output handle is set to null before validation and remains null on failure.
+    output handle is set to null before ordinary input validation and remains
+    null on failure.  Setup options/presence arrays are immutable and their
+    declared spans must not overlap the output handle.  Such overlap returns
+    LEO2_OVERLAP without modifying the handle, because clearing it would modify
+    immutable input.  An unrepresentable input or output span similarly returns
+    LEO2_INVALID_ARGUMENT before the handle is written.
 */
 LEO2_EXPORT leo2_result leo2_context_create(
     const leo2_context_options* options,

@@ -2649,8 +2649,26 @@ LEO2_EXPORT leo2_result leo2_context_create(
 {
     if (!context_out)
         return LEO2_INVALID_ARGUMENT;
+
+    AddressRange output_range;
+    if (!MakeArrayRange(
+            context_out, 1, sizeof(*context_out), output_range))
+        return LEO2_INVALID_ARGUMENT;
+    size_t options_size = 0;
+    if (options)
+    {
+        options_size = options->struct_size;
+        const size_t protected_size = std::max(
+            options_size, sizeof(options->struct_size));
+        AddressRange options_range;
+        if (!MakeRange(options, static_cast<uint64_t>(protected_size),
+                options_range))
+            return LEO2_INVALID_ARGUMENT;
+        if (RangesOverlap(options_range, output_range))
+            return LEO2_OVERLAP;
+    }
     *context_out = NULL;
-    if (options && (options->struct_size < sizeof(leo2_context_options) ||
+    if (options && (options_size < sizeof(leo2_context_options) ||
                     options->reserved != 0))
         return LEO2_INVALID_ARGUMENT;
     const uint32_t requested_raw = options
@@ -2782,6 +2800,23 @@ LEO2_EXPORT leo2_result leo2_codec_create(
 {
     if (!codec_out)
         return LEO2_INVALID_ARGUMENT;
+
+    AddressRange output_range;
+    if (!MakeArrayRange(codec_out, 1, sizeof(*codec_out), output_range))
+        return LEO2_INVALID_ARGUMENT;
+    size_t options_size = 0;
+    if (options)
+    {
+        options_size = options->struct_size;
+        const size_t protected_size = std::max(
+            options_size, sizeof(options->struct_size));
+        AddressRange options_range;
+        if (!MakeRange(options, static_cast<uint64_t>(protected_size),
+                options_range))
+            return LEO2_INVALID_ARGUMENT;
+        if (RangesOverlap(options_range, output_range))
+            return LEO2_OVERLAP;
+    }
     *codec_out = NULL;
     if (!context || original_count == 0 || recovery_count == 0)
         return LEO2_INVALID_ARGUMENT;
@@ -2794,9 +2829,9 @@ LEO2_EXPORT leo2_result leo2_codec_create(
         // Validate the readable v1 prefix before accessing flags or reserved.
         // This permits callers to pass an intentionally short versioned
         // prefix and receive INVALID_ARGUMENT without an out-of-range read.
-        if (options->struct_size < version1_size ||
-            (options->struct_size > version1_size &&
-             options->struct_size < layout_field_end))
+        if (options_size < version1_size ||
+            (options_size > version1_size &&
+             options_size < layout_field_end))
             return LEO2_INVALID_ARGUMENT;
 
         const uint32_t supported_flags =
@@ -2819,7 +2854,7 @@ LEO2_EXPORT leo2_result leo2_codec_create(
             ((algorithm_flags & LEO2_CODEC_FORCE_GENERIC_DECODE) != 0 &&
              workspace_flags != 0))
             return LEO2_INVALID_ARGUMENT;
-        if (options->struct_size >= layout_field_end)
+        if (options_size >= layout_field_end)
         {
             const uint32_t raw_layout = options->shard_layout;
             if (raw_layout != LEO2_SHARD_LAYOUT_NATIVE_V1 &&
@@ -3365,9 +3400,26 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
 {
     if (!plan_out)
         return LEO2_INVALID_ARGUMENT;
-    *plan_out = NULL;
-    if (!codec || !original_present || !recovery_present)
+    AddressRange output_range;
+    if (!MakeArrayRange(plan_out, 1, sizeof(*plan_out), output_range))
         return LEO2_INVALID_ARGUMENT;
+    if (!codec || !original_present || !recovery_present)
+    {
+        *plan_out = NULL;
+        return LEO2_INVALID_ARGUMENT;
+    }
+
+    AddressRange original_range;
+    AddressRange recovery_range;
+    if (!MakeArrayRange(original_present, codec->original_count,
+            sizeof(*original_present), original_range) ||
+        !MakeArrayRange(recovery_present, codec->recovery_count,
+            sizeof(*recovery_present), recovery_range))
+        return LEO2_INVALID_ARGUMENT;
+    if (RangesOverlap(output_range, original_range) ||
+        RangesOverlap(output_range, recovery_range))
+        return LEO2_OVERLAP;
+    *plan_out = NULL;
     uint32_t present_count = 0;
     uint32_t missing_original_count = 0;
     for (uint32_t i = 0; i < codec->original_count; ++i)
