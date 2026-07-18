@@ -2386,8 +2386,11 @@ def cpu_policy_identity(cpu: int) -> dict[str, Any]:
         "shared_cpu_list", "shared_cpu_map", "allocation_policy",
         "write_policy",
     )
-    cache_roots = sorted(
-        (root / "cache").glob("index*"),
+    cache_roots = list((root / "cache").glob("index*"))
+    require(all(path.name.removeprefix("index").isdigit()
+                for path in cache_roots),
+            f"CPU {cpu} has an invalid cache-index inventory")
+    cache_roots.sort(
         key=lambda path: int(path.name.removeprefix("index")))
     cache_index_inventory = [path.name for path in cache_roots]
     caches = []
@@ -2407,9 +2410,12 @@ def cpu_policy_identity(cpu: int) -> dict[str, Any]:
                 f"CPU {cpu} cache index {suffix} excludes its own CPU")
         caches.append(record)
     require(caches, f"CPU {cpu} has no retained cache hierarchy")
-    numa_node_inventory = sorted(
-        path.name for path in root.glob("node*")
-        if path.name.removeprefix("node").isdigit())
+    numa_node_paths = [
+        path for path in root.glob("node*")
+        if path.name.removeprefix("node").isdigit()]
+    numa_node_paths.sort(
+        key=lambda path: int(path.name.removeprefix("node")))
+    numa_node_inventory = [path.name for path in numa_node_paths]
     numa_nodes = [int(name.removeprefix("node"))
                   for name in numa_node_inventory]
     core_class = {
