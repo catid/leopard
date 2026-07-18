@@ -84,9 +84,13 @@ rather than switching wire formats.
 
 GF8 has much smaller initialization tables and accepts arbitrary positive shard
 byte lengths. GF16 supports larger parent codes and its native layout requires
-complete two-byte symbols (the separately identified padded-odd layout handles
-odd application payloads). Relative throughput depends on the code shape,
-shard size, backend, and target CPU; neither field is universally faster.
+complete two-byte symbols. Passing an odd physical `shard_bytes` value to a
+native explicit-GF16 codec deterministically returns `LEO2_UNSUPPORTED`; it is
+never silently padded or projected to one byte. For an odd application payload
+of `B` bytes, explicitly select `LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1`, query the
+physical `B+1` size, and retain that extra byte in every parity shard. Relative
+throughput depends on the code shape, shard size, backend, and target CPU;
+neither field is universally faster.
 
 ## MDS Reed-Solomon Erasure Correction Codes for Large Data in C
 
