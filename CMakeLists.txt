@@ -456,14 +456,116 @@ endif()
 
 if(LEO2_BUILD_TESTS)
     enable_testing()
-    target_compile_definitions(leopard PRIVATE LEO2_ENABLE_TEST_HOOKS=1)
+
+    # Test hooks change codec construction, scratch sizing, backend setup, and
+    # a few diagnostic dispatch decisions in addition to exporting symbols.
+    # Keep the production/install target invariant when tests are enabled by
+    # compiling a separate, non-installed archive for the tests that need
+    # those hooks.  Its x86 backends are separate objects as well: sharing the
+    # production objects would either omit their hooks or contaminate the
+    # runtime-dispatched production archive.
+    add_library(leopard_test_hooks STATIC EXCLUDE_FROM_ALL
+        ${LIB_SOURCE_FILES})
+    target_compile_definitions(leopard_test_hooks PRIVATE
+        LEO2_ENABLE_TEST_HOOKS=1)
+    if(LEOPARD_ENABLE_GF8)
+        target_sources(leopard_test_hooks PRIVATE LeopardFF8.cpp LeopardFF8.h)
+    else()
+        target_compile_definitions(leopard_test_hooks PRIVATE
+            NO_LEO_HAS_FF8=1)
+    endif()
+    if(LEOPARD_ENABLE_GF16)
+        target_sources(leopard_test_hooks PRIVATE
+            LeopardFF16.cpp LeopardFF16.h)
+    else()
+        target_compile_definitions(leopard_test_hooks PRIVATE
+            NO_LEO_HAS_FF16=1)
+    endif()
+    if(LEO2_X86_TARGET)
+        target_compile_definitions(leopard_test_hooks PRIVATE
+            LEO2_DISABLE_SSSE3_CODEGEN=1
+            LEO2_DISABLE_AVX2_CODEGEN=1)
+    endif()
+    target_include_directories(leopard_test_hooks PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(leopard_test_hooks PUBLIC Threads::Threads)
+
     if(LEO2_HAVE_SSSE3_BACKEND)
-        target_compile_definitions(leopard2_backend_ssse3 PRIVATE
+        add_library(leopard2_backend_ssse3_test_hooks OBJECT EXCLUDE_FROM_ALL
+            Leopard2BackendSSSE3.cpp)
+        target_include_directories(leopard2_backend_ssse3_test_hooks PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR})
+        target_compile_definitions(leopard2_backend_ssse3_test_hooks PRIVATE
             LEO2_ENABLE_TEST_HOOKS=1)
+        if(NOT LEOPARD_ENABLE_GF8)
+            target_compile_definitions(leopard2_backend_ssse3_test_hooks PRIVATE
+                NO_LEO_HAS_FF8=1)
+        endif()
+        if(NOT LEOPARD_ENABLE_GF16)
+            target_compile_definitions(leopard2_backend_ssse3_test_hooks PRIVATE
+                NO_LEO_HAS_FF16=1)
+        endif()
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+           CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
+           CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+            target_compile_options(leopard2_backend_ssse3_test_hooks PRIVATE
+                -mssse3 -mno-avx)
+        endif()
+        target_sources(leopard_test_hooks PRIVATE
+            $<TARGET_OBJECTS:leopard2_backend_ssse3_test_hooks>)
+        target_compile_definitions(leopard_test_hooks PRIVATE
+            LEO2_HAVE_SSSE3_BACKEND=1)
     endif()
     if(LEO2_HAVE_AVX2_BACKEND)
-        target_compile_definitions(leopard2_backend_avx2 PRIVATE
+        add_library(leopard2_backend_avx2_test_hooks OBJECT EXCLUDE_FROM_ALL
+            Leopard2BackendAVX2.cpp)
+        target_include_directories(leopard2_backend_avx2_test_hooks PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR})
+        target_compile_definitions(leopard2_backend_avx2_test_hooks PRIVATE
             LEO2_ENABLE_TEST_HOOKS=1)
+        if(NOT LEOPARD_ENABLE_GF8)
+            target_compile_definitions(leopard2_backend_avx2_test_hooks PRIVATE
+                NO_LEO_HAS_FF8=1)
+        endif()
+        if(NOT LEOPARD_ENABLE_GF16)
+            target_compile_definitions(leopard2_backend_avx2_test_hooks PRIVATE
+                NO_LEO_HAS_FF16=1)
+        endif()
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+           CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
+           CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+            target_compile_options(leopard2_backend_avx2_test_hooks PRIVATE
+                -mavx2 -mno-avx512f)
+            if(LEO2_FLAG_FALIGN_FUNCTIONS_64)
+                target_compile_options(leopard2_backend_avx2_test_hooks PRIVATE
+                    -falign-functions=64)
+            endif()
+        elseif(MSVC)
+            target_compile_options(leopard2_backend_avx2_test_hooks PRIVATE
+                /arch:AVX2)
+        endif()
+        target_sources(leopard_test_hooks PRIVATE
+            $<TARGET_OBJECTS:leopard2_backend_avx2_test_hooks>)
+        target_compile_definitions(leopard_test_hooks PRIVATE
+            LEO2_HAVE_AVX2_BACKEND=1)
+    endif()
+    if(ENABLE_OPENMP)
+        if(TARGET OpenMP::OpenMP_CXX)
+            target_link_libraries(leopard_test_hooks PUBLIC OpenMP::OpenMP_CXX)
+        else()
+            target_link_libraries(leopard_test_hooks PUBLIC
+                "${OpenMP_CXX_FLAGS}")
+        endif()
+    endif()
+    if(LEO2_BACKEND_VARIANT STREQUAL "scalar")
+        target_compile_definitions(leopard_test_hooks PRIVATE
+            LEO2_BACKEND_FORCE_SCALAR=1)
+    elseif(LEO2_BACKEND_VARIANT STREQUAL "ssse3")
+        target_compile_definitions(leopard_test_hooks PRIVATE
+            LEO2_BACKEND_FORCE_SSSE3=1)
+    elseif(LEO2_BACKEND_VARIANT STREQUAL "avx2")
+        target_compile_definitions(leopard_test_hooks PRIVATE
+            LEO2_BACKEND_FORCE_AVX2=1)
     endif()
 
     add_executable(leopard2_field_options_test
@@ -614,7 +716,7 @@ if(LEO2_BUILD_TESTS)
             bench/leopard2/direct_encode_benchmark.cpp)
         target_compile_definitions(bench_leopard2_direct_encode PRIVATE
             LEO2_ENABLE_TEST_HOOKS=1)
-        target_link_libraries(bench_leopard2_direct_encode leopard)
+        target_link_libraries(bench_leopard2_direct_encode leopard_test_hooks)
 
         # This diagnostic benchmark is built only with the test hooks that
         # expose the full padded LCH oracle; it is never installed.  Production
@@ -625,7 +727,8 @@ if(LEO2_BUILD_TESTS)
             LEO2_ENABLE_TEST_HOOKS=1
             LEO2_PRUNED_SOURCE_GIT_SHA="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
             LEO2_PRUNED_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
-        target_link_libraries(bench_leopard2_pruned_transform leopard)
+        target_link_libraries(bench_leopard2_pruned_transform
+            leopard_test_hooks)
 
         # Same-binary, same-source comparison of exact requested-output masks
         # against the mature prefix encoder transforms.  Schedule setup,
@@ -637,7 +740,7 @@ if(LEO2_BUILD_TESTS)
             LEO2_ENABLE_TEST_HOOKS=1
             LEO2_SPARSE_ENCODE_SOURCE_GIT_SHA="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
             LEO2_SPARSE_ENCODE_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
-        target_link_libraries(bench_leopard2_sparse_encode leopard)
+        target_link_libraries(bench_leopard2_sparse_encode leopard_test_hooks)
 
     endif()
 
@@ -658,7 +761,7 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/test_backend_failures.cpp)
     target_compile_definitions(leopard2_backend_failures_test PRIVATE
         LEO2_ENABLE_TEST_HOOKS=1)
-    target_link_libraries(leopard2_backend_failures_test leopard)
+    target_link_libraries(leopard2_backend_failures_test leopard_test_hooks)
     add_test(NAME leopard2_backend_failure_scalar_ff8_allocation
         COMMAND leopard2_backend_failures_test scalar ff8-allocation)
     add_test(NAME leopard2_backend_failure_scalar_ff16_allocation
@@ -693,7 +796,7 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/test_context_backends.cpp)
     target_compile_definitions(leopard2_context_backends_test PRIVATE
         LEO2_ENABLE_TEST_HOOKS=1)
-    target_link_libraries(leopard2_context_backends_test leopard)
+    target_link_libraries(leopard2_context_backends_test leopard_test_hooks)
     add_test(NAME leopard2_context_backends
         COMMAND leopard2_context_backends_test)
     set_tests_properties(leopard2_context_backends PROPERTIES
@@ -701,8 +804,6 @@ if(LEO2_BUILD_TESTS)
 
     add_executable(leopard2_r1_xor_test
         tests/leopard2/test_r1_xor.cpp)
-    target_compile_definitions(leopard2_r1_xor_test PRIVATE
-        LEO2_ENABLE_TEST_HOOKS=1)
     target_link_libraries(leopard2_r1_xor_test leopard)
     add_test(NAME leopard2_r1_xor COMMAND leopard2_r1_xor_test)
     set_tests_properties(leopard2_r1_xor PROPERTIES
@@ -714,7 +815,7 @@ if(LEO2_BUILD_TESTS)
     target_compile_definitions(leopard2_direct_encode_test PRIVATE
         LEO2_ENABLE_TEST_HOOKS=1)
     target_include_directories(leopard2_direct_encode_test PRIVATE tests/leopard2)
-    target_link_libraries(leopard2_direct_encode_test leopard)
+    target_link_libraries(leopard2_direct_encode_test leopard_test_hooks)
     add_test(NAME leopard2_direct_encode COMMAND leopard2_direct_encode_test)
     set_tests_properties(leopard2_direct_encode PROPERTIES
         ENVIRONMENT "OMP_NUM_THREADS=1")
@@ -725,7 +826,7 @@ if(LEO2_BUILD_TESTS)
     target_compile_definitions(leopard2_active_lch_test PRIVATE
         LEO2_ENABLE_TEST_HOOKS=1)
     target_include_directories(leopard2_active_lch_test PRIVATE tests/leopard2)
-    target_link_libraries(leopard2_active_lch_test leopard)
+    target_link_libraries(leopard2_active_lch_test leopard_test_hooks)
     add_test(NAME leopard2_active_lch COMMAND leopard2_active_lch_test)
     set_tests_properties(leopard2_active_lch PROPERTIES
         ENVIRONMENT "OMP_NUM_THREADS=1")
@@ -736,12 +837,12 @@ if(LEO2_BUILD_TESTS)
     target_compile_definitions(leopard2_api_test PRIVATE
         LEO2_ENABLE_TEST_HOOKS=1)
     target_include_directories(leopard2_api_test PRIVATE tests/leopard2)
-    target_link_libraries(leopard2_api_test leopard)
+    target_link_libraries(leopard2_api_test leopard_test_hooks)
     add_test(NAME leopard2_api COMMAND leopard2_api_test)
 
     add_executable(leopard2_public_api_contract_test
         tests/leopard2/test_public_api_contract.cpp)
-    target_link_libraries(leopard2_public_api_contract_test leopard)
+    target_link_libraries(leopard2_public_api_contract_test leopard_test_hooks)
     add_test(NAME leopard2_public_api_contract
         COMMAND leopard2_public_api_contract_test)
 
@@ -916,7 +1017,8 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/direct_oracle.cpp)
     target_compile_definitions(leopard2_transform_differential_test PRIVATE
         LEO2_ENABLE_TEST_HOOKS=1)
-    target_link_libraries(leopard2_transform_differential_test leopard)
+    target_link_libraries(leopard2_transform_differential_test
+        leopard_test_hooks)
     add_test(NAME leopard2_transform_differential
         COMMAND leopard2_transform_differential_test)
 
@@ -927,7 +1029,7 @@ if(LEO2_BUILD_TESTS)
         LEO2_ENABLE_TEST_HOOKS=1)
     target_include_directories(leopard2_pruned_transform_test
         PRIVATE tests/leopard2)
-    target_link_libraries(leopard2_pruned_transform_test leopard)
+    target_link_libraries(leopard2_pruned_transform_test leopard_test_hooks)
     add_test(NAME leopard2_pruned_transform
         COMMAND leopard2_pruned_transform_test)
     set_tests_properties(leopard2_pruned_transform PROPERTIES
@@ -936,7 +1038,10 @@ if(LEO2_BUILD_TESTS)
     add_executable(leopard2_fuzz_smoke
         tests/leopard2/fuzz_api.cpp
         tests/leopard2/fuzz_replay.cpp)
-    target_link_libraries(leopard2_fuzz_smoke leopard)
+    # The deterministic campaign driver attests sanitizer state from the
+    # linked core (and may invoke a deliberate leak canary).  Keep those
+    # diagnostics in the private hook archive, never in production leopard.
+    target_link_libraries(leopard2_fuzz_smoke leopard_test_hooks)
     add_test(NAME leopard2_fuzz_smoke COMMAND leopard2_fuzz_smoke)
 
     add_executable(leopard2_pruned_fuzz_smoke
@@ -944,7 +1049,7 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/fuzz_replay.cpp)
     target_compile_definitions(leopard2_pruned_fuzz_smoke PRIVATE
         LEO2_ENABLE_TEST_HOOKS=1)
-    target_link_libraries(leopard2_pruned_fuzz_smoke leopard)
+    target_link_libraries(leopard2_pruned_fuzz_smoke leopard_test_hooks)
     add_test(NAME leopard2_pruned_fuzz_smoke
         COMMAND leopard2_pruned_fuzz_smoke 0xc1f022d17 256)
     set_tests_properties(leopard2_pruned_fuzz_smoke PROPERTIES
@@ -986,6 +1091,22 @@ if(LEO2_BUILD_TESTS)
             -DLEO2_STATIC_LIBRARY_PREFIX=${CMAKE_STATIC_LIBRARY_PREFIX}
             -DLEO2_STATIC_LIBRARY_SUFFIX=${CMAKE_STATIC_LIBRARY_SUFFIX}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_field_options.cmake)
+
+    add_test(
+        NAME leopard2_test_hook_isolation
+        COMMAND ${CMAKE_COMMAND}
+            -DLEO2_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLEO2_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/test-hook-isolation
+            -DLEO2_GENERATOR=${CMAKE_GENERATOR}
+            -DLEO2_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}
+            -DLEO2_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}
+            -DLEO2_ENABLE_OPENMP=${ENABLE_OPENMP}
+            -DLEO2_ARCHIVE_SYMBOL_CHECKS=${LEO2_ARCHIVE_SYMBOL_CHECKS}
+            -DLEO2_NM_COMMAND=${CMAKE_NM}
+            -DLEO2_STATIC_LIBRARY_PREFIX=${CMAKE_STATIC_LIBRARY_PREFIX}
+            -DLEO2_STATIC_LIBRARY_SUFFIX=${CMAKE_STATIC_LIBRARY_SUFFIX}
+            -DLEO2_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_hook_isolation.cmake)
 
     if(CMAKE_VERSION VERSION_LESS 3.12)
         find_package(PythonInterp QUIET)
