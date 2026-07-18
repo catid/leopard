@@ -27,6 +27,7 @@ from pathlib import Path
 SCHEMA = "leopard2-backend-matrix/v1"
 VARIANTS = ("auto", "scalar", "ssse3", "avx2")
 COMPARE_TESTS = (
+    "field_options",
     "direct_oracle",
     "backend_ops",
     "context_backends",
@@ -34,6 +35,12 @@ COMPARE_TESTS = (
     "legacy_golden",
     "api",
     "public_api_contract",
+    "initialization_threads_legacy",
+    "initialization_threads_explicit",
+    "initialization_threads_default",
+    "initialization_threads_gf16_high_codec",
+    "initialization_threads_gf16_high_plan",
+    "initialization_threads_gf16_low_plan",
     "random",
     "locator",
     "active_lch",
@@ -42,6 +49,7 @@ COMPARE_TESTS = (
     "gf16_legacy_encoder_matrix",
     "low_gf16_direct_rows",
     "decode_high_acceptance",
+    "high_pruned_legacy",
     "decode_low_acceptance",
     "decode_plan_schedule",
     "direct_encode",
@@ -53,7 +61,14 @@ COMPARE_TESTS = (
     "boundaries",
     "transform_differential",
     "fuzz_smoke",
+    "pruned_fuzz_smoke",
 )
+# This test intentionally enumerates every backend qualified by the selected
+# build.  Forced scalar/SSSE3 variants therefore report different aggregate
+# counters even though every byte comparison passes, so run it in every
+# variant without requiring identical stdout.
+RUN_ONLY_TESTS = ("pruned_transform",)
+RUN_TESTS = COMPARE_TESTS + RUN_ONLY_TESTS
 BACKEND_FAILURE_TESTS = (
     "leopard2_backend_failure_scalar_ff8_allocation",
     "leopard2_backend_failure_scalar_ff16_allocation",
@@ -87,10 +102,11 @@ EXPECTED_COMPILE_SOURCE_COUNTS = {
     "LeopardFF8.cpp": 1,
     "leopard.cpp": 1,
     "leopard2.cpp": 1,
-    "tests/leopard2/direct_oracle.cpp": 13,
+    "tests/leopard2/direct_oracle.cpp": 14,
     "tests/leopard2/direct_repair.cpp": 1,
     "tests/leopard2/fuzz_api.cpp": 1,
-    "tests/leopard2/fuzz_replay.cpp": 1,
+    "tests/leopard2/fuzz_pruned_transform.cpp": 1,
+    "tests/leopard2/fuzz_replay.cpp": 2,
     "tests/leopard2/test_active_lch.cpp": 1,
     "tests/leopard2/test_api.cpp": 1,
     "tests/leopard2/test_arbitrary_counts_acceptance.cpp": 1,
@@ -108,12 +124,16 @@ EXPECTED_COMPILE_SOURCE_COUNTS = {
     "tests/leopard2/test_direct_repair.cpp": 1,
     "tests/leopard2/test_encode_concurrency.cpp": 1,
     "tests/leopard2/test_encoder_gf16_legacy_matrix.cpp": 1,
+    "tests/leopard2/test_field_options.cpp": 1,
     "tests/leopard2/test_gf16_padded_odd.cpp": 1,
     "tests/leopard2/test_gf16_tails.cpp": 1,
+    "tests/leopard2/test_high_pruned_legacy.cpp": 1,
+    "tests/leopard2/test_initialization_threads.cpp": 1,
     "tests/leopard2/test_legacy_golden.cpp": 1,
     "tests/leopard2/test_locator.cpp": 1,
     "tests/leopard2/test_low_gf16_direct_rows.cpp": 1,
     "tests/leopard2/test_max_counts.cpp": 1,
+    "tests/leopard2/test_pruned_transform.cpp": 1,
     "tests/leopard2/test_public_api_contract.cpp": 1,
     "tests/leopard2/test_random.cpp": 1,
     "tests/leopard2/test_transform_differential.cpp": 1,
@@ -145,6 +165,8 @@ SOURCE_FILES = (
     "tests/leopard2/test_backend_ops.cpp",
     "tests/leopard2/test_context_backends.cpp",
     "tests/leopard2/test_r1_xor.cpp",
+    "tests/leopard2/test_field_options.cpp",
+    "tests/leopard2/test_initialization_threads.cpp",
     "tests/leopard2/legacy_golden_vectors.h",
     "tests/leopard2/test_api.cpp",
     "tests/leopard2/test_public_api_contract.cpp",
@@ -157,6 +179,7 @@ SOURCE_FILES = (
     "tests/leopard2/test_encoder_gf16_legacy_matrix.cpp",
     "tests/leopard2/test_low_gf16_direct_rows.cpp",
     "tests/leopard2/test_decode_high_acceptance.cpp",
+    "tests/leopard2/test_high_pruned_legacy.cpp",
     "tests/leopard2/test_decode_low_acceptance.cpp",
     "tests/leopard2/test_decode_plan_schedule.cpp",
     "tests/leopard2/test_direct_encode.cpp",
@@ -165,6 +188,7 @@ SOURCE_FILES = (
     "tests/leopard2/test_encode_concurrency.cpp",
     "tests/leopard2/test_codec_options_abi.c",
     "tests/leopard2/test_transform_differential.cpp",
+    "tests/leopard2/test_pruned_transform.cpp",
     "tests/leopard2/direct_oracle.cpp",
     "tests/leopard2/direct_oracle.h",
     "tests/leopard2/test_direct_oracle.cpp",
@@ -172,6 +196,7 @@ SOURCE_FILES = (
     "tests/leopard2/direct_repair.h",
     "tests/leopard2/test_direct_repair.cpp",
     "tests/leopard2/fuzz_api.cpp",
+    "tests/leopard2/fuzz_pruned_transform.cpp",
     "tests/leopard2/fuzz_replay.cpp",
     "tests/cmake/test_cuda_optional.cmake",
     "cmake/leopardConfig.cmake.in",
@@ -328,8 +353,13 @@ def compiler_identity(compiler):
     ).strip()
     if completed.returncode != 0:
         raise MatrixError("cannot query compiler {}: {}".format(resolved, output))
+    # Driver spelling is semantically significant even when two frontends are
+    # symlinks to one binary.  In particular, Clang's clang and clang++ names
+    # select the C and C++ link drivers.  Resolving clang++ to clang here made
+    # every C++ executable link with the C driver and omitted libstdc++.
+    executable = str(Path(resolved).absolute())
     return {
-        "executable": str(Path(resolved).resolve()),
+        "executable": executable,
         "binary_sha256": digest_bytes(Path(resolved).read_bytes()),
         "version": output,
         "version_sha256": digest_bytes(output.encode("utf-8")),
@@ -687,18 +717,21 @@ def run_variant(context, variant, index):
         return base
 
     targets = [
+        "leopard2_field_options_test",
         "leopard2_direct_oracle_test",
         "leopard2_backend_ops_test", "leopard2_backend_failures_test",
         "leopard2_context_backends_test",
         "leopard2_r1_xor_test",
         "leopard2_legacy_golden_test", "leopard2_api_test",
         "leopard2_public_api_contract_test",
+        "leopard2_initialization_threads_test",
         "leopard2_random_test", "leopard2_locator_test",
         "leopard2_active_lch_test", "leopard2_gf16_tails_test",
         "leopard2_gf16_padded_odd_test",
         "leopard2_gf16_legacy_encoder_matrix_test",
         "leopard2_low_gf16_direct_rows_test",
         "leopard2_decode_high_acceptance_test",
+        "leopard2_high_pruned_legacy_test",
         "leopard2_decode_low_acceptance_test",
         "leopard2_decode_plan_schedule_test",
         "leopard2_direct_encode_test",
@@ -706,7 +739,9 @@ def run_variant(context, variant, index):
         "leopard2_max_counts_test",
         "leopard2_encode_concurrency_test", "leopard2_codec_options_abi_test",
         "leopard2_direct_repair_test", "leopard2_boundaries_test",
-        "leopard2_transform_differential_test", "leopard2_fuzz_smoke",
+        "leopard2_transform_differential_test",
+        "leopard2_pruned_transform_test",
+        "leopard2_fuzz_smoke", "leopard2_pruned_fuzz_smoke",
     ]
     build_command = [
         context["cmake"], "--build", build, "--config", "Release",
@@ -724,6 +759,7 @@ def run_variant(context, variant, index):
         return base
 
     test_specs = {
+        "field_options": ("leopard2_field_options_test", []),
         "direct_oracle": ("leopard2_direct_oracle_test", []),
         "backend_ops": ("leopard2_backend_ops_test", []),
         "context_backends": ("leopard2_context_backends_test", []),
@@ -731,6 +767,18 @@ def run_variant(context, variant, index):
         "legacy_golden": ("leopard2_legacy_golden_test", []),
         "api": ("leopard2_api_test", []),
         "public_api_contract": ("leopard2_public_api_contract_test", []),
+        "initialization_threads_legacy": (
+            "leopard2_initialization_threads_test", ["legacy"]),
+        "initialization_threads_explicit": (
+            "leopard2_initialization_threads_test", ["explicit"]),
+        "initialization_threads_default": (
+            "leopard2_initialization_threads_test", ["default"]),
+        "initialization_threads_gf16_high_codec": (
+            "leopard2_initialization_threads_test", ["gf16-high-codec"]),
+        "initialization_threads_gf16_high_plan": (
+            "leopard2_initialization_threads_test", ["gf16-high-plan"]),
+        "initialization_threads_gf16_low_plan": (
+            "leopard2_initialization_threads_test", ["gf16-low-plan"]),
         "random": ("leopard2_random_test", [
             "--seed", "0x4c656f7061726432", "--cases", "64", "--threads", "1"
         ]),
@@ -743,6 +791,7 @@ def run_variant(context, variant, index):
         "low_gf16_direct_rows": ("leopard2_low_gf16_direct_rows_test", []),
         "decode_high_acceptance": (
             "leopard2_decode_high_acceptance_test", []),
+        "high_pruned_legacy": ("leopard2_high_pruned_legacy_test", []),
         "decode_low_acceptance": (
             "leopard2_decode_low_acceptance_test", []),
         "decode_plan_schedule": ("leopard2_decode_plan_schedule_test", []),
@@ -755,11 +804,13 @@ def run_variant(context, variant, index):
         "direct_repair": ("leopard2_direct_repair_test", []),
         "boundaries": ("leopard2_boundaries_test", []),
         "transform_differential": ("leopard2_transform_differential_test", []),
+        "pruned_transform": ("leopard2_pruned_transform_test", []),
         "fuzz_smoke": ("leopard2_fuzz_smoke", []),
+        "pruned_fuzz_smoke": ("leopard2_pruned_fuzz_smoke", []),
     }
     tests = {}
     pin_cpu = context["allowed_cpus"][index % len(context["allowed_cpus"])]
-    for name in COMPARE_TESTS:
+    for name in RUN_TESTS:
         target, arguments = test_specs[name]
         executable = executable_path(build, target)
         argv = pinned_command(
@@ -1110,6 +1161,12 @@ def self_test():
         (stale / "copied-object.o").write_bytes(b"stale")
         assert prepare_fresh_directory(stale)
         assert list(stale.iterdir()) == []
+        driver_link = Path(directory) / "python-driver"
+        driver_link.symlink_to(sys.executable)
+        driver_identity = compiler_identity(str(driver_link))
+        assert driver_identity["executable"] == str(driver_link.absolute())
+        assert Path(driver_identity["executable"]).resolve() == Path(
+            sys.executable).resolve()
         timeout_record = run_command(
             "timeout", [sys.executable, "-c", "import time; time.sleep(1)"],
             directory, Path(directory), 0.01
