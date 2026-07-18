@@ -58,9 +58,11 @@ to the `T`-coefficient accumulator.  The tiled traversal loads and inversely
 transforms one block at a time, XORs it into the accumulator in the original
 block order, and reuses the second `T`-slot tile.  After the syndrome/evaluator
 steps, each requested output block is evaluated into that same tile.  Its
-requested coordinates are multiplied by the unchanged reveal factors and
-copied to `L` retained kernel-layout slots.  Public scatter then handles a
-possible compact GF16 tail exactly as before.
+requested coordinates are multiplied by the unchanged reveal factors directly
+into `L` retained kernel-layout slots.  The evaluator accumulator is read
+through an out-of-place first butterfly layer, so it is no longer copied in
+full before each requested block.  Public scatter then handles a possible
+compact GF16 tail exactly as before.
 
 The old `N`-materializing planned high kernel remains available internally and
 is compared byte-for-byte with the new requested outputs in the decode-plan

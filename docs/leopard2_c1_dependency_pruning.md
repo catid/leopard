@@ -305,9 +305,12 @@ execution falls back to the mature prefix/dependency transform.
 Both the materialized and side-sized tiled Algorithm 4/5 kernels consume the
 same immutable schedules for GF8 and GF16. Execution does not allocate, and
 the selected context backend is passed explicitly through every retained
-butterfly. The decode-plan schedule gate compares the pruned kernels with the
-unpruned prepared kernels and reports, for its deterministic GF8/GF16 sparse
-patterns:
+butterfly. Algorithm 5 begins each exact sparse output schedule with an
+immutable-source out-of-place root layer, then resumes the retained schedule;
+this removes its former whole-T evaluator copy without replacing the exact
+output mask with a prefix. The decode-plan schedule gate compares the pruned
+kernels with the unpruned prepared kernels and reports, for its deterministic
+GF8/GF16 sparse patterns:
 
 | Decoder | Retained / padded-equivalent operations |
 |---|---:|
