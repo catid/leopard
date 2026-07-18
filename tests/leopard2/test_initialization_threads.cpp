@@ -43,6 +43,10 @@
 
 #include <vector>
 
+#if defined(_MSC_VER)
+#include <malloc.h>
+#endif
+
 namespace {
 
 static bool LinuxTaskCount(unsigned& count)
@@ -337,7 +341,12 @@ static int TestContextInitialization(bool explicit_single_thread,
     }
     void* scratch = NULL;
     const size_t allocation_bytes = scratch_bytes == 0 ? 64 : scratch_bytes;
+#if defined(_MSC_VER)
+    scratch = _aligned_malloc(allocation_bytes, leo2_scratch_alignment());
+    if (scratch == NULL)
+#else
     if (posix_memalign(&scratch, leo2_scratch_alignment(), allocation_bytes) != 0)
+#endif
     {
         leo2_codec_destroy(codec);
         leo2_context_destroy(context);
@@ -360,7 +369,11 @@ static int TestContextInitialization(bool explicit_single_thread,
         if (recovery_storage[byte_i] != expected)
             parity_matches = false;
     }
+#if defined(_MSC_VER)
+    _aligned_free(scratch);
+#else
     free(scratch);
+#endif
     if (!parity_matches ||
         !RequireTaskCount(initial_tasks, "single-item batch"))
     {

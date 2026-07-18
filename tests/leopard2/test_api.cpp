@@ -42,6 +42,10 @@
 #include <stdexcept>
 #include <vector>
 
+#if defined(_MSC_VER)
+#include <malloc.h>
+#endif
+
 namespace {
 
 using leopard2_test::BinaryField;
@@ -93,16 +97,26 @@ struct AlignedBuffer
     {
         if (size != 0)
         {
+#if defined(_MSC_VER)
+            data = _aligned_malloc(size, leo2_scratch_alignment());
+            if (data == NULL)
+                throw std::bad_alloc();
+#else
             const int error = posix_memalign(&data, leo2_scratch_alignment(), size);
             if (error != 0)
                 throw std::bad_alloc();
+#endif
             memset(data, 0, size);
         }
     }
 
     ~AlignedBuffer()
     {
+#if defined(_MSC_VER)
+        _aligned_free(data);
+#else
         free(data);
+#endif
     }
 
 private:

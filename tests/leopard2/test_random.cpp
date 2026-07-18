@@ -42,6 +42,10 @@
 #include <string>
 #include <vector>
 
+#if defined(_MSC_VER)
+#include <malloc.h>
+#endif
+
 namespace {
 
 using leopard2_test::BinaryField;
@@ -141,15 +145,25 @@ public:
     {
         if (bytes != 0)
         {
+#if defined(_MSC_VER)
+            data_ = _aligned_malloc(bytes, leo2_scratch_alignment());
+            if (data_ == NULL)
+                throw std::bad_alloc();
+#else
             if (posix_memalign(&data_, leo2_scratch_alignment(), bytes) != 0)
                 throw std::bad_alloc();
+#endif
             memset(data_, 0, bytes);
         }
     }
 
     ~AlignedBuffer()
     {
+#if defined(_MSC_VER)
+        _aligned_free(data_);
+#else
         free(data_);
+#endif
     }
 
     void* data() { return data_; }

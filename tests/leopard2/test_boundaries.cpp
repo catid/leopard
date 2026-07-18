@@ -17,6 +17,10 @@
 #include <stdexcept>
 #include <vector>
 
+#if defined(_MSC_VER)
+#include <malloc.h>
+#endif
+
 namespace {
 
 typedef std::vector<std::vector<uint8_t> > Shards;
@@ -51,14 +55,25 @@ public:
         : pointer_(NULL)
         , bytes_(bytes)
     {
-        if (bytes_ != 0 && posix_memalign(
-                &pointer_, leo2_scratch_alignment(), bytes_) != 0)
-            pointer_ = NULL;
+        if (bytes_ != 0)
+        {
+#if defined(_MSC_VER)
+            pointer_ = _aligned_malloc(bytes_, leo2_scratch_alignment());
+#else
+            if (posix_memalign(
+                    &pointer_, leo2_scratch_alignment(), bytes_) != 0)
+                pointer_ = NULL;
+#endif
+        }
     }
 
     ~AlignedBuffer()
     {
+#if defined(_MSC_VER)
+        _aligned_free(pointer_);
+#else
         free(pointer_);
+#endif
     }
 
     bool valid() const { return bytes_ == 0 || pointer_ != NULL; }
