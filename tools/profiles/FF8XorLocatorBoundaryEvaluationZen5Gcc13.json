@@ -1,0 +1,204 @@
+{
+  "benchmark": {
+    "affinity": "taskset -c 24",
+    "allocation_timed": false,
+    "buffer_bytes": 1048576,
+    "build_type": "Release",
+    "compiler": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+    "cpu": "AMD Ryzen Threadripper PRO 9985WX 64-Cores",
+    "eligible_ratio_aggregation": "equal weight per retained benchmark row and independent repetition; not schedule-frequency weighted",
+    "kernel_mode": "AVX2 XOR circuits",
+    "measurement_order": "paired A-B-B-A; each sample is the average of its two same-arm calls",
+    "repetitions": 4,
+    "rounds_per_repetition": 21,
+    "rows": [
+      {
+        "eligible_pairs": 1,
+        "k": 7,
+        "loss": 1,
+        "r": 3,
+        "fused_median_usec": [
+          2386.415,
+          2388.378,
+          2376.029,
+          2378.914
+        ],
+        "ratios_staged_over_fused": [
+          0.969024,
+          0.965542,
+          0.965044,
+          0.965266
+        ],
+        "staged_median_usec": [
+          2312.494,
+          2306.079,
+          2292.974,
+          2296.284
+        ]
+      },
+      {
+        "eligible_pairs": 0,
+        "k": 7,
+        "loss": 3,
+        "r": 3,
+        "fused_median_usec": [
+          3022.1,
+          3029.247,
+          3021.6,
+          3037.559
+        ],
+        "ratios_staged_over_fused": [
+          1.012558,
+          1.020976,
+          1.001271,
+          0.999598
+        ],
+        "staged_median_usec": [
+          3060.052,
+          3092.787,
+          3025.441,
+          3036.337
+        ]
+      },
+      {
+        "eligible_pairs": 0,
+        "k": 32,
+        "loss": 1,
+        "r": 8,
+        "fused_median_usec": [
+          21556.471,
+          21696.668,
+          21116.712,
+          21318.002
+        ],
+        "ratios_staged_over_fused": [
+          1.001684,
+          0.995171,
+          0.999635,
+          0.999343
+        ],
+        "staged_median_usec": [
+          21592.771,
+          21591.905,
+          21109.005,
+          21303.995
+        ]
+      },
+      {
+        "eligible_pairs": 1,
+        "k": 32,
+        "loss": 8,
+        "r": 8,
+        "fused_median_usec": [
+          29040.702,
+          28564.154,
+          28047.283,
+          28155.416
+        ],
+        "ratios_staged_over_fused": [
+          0.999263,
+          1.00755,
+          0.998318,
+          1.000807
+        ],
+        "staged_median_usec": [
+          29019.289,
+          28779.799,
+          28000.096,
+          28178.136
+        ]
+      },
+      {
+        "eligible_pairs": 1,
+        "k": 128,
+        "loss": 1,
+        "r": 32,
+        "fused_median_usec": [
+          112153.577,
+          113853.834,
+          110537.842,
+          110659.296
+        ],
+        "ratios_staged_over_fused": [
+          0.997114,
+          0.997765,
+          0.999811,
+          0.99901
+        ],
+        "staged_median_usec": [
+          111829.923,
+          113599.38,
+          110516.97,
+          110549.696
+        ]
+      },
+      {
+        "eligible_pairs": 0,
+        "k": 128,
+        "loss": 32,
+        "r": 32,
+        "fused_median_usec": [
+          154467.84,
+          157146.85,
+          150369.388,
+          153745.715
+        ],
+        "ratios_staged_over_fused": [
+          0.998731,
+          0.999476,
+          1.000458,
+          0.996884
+        ],
+        "staged_median_usec": [
+          154271.785,
+          157064.49,
+          150438.247,
+          153266.716
+        ]
+      }
+    ],
+    "transpose_included": false,
+    "work_buffer_placement": "same physical work buffers for both arms"
+  },
+  "candidate": {
+    "description": "Fuse identity-scaled and structural-zero inputs into the first decoder IFFT layer with literal out-of-place copy/zero circuits; retain the staged path for every nonidentity pair.",
+    "dense_first_layer_map_cardinality": 16646400,
+    "dense_first_layer_map_formula": "255 x 255 input coefficient pairs x 256 skews",
+    "generated_presence_skew_specializations": 768,
+    "generated_specialization_formula": "3 nonempty presence masks x 256 skews",
+    "retained": false
+  },
+  "checksum_sha256": "3d948e4159b338058a66d6fe5adc91d7d51035575641302a5633f2dae46d223d",
+  "code_size": {
+    "baseline_core_object_text_bytes": 1285847,
+    "candidate_core_object_text_bytes": 2563407,
+    "delta_text_bytes": 1277560,
+    "ratio_candidate_over_baseline": 1.9935552208,
+    "scope": "LeopardFF8Xor.cpp.o plus LeopardFF8XorAVX2.cpp.o"
+  },
+  "decision": {
+    "eligible_row_geometric_mean_ratio": 0.9885770529,
+    "highest_value_alternative": "A materially different fused-map representation or AVX-512 tuple kernel that amortizes dispatch and code size; do not reintroduce the 768-case identity-only portfolio.",
+    "result": "rejected",
+    "small_transform_geometric_mean_ratio": 0.966218,
+    "summary": "The bounded candidate nearly doubled core object text. Its equal-row/equal-repetition geometric mean across the three benchmark rows with one eligible pair was 0.988577x, including a repeatable 0.966218x small-transform regression; larger transforms were statistically neutral."
+  },
+  "proof": {
+    "cpp_candidate_map_cases": 11520,
+    "cpp_candidate_map_dimensions": "5 available kernel modes x 3 buffer sizes x 256 skews x 3 nonempty presence masks",
+    "forced_locator_shifts": 255,
+    "forced_shift_decode_case": "k=7 r=3 bytes=65536 losses=2",
+    "linear_map_check": "all 256 skews x 3 nonempty presence masks x 16 basis vectors",
+    "note": "The checked runtime candidate was removed after the negative measurement; the independent Python checker preserves the algebra and schedule-cardinality proof.",
+    "poisoned_work_status": "The direct map proof is destination-state independent because every output plane is defined and stored. The temporary end-to-end forced-shift harness zero-initialized work, and the requested distinct-nonzero poisoned-work integration rerun was not completed before rejection. This is recorded as a correctness-evidence limitation, not presented as a pass.",
+    "required_if_reconsidered": "Repeat every forced locator shift and structural presence case with distinct nonzero poison in all work shards, plus canaries, before any runtime hook is retained."
+  },
+  "schedule_corpus": {
+    "automatic_decode_records": 80,
+    "eligible_first_layer_pairs": 282,
+    "eligible_unique_skews": 66,
+    "possible_first_layer_skews": 128,
+    "schedule_checksum_sha256": "fad8502fe53b91ce262c75212ef0db075c2f9b0c1533e80858be64e5dee851bf"
+  },
+  "schema": "leopard.ff8xor.locator-boundary-evaluation.v1"
+}

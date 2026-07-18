@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Generate the static FF8 XOR circuits used by the experimental backend.
+"""Generate static FF8 XOR2 and experimental explicit-XOR3 circuits.
 
-The generated C++ deliberately contains named wire variables and literal XOR
-statements.  The payload kernels include it after defining XorValue() for the
-selected scalar or SIMD value type.
+Both generated C++ artifacts deliberately contain named wire variables and
+literal XOR statements.  The production payload kernels include the XOR2
+artifact after defining XorValue().  The separately checked XOR3 artifact uses
+Xor3Value(dst, a, b), suitable for explicit parity truth table 0x96, and is
+retained as a measured negative experiment rather than enabled by default.
 """
 
 from __future__ import print_function
@@ -24,6 +26,7 @@ _TOOLS_DIRECTORY = str(Path(__file__).resolve().parent)
 if _TOOLS_DIRECTORY not in sys.path:
     sys.path.insert(0, _TOOLS_DIRECTORY)
 import ff8_xor_cost_model as cost_model
+import ff8_xor3_schedule as xor3_schedule
 
 
 FIELD_BITS = 8
@@ -34,6 +37,7 @@ CANTOR_BASIS = (1, 214, 152, 146, 86, 200, 88, 230)
 WIRE_COUNT_MULTIPLY = 8
 WIRE_COUNT_BUTTERFLY = 16
 GENERATOR_VERSION = b"LeopardFF8XorCircuits-v4-exact8\0"
+XOR3_GENERATOR_VERSION = b"LeopardFF8XorCircuitsXor3-v1\0"
 
 
 def add_mod(a, b):
@@ -1106,6 +1110,12 @@ def build_circuits(cost_profile=None):
     multiplication_variants = []
     forward_variants = []
     inverse_variants = []
+    multiplication_xor3_schedules = []
+    forward_xor3_schedules = []
+    inverse_xor3_schedules = []
+    multiplication_xor3_variants = []
+    forward_xor3_variants = []
+    inverse_xor3_variants = []
 
     # Exhaustive multiplier validation is fast and guards the column/row and
     # Cantor-coordinate conventions independently of the circuit synthesis.
@@ -1114,6 +1124,13 @@ def build_circuits(cost_profile=None):
             matrix, cost_profile)
         if circuit_matrix(WIRE_COUNT_MULTIPLY, gates) != matrix:
             raise AssertionError("incorrect multiplier circuit")
+        xor3_variant, xor3_operations = xor3_schedule.choose_schedule(
+            gates, WIRE_COUNT_MULTIPLY)
+        xor3_schedule.verify_schedule(
+            gates, xor3_operations, WIRE_COUNT_MULTIPLY)
+        if xor3_schedule.operation_matrix(
+                xor3_operations, WIRE_COUNT_MULTIPLY) != matrix:
+            raise AssertionError("incorrect XOR3 multiplier schedule map")
         for value in range(FIELD_ORDER):
             expected = scalar_multiply_log(value, log_multiplier)
             independent_expected = independent_scalar_multiply_log(
@@ -1124,8 +1141,13 @@ def build_circuits(cost_profile=None):
                 raise AssertionError("incorrect multiplication matrix")
             if apply_circuit(value, gates) != expected:
                 raise AssertionError("incorrect multiplication circuit")
+            if xor3_schedule.apply_operations(
+                    value, xor3_operations, WIRE_COUNT_MULTIPLY) != expected:
+                raise AssertionError("incorrect XOR3 multiplication schedule")
         multiplication_circuits.append(gates)
         multiplication_variants.append(variant)
+        multiplication_xor3_schedules.append(xor3_operations)
+        multiplication_xor3_variants.append(xor3_variant)
 
     deterministic_random = random.Random(0xFF8C1AC017)
     random_states = tuple(
@@ -1152,6 +1174,26 @@ def build_circuits(cost_profile=None):
             forward_matrix, direct_forward, cost_profile)
         chosen_inverse, inverse_variant = choose_butterfly_circuit(
             inverse_matrix, direct_inverse, cost_profile)
+        forward_xor3_variant, forward_xor3_operations = \
+            xor3_schedule.choose_schedule(
+                chosen_forward, WIRE_COUNT_BUTTERFLY)
+        inverse_xor3_variant, inverse_xor3_operations = \
+            xor3_schedule.choose_schedule(
+                chosen_inverse, WIRE_COUNT_BUTTERFLY)
+        xor3_schedule.verify_schedule(
+            chosen_forward, forward_xor3_operations,
+            WIRE_COUNT_BUTTERFLY)
+        xor3_schedule.verify_schedule(
+            chosen_inverse, inverse_xor3_operations,
+            WIRE_COUNT_BUTTERFLY)
+        if xor3_schedule.operation_matrix(
+                forward_xor3_operations,
+                WIRE_COUNT_BUTTERFLY) != forward_matrix:
+            raise AssertionError("forward XOR3 schedule map mismatch")
+        if xor3_schedule.operation_matrix(
+                inverse_xor3_operations,
+                WIRE_COUNT_BUTTERFLY) != inverse_matrix:
+            raise AssertionError("inverse XOR3 schedule map mismatch")
 
         for state in validation_states:
             expected_forward = forward_function(state)
@@ -1164,6 +1206,22 @@ def build_circuits(cost_profile=None):
                 raise AssertionError("inverse(forward(state)) failed")
             if apply_circuit(expected_inverse, chosen_forward) != state:
                 raise AssertionError("forward(inverse(state)) failed")
+            observed_forward = xor3_schedule.apply_operations(
+                state, forward_xor3_operations, WIRE_COUNT_BUTTERFLY)
+            observed_inverse = xor3_schedule.apply_operations(
+                state, inverse_xor3_operations, WIRE_COUNT_BUTTERFLY)
+            if observed_forward != expected_forward:
+                raise AssertionError("incorrect forward XOR3 schedule")
+            if observed_inverse != expected_inverse:
+                raise AssertionError("incorrect inverse XOR3 schedule")
+            if xor3_schedule.apply_operations(
+                    observed_forward, inverse_xor3_operations,
+                    WIRE_COUNT_BUTTERFLY) != state:
+                raise AssertionError("XOR3 inverse(forward(state)) failed")
+            if xor3_schedule.apply_operations(
+                    observed_inverse, forward_xor3_operations,
+                    WIRE_COUNT_BUTTERFLY) != state:
+                raise AssertionError("XOR3 forward(inverse(state)) failed")
 
         # Equality of the induced matrices proves the result for all 2^16
         # states, while the checks above independently exercise scalar order.
@@ -1178,6 +1236,10 @@ def build_circuits(cost_profile=None):
         inverse_circuits.append(chosen_inverse)
         forward_variants.append(forward_variant)
         inverse_variants.append(inverse_variant)
+        forward_xor3_schedules.append(forward_xor3_operations)
+        inverse_xor3_schedules.append(inverse_xor3_operations)
+        forward_xor3_variants.append(forward_xor3_variant)
+        inverse_xor3_variants.append(inverse_xor3_variant)
 
     validate_representative_wide_synthesis(cost_profile)
 
@@ -1191,6 +1253,12 @@ def build_circuits(cost_profile=None):
         "multiply_variants": tuple(multiplication_variants),
         "forward_variants": tuple(forward_variants),
         "inverse_variants": tuple(inverse_variants),
+        "multiply_xor3_schedules": tuple(multiplication_xor3_schedules),
+        "forward_xor3_schedules": tuple(forward_xor3_schedules),
+        "inverse_xor3_schedules": tuple(inverse_xor3_schedules),
+        "multiply_xor3_variants": tuple(multiplication_xor3_variants),
+        "forward_xor3_variants": tuple(forward_xor3_variants),
+        "inverse_xor3_variants": tuple(inverse_xor3_variants),
         "cost_profile_id": cost_profile["id"],
         "cost_profile_checksum": cost_model.checksum(cost_profile),
     }
@@ -1222,6 +1290,40 @@ def circuit_checksum(circuit_data):
             encoded = variant.encode("ascii")
             digest.update(len(encoded).to_bytes(2, byteorder="little"))
             digest.update(encoded)
+    return digest.hexdigest()
+
+
+def xor3_circuit_checksum(circuit_data):
+    """Hash the explicit ternary schedules separately from the base circuits."""
+    digest = hashlib.sha256()
+    digest.update(XOR3_GENERATOR_VERSION)
+    digest.update(bytes.fromhex(circuit_checksum(circuit_data)))
+    digest.update(bytes((
+        xor3_schedule.DEFAULT_XOR2_CODE_BYTES,
+        xor3_schedule.DEFAULT_XOR3_CODE_BYTES,
+    )))
+    for name in xor3_schedule.VARIANT_NAMES:
+        encoded = name.encode("ascii")
+        digest.update(bytes((len(encoded),)))
+        digest.update(encoded)
+
+    families = (
+        (WIRE_COUNT_MULTIPLY,
+         "multiply_xor3_schedules", "multiply_xor3_variants"),
+        (WIRE_COUNT_BUTTERFLY,
+         "forward_xor3_schedules", "forward_xor3_variants"),
+        (WIRE_COUNT_BUTTERFLY,
+         "inverse_xor3_schedules", "inverse_xor3_variants"),
+    )
+    for width, schedule_name, variant_name in families:
+        digest.update(bytes((width,)))
+        for operations, variant in zip(
+                circuit_data[schedule_name], circuit_data[variant_name]):
+            validated = xor3_schedule.validate_operations(operations, width)
+            digest.update(bytes((variant,)))
+            digest.update(len(validated).to_bytes(2, byteorder="little"))
+            for operation in validated:
+                digest.update(bytes((len(operation),) + operation))
     return digest.hexdigest()
 
 
@@ -1292,6 +1394,74 @@ def append_circuit_specializations(lines, struct_name, circuits, width):
             source_name = names[source]
             lines.append("        %s = XorValue(%s, %s);" % (
                 destination_name, destination_name, source_name))
+        lines.append("    }")
+        lines.append("};")
+        lines.append("")
+
+
+def append_xor3_stats(lines, prefix, schedules, variants, width):
+    metadata = tuple(
+        xor3_schedule.schedule_metadata(operations, width)
+        for operations in schedules)
+    series = (
+        ("Xor2Counts", "Xor2Count", "xor2_count", format_integer_array),
+        ("Xor3Counts", "Xor3Count", "xor3_count", format_integer_array),
+        ("InstructionCounts", "InstructionCount", "instruction_count",
+         format_integer_array),
+        ("Depths", "Depth", "depth", format_integer_array),
+        ("PeakLiveWireCounts", "PeakLiveWireCount", "peak_live_wires",
+         format_integer_array),
+        ("EstimatedCodeBytes", "EstimatedCodeBytes", "estimated_code_bytes",
+         format_uint16_array),
+    )
+    for array_label, scalar_label, key, formatter in series:
+        values = [entry[key] for entry in metadata]
+        lines.extend(formatter("k%sXor3%s" % (
+            prefix, array_label), values))
+        lines.append("")
+        lines.append("static const unsigned k%sXor3Total%s = %d;" % (
+            prefix, scalar_label, sum(values)))
+        lines.append("static const unsigned k%sXor3Min%s = %d;" % (
+            prefix, scalar_label, min(values)))
+        lines.append("static const unsigned k%sXor3Max%s = %d;" % (
+            prefix, scalar_label, max(values)))
+        lines.append("static const double k%sXor3Average%s = %.9f;" % (
+            prefix, scalar_label, float(sum(values)) / len(values)))
+        lines.append("")
+    lines.extend(format_integer_array(
+        "k%sXor3ScheduleVariantIds" % prefix, variants))
+
+
+def append_xor3_circuit_specializations(
+        lines, struct_name, schedules, width):
+    names = wire_names(width)
+    lines.append("template <unsigned Coefficient> struct %s;" % struct_name)
+    lines.append("")
+    for coefficient, operations in enumerate(schedules):
+        operations = xor3_schedule.validate_operations(operations, width)
+        lines.append("template <> struct %s<%d>" % (struct_name, coefficient))
+        lines.append("{")
+        lines.append("    template <typename Value>")
+        lines.append("    static LEO_FORCE_INLINE void Apply(")
+        for index, name in enumerate(names):
+            comma = "," if index + 1 != len(names) else ")"
+            lines.append("        Value& %s%s" % (name, comma))
+        lines.append("    {")
+        for name in names:
+            lines.append("        (void)%s;" % name)
+        if operations:
+            lines.append("")
+        for operation in operations:
+            destination_name = names[operation[1]]
+            first_source_name = names[operation[2]]
+            if operation[0] == xor3_schedule.OP_XOR2:
+                lines.append("        %s = XorValue(%s, %s);" % (
+                    destination_name, destination_name, first_source_name))
+            else:
+                second_source_name = names[operation[3]]
+                lines.append("        %s = Xor3Value(%s, %s, %s);" % (
+                    destination_name, destination_name,
+                    first_source_name, second_source_name))
         lines.append("    }")
         lines.append("};")
         lines.append("")
@@ -1388,6 +1558,79 @@ def generate_cpp(circuit_data):
     return "\n".join(lines)
 
 
+def generate_xor3_cpp(circuit_data):
+    checksum = xor3_circuit_checksum(circuit_data)
+    base_checksum = circuit_checksum(circuit_data)
+    multiply_schedules = circuit_data["multiply_xor3_schedules"]
+    forward_schedules = circuit_data["forward_xor3_schedules"]
+    inverse_schedules = circuit_data["inverse_xor3_schedules"]
+
+    lines = [
+        "// Generated by tools/generate_ff8_xor_circuits.py.  DO NOT EDIT.",
+        "// Explicit XOR3 schedule checksum (SHA-256): %s" % checksum,
+        "// Base XOR2 circuit checksum (SHA-256): %s" % base_checksum,
+        "// XOR3 is the exact three-input parity operation (VPTERNLOG 0x96).",
+        "// Schedule depth applies ternary dependency semantics and forbids",
+        "// operations in one layer from sharing any named wire.",
+        "",
+        "#ifndef LEOPARD_FF8_XOR_CIRCUITS_XOR3_GENERATED_INL",
+        "#define LEOPARD_FF8_XOR_CIRCUITS_XOR3_GENERATED_INL",
+        "",
+        "#ifndef LEOPARD_FF8_XOR_CIRCUITS_GENERATED_INL",
+        "#error Include LeopardFF8XorCircuits.inl before its XOR3 schedules",
+        "#endif",
+        "",
+        "namespace leopard { namespace ff8xor { namespace generated {",
+        "",
+        "static const char kXor3CircuitChecksum[] = \"%s\";" % checksum,
+        "static const char kXor3BaseCircuitChecksum[] = \"%s\";" %
+        base_checksum,
+        "static const unsigned kXor3EstimatedXor2CodeBytes = %d;" %
+        xor3_schedule.DEFAULT_XOR2_CODE_BYTES,
+        "static const unsigned kXor3EstimatedXor3CodeBytes = %d;" %
+        xor3_schedule.DEFAULT_XOR3_CODE_BYTES,
+        "",
+        "static const unsigned kXor3ScheduleVariantCount = %d;" %
+        len(xor3_schedule.VARIANT_NAMES),
+        "static const char* const kXor3ScheduleVariantNames[%d] = {" %
+        len(xor3_schedule.VARIANT_NAMES),
+    ]
+    for name in xor3_schedule.VARIANT_NAMES:
+        lines.append("    \"%s\"," % name)
+    lines.extend(["};", ""])
+
+    append_xor3_stats(
+        lines, "Multiply", multiply_schedules,
+        circuit_data["multiply_xor3_variants"], WIRE_COUNT_MULTIPLY)
+    lines.append("")
+    append_xor3_stats(
+        lines, "FFT", forward_schedules,
+        circuit_data["forward_xor3_variants"], WIRE_COUNT_BUTTERFLY)
+    lines.append("")
+    append_xor3_stats(
+        lines, "IFFT", inverse_schedules,
+        circuit_data["inverse_xor3_variants"], WIRE_COUNT_BUTTERFLY)
+    lines.append("")
+
+    append_xor3_circuit_specializations(
+        lines, "MultiplyCircuitXor3",
+        multiply_schedules, WIRE_COUNT_MULTIPLY)
+    append_xor3_circuit_specializations(
+        lines, "FFTCircuitXor3",
+        forward_schedules, WIRE_COUNT_BUTTERFLY)
+    append_xor3_circuit_specializations(
+        lines, "IFFTCircuitXor3",
+        inverse_schedules, WIRE_COUNT_BUTTERFLY)
+
+    lines.extend([
+        "}}} // namespace leopard::ff8xor::generated",
+        "",
+        "#endif // LEOPARD_FF8_XOR_CIRCUITS_XOR3_GENERATED_INL",
+        "",
+    ])
+    return "\n".join(lines)
+
+
 def check_output(output_path, generated_text):
     try:
         current_text = output_path.read_text(encoding="utf-8")
@@ -1434,6 +1677,35 @@ def print_synthesis_summary(circuit_data, elapsed_seconds):
                   sum(depths), min(depths), max(depths),
                   float(sum(depths)) / len(depths),
                   len(set(circuit_data[variant_name]))))
+    xor3_families = (
+        ("Multiply", "multiply_xor3_schedules",
+         "multiply_xor3_variants", WIRE_COUNT_MULTIPLY),
+        ("FFT", "forward_xor3_schedules",
+         "forward_xor3_variants", WIRE_COUNT_BUTTERFLY),
+        ("IFFT", "inverse_xor3_schedules",
+         "inverse_xor3_variants", WIRE_COUNT_BUTTERFLY),
+    )
+    for label, schedule_name, variant_name, width in xor3_families:
+        metadata = tuple(
+            xor3_schedule.schedule_metadata(operations, width)
+            for operations in circuit_data[schedule_name])
+        xor2_counts = [entry["xor2_count"] for entry in metadata]
+        xor3_counts = [entry["xor3_count"] for entry in metadata]
+        instructions = [entry["instruction_count"] for entry in metadata]
+        depths = [entry["depth"] for entry in metadata]
+        code_bytes = [entry["estimated_code_bytes"] for entry in metadata]
+        print("%s XOR3 schedule: xor2=%d xor3=%d instructions=%d "
+              "(min=%d max=%d avg=%.6f) depth=%d "
+              "(min=%d max=%d avg=%.6f) live=%d code_bytes=%d variants=%d" % (
+                  label, sum(xor2_counts), sum(xor3_counts),
+                  sum(instructions), min(instructions), max(instructions),
+                  float(sum(instructions)) / len(instructions),
+                  sum(depths), min(depths), max(depths),
+                  float(sum(depths)) / len(depths), width,
+                  sum(code_bytes),
+                  len(set(circuit_data[variant_name]))))
+    print("Explicit XOR3 schedule checksum: %s" %
+          xor3_circuit_checksum(circuit_data))
     print("Synthesis generation time: %.3f seconds" % elapsed_seconds)
 
 
@@ -1445,12 +1717,18 @@ def parse_arguments():
     parser.add_argument(
         "--check",
         action="store_true",
-        help="verify that the checked-in generated source is current")
+        help="verify that both checked-in generated sources are current")
     parser.add_argument(
         "--output",
         type=Path,
         default=default_output,
         help="generated output path (default: %(default)s)")
+    parser.add_argument(
+        "--xor3-output",
+        type=Path,
+        default=None,
+        help=("explicit XOR3 output path (default: append Xor3 to the "
+              "--output stem)"))
     parser.add_argument(
         "--cost-profile",
         default="portable-default-v1",
@@ -1465,6 +1743,10 @@ def parse_arguments():
 
 def main():
     arguments = parse_arguments()
+    xor3_output = arguments.xor3_output
+    if xor3_output is None:
+        xor3_output = arguments.output.with_name(
+            arguments.output.stem + "Xor3" + arguments.output.suffix)
     profile_artifact = cost_model.load_profile_artifact(
         arguments.cost_profiles)
     selected_profile = cost_model.find_profile(
@@ -1472,16 +1754,22 @@ def main():
     begin = time.monotonic()
     circuit_data = build_circuits(selected_profile)
     generated_text = generate_cpp(circuit_data)
+    generated_xor3_text = generate_xor3_cpp(circuit_data)
     elapsed_seconds = time.monotonic() - begin
 
     if arguments.check:
-        result = 0 if check_output(arguments.output, generated_text) else 1
+        base_current = check_output(arguments.output, generated_text)
+        xor3_current = check_output(xor3_output, generated_xor3_text)
+        result = 0 if base_current and xor3_current else 1
         print_synthesis_summary(circuit_data, elapsed_seconds)
         return result
 
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
+    xor3_output.parent.mkdir(parents=True, exist_ok=True)
     arguments.output.write_text(generated_text, encoding="utf-8")
+    xor3_output.write_text(generated_xor3_text, encoding="utf-8")
     print("Generated %s" % arguments.output)
+    print("Generated %s" % xor3_output)
     print("Circuit checksum: %s" % circuit_checksum(circuit_data))
     print_synthesis_summary(circuit_data, elapsed_seconds)
     return 0

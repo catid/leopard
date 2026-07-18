@@ -44,8 +44,14 @@ DEFAULT_XOR3_CODE_BYTES = 7
 
 
 def _validate_width(width):
-    if not isinstance(width, int) or width <= 0:
+    if isinstance(width, bool) or not isinstance(width, int) or width <= 0:
         raise ValueError("wire width must be a positive integer")
+
+
+def _validate_code_bytes(value, label):
+    if (isinstance(value, bool) or not isinstance(value, int) or
+            value < 0):
+        raise ValueError("%s must be a non-negative integer" % label)
 
 
 def validate_gates(gates, width):
@@ -56,7 +62,9 @@ def validate_gates(gates, width):
         if len(gate) != 2:
             raise ValueError("a CNOT gate must contain destination and source")
         destination, source = gate
-        if not isinstance(destination, int) or not isinstance(source, int):
+        if (isinstance(destination, bool) or isinstance(source, bool) or
+                not isinstance(destination, int) or
+                not isinstance(source, int)):
             raise ValueError("wire indices must be integers")
         if not (0 <= destination < width and 0 <= source < width):
             raise ValueError("CNOT wire index is outside the circuit")
@@ -73,13 +81,17 @@ def validate_operations(operations, width):
         if not operation:
             raise ValueError("empty circuit operation")
         opcode = operation[0]
+        if isinstance(opcode, bool) or not isinstance(opcode, int):
+            raise ValueError("an XOR opcode must be an integer")
         expected_length = 3 if opcode == OP_XOR2 else 4 if opcode == OP_XOR3 else 0
         if not expected_length or len(operation) != expected_length:
             raise ValueError("invalid XOR2/XOR3 operation")
         destination = operation[1]
         sources = operation[2:]
-        if not isinstance(destination, int) or not all(
-                isinstance(source, int) for source in sources):
+        if (isinstance(destination, bool) or
+                not isinstance(destination, int) or any(
+                    isinstance(source, bool) or not isinstance(source, int)
+                    for source in sources)):
             raise ValueError("wire indices must be integers")
         if not (0 <= destination < width) or not all(
                 0 <= source < width for source in sources):
@@ -213,7 +225,8 @@ def expand_operations(operations, width):
 def apply_gates(state, gates, width):
     """Apply a CNOT sequence to an integer bit-vector."""
     validated = validate_gates(gates, width)
-    if not isinstance(state, int) or not (0 <= state < (1 << width)):
+    if (isinstance(state, bool) or not isinstance(state, int) or
+            not (0 <= state < (1 << width))):
         raise ValueError("state is outside the circuit width")
     for destination, source in validated:
         state ^= ((state >> source) & 1) << destination
@@ -223,7 +236,8 @@ def apply_gates(state, gates, width):
 def apply_operations(state, operations, width):
     """Apply a mixed XOR2/XOR3 schedule to an integer bit-vector."""
     validated = validate_operations(operations, width)
-    if not isinstance(state, int) or not (0 <= state < (1 << width)):
+    if (isinstance(state, bool) or not isinstance(state, int) or
+            not (0 <= state < (1 << width))):
         raise ValueError("state is outside the circuit width")
     for operation in validated:
         destination = operation[1]
@@ -282,6 +296,8 @@ def schedule_metadata(operations, width,
     every named input wire remains a named output wire that must be stored.
     """
     validated = validate_operations(operations, width)
+    _validate_code_bytes(xor2_code_bytes, "XOR2 code bytes")
+    _validate_code_bytes(xor3_code_bytes, "XOR3 code bytes")
     xor2_count = sum(operation[0] == OP_XOR2 for operation in validated)
     xor3_count = sum(operation[0] == OP_XOR3 for operation in validated)
     return {

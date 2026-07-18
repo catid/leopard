@@ -702,6 +702,40 @@ if(FF8XOR_PYTHON_EXECUTABLE)
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_ff8_xor_circuits.py"
                 --check)
 
+    add_custom_target(generate_ff8_xor_four_buffer_circuits
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_ff8_xor_four_buffer_circuits.py"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        VERBATIM)
+
+    add_custom_target(check_ff8_xor_four_buffer_circuits
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_ff8_xor_four_buffer_circuits.py"
+                --check
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        VERBATIM)
+
+    add_test(NAME ff8xor_four_buffer_circuits
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_four_buffer_circuits.py")
+
+    add_custom_target(check_ff8xor_locator_boundary_evidence
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/evaluate_ff8xor_locator_boundary.py"
+                --check
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        VERBATIM)
+
+    add_test(NAME ff8xor_locator_boundary_evidence
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/evaluate_ff8xor_locator_boundary.py"
+                --check)
+
     add_custom_target(generate_ff8xor_schedule_corpus
         COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
                 "${FF8XOR_PYTHON_EXECUTABLE}"
@@ -788,6 +822,11 @@ if(FF8XOR_PYTHON_EXECUTABLE)
         COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
                 "${FF8XOR_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8_xor3_schedule.py")
+
+    add_test(NAME ff8xor_generated_xor3
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_generated_xor3.py")
 
     add_test(NAME ff8xor_baseline_isa_inspector
         COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
@@ -936,6 +975,29 @@ if(FF8XOR_PYTHON_EXECUTABLE)
         elseif(NOT FF8XOR_CAN_INSPECT_X86_ASSEMBLY)
             message(STATUS
                 "FF8 XOR3 assembly inspection: nm/objdump unavailable")
+        endif()
+
+        if(FF8XOR_CAN_INSPECT_X86_ASSEMBLY)
+            add_test(NAME ff8xor_four_buffer_avx512_assembly
+                COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                        "${FF8XOR_PYTHON_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_four_buffer_avx512.py"
+                        --compiler "${CMAKE_CXX_COMPILER}"
+                        --nm "${FF8XOR_NM_EXECUTABLE}"
+                        --objdump "${FF8XOR_OBJDUMP_EXECUTABLE}"
+                        --strict)
+
+            add_custom_target(check_ff8xor_four_buffer_avx512_assembly
+                COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                        "${FF8XOR_PYTHON_EXECUTABLE}"
+                        "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_four_buffer_avx512.py"
+                        --compiler "${CMAKE_CXX_COMPILER}"
+                        --nm "${FF8XOR_NM_EXECUTABLE}"
+                        --objdump "${FF8XOR_OBJDUMP_EXECUTABLE}"
+                        --strict
+                        --json
+                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                VERBATIM)
         endif()
     endif()
 

@@ -26,13 +26,25 @@ class Xor3ScheduleTests(unittest.TestCase):
 
     def test_validation_rejects_illegal_wires_and_operations(self):
         with self.assertRaises(ValueError):
+            xor3.validate_gates((), True)
+        with self.assertRaises(ValueError):
             xor3.validate_gates(((0, 0),), 2)
+        with self.assertRaises(ValueError):
+            xor3.validate_gates(((False, 1),), 2)
         with self.assertRaises(ValueError):
             xor3.validate_gates(((2, 0),), 2)
         with self.assertRaises(ValueError):
             xor3.validate_operations(((xor3.OP_XOR3, 0, 1, 1),), 3)
         with self.assertRaises(ValueError):
+            xor3.validate_operations(((2.0, 0, 1),), 3)
+        with self.assertRaises(ValueError):
+            xor3.validate_operations(((3.0, 0, 1, 2),), 3)
+        with self.assertRaises(ValueError):
             xor3.validate_operations(((4, 0, 1),), 2)
+        with self.assertRaises(ValueError):
+            xor3.apply_gates(False, (), 2)
+        with self.assertRaises(ValueError):
+            xor3.schedule_metadata((), 2, xor2_code_bytes=-1)
 
     def test_commutation_rule_matches_exhaustive_linear_maps(self):
         width = 4

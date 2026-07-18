@@ -58,6 +58,8 @@ def main():
             "metadata circuit profile checksum is stale")
     require(len(metadata[0].get("circuit_checksum", "")) == 64,
             "metadata omitted the circuit checksum")
+    require(metadata[0].get("ff8xor_mode_requested") == "auto",
+            "metadata omitted the requested default kernel mode")
     circuit_metadata = [record for record in records
                         if record.get("record") == "circuit_metadata"]
     require(len(circuit_metadata) == 3,
@@ -160,8 +162,13 @@ def main():
     profile_fields = {"cost_profile_id", "cost_profile_checksum"}
     require(not (profile_fields - set(reader.fieldnames)),
             "CSV header omitted circuit profile provenance")
+    require("ff8xor_mode_requested" in reader.fieldnames,
+            "CSV header omitted the requested kernel mode")
     csv_records = list(reader)
     require(csv_records, "CSV benchmark emitted no records")
+    require(all(record["ff8xor_mode_requested"] == "auto"
+                for record in csv_records),
+            "CSV rows disagree about the requested kernel mode")
     require(all(None not in record for record in csv_records),
             "CSV benchmark emitted a row wider than its header")
     require(all(len(record) == len(reader.fieldnames) and
@@ -212,6 +219,13 @@ def main():
             csv_saw_tracked_decode = True
     require(csv_saw_tracked_decode,
             "quick CSV benchmark did not expose tracked decode elision")
+
+    invalid_mode = subprocess.run(
+        [sys.argv[1], "--ff8xor-mode", "not-a-mode", "--no-pin"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    require(invalid_mode.returncode == 2 and
+            "Invalid --ff8xor-mode value" in invalid_mode.stderr,
+            "benchmark accepted or misreported an invalid kernel mode")
 
     print("FF8 XOR benchmark metadata tests passed")
     return 0

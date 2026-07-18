@@ -9,8 +9,10 @@ the default backend and does not change the data output of valid
 `leo_encode()` or `leo_decode()` calls. This branch also hardens the packed
 APIs' documented count/work-count validation and fixes a `k=1` no-loss decode
 null-recovery bug; those changes affect invalid or formerly crashing calls,
-not valid packed codewords. The experimental backend does not implement FF16,
-CUDA, or AVX-512 four-buffer fusion.
+not valid packed codewords. The experimental backend does not implement FF16
+or CUDA. A generated AVX-512 four-buffer circuit corpus now exists, but it is
+not integrated into the production transform path; the codec still executes
+two-buffer butterflies.
 
 The payload loops use loads, stores, XORs, copies, zeroing, and address/loop
 arithmetic. They do not use payload-indexed multiplication tables, byte
@@ -182,11 +184,14 @@ Encoder chunking, zero padding, transform truncation, work ordering, formal
 derivative, decoder ErrorBitfield selection, and the `k=1`/`r=1` special cases
 remain intact.
 
-This first experiment executes two-way butterflies. It intentionally does not
+The production transform still executes two-way butterflies. It does not yet
 use the packed backend's fused two-layer four-buffer path: four plane-sliced
-FF8 buffers would require 32 live vector registers, while AVX2 provides 16.
-This adds intermediate load/store passes and is an important performance
-disadvantage, not a benchmark artifact.
+FF8 buffers require 32 live vector registers, while AVX2 provides 16. A
+separately generated 64-tuple AVX-512 corpus now proves the required radix-4
+maps and their named-register lowering, but production dispatch and transform
+integration remain future work. Until that integration is complete, the extra
+intermediate load/store passes remain an important performance disadvantage,
+not a benchmark artifact.
 
 ### Choosing lower-cost locator constants
 
@@ -207,6 +212,39 @@ are fixed and are never changed by this optimization. This reduces generated
 XOR gate counts and dependency depth where the algebra leaves a free choice;
 it does not reduce the fixed eight-plane loads and stores. Even an identity
 multiplier copies eight planes when source and destination differ.
+
+### Rejected locator-boundary fusion
+
+A bounded experiment fused identity-scaled or structural-zero inputs directly
+into the first decoder IFFT layer, retaining the staged scale/copy path for
+every nonidentity pair. The bounded corpus required 768 generated cases (three
+nonempty presence masks times 256 skews); a dense version covering both input
+coefficients would require 16,646,400 maps (`255 * 255 * 256`). The candidate
+was exact at the map level, but was rejected and removed from the runtime.
+
+On the GCC 13.3 implementation host, text in
+`LeopardFF8Xor.cpp.o + LeopardFF8XorAVX2.cpp.o` grew from 1,285,847 to
+2,563,407 bytes: an increase of 1,277,560 bytes, or 1.993555x baseline. A
+pinned 1 MiB AVX2 decode benchmark used four independent repetitions of 21
+paired A-B-B-A rounds. Across the three rows containing one eligible fused
+pair, equal-row/equal-repetition geometric mean staged/fused time was
+0.988577x, so the candidate was about 1.16% slower. The small-transform result
+was a repeatable 0.966218x, while the larger transforms were effectively
+neutral. Transposes and allocation were excluded.
+
+The checked negative evidence has checksum
+`3d948e4159b338058a66d6fe5adc91d7d51035575641302a5633f2dae46d223d`.
+Its independent checker reconstructs all 256 skews and three presence masks,
+validates 16 basis vectors per map, checks the schedule-corpus cardinalities,
+and recomputes the reported code-size and timing aggregates. The evidence also
+records the removed C++ candidate's 11,520-case map census and a temporary
+end-to-end harness over all 255 forced locator shifts. There is an important
+limitation: the direct map proof defines and stores every destination plane,
+but that temporary end-to-end harness started with zeroed work buffers. The
+requested rerun with distinct nonzero poison and canaries was not completed
+before the candidate was rejected. This is not presented as poisoned-work
+end-to-end coverage; such coverage is required before reconsidering the
+runtime hook.
 
 ## Experimental C API
 
@@ -241,17 +279,34 @@ multiple-of-64 size validation conventions.
 ## Regeneration and tests
 
 The normal library build consumes checked-in generated code and does not
-require Python. With Python 3 available:
+require Python. The primary generator writes both the production XOR2 file and
+the separately checked experimental XOR3 file. With Python 3 available:
 
 ```sh
 python3 tools/generate_ff8_xor_circuits.py
 python3 tools/generate_ff8_xor_circuits.py --check
+python3 tests/test_ff8_xor3_schedule.py
+python3 tests/test_ff8xor_generated_xor3.py
 cmake --build build --target generate_ff8_xor_circuits
 cmake --build build --target check_ff8_xor_circuits
 ```
 
-`--check` returns nonzero when the checked-in output differs from regenerated
-output.
+`--check` returns nonzero when either checked-in output differs from regenerated
+output. The four-buffer corpus and rejected locator-boundary evidence have
+their own finite generation and checking commands:
+
+```sh
+python3 tools/generate_ff8_xor_four_buffer_circuits.py
+python3 tools/generate_ff8_xor_four_buffer_circuits.py --check
+python3 tests/test_ff8xor_four_buffer_circuits.py
+python3 tools/inspect_ff8xor_four_buffer_avx512.py \
+    --compiler g++ --compiler clang++-18 --strict
+python3 tools/evaluate_ff8xor_locator_boundary.py --check
+cmake --build build --target check_ff8_xor_four_buffer_circuits
+cmake --build build --target check_ff8xor_locator_boundary_evidence
+ctest --test-dir build --output-on-failure \
+    -R 'ff8xor_(generated_xor3|four_buffer_circuits|locator_boundary_evidence)'
+```
 
 Build and run the finite automated test with:
 
@@ -288,7 +343,16 @@ and output MB/s.
 ./build/bench_leopard_ff8xor --csv
 ./build/bench_leopard_ff8xor --quick --json --abba --counters
 ./build/bench_leopard_ff8xor --quick --json --abba --cache-color
+./build/bench_leopard_ff8xor --quick --json --abba \
+    --ff8xor-mode avx512zmm
 ```
+
+`--ff8xor-mode` accepts `auto`, `portable`, `simd128`, `avx2`, `avx512vl`,
+or `avx512zmm`. Selection occurs before timing and the requested value is
+printed in human, CSV, and JSON metadata. A forced mode that is unavailable in
+the build, on the CPU, or in the OS-enabled extended state exits with status
+77; it never silently benchmarks a fallback. `auto` retains normal runtime
+selection.
 
 Native rows exclude transpose time. Rows named `ff8xor_packed_boundary`
 include packed-to-plane input transposes and plane-to-packed outputs. The full
@@ -544,6 +608,90 @@ microbenchmark confirms that ternary XOR can reduce dependency depth, but it
 does not establish an end-to-end ff8xor codec gain. Generated-circuit changes
 must still pass the full codec benchmark and assembly census before retention.
 
+### Generated explicit-XOR3 experiment
+
+The generator also emits the separate checked artifact
+`generated/LeopardFF8XorCircuitsXor3.inl`. It schedules literal named-wire
+`XorValue` and three-input `Xor3Value` operations without changing the base
+binary maps. `Xor3Value` is exact parity (`VPTERNLOG` immediate `0x96`), and
+the deterministic schedule checksum is:
+
+```text
+a054d879212b80bdc03e418cdc3a6fe65b569a082784f7c4227b1146d4bce26e
+```
+
+The explicit schedules reduce source operation count as follows:
+
+| Family | Source XOR2 gates | Scheduled XOR2 | Scheduled XOR3 | Total instructions | Reduction |
+|---|---:|---:|---:|---:|---:|
+| Multiply | 4,903 | 3,113 | 895 | 4,008 | 18.25% |
+| FFT | 10,240 | 3,072 | 3,584 | 6,656 | 35.00% |
+| IFFT | 10,240 | 3,072 | 3,584 | 6,656 | 35.00% |
+
+Fewer source operations did not produce a codec win. On the GCC 13.3 host,
+nine alternating pinned quick-mode processes per variant and width used
+native buffers, internal A-B-B-A order, and packed-normalized end-to-end
+times. Full explicit scheduling measured 0.981208x at AVX-512VL and 0.976871x
+at AVX-512 ZMM, where values above one favor explicit scheduling. An FFT-only
+variant measured 1.003649x and 0.992819x respectively, but its normalized FFT
+microbenchmarks measured 0.994077x and 0.992180x. The inconsistent width-level
+result and contrary microbenchmark do not justify retaining it.
+
+The compiler already forms legal XOR3 instructions from the historical XOR2
+source. Explicit scheduling reduced FFT code and instruction count, but grew
+the multiplier and IFFT production census; all control and candidate assembly
+variants nevertheless passed strict inspection with zero spills or inner-loop
+calls. Production therefore continues to include only the historical XOR2
+artifact. Checked evaluation checksum
+`03412e947d515369eae7ca9929687e8f54fb89362e272f872e38fcee866420ba`
+binds the artifacts, build, assembly totals, timings, and decision. Its raw
+temporary JSONL and assembly reports were not retained, so their manifest
+hashes authenticate the summary but cannot make those inputs reparsable.
+
+### Generated AVX-512 four-buffer corpus
+
+`tools/generate_ff8_xor_four_buffer_circuits.py` exhaustively enumerates all
+21,845 valid FF8 `(k,r)` parameter pairs and finds 64 reachable three-skew
+radix-4 tuples spanning 128 skew values. An independent cross-check against
+the 104-case schedule corpus finds the same 64 tuples. For each direction and
+tuple, the generator verifies direct butterfly composition, a composition of
+the selected two-buffer portfolio, and synthesized whole-map candidates. It
+then emits the better verified direct or composed circuit; no whole-map
+candidate won. The checked metadata and named-register C++ share checksum:
+
+```text
+0301b24993ab889caa17aa00e64e969523ace698f63466833af500710244142b
+```
+
+The exhaustive valid-shape census contains 4,747,804 complete FFT radix-4
+calls and 4,945,408 complete IFFT calls. A unit is counted only when both
+lower-layer pairs execute (`range_start + 2 * distance < count_truncated`);
+partial truncated units must retain the natural two-way schedule.
+
+| Family | Lowering | Minimum ops | Maximum ops | Average ops | Total ops | Selected direct/composed |
+|---|---|---:|---:|---:|---:|---:|
+| FFT | XOR2 | 53 | 183 | 155.000 | 9,920 | 48 / 16 |
+| IFFT | XOR2 | 53 | 183 | 155.000 | 9,920 | 53 / 11 |
+| FFT | XOR2+XOR3 | 43 | 115 | 101.484 | 6,495 | 51 / 13 |
+| IFFT | XOR2+XOR3 | 41 | 110 | 97.500 | 6,240 | 57 / 7 |
+
+The selected FFT XOR3 schedules contain 3,425 ternary operations; IFFT
+contains 3,680. Every generated body uses the 32 statically named wires
+`a0..a7`, `b0..b7`, `c0..c7`, and `d0..d7`, with tuple dispatch intended
+outside the vector-chunk loop.
+
+All 32 ZMM registers are live, so the lowering contract matters. Ordinary
+intrinsic wrappers let GCC and Clang reassociate the circuit DAG and were
+observed to spill. The inspection harness therefore uses destructive
+read/write `+v` inline-assembly wrappers for `vpxord` and
+`vpternlogd $0x96`. With the production AVX-512 flags, GCC 13.3.0 and Clang
+18.1.3 each compiled frequency-representative and maximum-operation stress
+kernels for FFT/IFFT and XOR2/XOR3 with zero vector-stack references, calls,
+or forbidden field instructions. This is spill-free evidence for the eight
+synthetic representative/stress kernels per compiler, not for a production
+translation unit. The corpus is generated and tested, but production transform
+integration and end-to-end benchmarking are still pending.
+
 ### Offline ISA-aware circuit costing
 
 Circuit selection is reproducible and does not calibrate at runtime. The normal
@@ -563,11 +711,14 @@ a deterministic distinct-linear-form XOR2 estimate, dependency depth,
 live-range events, a fixed width-versus-register-budget overflow estimate,
 fixed plane loads/stores, estimated code bytes, and estimated I-cache lines.
 Its calibrated XOR3 weight is retained as provenance, but source generation
-currently assigns every candidate an XOR3 count of zero: it does not predict
-which XOR pairs the compiler will combine into `vpternlog`, nor does it simulate
-the compiler's register allocator. Actual XOR2/XOR3 and spill counts enter only
-the post-compile assembly evidence. These are known limitations of the current
-model and reasons not to infer an AVX-512 benefit from its source score.
+assigns every candidate in this machine-profile selection stage an XOR3 count
+of zero: it does not predict which XOR pairs the compiler will combine into
+`vpternlog`, nor does it simulate the compiler's register allocator. The
+separate explicit-XOR3 artifact is a post-selection rescheduling experiment,
+not an input to this cost-profile choice. Actual XOR2/XOR3 and spill counts
+enter only the post-compile assembly evidence. These are known limitations of
+the current model and reasons not to infer an AVX-512 benefit from its source
+score.
 Checked evidence includes the complete 256-coefficient AVX2
 calibration, the standalone XOR3 calibration, the 104-case transform-schedule
 corpus (including coefficient, skew, and four-buffer-tuple frequencies), and
@@ -938,15 +1089,16 @@ strict structural checks but still spills in 739 base/AVX2 butterfly
 specializations; multiplier and AVX-512 families remain spill-free. This is a
 reported compiler/code-generation limitation, not concealed as a pass of the
 optional `--fail-on-spills` gate. GCC AVX-512 output also combines some XORs
-into `vpternlog[dq] 0x96`; explicit generated XOR3 scheduling remains a separate
-experiment.
+into `vpternlog[dq] 0x96`; the separately generated explicit-XOR3 schedules
+were measured and rejected for production as documented above.
 
 ## Known disadvantages and next experiment
 
 - Applications must retain the plane layout to avoid boundary transpose cost.
 - Each whole-buffer operation incurs one coefficient function-pointer dispatch.
-- Two-way butterflies lose the packed backend's existing fused two-layer
-  memory pass.
+- Production still uses two-way butterflies and loses the packed backend's
+  existing fused two-layer memory pass. The verified 64-tuple AVX-512 corpus
+  has not yet been integrated.
 - Encoder chunk accumulation and the decoder formal-derivative sweep expose
   two/four-stream XOR instruction-level parallelism only through 1 KiB. Larger
   buffers use the measured faster sequential-loop shape and still lack fusion
@@ -970,9 +1122,12 @@ experiment.
   broader packed-code multiversioning change.
 - This backend is FF8-only and CPU-only.
 
-The highest-value next optimization is AVX-512 four-buffer fused generation:
-32 architectural vector registers can hold four plane-sliced FF8 buffers and
-recover the fused two-layer memory behavior. Other follow-ups include
-tuple-specialized four-way circuits, CUDA plane kernels, persistent plane
-pipelines, packed-boundary transpose/locator fusion, and synthesis optimized
-for depth and register pressure rather than gate count alone.
+The highest-value next optimization is integrating the generated AVX-512
+four-buffer circuits behind one tuple dispatch per whole-buffer operation,
+then validating the actual production object and end-to-end codec benchmark.
+The 32 architectural vector registers can hold four plane-sliced FF8 buffers
+and potentially recover the fused two-layer memory behavior, but the synthetic
+spill-free inspection is not yet that proof. Other follow-ups include CUDA
+plane kernels, persistent plane pipelines, packed-boundary transpose/scaling
+fusion, and synthesis optimized for depth and register pressure rather than
+gate count alone.

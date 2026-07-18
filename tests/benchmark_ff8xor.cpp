@@ -51,6 +51,8 @@ struct Options
     bool abba;
     bool pin;
     bool cache_color;
+    leopard::ff8xor::KernelMode ff8xor_mode;
+    std::string ff8xor_mode_name;
     int pin_cpu;
     unsigned warmups;
     unsigned iterations;
@@ -66,6 +68,8 @@ struct Options
         , abba(false)
         , pin(true)
         , cache_color(false)
+        , ff8xor_mode(leopard::ff8xor::KernelMode::Auto)
+        , ff8xor_mode_name("auto")
         , pin_cpu(-1)
         , warmups(2)
         , iterations(7)
@@ -81,6 +85,7 @@ struct Environment
     std::string build_flags;
     std::string cpu;
     std::string simd;
+    std::string ff8xor_mode_requested;
     std::string operating_system;
     std::string affinity;
     std::string counter_backend;
@@ -924,7 +929,8 @@ public:
                 << "k,r,buffer_bytes,loss_count,"
                 << "warmups,iterations,calls_per_sample,median_us,best_us,median_input_MBps,"
                 << "best_input_MBps,median_output_MBps,best_output_MBps,"
-                << "speed_ratio_vs_packed,compiler,build_type,cpu,simd,checksum,"
+                << "speed_ratio_vs_packed,compiler,build_type,cpu,simd,"
+                << "ff8xor_mode_requested,checksum,"
                 << "cost_profile_id,cost_profile_checksum,gate_min,"
                 << "gate_max,gate_average,note,schedule_id,"
                 << "modeled_payload_bytes_scheduled,modeled_payload_bytes_elided,"
@@ -966,6 +972,8 @@ public:
                 << ',' << Json("build_flags") << ':' << Json(Env.build_flags)
                 << ',' << Json("cpu") << ':' << Json(Env.cpu)
                 << ',' << Json("simd") << ':' << Json(Env.simd)
+                << ',' << Json("ff8xor_mode_requested") << ':'
+                << Json(Env.ff8xor_mode_requested)
                 << ',' << Json("circuit_checksum") << ':'
                 << Json(leopard::ff8xor::GetCircuitChecksum())
                 << ',' << Json("circuit_cost_profile_id") << ':'
@@ -1005,6 +1013,7 @@ public:
             << "build: " << Env.build_type << '\n'
             << "cpu: " << Env.cpu << '\n'
             << "simd: " << Env.simd << '\n'
+            << "ff8xor mode requested: " << Env.ff8xor_mode_requested << '\n'
             << "os: " << Env.operating_system << '\n'
             << "affinity: " << Env.affinity << '\n'
             << "build flags: " << Env.build_flags << '\n'
@@ -1072,6 +1081,7 @@ public:
                 << result.ratio_vs_packed << ','
                 << Csv(Env.compiler) << ',' << Csv(Env.build_type) << ','
                 << Csv(Env.cpu) << ',' << Csv(Env.simd) << ','
+                << Csv(Env.ff8xor_mode_requested) << ','
                 << Csv("") << ",,,,,," << Csv(result.note) << ','
                 << Csv(result.schedule_id) << ','
                 << result.modeled_payload_bytes << ','
@@ -1294,6 +1304,7 @@ private:
             << Csv(operation) << ",0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,"
             << Csv(Env.compiler) << ',' << Csv(Env.build_type) << ','
             << Csv(Env.cpu) << ',' << Csv(Env.simd) << ','
+            << Csv(Env.ff8xor_mode_requested) << ','
             << Csv(leopard::ff8xor::GetCircuitChecksum()) << ','
             << Csv(leopard::ff8xor::GetCircuitCostProfileId()) << ','
             << Csv(leopard::ff8xor::GetCircuitCostProfileChecksum()) << ','
@@ -2975,11 +2986,33 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
     return true;
 }
 
+static bool ParseFF8XorMode(
+    const std::string& text,
+    leopard::ff8xor::KernelMode& mode)
+{
+    if (text == "auto")
+        mode = leopard::ff8xor::KernelMode::Auto;
+    else if (text == "portable")
+        mode = leopard::ff8xor::KernelMode::Portable;
+    else if (text == "simd128")
+        mode = leopard::ff8xor::KernelMode::Simd128;
+    else if (text == "avx2")
+        mode = leopard::ff8xor::KernelMode::Avx2;
+    else if (text == "avx512vl")
+        mode = leopard::ff8xor::KernelMode::Avx512VL;
+    else if (text == "avx512zmm")
+        mode = leopard::ff8xor::KernelMode::Avx512Zmm;
+    else
+        return false;
+    return true;
+}
+
 static void Usage(const char* program)
 {
     std::cout << "Usage: " << program
         << " [--quick] [--csv|--json] [--include-transpose] [--counters]"
         << " [--portable-transpose] [--abba] [--cache-color]"
+        << " [--ff8xor-mode MODE]"
         << " [--cpu N|--no-pin]\n"
         << "  --quick              Run a bounded development/CI subset.\n"
         << "  --csv                Emit machine-readable CSV.\n"
@@ -2991,6 +3024,8 @@ static void Usage(const char* program)
         << "  --abba               Measure paired end-to-end rows in A-B-B-A order.\n"
         << "  --cache-color        Color native transform buffers by page-relative"
         << " L1D set when all eight plane starts alias.\n"
+        << "  --ff8xor-mode MODE   Force auto, portable, simd128, avx2,"
+        << " avx512vl, or avx512zmm; unavailable modes skip.\n"
         << "  --cpu N              Pin the benchmark to allowed logical CPU N.\n"
         << "  --no-pin             Disable default pinning to the first allowed CPU.\n";
 }
@@ -3016,6 +3051,22 @@ static bool ParseOptions(int argc, char** argv, Options& options)
             options.abba = true;
         else if (argument == "--cache-color")
             options.cache_color = true;
+        else if (argument == "--ff8xor-mode")
+        {
+            if (i + 1 >= argc)
+            {
+                std::cerr << "--ff8xor-mode requires a mode name\n";
+                return false;
+            }
+            options.ff8xor_mode_name = argv[++i];
+            if (!ParseFF8XorMode(
+                    options.ff8xor_mode_name, options.ff8xor_mode))
+            {
+                std::cerr << "Invalid --ff8xor-mode value: "
+                    << options.ff8xor_mode_name << '\n';
+                return false;
+            }
+        }
         else if (argument == "--no-pin")
             options.pin = false;
         else if (argument == "--cpu")
@@ -3090,7 +3141,18 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    Reporter reporter(options.csv, options.json, GetEnvironment(affinity));
+    if (options.ff8xor_mode != leopard::ff8xor::KernelMode::Auto &&
+        !leopard::ff8xor::IsKernelModeAvailable(options.ff8xor_mode))
+    {
+        std::cerr << "Requested ff8xor mode is unavailable on this build/host: "
+            << options.ff8xor_mode_name << '\n';
+        return 77;
+    }
+    leopard::ff8xor::SetKernelMode(options.ff8xor_mode);
+
+    Environment environment = GetEnvironment(affinity);
+    environment.ff8xor_mode_requested = options.ff8xor_mode_name;
+    Reporter reporter(options.csv, options.json, environment);
     reporter.Begin(options);
 
     if (!CheckTransposeHelper())

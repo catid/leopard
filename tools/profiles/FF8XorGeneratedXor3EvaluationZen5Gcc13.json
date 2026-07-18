@@ -1,0 +1,485 @@
+{
+  "schema": "leopard.ff8xor.generated-xor3-evaluation.v1",
+  "checksum_sha256": "03412e947d515369eae7ca9929687e8f54fb89362e272f872e38fcee866420ba",
+  "experiment": "Explicit generated XOR3 schedules versus compiler-lowered XOR2 circuits",
+  "artifacts": {
+    "xor2": {
+      "path": "generated/LeopardFF8XorCircuits.inl",
+      "file_sha256": "fc04bfb9a180b101dacfddd59c30d1897205cc5e696b1362c2a6ff6ff28889a2",
+      "circuit_checksum_sha256": "f03cc4d1230d128c6900745f3372b6ce946ede037904b887bc760abd557b8028"
+    },
+    "xor3": {
+      "path": "generated/LeopardFF8XorCircuitsXor3.inl",
+      "file_sha256": "dd6468a3854da8874fb4c3ad377fdc12d3ee7a1bd2f2c87f918ac3cdb8b043ea",
+      "schedule_checksum_sha256": "a054d879212b80bdc03e418cdc3a6fe65b569a082784f7c4227b1146d4bce26e",
+      "base_circuit_checksum_sha256": "f03cc4d1230d128c6900745f3372b6ce946ede037904b887bc760abd557b8028"
+    }
+  },
+  "generated_schedule_totals": {
+    "multiply": {
+      "source_xor2_gates": 4903,
+      "xor2_operations": 3113,
+      "xor3_operations": 895,
+      "scheduled_instructions": 4008
+    },
+    "fft": {
+      "source_xor2_gates": 10240,
+      "xor2_operations": 3072,
+      "xor3_operations": 3584,
+      "scheduled_instructions": 6656
+    },
+    "ifft": {
+      "source_xor2_gates": 10240,
+      "xor2_operations": 3072,
+      "xor3_operations": 3584,
+      "scheduled_instructions": 6656
+    }
+  },
+  "environment": {
+    "cpu_model": "AMD Ryzen Threadripper PRO 9985WX 64-Cores",
+    "pinned_logical_cpu": 24,
+    "compiler": "GCC 13.3.0",
+    "build_type": "Release (NDEBUG)",
+    "configure_command": "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DENABLE_OPENMP=OFF",
+    "build_command": "cmake --build build -j 30 --target bench_leopard_ff8xor",
+    "circuit_object_flags": [
+      "-march=x86-64",
+      "-mavx2",
+      "-mavx512f",
+      "-mavx512vl",
+      "-fno-tree-reassoc"
+    ],
+    "source_base_commit": "fdd1ebd2a7fe992890723c9673adc200e838efed",
+    "isolation": "Two detached worktrees used the same base commit and benchmark mode-selection patch. The full candidate additionally used only the XOR3 generator/artifact and AVX-512 hook; the FFT-only candidate selected explicit schedules only for FFT."
+  },
+  "methodology": {
+    "benchmark_command": "taskset -c 24 $BINARY --quick --json --abba --ff8xor-mode $MODE --cpu 24",
+    "modes": [
+      "avx512vl",
+      "avx512zmm"
+    ],
+    "process_repetitions_per_variant_per_mode": 9,
+    "process_order": "Control/candidate process order alternated by repetition parity.",
+    "inner_measurement_order": "ABBA",
+    "warmup_iterations": 1,
+    "measured_iterations": 3,
+    "minimum_sample_usec": 250,
+    "transpose_included": false,
+    "allocation_included": false,
+    "end_to_end_row_identities_per_process": 14,
+    "end_to_end_rows_per_variant_per_mode": 126,
+    "normalized_circuit_row_identities_per_process": 9,
+    "normalized_circuit_rows_per_variant_per_mode": 81,
+    "speedup_definition": "median(control_native/control_packed) divided by median(candidate_native/candidate_packed); values above one favor the candidate",
+    "circuit_microbenchmark_normalization": "Non-identity multiply rows are normalized by the median identity memmove row; FFT and IFFT rows are normalized by their corresponding skew-255 sentinel row.",
+    "raw_sample_manifest_definition": "SHA-256 of the concatenated binary SHA-256 digests of nine JSONL files sorted by filename within one variant and mode.",
+    "raw_samples_retained": false,
+    "raw_samples_note": "The 72 temporary JSONL process outputs and three temporary assembly reports were not checked in and are unavailable for reparsing. Manifest digests below bind this summary to those now-unavailable inputs; they do not make the raw data recoverable."
+  },
+  "results": {
+    "full_explicit": {
+      "avx512vl": {
+        "control_manifest_sha256": "441c9790b033e950c984842eaa6ab8d54a895403452a95b2601ce64595bb024e",
+        "candidate_manifest_sha256": "67ec3c0d9b7fe4a4d07490bf5ff85ee77cb4b075e4554d4c23c7289ef2b2610d",
+        "normalized_end_to_end": {
+          "geomean_speedup": 0.9812084393895245,
+          "minimum_speedup": 0.8539766920958446,
+          "maximum_speedup": 1.0078766356992386,
+          "by_operation_and_buffer": [
+            {
+              "operation": "decode",
+              "buffer_bytes": 1024,
+              "row_identities": 5,
+              "geomean_speedup": 0.9879924682833511,
+              "minimum_speedup": 0.9805740983742317,
+              "maximum_speedup": 0.996274228803424
+            },
+            {
+              "operation": "decode",
+              "buffer_bytes": 65536,
+              "row_identities": 5,
+              "geomean_speedup": 0.9955611080033067,
+              "minimum_speedup": 0.9919035106491723,
+              "maximum_speedup": 1.0005261232117222
+            },
+            {
+              "operation": "encode",
+              "buffer_bytes": 1024,
+              "row_identities": 2,
+              "geomean_speedup": 0.9150236642125819,
+              "minimum_speedup": 0.8539766920958446,
+              "maximum_speedup": 0.9804346111767772
+            },
+            {
+              "operation": "encode",
+              "buffer_bytes": 65536,
+              "row_identities": 2,
+              "geomean_speedup": 0.9973387839998379,
+              "minimum_speedup": 0.9869111107831058,
+              "maximum_speedup": 1.0078766356992386
+            }
+          ]
+        },
+        "normalized_circuit_families": [
+          {
+            "family": "fft",
+            "coefficients": 3,
+            "geomean_speedup": 1.004570038756457,
+            "minimum_speedup": 1.0013760997132999,
+            "maximum_speedup": 1.0096381468874587
+          },
+          {
+            "family": "ifft",
+            "coefficients": 3,
+            "geomean_speedup": 0.9956878052426169,
+            "minimum_speedup": 0.9703525730688929,
+            "maximum_speedup": 1.0101415941850944
+          },
+          {
+            "family": "multiply",
+            "coefficients": 3,
+            "geomean_speedup": 0.9987391169402606,
+            "minimum_speedup": 0.9973440514205368,
+            "maximum_speedup": 1.0003107917040834
+          }
+        ]
+      },
+      "avx512zmm": {
+        "control_manifest_sha256": "ebfdb1defe1307d8c5f07006469a6e9f6c714906af9d99108645e143567d520e",
+        "candidate_manifest_sha256": "da7e8c4fe73064cdea8a3afe4f330aceef7b75326d76cd9c42cd304d9769623c",
+        "normalized_end_to_end": {
+          "geomean_speedup": 0.9768714400996034,
+          "minimum_speedup": 0.7880486365277185,
+          "maximum_speedup": 1.0207848164784326,
+          "by_operation_and_buffer": [
+            {
+              "operation": "decode",
+              "buffer_bytes": 1024,
+              "row_identities": 5,
+              "geomean_speedup": 0.9877946989545157,
+              "minimum_speedup": 0.9823369513272554,
+              "maximum_speedup": 0.9914437617762585
+            },
+            {
+              "operation": "decode",
+              "buffer_bytes": 65536,
+              "row_identities": 5,
+              "geomean_speedup": 0.9968296135846936,
+              "minimum_speedup": 0.9949107287659927,
+              "maximum_speedup": 0.9996587942200117
+            },
+            {
+              "operation": "encode",
+              "buffer_bytes": 1024,
+              "row_identities": 2,
+              "geomean_speedup": 0.8758281129844124,
+              "minimum_speedup": 0.7880486365277185,
+              "maximum_speedup": 0.9733852048443407
+            },
+            {
+              "operation": "encode",
+              "buffer_bytes": 65536,
+              "row_identities": 2,
+              "geomean_speedup": 1.0074510437243047,
+              "minimum_speedup": 0.9942914403866776,
+              "maximum_speedup": 1.0207848164784326
+            }
+          ]
+        },
+        "normalized_circuit_families": [
+          {
+            "family": "fft",
+            "coefficients": 3,
+            "geomean_speedup": 0.9888663803348539,
+            "minimum_speedup": 0.9827549775811625,
+            "maximum_speedup": 0.9999413445029303
+          },
+          {
+            "family": "ifft",
+            "coefficients": 3,
+            "geomean_speedup": 0.9961432213563884,
+            "minimum_speedup": 0.9919090994897509,
+            "maximum_speedup": 1.0010273801451257
+          },
+          {
+            "family": "multiply",
+            "coefficients": 3,
+            "geomean_speedup": 0.9910613430083693,
+            "minimum_speedup": 0.9862905522734685,
+            "maximum_speedup": 0.9963430880944733
+          }
+        ]
+      }
+    },
+    "fft_only": {
+      "avx512vl": {
+        "control_manifest_sha256": "3ceb11b01934be8e6bc7365fb8c807bc6d388be6c9764efd5ebc385d232d3064",
+        "candidate_manifest_sha256": "e44d0f72d5f0f192f1820e1eb63ad4fa79e500217729c6338796efdd3e99b7c8",
+        "normalized_end_to_end": {
+          "geomean_speedup": 1.0036487693501197,
+          "minimum_speedup": 0.9551809022297677,
+          "maximum_speedup": 1.032597165157637,
+          "by_operation_and_buffer": [
+            {
+              "operation": "decode",
+              "buffer_bytes": 1024,
+              "row_identities": 5,
+              "geomean_speedup": 1.0046163754024493,
+              "minimum_speedup": 0.9982215655181756,
+              "maximum_speedup": 1.013571647274905
+            },
+            {
+              "operation": "decode",
+              "buffer_bytes": 65536,
+              "row_identities": 5,
+              "geomean_speedup": 1.0070565996035976,
+              "minimum_speedup": 1.0013469189451003,
+              "maximum_speedup": 1.0262262747963056
+            },
+            {
+              "operation": "encode",
+              "buffer_bytes": 1024,
+              "row_identities": 2,
+              "geomean_speedup": 0.9931349816893836,
+              "minimum_speedup": 0.9551809022297677,
+              "maximum_speedup": 1.032597165157637
+            },
+            {
+              "operation": "encode",
+              "buffer_bytes": 65536,
+              "row_identities": 2,
+              "geomean_speedup": 1.003295081669349,
+              "minimum_speedup": 1.0011048035387078,
+              "maximum_speedup": 1.005490151824035
+            }
+          ]
+        },
+        "normalized_circuit_families": [
+          {
+            "family": "fft",
+            "coefficients": 3,
+            "geomean_speedup": 0.9940766941655861,
+            "minimum_speedup": 0.9846668008197521,
+            "maximum_speedup": 1.002186786381009
+          },
+          {
+            "family": "ifft",
+            "coefficients": 3,
+            "geomean_speedup": 1.0101652961560683,
+            "minimum_speedup": 1.0069801906276756,
+            "maximum_speedup": 1.0131890271355302
+          },
+          {
+            "family": "multiply",
+            "coefficients": 3,
+            "geomean_speedup": 0.998067289413305,
+            "minimum_speedup": 0.9941463207253318,
+            "maximum_speedup": 1.0001481358488653
+          }
+        ]
+      },
+      "avx512zmm": {
+        "control_manifest_sha256": "2ce0ace5b1cfcc4aa2cfc25fb98c2d162095fda758f27eb7b153a21eb0dd28a1",
+        "candidate_manifest_sha256": "d136c9677f1052e9cf86621f691364686da58a677029d0fdc4208ca7b8857bc2",
+        "normalized_end_to_end": {
+          "geomean_speedup": 0.9928193776180321,
+          "minimum_speedup": 0.8975272270299809,
+          "maximum_speedup": 1.0219845771035552,
+          "by_operation_and_buffer": [
+            {
+              "operation": "decode",
+              "buffer_bytes": 1024,
+              "row_identities": 5,
+              "geomean_speedup": 0.9898658995256373,
+              "minimum_speedup": 0.9821477587083733,
+              "maximum_speedup": 0.9986526938918546
+            },
+            {
+              "operation": "decode",
+              "buffer_bytes": 65536,
+              "row_identities": 5,
+              "geomean_speedup": 1.0085603098055276,
+              "minimum_speedup": 1.0022548784687175,
+              "maximum_speedup": 1.0219845771035552
+            },
+            {
+              "operation": "encode",
+              "buffer_bytes": 1024,
+              "row_identities": 2,
+              "geomean_speedup": 0.9506954326211203,
+              "minimum_speedup": 0.8975272270299809,
+              "maximum_speedup": 1.0070132452666731
+            },
+            {
+              "operation": "encode",
+              "buffer_bytes": 65536,
+              "row_identities": 2,
+              "geomean_speedup": 1.0042797749517631,
+              "minimum_speedup": 1.002318041973225,
+              "maximum_speedup": 1.0062453474264672
+            }
+          ]
+        },
+        "normalized_circuit_families": [
+          {
+            "family": "fft",
+            "coefficients": 3,
+            "geomean_speedup": 0.9921804810779209,
+            "minimum_speedup": 0.9848341654650059,
+            "maximum_speedup": 1.0041295112488955
+          },
+          {
+            "family": "ifft",
+            "coefficients": 3,
+            "geomean_speedup": 1.0028381416581607,
+            "minimum_speedup": 1.0013362907747838,
+            "maximum_speedup": 1.0049261599122532
+          },
+          {
+            "family": "multiply",
+            "coefficients": 3,
+            "geomean_speedup": 0.9969145382482083,
+            "minimum_speedup": 0.9956133936382285,
+            "maximum_speedup": 0.9980941516243484
+          }
+        ]
+      }
+    }
+  },
+  "assembly": {
+    "command": "python3 tools/inspect_ff8xor_assembly.py build/liblibleopard.a --strict --fail-on-spills --require-avx2 --require-avx512 --json",
+    "raw_reports_retained": false,
+    "control_report_sha256": "74977e7f0b3b52c8712f807f8869d62c12402b0b21e65139b5d12f23de90952d",
+    "full_explicit_report_sha256": "4212ba60d249b77e307521b8358ad99eb207424b7ad087375c2f76631b742946",
+    "fft_only_report_sha256": "453c794ecf2c38d5431050ee8722e3e5f7ebeb35331696b467642c7af90d4e8a",
+    "all_variants": {
+      "strict_pass": true,
+      "spill_check_pass": true,
+      "hard_violation_count": 0,
+      "spill_warning_count": 0,
+      "inner_loop_calls": 0,
+      "forbidden_instructions": 0,
+      "non_xor3_ternary_immediates": 0
+    },
+    "control": {
+      "multiply_avx512vl": {
+        "instructions": 18092,
+        "code_bytes": 72644,
+        "xor2": 2265,
+        "xor3": 924
+      },
+      "multiply_avx512zmm": {
+        "instructions": 18182,
+        "code_bytes": 83268,
+        "xor2": 2265,
+        "xor3": 924
+      },
+      "fft_avx512vl": {
+        "instructions": 27254,
+        "code_bytes": 123758,
+        "xor2": 3059,
+        "xor3": 3438
+      },
+      "fft_avx512zmm": {
+        "instructions": 27247,
+        "code_bytes": 143558,
+        "xor2": 3059,
+        "xor3": 3438
+      },
+      "ifft_avx512vl": {
+        "instructions": 27021,
+        "code_bytes": 121750,
+        "xor2": 3076,
+        "xor3": 3308
+      },
+      "ifft_avx512zmm": {
+        "instructions": 25342,
+        "code_bytes": 132214,
+        "xor2": 3076,
+        "xor3": 3308
+      }
+    },
+    "full_explicit": {
+      "multiply_avx512vl": {
+        "instructions": 19258,
+        "code_bytes": 77340,
+        "xor2": 2297,
+        "xor3": 1147
+      },
+      "multiply_avx512zmm": {
+        "instructions": 19397,
+        "code_bytes": 87964,
+        "xor2": 2297,
+        "xor3": 1147
+      },
+      "fft_avx512vl": {
+        "instructions": 26809,
+        "code_bytes": 119574,
+        "xor2": 2913,
+        "xor3": 3584
+      },
+      "fft_avx512zmm": {
+        "instructions": 26810,
+        "code_bytes": 135974,
+        "xor2": 2913,
+        "xor3": 3584
+      },
+      "ifft_avx512vl": {
+        "instructions": 26979,
+        "code_bytes": 121950,
+        "xor2": 3056,
+        "xor3": 3584
+      },
+      "ifft_avx512zmm": {
+        "instructions": 26973,
+        "code_bytes": 138998,
+        "xor2": 3056,
+        "xor3": 3584
+      }
+    },
+    "fft_only": {
+      "multiply_avx512vl": {
+        "instructions": 18092,
+        "code_bytes": 72644,
+        "xor2": 2265,
+        "xor3": 924
+      },
+      "multiply_avx512zmm": {
+        "instructions": 18182,
+        "code_bytes": 83268,
+        "xor2": 2265,
+        "xor3": 924
+      },
+      "fft_avx512vl": {
+        "instructions": 26809,
+        "code_bytes": 119574,
+        "xor2": 2913,
+        "xor3": 3584
+      },
+      "fft_avx512zmm": {
+        "instructions": 26810,
+        "code_bytes": 135974,
+        "xor2": 2913,
+        "xor3": 3584
+      },
+      "ifft_avx512vl": {
+        "instructions": 27021,
+        "code_bytes": 121750,
+        "xor2": 3076,
+        "xor3": 3308
+      },
+      "ifft_avx512zmm": {
+        "instructions": 25342,
+        "code_bytes": 132214,
+        "xor2": 3076,
+        "xor3": 3308
+      }
+    }
+  },
+  "decision": {
+    "enable_full_explicit_in_production": false,
+    "enable_fft_only_in_production": false,
+    "production_avx512_uses_historical_xor2_source": true,
+    "reason": "The compiler already forms legal XOR3 instructions from the historical source. Full explicit scheduling slowed both widths and increased aggregate instructions; FFT-only results were inconsistent across widths and contradicted by normalized FFT microbenchmarks."
+  }
+}
