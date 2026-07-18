@@ -731,6 +731,14 @@ if(LEO2_BUILD_TESTS)
     add_test(NAME leopard2_public_api_contract
         COMMAND leopard2_public_api_contract_test)
 
+    add_executable(leopard2_batch_aliasing_test
+        tests/leopard2/test_batch_aliasing.cpp)
+    target_link_libraries(leopard2_batch_aliasing_test leopard)
+    add_test(NAME leopard2_batch_aliasing
+        COMMAND leopard2_batch_aliasing_test)
+    set_tests_properties(leopard2_batch_aliasing PROPERTIES
+        ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
+
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND ENABLE_OPENMP)
         add_executable(leopard2_initialization_threads_test
             tests/leopard2/test_initialization_threads.cpp)

@@ -176,7 +176,8 @@ static leo2_result DecodePlanExecuteInternal(
     size_t scratch_bytes,
     bool multi_item_batch,
     const void* protected_metadata,
-    size_t protected_metadata_bytes);
+    size_t protected_metadata_bytes,
+    bool prevalidated);
 
 static leo2_result EncodeInternal(
     const leo2_codec* codec,
@@ -186,7 +187,8 @@ static leo2_result EncodeInternal(
     void* scratch,
     size_t scratch_bytes,
     const void* protected_metadata,
-    size_t protected_metadata_bytes);
+    size_t protected_metadata_bytes,
+    bool prevalidated);
 
 namespace {
 
@@ -202,6 +204,7 @@ static const uint64_t kDirectSimdTileBytes = 64;
 static const uint64_t kDirectMinimumMeasuredBytes = 1024;
 
 typedef leo2_result (*BatchTaskFunction)(void* context, size_t index);
+typedef leo2_result (*BatchPreflightFunction)(void* context);
 
 #ifdef LEO2_ENABLE_TEST_HOOKS
 static std::atomic<bool> g_test_thread_start_fault(false);
@@ -312,12 +315,19 @@ public:
     leo2_result Run(
         size_t task_count,
         BatchTaskFunction function,
-        void* function_context)
+        void* function_context,
+        BatchPreflightFunction preflight)
     {
         if (task_count == 0)
             return LEO2_SUCCESS;
         if (task_count == 1)
         {
+            if (preflight)
+            {
+                const leo2_result result = preflight(function_context);
+                if (result != LEO2_SUCCESS)
+                    return result;
+            }
             return function(function_context, 0);
         }
 
@@ -325,6 +335,12 @@ public:
            at a time.  Independent callers remain correct and are serialized at
            this optional scheduling layer rather than racing shared job state. */
         std::lock_guard<std::mutex> run_lock(run_mutex_);
+        if (preflight)
+        {
+            const leo2_result result = preflight(function_context);
+            if (result != LEO2_SUCCESS)
+                return result;
+        }
         if (!EnsureStarted(task_count))
             return LEO2_OUT_OF_MEMORY;
         {
@@ -2573,12 +2589,555 @@ static leo2_result ExecuteDirectRepair(
     return LEO2_SUCCESS;
 }
 
+/*
+    Batch execution must not start until every writable range is disjoint from
+    every other item's readable and writable ranges.  Otherwise a serial batch
+    can consume bytes produced by an earlier item while a pooled batch races on
+    the same bytes.  These helpers deliberately use each item's already
+    required scratch range table as temporary preflight storage: batch setup
+    remains allocation-free and does not impose a batch-size-dependent stack or
+    heap bound.  For B items the pairwise sorted-list sweeps cost
+    O(B^2 * (K + R)); this is deliberate setup work that prevents data races
+    without silently lowering the documented UINT32_MAX item-count limit.
+
+    Scratch is written only after the first pass proves that every supplied
+    scratch span is disjoint from all batch metadata and shard spans.  Immutable
+    input-input and metadata-input aliases remain supported.
+*/
+static bool SortedRangeListsOverlap(
+    const AddressRange* a,
+    size_t a_count,
+    const AddressRange* b,
+    size_t b_count)
+{
+    size_t a_i = 0;
+    size_t b_i = 0;
+    while (a_i < a_count && b_i < b_count)
+    {
+        if (RangesOverlap(a[a_i], b[b_i]))
+            return true;
+        if (a[a_i].end <= b[b_i].begin)
+            ++a_i;
+        else
+            ++b_i;
+    }
+    return false;
+}
+
+static bool SortedRangesOverlapRange(
+    const AddressRange* ranges,
+    size_t count,
+    const AddressRange& range)
+{
+    for (size_t i = 0; i < count && ranges[i].begin < range.end; ++i)
+        if (RangesOverlap(ranges[i], range))
+            return true;
+    return false;
+}
+
+static bool SortedRangesOverlapEachOther(
+    const AddressRange* ranges,
+    size_t count)
+{
+    for (size_t i = 1; i < count; ++i)
+        if (RangesOverlap(ranges[i - 1], ranges[i]))
+            return true;
+    return false;
+}
+
+static leo2_result ValidateEncodeBatchItemAddressability(
+    const leo2_codec* codec,
+    const leo2_encode_batch_item& item)
+{
+    ScratchLayout direct_layout;
+    size_t rounded_bytes = 0;
+    EncodeScratchGeometry geometry;
+    const bool direct = UseSingleSideEncodeLayout(codec);
+    leo2_result result = direct
+        ? DirectEncodeLayout(
+            codec, item.shard_bytes, direct_layout, rounded_bytes)
+        : EncodeLayout(codec, item.shard_bytes, geometry);
+    if (result != LEO2_SUCCESS)
+        return result;
+
+    const ScratchLayout& layout = direct ? direct_layout : geometry.layout;
+    /* DirectEncodeLayout and EncodeLayout both reserve exactly K+R range
+       entries at range_offset zero.  Batch preflight uses no more than K
+       inputs plus the requested subset of R outputs. */
+    LEO_DEBUG_ASSERT(layout.range_offset == 0);
+    AddressRange scratch_range;
+    result = CheckScratch(item.scratch, item.scratch_bytes,
+        layout, scratch_range);
+    if (result != LEO2_SUCCESS)
+        return result;
+    if (!item.original || !item.recovery)
+        return LEO2_INVALID_ARGUMENT;
+
+    AddressRange metadata_range;
+    if (!MakeArrayRange(item.original, codec->original_count,
+            sizeof(*item.original), metadata_range) ||
+        !MakeArrayRange(item.recovery, codec->recovery_count,
+            sizeof(*item.recovery), metadata_range))
+        return LEO2_INVALID_ARGUMENT;
+
+    for (uint32_t i = 0; i < codec->original_count; ++i)
+    {
+        AddressRange range;
+        if (!MakeRange(item.original[i], item.shard_bytes, range))
+            return LEO2_INVALID_ARGUMENT;
+        if (!HasValidSystematicPad(
+                codec, item.original[i], item.shard_bytes))
+            return LEO2_INVALID_ARGUMENT;
+    }
+    for (uint32_t i = 0; i < codec->recovery_count; ++i)
+    {
+        if (!item.recovery[i])
+            continue;
+        AddressRange range;
+        if (!MakeRange(item.recovery[i], item.shard_bytes, range))
+            return LEO2_INVALID_ARGUMENT;
+    }
+    return LEO2_SUCCESS;
+}
+
+static leo2_result ValidateDecodeBatchItemAddressability(
+    const leo2_decode_plan* plan,
+    const leo2_decode_batch_item& item)
+{
+    const leo2_codec* codec = plan->codec;
+    ScratchLayout direct_layout;
+    size_t rounded_bytes = 0;
+    DecodeScratchGeometry geometry;
+    const bool direct =
+        plan->direct_repair || plan->direct_xor || plan->direct_copy;
+    leo2_result result = direct
+        ? DirectDecodeLayout(
+            codec, item.shard_bytes, direct_layout, rounded_bytes)
+        : DecodeLayout(codec, plan, item.shard_bytes, geometry);
+    if (result != LEO2_SUCCESS)
+        return result;
+
+    const ScratchLayout& layout = direct ? direct_layout : geometry.layout;
+    /* DirectDecodeLayout and DecodeLayout reserve 2K+R range entries at
+       range_offset zero.  At most K+R received inputs plus K restored outputs
+       are staged in that table. */
+    LEO_DEBUG_ASSERT(layout.range_offset == 0);
+    AddressRange scratch_range;
+    result = CheckScratch(item.scratch, item.scratch_bytes,
+        layout, scratch_range);
+    if (result != LEO2_SUCCESS)
+        return result;
+    if (!item.original || !item.recovery || !item.restored_original)
+        return LEO2_INVALID_ARGUMENT;
+
+    AddressRange metadata_range;
+    if (!MakeArrayRange(item.original, codec->original_count,
+            sizeof(*item.original), metadata_range) ||
+        !MakeArrayRange(item.recovery, codec->recovery_count,
+            sizeof(*item.recovery), metadata_range) ||
+        !MakeArrayRange(item.restored_original, codec->original_count,
+            sizeof(*item.restored_original), metadata_range))
+        return LEO2_INVALID_ARGUMENT;
+
+    for (uint32_t i = 0; i < codec->original_count; ++i)
+    {
+        if ((item.original[i] != NULL) !=
+            (plan->original_present[i] != 0))
+            return LEO2_INVALID_ARGUMENT;
+        AddressRange range;
+        if (item.original[i])
+        {
+            if (!MakeRange(item.original[i], item.shard_bytes, range))
+                return LEO2_INVALID_ARGUMENT;
+            if (!HasValidSystematicPad(
+                    codec, item.original[i], item.shard_bytes))
+                return LEO2_INVALID_ARGUMENT;
+        }
+        else if (!item.restored_original[i] ||
+                 !MakeRange(item.restored_original[i],
+                     item.shard_bytes, range))
+            return LEO2_INVALID_ARGUMENT;
+    }
+    for (uint32_t i = 0; i < codec->recovery_count; ++i)
+    {
+        if ((item.recovery[i] != NULL) !=
+            (plan->recovery_present[i] != 0))
+            return LEO2_INVALID_ARGUMENT;
+        if (item.recovery[i])
+        {
+            AddressRange range;
+            if (!MakeRange(item.recovery[i], item.shard_bytes, range))
+                return LEO2_INVALID_ARGUMENT;
+        }
+    }
+    return LEO2_SUCCESS;
+}
+
+static bool EncodeScratchOverlapsItem(
+    const leo2_codec* codec,
+    const AddressRange& scratch_range,
+    const leo2_encode_batch_item& item,
+    bool compare_scratch)
+{
+    AddressRange range;
+    if (MakeArrayRange(item.original, codec->original_count,
+            sizeof(*item.original), range) &&
+        RangesOverlap(scratch_range, range))
+        return true;
+    if (MakeArrayRange(item.recovery, codec->recovery_count,
+            sizeof(*item.recovery), range) &&
+        RangesOverlap(scratch_range, range))
+        return true;
+    if (compare_scratch &&
+        MakeRange(item.scratch, item.scratch_bytes, range) &&
+        RangesOverlap(scratch_range, range))
+        return true;
+    for (uint32_t i = 0; i < codec->original_count; ++i)
+        if (MakeRange(item.original[i], item.shard_bytes, range) &&
+            RangesOverlap(scratch_range, range))
+            return true;
+    for (uint32_t i = 0; i < codec->recovery_count; ++i)
+        if (item.recovery[i] &&
+            MakeRange(item.recovery[i], item.shard_bytes, range) &&
+            RangesOverlap(scratch_range, range))
+            return true;
+    return false;
+}
+
+static bool DecodeScratchOverlapsItem(
+    const leo2_decode_plan* plan,
+    const AddressRange& scratch_range,
+    const leo2_decode_batch_item& item,
+    bool compare_scratch)
+{
+    const leo2_codec* codec = plan->codec;
+    AddressRange range;
+    if (MakeArrayRange(item.original, codec->original_count,
+            sizeof(*item.original), range) &&
+        RangesOverlap(scratch_range, range))
+        return true;
+    if (MakeArrayRange(item.recovery, codec->recovery_count,
+            sizeof(*item.recovery), range) &&
+        RangesOverlap(scratch_range, range))
+        return true;
+    if (MakeArrayRange(item.restored_original, codec->original_count,
+            sizeof(*item.restored_original), range) &&
+        RangesOverlap(scratch_range, range))
+        return true;
+    if (compare_scratch &&
+        MakeRange(item.scratch, item.scratch_bytes, range) &&
+        RangesOverlap(scratch_range, range))
+        return true;
+    for (uint32_t i = 0; i < codec->original_count; ++i)
+    {
+        const void* const data = item.original[i]
+            ? item.original[i] : item.restored_original[i];
+        if (MakeRange(data, item.shard_bytes, range) &&
+            RangesOverlap(scratch_range, range))
+            return true;
+    }
+    for (uint32_t i = 0; i < codec->recovery_count; ++i)
+        if (item.recovery[i] &&
+            MakeRange(item.recovery[i], item.shard_bytes, range) &&
+            RangesOverlap(scratch_range, range))
+            return true;
+    return false;
+}
+
+static size_t PrepareEncodeBatchRanges(
+    const leo2_codec* codec,
+    const leo2_encode_batch_item& item)
+{
+    AddressRange* const inputs =
+        static_cast<AddressRange*>(item.scratch);
+    for (uint32_t i = 0; i < codec->original_count; ++i)
+        MakeRange(item.original[i], item.shard_bytes, inputs[i]);
+    std::sort(inputs, inputs + codec->original_count, RangeLess);
+
+    AddressRange* const outputs = inputs + codec->original_count;
+    size_t output_count = 0;
+    for (uint32_t i = 0; i < codec->recovery_count; ++i)
+        if (item.recovery[i])
+            MakeRange(item.recovery[i], item.shard_bytes,
+                outputs[output_count++]);
+    LEO_DEBUG_ASSERT(output_count <= codec->recovery_count);
+    std::sort(outputs, outputs + output_count, RangeLess);
+    return output_count;
+}
+
+static size_t DecodeBatchInputCount(const leo2_decode_plan* plan)
+{
+    size_t input_count = 0;
+    for (size_t i = 0; i < plan->original_present.size(); ++i)
+        input_count += plan->original_present[i] != 0;
+    for (size_t i = 0; i < plan->recovery_present.size(); ++i)
+        input_count += plan->recovery_present[i] != 0;
+    return input_count;
+}
+
+static void PrepareDecodeBatchRanges(
+    const leo2_decode_plan* plan,
+    const leo2_decode_batch_item& item,
+    size_t input_count)
+{
+    const leo2_codec* codec = plan->codec;
+    AddressRange* const inputs =
+        static_cast<AddressRange*>(item.scratch);
+    size_t input_i = 0;
+    for (uint32_t i = 0; i < codec->original_count; ++i)
+        if (item.original[i])
+            MakeRange(item.original[i], item.shard_bytes, inputs[input_i++]);
+    for (uint32_t i = 0; i < codec->recovery_count; ++i)
+        if (item.recovery[i])
+            MakeRange(item.recovery[i], item.shard_bytes, inputs[input_i++]);
+    LEO_DEBUG_ASSERT(input_i == input_count);
+    LEO_DEBUG_ASSERT(input_count <=
+        static_cast<size_t>(codec->original_count) + codec->recovery_count);
+    std::sort(inputs, inputs + input_count, RangeLess);
+
+    AddressRange* const outputs = inputs + input_count;
+    size_t output_i = 0;
+    for (uint32_t i = 0; i < codec->original_count; ++i)
+        if (!item.original[i])
+            MakeRange(item.restored_original[i], item.shard_bytes,
+                outputs[output_i++]);
+    LEO_DEBUG_ASSERT(output_i == plan->missing_original_count);
+    LEO_DEBUG_ASSERT(input_count + output_i <=
+        static_cast<size_t>(codec->original_count) * 2 +
+            codec->recovery_count);
+    std::sort(outputs, outputs + output_i, RangeLess);
+}
+
+static leo2_result ValidateEncodeBatchAliases(
+    const leo2_codec* codec,
+    const leo2_encode_batch_item* items,
+    size_t item_count,
+    const AddressRange& item_range,
+    size_t item_bytes)
+{
+    for (size_t item_i = 0; item_i < item_count; ++item_i)
+    {
+        AddressRange scratch_range = { 0, 0 };
+        if (!MakeRange(items[item_i].scratch,
+                items[item_i].scratch_bytes, scratch_range))
+            return LEO2_INVALID_ARGUMENT;
+        if (RangesOverlap(scratch_range, item_range))
+            return LEO2_OVERLAP;
+        for (size_t other_i = 0; other_i < item_count; ++other_i)
+            if (EncodeScratchOverlapsItem(codec, scratch_range,
+                    items[other_i], item_i != other_i))
+                return LEO2_OVERLAP;
+    }
+
+    /* Scratch is globally safe now, so the ordinary per-item validator may
+       use it for range sorting without corrupting another item. */
+    for (size_t item_i = 0; item_i < item_count; ++item_i)
+    {
+        const leo2_encode_batch_item& item = items[item_i];
+        const leo2_result result = ValidateEncodeBuffers(codec,
+            item.shard_bytes, item.original, item.recovery, item.scratch,
+            item.scratch_bytes, items, item_bytes);
+        if (result != LEO2_SUCCESS)
+            return result;
+    }
+
+    for (size_t item_i = 0; item_i < item_count; ++item_i)
+        PrepareEncodeBatchRanges(codec, items[item_i]);
+
+    const size_t input_count = codec->original_count;
+    for (size_t item_i = 0; item_i < item_count; ++item_i)
+    {
+        AddressRange* const item_inputs =
+            static_cast<AddressRange*>(items[item_i].scratch);
+        AddressRange* const item_outputs = item_inputs + input_count;
+        size_t item_output_count = 0;
+        for (uint32_t i = 0; i < codec->recovery_count; ++i)
+            item_output_count += items[item_i].recovery[i] != NULL;
+        if (SortedRangesOverlapEachOther(
+                item_outputs, item_output_count))
+            return LEO2_OVERLAP;
+        if (SortedRangesOverlapRange(
+                item_outputs, item_output_count, item_range))
+            return LEO2_OVERLAP;
+
+        for (size_t other_i = 0; other_i < item_count; ++other_i)
+        {
+            AddressRange metadata_range;
+            if ((MakeArrayRange(items[other_i].original,
+                     codec->original_count,
+                     sizeof(*items[other_i].original), metadata_range) &&
+                 SortedRangesOverlapRange(item_outputs,
+                     item_output_count, metadata_range)) ||
+                (MakeArrayRange(items[other_i].recovery,
+                     codec->recovery_count,
+                     sizeof(*items[other_i].recovery), metadata_range) &&
+                 SortedRangesOverlapRange(item_outputs,
+                     item_output_count, metadata_range)))
+                return LEO2_OVERLAP;
+
+            AddressRange* const other_inputs =
+                static_cast<AddressRange*>(items[other_i].scratch);
+            if (SortedRangeListsOverlap(item_outputs, item_output_count,
+                    other_inputs, input_count))
+                return LEO2_OVERLAP;
+            if (other_i > item_i)
+            {
+                AddressRange* const other_outputs =
+                    other_inputs + input_count;
+                size_t other_output_count = 0;
+                for (uint32_t i = 0; i < codec->recovery_count; ++i)
+                    other_output_count +=
+                        items[other_i].recovery[i] != NULL;
+                if (SortedRangeListsOverlap(item_outputs,
+                        item_output_count, other_outputs,
+                        other_output_count))
+                    return LEO2_OVERLAP;
+            }
+        }
+    }
+    return LEO2_SUCCESS;
+}
+
+static leo2_result ValidateDecodeBatchAliases(
+    const leo2_decode_plan* plan,
+    const leo2_decode_batch_item* items,
+    size_t item_count,
+    const AddressRange& item_range,
+    size_t item_bytes)
+{
+    const leo2_codec* codec = plan->codec;
+    for (size_t item_i = 0; item_i < item_count; ++item_i)
+    {
+        AddressRange scratch_range = { 0, 0 };
+        if (!MakeRange(items[item_i].scratch,
+                items[item_i].scratch_bytes, scratch_range))
+            return LEO2_INVALID_ARGUMENT;
+        if (RangesOverlap(scratch_range, item_range))
+            return LEO2_OVERLAP;
+        for (size_t other_i = 0; other_i < item_count; ++other_i)
+            if (DecodeScratchOverlapsItem(plan, scratch_range,
+                    items[other_i], item_i != other_i))
+                return LEO2_OVERLAP;
+    }
+
+    for (size_t item_i = 0; item_i < item_count; ++item_i)
+    {
+        const leo2_decode_batch_item& item = items[item_i];
+        const leo2_result result = ValidateDecodeBuffers(plan,
+            item.shard_bytes, item.original, item.recovery,
+            item.restored_original, item.scratch, item.scratch_bytes,
+            items, item_bytes);
+        if (result != LEO2_SUCCESS)
+            return result;
+    }
+
+    const size_t input_count = DecodeBatchInputCount(plan);
+    const size_t output_count = plan->missing_original_count;
+    for (size_t item_i = 0; item_i < item_count; ++item_i)
+        PrepareDecodeBatchRanges(
+            plan, items[item_i], input_count);
+
+    for (size_t item_i = 0; item_i < item_count; ++item_i)
+    {
+        AddressRange* const item_inputs =
+            static_cast<AddressRange*>(items[item_i].scratch);
+        AddressRange* const item_outputs = item_inputs + input_count;
+        if (SortedRangesOverlapEachOther(item_outputs, output_count) ||
+            SortedRangesOverlapRange(
+                item_outputs, output_count, item_range))
+            return LEO2_OVERLAP;
+
+        for (size_t other_i = 0; other_i < item_count; ++other_i)
+        {
+            AddressRange metadata_range;
+            if ((MakeArrayRange(items[other_i].original,
+                     codec->original_count,
+                     sizeof(*items[other_i].original), metadata_range) &&
+                 SortedRangesOverlapRange(item_outputs,
+                     output_count, metadata_range)) ||
+                (MakeArrayRange(items[other_i].recovery,
+                     codec->recovery_count,
+                     sizeof(*items[other_i].recovery), metadata_range) &&
+                 SortedRangesOverlapRange(item_outputs,
+                     output_count, metadata_range)) ||
+                (MakeArrayRange(items[other_i].restored_original,
+                     codec->original_count,
+                     sizeof(*items[other_i].restored_original),
+                     metadata_range) &&
+                 SortedRangesOverlapRange(item_outputs,
+                     output_count, metadata_range)))
+                return LEO2_OVERLAP;
+
+            AddressRange* const other_inputs =
+                static_cast<AddressRange*>(items[other_i].scratch);
+            if (SortedRangeListsOverlap(item_outputs, output_count,
+                    other_inputs, input_count))
+                return LEO2_OVERLAP;
+            if (other_i > item_i)
+            {
+                AddressRange* const other_outputs =
+                    other_inputs + input_count;
+                if (SortedRangeListsOverlap(item_outputs, output_count,
+                        other_outputs, output_count))
+                    return LEO2_OVERLAP;
+            }
+        }
+    }
+    return LEO2_SUCCESS;
+}
+
+static leo2_result PreflightEncodeBatch(
+    const leo2_codec* codec,
+    const leo2_encode_batch_item* items,
+    size_t item_count,
+    const AddressRange& item_range,
+    size_t item_bytes)
+{
+    for (size_t i = 0; i < item_count; ++i)
+    {
+        const leo2_result result =
+            ValidateEncodeBatchItemAddressability(codec, items[i]);
+        if (result != LEO2_SUCCESS)
+            return result;
+    }
+    return ValidateEncodeBatchAliases(
+        codec, items, item_count, item_range, item_bytes);
+}
+
+static leo2_result PreflightDecodeBatch(
+    const leo2_decode_plan* plan,
+    const leo2_decode_batch_item* items,
+    size_t item_count,
+    const AddressRange& item_range,
+    size_t item_bytes)
+{
+    for (size_t i = 0; i < item_count; ++i)
+    {
+        const leo2_result result =
+            ValidateDecodeBatchItemAddressability(plan, items[i]);
+        if (result != LEO2_SUCCESS)
+            return result;
+    }
+    return ValidateDecodeBatchAliases(
+        plan, items, item_count, item_range, item_bytes);
+}
+
 struct EncodeBatchTaskContext
 {
     const leo2_codec* codec;
     const leo2_encode_batch_item* items;
     size_t item_bytes;
+    AddressRange item_range;
 };
+
+static leo2_result PreflightEncodeBatchTask(void* context)
+{
+    const EncodeBatchTaskContext* batch =
+        static_cast<const EncodeBatchTaskContext*>(context);
+    return PreflightEncodeBatch(batch->codec, batch->items,
+        batch->item_bytes / sizeof(*batch->items), batch->item_range,
+        batch->item_bytes);
+}
 
 static leo2_result RunEncodeBatchItem(void* context, size_t index)
 {
@@ -2586,7 +3145,8 @@ static leo2_result RunEncodeBatchItem(void* context, size_t index)
     const leo2_encode_batch_item& item = batch->items[index];
     return EncodeInternal(
         batch->codec, item.shard_bytes, item.original, item.recovery,
-        item.scratch, item.scratch_bytes, batch->items, batch->item_bytes);
+        item.scratch, item.scratch_bytes, batch->items, batch->item_bytes,
+        true);
 }
 
 struct DecodeBatchTaskContext
@@ -2594,8 +3154,18 @@ struct DecodeBatchTaskContext
     const leo2_decode_plan* plan;
     const leo2_decode_batch_item* items;
     size_t item_bytes;
+    AddressRange item_range;
     bool multi_item_batch;
 };
+
+static leo2_result PreflightDecodeBatchTask(void* context)
+{
+    const DecodeBatchTaskContext* batch =
+        static_cast<const DecodeBatchTaskContext*>(context);
+    return PreflightDecodeBatch(batch->plan, batch->items,
+        batch->item_bytes / sizeof(*batch->items), batch->item_range,
+        batch->item_bytes);
+}
 
 static leo2_result RunDecodeBatchItem(void* context, size_t index)
 {
@@ -2604,7 +3174,7 @@ static leo2_result RunDecodeBatchItem(void* context, size_t index)
     return DecodePlanExecuteInternal(
         batch->plan, item.shard_bytes, item.original, item.recovery,
         item.restored_original, item.scratch, item.scratch_bytes,
-        batch->multi_item_batch, batch->items, batch->item_bytes);
+        batch->multi_item_batch, batch->items, batch->item_bytes, true);
 }
 
 } // namespace
@@ -3217,7 +3787,8 @@ static leo2_result EncodeInternal(
     void* scratch,
     size_t scratch_bytes,
     const void* protected_metadata,
-    size_t protected_metadata_bytes)
+    size_t protected_metadata_bytes,
+    bool prevalidated)
 {
     if (UseSingleSideEncodeLayout(codec))
     {
@@ -3227,16 +3798,20 @@ static leo2_result EncodeInternal(
             codec, shard_bytes, direct_layout, rounded_bytes);
         if (result != LEO2_SUCCESS)
             return result;
-        AddressRange scratch_range;
-        result = CheckScratch(
-            scratch, scratch_bytes, direct_layout, scratch_range);
-        if (result != LEO2_SUCCESS)
-            return result;
-        result = ValidateEncodeBuffers(
-            codec, shard_bytes, original, recovery, scratch, scratch_bytes,
-            protected_metadata, protected_metadata_bytes);
-        if (result != LEO2_SUCCESS)
-            return result;
+        if (!prevalidated)
+        {
+            AddressRange scratch_range;
+            result = CheckScratch(
+                scratch, scratch_bytes, direct_layout, scratch_range);
+            if (result != LEO2_SUCCESS)
+                return result;
+            result = ValidateEncodeBuffers(
+                codec, shard_bytes, original, recovery, scratch,
+                scratch_bytes, protected_metadata,
+                protected_metadata_bytes);
+            if (result != LEO2_SUCCESS)
+                return result;
+        }
         ExecuteSingleSideEncode(
             codec, static_cast<size_t>(shard_bytes), original, recovery);
         return LEO2_SUCCESS;
@@ -3246,16 +3821,19 @@ static leo2_result EncodeInternal(
     leo2_result result = EncodeLayout(codec, shard_bytes, geometry);
     if (result != LEO2_SUCCESS)
         return result;
-    AddressRange scratch_range;
-    result = CheckScratch(
-        scratch, scratch_bytes, geometry.layout, scratch_range);
-    if (result != LEO2_SUCCESS)
-        return result;
-    result = ValidateEncodeBuffers(
-        codec, shard_bytes, original, recovery, scratch, scratch_bytes,
-        protected_metadata, protected_metadata_bytes);
-    if (result != LEO2_SUCCESS)
-        return result;
+    if (!prevalidated)
+    {
+        AddressRange scratch_range;
+        result = CheckScratch(
+            scratch, scratch_bytes, geometry.layout, scratch_range);
+        if (result != LEO2_SUCCESS)
+            return result;
+        result = ValidateEncodeBuffers(
+            codec, shard_bytes, original, recovery, scratch, scratch_bytes,
+            protected_metadata, protected_metadata_bytes);
+        if (result != LEO2_SUCCESS)
+            return result;
+    }
 
     uint32_t requested_recovery_count = 0;
     uint32_t requested_recovery_prefix = 0;
@@ -3368,7 +3946,7 @@ LEO2_EXPORT leo2_result leo2_encode(
     size_t scratch_bytes)
 {
     return EncodeInternal(codec, shard_bytes, original, recovery,
-        scratch, scratch_bytes, NULL, 0);
+        scratch, scratch_bytes, NULL, 0, false);
 }
 
 LEO2_EXPORT leo2_result leo2_encode_batch(
@@ -3383,14 +3961,23 @@ LEO2_EXPORT leo2_result leo2_encode_batch(
     if (!codec)
         return LEO2_INVALID_ARGUMENT;
     size_t item_bytes = 0;
-    AddressRange item_range;
+    AddressRange item_range = { 0, 0 };
     if (item_count != 0 &&
         (!CheckedMultiply(item_count, sizeof(*items), item_bytes) ||
          !MakeRange(items, static_cast<uint64_t>(item_bytes), item_range)))
         return LEO2_INVALID_ARGUMENT;
-    EncodeBatchTaskContext batch = { codec, items, item_bytes };
+    EncodeBatchTaskContext batch = {
+        codec, items, item_bytes, item_range
+    };
     if (codec->context->pool)
-        return codec->context->pool->Run(item_count, RunEncodeBatchItem, &batch);
+        return codec->context->pool->Run(item_count,
+            RunEncodeBatchItem, &batch, PreflightEncodeBatchTask);
+    if (item_count != 0)
+    {
+        const leo2_result result = PreflightEncodeBatchTask(&batch);
+        if (result != LEO2_SUCCESS)
+            return result;
+    }
     for (size_t i = 0; i < item_count; ++i)
     {
         const leo2_result result = RunEncodeBatchItem(&batch, i);
@@ -3646,7 +4233,8 @@ static leo2_result DecodePlanExecuteInternal(
     size_t scratch_bytes,
     bool multi_item_batch,
     const void* protected_metadata,
-    size_t protected_metadata_bytes)
+    size_t protected_metadata_bytes,
+    bool prevalidated)
 {
     if (!plan || shard_bytes == 0)
         return LEO2_INVALID_ARGUMENT;
@@ -3667,16 +4255,19 @@ static leo2_result DecodePlanExecuteInternal(
     const ScratchLayout& layout = direct_execution
         ? direct_layout
         : geometry.layout;
-    AddressRange scratch_range;
-    result = CheckScratch(scratch, scratch_bytes, layout, scratch_range);
-    if (result != LEO2_SUCCESS)
-        return result;
-    result = ValidateDecodeBuffers(
-        plan, shard_bytes, original, recovery, restored_original,
-        scratch, scratch_bytes, protected_metadata,
-        protected_metadata_bytes);
-    if (result != LEO2_SUCCESS)
-        return result;
+    if (!prevalidated)
+    {
+        AddressRange scratch_range;
+        result = CheckScratch(scratch, scratch_bytes, layout, scratch_range);
+        if (result != LEO2_SUCCESS)
+            return result;
+        result = ValidateDecodeBuffers(
+            plan, shard_bytes, original, recovery, restored_original,
+            scratch, scratch_bytes, protected_metadata,
+            protected_metadata_bytes);
+        if (result != LEO2_SUCCESS)
+            return result;
+    }
 
     const leo2_codec* codec = plan->codec;
     const leopard::backend::Ops& ops = *codec->context->ops;
@@ -3800,7 +4391,7 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
 {
     return DecodePlanExecuteInternal(
         plan, shard_bytes, original, recovery, restored_original,
-        scratch, scratch_bytes, false, NULL, 0);
+        scratch, scratch_bytes, false, NULL, 0, false);
 }
 
 LEO2_EXPORT leo2_result leo2_decode_plan_execute_batch(
@@ -3815,16 +4406,25 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute_batch(
     if (!plan)
         return LEO2_INVALID_ARGUMENT;
     size_t item_bytes = 0;
-    AddressRange item_range;
+    AddressRange item_range = { 0, 0 };
     if (item_count != 0 &&
         (!CheckedMultiply(item_count, sizeof(*items), item_bytes) ||
          !MakeRange(items, static_cast<uint64_t>(item_bytes), item_range)))
         return LEO2_INVALID_ARGUMENT;
+    /* A no-loss plan is a true no-op: after validating only the top-level
+       plan/item-array address arithmetic, do not inspect per-item pointers,
+       scratch, sizes, or aliases and do not start the worker pool. */
+    if (item_count == 0 || plan->no_op)
+        return LEO2_SUCCESS;
     DecodeBatchTaskContext batch = {
-        plan, items, item_bytes, item_count > 1
+        plan, items, item_bytes, item_range, item_count > 1
     };
     if (plan->codec->context->pool)
-        return plan->codec->context->pool->Run(item_count, RunDecodeBatchItem, &batch);
+        return plan->codec->context->pool->Run(item_count,
+            RunDecodeBatchItem, &batch, PreflightDecodeBatchTask);
+    const leo2_result preflight = PreflightDecodeBatchTask(&batch);
+    if (preflight != LEO2_SUCCESS)
+        return preflight;
     for (size_t i = 0; i < item_count; ++i)
     {
         const leo2_result result = RunDecodeBatchItem(&batch, i);
