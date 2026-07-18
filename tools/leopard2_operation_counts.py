@@ -1305,6 +1305,10 @@ def model_high_decode(
             "qualified GF8 AVX2 delta only: T>=64, live_count>=ceil(T/2), "
             "and each kernel pass in [16 KiB, 256 KiB]"
         ),
+        "locator_weighted_live_scan_scope": (
+            "statically qualified GF8 AVX2 passes scan receive pointers "
+            "until ceil(T/2) live rows are found; sparse fallback scans all T"
+        ),
         "locator_weighted_fusion_applied_to_isa_independent_totals": False,
         "evaluation_block_prefixes": evaluation_prefixes,
         "out_of_place_evaluator_first_layer": True,
@@ -1814,6 +1818,10 @@ def run_self_test(verbose: bool = True) -> None:
     assert high_decode.decode_coordinate_pointer_mappings == 240
     assert high_decode.copies == 240
     assert high_decode.decode_output_gather_payload_bytes == 1024
+    assert high_decode.details["locator_weighted_live_scan_scope"] == (
+        "statically qualified GF8 AVX2 passes scan receive pointers "
+        "until ceil(T/2) live rows are found; sparse fallback scans all T"
+    )
     low_decode_ragged = model_low_decode(8, 248, 256, 8, 65, {0, 1})
     assert low_decode_ragged.decode_coordinate_pointer_mappings == 8
     assert low_decode_ragged.copies == 0
@@ -1824,7 +1832,7 @@ def run_self_test(verbose: bool = True) -> None:
     )
     assert scratch.plan_total_bytes == 28800
     assert scratch.codec_total_bytes == 29824
-    checks += 8
+    checks += 9
 
     for pointer_bytes in (4, 8):
         maximum = size_t_max(pointer_bytes)

@@ -96,14 +96,17 @@ region:
 - each kernel pass from 16 KiB through 256 KiB, inclusive.
 
 Everything else retains the established locator-scale/zero pass followed by
-the ordinary inverse transform.  In particular scalar, SSSE3, GF16, T=32,
-fewer than half-live receive rows, and byte passes outside the interval do not
-pay an added live-row scan or enter the new operation.  A split public shard is
-decided per pass: a qualified aligned prefix may use the operation while its
-64-byte padded tail uses the fallback.  Selected and fallback row counters are
-separate, and context tracing proves that every selected radix-four group uses
-the codec's immutable backend table.  Prepared, materialized, tiled, aligned,
-and tail-split paths have explicit dispatch tests.
+the ordinary inverse transform.  Scalar, SSSE3, GF16, T=32, and byte passes
+outside the interval fail the static gates and do not pay an added live-row
+scan.  A statically qualified GF8 AVX2 pass scans receive pointers in coordinate
+order, stopping as soon as `ceil(T/2)` live rows are found.  Consequently a
+fewer-than-half-live pass scans all T pointers before selecting the fallback;
+the scan is bounded setup/control work and never inspects shard bytes.  A split
+public shard is decided per pass: a qualified aligned prefix may use the
+operation while its 64-byte padded tail uses the fallback.  Selected and
+fallback row counters are separate, and context tracing proves that every
+selected radix-four group uses the codec's immutable backend table.  Prepared,
+materialized, tiled, aligned, and tail-split paths have explicit dispatch tests.
 
 The attribution run used one diagnostic binary for both paths, switching only
 a fail-closed environment selector.  The benchmark SHA-256 was
