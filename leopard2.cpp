@@ -4337,23 +4337,27 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
     AddressRange output_range;
     if (!MakeArrayRange(plan_out, 1, sizeof(*plan_out), output_range))
         return LEO2_INVALID_ARGUMENT;
-    if (!codec || !original_present || !recovery_present)
+    if (!codec)
     {
         *plan_out = NULL;
         return LEO2_INVALID_ARGUMENT;
     }
 
-    AddressRange original_range;
-    AddressRange recovery_range;
-    if (!MakeArrayRange(original_present, codec->original_count,
-            sizeof(*original_present), original_range) ||
-        !MakeArrayRange(recovery_present, codec->recovery_count,
-            sizeof(*recovery_present), recovery_range))
+    AddressRange original_range = { 0, 0 };
+    AddressRange recovery_range = { 0, 0 };
+    if ((original_present &&
+         !MakeArrayRange(original_present, codec->original_count,
+             sizeof(*original_present), original_range)) ||
+        (recovery_present &&
+         !MakeArrayRange(recovery_present, codec->recovery_count,
+             sizeof(*recovery_present), recovery_range)))
         return LEO2_INVALID_ARGUMENT;
-    if (RangesOverlap(output_range, original_range) ||
-        RangesOverlap(output_range, recovery_range))
+    if ((original_present && RangesOverlap(output_range, original_range)) ||
+        (recovery_present && RangesOverlap(output_range, recovery_range)))
         return LEO2_OVERLAP;
     *plan_out = NULL;
+    if (!original_present || !recovery_present)
+        return LEO2_INVALID_ARGUMENT;
     uint32_t present_count = 0;
     uint32_t missing_original_count = 0;
     for (uint32_t i = 0; i < codec->original_count; ++i)
