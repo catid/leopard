@@ -56,6 +56,7 @@ SOURCE_FILES = (
     "tools/leopard2_sparse_encode_crossover.py",
 )
 KNOWN_BACKENDS = ("scalar", "ssse3", "avx2", "auto")
+CELL_SCHEMA = "leopard2-sparse-encode-cells/v1"
 
 
 class CrossoverError(RuntimeError):
@@ -291,6 +292,76 @@ def make_cells(backends: list[str], shard_bytes: list[int]) -> list[dict[str, An
             cell["mask_name"], cell["backend"], cell["shard_bytes"],
         ),
     )
+
+
+def validate_cells(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, dict) or value.get("schema") != CELL_SCHEMA:
+        raise CrossoverError("cell manifest has an unknown schema")
+    raw_cells = value.get("cells")
+    if not isinstance(raw_cells, list) or not raw_cells:
+        raise CrossoverError("cell manifest contains no cells")
+    cells: list[dict[str, Any]] = []
+    for index, raw in enumerate(raw_cells):
+        if not isinstance(raw, dict):
+            raise CrossoverError(f"cell {index} is not an object")
+        expected_keys = {
+            "profile", "field", "K", "R", "mask_name",
+            "requested_parity", "backend", "shard_bytes",
+        }
+        if set(raw) != expected_keys:
+            raise CrossoverError(f"cell {index} has unknown or missing fields")
+        profile = raw["profile"]
+        field = raw["field"]
+        backend = raw["backend"]
+        k = raw["K"]
+        r = raw["R"]
+        byte_count = raw["shard_bytes"]
+        requested_raw = raw["requested_parity"]
+        if profile not in ("high", "low") or field not in ("gf8", "gf16"):
+            raise CrossoverError(f"cell {index} has an invalid profile or field")
+        if backend not in KNOWN_BACKENDS:
+            raise CrossoverError(f"cell {index} has an invalid backend")
+        if not isinstance(k, int) or isinstance(k, bool) or k <= 0 or (
+            not isinstance(r, int) or isinstance(r, bool) or r <= 0
+        ):
+            raise CrossoverError(f"cell {index} has invalid K or R")
+        if not isinstance(byte_count, int) or isinstance(byte_count, bool) or (
+            byte_count <= 0 or byte_count > 1 << 30
+        ):
+            raise CrossoverError(f"cell {index} has invalid shard bytes")
+        if field == "gf16" and byte_count % 2 != 0:
+            raise CrossoverError(f"cell {index} has an odd GF16 byte count")
+        if not isinstance(raw["mask_name"], str) or not raw["mask_name"]:
+            raise CrossoverError(f"cell {index} has no mask name")
+        requested = list(range(r)) if requested_raw == "all" else requested_raw
+        if not isinstance(requested, list) or not requested or any(
+            not isinstance(item, int) or isinstance(item, bool)
+            or item < 0 or item >= r for item in requested
+        ) or requested != sorted(set(requested)):
+            raise CrossoverError(f"cell {index} has invalid requested parity")
+        side_value = r if profile == "high" else k
+        side = 1
+        while side < side_value:
+            side <<= 1
+        order = 256 if field == "gf8" else 65536
+        span = k + side if profile == "high" else side + r
+        if side < 2 or span > order or (profile == "low" and side > order // 2):
+            raise CrossoverError(f"cell {index} does not fit its field")
+        cell = dict(raw)
+        cell["requested_parity"] = requested
+        cells.append(cell)
+    cells.sort(key=lambda cell: (
+        cell["field"], cell["profile"], cell["K"], cell["R"],
+        cell["mask_name"], cell["backend"], cell["shard_bytes"],
+    ))
+    identities = [canonical_bytes(cell) for cell in cells]
+    if len(identities) != len(set(identities)):
+        raise CrossoverError("cell manifest contains duplicate cells")
+    return cells
+
+
+def load_cells(path: Path) -> list[dict[str, Any]]:
+    return validate_cells(read_json(path))
 
 
 def mask_text(indices: list[int]) -> str:
@@ -639,6 +710,14 @@ def summarize_jobs(jobs: list[dict[str, Any]], reuse: list[int]) -> dict[str, An
     prepared: list[float] = []
     call_local: list[float] = []
     amortized: dict[int, list[float]] = {value: [] for value in reuse}
+    inverse_prefix: list[float] = []
+    inverse_exact: list[float] = []
+    inverse_prefix_amortized: dict[int, list[float]] = {
+        value: [] for value in reuse
+    }
+    inverse_exact_amortized: dict[int, list[float]] = {
+        value: [] for value in reuse
+    }
     for job in passed:
         metrics = job["benchmark"]["metrics"]
         prefix = float(metrics["prefix_execution_ns"]["median"])
@@ -650,6 +729,29 @@ def summarize_jobs(jobs: list[dict[str, Any]], reuse: list[int]) -> dict[str, An
         for reuse_count in reuse:
             modeled = exact + setup / reuse_count
             amortized[reuse_count].append((prefix / modeled - 1.0) * 100.0)
+        if job["benchmark"]["plan"]["inverse_candidate_available"]:
+            inverse_setup = float(
+                metrics["inverse_schedule_setup_ns"]["median"]
+            )
+            pruned_prefix = float(
+                metrics["prefix_pruned_inverse_execution_ns"]["median"]
+            )
+            pruned_exact = float(
+                metrics["exact_pruned_inverse_execution_ns"]["median"]
+            )
+            inverse_prefix.append((prefix / pruned_prefix - 1.0) * 100.0)
+            inverse_exact.append((exact / pruned_exact - 1.0) * 100.0)
+            for reuse_count in reuse:
+                inverse_prefix_modeled = (
+                    pruned_prefix + inverse_setup / reuse_count
+                )
+                inverse_exact_modeled = pruned_exact + inverse_setup / reuse_count
+                inverse_prefix_amortized[reuse_count].append(
+                    (prefix / inverse_prefix_modeled - 1.0) * 100.0
+                )
+                inverse_exact_amortized[reuse_count].append(
+                    (exact / inverse_exact_modeled - 1.0) * 100.0
+                )
 
     def summary(values: list[float]) -> dict[str, Any]:
         return {
@@ -666,11 +768,21 @@ def summarize_jobs(jobs: list[dict[str, Any]], reuse: list[int]) -> dict[str, An
     return {
         "call_local_total": summary(call_local),
         "exact_prepared_execution": summary(prepared),
+        "inverse_pruned_prefix_execution": summary(inverse_prefix),
+        "inverse_pruned_exact_execution": summary(inverse_exact),
         "jobs_failed": len(jobs) - len(passed),
         "jobs_passed": len(passed),
         "jobs_total": len(jobs),
         "modeled_amortized": {
             str(value): summary(amortized[value]) for value in reuse
+        },
+        "modeled_amortized_inverse_prefix": {
+            str(value): summary(inverse_prefix_amortized[value])
+            for value in reuse
+        },
+        "modeled_amortized_inverse_exact": {
+            str(value): summary(inverse_exact_amortized[value])
+            for value in reuse
         },
     }
 
@@ -740,7 +852,16 @@ def run_matrix(arguments: argparse.Namespace) -> int:
     shard_bytes = parse_csv_unsigned(arguments.bytes, "bytes", 1 << 30)
     reuse = parse_csv_unsigned(arguments.reuse, "reuse", 1000000)
     backends = parse_backends(arguments.backends)
-    cells = make_cells(backends, shard_bytes)
+    if arguments.cell_manifest:
+        cell_manifest = Path(arguments.cell_manifest).resolve()
+        cells = load_cells(cell_manifest)
+        settings_cell_manifest = {
+            "path": str(cell_manifest),
+            "sha256": digest_bytes(cell_manifest.read_bytes()),
+        }
+    else:
+        cells = make_cells(backends, shard_bytes)
+        settings_cell_manifest = None
     if arguments.workers is None:
         arguments.workers = min(128, len(cpus), len(cells))
     settings = {
@@ -755,6 +876,7 @@ def run_matrix(arguments: argparse.Namespace) -> int:
         "timeout_seconds": arguments.timeout,
         "warmups": arguments.warmups,
         "workers": arguments.workers,
+        "cell_manifest": settings_cell_manifest,
     }
     manifest = make_manifest(
         source, executable, arguments.command, cells, settings,
@@ -863,6 +985,24 @@ def self_test() -> int:
         raise CrossoverError("cell generation is not deterministic")
     if parse_csv_unsigned("64,1,8", "reuse", 100) != [1, 8, 64]:
         raise CrossoverError("numeric list normalization failed")
+    custom_cells = validate_cells({
+        "schema": CELL_SCHEMA,
+        "cells": [{
+            "profile": "low", "field": "gf8", "K": 17, "R": 18,
+            "mask_name": "all", "requested_parity": list(range(18)),
+            "backend": "scalar", "shard_bytes": 65536,
+        }],
+    })
+    if len(custom_cells) != 1 or custom_cells[0]["K"] != 17:
+        raise CrossoverError("custom cell manifest validation failed")
+    malformed_cells = dict(custom_cells[0])
+    malformed_cells["requested_parity"] = [18]
+    try:
+        validate_cells({"schema": CELL_SCHEMA, "cells": [malformed_cells]})
+    except CrossoverError:
+        pass
+    else:
+        raise CrossoverError("out-of-range custom cell was accepted")
     with tempfile.TemporaryDirectory(prefix="leopard2-sparse-crossover-") as directory:
         root = Path(directory)
         for relative in SOURCE_FILES:
@@ -973,6 +1113,27 @@ def self_test() -> int:
         },
     }
     validate_benchmark_result(benchmark, cell, settings, state)
+    unavailable_summary = summarize_jobs(
+        [{"status": "passed", "benchmark": benchmark}], [1, 8, 64]
+    )
+    if unavailable_summary["inverse_pruned_prefix_execution"]["cells"] != 0:
+        raise CrossoverError("summary included an unavailable inverse candidate")
+    candidate_benchmark = json.loads(json.dumps(benchmark))
+    candidate_benchmark["plan"].update(
+        inverse_candidate_available=True,
+        inverse_operations=63,
+        inverse_source_groups=4,
+        inverse_active_prefix=17,
+        mature_zero_fill_shards=47,
+    )
+    candidate_summary = summarize_jobs(
+        [{"status": "passed", "benchmark": candidate_benchmark}], [1, 8, 64]
+    )
+    inverse_gain = candidate_summary[
+        "inverse_pruned_prefix_execution"
+    ]["gain_median_percent"]
+    if inverse_gain is None or abs(inverse_gain - 25.0) > 0.001:
+        raise CrossoverError("summary computed the wrong inverse-prefix gain")
     benchmark["build"]["source_git_sha"] = "b" * 40
     try:
         validate_benchmark_result(benchmark, cell, settings, state)
@@ -1022,6 +1183,7 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--source", default=".")
         sub.add_argument("--executable", required=True)
         sub.add_argument("--result-dir", required=True)
+        sub.add_argument("--cell-manifest")
         sub.add_argument("--backends", default="auto")
         sub.add_argument(
             "--bytes", default="64,1024" if command == "screen"

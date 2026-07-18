@@ -1,0 +1,55 @@
+{
+  "schema": "leopard2-sparse-encode-cells/v1",
+  "cells": [
+    {
+      "profile": "low",
+      "field": "gf8",
+      "K": 17,
+      "R": 18,
+      "mask_name": "all_scalar_64k",
+      "requested_parity": "all",
+      "backend": "scalar",
+      "shard_bytes": 65536
+    },
+    {
+      "profile": "low",
+      "field": "gf8",
+      "K": 33,
+      "R": 34,
+      "mask_name": "all_avx2_64k",
+      "requested_parity": "all",
+      "backend": "avx2",
+      "shard_bytes": 65536
+    },
+    {
+      "profile": "low",
+      "field": "gf8",
+      "K": 65,
+      "R": 66,
+      "mask_name": "all_avx2_1m",
+      "requested_parity": "all",
+      "backend": "avx2",
+      "shard_bytes": 1048576
+    },
+    {
+      "profile": "high",
+      "field": "gf8",
+      "K": 33,
+      "R": 32,
+      "mask_name": "all_avx2_64k",
+      "requested_parity": "all",
+      "backend": "avx2",
+      "shard_bytes": 65536
+    },
+    {
+      "profile": "low",
+      "field": "gf16",
+      "K": 129,
+      "R": 130,
+      "mask_name": "all_avx2_64k",
+      "requested_parity": "all",
+      "backend": "avx2",
+      "shard_bytes": 65536
+    }
+  ]
+}
