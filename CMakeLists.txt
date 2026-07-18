@@ -152,6 +152,10 @@ add_executable(test_leopard_ff8xor tests/test_ff8xor.cpp)
 target_link_libraries(test_leopard_ff8xor libleopard)
 add_test(NAME leopard_ff8xor COMMAND test_leopard_ff8xor)
 
+add_executable(test_leopard_ff8xor_statistics tests/test_ff8xor_statistics.cpp)
+target_link_libraries(test_leopard_ff8xor_statistics libleopard)
+add_test(NAME leopard_ff8xor_statistics COMMAND test_leopard_ff8xor_statistics)
+
 add_executable(bench_leopard_ff8xor tests/benchmark_ff8xor.cpp)
 target_link_libraries(bench_leopard_ff8xor libleopard)
 
