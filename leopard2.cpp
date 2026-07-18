@@ -259,6 +259,7 @@ static const uint32_t kDirectMaxLosses = 4;
 static const uint32_t kDirectMaxParentDimension = 256;
 static const uint64_t kDirectSimdTileBytes = 64;
 static const uint64_t kDirectMinimumMeasuredBytes = 1024;
+static const size_t kScalableBatchPreflightMinItems = 9;
 #ifdef LEO2_ENABLE_TEST_HOOKS
 static const size_t kSparseEncodeScheduleBudget = 65536;
 #endif
@@ -574,6 +575,12 @@ struct AddressRange
     uintptr_t end;
 };
 
+struct BatchRangeRecord
+{
+    AddressRange range;
+    uintptr_t writable;
+};
+
 struct ScratchLayout
 {
     size_t range_offset;
@@ -633,6 +640,28 @@ static bool AlignUp(size_t value, size_t alignment, size_t& result)
         return false;
     result = sum & ~mask;
     return true;
+}
+
+static leo2_result ComputeBatchPreflightScratchBytes(
+    size_t item_count,
+    size_t ranges_per_item,
+    size_t& scratch_bytes)
+{
+    scratch_bytes = 0;
+    if (item_count > 0xffffffffu)
+        return LEO2_INVALID_ARGUMENT;
+    if (item_count < kScalableBatchPreflightMinItems)
+        return LEO2_SUCCESS;
+
+    size_t range_count = 0;
+    size_t range_bytes = 0;
+    if (!CheckedMultiply(item_count, ranges_per_item, range_count) ||
+        !CheckedAdd(range_count, 1, range_count) ||
+        !CheckedMultiply(
+            range_count, sizeof(BatchRangeRecord), range_bytes) ||
+        !AlignUp(range_bytes, kScratchAlignment, scratch_bytes))
+        return LEO2_INVALID_ARGUMENT;
+    return LEO2_SUCCESS;
 }
 
 static bool RoundShardBytes(uint64_t shard_bytes, size_t& rounded)
@@ -3004,6 +3033,162 @@ static bool SortedRangesOverlapEachOther(
     return false;
 }
 
+static bool BatchRangeLess(
+    const BatchRangeRecord& a,
+    const BatchRangeRecord& b)
+{
+    if (a.range.begin != b.range.begin)
+        return a.range.begin < b.range.begin;
+    if (a.range.end != b.range.end)
+        return a.range.end < b.range.end;
+    return a.writable < b.writable;
+}
+
+static void SiftBatchRangeHeap(
+    BatchRangeRecord* ranges,
+    size_t root,
+    size_t count)
+{
+    for (;;)
+    {
+        if (root > (count - 1) / 2)
+            return;
+        const size_t left = root * 2 + 1;
+        if (left >= count)
+            return;
+        size_t child = left;
+        const size_t right = left + 1;
+        if (right < count && BatchRangeLess(ranges[child], ranges[right]))
+            child = right;
+        if (!BatchRangeLess(ranges[root], ranges[child]))
+            return;
+        std::swap(ranges[root], ranges[child]);
+        root = child;
+    }
+}
+
+static void SortBatchRangesWithoutAllocation(
+    BatchRangeRecord* ranges,
+    size_t count)
+{
+    if (count < 2)
+        return;
+    for (size_t root = count / 2; root != 0; --root)
+        SiftBatchRangeHeap(ranges, root - 1, count);
+    for (size_t end = count; end > 1; --end)
+    {
+        std::swap(ranges[0], ranges[end - 1]);
+        SiftBatchRangeHeap(ranges, 0, end - 1);
+    }
+}
+
+static leo2_result ValidateSortedBatchRanges(
+    const BatchRangeRecord* ranges,
+    size_t count)
+{
+    uintptr_t furthest_end = 0;
+    uintptr_t furthest_writable_end = 0;
+    bool have_range = false;
+    bool have_writable = false;
+    for (size_t i = 0; i < count; ++i)
+    {
+        const BatchRangeRecord& current = ranges[i];
+        if ((current.writable && have_range &&
+                furthest_end > current.range.begin) ||
+            (!current.writable && have_writable &&
+                furthest_writable_end > current.range.begin))
+            return LEO2_OVERLAP;
+        if (!have_range || current.range.end > furthest_end)
+            furthest_end = current.range.end;
+        have_range = true;
+        if (current.writable &&
+            (!have_writable || current.range.end > furthest_writable_end))
+        {
+            furthest_writable_end = current.range.end;
+            have_writable = true;
+        }
+    }
+    return LEO2_SUCCESS;
+}
+
+static bool AppendBatchRange(
+    BatchRangeRecord* ranges,
+    size_t& count,
+    size_t capacity,
+    const AddressRange& range,
+    bool writable)
+{
+    if (count >= capacity)
+        return false;
+    ranges[count].range = range;
+    ranges[count].writable = writable ? 1 : 0;
+    ++count;
+    return true;
+}
+
+static leo2_result PrepareBatchPreflightScratch(
+    void* scratch,
+    size_t scratch_bytes,
+    size_t required_bytes,
+    AddressRange& scratch_range)
+{
+    scratch_range.begin = scratch_range.end = 0;
+    if (scratch_bytes < required_bytes)
+        return LEO2_SCRATCH_TOO_SMALL;
+    if (required_bytes == 0)
+        return LEO2_SUCCESS;
+    if (!scratch)
+        return LEO2_INVALID_ARGUMENT;
+    if ((reinterpret_cast<uintptr_t>(scratch) &
+            (kScratchAlignment - 1)) != 0)
+        return LEO2_BAD_ALIGNMENT;
+    if (!MakeRange(scratch, scratch_bytes, scratch_range))
+        return LEO2_INVALID_ARGUMENT;
+    return LEO2_SUCCESS;
+}
+
+static leo2_result EncodeBatchPreflightScratchBytes(
+    const leo2_codec* codec,
+    size_t item_count,
+    size_t& scratch_bytes)
+{
+    scratch_bytes = 0;
+    if (!codec)
+        return LEO2_INVALID_ARGUMENT;
+    size_t ranges_per_item = 0;
+    if (!CheckedAdd(codec->original_count, codec->recovery_count,
+            ranges_per_item) ||
+        !CheckedAdd(ranges_per_item, 3, ranges_per_item))
+        return LEO2_INVALID_ARGUMENT;
+    return ComputeBatchPreflightScratchBytes(
+        item_count, ranges_per_item, scratch_bytes);
+}
+
+static leo2_result DecodeBatchPreflightScratchBytes(
+    const leo2_decode_plan* plan,
+    size_t item_count,
+    size_t& scratch_bytes)
+{
+    scratch_bytes = 0;
+    if (!plan)
+        return LEO2_INVALID_ARGUMENT;
+    if (item_count > 0xffffffffu)
+        return LEO2_INVALID_ARGUMENT;
+    if (item_count < kScalableBatchPreflightMinItems || plan->no_op)
+        return LEO2_SUCCESS;
+
+    size_t recovery_input_count = 0;
+    for (size_t i = 0; i < plan->recovery_present.size(); ++i)
+        recovery_input_count += plan->recovery_present[i] != 0;
+    size_t ranges_per_item = 0;
+    if (!CheckedAdd(plan->codec->original_count,
+            recovery_input_count, ranges_per_item) ||
+        !CheckedAdd(ranges_per_item, 4, ranges_per_item))
+        return LEO2_INVALID_ARGUMENT;
+    return ComputeBatchPreflightScratchBytes(
+        item_count, ranges_per_item, scratch_bytes);
+}
+
 static leo2_result ValidateEncodeBatchItemAddressability(
     const leo2_codec* codec,
     const leo2_encode_batch_item& item)
@@ -3544,6 +3729,184 @@ static leo2_result PreflightDecodeBatch(
         plan, items, item_count, item_range, item_bytes);
 }
 
+static leo2_result PreflightEncodeBatchScalable(
+    const leo2_codec* codec,
+    const leo2_encode_batch_item* items,
+    size_t item_count,
+    const AddressRange& item_range,
+    void* preflight_scratch,
+    size_t preflight_scratch_bytes)
+{
+    size_t required_bytes = 0;
+    leo2_result result = EncodeBatchPreflightScratchBytes(
+        codec, item_count, required_bytes);
+    if (result != LEO2_SUCCESS)
+        return result;
+    AddressRange preflight_range;
+    result = PrepareBatchPreflightScratch(preflight_scratch,
+        preflight_scratch_bytes, required_bytes, preflight_range);
+    if (result != LEO2_SUCCESS)
+        return result;
+
+    /* Finish every potentially failing read-only check before writing the
+       caller's batch-wide workspace. */
+    for (size_t i = 0; i < item_count; ++i)
+    {
+        result = ValidateEncodeBatchItemAddressability(codec, items[i]);
+        if (result != LEO2_SUCCESS)
+            return result;
+    }
+    if (RangesOverlap(preflight_range, item_range))
+        return LEO2_OVERLAP;
+    for (size_t i = 0; i < item_count; ++i)
+        if (EncodeScratchOverlapsItem(
+                codec, preflight_range, items[i], true))
+            return LEO2_OVERLAP;
+
+    BatchRangeRecord* const ranges =
+        static_cast<BatchRangeRecord*>(preflight_scratch);
+    const size_t capacity = required_bytes / sizeof(*ranges);
+    size_t count = 0;
+    const auto append = [&](const AddressRange& range, bool writable) {
+        return AppendBatchRange(
+            ranges, count, capacity, range, writable);
+    };
+    if (!append(item_range, false))
+        return LEO2_INTERNAL_ERROR;
+    for (size_t item_i = 0; item_i < item_count; ++item_i)
+    {
+        const leo2_encode_batch_item& item = items[item_i];
+        AddressRange range;
+        if (!MakeArrayRange(item.original, codec->original_count,
+                sizeof(*item.original), range))
+            return LEO2_INTERNAL_ERROR;
+        if (!append(range, false))
+            return LEO2_INTERNAL_ERROR;
+        if (!MakeArrayRange(item.recovery, codec->recovery_count,
+                sizeof(*item.recovery), range))
+            return LEO2_INTERNAL_ERROR;
+        if (!append(range, false))
+            return LEO2_INTERNAL_ERROR;
+        if (!MakeRange(item.scratch, item.scratch_bytes, range))
+            return LEO2_INTERNAL_ERROR;
+        if (!append(range, true))
+            return LEO2_INTERNAL_ERROR;
+        for (uint32_t i = 0; i < codec->original_count; ++i)
+        {
+            if (!MakeRange(item.original[i], item.shard_bytes, range))
+                return LEO2_INTERNAL_ERROR;
+            if (!append(range, false))
+                return LEO2_INTERNAL_ERROR;
+        }
+        for (uint32_t i = 0; i < codec->recovery_count; ++i)
+        {
+            if (!item.recovery[i])
+                continue;
+            if (!MakeRange(item.recovery[i], item.shard_bytes, range))
+                return LEO2_INTERNAL_ERROR;
+            if (!append(range, true))
+                return LEO2_INTERNAL_ERROR;
+        }
+    }
+    if (count > capacity)
+        return LEO2_INTERNAL_ERROR;
+    SortBatchRangesWithoutAllocation(ranges, count);
+    return ValidateSortedBatchRanges(ranges, count);
+}
+
+static leo2_result PreflightDecodeBatchScalable(
+    const leo2_decode_plan* plan,
+    const leo2_decode_batch_item* items,
+    size_t item_count,
+    const AddressRange& item_range,
+    void* preflight_scratch,
+    size_t preflight_scratch_bytes)
+{
+    size_t required_bytes = 0;
+    leo2_result result = DecodeBatchPreflightScratchBytes(
+        plan, item_count, required_bytes);
+    if (result != LEO2_SUCCESS)
+        return result;
+    AddressRange preflight_range;
+    result = PrepareBatchPreflightScratch(preflight_scratch,
+        preflight_scratch_bytes, required_bytes, preflight_range);
+    if (result != LEO2_SUCCESS)
+        return result;
+
+    for (size_t i = 0; i < item_count; ++i)
+    {
+        result = ValidateDecodeBatchItemAddressability(
+            plan, items[i], item_count > 1);
+        if (result != LEO2_SUCCESS)
+            return result;
+    }
+    if (RangesOverlap(preflight_range, item_range))
+        return LEO2_OVERLAP;
+    for (size_t i = 0; i < item_count; ++i)
+        if (DecodeScratchOverlapsItem(
+                plan, preflight_range, items[i], true))
+            return LEO2_OVERLAP;
+
+    const leo2_codec* const codec = plan->codec;
+    BatchRangeRecord* const ranges =
+        static_cast<BatchRangeRecord*>(preflight_scratch);
+    const size_t capacity = required_bytes / sizeof(*ranges);
+    size_t count = 0;
+    const auto append = [&](const AddressRange& range, bool writable) {
+        return AppendBatchRange(
+            ranges, count, capacity, range, writable);
+    };
+    if (!append(item_range, false))
+        return LEO2_INTERNAL_ERROR;
+    for (size_t item_i = 0; item_i < item_count; ++item_i)
+    {
+        const leo2_decode_batch_item& item = items[item_i];
+        AddressRange range;
+        if (!MakeArrayRange(item.original, codec->original_count,
+                sizeof(*item.original), range))
+            return LEO2_INTERNAL_ERROR;
+        if (!append(range, false))
+            return LEO2_INTERNAL_ERROR;
+        if (!MakeArrayRange(item.recovery, codec->recovery_count,
+                sizeof(*item.recovery), range))
+            return LEO2_INTERNAL_ERROR;
+        if (!append(range, false))
+            return LEO2_INTERNAL_ERROR;
+        if (!MakeArrayRange(item.restored_original, codec->original_count,
+                sizeof(*item.restored_original), range))
+            return LEO2_INTERNAL_ERROR;
+        if (!append(range, false))
+            return LEO2_INTERNAL_ERROR;
+        if (!MakeRange(item.scratch, item.scratch_bytes, range))
+            return LEO2_INTERNAL_ERROR;
+        if (!append(range, true))
+            return LEO2_INTERNAL_ERROR;
+        for (uint32_t i = 0; i < codec->original_count; ++i)
+        {
+            const bool writable = item.original[i] == NULL;
+            const void* const shard = writable
+                ? item.restored_original[i] : item.original[i];
+            if (!MakeRange(shard, item.shard_bytes, range))
+                return LEO2_INTERNAL_ERROR;
+            if (!append(range, writable))
+                return LEO2_INTERNAL_ERROR;
+        }
+        for (uint32_t i = 0; i < codec->recovery_count; ++i)
+        {
+            if (!item.recovery[i])
+                continue;
+            if (!MakeRange(item.recovery[i], item.shard_bytes, range))
+                return LEO2_INTERNAL_ERROR;
+            if (!append(range, false))
+                return LEO2_INTERNAL_ERROR;
+        }
+    }
+    if (count > capacity)
+        return LEO2_INTERNAL_ERROR;
+    SortBatchRangesWithoutAllocation(ranges, count);
+    return ValidateSortedBatchRanges(ranges, count);
+}
+
 struct EncodeBatchTaskContext
 {
     const leo2_codec* codec;
@@ -3559,6 +3922,32 @@ static leo2_result PreflightEncodeBatchTask(void* context)
     return PreflightEncodeBatch(batch->codec, batch->items,
         batch->item_bytes / sizeof(*batch->items), batch->item_range,
         batch->item_bytes);
+}
+
+static leo2_result RunEncodeBatchItem(void* context, size_t index);
+
+struct ScalableEncodeBatchPreflightContext
+{
+    EncodeBatchTaskContext batch;
+    void* scratch;
+    size_t scratch_bytes;
+};
+
+static leo2_result PreflightEncodeBatchScalableTask(void* context)
+{
+    const ScalableEncodeBatchPreflightContext* scalable =
+        static_cast<const ScalableEncodeBatchPreflightContext*>(context);
+    const EncodeBatchTaskContext& batch = scalable->batch;
+    return PreflightEncodeBatchScalable(batch.codec, batch.items,
+        batch.item_bytes / sizeof(*batch.items), batch.item_range,
+        scalable->scratch, scalable->scratch_bytes);
+}
+
+static leo2_result RunScalableEncodeBatchItem(void* context, size_t index)
+{
+    ScalableEncodeBatchPreflightContext* scalable =
+        static_cast<ScalableEncodeBatchPreflightContext*>(context);
+    return RunEncodeBatchItem(&scalable->batch, index);
 }
 
 static leo2_result RunEncodeBatchItem(void* context, size_t index)
@@ -3587,6 +3976,32 @@ static leo2_result PreflightDecodeBatchTask(void* context)
     return PreflightDecodeBatch(batch->plan, batch->items,
         batch->item_bytes / sizeof(*batch->items), batch->item_range,
         batch->item_bytes);
+}
+
+static leo2_result RunDecodeBatchItem(void* context, size_t index);
+
+struct ScalableDecodeBatchPreflightContext
+{
+    DecodeBatchTaskContext batch;
+    void* scratch;
+    size_t scratch_bytes;
+};
+
+static leo2_result PreflightDecodeBatchScalableTask(void* context)
+{
+    const ScalableDecodeBatchPreflightContext* scalable =
+        static_cast<const ScalableDecodeBatchPreflightContext*>(context);
+    const DecodeBatchTaskContext& batch = scalable->batch;
+    return PreflightDecodeBatchScalable(batch.plan, batch.items,
+        batch.item_bytes / sizeof(*batch.items), batch.item_range,
+        scalable->scratch, scalable->scratch_bytes);
+}
+
+static leo2_result RunScalableDecodeBatchItem(void* context, size_t index)
+{
+    ScalableDecodeBatchPreflightContext* scalable =
+        static_cast<ScalableDecodeBatchPreflightContext*>(context);
+    return RunDecodeBatchItem(&scalable->batch, index);
 }
 
 static leo2_result RunDecodeBatchItem(void* context, size_t index)
@@ -4499,7 +4914,7 @@ LEO2_EXPORT leo2_result leo2_encode(
         scratch, scratch_bytes, NULL, 0, false);
 }
 
-LEO2_EXPORT leo2_result leo2_encode_batch(
+static leo2_result EncodeBatchCompatibilityInternal(
     const leo2_codec* codec,
     const leo2_encode_batch_item* items,
     size_t item_count)
@@ -4544,6 +4959,68 @@ LEO2_EXPORT leo2_result leo2_encode_batch(
     for (size_t i = 0; i < item_count; ++i)
     {
         const leo2_result result = RunEncodeBatchItem(&batch, i);
+        if (result != LEO2_SUCCESS)
+            return result;
+    }
+    return LEO2_SUCCESS;
+}
+
+LEO2_EXPORT leo2_result leo2_encode_batch(
+    const leo2_codec* codec,
+    const leo2_encode_batch_item* items,
+    size_t item_count)
+{
+    return EncodeBatchCompatibilityInternal(codec, items, item_count);
+}
+
+LEO2_EXPORT leo2_result leo2_encode_batch_preflight_scratch_size(
+    const leo2_codec* codec,
+    size_t item_count,
+    size_t* scratch_bytes_out)
+{
+    if (!scratch_bytes_out)
+        return LEO2_INVALID_ARGUMENT;
+    *scratch_bytes_out = 0;
+    return EncodeBatchPreflightScratchBytes(
+        codec, item_count, *scratch_bytes_out);
+}
+
+LEO2_EXPORT leo2_result leo2_encode_batch_with_preflight_scratch(
+    const leo2_codec* codec,
+    const leo2_encode_batch_item* items,
+    size_t item_count,
+    void* preflight_scratch,
+    size_t preflight_scratch_bytes)
+{
+    /* Preserve the established empty/single-item validation, metadata
+       protection, and lazy-worker behavior without imposing a new workspace. */
+    if (item_count < kScalableBatchPreflightMinItems)
+        return EncodeBatchCompatibilityInternal(codec, items, item_count);
+    if (item_count > 0xffffffffu || !items || !codec)
+        return LEO2_INVALID_ARGUMENT;
+    size_t item_bytes = 0;
+    AddressRange item_range = { 0, 0 };
+    if (!CheckedMultiply(item_count, sizeof(*items), item_bytes) ||
+        !MakeRange(items, static_cast<uint64_t>(item_bytes), item_range))
+        return LEO2_INVALID_ARGUMENT;
+
+    ScalableEncodeBatchPreflightContext scalable = {
+        { codec, items, item_bytes, item_range },
+        preflight_scratch,
+        preflight_scratch_bytes
+    };
+    if (codec->context->pool)
+        return codec->context->pool->Run(item_count,
+            RunScalableEncodeBatchItem, &scalable,
+            PreflightEncodeBatchScalableTask);
+    const leo2_result preflight =
+        PreflightEncodeBatchScalableTask(&scalable);
+    if (preflight != LEO2_SUCCESS)
+        return preflight;
+    for (size_t i = 0; i < item_count; ++i)
+    {
+        const leo2_result result =
+            RunScalableEncodeBatchItem(&scalable, i);
         if (result != LEO2_SUCCESS)
             return result;
     }
@@ -4979,7 +5456,7 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
         scratch, scratch_bytes, false, NULL, 0, false);
 }
 
-LEO2_EXPORT leo2_result leo2_decode_plan_execute_batch(
+static leo2_result DecodeBatchCompatibilityInternal(
     const leo2_decode_plan* plan,
     const leo2_decode_batch_item* items,
     size_t item_count)
@@ -5013,6 +5490,71 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute_batch(
     for (size_t i = 0; i < item_count; ++i)
     {
         const leo2_result result = RunDecodeBatchItem(&batch, i);
+        if (result != LEO2_SUCCESS)
+            return result;
+    }
+    return LEO2_SUCCESS;
+}
+
+LEO2_EXPORT leo2_result leo2_decode_plan_execute_batch(
+    const leo2_decode_plan* plan,
+    const leo2_decode_batch_item* items,
+    size_t item_count)
+{
+    return DecodeBatchCompatibilityInternal(plan, items, item_count);
+}
+
+LEO2_EXPORT leo2_result leo2_decode_plan_batch_preflight_scratch_size(
+    const leo2_decode_plan* plan,
+    size_t item_count,
+    size_t* scratch_bytes_out)
+{
+    if (!scratch_bytes_out)
+        return LEO2_INVALID_ARGUMENT;
+    *scratch_bytes_out = 0;
+    return DecodeBatchPreflightScratchBytes(
+        plan, item_count, *scratch_bytes_out);
+}
+
+LEO2_EXPORT leo2_result
+leo2_decode_plan_execute_batch_with_preflight_scratch(
+    const leo2_decode_plan* plan,
+    const leo2_decode_batch_item* items,
+    size_t item_count,
+    void* preflight_scratch,
+    size_t preflight_scratch_bytes)
+{
+    /* The compatibility entry point owns the exact true-no-op and one-item
+       semantics, including validation of only top-level item-array arithmetic
+       for a no-loss plan. */
+    if (item_count < kScalableBatchPreflightMinItems ||
+        (plan && plan->no_op))
+        return DecodeBatchCompatibilityInternal(plan, items, item_count);
+    if (item_count > 0xffffffffu || !items || !plan)
+        return LEO2_INVALID_ARGUMENT;
+    size_t item_bytes = 0;
+    AddressRange item_range = { 0, 0 };
+    if (!CheckedMultiply(item_count, sizeof(*items), item_bytes) ||
+        !MakeRange(items, static_cast<uint64_t>(item_bytes), item_range))
+        return LEO2_INVALID_ARGUMENT;
+
+    ScalableDecodeBatchPreflightContext scalable = {
+        { plan, items, item_bytes, item_range, true },
+        preflight_scratch,
+        preflight_scratch_bytes
+    };
+    if (plan->codec->context->pool)
+        return plan->codec->context->pool->Run(item_count,
+            RunScalableDecodeBatchItem, &scalable,
+            PreflightDecodeBatchScalableTask);
+    const leo2_result preflight =
+        PreflightDecodeBatchScalableTask(&scalable);
+    if (preflight != LEO2_SUCCESS)
+        return preflight;
+    for (size_t i = 0; i < item_count; ++i)
+    {
+        const leo2_result result =
+            RunScalableDecodeBatchItem(&scalable, i);
         if (result != LEO2_SUCCESS)
             return result;
     }
