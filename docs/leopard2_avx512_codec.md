@@ -2,15 +2,78 @@
 
 ## Disposition
 
-AVX-512BW nibble kernels are a strong production-integration candidate, but
-this checkpoint does **not** enable them in the library.  On the tested AMD
-Ryzen 9 9950X3D, the complete four-parity codec-like chain was 37.9% to 119.2%
-faster than its AVX2 counterpart over 64 B through 16 MiB shards.  Radix-4 and
-radix-8 chains also favored AVX-512BW at every tested size.  Promotion still
-requires runtime dispatch, full Leopard2 encode/decode measurements, another
-AVX-512 microarchitecture, and a cleaner repeat of the noisy 16 MiB codec
-cell.  In other words: advance AVX-512BW to production integration testing,
-but do not make it the default from this standalone result alone.
+The full-codec GF16 AVX-512VL/BW integration candidate is **rejected**.  It
+did not meet the experiment's promotion rule: a credible improvement of at
+least 5% in the target regime, no unexplained neighboring regression above
+2%, and closure of the corresponding exact-Leopard-main encode gap.  No
+AVX-512 backend, public backend selector, CMake source, or runtime-dispatch
+change from this follow-up is present in the production tree.
+
+The candidate isolated a 256-bit AVX-512VL/BW GF16 radix-four kernel in its
+own ISA translation unit.  It used the expanded vector register file while
+retaining YMM-width memory operations and the legacy wire representation.
+`AUTO` remained AVX2; the experimental backend required explicit selection.
+Exhaustive kernel tests covered all 65,535 ordinary GF16 logarithm values in
+each multiplier position, forward and inverse radix-four forms, and scalar
+equality.  Backend KAT, context, public API, direct encode, portable-ISA,
+tests-off archive, and benchmark-parser gates passed.  Parity and recovered
+data digests matched exact main in every retained timing invocation.
+
+Pinned full-codec results used an AMD Ryzen 9 9950X3D, CPU 4, reserved SMT
+sibling 20, three independent ABBA rounds, nine samples per child, two
+warmups, loss count 8, and plan reuse 8.  Ratios are exact-main time divided
+by candidate time, so values above one favor the candidate.  Exact main was
+commit `6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198`; the experiment and hardened
+evidence-runner commits were `66701c69074385a62bae8edf66038c67a76684a7`
+and `eba41f7c47d860dfcb03d9199473780a3aeac0e7` respectively.
+
+| Cell | Encode, 95% CI | Decode first use, 95% CI | Decode reuse 8, 95% CI |
+| --- | ---: | ---: | ---: |
+| K=1000 R=200, 64 KiB | 0.917 [0.914,0.919] | 2.981 [2.970,2.992] | 3.000 [2.989,3.012] |
+| K=4096 R=512, 4 KiB | 1.018 [1.012,1.024] | 2.026 [2.006,2.045] | 2.156 [2.136,2.177] |
+| K=1000 R=200, 32 KiB neighbor | 0.973 [0.910,1.039] | 1.939 [1.935,1.944] | 1.963 [1.958,1.968] |
+
+Thus the candidate still encoded the primary K=1000/R=200 cell 8.35% slower
+than exact main.  It closed the K=4096/R=512 gap, but only by 1.8%, whose
+lower confidence bound was far below 5%.  The neighboring encode result was
+inconclusive and did not exclude a regression.  The 1.94x to 3.00x decode
+speedups confirm that the experiment did not regress Leopard2's specialized
+decoder, but they do not justify a backend whose purpose was to close the
+remaining encode gap.  A preliminary same-binary comparison also showed only
+about 2% over AVX2 at K=1000/R=200, consistent with the exact-main result and
+below the kill threshold.
+
+Two initial combined campaigns were deliberately rejected rather than quoted:
+the reserved sibling accumulated 14 non-idle jiffies during an overlapping
+parallel build and 3 during the coordinated retry.  Splitting the cells into
+shorter independent campaigns produced zero-sibling-work manifests.  The
+ignored research cache retains the rejected `failure.json` files and the
+three verified manifests:
+
+- `.research/leopard2/gf16-avx512-eba41f7-exact-main-cpu4-20260718/`
+  (`failure.json` SHA-256
+  `885f97c799c86d23f1221adce09425e0cf4c6150bcb1f30ad0e642aa683da9d1`);
+- `.research/leopard2/gf16-avx512-eba41f7-exact-main-cpu4-retry1-20260718/`
+  (`failure.json` SHA-256
+  `9b56551d251fcc5029744c0b0b3d8d1bc0d24f5bbfe0756077387f25dd38f40e`);
+- `.research/leopard2/gf16-avx512-eba41f7-k1000-r200-64k-cpu4-20260718/`
+  (`manifest.json` SHA-256
+  `2c8bae43f6b2bd9c5323f5152b484a6c049bcd8a3dcd912be846e42b72ae8a2a`);
+- `.research/leopard2/gf16-avx512-eba41f7-k4096-r512-4k-cpu4-20260718/`
+  (`manifest.json` SHA-256
+  `dd121b9d38f8b6a01d6f33a87721b7218e33c65bcc6ecfe1245f4dce78d92907`);
+- `.research/leopard2/gf16-avx512-eba41f7-k1000-r200-32k-cpu4-20260718/`
+  (`manifest.json` SHA-256
+  `45b8d46d4146502e9d840d4b1eff85b6ffe5330c71abec18aabaa14607e29d34`).
+
+## Earlier standalone checkpoint
+
+The earlier isolated GF8 microkernel experiment remains useful as a warning
+against promoting from a favorable synthetic chain.  Its AVX-512BW
+four-parity codec-like chain was 37.9% to 119.2% faster than AVX2 over 64 B
+through 16 MiB shards, and its radix-4 and radix-8 chains favored AVX-512BW at
+every tested size.  Those results justified the bounded full-codec follow-up
+above; they did not predict its end-to-end gain.
 
 The tested AVX-512VBMI four-quadrant 256-byte lookup is rejected.  It was
 slower than the AVX-512BW two-nibble lookup in every multiplication,
