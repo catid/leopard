@@ -155,6 +155,11 @@ struct leo2_decode_plan
     bool direct_repair;
 };
 
+namespace leopard {
+int InitializeLibrary(
+    backend::QualificationStatus* qualification_failure_out);
+}
+
 static leo2_result DecodePlanExecuteInternal(
     const leo2_decode_plan* plan,
     uint64_t shard_bytes,
@@ -1283,16 +1288,29 @@ static leo2_backend RuntimeBackend()
 
 static leo2_result EnsureInitialized()
 {
-    // leo_init() serializes and publishes all process-global setup.  Calling
-    // it on each context construction preserves retry semantics after a
-    // transient setup failure while remaining cheap after the first success.
-    const int result = leo_init();
-    if (result == Leopard_Success)
-        return LEO2_SUCCESS;
-    if (leopard::backend::StartupQualificationFailure() ==
-            leopard::backend::QualificationOutOfMemory)
-        return LEO2_OUT_OF_MEMORY;
-    return LEO2_INTERNAL_ERROR;
+    // Every Leopard2 caller observes the same first process-wide setup result.
+    // The detailed qualification status is captured by the shared initializer
+    // while it still owns the legacy initialization lock; a concurrent direct
+    // leo_init() retry therefore cannot race or rewrite this cached outcome.
+    static std::mutex mutex;
+    static bool attempted = false;
+    static leo2_result cached_result = LEO2_INTERNAL_ERROR;
+    std::lock_guard<std::mutex> lock(mutex);
+    if (!attempted)
+    {
+        leopard::backend::QualificationStatus qualification =
+            leopard::backend::QualificationAvailable;
+        const int result = leopard::InitializeLibrary(&qualification);
+        if (result == Leopard_Success)
+            cached_result = LEO2_SUCCESS;
+        else if (qualification ==
+                    leopard::backend::QualificationOutOfMemory)
+            cached_result = LEO2_OUT_OF_MEMORY;
+        else
+            cached_result = LEO2_INTERNAL_ERROR;
+        attempted = true;
+    }
+    return cached_result;
 }
 
 static bool MakeRange(const void* pointer, uint64_t bytes, AddressRange& range)

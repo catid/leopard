@@ -41,9 +41,6 @@
 #include <mutex>
 #include <string.h>
 
-extern "C" {
-
-
 //------------------------------------------------------------------------------
 // Initialization API
 
@@ -119,10 +116,13 @@ static LegacyGeometryResult GetLegacyGeometry(
     return LegacyGeometryValid;
 }
 
-LEO_EXPORT int leo_init_(int version)
+namespace leopard {
+
+int InitializeLibrary(
+    backend::QualificationStatus* qualification_failure_out)
 {
-    if (version != LEO_VERSION)
-        return Leopard_InvalidInput;
+    if (qualification_failure_out)
+        *qualification_failure_out = backend::QualificationAvailable;
 
     // Initialization publishes process-global CPU features, field tables, and
     // backend tables.  Serialize the complete transaction so legacy callers
@@ -159,11 +159,27 @@ LEO_EXPORT int leo_init_(int version)
 #endif
     };
     if (!leopard::backend::Initialize(backend_args))
+    {
+        if (qualification_failure_out)
+            *qualification_failure_out =
+                leopard::backend::StartupQualificationFailure();
         return Leopard_Platform;
+    }
 
 
     m_Initialized.store(true, std::memory_order_release);
     return Leopard_Success;
+}
+
+} // namespace leopard
+
+extern "C" {
+
+LEO_EXPORT int leo_init_(int version)
+{
+    if (version != LEO_VERSION)
+        return Leopard_InvalidInput;
+    return leopard::InitializeLibrary(NULL);
 }
 
 //------------------------------------------------------------------------------

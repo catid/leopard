@@ -4,6 +4,7 @@
 */
 
 #include "Leopard2Backend.h"
+#include "leopard.h"
 #include "leopard2.h"
 
 #include <atomic>
@@ -215,6 +216,18 @@ void run_failure_case(leo2_backend backend, const char* stage)
             "lower-backend failure changed the process default");
         leo2_context_destroy(automatic);
     }
+
+    // Legacy initialization remains explicitly retryable.  Leopard2 must keep
+    // the first context-setup outcome deterministic even if a direct legacy
+    // retry subsequently succeeds and updates backend qualification globals.
+    require(leo_init() == Leopard_Success,
+        "direct legacy initialization retry failed");
+    leo2_context* after_legacy_retry = reinterpret_cast<leo2_context*>(
+        static_cast<uintptr_t>(1));
+    require(leo2_context_create(&options, &after_legacy_retry) == expected,
+        "legacy retry rewrote cached Leopard2 startup failure");
+    require(after_legacy_retry == NULL,
+        "cached failure after legacy retry did not clear context output");
 
     std::printf("Backend failure case passed: backend=%u stage=%s "
         "threads=%u expected=%d table_bytes=%llu\n",

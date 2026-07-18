@@ -145,7 +145,11 @@ typedef enum leo2_backend {
     LEO2_INTERNAL_ERROR.
     Independent contexts may select different tables concurrently without
     changing the wire profile or process-global legacy leo_* selection.  NEON
-    remains an exact request for the existing active ARM path.
+    remains an exact request for the existing active ARM path.  Leopard2 caches
+    the first process-wide initialization outcome so concurrent and later
+    context constructors report one deterministic result.  An application that
+    needs explicit retry after a transient startup failure should call
+    leo_init() to completion before its first Leopard2 context construction.
 */
 typedef struct leo2_context_options {
     size_t struct_size;
