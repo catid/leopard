@@ -511,6 +511,14 @@ add_executable(test_leopard_ff8xor_statistics tests/test_ff8xor_statistics.cpp)
 target_link_libraries(test_leopard_ff8xor_statistics libleopard)
 add_test(NAME leopard_ff8xor_statistics COMMAND test_leopard_ff8xor_statistics)
 
+add_executable(test_leopard_ff8xor_locator_selector
+    tests/test_ff8xor_locator_selector.cpp)
+target_include_directories(test_leopard_ff8xor_locator_selector PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(test_leopard_ff8xor_locator_selector libleopard)
+add_test(NAME leopard_ff8xor_locator_selector
+    COMMAND test_leopard_ff8xor_locator_selector)
+
 add_executable(test_leopard_ff8xor_four_buffer_runtime
     tests/test_ff8xor_four_buffer_runtime.cpp)
 target_include_directories(test_leopard_ff8xor_four_buffer_runtime PRIVATE

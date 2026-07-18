@@ -927,8 +927,8 @@ public:
         const leopard::ff8xor::CircuitStatistics ifft =
             leopard::ff8xor::GetIFFTCircuitStatistics();
         MeasurementOrder = options.abba
-            ? "ABBA end-to-end, XOR-batch pairs, and transpose pairs; other micro/boundary sequential"
-            : "packed-then-ff8xor end-to-end; XOR-batch pairs ABBA; transpose pairs ABBA; other micro/boundary sequential";
+            ? "end-to-end pairs ABBA; XOR-batch pairs ABBA; locator-selector pairs ABBA; transpose pairs ABBA; other micro/boundary sequential"
+            : "packed-then-ff8xor end-to-end; XOR-batch pairs ABBA; locator-selector pairs ABBA; transpose pairs ABBA; other micro/boundary sequential";
         if (CSV)
         {
             std::cout
@@ -1010,8 +1010,8 @@ public:
                 << (options.cache_color ? "true" : "false")
                 << ',' << Json("measurement_order") << ':'
                 << Json(options.abba
-                    ? "ABBA for paired end-to-end rows, XOR-batch pairs, and transpose pairs; other micro/boundary sequential"
-                    : "packed-then-ff8xor end-to-end; XOR-batch pairs ABBA; transpose pairs ABBA; other micro/boundary sequential")
+                    ? "end-to-end pairs ABBA; XOR-batch pairs ABBA; locator-selector pairs ABBA; transpose pairs ABBA; other micro/boundary sequential"
+                    : "packed-then-ff8xor end-to-end; XOR-batch pairs ABBA; locator-selector pairs ABBA; transpose pairs ABBA; other micro/boundary sequential")
                 << "}\n";
             GateJSON("multiply", multiply);
             GateJSON("fft", fft);
@@ -1039,8 +1039,8 @@ public:
             << (options.include_transpose ? "included" : "disabled") << '\n'
             << "measurement order: "
             << (options.abba
-                ? "ABBA for paired end-to-end rows, XOR-batch pairs, and transpose pairs; other micro/boundary sequential"
-                : "packed then ff8xor end-to-end; XOR-batch pairs ABBA; transpose pairs ABBA; other micro/boundary sequential") << '\n'
+                ? "end-to-end pairs ABBA; XOR-batch pairs ABBA; locator-selector pairs ABBA; transpose pairs ABBA; other micro/boundary sequential"
+                : "packed then ff8xor end-to-end; XOR-batch pairs ABBA; locator-selector pairs ABBA; transpose pairs ABBA; other micro/boundary sequential") << '\n'
             << "PMU counters: "
             << (options.counters ? "requested" : "disabled") << '\n'
             << "ff8xor allocations: "
@@ -1733,7 +1733,8 @@ static std::string ScheduleID(
     std::ostringstream id;
     id << operation << "-k" << original_count << "-r" << recovery_count
         << "-b" << buffer_bytes;
-    if (strcmp(operation, "decode") == 0)
+    if (strcmp(operation, "decode") == 0 ||
+        strcmp(operation, "locator_shift_select") == 0)
         id << "-loss" << loss_count;
     return id.str();
 }
@@ -2417,17 +2418,157 @@ static void PrintMicro(
     uint64_t input_bytes,
     uint64_t output_bytes,
     uint64_t modeled_payload_bytes,
-    const char* measurement_order = "sequential")
+    const char* measurement_order = "sequential",
+    unsigned original_count = 0,
+    unsigned recovery_count = 0,
+    unsigned loss_count = 0,
+    unsigned locator_shift = std::numeric_limits<unsigned>::max())
 {
     Result result = MakeResult(options, backend, operation, false,
-        0, 0, buffer_bytes, 0, timing, input_bytes, output_bytes, 0,
-        note.c_str());
+        original_count, recovery_count, buffer_bytes, loss_count,
+        timing, input_bytes, output_bytes, 0, note.c_str());
     result.record = "microbenchmark";
     result.modeled_payload_bytes = modeled_payload_bytes;
     result.modeled_payload_bytes_adjusted =
         static_cast<int64_t>(modeled_payload_bytes);
     result.measurement_order = measurement_order;
+    result.locator_shift = locator_shift;
     reporter.Print(result);
+}
+
+static bool RunLocatorSelectorMicrobenchmarks(
+    const Options& options,
+    Reporter& reporter)
+{
+    struct SelectorCase
+    {
+        unsigned OriginalCount;
+        unsigned RecoveryCount;
+        unsigned LossCount;
+    };
+    static const SelectorCase kCases[] = {
+        { 8, 2, 1 },
+        { 16, 4, 4 },
+        { 32, 8, 4 },
+        { 64, 16, 8 },
+        { 128, 32, 16 },
+        { 128, 128, 128 }
+    };
+
+    for (size_t case_index = 0;
+         case_index < sizeof(kCases) / sizeof(kCases[0]);
+         ++case_index)
+    {
+        const SelectorCase parameters = kCases[case_index];
+        const unsigned term_count =
+            parameters.OriginalCount + parameters.LossCount;
+        leopard::ff8xor::ffe_t logarithms[leopard::ff8xor::kOrder];
+        bool inverse[leopard::ff8xor::kOrder];
+        uint32_t random = UINT32_C(0x51ec7001) ^
+            (parameters.OriginalCount << 16) ^
+            (parameters.RecoveryCount << 8) ^ parameters.LossCount;
+        for (unsigned index = 0; index < term_count; ++index)
+        {
+            random ^= random << 13;
+            random ^= random >> 17;
+            random ^= random << 5;
+            logarithms[index] = static_cast<leopard::ff8xor::ffe_t>(random);
+            inverse[index] = index >= parameters.OriginalCount;
+        }
+        // Exercise the redundant multiplier-one logarithm in every timed case.
+        logarithms[0] = leopard::ff8xor::kModulus;
+
+        const unsigned reference_shift =
+            leopard::ff8xor::SelectLocatorShiftReferenceForTesting(
+                logarithms, inverse, term_count);
+        const unsigned rotated_shift =
+            leopard::ff8xor::SelectLocatorShiftForTesting(
+                logarithms, inverse, term_count);
+        if (reference_shift != rotated_shift ||
+            reference_shift >= leopard::ff8xor::kModulus)
+        {
+            std::cerr << "locator selector microbenchmark mismatch: k="
+                << parameters.OriginalCount
+                << " r=" << parameters.RecoveryCount
+                << " loss=" << parameters.LossCount
+                << " reference=" << reference_shift
+                << " rotated=" << rotated_shift << '\n';
+            return false;
+        }
+
+        typedef unsigned (*SelectorFunction)(
+            const leopard::ff8xor::ffe_t*, const bool*, unsigned);
+        SelectorFunction volatile reference_function =
+            &leopard::ff8xor::SelectLocatorShiftReferenceForTesting;
+        SelectorFunction volatile rotated_function =
+            &leopard::ff8xor::SelectLocatorShiftForTesting;
+        const auto reference = [&]() -> LeopardResult {
+            BenchmarkSink ^=
+                reference_function(logarithms, inverse, term_count);
+            return Leopard_Success;
+        };
+        const auto rotated = [&]() -> LeopardResult {
+            BenchmarkSink ^=
+                rotated_function(logarithms, inverse, term_count);
+            return Leopard_Success;
+        };
+        Timing reference_timing;
+        Timing rotated_timing;
+        LeopardResult result = Leopard_Success;
+        if (!MeasurePairABBA(
+                options,
+                reference,
+                rotated,
+                reference_timing,
+                rotated_timing,
+                result))
+        {
+            return false;
+        }
+
+        std::ostringstream reference_note;
+        reference_note << "old shift-major exact gate/depth scoring; terms="
+            << term_count << "; selected_shift=" << reference_shift
+            << "; paired ABBA control";
+        std::ostringstream rotated_note;
+        rotated_note << "generated rotated gate rows; depth only on gate ties; "
+            << "terms=" << term_count
+            << "; selected_shift=" << rotated_shift
+            << "; paired ABBA";
+        PrintMicro(
+            options,
+            reporter,
+            "ff8xor_selector_reference",
+            "locator_shift_select",
+            reference_note.str(),
+            reference_timing,
+            0,
+            0,
+            0,
+            0,
+            "ABBA",
+            parameters.OriginalCount,
+            parameters.RecoveryCount,
+            parameters.LossCount,
+            reference_shift);
+        PrintMicro(
+            options,
+            reporter,
+            "ff8xor_selector_rotated",
+            "locator_shift_select",
+            rotated_note.str(),
+            rotated_timing,
+            0,
+            0,
+            0,
+            0,
+            "ABBA",
+            parameters.OriginalCount,
+            parameters.RecoveryCount,
+            parameters.LossCount,
+            rotated_shift);
+    }
+    return true;
 }
 
 struct CircuitCase
@@ -2526,6 +2667,9 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
     options.warmups = base_options.quick ? 2 : 3;
     options.iterations = base_options.quick ? 15 : 31;
     const uint64_t bytes = base_options.quick ? 64 * 1024 : 1024 * 1024;
+
+    if (!RunLocatorSelectorMicrobenchmarks(options, reporter))
+        return false;
 
     BufferSet a;
     BufferSet b;

@@ -188,6 +188,22 @@ unsigned GetLastLocatorShiftForTesting();
 // -1 restores automatic gate/depth minimization; 0..254 forces a common shift.
 void SetLocatorShiftForTesting(int shift);
 
+// Pure exact selector hook.  Logarithm 255 is canonicalized to multiply-log
+// zero; inverse entries score -(log + shift).  The objective is minimum total
+// gates, then minimum total depth, then lowest numeric shift.  A zero count
+// permits null pointers.  Invalid pointers/count return the sentinel 255.
+unsigned SelectLocatorShiftForTesting(
+    const ffe_t* logarithms,
+    const bool* inverse,
+    unsigned count);
+
+// Retained shift-major implementation of the same objective for reproducible
+// selector microbenchmarks.  Tests compare both hooks with a separate oracle.
+unsigned SelectLocatorShiftReferenceForTesting(
+    const ffe_t* logarithms,
+    const bool* inverse,
+    unsigned count);
+
 // Exercise the logical-state butterfly planner directly.  The caller must
 // provide payloads matching the declared zero/equality relation.  Deferred
 // zero outputs are materialized before return for byte-exact comparison.

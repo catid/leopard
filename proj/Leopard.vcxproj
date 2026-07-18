@@ -28,6 +28,7 @@
     <ClInclude Include="..\LeopardFF8XorDerivative.h" />
     <ClInclude Include="..\leopard_ff8xor.h" />
     <ClInclude Include="..\generated\LeopardFF8XorCircuits.inl" />
+    <ClInclude Include="..\generated\LeopardFF8XorLocatorRotations.inl" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="..\leopard.cpp" />

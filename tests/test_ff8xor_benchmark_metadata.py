@@ -122,6 +122,14 @@ def main():
     portable_profile = next(
         profile for profile in profile_artifact["profiles"]
         if profile["id"] == "portable-default-v1")
+    schedule_artifact = json.loads((repository_root / "generated" /
+                                    "FF8XorScheduleCorpus.json").read_text(
+                                        encoding="utf-8"))
+    expected_locator_shifts = {
+        record["id"]: record["locator_shift"]
+        for record in schedule_artifact["records"]
+        if record["operation"] == "decode"
+    }
     result = subprocess.run(
         [sys.argv[1], "--quick", "--json", "--no-pin"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -140,6 +148,8 @@ def main():
             "benchmark traffic-accounting schema version changed")
     require("XOR-batch pairs ABBA" in metadata[0]["measurement_order"],
             "metadata omitted unconditional XOR-batch ABBA sampling")
+    require("locator-selector pairs" in metadata[0]["measurement_order"],
+            "metadata omitted unconditional locator-selector ABBA sampling")
     require(metadata[0].get("circuit_cost_profile_id") ==
             "portable-default-v1",
             "metadata omitted the generated circuit selection profile")
@@ -182,6 +192,42 @@ def main():
                 (record["operation"], record.get("measurement_order")))
         require("paired ABBA" in record.get("note", ""),
                 "%s row lost paired-sampling note" % record["operation"])
+
+    selector_rows = [record for record in records
+                     if record.get("record") == "microbenchmark" and
+                     record.get("operation") == "locator_shift_select"]
+    expected_selector_schedules = {
+        "locator_shift_select-k8-r2-b0-loss1",
+        "locator_shift_select-k16-r4-b0-loss4",
+        "locator_shift_select-k32-r8-b0-loss4",
+        "locator_shift_select-k64-r16-b0-loss8",
+        "locator_shift_select-k128-r32-b0-loss16",
+        "locator_shift_select-k128-r128-b0-loss128",
+    }
+    require(len(selector_rows) == 12,
+            "quick benchmark did not emit six locator-selector ABBA pairs")
+    selector_pairs = {}
+    for record in selector_rows:
+        require(record.get("measurement_order") == "ABBA" and
+                "paired ABBA" in record.get("note", ""),
+                "locator-selector row mislabeled paired sampling")
+        require(record.get("locator_shift") is not None and
+                0 <= int(record["locator_shift"]) < 255,
+                "locator-selector row omitted its selected shift")
+        require(record.get("schedule_id", "").endswith(
+                    "-loss%d" % int(record["loss_count"])),
+                "locator-selector schedule ID omitted its loss count")
+        selector_pairs.setdefault(record["schedule_id"], []).append(record)
+    require(set(selector_pairs) == expected_selector_schedules,
+            "locator-selector schedule set changed: %r" %
+            sorted(selector_pairs))
+    for schedule_id, pair in selector_pairs.items():
+        require({record["backend"] for record in pair} == {
+                    "ff8xor_selector_reference",
+                    "ff8xor_selector_rotated"} and
+                len(pair) == 2 and
+                len({int(record["locator_shift"]) for record in pair}) == 1,
+                "locator-selector pair disagrees for %s" % schedule_id)
 
     traffic_fields = {
         "modeled_payload_bytes_scheduled",
@@ -236,6 +282,14 @@ def main():
                     "native decode fused-traffic model is stale: "
                     "expected %d, observed %d for %s" %
                     (expected, scheduled, record["schedule_id"]))
+            require(record["schedule_id"] in expected_locator_shifts and
+                    record.get("locator_shift") ==
+                    expected_locator_shifts[record["schedule_id"]],
+                    "native decode production locator gather selected a "
+                    "stale shift for %s: expected %r, observed %r" %
+                    (record["schedule_id"],
+                     expected_locator_shifts.get(record["schedule_id"]),
+                     record.get("locator_shift")))
         full_chunk_encode = (record["operation"] == "encode" and
                              record["k"] %
                              next_power_of_two(record["r"]) == 0)
@@ -292,6 +346,31 @@ def main():
                 for record in csv_circuit_metadata),
             "CSV circuit metadata omitted profile provenance")
 
+    csv_selector_rows = [record for record in csv_records
+                         if record.get("record") == "microbenchmark" and
+                         record.get("operation") == "locator_shift_select"]
+    csv_selector_pairs = {}
+    for record in csv_selector_rows:
+        require(record.get("measurement_order") == "ABBA" and
+                "paired ABBA" in record.get("note", "") and
+                record.get("locator_shift") not in ("", "null") and
+                0 <= int(record["locator_shift"]) < 255 and
+                record.get("schedule_id", "").endswith(
+                    "-loss%s" % record.get("loss_count")),
+                "CSV locator-selector paired metadata is incomplete")
+        csv_selector_pairs.setdefault(
+            record["schedule_id"], []).append(record)
+    require(set(csv_selector_pairs) == expected_selector_schedules,
+            "CSV locator-selector schedule set changed: %r" %
+            sorted(csv_selector_pairs))
+    for schedule_id, pair in csv_selector_pairs.items():
+        require({record["backend"] for record in pair} == {
+                    "ff8xor_selector_reference",
+                    "ff8xor_selector_rotated"} and
+                len(pair) == 2 and
+                len({int(record["locator_shift"]) for record in pair}) == 1,
+                "CSV locator-selector pair disagrees for %s" % schedule_id)
+
     csv_end_to_end = [record for record in csv_records
                       if record.get("record") == "benchmark" and
                       record.get("backend") in
@@ -323,6 +402,11 @@ def main():
                     "CSV native decode fused-traffic model is stale: "
                     "expected %d, observed %d for %s" %
                     (expected, scheduled, record["schedule_id"]))
+            require(record["schedule_id"] in expected_locator_shifts and
+                    int(record["locator_shift"]) ==
+                    expected_locator_shifts[record["schedule_id"]],
+                    "CSV native decode production locator gather selected a "
+                    "stale shift for %s" % record["schedule_id"])
         full_chunk_encode = (record["operation"] == "encode" and
                              int(record["k"]) %
                              next_power_of_two(int(record["r"])) == 0)

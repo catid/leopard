@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Keep mandatory FF8 XOR fallback objects in the Visual Studio project."""
+"""Keep mandatory FF8 XOR fallback objects/data in the VS project."""
 
 from pathlib import Path
 import sys
@@ -27,6 +27,7 @@ def main() -> int:
         "ClInclude": {
             r"..\LeopardFF8XorAVX512Four.h",
             r"..\LeopardFF8XorDerivative.h",
+            r"..\generated\LeopardFF8XorLocatorRotations.inl",
         },
         "ClCompile": {r"..\LeopardFF8XorAVX512Four.cpp"},
     }
@@ -43,9 +44,9 @@ def main() -> int:
         for failure in failures:
             print("FAIL:", failure, file=sys.stderr)
         print(
-            "LeopardFF8Xor.cpp directly references the four-buffer namespace; "
-            "the separate translation unit supplies required portable stubs "
-            "when AVX-512 generation is disabled.",
+            "The Visual Studio project must list both generated FF8 XOR "
+            "metadata and translation units that provide portable stubs "
+            "when optional SIMD generation is disabled.",
             file=sys.stderr,
         )
         return 1

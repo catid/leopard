@@ -1387,7 +1387,10 @@ static bool TestPackedEquivalence()
         {  32,   8, 65536, 0x80320008U, "encode k=32 r=8 bytes=65536" },
         {  64,  16,  1024, 0x10640010U, "encode k=64 r=16 bytes=1024" },
         { 128,  32,  4096, 0x20800020U, "encode k=128 r=32 bytes=4096" },
-        { 128, 128,  1024, 0x80800080U, "encode k=128 r=128 bytes=1024" }
+        { 128, 128,  1024, 0x80800080U, "encode k=128 r=128 bytes=1024" },
+        // One-loss decode has all two recovery shards available plus all 254
+        // original decisions, exercising the selector's 256-term bound.
+        { 254,   2,    64, 0x22540002U, "encode k=254 r=2 bytes=64" }
     };
 
     for (unsigned index = 0;

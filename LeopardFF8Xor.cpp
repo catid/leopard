@@ -78,6 +78,7 @@ static LEO_FORCE_INLINE LEO_M128 XorValue(LEO_M128 x, LEO_M128 y)
 }} // namespace leopard::ff8xor
 
 #include "generated/LeopardFF8XorCircuits.inl"
+#include "generated/LeopardFF8XorLocatorRotations.inl"
 
 namespace leopard { namespace ff8xor {
 
@@ -2668,51 +2669,150 @@ static LEO_FORCE_INLINE ffe_t InverseShiftedLog(
     return static_cast<ffe_t>(shifted == 0 ? 0 : kModulus - shifted);
 }
 
-static unsigned SelectLocatorShift(
-    const ffe_t* error_locations,
-    unsigned original_count,
-    unsigned recovery_count,
-    unsigned m,
-    const void* const* original,
-    const void* const* recovery)
+struct LocatorShiftTerm
 {
+    uint8_t BaseLog;
+    uint8_t Inverse;
+};
+
+// GCC's -O3 -floop-unroll-and-jam pass combines adjacent terms in the nested
+// accumulator below and turns the 256-shift loop into scalar stack updates.
+// Keeping that single pass off lets the existing vectorizer widen each term's
+// independent uint8_t-to-uint16_t accumulation.  Other compilers either do not
+// expose this pass through a function attribute or already generate the
+// intended vector loop.  Apply the same scoped guard to native and MinGW GCC;
+// MSVC and Clang do not enter this compiler-specific path.
+#if defined(__GNUC__) && !defined(__clang__) && (__GNUC__ >= 8)
+    #define LEO_FF8XOR_NO_UNROLL_AND_JAM \
+        __attribute__((optimize("no-loop-unroll-and-jam")))
+#else
+    #define LEO_FF8XOR_NO_UNROLL_AND_JAM
+#endif
+
+static_assert(
+    kOrder * generated::kMultiplyMaxGateCount <= UINT16_MAX,
+    "locator gate totals fit in uint16_t");
+static_assert(
+    kOrder * generated::kMultiplyMaxDepth <= UINT16_MAX,
+    "locator depth totals fit in uint16_t");
+
+static LEO_FF8XOR_NO_UNROLL_AND_JAM unsigned SelectLocatorShiftTerms(
+    const LocatorShiftTerm* terms,
+    unsigned term_count)
+{
+    LEO_ALIGNED uint16_t gate_totals[kOrder] = {};
+
+    // Accumulate all 255 candidate rotations term by term.  The generated
+    // rows contain one extra duplicate entry so this hot inner loop has the
+    // power-of-two trip count 256; gate_totals[255] is intentionally ignored.
+    for (unsigned term_index = 0; term_index < term_count; ++term_index)
+    {
+        const LocatorShiftTerm& term = terms[term_index];
+        const uint8_t* row = term.Inverse
+            ? generated::kLocatorInverseGateCosts
+            : generated::kLocatorPositiveGateCosts;
+        row += term.BaseLog;
+        for (unsigned shift = 0; shift < kOrder; ++shift)
+        {
+            gate_totals[shift] = static_cast<uint16_t>(
+                gate_totals[shift] + row[shift]);
+        }
+    }
+
+    uint16_t best_gates = UINT16_MAX;
+    for (unsigned shift = 0; shift < kModulus; ++shift)
+    {
+        if (gate_totals[shift] < best_gates)
+            best_gates = gate_totals[shift];
+    }
+
+    unsigned best_shift = 0;
+    unsigned best_depth = UINT_MAX;
+    for (unsigned shift = 0; shift < kModulus; ++shift)
+    {
+        if (gate_totals[shift] != best_gates)
+            continue;
+
+        unsigned depth = 0;
+        for (unsigned term_index = 0; term_index < term_count; ++term_index)
+        {
+            const LocatorShiftTerm& term = terms[term_index];
+            const uint8_t* row = term.Inverse
+                ? generated::kLocatorInverseDepthCosts
+                : generated::kLocatorPositiveDepthCosts;
+            depth += row[term.BaseLog + shift];
+        }
+
+        // Strict improvement plus ascending scan preserves the old lowest
+        // numeric shift tie-break when both gate count and depth are equal.
+        if (depth < best_depth)
+        {
+            best_depth = depth;
+            best_shift = shift;
+        }
+    }
+
+    return best_shift;
+}
+
+#undef LEO_FF8XOR_NO_UNROLL_AND_JAM
+
+#ifdef _MSC_VER
+    #define LEO_FF8XOR_LOCATOR_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+    #define LEO_FF8XOR_LOCATOR_NOINLINE __attribute__((noinline))
+#else
+    #define LEO_FF8XOR_LOCATOR_NOINLINE
+#endif
+
+LEO_FF8XOR_LOCATOR_NOINLINE unsigned SelectLocatorShiftForTesting(
+    const ffe_t* logarithms,
+    const bool* inverse,
+    unsigned count)
+{
+    if (count > kOrder ||
+        (count != 0 && (logarithms == NULL || inverse == NULL)))
+    {
+        return kModulus;
+    }
+
+    LocatorShiftTerm terms[kOrder];
+    for (unsigned index = 0; index < count; ++index)
+    {
+        terms[index].BaseLog = static_cast<uint8_t>(
+            CanonicalLog(logarithms[index]));
+        terms[index].Inverse = inverse[index] ? 1 : 0;
+    }
+    return SelectLocatorShiftTerms(terms, count);
+}
+
+LEO_FF8XOR_LOCATOR_NOINLINE unsigned
+SelectLocatorShiftReferenceForTesting(
+    const ffe_t* logarithms,
+    const bool* inverse,
+    unsigned count)
+{
+    if (count > kOrder ||
+        (count != 0 && (logarithms == NULL || inverse == NULL)))
+    {
+        return kModulus;
+    }
+
     uint64_t best_gates = UINT64_MAX;
     uint64_t best_depth = UINT64_MAX;
     unsigned best_shift = 0;
-
     for (unsigned shift = 0; shift < kModulus; ++shift)
     {
         uint64_t gates = 0;
         uint64_t depth = 0;
-
-        for (unsigned index = 0; index < recovery_count; ++index)
+        for (unsigned index = 0; index < count; ++index)
         {
-            if (recovery[index])
-            {
-                const ffe_t log = ShiftedLog(error_locations[index], shift);
-                gates += generated::kMultiplyGateCounts[log];
-                depth += generated::kMultiplyDepths[log];
-            }
+            const ffe_t log = inverse[index]
+                ? InverseShiftedLog(logarithms[index], shift)
+                : ShiftedLog(logarithms[index], shift);
+            gates += generated::kMultiplyGateCounts[log];
+            depth += generated::kMultiplyDepths[log];
         }
-
-        for (unsigned index = 0; index < original_count; ++index)
-        {
-            if (original[index])
-            {
-                const ffe_t log = ShiftedLog(
-                    error_locations[m + index], shift);
-                gates += generated::kMultiplyGateCounts[log];
-                depth += generated::kMultiplyDepths[log];
-            }
-            else
-            {
-                const ffe_t log = InverseShiftedLog(
-                    error_locations[m + index], shift);
-                gates += generated::kMultiplyGateCounts[log];
-                depth += generated::kMultiplyDepths[log];
-            }
-        }
-
         if (gates < best_gates ||
             (gates == best_gates && depth < best_depth))
         {
@@ -2721,8 +2821,42 @@ static unsigned SelectLocatorShift(
             best_shift = shift;
         }
     }
-
     return best_shift;
+}
+
+#undef LEO_FF8XOR_LOCATOR_NOINLINE
+
+static unsigned SelectLocatorShift(
+    const ffe_t* error_locations,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned m,
+    const void* const* original,
+    const void* const* recovery)
+{
+    LocatorShiftTerm terms[kOrder];
+    unsigned term_count = 0;
+
+    for (unsigned index = 0; index < recovery_count; ++index)
+    {
+        if (recovery[index])
+        {
+            terms[term_count].BaseLog = static_cast<uint8_t>(
+                CanonicalLog(error_locations[index]));
+            terms[term_count].Inverse = 0;
+            ++term_count;
+        }
+    }
+
+    for (unsigned index = 0; index < original_count; ++index)
+    {
+        terms[term_count].BaseLog = static_cast<uint8_t>(
+            CanonicalLog(error_locations[m + index]));
+        terms[term_count].Inverse = original[index] ? 0 : 1;
+        ++term_count;
+    }
+
+    return SelectLocatorShiftTerms(terms, term_count);
 }
 
 
