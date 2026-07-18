@@ -1243,6 +1243,39 @@ bool CompilePrunedTransformPlan(
                 ++i;
         }
 
+        if (inverse)
+        {
+            uint32_t prefix = 0;
+            while (prefix < size && candidate.input_mask[prefix] != 0)
+                ++prefix;
+            bool strict_prefix = prefix != 0 && prefix < size;
+            for (uint32_t i = prefix; i < size; ++i)
+                strict_prefix = strict_prefix && candidate.input_mask[i] == 0;
+            for (uint32_t i = 0; i < size; ++i)
+                strict_prefix = strict_prefix && candidate.output_mask[i] == 1;
+            if (strict_prefix)
+            {
+                candidate.inverse_source_prefix = prefix;
+                candidate.inverse_source_groups.reserve(prefix / 4U);
+                for (uint32_t base = 0; base + 4U <= prefix; base += 4U)
+                {
+                    const PrunedInverseSourceGroup group = {
+                        multiplier_log(multiplier_context,
+                            shift + base + 1U),
+                        multiplier_log(multiplier_context,
+                            shift + base + 3U),
+                        multiplier_log(multiplier_context,
+                            shift + base + 2U)
+                    };
+                    if (group.multiplier_log01 > zero_multiplier_log ||
+                        group.multiplier_log23 > zero_multiplier_log ||
+                        group.multiplier_log02 > zero_multiplier_log)
+                        return false;
+                    candidate.inverse_source_groups.push_back(group);
+                }
+            }
+        }
+
         plan = std::move(candidate);
         return true;
     }
@@ -1425,6 +1458,172 @@ bool ExecutePrunedForwardTransformPlanFromSources(
             return false;
         ++i;
     }
+    if (fused_index != plan.fused_four_starts.size())
+        return false;
+    for (size_t i = 0; i < plan.zero_outputs.size(); ++i)
+        memset(work[plan.zero_outputs[i]], 0,
+            static_cast<size_t>(byte_count));
+    return true;
+}
+
+static bool IsConsumedInverseSourceOperation(
+    const PrunedTransformOperation& operation,
+    uint32_t staged_prefix)
+{
+    if (operation.x >= staged_prefix || operation.y >= staged_prefix ||
+        (operation.x >> 2) != (operation.y >> 2))
+        return false;
+    const uint32_t x = operation.x & 3U;
+    const uint32_t y = operation.y & 3U;
+    return (x == 0U && (y == 1U || y == 2U)) ||
+        (x == 1U && y == 3U) || (x == 2U && y == 3U);
+}
+
+bool ExecutePrunedInverseTransformPlanFromSources(
+    const leopard::backend::Ops& ops,
+    uint64_t byte_count,
+    const PrunedTransformPlan& plan,
+    void* const* source,
+    void** work)
+{
+    const bool gf16 = plan.zero_multiplier_log == 65535U;
+    if ((plan.zero_multiplier_log != 255U && !gf16) ||
+        plan.size < 2 || !IsPowerOfTwo(plan.size) || !plan.inverse ||
+        !source || !work ||
+        plan.input_mask.size() != plan.size ||
+        plan.output_mask.size() != plan.size ||
+        plan.inverse_source_prefix == 0 ||
+        plan.inverse_source_prefix >= plan.size ||
+        plan.inverse_source_groups.size() !=
+            plan.inverse_source_prefix / 4U ||
+        byte_count > static_cast<uint64_t>(SIZE_MAX) ||
+        (gf16 && (byte_count & 1U) != 0))
+        return false;
+
+    for (uint32_t i = 0; i < plan.size; ++i)
+    {
+        const uint8_t expected =
+            static_cast<uint8_t>(i < plan.inverse_source_prefix);
+        if (plan.input_mask[i] != expected || plan.output_mask[i] != 1)
+            return false;
+    }
+    for (size_t i = 0; i < plan.inverse_source_groups.size(); ++i)
+    {
+        const PrunedInverseSourceGroup& group =
+            plan.inverse_source_groups[i];
+        if (group.multiplier_log01 > plan.zero_multiplier_log ||
+            group.multiplier_log23 > plan.zero_multiplier_log ||
+            group.multiplier_log02 > plan.zero_multiplier_log)
+            return false;
+    }
+    for (size_t i = 0; i < plan.zero_outputs.size(); ++i)
+        if (plan.zero_outputs[i] >= plan.size)
+            return false;
+    for (size_t i = 0; i < plan.fused_four_starts.size(); ++i)
+    {
+        const size_t start = plan.fused_four_starts[i];
+        FusedFourMatch match;
+        if (start > plan.operations.size() ||
+            plan.operations.size() - start < 4 ||
+            (i != 0 && plan.fused_four_starts[i - 1] + 4U > start) ||
+            !MatchFusedFour(plan.operations, start, true, match))
+            return false;
+    }
+    if (byte_count == 0)
+        return true;
+    for (uint32_t i = 0; i < plan.inverse_source_prefix; ++i)
+        if (!source[i])
+            return false;
+    for (uint32_t i = 0; i < plan.size; ++i)
+        if (!work[i])
+            return false;
+
+    const PrunedExecutionOps selected = {
+        gf16 ? ops.ff16_multiply : ops.ff8_multiply,
+        gf16 ? ops.ff16_multiply_add : ops.ff8_multiply_add,
+        gf16 ? ops.ff16_ifft_butterfly2 : ops.ff8_ifft_butterfly2,
+        gf16 ? ops.ff16_ifft_butterfly4 : ops.ff8_ifft_butterfly4,
+        gf16 ? ops.ff16_fft_butterfly2_out : ops.ff8_fft_butterfly2_out
+    };
+    const leopard::backend::IFFTButterfly4Out butterfly_four_out =
+        gf16 ? ops.ff16_ifft_butterfly4_out : ops.ff8_ifft_butterfly4_out;
+    if (!selected.multiply || !selected.multiply_add ||
+        !selected.butterfly || !selected.butterfly_four ||
+        !butterfly_four_out)
+        return false;
+
+    const uint32_t staged_prefix = static_cast<uint32_t>(
+        plan.inverse_source_groups.size() * 4U);
+    for (uint32_t base = 0; base < staged_prefix; base += 4U)
+    {
+        const PrunedInverseSourceGroup& group =
+            plan.inverse_source_groups[base >> 2];
+        butterfly_four_out(
+            source[base], source[base + 1U],
+            source[base + 2U], source[base + 3U],
+            work[base], work[base + 1U],
+            work[base + 2U], work[base + 3U],
+            group.multiplier_log01, group.multiplier_log23,
+            group.multiplier_log02, byte_count);
+    }
+    for (uint32_t i = staged_prefix; i < plan.inverse_source_prefix; ++i)
+        memcpy(work[i], source[i], static_cast<size_t>(byte_count));
+
+    size_t fused_index = 0;
+    for (size_t i = 0; i < plan.operations.size();)
+    {
+        while (fused_index < plan.fused_four_starts.size() &&
+            plan.fused_four_starts[fused_index] < i)
+            ++fused_index;
+
+        const PrunedTransformOperation& operation = plan.operations[i];
+        if (operation.x >= plan.size || operation.y >= plan.size ||
+            operation.x == operation.y ||
+            operation.multiplier_log > plan.zero_multiplier_log)
+            return false;
+        if (IsConsumedInverseSourceOperation(operation, staged_prefix))
+        {
+            ++i;
+            continue;
+        }
+
+        if (fused_index < plan.fused_four_starts.size() &&
+            plan.fused_four_starts[fused_index] == i)
+        {
+            bool consumed = false;
+            for (size_t j = 0; j < 4; ++j)
+                consumed = consumed || IsConsumedInverseSourceOperation(
+                    plan.operations[i + j], staged_prefix);
+            if (!consumed)
+            {
+                FusedFourMatch match;
+                if (!MatchFusedFour(plan.operations, i, true, match) ||
+                    match.value0 >= plan.size || match.value1 >= plan.size ||
+                    match.value2 >= plan.size || match.value3 >= plan.size ||
+                    match.multiplier_log01 > plan.zero_multiplier_log ||
+                    match.multiplier_log23 > plan.zero_multiplier_log ||
+                    match.multiplier_log02 > plan.zero_multiplier_log)
+                    return false;
+                selected.butterfly_four(
+                    work[match.value0], work[match.value1],
+                    work[match.value2], work[match.value3],
+                    match.multiplier_log01, match.multiplier_log23,
+                    match.multiplier_log02, byte_count);
+                ++fused_index;
+                i += 4;
+                continue;
+            }
+        }
+
+        if (!ExecutePrunedOperation(
+                ops, selected, true, plan.zero_multiplier_log, byte_count,
+                operation, work[operation.x], work[operation.y]))
+            return false;
+        ++i;
+    }
+    while (fused_index < plan.fused_four_starts.size() &&
+        plan.fused_four_starts[fused_index] < plan.operations.size())
+        ++fused_index;
     if (fused_index != plan.fused_four_starts.size())
         return false;
     for (size_t i = 0; i < plan.zero_outputs.size(); ++i)

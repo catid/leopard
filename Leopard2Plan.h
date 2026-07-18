@@ -93,6 +93,18 @@ struct PrunedTransformOperation
     uint8_t flags;
 };
 
+// One complete four-source prefix group consumed directly by the mature
+// out-of-place inverse backend.  The group index is implicit: entry i owns
+// coordinates 4*i..4*i+3.  Keeping only the three logarithms bounds maximum
+// GF16 metadata to 96 KiB while avoiding a byte-sized skip map for the much
+// larger flat operation schedule.
+struct PrunedInverseSourceGroup
+{
+    uint16_t multiplier_log01;
+    uint16_t multiplier_log23;
+    uint16_t multiplier_log02;
+};
+
 /*
     Immutable flat schedule for one exact parent-preserving LCH transform.
     input_mask marks the only coordinates allowed to be nonzero at execution;
@@ -123,6 +135,12 @@ struct PrunedTransformPlan
     // executor may use dead slots as temporary storage, then clears these at
     // final scatter so requested zero outputs remain exact.
     std::vector<uint32_t> zero_outputs;
+    // Populated only for inverse plans with a nonempty strict input prefix and
+    // complete output mask.  Execution can consume each complete four-shard
+    // prefix group directly from immutable caller sources, copy at most three
+    // ragged leaves, and leave every shortened suffix slot unmaterialized.
+    uint32_t inverse_source_prefix;
+    std::vector<PrunedInverseSourceGroup> inverse_source_groups;
     size_t full_butterfly_count;
     size_t one_output_butterflies;
     size_t input_zero_specializations;
@@ -135,6 +153,7 @@ struct PrunedTransformPlan
         , zero_multiplier_log(0)
         , first_layer_multiplier_log(0)
         , inverse(false)
+        , inverse_source_prefix(0)
         , full_butterfly_count(0)
         , one_output_butterflies(0)
         , input_zero_specializations(0)
@@ -276,6 +295,19 @@ bool ExecutePrunedTransformPlan(
 // used by high-rate Algorithm 5 to evaluate one reusable coefficient block on
 // multiple requested message cosets.
 bool ExecutePrunedForwardTransformPlanFromSources(
+    const leopard::backend::Ops& ops,
+    uint64_t byte_count,
+    const PrunedTransformPlan& plan,
+    void* const* source,
+    void** work);
+
+// Inverse-only companion for a strict nonempty prefix input and complete
+// output mask.  source contains exactly inverse_source_prefix accessible
+// entries; shortened suffix pointers need not exist and are never read.  Full
+// groups use the backend's out-of-place fused inverse butterfly, the ragged
+// tail copies at most three shards, and the flat C1 schedule treats the suffix
+// as structural zero without memset.  Source and work ranges are disjoint.
+bool ExecutePrunedInverseTransformPlanFromSources(
     const leopard::backend::Ops& ops,
     uint64_t byte_count,
     const PrunedTransformPlan& plan,

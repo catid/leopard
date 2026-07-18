@@ -65,6 +65,8 @@ uint64_t plan_storage_bytes(
         plan.operations.capacity() * sizeof(plan.operations[0]) +
         plan.fused_four_starts.capacity() *
             sizeof(plan.fused_four_starts[0]) +
+        plan.inverse_source_groups.capacity() *
+            sizeof(plan.inverse_source_groups[0]) +
         plan.zero_outputs.capacity() * sizeof(plan.zero_outputs[0]);
 }
 
@@ -375,6 +377,49 @@ void run_case(
     ++counts.plans;
     ++counts.executions;
 
+    bool strict_inverse_prefix = inverse && !input_mask.empty() &&
+        input_mask[0] != 0;
+    unsigned inverse_prefix = 0;
+    while (inverse_prefix < size && input_mask[inverse_prefix] != 0)
+        ++inverse_prefix;
+    strict_inverse_prefix = strict_inverse_prefix &&
+        inverse_prefix < size;
+    for (unsigned coordinate = inverse_prefix; coordinate < size; ++coordinate)
+        strict_inverse_prefix = strict_inverse_prefix &&
+            input_mask[coordinate] == 0;
+    for (unsigned coordinate = 0; coordinate < size; ++coordinate)
+        strict_inverse_prefix = strict_inverse_prefix &&
+            output_mask[coordinate] != 0;
+    if (strict_inverse_prefix)
+    {
+        require(plan.inverse_source_prefix == inverse_prefix &&
+                plan.inverse_source_groups.size() == inverse_prefix / 4U,
+            "inverse source-prefix metadata mismatch");
+        const std::vector<std::vector<uint8_t> > source_snapshot(initial);
+        std::vector<std::vector<uint8_t> > from_source(
+            size, std::vector<uint8_t>(static_cast<size_t>(bytes), 0xa5));
+        // Deliberately publish only the active prefix.  Any suffix validation
+        // or read by the executor is an out-of-bounds access under ASan.
+        std::vector<void*> immutable_source(inverse_prefix, NULL);
+        for (unsigned coordinate = 0; coordinate < inverse_prefix; ++coordinate)
+            immutable_source[coordinate] = initial[coordinate].data();
+        std::vector<void*> from_source_pointers = pointers(from_source);
+        require(
+            leopard2_internal::ExecutePrunedInverseTransformPlanFromSources(
+                ops, bytes, plan, immutable_source.data(),
+                from_source_pointers.data()),
+            "immutable-source inverse transform execution failed");
+        require(initial == source_snapshot,
+            "immutable-source inverse transform changed its evaluations");
+        for (unsigned coordinate = 0; coordinate < size; ++coordinate)
+        {
+            require(from_source[coordinate] == expected[coordinate],
+                "immutable-source inverse transform output mismatch");
+            counts.compared_bytes += bytes;
+        }
+        ++counts.executions;
+    }
+
     bool complete_input = !inverse;
     for (unsigned coordinate = 0; coordinate < size; ++coordinate)
         complete_input = complete_input && input_mask[coordinate] != 0;
@@ -575,6 +620,124 @@ void test_sparse_forward_direct_oracle(
                     ++counts.direct_symbols;
                 }
             }
+    }
+}
+
+template<class Field>
+void run_inverse_source_prefix_case(
+    const leopard::backend::Ops& ops,
+    unsigned size,
+    unsigned shift,
+    unsigned prefix,
+    uint64_t bytes,
+    uint64_t seed,
+    TestCounts& counts)
+{
+    require(prefix != 0 && prefix < size,
+        "invalid inverse source-prefix test geometry");
+    std::vector<uint8_t> input(size, 0);
+    std::vector<uint8_t> output(size, 1);
+    std::fill(input.begin(), input.begin() + prefix, 1);
+    leopard2_internal::PrunedTransformPlan plan;
+    require(Field::prepare(
+            size, shift, true, input.data(), output.data(), plan),
+        "inverse source-prefix plan construction failed");
+    require(plan.inverse_source_prefix == prefix &&
+            plan.inverse_source_groups.size() == prefix / 4U,
+        "inverse source-prefix plan metadata mismatch");
+
+    std::vector<std::vector<uint8_t> > source =
+        make_input(size, bytes, input, seed);
+    const std::vector<std::vector<uint8_t> > source_snapshot(source);
+    std::vector<std::vector<uint8_t> > expected(source);
+    std::vector<std::vector<uint8_t> > actual(
+        size, std::vector<uint8_t>(static_cast<size_t>(bytes), 0xa5));
+    std::vector<void*> expected_ptrs = pointers(expected);
+    Field::full(ops, true, bytes, size, shift, expected_ptrs.data());
+    // The pointer array ends at prefix.  ASan catches even validating one
+    // shortened suffix entry, independently of the zero-filled oracle data.
+    std::vector<void*> source_ptrs(prefix, NULL);
+    for (unsigned i = 0; i < prefix; ++i)
+        source_ptrs[i] = source[i].data();
+    std::vector<void*> actual_ptrs = pointers(actual);
+    require(
+        leopard2_internal::ExecutePrunedInverseTransformPlanFromSources(
+            ops, bytes, plan, source_ptrs.data(), actual_ptrs.data()),
+        "inverse source-prefix execution failed");
+    require(source == source_snapshot,
+        "inverse source-prefix execution changed caller sources");
+    for (unsigned i = 0; i < size; ++i)
+    {
+        require(actual[i] == expected[i],
+            "inverse source-prefix differs from padded inverse transform");
+        counts.compared_bytes += bytes;
+    }
+    ++counts.plans;
+    ++counts.executions;
+}
+
+template<class Field>
+void test_inverse_source_prefix_matrix(
+    const leopard::backend::Ops& ops,
+    const unsigned* sizes,
+    size_t size_count,
+    const uint64_t* byte_counts,
+    size_t byte_count,
+    TestCounts& counts)
+{
+    for (size_t size_i = 0; size_i < size_count; ++size_i)
+    {
+        const unsigned size = sizes[size_i];
+        const std::vector<unsigned> transform_shifts =
+            shifts(Field::order(), size);
+        for (size_t shift_i = 0; shift_i < transform_shifts.size(); ++shift_i)
+        {
+            // Exhaust every strict prefix through 64.  Larger production
+            // parents use all ragged/four-way boundary classes below without
+            // turning one CTest into thousands of OpenMP team launches.
+            if (size <= 64U)
+                for (unsigned prefix = 1; prefix < size; ++prefix)
+                    run_inverse_source_prefix_case<Field>(
+                        ops, size, transform_shifts[shift_i], prefix,
+                        Field::symbol_bytes(),
+                        UINT64_C(0x494e565052454658) ^
+                            (static_cast<uint64_t>(size) << 40) ^
+                            (static_cast<uint64_t>(shift_i) << 32) ^ prefix,
+                        counts);
+
+            // Boundary prefixes also cover every arbitrary byte tail used by
+            // the normal pruned-transform matrix.
+            std::vector<unsigned> boundaries;
+            const unsigned candidates[] = {
+                1U, 2U, 3U, 4U, 5U,
+                size / 2U > 0 ? size / 2U - 1U : 0U,
+                size / 2U, size / 2U + 1U,
+                size > 3U ? size - 3U : 0U,
+                size > 2U ? size - 2U : 0U,
+                size - 1U
+            };
+            for (size_t i = 0;
+                 i < sizeof(candidates) / sizeof(candidates[0]); ++i)
+                if (candidates[i] != 0 && candidates[i] < size &&
+                    std::find(boundaries.begin(), boundaries.end(),
+                        candidates[i]) == boundaries.end())
+                    boundaries.push_back(candidates[i]);
+            for (size_t bytes_i = 0; bytes_i < byte_count; ++bytes_i)
+            {
+                if (byte_counts[bytes_i] == Field::symbol_bytes())
+                    continue;
+                for (size_t prefix_i = 0;
+                     prefix_i < boundaries.size(); ++prefix_i)
+                    run_inverse_source_prefix_case<Field>(
+                        ops, size, transform_shifts[shift_i],
+                        boundaries[prefix_i], byte_counts[bytes_i],
+                        UINT64_C(0x494e565441494c53) ^
+                            (static_cast<uint64_t>(size) << 40) ^
+                            (static_cast<uint64_t>(shift_i) << 32) ^
+                            (static_cast<uint64_t>(bytes_i) << 24) ^
+                            boundaries[prefix_i], counts);
+            }
+        }
     }
 }
 
@@ -889,8 +1052,11 @@ bool same_plan(
         left.input_mask != right.input_mask ||
         left.output_mask != right.output_mask ||
         left.zero_outputs != right.zero_outputs ||
+        left.inverse_source_prefix != right.inverse_source_prefix ||
         left.operations.size() != right.operations.size() ||
         left.fused_four_starts != right.fused_four_starts ||
+        left.inverse_source_groups.size() !=
+            right.inverse_source_groups.size() ||
         left.full_butterfly_count != right.full_butterfly_count ||
         left.one_output_butterflies != right.one_output_butterflies ||
         left.input_zero_specializations != right.input_zero_specializations ||
@@ -905,6 +1071,17 @@ bool same_plan(
             right.operations[i];
         if (a.x != b.x || a.y != b.y ||
             a.multiplier_log != b.multiplier_log || a.flags != b.flags)
+            return false;
+    }
+    for (size_t i = 0; i < left.inverse_source_groups.size(); ++i)
+    {
+        const leopard2_internal::PrunedInverseSourceGroup& a =
+            left.inverse_source_groups[i];
+        const leopard2_internal::PrunedInverseSourceGroup& b =
+            right.inverse_source_groups[i];
+        if (a.multiplier_log01 != b.multiplier_log01 ||
+            a.multiplier_log23 != b.multiplier_log23 ||
+            a.multiplier_log02 != b.multiplier_log02)
             return false;
     }
     return true;
@@ -929,6 +1106,9 @@ void test_invalid_plan_construction()
     plan.operations.push_back(operation);
     plan.fused_four_starts.push_back(1);
     plan.zero_outputs.push_back(3);
+    plan.inverse_source_prefix = 1;
+    leopard2_internal::PrunedInverseSourceGroup source_group = { 1, 2, 3 };
+    plan.inverse_source_groups.push_back(source_group);
     plan.full_butterfly_count = 11;
     plan.one_output_butterflies = 12;
     plan.input_zero_specializations = 13;
@@ -1221,6 +1401,12 @@ int main()
                 *ops, sizes8, sizeof(sizes8) / sizeof(sizes8[0]),
                 bytes8, sizeof(bytes8) / sizeof(bytes8[0]), counts);
             test_sparse_forward_matrix<GF16>(
+                *ops, sizes16, sizeof(sizes16) / sizeof(sizes16[0]),
+                bytes16, sizeof(bytes16) / sizeof(bytes16[0]), counts);
+            test_inverse_source_prefix_matrix<GF8>(
+                *ops, sizes8, sizeof(sizes8) / sizeof(sizes8[0]),
+                bytes8, sizeof(bytes8) / sizeof(bytes8[0]), counts);
+            test_inverse_source_prefix_matrix<GF16>(
                 *ops, sizes16, sizeof(sizes16) / sizeof(sizes16[0]),
                 bytes16, sizeof(bytes16) / sizeof(bytes16[0]), counts);
             test_exhaustive_small_masks<GF8>(*ops, 17, counts);

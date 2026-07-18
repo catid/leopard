@@ -113,6 +113,9 @@ bool SamePlan(
         left.output_mask != right.output_mask ||
         left.fused_four_starts != right.fused_four_starts ||
         left.zero_outputs != right.zero_outputs ||
+        left.inverse_source_prefix != right.inverse_source_prefix ||
+        left.inverse_source_groups.size() !=
+            right.inverse_source_groups.size() ||
         left.operations.size() != right.operations.size() ||
         left.full_butterfly_count != right.full_butterfly_count ||
         left.one_output_butterflies != right.one_output_butterflies ||
@@ -128,6 +131,17 @@ bool SamePlan(
             right.operations[i];
         if (a.x != b.x || a.y != b.y ||
             a.multiplier_log != b.multiplier_log || a.flags != b.flags)
+            return false;
+    }
+    for (size_t i = 0; i < left.inverse_source_groups.size(); ++i)
+    {
+        const leopard2_internal::PrunedInverseSourceGroup& a =
+            left.inverse_source_groups[i];
+        const leopard2_internal::PrunedInverseSourceGroup& b =
+            right.inverse_source_groups[i];
+        if (a.multiplier_log01 != b.multiplier_log01 ||
+            a.multiplier_log23 != b.multiplier_log23 ||
+            a.multiplier_log02 != b.multiplier_log02)
             return false;
     }
     return true;
@@ -403,6 +417,53 @@ void RunCase(
         broken_source.input_mask[random.Next() % size] = 0;
         Check(!leopard2_internal::ExecutePrunedForwardTransformPlanFromSources(
             ops, bytes, broken_source, source.pointers.data(),
+            source_actual.pointers.data()));
+    }
+    else
+    {
+        const unsigned prefix = 1U +
+            static_cast<unsigned>(random.Next() % (size - 1U));
+        std::vector<uint8_t> prefix_input(size, 0);
+        std::vector<uint8_t> complete_output(size, 1);
+        std::fill(prefix_input.begin(), prefix_input.begin() + prefix, 1);
+        leopard2_internal::PrunedTransformPlan source_plan;
+        Check(Field::Prepare(
+            size, shift, true, prefix_input.data(), complete_output.data(),
+            source_plan));
+        Workspace source(size, bytes);
+        for (unsigned shard = 0; shard < prefix; ++shard)
+            for (size_t offset = 0; offset < bytes; ++offset)
+                source.shards[shard][offset] =
+                    static_cast<uint8_t>(random.Next());
+        Workspace source_snapshot(source);
+        Workspace source_expected(source);
+        Workspace source_actual(size, bytes);
+        for (unsigned i = 0; i < size; ++i)
+        {
+            source_snapshot.pointers[i] = source_snapshot.shards[i].data();
+            source_expected.pointers[i] = source_expected.shards[i].data();
+        }
+        Field::Full(
+            ops, true, bytes, size, shift, prefix,
+            source_expected.pointers.data());
+        std::vector<void*> prefix_pointers(prefix, NULL);
+        for (unsigned i = 0; i < prefix; ++i)
+            prefix_pointers[i] = source.pointers[i];
+        Check(leopard2_internal::ExecutePrunedInverseTransformPlanFromSources(
+            ops, bytes, source_plan, prefix_pointers.data(),
+            source_actual.pointers.data()));
+        Check(source.shards == source_snapshot.shards);
+        Check(source_actual.shards == source_expected.shards);
+
+        leopard2_internal::PrunedTransformPlan broken_source(source_plan);
+        broken_source.output_mask[random.Next() % size] = 0;
+        Check(!leopard2_internal::ExecutePrunedInverseTransformPlanFromSources(
+            ops, bytes, broken_source, prefix_pointers.data(),
+            source_actual.pointers.data()));
+        broken_source = source_plan;
+        broken_source.inverse_source_prefix = size;
+        Check(!leopard2_internal::ExecutePrunedInverseTransformPlanFromSources(
+            ops, bytes, broken_source, prefix_pointers.data(),
             source_actual.pointers.data()));
     }
 
