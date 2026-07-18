@@ -7,32 +7,38 @@ It does not build either side.  It accepts only the clean, tests-disabled,
 Release production builds described in the reproduction guide, verifies their
 source/object/archive/link/runtime closure, cleanly recompiles every retained
 source/object pair byte-for-byte, and then runs the fixed matrix. New evidence
-uses raw/manifest schema v4 and failure schema v4, binding the canonical CMake
-target `leopard`, archive `libleopard.a`, and `leopard.dir` object closure.
-V4 retains the exact bounded UTF-8 archive `link.txt` content, binds its byte
+uses raw/manifest/failure schema v5, truthfully binding the frozen commits'
+historical CMake target `libleopard`, archive `liblibleopard.a`, and
+`libleopard.dir` object closure. V5 retains the exact bounded UTF-8 archive
+`link.txt` content, binds its byte
 size and SHA-256 to the existing recipe-file identity, and parses those bytes
 to require the declared archive and ordinary-object target directory (backend
 object-library directories remain distinct allowed targets). Retained
-schema-v3 evidence replays against its exact historical
-`libleopard`/`liblibleopard.a` identity and record shape. A schema/path relabel
-that retains the old recipe bytes is rejected.
+schema-v3 evidence replays byte-for-byte without the new recipe-content fields.
+Canonical schema v4 remains independently replayable with target `leopard`,
+archive `libleopard.a`, and `leopard.dir`; schema/path/recipe relabeling across
+v3, v4, and v5 is rejected.
+
+The benchmark capability boundary is schema-authenticated too. Frozen v3/v5
+children predate `force_tiled_decode` and `force_materialized_decode`, so both
+keys must be absent. Canonical v4 requires both keys to be strict JSON `false`.
+Every version requires `force_generic_decode` and `force_specialized_decode` to
+be strict JSON `false`; integer lookalikes are rejected.
 
 The evidence digests are unkeyed integrity checks, not an external
 authenticity anchor. They detect edits relative to the retained evidence and
-the v4 semantic binding prevents re-signing only the schema and path labels
+the v5 semantic binding prevents re-signing only the schema and path labels
 around old recipe bytes. They cannot prevent an attacker from replacing every
 evidence byte and recomputing a completely internally consistent bundle.
 Preventing that stronger evidence re-authoring requires a trusted external
 signature, transparency log, or equivalent authenticity anchor.
 
 The frozen control and candidate commits both predate canonical-target commit
-`0a2a666`. They cannot produce a fresh v4 bundle while also satisfying the
-collector's exact-clean-commit rule: both source trees define only the
-historical target. Do not work around this with an unrecorded generated-build
-edit, copied archive, or dirty CMake overlay. Fresh v4 timing requires either
-new behavior-equivalent paired commits carrying the canonical rename or a
-separately versioned, fully authenticated external build wrapper. Until then,
-v3 replay is the reproducible evidence for this frozen comparison.
+`0a2a666`; therefore v5 is the only truthful generation schema for this exact
+pair and is the collector default. Do not rename generated files, copy the
+archive, or apply an unrecorded CMake overlay. Those changes would break the
+provenance claim. V4 support is retained for its own canonical evidence, never
+as a relabeling of these frozen historical builds.
 
 The evidence exit statuses are deliberately distinct:
 

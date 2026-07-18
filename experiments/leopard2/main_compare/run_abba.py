@@ -40,6 +40,8 @@ MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 RAW_SCHEMA_V1 = "leopard2-main-compare-raw/v1"
 RAW_SCHEMA_V2 = "leopard2-main-compare-raw/v2"
 RAW_SCHEMA = "leopard2-main-compare-raw/v3"
+HARDENED_HISTORICAL_BUILD_SCHEMA = \
+    "leopard2-main-compare-build/hardened-historical-v1"
 MANIFEST_SCHEMA_V1 = "leopard2-main-compare-manifest/v1"
 MANIFEST_SCHEMA_V2 = "leopard2-main-compare-manifest/v2"
 MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v3"
@@ -69,6 +71,18 @@ RAW_TO_CMAKE_IDENTITY = {
     RAW_SCHEMA_V2: HISTORICAL_CMAKE_IDENTITY,
     RAW_SCHEMA: CANONICAL_CMAKE_IDENTITY,
 }
+# This internal build-only schema lets another evidence family authenticate an
+# exact pre-rename CMake graph with current recipe-content hardening.  It is
+# deliberately absent from RAW_TO_CMAKE_IDENTITY and every manifest/failure
+# version map, so main-comparison evidence can never claim this private schema.
+BUILD_SCHEMA_TO_CMAKE_IDENTITY = {
+    **RAW_TO_CMAKE_IDENTITY,
+    HARDENED_HISTORICAL_BUILD_SCHEMA: HISTORICAL_CMAKE_IDENTITY,
+}
+HARDENED_BUILD_SCHEMAS = frozenset((
+    RAW_SCHEMA,
+    HARDENED_HISTORICAL_BUILD_SCHEMA,
+))
 MANIFEST_TO_RAW_SCHEMA = {
     MANIFEST_SCHEMA_V1: RAW_SCHEMA_V1,
     MANIFEST_SCHEMA_V2: RAW_SCHEMA_V2,
@@ -1235,6 +1249,14 @@ def cmake_identity_for_raw_schema(raw_schema: str) -> Mapping[str, str]:
     return identity
 
 
+def cmake_identity_for_build_schema(build_schema: str) -> Mapping[str, str]:
+    require(isinstance(build_schema, str),
+            "main-comparison build schema is not a string")
+    identity = BUILD_SCHEMA_TO_CMAKE_IDENTITY.get(build_schema)
+    require(identity is not None, "unsupported main-comparison build schema")
+    return identity
+
+
 def exact_text_content(text: str, label: str) -> dict[str, Any]:
     require(isinstance(text, str), f"{label} is not text")
     encoded = text.encode("utf-8")
@@ -1335,7 +1357,7 @@ def build_provenance(
 ) -> dict[str, Any]:
     build = Path(specification[f"{implementation}_build_dir"]).resolve(strict=True)
     require(build.is_dir(), f"{implementation} build path is not a directory: {build}")
-    cmake_identity = cmake_identity_for_raw_schema(raw_schema)
+    cmake_identity = cmake_identity_for_build_schema(raw_schema)
     names = ({
         "executable": "leopard_main_benchmark",
         "archive": "libleopard_main_exact.a",
@@ -1494,7 +1516,7 @@ def build_provenance(
         },
         "validated_compile_commands": semantics,
     }
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in HARDENED_BUILD_SCHEMAS:
         content = exact_text_content(
             archive_link, f"{implementation} archive link recipe")
         require(content["size"] == archive_link_identity["size"] and

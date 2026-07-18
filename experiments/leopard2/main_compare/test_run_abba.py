@@ -541,6 +541,23 @@ class MainCompareRunnerTests(unittest.TestCase):
         value["schema"] = runner.RAW_SCHEMA
         self.assert_rejected(value)
 
+    def test_private_hardened_historical_build_schema_is_not_evidence(self) -> None:
+        private = runner.HARDENED_HISTORICAL_BUILD_SCHEMA
+        self.assertIn(private, runner.BUILD_SCHEMA_TO_CMAKE_IDENTITY)
+        self.assertIn(private, runner.HARDENED_BUILD_SCHEMAS)
+        self.assertNotIn(private, runner.RAW_TO_CMAKE_IDENTITY)
+        self.assertNotIn(private, runner.MANIFEST_TO_RAW_SCHEMA.values())
+        self.assertNotIn(private, runner.FAILURE_TO_RAW_SCHEMA.values())
+        self.assertEqual(
+            runner.HISTORICAL_CMAKE_IDENTITY,
+            runner.cmake_identity_for_build_schema(private))
+        with self.assertRaises(runner.EvidenceError):
+            runner.cmake_identity_for_raw_schema(private)
+
+        value = synthetic_raw()
+        value["schema"] = private
+        self.assert_rejected(value)
+
     def test_coherent_historical_recipe_relabel_is_rejected(self) -> None:
         value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V2)
         value = recursively_replace_strings(value, (

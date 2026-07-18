@@ -41,24 +41,41 @@ from typing import Any, Callable, Mapping, Sequence
 CONTROL_COMMIT = "4070e4e527935026fb87593567587558f0a08d51"
 CANDIDATE_COMMIT = "6d3afee213b94d486cf5f8145ac18078883ebc20"
 RAW_SCHEMA_V3 = "leopard2-low-encode-copy-raw/v3"
-RAW_SCHEMA = "leopard2-low-encode-copy-raw/v4"
+RAW_SCHEMA_V4 = "leopard2-low-encode-copy-raw/v4"
+RAW_SCHEMA_V5 = "leopard2-low-encode-copy-raw/v5"
+RAW_SCHEMA = RAW_SCHEMA_V5
 MANIFEST_SCHEMA_V3 = "leopard2-low-encode-copy-manifest/v3"
-MANIFEST_SCHEMA = "leopard2-low-encode-copy-manifest/v4"
+MANIFEST_SCHEMA_V4 = "leopard2-low-encode-copy-manifest/v4"
+MANIFEST_SCHEMA_V5 = "leopard2-low-encode-copy-manifest/v5"
+MANIFEST_SCHEMA = MANIFEST_SCHEMA_V5
 FAILURE_SCHEMA_V3 = "leopard2-low-encode-copy-failure/v3"
-FAILURE_SCHEMA = "leopard2-low-encode-copy-failure/v4"
+FAILURE_SCHEMA_V4 = "leopard2-low-encode-copy-failure/v4"
+FAILURE_SCHEMA_V5 = "leopard2-low-encode-copy-failure/v5"
+FAILURE_SCHEMA = FAILURE_SCHEMA_V5
 EXECUTION_SCHEMA = "leopard2-low-encode-copy-execution/v1"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 RAW_TO_SUPPORT_SCHEMA = {
     RAW_SCHEMA_V3: "leopard2-main-compare-raw/v2",
-    RAW_SCHEMA: "leopard2-main-compare-raw/v3",
+    RAW_SCHEMA_V4: "leopard2-main-compare-raw/v3",
+    # The exact frozen A/B commits predate the canonical CMake-target rename.
+    # V5 adds the v4 recipe-content hardening while truthfully retaining their
+    # historical target/archive identity instead of relabeling it as current.
+    RAW_SCHEMA_V5: "leopard2-main-compare-build/hardened-historical-v1",
 }
 MANIFEST_TO_RAW_SCHEMA = {
     MANIFEST_SCHEMA_V3: RAW_SCHEMA_V3,
-    MANIFEST_SCHEMA: RAW_SCHEMA,
+    MANIFEST_SCHEMA_V4: RAW_SCHEMA_V4,
+    MANIFEST_SCHEMA_V5: RAW_SCHEMA_V5,
 }
 FAILURE_TO_RAW_SCHEMA = {
     FAILURE_SCHEMA_V3: RAW_SCHEMA_V3,
-    FAILURE_SCHEMA: RAW_SCHEMA,
+    FAILURE_SCHEMA_V4: RAW_SCHEMA_V4,
+    FAILURE_SCHEMA_V5: RAW_SCHEMA_V5,
+}
+HARDENED_RAW_SCHEMAS = frozenset((RAW_SCHEMA_V4, RAW_SCHEMA_V5))
+SELECTOR_PARAMETER_RAW_SCHEMAS = frozenset((RAW_SCHEMA_V4,))
+GENERATION_SCHEMAS = {
+    "historical-v5": (RAW_SCHEMA_V5, MANIFEST_SCHEMA_V5, FAILURE_SCHEMA_V5),
 }
 ROUNDS = 5
 SEQUENCE = (
@@ -659,6 +676,7 @@ def validate_execution_summary(
 def validate_support_contract() -> dict[str, Any]:
     required_callables = (
         "artifact_identity", "build_provenance", "canonical_bytes",
+        "cmake_identity_for_build_schema",
         "exact_text_content", "validate_archive_link_recipe_content",
         "cpu_stat_snapshot", "git_identity", "host_identity", "isolation_record",
         "PairLease", "StableLeaseAnchor", "parse_cpu_list", "runtime_closure",
@@ -672,8 +690,32 @@ def validate_support_contract() -> dict[str, Any]:
     require(SUPPORT.RESERVATION_SCHEMA == RESERVATION_SCHEMA,
             "support reservation schema changed")
     require(SUPPORT.RAW_SCHEMA_V2 == RAW_TO_SUPPORT_SCHEMA[RAW_SCHEMA_V3] and
-            SUPPORT.RAW_SCHEMA == RAW_TO_SUPPORT_SCHEMA[RAW_SCHEMA],
+            SUPPORT.RAW_SCHEMA == RAW_TO_SUPPORT_SCHEMA[RAW_SCHEMA_V4] and
+            SUPPORT.HARDENED_HISTORICAL_BUILD_SCHEMA ==
+            RAW_TO_SUPPORT_SCHEMA[RAW_SCHEMA_V5],
             "support CMake identity schema mapping changed")
+    require(SUPPORT.HARDENED_HISTORICAL_BUILD_SCHEMA in
+            SUPPORT.BUILD_SCHEMA_TO_CMAKE_IDENTITY and
+            SUPPORT.HARDENED_HISTORICAL_BUILD_SCHEMA not in
+            SUPPORT.RAW_TO_CMAKE_IDENTITY and
+            SUPPORT.HARDENED_HISTORICAL_BUILD_SCHEMA not in
+            SUPPORT.MANIFEST_TO_RAW_SCHEMA.values() and
+            SUPPORT.HARDENED_HISTORICAL_BUILD_SCHEMA not in
+            SUPPORT.FAILURE_TO_RAW_SCHEMA.values(),
+            "support admitted the private historical build schema as evidence")
+    require(dict(SUPPORT.cmake_identity_for_build_schema(
+                SUPPORT.HARDENED_HISTORICAL_BUILD_SCHEMA)) == {
+                    "target": "libleopard",
+                    "archive": "liblibleopard.a",
+                    "target_directory": "libleopard.dir",
+                } and
+            dict(SUPPORT.cmake_identity_for_build_schema(
+                SUPPORT.RAW_SCHEMA)) == {
+                    "target": "leopard",
+                    "archive": "libleopard.a",
+                    "target_directory": "leopard.dir",
+                },
+            "support CMake target/archive literals changed")
     require(SUPPORT.MAX_LINK_RECIPE_BYTES == MAX_LINK_RECIPE_BYTES,
             "support retained link-recipe byte bound changed")
     require(SUPPORT.PAIR_LEASE_SCHEMA == "leopard2-cpu-pair-lease/v1",
@@ -1078,13 +1120,19 @@ def support_schema_for_raw(raw_schema: str) -> str:
     return support_schema
 
 
+def generation_schemas(name: object) -> tuple[str, str, str]:
+    require(isinstance(name, str) and name in GENERATION_SCHEMAS,
+            "unsupported low-copy generation schema")
+    return GENERATION_SCHEMAS[name]
+
+
 def validate_build_provenance(
     side: str, specification: Mapping[str, Any],
     raw_schema: str = RAW_SCHEMA,
 ) -> dict[str, Any]:
     build = Path(specification[f"{side}_build_dir"]).resolve(strict=True)
     support_schema = support_schema_for_raw(raw_schema)
-    cmake_identity = SUPPORT.cmake_identity_for_raw_schema(support_schema)
+    cmake_identity = SUPPORT.cmake_identity_for_build_schema(support_schema)
     for relative in (
         "CMakeCache.txt", "compile_commands.json",
         "CMakeFiles/bench_leopard2.dir/link.txt",
@@ -1285,12 +1333,12 @@ def validate_archive_link_recipe_content(
     """
     support_schema_for_raw(raw_schema)
     content = build.get("archive_link_recipe_content")
-    if raw_schema == RAW_SCHEMA_V3:
+    if raw_schema not in HARDENED_RAW_SCHEMAS:
         require(content is None,
                 f"historical {side} build unexpectedly embeds recipe content")
         return
 
-    identity = SUPPORT.cmake_identity_for_raw_schema(
+    identity = SUPPORT.cmake_identity_for_build_schema(
         support_schema_for_raw(raw_schema))
     link = build.get("strict_link_provenance")
     require(isinstance(link, dict) and
@@ -1338,7 +1386,7 @@ def validate_cmake_identity_paths(
     side: str, specification: Mapping[str, Any], build: Mapping[str, Any],
     outer_archive: Mapping[str, Any], raw_schema: str,
 ) -> None:
-    cmake_identity = SUPPORT.cmake_identity_for_raw_schema(
+    cmake_identity = SUPPORT.cmake_identity_for_build_schema(
         support_schema_for_raw(raw_schema))
     recipe = build.get("archive_link_recipe")
     require(isinstance(recipe, dict) and
@@ -1366,7 +1414,7 @@ def validate_build_identity(
         "validated_cache", "validated_compile_commands", "validated_executable",
         "strict_compile_recipes", "clean_recompile_proof", "strict_link_provenance",
     }
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in HARDENED_RAW_SCHEMAS:
         expected_keys.update({
             "archive_link_recipe_content", "archive_link_tool_invocations",
             "ranlib"})
@@ -1384,7 +1432,7 @@ def validate_build_identity(
         ("archive_link_recipe", "build_metadata"),
         ("compiler", "compiler"),
         ("archiver", "archiver"),
-    ) + (("ranlib", "ranlib"),) * (raw_schema == RAW_SCHEMA) + (
+    ) + (("ranlib", "ranlib"),) * (raw_schema in HARDENED_RAW_SCHEMAS) + (
         ("validated_executable", "executable"),
         ("validated_archive", "archive"),
     )
@@ -1431,7 +1479,7 @@ def validate_build_identity(
                            expected_kind="compiler")
     validate_file_identity(value.get("archiver"), f"{side} archiver",
                            expected_path="/usr/bin/ar", expected_kind="archiver")
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in HARDENED_RAW_SCHEMAS:
         validate_file_identity(value.get("ranlib"), f"{side} ranlib",
                                expected_path="/usr/bin/ranlib",
                                expected_kind="ranlib")
@@ -2197,7 +2245,7 @@ def validate_result(
         "thread_count": 1,
         "seed": cell.seed,
     }
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in SELECTOR_PARAMETER_RAW_SCHEMAS:
         expected.update({
             "force_tiled_decode": False,
             "force_materialized_decode": False,
@@ -2415,6 +2463,7 @@ def run_child(
     timeout: float,
     snapshot: Callable[[], Mapping[str, Any]],
     validate_guards: Callable[[], None],
+    raw_schema: str = RAW_SCHEMA,
 ) -> dict[str, Any]:
     validate_guards()
     identity_before = snapshot()
@@ -2449,7 +2498,7 @@ def run_child(
     require(returncode == 0,
             f"benchmark {implementation}/{cell.identifier}/{label} exited {returncode}")
     result = parse_json_bytes(stdout, "benchmark stdout", MAX_STDOUT_BYTES)
-    normalized = validate_result(result, cell, campaign)
+    normalized = validate_result(result, cell, campaign, raw_schema)
     validate_guards()
     identity_after = snapshot()
     require(identity_after == initial_identity,
@@ -2555,7 +2604,9 @@ def validate_campaign(
     return value, campaign_cells(value, allow_self_test)
 
 
-def validate_input_specification(value: object) -> dict[str, str]:
+def validate_input_specification(
+    value: object, raw_schema: str,
+) -> dict[str, str]:
     expected = {
         "candidate_archive", "candidate_build_dir", "candidate_executable",
         "candidate_source_root", "control_archive", "control_build_dir",
@@ -2567,6 +2618,12 @@ def validate_input_specification(value: object) -> dict[str, str]:
             "input specification is incomplete or has unexpected fields")
     for name, item in value.items():
         validate_path_text(item, f"input specification {name}", absolute=True)
+    identity = SUPPORT.cmake_identity_for_build_schema(
+        support_schema_for_raw(raw_schema))
+    require(all(
+        Path(value[f"{side}_archive"]).name == identity["archive"]
+        for side in ("control", "candidate")),
+        "input archive names differ from the evidence schema")
     return value
 
 
@@ -2694,7 +2751,8 @@ def validate_raw(
     SUPPORT.validate_host_record(raw.get("host_initial"), cpu, sibling, allowed)
     isolation = SUPPORT.validate_isolation(raw.get("isolation"), cpu, sibling)
     reservation = validate_reservation_identity(raw.get("reservation"), cpu, sibling)
-    specification = validate_input_specification(raw.get("input_specification"))
+    specification = validate_input_specification(
+        raw.get("input_specification"), raw_schema)
     initial = raw.get("identities_initial")
     require(isinstance(initial, dict) and raw.get("identities_final") == initial,
             "input source/build identities changed during campaign")
@@ -2827,7 +2885,9 @@ def validate_failure(
     campaign, cells = validate_campaign(failure.get("campaign"), allow_self_test)
     cpu = campaign["benchmark_cpu"]
     sibling = campaign["reserved_sibling"]
-    specification = validate_input_specification(failure.get("input_specification"))
+    specification = validate_input_specification(
+        failure.get("input_specification"),
+        FAILURE_TO_RAW_SCHEMA[failure_schema])
     host = failure.get("host_initial")
     if "topology_validated" in completed:
         require(host is not None, "failure topology phase lacks host identity")
@@ -3054,7 +3114,9 @@ def publish_failure(
     publish_no_replace(stage, output)
 
 
-def authoritative_specification(options: argparse.Namespace) -> dict[str, str]:
+def authoritative_specification(
+    options: argparse.Namespace, raw_schema: str,
+) -> dict[str, str]:
     taskset = options.taskset.resolve(strict=True)
     ldd = options.ldd.resolve(strict=True)
     git = Path("/usr/bin/git").resolve(strict=True)
@@ -3078,7 +3140,7 @@ def authoritative_specification(options: argparse.Namespace) -> dict[str, str]:
         "runner": str(Path(__file__).resolve(strict=True)),
         "taskset": str(taskset),
     }
-    validate_input_specification(specification)
+    validate_input_specification(specification, raw_schema)
     return specification
 
 
@@ -3107,6 +3169,8 @@ class TrackedContextExit:
 
 
 def run_campaign(options: argparse.Namespace) -> int:
+    raw_schema, manifest_schema, failure_schema = generation_schemas(
+        options.generation_schema)
     require(type(options.iterations) is int and
             5 <= options.iterations <= MAX_ITERATIONS,
             "--iterations is out of bounds")
@@ -3127,7 +3191,7 @@ def run_campaign(options: argparse.Namespace) -> int:
             "launch affinity must contain the pair and at least one housekeeping CPU")
     for cell in FIXED_CELLS:
         validate_cell(cell)
-    specification = authoritative_specification(options)
+    specification = authoritative_specification(options, raw_schema)
     campaign: dict[str, Any] = {
         "allowed_cpu_set_at_launch": sorted(allowed),
         "batch": 1,
@@ -3190,7 +3254,7 @@ def run_campaign(options: argparse.Namespace) -> int:
                 validate_exact_affinity(housekeeping)
 
             validate_guards()
-            initial = input_snapshot(specification)
+            initial = input_snapshot(specification, raw_schema)
             completed_phases.append("inputs_attested")
             execution_guard = ImmutableExecutables(stage, specification, initial)
             execution, execution_descriptors = execution_guard.__enter__()
@@ -3198,7 +3262,7 @@ def run_campaign(options: argparse.Namespace) -> int:
             completed_phases.append("executables_staged")
 
             def snapshot() -> Mapping[str, Any]:
-                return input_snapshot(specification)
+                return input_snapshot(specification, raw_schema)
 
             completed_phases.append("measurement_started")
             before_monotonic_ns = time.monotonic_ns()
@@ -3212,7 +3276,8 @@ def run_campaign(options: argparse.Namespace) -> int:
                                 implementation, label, cell, round_index, slot,
                                 campaign, specification, initial, reservation,
                                 execution, execution_descriptors, stage,
-                                options.cpu, options.timeout, snapshot, validate_guards)
+                                options.cpu, options.timeout, snapshot, validate_guards,
+                                raw_schema)
                             validate_guards()
                             invocations.append(invocation)
             finally:
@@ -3227,7 +3292,7 @@ def run_campaign(options: argparse.Namespace) -> int:
             require(isolation["accepted"] is True,
                     "reserved SMT sibling performed non-idle work during the campaign")
             completed_phases.append("measurement_completed")
-            final = input_snapshot(specification)
+            final = input_snapshot(specification, raw_schema)
             require(final == initial, "input identity changed during campaign")
             host_final = SUPPORT.host_identity(
                 options.cpu, options.reserved_sibling, allowed)
@@ -3247,7 +3312,7 @@ def run_campaign(options: argparse.Namespace) -> int:
                 "invocations": invocations,
                 "isolation": isolation,
                 "reservation": reservation,
-                "schema": RAW_SCHEMA,
+                "schema": raw_schema,
                 "validity_is_independent_of_speed": True,
             })
             validate_guards()
@@ -3265,7 +3330,7 @@ def run_campaign(options: argparse.Namespace) -> int:
                 "isolation": isolation,
                 "raw": raw_file_identity(raw_path, raw),
                 "reservation": reservation,
-                "schema": MANIFEST_SCHEMA,
+                "schema": manifest_schema,
                 "status": status,
                 "valid": True,
                 "validity_is_independent_of_speed": True,
@@ -3355,7 +3420,7 @@ def run_campaign(options: argparse.Namespace) -> int:
                 "pair_lease": pair_lease,
                 "reservation": reservation,
                 "retained_files": retained_child_records(stage),
-                "schema": FAILURE_SCHEMA,
+                "schema": failure_schema,
                 "status": "failed",
                 "traceback": (caught_traceback or repr(caught))[-65536:],
                 "valid": False,
@@ -3403,7 +3468,7 @@ def run_campaign(options: argparse.Namespace) -> int:
             "pair_lease": pair_lease,
             "reservation": reservation,
             "retained_files": retained_child_records(stage),
-            "schema": FAILURE_SCHEMA,
+            "schema": failure_schema,
             "status": "failed",
             "traceback": traceback.format_exc()[-65536:],
             "valid": False,
@@ -3543,12 +3608,16 @@ def build_self_test_bundle(
     campaign = self_test_campaign(retained_cells, cpu, sibling, allowed)
     validate_campaign(campaign, allow_self_test=True)
     control = root.parent / "control-mock"
+    cmake_identity = SUPPORT.cmake_identity_for_build_schema(
+        support_schema_for_raw(RAW_SCHEMA))
     specification = {
-        "candidate_archive": str(root.parent / "candidate.a"),
+        "candidate_archive": str(
+            root.parent / "candidate-build" / cmake_identity["archive"]),
         "candidate_build_dir": str(root.parent / "candidate-build"),
         "candidate_executable": str(candidate),
         "candidate_source_root": str(root.parent / "candidate-source"),
-        "control_archive": str(root.parent / "control.a"),
+        "control_archive": str(
+            root.parent / "control-build" / cmake_identity["archive"]),
         "control_build_dir": str(root.parent / "control-build"),
         "control_executable": str(control),
         "control_source_root": str(root.parent / "control-source"),
@@ -3696,10 +3765,9 @@ def run_self_test(_options: argparse.Namespace) -> int:
                 manifest_exit_status("policy_failed", True, False) == 2,
                 "portable replay was not downgraded to non-authoritative status")
 
-        # Re-serialize the current synthetic bundle under the exact historical
-        # v3 schema pair.  The payload is otherwise byte-for-byte equivalent,
-        # which makes this a focused version-dispatch/replay gate rather than a
-        # second behavioral oracle.
+        # Re-serialize current v5 bytes under exact historical v3.  Both
+        # schemas truthfully describe the frozen benchmark's selector surface,
+        # so this remains a byte-exact replay/version-dispatch gate.
         legacy_root = root / "legacy-v3"
         shutil.copytree(root / "fast", legacy_root)
         legacy_raw = copy.deepcopy(fast_raw)
@@ -3710,8 +3778,8 @@ def run_self_test(_options: argparse.Namespace) -> int:
         }
         for invocation in legacy_raw["invocations"]:
             parameters = invocation["result"]["parameters"]
-            parameters.pop("force_tiled_decode")
-            parameters.pop("force_materialized_decode")
+            parameters.pop("force_tiled_decode", None)
+            parameters.pop("force_materialized_decode", None)
             cell = legacy_cells[invocation["cell_id"]]
             invocation["normalized"] = validate_result(
                 invocation["result"], cell, legacy_raw["campaign"],
@@ -3740,6 +3808,58 @@ def run_self_test(_options: argparse.Namespace) -> int:
             legacy_manifest, legacy_root, False, allow_self_test=True)
         require(legacy_status == 0, "historical low-copy v3 replay failed")
 
+        # Canonical v4 remains replayable with its exact later benchmark
+        # capability surface: both workspace-selector booleans are present and
+        # strictly false.  The v4 bytes are rebuilt and re-hashed explicitly;
+        # they are never inferred from or silently accepted under v5.
+        canonical_root = root / "canonical-v4"
+        shutil.copytree(root / "fast", canonical_root)
+        canonical_raw = copy.deepcopy(fast_raw)
+        canonical_raw["schema"] = RAW_SCHEMA_V4
+        for side in ("control", "candidate"):
+            archive_key = f"{side}_archive"
+            canonical_raw["input_specification"][archive_key] = str(
+                Path(canonical_raw["input_specification"][archive_key]).with_name(
+                    "libleopard.a"))
+        canonical_cells = {
+            item.identifier: item
+            for item in campaign_cells(
+                canonical_raw["campaign"], allow_self_test=True)
+        }
+        for invocation in canonical_raw["invocations"]:
+            invocation["result"]["parameters"].update({
+                "force_tiled_decode": False,
+                "force_materialized_decode": False,
+            })
+            cell = canonical_cells[invocation["cell_id"]]
+            invocation["normalized"] = validate_result(
+                invocation["result"], cell, canonical_raw["campaign"],
+                RAW_SCHEMA_V4)
+            stdout_path = canonical_root / invocation["stdout"]["path"]
+            stdout_path.write_bytes(
+                canonical_bytes(invocation["result"]) + b"\n")
+            invocation["stdout"] = artifact_record(
+                canonical_root, stdout_path, MAX_STDOUT_BYTES)
+        canonical_raw["analysis"] = analyze(
+            canonical_raw["invocations"], tuple(canonical_cells.values()))
+        canonical_raw = resign(canonical_raw)
+        canonical_raw_path = canonical_root / "raw.json"
+        canonical_raw_path.unlink()
+        write_json_exclusive(canonical_raw_path, canonical_raw)
+        canonical_manifest = copy.deepcopy(fast_manifest)
+        canonical_manifest["schema"] = MANIFEST_SCHEMA_V4
+        canonical_manifest["analysis"] = canonical_raw["analysis"]
+        canonical_manifest["raw"] = raw_file_identity(
+            canonical_raw_path, canonical_raw)
+        canonical_manifest = resign(canonical_manifest)
+        canonical_manifest_path = canonical_root / "manifest.json"
+        canonical_manifest_path.unlink()
+        write_json_exclusive(canonical_manifest_path, canonical_manifest)
+        _, canonical_status = validate_manifest(
+            canonical_manifest, canonical_root, False, allow_self_test=True)
+        require(canonical_status == 0,
+                "canonical low-copy v4 replay failed")
+
         cross_schema = copy.deepcopy(fast_manifest)
         cross_schema["schema"] = MANIFEST_SCHEMA_V3
         cross_schema = resign(cross_schema)
@@ -3747,9 +3867,25 @@ def run_self_test(_options: argparse.Namespace) -> int:
             lambda: validate_manifest(
                 cross_schema, root / "fast", False, allow_self_test=True),
             "manifest/raw cross-schema relabel")
+        for wrong_manifest_schema in (MANIFEST_SCHEMA_V3, MANIFEST_SCHEMA_V5):
+            cross_schema = copy.deepcopy(canonical_manifest)
+            cross_schema["schema"] = wrong_manifest_schema
+            cross_schema = resign(cross_schema)
+            expect_evidence_error(
+                lambda value=cross_schema: validate_manifest(
+                    value, canonical_root, False, allow_self_test=True),
+                "canonical v4 manifest cross-schema relabel")
+        for wrong_manifest_schema in (MANIFEST_SCHEMA_V3, MANIFEST_SCHEMA_V4):
+            cross_schema = copy.deepcopy(fast_manifest)
+            cross_schema["schema"] = wrong_manifest_schema
+            cross_schema = resign(cross_schema)
+            expect_evidence_error(
+                lambda value=cross_schema: validate_manifest(
+                    value, root / "fast", False, allow_self_test=True),
+                "historical v5 manifest cross-schema relabel")
 
         def cmake_probe(raw_schema: str) -> tuple[dict[str, str], dict[str, Any]]:
-            identity = SUPPORT.cmake_identity_for_raw_schema(
+            identity = SUPPORT.cmake_identity_for_build_schema(
                 support_schema_for_raw(raw_schema))
             archive = "/fixture/build/" + identity["archive"]
             specification = {"control_archive": archive}
@@ -3784,7 +3920,7 @@ def run_self_test(_options: argparse.Namespace) -> int:
                         {"object_path": path} for path in object_paths],
                 },
             }
-            if raw_schema == RAW_SCHEMA:
+            if raw_schema in HARDENED_RAW_SCHEMAS:
                 build["archive_link_recipe_content"] = recipe_content
                 build["ranlib"] = {
                     "path": "/usr/bin/x86_64-linux-gnu-ranlib"}
@@ -3804,8 +3940,9 @@ def run_self_test(_options: argparse.Namespace) -> int:
             return specification, {
                 "build": build, "outer": outer, "recipe_text": recipe_text}
 
-        current_spec, current_probe = cmake_probe(RAW_SCHEMA)
+        current_spec, current_probe = cmake_probe(RAW_SCHEMA_V4)
         legacy_spec, legacy_probe = cmake_probe(RAW_SCHEMA_V3)
+        hardened_spec, hardened_probe = cmake_probe(RAW_SCHEMA_V5)
         expect_evidence_error(
             lambda: validate_cmake_identity_paths(
                 "control", current_spec, current_probe["build"],
@@ -3814,13 +3951,35 @@ def run_self_test(_options: argparse.Namespace) -> int:
         expect_evidence_error(
             lambda: validate_cmake_identity_paths(
                 "control", legacy_spec, legacy_probe["build"],
-                legacy_probe["outer"], RAW_SCHEMA),
+                legacy_probe["outer"], RAW_SCHEMA_V4),
             "historical archive relabeled as current v4")
+        expect_evidence_error(
+            lambda: validate_cmake_identity_paths(
+                "control", current_spec, current_probe["build"],
+                current_probe["outer"], RAW_SCHEMA_V5),
+            "canonical v4 archive relabeled as historical v5")
+        expect_evidence_error(
+            lambda: validate_cmake_identity_paths(
+                "control", hardened_spec, hardened_probe["build"],
+                hardened_probe["outer"], RAW_SCHEMA_V4),
+            "historical v5 archive relabeled as canonical v4")
+        expect_evidence_error(
+            lambda: validate_cmake_identity_paths(
+                "control", hardened_spec, hardened_probe["build"],
+                hardened_probe["outer"], RAW_SCHEMA_V3),
+            "hardened historical v5 archive relabeled as byte-exact v3")
+        expect_evidence_error(
+            lambda: validate_cmake_identity_paths(
+                "control", legacy_spec, legacy_probe["build"],
+                legacy_probe["outer"], RAW_SCHEMA_V5),
+            "unhardened historical v3 archive relabeled as v5")
 
-        def current_recipe_mutation(text: str) -> dict[str, Any]:
-            mutated = copy.deepcopy(current_probe["build"])
+        def recipe_mutation(
+            probe: Mapping[str, Any], text: str, label: str,
+        ) -> dict[str, Any]:
+            mutated = copy.deepcopy(probe["build"])
             content = SUPPORT.exact_text_content(
-                text, "mutated current low-copy archive recipe")
+                text, label)
             mutated["archive_link_recipe_content"] = content
             mutated["archive_link_recipe"]["size"] = content["size"]
             mutated["archive_link_recipe"]["sha256"] = content["sha256"]
@@ -3836,46 +3995,92 @@ def run_self_test(_options: argparse.Namespace) -> int:
         expect_evidence_error(
             lambda: validate_cmake_identity_paths(
                 "control", current_spec, stale_content,
-                current_probe["outer"], RAW_SCHEMA),
+                current_probe["outer"], RAW_SCHEMA_V4),
             "current recipe bytes with stale size and SHA")
         expect_evidence_error(
             lambda: validate_cmake_identity_paths(
                 "control", current_spec,
-                current_recipe_mutation(
-                    recipe_text.replace("libleopard.a", "wrong.a")),
-                current_probe["outer"], RAW_SCHEMA),
+                recipe_mutation(current_probe,
+                    recipe_text.replace("libleopard.a", "wrong.a"),
+                    "mutated current low-copy archive recipe"),
+                current_probe["outer"], RAW_SCHEMA_V4),
             "current recipe output archive relabel")
         expect_evidence_error(
             lambda: validate_cmake_identity_paths(
                 "control", current_spec,
-                current_recipe_mutation(
-                    recipe_text.replace("/usr/bin/ar qc", "/usr/bin/tar qc")),
-                current_probe["outer"], RAW_SCHEMA),
+                recipe_mutation(current_probe,
+                    recipe_text.replace("/usr/bin/ar qc", "/usr/bin/tar qc"),
+                    "mutated current low-copy archive recipe"),
+                current_probe["outer"], RAW_SCHEMA_V4),
             "current recipe archiver relabel")
         expect_evidence_error(
             lambda: validate_cmake_identity_paths(
                 "control", current_spec,
-                current_recipe_mutation(recipe_text.replace(
+                recipe_mutation(current_probe, recipe_text.replace(
                     ordinary_object + " " + backend_object,
-                    backend_object + " " + ordinary_object)),
-                current_probe["outer"], RAW_SCHEMA),
+                    backend_object + " " + ordinary_object),
+                    "mutated current low-copy archive recipe"),
+                current_probe["outer"], RAW_SCHEMA_V4),
             "current recipe object-order mutation")
         expect_evidence_error(
             lambda: validate_cmake_identity_paths(
                 "control", current_spec,
-                current_recipe_mutation(recipe_text.replace(
+                recipe_mutation(current_probe, recipe_text.replace(
                     backend_object,
                     "CMakeFiles/leopard2_backend_ssse3.dir/"
-                    "Leopard2BackendSSSE3.cpp.o")),
-                current_probe["outer"], RAW_SCHEMA),
+                    "Leopard2BackendSSSE3.cpp.o"),
+                    "mutated current low-copy archive recipe"),
+                current_probe["outer"], RAW_SCHEMA_V4),
             "current recipe object-set mutation")
         expect_evidence_error(
             lambda: validate_cmake_identity_paths(
                 "control", current_spec,
-                current_recipe_mutation(
-                    recipe_text.replace("/usr/bin/ranlib", "/usr/bin/ar")),
-                current_probe["outer"], RAW_SCHEMA),
+                recipe_mutation(current_probe,
+                    recipe_text.replace("/usr/bin/ranlib", "/usr/bin/ar"),
+                    "mutated current low-copy archive recipe"),
+                current_probe["outer"], RAW_SCHEMA_V4),
             "current recipe ranlib mutation")
+
+        historical_recipe = hardened_probe["recipe_text"]
+        historical_ordinary = "CMakeFiles/libleopard.dir/Leopard2.cpp.o"
+        for label, mutated_text in (
+            ("v5 recipe archive relabel", historical_recipe.replace(
+                "liblibleopard.a", "libleopard.a")),
+            ("v5 recipe object-directory relabel", historical_recipe.replace(
+                historical_ordinary,
+                "CMakeFiles/leopard.dir/Leopard2.cpp.o")),
+            ("v5 recipe tool relabel", historical_recipe.replace(
+                "/usr/bin/ar qc", "/usr/bin/tar qc")),
+            ("v5 recipe ranlib relabel", historical_recipe.replace(
+                "/usr/bin/ranlib", "/usr/bin/ar")),
+        ):
+            expect_evidence_error(
+                lambda text=mutated_text, name=label: validate_cmake_identity_paths(
+                    "control", hardened_spec,
+                    recipe_mutation(hardened_probe, text, name),
+                    hardened_probe["outer"], RAW_SCHEMA_V5),
+                label)
+
+        for label, mutator in (
+            ("v5 declared archive path relabel",
+             lambda spec, build, outer: spec.__setitem__(
+                 "control_archive", "/fixture/build/libleopard.a")),
+            ("v5 outer archive path relabel",
+             lambda spec, build, outer: outer.__setitem__(
+                 "path", "/fixture/build/libleopard.a")),
+            ("v5 recipe path relabel",
+             lambda spec, build, outer: build["archive_link_recipe"].__setitem__(
+                 "path", "/fixture/build/CMakeFiles/leopard.dir/link.txt")),
+        ):
+            changed_spec = copy.deepcopy(hardened_spec)
+            changed_build = copy.deepcopy(hardened_probe["build"])
+            changed_outer = copy.deepcopy(hardened_probe["outer"])
+            mutator(changed_spec, changed_build, changed_outer)
+            expect_evidence_error(
+                lambda spec=changed_spec, build=changed_build,
+                       outer=changed_outer: validate_cmake_identity_paths(
+                           "control", spec, build, outer, RAW_SCHEMA_V5),
+                label)
 
         def signed_cmake_probe(
             evidence_schema: str, status: str,
@@ -3950,23 +4155,83 @@ def run_self_test(_options: argparse.Namespace) -> int:
             }
             return signed(payload)
 
+        def relabel_current_probe_as_historical(
+            value: Mapping[str, Any], historical_schema: str,
+        ) -> dict[str, Any]:
+            payload = copy.deepcopy(dict(value))
+            payload.pop("digest", None)
+            payload["schema"] = historical_schema
+
+            def relabel_path(text: str) -> str:
+                return text.replace(
+                    "CMakeFiles/leopard.dir", "CMakeFiles/libleopard.dir"
+                ).replace("libleopard.a", "liblibleopard.a")
+
+            payload["specification"]["control_archive"] = relabel_path(
+                payload["specification"]["control_archive"])
+            payload["outer_archive"]["path"] = relabel_path(
+                payload["outer_archive"]["path"])
+            payload["build"]["archive_link_recipe"]["path"] = relabel_path(
+                payload["build"]["archive_link_recipe"]["path"])
+            for item in payload["build"]["strict_link_provenance"][
+                    "archive_member_content"]:
+                item["object_path"] = relabel_path(item["object_path"])
+            # Retain the exact canonical v4 recipe bytes so the semantic parser
+            # proves that coherent surrounding path edits cannot create v5.
+            return signed(payload)
+
         historical_success = signed_cmake_probe(
             RAW_SCHEMA_V3, "success", legacy_spec, legacy_probe)
         historical_failure_probe = signed_cmake_probe(
             FAILURE_SCHEMA_V3, "failure", legacy_spec, legacy_probe)
+        hardened_success = signed_cmake_probe(
+            RAW_SCHEMA_V5, "success", hardened_spec, hardened_probe)
+        hardened_failure_probe = signed_cmake_probe(
+            FAILURE_SCHEMA_V5, "failure", hardened_spec, hardened_probe)
+        current_success = signed_cmake_probe(
+            RAW_SCHEMA_V4, "success", current_spec, current_probe)
+        current_failure_probe = signed_cmake_probe(
+            FAILURE_SCHEMA_V4, "failure", current_spec, current_probe)
         validate_signed_cmake_probe(historical_success, "success")
         validate_signed_cmake_probe(historical_failure_probe, "failure")
+        validate_signed_cmake_probe(hardened_success, "success")
+        validate_signed_cmake_probe(hardened_failure_probe, "failure")
+        validate_signed_cmake_probe(current_success, "success")
+        validate_signed_cmake_probe(current_failure_probe, "failure")
         expect_evidence_error(
             lambda: validate_signed_cmake_probe(
-                relabel_historical_probe(historical_success, RAW_SCHEMA),
+                relabel_historical_probe(historical_success, RAW_SCHEMA_V4),
                 "success"),
             "coherently re-signed success relabel retaining historical recipe bytes")
         expect_evidence_error(
             lambda: validate_signed_cmake_probe(
                 relabel_historical_probe(
-                    historical_failure_probe, FAILURE_SCHEMA),
+                    historical_failure_probe, FAILURE_SCHEMA_V4),
                 "failure"),
             "coherently re-signed failure relabel retaining historical recipe bytes")
+        expect_evidence_error(
+            lambda: validate_signed_cmake_probe(
+                relabel_historical_probe(hardened_success, RAW_SCHEMA_V4),
+                "success"),
+            "coherently re-signed v5-to-v4 relabel retaining historical recipe")
+        expect_evidence_error(
+            lambda: validate_signed_cmake_probe(
+                relabel_historical_probe(
+                    hardened_failure_probe, FAILURE_SCHEMA_V4),
+                "failure"),
+            "coherently re-signed failed v5-to-v4 relabel retaining recipe")
+        expect_evidence_error(
+            lambda: validate_signed_cmake_probe(
+                relabel_current_probe_as_historical(
+                    current_success, RAW_SCHEMA_V5),
+                "success"),
+            "coherently re-signed v4-to-v5 relabel retaining canonical recipe")
+        expect_evidence_error(
+            lambda: validate_signed_cmake_probe(
+                relabel_current_probe_as_historical(
+                    current_failure_probe, FAILURE_SCHEMA_V5),
+                "failure"),
+            "coherently re-signed failed v4-to-v5 relabel retaining recipe")
 
         failed_root = root / "failed"
         failed_root.mkdir(mode=0o700)
@@ -4001,6 +4266,26 @@ def run_self_test(_options: argparse.Namespace) -> int:
         legacy_failure["schema"] = FAILURE_SCHEMA_V3
         legacy_failure = resign(legacy_failure)
         validate_failure(legacy_failure, failed_root, allow_self_test=True)
+        canonical_failure = copy.deepcopy(failure)
+        canonical_failure["schema"] = FAILURE_SCHEMA_V4
+        for side in ("control", "candidate"):
+            archive_key = f"{side}_archive"
+            canonical_failure["input_specification"][archive_key] = str(
+                Path(canonical_failure["input_specification"][archive_key]).with_name(
+                    "libleopard.a"))
+        canonical_failure = resign(canonical_failure)
+        validate_failure(canonical_failure, failed_root, allow_self_test=True)
+        for source, wrong_schema, label in (
+            (failure, FAILURE_SCHEMA_V4, "v5 failure relabeled as v4"),
+            (canonical_failure, FAILURE_SCHEMA_V5, "v4 failure relabeled as v5"),
+        ):
+            changed_failure = copy.deepcopy(source)
+            changed_failure["schema"] = wrong_schema
+            changed_failure = resign(changed_failure)
+            expect_evidence_error(
+                lambda value=changed_failure: validate_failure(
+                    value, failed_root, allow_self_test=True),
+                label)
         bad_lifecycle = copy.deepcopy(failure)
         bad_lifecycle["lifecycle"]["completed_phases"] = [
             "initialized", "locks_acquired"]
@@ -4044,31 +4329,39 @@ def run_self_test(_options: argparse.Namespace) -> int:
             raise EvidenceError("tracked context suppressed a primary failure")
 
         selector_cell = FIXED_CELLS[0]
-        current_result = fast_raw["invocations"][0]["result"]
+        current_result = canonical_raw["invocations"][0]["result"]
         for selector in ("force_tiled_decode", "force_materialized_decode"):
             changed_result = copy.deepcopy(current_result)
             changed_result["parameters"].pop(selector)
             expect_evidence_error(
                 lambda changed_result=changed_result: validate_result(
-                    changed_result, selector_cell, fast_raw["campaign"], RAW_SCHEMA),
-                "current selector omission " + selector)
-            changed_result = copy.deepcopy(current_result)
-            changed_result["parameters"][selector] = True
+                    changed_result, selector_cell, canonical_raw["campaign"],
+                    RAW_SCHEMA_V4),
+                "canonical v4 selector omission " + selector)
+            for invalid in (True, 0, 1):
+                changed_result = copy.deepcopy(current_result)
+                changed_result["parameters"][selector] = invalid
+                expect_evidence_error(
+                    lambda changed_result=changed_result: validate_result(
+                        changed_result, selector_cell,
+                        canonical_raw["campaign"], RAW_SCHEMA_V4),
+                    "canonical v4 selector activation/type " + selector)
+        for raw_schema, historical_result, historical_campaign, label in (
+            (RAW_SCHEMA_V3, legacy_raw["invocations"][0]["result"],
+             legacy_raw["campaign"], "historical v3"),
+            (RAW_SCHEMA_V5, fast_raw["invocations"][0]["result"],
+             fast_raw["campaign"], "historical v5"),
+        ):
+            changed_result = copy.deepcopy(historical_result)
+            changed_result["parameters"].update({
+                "force_tiled_decode": False,
+                "force_materialized_decode": False,
+            })
             expect_evidence_error(
-                lambda changed_result=changed_result: validate_result(
-                    changed_result, selector_cell, fast_raw["campaign"], RAW_SCHEMA),
-                "current selector activation " + selector)
-        legacy_result = legacy_raw["invocations"][0]["result"]
-        changed_result = copy.deepcopy(legacy_result)
-        changed_result["parameters"].update({
-            "force_tiled_decode": False,
-            "force_materialized_decode": False,
-        })
-        expect_evidence_error(
-            lambda: validate_result(
-                changed_result, selector_cell, legacy_raw["campaign"],
-                RAW_SCHEMA_V3),
-            "historical selector injection")
+                lambda value=changed_result, schema=raw_schema,
+                       campaign=historical_campaign: validate_result(
+                           value, selector_cell, campaign, schema),
+                label + " selector injection")
 
         mutations: list[tuple[str, Callable[[dict[str, Any]], None]]] = [
             ("command", lambda value: value["invocations"][0]["command"].__setitem__(
@@ -4522,6 +4815,7 @@ def run_self_test(_options: argparse.Namespace) -> int:
 
 def run_production_smoke(options: argparse.Namespace) -> int:
     """Exercise real benchmark-v2 semantics without producing timing evidence."""
+    raw_schema, _, _ = generation_schemas(options.generation_schema)
     backends = tuple(options.backend or ("scalar",))
     require(len(backends) == len(set(backends)),
             "production-smoke backends must be unique")
@@ -4555,7 +4849,8 @@ def run_production_smoke(options: argparse.Namespace) -> int:
                     f"production-smoke {side}/{backend} failed or wrote stderr")
             parsed = parse_json_bytes(
                 stdout, f"production-smoke {side}/{backend}", MAX_STDOUT_BYTES)
-            validated[side] = validate_result(parsed, cell, campaign)
+            validated[side] = validate_result(
+                parsed, cell, campaign, raw_schema)
         require(validated["control"]["digests"] ==
                 validated["candidate"]["digests"],
                 f"production-smoke control/candidate original, parity, or repaired "
@@ -4572,6 +4867,11 @@ def parser() -> argparse.ArgumentParser:
     run = commands.add_parser(
         "run", help="run the fixed isolated low-encode-copy A/B campaign")
     run.add_argument(
+        "--generation-schema", choices=tuple(GENERATION_SCHEMAS),
+        default="historical-v5",
+        help=("evidence identity to generate; historical-v5 is the truthful "
+              "default for the exact frozen experiment commits"))
+    run.add_argument(
         "--control",
         default="/home/catid/leopard-wt-low-copy-baseline/build/"
                 "low-copy-authoritative/bench_leopard2",
@@ -4584,12 +4884,12 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--control-archive",
         default="/home/catid/leopard-wt-low-copy-baseline/build/"
-                "low-copy-authoritative/libleopard.a",
+                "low-copy-authoritative/liblibleopard.a",
         type=Path)
     run.add_argument(
         "--candidate-archive",
         default="/home/catid/leopard-wt-low-copy/build/"
-                "low-copy-authoritative/libleopard.a",
+                "low-copy-authoritative/liblibleopard.a",
         type=Path)
     run.add_argument(
         "--control-build-dir",
@@ -4638,6 +4938,10 @@ def parser() -> argparse.ArgumentParser:
     smoke = commands.add_parser(
         "production-smoke",
         help="run a non-authoritative correctness/schema smoke against real binaries")
+    smoke.add_argument(
+        "--generation-schema", choices=tuple(GENERATION_SCHEMAS),
+        default="historical-v5",
+        help="benchmark capability schema to validate (default: historical-v5)")
     smoke.add_argument(
         "--control",
         default="/home/catid/leopard-wt-low-copy-baseline/build/"

@@ -131,8 +131,6 @@ def main() -> int:
             "requested_backend": options.backend,
             "force_generic_decode": False,
             "force_specialized_decode": False,
-            "force_tiled_decode": False,
-            "force_materialized_decode": False,
             "skip_legacy": options.skip_legacy,
             "retain_samples": options.retain_samples,
             "shard_bytes": options.bytes,

@@ -23,39 +23,42 @@ executes the exact retained compiler command and working directory with only
 its output redirected to a private temporary file; a digest or size difference
 invalidates the run before measurement.
 
-New authoritative bundles use `leopard2-low-encode-copy-raw/v4` and
-`leopard2-low-encode-copy-manifest/v4`. Failed-run diagnostics use
-`leopard2-low-encode-copy-failure/v4`, whose signed lifecycle is an exact prefix
+New authoritative bundles use `leopard2-low-encode-copy-raw/v5` and
+`leopard2-low-encode-copy-manifest/v5`. Failed-run diagnostics use
+`leopard2-low-encode-copy-failure/v5`, whose signed lifecycle is an exact prefix
 of the declared phases and records the failed phase plus teardown result. These
-schemas bind the canonical CMake target `leopard`, archive `libleopard.a`, and
-`leopard.dir` object closure. V4 retains the exact bounded UTF-8 archive
+schemas truthfully bind the exact commits' historical CMake target `libleopard`,
+archive `liblibleopard.a`, and `libleopard.dir` object closure. V5 retains the
+exact bounded UTF-8 archive
 `link.txt` content, requires its byte size and SHA-256 to equal the existing
 recipe-file identity, and parses those bytes to require the declared archive
 and ordinary-object target directory while allowing only the separate backend
-object-library directories. The verifier retains exact read-only support for
-v3 bundles and their historical `libleopard`/`liblibleopard.a` identity and
-record shape. It rejects a schema/path relabel that retains the historical
-recipe bytes.
+object-library directories. The verifier retains byte-exact v3 replay and
+canonical v4 read-only replay (`leopard`, `libleopard.a`, `leopard.dir`) as
+distinct identities. It rejects cross-schema target, archive, path, selector,
+and retained-recipe relabeling.
+
+Selector capability is exact, not permissive. Frozen v3/v5 benchmark output
+must omit `force_tiled_decode` and `force_materialized_decode`, because those
+commits predate the options. Canonical v4 requires both fields to be strict
+JSON `false`. All three schemas require `force_generic_decode` and
+`force_specialized_decode` to be strict JSON `false`; numeric `0`/`1` values
+are rejected rather than treated as booleans.
 
 This is an integrity boundary, not a standalone authenticity claim. Bundle
 digests are unkeyed. They expose changes relative to the retained bytes, and
-the semantic recipe check prevents relabeling those old bytes under v4, but a
+the semantic recipe check prevents relabeling those bytes across schemas, but a
 party able to replace every evidence byte can recompute a new internally
 consistent bundle. Resistance to that total evidence re-authoring requires an
 external trusted signature, transparency log, or comparable authenticity
 anchor.
 
-There is an intentional generation boundary. Both frozen experiment commits
-precede canonical-target commit `0a2a666` and their clean CMake graphs define
-only `libleopard`/`liblibleopard.a`. Therefore the current v4 validator can
-authenticate canonical evidence, but these exact two commits cannot generate
-such a bundle under the existing clean-source requirement. Renaming generated
-files, copying the archive, or applying an unrecorded CMake overlay would break
-the provenance claim and is not supported. A fresh v4 campaign needs either
-new behavior-equivalent control/candidate commits that include the canonical
-rename, or a separately versioned external build wrapper whose complete bytes
-and transformation are added to the authenticated closure. Historical v3
-replay remains exact and is not promoted to v4 by relabeling.
+Both frozen experiment commits precede canonical-target commit `0a2a666`; their
+clean CMake graphs define only the historical target and archive. V5 is the
+truthful generation schema for these exact sources and is the runner default.
+Renaming generated files, copying the archive, or applying an unrecorded CMake
+overlay breaks the provenance claim and is unsupported. V3 replay remains
+byte-exact, while v4 evidence keeps its separate canonical identity.
 
 The retained benchmark output is schema `leopard2-benchmark-v2`.  Every child
 must retain its raw timing samples, resolve the explicitly requested LOW_V1
@@ -266,6 +269,7 @@ replace them with a pair actually reported by this host.
     )"
     taskset -c "$CPU,$SIBLING,$HOUSEKEEPING" \
       python3 experiments/leopard2/low_encode_copy/run_abba.py run \
+      --generation-schema historical-v5 \
       --cpu "$CPU" --reserved-sibling "$SIBLING" \
       --reservation-file "$RESERVATION" --output "$OUTPUT" \
       --iterations 5 --warmup 1 --reuse 1 --timeout 180
