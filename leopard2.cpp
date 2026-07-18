@@ -107,6 +107,10 @@ struct leo2_codec
     std::vector<uint8_t> direct_generator_logs8;
     std::vector<uint16_t> direct_generator_logs16;
 #ifdef LEO2_ENABLE_TEST_HOOKS
+    // Experimental C1 inverse schedule for the one shortened encoder block.
+    // Production codecs do not pay its object or setup cost until crossover
+    // evidence meets the promotion gate; FORCE_TRANSFORM exercises it.
+    leopard2_internal::PrunedTransformPlan encoder_inverse_prefix_plan;
     leo2_test_encode_mode test_encode_mode;
 #endif
 };
@@ -2531,6 +2535,12 @@ static void ExecuteTransformEncodePass(
     const leopard2_internal::SparseForwardPlanBatchView* sparse_plans)
 {
     const leopard::backend::Ops& ops = *codec->context->ops;
+    const leopard2_internal::PrunedTransformPlan* inverse_prefix_plan = NULL;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    if (codec->test_encode_mode == LEO2_TEST_ENCODE_FORCE_TRANSFORM &&
+        codec->encoder_inverse_prefix_plan.size != 0)
+        inverse_prefix_plan = &codec->encoder_inverse_prefix_plan;
+#endif
     if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
     {
         if (codec->padded_side == 1)
@@ -2552,7 +2562,7 @@ static void ExecuteTransformEncodePass(
                 ops, buffer_bytes, codec->original_count,
                 requested_recovery_prefix, requested_recovery_count,
                 codec->padded_side,
-                padded_original, work, sparse_plans);
+                padded_original, work, sparse_plans, inverse_prefix_plan);
 #else
             return;
 #endif
@@ -2562,7 +2572,7 @@ static void ExecuteTransformEncodePass(
                 ops, buffer_bytes, codec->original_count,
                 requested_recovery_prefix, requested_recovery_count,
                 codec->padded_side,
-                padded_original, work, sparse_plans);
+                padded_original, work, sparse_plans, inverse_prefix_plan);
 #else
             return;
 #endif
@@ -2581,7 +2591,7 @@ static void ExecuteTransformEncodePass(
         leopard::ff8::ReedSolomonEncodeLow(
             ops, buffer_bytes, codec->original_count,
             codec->recovery_count, codec->padded_side, padded_original,
-            parity, work, sparse_plans);
+            parity, work, sparse_plans, inverse_prefix_plan);
 #else
         return;
 #endif
@@ -2590,7 +2600,7 @@ static void ExecuteTransformEncodePass(
         leopard::ff16::ReedSolomonEncodeLow(
             ops, buffer_bytes, codec->original_count,
             codec->recovery_count, codec->padded_side, padded_original,
-            parity, work, sparse_plans);
+            parity, work, sparse_plans, inverse_prefix_plan);
 #else
         return;
 #endif
@@ -3910,6 +3920,38 @@ LEO2_EXPORT leo2_result leo2_codec_create(
             for (uint32_t i = padded + recovery_count; i < parent; ++i)
                 codec->permanent_erased[i] = 1;
         }
+
+#ifdef LEO2_ENABLE_TEST_HOOKS
+        uint32_t inverse_prefix = 0;
+        uint32_t inverse_shift = 0;
+        if (profile == LEO2_PROFILE_LOW_V1)
+        {
+            if (original_count < padded)
+                inverse_prefix = original_count;
+        }
+        else
+        {
+            inverse_prefix = original_count % padded;
+            if (inverse_prefix != 0)
+                inverse_shift = padded +
+                    (original_count / padded) * padded;
+        }
+        if (inverse_prefix != 0 && inverse_prefix < padded)
+        {
+            std::vector<uint8_t> input_mask(padded, 0);
+            std::vector<uint8_t> output_mask(padded, 1);
+            std::fill(
+                input_mask.begin(), input_mask.begin() + inverse_prefix, 1);
+            if (!PrepareCodecPrunedTransform(
+                    codec, padded, inverse_shift, true,
+                    input_mask.data(), output_mask.data(),
+                    codec->encoder_inverse_prefix_plan))
+            {
+                delete codec;
+                return LEO2_INTERNAL_ERROR;
+            }
+        }
+#endif
 
         const bool specialized =
             (codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) == 0;

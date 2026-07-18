@@ -27,7 +27,7 @@ from typing import Any
 
 SCHEMA = "leopard2-sparse-encode-crossover/v1"
 JOB_SCHEMA = "leopard2-sparse-encode-crossover-job/v1"
-BENCHMARK_SCHEMA = "leopard2-sparse-encode-benchmark-v1"
+BENCHMARK_SCHEMA = "leopard2-sparse-encode-benchmark-v2"
 ATTESTATION_SCHEMA = "leopard2-benchmark-isolation-attestation/v1"
 SOURCE_FILES = (
     "CMakeLists.txt",
@@ -354,6 +354,11 @@ def validate_benchmark_result(
         raise CrossoverError("benchmark binary source SHA differs from runner source")
     if build.get("source_dirty") != int(expected_git["dirty"]):
         raise CrossoverError("benchmark binary dirty marker differs from runner source")
+    if build.get("library_test_hooks") is not False:
+        raise CrossoverError(
+            "benchmark library contains test-hook instrumentation; "
+            "configure authoritative builds with LEO2_BUILD_TESTS=OFF"
+        )
     if not isinstance(build.get("compiler"), str) or not build["compiler"]:
         raise CrossoverError("benchmark binary omitted compiler identity")
     if not isinstance(build.get("compiler_version"), str) or not build["compiler_version"]:
@@ -393,11 +398,45 @@ def validate_benchmark_result(
         <= plan.get("full_butterflies", -1)
     ):
         raise CrossoverError("sparse cell did not reduce prefix work")
+    available = plan.get("inverse_candidate_available")
+    inverse_operations = plan.get("inverse_operations")
+    inverse_groups = plan.get("inverse_source_groups")
+    inverse_prefix = plan.get("inverse_active_prefix")
+    mature_zero_fill = plan.get("mature_zero_fill_shards")
+    if not isinstance(available, bool) or not all(
+        isinstance(value, int) and value >= 0
+        for value in (
+            inverse_operations, inverse_groups, inverse_prefix,
+            mature_zero_fill,
+        )
+    ) or plan.get("pruned_zero_fill_shards") != 0:
+        raise CrossoverError("benchmark emitted invalid inverse-plan accounting")
+    padded_side = resolved.get("padded_side")
+    if not isinstance(padded_side, int) or padded_side < 2:
+        raise CrossoverError("benchmark omitted the padded transform side")
+    if available:
+        if not (
+            0 < inverse_prefix < padded_side
+            and inverse_operations > 0
+            and inverse_groups == inverse_prefix // 4
+            and mature_zero_fill == padded_side - inverse_prefix
+        ):
+            raise CrossoverError("benchmark emitted inconsistent inverse plan")
+    elif any(
+        value != 0
+        for value in (
+            inverse_operations, inverse_groups, inverse_prefix,
+            mature_zero_fill,
+        )
+    ):
+        raise CrossoverError("unavailable inverse plan retained accounting")
     correctness = result.get("correctness")
     if not isinstance(correctness, dict) or (
         correctness.get("exact_prefix_parity_match") is not True
     ):
         raise CrossoverError("exact parity differs from mature prefix parity")
+    if correctness.get("inverse_pruned_parity_match") is not True:
+        raise CrossoverError("inverse-pruned parity differs from mature parity")
     digest = correctness.get("digest_fnv1a64")
     if not isinstance(digest, str) or len(digest) != 18 or not digest.startswith("0x"):
         raise CrossoverError("benchmark emitted an invalid parity digest")
@@ -405,8 +444,10 @@ def validate_benchmark_result(
     if not isinstance(metrics, dict):
         raise CrossoverError("benchmark omitted metrics")
     names = (
-        "schedule_setup_ns", "prefix_execution_ns",
-        "exact_prepared_execution_ns", "exact_call_local_total_ns",
+        "schedule_setup_ns", "inverse_schedule_setup_ns",
+        "prefix_execution_ns", "exact_prepared_execution_ns",
+        "exact_call_local_total_ns", "prefix_pruned_inverse_execution_ns",
+        "exact_pruned_inverse_execution_ns",
     )
     for name in names:
         validate_metric(metrics.get(name), settings["samples"], name)
@@ -419,10 +460,16 @@ def validate_benchmark_result(
     execution = float(metrics["exact_prepared_execution_ns"]["median"])
     prefix = float(metrics["prefix_execution_ns"]["median"])
     call_local = float(metrics["exact_call_local_total_ns"]["median"])
+    prefix_inverse = float(metrics["prefix_pruned_inverse_execution_ns"]["median"])
+    exact_inverse = float(metrics["exact_pruned_inverse_execution_ns"]["median"])
     if abs(float(metrics.get("prefix_over_exact_prepared", -1)) - prefix / execution) > 0.002:
         raise CrossoverError("benchmark emitted wrong prepared-exact ratio")
     if abs(float(metrics.get("prefix_over_exact_call_local", -1)) - prefix / call_local) > 0.002:
         raise CrossoverError("benchmark emitted wrong call-local ratio")
+    if abs(float(metrics.get("mature_over_pruned_inverse_prefix", -1)) - prefix / prefix_inverse) > 0.002:
+        raise CrossoverError("benchmark emitted wrong inverse-prefix ratio")
+    if abs(float(metrics.get("mature_over_pruned_inverse_exact", -1)) - execution / exact_inverse) > 0.002:
+        raise CrossoverError("benchmark emitted wrong inverse-exact ratio")
     for row in amortized:
         modeled = execution + setup / row["reuse"]
         if abs(float(row.get("modeled_ns", -1)) - modeled) > 0.002:
@@ -860,6 +907,7 @@ def self_test() -> int:
         "authoritative": False,
         "build": {
             "source_git_sha": state["sha"], "source_dirty": 0,
+            "library_test_hooks": False,
             "compiler": "self-test", "compiler_version": "1", "cplusplus": 201103,
         },
         "parameters": {
@@ -870,17 +918,26 @@ def self_test() -> int:
             "warmups": 1, "setup_iterations": 2, "reuse": [1, 8, 64],
             "memory_mib": 16, "seed": 7,
         },
-        "resolved": {"backend": "scalar"},
+        "resolved": {"backend": "scalar", "padded_side": 64},
         "plan": {
             "full_butterflies": 100, "prefix_butterflies": 80,
             "retained_butterflies": 50,
+            "inverse_candidate_available": False,
+            "inverse_operations": 0, "inverse_source_groups": 0,
+            "inverse_active_prefix": 0, "mature_zero_fill_shards": 0,
+            "pruned_zero_fill_shards": 0,
         },
         "correctness": {
             "exact_prefix_parity_match": True,
+            "inverse_pruned_parity_match": True,
             "digest_fnv1a64": "0x0123456789abcdef",
         },
         "metrics": {
             "schedule_setup_ns": {
+                "median": setup, "mad": 0, "minimum": 10, "maximum": 10,
+                "samples": [10, 10, 10],
+            },
+            "inverse_schedule_setup_ns": {
                 "median": setup, "mad": 0, "minimum": 10, "maximum": 10,
                 "samples": [10, 10, 10],
             },
@@ -896,8 +953,18 @@ def self_test() -> int:
                 "median": 25, "mad": 0, "minimum": 25, "maximum": 25,
                 "samples": [25, 25, 25],
             },
+            "prefix_pruned_inverse_execution_ns": {
+                "median": 24, "mad": 0, "minimum": 24, "maximum": 24,
+                "samples": [24, 24, 24],
+            },
+            "exact_pruned_inverse_execution_ns": {
+                "median": 18, "mad": 0, "minimum": 18, "maximum": 18,
+                "samples": [18, 18, 18],
+            },
             "prefix_over_exact_prepared": prefix / exact,
             "prefix_over_exact_call_local": prefix / 25,
+            "mature_over_pruned_inverse_prefix": prefix / 24,
+            "mature_over_pruned_inverse_exact": exact / 18,
             "amortized_exact": [
                 {"reuse": reuse, "modeled_ns": exact + setup / reuse,
                  "prefix_over_modeled_exact": prefix / (exact + setup / reuse)}
@@ -921,7 +988,22 @@ def self_test() -> int:
         pass
     else:
         raise CrossoverError("mismatched binary dirty marker was accepted")
-    print("PASS sparse encode crossover self-test cells=32 identity_mutations=4")
+    benchmark["build"]["source_dirty"] = 0
+    benchmark["build"]["library_test_hooks"] = True
+    try:
+        validate_benchmark_result(benchmark, cell, settings, state)
+    except CrossoverError:
+        pass
+    else:
+        raise CrossoverError("instrumented benchmark archive was accepted")
+    del benchmark["build"]["library_test_hooks"]
+    try:
+        validate_benchmark_result(benchmark, cell, settings, state)
+    except CrossoverError:
+        pass
+    else:
+        raise CrossoverError("benchmark without instrumentation identity was accepted")
+    print("PASS sparse encode crossover self-test cells=32 identity_mutations=6")
     return 0
 
 

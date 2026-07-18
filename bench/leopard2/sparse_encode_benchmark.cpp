@@ -6,8 +6,8 @@
     BSD license are met.  See the repository LICENSE file.
 */
 
-#ifndef LEO2_ENABLE_TEST_HOOKS
-#error "sparse_encode_benchmark requires LEO2_ENABLE_TEST_HOOKS"
+#ifndef LEO2_SPARSE_ENCODE_LIBRARY_TEST_HOOKS
+#define LEO2_SPARSE_ENCODE_LIBRARY_TEST_HOOKS 1
 #endif
 
 #include "Leopard2Backend.h"
@@ -63,6 +63,8 @@ enum Form
     FormPrefix,
     FormExactPrepared,
     FormExactCallLocal,
+    FormPrefixInversePruned,
+    FormExactInversePruned,
     FormCount
 };
 
@@ -511,6 +513,7 @@ struct PlanStorage
     std::vector<uint8_t> masks;
     std::vector<uint8_t> workspace;
     leopard2_internal::SparseForwardPlanBatchView view;
+    leopard2_internal::PrunedTransformPlan inverse_prefix;
     size_t full_butterflies;
     size_t prefix_butterflies;
     size_t retained_butterflies;
@@ -539,6 +542,13 @@ struct PlanStorage
 
 struct GF8
 {
+    static bool prepare_inverse(unsigned size, unsigned shift,
+        const uint8_t* input, const uint8_t* output,
+        leopard2_internal::PrunedTransformPlan& plan)
+    {
+        return leopard::ff8::PreparePrunedTransformPlan(
+            size, shift, true, input, output, plan);
+    }
     static bool prepare(unsigned size, unsigned shift, uint8_t* workspace,
         size_t workspace_bytes, uint8_t* masks, size_t mask_bytes,
         leopard2_internal::SparseForwardPlanStats& stats)
@@ -549,23 +559,32 @@ struct GF8
     static void high(const leopard::backend::Ops& ops, uint64_t bytes,
         unsigned k, unsigned prefix, unsigned requested, unsigned side,
         const void* const* data, void** work,
-        const leopard2_internal::SparseForwardPlanBatchView* plan)
+        const leopard2_internal::SparseForwardPlanBatchView* plan,
+        const leopard2_internal::PrunedTransformPlan* inverse)
     {
         leopard::ff8::ReedSolomonEncode(
-            ops, bytes, k, prefix, requested, side, data, work, plan);
+            ops, bytes, k, prefix, requested, side, data, work, plan, inverse);
     }
     static void low(const leopard::backend::Ops& ops, uint64_t bytes,
         unsigned k, unsigned r, unsigned side, const void* const* data,
         void* const* recovery, void** work,
-        const leopard2_internal::SparseForwardPlanBatchView* plan)
+        const leopard2_internal::SparseForwardPlanBatchView* plan,
+        const leopard2_internal::PrunedTransformPlan* inverse)
     {
         leopard::ff8::ReedSolomonEncodeLow(
-            ops, bytes, k, r, side, data, recovery, work, plan);
+            ops, bytes, k, r, side, data, recovery, work, plan, inverse);
     }
 };
 
 struct GF16
 {
+    static bool prepare_inverse(unsigned size, unsigned shift,
+        const uint8_t* input, const uint8_t* output,
+        leopard2_internal::PrunedTransformPlan& plan)
+    {
+        return leopard::ff16::PreparePrunedTransformPlan(
+            size, shift, true, input, output, plan);
+    }
     static bool prepare(unsigned size, unsigned shift, uint8_t* workspace,
         size_t workspace_bytes, uint8_t* masks, size_t mask_bytes,
         leopard2_internal::SparseForwardPlanStats& stats)
@@ -576,18 +595,20 @@ struct GF16
     static void high(const leopard::backend::Ops& ops, uint64_t bytes,
         unsigned k, unsigned prefix, unsigned requested, unsigned side,
         const void* const* data, void** work,
-        const leopard2_internal::SparseForwardPlanBatchView* plan)
+        const leopard2_internal::SparseForwardPlanBatchView* plan,
+        const leopard2_internal::PrunedTransformPlan* inverse)
     {
         leopard::ff16::ReedSolomonEncode(
-            ops, bytes, k, prefix, requested, side, data, work, plan);
+            ops, bytes, k, prefix, requested, side, data, work, plan, inverse);
     }
     static void low(const leopard::backend::Ops& ops, uint64_t bytes,
         unsigned k, unsigned r, unsigned side, const void* const* data,
         void* const* recovery, void** work,
-        const leopard2_internal::SparseForwardPlanBatchView* plan)
+        const leopard2_internal::SparseForwardPlanBatchView* plan,
+        const leopard2_internal::PrunedTransformPlan* inverse)
     {
         leopard::ff16::ReedSolomonEncodeLow(
-            ops, bytes, k, r, side, data, recovery, work, plan);
+            ops, bytes, k, r, side, data, recovery, work, plan, inverse);
     }
 };
 
@@ -642,6 +663,30 @@ void compile_plan(const Options& options, const Geometry& geometry,
     }
     if (storage.retained_butterflies == 0)
         fail("compiled schedule retained no work");
+}
+
+template<class Field>
+void compile_inverse_prefix_plan(
+    const Options& options,
+    const Geometry& geometry,
+    leopard2_internal::PrunedTransformPlan& plan)
+{
+    const unsigned prefix = options.profile == ProfileLow
+        ? options.k : options.k % geometry.side;
+    if (prefix == 0 || prefix >= geometry.side)
+    {
+        plan = leopard2_internal::PrunedTransformPlan();
+        return;
+    }
+    const unsigned shift = options.profile == ProfileLow
+        ? 0U : geometry.side + (options.k / geometry.side) * geometry.side;
+    std::vector<uint8_t> input(geometry.side, 0);
+    std::vector<uint8_t> output(geometry.side, 1);
+    std::fill(input.begin(), input.begin() + prefix, 1);
+    if (!Field::prepare_inverse(
+            geometry.side, shift, input.data(), output.data(), plan) ||
+        plan.inverse_source_prefix != prefix)
+        fail("inverse input-prefix schedule compilation failed");
 }
 
 struct Buffers
@@ -734,15 +779,20 @@ unsigned requested_prefix(const std::vector<uint8_t>& requested)
 template<class Field>
 void execute(const leopard::backend::Ops& ops, const Options& options,
     const Geometry& geometry, const std::vector<uint8_t>& requested,
-    Buffers& buffers, const PlanStorage& plan, bool exact)
+    Buffers& buffers, const PlanStorage& plan,
+    bool exact, bool inverse_pruned)
 {
+    const leopard2_internal::PrunedTransformPlan* inverse =
+        inverse_pruned && plan.inverse_prefix.size != 0
+            ? &plan.inverse_prefix : NULL;
     if (options.profile == ProfileHigh)
     {
         Field::high(ops, options.shard_bytes, options.k,
             requested_prefix(requested), requested_count(requested), geometry.side,
             &buffers.original[0],
             exact ? &buffers.exact_work[0] : &buffers.prefix_work[0],
-            exact ? &plan.view : NULL);
+            exact ? &plan.view : NULL,
+            inverse);
     }
     else
     {
@@ -750,8 +800,21 @@ void execute(const leopard::backend::Ops& ops, const Options& options,
             &buffers.original[0],
             exact ? &buffers.exact_recovery[0] : &buffers.prefix_recovery[0],
             exact ? &buffers.exact_work[0] : &buffers.prefix_work[0],
-            exact ? &plan.view : NULL);
+            exact ? &plan.view : NULL,
+            inverse);
     }
+}
+
+bool form_uses_exact_forward(Form form)
+{
+    return form == FormExactPrepared || form == FormExactCallLocal ||
+        form == FormExactInversePruned;
+}
+
+bool form_uses_pruned_inverse(Form form)
+{
+    return form == FormPrefixInversePruned ||
+        form == FormExactInversePruned;
 }
 
 const uint8_t* output_pointer(const Options& options, const Geometry& geometry,
@@ -831,7 +894,7 @@ double time_form(Form form, const leopard::backend::Ops& ops,
         if (form == FormExactCallLocal)
             compile_plan<Field>(options, geometry, requested, plan, false);
         execute<Field>(ops, options, geometry, requested, buffers, plan,
-            form != FormPrefix);
+            form_uses_exact_forward(form), form_uses_pruned_inverse(form));
     }
     const Clock::time_point end = Clock::now();
     const double elapsed = static_cast<double>(
@@ -845,11 +908,22 @@ void run(const leopard::backend::Ops& ops, const Options& options,
 {
     PlanStorage plan(geometry);
     compile_plan<Field>(options, geometry, requested, plan, true);
+    compile_inverse_prefix_plan<Field>(options, geometry, plan.inverse_prefix);
     Buffers buffers(options, geometry, requested);
-    execute<Field>(ops, options, geometry, requested, buffers, plan, false);
-    execute<Field>(ops, options, geometry, requested, buffers, plan, true);
+    execute<Field>(ops, options, geometry, requested, buffers, plan,
+        false, false);
+    execute<Field>(ops, options, geometry, requested, buffers, plan,
+        true, false);
+    const uint64_t mature_digest = verify_and_digest(
+        options, geometry, requested, buffers);
+    execute<Field>(ops, options, geometry, requested, buffers, plan,
+        false, true);
+    execute<Field>(ops, options, geometry, requested, buffers, plan,
+        true, true);
     const uint64_t digest = verify_and_digest(
         options, geometry, requested, buffers);
+    if (digest != mature_digest)
+        fail("inverse input pruning changed parity");
 
     for (unsigned warmup = 0; warmup < options.warmups; ++warmup)
     {
@@ -858,7 +932,8 @@ void run(const leopard::backend::Ops& ops, const Options& options,
             if (form == FormExactCallLocal)
                 compile_plan<Field>(options, geometry, requested, plan, false);
             execute<Field>(ops, options, geometry, requested, buffers, plan,
-                form != FormPrefix);
+                form_uses_exact_forward(static_cast<Form>(form)),
+                form_uses_pruned_inverse(static_cast<Form>(form)));
         }
     }
 
@@ -874,6 +949,7 @@ void run(const leopard::backend::Ops& ops, const Options& options,
     }
 
     std::vector<double> setup_samples;
+    std::vector<double> inverse_setup_samples;
     uint64_t setup_digest = 0;
     for (unsigned sample = 0; sample < options.samples; ++sample)
     {
@@ -888,21 +964,46 @@ void run(const leopard::backend::Ops& ops, const Options& options,
         const double elapsed = static_cast<double>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count());
         setup_samples.push_back(elapsed / options.setup_iterations);
+
+        const Clock::time_point inverse_begin = Clock::now();
+        for (unsigned i = 0; i < options.setup_iterations; ++i)
+        {
+            compile_inverse_prefix_plan<Field>(
+                options, geometry, plan.inverse_prefix);
+            setup_digest ^= plan.inverse_prefix.operations.size() +
+                (static_cast<uint64_t>(
+                    plan.inverse_prefix.inverse_source_groups.size()) << 32);
+        }
+        const Clock::time_point inverse_end = Clock::now();
+        const double inverse_elapsed = static_cast<double>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                inverse_end - inverse_begin).count());
+        inverse_setup_samples.push_back(
+            inverse_elapsed / options.setup_iterations);
     }
     if (setup_digest == UINT64_MAX)
         fail("unreachable setup digest");
 
-    execute<Field>(ops, options, geometry, requested, buffers, plan, false);
-    execute<Field>(ops, options, geometry, requested, buffers, plan, true);
+    execute<Field>(ops, options, geometry, requested, buffers, plan,
+        false, true);
+    execute<Field>(ops, options, geometry, requested, buffers, plan,
+        true, true);
     if (verify_and_digest(options, geometry, requested, buffers) != digest)
         fail("parity changed during timing");
 
     const Summary prefix = summarize(form_samples[FormPrefix]);
     const Summary exact = summarize(form_samples[FormExactPrepared]);
     const Summary call_local = summarize(form_samples[FormExactCallLocal]);
+    const Summary prefix_inverse =
+        summarize(form_samples[FormPrefixInversePruned]);
+    const Summary exact_inverse =
+        summarize(form_samples[FormExactInversePruned]);
     const Summary setup = summarize(setup_samples);
+    const Summary inverse_setup = summarize(inverse_setup_samples);
     if (prefix.median <= 0 || exact.median <= 0 ||
-        call_local.median <= 0 || setup.median <= 0)
+        call_local.median <= 0 || prefix_inverse.median <= 0 ||
+        exact_inverse.median <= 0 || setup.median <= 0 ||
+        inverse_setup.median <= 0)
         fail("clock resolution is insufficient");
 
     std::ostringstream digest_text;
@@ -911,13 +1012,16 @@ void run(const leopard::backend::Ops& ops, const Options& options,
     std::cout.imbue(std::locale::classic());
     std::cout << std::fixed << std::setprecision(3)
         << "{\n"
-        << "  \"schema\": \"leopard2-sparse-encode-benchmark-v1\",\n"
+        << "  \"schema\": \"leopard2-sparse-encode-benchmark-v2\",\n"
         << "  \"authoritative\": false,\n"
         << "  \"authority_note\": \"requires the fail-closed pinned runner "
         << "and host isolation attestation\",\n"
         << "  \"build\": {\"source_git_sha\": \""
         << LEO2_SPARSE_ENCODE_SOURCE_GIT_SHA << "\", \"source_dirty\": "
-        << LEO2_SPARSE_ENCODE_SOURCE_DIRTY << ", \"compiler\": \""
+        << LEO2_SPARSE_ENCODE_SOURCE_DIRTY
+        << ", \"library_test_hooks\": "
+        << (LEO2_SPARSE_ENCODE_LIBRARY_TEST_HOOKS ? "true" : "false")
+        << ", \"compiler\": \""
         << compiler_name() << "\", \"compiler_version\": \""
         << json_escape(compiler_version()) << "\", \"cplusplus\": " << __cplusplus
         << "},\n"
@@ -957,17 +1061,36 @@ void run(const leopard::backend::Ops& ops, const Options& options,
         << ", \"prefix_butterflies\": " << plan.prefix_butterflies
         << ", \"retained_butterflies\": " << plan.retained_butterflies
         << ", \"one_output_butterflies\": " << plan.one_output_butterflies
-        << ", \"fused_four_groups\": " << plan.fused_four_groups << "},\n"
+        << ", \"fused_four_groups\": " << plan.fused_four_groups
+        << ", \"inverse_candidate_available\": "
+        << (plan.inverse_prefix.size != 0 ? "true" : "false")
+        << ", \"inverse_operations\": "
+        << plan.inverse_prefix.operations.size()
+        << ", \"inverse_source_groups\": "
+        << plan.inverse_prefix.inverse_source_groups.size()
+        << ", \"inverse_active_prefix\": "
+        << plan.inverse_prefix.inverse_source_prefix
+        << ", \"mature_zero_fill_shards\": "
+        << (plan.inverse_prefix.size != 0
+            ? geometry.side - plan.inverse_prefix.inverse_source_prefix : 0)
+        << ", \"pruned_zero_fill_shards\": 0},\n"
         << "  \"correctness\": {\"exact_prefix_parity_match\": true, "
+        << "\"inverse_pruned_parity_match\": true, "
         << "\"digest_fnv1a64\": \"" << digest_text.str() << "\"},\n"
         << "  \"metrics\": {\n";
 
-    const Summary summaries[] = { setup, prefix, exact, call_local };
-    const char* names[] = {
-        "schedule_setup_ns", "prefix_execution_ns",
-        "exact_prepared_execution_ns", "exact_call_local_total_ns"
+    const Summary summaries[] = {
+        setup, inverse_setup, prefix, exact, call_local,
+        prefix_inverse, exact_inverse
     };
-    for (unsigned metric = 0; metric < 4; ++metric)
+    const char* names[] = {
+        "schedule_setup_ns", "inverse_schedule_setup_ns",
+        "prefix_execution_ns", "exact_prepared_execution_ns",
+        "exact_call_local_total_ns",
+        "prefix_pruned_inverse_execution_ns",
+        "exact_pruned_inverse_execution_ns"
+    };
+    for (unsigned metric = 0; metric < 7; ++metric)
     {
         const Summary& value = summaries[metric];
         std::cout << "    \"" << names[metric] << "\": {\"median\": "
@@ -985,6 +1108,10 @@ void run(const leopard::backend::Ops& ops, const Options& options,
         << prefix.median / exact.median
         << ", \"prefix_over_exact_call_local\": "
         << prefix.median / call_local.median << ",\n"
+        << "    \"mature_over_pruned_inverse_prefix\": "
+        << prefix.median / prefix_inverse.median << ",\n"
+        << "    \"mature_over_pruned_inverse_exact\": "
+        << exact.median / exact_inverse.median << ",\n"
         << "    \"amortized_exact\": [\n";
     for (size_t i = 0; i < options.reuse.size(); ++i)
     {

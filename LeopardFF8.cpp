@@ -51,6 +51,10 @@ static std::atomic<uint64_t> TestLowFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestLowFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighIFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighInputCopyShards(0);
+static std::atomic<uint64_t> TestHighInputSourceWriteShards(0);
+static std::atomic<uint64_t> TestHighZeroFillShards(0);
+static std::atomic<uint64_t> TestHighPrunedInverseBlocks(0);
+static std::atomic<uint64_t> TestHighSkippedZeroFillShards(0);
 static std::atomic<uint64_t> TestHighOutputBlocks(0);
 static std::atomic<uint64_t> TestHighFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestHighFFTButterfly4OutCalls(0);
@@ -1288,8 +1292,39 @@ static void IFFT_DIT_Encoder(
     void** work,
     void** xor_result,
     const unsigned m,
-    const ffe_t* skewLUT)
+    const ffe_t* skewLUT,
+    const leopard2_internal::PrunedTransformPlan* inverse_prefix_plan)
 {
+    if (inverse_prefix_plan &&
+        inverse_prefix_plan->size == m &&
+        inverse_prefix_plan->inverse_source_prefix == m_truncated &&
+        leopard2_internal::ExecutePrunedInverseTransformPlanFromSources(
+            ops, bytes, *inverse_prefix_plan, data, work))
+    {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        const uint64_t staged =
+            inverse_prefix_plan->inverse_source_groups.size() * 4U;
+        TestHighIFFTButterfly4OutCalls.fetch_add(
+            inverse_prefix_plan->inverse_source_groups.size(),
+            std::memory_order_relaxed);
+        TestHighInputCopyShards.fetch_add(
+            m_truncated - staged, std::memory_order_relaxed);
+        TestHighInputSourceWriteShards.fetch_add(
+            m_truncated, std::memory_order_relaxed);
+        TestHighPrunedInverseBlocks.fetch_add(1, std::memory_order_relaxed);
+        TestHighSkippedZeroFillShards.fetch_add(
+            m - m_truncated, std::memory_order_relaxed);
+#endif
+        if (xor_result)
+            VectorXOR(ops, bytes, m, xor_result, work);
+        return;
+    }
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    TestHighInputSourceWriteShards.fetch_add(
+        m_truncated, std::memory_order_relaxed);
+    TestHighZeroFillShards.fetch_add(
+        m - m_truncated, std::memory_order_relaxed);
+#endif
     // Decimation in time: Unroll 2 layers at a time
     unsigned dist = 1, dist4 = 4;
     if (m > 4)
@@ -1999,7 +2034,8 @@ void ReedSolomonEncode(
     unsigned m,
     const void* const* data,
     void** work,
-    const leopard2_internal::SparseForwardPlanBatchView* sparse_plans)
+    const leopard2_internal::SparseForwardPlanBatchView* sparse_plans,
+    const leopard2_internal::PrunedTransformPlan* inverse_prefix_plan)
 {
 #if !defined(LEO2_ENABLE_TEST_HOOKS)
     (void)requested_output_count;
@@ -2016,7 +2052,8 @@ void ReedSolomonEncode(
         work,
         nullptr, // No xor output
         m,
-        skewLUT);
+        skewLUT,
+        original_count < m ? inverse_prefix_plan : NULL);
 
     const unsigned last_count = original_count % m;
     if (m >= original_count)
@@ -2038,7 +2075,8 @@ void ReedSolomonEncode(
             work + m, // temporary workspace
             work, // xor destination
             m,
-            skewLUT);
+            skewLUT,
+            NULL);
     }
 
     // Handle final partial set of m pieces:
@@ -2057,7 +2095,8 @@ void ReedSolomonEncode(
             work + m, // temporary workspace
             work, // xor destination
             m,
-            skewLUT);
+            skewLUT,
+            inverse_prefix_plan);
     }
 
 skip_body:
@@ -2101,7 +2140,7 @@ void ReedSolomonEncode(
     void** work)
 {
     ReedSolomonEncode(ops, buffer_bytes, original_count, recovery_count,
-        recovery_count, m, data, work, NULL);
+        recovery_count, m, data, work, NULL, NULL);
 }
 
 
@@ -2128,7 +2167,8 @@ void ReedSolomonEncodeLow(
     const void* const* data,
     void* const* recovery,
     void** work,
-    const leopard2_internal::SparseForwardPlanBatchView* sparse_plans)
+    const leopard2_internal::SparseForwardPlanBatchView* sparse_plans,
+    const leopard2_internal::PrunedTransformPlan* inverse_prefix_plan)
 {
     LEO_DEBUG_ASSERT(p >= 2 && p <= kOrder / 2);
     LEO_DEBUG_ASSERT(original_count <= p);
@@ -2144,7 +2184,8 @@ void ReedSolomonEncodeLow(
         work,
         nullptr,
         p,
-        FFTSkewStorage);
+        FFTSkewStorage,
+        inverse_prefix_plan);
 
     // Evaluate the immutable coefficient block on each requested parity coset.
     // The out-of-place first layer writes work[p..2p) directly, avoiding the
@@ -2220,7 +2261,7 @@ void ReedSolomonEncodeLow(
     void** work)
 {
     ReedSolomonEncodeLow(ops, buffer_bytes, original_count, recovery_count,
-        p, data, recovery, work, NULL);
+        p, data, recovery, work, NULL, NULL);
 }
 
 
@@ -2914,6 +2955,10 @@ void TestOnlyResetHighEncodeCounts()
 {
     TestHighIFFTButterfly4OutCalls.store(0, std::memory_order_relaxed);
     TestHighInputCopyShards.store(0, std::memory_order_relaxed);
+    TestHighInputSourceWriteShards.store(0, std::memory_order_relaxed);
+    TestHighZeroFillShards.store(0, std::memory_order_relaxed);
+    TestHighPrunedInverseBlocks.store(0, std::memory_order_relaxed);
+    TestHighSkippedZeroFillShards.store(0, std::memory_order_relaxed);
 }
 
 
@@ -2924,6 +2969,14 @@ TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts()
         TestHighIFFTButterfly4OutCalls.load(std::memory_order_relaxed);
     result.input_copy_shards =
         TestHighInputCopyShards.load(std::memory_order_relaxed);
+    result.input_source_write_shards =
+        TestHighInputSourceWriteShards.load(std::memory_order_relaxed);
+    result.zero_fill_shards =
+        TestHighZeroFillShards.load(std::memory_order_relaxed);
+    result.pruned_inverse_blocks =
+        TestHighPrunedInverseBlocks.load(std::memory_order_relaxed);
+    result.skipped_zero_fill_shards =
+        TestHighSkippedZeroFillShards.load(std::memory_order_relaxed);
     return result;
 }
 

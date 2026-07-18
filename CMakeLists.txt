@@ -451,6 +451,25 @@ if(LEO2_BUILD_BENCHMARKS)
         LEO2_LOCATOR_SOURCE_GIT_SHA="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
         LEO2_LOCATOR_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
 
+    # This diagnostic uses only ordinary internal transform entry points and
+    # can therefore be built without test instrumentation.  Authoritative
+    # crossover runs must configure with LEO2_BUILD_TESTS=OFF; the embedded
+    # marker lets the fail-closed runner reject an instrumented archive.
+    if(LEOPARD_ENABLE_GF8 AND LEOPARD_ENABLE_GF16)
+        add_executable(bench_leopard2_sparse_encode
+            bench/leopard2/sparse_encode_benchmark.cpp)
+        if(LEO2_BUILD_TESTS)
+            set(LEO2_SPARSE_ENCODE_LIBRARY_TEST_HOOKS 1)
+        else()
+            set(LEO2_SPARSE_ENCODE_LIBRARY_TEST_HOOKS 0)
+        endif()
+        target_compile_definitions(bench_leopard2_sparse_encode PRIVATE
+            LEO2_SPARSE_ENCODE_SOURCE_GIT_SHA="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
+            LEO2_SPARSE_ENCODE_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY}
+            LEO2_SPARSE_ENCODE_LIBRARY_TEST_HOOKS=${LEO2_SPARSE_ENCODE_LIBRARY_TEST_HOOKS})
+        target_link_libraries(bench_leopard2_sparse_encode leopard)
+    endif()
+
     add_executable(experiment_leopard ${EXPERIMENT_SOURCE_FILES})
 endif()
 
@@ -505,6 +524,20 @@ if(LEO2_BUILD_TESTS)
             -DLEO2_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}
             -DLEO2_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_release_flags.cmake)
+
+    if(LEO2_BUILD_BENCHMARKS)
+        add_test(NAME leopard2_sparse_encode_benchmark_registration
+            COMMAND ${CMAKE_COMMAND}
+                -DLEO2_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DLEO2_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/sparse_encode_registration
+                -DLEO2_C_COMPILER=${CMAKE_C_COMPILER}
+                -DLEO2_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+                -DLEO2_GENERATOR=${CMAKE_GENERATOR}
+                -DLEO2_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}
+                -DLEO2_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}
+                -DLEO2_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_sparse_encode_benchmark_registration.cmake)
+    endif()
 
     # The installed archive keeps optional ISAs in isolated object files, but
     # historical/manual whole-translation-unit SSSE3 builds remain supported.
@@ -626,18 +659,6 @@ if(LEO2_BUILD_TESTS)
             LEO2_PRUNED_SOURCE_GIT_SHA="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
             LEO2_PRUNED_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
         target_link_libraries(bench_leopard2_pruned_transform leopard)
-
-        # Same-binary, same-source comparison of exact requested-output masks
-        # against the mature prefix encoder transforms.  Schedule setup,
-        # prepared execution, and the current call-local total are all retained
-        # separately; the executable is diagnostic and is never installed.
-        add_executable(bench_leopard2_sparse_encode
-            bench/leopard2/sparse_encode_benchmark.cpp)
-        target_compile_definitions(bench_leopard2_sparse_encode PRIVATE
-            LEO2_ENABLE_TEST_HOOKS=1
-            LEO2_SPARSE_ENCODE_SOURCE_GIT_SHA="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
-            LEO2_SPARSE_ENCODE_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
-        target_link_libraries(bench_leopard2_sparse_encode leopard)
 
     endif()
 

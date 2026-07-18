@@ -677,12 +677,14 @@ void test_high_transform_source_staging(
         unsigned k;
         uint64_t expected_out_of_place_calls;
         uint64_t expected_copied_input_shards;
+        uint64_t expected_pruned_blocks;
+        uint64_t expected_skipped_zero_fills;
     };
     const Case cases[] = {
-        { LEO2_FIELD_GF8, 32, 8, 0 },
-        { LEO2_FIELD_GF8, 33, 8, 1 },
-        { LEO2_FIELD_GF16, 32, 8, 0 },
-        { LEO2_FIELD_GF16, 33, 8, 1 }
+        { LEO2_FIELD_GF8, 32, 8, 0, 0, 0 },
+        { LEO2_FIELD_GF8, 33, 8, 1, 1, 15 },
+        { LEO2_FIELD_GF16, 32, 8, 0, 0, 0 },
+        { LEO2_FIELD_GF16, 33, 8, 1, 1, 15 }
     };
     const unsigned r = 16;
     const size_t bytes = 64;
@@ -718,12 +720,20 @@ void test_high_transform_source_staging(
 
         uint64_t out_of_place_calls = 0;
         uint64_t copied_input_shards = 0;
+        uint64_t source_write_shards = 0;
+        uint64_t zero_fill_shards = 0;
+        uint64_t pruned_blocks = 0;
+        uint64_t skipped_zero_fills = 0;
         if (c.field == LEO2_FIELD_GF8)
         {
             const leopard::ff8::TestOnlyHighEncodeCounts actual =
                 leopard::ff8::TestOnlyGetHighEncodeCounts();
             out_of_place_calls = actual.ifft_butterfly4_out_of_place;
             copied_input_shards = actual.input_copy_shards;
+            source_write_shards = actual.input_source_write_shards;
+            zero_fill_shards = actual.zero_fill_shards;
+            pruned_blocks = actual.pruned_inverse_blocks;
+            skipped_zero_fills = actual.skipped_zero_fill_shards;
         }
         else
         {
@@ -731,11 +741,22 @@ void test_high_transform_source_staging(
                 leopard::ff16::TestOnlyGetHighEncodeCounts();
             out_of_place_calls = actual.ifft_butterfly4_out_of_place;
             copied_input_shards = actual.input_copy_shards;
+            source_write_shards = actual.input_source_write_shards;
+            zero_fill_shards = actual.zero_fill_shards;
+            pruned_blocks = actual.pruned_inverse_blocks;
+            skipped_zero_fills = actual.skipped_zero_fill_shards;
         }
         require(out_of_place_calls == c.expected_out_of_place_calls,
             "high source-staging out-of-place call count mismatch");
         require(copied_input_shards == c.expected_copied_input_shards,
             "high source-staging input-copy count mismatch");
+        require(source_write_shards == c.k,
+            "high inverse source-write count mismatch");
+        require(zero_fill_shards == 0,
+            "high inverse unexpectedly materialized shortened zeroes");
+        require(pruned_blocks == c.expected_pruned_blocks &&
+                skipped_zero_fills == c.expected_skipped_zero_fills,
+            "high inverse C1 pruning route mismatch");
         ++counts->high_source_staging_checks;
         delete owner;
     }
@@ -858,7 +879,11 @@ void test_high_transform_source_staging(
         const leopard::ff16::TestOnlyHighEncodeCounts actual =
             leopard::ff16::TestOnlyGetHighEncodeCounts();
         require(actual.ifft_butterfly4_out_of_place == 32 &&
-                actual.input_copy_shards == 1,
+                actual.input_copy_shards == 1 &&
+                actual.input_source_write_shards == low_k &&
+                actual.zero_fill_shards == 0 &&
+                actual.pruned_inverse_blocks == 1 &&
+                actual.skipped_zero_fill_shards == 127,
             "GF16 low-profile large source-staging route mismatch");
         require(original == original_before,
             "GF16 low-profile large source-staging modified caller data");

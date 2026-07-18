@@ -311,7 +311,7 @@ bool ExecutePrunedInverseTransformPlanFromSources(
     const leopard::backend::Ops& ops,
     uint64_t byte_count,
     const PrunedTransformPlan& plan,
-    void* const* source,
+    const void* const* source,
     void** work);
 
 uint8_t Log2PowerOfTwo(uint32_t size);

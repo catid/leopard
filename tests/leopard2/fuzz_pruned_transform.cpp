@@ -446,7 +446,7 @@ void RunCase(
         Field::Full(
             ops, true, bytes, size, shift, prefix,
             source_expected.pointers.data());
-        std::vector<void*> prefix_pointers(prefix, NULL);
+        std::vector<const void*> prefix_pointers(prefix, NULL);
         for (unsigned i = 0; i < prefix; ++i)
             prefix_pointers[i] = source.pointers[i];
         Check(leopard2_internal::ExecutePrunedInverseTransformPlanFromSources(

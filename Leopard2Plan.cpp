@@ -1483,7 +1483,7 @@ bool ExecutePrunedInverseTransformPlanFromSources(
     const leopard::backend::Ops& ops,
     uint64_t byte_count,
     const PrunedTransformPlan& plan,
-    void* const* source,
+    const void* const* source,
     void** work)
 {
     const bool gf16 = plan.zero_multiplier_log == 65535U;
@@ -1519,16 +1519,6 @@ bool ExecutePrunedInverseTransformPlanFromSources(
     for (size_t i = 0; i < plan.zero_outputs.size(); ++i)
         if (plan.zero_outputs[i] >= plan.size)
             return false;
-    for (size_t i = 0; i < plan.fused_four_starts.size(); ++i)
-    {
-        const size_t start = plan.fused_four_starts[i];
-        FusedFourMatch match;
-        if (start > plan.operations.size() ||
-            plan.operations.size() - start < 4 ||
-            (i != 0 && plan.fused_four_starts[i - 1] + 4U > start) ||
-            !MatchFusedFour(plan.operations, start, true, match))
-            return false;
-    }
     if (byte_count == 0)
         return true;
     for (uint32_t i = 0; i < plan.inverse_source_prefix; ++i)
@@ -1590,6 +1580,8 @@ bool ExecutePrunedInverseTransformPlanFromSources(
         if (fused_index < plan.fused_four_starts.size() &&
             plan.fused_four_starts[fused_index] == i)
         {
+            if (plan.operations.size() - i < 4)
+                return false;
             bool consumed = false;
             for (size_t j = 0; j < 4; ++j)
                 consumed = consumed || IsConsumedInverseSourceOperation(

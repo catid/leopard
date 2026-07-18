@@ -400,7 +400,7 @@ void run_case(
             size, std::vector<uint8_t>(static_cast<size_t>(bytes), 0xa5));
         // Deliberately publish only the active prefix.  Any suffix validation
         // or read by the executor is an out-of-bounds access under ASan.
-        std::vector<void*> immutable_source(inverse_prefix, NULL);
+        std::vector<const void*> immutable_source(inverse_prefix, NULL);
         for (unsigned coordinate = 0; coordinate < inverse_prefix; ++coordinate)
             immutable_source[coordinate] = initial[coordinate].data();
         std::vector<void*> from_source_pointers = pointers(from_source);
@@ -656,7 +656,7 @@ void run_inverse_source_prefix_case(
     Field::full(ops, true, bytes, size, shift, expected_ptrs.data());
     // The pointer array ends at prefix.  ASan catches even validating one
     // shortened suffix entry, independently of the zero-filled oracle data.
-    std::vector<void*> source_ptrs(prefix, NULL);
+    std::vector<const void*> source_ptrs(prefix, NULL);
     for (unsigned i = 0; i < prefix; ++i)
         source_ptrs[i] = source[i].data();
     std::vector<void*> actual_ptrs = pointers(actual);
@@ -1354,6 +1354,60 @@ void test_shared_source_plan_concurrency(const leopard::backend::Ops& ops)
         "concurrent immutable-source execution changed coefficients");
 }
 
+void test_shared_inverse_source_plan_concurrency(
+    const leopard::backend::Ops& ops)
+{
+    const unsigned size = 64;
+    const unsigned prefix = 33;
+    const uint64_t bytes = 129;
+    std::vector<uint8_t> input(size, 0);
+    std::vector<uint8_t> output(size, 1);
+    std::fill(input.begin(), input.begin() + prefix, 1);
+    leopard2_internal::PrunedTransformPlan plan;
+    require(leopard::ff8::PreparePrunedTransformPlan(
+            size, 128, true, input.data(), output.data(), plan),
+        "concurrent inverse-source plan construction failed");
+
+    std::vector<std::vector<uint8_t> > source = make_input(
+        size, bytes, input, UINT64_C(0x494e56534f555243));
+    const std::vector<std::vector<uint8_t> > source_snapshot(source);
+    std::vector<const void*> source_values(prefix, NULL);
+    for (unsigned i = 0; i < prefix; ++i)
+        source_values[i] = source[i].data();
+    std::vector<std::vector<uint8_t> > expected(source);
+    std::vector<void*> expected_pointers = pointers(expected);
+    GF8::full(ops, true, bytes, size, 128, expected_pointers.data());
+
+    std::atomic<bool> failed(false);
+    std::vector<std::thread> threads;
+    for (unsigned thread = 0; thread < 8; ++thread)
+    {
+        threads.push_back(std::thread([&, thread]() {
+            for (unsigned iteration = 0; iteration < 16; ++iteration)
+            {
+                std::vector<std::vector<uint8_t> > actual(
+                    size, std::vector<uint8_t>(bytes, 0xa5));
+                std::vector<void*> actual_pointers = pointers(actual);
+                if (!leopard2_internal::
+                        ExecutePrunedInverseTransformPlanFromSources(
+                            ops, bytes, plan, source_values.data(),
+                            actual_pointers.data()) || actual != expected)
+                {
+                    (void)thread;
+                    failed.store(true, std::memory_order_relaxed);
+                    return;
+                }
+            }
+        }));
+    }
+    for (size_t i = 0; i < threads.size(); ++i)
+        threads[i].join();
+    require(!failed.load(std::memory_order_relaxed),
+        "shared inverse immutable-source plan failed concurrent execution");
+    require(source == source_snapshot,
+        "concurrent inverse-source execution changed caller sources");
+}
+
 } // namespace
 
 int main()
@@ -1421,6 +1475,7 @@ int main()
             test_profile_masks<GF16>(*ops, 257, 700, 66, counts);
             test_shared_plan_concurrency(*ops);
             test_shared_source_plan_concurrency(*ops);
+            test_shared_inverse_source_plan_concurrency(*ops);
             ++counts.backends;
         }
         require(counts.backends != 0, "no backend was available");

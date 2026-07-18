@@ -159,7 +159,8 @@ void ReedSolomonEncode(
     unsigned m,
     const void* const * const data,
     void** work,
-    const leopard2_internal::SparseForwardPlanBatchView* sparse_plans);
+    const leopard2_internal::SparseForwardPlanBatchView* sparse_plans,
+    const leopard2_internal::PrunedTransformPlan* inverse_prefix_plan);
 void ReedSolomonEncode(
     uint64_t buffer_bytes,
     unsigned original_count,
@@ -191,7 +192,8 @@ void ReedSolomonEncodeLow(
     const void* const * const data,
     void* const * const recovery,
     void** work,
-    const leopard2_internal::SparseForwardPlanBatchView* sparse_plans);
+    const leopard2_internal::SparseForwardPlanBatchView* sparse_plans,
+    const leopard2_internal::PrunedTransformPlan* inverse_prefix_plan);
 void ReedSolomonEncodeLow(
     uint64_t buffer_bytes,
     unsigned original_count,
@@ -323,6 +325,10 @@ struct TestOnlyHighEncodeCounts
 {
     uint64_t ifft_butterfly4_out_of_place;
     uint64_t input_copy_shards;
+    uint64_t input_source_write_shards;
+    uint64_t zero_fill_shards;
+    uint64_t pruned_inverse_blocks;
+    uint64_t skipped_zero_fill_shards;
 };
 struct TestOnlySparseEncodeCounts
 {

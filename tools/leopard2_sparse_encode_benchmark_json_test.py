@@ -69,7 +69,7 @@ def validate(raw: str, expected: dict[str, object]) -> None:
     except json.JSONDecodeError as error:
         raise SmokeError(f"benchmark output is not JSON: {error}") from error
     require(
-        result.get("schema") == "leopard2-sparse-encode-benchmark-v1",
+        result.get("schema") == "leopard2-sparse-encode-benchmark-v2",
         "unexpected schema",
     )
     require(result.get("authoritative") is False, "cell claimed authority")
@@ -85,6 +85,10 @@ def validate(raw: str, expected: dict[str, object]) -> None:
         "missing source SHA",
     )
     require(build.get("source_dirty") in (0, 1), "invalid dirty marker")
+    require(
+        isinstance(build.get("library_test_hooks"), bool),
+        "missing instrumentation marker",
+    )
     require(
         isinstance(build.get("compiler"), str) and build["compiler"],
         "missing compiler identity",
@@ -127,12 +131,35 @@ def validate(raw: str, expected: dict[str, object]) -> None:
         and plan["dependency_workspace_bytes"] > 0,
         "invalid schedule storage",
     )
+    require(
+        plan.get("inverse_candidate_available") is True
+        and isinstance(plan.get("inverse_operations"), int)
+        and plan["inverse_operations"] > 0
+        and isinstance(plan.get("inverse_source_groups"), int)
+        and isinstance(plan.get("inverse_active_prefix"), int)
+        and 0 < plan["inverse_active_prefix"] < resolved["padded_side"],
+        "strict-prefix smoke cell did not compile an inverse source plan",
+    )
+    require(
+        plan["inverse_source_groups"] == plan["inverse_active_prefix"] // 4,
+        "inverse source plan has wrong complete four-source group count",
+    )
+    require(
+        isinstance(plan.get("mature_zero_fill_shards"), int)
+        and plan["mature_zero_fill_shards"] > 0
+        and plan.get("pruned_zero_fill_shards") == 0,
+        "invalid inverse-prefix zero-fill accounting",
+    )
 
     correctness = result.get("correctness")
     require(
         isinstance(correctness, dict)
         and correctness.get("exact_prefix_parity_match") is True,
         "parity comparison failed",
+    )
+    require(
+        correctness.get("inverse_pruned_parity_match") is True,
+        "inverse-pruned parity comparison failed",
     )
     digest = correctness.get("digest_fnv1a64")
     require(
@@ -144,13 +171,21 @@ def validate(raw: str, expected: dict[str, object]) -> None:
     require(isinstance(metrics, dict), "missing metrics")
     names = (
         "schedule_setup_ns",
+        "inverse_schedule_setup_ns",
         "prefix_execution_ns",
         "exact_prepared_execution_ns",
         "exact_call_local_total_ns",
+        "prefix_pruned_inverse_execution_ns",
+        "exact_pruned_inverse_execution_ns",
     )
     for name in names:
         validate_metric(metrics.get(name), int(parameters["samples"]), name)
-    for name in ("prefix_over_exact_prepared", "prefix_over_exact_call_local"):
+    for name in (
+        "prefix_over_exact_prepared",
+        "prefix_over_exact_call_local",
+        "mature_over_pruned_inverse_prefix",
+        "mature_over_pruned_inverse_exact",
+    ):
         require(
             isinstance(metrics.get(name), (int, float))
             and math.isfinite(metrics[name])
@@ -166,6 +201,28 @@ def validate(raw: str, expected: dict[str, object]) -> None:
     setup = float(metrics["schedule_setup_ns"]["median"])
     execution = float(metrics["exact_prepared_execution_ns"]["median"])
     mature = float(metrics["prefix_execution_ns"]["median"])
+    prefix_inverse = float(
+        metrics["prefix_pruned_inverse_execution_ns"]["median"]
+    )
+    exact_inverse = float(
+        metrics["exact_pruned_inverse_execution_ns"]["median"]
+    )
+    require(
+        math.isclose(
+            float(metrics["mature_over_pruned_inverse_prefix"]),
+            mature / prefix_inverse,
+            abs_tol=0.002,
+        ),
+        "wrong inverse-prefix ratio",
+    )
+    require(
+        math.isclose(
+            float(metrics["mature_over_pruned_inverse_exact"]),
+            execution / exact_inverse,
+            abs_tol=0.002,
+        ),
+        "wrong inverse-exact ratio",
+    )
     for row in amortized:
         modeled = execution + setup / row["reuse"]
         require(
@@ -199,27 +256,27 @@ def main() -> int:
     ]
     cases = (
         (
-            ["--profile", "high", "--field", "gf8", "--k", "48", "--r", "16",
+            ["--profile", "high", "--field", "gf8", "--k", "49", "--r", "16",
              "--requested-parity", "0,7,15", *common],
-            {"profile": "high", "field": "gf8", "K": 48, "R": 16,
+            {"profile": "high", "field": "gf8", "K": 49, "R": 16,
              "requested_parity": [0, 7, 15]},
         ),
         (
-            ["--profile", "low", "--field", "gf8", "--k", "16", "--r", "48",
+            ["--profile", "low", "--field", "gf8", "--k", "17", "--r", "48",
              "--requested-parity", "0,15,16,31,47", *common],
-            {"profile": "low", "field": "gf8", "K": 16, "R": 48,
+            {"profile": "low", "field": "gf8", "K": 17, "R": 48,
              "requested_parity": [0, 15, 16, 31, 47]},
         ),
         (
-            ["--profile", "high", "--field", "gf16", "--k", "48", "--r", "16",
+            ["--profile", "high", "--field", "gf16", "--k", "49", "--r", "16",
              "--requested-parity", "0,7,15", *common],
-            {"profile": "high", "field": "gf16", "K": 48, "R": 16,
+            {"profile": "high", "field": "gf16", "K": 49, "R": 16,
              "requested_parity": [0, 7, 15]},
         ),
         (
-            ["--profile", "low", "--field", "gf16", "--k", "16", "--r", "48",
+            ["--profile", "low", "--field", "gf16", "--k", "17", "--r", "48",
              "--requested-parity", "0,15,16,31,47", *common],
-            {"profile": "low", "field": "gf16", "K": 16, "R": 48,
+            {"profile": "low", "field": "gf16", "K": 17, "R": 48,
              "requested_parity": [0, 15, 16, 31, 47]},
         ),
     )
