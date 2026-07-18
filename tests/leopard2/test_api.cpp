@@ -1209,6 +1209,121 @@ void test_balanced_dispatch_policy()
         "balanced dispatch accepted an unmeasured backend");
 }
 
+void require_balanced_family(
+    bool condition,
+    unsigned k,
+    size_t bytes,
+    const char* message)
+{
+    if (condition)
+        return;
+    std::ostringstream stream;
+    stream << "balanced family K=R=" << k;
+    if (bytes != 0)
+        stream << " bytes=" << bytes;
+    stream << ": " << message;
+    throw std::runtime_error(stream.str());
+}
+
+void test_balanced_family_forced_equivalence(leo2_context* context)
+{
+    const size_t execution_bytes = 193;
+    const size_t scratch_sizes[] = { execution_bytes, 256, 4097 };
+    const uint32_t flags[] = {
+        0,
+        LEO2_CODEC_FORCE_GENERIC_DECODE,
+        LEO2_CODEC_FORCE_SPECIALIZED_DECODE |
+            LEO2_CODEC_FORCE_MATERIALIZED_DECODE,
+        LEO2_CODEC_FORCE_SPECIALIZED_DECODE |
+            LEO2_CODEC_FORCE_TILED_DECODE
+    };
+    const size_t path_count = sizeof(flags) / sizeof(flags[0]);
+
+    for (unsigned k = 5; k <= 128; ++k)
+    {
+        leo2_codec* codecs[path_count] = { NULL, NULL, NULL, NULL };
+        leo2_decode_plan* plans[path_count] = { NULL, NULL, NULL, NULL };
+        std::vector<uint8_t> original_present(k, 0);
+        std::vector<uint8_t> recovery_present(k, 1);
+
+        for (size_t path = 0; path < path_count; ++path)
+        {
+            codecs[path] = flags[path] == 0
+                ? make_codec(context, k, k,
+                    LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8)
+                : make_flagged_codec(context, k, k,
+                    LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                    flags[path]);
+            require_balanced_family(
+                leo2_codec_field(codecs[path]) == LEO2_FIELD_GF8,
+                k, 0, "resolved outside GF8");
+            require_balanced_family(
+                leo2_codec_parent_count(codecs[path]) ==
+                    leo2_codec_padded_side(codecs[path]) * 2,
+                k, 0, "did not resolve to N=2T");
+            require_result(leo2_decode_plan_create(
+                codecs[path], &original_present[0], &recovery_present[0],
+                &plans[path]), "balanced family plan create");
+        }
+
+        size_t execution_scratch[path_count] = { 0, 0, 0, 0 };
+        for (size_t size_i = 0;
+             size_i < sizeof(scratch_sizes) / sizeof(scratch_sizes[0]);
+             ++size_i)
+        {
+            const size_t bytes = scratch_sizes[size_i];
+            size_t scratch[path_count] = { 0, 0, 0, 0 };
+            for (size_t path = 0; path < path_count; ++path)
+            {
+                require_result(leo2_decode_plan_scratch_size(
+                    plans[path], bytes, &scratch[path]),
+                    "balanced family scratch query");
+            }
+            require_balanced_family(
+                scratch[0] == scratch[1] && scratch[0] == scratch[2],
+                k, bytes,
+                "AUTO, generic, and materialized scratch differ");
+            require_balanced_family(
+                scratch[3] > scratch[2], k, bytes,
+                "forced tiled scratch did not retain its K output slots");
+
+            size_t one_shot_scratch = 0;
+            require_result(leo2_decode_scratch_size(
+                codecs[0], bytes, &one_shot_scratch),
+                "balanced family one-shot scratch query");
+            require_balanced_family(
+                one_shot_scratch == scratch[0], k, bytes,
+                "one-shot query does not cover the full-loss AUTO plan");
+            if (bytes == execution_bytes)
+                std::copy(scratch, scratch + path_count, execution_scratch);
+        }
+
+        const Shards source = make_originals(
+            k, execution_bytes, UINT64_C(0xb41a4ced00000000) + k);
+        const Shards parity = encode_new(codecs[0], source, execution_bytes);
+        std::vector<const void*> original_input(k, NULL);
+        const std::vector<const void*> recovery_input = const_pointers(parity);
+        for (size_t path = 0; path < path_count; ++path)
+        {
+            Shards restored(k, std::vector<uint8_t>(execution_bytes, 0));
+            std::vector<void*> output = mutable_pointers(restored);
+            AlignedBuffer scratch(execution_scratch[path]);
+            require_result(leo2_decode_plan_execute(
+                plans[path], execution_bytes, &original_input[0],
+                &recovery_input[0], &output[0], scratch.data, scratch.bytes),
+                "balanced family decode execute");
+            require_balanced_family(restored == source, k, execution_bytes,
+                "AUTO/generic/materialized/tiled recovery mismatch");
+        }
+
+        for (size_t path = 0; path < path_count; ++path)
+        {
+            leo2_decode_plan_destroy(plans[path]);
+            leo2_codec_destroy(codecs[path]);
+        }
+    }
+}
+
 } // namespace
 
 int main()
@@ -1227,6 +1342,7 @@ int main()
         test_forced_backend(context);
         test_codec_flag_validation(context);
         test_balanced_dispatch_policy();
+        test_balanced_family_forced_equivalence(context);
         test_tiled_high_dispatch_policy();
         test_tiled_materialized_execution(context);
         test_batch_materialized_capacity(context);
@@ -1308,8 +1424,15 @@ int main()
         run_decode_case(context, 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1,
             LEO2_FIELD_GF8, 4097, balanced_full_recovery,
             std::vector<unsigned>(), &counts);
-        require(leo2_test_generic_direct_reveal_shards() == 128 * 3,
-            "balanced generic decode did not fuse complete-tile reveal/scatter");
+        const leo2_backend balanced_backend = leo2_context_backend(context);
+        const uint64_t expected_direct_reveals =
+            balanced_backend == LEO2_BACKEND_SSSE3 ||
+            balanced_backend == LEO2_BACKEND_AVX2
+                ? 128 * 3
+                : 0;
+        require(leo2_test_generic_direct_reveal_shards() ==
+                expected_direct_reveals,
+            "balanced generic reveal/scatter did not match backend policy");
 
         const size_t direct_gf16_boundaries[] = { 2, 34, 64, 66, 1026 };
         for (size_t count_i = 0;
