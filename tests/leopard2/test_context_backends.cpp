@@ -1576,6 +1576,130 @@ std::vector<ContextEntry> create_contexts()
     return contexts;
 }
 
+void require_r1_xor_trace(
+    const TraceOpsGuard& trace,
+    uint32_t original_count,
+    bool expect_coarse,
+    const std::string& operation)
+{
+    const uint64_t expected_pairs = (original_count - 1U) / 2U;
+    const uint64_t expected_single = (original_count - 1U) % 2U;
+    if (expect_coarse)
+    {
+        require(trace.xor_sources_calls() == 1 &&
+                trace.xor_two_to_one_calls() == 0 &&
+                trace.xor_calls() == 0,
+            operation + " did not select exactly one coarse reduction");
+    }
+    else
+    {
+        require(trace.xor_sources_calls() == 0 &&
+                trace.xor_two_to_one_calls() == expected_pairs &&
+                trace.xor_calls() == expected_single,
+            operation + " did not retain the exact paired/single reduction");
+    }
+}
+
+void execute_r1_xor_dispatch_case(
+    const ContextEntry& entry,
+    TraceOpsGuard& trace,
+    uint32_t original_count,
+    size_t bytes,
+    bool expect_coarse)
+{
+    const CodecCase test_case = {
+        original_count, 1, LEO2_PROFILE_LEGACY_HIGH_V1,
+        LEO2_FIELD_GF8, bytes
+    };
+    const std::string identity = "R=1 backend=" +
+        std::to_string(static_cast<unsigned>(
+            leo2_context_backend(entry.context))) +
+        " K=" + std::to_string(original_count) +
+        " bytes=" + std::to_string(bytes);
+    const Shards originals = make_originals(test_case,
+        static_cast<uint32_t>(0x13198a2eU + original_count * 977U +
+            bytes));
+    leo2_codec* codec = NULL;
+    trace.reset();
+    const Shards recovery = encode_case(
+        entry.context, test_case, originals, &codec);
+    require_r1_xor_trace(
+        trace, original_count, expect_coarse, identity + " encode");
+
+    std::vector<uint8_t> original_present(original_count, 1);
+    std::vector<uint8_t> recovery_present(1, 1);
+    original_present[0] = 0;
+    leo2_decode_plan* plan = NULL;
+    require_result(leo2_decode_plan_create(codec, &original_present[0],
+        &recovery_present[0], &plan), LEO2_SUCCESS,
+        identity + " plan create");
+    size_t scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(plan, bytes,
+        &scratch_bytes), LEO2_SUCCESS, identity + " scratch query");
+    AlignedBuffer scratch(scratch_bytes);
+    std::vector<const void*> original_pointers = const_pointers(originals);
+    const std::vector<const void*> recovery_pointers =
+        const_pointers(recovery);
+    original_pointers[0] = NULL;
+    Bytes restored(bytes);
+    std::vector<void*> restored_pointers(original_count, NULL);
+    restored_pointers[0] = &restored[0];
+    trace.reset();
+    require_result(leo2_decode_plan_execute(plan, bytes,
+        &original_pointers[0], &recovery_pointers[0],
+        &restored_pointers[0], scratch.data(), scratch_bytes),
+        LEO2_SUCCESS, identity + " decode");
+    require(restored == originals[0], identity + " restored data mismatch");
+    require_r1_xor_trace(
+        trace, original_count, expect_coarse, identity + " decode");
+
+    leo2_decode_plan_destroy(plan);
+    leo2_codec_destroy(codec);
+}
+
+void test_r1_xor_dispatch_boundaries(
+    const ContextEntry& entry,
+    TraceOpsGuard& trace)
+{
+    const leo2_backend backend = leo2_context_backend(entry.context);
+    uint32_t fallback_originals = 0;
+    uint32_t promoted_originals = 0;
+    bool backend_can_promote = true;
+    switch (backend)
+    {
+    case LEO2_BACKEND_SCALAR:
+    case LEO2_BACKEND_SSSE3:
+        fallback_originals = 4;
+        promoted_originals = 5;
+        break;
+    case LEO2_BACKEND_AVX2:
+        fallback_originals = 6;
+        promoted_originals = 7;
+        break;
+    case LEO2_BACKEND_AVX512:
+        /* AVX-512 intentionally has no promotion until its own retained
+           end-to-end evidence exists.  Two adjacent counts still prove that
+           both paired-only and paired-plus-single forms remain selected. */
+        fallback_originals = 7;
+        promoted_originals = 8;
+        backend_can_promote = false;
+        break;
+    default:
+        return;
+    }
+
+    const uint32_t counts[] = { fallback_originals, promoted_originals };
+    const size_t sizes[] = { 1023, 1024 };
+    for (size_t count_i = 0; count_i < 2; ++count_i)
+        for (size_t size_i = 0; size_i < 2; ++size_i)
+        {
+            const bool expect_coarse = backend_can_promote &&
+                count_i == 1 && sizes[size_i] == 1024;
+            execute_r1_xor_dispatch_case(entry, trace, counts[count_i],
+                sizes[size_i], expect_coarse);
+        }
+}
+
 void test_process_default_immutable(
     const leopard::backend::Ops* process_default)
 {
@@ -1911,50 +2035,7 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
             leo2_codec_destroy(codec);
         }
 
-        const CodecCase xor_case = {
-            9, 1, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 1024
-        };
-        const Shards xor_originals = make_originals(xor_case, 0x13198a2eU);
-        leo2_codec* xor_codec = NULL;
-        trace.reset();
-        const Shards xor_recovery = encode_case(contexts[context_i].context,
-            xor_case, xor_originals, &xor_codec);
-        require(trace.xor_sources_calls() == 1 &&
-                trace.xor_two_to_one_calls() == 0 &&
-                trace.xor_calls() == 0,
-            "R=1 encode bypassed the coarse context XOR table");
-
-        std::vector<uint8_t> original_present(xor_case.k, 1);
-        std::vector<uint8_t> recovery_present(xor_case.r, 1);
-        original_present[0] = 0;
-        leo2_decode_plan* xor_plan = NULL;
-        require_result(leo2_decode_plan_create(xor_codec,
-            &original_present[0], &recovery_present[0], &xor_plan),
-            LEO2_SUCCESS, "R=1 plan create");
-        size_t scratch_bytes = 0;
-        require_result(leo2_decode_plan_scratch_size(xor_plan, xor_case.bytes,
-            &scratch_bytes), LEO2_SUCCESS, "R=1 scratch query");
-        AlignedBuffer scratch(scratch_bytes);
-        std::vector<const void*> original_pointers =
-            const_pointers(xor_originals);
-        const std::vector<const void*> recovery_pointers =
-            const_pointers(xor_recovery);
-        original_pointers[0] = NULL;
-        Bytes restored(xor_case.bytes);
-        std::vector<void*> restored_pointers(xor_case.k, NULL);
-        restored_pointers[0] = &restored[0];
-        trace.reset();
-        require_result(leo2_decode_plan_execute(xor_plan, xor_case.bytes,
-            &original_pointers[0], &recovery_pointers[0],
-            &restored_pointers[0], scratch.data(), scratch_bytes),
-            LEO2_SUCCESS, "R=1 decode");
-        require(restored == xor_originals[0], "R=1 restored data mismatch");
-        require(trace.xor_sources_calls() == 1 &&
-                trace.xor_two_to_one_calls() == 0 &&
-                trace.xor_calls() == 0,
-            "R=1 decode bypassed the coarse context XOR table");
-        leo2_decode_plan_destroy(xor_plan);
-        leo2_codec_destroy(xor_codec);
+        test_r1_xor_dispatch_boundaries(contexts[context_i], trace);
     }
 }
 

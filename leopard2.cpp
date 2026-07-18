@@ -2686,9 +2686,15 @@ static bool UseCoarseR1Xor(
         minimum_originals = 5;
         break;
     case LEO2_BACKEND_AVX2:
-    case LEO2_BACKEND_AVX512:
         minimum_originals = 7;
         break;
+    case LEO2_BACKEND_AVX512:
+        /* The AVX-512 translation unit currently reuses the AVX2 kernel, but
+           that is not enough evidence to promote this end-to-end codec path:
+           frequency effects and the distinct execution environment still
+           need a retained, reproducible benchmark matrix.  Keep the mature
+           paired reduction until that gate has passed. */
+        return false;
     default:
         /* Native NEON and future backends retain the mature paired loop until
            a coarse implementation has backend-specific measurements. */

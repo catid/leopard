@@ -708,6 +708,154 @@ void TestSingleDecodeItemFastPath(Fixture& fixture)
         LEO2_OVERLAP, "single-item decode output/input overlap");
 }
 
+void RequireDecodeItemUnchanged(
+    const leo2_decode_batch_item& item,
+    const leo2_decode_batch_item& before,
+    const std::string& operation)
+{
+    Require(item.shard_bytes == before.shard_bytes &&
+            item.original == before.original &&
+            item.recovery == before.recovery &&
+            item.restored_original == before.restored_original &&
+            item.scratch == before.scratch &&
+            item.scratch_bytes == before.scratch_bytes,
+        operation + " modified descriptor metadata");
+}
+
+void TestSingleDecodeItemTransformPlans(Fixture& fixture)
+{
+    struct TransformCase
+    {
+        uint32_t k;
+        uint32_t r;
+        leo2_profile profile;
+        const char* name;
+    };
+    const TransformCase cases[] = {
+        { 9, 5, LEO2_PROFILE_LEGACY_HIGH_V1, "legacy-high" },
+        { 5, 9, LEO2_PROFILE_LOW_V1, "low" }
+    };
+
+    for (size_t case_index = 0;
+         case_index < sizeof(cases) / sizeof(cases[0]); ++case_index)
+    {
+        const TransformCase& test = cases[case_index];
+        const std::string prefix = std::string("single-item transform ") +
+            test.name;
+        leo2_codec_options options;
+        memset(&options, 0, sizeof(options));
+        options.struct_size = sizeof(options);
+        /* This disables the small-loss direct solver, so the one-item batch
+           shortcut is exercised with the production transform validator and
+           execution layout for both coordinate profiles. */
+        options.flags = LEO2_CODEC_FORCE_SPECIALIZED_DECODE;
+        leo2_codec* codec = NULL;
+        RequireResult(leo2_codec_create(fixture.context, test.k, test.r,
+            test.profile, LEO2_FIELD_GF8, &options, &codec),
+            LEO2_SUCCESS, prefix + " codec create");
+
+        Shards source(test.k, Bytes(Fixture::kLongBytes, 0));
+        Fixture::Fill(source,
+            static_cast<uint32_t>(0x6a09e667U + case_index * 977U));
+        std::vector<const void*> original(test.k, NULL);
+        for (uint32_t i = 0; i < test.k; ++i)
+            original[i] = &source[i][0];
+        Shards parity(test.r, Bytes(Fixture::kLongBytes, 0));
+        std::vector<void*> parity_mutable(test.r, NULL);
+        for (uint32_t i = 0; i < test.r; ++i)
+            parity_mutable[i] = &parity[i][0];
+        size_t encode_scratch_bytes = 0;
+        RequireResult(leo2_encode_scratch_size(codec, Fixture::kLongBytes,
+            &encode_scratch_bytes), LEO2_SUCCESS,
+            prefix + " encode scratch query");
+        AlignedBuffer encode_scratch(encode_scratch_bytes);
+        RequireResult(leo2_encode(codec, Fixture::kLongBytes, &original[0],
+            &parity_mutable[0], encode_scratch.data(),
+            encode_scratch.size()), LEO2_SUCCESS, prefix + " encode");
+
+        const uint32_t first_missing = 0;
+        const uint32_t second_missing = test.k - 1;
+        std::vector<uint8_t> original_present(test.k, 1);
+        std::vector<uint8_t> recovery_present(test.r, 1);
+        original_present[first_missing] = 0;
+        original_present[second_missing] = 0;
+        leo2_decode_plan* plan = NULL;
+        RequireResult(leo2_decode_plan_create(codec, &original_present[0],
+            &recovery_present[0], &plan), LEO2_SUCCESS,
+            prefix + " plan create");
+        size_t decode_scratch_bytes = 0;
+        RequireResult(leo2_decode_plan_scratch_size(plan,
+            Fixture::kLongBytes, &decode_scratch_bytes), LEO2_SUCCESS,
+            prefix + " decode scratch query");
+        AlignedBuffer decode_scratch(decode_scratch_bytes);
+
+        original[first_missing] = NULL;
+        original[second_missing] = NULL;
+        std::vector<const void*> recovery(test.r, NULL);
+        for (uint32_t i = 0; i < test.r; ++i)
+            recovery[i] = &parity[i][0];
+        Shards restored(test.k, Bytes(Fixture::kLongBytes, 0xcc));
+        std::vector<void*> restored_pointers(test.k, NULL);
+        restored_pointers[first_missing] = &restored[first_missing][0];
+        restored_pointers[second_missing] = &restored[second_missing][0];
+        leo2_decode_batch_item item = {
+            Fixture::kLongBytes, &original[0], &recovery[0],
+            &restored_pointers[0], decode_scratch.data(),
+            decode_scratch.size()
+        };
+        RequireResult(leo2_decode_plan_execute_batch(plan, &item, 1),
+            LEO2_SUCCESS, prefix + " valid execute");
+        Require(restored[first_missing] == source[first_missing] &&
+                restored[second_missing] == source[second_missing],
+            prefix + " recovery mismatch");
+
+        alignas(64) leo2_decode_batch_item descriptor_item = item;
+        std::vector<void*> descriptor_outputs = restored_pointers;
+        descriptor_outputs[first_missing] = &descriptor_item;
+        descriptor_item.restored_original = &descriptor_outputs[0];
+        const leo2_decode_batch_item descriptor_before = descriptor_item;
+        RequireResult(leo2_decode_plan_execute_batch(
+            plan, &descriptor_item, 1), LEO2_OVERLAP,
+            prefix + " output/descriptor overlap");
+        RequireDecodeItemUnchanged(
+            descriptor_item, descriptor_before, prefix + " descriptor");
+
+        alignas(64) leo2_decode_batch_item scratch_item = item;
+        scratch_item.scratch = &scratch_item;
+        scratch_item.scratch_bytes = decode_scratch.size();
+        const leo2_decode_batch_item scratch_before = scratch_item;
+        RequireResult(leo2_decode_plan_execute_batch(plan, &scratch_item, 1),
+            LEO2_OVERLAP, prefix + " scratch/descriptor overlap");
+        RequireDecodeItemUnchanged(
+            scratch_item, scratch_before, prefix + " scratch descriptor");
+
+        std::vector<void*> duplicate_outputs = restored_pointers;
+        duplicate_outputs[second_missing] =
+            duplicate_outputs[first_missing];
+        leo2_decode_batch_item duplicate_item = item;
+        duplicate_item.restored_original = &duplicate_outputs[0];
+        const leo2_decode_batch_item duplicate_before = duplicate_item;
+        RequireResult(leo2_decode_plan_execute_batch(
+            plan, &duplicate_item, 1), LEO2_OVERLAP,
+            prefix + " duplicate output overlap");
+        RequireDecodeItemUnchanged(
+            duplicate_item, duplicate_before, prefix + " duplicate output");
+
+        std::vector<void*> input_outputs = restored_pointers;
+        input_outputs[first_missing] = const_cast<void*>(original[1]);
+        leo2_decode_batch_item input_item = item;
+        input_item.restored_original = &input_outputs[0];
+        const leo2_decode_batch_item input_before = input_item;
+        RequireResult(leo2_decode_plan_execute_batch(plan, &input_item, 1),
+            LEO2_OVERLAP, prefix + " output/input overlap");
+        RequireDecodeItemUnchanged(
+            input_item, input_before, prefix + " input overlap");
+
+        leo2_decode_plan_destroy(plan);
+        leo2_codec_destroy(codec);
+    }
+}
+
 void TestEncodeConflicts(Fixture& fixture)
 {
     void* no_output[2] = { NULL, NULL };
@@ -1473,6 +1621,7 @@ void Run(uint32_t thread_count)
     TestValidSharedInputs(fixture);
     TestSingleEncodeItemFastPath(fixture);
     TestSingleDecodeItemFastPath(fixture);
+    TestSingleDecodeItemTransformPlans(fixture);
     TestEncodeConflicts(fixture);
     TestDecodeConflicts(fixture);
     TestValidSharedInputs(fixture);
