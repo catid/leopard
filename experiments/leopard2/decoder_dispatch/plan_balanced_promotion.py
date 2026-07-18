@@ -43,6 +43,29 @@ FORCED_ORDERS = (
     ("control", "candidate", "candidate", "control"),
 )
 AUTO_BACKENDS = ("scalar", "ssse3", "avx2", "avx512", "neon")
+# Exact string pairs emitted by DecodePathName/DecodePathRuleName in
+# Leopard2Dispatch.h.  This list is deliberately complete: it prevents a
+# negative predicate ("not generic") from accepting unknown or cross-paired
+# strings while the exact AUTO prediction below narrows each attestation cell
+# to the one pair its plan and selector geometry can produce.
+PRODUCTION_DECODE_PATH_RULE_PAIRS = frozenset({
+    ("no_op", "no_op"),
+    ("direct", "direct"),
+    ("generic", "forced_generic"),
+    ("materialized", "forced_materialized"),
+    ("tiled", "forced_tiled"),
+    ("generic", "balanced_generic"),
+    ("tiled", "measured_batch_tiled"),
+    ("materialized", "measured_materialized"),
+    ("tiled", "workspace_tiled"),
+    ("materialized", "workspace_materialized"),
+    ("materialized", "unsupported_profile"),
+})
+# Production direct-plan limits mirrored from leopard2.cpp.  The attestation
+# source/build identity binds that file, so changing these values requires an
+# explicit evidence-protocol update rather than silently broadening acceptance.
+DIRECT_MAX_ORIGINALS = 16
+DIRECT_MAX_LOSSES = 4
 
 
 class PlanError(RuntimeError):
@@ -847,6 +870,70 @@ def ceil_power_of_two(value: int) -> int:
     return 1 << (value - 1).bit_length()
 
 
+def coherent_production_decode_pair(path: object, rule: object) -> bool:
+    return type(path) is str and type(rule) is str and \
+        (path, rule) in PRODUCTION_DECODE_PATH_RULE_PAIRS
+
+
+def validate_selector_pair_contract(source_root: Path) -> None:
+    """Prove the Python whitelist still matches the production C++ emitters."""
+    dispatch = (source_root / "Leopard2Dispatch.h").read_text(encoding="utf-8")
+    decoder = (source_root / "leopard2.cpp").read_text(encoding="utf-8")
+    path_names = dict(re.findall(
+        r'case kDecodePath([A-Za-z0-9_]+): return "([a-z0-9_]+)";', dispatch))
+    rule_names = dict(re.findall(
+        r'case kDecodeRule([A-Za-z0-9_]+): return "([a-z0-9_]+)";', dispatch))
+    token_pairs = set(re.findall(
+        r'selection\.path = kDecodePath([A-Za-z0-9_]+);\s*'
+        r'selection\.rule = kDecodeRule([A-Za-z0-9_]+);', dispatch))
+    token_pairs.update(re.findall(
+        r'FillTerminalDecodePathInfo\(kDecodePath([A-Za-z0-9_]+),\s*'
+        r'kDecodeRule([A-Za-z0-9_]+),', decoder))
+    require(token_pairs and all(path in path_names and rule in rule_names
+                                for path, rule in token_pairs),
+            "cannot derive production decode path/rule names")
+    derived = {(path_names[path], rule_names[rule]) for path, rule in token_pairs}
+    require(derived == PRODUCTION_DECODE_PATH_RULE_PAIRS,
+            "production decode path/rule pair contract changed")
+
+
+def expected_auto_decode_pair(case: dict[str, Any], backend: str) -> tuple[str, str]:
+    """Mirror terminal-plan and AUTO selector ordering for one canonical cell.
+
+    These attestation cells are legacy-high GF8, one-item, plan-known calls with
+    no force flags and at least one missing original.  The only terminal plan is
+    bounded direct repair.  The remaining prediction follows the ordered
+    balanced, measured-materialized, and workspace rules in
+    Leopard2Dispatch.h.  A passing gate is the *only* input allowed to satisfy
+    the balanced predicate; this is intentionally narrower than an unverified
+    current dispatcher rule.
+    """
+    cell = case["cell"]
+    require(backend in AUTO_BACKENDS, "AUTO attestation backend is unknown")
+    k = cell["K"]
+    r = cell["R"]
+    losses = cell["loss_count"]
+    if 2 <= k <= DIRECT_MAX_ORIGINALS and losses <= DIRECT_MAX_LOSSES:
+        return "direct", "direct"
+    if case["expected_selected_decode_path"] == "generic":
+        return "generic", "balanced_generic"
+
+    padded = ceil_power_of_two(r)
+    parent = ceil_power_of_two(k + padded)
+    rounded = (cell["shard_bytes"] + 63) & ~63
+    measured_materialized = (
+        k == 224 and r == 32 and padded == 32 and parent == 256 and
+        0 < losses <= 8 and rounded <= 64 * 1024 and (
+            (backend in {"avx2", "avx512"} and rounded >= 24 * 1024) or
+            (backend == "ssse3" and rounded >= 32 * 1024)))
+    if measured_materialized:
+        return "materialized", "measured_materialized"
+    tiled_work_slots = 2 * padded + losses
+    if tiled_work_slots < parent:
+        return "tiled", "workspace_tiled"
+    return "materialized", "workspace_materialized"
+
+
 def validate_attestation_output(document: object, case: dict[str, Any],
                                 expected_backend: str | None = None) -> dict[str, Any]:
     require(isinstance(document, dict) and
@@ -930,12 +1017,13 @@ def validate_attestation_output(document: object, case: dict[str, Any],
             f"attestation resolved codec identity differs for {cell['identifier']}")
     selected_path = resolved["selected_decode_path"]
     selected_rule = resolved["selected_decode_rule"]
-    if case["expected_selected_decode_path"] == "generic":
-        require(selected_path == "generic" and selected_rule == "balanced_generic",
-                f"surviving cell did not select balanced generic: {cell['identifier']}")
-    else:
-        require(selected_path != "generic" and selected_rule != "balanced_generic",
-                f"unproven cell selected balanced generic: {cell['identifier']}")
+    require(coherent_production_decode_pair(selected_path, selected_rule),
+            f"attestation selected path/rule pair is not a production pair: "
+            f"{cell['identifier']}")
+    expected_pair = expected_auto_decode_pair(case, resolved["backend"])
+    require((selected_path, selected_rule) == expected_pair,
+            f"attestation selected path/rule differs for {cell['identifier']}: "
+            f"expected {expected_pair!r}, got {(selected_path, selected_rule)!r}")
     require(isinstance(correctness, dict) and set(correctness) == {
         "leopard2_round_trip", "legacy_comparison",
     } and correctness.get("leopard2_round_trip") is True and
@@ -1007,6 +1095,7 @@ def validate_attestation_output(document: object, case: dict[str, Any],
 
 def attestation_identities(source_root: Path, candidate_commit: str,
                            binary_relative: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    validate_selector_pair_contract(source_root)
     source = stable_source_identity(
         common.git_identity(source_root, candidate_commit), candidate_commit)
     build = stable_build_identity(common.build_identity(source_root, binary_relative))
@@ -1291,14 +1380,11 @@ def fake_attestation_output(case: dict[str, Any], selected_path: str | None = No
                             selected_rule: str | None = None,
                             backend: str = "scalar") -> dict[str, Any]:
     cell = case["cell"]
+    expected_path, expected_rule = expected_auto_decode_pair(case, backend)
     if selected_path is None:
-        selected_path = (
-            "generic" if case["expected_selected_decode_path"] == "generic"
-            else "materialized")
+        selected_path = expected_path
     if selected_rule is None:
-        selected_rule = (
-            "balanced_generic" if selected_path == "generic"
-            else "workspace_materialized")
+        selected_rule = expected_rule
     transform = ceil_power_of_two(cell["R"])
     parent = ceil_power_of_two(cell["K"] + transform)
     return {
@@ -1531,6 +1617,69 @@ def self_test() -> None:
                     if item["cell"]["category"] in {
                         "extra_aligned_confirmation", "true_tail",
                     }), "unproven aligned/tail cells entered AUTO")
+
+        path_names = {pair[0] for pair in PRODUCTION_DECODE_PATH_RULE_PAIRS}
+        rule_names = {pair[1] for pair in PRODUCTION_DECODE_PATH_RULE_PAIRS}
+        validate_selector_pair_contract(Path(__file__).resolve().parents[3])
+        require(all(coherent_production_decode_pair(*pair)
+                    for pair in PRODUCTION_DECODE_PATH_RULE_PAIRS),
+                "a declared production path/rule pair is not coherent")
+        for path_name in path_names | {"banana"}:
+            for rule_name in rule_names | {"banana"}:
+                require(coherent_production_decode_pair(path_name, rule_name) ==
+                        ((path_name, rule_name) in
+                         PRODUCTION_DECODE_PATH_RULE_PAIRS),
+                        "unknown or cross-paired selector names were accepted")
+        for invalid_pair in (
+            ("banana", "banana"), ("materialized", "direct"),
+            ("direct", "workspace_tiled"),
+        ):
+            require(not coherent_production_decode_pair(*invalid_pair),
+                    f"explicit invalid selector pair was accepted: {invalid_pair!r}")
+
+        materialized_case = next(
+            item for item in attestation["cases"]
+            if expected_auto_decode_pair(item, "scalar") ==
+                ("materialized", "workspace_materialized") and
+               item["expected_selected_decode_path"] == "not_generic")
+        expected_materialized = expected_auto_decode_pair(
+            materialized_case, "scalar")
+        for pair in sorted(PRODUCTION_DECODE_PATH_RULE_PAIRS):
+            candidate_output = fake_attestation_output(
+                materialized_case, pair[0], pair[1], "scalar")
+            accepted = True
+            try:
+                validate_attestation_output(candidate_output, materialized_case)
+            except PlanError:
+                accepted = False
+            require(accepted == (pair == expected_materialized),
+                    f"negative cell pair constraint differs for {pair!r}")
+        for pair in (
+            ("banana", "banana"), ("materialized", "direct"),
+            ("direct", "workspace_tiled"),
+        ):
+            try:
+                validate_attestation_output(fake_attestation_output(
+                    materialized_case, pair[0], pair[1], "scalar"),
+                    materialized_case)
+            except PlanError:
+                pass
+            else:
+                raise PlanError(f"negative cell accepted invalid pair {pair!r}")
+
+        direct_case = attestation_case(
+            "fixture-direct", "loss_rate_neighbor", 8, 8, 4096, 4,
+            deterministic_seed("fixture-direct", 8, 4), False)
+        tiled_case = attestation_case(
+            "fixture-tiled", "loss_rate_neighbor", 127, 63, 4096, 63,
+            deterministic_seed("fixture-tiled", 127, 63), False)
+        require(expected_auto_decode_pair(direct_case, "scalar") ==
+                ("direct", "direct") and
+                expected_auto_decode_pair(tiled_case, "scalar") ==
+                ("tiled", "workspace_tiled"),
+                "terminal/workspace fixture predictions differ")
+        validate_attestation_output(fake_attestation_output(direct_case), direct_case)
+        validate_attestation_output(fake_attestation_output(tiled_case), tiled_case)
 
         source = {
             "head": "1" * 40, "tree": "4" * 40, "status": "clean",

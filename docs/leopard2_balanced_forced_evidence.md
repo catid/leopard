@@ -99,6 +99,19 @@ requires the same live source/build identity, exact raw file set, and a
 deterministic reconstruction of every record; missing, duplicate, extra,
 stale, edited, or merely re-signed outputs fail closed.
 
+Path and rule names are not validated as two unrelated negative predicates.
+The verifier carries the complete coherent pair table emitted by
+`DecodePathName` and `DecodePathRuleName` in `Leopard2Dispatch.h`; unknown names
+and cross-pairs such as `materialized/direct` are invalid even when neither
+string says `generic`. It then narrows each canonical AUTO cell to one expected
+pair by mirroring selector order: bounded direct plans use `direct/direct`, the
+measured exception uses `materialized/measured_materialized`, and remaining
+legacy-high cells compare `2*T + L` tiled slots with parent `N` to select the
+matching workspace pair. Only an exact passing gate may instead use
+`generic/balanced_generic`. The mirrored direct limits are source-bound through
+the retained `leopard2.cpp` identity, so changing them requires updating and
+revalidating this protocol.
+
 After the conditional timing work, collect and independently verify AUTO
 selection from the exact candidate commit named by the stage. A dispatcher edit
 changes that identity, so it requires regenerated exact-main evidence and a new
