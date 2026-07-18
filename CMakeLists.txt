@@ -559,9 +559,9 @@ if(LEO2_BUILD_TESTS)
             LEO2_ENABLE_TEST_HOOKS=1)
         target_link_libraries(bench_leopard2_direct_encode leopard)
 
-        # C1 is internal and absent from production dispatch.  This benchmark
-        # is built only with the test hooks that expose the full padded LCH
-        # oracle; it is never installed and cannot affect production behavior.
+        # This diagnostic benchmark is built only with the test hooks that
+        # expose the full padded LCH oracle; it is never installed.  Production
+        # Algorithm 5 owns immutable schedules through its ordinary plan API.
         add_executable(bench_leopard2_pruned_transform
             bench/leopard2/pruned_transform_benchmark.cpp)
         target_compile_definitions(bench_leopard2_pruned_transform PRIVATE
@@ -756,6 +756,14 @@ if(LEO2_BUILD_TESTS)
         COMMAND leopard2_decode_high_acceptance_test)
     set_tests_properties(leopard2_decode_high_acceptance PROPERTIES
         ENVIRONMENT "OMP_NUM_THREADS=1")
+
+    add_executable(leopard2_high_pruned_legacy_test
+        tests/leopard2/test_high_pruned_legacy.cpp)
+    target_link_libraries(leopard2_high_pruned_legacy_test leopard)
+    add_test(NAME leopard2_high_pruned_legacy
+        COMMAND leopard2_high_pruned_legacy_test)
+    set_tests_properties(leopard2_high_pruned_legacy PROPERTIES
+        ENVIRONMENT "OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
     add_executable(leopard2_decode_low_acceptance_test
         tests/leopard2/direct_oracle.cpp

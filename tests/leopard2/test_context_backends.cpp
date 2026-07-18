@@ -448,7 +448,8 @@ void require_four_way_callsites(
     size_t public_bytes,
     const std::string& operation,
     bool expect_ff8_accumulating_ifft,
-    bool split_ragged_execution)
+    bool split_ragged_execution,
+    bool allow_pruned_schedule_calls = false)
 {
     if (field == LEO2_FIELD_GF8)
     {
@@ -464,10 +465,15 @@ void require_four_way_callsites(
                 operation + " unexpectedly exercised GF8 IFFT_DIT4_xor");
         require(callsites.fft_dit4 != 0,
             operation + " did not exercise GF8 FFT_DIT4");
-        require(trace.ff8_ifft_four_calls() ==
-                callsites.ifft_dit4 + callsites.ifft_dit4_xor,
+        const uint64_t classified_ifft_calls =
+            callsites.ifft_dit4 + callsites.ifft_dit4_xor;
+        require(allow_pruned_schedule_calls
+                ? trace.ff8_ifft_four_calls() >= classified_ifft_calls
+                : trace.ff8_ifft_four_calls() == classified_ifft_calls,
             operation + " has a GF8 inverse radix-four callsite bypass");
-        require(trace.ff8_fft_four_calls() == callsites.fft_dit4,
+        require(allow_pruned_schedule_calls
+                ? trace.ff8_fft_four_calls() >= callsites.fft_dit4
+                : trace.ff8_fft_four_calls() == callsites.fft_dit4,
             operation + " has a GF8 forward radix-four callsite bypass");
     }
     else
@@ -484,9 +490,13 @@ void require_four_way_callsites(
         require(callsites.fft_dit4 ==
                 callsites.fft_dit4_fused + callsites.fft_dit4_split,
             operation + " has an unclassified GF16 forward radix-four callsite");
-        require(trace.ff16_ifft_four_calls() == callsites.ifft_dit4_fused,
+        require(allow_pruned_schedule_calls
+                ? trace.ff16_ifft_four_calls() >= callsites.ifft_dit4_fused
+                : trace.ff16_ifft_four_calls() == callsites.ifft_dit4_fused,
             operation + " has a GF16 inverse fused-dispatch mismatch");
-        require(trace.ff16_fft_four_calls() == callsites.fft_dit4_fused,
+        require(allow_pruned_schedule_calls
+                ? trace.ff16_fft_four_calls() >= callsites.fft_dit4_fused
+                : trace.ff16_fft_four_calls() == callsites.fft_dit4_fused,
             operation + " has a GF16 forward fused-dispatch mismatch");
 
         const size_t transform_bytes = (public_bytes + 63U) & ~size_t(63U);
@@ -983,7 +993,8 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                 leo2_context_backend(contexts[context_i].context),
                 test_case.field,
                 test_case.bytes,
-                profile_name + " decode", false, true);
+                profile_name + " decode", false, true,
+                test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1);
             require(trace.xor_four_calls() != 0,
                 "decode bypassed the context grouped-XOR table");
             leo2_codec_destroy(codec);

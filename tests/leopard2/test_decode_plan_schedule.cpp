@@ -40,6 +40,7 @@
 #include <iostream>
 #include <new>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -689,7 +690,22 @@ static uint64_t CheckFieldKernels(
     void (*high_tiled)(const leopard::backend::Ops&, uint64_t, unsigned,
         unsigned, const void* const*, const uint16_t*, const uint32_t*,
         const leopard2_internal::DecodeOutputBlock*, unsigned, const Ffe*,
-        const Ffe*, void* const*, void**))
+        const Ffe*, void* const*, void**),
+    bool (*prepare_pruned)(unsigned, unsigned, bool, const uint8_t*,
+        const uint8_t*, leopard2_internal::PrunedTransformPlan&),
+    void (*high_pruned)(const leopard::backend::Ops&, uint64_t, unsigned,
+        unsigned, const void* const*, const uint16_t*, const uint32_t*,
+        const leopard2_internal::DecodeOutputBlock*, unsigned, const Ffe*,
+        const Ffe*, const leopard2_internal::PrunedTransformBlock*, unsigned,
+        const leopard2_internal::PrunedTransformPlan*, unsigned, void**),
+    void (*high_tiled_pruned)(const leopard::backend::Ops&, uint64_t, unsigned,
+        unsigned, const void* const*, const uint16_t*, const uint32_t*,
+        const leopard2_internal::DecodeOutputBlock*, unsigned, const Ffe*,
+        const Ffe*, void* const*,
+        const leopard2_internal::PrunedTransformBlock*, unsigned,
+        const leopard2_internal::PrunedTransformPlan*, unsigned, void**),
+    uint64_t& pruned_full_butterflies,
+    uint64_t& pruned_retained_operations)
 {
     AlignedBytes sources(static_cast<size_t>(n) * kBytes);
     Require(sources.valid(), "aligned source allocation");
@@ -785,6 +801,69 @@ static uint64_t CheckFieldKernels(
         &high_factors[0], &actual_work[0]);
     Require(memcmp(expected_storage.data(), actual_storage.data(),
         expected_storage.size()) == 0, "high planned/prepared mismatch");
+
+    std::vector<leopard2_internal::PrunedTransformBlock> high_input_plans;
+    std::vector<leopard2_internal::PrunedTransformPlan> high_output_plans;
+    std::vector<uint8_t> input_mask(side), output_mask(side, 1);
+    for (unsigned block = 0; block < n / side; ++block)
+    {
+        unsigned live_count = 0;
+        for (unsigned i = 0; i < side; ++i)
+        {
+            input_mask[i] = coordinate_data[block * side + i] != NULL;
+            live_count += input_mask[i];
+        }
+        if (live_count == 0 || live_count == side)
+            continue;
+        leopard2_internal::PrunedTransformBlock entry;
+        entry.block = block;
+        Require(prepare_pruned(side, block * side, true, &input_mask[0],
+            &output_mask[0], entry.plan), "high input pruned schedule build");
+        if (entry.plan.operations.size() < entry.plan.full_butterfly_count ||
+            entry.plan.input_zero_specializations != 0 ||
+            entry.plan.one_output_butterflies != 0)
+        {
+            pruned_full_butterflies += entry.plan.full_butterfly_count;
+            pruned_retained_operations += entry.plan.operations.size();
+            high_input_plans.push_back(std::move(entry));
+        }
+    }
+    input_mask.assign(side, 1);
+    for (size_t block_i = 0; block_i < high_blocks.size(); ++block_i)
+    {
+        output_mask.assign(side, 0);
+        const leopard2_internal::DecodeOutputBlock& descriptor =
+            high_blocks[block_i];
+        const unsigned offset = descriptor.block * side;
+        for (unsigned i = descriptor.requested_begin;
+             i < descriptor.requested_end; ++i)
+            output_mask[high_coordinates[i] - offset] = 1;
+        leopard2_internal::PrunedTransformPlan candidate;
+        Require(prepare_pruned(side, offset, false, &input_mask[0],
+            &output_mask[0], candidate), "high output pruned schedule build");
+        if (candidate.operations.size() < candidate.full_butterfly_count ||
+            candidate.input_zero_specializations != 0 ||
+            candidate.one_output_butterflies != 0)
+        {
+            pruned_full_butterflies += candidate.full_butterfly_count;
+            pruned_retained_operations += candidate.operations.size();
+            high_output_plans.push_back(std::move(candidate));
+        }
+        else
+            high_output_plans.push_back(
+                leopard2_internal::PrunedTransformPlan());
+    }
+    high_pruned(leopard::backend::GetDefaultOps(), kBytes, n, side,
+        &coordinate_data[0], &block_inputs[0], &high_coordinates[0],
+        &high_blocks[0], high_blocks.size(), &locator[0], &high_factors[0],
+        high_input_plans.empty() ? NULL : &high_input_plans[0],
+        high_input_plans.size(), &high_output_plans[0],
+        high_output_plans.size(), &actual_work[0]);
+    for (size_t i = 0; i < high_coordinates.size(); ++i)
+        Require(memcmp(expected_work[high_coordinates[i]],
+                actual_work[high_coordinates[i]], kBytes) == 0,
+            "high pruned/planned requested output mismatch");
+
     const unsigned high_tiled_count =
         side * 2 + static_cast<unsigned>(high_coordinates.size());
     AlignedBytes high_tiled_storage(
@@ -801,6 +880,19 @@ static uint64_t CheckFieldKernels(
         Require(memcmp(expected_work[high_coordinates[i]],
                 high_tiled_work[side * 2 + i], kBytes) == 0,
             "high tiled/planned requested output mismatch");
+    }
+    high_tiled_pruned(leopard::backend::GetDefaultOps(), kBytes, n, side,
+        &coordinate_data[0], &block_inputs[0], &high_coordinates[0],
+        &high_blocks[0], high_blocks.size(), &locator[0], &high_factors[0],
+        &high_tiled_work[side * 2],
+        high_input_plans.empty() ? NULL : &high_input_plans[0],
+        high_input_plans.size(), &high_output_plans[0],
+        high_output_plans.size(), &high_tiled_work[0]);
+    for (size_t i = 0; i < high_coordinates.size(); ++i)
+    {
+        Require(memcmp(expected_work[high_coordinates[i]],
+                high_tiled_work[side * 2 + i], kBytes) == 0,
+            "high tiled-pruned/planned requested output mismatch");
     }
 
     return static_cast<uint64_t>(n) * 3 + side * 3 +
@@ -820,6 +912,8 @@ int main()
     const uint64_t builder_contract_cases = CheckDependencyBuilderContract();
     const uint64_t concurrent_builds = CheckDependencyBuilderConcurrency();
     uint64_t kernel_slots = 0;
+    uint64_t pruned_full_butterflies = 0;
+    uint64_t pruned_retained_operations = 0;
     kernel_slots += CheckFieldKernels<leopard::ff8::ffe_t>(
         256, 32, leopard::ff8::kModulus,
         leopard::ff8::ReedSolomonDecodePrepared,
@@ -831,7 +925,11 @@ int main()
         leopard::ff8::PrepareHighDecode,
         leopard::ff8::ReedSolomonDecodeHighPrepared,
         leopard::ff8::ReedSolomonDecodeHighPlanned,
-        leopard::ff8::ReedSolomonDecodeHighTiledPlanned);
+        leopard::ff8::ReedSolomonDecodeHighTiledPlanned,
+        leopard::ff8::PreparePrunedTransformPlan,
+        leopard::ff8::ReedSolomonDecodeHighPrunedPlanned,
+        leopard::ff8::ReedSolomonDecodeHighTiledPrunedPlanned,
+        pruned_full_butterflies, pruned_retained_operations);
     kernel_slots += CheckFieldKernels<leopard::ff16::ffe_t>(
         1024, 128, leopard::ff16::kModulus,
         leopard::ff16::ReedSolomonDecodePrepared,
@@ -843,7 +941,13 @@ int main()
         leopard::ff16::PrepareHighDecode,
         leopard::ff16::ReedSolomonDecodeHighPrepared,
         leopard::ff16::ReedSolomonDecodeHighPlanned,
-        leopard::ff16::ReedSolomonDecodeHighTiledPlanned);
+        leopard::ff16::ReedSolomonDecodeHighTiledPlanned,
+        leopard::ff16::PreparePrunedTransformPlan,
+        leopard::ff16::ReedSolomonDecodeHighPrunedPlanned,
+        leopard::ff16::ReedSolomonDecodeHighTiledPrunedPlanned,
+        pruned_full_butterflies, pruned_retained_operations);
+    Require(pruned_retained_operations < pruned_full_butterflies,
+        "production high pruning did not remove padded operations");
     CheckPublicPlanReuseAndAllocation();
 
     std::cout << "leopard2 decode-plan schedule tests passed: dependency_queries="
@@ -852,6 +956,9 @@ int main()
               << " dependency_builder_contract_cases=" << builder_contract_cases
               << " concurrent_dependency_builds=" << concurrent_builds
               << " execution_cpp_allocations=0 gf16_max_schedule_bytes=2736"
+              << " pruned_full_butterflies=" << pruned_full_butterflies
+              << " pruned_retained_operations="
+              << pruned_retained_operations
               << std::endl;
     return 0;
 }

@@ -3052,7 +3052,7 @@ void ReedSolomonDecodeHighPrepared(
 }
 
 
-void ReedSolomonDecodeHighPlanned(
+void ReedSolomonDecodeHighPrunedPlanned(
     const backend::Ops& ops,
     uint64_t buffer_bytes,
     unsigned n,
@@ -3064,9 +3064,17 @@ void ReedSolomonDecodeHighPlanned(
     unsigned output_block_count,
     const ffe_t* locator_logs,
     const ffe_t* output_factors,
+    const leopard2_internal::PrunedTransformBlock* input_plans,
+    unsigned input_plan_count,
+    const leopard2_internal::PrunedTransformPlan* output_plans,
+    unsigned output_plan_count,
     void** work)
 {
     LEO_DEBUG_ASSERT(t >= 2 && t < n && n <= kOrder);
+    LEO_DEBUG_ASSERT(input_plan_count == 0 || input_plans != NULL);
+    LEO_DEBUG_ASSERT(output_plan_count == 0 || output_plans != NULL);
+    LEO_DEBUG_ASSERT(output_plan_count == 0 ||
+        output_plan_count == output_block_count);
 
 #pragma omp parallel for
     for (int i = 0; i < (int)n; ++i)
@@ -3078,6 +3086,7 @@ void ReedSolomonDecodeHighPlanned(
     }
 
     const unsigned block_count = n / t;
+    unsigned input_plan_index = 0;
     for (unsigned block = 0; block < block_count; ++block)
     {
         const unsigned offset = block * t;
@@ -3085,10 +3094,27 @@ void ReedSolomonDecodeHighPlanned(
         LEO_DEBUG_ASSERT(input_count <= t);
         if (input_count != 0)
         {
-            IFFT_DIT_Decoder(
-                ops,
-                buffer_bytes, input_count, work + offset, t,
-                FFTSkewStorage + offset);
+            const leopard2_internal::PrunedTransformPlan* pruned = NULL;
+            if (input_plan_index < input_plan_count && input_plans &&
+                input_plans[input_plan_index].block == block)
+            {
+                pruned = &input_plans[input_plan_index].plan;
+                ++input_plan_index;
+            }
+            if (pruned)
+            {
+                LEO_DEBUG_ASSERT(pruned->size == t &&
+                    pruned->shift == offset && pruned->inverse);
+                const bool executed =
+                    leopard2_internal::ExecutePrunedTransformPlan(
+                        ops, buffer_bytes, *pruned, work + offset);
+                LEO_DEBUG_ASSERT(executed);
+                (void)executed;
+            }
+            else
+                IFFT_DIT_Decoder(
+                    ops, buffer_bytes, input_count, work + offset, t,
+                    FFTSkewStorage + offset);
         }
         if (block != 0 && input_count != 0)
         {
@@ -3099,6 +3125,7 @@ void ReedSolomonDecodeHighPlanned(
                     ops, buffer_bytes, t, work, work + offset);
         }
     }
+    LEO_DEBUG_ASSERT(input_plan_index == input_plan_count);
 
     FFT_DIT(ops, buffer_bytes, work, t, t, FFTSkewStorage);
 #pragma omp parallel for
@@ -3125,10 +3152,26 @@ void ReedSolomonDecodeHighPlanned(
 #pragma omp parallel for
         for (int i = 0; i < (int)t; ++i)
             memcpy(work[offset + i], work[i], buffer_bytes);
-        FFT_DIT(
-            ops,
-            buffer_bytes, work + offset, descriptor.requested_prefix, t,
-            FFTSkewStorage + offset);
+        const leopard2_internal::PrunedTransformPlan* pruned =
+            output_plans && output_plan_count == output_block_count &&
+            output_plans[output_block].size != 0
+                ? &output_plans[output_block]
+                : NULL;
+        if (pruned)
+        {
+            LEO_DEBUG_ASSERT(pruned->size == t &&
+                pruned->shift == offset && !pruned->inverse);
+            const bool executed =
+                leopard2_internal::ExecutePrunedTransformPlan(
+                    ops, buffer_bytes, *pruned, work + offset);
+            LEO_DEBUG_ASSERT(executed);
+            (void)executed;
+        }
+        else
+            FFT_DIT(
+                ops, buffer_bytes, work + offset,
+                descriptor.requested_prefix, t,
+                FFTSkewStorage + offset);
 #pragma omp parallel for
         for (int i = (int)descriptor.requested_begin;
              i < (int)descriptor.requested_end;
@@ -3142,6 +3185,27 @@ void ReedSolomonDecodeHighPlanned(
                 ops, work[coordinate], reveal_log, buffer_bytes);
         }
     }
+}
+
+
+void ReedSolomonDecodeHighPlanned(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned t,
+    const void* const* coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    const leopard2_internal::DecodeOutputBlock* output_blocks,
+    unsigned output_block_count,
+    const ffe_t* locator_logs,
+    const ffe_t* output_factors,
+    void** work)
+{
+    ReedSolomonDecodeHighPrunedPlanned(
+        ops, buffer_bytes, n, t, coordinate_data, block_input_counts,
+        requested_coordinates, output_blocks, output_block_count,
+        locator_logs, output_factors, NULL, 0, NULL, 0, work);
 }
 
 
@@ -3165,7 +3229,7 @@ void ReedSolomonDecodeHighPlanned(
 }
 
 
-void ReedSolomonDecodeHighTiledPlanned(
+void ReedSolomonDecodeHighTiledPrunedPlanned(
     const backend::Ops& ops,
     uint64_t buffer_bytes,
     unsigned n,
@@ -3178,9 +3242,17 @@ void ReedSolomonDecodeHighTiledPlanned(
     const ffe_t* locator_logs,
     const ffe_t* output_factors,
     void* const* requested_output,
+    const leopard2_internal::PrunedTransformBlock* input_plans,
+    unsigned input_plan_count,
+    const leopard2_internal::PrunedTransformPlan* output_plans,
+    unsigned output_plan_count,
     void** work)
 {
     LEO_DEBUG_ASSERT(t >= 2 && t < n && n <= kOrder);
+    LEO_DEBUG_ASSERT(input_plan_count == 0 || input_plans != NULL);
+    LEO_DEBUG_ASSERT(output_plan_count == 0 || output_plans != NULL);
+    LEO_DEBUG_ASSERT(output_plan_count == 0 ||
+        output_plan_count == output_block_count);
     LEO_DEBUG_ASSERT(n % t == 0);
 
     void** const accumulator = work;
@@ -3197,10 +3269,31 @@ void ReedSolomonDecodeHighTiledPlanned(
         else
             memset(accumulator[i], 0, buffer_bytes);
     }
+    unsigned input_plan_index = 0;
     if (first_input_count != 0)
-        IFFT_DIT_Decoder(
-            ops, buffer_bytes, first_input_count, accumulator, t,
-            FFTSkewStorage);
+    {
+        const leopard2_internal::PrunedTransformPlan* pruned = NULL;
+        if (input_plan_index < input_plan_count && input_plans &&
+            input_plans[input_plan_index].block == 0)
+        {
+            pruned = &input_plans[input_plan_index].plan;
+            ++input_plan_index;
+        }
+        if (pruned)
+        {
+            LEO_DEBUG_ASSERT(pruned->size == t &&
+                pruned->shift == 0 && pruned->inverse);
+            const bool executed =
+                leopard2_internal::ExecutePrunedTransformPlan(
+                    ops, buffer_bytes, *pruned, accumulator);
+            LEO_DEBUG_ASSERT(executed);
+            (void)executed;
+        }
+        else
+            IFFT_DIT_Decoder(
+                ops, buffer_bytes, first_input_count, accumulator, t,
+                FFTSkewStorage);
+    }
 
     for (unsigned block = 1; block < block_count; ++block)
     {
@@ -3218,14 +3311,33 @@ void ReedSolomonDecodeHighTiledPlanned(
             else
                 memset(tile[i], 0, buffer_bytes);
         }
-        IFFT_DIT_Decoder(
-            ops, buffer_bytes, input_count, tile, t,
-            FFTSkewStorage + offset);
+        const leopard2_internal::PrunedTransformPlan* pruned = NULL;
+        if (input_plan_index < input_plan_count && input_plans &&
+            input_plans[input_plan_index].block == block)
+        {
+            pruned = &input_plans[input_plan_index].plan;
+            ++input_plan_index;
+        }
+        if (pruned)
+        {
+            LEO_DEBUG_ASSERT(pruned->size == t &&
+                pruned->shift == offset && pruned->inverse);
+            const bool executed =
+                leopard2_internal::ExecutePrunedTransformPlan(
+                    ops, buffer_bytes, *pruned, tile);
+            LEO_DEBUG_ASSERT(executed);
+            (void)executed;
+        }
+        else
+            IFFT_DIT_Decoder(
+                ops, buffer_bytes, input_count, tile, t,
+                FFTSkewStorage + offset);
         if (t < 8)
             VectorXOR(ops, buffer_bytes, t, accumulator, tile);
         else
             VectorXOR_Threads(ops, buffer_bytes, t, accumulator, tile);
     }
+    LEO_DEBUG_ASSERT(input_plan_index == input_plan_count);
 
     FFT_DIT(ops, buffer_bytes, accumulator, t, t, FFTSkewStorage);
 #pragma omp parallel for
@@ -3254,9 +3366,25 @@ void ReedSolomonDecodeHighTiledPlanned(
 #pragma omp parallel for
         for (int i = 0; i < (int)t; ++i)
             memcpy(tile[i], accumulator[i], buffer_bytes);
-        FFT_DIT(
-            ops, buffer_bytes, tile, descriptor.requested_prefix, t,
-            FFTSkewStorage + offset);
+        const leopard2_internal::PrunedTransformPlan* pruned =
+            output_plans && output_plan_count == output_block_count &&
+            output_plans[output_block].size != 0
+                ? &output_plans[output_block]
+                : NULL;
+        if (pruned)
+        {
+            LEO_DEBUG_ASSERT(pruned->size == t &&
+                pruned->shift == offset && !pruned->inverse);
+            const bool executed =
+                leopard2_internal::ExecutePrunedTransformPlan(
+                    ops, buffer_bytes, *pruned, tile);
+            LEO_DEBUG_ASSERT(executed);
+            (void)executed;
+        }
+        else
+            FFT_DIT(
+                ops, buffer_bytes, tile, descriptor.requested_prefix, t,
+                FFTSkewStorage + offset);
 #pragma omp parallel for
         for (int i = (int)descriptor.requested_begin;
              i < (int)descriptor.requested_end;
@@ -3272,6 +3400,29 @@ void ReedSolomonDecodeHighTiledPlanned(
                 reveal_log, buffer_bytes);
         }
     }
+}
+
+
+void ReedSolomonDecodeHighTiledPlanned(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned t,
+    const void* const* coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    const leopard2_internal::DecodeOutputBlock* output_blocks,
+    unsigned output_block_count,
+    const ffe_t* locator_logs,
+    const ffe_t* output_factors,
+    void* const* requested_output,
+    void** work)
+{
+    ReedSolomonDecodeHighTiledPrunedPlanned(
+        ops, buffer_bytes, n, t, coordinate_data, block_input_counts,
+        requested_coordinates, output_blocks, output_block_count,
+        locator_logs, output_factors, requested_output,
+        NULL, 0, NULL, 0, work);
 }
 
 void ReedSolomonDecode(

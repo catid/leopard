@@ -106,8 +106,8 @@ void MultiplyAddBytes(
     ffe_t multiplier_log,
     uint64_t byte_count);
 
-// C1 experiment: compile an exact parent-preserving flat radix-2 schedule.
-// This remains internal and is not selected by the production dispatcher.
+// Compile an exact parent-preserving flat schedule.  Algorithm 5 plan setup
+// uses this internally for shortened, punctured, and requested masks.
 bool PreparePrunedTransformPlan(
     unsigned size,
     unsigned shift,
@@ -408,6 +408,23 @@ void ReedSolomonDecodeHighPlanned(
     const ffe_t* locator_logs,
     const ffe_t* output_factors,
     void** work);
+void ReedSolomonDecodeHighPrunedPlanned(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned t,
+    const void* const * const coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    const leopard2_internal::DecodeOutputBlock* output_blocks,
+    unsigned output_block_count,
+    const ffe_t* locator_logs,
+    const ffe_t* output_factors,
+    const leopard2_internal::PrunedTransformBlock* input_plans,
+    unsigned input_plan_count,
+    const leopard2_internal::PrunedTransformPlan* output_plans,
+    unsigned output_plan_count,
+    void** work);
 void ReedSolomonDecodeHighPlanned(
     uint64_t buffer_bytes,
     unsigned n,
@@ -439,6 +456,24 @@ void ReedSolomonDecodeHighTiledPlanned(
     const ffe_t* locator_logs,
     const ffe_t* output_factors,
     void* const* requested_output,
+    void** work);
+void ReedSolomonDecodeHighTiledPrunedPlanned(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned t,
+    const void* const * const coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    const leopard2_internal::DecodeOutputBlock* output_blocks,
+    unsigned output_block_count,
+    const ffe_t* locator_logs,
+    const ffe_t* output_factors,
+    void* const* requested_output,
+    const leopard2_internal::PrunedTransformBlock* input_plans,
+    unsigned input_plan_count,
+    const leopard2_internal::PrunedTransformPlan* output_plans,
+    unsigned output_plan_count,
     void** work);
 
 void ReedSolomonDecode(

@@ -137,6 +137,15 @@ struct PrunedTransformPlan
     {}
 };
 
+// One block-local transform schedule in a larger active parent.  Entries are
+// sorted by block so Algorithm 5 execution can consume them without lookup
+// allocation or branches in the byte inner loop.
+struct PrunedTransformBlock
+{
+    uint32_t block;
+    PrunedTransformPlan plan;
+};
+
 typedef uint16_t (*PrunedMultiplierLogProvider)(
     const void* context,
     uint32_t storage_index);
