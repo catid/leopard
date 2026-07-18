@@ -932,6 +932,19 @@ if(LEO2_BUILD_TESTS)
         target_link_libraries(bench_leopard2_pruned_transform
             leopard_test_hooks)
 
+        # Same-source Algorithm 5 copy/no-copy attribution.  This deliberately
+        # recompiles the ordinary JSON benchmark against the private hooks
+        # archive; neither the selector nor this executable is installed or
+        # linked into the production archive.
+        add_executable(bench_leopard2_high_decode_copy_attribution
+            bench/leopard2/benchmark.cpp)
+        target_compile_definitions(
+            bench_leopard2_high_decode_copy_attribution PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1
+            LEO2_HIGH_DECODE_COPY_ATTRIBUTION=1)
+        target_link_libraries(
+            bench_leopard2_high_decode_copy_attribution leopard_test_hooks)
+
     endif()
 
     add_executable(leopard2_direct_oracle_test
@@ -1480,6 +1493,45 @@ if(LEO2_BUILD_TESTS)
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/decoder_dispatch/run_tiled_high_abba.py
                 --self-test)
+        add_test(
+            NAME leopard2_high_decode_copy_contract_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/high_decode_copy/benchmark_contract.py
+                self-test)
+        add_test(
+            NAME leopard2_high_decode_copy_runner_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/high_decode_copy/run_abba.py
+                self-test)
+        add_test(
+            NAME leopard2_high_decode_copy_composite_self_test
+            COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/high_decode_copy/compose.py
+                self-test)
+        if(TARGET bench_leopard2_high_decode_copy_attribution)
+            add_test(
+                NAME leopard2_high_decode_copy_benchmark_smoke
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/high_decode_copy/benchmark_contract.py
+                    smoke
+                    --benchmark
+                    $<TARGET_FILE:bench_leopard2_high_decode_copy_attribution>)
+            set_tests_properties(
+                leopard2_high_decode_copy_benchmark_smoke PROPERTIES
+                ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
+            if(CMAKE_EXPORT_COMPILE_COMMANDS AND
+               CMAKE_BUILD_TYPE STREQUAL "Release")
+                add_test(
+                    NAME leopard2_high_decode_copy_build_identity
+                    COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/high_decode_copy/run_abba.py
+                        build-smoke
+                        --source-root ${CMAKE_CURRENT_SOURCE_DIR}
+                        --binary
+                        $<TARGET_FILE:bench_leopard2_high_decode_copy_attribution>
+                        --hook-archive $<TARGET_FILE:leopard_test_hooks>)
+            endif()
+        endif()
         add_test(
             NAME leopard2_tiled_high_analyzer_self_test
             COMMAND ${LEO2_PYTHON_EXECUTABLE}

@@ -1,0 +1,29 @@
+{
+  "cells": [
+    {"backend":"avx2","exact_main_eligible":true,"field":"gf8","id":"gf8-mat-target-one","k":240,"losses":1,"r":16,"role":"target","seed":1701,"shard_bytes":65536,"workspace":"materialized"},
+    {"backend":"avx2","exact_main_eligible":true,"field":"gf8","id":"gf8-mat-neighbor-full","k":224,"losses":32,"r":32,"role":"neighbor","seed":1703,"shard_bytes":4096,"workspace":"materialized"},
+    {"backend":"avx2","exact_main_eligible":false,"field":"gf8","id":"gf8-mat-tail","k":191,"losses":8,"r":63,"role":"tail","seed":1709,"shard_bytes":257,"workspace":"materialized"},
+    {"backend":"avx2","exact_main_eligible":true,"field":"gf8","id":"gf8-tiled-target-one","k":240,"losses":1,"r":16,"role":"target","seed":1721,"shard_bytes":65536,"workspace":"tiled"},
+    {"backend":"avx2","exact_main_eligible":true,"field":"gf8","id":"gf8-tiled-neighbor-full","k":224,"losses":32,"r":32,"role":"neighbor","seed":1723,"shard_bytes":4096,"workspace":"tiled"},
+    {"backend":"avx2","exact_main_eligible":false,"field":"gf8","id":"gf8-tiled-tail","k":191,"losses":8,"r":63,"role":"tail","seed":1733,"shard_bytes":257,"workspace":"tiled"},
+    {"backend":"avx2","exact_main_eligible":true,"field":"gf16","id":"gf16-mat-target-one","k":1000,"losses":1,"r":200,"role":"target","seed":1741,"shard_bytes":4096,"workspace":"materialized"},
+    {"backend":"avx2","exact_main_eligible":true,"field":"gf16","id":"gf16-mat-neighbor-eight","k":4096,"losses":8,"r":512,"role":"neighbor","seed":1747,"shard_bytes":4096,"workspace":"materialized"},
+    {"backend":"avx2","exact_main_eligible":false,"field":"gf16","id":"gf16-mat-tail","k":257,"losses":8,"r":63,"role":"tail","seed":1753,"shard_bytes":258,"workspace":"materialized"},
+    {"backend":"avx2","exact_main_eligible":true,"field":"gf16","id":"gf16-tiled-target-one","k":1000,"losses":1,"r":200,"role":"target","seed":1759,"shard_bytes":4096,"workspace":"tiled"},
+    {"backend":"avx2","exact_main_eligible":true,"field":"gf16","id":"gf16-tiled-neighbor-eight","k":4096,"losses":8,"r":512,"role":"neighbor","seed":1777,"shard_bytes":4096,"workspace":"tiled"},
+    {"backend":"avx2","exact_main_eligible":false,"field":"gf16","id":"gf16-tiled-tail","k":257,"losses":8,"r":63,"role":"tail","seed":1783,"shard_bytes":258,"workspace":"tiled"}
+  ],
+  "comparison_policy": {
+    "copy_vs_no_copy": "same diagnostic executable and archive, explicit selector only",
+    "exact_main": "independent production Leopard2 versus detached exact Leopard main campaign at the identical source commit",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "promotion_lower_confidence_speedup": 1.05,
+    "tail_classification": "same-source-only because exact Leopard main requires shard_bytes divisible by 64"
+  },
+  "round_orders": [
+    ["copy-fallback", "no-copy", "no-copy", "copy-fallback"],
+    ["no-copy", "copy-fallback", "copy-fallback", "no-copy"],
+    ["copy-fallback", "no-copy", "no-copy", "copy-fallback"]
+  ],
+  "schema": "leopard2-high-decode-copy-matrix/v1"
+}

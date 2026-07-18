@@ -218,6 +218,18 @@ Release instance passed.
 
 ## Isolated timing evidence
 
+The source-boundary measurements below predate the complete evaluator-copy
+attribution gate.  The production implementation now also ships a private,
+non-installed evidence harness under
+`experiments/leopard2/high_decode_copy/`.  It can force the retained copy
+fallback for every materialized or tiled Algorithm 5 output block in the same
+test-hooks-only executable, while counter attestation proves which path ran.
+Its bounded matrix covers GF8/GF16, aligned and compact-tail shards, targets
+and neighbors.  A separate composite step binds only the aligned cells to
+independent production-versus-exact-main campaigns at the identical source
+commit; it explicitly refuses to infer exact-main evidence for tails.  No new
+timing claim is made until those isolated campaigns are collected.
+
 The source-boundary candidate at `a09d705` was compared with its immediate
 control `3a00fd8` using three independent ABBA rounds on one pinned physical
 core while reserving its SMT sibling.  Each sample retained source, binary,
