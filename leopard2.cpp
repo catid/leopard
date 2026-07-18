@@ -213,6 +213,8 @@ typedef leo2_result (*BatchPreflightFunction)(void* context);
 static std::atomic<bool> g_test_thread_start_fault(false);
 static std::atomic<unsigned> g_test_thread_start_fault_consumptions(0);
 static std::atomic<uint64_t> g_test_generic_direct_reveal_shards(0);
+static std::atomic<uint64_t> g_test_low_direct_reveal_shards(0);
+static std::atomic<uint64_t> g_test_low_scratch_reveal_shards(0);
 
 static bool TestConsumeThreadStartFault()
 {
@@ -1766,6 +1768,19 @@ static bool UseFusedGenericRevealScatter(
 #endif
 }
 
+static bool UseFusedLowRevealScatter(
+    const leo2_codec* codec,
+    size_t aligned_prefix_bytes)
+{
+    // Algorithm 4's final values already occupy the requested low-profile
+    // systematic coordinates for both materialized and tiled schedules.
+    // Complete tiles can therefore apply the inverse-locator factor directly
+    // into the non-overlapping caller destination.  Tails retain the scratch
+    // reveal because their padded kernel layout is not the public byte layout.
+    return codec->profile == LEO2_PROFILE_LOW_V1 &&
+        aligned_prefix_bytes != 0;
+}
+
 static bool UseMaterializedDecode(
     const leo2_codec* codec,
     const leo2_decode_plan* plan,
@@ -2002,7 +2017,7 @@ static void ExecuteTransformDecodePass(
     void** work,
     bool use_generic,
     bool use_tiled,
-    bool reveal_generic_in_place)
+    bool reveal_outputs_in_place)
 {
     const leo2_codec* codec = plan->codec;
     const leopard::backend::Ops& ops = *codec->context->ops;
@@ -2045,7 +2060,7 @@ static void ExecuteTransformDecodePass(
                 ops, buffer_bytes, codec->parent_count, coordinate_input,
                 plan->generic_input_count, requested_coordinates,
                 requested_count, dependencies, &plan->locator8[0],
-                reveal_generic_in_place, work);
+                reveal_outputs_in_place, work);
         }
         else if (codec->profile == LEO2_PROFILE_LOW_V1 && use_tiled)
         {
@@ -2054,12 +2069,23 @@ static void ExecuteTransformDecodePass(
                     codec->padded_side,
                     plan->specialized_output_dependencies.data(),
                     plan->specialized_output_dependencies.size());
-            leopard::ff8::ReedSolomonDecodeLowTiledPrunedPlanned(
-                ops, buffer_bytes, codec->parent_count, codec->padded_side,
-                coordinate_input, plan->block_input_counts.data(),
-                requested_coordinates, requested_count, dependencies,
-                &plan->locator8[0], &codec->fixed_factors8[0],
-                low_input_plans, low_input_plan_count, low_output_plan, work);
+            if (reveal_outputs_in_place)
+                leopard::ff8::ReedSolomonDecodeLowTiledPrunedPlanned(
+                    ops, buffer_bytes, codec->parent_count,
+                    codec->padded_side, coordinate_input,
+                    plan->block_input_counts.data(), requested_coordinates,
+                    requested_count, dependencies, &plan->locator8[0],
+                    &codec->fixed_factors8[0], low_input_plans,
+                    low_input_plan_count, low_output_plan, work);
+            else
+                leopard::ff8::
+                    ReedSolomonDecodeLowTiledPrunedPlannedUnrevealed(
+                        ops, buffer_bytes, codec->parent_count,
+                        codec->padded_side, coordinate_input,
+                        plan->block_input_counts.data(), requested_coordinates,
+                        requested_count, dependencies, &plan->locator8[0],
+                        &codec->fixed_factors8[0], low_input_plans,
+                        low_input_plan_count, low_output_plan, work);
         }
         else if (use_tiled)
             leopard::ff8::ReedSolomonDecodeHighTiledPrunedPlanned(
@@ -2078,12 +2104,22 @@ static void ExecuteTransformDecodePass(
                     codec->padded_side,
                     plan->specialized_output_dependencies.data(),
                     plan->specialized_output_dependencies.size());
-            leopard::ff8::ReedSolomonDecodeLowPrunedPlanned(
-                ops, buffer_bytes, codec->parent_count, codec->padded_side,
-                coordinate_input, plan->block_input_counts.data(),
-                requested_coordinates, requested_count, dependencies,
-                &plan->locator8[0], &codec->fixed_factors8[0],
-                low_input_plans, low_input_plan_count, low_output_plan, work);
+            if (reveal_outputs_in_place)
+                leopard::ff8::ReedSolomonDecodeLowPrunedPlanned(
+                    ops, buffer_bytes, codec->parent_count,
+                    codec->padded_side, coordinate_input,
+                    plan->block_input_counts.data(), requested_coordinates,
+                    requested_count, dependencies, &plan->locator8[0],
+                    &codec->fixed_factors8[0], low_input_plans,
+                    low_input_plan_count, low_output_plan, work);
+            else
+                leopard::ff8::ReedSolomonDecodeLowPrunedPlannedUnrevealed(
+                    ops, buffer_bytes, codec->parent_count,
+                    codec->padded_side, coordinate_input,
+                    plan->block_input_counts.data(), requested_coordinates,
+                    requested_count, dependencies, &plan->locator8[0],
+                    &codec->fixed_factors8[0], low_input_plans,
+                    low_input_plan_count, low_output_plan, work);
         }
         else
             leopard::ff8::ReedSolomonDecodeHighPrunedPlanned(
@@ -2110,7 +2146,7 @@ static void ExecuteTransformDecodePass(
                 ops, buffer_bytes, codec->parent_count, coordinate_input,
                 plan->generic_input_count, requested_coordinates,
                 requested_count, dependencies, &plan->locator16[0],
-                reveal_generic_in_place, work);
+                reveal_outputs_in_place, work);
         }
         else if (codec->profile == LEO2_PROFILE_LOW_V1 && use_tiled)
         {
@@ -2119,12 +2155,23 @@ static void ExecuteTransformDecodePass(
                     codec->padded_side,
                     plan->specialized_output_dependencies.data(),
                     plan->specialized_output_dependencies.size());
-            leopard::ff16::ReedSolomonDecodeLowTiledPrunedPlanned(
-                ops, buffer_bytes, codec->parent_count, codec->padded_side,
-                coordinate_input, plan->block_input_counts.data(),
-                requested_coordinates, requested_count, dependencies,
-                &plan->locator16[0], &codec->fixed_factors16[0],
-                low_input_plans, low_input_plan_count, low_output_plan, work);
+            if (reveal_outputs_in_place)
+                leopard::ff16::ReedSolomonDecodeLowTiledPrunedPlanned(
+                    ops, buffer_bytes, codec->parent_count,
+                    codec->padded_side, coordinate_input,
+                    plan->block_input_counts.data(), requested_coordinates,
+                    requested_count, dependencies, &plan->locator16[0],
+                    &codec->fixed_factors16[0], low_input_plans,
+                    low_input_plan_count, low_output_plan, work);
+            else
+                leopard::ff16::
+                    ReedSolomonDecodeLowTiledPrunedPlannedUnrevealed(
+                        ops, buffer_bytes, codec->parent_count,
+                        codec->padded_side, coordinate_input,
+                        plan->block_input_counts.data(), requested_coordinates,
+                        requested_count, dependencies, &plan->locator16[0],
+                        &codec->fixed_factors16[0], low_input_plans,
+                        low_input_plan_count, low_output_plan, work);
         }
         else if (use_tiled)
             leopard::ff16::ReedSolomonDecodeHighTiledPrunedPlanned(
@@ -2143,12 +2190,22 @@ static void ExecuteTransformDecodePass(
                     codec->padded_side,
                     plan->specialized_output_dependencies.data(),
                     plan->specialized_output_dependencies.size());
-            leopard::ff16::ReedSolomonDecodeLowPrunedPlanned(
-                ops, buffer_bytes, codec->parent_count, codec->padded_side,
-                coordinate_input, plan->block_input_counts.data(),
-                requested_coordinates, requested_count, dependencies,
-                &plan->locator16[0], &codec->fixed_factors16[0],
-                low_input_plans, low_input_plan_count, low_output_plan, work);
+            if (reveal_outputs_in_place)
+                leopard::ff16::ReedSolomonDecodeLowPrunedPlanned(
+                    ops, buffer_bytes, codec->parent_count,
+                    codec->padded_side, coordinate_input,
+                    plan->block_input_counts.data(), requested_coordinates,
+                    requested_count, dependencies, &plan->locator16[0],
+                    &codec->fixed_factors16[0], low_input_plans,
+                    low_input_plan_count, low_output_plan, work);
+            else
+                leopard::ff16::ReedSolomonDecodeLowPrunedPlannedUnrevealed(
+                    ops, buffer_bytes, codec->parent_count,
+                    codec->padded_side, coordinate_input,
+                    plan->block_input_counts.data(), requested_coordinates,
+                    requested_count, dependencies, &plan->locator16[0],
+                    &codec->fixed_factors16[0], low_input_plans,
+                    low_input_plan_count, low_output_plan, work);
         }
         else
             leopard::ff16::ReedSolomonDecodeHighPrunedPlanned(
@@ -2225,7 +2282,7 @@ static LEO_FORCE_INLINE void GatherTransformDecodeOne(
     void** work,
     bool use_generic,
     bool use_tiled,
-    bool generic_revealed_in_place,
+    bool outputs_revealed_in_place,
     const leopard::backend::Ops& ops,
     void** high_requested_output,
     size_t output_index)
@@ -2240,14 +2297,17 @@ static LEO_FORCE_INLINE void GatherTransformDecodeOne(
     uint8_t* const destination =
         static_cast<uint8_t*>(restored_original[original_index]) +
         destination_offset;
+    const bool use_low_specialized = !use_generic &&
+        codec->profile == LEO2_PROFILE_LOW_V1;
 
-    // Complete kernel tiles can reveal a generic-decoder output directly
+    // Complete kernel tiles can reveal a generic or Algorithm 4 output directly
     // into its caller-owned destination.  This removes both the alias-safe
     // in-place multiply's temporary copy and the following scatter copy.
     // Ragged tails still reveal in scratch first because their 64-byte
     // kernel layout can be larger (and, for GF16, differently arranged)
     // than the public destination.
-    if (use_generic && !generic_revealed_in_place)
+    if ((use_generic || use_low_specialized) &&
+        !outputs_revealed_in_place)
     {
         const uint32_t coordinate =
             CoordinateForOriginal(codec, original_index);
@@ -2260,8 +2320,12 @@ static LEO_FORCE_INLINE void GatherTransformDecodeOne(
                 static_cast<uint16_t>(255U - plan->locator8[coordinate]),
                 pass_bytes);
 #ifdef LEO2_ENABLE_TEST_HOOKS
-            g_test_generic_direct_reveal_shards.fetch_add(
-                1, std::memory_order_relaxed);
+            if (use_low_specialized)
+                g_test_low_direct_reveal_shards.fetch_add(
+                    1, std::memory_order_relaxed);
+            else
+                g_test_generic_direct_reveal_shards.fetch_add(
+                    1, std::memory_order_relaxed);
 #endif
             return;
         }
@@ -2273,12 +2337,21 @@ static LEO_FORCE_INLINE void GatherTransformDecodeOne(
             static_cast<uint16_t>(65535U - plan->locator16[coordinate]),
             pass_bytes);
 #ifdef LEO2_ENABLE_TEST_HOOKS
-        g_test_generic_direct_reveal_shards.fetch_add(
-            1, std::memory_order_relaxed);
+        if (use_low_specialized)
+            g_test_low_direct_reveal_shards.fetch_add(
+                1, std::memory_order_relaxed);
+        else
+            g_test_generic_direct_reveal_shards.fetch_add(
+                1, std::memory_order_relaxed);
 #endif
         return;
 #endif
     }
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    if (use_low_specialized)
+        g_test_low_scratch_reveal_shards.fetch_add(
+            1, std::memory_order_relaxed);
+#endif
     GatherShardFromKernel(codec, destination, source, pass_bytes);
 }
 
@@ -2290,7 +2363,7 @@ static void GatherTransformDecodePass(
     void** work,
     bool use_generic,
     bool use_tiled,
-    bool generic_revealed_in_place)
+    bool outputs_revealed_in_place)
 {
     const leo2_codec* codec = plan->codec;
     const leopard::backend::Ops& ops = *codec->context->ops;
@@ -2298,15 +2371,17 @@ static void GatherTransformDecodePass(
         work + static_cast<size_t>(codec->padded_side) * 2;
 
 #if defined(_OPENMP) && defined(LEO_HAS_FF16)
-    if (use_generic && !generic_revealed_in_place &&
-        codec->field == LEO2_FIELD_GF16)
+    const bool direct_ff16_reveal = !outputs_revealed_in_place &&
+        (use_generic || codec->profile == LEO2_PROFILE_LOW_V1) &&
+        codec->field == LEO2_FIELD_GF16;
+    if (direct_ff16_reveal)
     {
 #pragma omp parallel for
         for (int i = 0;
              i < static_cast<int>(plan->missing_originals.size()); ++i)
             GatherTransformDecodeOne(
                 plan, restored_original, destination_offset, pass_bytes, work,
-                use_generic, use_tiled, generic_revealed_in_place, ops,
+                use_generic, use_tiled, outputs_revealed_in_place, ops,
                 high_requested_output, static_cast<size_t>(i));
         return;
     }
@@ -2314,7 +2389,7 @@ static void GatherTransformDecodePass(
     for (size_t i = 0; i < plan->missing_originals.size(); ++i)
         GatherTransformDecodeOne(
             plan, restored_original, destination_offset, pass_bytes, work,
-            use_generic, use_tiled, generic_revealed_in_place, ops,
+            use_generic, use_tiled, outputs_revealed_in_place, ops,
             high_requested_output, i);
 }
 
@@ -3673,6 +3748,22 @@ LEO2_EXPORT uint64_t leo2_test_generic_direct_reveal_shards(void)
 {
     return g_test_generic_direct_reveal_shards.load(std::memory_order_acquire);
 }
+
+LEO2_EXPORT void leo2_test_reset_low_reveal_counts(void)
+{
+    g_test_low_direct_reveal_shards.store(0, std::memory_order_release);
+    g_test_low_scratch_reveal_shards.store(0, std::memory_order_release);
+}
+
+LEO2_EXPORT uint64_t leo2_test_low_direct_reveal_shards(void)
+{
+    return g_test_low_direct_reveal_shards.load(std::memory_order_acquire);
+}
+
+LEO2_EXPORT uint64_t leo2_test_low_scratch_reveal_shards(void)
+{
+    return g_test_low_scratch_reveal_shards.load(std::memory_order_acquire);
+}
 #endif
 
 LEO2_EXPORT leo2_result leo2_codec_create(
@@ -4695,6 +4786,10 @@ static leo2_result DecodePlanExecuteInternal(
         UseGenericDecode(plan, geometry.rounded_bytes);
     const bool fuse_generic_reveal_scatter = use_generic &&
         UseFusedGenericRevealScatter(codec, geometry.aligned_prefix_bytes);
+    const bool fuse_low_reveal_scatter = !use_generic &&
+        UseFusedLowRevealScatter(codec, geometry.aligned_prefix_bytes);
+    const bool reveal_aligned_outputs_in_place =
+        !(fuse_generic_reveal_scatter || fuse_low_reveal_scatter);
     const bool force_tiled =
         (codec->flags & LEO2_CODEC_FORCE_TILED_DECODE) != 0;
     const bool force_materialized =
@@ -4717,10 +4812,10 @@ static leo2_result DecodePlanExecuteInternal(
             const_cast<const void* const*>(coordinate_data);
         ExecuteTransformDecodePass(
             plan, geometry.aligned_prefix_bytes, coordinate_input, work,
-            use_generic, use_tiled, !fuse_generic_reveal_scatter);
+            use_generic, use_tiled, reveal_aligned_outputs_in_place);
         GatherTransformDecodePass(
             plan, restored_original, 0, geometry.aligned_prefix_bytes,
-            work, use_generic, use_tiled, !fuse_generic_reveal_scatter);
+            work, use_generic, use_tiled, reveal_aligned_outputs_in_place);
     }
 
     if (geometry.tail_bytes != 0)
