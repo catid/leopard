@@ -1154,17 +1154,17 @@ if(LEO2_BUILD_TESTS)
             COMMAND ${LEO2_PYTHON_EXECUTABLE}
                 ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/cost_model.py
                 self-test)
-        add_test(
-            NAME leopard2_lab_self_test
-            COMMAND ${LEO2_PYTHON_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_lab.py
-                self-test)
-        # The strict sanitizer campaign attests ELF instrumentation with nm and
-        # its destructive-output guards exercise POSIX symlink semantics.
-        # Keep this host-tool self-test off platforms where those contracts do
-        # not exist (notably MSVC/Windows); ordinary codec fuzz smoke tests are
-        # registered independently above.
+        # The lab runner's self-test exercises Linux process affinity and
+        # /proc-based runtime attestation.  The strict sanitizer campaign also
+        # attests ELF instrumentation with nm and POSIX alias semantics.  Keep
+        # both host-tool tests out of non-Linux CTest inventories; portable
+        # codec and Python tests remain registered independently.
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            add_test(
+                NAME leopard2_lab_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_lab.py
+                    self-test)
             add_test(
                 NAME leopard2_fuzz_campaign_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
