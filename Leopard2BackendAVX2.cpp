@@ -1212,7 +1212,8 @@ static void AVX2FF8FFTButterfly4(
         AVX2FF8Butterfly2<false>(value2, value3, log23, byte_count);
 }
 
-static void AVX2FF8FFTButterfly4Out(
+template<bool Inverse>
+static void AVX2FF8Butterfly4Out(
     const void* input0_pointer, const void* input1_pointer,
     const void* input2_pointer, const void* input3_pointer,
     void* output0_pointer, void* output1_pointer,
@@ -1260,23 +1261,46 @@ static void AVX2FF8FFTButterfly4Out(
             reinterpret_cast<const __m256i*>(input2));
         __m256i x3 = _mm256_loadu_si256(
             reinterpret_cast<const __m256i*>(input3));
-        if (log02 != kZeroSkew)
+        if (Inverse)
         {
-            x0 = _mm256_xor_si256(x0,
-                AVX2FF8ProductVector(x2, low02, high02));
-            x1 = _mm256_xor_si256(x1,
-                AVX2FF8ProductVector(x3, low02, high02));
+            x1 = _mm256_xor_si256(x1, x0);
+            if (log01 != kZeroSkew)
+                x0 = _mm256_xor_si256(x0,
+                    AVX2FF8ProductVector(x1, low01, high01));
+            x3 = _mm256_xor_si256(x3, x2);
+            if (log23 != kZeroSkew)
+                x2 = _mm256_xor_si256(x2,
+                    AVX2FF8ProductVector(x3, low23, high23));
+            x2 = _mm256_xor_si256(x2, x0);
+            x3 = _mm256_xor_si256(x3, x1);
+            if (log02 != kZeroSkew)
+            {
+                x0 = _mm256_xor_si256(x0,
+                    AVX2FF8ProductVector(x2, low02, high02));
+                x1 = _mm256_xor_si256(x1,
+                    AVX2FF8ProductVector(x3, low02, high02));
+            }
         }
-        x2 = _mm256_xor_si256(x2, x0);
-        x3 = _mm256_xor_si256(x3, x1);
-        if (log01 != kZeroSkew)
-            x0 = _mm256_xor_si256(x0,
-                AVX2FF8ProductVector(x1, low01, high01));
-        x1 = _mm256_xor_si256(x1, x0);
-        if (log23 != kZeroSkew)
-            x2 = _mm256_xor_si256(x2,
-                AVX2FF8ProductVector(x3, low23, high23));
-        x3 = _mm256_xor_si256(x3, x2);
+        else
+        {
+            if (log02 != kZeroSkew)
+            {
+                x0 = _mm256_xor_si256(x0,
+                    AVX2FF8ProductVector(x2, low02, high02));
+                x1 = _mm256_xor_si256(x1,
+                    AVX2FF8ProductVector(x3, low02, high02));
+            }
+            x2 = _mm256_xor_si256(x2, x0);
+            x3 = _mm256_xor_si256(x3, x1);
+            if (log01 != kZeroSkew)
+                x0 = _mm256_xor_si256(x0,
+                    AVX2FF8ProductVector(x1, low01, high01));
+            x1 = _mm256_xor_si256(x1, x0);
+            if (log23 != kZeroSkew)
+                x2 = _mm256_xor_si256(x2,
+                    AVX2FF8ProductVector(x3, low23, high23));
+            x3 = _mm256_xor_si256(x3, x2);
+        }
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(output0), x0);
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(output1), x1);
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(output2), x2);
@@ -1297,24 +1321,69 @@ static void AVX2FF8FFTButterfly4Out(
         uint8_t x1 = *input1++;
         uint8_t x2 = *input2++;
         uint8_t x3 = *input3++;
-        if (log02 != kZeroSkew)
+        if (Inverse)
         {
-            x0 ^= FF8Product(log02, x2);
-            x1 ^= FF8Product(log02, x3);
+            x1 ^= x0;
+            if (log01 != kZeroSkew)
+                x0 ^= FF8Product(log01, x1);
+            x3 ^= x2;
+            if (log23 != kZeroSkew)
+                x2 ^= FF8Product(log23, x3);
+            x2 ^= x0;
+            x3 ^= x1;
+            if (log02 != kZeroSkew)
+            {
+                x0 ^= FF8Product(log02, x2);
+                x1 ^= FF8Product(log02, x3);
+            }
         }
-        x2 ^= x0;
-        x3 ^= x1;
-        if (log01 != kZeroSkew)
-            x0 ^= FF8Product(log01, x1);
-        x1 ^= x0;
-        if (log23 != kZeroSkew)
-            x2 ^= FF8Product(log23, x3);
-        x3 ^= x2;
+        else
+        {
+            if (log02 != kZeroSkew)
+            {
+                x0 ^= FF8Product(log02, x2);
+                x1 ^= FF8Product(log02, x3);
+            }
+            x2 ^= x0;
+            x3 ^= x1;
+            if (log01 != kZeroSkew)
+                x0 ^= FF8Product(log01, x1);
+            x1 ^= x0;
+            if (log23 != kZeroSkew)
+                x2 ^= FF8Product(log23, x3);
+            x3 ^= x2;
+        }
         *output0++ = x0;
         *output1++ = x1;
         *output2++ = x2;
         *output3++ = x3;
     }
+}
+
+static void AVX2FF8IFFTButterfly4Out(
+    const void* input0, const void* input1,
+    const void* input2, const void* input3,
+    void* output0, void* output1, void* output2, void* output3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    AVX2FF8Butterfly4Out<true>(
+        input0, input1, input2, input3,
+        output0, output1, output2, output3,
+        log01, log23, log02, byte_count);
+}
+
+static void AVX2FF8FFTButterfly4Out(
+    const void* input0, const void* input1,
+    const void* input2, const void* input3,
+    void* output0, void* output1, void* output2, void* output3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    AVX2FF8Butterfly4Out<false>(
+        input0, input1, input2, input3,
+        output0, output1, output2, output3,
+        log01, log23, log02, byte_count);
 }
 
 static void AVX2FF8IFFTButterfly4Range(
@@ -1581,7 +1650,8 @@ static void AVX2FF16FFTButterfly4(
         log01, log23, log02, byte_count);
 }
 
-static void AVX2FF16FFTButterfly4Out(
+template<bool Inverse>
+static void AVX2FF16Butterfly4Out(
     const void* input0_pointer, const void* input1_pointer,
     const void* input2_pointer, const void* input3_pointer,
     void* output0_pointer, void* output1_pointer,
@@ -1615,27 +1685,54 @@ static void AVX2FF16FFTButterfly4Out(
                 reinterpret_cast<const __m256i*>(
                     inputs[lane] + offset + 32));
         }
-        if (log02 != kZeroSkew)
+        if (Inverse)
         {
-            AVX2FF16MultiplyAddPair(low[0], high[0], low[2], high[2],
-                FF16Tables[log02]);
-            AVX2FF16MultiplyAddPair(low[1], high[1], low[3], high[3],
-                FF16Tables[log02]);
+            low[1] = _mm256_xor_si256(low[1], low[0]);
+            high[1] = _mm256_xor_si256(high[1], high[0]);
+            if (log01 != kZeroSkew)
+                AVX2FF16MultiplyAddPair(low[0], high[0],
+                    low[1], high[1], FF16Tables[log01]);
+            low[3] = _mm256_xor_si256(low[3], low[2]);
+            high[3] = _mm256_xor_si256(high[3], high[2]);
+            if (log23 != kZeroSkew)
+                AVX2FF16MultiplyAddPair(low[2], high[2],
+                    low[3], high[3], FF16Tables[log23]);
+            low[2] = _mm256_xor_si256(low[2], low[0]);
+            high[2] = _mm256_xor_si256(high[2], high[0]);
+            low[3] = _mm256_xor_si256(low[3], low[1]);
+            high[3] = _mm256_xor_si256(high[3], high[1]);
+            if (log02 != kZeroSkew)
+            {
+                AVX2FF16MultiplyAddPair(low[0], high[0],
+                    low[2], high[2], FF16Tables[log02]);
+                AVX2FF16MultiplyAddPair(low[1], high[1],
+                    low[3], high[3], FF16Tables[log02]);
+            }
         }
-        low[2] = _mm256_xor_si256(low[2], low[0]);
-        high[2] = _mm256_xor_si256(high[2], high[0]);
-        low[3] = _mm256_xor_si256(low[3], low[1]);
-        high[3] = _mm256_xor_si256(high[3], high[1]);
-        if (log01 != kZeroSkew)
-            AVX2FF16MultiplyAddPair(low[0], high[0], low[1], high[1],
-                FF16Tables[log01]);
-        low[1] = _mm256_xor_si256(low[1], low[0]);
-        high[1] = _mm256_xor_si256(high[1], high[0]);
-        if (log23 != kZeroSkew)
-            AVX2FF16MultiplyAddPair(low[2], high[2], low[3], high[3],
-                FF16Tables[log23]);
-        low[3] = _mm256_xor_si256(low[3], low[2]);
-        high[3] = _mm256_xor_si256(high[3], high[2]);
+        else
+        {
+            if (log02 != kZeroSkew)
+            {
+                AVX2FF16MultiplyAddPair(low[0], high[0],
+                    low[2], high[2], FF16Tables[log02]);
+                AVX2FF16MultiplyAddPair(low[1], high[1],
+                    low[3], high[3], FF16Tables[log02]);
+            }
+            low[2] = _mm256_xor_si256(low[2], low[0]);
+            high[2] = _mm256_xor_si256(high[2], high[0]);
+            low[3] = _mm256_xor_si256(low[3], low[1]);
+            high[3] = _mm256_xor_si256(high[3], high[1]);
+            if (log01 != kZeroSkew)
+                AVX2FF16MultiplyAddPair(low[0], high[0],
+                    low[1], high[1], FF16Tables[log01]);
+            low[1] = _mm256_xor_si256(low[1], low[0]);
+            high[1] = _mm256_xor_si256(high[1], high[0]);
+            if (log23 != kZeroSkew)
+                AVX2FF16MultiplyAddPair(low[2], high[2],
+                    low[3], high[3], FF16Tables[log23]);
+            low[3] = _mm256_xor_si256(low[3], low[2]);
+            high[3] = _mm256_xor_si256(high[3], high[2]);
+        }
         for (unsigned lane = 0; lane < 4; ++lane)
         {
             _mm256_storeu_si256(
@@ -1652,19 +1749,38 @@ static void AVX2FF16FFTButterfly4Out(
         for (unsigned lane = 0; lane < 4; ++lane)
             x[lane] = static_cast<uint16_t>(inputs[lane][offset + i] |
                 (static_cast<unsigned>(inputs[lane][offset + symbols + i]) << 8));
-        if (log02 != kZeroSkew)
+        if (Inverse)
         {
-            x[0] ^= FF16Product(log02, x[2]);
-            x[1] ^= FF16Product(log02, x[3]);
+            x[1] ^= x[0];
+            if (log01 != kZeroSkew)
+                x[0] ^= FF16Product(log01, x[1]);
+            x[3] ^= x[2];
+            if (log23 != kZeroSkew)
+                x[2] ^= FF16Product(log23, x[3]);
+            x[2] ^= x[0];
+            x[3] ^= x[1];
+            if (log02 != kZeroSkew)
+            {
+                x[0] ^= FF16Product(log02, x[2]);
+                x[1] ^= FF16Product(log02, x[3]);
+            }
         }
-        x[2] ^= x[0];
-        x[3] ^= x[1];
-        if (log01 != kZeroSkew)
-            x[0] ^= FF16Product(log01, x[1]);
-        x[1] ^= x[0];
-        if (log23 != kZeroSkew)
-            x[2] ^= FF16Product(log23, x[3]);
-        x[3] ^= x[2];
+        else
+        {
+            if (log02 != kZeroSkew)
+            {
+                x[0] ^= FF16Product(log02, x[2]);
+                x[1] ^= FF16Product(log02, x[3]);
+            }
+            x[2] ^= x[0];
+            x[3] ^= x[1];
+            if (log01 != kZeroSkew)
+                x[0] ^= FF16Product(log01, x[1]);
+            x[1] ^= x[0];
+            if (log23 != kZeroSkew)
+                x[2] ^= FF16Product(log23, x[3]);
+            x[3] ^= x[2];
+        }
         for (unsigned lane = 0; lane < 4; ++lane)
         {
             outputs[lane][offset + i] = static_cast<uint8_t>(x[lane]);
@@ -1672,6 +1788,32 @@ static void AVX2FF16FFTButterfly4Out(
                 static_cast<uint8_t>(x[lane] >> 8);
         }
     }
+}
+
+static void AVX2FF16IFFTButterfly4Out(
+    const void* input0, const void* input1,
+    const void* input2, const void* input3,
+    void* output0, void* output1, void* output2, void* output3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    AVX2FF16Butterfly4Out<true>(
+        input0, input1, input2, input3,
+        output0, output1, output2, output3,
+        log01, log23, log02, byte_count);
+}
+
+static void AVX2FF16FFTButterfly4Out(
+    const void* input0, const void* input1,
+    const void* input2, const void* input3,
+    void* output0, void* output1, void* output2, void* output3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    AVX2FF16Butterfly4Out<false>(
+        input0, input1, input2, input3,
+        output0, output1, output2, output3,
+        log01, log23, log02, byte_count);
 }
 
 template<bool Inverse>
@@ -1742,11 +1884,13 @@ static const Ops AVX2Ops = {
     AVX2FF8IFFTButterfly2Xor,
     AVX2FF8IFFTButterfly4,
     AVX2FF8FFTButterfly4,
+    AVX2FF8IFFTButterfly4Out,
     AVX2FF8FFTButterfly4Out,
     AVX2FF8IFFTButterfly4Range,
     AVX2FF8FFTButterfly4Range,
     AVX2FF8IFFTButterfly4XorRange,
 #else
+    NULL,
     NULL,
     NULL,
     NULL,
@@ -1765,10 +1909,12 @@ static const Ops AVX2Ops = {
     AVX2FF16IFFTButterfly2Xor,
     AVX2FF16IFFTButterfly4,
     AVX2FF16FFTButterfly4,
+    AVX2FF16IFFTButterfly4Out,
     AVX2FF16FFTButterfly4Out,
     AVX2FF16IFFTButterfly4Range,
     AVX2FF16FFTButterfly4Range
 #else
+    NULL,
     NULL,
     NULL,
     NULL,

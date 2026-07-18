@@ -183,6 +183,13 @@ typedef void (*FFTButterfly4Out)(
     uint16_t multiplier_log02,
     uint64_t byte_count);
 
+// Out-of-place inverse companion.  The storage and sentinel contract is the
+// same as FFTButterfly4Out; only the LCH butterfly direction differs.  High-
+// rate encoding uses this to consume four caller shards directly into the
+// first two inverse layers instead of copying them through a full workspace
+// pass first.
+typedef FFTButterfly4Out IFFTButterfly4Out;
+
 // This table is private to the implementation and immutable.  A backend owns
 // any tables referenced by its functions and publishes this object only after
 // initialization and the startup known-answer tests have succeeded.
@@ -203,6 +210,7 @@ struct Ops
     IFFTButterfly2Xor ff8_ifft_butterfly2_xor;
     Butterfly4 ff8_ifft_butterfly4;
     Butterfly4 ff8_fft_butterfly4;
+    IFFTButterfly4Out ff8_ifft_butterfly4_out;
     FFTButterfly4Out ff8_fft_butterfly4_out;
     Butterfly4Range ff8_ifft_butterfly4_range;
     Butterfly4Range ff8_fft_butterfly4_range;
@@ -213,6 +221,7 @@ struct Ops
     IFFTButterfly2Xor ff16_ifft_butterfly2_xor;
     Butterfly4 ff16_ifft_butterfly4;
     Butterfly4 ff16_fft_butterfly4;
+    IFFTButterfly4Out ff16_ifft_butterfly4_out;
     FFTButterfly4Out ff16_fft_butterfly4_out;
     Butterfly4Range ff16_ifft_butterfly4_range;
     Butterfly4Range ff16_fft_butterfly4_range;

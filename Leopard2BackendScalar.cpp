@@ -670,6 +670,89 @@ static void ScalarFF8FFTButterfly4(
         log01, log23, log02, byte_count);
 }
 
+static void ScalarFF8IFFTButterfly4Out(
+    const void* input0_pointer, const void* input1_pointer,
+    const void* input2_pointer, const void* input3_pointer,
+    void* output0_pointer, void* output1_pointer,
+    void* output2_pointer, void* output3_pointer,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 255;
+    const uint8_t* input0 = static_cast<const uint8_t*>(input0_pointer);
+    const uint8_t* input1 = static_cast<const uint8_t*>(input1_pointer);
+    const uint8_t* input2 = static_cast<const uint8_t*>(input2_pointer);
+    const uint8_t* input3 = static_cast<const uint8_t*>(input3_pointer);
+    uint8_t* output0 = static_cast<uint8_t*>(output0_pointer);
+    uint8_t* output1 = static_cast<uint8_t*>(output1_pointer);
+    uint8_t* output2 = static_cast<uint8_t*>(output2_pointer);
+    uint8_t* output3 = static_cast<uint8_t*>(output3_pointer);
+    const uint8_t* table01 = log01 == kZeroSkew ? NULL :
+        FF8Table + static_cast<size_t>(log01) * 256U;
+    const uint8_t* table23 = log23 == kZeroSkew ? NULL :
+        FF8Table + static_cast<size_t>(log23) * 256U;
+    const uint8_t* table02 = log02 == kZeroSkew ? NULL :
+        FF8Table + static_cast<size_t>(log02) * 256U;
+    while (byte_count >= 8)
+    {
+        uint64_t x0, x1, x2, x3;
+        std::memcpy(&x0, input0, sizeof(x0));
+        std::memcpy(&x1, input1, sizeof(x1));
+        std::memcpy(&x2, input2, sizeof(x2));
+        std::memcpy(&x3, input3, sizeof(x3));
+        x1 ^= x0;
+        if (table01)
+            x0 ^= ScalarFF8PackedProduct(x1, table01);
+        x3 ^= x2;
+        if (table23)
+            x2 ^= ScalarFF8PackedProduct(x3, table23);
+        x2 ^= x0;
+        x3 ^= x1;
+        if (table02)
+        {
+            x0 ^= ScalarFF8PackedProduct(x2, table02);
+            x1 ^= ScalarFF8PackedProduct(x3, table02);
+        }
+        std::memcpy(output0, &x0, sizeof(x0));
+        std::memcpy(output1, &x1, sizeof(x1));
+        std::memcpy(output2, &x2, sizeof(x2));
+        std::memcpy(output3, &x3, sizeof(x3));
+        input0 += 8;
+        input1 += 8;
+        input2 += 8;
+        input3 += 8;
+        output0 += 8;
+        output1 += 8;
+        output2 += 8;
+        output3 += 8;
+        byte_count -= 8;
+    }
+    while (byte_count-- != 0)
+    {
+        uint8_t x0 = *input0++;
+        uint8_t x1 = *input1++;
+        uint8_t x2 = *input2++;
+        uint8_t x3 = *input3++;
+        x1 ^= x0;
+        if (table01)
+            x0 ^= table01[x1];
+        x3 ^= x2;
+        if (table23)
+            x2 ^= table23[x3];
+        x2 ^= x0;
+        x3 ^= x1;
+        if (table02)
+        {
+            x0 ^= table02[x2];
+            x1 ^= table02[x3];
+        }
+        *output0++ = x0;
+        *output1++ = x1;
+        *output2++ = x2;
+        *output3++ = x3;
+    }
+}
+
 static void ScalarFF8FFTButterfly4Out(
     const void* input0_pointer, const void* input1_pointer,
     const void* input2_pointer, const void* input3_pointer,
@@ -1028,6 +1111,86 @@ static inline void ScalarFF16FFTButterfly4Values(
     x3 ^= x2;
 }
 
+static inline void ScalarFF16IFFTButterfly4Values(
+    uint16_t& x0, uint16_t& x1, uint16_t& x2, uint16_t& x3,
+    uint16_t log01, uint16_t log23, uint16_t log02)
+{
+    static const uint16_t kZeroSkew = 65535;
+    x1 ^= x0;
+    if (log01 != kZeroSkew)
+        x0 ^= ScalarFF16Product(log01, x1);
+    x3 ^= x2;
+    if (log23 != kZeroSkew)
+        x2 ^= ScalarFF16Product(log23, x3);
+    x2 ^= x0;
+    x3 ^= x1;
+    if (log02 != kZeroSkew)
+    {
+        x0 ^= ScalarFF16Product(log02, x2);
+        x1 ^= ScalarFF16Product(log02, x3);
+    }
+}
+
+static void ScalarFF16IFFTButterfly4Out(
+    const void* input0_pointer, const void* input1_pointer,
+    const void* input2_pointer, const void* input3_pointer,
+    void* output0_pointer, void* output1_pointer,
+    void* output2_pointer, void* output3_pointer,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    const uint8_t* inputs[4] = {
+        static_cast<const uint8_t*>(input0_pointer),
+        static_cast<const uint8_t*>(input1_pointer),
+        static_cast<const uint8_t*>(input2_pointer),
+        static_cast<const uint8_t*>(input3_pointer)
+    };
+    uint8_t* outputs[4] = {
+        static_cast<uint8_t*>(output0_pointer),
+        static_cast<uint8_t*>(output1_pointer),
+        static_cast<uint8_t*>(output2_pointer),
+        static_cast<uint8_t*>(output3_pointer)
+    };
+    uint64_t offset = 0;
+    while (byte_count - offset >= 64)
+    {
+        for (unsigned i = 0; i < 32; ++i)
+        {
+            uint16_t values[4];
+            for (unsigned lane = 0; lane < 4; ++lane)
+                values[lane] = static_cast<uint16_t>(inputs[lane][offset + i] |
+                    (static_cast<unsigned>(inputs[lane][offset + 32 + i]) << 8));
+            ScalarFF16IFFTButterfly4Values(
+                values[0], values[1], values[2], values[3],
+                log01, log23, log02);
+            for (unsigned lane = 0; lane < 4; ++lane)
+            {
+                outputs[lane][offset + i] = static_cast<uint8_t>(values[lane]);
+                outputs[lane][offset + 32 + i] =
+                    static_cast<uint8_t>(values[lane] >> 8);
+            }
+        }
+        offset += 64;
+    }
+    const uint64_t symbols = (byte_count - offset) / 2;
+    for (uint64_t i = 0; i < symbols; ++i)
+    {
+        uint16_t values[4];
+        for (unsigned lane = 0; lane < 4; ++lane)
+            values[lane] = static_cast<uint16_t>(inputs[lane][offset + i] |
+                (static_cast<unsigned>(inputs[lane][offset + symbols + i]) << 8));
+        ScalarFF16IFFTButterfly4Values(
+            values[0], values[1], values[2], values[3],
+            log01, log23, log02);
+        for (unsigned lane = 0; lane < 4; ++lane)
+        {
+            outputs[lane][offset + i] = static_cast<uint8_t>(values[lane]);
+            outputs[lane][offset + symbols + i] =
+                static_cast<uint8_t>(values[lane] >> 8);
+        }
+    }
+}
+
 static void ScalarFF16FFTButterfly4Out(
     const void* input0_pointer, const void* input1_pointer,
     const void* input2_pointer, const void* input3_pointer,
@@ -1116,11 +1279,13 @@ static const Ops ScalarOps = {
     ScalarFF8IFFTButterfly2Xor,
     ScalarFF8IFFTButterfly4,
     ScalarFF8FFTButterfly4,
+    ScalarFF8IFFTButterfly4Out,
     ScalarFF8FFTButterfly4Out,
     ScalarFF8IFFTButterfly4Range,
     ScalarFF8FFTButterfly4Range,
     ScalarFF8IFFTButterfly4XorRange,
 #else
+    NULL,
     NULL,
     NULL,
     NULL,
@@ -1139,10 +1304,12 @@ static const Ops ScalarOps = {
     ScalarFF16IFFTButterfly2Xor,
     ScalarFF16IFFTButterfly4,
     ScalarFF16FFTButterfly4,
+    ScalarFF16IFFTButterfly4Out,
     ScalarFF16FFTButterfly4Out,
     ScalarFF16IFFTButterfly4Range,
     ScalarFF16FFTButterfly4Range
 #else
+    NULL,
     NULL,
     NULL,
     NULL,
