@@ -175,12 +175,15 @@ static inline bool IsDecodeByteGeometryConsistent(
 }
 
 /*
-    One ordered decode selector owns both workspace sizing and execution.  The
-    actual byte split is deliberately part of its input even though the
-    currently promoted crossover rules use the 64-byte-rounded size: future
-    rules cannot accidentally receive only a rounded surrogate and ignore a
-    ragged pass.  matching_auto_rules excludes the capacity fallback and lets
-    tests prove that evidence-scoped rules do not overlap.
+    One ordered transform-decode selector owns both workspace sizing and
+    transform execution.  No-op and direct repair are immutable terminal plan
+    states that bypass transform workspace and are reported by the private
+    introspection wrapper before this selector is called.  The actual byte
+    split is deliberately part of the input even though the currently promoted
+    crossover rules use the 64-byte-rounded size: future rules cannot
+    accidentally receive only a rounded surrogate and ignore a ragged pass.
+    matching_auto_rules excludes the capacity fallback and lets tests prove
+    that evidence-scoped rules do not overlap.
 */
 static inline bool SelectDecodePath(
     const DecodePathInput& input,
@@ -267,7 +270,15 @@ static inline bool SelectDecodePath(
     {
         selection.path = kDecodePathTiled;
         selection.rule = kDecodeRuleForcedTiled;
-        selection.required_work_slots = tiled_work_slots;
+        /* Codec construction currently rejects unsupported profiles, but the
+           retained fallback historically reserved N slots before the
+           forced execution predicate selected tiled traversal.  Preserve that
+           conservative contract for private selector probes and future
+           versioned profiles until their workspace is defined explicitly. */
+        selection.required_work_slots =
+            input.profile == LEO2_PROFILE_LOW_V1 ||
+            input.profile == LEO2_PROFILE_LEGACY_HIGH_V1
+                ? tiled_work_slots : materialized_work_slots;
         return true;
     }
 

@@ -1554,6 +1554,21 @@ void test_unified_decode_path_selector()
     require_decode_path(fallback, kDecodePathTiled,
         kDecodeRuleWorkspaceTiled, "NEON measured-rule fallback");
 
+    DecodePathInput unsupported = make_decode_path_input(
+        LEO2_PROFILE_EXACT_EXPERIMENTAL_V1, LEO2_FIELD_GF8,
+        LEO2_BACKEND_AVX2, 224, 32, 32, 256, 8, 32 * 1024);
+    selection = require_decode_path(unsupported, kDecodePathMaterialized,
+        kDecodeRuleUnsupportedProfile,
+        "unsupported-profile retained fallback");
+    require(selection.required_work_slots == 256,
+        "unsupported-profile fallback did not retain N slots");
+    unsupported.codec_flags = LEO2_CODEC_FORCE_TILED_DECODE;
+    selection = require_decode_path(unsupported, kDecodePathTiled,
+        kDecodeRuleForcedTiled,
+        "unsupported-profile forced tiled traversal");
+    require(selection.required_work_slots == 256,
+        "unsupported forced tiled path did not retain fallback N slots");
+
     DecodePathInput codec_query = make_decode_path_input(
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
         LEO2_BACKEND_AVX2, 224, 32, 32, 256, 0, 32 * 1024,
