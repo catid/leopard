@@ -627,6 +627,18 @@ if(LEO2_BUILD_TESTS)
             LEO2_PRUNED_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
         target_link_libraries(bench_leopard2_pruned_transform leopard)
 
+        # Same-binary, same-source comparison of exact requested-output masks
+        # against the mature prefix encoder transforms.  Schedule setup,
+        # prepared execution, and the current call-local total are all retained
+        # separately; the executable is diagnostic and is never installed.
+        add_executable(bench_leopard2_sparse_encode
+            bench/leopard2/sparse_encode_benchmark.cpp)
+        target_compile_definitions(bench_leopard2_sparse_encode PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1
+            LEO2_SPARSE_ENCODE_SOURCE_GIT_SHA="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
+            LEO2_SPARSE_ENCODE_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
+        target_link_libraries(bench_leopard2_sparse_encode leopard)
+
     endif()
 
     add_executable(leopard2_direct_oracle_test
@@ -1003,6 +1015,14 @@ if(LEO2_BUILD_TESTS)
                     $<TARGET_FILE:bench_leopard2_pruned_transform>)
             set_tests_properties(
                 leopard2_pruned_transform_benchmark_smoke PROPERTIES
+                ENVIRONMENT "OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")
+            add_test(
+                NAME leopard2_sparse_encode_benchmark_smoke
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_sparse_encode_benchmark_json_test.py
+                    $<TARGET_FILE:bench_leopard2_sparse_encode>)
+            set_tests_properties(
+                leopard2_sparse_encode_benchmark_smoke PROPERTIES
                 ENVIRONMENT "OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")
         endif()
         add_test(
