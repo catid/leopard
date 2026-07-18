@@ -234,12 +234,33 @@ two-way implementation.
 ### Choosing lower-cost locator constants
 
 The decoder's evaluated error locator is defined only up to one common nonzero
-scale. The backend scans all 255 possible common logarithmic shifts after
-locator evaluation and minimizes:
+scale. After locator evaluation, the backend still chooses exactly the best of
+all 255 common logarithmic shifts and minimizes:
 
 ```text
 (total multiplier gate count, total multiplier depth, numeric shift)
 ```
+
+The checked-in immutable metadata file
+`generated/LeopardFF8XorLocatorRotations.inl` contains four 510-entry rows:
+positive and inverse rotations of both multiplier gate count and dependency
+depth. They are generated from, and identify, the same production XOR2 circuit
+checksum and cost profile as `generated/LeopardFF8XorCircuits.inl`. Each row is
+two copies of the 255-value logarithmic cycle. A term can therefore index
+`row[base_log + shift]` directly for every shift without a remainder operation
+or a 255-way scalar recomputation. Leopard's redundant multiplier log `255` is
+canonicalized to log zero before indexing; this is multiplication by one, not
+the butterfly sentinel meaning.
+
+At most 256 signed terms are gathered. Positive terms score input scaling;
+inverse terms score the final reveal of missing originals. The selector first
+accumulates gate costs term by term across a power-of-two 256-shift loop, a
+layout intended for ordinary compiler vectorization. The duplicate entry for
+shift 255 exists only to make that accumulator length 256 and is ignored when
+choosing among the real shifts 0 through 254. Depth is then accumulated only
+for shifts tied at the minimum gate count. Scanning those candidates in
+ascending order and updating only on a strict depth improvement preserves the
+exact gate-count, then depth, then lowest-numeric-shift tie break.
 
 The score includes present recovery inputs, present original inputs, and final
 inverse-locator multipliers for missing originals. Missing and padded zero
@@ -250,6 +271,71 @@ are fixed and are never changed by this optimization. This reduces generated
 XOR gate counts and dependency depth where the algebra leaves a free choice;
 it does not reduce the fixed eight-plane loads and stores. Even an identity
 multiplier copies eight planes when source and destination differ.
+
+This selector is metadata/control work performed once per decode. Its generated
+cost rows are never indexed by payload data and are not consulted inside any
+plane word or vector loop; the payload kernels remain literal,
+coefficient-specialized XOR circuits.
+
+#### Retained selector measurements
+
+The retained implementation was measured on the AMD Ryzen Threadripper PRO
+9985WX host with Linux 6.8 and GCC 13.3.0 Release (`-O3 -DNDEBUG`). The packed
+backend selected AVX2 and ff8xor was forced to AVX-512 ZMM; four-buffer fusion
+was disabled. Native plane buffers were used, so transpose, allocation, and
+correctness checking were outside the timed regions. Full end-to-end runs used
+two warm-ups and seven measured ABBA rounds (14 samples per backend per
+schedule), with adaptive inner calls. Two candidate runs were bracketed by two
+control runs in C-A-A-C order on logical CPU 24. The final candidate benchmark
+SHA-256 was
+`873e5d8f7b3ac6f90d5ff762581e5d6c4d1c80cab9f4fc458d5694e1e8d92769`;
+the pre-selector control at commit `3eb1778` was
+`466e2142f11d3500a451b432eeef731cb5d0b994a4177b433768efbcac019021`.
+
+The selector microbenchmark runs the retained shift-major exact objective and
+the generated rotated implementation in paired ABBA order. The table reports
+the geometric mean of the two candidate-run median times. Both implementations
+selected the same shift in every pair.
+
+| Terms (`k,r,loss`) | Reference median us | Rotated median us | Speedup |
+|---|---:|---:|---:|
+| 9 (`8,2,1`) | 1.426 | 0.186 | 7.69x |
+| 20 (`16,4,4`) | 3.260 | 0.245 | 13.29x |
+| 36 (`32,8,4`) | 5.729 | 0.312 | 18.34x |
+| 72 (`64,16,8`) | 11.543 | 0.517 | 22.31x |
+| 144 (`128,32,16`) | 22.922 | 0.836 | 27.42x |
+| 256 (`128,128,128`) | 45.040 | 1.402 | 32.13x |
+
+The end-to-end table covers 20 decode schedules at each payload size across
+all configured `(k,r,loss)` rows. A ratio below one means the retained selector
+candidate took less time than the pre-selector control. The normalized column
+divides that ratio by the corresponding candidate/control packed-decode ratio
+to reduce run-to-run frequency and system drift. Values are unweighted
+geometric means of the two bracketed comparisons.
+
+| Shard bytes | Schedules | Raw candidate/control | Packed-decode-normalized | Raw speedup |
+|---:|---:|---:|---:|---:|
+| 1 KiB | 20 | 0.5014 | 0.5005 | 1.995x |
+| 4 KiB | 20 | 0.7565 | 0.7464 | 1.322x |
+| 64 KiB | 20 | 0.9965 | 0.9827 | 1.004x |
+| 1 MiB | 20 | 1.0058 | 0.9980 | 0.994x |
+| All 80 | 80 | 0.7852 | 0.7780 | 1.274x |
+
+Thus the selector removes a large fixed decode cost at 1--4 KiB and is
+effectively neutral once payload work dominates. It is not presented as a
+large-payload win: the 1 MiB raw aggregate was 0.58% slower, while its
+packed-decode-normalized result was 0.20% faster. Individual large rows moved
+in both directions; the worst two-run raw ratio was 1.0361. All 80 native
+decode schedules chose the same locator shift in all four outer runs.
+
+GCC's default `-O3 -floop-unroll-and-jam` initially paired adjacent terms and
+lowered the dominant accumulator to scalar stack updates. A function-scoped
+GCC `optimize("no-loop-unroll-and-jam")` attribute retains the
+ordinary XMM byte-to-word accumulation without weakening optimization for the
+large generated payload translation unit. The same guard restores MinGW GCC's
+SSE2 loop; MSVC and Clang do not take the GNU-specific path, and AArch64 GCC
+emits a NEON loop. This compiler-specific adjustment is part of the retained
+result, not an omitted benchmark-only flag.
 
 ### Rejected locator-boundary fusion
 
@@ -317,8 +403,10 @@ multiple-of-64 size validation conventions.
 ## Regeneration and tests
 
 The normal library build consumes checked-in generated code and does not
-require Python. The primary generator writes both the production XOR2 file and
-the separately checked experimental XOR3 file. With Python 3 available:
+require Python. The primary generator writes three independently checked
+artifacts: the production XOR2 circuits, the experimental XOR3 circuits, and
+the immutable locator gate/depth rotations in
+`generated/LeopardFF8XorLocatorRotations.inl`. With Python 3 available:
 
 ```sh
 python3 tools/generate_ff8_xor_circuits.py
@@ -329,9 +417,9 @@ cmake --build build --target generate_ff8_xor_circuits
 cmake --build build --target check_ff8_xor_circuits
 ```
 
-`--check` returns nonzero when either checked-in output differs from regenerated
-output. The four-buffer corpus and rejected locator-boundary evidence have
-their own finite generation and checking commands:
+`--check` returns nonzero when any of the three checked-in outputs differs from
+regenerated output. The four-buffer corpus and rejected locator-boundary
+evidence have their own finite generation and checking commands:
 
 ```sh
 python3 tools/generate_ff8_xor_four_buffer_circuits.py
@@ -369,6 +457,14 @@ and `(128,128)`; across these cases, selected buffer sizes include 64, 1024,
 4096, and 65536 bytes. Additional cases cover `k=1`, `r=1`, non-power-of-two
 recovery counts, no-loss, mixed-loss, and
 insufficient-recovery edge cases.
+
+The dedicated locator-selector test independently reconstructs all four
+rotation rows from the public circuit costs and compares the optimized selector
+with the original exact reference objective for every raw logarithm and sign,
+all ordered signed pairs, deterministic random term lists, explicit tie cases,
+and full 256-term decoder shapes. It also checks invalid inputs and the empty
+objective. Thus the faster lookup organization is tested independently from
+the tables it consumes.
 
 ## Benchmarking
 
@@ -1334,16 +1430,14 @@ are recorded in the four-buffer section above.
   broader packed-code multiversioning change.
 - This backend is FF8-only and CPU-only.
 
-The highest-value next optimization is to make the exact 255-way locator-scale
-selection substantially cheaper while preserving its gate-count/depth/numeric
-tie break. That keeps the user's algebraically free constant choice at the
-simplest available circuits without letting small-payload scalar metadata
-dominate. The next payload experiment is encoder-boundary fusion: combine
-original copy/first IFFT work and chunk accumulation/final FFT work without
-changing transform order. A separately validated per-call four-buffer policy
-for the favorable small-payload and cache-geometry regions must repeat
-correctness, production assembly inspection, and counterbalanced full-matrix
-timing before changing the disabled default.
+The highest-value next payload experiment is encoder-boundary fusion: first
+combine the last chunk accumulation with the always-sentinel top final-FFT
+boundary, then evaluate loading originals directly into the first IFFT. Both
+must retain the existing transform order, truncation, chunk tails, and tracked
+buffer states. The next control experiment is a separately validated per-call
+plan that enables four-buffer fusion only in favorable small-payload and cache
+geometry regions. It must repeat correctness, production assembly inspection,
+and counterbalanced full-matrix timing before changing the disabled default.
 
 Other follow-ups include AVX-512 tuple scheduling optimized for dependency
 depth and register pressure, CUDA plane kernels, persistent plane pipelines,
