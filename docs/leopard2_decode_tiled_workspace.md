@@ -97,7 +97,34 @@ materialized traversal in that case.
 
 ## Isolated performance evidence
 
-The retained machine-readable summary is historical v1 evidence:
+The current same-binary v2 summary is
+`experiments/leopard2/decoder_dispatch/results/tiled_high_same_binary_amd_9950x3d_v2.json`.
+Its file SHA-256 is
+`d1350e1d188547eaedbb998276c2bf09534e5cba2f648ddaee877e1cf9b8c3fc`
+and its canonical content SHA-256 is
+`9fc307dabf33ef9416ed779ae4ff786da472e7f8f982e971a2206d1fa4cdaf64`.
+The authenticated, ignored raw manifest has file SHA-256
+`14f3fc0141945b3bba223247dd42c33afea1a65c78fa7dd8ff01ebdc294fa111`,
+canonical content SHA-256
+`658304f78af925491d7af79717a082e87fbb5a0bb1dc98207115a511f664bdfd`,
+and raw-result-set SHA-256
+`49fbcc9ec8ec58f3fb90af469c68af11653ffcd082c42fe3a5c08709f167f7f1`.
+
+The v2 campaign used clean commit
+`cb10fc577cfae6d2b4b5868ab1826561497a0975`, one binary with SHA-256
+`c2e3f73fcbd6a05707f63713f6868755b38f2f206bb9155f9796621dbe514115`,
+and the same 117-cell, 1,404-invocation, three-round matrix as v1.  It found 28
+cells with a credible tiled execution gain of at least 5% and 17 cells with a
+credible tiled regression greater than 2%.  Every regression was a
+single-stripe legacy-high GF8 `K=224`, `R=T=32`, `N=256` AVX2/SSSE3 cell inside
+the materialized exception above, including the AVX2 reuse-64 cell.  Every
+credible gain remains on the tiled path, including AVX2 batches, scalar,
+`T=16`, `T=64`, larger byte counts, and larger loss counts.  Plan setup had no
+credible regression, and tiled scratch was 46.82% to 84.34% smaller.  Thus the
+same-binary evidence confirms the existing region dispatcher rather than
+changing its thresholds.
+
+For historical comparison, the retained v1 machine-readable summary is
 `experiments/leopard2/decoder_dispatch/results/tiled_high_amd_9950x3d.json`.
 Its file SHA-256 is
 `812332d2edee285b59adb0a45751b111df91bc6fbd1a2294f5ad94b4037d3283` and its
