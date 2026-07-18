@@ -32,6 +32,7 @@ pair-wide lease, per-child monotonic intervals, and per-child CPU deltas.
 Use a clean committed source tree.  The attribution build is diagnostic only:
 
     cmake -S . -B /tmp/leo2-high-copy-hooks \
+      -G "Unix Makefiles" \
       -DCMAKE_BUILD_TYPE=Release \
       -DLEO2_BUILD_TESTS=ON -DLEO2_BUILD_BENCHMARKS=ON \
       -DLEO2_BUILD_FUZZERS=OFF -DLEO2_ENABLE_CUDA=OFF \
@@ -39,7 +40,12 @@ Use a clean committed source tree.  The attribution build is diagnostic only:
     cmake --build /tmp/leo2-high-copy-hooks -j "$(nproc)" \
       --target bench_leopard2_high_decode_copy_attribution
 
-With compile-command export enabled, CTest also runs
+The authenticated build-identity check currently requires the `Unix Makefiles`
+generator because it binds CMake's emitted `link.txt` archive and executable
+recipes.  Ninja builds remain fully supported for the library and ordinary
+tests, but CTest does not register this generator-specific evidence check in a
+Ninja build.  With compile-command export enabled in the Unix Makefiles build,
+CTest also runs
 `leopard2_high_decode_copy_build_identity`.  The same check is repeated before
 every collected campaign: it resolves the actual link recipe, requires the
 benchmark object and exactly one `leopard_test_hooks` archive, rejects the

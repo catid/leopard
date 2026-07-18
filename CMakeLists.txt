@@ -1519,8 +1519,13 @@ if(LEO2_BUILD_TESTS)
             set_tests_properties(
                 leopard2_high_decode_copy_benchmark_smoke PROPERTIES
                 ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
+            # The build-identity checker authenticates CMake's Unix Makefiles
+            # link.txt recipes.  Ninja expresses the same commands only through
+            # its generated rule graph, so do not register a test that cannot
+            # establish the recipe provenance it promises.
             if(CMAKE_EXPORT_COMPILE_COMMANDS AND
-               CMAKE_BUILD_TYPE STREQUAL "Release")
+               CMAKE_BUILD_TYPE STREQUAL "Release" AND
+               CMAKE_GENERATOR STREQUAL "Unix Makefiles")
                 add_test(
                     NAME leopard2_high_decode_copy_build_identity
                     COMMAND ${LEO2_PYTHON_EXECUTABLE}

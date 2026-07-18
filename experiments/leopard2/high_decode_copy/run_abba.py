@@ -506,8 +506,8 @@ def validate_clean_rebuild(
     require(Path(cmake_invocation).resolve(strict=True) == cmake,
             "diagnostic CMake invocation resolves to another executable")
     generator = cache.get("CMAKE_GENERATOR")
-    require(isinstance(generator, str) and generator,
-            "diagnostic build omitted its CMake generator")
+    require(generator == "Unix Makefiles",
+            "diagnostic build identity requires the Unix Makefiles generator")
     retained_options = {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_AR": cache.get("CMAKE_AR", ""),
@@ -618,6 +618,8 @@ def build_identity(source_root: Path, binary: Path, hook_archive: Path) -> dict[
     require(cache_identity["sha256"] == SUPPORT.sha256_bytes(cache_bytes),
             "diagnostic CMake cache changed while it was validated")
     global_flags = shlex.split(cache.get("CMAKE_CXX_FLAGS", ""))
+    require(cache.get("CMAKE_GENERATOR") == "Unix Makefiles",
+            "diagnostic build identity requires the Unix Makefiles generator")
     require(Path(cache.get("CMAKE_HOME_DIRECTORY", "")).resolve() == source_root and
             cache.get("CMAKE_BUILD_TYPE") == "Release" and
             cache.get("CMAKE_CXX_FLAGS_RELEASE") == "-O3 -DNDEBUG" and
@@ -1136,7 +1138,7 @@ def validate_clean_rebuild_snapshot(
             cmake_tool_path(canonical_absolute_path(
                 cmake_invocation, "CMake invocation")) and
             cmake_tool_path(Path(cmake["path"])) and
-            type(value.get("generator")) is str and value["generator"],
+            value.get("generator") == "Unix Makefiles",
             "retained clean-rebuild tool/generator is invalid")
     options = value.get("retained_options")
     expected_keys = {
@@ -2614,6 +2616,9 @@ def self_test() -> None:
     add_identity_mutation(lambda identity: identity["build"]
                           ["validated_clean_rebuild"]["retained_options"]
                           .__setitem__("CMAKE_BUILD_TYPE", "Debug"))
+    add_identity_mutation(lambda identity: identity["build"]
+                          ["validated_clean_rebuild"]
+                          .__setitem__("generator", "Ninja"))
     add_identity_mutation(lambda identity: identity["build"]["compiler"]
                           .__setitem__("path", "/usr/bin/false"))
     add_identity_mutation(lambda identity: identity["build"]["nm"]
