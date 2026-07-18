@@ -144,43 +144,56 @@ also adds architecture absent from main:
 - Active-parent Algorithm 5 high-rate message-only decoding and Algorithm 4
   low-rate decoding, with the generic `O(N log N)` decoder retained as a
   fallback and oracle.
-- Immutable reusable codecs and erasure plans, allocation-free execution,
-  no-loss no-op behavior, explicit scratch queries, arbitrary byte tails,
-  parity subsets, batch APIs, and a persistent worker pool.
+- Immutable reusable codecs and erasure plans, allocation-free encode and
+  reusable-plan execution with caller scratch, no-loss no-op behavior, explicit
+  scratch queries, arbitrary GF8 byte tails, complete-symbol native GF16
+  lengths, a versioned padded-odd GF16 layout, parity subsets, batch APIs, and a
+  persistent worker pool.  The one-shot decode wrapper allocates its plan.
 - Direct paths for XOR parity, `K=1`, bounded tiny systematic encoding, and up
   to four missing originals in small codes.
-- Runtime-isolated scalar, SSSE3, and AVX2 fixed-operation backends with startup
-  self-tests instead of raising the entire library's ISA floor.
+- Runtime-isolated scalar, SSSE3, AVX2, and explicit AVX-512 fixed-operation
+  backends with startup self-tests instead of raising the entire library's ISA
+  floor; native NEON remains open production work.
 
 The low profile is not included in an exact-main performance ratio: main
 rejects `R>K`, and comparing a different generator/wire profile would not be a
 like-for-like compatibility benchmark.
 
-## Confirmed gaps
+## Historical findings and current gaps
 
-The algorithm audit found no high/low coordinate-map or Algorithm 4/5 arithmetic
-mismatch, but it confirmed these production gaps:
+The 2026-07-16 audit found no high/low coordinate-map or Algorithm 4/5
+arithmetic mismatch.  It did find the following four production gaps, but all
+four have since been implemented; they are retained here to prevent the older
+benchmark snapshot from being mistaken for current source:
 
-1. Low encode copies all `P` coefficient shards into a second `P` workspace for
-   each nonempty parity block. Tracked as `leopard-79h.26.1`.
-2. Dense locator setup still runs ambient-field 256/65,536-entry Walsh
-   transforms rather than always scaling with active parent `N`. Tracked as
-   `leopard-79h.29.1`.
-3. Follow-up candidate `leopard-79h.26.2.2` removes the `N` full-shard
-   specialized workspace where smaller: low uses `min(N,2P)` and high uses
-   `min(N,2T+L)`. Forced generic retains `N`; the materialized specialized path
-   also remains when tiling would use at least `N`. Follow-up candidate
-   `leopard-79h.26.2.3` splits ragged execution so its `K+R` staging term is
-   fixed at one 64-byte tile per public coordinate instead of full-shard slots.
-   Correctness and scratch-slope tests pass; isolated promotion timing remains
-   open, so the benchmark numbers above do not yet claim these candidates.
-4. Runtime backend choice is process-global; lower scalar/SSSE3 contexts in the
-   same production binary are not supported. Tracked as `leopard-79h.13.1`.
+1. Low encode formerly copied all `P` coefficient shards for every nonempty
+   parity block.  Production now evaluates directly from immutable coefficient
+   pointers through an out-of-place first layer.  `leopard-79h.26.1` remains
+   open only for its authoritative isolated crossover/nonregression evidence.
+2. Dense locator setup formerly used the ambient field order.  Production now
+   restricts Walsh setup to active parent `N`; product-tree and epsilon locator
+   construction remain optional comparison experiments under
+   `leopard-79h.29` rather than missing production correctness work.
+3. Specialized decode formerly staged an `N`-shard workspace.  Production now
+   normally uses `min(N,2P)` for low and `min(N,2T+L)` for high where side
+   tiling is profitable, while a narrow measured high-rate region deliberately
+   retains `N`.  Ragged public-coordinate staging is bounded to one 64-byte
+   tile per coordinate.  Some generic/fallback configurations still exceed the
+   plan's aspirational `O(min(P,T))` scratch target and output pruning remains
+   under `leopard-79h.26.4`.
+4. Backend selection formerly required a process-global forced diagnostic
+   build.  Contexts in one production binary can now independently select
+   immutable qualified scalar, SSSE3, AVX2, or explicit AVX-512 operation
+   tables.  The context's persistent worker pool remains lazily mutable.  Native
+   NEON remains production work under `leopard-79h.13.7`.
 
-General dependency pruning, active topology/NUMA scheduling, exact-size stable
-profiles, native NEON, streaming/incremental encode, serialized code identity,
-and CUDA kernels also remain open. CUDA is currently only a correctly isolated,
-default-off build scaffold.
+Current core gaps are the exact-main encoder and dispatcher crossovers under
+`leopard-79h.38`, sparse encoder output pruning under `leopard-79h.26.4`, and
+allocation-free prewarm, static scheduling, affinity, 128-core scaling, and
+NUMA policy under `leopard-79h.14`, `.23`, and `.24`.  Exact-size stable
+profiles, streaming/incremental encode, serialized code identity, and CUDA are
+separate experiments.  CUDA remains a correctly isolated, default-off build
+scaffold and is intentionally sequenced after the production CPU codec.
 
 ## Evidence and reproduction
 
