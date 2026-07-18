@@ -2624,9 +2624,14 @@ def validate_retained_link_recipe_semantics(recipes, tools, units):
             require(benchmark[offset] == normalized[len("@build/"):],
                     "retained benchmark build-path identity")
         elif normalized.startswith("@external/"):
-            require(normalized in external_by_path and
-                    benchmark[offset] == external_by_path[normalized]["raw_path"] and
-                    Path(benchmark[offset]).name == Path(normalized).name,
+            external = external_by_path.get(normalized)
+            raw_external = (Path(external["raw_path"])
+                            if external is not None else None)
+            require(external is not None and
+                    benchmark[offset] == external["raw_path"] and
+                    raw_external.is_absolute() and raw_external.is_file() and
+                    raw_external.resolve().name == Path(normalized).name and
+                    sha256_file(raw_external) == external["sha256"],
                     "retained benchmark external-path identity")
         else:
             require(benchmark[offset] == normalized,
@@ -2958,6 +2963,12 @@ def validate_build_record(record, repo, schema):
                   external["raw_path"] and
                   not external["raw_path"].startswith("@"))),
                 "external link input identity")
+        if schema == SCHEMA:
+            raw_external = Path(external["raw_path"])
+            require(raw_external.is_absolute() and raw_external.is_file() and
+                    raw_external.resolve().name == Path(external["path"]).name and
+                    sha256_file(raw_external) == external["sha256"],
+                    "external raw/resolved link identity")
     file_api_libraries = [
         value["fragment"]
         for value in targets["bench_leopard2"]["link"]["fragments"]
