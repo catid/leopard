@@ -270,3 +270,15 @@ contexts may run independently.  Ordinary encode or plan-execute calls remain
 safe to invoke concurrently with distinct outputs and scratch.  Within a batch,
 the implementation reports the result from the lowest-index failing item
 deterministically; completion order is otherwise unspecified.
+
+API version 4 also provides an opt-in scalable alias preflight for large
+batches. Query caller-owned storage with
+`leo2_encode_batch_preflight_scratch_size` or
+`leo2_decode_plan_batch_preflight_scratch_size`, then pass that aligned storage
+to the corresponding `*_with_preflight_scratch` entry point. Below nine items
+the query returns zero and execution uses the exact compatibility path. At
+larger counts a flattened, allocation-free interval sort and sweep replaces the
+compatibility path's pairwise item comparisons without weakening atomic
+rejection or immutable-input sharing. The full algorithm, alias treatment,
+tests, and diagnostic crossover evidence are in
+`docs/leopard2_batch_preflight.md`.
