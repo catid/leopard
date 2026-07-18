@@ -1251,6 +1251,66 @@ static bool CheckMultiplyKernel(uint64_t buffer_bytes, unsigned coefficient)
         in_place, plane_expected, "in-place direct multiply", coefficient);
 }
 
+static bool CheckIdentityMultiplyFastPath(
+    uint64_t buffer_bytes,
+    unsigned coefficient)
+{
+    const size_t bytes = static_cast<size_t>(buffer_bytes);
+    const size_t overlap = 13;
+    uint32_t state = static_cast<uint32_t>(
+        0x1de1717eU ^ coefficient ^ static_cast<unsigned>(buffer_bytes));
+
+    // A nonzero byte count with null in-place pointers is deliberate:  The
+    // identity path is required to return before attempting any payload load
+    // or store.  This also catches accidental dispatch to the generated
+    // identity circuit, whose zero gates still surround payload I/O.
+    leopard::ff8xor::MultiplyBuffer(
+        buffer_bytes,
+        static_cast<void*>(NULL),
+        static_cast<const void*>(NULL),
+        static_cast<uint8_t>(coefficient));
+
+    Buffer forward(bytes + overlap);
+    FillRandom(forward, state);
+    Buffer expected_source(forward.begin(), forward.begin() + bytes);
+    leopard::ff8xor::MultiplyBuffer(
+        buffer_bytes,
+        forward.data() + overlap,
+        forward.data(),
+        static_cast<uint8_t>(coefficient));
+    if (!std::equal(
+            expected_source.begin(),
+            expected_source.end(),
+            forward.begin() + overlap))
+    {
+        fprintf(stderr,
+            "overlapping forward identity copy mismatch: bytes=%llu log=%u\n",
+            static_cast<unsigned long long>(buffer_bytes), coefficient);
+        return false;
+    }
+
+    Buffer backward(bytes + overlap);
+    FillRandom(backward, state);
+    expected_source.assign(backward.begin() + overlap, backward.end());
+    leopard::ff8xor::MultiplyBuffer(
+        buffer_bytes,
+        backward.data(),
+        backward.data() + overlap,
+        static_cast<uint8_t>(coefficient));
+    if (!std::equal(
+            expected_source.begin(),
+            expected_source.end(),
+            backward.begin()))
+    {
+        fprintf(stderr,
+            "overlapping backward identity copy mismatch: bytes=%llu log=%u\n",
+            static_cast<unsigned long long>(buffer_bytes), coefficient);
+        return false;
+    }
+
+    return true;
+}
+
 static bool CheckButterflyKernel(uint64_t buffer_bytes, unsigned skew)
 {
     uint32_t state = static_cast<uint32_t>(
@@ -1359,6 +1419,16 @@ static bool TestKernelModes()
                 if (!CheckMultiplyKernel(
                         kSizes[size_index],
                         kCoefficients[coefficient_index]))
+                {
+                    leopard::ff8xor::SetKernelMode(saved_mode);
+                    return false;
+                }
+
+                const unsigned coefficient =
+                    kCoefficients[coefficient_index];
+                if ((coefficient == 0 || coefficient == kFieldModulus) &&
+                    !CheckIdentityMultiplyFastPath(
+                        kSizes[size_index], coefficient))
                 {
                     leopard::ff8xor::SetKernelMode(saved_mode);
                     return false;

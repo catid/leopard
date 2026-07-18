@@ -79,12 +79,17 @@ CircuitStatistics GetFFTCircuitStatistics();
 CircuitStatistics GetIFFTCircuitStatistics();
 
 // The buffer byte count includes all eight equal contiguous planes.
+// Multiplier logarithms 0 and 255 both mean multiplication by one.  Exact
+// in-place identity performs no payload access; out-of-place identity has
+// memmove-compatible overlap semantics.
 void MultiplyBuffer(
     uint64_t buffer_bytes,
     void* destination,
     const void* source,
     ffe_t log_multiplier);
 
+// Unlike multiplier logarithm 255, butterfly skew 255 is a sentinel that
+// omits the multiply-add term: x is unchanged and y is XORed with x.
 void FFTButterflyBuffer(
     uint64_t buffer_bytes,
     void* x,

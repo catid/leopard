@@ -359,6 +359,62 @@ static LEO_FORCE_INLINE void ButterflyChunk(
 //------------------------------------------------------------------------------
 // Coefficient-specialized whole-buffer kernels
 
+template <typename ValueTag>
+static LEO_FORCE_INLINE void XorContiguousChunk(
+    uint8_t* destination,
+    const uint8_t* source,
+    uint64_t offset)
+{
+    typedef typename ValueIO<ValueTag>::Value Value;
+    const Value result = XorValue(
+        ValueIO<ValueTag>::Load(destination + offset),
+        ValueIO<ValueTag>::Load(source + offset));
+    ValueIO<ValueTag>::Store(destination + offset, result);
+}
+
+// Skew 255 is not a multiplier.  It means that the multiply-add term is
+// omitted, leaving x unchanged and y ^= x.  Process that operation as one
+// contiguous buffer so the payload loop never stores x and does not pay the
+// eight-plane address-arithmetic overhead of a general butterfly.
+static void XorContiguousWholeBuffer(
+    void* destination_void,
+    const void* source_void,
+    uint64_t buffer_bytes)
+{
+    uint8_t* destination = reinterpret_cast<uint8_t*>(destination_void);
+    const uint8_t* source = reinterpret_cast<const uint8_t*>(source_void);
+    const KernelMode mode = ResolveKernelMode();
+    uint64_t offset = 0;
+
+#ifdef LEO_TRY_AVX2
+    if (mode == KernelMode::Avx2)
+    {
+        while (buffer_bytes - offset >= ValueIO<Avx2Tag>::kBytes)
+        {
+            XorContiguousChunk<Avx2Tag>(destination, source, offset);
+            offset += ValueIO<Avx2Tag>::kBytes;
+        }
+    }
+#endif
+
+#ifdef LEO_FF8XOR_HAS_SIMD128
+    if (mode != KernelMode::Portable)
+    {
+        while (buffer_bytes - offset >= ValueIO<Simd128Tag>::kBytes)
+        {
+            XorContiguousChunk<Simd128Tag>(destination, source, offset);
+            offset += ValueIO<Simd128Tag>::kBytes;
+        }
+    }
+#endif
+
+    while (offset < buffer_bytes)
+    {
+        XorContiguousChunk<PortableTag>(destination, source, offset);
+        offset += ValueIO<PortableTag>::kBytes;
+    }
+}
+
 template <unsigned Coefficient>
 static void MultiplyWholeBuffer(
     void* destination_void,
@@ -409,6 +465,14 @@ static void ButterflyWholeBuffer(
     void* y_void,
     uint64_t buffer_bytes)
 {
+    // This constant branch is eliminated separately for every specialization.
+    // Both FFT and IFFT have the same skew-sentinel operation.
+    if (Skew == kModulus)
+    {
+        XorContiguousWholeBuffer(y_void, x_void, buffer_bytes);
+        return;
+    }
+
     uint8_t* x_buffer = reinterpret_cast<uint8_t*>(x_void);
     uint8_t* y_buffer = reinterpret_cast<uint8_t*>(y_void);
     const uint64_t plane_bytes = buffer_bytes >> 3;
@@ -474,6 +538,18 @@ void MultiplyBuffer(
     const void* source,
     ffe_t log_multiplier)
 {
+    // Both logarithms denote the nonzero field element one for multiplication.
+    // Keep this distinct from butterfly skew 255, which omits a multiply-add.
+    // Exact in-place identity must not access payload memory at all.  memmove
+    // gives the out-of-place identity operation defined copy semantics even
+    // when the source and destination ranges overlap.
+    if (log_multiplier == 0 || log_multiplier == kModulus)
+    {
+        if (destination != source)
+            memmove(destination, source, static_cast<size_t>(buffer_bytes));
+        return;
+    }
+
     MultiplyFunctions[log_multiplier](destination, source, buffer_bytes);
 }
 
