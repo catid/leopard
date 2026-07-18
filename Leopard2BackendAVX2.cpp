@@ -436,23 +436,16 @@ static void AVX2FF16MultiplyAdd(
 }
 
 template<bool Inverse>
-static void AVX2FF16Butterfly2(
+static LEO_FORCE_INLINE void AVX2FF16Butterfly2Prepared(
     void* x_pointer,
     void* y_pointer,
     uint16_t multiplier_log,
+    const __m256i low_tables[4],
+    const __m256i high_tables[4],
     uint64_t byte_count)
 {
     uint8_t* x = static_cast<uint8_t*>(x_pointer);
     uint8_t* y = static_cast<uint8_t*>(y_pointer);
-    const FF16NibbleTable& table = FF16Tables[multiplier_log];
-    const __m256i low_tables[4] = {
-        BroadcastTable(table.low[0]), BroadcastTable(table.low[1]),
-        BroadcastTable(table.low[2]), BroadcastTable(table.low[3])
-    };
-    const __m256i high_tables[4] = {
-        BroadcastTable(table.high[0]), BroadcastTable(table.high[1]),
-        BroadcastTable(table.high[2]), BroadcastTable(table.high[3])
-    };
     uint64_t offset = 0;
     while (byte_count - offset >= 64)
     {
@@ -510,6 +503,27 @@ static void AVX2FF16Butterfly2(
         y[offset + i] = static_cast<uint8_t>(y_value);
         y[offset + symbols + i] = static_cast<uint8_t>(y_value >> 8);
     }
+}
+
+template<bool Inverse>
+static void AVX2FF16Butterfly2(
+    void* x_pointer,
+    void* y_pointer,
+    uint16_t multiplier_log,
+    uint64_t byte_count)
+{
+    const FF16NibbleTable& table = FF16Tables[multiplier_log];
+    const __m256i low_tables[4] = {
+        BroadcastTable(table.low[0]), BroadcastTable(table.low[1]),
+        BroadcastTable(table.low[2]), BroadcastTable(table.low[3])
+    };
+    const __m256i high_tables[4] = {
+        BroadcastTable(table.high[0]), BroadcastTable(table.high[1]),
+        BroadcastTable(table.high[2]), BroadcastTable(table.high[3])
+    };
+    AVX2FF16Butterfly2Prepared<Inverse>(
+        x_pointer, y_pointer, multiplier_log,
+        low_tables, high_tables, byte_count);
 }
 
 static void AVX2FF16IFFTButterfly2(
@@ -1963,12 +1977,52 @@ static void AVX2FF16FFTButterfly4Out(
         log01, log23, log02, byte_count);
 }
 
+#if !defined(LEO2_AVX512_VARIANT)
+template<bool Inverse>
+static void AVX2FF16Butterfly2RangePrepared(
+    void* const* work,
+    unsigned x_base,
+    unsigned y_base,
+    unsigned distance,
+    uint16_t multiplier_log,
+    uint64_t byte_count)
+{
+    // Every pair in a transform range uses the same fixed multiplier.  Keep
+    // its eight nibble rows prepared across the independent pairs instead of
+    // broadcasting them again for every shard pair.  The AVX2 product still
+    // uses the established byte order and arithmetic within each butterfly.
+    static const uint16_t kZeroSkew = 65535;
+    if (multiplier_log == kZeroSkew)
+    {
+        for (unsigned i = 0; i < distance; ++i)
+            AVX2XorMemory(work[y_base + i], work[x_base + i], byte_count);
+        return;
+    }
+    const FF16NibbleTable& table = FF16Tables[multiplier_log];
+    const __m256i low_tables[4] = {
+        BroadcastTable(table.low[0]), BroadcastTable(table.low[1]),
+        BroadcastTable(table.low[2]), BroadcastTable(table.low[3])
+    };
+    const __m256i high_tables[4] = {
+        BroadcastTable(table.high[0]), BroadcastTable(table.high[1]),
+        BroadcastTable(table.high[2]), BroadcastTable(table.high[3])
+    };
+    for (unsigned i = 0; i < distance; ++i)
+    {
+        AVX2FF16Butterfly2Prepared<Inverse>(
+            work[x_base + i], work[y_base + i], multiplier_log,
+            low_tables, high_tables, byte_count);
+    }
+}
+#endif
+
 template<bool Inverse>
 static void AVX2FF16Butterfly4Range(
     void* const* work, unsigned distance,
     uint16_t log01, uint16_t log23, uint16_t log02,
     uint64_t byte_count, bool prefer_fused)
 {
+#if defined(LEO2_AVX512_VARIANT)
     for (unsigned i = 0; i < distance; ++i)
     {
         void* const value0 = work[i];
@@ -1983,6 +2037,51 @@ static void AVX2FF16Butterfly4Range(
                 value0, value1, value2, value3,
                 log01, log23, log02, byte_count);
     }
+#else
+    // The Butterfly4Range contract makes all coordinates disjoint, so the
+    // split radix-four layers are independent across i.  Execute each layer
+    // as a range so its fixed tables remain prepared, then preserve the
+    // inverse/forward layer order for every coordinate.  AVX-512VL retains
+    // the fused/per-pair schedule above: its expanded register file has a
+    // different measured crossover and does not need this AVX2 workaround.
+    if (prefer_fused)
+    {
+        for (unsigned i = 0; i < distance; ++i)
+        {
+            AVX2FF16Butterfly4<Inverse>(
+                work[i], work[i + distance],
+                work[i + distance * 2U], work[i + distance * 3U],
+                log01, log23, log02, byte_count);
+        }
+        return;
+    }
+    if (Inverse)
+    {
+        AVX2FF16Butterfly2RangePrepared<true>(
+            work, 0, distance, distance, log01, byte_count);
+        AVX2FF16Butterfly2RangePrepared<true>(
+            work, distance * 2U, distance * 3U,
+            distance, log23, byte_count);
+        AVX2FF16Butterfly2RangePrepared<true>(
+            work, 0, distance * 2U, distance, log02, byte_count);
+        AVX2FF16Butterfly2RangePrepared<true>(
+            work, distance, distance * 3U,
+            distance, log02, byte_count);
+    }
+    else
+    {
+        AVX2FF16Butterfly2RangePrepared<false>(
+            work, 0, distance * 2U, distance, log02, byte_count);
+        AVX2FF16Butterfly2RangePrepared<false>(
+            work, distance, distance * 3U,
+            distance, log02, byte_count);
+        AVX2FF16Butterfly2RangePrepared<false>(
+            work, 0, distance, distance, log01, byte_count);
+        AVX2FF16Butterfly2RangePrepared<false>(
+            work, distance * 2U, distance * 3U,
+            distance, log23, byte_count);
+    }
+#endif
 }
 
 static void AVX2FF16IFFTButterfly4Range(
