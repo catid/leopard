@@ -6,6 +6,7 @@
 #include "Leopard2Backend.h"
 #include "LeopardCommon.h"
 
+#include <cstring>
 #include <memory>
 #include <new>
 #include <tmmintrin.h>
@@ -737,6 +738,64 @@ static void SSSE3XorMemory2To1(
     }
     while (byte_count-- != 0)
         *output++ ^= *input0++ ^ *input1++;
+}
+
+static void SSSE3XorMemorySources(
+    void* destination,
+    const void* initial_source,
+    const void* const* sources,
+    uint32_t source_count,
+    uint64_t byte_count)
+{
+    std::memcpy(destination, initial_source, static_cast<size_t>(byte_count));
+    const void* waiting[4];
+    unsigned waiting_count = 0;
+    for (uint32_t i = 0; i < source_count; ++i)
+    {
+        if (!sources[i])
+            continue;
+        waiting[waiting_count++] = sources[i];
+        if (waiting_count == 4)
+        {
+            uint8_t* output = static_cast<uint8_t*>(destination);
+            const uint8_t* input[4] = {
+                static_cast<const uint8_t*>(waiting[0]),
+                static_cast<const uint8_t*>(waiting[1]),
+                static_cast<const uint8_t*>(waiting[2]),
+                static_cast<const uint8_t*>(waiting[3])
+            };
+            uint64_t offset = 0;
+            while (byte_count - offset >= 16)
+            {
+                __m128i result = _mm_loadu_si128(
+                    reinterpret_cast<const __m128i*>(output + offset));
+                for (unsigned lane = 0; lane < 4; ++lane)
+                    result = _mm_xor_si128(result, _mm_loadu_si128(
+                        reinterpret_cast<const __m128i*>(
+                            input[lane] + offset)));
+                _mm_storeu_si128(
+                    reinterpret_cast<__m128i*>(output + offset), result);
+                offset += 16;
+            }
+            while (offset < byte_count)
+            {
+                output[offset] ^= input[0][offset] ^ input[1][offset] ^
+                    input[2][offset] ^ input[3][offset];
+                ++offset;
+            }
+            waiting_count = 0;
+        }
+    }
+    if (waiting_count >= 2)
+    {
+        SSSE3XorMemory2To1(
+            destination, waiting[0], waiting[1], byte_count);
+        waiting_count -= 2;
+        if (waiting_count != 0)
+            waiting[0] = waiting[2];
+    }
+    if (waiting_count != 0)
+        SSSE3XorMemory(destination, waiting[0], byte_count);
 }
 
 static void SSSE3XorMemory4(
@@ -1915,6 +1974,7 @@ static const Ops SSSE3Ops = {
 #endif
     SSSE3XorMemory,
     SSSE3XorMemory2To1,
+    SSSE3XorMemorySources,
     SSSE3XorMemory4,
 #ifdef LEO_HAS_FF8
     SSSE3FF8IFFTButterfly2,

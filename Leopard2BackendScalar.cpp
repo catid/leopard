@@ -579,6 +579,70 @@ static void ScalarXorMemory2To1(
         *output++ ^= *input0++ ^ *input1++;
 }
 
+static void ScalarXorMemorySources(
+    void* destination,
+    const void* initial_source,
+    const void* const* sources,
+    uint32_t source_count,
+    uint64_t byte_count)
+{
+    std::memcpy(destination, initial_source, static_cast<size_t>(byte_count));
+    const void* waiting[4];
+    unsigned waiting_count = 0;
+    for (uint32_t i = 0; i < source_count; ++i)
+    {
+        if (!sources[i])
+            continue;
+        waiting[waiting_count++] = sources[i];
+        if (waiting_count == 4)
+        {
+            uint8_t* output = static_cast<uint8_t*>(destination);
+            const uint8_t* const input0 =
+                static_cast<const uint8_t*>(waiting[0]);
+            const uint8_t* const input1 =
+                static_cast<const uint8_t*>(waiting[1]);
+            const uint8_t* const input2 =
+                static_cast<const uint8_t*>(waiting[2]);
+            const uint8_t* const input3 =
+                static_cast<const uint8_t*>(waiting[3]);
+            uint64_t offset = 0;
+            while (byte_count - offset >= sizeof(uint64_t))
+            {
+                uint64_t result;
+                uint64_t value0;
+                uint64_t value1;
+                uint64_t value2;
+                uint64_t value3;
+                std::memcpy(&result, output + offset, sizeof(result));
+                std::memcpy(&value0, input0 + offset, sizeof(value0));
+                std::memcpy(&value1, input1 + offset, sizeof(value1));
+                std::memcpy(&value2, input2 + offset, sizeof(value2));
+                std::memcpy(&value3, input3 + offset, sizeof(value3));
+                result ^= value0 ^ value1 ^ value2 ^ value3;
+                std::memcpy(output + offset, &result, sizeof(result));
+                offset += sizeof(uint64_t);
+            }
+            while (offset < byte_count)
+            {
+                output[offset] ^= input0[offset] ^ input1[offset] ^
+                    input2[offset] ^ input3[offset];
+                ++offset;
+            }
+            waiting_count = 0;
+        }
+    }
+    if (waiting_count >= 2)
+    {
+        ScalarXorMemory2To1(
+            destination, waiting[0], waiting[1], byte_count);
+        waiting_count -= 2;
+        if (waiting_count != 0)
+            waiting[0] = waiting[2];
+    }
+    if (waiting_count != 0)
+        ScalarXorMemory(destination, waiting[0], byte_count);
+}
+
 static void ScalarXorMemory4(
     void* destination0, const void* source0,
     void* destination1, const void* source1,
@@ -1271,6 +1335,7 @@ static const Ops ScalarOps = {
 #endif
     ScalarXorMemory,
     ScalarXorMemory2To1,
+    ScalarXorMemorySources,
     ScalarXorMemory4,
 #ifdef LEO_HAS_FF8
     ScalarFF8IFFTButterfly2,

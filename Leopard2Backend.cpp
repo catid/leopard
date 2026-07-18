@@ -1280,6 +1280,7 @@ static bool TestXor(const Ops& ops)
     uint8_t output[260];
     uint8_t expected[260];
     uint8_t sources4[3][260];
+    const void* reduction_sources[8];
     uint8_t outputs4[4][260];
     uint8_t expected4[4][260];
     for (size_t i = 0; i < sizeof(source); ++i)
@@ -1300,6 +1301,24 @@ static bool TestXor(const Ops& ops)
         for (uint64_t i = 0; i < bytes; ++i)
             expected[i + 1] ^= source[i + 1];
         ops.xor_memory(output + 1, source + 1, bytes);
+        if (std::memcmp(output, expected, sizeof(output)) != 0)
+            return false;
+
+        reduction_sources[0] = sources4[0] + 1;
+        reduction_sources[1] = NULL;
+        reduction_sources[2] = sources4[1] + 1;
+        reduction_sources[3] = sources4[0] + 1;
+        reduction_sources[4] = sources4[2] + 1;
+        reduction_sources[5] = sources4[1] + 1;
+        reduction_sources[6] = sources4[0] + 1;
+        reduction_sources[7] = sources4[2] + 1;
+        std::memset(output, 0xa5, sizeof(output));
+        std::memset(expected, 0xa5, sizeof(expected));
+        for (uint64_t i = 0; i < bytes; ++i)
+            expected[i + 1] = static_cast<uint8_t>(
+                source[i + 1] ^ sources4[0][i + 1]);
+        ops.xor_memory_sources(
+            output + 1, source + 1, reduction_sources, 8, bytes);
         if (std::memcmp(output, expected, sizeof(output)) != 0)
             return false;
 
@@ -1407,7 +1426,7 @@ static bool TestWeightedIFFTAliasingContract()
 static bool TestOps(const Ops& ops, const InitializeArgs& args)
 {
     if (!ops.name || !ops.xor_memory || !ops.xor_memory_2to1 ||
-        !ops.xor_memory4 || !TestXor(ops))
+        !ops.xor_memory_sources || !ops.xor_memory4 || !TestXor(ops))
         return false;
 #ifdef LEO_HAS_FF8
     if (!args.ff8_multiply_log || !ops.ff8_multiply ||

@@ -67,6 +67,18 @@ typedef void (*XorMemory2To1)(
     const void* source1,
     uint64_t byte_count);
 
+// Copy initial_source to destination, then XOR every non-null entry in
+// sources[0..source_count).  The destination must be disjoint from every
+// source range; read-only source ranges may alias one another.  This coarse
+// operation keeps the R=1 reduction loop inside the selected ISA translation
+// unit instead of paying one indirect Ops dispatch per source pair.
+typedef void (*XorMemorySources)(
+    void* destination,
+    const void* initial_source,
+    const void* const* sources,
+    uint32_t source_count,
+    uint64_t byte_count);
+
 // Four independent in-place XOR pairs.  Destination ranges must be pairwise
 // disjoint and disjoint from all source ranges.  Read-only source ranges may
 // alias one another, matching the public API's allowed input-input aliasing.
@@ -243,6 +255,7 @@ struct Ops
     FixedMultiply ff16_multiply_add;
     XorMemory xor_memory;
     XorMemory2To1 xor_memory_2to1;
+    XorMemorySources xor_memory_sources;
     XorMemory4 xor_memory4;
     Butterfly2 ff8_ifft_butterfly2;
     Butterfly2 ff8_fft_butterfly2;

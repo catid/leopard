@@ -6,6 +6,7 @@
 #include "Leopard2Backend.h"
 #include "LeopardCommon.h"
 
+#include <cstring>
 #include <immintrin.h>
 #include <memory>
 #include <new>
@@ -752,6 +753,67 @@ static void AVX2XorMemory2To1(
     }
     while (byte_count-- != 0)
         *output++ ^= *input0++ ^ *input1++;
+}
+
+static void AVX2XorMemorySources(
+    void* destination,
+    const void* initial_source,
+    const void* const* sources,
+    uint32_t source_count,
+    uint64_t byte_count)
+{
+    std::memcpy(destination, initial_source, static_cast<size_t>(byte_count));
+    const void* waiting[6];
+    unsigned waiting_count = 0;
+    for (uint32_t i = 0; i < source_count; ++i)
+    {
+        if (!sources[i])
+            continue;
+        waiting[waiting_count++] = sources[i];
+        if (waiting_count == 6)
+        {
+            uint8_t* output = static_cast<uint8_t*>(destination);
+            const uint8_t* input[6] = {
+                static_cast<const uint8_t*>(waiting[0]),
+                static_cast<const uint8_t*>(waiting[1]),
+                static_cast<const uint8_t*>(waiting[2]),
+                static_cast<const uint8_t*>(waiting[3]),
+                static_cast<const uint8_t*>(waiting[4]),
+                static_cast<const uint8_t*>(waiting[5])
+            };
+            uint64_t offset = 0;
+            while (byte_count - offset >= 32)
+            {
+                __m256i result = _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(output + offset));
+                for (unsigned lane = 0; lane < 6; ++lane)
+                    result = _mm256_xor_si256(result, _mm256_loadu_si256(
+                        reinterpret_cast<const __m256i*>(
+                            input[lane] + offset)));
+                _mm256_storeu_si256(
+                    reinterpret_cast<__m256i*>(output + offset), result);
+                offset += 32;
+            }
+            while (offset < byte_count)
+            {
+                output[offset] ^= input[0][offset] ^ input[1][offset] ^
+                    input[2][offset] ^ input[3][offset] ^ input[4][offset] ^
+                    input[5][offset];
+                ++offset;
+            }
+            waiting_count = 0;
+        }
+    }
+    while (waiting_count >= 2)
+    {
+        AVX2XorMemory2To1(
+            destination, waiting[0], waiting[1], byte_count);
+        waiting_count -= 2;
+        for (unsigned i = 0; i < waiting_count; ++i)
+            waiting[i] = waiting[i + 2];
+    }
+    if (waiting_count != 0)
+        AVX2XorMemory(destination, waiting[0], byte_count);
 }
 
 static void AVX2XorMemory4(
@@ -2122,6 +2184,7 @@ static const Ops AVX2Ops = {
 #endif
     AVX2XorMemory,
     AVX2XorMemory2To1,
+    AVX2XorMemorySources,
     AVX2XorMemory4,
 #ifdef LEO_HAS_FF8
     AVX2FF8IFFTButterfly2,
