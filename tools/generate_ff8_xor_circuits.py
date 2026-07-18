@@ -25,7 +25,7 @@ FIELD_POLYNOMIAL = 0x11D
 CANTOR_BASIS = (1, 214, 152, 146, 86, 200, 88, 230)
 WIRE_COUNT_MULTIPLY = 8
 WIRE_COUNT_BUTTERFLY = 16
-GENERATOR_VERSION = b"LeopardFF8XorCircuits-v3-greedy\0"
+GENERATOR_VERSION = b"LeopardFF8XorCircuits-v4-exact8\0"
 
 
 def add_mod(a, b):
@@ -246,6 +246,23 @@ def circuit_depth(gates, width):
     return maximum
 
 
+def compiled_xor_form_cost(gates, width):
+    """Estimate optimized XOR work by counting distinct SSA linear forms.
+
+    Compilers are not constrained to execute every reversible source CNOT:
+    after inlining, each assignment is an SSA value and equivalent intermediate
+    linear forms can be reused.  Counting distinct non-input forms is a stable,
+    compiler-independent proxy for that optimized DAG.  It is intentionally a
+    promotion guard, not a claim to reproduce every compiler instruction.
+    """
+    wires = [1 << wire for wire in range(width)]
+    forms = set(wires)
+    for destination, source in gates:
+        wires[destination] ^= wires[source]
+        forms.add(wires[destination])
+    return len(forms) - width
+
+
 _POPCOUNT_16 = bytes(
     bin(value).count("1") for value in range(1 << WIRE_COUNT_BUTTERFLY))
 
@@ -422,6 +439,19 @@ def synthesize_reversible_map_ordered(
 
 _EXACT_CNOT_TABLES = {}
 
+# A complete GL(8, 2) table is far too large, but the complete radius-three
+# ball around identity is compact (52,277 maps).  Splitting a candidate after
+# at most three gates then gives an exact, deterministic meet-in-the-middle
+# search through six gates.  The search is used below on windows whose existing
+# circuit supplies a finite upper bound, so absence of a shorter result is an
+# optimality proof for that window rather than a heuristic timeout.
+EXACT_CNOT_8_HALF_DEPTH = 3
+EXACT_CNOT_8_MAX_DEPTH = 2 * EXACT_CNOT_8_HALF_DEPTH
+EXACT_CNOT_8_PORTFOLIO_SHORTLIST = 8
+_EXACT_CNOT_BALL_8 = None
+_EXACT_CNOT_SUFFIXES_8 = {}
+_EXACT_CNOT_SEARCH_CACHE_8 = {}
+
 
 def exact_cnot_table(width):
     """Return lexical shortest CNOT circuits for every map up to width four."""
@@ -450,6 +480,183 @@ def exact_cnot_table(width):
                 pending.append(candidate)
     _EXACT_CNOT_TABLES[width] = paths
     return paths
+
+
+def pack_8wire_rows(rows):
+    """Pack eight 8-bit matrix rows into a compact search key."""
+    if len(rows) != WIRE_COUNT_MULTIPLY:
+        raise ValueError("the bounded exact search requires an 8x8 map")
+    packed = 0
+    for row_index, row in enumerate(rows):
+        if row < 0 or row >= FIELD_ORDER:
+            raise ValueError("8x8 matrix row is out of range")
+        packed |= row << (FIELD_BITS * row_index)
+    return packed
+
+
+def apply_packed_8wire_cnot(packed_rows, gate):
+    """Left-multiply packed matrix rows by one CNOT."""
+    destination, source = gate
+    source_row = ((packed_rows >> (FIELD_BITS * source)) & 0xFF)
+    return packed_rows ^ (source_row << (FIELD_BITS * destination))
+
+
+def exact_cnot_ball_8():
+    """Return lexical shortest paths through radius three in GL(8, 2).
+
+    Breadth-first traversal proves the minimum gate count.  Processing both
+    frontier paths and gates in lexical order makes the retained shortest path
+    deterministic without depending on hash-table iteration order.
+    """
+    global _EXACT_CNOT_BALL_8
+    if _EXACT_CNOT_BALL_8 is not None:
+        return _EXACT_CNOT_BALL_8
+
+    identity_rows = tuple(
+        1 << wire for wire in range(WIRE_COUNT_MULTIPLY))
+    identity = pack_8wire_rows(identity_rows)
+    gates = tuple(
+        (destination, source)
+        for destination in range(WIRE_COUNT_MULTIPLY)
+        for source in range(WIRE_COUNT_MULTIPLY)
+        if destination != source)
+    paths = {identity: ()}
+    frontier = (identity,)
+    for unused_depth in range(EXACT_CNOT_8_HALF_DEPTH):
+        next_frontier = []
+        for packed_rows in frontier:
+            path = paths[packed_rows]
+            for gate in gates:
+                candidate = apply_packed_8wire_cnot(packed_rows, gate)
+                if candidate not in paths:
+                    paths[candidate] = path + (gate,)
+                    next_frontier.append(candidate)
+        frontier = tuple(next_frontier)
+
+    _EXACT_CNOT_BALL_8 = paths
+    return paths
+
+
+def exact_cnot_suffixes_8(maximum_depth):
+    """Return canonical ball entries through a requested suffix depth."""
+    cached = _EXACT_CNOT_SUFFIXES_8.get(maximum_depth)
+    if cached is not None:
+        return cached
+    suffixes = tuple(sorted(
+        ((path, packed_rows)
+         for packed_rows, path in exact_cnot_ball_8().items()
+         if len(path) <= maximum_depth),
+        key=lambda item: (len(item[0]), item[0], item[1])))
+    _EXACT_CNOT_SUFFIXES_8[maximum_depth] = suffixes
+    return suffixes
+
+
+def synthesize_reversible_map_exact_bounded_8(
+        rows, maximum_gate_count=EXACT_CNOT_8_MAX_DEPTH):
+    """Return an exact shortest 8-wire circuit within a finite gate bound.
+
+    The radius-three breadth-first ball contains an exact canonical circuit P
+    for every prefix map reachable in at most three gates.  For bounds above
+    three, enumerate every canonical suffix S within the complementary radius
+    and look up P = inverse(S) * A.  Thus P followed by S implements A.  Every
+    circuit of at most six gates has such a split, so returning None proves that
+    no circuit exists within ``maximum_gate_count``; it is not a node-budget or
+    wall-clock heuristic.
+    """
+    rows = tuple(rows)
+    if len(rows) != WIRE_COUNT_MULTIPLY:
+        raise ValueError("the bounded exact search requires an 8x8 map")
+    if (maximum_gate_count < 0 or
+            maximum_gate_count > EXACT_CNOT_8_MAX_DEPTH):
+        raise ValueError("8x8 exact-search bound must be between zero and %d" %
+                         EXACT_CNOT_8_MAX_DEPTH)
+
+    target = pack_8wire_rows(rows)
+    cache_key = (target, maximum_gate_count)
+    if cache_key in _EXACT_CNOT_SEARCH_CACHE_8:
+        return _EXACT_CNOT_SEARCH_CACHE_8[cache_key]
+
+    # Starting from identity, each CNOT changes only its destination row.
+    # Every non-identity target row therefore needs at least one gate.  This
+    # inexpensive exact lower bound rejects all nontrivial FF8 multiplier maps
+    # for the small global radius before constructing the BFS table.
+    changed_rows = sum(
+        row != (1 << row_index) for row_index, row in enumerate(rows))
+    if changed_rows > maximum_gate_count:
+        _EXACT_CNOT_SEARCH_CACHE_8[cache_key] = None
+        return None
+
+    ball = exact_cnot_ball_8()
+    direct = ball.get(target)
+    if direct is not None and len(direct) <= maximum_gate_count:
+        _EXACT_CNOT_SEARCH_CACHE_8[cache_key] = direct
+        return direct
+    if maximum_gate_count <= EXACT_CNOT_8_HALF_DEPTH:
+        _EXACT_CNOT_SEARCH_CACHE_8[cache_key] = None
+        return None
+
+    suffix_limit = maximum_gate_count - EXACT_CNOT_8_HALF_DEPTH
+    suffixes = exact_cnot_suffixes_8(suffix_limit)
+    best = None
+    for suffix, unused_suffix_rows in suffixes:
+        # If suffix gates h1..hn implement S = hn..h1, applying hn..h1
+        # to A on the left produces inverse(S) * A, the required prefix map.
+        prefix_rows = target
+        for gate in reversed(suffix):
+            prefix_rows = apply_packed_8wire_cnot(prefix_rows, gate)
+        prefix = ball.get(prefix_rows)
+        if prefix is None:
+            continue
+        candidate = prefix + suffix
+        if len(candidate) > maximum_gate_count:
+            continue
+        key = (len(candidate), candidate)
+        if best is None or key < best[0]:
+            best = (key, candidate)
+
+    result = None if best is None else best[1]
+    if result is not None and circuit_matrix(
+            WIRE_COUNT_MULTIPLY, result) != rows:
+        raise AssertionError("bounded exact 8x8 synthesis map mismatch")
+    _EXACT_CNOT_SEARCH_CACHE_8[cache_key] = result
+    return result
+
+
+def optimize_exact_8wire_windows(gates, width, maximum_window=6):
+    """Replace up-to-six-gate 8x8 windows with exact shorter circuits.
+
+    A window of L gates is already a constructive upper bound.  Searching
+    exactly through L-1 gates either finds a strict improvement or proves the
+    window gate-optimal.  Restricting the window to six gates keeps the complete
+    meet-in-the-middle search small and deterministic.
+    """
+    if width != WIRE_COUNT_MULTIPLY:
+        raise ValueError("exact 8-wire windows require width eight")
+    if maximum_window < 1 or maximum_window > EXACT_CNOT_8_MAX_DEPTH:
+        raise ValueError("exact 8-wire window must be between one and %d" %
+                         EXACT_CNOT_8_MAX_DEPTH)
+    gates = tuple(gates)
+    expected_rows = circuit_matrix(width, gates)
+    while True:
+        best = None
+        for begin in range(len(gates)):
+            end_limit = min(len(gates), begin + maximum_window)
+            for end in range(begin + 1, end_limit):
+                window = gates[begin:end + 1]
+                replacement = synthesize_reversible_map_exact_bounded_8(
+                    circuit_matrix(width, window), len(window) - 1)
+                if replacement is None:
+                    continue
+                candidate = gates[:begin] + replacement + gates[end + 1:]
+                candidate = cancel_commuting_duplicate_gates(candidate)
+                key = circuit_key(candidate, width)
+                if best is None or key < best[0]:
+                    best = (key, candidate)
+        if best is None:
+            if circuit_matrix(width, gates) != expected_rows:
+                raise AssertionError("exact 8-wire rewrite changed the map")
+            return gates
+        gates = best[1]
 
 
 def optimize_exact_windows(gates, width, maximum_window=8):
@@ -727,9 +934,44 @@ def synthesize_reversible_map_portfolio(rows):
         if previous is None or optimized_name < previous:
             candidates[optimized] = optimized_name
 
+    # Run the complete eight-wire meet-in-the-middle peephole search on a
+    # bounded shortlist.  Unlike exact4x8, these windows may involve every
+    # multiplier plane.  Butterfly maps deliberately skip this candidate: the
+    # 16-wire search space is a separate problem, and their direct schedules
+    # already avoid the register-pressure regressions seen in wide greedy
+    # synthesis.
+    pre_exact_compiled_cost = None
+    if width == WIRE_COUNT_MULTIPLY:
+        ranked = sorted(
+            candidates.items(),
+            key=lambda item: circuit_key(item[0], width) + (item[1],))
+        pre_exact_compiled_cost = compiled_xor_form_cost(
+            ranked[0][0], width)
+        for gates, name in ranked[:EXACT_CNOT_8_PORTFOLIO_SHORTLIST]:
+            optimized = optimize_exact_8wire_windows(gates, width)
+            if circuit_matrix(width, optimized) != rows:
+                raise AssertionError("exact 8-wire candidate changed the map")
+            if optimized == gates:
+                continue
+            # A shorter reversible program can compile worse because SSA keeps
+            # overwritten values available and exposes a different XOR DAG.
+            # Promote only candidates that strictly improve the deterministic
+            # form-count proxy over the pre-exact incumbent.  Representative
+            # GCC AVX2 compilation is checked separately by the assembly audit.
+            if compiled_xor_form_cost(
+                    optimized, width) >= pre_exact_compiled_cost:
+                continue
+            optimized_name = "bounded-exact8x6"
+            previous = candidates.get(optimized)
+            if previous is None or optimized_name < previous:
+                candidates[optimized] = optimized_name
+
     gates, name = min(
         candidates.items(),
         key=lambda item: circuit_key(item[0], width) + (item[1],))
+    if (name == "bounded-exact8x6" and
+            compiled_xor_form_cost(gates, width) >= pre_exact_compiled_cost):
+        raise AssertionError("exact 8-wire promotion regressed XOR form cost")
     return gates, name
 
 

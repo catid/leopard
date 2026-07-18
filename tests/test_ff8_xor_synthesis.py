@@ -84,6 +84,16 @@ def local_circuit_matrix(width, gates):
     return tuple(rows)
 
 
+def local_compiled_xor_form_cost(width, gates):
+    """Independently count distinct non-input linear forms in a circuit."""
+    wires = [1 << wire for wire in range(width)]
+    forms = set(wires)
+    for destination, source in gates:
+        wires[destination] ^= wires[source]
+        forms.add(wires[destination])
+    return len(forms.difference(1 << wire for wire in range(width)))
+
+
 def local_apply_matrix(rows, state):
     """Apply binary matrix rows with a test-local parity calculation."""
     width = len(rows)
@@ -168,6 +178,99 @@ def test_commuting_cancellation_and_exact_templates():
             "exact GL(n,2) table sizes changed: %r" % (observed,))
 
 
+def test_bounded_exact_eight_wire_search():
+    # Rebuild the complete ball so this test proves deterministic traversal,
+    # not merely repeatability of a memoized answer from another fixture.
+    GENERATOR._EXACT_CNOT_BALL_8 = None
+    GENERATOR._EXACT_CNOT_SUFFIXES_8.clear()
+    GENERATOR._EXACT_CNOT_SEARCH_CACHE_8.clear()
+    first_ball = GENERATOR.exact_cnot_ball_8()
+    depth_counts = tuple(
+        sum(len(path) == depth for path in first_ball.values())
+        for depth in range(GENERATOR.EXACT_CNOT_8_HALF_DEPTH + 1))
+    require(depth_counts == (1, 56, 1904, 50316),
+            "8x8 exact-search BFS ball changed: %r" % (depth_counts,))
+    first_items = tuple(sorted(first_ball.items()))
+    GENERATOR._EXACT_CNOT_BALL_8 = None
+    GENERATOR._EXACT_CNOT_SUFFIXES_8.clear()
+    second_items = tuple(sorted(GENERATOR.exact_cnot_ball_8().items()))
+    require(first_items == second_items,
+            "8x8 exact-search BFS traversal was nondeterministic")
+
+    # This six-gate fixture touches all eight wires.  The first three gates
+    # have an equivalent two-gate form, while the remaining destinations are
+    # independent, so the exact answer has five gates.  More importantly, five
+    # target rows differ from identity.  Since each CNOT changes only one
+    # destination row, that supplies a test-local lower-bound proof that no
+    # four-gate implementation exists.
+    fixture = (
+        (0, 1), (1, 2), (0, 1),
+        (3, 4), (5, 6), (6, 7),
+    )
+    fixture_rows = local_circuit_matrix(8, fixture)
+    require(set(wire for gate in fixture for wire in gate) == set(range(8)),
+            "8x8 exact-search fixture does not touch every wire")
+    changed_rows = sum(
+        row != (1 << row_index)
+        for row_index, row in enumerate(fixture_rows))
+    require(changed_rows == 5,
+            "8x8 exact-search fixture lower bound changed")
+    require(GENERATOR.synthesize_reversible_map_exact_bounded_8(
+                fixture_rows, 4) is None,
+            "8x8 exact search accepted a circuit below its row lower bound")
+
+    exact = GENERATOR.synthesize_reversible_map_exact_bounded_8(
+        fixture_rows, 5)
+    require(exact is not None and len(exact) == 5,
+            "8x8 exact search missed its shortest five-gate circuit")
+    require_circuit_matches_map(
+        "exact-8x8", fixture_rows, exact, tuple(range(1 << 8)))
+    exact_again = GENERATOR.synthesize_reversible_map_exact_bounded_8(
+        fixture_rows, 5)
+    require(exact_again == exact,
+            "8x8 exact-search result was nondeterministic")
+    require(GENERATOR.compiled_xor_form_cost(exact, 8) ==
+            local_compiled_xor_form_cost(8, exact),
+            "compiled XOR form-cost proxy disagreed with local model")
+
+    optimized = GENERATOR.optimize_exact_8wire_windows(fixture, 8)
+    require(len(optimized) == 5,
+            "8x8 exact peephole failed to shorten a six-gate window")
+    require_circuit_matches_map(
+        "exact-8x8-window", fixture_rows, optimized,
+        (0, 1, 0x55, 0xAA, 0xFF))
+    require(GENERATOR.optimize_exact_8wire_windows(fixture, 8) == optimized,
+            "8x8 exact peephole was nondeterministic")
+
+    # Exercise every supported bound with circuits generated independently of
+    # the production search.  Once the solver reports an optimum, querying one
+    # gate below it must fail, and test-local symbolic execution proves the
+    # returned program on every 8-bit state.
+    exact_random = random.Random(0x8EAC7)
+    for source_gate_count in range(
+            GENERATOR.EXACT_CNOT_8_MAX_DEPTH + 1):
+        source_gates = []
+        for unused in range(source_gate_count):
+            destination = exact_random.randrange(8)
+            source = exact_random.randrange(7)
+            if source >= destination:
+                source += 1
+            source_gates.append((destination, source))
+        rows = local_circuit_matrix(8, source_gates)
+        shortest = GENERATOR.synthesize_reversible_map_exact_bounded_8(
+            rows, GENERATOR.EXACT_CNOT_8_MAX_DEPTH)
+        require(shortest is not None and
+                len(shortest) <= source_gate_count,
+                "8x8 exact search missed a bounded random circuit")
+        require_circuit_matches_map(
+            "exact-8x8-random-%d" % source_gate_count,
+            rows, shortest, tuple(range(1 << 8)))
+        if shortest:
+            require(GENERATOR.synthesize_reversible_map_exact_bounded_8(
+                        rows, len(shortest) - 1) is None,
+                    "8x8 exact search returned a non-minimum circuit")
+
+
 def test_bidirectional_greedy_synthesis():
     # Every input/output-side move must update the explicitly tracked inverse
     # exactly.  The greedy cost depends on both matrices, so a one-sided update
@@ -245,6 +348,9 @@ def test_portfolio_determinism_and_quality():
                 "%s portfolio selection was nondeterministic" % label)
         require(local_circuit_matrix(width, selected) == rows,
                 "%s selected the wrong map" % label)
+        require(GENERATOR.compiled_xor_form_cost(selected, width) ==
+                local_compiled_xor_form_cost(width, selected),
+                "%s compiled XOR form-cost proxy mismatch" % label)
         require(GENERATOR.circuit_key(selected, width) <=
                 GENERATOR.circuit_key(baseline, width),
                 "%s portfolio regressed the baseline cost" % label)
@@ -298,6 +404,7 @@ def test_representative_wide_maps():
 def main():
     test_matrix_algebra()
     test_commuting_cancellation_and_exact_templates()
+    test_bounded_exact_eight_wire_search()
     test_bidirectional_greedy_synthesis()
     test_portfolio_determinism_and_quality()
     test_representative_wide_maps()

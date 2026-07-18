@@ -385,7 +385,7 @@ int main()
 
     // These fixtures were computed independently from the generated summaries.
     // Integer sums make the averages exact binary fractions when divided by 256.
-    const FamilyFixture multiply_fixture = { 0, 24, 4959, 0, 17, 2957 };
+    const FamilyFixture multiply_fixture = { 0, 23, 4903, 0, 17, 2912 };
     const FamilyFixture fft_fixture = { 8, 51, 10240, 1, 14, 2780 };
     const FamilyFixture ifft_fixture = { 8, 51, 10240, 1, 14, 2780 };
 
