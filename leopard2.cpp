@@ -1254,6 +1254,25 @@ static leo2_result ValidateDisjointRanges(
     AddressRange* output_ranges,
     size_t output_count)
 {
+    if (output_count == 0)
+        return LEO2_SUCCESS;
+
+    /*
+        Input-input aliasing is permitted.  The overwhelmingly common repair
+        and R=1 encode cases have one output, so sorting and merging every
+        input range only to compare it with that single range is unnecessary
+        setup in the byte-execution path.  Preserve the exact overlap contract
+        with a linear scan; the general merge/sweep remains preferable once
+        there are multiple outputs.
+    */
+    if (output_count == 1)
+    {
+        for (size_t input_i = 0; input_i < input_count; ++input_i)
+            if (RangesOverlap(input_ranges[input_i], output_ranges[0]))
+                return LEO2_OVERLAP;
+        return LEO2_SUCCESS;
+    }
+
     input_count = MergeRanges(input_ranges, input_count);
     std::sort(output_ranges, output_ranges + output_count, RangeLess);
     for (size_t i = 1; i < output_count; ++i)
@@ -1315,6 +1334,37 @@ static leo2_result ValidateEncodeBuffers(
     if (!MakeRange(scratch, scratch_bytes, scratch_range))
         return LEO2_INVALID_ARGUMENT;
 
+    size_t output_count = 0;
+    AddressRange single_output = { 0, 0 };
+    for (uint32_t i = 0; i < codec->recovery_count; ++i)
+    {
+        if (!recovery[i])
+            continue;
+        AddressRange range;
+        if (!MakeRange(recovery[i], shard_bytes, range))
+            return LEO2_INVALID_ARGUMENT;
+        if (RangesOverlap(range, scratch_range))
+            return LEO2_OVERLAP;
+        if (++output_count == 1)
+            single_output = range;
+    }
+
+    if (output_count <= 1)
+    {
+        for (uint32_t i = 0; i < codec->original_count; ++i)
+        {
+            AddressRange range;
+            if (!MakeRange(original[i], shard_bytes, range))
+                return LEO2_INVALID_ARGUMENT;
+            if (RangesOverlap(range, scratch_range) ||
+                (output_count == 1 && RangesOverlap(range, single_output)))
+                return LEO2_OVERLAP;
+            if (!HasValidSystematicPad(codec, original[i], shard_bytes))
+                return LEO2_INVALID_ARGUMENT;
+        }
+        return LEO2_SUCCESS;
+    }
+
     for (uint32_t i = 0; i < codec->original_count; ++i)
     {
         AddressRange range;
@@ -1325,20 +1375,9 @@ static leo2_result ValidateEncodeBuffers(
         if (!HasValidSystematicPad(codec, original[i], shard_bytes))
             return LEO2_INVALID_ARGUMENT;
     }
-    for (uint32_t i = 0; i < codec->recovery_count; ++i)
-    {
-        if (!recovery[i])
-            continue;
-        AddressRange range;
-        if (!MakeRange(recovery[i], shard_bytes, range))
-            return LEO2_INVALID_ARGUMENT;
-        if (RangesOverlap(range, scratch_range))
-            return LEO2_OVERLAP;
-    }
-
     AddressRange* ranges = reinterpret_cast<AddressRange*>(scratch);
     size_t input_count = 0;
-    size_t output_count = 0;
+    output_count = 0;
     for (uint32_t i = 0; i < codec->original_count; ++i)
         MakeRange(original[i], shard_bytes, ranges[input_count++]);
     AddressRange* outputs = ranges + codec->original_count;
@@ -1532,6 +1571,38 @@ static leo2_result DirectDecodeLayout(
     // is needed only for overlap/range validation, never for shard data.
     const size_t range_count = static_cast<size_t>(codec->original_count) * 2 +
         codec->recovery_count;
+    if (!ComputeScratchLayout(range_count, 0, 0, rounded_bytes, layout))
+        return LEO2_INVALID_COUNTS;
+    return LEO2_SUCCESS;
+}
+
+static bool UseSingleSideEncodeLayout(const leo2_codec* codec)
+{
+    if (!codec || codec->padded_side != 1)
+        return false;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    /* Keep the test-only direct-versus-transform experiment honest.  Both
+       production profiles reduce to copy/XOR when their padded side is one,
+       but a forced mode must retain the instrumented transform plumbing that
+       the diagnostic requested. */
+    if (codec->test_encode_mode != LEO2_TEST_ENCODE_AUTO)
+        return false;
+#endif
+    return true;
+}
+
+static leo2_result DirectEncodeLayout(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    ScratchLayout& layout,
+    size_t& rounded_bytes)
+{
+    if (!codec || !RoundShardBytes(shard_bytes, rounded_bytes))
+        return LEO2_INVALID_ARGUMENT;
+    if (codec->field == LEO2_FIELD_GF16 && (shard_bytes & 1u) != 0)
+        return LEO2_UNSUPPORTED;
+    const size_t range_count =
+        static_cast<size_t>(codec->original_count) + codec->recovery_count;
     if (!ComputeScratchLayout(range_count, 0, 0, rounded_bytes, layout))
         return LEO2_INVALID_COUNTS;
     return LEO2_SUCCESS;
@@ -1926,6 +1997,36 @@ static void ExecuteTransformEncodePass(
 #endif
 }
 
+static void ExecuteSingleSideEncode(
+    const leo2_codec* codec,
+    size_t shard_bytes,
+    const void* const* original,
+    void* const* recovery)
+{
+    const leopard::backend::Ops& ops = *codec->context->ops;
+    if (codec->profile == LEO2_PROFILE_LOW_V1)
+    {
+        LEO_DEBUG_ASSERT(codec->original_count == 1);
+        for (uint32_t i = 0; i < codec->recovery_count; ++i)
+            if (recovery[i])
+                memcpy(recovery[i], original[0], shard_bytes);
+        return;
+    }
+
+    LEO_DEBUG_ASSERT(codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1);
+    LEO_DEBUG_ASSERT(codec->recovery_count == 1);
+    if (!recovery[0])
+        return;
+    uint8_t* const output = static_cast<uint8_t*>(recovery[0]);
+    memcpy(output, original[0], shard_bytes);
+    uint32_t i = 1;
+    for (; i + 1 < codec->original_count; i += 2)
+        leopard::xor_mem_2to1(
+            ops, output, original[i], original[i + 1], shard_bytes);
+    if (i < codec->original_count)
+        leopard::xor_mem(ops, output, original[i], shard_bytes);
+}
+
 static leo2_result ValidateDecodeBuffers(
     const leo2_decode_plan* plan,
     uint64_t shard_bytes,
@@ -1942,6 +2043,31 @@ static leo2_result ValidateDecodeBuffers(
     if (!MakeRange(scratch, scratch_bytes, scratch_range))
         return LEO2_INVALID_ARGUMENT;
 
+    /*
+        A one-loss plan already identifies its only output.  Validate that
+        output first, then compare each received shard against it while the
+        shard is otherwise being validated.  This preserves the public alias
+        contract without materializing and sorting K+R address ranges on the
+        common direct-repair path.
+    */
+    const bool single_output = plan->missing_original_count == 1;
+    AddressRange single_output_range = { 0, 0 };
+    uint32_t single_output_index = 0;
+    if (single_output)
+    {
+        if (plan->missing_originals.size() != 1)
+            return LEO2_INTERNAL_ERROR;
+        single_output_index = plan->missing_originals[0];
+        if (single_output_index >= codec->original_count ||
+            !restored[single_output_index] ||
+            !MakeRange(
+                restored[single_output_index], shard_bytes,
+                single_output_range))
+            return LEO2_INVALID_ARGUMENT;
+        if (RangesOverlap(single_output_range, scratch_range))
+            return LEO2_OVERLAP;
+    }
+
     size_t input_count = 0;
     size_t output_count = 0;
     for (uint32_t i = 0; i < codec->original_count; ++i)
@@ -1953,7 +2079,8 @@ static leo2_result ValidateDecodeBuffers(
             AddressRange range;
             if (!MakeRange(original[i], shard_bytes, range))
                 return LEO2_INVALID_ARGUMENT;
-            if (RangesOverlap(range, scratch_range))
+            if (RangesOverlap(range, scratch_range) ||
+                (single_output && RangesOverlap(range, single_output_range)))
                 return LEO2_OVERLAP;
             if (!HasValidSystematicPad(codec, original[i], shard_bytes))
                 return LEO2_INVALID_ARGUMENT;
@@ -1963,6 +2090,8 @@ static leo2_result ValidateDecodeBuffers(
         {
             if (!restored[i])
                 return LEO2_INVALID_ARGUMENT;
+            if (single_output && i != single_output_index)
+                return LEO2_INTERNAL_ERROR;
             AddressRange range;
             if (!MakeRange(restored[i], shard_bytes, range))
                 return LEO2_INVALID_ARGUMENT;
@@ -1980,11 +2109,15 @@ static leo2_result ValidateDecodeBuffers(
             AddressRange range;
             if (!MakeRange(recovery[i], shard_bytes, range))
                 return LEO2_INVALID_ARGUMENT;
-            if (RangesOverlap(range, scratch_range))
+            if (RangesOverlap(range, scratch_range) ||
+                (single_output && RangesOverlap(range, single_output_range)))
                 return LEO2_OVERLAP;
             ++input_count;
         }
     }
+
+    if (single_output)
+        return output_count == 1 ? LEO2_SUCCESS : LEO2_INTERNAL_ERROR;
 
     AddressRange* ranges = reinterpret_cast<AddressRange*>(scratch);
     input_count = 0;
@@ -2720,6 +2853,17 @@ LEO2_EXPORT leo2_result leo2_encode_scratch_size(
     if (!scratch_bytes_out)
         return LEO2_INVALID_ARGUMENT;
     *scratch_bytes_out = 0;
+    if (UseSingleSideEncodeLayout(codec))
+    {
+        ScratchLayout direct_layout;
+        size_t rounded_bytes = 0;
+        const leo2_result result = DirectEncodeLayout(
+            codec, shard_bytes, direct_layout, rounded_bytes);
+        if (result != LEO2_SUCCESS)
+            return result;
+        *scratch_bytes_out = direct_layout.total_bytes;
+        return LEO2_SUCCESS;
+    }
     EncodeScratchGeometry geometry;
     const leo2_result result = EncodeLayout(codec, shard_bytes, geometry);
     if (result != LEO2_SUCCESS)
@@ -2736,6 +2880,28 @@ LEO2_EXPORT leo2_result leo2_encode(
     void* scratch,
     size_t scratch_bytes)
 {
+    if (UseSingleSideEncodeLayout(codec))
+    {
+        ScratchLayout direct_layout;
+        size_t rounded_bytes = 0;
+        leo2_result result = DirectEncodeLayout(
+            codec, shard_bytes, direct_layout, rounded_bytes);
+        if (result != LEO2_SUCCESS)
+            return result;
+        AddressRange scratch_range;
+        result = CheckScratch(
+            scratch, scratch_bytes, direct_layout, scratch_range);
+        if (result != LEO2_SUCCESS)
+            return result;
+        result = ValidateEncodeBuffers(
+            codec, shard_bytes, original, recovery, scratch, scratch_bytes);
+        if (result != LEO2_SUCCESS)
+            return result;
+        ExecuteSingleSideEncode(
+            codec, static_cast<size_t>(shard_bytes), original, recovery);
+        return LEO2_SUCCESS;
+    }
+
     EncodeScratchGeometry geometry;
     leo2_result result = EncodeLayout(codec, shard_bytes, geometry);
     if (result != LEO2_SUCCESS)
@@ -3076,13 +3242,15 @@ LEO2_EXPORT leo2_result leo2_decode_plan_scratch_size(
     ScratchLayout direct_layout;
     size_t direct_rounded = 0;
     DecodeScratchGeometry geometry;
-    const leo2_result result = plan->direct_repair
+    const bool direct_execution =
+        plan->direct_repair || plan->direct_xor || plan->direct_copy;
+    const leo2_result result = direct_execution
         ? DirectDecodeLayout(
             plan->codec, shard_bytes, direct_layout, direct_rounded)
         : DecodeLayout(plan->codec, plan, shard_bytes, geometry);
     if (result != LEO2_SUCCESS)
         return result;
-    *scratch_bytes_out = plan->direct_repair
+    *scratch_bytes_out = direct_execution
         ? direct_layout.total_bytes
         : geometry.layout.total_bytes;
     return LEO2_SUCCESS;
@@ -3108,13 +3276,15 @@ static leo2_result DecodePlanExecuteInternal(
     ScratchLayout direct_layout;
     size_t direct_rounded = 0;
     DecodeScratchGeometry geometry;
-    leo2_result result = plan->direct_repair
+    const bool direct_execution =
+        plan->direct_repair || plan->direct_xor || plan->direct_copy;
+    leo2_result result = direct_execution
         ? DirectDecodeLayout(
             plan->codec, shard_bytes, direct_layout, direct_rounded)
         : DecodeLayout(plan->codec, plan, shard_bytes, geometry);
     if (result != LEO2_SUCCESS)
         return result;
-    const ScratchLayout& layout = plan->direct_repair
+    const ScratchLayout& layout = direct_execution
         ? direct_layout
         : geometry.layout;
     AddressRange scratch_range;

@@ -302,8 +302,76 @@ void execute_and_check_decode(const R1Fixture& fixture)
         require(restored_storage[i] == 0xa5, "R=1 decode changed a suffix guard");
 }
 
+void test_public_r1_overlap_rejection(leo2_backend backend)
+{
+    R1Fixture fixture(backend, 9, 65, false, LEO2_FIELD_GF8,
+        LEO2_SHARD_LAYOUT_NATIVE_V1);
+
+    size_t encode_scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(
+        fixture.codec, fixture.bytes, &encode_scratch_bytes), LEO2_SUCCESS,
+        "R=1 overlap encode scratch query");
+    AlignedScratch encode_scratch(encode_scratch_bytes);
+    void* overlapping_parity[1] = {
+        const_cast<void*>(fixture.original[3])
+    };
+    require_result(leo2_encode(fixture.codec, fixture.bytes,
+        &fixture.original[0], overlapping_parity, encode_scratch.data(),
+        encode_scratch_bytes), LEO2_OVERLAP,
+        "R=1 encode input/output overlap");
+
+    size_t decode_scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+        fixture.plan, fixture.bytes, &decode_scratch_bytes), LEO2_SUCCESS,
+        "R=1 overlap decode scratch query");
+    AlignedScratch decode_scratch(decode_scratch_bytes);
+    std::vector<const void*> received = fixture.original;
+    received[0] = NULL;
+    std::vector<void*> restored(fixture.k, NULL);
+
+    restored[0] = const_cast<void*>(received[3]);
+    require_result(leo2_decode_plan_execute(fixture.plan, fixture.bytes,
+        &received[0], fixture.recovery, &restored[0], decode_scratch.data(),
+        decode_scratch_bytes), LEO2_OVERLAP,
+        "R=1 decode input/output overlap");
+
+    restored[0] = const_cast<void*>(fixture.recovery[0]);
+    require_result(leo2_decode_plan_execute(fixture.plan, fixture.bytes,
+        &received[0], fixture.recovery, &restored[0], decode_scratch.data(),
+        decode_scratch_bytes), LEO2_OVERLAP,
+        "R=1 decode recovery/output overlap");
+}
+
 void test_public_r1(leo2_backend backend)
 {
+    // The production R=1 path needs only address-range validation scratch.
+    // Its scratch footprint must therefore not grow with shard bytes as a
+    // transform workspace would.
+    {
+        R1Fixture fixture(backend, 31, 64, false, LEO2_FIELD_GF8,
+            LEO2_SHARD_LAYOUT_NATIVE_V1);
+        size_t encode_small = 0;
+        size_t encode_large = 0;
+        size_t decode_small = 0;
+        size_t decode_large = 0;
+        require_result(leo2_encode_scratch_size(
+            fixture.codec, 64, &encode_small), LEO2_SUCCESS,
+            "R=1 small encode scratch query");
+        require_result(leo2_encode_scratch_size(
+            fixture.codec, 1024 * 1024, &encode_large), LEO2_SUCCESS,
+            "R=1 large encode scratch query");
+        require_result(leo2_decode_plan_scratch_size(
+            fixture.plan, 64, &decode_small), LEO2_SUCCESS,
+            "R=1 small decode scratch query");
+        require_result(leo2_decode_plan_scratch_size(
+            fixture.plan, 1024 * 1024, &decode_large), LEO2_SUCCESS,
+            "R=1 large decode scratch query");
+        require(encode_small == encode_large,
+            "R=1 encode scratch still scales with shard bytes");
+        require(decode_small == decode_large,
+            "R=1 decode scratch still scales with shard bytes");
+    }
+
     static const uint32_t counts[] = { 3, 9, 10, 31 };
     static const size_t sizes[] = {
         1, 2, 3, 17, 31, 32, 33, 64, 65, 1025, 65537, 1048579
@@ -341,6 +409,8 @@ void test_public_r1(leo2_backend backend)
     R1Fixture gf16_boundary(backend, 256, 66, false, LEO2_FIELD_GF16,
         LEO2_SHARD_LAYOUT_NATIVE_V1);
     execute_and_check_decode(gf16_boundary);
+
+    test_public_r1_overlap_rejection(backend);
 
     // Shared immutable codec/plan execution must remain race-free.
     R1Fixture fixture(backend, 9, 4097, true, LEO2_FIELD_GF8,
