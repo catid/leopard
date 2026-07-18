@@ -16,16 +16,25 @@ schema-v4 exact-main bundles and derives the survivor set from their retained
 analysis; an edited or merely re-signed plan, threshold, matrix, or survivor
 file is rejected by canonical regeneration.
 
-Selection also requires every input bundle to have one identical normalized
-evidence scope. The retained scope binds the host and CPU/topology class,
-allowed and online CPU sets, compiler bytes/version, canonical CMake cache,
-Release `-O3` compile semantics, exact production archive/link recipe and
-object closure, candidate source identity, and the resolved AUTO backend.
-Logical benchmark/sibling CPU numbers and per-file timestamps/inodes are
-normalized because independently pinned shards may use different cores; their
-topology cardinality and frequency policy remain bound. Valid bundles from
-different hosts, compilers, CMake configurations, builds, or resolved backends
-cannot be combined into one survivor set.
+Selection also requires every input bundle to have one identical evidence
+scope. The current scope deliberately retains the exact benchmark and reserved
+sibling CPU numbers, their full recorded topology/CPU identity and frequency
+policy, and the allowed and online CPU sets. It does not equate different CPU
+pairs merely because their sibling cardinalities match: on heterogeneous-cache
+processors such as the 9950X3D, equal-sized pairs can belong to materially
+different L3 domains. A future schema may normalize pairs only after it records
+cache sizes/types/shared domains, NUMA placement, and heterogeneous-core class.
+
+The same scope binds both exact Leopard-main and candidate source identities,
+compiler bytes/version, CMake cache, Release `-O3` compile semantics, archive
+and executable bytes, exact archive recipe and compile/object/link closure,
+plus both runtime-library closures. Baseline source/build roots and candidate
+source/build roots use four distinct markers, with longest paths replaced
+first so a nested build root cannot be swallowed by a broader source marker.
+Only volatile per-file timestamps/inodes/devices are removed. Valid bundles
+from different CPU pairs, hosts, compilers, CMake configurations, baseline or
+candidate builds, runtime dependencies, or resolved backends cannot be combined
+into one survivor set.
 
 The initial boundary set is
 `5,7,8,9,14,15,16,17,29,30,31,32,33,62,63,64,65,96,112,120,124,125,126,127,128`.

@@ -20,10 +20,10 @@ import balanced_evidence_common as common
 
 PLAN_SCHEMA = "leopard2-balanced-promotion-plan/v2"
 MAIN_CELL_SCHEMA = "leopard2-main-compare-cell-list/v2"
-SURVIVOR_SCHEMA = "leopard2-balanced-promotion-survivors/v2"
-STAGE_SCHEMA = "leopard2-balanced-promotion-stage/v3"
-ATTESTATION_SCHEMA = "leopard2-balanced-auto-path-attestation/v3"
-ATTESTATION_RESULT_SCHEMA = "leopard2-balanced-auto-path-result/v2"
+SURVIVOR_SCHEMA = "leopard2-balanced-promotion-survivors/v3"
+STAGE_SCHEMA = "leopard2-balanced-promotion-stage/v4"
+ATTESTATION_SCHEMA = "leopard2-balanced-auto-path-attestation/v4"
+ATTESTATION_RESULT_SCHEMA = "leopard2-balanced-auto-path-result/v3"
 EXACT_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v4"
 EXACT_MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 PROMOTION_GATE = 1.05
@@ -58,6 +58,10 @@ REQUIRED_CANDIDATE_CACHE = {
     "LEO2_BUILD_FUZZERS": "OFF",
     "LEO2_BUILD_TESTS": "OFF",
     "LEO2_ENABLE_CUDA": "OFF",
+}
+REQUIRED_BASELINE_CACHE = {
+    "CMAKE_BUILD_TYPE": "Release",
+    "LEO_MAIN_HAS_MARCH_NATIVE": "1",
 }
 EXCLUDED_CAMPAIGN_BACKENDS = {
     "avx512": "no forced AVX-512 runner coverage in this campaign schema",
@@ -368,63 +372,101 @@ def planned_gate_cells(root: Path, plan: dict[str, Any]) -> dict[tuple[int, int]
     return result
 
 
-def _cpu_list_count(value: object, label: str) -> int:
-    require(isinstance(value, str), f"{label} is not a CPU-list string")
-    result = set()
-    for component in value.split(","):
-        component = component.strip()
-        require(component and re.fullmatch(r"[0-9]+(?:-[0-9]+)?", component),
-                f"{label} is malformed")
-        bounds = [int(item) for item in component.split("-", 1)]
-        first, last = (bounds[0], bounds[-1])
-        require(first <= last, f"{label} range is reversed")
-        result.update(range(first, last + 1))
-    return len(result)
-
-
-def _normalized_cpu_policy(value: object, label: str) -> dict[str, Any]:
-    require(isinstance(value, dict), f"{label} is not an object")
-    cpuinfo = value.get("cpuinfo")
-    topology = value.get("topology")
-    frequency = value.get("frequency_policy")
-    require(isinstance(cpuinfo, dict) and isinstance(topology, dict) and
-            isinstance(frequency, dict), f"{label} policy is incomplete")
-    # Logical CPU and core identifiers vary between the independently pinned
-    # shards.  Retain the CPU signature, sibling cardinality,
-    # frequency policy, and online state instead of those incidental IDs.
-    normalized_cpuinfo = {
-        key: item for key, item in cpuinfo.items() if key != "processor"
-    }
-    thread_list = topology.get("thread_siblings_list")
-    core_list = topology.get("core_siblings_list")
-    return {
-        "online": value.get("online"),
-        "cpuinfo": normalized_cpuinfo,
-        "topology": {
-            "thread_sibling_count": _cpu_list_count(
-                thread_list, f"{label} thread siblings"),
-            "core_sibling_count": _cpu_list_count(
-                core_list, f"{label} core siblings"),
-        },
-        "frequency_policy": frequency,
-    }
-
-
 def _normalize_bound_paths(value: object, replacements: tuple[tuple[str, str], ...]) -> object:
     """Remove volatile filesystem metadata while retaining exact byte identity."""
-    if isinstance(value, dict):
-        return {
-            key: _normalize_bound_paths(item, replacements)
-            for key, item in sorted(value.items())
-            if key not in {"device", "inode", "mtime_ns"}
-        }
-    if isinstance(value, list):
-        return [_normalize_bound_paths(item, replacements) for item in value]
-    if isinstance(value, str):
-        result = value
-        for original, marker in replacements:
-            result = result.replace(original, marker)
-        return result
+    require(replacements and all(isinstance(original, str) and original and
+                                 isinstance(marker, str) and marker
+                                 for original, marker in replacements) and
+            len({original for original, _ in replacements}) == len(replacements) and
+            len({marker for _, marker in replacements}) == len(replacements),
+            "scope path replacements are invalid or ambiguous")
+    # A baseline build may live below the candidate source tree.  Replacing the
+    # longest roots first prevents a broad source marker from swallowing the
+    # more specific, role-distinct build identity.
+    ordered = tuple(sorted(replacements, key=lambda item: len(item[0]), reverse=True))
+
+    def visit(item: object) -> object:
+        if isinstance(item, dict):
+            return {
+                key: visit(child) for key, child in sorted(item.items())
+                if key not in {"device", "inode", "mtime_ns"}
+            }
+        if isinstance(item, list):
+            return [visit(child) for child in item]
+        if isinstance(item, str):
+            result = item
+            for original, marker in ordered:
+                result = result.replace(original, marker)
+            return result
+        return item
+
+    return visit(value)
+
+
+def _parse_scope_cpu_list(value: object, label: str) -> set[int]:
+    require(isinstance(value, str), f"{label} is not a CPU-list string")
+    result: set[int] = set()
+    for component in value.split(","):
+        component = component.strip()
+        require(re.fullmatch(r"[0-9]+(?:-[0-9]+)?", component) is not None,
+                f"{label} is malformed")
+        bounds = [int(item) for item in component.split("-", 1)]
+        first, last = bounds[0], bounds[-1]
+        require(0 <= first <= last, f"{label} range is reversed")
+        result.update(range(first, last + 1))
+    require(result, f"{label} is empty")
+    return result
+
+
+def _validate_scope_build(build: object, role: str) -> dict[str, Any]:
+    require(role in {"baseline", "candidate"} and isinstance(build, dict),
+            f"{role} scope build is invalid")
+    cache = build.get("validated_cache")
+    semantics = build.get("validated_compile_commands")
+    required_cache = (REQUIRED_BASELINE_CACHE if role == "baseline"
+                      else REQUIRED_CANDIDATE_CACHE)
+    require(isinstance(cache, dict) and all(
+        cache.get(key) == expected for key, expected in required_cache.items()) and
+            isinstance(build.get("compiler"), dict) and
+            isinstance(build.get("compiler_version_stdout"), dict) and
+            isinstance(build.get("cmake_cache"), dict) and
+            isinstance(build.get("compile_commands"), dict) and
+            isinstance(build.get("executable_link_recipe"), dict) and
+            isinstance(build.get("archive_link_recipe"), dict) and
+            isinstance(build.get("archive_link_recipe_content"), dict) and
+            isinstance(build.get("archive_link_tool_invocations"), dict) and
+            isinstance(build.get("validated_archive"), dict) and
+            isinstance(build.get("validated_executable"), dict) and
+            isinstance(build.get("validated_archive_members"), list) and
+            build["validated_archive_members"] and
+            isinstance(semantics, dict) and
+            semantics.get("validated_optimization") == "-O3" and
+            semantics.get("validated_openmp") is True and
+            isinstance(semantics.get("required_source_object_pairs"), list) and
+            semantics["required_source_object_pairs"],
+            f"{role} scope lacks canonical compile/archive/link closure")
+    return build
+
+
+def _validate_scope_artifact(value: object, label: str) -> dict[str, Any]:
+    require(isinstance(value, dict) and
+            isinstance(value.get("sha256"), str) and
+            re.fullmatch(r"[0-9a-f]{64}", value["sha256"]) is not None and
+            type(value.get("size")) is int and value["size"] >= 0,
+            f"{label} scope artifact is invalid")
+    return value
+
+
+def _validate_runtime_closure(value: object, label: str) -> dict[str, Any]:
+    require(isinstance(value, dict) and isinstance(value.get("executable"), str) and
+            isinstance(value.get("dependencies"), list) and value["dependencies"],
+            f"{label} runtime closure is invalid")
+    for dependency in value["dependencies"]:
+        require(isinstance(dependency, dict) and
+                isinstance(dependency.get("soname"), str) and
+                (dependency.get("virtual") is True or
+                 isinstance(dependency.get("file"), dict)),
+                f"{label} runtime dependency is invalid")
     return value
 
 
@@ -438,29 +480,21 @@ def selection_scope_from_verified_bundle(
     host = manifest.get("host")
     require(isinstance(identities, dict) and isinstance(host, dict),
             "exact-main scope identity is incomplete")
+    baseline_build = identities.get("baseline_build")
     candidate_build = identities.get("candidate_build")
+    baseline_source = identities.get("baseline_source")
     candidate_source = identities.get("candidate_source")
-    require(isinstance(candidate_build, dict) and isinstance(candidate_source, dict),
-            "exact-main candidate build/source scope is absent")
-    cache = candidate_build.get("validated_cache")
-    compile_semantics = candidate_build.get("validated_compile_commands")
-    require(isinstance(cache, dict) and all(
-        cache.get(key) == expected
-        for key, expected in REQUIRED_CANDIDATE_CACHE.items()),
-        "exact-main candidate is not the canonical Release AUTO build")
-    require(isinstance(compile_semantics, dict) and
-            compile_semantics.get("validated_optimization") == "-O3" and
-            compile_semantics.get("validated_openmp") is True and
-            isinstance(compile_semantics.get("required_source_object_pairs"), list) and
-            compile_semantics["required_source_object_pairs"] and
-            isinstance(candidate_build.get("archive_link_recipe_content"), dict) and
-            isinstance(candidate_build.get("archive_link_tool_invocations"), dict) and
-            isinstance(candidate_build.get("ranlib"), dict),
-            "exact-main candidate lacks hardened compile/link provenance")
-    source_root = candidate_source.get("path")
-    build_root = candidate_build.get("build_dir")
-    require(isinstance(source_root, str) and isinstance(build_root, str),
-            "exact-main candidate path roots are absent")
+    require(all(isinstance(item, dict) for item in (
+        baseline_build, candidate_build, baseline_source, candidate_source)),
+        "exact-main baseline/candidate build or source scope is absent")
+    baseline_source_root = baseline_source.get("path")
+    candidate_source_root = candidate_source.get("path")
+    baseline_build_root = baseline_build.get("build_dir")
+    candidate_build_root = candidate_build.get("build_dir")
+    require(all(isinstance(item, str) and item for item in (
+        baseline_source_root, candidate_source_root,
+        baseline_build_root, candidate_build_root)),
+        "exact-main role-specific source/build roots are absent")
 
     backends = {
         invocation.get("normalized", {}).get("backend")
@@ -475,30 +509,42 @@ def selection_scope_from_verified_bundle(
             "resolved AUTO backend lacks forced confirmation coverage; "
             "AVX-512 and NEON are outside this campaign")
 
-    allowed = host.get("allowed_cpu_set_at_launch")
-    online = host.get("online_cpu_set")
-    require(isinstance(allowed, list) and allowed and
-            all(type(item) is int and item >= 0 for item in allowed) and
-            isinstance(online, list) and online and
-            all(type(item) is int and item >= 0 for item in online),
-            "exact-main CPU-set scope is invalid")
-    replacements = ((source_root, "$SOURCE"), (build_root, "$BUILD"))
-    build_scope = _normalize_bound_paths(candidate_build, replacements)
-    require(isinstance(build_scope, dict), "normalized build scope is invalid")
+    replacements = (
+        (baseline_source_root, "$BASELINE_SOURCE"),
+        (candidate_source_root, "$CANDIDATE_SOURCE"),
+        (baseline_build_root, "$BASELINE_BUILD"),
+        (candidate_build_root, "$CANDIDATE_BUILD"),
+    )
     scope = {
-        "schema": "leopard2-balanced-evidence-scope/v1",
-        "host": {
-            "system": host.get("system"),
-            "allowed_cpu_set_at_launch": allowed,
-            "online_cpu_set": online,
-            "benchmark_cpu_class": _normalized_cpu_policy(
-                host.get("benchmark_cpu"), "benchmark CPU"),
-            "reserved_sibling_class": _normalized_cpu_policy(
-                host.get("reserved_sibling"), "reserved sibling"),
-            "turbo_and_pstate": host.get("turbo_and_pstate"),
+        "schema": "leopard2-balanced-evidence-scope/v2",
+        # Retain the exact pinned CPU pair.  This is intentionally stricter than
+        # topology cardinality: the current evidence format lacks cache/NUMA and
+        # heterogeneous-core descriptors needed to equate different pairs.
+        "host": _normalize_bound_paths(host, replacements),
+        "sources": {
+            "baseline": _normalize_bound_paths(baseline_source, replacements),
+            "candidate": _normalize_bound_paths(candidate_source, replacements),
         },
-        "compiler_and_build": build_scope,
-        "candidate_source": _normalize_bound_paths(candidate_source, replacements),
+        "builds": {
+            "baseline": _normalize_bound_paths(baseline_build, replacements),
+            "candidate": _normalize_bound_paths(candidate_build, replacements),
+        },
+        "artifacts": {
+            key: _normalize_bound_paths(identities.get(key), replacements)
+            for key in (
+                "baseline_archive", "baseline_executable",
+                "candidate_archive", "candidate_executable")
+        },
+        "runtime_closures": {
+            "baseline": _normalize_bound_paths(
+                identities.get("baseline_runtime_closure"), replacements),
+            "candidate": _normalize_bound_paths(
+                identities.get("candidate_runtime_closure"), replacements),
+        },
+        "tools": {
+            key: _normalize_bound_paths(identities.get(key), replacements)
+            for key in ("runner", "taskset", "ldd")
+        },
         "resolved_auto_backend": resolved_backend,
         "forced_confirmation_backends": list(
             BACKENDS[:BACKENDS.index(resolved_backend) + 1]),
@@ -509,10 +555,11 @@ def selection_scope_from_verified_bundle(
 
 def validate_evidence_scope(scope: object) -> dict[str, Any]:
     require(isinstance(scope, dict) and set(scope) == {
-        "schema", "host", "compiler_and_build", "candidate_source",
+        "schema", "host", "sources", "builds", "artifacts",
+        "runtime_closures", "tools",
         "resolved_auto_backend", "forced_confirmation_backends",
         "excluded_backends",
-    } and scope.get("schema") == "leopard2-balanced-evidence-scope/v1",
+    } and scope.get("schema") == "leopard2-balanced-evidence-scope/v2",
             "gate evidence scope shape differs")
     backend = scope.get("resolved_auto_backend")
     require(backend in CAMPAIGN_BACKENDS and
@@ -521,31 +568,76 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
             scope.get("excluded_backends") == EXCLUDED_CAMPAIGN_BACKENDS,
             "gate evidence backend coverage declaration differs")
     host = scope.get("host")
-    build = scope.get("compiler_and_build")
-    source = scope.get("candidate_source")
+    sources = scope.get("sources")
+    builds = scope.get("builds")
+    artifacts = scope.get("artifacts")
+    closures = scope.get("runtime_closures")
+    tools = scope.get("tools")
     require(isinstance(host, dict) and set(host) == {
         "system", "allowed_cpu_set_at_launch", "online_cpu_set",
-        "benchmark_cpu_class", "reserved_sibling_class", "turbo_and_pstate",
+        "benchmark_cpu", "reserved_sibling", "turbo_and_pstate",
     } and isinstance(host["system"], dict) and
-            isinstance(host["benchmark_cpu_class"], dict) and
-            isinstance(host["reserved_sibling_class"], dict) and
+            isinstance(host["benchmark_cpu"], dict) and
+            isinstance(host["reserved_sibling"], dict) and
+            type(host["benchmark_cpu"].get("cpu")) is int and
+            type(host["reserved_sibling"].get("cpu")) is int and
+            host["benchmark_cpu"]["cpu"] != host["reserved_sibling"]["cpu"] and
+            isinstance(host["benchmark_cpu"].get("topology"), dict) and
+            isinstance(host["reserved_sibling"].get("topology"), dict) and
             isinstance(host["allowed_cpu_set_at_launch"], list) and
             host["allowed_cpu_set_at_launch"] and
             isinstance(host["online_cpu_set"], list) and host["online_cpu_set"],
-            "gate evidence host/topology scope differs")
-    require(isinstance(build, dict) and isinstance(source, dict) and
-            isinstance(build.get("validated_cache"), dict) and
-            all(build["validated_cache"].get(key) == expected
-                for key, expected in REQUIRED_CANDIDATE_CACHE.items()) and
-            isinstance(build.get("compiler"), dict) and
-            isinstance(build.get("validated_compile_commands"), dict) and
-            build["validated_compile_commands"].get(
-                "validated_optimization") == "-O3" and
-            build["validated_compile_commands"].get("validated_openmp") is True and
-            isinstance(build.get("archive_link_recipe_content"), dict) and
-            isinstance(source.get("head"), str) and
-            re.fullmatch(r"[0-9a-f]{40}", source["head"]) is not None,
-            "gate evidence compiler/CMake/build scope differs")
+            "gate evidence exact CPU-pair/topology scope differs")
+    pair = {host["benchmark_cpu"]["cpu"], host["reserved_sibling"]["cpu"]}
+    require(pair.issubset(set(host["allowed_cpu_set_at_launch"])) and
+            pair.issubset(set(host["online_cpu_set"])) and
+            _parse_scope_cpu_list(host["benchmark_cpu"]["topology"].get(
+                "thread_siblings_list"), "benchmark CPU thread siblings") == pair and
+            _parse_scope_cpu_list(host["reserved_sibling"]["topology"].get(
+                "thread_siblings_list"), "reserved sibling thread siblings") == pair,
+            "gate evidence does not retain one exact SMT CPU pair")
+    require(isinstance(sources, dict) and set(sources) == {"baseline", "candidate"} and
+            all(isinstance(value, dict) for value in sources.values()) and
+            sources["baseline"].get("head") == EXACT_MAIN_COMMIT and
+            re.fullmatch(r"[0-9a-f]{40}", str(
+                sources["candidate"].get("head"))) is not None and
+            isinstance(builds, dict) and set(builds) == {"baseline", "candidate"},
+            "gate evidence role-specific source/build scope differs")
+    _validate_scope_build(builds["baseline"], "baseline")
+    _validate_scope_build(builds["candidate"], "candidate")
+    require(builds["baseline"]["compiler"] == builds["candidate"]["compiler"] and
+            builds["baseline"]["compiler_version_stdout"] ==
+                builds["candidate"]["compiler_version_stdout"],
+            "gate evidence baseline/candidate compiler identity differs")
+    require(isinstance(artifacts, dict) and set(artifacts) == {
+        "baseline_archive", "baseline_executable",
+        "candidate_archive", "candidate_executable",
+    }, "gate evidence artifact closure shape differs")
+    for key, artifact_value in artifacts.items():
+        _validate_scope_artifact(artifact_value, key)
+    require(artifacts["baseline_archive"] ==
+                builds["baseline"]["validated_archive"] and
+            artifacts["baseline_executable"] ==
+                builds["baseline"]["validated_executable"] and
+            artifacts["candidate_archive"] ==
+                builds["candidate"]["validated_archive"] and
+            artifacts["candidate_executable"] ==
+                builds["candidate"]["validated_executable"],
+            "gate evidence top-level/build artifact closure differs")
+    require(isinstance(closures, dict) and set(closures) == {
+        "baseline", "candidate",
+    }, "gate evidence runtime closure shape differs")
+    _validate_runtime_closure(closures["baseline"], "baseline")
+    _validate_runtime_closure(closures["candidate"], "candidate")
+    require(closures["baseline"]["executable"] ==
+                artifacts["baseline_executable"].get("path") and
+            closures["candidate"]["executable"] ==
+                artifacts["candidate_executable"].get("path"),
+            "gate evidence runtime closure names a different executable")
+    require(isinstance(tools, dict) and set(tools) == {"runner", "taskset", "ldd"},
+            "gate evidence tool scope shape differs")
+    for key, tool in tools.items():
+        _validate_scope_artifact(tool, key)
     return scope
 
 
@@ -653,7 +745,8 @@ def derive_survivors(plan_root: Path, manifests: list[dict[str, Any]],
             candidate_commit = candidate["head"]
         require(candidate["head"] == candidate_commit,
                 "gate manifests use different candidate commits")
-        require(scope["candidate_source"]["head"] == candidate_commit,
+        require(scope["sources"]["candidate"]["head"] == candidate_commit and
+                scope["sources"]["baseline"]["head"] == EXACT_MAIN_COMMIT,
                 "normalized evidence scope names a different candidate commit")
         raw_cells = campaign.get("cells")
         require(isinstance(raw_cells, list), "gate campaign cells are absent")
@@ -1713,25 +1806,111 @@ def adversarial_resign(path: Path, mutator) -> None:
 
 def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
     require(backend in CAMPAIGN_BACKENDS, "fixture backend is outside campaign")
+    def fixture_artifact(character: str) -> dict[str, Any]:
+        return {"path": "$FIXTURE/" + character, "kind": "fixture",
+                "sha256": character * 64, "size": 1, "mode": 0o755}
+
+    def fixture_build(role: str, character: str) -> dict[str, Any]:
+        cache = dict(REQUIRED_BASELINE_CACHE if role == "baseline"
+                     else REQUIRED_CANDIDATE_CACHE)
+        return {
+            "build_dir": f"${role.upper()}_BUILD",
+            "validated_cache": cache,
+            "compiler": fixture_artifact("a"),
+            "compiler_version_stdout": {"sha256": "a" * 64,
+                                         "text": "fixture compiler"},
+            "cmake_cache": fixture_artifact(character),
+            "compile_commands": fixture_artifact(character),
+            "executable_link_recipe": fixture_artifact(character),
+            "archive_link_recipe": fixture_artifact(character),
+            "archive_link_recipe_content": {
+                "encoding": "utf-8", "text": f"fixture {role} recipe",
+                "sha256": character * 64, "size": 1,
+            },
+            "archive_link_tool_invocations": {
+                "archiver": {"invocation": "ar", "resolved_path": "/usr/bin/ar"},
+                "ranlib": {"invocation": "ranlib", "resolved_path": "/usr/bin/ranlib"},
+            },
+            "validated_archive": fixture_artifact(character),
+            "validated_executable": fixture_artifact(character),
+            "validated_archive_members": [f"{role}.o"],
+            "validated_compile_commands": {
+                "validated_optimization": "-O3", "validated_openmp": True,
+                "required_source_object_pairs": [{
+                    "source": fixture_artifact(character),
+                    "object": fixture_artifact(character),
+                }],
+            },
+        }
+
+    def fixture_runtime(executable: str, character: str) -> dict[str, Any]:
+        return {
+            "executable": executable,
+            "dependencies": [{
+                "soname": "libc.so.6", "loader_path": "/lib/libc.so.6",
+                "file": fixture_artifact(character),
+            }],
+        }
+
+    baseline_build = fixture_build("baseline", "a")
+    candidate_build = fixture_build("candidate", "b")
+    baseline_archive = baseline_build["validated_archive"]
+    baseline_executable = baseline_build["validated_executable"]
+    candidate_archive = candidate_build["validated_archive"]
+    candidate_executable = candidate_build["validated_executable"]
     return {
-        "schema": "leopard2-balanced-evidence-scope/v1",
+        "schema": "leopard2-balanced-evidence-scope/v2",
         "host": {
             "system": {"system": "Linux", "machine": "x86_64"},
             "allowed_cpu_set_at_launch": list(range(8)),
             "online_cpu_set": list(range(8)),
-            "benchmark_cpu_class": {"cpuinfo": {"model": "fixture"}},
-            "reserved_sibling_class": {"cpuinfo": {"model": "fixture"}},
+            "benchmark_cpu": {
+                "cpu": 2, "online": "1",
+                "cpuinfo": {"processor": "2", "model name": "fixture",
+                            "cache domain": "96MiB"},
+                "topology": {
+                    "core_id": "2", "physical_package_id": "0",
+                    "thread_siblings_list": "2,6", "core_siblings_list": "0-7",
+                },
+                "frequency_policy": {"scaling_governor": "performance"},
+            },
+            "reserved_sibling": {
+                "cpu": 6, "online": "1",
+                "cpuinfo": {"processor": "6", "model name": "fixture",
+                            "cache domain": "96MiB"},
+                "topology": {
+                    "core_id": "2", "physical_package_id": "0",
+                    "thread_siblings_list": "2,6", "core_siblings_list": "0-7",
+                },
+                "frequency_policy": {"scaling_governor": "performance"},
+            },
             "turbo_and_pstate": {"fixture": "stable"},
         },
-        "compiler_and_build": {
-            "validated_cache": dict(REQUIRED_CANDIDATE_CACHE),
-            "compiler": {"sha256": "a" * 64},
-            "validated_compile_commands": {
-                "validated_optimization": "-O3", "validated_openmp": True,
-            },
-            "archive_link_recipe_content": {"sha256": "b" * 64},
+        "sources": {
+            "baseline": {"path": "$BASELINE_SOURCE", "head": EXACT_MAIN_COMMIT,
+                         "tree": "a" * 40},
+            "candidate": {"path": "$CANDIDATE_SOURCE", "head": "1" * 40,
+                          "tree": "c" * 40},
         },
-        "candidate_source": {"head": "1" * 40, "tree": "c" * 40},
+        "builds": {
+            "baseline": baseline_build,
+            "candidate": candidate_build,
+        },
+        "artifacts": {
+            "baseline_archive": baseline_archive,
+            "baseline_executable": baseline_executable,
+            "candidate_archive": candidate_archive,
+            "candidate_executable": candidate_executable,
+        },
+        "runtime_closures": {
+            "baseline": fixture_runtime(baseline_executable["path"], "1"),
+            "candidate": fixture_runtime(candidate_executable["path"], "2"),
+        },
+        "tools": {
+            "runner": fixture_artifact("3"),
+            "taskset": fixture_artifact("4"),
+            "ldd": fixture_artifact("5"),
+        },
         "resolved_auto_backend": backend,
         "forced_confirmation_backends": list(
             BACKENDS[:BACKENDS.index(backend) + 1]),
@@ -1926,26 +2105,85 @@ def self_test() -> None:
         reject_scope_mutation("host", lambda values:
                               values[-1]["host"]["system"].update({
                                   "machine": "aarch64"}))
-        reject_scope_mutation("compiler", lambda values:
-                              values[-1]["compiler_and_build"]["compiler"].update({
+        def move_to_other_cache_class(values) -> None:
+            pair = values[-1]["host"]
+            pair["benchmark_cpu"].update({"cpu": 3})
+            pair["benchmark_cpu"]["cpuinfo"].update({
+                "processor": "3", "cache domain": "32MiB"})
+            pair["benchmark_cpu"]["topology"].update({
+                "core_id": "3", "thread_siblings_list": "3,7"})
+            pair["reserved_sibling"].update({"cpu": 7})
+            pair["reserved_sibling"]["cpuinfo"].update({
+                "processor": "7", "cache domain": "32MiB"})
+            pair["reserved_sibling"]["topology"].update({
+                "core_id": "3", "thread_siblings_list": "3,7"})
+        reject_scope_mutation("equal-cardinality mixed cache class",
+                              move_to_other_cache_class)
+        reject_scope_mutation("candidate compiler", lambda values:
+                              values[-1]["builds"]["candidate"]["compiler"].update({
                                   "sha256": "d" * 64}))
-        reject_scope_mutation("CMake", lambda values:
-                              values[-1]["compiler_and_build"][
+        reject_scope_mutation("baseline source", lambda values:
+                              values[-1]["sources"]["baseline"].update({
+                                  "tree": "d" * 40}))
+        reject_scope_mutation("candidate CMake", lambda values:
+                              values[-1]["builds"]["candidate"][
                                   "validated_cache"].update({
                                       "LEO2_BACKEND_VARIANT": "scalar"}))
-        reject_scope_mutation("uniform noncanonical CMake", lambda values:
-                              [value["compiler_and_build"][
+        reject_scope_mutation("uniform noncanonical candidate CMake", lambda values:
+                              [value["builds"]["candidate"][
                                   "validated_cache"].update({
                                       "LEO2_BACKEND_VARIANT": "scalar"})
+                               for value in values])
+        reject_scope_mutation("baseline archive", lambda values:
+                              values[-1]["artifacts"]["baseline_archive"].update({
+                                  "sha256": "6" * 64}))
+        reject_scope_mutation("baseline executable", lambda values:
+                              values[-1]["artifacts"]["baseline_executable"].update({
+                                  "sha256": "7" * 64}))
+        reject_scope_mutation("baseline CMake cache", lambda values:
+                              values[-1]["builds"]["baseline"][
+                                  "cmake_cache"].update({"sha256": "8" * 64}))
+        reject_scope_mutation("baseline archive recipe", lambda values:
+                              values[-1]["builds"]["baseline"][
+                                  "archive_link_recipe_content"].update({
+                                      "sha256": "9" * 64}))
+        reject_scope_mutation("baseline compile closure", lambda values:
+                              values[-1]["builds"]["baseline"][
+                                  "validated_compile_commands"][
+                                      "required_source_object_pairs"][0][
+                                          "object"].update({"sha256": "0" * 64}))
+        reject_scope_mutation("baseline runtime dependency", lambda values:
+                              values[-1]["runtime_closures"]["baseline"][
+                                  "dependencies"][0]["file"].update({
+                                      "sha256": "6" * 64}))
+        reject_scope_mutation("candidate runtime dependency", lambda values:
+                              values[-1]["runtime_closures"]["candidate"][
+                                  "dependencies"][0]["file"].update({
+                                      "sha256": "7" * 64}))
+        reject_scope_mutation("uniform noncanonical baseline CMake", lambda values:
+                              [value["builds"]["baseline"][
+                                  "validated_cache"].update({
+                                      "LEO_MAIN_HAS_MARCH_NATIVE": "0"})
                                for value in values])
         reject_scope_mutation("resolved backend", lambda values:
                               values[-1].update({
                                   "resolved_auto_backend": "ssse3"}))
         for excluded_backend in ("avx512", "neon"):
+            reject_scope_mutation(
+                "mixed " + excluded_backend,
+                lambda values, backend=excluded_backend:
+                    values[-1].update({"resolved_auto_backend": backend}))
             reject_scope_mutation(excluded_backend, lambda values, backend=excluded_backend:
                                   [value.update({
                                       "resolved_auto_backend": backend})
                                    for value in values])
+
+        normalized_nested = _normalize_bound_paths(
+            {"paths": ["/tree/build/object.o", "/tree/source.cpp"]},
+            (("/tree", "$SOURCE"), ("/tree/build", "$BUILD")))
+        require(normalized_nested == {
+            "paths": ["$BUILD/object.o", "$SOURCE/source.cpp"]},
+            "scope path normalization did not prefer the longest role root")
 
         unsolicited_manifests = json.loads(json.dumps(manifests))
         unsolicited = main_cell(
