@@ -222,6 +222,8 @@ leo2_backend expected_backend_from_environment()
         return LEO2_BACKEND_AVX2;
     if (strcmp(name, "neon") == 0)
         return LEO2_BACKEND_NEON;
+    if (strcmp(name, "avx512") == 0 || strcmp(name, "avx512vl") == 0)
+        return LEO2_BACKEND_AVX512;
     throw std::runtime_error("unknown LEO2_EXPECT_BACKEND value");
 }
 
@@ -313,7 +315,7 @@ void test_introspection_and_null_contracts(
     require(leo2_context_thread_count(context) == 4,
         "explicit context thread count was not retained");
     require(live_backend >= LEO2_BACKEND_SCALAR &&
-            live_backend <= LEO2_BACKEND_NEON,
+            live_backend <= LEO2_BACKEND_AVX512,
         "live context reports an out-of-range backend");
     const leo2_backend expected_backend = expected_backend_from_environment();
     if (expected_backend != LEO2_BACKEND_AUTO)

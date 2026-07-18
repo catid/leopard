@@ -170,7 +170,9 @@ leo2_backend parse_backend(const std::string& value)
     if (value == "scalar") return LEO2_BACKEND_SCALAR;
     if (value == "ssse3") return LEO2_BACKEND_SSSE3;
     if (value == "avx2") return LEO2_BACKEND_AVX2;
-    fail("backend must be auto, scalar, ssse3, or avx2");
+    if (value == "avx512" || value == "avx512vl")
+        return LEO2_BACKEND_AVX512;
+    fail("backend must be auto, scalar, ssse3, avx2, or avx512");
     return LEO2_BACKEND_AUTO;
 }
 
@@ -183,6 +185,7 @@ const char* backend_name(leo2_backend backend)
     case LEO2_BACKEND_SSSE3: return "ssse3";
     case LEO2_BACKEND_AVX2: return "avx2";
     case LEO2_BACKEND_NEON: return "neon";
+    case LEO2_BACKEND_AVX512: return "avx512";
     }
     return "unknown";
 }

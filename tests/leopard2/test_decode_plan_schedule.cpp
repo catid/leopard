@@ -1028,7 +1028,8 @@ static void CheckGF8WeightedLocatorBoundaryCallsites()
     static const unsigned side = 64;
     static const size_t bytes = 16U * 1024U;
     const leopard::backend::Ops& ops = leopard::backend::GetDefaultOps();
-    const bool expect_weighted = ops.kind == LEO2_BACKEND_AVX2;
+    const bool expect_weighted = ops.kind == LEO2_BACKEND_AVX2 ||
+        ops.kind == LEO2_BACKEND_AVX512;
     leopard::backend::Ops tracing_ops = ops;
     if (ops.ff8_weighted_ifft_butterfly4)
     {

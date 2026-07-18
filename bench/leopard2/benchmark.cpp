@@ -336,6 +336,8 @@ static leo2_backend ParseBackend(const std::string& text)
     if (text == "scalar") return LEO2_BACKEND_SCALAR;
     if (text == "ssse3") return LEO2_BACKEND_SSSE3;
     if (text == "avx2") return LEO2_BACKEND_AVX2;
+    if (text == "avx512" || text == "avx512vl")
+        return LEO2_BACKEND_AVX512;
     if (text == "neon") return LEO2_BACKEND_NEON;
     Fail("invalid --backend: " + text);
     return LEO2_BACKEND_AUTO;
@@ -356,7 +358,7 @@ static void Usage(std::ostream& output, const char* program)
         << "  --r N                 Recovery shard count (default 16)\n"
         << "  --profile NAME        auto, high, low, exact (default auto)\n"
         << "  --field NAME          auto, gf8, gf16 (default auto)\n"
-        << "  --backend NAME        auto, scalar, ssse3, avx2, neon\n"
+        << "  --backend NAME        auto, scalar, ssse3, avx2, avx512, neon\n"
         << "  --bytes N[KiB|MiB]    Bytes per shard (default 64KiB)\n"
         << "  --loss N              Missing original shards (default 1)\n"
         << "  --batch N             Independent stripes per call (default 1)\n"
@@ -463,6 +465,7 @@ static const char* BackendName(leo2_backend backend)
     case LEO2_BACKEND_SSSE3: return "ssse3";
     case LEO2_BACKEND_AVX2: return "avx2";
     case LEO2_BACKEND_NEON: return "neon";
+    case LEO2_BACKEND_AVX512: return "avx512";
     }
     return "unknown";
 }

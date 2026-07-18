@@ -604,6 +604,7 @@ static const char* BackendName(leo2_backend backend)
     case LEO2_BACKEND_SSSE3: return "ssse3";
     case LEO2_BACKEND_AVX2: return "avx2";
     case LEO2_BACKEND_NEON: return "neon";
+    case LEO2_BACKEND_AVX512: return "avx512";
     }
     return "unknown";
 }

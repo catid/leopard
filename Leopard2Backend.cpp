@@ -59,15 +59,15 @@ bool IsWeightedIFFTButterfly4AliasingValid(
 }
 
 static const Ops* SelectedOps = NULL;
-static const Ops* QualifiedOps[LEO2_BACKEND_NEON + 1] = {};
+static const Ops* QualifiedOps[LEO2_BACKEND_AVX512 + 1] = {};
 enum QualificationState
 {
     QualificationUnattempted,
     QualificationPassed,
     QualificationFailed
 };
-static QualificationState QualificationStates[LEO2_BACKEND_NEON + 1] = {};
-static QualificationStatus QualificationFailures[LEO2_BACKEND_NEON + 1] = {};
+static QualificationState QualificationStates[LEO2_BACKEND_AVX512 + 1] = {};
+static QualificationStatus QualificationFailures[LEO2_BACKEND_AVX512 + 1] = {};
 static InitializeArgs SavedInitializeArgs = { NULL, NULL };
 static uint32_t QualifiableBackendMask = 0;
 static bool SelfTestPassed = false;
@@ -92,6 +92,9 @@ static TestSetupFault AllocationFaultFor(
     case LEO2_BACKEND_AVX2:
         return ff16 ? TestSetupFaultAVX2FF16Allocation
                     : TestSetupFaultAVX2FF8Allocation;
+    case LEO2_BACKEND_AVX512:
+        return ff16 ? TestSetupFaultAVX512FF16Allocation
+                    : TestSetupFaultAVX512FF8Allocation;
     default:
         return TestSetupFaultNone;
     }
@@ -104,6 +107,7 @@ static TestSetupFault KATFaultFor(leo2_backend backend)
     case LEO2_BACKEND_SCALAR: return TestSetupFaultScalarKAT;
     case LEO2_BACKEND_SSSE3: return TestSetupFaultSSSE3KAT;
     case LEO2_BACKEND_AVX2: return TestSetupFaultAVX2KAT;
+    case LEO2_BACKEND_AVX512: return TestSetupFaultAVX512KAT;
     default: return TestSetupFaultNone;
     }
 }
@@ -1416,7 +1420,8 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         !TestFF8Butterflies4(ops, args.ff8_multiply_log) ||
         !TestFF8ButterflyRanges(ops))
         return false;
-    if (ops.kind == LEO2_BACKEND_AVX2)
+    if (ops.kind == LEO2_BACKEND_AVX2 ||
+        ops.kind == LEO2_BACKEND_AVX512)
     {
         if (!ops.ff8_weighted_ifft_butterfly4 ||
             !TestWeightedIFFTAliasingContract() ||
@@ -1516,6 +1521,14 @@ static leo2_backend SelectBackend(const X86Features& features)
 # else
     return LEO2_BACKEND_AUTO;
 # endif
+#elif defined(LEO2_BACKEND_FORCE_AVX512)
+# if defined(LEO2_HAVE_AVX512_BACKEND)
+    if (!features.avx512)
+        return LEO2_BACKEND_AUTO;
+    selected_kind = LEO2_BACKEND_AVX512;
+# else
+    return LEO2_BACKEND_AUTO;
+# endif
 #else
 # if defined(LEO2_HAVE_AVX2_BACKEND)
     if (features.avx2)
@@ -1556,6 +1569,10 @@ bool Initialize(const InitializeArgs& args)
     if (selected_kind == LEO2_BACKEND_AVX2)
         selected_ops = InitializeAVX2(args);
 #endif
+#if defined(LEO2_HAVE_AVX512_BACKEND)
+    if (selected_kind == LEO2_BACKEND_AVX512)
+        selected_ops = InitializeAVX512(args);
+#endif
 
     if (!selected_ops)
     {
@@ -1580,6 +1597,12 @@ bool Initialize(const InitializeArgs& args)
 #if defined(LEO2_HAVE_AVX2_BACKEND)
     if (features.avx2 && selected_kind >= LEO2_BACKEND_AVX2)
         qualifiable_mask |= 1U << LEO2_BACKEND_AVX2;
+#endif
+#if defined(LEO2_HAVE_AVX512_BACKEND)
+    // Keep the candidate explicit until the whole-codec crossover gate has
+    // passed.  ISA kernels may change without changing the wire profile.
+    if (features.avx512)
+        qualifiable_mask |= 1U << LEO2_BACKEND_AVX512;
 #endif
 
     {
@@ -1613,7 +1636,7 @@ const Ops* GetQualifiedOps(
     if (requested == LEO2_BACKEND_AUTO)
         return SelectedOps;
     const unsigned index = static_cast<unsigned>(requested);
-    if (index > static_cast<unsigned>(LEO2_BACKEND_NEON))
+    if (index > static_cast<unsigned>(LEO2_BACKEND_AVX512))
     {
         if (status)
             *status = QualificationUnavailable;
@@ -1650,6 +1673,11 @@ const Ops* GetQualifiedOps(
 #if defined(LEO2_HAVE_AVX2_BACKEND)
     case LEO2_BACKEND_AVX2:
         candidate = InitializeAVX2(SavedInitializeArgs);
+        break;
+#endif
+#if defined(LEO2_HAVE_AVX512_BACKEND)
+    case LEO2_BACKEND_AVX512:
+        candidate = InitializeAVX512(SavedInitializeArgs);
         break;
 #endif
     default:
@@ -1736,6 +1764,11 @@ bool TestGetBackendState(leo2_backend backend, TestBackendState* state)
 # if defined(LEO2_HAVE_AVX2_BACKEND)
     case LEO2_BACKEND_AVX2:
         TestGetAVX2TableState(state);
+        break;
+# endif
+# if defined(LEO2_HAVE_AVX512_BACKEND)
+    case LEO2_BACKEND_AVX512:
+        TestGetAVX512TableState(state);
         break;
 # endif
     default:

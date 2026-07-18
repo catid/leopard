@@ -857,6 +857,8 @@ void test_forced_backend(leo2_context* context)
         backend = LEO2_BACKEND_SSSE3;
     else if (std::strcmp(expected, "avx2") == 0)
         backend = LEO2_BACKEND_AVX2;
+    else if (std::strcmp(expected, "avx512") == 0)
+        backend = LEO2_BACKEND_AVX512;
     else
         throw std::runtime_error("invalid LEO2_EXPECT_BACKEND test value");
     require(leo2_context_backend(context) == backend,
@@ -932,6 +934,9 @@ void test_tiled_high_dispatch_policy()
     require(ShouldUseMaterializedHighDecode(profile, field, k, r, padded,
         parent, 8, 64 * 1024, LEO2_BACKEND_AVX2),
         "AVX2 materialized policy rejected its upper byte/loss boundary");
+    require(ShouldUseMaterializedHighDecode(profile, field, k, r, padded,
+        parent, 1, 24 * 1024, LEO2_BACKEND_AVX512),
+        "AVX-512 materialized policy rejected its lower byte boundary");
     require(ShouldUseMaterializedHighDecode(profile, field, k, r, padded,
         parent, 1, 32 * 1024, LEO2_BACKEND_SSSE3),
         "SSSE3 materialized policy rejected its lower byte boundary");
@@ -1126,7 +1131,9 @@ void test_tiled_materialized_execution(leo2_context* context)
     require(scratch_bytes[2] > scratch_bytes[1],
         "materialized workspace is not larger than tiled workspace");
     const leo2_backend backend = leo2_context_backend(context);
-    if (backend == LEO2_BACKEND_AVX2 || backend == LEO2_BACKEND_SSSE3)
+    if (backend == LEO2_BACKEND_AVX2 ||
+        backend == LEO2_BACKEND_AVX512 ||
+        backend == LEO2_BACKEND_SSSE3)
         require(scratch_bytes[0] == scratch_bytes[2],
             "AUTO did not reserve its calibrated materialized workspace");
     else
@@ -1333,6 +1340,9 @@ void test_balanced_dispatch_policy()
     require(ShouldUseBalancedGenericDecode(profile, field, k, r, padded,
         parent, missing, 4096, LEO2_BACKEND_AVX2),
         "balanced dispatch rejected AVX2");
+    require(ShouldUseBalancedGenericDecode(profile, field, k, r, padded,
+        parent, missing, 4096, LEO2_BACKEND_AVX512),
+        "balanced dispatch rejected AVX-512");
 
     require(!ShouldUseBalancedGenericDecode(profile, field, k, r, padded,
         parent, missing, 255, LEO2_BACKEND_SCALAR),
@@ -1863,7 +1873,8 @@ int main()
         const leo2_backend balanced_backend = leo2_context_backend(context);
         const uint64_t expected_direct_reveals =
             balanced_backend == LEO2_BACKEND_SSSE3 ||
-            balanced_backend == LEO2_BACKEND_AVX2
+            balanced_backend == LEO2_BACKEND_AVX2 ||
+            balanced_backend == LEO2_BACKEND_AVX512
                 ? 128 * 3
                 : 0;
         require(leo2_test_generic_direct_reveal_shards() ==

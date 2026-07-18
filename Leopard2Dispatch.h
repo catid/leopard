@@ -120,7 +120,8 @@ static inline bool ShouldUseBalancedGenericDecode(
         rounded_shard_bytes >= 256 && rounded_shard_bytes <= 1024 * 1024 &&
         (backend == LEO2_BACKEND_SCALAR ||
          backend == LEO2_BACKEND_SSSE3 ||
-         backend == LEO2_BACKEND_AVX2);
+         backend == LEO2_BACKEND_AVX2 ||
+         backend == LEO2_BACKEND_AVX512);
 }
 
 /*
@@ -149,7 +150,7 @@ static inline bool ShouldUseMaterializedHighDecode(
         rounded_shard_bytes > 64 * 1024)
         return false;
 
-    if (backend == LEO2_BACKEND_AVX2)
+    if (backend == LEO2_BACKEND_AVX2 || backend == LEO2_BACKEND_AVX512)
         return rounded_shard_bytes >= 24 * 1024;
     if (backend == LEO2_BACKEND_SSSE3)
         return rounded_shard_bytes >= 32 * 1024;

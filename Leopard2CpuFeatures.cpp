@@ -15,6 +15,9 @@ static const uint32_t kSSSE3 = 0x00000200U;
 static const uint32_t kOSXSAVE = 0x08000000U;
 static const uint32_t kAVX = 0x10000000U;
 static const uint32_t kAVX2 = 0x00000020U;
+static const uint32_t kAVX512F = 0x00010000U;
+static const uint32_t kAVX512BW = 0x40000000U;
+static const uint32_t kAVX512VL = 0x80000000U;
 
 X86Features ClassifyX86Features(
     uint32_t maximum_basic_leaf,
@@ -22,7 +25,7 @@ X86Features ClassifyX86Features(
     uint32_t leaf7_ebx,
     uint64_t xcr0)
 {
-    X86Features features = { false, false };
+    X86Features features = { false, false, false };
     if (maximum_basic_leaf < 1)
         return features;
 
@@ -32,6 +35,10 @@ X86Features ClassifyX86Features(
         (xcr0 & 0x6U) == 0x6U;
     features.avx2 = maximum_basic_leaf >= 7 && ymm_enabled &&
         (leaf7_ebx & kAVX2) != 0;
+    const uint32_t avx512_mask = kAVX512F | kAVX512BW | kAVX512VL;
+    const bool zmm_enabled = (xcr0 & 0xe6U) == 0xe6U;
+    features.avx512 = features.avx2 && zmm_enabled &&
+        (leaf7_ebx & avx512_mask) == avx512_mask;
     return features;
 }
 
@@ -104,7 +111,7 @@ X86Features DetectX86Features()
 {
     if (!CPUIDSupported())
     {
-        X86Features features = { false, false };
+        X86Features features = { false, false, false };
         return features;
     }
     uint32_t registers[4] = {};
@@ -133,7 +140,7 @@ X86Features DetectX86Features()
 
 X86Features DetectX86Features()
 {
-    X86Features features = { false, false };
+    X86Features features = { false, false, false };
     return features;
 }
 

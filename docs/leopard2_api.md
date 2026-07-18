@@ -235,9 +235,10 @@ exceeds the current affinity budget; a larger count returns
 parallelism across batch items, not the wire profile or the result bytes.
 
 The context `backend` option selects an immutable execution table.  `AUTO` uses
-the fastest table that passed the startup capability checks and known-answer
-tests.  In one ordinary production x86 binary, explicit `SCALAR`, `SSSE3`, and
-`AVX2` requests select that table when it was compiled and supported by the
+the production-default table that passed the startup capability checks and
+known-answer tests.  In one ordinary production x86 binary, explicit `SCALAR`,
+`SSSE3`, `AVX2`, and experimental `AVX512` requests select that table when it
+was compiled and supported by the
 host.  Lower tables are allocated and known-answer-tested once, on the first
 explicit context request, so legacy and `AUTO`-only applications do not pay
 their setup or memory cost.  Qualification is serialized and its result is
@@ -246,6 +247,13 @@ returns `LEO2_OUT_OF_MEMORY`, and a known-answer-test failure returns
 `LEO2_INTERNAL_ERROR`.  A context never changes the process-default table
 used by the legacy `leo_*` API, and independent contexts selecting different
 tables can execute concurrently.
+`AUTO` deliberately remains AVX2 on qualifying x86 hosts while the AVX-512VL
+complete-codec promotion evidence is collected.  The explicit AVX-512 request
+requires AVX2 plus AVX-512F/BW/VL and operating-system support for opmask and
+ZMM state; its current kernels retain 256-bit data operations and use the
+expanded architectural register file.  Unsupported hosts return
+`LEO2_UNSUPPORTED` without executing the backend.
+
 Backend choice affects execution-path thresholds and kernels only, never the
 profile, field, coordinate map, or parity bytes.  Diagnostic builds still cap
 `AUTO` and explicit selection at their forced backend.

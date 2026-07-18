@@ -896,7 +896,8 @@ void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
 {
     const leo2_backend backend = leo2_context_backend(context);
     const bool qualified_simd = backend == LEO2_BACKEND_SSSE3 ||
-        backend == LEO2_BACKEND_AVX2;
+        backend == LEO2_BACKEND_AVX2 ||
+        backend == LEO2_BACKEND_AVX512;
     const bool qualified_k7 = qualified_simd || backend == LEO2_BACKEND_SCALAR;
 
     CodecOwner* low = make_codec(context, 7, 7,

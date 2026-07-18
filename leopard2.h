@@ -119,7 +119,9 @@ typedef enum leo2_backend {
     LEO2_BACKEND_SCALAR = 1,
     LEO2_BACKEND_SSSE3 = 2,
     LEO2_BACKEND_AVX2 = 3,
-    LEO2_BACKEND_NEON = 4
+    LEO2_BACKEND_NEON = 4,
+    /* Explicit experimental AVX-512F/BW/VL acceleration. */
+    LEO2_BACKEND_AVX512 = 5
 } leo2_backend;
 
 /*
@@ -136,10 +138,12 @@ typedef enum leo2_backend {
     A zero value uses the process's allowed CPU count where the platform exposes
     it, capped at 128; explicit nonzero values retain their requested budget.
     backend selects an immutable execution table for this context.  AUTO uses
-    the fastest startup-qualified runtime backend.  On production x86 builds,
-    SCALAR, SSSE3, and AVX2 may explicitly select any compiled, host-qualified
-    table at or below AUTO.  A lower table is allocated and known-answer-tested
-    on its first explicit context request.  Results are cached: unavailable
+    the production-default startup-qualified runtime backend.  On production
+    x86 builds, SCALAR, SSSE3, AVX2, and experimental AVX512 may explicitly
+    select any compiled, host-qualified table.  AUTO deliberately remains AVX2
+    while AVX512 whole-codec promotion evidence is collected.  A non-default
+    table is allocated and known-answer-tested on its first explicit context
+    request.  Results are cached: unavailable
     ISAs return LEO2_UNSUPPORTED, allocation failure returns
     LEO2_OUT_OF_MEMORY, and known-answer-test failure returns
     LEO2_INTERNAL_ERROR.

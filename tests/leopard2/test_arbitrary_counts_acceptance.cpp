@@ -521,6 +521,8 @@ void verify_expected_backend(const leo2_context* context)
         backend = LEO2_BACKEND_SSSE3;
     else if (std::strcmp(expected, "avx2") == 0)
         backend = LEO2_BACKEND_AVX2;
+    else if (std::strcmp(expected, "avx512") == 0)
+        backend = LEO2_BACKEND_AVX512;
     else
         throw std::runtime_error("invalid LEO2_EXPECT_BACKEND value");
     require(leo2_context_backend(context) == backend,

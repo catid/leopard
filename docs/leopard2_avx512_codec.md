@@ -1,13 +1,60 @@
 # Leopard2 AVX-512BW/VBMI codec experiment
 
-## Disposition
+## 2026-07 full-operation register-file follow-up
+
+The earlier full-codec candidate below changed only the fused radix-four
+range operation.  Assembly attribution subsequently found that the dominant
+GF16 high-rate encoder operations were instead the two-way and final
+accumulating butterflies: the portable AVX2 translation unit has 16 YMM
+registers and repeatedly spills fixed-multiplier table vectors, while exact
+Leopard main built with `-march=native` uses the AVX-512VL register file and
+keeps those vectors in registers.
+
+A distinct full-operation candidate now recompiles the reviewed AVX2 operation
+table in `Leopard2BackendAVX512.cpp` with AVX2 plus AVX-512F/BW/VL and
+`-mprefer-vector-width=256`.  It retains 256-bit loads, stores, and arithmetic;
+the additional ISA contract is used for registers YMM16 through YMM31.  Runtime
+qualification requires the corresponding CPUID bits and XCR0 state.  The
+candidate shares the immutable AVX2 GF8/GF16 nibble tables, so it does not add
+a second roughly 8 MiB GF16 table.  `AUTO` remains AVX2 and the candidate must
+be selected explicitly while promotion evidence is collected.
+
+The backend startup KAT, explicit-context concurrency tests, odd-byte GF16,
+R=1, direct-encode, pruned-transform, decode-schedule, failure-injection, and
+portable-ISA gates pass.  The archive audit treats the new object as a distinct
+ISA member, rejects EVEX in the AVX2 member, permits only reviewed 256-bit EVEX
+forms in the AVX-512VL member, and rejects ZMM and GFNI instructions.  Assembly
+inspection of the accumulating GF16 butterfly confirms that its vector loop
+uses the expanded register file without fixed-table stack spills.
+
+The following same-binary measurements are directional only: the machine was
+busy with independent sanitizer/fuzzer work, so they are not promotion
+evidence.  They compare explicit AVX-512VL with explicit AVX2 using identical
+Leopard2 code and data.
+
+| Cell | AVX2 encode | AVX-512VL encode | Time reduction |
+| --- | ---: | ---: | ---: |
+| K=1000 R=200, 64 KiB | 8407 us | 7486 us | 11.0% |
+| K=4096 R=512, 4 KiB | 2255 us | 1961 us | 13.0% |
+
+Exact-Leopard-main ABBA evidence on an isolated core remains the promotion
+gate.  Until it is recorded, this full-operation candidate is experimental and
+does not alter `AUTO`.
+
+Two alternative AVX2 table layouts were rejected during attribution.  Direct
+32-byte row loads duplicated the fixed table and caused 3.5% to 4.5%
+neighboring regressions.  A four-table packed-symbol design was 51% to 58%
+slower.  Neither variant remains in the production source.
+
+## Earlier narrow-candidate disposition
 
 The full-codec GF16 AVX-512VL/BW integration candidate is **rejected**.  It
 did not meet the experiment's promotion rule: a credible improvement of at
 least 5% in the target regime, no unexplained neighboring regression above
 2%, and closure of the corresponding exact-Leopard-main encode gap.  No
 AVX-512 backend, public backend selector, CMake source, or runtime-dispatch
-change from this follow-up is present in the production tree.
+change from that narrow follow-up was promoted.  The later full-operation
+candidate described above is a distinct implementation and decision.
 
 The candidate isolated a 256-bit AVX-512VL/BW GF16 radix-four kernel in its
 own ISA translation unit.  It used the expanded vector register file while

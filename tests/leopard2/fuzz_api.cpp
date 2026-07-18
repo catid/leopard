@@ -123,9 +123,30 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
         memset(&context_options, 0, sizeof(context_options));
         context_options.struct_size = sizeof(context_options);
         context_options.thread_count = 1;
+        const leo2_backend requested_backends[] = {
+            LEO2_BACKEND_AUTO,
+            LEO2_BACKEND_SCALAR,
+            LEO2_BACKEND_SSSE3,
+            LEO2_BACKEND_AVX2,
+            LEO2_BACKEND_AVX512
+        };
+        const leo2_backend requested_backend =
+            requested_backends[(data[4] >> 2) % 5u];
+        context_options.backend = requested_backend;
         leo2_context* context = NULL;
-        Check(leo2_context_create(&context_options, &context) == LEO2_SUCCESS);
+        leo2_result context_result = leo2_context_create(
+            &context_options, &context);
+        bool backend_fell_back = false;
+        if (context_result == LEO2_UNSUPPORTED)
+        {
+            backend_fell_back = true;
+            context_options.backend = LEO2_BACKEND_AUTO;
+            context_result = leo2_context_create(&context_options, &context);
+        }
+        Check(context_result == LEO2_SUCCESS);
         Check(context != NULL);
+        if (!backend_fell_back && requested_backend != LEO2_BACKEND_AUTO)
+            Check(leo2_context_backend(context) == requested_backend);
         const unsigned field_mask = leo2_context_field_mask(context);
         Check(field_mask != 0);
         const leo2_field field = (field_mask & LEO2_FIELD_MASK_GF8)

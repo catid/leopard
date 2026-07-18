@@ -2122,9 +2122,16 @@ class CMakeProductionGraph(object):
             if (command == "target_sources" and tokens and
                     tokens[0] == "leopard" and
                     not bool_satisfiable(guard)):
-                raise ContractError(
-                    "leopard TARGET_OBJECTS has no MSVC-reachable "
-                    "definition or attachment configuration")
+                # This backend is intentionally GNU/Clang-only: MSVC does not
+                # provide the same per-source AVX-512VL compile contract.  The
+                # exact unreachable attachment therefore does not belong in
+                # the hand-maintained Visual Studio project.
+                if tokens != [
+                        "leopard", "PRIVATE",
+                        "$<TARGET_OBJECTS:leopard2_backend_avx512>"]:
+                    raise ContractError(
+                        "leopard TARGET_OBJECTS has no MSVC-reachable "
+                        "definition or attachment configuration")
             if (command == "add_library" and tokens and
                     tokens[0] == "leopard" and conditional_depth):
                 raise ContractError(

@@ -114,7 +114,9 @@ static inline bool UseFusedButterfly4(
     // Larger working sets retain the two-layer schedule, which has lower
     // table/register pressure despite performing more backend calls.
     return bytes == 64 ||
-        (bytes == 128 && ops.kind == LEO2_BACKEND_AVX2);
+        (bytes == 128 &&
+         (ops.kind == LEO2_BACKEND_AVX2 ||
+          ops.kind == LEO2_BACKEND_AVX512));
 }
 
 
@@ -1230,7 +1232,9 @@ static void IFFT_DIT_Encoder_Impl(
     // low-profile interpolation remains source-staged.  Keep this deterministic
     // wire-independent crossover out of the byte loop.
     const bool stage_sources = m > 4 && !(
-        high_profile_transform && ops.kind == LEO2_BACKEND_AVX2 &&
+        high_profile_transform &&
+        (ops.kind == LEO2_BACKEND_AVX2 ||
+         ops.kind == LEO2_BACKEND_AVX512) &&
         m >= 256 && bytes > 16U * 1024U);
     if (stage_sources)
     {
@@ -1380,7 +1384,9 @@ static void IFFT_DIT_Encoder(
     // a correctness oracle and retains the materialize-then-XOR schedule,
     // which is faster for its table arithmetic.  Future native vector tables
     // require their own end-to-end qualification before opting in.
-    if (ops.kind == LEO2_BACKEND_SSSE3 || ops.kind == LEO2_BACKEND_AVX2)
+    if (ops.kind == LEO2_BACKEND_SSSE3 ||
+        ops.kind == LEO2_BACKEND_AVX2 ||
+        ops.kind == LEO2_BACKEND_AVX512)
     {
         IFFT_DIT_Encoder_Impl<true>(ops, bytes, data, m_truncated,
             work, xor_result, high_profile_transform, m, skewLUT);
@@ -1513,7 +1519,9 @@ static bool IFFT_DIT_DecoderAccumulate(
     const ffe_t* skewLUT)
 {
     LEO_DEBUG_ASSERT(xor_result != NULL);
-    if (ops.kind == LEO2_BACKEND_SSSE3 || ops.kind == LEO2_BACKEND_AVX2)
+    if (ops.kind == LEO2_BACKEND_SSSE3 ||
+        ops.kind == LEO2_BACKEND_AVX2 ||
+        ops.kind == LEO2_BACKEND_AVX512)
     {
         return IFFT_DIT_DecoderImpl<true>(
             ops, bytes, m_truncated, work, m, skewLUT, xor_result);
@@ -3926,7 +3934,9 @@ static bool ShouldUsePrunedHighSyndromeSink(
     // crossover.  SSSE3 was faster, but its 64-KiB target cell improved only
     // 4.86%, below the project's default 5% complexity threshold, so it keeps
     // the mature materialized schedule.
-    return ops.kind == LEO2_BACKEND_AVX2 && buffer_bytes >= 1024;
+    return (ops.kind == LEO2_BACKEND_AVX2 ||
+            ops.kind == LEO2_BACKEND_AVX512) &&
+        buffer_bytes >= 1024;
 }
 
 

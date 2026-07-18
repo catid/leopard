@@ -28,10 +28,16 @@ void test_feature_classifier()
         "leaf-zero SSSE3 classification");
     require(!ClassifyX86Features(0, ~0U, ~0U, ~0ULL).avx2,
         "leaf-zero AVX2 classification");
+    require(!ClassifyX86Features(0, ~0U, ~0U, ~0ULL).avx512,
+        "leaf-zero AVX-512 classification");
 
     const uint32_t ssse3 = 0x00000200U;
     const uint32_t osxsave_avx = 0x18000000U;
     const uint32_t avx2 = 0x00000020U;
+    const uint32_t avx512f = 0x00010000U;
+    const uint32_t avx512bw = 0x40000000U;
+    const uint32_t avx512vl = 0x80000000U;
+    const uint32_t avx512 = avx512f | avx512bw | avx512vl;
     require(ClassifyX86Features(1, ssse3, 0, 0).ssse3,
         "SSSE3 classification");
     require(!ClassifyX86Features(7, ssse3, avx2, 6).avx2,
@@ -44,6 +50,28 @@ void test_feature_classifier()
         7, ssse3 | osxsave_avx, avx2, 6);
     require(complete.ssse3 && complete.avx2,
         "complete AVX2 classification");
+    require(!complete.avx512, "AVX2 misclassified as AVX-512");
+    require(!ClassifyX86Features(
+            7, ssse3 | osxsave_avx, avx2 | avx512, 6).avx512,
+        "AVX-512 without opmask/ZMM state");
+    require(!ClassifyX86Features(
+            7, ssse3 | osxsave_avx, avx2 | avx512bw | avx512vl,
+            0xe6).avx512,
+        "AVX-512 without AVX512F");
+    require(!ClassifyX86Features(
+            7, ssse3 | osxsave_avx, avx2 | avx512f | avx512vl,
+            0xe6).avx512,
+        "AVX-512 without AVX512BW");
+    require(!ClassifyX86Features(
+            7, ssse3 | osxsave_avx, avx2 | avx512f | avx512bw,
+            0xe6).avx512,
+        "AVX-512 without AVX512VL");
+    const leopard::backend::X86Features complete_avx512 =
+        ClassifyX86Features(
+            7, ssse3 | osxsave_avx, avx2 | avx512, 0xe6);
+    require(complete_avx512.ssse3 && complete_avx512.avx2 &&
+            complete_avx512.avx512,
+        "complete AVX-512 classification");
 }
 
 void run_kernel_check(unsigned seed)
@@ -282,6 +310,9 @@ void verify_expected_backend(leo2_backend backend)
         require(backend == LEO2_BACKEND_SSSE3, "forced SSSE3 selection");
     else if (std::strcmp(expected, "avx2") == 0)
         require(backend == LEO2_BACKEND_AVX2, "forced AVX2 selection");
+    else if (std::strcmp(expected, "avx512") == 0)
+        require(backend == LEO2_BACKEND_AVX512,
+            "forced AVX-512 selection");
     else
         throw std::runtime_error("invalid expected backend");
 }
@@ -302,7 +333,8 @@ int main()
         require(ops.kind != LEO2_BACKEND_AUTO && ops.name,
             "backend selection missing");
 #ifdef LEO_HAS_FF8
-        require((ops.kind == LEO2_BACKEND_AVX2) ==
+        require((ops.kind == LEO2_BACKEND_AVX2 ||
+                 ops.kind == LEO2_BACKEND_AVX512) ==
                     (ops.ff8_weighted_ifft_butterfly4 != NULL),
             "weighted locator capability escaped the AVX2 GF8 backend");
         const leopard::backend::Ops* scalar_ops =
@@ -319,6 +351,11 @@ int main()
         if (avx2_ops)
             require(avx2_ops->ff8_weighted_ifft_butterfly4 != NULL,
                 "AVX2 backend omitted its qualified weighted boundary");
+        const leopard::backend::Ops* avx512_ops =
+            leopard::backend::GetQualifiedOps(LEO2_BACKEND_AVX512);
+        if (avx512_ops)
+            require(avx512_ops->ff8_weighted_ifft_butterfly4 != NULL,
+                "AVX-512 backend omitted its qualified weighted boundary");
 #else
         require(!ops.ff8_weighted_ifft_butterfly4,
             "FF8-disabled build exposed a weighted boundary");

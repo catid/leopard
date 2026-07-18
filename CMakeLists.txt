@@ -262,6 +262,7 @@ target_link_libraries(leopard PUBLIC Threads::Threads)
 # runtime feature checks select one immutable ops table after startup KATs.
 set(LEO2_HAVE_SSSE3_BACKEND OFF)
 set(LEO2_HAVE_AVX2_BACKEND OFF)
+set(LEO2_HAVE_AVX512_BACKEND OFF)
 if(LEO2_X86_TARGET)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
        CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
@@ -294,6 +295,33 @@ if(LEO2_X86_TARGET)
                     -falign-functions=64)
             endif()
             set(LEO2_HAVE_AVX2_BACKEND ON)
+        endif()
+
+        check_cxx_compiler_flag("-mavx512f" LEO2_FLAG_MAVX512F)
+        check_cxx_compiler_flag("-mavx512bw" LEO2_FLAG_MAVX512BW)
+        check_cxx_compiler_flag("-mavx512vl" LEO2_FLAG_MAVX512VL)
+        check_cxx_compiler_flag("-mprefer-vector-width=256"
+            LEO2_FLAG_MPREFER_VECTOR_WIDTH_256)
+        if(LEO2_HAVE_AVX2_BACKEND AND LEO2_FLAG_MAVX512F AND
+           LEO2_FLAG_MAVX512BW AND LEO2_FLAG_MAVX512VL AND
+           LEO2_FLAG_MPREFER_VECTOR_WIDTH_256)
+            # Compile the reviewed AVX2 algorithms a second time with the
+            # AVX-512VL register file.  The data path remains 256 bits wide;
+            # F/BW/VL are required so the compiler may address ymm16..ymm31.
+            add_library(leopard2_backend_avx512 OBJECT
+                Leopard2BackendAVX512.cpp)
+            target_include_directories(leopard2_backend_avx512 PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR})
+            target_compile_definitions(leopard2_backend_avx512 PRIVATE
+                LEO2_HAVE_AVX2_BACKEND=1)
+            target_compile_options(leopard2_backend_avx512 PRIVATE
+                -mavx2 -mavx512f -mavx512bw -mavx512vl
+                -mprefer-vector-width=256)
+            if(LEO2_FLAG_FALIGN_FUNCTIONS_64)
+                target_compile_options(leopard2_backend_avx512 PRIVATE
+                    -falign-functions=64)
+            endif()
+            set(LEO2_HAVE_AVX512_BACKEND ON)
         endif()
     elseif(MSVC)
         # x64 MSVC accepts SSSE3 intrinsics without raising other translation
@@ -340,6 +368,19 @@ if(LEO2_HAVE_AVX2_BACKEND)
     target_sources(leopard PRIVATE
         $<TARGET_OBJECTS:leopard2_backend_avx2>)
     target_compile_definitions(leopard PRIVATE LEO2_HAVE_AVX2_BACKEND=1)
+endif()
+if(LEO2_HAVE_AVX512_BACKEND)
+    if(NOT LEOPARD_ENABLE_GF8)
+        target_compile_definitions(leopard2_backend_avx512 PRIVATE
+            NO_LEO_HAS_FF8=1)
+    endif()
+    if(NOT LEOPARD_ENABLE_GF16)
+        target_compile_definitions(leopard2_backend_avx512 PRIVATE
+            NO_LEO_HAS_FF16=1)
+    endif()
+    target_sources(leopard PRIVATE
+        $<TARGET_OBJECTS:leopard2_backend_avx512>)
+    target_compile_definitions(leopard PRIVATE LEO2_HAVE_AVX512_BACKEND=1)
 endif()
 if(ENABLE_OPENMP)
     if(TARGET OpenMP::OpenMP_CXX)
@@ -500,6 +541,13 @@ if(LEO2_BUILD_BENCHMARKS)
             VERBATIM)
     endif()
 
+    if(LEOPARD_ENABLE_GF16)
+        add_executable(bench_leopard2_gf16_high_attribution
+            experiments/leopard2/gf16_high_encode/attribution.cpp)
+        target_link_libraries(
+            bench_leopard2_gf16_high_attribution leopard)
+    endif()
+
     add_executable(experiment_leopard ${EXPERIMENT_SOURCE_FILES})
 endif()
 
@@ -604,6 +652,34 @@ if(LEO2_BUILD_TESTS)
             $<TARGET_OBJECTS:leopard2_backend_avx2_test_hooks>)
         target_compile_definitions(leopard_test_hooks PRIVATE
             LEO2_HAVE_AVX2_BACKEND=1)
+    endif()
+    if(LEO2_HAVE_AVX512_BACKEND)
+        add_library(leopard2_backend_avx512_test_hooks OBJECT EXCLUDE_FROM_ALL
+            Leopard2BackendAVX512.cpp)
+        target_include_directories(leopard2_backend_avx512_test_hooks PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR})
+        target_compile_definitions(leopard2_backend_avx512_test_hooks PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1
+            LEO2_HAVE_AVX2_BACKEND=1)
+        if(NOT LEOPARD_ENABLE_GF8)
+            target_compile_definitions(leopard2_backend_avx512_test_hooks
+                PRIVATE NO_LEO_HAS_FF8=1)
+        endif()
+        if(NOT LEOPARD_ENABLE_GF16)
+            target_compile_definitions(leopard2_backend_avx512_test_hooks
+                PRIVATE NO_LEO_HAS_FF16=1)
+        endif()
+        target_compile_options(leopard2_backend_avx512_test_hooks PRIVATE
+            -mavx2 -mavx512f -mavx512bw -mavx512vl
+            -mprefer-vector-width=256)
+        if(LEO2_FLAG_FALIGN_FUNCTIONS_64)
+            target_compile_options(leopard2_backend_avx512_test_hooks PRIVATE
+                -falign-functions=64)
+        endif()
+        target_sources(leopard_test_hooks PRIVATE
+            $<TARGET_OBJECTS:leopard2_backend_avx512_test_hooks>)
+        target_compile_definitions(leopard_test_hooks PRIVATE
+            LEO2_HAVE_AVX512_BACKEND=1)
     endif()
     if(ENABLE_OPENMP)
         if(TARGET OpenMP::OpenMP_CXX)
@@ -777,6 +853,9 @@ if(LEO2_BUILD_TESTS)
             if(LEO2_HAVE_AVX2_BACKEND)
                 list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES avx2)
             endif()
+            if(LEO2_HAVE_AVX512_BACKEND)
+                list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES avx512)
+            endif()
             string(REPLACE ";" "," LEO2_PORTABLE_ISA_EXPECTED_CLASSES_ARG
                 "${LEO2_PORTABLE_ISA_EXPECTED_CLASSES}")
             set(LEO2_PORTABLE_ISA_METADATA_ARGS)
@@ -878,6 +957,14 @@ if(LEO2_BUILD_TESTS)
         COMMAND leopard2_backend_failures_test avx2 ff16-allocation)
     add_test(NAME leopard2_backend_failure_avx2_kat
         COMMAND leopard2_backend_failures_test avx2 kat)
+    if(LEO2_HAVE_AVX512_BACKEND)
+        add_test(NAME leopard2_backend_failure_avx512_ff8_allocation
+            COMMAND leopard2_backend_failures_test avx512 ff8-allocation)
+        add_test(NAME leopard2_backend_failure_avx512_ff16_allocation
+            COMMAND leopard2_backend_failures_test avx512 ff16-allocation)
+        add_test(NAME leopard2_backend_failure_avx512_kat
+            COMMAND leopard2_backend_failures_test avx512 kat)
+    endif()
     set_tests_properties(
         leopard2_backend_failure_scalar_ff8_allocation
         leopard2_backend_failure_scalar_ff16_allocation
@@ -889,6 +976,13 @@ if(LEO2_BUILD_TESTS)
         leopard2_backend_failure_avx2_ff16_allocation
         leopard2_backend_failure_avx2_kat
         PROPERTIES ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
+    if(LEO2_HAVE_AVX512_BACKEND)
+        set_tests_properties(
+            leopard2_backend_failure_avx512_ff8_allocation
+            leopard2_backend_failure_avx512_ff16_allocation
+            leopard2_backend_failure_avx512_kat
+            PROPERTIES ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
+    endif()
 
     add_executable(leopard2_context_backends_test
         tests/leopard2/test_context_backends.cpp)
@@ -1538,6 +1632,35 @@ if(LEO2_BUILD_FUZZERS)
             LEO2_HAVE_AVX2_BACKEND=1)
         target_compile_definitions(leopard2_pruned_plan_fuzzer PRIVATE
             LEO2_HAVE_AVX2_BACKEND=1)
+    endif()
+    if(LEO2_HAVE_AVX512_BACKEND)
+        add_library(leopard2_backend_avx512_fuzz OBJECT
+            Leopard2BackendAVX512.cpp)
+        target_include_directories(leopard2_backend_avx512_fuzz PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR})
+        target_compile_definitions(leopard2_backend_avx512_fuzz PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1
+            LEO2_HAVE_AVX2_BACKEND=1)
+        if(NOT LEOPARD_ENABLE_GF8)
+            target_compile_definitions(leopard2_backend_avx512_fuzz PRIVATE
+                NO_LEO_HAS_FF8=1)
+        endif()
+        if(NOT LEOPARD_ENABLE_GF16)
+            target_compile_definitions(leopard2_backend_avx512_fuzz PRIVATE
+                NO_LEO_HAS_FF16=1)
+        endif()
+        target_compile_options(leopard2_backend_avx512_fuzz PRIVATE
+            ${LEO2_FUZZ_SANITIZER_FLAGS}
+            -mavx2 -mavx512f -mavx512bw -mavx512vl
+            -mprefer-vector-width=256)
+        target_sources(leopard2_api_fuzzer PRIVATE
+            $<TARGET_OBJECTS:leopard2_backend_avx512_fuzz>)
+        target_sources(leopard2_pruned_plan_fuzzer PRIVATE
+            $<TARGET_OBJECTS:leopard2_backend_avx512_fuzz>)
+        target_compile_definitions(leopard2_api_fuzzer PRIVATE
+            LEO2_HAVE_AVX512_BACKEND=1)
+        target_compile_definitions(leopard2_pruned_plan_fuzzer PRIVATE
+            LEO2_HAVE_AVX512_BACKEND=1)
     endif()
     set_property(TARGET leopard2_api_fuzzer APPEND_STRING PROPERTY
         LINK_FLAGS " -fsanitize=fuzzer,address,undefined")

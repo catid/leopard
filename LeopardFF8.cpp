@@ -1596,7 +1596,8 @@ static void IFFT_DIT_DecoderWeightedLocator(
     // scalar/SSSE3, small redundancy sides, sparse receive sets, and very
     // small/large shard passes on the established scale-then-IFFT path.
     const bool statically_qualified =
-        ops.kind == LEO2_BACKEND_AVX2 &&
+        (ops.kind == LEO2_BACKEND_AVX2 ||
+         ops.kind == LEO2_BACKEND_AVX512) &&
         ops.ff8_weighted_ifft_butterfly4 != NULL &&
         m >= 64 &&
         bytes >= 16U * 1024U && bytes <= 256U * 1024U;
@@ -1693,7 +1694,8 @@ static void StageHighDecodeSources(
 
 
 // Complete live GF8 receive groups enter the first two inverse layers without
-// a staging pass only on the isolated and qualified SSSE3/AVX2 backends.
+// a staging pass only on the isolated and qualified SSSE3/AVX2-family
+// backends.
 // Pruned blocks are staged separately so their exact sink schedule remains
 // authoritative; scalar, NEON, and other unmeasured backends copy first.
 static void IFFT_DIT_DecoderFromSources(
@@ -1709,7 +1711,9 @@ static void IFFT_DIT_DecoderFromSources(
     LEO_DEBUG_ASSERT(m_truncated <= m);
     LEO_DEBUG_ASSERT(m <= 4 || (m & 3U) == 0);
     const bool qualified_source_backend =
-        ops.kind == LEO2_BACKEND_SSSE3 || ops.kind == LEO2_BACKEND_AVX2;
+        ops.kind == LEO2_BACKEND_SSSE3 ||
+        ops.kind == LEO2_BACKEND_AVX2 ||
+        ops.kind == LEO2_BACKEND_AVX512;
     if (m <= 4 || !qualified_source_backend)
     {
         StageHighDecodeSources(bytes, sources, work, m);
@@ -3965,7 +3969,8 @@ static bool ShouldUsePrunedHighSyndromeSink(
     // crossover sweeps found AVX2 neutral-to-faster from 1 KiB, while GF8
     // SSSE3 did not become a credible win until 64 KiB.  Keep smaller shards
     // on the materialize-then-XOR oracle instead of paying that fixed cost.
-    if (ops.kind == LEO2_BACKEND_AVX2)
+    if (ops.kind == LEO2_BACKEND_AVX2 ||
+        ops.kind == LEO2_BACKEND_AVX512)
         return buffer_bytes >= 1024;
     if (ops.kind == LEO2_BACKEND_SSSE3)
         return buffer_bytes >= 65536;

@@ -10,8 +10,11 @@ graph.  Native Visual Studio 2015 load/build validation is still outstanding.
 
 The default CMake build is portable for the target platform; it does not add
 `-march=native`.  On x86-64, baseline code stays at the platform's SSE2 floor,
-while SSSE3 and AVX2 kernels are compiled in separate translation units and
-selected only after runtime CPU and operating-system checks.  A normal
+while SSSE3, AVX2, and the experimental AVX-512VL kernels are compiled in
+separate translation units and selected only after runtime CPU and
+operating-system checks.  `AUTO` remains on the established AVX2 path when it
+is available; AVX-512VL requires explicit selection until its complete-codec
+promotion evidence is final.  A normal
 distributable build therefore needs no host-CPU option:
 
 ```sh

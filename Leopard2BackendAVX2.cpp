@@ -12,13 +12,25 @@
 
 namespace leopard { namespace backend {
 
+#if defined(LEO2_AVX512_VARIANT)
+# define LEO2_AVX_BACKEND_KIND LEO2_BACKEND_AVX512
+# define LEO2_AVX_BACKEND_NAME "avx512vl"
+# define LEO2_AVX_INITIALIZER InitializeAVX512
+# define LEO2_AVX_TABLE_STATE TestGetAVX512TableState
+#else
+# define LEO2_AVX_BACKEND_KIND LEO2_BACKEND_AVX2
+# define LEO2_AVX_BACKEND_NAME "avx2"
+# define LEO2_AVX_INITIALIZER InitializeAVX2
+# define LEO2_AVX_TABLE_STATE TestGetAVX2TableState
+#endif
+
 #ifdef LEO_HAS_FF8
 struct FF8NibbleTable
 {
     uint8_t low[16];
     uint8_t high[16];
 };
-static FF8NibbleTable* FF8Tables = NULL;
+static const FF8NibbleTable* FF8Tables = NULL;
 #endif
 
 #ifdef LEO_HAS_FF16
@@ -27,7 +39,7 @@ struct FF16NibbleTable
     uint8_t low[4][16];
     uint8_t high[4][16];
 };
-static FF16NibbleTable* FF16Tables = NULL;
+static const FF16NibbleTable* FF16Tables = NULL;
 #endif
 
 #ifdef LEO_HAS_FF8
@@ -1993,8 +2005,8 @@ static void AVX2FF16FFTButterfly4Range(
 #endif // LEO_HAS_FF16
 
 static const Ops AVX2Ops = {
-    LEO2_BACKEND_AVX2,
-    "avx2",
+    LEO2_AVX_BACKEND_KIND,
+    LEO2_AVX_BACKEND_NAME,
 #ifdef LEO_HAS_FF8
     AVX2FF8Multiply,
     AVX2FF8MultiplyAdd,
@@ -2064,7 +2076,7 @@ static const Ops AVX2Ops = {
 #endif
 };
 
-const Ops* InitializeAVX2(const InitializeArgs& args)
+const Ops* LEO2_AVX_INITIALIZER(const InitializeArgs& args)
 {
 #ifdef LEO_HAS_FF8
     if (!args.ff8_multiply_log)
@@ -2074,6 +2086,32 @@ const Ops* InitializeAVX2(const InitializeArgs& args)
     if (!args.ff16_multiply_log)
         return NULL;
 #endif
+#if defined(LEO2_AVX512_VARIANT)
+# ifdef LEO2_ENABLE_TEST_HOOKS
+#  ifdef LEO_HAS_FF8
+    if (TestShouldFailAllocation(LEO2_AVX_BACKEND_KIND, false))
+        return NULL;
+#  endif
+#  ifdef LEO_HAS_FF16
+    if (TestShouldFailAllocation(LEO2_AVX_BACKEND_KIND, true))
+        return NULL;
+#  endif
+# endif
+    const Ops* const base = InitializeAVX2(args);
+    if (!base)
+        return NULL;
+# ifdef LEO_HAS_FF8
+    FF8Tables = static_cast<const FF8NibbleTable*>(GetAVX2FF8Tables());
+    if (!FF8Tables)
+        return NULL;
+# endif
+# ifdef LEO_HAS_FF16
+    FF16Tables = static_cast<const FF16NibbleTable*>(GetAVX2FF16Tables());
+    if (!FF16Tables)
+        return NULL;
+# endif
+    return &AVX2Ops;
+#else
 #if defined(LEO_HAS_FF8) && defined(LEO_HAS_FF16)
     if (FF8Tables || FF16Tables)
         return FF8Tables && FF16Tables ? &AVX2Ops : NULL;
@@ -2086,7 +2124,7 @@ const Ops* InitializeAVX2(const InitializeArgs& args)
 #endif
 #ifdef LEO_HAS_FF8
 #ifdef LEO2_ENABLE_TEST_HOOKS
-    if (TestShouldFailAllocation(LEO2_BACKEND_AVX2, false))
+    if (TestShouldFailAllocation(LEO2_AVX_BACKEND_KIND, false))
         return NULL;
 #endif
     std::unique_ptr<FF8NibbleTable[]> ff8(
@@ -2096,7 +2134,7 @@ const Ops* InitializeAVX2(const InitializeArgs& args)
 #endif
 #ifdef LEO_HAS_FF16
 #ifdef LEO2_ENABLE_TEST_HOOKS
-    if (TestShouldFailAllocation(LEO2_BACKEND_AVX2, true))
+    if (TestShouldFailAllocation(LEO2_AVX_BACKEND_KIND, true))
         return NULL;
 #endif
     std::unique_ptr<FF16NibbleTable[]> ff16(
@@ -2143,10 +2181,31 @@ const Ops* InitializeAVX2(const InitializeArgs& args)
     FF16Tables = ff16.release();
 #endif
     return &AVX2Ops;
+#endif
 }
 
+#if !defined(LEO2_AVX512_VARIANT)
+const void* GetAVX2FF8Tables()
+{
+#ifdef LEO_HAS_FF8
+    return FF8Tables;
+#else
+    return NULL;
+#endif
+}
+
+const void* GetAVX2FF16Tables()
+{
+#ifdef LEO_HAS_FF16
+    return FF16Tables;
+#else
+    return NULL;
+#endif
+}
+#endif
+
 #ifdef LEO2_ENABLE_TEST_HOOKS
-void TestGetAVX2TableState(TestBackendState* state)
+void LEO2_AVX_TABLE_STATE(TestBackendState* state)
 {
 #ifdef LEO_HAS_FF8
     state->ff8_published = FF8Tables != NULL;
@@ -2164,5 +2223,10 @@ void TestGetAVX2TableState(TestBackendState* state)
 #endif
 }
 #endif
+
+#undef LEO2_AVX_TABLE_STATE
+#undef LEO2_AVX_INITIALIZER
+#undef LEO2_AVX_BACKEND_NAME
+#undef LEO2_AVX_BACKEND_KIND
 
 }} // namespace leopard::backend

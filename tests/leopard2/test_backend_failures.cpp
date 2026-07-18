@@ -34,6 +34,8 @@ leo2_backend parse_backend(const char* name)
         return LEO2_BACKEND_SSSE3;
     if (std::strcmp(name, "avx2") == 0)
         return LEO2_BACKEND_AVX2;
+    if (std::strcmp(name, "avx512") == 0)
+        return LEO2_BACKEND_AVX512;
     throw std::runtime_error("unknown backend argument");
 }
 
@@ -48,7 +50,9 @@ leopard::backend::TestSetupFault fault_for(
             return TestSetupFaultScalarFF8Allocation;
         if (backend == LEO2_BACKEND_SSSE3)
             return TestSetupFaultSSSE3FF8Allocation;
-        return TestSetupFaultAVX2FF8Allocation;
+        if (backend == LEO2_BACKEND_AVX2)
+            return TestSetupFaultAVX2FF8Allocation;
+        return TestSetupFaultAVX512FF8Allocation;
     }
     if (std::strcmp(stage, "ff16-allocation") == 0)
     {
@@ -56,7 +60,9 @@ leopard::backend::TestSetupFault fault_for(
             return TestSetupFaultScalarFF16Allocation;
         if (backend == LEO2_BACKEND_SSSE3)
             return TestSetupFaultSSSE3FF16Allocation;
-        return TestSetupFaultAVX2FF16Allocation;
+        if (backend == LEO2_BACKEND_AVX2)
+            return TestSetupFaultAVX2FF16Allocation;
+        return TestSetupFaultAVX512FF16Allocation;
     }
     if (std::strcmp(stage, "kat") == 0)
     {
@@ -64,7 +70,9 @@ leopard::backend::TestSetupFault fault_for(
             return TestSetupFaultScalarKAT;
         if (backend == LEO2_BACKEND_SSSE3)
             return TestSetupFaultSSSE3KAT;
-        return TestSetupFaultAVX2KAT;
+        if (backend == LEO2_BACKEND_AVX2)
+            return TestSetupFaultAVX2KAT;
+        return TestSetupFaultAVX512KAT;
     }
     throw std::runtime_error("unknown failure-stage argument");
 }
@@ -79,6 +87,8 @@ bool runtime_can_select(leo2_backend backend, leo2_backend default_backend)
         return features.ssse3 && default_backend >= LEO2_BACKEND_SSSE3;
     if (backend == LEO2_BACKEND_AVX2)
         return features.avx2 && default_backend >= LEO2_BACKEND_AVX2;
+    if (backend == LEO2_BACKEND_AVX512)
+        return features.avx512;
     return false;
 }
 

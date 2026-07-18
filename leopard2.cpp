@@ -808,6 +808,7 @@ static bool PrepareCodecPrunedTransform(
     // materialized schedule those backends continue to execute.
     const leo2_backend backend = codec->context->ops->kind;
     const bool sink_backend = backend == LEO2_BACKEND_AVX2 ||
+        backend == LEO2_BACKEND_AVX512 ||
         (codec->field == LEO2_FIELD_GF8 &&
          backend == LEO2_BACKEND_SSSE3);
     if (inverse && !sink_backend)
@@ -1147,7 +1148,9 @@ static bool CanAutoDirectEncodeCodec(const leo2_codec* codec)
     const leo2_backend backend = codec->context->backend;
     if (backend == LEO2_BACKEND_SCALAR)
         return codec->original_count >= 3;
-    return backend == LEO2_BACKEND_SSSE3 || backend == LEO2_BACKEND_AVX2;
+    return backend == LEO2_BACKEND_SSSE3 ||
+        backend == LEO2_BACKEND_AVX2 ||
+        backend == LEO2_BACKEND_AVX512;
 }
 
 static bool ShouldPrepareDirectEncode(const leo2_codec* codec)
@@ -1843,7 +1846,8 @@ static bool UseFusedGenericRevealScatter(
     return codec->field == LEO2_FIELD_GF8 &&
         aligned_prefix_bytes >= 4096 &&
         (codec->context->backend == LEO2_BACKEND_SSSE3 ||
-         codec->context->backend == LEO2_BACKEND_AVX2);
+         codec->context->backend == LEO2_BACKEND_AVX2 ||
+         codec->context->backend == LEO2_BACKEND_AVX512);
 #else
     (void)codec;
     (void)aligned_prefix_bytes;
@@ -4172,7 +4176,7 @@ LEO2_EXPORT leo2_result leo2_context_create(
         return LEO2_INVALID_ARGUMENT;
     const uint32_t requested_raw = options
         ? options->backend : static_cast<uint32_t>(LEO2_BACKEND_AUTO);
-    if (requested_raw > static_cast<uint32_t>(LEO2_BACKEND_NEON))
+    if (requested_raw > static_cast<uint32_t>(LEO2_BACKEND_AVX512))
         return LEO2_INVALID_ARGUMENT;
     uint32_t threads = options ? options->thread_count : 0;
     if (threads > 128)

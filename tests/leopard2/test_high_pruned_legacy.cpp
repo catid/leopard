@@ -154,7 +154,9 @@ void verify_gf8_one_loss_receive_stage(
         "one-loss restored original mismatch");
 
     const leo2_backend selected = leo2_context_backend(context);
-    if (selected == LEO2_BACKEND_SSSE3 || selected == LEO2_BACKEND_AVX2)
+    if (selected == LEO2_BACKEND_SSSE3 ||
+        selected == LEO2_BACKEND_AVX2 ||
+        selected == LEO2_BACKEND_AVX512)
     {
         require(counts.receive_ifft_butterfly4_out_of_place == 56,
             "qualified GF8 one-loss fused-group count drifted");

@@ -763,10 +763,12 @@ void require_four_way_callsites(
         const size_t prefix_bytes = public_bytes & ~size_t(63U);
         const bool transform_fused = transform_bytes == 64U ||
             (transform_bytes == 128U &&
-             execution_backend == LEO2_BACKEND_AVX2);
+             (execution_backend == LEO2_BACKEND_AVX2 ||
+              execution_backend == LEO2_BACKEND_AVX512));
         const bool prefix_fused = prefix_bytes == 64U ||
             (prefix_bytes == 128U &&
-             execution_backend == LEO2_BACKEND_AVX2);
+             (execution_backend == LEO2_BACKEND_AVX2 ||
+              execution_backend == LEO2_BACKEND_AVX512));
         const bool has_split_tail = split_ragged_execution &&
             (public_bytes & 63U) != 0;
         const bool mixed_split = has_split_tail && prefix_bytes != 0 &&
@@ -841,7 +843,8 @@ void require_low_encode_no_copy(
         const bool has_tail = (public_bytes & 63U) != 0;
         const bool prefix_fused = prefix_bytes == 64U ||
             (prefix_bytes == 128U &&
-             execution_backend == LEO2_BACKEND_AVX2);
+             (execution_backend == LEO2_BACKEND_AVX2 ||
+              execution_backend == LEO2_BACKEND_AVX512));
         // A ragged tail is a separate padded 64-byte transform and therefore
         // always uses the qualified fused first layer.  The aligned prefix
         // retains its own size/backend policy.
@@ -1381,20 +1384,16 @@ void test_weighted_locator_boundary_dispatch(
         "lower-backend fallback"
     };
 
-    bool tested_avx2 = false;
     for (size_t context_i = 0; context_i < contexts.size(); ++context_i)
     {
         const leo2_backend kind =
             leo2_context_backend(contexts[context_i].context);
-        if (kind == LEO2_BACKEND_AVX2)
+        if (kind == LEO2_BACKEND_AVX2 || kind == LEO2_BACKEND_AVX512)
         {
-            if (tested_avx2)
-                continue;
             for (size_t i = 0;
                  i < sizeof(avx2_cases) / sizeof(avx2_cases[0]); ++i)
                 execute_weighted_boundary_case(contexts[context_i],
                     avx2_cases[i]);
-            tested_avx2 = true;
         }
         else if (kind == LEO2_BACKEND_SCALAR ||
                  kind == LEO2_BACKEND_SSSE3)
@@ -1405,12 +1404,13 @@ void test_weighted_locator_boundary_dispatch(
 
 void test_concurrent_first_use()
 {
-    static const unsigned request_count = 3;
+    static const unsigned request_count = 4;
     static const unsigned lanes_per_request = 8;
     const leo2_backend requests[request_count] = {
         LEO2_BACKEND_SCALAR,
         LEO2_BACKEND_SSSE3,
-        LEO2_BACKEND_AVX2
+        LEO2_BACKEND_AVX2,
+        LEO2_BACKEND_AVX512
     };
     leo2_result results[request_count][lanes_per_request];
     for (unsigned request_i = 0; request_i < request_count; ++request_i)
@@ -1498,7 +1498,8 @@ std::vector<ContextEntry> create_contexts()
         LEO2_BACKEND_SCALAR,
         LEO2_BACKEND_SSSE3,
         LEO2_BACKEND_AVX2,
-        LEO2_BACKEND_NEON
+        LEO2_BACKEND_NEON,
+        LEO2_BACKEND_AVX512
     };
     for (size_t i = 0; i < sizeof(requests) / sizeof(requests[0]); ++i)
     {
@@ -1538,7 +1539,7 @@ std::vector<ContextEntry> create_contexts()
     leo2_context_options invalid;
     std::memset(&invalid, 0, sizeof(invalid));
     invalid.struct_size = sizeof(invalid);
-    invalid.backend = static_cast<uint32_t>(LEO2_BACKEND_NEON) + 1U;
+    invalid.backend = static_cast<uint32_t>(LEO2_BACKEND_AVX512) + 1U;
     leo2_context* rejected = reinterpret_cast<leo2_context*>(
         static_cast<uintptr_t>(1));
     require_result(leo2_context_create(&invalid, &rejected),
@@ -1554,7 +1555,7 @@ void test_process_default_immutable(
     require(&leopard::backend::GetOps() == process_default,
         "legacy accessor differs from process default");
     for (unsigned raw = static_cast<unsigned>(LEO2_BACKEND_SCALAR);
-         raw <= static_cast<unsigned>(LEO2_BACKEND_AVX2); ++raw)
+         raw <= static_cast<unsigned>(LEO2_BACKEND_AVX512); ++raw)
     {
         (void)leopard::backend::GetQualifiedOps(
             static_cast<leo2_backend>(raw));
@@ -1767,7 +1768,8 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                 const leo2_backend execution_backend =
                     leo2_context_backend(contexts[context_i].context);
                 const bool expect_pruned_accumulation =
-                    (execution_backend == LEO2_BACKEND_AVX2 &&
+                    ((execution_backend == LEO2_BACKEND_AVX2 ||
+                      execution_backend == LEO2_BACKEND_AVX512) &&
                      test_case.bytes >= 1024) ||
                     (execution_backend == LEO2_BACKEND_SSSE3 &&
                      test_case.field == LEO2_FIELD_GF8 &&
@@ -1785,7 +1787,8 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                     test_case.field == LEO2_FIELD_GF8 &&
                         side > 4 && test_case.r == side &&
                         (execution_backend == LEO2_BACKEND_SSSE3 ||
-                         execution_backend == LEO2_BACKEND_AVX2),
+                         execution_backend == LEO2_BACKEND_AVX2 ||
+                         execution_backend == LEO2_BACKEND_AVX512),
                     false,
                     expect_gf16_accumulation,
                     expect_gf16_materialization,

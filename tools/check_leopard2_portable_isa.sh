@@ -80,6 +80,11 @@ forbidden_mnemonics='^(addsubp[ds]|haddp[ds]|hsubp[ds]|lddqu|movddup|movshdup|mo
 # exemption would silently admit instructions whose CPUID bits are not probed.
 allowed_avx2_vex_mnemonics='^(vbroadcastf128|vbroadcasti128|vinserti128|vmovd|vmovdqa|vmovdqu|vmovq|vmovups|vpand|vpbroadcastb|vpbroadcastq|vpinsrb|vpshufb|vpsrlq|vpunpckldq|vpunpcklqdq|vpunpcklwd|vpxor|vxorps|vzeroupper)$'
 
+# The AVX-512 candidate is separately gated on F/BW/VL and complete OS ZMM
+# state.  It deliberately retains 256-bit data width and uses EVEX only to
+# access the expanded vector register file.  Keep the allowlist exact.
+allowed_avx512vl_mnemonics='^(vbroadcasti32x4|vmovdqa32|vmovdqa64|vmovdqu8|vmovdqu64|vpandq|vpinsrq|vpshufb|vpsrlq|vpternlogd|vpternlogq|vpxord|vpxorq)$'
+
 # Reject target-raising options in Make, Ninja, or compilation-database
 # metadata.  -mno-* and the x86-64 SSE2 baseline remain allowed.  All -march
 # and -mcpu values are conservatively rejected because proving that an
@@ -156,6 +161,20 @@ scan_object()
                 return 1
             fi
             ;;
+        avx512)
+            grep -Ev "$allowed_avx2_vex_mnemonics|$allowed_avx512vl_mnemonics|^(addsubp[ds]|haddp[ds]|hsubp[ds]|lddqu|movddup|movshdup|movsldup|fisttp[[:alnum:]]*|pabs[bdw]|palignr|phadd(d|sw|w)|phsub(d|sw|w)|pmaddubsw|pmulhrsw|pshufb|psign[bdw])$" \
+                "$forbidden_file" > "$violations_file" || true
+            if ! grep -Eq '^[[:space:]]*[0-9a-f]+:[[:space:]]+62([[:space:]]|$)' \
+                "$raw_disassembly_file"
+            then
+                echo "portable ISA check: AVX-512 member has no EVEX instruction: $object_name" >&2
+                return 1
+            fi
+            if grep -Eq '(%zmm[0-9]+|\{1to[0-9]+\}|\{z\})' "$disassembly_file"; then
+                echo "portable ISA check: AVX-512VL member widened beyond YMM: $object_name" >&2
+                return 1
+            fi
+            ;;
         *)
             echo "portable ISA check: unknown object class: $object_class" >&2
             return 1
@@ -184,6 +203,7 @@ require_expected_members()
             cpu_features) expected_member=Leopard2CpuFeatures.cpp.o ;;
             ssse3) expected_member=Leopard2BackendSSSE3.cpp.o ;;
             avx2) expected_member=Leopard2BackendAVX2.cpp.o ;;
+            avx512) expected_member=Leopard2BackendAVX512.cpp.o ;;
             '') continue ;;
             *)
                 echo "portable ISA check: unknown expected class: $object_class" >&2
@@ -256,6 +276,8 @@ scan_archive()
                 object_class=ssse3 ;;
             Leopard2BackendAVX2.cpp.o|Leopard2BackendAVX2.cpp.obj)
                 object_class=avx2 ;;
+            Leopard2BackendAVX512.cpp.o|Leopard2BackendAVX512.cpp.obj)
+                object_class=avx512 ;;
             Leopard2CpuFeatures.cpp.o|Leopard2CpuFeatures.cpp.obj)
                 object_class=cpu_features ;;
             *) object_class=baseline ;;
@@ -368,7 +390,7 @@ scan_build_metadata()
         violating_lines="$scratch_root/metadata-violations"
         candidate_lines="$scratch_root/metadata-candidates"
         LC_ALL=C grep -Ein -- "$forbidden_metadata" "$compile_commands" |
-            grep -Ev 'Leopard2Backend(SSSE3|AVX2)[.]cpp' > \
+            grep -Ev 'Leopard2Backend(SSSE3|AVX2|AVX512)[.]cpp' > \
                 "$candidate_lines" || true
         : > "$violating_lines"
         while IFS= read -r candidate_line
@@ -414,6 +436,25 @@ scan_build_metadata()
         then
             echo "portable ISA check: AVX2 object has an unrelated ISA/LTO flag" >&2
             return 1
+        fi
+        if grep -q 'Leopard2BackendAVX512[.]cpp' "$compile_commands"; then
+            avx512_lines="$scratch_root/avx512-lines"
+            grep 'Leopard2BackendAVX512[.]cpp' "$compile_commands" > \
+                "$avx512_lines"
+            for required_flag in -mavx2 -mavx512f -mavx512bw -mavx512vl
+            do
+                if ! grep -q -- "$required_flag" "$avx512_lines"; then
+                    echo "portable ISA check: AVX-512 object lacks $required_flag" >&2
+                    return 1
+                fi
+            done
+            avx512_command="$scratch_root/avx512-command"
+            sed 's/-mavx2//g; s/-mavx512f//g; s/-mavx512bw//g; s/-mavx512vl//g' \
+                "$avx512_lines" > "$avx512_command"
+            if grep -Ein -- "$forbidden_metadata" "$avx512_command"; then
+                echo "portable ISA check: AVX-512 object has an unrelated ISA/LTO flag" >&2
+                return 1
+            fi
         fi
     fi
     return 0
@@ -718,6 +759,9 @@ run_negative_controls()
         'Leopard2BackendSSSE3.cpp.o' 'pshufb %xmm0, %xmm0'
     expect_classified_archive_accepted good_avx2 \
         'Leopard2BackendAVX2.cpp.o' 'vpxor %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_accepted good_avx512vl \
+        'Leopard2BackendAVX512.cpp.o' \
+        'vpternlogq $0, %ymm0, %ymm0, %ymm0'
     # Sanitizer instrumentation can materialize an integer argument with the
     # VEX-encoded AVX vmovd form.  AVX is already required by the runtime
     # probe, so admit this exact move while retaining the fail-closed v* list.
@@ -744,6 +788,12 @@ run_negative_controls()
         'Leopard2BackendAVX2.cpp.o' 'xgetbv'
     expect_classified_archive_rejected avx2_leaks_avx512 \
         'Leopard2BackendAVX2.cpp.o' 'vpxord %zmm0, %zmm0, %zmm0'
+    expect_classified_archive_rejected avx512vl_leaks_zmm \
+        'Leopard2BackendAVX512.cpp.o' \
+        'vpternlogq $0, %zmm0, %zmm0, %zmm0'
+    expect_classified_archive_rejected avx512vl_leaks_gfni \
+        'Leopard2BackendAVX512.cpp.o' \
+        'vgf2p8affineqb $0, %ymm0, %ymm0, %ymm0'
     expect_classified_archive_rejected lookalike_ssse3_member \
         'NotLeopard2BackendSSSE3.cpp.o' 'pshufb %xmm0, %xmm0'
     expect_classified_archive_rejected lookalike_avx2_member \
@@ -823,4 +873,4 @@ elif [ "$metadata_mode" = required ]; then
     exit 1
 fi
 
-echo "portable ISA check: PASS (SSE2 baseline; named SSSE3/AVX2/probe members isolated)"
+echo "portable ISA check: PASS (SSE2 baseline; named SSSE3/AVX2/AVX-512VL/probe members isolated)"

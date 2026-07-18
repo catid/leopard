@@ -251,7 +251,7 @@ struct Ops
     Butterfly4 ff8_ifft_butterfly4;
     Butterfly4 ff8_fft_butterfly4;
     IFFTButterfly4Out ff8_ifft_butterfly4_out;
-    // Optional: only the qualified AVX2 backend currently supplies this.
+    // Optional: the qualified AVX2-family backends currently supply this.
     WeightedIFFTButterfly4 ff8_weighted_ifft_butterfly4;
     FFTButterfly4Out ff8_fft_butterfly4_out;
     Butterfly4Range ff8_ifft_butterfly4_range;
@@ -273,6 +273,7 @@ struct X86Features
 {
     bool ssse3;
     bool avx2;
+    bool avx512;
 };
 
 // Pure feature classifier used by both the runtime probe and synthetic tests.
@@ -291,6 +292,15 @@ const Ops* InitializeSSSE3(const InitializeArgs& args);
 
 #if defined(LEO2_HAVE_AVX2_BACKEND)
 const Ops* InitializeAVX2(const InitializeArgs& args);
+// Immutable nibble-table storage shared by the AVX2 and AVX-512VL codegen
+// variants.  The erased pointer types keep the private table layouts local to
+// their implementation translation unit.
+const void* GetAVX2FF8Tables();
+const void* GetAVX2FF16Tables();
+#endif
+
+#if defined(LEO2_HAVE_AVX512_BACKEND)
+const Ops* InitializeAVX512(const InitializeArgs& args);
 #endif
 
 // Called once after both legacy fields have initialized their logarithm tables.
@@ -340,7 +350,10 @@ enum TestSetupFault
     TestSetupFaultAVX2FF16Allocation,
     TestSetupFaultScalarKAT,
     TestSetupFaultSSSE3KAT,
-    TestSetupFaultAVX2KAT
+    TestSetupFaultAVX2KAT,
+    TestSetupFaultAVX512FF8Allocation,
+    TestSetupFaultAVX512FF16Allocation,
+    TestSetupFaultAVX512KAT
 };
 
 struct TestBackendState
@@ -366,6 +379,9 @@ void TestGetSSSE3TableState(TestBackendState* state);
 # endif
 # if defined(LEO2_HAVE_AVX2_BACKEND)
 void TestGetAVX2TableState(TestBackendState* state);
+# endif
+# if defined(LEO2_HAVE_AVX512_BACKEND)
+void TestGetAVX512TableState(TestBackendState* state);
 # endif
 
 // Test-only injection point for a copied/tracing immutable ops table.  The

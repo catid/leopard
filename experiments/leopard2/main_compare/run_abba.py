@@ -2669,7 +2669,8 @@ def validate_result(
                     "historical candidate result contains unversioned workspace selectors")
         require(resolved.get("thread_count") == 1,
                 "candidate resolved more than one thread")
-        require(resolved.get("backend") in {"scalar", "ssse3", "avx2", "neon"},
+        require(resolved.get("backend") in {
+                    "scalar", "ssse3", "avx2", "avx512", "neon"},
                 "candidate did not resolve a production backend")
         require(value.get("correctness", {}).get("leopard2_round_trip") is True,
                 "candidate round trip failed")
