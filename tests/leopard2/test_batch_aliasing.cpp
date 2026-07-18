@@ -267,7 +267,8 @@ void TestLargeBatchCount(Fixture& fixture)
     for (size_t i = 0; i < item_count; ++i)
     {
         output_pointers[i][0] = &outputs[i][0];
-        scratches[i].reset(new AlignedBuffer(fixture.encode_long));
+        scratches[i].reset(new AlignedBuffer(
+            std::max(fixture.encode_long, fixture.decode_long)));
         items[i].shard_bytes = Fixture::kLongBytes;
         items[i].original = &fixture.original_a[0];
         items[i].recovery = &output_pointers[i][0];
@@ -280,6 +281,34 @@ void TestLargeBatchCount(Fixture& fixture)
     for (size_t i = 0; i < item_count; ++i)
         Require(outputs[i] == fixture.parity_a[0],
             "257-item encode batch parity mismatch");
+
+    const void* original[3] = {
+        NULL, fixture.original_a[1], fixture.original_a[2]
+    };
+    std::vector<Bytes> restored(
+        item_count, Bytes(Fixture::kLongBytes, 0xcc));
+    std::vector<std::vector<const void*> > recovery_pointers(
+        item_count, std::vector<const void*>(2, NULL));
+    std::vector<std::vector<void*> > restored_pointers(
+        item_count, std::vector<void*>(3, NULL));
+    std::vector<leo2_decode_batch_item> decode_items(item_count);
+    for (size_t i = 0; i < item_count; ++i)
+    {
+        recovery_pointers[i][0] = &outputs[i][0];
+        restored_pointers[i][0] = &restored[i][0];
+        decode_items[i].shard_bytes = Fixture::kLongBytes;
+        decode_items[i].original = original;
+        decode_items[i].recovery = &recovery_pointers[i][0];
+        decode_items[i].restored_original = &restored_pointers[i][0];
+        decode_items[i].scratch = scratches[i]->data();
+        decode_items[i].scratch_bytes = scratches[i]->size();
+    }
+    RequireResult(leo2_decode_plan_execute_batch(
+        fixture.plan, &decode_items[0], decode_items.size()),
+        LEO2_SUCCESS, "257-item decode batch");
+    for (size_t i = 0; i < item_count; ++i)
+        Require(restored[i] == fixture.source_a[0],
+            "257-item decode batch recovery mismatch");
 }
 
 void TestNoLossBatchIsTrueNoOp(Fixture& fixture)
@@ -621,7 +650,8 @@ int main()
         Run(1);
         Run(4);
         std::cout << "leopard2 batch aliasing passed: contexts=2 "
-                  << "valid_shared=4 conflict_checks=20 large_items=514"
+                  << "valid_shared=4 conflict_checks=20 "
+                  << "large_encode_items=514 large_decode_items=514"
                   << std::endl;
         return 0;
     }
