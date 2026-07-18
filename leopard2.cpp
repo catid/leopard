@@ -2630,6 +2630,17 @@ LEO2_EXPORT leo2_result leo2_codec_create(
     leo2_shard_layout shard_layout = LEO2_SHARD_LAYOUT_NATIVE_V1;
     if (options)
     {
+        const size_t version1_size = offsetof(leo2_codec_options, shard_layout);
+        const size_t layout_field_end =
+            version1_size + sizeof(options->shard_layout);
+        // Validate the readable v1 prefix before accessing flags or reserved.
+        // This permits callers to pass an intentionally short versioned
+        // prefix and receive INVALID_ARGUMENT without an out-of-range read.
+        if (options->struct_size < version1_size ||
+            (options->struct_size > version1_size &&
+             options->struct_size < layout_field_end))
+            return LEO2_INVALID_ARGUMENT;
+
         const uint32_t supported_flags =
             LEO2_CODEC_FORCE_GENERIC_DECODE |
             LEO2_CODEC_FORCE_SPECIALIZED_DECODE |
@@ -2641,12 +2652,7 @@ LEO2_EXPORT leo2_result leo2_codec_create(
         const uint32_t workspace_flags = options->flags &
             (LEO2_CODEC_FORCE_TILED_DECODE |
              LEO2_CODEC_FORCE_MATERIALIZED_DECODE);
-        const size_t version1_size = offsetof(leo2_codec_options, shard_layout);
-        const size_t layout_field_end = version1_size + sizeof(options->shard_layout);
-        if (options->struct_size < version1_size ||
-            (options->struct_size > version1_size &&
-             options->struct_size < layout_field_end) ||
-            options->reserved != 0 ||
+        if (options->reserved != 0 ||
             (options->flags & ~supported_flags) != 0 ||
             algorithm_flags == (LEO2_CODEC_FORCE_GENERIC_DECODE |
                                 LEO2_CODEC_FORCE_SPECIALIZED_DECODE) ||

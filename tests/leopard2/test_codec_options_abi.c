@@ -33,6 +33,11 @@
 #include <stdio.h>
 #include <string.h>
 
+#if defined(__unix__) || defined(__APPLE__)
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+
 typedef char leo2_layout_storage_must_be_u32[
     sizeof(((leo2_codec_options *)0)->shard_layout) == sizeof(uint32_t) ? 1 : -1];
 typedef char leo2_backend_storage_must_be_u32[
@@ -56,6 +61,10 @@ int main(void)
     leo2_codec *codec = NULL;
     leo2_context_options context_options;
     leo2_codec_options options;
+    struct extended_codec_options {
+        leo2_codec_options base;
+        uint64_t future_words[2];
+    } extended_options;
     const size_t version1_size = offsetof(leo2_codec_options, shard_layout);
     const size_t layout_field_end = version1_size + sizeof(options.shard_layout);
 
@@ -80,6 +89,25 @@ int main(void)
             LEO2_SUCCESS, "C ABI padded codec create") ||
         leo2_codec_shard_layout(codec) !=
             LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1) {
+        leo2_codec_destroy(codec);
+        leo2_context_destroy(context);
+        return 1;
+    }
+    leo2_codec_destroy(codec);
+    codec = NULL;
+
+    /* A future caller may append fields.  The known current prefix remains
+       valid and unknown trailing storage is ignored. */
+    memset(&extended_options, 0xa5, sizeof(extended_options));
+    extended_options.base.struct_size = sizeof(extended_options);
+    extended_options.base.flags = 0;
+    extended_options.base.reserved = 0;
+    extended_options.base.shard_layout = LEO2_SHARD_LAYOUT_NATIVE_V1;
+    if (!require_result(leo2_codec_create(context, 5, 3,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+            &extended_options.base, &codec), LEO2_SUCCESS,
+            "C ABI oversized-extension codec create") ||
+        leo2_codec_shard_layout(codec) != LEO2_SHARD_LAYOUT_NATIVE_V1) {
         leo2_codec_destroy(codec);
         leo2_context_destroy(context);
         return 1;
@@ -125,6 +153,60 @@ int main(void)
         leo2_context_destroy(context);
         return 1;
     }
+
+    /* An undersized portable object is rejected before any later field is
+       interpreted, regardless of the bytes present in that storage. */
+    memset(&options, 0xa5, sizeof(options));
+    options.struct_size = version1_size - 1;
+    codec = (leo2_codec *)(uintptr_t)1;
+    if (!require_result(leo2_codec_create(context, 5, 3,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, &options, &codec),
+            LEO2_INVALID_ARGUMENT, "C ABI undersized-prefix rejection") ||
+        codec != NULL) {
+        leo2_codec_destroy(codec);
+        leo2_context_destroy(context);
+        return 1;
+    }
+
+#if (defined(__unix__) || defined(__APPLE__)) && defined(MAP_ANONYMOUS)
+    {
+        const long page_size_value = sysconf(_SC_PAGESIZE);
+        if (page_size_value <= 0) {
+            leo2_context_destroy(context);
+            return 1;
+        }
+        const size_t page_size = (size_t)page_size_value;
+        unsigned char *mapping = (unsigned char *)mmap(NULL, page_size * 2,
+            PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (mapping == MAP_FAILED ||
+            mprotect(mapping + page_size, page_size, PROT_NONE) != 0) {
+            if (mapping != MAP_FAILED)
+                munmap(mapping, page_size * 2);
+            leo2_context_destroy(context);
+            return 1;
+        }
+
+        /* Only struct_size is mapped.  Reading flags before checking this
+           deliberately short prefix crosses into the protected page. */
+        leo2_codec_options *guarded_options = (leo2_codec_options *)(
+            mapping + page_size - sizeof(size_t));
+        guarded_options->struct_size = sizeof(size_t);
+        codec = (leo2_codec *)(uintptr_t)1;
+        if (!require_result(leo2_codec_create(context, 5, 3,
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                guarded_options, &codec), LEO2_INVALID_ARGUMENT,
+                "C ABI guard-page prefix rejection") || codec != NULL) {
+            munmap(mapping, page_size * 2);
+            leo2_codec_destroy(codec);
+            leo2_context_destroy(context);
+            return 1;
+        }
+        if (munmap(mapping, page_size * 2) != 0) {
+            leo2_context_destroy(context);
+            return 1;
+        }
+    }
+#endif
 
     leo2_context_destroy(context);
     context = (leo2_context *)(uintptr_t)1;
