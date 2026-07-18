@@ -45,13 +45,41 @@ except ImportError:  # pragma: no cover - Unix/Linux is the production target.
     resource = None
 
 
-MANIFEST_SCHEMA = "leopard2-lab-manifest/v3"
-RESULT_SCHEMA = "leopard2-lab-result/v1"
-MERGE_SCHEMA = "leopard2-lab-merged/v1"
+MANIFEST_SCHEMA = "leopard2-lab-manifest/v4"
+RESULT_SCHEMA = "leopard2-lab-result/v2"
+MERGE_SCHEMA = "leopard2-lab-merged/v2"
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 TOKEN_REPLACEMENTS = ("seed", "job_id", "cpu_set")
 PERF_PROVIDER = "linux-perf-stat"
 PERF_EVENT_RE = re.compile(r"^[A-Za-z0-9_.:/=-]+$")
+THREAD_POLICY_SCHEMA = "leopard2-lab-thread-policy/v1"
+THREAD_OBSERVATION_SCHEMA = "leopard2-lab-thread-observation/v1"
+
+# These variables cover OpenMP and the common nested native thread pools that
+# can otherwise multiply a one-process-per-CPU fuzz campaign into hundreds of
+# runnable threads.  The complete, effective subset is signed into each job;
+# inherited values never leak into a child unnoticed.
+THREAD_COUNT_ENV = (
+    "OMP_NUM_THREADS",
+    "OMP_THREAD_LIMIT",
+    "OPENBLAS_NUM_THREADS",
+    "GOTO_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "BLIS_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "RAYON_NUM_THREADS",
+)
+THREAD_FALSE_ENV = (
+    "OMP_DYNAMIC",
+    "OMP_NESTED",
+    "MKL_DYNAMIC",
+)
+THREAD_FIXED_ENV = {
+    "OMP_MAX_ACTIVE_LEVELS": "1",
+}
+THREAD_ENV_KEYS = tuple(sorted(
+    THREAD_COUNT_ENV + THREAD_FALSE_ENV + tuple(THREAD_FIXED_ENV)))
 
 
 class LabError(Exception):
@@ -503,6 +531,64 @@ def _positive_int(value, label, allow_zero=False):
     return value
 
 
+def _thread_environment(max_threads):
+    """Return the deterministic nested-runtime cap for one workload job."""
+    value = str(max_threads)
+    environment = {key: value for key in THREAD_COUNT_ENV}
+    environment.update({key: "FALSE" for key in THREAD_FALSE_ENV})
+    environment.update(THREAD_FIXED_ENV)
+    return dict(sorted(environment.items()))
+
+
+def _normalize_thread_policy(value, cpu_set, label):
+    """Validate an explicit internal-team request and bind its environment."""
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise LabError("{} thread_runtime must be an object".format(label))
+    unknown = set(value) - {"max_threads", "allow_internal_team"}
+    if unknown:
+        raise LabError(
+            "{} thread_runtime has unknown fields: {}".format(
+                label, ", ".join(sorted(unknown))))
+    max_threads = value.get("max_threads", 1)
+    _positive_int(max_threads, "{} thread_runtime max_threads".format(label))
+    allow_internal_team = value.get("allow_internal_team", False)
+    if not isinstance(allow_internal_team, bool):
+        raise LabError(
+            "{} thread_runtime allow_internal_team must be boolean".format(
+                label))
+    if max_threads != 1 and not allow_internal_team:
+        raise LabError(
+            "{} requests {} internal threads without explicit "
+            "allow_internal_team opt-in".format(label, max_threads))
+    if max_threads > len(cpu_set):
+        raise LabError(
+            "{} requests {} internal threads but its CPU set contains only {} "
+            "CPUs".format(label, max_threads, len(cpu_set)))
+    return {
+        "schema": THREAD_POLICY_SCHEMA,
+        "max_threads": max_threads,
+        "allow_internal_team": allow_internal_team,
+        "effective_env": _thread_environment(max_threads),
+    }
+
+
+def _validate_thread_policy(policy, cpu_set, label):
+    if not isinstance(policy, dict) or set(policy) != {
+            "schema", "max_threads", "allow_internal_team", "effective_env"}:
+        raise LabError("{} has an invalid thread runtime policy".format(label))
+    if policy.get("schema") != THREAD_POLICY_SCHEMA:
+        raise LabError("{} has an unsupported thread runtime policy".format(label))
+    normalized = _normalize_thread_policy({
+        "max_threads": policy.get("max_threads"),
+        "allow_internal_team": policy.get("allow_internal_team"),
+    }, cpu_set, label)
+    if policy != normalized:
+        raise LabError("{} thread runtime environment is not canonical".format(label))
+    return policy
+
+
 def _stable_seed(base_seed, job_id):
     material = "{}\0{}".format(base_seed, job_id).encode("utf-8")
     # Stay below 2^63 so seeds are accepted by libraries with signed APIs.
@@ -612,8 +698,16 @@ def build_manifest(spec, root=None, workers=None, base_seed=None):
     _positive_number(default_timeout, "default timeout_seconds")
     default_memory = defaults.get("memory_mb", _default_memory_mb(topology, selected_workers))
     _positive_int(default_memory, "default memory_mb", allow_zero=True)
+    default_rss_limit = defaults.get("rss_limit_mb", 0)
+    _positive_int(default_rss_limit, "default rss_limit_mb", allow_zero=True)
+    default_minimum_memory = defaults.get("minimum_memory_mb", 0)
+    _positive_int(
+        default_minimum_memory, "default minimum_memory_mb", allow_zero=True)
     default_cpu_count = defaults.get("cpu_count", 1)
     _positive_int(default_cpu_count, "default cpu_count")
+    default_thread_runtime = defaults.get("thread_runtime", {})
+    if not isinstance(default_thread_runtime, dict):
+        raise LabError("default thread_runtime must be an object")
     cpu_policy = defaults.get("cpu_policy", "physical-first")
     cpu_order = _cpu_order(topology, cpu_policy)
     allowed_set = set(topology["allowed_cpus"])
@@ -639,8 +733,12 @@ def build_manifest(spec, root=None, workers=None, base_seed=None):
             raise LabError("job {} env must map strings to strings".format(job_id))
         timeout_seconds = raw.get("timeout_seconds", default_timeout)
         memory_mb = raw.get("memory_mb", default_memory)
+        rss_limit_mb = raw.get("rss_limit_mb", default_rss_limit)
         _positive_number(timeout_seconds, "job {} timeout_seconds".format(job_id))
         _positive_int(memory_mb, "job {} memory_mb".format(job_id), allow_zero=True)
+        _positive_int(
+            rss_limit_mb, "job {} rss_limit_mb".format(job_id),
+            allow_zero=True)
 
         cpu_group = raw.get("cpu_group")
         if cpu_group is not None and (not isinstance(cpu_group, str) or not cpu_group):
@@ -685,13 +783,35 @@ def build_manifest(spec, root=None, workers=None, base_seed=None):
                 if cpu_group is not None:
                     cpu_groups[cpu_group] = list(cpu_set)
 
+        thread_runtime = _normalize_thread_policy(
+            raw.get("thread_runtime", default_thread_runtime), cpu_set,
+            "job {}".format(job_id))
+        environment = dict(environment)
+        for key in THREAD_ENV_KEYS:
+            if key not in environment:
+                continue
+            expected = thread_runtime["effective_env"][key]
+            if environment[key].upper() != expected.upper():
+                raise LabError(
+                    "job {} env {}={!r} conflicts with its signed thread "
+                    "runtime value {!r}".format(
+                        job_id, key, environment[key], expected))
+            # Keep one canonical source of truth in the signed job.  The
+            # source-spec digest still records that the author supplied it.
+            environment.pop(key)
+
         cwd = raw.get("cwd", ".")
         if not isinstance(cwd, str) or not cwd:
             raise LabError("job {} cwd must be a non-empty string".format(job_id))
-        minimum_memory_mb = raw.get("minimum_memory_mb", 0)
+        minimum_memory_mb = raw.get(
+            "minimum_memory_mb", default_minimum_memory)
         _positive_int(
             minimum_memory_mb, "job {} minimum_memory_mb".format(job_id),
             allow_zero=True)
+        if rss_limit_mb and minimum_memory_mb > rss_limit_mb:
+            raise LabError(
+                "job {} minimum_memory_mb exceeds rss_limit_mb".format(
+                    job_id))
         executable = _resolve_executable(
             command, root_path, cwd, environment, executable_identities)
         performance_counters = _normalize_performance_counters(
@@ -708,8 +828,10 @@ def build_manifest(spec, root=None, workers=None, base_seed=None):
             "env": dict(sorted(environment.items())),
             "timeout_seconds": timeout_seconds,
             "memory_mb": memory_mb,
+            "rss_limit_mb": rss_limit_mb,
             "minimum_memory_mb": minimum_memory_mb,
             "cpu_set": cpu_set,
+            "thread_runtime": thread_runtime,
             "seed": seed,
             "executable": executable,
         }
@@ -730,6 +852,11 @@ def build_manifest(spec, root=None, workers=None, base_seed=None):
         "base_seed": selected_seed,
         "workers": selected_workers,
         "cpu_policy": cpu_policy,
+        "thread_safety": {
+            "schema": THREAD_POLICY_SCHEMA,
+            "controlled_environment": list(THREAD_ENV_KEYS),
+            "runtime_observation": THREAD_OBSERVATION_SCHEMA,
+        },
         "topology": topology,
         "source_spec": {
             "schema": spec.get("schema"),
@@ -756,6 +883,11 @@ def validate_manifest(manifest):
         raise LabError("manifest workers may not exceed 128")
     if not isinstance(manifest.get("root"), str):
         raise LabError("manifest root is missing")
+    if manifest.get("thread_safety") != {
+            "schema": THREAD_POLICY_SCHEMA,
+            "controlled_environment": list(THREAD_ENV_KEYS),
+            "runtime_observation": THREAD_OBSERVATION_SCHEMA}:
+        raise LabError("manifest thread-safety policy is invalid")
     source_spec = manifest.get("source_spec")
     if (not isinstance(source_spec, dict) or
             not isinstance(source_spec.get("digest"), str) or
@@ -778,11 +910,28 @@ def validate_manifest(manifest):
             raise LabError("job {} has no command".format(job["id"]))
         if not isinstance(job.get("cpu_set"), list) or not job["cpu_set"]:
             raise LabError("job {} has no CPU set".format(job["id"]))
+        _validate_thread_policy(
+            job.get("thread_runtime"), job["cpu_set"],
+            "job {}".format(job["id"]))
+        environment = job.get("env")
+        if (not isinstance(environment, dict) or
+                any(key in environment for key in THREAD_ENV_KEYS)):
+            raise LabError(
+                "job {} has noncanonical thread controls in env".format(
+                    job["id"]))
         _positive_number(job.get("timeout_seconds"), "job {} timeout_seconds".format(job["id"]))
         _positive_int(job.get("memory_mb"), "job {} memory_mb".format(job["id"]), allow_zero=True)
         _positive_int(
+            job.get("rss_limit_mb"),
+            "job {} rss_limit_mb".format(job["id"]), allow_zero=True)
+        _positive_int(
             job.get("minimum_memory_mb"),
             "job {} minimum_memory_mb".format(job["id"]), allow_zero=True)
+        if (job["rss_limit_mb"] and
+                job["minimum_memory_mb"] > job["rss_limit_mb"]):
+            raise LabError(
+                "job {} memory estimate exceeds its RSS limit".format(
+                    job["id"]))
         executable = job.get("executable")
         if (not isinstance(executable, dict) or
                 not isinstance(executable.get("path"), str) or
@@ -880,6 +1029,82 @@ def _resume_candidates(manifest, output_dir, rerun_failed):
     return candidates
 
 
+def _validate_thread_runtime_evidence(result, job):
+    runtime = result.get("thread_runtime")
+    if (not isinstance(runtime, dict) or
+            set(runtime) != {"policy", "observation"} or
+            runtime.get("policy") != job.get("thread_runtime")):
+        raise LabError(
+            "terminal thread policy is invalid for job {}".format(job["id"]))
+    observation = runtime.get("observation")
+    required = {
+        "schema", "status", "declared_max_threads", "allocated_cpu_count",
+        "sample_count", "affinity_sample_count", "peak_process_count",
+        "peak_thread_count",
+        "peak_rss_bytes", "rss_limit_bytes", "rss_exceeded",
+        "outside_cpu_set", "oversubscribed"}
+    if (not isinstance(observation, dict) or
+            not required.issubset(observation) or
+            not set(observation).issubset(required | {"detail"}) or
+            observation.get("schema") != THREAD_OBSERVATION_SCHEMA or
+            observation.get("status") not in {
+                "pending", "not_run", "observed", "unavailable"} or
+            observation.get("declared_max_threads") !=
+                job["thread_runtime"]["max_threads"] or
+            observation.get("allocated_cpu_count") != len(job["cpu_set"]) or
+            any(isinstance(observation.get(key), bool) or
+                not isinstance(observation.get(key), int) or
+                observation[key] < 0
+                for key in ("sample_count", "affinity_sample_count",
+                            "peak_process_count",
+                            "peak_thread_count", "peak_rss_bytes",
+                            "rss_limit_bytes")) or
+            not isinstance(observation.get("outside_cpu_set"), list) or
+            observation["outside_cpu_set"] != sorted(set(
+                observation["outside_cpu_set"])) or
+            not all(isinstance(cpu, int) and not isinstance(cpu, bool) and cpu >= 0
+                    for cpu in observation["outside_cpu_set"]) or
+            not isinstance(observation.get("oversubscribed"), bool) or
+            not isinstance(observation.get("rss_exceeded"), bool) or
+            ("detail" in observation and
+             (not isinstance(observation["detail"], str) or
+              not observation["detail"]))):
+        raise LabError(
+            "terminal thread observation is invalid for job {}".format(
+                job["id"]))
+    expected_oversubscribed = (
+        observation["peak_thread_count"] >
+        observation["declared_max_threads"])
+    if observation["oversubscribed"] != expected_oversubscribed:
+        raise LabError(
+            "terminal oversubscription evidence is inconsistent for job {}".format(
+                job["id"]))
+    if observation["rss_limit_bytes"] != job.get("rss_limit_mb", 0) * 1024 * 1024:
+        raise LabError(
+            "terminal RSS limit evidence is inconsistent for job {}".format(
+                job["id"]))
+    expected_rss_exceeded = bool(
+        observation["rss_limit_bytes"] and
+        observation["peak_rss_bytes"] > observation["rss_limit_bytes"])
+    if observation["rss_exceeded"] != expected_rss_exceeded:
+        raise LabError(
+            "terminal RSS observation is inconsistent for job {}".format(
+                job["id"]))
+    if result.get("outcome") == "success" and (
+            observation["status"] != "observed" or
+            observation["sample_count"] < 1 or
+            observation["affinity_sample_count"] < 1 or
+            observation["peak_process_count"] < 1 or
+            observation["peak_thread_count"] < 1 or
+            observation["oversubscribed"] or
+            observation["rss_exceeded"] or
+            observation["outside_cpu_set"]):
+        raise LabError(
+            "successful job {} lacks valid thread-allocation evidence".format(
+                job["id"]))
+    return runtime
+
+
 def _validate_terminal_result(result_path, result, job):
     unsigned = dict(result)
     expected_result_digest = unsigned.pop("result_digest", None)
@@ -895,6 +1120,7 @@ def _validate_terminal_result(result_path, result, job):
     if job.get("resume_group") is not None and run_epoch is None:
         raise LabError("terminal result run epoch is missing for grouped job {}".format(
             job["id"]))
+    _validate_thread_runtime_evidence(result, job)
     outputs = result.get("outputs")
     if not isinstance(outputs, dict):
         raise LabError("terminal result output identities are missing for job {}".format(job["id"]))
@@ -1091,6 +1317,7 @@ def _probe_performance_counters(job):
                 job, probe_workload, output_path)
             completed = subprocess.run(
                 command,
+                env=_expanded_environment(job),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -1158,10 +1385,142 @@ def _performance_result(job, probe, output_path=None):
 def _expanded_environment(job):
     environment = os.environ.copy()
     environment.update({key: _replace_tokens(value, job) for key, value in job["env"].items()})
+    environment.update(job["thread_runtime"]["effective_env"])
     environment["LEO2_LAB_SEED"] = str(job["seed"])
     environment["LEO2_LAB_JOB_ID"] = job["id"]
     environment["LEO2_LAB_CPUSET"] = format_cpu_list(job["cpu_set"])
     return environment
+
+
+def _new_thread_observation(job, status="pending", detail=None):
+    observation = {
+        "schema": THREAD_OBSERVATION_SCHEMA,
+        "status": status,
+        "declared_max_threads": job["thread_runtime"]["max_threads"],
+        "allocated_cpu_count": len(job["cpu_set"]),
+        "sample_count": 0,
+        "affinity_sample_count": 0,
+        "peak_process_count": 0,
+        "peak_thread_count": 0,
+        "peak_rss_bytes": 0,
+        "rss_limit_bytes": job.get("rss_limit_mb", 0) * 1024 * 1024,
+        "rss_exceeded": False,
+        "outside_cpu_set": [],
+        "oversubscribed": False,
+    }
+    if detail:
+        observation["detail"] = detail
+    return observation
+
+
+def _parse_linux_proc_stat(text):
+    """Return (pid, session) from Linux /proc/PID/stat, or None."""
+    try:
+        open_paren = text.index("(")
+        close_paren = text.rindex(")")
+        pid = int(text[:open_paren].strip())
+        fields = text[close_paren + 1:].split()
+        # Fields after comm begin with state, ppid, pgrp, session.
+        if len(fields) < 4:
+            return None
+        return pid, int(fields[3])
+    except (ValueError, IndexError):
+        return None
+
+
+def _linux_session_snapshot(proc_root="/proc"):
+    """Collect one process/thread/affinity snapshot keyed by session id."""
+    root = Path(proc_root)
+    sessions = {}
+    try:
+        entries = list(root.iterdir())
+    except OSError:
+        return None
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        stat_text = _read_text(entry / "stat")
+        parsed = _parse_linux_proc_stat(stat_text or "")
+        if parsed is None:
+            continue
+        pid, session = parsed
+        try:
+            thread_count = sum(
+                1 for task in (entry / "task").iterdir()
+                if task.name.isdigit())
+        except OSError:
+            continue
+        affinity = []
+        rss_bytes = 0
+        status_text = _read_text(entry / "status")
+        if status_text:
+            for line in status_text.splitlines():
+                if line.startswith("Cpus_allowed_list:"):
+                    try:
+                        affinity = parse_cpu_list(line.split(":", 1)[1].strip())
+                    except LabError:
+                        affinity = []
+                elif line.startswith("VmRSS:"):
+                    fields = line.split()
+                    if len(fields) >= 2:
+                        try:
+                            rss_bytes = int(fields[1]) * 1024
+                        except ValueError:
+                            rss_bytes = 0
+        sessions.setdefault(session, []).append({
+            "pid": pid,
+            "thread_count": thread_count,
+            "cpu_set": affinity,
+            "rss_bytes": rss_bytes,
+        })
+    return sessions
+
+
+def _sample_thread_runtime(active_jobs, proc_root="/proc"):
+    """Update all active jobs from one global /proc scan."""
+    if not active_jobs:
+        return
+    sessions = _linux_session_snapshot(proc_root)
+    for active in active_jobs:
+        observation = active["thread_observation"]
+        if sessions is None:
+            observation["status"] = "unavailable"
+            observation["detail"] = "Linux /proc runtime observation is unavailable"
+            continue
+        processes = list(sessions.get(active["process"].pid, []))
+        if active.get("counter_active"):
+            # perf stat is runner instrumentation, not part of the workload's
+            # declared internal team.  Its descendant command remains counted.
+            processes = [
+                process for process in processes
+                if process["pid"] != active["process"].pid]
+        if not processes:
+            continue
+        process_count = len(processes)
+        thread_count = sum(process["thread_count"] for process in processes)
+        rss_bytes = sum(process["rss_bytes"] for process in processes)
+        requested = set(active["job"]["cpu_set"])
+        outside = set(observation["outside_cpu_set"])
+        for process in processes:
+            outside.update(set(process["cpu_set"]) - requested)
+        observation.update(
+            status="observed",
+            sample_count=observation["sample_count"] + 1,
+            affinity_sample_count=(
+                observation["affinity_sample_count"] +
+                (1 if all(process["cpu_set"] for process in processes) else 0)),
+            peak_process_count=max(
+                observation["peak_process_count"], process_count),
+            peak_thread_count=max(
+                observation["peak_thread_count"], thread_count),
+            peak_rss_bytes=max(observation["peak_rss_bytes"], rss_bytes),
+            outside_cpu_set=sorted(outside),
+        )
+        if thread_count > observation["declared_max_threads"]:
+            observation["oversubscribed"] = True
+        if (observation["rss_limit_bytes"] and
+                rss_bytes > observation["rss_limit_bytes"]):
+            observation["rss_exceeded"] = True
 
 
 def _child_setup(cpu_set, memory_mb):
@@ -1188,9 +1547,16 @@ def _base_result(
         "seed": job["seed"],
         "cpu_set": job["cpu_set"],
         "memory_mb": job["memory_mb"],
+        "rss_limit_mb": job.get("rss_limit_mb", 0),
         "minimum_memory_mb": job.get("minimum_memory_mb", 0),
         "timeout_seconds": job["timeout_seconds"],
         "command": command,
+        "thread_runtime": {
+            "policy": _json_copy(job["thread_runtime"]),
+            "observation": _new_thread_observation(
+                job, status="not_run",
+                detail="job did not reach runtime observation"),
+        },
         "stdout": "stdout.txt",
         "stderr": "stderr.txt",
     }
@@ -1284,6 +1650,14 @@ def _launch_job(
             result["performance_counters"] = performance
         _write_terminal_result(job_dir, result)
         return None, result
+    thread_observation = _new_thread_observation(job)
+    # Popen returning proves the post-affinity execution chain reached exec.
+    # Seed the declared workload's one-process/one-thread floor so even a
+    # sub-millisecond command has evidence; periodic /proc sampling records any
+    # larger team.  A perf wrapper is excluded from later workload counts.
+    thread_observation.update(
+        status="observed", sample_count=1, affinity_sample_count=1,
+        peak_process_count=1, peak_thread_count=1)
     active = {
         "job": job,
         "command": command,
@@ -1293,10 +1667,14 @@ def _launch_job(
         "stdout_handle": stdout_handle,
         "stderr_handle": stderr_handle,
         "timed_out": False,
+        "resource_limited": False,
+        "thread_limited": False,
         "terminate_started": None,
         "run_epoch": run_epoch,
         "performance_probe": performance_probe,
         "counter_output_path": counter_output_path if counter_active else None,
+        "counter_active": counter_active,
+        "thread_observation": thread_observation,
     }
     return active, None
 
@@ -1332,6 +1710,8 @@ def _finish_active(active, output_dir, forced_outcome=None, detail=None):
         executable_detail = str(error)
     if forced_outcome:
         outcome = forced_outcome
+    elif active["resource_limited"]:
+        outcome = "memory_limit"
     elif active["timed_out"]:
         outcome = "timeout"
     elif exit_code == 0:
@@ -1341,10 +1721,30 @@ def _finish_active(active, output_dir, forced_outcome=None, detail=None):
     if executable_detail:
         outcome = "evidence_invalid"
         detail = executable_detail if detail is None else detail + "; " + executable_detail
+    observation = active["thread_observation"]
+    if (observation["oversubscribed"] or
+            observation["outside_cpu_set"]):
+        runtime_detail = (
+            "runtime thread demand exceeded its signed allocation"
+            if observation["oversubscribed"] else
+            "runtime process affinity escaped its signed CPU set")
+        if forced_outcome is None:
+            outcome = "evidence_invalid"
+        detail = runtime_detail if detail is None else detail + "; " + runtime_detail
+    if observation["rss_exceeded"]:
+        runtime_detail = "runtime RSS exceeded its signed per-job limit"
+        if outcome == "success":
+            outcome = "memory_limit"
+        detail = runtime_detail if detail is None else detail + "; " + runtime_detail
+    elif outcome == "success" and observation["sample_count"] == 0:
+        outcome = "evidence_invalid"
+        runtime_detail = "successful workload had no runtime thread observation"
+        detail = runtime_detail if detail is None else detail + "; " + runtime_detail
     result = _base_result(
         active["job"], active["command"], time.monotonic() - active["started"],
         outcome, exit_code=exit_code, detail=detail,
         run_epoch=active["run_epoch"])
+    result["thread_runtime"]["observation"] = _json_copy(observation)
     counter_output_path = active.get("counter_output_path")
     performance = _performance_result(
         active["job"], active.get("performance_probe"),
@@ -1362,12 +1762,19 @@ def _can_launch(job, active, allow_cpu_overlap, memory_budget_mb=None):
             current["job"].get("minimum_memory_mb", 0) for current in active)
         if active_memory_mb + job.get("minimum_memory_mb", 0) > memory_budget_mb:
             return False
-    if allow_cpu_overlap:
-        return True
     active_cpus = set()
+    aggregate_threads = job["thread_runtime"]["max_threads"]
+    allocated_cpus = set(job["cpu_set"])
     for current in active:
         active_cpus.update(current["job"]["cpu_set"])
-    return not active_cpus.intersection(job["cpu_set"])
+        allocated_cpus.update(current["job"]["cpu_set"])
+        aggregate_threads += current["job"]["thread_runtime"]["max_threads"]
+    # Even the explicit overlap mode may not oversubscribe the union of CPUs
+    # assigned to simultaneously active work.  It can share partially
+    # overlapping multi-CPU sets only while aggregate demand still fits.
+    if aggregate_threads > len(allocated_cpus):
+        return False
+    return allow_cpu_overlap or not active_cpus.intersection(job["cpu_set"])
 
 
 def _validate_runtime_cpus(manifest):
@@ -1478,7 +1885,9 @@ def _dry_run_plan(manifest, output_dir, rerun_failed, workers=None):
             "seed": job["seed"],
             "timeout_seconds": job["timeout_seconds"],
             "memory_mb": job["memory_mb"],
+            "rss_limit_mb": job.get("rss_limit_mb", 0),
             "minimum_memory_mb": job.get("minimum_memory_mb", 0),
+            "thread_runtime": job["thread_runtime"],
             "command": _expanded_command(job),
             "performance_counters": job.get("performance_counters"),
             "detail": unavailable_reason,
@@ -1582,16 +1991,35 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
                     launched_any = True
                     break
 
+            _sample_thread_runtime(active)
             now = time.monotonic()
             for current in list(active):
                 process = current["process"]
                 exit_code = process.poll()
                 elapsed = now - current["started"]
-                if exit_code is None and not current["timed_out"] and elapsed >= current["job"]["timeout_seconds"]:
+                if (exit_code is None and
+                        (current["thread_observation"]["oversubscribed"] or
+                         current["thread_observation"]["outside_cpu_set"]) and
+                        not current["thread_limited"]):
+                    current["thread_limited"] = True
+                    current["terminate_started"] = now
+                    _signal_group(process, signal.SIGTERM)
+                elif (exit_code is None and
+                        current["thread_observation"]["rss_exceeded"] and
+                        not current["resource_limited"]):
+                    current["resource_limited"] = True
+                    current["terminate_started"] = now
+                    _signal_group(process, signal.SIGTERM)
+                elif (exit_code is None and not current["timed_out"] and
+                      not current["resource_limited"] and
+                      not current["thread_limited"] and
+                      elapsed >= current["job"]["timeout_seconds"]):
                     current["timed_out"] = True
                     current["terminate_started"] = now
                     _signal_group(process, signal.SIGTERM)
-                elif (exit_code is None and current["timed_out"] and
+                elif (exit_code is None and
+                      (current["timed_out"] or current["resource_limited"] or
+                       current["thread_limited"]) and
                       now - current["terminate_started"] >= 0.5):
                     _signal_group(process, signal.SIGKILL)
                 if process.poll() is not None:
@@ -1792,6 +2220,171 @@ def self_test():
         })
         if grouped_manifest["jobs"][0]["cpu_set"] != grouped_manifest["jobs"][1]["cpu_set"]:
             raise LabError("self-test: CPU assignment group did not preserve pair affinity")
+
+        def expect_bad_thread_spec(fragment, label):
+            candidate = {
+                "root": str(root),
+                "defaults": {"memory_mb": 0, "cpu_count": 1},
+                "jobs": [{
+                    "id": "bad-thread-spec",
+                    "command": [python, "-c", "pass"],
+                }],
+            }
+            candidate["jobs"][0].update(fragment)
+            try:
+                build_manifest(candidate)
+            except LabError:
+                return
+            raise LabError("self-test: {} was accepted".format(label))
+
+        expect_bad_thread_spec(
+            {"env": {"OMP_NUM_THREADS": "999"}},
+            "conflicting explicit OpenMP environment")
+        expect_bad_thread_spec(
+            {"thread_runtime": {"max_threads": 2}},
+            "unacknowledged internal thread team")
+        expect_bad_thread_spec(
+            {"thread_runtime": {
+                "max_threads": 2, "allow_internal_team": True}},
+            "internal thread demand larger than its CPU set")
+
+        inherited_code = (
+            "import json,os,time; "
+            "keys={{}}; "
+            "keys.update((key,os.environ.get(key)) for key in {}); "
+            "print(json.dumps(keys,sort_keys=True)); time.sleep(0.08)".format(
+                repr(list(THREAD_ENV_KEYS))))
+        inherited_manifest = build_manifest({
+            "root": str(root),
+            "workers": 1,
+            "defaults": {
+                "memory_mb": 0, "rss_limit_mb": 64, "cpu_count": 1},
+            "jobs": [{
+                "id": "inherited-thread-defaults",
+                "command": [python, "-c", inherited_code],
+            }],
+        })
+        saved_thread_environment = {
+            key: os.environ.get(key) for key in THREAD_ENV_KEYS}
+        try:
+            for key in THREAD_COUNT_ENV:
+                os.environ[key] = "999"
+            for key in THREAD_FALSE_ENV:
+                os.environ[key] = "TRUE"
+            os.environ["OMP_MAX_ACTIVE_LEVELS"] = "999"
+            inherited_output = root / "inherited-thread-results"
+            inherited_summary = run_manifest(
+                inherited_manifest, inherited_output, quiet=True)
+        finally:
+            for key, value in saved_thread_environment.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+        if inherited_summary["outcomes"] != {"missing": 0, "success": 1}:
+            raise LabError(
+                "self-test: inherited runtime defaults escaped the cap")
+        inherited_job = inherited_manifest["jobs"][0]
+        inherited_result = _load_json(
+            _job_directory(inherited_output, inherited_job["id"]) /
+            "result.json")
+        inherited_child_env = json.loads((
+            _job_directory(inherited_output, inherited_job["id"]) /
+            "stdout.txt").read_text(encoding="utf-8"))
+        if (inherited_child_env !=
+                inherited_job["thread_runtime"]["effective_env"] or
+                inherited_result["thread_runtime"]["observation"][
+                    "peak_thread_count"] != 1):
+            raise LabError(
+                "self-test: effective nested-runtime environment was not recorded")
+
+        oversubscribe_code = (
+            "import threading,time; "
+            "threads=[threading.Thread(target=lambda:time.sleep(0.3)) "
+            "for _ in range(3)]; "
+            "[thread.start() for thread in threads]; time.sleep(0.2); "
+            "[thread.join() for thread in threads]")
+        oversubscribe_manifest = build_manifest({
+            "root": str(root), "workers": 1,
+            "defaults": {"memory_mb": 0, "cpu_count": 1},
+            "jobs": [{
+                "id": "observed-oversubscription",
+                "command": [python, "-c", oversubscribe_code],
+            }],
+        })
+        oversubscribe_output = root / "oversubscribe-results"
+        oversubscribe_summary = run_manifest(
+            oversubscribe_manifest, oversubscribe_output, quiet=True)
+        if oversubscribe_summary["outcomes"] != {
+                "evidence_invalid": 1, "missing": 0}:
+            raise LabError(
+                "self-test: observed oversubscription was accepted: {}".format(
+                    oversubscribe_summary["outcomes"]))
+        oversubscribe_result = _load_json(
+            _job_directory(
+                oversubscribe_output, "observed-oversubscription") /
+            "result.json")
+        if (not oversubscribe_result["thread_runtime"]["observation"][
+                "oversubscribed"] or
+                oversubscribe_result["thread_runtime"]["observation"][
+                    "peak_thread_count"] < 4):
+            raise LabError(
+                "self-test: oversubscription evidence did not record the team")
+
+        rss_manifest = build_manifest({
+            "root": str(root), "workers": 1,
+            "defaults": {
+                "memory_mb": 0, "rss_limit_mb": 32, "cpu_count": 1},
+            "jobs": [{
+                "id": "observed-rss-limit",
+                "command": [
+                    python, "-c",
+                    "import time; payload=bytearray(96*1024*1024); "
+                    "time.sleep(0.3)"],
+            }],
+        })
+        rss_output = root / "rss-limit-results"
+        rss_summary = run_manifest(rss_manifest, rss_output, quiet=True)
+        rss_result = _load_json(
+            _job_directory(rss_output, "observed-rss-limit") /
+            "result.json")
+        if (rss_summary["outcomes"] != {"memory_limit": 1, "missing": 0} or
+                not rss_result["thread_runtime"]["observation"][
+                    "rss_exceeded"] or
+                rss_result["thread_runtime"]["observation"][
+                    "peak_rss_bytes"] <= 32 * 1024 * 1024):
+            raise LabError(
+                "self-test: sampled RSS limit did not bound the job")
+
+        if len(_allowed_cpus()[0]) >= 2:
+            intentional_code = (
+                "import threading,time; "
+                "thread=threading.Thread(target=lambda:time.sleep(0.2)); "
+                "thread.start(); time.sleep(0.12); thread.join()")
+            intentional_manifest = build_manifest({
+                "root": str(root), "workers": 1,
+                "defaults": {"memory_mb": 0, "cpu_count": 2},
+                "jobs": [{
+                    "id": "intentional-team",
+                    "command": [python, "-c", intentional_code],
+                    "thread_runtime": {
+                        "max_threads": 2,
+                        "allow_internal_team": True,
+                    },
+                }],
+            })
+            intentional_output = root / "intentional-team-results"
+            intentional_summary = run_manifest(
+                intentional_manifest, intentional_output, quiet=True)
+            intentional_result = _load_json(
+                _job_directory(intentional_output, "intentional-team") /
+                "result.json")
+            if (intentional_summary["outcomes"] != {
+                    "missing": 0, "success": 1} or
+                    intentional_result["thread_runtime"]["observation"][
+                        "peak_thread_count"] != 2):
+                raise LabError(
+                    "self-test: explicit internal thread team was not honored")
 
         fake_perf = root / "fake-perf.py"
         fake_perf.write_text(

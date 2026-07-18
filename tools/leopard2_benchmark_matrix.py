@@ -33,7 +33,10 @@ from leopard2_perf_evidence import (  # noqa: E402
 
 SCHEMA = "leopard2-benchmark-matrix/v3"
 SPEC_SCHEMA = "leopard2-benchmark-spec/v3"
-LAB_MANIFEST_SCHEMA = "leopard2-lab-manifest/v3"
+LAB_MANIFEST_SCHEMA = "leopard2-lab-manifest/v4"
+LAB_RESULT_SCHEMA = "leopard2-lab-result/v2"
+LAB_THREAD_POLICY_SCHEMA = "leopard2-lab-thread-policy/v1"
+LAB_THREAD_OBSERVATION_SCHEMA = "leopard2-lab-thread-observation/v1"
 MODE_AUTOMATIC = "automatic"
 MODE_FORCED_SPECIALIZED = "forced-specialized"
 MODE_FORCED_GENERIC = "forced-generic"
@@ -67,6 +70,21 @@ EXPECTED_CELL_FIELDS = (
     "thread_count",
     "seed",
 )
+
+LAB_THREAD_COUNT_ENV = (
+    "OMP_NUM_THREADS", "OMP_THREAD_LIMIT", "OPENBLAS_NUM_THREADS",
+    "GOTO_NUM_THREADS", "MKL_NUM_THREADS", "BLIS_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS", "NUMEXPR_NUM_THREADS", "RAYON_NUM_THREADS",
+)
+LAB_THREAD_FALSE_ENV = ("OMP_DYNAMIC", "OMP_NESTED", "MKL_DYNAMIC")
+
+
+def _expected_thread_environment(max_threads: int) -> dict:
+    value = str(max_threads)
+    environment = {key: value for key in LAB_THREAD_COUNT_ENV}
+    environment.update({key: "FALSE" for key in LAB_THREAD_FALSE_ENV})
+    environment["OMP_MAX_ACTIVE_LEVELS"] = "1"
+    return dict(sorted(environment.items()))
 
 RATE_CASES = {
     "low": (
@@ -721,6 +739,70 @@ def _validate_benchmark(value: object, job_id: str) -> dict:
     return value
 
 
+def _validate_lab_thread_policy(job: dict) -> dict:
+    policy = job.get("thread_runtime")
+    max_threads = policy.get("max_threads") if isinstance(policy, dict) else None
+    allow_team = policy.get("allow_internal_team") if isinstance(policy, dict) else None
+    if (not isinstance(policy, dict) or set(policy) != {
+            "schema", "max_threads", "allow_internal_team", "effective_env"} or
+            policy.get("schema") != LAB_THREAD_POLICY_SCHEMA or
+            isinstance(max_threads, bool) or not isinstance(max_threads, int) or
+            max_threads < 1 or
+            not isinstance(allow_team, bool) or
+            (max_threads != 1 and not allow_team) or
+            max_threads > len(job.get("cpu_set", [])) or
+            policy.get("effective_env") !=
+                _expected_thread_environment(max_threads)):
+        raise MatrixError(
+            f"job {job.get('id')} has an invalid nested-runtime policy")
+    return policy
+
+
+def _validate_lab_thread_evidence(job: dict, result: dict) -> dict:
+    runtime = result.get("thread_runtime")
+    if (not isinstance(runtime, dict) or
+            set(runtime) != {"policy", "observation"} or
+            runtime.get("policy") != _validate_lab_thread_policy(job)):
+        raise MatrixError(
+            f"job {job['id']} has invalid nested-runtime evidence")
+    observation = runtime.get("observation")
+    required = {
+        "schema", "status", "declared_max_threads", "allocated_cpu_count",
+        "sample_count", "affinity_sample_count", "peak_process_count",
+        "peak_thread_count",
+        "peak_rss_bytes", "rss_limit_bytes", "rss_exceeded",
+        "outside_cpu_set", "oversubscribed"}
+    numeric = (
+        "sample_count", "affinity_sample_count", "peak_process_count",
+        "peak_thread_count",
+        "peak_rss_bytes", "rss_limit_bytes")
+    if (not isinstance(observation, dict) or
+            not required.issubset(observation) or
+            not set(observation).issubset(required | {"detail"}) or
+            observation.get("schema") != LAB_THREAD_OBSERVATION_SCHEMA or
+            observation.get("status") != "observed" or
+            observation.get("declared_max_threads") !=
+                job["thread_runtime"]["max_threads"] or
+            observation.get("allocated_cpu_count") != len(job["cpu_set"]) or
+            any(isinstance(observation.get(key), bool) or
+                not isinstance(observation.get(key), int) or
+                observation[key] < 0 for key in numeric) or
+            observation.get("sample_count", 0) < 1 or
+            observation.get("affinity_sample_count", 0) < 1 or
+            observation.get("peak_process_count", 0) < 1 or
+            observation.get("peak_thread_count", 0) < 1 or
+            observation.get("peak_thread_count") >
+                job["thread_runtime"]["max_threads"] or
+            observation.get("rss_limit_bytes") !=
+                job.get("rss_limit_mb", 0) * 1024 * 1024 or
+            observation.get("rss_exceeded") is not False or
+            observation.get("outside_cpu_set") != [] or
+            observation.get("oversubscribed") is not False):
+        raise MatrixError(
+            f"job {job['id']} lacks valid thread-allocation evidence")
+    return runtime
+
+
 def _validate_manifest(value: object) -> dict:
     if not isinstance(value, dict) or value.get("schema") != LAB_MANIFEST_SCHEMA:
         raise MatrixError("unsupported lab manifest")
@@ -729,6 +811,15 @@ def _validate_manifest(value: object) -> dict:
     unsigned.pop("manifest_digest", None)
     if expected_digest != digest(unsigned):
         raise MatrixError("lab manifest digest does not match its contents")
+    thread_safety = value.get("thread_safety")
+    expected_controls = sorted(
+        LAB_THREAD_COUNT_ENV + LAB_THREAD_FALSE_ENV +
+        ("OMP_MAX_ACTIVE_LEVELS",))
+    if thread_safety != {
+            "schema": LAB_THREAD_POLICY_SCHEMA,
+            "controlled_environment": expected_controls,
+            "runtime_observation": LAB_THREAD_OBSERVATION_SCHEMA}:
+        raise MatrixError("lab manifest thread-safety policy is invalid")
     source_spec = value.get("source_spec")
     if (not isinstance(source_spec, dict) or
             source_spec.get("schema") != SPEC_SCHEMA or
@@ -756,6 +847,7 @@ def _validate_manifest(value: object) -> dict:
                 job["resume_group"] != job["cpu_group"]):
             raise MatrixError(
                 f"job {job['id']} is missing its atomic resume group")
+        _validate_lab_thread_policy(job)
         expected_cell = job.get("benchmark_cell")
         if (not isinstance(expected_cell, dict) or
                 set(expected_cell) != set(EXPECTED_CELL_FIELDS)):
@@ -926,7 +1018,7 @@ def collect(manifest_path: Path, results_dir: Path) -> dict:
         job_dir = results_dir / "jobs" / job_id
         lab_result = load_json(job_dir / "result.json")
         if (not isinstance(lab_result, dict) or
-                lab_result.get("schema") != "leopard2-lab-result/v1" or
+                lab_result.get("schema") != LAB_RESULT_SCHEMA or
                 lab_result.get("state") != "complete"):
             raise MatrixError(f"job {job_id} has an invalid lab result")
         unsigned_result = dict(lab_result)
@@ -945,6 +1037,7 @@ def collect(manifest_path: Path, results_dir: Path) -> dict:
         result_cpu_set = lab_result.get("cpu_set")
         if result_cpu_set != job.get("cpu_set"):
             raise MatrixError(f"job {job_id} result CPU set differs from its manifest")
+        thread_runtime = _validate_lab_thread_evidence(job, lab_result)
         outcome = str(lab_result.get("outcome"))
         outcomes[outcome] += 1
         run_epoch = lab_result.get("run_epoch")
@@ -965,6 +1058,7 @@ def collect(manifest_path: Path, results_dir: Path) -> dict:
             "cpu_group": job["cpu_group"],
             "resume_group": job["resume_group"],
             "run_epoch": run_epoch,
+            "thread_runtime": thread_runtime,
             "order_trial": order_trial,
             "order_sequence": order_sequence,
             "performance_counter_request": job.get("performance_counters"),
@@ -1348,6 +1442,13 @@ def self_test() -> None:
                     "cpu_group": "self-test-pair",
                     "resume_group": "self-test-pair",
                     "executable": executable,
+                    "rss_limit_mb": 0,
+                    "thread_runtime": {
+                        "schema": LAB_THREAD_POLICY_SCHEMA,
+                        "max_threads": 1,
+                        "allow_internal_team": False,
+                        "effective_env": _expected_thread_environment(1),
+                    },
                     "command": (["/tmp/bench_leopard2", "--force-generic"]
                                 if forced_generic else
                                 (["/tmp/bench_leopard2", "--force-specialized"]
@@ -1356,7 +1457,7 @@ def self_test() -> None:
                 job["job_digest"] = digest(job)
                 jobs.append(job)
                 lab_results[job_id] = {
-                    "schema": "leopard2-lab-result/v1",
+                    "schema": LAB_RESULT_SCHEMA,
                     "state": "complete",
                     "job_id": job_id,
                     "job_digest": job["job_digest"],
@@ -1365,6 +1466,24 @@ def self_test() -> None:
                     "cpu_set": [7],
                     "duration_seconds": 0.1,
                     "run_epoch": "a" * 64,
+                    "thread_runtime": {
+                        "policy": job["thread_runtime"],
+                        "observation": {
+                            "schema": LAB_THREAD_OBSERVATION_SCHEMA,
+                            "status": "observed",
+                            "declared_max_threads": 1,
+                            "allocated_cpu_count": 1,
+                            "sample_count": 2,
+                            "affinity_sample_count": 2,
+                            "peak_process_count": 1,
+                            "peak_thread_count": 1,
+                            "peak_rss_bytes": 4096,
+                            "rss_limit_bytes": 0,
+                            "rss_exceeded": False,
+                            "outside_cpu_set": [],
+                            "oversubscribed": False,
+                        },
+                    },
                 }
                 benchmarks[job_id] = {
                     "schema": "leopard2-benchmark-v1",
@@ -1405,6 +1524,13 @@ def self_test() -> None:
             manifest = {
                 "schema": LAB_MANIFEST_SCHEMA,
                 "root": "/tmp",
+                "thread_safety": {
+                    "schema": LAB_THREAD_POLICY_SCHEMA,
+                    "controlled_environment": sorted(
+                        LAB_THREAD_COUNT_ENV + LAB_THREAD_FALSE_ENV +
+                        ("OMP_MAX_ACTIVE_LEVELS",)),
+                    "runtime_observation": LAB_THREAD_OBSERVATION_SCHEMA,
+                },
                 "source_spec": {
                     "schema": SPEC_SCHEMA, "digest": "b" * 64,
                     "metadata": {"preset": "self-test"}},
@@ -1439,6 +1565,19 @@ def self_test() -> None:
                     "automatic_ratio_to_best_forced"] != 1.2 or
                 collected["source_spec"]["metadata"]["preset"] != "self-test"):
             raise MatrixError("collector pairing invariant failed")
+
+        def forge_oversubscribed_result(manifest, results, benchmarks):
+            del manifest, benchmarks
+            observation = next(iter(results.values()))[
+                "thread_runtime"]["observation"]
+            observation["peak_thread_count"] = 2
+            observation["oversubscribed"] = True
+
+        oversubscribed_fixture = write_fixture(
+            "oversubscribed-runtime", forge_oversubscribed_result)
+        expect_error(
+            "oversubscribed runtime evidence",
+            lambda: collect(*oversubscribed_fixture))
 
         def add_unavailable_counters(manifest, results, benchmarks):
             del benchmarks

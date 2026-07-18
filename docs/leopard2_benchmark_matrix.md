@@ -227,8 +227,12 @@ and require the recorded measurements, status, and detail to equal that
 raw-derived result; coordinated JSON/digest edits cannot substitute a different
 value while leaving the retained raw bytes unchanged. The matrix self-test
 applies the same evidence invariants during collection.
-Lab manifests therefore use `leopard2-lab-manifest/v3`; older manifests must be
-regenerated rather than being resumed under weaker evidence semantics.
+Lab manifests therefore use `leopard2-lab-manifest/v4`, and terminal results
+use `leopard2-lab-result/v2`. Each job now binds a deterministic nested-runtime
+environment and records observed process, aggregate-thread, affinity, and RSS
+evidence. Older manifests and results must be regenerated rather than being
+resumed under weaker evidence semantics. The dedicated sanitizer replay
+workflow is documented in `docs/leopard2_fuzz_campaign.md`.
 CTest also runs the independent operation-count model's schedule invariants;
 those counts remain modeled bounds rather than PMU observations.
 
