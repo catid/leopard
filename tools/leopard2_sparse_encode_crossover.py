@@ -50,6 +50,7 @@ SOURCE_FILES = (
     "Leopard2Backend.cpp",
     "Leopard2Backend.h",
     "Leopard2BackendAVX2.cpp",
+    "Leopard2BackendAVX512.cpp",
     "Leopard2BackendSSSE3.cpp",
     "Leopard2BackendScalar.cpp",
     "Leopard2CpuFeatures.cpp",
@@ -72,7 +73,7 @@ SOURCE_FILES = (
     "tools/leopard2_sparse_encode_benchmark_json_test.py",
     "tools/leopard2_sparse_encode_crossover.py",
 )
-KNOWN_BACKENDS = ("scalar", "ssse3", "avx2", "auto")
+KNOWN_BACKENDS = ("scalar", "ssse3", "avx2", "avx512", "auto")
 
 
 class CrossoverError(RuntimeError):
@@ -1870,6 +1871,13 @@ def analyze(arguments: argparse.Namespace) -> int:
 
 
 def self_test() -> int:
+    if parse_backends("avx512") != ["avx512"]:
+        raise CrossoverError("explicit AVX-512 backend parsing failed")
+    defaults = build_parser().parse_args([
+        "screen", "--executable", "benchmark", "--result-dir", "results",
+    ])
+    if defaults.backends != "auto":
+        raise CrossoverError("sparse runner default backend changed")
     cells_a = make_cells(["avx2", "scalar"], [1024, 64])
     cells_b = make_cells(["scalar", "avx2"], [64, 1024])
     if canonical_bytes(cells_a) != canonical_bytes(cells_b) or len(cells_a) != 48:

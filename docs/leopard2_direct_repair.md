@@ -73,7 +73,7 @@ original directly to its caller-provided disjoint output and uses scratch only
 for the existing overlap/range validation array.
 
 GF8 fixed multiply and multiply-add accept any positive byte count.  Complete
-64-byte tiles use the current SSSE3/AVX2 backend and a trailing partial tile uses
+64-byte tiles use the current SSSE3/AVX2/AVX512 backend and a trailing partial tile uses
 scalar field elements.  GF16 uses the same optimized complete-tile kernels and
 handles an even compact tail as `q` low bytes followed by `q` high bytes.  Odd
 GF16 byte counts remain unsupported.  No-loss, `R=1`, `K=1`, specialized LCH,

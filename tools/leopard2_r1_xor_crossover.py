@@ -47,6 +47,7 @@ JOB_SCHEMA = "leopard2-r1-xor-crossover-job/v1"
 ANALYSIS_SCHEMA = "leopard2-r1-xor-crossover-analysis/v1"
 BENCHMARK_SCHEMA = "leopard2-benchmark-v2"
 BACKENDS = ("scalar", "ssse3", "avx2")
+ACCEPTED_BACKENDS = BACKENDS + ("avx512",)
 
 
 class CrossoverError(Exception):
@@ -280,8 +281,12 @@ def parse_backends(value):
         item = item.strip().lower()
         if item and item not in result:
             result.append(item)
-    if not result or any(item not in BACKENDS for item in result):
-        raise CrossoverError("backends must be a subset of scalar,ssse3,avx2")
+    if not result or any(item not in ACCEPTED_BACKENDS for item in result):
+        raise CrossoverError(
+            "backends must be a subset of {}".format(
+                ",".join(ACCEPTED_BACKENDS)
+            )
+        )
     return result
 
 
@@ -931,6 +936,12 @@ def command_analyze(args):
 
 
 def command_self_test(_args):
+    assert parse_backends("avx512") == ["avx512"]
+    defaults = parser().parse_args([
+        "run", "--baseline", "baseline", "--candidate", "candidate",
+        "--result-dir", "results", "--cpu", "0",
+    ])
+    assert defaults.backends == ",".join(BACKENDS)
     values = compact_grid(BACKENDS)
     assert {item["backend"] for item in values} == set(BACKENDS)
     assert min(item["shard_bytes"] for item in values) == 1

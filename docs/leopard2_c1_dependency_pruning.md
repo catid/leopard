@@ -194,9 +194,9 @@ identity writes, and publishes the candidate plan only after complete
 validation. The immutable plan owns masks, flat operation descriptors, fused
 start indices, requested structurally-zero output indices, and, for inverse
 plans, the compact root dependency flags described below. Byte execution
-allocates nothing. It calls the selected scalar, SSSE3, or AVX2 fixed-product and
-butterfly table explicitly, so a process-global default cannot leak into a
-lower-backend test.
+allocates nothing. It calls the selected scalar, SSSE3, AVX2, or explicit
+AVX512 fixed-product and butterfly table explicitly, so a process-global
+default cannot leak into a lower-backend test.
 
 The final operation vector reserves only the retained operation count, rather
 than retaining capacity for the full padded graph after pruning. The temporary

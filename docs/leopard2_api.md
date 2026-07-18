@@ -53,8 +53,8 @@ single-pass encoder, and requested null parity outputs remain unmaterialized.
 For bounded `K,R <= 16` codecs, setup can precompute exact full-parent
 systematic generator rows. AUTO uses this allocation-free direct evaluator only
 for the measured Low V1, one-output, regular-shard region; scalar requires
-`K >= 3`, SSSE3/AVX2 requires `K >= 2`, and physical shards must be at least
-1 KiB and a multiple of 64 bytes. All other cells retain the transform encoder.
+`K >= 3`, SSSE3/AVX2/explicit AVX512 requires `K >= 2`, and physical shards
+must be at least 1 KiB and a multiple of 64 bytes. All other cells retain the transform encoder.
 This is an internal kernel decision and does not change profile identity or
 parity bytes. See `leopard2_direct_encode.md` for the derivation and evidence.
 
@@ -90,9 +90,9 @@ missing originals; its last `L` tiled slots retain outputs until
 application-layout scatter.  The retained materialized specialized kernel is
 used when its regular `N` slots are no larger.  One offline-calibrated
 legacy-high GF8 region also reserves and uses `N` slots because that regular
-traversal is faster for a single stripe; measured AVX2 multi-item batches
-execute tiled using the same conservative allocation.  SSSE3 batches retain
-the materialized traversal pending dedicated evidence.  Forced generic decoding
+traversal is faster for a single stripe; measured AVX2 and explicit AVX512
+multi-item batches execute tiled using the same conservative allocation.  SSSE3
+batches retain the materialized traversal pending dedicated evidence.  Forced generic decoding
 retains `N` work slots.  A ragged final
 tile adds `64*(K+R)` bytes for GF8 zero padding or GF16 compact-to-ALTMAP
 scatter.  The public overlap checks are unchanged.
@@ -105,7 +105,7 @@ Its `K+R` staging term is therefore fixed at 64 bytes per public coordinate;
 it no longer scales with the full shard length.  Pointer and range-validation
 metadata are additional small terms; neither is a full-shard data slot.  See
 `leopard2_decode_tiled_workspace.md` for the execution equivalence and scratch
-formulas.  In the measured GF8 generic-fallback region, aligned SSSE3/AVX2
+formulas.  In the measured GF8 generic-fallback region, aligned SSSE3/AVX2/AVX512
 prefixes of at least 4 KiB also reveal directly from the `N`-slot workspace into
 caller outputs, eliminating the separate in-scratch reveal and public scatter
 passes without changing scratch size or wire identity.

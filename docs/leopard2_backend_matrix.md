@@ -1,28 +1,39 @@
 # Leopard2 backend determinism matrix
 
-`LEO2_BACKEND_VARIANT` is a diagnostic CMake cache setting with four values:
-`auto`, `scalar`, `ssse3`, and `avx2`. The default is `auto`. In that mode the
+`LEO2_BACKEND_VARIANT` is a diagnostic CMake cache setting with five values:
+`auto`, `scalar`, `ssse3`, `avx2`, and `avx512`. The default is `auto`. In that mode the
 project builds baseline control flow at the x86-64 SSE2 floor and adds named
-SSSE3 and AVX2 object members compiled with target-local ISA flags. Startup
+SSSE3, AVX2, and AVX-512VL object members compiled with target-local ISA flags
+when the compiler supports them. Startup
 CPUID/XCR0 probing selects one immutable private ops table only after its
-GF8/GF16/XOR known-answer tests pass. A forced variant changes that selection
-only; it never changes the field, coordinate profile, or wire bytes.
+GF8/GF16/XOR known-answer tests pass. A forced variant caps both `AUTO` and
+explicit context selection at that backend; `avx512` may still qualify lower
+tables. It never changes the field, coordinate profile, or wire bytes.
 
 The forced variants apply to the x86 library and independently built fuzzer
 copy. `scalar` selects table-backed scalar fixed multiplication and portable
 XOR. `ssse3` requires runtime SSSE3 and selects isolated 128-bit nibble-table
 kernels. `avx2` additionally requires AVX, OSXSAVE, XMM/YMM XCR0 state, and the
 AVX2 CPUID bit before selecting 256-bit fixed multiplication and Common XOR.
+`avx512` requires AVX2 plus AVX-512F/BW/VL and OS-enabled opmask/ZMM state. It
+selects the explicit AVX-512VL table, whose current data path remains 256 bits
+wide while using the expanded register file. `AUTO` deliberately remains
+AVX2 on a qualifying host.
 All baseline FF/control objects have legacy whole-TU optional code generation
 disabled.
 
 The current CMake diagnostic variants are x86-only. CMake checks that the
 compiler accepts each isolated object's target flags; it does not require the
 build host to implement that ISA. The Python matrix separately skips execution
-of a SIMD diagnostic when the host lacks the selected feature. `scalar`
+of a SIMD diagnostic when the host lacks the selected feature, and records
+`avx512` as unavailable when any required compiler flag or CPU feature is
+missing. A direct CMake request fails at configure time when its isolated
+backend cannot be built. `scalar`
 performs neither optional-feature nor compiler-ISA check. Variants do not
-silently substitute a different implementation. All four archives have the
-same member isolation; the variants are deterministic selection diagnostics,
+silently substitute a different implementation. All five archives have the
+same available member isolation; the matrix derives its exact compile-source
+contract from the CMake probe results so an unsupported optional object is not
+mistaken for graph drift. The variants are deterministic selection diagnostics,
 while `auto` is the production runtime-dispatched binary.
 
 Run the standard-library-only matrix from the repository root:
@@ -43,7 +54,9 @@ concurrency test across all executable backends. The `auto` build
 runs `leopard2_cuda_optional`, proving that a normal build does not need a CUDA
 compiler or toolkit. Each forced build also makes the public API suite assert
 that runtime backend introspection reports the requested scalar, SSSE3, or
-AVX2 backend; matching output alone cannot conceal a failed force control.
+AVX2 backend; the AVX-512 variant is checked the same way when available.
+Lower forced builds also assert that an explicit AVX-512 context is rejected,
+so matching output alone cannot conceal a failed force or qualification cap.
 If CMake did not register or execute the portable-ISA gate (for example because
 `objdump` or a POSIX `sh` is unavailable), the matrix fails with an actionable
 reason; it does not accept CTest's zero exit status for an empty selection.

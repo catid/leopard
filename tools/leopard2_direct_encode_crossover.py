@@ -42,7 +42,7 @@ SCHEMA = "leopard2-direct-encode-crossover/v1"
 JOB_SCHEMA = "leopard2-direct-encode-crossover-job/v1"
 ANALYSIS_SCHEMA = "leopard2-direct-encode-crossover-analysis/v1"
 BENCHMARK_SCHEMA = "leopard2-direct-encode-benchmark-v1"
-KNOWN_BACKENDS = ("scalar", "ssse3", "avx2")
+KNOWN_BACKENDS = ("scalar", "ssse3", "avx2", "avx512")
 SOURCE_FILES = (
     "CMakeLists.txt",
     "LeopardCommon.cpp",
@@ -1262,6 +1262,8 @@ def self_test():
     assert compact_cpu_list([3, 2, 1, 7, 9, 8]) == "1-3,7-9"
     assert digest_value({"b": 2, "a": 1}) == digest_value({"a": 1, "b": 2})
     assert stable_seed({"cell": 1}) == stable_seed({"cell": 1})
+    assert parse_backends("avx512") == ["avx512"]
+    assert parser().parse_args(["screen"]).backends == "scalar,ssse3,avx2"
     grid = sorted_grid(["scalar", "ssse3", "avx2"], [16], False)
     candidates = [item for item in grid if item["region"] == "candidate"]
     assert candidates

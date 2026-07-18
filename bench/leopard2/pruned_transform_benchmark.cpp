@@ -180,7 +180,7 @@ void usage(const char* executable)
         << "  --output-requested N      requested output prefix\n"
         << "  --input-shape prefix|holey\n"
         << "  --output-shape prefix|holey\n"
-        << "  --backend auto|scalar|ssse3|avx2\n"
+        << "  --backend auto|scalar|ssse3|avx2|avx512\n"
         << "  --iterations N            executions per timing sample\n"
         << "  --samples N               retained timing samples\n"
         << "  --warmups N\n"

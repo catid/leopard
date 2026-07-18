@@ -28,7 +28,11 @@ allow the compiler to emit unsupported instructions anywhere in the program.
 For cross-compilation, select the destination architecture in a CMake toolchain
 file and keep its baseline compatible with every deployment CPU.  The
 `LEO2_BACKEND_VARIANT` setting is a diagnostic control for forcing a qualified
-backend during testing; it is not a portability target or a wire-format choice.
+backend during testing; accepted values are `auto`, `scalar`, `ssse3`, `avx2`,
+and `avx512`.  Lower forced variants cap explicit contexts at the selected
+backend, while `avx512` retains access to qualified lower tables.  This setting
+is not a portability target or a wire-format choice, and `auto` continues to
+prefer AVX2 rather than AVX-512VL.
 When its POSIX shell and disassembly tools are available, the normal test build
 registers `leopard2_portable_isa` to audit the x86-64 archive and any available
 build metadata.  Missing audit tools remain non-fatal for ordinary developer,

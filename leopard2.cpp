@@ -1841,8 +1841,9 @@ static bool UseFusedGenericRevealScatter(
 {
 #ifdef LEO_HAS_FF8
     // A counterbalanced screen retained the established scratch reveal below
-    // 4 KiB and on scalar/NEON.  At and above 4 KiB the fused SSSE3/AVX2 path
-    // removes two full output writes and showed a clear whole-decode win.
+    // 4 KiB and on scalar/NEON.  At and above 4 KiB the fused
+    // SSSE3/AVX2/explicit-AVX512 path removes two full output writes and
+    // showed a clear whole-decode win.
     return codec->field == LEO2_FIELD_GF8 &&
         aligned_prefix_bytes >= 4096 &&
         (codec->context->backend == LEO2_BACKEND_SSSE3 ||
@@ -5396,10 +5397,12 @@ static leo2_result DecodePlanExecuteInternal(
         aggregate work despite Algorithm 5's smaller transform side: the
         operation model counts 1280 versus 1856 butterflies.  Two reversed,
         CPU-pinned runs measured the generic decoder 5-32% faster from 256 B
-        through 1 MiB on the three production x86 backends.  Keep dispatch
-        strictly inside that measured region; neighboring counts, fields,
-        backends, and sizes retain the profile-specific decoder.  A ragged
-        final tile uses the same path as its aligned prefix.
+        through 1 MiB on scalar, SSSE3, and AVX2.  The explicit AVX-512VL
+        table recompiles the AVX2 traversal with the expanded register file
+        and follows the same rule.  Keep dispatch strictly inside that region;
+        neighboring counts, fields, backends, and sizes retain the
+        profile-specific decoder.  A ragged final tile uses the same path as
+        its aligned prefix.
     */
     const bool use_generic = geometry.selection.path ==
         leopard2_internal::kDecodePathGeneric;

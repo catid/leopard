@@ -13,7 +13,7 @@ automatically only when all of the following are true:
 - the field is legacy GF8;
 - every original is missing;
 - the rounded shard size is 256 bytes through 1 MiB; and
-- the selected backend is scalar, SSSE3, or AVX2.
+- the selected backend is scalar, SSSE3, AVX2, or explicit AVX512.
 
 All neighboring counts, partial-loss patterns, GF16 codes, NEON, and sizes
 outside that interval retain the profile-specific high decoder. Explicit

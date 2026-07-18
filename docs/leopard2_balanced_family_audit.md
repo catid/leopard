@@ -13,7 +13,8 @@ been run with it.
 The existing `ShouldUseBalancedGenericDecode` policy is an evidence boundary,
 not an algebraic boundary.  It selects the generic active-parent decoder only
 for legacy-high GF8 with `K=R=T=128`, `N=256`, all originals missing, rounded
-shard bytes from 256 through 1 MiB, and a scalar, SSSE3, or AVX2 backend.
+shard bytes from 256 through 1 MiB, and a scalar, SSSE3, AVX2, or explicit
+AVX512 backend.
 Explicit force flags still override it.
 
 For every balanced legacy-high GF8 code with `5 <= K=R <= 128`, let

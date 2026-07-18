@@ -98,7 +98,7 @@ tail is not misrepresented as another whole rounded shard.  Algorithm 5 gathers
 L complete requested payloads.  Algorithm 4 reveals every aligned prefix
 directly and gathers only `L * (shard_bytes mod 64)` tail bytes.  Generic decode
 retains the in-scratch reveal and scatter except where qualified GF8
-SSSE3/AVX2 execution removes both for the aligned prefix.
+SSSE3/AVX2/AVX512 execution removes both for the aligned prefix.
 
 Reports separate:
 
@@ -150,8 +150,11 @@ that cannot round up to 64 bytes in the declared `size_t`, or a complete scratch
 layout that overflows.  It never labels an unrepresentable Python integer as an
 exact public-query byte count.
 
-`--backend scalar|ssse3|avx2|neon` chooses the backend predicates used for
-traffic accounting.  It never changes the structural butterfly count.
+`--backend scalar|ssse3|avx2|avx512|neon` chooses the backend predicates used
+for traffic accounting.  It never changes the structural butterfly count.
+The AVX512 choice models the explicit AVX-512VL context backend; ordinary AUTO
+selection remains the production backend observed by the linked probe and does
+not change merely because this reporting option is available.
 `--decode-selection path` forces the path named by the report and
 `--decode-workspace materialized|tiled` selects that specialized workspace.
 `--decode-selection auto` mirrors production AUTO, including bounded direct
@@ -245,9 +248,10 @@ The self-test fixes two useful schedule checks:
   before that zero-copy model is accepted.  The remaining 256 logical copies
   are the 8 systematic inputs staged for interpolation and the 248 requested
   parity outputs scattered to caller buffers.
-- GF8 high K=240, R=16 decode with original 0 missing: on qualified SSSE3 and
-  AVX2 backends, the incomplete parity and first-message blocks retain their
-  two exact-pruned T=16 staging workspaces.  The remaining full blocks provide
+- GF8 high K=240, R=16 decode with original 0 missing: on qualified SSSE3,
+  AVX2, and explicit AVX512 backends, the incomplete parity and first-message
+  blocks retain their two exact-pruned T=16 staging workspaces.  The remaining
+  full blocks provide
   56 complete four-row receive groups that enter the first two inverse layers
   directly.  The receive boundary copies 16 live rows and zeroes 16 absent
   rows, removing 224 logical copy vectors (224 shard reads and 224 shard

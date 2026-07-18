@@ -5,9 +5,9 @@
 The legacy-high and low-profile encoders normally no longer copy a complete active
 input prefix into scratch before beginning a block inverse transform.  For a
 transform side greater than four, each complete group of four caller shards is
-read directly by the selected scalar, SSSE3, or AVX2 inverse radix-four
-backend and the two-layer result is written to scratch.  A final group of one
-to three shards retains the established copy-and-zero path.  Sides of four or
+read directly by the selected scalar, SSSE3, AVX2, or explicit AVX512 inverse
+radix-four backend and the two-layer result is written to scratch.  A final
+group of one to three shards retains the established copy-and-zero path.  Sides of four or
 less retain the old path because their only inverse stage can already be fused
 with high-rate XOR accumulation.  A measured GF16 AVX2 crossover also retains
 copy-first for every legacy-high block when the transform side is at least 256

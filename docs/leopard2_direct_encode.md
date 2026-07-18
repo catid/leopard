@@ -16,7 +16,7 @@ The bound is an implementation and measurement boundary, not a mathematical
 limit. Test-enabled builds prepare rows for every bounded high/low and GF8/GF16
 combination so differential coverage can force either encoder. A production
 build allocates the table only for a codec that can enter the AUTO region:
-Low V1 with scalar `K >= 3`, or qualified SSSE3/AVX2 `K >= 2`. Thus legacy-high,
+Low V1 with scalar `K >= 3`, or qualified SSSE3/AVX2/AVX512 `K >= 2`. Thus legacy-high,
 `K=1`, scalar `K=2`, and unmeasured-backend codecs pay no encoder-table setup or
 footprint. A codec outside the bound retains the normal transform encoder
 without a partial direct table or a changed wire profile.

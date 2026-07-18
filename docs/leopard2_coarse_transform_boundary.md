@@ -20,8 +20,9 @@ granularity is one concrete part of the remaining main/current transform gap.
 
 This checkpoint moves the loop over one complete contiguous radix-four group
 behind the private backend boundary.  A field transform now makes one
-context-routed call for the group; the scalar, SSSE3, or AVX2 translation unit
-then walks its independent shard lanes with direct backend-kernel calls.  The
+context-routed call for the group; the scalar, SSSE3, AVX2, or explicit AVX512
+translation unit then walks its independent shard lanes with direct backend-
+kernel calls.  The
 following operations have coarse entries:
 
 - GF8 forward radix-four groups;
@@ -54,13 +55,13 @@ nonzero number of range entries and fewer range calls than logical leaves.
 ## Portability and context selection
 
 The range callbacks are private members of the immutable `Ops` table; no
-public C or C++ ABI changes.  Scalar, SSSE3, and AVX2 tables all implement the
-entries, and builds omitting GF8 or GF16 publish null entries for the omitted
-field.  Startup known-answer tests reject a backend before publication when a
+public C or C++ ABI changes.  Scalar, SSSE3, AVX2, and explicit AVX512 tables
+all implement the entries, and builds omitting GF8 or GF16 publish null entries
+for the omitted field.  Startup known-answer tests reject a backend before publication when a
 required entry is absent or disagrees with its already-qualified leaf kernels.
 
-On portable x86 builds, the field translation units contain no SSSE3 or AVX2
-instructions and dispatch into the isolated backend object.  Targets that
+On portable x86 builds, the field translation units contain no SSSE3, AVX2, or
+AVX-512 instructions and dispatch into the isolated backend objects.  Targets that
 intentionally retain legacy in-field SIMD, including SSE2NEON-style builds,
 keep the established default-context leaf route rather than accidentally
 calling the scalar range entry.  Explicit non-default contexts still use their

@@ -283,7 +283,7 @@ void usage(const char* executable)
         << "  --k N --r N\n"
         << "  --bytes N\n"
         << "  --requested-parity MASK   comma-separated indices/ranges\n"
-        << "  --backend auto|scalar|ssse3|avx2\n"
+        << "  --backend auto|scalar|ssse3|avx2|avx512\n"
         << "  --iterations N            calls per timing sample\n"
         << "  --rounds 3                independent ABBA/BAAB/ABBA rounds\n"
         << "  --warmups N\n"
