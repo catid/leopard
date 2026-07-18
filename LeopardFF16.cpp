@@ -33,6 +33,10 @@
 
 #include <string.h>
 
+#if defined(LEO2_WEIGHTED_LOCATOR_BOUNDARY_ABBA)
+#include <stdlib.h>
+#endif
+
 #if defined(LEO2_ENABLE_TEST_HOOKS)
 #include <atomic>
 #endif
@@ -1545,7 +1549,15 @@ static void IFFT_DIT_DecoderWeightedLocator(
     const unsigned m,
     const ffe_t* skewLUT)
 {
-    if (m < 4)
+#if defined(LEO2_WEIGHTED_LOCATOR_BOUNDARY_ABBA)
+    const char* const diagnostic_selection =
+        getenv("LEO2_WEIGHTED_LOCATOR_BOUNDARY");
+    const bool select_weighted = diagnostic_selection != NULL &&
+        diagnostic_selection[0] == '1' && diagnostic_selection[1] == '\0';
+#else
+    const bool select_weighted = true;
+#endif
+    if (m < 4 || !select_weighted)
     {
 #pragma omp parallel for
         for (int i = 0; i < static_cast<int>(m); ++i)
