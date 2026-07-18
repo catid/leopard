@@ -333,6 +333,28 @@ evaluates it on `V_t`, multiplies by locator values, and inverse-transforms thos
 values to `z`.  Only message blocks containing requested missing originals need
 the final shifted evaluation.
 
+The promoted GF8 AVX2 execution composes, but does not reorder, the locator
+diagonal with the first two inverse layers.  For four rows, let
+`u_i = h_i Lambda_i` when row `i` is live and zero otherwise.  With the three
+ordinary inverse-butterfly skew factors `a`, `b`, and `c`, the stored boundary
+is exactly
+
+    v1 = u1 + u0              v0 = u0 + a v1
+    v3 = u3 + u2              v2 = u2 + b v3
+    o2 = v2 + v0              o3 = v3 + v1
+    o0 = v0 + c o2            o1 = v1 + c o3
+
+where addition is XOR.  This is a labeled execution derivation obtained by
+substitution into Leopard's existing two inverse radix-two layers, not a new
+decoder identity.  Locator weight logs zero and the GF8 modulus log 255 both
+mean multiplication by one.  In the skew positions 255 instead means the
+zero-skew sentinel, so the corresponding product term is absent while the XOR
+edge remains.  Scalar-reference known-answer tests enumerate all sixteen live
+masks, identity and ordinary locator weights, each skew sentinel independently,
+disjoint and exact in-place storage, vector widths, and arbitrary byte tails.
+The full scale-then-IFFT path remains the oracle outside the measured dispatch
+region documented in `docs/leopard2_high_decode_no_copy.md`.
+
 For a missing original `e` outside `V_t`, differentiating the active congruence
 introduces `c_n=s_n'`:
 

@@ -171,6 +171,66 @@ def verify_high_decode_receive_fusion_source(source: str, label: str) -> None:
             )
 
 
+def verify_high_decode_weighted_locator_source(source: str, label: str) -> None:
+    """Bind the Algorithm 5 locator delta to its measured dispatch region."""
+    compact = re.sub(r"\s+", "", source)
+    begin = compact.find("staticvoidIFFT_DIT_DecoderWeightedLocator(")
+    end = compact.find("staticvoidStageHighDecodeSources(", begin)
+    if begin < 0 or end < 0:
+        raise ModelError(
+            "{} is missing the Algorithm 5 weighted locator boundary".format(
+                label
+            )
+        )
+    helper = compact[begin:end]
+    required = (
+        "ops.kind==LEO2_BACKEND_AVX2",
+        "ops.ff8_weighted_ifft_butterfly4!=NULL",
+        "m>=64",
+        "bytes>=16U*1024U",
+        "bytes<=256U*1024U",
+        "live_count>=(m+1U)/2U",
+        "mul_mem_inplace(ops,work[i],locator_logs[i],bytes)",
+        "IFFT_DIT_Decoder(ops,bytes,m,work,m,skewLUT)",
+        "ops.ff8_weighted_ifft_butterfly4(",
+    )
+    for token in required:
+        if token not in helper:
+            raise ModelError(
+                "{} widened or obscured the qualified weighted locator "
+                "boundary ({})".format(label, token)
+            )
+    for callsite in (
+        "voidReedSolomonDecodeHighPrepared(constbackend::Ops&",
+        "voidReedSolomonDecodeHighPrunedPlanned(constbackend::Ops&",
+        "voidReedSolomonDecodeHighTiledPrunedPlanned(constbackend::Ops&",
+    ):
+        start = compact.find(callsite)
+        if start < 0:
+            raise ModelError("{} lost {}".format(label, callsite))
+        body = compact.find("{", start + len(callsite))
+        if body < 0:
+            raise ModelError("{} has no body".format(callsite))
+        depth = 0
+        end = body
+        for end in range(body, len(compact)):
+            if compact[end] == "{":
+                depth += 1
+            elif compact[end] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+        if depth != 0:
+            raise ModelError("{} has an unbalanced body".format(callsite))
+        segment = compact[start:end + 1]
+        if "IFFT_DIT_DecoderWeightedLocator(" not in segment:
+            raise ModelError(
+                "{} callsite bypasses the weighted locator dispatcher".format(
+                    callsite
+                )
+            )
+
+
 def verify_high_decode_gf16_copy_first_source(source: str, label: str) -> None:
     """Reject promotion of the measured-below-threshold GF16 candidate."""
     compact = re.sub(r"\s+", "", source)
@@ -1240,6 +1300,12 @@ def model_high_decode(
             "GF16 deterministic copy-first policy"
         ),
         "syndrome_reduction_vectors": reduction,
+        "locator_scale_vectors": len(selected_parities),
+        "locator_weighted_fusion_scope": (
+            "qualified GF8 AVX2 delta only: T>=64, live_count>=ceil(T/2), "
+            "and each kernel pass in [16 KiB, 256 KiB]"
+        ),
+        "locator_weighted_fusion_applied_to_isa_independent_totals": False,
         "evaluation_block_prefixes": evaluation_prefixes,
         "out_of_place_evaluator_first_layer": True,
         "requested_coordinates": mask_to_ranges(requested_coordinates),
@@ -1854,6 +1920,7 @@ def run_self_test(verbose: bool = True) -> None:
         verify_high_decode_no_copy_source(source, filename)
         if filename == "LeopardFF8.cpp":
             verify_high_decode_receive_fusion_source(source, filename)
+            verify_high_decode_weighted_locator_source(source, filename)
         else:
             verify_high_decode_gf16_copy_first_source(source, filename)
         verify_low_decode_weighted_fusion_source(source, filename)
@@ -1878,7 +1945,7 @@ def run_self_test(verbose: bool = True) -> None:
             pass
         else:
             raise AssertionError("whole-T copy mutation escaped source guard")
-        checks += 5
+        checks += 6 if filename == "LeopardFF8.cpp" else 5
 
     direct = model_direct_repair(16, 8, 16, 16, "low", set(range(4)))
     assert direct.nontransform_xor_vectors == 60

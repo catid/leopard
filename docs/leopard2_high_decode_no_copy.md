@@ -72,13 +72,66 @@ and pruned blocks with zero rows before block transforms begin.  The tiled
 kernel retains its established per-tile staging because it has no N-row
 workspace.
 
-Algorithm 4 is not changed by this fusion.  Its receive values are multiplied
-by plan-owned locator factors before the first inverse transform.  Algorithm
-5's later locator-weighted inverse has the same dependency.  Correctly fusing
-either boundary requires a new backend operation that applies four independent
-fixed multipliers before the inverse butterfly; the current unweighted
-operation cannot be reused by reordering the diagonal multiplication.  That is
-a separate measured experiment, not an assumed algebraic optimization.
+Algorithm 4 is not changed by this receive fusion.  Its receive values are
+multiplied by plan-owned locator factors before the first inverse transform.
+
+## Locator-weighted inverse boundary
+
+Algorithm 5's later `h * Lambda` step now has its own deliberately narrow GF8
+AVX2 operation.  It applies four independent locator multipliers and executes
+the first two inverse LCH layers before storing the rows, then the mature
+inverse schedule resumes at distance four.  Locator weight logs zero and 255
+both denote the multiplicative identity; the same value 255 remains the
+zero-skew sentinel in each butterfly multiplier.  A four-bit live mask is the
+only mechanism that substitutes mathematical zero for an absent input row.
+The operation accepts either four exact in-place rows or wholly disjoint
+inputs and outputs; partial overlap, cross-row overlap, and overlapping outputs
+are rejected by the debug/test alias oracle.
+
+Same-executable pinned ABBA qualification promoted only this deterministic
+region:
+
+- GF8 and the AVX2 context backend;
+- `T >= 64` and at least `ceil(T/2)` live receive rows;
+- each kernel pass from 16 KiB through 256 KiB, inclusive.
+
+Everything else retains the established locator-scale/zero pass followed by
+the ordinary inverse transform.  In particular scalar, SSSE3, GF16, T=32,
+fewer than half-live receive rows, and byte passes outside the interval do not
+pay an added live-row scan or enter the new operation.  A split public shard is
+decided per pass: a qualified aligned prefix may use the operation while its
+64-byte padded tail uses the fallback.  Selected and fallback row counters are
+separate, and context tracing proves that every selected radix-four group uses
+the codec's immutable backend table.  Prepared, materialized, tiled, aligned,
+and tail-split paths have explicit dispatch tests.
+
+The attribution run used one diagnostic binary for both paths, switching only
+a fail-closed environment selector.  The benchmark SHA-256 was
+`3c90623ed35b3b7d0362bdc086672b6e8432068a5fba0ec133607018a2aeaa80` and
+the linked archive SHA-256 was
+`0fda8f23dae176b0afd7aed239aa00720e27a082baa5db9543a4bb929df5c052`.
+CPU 4 of the Ryzen 9 9950X3D host was pinned; SMT sibling 20 was monitored.
+Every cell used three independent ABBA rounds, eleven retained timing samples
+per launch, and eight executions per sample.  Ratios are fallback time divided
+by weighted time with round-level 95% t intervals:
+
+| GF8 AVX2 workload | Ratio |
+| --- | ---: |
+| T=64, 32 live, 16 KiB | 1.085 [1.078, 1.092] |
+| T=64, 32 live, 64 KiB | 1.092 [1.090, 1.094] |
+| T=64, 32 live, 256 KiB | 1.090 [1.088, 1.092] |
+| T=64, 64 live, 64 KiB | 1.153 [1.145, 1.161] |
+| T=128, 64 live, 64 KiB | 1.146 [1.144, 1.149] |
+| T=128, 128 live, 64 KiB | 1.386 [1.381, 1.391] |
+
+The neighboring T=16 half-live case reached only 1.043 [1.030, 1.057], T=64
+with 16 live rows had an interval of [1.030, 1.079], 256-byte shards reached
+1.035 [1.031, 1.039], and 1 MiB reached 1.050 [1.042, 1.057].  These did not
+clear the project-wide lower-confidence promotion rule and stay on the mature
+path.  T=32 full loss did clear the rule, but was intentionally not promoted
+because a one-size special case was not worth the extra policy surface.
+Scalar, SSSE3, and GF16 candidate implementations were removed rather than
+retained as unqualified symmetry code.  Algorithm 4 remains unchanged.
 
 For qualified GF8 K=240, R=16 with original zero missing, the incomplete
 parity block and incomplete first message block both own exact-pruned input

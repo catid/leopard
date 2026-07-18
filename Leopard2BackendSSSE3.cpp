@@ -109,18 +109,6 @@ static __m128i SSSE3FF8ProductVector(
     return _mm_xor_si128(low, high);
 }
 
-static __m128i SSSE3FF8ApplyWeight(__m128i data, uint16_t weight_log)
-{
-    static const uint16_t kModulus = 255;
-    if (weight_log == 0 || weight_log == kModulus)
-        return data;
-    const FF8NibbleTable& table = FF8Tables[weight_log];
-    return SSSE3FF8ProductVector(
-        data,
-        _mm_loadu_si128(reinterpret_cast<const __m128i*>(table.low)),
-        _mm_loadu_si128(reinterpret_cast<const __m128i*>(table.high)));
-}
-
 template<bool Inverse>
 static void SSSE3FF8Butterfly2(
     void* x_pointer,
@@ -1425,137 +1413,6 @@ static void SSSE3FF8IFFTButterfly4Out(
         log01, log23, log02, byte_count);
 }
 
-static void SSSE3FF8WeightedIFFTButterfly4(
-    const void* input0_pointer, const void* input1_pointer,
-    const void* input2_pointer, const void* input3_pointer,
-    void* output0_pointer, void* output1_pointer,
-    void* output2_pointer, void* output3_pointer,
-    uint16_t weight_log0, uint16_t weight_log1,
-    uint16_t weight_log2, uint16_t weight_log3,
-    uint8_t live_mask,
-    uint16_t log01, uint16_t log23, uint16_t log02,
-    uint64_t byte_count)
-{
-    static const uint16_t kZeroSkew = 255;
-    const uint8_t* inputs[4] = {
-        static_cast<const uint8_t*>(input0_pointer),
-        static_cast<const uint8_t*>(input1_pointer),
-        static_cast<const uint8_t*>(input2_pointer),
-        static_cast<const uint8_t*>(input3_pointer)
-    };
-    uint8_t* outputs[4] = {
-        static_cast<uint8_t*>(output0_pointer),
-        static_cast<uint8_t*>(output1_pointer),
-        static_cast<uint8_t*>(output2_pointer),
-        static_cast<uint8_t*>(output3_pointer)
-    };
-#ifdef LEO_DEBUG
-    const void* alias_inputs[4] = {
-        input0_pointer, input1_pointer, input2_pointer, input3_pointer
-    };
-    const void* alias_outputs[4] = {
-        output0_pointer, output1_pointer, output2_pointer, output3_pointer
-    };
-    LEO_DEBUG_ASSERT(IsWeightedIFFTButterfly4AliasingValid(
-        alias_inputs, alias_outputs, live_mask, byte_count));
-#endif
-    const uint16_t weights[4] = {
-        weight_log0, weight_log1, weight_log2, weight_log3
-    };
-    __m128i low01 = _mm_setzero_si128();
-    __m128i high01 = _mm_setzero_si128();
-    __m128i low23 = _mm_setzero_si128();
-    __m128i high23 = _mm_setzero_si128();
-    __m128i low02 = _mm_setzero_si128();
-    __m128i high02 = _mm_setzero_si128();
-    if (log01 != kZeroSkew)
-    {
-        low01 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(
-            FF8Tables[log01].low));
-        high01 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(
-            FF8Tables[log01].high));
-    }
-    if (log23 != kZeroSkew)
-    {
-        low23 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(
-            FF8Tables[log23].low));
-        high23 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(
-            FF8Tables[log23].high));
-    }
-    if (log02 != kZeroSkew)
-    {
-        low02 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(
-            FF8Tables[log02].low));
-        high02 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(
-            FF8Tables[log02].high));
-    }
-    uint64_t offset = 0;
-    while (byte_count - offset >= 16)
-    {
-        __m128i x[4];
-        for (unsigned lane = 0; lane < 4; ++lane)
-        {
-            if ((live_mask & (1U << lane)) != 0)
-            {
-                x[lane] = _mm_loadu_si128(
-                    reinterpret_cast<const __m128i*>(inputs[lane] + offset));
-                x[lane] = SSSE3FF8ApplyWeight(x[lane], weights[lane]);
-            }
-            else
-                x[lane] = _mm_setzero_si128();
-        }
-        x[1] = _mm_xor_si128(x[1], x[0]);
-        if (log01 != kZeroSkew)
-            x[0] = _mm_xor_si128(x[0],
-                SSSE3FF8ProductVector(x[1], low01, high01));
-        x[3] = _mm_xor_si128(x[3], x[2]);
-        if (log23 != kZeroSkew)
-            x[2] = _mm_xor_si128(x[2],
-                SSSE3FF8ProductVector(x[3], low23, high23));
-        x[2] = _mm_xor_si128(x[2], x[0]);
-        x[3] = _mm_xor_si128(x[3], x[1]);
-        if (log02 != kZeroSkew)
-        {
-            x[0] = _mm_xor_si128(x[0],
-                SSSE3FF8ProductVector(x[2], low02, high02));
-            x[1] = _mm_xor_si128(x[1],
-                SSSE3FF8ProductVector(x[3], low02, high02));
-        }
-        for (unsigned lane = 0; lane < 4; ++lane)
-            _mm_storeu_si128(
-                reinterpret_cast<__m128i*>(outputs[lane] + offset), x[lane]);
-        offset += 16;
-    }
-    while (offset < byte_count)
-    {
-        uint8_t x[4] = {};
-        for (unsigned lane = 0; lane < 4; ++lane)
-        {
-            if ((live_mask & (1U << lane)) == 0)
-                continue;
-            x[lane] = inputs[lane][offset];
-            if (weights[lane] != 0 && weights[lane] != kZeroSkew)
-                x[lane] = FF8Product(weights[lane], x[lane]);
-        }
-        x[1] ^= x[0];
-        if (log01 != kZeroSkew)
-            x[0] ^= FF8Product(log01, x[1]);
-        x[3] ^= x[2];
-        if (log23 != kZeroSkew)
-            x[2] ^= FF8Product(log23, x[3]);
-        x[2] ^= x[0];
-        x[3] ^= x[1];
-        if (log02 != kZeroSkew)
-        {
-            x[0] ^= FF8Product(log02, x[2]);
-            x[1] ^= FF8Product(log02, x[3]);
-        }
-        for (unsigned lane = 0; lane < 4; ++lane)
-            outputs[lane][offset] = x[lane];
-        ++offset;
-    }
-}
-
 static void SSSE3FF8FFTButterfly4Out(
     const void* input0, const void* input1,
     const void* input2, const void* input3,
@@ -1985,143 +1842,6 @@ static void SSSE3FF16IFFTButterfly4Out(
         log01, log23, log02, byte_count);
 }
 
-static void SSSE3FF16WeightedIFFTButterfly4(
-    const void* input0_pointer, const void* input1_pointer,
-    const void* input2_pointer, const void* input3_pointer,
-    void* output0_pointer, void* output1_pointer,
-    void* output2_pointer, void* output3_pointer,
-    uint16_t weight_log0, uint16_t weight_log1,
-    uint16_t weight_log2, uint16_t weight_log3,
-    uint8_t live_mask,
-    uint16_t log01, uint16_t log23, uint16_t log02,
-    uint64_t byte_count)
-{
-    static const uint16_t kModulus = 65535;
-    const uint8_t* inputs[4] = {
-        static_cast<const uint8_t*>(input0_pointer),
-        static_cast<const uint8_t*>(input1_pointer),
-        static_cast<const uint8_t*>(input2_pointer),
-        static_cast<const uint8_t*>(input3_pointer)
-    };
-    uint8_t* outputs[4] = {
-        static_cast<uint8_t*>(output0_pointer),
-        static_cast<uint8_t*>(output1_pointer),
-        static_cast<uint8_t*>(output2_pointer),
-        static_cast<uint8_t*>(output3_pointer)
-    };
-#ifdef LEO_DEBUG
-    const void* alias_inputs[4] = {
-        input0_pointer, input1_pointer, input2_pointer, input3_pointer
-    };
-    const void* alias_outputs[4] = {
-        output0_pointer, output1_pointer, output2_pointer, output3_pointer
-    };
-    LEO_DEBUG_ASSERT(IsWeightedIFFTButterfly4AliasingValid(
-        alias_inputs, alias_outputs, live_mask, byte_count));
-#endif
-    const uint16_t weights[4] = {
-        weight_log0, weight_log1, weight_log2, weight_log3
-    };
-    uint64_t offset = 0;
-    while (byte_count - offset >= 64)
-    {
-        for (unsigned vector_offset = 0; vector_offset < 32;
-             vector_offset += 16)
-        {
-            __m128i low[4];
-            __m128i high[4];
-            for (unsigned lane = 0; lane < 4; ++lane)
-            {
-                if ((live_mask & (1U << lane)) == 0)
-                {
-                    low[lane] = _mm_setzero_si128();
-                    high[lane] = _mm_setzero_si128();
-                    continue;
-                }
-                low[lane] = _mm_loadu_si128(
-                    reinterpret_cast<const __m128i*>(
-                        inputs[lane] + offset + vector_offset));
-                high[lane] = _mm_loadu_si128(
-                    reinterpret_cast<const __m128i*>(
-                        inputs[lane] + offset + 32 + vector_offset));
-                if (weights[lane] != 0 && weights[lane] != kModulus)
-                {
-                    __m128i product_low;
-                    __m128i product_high;
-                    SSSE3FF16ProductVectors(low[lane], high[lane],
-                        FF16Tables[weights[lane]],
-                        product_low, product_high);
-                    low[lane] = product_low;
-                    high[lane] = product_high;
-                }
-            }
-            low[1] = _mm_xor_si128(low[1], low[0]);
-            high[1] = _mm_xor_si128(high[1], high[0]);
-            if (log01 != kModulus)
-                SSSE3FF16MultiplyAddPair(low[0], high[0],
-                    low[1], high[1], FF16Tables[log01]);
-            low[3] = _mm_xor_si128(low[3], low[2]);
-            high[3] = _mm_xor_si128(high[3], high[2]);
-            if (log23 != kModulus)
-                SSSE3FF16MultiplyAddPair(low[2], high[2],
-                    low[3], high[3], FF16Tables[log23]);
-            low[2] = _mm_xor_si128(low[2], low[0]);
-            high[2] = _mm_xor_si128(high[2], high[0]);
-            low[3] = _mm_xor_si128(low[3], low[1]);
-            high[3] = _mm_xor_si128(high[3], high[1]);
-            if (log02 != kModulus)
-            {
-                SSSE3FF16MultiplyAddPair(low[0], high[0],
-                    low[2], high[2], FF16Tables[log02]);
-                SSSE3FF16MultiplyAddPair(low[1], high[1],
-                    low[3], high[3], FF16Tables[log02]);
-            }
-            for (unsigned lane = 0; lane < 4; ++lane)
-            {
-                _mm_storeu_si128(reinterpret_cast<__m128i*>(
-                    outputs[lane] + offset + vector_offset), low[lane]);
-                _mm_storeu_si128(reinterpret_cast<__m128i*>(
-                    outputs[lane] + offset + 32 + vector_offset), high[lane]);
-            }
-        }
-        offset += 64;
-    }
-    const uint64_t symbols = (byte_count - offset) / 2;
-    for (uint64_t i = 0; i < symbols; ++i)
-    {
-        uint16_t x[4] = {};
-        for (unsigned lane = 0; lane < 4; ++lane)
-        {
-            if ((live_mask & (1U << lane)) == 0)
-                continue;
-            x[lane] = static_cast<uint16_t>(inputs[lane][offset + i] |
-                (static_cast<unsigned>(
-                    inputs[lane][offset + symbols + i]) << 8));
-            if (weights[lane] != 0 && weights[lane] != kModulus)
-                x[lane] = FF16Product(weights[lane], x[lane]);
-        }
-        x[1] ^= x[0];
-        if (log01 != kModulus)
-            x[0] ^= FF16Product(log01, x[1]);
-        x[3] ^= x[2];
-        if (log23 != kModulus)
-            x[2] ^= FF16Product(log23, x[3]);
-        x[2] ^= x[0];
-        x[3] ^= x[1];
-        if (log02 != kModulus)
-        {
-            x[0] ^= FF16Product(log02, x[2]);
-            x[1] ^= FF16Product(log02, x[3]);
-        }
-        for (unsigned lane = 0; lane < 4; ++lane)
-        {
-            outputs[lane][offset + i] = static_cast<uint8_t>(x[lane]);
-            outputs[lane][offset + symbols + i] =
-                static_cast<uint8_t>(x[lane] >> 8);
-        }
-    }
-}
-
 static void SSSE3FF16FFTButterfly4Out(
     const void* input0, const void* input1,
     const void* input2, const void* input3,
@@ -2204,7 +1924,7 @@ static const Ops SSSE3Ops = {
     SSSE3FF8IFFTButterfly4,
     SSSE3FF8FFTButterfly4,
     SSSE3FF8IFFTButterfly4Out,
-    SSSE3FF8WeightedIFFTButterfly4,
+    NULL,
     SSSE3FF8FFTButterfly4Out,
     SSSE3FF8IFFTButterfly4Range,
     SSSE3FF8FFTButterfly4Range,
@@ -2231,12 +1951,10 @@ static const Ops SSSE3Ops = {
     SSSE3FF16IFFTButterfly4,
     SSSE3FF16FFTButterfly4,
     SSSE3FF16IFFTButterfly4Out,
-    SSSE3FF16WeightedIFFTButterfly4,
     SSSE3FF16FFTButterfly4Out,
     SSSE3FF16IFFTButterfly4Range,
     SSSE3FF16FFTButterfly4Range
 #else
-    NULL,
     NULL,
     NULL,
     NULL,

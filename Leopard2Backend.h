@@ -190,13 +190,13 @@ typedef void (*FFTButterfly4Out)(
 // pass first.
 typedef FFTButterfly4Out IFFTButterfly4Out;
 
-// Applies four independent nonzero fixed multipliers to the selected input
-// rows and immediately executes the first two inverse LCH layers.  weight_log
-// values are ordinary field logarithms: both zero and the field modulus denote
-// the multiplicative identity.  This differs deliberately from the butterfly
-// logs, where the field modulus remains the zero-skew sentinel.  A cleared bit
-// in live_mask supplies mathematical zero and permits the corresponding input
-// pointer to be null.
+// GF8 AVX2 boundary operation.  Applies four independent nonzero fixed
+// multipliers to the selected input rows and immediately executes the first
+// two inverse LCH layers.  weight_log values are ordinary GF8 logarithms: both
+// zero and 255 denote the multiplicative identity.  This differs deliberately
+// from the butterfly logs, where 255 remains the zero-skew sentinel.  A
+// cleared bit in live_mask supplies mathematical zero and permits the
+// corresponding input pointer to be null.
 //
 // Outputs must be pairwise disjoint.  The inputs may either be wholly disjoint
 // from every output (and may alias one another), or every output must exactly
@@ -251,6 +251,7 @@ struct Ops
     Butterfly4 ff8_ifft_butterfly4;
     Butterfly4 ff8_fft_butterfly4;
     IFFTButterfly4Out ff8_ifft_butterfly4_out;
+    // Optional: only the qualified AVX2 backend currently supplies this.
     WeightedIFFTButterfly4 ff8_weighted_ifft_butterfly4;
     FFTButterfly4Out ff8_fft_butterfly4_out;
     Butterfly4Range ff8_ifft_butterfly4_range;
@@ -263,7 +264,6 @@ struct Ops
     Butterfly4 ff16_ifft_butterfly4;
     Butterfly4 ff16_fft_butterfly4;
     IFFTButterfly4Out ff16_ifft_butterfly4_out;
-    WeightedIFFTButterfly4 ff16_weighted_ifft_butterfly4;
     FFTButterfly4Out ff16_fft_butterfly4_out;
     Butterfly4Range ff16_ifft_butterfly4_range;
     Butterfly4Range ff16_fft_butterfly4_range;

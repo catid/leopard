@@ -1938,137 +1938,6 @@ static void AVX2FF16IFFTButterfly4Out(
         log01, log23, log02, byte_count);
 }
 
-static void AVX2FF16WeightedIFFTButterfly4(
-    const void* input0_pointer, const void* input1_pointer,
-    const void* input2_pointer, const void* input3_pointer,
-    void* output0_pointer, void* output1_pointer,
-    void* output2_pointer, void* output3_pointer,
-    uint16_t weight_log0, uint16_t weight_log1,
-    uint16_t weight_log2, uint16_t weight_log3,
-    uint8_t live_mask,
-    uint16_t log01, uint16_t log23, uint16_t log02,
-    uint64_t byte_count)
-{
-    static const uint16_t kModulus = 65535;
-    const uint8_t* inputs[4] = {
-        static_cast<const uint8_t*>(input0_pointer),
-        static_cast<const uint8_t*>(input1_pointer),
-        static_cast<const uint8_t*>(input2_pointer),
-        static_cast<const uint8_t*>(input3_pointer)
-    };
-    uint8_t* outputs[4] = {
-        static_cast<uint8_t*>(output0_pointer),
-        static_cast<uint8_t*>(output1_pointer),
-        static_cast<uint8_t*>(output2_pointer),
-        static_cast<uint8_t*>(output3_pointer)
-    };
-#ifdef LEO_DEBUG
-    const void* alias_inputs[4] = {
-        input0_pointer, input1_pointer, input2_pointer, input3_pointer
-    };
-    const void* alias_outputs[4] = {
-        output0_pointer, output1_pointer, output2_pointer, output3_pointer
-    };
-    LEO_DEBUG_ASSERT(IsWeightedIFFTButterfly4AliasingValid(
-        alias_inputs, alias_outputs, live_mask, byte_count));
-#endif
-    const uint16_t weights[4] = {
-        weight_log0, weight_log1, weight_log2, weight_log3
-    };
-    uint64_t offset = 0;
-    while (byte_count - offset >= 64)
-    {
-        __m256i low[4];
-        __m256i high[4];
-        for (unsigned lane = 0; lane < 4; ++lane)
-        {
-            if ((live_mask & (1U << lane)) == 0)
-            {
-                low[lane] = _mm256_setzero_si256();
-                high[lane] = _mm256_setzero_si256();
-                continue;
-            }
-            low[lane] = _mm256_loadu_si256(
-                reinterpret_cast<const __m256i*>(inputs[lane] + offset));
-            high[lane] = _mm256_loadu_si256(
-                reinterpret_cast<const __m256i*>(
-                    inputs[lane] + offset + 32));
-            if (weights[lane] != 0 && weights[lane] != kModulus)
-            {
-                __m256i product_low = _mm256_setzero_si256();
-                __m256i product_high = _mm256_setzero_si256();
-                AVX2FF16MultiplyAddPair(product_low, product_high,
-                    low[lane], high[lane], FF16Tables[weights[lane]]);
-                low[lane] = product_low;
-                high[lane] = product_high;
-            }
-        }
-        low[1] = _mm256_xor_si256(low[1], low[0]);
-        high[1] = _mm256_xor_si256(high[1], high[0]);
-        if (log01 != kModulus)
-            AVX2FF16MultiplyAddPair(low[0], high[0],
-                low[1], high[1], FF16Tables[log01]);
-        low[3] = _mm256_xor_si256(low[3], low[2]);
-        high[3] = _mm256_xor_si256(high[3], high[2]);
-        if (log23 != kModulus)
-            AVX2FF16MultiplyAddPair(low[2], high[2],
-                low[3], high[3], FF16Tables[log23]);
-        low[2] = _mm256_xor_si256(low[2], low[0]);
-        high[2] = _mm256_xor_si256(high[2], high[0]);
-        low[3] = _mm256_xor_si256(low[3], low[1]);
-        high[3] = _mm256_xor_si256(high[3], high[1]);
-        if (log02 != kModulus)
-        {
-            AVX2FF16MultiplyAddPair(low[0], high[0],
-                low[2], high[2], FF16Tables[log02]);
-            AVX2FF16MultiplyAddPair(low[1], high[1],
-                low[3], high[3], FF16Tables[log02]);
-        }
-        for (unsigned lane = 0; lane < 4; ++lane)
-        {
-            _mm256_storeu_si256(reinterpret_cast<__m256i*>(
-                outputs[lane] + offset), low[lane]);
-            _mm256_storeu_si256(reinterpret_cast<__m256i*>(
-                outputs[lane] + offset + 32), high[lane]);
-        }
-        offset += 64;
-    }
-    const uint64_t symbols = (byte_count - offset) / 2;
-    for (uint64_t i = 0; i < symbols; ++i)
-    {
-        uint16_t x[4] = {};
-        for (unsigned lane = 0; lane < 4; ++lane)
-        {
-            if ((live_mask & (1U << lane)) == 0)
-                continue;
-            x[lane] = static_cast<uint16_t>(inputs[lane][offset + i] |
-                (static_cast<unsigned>(
-                    inputs[lane][offset + symbols + i]) << 8));
-            if (weights[lane] != 0 && weights[lane] != kModulus)
-                x[lane] = FF16Product(weights[lane], x[lane]);
-        }
-        x[1] ^= x[0];
-        if (log01 != kModulus)
-            x[0] ^= FF16Product(log01, x[1]);
-        x[3] ^= x[2];
-        if (log23 != kModulus)
-            x[2] ^= FF16Product(log23, x[3]);
-        x[2] ^= x[0];
-        x[3] ^= x[1];
-        if (log02 != kModulus)
-        {
-            x[0] ^= FF16Product(log02, x[2]);
-            x[1] ^= FF16Product(log02, x[3]);
-        }
-        for (unsigned lane = 0; lane < 4; ++lane)
-        {
-            outputs[lane][offset + i] = static_cast<uint8_t>(x[lane]);
-            outputs[lane][offset + symbols + i] =
-                static_cast<uint8_t>(x[lane] >> 8);
-        }
-    }
-}
-
 static void AVX2FF16FFTButterfly4Out(
     const void* input0, const void* input1,
     const void* input2, const void* input3,
@@ -2178,12 +2047,10 @@ static const Ops AVX2Ops = {
     AVX2FF16IFFTButterfly4,
     AVX2FF16FFTButterfly4,
     AVX2FF16IFFTButterfly4Out,
-    AVX2FF16WeightedIFFTButterfly4,
     AVX2FF16FFTButterfly4Out,
     AVX2FF16IFFTButterfly4Range,
     AVX2FF16FFTButterfly4Range
 #else
-    NULL,
     NULL,
     NULL,
     NULL,

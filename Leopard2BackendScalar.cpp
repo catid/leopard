@@ -753,120 +753,6 @@ static void ScalarFF8IFFTButterfly4Out(
     }
 }
 
-static void ScalarFF8WeightedIFFTButterfly4(
-    const void* input0_pointer, const void* input1_pointer,
-    const void* input2_pointer, const void* input3_pointer,
-    void* output0_pointer, void* output1_pointer,
-    void* output2_pointer, void* output3_pointer,
-    uint16_t weight_log0, uint16_t weight_log1,
-    uint16_t weight_log2, uint16_t weight_log3,
-    uint8_t live_mask,
-    uint16_t log01, uint16_t log23, uint16_t log02,
-    uint64_t byte_count)
-{
-    static const uint16_t kModulus = 255;
-    const uint8_t* inputs[4] = {
-        static_cast<const uint8_t*>(input0_pointer),
-        static_cast<const uint8_t*>(input1_pointer),
-        static_cast<const uint8_t*>(input2_pointer),
-        static_cast<const uint8_t*>(input3_pointer)
-    };
-    uint8_t* outputs[4] = {
-        static_cast<uint8_t*>(output0_pointer),
-        static_cast<uint8_t*>(output1_pointer),
-        static_cast<uint8_t*>(output2_pointer),
-        static_cast<uint8_t*>(output3_pointer)
-    };
-#ifdef LEO_DEBUG
-    const void* alias_inputs[4] = {
-        input0_pointer, input1_pointer, input2_pointer, input3_pointer
-    };
-    const void* alias_outputs[4] = {
-        output0_pointer, output1_pointer, output2_pointer, output3_pointer
-    };
-    LEO_DEBUG_ASSERT(IsWeightedIFFTButterfly4AliasingValid(
-        alias_inputs, alias_outputs, live_mask, byte_count));
-#endif
-    const uint16_t weight_logs[4] = {
-        weight_log0, weight_log1, weight_log2, weight_log3
-    };
-    const uint8_t* weight_tables[4] = {};
-    for (unsigned lane = 0; lane < 4; ++lane)
-    {
-        if ((live_mask & (1U << lane)) != 0 &&
-            weight_logs[lane] != 0 && weight_logs[lane] != kModulus)
-        {
-            weight_tables[lane] = FF8Table +
-                static_cast<size_t>(weight_logs[lane]) * 256U;
-        }
-    }
-    const uint8_t* table01 = log01 == kModulus ? NULL :
-        FF8Table + static_cast<size_t>(log01) * 256U;
-    const uint8_t* table23 = log23 == kModulus ? NULL :
-        FF8Table + static_cast<size_t>(log23) * 256U;
-    const uint8_t* table02 = log02 == kModulus ? NULL :
-        FF8Table + static_cast<size_t>(log02) * 256U;
-
-    uint64_t offset = 0;
-    while (byte_count - offset >= sizeof(uint64_t))
-    {
-        uint64_t x[4] = {};
-        for (unsigned lane = 0; lane < 4; ++lane)
-        {
-            if ((live_mask & (1U << lane)) == 0)
-                continue;
-            std::memcpy(&x[lane], inputs[lane] + offset, sizeof(uint64_t));
-            if (weight_tables[lane])
-                x[lane] = ScalarFF8PackedProduct(
-                    x[lane], weight_tables[lane]);
-        }
-        x[1] ^= x[0];
-        if (table01)
-            x[0] ^= ScalarFF8PackedProduct(x[1], table01);
-        x[3] ^= x[2];
-        if (table23)
-            x[2] ^= ScalarFF8PackedProduct(x[3], table23);
-        x[2] ^= x[0];
-        x[3] ^= x[1];
-        if (table02)
-        {
-            x[0] ^= ScalarFF8PackedProduct(x[2], table02);
-            x[1] ^= ScalarFF8PackedProduct(x[3], table02);
-        }
-        for (unsigned lane = 0; lane < 4; ++lane)
-            std::memcpy(outputs[lane] + offset, &x[lane], sizeof(uint64_t));
-        offset += sizeof(uint64_t);
-    }
-    while (offset < byte_count)
-    {
-        uint8_t x[4] = {};
-        for (unsigned lane = 0; lane < 4; ++lane)
-        {
-            if ((live_mask & (1U << lane)) == 0)
-                continue;
-            x[lane] = inputs[lane][offset];
-            if (weight_tables[lane])
-                x[lane] = weight_tables[lane][x[lane]];
-        }
-        x[1] ^= x[0];
-        if (table01)
-            x[0] ^= table01[x[1]];
-        x[3] ^= x[2];
-        if (table23)
-            x[2] ^= table23[x[3]];
-        x[2] ^= x[0];
-        x[3] ^= x[1];
-        if (table02)
-        {
-            x[0] ^= table02[x[2]];
-            x[1] ^= table02[x[3]];
-        }
-        for (unsigned lane = 0; lane < 4; ++lane)
-            outputs[lane][offset] = x[lane];
-        ++offset;
-    }
-}
-
 static void ScalarFF8FFTButterfly4Out(
     const void* input0_pointer, const void* input1_pointer,
     const void* input2_pointer, const void* input3_pointer,
@@ -1305,106 +1191,6 @@ static void ScalarFF16IFFTButterfly4Out(
     }
 }
 
-static void ScalarFF16WeightedIFFTButterfly4(
-    const void* input0_pointer, const void* input1_pointer,
-    const void* input2_pointer, const void* input3_pointer,
-    void* output0_pointer, void* output1_pointer,
-    void* output2_pointer, void* output3_pointer,
-    uint16_t weight_log0, uint16_t weight_log1,
-    uint16_t weight_log2, uint16_t weight_log3,
-    uint8_t live_mask,
-    uint16_t log01, uint16_t log23, uint16_t log02,
-    uint64_t byte_count)
-{
-    static const uint16_t kModulus = 65535;
-    const uint8_t* inputs[4] = {
-        static_cast<const uint8_t*>(input0_pointer),
-        static_cast<const uint8_t*>(input1_pointer),
-        static_cast<const uint8_t*>(input2_pointer),
-        static_cast<const uint8_t*>(input3_pointer)
-    };
-    uint8_t* outputs[4] = {
-        static_cast<uint8_t*>(output0_pointer),
-        static_cast<uint8_t*>(output1_pointer),
-        static_cast<uint8_t*>(output2_pointer),
-        static_cast<uint8_t*>(output3_pointer)
-    };
-#ifdef LEO_DEBUG
-    const void* alias_inputs[4] = {
-        input0_pointer, input1_pointer, input2_pointer, input3_pointer
-    };
-    const void* alias_outputs[4] = {
-        output0_pointer, output1_pointer, output2_pointer, output3_pointer
-    };
-    LEO_DEBUG_ASSERT(IsWeightedIFFTButterfly4AliasingValid(
-        alias_inputs, alias_outputs, live_mask, byte_count));
-#endif
-    const uint16_t weight_logs[4] = {
-        weight_log0, weight_log1, weight_log2, weight_log3
-    };
-
-    uint64_t offset = 0;
-    while (byte_count - offset >= 64)
-    {
-        for (unsigned i = 0; i < 32; ++i)
-        {
-            uint16_t values[4] = {};
-            for (unsigned lane = 0; lane < 4; ++lane)
-            {
-                if ((live_mask & (1U << lane)) == 0)
-                    continue;
-                values[lane] = static_cast<uint16_t>(
-                    inputs[lane][offset + i] |
-                    (static_cast<unsigned>(
-                        inputs[lane][offset + 32 + i]) << 8));
-                const uint16_t weight_log = weight_logs[lane];
-                if (weight_log != 0 && weight_log != kModulus)
-                    values[lane] = ScalarFF16Product(
-                        weight_log, values[lane]);
-            }
-            ScalarFF16IFFTButterfly4Values(
-                values[0], values[1], values[2], values[3],
-                log01, log23, log02);
-            for (unsigned lane = 0; lane < 4; ++lane)
-            {
-                outputs[lane][offset + i] =
-                    static_cast<uint8_t>(values[lane]);
-                outputs[lane][offset + 32 + i] =
-                    static_cast<uint8_t>(values[lane] >> 8);
-            }
-        }
-        offset += 64;
-    }
-    const uint64_t symbols = (byte_count - offset) / 2;
-    for (uint64_t i = 0; i < symbols; ++i)
-    {
-        uint16_t values[4] = {};
-        for (unsigned lane = 0; lane < 4; ++lane)
-        {
-            if ((live_mask & (1U << lane)) == 0)
-                continue;
-            values[lane] = static_cast<uint16_t>(
-                inputs[lane][offset + i] |
-                (static_cast<unsigned>(
-                    inputs[lane][offset + symbols + i]) << 8));
-            const uint16_t weight_log = weight_logs[lane];
-            if (weight_log != 0 && weight_log != kModulus)
-                values[lane] = ScalarFF16Product(
-                    weight_log, values[lane]);
-        }
-        ScalarFF16IFFTButterfly4Values(
-            values[0], values[1], values[2], values[3],
-            log01, log23, log02);
-        for (unsigned lane = 0; lane < 4; ++lane)
-        {
-            outputs[lane][offset + i] =
-                static_cast<uint8_t>(values[lane]);
-            outputs[lane][offset + symbols + i] =
-                static_cast<uint8_t>(values[lane] >> 8);
-        }
-    }
-}
-
 static void ScalarFF16FFTButterfly4Out(
     const void* input0_pointer, const void* input1_pointer,
     const void* input2_pointer, const void* input3_pointer,
@@ -1494,7 +1280,7 @@ static const Ops ScalarOps = {
     ScalarFF8IFFTButterfly4,
     ScalarFF8FFTButterfly4,
     ScalarFF8IFFTButterfly4Out,
-    ScalarFF8WeightedIFFTButterfly4,
+    NULL,
     ScalarFF8FFTButterfly4Out,
     ScalarFF8IFFTButterfly4Range,
     ScalarFF8FFTButterfly4Range,
@@ -1521,12 +1307,10 @@ static const Ops ScalarOps = {
     ScalarFF16IFFTButterfly4,
     ScalarFF16FFTButterfly4,
     ScalarFF16IFFTButterfly4Out,
-    ScalarFF16WeightedIFFTButterfly4,
     ScalarFF16FFTButterfly4Out,
     ScalarFF16IFFTButterfly4Range,
     ScalarFF16FFTButterfly4Range
 #else
-    NULL,
     NULL,
     NULL,
     NULL,

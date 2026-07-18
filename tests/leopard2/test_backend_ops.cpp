@@ -301,6 +301,28 @@ int main()
             "fixed-ops introspection is not derived from selected ops");
         require(ops.kind != LEO2_BACKEND_AUTO && ops.name,
             "backend selection missing");
+#ifdef LEO_HAS_FF8
+        require((ops.kind == LEO2_BACKEND_AVX2) ==
+                    (ops.ff8_weighted_ifft_butterfly4 != NULL),
+            "weighted locator capability escaped the AVX2 GF8 backend");
+        const leopard::backend::Ops* scalar_ops =
+            leopard::backend::GetQualifiedOps(LEO2_BACKEND_SCALAR);
+        require(scalar_ops && !scalar_ops->ff8_weighted_ifft_butterfly4,
+            "scalar backend exposed the AVX2-only weighted boundary");
+        const leopard::backend::Ops* ssse3_ops =
+            leopard::backend::GetQualifiedOps(LEO2_BACKEND_SSSE3);
+        if (ssse3_ops)
+            require(!ssse3_ops->ff8_weighted_ifft_butterfly4,
+                "SSSE3 backend exposed the AVX2-only weighted boundary");
+        const leopard::backend::Ops* avx2_ops =
+            leopard::backend::GetQualifiedOps(LEO2_BACKEND_AVX2);
+        if (avx2_ops)
+            require(avx2_ops->ff8_weighted_ifft_butterfly4 != NULL,
+                "AVX2 backend omitted its qualified weighted boundary");
+#else
+        require(!ops.ff8_weighted_ifft_butterfly4,
+            "FF8-disabled build exposed a weighted boundary");
+#endif
 
         leo2_context_options options;
         std::memset(&options, 0, sizeof(options));

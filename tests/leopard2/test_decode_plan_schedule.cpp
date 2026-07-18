@@ -143,6 +143,29 @@ namespace {
 
 static const size_t kBytes = 64;
 
+#ifdef LEO_HAS_FF8
+static const leopard::backend::Ops* gWeightedBoundaryDelegate = NULL;
+static uint64_t gWeightedBoundaryCalls = 0;
+
+static void TraceWeightedIFFTButterfly4(
+    const void* input0, const void* input1,
+    const void* input2, const void* input3,
+    void* output0, void* output1, void* output2, void* output3,
+    uint16_t weight0, uint16_t weight1,
+    uint16_t weight2, uint16_t weight3,
+    uint8_t live_mask,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    ++gWeightedBoundaryCalls;
+    gWeightedBoundaryDelegate->ff8_weighted_ifft_butterfly4(
+        input0, input1, input2, input3,
+        output0, output1, output2, output3,
+        weight0, weight1, weight2, weight3, live_mask,
+        log01, log23, log02, byte_count);
+}
+#endif
+
 static void Require(bool condition, const char* message)
 {
     if (!condition)
@@ -998,6 +1021,104 @@ static uint64_t CheckFieldKernels(
         high_coordinates.size();
 }
 
+static void CheckGF8WeightedLocatorBoundaryCallsites()
+{
+#ifdef LEO_HAS_FF8
+    static const unsigned n = 256;
+    static const unsigned side = 64;
+    static const size_t bytes = 16U * 1024U;
+    const leopard::backend::Ops& ops = leopard::backend::GetDefaultOps();
+    const bool expect_weighted = ops.kind == LEO2_BACKEND_AVX2;
+    leopard::backend::Ops tracing_ops = ops;
+    if (ops.ff8_weighted_ifft_butterfly4)
+    {
+        gWeightedBoundaryDelegate = &ops;
+        tracing_ops.ff8_weighted_ifft_butterfly4 =
+            TraceWeightedIFFTButterfly4;
+    }
+
+    AlignedBytes sources(static_cast<size_t>(n) * bytes);
+    Require(sources.valid(), "weighted boundary source allocation");
+    std::vector<const void*> coordinate_data(n, NULL);
+    for (unsigned i = 0; i < n; ++i)
+    {
+        uint8_t* shard = sources.data() + static_cast<size_t>(i) * bytes;
+        for (size_t b = 0; b < bytes; ++b)
+            shard[b] = static_cast<uint8_t>(Mix(i * 131u + b * 7u));
+        // The locator boundary consumes side/2 live receive rows.  Later
+        // blocks remain dense so every high-decoder callsite does real work.
+        if (i < side / 2 || i >= side)
+            coordinate_data[i] = shard;
+    }
+    const std::vector<uint16_t> block_inputs =
+        BlockInputCounts(coordinate_data, side);
+    const std::vector<leopard::ff8::ffe_t> locator =
+        MakeLocator<leopard::ff8::ffe_t>(
+            n, leopard::ff8::kModulus, 0xb5297a4du);
+    std::vector<leopard::ff8::ffe_t> output_factors(n);
+    leopard::ff8::PrepareHighDecode(n, side, &output_factors[0]);
+
+    std::vector<uint8_t> requested_mask(n, 0);
+    requested_mask[side + 1] = 1;
+    const std::vector<uint32_t> requested_coordinates =
+        CoordinatesFromMask(requested_mask);
+    const std::vector<leopard2_internal::DecodeOutputBlock> output_blocks =
+        OutputBlocks(requested_coordinates, side);
+
+    AlignedBytes prepared_storage(static_cast<size_t>(n) * bytes);
+    AlignedBytes planned_storage(static_cast<size_t>(n) * bytes);
+    Require(prepared_storage.valid() && planned_storage.valid(),
+        "weighted boundary work allocation");
+    std::vector<void*> prepared_work(n), planned_work(n);
+    for (unsigned i = 0; i < n; ++i)
+    {
+        prepared_work[i] = prepared_storage.data() +
+            static_cast<size_t>(i) * bytes;
+        planned_work[i] = planned_storage.data() +
+            static_cast<size_t>(i) * bytes;
+    }
+
+    const auto require_dispatch = [expect_weighted](const char* callsite) {
+        Require(gWeightedBoundaryCalls == (expect_weighted ? side / 4 : 0),
+            callsite);
+    };
+
+    gWeightedBoundaryCalls = 0;
+    leopard::ff8::ReedSolomonDecodeHighPrepared(
+        tracing_ops, bytes, n, side, &coordinate_data[0], &requested_mask[0],
+        &locator[0], &output_factors[0], &prepared_work[0]);
+    require_dispatch("prepared weighted locator dispatch");
+
+    gWeightedBoundaryCalls = 0;
+    leopard::ff8::ReedSolomonDecodeHighPlanned(
+        tracing_ops, bytes, n, side, &coordinate_data[0], &block_inputs[0],
+        &requested_coordinates[0], &output_blocks[0], output_blocks.size(),
+        &locator[0], &output_factors[0], &planned_work[0]);
+    require_dispatch("materialized weighted locator dispatch");
+    Require(memcmp(prepared_work[requested_coordinates[0]],
+            planned_work[requested_coordinates[0]], bytes) == 0,
+        "materialized weighted locator output mismatch");
+
+    const unsigned tiled_slots = side * 2 + 1;
+    AlignedBytes tiled_storage(static_cast<size_t>(tiled_slots) * bytes);
+    Require(tiled_storage.valid(), "weighted boundary tiled allocation");
+    std::vector<void*> tiled_work(tiled_slots);
+    for (unsigned i = 0; i < tiled_slots; ++i)
+        tiled_work[i] = tiled_storage.data() +
+            static_cast<size_t>(i) * bytes;
+    void* requested_output[1] = { tiled_work[side * 2] };
+    gWeightedBoundaryCalls = 0;
+    leopard::ff8::ReedSolomonDecodeHighTiledPlanned(
+        tracing_ops, bytes, n, side, &coordinate_data[0], &block_inputs[0],
+        &requested_coordinates[0], &output_blocks[0], output_blocks.size(),
+        &locator[0], &output_factors[0], requested_output, &tiled_work[0]);
+    require_dispatch("tiled weighted locator dispatch");
+    Require(memcmp(prepared_work[requested_coordinates[0]],
+            requested_output[0], bytes) == 0,
+        "tiled weighted locator output mismatch");
+#endif
+}
+
 } // namespace
 
 int main()
@@ -1057,6 +1178,7 @@ int main()
         "production low pruning did not remove padded operations");
     Require(high_pruned_retained_operations < high_pruned_full_butterflies,
         "production high pruning did not remove padded operations");
+    CheckGF8WeightedLocatorBoundaryCallsites();
     CheckPublicPlanReuseAndAllocation();
 
     std::cout << "leopard2 decode-plan schedule tests passed: dependency_queries="

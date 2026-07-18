@@ -129,7 +129,6 @@ struct TraceState
     std::atomic<uint64_t> ff8_ifft_two_xor_calls;
     std::atomic<uint64_t> ff16_ifft_four_calls;
     std::atomic<uint64_t> ff16_ifft_four_out_calls;
-    std::atomic<uint64_t> ff16_weighted_ifft_four_calls;
     std::atomic<uint64_t> ff16_fft_four_calls;
     std::atomic<uint64_t> ff16_fft_two_out_calls;
     std::atomic<uint64_t> ff16_ifft_two_xor_calls;
@@ -368,25 +367,6 @@ void trace_ff16_ifft4_out(
         log01, log23, log02, bytes);
 }
 
-void trace_ff16_weighted_ifft4(
-    const void* input0, const void* input1,
-    const void* input2, const void* input3,
-    void* output0, void* output1, void* output2, void* output3,
-    uint16_t weight0, uint16_t weight1,
-    uint16_t weight2, uint16_t weight3,
-    uint8_t live_mask,
-    uint16_t log01, uint16_t log23, uint16_t log02, uint64_t bytes)
-{
-    g_trace.ff16_calls.fetch_add(1, std::memory_order_relaxed);
-    g_trace.ff16_weighted_ifft_four_calls.fetch_add(
-        1, std::memory_order_relaxed);
-    trace_delegate()->ff16_weighted_ifft_butterfly4(
-        input0, input1, input2, input3,
-        output0, output1, output2, output3,
-        weight0, weight1, weight2, weight3, live_mask,
-        log01, log23, log02, bytes);
-}
-
 void trace_ff16_fft4(
     void* value0, void* value1, void* value2, void* value3,
     uint16_t log01, uint16_t log23, uint16_t log02, uint64_t bytes)
@@ -505,7 +485,9 @@ public:
         tracing_.ff8_ifft_butterfly2_xor = trace_ff8_ifft_xor;
         tracing_.ff8_ifft_butterfly4 = trace_ff8_ifft4;
         tracing_.ff8_ifft_butterfly4_out = trace_ff8_ifft4_out;
-        tracing_.ff8_weighted_ifft_butterfly4 = trace_ff8_weighted_ifft4;
+        if (entry.table->ff8_weighted_ifft_butterfly4)
+            tracing_.ff8_weighted_ifft_butterfly4 =
+                trace_ff8_weighted_ifft4;
         tracing_.ff8_fft_butterfly4 = trace_ff8_fft4;
         tracing_.ff8_fft_butterfly4_out = trace_ff8_fft4_out;
         tracing_.ff8_ifft_butterfly4_range = trace_ff8_ifft4_range;
@@ -518,7 +500,6 @@ public:
         tracing_.ff16_ifft_butterfly2_xor = trace_ff16_ifft_xor;
         tracing_.ff16_ifft_butterfly4 = trace_ff16_ifft4;
         tracing_.ff16_ifft_butterfly4_out = trace_ff16_ifft4_out;
-        tracing_.ff16_weighted_ifft_butterfly4 = trace_ff16_weighted_ifft4;
         tracing_.ff16_fft_butterfly4 = trace_ff16_fft4;
         tracing_.ff16_fft_butterfly4_out = trace_ff16_fft4_out;
         tracing_.ff16_ifft_butterfly4_range = trace_ff16_ifft4_range;
@@ -550,8 +531,6 @@ public:
         g_trace.ff8_ifft_two_xor_calls.store(0, std::memory_order_relaxed);
         g_trace.ff16_ifft_four_calls.store(0, std::memory_order_relaxed);
         g_trace.ff16_ifft_four_out_calls.store(0, std::memory_order_relaxed);
-        g_trace.ff16_weighted_ifft_four_calls.store(
-            0, std::memory_order_relaxed);
         g_trace.ff16_fft_four_calls.store(0, std::memory_order_relaxed);
         g_trace.ff16_fft_two_out_calls.store(0, std::memory_order_relaxed);
         g_trace.ff16_ifft_two_xor_calls.store(
@@ -635,11 +614,6 @@ public:
     uint64_t ff16_ifft_four_out_calls() const
     {
         return g_trace.ff16_ifft_four_out_calls.load(
-            std::memory_order_relaxed);
-    }
-    uint64_t ff16_weighted_ifft_four_calls() const
-    {
-        return g_trace.ff16_weighted_ifft_four_calls.load(
             std::memory_order_relaxed);
     }
     uint64_t ff16_fft_four_calls() const
@@ -986,6 +960,7 @@ void require_high_decode_no_copy(
     uint64_t locator_weighted_butterfly4 = 0;
     uint64_t locator_scale_rows_elided = 0;
     uint64_t locator_inactive_rows = 0;
+    uint64_t locator_fallback_rows = 0;
     uint64_t traced_locator_weighted_butterfly4 = 0;
     if (field == LEO2_FIELD_GF8)
     {
@@ -1012,6 +987,7 @@ void require_high_decode_no_copy(
             counts.locator_weighted_ifft_butterfly4;
         locator_scale_rows_elided = counts.locator_scale_rows_elided;
         locator_inactive_rows = counts.locator_inactive_rows;
+        locator_fallback_rows = counts.locator_fallback_rows;
         traced_locator_weighted_butterfly4 =
             trace.ff8_weighted_ifft_four_calls();
     }
@@ -1036,12 +1012,6 @@ void require_high_decode_no_copy(
         receive_copy_shards = counts.receive_copy_shards;
         receive_zero_shards = counts.receive_zero_shards;
         traced_receive_butterfly4 = trace.ff16_ifft_four_out_calls();
-        locator_weighted_butterfly4 =
-            counts.locator_weighted_ifft_butterfly4;
-        locator_scale_rows_elided = counts.locator_scale_rows_elided;
-        locator_inactive_rows = counts.locator_inactive_rows;
-        traced_locator_weighted_butterfly4 =
-            trace.ff16_weighted_ifft_four_calls();
     }
     const uint64_t out_of_place_calls = butterfly2 + butterfly4;
     require(output_blocks != 0,
@@ -1064,11 +1034,19 @@ void require_high_decode_no_copy(
     require(locator_inactive_rows <= locator_scale_rows_elided,
         operation + " over-counted masked locator rows");
     if (expect_weighted_boundary)
-        require(locator_weighted_butterfly4 != 0,
-            operation + " did not remove the Algorithm 5 locator pass");
+    {
+        require(locator_weighted_butterfly4 != 0 &&
+                locator_fallback_rows == 0,
+            operation + " did not select only the weighted locator boundary");
+    }
     else
-        require(locator_weighted_butterfly4 == 0,
-            operation + " widened the weighted boundary below four rows");
+    {
+        require(locator_weighted_butterfly4 == 0 &&
+                locator_scale_rows_elided == 0 &&
+                locator_inactive_rows == 0 &&
+                (field != LEO2_FIELD_GF8 || locator_fallback_rows != 0),
+            operation + " widened or miscounted the weighted boundary");
+    }
     if (expect_receive_fusion)
         require(receive_butterfly4 != 0,
             operation + " did not fuse a complete unpruned receive group");
@@ -1273,6 +1251,156 @@ void decode_case(
     leo2_decode_plan* plan = make_plan(codec, test_case);
     execute_plan(plan, test_case, originals, recovery);
     leo2_decode_plan_destroy(plan);
+}
+
+struct WeightedBoundaryCase
+{
+    CodecCase codec;
+    uint32_t loss_count;
+    uint32_t flags;
+    uint64_t expected_selected_rows;
+    uint64_t expected_fallback_rows;
+    const char* name;
+};
+
+void execute_weighted_boundary_case(
+    const ContextEntry& entry,
+    const WeightedBoundaryCase& item)
+{
+    leo2_codec_options options;
+    std::memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.flags = LEO2_CODEC_FORCE_SPECIALIZED_DECODE | item.flags;
+    leo2_codec* codec = NULL;
+    require_result(leo2_codec_create(entry.context,
+        item.codec.k, item.codec.r, item.codec.profile, item.codec.field,
+        &options, &codec), LEO2_SUCCESS,
+        std::string(item.name) + " codec create");
+    const Shards originals = make_originals(item.codec,
+        static_cast<uint32_t>(0x510e527fU + item.codec.bytes +
+            item.loss_count * 131U + item.flags));
+    const Shards recovery = execute_encode(codec, item.codec, originals);
+
+    std::vector<uint8_t> original_present(item.codec.k, 1);
+    std::vector<uint8_t> recovery_present(item.codec.r, 1);
+    for (uint32_t i = 0; i < item.loss_count; ++i)
+        original_present[i] = 0;
+    leo2_decode_plan* plan = NULL;
+    require_result(leo2_decode_plan_create(codec, &original_present[0],
+        &recovery_present[0], &plan), LEO2_SUCCESS,
+        std::string(item.name) + " plan create");
+
+    size_t scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+        plan, item.codec.bytes, &scratch_bytes), LEO2_SUCCESS,
+        std::string(item.name) + " scratch query");
+    AlignedBuffer scratch(scratch_bytes);
+    std::vector<const void*> original_pointers = const_pointers(originals);
+    const std::vector<const void*> recovery_pointers =
+        const_pointers(recovery);
+    Shards restored(item.codec.k, Bytes(item.codec.bytes));
+    std::vector<void*> restored_pointers(item.codec.k, NULL);
+    for (uint32_t i = 0; i < item.loss_count; ++i)
+    {
+        original_pointers[i] = NULL;
+        restored_pointers[i] = &restored[i][0];
+    }
+
+    TraceOpsGuard trace(entry);
+    trace.reset();
+    require_result(leo2_decode_plan_execute(plan, item.codec.bytes,
+        &original_pointers[0], &recovery_pointers[0],
+        &restored_pointers[0], scratch.data(), scratch_bytes),
+        LEO2_SUCCESS, std::string(item.name) + " execute");
+    for (uint32_t i = 0; i < item.loss_count; ++i)
+        require(restored[i] == originals[i],
+            std::string(item.name) + " restored data mismatch");
+
+    if (item.codec.field == LEO2_FIELD_GF8)
+    {
+        const leopard::ff8::TestOnlyHighDecodeCounts counts =
+            leopard::ff8::TestOnlyGetHighDecodeCounts();
+        require(counts.locator_scale_rows_elided ==
+                    item.expected_selected_rows &&
+                counts.locator_weighted_ifft_butterfly4 * 4U ==
+                    item.expected_selected_rows &&
+                counts.locator_fallback_rows == item.expected_fallback_rows,
+            std::string(item.name) + " selected/fallback row mismatch");
+        require(trace.ff8_weighted_ifft_four_calls() ==
+                    counts.locator_weighted_ifft_butterfly4,
+            std::string(item.name) + " bypassed the context weighted op");
+    }
+    else
+    {
+        require(trace.ff8_weighted_ifft_four_calls() == 0,
+            std::string(item.name) + " crossed the GF8-only boundary");
+    }
+
+    leo2_decode_plan_destroy(plan);
+    leo2_codec_destroy(codec);
+}
+
+void test_weighted_locator_boundary_dispatch(
+    const std::vector<ContextEntry>& contexts)
+{
+    static const uint32_t materialized =
+        LEO2_CODEC_FORCE_MATERIALIZED_DECODE;
+    static const uint32_t tiled = LEO2_CODEC_FORCE_TILED_DECODE;
+    const WeightedBoundaryCase avx2_cases[] = {
+        { { 224, 32, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+              64U * 1024U }, 32, materialized, 0, 32,
+          "T32 lower-side fallback" },
+        { { 192, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+              16U * 1024U - 64U }, 32, materialized, 0, 64,
+          "16KiB lower-byte fallback" },
+        { { 192, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+              16U * 1024U }, 31, materialized, 0, 64,
+          "half-live lower-neighbor fallback" },
+        { { 192, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+              16U * 1024U }, 32, materialized, 64, 0,
+          "materialized lower boundary" },
+        { { 192, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+              16U * 1024U }, 32, tiled, 64, 0,
+          "tiled lower boundary" },
+        { { 192, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+              16U * 1024U + 1U }, 32, tiled, 64, 64,
+          "aligned-prefix plus padded-tail split" },
+        { { 192, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+              256U * 1024U }, 32, materialized, 64, 0,
+          "256KiB upper boundary" },
+        { { 192, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+              256U * 1024U + 64U }, 32, materialized, 0, 64,
+          "256KiB upper-neighbor fallback" },
+        { { 192, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
+              16U * 1024U }, 32, materialized, 0, 0,
+          "GF16 field fallback" }
+    };
+    const WeightedBoundaryCase lower_backend = {
+        { 192, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+            16U * 1024U }, 32, materialized, 0, 64,
+        "lower-backend fallback"
+    };
+
+    bool tested_avx2 = false;
+    for (size_t context_i = 0; context_i < contexts.size(); ++context_i)
+    {
+        const leo2_backend kind =
+            leo2_context_backend(contexts[context_i].context);
+        if (kind == LEO2_BACKEND_AVX2)
+        {
+            if (tested_avx2)
+                continue;
+            for (size_t i = 0;
+                 i < sizeof(avx2_cases) / sizeof(avx2_cases[0]); ++i)
+                execute_weighted_boundary_case(contexts[context_i],
+                    avx2_cases[i]);
+            tested_avx2 = true;
+        }
+        else if (kind == LEO2_BACKEND_SCALAR ||
+                 kind == LEO2_BACKEND_SSSE3)
+            execute_weighted_boundary_case(
+                contexts[context_i], lower_backend);
+    }
 }
 
 void test_concurrent_first_use()
@@ -1658,7 +1786,7 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                         side > 4 && test_case.r == side &&
                         (execution_backend == LEO2_BACKEND_SSSE3 ||
                          execution_backend == LEO2_BACKEND_AVX2),
-                    side >= 4,
+                    false,
                     expect_gf16_accumulation,
                     expect_gf16_materialization,
                     profile_name + " decode backend=" +
@@ -2152,6 +2280,7 @@ int main()
         require(!contexts.empty(), "no executable contexts");
         test_process_default_immutable(process_default);
         test_traced_context_dispatch(contexts);
+        test_weighted_locator_boundary_dispatch(contexts);
         test_public_codecs(contexts);
         test_sparse_encode_contexts(contexts);
         test_shared_codec_and_plan(contexts);

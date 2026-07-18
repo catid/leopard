@@ -344,6 +344,7 @@ struct TestOnlyHighDecodeCounts
     uint64_t locator_weighted_ifft_butterfly4;
     uint64_t locator_scale_rows_elided;
     uint64_t locator_inactive_rows;
+    uint64_t locator_fallback_rows;
 };
 void TestOnlyResetTransformCallsiteCounts();
 TestOnlyTransformCallsiteCounts TestOnlyGetTransformCallsiteCounts();

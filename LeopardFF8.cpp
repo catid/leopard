@@ -69,6 +69,7 @@ static std::atomic<uint64_t> TestHighReceiveZeroShards(0);
 static std::atomic<uint64_t> TestHighLocatorWeightedIFFTButterfly4Calls(0);
 static std::atomic<uint64_t> TestHighLocatorScaleRowsElided(0);
 static std::atomic<uint64_t> TestHighLocatorInactiveRows(0);
+static std::atomic<uint64_t> TestHighLocatorFallbackRows(0);
 static std::atomic<uint64_t> TestSparseExactBlocks(0);
 static std::atomic<uint64_t> TestSparsePrefixButterflies(0);
 static std::atomic<uint64_t> TestSparseRetainedButterflies(0);
@@ -1587,9 +1588,27 @@ static void IFFT_DIT_DecoderWeightedLocator(
     const char* const diagnostic_selection =
         getenv("LEO2_WEIGHTED_LOCATOR_BOUNDARY");
     const bool select_weighted = diagnostic_selection != NULL &&
-        diagnostic_selection[0] == '1' && diagnostic_selection[1] == '\0';
+        diagnostic_selection[0] == '1' && diagnostic_selection[1] == '\0' &&
+        ops.ff8_weighted_ifft_butterfly4 != NULL;
 #else
-    const bool select_weighted = true;
+    // Same-binary, isolated ABBA qualification found a durable win only for
+    // the AVX2 GF8 boundary in this deliberately conservative region.  Keep
+    // scalar/SSSE3, small redundancy sides, sparse receive sets, and very
+    // small/large shard passes on the established scale-then-IFFT path.
+    const bool statically_qualified =
+        ops.kind == LEO2_BACKEND_AVX2 &&
+        ops.ff8_weighted_ifft_butterfly4 != NULL &&
+        m >= 64 &&
+        bytes >= 16U * 1024U && bytes <= 256U * 1024U;
+    unsigned live_count = 0;
+    if (statically_qualified)
+    {
+        const unsigned required_live = (m + 1U) / 2U;
+        for (unsigned i = 0; i < m && live_count < required_live; ++i)
+            live_count += coordinate_data[i] != NULL;
+    }
+    const bool select_weighted =
+        statically_qualified && live_count >= (m + 1U) / 2U;
 #endif
     if (m < 4 || !select_weighted)
     {
@@ -1600,12 +1619,18 @@ static void IFFT_DIT_DecoderWeightedLocator(
             else
                 memset(work[i], 0, bytes);
         }
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        TestHighLocatorFallbackRows.fetch_add(
+            m, std::memory_order_relaxed);
+#endif
         IFFT_DIT_Decoder(ops, bytes, m, work, m, skewLUT);
         return;
     }
 
     LEO_DEBUG_ASSERT((m & 3U) == 0);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
     uint64_t inactive_rows = 0;
+#endif
     for (unsigned r = 0; r < m; r += 4)
     {
         uint8_t live_mask = 0;
@@ -1613,8 +1638,10 @@ static void IFFT_DIT_DecoderWeightedLocator(
         {
             if (coordinate_data[r + lane])
                 live_mask |= static_cast<uint8_t>(1U << lane);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
             else
                 ++inactive_rows;
+#endif
         }
         ops.ff8_weighted_ifft_butterfly4(
             work[r], work[r + 1], work[r + 2], work[r + 3],
@@ -1629,8 +1656,6 @@ static void IFFT_DIT_DecoderWeightedLocator(
     TestHighLocatorScaleRowsElided.fetch_add(m, std::memory_order_relaxed);
     TestHighLocatorInactiveRows.fetch_add(
         inactive_rows, std::memory_order_relaxed);
-#else
-    (void)inactive_rows;
 #endif
     IFFT_DIT_DecoderImpl(
         ops, bytes, m, work, m, skewLUT, NULL, 4);
@@ -3162,6 +3187,7 @@ void TestOnlyResetHighDecodeCounts()
         0, std::memory_order_relaxed);
     TestHighLocatorScaleRowsElided.store(0, std::memory_order_relaxed);
     TestHighLocatorInactiveRows.store(0, std::memory_order_relaxed);
+    TestHighLocatorFallbackRows.store(0, std::memory_order_relaxed);
 }
 
 
@@ -3199,6 +3225,8 @@ TestOnlyHighDecodeCounts TestOnlyGetHighDecodeCounts()
         TestHighLocatorScaleRowsElided.load(std::memory_order_relaxed);
     result.locator_inactive_rows =
         TestHighLocatorInactiveRows.load(std::memory_order_relaxed);
+    result.locator_fallback_rows =
+        TestHighLocatorFallbackRows.load(std::memory_order_relaxed);
     return result;
 }
 
