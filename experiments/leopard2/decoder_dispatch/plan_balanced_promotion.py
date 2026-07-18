@@ -9,6 +9,7 @@ import importlib.util
 import json
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -20,11 +21,11 @@ import balanced_evidence_common as common
 
 PLAN_SCHEMA = "leopard2-balanced-promotion-plan/v2"
 MAIN_CELL_SCHEMA = "leopard2-main-compare-cell-list/v2"
-SURVIVOR_SCHEMA = "leopard2-balanced-promotion-survivors/v3"
-STAGE_SCHEMA = "leopard2-balanced-promotion-stage/v4"
-ATTESTATION_SCHEMA = "leopard2-balanced-auto-path-attestation/v4"
-ATTESTATION_RESULT_SCHEMA = "leopard2-balanced-auto-path-result/v3"
-EXACT_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v4"
+SURVIVOR_SCHEMA = "leopard2-balanced-promotion-survivors/v4"
+STAGE_SCHEMA = "leopard2-balanced-promotion-stage/v5"
+ATTESTATION_SCHEMA = "leopard2-balanced-auto-path-attestation/v5"
+ATTESTATION_RESULT_SCHEMA = "leopard2-balanced-auto-path-result/v4"
+EXACT_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v5"
 EXACT_MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 PROMOTION_GATE = 1.05
 BOUNDARY_K = (
@@ -49,7 +50,7 @@ FORCED_ORDERS = (
 # cannot force.  A later schema can add them with their own forced matrices.
 CAMPAIGN_BACKENDS = ("scalar", "ssse3", "avx2")
 AUTO_BACKENDS = CAMPAIGN_BACKENDS
-EXACT_RAW_SCHEMA = "leopard2-main-compare-raw/v4"
+EXACT_RAW_SCHEMA = "leopard2-main-compare-raw/v5"
 REQUIRED_CANDIDATE_CACHE = {
     "CMAKE_BUILD_TYPE": "Release",
     "ENABLE_OPENMP": "ON",
@@ -283,7 +284,7 @@ def generate_plan(root: Path) -> dict[str, Any]:
         },
         "workflow": {
             "select_command": (
-                "select verifies every schema-v4 exact-main gate manifest and "
+                "select verifies every schema-v5 exact-main gate manifest and "
                 "derives an evidence-bound survivor set"),
             "refinement": (
                 "opposite outcomes separated by an unmeasured K emit exact "
@@ -387,10 +388,29 @@ def _normalize_bound_paths(value: object, replacements: tuple[tuple[str, str], .
 
     def visit(item: object) -> object:
         if isinstance(item, dict):
-            return {
+            result = {
                 key: visit(child) for key, child in sorted(item.items())
                 if key not in {"device", "inode", "mtime_ns"}
             }
+            # Retained recipe text legitimately contains source/build roots.
+            # Replacing those roots changes the normalized bytes, so recompute
+            # their normalized content identity instead of leaving a stale
+            # size/hash pair or retaining machine-specific absolute paths.
+            if set(result) == {"encoding", "size", "sha256", "text"} and \
+                    result.get("encoding") == "utf-8" and \
+                    isinstance(result.get("text"), str):
+                encoded = result["text"].encode("utf-8")
+                result["size"] = len(encoded)
+                result["sha256"] = hashlib.sha256(encoded).hexdigest()
+            for prefix in ("archive", "executable"):
+                content = result.get(f"{prefix}_link_recipe_content")
+                identity = result.get(f"{prefix}_link_recipe")
+                if isinstance(content, dict) and isinstance(identity, dict) and \
+                        type(content.get("size")) is int and \
+                        isinstance(content.get("sha256"), str):
+                    identity["size"] = content["size"]
+                    identity["sha256"] = content["sha256"]
+            return result
         if isinstance(item, list):
             return [visit(child) for child in item]
         if isinstance(item, str):
@@ -418,55 +438,416 @@ def _parse_scope_cpu_list(value: object, label: str) -> set[int]:
     return result
 
 
-def _validate_scope_build(build: object, role: str) -> dict[str, Any]:
-    require(role in {"baseline", "candidate"} and isinstance(build, dict),
-            f"{role} scope build is invalid")
-    cache = build.get("validated_cache")
-    semantics = build.get("validated_compile_commands")
-    required_cache = (REQUIRED_BASELINE_CACHE if role == "baseline"
-                      else REQUIRED_CANDIDATE_CACHE)
-    require(isinstance(cache, dict) and all(
-        cache.get(key) == expected for key, expected in required_cache.items()) and
-            isinstance(build.get("compiler"), dict) and
-            isinstance(build.get("compiler_version_stdout"), dict) and
-            isinstance(build.get("cmake_cache"), dict) and
-            isinstance(build.get("compile_commands"), dict) and
-            isinstance(build.get("executable_link_recipe"), dict) and
-            isinstance(build.get("archive_link_recipe"), dict) and
-            isinstance(build.get("archive_link_recipe_content"), dict) and
-            isinstance(build.get("archive_link_tool_invocations"), dict) and
-            isinstance(build.get("validated_archive"), dict) and
-            isinstance(build.get("validated_executable"), dict) and
-            isinstance(build.get("validated_archive_members"), list) and
-            build["validated_archive_members"] and
-            isinstance(semantics, dict) and
-            semantics.get("validated_optimization") == "-O3" and
-            semantics.get("validated_openmp") is True and
-            isinstance(semantics.get("required_source_object_pairs"), list) and
-            semantics["required_source_object_pairs"],
-            f"{role} scope lacks canonical compile/archive/link closure")
-    return build
-
-
-def _validate_scope_artifact(value: object, label: str) -> dict[str, Any]:
-    require(isinstance(value, dict) and
+def _validate_scope_artifact(
+    value: object, label: str, expected_kind: str | None = None,
+) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+                "path", "kind", "size", "mode", "sha256"},
+            f"{label} normalized artifact shape differs")
+    require(isinstance(value.get("path"), str) and value["path"] and
+            isinstance(value.get("kind"), str) and value["kind"] and
+            (expected_kind is None or value["kind"] == expected_kind) and
+            type(value.get("size")) is int and value["size"] >= 0 and
+            type(value.get("mode")) is int and 0 <= value["mode"] <= 0o7777 and
             isinstance(value.get("sha256"), str) and
-            re.fullmatch(r"[0-9a-f]{64}", value["sha256"]) is not None and
-            type(value.get("size")) is int and value["size"] >= 0,
-            f"{label} scope artifact is invalid")
+            re.fullmatch(r"[0-9a-f]{64}", value["sha256"]) is not None,
+            f"{label} normalized artifact is invalid")
     return value
 
 
+def _validate_scope_text(value: object, label: str) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+                "encoding", "size", "sha256", "text"} and
+            value.get("encoding") == "utf-8" and
+            isinstance(value.get("text"), str),
+            f"{label} normalized retained text shape differs")
+    encoded = value["text"].encode("utf-8")
+    require(type(value.get("size")) is int and value["size"] == len(encoded) and
+            isinstance(value.get("sha256"), str) and
+            value["sha256"] == hashlib.sha256(encoded).hexdigest(),
+            f"{label} normalized retained text identity differs")
+    return value
+
+
+def _validate_scope_source(value: object, role: str) -> dict[str, Any]:
+    require(role in {"baseline", "candidate"} and isinstance(value, dict) and
+            set(value) == {
+                "path", "head", "tree", "detached",
+                "tracked_tree_listing_sha256", "tracked_status"},
+            f"{role} normalized source identity shape differs")
+    expected_path = "$BASELINE_SOURCE" if role == "baseline" else "$CANDIDATE_SOURCE"
+    expected_head = EXACT_MAIN_COMMIT if role == "baseline" else None
+    require(value.get("path") == expected_path and
+            isinstance(value.get("head"), str) and
+            re.fullmatch(r"[0-9a-f]{40}", value["head"]) is not None and
+            (expected_head is None or value["head"] == expected_head) and
+            isinstance(value.get("tree"), str) and
+            re.fullmatch(r"[0-9a-f]{40}", value["tree"]) is not None and
+            type(value.get("detached")) is bool and
+            (role != "baseline" or value["detached"] is True) and
+            isinstance(value.get("tracked_tree_listing_sha256"), str) and
+            re.fullmatch(r"[0-9a-f]{64}",
+                         value["tracked_tree_listing_sha256"]) is not None and
+            value.get("tracked_status") == "clean",
+            f"{role} normalized source identity differs")
+    return value
+
+
+def _validate_scope_build(build: object, role: str) -> dict[str, Any]:
+    require(role in {"baseline", "candidate"} and isinstance(build, dict) and
+            set(build) == {
+                "build_dir", "cmake_cache", "compile_commands",
+                "executable_link_recipe", "archive_link_recipe", "compiler",
+                "compiler_version_stdout", "archiver", "ranlib",
+                "validated_archive_members", "validated_executable",
+                "validated_archive", "validated_cache",
+                "validated_compile_commands", "archive_link_recipe_content",
+                "executable_link_recipe_content",
+                "archive_link_tool_invocations", "compiler_invocation"},
+            f"{role} normalized build identity shape differs")
+    expected_root = "$BASELINE_BUILD" if role == "baseline" else "$CANDIDATE_BUILD"
+    require(build.get("build_dir") == expected_root,
+            f"{role} normalized build directory differs")
+    baseline = role == "baseline"
+    archive_name = "libleopard_main_exact.a" if baseline else "libleopard.a"
+    executable_name = "leopard_main_benchmark" if baseline else "bench_leopard2"
+    archive_target = "leopard_main_exact.dir" if baseline else "leopard.dir"
+    metadata_paths = {
+        "cmake_cache": f"{expected_root}/CMakeCache.txt",
+        "compile_commands": f"{expected_root}/compile_commands.json",
+        "executable_link_recipe": (
+            f"{expected_root}/CMakeFiles/{executable_name}.dir/link.txt"),
+        "archive_link_recipe": (
+            f"{expected_root}/CMakeFiles/{archive_target}/link.txt"),
+    }
+    for name in ("cmake_cache", "compile_commands", "executable_link_recipe",
+                 "archive_link_recipe"):
+        record = _validate_scope_artifact(
+            build.get(name), f"{role} {name}", "build_metadata")
+        require(record["path"] == metadata_paths[name],
+                f"{role} normalized {name} path differs")
+    compiler = _validate_scope_artifact(
+        build.get("compiler"), f"{role} compiler", "compiler")
+    archiver = _validate_scope_artifact(
+        build.get("archiver"), f"{role} archiver", "archiver")
+    ranlib = _validate_scope_artifact(
+        build.get("ranlib"), f"{role} ranlib", "ranlib")
+    archive = _validate_scope_artifact(
+        build.get("validated_archive"), f"{role} archive", "archive")
+    executable = _validate_scope_artifact(
+        build.get("validated_executable"), f"{role} executable", "executable")
+    require(archive["path"] == f"{expected_root}/{archive_name}" and
+            executable["path"] == f"{expected_root}/{executable_name}",
+            f"{role} normalized output paths differ")
+    version = build.get("compiler_version_stdout")
+    require(isinstance(version, dict) and set(version) == {"sha256", "text"} and
+            isinstance(version.get("text"), str) and version["text"] and
+            isinstance(version.get("sha256"), str) and
+            version["sha256"] == hashlib.sha256(
+                version["text"].encode("utf-8")).hexdigest(),
+            f"{role} compiler version identity differs")
+    cache = build.get("validated_cache")
+    required_cache = (REQUIRED_BASELINE_CACHE if role == "baseline"
+                      else REQUIRED_CANDIDATE_CACHE)
+    expected_cache_keys = {
+        "CMAKE_BUILD_TYPE", "CMAKE_CXX_COMPILER", "CMAKE_CXX_FLAGS_RELEASE",
+        *required_cache,
+    }
+    require(isinstance(cache, dict) and set(cache) == expected_cache_keys and
+            isinstance(cache.get("CMAKE_CXX_COMPILER"), str) and
+            cache["CMAKE_CXX_COMPILER"] and
+            isinstance(cache.get("CMAKE_CXX_FLAGS_RELEASE"), str) and
+            all(cache.get(key) == expected
+                for key, expected in required_cache.items()),
+            f"{role} validated CMake cache differs")
+    compiler_invocation = build.get("compiler_invocation")
+    require(isinstance(compiler_invocation, dict) and
+            set(compiler_invocation) == {"invocation", "resolved_path"} and
+            compiler_invocation.get("invocation") ==
+                cache["CMAKE_CXX_COMPILER"] and
+            compiler_invocation.get("resolved_path") == compiler["path"],
+            f"{role} normalized compiler invocation differs")
+    semantics = build.get("validated_compile_commands")
+    require(isinstance(semantics, dict) and set(semantics) == {
+                "entry_count", "required_sources", "validated_optimization",
+                "validated_openmp", "required_source_object_pairs", "isa_policy"} and
+            type(semantics.get("entry_count")) is int and
+            semantics["entry_count"] >= 1 and
+            semantics.get("validated_optimization") == "-O3" and
+            semantics.get("validated_openmp") is True and
+            isinstance(semantics.get("isa_policy"), str) and
+            semantics["isa_policy"] and
+            isinstance(semantics.get("required_sources"), list) and
+            semantics["required_sources"] and
+            len(semantics["required_sources"]) == len(set(
+                semantics["required_sources"])) and
+            isinstance(semantics.get("required_source_object_pairs"), list) and
+            semantics["required_source_object_pairs"],
+            f"{role} normalized compile-command identity differs")
+    sources: list[str] = []
+    objects: list[str] = []
+    for index, pair in enumerate(semantics["required_source_object_pairs"]):
+        require(isinstance(pair, dict) and set(pair) == {"source", "object"},
+                f"{role} normalized compile pair {index} shape differs")
+        source = _validate_scope_artifact(
+            pair["source"], f"{role} source {index}", "source_file")
+        obj = _validate_scope_artifact(
+            pair["object"], f"{role} object {index}", "object_file")
+        sources.append(source["path"])
+        objects.append(obj["path"])
+    require(sources == semantics["required_sources"] and
+            len(sources) == len(set(sources)) and
+            len(objects) == len(set(objects)) and
+            semantics["entry_count"] >= len(sources),
+            f"{role} normalized compile source/object closure differs")
+    benchmark_suffix = (
+        "/experiments/leopard2/main_compare/legacy_main_benchmark.cpp"
+        if baseline else "/bench/leopard2/benchmark.cpp")
+    benchmark_pairs = [
+        pair for pair in semantics["required_source_object_pairs"]
+        if pair["source"]["path"].endswith(benchmark_suffix)]
+    require(len(benchmark_pairs) == 1 and
+            all(path.startswith(expected_root + "/") for path in objects),
+            f"{role} normalized benchmark/build object closure differs")
+    archive_pairs = [pair for pair in semantics["required_source_object_pairs"]
+                     if pair not in benchmark_pairs]
+    implementation_source = "$BASELINE_SOURCE" if baseline else "$CANDIDATE_SOURCE"
+    require(archive_pairs and
+            all(pair["source"]["path"].startswith("$CANDIDATE_SOURCE/")
+                for pair in benchmark_pairs) and
+            all(pair["source"]["path"].startswith(implementation_source + "/")
+                for pair in archive_pairs),
+            f"{role} normalized compile sources escape their source roots")
+    members = build.get("validated_archive_members")
+    require(isinstance(members, list) and members and
+            len(members) == len(set(members)) and
+            all(isinstance(member, str) and member and "/" not in member
+                for member in members),
+            f"{role} normalized archive members differ")
+    objects_by_member = {
+        pair["object"]["path"].rsplit("/", 1)[-1]: pair["object"]["path"]
+        for pair in archive_pairs
+    }
+    require(len(objects_by_member) == len(archive_pairs) and
+            set(objects_by_member) == set(members),
+            f"{role} normalized archive member/object closure differs")
+    archive_text = _validate_scope_text(
+        build.get("archive_link_recipe_content"),
+        f"{role} archive link recipe")
+    executable_text = _validate_scope_text(
+        build.get("executable_link_recipe_content"),
+        f"{role} executable link recipe")
+    require(archive_text["size"] == build["archive_link_recipe"]["size"] and
+            archive_text["sha256"] == build["archive_link_recipe"]["sha256"] and
+            executable_text["size"] == build["executable_link_recipe"]["size"] and
+            executable_text["sha256"] ==
+                build["executable_link_recipe"]["sha256"],
+            f"{role} normalized retained link bytes differ from file identity")
+    tools = build.get("archive_link_tool_invocations")
+    require(isinstance(tools, dict) and set(tools) == {"archiver", "ranlib"},
+            f"{role} archive tool invocation shape differs")
+    for name, artifact in (("archiver", archiver), ("ranlib", ranlib)):
+        invocation = tools.get(name)
+        require(isinstance(invocation, dict) and set(invocation) == {
+                    "invocation", "resolved_path"} and
+                isinstance(invocation.get("invocation"), str) and
+                invocation["invocation"] and
+                invocation.get("resolved_path") == artifact["path"],
+                f"{role} normalized {name} invocation differs")
+    archive_commands = [
+        shlex.split(line, posix=True)
+        for line in archive_text["text"].splitlines() if line.strip()
+    ]
+    expected_archive_objects = [
+        objects_by_member[member][len(expected_root) + 1:]
+        for member in members
+    ]
+    require(len(archive_commands) == 2 and
+            len(archive_commands[0]) >= 4 and
+            archive_commands[0][0] == tools["archiver"]["invocation"] and
+            archive_commands[0][1] in {"qc", "rc", "rcs"} and
+            archive_commands[0][2] == archive_name and
+            archive_commands[0][3:] == expected_archive_objects and
+            archive_commands[1] == [tools["ranlib"]["invocation"], archive_name],
+            f"{role} normalized archive recipe semantics differ")
+    executable_tokens = shlex.split(
+        executable_text["text"], posix=True)
+    expected_benchmark_object = benchmark_pairs[0]["object"]["path"][
+        len(expected_root) + 1:]
+    outputs = [executable_tokens[index + 1]
+               for index, token in enumerate(executable_tokens[:-1])
+               if token == "-o"]
+    require(executable_tokens and
+            executable_tokens[0] == compiler_invocation["invocation"] and
+            [token for token in executable_tokens if token.endswith(".o")] ==
+                [expected_benchmark_object] and
+            any(token.rsplit("/", 1)[-1] == archive_name
+                for token in executable_tokens) and
+            outputs == [executable_name],
+            f"{role} normalized executable recipe semantics differ")
+    require(compiler["path"], f"{role} normalized compiler path is empty")
+    return build
+
+
 def _validate_runtime_closure(value: object, label: str) -> dict[str, Any]:
-    require(isinstance(value, dict) and isinstance(value.get("executable"), str) and
+    require(isinstance(value, dict) and set(value) == {
+                "executable", "dependencies"} and
+            isinstance(value.get("executable"), str) and value["executable"] and
             isinstance(value.get("dependencies"), list) and value["dependencies"],
-            f"{label} runtime closure is invalid")
+            f"{label} normalized runtime closure shape differs")
+    sonames: list[str] = []
+    loader_paths: list[str] = []
+    file_paths: list[str] = []
     for dependency in value["dependencies"]:
         require(isinstance(dependency, dict) and
                 isinstance(dependency.get("soname"), str) and
-                (dependency.get("virtual") is True or
-                 isinstance(dependency.get("file"), dict)),
-                f"{label} runtime dependency is invalid")
+                dependency["soname"],
+                f"{label} normalized runtime dependency is invalid")
+        sonames.append(dependency["soname"])
+        if set(dependency) == {"soname", "virtual"}:
+            require(dependency["soname"] == "linux-vdso.so.1" and
+                    dependency.get("virtual") is True,
+                    f"{label} normalized virtual dependency differs")
+            continue
+        require(set(dependency) == {"soname", "loader_path", "file"} and
+                isinstance(dependency.get("loader_path"), str) and
+                dependency["loader_path"],
+                f"{label} normalized runtime dependency variant differs")
+        file_record = _validate_scope_artifact(
+            dependency["file"], f"{label} runtime {dependency['soname']}")
+        require(file_record["kind"] in {"shared_library", "dynamic_loader"},
+                f"{label} normalized runtime dependency kind differs")
+        loader_paths.append(dependency["loader_path"])
+        file_paths.append(file_record["path"])
+    require(sonames == sorted(sonames) and len(sonames) == len(set(sonames)) and
+            len(loader_paths) == len(set(loader_paths)) and
+            len(file_paths) == len(set(file_paths)),
+            f"{label} normalized runtime closure is not sorted and unique")
+    return value
+
+
+def _validate_scope_cpu_policy(
+    value: object, label: str, expected_sibling: int,
+) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+                "cpu", "online", "cpuinfo", "topology", "frequency_policy",
+                "cache_hierarchy", "numa_nodes", "core_class"} and
+            type(value.get("cpu")) is int and value["cpu"] >= 0 and
+            (value.get("online") is None or isinstance(value["online"], str)),
+            f"{label} normalized CPU policy shape differs")
+    cpu = value["cpu"]
+    cpuinfo = value.get("cpuinfo")
+    allowed_cpuinfo = {
+        "processor", "vendor_id", "cpu family", "model", "model name",
+        "stepping", "microcode", "flags", "Features", "CPU implementer",
+        "CPU architecture", "CPU variant", "CPU part", "CPU revision",
+    }
+    require(isinstance(cpuinfo, dict) and cpuinfo and
+            set(cpuinfo).issubset(allowed_cpuinfo) and
+            cpuinfo.get("processor") == str(cpu) and
+            any(name in cpuinfo for name in ("model name", "CPU part")) and
+            all(isinstance(item, str) for item in cpuinfo.values()),
+            f"{label} normalized CPU model identity differs")
+    topology = value.get("topology")
+    require(isinstance(topology, dict) and set(topology) == {
+                "core_id", "physical_package_id", "die_id", "cluster_id",
+                "thread_siblings_list", "core_siblings_list"} and
+            all(item is None or isinstance(item, str)
+                for item in topology.values()) and
+            _parse_scope_cpu_list(topology.get("thread_siblings_list"),
+                                  f"{label} thread siblings") == {
+                cpu, expected_sibling} and
+            {cpu, expected_sibling}.issubset(_parse_scope_cpu_list(
+                topology.get("core_siblings_list"),
+                f"{label} core siblings")),
+            f"{label} normalized CPU topology differs")
+    frequency = value.get("frequency_policy")
+    require(isinstance(frequency, dict) and set(frequency) == {
+                "scaling_driver", "scaling_governor",
+                "energy_performance_preference", "scaling_min_freq",
+                "scaling_max_freq", "cpuinfo_min_freq", "cpuinfo_max_freq"} and
+            all(item is None or isinstance(item, str)
+                for item in frequency.values()),
+            f"{label} normalized frequency identity differs")
+    caches = value.get("cache_hierarchy")
+    require(isinstance(caches, list) and caches,
+            f"{label} normalized cache hierarchy is absent")
+    indices = []
+    for cache in caches:
+        require(isinstance(cache, dict) and set(cache) == {
+                    "index", "level", "type", "size", "coherency_line_size",
+                    "number_of_sets", "ways_of_associativity",
+                    "physical_line_partition", "shared_cpu_list", "shared_cpu_map",
+                    "allocation_policy", "write_policy"} and
+                type(cache.get("index")) is int and cache["index"] >= 0 and
+                all(cache.get(name) is None or isinstance(cache[name], str)
+                    for name in set(cache) - {"index"}) and
+                all(isinstance(cache.get(name), str) and cache[name]
+                    for name in ("level", "type", "size", "coherency_line_size",
+                                 "shared_cpu_list", "shared_cpu_map")) and
+                cpu in _parse_scope_cpu_list(
+                    cache["shared_cpu_list"], f"{label} cache shared CPUs"),
+                f"{label} normalized cache identity differs")
+        indices.append(cache["index"])
+    require(indices == sorted(indices) and len(indices) == len(set(indices)),
+            f"{label} normalized cache indices differ")
+    numa = value.get("numa_nodes")
+    core_class = value.get("core_class")
+    require(isinstance(numa, list) and numa == sorted(set(numa)) and
+            all(type(node) is int and node >= 0 for node in numa) and
+            isinstance(core_class, dict) and set(core_class) == {
+                "core_type", "cpu_capacity"} and
+            all(item is None or isinstance(item, str)
+                for item in core_class.values()),
+            f"{label} normalized NUMA/core-class identity differs")
+    return value
+
+
+def _validate_scope_host(value: object) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+                "system", "allowed_cpu_set_at_launch", "online_cpu_set",
+                "benchmark_cpu", "reserved_sibling", "turbo_and_pstate"},
+            "gate normalized host identity shape differs")
+    system = value.get("system")
+    require(isinstance(system, dict) and set(system) == {
+                "system", "node", "release", "version", "machine", "python",
+                "page_size"} and
+            all(isinstance(system.get(name), str) and system[name]
+                for name in ("system", "node", "release", "version", "machine",
+                             "python")) and
+            type(system.get("page_size")) is int and system["page_size"] > 0,
+            "gate normalized host system identity differs")
+    allowed = value.get("allowed_cpu_set_at_launch")
+    online = value.get("online_cpu_set")
+    require(isinstance(allowed, list) and allowed == sorted(set(allowed)) and
+            allowed and all(type(cpu) is int and cpu >= 0 for cpu in allowed) and
+            isinstance(online, list) and online == sorted(set(online)) and
+            online and all(type(cpu) is int and cpu >= 0 for cpu in online),
+            "gate normalized host CPU sets differ")
+    benchmark = value.get("benchmark_cpu")
+    sibling = value.get("reserved_sibling")
+    require(isinstance(benchmark, dict) and isinstance(sibling, dict) and
+            type(benchmark.get("cpu")) is int and
+            type(sibling.get("cpu")) is int and
+            benchmark["cpu"] != sibling["cpu"],
+            "gate normalized host reserved pair differs")
+    _validate_scope_cpu_policy(
+        benchmark, "benchmark CPU", sibling["cpu"])
+    _validate_scope_cpu_policy(
+        sibling, "reserved sibling", benchmark["cpu"])
+    pair = {benchmark["cpu"], sibling["cpu"]}
+    require(pair.issubset(set(allowed)) and pair.issubset(set(online)) and
+            benchmark["cache_hierarchy"] == sibling["cache_hierarchy"] and
+            benchmark["numa_nodes"] == sibling["numa_nodes"] and
+            benchmark["core_class"] == sibling["core_class"],
+            "gate normalized pair is outside CPU sets or differs in cache/class/domain")
+    turbo = value.get("turbo_and_pstate")
+    require(isinstance(turbo, dict) and set(turbo) == {
+                "/sys/devices/system/cpu/intel_pstate/no_turbo",
+                "/sys/devices/system/cpu/amd_pstate/status",
+                "/sys/devices/system/cpu/cpufreq/boost"} and
+            all(item is None or isinstance(item, str) for item in turbo.values()),
+            "gate normalized host turbo/pstate identity differs")
     return value
 
 
@@ -475,7 +856,7 @@ def selection_scope_from_verified_bundle(
 ) -> dict[str, Any]:
     """Derive the one environment in which every gate cell is meaningful."""
     require(raw.get("schema") == EXACT_RAW_SCHEMA,
-            "exact-main raw bundle is not hardened schema v4")
+            "exact-main raw bundle is not complete-identity schema v5")
     identities = manifest.get("identities")
     host = manifest.get("host")
     require(isinstance(identities, dict) and isinstance(host, dict),
@@ -516,7 +897,7 @@ def selection_scope_from_verified_bundle(
         (candidate_build_root, "$CANDIDATE_BUILD"),
     )
     scope = {
-        "schema": "leopard2-balanced-evidence-scope/v2",
+        "schema": "leopard2-balanced-evidence-scope/v3",
         # Retain the exact pinned CPU pair.  This is intentionally stricter than
         # topology cardinality: the current evidence format lacks cache/NUMA and
         # heterogeneous-core descriptors needed to equate different pairs.
@@ -559,7 +940,7 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
         "runtime_closures", "tools",
         "resolved_auto_backend", "forced_confirmation_backends",
         "excluded_backends",
-    } and scope.get("schema") == "leopard2-balanced-evidence-scope/v2",
+    } and scope.get("schema") == "leopard2-balanced-evidence-scope/v3",
             "gate evidence scope shape differs")
     backend = scope.get("resolved_auto_backend")
     require(backend in CAMPAIGN_BACKENDS and
@@ -573,36 +954,12 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
     artifacts = scope.get("artifacts")
     closures = scope.get("runtime_closures")
     tools = scope.get("tools")
-    require(isinstance(host, dict) and set(host) == {
-        "system", "allowed_cpu_set_at_launch", "online_cpu_set",
-        "benchmark_cpu", "reserved_sibling", "turbo_and_pstate",
-    } and isinstance(host["system"], dict) and
-            isinstance(host["benchmark_cpu"], dict) and
-            isinstance(host["reserved_sibling"], dict) and
-            type(host["benchmark_cpu"].get("cpu")) is int and
-            type(host["reserved_sibling"].get("cpu")) is int and
-            host["benchmark_cpu"]["cpu"] != host["reserved_sibling"]["cpu"] and
-            isinstance(host["benchmark_cpu"].get("topology"), dict) and
-            isinstance(host["reserved_sibling"].get("topology"), dict) and
-            isinstance(host["allowed_cpu_set_at_launch"], list) and
-            host["allowed_cpu_set_at_launch"] and
-            isinstance(host["online_cpu_set"], list) and host["online_cpu_set"],
-            "gate evidence exact CPU-pair/topology scope differs")
-    pair = {host["benchmark_cpu"]["cpu"], host["reserved_sibling"]["cpu"]}
-    require(pair.issubset(set(host["allowed_cpu_set_at_launch"])) and
-            pair.issubset(set(host["online_cpu_set"])) and
-            _parse_scope_cpu_list(host["benchmark_cpu"]["topology"].get(
-                "thread_siblings_list"), "benchmark CPU thread siblings") == pair and
-            _parse_scope_cpu_list(host["reserved_sibling"]["topology"].get(
-                "thread_siblings_list"), "reserved sibling thread siblings") == pair,
-            "gate evidence does not retain one exact SMT CPU pair")
+    _validate_scope_host(host)
     require(isinstance(sources, dict) and set(sources) == {"baseline", "candidate"} and
-            all(isinstance(value, dict) for value in sources.values()) and
-            sources["baseline"].get("head") == EXACT_MAIN_COMMIT and
-            re.fullmatch(r"[0-9a-f]{40}", str(
-                sources["candidate"].get("head"))) is not None and
             isinstance(builds, dict) and set(builds) == {"baseline", "candidate"},
             "gate evidence role-specific source/build scope differs")
+    _validate_scope_source(sources["baseline"], "baseline")
+    _validate_scope_source(sources["candidate"], "candidate")
     _validate_scope_build(builds["baseline"], "baseline")
     _validate_scope_build(builds["candidate"], "candidate")
     require(builds["baseline"]["compiler"] == builds["candidate"]["compiler"] and
@@ -614,7 +971,9 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
         "candidate_archive", "candidate_executable",
     }, "gate evidence artifact closure shape differs")
     for key, artifact_value in artifacts.items():
-        _validate_scope_artifact(artifact_value, key)
+        _validate_scope_artifact(
+            artifact_value, key,
+            "archive" if key.endswith("archive") else "executable")
     require(artifacts["baseline_archive"] ==
                 builds["baseline"]["validated_archive"] and
             artifacts["baseline_executable"] ==
@@ -637,7 +996,8 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
     require(isinstance(tools, dict) and set(tools) == {"runner", "taskset", "ldd"},
             "gate evidence tool scope shape differs")
     for key, tool in tools.items():
-        _validate_scope_artifact(tool, key)
+        _validate_scope_artifact(
+            tool, key, "file" if key == "runner" else "executable")
     return scope
 
 
@@ -653,7 +1013,7 @@ def verify_exact_manifest(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     require(isinstance(document, dict) and
             document.get("schema") == EXACT_MANIFEST_SCHEMA and
             document.get("valid") is True,
-            f"exact-main manifest is not valid schema v4: {path}")
+            f"exact-main manifest is not valid schema v5: {path}")
     raw_record = document.get("raw")
     require(isinstance(raw_record, dict) and
             isinstance(raw_record.get("path"), str),
@@ -1203,7 +1563,7 @@ def load_exact_main_runner() -> Any:
 def canonical_candidate_build_identity(
     source_root: Path, binary_relative: str
 ) -> dict[str, Any]:
-    """Run the exact-main schema-v4 compile/archive/link semantic validator."""
+    """Run the exact-main schema-v5 compile/archive/link semantic validator."""
     source_root = source_root.resolve(strict=True)
     relative = Path(binary_relative)
     require(not relative.is_absolute() and ".." not in relative.parts,
@@ -1244,7 +1604,7 @@ def canonical_candidate_build_identity(
     require(isinstance(normalized, dict), "canonical build scope is invalid")
     return {
         "schema": "leopard2-canonical-production-build/v1",
-        "validator": "exact-main/run_abba.py build_provenance schema v4",
+        "validator": "exact-main/run_abba.py build_provenance schema v5",
         "provenance": normalized,
         "provenance_sha256": canonical_sha256(normalized),
     }
@@ -1588,7 +1948,7 @@ def derive_attestation_result(
                 "schema", "validator", "provenance", "provenance_sha256",
             } and canonical["schema"] == "leopard2-canonical-production-build/v1" and
             canonical["validator"] ==
-                "exact-main/run_abba.py build_provenance schema v4" and
+                "exact-main/run_abba.py build_provenance schema v5" and
             isinstance(canonical["provenance"], dict) and
             canonical_sha256(canonical["provenance"]) ==
                 canonical["provenance_sha256"] and
@@ -1806,40 +2166,113 @@ def adversarial_resign(path: Path, mutator) -> None:
 
 def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
     require(backend in CAMPAIGN_BACKENDS, "fixture backend is outside campaign")
-    def fixture_artifact(character: str) -> dict[str, Any]:
-        return {"path": "$FIXTURE/" + character, "kind": "fixture",
-                "sha256": character * 64, "size": 1, "mode": 0o755}
+    def fixture_artifact(path: str, kind: str, character: str,
+                         mode: int = 0o644) -> dict[str, Any]:
+        return {"path": path, "kind": kind, "sha256": character * 64,
+                "size": 1, "mode": mode}
+
+    def fixture_text(text: str) -> dict[str, Any]:
+        encoded = text.encode("utf-8")
+        return {"encoding": "utf-8", "text": text, "size": len(encoded),
+                "sha256": hashlib.sha256(encoded).hexdigest()}
+
+    compiler = fixture_artifact(
+        "/usr/bin/compiler", "compiler", "a", 0o755)
+    compiler_text = "fixture compiler 1.0\n"
+    compiler_version = {
+        "sha256": hashlib.sha256(compiler_text.encode("utf-8")).hexdigest(),
+        "text": compiler_text,
+    }
 
     def fixture_build(role: str, character: str) -> dict[str, Any]:
-        cache = dict(REQUIRED_BASELINE_CACHE if role == "baseline"
-                     else REQUIRED_CANDIDATE_CACHE)
+        baseline = role == "baseline"
+        root = f"${role.upper()}_BUILD"
+        source_root = "$BASELINE_SOURCE" if baseline else "$CANDIDATE_SOURCE"
+        target = "leopard_main_exact.dir" if baseline else "leopard.dir"
+        executable_name = "leopard_main_benchmark" if baseline else "bench_leopard2"
+        archive_name = "libleopard_main_exact.a" if baseline else "libleopard.a"
+        library_source = fixture_artifact(
+            f"{source_root}/LeopardCommon.cpp", "source_file", character)
+        library_object = fixture_artifact(
+            f"{root}/CMakeFiles/{target}/LeopardCommon.cpp.o",
+            "object_file", character)
+        benchmark_source = fixture_artifact(
+            ("$CANDIDATE_SOURCE/experiments/leopard2/main_compare/"
+             "legacy_main_benchmark.cpp" if baseline else
+             "$CANDIDATE_SOURCE/bench/leopard2/benchmark.cpp"),
+            "source_file", character)
+        benchmark_object = fixture_artifact(
+            f"{root}/CMakeFiles/{executable_name}.dir/benchmark.cpp.o",
+            "object_file", character)
+        pairs = sorted([
+            {"source": library_source, "object": library_object},
+            {"source": benchmark_source, "object": benchmark_object},
+        ], key=lambda pair: pair["source"]["path"])
+        cache = {
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_CXX_COMPILER": "/usr/bin/compiler",
+            "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
+            **(REQUIRED_BASELINE_CACHE if baseline else REQUIRED_CANDIDATE_CACHE),
+        }
+        library_relative = library_object["path"][len(root) + 1:]
+        benchmark_relative = benchmark_object["path"][len(root) + 1:]
+        archive_text = fixture_text(
+            f"/usr/bin/ar qc {archive_name} {library_relative}\n"
+            f"/usr/bin/ranlib {archive_name}\n")
+        executable_text = fixture_text(
+            f"/usr/bin/compiler -O3 {archive_name} {benchmark_relative} "
+            f"-o {executable_name}\n")
+        archive_recipe = fixture_artifact(
+            f"{root}/CMakeFiles/{target}/link.txt", "build_metadata", character)
+        archive_recipe.update({
+            "size": archive_text["size"], "sha256": archive_text["sha256"]})
+        executable_recipe = fixture_artifact(
+            f"{root}/CMakeFiles/{executable_name}.dir/link.txt",
+            "build_metadata", character)
+        executable_recipe.update({
+            "size": executable_text["size"],
+            "sha256": executable_text["sha256"]})
         return {
-            "build_dir": f"${role.upper()}_BUILD",
+            "build_dir": root,
             "validated_cache": cache,
-            "compiler": fixture_artifact("a"),
-            "compiler_version_stdout": {"sha256": "a" * 64,
-                                         "text": "fixture compiler"},
-            "cmake_cache": fixture_artifact(character),
-            "compile_commands": fixture_artifact(character),
-            "executable_link_recipe": fixture_artifact(character),
-            "archive_link_recipe": fixture_artifact(character),
-            "archive_link_recipe_content": {
-                "encoding": "utf-8", "text": f"fixture {role} recipe",
-                "sha256": character * 64, "size": 1,
+            "compiler": dict(compiler),
+            "compiler_invocation": {
+                "invocation": "/usr/bin/compiler",
+                "resolved_path": "/usr/bin/compiler",
             },
+            "compiler_version_stdout": dict(compiler_version),
+            "cmake_cache": fixture_artifact(
+                f"{root}/CMakeCache.txt", "build_metadata", character),
+            "compile_commands": fixture_artifact(
+                f"{root}/compile_commands.json", "build_metadata", character),
+            "executable_link_recipe": executable_recipe,
+            "archive_link_recipe": archive_recipe,
+            "archive_link_recipe_content": archive_text,
+            "executable_link_recipe_content": executable_text,
+            "archiver": fixture_artifact(
+                "/usr/bin/ar", "archiver", "b", 0o755),
+            "ranlib": fixture_artifact(
+                "/usr/bin/ranlib", "ranlib", "c", 0o755),
             "archive_link_tool_invocations": {
-                "archiver": {"invocation": "ar", "resolved_path": "/usr/bin/ar"},
-                "ranlib": {"invocation": "ranlib", "resolved_path": "/usr/bin/ranlib"},
+                "archiver": {"invocation": "/usr/bin/ar",
+                             "resolved_path": "/usr/bin/ar"},
+                "ranlib": {"invocation": "/usr/bin/ranlib",
+                           "resolved_path": "/usr/bin/ranlib"},
             },
-            "validated_archive": fixture_artifact(character),
-            "validated_executable": fixture_artifact(character),
-            "validated_archive_members": [f"{role}.o"],
+            "validated_archive": fixture_artifact(
+                f"{root}/{archive_name}", "archive", character),
+            "validated_executable": fixture_artifact(
+                f"{root}/{executable_name}", "executable", character, 0o755),
+            "validated_archive_members": ["LeopardCommon.cpp.o"],
             "validated_compile_commands": {
+                "entry_count": 2,
+                "required_sources": sorted(pair["source"]["path"] for pair in pairs),
                 "validated_optimization": "-O3", "validated_openmp": True,
-                "required_source_object_pairs": [{
-                    "source": fixture_artifact(character),
-                    "object": fixture_artifact(character),
-                }],
+                "required_source_object_pairs": pairs,
+                "isa_policy": (
+                    "whole-build -march=native" if baseline else
+                    "portable core with ISA flags only on SSSE3, AVX2, and "
+                    "AVX-512VL translation units"),
             },
         }
 
@@ -1848,49 +2281,70 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
             "executable": executable,
             "dependencies": [{
                 "soname": "libc.so.6", "loader_path": "/lib/libc.so.6",
-                "file": fixture_artifact(character),
+                "file": fixture_artifact(
+                    f"/usr/lib/{character}/libc.so.6", "shared_library", character),
             }],
         }
 
-    baseline_build = fixture_build("baseline", "a")
-    candidate_build = fixture_build("candidate", "b")
+    def fixture_cpu(cpu: int, sibling: int) -> dict[str, Any]:
+        return {
+            "cpu": cpu, "online": "1",
+            "cpuinfo": {"processor": str(cpu), "model name": "fixture"},
+            "topology": {
+                "core_id": "2", "physical_package_id": "0", "die_id": "0",
+                "cluster_id": None, "thread_siblings_list": "2,6",
+                "core_siblings_list": "0-7",
+            },
+            "frequency_policy": {
+                "scaling_driver": "fixture", "scaling_governor": "performance",
+                "energy_performance_preference": "performance",
+                "scaling_min_freq": "1", "scaling_max_freq": "2",
+                "cpuinfo_min_freq": "1", "cpuinfo_max_freq": "2",
+            },
+            "cache_hierarchy": [{
+                "index": 0, "level": "3", "type": "Unified", "size": "8M",
+                "coherency_line_size": "64", "number_of_sets": "1",
+                "ways_of_associativity": "1", "physical_line_partition": "1",
+                "shared_cpu_list": "0-7", "shared_cpu_map": "ff",
+                "allocation_policy": None, "write_policy": "WriteBack",
+            }],
+            "numa_nodes": [0],
+            "core_class": {"core_type": None, "cpu_capacity": None},
+        }
+
+    baseline_build = fixture_build("baseline", "d")
+    candidate_build = fixture_build("candidate", "e")
     baseline_archive = baseline_build["validated_archive"]
     baseline_executable = baseline_build["validated_executable"]
     candidate_archive = candidate_build["validated_archive"]
     candidate_executable = candidate_build["validated_executable"]
     return {
-        "schema": "leopard2-balanced-evidence-scope/v2",
+        "schema": "leopard2-balanced-evidence-scope/v3",
         "host": {
-            "system": {"system": "Linux", "machine": "x86_64"},
+            "system": {
+                "system": "Linux", "node": "fixture", "release": "fixture",
+                "version": "fixture", "machine": "x86_64", "python": "3.11",
+                "page_size": 4096,
+            },
             "allowed_cpu_set_at_launch": list(range(8)),
             "online_cpu_set": list(range(8)),
-            "benchmark_cpu": {
-                "cpu": 2, "online": "1",
-                "cpuinfo": {"processor": "2", "model name": "fixture",
-                            "cache domain": "96MiB"},
-                "topology": {
-                    "core_id": "2", "physical_package_id": "0",
-                    "thread_siblings_list": "2,6", "core_siblings_list": "0-7",
-                },
-                "frequency_policy": {"scaling_governor": "performance"},
+            "benchmark_cpu": fixture_cpu(2, 6),
+            "reserved_sibling": fixture_cpu(6, 2),
+            "turbo_and_pstate": {
+                "/sys/devices/system/cpu/intel_pstate/no_turbo": "0",
+                "/sys/devices/system/cpu/amd_pstate/status": None,
+                "/sys/devices/system/cpu/cpufreq/boost": None,
             },
-            "reserved_sibling": {
-                "cpu": 6, "online": "1",
-                "cpuinfo": {"processor": "6", "model name": "fixture",
-                            "cache domain": "96MiB"},
-                "topology": {
-                    "core_id": "2", "physical_package_id": "0",
-                    "thread_siblings_list": "2,6", "core_siblings_list": "0-7",
-                },
-                "frequency_policy": {"scaling_governor": "performance"},
-            },
-            "turbo_and_pstate": {"fixture": "stable"},
         },
         "sources": {
             "baseline": {"path": "$BASELINE_SOURCE", "head": EXACT_MAIN_COMMIT,
-                         "tree": "a" * 40},
+                         "tree": "a" * 40, "detached": True,
+                         "tracked_tree_listing_sha256": "b" * 64,
+                         "tracked_status": "clean"},
             "candidate": {"path": "$CANDIDATE_SOURCE", "head": "1" * 40,
-                          "tree": "c" * 40},
+                          "tree": "c" * 40, "detached": False,
+                          "tracked_tree_listing_sha256": "d" * 64,
+                          "tracked_status": "clean"},
         },
         "builds": {
             "baseline": baseline_build,
@@ -1907,9 +2361,11 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
             "candidate": fixture_runtime(candidate_executable["path"], "2"),
         },
         "tools": {
-            "runner": fixture_artifact("3"),
-            "taskset": fixture_artifact("4"),
-            "ldd": fixture_artifact("5"),
+            "runner": fixture_artifact("/fixture/run.py", "file", "3"),
+            "taskset": fixture_artifact(
+                "/usr/bin/taskset", "executable", "4", 0o755),
+            "ldd": fixture_artifact(
+                "/usr/bin/ldd", "executable", "5", 0o755),
         },
         "resolved_auto_backend": backend,
         "forced_confirmation_backends": list(
@@ -2134,6 +2590,57 @@ def self_test() -> None:
                                   "validated_cache"].update({
                                       "LEO2_BACKEND_VARIANT": "scalar"})
                                for value in values])
+        reject_scope_mutation("uniform incomplete sources", lambda values:
+                              [value["sources"][role].pop("tree")
+                               for value in values
+                               for role in ("baseline", "candidate")])
+        reject_scope_mutation("uniform incomplete runtime files", lambda values:
+                              [dependency.update({
+                                   "file": {"path": dependency["file"]["path"]}})
+                               for value in values
+                               for role in ("baseline", "candidate")
+                               for dependency in value["runtime_closures"][role][
+                                   "dependencies"]
+                               if "file" in dependency])
+        reject_scope_mutation("uniform path-only compile pairs", lambda values:
+                              [pair.update({
+                                   "source": {"path": pair["source"]["path"]},
+                                   "object": {"path": pair["object"]["path"]}})
+                               for value in values
+                               for role in ("baseline", "candidate")
+                               for pair in value["builds"][role][
+                                   "validated_compile_commands"][
+                                       "required_source_object_pairs"]])
+        reject_scope_mutation("uniform empty compiler/CMake/link records",
+                              lambda values:
+                              [value["builds"][role].update({
+                                   name: {} for name in (
+                                       "compiler", "cmake_cache", "compile_commands",
+                                       "executable_link_recipe",
+                                       "archive_link_recipe")})
+                               for value in values
+                               for role in ("baseline", "candidate")])
+        def reduce_all_outputs(values) -> None:
+            for value in values:
+                for role in ("baseline", "candidate"):
+                    for output in ("archive", "executable"):
+                        key = f"{role}_{output}"
+                        retained = value["artifacts"][key]
+                        reduced = {name: retained[name]
+                                   for name in ("path", "kind", "sha256")}
+                        value["artifacts"][key] = dict(reduced)
+                        value["builds"][role][f"validated_{output}"] = dict(reduced)
+        reject_scope_mutation("uniform reduced archive/executable",
+                              reduce_all_outputs)
+        def reduce_all_hosts_to_topology(values) -> None:
+            for value in values:
+                host = value["host"]
+                for name in ("benchmark_cpu", "reserved_sibling"):
+                    retained = host[name]
+                    host[name] = {"cpu": retained["cpu"],
+                                  "topology": retained["topology"]}
+        reject_scope_mutation("uniform topology-only host",
+                              reduce_all_hosts_to_topology)
         reject_scope_mutation("baseline archive", lambda values:
                               values[-1]["artifacts"]["baseline_archive"].update({
                                   "sha256": "6" * 64}))
@@ -2184,6 +2691,30 @@ def self_test() -> None:
         require(normalized_nested == {
             "paths": ["$BUILD/object.o", "$SOURCE/source.cpp"]},
             "scope path normalization did not prefer the longest role root")
+        recipe_text = "/tree/build/ar qc /tree/source.cpp\n"
+        normalized_recipe = _normalize_bound_paths({
+            "archive_link_recipe": {
+                "path": "/tree/build/link.txt", "kind": "build_metadata",
+                "size": len(recipe_text.encode("utf-8")), "mode": 0o644,
+                "sha256": hashlib.sha256(recipe_text.encode("utf-8")).hexdigest(),
+                "mtime_ns": 1,
+            },
+            "archive_link_recipe_content": {
+                "encoding": "utf-8", "text": recipe_text,
+                "size": len(recipe_text.encode("utf-8")),
+                "sha256": hashlib.sha256(recipe_text.encode("utf-8")).hexdigest(),
+            },
+        }, (("/tree", "$SOURCE"), ("/tree/build", "$BUILD")))
+        normalized_content = normalized_recipe["archive_link_recipe_content"]
+        require(normalized_content["text"] ==
+                    "$BUILD/ar qc $SOURCE/source.cpp\n" and
+                normalized_content["sha256"] == hashlib.sha256(
+                    normalized_content["text"].encode("utf-8")).hexdigest() and
+                normalized_recipe["archive_link_recipe"]["sha256"] ==
+                    normalized_content["sha256"] and
+                normalized_recipe["archive_link_recipe"]["size"] ==
+                    normalized_content["size"],
+                "normalized recipe content retained a stale byte identity")
 
         unsolicited_manifests = json.loads(json.dumps(manifests))
         unsolicited = main_cell(
@@ -2412,7 +2943,7 @@ def self_test() -> None:
             "canonical_production": {
                 "schema": "leopard2-canonical-production-build/v1",
                 "validator":
-                    "exact-main/run_abba.py build_provenance schema v4",
+                    "exact-main/run_abba.py build_provenance schema v5",
                 "provenance": canonical_provenance,
                 "provenance_sha256": canonical_sha256(canonical_provenance),
             },

@@ -12,29 +12,34 @@ Its first stage contains only exact Leopard main versus current-source generic
 decoder cells, sharded by transform side. A `(K, shard_bytes)` cell advances
 only when the 95-percent lower confidence bounds for both first-use and
 reuse-amortized decode speedup are at least 1.05. The selector authenticates the
-schema-v4 exact-main bundles and derives the survivor set from their retained
+schema-v5 exact-main bundles and derives the survivor set from their retained
 analysis; an edited or merely re-signed plan, threshold, matrix, or survivor
 file is rejected by canonical regeneration.
 
 Selection also requires every input bundle to have one identical evidence
 scope. The current scope deliberately retains the exact benchmark and reserved
 sibling CPU numbers, their full recorded topology/CPU identity and frequency
-policy, and the allowed and online CPU sets. It does not equate different CPU
-pairs merely because their sibling cardinalities match: on heterogeneous-cache
-processors such as the 9950X3D, equal-sized pairs can belong to materially
-different L3 domains. A future schema may normalize pairs only after it records
-cache sizes/types/shared domains, NUMA placement, and heterogeneous-core class.
+policy, every enumerated cache level and shared-CPU domain, NUMA placement,
+heterogeneous-core class, and the allowed and online CPU sets. It does not
+equate different CPU pairs merely because their sibling cardinalities match:
+on heterogeneous-cache processors such as the 9950X3D, equal-sized pairs can
+belong to materially different L3 domains.
 
 The same scope binds both exact Leopard-main and candidate source identities,
 compiler bytes/version, CMake cache, Release `-O3` compile semantics, archive
-and executable bytes, exact archive recipe and compile/object/link closure,
+and executable bytes, exact archive and executable recipe content, complete
+compile/object/link closure,
 plus both runtime-library closures. Baseline source/build roots and candidate
 source/build roots use four distinct markers, with longest paths replaced
 first so a nested build root cannot be swallowed by a broader source marker.
 Only volatile per-file timestamps/inodes/devices are removed. Valid bundles
 from different CPU pairs, hosts, compilers, CMake configurations, baseline or
 candidate builds, runtime dependencies, or resolved backends cannot be combined
-into one survivor set.
+into one survivor set. Because retained link recipes contain absolute build and
+source roots, scope normalization replaces those roots longest-first and then
+recomputes the normalized recipe byte identity and matching recipe-record
+digest. The exact unnormalized bytes remain authenticated by the schema-v5 raw
+verifier before this environment-equivalence step.
 
 The initial boundary set is
 `5,7,8,9,14,15,16,17,29,30,31,32,33,62,63,64,65,96,112,120,124,125,126,127,128`.
@@ -115,7 +120,7 @@ exact cells.
 
 The path result is collected rather than inferred from timing. The collector
 refreshes `bench_leopard2`, requires a clean source at the survivor candidate
-commit, and reuses exact-main's hardened schema-v4 build validator. Thus the
+commit, and reuses exact-main's complete-identity schema-v5 build validator. Thus the
 attested binary must be a canonical CMake Release build with
 `LEO2_BACKEND_VARIANT=auto`, portable core translation units, exact SSSE3,
 AVX2, and AVX-512 translation-unit flags, OpenMP, canonical archive membership,
