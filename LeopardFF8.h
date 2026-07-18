@@ -316,6 +316,11 @@ struct TestOnlyLowEncodeCounts
     uint64_t fft_butterfly2_out_of_place;
     uint64_t fft_butterfly4_out_of_place;
 };
+struct TestOnlyHighEncodeCounts
+{
+    uint64_t ifft_butterfly4_out_of_place;
+    uint64_t input_copy_shards;
+};
 struct TestOnlySparseEncodeCounts
 {
     uint64_t exact_blocks;
@@ -336,6 +341,8 @@ void TestOnlyResetTransformCallsiteCounts();
 TestOnlyTransformCallsiteCounts TestOnlyGetTransformCallsiteCounts();
 void TestOnlyResetLowEncodeCounts();
 TestOnlyLowEncodeCounts TestOnlyGetLowEncodeCounts();
+void TestOnlyResetHighEncodeCounts();
+TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts();
 void TestOnlyResetSparseEncodeCounts();
 TestOnlySparseEncodeCounts TestOnlyGetSparseEncodeCounts();
 void TestOnlyResetHighDecodeCounts();

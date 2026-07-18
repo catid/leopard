@@ -52,6 +52,8 @@ static std::atomic<uint64_t> TestFFTDIT4FusedCalls(0);
 static std::atomic<uint64_t> TestFFTDIT4SplitCalls(0);
 static std::atomic<uint64_t> TestLowFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestLowFFTButterfly4OutCalls(0);
+static std::atomic<uint64_t> TestHighIFFTButterfly4OutCalls(0);
+static std::atomic<uint64_t> TestHighInputCopyShards(0);
 static std::atomic<uint64_t> TestHighOutputBlocks(0);
 static std::atomic<uint64_t> TestHighFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestHighFFTButterfly4OutCalls(0);
@@ -1211,25 +1213,80 @@ static void IFFT_DIT_Encoder_Impl(
     const unsigned m_truncated,
     void** work,
     void** xor_result,
+    const bool high_profile_transform,
     const unsigned m,
     const ffe_t* skewLUT)
 {
-    // I tried rolling the memcpy/memset into the first layer of the FFT and
-    // found that it only yields a 4% performance improvement, which is not
-    // worth the extra complexity.
-#pragma omp parallel for
-    for (int i = 0; i < (int)m_truncated; ++i)
-        memcpy(work[i], data[i], bytes);
-#pragma omp parallel for
-    for (int i = m_truncated; i < (int)m; ++i)
-        memset(work[i], 0, bytes);
-
-    // I tried splitting up the first few layers into L3-cache sized blocks but
-    // found that it only provides about 5% performance boost, which is not
-    // worth the extra complexity.
-
     // Decimation in time: Unroll 2 layers at a time
     unsigned dist = 1, dist4 = 4;
+    // Large AVX2 legacy-high blocks cross back below the mature copy-first
+    // schedule once each shard no longer fits the useful cache region.  Apply
+    // that policy to the first block as well as later accumulated blocks: the
+    // first block accounts for most of the observed large-T regression.  The
+    // low-profile interpolation remains source-staged.  Keep this deterministic
+    // wire-independent crossover out of the byte loop.
+    const bool stage_sources = m > 4 && !(
+        high_profile_transform && ops.kind == LEO2_BACKEND_AVX2 &&
+        m >= 256 && bytes > 16U * 1024U);
+    if (stage_sources)
+    {
+        // Consume complete encoder-source groups directly through the first
+        // two inverse layers.  This replaces the former whole-active-prefix
+        // copy plus first transform read/write with one read and one store.
+        // Later layers still require the inactive suffix to contain zeros.
+#pragma omp parallel for
+        for (int i = m_truncated; i < (int)m; ++i)
+            memset(work[i], 0, bytes);
+
+        const unsigned full_group_count = m_truncated / 4;
+#pragma omp parallel for
+        for (int group = 0; group < (int)full_group_count; ++group)
+        {
+            const unsigned r = static_cast<unsigned>(group) * 4U;
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            TestHighIFFTButterfly4OutCalls.fetch_add(
+                1, std::memory_order_relaxed);
+#endif
+            ops.ff16_ifft_butterfly4_out(
+                data[r], data[r + 1], data[r + 2], data[r + 3],
+                work[r], work[r + 1], work[r + 2], work[r + 3],
+                skewLUT[r + 1], skewLUT[r + 3], skewLUT[r + 2],
+                bytes);
+        }
+
+        const unsigned r = full_group_count * 4U;
+        if (r < m_truncated)
+        {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            TestHighInputCopyShards.fetch_add(
+                m_truncated - r, std::memory_order_relaxed);
+#endif
+            for (unsigned i = r; i < m_truncated; ++i)
+                memcpy(work[i], data[i], bytes);
+            IFFT_DIT4_Range(
+                ops, bytes, work + r, 1,
+                skewLUT[r + 1], skewLUT[r + 3], skewLUT[r + 2]);
+        }
+        dist = 4;
+        dist4 = 16;
+    }
+    else
+    {
+        // Tiny transforms can fuse their only inverse stage with the final
+        // accumulator.  The qualified large legacy-high AVX2 region above
+        // also retains this established copy-first path.
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        TestHighInputCopyShards.fetch_add(
+            m_truncated, std::memory_order_relaxed);
+#endif
+#pragma omp parallel for
+        for (int i = 0; i < (int)m_truncated; ++i)
+            memcpy(work[i], data[i], bytes);
+#pragma omp parallel for
+        for (int i = m_truncated; i < (int)m; ++i)
+            memset(work[i], 0, bytes);
+    }
+
     bool accumulated = false;
     for (; dist4 <= m; dist = dist4, dist4 <<= 2)
     {
@@ -1310,6 +1367,7 @@ static void IFFT_DIT_Encoder(
     const unsigned m_truncated,
     void** work,
     void** xor_result,
+    const bool high_profile_transform,
     const unsigned m,
     const ffe_t* skewLUT)
 {
@@ -1321,12 +1379,12 @@ static void IFFT_DIT_Encoder(
     if (ops.kind == LEO2_BACKEND_SSSE3 || ops.kind == LEO2_BACKEND_AVX2)
     {
         IFFT_DIT_Encoder_Impl<true>(ops, bytes, data, m_truncated,
-            work, xor_result, m, skewLUT);
+            work, xor_result, high_profile_transform, m, skewLUT);
     }
     else
     {
         IFFT_DIT_Encoder_Impl<false>(ops, bytes, data, m_truncated,
-            work, xor_result, m, skewLUT);
+            work, xor_result, high_profile_transform, m, skewLUT);
     }
 }
 
@@ -2043,6 +2101,7 @@ void ReedSolomonEncode(
         original_count < m ? original_count : m,
         work,
         nullptr, // No xor output
+        true, // Legacy-high transform
         m,
         skewLUT);
 
@@ -2065,6 +2124,7 @@ void ReedSolomonEncode(
             m,
             work + m, // temporary workspace
             work, // xor destination
+            true, // Legacy-high transform
             m,
             skewLUT);
     }
@@ -2084,6 +2144,7 @@ void ReedSolomonEncode(
             last_count,
             work + m, // temporary workspace
             work, // xor destination
+            true, // Legacy-high transform
             m,
             skewLUT);
     }
@@ -2170,6 +2231,7 @@ void ReedSolomonEncodeLow(
         original_count,
         work,
         nullptr,
+        false, // Low-profile interpolation
         p,
         FFTSkewStorage);
 
@@ -3003,6 +3065,24 @@ TestOnlyLowEncodeCounts TestOnlyGetLowEncodeCounts()
         TestLowFFTButterfly2OutCalls.load(std::memory_order_relaxed);
     result.fft_butterfly4_out_of_place =
         TestLowFFTButterfly4OutCalls.load(std::memory_order_relaxed);
+    return result;
+}
+
+
+void TestOnlyResetHighEncodeCounts()
+{
+    TestHighIFFTButterfly4OutCalls.store(0, std::memory_order_relaxed);
+    TestHighInputCopyShards.store(0, std::memory_order_relaxed);
+}
+
+
+TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts()
+{
+    TestOnlyHighEncodeCounts result;
+    result.ifft_butterfly4_out_of_place =
+        TestHighIFFTButterfly4OutCalls.load(std::memory_order_relaxed);
+    result.input_copy_shards =
+        TestHighInputCopyShards.load(std::memory_order_relaxed);
     return result;
 }
 

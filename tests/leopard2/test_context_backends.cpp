@@ -121,11 +121,13 @@ struct TraceState
     std::atomic<uint64_t> xor_calls;
     std::atomic<uint64_t> xor_two_to_one_calls;
     std::atomic<uint64_t> ff8_ifft_four_calls;
+    std::atomic<uint64_t> ff8_ifft_four_out_calls;
     std::atomic<uint64_t> ff8_fft_four_calls;
     std::atomic<uint64_t> ff8_fft_two_out_calls;
     std::atomic<uint64_t> ff8_fft_four_out_calls;
     std::atomic<uint64_t> ff8_ifft_two_xor_calls;
     std::atomic<uint64_t> ff16_ifft_four_calls;
+    std::atomic<uint64_t> ff16_ifft_four_out_calls;
     std::atomic<uint64_t> ff16_fft_four_calls;
     std::atomic<uint64_t> ff16_fft_two_out_calls;
     std::atomic<uint64_t> ff16_ifft_two_xor_calls;
@@ -279,6 +281,21 @@ void trace_ff8_ifft4(
         log01, log23, log02, bytes);
 }
 
+void trace_ff8_ifft4_out(
+    const void* input0, const void* input1,
+    const void* input2, const void* input3,
+    void* output0, void* output1, void* output2, void* output3,
+    uint16_t log01, uint16_t log23, uint16_t log02, uint64_t bytes)
+{
+    g_trace.ff8_calls.fetch_add(1, std::memory_order_relaxed);
+    g_trace.ff8_ifft_four_out_calls.fetch_add(
+        1, std::memory_order_relaxed);
+    trace_delegate()->ff8_ifft_butterfly4_out(
+        input0, input1, input2, input3,
+        output0, output1, output2, output3,
+        log01, log23, log02, bytes);
+}
+
 void trace_ff8_fft4(
     void* value0, void* value1, void* value2, void* value3,
     uint16_t log01, uint16_t log23, uint16_t log02, uint64_t bytes)
@@ -312,6 +329,21 @@ void trace_ff16_ifft4(
     g_trace.ff16_ifft_four_calls.fetch_add(1, std::memory_order_relaxed);
     trace_delegate()->ff16_ifft_butterfly4(
         value0, value1, value2, value3,
+        log01, log23, log02, bytes);
+}
+
+void trace_ff16_ifft4_out(
+    const void* input0, const void* input1,
+    const void* input2, const void* input3,
+    void* output0, void* output1, void* output2, void* output3,
+    uint16_t log01, uint16_t log23, uint16_t log02, uint64_t bytes)
+{
+    g_trace.ff16_calls.fetch_add(1, std::memory_order_relaxed);
+    g_trace.ff16_ifft_four_out_calls.fetch_add(
+        1, std::memory_order_relaxed);
+    trace_delegate()->ff16_ifft_butterfly4_out(
+        input0, input1, input2, input3,
+        output0, output1, output2, output3,
         log01, log23, log02, bytes);
 }
 
@@ -432,6 +464,7 @@ public:
         tracing_.ff8_fft_butterfly2_out = trace_ff8_fft_out;
         tracing_.ff8_ifft_butterfly2_xor = trace_ff8_ifft_xor;
         tracing_.ff8_ifft_butterfly4 = trace_ff8_ifft4;
+        tracing_.ff8_ifft_butterfly4_out = trace_ff8_ifft4_out;
         tracing_.ff8_fft_butterfly4 = trace_ff8_fft4;
         tracing_.ff8_fft_butterfly4_out = trace_ff8_fft4_out;
         tracing_.ff8_ifft_butterfly4_range = trace_ff8_ifft4_range;
@@ -443,6 +476,7 @@ public:
         tracing_.ff16_fft_butterfly2_out = trace_ff16_fft_out;
         tracing_.ff16_ifft_butterfly2_xor = trace_ff16_ifft_xor;
         tracing_.ff16_ifft_butterfly4 = trace_ff16_ifft4;
+        tracing_.ff16_ifft_butterfly4_out = trace_ff16_ifft4_out;
         tracing_.ff16_fft_butterfly4 = trace_ff16_fft4;
         tracing_.ff16_fft_butterfly4_out = trace_ff16_fft4_out;
         tracing_.ff16_ifft_butterfly4_range = trace_ff16_ifft4_range;
@@ -465,11 +499,13 @@ public:
         g_trace.xor_calls.store(0, std::memory_order_relaxed);
         g_trace.xor_two_to_one_calls.store(0, std::memory_order_relaxed);
         g_trace.ff8_ifft_four_calls.store(0, std::memory_order_relaxed);
+        g_trace.ff8_ifft_four_out_calls.store(0, std::memory_order_relaxed);
         g_trace.ff8_fft_four_calls.store(0, std::memory_order_relaxed);
         g_trace.ff8_fft_two_out_calls.store(0, std::memory_order_relaxed);
         g_trace.ff8_fft_four_out_calls.store(0, std::memory_order_relaxed);
         g_trace.ff8_ifft_two_xor_calls.store(0, std::memory_order_relaxed);
         g_trace.ff16_ifft_four_calls.store(0, std::memory_order_relaxed);
+        g_trace.ff16_ifft_four_out_calls.store(0, std::memory_order_relaxed);
         g_trace.ff16_fft_four_calls.store(0, std::memory_order_relaxed);
         g_trace.ff16_fft_two_out_calls.store(0, std::memory_order_relaxed);
         g_trace.ff16_ifft_two_xor_calls.store(
@@ -490,6 +526,8 @@ public:
         leopard::ff16::TestOnlyResetTransformCallsiteCounts();
         leopard::ff8::TestOnlyResetLowEncodeCounts();
         leopard::ff16::TestOnlyResetLowEncodeCounts();
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        leopard::ff16::TestOnlyResetHighEncodeCounts();
         leopard::ff8::TestOnlyResetSparseEncodeCounts();
         leopard::ff16::TestOnlyResetSparseEncodeCounts();
         leopard::ff8::TestOnlyResetHighDecodeCounts();
@@ -517,6 +555,11 @@ public:
     {
         return g_trace.ff8_ifft_four_calls.load(std::memory_order_relaxed);
     }
+    uint64_t ff8_ifft_four_out_calls() const
+    {
+        return g_trace.ff8_ifft_four_out_calls.load(
+            std::memory_order_relaxed);
+    }
     uint64_t ff8_fft_four_calls() const
     {
         return g_trace.ff8_fft_four_calls.load(std::memory_order_relaxed);
@@ -537,6 +580,11 @@ public:
     uint64_t ff16_ifft_four_calls() const
     {
         return g_trace.ff16_ifft_four_calls.load(std::memory_order_relaxed);
+    }
+    uint64_t ff16_ifft_four_out_calls() const
+    {
+        return g_trace.ff16_ifft_four_out_calls.load(
+            std::memory_order_relaxed);
     }
     uint64_t ff16_fft_four_calls() const
     {
@@ -791,6 +839,33 @@ void require_low_encode_no_copy(
                 operation + " fused an unqualified GF16 first layer");
         }
     }
+}
+
+void require_high_encode_source_staging(
+    const TraceOpsGuard& trace,
+    leo2_field field,
+    const std::string& operation)
+{
+    uint64_t staged_groups = 0;
+    uint64_t traced_groups = 0;
+    if (field == LEO2_FIELD_GF8)
+    {
+        const leopard::ff8::TestOnlyHighEncodeCounts counts =
+            leopard::ff8::TestOnlyGetHighEncodeCounts();
+        staged_groups = counts.ifft_butterfly4_out_of_place;
+        traced_groups = trace.ff8_ifft_four_out_calls();
+    }
+    else
+    {
+        const leopard::ff16::TestOnlyHighEncodeCounts counts =
+            leopard::ff16::TestOnlyGetHighEncodeCounts();
+        staged_groups = counts.ifft_butterfly4_out_of_place;
+        traced_groups = trace.ff16_ifft_four_out_calls();
+    }
+    require(staged_groups != 0,
+        operation + " did not stage caller sources through inverse radix four");
+    require(traced_groups == staged_groups,
+        operation + " bypassed the context inverse out-of-place ops table");
 }
 
 void require_coarse_stage_reduction(
@@ -1372,6 +1447,9 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                     leo2_context_backend(contexts[context_i].context),
                     test_case.field, test_case.bytes,
                     profile_name + " encode");
+            else if (side > 4)
+                require_high_encode_source_staging(
+                    trace, test_case.field, profile_name + " encode");
 
             trace.reset();
             decode_case(codec, test_case, originals, recovery);

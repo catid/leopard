@@ -49,6 +49,8 @@ static std::atomic<uint64_t> TestIFFTDIT4XorCalls(0);
 static std::atomic<uint64_t> TestFFTDIT4Calls(0);
 static std::atomic<uint64_t> TestLowFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestLowFFTButterfly4OutCalls(0);
+static std::atomic<uint64_t> TestHighIFFTButterfly4OutCalls(0);
+static std::atomic<uint64_t> TestHighInputCopyShards(0);
 static std::atomic<uint64_t> TestHighOutputBlocks(0);
 static std::atomic<uint64_t> TestHighFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestHighFFTButterfly4OutCalls(0);
@@ -1288,20 +1290,63 @@ static void IFFT_DIT_Encoder(
     const unsigned m,
     const ffe_t* skewLUT)
 {
-    // I tried rolling the memcpy/memset into the first layer of the FFT and
-    // found that it only yields a 4% performance improvement, which is not
-    // worth the extra complexity.
-    for (unsigned i = 0; i < m_truncated; ++i)
-        memcpy(work[i], data[i], bytes);
-    for (unsigned i = m_truncated; i < m; ++i)
-        memset(work[i], 0, bytes);
-
-    // I tried splitting up the first few layers into L3-cache sized blocks but
-    // found that it only provides about 5% performance boost, which is not
-    // worth the extra complexity.
-
     // Decimation in time: Unroll 2 layers at a time
     unsigned dist = 1, dist4 = 4;
+    if (m > 4)
+    {
+        // The encoder block transform consumes caller data exactly once. Complete
+        // four-shard groups feed the first two inverse layers directly and
+        // are stored to work only after both butterflies.  Only the ragged
+        // final group needs the compatibility copy into its zero-padded
+        // workspace.  The suffix still must be initialized because later
+        // stages combine it with the active prefix.
+        for (unsigned i = m_truncated; i < m; ++i)
+            memset(work[i], 0, bytes);
+
+        unsigned r = 0;
+        for (; r + 4 <= m_truncated; r += 4)
+        {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            TestHighIFFTButterfly4OutCalls.fetch_add(
+                1, std::memory_order_relaxed);
+#endif
+            ops.ff8_ifft_butterfly4_out(
+                data[r], data[r + 1], data[r + 2], data[r + 3],
+                work[r], work[r + 1], work[r + 2], work[r + 3],
+                skewLUT[r + 1], skewLUT[r + 3], skewLUT[r + 2],
+                bytes);
+        }
+        if (r < m_truncated)
+        {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            TestHighInputCopyShards.fetch_add(
+                m_truncated - r, std::memory_order_relaxed);
+#endif
+            for (unsigned i = r; i < m_truncated; ++i)
+                memcpy(work[i], data[i], bytes);
+            IFFT_DIT4_Range(
+                ops, bytes, work + r, 1,
+                skewLUT[r + 1], skewLUT[r + 3], skewLUT[r + 2]);
+        }
+        dist = 4;
+        dist4 = 16;
+    }
+    else
+    {
+        // Preserve the final-stage accumulating path for m <= 4: staging
+        // directly into work and then fusing IFFT with xor_result avoids an
+        // extra write/read pair that an out-of-place source transform would
+        // reintroduce for these tiny transforms.
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        TestHighInputCopyShards.fetch_add(
+            m_truncated, std::memory_order_relaxed);
+#endif
+        for (unsigned i = 0; i < m_truncated; ++i)
+            memcpy(work[i], data[i], bytes);
+        for (unsigned i = m_truncated; i < m; ++i)
+            memset(work[i], 0, bytes);
+    }
+
     for (; dist4 <= m; dist = dist4, dist4 <<= 2)
     {
         // For each set of dist*4 elements:
@@ -2861,6 +2906,24 @@ TestOnlyLowEncodeCounts TestOnlyGetLowEncodeCounts()
         TestLowFFTButterfly2OutCalls.load(std::memory_order_relaxed);
     result.fft_butterfly4_out_of_place =
         TestLowFFTButterfly4OutCalls.load(std::memory_order_relaxed);
+    return result;
+}
+
+
+void TestOnlyResetHighEncodeCounts()
+{
+    TestHighIFFTButterfly4OutCalls.store(0, std::memory_order_relaxed);
+    TestHighInputCopyShards.store(0, std::memory_order_relaxed);
+}
+
+
+TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts()
+{
+    TestOnlyHighEncodeCounts result;
+    result.ifft_butterfly4_out_of_place =
+        TestHighIFFTButterfly4OutCalls.load(std::memory_order_relaxed);
+    result.input_copy_shards =
+        TestHighInputCopyShards.load(std::memory_order_relaxed);
     return result;
 }
 

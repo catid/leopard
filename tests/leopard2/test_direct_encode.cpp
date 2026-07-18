@@ -30,6 +30,7 @@
 #include "LeopardFF16.h"
 #include "LeopardFF8.h"
 #include "direct_oracle.h"
+#include "leopard.h"
 #include "leopard2.h"
 
 #include <algorithm>
@@ -126,12 +127,14 @@ struct Counts
     uint64_t unaligned_checks;
     uint64_t batch_executions;
     uint64_t no_copy_checks;
+    uint64_t high_source_staging_checks;
 
     Counts()
         : profiles(0), basis_messages(0), random_messages(0), parity_symbols(0)
         , mask_executions(0), boundary_profiles(0), allocation_checks(0)
         , concurrent_executions(0), contract_checks(0), dispatch_checks(0)
         , unaligned_checks(0), batch_executions(0), no_copy_checks(0)
+        , high_source_staging_checks(0)
     {}
 };
 
@@ -658,6 +661,212 @@ void test_low_transform_no_coefficient_copy(
             }
         }
         ++counts->no_copy_checks;
+        delete owner;
+    }
+}
+
+void test_high_transform_source_staging(
+    leo2_context* context,
+    const BinaryField& gf8,
+    const BinaryField& gf16,
+    Counts* counts)
+{
+    struct Case
+    {
+        leo2_field field;
+        unsigned k;
+        uint64_t expected_out_of_place_calls;
+        uint64_t expected_copied_input_shards;
+    };
+    const Case cases[] = {
+        { LEO2_FIELD_GF8, 32, 8, 0 },
+        { LEO2_FIELD_GF8, 33, 8, 1 },
+        { LEO2_FIELD_GF16, 32, 8, 0 },
+        { LEO2_FIELD_GF16, 33, 8, 1 }
+    };
+    const unsigned r = 16;
+    const size_t bytes = 64;
+    for (unsigned case_i = 0;
+         case_i < sizeof(cases) / sizeof(cases[0]); ++case_i)
+    {
+        const Case& c = cases[case_i];
+        CodecOwner* owner = make_codec(context, c.k, r,
+            LEO2_PROFILE_LEGACY_HIGH_V1, c.field);
+        const Shards original = random_shards(c.k, bytes,
+            UINT64_C(0x4849474853544147) + case_i);
+        const Shards original_before = original;
+        const BinaryField& field = c.field == LEO2_FIELD_GF8 ? gf8 : gf16;
+        const ProfileLayout layout = leopard2_test::make_profile_layout(
+            leopard2_test::kLegacyHigh, c.k, r);
+        const Matrix generator =
+            leopard2_test::direct_systematic_generator(field, layout);
+        const Shards expected = oracle_parity(
+            field, generator, original, r, c.field);
+        const std::vector<uint8_t> requested(r, 1);
+
+        if (c.field == LEO2_FIELD_GF8)
+            leopard::ff8::TestOnlyResetHighEncodeCounts();
+        else
+            leopard::ff16::TestOnlyResetHighEncodeCounts();
+        const EncodeResult transformed = encode(owner->codec,
+            LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, requested);
+        require_result(transformed.result, "high source-staging encode");
+        require(original == original_before,
+            "high transform modified a caller source shard");
+        compare_requested(transformed.recovery, expected, requested, 0xa5,
+            "high source-staging/oracle", counts);
+
+        uint64_t out_of_place_calls = 0;
+        uint64_t copied_input_shards = 0;
+        if (c.field == LEO2_FIELD_GF8)
+        {
+            const leopard::ff8::TestOnlyHighEncodeCounts actual =
+                leopard::ff8::TestOnlyGetHighEncodeCounts();
+            out_of_place_calls = actual.ifft_butterfly4_out_of_place;
+            copied_input_shards = actual.input_copy_shards;
+        }
+        else
+        {
+            const leopard::ff16::TestOnlyHighEncodeCounts actual =
+                leopard::ff16::TestOnlyGetHighEncodeCounts();
+            out_of_place_calls = actual.ifft_butterfly4_out_of_place;
+            copied_input_shards = actual.input_copy_shards;
+        }
+        require(out_of_place_calls == c.expected_out_of_place_calls,
+            "high source-staging out-of-place call count mismatch");
+        require(copied_input_shards == c.expected_copied_input_shards,
+            "high source-staging input-copy count mismatch");
+        ++counts->high_source_staging_checks;
+        delete owner;
+    }
+
+    // The measured GF16 AVX2 crossover returns every legacy-high T>=256 block
+    // to copy-first above 16 KiB.  Compare the complete staged prefix and
+    // independently oracle-check the next complete 64-byte tile.  This route
+    // test also proves that the crossover cannot change parity.
+    {
+        const unsigned large_k = 512;
+        const unsigned large_r = 256;
+        const size_t boundary_bytes = 16U * 1024U;
+        const size_t tail_bytes = 64U;
+        const size_t fallback_bytes = boundary_bytes + tail_bytes;
+        CodecOwner* owner = make_codec(context, large_k, large_r,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16);
+        const Shards large_original = random_shards(
+            large_k, fallback_bytes, UINT64_C(0x4746313647415445));
+        Shards boundary_original(large_k, Bytes(boundary_bytes));
+        Shards tail_original(large_k, Bytes(tail_bytes));
+        for (unsigned i = 0; i < large_k; ++i)
+        {
+            std::copy(large_original[i].begin(),
+                large_original[i].begin() + boundary_bytes,
+                boundary_original[i].begin());
+            std::copy(large_original[i].begin() + boundary_bytes,
+                large_original[i].end(), tail_original[i].begin());
+        }
+        const std::vector<uint8_t> requested(large_r, 1);
+
+        leopard::ff16::TestOnlyResetHighEncodeCounts();
+        const EncodeResult boundary = encode(owner->codec,
+            LEO2_TEST_ENCODE_FORCE_TRANSFORM, boundary_original, requested);
+        require_result(boundary.result, "GF16 source-staging boundary encode");
+        const leopard::ff16::TestOnlyHighEncodeCounts boundary_counts =
+            leopard::ff16::TestOnlyGetHighEncodeCounts();
+        require(boundary_counts.ifft_butterfly4_out_of_place == 128 &&
+                boundary_counts.input_copy_shards == 0,
+            "GF16 source-staging boundary route mismatch");
+
+        leopard::ff16::TestOnlyResetHighEncodeCounts();
+        const EncodeResult fallback = encode(owner->codec,
+            LEO2_TEST_ENCODE_FORCE_TRANSFORM, large_original, requested);
+        require_result(fallback.result, "GF16 source-staging fallback encode");
+        const leopard::ff16::TestOnlyHighEncodeCounts fallback_counts =
+            leopard::ff16::TestOnlyGetHighEncodeCounts();
+        const bool avx2 = leo2_context_backend(context) == LEO2_BACKEND_AVX2;
+        require(fallback_counts.ifft_butterfly4_out_of_place ==
+                    (avx2 ? 0U : 128U) &&
+                fallback_counts.input_copy_shards == (avx2 ? 512U : 0U),
+            "GF16 source-staging fallback route mismatch: backend=" +
+                std::to_string(static_cast<unsigned>(
+                    leo2_context_backend(context))) +
+                " out=" + std::to_string(
+                    fallback_counts.ifft_butterfly4_out_of_place) +
+                " copied=" + std::to_string(
+                    fallback_counts.input_copy_shards));
+
+        const unsigned legacy_work_count =
+            leo_encode_work_count(large_k, large_r);
+        require(legacy_work_count >= large_r,
+            "GF16 fallback legacy work-count query failed");
+        Shards legacy_work(legacy_work_count, Bytes(tail_bytes, 0));
+        std::vector<const void*> legacy_original(large_k, NULL);
+        std::vector<void*> legacy_pointers(legacy_work_count, NULL);
+        for (unsigned i = 0; i < large_k; ++i)
+            legacy_original[i] = tail_original[i].data();
+        for (unsigned i = 0; i < legacy_work_count; ++i)
+            legacy_pointers[i] = legacy_work[i].data();
+        require(leo_encode(tail_bytes, large_k, large_r,
+                    legacy_work_count, legacy_original.data(),
+                    legacy_pointers.data()) == Leopard_Success,
+            "GF16 fallback legacy tail encode failed");
+        for (unsigned i = 0; i < large_r; ++i)
+        {
+            require(std::equal(boundary.recovery[i].begin(),
+                    boundary.recovery[i].end(), fallback.recovery[i].begin()),
+                "GF16 source-staging fallback changed prefix parity");
+            require(std::equal(legacy_work[i].begin(),
+                    legacy_work[i].end(),
+                    fallback.recovery[i].begin() + boundary_bytes),
+                "GF16 source-staging fallback tail differs from legacy oracle");
+        }
+        ++counts->high_source_staging_checks;
+        delete owner;
+    }
+
+    // The large-shard fallback is specific to the legacy-high block
+    // accumulator.  A low-profile interpolation with the same GF16 side and
+    // byte count must retain direct source staging.
+    {
+        const unsigned low_k = 129;
+        const unsigned low_r = 1;
+        const size_t low_bytes = 16U * 1024U + 64U;
+        CodecOwner* owner = make_codec(context, low_k, low_r,
+            LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16);
+        const Shards original = random_shards(
+            low_k, low_bytes, UINT64_C(0x4c4f575354414745));
+        const Shards original_before = original;
+        const size_t oracle_bytes = 64;
+        Shards oracle_original(low_k, Bytes(oracle_bytes));
+        for (unsigned i = 0; i < low_k; ++i)
+            std::copy(original[i].begin(),
+                original[i].begin() + oracle_bytes,
+                oracle_original[i].begin());
+        const BinaryField& field = gf16;
+        const ProfileLayout layout = leopard2_test::make_profile_layout(
+            leopard2_test::kLow, low_k, low_r);
+        const Matrix generator =
+            leopard2_test::direct_systematic_generator(field, layout);
+        const Shards expected = oracle_parity(
+            field, generator, oracle_original, low_r, LEO2_FIELD_GF16);
+        const std::vector<uint8_t> requested(low_r, 1);
+
+        leopard::ff16::TestOnlyResetHighEncodeCounts();
+        const EncodeResult transformed = encode(owner->codec,
+            LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, requested);
+        require_result(transformed.result,
+            "GF16 low-profile large source-staging encode");
+        const leopard::ff16::TestOnlyHighEncodeCounts actual =
+            leopard::ff16::TestOnlyGetHighEncodeCounts();
+        require(actual.ifft_butterfly4_out_of_place == 32 &&
+                actual.input_copy_shards == 1,
+            "GF16 low-profile large source-staging route mismatch");
+        require(original == original_before,
+            "GF16 low-profile large source-staging modified caller data");
+        require(std::equal(expected[0].begin(), expected[0].end(),
+                transformed.recovery[0].begin()),
+            "GF16 low-profile large source-staging/oracle prefix mismatch");
+        ++counts->parity_symbols;
+        ++counts->high_source_staging_checks;
         delete owner;
     }
 }
@@ -1214,6 +1423,8 @@ int main()
         test_sparse_schedule_budget_fallback(context, &counts);
         test_low_transform_no_coefficient_copy(
             context, gf8, gf16, &counts);
+        test_high_transform_source_staging(
+            context, gf8, gf16, &counts);
         test_auto_dispatch_threshold(context, &counts);
         test_tail_allocation_and_contracts(context, gf8, gf16, &counts);
         test_unaligned_guarded_buffers(context, gf8, gf16, &counts);
@@ -1233,7 +1444,9 @@ int main()
                   << " dispatch_checks=" << counts.dispatch_checks
                   << " unaligned_checks=" << counts.unaligned_checks
                   << " batch_executions=" << counts.batch_executions
-                  << " no_copy_checks=" << counts.no_copy_checks << std::endl;
+                  << " no_copy_checks=" << counts.no_copy_checks
+                  << " high_source_staging_checks="
+                  << counts.high_source_staging_checks << std::endl;
         return 0;
     }
     catch (const std::exception& error)
