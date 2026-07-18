@@ -835,6 +835,11 @@ if(FF8XOR_PYTHON_EXECUTABLE)
                 "${FF8XOR_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_four_buffer_production_inspector.py")
 
+    add_test(NAME ff8xor_visual_studio_project
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_visual_studio_project.py")
+
     add_test(NAME ff8xor_synthesis
         COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
                 "${FF8XOR_PYTHON_EXECUTABLE}"

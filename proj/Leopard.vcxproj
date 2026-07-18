@@ -24,6 +24,7 @@
     <ClInclude Include="..\LeopardFF16.h" />
     <ClInclude Include="..\LeopardFF8.h" />
     <ClInclude Include="..\LeopardFF8Xor.h" />
+    <ClInclude Include="..\LeopardFF8XorAVX512Four.h" />
     <ClInclude Include="..\leopard_ff8xor.h" />
     <ClInclude Include="..\generated\LeopardFF8XorCircuits.inl" />
   </ItemGroup>
@@ -33,6 +34,7 @@
     <ClCompile Include="..\LeopardFF16.cpp" />
     <ClCompile Include="..\LeopardFF8.cpp" />
     <ClCompile Include="..\LeopardFF8Xor.cpp" />
+    <ClCompile Include="..\LeopardFF8XorAVX512Four.cpp" />
     <ClCompile Include="..\leopard_ff8xor.cpp" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
