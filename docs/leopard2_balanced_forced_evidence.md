@@ -29,7 +29,15 @@ The same scope binds both exact Leopard-main and candidate source identities,
 compiler bytes/version, CMake cache, Release `-O3` compile semantics, archive
 and executable bytes, exact archive and executable recipe content, complete
 compile/object/link closure,
-plus both runtime-library closures. Baseline source/build roots and candidate
+plus both runtime-library closures. Completeness is independently checkable:
+the scope requires the producer's exact four-member/adapter baseline and
+twelve-member/benchmark candidate translation-unit sets; re-parses retained raw
+`ldd` bytes and requires exactly one loader; recomputes each retained raw Git
+commit object's object ID and tree; and matches cache/NUMA summaries against
+their exact sysfs inventories and online-list bytes. A coherent deletion from
+both sides is therefore not an equivalent environment.
+
+Baseline source/build roots and candidate
 source/build roots use four distinct markers, with longest paths replaced
 first so a nested build root cannot be swallowed by a broader source marker.
 Only volatile per-file timestamps/inodes/devices are removed. Valid bundles
