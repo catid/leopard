@@ -45,6 +45,8 @@ from pathlib import Path
 
 REPORT_SCHEMA = "leopard2-affinity-supervisor/v2"
 BINDING_SCHEMA = "leopard2-affinity-main-binding/v1"
+MAIN_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v4"
+MAIN_RAW_SCHEMA = "leopard2-main-compare-raw/v4"
 DEFAULT_POLL_MS = 25
 MAX_STABILIZE_PASSES = 64
 LAUNCH_READY_TIMEOUT_SECONDS = 10.0
@@ -761,6 +763,13 @@ def validate_report(report, require_accepted=False):
     require(isinstance(report["events"], list), "report events are malformed")
     for index, event in enumerate(report["events"]):
         validate_event(event, "event {}".format(index))
+    signal_events = [item for item in report["events"] if item["event"] == "signal"]
+    if report["received_signal"] is None:
+        require(not signal_events, "report has a signal event without a signal")
+    else:
+        require(len(signal_events) == 1 and
+                signal_events[0]["value"] == report["received_signal"],
+                "report signal event differs from received signal")
     exact_bool(report["uncertainty"], "report uncertainty")
     exact_bool(report["accepted"], "report acceptance")
     exact_nullable_string(report["error"], "report error")
@@ -1771,7 +1780,9 @@ def validate_main_manifest_binding(report, manifest_path):
     manifest_bytes = manifest_path.read_bytes()
     manifest = verify_signed_json(
         json.loads(manifest_bytes.decode("utf-8")), "main-comparison manifest")
-    require(manifest.get("valid") is True, "main-comparison manifest is not valid")
+    require(manifest.get("schema") == MAIN_MANIFEST_SCHEMA and
+            manifest.get("valid") is True,
+            "main-comparison manifest is not valid current-schema evidence")
     raw_info = manifest.get("raw")
     require(isinstance(raw_info, dict) and
             set(raw_info) == {"path", "payload_digest", "sha256", "size"},
@@ -1783,6 +1794,8 @@ def validate_main_manifest_binding(report, manifest_path):
             "main-comparison raw file identity differs from its manifest")
     raw = verify_signed_json(json.loads(raw_bytes.decode("utf-8")),
                              "main-comparison raw bundle")
+    require(raw.get("schema") == MAIN_RAW_SCHEMA,
+            "main-comparison raw bundle is not current-schema evidence")
     require(raw_info["payload_digest"] == raw.get("digest"),
             "main-comparison payload digest differs from its manifest")
 
@@ -2358,6 +2371,17 @@ def test_tid_reuse_and_recovery():
               "recovery fixture was not restricted")
         transaction.records[identity.key()]["restore_status"] = "failed"
         transaction._write()
+        wrong_host = {
+            "boot_id": "00000000-0000-0000-0000-000000000002",
+            "pid_namespace": dict(FAKE_HOST["pid_namespace"]),
+        }
+        expect_exception(
+            IsolationError,
+            lambda: recover_report(
+                transaction.report_path, backend=backend, host=wrong_host),
+            "cross-boot recovery")
+        check(backend.get_affinity(identity) == {0, 2},
+              "cross-boot recovery mutated a journaled mask")
         check(recover_report(
             transaction.report_path, backend=backend, host=FAKE_HOST,
             sleep_function=lambda _seconds: None) == 0,
@@ -2454,7 +2478,7 @@ def test_binding():
               "binding fixture transaction was not accepted")
         script_identity = transaction.report["command_identity"]["script"]
         raw_payload = {
-            "schema": "leopard2-main-compare-raw/test",
+            "schema": MAIN_RAW_SCHEMA,
             "campaign": {
                 "benchmark_cpu": 1, "reserved_sibling": 3, "reuse": 8,
                 "iterations": 9, "warmup": 2, "timeout_seconds": 120.0,
@@ -2485,7 +2509,7 @@ def test_binding():
         atomic_json(raw_path, raw_payload, exclusive=True)
         raw_bytes = raw_path.read_bytes()
         manifest_payload = {
-            "schema": "leopard2-main-compare-manifest/test", "valid": True,
+            "schema": MAIN_MANIFEST_SCHEMA, "valid": True,
             "raw": {
                 "path": "raw.json", "size": len(raw_bytes),
                 "sha256": sha256_bytes(raw_bytes),
@@ -2590,11 +2614,32 @@ def main(arguments=None):
             previous_handlers[signum] = signal.getsignal(signum)
             signal.signal(signum, lambda received, _frame, tx=transaction:
                           tx.request_signal(received))
+        result_code = 1
+        late_mask = None
         try:
-            return transaction.run(child, options.taskset)
+            result_code = transaction.run(child, options.taskset)
         finally:
-            for signum, handler in previous_handlers.items():
-                signal.signal(signum, handler)
+            # Close the small interval between run()'s durability boundary and
+            # restoration of the caller's handlers.  A signal already handled
+            # in that interval still invalidates an otherwise accepted report.
+            late_mask = signal.pthread_sigmask(
+                signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+            try:
+                transaction._capture_blocked_signals()
+                if transaction.received_signal is not None and \
+                        transaction.report["accepted"]:
+                    transaction.report["accepted"] = False
+                    transaction.report["state"] = "failed"
+                    transaction.report["finished_utc"] = utc_now()
+                    transaction.report["error"] = "received signal {}".format(
+                        transaction.received_signal)
+                    transaction._write()
+                    result_code = 128 + transaction.received_signal
+            finally:
+                for signum, handler in previous_handlers.items():
+                    signal.signal(signum, handler)
+                signal.pthread_sigmask(signal.SIG_SETMASK, late_mask)
+        return result_code
     except (IsolationError, OSError, ValueError) as error:
         print("affinity supervisor error: {}".format(error), file=sys.stderr)
         return 1
