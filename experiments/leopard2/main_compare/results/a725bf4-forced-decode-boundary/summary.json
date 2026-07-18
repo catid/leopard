@@ -1,0 +1,188 @@
+{
+  "accepted_child_invocations": 96,
+  "accepted_modes": {
+    "auto": {
+      "bundle_bytes": 1526132,
+      "bundle_file_count": 50,
+      "bundle_path": "/home/catid/leopard-results/forced-decode-a725bf4-auto-k127-k128-cpu4-shielded",
+      "bundle_tree_sha256": "02203ac130f1498e8b9f25b1f1d336c50505ca0509ea35e4e0dff4673f11fd4f",
+      "manifest_sha256": "e5740d7781a042da4d84f0a2266887ce60836bc593ace0b839e100b07513851d",
+      "raw_sha256": "b89ec2cd7e42b32a0d9ce66b6bb0378b5ef92eda2f4b98ade7846ad856f18a18",
+      "reserved_pair": [4, 20],
+      "sibling_nonidle_jiffies": 0
+    },
+    "generic": {
+      "bundle_bytes": 1526260,
+      "bundle_file_count": 50,
+      "bundle_path": "/home/catid/leopard-results/forced-decode-a725bf4-generic-k127-k128-cpu4-shielded",
+      "bundle_tree_sha256": "2b9a2a18c2fe293da7255ac02363056a0ef95b906113187882474fdeffb77d30",
+      "manifest_sha256": "c673d34be4ceb8acb22dfdf7fac09e6aa7bc3335ae9c1d190219ef4622d37980",
+      "raw_sha256": "3791303b8c87ed7ab769a124a5d3fb97bd8d2d28bc660008ecfb770caa556419",
+      "reserved_pair": [4, 20],
+      "sibling_nonidle_jiffies": 0
+    },
+    "materialized": {
+      "bundle_bytes": 1526736,
+      "bundle_file_count": 50,
+      "bundle_path": "/home/catid/leopard-results/forced-decode-a725bf4-materialized-k127-k128-cpu4-shielded",
+      "bundle_tree_sha256": "630a421c9a8ff84f028d6c9160f25e8dd675cfb7094d444b1eb880cc6de1cdcd",
+      "manifest_sha256": "2fb66acee51b9d4ad0e76b67249011235f78088cda13c85cad3f4879cb45a236",
+      "raw_sha256": "7b8887dd41a12021c0722ee2e95db3987b53e32ea8af62c58f0a1591cd933042",
+      "reserved_pair": [4, 20],
+      "sibling_nonidle_jiffies": 0
+    },
+    "tiled": {
+      "bundle_bytes": 1524453,
+      "bundle_file_count": 50,
+      "bundle_path": "/home/catid/leopard-results/forced-decode-a725bf4-tiled-k127-k128-cpu14-shielded-final",
+      "bundle_tree_sha256": "a5d3e7acccba861557f5e4682100d0be1b6efd3634795f07edadee6387be5333",
+      "manifest_sha256": "7b77fcd9fe40822e2180cadbf0a69419ab36c0a55e3de97e3a55f74f791c741d",
+      "raw_sha256": "b6ae998cbaaef777f5a9f0aae7c736318fa86391cedeb6296cae470ec8750b49",
+      "reserved_pair": [14, 30],
+      "sibling_nonidle_jiffies": 0
+    }
+  },
+  "backend": "avx2",
+  "candidate_commit": "a725bf46846714c4f1e438e5a6a43c2e29b37613",
+  "cells": [
+    {
+      "K": 127,
+      "R": 127,
+      "loss_count": 127,
+      "seed": 107,
+      "shard_bytes": 65536,
+      "workload_digests": {
+        "original_data": "40dc5da5dbb2c3b3",
+        "recovered_originals": "40dc5da5dbb2c3b3",
+        "transmitted_parity": "6b9c1602cffa9489"
+      }
+    },
+    {
+      "K": 128,
+      "R": 128,
+      "loss_count": 128,
+      "seed": 109,
+      "shard_bytes": 65536,
+      "workload_digests": {
+        "original_data": "d1f552cf619ac882",
+        "recovered_originals": "d1f552cf619ac882",
+        "transmitted_parity": "1c10e55ffac6c83e"
+      }
+    }
+  ],
+  "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+  "host": {
+    "allowed_cpu_set": "0-14,16-30",
+    "kernel": "6.8.0-134-generic",
+    "machine": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "operating_system": "Linux x86_64"
+  },
+  "introspection": {
+    "bundle_bytes": 31368,
+    "bundle_file_count": 8,
+    "bundle_path": "/home/catid/leopard-results/forced-decode-a725bf4-path-auth",
+    "bundle_tree_sha256": "9576388496700ff5fbb3f197e85c89024587ae5e14ae91a74fc8e4d93f1af7dc",
+    "rules": {
+      "127": {
+        "auto": "workspace_materialized",
+        "generic": "forced_generic",
+        "materialized": "forced_materialized",
+        "tiled": "forced_tiled"
+      },
+      "128": {
+        "auto": "balanced_generic",
+        "generic": "forced_generic",
+        "materialized": "forced_materialized",
+        "tiled": "forced_tiled"
+      }
+    }
+  },
+  "metrics": {
+    "auto": {
+      "127": {
+        "decode_first_use": {"ci95_lower": 0.8317333404654391, "ci95_upper": 0.8337873218663835, "geometric_speedup": 0.832759697904299},
+        "decode_reuse_8": {"ci95_lower": 0.8348962676239927, "ci95_upper": 0.8369079036540792, "geometric_speedup": 0.8359014805022245}
+      },
+      "128": {
+        "decode_first_use": {"ci95_lower": 1.0472706024301481, "ci95_upper": 1.050914010307348, "geometric_speedup": 1.0490907247120524},
+        "decode_reuse_8": {"ci95_lower": 1.0501544160174787, "ci95_upper": 1.0538186874754005, "geometric_speedup": 1.0519849563249635}
+      }
+    },
+    "generic": {
+      "127": {
+        "decode_first_use": {"ci95_lower": 1.0485500847282752, "ci95_upper": 1.0545160077785152, "geometric_speedup": 1.0515288152511488},
+        "decode_reuse_8": {"ci95_lower": 1.0494074841527867, "ci95_upper": 1.0552961638552008, "geometric_speedup": 1.0523477050611043}
+      },
+      "128": {
+        "decode_first_use": {"ci95_lower": 1.0505269730579625, "ci95_upper": 1.051656825615424, "geometric_speedup": 1.0510917475223163},
+        "decode_reuse_8": {"ci95_lower": 1.0513358100992365, "ci95_upper": 1.052436458334459, "geometric_speedup": 1.0518859902579887}
+      }
+    },
+    "materialized": {
+      "127": {
+        "decode_first_use": {"ci95_lower": 0.829156580379017, "ci95_upper": 0.841133512724835, "geometric_speedup": 0.8351235759174295},
+        "decode_reuse_8": {"ci95_lower": 0.8320786242746329, "ci95_upper": 0.8441236550481419, "geometric_speedup": 0.8380795007695467}
+      },
+      "128": {
+        "decode_first_use": {"ci95_lower": 0.8972328812151069, "ci95_upper": 0.9124126741271364, "geometric_speedup": 0.9047909440662363},
+        "decode_reuse_8": {"ci95_lower": 0.8991694915594219, "ci95_upper": 0.9143958550595591, "geometric_speedup": 0.9067507133043495}
+      }
+    },
+    "tiled": {
+      "127": {
+        "decode_first_use": {"ci95_lower": 0.9268765048542732, "ci95_upper": 0.9377681729936409, "geometric_speedup": 0.9323064338230876},
+        "decode_reuse_8": {"ci95_lower": 0.9305404648880359, "ci95_upper": 0.941392457245708, "geometric_speedup": 0.9359507331091266}
+      },
+      "128": {
+        "decode_first_use": {"ci95_lower": 0.960355005137734, "ci95_upper": 0.9738822332499574, "geometric_speedup": 0.9670949679924462},
+        "decode_reuse_8": {"ci95_lower": 0.9625295426387125, "ci95_upper": 0.9761548295606606, "geometric_speedup": 0.9693182458004146}
+      }
+    }
+  },
+  "ratio_orientation": "exact_main_time_over_leopard2_time",
+  "rejected_bundles": [
+    {
+      "bundle_bytes": 1460654,
+      "bundle_file_count": 49,
+      "bundle_path": "/home/catid/leopard-results/forced-decode-a725bf4-auto-k127-k128",
+      "bundle_tree_sha256": "364d69d4155c1ea8665e481b127268e967aae5d92e30bc8c01e9c25a7d7197b4",
+      "failure_sha256": "128b676b897443c25ded9769956a15a0fa5c2aba4322b35ec596a1c52681ab7e",
+      "mode": "auto",
+      "reserved_pair": [14, 30],
+      "sibling_jiffies": {"system": 1, "user": 5}
+    },
+    {
+      "bundle_bytes": 1463216,
+      "bundle_file_count": 49,
+      "bundle_path": "/home/catid/leopard-results/forced-decode-a725bf4-auto-k127-k128-cpu4",
+      "bundle_tree_sha256": "a20608f82423010bb4cce0780329ad4c1e4e79efb40091228e9004c5d07cfa9c",
+      "failure_sha256": "f01cfd8707721035d892ebd9c0eeb2181f622eaad34cee6fba731c10f7c9d4bc",
+      "mode": "auto",
+      "reserved_pair": [4, 20],
+      "sibling_jiffies": {"system": 2, "user": 2}
+    },
+    {
+      "bundle_bytes": 1463642,
+      "bundle_file_count": 49,
+      "bundle_path": "/home/catid/leopard-results/forced-decode-a725bf4-tiled-k127-k128-cpu4-shielded",
+      "bundle_tree_sha256": "ba4028897b1bb327a3176e31dea478527c9407b2a5cfab9259445eb25f3f9ef0",
+      "failure_sha256": "4dd85c05a6861de8ae40e0e801ef75f2643b8c53078ade83cf6211bf54ad71e3",
+      "mode": "tiled",
+      "reserved_pair": [4, 20],
+      "sibling_jiffies": {"system": 2, "user": 2}
+    },
+    {
+      "bundle_bytes": 1463703,
+      "bundle_file_count": 49,
+      "bundle_path": "/home/catid/leopard-results/forced-decode-a725bf4-tiled-k127-k128-cpu4-shielded-retry1",
+      "bundle_tree_sha256": "85dea14d5d3a840c7d34855fd34c2a6c32297dd59bc449b757efe946a9de0302",
+      "failure_sha256": "218366d0ac2eaf370d039443ed09fa6a7d840573cdbc51e3a40be70a0c0529b8",
+      "mode": "tiled",
+      "reserved_pair": [4, 20],
+      "sibling_jiffies": {"system": 0, "user": 4}
+    }
+  ],
+  "rounds_per_mode": 3,
+  "schema": "leopard2-forced-decode-boundary-summary/v1",
+  "statistics": "one mean log contrast per independent ABBA round; Student-t 95% CI with df=2"
+}
