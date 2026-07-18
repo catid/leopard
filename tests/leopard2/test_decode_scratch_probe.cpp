@@ -181,7 +181,7 @@ void emit_case(
         test, parent, padded, codec_scratch, true);
 
     std::cout
-        << "{\"schema\":\"leopard2-decode-scratch-probe/v1\""
+        << "{\"schema\":\"leopard2-decode-scratch-probe/v2\""
         << ",\"name\":\"" << test.name
         << "\",\"K\":" << test.k
         << ",\"R\":" << test.r
@@ -198,7 +198,9 @@ void emit_case(
         << leopard2_internal::DecodePathName(selected.path)
         << "\",\"selected_rule\":\""
         << leopard2_internal::DecodePathRuleName(selected.rule)
-        << "\",\"selected_required_work_slots\":"
+        << "\",\"selected_matching_auto_rules\":"
+        << selected.matching_auto_rules
+        << ",\"selected_required_work_slots\":"
         << selected.required_work_slots
         << ",\"scratch_path\":\""
         << leopard2_internal::DecodePathName(scratch_selection.path)
@@ -208,7 +210,9 @@ void emit_case(
         << leopard2_internal::DecodePathName(codec_selection.path)
         << "\",\"codec_rule\":\""
         << leopard2_internal::DecodePathRuleName(codec_selection.rule)
-        << "\",\"multi_item_batch\":"
+        << "\",\"codec_matching_auto_rules\":"
+        << codec_selection.matching_auto_rules
+        << ",\"multi_item_batch\":"
         << (multi_item_batch ? "true" : "false")
         << ",\"aligned_prefix_bytes\":" << selected.aligned_prefix_bytes
         << ",\"tail_bytes\":" << selected.tail_bytes

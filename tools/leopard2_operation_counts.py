@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""Deterministic, ISA-independent operation model for Leopard2 paths.
+"""Deterministic operation and logical-traffic model for Leopard2 paths.
 
 This utility models the transform schedules implemented by Leopard's radix-4
 wrappers in terms of their equivalent radix-2 butterflies.  It deliberately
 does not pretend that a scheduled butterfly always executes a multiplication:
 zero skew factors are specialized by the production kernels.  Arithmetic
-totals involving those factors are therefore emitted as bounds.
+totals involving those factors are therefore emitted as bounds.  The
+structural schedule remains ISA-independent; separately classified traffic
+metrics apply the production backend's decode-fusion predicates.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Set, TextIO, Tuple
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 UINT32_MAX = (1 << 32) - 1
 UINT64_MAX = (1 << 64) - 1
 SCRATCH_ALIGNMENT = 64
@@ -39,6 +41,8 @@ PATHS = (
 FIELDS = ("gf8", "gf16")
 PROFILES = ("high", "low")
 DECODE_WORKSPACES = ("materialized", "tiled")
+BACKENDS = ("scalar", "ssse3", "avx2", "neon")
+DECODE_SELECTIONS = ("path", "auto", "specialized")
 
 
 _LOW_COEFFICIENT_COPY_PATTERNS = (
@@ -437,6 +441,88 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
         )
 
 
+def verify_decode_fusion_sources(
+    core_source: str,
+    ff8_source: str,
+    ff16_source: str,
+) -> None:
+    """Bind schema-v3 traffic predicates to the production source.
+
+    The operation model is intentionally independent code, but backend traffic
+    would become misleading if a production crossover changed without a schema
+    update.  These narrow guards reject that drift and are mutation-tested.
+    """
+    core = re.sub(r"\s+", "", core_source)
+    ff8 = re.sub(r"\s+", "", ff8_source)
+    ff16 = re.sub(r"\s+", "", ff16_source)
+    core_tokens = (
+        "returncodec->field==LEO2_FIELD_GF8&&"
+        "aligned_prefix_bytes>=4096&&"
+        "(codec->context->backend==LEO2_BACKEND_SSSE3||"
+        "codec->context->backend==LEO2_BACKEND_AVX2);",
+        "returncodec->profile==LEO2_PROFILE_LOW_V1&&"
+        "aligned_prefix_bytes!=0;",
+        "constboolfuse_generic_reveal_scatter=use_generic&&"
+        "UseFusedGenericRevealScatter(codec,geometry.aligned_prefix_bytes);",
+        "constboolfuse_low_reveal_scatter=!use_generic&&"
+        "UseFusedLowRevealScatter(codec,geometry.aligned_prefix_bytes);",
+        "constboolreveal_aligned_outputs_in_place="
+        "!(fuse_generic_reveal_scatter||fuse_low_reveal_scatter);",
+        "ExecuteTransformDecodePass(plan,geometry.aligned_prefix_bytes,"
+        "coordinate_input,work,use_generic,use_tiled,"
+        "reveal_aligned_outputs_in_place);",
+        "GatherTransformDecodePass(plan,restored_original,0,"
+        "geometry.aligned_prefix_bytes,work,use_generic,use_tiled,"
+        "reveal_aligned_outputs_in_place);",
+        "ExecuteTransformDecodePass(plan,kScratchAlignment,coordinate_input,"
+        "work,use_generic,use_tiled,true);",
+        "GatherTransformDecodePass(plan,restored_original,"
+        "geometry.aligned_prefix_bytes,geometry.tail_bytes,work,use_generic,"
+        "use_tiled,true);",
+    )
+    if any(token not in core for token in core_tokens):
+        raise ModelError(
+            "leopard2.cpp decode reveal-fusion policy diverged from schema v3"
+        )
+    ff8_tokens = (
+        "if(ops.kind==LEO2_BACKEND_AVX2)returnbuffer_bytes>=1024;",
+        "if(ops.kind==LEO2_BACKEND_SSSE3)returnbuffer_bytes>=65536;",
+        "IFFT_DIT_DecoderImpl(ops,bytes,m_truncated,work,m,skewLUT,"
+        "xor_result,1);",
+    )
+    if any(token not in ff8 for token in ff8_tokens):
+        raise ModelError(
+            "LeopardFF8.cpp syndrome-fusion policy diverged from schema v3"
+        )
+    ff8_sink_assignment = (
+        "constbooluse_accumulating_sink="
+        "ShouldUsePrunedHighSyndromeSink(ops,buffer_bytes);"
+    )
+    if ff8.count(ff8_sink_assignment) != 2:
+        raise ModelError(
+            "LeopardFF8.cpp pruned syndrome-sink wiring diverged from schema v3"
+        )
+    ff16_tokens = (
+        "returnbytes==64||(bytes==128&&ops.kind==LEO2_BACKEND_AVX2);",
+        "returnops.kind==LEO2_BACKEND_AVX2&&buffer_bytes>=1024;",
+        "if(ops.kind==LEO2_BACKEND_SSSE3||"
+        "ops.kind==LEO2_BACKEND_AVX2){"
+        "returnIFFT_DIT_DecoderImpl<true>(",
+    )
+    if any(token not in ff16 for token in ff16_tokens):
+        raise ModelError(
+            "LeopardFF16.cpp syndrome-fusion policy diverged from schema v3"
+        )
+    ff16_sink_assignment = (
+        "constbooluse_accumulating_sink="
+        "ShouldUsePrunedHighSyndromeSink(ops,buffer_bytes);"
+    )
+    if ff16.count(ff16_sink_assignment) != 2:
+        raise ModelError(
+            "LeopardFF16.cpp pruned syndrome-sink wiring diverged from schema v3"
+        )
+
+
 @dataclass(frozen=True)
 class Metric:
     value: object
@@ -470,11 +556,20 @@ class Schedule:
     details: Dict[str, object] = field(default_factory=dict)
     arithmetic_classification: str = "derived_upper_bound"
     memory_override: Optional[Tuple[int, int, int, int]] = None
+    execution_bytes_override: Optional[int] = None
     decode_scratch: Optional["DecodeScratchAccounting"] = None
     decode_coordinate_pointer_mappings: Optional[int] = None
     decode_output_gather_payload_bytes: Optional[int] = None
     decode_output_gather_classification: str = "exact_schedule"
     decode_output_gather_note: str = ""
+    decode_reveal_temporary_payload_bytes: Optional[int] = None
+    decode_reveal_scatter_payload_bytes: Optional[int] = None
+    decode_reveal_direct_payload_bytes: Optional[int] = None
+    decode_syndrome_fused_payload_bytes: Optional[int] = None
+    decode_syndrome_materialized_payload_bytes: Optional[int] = None
+    selected_decode_path: Optional[str] = None
+    selected_decode_rule: Optional[str] = None
+    selected_decode_matching_auto_rules: int = 0
 
     def add_transform(self, count: int, layers: int) -> None:
         self.butterflies += count
@@ -1011,6 +1106,284 @@ def _block_prefix(data_coordinates: Set[int], offset: int, width: int) -> int:
     return max(local) + 1 if local else 0
 
 
+@dataclass(frozen=True)
+class DecodeSelection:
+    path: str
+    rule: str
+    matching_auto_rules: int
+    required_work_slots: int
+
+
+def select_decode_execution(
+    k: int,
+    r: int,
+    profile: str,
+    field_name: str,
+    backend: str,
+    geometry: Dict[str, int],
+    shard_bytes: int,
+    loss_count: int,
+    force: str = "auto",
+    multi_item_batch: bool = False,
+) -> DecodeSelection:
+    """Independent mirror of terminal-plan and transform path selection."""
+    if backend not in BACKENDS:
+        raise ModelError("unsupported backend")
+    if force not in ("auto", "generic", "specialized", "materialized", "tiled"):
+        raise ModelError("unsupported decode selection")
+    if loss_count < 0 or loss_count > min(k, r):
+        raise ModelError("invalid decode loss count")
+    padded = geometry["padded_side"]
+    parent = geometry["parent_count"]
+    # Production terminal plan introspection and execution return no-op before
+    # constructing byte geometry.  Public scratch queries are stricter; the
+    # report's later scratch accounting still validates their shard length.
+    if loss_count == 0:
+        return DecodeSelection("no_op", "no_op", 0, 0)
+    rounded = rounded_kernel_bytes(shard_bytes)
+    # R=1 legacy-high and K=1 low profiles are unconditional terminal plans,
+    # including codecs with forced transform flags.
+    if padded == 1:
+        return DecodeSelection("direct", "direct", 0, 0)
+    # Ordinary AUTO prepares the bounded LxL direct plan before transform
+    # metadata.  Any explicit transform selection disables this path.
+    if (force == "auto" and 2 <= k <= 16 and
+            geometry["parent_dimension"] <= 256 and loss_count <= 4):
+        return DecodeSelection("direct", "direct", 0, 0)
+
+    tiled_slots = 2 * padded + (loss_count if profile == "high" else 0)
+    materialized_slots = parent
+    balanced = (
+        profile == "high" and field_name == "gf8" and
+        k == 128 and r == 128 and padded == 128 and parent == 256 and
+        loss_count == 128 and 256 <= rounded <= 1024 * 1024 and
+        backend in ("scalar", "ssse3", "avx2")
+    )
+    measured_materialized = (
+        profile == "high" and field_name == "gf8" and
+        k == 224 and r == 32 and padded == 32 and parent == 256 and
+        0 < loss_count <= 8 and rounded <= 64 * 1024 and
+        ((backend == "avx2" and rounded >= 24 * 1024) or
+         (backend == "ssse3" and rounded >= 32 * 1024))
+    )
+    matching = (1 if balanced else 0) | (2 if measured_materialized else 0)
+    if force == "generic":
+        return DecodeSelection(
+            "generic", "forced_generic", matching, materialized_slots
+        )
+    if force == "materialized":
+        return DecodeSelection(
+            "materialized", "forced_materialized", matching,
+            materialized_slots,
+        )
+    if force == "tiled":
+        return DecodeSelection("tiled", "forced_tiled", matching, tiled_slots)
+
+    if force != "specialized" and balanced:
+        return DecodeSelection(
+            "generic", "balanced_generic", matching, materialized_slots
+        )
+    if measured_materialized:
+        if multi_item_batch and backend == "avx2":
+            return DecodeSelection(
+                "tiled", "measured_batch_tiled", matching, tiled_slots
+            )
+        return DecodeSelection(
+            "materialized", "measured_materialized", matching,
+            materialized_slots,
+        )
+    if tiled_slots < materialized_slots:
+        return DecodeSelection("tiled", "workspace_tiled", matching, tiled_slots)
+    return DecodeSelection(
+        "materialized", "workspace_materialized", matching,
+        materialized_slots,
+    )
+
+
+def select_codec_transform_execution(
+    k: int,
+    r: int,
+    profile: str,
+    field_name: str,
+    backend: str,
+    geometry: Dict[str, int],
+    shard_bytes: int,
+    force: str = "auto",
+) -> DecodeSelection:
+    """Mirror the pattern-independent one-shot codec scratch query."""
+    padded = geometry["padded_side"]
+    parent = geometry["parent_count"]
+    rounded = rounded_kernel_bytes(shard_bytes)
+    tiled_slots = 2 * padded + (r if profile == "high" else 0)
+    if force not in ("auto", "specialized"):
+        if force not in ("generic", "materialized", "tiled"):
+            raise ModelError("unsupported codec decode selection")
+    measured_materialized = (
+        profile == "high" and field_name == "gf8" and
+        k == 224 and r == 32 and padded == 32 and parent == 256 and
+        rounded <= 64 * 1024 and
+        ((backend == "avx2" and rounded >= 24 * 1024) or
+         (backend == "ssse3" and rounded >= 32 * 1024))
+    )
+    matching = 2 if measured_materialized else 0
+    if force == "generic":
+        return DecodeSelection("generic", "forced_generic", matching, parent)
+    if force == "materialized":
+        return DecodeSelection(
+            "materialized", "forced_materialized", matching, parent
+        )
+    if force == "tiled":
+        return DecodeSelection("tiled", "forced_tiled", matching, tiled_slots)
+    if measured_materialized:
+        return DecodeSelection(
+            "materialized", "measured_materialized", matching, parent
+        )
+    if tiled_slots < parent:
+        return DecodeSelection("tiled", "workspace_tiled", 0, tiled_slots)
+    return DecodeSelection("materialized", "workspace_materialized", 0, parent)
+
+
+def _gf16_mature_syndrome_fuses(
+    padded: int, backend: str, pass_bytes: int
+) -> bool:
+    if backend not in ("ssse3", "avx2"):
+        return False
+    # An odd transform depth ends in a two-way layer, which the qualified
+    # vector decoder always accumulates.  Even depths end in a four-way layer;
+    # compact fused-four kernels retain the measured materialize-then-XOR path.
+    if _transform_layers(padded) & 1:
+        return True
+    if pass_bytes == 64:
+        return False
+    if pass_bytes == 128 and backend == "avx2":
+        return False
+    return True
+
+
+def _pruned_syndrome_fuses(
+    field_name: str, backend: str, pass_bytes: int
+) -> bool:
+    if backend == "avx2":
+        return pass_bytes >= 1024
+    return field_name == "gf8" and backend == "ssse3" and pass_bytes >= 65536
+
+
+def apply_decode_backend_accounting(
+    schedule: Schedule,
+    k: int,
+    r: int,
+    profile: str,
+    field_name: str,
+    backend: str,
+    geometry: Dict[str, int],
+    shard_bytes: int,
+    losses: Set[int],
+    selection: DecodeSelection,
+    multi_item_batch: bool,
+) -> None:
+    """Attach exact selected-rule and backend-qualified boundary traffic."""
+    schedule.selected_decode_path = selection.path
+    schedule.selected_decode_rule = selection.rule
+    schedule.selected_decode_matching_auto_rules = selection.matching_auto_rules
+    schedule.details.update({
+        "selected_decode_path": selection.path,
+        "selected_decode_rule": selection.rule,
+        "selected_decode_matching_auto_rules": selection.matching_auto_rules,
+        "selected_backend": backend,
+        "multi_item_batch": multi_item_batch,
+    })
+    if selection.path in ("no_op", "direct"):
+        return
+
+    loss_count = len(losses)
+    tail = shard_bytes & (SCRATCH_ALIGNMENT - 1)
+    aligned = shard_bytes - tail
+    kernel_bytes = rounded_kernel_bytes(shard_bytes)
+    use_generic = selection.path == "generic"
+    use_low_specialized = not use_generic and profile == "low"
+    fuse_aligned_reveal = (
+        aligned != 0 and
+        (use_low_specialized or
+         (use_generic and field_name == "gf8" and aligned >= 4096 and
+          backend in ("ssse3", "avx2")))
+    )
+
+    if use_generic or use_low_specialized:
+        unfused_kernel = (0 if fuse_aligned_reveal else aligned) + (64 if tail else 0)
+        scatter = (0 if fuse_aligned_reveal else aligned) + tail
+        direct = aligned if fuse_aligned_reveal else 0
+        temporary = unfused_kernel
+    elif selection.path == "materialized":
+        # Algorithm 5 reveals in-place in the materialized output block.
+        temporary = kernel_bytes
+        scatter = shard_bytes
+        direct = 0
+    else:
+        # Tiled Algorithm 5 multiplies out of place into a compact requested-
+        # output workspace, then scatters the public payload.
+        temporary = 0
+        scatter = shard_bytes
+        direct = 0
+    schedule.decode_reveal_temporary_payload_bytes = temporary * loss_count
+    schedule.decode_reveal_scatter_payload_bytes = scatter * loss_count
+    schedule.decode_reveal_direct_payload_bytes = direct * loss_count
+    schedule.decode_output_gather_payload_bytes = scatter * loss_count
+    schedule.decode_output_gather_classification = "exact_schedule"
+    schedule.decode_output_gather_note = (
+        "Backend-qualified execution: direct reveal owns the aligned prefix; "
+        "only the reported residual payload is copied from scratch."
+        if fuse_aligned_reveal else
+        "Selected execution retains scratch reveal and the reported scatter."
+    )
+
+    fused_syndrome = 0
+    materialized_syndrome = 0
+    if profile == "high" and not use_generic:
+        padded = geometry["padded_side"]
+        parent = geometry["parent_count"]
+        data, _ = deterministic_decode_coordinates(k, r, profile, padded, losses)
+        pass_sizes = ([aligned] if aligned else []) + ([64] if tail else [])
+        for offset in range(padded, parent, padded):
+            live_count = sum(
+                1 for coordinate in data
+                if offset <= coordinate < offset + padded
+            )
+            if live_count == 0:
+                continue
+            pruned = live_count != padded
+            for pass_bytes in pass_sizes:
+                if pruned:
+                    fused = _pruned_syndrome_fuses(
+                        field_name, backend, pass_bytes
+                    )
+                elif field_name == "gf8":
+                    # The mature GF8 decoder always folds the final inverse
+                    # layer into the accumulator; backend qualification affects
+                    # source staging, not this boundary.
+                    fused = True
+                else:
+                    fused = _gf16_mature_syndrome_fuses(
+                        padded, backend, pass_bytes
+                    )
+                payload = padded * pass_bytes
+                if fused:
+                    fused_syndrome += payload
+                else:
+                    materialized_syndrome += payload
+    schedule.decode_syndrome_fused_payload_bytes = fused_syndrome
+    schedule.decode_syndrome_materialized_payload_bytes = materialized_syndrome
+    schedule.details.update({
+        "reveal_aligned_fused": fuse_aligned_reveal,
+        "reveal_inplace_temporary_payload_bytes":
+            schedule.decode_reveal_temporary_payload_bytes,
+        "reveal_scatter_payload_bytes": schedule.decode_reveal_scatter_payload_bytes,
+        "reveal_direct_payload_bytes": schedule.decode_reveal_direct_payload_bytes,
+        "syndrome_fused_accumulation_payload_bytes": fused_syndrome,
+        "syndrome_materialized_xor_payload_bytes": materialized_syndrome,
+        "backend_traffic_classification": "exact_production_predicates",
+    })
+
+
 def model_high_encode(
     k: int, r: int, padded: int, shard_bytes: int, requested: Set[int]
 ) -> Schedule:
@@ -1263,6 +1636,7 @@ def model_high_decode(
     receive_fused_groups = 0
     receive_exact_pruned_blocks = 0
     receive_skipped_blocks = 0
+    active_later_blocks = 0
     prefixes: List[int] = []
     for offset in range(0, parent, padded):
         prefix = _block_prefix(data, offset, padded)
@@ -1272,6 +1646,8 @@ def model_high_decode(
         if not live and offset != 0:
             receive_skipped_blocks += 1
             continue
+        if offset != 0:
+            active_later_blocks += 1
         if padded <= 4 or field_name != "gf8":
             receive_copy_vectors += len(live)
             receive_zero_vectors += padded - len(live)
@@ -1291,7 +1667,7 @@ def model_high_decode(
     # A future backend-aware model can apply the delta to absolute traffic.
     schedule.copies += k
     schedule.zero_fills += parent - k
-    reduction = (parent // padded - 1) * padded
+    reduction = active_later_blocks * padded
     schedule.nontransform_xor_vectors += reduction
     schedule.add_transform(
         fft_prefix_butterflies(padded, padded), _transform_layers(padded)
@@ -1328,6 +1704,7 @@ def model_high_decode(
         "receive_copy_vectors_removed": 4 * receive_fused_groups,
         "receive_exact_pruned_staged_blocks": receive_exact_pruned_blocks,
         "receive_skipped_empty_blocks": receive_skipped_blocks,
+        "active_later_syndrome_blocks": active_later_blocks,
         "receive_source_fusion_scope": (
             "GF8 qualified SSSE3/AVX2 mature unpruned schedule delta"
             if field_name == "gf8" else
@@ -1358,6 +1735,7 @@ def model_direct_repair(
     padded: int,
     profile: str,
     losses: Set[int],
+    shard_bytes: Optional[int] = None,
 ) -> Schedule:
     loss_count = len(losses)
     if loss_count == 0:
@@ -1387,6 +1765,7 @@ def model_direct_repair(
         # Both memory bounds are the dense fused multiply/add traversal.  It is
         # an upper bound, not an exact term-list count.
         memory_override=(reads, writes, reads, writes),
+        execution_bytes_override=shard_bytes,
         details={
             "missing_originals": mask_to_ranges(losses),
             "dense_term_upper_bound": dense_terms,
@@ -1394,6 +1773,33 @@ def model_direct_repair(
             "profile": profile,
         },
     )
+    return schedule
+
+
+def model_direct_terminal(
+    k: int, profile: str, losses: Set[int], shard_bytes: int
+) -> Schedule:
+    """Model the unconditional R=1 XOR or K=1 copy terminal plan."""
+    if len(losses) != 1:
+        raise ModelError("terminal direct path requires exactly one loss")
+    schedule = Schedule(
+        execution_slots=0,
+        api_scratch_slots=0,
+        execution_bytes_override=shard_bytes,
+    )
+    schedule.copies = 1
+    if profile == "high":
+        # Copy the XOR parity, then XOR every surviving original into it.
+        schedule.nontransform_xor_vectors = k - 1
+        schedule.details["direct_mode"] = "r1_xor"
+    else:
+        if k != 1:
+            raise ModelError("low terminal direct-copy path requires K=1")
+        schedule.details["direct_mode"] = "k1_copy"
+    schedule.details.update({
+        "missing_originals": mask_to_ranges(losses),
+        "plan_setup": "excluded",
+    })
     return schedule
 
 
@@ -1421,7 +1827,11 @@ def model_generic_transform(
 def schedule_metrics(
     schedule: Schedule, field_name: str, shard_bytes: int
 ) -> Dict[str, Metric]:
-    kernel_bytes = rounded_kernel_bytes(shard_bytes)
+    kernel_bytes = (
+        schedule.execution_bytes_override
+        if schedule.execution_bytes_override is not None
+        else rounded_kernel_bytes(shard_bytes)
+    )
     symbol_bytes = 1 if field_name == "gf8" else 2
     symbols = kernel_bytes // symbol_bytes
     butterfly_xors_lower = schedule.butterflies
@@ -1552,7 +1962,11 @@ def schedule_metrics(
         ),
         "kernel_shard_bytes": Metric(
             kernel_bytes, "bytes", "exact_schedule",
-            "Current kernels round execution to complete 64-byte tiles."
+            (
+                "Direct execution consumes the exact public payload length."
+                if schedule.execution_bytes_override is not None else
+                "Transform kernels round execution to complete 64-byte tiles."
+            )
         ),
     }
     if schedule.decode_coordinate_pointer_mappings is not None:
@@ -1567,6 +1981,67 @@ def schedule_metrics(
             schedule.decode_output_gather_classification,
             schedule.decode_output_gather_note,
         )
+    if schedule.decode_reveal_temporary_payload_bytes is not None:
+        reveal_temporary = schedule.decode_reveal_temporary_payload_bytes
+        reveal_scatter = schedule.decode_reveal_scatter_payload_bytes or 0
+        reveal_direct = schedule.decode_reveal_direct_payload_bytes or 0
+        syndrome_fused = schedule.decode_syndrome_fused_payload_bytes or 0
+        syndrome_materialized = (
+            schedule.decode_syndrome_materialized_payload_bytes or 0
+        )
+        auxiliary = reveal_temporary + reveal_scatter
+        adjusted_note = (
+            "Backend-qualified logical traffic adds the alias-safe in-place "
+            "reveal temporary and public scatter, and subtracts one read plus "
+            "one write for each syndrome byte accumulated by the final inverse "
+            "layer. Schema v3 applies only these reveal/syndrome deltas; "
+            "receive-source and weighted-locator effects remain separately "
+            "reported structural details. This is logical, not cache traffic."
+        )
+        metrics.update({
+            "decode_reveal_inplace_temporary_payload_bytes": Metric(
+                reveal_temporary, "bytes", "exact_schedule",
+                "Payload copied to a disjoint 64-byte temporary before a "
+                "restrict-qualified in-place reveal multiply; contributes "
+                "the same number of logical read and write bytes.",
+            ),
+            "decode_reveal_scatter_payload_bytes": Metric(
+                reveal_scatter, "bytes", "exact_schedule",
+                "Public payload copied from transform/requested-output scratch; "
+                "contributes the same number of logical read and write bytes.",
+            ),
+            "decode_reveal_direct_payload_bytes": Metric(
+                reveal_direct, "bytes", "exact_schedule",
+                "Aligned payload multiplied directly from transform scratch "
+                "into caller output by the selected backend policy.",
+            ),
+            "decode_syndrome_fused_accumulation_payload_bytes": Metric(
+                syndrome_fused, "bytes", "exact_schedule",
+                "Algorithm 5 output-row bytes whose final inverse layer "
+                "accumulates directly into the syndrome workspace.",
+            ),
+            "decode_syndrome_materialized_xor_payload_bytes": Metric(
+                syndrome_materialized, "bytes", "exact_schedule",
+                "Algorithm 5 output-row bytes retaining a separate "
+                "materialized XOR reduction.",
+            ),
+            "estimated_backend_bytes_read_lower": Metric(
+                reads_lower * kernel_bytes - syndrome_fused + auxiliary,
+                "bytes", "estimated_lower_bound", adjusted_note,
+            ),
+            "estimated_backend_bytes_read_upper": Metric(
+                reads_upper * kernel_bytes - syndrome_fused + auxiliary,
+                "bytes", "estimated_upper_bound", adjusted_note,
+            ),
+            "estimated_backend_bytes_written_lower": Metric(
+                writes_lower * kernel_bytes - syndrome_fused + auxiliary,
+                "bytes", "estimated_lower_bound", adjusted_note,
+            ),
+            "estimated_backend_bytes_written_upper": Metric(
+                writes_upper * kernel_bytes - syndrome_fused + auxiliary,
+                "bytes", "estimated_upper_bound", adjusted_note,
+            ),
+        })
     scratch = schedule.decode_scratch
     if scratch is not None:
         scratch_note = (
@@ -1692,25 +2167,68 @@ def build_report(args: argparse.Namespace) -> Dict[str, object]:
             raise ModelError("loss count outside [0, K]")
         losses = set(range(loss_count))
 
+    decode_paths = {
+        "legacy_high_decode", "low_decode", "generic_decode", "direct_repair"
+    }
+    selection: Optional[DecodeSelection] = None
+    if path in decode_paths:
+        if path == "direct_repair":
+            selection = DecodeSelection("direct", "direct", 0, 0)
+        else:
+            if path == "generic_decode":
+                if args.decode_selection != "path":
+                    raise ModelError(
+                        "generic_decode already names its selected path"
+                    )
+                force = "generic"
+            elif args.decode_selection == "path":
+                force = args.decode_workspace
+            else:
+                force = args.decode_selection
+            selection = select_decode_execution(
+                args.k, args.r, profile, args.field, args.backend, geometry,
+                args.shard_bytes, len(losses), force,
+                multi_item_batch=args.multi_item_batch,
+            )
+
     if path == "legacy_high_encode":
         schedule = model_high_encode(args.k, args.r, padded, args.shard_bytes, requested)
     elif path == "low_encode":
         schedule = model_low_encode(args.k, args.r, padded, args.shard_bytes, requested)
-    elif path == "legacy_high_decode":
-        schedule = model_high_decode(
-            args.k, args.r, parent, padded, args.shard_bytes, losses, args.field
-        )
-    elif path == "low_decode":
-        schedule = model_low_decode(
-            args.k, args.r, parent, padded, args.shard_bytes, losses
-        )
-    elif path == "generic_decode":
-        schedule = model_generic_decode(
-            args.k, args.r, parent, padded, profile, args.shard_bytes, losses
-        )
+    elif path in ("legacy_high_decode", "low_decode", "generic_decode"):
+        assert selection is not None
+        if selection.path == "no_op":
+            schedule = Schedule(details={
+                "no_op": True, "missing_originals": "none"
+            })
+        elif selection.path == "direct":
+            if padded == 1:
+                schedule = model_direct_terminal(
+                    args.k, profile, losses, args.shard_bytes
+                )
+            else:
+                schedule = model_direct_repair(
+                    args.k, args.r, geometry["parent_dimension"], padded,
+                    profile, losses, args.shard_bytes,
+                )
+        elif selection.path == "generic":
+            schedule = model_generic_decode(
+                args.k, args.r, parent, padded, profile,
+                args.shard_bytes, losses,
+            )
+        elif profile == "high":
+            schedule = model_high_decode(
+                args.k, args.r, parent, padded, args.shard_bytes,
+                losses, args.field,
+            )
+        else:
+            schedule = model_low_decode(
+                args.k, args.r, parent, padded, args.shard_bytes, losses
+            )
     elif path == "direct_repair":
         schedule = model_direct_repair(
-            args.k, args.r, geometry["parent_dimension"], padded, profile, losses
+            args.k, args.r, geometry["parent_dimension"], padded, profile,
+            losses, args.shard_bytes,
         )
     elif path == "generic_transform":
         transform_requested = parse_mask(
@@ -1722,20 +2240,36 @@ def build_report(args: argparse.Namespace) -> Dict[str, object]:
     else:
         raise ModelError("unsupported path: {}".format(path))
 
-    if path in ("legacy_high_decode", "low_decode", "generic_decode",
-                "direct_repair"):
-        if path == "generic_decode":
+    if path in decode_paths:
+        assert selection is not None
+        apply_decode_backend_accounting(
+            schedule, args.k, args.r, profile, args.field, args.backend,
+            geometry, args.shard_bytes, losses, selection,
+            args.multi_item_batch,
+        )
+        if selection.path == "generic":
             plan_workspace = "generic"
-            codec_workspace = "generic"
-            direct = padded == 1 and bool(losses)
-        elif path == "direct_repair":
-            plan_workspace = "specialized"
-            codec_workspace = "specialized"
-            direct = True
+        elif selection.path in ("materialized", "tiled"):
+            plan_workspace = selection.path
         else:
-            plan_workspace = args.decode_workspace
+            # Direct/no-op plan layout ignores this value.  The one-shot codec
+            # query remains transform-capable and uses the ordinary specialized
+            # capacity policy for the same immutable codec.
+            plan_workspace = "specialized"
+        if path == "generic_decode":
+            codec_workspace = "generic"
+        elif args.decode_selection == "path" and path != "direct_repair":
             codec_workspace = args.decode_workspace
-            direct = padded == 1 and bool(losses)
+        else:
+            codec_force = (
+                args.decode_selection
+                if args.decode_selection in ("auto", "specialized") else "auto"
+            )
+            codec_workspace = select_codec_transform_execution(
+                args.k, args.r, profile, args.field, args.backend,
+                geometry, args.shard_bytes, codec_force,
+            ).path
+        direct = selection.path == "direct"
         attach_decode_scratch(
             schedule, args.k, args.r, parent, padded, profile,
             args.shard_bytes, losses, plan_workspace, args.pointer_bytes,
@@ -1745,28 +2279,40 @@ def build_report(args: argparse.Namespace) -> Dict[str, object]:
     metrics = schedule_metrics(schedule, args.field, args.shard_bytes)
     return {
         "schema_version": SCHEMA_VERSION,
-        "model": "leopard2_isa_independent_operation_counts",
+        "model": "leopard2_operation_counts_with_backend_traffic",
         "path": path,
         "inputs": {
             "K": args.k,
             "R": args.r,
             "profile": profile,
             "field": args.field,
+            "backend": args.backend,
             "shard_bytes": args.shard_bytes,
             "pointer_bytes": args.pointer_bytes,
             "decode_workspace": (
                 schedule.decode_scratch.workspace
                 if schedule.decode_scratch is not None else None
             ),
+            "decode_selection": args.decode_selection,
+            "multi_item_batch": args.multi_item_batch,
             "requested_parity": mask_to_ranges(requested),
             "missing_originals": mask_to_ranges(losses),
         },
         "geometry": geometry,
         "scope": {
             "plan_setup_included": False,
-            "isa_independent": True,
+            "structural_schedule_isa_independent": True,
+            "backend_traffic_predicates_applied": path in decode_paths,
             "schedule_source": "Leopard DIT radix-4 loop topology",
         },
+        "selection": (
+            {
+                "path": selection.path,
+                "rule": selection.rule,
+                "matching_auto_rules": selection.matching_auto_rules,
+                "required_work_slots": selection.required_work_slots,
+            } if selection is not None else None
+        ),
         "details": schedule.details,
         "metrics": {name: metric.as_dict() for name, metric in sorted(metrics.items())},
     }
@@ -1786,7 +2332,10 @@ def write_csv(report: Dict[str, object], output: TextIO) -> None:
     assert isinstance(metrics, dict)
     columns = [
         "schema_version", "path", "K", "R", "profile", "field",
-        "shard_bytes", "pointer_bytes", "decode_workspace", "parent_count",
+        "backend", "shard_bytes", "pointer_bytes", "decode_workspace",
+        "decode_selection", "multi_item_batch", "selected_decode_path",
+        "selected_decode_rule", "selected_decode_matching_auto_rules",
+        "selected_decode_required_work_slots", "parent_count",
         "padded_side", "metric", "value", "unit", "classification", "note",
     ]
     writer = csv.DictWriter(output, fieldnames=columns, lineterminator="\n")
@@ -1801,9 +2350,26 @@ def write_csv(report: Dict[str, object], output: TextIO) -> None:
             "R": inputs["R"],
             "profile": inputs["profile"],
             "field": inputs["field"],
+            "backend": inputs["backend"],
             "shard_bytes": inputs["shard_bytes"],
             "pointer_bytes": inputs["pointer_bytes"],
             "decode_workspace": inputs["decode_workspace"],
+            "decode_selection": inputs["decode_selection"],
+            "multi_item_batch": inputs["multi_item_batch"],
+            "selected_decode_path": (
+                report["selection"]["path"] if report["selection"] else ""
+            ),
+            "selected_decode_rule": (
+                report["selection"]["rule"] if report["selection"] else ""
+            ),
+            "selected_decode_matching_auto_rules": (
+                report["selection"]["matching_auto_rules"]
+                if report["selection"] else ""
+            ),
+            "selected_decode_required_work_slots": (
+                report["selection"]["required_work_slots"]
+                if report["selection"] else ""
+            ),
             "parent_count": geometry["parent_count"],
             "padded_side": geometry["padded_side"],
             "metric": name,
@@ -1956,8 +2522,95 @@ def run_self_test(verbose: bool = True) -> None:
     else:
         raise AssertionError("direct decode scratch mutation escaped source guard")
     checks += 2
+    ff8_source = (root / "LeopardFF8.cpp").read_text(encoding="utf-8")
+    ff16_source = (root / "LeopardFF16.cpp").read_text(encoding="utf-8")
+    verify_decode_fusion_sources(core_source, ff8_source, ff16_source)
+    fusion_mutations = (
+        (
+            core_source.replace(
+                "aligned_prefix_bytes >= 4096",
+                "aligned_prefix_bytes >= 2048", 1,
+            ),
+            ff8_source,
+            ff16_source,
+        ),
+        (
+            core_source,
+            ff8_source.replace(
+                "buffer_bytes >= 65536", "buffer_bytes >= 32768", 1
+            ),
+            ff16_source,
+        ),
+        (
+            core_source,
+            ff8_source,
+            ff16_source.replace("bytes == 64", "bytes == 32", 1),
+        ),
+        (
+            core_source.replace(
+                "const bool reveal_aligned_outputs_in_place =\n"
+                "        !(fuse_generic_reveal_scatter || "
+                "fuse_low_reveal_scatter);",
+                "const bool reveal_aligned_outputs_in_place = true;",
+                1,
+            ),
+            ff8_source,
+            ff16_source,
+        ),
+        (
+            core_source.replace(
+                "ExecuteTransformDecodePass(\n"
+                "            plan, kScratchAlignment, coordinate_input, "
+                "work,\n"
+                "            use_generic, use_tiled, true);",
+                "ExecuteTransformDecodePass(\n"
+                "            plan, kScratchAlignment, coordinate_input, "
+                "work,\n"
+                "            use_generic, use_tiled, "
+                "reveal_aligned_outputs_in_place);",
+                1,
+            ),
+            ff8_source,
+            ff16_source,
+        ),
+        (
+            core_source,
+            ff8_source.replace(
+                "const bool use_accumulating_sink =\n"
+                "                ShouldUsePrunedHighSyndromeSink("
+                "ops, buffer_bytes);",
+                "const bool use_accumulating_sink = false;",
+                1,
+            ),
+            ff16_source,
+        ),
+        (
+            core_source,
+            ff8_source,
+            ff16_source.replace(
+                "const bool use_accumulating_sink =\n"
+                "                ShouldUsePrunedHighSyndromeSink("
+                "ops, buffer_bytes);",
+                "const bool use_accumulating_sink = false;",
+                1,
+            ),
+        ),
+    )
+    for mutated_core, mutated_ff8, mutated_ff16 in fusion_mutations:
+        if (mutated_core == core_source and mutated_ff8 == ff8_source and
+                mutated_ff16 == ff16_source):
+            raise AssertionError("decode fusion mutation did not apply")
+        try:
+            verify_decode_fusion_sources(
+                mutated_core, mutated_ff8, mutated_ff16
+            )
+        except ModelError:
+            pass
+        else:
+            raise AssertionError("decode fusion mutation escaped source guard")
+    checks += 1 + len(fusion_mutations)
     for filename in ("LeopardFF8.cpp", "LeopardFF16.cpp"):
-        source = (root / filename).read_text(encoding="utf-8")
+        source = ff8_source if filename == "LeopardFF8.cpp" else ff16_source
         verify_low_encode_no_copy_source(source, filename)
         verify_high_decode_no_copy_source(source, filename)
         if filename == "LeopardFF8.cpp":
@@ -2008,10 +2661,12 @@ def run_self_test(verbose: bool = True) -> None:
 
     namespace = argparse.Namespace(
         path="legacy_high_encode", k=9, r=7, profile=None, field="gf8",
+        backend="scalar",
         shard_bytes=65, requested_parity="0-3,6", loss_count=None,
         loss_mask=None, direction="forward", active_input_count=None,
         transform_output_mask=None, pointer_bytes=struct.calcsize("P"),
-        decode_workspace="materialized",
+        decode_workspace="materialized", decode_selection="path",
+        multi_item_batch=False,
     )
     first = json.dumps(build_report(namespace), sort_keys=True)
     second = json.dumps(build_report(namespace), sort_keys=True)
@@ -2028,6 +2683,10 @@ def _add_model_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--profile", choices=PROFILES,
                         help="required for generic/direct paths; inferred otherwise")
     parser.add_argument("--field", choices=FIELDS, required=True)
+    parser.add_argument(
+        "--backend", choices=BACKENDS, default="scalar",
+        help="production backend used for decode fusion traffic (default: scalar)",
+    )
     parser.add_argument("--shard-bytes", type=int, required=True)
     parser.add_argument(
         "--pointer-bytes", type=int, choices=(4, 8),
@@ -2038,6 +2697,17 @@ def _add_model_arguments(parser: argparse.ArgumentParser) -> None:
         "--decode-workspace", choices=DECODE_WORKSPACES,
         default="materialized",
         help="forced specialized decode workspace (default: materialized)",
+    )
+    parser.add_argument(
+        "--decode-selection", choices=DECODE_SELECTIONS, default="path",
+        help=(
+            "path forces the named generic/specialized path; auto mirrors "
+            "production AUTO; specialized mirrors FORCE_SPECIALIZED"
+        ),
+    )
+    parser.add_argument(
+        "--multi-item-batch", action="store_true",
+        help="apply the production multi-item batch decode selector rule",
     )
     parser.add_argument(
         "--requested-parity", default=None,

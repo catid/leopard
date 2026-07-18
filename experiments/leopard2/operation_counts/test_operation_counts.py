@@ -10,6 +10,7 @@ import json
 import pathlib
 import subprocess
 import sys
+import types
 import unittest
 
 
@@ -32,6 +33,31 @@ def independent_full_transform_count(size: int) -> int:
                 operations += 1
         span *= 2
     return operations
+
+
+def build_decode_report(**overrides: object) -> dict:
+    """Build one report with explicit stable defaults for selector tests."""
+    values = {
+        "path": "legacy_high_decode",
+        "k": 240,
+        "r": 16,
+        "profile": None,
+        "field": "gf8",
+        "backend": "scalar",
+        "shard_bytes": 4096,
+        "requested_parity": None,
+        "loss_count": 1,
+        "loss_mask": None,
+        "direction": "forward",
+        "active_input_count": None,
+        "transform_output_mask": None,
+        "pointer_bytes": 8,
+        "decode_workspace": "materialized",
+        "decode_selection": "auto",
+        "multi_item_batch": False,
+    }
+    values.update(overrides)
+    return COUNTS.build_report(types.SimpleNamespace(**values))
 
 
 class OperationCountTests(unittest.TestCase):
@@ -207,6 +233,371 @@ class OperationCountTests(unittest.TestCase):
                 mutated, filename + " hook-definition mutation"
             )
 
+    def test_decode_fusion_source_guards_reject_policy_mutations(self) -> None:
+        core = (ROOT / "leopard2.cpp").read_text(encoding="utf-8")
+        ff8 = (ROOT / "LeopardFF8.cpp").read_text(encoding="utf-8")
+        ff16 = (ROOT / "LeopardFF16.cpp").read_text(encoding="utf-8")
+        COUNTS.verify_decode_fusion_sources(core, ff8, ff16)
+        mutations = (
+            (
+                core.replace("aligned_prefix_bytes >= 4096",
+                             "aligned_prefix_bytes >= 2048", 1),
+                ff8,
+                ff16,
+                "generic reveal crossover",
+            ),
+            (
+                core,
+                ff8.replace("buffer_bytes >= 65536",
+                            "buffer_bytes >= 32768", 1),
+                ff16,
+                "GF8 pruned sink crossover",
+            ),
+            (
+                core,
+                ff8,
+                ff16.replace("bytes == 64", "bytes == 32", 1),
+                "GF16 compact fused-four policy",
+            ),
+            (
+                core.replace(
+                    "const bool reveal_aligned_outputs_in_place =\n"
+                    "        !(fuse_generic_reveal_scatter || "
+                    "fuse_low_reveal_scatter);",
+                    "const bool reveal_aligned_outputs_in_place = true;",
+                    1,
+                ),
+                ff8,
+                ff16,
+                "aligned reveal execution wiring",
+            ),
+            (
+                core.replace(
+                    "ExecuteTransformDecodePass(\n"
+                    "            plan, kScratchAlignment, coordinate_input, "
+                    "work,\n"
+                    "            use_generic, use_tiled, true);",
+                    "ExecuteTransformDecodePass(\n"
+                    "            plan, kScratchAlignment, coordinate_input, "
+                    "work,\n"
+                    "            use_generic, use_tiled, "
+                    "reveal_aligned_outputs_in_place);",
+                    1,
+                ),
+                ff8,
+                ff16,
+                "tail reveal execution wiring",
+            ),
+            (
+                core,
+                ff8.replace(
+                    "const bool use_accumulating_sink =\n"
+                    "                ShouldUsePrunedHighSyndromeSink("
+                    "ops, buffer_bytes);",
+                    "const bool use_accumulating_sink = false;",
+                    1,
+                ),
+                ff16,
+                "GF8 pruned sink wiring",
+            ),
+            (
+                core,
+                ff8,
+                ff16.replace(
+                    "const bool use_accumulating_sink =\n"
+                    "                ShouldUsePrunedHighSyndromeSink("
+                    "ops, buffer_bytes);",
+                    "const bool use_accumulating_sink = false;",
+                    1,
+                ),
+                "GF16 pruned sink wiring",
+            ),
+        )
+        for mutated_core, mutated_ff8, mutated_ff16, label in mutations:
+            with self.subTest(label=label):
+                self.assertTrue(
+                    mutated_core != core or mutated_ff8 != ff8 or
+                    mutated_ff16 != ff16,
+                    label + " mutation did not apply",
+                )
+                with self.assertRaises(COUNTS.ModelError):
+                    COUNTS.verify_decode_fusion_sources(
+                        mutated_core, mutated_ff8, mutated_ff16
+                    )
+
+    def test_decode_selection_matches_promoted_boundaries(self) -> None:
+        balanced = build_decode_report(
+            k=128, r=128, loss_count=128, shard_bytes=256,
+        )
+        self.assertEqual(
+            balanced["selection"],
+            {
+                "path": "generic",
+                "rule": "balanced_generic",
+                "matching_auto_rules": 1,
+                "required_work_slots": 256,
+            },
+        )
+        below_balanced = build_decode_report(
+            k=128, r=128, loss_count=128, shard_bytes=192,
+        )
+        self.assertEqual(
+            (below_balanced["selection"]["path"],
+             below_balanced["selection"]["rule"]),
+            ("materialized", "workspace_materialized"),
+        )
+        ragged_balanced = build_decode_report(
+            k=128, r=128, loss_count=128, shard_bytes=193,
+        )
+        self.assertEqual(ragged_balanced["selection"]["rule"],
+                         "balanced_generic")
+        above_balanced = build_decode_report(
+            k=128, r=128, loss_count=128, shard_bytes=1024 * 1024 + 1,
+        )
+        self.assertEqual(above_balanced["selection"]["rule"],
+                         "workspace_materialized")
+        forced_specialized = build_decode_report(
+            k=128, r=128, loss_count=128, shard_bytes=256,
+            decode_selection="specialized",
+        )
+        self.assertEqual(
+            (forced_specialized["selection"]["path"],
+             forced_specialized["selection"]["rule"]),
+            ("materialized", "workspace_materialized"),
+        )
+        self.assertEqual(
+            forced_specialized["selection"]["matching_auto_rules"], 1
+        )
+
+        materialized = build_decode_report(
+            k=224, r=32, loss_count=8, shard_bytes=32 * 1024,
+            backend="avx2",
+        )
+        self.assertEqual(
+            (materialized["selection"]["path"],
+             materialized["selection"]["rule"]),
+            ("materialized", "measured_materialized"),
+        )
+        batch = build_decode_report(
+            k=224, r=32, loss_count=8, shard_bytes=32 * 1024,
+            backend="avx2", multi_item_batch=True,
+        )
+        self.assertEqual(
+            (batch["selection"]["path"], batch["selection"]["rule"]),
+            ("tiled", "measured_batch_tiled"),
+        )
+        below_materialized = build_decode_report(
+            k=224, r=32, loss_count=8, shard_bytes=16 * 1024,
+            backend="avx2",
+        )
+        self.assertEqual(
+            (below_materialized["selection"]["path"],
+             below_materialized["selection"]["rule"]),
+            ("tiled", "workspace_tiled"),
+        )
+        for backend, threshold in (("avx2", 24 * 1024),
+                                   ("ssse3", 32 * 1024)):
+            with self.subTest(backend=backend):
+                below = build_decode_report(
+                    k=224, r=32, loss_count=1,
+                    shard_bytes=threshold - 64, backend=backend,
+                )
+                ragged_boundary = build_decode_report(
+                    k=224, r=32, loss_count=1,
+                    shard_bytes=threshold - 63, backend=backend,
+                )
+                self.assertEqual(below["selection"]["rule"],
+                                 "workspace_tiled")
+                self.assertEqual(ragged_boundary["selection"]["rule"],
+                                 "measured_materialized")
+        above_materialized = build_decode_report(
+            k=224, r=32, loss_count=8, shard_bytes=64 * 1024 + 1,
+            backend="avx2",
+        )
+        self.assertEqual(above_materialized["selection"]["rule"],
+                         "workspace_tiled")
+        too_many_losses = build_decode_report(
+            k=224, r=32, loss_count=9, shard_bytes=32 * 1024,
+            backend="avx2",
+        )
+        self.assertEqual(too_many_losses["selection"]["rule"],
+                         "workspace_tiled")
+
+        no_op = build_decode_report(loss_count=0)
+        self.assertEqual(no_op["selection"]["path"], "no_op")
+        geometry = COUNTS.parent_geometry(240, 16, "high")
+        for unvalidated_bytes in (0, COUNTS.UINT64_MAX):
+            no_op_selection = COUNTS.select_decode_execution(
+                240, 16, "high", "gf8", "scalar", geometry,
+                unvalidated_bytes, 0,
+            )
+            self.assertEqual(no_op_selection.path, "no_op")
+        with self.assertRaises(COUNTS.ModelError):
+            build_decode_report(loss_count=0, shard_bytes=COUNTS.UINT64_MAX)
+        xor_terminal = build_decode_report(k=9, r=1, loss_count=1)
+        self.assertEqual(xor_terminal["selection"]["path"], "direct")
+        self.assertEqual(xor_terminal["details"]["direct_mode"], "r1_xor")
+        self.assertEqual(
+            xor_terminal["metrics"]["nontransform_xor_vectors"]["value"], 8
+        )
+        xor_terminal_ragged = build_decode_report(
+            k=9, r=1, loss_count=1, shard_bytes=65
+        )
+        self.assertEqual(
+            xor_terminal_ragged["metrics"]["kernel_shard_bytes"]["value"], 65
+        )
+        copy_terminal = build_decode_report(
+            path="low_decode", k=1, r=8, loss_count=1,
+        )
+        self.assertEqual(copy_terminal["selection"]["path"], "direct")
+        self.assertEqual(copy_terminal["details"]["direct_mode"], "k1_copy")
+        self.assertEqual(
+            copy_terminal["metrics"]["logical_copy_vectors"]["value"], 1
+        )
+        direct = build_decode_report(
+            path="low_decode", profile=None, k=16, r=8, loss_count=4,
+        )
+        self.assertEqual(direct["selection"]["path"], "direct")
+        direct_disabled = build_decode_report(
+            path="low_decode", profile=None, k=16, r=8, loss_count=4,
+            decode_selection="specialized",
+        )
+        self.assertNotEqual(direct_disabled["selection"]["path"], "direct")
+
+    def test_backend_qualified_reveal_traffic(self) -> None:
+        fused = build_decode_report(
+            path="generic_decode", profile="high", k=240, r=16,
+            loss_count=2, shard_bytes=4096, backend="avx2",
+            decode_selection="path",
+        )["metrics"]
+        self.assertEqual(
+            fused["decode_reveal_direct_payload_bytes"]["value"], 8192
+        )
+        self.assertEqual(
+            fused["decode_reveal_inplace_temporary_payload_bytes"]["value"], 0
+        )
+        self.assertEqual(
+            fused["decode_reveal_scatter_payload_bytes"]["value"], 0
+        )
+
+        ragged = build_decode_report(
+            path="generic_decode", profile="high", k=240, r=16,
+            loss_count=2, shard_bytes=4097, backend="avx2",
+            decode_selection="path",
+        )["metrics"]
+        self.assertEqual(
+            ragged["decode_reveal_direct_payload_bytes"]["value"], 8192
+        )
+        self.assertEqual(
+            ragged["decode_reveal_inplace_temporary_payload_bytes"]["value"],
+            128,
+        )
+        self.assertEqual(
+            ragged["decode_reveal_scatter_payload_bytes"]["value"], 2
+        )
+        scalar = build_decode_report(
+            path="generic_decode", profile="high", k=240, r=16,
+            loss_count=2, shard_bytes=4096, backend="scalar",
+            decode_selection="path",
+        )["metrics"]
+        self.assertEqual(
+            scalar["decode_reveal_direct_payload_bytes"]["value"], 0
+        )
+        self.assertEqual(
+            scalar["decode_reveal_inplace_temporary_payload_bytes"]["value"],
+            8192,
+        )
+        self.assertEqual(
+            scalar["decode_reveal_scatter_payload_bytes"]["value"], 8192
+        )
+
+        low_tail = build_decode_report(
+            path="low_decode", k=8, r=248, field="gf16", backend="scalar",
+            shard_bytes=130, loss_count=2, decode_workspace="tiled",
+            decode_selection="path",
+        )["metrics"]
+        self.assertEqual(
+            low_tail["decode_reveal_direct_payload_bytes"]["value"], 256
+        )
+        self.assertEqual(
+            low_tail["decode_reveal_inplace_temporary_payload_bytes"]["value"],
+            128,
+        )
+        self.assertEqual(
+            low_tail["decode_reveal_scatter_payload_bytes"]["value"], 4
+        )
+
+        high_materialized = build_decode_report(
+            loss_count=2, shard_bytes=128, decode_workspace="materialized",
+            decode_selection="path",
+        )["metrics"]
+        high_tiled = build_decode_report(
+            loss_count=2, shard_bytes=128, decode_workspace="tiled",
+            decode_selection="path",
+        )["metrics"]
+        self.assertEqual(
+            high_materialized[
+                "decode_reveal_inplace_temporary_payload_bytes"
+            ]["value"],
+            256,
+        )
+        self.assertEqual(
+            high_materialized["decode_reveal_scatter_payload_bytes"]["value"],
+            256,
+        )
+        self.assertEqual(
+            high_tiled["decode_reveal_inplace_temporary_payload_bytes"]["value"],
+            0,
+        )
+        self.assertEqual(
+            high_tiled["decode_reveal_scatter_payload_bytes"]["value"], 256
+        )
+
+    def test_backend_qualified_high_syndrome_traffic(self) -> None:
+        def metrics(shard_bytes: int, backend: str = "avx2") -> dict:
+            return build_decode_report(
+                k=1000, r=200, field="gf16", backend=backend,
+                shard_bytes=shard_bytes, loss_count=8,
+                decode_workspace="tiled", decode_selection="path",
+            )["metrics"]
+
+        compact = metrics(64)
+        self.assertEqual(
+            compact["decode_syndrome_fused_accumulation_payload_bytes"]["value"],
+            0,
+        )
+        self.assertEqual(
+            compact["decode_syndrome_materialized_xor_payload_bytes"]["value"],
+            4 * 256 * 64,
+        )
+        split = metrics(192)
+        self.assertEqual(
+            split["decode_syndrome_fused_accumulation_payload_bytes"]["value"],
+            2 * 256 * 192,
+        )
+        self.assertEqual(
+            split["decode_syndrome_materialized_xor_payload_bytes"]["value"],
+            2 * 256 * 192,
+        )
+        all_fused = metrics(1024)
+        self.assertEqual(
+            all_fused["decode_syndrome_fused_accumulation_payload_bytes"]["value"],
+            4 * 256 * 1024,
+        )
+        self.assertEqual(
+            all_fused["decode_syndrome_materialized_xor_payload_bytes"]["value"],
+            0,
+        )
+        scalar = metrics(192, "scalar")
+        self.assertEqual(
+            scalar["decode_syndrome_fused_accumulation_payload_bytes"]["value"],
+            0,
+        )
+        self.assertEqual(
+            scalar["decode_syndrome_materialized_xor_payload_bytes"]["value"],
+            4 * 256 * 192,
+        )
+
     def test_sparse_requested_parity_reduces_low_work(self) -> None:
         all_outputs = COUNTS.model_low_encode(8, 248, 8, 1024, set(range(248)))
         sparse = COUNTS.model_low_encode(8, 248, 8, 1024, {0, 247})
@@ -373,7 +764,7 @@ class OperationCountTests(unittest.TestCase):
         second = subprocess.check_output(command, text=True)
         self.assertEqual(first, second)
         document = json.loads(first)
-        self.assertEqual(document["schema_version"], 2)
+        self.assertEqual(document["schema_version"], 3)
         self.assertEqual(
             document["metrics"]["decode_plan_scratch_bytes"]["classification"],
             "exact_schedule",

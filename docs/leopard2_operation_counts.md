@@ -1,7 +1,9 @@
 # Leopard2 operation-count model
 
-`tools/leopard2_operation_counts.py` is a deterministic, ISA-independent model
-of Leopard2's byte-heavy execution paths.  It reports the algorithmic work for:
+`tools/leopard2_operation_counts.py` is a deterministic model of Leopard2's
+byte-heavy execution paths.  Its transform and arithmetic schedule is
+ISA-independent; a separate layer applies the selected production backend's
+promoted decode-fusion predicates to logical traffic.  It reports:
 
 - legacy-compatible high-rate encoding;
 - the specialized high-rate original-recovery decoder;
@@ -11,8 +13,9 @@ of Leopard2's byte-heavy execution paths.  It reports the algorithmic work for:
 
 The model is deliberately separate from the production kernels.  It can reveal
 whether a change altered the algorithmic schedule without confusing that change
-with AVX2, SSSE3, NEON, table layout, cache, or compiler effects.  It is not a
-replacement for hardware counters or elapsed-time benchmarks.
+with table layout, cache, or compiler effects.  Backend-qualified traffic is
+identified explicitly and guarded against production-source policy drift.  It
+is not a replacement for hardware counters or elapsed-time benchmarks.
 
 ## Classification of results
 
@@ -23,6 +26,10 @@ Every JSON/CSV metric carries a classification.
   public scratch-layout formula.  Fused transforms are expanded into equivalent
   radix-2 butterfly counts.  Decode scratch bytes are exact for the pointer
   width recorded in the report.
+- `exact_schedule` also labels the reveal/scatter and Algorithm 5 syndrome
+  payload split after applying a named backend's exact production crossover
+  predicates.  It describes bytes crossing those software boundaries, not
+  cache-line transfers or instruction counts.
 - `derived_lower_bound` and `derived_upper_bound` bracket arithmetic affected
   by transform skew constants.  A nonzero-skew butterfly performs two field
   additions and one fixed multiplication; Leopard specializes a zero skew to
@@ -67,15 +74,18 @@ suffix, matching the production encoder.  Low encoding additionally skips
 empty parity blocks.  The generic forward transform accepts an arbitrary parent
 coordinate mask through `--transform-output-mask`.
 
-The current byte kernels execute complete 64-byte tiles, so reports include
-both requested shard bytes and `kernel_shard_bytes`.  GF16 reports reject odd
+Transform kernels execute complete 64-byte tiles, so reports include both
+requested shard bytes and `kernel_shard_bytes`; direct repair/XOR/copy consumes
+the exact public length.  GF16 reports reject odd
 physical byte counts because the native wire profile requires complete two-byte
 symbols.  A padded-odd GF16 application payload must be translated to its even
 physical wire size before it is passed to this model.
 
-## Decode copy, staging, and scratch accounting
+## Decode selection, fusion traffic, and scratch accounting
 
-Schema version 2 corrects an important category error in the former model.  A
+Schema version 3 retains schema v2's corrected pointer-versus-copy accounting
+and adds the actual selected decode rule plus backend-qualified reveal and
+syndrome boundaries.  A
 transform decode owns an N-entry coordinate pointer map, but complete aligned
 passes point those entries directly at the selected K caller shards.  Mapping a
 pointer is metadata work; it is not a K-shard data copy.  The transform kernel
@@ -87,8 +97,28 @@ output and tail-boundary copies are reported in payload bytes so a one-byte
 tail is not misrepresented as another whole rounded shard.  Algorithm 5 gathers
 L complete requested payloads.  Algorithm 4 reveals every aligned prefix
 directly and gathers only `L * (shard_bytes mod 64)` tail bytes.  Generic decode
-reports its copy-first output baseline as an upper bound because qualified GF8
-SSSE3/AVX2 reveal fusion can remove the aligned-prefix gather.
+retains the in-scratch reveal and scatter except where qualified GF8
+SSSE3/AVX2 execution removes both for the aligned prefix.
+
+Reports separate:
+
+- `decode_reveal_inplace_temporary_payload_bytes`, the payload copied through
+  the 64-byte alias-safe temporary used by in-place fixed multiplication;
+- `decode_reveal_scatter_payload_bytes`, the public payload later copied out of
+  transform scratch;
+- `decode_reveal_direct_payload_bytes`, the aligned payload multiplied directly
+  into caller output;
+- `decode_syndrome_fused_accumulation_payload_bytes`, Algorithm 5 rows whose
+  final inverse layer accumulates into the syndrome workspace; and
+- `decode_syndrome_materialized_xor_payload_bytes`, rows retaining a separate
+  materialize-then-XOR boundary.
+
+The `estimated_backend_bytes_*` metrics apply those exact boundary deltas to the
+broader logical traffic bounds.  They remain estimates because they do not
+model caches, write allocation, tables, or backend instruction sequences.
+Schema v3 applies only reveal and syndrome deltas to those totals; the existing
+receive-source and weighted-locator fusion effects remain explicit detail
+fields and are not silently folded into the aggregate.
 
 The exact public scratch metrics mirror `leo2_decode_plan_scratch_size()` and
 `leo2_decode_scratch_size()`:
@@ -120,12 +150,29 @@ that cannot round up to 64 bytes in the declared `size_t`, or a complete scratch
 layout that overflows.  It never labels an unrepresentable Python integer as an
 exact public-query byte count.
 
-`--decode-workspace materialized|tiled` selects a forced, backend-independent
-accounting oracle for specialized reports.  The production-linked
+`--backend scalar|ssse3|avx2|neon` chooses the backend predicates used for
+traffic accounting.  It never changes the structural butterfly count.
+`--decode-selection path` forces the path named by the report and
+`--decode-workspace materialized|tiled` selects that specialized workspace.
+`--decode-selection auto` mirrors production AUTO, including bounded direct
+repair and measured crossover rules; `specialized` mirrors
+`LEO2_CODEC_FORCE_SPECIALIZED_DECODE`.  `--multi-item-batch` applies the
+multi-stripe selector exception.  Every decode report records the selected
+path, rule, matching automatic-rule mask, and required work slots.
+
+The standalone selector mirror returns an immutable no-loss plan before byte
+geometry validation, matching private path introspection and execution.  Public
+plan scratch rejects zero bytes, while the pattern-independent codec scratch
+query still validates and rounds its transform-capable byte geometry.  A full
+report includes that codec query and therefore rejects an unrepresentable byte
+length even when its selected plan path is no-op.
+
+The production-linked
 `leopard2_decode_scratch_probe` additionally emits AUTO rows.  Those rows record
 the context's selected backend and the actual deterministic policy path at each
-shard size; they are host/backend observations, never universal crossover
-claims.
+shard size.  The independent Python selector is cross-checked against those
+production rows at every configured boundary; AUTO backend choice itself is a
+host observation, never a universal crossover claim.
 
 ## Usage
 
@@ -156,11 +203,19 @@ Compare specialized and generic decoding for the same loss pattern:
 
     python3 tools/leopard2_operation_counts.py report \
       --path legacy_high_decode --k 240 --r 16 --field gf8 \
-      --shard-bytes 1024 --loss-mask 0,15 --decode-workspace tiled
+      --backend avx2 --shard-bytes 1024 --loss-mask 0,15 \
+      --decode-workspace tiled
 
     python3 tools/leopard2_operation_counts.py report \
       --path generic_decode --profile high --k 240 --r 16 --field gf8 \
-      --shard-bytes 1024 --loss-mask 0,15
+      --backend avx2 --shard-bytes 1024 --loss-mask 0,15
+
+Report the actual production AUTO rule for a batch-shaped cell:
+
+    python3 tools/leopard2_operation_counts.py report \
+      --path legacy_high_decode --k 224 --r 32 --field gf8 \
+      --backend avx2 --shard-bytes 32768 --loss-count 8 \
+      --decode-selection auto --multi-item-batch
 
 Model the generic parent FFT with a non-prefix output mask:
 
@@ -171,8 +226,8 @@ Model the generic parent FFT with a non-prefix output mask:
 
 The output is stable: JSON object keys and CSV metric rows are sorted, mask
 ranges are canonical, floating pass estimates are rounded, and the schema has
-an explicit version.  Schema v2 intentionally replaces the ambiguous
-`api_scratch_data_slots` value with exact byte/component metrics.  Use
+an explicit version.  Schema v3 includes schema v2's exact scratch
+byte/component metrics and adds selected-rule/backend-traffic fields.  Use
 `--output FILE` to write either format directly.
 
 ## Representative validated counts
@@ -197,7 +252,7 @@ The self-test fixes two useful schedule checks:
   directly.  The receive boundary copies 16 live rows and zeroes 16 absent
   rows, removing 224 logical copy vectors (224 shard reads and 224 shard
   writes) from the former copy-first schedule.  These are exact
-  boundary deltas.  Schema v2's absolute accounting treats the K received
+  boundary deltas.  Schema v3's absolute accounting treats the K received
   coordinate entries as pointer mappings, and charges Algorithm 5's separate
   copy-first work staging before applying this qualified SIMD delta.  Scalar,
   NEON, exact-mask plans, and other unqualified backends retain copy-first
@@ -216,8 +271,10 @@ stable JSON/CSV serialization, and covers production GF16 byte-length rejection.
 
 ## Limitations
 
-The operation model follows the current algorithms, not every possible backend
-micro-op.  It does not count locator-plan setup, field-table initialization,
+The operation model follows the current algorithms, not every backend micro-op.
+Its production-source guards intentionally fail when a guarded reveal or
+syndrome crossover changes, requiring a schema/model review.  It does not count
+locator-plan setup, field-table initialization,
 thread synchronization, validation instruction cost, or NUMA effects.  Exact
 decode scratch size does include the storage occupied by validation range
 metadata; logical byte-traffic estimates do not treat metadata scans as shard

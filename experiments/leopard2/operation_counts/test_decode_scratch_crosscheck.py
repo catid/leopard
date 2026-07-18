@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-check schema-v2 decode scratch accounting against the public API."""
+"""Cross-check schema-v3 decode policy/scratch accounting against production."""
 
 from __future__ import annotations
 
@@ -62,6 +62,18 @@ def normalized_workspace(path: str) -> str:
     raise AssertionError("unexpected transform path: " + path)
 
 
+def decode_force_from_flags(flags: int) -> str:
+    if flags & 1:
+        return "generic"
+    if flags & 8:
+        return "materialized"
+    if flags & 4:
+        return "tiled"
+    if flags & 2:
+        return "specialized"
+    return "auto"
+
+
 def cross_check_rows(rows: List[Dict[str, object]]) -> int:
     names = set()
     checks = 0
@@ -71,7 +83,7 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
         require(name not in names, "duplicate probe row " + name)
         names.add(name)
         require(
-            row.get("schema") == "leopard2-decode-scratch-probe/v1",
+            row.get("schema") == "leopard2-decode-scratch-probe/v2",
             name + " probe schema changed",
         )
         selected_path = str(row["selected_path"])
@@ -79,6 +91,52 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
         codec_path = normalized_workspace(str(row["codec_path"]))
         direct = selected_path == "direct"
         no_op = selected_path == "no_op"
+        profile = str(row["profile"])
+        padded = int(row["padded"])
+        parent = int(row["parent"])
+        geometry = {
+            "padded_side": padded,
+            "parent_count": parent,
+            "parent_dimension": (
+                parent - padded if profile == "high" else padded
+            ),
+        }
+        force = decode_force_from_flags(int(row["flags"]))
+        selected_model = COUNTS.select_decode_execution(
+            int(row["K"]), int(row["R"]), profile, str(row["field"]),
+            str(row["backend"]), geometry, int(row["shard_bytes"]),
+            int(row["losses"]), force,
+            multi_item_batch=bool(row["multi_item_batch"]),
+        )
+        require(selected_model.path == selected_path,
+                name + " selected policy path mismatch")
+        require(selected_model.rule == str(row["selected_rule"]),
+                name + " selected policy rule mismatch")
+        require(
+            selected_model.matching_auto_rules ==
+            int(row["selected_matching_auto_rules"]),
+            name + " selected matching-rule mask mismatch",
+        )
+        require(
+            selected_model.required_work_slots ==
+            int(row["selected_required_work_slots"]),
+            name + " selected policy work-slot mismatch",
+        )
+        codec_model = COUNTS.select_codec_transform_execution(
+            int(row["K"]), int(row["R"]), profile, str(row["field"]),
+            str(row["backend"]), geometry, int(row["shard_bytes"]), force,
+        )
+        require(codec_model.path == codec_path,
+                name + " codec-query policy path mismatch")
+        require(codec_model.rule == str(row["codec_rule"]),
+                name + " codec-query policy rule mismatch")
+        require(
+            codec_model.matching_auto_rules ==
+            int(row["codec_matching_auto_rules"]),
+            name + " codec-query matching-rule mask mismatch",
+        )
+        require(codec_model.required_work_slots == int(row["codec_work_slots"]),
+                name + " codec-query policy work-slot mismatch")
         require(
             scratch_path == selected_path or bool(row["multi_item_batch"]),
             name + " single-item selected/scratch path differs",
@@ -171,7 +229,7 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
             )
         require(str(row["selected_rule"]) and str(row["scratch_rule"]) and
                 str(row["codec_rule"]), name + " missing selected rule")
-        checks += 16
+        checks += 24
 
     required = {
         "noop_ragged", "forced_high_materialized_aligned",
@@ -241,6 +299,99 @@ def mutation_checks() -> int:
     require(exact.tail_reserved_slots == 256, "K+R tail sentinel")
     require(exact.plan_work_slots == 33, "high plan L-slot sentinel")
     require(exact.codec_work_slots == 48, "high codec R-slot sentinel")
+    ff8 = (ROOT / "LeopardFF8.cpp").read_text(encoding="utf-8")
+    ff16 = (ROOT / "LeopardFF16.cpp").read_text(encoding="utf-8")
+    COUNTS.verify_decode_fusion_sources(source, ff8, ff16)
+    fusion_mutations = (
+        (
+            source.replace("aligned_prefix_bytes >= 4096",
+                           "aligned_prefix_bytes >= 2048", 1),
+            ff8,
+            ff16,
+            "reveal crossover mutation",
+        ),
+        (
+            source,
+            ff8.replace("buffer_bytes >= 65536",
+                        "buffer_bytes >= 32768", 1),
+            ff16,
+            "GF8 sink crossover mutation",
+        ),
+        (
+            source,
+            ff8,
+            ff16.replace("bytes == 64", "bytes == 32", 1),
+            "GF16 fused-four mutation",
+        ),
+        (
+            source.replace(
+                "const bool reveal_aligned_outputs_in_place =\n"
+                "        !(fuse_generic_reveal_scatter || "
+                "fuse_low_reveal_scatter);",
+                "const bool reveal_aligned_outputs_in_place = true;",
+                1,
+            ),
+            ff8,
+            ff16,
+            "aligned reveal wiring mutation",
+        ),
+        (
+            source.replace(
+                "ExecuteTransformDecodePass(\n"
+                "            plan, kScratchAlignment, coordinate_input, "
+                "work,\n"
+                "            use_generic, use_tiled, true);",
+                "ExecuteTransformDecodePass(\n"
+                "            plan, kScratchAlignment, coordinate_input, "
+                "work,\n"
+                "            use_generic, use_tiled, "
+                "reveal_aligned_outputs_in_place);",
+                1,
+            ),
+            ff8,
+            ff16,
+            "tail reveal wiring mutation",
+        ),
+        (
+            source,
+            ff8.replace(
+                "const bool use_accumulating_sink =\n"
+                "                ShouldUsePrunedHighSyndromeSink("
+                "ops, buffer_bytes);",
+                "const bool use_accumulating_sink = false;",
+                1,
+            ),
+            ff16,
+            "GF8 pruned sink wiring mutation",
+        ),
+        (
+            source,
+            ff8,
+            ff16.replace(
+                "const bool use_accumulating_sink =\n"
+                "                ShouldUsePrunedHighSyndromeSink("
+                "ops, buffer_bytes);",
+                "const bool use_accumulating_sink = false;",
+                1,
+            ),
+            "GF16 pruned sink wiring mutation",
+        ),
+    )
+    checks += 1
+    for mutated_core, mutated_ff8, mutated_ff16, label in fusion_mutations:
+        require(
+            mutated_core != source or mutated_ff8 != ff8 or
+            mutated_ff16 != ff16,
+            label + " did not apply",
+        )
+        try:
+            COUNTS.verify_decode_fusion_sources(
+                mutated_core, mutated_ff8, mutated_ff16
+            )
+        except COUNTS.ModelError:
+            checks += 1
+        else:
+            raise AssertionError(label + " escaped the source guard")
     return checks + 4
 
 

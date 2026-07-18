@@ -596,8 +596,23 @@ void test_no_loss_no_op(leo2_context* context)
     require_result(leo2_decode_plan_scratch_size(plan, 17, &scratch_bytes),
         "no-loss scratch query");
     require(scratch_bytes == 0, "no-loss plan unexpectedly requires scratch");
+    scratch_bytes = 99;
+    require_result(leo2_decode_plan_scratch_size(
+        plan, UINT64_MAX, &scratch_bytes),
+        "no-loss maximum-byte scratch query");
+    require(scratch_bytes == 0,
+        "no-loss maximum-byte query unexpectedly requires scratch");
+    scratch_bytes = 99;
+    require(leo2_decode_plan_scratch_size(plan, 0, &scratch_bytes) ==
+            LEO2_INVALID_ARGUMENT,
+        "no-loss zero-byte scratch query did not reject the length");
+    require(scratch_bytes == 0,
+        "rejected no-loss zero-byte query did not clear output");
     require_result(leo2_decode_plan_execute(
         plan, 17, NULL, NULL, NULL, NULL, 0), "no-loss no-op execute");
+    require_result(leo2_decode_plan_execute(
+        plan, 0, NULL, NULL, NULL, NULL, 0),
+        "no-loss zero-byte no-op execute");
     leo2_decode_plan_destroy(plan);
     leo2_codec_destroy(codec);
 }
