@@ -1,0 +1,161 @@
+{
+  "schema": "leopard2-all-k-gap-findings/v1",
+  "status": "diagnostic_not_promotion_evidence",
+  "bead": "leopard-79h.38.2",
+  "source_identity": {
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "current_commit": "2fce390c9855b6c86b7e20fa86625db500757859",
+    "exact_main_archive_sha256": "8dc99f69b5ff677d1fae51548f90ae2090a0231362a98ed117de44eaae5c2168",
+    "exact_main_executable_sha256": "93d8c6b29d437e5775bc640c10aaba948cc1a6ff2dda37f78a8e67d5c71eee30",
+    "current_archive_sha256": "28b8e96c98dbb954d27c0005ef6877057e12fc31b1ad43131e903270685d5d4e",
+    "current_executable_sha256": "fe569e1a2173dd147756e1a98ec23a46005058e4febb34f606c891c47a891526",
+    "runner_sha256": "fbee2d9c727e615caa48766c5bdb9caf3e98d28c0f43286c76b262efa9c5b6bf"
+  },
+  "method": {
+    "allowed_and_used_logical_cpus": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30],
+    "worker_count": 30,
+    "process_order_per_cell": ["exact_main", "current", "current", "exact_main"],
+    "samples_per_process": 5,
+    "warmups_per_process": 1,
+    "cell_count": 2760,
+    "invocation_count": 11040,
+    "gf8": {
+      "K": "every integer 1..255",
+      "R_bands": ["1", "middle legal GF8 redundancy", "maximum legal GF8 redundancy"],
+      "shard_bytes": [4096, 65536],
+      "losses": ["one", "maximum"]
+    },
+    "gf16": {
+      "K": [129, 130, 191, 192, 193, 200, 224, 225, 239, 240, 241, 248, 249, 255, 256, 257, 300, 511, 512, 513, 1000, 2048, 4096],
+      "shard_bytes": [512, 4096],
+      "R_bands": ["first GF16-forcing", "middle", "high"],
+      "losses": ["one", "maximum"]
+    },
+    "limitations": [
+      "All CPUs were intentionally saturated for diagnostic coverage; timings are not isolated promotion evidence.",
+      "AUTO selected AVX2 on this host; scalar, SSSE3, NEON and other machines were not timed in this sweep.",
+      "Only one-loss and maximum-loss patterns and the listed shard sizes were swept."
+    ]
+  },
+  "correctness": {
+    "valid_cells": 2760,
+    "failed_cells": 0,
+    "cross_invocation_digest_mismatches": 0,
+    "round_trip_failures": 0,
+    "current_tree_legacy_comparison_mismatches": 0
+  },
+  "ratio_semantics": "Every ratio is left-hand time divided by right-hand time; above 1 favors the right-hand implementation.",
+  "overall": {
+    "exact_main_over_leopard2": {
+      "encode": {"median": 0.8521278305231366, "below_1_05": 2258, "count": 2760},
+      "decode_first_use": {"median": 1.2865094170892903, "below_1_05": 1089, "count": 2760},
+      "decode_at_reuse": {"median": 1.3028199784032704, "below_1_05": 1078, "count": 2760}
+    },
+    "attribution": {
+      "exact_main_over_current_tree_legacy_encode": 0.8906287902613974,
+      "exact_main_over_current_tree_legacy_decode": 0.9264266464369366,
+      "current_tree_legacy_over_leopard2_encode": 0.97040252706913,
+      "current_tree_legacy_over_leopard2_decode_first_use": 1.329599255633641,
+      "current_tree_legacy_over_leopard2_decode_at_reuse": 1.3373025003713654
+    }
+  },
+  "field_byte_medians": [
+    {"field": "gf8", "shard_bytes": 4096, "cells": 1261, "exact_main_over_leopard2": {"encode": 0.833, "decode_first_use": 1.056, "decode_at_reuse": 1.077}, "exact_main_over_current_tree_legacy": {"encode": 0.881, "decode": 0.917}, "current_tree_legacy_over_leopard2": {"encode": 0.967, "decode_first_use": 1.133, "decode_at_reuse": 1.155}},
+    {"field": "gf8", "shard_bytes": 65536, "cells": 1261, "exact_main_over_leopard2": {"encode": 0.927, "decode_first_use": 1.413, "decode_at_reuse": 1.414}, "exact_main_over_current_tree_legacy": {"encode": 0.934, "decode": 0.948}, "current_tree_legacy_over_leopard2": {"encode": 0.993, "decode_first_use": 1.425, "decode_at_reuse": 1.428}},
+    {"field": "gf16", "shard_bytes": 512, "cells": 119, "exact_main_over_leopard2": {"encode": 0.682, "decode_first_use": 4.447, "decode_at_reuse": 4.796}, "exact_main_over_current_tree_legacy": {"encode": 0.741, "decode": 0.886}, "current_tree_legacy_over_leopard2": {"encode": 0.920, "decode_first_use": 4.201, "decode_at_reuse": 4.481}},
+    {"field": "gf16", "shard_bytes": 4096, "cells": 119, "exact_main_over_leopard2": {"encode": 0.809, "decode_first_use": 1.808, "decode_at_reuse": 1.817}, "exact_main_over_current_tree_legacy": {"encode": 0.834, "decode": 0.955}, "current_tree_legacy_over_leopard2": {"encode": 0.975, "decode_first_use": 2.065, "decode_at_reuse": 2.074}}
+  ],
+  "direct_xor_medians": [
+    {"field": "gf8", "shard_bytes": 4096, "cells": 255, "exact_main_over_leopard2": {"encode": 0.868, "decode_first_use": 0.658, "decode_at_reuse": 0.694}, "exact_main_over_current_tree_legacy": {"encode": 1.040, "decode": 1.022}, "current_tree_legacy_over_leopard2": {"encode": 0.821, "decode_first_use": 0.613, "decode_at_reuse": 0.666}},
+    {"field": "gf8", "shard_bytes": 65536, "cells": 255, "exact_main_over_leopard2": {"encode": 1.009, "decode_first_use": 0.972, "decode_at_reuse": 0.975}, "exact_main_over_current_tree_legacy": {"encode": 1.038, "decode": 1.013}, "current_tree_legacy_over_leopard2": {"encode": 0.973, "decode_first_use": 0.965, "decode_at_reuse": 0.969}},
+    {"field": "gf16", "shard_bytes": 512, "cells": 9, "exact_main_over_leopard2": {"encode": 0.349, "decode_first_use": 0.137, "decode_at_reuse": 0.142}, "exact_main_over_current_tree_legacy": {"encode": 0.970, "decode": 1.058}, "current_tree_legacy_over_leopard2": {"encode": 0.367, "decode_first_use": 0.128, "decode_at_reuse": 0.133}},
+    {"field": "gf16", "shard_bytes": 4096, "cells": 9, "exact_main_over_leopard2": {"encode": 0.862, "decode_first_use": 0.555, "decode_at_reuse": 0.564}, "exact_main_over_current_tree_legacy": {"encode": 1.104, "decode": 1.023}, "current_tree_legacy_over_leopard2": {"encode": 0.819, "decode_first_use": 0.529, "decode_at_reuse": 0.538}}
+  ],
+  "forced_balanced_full_loss_abba": {
+    "status": "same-seed_same-cpu_ABBA_diagnostic_not_promotion_evidence",
+    "order": ["generic", "specialized", "specialized", "generic"],
+    "backend": "avx2",
+    "field": "gf8",
+    "samples": 9,
+    "warmups": 2,
+    "reuse": 16,
+    "cell_order": "K in [15,16,30,31,32], then bytes in [4096,65536]",
+    "cpu_and_seed": "cell index i used CPU i and seed 989855744+i",
+    "command_template": "taskset -c CPU build/gap-current/bench_leopard2 --k K --r K --bytes BYTES --loss K --batch 1 --reuse 16 --iterations 9 --warmup 2 --threads 1 --seed SEED --profile high --field auto --backend auto FORCE_FLAG --retain-samples --json OUTPUT",
+    "raw_hash_list_sha256": "7fd02d26314db895990a455c11027eff900dc26ca0e22f391ff5451311873542",
+    "cells": [
+      {"K": 15, "shard_bytes": 4096, "generic_us": 15.653435836973618, "specialized_us": 18.35744225346358, "specialized_over_generic": 1.172742038530804, "current_legacy_over_generic": 0.8100905421905322},
+      {"K": 15, "shard_bytes": 65536, "generic_us": 266.42172961730824, "specialized_us": 326.8229647807507, "specialized_over_generic": 1.2267128707939987, "current_legacy_over_generic": 0.7894562045997068},
+      {"K": 16, "shard_bytes": 4096, "generic_us": 15.035454653562827, "specialized_us": 19.289486394795478, "specialized_over_generic": 1.28293336245902, "current_legacy_over_generic": 0.7993154178719292},
+      {"K": 16, "shard_bytes": 65536, "generic_us": 291.00822401472476, "specialized_us": 329.67813987956157, "specialized_over_generic": 1.1328825533909315, "current_legacy_over_generic": 0.8300798879843677},
+      {"K": 30, "shard_bytes": 4096, "generic_us": 32.58693127236746, "specialized_us": 41.674045990692754, "specialized_over_generic": 1.2788576390447308, "current_legacy_over_generic": 0.8205593770813007},
+      {"K": 30, "shard_bytes": 65536, "generic_us": 580.5458100189877, "specialized_us": 724.2640951988639, "specialized_over_generic": 1.2475571827401106, "current_legacy_over_generic": 0.8236600590875067},
+      {"K": 31, "shard_bytes": 4096, "generic_us": 33.46381242850253, "specialized_us": 42.25063254190255, "specialized_over_generic": 1.2625767799820655, "current_legacy_over_generic": 0.8060150648190948},
+      {"K": 31, "shard_bytes": 65536, "generic_us": 592.1632395202761, "specialized_us": 734.5399580606821, "specialized_over_generic": 1.2404349156420929, "current_legacy_over_generic": 0.7956032758586636},
+      {"K": 32, "shard_bytes": 4096, "generic_us": 32.6093782029227, "specialized_us": 46.21131594962971, "specialized_over_generic": 1.4171173599835123, "current_legacy_over_generic": 0.8100304698433191},
+      {"K": 32, "shard_bytes": 65536, "generic_us": 569.5191313328785, "specialized_us": 724.7509069226949, "specialized_over_generic": 1.2725663933826392, "current_legacy_over_generic": 0.8123546324672373}
+    ]
+  },
+  "ranked_findings": [
+    {"rank": 1, "id": "portable_coarse_kernel_gap", "finding": "Exact main is faster than the current-tree retained legacy API by median ratios 0.891 encode and 0.926 decode. The dominant broad encode gap predates Leopard2 API dispatch.", "next_action": "Causally compare native whole-transform code with portable runtime dispatch, then move coarse complete FFT/IFFT/encode/decode traversals into ISA-specific translation units or otherwise remove per-butterfly callback overhead without raising the archive ISA floor."},
+    {"rank": 2, "id": "balanced_full_loss_dispatch", "finding": "AUTO uses generic only at exact K=R=128, but same-seed ABBA finds generic 13.3% to 41.7% faster than specialized at K=15,16,30,31,32. Generic still trails current legacy by 17% to 27% in these cells.", "next_action": "Run the pinned family crossover below, then replace the singleton with the smallest validated deterministic family rule."},
+    {"rank": 3, "id": "direct_xor_validation_and_scratch", "finding": "R=1 is an API-path gap, not a portable-kernel gap. At GF8/4KiB current legacy over Leopard2 is 0.821 encode and 0.613 first-use decode; GF16/512B is 0.367 and 0.128.", "next_action": "Give direct XOR a lean scratch geometry and linear specialized overlap validation, avoid transform-sized scratch/pointer setup, and measure a reusable prevalidated topology or fused multi-source kernel."},
+    {"rank": 4, "id": "encode_api_overhead", "finding": "After removing exact-main/current-legacy effects, Leopard2 encode is still slower at median current-legacy/Leopard2 0.970, especially GF16/512B at 0.920.", "next_action": "Fuse range construction with pointer population, add a monotonic-range fast path with safe fallback, and evaluate reusable encode topology metadata."},
+    {"rank": 5, "id": "algorithm5_high_T_crossover", "finding": "At T=128, full-loss GF8 median current-legacy/Leopard2 is 0.751 at 4KiB and 0.827 at 64KiB. Full output removes Algorithm 5 message-only pruning and the materialized specialized path is selected.", "next_action": "Use generic for validated full-recovery regions; retain Algorithm 5 for partial output and optimize its high-T materialized/tiled boundary separately."}
+  ],
+  "source_audit": {
+    "current_policy": "Leopard2Dispatch.h:42-61 recognizes only GF8 K=R=T=128, N=256, all originals missing, 256B..1MiB, scalar/SSSE3/AVX2.",
+    "policy_reason": "docs/leopard2_balanced_dispatch.md explicitly says neighboring counts were not measured and therefore remain specialized; the singleton is evidence scope, not a mathematical restriction.",
+    "execution": "leopard2.cpp:1397-1415 applies the predicate only when no forced diagnostic flag overrides it. AUTO plans retain both generic and specialized metadata at leopard2.cpp:636-649.",
+    "algorithmic_reason": "For balanced full loss, Algorithm 5 performs the syndrome-side T IFFT, T FFT, locator-weighted T IFFT, and a nearly full T output FFT after output pruning disappears. The generic active-parent path has lower aggregate work; the existing T=128 model counts 1280 versus 1856 butterflies.",
+    "scratch_effect": "Balanced full-loss specialized geometry already clamps min(N,2T+L) to N; generic also uses N. A crossover change does not increase full-shard scratch in this family.",
+    "wire_effect": "None. Both paths consume the same immutable plan locator and selected coordinates and recover identical requested systematic coordinates."
+  },
+  "candidate_dispatch_hypothesis_do_not_merge": {
+    "predicate": "legacy_high_v1 && GF8 && K == R && missing_original_count == K && N == 2*T && T >= 8 && 256 <= rounded_shard_bytes <= 1MiB && backend in {scalar,SSSE3,AVX2}",
+    "rationale": "This is the smallest structural family containing the observed gaps while excluding direct-repair T<=4, partial-loss Algorithm 5 wins, GF16 and unmeasured backends.",
+    "required_validation_before_promotion": {
+      "balanced_K": [5, 7, 8, 9, 14, 15, 16, 17, 29, 30, 31, 32, 33, 62, 63, 64, 65, 126, 127, 128],
+      "shard_bytes": [64, 256, 4096, 65536, 1048576, 1048640],
+      "backends": ["scalar", "ssse3", "avx2"],
+      "loss_neighbors": ["1", "4", "K/2", "K-1", "K"],
+      "rate_neighbors": ["R=K-1", "R=K", "middle-R"],
+      "reuse": [1, 8, 64],
+      "field_neighbors": ["GF16 K=129,255,256,257; collect evidence but do not promote through the GF8 rule"],
+      "modes": ["exact main", "current-tree legacy", "forced generic", "forced specialized materialized", "forced specialized tiled where legal", "AUTO"],
+      "gates": ["pinned ABBA with confidence intervals", "AUTO selected-path threshold tests", "generic/specialized byte equality", "wire golden vectors", "scratch contracts", "full CTest", "ASan", "UBSan", "TSan"],
+      "promotion": ">=5% credible target gain, no unexplained >2% neighboring regression"
+    }
+  },
+  "bead_38_2_acceptance_audit": {
+    "pinned_full_crossover": "open: the all-K and forced-path results are saturated diagnostics, AVX2-only, and cover only two byte sizes plus one/max loss",
+    "auto_selects_faster_kernel": "open: AUTO still selects specialized outside the exact K=R=128 singleton",
+    "selected_path_threshold_tests": "open: only the existing singleton boundaries are locked",
+    "no_promotion_from_saturated_diagnostics": "satisfied: this artifact proposes no production change",
+    "correctness_wire_scratch_sanitizers": "partial: 2760 cells have matching digests and round trips, but no proposed-dispatch sanitizer/scratch gate exists because no change was made",
+    "beats_Leopard1_or_root_cause": "partial: root causes are identified; generic still trails current legacy in the forced balanced cells and the coarse portable-backend plus API gaps remain"
+  },
+  "reproduction": {
+    "commands": [
+      "CURRENT_WT=${TMPDIR:-/tmp}/leopard-wt-allk-gap-map",
+      "MAIN_WT=${TMPDIR:-/tmp}/leopard-wt-allk-main",
+      "git worktree add --detach \"$CURRENT_WT\" 2fce390c9855b6c86b7e20fa86625db500757859",
+      "git worktree add --detach \"$MAIN_WT\" 6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+      "cmake -S \"$CURRENT_WT\" -B \"$CURRENT_WT/build/gap-current\" -G Ninja -DCMAKE_BUILD_TYPE=Release -DLEO2_BUILD_TESTS=OFF -DLEO2_BUILD_BENCHMARKS=ON -DLEO2_BUILD_FUZZERS=OFF -DLEO2_ENABLE_CUDA=OFF -DLEO2_BACKEND_VARIANT=auto",
+      "cmake --build \"$CURRENT_WT/build/gap-current\" -j 30 --target bench_leopard2",
+      "cmake -S \"$CURRENT_WT/experiments/leopard2/main_compare\" -B \"$CURRENT_WT/build/gap-main\" -G Ninja -DCMAKE_BUILD_TYPE=Release -DLEOPARD_MAIN_SOURCE_DIR=\"$MAIN_WT\"",
+      "cmake --build \"$CURRENT_WT/build/gap-main\" -j 30 --target leopard_main_benchmark",
+      "python3 experiments/leopard2/main_compare/run_allk_gap.py --main build/gap-main/leopard_main_benchmark --current build/gap-current/bench_leopard2 --output .research/leopard2/allk-gap-attribution-2fce390-vs-6e5725e --workers 30 --timeout 120 --with-current-legacy"
+    ]
+  },
+  "retained_artifacts": {
+    "initial_manifest_sha256": "1720291614d40f7d2af5a19d0379b70d2c81106978507610ebc61d3d73765863",
+    "initial_cells_sha256": "699e00610fad16e135093a29d5d3e73cef420410cc8f2785c96d6fd9d6ba103c",
+    "initial_summary_sha256": "38654d7fc6f56ac7f1f8b47041d0c78b06bdc8f7b0c3f000b4a6442b246fa4d8",
+    "attribution_manifest_sha256": "07837d4c3ca50f1a588b94f5d7807ace832170c27b729b78458349f842772820",
+    "attribution_cells_sha256": "69a2c3ee5389ae7edbb05674513e2fc19c21b412fa127bc5d84c2a2567aafd8a",
+    "attribution_gap_cells_sha256": "8e89e402a67535d55dddbd82dd67474b58de33a9b867c90246b0d7bee523ca3b",
+    "attribution_summary_sha256": "c44a30038fea0cfce357c570e814f11b7d8d7d8f50cd3699cedc4a4f25f3ddc6",
+    "ignored_root": ".research/leopard2/allk-gap-attribution-2fce390-vs-6e5725e"
+  }
+}
