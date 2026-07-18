@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import datetime as dt
 import importlib.util
 import json
 import math
@@ -37,6 +38,8 @@ RECORD_KEYS = {
     "cpu_before", "cpu_after", "cpu_delta",
     "sibling_before", "sibling_after", "sibling_delta", "result",
 }
+HEX40 = re.compile(r"^[0-9a-f]{40}$")
+HEX64 = re.compile(r"^[0-9a-f]{64}$")
 
 
 def load_module(name: str, path: Path) -> ModuleType:
@@ -62,6 +65,29 @@ EvidenceError = SUPPORT.EvidenceError
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise EvidenceError(message)
+
+
+def parse_canonical_utc(value: object, label: str) -> dt.datetime:
+    require(type(value) is str and value.endswith("Z"),
+            f"{label} is not a canonical UTC timestamp")
+    try:
+        parsed = dt.datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError as error:
+        raise EvidenceError(f"{label} is not an RFC3339 timestamp: {error}") from error
+    require(parsed.tzinfo is not None and
+            parsed.utcoffset() == dt.timedelta(0) and
+            parsed.isoformat().replace("+00:00", "Z") == value,
+            f"{label} is not canonical timezone-aware UTC")
+    return parsed
+
+
+def validate_manifest_raw_timestamps(
+    manifest_created: object, raw_created: object
+) -> None:
+    manifest_time = parse_canonical_utc(manifest_created, "manifest created_utc")
+    raw_time = parse_canonical_utc(raw_created, "raw created_utc")
+    require(manifest_time >= raw_time,
+            "manifest creation time predates its raw evidence")
 
 
 def load_matrix(path: Path) -> dict[str, Any]:
@@ -220,16 +246,9 @@ def find_build_root(binary: Path) -> Path:
     raise EvidenceError("diagnostic benchmark has no enclosing CMake cache")
 
 
-def diagnostic_compile_closure(
-    source_root: Path, build: Path, commands_path: Path, compiler: Path
-) -> tuple[list[dict[str, Any]], Path, list[Path], str]:
-    try:
-        commands_text = commands_path.read_text(encoding="utf-8", errors="strict")
-        entries = json.loads(commands_text)
-    except json.JSONDecodeError as error:
-        raise EvidenceError(f"invalid diagnostic compile_commands.json: {error}") from error
-    require(isinstance(entries, list) and entries,
-            "diagnostic compile_commands.json is empty")
+def diagnostic_specifications(
+    source_root: Path, build: Path
+) -> list[tuple[Path, Path, set[str]]]:
     ordinary = (
         "leopard.cpp", "leopard2.cpp", "Leopard2Backend.cpp",
         "Leopard2BackendScalar.cpp", "Leopard2CpuFeatures.cpp",
@@ -253,12 +272,26 @@ def diagnostic_compile_closure(
          {"LEO2_ENABLE_TEST_HOOKS=1"})
         for name, target in backends
     )
-    benchmark_source = source_root / "bench/leopard2/benchmark.cpp"
-    benchmark_object = build / "CMakeFiles" / f"{TARGET_NAME}.dir" / \
-        "bench/leopard2/benchmark.cpp.o"
     specifications.append((
-        benchmark_source, benchmark_object,
+        source_root / "bench/leopard2/benchmark.cpp",
+        build / "CMakeFiles" / f"{TARGET_NAME}.dir" /
+            "bench/leopard2/benchmark.cpp.o",
         {"LEO2_ENABLE_TEST_HOOKS=1", "LEO2_HIGH_DECODE_COPY_ATTRIBUTION=1"}))
+    return specifications
+
+
+def diagnostic_compile_closure(
+    source_root: Path, build: Path, commands_path: Path, compiler: Path
+) -> tuple[list[dict[str, Any]], Path, list[Path], str]:
+    try:
+        commands_text = commands_path.read_text(encoding="utf-8", errors="strict")
+        entries = json.loads(commands_text)
+    except json.JSONDecodeError as error:
+        raise EvidenceError(f"invalid diagnostic compile_commands.json: {error}") from error
+    require(isinstance(entries, list) and entries,
+            "diagnostic compile_commands.json is empty")
+    specifications = diagnostic_specifications(source_root, build)
+    benchmark_object = specifications[-1][1]
     expected_outputs = {output.resolve(): (source.resolve(), definitions)
                         for source, output, definitions in specifications}
     selected: dict[Path, tuple[Mapping[str, Any], list[str]]] = {}
@@ -285,7 +318,10 @@ def diagnostic_compile_closure(
     for output, (expected_source, definitions) in expected_outputs.items():
         entry, tokens = selected[output]
         source_value = entry.get("file")
-        require(isinstance(source_value, str) and
+        directory_value = entry.get("directory")
+        require(isinstance(directory_value, str) and
+                Path(directory_value).resolve(strict=True) == build and
+                isinstance(source_value, str) and
                 Path(source_value).resolve(strict=True) == expected_source and
                 tokens and Path(tokens[0]).resolve(strict=True) == compiler and
                 tokens.count("-c") == 1 and
@@ -304,11 +340,15 @@ def diagnostic_compile_closure(
         object_identity = SUPPORT.artifact_identity(output, "object_file")
         require(object_identity["mtime_ns"] >= source_identity["mtime_ns"],
                 f"diagnostic object predates source: {output}")
-        records.append({"source": source_identity, "object": object_identity,
-                        "required_definitions": sorted(definitions)})
+        records.append({
+            "source": source_identity, "object": object_identity,
+            "directory": str(build), "command_tokens": list(tokens),
+            "compiler_path": str(compiler),
+            "required_definitions": sorted(definitions),
+        })
     archive_objects = [output.resolve() for _, output, _ in specifications[:-1]]
     return (records, benchmark_object.resolve(strict=True), archive_objects,
-            SUPPORT.sha256_bytes(commands_text.encode("utf-8")))
+            commands_text)
 
 
 def validate_archive_closure(
@@ -368,6 +408,9 @@ def validate_archive_closure(
     return {
         "recipe": recipe_identity,
         "recipe_text": recipe,
+        "recipe_tokens": [archive_tokens, ranlib_tokens],
+        "archiver_invocation": archive_tokens[0],
+        "ranlib_invocation": ranlib_tokens[0],
         "archive": archive_identity,
         "members": member_digests,
         "archiver": SUPPORT.artifact_identity(archiver, "archiver"),
@@ -378,7 +421,7 @@ def validate_archive_closure(
 def validate_executable_link_inputs(
     tokens: Sequence[str], build: Path, source_root: Path, compiler: Path,
     binary: Path, benchmark_object: Path, hook_archive: Path
-) -> list[Path]:
+) -> dict[str, Any]:
     require(tokens and Path(tokens[0]).resolve(strict=True) == compiler and
             tokens.count("-o") == 1,
             "diagnostic executable link compiler/output shape changed")
@@ -388,7 +431,7 @@ def validate_executable_link_inputs(
     output = output if output.is_absolute() else build / output
     require(output.resolve(strict=True) == binary,
             "diagnostic link recipe does not produce the declared executable")
-    explicit_inputs: list[Path] = []
+    explicit_inputs: list[tuple[str, Path]] = []
     for index, token in enumerate(tokens[1:], start=1):
         if index == output_index or index == output_index + 1:
             continue
@@ -406,22 +449,38 @@ def validate_executable_link_inputs(
                         "diagnostic link rpath is outside system library roots")
             continue
         item = Path(token)
-        explicit_inputs.append(
-            (item if item.is_absolute() else build / item).resolve(strict=True))
-    build_inputs = [path for path in explicit_inputs if path.is_relative_to(build)]
-    require(build_inputs == [benchmark_object, hook_archive],
+        explicit_inputs.append((
+            token, (item if item.is_absolute() else build / item).resolve(strict=True)))
+    build_inputs = [(token, path) for token, path in explicit_inputs
+                    if path.is_relative_to(build)]
+    require([path for _token, path in build_inputs] ==
+                [benchmark_object, hook_archive],
             "diagnostic executable has an extra/substituted build-tree input")
     require(not any(path.is_relative_to(source_root) and
-                    not path.is_relative_to(build) for path in explicit_inputs),
+                    not path.is_relative_to(build)
+                    for _token, path in explicit_inputs),
             "diagnostic executable links a source-tree artifact")
-    system_inputs = [path for path in explicit_inputs if path not in build_inputs]
+    system_inputs = [(token, path) for token, path in explicit_inputs
+                     if (token, path) not in build_inputs]
     allowed_system_names = re.compile(r"lib(?:gomp|omp|pthread)\.(?:a|so(?:\..*)?)$")
     require(all((path.is_relative_to(Path("/usr/lib")) or
                  path.is_relative_to(Path("/lib"))) and
                 allowed_system_names.fullmatch(path.name) is not None
-                for path in system_inputs),
+                for _token, path in system_inputs),
             "diagnostic executable has an undeclared external link input")
-    return system_inputs
+    return {
+        "recipe_tokens": list(tokens),
+        "compiler_invocation": tokens[0],
+        "compiler_resolved_path": str(compiler),
+        "output_token": tokens[output_index + 1],
+        "output_path": str(binary),
+        "build_inputs": [
+            {"token": token, "resolved_path": str(path)}
+            for token, path in build_inputs],
+        "system_inputs": [
+            {"token": token, "resolved_path": str(path)}
+            for token, path in system_inputs],
+    }
 
 
 def validate_clean_rebuild(
@@ -562,11 +621,12 @@ def build_identity(source_root: Path, binary: Path, hook_archive: Path) -> dict[
     require(all(any(tool.is_relative_to(root) for root in system_tool_roots)
                 for tool in (compiler, archiver, ranlib)),
             "diagnostic compiler/archive tools are outside system roots")
-    compile_records, benchmark_object, archive_objects, commands_sha256 = \
+    compile_records, benchmark_object, archive_objects, commands_text = \
         diagnostic_compile_closure(
             source_root, build, commands_path, compiler)
     commands_identity = SUPPORT.artifact_identity(commands_path, "build_metadata")
-    require(commands_identity["sha256"] == commands_sha256,
+    require(commands_identity["sha256"] ==
+            SUPPORT.sha256_bytes(commands_text.encode("utf-8")),
             "diagnostic compile commands changed while they were validated")
     archive_recipe = build / "CMakeFiles/leopard_test_hooks.dir/link.txt"
     require(archive_recipe.is_file(), "hooks archive recipe is missing")
@@ -583,7 +643,7 @@ def build_identity(source_root: Path, binary: Path, hook_archive: Path) -> dict[
     require(len(link_lines) == 1, "diagnostic benchmark has multiple link commands")
     tokens = shlex.split(link_lines[0])
     SUPPORT.validate_effective_flags(tokens, "diagnostic executable link recipe")
-    system_inputs = validate_executable_link_inputs(
+    link_closure = validate_executable_link_inputs(
         tokens, build, source_root, compiler, binary, benchmark_object, hook_archive)
     binary_identity = SUPPORT.artifact_identity(binary, "executable")
     require(binary_identity["mtime_ns"] >= archive_closure["archive"]["mtime_ns"] and
@@ -619,16 +679,20 @@ def build_identity(source_root: Path, binary: Path, hook_archive: Path) -> dict[
         "build_root": str(build),
         "cache": cache_identity,
         "compile_commands": commands_identity,
+        "compile_commands_text": commands_text,
         "validated_compile_closure": compile_records,
         "link_recipe": link_identity,
+        "link_recipe_text": link_text,
+        "validated_link_closure": link_closure,
         "validated_archive_closure": archive_closure,
         "validated_clean_rebuild": clean_rebuild,
         "binary": binary_identity,
         "hook_archive": archive_closure["archive"],
         "compiler": SUPPORT.artifact_identity(compiler, "compiler"),
         "system_link_inputs": [
-            SUPPORT.artifact_identity(path, "system_link_dependency")
-            for path in system_inputs],
+            SUPPORT.artifact_identity(
+                Path(item["resolved_path"]), "system_link_dependency")
+            for item in link_closure["system_inputs"]],
         "deterministic_relink_sha256": binary_identity["sha256"],
         "nm": SUPPORT.artifact_identity(nm, "executable"),
         "selector_symbols_present_in_hook_archive_and_binary": True,
@@ -649,6 +713,467 @@ def snapshot(source_root: Path, commit: str, binary: Path,
             ROOT / "experiments/leopard2/main_compare/run_abba.py", "source_file"),
         "runtime": SUPPORT.runtime_closure(Path("/usr/bin/ldd"), binary),
     }
+
+
+def canonical_absolute_path(value: object, label: str) -> Path:
+    require(type(value) is str and value and os.path.isabs(value) and
+            os.path.normpath(value) == value,
+            f"{label} is not a canonical absolute path")
+    return Path(value)
+
+
+def lexical_path(value: str, directory: Path) -> Path:
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        candidate = directory / candidate
+    return Path(os.path.normpath(str(candidate)))
+
+
+def system_path(path: Path) -> bool:
+    return any(path.is_relative_to(root)
+               for root in (Path("/usr/bin"), Path("/usr/lib"),
+                             Path("/usr/lib64"), Path("/lib"), Path("/lib64")))
+
+
+def validate_artifact_record(
+    value: object, label: str, *, expected_path: Path | None = None,
+    expected_kind: str | None = None,
+) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+                "path", "kind", "size", "mode", "mtime_ns", "sha256"},
+            f"{label} artifact shape changed")
+    path = canonical_absolute_path(value.get("path"), f"{label} path")
+    require(expected_path is None or path == expected_path,
+            f"{label} artifact path changed")
+    kind = value.get("kind")
+    require(type(kind) is str and kind and
+            (expected_kind is None or kind == expected_kind),
+            f"{label} artifact kind changed")
+    require(type(value.get("size")) is int and value["size"] > 0 and
+            type(value.get("mode")) is int and 0 <= value["mode"] <= 0o7777 and
+            type(value.get("mtime_ns")) is int and value["mtime_ns"] >= 0 and
+            type(value.get("sha256")) is str and
+            HEX64.fullmatch(value["sha256"]) is not None,
+            f"{label} artifact metadata is invalid")
+    if kind in ("executable", "compiler", "archiver", "ranlib", "build_tool"):
+        require(value["mode"] & 0o111 != 0,
+                f"{label} executable artifact has no execute bit")
+    return value
+
+
+def validate_source_identity(value: object) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+                "path", "head", "tree", "detached",
+                "tracked_tree_listing_sha256", "tracked_status"},
+            "retained source identity shape changed")
+    canonical_absolute_path(value.get("path"), "source root")
+    require(type(value.get("head")) is str and
+            HEX40.fullmatch(value["head"]) is not None and
+            type(value.get("tree")) is str and
+            HEX40.fullmatch(value["tree"]) is not None and
+            value.get("detached") is False and
+            type(value.get("tracked_tree_listing_sha256")) is str and
+            HEX64.fullmatch(value["tracked_tree_listing_sha256"]) is not None and
+            value.get("tracked_status") == "clean",
+            "retained source identity is not a clean attached commit")
+    return value
+
+
+def validate_compile_snapshot(
+    build_value: Mapping[str, Any], source_root: Path, build: Path,
+    compiler: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], Path]:
+    commands_path = build / "compile_commands.json"
+    commands_artifact = validate_artifact_record(
+        build_value.get("compile_commands"), "compile commands",
+        expected_path=commands_path, expected_kind="build_metadata")
+    commands_text = build_value.get("compile_commands_text")
+    require(type(commands_text) is str and commands_text and
+            len(commands_text.encode("utf-8")) == commands_artifact["size"] and
+            SUPPORT.sha256_bytes(commands_text.encode("utf-8")) ==
+                commands_artifact["sha256"],
+            "retained compile commands text differs from its artifact identity")
+    try:
+        entries = json.loads(commands_text)
+    except json.JSONDecodeError as error:
+        raise EvidenceError(
+            f"retained compile commands are not JSON: {error}") from error
+    require(type(entries) is list and all(isinstance(item, dict) for item in entries),
+            "retained compile commands are not an object array")
+
+    specifications = diagnostic_specifications(source_root, build)
+    records = build_value.get("validated_compile_closure")
+    require(type(records) is list and len(records) == len(specifications) and
+            all(isinstance(record, dict) for record in records),
+            "retained compile closure has the wrong action count")
+    compiler_path = canonical_absolute_path(compiler["path"], "compiler path")
+    seen_objects: set[Path] = set()
+    for record, (source, output, definitions) in zip(records, specifications):
+        require(set(record) == {
+                    "source", "object", "directory", "command_tokens",
+                    "compiler_path", "required_definitions"},
+                "retained compile action shape changed")
+        source_artifact = validate_artifact_record(
+            record.get("source"), "compile source",
+            expected_path=source, expected_kind="source_file")
+        object_artifact = validate_artifact_record(
+            record.get("object"), "compile object",
+            expected_path=output, expected_kind="object_file")
+        require(object_artifact["mtime_ns"] >= source_artifact["mtime_ns"] and
+                output not in seen_objects,
+                "retained compile object is stale or duplicated")
+        seen_objects.add(output)
+        require(record.get("directory") == str(build) and
+                record.get("compiler_path") == str(compiler_path) and
+                record.get("required_definitions") == sorted(definitions),
+                "retained compile action directory/compiler/definitions changed")
+        tokens = record.get("command_tokens")
+        require(type(tokens) is list and tokens and
+                all(type(token) is str and token for token in tokens) and
+                not any(token.startswith("@") for token in tokens) and
+                tokens.count("-c") == 1 and tokens.count("-o") == 1,
+                "retained compile action tokens are indirect or malformed")
+        source_index = tokens.index("-c")
+        output_index = tokens.index("-o")
+        require(source_index + 1 < len(tokens) and output_index + 1 < len(tokens) and
+                lexical_path(tokens[source_index + 1], build) == source and
+                lexical_path(tokens[output_index + 1], build) == output and
+                system_path(canonical_absolute_path(
+                    tokens[0], "compile compiler invocation")),
+                "retained compile action source/output/compiler changed")
+        SUPPORT.validate_effective_flags(tokens, f"retained compile action {output}")
+        require("-fopenmp" in tokens or "-fopenmp=libomp" in tokens,
+                "retained compile action lost OpenMP")
+        define_tokens = {token[2:] for token in tokens if token.startswith("-D")}
+        require(definitions.issubset(define_tokens),
+                "retained compile action lost a private definition")
+
+        matching = []
+        for entry in entries:
+            directory = entry.get("directory")
+            output_value = entry.get("output")
+            if type(directory) is not str or type(output_value) is not str:
+                continue
+            if lexical_path(output_value, Path(directory)) != output:
+                continue
+            matching.append(entry)
+        require(len(matching) == 1,
+                "retained compile_commands text omits or duplicates an action")
+        entry = matching[0]
+        require(entry.get("directory") == str(build) and
+                type(entry.get("file")) is str and
+                lexical_path(entry["file"], build) == source and
+                SUPPORT.compile_command_tokens(entry) == tokens,
+                "retained compile action differs from compile_commands text")
+    return records, specifications[-1][1]
+
+
+def validate_archive_snapshot(
+    value: object, build: Path, compile_records: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+                "recipe", "recipe_text", "recipe_tokens",
+                "archiver_invocation", "ranlib_invocation", "archive",
+                "members", "archiver", "ranlib"},
+            "retained archive closure shape changed")
+    recipe_path = build / "CMakeFiles/leopard_test_hooks.dir/link.txt"
+    recipe = validate_artifact_record(
+        value.get("recipe"), "archive recipe", expected_path=recipe_path,
+        expected_kind="build_metadata")
+    text = value.get("recipe_text")
+    require(type(text) is str and text and
+            len(text.encode("utf-8")) == recipe["size"] and
+            SUPPORT.sha256_bytes(text.encode("utf-8")) == recipe["sha256"],
+            "retained archive recipe text differs from its artifact")
+    try:
+        parsed = [shlex.split(line) for line in text.splitlines() if line.strip()]
+    except ValueError as error:
+        raise EvidenceError(f"retained archive recipe is malformed: {error}") from error
+    tokens = value.get("recipe_tokens")
+    require(type(tokens) is list and tokens == parsed and len(tokens) == 2 and
+            all(type(command) is list and
+                all(type(token) is str and token for token in command)
+                for command in tokens),
+            "retained archive tokenization differs from its recipe")
+    archive_tokens, ranlib_tokens = tokens
+    require(len(archive_tokens) == 3 + len(compile_records) - 1 and
+            archive_tokens[0] == value.get("archiver_invocation") and
+            archive_tokens[1] in ("qc", "rc", "rcs") and
+            len(ranlib_tokens) == 2 and
+            ranlib_tokens[0] == value.get("ranlib_invocation") and
+            ranlib_tokens[1] == archive_tokens[2] and
+            system_path(canonical_absolute_path(
+                archive_tokens[0], "archiver invocation")) and
+            system_path(canonical_absolute_path(
+                ranlib_tokens[0], "ranlib invocation")),
+            "retained archive/ranlib command shape changed")
+    archive_path = build / "libleopard_test_hooks.a"
+    require(lexical_path(archive_tokens[2], build) == archive_path,
+            "retained archive recipe output changed")
+    expected_objects = [Path(record["object"]["path"])
+                        for record in compile_records[:-1]]
+    require([lexical_path(token, build) for token in archive_tokens[3:]] ==
+                expected_objects and len(set(expected_objects)) == len(expected_objects),
+            "retained archive recipe object closure changed")
+    archive = validate_artifact_record(
+        value.get("archive"), "hooks archive", expected_path=archive_path,
+        expected_kind="archive")
+    archiver = validate_artifact_record(
+        value.get("archiver"), "archiver", expected_kind="archiver")
+    ranlib = validate_artifact_record(
+        value.get("ranlib"), "ranlib", expected_kind="ranlib")
+    require(system_path(Path(archiver["path"])) and
+            system_path(Path(ranlib["path"])),
+            "retained archive tools are outside system roots")
+    members = value.get("members")
+    require(type(members) is list and len(members) == len(expected_objects),
+            "retained archive member count changed")
+    for member, object_record, expected_object in zip(
+            members, compile_records[:-1], expected_objects):
+        require(isinstance(member, dict) and set(member) == {"member", "sha256"} and
+                member.get("member") == expected_object.name and
+                type(member.get("sha256")) is str and
+                HEX64.fullmatch(member["sha256"]) is not None and
+                member["sha256"] == object_record["object"]["sha256"],
+                "retained archive member differs from its compiled object")
+    require(archive["mtime_ns"] >=
+            max(record["object"]["mtime_ns"] for record in compile_records[:-1]),
+            "retained archive predates a compiled member")
+    return value
+
+
+def validate_link_snapshot(
+    build_value: Mapping[str, Any], build: Path,
+    benchmark_object: Path, archive: Mapping[str, Any],
+    compiler: Mapping[str, Any],
+) -> None:
+    binary_path = build / TARGET_NAME
+    link_path = build / "CMakeFiles" / f"{TARGET_NAME}.dir" / "link.txt"
+    link = validate_artifact_record(
+        build_value.get("link_recipe"), "executable link recipe",
+        expected_path=link_path, expected_kind="build_metadata")
+    text = build_value.get("link_recipe_text")
+    require(type(text) is str and text and
+            len(text.encode("utf-8")) == link["size"] and
+            SUPPORT.sha256_bytes(text.encode("utf-8")) == link["sha256"],
+            "retained executable link text differs from its artifact")
+    lines = [line for line in text.splitlines() if line.strip()]
+    require(len(lines) == 1, "retained executable has multiple link commands")
+    try:
+        parsed_tokens = shlex.split(lines[0])
+    except ValueError as error:
+        raise EvidenceError(f"retained executable link is malformed: {error}") from error
+    closure = build_value.get("validated_link_closure")
+    require(isinstance(closure, dict) and set(closure) == {
+                "recipe_tokens", "compiler_invocation", "compiler_resolved_path",
+                "output_token", "output_path", "build_inputs", "system_inputs"},
+            "retained executable link closure shape changed")
+    tokens = closure.get("recipe_tokens")
+    require(type(tokens) is list and tokens == parsed_tokens and tokens and
+            all(type(token) is str and token for token in tokens) and
+            tokens.count("-o") == 1 and not any(token.startswith("@") for token in tokens),
+            "retained executable link tokenization changed")
+    output_index = tokens.index("-o")
+    require(output_index + 1 < len(tokens) and
+            tokens[0] == closure.get("compiler_invocation") and
+            closure.get("compiler_resolved_path") == compiler["path"] and
+            system_path(canonical_absolute_path(
+                tokens[0], "link compiler invocation")) and
+            tokens[output_index + 1] == closure.get("output_token") and
+            lexical_path(tokens[output_index + 1], build) == binary_path and
+            closure.get("output_path") == str(binary_path),
+            "retained executable compiler/output closure changed")
+    SUPPORT.validate_effective_flags(tokens, "retained executable link recipe")
+    explicit_tokens: list[str] = []
+    for index, token in enumerate(tokens[1:], start=1):
+        if index in (output_index, output_index + 1):
+            continue
+        if token.startswith("-"):
+            require(not token.startswith(("-L", "-l", "-Xlinker")) and
+                    (not token.startswith("-Wl,") or
+                     token.startswith("-Wl,-rpath,")),
+                    "retained executable contains an undeclared linker input flag")
+            if token.startswith("-Wl,-rpath,"):
+                require(system_path(canonical_absolute_path(
+                    token.split(",", 2)[2], "link rpath")),
+                    "retained executable rpath is outside system roots")
+            continue
+        explicit_tokens.append(token)
+    build_inputs = closure.get("build_inputs")
+    system_inputs = closure.get("system_inputs")
+    require(type(build_inputs) is list and len(build_inputs) == 2 and
+            type(system_inputs) is list and
+            all(isinstance(item, dict) and
+                set(item) == {"token", "resolved_path"}
+                for item in [*build_inputs, *system_inputs]) and
+            [item["token"] for item in [*build_inputs, *system_inputs]] ==
+                explicit_tokens,
+            "retained executable input token closure changed")
+    expected_build_paths = [benchmark_object, Path(archive["archive"]["path"])]
+    for item, expected in zip(build_inputs, expected_build_paths):
+        require(type(item["token"]) is str and
+                lexical_path(item["token"], build) == expected and
+                item["resolved_path"] == str(expected),
+                "retained executable build input changed")
+    system_artifacts = build_value.get("system_link_inputs")
+    require(type(system_artifacts) is list and
+            len(system_artifacts) == len(system_inputs),
+            "retained executable system input count changed")
+    allowed_system_names = re.compile(r"lib(?:gomp|omp|pthread)\.(?:a|so(?:\..*)?)$")
+    for item, artifact in zip(system_inputs, system_artifacts):
+        resolved = canonical_absolute_path(
+            item.get("resolved_path"), "system link input")
+        token_path = canonical_absolute_path(item.get("token"), "system link token")
+        validate_artifact_record(
+            artifact, "system link input", expected_path=resolved,
+            expected_kind="system_link_dependency")
+        require(system_path(token_path) and system_path(resolved) and
+                allowed_system_names.fullmatch(resolved.name) is not None,
+                "retained executable has an undeclared system link input")
+    binary = validate_artifact_record(
+        build_value.get("binary"), "diagnostic binary", expected_path=binary_path,
+        expected_kind="executable")
+    require(binary["mtime_ns"] >= archive["archive"]["mtime_ns"] and
+            binary["mtime_ns"] >=
+                next(record for record in build_value["validated_compile_closure"]
+                     if record["object"]["path"] == str(benchmark_object))
+                ["object"]["mtime_ns"] and
+            build_value.get("deterministic_relink_sha256") == binary["sha256"],
+            "retained binary is stale or differs from its deterministic relink")
+
+
+def validate_clean_rebuild_snapshot(
+    value: object, build_value: Mapping[str, Any], archive: Mapping[str, Any]
+) -> None:
+    require(isinstance(value, dict) and set(value) == {
+                "cmake", "generator", "retained_options",
+                "archive_sha256", "binary_sha256"},
+            "retained clean-rebuild identity shape changed")
+    cmake = validate_artifact_record(
+        value.get("cmake"), "clean-rebuild CMake", expected_kind="build_tool")
+    require(system_path(Path(cmake["path"])) and
+            type(value.get("generator")) is str and value["generator"],
+            "retained clean-rebuild tool/generator is invalid")
+    options = value.get("retained_options")
+    expected_keys = {
+        "CMAKE_BUILD_TYPE", "CMAKE_AR", "CMAKE_CXX_COMPILER",
+        "CMAKE_CXX_FLAGS", "CMAKE_CXX_FLAGS_RELEASE",
+        "CMAKE_EXPORT_COMPILE_COMMANDS", "CMAKE_RANLIB", "ENABLE_OPENMP",
+        "LEO2_BACKEND_VARIANT", "LEO2_BUILD_BENCHMARKS",
+        "LEO2_BUILD_FUZZERS", "LEO2_BUILD_TESTS", "LEO2_ENABLE_CUDA",
+        "LEOPARD_ENABLE_GF8", "LEOPARD_ENABLE_GF16",
+    }
+    require(isinstance(options, dict) and set(options) == expected_keys and
+            all(type(item) is str for item in options.values()) and
+            options["CMAKE_BUILD_TYPE"] == "Release" and
+            options["CMAKE_CXX_FLAGS_RELEASE"] == "-O3 -DNDEBUG" and
+            options["CMAKE_EXPORT_COMPILE_COMMANDS"] == "ON" and
+            options["ENABLE_OPENMP"] == "ON" and
+            options["LEO2_BACKEND_VARIANT"] == "auto" and
+            options["LEO2_BUILD_BENCHMARKS"] == "ON" and
+            options["LEO2_BUILD_FUZZERS"] == "OFF" and
+            options["LEO2_BUILD_TESTS"] == "ON" and
+            options["LEO2_ENABLE_CUDA"] == "OFF" and
+            options["LEOPARD_ENABLE_GF8"] == "ON" and
+            options["LEOPARD_ENABLE_GF16"] == "ON" and
+            options["CMAKE_AR"] == archive["archiver_invocation"] and
+            options["CMAKE_RANLIB"] == archive["ranlib_invocation"] and
+            options["CMAKE_CXX_COMPILER"] ==
+                build_value["validated_link_closure"]["compiler_invocation"] and
+            value.get("archive_sha256") == archive["archive"]["sha256"] and
+            value.get("binary_sha256") == build_value["binary"]["sha256"],
+            "retained clean-rebuild options or output hashes changed")
+
+
+def validate_runtime_snapshot(value: object, binary: Path) -> None:
+    require(isinstance(value, dict) and set(value) == {
+                "executable", "dependencies"} and
+            value.get("executable") == str(binary),
+            "retained runtime closure shape/executable changed")
+    dependencies = value.get("dependencies")
+    require(type(dependencies) is list and dependencies and
+            all(isinstance(item, dict) for item in dependencies) and
+            dependencies == sorted(dependencies, key=lambda item: item.get("soname", "")) and
+            len({item.get("soname") for item in dependencies}) == len(dependencies),
+            "retained runtime dependency set is empty, duplicate, or unsorted")
+    for item in dependencies:
+        soname = item.get("soname")
+        require(type(soname) is str and soname,
+                "retained runtime dependency has no soname")
+        if item.get("virtual") is True:
+            require(set(item) == {"soname", "virtual"} and
+                    soname == "linux-vdso.so.1",
+                    "retained virtual runtime dependency changed")
+            continue
+        require(set(item) == {"soname", "loader_path", "file"},
+                "retained runtime dependency shape changed")
+        path = canonical_absolute_path(item.get("loader_path"),
+                                       "runtime loader path")
+        kind = "dynamic_loader" if Path(soname).name == path.name and \
+            (soname.startswith("ld-linux") or "ld-" in soname) \
+            else "shared_library"
+        file_artifact = validate_artifact_record(
+            item.get("file"), "runtime dependency", expected_kind=kind)
+        file_path = Path(file_artifact["path"])
+        require(system_path(path) and system_path(file_path) and
+                (file_path.name == soname or file_path.name.startswith(soname + ".")),
+                "retained runtime dependency is outside system roots")
+
+
+def validate_snapshot_identity(value: object) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+                "source", "build", "runner", "contract", "matrix",
+                "support", "runtime"},
+            "retained source/build snapshot shape changed")
+    source = validate_source_identity(value.get("source"))
+    source_root = Path(source["path"])
+    build_value = value.get("build")
+    expected_build_keys = {
+        "build_root", "cache", "compile_commands", "compile_commands_text",
+        "validated_compile_closure", "link_recipe", "link_recipe_text",
+        "validated_link_closure", "validated_archive_closure",
+        "validated_clean_rebuild", "binary", "hook_archive", "compiler",
+        "system_link_inputs", "deterministic_relink_sha256", "nm",
+        "selector_symbols_present_in_hook_archive_and_binary",
+    }
+    require(isinstance(build_value, dict) and set(build_value) == expected_build_keys and
+            build_value.get("selector_symbols_present_in_hook_archive_and_binary") is True,
+            "retained diagnostic build snapshot shape changed")
+    build = canonical_absolute_path(build_value.get("build_root"), "build root")
+    validate_artifact_record(
+        build_value.get("cache"), "CMake cache",
+        expected_path=build / "CMakeCache.txt", expected_kind="build_metadata")
+    compiler = validate_artifact_record(
+        build_value.get("compiler"), "compiler", expected_kind="compiler")
+    nm = validate_artifact_record(
+        build_value.get("nm"), "nm", expected_kind="executable")
+    compiler_name = Path(compiler["path"]).name
+    nm_name = Path(nm["path"]).name
+    require(system_path(Path(compiler["path"])) and system_path(Path(nm["path"])) and
+            re.fullmatch(r"(?:[^/]+-)?(?:g\+\+|c\+\+|clang\+\+)(?:-\d+)?",
+                         compiler_name) is not None and
+            re.fullmatch(r"(?:[^/]+-)?nm(?:-\d+)?", nm_name) is not None,
+            "retained compiler/nm are outside system roots")
+    compile_records, benchmark_object = validate_compile_snapshot(
+        build_value, source_root, build, compiler)
+    archive = validate_archive_snapshot(
+        build_value.get("validated_archive_closure"), build, compile_records)
+    require(build_value.get("hook_archive") == archive["archive"],
+            "top-level hooks archive differs from the validated archive closure")
+    validate_link_snapshot(
+        build_value, build, benchmark_object, archive, compiler)
+    validate_clean_rebuild_snapshot(
+        build_value.get("validated_clean_rebuild"), build_value, archive)
+    binary = Path(build_value["binary"]["path"])
+    for name, relative in (
+        ("runner", RUNNER_RELATIVE), ("contract", CONTRACT_RELATIVE),
+        ("matrix", MATRIX_RELATIVE),
+        ("support", "experiments/leopard2/main_compare/run_abba.py")):
+        validate_artifact_record(
+            value.get(name), name, expected_path=source_root / relative,
+            expected_kind="source_file")
+    validate_runtime_snapshot(value.get("runtime"), binary)
+    return value
 
 
 def benchmark_command(binary: Path, cell: Mapping[str, Any], mode: str,
@@ -988,9 +1513,9 @@ def validate_raw(raw: object, output: Path, *, current: bool) -> dict[str, Any]:
                 "reservation", "pair_lease", "isolation",
                 "identities_initial", "identities_final", "records",
                 "analysis", "digest"} and
-            type(raw.get("created_utc")) is str and raw["created_utc"] and
             raw.get("validity_is_independent_of_speed") is True,
             "raw high-decode copy evidence schema changed")
+    parse_canonical_utc(raw.get("created_utc"), "raw created_utc")
     matrix = raw.get("matrix")
     require(matrix == load_matrix(ROOT / MATRIX_RELATIVE),
             "raw matrix differs from the canonical checked-in matrix")
@@ -1029,6 +1554,7 @@ def validate_raw(raw: object, output: Path, *, current: bool) -> dict[str, Any]:
     initial = raw.get("identities_initial")
     require(isinstance(initial, dict) and initial == raw.get("identities_final"),
             "source/build identity changed during the campaign")
+    validate_snapshot_identity(initial)
     binary_value = initial.get("build", {}).get("binary", {}).get("path")
     require(type(binary_value) is str and binary_value,
             "diagnostic binary identity path is absent")
@@ -1174,6 +1700,8 @@ def run_campaign(options: argparse.Namespace) -> int:
                 "isolation": isolation,
                 "analysis": raw["analysis"],
             })
+            validate_manifest_raw_timestamps(
+                manifest["created_utc"], raw["created_utc"])
             SUPPORT.write_json_exclusive(output / "manifest.json", manifest)
     except Exception as error:
         failure = SUPPORT.signed({
@@ -1201,10 +1729,10 @@ def verify_campaign(options: argparse.Namespace) -> int:
                 "validity_is_independent_of_speed", "raw", "matrix", "campaign",
                 "host_initial", "host_final", "reservation", "pair_lease",
                 "identities", "isolation", "analysis", "digest"} and
-            type(manifest.get("created_utc")) is str and manifest["created_utc"] and
             manifest.get("valid") is True and
             manifest.get("validity_is_independent_of_speed") is True,
             "manifest is not valid high-decode copy evidence")
+    parse_canonical_utc(manifest.get("created_utc"), "manifest created_utc")
     raw_info = manifest.get("raw")
     require(isinstance(raw_info, dict), "manifest has no raw identity")
     raw_path = SUPPORT.safe_evidence_path(path.parent, raw_info.get("path"))
@@ -1213,6 +1741,8 @@ def verify_campaign(options: argparse.Namespace) -> int:
             "raw high-decode copy bundle identity differs")
     raw = json.loads(raw_path.read_text(encoding="utf-8"))
     analysis = validate_raw(raw, path.parent, current=not options.no_current_input_check)
+    validate_manifest_raw_timestamps(
+        manifest.get("created_utc"), raw.get("created_utc"))
     require(raw.get("digest") == raw_info.get("payload_digest") and
             manifest.get("matrix") == raw.get("matrix") and
             manifest.get("campaign") == raw.get("campaign") and
@@ -1311,6 +1841,168 @@ def synthetic_result(
     return document
 
 
+def synthetic_snapshot_identity() -> dict[str, Any]:
+    source_root = Path("/fixture/source")
+    build = Path("/fixture/build")
+    compiler_invocation = "/usr/bin/c++"
+    archiver_invocation = "/usr/bin/ar"
+    ranlib_invocation = "/usr/bin/ranlib"
+
+    def artifact(
+        path: Path, kind: str, *, payload: bytes | None = None,
+        mtime_ns: int = 1, executable: bool = False,
+    ) -> dict[str, Any]:
+        content = payload if payload is not None else \
+            f"{kind}:{path}".encode("utf-8")
+        return {
+            "path": str(path), "kind": kind, "size": len(content),
+            "mode": 0o755 if executable else 0o644,
+            "mtime_ns": mtime_ns, "sha256": SUPPORT.sha256_bytes(content),
+        }
+
+    compiler = artifact(Path(compiler_invocation), "compiler", executable=True)
+    specifications = diagnostic_specifications(source_root, build)
+    compile_records: list[dict[str, Any]] = []
+    compile_entries: list[dict[str, Any]] = []
+    for source, output, definitions in specifications:
+        tokens = [compiler_invocation, "-O3", "-DNDEBUG", "-fopenmp",
+                  *["-D" + item for item in sorted(definitions)],
+                  "-c", str(source), "-o", str(output)]
+        compile_records.append({
+            "source": artifact(source, "source_file", mtime_ns=1),
+            "object": artifact(output, "object_file", mtime_ns=2),
+            "directory": str(build), "command_tokens": tokens,
+            "compiler_path": str(Path(compiler["path"])),
+            "required_definitions": sorted(definitions),
+        })
+        compile_entries.append({
+            "directory": str(build), "file": str(source),
+            "output": str(output), "arguments": tokens,
+        })
+    compile_text = json.dumps(
+        compile_entries, sort_keys=True, separators=(",", ":"))
+    compile_path = build / "compile_commands.json"
+
+    archive_path = build / "libleopard_test_hooks.a"
+    archive_recipe_path = build / "CMakeFiles/leopard_test_hooks.dir/link.txt"
+    archive_tokens = [archiver_invocation, "qc", str(archive_path),
+                      *[record["object"]["path"] for record in compile_records[:-1]]]
+    ranlib_tokens = [ranlib_invocation, str(archive_path)]
+    archive_text = " ".join(archive_tokens) + "\n" + \
+        " ".join(ranlib_tokens) + "\n"
+    archive_artifact = artifact(archive_path, "archive", mtime_ns=3)
+    archive_closure = {
+        "recipe": artifact(
+            archive_recipe_path, "build_metadata",
+            payload=archive_text.encode("utf-8")),
+        "recipe_text": archive_text,
+        "recipe_tokens": [archive_tokens, ranlib_tokens],
+        "archiver_invocation": archiver_invocation,
+        "ranlib_invocation": ranlib_invocation,
+        "archive": archive_artifact,
+        "members": [
+            {"member": Path(record["object"]["path"]).name,
+             "sha256": record["object"]["sha256"]}
+            for record in compile_records[:-1]],
+        "archiver": artifact(
+            Path(archiver_invocation), "archiver", executable=True),
+        "ranlib": artifact(
+            Path(ranlib_invocation), "ranlib", executable=True),
+    }
+
+    binary_path = build / TARGET_NAME
+    benchmark_object = specifications[-1][1]
+    system_token = "/usr/lib/libgomp.so.1"
+    link_tokens = [compiler_invocation, "-O3", str(benchmark_object),
+                   "-o", str(binary_path), str(archive_path), system_token]
+    link_text = " ".join(link_tokens) + "\n"
+    binary = artifact(
+        binary_path, "executable", mtime_ns=4, executable=True)
+    system_link = artifact(
+        Path(system_token), "system_link_dependency", mtime_ns=1)
+    link_closure = {
+        "recipe_tokens": link_tokens,
+        "compiler_invocation": compiler_invocation,
+        "compiler_resolved_path": compiler["path"],
+        "output_token": str(binary_path), "output_path": str(binary_path),
+        "build_inputs": [
+            {"token": str(benchmark_object),
+             "resolved_path": str(benchmark_object)},
+            {"token": str(archive_path), "resolved_path": str(archive_path)},
+        ],
+        "system_inputs": [
+            {"token": system_token, "resolved_path": system_token}],
+    }
+    retained_options = {
+        "CMAKE_BUILD_TYPE": "Release", "CMAKE_AR": archiver_invocation,
+        "CMAKE_CXX_COMPILER": compiler_invocation, "CMAKE_CXX_FLAGS": "",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_RANLIB": ranlib_invocation, "ENABLE_OPENMP": "ON",
+        "LEO2_BACKEND_VARIANT": "auto", "LEO2_BUILD_BENCHMARKS": "ON",
+        "LEO2_BUILD_FUZZERS": "OFF", "LEO2_BUILD_TESTS": "ON",
+        "LEO2_ENABLE_CUDA": "OFF", "LEOPARD_ENABLE_GF8": "ON",
+        "LEOPARD_ENABLE_GF16": "ON",
+    }
+    build_identity = {
+        "build_root": str(build),
+        "cache": artifact(build / "CMakeCache.txt", "build_metadata"),
+        "compile_commands": artifact(
+            compile_path, "build_metadata", payload=compile_text.encode("utf-8")),
+        "compile_commands_text": compile_text,
+        "validated_compile_closure": compile_records,
+        "link_recipe": artifact(
+            build / "CMakeFiles" / f"{TARGET_NAME}.dir" / "link.txt",
+            "build_metadata", payload=link_text.encode("utf-8")),
+        "link_recipe_text": link_text,
+        "validated_link_closure": link_closure,
+        "validated_archive_closure": archive_closure,
+        "validated_clean_rebuild": {
+            "cmake": artifact(
+                Path("/usr/bin/cmake"), "build_tool", executable=True),
+            "generator": "Unix Makefiles", "retained_options": retained_options,
+            "archive_sha256": archive_artifact["sha256"],
+            "binary_sha256": binary["sha256"],
+        },
+        "binary": binary, "hook_archive": copy.deepcopy(archive_artifact),
+        "compiler": compiler, "system_link_inputs": [system_link],
+        "deterministic_relink_sha256": binary["sha256"],
+        "nm": artifact(Path("/usr/bin/nm"), "executable", executable=True),
+        "selector_symbols_present_in_hook_archive_and_binary": True,
+    }
+    runtime_dependencies = [
+        {
+            "soname": "ld-linux-x86-64.so.2",
+            "loader_path": "/lib/ld-linux-x86-64.so.2",
+            "file": artifact(
+                Path("/lib/ld-linux-x86-64.so.2"), "dynamic_loader"),
+        },
+        {
+            "soname": "libc.so.6", "loader_path": "/usr/lib/libc.so.6",
+            "file": artifact(Path("/usr/lib/libc.so.6"), "shared_library"),
+        },
+        {"soname": "linux-vdso.so.1", "virtual": True},
+    ]
+    return {
+        "source": {
+            "path": str(source_root), "head": "a" * 40, "tree": "b" * 40,
+            "detached": False, "tracked_tree_listing_sha256": "c" * 64,
+            "tracked_status": "clean",
+        },
+        "build": build_identity,
+        "runner": artifact(source_root / RUNNER_RELATIVE, "source_file"),
+        "contract": artifact(source_root / CONTRACT_RELATIVE, "source_file"),
+        "matrix": artifact(source_root / MATRIX_RELATIVE, "source_file"),
+        "support": artifact(
+            source_root / "experiments/leopard2/main_compare/run_abba.py",
+            "source_file"),
+        "runtime": {
+            "executable": str(binary_path),
+            "dependencies": runtime_dependencies,
+        },
+    }
+
+
 def self_test() -> None:
     matrix = load_matrix(ROOT / MATRIX_RELATIVE)
     wrong_field = json.loads(json.dumps(matrix))
@@ -1372,6 +2064,25 @@ def self_test() -> None:
         except (EvidenceError, CONTRACT.ContractError):
             continue
         raise AssertionError("adversarial loss/timing/control mutation was accepted")
+
+    canonical_time = "2026-07-18T00:00:00Z"
+    parse_canonical_utc(canonical_time, "fixture created_utc")
+    validate_manifest_raw_timestamps(canonical_time, canonical_time)
+    for invalid_time in (
+            "fixture", "2026-07-18T00:00:00+00:00",
+            "2026-07-18T00:00:00", "2026-07-18T00:00:00.000000Z"):
+        try:
+            parse_canonical_utc(invalid_time, "fixture created_utc")
+        except EvidenceError:
+            continue
+        raise AssertionError("noncanonical raw/manifest timestamp was accepted")
+    try:
+        validate_manifest_raw_timestamps(
+            "2026-07-18T00:00:00Z", "2026-07-18T00:00:01Z")
+    except EvidenceError:
+        pass
+    else:
+        raise AssertionError("manifest timestamp before raw evidence was accepted")
 
     sequence = [
         {"cell": cell, "round": round_index, "slot": slot, "mode": mode}
@@ -1554,7 +2265,9 @@ def self_test() -> None:
         "child_environment": dict(SUPPORT.CHILD_ENVIRONMENT),
         "invocation_count": len(expected_record_sequence(matrix)),
     }
-    fixture_binary = Path("/tmp/leo2-high-copy-fixture-bench")
+    fixture_identity = synthetic_snapshot_identity()
+    validate_snapshot_identity(fixture_identity)
+    fixture_binary = Path(fixture_identity["build"]["binary"]["path"])
     raw_records = []
     for index, (identifier, round_index, slot, mode) in enumerate(
             expected_record_sequence(matrix)):
@@ -1580,13 +2293,8 @@ def self_test() -> None:
         record["sibling_delta"] = SUPPORT.cpu_stat_delta(
             record["sibling_before"], record["sibling_after"])
         raw_records.append(record)
-    fixture_identity = {
-        "source": {"path": str(ROOT), "head": "a" * 40},
-        "build": {"binary": {"path": str(fixture_binary)},
-                  "hook_archive": {"path": "/tmp/fixture-hooks.a"}},
-    }
     raw_fixture_payload = {
-        "schema": RAW_SCHEMA, "created_utc": "fixture",
+        "schema": RAW_SCHEMA, "created_utc": canonical_time,
         "validity_is_independent_of_speed": True, "matrix": matrix,
         "campaign": raw_campaign, "host_initial": host,
         "host_final": copy.deepcopy(host), "reservation": reservation,
@@ -1612,6 +2320,66 @@ def self_test() -> None:
     bool_control = copy.deepcopy(raw_fixture_payload)
     bool_control["campaign"]["reuse"] = True
     raw_mutations.append(bool_control)
+    bad_timestamp = copy.deepcopy(raw_fixture_payload)
+    bad_timestamp["created_utc"] = "fixture"
+    raw_mutations.append(bad_timestamp)
+
+    def add_identity_mutation(editor: Any) -> None:
+        mutation = copy.deepcopy(raw_fixture_payload)
+        editor(mutation["identities_initial"])
+        mutation["identities_final"] = copy.deepcopy(
+            mutation["identities_initial"])
+        raw_mutations.append(mutation)
+
+    add_identity_mutation(lambda identity: identity["source"].pop("tree"))
+    add_identity_mutation(lambda identity: identity["build"].pop("cache"))
+    add_identity_mutation(lambda identity: identity["build"]
+                          ["validated_compile_closure"][0]["source"]
+                          .__setitem__("path", "/fixture/source/impostor.cpp"))
+    add_identity_mutation(lambda identity: identity["build"]
+                          ["validated_compile_closure"][0]["object"]
+                          .__setitem__("path", "/fixture/build/impostor.o"))
+    add_identity_mutation(lambda identity: identity["build"]
+                          ["validated_compile_closure"][0]["command_tokens"]
+                          .append("-DUNRETAINED=1"))
+    add_identity_mutation(lambda identity: identity["build"]
+                          ["validated_archive_closure"]
+                          .__setitem__("recipe_text", "substituted\n"))
+    add_identity_mutation(lambda identity: identity["build"]
+                          ["validated_archive_closure"]["members"][0]
+                          .__setitem__("sha256", "e" * 64))
+    add_identity_mutation(lambda identity: identity["build"]
+                          ["validated_archive_closure"]["archive"]
+                          .__setitem__("sha256", "f" * 64))
+    add_identity_mutation(lambda identity: identity["build"]
+                          ["validated_archive_closure"]
+                          .__setitem__("archiver_invocation", "/usr/bin/true"))
+    add_identity_mutation(lambda identity: identity["build"]
+                          .__setitem__("link_recipe_text", "substituted\n"))
+    add_identity_mutation(lambda identity: identity["build"]
+                          ["validated_link_closure"]["build_inputs"][0]
+                          .__setitem__("resolved_path", "/fixture/build/impostor.o"))
+    add_identity_mutation(lambda identity: identity["build"]
+                          ["system_link_inputs"][0]
+                          .__setitem__("path", "/usr/lib/libomp.so.1"))
+    add_identity_mutation(lambda identity: identity["build"]["binary"]
+                          .__setitem__("sha256", "2" * 64))
+    add_identity_mutation(lambda identity: identity["build"]
+                          .__setitem__("deterministic_relink_sha256", "3" * 64))
+    add_identity_mutation(lambda identity: identity["build"]
+                          ["validated_clean_rebuild"]["retained_options"]
+                          .__setitem__("CMAKE_BUILD_TYPE", "Debug"))
+    add_identity_mutation(lambda identity: identity["build"]["compiler"]
+                          .__setitem__("path", "/usr/bin/false"))
+    add_identity_mutation(lambda identity: identity["build"]["nm"]
+                          .__setitem__("path", "/usr/bin/false"))
+    for component in ("runner", "contract", "matrix", "support"):
+        add_identity_mutation(
+            lambda identity, name=component: identity[name].__setitem__(
+                "path", f"/fixture/source/substituted-{name}"))
+    add_identity_mutation(lambda identity: identity["runtime"]
+                          ["dependencies"][1]["file"]
+                          .__setitem__("path", "/usr/lib/libm.so.6"))
     for mutation in raw_mutations:
         try:
             validate_raw(SUPPORT.signed(mutation), Path("."), current=False)

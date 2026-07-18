@@ -159,6 +159,8 @@ def validate_document(
     tail_bytes: int,
     evaluator: str | None = None,
 ) -> dict[str, Any]:
+    require(type(tail_bytes) is int and 0 <= tail_bytes < 64,
+            "expected decode tail is not an exact bounded integer")
     require(isinstance(document, dict), "benchmark result is not an object")
     result = document
     require(result.get("schema") == "leopard2-benchmark-v4",
@@ -183,12 +185,15 @@ def validate_document(
             parameters.get("retain_samples") is True and
             parameters.get("report_decode_path") is True,
             "benchmark request attestation differs from the signed role")
+    resolved_tail = resolved.get("decode_tail_bytes")
+    require(type(resolved_tail) is int and 0 <= resolved_tail < 64,
+            "resolved decode tail is not an exact bounded integer")
     require(resolved.get("profile") == "legacy_high_v1" and
             resolved.get("field") == field and
             resolved.get("selected_decode_path") == workspace and
             resolved.get("selected_decode_rule") == "forced_" + workspace and
             resolved.get("high_evaluator_mode") == mode and
-            resolved.get("decode_tail_bytes") == tail_bytes,
+            resolved_tail == tail_bytes,
             "resolved field/path/tail/mode attestation differs")
     require(correctness.get("leopard2_round_trip") is True and
             correctness.get("legacy_comparison") is None,
@@ -454,6 +459,9 @@ def self_test() -> None:
     bool_loss = copy.deepcopy(no_copy)
     bool_loss["parameters"]["missing_original_indices"] = [True]
     mutations.append(bool_loss)
+    bool_tail = copy.deepcopy(no_copy)
+    bool_tail["resolved"]["decode_tail_bytes"] = True
+    mutations.append(bool_tail)
     for mutation in mutations:
         try:
             validate_pair(mutation, fallback, workspace="materialized", field="gf8",
@@ -462,7 +470,7 @@ def self_test() -> None:
             continue
         raise ContractError(
             "adversarial mode/counter/path/digest/evaluator mutation passed")
-    print("high-decode copy attribution contract self-test passed: 8 mutations rejected")
+    print("high-decode copy attribution contract self-test passed: 9 mutations rejected")
 
 
 def main() -> int:

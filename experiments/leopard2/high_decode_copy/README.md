@@ -58,6 +58,16 @@ inputs, byte-compares the retained executable with a deterministic relink, and
 requires both the archive and executable to match a clean temporary rebuild
 from the committed source and retained compiler/options.
 
+Portable verification with `--no-current-input-check` still validates the
+exact signed source/build snapshot schemas and every retained relationship from
+source and compile command through object, archive member/recipe, executable
+link input/recipe, deterministic relink, clean-rebuild hashes, and runtime
+closure.  It does not claim that those files still exist on the audit machine.
+Verification without that option additionally reconstructs the same closure
+from the current filesystem and requires exact equality.  Raw and manifest
+creation times are canonical timezone-aware UTC (`...Z`), and the manifest may
+not predate its raw bundle.
+
 Build an independent production candidate from the identical commit with test
 hooks disabled, following `experiments/leopard2/main_compare/README.md`.  Build
 the detached exact Leopard main adapter at commit
