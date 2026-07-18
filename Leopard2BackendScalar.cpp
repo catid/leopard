@@ -737,24 +737,111 @@ static void ScalarFF8FFTButterfly4Range(
         log01, log23, log02, byte_count, prefer_fused);
 }
 
+static void ScalarFF8IFFTButterfly4Xor(
+    const void* input0_pointer, const void* input1_pointer,
+    const void* input2_pointer, const void* input3_pointer,
+    void* output0_pointer, void* output1_pointer,
+    void* output2_pointer, void* output3_pointer,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 255;
+    const uint8_t* input0 = static_cast<const uint8_t*>(input0_pointer);
+    const uint8_t* input1 = static_cast<const uint8_t*>(input1_pointer);
+    const uint8_t* input2 = static_cast<const uint8_t*>(input2_pointer);
+    const uint8_t* input3 = static_cast<const uint8_t*>(input3_pointer);
+    uint8_t* output0 = static_cast<uint8_t*>(output0_pointer);
+    uint8_t* output1 = static_cast<uint8_t*>(output1_pointer);
+    uint8_t* output2 = static_cast<uint8_t*>(output2_pointer);
+    uint8_t* output3 = static_cast<uint8_t*>(output3_pointer);
+    const uint8_t* table01 = log01 == kZeroSkew ? NULL :
+        FF8Table + static_cast<size_t>(log01) * 256U;
+    const uint8_t* table23 = log23 == kZeroSkew ? NULL :
+        FF8Table + static_cast<size_t>(log23) * 256U;
+    const uint8_t* table02 = log02 == kZeroSkew ? NULL :
+        FF8Table + static_cast<size_t>(log02) * 256U;
+    while (byte_count >= 8)
+    {
+        uint64_t x0, x1, x2, x3;
+        uint64_t accumulator0, accumulator1, accumulator2, accumulator3;
+        std::memcpy(&x0, input0, sizeof(x0));
+        std::memcpy(&x1, input1, sizeof(x1));
+        std::memcpy(&x2, input2, sizeof(x2));
+        std::memcpy(&x3, input3, sizeof(x3));
+        std::memcpy(&accumulator0, output0, sizeof(accumulator0));
+        std::memcpy(&accumulator1, output1, sizeof(accumulator1));
+        std::memcpy(&accumulator2, output2, sizeof(accumulator2));
+        std::memcpy(&accumulator3, output3, sizeof(accumulator3));
+        x1 ^= x0;
+        if (table01)
+            x0 ^= ScalarFF8PackedProduct(x1, table01);
+        x3 ^= x2;
+        if (table23)
+            x2 ^= ScalarFF8PackedProduct(x3, table23);
+        x2 ^= x0;
+        x3 ^= x1;
+        if (table02)
+        {
+            x0 ^= ScalarFF8PackedProduct(x2, table02);
+            x1 ^= ScalarFF8PackedProduct(x3, table02);
+        }
+        accumulator0 ^= x0;
+        accumulator1 ^= x1;
+        accumulator2 ^= x2;
+        accumulator3 ^= x3;
+        std::memcpy(output0, &accumulator0, sizeof(accumulator0));
+        std::memcpy(output1, &accumulator1, sizeof(accumulator1));
+        std::memcpy(output2, &accumulator2, sizeof(accumulator2));
+        std::memcpy(output3, &accumulator3, sizeof(accumulator3));
+        input0 += 8;
+        input1 += 8;
+        input2 += 8;
+        input3 += 8;
+        output0 += 8;
+        output1 += 8;
+        output2 += 8;
+        output3 += 8;
+        byte_count -= 8;
+    }
+    while (byte_count-- != 0)
+    {
+        uint8_t x0 = *input0++;
+        uint8_t x1 = *input1++;
+        uint8_t x2 = *input2++;
+        uint8_t x3 = *input3++;
+        x1 ^= x0;
+        if (table01)
+            x0 ^= table01[x1];
+        x3 ^= x2;
+        if (table23)
+            x2 ^= table23[x3];
+        x2 ^= x0;
+        x3 ^= x1;
+        if (table02)
+        {
+            x0 ^= table02[x2];
+            x1 ^= table02[x3];
+        }
+        *output0++ ^= x0;
+        *output1++ ^= x1;
+        *output2++ ^= x2;
+        *output3++ ^= x3;
+    }
+}
+
 static void ScalarFF8IFFTButterfly4XorRange(
     void* const* work, void* const* xor_output, unsigned distance,
     uint16_t log01, uint16_t log23, uint16_t log02,
     uint64_t byte_count)
 {
     for (unsigned i = 0; i < distance; ++i)
-    {
-        ScalarFF8Butterfly4<true>(
+        ScalarFF8IFFTButterfly4Xor(
             work[i], work[i + distance],
             work[i + distance * 2U], work[i + distance * 3U],
+            xor_output[i], xor_output[i + distance],
+            xor_output[i + distance * 2U],
+            xor_output[i + distance * 3U],
             log01, log23, log02, byte_count);
-        ScalarXorMemory4(
-            xor_output[i], work[i],
-            xor_output[i + distance], work[i + distance],
-            xor_output[i + distance * 2U], work[i + distance * 2U],
-            xor_output[i + distance * 3U], work[i + distance * 3U],
-            byte_count);
-    }
 }
 
 #endif // LEO_HAS_FF8

@@ -876,6 +876,127 @@ static void AVX2FF8IFFTButterfly4Kernel(
     }
 }
 
+// The final radix-four layer for every message block after the first feeds an
+// XOR accumulator and never observes the temporary work again.  Keep the
+// transformed values in registers and accumulate them directly, matching the
+// legacy encoder's single memory pass instead of storing work and rereading it
+// through AVX2XorMemory4.
+template<bool AllNonzero>
+static void AVX2FF8IFFTButterfly4XorKernel(
+    const void* value0_pointer, const void* value1_pointer,
+    const void* value2_pointer, const void* value3_pointer,
+    void* output0_pointer, void* output1_pointer,
+    void* output2_pointer, void* output3_pointer,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 255;
+    const uint8_t* value0 = static_cast<const uint8_t*>(value0_pointer);
+    const uint8_t* value1 = static_cast<const uint8_t*>(value1_pointer);
+    const uint8_t* value2 = static_cast<const uint8_t*>(value2_pointer);
+    const uint8_t* value3 = static_cast<const uint8_t*>(value3_pointer);
+    uint8_t* output0 = static_cast<uint8_t*>(output0_pointer);
+    uint8_t* output1 = static_cast<uint8_t*>(output1_pointer);
+    uint8_t* output2 = static_cast<uint8_t*>(output2_pointer);
+    uint8_t* output3 = static_cast<uint8_t*>(output3_pointer);
+
+    __m256i low01 = _mm256_setzero_si256();
+    __m256i high01 = _mm256_setzero_si256();
+    __m256i low23 = _mm256_setzero_si256();
+    __m256i high23 = _mm256_setzero_si256();
+    __m256i low02 = _mm256_setzero_si256();
+    __m256i high02 = _mm256_setzero_si256();
+    if (AllNonzero || log01 != kZeroSkew)
+    {
+        low01 = BroadcastTable(FF8Tables[log01].low);
+        high01 = BroadcastTable(FF8Tables[log01].high);
+    }
+    if (AllNonzero || log23 != kZeroSkew)
+    {
+        low23 = BroadcastTable(FF8Tables[log23].low);
+        high23 = BroadcastTable(FF8Tables[log23].high);
+    }
+    if (AllNonzero || log02 != kZeroSkew)
+    {
+        low02 = BroadcastTable(FF8Tables[log02].low);
+        high02 = BroadcastTable(FF8Tables[log02].high);
+    }
+
+    while (byte_count >= 32)
+    {
+        __m256i x0 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(value0));
+        __m256i x1 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(value1));
+        __m256i x2 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(value2));
+        __m256i x3 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(value3));
+        x1 = _mm256_xor_si256(x1, x0);
+        if (AllNonzero || log01 != kZeroSkew)
+            x0 = _mm256_xor_si256(x0,
+                AVX2FF8ProductVector(x1, low01, high01));
+        x3 = _mm256_xor_si256(x3, x2);
+        if (AllNonzero || log23 != kZeroSkew)
+            x2 = _mm256_xor_si256(x2,
+                AVX2FF8ProductVector(x3, low23, high23));
+        x2 = _mm256_xor_si256(x2, x0);
+        x3 = _mm256_xor_si256(x3, x1);
+        if (AllNonzero || log02 != kZeroSkew)
+        {
+            x0 = _mm256_xor_si256(x0,
+                AVX2FF8ProductVector(x2, low02, high02));
+            x1 = _mm256_xor_si256(x1,
+                AVX2FF8ProductVector(x3, low02, high02));
+        }
+        x0 = _mm256_xor_si256(x0, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(output0)));
+        x1 = _mm256_xor_si256(x1, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(output1)));
+        x2 = _mm256_xor_si256(x2, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(output2)));
+        x3 = _mm256_xor_si256(x3, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(output3)));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(output0), x0);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(output1), x1);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(output2), x2);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(output3), x3);
+        value0 += 32;
+        value1 += 32;
+        value2 += 32;
+        value3 += 32;
+        output0 += 32;
+        output1 += 32;
+        output2 += 32;
+        output3 += 32;
+        byte_count -= 32;
+    }
+    while (byte_count-- != 0)
+    {
+        uint8_t x0 = *value0++;
+        uint8_t x1 = *value1++;
+        uint8_t x2 = *value2++;
+        uint8_t x3 = *value3++;
+        x1 ^= x0;
+        if (AllNonzero || log01 != kZeroSkew)
+            x0 ^= FF8Product(log01, x1);
+        x3 ^= x2;
+        if (AllNonzero || log23 != kZeroSkew)
+            x2 ^= FF8Product(log23, x3);
+        x2 ^= x0;
+        x3 ^= x1;
+        if (AllNonzero || log02 != kZeroSkew)
+        {
+            x0 ^= FF8Product(log02, x2);
+            x1 ^= FF8Product(log02, x3);
+        }
+        *output0++ ^= x0;
+        *output1++ ^= x1;
+        *output2++ ^= x2;
+        *output3++ ^= x3;
+    }
+}
+
 static void AVX2FF8IFFTButterfly4(
     void* value0, void* value1, void* value2, void* value3,
     uint16_t log01, uint16_t log23, uint16_t log02,
@@ -1155,19 +1276,29 @@ static void AVX2FF8IFFTButterfly4XorRange(
     uint16_t log01, uint16_t log23, uint16_t log02,
     uint64_t byte_count)
 {
-    for (unsigned i = 0; i < distance; ++i)
+    static const uint16_t kZeroSkew = 255;
+    const bool all_nonzero =
+        log01 != kZeroSkew && log23 != kZeroSkew && log02 != kZeroSkew;
+    if (all_nonzero)
     {
-        AVX2FF8IFFTButterfly4Kernel(
+        for (unsigned i = 0; i < distance; ++i)
+            AVX2FF8IFFTButterfly4XorKernel<true>(
+                work[i], work[i + distance],
+                work[i + distance * 2U], work[i + distance * 3U],
+                xor_output[i], xor_output[i + distance],
+                xor_output[i + distance * 2U],
+                xor_output[i + distance * 3U],
+                log01, log23, log02, byte_count);
+        return;
+    }
+    for (unsigned i = 0; i < distance; ++i)
+        AVX2FF8IFFTButterfly4XorKernel<false>(
             work[i], work[i + distance],
             work[i + distance * 2U], work[i + distance * 3U],
+            xor_output[i], xor_output[i + distance],
+            xor_output[i + distance * 2U],
+            xor_output[i + distance * 3U],
             log01, log23, log02, byte_count);
-        AVX2XorMemory4(
-            xor_output[i], work[i],
-            xor_output[i + distance], work[i + distance],
-            xor_output[i + distance * 2U], work[i + distance * 2U],
-            xor_output[i + distance * 3U], work[i + distance * 3U],
-            byte_count);
-    }
 }
 
 #endif // LEO_HAS_FF8

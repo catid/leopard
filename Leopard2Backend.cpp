@@ -521,9 +521,19 @@ static bool TestFF8ButterflyRanges(const Ops& ops)
                 actual_pointers, xor_actual_pointers, kDistance,
                 log_sets[set_i][0], log_sets[set_i][1],
                 log_sets[set_i][2], bytes);
-            if (std::memcmp(actual, expected, sizeof(actual)) != 0 ||
-                std::memcmp(xor_actual, xor_expected,
-                    sizeof(xor_actual)) != 0)
+            bool work_guards_ok = true;
+            for (unsigned lane = 0; lane < kLaneCount; ++lane)
+            {
+                work_guards_ok = work_guards_ok &&
+                    actual[lane][0] == expected[lane][0] &&
+                    std::memcmp(
+                        actual[lane] + bytes + 1,
+                        expected[lane] + bytes + 1,
+                        sizeof(actual[lane]) -
+                            static_cast<size_t>(bytes) - 1) == 0;
+            }
+            if (!work_guards_ok || std::memcmp(
+                    xor_actual, xor_expected, sizeof(xor_actual)) != 0)
                 return false;
         }
     return true;
