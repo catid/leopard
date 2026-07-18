@@ -27,8 +27,14 @@ The specialized decoders take the codec's active parent `N`, not the field
 order. Codec setup precomputes permanent puncture/shortening erasure vectors
 and caches their locator contribution in the sparse-direct region. Dense
 locator setup calls the active-N Walsh construction, so the former unconditional
-256/65,536-entry behavior is gone, but it still rebuilds the permanent component
-with each dense pattern; `leopard-79h.11.1` owns that remaining separation.
+256/65,536-entry behavior is gone.  The `leopard-79h.11.1` checkpoint proves
+that current plan selection always contributes exactly `R` non-permanent real
+plus virtual erasures, so the codec's sparse-cache decision is exact.  Both
+coordinate- and transform-domain dense cache prototypes retain both Walsh
+transforms, add an `N`-entry modular pass, and consume `N` persistent field
+symbols.  `docs/leopard2_permanent_locator_cache.md` records the exhaustive
+decomposition tests and negative dense promotion result; rebuilding the explicit
+union is the non-dominated dense production path.
 
 The default-off locator experiment under `leopard-79h.29` reached a negative
 algebraic result for its dense product-tree form and a promising epsilon
@@ -147,7 +153,7 @@ remain in `leopard-79h.16`, `.23`, and `.24`.
 
 | Requirement family | Durable Beads coverage |
 |---|---|
-| Dense active-locator permanent-contribution reuse | `leopard-79h.11.1` |
+| Dense active-locator permanent-contribution checkpoint | `leopard-79h.11.1`; sparse reuse is complete and dense caching has a tested negative disposition |
 | Sparse high/low encoder output pruning | `leopard-79h.26.4` |
 | Algorithm 5 current-source isolated crossover and retained gather disposition | `leopard-79h.26.5` |
 | Algorithm 4 C1 isolated crossover and promotion evidence | `leopard-79h.18.1.12`, `.18.1.12.1` |

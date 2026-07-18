@@ -269,6 +269,19 @@ permanent base; its dense path forms the explicit union before the active Walsh
 transform.  Thus the setup result does not depend on which calling convention
 crosses the measured direct/Walsh threshold.
 
+Linearity gives `lambda_(P union D) = lambda_P + lambda_D (mod q)` for
+disjoint permanent and dynamic sets.  This does not make a dense cache useful:
+both a cached coordinate-domain output and a cached post-kernel transform-domain
+vector retain the two dynamic Walsh transforms and require one additional
+`N`-entry modular-add pass.  The explicit union path needs neither that pass nor
+an `N`-symbol persistent cache.  Current deterministic survivor selection keeps
+exactly `K` of the `K+R` transmitted coordinates, so the real-plus-virtual set
+outside the permanent mask has exactly `R` members.  The codec's sparse-cache
+decision from `recovery_count` therefore exactly matches the later dynamic
+direct/Walsh decision.  The derivation, candidate operation counts, exhaustive
+decomposition tests, and negative dense promotion result are recorded in
+`docs/leopard2_permanent_locator_cache.md`.
+
 When a specialized decoder requires exactly `N-D` erasures but more than `D`
 coordinates are available, the plan marks deterministic surplus received
 coordinates as virtual erasures.  The baseline rule prefers surviving systematic

@@ -25,6 +25,15 @@ temporary.  The old production path used a 256-entry or 65,536-entry automatic
 array regardless of active `N`.  The full-field array now exists only in the
 retained reference oracle.
 
+Permanent locator contributions are cached only for the sparse direct region.
+This is complete for current plan construction: deterministic selection retains
+exactly `K` of `K+R` transmitted coordinates, so the dynamic real-plus-virtual
+erasure count is always exactly `R`, the value used by codec setup's crossover
+decision.  Coordinate- and transform-domain dense cache prototypes both retain
+both Walsh transforms, add an `N`-entry modular pass, and require `N` persistent
+field symbols.  The derivation, operation model, and negative promotion result
+are in `docs/leopard2_permanent_locator_cache.md`.
+
 GNU `size` on otherwise equivalent Release `bench_leopard2` executables reports
 131,328 additional BSS bytes (the packed tables plus alignment), 7,480 additional
 text bytes, and no data-segment change.  This is a process-wide fixed footprint;
@@ -69,10 +78,15 @@ decision.  A parser-backed CTest validates this JSON contract.
   coordinate would dominate the suite, including modulo-65,535 wrap;
 - permanent-mask reuse with permanent coordinates both included in and excluded
   from the dynamic erasure bitmap;
+- exhaustive disjoint permanent/dynamic GF(2^4) decompositions through `N=8`,
+  deterministic `N=16` decompositions, and GF8/GF16 add/remove/swap/dense
+  coordinate- versus transform-cache prototypes;
+- the exact-`R` dynamic/virtual selection invariant across 9,647 valid small
+  public presence patterns;
 - the measured dispatcher boundary for every parent size; and
 - 256 concurrent preparations of the same immutable pattern.
 
-The focused test compares 7,251,816 locator entries.  The complete release test
+The focused test compares 9,894,532 locator entries.  The complete release test
 configuration passed all 45 tests.  At `ctest -j30`, the tests shared the 30
 allowed logical CPUs and the suite completed in 5.69 seconds; that saturated run
 is correctness evidence, not a latency measurement.
