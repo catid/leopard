@@ -1117,6 +1117,39 @@ void test_tiled_materialized_execution(leo2_context* context)
     else
         require(scratch_bytes[0] == scratch_bytes[1],
             "uncalibrated backend did not retain the tiled workspace");
+    leopard2_internal::DecodePathInfo path_info[3];
+    for (unsigned i = 0; i < 3; ++i)
+        require_result(leopard2_internal::GetDecodePlanPathInfo(
+            plans[i], bytes, false, &path_info[i]),
+            "workspace path introspection");
+    const leopard2_internal::DecodePath expected_auto =
+        backend == LEO2_BACKEND_AVX2 || backend == LEO2_BACKEND_SSSE3
+            ? leopard2_internal::kDecodePathMaterialized
+            : leopard2_internal::kDecodePathTiled;
+    require(path_info[0].path == expected_auto &&
+            path_info[1].path == leopard2_internal::kDecodePathTiled &&
+            path_info[2].path == leopard2_internal::kDecodePathMaterialized,
+        "workspace introspection differs from selected single-item paths");
+    require(path_info[0].required_work_slots ==
+                (expected_auto == leopard2_internal::kDecodePathMaterialized
+                    ? 256u : 72u) &&
+            path_info[1].required_work_slots == 72 &&
+            path_info[2].required_work_slots == 256,
+        "workspace introspection slot accounting differs");
+
+    leopard2_internal::DecodePathInfo batch_path;
+    require_result(leopard2_internal::GetDecodePlanPathInfo(
+        plans[0], bytes, true, &batch_path),
+        "AUTO batch path introspection");
+    const leopard2_internal::DecodePath expected_batch =
+        backend == LEO2_BACKEND_SSSE3
+            ? leopard2_internal::kDecodePathMaterialized
+            : leopard2_internal::kDecodePathTiled;
+    require(batch_path.path == expected_batch &&
+            batch_path.required_work_slots ==
+                (expected_batch == leopard2_internal::kDecodePathMaterialized
+                    ? 256u : 72u),
+        "AUTO batch introspection differs from execution workspace");
 
     std::vector<const void*> original_inputs = const_pointers(source);
     std::vector<const void*> recovery_inputs = const_pointers(parity);
@@ -1318,6 +1351,268 @@ void test_balanced_dispatch_policy()
         "balanced dispatch accepted an unmeasured backend");
 }
 
+uint32_t test_ceil_pow2(uint32_t value)
+{
+    uint32_t result = 1;
+    while (result < value)
+        result <<= 1;
+    return result;
+}
+
+leopard2_internal::DecodePathInput make_decode_path_input(
+    leo2_profile profile,
+    leo2_field field,
+    leo2_backend backend,
+    uint32_t k,
+    uint32_t r,
+    uint32_t padded,
+    uint32_t parent,
+    uint32_t missing,
+    uint64_t bytes,
+    uint32_t flags = 0,
+    bool multi_item_batch = false,
+    bool plan_known = true)
+{
+    leopard2_internal::DecodePathInput input;
+    input.profile = profile;
+    input.field = field;
+    input.backend = backend;
+    input.original_count = k;
+    input.recovery_count = r;
+    input.padded_side = padded;
+    input.parent_count = parent;
+    input.missing_original_count = plan_known ? missing : 0;
+    input.requested_output_count = profile == LEO2_PROFILE_LEGACY_HIGH_V1
+        ? (plan_known ? missing : r) : 0;
+    input.codec_flags = flags;
+    input.actual_shard_bytes = bytes;
+    input.tail_bytes = static_cast<size_t>(bytes) & 63u;
+    input.aligned_prefix_bytes =
+        static_cast<size_t>(bytes) - input.tail_bytes;
+    input.rounded_shard_bytes = input.aligned_prefix_bytes +
+        (input.tail_bytes == 0 ? 0 : 64);
+    input.plan_known = plan_known;
+    input.multi_item_batch = multi_item_batch;
+    return input;
+}
+
+leopard2_internal::DecodePathInfo require_decode_path(
+    const leopard2_internal::DecodePathInput& input,
+    leopard2_internal::DecodePath expected,
+    leopard2_internal::DecodePathRule expected_rule,
+    const char* operation)
+{
+    leopard2_internal::DecodePathInfo selection;
+    require(leopard2_internal::SelectDecodePath(input, selection),
+        std::string(operation) + " rejected a valid selector input");
+    require(selection.path == expected,
+        std::string(operation) + " selected " +
+        leopard2_internal::DecodePathName(selection.path));
+    require(selection.rule == expected_rule,
+        std::string(operation) + " selected rule " +
+        leopard2_internal::DecodePathRuleName(selection.rule));
+    require(selection.aligned_prefix_bytes == input.aligned_prefix_bytes &&
+            selection.tail_bytes == input.tail_bytes &&
+            selection.rounded_shard_bytes == input.rounded_shard_bytes &&
+            selection.multi_item_batch == input.multi_item_batch,
+        std::string(operation) + " lost byte or batch state");
+    return selection;
+}
+
+void test_unified_decode_path_selector()
+{
+    using namespace leopard2_internal;
+    DecodePathInput balanced = make_decode_path_input(
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+        LEO2_BACKEND_AVX2, 128, 128, 128, 256, 128, 193);
+    DecodePathInfo selection = require_decode_path(balanced,
+        kDecodePathGeneric, kDecodeRuleBalancedGeneric,
+        "balanced ragged lower boundary");
+    require(selection.required_work_slots == 256 &&
+            selection.matching_auto_rules == kDecodeAutoRuleBalancedGeneric,
+        "balanced selector accounting differs");
+
+    balanced.actual_shard_bytes = 192;
+    balanced.aligned_prefix_bytes = 192;
+    balanced.tail_bytes = 0;
+    balanced.rounded_shard_bytes = 192;
+    require_decode_path(balanced, kDecodePathMaterialized,
+        kDecodeRuleWorkspaceMaterialized,
+        "balanced immediate lower neighbor");
+    balanced = make_decode_path_input(LEO2_PROFILE_LEGACY_HIGH_V1,
+        LEO2_FIELD_GF8, LEO2_BACKEND_SCALAR,
+        128, 128, 128, 256, 128, 1024 * 1024);
+    require_decode_path(balanced, kDecodePathGeneric,
+        kDecodeRuleBalancedGeneric, "balanced upper boundary");
+    balanced = make_decode_path_input(LEO2_PROFILE_LEGACY_HIGH_V1,
+        LEO2_FIELD_GF8, LEO2_BACKEND_SCALAR,
+        128, 128, 128, 256, 128, 1024 * 1024 + 1);
+    require_decode_path(balanced, kDecodePathMaterialized,
+        kDecodeRuleWorkspaceMaterialized,
+        "balanced immediate upper neighbor");
+
+    balanced = make_decode_path_input(LEO2_PROFILE_LEGACY_HIGH_V1,
+        LEO2_FIELD_GF8, LEO2_BACKEND_AVX2,
+        128, 128, 128, 256, 128, 4097,
+        LEO2_CODEC_FORCE_SPECIALIZED_DECODE);
+    require_decode_path(balanced, kDecodePathMaterialized,
+        kDecodeRuleWorkspaceMaterialized,
+        "force-specialized precedence");
+    balanced.codec_flags = LEO2_CODEC_FORCE_GENERIC_DECODE;
+    require_decode_path(balanced, kDecodePathGeneric,
+        kDecodeRuleForcedGeneric, "force-generic precedence");
+    balanced.codec_flags = LEO2_CODEC_FORCE_MATERIALIZED_DECODE;
+    require_decode_path(balanced, kDecodePathMaterialized,
+        kDecodeRuleForcedMaterialized, "force-materialized precedence");
+    balanced.codec_flags = LEO2_CODEC_FORCE_TILED_DECODE;
+    selection = require_decode_path(balanced, kDecodePathTiled,
+        kDecodeRuleForcedTiled, "force-tiled precedence");
+    require(selection.required_work_slots == 384,
+        "forced balanced tiled work slots differ");
+
+    DecodePathInput high = make_decode_path_input(
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+        LEO2_BACKEND_AVX2, 224, 32, 32, 256, 1,
+        24 * 1024 - 64);
+    require_decode_path(high, kDecodePathTiled, kDecodeRuleWorkspaceTiled,
+        "AVX2 materialized immediate lower neighbor");
+    high = make_decode_path_input(LEO2_PROFILE_LEGACY_HIGH_V1,
+        LEO2_FIELD_GF8, LEO2_BACKEND_AVX2,
+        224, 32, 32, 256, 1, 24 * 1024 - 63);
+    require_decode_path(high, kDecodePathMaterialized,
+        kDecodeRuleMeasuredMaterialized,
+        "AVX2 materialized ragged lower boundary");
+    high = make_decode_path_input(LEO2_PROFILE_LEGACY_HIGH_V1,
+        LEO2_FIELD_GF8, LEO2_BACKEND_SSSE3,
+        224, 32, 32, 256, 1, 32 * 1024 - 64);
+    require_decode_path(high, kDecodePathTiled, kDecodeRuleWorkspaceTiled,
+        "SSSE3 materialized immediate lower neighbor");
+    high = make_decode_path_input(LEO2_PROFILE_LEGACY_HIGH_V1,
+        LEO2_FIELD_GF8, LEO2_BACKEND_SSSE3,
+        224, 32, 32, 256, 1, 32 * 1024 - 63);
+    require_decode_path(high, kDecodePathMaterialized,
+        kDecodeRuleMeasuredMaterialized,
+        "SSSE3 materialized ragged lower boundary");
+    high = make_decode_path_input(LEO2_PROFILE_LEGACY_HIGH_V1,
+        LEO2_FIELD_GF8, LEO2_BACKEND_AVX2,
+        224, 32, 32, 256, 8, 64 * 1024);
+    require_decode_path(high, kDecodePathMaterialized,
+        kDecodeRuleMeasuredMaterialized,
+        "materialized byte/loss upper boundary");
+    high = make_decode_path_input(LEO2_PROFILE_LEGACY_HIGH_V1,
+        LEO2_FIELD_GF8, LEO2_BACKEND_AVX2,
+        224, 32, 32, 256, 8, 64 * 1024 + 1);
+    require_decode_path(high, kDecodePathTiled, kDecodeRuleWorkspaceTiled,
+        "materialized byte upper neighbor");
+    high = make_decode_path_input(LEO2_PROFILE_LEGACY_HIGH_V1,
+        LEO2_FIELD_GF8, LEO2_BACKEND_AVX2,
+        224, 32, 32, 256, 9, 32 * 1024);
+    require_decode_path(high, kDecodePathTiled, kDecodeRuleWorkspaceTiled,
+        "materialized loss upper neighbor");
+
+    high = make_decode_path_input(LEO2_PROFILE_LEGACY_HIGH_V1,
+        LEO2_FIELD_GF8, LEO2_BACKEND_AVX2,
+        224, 32, 32, 256, 8, 32 * 1024, 0, true);
+    selection = require_decode_path(high, kDecodePathTiled,
+        kDecodeRuleMeasuredBatchTiled, "AVX2 multi-item exception");
+    require(selection.required_work_slots == 72,
+        "batch tiled selector did not account for L outputs");
+    high.backend = LEO2_BACKEND_SSSE3;
+    require_decode_path(high, kDecodePathMaterialized,
+        kDecodeRuleMeasuredMaterialized,
+        "SSSE3 multi-item materialized control");
+    high.backend = LEO2_BACKEND_AVX2;
+    high.codec_flags = LEO2_CODEC_FORCE_MATERIALIZED_DECODE;
+    require_decode_path(high, kDecodePathMaterialized,
+        kDecodeRuleForcedMaterialized,
+        "forced materialized batch precedence");
+
+    DecodePathInput low = make_decode_path_input(
+        LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, LEO2_BACKEND_AVX2,
+        8, 248, 8, 256, 8, 65);
+    selection = require_decode_path(low, kDecodePathTiled,
+        kDecodeRuleWorkspaceTiled, "low tiled fallback");
+    require(selection.required_work_slots == 16,
+        "low tiled work slots differ");
+    low = make_decode_path_input(LEO2_PROFILE_LOW_V1,
+        LEO2_FIELD_GF8, LEO2_BACKEND_AVX2,
+        8, 8, 8, 16, 8, 64);
+    require_decode_path(low, kDecodePathMaterialized,
+        kDecodeRuleWorkspaceMaterialized,
+        "workspace equality must retain materialized");
+    low.codec_flags = LEO2_CODEC_FORCE_TILED_DECODE;
+    require_decode_path(low, kDecodePathTiled,
+        kDecodeRuleForcedTiled, "forced workspace equality");
+
+    DecodePathInput fallback = make_decode_path_input(
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
+        LEO2_BACKEND_AVX2, 224, 32, 32, 256, 1, 32 * 1024);
+    require_decode_path(fallback, kDecodePathTiled,
+        kDecodeRuleWorkspaceTiled, "GF16 measured-rule fallback");
+    fallback.field = LEO2_FIELD_GF8;
+    fallback.backend = LEO2_BACKEND_NEON;
+    require_decode_path(fallback, kDecodePathTiled,
+        kDecodeRuleWorkspaceTiled, "NEON measured-rule fallback");
+
+    DecodePathInput codec_query = make_decode_path_input(
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+        LEO2_BACKEND_AVX2, 224, 32, 32, 256, 0, 32 * 1024,
+        0, false, false);
+    require_decode_path(codec_query, kDecodePathMaterialized,
+        kDecodeRuleMeasuredMaterialized,
+        "one-shot conservative materialized query");
+
+    DecodePathInput invalid = balanced;
+    invalid.tail_bytes = 0;
+    DecodePathInfo unused;
+    require(!SelectDecodePath(invalid, unused),
+        "inconsistent tail geometry was accepted");
+    invalid = balanced;
+    invalid.codec_flags = LEO2_CODEC_FORCE_GENERIC_DECODE |
+        LEO2_CODEC_FORCE_TILED_DECODE;
+    require(!SelectDecodePath(invalid, unused),
+        "conflicting force precedence was accepted");
+
+    const uint32_t counts[] = { 31, 32, 33, 127, 128, 129, 223, 224, 225 };
+    const uint64_t byte_counts[] = {
+        192, 193, 256, 24 * 1024 - 64, 24 * 1024 - 63,
+        32 * 1024, 64 * 1024, 64 * 1024 + 1,
+        1024 * 1024, 1024 * 1024 + 1
+    };
+    const leo2_backend backends[] = {
+        LEO2_BACKEND_SCALAR, LEO2_BACKEND_SSSE3,
+        LEO2_BACKEND_AVX2, LEO2_BACKEND_NEON
+    };
+    for (size_t k_i = 0; k_i < sizeof(counts) / sizeof(counts[0]); ++k_i)
+    for (size_t r_i = 0; r_i < sizeof(counts) / sizeof(counts[0]); ++r_i)
+    {
+        const uint32_t k = counts[k_i];
+        const uint32_t r = counts[r_i];
+        const uint32_t padded = test_ceil_pow2(r);
+        const uint32_t parent = test_ceil_pow2(k + padded);
+        if (parent > 256)
+            continue;
+        const uint32_t missing = std::min(k, r);
+        for (size_t byte_i = 0;
+             byte_i < sizeof(byte_counts) / sizeof(byte_counts[0]); ++byte_i)
+        for (size_t backend_i = 0;
+             backend_i < sizeof(backends) / sizeof(backends[0]); ++backend_i)
+        {
+            DecodePathInput input = make_decode_path_input(
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                backends[backend_i], k, r, padded, parent, missing,
+                byte_counts[byte_i]);
+            DecodePathInfo result;
+            require(SelectDecodePath(input, result),
+                "overlap sweep rejected a valid cell");
+            require(result.matching_auto_rules !=
+                    (kDecodeAutoRuleBalancedGeneric |
+                     kDecodeAutoRuleMeasuredMaterialized),
+                "evidence-scoped AUTO rules overlap");
+        }
+    }
+}
+
 void require_balanced_family(
     bool condition,
     unsigned k,
@@ -1451,6 +1746,7 @@ int main()
         test_forced_backend(context);
         test_codec_flag_validation(context);
         test_balanced_dispatch_policy();
+        test_unified_decode_path_selector();
         test_balanced_family_forced_equivalence(context);
         test_tiled_high_dispatch_policy();
         test_tiled_materialized_execution(context);

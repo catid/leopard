@@ -107,12 +107,24 @@ def output_is_ignored(path: Path, source_root: Path) -> None:
 def validate_raw_mode(path: Path, case: dict[str, Any], role: str) -> None:
     document, _ = common.load_json(path, "benchmark result")
     common.require(document.get("schema") == common.BENCHMARK_SCHEMA,
-                   f"{path}: benchmark did not retain schema v2 observations")
+                   f"{path}: benchmark did not retain schema v3 path observations")
+    common.require(set(document) == {
+        "schema", "build", "parameters", "resolved", "correctness",
+        "workload_digests", "memory", "metrics", "legacy",
+    }, f"{path}: benchmark top-level shape changed")
     parameters = document.get("parameters")
     resolved = document.get("resolved")
     correctness = document.get("correctness")
     common.require(isinstance(parameters, dict) and isinstance(resolved, dict) and
                    isinstance(correctness, dict), f"{path}: incomplete benchmark identity")
+    common.require(set(parameters) == {
+        "K", "R", "requested_profile", "requested_field", "requested_backend",
+        "force_generic_decode", "force_specialized_decode", "force_tiled_decode",
+        "force_materialized_decode", "skip_legacy", "retain_samples",
+        "report_decode_path", "shard_bytes", "loss_count",
+        "missing_original_indices", "batch", "reuse", "iterations", "warmup",
+        "thread_count", "seed",
+    }, f"{path}: benchmark parameter shape changed")
     mode = common.role_mode(case, role)
     for key, expected in common.MODE_PARAMETERS[mode].items():
         actual = parameters.get(key)
@@ -122,7 +134,8 @@ def validate_raw_mode(path: Path, case: dict[str, Any], role: str) -> None:
         "K": case["K"], "R": case["R"],
         "requested_profile": "legacy_high_v1", "requested_field": "gf8",
         "requested_backend": case["backend"], "skip_legacy": True,
-        "retain_samples": True, "shard_bytes": case["shard_bytes"],
+        "retain_samples": True, "report_decode_path": True,
+        "shard_bytes": case["shard_bytes"],
         "loss_count": case["loss_count"], "batch": case["batch"],
         "reuse": case["reuse"], "iterations": case["iterations"],
         "warmup": case["warmup"], "thread_count": 1, "seed": case["seed"],
@@ -138,11 +151,22 @@ def validate_raw_mode(path: Path, case: dict[str, Any], role: str) -> None:
         "profile": "legacy_high_v1", "field": "gf8",
         "backend": case["backend"], "thread_count": 1,
         "parent_count": case["parent_count"], "padded_side": case["padded_side"],
+        "selected_decode_path": mode,
+        "selected_decode_rule": "forced_" + mode,
+        "decode_required_work_slots": (
+            case["parent_count"] if mode != "tiled" else
+            2 * case["padded_side"] + case["loss_count"]),
+        "decode_aligned_prefix_bytes": case["shard_bytes"] & ~63,
+        "decode_tail_bytes": case["shard_bytes"] & 63,
+        "decode_rounded_bytes": (case["shard_bytes"] + 63) & ~63,
+        "decode_multi_item_batch": case["batch"] > 1,
     }
     for key, wanted in resolved_expected.items():
         common.require(type(resolved.get(key)) is type(wanted) and
                        resolved.get(key) == wanted,
                        f"{path}: resolved codec {key} is not exact")
+    common.require(set(resolved) == set(resolved_expected),
+                   f"{path}: resolved path shape changed")
     common.require(correctness.get("leopard2_round_trip") is True and
                    correctness.get("legacy_comparison") is None,
                    f"{path}: round-trip/skip-legacy contract failed")
@@ -239,7 +263,8 @@ def self_test() -> None:
             mode = common.role_mode(case, role)
             for selector in common.MODE_SELECTORS[mode]:
                 common.require(selector in command, "forced selector is absent")
-            common.require("--json" in command and "--retain-samples" in command,
+            common.require("--json" in command and "--retain-samples" in command and
+                           "--report-decode-path" in command,
                            "raw observation command contract changed")
     common.require([list(item) for item in common.ROUND_ORDERS] == [
         ["control", "candidate", "candidate", "control"],

@@ -585,6 +585,7 @@ struct ScratchLayout
 struct DecodeScratchGeometry
 {
     ScratchLayout layout;
+    leopard2_internal::DecodePathInfo selection;
     size_t rounded_bytes;
     size_t aligned_prefix_bytes;
     size_t tail_bytes;
@@ -1802,27 +1803,6 @@ static leo2_result EncodeLayout(
     return LEO2_SUCCESS;
 }
 
-static bool UseGenericDecode(
-    const leo2_decode_plan* plan,
-    size_t rounded_shard_bytes)
-{
-    const leo2_codec* codec = plan->codec;
-    const bool force_generic =
-        (codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) != 0;
-    const bool force_specialized =
-        (codec->flags & (LEO2_CODEC_FORCE_SPECIALIZED_DECODE |
-                         LEO2_CODEC_FORCE_TILED_DECODE |
-                         LEO2_CODEC_FORCE_MATERIALIZED_DECODE)) != 0;
-    const bool measured_balanced_full_recovery =
-        leopard2_internal::ShouldUseBalancedGenericDecode(
-            codec->profile, codec->field, codec->original_count,
-            codec->recovery_count, codec->padded_side, codec->parent_count,
-            plan->missing_original_count, rounded_shard_bytes,
-            codec->context->backend);
-    return force_generic ||
-        (!force_specialized && measured_balanced_full_recovery);
-}
-
 static bool UseFusedGenericRevealScatter(
     const leo2_codec* codec,
     size_t aligned_prefix_bytes)
@@ -1855,29 +1835,44 @@ static bool UseFusedLowRevealScatter(
         aligned_prefix_bytes != 0;
 }
 
-static bool UseMaterializedDecode(
+static bool SelectTransformDecodePath(
     const leo2_codec* codec,
     const leo2_decode_plan* plan,
-    size_t rounded_shard_bytes)
+    uint64_t shard_bytes,
+    bool multi_item_batch,
+    const DecodeScratchGeometry& geometry,
+    leopard2_internal::DecodePathInfo& selection)
 {
-    if ((codec->flags & LEO2_CODEC_FORCE_TILED_DECODE) != 0)
-        return false;
-    if ((codec->flags & LEO2_CODEC_FORCE_MATERIALIZED_DECODE) != 0)
-        return true;
-    const uint32_t missing_original_count = plan
-        ? plan->missing_original_count
-        : 1; // One-shot scratch must cover every AUTO materialized plan.
-    return leopard2_internal::ShouldUseMaterializedHighDecode(
-        codec->profile, codec->field, codec->original_count,
-        codec->recovery_count, codec->padded_side, codec->parent_count,
-        missing_original_count, rounded_shard_bytes,
-        codec->context->backend);
+    leopard2_internal::DecodePathInput input;
+    input.profile = codec->profile;
+    input.field = codec->field;
+    input.backend = codec->context->backend;
+    input.original_count = codec->original_count;
+    input.recovery_count = codec->recovery_count;
+    input.padded_side = codec->padded_side;
+    input.parent_count = codec->parent_count;
+    input.missing_original_count = plan ? plan->missing_original_count : 0;
+    input.requested_output_count = codec->profile ==
+            LEO2_PROFILE_LEGACY_HIGH_V1
+        ? static_cast<uint32_t>(plan
+            ? plan->requested_coordinates.size()
+            : codec->recovery_count)
+        : 0;
+    input.codec_flags = codec->flags;
+    input.actual_shard_bytes = shard_bytes;
+    input.aligned_prefix_bytes = geometry.aligned_prefix_bytes;
+    input.tail_bytes = geometry.tail_bytes;
+    input.rounded_shard_bytes = geometry.rounded_bytes;
+    input.plan_known = plan != NULL;
+    input.multi_item_batch = multi_item_batch;
+    return leopard2_internal::SelectDecodePath(input, selection);
 }
 
 static leo2_result DecodeLayout(
     const leo2_codec* codec,
     const leo2_decode_plan* plan,
     uint64_t shard_bytes,
+    bool multi_item_batch,
     DecodeScratchGeometry& geometry)
 {
     geometry = DecodeScratchGeometry();
@@ -1893,44 +1888,10 @@ static leo2_result DecodeLayout(
         ? static_cast<size_t>(shard_bytes)
         : std::max(geometry.aligned_prefix_bytes, kScratchAlignment);
     const size_t range_count = static_cast<size_t>(codec->original_count) * 2 + codec->recovery_count;
-    const bool force_generic =
-        (codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) != 0;
-    const bool known_generic = plan
-        ? UseGenericDecode(plan, geometry.rounded_bytes)
-        : force_generic;
-    const bool known_materialized = !known_generic &&
-        UseMaterializedDecode(codec, plan, geometry.rounded_bytes);
-    if (known_generic || known_materialized ||
-        (codec->profile != LEO2_PROFILE_LOW_V1 &&
-         codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1))
-    {
-        geometry.work_slot_count = codec->parent_count;
-    }
-    else
-    {
-        size_t tiled_slot_count = 0;
-        if (!CheckedMultiply(
-                static_cast<size_t>(codec->padded_side), 2,
-                tiled_slot_count))
-            return LEO2_INVALID_COUNTS;
-        if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
-        {
-            const size_t output_slots = plan
-                ? plan->requested_coordinates.size()
-                : static_cast<size_t>(codec->recovery_count);
-            if (!CheckedAdd(
-                    tiled_slot_count, output_slots, tiled_slot_count))
-                return LEO2_INVALID_COUNTS;
-        }
-        /* Keep the retained materialized specialized kernel when its regular
-           N-slot workspace is no larger than the tiled form. */
-        const bool force_tiled =
-            (codec->flags & LEO2_CODEC_FORCE_TILED_DECODE) != 0;
-        geometry.work_slot_count = force_tiled
-            ? tiled_slot_count
-            : std::min(
-                static_cast<size_t>(codec->parent_count), tiled_slot_count);
-    }
+    if (!SelectTransformDecodePath(codec, plan, shard_bytes,
+            multi_item_batch, geometry, geometry.selection))
+        return LEO2_INTERNAL_ERROR;
+    geometry.work_slot_count = geometry.selection.required_work_slots;
     size_t pointer_count = 0;
     if (!CheckedAdd(
             static_cast<size_t>(codec->parent_count),
@@ -3100,7 +3061,8 @@ static leo2_result ValidateEncodeBatchItemAddressability(
 
 static leo2_result ValidateDecodeBatchItemAddressability(
     const leo2_decode_plan* plan,
-    const leo2_decode_batch_item& item)
+    const leo2_decode_batch_item& item,
+    bool multi_item_batch)
 {
     const leo2_codec* codec = plan->codec;
     ScratchLayout direct_layout;
@@ -3111,7 +3073,8 @@ static leo2_result ValidateDecodeBatchItemAddressability(
     leo2_result result = direct
         ? DirectDecodeLayout(
             codec, item.shard_bytes, direct_layout, rounded_bytes)
-        : DecodeLayout(codec, plan, item.shard_bytes, geometry);
+        : DecodeLayout(codec, plan, item.shard_bytes,
+            multi_item_batch, geometry);
     if (result != LEO2_SUCCESS)
         return result;
 
@@ -3572,7 +3535,8 @@ static leo2_result PreflightDecodeBatch(
     for (size_t i = 0; i < item_count; ++i)
     {
         const leo2_result result =
-            ValidateDecodeBatchItemAddressability(plan, items[i]);
+            ValidateDecodeBatchItemAddressability(
+                plan, items[i], item_count > 1);
         if (result != LEO2_SUCCESS)
             return result;
     }
@@ -3636,6 +3600,94 @@ static leo2_result RunDecodeBatchItem(void* context, size_t index)
 }
 
 } // namespace
+
+namespace leopard2_internal {
+
+static void FillTerminalDecodePathInfo(
+    DecodePath path,
+    DecodePathRule rule,
+    uint64_t shard_bytes,
+    bool multi_item_batch,
+    DecodePathInfo& info)
+{
+    info.path = path;
+    info.rule = rule;
+    info.matching_auto_rules = 0;
+    info.required_work_slots = 0;
+    info.aligned_prefix_bytes = 0;
+    info.tail_bytes = 0;
+    info.rounded_shard_bytes = 0;
+    info.multi_item_batch = multi_item_batch;
+    size_t rounded = 0;
+    if (shard_bytes != 0 && RoundShardBytes(shard_bytes, rounded))
+    {
+        info.tail_bytes = static_cast<size_t>(shard_bytes) & 63u;
+        info.aligned_prefix_bytes =
+            static_cast<size_t>(shard_bytes) - info.tail_bytes;
+        info.rounded_shard_bytes = rounded;
+    }
+}
+
+leo2_result GetDecodePlanPathInfo(
+    const leo2_decode_plan* plan,
+    uint64_t shard_bytes,
+    bool multi_item_batch,
+    DecodePathInfo* info_out)
+{
+    if (!info_out)
+        return LEO2_INVALID_ARGUMENT;
+    FillTerminalDecodePathInfo(kDecodePathNoOp, kDecodeRuleNoOp,
+        0, multi_item_batch, *info_out);
+    if (!plan)
+        return LEO2_INVALID_ARGUMENT;
+    if (plan->no_op)
+    {
+        FillTerminalDecodePathInfo(kDecodePathNoOp, kDecodeRuleNoOp,
+            shard_bytes, multi_item_batch, *info_out);
+        return LEO2_SUCCESS;
+    }
+    if (shard_bytes == 0)
+        return LEO2_INVALID_ARGUMENT;
+    if (plan->direct_repair || plan->direct_xor || plan->direct_copy)
+    {
+        ScratchLayout layout;
+        size_t rounded = 0;
+        const leo2_result result = DirectDecodeLayout(
+            plan->codec, shard_bytes, layout, rounded);
+        if (result != LEO2_SUCCESS)
+            return result;
+        FillTerminalDecodePathInfo(kDecodePathDirect, kDecodeRuleDirect,
+            shard_bytes, multi_item_batch, *info_out);
+        return LEO2_SUCCESS;
+    }
+    DecodeScratchGeometry geometry;
+    const leo2_result result = DecodeLayout(
+        plan->codec, plan, shard_bytes, multi_item_batch, geometry);
+    if (result != LEO2_SUCCESS)
+        return result;
+    *info_out = geometry.selection;
+    return LEO2_SUCCESS;
+}
+
+leo2_result GetDecodeCodecScratchPathInfo(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    DecodePathInfo* info_out)
+{
+    if (!info_out)
+        return LEO2_INVALID_ARGUMENT;
+    FillTerminalDecodePathInfo(kDecodePathNoOp, kDecodeRuleNoOp,
+        0, false, *info_out);
+    DecodeScratchGeometry geometry;
+    const leo2_result result = DecodeLayout(
+        codec, NULL, shard_bytes, false, geometry);
+    if (result != LEO2_SUCCESS)
+        return result;
+    *info_out = geometry.selection;
+    return LEO2_SUCCESS;
+}
+
+} // namespace leopard2_internal
 
 extern "C" {
 
@@ -4746,7 +4798,7 @@ LEO2_EXPORT leo2_result leo2_decode_plan_scratch_size(
     const leo2_result result = direct_execution
         ? DirectDecodeLayout(
             plan->codec, shard_bytes, direct_layout, direct_rounded)
-        : DecodeLayout(plan->codec, plan, shard_bytes, geometry);
+        : DecodeLayout(plan->codec, plan, shard_bytes, false, geometry);
     if (result != LEO2_SUCCESS)
         return result;
     *scratch_bytes_out = direct_execution
@@ -4785,7 +4837,8 @@ static leo2_result DecodePlanExecuteInternal(
     leo2_result result = direct_execution
         ? DirectDecodeLayout(
             plan->codec, shard_bytes, direct_layout, direct_rounded)
-        : DecodeLayout(plan->codec, plan, shard_bytes, geometry);
+        : DecodeLayout(plan->codec, plan, shard_bytes,
+            multi_item_batch, geometry);
     if (result != LEO2_SUCCESS)
         return result;
     const ScratchLayout& layout = direct_execution
@@ -4867,26 +4920,16 @@ static leo2_result DecodePlanExecuteInternal(
         backends, and sizes retain the profile-specific decoder.  A ragged
         final tile uses the same path as its aligned prefix.
     */
-    const bool use_generic =
-        UseGenericDecode(plan, geometry.rounded_bytes);
+    const bool use_generic = geometry.selection.path ==
+        leopard2_internal::kDecodePathGeneric;
     const bool fuse_generic_reveal_scatter = use_generic &&
         UseFusedGenericRevealScatter(codec, geometry.aligned_prefix_bytes);
     const bool fuse_low_reveal_scatter = !use_generic &&
         UseFusedLowRevealScatter(codec, geometry.aligned_prefix_bytes);
     const bool reveal_aligned_outputs_in_place =
         !(fuse_generic_reveal_scatter || fuse_low_reveal_scatter);
-    const bool force_tiled =
-        (codec->flags & LEO2_CODEC_FORCE_TILED_DECODE) != 0;
-    const bool force_materialized =
-        (codec->flags & LEO2_CODEC_FORCE_MATERIALIZED_DECODE) != 0;
-    const bool calibrated_materialized = !force_materialized &&
-        UseMaterializedDecode(codec, plan, geometry.rounded_bytes);
-    const bool measured_batch_tiled = multi_item_batch &&
-        calibrated_materialized &&
-        codec->context->backend == LEO2_BACKEND_AVX2;
-    const bool use_tiled = !use_generic &&
-        (force_tiled || measured_batch_tiled ||
-         geometry.work_slot_count < static_cast<size_t>(codec->parent_count));
+    const bool use_tiled = geometry.selection.path ==
+        leopard2_internal::kDecodePathTiled;
 
     if (geometry.aligned_prefix_bytes != 0)
     {
@@ -4986,7 +5029,7 @@ LEO2_EXPORT leo2_result leo2_decode_scratch_size(
     *scratch_bytes_out = 0;
     DecodeScratchGeometry geometry;
     const leo2_result result = DecodeLayout(
-        codec, NULL, shard_bytes, geometry);
+        codec, NULL, shard_bytes, false, geometry);
     if (result != LEO2_SUCCESS)
         return result;
     *scratch_bytes_out = geometry.layout.total_bytes;

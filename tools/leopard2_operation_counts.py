@@ -350,16 +350,37 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
     and direct execution retains range metadata without shard-data slots.
     """
     compact = re.sub(r"\s+", "", source)
-    begin = compact.find("staticleo2_resultDecodeLayout(")
+    selector_begin = compact.find("staticboolSelectTransformDecodePath(")
+    begin = compact.find("staticleo2_resultDecodeLayout(", selector_begin)
     end = compact.find("staticleo2_resultDirectDecodeLayout(", begin)
     direct_end = compact.find("staticboolUseSingleSideEncodeLayout(", end)
     populate = compact.find("staticvoidPopulateDecodeCoordinates(")
     populate_end = compact.find("staticLEO_FORCE_INLINEvoidGatherTransformDecodeOne(", populate)
-    if min(begin, end, direct_end, populate, populate_end) < 0:
+    execute = compact.find("staticleo2_resultDecodePlanExecuteInternal(", direct_end)
+    if min(selector_begin, begin, end, direct_end, populate, populate_end,
+           execute) < 0:
         raise ModelError("{} is missing a decode scratch boundary".format(label))
+    selector = compact[selector_begin:begin]
     layout = compact[begin:end]
     direct = compact[end:direct_end]
     staging = compact[populate:populate_end]
+    execution = compact[execute:]
+    required_selector = (
+        "plan?plan->requested_coordinates.size():"
+        "codec->recovery_count",
+        "input.actual_shard_bytes=shard_bytes;",
+        "input.aligned_prefix_bytes=geometry.aligned_prefix_bytes;",
+        "input.tail_bytes=geometry.tail_bytes;",
+        "input.rounded_shard_bytes=geometry.rounded_bytes;",
+        "input.multi_item_batch=multi_item_batch;",
+        "returnleopard2_internal::SelectDecodePath(input,selection);",
+    )
+    if any(token not in selector for token in required_selector):
+        raise ModelError(
+            "{} decode selector no longer owns complete byte/batch state".format(
+                label
+            )
+        )
     required_layout = (
         "geometry.work_slot_bytes=geometry.tail_bytes==0?"
         "static_cast<size_t>(shard_bytes):"
@@ -373,8 +394,9 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
         "ComputeSplitScratchLayout(range_count,pointer_count,input_slot_count,"
         "geometry.work_slot_count,geometry.work_slot_bytes,geometry.layout,"
         "geometry.work_data_offset)",
-        "plan?plan->requested_coordinates.size():"
-        "static_cast<size_t>(codec->recovery_count)",
+        "SelectTransformDecodePath(codec,plan,shard_bytes,multi_item_batch,"
+        "geometry,geometry.selection)",
+        "geometry.work_slot_count=geometry.selection.required_work_slots;",
     )
     if any(token not in layout for token in required_layout):
         raise ModelError(
@@ -400,6 +422,18 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
     if any(token not in staging for token in required_staging):
         raise ModelError(
             "{} ragged decode staging map diverged from schema v2".format(label)
+        )
+    required_execution = (
+        "constbooluse_generic=geometry.selection.path=="
+        "leopard2_internal::kDecodePathGeneric;",
+        "constbooluse_tiled=geometry.selection.path=="
+        "leopard2_internal::kDecodePathTiled;",
+    )
+    if any(token not in execution for token in required_execution):
+        raise ModelError(
+            "{} execution duplicated or bypassed the selected decode path".format(
+                label
+            )
         )
 
 

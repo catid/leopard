@@ -21,7 +21,7 @@ RUN_SCHEMA = "leopard2-balanced-forced-abba/v2"
 CHECKPOINT_SCHEMA = "leopard2-balanced-forced-checkpoint/v1"
 RECORD_SCHEMA = "leopard2-balanced-forced-record/v1"
 SUMMARY_SCHEMA = "leopard2-balanced-forced-summary/v2"
-BENCHMARK_SCHEMA = "leopard2-benchmark-v2"
+BENCHMARK_SCHEMA = "leopard2-benchmark-v3"
 ROUND_ORDERS = (
     ("control", "candidate", "candidate", "control"),
     ("candidate", "control", "control", "candidate"),
@@ -464,6 +464,7 @@ def benchmark_command(binary: Path, case: dict[str, Any], output: Path,
         "--iterations", str(case["iterations"]), "--warmup", str(case["warmup"]),
         "--threads", "1", "--seed", str(case["seed"]),
         *MODE_SELECTORS[mode], "--skip-legacy", "--retain-samples",
+        "--report-decode-path",
         "--json", str(output.absolute()),
     ]
 

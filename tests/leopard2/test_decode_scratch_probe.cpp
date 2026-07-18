@@ -124,42 +124,10 @@ const char* field_name(leo2_field field)
     return field == LEO2_FIELD_GF16 ? "gf16" : "gf8";
 }
 
-const char* classify_transform_path(
+void emit_case(
+    leo2_context* context,
     const ProbeCase& test,
-    leo2_backend backend,
-    uint32_t parent,
-    uint32_t padded,
-    size_t rounded_bytes,
-    uint32_t output_slots,
-    bool codec_query)
-{
-    if ((test.flags & LEO2_CODEC_FORCE_GENERIC_DECODE) != 0)
-        return "generic";
-    if ((test.flags & LEO2_CODEC_FORCE_MATERIALIZED_DECODE) != 0)
-        return "materialized";
-    if ((test.flags & LEO2_CODEC_FORCE_TILED_DECODE) != 0)
-        return "tiled";
-
-    if (!codec_query &&
-        leopard2_internal::ShouldUseBalancedGenericDecode(
-            test.profile, test.field, test.k, test.r, padded, parent,
-            output_slots, rounded_bytes, backend))
-        return "generic";
-
-    const uint32_t materialized_losses = codec_query ? 1 : output_slots;
-    if (leopard2_internal::ShouldUseMaterializedHighDecode(
-            test.profile, test.field, test.k, test.r, padded, parent,
-            materialized_losses, rounded_bytes, backend))
-        return "materialized";
-
-    const size_t tiled = static_cast<size_t>(padded) * 2 +
-        (test.profile == LEO2_PROFILE_LEGACY_HIGH_V1
-            ? (codec_query ? test.r : output_slots)
-            : 0);
-    return tiled < parent ? "tiled" : "materialized";
-}
-
-void emit_case(leo2_context* context, const ProbeCase& test)
+    bool multi_item_batch = false)
 {
     leo2_codec_options options;
     std::memset(&options, 0, sizeof(options));
@@ -189,29 +157,23 @@ void emit_case(leo2_context* context, const ProbeCase& test)
         codec, test.shard_bytes, &codec_scratch), "codec scratch query");
 
     const leo2_backend backend = leo2_context_backend(context);
-    const size_t rounded = align_up(static_cast<size_t>(test.shard_bytes), 64);
     const size_t direct_bytes = direct_scratch_bytes(test);
-    const bool no_op = test.losses == 0;
-    const bool direct = !no_op && plan_scratch == direct_bytes;
-    const char* selected_path = NULL;
-    if (no_op)
-        selected_path = "no_op";
-    else if (direct)
-    {
-        if (test.profile == LEO2_PROFILE_LEGACY_HIGH_V1 && padded == 1)
-            selected_path = "direct_xor";
-        else if (test.profile == LEO2_PROFILE_LOW_V1 && padded == 1)
-            selected_path = "direct_copy";
-        else
-            selected_path = "direct_repair";
-    }
-    else
-    {
-        selected_path = classify_transform_path(
-            test, backend, parent, padded, rounded, test.losses, false);
-    }
-    const char* codec_path = classify_transform_path(
-        test, backend, parent, padded, rounded, test.r, true);
+    leopard2_internal::DecodePathInfo selected;
+    leopard2_internal::DecodePathInfo scratch_selection;
+    leopard2_internal::DecodePathInfo codec_selection;
+    require_result(leopard2_internal::GetDecodePlanPathInfo(
+        plan, test.shard_bytes, multi_item_batch, &selected),
+        "selected path introspection");
+    require_result(leopard2_internal::GetDecodePlanPathInfo(
+        plan, test.shard_bytes, false, &scratch_selection),
+        "scratch path introspection");
+    require_result(leopard2_internal::GetDecodeCodecScratchPathInfo(
+        codec, test.shard_bytes, &codec_selection),
+        "codec path introspection");
+    const bool no_op = selected.path == leopard2_internal::kDecodePathNoOp;
+    const bool direct = selected.path == leopard2_internal::kDecodePathDirect;
+    if (direct != (!no_op && plan_scratch == direct_bytes))
+        throw std::runtime_error("direct introspection/scratch mismatch");
     const size_t plan_work_slots = direct || no_op
         ? 0
         : observe_work_slots(test, parent, padded, plan_scratch, false);
@@ -219,7 +181,8 @@ void emit_case(leo2_context* context, const ProbeCase& test)
         test, parent, padded, codec_scratch, true);
 
     std::cout
-        << "{\"name\":\"" << test.name
+        << "{\"schema\":\"leopard2-decode-scratch-probe/v1\""
+        << ",\"name\":\"" << test.name
         << "\",\"K\":" << test.k
         << ",\"R\":" << test.r
         << ",\"profile\":\"" << profile_name(test.profile)
@@ -231,9 +194,26 @@ void emit_case(leo2_context* context, const ProbeCase& test)
         << ",\"padded\":" << padded
         << ",\"pointer_bytes\":" << sizeof(void*)
         << ",\"backend\":\"" << backend_name(backend)
-        << "\",\"selected_path\":\"" << selected_path
-        << "\",\"codec_path\":\"" << codec_path
-        << "\",\"auto_host_backend_observed\":"
+        << "\",\"selected_path\":\""
+        << leopard2_internal::DecodePathName(selected.path)
+        << "\",\"selected_rule\":\""
+        << leopard2_internal::DecodePathRuleName(selected.rule)
+        << "\",\"selected_required_work_slots\":"
+        << selected.required_work_slots
+        << ",\"scratch_path\":\""
+        << leopard2_internal::DecodePathName(scratch_selection.path)
+        << "\",\"scratch_rule\":\""
+        << leopard2_internal::DecodePathRuleName(scratch_selection.rule)
+        << "\",\"codec_path\":\""
+        << leopard2_internal::DecodePathName(codec_selection.path)
+        << "\",\"codec_rule\":\""
+        << leopard2_internal::DecodePathRuleName(codec_selection.rule)
+        << "\",\"multi_item_batch\":"
+        << (multi_item_batch ? "true" : "false")
+        << ",\"aligned_prefix_bytes\":" << selected.aligned_prefix_bytes
+        << ",\"tail_bytes\":" << selected.tail_bytes
+        << ",\"rounded_bytes\":" << selected.rounded_shard_bytes
+        << ",\"auto_host_backend_observed\":"
         << (test.auto_observed ? "true" : "false")
         << ",\"plan_work_slots\":" << plan_work_slots
         << ",\"codec_work_slots\":" << codec_work_slots
@@ -361,6 +341,15 @@ int main()
                 ? LEO2_FIELD_MASK_GF16 : LEO2_FIELD_MASK_GF8;
             if ((fields & bit) != 0)
                 emit_case(context, cases[i]);
+        }
+        if ((fields & LEO2_FIELD_MASK_GF8) != 0)
+        {
+            const ProbeCase batch_case = {
+                "auto_high_32k_batch", 224, 32,
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                0, 32 * 1024, 8, true
+            };
+            emit_case(context, batch_case, true);
         }
         leo2_context_destroy(context);
         return 0;

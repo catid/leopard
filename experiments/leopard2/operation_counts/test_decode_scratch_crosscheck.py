@@ -70,12 +70,21 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
         name = str(row["name"])
         require(name not in names, "duplicate probe row " + name)
         names.add(name)
+        require(
+            row.get("schema") == "leopard2-decode-scratch-probe/v1",
+            name + " probe schema changed",
+        )
         selected_path = str(row["selected_path"])
+        scratch_path = str(row["scratch_path"])
         codec_path = normalized_workspace(str(row["codec_path"]))
-        direct = selected_path.startswith("direct_")
+        direct = selected_path == "direct"
         no_op = selected_path == "no_op"
+        require(
+            scratch_path == selected_path or bool(row["multi_item_batch"]),
+            name + " single-item selected/scratch path differs",
+        )
         plan_workspace = codec_path if (direct or no_op) else normalized_workspace(
-            selected_path
+            scratch_path
         )
         accounting = COUNTS.decode_scratch_accounting(
             int(row["K"]), int(row["R"]), int(row["parent"]),
@@ -104,6 +113,20 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
             accounting.codec_work_slots == int(row["codec_work_slots"]),
             name + " codec work-slot mismatch",
         )
+        selected_accounting = COUNTS.decode_scratch_accounting(
+            int(row["K"]), int(row["R"]), int(row["parent"]),
+            int(row["padded"]), str(row["profile"]),
+            int(row["shard_bytes"]), int(row["losses"]),
+            (codec_path if (direct or no_op) else
+             normalized_workspace(selected_path)),
+            int(row["pointer_bytes"]), codec_workspace=codec_path,
+            no_op=no_op, direct=direct,
+        )
+        require(
+            selected_accounting.plan_work_slots ==
+            int(row["selected_required_work_slots"]),
+            name + " selected-path work-slot mismatch",
+        )
         maximum = COUNTS.size_t_max(int(row["pointer_bytes"]))
         require(
             accounting.plan_total_bytes <= maximum and
@@ -117,6 +140,13 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
             name + " valid probe control did not round like production",
         )
         tail = int(row["shard_bytes"]) & 63
+        prefix = int(row["shard_bytes"]) - tail
+        require(int(row["tail_bytes"]) == tail,
+                name + " introspected tail differs")
+        require(int(row["aligned_prefix_bytes"]) == prefix,
+                name + " introspected aligned prefix differs")
+        require(int(row["rounded_bytes"]) == ((int(row["shard_bytes"]) + 63) & ~63),
+                name + " introspected rounded bytes differ")
         if tail and not (direct or no_op):
             require(
                 accounting.tail_reserved_slots == int(row["K"]) + int(row["R"]),
@@ -139,7 +169,9 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
                 str(row["backend"]) in ("scalar", "ssse3", "avx2", "neon"),
                 name + " did not record the selected production backend",
             )
-        checks += 10
+        require(str(row["selected_rule"]) and str(row["scratch_rule"]) and
+                str(row["codec_rule"]), name + " missing selected rule")
+        checks += 16
 
     required = {
         "noop_ragged", "forced_high_materialized_aligned",
@@ -149,6 +181,7 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
         "direct_xor", "direct_copy", "direct_repair",
         "auto_ordinary_high", "auto_balanced_64", "auto_balanced_256",
         "auto_high_16k", "auto_high_32k", "auto_high_128k", "auto_low",
+        "auto_high_32k_batch",
     }
     require(required.issubset(names), "probe is missing required rows")
     require(auto_rows >= 7, "probe did not cover AUTO size transitions")
@@ -171,8 +204,8 @@ def mutation_checks() -> int:
             "ragged-reservation mutation",
         ),
         (
-            "plan\n                ? plan->requested_coordinates.size()\n                : static_cast<size_t>(codec->recovery_count)",
-            "plan\n                ? static_cast<size_t>(codec->recovery_count)\n                : static_cast<size_t>(codec->recovery_count)",
+            "plan\n            ? plan->requested_coordinates.size()\n            : codec->recovery_count",
+            "plan\n            ? codec->recovery_count\n            : codec->recovery_count",
             "plan-output-slot mutation",
         ),
         (

@@ -28,6 +28,7 @@
 
 #include "leopard.h"
 #include "leopard2.h"
+#include "Leopard2Dispatch.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -95,6 +96,7 @@ struct Options
     bool force_materialized_decode;
     bool skip_legacy;
     bool retain_samples;
+    bool report_decode_path;
     std::string output;
 
     Options()
@@ -117,6 +119,7 @@ struct Options
         , force_materialized_decode(false)
         , skip_legacy(false)
         , retain_samples(false)
+        , report_decode_path(false)
         , output("-")
     {}
 };
@@ -368,6 +371,7 @@ static void Usage(std::ostream& output, const char* program)
         << "  --force-materialized  Use the retained N-slot specialized kernel\n"
         << "  --skip-legacy         Do not run the in-tree legacy comparison\n"
         << "  --retain-samples      Emit raw timing samples using benchmark schema v2\n"
+        << "  --report-decode-path  Emit internal selected-path metadata using schema v3\n"
         << "  --json PATH           JSON output path, or - for stdout\n"
         << "  --help                 Show this message\n";
 }
@@ -402,6 +406,7 @@ static Options ParseOptions(int argc, char** argv)
         else if (argument == "--force-materialized") options.force_materialized_decode = true;
         else if (argument == "--skip-legacy") options.skip_legacy = true;
         else if (argument == "--retain-samples") options.retain_samples = true;
+        else if (argument == "--report-decode-path") options.report_decode_path = true;
         else if (argument == "--json" || argument == "--output") options.output = NeedValue(argc, argv, i);
         else Fail("unknown argument: " + argument);
     }
@@ -880,6 +885,14 @@ static int Run(const Options& options)
     RequireLeo2(leo2_decode_plan_scratch_size(plan, options.bytes, &decode_scratch_bytes),
         "decode scratch query");
 
+    leopard2_internal::DecodePathInfo decode_path_info;
+    if (options.report_decode_path)
+    {
+        RequireLeo2(leopard2_internal::GetDecodePlanPathInfo(
+            plan, options.bytes, options.batch > 1, &decode_path_info),
+            "decode path introspection");
+    }
+
     std::vector<std::unique_ptr<Stripe> > stripes;
     stripes.reserve(options.batch);
     std::vector<leo2_encode_batch_item> encode_items(options.batch);
@@ -903,7 +916,10 @@ static int Run(const Options& options)
         decode_items[i].scratch_bytes = stripe.decode_scratch.size();
     }
 
-    const bool extended_schema = options.skip_legacy || options.retain_samples;
+    const bool extended_schema = options.skip_legacy || options.retain_samples ||
+        options.report_decode_path;
+    const unsigned schema_version = options.report_decode_path
+        ? 3 : (extended_schema ? 2 : 1);
     static const uint64_t kFnv1a64Offset = UINT64_C(14695981039346656037);
     uint64_t original_digest = kFnv1a64Offset;
     uint64_t parity_digest = kFnv1a64Offset;
@@ -1078,7 +1094,7 @@ static int Run(const Options& options)
     json << std::fixed << std::setprecision(6);
     json << "{\n"
          << "  \"schema\": \"leopard2-benchmark-v"
-         << (extended_schema ? 2 : 1) << "\",\n"
+         << schema_version << "\",\n"
          << "  \"build\": {\n"
          << "    \"compiler\": \"" << CompilerName() << "\",\n"
          << "    \"compiler_version\": \"" << JsonEscape(CompilerVersion()) << "\",\n"
@@ -1104,6 +1120,8 @@ static int Run(const Options& options)
              << (options.skip_legacy ? "true" : "false") << ",\n"
              << "    \"retain_samples\": "
              << (options.retain_samples ? "true" : "false") << ",\n";
+        if (options.report_decode_path)
+            json << "    \"report_decode_path\": true,\n";
     }
     json << "    \"shard_bytes\": " << options.bytes << ",\n"
          << "    \"loss_count\": " << options.losses << ",\n"
@@ -1128,7 +1146,28 @@ static int Run(const Options& options)
          << "    \"backend\": \"" << BackendName(leo2_context_backend(context)) << "\",\n"
          << "    \"thread_count\": " << leo2_context_thread_count(context) << ",\n"
          << "    \"parent_count\": " << leo2_codec_parent_count(codec) << ",\n"
-         << "    \"padded_side\": " << leo2_codec_padded_side(codec) << "\n"
+         << "    \"padded_side\": " << leo2_codec_padded_side(codec);
+    if (options.report_decode_path)
+    {
+        json << ",\n"
+             << "    \"selected_decode_path\": \""
+             << leopard2_internal::DecodePathName(decode_path_info.path)
+             << "\",\n"
+             << "    \"selected_decode_rule\": \""
+             << leopard2_internal::DecodePathRuleName(decode_path_info.rule)
+             << "\",\n"
+             << "    \"decode_required_work_slots\": "
+             << decode_path_info.required_work_slots << ",\n"
+             << "    \"decode_aligned_prefix_bytes\": "
+             << decode_path_info.aligned_prefix_bytes << ",\n"
+             << "    \"decode_tail_bytes\": "
+             << decode_path_info.tail_bytes << ",\n"
+             << "    \"decode_rounded_bytes\": "
+             << decode_path_info.rounded_shard_bytes << ",\n"
+             << "    \"decode_multi_item_batch\": "
+             << (decode_path_info.multi_item_batch ? "true" : "false");
+    }
+    json << "\n"
          << "  },\n"
          << "  \"correctness\": {\n"
          << "    \"leopard2_round_trip\": true,\n"

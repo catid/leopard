@@ -16,7 +16,11 @@ def require(condition: bool, message: str) -> None:
         raise RuntimeError(message)
 
 
-def run(executable: Path, external_evidence: bool) -> dict[str, Any]:
+def run(
+    executable: Path,
+    external_evidence: bool,
+    report_decode_path: bool = False,
+) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="leo2-benchmark-json-") as temporary:
         output = Path(temporary) / "result.json"
         command = [
@@ -28,6 +32,8 @@ def run(executable: Path, external_evidence: bool) -> dict[str, Any]:
         ]
         if external_evidence:
             command.extend(("--skip-legacy", "--retain-samples"))
+        if report_decode_path:
+            command.append("--report-decode-path")
         command.extend(("--json", str(output)))
         completed = subprocess.run(
             command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -43,14 +49,25 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
     expected_top = {
         "schema", "build", "parameters", "resolved", "correctness",
         "memory", "metrics", "legacy"}
-    if document["schema"] == "leopard2-benchmark-v2":
+    if document["schema"] in {
+        "leopard2-benchmark-v2", "leopard2-benchmark-v3"
+    }:
         expected_top.add("workload_digests")
     require(set(document) == expected_top, "top-level JSON keys changed")
     require(set(document["build"]) == {
         "compiler", "compiler_version", "cplusplus"}, "build keys changed")
-    require(set(document["resolved"]) == {
+    expected_resolved = {
         "profile", "field", "backend", "thread_count", "parent_count",
-        "padded_side"}, "resolved keys changed")
+        "padded_side"}
+    if document["schema"] == "leopard2-benchmark-v3":
+        expected_resolved.update({
+            "selected_decode_path", "selected_decode_rule",
+            "decode_required_work_slots", "decode_aligned_prefix_bytes",
+            "decode_tail_bytes", "decode_rounded_bytes",
+            "decode_multi_item_batch",
+        })
+    require(set(document["resolved"]) == expected_resolved,
+            "resolved keys changed")
     require(set(document["correctness"]) == {
         "leopard2_round_trip", "legacy_comparison"}, "correctness keys changed")
     require(set(document["memory"]) == {
@@ -172,6 +189,27 @@ def main() -> int:
     require(external["correctness"]["legacy_comparison"] is None,
             "external-evidence mode claimed a legacy comparison")
     validate_isal_comparison_contract(external)
+
+    path_report = run(executable, True, True)
+    require(path_report["schema"] == "leopard2-benchmark-v3",
+            "path-report benchmark schema changed")
+    validate_common(path_report, True)
+    validate_workload_digests(path_report)
+    require(set(path_report["parameters"]) ==
+            (expected_external_parameters | {"report_decode_path"}),
+            "path-report parameter structure changed")
+    require(path_report["parameters"]["report_decode_path"] is True,
+            "path-report opt-in was not recorded")
+    resolved = path_report["resolved"]
+    require(resolved["selected_decode_path"] == "direct" and
+            resolved["selected_decode_rule"] == "direct" and
+            resolved["decode_required_work_slots"] == 0,
+            "path-report did not observe the production direct repair")
+    require(resolved["decode_aligned_prefix_bytes"] == 64 and
+            resolved["decode_tail_bytes"] == 0 and
+            resolved["decode_rounded_bytes"] == 64 and
+            resolved["decode_multi_item_batch"] is False,
+            "path-report byte/batch geometry differs")
     print("leopard2 benchmark JSON regression passed")
     return 0
 

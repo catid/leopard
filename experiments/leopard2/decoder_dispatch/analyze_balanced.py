@@ -250,13 +250,14 @@ def validate_benchmark(path: Path, case: dict[str, Any], mode: str,
         "workload_digests", "memory", "metrics", "legacy",
     }, f"benchmark {path}")
     common.require(document["schema"] == common.BENCHMARK_SCHEMA,
-                   f"{path}: benchmark schema is not v2")
+                   f"{path}: benchmark schema is not v3")
     common.require_keys(document["build"], {"compiler", "compiler_version", "cplusplus"},
                         f"{path} compiler build")
     parameters = common.require_keys(document["parameters"], {
         "K", "R", "requested_profile", "requested_field", "requested_backend",
         "force_generic_decode", "force_specialized_decode", "force_tiled_decode",
-        "force_materialized_decode", "skip_legacy", "retain_samples", "shard_bytes",
+        "force_materialized_decode", "skip_legacy", "retain_samples",
+        "report_decode_path", "shard_bytes",
         "loss_count", "missing_original_indices", "batch", "reuse", "iterations",
         "warmup", "thread_count", "seed",
     }, f"{path} parameters")
@@ -267,6 +268,7 @@ def validate_benchmark(path: Path, case: dict[str, Any], mode: str,
         "K": case["K"], "R": case["R"], "requested_profile": "legacy_high_v1",
         "requested_field": "gf8", "requested_backend": case["backend"],
         "skip_legacy": True, "retain_samples": True,
+        "report_decode_path": True,
         "shard_bytes": case["shard_bytes"], "loss_count": case["loss_count"],
         "batch": case["batch"], "reuse": case["reuse"],
         "iterations": case["iterations"], "warmup": case["warmup"],
@@ -279,11 +281,23 @@ def validate_benchmark(path: Path, case: dict[str, Any], mode: str,
                    f"{path}: missing-original coordinates are not canonical full loss")
     resolved = common.require_keys(document["resolved"], {
         "profile", "field", "backend", "thread_count", "parent_count", "padded_side",
+        "selected_decode_path", "selected_decode_rule",
+        "decode_required_work_slots", "decode_aligned_prefix_bytes",
+        "decode_tail_bytes", "decode_rounded_bytes", "decode_multi_item_batch",
     }, f"{path} resolved")
     expected_resolved = {
         "profile": "legacy_high_v1", "field": "gf8", "backend": case["backend"],
         "thread_count": 1, "parent_count": case["parent_count"],
         "padded_side": case["padded_side"],
+        "selected_decode_path": mode,
+        "selected_decode_rule": "forced_" + mode,
+        "decode_required_work_slots": (
+            case["parent_count"] if mode != "tiled" else
+            2 * case["padded_side"] + case["loss_count"]),
+        "decode_aligned_prefix_bytes": case["shard_bytes"] & ~63,
+        "decode_tail_bytes": case["shard_bytes"] & 63,
+        "decode_rounded_bytes": (case["shard_bytes"] + 63) & ~63,
+        "decode_multi_item_batch": case["batch"] > 1,
     }
     for key, expected in expected_resolved.items():
         common.require(type(resolved[key]) is type(expected) and resolved[key] == expected,
@@ -760,12 +774,17 @@ def make_fixture(root: Path) -> Path:
                 "parameters": {"K": 8, "R": 8, "requested_profile": "legacy_high_v1",
                     "requested_field": "gf8", "requested_backend": "scalar",
                     **common.MODE_PARAMETERS[mode], "skip_legacy": True,
-                    "retain_samples": True, "shard_bytes": 256, "loss_count": 8,
+                    "retain_samples": True, "report_decode_path": True,
+                    "shard_bytes": 256, "loss_count": 8,
                     "missing_original_indices": list(range(8)), "batch": 1, "reuse": 2,
                     "iterations": 3, "warmup": 1, "thread_count": 1, "seed": 77},
                 "resolved": {"profile": "legacy_high_v1", "field": "gf8",
                     "backend": "scalar", "thread_count": 1, "parent_count": 16,
-                    "padded_side": 8},
+                    "padded_side": 8, "selected_decode_path": mode,
+                    "selected_decode_rule": "forced_" + mode,
+                    "decode_required_work_slots": 16 if mode != "tiled" else 24,
+                    "decode_aligned_prefix_bytes": 256, "decode_tail_bytes": 0,
+                    "decode_rounded_bytes": 256, "decode_multi_item_batch": False},
                 "correctness": {"leopard2_round_trip": True, "legacy_comparison": None},
                 "workload_digests": {"algorithm": "fnv1a64", "original_data": "1" * 16,
                     "transmitted_parity": "2" * 16, "recovered_originals": "3" * 16},
