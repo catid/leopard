@@ -627,6 +627,37 @@ class CMakeProductionGraph(object):
         ("execute_process", _locator_git_revision): 1,
         ("execute_process", _locator_git_status): 1,
     })
+    _sparse_sidecar_link_depends = (
+        "TARGET", "bench_leopard2_sparse_encode", "APPEND", "PROPERTY",
+        "LINK_DEPENDS",
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/"
+        "WriteSparseEncodeEvidenceSidecar.cmake")
+    _sparse_sidecar_post_build = (
+        "TARGET", "bench_leopard2_sparse_encode", "POST_BUILD", "COMMAND",
+        "${CMAKE_COMMAND}",
+        "-DOUTPUT=$<TARGET_FILE:bench_leopard2_sparse_encode>."
+        "leopard2-evidence",
+        "-DEXECUTABLE=$<TARGET_FILE:bench_leopard2_sparse_encode>",
+        "-DPRODUCTION_ARCHIVE=$<TARGET_FILE:leopard>",
+        "-DBENCHMARK_OBJECT=$<TARGET_OBJECTS:"
+        "leopard2_sparse_encode_benchmark_object>",
+        "-DORACLE_OBJECT=$<TARGET_OBJECTS:"
+        "leopard2_sparse_encode_oracle_object>",
+        "-DBENCHMARK_LINK_RECIPE=${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/"
+        "bench_leopard2_sparse_encode.dir/link.txt",
+        "-DPRODUCTION_LINK_RECIPE=${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/"
+        "leopard.dir/link.txt",
+        "-DBUILD_PROGRAM=${CMAKE_MAKE_PROGRAM}",
+        "-DBUILD_ROOT=${CMAKE_CURRENT_BINARY_DIR}",
+        "-DBUILD_GENERATOR=${CMAKE_GENERATOR}",
+        "-P",
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/"
+        "WriteSparseEncodeEvidenceSidecar.cmake",
+        "VERBATIM")
+    _required_sparse_sidecar_commands = Counter({
+        ("set_property", _sparse_sidecar_link_depends): 1,
+        ("add_custom_command", _sparse_sidecar_post_build): 1,
+    })
     _required_trusted_commands = Counter({
         ("cmake_minimum_required", ("VERSION", "3.7")): 1,
         ("project", ("leopard",)): 1,
@@ -833,6 +864,10 @@ class CMakeProductionGraph(object):
             "execute_process", _locator_git_revision)),
         ("locator-provenance", (
             "execute_process", _locator_git_status)),
+        ("sparse-sidecar", (
+            "set_property", _sparse_sidecar_link_depends)),
+        ("sparse-sidecar", (
+            "add_custom_command", _sparse_sidecar_post_build)),
     )
     _dangerous_build_properties = {
         "COMPILE_DEFINITIONS", "COMPILE_FEATURES", "COMPILE_FLAGS",
@@ -911,6 +946,7 @@ class CMakeProductionGraph(object):
         self.target_build_mutations = []
         self.trusted_command_counts = Counter()
         self.locator_provenance_counts = Counter()
+        self.sparse_sidecar_counts = Counter()
         self.protected_assignments = []
         self.contract_events = []
         self.require_mutation_contract = require_mutation_contract
@@ -1068,6 +1104,22 @@ class CMakeProductionGraph(object):
                 "locator provenance command guard drift: " + command)
         self.locator_provenance_counts[key] += 1
         self.contract_events.append(("locator-provenance", key))
+        return True
+
+    def _record_sparse_sidecar_command(
+            self, command, tokens, guard, reasons):
+        key = (command, tuple(tokens))
+        if key not in self._required_sparse_sidecar_commands:
+            return False
+        expected_guard = bool_and(
+            bool_atom("option:LEO2_BUILD_BENCHMARKS"),
+            bool_atom("option:LEOPARD_ENABLE_GF8"),
+            bool_atom("option:LEOPARD_ENABLE_GF16"))
+        if reasons or not self._formula_equivalent(guard, expected_guard):
+            raise ContractError(
+                "sparse evidence sidecar command guard drift: " + command)
+        self.sparse_sidecar_counts[key] += 1
+        self.contract_events.append(("sparse-sidecar", key))
         return True
 
     @classmethod
@@ -1871,6 +1923,11 @@ class CMakeProductionGraph(object):
                     output_variable,
                     (BOOL_SYMBOL_PREFIX + symbol + "-output",), guard)
                 continue
+            if (command in {"set_property", "add_custom_command"} and
+                    bool_satisfiable(guard) and
+                    self._record_sparse_sidecar_command(
+                        command, tokens, guard, reasons)):
+                continue
             if (command in self._build_extension_commands and
                     bool_satisfiable(guard)):
                 raise ContractError(
@@ -2168,6 +2225,17 @@ class CMakeProductionGraph(object):
                          self._required_locator_provenance_commands)
                 raise ContractError(
                     "missing or duplicate locator provenance command: "
+                    "missing=" +
+                    repr(sorted(missing.elements(), key=repr)) + " extra=" +
+                    repr(sorted(extra.elements(), key=repr)))
+            if (self.sparse_sidecar_counts !=
+                    self._required_sparse_sidecar_commands):
+                missing = (self._required_sparse_sidecar_commands -
+                           self.sparse_sidecar_counts)
+                extra = (self.sparse_sidecar_counts -
+                         self._required_sparse_sidecar_commands)
+                raise ContractError(
+                    "missing or duplicate sparse evidence sidecar command: "
                     "missing=" +
                     repr(sorted(missing.elements(), key=repr)) + " extra=" +
                     repr(sorted(extra.elements(), key=repr)))
@@ -4557,6 +4625,116 @@ target_compile_options(alias_backend PRIVATE /arch:AVX2)
         reordered = self.cmake.replace(revision_command, sentinel, 1)
         reordered = reordered.replace(status_command, revision_command, 1)
         reordered = reordered.replace(sentinel, status_command, 1)
+        self.assertNotEqual(reordered, self.cmake)
+        with self.assertRaisesRegex(
+                ContractError, "security-sensitive CMake command order drift"):
+            self.resolve_text(reordered, require_mutation_contract=True)
+
+    def test_sparse_evidence_sidecar_commands_are_exact_guarded_and_required(
+            self):
+        link_depends = """set_property(TARGET bench_leopard2_sparse_encode APPEND PROPERTY
+            LINK_DEPENDS
+            ${CMAKE_CURRENT_SOURCE_DIR}/cmake/WriteSparseEncodeEvidenceSidecar.cmake)"""
+        post_build = """add_custom_command(TARGET bench_leopard2_sparse_encode POST_BUILD
+            COMMAND ${CMAKE_COMMAND}
+                -DOUTPUT=$<TARGET_FILE:bench_leopard2_sparse_encode>.leopard2-evidence
+                -DEXECUTABLE=$<TARGET_FILE:bench_leopard2_sparse_encode>
+                -DPRODUCTION_ARCHIVE=$<TARGET_FILE:leopard>
+                -DBENCHMARK_OBJECT=$<TARGET_OBJECTS:leopard2_sparse_encode_benchmark_object>
+                -DORACLE_OBJECT=$<TARGET_OBJECTS:leopard2_sparse_encode_oracle_object>
+                -DBENCHMARK_LINK_RECIPE=${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/bench_leopard2_sparse_encode.dir/link.txt
+                -DPRODUCTION_LINK_RECIPE=${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/leopard.dir/link.txt
+                -DBUILD_PROGRAM=${CMAKE_MAKE_PROGRAM}
+                -DBUILD_ROOT=${CMAKE_CURRENT_BINARY_DIR}
+                -DBUILD_GENERATOR=${CMAKE_GENERATOR}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/WriteSparseEncodeEvidenceSidecar.cmake
+            VERBATIM)"""
+        commands = (link_depends, post_build)
+        for command in commands:
+            with self.subTest(required=command.split("(", 1)[0]):
+                self.assertEqual(1, self.cmake.count(command))
+                removed = self.cmake.replace(command, "", 1)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "missing or duplicate sparse evidence sidecar command"):
+                    self.resolve_text(
+                        removed, require_mutation_contract=True)
+
+            with self.subTest(duplicate=command.split("(", 1)[0]):
+                duplicated = self.cmake.replace(
+                    command, command + "\n        " + command, 1)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "missing or duplicate sparse evidence sidecar command"):
+                    self.resolve_text(
+                        duplicated, require_mutation_contract=True)
+
+        adversarial_mutations = (
+            (link_depends, link_depends.replace(
+                "TARGET bench_leopard2_sparse_encode",
+                "TARGET leopard", 1)),
+            (link_depends, link_depends.replace(
+                "APPEND PROPERTY", "APPEND_STRING PROPERTY", 1)),
+            (link_depends, link_depends.replace(
+                "LINK_DEPENDS", "LINK_OPTIONS", 1)),
+            (link_depends, link_depends.replace(
+                "WriteSparseEncodeEvidenceSidecar.cmake",
+                "InjectedSparseSidecar.cmake", 1)),
+            (post_build, post_build.replace(
+                "TARGET bench_leopard2_sparse_encode POST_BUILD",
+                "TARGET leopard POST_BUILD", 1)),
+            (post_build, post_build.replace(
+                "POST_BUILD", "PRE_LINK", 1)),
+            (post_build, post_build.replace(
+                "COMMAND ${CMAKE_COMMAND}", "COMMAND injected", 1)),
+            (post_build, post_build.replace(
+                "-DPRODUCTION_ARCHIVE=$<TARGET_FILE:leopard>",
+                "-DPRODUCTION_ARCHIVE=$<TARGET_FILE:libleopard>", 1)),
+            (post_build, post_build.replace(
+                "-DBENCHMARK_OBJECT=$<TARGET_OBJECTS:"
+                "leopard2_sparse_encode_benchmark_object>",
+                "-DBENCHMARK_OBJECT=$<TARGET_OBJECTS:"
+                "leopard2_sparse_encode_oracle_object>", 1)),
+            (post_build, post_build.replace(
+                "-DBUILD_ROOT=${CMAKE_CURRENT_BINARY_DIR}",
+                "-DBUILD_ROOT=${CMAKE_CURRENT_SOURCE_DIR}", 1)),
+            (post_build, post_build.replace(
+                "WriteSparseEncodeEvidenceSidecar.cmake",
+                "InjectedSparseSidecar.cmake", 1)),
+            (post_build, post_build.replace("\n            VERBATIM)", ")", 1)),
+        )
+        for original, replacement in adversarial_mutations:
+            with self.subTest(mutation=replacement.splitlines()[0]):
+                self.assertNotEqual(original, replacement)
+                mutated = self.cmake.replace(original, replacement, 1)
+                self.assertNotEqual(mutated, self.cmake)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "generated/custom build extension|target property|"
+                        "embedded or environment source variable|"
+                        "compile/link property bypasses graph"):
+                    self.resolve_text(
+                        mutated, require_mutation_contract=True)
+
+        field_guard = (
+            "if(LEOPARD_ENABLE_GF8 AND LEOPARD_ENABLE_GF16)")
+        self.assertEqual(2, self.cmake.count(field_guard))
+        for replacement in (
+                "if(LEOPARD_ENABLE_GF8)",
+                "if(LEOPARD_ENABLE_GF8 OR LEOPARD_ENABLE_GF16)",
+                "if(NOT LEOPARD_ENABLE_GF8 AND LEOPARD_ENABLE_GF16)"):
+            with self.subTest(guard=replacement):
+                mutated = self.cmake.replace(field_guard, replacement, 1)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "sparse evidence sidecar command guard drift"):
+                    self.resolve_text(
+                        mutated, require_mutation_contract=True)
+
+        sentinel = "__LEO2_SPARSE_SIDECAR_COMMAND_SENTINEL__"
+        reordered = self.cmake.replace(link_depends, sentinel, 1)
+        reordered = reordered.replace(post_build, link_depends, 1)
+        reordered = reordered.replace(sentinel, post_build, 1)
         self.assertNotEqual(reordered, self.cmake)
         with self.assertRaisesRegex(
                 ContractError, "security-sensitive CMake command order drift"):
