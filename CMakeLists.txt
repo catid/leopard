@@ -38,6 +38,13 @@ set(LIB_SOURCE_FILES
         LeopardFF8XorAVX2.h
         LeopardFF8XorAVX512.cpp
         LeopardFF8XorAVX512.h
+        LeopardFF8XorTranspose.cpp
+        LeopardFF8XorTranspose.h
+        LeopardFF8XorTransposeAVX2.cpp
+        LeopardFF8XorTransposeAVX2.h
+        LeopardFF8XorTransposeAVX512.h
+        LeopardFF8XorTransposeBITALG.cpp
+        LeopardFF8XorTransposeVBMI.cpp
         leopard_ff8xor.cpp
         leopard_ff8xor.h)
 
@@ -65,7 +72,7 @@ set(FF8XOR_BASELINE_COMPILE_FLAGS "")
 set(FF8XOR_AVX2_COMPILE_FLAGS "")
 set(FF8XOR_BUILD_AVX2 OFF)
 option(LEO_FF8XOR_ENABLE_AVX2
-    "Build isolated experimental AVX2 FF8 XOR circuit kernels" ON)
+    "Build isolated experimental AVX2 FF8 XOR circuit and boundary-transpose kernels" ON)
 if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND
    CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
@@ -102,7 +109,26 @@ if(FF8XOR_BASELINE_COMPILE_FLAGS AND
         -mno-avx
         -mno-avx2
         -mno-avx512f
+        -mno-avx512bw
+        -mno-avx512cd
+        -mno-avx512dq
+        -mno-avx512er
+        -mno-avx512ifma
+        -mno-avx512pf
         -mno-avx512vl
+        -mno-avx512bitalg
+        -mno-avx512vbmi
+        -mno-avx512vbmi2
+        -mno-avx512vpopcntdq
+        -mno-avx512vnni
+        -mno-avx512bf16
+        -mno-avx512fp16
+        -mno-avx512vp2intersect
+        -mno-avx5124fmaps
+        -mno-avx5124vnniw
+        -mno-avxvnni
+        -mno-avxvnniint8
+        -mno-avxvnniint16
         -mno-bmi
         -mno-bmi2
         -mno-lzcnt
@@ -110,7 +136,9 @@ if(FF8XOR_BASELINE_COMPILE_FLAGS AND
         -mno-aes
         -mno-pclmul
         -mno-fma
-        -mno-gfni)
+        -mno-gfni
+        -mno-vaes
+        -mno-vpclmulqdq)
     foreach(FF8XOR_BASELINE_DISABLE_FLAG ${FF8XOR_BASELINE_DISABLE_FLAGS})
         string(MAKE_C_IDENTIFIER
             "FF8XOR_SUPPORTS_${FF8XOR_BASELINE_DISABLE_FLAG}"
@@ -146,6 +174,7 @@ if(FF8XOR_BASELINE_COMPILE_FLAGS)
         leopard.cpp
         leopard_ff8xor.cpp
         LeopardFF8Xor.cpp
+        LeopardFF8XorTranspose.cpp
         PROPERTIES
         COMPILE_FLAGS "${FF8XOR_BASELINE_COMPILE_FLAGS}")
 endif()
@@ -154,12 +183,17 @@ if(FF8XOR_BUILD_AVX2)
     set_source_files_properties(LeopardFF8XorAVX2.cpp PROPERTIES
         COMPILE_FLAGS "${FF8XOR_AVX2_COMPILE_FLAGS}"
         COMPILE_DEFINITIONS "LEO_FF8XOR_BUILD_AVX2=1")
+    set_source_files_properties(LeopardFF8XorTransposeAVX2.cpp PROPERTIES
+        COMPILE_FLAGS "${FF8XOR_AVX2_COMPILE_FLAGS}"
+        COMPILE_DEFINITIONS "LEO_FF8XOR_BUILD_AVX2_TRANSPOSE=1")
     set_property(SOURCE LeopardFF8Xor.cpp APPEND PROPERTY
         COMPILE_DEFINITIONS "LEO_FF8XOR_HAS_AVX2_KERNELS=1")
     message(STATUS "FF8 XOR AVX2 kernels: enabled (isolated object)")
 else()
     if(FF8XOR_BASELINE_COMPILE_FLAGS)
         set_source_files_properties(LeopardFF8XorAVX2.cpp PROPERTIES
+            COMPILE_FLAGS "${FF8XOR_BASELINE_COMPILE_FLAGS}")
+        set_source_files_properties(LeopardFF8XorTransposeAVX2.cpp PROPERTIES
             COMPILE_FLAGS "${FF8XOR_BASELINE_COMPILE_FLAGS}")
     endif()
     message(STATUS "FF8 XOR AVX2 kernels: unavailable")
@@ -174,7 +208,7 @@ set(FF8XOR_COMPILE_FLAGS "${FF8XOR_BASELINE_COMPILE_FLAGS}")
 # Unsupported compilers build small stubs from this source; runtime
 # CPUID/XCR0 checks still gate every call into a real kernel.
 option(LEO_FF8XOR_ENABLE_AVX512
-    "Build experimental AVX-512VL/ZMM FF8 XOR circuit kernels" ON)
+    "Build experimental AVX-512 FF8 XOR circuit and boundary-transpose kernels" ON)
 set(FF8XOR_BUILD_AVX512 OFF)
 if(LEO_FF8XOR_ENABLE_AVX512 AND FF8XOR_BUILD_AVX2 AND
    CMAKE_SIZEOF_VOID_P EQUAL 8 AND
@@ -212,6 +246,158 @@ else()
             COMPILE_FLAGS "${FF8XOR_BASELINE_COMPILE_FLAGS}")
     endif()
     message(STATUS "FF8 XOR AVX-512VL/ZMM kernels: unavailable")
+endif()
+
+# Packed-boundary transposes use two narrower AVX-512 feature contracts than
+# the generated circuit kernels above.  BITALG and VBMI are compiled in
+# separate objects so runtime dispatch never requires one feature merely
+# because the other direction uses it.  AVX-512VL is not required.
+set(FF8XOR_BUILD_AVX512_BITALG_TRANSPOSE OFF)
+set(FF8XOR_BUILD_AVX512_VBMI_TRANSPOSE OFF)
+set(FF8XOR_AVX512_BITALG_TRANSPOSE_FLAGS "")
+set(FF8XOR_AVX512_VBMI_TRANSPOSE_FLAGS "")
+if(LEO_FF8XOR_ENABLE_AVX512 AND
+   CMAKE_SIZEOF_VOID_P EQUAL 8 AND
+   CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$" AND
+   (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+    CMAKE_CXX_COMPILER_ID MATCHES "Clang"))
+    check_cxx_compiler_flag("-mavx512f" COMPILER_SUPPORTS_AVX512F)
+    check_cxx_compiler_flag("-mavx512bw"
+        COMPILER_SUPPORTS_AVX512BW_TRANSPOSE)
+    check_cxx_compiler_flag("-mavx512bitalg"
+        COMPILER_SUPPORTS_AVX512BITALG_TRANSPOSE)
+    check_cxx_compiler_flag("-mavx512vbmi"
+        COMPILER_SUPPORTS_AVX512VBMI_TRANSPOSE)
+    if(COMPILER_SUPPORTS_AVX512F AND
+       COMPILER_SUPPORTS_AVX512BW_TRANSPOSE AND
+       COMPILER_SUPPORTS_AVX512BITALG_TRANSPOSE)
+        set(FF8XOR_BUILD_AVX512_BITALG_TRANSPOSE ON)
+        set(FF8XOR_AVX512_BITALG_TRANSPOSE_FLAGS
+            "-march=x86-64")
+    endif()
+    if(COMPILER_SUPPORTS_AVX512F AND
+       COMPILER_SUPPORTS_AVX512BW_TRANSPOSE AND
+       COMPILER_SUPPORTS_AVX512VBMI_TRANSPOSE)
+        set(FF8XOR_BUILD_AVX512_VBMI_TRANSPOSE ON)
+        set(FF8XOR_AVX512_VBMI_TRANSPOSE_FLAGS
+            "-march=x86-64")
+    endif()
+
+    # A later -march does not necessarily cancel extension flags explicitly
+    # supplied in global CXX flags.  Negate every probed non-contract feature
+    # so adversarial build flags cannot broaden either runtime gate.  Append
+    # the required feature set last: Clang otherwise treats some negative
+    # options (notably -mno-fma) as revoking AVX-512F prerequisites.  Do not
+    # negate AVX2 here: GCC models AVX-512F as depending on its target option
+    # even though these inspected kernels emit no AVX2-width instructions.
+    set(FF8XOR_AVX512_TRANSPOSE_COMMON_DISABLE_FLAGS
+        -mno-avx512cd
+        -mno-avx512dq
+        -mno-avx512er
+        -mno-avx512ifma
+        -mno-avx512pf
+        -mno-avx512vl
+        -mno-avx512vpopcntdq
+        -mno-avx512vnni
+        -mno-avx512bf16
+        -mno-avx512fp16
+        -mno-avx512vp2intersect
+        -mno-avx5124fmaps
+        -mno-avx5124vnniw
+        -mno-avxvnni
+        -mno-avxvnniint8
+        -mno-avxvnniint16
+        -mno-gfni
+        -mno-vaes
+        -mno-vpclmulqdq
+        -mno-bmi
+        -mno-bmi2
+        -mno-lzcnt
+        -mno-popcnt
+        -mno-aes
+        -mno-pclmul
+        -mno-fma)
+    set(FF8XOR_AVX512_BITALG_TRANSPOSE_DISABLE_FLAGS
+        ${FF8XOR_AVX512_TRANSPOSE_COMMON_DISABLE_FLAGS}
+        -mno-avx512vbmi
+        -mno-avx512vbmi2)
+    set(FF8XOR_AVX512_VBMI_TRANSPOSE_DISABLE_FLAGS
+        ${FF8XOR_AVX512_TRANSPOSE_COMMON_DISABLE_FLAGS}
+        -mno-avx512bitalg
+        -mno-avx512vbmi2)
+
+    if(FF8XOR_BUILD_AVX512_BITALG_TRANSPOSE)
+        foreach(FF8XOR_TRANSPOSE_DISABLE_FLAG
+                ${FF8XOR_AVX512_BITALG_TRANSPOSE_DISABLE_FLAGS})
+            string(MAKE_C_IDENTIFIER
+                "FF8XOR_TRANSPOSE_SUPPORTS_${FF8XOR_TRANSPOSE_DISABLE_FLAG}"
+                FF8XOR_TRANSPOSE_DISABLE_VARIABLE)
+            check_cxx_compiler_flag(
+                "${FF8XOR_TRANSPOSE_DISABLE_FLAG}"
+                ${FF8XOR_TRANSPOSE_DISABLE_VARIABLE})
+            if(${FF8XOR_TRANSPOSE_DISABLE_VARIABLE})
+                set(FF8XOR_AVX512_BITALG_TRANSPOSE_FLAGS
+                    "${FF8XOR_AVX512_BITALG_TRANSPOSE_FLAGS} ${FF8XOR_TRANSPOSE_DISABLE_FLAG}")
+            endif()
+        endforeach()
+        set(FF8XOR_AVX512_BITALG_TRANSPOSE_FLAGS
+            "${FF8XOR_AVX512_BITALG_TRANSPOSE_FLAGS} -mavx512f -mavx512bw -mavx512bitalg")
+    endif()
+    if(FF8XOR_BUILD_AVX512_VBMI_TRANSPOSE)
+        foreach(FF8XOR_TRANSPOSE_DISABLE_FLAG
+                ${FF8XOR_AVX512_VBMI_TRANSPOSE_DISABLE_FLAGS})
+            string(MAKE_C_IDENTIFIER
+                "FF8XOR_TRANSPOSE_SUPPORTS_${FF8XOR_TRANSPOSE_DISABLE_FLAG}"
+                FF8XOR_TRANSPOSE_DISABLE_VARIABLE)
+            check_cxx_compiler_flag(
+                "${FF8XOR_TRANSPOSE_DISABLE_FLAG}"
+                ${FF8XOR_TRANSPOSE_DISABLE_VARIABLE})
+            if(${FF8XOR_TRANSPOSE_DISABLE_VARIABLE})
+                set(FF8XOR_AVX512_VBMI_TRANSPOSE_FLAGS
+                    "${FF8XOR_AVX512_VBMI_TRANSPOSE_FLAGS} ${FF8XOR_TRANSPOSE_DISABLE_FLAG}")
+            endif()
+        endforeach()
+        set(FF8XOR_AVX512_VBMI_TRANSPOSE_FLAGS
+            "${FF8XOR_AVX512_VBMI_TRANSPOSE_FLAGS} -mavx512f -mavx512bw -mavx512vbmi")
+    endif()
+endif()
+
+if(FF8XOR_BUILD_AVX512_BITALG_TRANSPOSE)
+    set_source_files_properties(LeopardFF8XorTransposeBITALG.cpp PROPERTIES
+        COMPILE_FLAGS "${FF8XOR_AVX512_BITALG_TRANSPOSE_FLAGS}"
+        COMPILE_DEFINITIONS
+            "LEO_FF8XOR_BUILD_AVX512_BITALG_TRANSPOSE=1")
+    set_property(SOURCE LeopardFF8XorTranspose.cpp APPEND PROPERTY
+        COMPILE_DEFINITIONS
+            "LEO_FF8XOR_HAS_AVX512_BITALG_TRANSPOSE=1")
+    message(STATUS
+        "FF8 XOR AVX-512BITALG packed-to-plane transpose: enabled")
+else()
+    if(FF8XOR_BASELINE_COMPILE_FLAGS)
+        set_source_files_properties(LeopardFF8XorTransposeBITALG.cpp PROPERTIES
+            COMPILE_FLAGS "${FF8XOR_BASELINE_COMPILE_FLAGS}")
+    endif()
+    message(STATUS
+        "FF8 XOR AVX-512BITALG packed-to-plane transpose: unavailable")
+endif()
+
+if(FF8XOR_BUILD_AVX512_VBMI_TRANSPOSE)
+    set_source_files_properties(LeopardFF8XorTransposeVBMI.cpp PROPERTIES
+        COMPILE_FLAGS "${FF8XOR_AVX512_VBMI_TRANSPOSE_FLAGS}"
+        COMPILE_DEFINITIONS
+            "LEO_FF8XOR_BUILD_AVX512_VBMI_TRANSPOSE=1")
+    set_property(SOURCE LeopardFF8XorTranspose.cpp APPEND PROPERTY
+        COMPILE_DEFINITIONS
+            "LEO_FF8XOR_HAS_AVX512_VBMI_TRANSPOSE=1")
+    message(STATUS
+        "FF8 XOR AVX-512VBMI plane-to-packed transpose: enabled")
+else()
+    if(FF8XOR_BASELINE_COMPILE_FLAGS)
+        set_source_files_properties(LeopardFF8XorTransposeVBMI.cpp PROPERTIES
+            COMPILE_FLAGS "${FF8XOR_BASELINE_COMPILE_FLAGS}")
+    endif()
+    message(STATUS
+        "FF8 XOR AVX-512VBMI plane-to-packed transpose: unavailable")
 endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
@@ -422,6 +608,14 @@ set(FF8XOR_BENCH_BUILD_FLAGS
     "${FF8XOR_BENCH_BUILD_FLAGS} avx512_built=${FF8XOR_BUILD_AVX512}")
 set(FF8XOR_BENCH_BUILD_FLAGS
     "${FF8XOR_BENCH_BUILD_FLAGS} avx512=[${FF8XOR_AVX512_COMPILE_FLAGS}]")
+set(FF8XOR_BENCH_BUILD_FLAGS
+    "${FF8XOR_BENCH_BUILD_FLAGS} transpose_bitalg_built=${FF8XOR_BUILD_AVX512_BITALG_TRANSPOSE}")
+set(FF8XOR_BENCH_BUILD_FLAGS
+    "${FF8XOR_BENCH_BUILD_FLAGS} transpose_bitalg=[${FF8XOR_AVX512_BITALG_TRANSPOSE_FLAGS}]")
+set(FF8XOR_BENCH_BUILD_FLAGS
+    "${FF8XOR_BENCH_BUILD_FLAGS} transpose_vbmi_built=${FF8XOR_BUILD_AVX512_VBMI_TRANSPOSE}")
+set(FF8XOR_BENCH_BUILD_FLAGS
+    "${FF8XOR_BENCH_BUILD_FLAGS} transpose_vbmi=[${FF8XOR_AVX512_VBMI_TRANSPOSE_FLAGS}]")
 string(REPLACE "\\" "\\\\" FF8XOR_BENCH_BUILD_FLAGS_ESCAPED
     "${FF8XOR_BENCH_BUILD_FLAGS}")
 string(REPLACE "\"" "\\\"" FF8XOR_BENCH_BUILD_FLAGS_ESCAPED
@@ -529,6 +723,46 @@ if(FF8XOR_PYTHON_EXECUTABLE)
                 "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_ff8xor_schedule_corpus.py"
                 --check)
 
+    add_custom_target(generate_ff8xor_cost_profiles
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_ff8xor_cost_profiles.py"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        VERBATIM)
+
+    add_custom_target(check_ff8xor_cost_profiles
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/generate_ff8xor_cost_profiles.py"
+                --check
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        VERBATIM)
+
+    add_test(NAME ff8xor_cost_model
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8_xor_cost_model.py")
+
+    add_test(NAME ff8xor_cost_profiles
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_cost_profiles.py")
+
+    add_test(NAME ff8xor_cost_generator_selection
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_cost_generator_selection.py")
+
+    add_test(NAME ff8xor_cost_evaluator
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_cost_evaluator.py")
+
+    add_test(NAME ff8xor_cost_evidence
+        COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                "${FF8XOR_PYTHON_EXECUTABLE}"
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_ff8xor_cost_evidence.py")
+
     add_test(NAME ff8xor_benchmark_metadata
         COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
                 "${FF8XOR_PYTHON_EXECUTABLE}"
@@ -589,6 +823,7 @@ if(FF8XOR_PYTHON_EXECUTABLE)
                     --member LeopardFF8.cpp.o
                     --member LeopardFF16.cpp.o
                     --member LeopardFF8Xor.cpp.o
+                    --member LeopardFF8XorTranspose.cpp.o
                     --member leopard_ff8xor.cpp.o
                     --member-symbol
                         "LeopardCommon.cpp.o=${FF8XOR_BASELINE_COMMON_SYMBOLS}"
@@ -610,6 +845,7 @@ if(FF8XOR_PYTHON_EXECUTABLE)
                     --member LeopardFF8.cpp.o
                     --member LeopardFF16.cpp.o
                     --member LeopardFF8Xor.cpp.o
+                    --member LeopardFF8XorTranspose.cpp.o
                     --member leopard_ff8xor.cpp.o
                     --member-symbol
                         "LeopardCommon.cpp.o=${FF8XOR_BASELINE_COMMON_SYMBOLS}"
@@ -633,6 +869,38 @@ if(FF8XOR_PYTHON_EXECUTABLE)
     elseif(FF8XOR_CAN_INSPECT_X86_ASSEMBLY)
         message(STATUS
             "FF8 XOR baseline ISA census: skipped for sanitizer-instrumented objects")
+    endif()
+
+    if(FF8XOR_BUILD_AVX512_BITALG_TRANSPOSE AND
+       FF8XOR_BUILD_AVX512_VBMI_TRANSPOSE AND
+       FF8XOR_CAN_INSPECT_X86_ASSEMBLY AND
+       NOT FF8XOR_SANITIZER_INSTRUMENTED AND
+       (FF8XOR_MULTI_CONFIG OR
+        FF8XOR_BUILD_TYPE_UPPER STREQUAL "RELEASE"))
+        add_test(NAME ff8xor_transpose_avx512_assembly
+            COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                    "${FF8XOR_PYTHON_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_transpose_avx512.py"
+                    "$<TARGET_FILE:libleopard>"
+                    --ar "${FF8XOR_AR_EXECUTABLE}"
+                    --nm "${FF8XOR_NM_EXECUTABLE}"
+                    --objdump "${FF8XOR_OBJDUMP_EXECUTABLE}"
+                    --strict
+            ${FF8XOR_RELEASE_TEST_CONFIG_ARGS})
+
+        add_custom_target(check_ff8xor_transpose_avx512_assembly
+            COMMAND "${CMAKE_COMMAND}" -E env "PYTHONDONTWRITEBYTECODE=1"
+                    "${FF8XOR_PYTHON_EXECUTABLE}"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/tools/inspect_ff8xor_transpose_avx512.py"
+                    "$<TARGET_FILE:libleopard>"
+                    --ar "${FF8XOR_AR_EXECUTABLE}"
+                    --nm "${FF8XOR_NM_EXECUTABLE}"
+                    --objdump "${FF8XOR_OBJDUMP_EXECUTABLE}"
+                    --strict
+                    --json
+            DEPENDS libleopard
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            VERBATIM)
     endif()
 
     if(FF8XOR_BUILD_AVX512)

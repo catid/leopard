@@ -1,0 +1,52 @@
+{
+  "benchmark": "bench_leopard_ff8xor_xor3",
+  "checksum_sha256": "616fde64475d90b18f289d7f1fb62ae300c8cbbfcea3bbaf1cf3207c8401f068",
+  "command": "bench_leopard_ff8xor_xor3 --cpu 0",
+  "compiler": "GCC 13.3.0",
+  "cpu_model": "AMD Ryzen Threadripper PRO 9985WX 64-Cores",
+  "measurement_order": "ABBA",
+  "profiles": [
+    {
+      "explicit_gxor3_per_second": 2.71,
+      "explicit_median_ns": 11808243,
+      "forced_gxor3_per_second": 1.30,
+      "forced_median_ns": 24588406,
+      "shape": "dependent-latency",
+      "speedup": 2.082,
+      "width": "ymm"
+    },
+    {
+      "explicit_gxor3_per_second": 10.79,
+      "explicit_median_ns": 2965300,
+      "forced_gxor3_per_second": 5.04,
+      "forced_median_ns": 6346634,
+      "shape": "four-independent-chains",
+      "speedup": 2.140,
+      "width": "ymm"
+    },
+    {
+      "explicit_gxor3_per_second": 2.71,
+      "explicit_median_ns": 11819390,
+      "forced_gxor3_per_second": 1.29,
+      "forced_median_ns": 24754327,
+      "shape": "dependent-latency",
+      "speedup": 2.094,
+      "width": "zmm"
+    },
+    {
+      "explicit_gxor3_per_second": 10.76,
+      "explicit_median_ns": 2973612,
+      "forced_gxor3_per_second": 5.10,
+      "forced_median_ns": 6277770,
+      "shape": "four-independent-chains",
+      "speedup": 2.111,
+      "width": "zmm"
+    }
+  ],
+  "schema": "leopard.ff8xor.xor3-calibration.v1",
+  "stream_speedup_vs_compiler_auto": {
+    "note": "Register-only gains did not carry through memory-bound streaming.",
+    "ymm": [1.031, 1.021, 0.972, 0.991, 0.995],
+    "zmm": [1.002, 0.984, 0.998, 1.003, 1.002]
+  }
+}

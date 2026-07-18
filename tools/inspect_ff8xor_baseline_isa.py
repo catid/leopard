@@ -77,7 +77,8 @@ FORBIDDEN_PREFIXES = (
 V_PREFIX_BASELINE_EXCEPTIONS = {"verr", "verw"}
 GUARDED_XGETBV_PROBE = re.compile(
     r"(?:^|::)(?:DetectX86VectorCapabilities|GetX86VectorCapabilities|"
-    r"InitializeCPUArch|_xgetbv0)\([^)]*\)(?: \[clone[^]]*\])?$"
+    r"DetectAVX512TransposeCapabilities|InitializeCPUArch|_xgetbv0)"
+    r"\([^)]*\)(?: \[clone[^]]*\])?$"
 )
 
 

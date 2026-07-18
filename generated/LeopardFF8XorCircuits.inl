@@ -2,6 +2,7 @@
 // Generator model: polynomial 0x11D; Cantor basis
 // { 1, 214, 152, 146, 86, 200, 88, 230 }.
 // Circuit checksum (SHA-256): f03cc4d1230d128c6900745f3372b6ce946ede037904b887bc760abd557b8028
+// Selection cost profile: portable-default-v1 (96a9fb14ba04b508831daa564dd1ecec7454eac234f4d12e80a75f4455070112)
 // CNOT depth forbids two gates in one layer from sharing a wire.
 // MultiplyCircuit<255> is identity; butterfly skew 255 omits multiply.
 
@@ -271,6 +272,8 @@
 namespace leopard { namespace ff8xor { namespace generated {
 
 static const char kCircuitChecksum[] = "f03cc4d1230d128c6900745f3372b6ce946ede037904b887bc760abd557b8028";
+static const char kCircuitCostProfileId[] = "portable-default-v1";
+static const char kCircuitCostProfileChecksum[] = "96a9fb14ba04b508831daa564dd1ecec7454eac234f4d12e80a75f4455070112";
 
 static const unsigned kSynthesisVariantCount = 35;
 static const char* const kSynthesisVariantNames[35] = {

@@ -107,8 +107,9 @@ There are 4,903 multiplier gates, 10,240 forward gates, and 10,240 inverse
 gates in total. Checked-in regeneration takes about 43.7 seconds and 59 MiB on
 the implementation host. Compared with the original single-row-reduction
 generator, multiplier gates fell from 8,108 to 4,903 (39.53%) and multiplier
-depth from 6,210 to 2,912 (53.11%). The generated file is 1,280,185 bytes,
-6.79% smaller than the original 1,373,440-byte file. Relative to the preceding
+depth from 6,210 to 2,912 (53.11%). Including its current cost-profile
+provenance, the generated file is 1,280,484 bytes, 6.77% smaller than the
+original 1,373,440-byte file. Relative to the preceding
 greedy portfolio, bounded exact search reduced source multiplier gates by
 1.13% and depth by 1.52%. A representative GCC AVX2 corpus compile reduced
 `vpxor` instructions from 4,060 to 4,027 and text from 43,758 to 43,566 bytes,
@@ -137,8 +138,11 @@ called once for a whole-buffer operation. Inside that function, the loop loads
 eight named plane values for multiplication or sixteen named plane values for
 a butterfly, executes literal XOR expressions, and stores them.
 
-`Auto` deliberately retains the established baseline selection while the
-AVX-512 modes remain opt-in. For a selected mode, the available chunk order is:
+Payload `KernelMode::Auto` deliberately retains the established baseline
+selection while the AVX-512 circuit modes remain opt-in. This is distinct from
+the boundary-transpose `Mode::Auto`, which selects the retained BITALG/VBMI
+paths when their narrower feature contracts are available. For a selected
+payload mode, the available chunk order is:
 
 1. AVX-512 ZMM (64 bytes) or AVX-512VL YMM (32 bytes), when explicitly selected;
 2. AVX2, 32 bytes from each plane;
@@ -152,8 +156,9 @@ source flags. MSVC x64 likewise keeps AVX2 in a separate `/arch:AVX2`
 translation unit while its public dispatcher retains the compiler's SSE2
 baseline. The baseline dispatcher checks CPUID, OSXSAVE, and XCR0 before
 entering either targeted object; an unavailable forced mode resolves to a safe
-128-bit or portable mode. `LEO_FF8XOR_ENABLE_AVX2=OFF` omits both the isolated
-AVX2 path and the AVX-512 path that depends on its tails.
+available baseline (AVX2, 128-bit, or portable). `LEO_FF8XOR_ENABLE_AVX2=OFF`
+omits both the isolated AVX2 circuit path and the AVX-512 circuit path that
+depends on its tails.
 
 Each smaller path handles only the exact remainder of one plane. Multiplication
 loads all eight source planes before any store, so `source == destination` is
@@ -300,8 +305,9 @@ For repeatable optimization work, the benchmark attempts to pin itself to the
 first CPU in its allowed affinity set. `--cpu N` selects a specific allowed
 logical CPU and `--no-pin` disables pinning. `--abba` measures matched packed
 and native end-to-end calls in A-B-B-A order. The paired sequential/batched
-XOR microbenchmarks always use A-B-B-A to control drift; other standalone
-microbenchmarks and optional packed-boundary rows remain sequential. Every row
+XOR microbenchmarks and portable/automatic transpose pairs always use A-B-B-A
+to control drift; other standalone microbenchmarks and optional packed-boundary
+rows remain sequential. Every row
 labels the actual order. ABBA rows report twice the requested sample count
 because each round contains two samples of each implementation. Allocation and
 equivalence checks remain outside the timed regions.
@@ -474,7 +480,8 @@ flags after `-march=x86-64`, so a caller's global `-mssse3` or host-native flag
 cannot silently contaminate the dispatcher. Clang 18 Release with an
 adversarial global `-mssse3` passed the strict artifact census with zero
 violations. A separate Clang 18 Debug ASan+UBSan build passed all 18 registered
-functional and parser tests. Sanitizers intentionally inject helper opcodes
+functional and parser tests at that checkpoint; later additions expanded the
+registered suite. Sanitizers intentionally inject helper opcodes
 and calls (Clang ASan inserts `lahf`), so CMake omits all production-shape
 artifact assembly tests and custom targets when any single- or multi-config
 C++ flag set enables a sanitizer. It prints that decision; parser unit tests
@@ -536,6 +543,100 @@ was not explained by systematic downclocking. Thus the register-only
 microbenchmark confirms that ternary XOR can reduce dependency depth, but it
 does not establish an end-to-end ff8xor codec gain. Generated-circuit changes
 must still pass the full codec benchmark and assembly census before retention.
+
+### Offline ISA-aware circuit costing
+
+Circuit selection is reproducible and does not calibrate at runtime. The normal
+generator reads `generated/FF8XorCostProfiles.json` and uses
+`portable-default-v1`. That profile deliberately preserves the historical
+gate-count, dependency-depth, and lexical ordering, so adding the cost model
+does not silently change the checked-in circuits. Its modeled score is
+provenance-only and comes after the lexical program in the key; it does not
+break portable lexical ties. The generated C++ records the selected profile ID
+and checksum; the current portable profile checksum is
+`96a9fb14ba04b508831daa564dd1ecec7454eac234f4d12e80a75f4455070112`.
+JSON, CSV, and human benchmark metadata print that provenance beside the
+circuit checksum.
+
+An explicit `amd-zen5-gcc13-avx2-avx512-v1` profile scores literal XOR2 count,
+a deterministic distinct-linear-form XOR2 estimate, dependency depth,
+live-range events, a fixed width-versus-register-budget overflow estimate,
+fixed plane loads/stores, estimated code bytes, and estimated I-cache lines.
+Its calibrated XOR3 weight is retained as provenance, but source generation
+currently assigns every candidate an XOR3 count of zero: it does not predict
+which XOR pairs the compiler will combine into `vpternlog`, nor does it simulate
+the compiler's register allocator. Actual XOR2/XOR3 and spill counts enter only
+the post-compile assembly evidence. These are known limitations of the current
+model and reasons not to infer an AVX-512 benefit from its source score.
+Checked evidence includes the complete 256-coefficient AVX2
+calibration, the standalone XOR3 calibration, the 104-case transform-schedule
+corpus (including coefficient, skew, and four-buffer-tuple frequencies), and
+all 362 equivalent-circuit timing records under `tools/profiles/`. The candidate
+artifact retains summarized production-assembly totals and codec statistics,
+plus SHA-256 hashes for all 14 codec JSONL inputs; those raw codec JSONLs are
+not checked into the repository. Every retained JSON evidence file carries a
+deterministic checksum. The evidence test also binds the pair timings to the
+current portable generated-file hash and to the exact rejected machine file
+summarized by the candidate evaluation.
+
+The coefficient calibration improved Spearman correlation with measured
+multiplier time from 0.323 for source gate count to 0.470 for the source-only
+ISA model; all five deterministic coefficient-modulo-five slices improved.
+This is only a correlation across different multiplication maps. It is not
+evidence that the model can choose between equivalent schedules for one map.
+The latter question was tested directly rather than inferred from that result.
+
+The explicit machine profile changed 51 multiplier, 176 FFT, and 135 IFFT
+schedules. A GCC 13.3 production census found no vector spills and the following
+schedule-corpus-weighted changes versus the portable corpus:
+
+| Family | Source gates | Modeled cost | AVX2 XOR2 | AVX2 code bytes | AVX-512VL XOR2 | AVX-512VL XOR3 |
+|---|---:|---:|---:|---:|---:|---:|
+| Multiply | +1.069% | -0.765% | -1.353% | -0.302% | -0.615% | -2.389% |
+| FFT | 0.000% | -1.536% | -2.036% | -0.772% | +2.936% | -5.321% |
+| IFFT | 0.000% | -1.451% | -0.480% | -0.011% | -0.271% | -0.691% |
+
+Those compiled reductions did not translate into a retained optimization. A
+same-process, pinned, 15-round ABBA harness first compared every changed pair's
+output and then timed its literal named-register AVX2 kernels. The candidate
+won 164 of 362 median comparisons, measured 0.986x by unweighted geometric
+mean and 0.968x when weighted by the schedule corpus. Predictor-saving versus
+measured-speedup Spearman was -0.099 (raw gate saving was -0.113), so even the
+slightly less negative rank statistic has no useful selection meaning. The
+family workload-weighted ratios were 1.052x multiply, 0.926x FFT, and 0.986x
+IFFT.
+
+Seven alternating quick codec repetitions then provided 98 observations over
+14 cases. After normalizing each native result by the packed control from its
+own build, the geometric mean of case medians was 0.993945x (7 of 14 case
+medians won), a 0.605% slowdown. The run used native buffers and excluded
+transposes. This is a small noisy result, but it is not a reproducible benefit;
+combined with the pair test, it rejects the current machine-specific corpus.
+The portable circuits remain the default. The checked codec evidence records
+historical benchmark schema v1 inputs captured before traffic-accounting schema
+v2. Those raw historical JSONLs are not retained, so current tests can verify
+the checked summary and its 14 exact input hashes but cannot reparse those old
+rows. For new inputs the evaluator supports both known schemas, requires exact
+complete row sets, and cross-links current v2 circuit/profile provenance to the
+generated files. It validates and binds the scheduled/elided/adjusted traffic
+fields in v2 row descriptors, but performance normalization remains based only
+on measured `median_us`; it does not traffic-adjust elapsed time.
+
+Regenerate or check the deterministic profile and portable circuits with:
+
+```sh
+python3 tools/generate_ff8xor_cost_profiles.py --check
+python3 tools/generate_ff8_xor_circuits.py --check
+python3 tools/generate_ff8_xor_circuits.py \
+    --cost-profile amd-zen5-gcc13-avx2-avx512-v1 \
+    --output /tmp/LeopardFF8XorCircuits-machine.inl
+ctest --test-dir build --output-on-failure -R ff8xor_cost
+```
+
+The calibration and candidate tools are offline developer tools; use their
+`--help` output to record compiler, CPU pinning, repetitions, input artifacts,
+and output path. Normal library builds consume only checked-in generated files
+and do not require Python or execute calibration.
 
 ## Measurements from the implementation host
 
@@ -605,7 +706,199 @@ timing, modeled traffic counted two loads plus one store, and transposes were
 excluded. The current quick old-versus-packed ratios remained well below one,
 so these local gains do not change the experiment's overall slower result.
 
-Representative 1 MiB microbenchmarks were:
+### Deferred-zero and redundant-materialization checkpoint
+
+The transform planner now tracks a small logical state for each work buffer:
+logical zero, or an opaque nonzero identity number whose payload is physically
+materialized. A nonzero identity number proves symbolic equality, not that the
+payload contains a nonzero bit. The planner never compares payload bytes.
+Copies preserve an identity; an arbitrary input or a general butterfly
+receives a fresh one. This permits
+exact reductions for zero/zero, zero/input, equal-input, sentinel, and
+coefficient-one butterflies, and lets the formal-derivative accumulation skip
+zero sources, cancel equal identities, or replace `zero ^= source` with a
+copy. A deferred zero is physically cleared immediately before any general
+kernel could read it, and every public output is materialized before return.
+
+Tracking is deliberately selective. Decode uses it at shard sizes of 64 KiB
+or larger. Encode uses it at those sizes only when its final `m`-sized input
+chunk is partial; full chunks contain no structural padding to eliminate.
+Smaller payloads and full-chunk encodes retain the exact prior schedule because
+the state-machine overhead did not amortize on the implementation host. This
+threshold is a measured policy for this experimental branch, not a universal
+CPU constant.
+
+The benchmark reports the static scheduled traffic, a signed estimated byte
+elision, the adjusted total, and seven operation counters. These are
+deterministic load/store models, not PMU measurements. For `k=7`, `r=3`, and
+64 KiB shards, encode deferred one clear and reduced one butterfly, modeling
+65,536 bytes elided. A deterministic one-original-loss decode deferred seven
+clears and reduced seven butterflies without adding a clear, modeling 458,752
+bytes elided. Public entry points reset the thread-local diagnostics even on
+validation errors, no-loss, `k=1`, and `r=1` fast paths, so a row cannot inherit
+stale counters from an earlier transform.
+
+A focused same-process A-B-B-A comparison against the untracked schedule for
+`k=7`, `r=3` measured approximately 8--9% lower encode time and 23--27% lower
+one-loss decode time at 64 and 128 KiB. The broader 64 KiB decode matrix was
+13.6% faster by geometric mean. Host noise moved some sequential individual
+cells in both directions, so retention is based on counterbalanced focused
+comparisons, the explicit 64 KiB threshold, and leaving non-benefiting regions
+on the old path. The two production objects grew by 6,744 text bytes (0.738%)
+and 64 BSS bytes on GCC 13.3.
+
+Packed-equivalence, tracked-path, and native-round-trip tests poison every work
+shard they allocate with distinct nonzero data before encode and before each
+decode. Forced-locator-shift decoding likewise refills its work with a nonzero
+pattern on every iteration. Native round trips include arbitrary native bytes
+at `k=7,r=3` and 64 KiB, so the tracked path is exercised without relying on a
+packed transpose. Forced-backend coverage includes `k=5,r=5` (`k<m`) and
+`k=13,r=3` (four chunks `4/4/4/1`), plus no loss, one, multiple, maximum, and
+mixed losses. The poisoned tracked cases specifically prevent a missing
+deferred clear from passing merely because a fresh allocation happened to
+contain zeros. The Release build and a Debug ASan+UBSan build pass this matrix.
+
+The highest-value follow-up for this checkpoint is a generated fused
+copy-plus-`(1+c)` multiplier for the inverse `(x,0)` case. The current reduced
+path copies `x` to `y` and then multiplies `x` in place; except when `c=1`, it
+still moves the same four payload-buffer equivalents as a general butterfly.
+
+### Retained blocked AVX2 boundary-transpose checkpoint
+
+The first retained packed-compatibility acceleration was a separately compiled,
+runtime-gated AVX2 8x8 transpose in both directions. It remains the fallback
+and tail path beneath the later AVX-512 kernels. It processes 32 groups
+(256 shard bytes) per block and hands every shorter remainder to the portable
+word-transpose implementation. The native codec still neither calls nor times
+this helper. Source and destination are caller-owned, non-overlapping buffers;
+conversion
+allocates no memory. `--portable-transpose` selects the portable control for
+the transpose-inclusive codec rows, while standalone microbenchmarks always
+compare portable and automatic dispatch directly.
+
+The following full-mode results used the same implementation host and GCC 13.3
+Release build described above, with OpenMP disabled and pinning disabled.
+Each portable/AVX2 microbenchmark pair used ABBA ordering, three warm-ups, and
+31 rounds (62 observations per implementation); correctness and allocation
+were outside timing. Throughput is one input shard byte per reported byte.
+
+| Direction | Shard bytes | Portable MB/s | AVX2 MB/s | Median speedup |
+|---|---:|---:|---:|---:|
+| Packed to plane | 1,024 | 3,937 | 21,121 | 5.42x |
+| Packed to plane | 4,096 | 3,957 | 21,098 | 5.34x |
+| Packed to plane | 65,536 | 4,021 | 21,134 | 5.26x |
+| Packed to plane | 1,048,576 | 3,948 | 20,586 | 5.21x |
+| Plane to packed | 1,024 | 7,781 | 35,072 | 4.55x |
+| Plane to packed | 4,096 | 7,791 | 35,787 | 4.61x |
+| Plane to packed | 65,536 | 7,868 | 36,025 | 4.58x |
+| Plane to packed | 1,048,576 | 7,749 | 34,003 | 4.39x |
+
+Two complete `--include-transpose` runs then compared automatic AVX2 dispatch
+against `--portable-transpose` in the same binary and source revision. These
+packed-boundary rows were sequential rather than ABBA; the table summarizes
+geometric means across all `(k,r,loss)` cases at each size. Native rows remain
+separately available and exclude both directions of transpose.
+
+| Operation | 1 KiB | 4 KiB | 64 KiB | 1 MiB | All cases |
+|---|---:|---:|---:|---:|---:|
+| Encode (6 cases/size) | 3.11x | 3.25x | 2.19x | 1.64x | 2.46x |
+| Decode (20 cases/size) | 1.47x | 1.75x | 1.55x | 1.22x | 1.48x |
+
+The automatic packed-boundary backend remained slower than packed Leopard:
+its packed-time/ff8xor-time geometric means were 0.271 for the 24 encode rows
+and 0.498 for the 80 decode rows. The transpose gain is therefore real but
+does not reverse the experiment's end-to-end result.
+
+GCC lowered the forward AVX2 cyclic payload component to 266 instructions with
+64 `vpmovmskb`, 56 `vpsllw`, 16 vector loads/stores, no calls, and no stack
+references. The inverse cyclic component used a bit-swap/unpack network: 162
+instructions and no calls, but three YMM spill slots (six stack references).
+Rewriting its unpack stages
+in place to shorten live ranges did not remove those spills, so they are
+reported rather than hidden; the retained loop still measured 34--36 GB/s.
+Exact-size ASan/UBSan tests cover 1 through 67 groups (including the 31/32/33
+block boundary), portable/auto/forced-AVX2 modes, source preservation,
+destination canaries, the AVX2 portions of all 4,096 one-hot states in a
+512-byte block, dense byte patterns, and deterministic random round trips.
+
+### Retained AVX-512 boundary-transpose checkpoint
+
+Automatic packed-boundary conversion now has two additional, independently
+compiled ZMM paths. Packed-to-plane uses `VPSHUFBITQMB` eight times per
+64-byte packed block and stores the eight masks into their planes. Its runtime
+contract is OS-enabled XMM/YMM/opmask/ZMM state plus AVX-512F, AVX-512BW, and
+AVX-512BITALG. Plane-to-packed uses a 512-byte hierarchy: eight plane loads,
+an 8x8 bit-swap network, then `VPERMT2B` pair/quad/octet interleaving. Its
+contract substitutes AVX-512VBMI for BITALG. Neither path requires AVX2,
+AVX-512VL, or the other path's special feature. The normal build keeps both in
+isolated translation units and runtime-gates entry; setting
+`LEO_FF8XOR_ENABLE_AVX512=OFF` builds their baseline-safe stubs instead.
+
+The exact automatic order is directional. Every legal 64-byte shard can use a
+complete BITALG forward block. The VBMI inverse is selected only for each
+complete 512-byte block; an available AVX2 256-byte block and then portable
+groups handle its remainder. Thus the retained inverse threshold is exactly
+512 shard bytes, not a claim that ZMM is best below that size. Native ff8xor
+still performs no boundary transpose.
+
+The retained choice followed isolated same-process ABBA prototypes rather
+than ISA preference. The 256-bit BITALG forward path beat AVX2 by roughly
+1.51--1.66x from 256 bytes through 1 MiB, but the 512-bit form won at every
+measured size, so the redundant VL implementation was rejected. Two first
+inverse attempts were also rejected: mask extraction plus scalar plane loads
+ran at about 0.52--0.53x AVX2 from 256 bytes upward, while a gather form fell
+to 0.125--0.189x. The retained VBMI permutation hierarchy instead won from
+its first full 512-byte block onward.
+
+The following production numbers used GCC 13.3.0 Release on the AMD Ryzen
+Threadripper PRO 9985WX implementation host, pinned to logical CPU 24. OpenMP
+was enabled in the build but these helpers are single-threaded. Each row is a
+same-binary forced-AVX2/forced-ZMM ABBA pair with three warm-ups and 31 rounds
+(62 observations per implementation); allocation and correctness were
+outside timing. Throughput counts one input shard byte.
+
+| Direction | Shard bytes | AVX2 MB/s | Retained ZMM MB/s | Median speedup |
+|---|---:|---:|---:|---:|
+| Packed to plane (BITALG) | 512 | 20,031 | 47,476 | 2.37x |
+| Plane to packed (VBMI) | 512 | 31,990 | 58,216 | 1.82x |
+| Packed to plane (BITALG) | 1,024 | 20,078 | 48,058 | 2.39x |
+| Plane to packed (VBMI) | 1,024 | 33,051 | 73,608 | 2.23x |
+| Packed to plane (BITALG) | 4,096 | 20,091 | 55,608 | 2.77x |
+| Plane to packed (VBMI) | 4,096 | 33,828 | 77,960 | 2.30x |
+| Packed to plane (BITALG) | 65,536 | 20,077 | 49,501 | 2.47x |
+| Plane to packed (VBMI) | 65,536 | 32,562 | 74,317 | 2.28x |
+| Packed to plane (BITALG) | 1,048,576 | 19,765 | 47,685 | 2.41x |
+| Plane to packed (VBMI) | 1,048,576 | 32,772 | 54,234 | 1.65x |
+
+The 1 MiB inverse rate falls relative to its cache-resident peak, but its
+AVX2-relative gain remains 1.65x; no tested large-buffer result suggests a ZMM
+frequency effect large enough to erase the benefit. Linux denied PMU access
+(`perf_event_paranoid=4`), so this run cannot separate frequency, memory, and
+cache effects and does not claim a measured clock rate.
+
+Strict archive inspection reports 321 code bytes and 66 instructions for the
+BITALG function: eight `vpshufbitqmb`, eight `kmovq`, one payload ZMM load,
+no calls, and no explicit stack references or vector spill slots. The VBMI
+function is 971 bytes and 158 instructions: GCC folded the bit-swap ternary
+expressions into 12 `vpternlogd`, followed by 24 `vpermt2b` and eight ZMM
+stores, again with no calls or stack references. A checked CMake target,
+`check_ff8xor_transpose_avx512_assembly`, preserves these shape checks. The
+baseline archive census also covers the CPUID/XCR0 dispatcher and rejects any
+VEX/EVEX leakage there. Each targeted source appends probed exclusions for
+non-contract ISA extensions and then its exact required feature set; this
+ordering preserves Clang's AVX-512 prerequisite closure. A GCC build with
+adversarial global AVX2, AVX-512VL/DQ/VBMI2/VNNI, GFNI, VAES, VPCLMUL, BMI2,
+and POPCNT flags passed both the baseline census and the direction-specific
+instruction allowlists, and the same sources passed Clang 18 ASan+UBSan.
+
+Correctness now covers groups 1 through 67 across portable, Auto, forced AVX2,
+forced BITALG, and forced VBMI modes; this crosses 8-group BITALG, 32-group
+AVX2, and 64-group VBMI boundaries with exact-size ASan canaries. All 4,096
+one-hot input bits in a full VBMI block and all dense byte values round-trip.
+Pure feature tests exhaust all 256 relevant/irrelevant CPUID combinations, all
+32 required XCR0-state combinations, and basic-leaf availability.
+
+Representative 1 MiB microbenchmarks from the earlier full reference run were:
 
 | Operation | Coefficient/circuit | Median/best us | Median input/output MB/s |
 |---|---|---:|---:|
@@ -620,7 +913,9 @@ The packed microkernel is multiply-add while the circuit kernel is
 multiply-only, so their input-byte rates are not directly equivalent. The
 sampled low/average/high circuits also show that performance is not monotonic
 in source gate count, which is consistent with memory behavior and instruction
-scheduling effects.
+scheduling effects. The two transpose rows in this historical table predate
+the retained AVX2 and AVX-512 boundary kernels; the directional AVX2 and ZMM
+tables above supersede them for current transpose performance.
 
 ## Representative optimized code inspection
 
@@ -660,10 +955,11 @@ experiment.
   remain possible for some generated circuits.
 - Static specialization of all multiplier and butterfly coefficients increases
   source, object, and instruction-cache footprint.
-- The implementation-host Release static archive is 3.4 MiB and the
-  experimental benchmark executable is 2.6 MiB, versus 102 KiB for the packed
-  benchmark. Static specialization remains a material code-size cost, though
-  packed-only static clients do not pull the generated circuit objects.
+- The current GCC Release/OpenMP artifacts are about 3.30 MiB for the static
+  archive and 2.55 MiB for the experimental benchmark executable, versus about
+  99.5 KiB for the packed benchmark. Static specialization remains a material
+  code-size cost, though packed-only static clients do not pull the generated
+  circuit objects.
 - Packed compatibility requires explicit 8x8 transposes.
 - The inherited packed payload objects still use the project's global
   `-march=native`; this experiment does not make the existing packed codec a

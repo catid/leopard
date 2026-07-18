@@ -6,6 +6,7 @@
 #include "../LeopardCommon.h"
 #include "../LeopardFF8.h"
 #include "../LeopardFF8Xor.h"
+#include "../LeopardFF8XorTranspose.h"
 #include "../leopard.h"
 #include "../leopard_ff8xor.h"
 #include "FF8XorCacheColoredBuffers.h"
@@ -36,6 +37,8 @@
 namespace {
 
 static volatile uint64_t BenchmarkSink = 0;
+static leopard::ff8xor::transpose::Mode BoundaryTransposeMode =
+    leopard::ff8xor::transpose::Mode::Auto;
 
 struct Options
 {
@@ -43,6 +46,7 @@ struct Options
     bool csv;
     bool json;
     bool include_transpose;
+    bool portable_transpose;
     bool counters;
     bool abba;
     bool pin;
@@ -57,6 +61,7 @@ struct Options
         , csv(false)
         , json(false)
         , include_transpose(false)
+        , portable_transpose(false)
         , counters(false)
         , abba(false)
         , pin(true)
@@ -132,7 +137,14 @@ struct Result
     Timing timing;
     uint64_t input_bytes;
     uint64_t output_bytes;
+    // The scheduled model is the pre-materialization transform traffic.  The
+    // signed elision estimate comes from the most recent native codec call;
+    // adjusted is scheduled - elided.  Keeping all three avoids presenting
+    // the old static model as work that was actually performed.
     uint64_t modeled_payload_bytes;
+    int64_t modeled_payload_bytes_elided;
+    int64_t modeled_payload_bytes_adjusted;
+    leopard::ff8xor::MaterializationStatistics materialization_statistics;
     double ratio_vs_packed;
     unsigned locator_shift;
     std::string schedule_id;
@@ -151,6 +163,9 @@ struct Result
         , input_bytes(0)
         , output_bytes(0)
         , modeled_payload_bytes(0)
+        , modeled_payload_bytes_elided(0)
+        , modeled_payload_bytes_adjusted(0)
+        , materialization_statistics()
         , ratio_vs_packed(0)
         , locator_shift(std::numeric_limits<unsigned>::max())
     {
@@ -178,17 +193,6 @@ private:
     uint64_t State;
 };
 
-static uint64_t TransposeWord8x8(uint64_t value)
-{
-    uint64_t temp = (value ^ (value >> 7)) & UINT64_C(0x00aa00aa00aa00aa);
-    value ^= temp ^ (temp << 7);
-    temp = (value ^ (value >> 14)) & UINT64_C(0x0000cccc0000cccc);
-    value ^= temp ^ (temp << 14);
-    temp = (value ^ (value >> 28)) & UINT64_C(0x00000000f0f0f0f0);
-    value ^= temp ^ (temp << 28);
-    return value;
-}
-
 // packed[8*g + lane] bit plane_index ==
 // plane[plane_index * (bytes / 8) + g] bit lane.
 static void PackedToPlane(
@@ -196,16 +200,8 @@ static void PackedToPlane(
     uint8_t* plane,
     uint64_t bytes)
 {
-    const uint64_t plane_bytes = bytes / 8;
-    for (uint64_t group = 0; group < plane_bytes; ++group)
-    {
-        uint64_t word;
-        memcpy(&word, packed + group * 8, sizeof(word));
-        word = TransposeWord8x8(word);
-        for (unsigned bit = 0; bit < 8; ++bit)
-            plane[bit * plane_bytes + group] =
-                static_cast<uint8_t>(word >> (bit * 8));
-    }
+    leopard::ff8xor::transpose::PackedToPlane(
+        packed, plane, bytes, BoundaryTransposeMode);
 }
 
 static void PlaneToPacked(
@@ -213,16 +209,26 @@ static void PlaneToPacked(
     uint8_t* packed,
     uint64_t bytes)
 {
-    const uint64_t plane_bytes = bytes / 8;
-    for (uint64_t group = 0; group < plane_bytes; ++group)
-    {
-        uint64_t word = 0;
-        for (unsigned bit = 0; bit < 8; ++bit)
-            word |= static_cast<uint64_t>(plane[bit * plane_bytes + group])
-                << (bit * 8);
-        word = TransposeWord8x8(word);
-        memcpy(packed + group * 8, &word, sizeof(word));
-    }
+    leopard::ff8xor::transpose::PlaneToPacked(
+        plane, packed, bytes, BoundaryTransposeMode);
+}
+
+static const char* AutoBoundaryTransposeNote()
+{
+    const bool bitalg = leopard::ff8xor::transpose::IsModeAvailable(
+        leopard::ff8xor::transpose::Mode::Avx512Bitalg);
+    const bool vbmi = leopard::ff8xor::transpose::IsModeAvailable(
+        leopard::ff8xor::transpose::Mode::Avx512Vbmi);
+    if (bitalg && vbmi)
+        return "auto: BITALG ZMM packed-to-plane; VBMI ZMM plane-to-packed; AVX2/portable tails";
+    if (bitalg)
+        return "auto: BITALG ZMM packed-to-plane; AVX2/portable inverse and tails";
+    if (vbmi)
+        return "auto: AVX2/portable forward; VBMI ZMM plane-to-packed; AVX2/portable tails";
+    if (leopard::ff8xor::transpose::IsModeAvailable(
+            leopard::ff8xor::transpose::Mode::Avx2))
+        return "auto-dispatched blocked AVX2 boundary transpose with portable tails";
+    return "portable boundary transpose fallback";
 }
 
 static void FillRandom(BufferSet& buffers, uint64_t bytes, uint64_t seed)
@@ -909,8 +915,8 @@ public:
         const leopard::ff8xor::CircuitStatistics ifft =
             leopard::ff8xor::GetIFFTCircuitStatistics();
         MeasurementOrder = options.abba
-            ? "ABBA end-to-end and XOR-batch pairs; other micro/boundary sequential"
-            : "packed-then-ff8xor end-to-end; XOR-batch pairs ABBA; other micro/boundary sequential";
+            ? "ABBA end-to-end, XOR-batch pairs, and transpose pairs; other micro/boundary sequential"
+            : "packed-then-ff8xor end-to-end; XOR-batch pairs ABBA; transpose pairs ABBA; other micro/boundary sequential";
         if (CSV)
         {
             std::cout
@@ -918,8 +924,18 @@ public:
                 << "k,r,buffer_bytes,loss_count,"
                 << "warmups,iterations,calls_per_sample,median_us,best_us,median_input_MBps,"
                 << "best_input_MBps,median_output_MBps,best_output_MBps,"
-                << "speed_ratio_vs_packed,compiler,build_type,cpu,simd,checksum,gate_min,"
-                << "gate_max,gate_average,note,schedule_id,modeled_payload_bytes,"
+                << "speed_ratio_vs_packed,compiler,build_type,cpu,simd,checksum,"
+                << "cost_profile_id,cost_profile_checksum,gate_min,"
+                << "gate_max,gate_average,note,schedule_id,"
+                << "modeled_payload_bytes_scheduled,modeled_payload_bytes_elided,"
+                << "modeled_payload_bytes_adjusted,"
+                << "materialization_deferred_zero_fills,"
+                << "materialization_added_zero_fills,"
+                << "materialization_butterflies_skipped,"
+                << "materialization_butterflies_reduced,"
+                << "materialization_xors_skipped,"
+                << "materialization_xors_replaced_by_copies,"
+                << "materialization_identity_operations_elided,"
                 << "locator_shift,measurement_order,operating_system,affinity,build_flags,"
                 << "counter_backend,cycles,instructions,reference_cycles,cache_references,"
                 << "cache_misses,frontend_stalled_cycles,backend_stalled_cycles,"
@@ -944,12 +960,18 @@ public:
         {
             std::cout << "{" << Json("record") << ':' << Json("metadata")
                 << ',' << Json("schema") << ':'
-                << Json("leopard.ff8xor.benchmark.jsonl.v1")
+                << Json("leopard.ff8xor.benchmark.jsonl.v2")
                 << ',' << Json("compiler") << ':' << Json(Env.compiler)
                 << ',' << Json("build_type") << ':' << Json(Env.build_type)
                 << ',' << Json("build_flags") << ':' << Json(Env.build_flags)
                 << ',' << Json("cpu") << ':' << Json(Env.cpu)
                 << ',' << Json("simd") << ':' << Json(Env.simd)
+                << ',' << Json("circuit_checksum") << ':'
+                << Json(leopard::ff8xor::GetCircuitChecksum())
+                << ',' << Json("circuit_cost_profile_id") << ':'
+                << Json(leopard::ff8xor::GetCircuitCostProfileId())
+                << ',' << Json("circuit_cost_profile_checksum") << ':'
+                << Json(leopard::ff8xor::GetCircuitCostProfileChecksum())
                 << ',' << Json("operating_system") << ':'
                 << Json(Env.operating_system)
                 << ',' << Json("affinity") << ':' << Json(Env.affinity)
@@ -969,8 +991,8 @@ public:
                 << (options.cache_color ? "true" : "false")
                 << ',' << Json("measurement_order") << ':'
                 << Json(options.abba
-                    ? "ABBA for paired end-to-end rows and XOR-batch pairs; other micro/boundary sequential"
-                    : "packed-then-ff8xor end-to-end; XOR-batch pairs ABBA; other micro/boundary sequential")
+                    ? "ABBA for paired end-to-end rows, XOR-batch pairs, and transpose pairs; other micro/boundary sequential"
+                    : "packed-then-ff8xor end-to-end; XOR-batch pairs ABBA; transpose pairs ABBA; other micro/boundary sequential")
                 << "}\n";
             GateJSON("multiply", multiply);
             GateJSON("fft", fft);
@@ -995,8 +1017,8 @@ public:
             << (options.include_transpose ? "included" : "disabled") << '\n'
             << "measurement order: "
             << (options.abba
-                ? "ABBA for paired end-to-end rows and XOR-batch pairs; other micro/boundary sequential"
-                : "packed then ff8xor end-to-end; XOR-batch pairs ABBA; other micro/boundary sequential") << '\n'
+                ? "ABBA for paired end-to-end rows, XOR-batch pairs, and transpose pairs; other micro/boundary sequential"
+                : "packed then ff8xor end-to-end; XOR-batch pairs ABBA; transpose pairs ABBA; other micro/boundary sequential") << '\n'
             << "PMU counters: "
             << (options.counters ? "requested" : "disabled") << '\n'
             << "ff8xor allocations: "
@@ -1006,6 +1028,9 @@ public:
             << "timing: calls/sample is auto-calibrated and each result is per call\n"
             << "circuit checksum: "
             << leopard::ff8xor::GetCircuitChecksum() << '\n'
+            << "circuit cost profile: "
+            << leopard::ff8xor::GetCircuitCostProfileId() << " ("
+            << leopard::ff8xor::GetCircuitCostProfileChecksum() << ")\n"
             << std::fixed << std::setprecision(3)
             << "gates multiply="
             << multiply.MinimumGateCount << ".."
@@ -1047,8 +1072,18 @@ public:
                 << result.ratio_vs_packed << ','
                 << Csv(Env.compiler) << ',' << Csv(Env.build_type) << ','
                 << Csv(Env.cpu) << ',' << Csv(Env.simd) << ','
-                << Csv("") << ",,,," << Csv(result.note) << ','
-                << Csv(result.schedule_id) << ',' << result.modeled_payload_bytes << ',';
+                << Csv("") << ",,,,,," << Csv(result.note) << ','
+                << Csv(result.schedule_id) << ','
+                << result.modeled_payload_bytes << ','
+                << result.modeled_payload_bytes_elided << ','
+                << result.modeled_payload_bytes_adjusted << ','
+                << result.materialization_statistics.DeferredZeroFills << ','
+                << result.materialization_statistics.AddedZeroFills << ','
+                << result.materialization_statistics.ButterfliesSkipped << ','
+                << result.materialization_statistics.ButterfliesReduced << ','
+                << result.materialization_statistics.XorsSkipped << ','
+                << result.materialization_statistics.XorsReplacedByCopies << ','
+                << result.materialization_statistics.IdentityOperationsElided << ',';
             if (result.locator_shift != std::numeric_limits<unsigned>::max())
                 std::cout << result.locator_shift;
             std::cout << ',' << Csv(result.measurement_order) << ','
@@ -1107,8 +1142,26 @@ public:
                 << ',' << Json("best_output_MBps") << ':' << best_output
                 << ',' << Json("speed_ratio_vs_packed") << ':'
                 << result.ratio_vs_packed
-                << ',' << Json("modeled_payload_bytes") << ':'
+                << ',' << Json("modeled_payload_bytes_scheduled") << ':'
                 << result.modeled_payload_bytes
+                << ',' << Json("modeled_payload_bytes_elided") << ':'
+                << result.modeled_payload_bytes_elided
+                << ',' << Json("modeled_payload_bytes_adjusted") << ':'
+                << result.modeled_payload_bytes_adjusted
+                << ',' << Json("materialization_deferred_zero_fills") << ':'
+                << result.materialization_statistics.DeferredZeroFills
+                << ',' << Json("materialization_added_zero_fills") << ':'
+                << result.materialization_statistics.AddedZeroFills
+                << ',' << Json("materialization_butterflies_skipped") << ':'
+                << result.materialization_statistics.ButterfliesSkipped
+                << ',' << Json("materialization_butterflies_reduced") << ':'
+                << result.materialization_statistics.ButterfliesReduced
+                << ',' << Json("materialization_xors_skipped") << ':'
+                << result.materialization_statistics.XorsSkipped
+                << ',' << Json("materialization_xors_replaced_by_copies") << ':'
+                << result.materialization_statistics.XorsReplacedByCopies
+                << ',' << Json("materialization_identity_operations_elided") << ':'
+                << result.materialization_statistics.IdentityOperationsElided
                 << ',' << Json("locator_shift") << ':';
             if (result.locator_shift == std::numeric_limits<unsigned>::max())
                 std::cout << "null";
@@ -1162,7 +1215,26 @@ public:
             << " input=" << std::setw(10) << median_input << " MB/s"
             << " output=" << std::setw(10) << median_output << " MB/s";
         if (result.modeled_payload_bytes != 0)
-            std::cout << " modeled=" << result.modeled_payload_bytes << " B";
+        {
+            std::cout << " modeled_scheduled=" << result.modeled_payload_bytes
+                << " B elided=" << result.modeled_payload_bytes_elided
+                << " B adjusted=" << result.modeled_payload_bytes_adjusted
+                << " B materialization_ops={deferred_zero:"
+                << result.materialization_statistics.DeferredZeroFills
+                << ",added_zero:"
+                << result.materialization_statistics.AddedZeroFills
+                << ",butterfly_skip:"
+                << result.materialization_statistics.ButterfliesSkipped
+                << ",butterfly_reduce:"
+                << result.materialization_statistics.ButterfliesReduced
+                << ",xor_skip:"
+                << result.materialization_statistics.XorsSkipped
+                << ",xor_copy:"
+                << result.materialization_statistics.XorsReplacedByCopies
+                << ",identity:"
+                << result.materialization_statistics.IdentityOperationsElided
+                << '}';
+        }
         if (result.timing.median_ipc > 0)
             std::cout << " IPC=" << result.timing.median_ipc;
         if (result.timing.median_effective_ghz > 0)
@@ -1202,6 +1274,10 @@ private:
             << ',' << Json("family") << ':' << Json(operation)
             << ',' << Json("checksum") << ':'
             << Json(leopard::ff8xor::GetCircuitChecksum())
+            << ',' << Json("cost_profile_id") << ':'
+            << Json(leopard::ff8xor::GetCircuitCostProfileId())
+            << ',' << Json("cost_profile_checksum") << ':'
+            << Json(leopard::ff8xor::GetCircuitCostProfileChecksum())
             << ',' << Json("gate_min") << ':' << statistics.MinimumGateCount
             << ',' << Json("gate_max") << ':' << statistics.MaximumGateCount
             << ',' << Json("gate_average") << ':'
@@ -1219,9 +1295,12 @@ private:
             << Csv(Env.compiler) << ',' << Csv(Env.build_type) << ','
             << Csv(Env.cpu) << ',' << Csv(Env.simd) << ','
             << Csv(leopard::ff8xor::GetCircuitChecksum()) << ','
+            << Csv(leopard::ff8xor::GetCircuitCostProfileId()) << ','
+            << Csv(leopard::ff8xor::GetCircuitCostProfileChecksum()) << ','
             << minimum << ',' << maximum << ',' << std::fixed
             << std::setprecision(6) << average << ',' << Csv("") << ','
-            << Csv("") << ",0,," << Csv(MeasurementOrder) << ','
+            << Csv("") << ",0,0,0,0,0,0,0,0,0,0,,"
+            << Csv(MeasurementOrder) << ','
             << Csv(Env.operating_system) << ',' << Csv(Env.affinity) << ','
             << Csv(Env.build_flags) << ',' << Csv(Env.counter_backend)
             ;
@@ -1645,6 +1724,18 @@ static Result MakeResult(
                 original_count, recovery_count, buffer_bytes, loss_count,
                 transpose);
         }
+
+        if (strcmp(operation, "encode") == 0 ||
+            strcmp(operation, "decode") == 0)
+        {
+            result.materialization_statistics =
+                leopard::ff8xor::GetLastMaterializationStatistics();
+            result.modeled_payload_bytes_elided =
+                result.materialization_statistics.EstimatedPayloadBytesElided;
+        }
+        result.modeled_payload_bytes_adjusted =
+            static_cast<int64_t>(result.modeled_payload_bytes) -
+            result.modeled_payload_bytes_elided;
     }
     result.note = note;
     if (result.cache_coloring_applied)
@@ -2034,7 +2125,10 @@ static bool RunParameter(
                 original_count, recovery_count, buffer_bytes, 0,
                 included_timing, encode_input_bytes, encode_output_bytes,
                 packed_encode_timing.median_usec / included_timing.median_usec,
-                "", use_cache_color));
+                options.portable_transpose ?
+                    "portable boundary transpose control" :
+                    AutoBoundaryTransposeNote(),
+                use_cache_color));
         }
     }
 
@@ -2225,7 +2319,10 @@ static bool RunParameter(
                     original_count, recovery_count, buffer_bytes, loss_count,
                     included_timing, decode_input_bytes, decode_output_bytes,
                     packed_decode_timing.median_usec / included_timing.median_usec,
-                    "", use_cache_color);
+                    options.portable_transpose ?
+                        "portable boundary transpose control" :
+                        AutoBoundaryTransposeNote(),
+                    use_cache_color);
                 included_result.locator_shift =
                     leopard::ff8xor::GetLastLocatorShiftForTesting();
                 reporter.Print(included_result);
@@ -2256,6 +2353,8 @@ static void PrintMicro(
         note.c_str());
     result.record = "microbenchmark";
     result.modeled_payload_bytes = modeled_payload_bytes;
+    result.modeled_payload_bytes_adjusted =
+        static_cast<int64_t>(modeled_payload_bytes);
     result.measurement_order = measurement_order;
     reporter.Print(result);
 }
@@ -2701,38 +2800,175 @@ static bool RunMicrobenchmarks(const Options& base_options, Reporter& reporter)
             bytes * (inverse_circuit.coefficient == 255 ? 3 : 4));
     }
 
-    FillRandom(a, bytes, UINT64_C(0x7472616e73706f73));
-    PackedToPlane(a[0], c[0], bytes);
-    PlaneToPacked(c[0], b[0], bytes);
-    if (!Equal(a[0], b[0], bytes))
+    const uint64_t transpose_sizes[] = {
+        512, 1024, 4096, 64 * 1024, 1024 * 1024
+    };
+    const size_t transpose_size_count = base_options.quick ? 4 : 5;
+    const bool avx2_transpose =
+        leopard::ff8xor::transpose::IsModeAvailable(
+            leopard::ff8xor::transpose::Mode::Avx2);
+    const bool bitalg_transpose =
+        leopard::ff8xor::transpose::IsModeAvailable(
+            leopard::ff8xor::transpose::Mode::Avx512Bitalg);
+    const bool vbmi_transpose =
+        leopard::ff8xor::transpose::IsModeAvailable(
+            leopard::ff8xor::transpose::Mode::Avx512Vbmi);
+    for (size_t size_index = 0;
+         size_index < transpose_size_count; ++size_index)
     {
-        std::cerr << "microbenchmark transpose round trip failed\n";
-        return false;
+        const uint64_t transpose_bytes = transpose_sizes[size_index];
+        FillRandom(a, transpose_bytes,
+            UINT64_C(0x7472616e73706f73) ^ transpose_bytes);
+        leopard::ff8xor::transpose::PackedToPlane(
+            a[0], d[0], transpose_bytes,
+            leopard::ff8xor::transpose::Mode::Portable);
+        leopard::ff8xor::transpose::PackedToPlane(
+            a[0], c[0], transpose_bytes,
+            leopard::ff8xor::transpose::Mode::Auto);
+        if (!Equal(c[0], d[0], transpose_bytes))
+        {
+            std::cerr << "microbenchmark transpose backend mismatch at bytes="
+                << transpose_bytes << '\n';
+            return false;
+        }
+        leopard::ff8xor::transpose::PlaneToPacked(
+            c[0], b[0], transpose_bytes,
+            leopard::ff8xor::transpose::Mode::Auto);
+        if (!Equal(a[0], b[0], transpose_bytes))
+        {
+            std::cerr << "microbenchmark transpose round trip failed at bytes="
+                << transpose_bytes << '\n';
+            return false;
+        }
+
+        Timing portable_timing;
+        Timing auto_timing;
+        if (!MeasurePairABBA(options,
+            [&]() -> LeopardResult {
+                leopard::ff8xor::transpose::PackedToPlane(
+                    a[0], d[0], transpose_bytes,
+                    leopard::ff8xor::transpose::Mode::Portable);
+                BenchmarkSink ^= d[0][0];
+                return Leopard_Success;
+            },
+            [&]() -> LeopardResult {
+                leopard::ff8xor::transpose::PackedToPlane(
+                    a[0], c[0], transpose_bytes,
+                    leopard::ff8xor::transpose::Mode::Auto);
+                BenchmarkSink ^= c[0][0];
+                return Leopard_Success;
+            }, portable_timing, auto_timing, result))
+            return false;
+        PrintMicro(options, reporter, "transpose",
+            "packed_to_plane_portable",
+            "portable 8x8 word transpose; no allocation; paired ABBA control",
+            portable_timing, transpose_bytes, transpose_bytes,
+            transpose_bytes, transpose_bytes * 2, "ABBA");
+        PrintMicro(options, reporter, "transpose", "packed_to_plane",
+            bitalg_transpose ?
+                "auto-dispatched AVX-512BITALG ZMM 64-byte blocks; no allocation; paired ABBA" :
+            avx2_transpose ?
+                "auto-dispatched blocked AVX2 8x8 transpose; portable tail; no allocation; paired ABBA" :
+                "portable fallback (AVX2 transpose unavailable); no allocation; paired ABBA",
+            auto_timing, transpose_bytes, transpose_bytes,
+            transpose_bytes, transpose_bytes * 2, "ABBA");
+
+        if (avx2_transpose && bitalg_transpose)
+        {
+            Timing avx2_timing;
+            Timing bitalg_timing;
+            if (!MeasurePairABBA(options,
+                [&]() -> LeopardResult {
+                    leopard::ff8xor::transpose::PackedToPlane(
+                        a[0], d[0], transpose_bytes,
+                        leopard::ff8xor::transpose::Mode::Avx2);
+                    BenchmarkSink ^= d[0][0];
+                    return Leopard_Success;
+                },
+                [&]() -> LeopardResult {
+                    leopard::ff8xor::transpose::PackedToPlane(
+                        a[0], c[0], transpose_bytes,
+                        leopard::ff8xor::transpose::Mode::Avx512Bitalg);
+                    BenchmarkSink ^= c[0][0];
+                    return Leopard_Success;
+                }, avx2_timing, bitalg_timing, result))
+                return false;
+            PrintMicro(options, reporter, "transpose",
+                "packed_to_plane_avx2_control",
+                "forced AVX2 control for retained-width comparison; paired ABBA",
+                avx2_timing, transpose_bytes, transpose_bytes,
+                transpose_bytes, transpose_bytes * 2, "ABBA");
+            PrintMicro(options, reporter, "transpose",
+                "packed_to_plane_bitalg_zmm",
+                "forced AVX-512BITALG ZMM; paired against AVX2; no allocation",
+                bitalg_timing, transpose_bytes, transpose_bytes,
+                transpose_bytes, transpose_bytes * 2, "ABBA");
+        }
+
+        Timing inverse_portable_timing;
+        Timing inverse_timing;
+        if (!MeasurePairABBA(options,
+            [&]() -> LeopardResult {
+                leopard::ff8xor::transpose::PlaneToPacked(
+                    c[0], e[0], transpose_bytes,
+                    leopard::ff8xor::transpose::Mode::Portable);
+                BenchmarkSink ^= e[0][0];
+                return Leopard_Success;
+            },
+            [&]() -> LeopardResult {
+                leopard::ff8xor::transpose::PlaneToPacked(
+                    c[0], b[0], transpose_bytes,
+                    leopard::ff8xor::transpose::Mode::Auto);
+                BenchmarkSink ^= b[0][0];
+                return Leopard_Success;
+            }, inverse_portable_timing, inverse_timing, result))
+            return false;
+        PrintMicro(options, reporter, "transpose",
+            "plane_to_packed_portable",
+            "portable inverse 8x8 word transpose; no allocation; paired ABBA control",
+            inverse_portable_timing, transpose_bytes, transpose_bytes,
+            transpose_bytes, transpose_bytes * 2, "ABBA");
+        PrintMicro(options, reporter, "transpose", "plane_to_packed",
+            vbmi_transpose ?
+                "auto-dispatched AVX-512VBMI ZMM 512-byte hierarchy; AVX2/portable tail; no allocation; paired ABBA" :
+            avx2_transpose ?
+                "auto-dispatched blocked AVX2 inverse 8x8 transpose; portable tail; no allocation; paired ABBA" :
+                "portable inverse fallback (AVX2 transpose unavailable); no allocation; paired ABBA",
+            inverse_timing, transpose_bytes, transpose_bytes,
+            transpose_bytes, transpose_bytes * 2, "ABBA");
+
+        if (avx2_transpose && vbmi_transpose)
+        {
+            Timing inverse_avx2_timing;
+            Timing vbmi_timing;
+            if (!MeasurePairABBA(options,
+                [&]() -> LeopardResult {
+                    leopard::ff8xor::transpose::PlaneToPacked(
+                        c[0], e[0], transpose_bytes,
+                        leopard::ff8xor::transpose::Mode::Avx2);
+                    BenchmarkSink ^= e[0][0];
+                    return Leopard_Success;
+                },
+                [&]() -> LeopardResult {
+                    leopard::ff8xor::transpose::PlaneToPacked(
+                        c[0], b[0], transpose_bytes,
+                        leopard::ff8xor::transpose::Mode::Avx512Vbmi);
+                    BenchmarkSink ^= b[0][0];
+                    return Leopard_Success;
+                }, inverse_avx2_timing, vbmi_timing, result))
+                return false;
+            PrintMicro(options, reporter, "transpose",
+                "plane_to_packed_avx2_control",
+                "forced AVX2 control for retained-width comparison; paired ABBA",
+                inverse_avx2_timing, transpose_bytes, transpose_bytes,
+                transpose_bytes, transpose_bytes * 2, "ABBA");
+            PrintMicro(options, reporter, "transpose",
+                "plane_to_packed_vbmi_zmm",
+                "forced AVX-512VBMI ZMM; paired against AVX2; portable tail",
+                vbmi_timing, transpose_bytes, transpose_bytes,
+                transpose_bytes, transpose_bytes * 2, "ABBA");
+        }
     }
-
-    Timing timing;
-    if (!Measure(options,
-        [&]() -> LeopardResult {
-            PackedToPlane(a[0], c[0], bytes);
-            BenchmarkSink ^= c[0][0];
-            return Leopard_Success;
-        }, timing, result))
-        return false;
-    PrintMicro(options, reporter, "transpose", "packed_to_plane",
-        "standalone 8x8 bit transpose; no allocation", timing,
-        bytes, bytes, bytes, bytes * 2);
-
-    timing = Timing();
-    if (!Measure(options,
-        [&]() -> LeopardResult {
-            PlaneToPacked(c[0], a[0], bytes);
-            BenchmarkSink ^= a[0][0];
-            return Leopard_Success;
-        }, timing, result))
-        return false;
-    PrintMicro(options, reporter, "transpose", "plane_to_packed",
-        "standalone 8x8 bit transpose; no allocation", timing,
-        bytes, bytes, bytes, bytes * 2);
 
     if (!base_options.csv && !base_options.json)
         std::cout << '\n';
@@ -2743,11 +2979,13 @@ static void Usage(const char* program)
 {
     std::cout << "Usage: " << program
         << " [--quick] [--csv|--json] [--include-transpose] [--counters]"
-        << " [--abba] [--cache-color] [--cpu N|--no-pin]\n"
+        << " [--portable-transpose] [--abba] [--cache-color]"
+        << " [--cpu N|--no-pin]\n"
         << "  --quick              Run a bounded development/CI subset.\n"
         << "  --csv                Emit machine-readable CSV.\n"
         << "  --json               Emit newline-delimited machine-readable JSON.\n"
         << "  --include-transpose  Also time packed boundary transposes around ff8xor.\n"
+        << "  --portable-transpose Use the portable transpose control for packed-boundary rows.\n"
         << "  --counters           Request Linux perf_event PMU counters; unavailable"
         << " events remain null.\n"
         << "  --abba               Measure paired end-to-end rows in A-B-B-A order.\n"
@@ -2770,6 +3008,8 @@ static bool ParseOptions(int argc, char** argv, Options& options)
             options.json = true;
         else if (argument == "--include-transpose")
             options.include_transpose = true;
+        else if (argument == "--portable-transpose")
+            options.portable_transpose = true;
         else if (argument == "--counters")
             options.counters = true;
         else if (argument == "--abba")
@@ -2836,6 +3076,10 @@ int main(int argc, char** argv)
     Options options;
     if (!ParseOptions(argc, argv, options))
         return 2;
+
+    BoundaryTransposeMode = options.portable_transpose ?
+        leopard::ff8xor::transpose::Mode::Portable :
+        leopard::ff8xor::transpose::Mode::Auto;
 
     const std::string affinity = ConfigureAffinity(options);
 

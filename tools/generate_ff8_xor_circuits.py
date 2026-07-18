@@ -17,6 +17,14 @@ import sys
 import time
 from pathlib import Path
 
+# Some synthesis tests load this file directly through importlib rather than
+# adding tools/ to sys.path.  Make the sibling cost model discoverable in both
+# ordinary script and direct-module modes.
+_TOOLS_DIRECTORY = str(Path(__file__).resolve().parent)
+if _TOOLS_DIRECTORY not in sys.path:
+    sys.path.insert(0, _TOOLS_DIRECTORY)
+import ff8_xor_cost_model as cost_model
+
 
 FIELD_BITS = 8
 FIELD_ORDER = 1 << FIELD_BITS
@@ -877,7 +885,13 @@ def synthesize_reversible_map_greedy(rows):
     return gates
 
 
-def synthesize_reversible_map_portfolio(rows):
+def selection_key(gates, width, profile=None):
+    """Rank a verified equivalent circuit under an explicit cost profile."""
+    return cost_model.circuit_key(
+        gates, width, profile or cost_model.PORTABLE_DEFAULT_PROFILE)
+
+
+def synthesize_reversible_map_portfolio(rows, cost_profile=None):
     """Choose a verified circuit from deterministic synthesis variants."""
     width = len(rows)
     inverse_rows = inverse_matrix(rows)
@@ -968,7 +982,8 @@ def synthesize_reversible_map_portfolio(rows):
 
     gates, name = min(
         candidates.items(),
-        key=lambda item: circuit_key(item[0], width) + (item[1],))
+        key=lambda item: selection_key(
+            item[0], width, cost_profile) + (item[1],))
     if (name == "bounded-exact8x6" and
             compiled_xor_form_cost(gates, width) >= pre_exact_compiled_cost):
         raise AssertionError("exact 8-wire promotion regressed XOR form cost")
@@ -1000,9 +1015,9 @@ def circuit_key(gates, width):
     return (len(gates), circuit_depth(gates, width), gates)
 
 
-def choose_butterfly_circuit(rows, direct_gates):
+def choose_butterfly_circuit(rows, direct_gates, cost_profile=None):
     synthesized_gates, synthesized_name = \
-        synthesize_reversible_map_portfolio(rows)
+        synthesize_reversible_map_portfolio(rows, cost_profile)
     direct_gates = cancel_commuting_duplicate_gates(direct_gates)
     direct_optimized = optimize_exact_windows(direct_gates, len(rows))
     if circuit_matrix(len(rows), synthesized_gates) != rows:
@@ -1012,18 +1027,19 @@ def choose_butterfly_circuit(rows, direct_gates):
     if circuit_matrix(len(rows), direct_optimized) != rows:
         raise AssertionError("optimized direct butterfly circuit is incorrect")
 
-    # The tuple comparison exactly implements gate count, then dependency
-    # depth, then lexical gate ordering.  Identical gate lists are equivalent.
+    # Final selection uses the same explicit profile as multiplier synthesis;
+    # every candidate remains independently map-verified above.
     candidates = (
         (synthesized_gates, "portfolio:" + synthesized_name),
         (direct_gates, "direct"),
         (direct_optimized, "direct/exact4x8"),
     )
     return min(candidates, key=lambda item:
-               circuit_key(item[0], len(rows)) + (item[1],))
+               selection_key(
+                   item[0], len(rows), cost_profile) + (item[1],))
 
 
-def validate_representative_wide_synthesis():
+def validate_representative_wide_synthesis(cost_profile=None):
     """Prove the portfolio machinery on deterministic 32x32 maps."""
     width = 32
     deterministic_random = random.Random(0x32C107FF8)
@@ -1071,12 +1087,14 @@ def validate_representative_wide_synthesis():
     # orientation transforms and post-passes at a width larger than emitted
     # FF8 circuits without making every --check invocation unnecessarily slow.
     selected, unused_name = synthesize_reversible_map_portfolio(
-        representative_maps[0])
+        representative_maps[0], cost_profile)
     if circuit_matrix(width, selected) != representative_maps[0]:
         raise AssertionError("32x32 portfolio selection mismatch")
 
 
-def build_circuits():
+def build_circuits(cost_profile=None):
+    cost_profile = cost_model.validate_profile(
+        cost_profile or cost_model.PORTABLE_DEFAULT_PROFILE)
     multiplication_matrices = tuple(
         multiplication_matrix(log_multiplier)
         for log_multiplier in range(FIELD_ORDER))
@@ -1092,7 +1110,8 @@ def build_circuits():
     # Exhaustive multiplier validation is fast and guards the column/row and
     # Cantor-coordinate conventions independently of the circuit synthesis.
     for log_multiplier, matrix in enumerate(multiplication_matrices):
-        gates, variant = synthesize_reversible_map_portfolio(matrix)
+        gates, variant = synthesize_reversible_map_portfolio(
+            matrix, cost_profile)
         if circuit_matrix(WIRE_COUNT_MULTIPLY, gates) != matrix:
             raise AssertionError("incorrect multiplier circuit")
         for value in range(FIELD_ORDER):
@@ -1130,9 +1149,9 @@ def build_circuits():
         direct_inverse = direct_butterfly_circuit(
             skew, True, multiplication_matrices)
         chosen_forward, forward_variant = choose_butterfly_circuit(
-            forward_matrix, direct_forward)
+            forward_matrix, direct_forward, cost_profile)
         chosen_inverse, inverse_variant = choose_butterfly_circuit(
-            inverse_matrix, direct_inverse)
+            inverse_matrix, direct_inverse, cost_profile)
 
         for state in validation_states:
             expected_forward = forward_function(state)
@@ -1160,7 +1179,7 @@ def build_circuits():
         forward_variants.append(forward_variant)
         inverse_variants.append(inverse_variant)
 
-    validate_representative_wide_synthesis()
+    validate_representative_wide_synthesis(cost_profile)
 
     return {
         "multiply_matrices": tuple(multiplication_matrices),
@@ -1172,6 +1191,8 @@ def build_circuits():
         "multiply_variants": tuple(multiplication_variants),
         "forward_variants": tuple(forward_variants),
         "inverse_variants": tuple(inverse_variants),
+        "cost_profile_id": cost_profile["id"],
+        "cost_profile_checksum": cost_model.checksum(cost_profile),
     }
 
 
@@ -1292,6 +1313,9 @@ def generate_cpp(circuit_data):
         "// Generator model: polynomial 0x11D; Cantor basis",
         "// { 1, 214, 152, 146, 86, 200, 88, 230 }.",
         "// Circuit checksum (SHA-256): %s" % checksum,
+        "// Selection cost profile: %s (%s)" % (
+            circuit_data["cost_profile_id"],
+            circuit_data["cost_profile_checksum"]),
         "// CNOT depth forbids two gates in one layer from sharing a wire.",
         "// MultiplyCircuit<255> is identity; butterfly skew 255 omits multiply.",
         "",
@@ -1311,6 +1335,10 @@ def generate_cpp(circuit_data):
         "namespace leopard { namespace ff8xor { namespace generated {",
         "",
         "static const char kCircuitChecksum[] = \"%s\";" % checksum,
+        "static const char kCircuitCostProfileId[] = \"%s\";" %
+        circuit_data["cost_profile_id"],
+        "static const char kCircuitCostProfileChecksum[] = \"%s\";" %
+        circuit_data["cost_profile_checksum"],
         "",
     ])
     lines.append("static const unsigned kSynthesisVariantCount = %d;" %
@@ -1384,6 +1412,9 @@ def check_output(output_path, generated_text):
 
 
 def print_synthesis_summary(circuit_data, elapsed_seconds):
+    print("Selection cost profile: %s (%s)" % (
+        circuit_data["cost_profile_id"],
+        circuit_data["cost_profile_checksum"]))
     families = (
         ("Multiply", "multiply_circuits", "multiply_variants",
          WIRE_COUNT_MULTIPLY),
@@ -1409,6 +1440,7 @@ def print_synthesis_summary(circuit_data, elapsed_seconds):
 def parse_arguments():
     repository_root = Path(__file__).resolve().parents[1]
     default_output = repository_root / "generated" / "LeopardFF8XorCircuits.inl"
+    default_profiles = repository_root / "generated" / "FF8XorCostProfiles.json"
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--check",
@@ -1419,13 +1451,26 @@ def parse_arguments():
         type=Path,
         default=default_output,
         help="generated output path (default: %(default)s)")
+    parser.add_argument(
+        "--cost-profile",
+        default="portable-default-v1",
+        help="checked-in cost-profile id used for final circuit selection")
+    parser.add_argument(
+        "--cost-profiles",
+        type=Path,
+        default=default_profiles,
+        help="cost-profile artifact (default: %(default)s)")
     return parser.parse_args()
 
 
 def main():
     arguments = parse_arguments()
+    profile_artifact = cost_model.load_profile_artifact(
+        arguments.cost_profiles)
+    selected_profile = cost_model.find_profile(
+        profile_artifact, arguments.cost_profile)
     begin = time.monotonic()
-    circuit_data = build_circuits()
+    circuit_data = build_circuits(selected_profile)
     generated_text = generate_cpp(circuit_data)
     elapsed_seconds = time.monotonic() - begin
 

@@ -89,6 +89,11 @@ LEO_EXPORT LeopardResult leo_ff8xor_encode(
     const void* const* original_data,
     void** work_data)
 {
+    // Fast paths below do not enter ReedSolomonEncode.  Reset at the public
+    // call boundary so per-thread diagnostic statistics can never describe a
+    // stale prior transform after k=1, r=1, or a rejected request.
+    leopard::ff8xor::ResetMaterializationStatistics();
+
     if (buffer_bytes == 0 || buffer_bytes % 64 != 0)
         return Leopard_InvalidSize;
     if (recovery_count == 0 || recovery_count > original_count)
@@ -147,6 +152,9 @@ LEO_EXPORT LeopardResult leo_ff8xor_decode(
     const void* const* recovery_data,
     void** work_data)
 {
+    // This also covers no-loss, k=1, and r=1 exits that bypass the transform.
+    leopard::ff8xor::ResetMaterializationStatistics();
+
     if (buffer_bytes == 0 || buffer_bytes % 64 != 0)
         return Leopard_InvalidSize;
     if (recovery_count == 0 || recovery_count > original_count)

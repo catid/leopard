@@ -4,6 +4,7 @@
 
 #include "../LeopardCommon.h"
 #include "../LeopardFF8Xor.h"
+#include "../LeopardFF8XorTranspose.h"
 #include "../leopard_ff8xor.h"
 
 #include <algorithm>
@@ -36,6 +37,8 @@ static const uint8_t kCantorBasis[kFieldBits] = {
 
 static uint8_t LogLUT[kFieldOrder];
 static uint8_t ExpLUT[kFieldOrder];
+static leopard::ff8xor::MaterializationStatistics ObservedEncodeStatistics = {};
+static leopard::ff8xor::MaterializationStatistics ObservedDecodeStatistics = {};
 
 static uint8_t AddMod(uint8_t a, uint8_t b)
 {
@@ -269,45 +272,24 @@ static bool TestButterflyCircuits()
 typedef std::vector<uint8_t> Buffer;
 typedef std::vector<Buffer> Buffers;
 
-static void PackedToPlane(const Buffer& packed, Buffer& plane)
+static void PackedToPlane(
+    const Buffer& packed,
+    Buffer& plane,
+    leopard::ff8xor::transpose::Mode mode =
+        leopard::ff8xor::transpose::Mode::Auto)
 {
     const size_t buffer_bytes = packed.size();
-    const size_t plane_bytes = buffer_bytes / kFieldBits;
     plane.assign(buffer_bytes, 0);
-
-    for (size_t group = 0; group < plane_bytes; ++group)
-    {
-        for (unsigned lane = 0; lane < kFieldBits; ++lane)
-        {
-            const uint8_t packed_value = packed[group * kFieldBits + lane];
-            for (unsigned bit = 0; bit < kFieldBits; ++bit)
-            {
-                plane[bit * plane_bytes + group] |= static_cast<uint8_t>(
-                    ((packed_value >> bit) & 1U) << lane);
-            }
-        }
-    }
+    leopard::ff8xor::transpose::PackedToPlane(
+        packed.data(), plane.data(), buffer_bytes, mode);
 }
 
 static void PlaneToPacked(const Buffer& plane, Buffer& packed)
 {
     const size_t buffer_bytes = plane.size();
-    const size_t plane_bytes = buffer_bytes / kFieldBits;
     packed.assign(buffer_bytes, 0);
-
-    for (size_t group = 0; group < plane_bytes; ++group)
-    {
-        for (unsigned lane = 0; lane < kFieldBits; ++lane)
-        {
-            uint8_t packed_value = 0;
-            for (unsigned bit = 0; bit < kFieldBits; ++bit)
-            {
-                packed_value |= static_cast<uint8_t>(
-                    ((plane[bit * plane_bytes + group] >> lane) & 1U) << bit);
-            }
-            packed[group * kFieldBits + lane] = packed_value;
-        }
-    }
+    leopard::ff8xor::transpose::PlaneToPacked(
+        plane.data(), packed.data(), buffer_bytes);
 }
 
 static void FillRandom(Buffer& buffer, uint32_t& state)
@@ -325,6 +307,26 @@ static void FillRandom(Buffers& buffers, uint32_t seed)
 static Buffers AllocateBuffers(unsigned count, uint64_t buffer_bytes)
 {
     return Buffers(count, Buffer(static_cast<size_t>(buffer_bytes), 0));
+}
+
+static void PoisonWorkBuffers(Buffers& buffers, uint32_t seed)
+{
+    // Deferred-zero correctness must not depend on freshly allocated pages.
+    // Use a distinct, deterministic, nonzero byte stream for each shard so a
+    // stale read is overwhelmingly unlikely to cancel elsewhere in the
+    // linear transform.
+    for (size_t shard = 0; shard < buffers.size(); ++shard)
+    {
+        uint32_t state = seed ^ static_cast<uint32_t>(
+            UINT32_C(0x9e3779b9) * static_cast<uint32_t>(shard + 1));
+        for (size_t offset = 0; offset < buffers[shard].size(); ++offset)
+        {
+            uint8_t value = static_cast<uint8_t>(NextRandom(state));
+            if (value == 0)
+                value = static_cast<uint8_t>(0x5aU ^ (shard & 0x3fU));
+            buffers[shard][offset] = value;
+        }
+    }
 }
 
 static std::vector<const void*> GetConstPointers(const Buffers& buffers)
@@ -372,21 +374,134 @@ static bool CheckEqual(
 
 static bool TestTransposeHelpers()
 {
-    static const uint64_t kSizes[] = { 64, 192, 1024, 4096 };
+    typedef leopard::ff8xor::transpose::Mode TransposeMode;
+    TransposeMode modes[] = {
+        TransposeMode::Portable,
+        TransposeMode::Auto,
+        TransposeMode::Avx2,
+        TransposeMode::Avx512Bitalg,
+        TransposeMode::Avx512Vbmi
+    };
+    const unsigned mode_count =
+        sizeof(modes) / sizeof(modes[0]);
     uint32_t state = 0x8badf00dU;
 
-    for (unsigned size_index = 0;
-         size_index < sizeof(kSizes) / sizeof(kSizes[0]);
-         ++size_index)
+    // Exercise every possible portable/vector tail length, including inputs
+    // smaller than one AVX2 block.  Exact-size vector allocations make ASan
+    // catch any read past the source; canaries independently catch writes
+    // outside either destination boundary.
+    for (size_t group_count = 1; group_count <= 67; ++group_count)
     {
-        Buffer packed(static_cast<size_t>(kSizes[size_index]));
-        Buffer plane;
-        Buffer round_trip;
+        const size_t bytes = group_count * kFieldBits;
+        const size_t guard_bytes = 32;
+        Buffer guarded_packed(bytes + guard_bytes * 2, 0xa5);
+        Buffer guarded_plane(bytes + guard_bytes * 2, 0x5a);
+        Buffer packed(bytes);
+        Buffer portable(bytes);
+        Buffer exact_actual(bytes);
+        Buffer round_trip(bytes);
+        Buffer guarded_round_trip(bytes + guard_bytes * 2, 0xc3);
         FillRandom(packed, state);
-        PackedToPlane(packed, plane);
+        memcpy(guarded_packed.data() + guard_bytes, packed.data(), bytes);
 
-        const size_t plane_bytes = plane.size() / kFieldBits;
-        for (size_t group = 0; group < plane_bytes; ++group)
+        leopard::ff8xor::transpose::PackedToPlane(
+            packed.data(), portable.data(), bytes, TransposeMode::Portable);
+
+        for (unsigned mode_index = 0; mode_index < mode_count; ++mode_index)
+        {
+            // The exact-size source and destination let ASan diagnose an
+            // overread/overwrite directly, including at 31/32/33 groups.
+            std::fill(exact_actual.begin(), exact_actual.end(), 0);
+            leopard::ff8xor::transpose::PackedToPlane(
+                packed.data(), exact_actual.data(), bytes,
+                modes[mode_index]);
+            if (exact_actual != portable)
+            {
+                fprintf(stderr,
+                    "exact-size transpose mismatch: groups=%llu mode=%u\n",
+                    static_cast<unsigned long long>(group_count), mode_index);
+                return false;
+            }
+
+            std::fill(guarded_plane.begin(), guarded_plane.end(), 0x5a);
+            leopard::ff8xor::transpose::PackedToPlane(
+                guarded_packed.data() + guard_bytes,
+                guarded_plane.data() + guard_bytes,
+                bytes,
+                modes[mode_index]);
+            if (memcmp(guarded_plane.data() + guard_bytes,
+                    portable.data(), bytes) != 0)
+            {
+                fprintf(stderr,
+                    "transpose backend mismatch: groups=%llu mode=%u\n",
+                    static_cast<unsigned long long>(group_count), mode_index);
+                return false;
+            }
+            if (memcmp(guarded_packed.data() + guard_bytes,
+                    packed.data(), bytes) != 0)
+            {
+                fprintf(stderr,
+                    "transpose modified source: groups=%llu mode=%u\n",
+                    static_cast<unsigned long long>(group_count), mode_index);
+                return false;
+            }
+            for (size_t index = 0; index < guard_bytes; ++index)
+            {
+                if (guarded_plane[index] != 0x5a ||
+                    guarded_plane[guard_bytes + bytes + index] != 0x5a ||
+                    guarded_packed[index] != 0xa5 ||
+                    guarded_packed[guard_bytes + bytes + index] != 0xa5)
+                {
+                    fprintf(stderr,
+                        "transpose guard changed: groups=%llu mode=%u\n",
+                        static_cast<unsigned long long>(group_count), mode_index);
+                    return false;
+                }
+            }
+
+            const Buffer plane_before = guarded_plane;
+            leopard::ff8xor::transpose::PlaneToPacked(
+                guarded_plane.data() + guard_bytes,
+                round_trip.data(), bytes, modes[mode_index]);
+            if (!CheckEqual(round_trip, packed,
+                    "transpose randomized round trip", mode_index))
+                return false;
+            if (guarded_plane != plane_before)
+            {
+                fprintf(stderr,
+                    "inverse transpose modified source: groups=%llu mode=%u\n",
+                    static_cast<unsigned long long>(group_count), mode_index);
+                return false;
+            }
+
+            std::fill(guarded_round_trip.begin(),
+                guarded_round_trip.end(), 0xc3);
+            leopard::ff8xor::transpose::PlaneToPacked(
+                guarded_plane.data() + guard_bytes,
+                guarded_round_trip.data() + guard_bytes,
+                bytes, modes[mode_index]);
+            if (memcmp(guarded_round_trip.data() + guard_bytes,
+                    packed.data(), bytes) != 0)
+            {
+                fprintf(stderr,
+                    "guarded inverse mismatch: groups=%llu mode=%u\n",
+                    static_cast<unsigned long long>(group_count), mode_index);
+                return false;
+            }
+            for (size_t index = 0; index < guard_bytes; ++index)
+            {
+                if (guarded_round_trip[index] != 0xc3 ||
+                    guarded_round_trip[guard_bytes + bytes + index] != 0xc3)
+                {
+                    fprintf(stderr,
+                        "inverse transpose guard changed: groups=%llu mode=%u\n",
+                        static_cast<unsigned long long>(group_count), mode_index);
+                    return false;
+                }
+            }
+        }
+
+        for (size_t group = 0; group < group_count; ++group)
         {
             for (unsigned lane = 0; lane < kFieldBits; ++lane)
             {
@@ -395,12 +510,12 @@ static bool TestTransposeHelpers()
                     const unsigned packed_bit =
                         (packed[group * kFieldBits + lane] >> bit) & 1U;
                     const unsigned plane_bit =
-                        (plane[bit * plane_bytes + group] >> lane) & 1U;
+                        (portable[bit * group_count + group] >> lane) & 1U;
                     if (packed_bit != plane_bit)
                     {
                         fprintf(stderr,
-                            "transpose formula mismatch: bytes=%llu group=%llu lane=%u bit=%u\n",
-                            static_cast<unsigned long long>(kSizes[size_index]),
+                            "transpose formula mismatch: groups=%llu group=%llu lane=%u bit=%u\n",
+                            static_cast<unsigned long long>(group_count),
                             static_cast<unsigned long long>(group),
                             lane,
                             bit);
@@ -409,10 +524,70 @@ static bool TestTransposeHelpers()
                 }
             }
         }
+    }
 
-        PlaneToPacked(plane, round_trip);
-        if (!CheckEqual(round_trip, packed, "transpose round trip", size_index))
-            return false;
+    // Exhaust the 4,096 one-hot input basis states of one complete 512-byte
+    // VBMI block.  This also covers two AVX2 blocks and eight BITALG blocks.
+    // Since the transpose is linear, this covers the entire map; the uniform
+    // byte sweep below catches useful dense patterns.
+    const size_t exhaustive_bytes = 512;
+    for (unsigned mode_index = 0; mode_index < mode_count; ++mode_index)
+    {
+        Buffer packed(exhaustive_bytes, 0);
+        Buffer expected(exhaustive_bytes);
+        Buffer actual(exhaustive_bytes);
+        Buffer round_trip(exhaustive_bytes);
+        for (size_t byte = 0; byte < exhaustive_bytes; ++byte)
+        {
+            for (unsigned bit = 0; bit < 8; ++bit)
+            {
+                packed[byte] = static_cast<uint8_t>(1U << bit);
+                leopard::ff8xor::transpose::PackedToPlane(
+                    packed.data(), expected.data(), exhaustive_bytes,
+                    TransposeMode::Portable);
+                leopard::ff8xor::transpose::PackedToPlane(
+                    packed.data(), actual.data(), exhaustive_bytes,
+                    modes[mode_index]);
+                if (actual != expected)
+                {
+                    fprintf(stderr,
+                        "transpose one-hot mismatch: mode=%u byte=%llu bit=%u\n",
+                        mode_index,
+                        static_cast<unsigned long long>(byte), bit);
+                    return false;
+                }
+                leopard::ff8xor::transpose::PlaneToPacked(
+                    actual.data(), round_trip.data(), exhaustive_bytes,
+                    modes[mode_index]);
+                if (round_trip != packed)
+                {
+                    fprintf(stderr,
+                        "transpose one-hot round trip mismatch: mode=%u byte=%llu bit=%u\n",
+                        mode_index,
+                        static_cast<unsigned long long>(byte), bit);
+                    return false;
+                }
+                packed[byte] = 0;
+            }
+        }
+        for (unsigned value = 0; value < 256; ++value)
+        {
+            std::fill(packed.begin(), packed.end(),
+                static_cast<uint8_t>(value));
+            leopard::ff8xor::transpose::PackedToPlane(
+                packed.data(), actual.data(), exhaustive_bytes,
+                modes[mode_index]);
+            leopard::ff8xor::transpose::PlaneToPacked(
+                actual.data(), round_trip.data(), exhaustive_bytes,
+                modes[mode_index]);
+            if (round_trip != packed)
+            {
+                fprintf(stderr,
+                    "transpose dense round trip mismatch: mode=%u value=%u\n",
+                    mode_index, value);
+                return false;
+            }
+        }
     }
     return true;
 }
@@ -712,6 +887,7 @@ static bool BuildEncodedData(const CodecCase& parameters, EncodedData& encoded)
         parameters.OriginalCount, parameters.RecoveryCount);
     Buffers packed_work = AllocateBuffers(
         packed_work_count, parameters.BufferBytes);
+    PoisonWorkBuffers(packed_work, parameters.Seed ^ UINT32_C(0x5041434b));
     std::vector<const void*> packed_original_ptrs =
         GetConstPointers(encoded.PackedOriginal);
     std::vector<void*> packed_work_ptrs = GetMutablePointers(packed_work);
@@ -741,6 +917,7 @@ static bool BuildEncodedData(const CodecCase& parameters, EncodedData& encoded)
         parameters.OriginalCount, parameters.RecoveryCount);
     Buffers plane_work = AllocateBuffers(
         plane_work_count, parameters.BufferBytes);
+    PoisonWorkBuffers(plane_work, parameters.Seed ^ UINT32_C(0x504c414e));
     std::vector<const void*> plane_original_ptrs =
         GetConstPointers(encoded.PlaneOriginal);
     std::vector<void*> plane_work_ptrs = GetMutablePointers(plane_work);
@@ -840,6 +1017,10 @@ static bool RunDecodePattern(
         packed_work_count, parameters.BufferBytes);
     Buffers plane_work = AllocateBuffers(
         plane_work_count, parameters.BufferBytes);
+    PoisonWorkBuffers(
+        packed_work, parameters.Seed ^ UINT32_C(0xdec0de01));
+    PoisonWorkBuffers(
+        plane_work, parameters.Seed ^ UINT32_C(0xdec0de02));
     std::vector<void*> packed_work_ptrs = GetMutablePointers(packed_work);
     std::vector<void*> plane_work_ptrs = GetMutablePointers(plane_work);
 
@@ -978,6 +1159,219 @@ static bool TestDecodePatterns(const EncodedData& encoded)
         insufficient_recovery,
         Leopard_NeedMoreData,
         "decode insufficient recovery");
+}
+
+static bool StatisticsAreZero(
+    const leopard::ff8xor::MaterializationStatistics& statistics)
+{
+    return statistics.DeferredZeroFills == 0 &&
+        statistics.AddedZeroFills == 0 &&
+        statistics.ButterfliesSkipped == 0 &&
+        statistics.ButterfliesReduced == 0 &&
+        statistics.XorsSkipped == 0 &&
+        statistics.XorsReplacedByCopies == 0 &&
+        statistics.IdentityOperationsElided == 0 &&
+        statistics.EstimatedPayloadBytesElided == 0;
+}
+
+static bool TestMaterializationStatistics()
+{
+    const CodecCase tracked_case = {
+        7, 3, 65536, 0x57a75a75U, "tracked materialization statistics"
+    };
+    EncodedData encoded;
+    if (!BuildEncodedData(tracked_case, encoded))
+        return false;
+    ObservedEncodeStatistics =
+        leopard::ff8xor::GetLastMaterializationStatistics();
+    if (ObservedEncodeStatistics.DeferredZeroFills == 0 ||
+        ObservedEncodeStatistics.ButterfliesReduced == 0 ||
+        ObservedEncodeStatistics.EstimatedPayloadBytesElided <= 0)
+    {
+        fprintf(stderr,
+            "encode materialization tracker reported no useful elision\n");
+        return false;
+    }
+
+    if (!ExpectResult(
+            leo_ff8xor_encode(1, 7, 3, 0, NULL, NULL),
+            Leopard_InvalidSize,
+            "materialization rejected encode reset") ||
+        !StatisticsAreZero(
+            leopard::ff8xor::GetLastMaterializationStatistics()))
+    {
+        fprintf(stderr,
+            "rejected encode left stale materialization statistics\n");
+        return false;
+    }
+
+    EncodedData encode_prime;
+    if (!BuildEncodedData(tracked_case, encode_prime))
+        return false;
+
+    // A tracked call immediately followed by each encode gateway bypass must
+    // report a fresh zero sample, never the prior transform's counters.
+    const CodecCase original_singleton_case = {
+        1, 1, 65536, 0x11110001U, "materialization k=1 bypass"
+    };
+    EncodedData original_singleton_encoded;
+    if (!BuildEncodedData(
+            original_singleton_case, original_singleton_encoded) ||
+        !StatisticsAreZero(
+            leopard::ff8xor::GetLastMaterializationStatistics()))
+    {
+        fprintf(stderr, "k=1 encode left stale materialization statistics\n");
+        return false;
+    }
+
+    if (!BuildEncodedData(tracked_case, encode_prime))
+        return false;
+    const CodecCase recovery_singleton_case = {
+        7, 1, 65536, 0x77770001U, "materialization r=1 bypass"
+    };
+    EncodedData recovery_singleton_encoded;
+    if (!BuildEncodedData(
+            recovery_singleton_case, recovery_singleton_encoded) ||
+        !StatisticsAreZero(
+            leopard::ff8xor::GetLastMaterializationStatistics()))
+    {
+        fprintf(stderr, "r=1 encode left stale materialization statistics\n");
+        return false;
+    }
+
+    std::vector<unsigned> one_loss(1, 3);
+    const std::vector<unsigned> none;
+    if (!RunDecodePattern(
+            encoded,
+            one_loss,
+            none,
+            Leopard_Success,
+            "tracked materialization decode statistics"))
+        return false;
+    ObservedDecodeStatistics =
+        leopard::ff8xor::GetLastMaterializationStatistics();
+    if (ObservedDecodeStatistics.DeferredZeroFills == 0 ||
+        (ObservedDecodeStatistics.ButterfliesSkipped == 0 &&
+         ObservedDecodeStatistics.ButterfliesReduced == 0 &&
+         ObservedDecodeStatistics.XorsSkipped == 0) ||
+        ObservedDecodeStatistics.EstimatedPayloadBytesElided <= 0)
+    {
+        fprintf(stderr,
+            "decode materialization tracker reported no useful elision: "
+            "deferred=%llu added=%llu skipped=%llu reduced=%llu xor=%llu "
+            "copy=%llu identity=%llu bytes=%lld\n",
+            static_cast<unsigned long long>(
+                ObservedDecodeStatistics.DeferredZeroFills),
+            static_cast<unsigned long long>(
+                ObservedDecodeStatistics.AddedZeroFills),
+            static_cast<unsigned long long>(
+                ObservedDecodeStatistics.ButterfliesSkipped),
+            static_cast<unsigned long long>(
+                ObservedDecodeStatistics.ButterfliesReduced),
+            static_cast<unsigned long long>(
+                ObservedDecodeStatistics.XorsSkipped),
+            static_cast<unsigned long long>(
+                ObservedDecodeStatistics.XorsReplacedByCopies),
+            static_cast<unsigned long long>(
+                ObservedDecodeStatistics.IdentityOperationsElided),
+            static_cast<long long>(
+                ObservedDecodeStatistics.EstimatedPayloadBytesElided));
+        return false;
+    }
+
+    if (!ExpectResult(
+            leo_ff8xor_decode(1, 7, 3, 0, NULL, NULL, NULL),
+            Leopard_InvalidSize,
+            "materialization rejected decode reset") ||
+        !StatisticsAreZero(
+            leopard::ff8xor::GetLastMaterializationStatistics()))
+    {
+        fprintf(stderr,
+            "rejected decode left stale materialization statistics\n");
+        return false;
+    }
+
+    // Re-prime immediately so the following no-loss call independently proves
+    // that its own gateway bypass also clears a tracked decode sample.
+    if (!RunDecodePattern(
+            encoded,
+            one_loss,
+            none,
+            Leopard_Success,
+            "materialization decode reprime no-loss"))
+        return false;
+
+    if (!RunDecodePattern(
+            encoded,
+            none,
+            none,
+            Leopard_Success,
+            "materialization no-loss bypass") ||
+        !StatisticsAreZero(
+            leopard::ff8xor::GetLastMaterializationStatistics()))
+    {
+        fprintf(stderr,
+            "no-loss decode left stale materialization statistics\n");
+        return false;
+    }
+
+    if (!RunDecodePattern(
+            encoded,
+            one_loss,
+            none,
+            Leopard_Success,
+            "materialization decode reprime"))
+        return false;
+    std::vector<unsigned> singleton_loss(1, 0);
+    if (!RunDecodePattern(
+            original_singleton_encoded,
+            singleton_loss,
+            none,
+            Leopard_Success,
+            "materialization k=1 decode bypass") ||
+        !StatisticsAreZero(
+            leopard::ff8xor::GetLastMaterializationStatistics()))
+    {
+        fprintf(stderr, "k=1 decode left stale materialization statistics\n");
+        return false;
+    }
+
+    if (!RunDecodePattern(
+            encoded,
+            one_loss,
+            none,
+            Leopard_Success,
+            "materialization decode reprime r=1"))
+        return false;
+    std::vector<unsigned> recovery_singleton_loss(1, 3);
+    if (!RunDecodePattern(
+            recovery_singleton_encoded,
+            recovery_singleton_loss,
+            none,
+            Leopard_Success,
+            "materialization r=1 decode bypass") ||
+        !StatisticsAreZero(
+            leopard::ff8xor::GetLastMaterializationStatistics()))
+    {
+        fprintf(stderr, "r=1 decode left stale materialization statistics\n");
+        return false;
+    }
+
+    // Below the measured profitability threshold the exact pre-optimization
+    // schedule is retained, and the reported optimization delta is zero.
+    CodecCase small_case = {
+        7, 3, 32768, 0x327a75a7U, "untracked materialization threshold"
+    };
+    EncodedData small_encoded;
+    if (!BuildEncodedData(tracked_case, encode_prime) ||
+        !BuildEncodedData(small_case, small_encoded) ||
+        !StatisticsAreZero(
+            leopard::ff8xor::GetLastMaterializationStatistics()))
+    {
+        fprintf(stderr, "small-buffer materialization bypass failed\n");
+        return false;
+    }
+    return true;
 }
 
 static bool TestPackedEquivalence()
@@ -1127,6 +1521,8 @@ static bool RunNativeRoundTrip(const CodecCase& parameters)
         parameters.OriginalCount, parameters.RecoveryCount);
     Buffers encode_work = AllocateBuffers(
         encode_work_count, parameters.BufferBytes);
+    PoisonWorkBuffers(
+        encode_work, parameters.Seed ^ UINT32_C(0x4e415445));
     std::vector<const void*> original_ptrs = GetConstPointers(original);
     std::vector<void*> encode_work_ptrs = GetMutablePointers(encode_work);
     if (!ExpectResult(
@@ -1173,6 +1569,8 @@ static bool RunNativeRoundTrip(const CodecCase& parameters)
         parameters.OriginalCount, parameters.RecoveryCount);
     Buffers decode_work = AllocateBuffers(
         decode_work_count, parameters.BufferBytes);
+    PoisonWorkBuffers(
+        decode_work, parameters.Seed ^ UINT32_C(0x4e415444));
     std::vector<void*> decode_work_ptrs = GetMutablePointers(decode_work);
     if (!ExpectResult(
             leo_ff8xor_decode(
@@ -1207,7 +1605,11 @@ static bool TestNativeRoundTrips()
         {  7, 3,  192, 0x19070003U, "native k=7 r=3 bytes=192" },
         {  8, 2,  192, 0x19080002U, "native k=8 r=2 bytes=192" },
         { 16, 4,  320, 0x32160004U, "native k=16 r=4 bytes=320" },
-        { 32, 8, 1024, 0x10320008U, "native k=32 r=8 bytes=1024" }
+        { 32, 8, 1024, 0x10320008U, "native k=32 r=8 bytes=1024" },
+        // Arbitrary native bytes (not a packed transpose) exercise the
+        // deferred-materialization path with nonzero stale work memory.
+        {  7, 3, 65536, 0x64700300U,
+            "native tracked k=7 r=3 bytes=65536" }
     };
     for (unsigned index = 0;
          index < sizeof(kCases) / sizeof(kCases[0]);
@@ -1389,6 +1791,115 @@ static bool CheckButterflyKernel(uint64_t buffer_bytes, unsigned skew)
            CheckEqual(plane_y, expected_plane_y, "direct IFFT y", skew);
 }
 
+static bool CheckTrackedButterflyTransitions(uint64_t buffer_bytes)
+{
+    enum Relation
+    {
+        BothZero,
+        XZero,
+        YZero,
+        Equal,
+        Different,
+        RelationCount
+    };
+
+    uint32_t random_state = static_cast<uint32_t>(
+        0x10a1ca1U ^ static_cast<unsigned>(buffer_bytes));
+    Buffer value_x(static_cast<size_t>(buffer_bytes));
+    Buffer value_y(static_cast<size_t>(buffer_bytes));
+    FillRandom(value_x, random_state);
+    FillRandom(value_y, random_state);
+
+    for (unsigned inverse = 0; inverse < 2; ++inverse)
+    {
+        for (unsigned skew = 0; skew < kFieldOrder; ++skew)
+        {
+            for (unsigned relation = 0; relation < RelationCount; ++relation)
+            {
+                const bool x_zero = relation == BothZero || relation == XZero;
+                const bool y_zero = relation == BothZero || relation == YZero;
+                const bool equal = relation == Equal;
+                Buffer actual_x = x_zero
+                    ? Buffer(static_cast<size_t>(buffer_bytes), 0)
+                    : value_x;
+                Buffer actual_y;
+                if (y_zero)
+                    actual_y.assign(static_cast<size_t>(buffer_bytes), 0);
+                else if (equal)
+                    actual_y = actual_x;
+                else
+                    actual_y = value_y;
+                Buffer expected_x = actual_x;
+                Buffer expected_y = actual_y;
+
+                if (inverse)
+                {
+                    leopard::ff8xor::IFFTButterflyBuffer(
+                        buffer_bytes,
+                        expected_x.data(),
+                        expected_y.data(),
+                        static_cast<uint8_t>(skew));
+                }
+                else
+                {
+                    leopard::ff8xor::FFTButterflyBuffer(
+                        buffer_bytes,
+                        expected_x.data(),
+                        expected_y.data(),
+                        static_cast<uint8_t>(skew));
+                }
+                leopard::ff8xor::TrackedButterflyBufferForTesting(
+                    buffer_bytes,
+                    actual_x.data(),
+                    actual_y.data(),
+                    inverse != 0,
+                    x_zero,
+                    y_zero,
+                    equal,
+                    static_cast<uint8_t>(skew));
+                if (!CheckEqual(
+                        actual_x, expected_x,
+                        inverse ? "tracked IFFT x" : "tracked FFT x",
+                        skew) ||
+                    !CheckEqual(
+                        actual_y, expected_y,
+                        inverse ? "tracked IFFT y" : "tracked FFT y",
+                        skew))
+                {
+                    fprintf(stderr,
+                        "tracked transition failed: inverse=%u skew=%u relation=%u\n",
+                        inverse, skew, relation);
+                    return false;
+                }
+
+                const leopard::ff8xor::MaterializationStatistics statistics =
+                    leopard::ff8xor::GetLastMaterializationStatistics();
+                const bool expect_skip = relation == BothZero ||
+                    (skew == kFieldModulus && x_zero) ||
+                    (relation == Equal &&
+                        (inverse || skew == 0 || skew == kFieldModulus));
+                const bool expect_reduce = !expect_skip && (
+                    y_zero ||
+                    (x_zero && (inverse || skew == 0)));
+                if ((statistics.ButterfliesSkipped != 0) != expect_skip ||
+                    (statistics.ButterfliesReduced != 0) != expect_reduce)
+                {
+                    fprintf(stderr,
+                        "tracked transition classification failed: "
+                        "inverse=%u skew=%u relation=%u skip=%llu reduce=%llu\n",
+                        inverse, skew, relation,
+                        static_cast<unsigned long long>(
+                            statistics.ButterfliesSkipped),
+                        static_cast<unsigned long long>(
+                            statistics.ButterfliesReduced));
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
 static bool CheckXorBuffersKernel(uint64_t buffer_bytes)
 {
     const size_t bytes = static_cast<size_t>(buffer_bytes);
@@ -1539,6 +2050,11 @@ static bool TestKernelModes()
             leopard::ff8xor::SetKernelMode(saved_mode);
             return false;
         }
+        if (!CheckTrackedButterflyTransitions(1536))
+        {
+            leopard::ff8xor::SetKernelMode(saved_mode);
+            return false;
+        }
 
         for (unsigned size_index = 0;
              size_index < sizeof(kSizes) / sizeof(kSizes[0]);
@@ -1585,6 +2101,61 @@ static bool TestKernelModes()
                     leopard::ff8xor::SetKernelMode(saved_mode);
                     return false;
                 }
+            }
+        }
+
+        // Run the tracked whole-codec path under every forced implementation,
+        // not just the isolated butterfly hook.  The deterministic decode
+        // patterns cover no loss, one/multiple/maximum losses, mixed missing
+        // originals and recovery, and insufficient recovery; k=1/r=1 remain
+        // covered by the API and packed-equivalence suites below.
+        static const CodecCase kTrackedCodecCases[] = {
+            { 7, 3, 65536, 0x10a10000U,
+                "forced tracked-materialization packed equivalence" },
+            // m=8: The first and only encoder chunk is partial, exercising
+            // deferred zeros before any accumulated destination exists.
+            { 5, 5, 65536, 0x10a15000U,
+                "forced poisoned k-less-than-m materialization" },
+            // m=4: Four chunks (4/4/4/1) repeatedly reuse the temporary half
+            // before the final chunk contributes three deferred-zero shards.
+            { 13, 3, 65536, 0x10a1d000U,
+                "forced poisoned multi-chunk materialization" }
+        };
+        for (unsigned case_index = 0;
+             case_index < sizeof(kTrackedCodecCases) /
+                sizeof(kTrackedCodecCases[0]);
+             ++case_index)
+        {
+            CodecCase tracked_codec_case = kTrackedCodecCases[case_index];
+            tracked_codec_case.Seed ^= mode_index;
+            EncodedData tracked_encoded;
+            if (!BuildEncodedData(tracked_codec_case, tracked_encoded) ||
+                !TestDecodePatterns(tracked_encoded))
+            {
+                leopard::ff8xor::SetKernelMode(saved_mode);
+                return false;
+            }
+        }
+
+        static const CodecCase kTrackedSingletonCases[] = {
+            { 1, 1, 65536, 0x10100001U,
+                "forced tracked original/recovery singleton" },
+            { 7, 1, 65536, 0x70100001U,
+                "forced tracked recovery singleton" }
+        };
+        for (unsigned case_index = 0;
+             case_index < sizeof(kTrackedSingletonCases) /
+                sizeof(kTrackedSingletonCases[0]);
+             ++case_index)
+        {
+            CodecCase singleton_case = kTrackedSingletonCases[case_index];
+            singleton_case.Seed ^= mode_index;
+            EncodedData singleton_encoded;
+            if (!BuildEncodedData(singleton_case, singleton_encoded) ||
+                !TestDecodePatterns(singleton_encoded))
+            {
+                leopard::ff8xor::SetKernelMode(saved_mode);
+                return false;
             }
         }
     }
@@ -1657,6 +2228,7 @@ static bool TestAllAVX512Specializations()
             leopard::ff8xor::SetKernelMode(saved_mode);
             return false;
         }
+
     }
 
     leopard::ff8xor::SetKernelMode(saved_mode);
@@ -1721,6 +2293,80 @@ static bool TestAVX512FeaturePredicate()
     return true;
 }
 
+static bool TestAVX512TransposeFeaturePredicates()
+{
+    // Exhaust every presence/absence combination of the six relevant feature
+    // bits plus the two deliberately irrelevant AVX2/AVX-512VL bits.
+    for (unsigned mask = 0; mask < 256; ++mask)
+    {
+        const uint32_t leaf1_ecx =
+            ((mask & (1U << 0)) ? UINT32_C(1) << 27 : 0) |
+            ((mask & (1U << 1)) ? UINT32_C(1) << 28 : 0);
+        const uint32_t leaf7_ebx =
+            ((mask & (1U << 2)) ? UINT32_C(1) << 16 : 0) |
+            ((mask & (1U << 3)) ? UINT32_C(1) << 30 : 0) |
+            ((mask & (1U << 6)) ? UINT32_C(1) << 5 : 0) |
+            ((mask & (1U << 7)) ? UINT32_C(1) << 31 : 0);
+        const uint32_t leaf7_ecx =
+            ((mask & (1U << 4)) ? UINT32_C(1) << 12 : 0) |
+            ((mask & (1U << 5)) ? UINT32_C(1) << 1 : 0);
+        const bool expected_bitalg = (mask & 0x1fU) == 0x1fU;
+        const bool expected_vbmi = (mask & 0x2fU) == 0x2fU;
+        const bool actual_bitalg =
+            leopard::ff8xor::transpose::IsAVX512BitalgSupported(
+                7, leaf1_ecx, leaf7_ebx, leaf7_ecx, UINT64_C(0xe6));
+        const bool actual_vbmi =
+            leopard::ff8xor::transpose::IsAVX512VbmiSupported(
+                7, leaf1_ecx, leaf7_ebx, leaf7_ecx, UINT64_C(0xe6));
+        if (actual_bitalg != expected_bitalg ||
+            actual_vbmi != expected_vbmi)
+        {
+            fprintf(stderr,
+                "AVX-512 transpose feature combination failed: mask=%u\n",
+                mask);
+            return false;
+        }
+    }
+
+    const unsigned xcr_bits[] = { 1, 2, 5, 6, 7 };
+    for (unsigned mask = 0; mask < 32; ++mask)
+    {
+        uint64_t xcr0 = 0;
+        for (unsigned index = 0; index < 5; ++index)
+            if ((mask & (1U << index)) != 0)
+                xcr0 |= UINT64_C(1) << xcr_bits[index];
+        const bool expected = mask == 31;
+        if (leopard::ff8xor::transpose::IsAVX512BitalgSupported(
+                7, UINT32_MAX, UINT32_MAX, UINT32_MAX, xcr0) != expected ||
+            leopard::ff8xor::transpose::IsAVX512VbmiSupported(
+                7, UINT32_MAX, UINT32_MAX, UINT32_MAX, xcr0) != expected)
+        {
+            fprintf(stderr,
+                "AVX-512 transpose XCR0 combination failed: mask=%u\n",
+                mask);
+            return false;
+        }
+    }
+
+    for (uint32_t maximum_leaf = 0; maximum_leaf <= 8; ++maximum_leaf)
+    {
+        const bool expected = maximum_leaf >= 7;
+        if (leopard::ff8xor::transpose::IsAVX512BitalgSupported(
+                maximum_leaf, UINT32_MAX, UINT32_MAX,
+                UINT32_MAX, UINT64_MAX) != expected ||
+            leopard::ff8xor::transpose::IsAVX512VbmiSupported(
+                maximum_leaf, UINT32_MAX, UINT32_MAX,
+                UINT32_MAX, UINT64_MAX) != expected)
+        {
+            fprintf(stderr,
+                "AVX-512 transpose maximum-leaf gate failed: leaf=%u\n",
+                maximum_leaf);
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool TestNextPow2Boundaries()
 {
     if (leopard::NextPow2(0) != 0 ||
@@ -1751,6 +2397,7 @@ int main()
         !TestCallInitialize() ||
         !TestAVX2FeaturePredicate() ||
         !TestAVX512FeaturePredicate() ||
+        !TestAVX512TransposeFeaturePredicates() ||
         !TestNextPow2Boundaries())
         return 1;
 
@@ -1761,6 +2408,7 @@ int main()
         !TestAPIValidation() ||
         !TestKernelModes() ||
         !TestAllAVX512Specializations() ||
+        !TestMaterializationStatistics() ||
         !TestPackedEquivalence() ||
         !TestForcedLocatorShifts() ||
         !TestNativeRoundTrips())
@@ -1784,5 +2432,29 @@ int main()
         leopard::ff8xor::generated::kIFFTMinGateCount,
         leopard::ff8xor::generated::kIFFTMaxGateCount,
         leopard::ff8xor::generated::kIFFTAverageGateCount);
+    printf(
+        "materialization_encode deferred=%llu added=%llu skipped_bfly=%llu "
+        "reduced_bfly=%llu skipped_xor=%llu copy_xor=%llu identity=%llu "
+        "bytes_elided=%lld\n",
+        static_cast<unsigned long long>(ObservedEncodeStatistics.DeferredZeroFills),
+        static_cast<unsigned long long>(ObservedEncodeStatistics.AddedZeroFills),
+        static_cast<unsigned long long>(ObservedEncodeStatistics.ButterfliesSkipped),
+        static_cast<unsigned long long>(ObservedEncodeStatistics.ButterfliesReduced),
+        static_cast<unsigned long long>(ObservedEncodeStatistics.XorsSkipped),
+        static_cast<unsigned long long>(ObservedEncodeStatistics.XorsReplacedByCopies),
+        static_cast<unsigned long long>(ObservedEncodeStatistics.IdentityOperationsElided),
+        static_cast<long long>(ObservedEncodeStatistics.EstimatedPayloadBytesElided));
+    printf(
+        "materialization_decode deferred=%llu added=%llu skipped_bfly=%llu "
+        "reduced_bfly=%llu skipped_xor=%llu copy_xor=%llu identity=%llu "
+        "bytes_elided=%lld\n",
+        static_cast<unsigned long long>(ObservedDecodeStatistics.DeferredZeroFills),
+        static_cast<unsigned long long>(ObservedDecodeStatistics.AddedZeroFills),
+        static_cast<unsigned long long>(ObservedDecodeStatistics.ButterfliesSkipped),
+        static_cast<unsigned long long>(ObservedDecodeStatistics.ButterfliesReduced),
+        static_cast<unsigned long long>(ObservedDecodeStatistics.XorsSkipped),
+        static_cast<unsigned long long>(ObservedDecodeStatistics.XorsReplacedByCopies),
+        static_cast<unsigned long long>(ObservedDecodeStatistics.IdentityOperationsElided),
+        static_cast<long long>(ObservedDecodeStatistics.EstimatedPayloadBytesElided));
     return 0;
 }

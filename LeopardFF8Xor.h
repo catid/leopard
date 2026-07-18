@@ -79,6 +79,21 @@ struct CircuitCost
     unsigned Depth;
 };
 
+// Statistics for the most recent transform on this thread.  Payload byte
+// counts are deterministic scheduled traffic estimates (loads plus stores),
+// not hardware performance-counter measurements.
+struct MaterializationStatistics
+{
+    uint64_t DeferredZeroFills;
+    uint64_t AddedZeroFills;
+    uint64_t ButterfliesSkipped;
+    uint64_t ButterfliesReduced;
+    uint64_t XorsSkipped;
+    uint64_t XorsReplacedByCopies;
+    uint64_t IdentityOperationsElided;
+    int64_t EstimatedPayloadBytesElided;
+};
+
 void SetKernelMode(KernelMode mode);
 KernelMode GetKernelMode();
 KernelMode GetActiveKernelMode();
@@ -95,12 +110,16 @@ bool IsAVX512Supported(
     uint64_t xcr0);
 
 const char* GetCircuitChecksum();
+const char* GetCircuitCostProfileId();
+const char* GetCircuitCostProfileChecksum();
 CircuitStatistics GetMultiplyCircuitStatistics();
 CircuitStatistics GetFFTCircuitStatistics();
 CircuitStatistics GetIFFTCircuitStatistics();
 CircuitCost GetMultiplyCircuitCost(ffe_t log_multiplier);
 CircuitCost GetFFTCircuitCost(ffe_t skew);
 CircuitCost GetIFFTCircuitCost(ffe_t skew);
+MaterializationStatistics GetLastMaterializationStatistics();
+void ResetMaterializationStatistics();
 
 // Whole-buffer field addition.  This follows the selected experimental kernel
 // mode and is also used by the native API's M=1 and formal-derivative paths so
@@ -147,6 +166,19 @@ void IFFTButterflyBuffer(
 unsigned GetLastLocatorShiftForTesting();
 // -1 restores automatic gate/depth minimization; 0..254 forces a common shift.
 void SetLocatorShiftForTesting(int shift);
+
+// Exercise the logical-state butterfly planner directly.  The caller must
+// provide payloads matching the declared zero/equality relation.  Deferred
+// zero outputs are materialized before return for byte-exact comparison.
+void TrackedButterflyBufferForTesting(
+    uint64_t buffer_bytes,
+    void* x,
+    void* y,
+    bool inverse,
+    bool x_is_zero,
+    bool y_is_zero,
+    bool equal_nonzero,
+    ffe_t skew);
 
 
 //------------------------------------------------------------------------------

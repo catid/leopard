@@ -144,6 +144,7 @@ struct ValueIO<Simd128Tag>
 static std::atomic<KernelMode> SelectedKernelMode(KernelMode::Auto);
 static thread_local unsigned LastLocatorShift = 0;
 static thread_local int LocatorShiftOverride = -1;
+static thread_local MaterializationStatistics LastMaterializationStatistics = {};
 
 bool IsAVX512Supported(
     uint32_t maximum_basic_leaf,
@@ -175,7 +176,16 @@ struct X86VectorCapabilities
 // This detector is deliberately compiled in the baseline translation unit.
 // No AVX-targeted object is entered until CPUID and XCR0 prove that both the
 // processor and operating system preserve the vector state that object needs.
-static X86VectorCapabilities DetectX86VectorCapabilities()
+#if defined(_MSC_VER)
+    #define LEO_FF8XOR_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+    #define LEO_FF8XOR_NOINLINE __attribute__((noinline))
+#else
+    #define LEO_FF8XOR_NOINLINE
+#endif
+
+static LEO_FF8XOR_NOINLINE X86VectorCapabilities
+DetectX86VectorCapabilities()
 {
     X86VectorCapabilities capabilities = { false, false, false };
 
@@ -250,6 +260,8 @@ static X86VectorCapabilities DetectX86VectorCapabilities()
 
     return capabilities;
 }
+
+#undef LEO_FF8XOR_NOINLINE
 
 static const X86VectorCapabilities& GetX86VectorCapabilities()
 {
@@ -416,6 +428,17 @@ unsigned GetLastLocatorShiftForTesting()
 void SetLocatorShiftForTesting(int shift)
 {
     LocatorShiftOverride = shift >= 0 && shift < kModulus ? shift : -1;
+}
+
+MaterializationStatistics GetLastMaterializationStatistics()
+{
+    return LastMaterializationStatistics;
+}
+
+void ResetMaterializationStatistics()
+{
+    const MaterializationStatistics empty = {};
+    LastMaterializationStatistics = empty;
 }
 
 
@@ -1016,6 +1039,16 @@ const char* GetCircuitChecksum()
     return generated::kCircuitChecksum;
 }
 
+const char* GetCircuitCostProfileId()
+{
+    return generated::kCircuitCostProfileId;
+}
+
+const char* GetCircuitCostProfileChecksum()
+{
+    return generated::kCircuitCostProfileChecksum;
+}
+
 static CircuitStatistics MakeCircuitStatistics(
     unsigned minimum_gate_count,
     unsigned maximum_gate_count,
@@ -1271,7 +1304,112 @@ static void FFTInitialize()
 //------------------------------------------------------------------------------
 // Natural two-way transform schedules
 
-static void IFFT_DIT(
+struct BufferState
+{
+    // Zero is the distinguished logical-zero identity.  Nonzero identities
+    // prove exact equality only when produced by a copy; arbitrary inputs get
+    // distinct identities even if their payload bytes happen to match.
+    uint32_t Identity;
+    bool Materialized;
+};
+
+struct MaterializationContext
+{
+    uint64_t BufferBytes;
+    uint32_t NextIdentity;
+    MaterializationStatistics Statistics;
+
+    explicit MaterializationContext(uint64_t buffer_bytes)
+        : BufferBytes(buffer_bytes)
+        , NextIdentity(1)
+        , Statistics()
+    {
+    }
+
+    void SetFresh(BufferState& state)
+    {
+        state.Identity = NextIdentity++;
+        state.Materialized = true;
+    }
+
+    void SetZero(BufferState& state, bool materialized)
+    {
+        state.Identity = 0;
+        state.Materialized = materialized;
+    }
+
+    void DeferZero(BufferState& state)
+    {
+        SetZero(state, false);
+        ++Statistics.DeferredZeroFills;
+        Statistics.EstimatedPayloadBytesElided +=
+            static_cast<int64_t>(BufferBytes);
+    }
+
+    void MaterializeZero(void* buffer, BufferState& state)
+    {
+        if (state.Identity != 0 || state.Materialized)
+            return;
+        memset(buffer, 0, static_cast<size_t>(BufferBytes));
+        state.Materialized = true;
+        ++Statistics.AddedZeroFills;
+        Statistics.EstimatedPayloadBytesElided -=
+            static_cast<int64_t>(BufferBytes);
+    }
+
+    uint64_t ButterflyPayloadBytes(ffe_t skew) const
+    {
+        // Sentinel 255 is the existing contiguous y ^= x path: two reads and
+        // one store.  A generated non-sentinel butterfly reads and stores both
+        // buffers.
+        return BufferBytes * (skew == kModulus ? 3 : 4);
+    }
+
+    void RecordSkippedButterfly(ffe_t skew, bool identity)
+    {
+        ++Statistics.ButterfliesSkipped;
+        if (identity)
+            ++Statistics.IdentityOperationsElided;
+        Statistics.EstimatedPayloadBytesElided +=
+            static_cast<int64_t>(ButterflyPayloadBytes(skew));
+    }
+
+    void RecordReducedButterfly(ffe_t skew, uint64_t replacement_bytes)
+    {
+        ++Statistics.ButterfliesReduced;
+        Statistics.EstimatedPayloadBytesElided += static_cast<int64_t>(
+            ButterflyPayloadBytes(skew) - replacement_bytes);
+    }
+
+    void RecordSkippedXor(bool identity)
+    {
+        ++Statistics.XorsSkipped;
+        if (identity)
+            ++Statistics.IdentityOperationsElided;
+        Statistics.EstimatedPayloadBytesElided +=
+            static_cast<int64_t>(BufferBytes * 3);
+    }
+};
+
+static LEO_FORCE_INLINE bool IsZero(const BufferState& state)
+{
+    return state.Identity == 0;
+}
+
+static LEO_FORCE_INLINE void CopyBufferState(
+    BufferState& destination,
+    const BufferState& source)
+{
+    destination.Identity = source.Identity;
+    destination.Materialized = source.Materialized;
+}
+
+static LEO_FORCE_INLINE ffe_t OnePlusMultiplierLog(ffe_t skew)
+{
+    return LogLUT[static_cast<ffe_t>(ExpLUT[skew] ^ 1)];
+}
+
+static void IFFT_DIT_Untracked(
     uint64_t buffer_bytes,
     unsigned count_truncated,
     void** work,
@@ -1298,7 +1436,7 @@ static void IFFT_DIT(
     }
 }
 
-static void FFT_DIT(
+static void FFT_DIT_Untracked(
     uint64_t buffer_bytes,
     void** work,
     unsigned count_truncated,
@@ -1323,6 +1461,298 @@ static void FFT_DIT(
             }
         }
     }
+}
+
+static void TrackedButterfly(
+    MaterializationContext& context,
+    bool inverse,
+    void* x,
+    void* y,
+    BufferState& x_state,
+    BufferState& y_state,
+    ffe_t skew)
+{
+    const bool x_zero = IsZero(x_state);
+    const bool y_zero = IsZero(y_state);
+
+    if (x_zero && y_zero)
+    {
+        context.RecordSkippedButterfly(skew, false);
+        return;
+    }
+
+    // Both FFT directions reduce to y ^= x for the sentinel coefficient.
+    if (skew == kModulus)
+    {
+        if (x_zero)
+        {
+            context.RecordSkippedButterfly(skew, false);
+            return;
+        }
+        if (!y_zero && x_state.Identity == y_state.Identity)
+        {
+            context.SetZero(y_state, false);
+            context.RecordSkippedButterfly(skew, true);
+            return;
+        }
+        if (y_zero)
+        {
+            memmove(y, x, static_cast<size_t>(context.BufferBytes));
+            CopyBufferState(y_state, x_state);
+            context.RecordReducedButterfly(
+                skew, context.BufferBytes * 2);
+            return;
+        }
+
+        XorBuffer(context.BufferBytes, y, x);
+        context.SetFresh(y_state);
+        return;
+    }
+
+    // IFFT(y == x) gives y' = 0 and x' = x for every coefficient.
+    if (inverse && !x_zero &&
+        x_state.Identity == y_state.Identity)
+    {
+        context.SetZero(y_state, false);
+        context.RecordSkippedButterfly(skew, true);
+        return;
+    }
+
+    // For coefficient one, FFT(x == y) gives x' = 0 and y' = y.
+    if (!inverse && skew == 0 && !x_zero &&
+        x_state.Identity == y_state.Identity)
+    {
+        context.SetZero(x_state, false);
+        context.RecordSkippedButterfly(skew, true);
+        return;
+    }
+
+    if (!inverse && y_zero)
+    {
+        // FFT(x, 0) = (x, x).
+        memmove(y, x, static_cast<size_t>(context.BufferBytes));
+        CopyBufferState(y_state, x_state);
+        context.RecordReducedButterfly(
+            skew, context.BufferBytes * 2);
+        return;
+    }
+
+    if (!inverse && x_zero && skew == 0)
+    {
+        // FFT(0, y) with multiplier one is (y, 0).
+        memmove(x, y, static_cast<size_t>(context.BufferBytes));
+        CopyBufferState(x_state, y_state);
+        context.SetZero(y_state, false);
+        context.RecordReducedButterfly(
+            skew, context.BufferBytes * 2);
+        return;
+    }
+
+    if (inverse && x_zero)
+    {
+        // IFFT(0, y) = (M*y, y).
+        MultiplyBuffer(context.BufferBytes, x, y, skew);
+        if (skew == 0)
+            CopyBufferState(x_state, y_state);
+        else
+            context.SetFresh(x_state);
+        context.RecordReducedButterfly(
+            skew, context.BufferBytes * 2);
+        return;
+    }
+
+    if (inverse && y_zero)
+    {
+        // IFFT(x, 0) = ((1+M)*x, x).  Preserve x for y before applying
+        // the combined coefficient in place.
+        memmove(y, x, static_cast<size_t>(context.BufferBytes));
+        CopyBufferState(y_state, x_state);
+        const ffe_t combined_value = static_cast<ffe_t>(ExpLUT[skew] ^ 1);
+        uint64_t replacement_bytes = context.BufferBytes * 2;
+        if (combined_value == 0)
+            context.SetZero(x_state, false);
+        else
+        {
+            MultiplyBuffer(
+                context.BufferBytes, x, x, OnePlusMultiplierLog(skew));
+            context.SetFresh(x_state);
+            replacement_bytes += context.BufferBytes * 2;
+        }
+        context.RecordReducedButterfly(skew, replacement_bytes);
+        return;
+    }
+
+    // The remaining x-zero forward case needs both outputs and has no
+    // no-temporary reduction using the existing kernels.  Materialize only at
+    // this consumption boundary, then preserve the established butterfly.
+    context.MaterializeZero(x, x_state);
+    context.MaterializeZero(y, y_state);
+    if (inverse)
+        IFFTButterflyBuffer(context.BufferBytes, x, y, skew);
+    else
+        FFTButterflyBuffer(context.BufferBytes, x, y, skew);
+    context.SetFresh(x_state);
+    context.SetFresh(y_state);
+}
+
+void TrackedButterflyBufferForTesting(
+    uint64_t buffer_bytes,
+    void* x,
+    void* y,
+    bool inverse,
+    bool x_is_zero,
+    bool y_is_zero,
+    bool equal_nonzero,
+    ffe_t skew)
+{
+    MaterializationContext context(buffer_bytes);
+    BufferState x_state;
+    BufferState y_state;
+    if (x_is_zero)
+        context.SetZero(x_state, true);
+    else
+        context.SetFresh(x_state);
+    if (y_is_zero)
+        context.SetZero(y_state, true);
+    else if (equal_nonzero)
+        CopyBufferState(y_state, x_state);
+    else
+        context.SetFresh(y_state);
+
+    TrackedButterfly(
+        context, inverse, x, y, x_state, y_state, skew);
+    context.MaterializeZero(x, x_state);
+    context.MaterializeZero(y, y_state);
+    LastMaterializationStatistics = context.Statistics;
+}
+
+static void IFFT_DIT(
+    uint64_t buffer_bytes,
+    unsigned count_truncated,
+    void** work,
+    BufferState* states,
+    MaterializationContext& context,
+    unsigned count,
+    unsigned skew_base)
+{
+    (void)buffer_bytes;
+    for (unsigned distance = 1; distance < count; distance <<= 1)
+    {
+        const unsigned span = distance << 1;
+        for (unsigned range = 0;
+            range < count_truncated;
+            range += span)
+        {
+            const ffe_t skew = FFTSkewPadded[skew_base + range + distance];
+            for (unsigned index = range; index < range + distance; ++index)
+            {
+                TrackedButterfly(
+                    context,
+                    true,
+                    work[index],
+                    work[index + distance],
+                    states[index],
+                    states[index + distance],
+                    skew);
+            }
+        }
+    }
+}
+
+static void FFT_DIT(
+    uint64_t buffer_bytes,
+    void** work,
+    BufferState* states,
+    MaterializationContext& context,
+    unsigned count_truncated,
+    unsigned count,
+    unsigned skew_base)
+{
+    (void)buffer_bytes;
+    for (unsigned distance = count >> 1; distance != 0; distance >>= 1)
+    {
+        const unsigned span = distance << 1;
+        for (unsigned range = 0;
+            range < count_truncated;
+            range += span)
+        {
+            const ffe_t skew = FFTSkewPadded[skew_base + range + distance];
+            for (unsigned index = range; index < range + distance; ++index)
+            {
+                TrackedButterfly(
+                    context,
+                    false,
+                    work[index],
+                    work[index + distance],
+                    states[index],
+                    states[index + distance],
+                    skew);
+            }
+        }
+    }
+}
+
+static void TrackedXorBuffers(
+    MaterializationContext& context,
+    unsigned count,
+    void** destination,
+    BufferState* destination_states,
+    void** source,
+    const BufferState* source_states)
+{
+    void* generic_destination[kOrder];
+    void* generic_source[kOrder];
+    BufferState* generic_states[kOrder];
+    unsigned generic_count = 0;
+
+    for (unsigned index = 0; index < count; ++index)
+    {
+        BufferState& destination_state = destination_states[index];
+        const BufferState& source_state = source_states[index];
+        if (destination[index] == source[index])
+        {
+            context.SetZero(destination_state, false);
+            context.RecordSkippedXor(true);
+            continue;
+        }
+        if (IsZero(source_state))
+        {
+            context.RecordSkippedXor(false);
+            continue;
+        }
+        if (IsZero(destination_state))
+        {
+            memmove(
+                destination[index], source[index],
+                static_cast<size_t>(context.BufferBytes));
+            CopyBufferState(destination_state, source_state);
+            ++context.Statistics.XorsReplacedByCopies;
+            context.Statistics.EstimatedPayloadBytesElided +=
+                static_cast<int64_t>(context.BufferBytes);
+            continue;
+        }
+        if (destination_state.Identity == source_state.Identity)
+        {
+            context.SetZero(destination_state, false);
+            context.RecordSkippedXor(true);
+            continue;
+        }
+
+        generic_destination[generic_count] = destination[index];
+        generic_source[generic_count] = source[index];
+        generic_states[generic_count] = &destination_state;
+        ++generic_count;
+    }
+
+    if (generic_count == 0)
+        return;
+    XorBuffers(
+        context.BufferBytes,
+        generic_count,
+        generic_destination,
+        generic_source);
+    for (unsigned index = 0; index < generic_count; ++index)
+        context.SetFresh(*generic_states[index]);
 }
 
 
@@ -1400,7 +1830,7 @@ void ErrorBitfield::Prepare()
     }
 }
 
-static void FFT_DIT_ErrorBits(
+static void FFT_DIT_ErrorBits_Untracked(
     uint64_t buffer_bytes,
     void** work,
     unsigned count_truncated,
@@ -1420,7 +1850,6 @@ static void FFT_DIT_ErrorBits(
         {
             if (!error_bits.IsNeeded(mip_level, range))
                 continue;
-
             const ffe_t skew = FFTSkewPadded[skew_base + range + distance];
             for (unsigned index = range; index < range + distance; ++index)
             {
@@ -1428,6 +1857,46 @@ static void FFT_DIT_ErrorBits(
                     buffer_bytes,
                     work[index],
                     work[index + distance],
+                    skew);
+            }
+        }
+    }
+}
+
+static void FFT_DIT_ErrorBits(
+    uint64_t buffer_bytes,
+    void** work,
+    BufferState* states,
+    MaterializationContext& context,
+    unsigned count_truncated,
+    unsigned count,
+    unsigned skew_base,
+    const ErrorBitfield& error_bits)
+{
+    (void)buffer_bytes;
+    unsigned mip_level = LastNonzeroBit32(count);
+    for (unsigned distance = count >> 1;
+        distance != 0;
+        distance >>= 1, --mip_level)
+    {
+        const unsigned span = distance << 1;
+        for (unsigned range = 0;
+            range < count_truncated;
+            range += span)
+        {
+            if (!error_bits.IsNeeded(mip_level, range))
+                continue;
+
+            const ffe_t skew = FFTSkewPadded[skew_base + range + distance];
+            for (unsigned index = range; index < range + distance; ++index)
+            {
+                TrackedButterfly(
+                    context,
+                    false,
+                    work[index],
+                    work[index + distance],
+                    states[index],
+                    states[index + distance],
                     skew);
             }
         }
@@ -1522,7 +1991,9 @@ static unsigned SelectLocatorShift(
 //------------------------------------------------------------------------------
 // Reed-Solomon encoding
 
-void ReedSolomonEncode(
+static const uint64_t kMaterializationMinimumBufferBytes = 65536;
+
+static void ReedSolomonEncodeUntracked(
     uint64_t buffer_bytes,
     unsigned original_count,
     unsigned recovery_count,
@@ -1536,7 +2007,6 @@ void ReedSolomonEncode(
         const unsigned remaining = original_count - chunk_start;
         const unsigned chunk_count = remaining < m ? remaining : m;
         void** chunk_work = chunk_start == 0 ? work : work + m;
-
         for (unsigned index = 0; index < chunk_count; ++index)
         {
             memcpy(
@@ -1547,21 +2017,104 @@ void ReedSolomonEncode(
         for (unsigned index = chunk_count; index < m; ++index)
             memset(chunk_work[index], 0, static_cast<size_t>(buffer_bytes));
 
-        // Padded index corresponding to logical FFTSkew + m - 1 + chunk_start.
-        IFFT_DIT(
+        IFFT_DIT_Untracked(
             buffer_bytes,
             chunk_count,
             chunk_work,
             m,
             m + chunk_start);
-
         if (chunk_start != 0)
             XorBuffers(buffer_bytes, m, work, chunk_work);
+        chunk_start += m;
+    }
+    FFT_DIT_Untracked(buffer_bytes, work, recovery_count, m, 0);
+}
+
+void ReedSolomonEncode(
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned m,
+    const void* const* data,
+    void** work)
+{
+    // Full chunks contain no structural zeros or copy identities, so tracking
+    // can only add schedule overhead.  Small payloads likewise cannot amortize
+    // the state machine; preserve the established schedule in both cases.
+    if (buffer_bytes < kMaterializationMinimumBufferBytes ||
+        original_count % m == 0)
+    {
+        ReedSolomonEncodeUntracked(
+            buffer_bytes,
+            original_count,
+            recovery_count,
+            m,
+            data,
+            work);
+        const MaterializationStatistics empty = {};
+        LastMaterializationStatistics = empty;
+        return;
+    }
+
+    MaterializationContext context(buffer_bytes);
+    BufferState accumulated_states[kOrder];
+    BufferState temporary_states[kOrder];
+    unsigned chunk_start = 0;
+    while (chunk_start < original_count)
+    {
+        const unsigned remaining = original_count - chunk_start;
+        const unsigned chunk_count = remaining < m ? remaining : m;
+        void** chunk_work = chunk_start == 0 ? work : work + m;
+        BufferState* chunk_states = chunk_start == 0
+            ? accumulated_states
+            : temporary_states;
+
+        for (unsigned index = 0; index < chunk_count; ++index)
+        {
+            memcpy(
+                chunk_work[index],
+                data[chunk_start + index],
+                static_cast<size_t>(buffer_bytes));
+            context.SetFresh(chunk_states[index]);
+        }
+        for (unsigned index = chunk_count; index < m; ++index)
+            context.DeferZero(chunk_states[index]);
+
+        // Padded index corresponding to logical FFTSkew + m - 1 + chunk_start.
+        IFFT_DIT(
+            buffer_bytes,
+            chunk_count,
+            chunk_work,
+            chunk_states,
+            context,
+            m,
+            m + chunk_start);
+
+        if (chunk_start != 0)
+        {
+            TrackedXorBuffers(
+                context,
+                m,
+                work,
+                accumulated_states,
+                chunk_work,
+                chunk_states);
+        }
 
         chunk_start += m;
     }
 
-    FFT_DIT(buffer_bytes, work, recovery_count, m, 0);
+    FFT_DIT(
+        buffer_bytes,
+        work,
+        accumulated_states,
+        context,
+        recovery_count,
+        m,
+        0);
+    for (unsigned index = 0; index < recovery_count; ++index)
+        context.MaterializeZero(work[index], accumulated_states[index]);
+    LastMaterializationStatistics = context.Statistics;
 }
 
 
@@ -1578,6 +2131,8 @@ void ReedSolomonDecode(
     const void* const* recovery,
     void** work)
 {
+    MaterializationContext context(buffer_bytes);
+    BufferState states[kOrder];
 #ifdef LEO_ERROR_BITFIELD_OPT
     ErrorBitfield error_bits;
 #endif
@@ -1626,6 +2181,85 @@ void ReedSolomonDecode(
             recovery);
     LastLocatorShift = locator_shift;
 
+    if (buffer_bytes < kMaterializationMinimumBufferBytes)
+    {
+        for (unsigned index = 0; index < recovery_count; ++index)
+        {
+            if (recovery[index])
+            {
+                MultiplyBuffer(
+                    buffer_bytes,
+                    work[index],
+                    recovery[index],
+                    ShiftedLog(error_locations[index], locator_shift));
+            }
+            else
+                memset(work[index], 0, static_cast<size_t>(buffer_bytes));
+        }
+        for (unsigned index = recovery_count; index < m; ++index)
+            memset(work[index], 0, static_cast<size_t>(buffer_bytes));
+
+        for (unsigned index = 0; index < original_count; ++index)
+        {
+            if (original[index])
+            {
+                MultiplyBuffer(
+                    buffer_bytes,
+                    work[m + index],
+                    original[index],
+                    ShiftedLog(
+                        error_locations[m + index], locator_shift));
+            }
+            else
+                memset(
+                    work[m + index], 0,
+                    static_cast<size_t>(buffer_bytes));
+        }
+        for (unsigned index = m + original_count; index < n; ++index)
+            memset(work[index], 0, static_cast<size_t>(buffer_bytes));
+
+        IFFT_DIT_Untracked(
+            buffer_bytes, m + original_count, work, n, 0);
+        for (unsigned index = 1; index < n; ++index)
+        {
+            const unsigned width = ((index ^ (index - 1)) + 1) >> 1;
+            XorBuffers(
+                buffer_bytes,
+                width,
+                work + index - width,
+                work + index);
+        }
+
+        const unsigned output_count = m + original_count;
+#ifdef LEO_ERROR_BITFIELD_OPT
+        FFT_DIT_ErrorBits_Untracked(
+            buffer_bytes,
+            work,
+            output_count,
+            n,
+            0,
+            error_bits);
+#else
+        FFT_DIT_Untracked(
+            buffer_bytes, work, output_count, n, 0);
+#endif
+        for (unsigned index = 0; index < original_count; ++index)
+        {
+            if (!original[index])
+            {
+                MultiplyBuffer(
+                    buffer_bytes,
+                    work[index],
+                    work[index + m],
+                    InverseShiftedLog(
+                        error_locations[index + m], locator_shift));
+            }
+        }
+        const MaterializationStatistics empty = {};
+        LastMaterializationStatistics = empty;
+        return;
+    }
+
     for (unsigned index = 0; index < recovery_count; ++index)
     {
         if (recovery[index])
@@ -1635,12 +2269,13 @@ void ReedSolomonDecode(
                 work[index],
                 recovery[index],
                 ShiftedLog(error_locations[index], locator_shift));
+            context.SetFresh(states[index]);
         }
         else
-            memset(work[index], 0, static_cast<size_t>(buffer_bytes));
+            context.DeferZero(states[index]);
     }
     for (unsigned index = recovery_count; index < m; ++index)
-        memset(work[index], 0, static_cast<size_t>(buffer_bytes));
+        context.DeferZero(states[index]);
 
     for (unsigned index = 0; index < original_count; ++index)
     {
@@ -1651,23 +2286,33 @@ void ReedSolomonDecode(
                 work[m + index],
                 original[index],
                 ShiftedLog(error_locations[m + index], locator_shift));
+            context.SetFresh(states[m + index]);
         }
         else
-            memset(work[m + index], 0, static_cast<size_t>(buffer_bytes));
+            context.DeferZero(states[m + index]);
     }
     for (unsigned index = m + original_count; index < n; ++index)
-        memset(work[index], 0, static_cast<size_t>(buffer_bytes));
+        context.DeferZero(states[index]);
 
-    IFFT_DIT(buffer_bytes, m + original_count, work, n, 0);
+    IFFT_DIT(
+        buffer_bytes,
+        m + original_count,
+        work,
+        states,
+        context,
+        n,
+        0);
 
     for (unsigned index = 1; index < n; ++index)
     {
         const unsigned width = ((index ^ (index - 1)) + 1) >> 1;
-        XorBuffers(
-            buffer_bytes,
+        TrackedXorBuffers(
+            context,
             width,
             work + index - width,
-            work + index);
+            states + index - width,
+            work + index,
+            states + index);
     }
 
     const unsigned output_count = m + original_count;
@@ -1675,26 +2320,51 @@ void ReedSolomonDecode(
     FFT_DIT_ErrorBits(
         buffer_bytes,
         work,
+        states,
+        context,
         output_count,
         n,
         0,
         error_bits);
 #else
-    FFT_DIT(buffer_bytes, work, output_count, n, 0);
+    FFT_DIT(
+        buffer_bytes,
+        work,
+        states,
+        context,
+        output_count,
+        n,
+        0);
 #endif
 
     for (unsigned index = 0; index < original_count; ++index)
     {
         if (!original[index])
         {
-            MultiplyBuffer(
-                buffer_bytes,
-                work[index],
-                work[index + m],
-                InverseShiftedLog(
-                    error_locations[index + m], locator_shift));
+            BufferState& destination_state = states[index];
+            const BufferState& source_state = states[index + m];
+            if (IsZero(source_state))
+            {
+                context.SetZero(destination_state, false);
+                context.MaterializeZero(work[index], destination_state);
+            }
+            else
+            {
+                const ffe_t log = InverseShiftedLog(
+                    error_locations[index + m], locator_shift);
+                MultiplyBuffer(
+                    buffer_bytes,
+                    work[index],
+                    work[index + m],
+                    log);
+                if (log == 0 || log == kModulus)
+                    CopyBufferState(destination_state, source_state);
+                else
+                    context.SetFresh(destination_state);
+            }
         }
     }
+    LastMaterializationStatistics = context.Statistics;
 }
 
 
