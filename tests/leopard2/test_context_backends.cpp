@@ -129,6 +129,11 @@ struct TraceState
     std::atomic<uint64_t> ff16_fft_two_out_calls;
     std::atomic<uint64_t> ff16_fft_four_out_calls;
     std::atomic<uint64_t> xor_four_calls;
+    std::atomic<uint64_t> ff8_ifft_four_range_calls;
+    std::atomic<uint64_t> ff8_fft_four_range_calls;
+    std::atomic<uint64_t> ff8_ifft_four_xor_range_calls;
+    std::atomic<uint64_t> ff16_ifft_four_range_calls;
+    std::atomic<uint64_t> ff16_fft_four_range_calls;
 };
 
 TraceState g_trace;
@@ -322,6 +327,80 @@ void trace_ff16_fft4_out(
         log01, log23, log02, bytes);
 }
 
+void trace_ff8_ifft4_range(
+    void* const* work, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t bytes, bool prefer_fused)
+{
+    g_trace.ff8_calls.fetch_add(distance, std::memory_order_relaxed);
+    g_trace.ff8_ifft_four_calls.fetch_add(
+        distance, std::memory_order_relaxed);
+    g_trace.ff8_ifft_four_range_calls.fetch_add(
+        1, std::memory_order_relaxed);
+    trace_delegate()->ff8_ifft_butterfly4_range(
+        work, distance, log01, log23, log02, bytes, prefer_fused);
+}
+
+void trace_ff8_fft4_range(
+    void* const* work, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t bytes, bool prefer_fused)
+{
+    g_trace.ff8_calls.fetch_add(distance, std::memory_order_relaxed);
+    g_trace.ff8_fft_four_calls.fetch_add(
+        distance, std::memory_order_relaxed);
+    g_trace.ff8_fft_four_range_calls.fetch_add(
+        1, std::memory_order_relaxed);
+    trace_delegate()->ff8_fft_butterfly4_range(
+        work, distance, log01, log23, log02, bytes, prefer_fused);
+}
+
+void trace_ff8_ifft4_xor_range(
+    void* const* work, void* const* xor_output, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t bytes)
+{
+    g_trace.ff8_calls.fetch_add(distance, std::memory_order_relaxed);
+    g_trace.ff8_ifft_four_calls.fetch_add(
+        distance, std::memory_order_relaxed);
+    g_trace.xor_four_calls.fetch_add(distance, std::memory_order_relaxed);
+    g_trace.ff8_ifft_four_xor_range_calls.fetch_add(
+        1, std::memory_order_relaxed);
+    trace_delegate()->ff8_ifft_butterfly4_xor_range(
+        work, xor_output, distance,
+        log01, log23, log02, bytes);
+}
+
+void trace_ff16_ifft4_range(
+    void* const* work, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t bytes, bool prefer_fused)
+{
+    g_trace.ff16_calls.fetch_add(distance, std::memory_order_relaxed);
+    if (prefer_fused)
+        g_trace.ff16_ifft_four_calls.fetch_add(
+            distance, std::memory_order_relaxed);
+    g_trace.ff16_ifft_four_range_calls.fetch_add(
+        1, std::memory_order_relaxed);
+    trace_delegate()->ff16_ifft_butterfly4_range(
+        work, distance, log01, log23, log02, bytes, prefer_fused);
+}
+
+void trace_ff16_fft4_range(
+    void* const* work, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t bytes, bool prefer_fused)
+{
+    g_trace.ff16_calls.fetch_add(distance, std::memory_order_relaxed);
+    if (prefer_fused)
+        g_trace.ff16_fft_four_calls.fetch_add(
+            distance, std::memory_order_relaxed);
+    g_trace.ff16_fft_four_range_calls.fetch_add(
+        1, std::memory_order_relaxed);
+    trace_delegate()->ff16_fft_butterfly4_range(
+        work, distance, log01, log23, log02, bytes, prefer_fused);
+}
+
 class TraceOpsGuard
 {
 public:
@@ -342,12 +421,18 @@ public:
         tracing_.ff8_ifft_butterfly4 = trace_ff8_ifft4;
         tracing_.ff8_fft_butterfly4 = trace_ff8_fft4;
         tracing_.ff8_fft_butterfly4_out = trace_ff8_fft4_out;
+        tracing_.ff8_ifft_butterfly4_range = trace_ff8_ifft4_range;
+        tracing_.ff8_fft_butterfly4_range = trace_ff8_fft4_range;
+        tracing_.ff8_ifft_butterfly4_xor_range =
+            trace_ff8_ifft4_xor_range;
         tracing_.ff16_ifft_butterfly2 = trace_ff16_ifft;
         tracing_.ff16_fft_butterfly2 = trace_ff16_fft;
         tracing_.ff16_fft_butterfly2_out = trace_ff16_fft_out;
         tracing_.ff16_ifft_butterfly4 = trace_ff16_ifft4;
         tracing_.ff16_fft_butterfly4 = trace_ff16_fft4;
         tracing_.ff16_fft_butterfly4_out = trace_ff16_fft4_out;
+        tracing_.ff16_ifft_butterfly4_range = trace_ff16_ifft4_range;
+        tracing_.ff16_fft_butterfly4_range = trace_ff16_fft4_range;
         g_trace.delegate.store(entry.table, std::memory_order_release);
         reset();
         leopard::backend::TestSetContextOps(entry.context, &tracing_);
@@ -374,6 +459,16 @@ public:
         g_trace.ff16_fft_two_out_calls.store(0, std::memory_order_relaxed);
         g_trace.ff16_fft_four_out_calls.store(0, std::memory_order_relaxed);
         g_trace.xor_four_calls.store(0, std::memory_order_relaxed);
+        g_trace.ff8_ifft_four_range_calls.store(
+            0, std::memory_order_relaxed);
+        g_trace.ff8_fft_four_range_calls.store(
+            0, std::memory_order_relaxed);
+        g_trace.ff8_ifft_four_xor_range_calls.store(
+            0, std::memory_order_relaxed);
+        g_trace.ff16_ifft_four_range_calls.store(
+            0, std::memory_order_relaxed);
+        g_trace.ff16_fft_four_range_calls.store(
+            0, std::memory_order_relaxed);
         leopard::ff8::TestOnlyResetTransformCallsiteCounts();
         leopard::ff16::TestOnlyResetTransformCallsiteCounts();
         leopard::ff8::TestOnlyResetLowEncodeCounts();
@@ -437,6 +532,31 @@ public:
     {
         return g_trace.xor_four_calls.load(std::memory_order_relaxed);
     }
+    uint64_t ff8_ifft_four_range_calls() const
+    {
+        return g_trace.ff8_ifft_four_range_calls.load(
+            std::memory_order_relaxed);
+    }
+    uint64_t ff8_fft_four_range_calls() const
+    {
+        return g_trace.ff8_fft_four_range_calls.load(
+            std::memory_order_relaxed);
+    }
+    uint64_t ff8_ifft_four_xor_range_calls() const
+    {
+        return g_trace.ff8_ifft_four_xor_range_calls.load(
+            std::memory_order_relaxed);
+    }
+    uint64_t ff16_ifft_four_range_calls() const
+    {
+        return g_trace.ff16_ifft_four_range_calls.load(
+            std::memory_order_relaxed);
+    }
+    uint64_t ff16_fft_four_range_calls() const
+    {
+        return g_trace.ff16_fft_four_range_calls.load(
+            std::memory_order_relaxed);
+    }
 
 private:
     TraceOpsGuard(const TraceOpsGuard&);
@@ -471,6 +591,19 @@ void require_four_way_callsites(
             operation + " did not exercise GF8 FFT_DIT4");
         const uint64_t classified_ifft_calls =
             callsites.ifft_dit4 + callsites.ifft_dit4_xor;
+        if (!allow_pruned_schedule_calls &&
+            trace.ff8_ifft_four_range_calls() +
+                trace.ff8_ifft_four_xor_range_calls() != 0)
+        {
+            const uint64_t inverse_ranges =
+                trace.ff8_ifft_four_range_calls() +
+                trace.ff8_ifft_four_xor_range_calls();
+            require(inverse_ranges <= classified_ifft_calls,
+                operation + " did not use the GF8 inverse stage boundary");
+            require(trace.ff8_fft_four_range_calls() <=
+                        callsites.fft_dit4,
+                operation + " did not use the GF8 forward stage boundary");
+        }
         require(allow_pruned_schedule_calls
                 ? trace.ff8_ifft_four_calls() >= classified_ifft_calls
                 : trace.ff8_ifft_four_calls() == classified_ifft_calls,
@@ -494,6 +627,16 @@ void require_four_way_callsites(
         require(callsites.fft_dit4 ==
                 callsites.fft_dit4_fused + callsites.fft_dit4_split,
             operation + " has an unclassified GF16 forward radix-four callsite");
+        if (!allow_pruned_schedule_calls &&
+            trace.ff16_ifft_four_range_calls() != 0)
+        {
+            require(trace.ff16_ifft_four_range_calls() <=
+                        callsites.ifft_dit4,
+                operation + " did not use the GF16 inverse stage boundary");
+            require(trace.ff16_fft_four_range_calls() <=
+                        callsites.fft_dit4,
+                operation + " did not use the GF16 forward stage boundary");
+        }
         require(allow_pruned_schedule_calls
                 ? trace.ff16_ifft_four_calls() >= callsites.ifft_dit4_fused
                 : trace.ff16_ifft_four_calls() == callsites.ifft_dit4_fused,
@@ -620,6 +763,40 @@ void require_low_encode_no_copy(
                     counts.fft_butterfly4_out_of_place == 0,
                 operation + " fused an unqualified GF16 first layer");
         }
+    }
+}
+
+void require_coarse_stage_reduction(
+    const TraceOpsGuard& trace,
+    leo2_field field,
+    const std::string& operation)
+{
+    if (field == LEO2_FIELD_GF8)
+    {
+        const leopard::ff8::TestOnlyTransformCallsiteCounts callsites =
+            leopard::ff8::TestOnlyGetTransformCallsiteCounts();
+        const uint64_t inverse_leaf_calls =
+            callsites.ifft_dit4 + callsites.ifft_dit4_xor;
+        const uint64_t inverse_range_calls =
+            trace.ff8_ifft_four_range_calls() +
+            trace.ff8_ifft_four_xor_range_calls();
+        require(inverse_range_calls != 0 &&
+                inverse_range_calls < inverse_leaf_calls,
+            operation + " did not reduce GF8 inverse indirect dispatches");
+        require(trace.ff8_fft_four_range_calls() != 0 &&
+                trace.ff8_fft_four_range_calls() < callsites.fft_dit4,
+            operation + " did not reduce GF8 forward indirect dispatches");
+    }
+    else
+    {
+        const leopard::ff16::TestOnlyTransformCallsiteCounts callsites =
+            leopard::ff16::TestOnlyGetTransformCallsiteCounts();
+        require(trace.ff16_ifft_four_range_calls() != 0 &&
+                trace.ff16_ifft_four_range_calls() < callsites.ifft_dit4,
+            operation + " did not reduce GF16 inverse indirect dispatches");
+        require(trace.ff16_fft_four_range_calls() != 0 &&
+                trace.ff16_fft_four_range_calls() < callsites.fft_dit4,
+            operation + " did not reduce GF16 forward indirect dispatches");
     }
 }
 
@@ -1032,6 +1209,8 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                 test_case.field == LEO2_FIELD_GF8 &&
                     test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1,
                 true);
+            require_coarse_stage_reduction(
+                trace, test_case.field, profile_name + " encode");
             if (test_case.profile == LEO2_PROFILE_LOW_V1)
                 require_low_encode_no_copy(
                     trace,

@@ -1120,6 +1120,56 @@ static void AVX2FF8FFTButterfly4Out(
     }
 }
 
+static void AVX2FF8IFFTButterfly4Range(
+    void* const* work, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count, bool prefer_fused)
+{
+    (void)prefer_fused;
+    for (unsigned i = 0; i < distance; ++i)
+    {
+        AVX2FF8IFFTButterfly4Kernel(
+            work[i], work[i + distance],
+            work[i + distance * 2U], work[i + distance * 3U],
+            log01, log23, log02, byte_count);
+    }
+}
+
+static void AVX2FF8FFTButterfly4Range(
+    void* const* work, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count, bool prefer_fused)
+{
+    (void)prefer_fused;
+    for (unsigned i = 0; i < distance; ++i)
+    {
+        AVX2FF8FFTButterfly4(
+            work[i], work[i + distance],
+            work[i + distance * 2U], work[i + distance * 3U],
+            log01, log23, log02, byte_count);
+    }
+}
+
+static void AVX2FF8IFFTButterfly4XorRange(
+    void* const* work, void* const* xor_output, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    for (unsigned i = 0; i < distance; ++i)
+    {
+        AVX2FF8IFFTButterfly4Kernel(
+            work[i], work[i + distance],
+            work[i + distance * 2U], work[i + distance * 3U],
+            log01, log23, log02, byte_count);
+        AVX2XorMemory4(
+            xor_output[i], work[i],
+            xor_output[i + distance], work[i + distance],
+            xor_output[i + distance * 2U], work[i + distance * 2U],
+            xor_output[i + distance * 3U], work[i + distance * 3U],
+            byte_count);
+    }
+}
+
 #endif // LEO_HAS_FF8
 
 #ifdef LEO_HAS_FF16
@@ -1416,6 +1466,46 @@ static void AVX2FF16FFTButterfly4Out(
         }
     }
 }
+
+template<bool Inverse>
+static void AVX2FF16Butterfly4Range(
+    void* const* work, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count, bool prefer_fused)
+{
+    for (unsigned i = 0; i < distance; ++i)
+    {
+        void* const value0 = work[i];
+        void* const value1 = work[i + distance];
+        void* const value2 = work[i + distance * 2U];
+        void* const value3 = work[i + distance * 3U];
+        if (prefer_fused)
+            AVX2FF16Butterfly4<Inverse>(value0, value1, value2, value3,
+                log01, log23, log02, byte_count);
+        else
+            AVX2FF16Butterfly4Split<Inverse>(
+                value0, value1, value2, value3,
+                log01, log23, log02, byte_count);
+    }
+}
+
+static void AVX2FF16IFFTButterfly4Range(
+    void* const* work, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count, bool prefer_fused)
+{
+    AVX2FF16Butterfly4Range<true>(work, distance,
+        log01, log23, log02, byte_count, prefer_fused);
+}
+
+static void AVX2FF16FFTButterfly4Range(
+    void* const* work, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count, bool prefer_fused)
+{
+    AVX2FF16Butterfly4Range<false>(work, distance,
+        log01, log23, log02, byte_count, prefer_fused);
+}
 #endif // LEO_HAS_FF16
 
 static const Ops AVX2Ops = {
@@ -1446,7 +1536,13 @@ static const Ops AVX2Ops = {
     AVX2FF8IFFTButterfly4,
     AVX2FF8FFTButterfly4,
     AVX2FF8FFTButterfly4Out,
+    AVX2FF8IFFTButterfly4Range,
+    AVX2FF8FFTButterfly4Range,
+    AVX2FF8IFFTButterfly4XorRange,
 #else
+    NULL,
+    NULL,
+    NULL,
     NULL,
     NULL,
     NULL,
@@ -1461,8 +1557,12 @@ static const Ops AVX2Ops = {
     AVX2FF16FFTButterfly2Out,
     AVX2FF16IFFTButterfly4,
     AVX2FF16FFTButterfly4,
-    AVX2FF16FFTButterfly4Out
+    AVX2FF16FFTButterfly4Out,
+    AVX2FF16IFFTButterfly4Range,
+    AVX2FF16FFTButterfly4Range
 #else
+    NULL,
+    NULL,
     NULL,
     NULL,
     NULL,

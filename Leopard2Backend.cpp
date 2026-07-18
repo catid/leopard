@@ -430,6 +430,105 @@ static bool TestFF8Butterflies4(const Ops& ops, FF8MultiplyLog reference)
     return true;
 }
 
+static bool TestFF8ButterflyRanges(const Ops& ops)
+{
+    static const unsigned kDistance = 3;
+    static const unsigned kLaneCount = kDistance * 4;
+    static const uint16_t log_sets[][3] = {
+        { 255, 0, 7 }, { 1, 2, 3 }
+    };
+    // The leaf KAT already exercises the 1,025-byte cutoff tail.  Keep this
+    // range-specific test below common 64-KiB caller-stack budgets while still
+    // spanning multiple AVX2 vectors and a byte tail.
+    static const uint64_t byte_counts[] = { 17, 129 };
+    uint8_t actual[kLaneCount][132];
+    uint8_t expected[kLaneCount][132];
+    uint8_t xor_actual[kLaneCount][132];
+    uint8_t xor_expected[kLaneCount][132];
+    void* actual_pointers[kLaneCount];
+    void* expected_pointers[kLaneCount];
+    void* xor_actual_pointers[kLaneCount];
+    for (size_t set_i = 0;
+         set_i < sizeof(log_sets) / sizeof(log_sets[0]); ++set_i)
+        for (size_t count_i = 0;
+             count_i < sizeof(byte_counts) / sizeof(byte_counts[0]);
+             ++count_i)
+        {
+            const uint64_t bytes = byte_counts[count_i];
+            for (unsigned lane = 0; lane < kLaneCount; ++lane)
+            {
+                for (size_t i = 0; i < sizeof(actual[lane]); ++i)
+                {
+                    actual[lane][i] = expected[lane][i] =
+                        static_cast<uint8_t>(
+                            i * (17U + lane * 6U) + set_i * 31U + lane);
+                    xor_actual[lane][i] = xor_expected[lane][i] =
+                        static_cast<uint8_t>(0xa5U + i * 3U + lane * 11U);
+                }
+                actual_pointers[lane] = actual[lane] + 1;
+                expected_pointers[lane] = expected[lane] + 1;
+                xor_actual_pointers[lane] = xor_actual[lane] + 1;
+            }
+            for (unsigned i = 0; i < kDistance; ++i)
+                ops.ff8_ifft_butterfly4(
+                    expected_pointers[i], expected_pointers[i + kDistance],
+                    expected_pointers[i + kDistance * 2U],
+                    expected_pointers[i + kDistance * 3U],
+                    log_sets[set_i][0], log_sets[set_i][1],
+                    log_sets[set_i][2], bytes);
+            ops.ff8_ifft_butterfly4_range(
+                actual_pointers, kDistance,
+                log_sets[set_i][0], log_sets[set_i][1],
+                log_sets[set_i][2], bytes, true);
+            if (std::memcmp(actual, expected, sizeof(actual)) != 0)
+                return false;
+
+            for (unsigned lane = 0; lane < kLaneCount; ++lane)
+                for (size_t i = 0; i < sizeof(actual[lane]); ++i)
+                    actual[lane][i] = expected[lane][i] =
+                        static_cast<uint8_t>(
+                            i * (43U + lane * 4U) + set_i * 13U + lane * 3U);
+            for (unsigned i = 0; i < kDistance; ++i)
+                ops.ff8_fft_butterfly4(
+                    expected_pointers[i], expected_pointers[i + kDistance],
+                    expected_pointers[i + kDistance * 2U],
+                    expected_pointers[i + kDistance * 3U],
+                    log_sets[set_i][0], log_sets[set_i][1],
+                    log_sets[set_i][2], bytes);
+            ops.ff8_fft_butterfly4_range(
+                actual_pointers, kDistance,
+                log_sets[set_i][0], log_sets[set_i][1],
+                log_sets[set_i][2], bytes, true);
+            if (std::memcmp(actual, expected, sizeof(actual)) != 0)
+                return false;
+
+            for (unsigned lane = 0; lane < kLaneCount; ++lane)
+                for (size_t i = 0; i < sizeof(actual[lane]); ++i)
+                    actual[lane][i] = expected[lane][i] =
+                        static_cast<uint8_t>(
+                            i * (61U + lane * 2U) + set_i * 19U + lane * 5U);
+            for (unsigned i = 0; i < kDistance; ++i)
+                ops.ff8_ifft_butterfly4(
+                    expected_pointers[i], expected_pointers[i + kDistance],
+                    expected_pointers[i + kDistance * 2U],
+                    expected_pointers[i + kDistance * 3U],
+                    log_sets[set_i][0], log_sets[set_i][1],
+                    log_sets[set_i][2], bytes);
+            for (unsigned lane = 0; lane < kLaneCount; ++lane)
+                for (uint64_t i = 0; i < bytes; ++i)
+                    xor_expected[lane][i + 1] ^= expected[lane][i + 1];
+            ops.ff8_ifft_butterfly4_xor_range(
+                actual_pointers, xor_actual_pointers, kDistance,
+                log_sets[set_i][0], log_sets[set_i][1],
+                log_sets[set_i][2], bytes);
+            if (std::memcmp(actual, expected, sizeof(actual)) != 0 ||
+                std::memcmp(xor_actual, xor_expected,
+                    sizeof(xor_actual)) != 0)
+                return false;
+        }
+    return true;
+}
+
 #endif // LEO_HAS_FF8
 
 #ifdef LEO_HAS_FF16
@@ -845,6 +944,67 @@ static bool TestFF16Butterflies4(const Ops& ops, FF16MultiplyLog reference)
     return true;
 }
 
+static bool TestFF16ButterflyRanges(const Ops& ops)
+{
+    static const unsigned kDistance = 3;
+    static const unsigned kLaneCount = kDistance * 4;
+    static const uint16_t log_sets[][3] = {
+        { 65535, 0, 17 }, { 1, 256, 4095 }
+    };
+    static const uint64_t byte_counts[] = { 64, 128, 130 };
+    uint8_t actual[kLaneCount][198];
+    uint8_t expected[kLaneCount][198];
+    void* actual_pointers[kLaneCount];
+    void* expected_pointers[kLaneCount];
+    for (size_t set_i = 0;
+         set_i < sizeof(log_sets) / sizeof(log_sets[0]); ++set_i)
+        for (size_t count_i = 0;
+             count_i < sizeof(byte_counts) / sizeof(byte_counts[0]);
+             ++count_i)
+            for (unsigned inverse = 0; inverse < 2; ++inverse)
+                for (unsigned fused = 0; fused < 2; ++fused)
+                {
+                    const uint64_t bytes = byte_counts[count_i];
+                    for (unsigned lane = 0; lane < kLaneCount; ++lane)
+                    {
+                        for (size_t i = 0; i < sizeof(actual[lane]); ++i)
+                            actual[lane][i] = expected[lane][i] =
+                                static_cast<uint8_t>(
+                                    i * (23U + lane * 4U) + set_i * 29U +
+                                    inverse * 37U + fused * 41U + lane);
+                        actual_pointers[lane] = actual[lane] + 1;
+                        expected_pointers[lane] = expected[lane] + 1;
+                    }
+                    for (unsigned i = 0; i < kDistance; ++i)
+                    {
+                        if (inverse)
+                            ops.ff16_ifft_butterfly4(
+                                expected_pointers[i],
+                                expected_pointers[i + kDistance],
+                                expected_pointers[i + kDistance * 2U],
+                                expected_pointers[i + kDistance * 3U],
+                                log_sets[set_i][0], log_sets[set_i][1],
+                                log_sets[set_i][2], bytes);
+                        else
+                            ops.ff16_fft_butterfly4(
+                                expected_pointers[i],
+                                expected_pointers[i + kDistance],
+                                expected_pointers[i + kDistance * 2U],
+                                expected_pointers[i + kDistance * 3U],
+                                log_sets[set_i][0], log_sets[set_i][1],
+                                log_sets[set_i][2], bytes);
+                    }
+                    (inverse ? ops.ff16_ifft_butterfly4_range :
+                               ops.ff16_fft_butterfly4_range)(
+                        actual_pointers, kDistance,
+                        log_sets[set_i][0], log_sets[set_i][1],
+                        log_sets[set_i][2], bytes, fused != 0);
+                    if (std::memcmp(actual, expected, sizeof(actual)) != 0)
+                        return false;
+                }
+    return true;
+}
+
 #endif // LEO_HAS_FF16
 
 static bool TestXor(const Ops& ops)
@@ -933,16 +1093,22 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         !ops.ff8_fft_butterfly2 || !ops.ff8_fft_butterfly2_out ||
         !ops.ff8_ifft_butterfly2_xor || !ops.ff8_ifft_butterfly4 ||
         !ops.ff8_fft_butterfly4 || !ops.ff8_fft_butterfly4_out ||
+        !ops.ff8_ifft_butterfly4_range ||
+        !ops.ff8_fft_butterfly4_range ||
+        !ops.ff8_ifft_butterfly4_xor_range ||
         !TestFF8(ops, args.ff8_multiply_log) ||
         !TestFF8Butterflies(ops, args.ff8_multiply_log) ||
-        !TestFF8Butterflies4(ops, args.ff8_multiply_log))
+        !TestFF8Butterflies4(ops, args.ff8_multiply_log) ||
+        !TestFF8ButterflyRanges(ops))
         return false;
 #else
     if (ops.ff8_multiply || ops.ff8_multiply_add ||
         ops.ff8_ifft_butterfly2 || ops.ff8_fft_butterfly2 ||
         ops.ff8_fft_butterfly2_out || ops.ff8_ifft_butterfly2_xor ||
         ops.ff8_ifft_butterfly4 || ops.ff8_fft_butterfly4 ||
-        ops.ff8_fft_butterfly4_out)
+        ops.ff8_fft_butterfly4_out || ops.ff8_ifft_butterfly4_range ||
+        ops.ff8_fft_butterfly4_range ||
+        ops.ff8_ifft_butterfly4_xor_range)
         return false;
 #endif
 #ifdef LEO_HAS_FF16
@@ -951,15 +1117,20 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         !ops.ff16_fft_butterfly2 || !ops.ff16_fft_butterfly2_out ||
         !ops.ff16_ifft_butterfly4 || !ops.ff16_fft_butterfly4 ||
         !ops.ff16_fft_butterfly4_out ||
+        !ops.ff16_ifft_butterfly4_range ||
+        !ops.ff16_fft_butterfly4_range ||
         !TestFF16(ops, args.ff16_multiply_log) ||
         !TestFF16Butterflies(ops, args.ff16_multiply_log) ||
-        !TestFF16Butterflies4(ops, args.ff16_multiply_log))
+        !TestFF16Butterflies4(ops, args.ff16_multiply_log) ||
+        !TestFF16ButterflyRanges(ops))
         return false;
 #else
     if (ops.ff16_multiply || ops.ff16_multiply_add ||
         ops.ff16_ifft_butterfly2 || ops.ff16_fft_butterfly2 ||
         ops.ff16_fft_butterfly2_out || ops.ff16_ifft_butterfly4 ||
-        ops.ff16_fft_butterfly4 || ops.ff16_fft_butterfly4_out)
+        ops.ff16_fft_butterfly4 || ops.ff16_fft_butterfly4_out ||
+        ops.ff16_ifft_butterfly4_range ||
+        ops.ff16_fft_butterfly4_range)
         return false;
 #endif
     return true;

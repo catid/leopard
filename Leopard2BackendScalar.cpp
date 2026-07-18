@@ -703,6 +703,60 @@ static void ScalarFF8FFTButterfly4Out(
     }
 }
 
+template<bool Inverse>
+static void ScalarFF8Butterfly4Range(
+    void* const* work, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count, bool prefer_fused)
+{
+    (void)prefer_fused;
+    for (unsigned i = 0; i < distance; ++i)
+    {
+        ScalarFF8Butterfly4<Inverse>(
+            work[i], work[i + distance],
+            work[i + distance * 2U], work[i + distance * 3U],
+            log01, log23, log02, byte_count);
+    }
+}
+
+static void ScalarFF8IFFTButterfly4Range(
+    void* const* work, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count, bool prefer_fused)
+{
+    ScalarFF8Butterfly4Range<true>(work, distance,
+        log01, log23, log02, byte_count, prefer_fused);
+}
+
+static void ScalarFF8FFTButterfly4Range(
+    void* const* work, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count, bool prefer_fused)
+{
+    ScalarFF8Butterfly4Range<false>(work, distance,
+        log01, log23, log02, byte_count, prefer_fused);
+}
+
+static void ScalarFF8IFFTButterfly4XorRange(
+    void* const* work, void* const* xor_output, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    for (unsigned i = 0; i < distance; ++i)
+    {
+        ScalarFF8Butterfly4<true>(
+            work[i], work[i + distance],
+            work[i + distance * 2U], work[i + distance * 3U],
+            log01, log23, log02, byte_count);
+        ScalarXorMemory4(
+            xor_output[i], work[i],
+            xor_output[i + distance], work[i + distance],
+            xor_output[i + distance * 2U], work[i + distance * 2U],
+            xor_output[i + distance * 3U], work[i + distance * 3U],
+            byte_count);
+    }
+}
+
 #endif // LEO_HAS_FF8
 
 #ifdef LEO_HAS_FF16
@@ -781,6 +835,40 @@ static void ScalarFF16FFTButterfly4(
 {
     ScalarFF16Butterfly4<false>(value0, value1, value2, value3,
         log01, log23, log02, byte_count);
+}
+
+template<bool Inverse>
+static void ScalarFF16Butterfly4Range(
+    void* const* work, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count, bool prefer_fused)
+{
+    (void)prefer_fused;
+    for (unsigned i = 0; i < distance; ++i)
+    {
+        ScalarFF16Butterfly4<Inverse>(
+            work[i], work[i + distance],
+            work[i + distance * 2U], work[i + distance * 3U],
+            log01, log23, log02, byte_count);
+    }
+}
+
+static void ScalarFF16IFFTButterfly4Range(
+    void* const* work, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count, bool prefer_fused)
+{
+    ScalarFF16Butterfly4Range<true>(work, distance,
+        log01, log23, log02, byte_count, prefer_fused);
+}
+
+static void ScalarFF16FFTButterfly4Range(
+    void* const* work, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count, bool prefer_fused)
+{
+    ScalarFF16Butterfly4Range<false>(work, distance,
+        log01, log23, log02, byte_count, prefer_fused);
 }
 
 static inline void ScalarFF16FFTButterfly4Values(
@@ -892,7 +980,13 @@ static const Ops ScalarOps = {
     ScalarFF8IFFTButterfly4,
     ScalarFF8FFTButterfly4,
     ScalarFF8FFTButterfly4Out,
+    ScalarFF8IFFTButterfly4Range,
+    ScalarFF8FFTButterfly4Range,
+    ScalarFF8IFFTButterfly4XorRange,
 #else
+    NULL,
+    NULL,
+    NULL,
     NULL,
     NULL,
     NULL,
@@ -907,8 +1001,12 @@ static const Ops ScalarOps = {
     ScalarFF16FFTButterfly2Out,
     ScalarFF16IFFTButterfly4,
     ScalarFF16FFTButterfly4,
-    ScalarFF16FFTButterfly4Out
+    ScalarFF16FFTButterfly4Out,
+    ScalarFF16IFFTButterfly4Range,
+    ScalarFF16FFTButterfly4Range
 #else
+    NULL,
+    NULL,
     NULL,
     NULL,
     NULL,
