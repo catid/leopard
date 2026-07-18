@@ -116,6 +116,32 @@ bool PreparePrunedTransformPlan(
     const uint8_t* output_mask,
     leopard2_internal::PrunedTransformPlan& plan);
 
+bool PrepareSparseForwardPlan(
+    unsigned size,
+    unsigned shift,
+    uint8_t* dependency_workspace,
+    size_t dependency_bytes,
+    uint8_t* operation_masks,
+    size_t retained_bytes,
+    leopard2_internal::SparseForwardPlanStats& stats);
+bool ExecuteSparseForwardPlan(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned size,
+    unsigned shift,
+    const uint8_t* operation_masks,
+    size_t retained_bytes,
+    void** work);
+bool ExecuteSparseForwardPlanFromSources(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned size,
+    unsigned shift,
+    const uint8_t* operation_masks,
+    size_t retained_bytes,
+    void* const* source,
+    void** work);
+
 void ReedSolomonEncode(
     const backend::Ops& ops,
     uint64_t buffer_bytes,
@@ -124,6 +150,16 @@ void ReedSolomonEncode(
     unsigned m, // = NextPow2(recovery_count)
     const void* const * const data,
     void** work); // m * 2 elements
+void ReedSolomonEncode(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned requested_output_count,
+    unsigned m,
+    const void* const * const data,
+    void** work,
+    const leopard2_internal::SparseForwardPlanBatchView* sparse_plans);
 void ReedSolomonEncode(
     uint64_t buffer_bytes,
     unsigned original_count,
@@ -146,6 +182,16 @@ void ReedSolomonEncodeLow(
     const void* const * const data,
     void* const * const recovery,
     void** work); // p * 2 elements
+void ReedSolomonEncodeLow(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned p,
+    const void* const * const data,
+    void* const * const recovery,
+    void** work,
+    const leopard2_internal::SparseForwardPlanBatchView* sparse_plans);
 void ReedSolomonEncodeLow(
     uint64_t buffer_bytes,
     unsigned original_count,
@@ -270,6 +316,13 @@ struct TestOnlyLowEncodeCounts
     uint64_t fft_butterfly2_out_of_place;
     uint64_t fft_butterfly4_out_of_place;
 };
+struct TestOnlySparseEncodeCounts
+{
+    uint64_t exact_blocks;
+    uint64_t prefix_butterflies;
+    uint64_t retained_butterflies;
+    uint64_t requested_output_copies;
+};
 struct TestOnlyHighDecodeCounts
 {
     uint64_t output_blocks;
@@ -281,6 +334,8 @@ void TestOnlyResetTransformCallsiteCounts();
 TestOnlyTransformCallsiteCounts TestOnlyGetTransformCallsiteCounts();
 void TestOnlyResetLowEncodeCounts();
 TestOnlyLowEncodeCounts TestOnlyGetLowEncodeCounts();
+void TestOnlyResetSparseEncodeCounts();
+TestOnlySparseEncodeCounts TestOnlyGetSparseEncodeCounts();
 void TestOnlyResetHighDecodeCounts();
 TestOnlyHighDecodeCounts TestOnlyGetHighDecodeCounts();
 ffe_t TestOnlyFFTMultiplier(unsigned logical_index);

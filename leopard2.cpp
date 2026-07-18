@@ -202,6 +202,9 @@ static const uint32_t kDirectMaxLosses = 4;
 static const uint32_t kDirectMaxParentDimension = 256;
 static const uint64_t kDirectSimdTileBytes = 64;
 static const uint64_t kDirectMinimumMeasuredBytes = 1024;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+static const size_t kSparseEncodeScheduleBudget = 65536;
+#endif
 
 typedef leo2_result (*BatchTaskFunction)(void* context, size_t index);
 typedef leo2_result (*BatchPreflightFunction)(void* context);
@@ -539,6 +542,10 @@ struct EncodeScratchGeometry
     size_t work_count;
     size_t work_slot_bytes;
     size_t work_data_offset;
+    size_t sparse_bits_offset;
+    size_t sparse_workspace_offset;
+    size_t sparse_block_count;
+    size_t sparse_operation_stride;
 };
 
 static bool CheckedAdd(size_t a, size_t b, size_t& result)
@@ -1670,6 +1677,51 @@ static leo2_result EncodeLayout(
             geometry.work_count, geometry.work_slot_bytes,
             geometry.layout, geometry.work_data_offset))
         return LEO2_INVALID_COUNTS;
+
+    // Exact sparse-output schedules are not part of AUTO until same-source
+    // setup+execution crossover measurements justify stable thresholds.  Test
+    // builds reserve the bounded call-local storage so FORCE_TRANSFORM can
+    // exercise the complete integration without changing the production
+    // scratch contract.
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    if (codec->padded_side >= 2)
+    {
+        geometry.sparse_block_count =
+            codec->profile == LEO2_PROFILE_LOW_V1
+                ? (static_cast<size_t>(codec->recovery_count) +
+                    codec->padded_side - 1U) / codec->padded_side
+                : 1U;
+        geometry.sparse_operation_stride =
+            leopard2_internal::SparseForwardRetainedBytes(
+                codec->padded_side);
+        if (geometry.sparse_operation_stride == 0)
+            return LEO2_INTERNAL_ERROR;
+        geometry.sparse_bits_offset = geometry.layout.total_bytes;
+        size_t retained_bytes = 0;
+        size_t schedule_end = 0;
+        if (!CheckedMultiply(geometry.sparse_block_count,
+                geometry.sparse_operation_stride, retained_bytes) ||
+            !CheckedAdd(geometry.sparse_bits_offset, retained_bytes,
+                geometry.sparse_workspace_offset) ||
+            !CheckedAdd(geometry.sparse_workspace_offset,
+                leopard2_internal::SparseForwardDependencyBytes(
+                    codec->padded_side),
+                schedule_end))
+            return LEO2_INVALID_COUNTS;
+        if (schedule_end - geometry.sparse_bits_offset >
+            kSparseEncodeScheduleBudget)
+        {
+            // A call-local exact schedule must stay bounded.  These mid-sized
+            // low-rate geometries have many parity cosets; until a compact
+            // variable-block representation is measured, retain the mature
+            // prefix transform instead of expanding caller scratch.
+            geometry.sparse_block_count = 0;
+            geometry.sparse_operation_stride = 0;
+        }
+        else
+            geometry.layout.total_bytes = schedule_end;
+    }
+#endif
     return LEO2_SUCCESS;
 }
 
@@ -2195,13 +2247,116 @@ static void PopulateEncodeInputs(
     }
 }
 
+static bool PrepareSparseEncodePlans(
+    const leo2_codec* codec,
+    const EncodeScratchGeometry& geometry,
+    void* const* recovery,
+    uint8_t* scratch_base,
+    leopard2_internal::SparseForwardPlanBatchView& view)
+{
+    view.operation_masks = NULL;
+    view.operation_stride = 0;
+    view.block_count = 0;
+#ifndef LEO2_ENABLE_TEST_HOOKS
+    (void)codec;
+    (void)geometry;
+    (void)recovery;
+    (void)scratch_base;
+    return true;
+#else
+    // This is an explicit diagnostic/experimental force mode.  AUTO keeps the
+    // established prefix transform until setup-inclusive crossover evidence
+    // supports a deterministic production dispatcher.
+    if (codec->test_encode_mode != LEO2_TEST_ENCODE_FORCE_TRANSFORM)
+        return true;
+    // A one-symbol side has no butterflies to schedule.  Keep the empty view
+    // valid so the existing XOR/copy direct transform path remains available.
+    if (codec->padded_side < 2)
+        return true;
+    // EncodeLayout deliberately publishes an empty pair when the exact masks
+    // would exceed the bounded call-local budget.  That is a valid prefix
+    // fallback, not an execution error.
+    if (geometry.sparse_block_count == 0 &&
+        geometry.sparse_operation_stride == 0)
+        return true;
+    if (geometry.sparse_block_count == 0 ||
+        geometry.sparse_operation_stride == 0 ||
+        geometry.sparse_block_count > 0xffffffffu)
+        return false;
+
+    uint8_t* const operation_masks =
+        scratch_base + geometry.sparse_bits_offset;
+    uint8_t* const workspace =
+        scratch_base + geometry.sparse_workspace_offset;
+
+    const uint32_t side = codec->padded_side;
+    const size_t dependency_bytes =
+        leopard2_internal::SparseForwardDependencyBytes(side);
+    if (dependency_bytes == 0)
+        return false;
+    for (size_t block = 0; block < geometry.sparse_block_count; ++block)
+    {
+        const uint32_t recovery_offset = codec->profile == LEO2_PROFILE_LOW_V1
+            ? static_cast<uint32_t>(block) * side
+            : 0;
+        const uint32_t block_count = std::min<uint32_t>(
+            side, codec->recovery_count - recovery_offset);
+        uint32_t requested_count = 0;
+        memset(workspace, 0, dependency_bytes);
+        for (uint32_t i = 0; i < block_count; ++i)
+        {
+            if (!recovery[recovery_offset + i])
+                continue;
+            workspace[i >> 3] |= static_cast<uint8_t>(1U << (i & 7U));
+            ++requested_count;
+        }
+        if (requested_count == 0)
+            continue;
+
+        leopard2_internal::SparseForwardPlanStats stats;
+        uint8_t* const block_bits = operation_masks +
+            block * geometry.sparse_operation_stride;
+        const uint32_t shift = codec->profile == LEO2_PROFILE_LOW_V1
+            ? side + recovery_offset
+            : 0;
+        bool compiled = false;
+#ifdef LEO_HAS_FF8
+        if (codec->field == LEO2_FIELD_GF8)
+        {
+            compiled = leopard::ff8::PrepareSparseForwardPlan(
+                side, shift, workspace, dependency_bytes, block_bits,
+                geometry.sparse_operation_stride, stats);
+        }
+#endif
+#ifdef LEO_HAS_FF16
+        if (codec->field == LEO2_FIELD_GF16)
+        {
+            compiled = leopard::ff16::PrepareSparseForwardPlan(
+                side, shift, workspace, dependency_bytes, block_bits,
+                geometry.sparse_operation_stride, stats);
+        }
+#endif
+        if (!compiled)
+            return false;
+
+    }
+
+    view.operation_masks = operation_masks;
+    view.operation_stride = geometry.sparse_operation_stride;
+    view.block_count = static_cast<uint32_t>(geometry.sparse_block_count);
+    return true;
+#endif
+}
+
 static void ExecuteTransformEncodePass(
     const leo2_codec* codec,
     size_t buffer_bytes,
+    uint32_t requested_recovery_count,
     uint32_t requested_recovery_prefix,
     const void* const* padded_original,
     void** parity,
-    void** work)
+    void** work,
+    const leopard2_internal::SparseForwardPlanBatchView* sparse_plans)
 {
     const leopard::backend::Ops& ops = *codec->context->ops;
     if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
@@ -2223,8 +2378,9 @@ static void ExecuteTransformEncodePass(
 #ifdef LEO_HAS_FF8
             leopard::ff8::ReedSolomonEncode(
                 ops, buffer_bytes, codec->original_count,
-                requested_recovery_prefix, codec->padded_side,
-                padded_original, work);
+                requested_recovery_prefix, requested_recovery_count,
+                codec->padded_side,
+                padded_original, work, sparse_plans);
 #else
             return;
 #endif
@@ -2232,8 +2388,9 @@ static void ExecuteTransformEncodePass(
 #ifdef LEO_HAS_FF16
             leopard::ff16::ReedSolomonEncode(
                 ops, buffer_bytes, codec->original_count,
-                requested_recovery_prefix, codec->padded_side,
-                padded_original, work);
+                requested_recovery_prefix, requested_recovery_count,
+                codec->padded_side,
+                padded_original, work, sparse_plans);
 #else
             return;
 #endif
@@ -2252,7 +2409,7 @@ static void ExecuteTransformEncodePass(
         leopard::ff8::ReedSolomonEncodeLow(
             ops, buffer_bytes, codec->original_count,
             codec->recovery_count, codec->padded_side, padded_original,
-            parity, work);
+            parity, work, sparse_plans);
 #else
         return;
 #endif
@@ -2261,7 +2418,7 @@ static void ExecuteTransformEncodePass(
         leopard::ff16::ReedSolomonEncodeLow(
             ops, buffer_bytes, codec->original_count,
             codec->recovery_count, codec->padded_side, padded_original,
-            parity, work);
+            parity, work, sparse_plans);
 #else
         return;
 #endif
@@ -3927,6 +4084,10 @@ static leo2_result EncodeInternal(
                     kScratchAlignment
             : NULL;
     uint8_t* const work_storage = base + geometry.work_data_offset;
+    leopard2_internal::SparseForwardPlanBatchView sparse_plans;
+    if (!PrepareSparseEncodePlans(
+            codec, geometry, recovery, base, sparse_plans))
+        return LEO2_INTERNAL_ERROR;
 
     if (geometry.aligned_prefix_bytes != 0)
     {
@@ -3950,7 +4111,9 @@ static leo2_result EncodeInternal(
             const_cast<const void* const*>(pointers);
         ExecuteTransformEncodePass(
             codec, geometry.aligned_prefix_bytes,
-            requested_recovery_prefix, padded_original, parity, work);
+            requested_recovery_count,
+            requested_recovery_prefix, padded_original, parity, work,
+            &sparse_plans);
     }
 
     if (geometry.tail_bytes != 0)
@@ -3971,8 +4134,9 @@ static leo2_result EncodeInternal(
         const void* const* const padded_original =
             const_cast<const void* const*>(pointers);
         ExecuteTransformEncodePass(
-            codec, kScratchAlignment, requested_recovery_prefix,
-            padded_original, parity, work);
+            codec, kScratchAlignment, requested_recovery_count,
+            requested_recovery_prefix,
+            padded_original, parity, work, &sparse_plans);
 
         for (uint32_t i = 0; i < codec->recovery_count; ++i)
         {

@@ -156,6 +156,94 @@ typedef uint16_t (*PrunedMultiplierLogProvider)(
     const void* context,
     uint32_t storage_index);
 
+/*
+    A call-local, allocation-free forward-transform schedule.  A two-bit
+    output mask corresponds to each radix-2 butterfly in the ordinary LCH
+    traversal, so a retained one-row operation does not write its dead peer.
+    The schedule is compiled into caller scratch from the exact requested
+    output mask, then reused for every byte tile in the encode call.  It is
+    intentionally a non-owning view: persistent decode plans continue to use
+    PrunedTransformPlan above, while encode request masks need not mutate an
+    immutable codec or allocate a heap object in the hot path.
+*/
+struct SparseForwardPlanStats
+{
+    size_t full_butterfly_count;
+    size_t retained_butterfly_count;
+    size_t one_output_butterflies;
+    size_t fused_four_groups;
+
+    SparseForwardPlanStats()
+        : full_butterfly_count(0)
+        , retained_butterfly_count(0)
+        , one_output_butterflies(0)
+        , fused_four_groups(0)
+    {}
+};
+
+struct SparseForwardPlanBatchView
+{
+    const uint8_t* operation_masks;
+    size_t operation_stride;
+    uint32_t block_count;
+};
+
+size_t SparseForwardButterflyCount(uint32_t transform_size);
+size_t SparseForwardRetainedBytes(uint32_t transform_size);
+size_t SparseForwardDependencyBytes(uint32_t transform_size);
+size_t CountSparseForwardRetainedButterflies(
+    uint32_t transform_size,
+    const uint8_t* operation_masks,
+    size_t retained_bytes);
+size_t PrefixForwardButterflyCount(
+    uint32_t transform_size,
+    uint32_t requested_prefix);
+
+// dependency_workspace initially contains a packed transform_size-bit output
+// mask and is consumed in place.  operation_masks is cleared before
+// publication and stores two output bits per butterfly.  Failure leaves stats
+// empty; callers discard scratch contents.
+bool CompileSparseForwardPlan(
+    uint32_t field_order,
+    uint16_t zero_multiplier_log,
+    uint32_t transform_size,
+    uint32_t shift,
+    uint8_t* dependency_workspace,
+    size_t dependency_bytes,
+    uint8_t* operation_masks,
+    size_t retained_bytes,
+    PrunedMultiplierLogProvider multiplier_log,
+    const void* multiplier_context,
+    SparseForwardPlanStats& stats);
+
+// Executes a trusted call-local schedule without allocation.  The in-place
+// form consumes a complete coefficient block.  The source form keeps that
+// block immutable and materializes only retained root butterflies in work.
+bool ExecuteSparseForwardPlan(
+    const leopard::backend::Ops& ops,
+    uint64_t byte_count,
+    uint32_t transform_size,
+    uint32_t shift,
+    uint16_t zero_multiplier_log,
+    const uint8_t* operation_masks,
+    size_t retained_bytes,
+    PrunedMultiplierLogProvider multiplier_log,
+    const void* multiplier_context,
+    void** work);
+
+bool ExecuteSparseForwardPlanFromSources(
+    const leopard::backend::Ops& ops,
+    uint64_t byte_count,
+    uint32_t transform_size,
+    uint32_t shift,
+    uint16_t zero_multiplier_log,
+    const uint8_t* operation_masks,
+    size_t retained_bytes,
+    PrunedMultiplierLogProvider multiplier_log,
+    const void* multiplier_context,
+    void* const* source,
+    void** work);
+
 // Builds into temporary storage and publishes only on success.  size and
 // field_order must be powers of two, shift must name an aligned in-field coset,
 // and both masks contain exactly size bytes with values in {0,1}.

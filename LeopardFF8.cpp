@@ -53,6 +53,41 @@ static std::atomic<uint64_t> TestHighOutputBlocks(0);
 static std::atomic<uint64_t> TestHighFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestHighFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighCompatibilityCopyFallbacks(0);
+static std::atomic<uint64_t> TestSparseExactBlocks(0);
+static std::atomic<uint64_t> TestSparsePrefixButterflies(0);
+static std::atomic<uint64_t> TestSparseRetainedButterflies(0);
+static std::atomic<uint64_t> TestSparseRequestedOutputCopies(0);
+#endif
+
+static uint16_t PrunedMultiplierLog(
+    const void* context,
+    uint32_t storage_index);
+
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+static void TestRecordSparseEncodeBlock(
+    unsigned transform_size,
+    unsigned requested_prefix,
+    unsigned requested_outputs,
+    const leopard2_internal::SparseForwardPlanBatchView* plans,
+    unsigned block)
+{
+    if (!plans || block >= plans->block_count)
+        return;
+    TestSparsePrefixButterflies.fetch_add(
+        leopard2_internal::PrefixForwardButterflyCount(
+            transform_size, requested_prefix),
+        std::memory_order_relaxed);
+    TestSparseRequestedOutputCopies.fetch_add(
+        requested_outputs, std::memory_order_relaxed);
+    TestSparseExactBlocks.fetch_add(1, std::memory_order_relaxed);
+    TestSparseRetainedButterflies.fetch_add(
+        leopard2_internal::CountSparseForwardRetainedButterflies(
+            transform_size,
+            plans->operation_masks +
+                static_cast<size_t>(block) * plans->operation_stride,
+            plans->operation_stride),
+        std::memory_order_relaxed);
+}
 #endif
 
 
@@ -1786,10 +1821,15 @@ void ReedSolomonEncode(
     uint64_t buffer_bytes,
     unsigned original_count,
     unsigned recovery_count,
+    unsigned requested_output_count,
     unsigned m,
     const void* const* data,
-    void** work)
+    void** work,
+    const leopard2_internal::SparseForwardPlanBatchView* sparse_plans)
 {
+#if !defined(LEO2_ENABLE_TEST_HOOKS)
+    (void)requested_output_count;
+#endif
     // work <- IFFT(data, m, m)
 
     const ffe_t* skewLUT = FFTSkewStorage + m;
@@ -1849,13 +1889,45 @@ void ReedSolomonEncode(
 skip_body:
 
     // work <- FFT(work, m, 0)
-    FFT_DIT(
-        ops,
-        buffer_bytes,
-        work,
-        recovery_count,
-        m,
-        FFTSkewStorage);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    TestRecordSparseEncodeBlock(
+        m, recovery_count, requested_output_count, sparse_plans, 0);
+#endif
+    if (sparse_plans && sparse_plans->block_count == 1)
+    {
+        const bool executed =
+            leopard2_internal::ExecuteSparseForwardPlan(
+                ops, buffer_bytes, m, 0, kModulus,
+                sparse_plans->operation_masks,
+                sparse_plans->operation_stride,
+                PrunedMultiplierLog, FFTSkewStorage, work);
+        LEO_DEBUG_ASSERT(executed);
+        (void)executed;
+    }
+    else
+    {
+        FFT_DIT(
+            ops,
+            buffer_bytes,
+            work,
+            recovery_count,
+            m,
+            FFTSkewStorage);
+    }
+}
+
+
+void ReedSolomonEncode(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned m,
+    const void* const* data,
+    void** work)
+{
+    ReedSolomonEncode(ops, buffer_bytes, original_count, recovery_count,
+        recovery_count, m, data, work, NULL);
 }
 
 
@@ -1881,7 +1953,8 @@ void ReedSolomonEncodeLow(
     unsigned p,
     const void* const* data,
     void* const* recovery,
-    void** work)
+    void** work,
+    const leopard2_internal::SparseForwardPlanBatchView* sparse_plans)
 {
     LEO_DEBUG_ASSERT(p >= 2 && p <= kOrder / 2);
     LEO_DEBUG_ASSERT(original_count <= p);
@@ -1918,15 +1991,39 @@ void ReedSolomonEncodeLow(
         if (requested_count == 0)
             continue;
 
-        FFT_DIT_FromCoefficients(
-            ops,
-            buffer_bytes,
-            work,
-            work + p,
-            requested_count,
-            p,
-            FFTSkewStorage + p + recovery_offset,
-            SourceEvaluationLowEncode);
+        const unsigned block = recovery_offset / p;
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        unsigned requested_outputs = 0;
+        for (unsigned i = 0; i < requested_count; ++i)
+            requested_outputs += recovery[recovery_offset + i] != NULL;
+        TestRecordSparseEncodeBlock(
+            p, requested_count, requested_outputs, sparse_plans, block);
+#endif
+        if (sparse_plans && block < sparse_plans->block_count)
+        {
+            const bool executed =
+                leopard2_internal::ExecuteSparseForwardPlanFromSources(
+                    ops, buffer_bytes, p, p + recovery_offset, kModulus,
+                    sparse_plans->operation_masks +
+                        static_cast<size_t>(block) *
+                            sparse_plans->operation_stride,
+                    sparse_plans->operation_stride,
+                    PrunedMultiplierLog, FFTSkewStorage, work, work + p);
+            LEO_DEBUG_ASSERT(executed);
+            (void)executed;
+        }
+        else
+        {
+            FFT_DIT_FromCoefficients(
+                ops,
+                buffer_bytes,
+                work,
+                work + p,
+                requested_count,
+                p,
+                FFTSkewStorage + p + recovery_offset,
+                SourceEvaluationLowEncode);
+        }
 
         for (unsigned i = 0; i < requested_count; ++i)
         {
@@ -1935,6 +2032,21 @@ void ReedSolomonEncodeLow(
                 memcpy(output, work[p + i], buffer_bytes);
         }
     }
+}
+
+
+void ReedSolomonEncodeLow(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned p,
+    const void* const* data,
+    void* const* recovery,
+    void** work)
+{
+    ReedSolomonEncodeLow(ops, buffer_bytes, original_count, recovery_count,
+        p, data, recovery, work, NULL);
 }
 
 
@@ -2518,6 +2630,56 @@ static uint16_t PrunedMultiplierLog(
 }
 
 
+bool PrepareSparseForwardPlan(
+    unsigned size,
+    unsigned shift,
+    uint8_t* dependency_workspace,
+    size_t dependency_bytes,
+    uint8_t* operation_masks,
+    size_t retained_bytes,
+    leopard2_internal::SparseForwardPlanStats& stats)
+{
+    return leopard2_internal::CompileSparseForwardPlan(
+        kOrder, kModulus, size, shift,
+        dependency_workspace, dependency_bytes,
+        operation_masks, retained_bytes,
+        PrunedMultiplierLog, FFTSkewStorage, stats);
+}
+
+
+bool ExecuteSparseForwardPlan(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned size,
+    unsigned shift,
+    const uint8_t* operation_masks,
+    size_t retained_bytes,
+    void** work)
+{
+    return leopard2_internal::ExecuteSparseForwardPlan(
+        ops, buffer_bytes, size, shift, kModulus,
+        operation_masks, retained_bytes,
+        PrunedMultiplierLog, FFTSkewStorage, work);
+}
+
+
+bool ExecuteSparseForwardPlanFromSources(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned size,
+    unsigned shift,
+    const uint8_t* operation_masks,
+    size_t retained_bytes,
+    void* const* source,
+    void** work)
+{
+    return leopard2_internal::ExecuteSparseForwardPlanFromSources(
+        ops, buffer_bytes, size, shift, kModulus,
+        operation_masks, retained_bytes,
+        PrunedMultiplierLog, FFTSkewStorage, source, work);
+}
+
+
 bool PreparePrunedTransformPlan(
     unsigned size,
     unsigned shift,
@@ -2568,6 +2730,30 @@ TestOnlyLowEncodeCounts TestOnlyGetLowEncodeCounts()
         TestLowFFTButterfly2OutCalls.load(std::memory_order_relaxed);
     result.fft_butterfly4_out_of_place =
         TestLowFFTButterfly4OutCalls.load(std::memory_order_relaxed);
+    return result;
+}
+
+
+void TestOnlyResetSparseEncodeCounts()
+{
+    TestSparseExactBlocks.store(0, std::memory_order_relaxed);
+    TestSparsePrefixButterflies.store(0, std::memory_order_relaxed);
+    TestSparseRetainedButterflies.store(0, std::memory_order_relaxed);
+    TestSparseRequestedOutputCopies.store(0, std::memory_order_relaxed);
+}
+
+
+TestOnlySparseEncodeCounts TestOnlyGetSparseEncodeCounts()
+{
+    TestOnlySparseEncodeCounts result;
+    result.exact_blocks =
+        TestSparseExactBlocks.load(std::memory_order_relaxed);
+    result.prefix_butterflies =
+        TestSparsePrefixButterflies.load(std::memory_order_relaxed);
+    result.retained_butterflies =
+        TestSparseRetainedButterflies.load(std::memory_order_relaxed);
+    result.requested_output_copies =
+        TestSparseRequestedOutputCopies.load(std::memory_order_relaxed);
     return result;
 }
 

@@ -340,9 +340,720 @@ static bool ExecutePrunedOperation(
     return !write_x && !write_y;
 }
 
+static size_t SparseButterflyCountUnchecked(uint32_t size)
+{
+    size_t log2_size = 0;
+    for (uint32_t value = size; value > 1; value >>= 1)
+        ++log2_size;
+    return static_cast<size_t>(size >> 1) * log2_size;
+}
+
+static bool PackedBit(
+    const uint8_t* bits,
+    size_t bit_count,
+    size_t index)
+{
+    return index < bit_count &&
+        0 != (bits[index >> 3] & static_cast<uint8_t>(1u << (index & 7u)));
+}
+
+static void AssignPackedBit(uint8_t* bits, size_t index, bool value)
+{
+    const uint8_t mask = static_cast<uint8_t>(1u << (index & 7u));
+    if (value)
+        bits[index >> 3] |= mask;
+    else
+        bits[index >> 3] &= static_cast<uint8_t>(~mask);
+}
+
+static uint8_t SparseOperationMask(
+    const uint8_t* masks,
+    size_t operation_count,
+    size_t index)
+{
+    if (index >= operation_count)
+        return 0;
+    return static_cast<uint8_t>(
+        (masks[index >> 2] >> ((index & 3U) * 2U)) & 3U);
+}
+
+static void SetSparseOperationMask(
+    uint8_t* masks,
+    size_t index,
+    uint8_t value)
+{
+    const unsigned shift = static_cast<unsigned>((index & 3U) * 2U);
+    const uint8_t clear = static_cast<uint8_t>(~(3U << shift));
+    masks[index >> 2] = static_cast<uint8_t>(
+        (masks[index >> 2] & clear) | (value << shift));
+}
+
+struct SparseCompileContext
+{
+    uint16_t zero_multiplier_log;
+    uint8_t* needed;
+    size_t needed_count;
+    uint8_t* operation_masks;
+    size_t operation_index;
+    leopard2_internal::PrunedMultiplierLogProvider multiplier_log;
+    const void* multiplier_context;
+    leopard2_internal::SparseForwardPlanStats* stats;
+    bool valid;
+};
+
+static uint16_t SparseMultiplier(
+    SparseCompileContext& context,
+    uint32_t storage_index)
+{
+    const uint16_t result = context.multiplier_log(
+        context.multiplier_context, storage_index);
+    if (result > context.zero_multiplier_log)
+        context.valid = false;
+    return result;
+}
+
+static void CompileSparseOperationReverse(
+    SparseCompileContext& context,
+    uint32_t x,
+    uint32_t y,
+    uint16_t multiplier_log)
+{
+    if (!context.valid || context.operation_index == 0)
+    {
+        context.valid = false;
+        return;
+    }
+    const size_t operation = --context.operation_index;
+    const bool need_x = PackedBit(context.needed, context.needed_count, x);
+    const bool need_y = PackedBit(context.needed, context.needed_count, y);
+    if (!need_x && !need_y)
+        return;
+
+    SetSparseOperationMask(context.operation_masks, operation,
+        static_cast<uint8_t>((need_x ? 1U : 0U) | (need_y ? 2U : 0U)));
+    ++context.stats->retained_butterfly_count;
+    if (need_x != need_y)
+        ++context.stats->one_output_butterflies;
+
+    const bool multiplier_zero =
+        multiplier_log == context.zero_multiplier_log;
+    const bool multiplier_one = multiplier_log == 0;
+    // Forward butterfly rows are x + m*y and x + (m+1)*y.
+    AssignPackedBit(context.needed, x, need_x || need_y);
+    AssignPackedBit(context.needed, y,
+        (need_x && !multiplier_zero) ||
+        (need_y && !multiplier_one));
+}
+
+static void CompileSparseNodeReverse(
+    SparseCompileContext& context,
+    uint32_t start,
+    uint32_t size,
+    uint32_t coset)
+{
+    if (!context.valid)
+        return;
+    if (size == 1)
+        return;
+    if (size == 2)
+    {
+        CompileSparseOperationReverse(context, start, start + 1,
+            SparseMultiplier(context, coset + 1));
+        return;
+    }
+
+    const uint32_t quarter = size >> 2;
+    const uint32_t half = size >> 1;
+    const uint16_t multiplier01 = SparseMultiplier(
+        context, coset + quarter);
+    const uint16_t multiplier23 = SparseMultiplier(
+        context, coset + half + quarter);
+    const uint16_t multiplier02 = SparseMultiplier(
+        context, coset + half);
+
+    // Reverse the exact forward traversal: four child transforms followed by
+    // the grouped two-layer butterflies at this node.
+    CompileSparseNodeReverse(context,
+        start + half + quarter, quarter, coset + half + quarter);
+    CompileSparseNodeReverse(context,
+        start + half, quarter, coset + half);
+    CompileSparseNodeReverse(context,
+        start + quarter, quarter, coset + quarter);
+    CompileSparseNodeReverse(context,
+        start, quarter, coset);
+
+    for (uint32_t offset = quarter; offset-- > 0;)
+    {
+        const uint32_t value0 = start + offset;
+        const uint32_t value1 = value0 + quarter;
+        const uint32_t value2 = value0 + half;
+        const uint32_t value3 = value2 + quarter;
+        CompileSparseOperationReverse(
+            context, value2, value3, multiplier23);
+        CompileSparseOperationReverse(
+            context, value0, value1, multiplier01);
+        CompileSparseOperationReverse(
+            context, value1, value3, multiplier02);
+        CompileSparseOperationReverse(
+            context, value0, value2, multiplier02);
+    }
+}
+
+struct SparseCountContext
+{
+    const uint8_t* operation_masks;
+    size_t operation_count;
+    size_t operation_index;
+    size_t fused_four_groups;
+};
+
+static void CountSparseFusedNode(
+    SparseCountContext& context,
+    uint32_t size)
+{
+    if (size == 1)
+        return;
+    if (size == 2)
+    {
+        ++context.operation_index;
+        return;
+    }
+    const uint32_t quarter = size >> 2;
+    for (uint32_t offset = 0; offset < quarter; ++offset)
+    {
+        bool complete = true;
+        for (unsigned operation = 0; operation < 4; ++operation)
+            complete = complete && SparseOperationMask(
+                context.operation_masks, context.operation_count,
+                context.operation_index + operation) == 3;
+        if (complete)
+            ++context.fused_four_groups;
+        context.operation_index += 4;
+    }
+    CountSparseFusedNode(context, quarter);
+    CountSparseFusedNode(context, quarter);
+    CountSparseFusedNode(context, quarter);
+    CountSparseFusedNode(context, quarter);
+}
+
+struct SparseExecuteContext
+{
+    const leopard::backend::Ops* ops;
+    PrunedExecutionOps selected;
+    uint16_t zero_multiplier_log;
+    uint64_t byte_count;
+    const uint8_t* operation_masks;
+    size_t operation_count;
+    size_t operation_index;
+    uint32_t skipped_distance;
+    leopard2_internal::PrunedMultiplierLogProvider multiplier_log;
+    const void* multiplier_context;
+    void** work;
+    bool valid;
+};
+
+static uint16_t SparseMultiplier(
+    SparseExecuteContext& context,
+    uint32_t storage_index)
+{
+    const uint16_t result = context.multiplier_log(
+        context.multiplier_context, storage_index);
+    if (result > context.zero_multiplier_log)
+        context.valid = false;
+    return result;
+}
+
+static bool ExecuteSparseOperation(
+    SparseExecuteContext& context,
+    size_t operation,
+    uint32_t x,
+    uint32_t y,
+    uint16_t multiplier_log)
+{
+    const uint8_t output_mask = SparseOperationMask(
+        context.operation_masks, context.operation_count, operation);
+    if (output_mask == 0 || y - x == context.skipped_distance)
+        return true;
+    const bool multiplier_zero =
+        multiplier_log == context.zero_multiplier_log;
+    const bool multiplier_one = multiplier_log == 0;
+    void* const x_output = context.work[x];
+    void* const y_output = context.work[y];
+    if (output_mask == 3)
+    {
+        if (multiplier_zero)
+            context.ops->xor_memory(y_output, x_output, context.byte_count);
+        else if (multiplier_one)
+        {
+            context.ops->xor_memory(x_output, y_output, context.byte_count);
+            context.ops->xor_memory(y_output, x_output, context.byte_count);
+        }
+        else
+            context.selected.butterfly(
+                x_output, y_output, multiplier_log, context.byte_count);
+        return true;
+    }
+    if (output_mask == 1)
+    {
+        // x' = x + m*y.  In particular m=0 is an identity and performs no
+        // write to either row.
+        if (multiplier_zero)
+            return true;
+        if (multiplier_one)
+            context.ops->xor_memory(x_output, y_output, context.byte_count);
+        else
+            context.selected.multiply_add(
+                x_output, y_output, multiplier_log, context.byte_count);
+        return true;
+    }
+
+    // y' = x + (m+1)*y.  multiply_add supports destination==source in every
+    // qualified backend: each vector/scalar lane is loaded before it is stored.
+    if (multiplier_zero)
+        context.ops->xor_memory(y_output, x_output, context.byte_count);
+    else if (multiplier_one)
+        memcpy(y_output, x_output, static_cast<size_t>(context.byte_count));
+    else
+    {
+        context.selected.multiply_add(
+            y_output, y_output, multiplier_log, context.byte_count);
+        context.ops->xor_memory(y_output, x_output, context.byte_count);
+    }
+    return true;
+}
+
+static bool ExecuteSparseOperationFromSources(
+    SparseExecuteContext& context,
+    size_t operation,
+    uint32_t x,
+    uint32_t y,
+    uint16_t multiplier_log,
+    void* const* source)
+{
+    const uint8_t output_mask = SparseOperationMask(
+        context.operation_masks, context.operation_count, operation);
+    if (output_mask == 0)
+        return true;
+    const bool multiplier_zero =
+        multiplier_log == context.zero_multiplier_log;
+    const bool multiplier_one = multiplier_log == 0;
+    const void* const x_source = source[x];
+    const void* const y_source = source[y];
+    void* const x_output = context.work[x];
+    void* const y_output = context.work[y];
+    const size_t bytes = static_cast<size_t>(context.byte_count);
+    if (output_mask == 3)
+    {
+        if (!multiplier_zero)
+        {
+            context.selected.butterfly_out(
+                x_source, y_source, x_output, y_output,
+                multiplier_log, context.byte_count);
+            return true;
+        }
+        memcpy(x_output, x_source, bytes);
+        memcpy(y_output, y_source, bytes);
+        context.ops->xor_memory(y_output, x_source, context.byte_count);
+        return true;
+    }
+    if (output_mask == 1)
+    {
+        if (multiplier_zero)
+            memcpy(x_output, x_source, bytes);
+        else if (multiplier_one)
+        {
+            memcpy(x_output, x_source, bytes);
+            context.ops->xor_memory(x_output, y_source, context.byte_count);
+        }
+        else
+        {
+            context.selected.multiply(
+                x_output, y_source, multiplier_log, context.byte_count);
+            context.ops->xor_memory(x_output, x_source, context.byte_count);
+        }
+        return true;
+    }
+
+    if (multiplier_one)
+        memcpy(y_output, x_source, bytes);
+    else
+    {
+        memcpy(y_output, y_source, bytes);
+        if (!multiplier_zero)
+            context.selected.multiply_add(
+                y_output, y_source, multiplier_log, context.byte_count);
+        context.ops->xor_memory(y_output, x_source, context.byte_count);
+    }
+    return true;
+}
+
+static void ExecuteSparseNode(
+    SparseExecuteContext& context,
+    uint32_t start,
+    uint32_t size,
+    uint32_t coset)
+{
+    if (!context.valid)
+        return;
+    if (size == 1)
+        return;
+    if (size == 2)
+    {
+        const size_t operation = context.operation_index++;
+        const uint16_t multiplier = SparseMultiplier(context, coset + 1);
+        if (context.valid)
+            ExecuteSparseOperation(
+                context, operation, start, start + 1, multiplier);
+        return;
+    }
+
+    const uint32_t quarter = size >> 2;
+    const uint32_t half = size >> 1;
+    const uint16_t multiplier01 = SparseMultiplier(
+        context, coset + quarter);
+    const uint16_t multiplier23 = SparseMultiplier(
+        context, coset + half + quarter);
+    const uint16_t multiplier02 = SparseMultiplier(
+        context, coset + half);
+    if (!context.valid)
+        return;
+    for (uint32_t offset = 0; offset < quarter; ++offset)
+    {
+        const uint32_t value0 = start + offset;
+        const uint32_t value1 = value0 + quarter;
+        const uint32_t value2 = value0 + half;
+        const uint32_t value3 = value2 + quarter;
+        const size_t first = context.operation_index;
+        const bool skipped = half == context.skipped_distance;
+        bool complete = !skipped;
+        for (unsigned operation = 0; operation < 4; ++operation)
+            complete = complete && SparseOperationMask(
+                context.operation_masks, context.operation_count,
+                first + operation) == 3;
+        if (complete)
+        {
+            context.selected.butterfly_four(
+                context.work[value0], context.work[value1],
+                context.work[value2], context.work[value3],
+                multiplier01, multiplier23, multiplier02,
+                context.byte_count);
+        }
+        else
+        {
+            ExecuteSparseOperation(context, first, value0, value2,
+                multiplier02);
+            ExecuteSparseOperation(context, first + 1, value1, value3,
+                multiplier02);
+            ExecuteSparseOperation(context, first + 2, value0, value1,
+                multiplier01);
+            ExecuteSparseOperation(context, first + 3, value2, value3,
+                multiplier23);
+        }
+        context.operation_index += 4;
+    }
+
+    ExecuteSparseNode(context, start, quarter, coset);
+    ExecuteSparseNode(context,
+        start + quarter, quarter, coset + quarter);
+    ExecuteSparseNode(context,
+        start + half, quarter, coset + half);
+    ExecuteSparseNode(context,
+        start + half + quarter, quarter, coset + half + quarter);
+}
+
+static bool ExecuteSparseRootFromSources(
+    SparseExecuteContext& context,
+    uint32_t size,
+    uint32_t shift,
+    void* const* source)
+{
+    const uint32_t half = size >> 1;
+    if (size == 2)
+    {
+        const uint16_t multiplier = SparseMultiplier(context, shift + 1);
+        if (!context.valid)
+            return false;
+        return ExecuteSparseOperationFromSources(
+            context, 0, 0, 1, multiplier, source);
+    }
+
+    const uint32_t quarter = size >> 2;
+    const uint16_t multiplier = SparseMultiplier(context, shift + half);
+    if (!context.valid)
+        return false;
+    for (uint32_t offset = 0; offset < quarter; ++offset)
+    {
+        const uint32_t pairs[][2] = {
+            { offset, offset + half },
+            { offset + quarter, offset + half + quarter }
+        };
+        for (unsigned pair = 0; pair < 2; ++pair)
+        {
+            const size_t operation = static_cast<size_t>(offset) * 4 + pair;
+            const uint32_t x = pairs[pair][0];
+            const uint32_t y = pairs[pair][1];
+            if (!ExecuteSparseOperationFromSources(
+                    context, operation, x, y, multiplier, source))
+                return false;
+        }
+    }
+    return context.valid;
+}
+
 } // namespace
 
 namespace leopard2_internal {
+
+size_t SparseForwardButterflyCount(uint32_t transform_size)
+{
+    if (!IsPowerOfTwo(transform_size) || transform_size < 2 ||
+        transform_size > 65536U)
+        return 0;
+    return SparseButterflyCountUnchecked(transform_size);
+}
+
+size_t SparseForwardRetainedBytes(uint32_t transform_size)
+{
+    const size_t butterflies = SparseForwardButterflyCount(transform_size);
+    return butterflies == 0 ? 0 : (butterflies + 3U) / 4U;
+}
+
+size_t SparseForwardDependencyBytes(uint32_t transform_size)
+{
+    if (!IsPowerOfTwo(transform_size) || transform_size < 2 ||
+        transform_size > 65536U)
+        return 0;
+    return (static_cast<size_t>(transform_size) + 7U) / 8U;
+}
+
+size_t CountSparseForwardRetainedButterflies(
+    uint32_t transform_size,
+    const uint8_t* operation_masks,
+    size_t retained_bytes)
+{
+    const size_t butterflies = SparseForwardButterflyCount(transform_size);
+    if (butterflies == 0 || !operation_masks ||
+        retained_bytes != SparseForwardRetainedBytes(transform_size))
+        return 0;
+    size_t result = 0;
+    for (size_t i = 0; i < butterflies; ++i)
+        if (SparseOperationMask(operation_masks, butterflies, i) != 0)
+            ++result;
+    return result;
+}
+
+size_t PrefixForwardButterflyCount(
+    uint32_t transform_size,
+    uint32_t requested_prefix)
+{
+    if (!IsPowerOfTwo(transform_size) || transform_size < 2 ||
+        transform_size > 65536U || requested_prefix > transform_size)
+        return 0;
+    size_t result = 0;
+    uint32_t dist4 = transform_size;
+    uint32_t dist = transform_size >> 2;
+    for (; dist != 0; dist4 = dist, dist >>= 2)
+    {
+        for (uint32_t start = 0;
+             start < requested_prefix;
+             start += dist4)
+            result += static_cast<size_t>(dist) * 4U;
+    }
+    if (dist4 == 2)
+        result += (static_cast<size_t>(requested_prefix) + 1U) / 2U;
+    return result;
+}
+
+bool CompileSparseForwardPlan(
+    uint32_t field_order,
+    uint16_t zero_multiplier_log,
+    uint32_t transform_size,
+    uint32_t shift,
+    uint8_t* dependency_workspace,
+    size_t dependency_bytes,
+    uint8_t* operation_masks,
+    size_t retained_bytes,
+    PrunedMultiplierLogProvider multiplier_log,
+    const void* multiplier_context,
+    SparseForwardPlanStats& stats)
+{
+    stats = SparseForwardPlanStats();
+    const size_t full_count = SparseForwardButterflyCount(transform_size);
+    const size_t expected_retained_bytes =
+        SparseForwardRetainedBytes(transform_size);
+    const size_t expected_dependency_bytes =
+        SparseForwardDependencyBytes(transform_size);
+    if (!IsPowerOfTwo(field_order) || field_order > 65536U ||
+        static_cast<uint32_t>(zero_multiplier_log) + 1U != field_order ||
+        full_count == 0 || transform_size > field_order ||
+        shift > field_order - transform_size ||
+        (shift & (transform_size - 1U)) != 0 ||
+        !dependency_workspace || dependency_bytes != expected_dependency_bytes ||
+        !operation_masks || retained_bytes != expected_retained_bytes ||
+        !multiplier_log || !multiplier_context)
+        return false;
+
+    memset(operation_masks, 0, retained_bytes);
+    SparseForwardPlanStats candidate;
+    candidate.full_butterfly_count = full_count;
+    SparseCompileContext context = {
+        zero_multiplier_log,
+        dependency_workspace,
+        transform_size,
+        operation_masks,
+        full_count,
+        multiplier_log,
+        multiplier_context,
+        &candidate,
+        true
+    };
+    CompileSparseNodeReverse(context, 0, transform_size, shift);
+    if (!context.valid || context.operation_index != 0)
+        return false;
+
+    SparseCountContext count = {
+        operation_masks,
+        full_count,
+        0,
+        0
+    };
+    CountSparseFusedNode(count, transform_size);
+    if (count.operation_index != full_count)
+        return false;
+    candidate.fused_four_groups = count.fused_four_groups;
+    stats = candidate;
+    return true;
+}
+
+static bool ValidateSparseExecution(
+    uint64_t byte_count,
+    uint32_t transform_size,
+    uint32_t shift,
+    uint16_t zero_multiplier_log,
+    const uint8_t* operation_masks,
+    size_t retained_bytes,
+    PrunedMultiplierLogProvider multiplier_log,
+    const void* multiplier_context,
+    void** work)
+{
+    const bool gf16 = zero_multiplier_log == 65535U;
+    const uint32_t field_order =
+        static_cast<uint32_t>(zero_multiplier_log) + 1U;
+    if ((zero_multiplier_log != 255U && !gf16) ||
+        SparseForwardButterflyCount(transform_size) == 0 ||
+        transform_size > field_order ||
+        shift > field_order - transform_size ||
+        (shift & (transform_size - 1U)) != 0 ||
+        retained_bytes != SparseForwardRetainedBytes(transform_size) ||
+        !operation_masks || !multiplier_log || !multiplier_context || !work ||
+        byte_count > static_cast<uint64_t>(SIZE_MAX) ||
+        (gf16 && (byte_count & 1U) != 0))
+        return false;
+    if (byte_count == 0)
+        return true;
+    for (uint32_t i = 0; i < transform_size; ++i)
+        if (!work[i])
+            return false;
+    return true;
+}
+
+static SparseExecuteContext MakeSparseExecuteContext(
+    const leopard::backend::Ops& ops,
+    uint64_t byte_count,
+    uint16_t zero_multiplier_log,
+    const uint8_t* operation_masks,
+    size_t operation_count,
+    uint32_t skipped_distance,
+    PrunedMultiplierLogProvider multiplier_log,
+    const void* multiplier_context,
+    void** work)
+{
+    const bool gf16 = zero_multiplier_log == 65535U;
+    const PrunedExecutionOps selected = {
+        gf16 ? ops.ff16_multiply : ops.ff8_multiply,
+        gf16 ? ops.ff16_multiply_add : ops.ff8_multiply_add,
+        gf16 ? ops.ff16_fft_butterfly2 : ops.ff8_fft_butterfly2,
+        gf16 ? ops.ff16_fft_butterfly4 : ops.ff8_fft_butterfly4,
+        gf16 ? ops.ff16_fft_butterfly2_out : ops.ff8_fft_butterfly2_out
+    };
+    SparseExecuteContext context = {
+        &ops,
+        selected,
+        zero_multiplier_log,
+        byte_count,
+        operation_masks,
+        operation_count,
+        0,
+        skipped_distance,
+        multiplier_log,
+        multiplier_context,
+        work,
+        selected.multiply != NULL && selected.multiply_add != NULL &&
+            selected.butterfly != NULL &&
+            selected.butterfly_four != NULL &&
+            selected.butterfly_out != NULL
+    };
+    return context;
+}
+
+bool ExecuteSparseForwardPlan(
+    const leopard::backend::Ops& ops,
+    uint64_t byte_count,
+    uint32_t transform_size,
+    uint32_t shift,
+    uint16_t zero_multiplier_log,
+    const uint8_t* operation_masks,
+    size_t retained_bytes,
+    PrunedMultiplierLogProvider multiplier_log,
+    const void* multiplier_context,
+    void** work)
+{
+    if (!ValidateSparseExecution(byte_count, transform_size, shift,
+            zero_multiplier_log, operation_masks, retained_bytes,
+            multiplier_log, multiplier_context, work))
+        return false;
+    if (byte_count == 0)
+        return true;
+    const size_t full_count = SparseForwardButterflyCount(transform_size);
+    SparseExecuteContext context = MakeSparseExecuteContext(
+        ops, byte_count, zero_multiplier_log, operation_masks, full_count, 0,
+        multiplier_log, multiplier_context, work);
+    ExecuteSparseNode(context, 0, transform_size, shift);
+    return context.valid && context.operation_index == full_count;
+}
+
+bool ExecuteSparseForwardPlanFromSources(
+    const leopard::backend::Ops& ops,
+    uint64_t byte_count,
+    uint32_t transform_size,
+    uint32_t shift,
+    uint16_t zero_multiplier_log,
+    const uint8_t* operation_masks,
+    size_t retained_bytes,
+    PrunedMultiplierLogProvider multiplier_log,
+    const void* multiplier_context,
+    void* const* source,
+    void** work)
+{
+    if (!ValidateSparseExecution(byte_count, transform_size, shift,
+            zero_multiplier_log, operation_masks, retained_bytes,
+            multiplier_log, multiplier_context, work) || !source)
+        return false;
+    if (byte_count == 0)
+        return true;
+    for (uint32_t i = 0; i < transform_size; ++i)
+        if (!source[i])
+            return false;
+    const size_t full_count = SparseForwardButterflyCount(transform_size);
+    SparseExecuteContext context = MakeSparseExecuteContext(
+        ops, byte_count, zero_multiplier_log, operation_masks, full_count,
+        transform_size >> 1, multiplier_log, multiplier_context, work);
+    if (!ExecuteSparseRootFromSources(
+            context, transform_size, shift, source))
+        return false;
+    ExecuteSparseNode(context, 0, transform_size, shift);
+    return context.valid && context.operation_index == full_count;
+}
 
 bool CompilePrunedTransformPlan(
     uint32_t field_order,
