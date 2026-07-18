@@ -132,6 +132,35 @@ typedef void (*Butterfly4)(
     uint16_t multiplier_log02,
     uint64_t byte_count);
 
+// Executes one complete contiguous radix-four transform group.  The field
+// scheduler has already proved that work[0..4*distance) names disjoint shard
+// buffers; each lane i applies the same three multipliers to
+// { i, i + distance, i + 2*distance, i + 3*distance }.  Keeping this loop in
+// the ISA-specific translation unit reduces one indirect Ops dispatch per
+// butterfly to one dispatch per group while preserving per-context backend
+// selection.  prefer_fused records the established GF16 size policy; GF8
+// backends retain their existing internal size policy.
+typedef void (*Butterfly4Range)(
+    void* const* work,
+    unsigned distance,
+    uint16_t multiplier_log01,
+    uint16_t multiplier_log23,
+    uint16_t multiplier_log02,
+    uint64_t byte_count,
+    bool prefer_fused);
+
+// GF8 encoder variant that accumulates a completed inverse radix-four group
+// into four corresponding output ranges.  Inputs are transformed in place;
+// output ranges are XORed and must be disjoint from the work ranges.
+typedef void (*IFFTButterfly4XorRange)(
+    void* const* work,
+    void* const* xor_output,
+    unsigned distance,
+    uint16_t multiplier_log01,
+    uint16_t multiplier_log23,
+    uint16_t multiplier_log02,
+    uint64_t byte_count);
+
 // Out-of-place forward fused two-layer LCH butterfly.  All input ranges are
 // read-only, all output ranges are disjoint, and inputs must not overlap any
 // output.  Sentinel behavior matches Butterfly4.  Sources are loaded directly
@@ -172,12 +201,17 @@ struct Ops
     Butterfly4 ff8_ifft_butterfly4;
     Butterfly4 ff8_fft_butterfly4;
     FFTButterfly4Out ff8_fft_butterfly4_out;
+    Butterfly4Range ff8_ifft_butterfly4_range;
+    Butterfly4Range ff8_fft_butterfly4_range;
+    IFFTButterfly4XorRange ff8_ifft_butterfly4_xor_range;
     Butterfly2 ff16_ifft_butterfly2;
     Butterfly2 ff16_fft_butterfly2;
     FFTButterfly2Out ff16_fft_butterfly2_out;
     Butterfly4 ff16_ifft_butterfly4;
     Butterfly4 ff16_fft_butterfly4;
     FFTButterfly4Out ff16_fft_butterfly4_out;
+    Butterfly4Range ff16_ifft_butterfly4_range;
+    Butterfly4Range ff16_fft_butterfly4_range;
 };
 
 struct X86Features

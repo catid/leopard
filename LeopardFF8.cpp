@@ -918,6 +918,41 @@ static void IFFT_DIT4(
         log_m01, log_m23, log_m02, bytes);
 }
 
+static void IFFT_DIT4_Range(
+    const backend::Ops& ops,
+    uint64_t bytes,
+    void** work,
+    unsigned dist,
+    const ffe_t log_m01,
+    const ffe_t log_m23,
+    const ffe_t log_m02)
+{
+    if (dist == 1)
+    {
+        IFFT_DIT4(ops, bytes, work, dist,
+            log_m01, log_m23, log_m02);
+        return;
+    }
+#if defined(LEO_TRY_AVX2) || defined(LEO_TRY_SSSE3)
+    // Non-x86 production builds can retain the legacy in-field SIMD path
+    // around the scalar Ops table.  Keep that default-context route native;
+    // x86 production field TUs disable these macros and use the isolated
+    // backend range below.
+    if (&ops == &backend::GetDefaultOps())
+    {
+        for (unsigned i = 0; i < dist; ++i)
+            IFFT_DIT4(ops, bytes, work + i, dist,
+                log_m01, log_m23, log_m02);
+        return;
+    }
+#endif
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    TestIFFTDIT4Calls.fetch_add(dist, std::memory_order_relaxed);
+#endif
+    ops.ff8_ifft_butterfly4_range(
+        work, dist, log_m01, log_m23, log_m02, bytes, true);
+}
+
 
 // {x_out, y_out} ^= IFFT_DIT2( {x_in, y_in} )
 static void IFFT_DIT2_xor(
@@ -1173,6 +1208,39 @@ static void IFFT_DIT4_xor(
         xor_out[dist * 3], work_in[dist * 3], bytes);
 }
 
+static void IFFT_DIT4_xor_Range(
+    const backend::Ops& ops,
+    uint64_t bytes,
+    void** work,
+    void** xor_output,
+    unsigned dist,
+    const ffe_t log_m01,
+    const ffe_t log_m23,
+    const ffe_t log_m02)
+{
+    if (dist == 1)
+    {
+        IFFT_DIT4_xor(ops, bytes, work, xor_output, dist,
+            log_m01, log_m23, log_m02);
+        return;
+    }
+#if defined(LEO_TRY_AVX2) || defined(LEO_TRY_SSSE3)
+    if (&ops == &backend::GetDefaultOps())
+    {
+        for (unsigned i = 0; i < dist; ++i)
+            IFFT_DIT4_xor(ops, bytes, work + i, xor_output + i, dist,
+                log_m01, log_m23, log_m02);
+        return;
+    }
+#endif
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    TestIFFTDIT4XorCalls.fetch_add(dist, std::memory_order_relaxed);
+#endif
+    ops.ff8_ifft_butterfly4_xor_range(
+        work, xor_output, dist,
+        log_m01, log_m23, log_m02, bytes);
+}
+
 
 // Unrolled IFFT for encoder
 static void IFFT_DIT_Encoder(
@@ -1211,34 +1279,15 @@ static void IFFT_DIT_Encoder(
 
             if (dist4 == m && xor_result)
             {
-                // For each set of dist elements:
-                for (unsigned i = r; i < i_end; ++i)
-                {
-                    IFFT_DIT4_xor(
-                        ops,
-                        bytes,
-                        work + i,
-                        xor_result + i,
-                        dist,
-                        log_m01,
-                        log_m23,
-                        log_m02);
-                }
+                IFFT_DIT4_xor_Range(
+                    ops, bytes, work + r, xor_result + r, dist,
+                    log_m01, log_m23, log_m02);
             }
             else
             {
-                // For each set of dist elements:
-                for (unsigned i = r; i < i_end; ++i)
-                {
-                    IFFT_DIT4(
-                        ops,
-                        bytes,
-                        work + i,
-                        dist,
-                        log_m01,
-                        log_m23,
-                        log_m02);
-                }
+                IFFT_DIT4_Range(
+                    ops, bytes, work + r, dist,
+                    log_m01, log_m23, log_m02);
             }
         }
 
@@ -1320,18 +1369,9 @@ static void IFFT_DIT_Decoder(
             const ffe_t log_m02 = skewLUT[i_end + dist];
             const ffe_t log_m23 = skewLUT[i_end + dist * 2];
 
-            // For each set of dist elements:
-            for (unsigned i = r; i < i_end; ++i)
-            {
-                IFFT_DIT4(
-                    ops,
-                    bytes,
-                    work + i,
-                    dist,
-                    log_m01,
-                    log_m23,
-                    log_m02);
-            }
+            IFFT_DIT4_Range(
+                ops, bytes, work + r, dist,
+                log_m01, log_m23, log_m02);
         }
     }
 
@@ -1626,6 +1666,37 @@ static void FFT_DIT4(
         log_m01, log_m23, log_m02, bytes);
 }
 
+static void FFT_DIT4_Range(
+    const backend::Ops& ops,
+    uint64_t bytes,
+    void** work,
+    unsigned dist,
+    const ffe_t log_m01,
+    const ffe_t log_m23,
+    const ffe_t log_m02)
+{
+    if (dist == 1)
+    {
+        FFT_DIT4(ops, bytes, work, dist,
+            log_m01, log_m23, log_m02);
+        return;
+    }
+#if defined(LEO_TRY_AVX2) || defined(LEO_TRY_SSSE3)
+    if (&ops == &backend::GetDefaultOps())
+    {
+        for (unsigned i = 0; i < dist; ++i)
+            FFT_DIT4(ops, bytes, work + i, dist,
+                log_m01, log_m23, log_m02);
+        return;
+    }
+#endif
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    TestFFTDIT4Calls.fetch_add(dist, std::memory_order_relaxed);
+#endif
+    ops.ff8_fft_butterfly4_range(
+        work, dist, log_m01, log_m23, log_m02, bytes, true);
+}
+
 
 // In-place FFT for encoder and decoder
 static void FFT_DIT(
@@ -1648,18 +1719,9 @@ static void FFT_DIT(
             const ffe_t log_m02 = skewLUT[i_end + dist];
             const ffe_t log_m23 = skewLUT[i_end + dist * 2];
 
-            // For each set of dist elements:
-            for (unsigned i = r; i < i_end; ++i)
-            {
-                FFT_DIT4(
-                    ops,
-                    bytes,
-                    work + i,
-                    dist,
-                    log_m01,
-                    log_m23,
-                    log_m02);
-            }
+            FFT_DIT4_Range(
+                ops, bytes, work + r, dist,
+                log_m01, log_m23, log_m02);
         }
     }
 
@@ -1754,13 +1816,10 @@ static void FFT_DIT_FromCoefficients(
             const ffe_t remaining_log_m01 = skewLUT[i_end];
             const ffe_t remaining_log_m02 = skewLUT[i_end + dist];
             const ffe_t remaining_log_m23 = skewLUT[i_end + dist * 2];
-            for (unsigned i = r; i < i_end; ++i)
-            {
-                FFT_DIT4(
-                    ops, bytes, evaluation_work + i, dist,
-                    remaining_log_m01, remaining_log_m23,
-                    remaining_log_m02);
-            }
+            FFT_DIT4_Range(
+                ops, bytes, evaluation_work + r, dist,
+                remaining_log_m01, remaining_log_m23,
+                remaining_log_m02);
         }
     }
     if (dist4 == 2)

@@ -1055,6 +1055,45 @@ static void IFFT_DIT4(
     }
 }
 
+static void IFFT_DIT4_Range(
+    const backend::Ops& ops,
+    uint64_t bytes,
+    void** work,
+    unsigned dist,
+    const ffe_t log_m01,
+    const ffe_t log_m23,
+    const ffe_t log_m02)
+{
+    if (dist == 1)
+    {
+        IFFT_DIT4(ops, bytes, work, dist,
+            log_m01, log_m23, log_m02);
+        return;
+    }
+#if defined(LEO_TRY_AVX2) || defined(LEO_TRY_SSSE3)
+    // Preserve the legacy default-context in-field SIMD route on targets
+    // where the field translation unit intentionally owns it.  Portable x86
+    // production disables these macros and dispatches into an isolated ISA
+    // backend below.
+    if (&ops == &backend::GetDefaultOps())
+    {
+        for (unsigned i = 0; i < dist; ++i)
+            IFFT_DIT4(ops, bytes, work + i, dist,
+                log_m01, log_m23, log_m02);
+        return;
+    }
+#endif
+    const bool use_fused_four_way = UseFusedButterfly4(ops, bytes);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    TestIFFTDIT4Calls.fetch_add(dist, std::memory_order_relaxed);
+    (use_fused_four_way ? TestIFFTDIT4FusedCalls : TestIFFTDIT4SplitCalls)
+        .fetch_add(dist, std::memory_order_relaxed);
+#endif
+    ops.ff16_ifft_butterfly4_range(
+        work, dist, log_m01, log_m23, log_m02,
+        bytes, use_fused_four_way);
+}
+
 
 // Unrolled IFFT for encoder
 static void IFFT_DIT_Encoder(
@@ -1094,18 +1133,9 @@ static void IFFT_DIT_Encoder(
             const ffe_t log_m02 = skewLUT[i_end + dist];
             const ffe_t log_m23 = skewLUT[i_end + dist * 2];
 
-            // For each set of dist elements:
-            for (int i = r; i < (int)i_end; ++i)
-            {
-                IFFT_DIT4(
-                    ops,
-                    bytes,
-                    work + i,
-                    dist,
-                    log_m01,
-                    log_m23,
-                    log_m02);
-            }
+            IFFT_DIT4_Range(
+                ops, bytes, work + r, dist,
+                log_m01, log_m23, log_m02);
         }
 
         // I tried alternating sweeps left->right and right->left to reduce cache misses.
@@ -1167,18 +1197,9 @@ static void IFFT_DIT_Decoder(
             const ffe_t log_m02 = skewLUT[i_end + dist];
             const ffe_t log_m23 = skewLUT[i_end + dist * 2];
 
-            // For each set of dist elements:
-            for (int i = r; i < (int)i_end; ++i)
-            {
-                IFFT_DIT4(
-                    ops,
-                    bytes,
-                    work + i,
-                    dist,
-                    log_m01,
-                    log_m23,
-                    log_m02);
-            }
+            IFFT_DIT4_Range(
+                ops, bytes, work + r, dist,
+                log_m01, log_m23, log_m02);
         }
     }
 
@@ -1536,6 +1557,16 @@ static void FFT_DIT4(
 }
 
 
+static void FFT_DIT4_Range(
+    const backend::Ops& ops,
+    uint64_t bytes,
+    void** work,
+    unsigned dist,
+    const ffe_t log_m01,
+    const ffe_t log_m23,
+    const ffe_t log_m02);
+
+
 // In-place FFT for encoder and decoder
 static void FFT_DIT(
     const backend::Ops& ops,
@@ -1558,18 +1589,9 @@ static void FFT_DIT(
             const ffe_t log_m02 = skewLUT[i_end + dist];
             const ffe_t log_m23 = skewLUT[i_end + dist * 2];
 
-            // For each set of dist elements:
-            for (int i = r; i < (int)i_end; ++i)
-            {
-                FFT_DIT4(
-                    ops,
-                    bytes,
-                    work + i,
-                    dist,
-                    log_m01,
-                    log_m23,
-                    log_m02);
-            }
+            FFT_DIT4_Range(
+                ops, bytes, work + r, dist,
+                log_m01, log_m23, log_m02);
         }
     }
 
@@ -1594,6 +1616,41 @@ static void FFT_DIT(
             }
         }
     }
+}
+
+static void FFT_DIT4_Range(
+    const backend::Ops& ops,
+    uint64_t bytes,
+    void** work,
+    unsigned dist,
+    const ffe_t log_m01,
+    const ffe_t log_m23,
+    const ffe_t log_m02)
+{
+    if (dist == 1)
+    {
+        FFT_DIT4(ops, bytes, work, dist,
+            log_m01, log_m23, log_m02);
+        return;
+    }
+#if defined(LEO_TRY_AVX2) || defined(LEO_TRY_SSSE3)
+    if (&ops == &backend::GetDefaultOps())
+    {
+        for (unsigned i = 0; i < dist; ++i)
+            FFT_DIT4(ops, bytes, work + i, dist,
+                log_m01, log_m23, log_m02);
+        return;
+    }
+#endif
+    const bool use_fused_four_way = UseFusedButterfly4(ops, bytes);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    TestFFTDIT4Calls.fetch_add(dist, std::memory_order_relaxed);
+    (use_fused_four_way ? TestFFTDIT4FusedCalls : TestFFTDIT4SplitCalls)
+        .fetch_add(dist, std::memory_order_relaxed);
+#endif
+    ops.ff16_fft_butterfly4_range(
+        work, dist, log_m01, log_m23, log_m02,
+        bytes, use_fused_four_way);
 }
 
 enum SourceEvaluationCallsite
@@ -1705,13 +1762,10 @@ static void FFT_DIT_FromCoefficients(
             const ffe_t remaining_log_m01 = skewLUT[i_end];
             const ffe_t remaining_log_m02 = skewLUT[i_end + dist];
             const ffe_t remaining_log_m23 = skewLUT[i_end + dist * 2];
-            for (int i = r; i < (int)i_end; ++i)
-            {
-                FFT_DIT4(
-                    ops, bytes, evaluation_work + i, dist,
-                    remaining_log_m01, remaining_log_m23,
-                    remaining_log_m02);
-            }
+            FFT_DIT4_Range(
+                ops, bytes, evaluation_work + r, dist,
+                remaining_log_m01, remaining_log_m23,
+                remaining_log_m02);
         }
     }
     if (dist4 == 2)

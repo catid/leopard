@@ -1155,6 +1155,56 @@ static void SSSE3FF8FFTButterfly4Out(
     }
 }
 
+static void SSSE3FF8IFFTButterfly4Range(
+    void* const* work, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count, bool prefer_fused)
+{
+    (void)prefer_fused;
+    for (unsigned i = 0; i < distance; ++i)
+    {
+        SSSE3FF8IFFTButterfly4Kernel(
+            work[i], work[i + distance],
+            work[i + distance * 2U], work[i + distance * 3U],
+            log01, log23, log02, byte_count);
+    }
+}
+
+static void SSSE3FF8FFTButterfly4Range(
+    void* const* work, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count, bool prefer_fused)
+{
+    (void)prefer_fused;
+    for (unsigned i = 0; i < distance; ++i)
+    {
+        SSSE3FF8FFTButterfly4(
+            work[i], work[i + distance],
+            work[i + distance * 2U], work[i + distance * 3U],
+            log01, log23, log02, byte_count);
+    }
+}
+
+static void SSSE3FF8IFFTButterfly4XorRange(
+    void* const* work, void* const* xor_output, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    for (unsigned i = 0; i < distance; ++i)
+    {
+        SSSE3FF8IFFTButterfly4Kernel(
+            work[i], work[i + distance],
+            work[i + distance * 2U], work[i + distance * 3U],
+            log01, log23, log02, byte_count);
+        SSSE3XorMemory4(
+            xor_output[i], work[i],
+            xor_output[i + distance], work[i + distance],
+            xor_output[i + distance * 2U], work[i + distance * 2U],
+            xor_output[i + distance * 3U], work[i + distance * 3U],
+            byte_count);
+    }
+}
+
 #endif // LEO_HAS_FF8
 
 #ifdef LEO_HAS_FF16
@@ -1450,6 +1500,46 @@ static void SSSE3FF16FFTButterfly4Out(
         }
     }
 }
+
+template<bool Inverse>
+static void SSSE3FF16Butterfly4Range(
+    void* const* work, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count, bool prefer_fused)
+{
+    for (unsigned i = 0; i < distance; ++i)
+    {
+        void* const value0 = work[i];
+        void* const value1 = work[i + distance];
+        void* const value2 = work[i + distance * 2U];
+        void* const value3 = work[i + distance * 3U];
+        if (prefer_fused)
+            SSSE3FF16Butterfly4<Inverse>(value0, value1, value2, value3,
+                log01, log23, log02, byte_count);
+        else
+            SSSE3FF16Butterfly4Split<Inverse>(
+                value0, value1, value2, value3,
+                log01, log23, log02, byte_count);
+    }
+}
+
+static void SSSE3FF16IFFTButterfly4Range(
+    void* const* work, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count, bool prefer_fused)
+{
+    SSSE3FF16Butterfly4Range<true>(work, distance,
+        log01, log23, log02, byte_count, prefer_fused);
+}
+
+static void SSSE3FF16FFTButterfly4Range(
+    void* const* work, unsigned distance,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count, bool prefer_fused)
+{
+    SSSE3FF16Butterfly4Range<false>(work, distance,
+        log01, log23, log02, byte_count, prefer_fused);
+}
 #endif // LEO_HAS_FF16
 
 static const Ops SSSE3Ops = {
@@ -1480,7 +1570,13 @@ static const Ops SSSE3Ops = {
     SSSE3FF8IFFTButterfly4,
     SSSE3FF8FFTButterfly4,
     SSSE3FF8FFTButterfly4Out,
+    SSSE3FF8IFFTButterfly4Range,
+    SSSE3FF8FFTButterfly4Range,
+    SSSE3FF8IFFTButterfly4XorRange,
 #else
+    NULL,
+    NULL,
+    NULL,
     NULL,
     NULL,
     NULL,
@@ -1495,8 +1591,12 @@ static const Ops SSSE3Ops = {
     SSSE3FF16FFTButterfly2Out,
     SSSE3FF16IFFTButterfly4,
     SSSE3FF16FFTButterfly4,
-    SSSE3FF16FFTButterfly4Out
+    SSSE3FF16FFTButterfly4Out,
+    SSSE3FF16IFFTButterfly4Range,
+    SSSE3FF16FFTButterfly4Range
 #else
+    NULL,
+    NULL,
     NULL,
     NULL,
     NULL,
