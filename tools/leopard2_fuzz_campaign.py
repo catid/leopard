@@ -25,6 +25,7 @@ import leopard2_lab as lab  # noqa: E402
 
 
 CAMPAIGN_SCHEMA = "leopard2-fuzz-campaign/v1"
+AUDIT_SCHEMA = "leopard2-fuzz-campaign-audit/v1"
 TARGETS = ("api", "pruned")
 
 
@@ -153,9 +154,21 @@ def audit_campaign(arguments):
     if any(count != expected_per_target for count in counts.values()):
         raise CampaignError("campaign target seed counts are incomplete")
 
+    destination = Path(arguments.output)
+    try:
+        destination.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        raise CampaignError(
+            "cannot clear prior audit output {}: {}".format(
+                destination, error))
+    # Keep the lab's ordinary deterministic merge separate.  The requested
+    # campaign audit artifact is written only after the stricter live-sample
+    # gates below pass, so a failed audit cannot leave a newly forged-looking
+    # "audited" output behind.
     merged = lab.merge_results(
-        manifest, arguments.output_dir,
-        output_path=arguments.output, allow_missing=False)
+        manifest, arguments.output_dir, allow_missing=False)
     if merged["summary"] != {"missing": 0, "success": len(manifest["jobs"])}:
         raise CampaignError(
             "campaign has non-success results: {}".format(merged["summary"]))
@@ -176,6 +189,14 @@ def audit_campaign(arguments):
             raise CampaignError(
                 "job {} violated its runtime allocation".format(
                     result["job_id"]))
+    lab._atomic_write_json(destination, {
+        "schema": AUDIT_SCHEMA,
+        "manifest_digest": manifest["manifest_digest"],
+        "job_count": len(manifest["jobs"]),
+        "distinct_seed_count": len(seeds),
+        "summary": merged["summary"],
+        "merged_results": merged,
+    })
     print("audited {} jobs, {} distinct seeds, one thread per CPU".format(
         len(manifest["jobs"]), len(seeds)))
 

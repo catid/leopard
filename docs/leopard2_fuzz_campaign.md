@@ -55,6 +55,12 @@ ASan and UBSan applied to both the codec and executables. Then run:
       --output-dir build/fuzz-campaign/results \
       --output build/fuzz-campaign/audited-results.json
 
+The final output uses `leopard2-fuzz-campaign-audit/v1` and embeds the ordinary
+deterministic lab merge. It is written atomically only after every stricter
+campaign gate passes; a failed audit removes the requested output rather than
+leaving a newly generated artifact that could be mistaken for accepted fuzz
+evidence.
+
 The 60 stable seeds are distinct. CPU assignment may repeat between jobs, but
 the scheduler never runs jobs with overlapping CPU sets simultaneously. Even
 the generic `--allow-cpu-overlap` mode will serialize work when aggregate
