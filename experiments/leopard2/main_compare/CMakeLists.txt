@@ -135,9 +135,17 @@ if(LEO_MAIN_PYTHON_EXECUTABLE)
     add_test(NAME leopard_main_compare_runner_selftest
         COMMAND "${LEO_MAIN_PYTHON_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/test_run_abba.py")
+    # Both Python suites exercise the real per-UID stable lease anchor.  They
+    # must remain mutually exclusive even when the standalone project is run
+    # with ctest -j; an expected nonblocking lock collision is not a test of
+    # either suite's assertions.
+    set_tests_properties(leopard_main_compare_runner_selftest PROPERTIES
+        RESOURCE_LOCK leopard2_global_evidence_lease)
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_test(NAME leopard_evidence_process_containment_faults
             COMMAND "${LEO_MAIN_PYTHON_EXECUTABLE}"
                 "${CMAKE_CURRENT_SOURCE_DIR}/../test_process_containment.py")
+        set_tests_properties(leopard_evidence_process_containment_faults PROPERTIES
+            RESOURCE_LOCK leopard2_global_evidence_lease)
     endif()
 endif()
