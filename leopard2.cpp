@@ -2672,6 +2672,31 @@ static void ExecuteTransformEncodePass(
 #endif
 }
 
+static bool UseCoarseR1Xor(
+    const leo2_codec* codec,
+    size_t shard_bytes)
+{
+    if (shard_bytes < 1024)
+        return false;
+    uint32_t minimum_originals = 0;
+    switch (codec->context->backend)
+    {
+    case LEO2_BACKEND_SCALAR:
+    case LEO2_BACKEND_SSSE3:
+        minimum_originals = 5;
+        break;
+    case LEO2_BACKEND_AVX2:
+    case LEO2_BACKEND_AVX512:
+        minimum_originals = 7;
+        break;
+    default:
+        /* Native NEON and future backends retain the mature paired loop until
+           a coarse implementation has backend-specific measurements. */
+        return false;
+    }
+    return codec->original_count >= minimum_originals;
+}
+
 static void ExecuteSingleSideEncode(
     const leo2_codec* codec,
     size_t shard_bytes,
@@ -2692,6 +2717,12 @@ static void ExecuteSingleSideEncode(
     LEO_DEBUG_ASSERT(codec->recovery_count == 1);
     if (!recovery[0])
         return;
+    if (UseCoarseR1Xor(codec, shard_bytes))
+    {
+        ops.xor_memory_sources(recovery[0], original[0], original + 1,
+            codec->original_count - 1, shard_bytes);
+        return;
+    }
     uint8_t* const output = static_cast<uint8_t*>(recovery[0]);
     memcpy(output, original[0], shard_bytes);
     uint32_t i = 1;
@@ -5373,7 +5404,14 @@ static leo2_result DecodePlanExecuteInternal(
         const uint32_t missing = plan->missing_originals[0];
         if (missing >= codec->original_count || !recovery[0])
             return LEO2_INTERNAL_ERROR;
-        uint8_t* output = static_cast<uint8_t*>(restored_original[missing]);
+        if (UseCoarseR1Xor(codec, static_cast<size_t>(shard_bytes)))
+        {
+            ops.xor_memory_sources(restored_original[missing], recovery[0],
+                original, codec->original_count, shard_bytes);
+            return LEO2_SUCCESS;
+        }
+        uint8_t* output =
+            static_cast<uint8_t*>(restored_original[missing]);
         memcpy(output, recovery[0], static_cast<size_t>(shard_bytes));
         const void* waiting = NULL;
         for (uint32_t i = 0; i < codec->original_count; ++i)
@@ -5502,6 +5540,18 @@ static leo2_result DecodeBatchCompatibilityInternal(
        scratch, sizes, or aliases and do not start the worker pool. */
     if (item_count == 0 || plan->no_op)
         return LEO2_SUCCESS;
+    /* A one-item batch has no cross-item aliases.  Match the encoder's
+       one-item fast path: run the ordinary validator once while protecting
+       the batch descriptor, rather than repeating addressability scans and
+       constructing/sorting K+R range tables in the general batch preflight. */
+    if (item_count == 1)
+    {
+        const ProtectedMetadataSpan item_metadata = { items, item_bytes };
+        return DecodePlanExecuteInternal(plan, items[0].shard_bytes,
+            items[0].original, items[0].recovery,
+            items[0].restored_original, items[0].scratch,
+            items[0].scratch_bytes, false, &item_metadata, 1, false);
+    }
     DecodeBatchTaskContext batch = {
         plan, items, item_bytes, item_range, item_count > 1
     };

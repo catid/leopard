@@ -646,6 +646,68 @@ void TestSingleEncodeItemFastPath(Fixture& fixture)
         LEO2_OVERLAP, "single-item output/input overlap");
 }
 
+void TestSingleDecodeItemFastPath(Fixture& fixture)
+{
+    const void* original[3] = {
+        NULL, fixture.original_a[1], fixture.original_a[2]
+    };
+    const void* recovery[2] = { &fixture.parity_a[0][0], NULL };
+    Bytes restored(Fixture::kLongBytes, 0xcc);
+    void* restored_pointers[3] = { &restored[0], NULL, NULL };
+    AlignedBuffer scratch(fixture.decode_long);
+    leo2_decode_batch_item item = {
+        Fixture::kLongBytes, original, recovery, restored_pointers,
+        scratch.data(), scratch.size()
+    };
+    RequireResult(leo2_decode_plan_execute_batch(fixture.plan, &item, 1),
+        LEO2_SUCCESS, "single-item decode batch");
+    Require(restored == fixture.source_a[0],
+        "single-item decode batch recovery mismatch");
+
+    /* The shortcut must retain the batch descriptor as protected immutable
+       metadata and reject before an output can overwrite it. */
+    alignas(64) leo2_decode_batch_item descriptor_item;
+    void* descriptor_outputs[3] = { &descriptor_item, NULL, NULL };
+    descriptor_item.shard_bytes = Fixture::kLongBytes;
+    descriptor_item.original = original;
+    descriptor_item.recovery = recovery;
+    descriptor_item.restored_original = descriptor_outputs;
+    descriptor_item.scratch = scratch.data();
+    descriptor_item.scratch_bytes = scratch.size();
+    const leo2_decode_batch_item descriptor_before = descriptor_item;
+    RequireResult(leo2_decode_plan_execute_batch(
+        fixture.plan, &descriptor_item, 1), LEO2_OVERLAP,
+        "single-item decode output/descriptor overlap");
+    Require(descriptor_item.shard_bytes == descriptor_before.shard_bytes &&
+            descriptor_item.original == descriptor_before.original &&
+            descriptor_item.recovery == descriptor_before.recovery &&
+            descriptor_item.restored_original ==
+                descriptor_before.restored_original &&
+            descriptor_item.scratch == descriptor_before.scratch &&
+            descriptor_item.scratch_bytes == descriptor_before.scratch_bytes,
+        "single-item decode rejection modified descriptor metadata");
+
+    alignas(64) leo2_decode_batch_item scratch_item = item;
+    scratch_item.scratch = &scratch_item;
+    scratch_item.scratch_bytes = fixture.decode_long;
+    const leo2_decode_batch_item scratch_before = scratch_item;
+    RequireResult(leo2_decode_plan_execute_batch(
+        fixture.plan, &scratch_item, 1), LEO2_OVERLAP,
+        "single-item decode scratch/descriptor overlap");
+    Require(scratch_item.shard_bytes == scratch_before.shard_bytes &&
+            scratch_item.original == scratch_before.original &&
+            scratch_item.recovery == scratch_before.recovery &&
+            scratch_item.restored_original ==
+                scratch_before.restored_original &&
+            scratch_item.scratch == scratch_before.scratch &&
+            scratch_item.scratch_bytes == scratch_before.scratch_bytes,
+        "single-item decode scratch rejection modified descriptor metadata");
+
+    restored_pointers[0] = const_cast<void*>(fixture.original_a[1]);
+    RequireResult(leo2_decode_plan_execute_batch(fixture.plan, &item, 1),
+        LEO2_OVERLAP, "single-item decode output/input overlap");
+}
+
 void TestEncodeConflicts(Fixture& fixture)
 {
     void* no_output[2] = { NULL, NULL };
@@ -1410,6 +1472,7 @@ void Run(uint32_t thread_count)
     Fixture fixture(thread_count);
     TestValidSharedInputs(fixture);
     TestSingleEncodeItemFastPath(fixture);
+    TestSingleDecodeItemFastPath(fixture);
     TestEncodeConflicts(fixture);
     TestDecodeConflicts(fixture);
     TestValidSharedInputs(fixture);
