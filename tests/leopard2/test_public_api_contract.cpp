@@ -53,6 +53,20 @@
 
 extern "C" {
 uint32_t leo2_test_context_worker_count(const leo2_context* context);
+int leo2_test_static_batch_task_range(
+    size_t task_count,
+    uint32_t participant_count,
+    uint32_t participant_index,
+    size_t* begin_out,
+    size_t* end_out);
+size_t leo2_test_context_last_batch_task_count(const leo2_context* context);
+uint32_t leo2_test_context_last_batch_participant_count(
+    const leo2_context* context);
+int leo2_test_context_last_batch_item_execution(
+    const leo2_context* context,
+    size_t index,
+    uint32_t* count_out,
+    uint32_t* participant_out);
 void leo2_test_set_thread_start_fault(int enabled);
 unsigned leo2_test_thread_start_fault_consumptions(void);
 }
@@ -1652,6 +1666,129 @@ void run_decode_batch_call(const BatchFixture& fixture, unsigned call_index)
             "concurrent decode batch restored wrong bytes");
 }
 
+void require_static_schedule(
+    size_t task_count,
+    uint32_t participant_count,
+    Counts* counts)
+{
+    size_t previous_end = 0;
+    size_t minimum_count = std::numeric_limits<size_t>::max();
+    size_t maximum_count = 0;
+    for (uint32_t participant = 0; participant < participant_count;
+         ++participant)
+    {
+        size_t begin = std::numeric_limits<size_t>::max();
+        size_t end = std::numeric_limits<size_t>::max();
+        require(leo2_test_static_batch_task_range(task_count,
+                    participant_count, participant, &begin, &end) != 0,
+            "static batch range query failed");
+        require(begin == previous_end,
+            "static batch ranges were not contiguous");
+        require(end >= begin && end <= task_count,
+            "static batch range escaped task bounds");
+
+        size_t repeat_begin = 0;
+        size_t repeat_end = 0;
+        require(leo2_test_static_batch_task_range(task_count,
+                    participant_count, participant, &repeat_begin,
+                    &repeat_end) != 0 &&
+                repeat_begin == begin && repeat_end == end,
+            "static batch range was not deterministic");
+        const size_t count = end - begin;
+        const size_t expected_count = task_count / participant_count +
+            (participant < task_count % participant_count ? 1 : 0);
+        require(count == expected_count,
+            "static batch remainder was assigned to the wrong slot");
+        minimum_count = std::min(minimum_count, count);
+        maximum_count = std::max(maximum_count, count);
+        previous_end = end;
+        counts->scheduler_checks += 5;
+    }
+    require(previous_end == task_count,
+        "static batch ranges did not cover every item");
+    require(maximum_count - minimum_count <= 1,
+        "static batch ranges were not balanced");
+    counts->scheduler_checks += 2;
+}
+
+void require_last_static_schedule(
+    leo2_context* context,
+    size_t task_count,
+    uint32_t participant_count,
+    Counts* counts)
+{
+    require(leo2_test_context_last_batch_task_count(context) == task_count,
+        "pool did not record the expected static task count");
+    require(leo2_test_context_last_batch_participant_count(context) ==
+            participant_count,
+        "pool did not use the expected static participant count");
+    counts->scheduler_checks += 2;
+    require_static_schedule(task_count, participant_count, counts);
+    for (uint32_t participant = 0; participant < participant_count;
+         ++participant)
+    {
+        size_t begin = 0;
+        size_t end = 0;
+        require(leo2_test_static_batch_task_range(task_count,
+                    participant_count, participant, &begin, &end) != 0,
+            "integrated static range query failed");
+        for (size_t item = begin; item < end; ++item)
+        {
+            uint32_t execution_count = 0;
+            uint32_t execution_participant = UINT32_MAX;
+            require(leo2_test_context_last_batch_item_execution(context,
+                        item, &execution_count,
+                        &execution_participant) != 0,
+                "static scheduler did not trace an executed item");
+            require(execution_count == 1,
+                "static scheduler did not execute an item exactly once");
+            require(execution_participant == participant,
+                "static scheduler executed an item in the wrong range");
+            counts->scheduler_checks += 3;
+        }
+    }
+    uint32_t invalid_count = 0x12345678u;
+    uint32_t invalid_participant = 0x87654321u;
+    require(leo2_test_context_last_batch_item_execution(context,
+                task_count, &invalid_count, &invalid_participant) == 0 &&
+            invalid_count == 0x12345678u &&
+            invalid_participant == 0x87654321u,
+        "out-of-range execution trace query modified outputs");
+    ++counts->scheduler_checks;
+}
+
+void test_static_batch_partition_math(Counts* counts)
+{
+    const size_t task_counts[] = {
+        0, 1, 2, 3, 7, 8, 9, 127, 128, 129, 1024,
+        static_cast<size_t>(UINT32_MAX),
+        std::numeric_limits<size_t>::max()
+    };
+    const uint32_t participant_counts[] = { 1, 2, 3, 4, 7, 8, 31, 128 };
+    for (size_t task_i = 0;
+         task_i < sizeof(task_counts) / sizeof(task_counts[0]); ++task_i)
+        for (size_t participant_i = 0;
+             participant_i < sizeof(participant_counts) /
+                 sizeof(participant_counts[0]); ++participant_i)
+            require_static_schedule(task_counts[task_i],
+                participant_counts[participant_i], counts);
+
+    size_t begin = 0x1234;
+    size_t end = 0x5678;
+    require(leo2_test_static_batch_task_range(
+                8, 0, 0, &begin, &end) == 0 &&
+            begin == 0x1234 && end == 0x5678,
+        "zero-participant static range query modified outputs");
+    require(leo2_test_static_batch_task_range(
+                8, 4, 4, &begin, &end) == 0 &&
+            begin == 0x1234 && end == 0x5678,
+        "out-of-range participant query modified outputs");
+    require(leo2_test_static_batch_task_range(
+                8, 4, 0, NULL, &end) == 0 && end == 0x5678,
+        "null static range output was accepted");
+    counts->scheduler_checks += 3;
+}
+
 void test_concurrent_shared_context_batches(
     leo2_context* context,
     Counts* counts)
@@ -1705,9 +1842,56 @@ void test_concurrent_shared_context_batches(
         require(errors[caller].empty(), errors[caller]);
     require(leo2_test_context_worker_count(context) == 3,
         "concurrent first use did not start exactly one persistent pool");
+    require_last_static_schedule(context, 4, 4, counts);
     ++counts->scheduler_checks;
     counts->concurrent_batches +=
         static_cast<uint64_t>(caller_count) * repetitions;
+}
+
+void test_nested_application_thread_batches(
+    leo2_context* context,
+    Counts* counts)
+{
+    const BatchFixture fixture(context, 47);
+    static const unsigned kInnerCallers = 4;
+    std::vector<std::string> errors(kInnerCallers);
+    std::atomic<unsigned> ready(0);
+    std::atomic<bool> start(false);
+
+    std::thread outer([&]() {
+        std::vector<std::thread> inner;
+        for (unsigned caller = 0; caller < kInnerCallers; ++caller)
+        {
+            inner.push_back(std::thread([&, caller]() {
+                ready.fetch_add(1, std::memory_order_release);
+                while (!start.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                try
+                {
+                    if ((caller & 1u) == 0)
+                        run_encode_batch_call(fixture, 100 + caller);
+                    else
+                        run_decode_batch_call(fixture, 100 + caller);
+                }
+                catch (const std::exception& error)
+                {
+                    errors[caller] = error.what();
+                }
+            }));
+        }
+        while (ready.load(std::memory_order_acquire) != kInnerCallers)
+            std::this_thread::yield();
+        start.store(true, std::memory_order_release);
+        for (size_t i = 0; i < inner.size(); ++i)
+            inner[i].join();
+    });
+    outer.join();
+
+    for (size_t caller = 0; caller < errors.size(); ++caller)
+        require(errors[caller].empty(), errors[caller]);
+    require_last_static_schedule(context, 4, 4, counts);
+    ++counts->scheduler_checks;
+    counts->concurrent_batches += kInnerCallers;
 }
 
 void test_lazy_thread_start_failure(Counts* counts)
@@ -1790,13 +1974,28 @@ void test_incremental_lazy_thread_growth(Counts* counts)
     run_encode_batch_call(fixture, 0, 2);
     require(leo2_test_context_worker_count(context.context) == 1,
         "two-item batch started unused workers");
+    require_last_static_schedule(context.context, 2, 2, counts);
     run_encode_batch_call(fixture, 1, 4);
     require(leo2_test_context_worker_count(context.context) == 3,
         "larger batch did not grow the persistent pool exactly");
+    require_last_static_schedule(context.context, 4, 4, counts);
     run_encode_batch_call(fixture, 2, 2);
     require(leo2_test_context_worker_count(context.context) == 3,
         "smaller batch discarded persistent workers");
-    counts->scheduler_checks += 3;
+    require_last_static_schedule(context.context, 2, 4, counts);
+    run_encode_batch_call(fixture, 3, 10);
+    require(leo2_test_context_worker_count(context.context) == 7,
+        "large batch did not use the configured worker budget");
+    require_last_static_schedule(context.context, 10, 8, counts);
+    run_encode_batch_call(fixture, 4, 3);
+    require(leo2_test_context_worker_count(context.context) == 7,
+        "small batch discarded the full persistent worker set");
+    require_last_static_schedule(context.context, 3, 8, counts);
+    run_decode_batch_call(fixture, 5);
+    require(leo2_test_context_worker_count(context.context) == 7,
+        "decode batch changed the persistent worker set");
+    require_last_static_schedule(context.context, 4, 8, counts);
+    counts->scheduler_checks += 6;
 }
 
 void test_deterministic_batch_failures(leo2_context* context, Counts* counts)
@@ -2249,6 +2448,7 @@ int main()
     {
         Counts counts;
         test_result_strings(&counts);
+        test_static_batch_partition_math(&counts);
 
         leo2_context_options options;
         memset(&options, 0, sizeof(options));
@@ -2268,6 +2468,7 @@ int main()
         test_ragged_decode_tail_staging_slopes(context.context, &counts);
         test_ragged_encode_tail_staging_slopes(context.context, &counts);
         test_concurrent_shared_context_batches(context.context, &counts);
+        test_nested_application_thread_batches(context.context, &counts);
         test_incremental_lazy_thread_growth(&counts);
         test_lazy_thread_start_failure(&counts);
         test_deterministic_batch_failures(context.context, &counts);

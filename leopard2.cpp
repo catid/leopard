@@ -262,10 +262,41 @@ static const uint64_t kDirectMinimumMeasuredBytes = 1024;
 static const size_t kScalableBatchPreflightMinItems = 9;
 #ifdef LEO2_ENABLE_TEST_HOOKS
 static const size_t kSparseEncodeScheduleBudget = 65536;
+static const size_t kTestBatchScheduleTraceItems = 256;
 #endif
 
 typedef leo2_result (*BatchTaskFunction)(void* context, size_t index);
 typedef leo2_result (*BatchPreflightFunction)(void* context);
+
+struct BatchTaskRange
+{
+    size_t begin;
+    size_t end;
+};
+
+static BatchTaskRange StaticBatchTaskRange(
+    size_t task_count,
+    size_t participant_count,
+    size_t participant_index)
+{
+    BatchTaskRange range = { 0, 0 };
+    if (participant_count == 0 || participant_index >= participant_count)
+        return range;
+
+    /*
+        Give the first remainder participants one extra item.  This form does
+        not multiply task_count by a participant index, so the calculation is
+        valid even at SIZE_MAX.  The ranges are contiguous, differ by at most
+        one item, and cover [0, task_count) exactly once.
+    */
+    const size_t base = task_count / participant_count;
+    const size_t remainder = task_count % participant_count;
+    range.begin = participant_index * base +
+        std::min(participant_index, remainder);
+    range.end = range.begin + base +
+        (participant_index < remainder ? 1 : 0);
+    return range;
+}
 
 #ifdef LEO2_ENABLE_TEST_HOOKS
 static std::atomic<bool> g_test_thread_start_fault(false);
@@ -358,10 +389,23 @@ public:
         , function_(NULL)
         , function_context_(NULL)
         , task_count_(0)
-        , next_task_(0)
+        , participant_count_(0)
         , failure_(0)
         , completed_workers_(0)
-    {}
+#ifdef LEO2_ENABLE_TEST_HOOKS
+        , test_last_task_count_(0)
+        , test_last_participant_count_(0)
+#endif
+    {
+#ifdef LEO2_ENABLE_TEST_HOOKS
+        for (size_t i = 0; i < kTestBatchScheduleTraceItems; ++i)
+        {
+            test_execution_counts_[i].store(0, std::memory_order_relaxed);
+            test_execution_participants_[i].store(
+                UINT32_MAX, std::memory_order_relaxed);
+        }
+#endif
+    }
 
     ~leo2_thread_pool()
     {
@@ -373,6 +417,34 @@ public:
     {
         std::lock_guard<std::mutex> lock(run_mutex_);
         return static_cast<uint32_t>(workers_.size());
+    }
+
+    size_t TestLastTaskCount()
+    {
+        std::lock_guard<std::mutex> lock(run_mutex_);
+        return test_last_task_count_;
+    }
+
+    uint32_t TestLastParticipantCount()
+    {
+        std::lock_guard<std::mutex> lock(run_mutex_);
+        return test_last_participant_count_;
+    }
+
+    bool TestLastItemExecution(
+        size_t index,
+        uint32_t& count,
+        uint32_t& participant)
+    {
+        std::lock_guard<std::mutex> lock(run_mutex_);
+        if (index >= test_last_task_count_ ||
+            index >= kTestBatchScheduleTraceItems)
+            return false;
+        count = test_execution_counts_[index].load(
+            std::memory_order_relaxed);
+        participant = test_execution_participants_[index].load(
+            std::memory_order_relaxed);
+        return true;
     }
 #endif
 
@@ -412,9 +484,23 @@ public:
             function_ = function;
             function_context_ = function_context;
             task_count_ = task_count;
-            next_task_.store(0, std::memory_order_relaxed);
+            participant_count_ = workers_.size() + 1;
             failure_.store(PackFailure(task_count, LEO2_SUCCESS), std::memory_order_relaxed);
             completed_workers_ = 0;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+            test_last_task_count_ = task_count_;
+            test_last_participant_count_ =
+                static_cast<uint32_t>(participant_count_);
+            const size_t trace_count = std::min(
+                task_count_, kTestBatchScheduleTraceItems);
+            for (size_t i = 0; i < trace_count; ++i)
+            {
+                test_execution_counts_[i].store(
+                    0, std::memory_order_relaxed);
+                test_execution_participants_[i].store(
+                    UINT32_MAX, std::memory_order_relaxed);
+            }
+#endif
             ++generation_;
         }
         work_ready_.notify_all();
@@ -423,7 +509,7 @@ public:
         const int saved_openmp_threads = omp_get_max_threads();
         omp_set_num_threads(1);
 #endif
-        ExecuteTasks();
+        ExecuteTasks(0);
 #ifdef _OPENMP
         omp_set_num_threads(saved_openmp_threads);
 #endif
@@ -465,8 +551,12 @@ private:
                 seen_generation = generation_;
             }
             while (workers_.size() < target_workers)
+            {
+                const size_t participant_index = workers_.size() + 1;
                 workers_.push_back(std::thread(
-                    &leo2_thread_pool::Worker, this, seen_generation));
+                    &leo2_thread_pool::Worker, this,
+                    participant_index, seen_generation));
+            }
         }
         catch (...)
         {
@@ -500,18 +590,30 @@ private:
         {}
     }
 
-    void ExecuteTasks()
+    void ExecuteTasks(size_t participant_index)
     {
-        for (;;)
+        const BatchTaskRange range = StaticBatchTaskRange(
+            task_count_, participant_count_, participant_index);
+        /* Each item owns its caller-provided scratch.  A stable, disjoint
+           range therefore gives this participant exclusive ownership of all
+           per-item scratch that it touches for the duration of the batch. */
+        for (size_t index = range.begin; index < range.end; ++index)
         {
-            const size_t index = next_task_.fetch_add(1, std::memory_order_relaxed);
-            if (index >= task_count_)
-                break;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+            if (index < kTestBatchScheduleTraceItems)
+            {
+                test_execution_participants_[index].store(
+                    static_cast<uint32_t>(participant_index),
+                    std::memory_order_relaxed);
+                test_execution_counts_[index].fetch_add(
+                    1, std::memory_order_relaxed);
+            }
+#endif
             RecordFailure(index, function_(function_context_, index));
         }
     }
 
-    void Worker(uint64_t seen_generation)
+    void Worker(size_t participant_index, uint64_t seen_generation)
     {
 #ifdef _OPENMP
         omp_set_num_threads(1);
@@ -527,7 +629,7 @@ private:
                     return;
                 seen_generation = generation_;
             }
-            ExecuteTasks();
+            ExecuteTasks(participant_index);
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 ++completed_workers_;
@@ -562,9 +664,17 @@ private:
     BatchTaskFunction function_;
     void* function_context_;
     size_t task_count_;
-    std::atomic<size_t> next_task_;
+    size_t participant_count_;
     std::atomic<uint64_t> failure_;
     size_t completed_workers_;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    size_t test_last_task_count_;
+    uint32_t test_last_participant_count_;
+    std::atomic<uint32_t>
+        test_execution_counts_[kTestBatchScheduleTraceItems];
+    std::atomic<uint32_t>
+        test_execution_participants_[kTestBatchScheduleTraceItems];
+#endif
 };
 
 namespace {
@@ -4322,6 +4432,57 @@ LEO2_EXPORT uint32_t leo2_test_context_worker_count(
     return context && context->pool
         ? context->pool->TestWorkerCount()
         : 0;
+}
+
+LEO2_EXPORT int leo2_test_static_batch_task_range(
+    size_t task_count,
+    uint32_t participant_count,
+    uint32_t participant_index,
+    size_t* begin_out,
+    size_t* end_out)
+{
+    if (!begin_out || !end_out || participant_count == 0 ||
+        participant_index >= participant_count)
+        return 0;
+    const BatchTaskRange range = StaticBatchTaskRange(
+        task_count, participant_count, participant_index);
+    *begin_out = range.begin;
+    *end_out = range.end;
+    return 1;
+}
+
+LEO2_EXPORT size_t leo2_test_context_last_batch_task_count(
+    const leo2_context* context)
+{
+    return context && context->pool
+        ? context->pool->TestLastTaskCount()
+        : 0;
+}
+
+LEO2_EXPORT uint32_t leo2_test_context_last_batch_participant_count(
+    const leo2_context* context)
+{
+    return context && context->pool
+        ? context->pool->TestLastParticipantCount()
+        : 0;
+}
+
+LEO2_EXPORT int leo2_test_context_last_batch_item_execution(
+    const leo2_context* context,
+    size_t index,
+    uint32_t* count_out,
+    uint32_t* participant_out)
+{
+    if (!context || !context->pool || !count_out || !participant_out)
+        return 0;
+    uint32_t count = 0;
+    uint32_t participant = 0;
+    if (!context->pool->TestLastItemExecution(
+            index, count, participant))
+        return 0;
+    *count_out = count;
+    *participant_out = participant;
+    return 1;
 }
 
 LEO2_EXPORT void leo2_test_set_thread_start_fault(int enabled)
