@@ -29,15 +29,23 @@ The same scope binds both exact Leopard-main and candidate source identities,
 compiler bytes/version, CMake cache, Release `-O3` compile semantics, archive
 and executable bytes, exact archive and executable recipe content, complete
 compile/object/link closure,
-plus both runtime-library closures. Completeness is independently checkable:
-the scope requires the producer's exact four-member/adapter baseline and
-twelve-member/benchmark candidate translation-unit sets; re-parses retained raw
-`ldd` bytes and requires exactly one loader; recomputes each retained raw Git
+plus both runtime-library closures. Retained internal consistency is independently
+recomputed: the scope requires the producer's exact four-member/adapter baseline
+and twelve-member/benchmark candidate translation-unit sets; re-parses retained
+raw `ldd` bytes and requires exactly one loader; recomputes each retained raw Git
 commit object's object ID and tree; and matches cache/NUMA summaries against
-their exact sysfs inventories and online-list bytes. Runtime file records retain
-and must equal their raw loader paths, while cache summaries must match a
-separately retained canonical sysfs directory listing. A coherent deletion from
-both sides is therefore not an equivalent environment.
+their retained inventories and online-list bytes. Runtime file records retain
+and must equal their canonical raw loader paths. Cache hierarchy, summary, and
+canonical directory-listing records must agree three ways.
+
+Those runtime and cache checks do not authenticate an external observation
+against a writer able to coherently replace and re-sign every input in the
+unkeyed bundle. In particular, coherently deleting an ordinary shared-library
+line from both retained `ldd` representations, or a cache index from all three
+retained cache representations, remains internally consistent. Preserve the
+bundle in an immutable/authenticated store or add an external signature when
+that adversary is in scope. Cross-bundle comparison still rejects a deletion or
+environment change present in only one gate bundle.
 
 Baseline source/build roots and candidate
 source/build roots use four distinct markers, with longest paths replaced

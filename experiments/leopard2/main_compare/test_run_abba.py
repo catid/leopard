@@ -31,6 +31,29 @@ sys.modules[SPEC.name] = runner
 SPEC.loader.exec_module(runner)
 
 
+def load_plan_runner():
+    path = MODULE_PATH.parents[1] / "decoder_dispatch" / \
+        "plan_balanced_promotion.py"
+    module_name = "main_compare_test_balanced_promotion"
+    existing = sys.modules.get(module_name)
+    if existing is not None:
+        return existing
+    module_spec = importlib.util.spec_from_file_location(module_name, path)
+    assert module_spec is not None and module_spec.loader is not None
+    module = importlib.util.module_from_spec(module_spec)
+    decoder_directory = str(path.parent)
+    inserted = decoder_directory not in sys.path
+    if inserted:
+        sys.path.insert(0, decoder_directory)
+    try:
+        sys.modules[module_name] = module
+        module_spec.loader.exec_module(module)
+    finally:
+        if inserted:
+            sys.path.remove(decoder_directory)
+    return module
+
+
 BASELINE_TREE = "b7c8830d96a978f6ec14fe747095f066e351ae72"
 BASELINE_COMMIT_BASE64 = (
     "dHJlZSBiN2M4ODMwZDk2YTk3OGY2ZWMxNGZlNzQ3MDk1ZjA2NmUzNTFhZTcyCnBhcmVudCAy"
@@ -952,9 +975,21 @@ class MainCompareRunnerTests(unittest.TestCase):
                 with self.assertRaises(runner.EvidenceError):
                     runner.validate_cell(runner.Cell(**values))
 
-    def test_uniformly_incomplete_v5_identities_fail_offline_verify_and_select(self) -> None:
-        plan_runner = (MODULE_PATH.parents[1] / "decoder_dispatch" /
-                       "plan_balanced_promotion.py")
+    def test_uniformly_incomplete_v5_identities_fail_offline_verify_and_promotion(
+        self,
+    ) -> None:
+        plan = load_plan_runner()
+
+        with tempfile.TemporaryDirectory() as directory:
+            valid_manifest = write_complete_evidence_bundle(
+                Path(directory), synthetic_raw())
+            runner.verify_campaign(argparse.Namespace(
+                manifest=valid_manifest, no_current_input_check=True))
+            document, scope = plan.verify_exact_manifest(valid_manifest)
+            self.assertEqual(document["schema"], runner.MANIFEST_SCHEMA)
+            self.assertEqual(
+                plan.validate_evidence_scope(scope)["schema"],
+                "leopard2-balanced-evidence-scope/v3")
 
         def missing_sources(value: dict) -> None:
             for role in ("baseline", "candidate"):
@@ -1032,7 +1067,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 build["archive_link_recipe"]["sha256"] = content["sha256"]
             synchronize_identity(value)
 
-        def coherently_truncated_runtime(value: dict) -> None:
+        def missing_dynamic_loader(value: dict) -> None:
             for role in ("baseline", "candidate"):
                 closure = value["identities_initial"][f"{role}_runtime_closure"]
                 closure["dependencies"] = [item for item in closure["dependencies"]
@@ -1053,6 +1088,19 @@ class MainCompareRunnerTests(unittest.TestCase):
                 libm = next(item for item in dependencies
                             if item["soname"] == "libm.so.6")
                 libc["file"], libm["file"] = libm["file"], libc["file"]
+            synchronize_identity(value)
+
+        def noncanonical_runtime_loader_paths(value: dict) -> None:
+            for role in ("baseline", "candidate"):
+                closure = value["identities_initial"][f"{role}_runtime_closure"]
+                libc = next(item for item in closure["dependencies"]
+                            if item["soname"] == "libc.so.6")
+                libc["loader_path"] = "/lib/./libc.so.6"
+                libc["file"]["path"] = libc["loader_path"]
+                text = closure["raw_ldd_output"]["text"].replace(
+                    "/lib/libc.so.6", libc["loader_path"])
+                closure["raw_ldd_output"] = runner.exact_text_content(
+                    text, f"noncanonical {role} ldd output")
             synchronize_identity(value)
 
         def truncated_cache_inventory(value: dict) -> None:
@@ -1083,8 +1131,10 @@ class MainCompareRunnerTests(unittest.TestCase):
             "reduced-outputs": reduced_outputs,
             "topology-only-host": topology_only_host,
             "truncated-tu-closure": truncated_tu_closure,
-            "coherently-truncated-runtime": coherently_truncated_runtime,
+            "missing-dynamic-loader": missing_dynamic_loader,
             "swapped-runtime-file-records": swapped_runtime_file_records,
+            "noncanonical-runtime-loader-paths":
+                noncanonical_runtime_loader_paths,
             "truncated-cache-inventory": truncated_cache_inventory,
             "empty-numa-summary": empty_numa_summary,
             "source-tree-commit-mismatch": source_tree_commit_mismatch,
@@ -1099,14 +1149,91 @@ class MainCompareRunnerTests(unittest.TestCase):
                 with self.assertRaises(runner.EvidenceError):
                     runner.verify_campaign(argparse.Namespace(
                         manifest=manifest_path, no_current_input_check=True))
-                completed = subprocess.run([
-                    sys.executable, str(plan_runner), "select",
-                    "--plan", str(root / "unused-plan"),
-                    "--gate-manifest", str(manifest_path),
-                    "--output", str(root / "survivors.json"),
-                ], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-                self.assertNotEqual(completed.returncode, 0)
-                self.assertFalse((root / "survivors.json").exists())
+                with self.assertRaises(plan.PlanError):
+                    plan.verify_exact_manifest(manifest_path)
+
+    def test_coherent_ordinary_runtime_rewrite_is_internal_consistency_only(
+        self,
+    ) -> None:
+        plan = load_plan_runner()
+        value = synthetic_raw()
+        for role in ("baseline", "candidate"):
+            closure = value["identities_initial"][f"{role}_runtime_closure"]
+            closure["dependencies"] = [
+                dependency for dependency in closure["dependencies"]
+                if dependency["soname"] != "libm.so.6"]
+            text = "\n".join(
+                line for line in closure["raw_ldd_output"]["text"].splitlines()
+                if not line.startswith("libm.so.6 =>")) + "\n"
+            closure["raw_ldd_output"] = runner.exact_text_content(
+                text, f"coherently rewritten {role} ldd output")
+        synchronize_identity(value)
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = write_complete_evidence_bundle(
+                Path(directory), value)
+            self.assertEqual(runner.verify_campaign(argparse.Namespace(
+                manifest=manifest_path, no_current_input_check=True)), 0)
+            document, scope = plan.verify_exact_manifest(manifest_path)
+            self.assertEqual(document["schema"], runner.MANIFEST_SCHEMA)
+            plan.validate_evidence_scope(scope)
+
+    def test_coherent_cache_inventory_rewrite_is_internal_consistency_only(
+        self,
+    ) -> None:
+        plan = load_plan_runner()
+        value = synthetic_raw()
+        for name in ("benchmark_cpu", "reserved_sibling"):
+            record = value["host_initial"][name]
+            record["cache_hierarchy"].pop()
+            record["cache_index_inventory"].pop()
+            text = "".join(
+                f"{entry}\n" for entry in record["cache_index_inventory"])
+            record["cache_directory_inventory_text"] = \
+                runner.exact_text_content(
+                    text, f"coherently rewritten {name} cache inventory")
+        value["host_final"] = copy.deepcopy(value["host_initial"])
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = write_complete_evidence_bundle(
+                Path(directory), value)
+            self.assertEqual(runner.verify_campaign(argparse.Namespace(
+                manifest=manifest_path, no_current_input_check=True)), 0)
+            document, scope = plan.verify_exact_manifest(manifest_path)
+            self.assertEqual(document["schema"], runner.MANIFEST_SCHEMA)
+            plan.validate_evidence_scope(scope)
+
+    def test_promotion_consumes_the_exact_verified_manifest_and_raw_snapshots(
+        self,
+    ) -> None:
+        plan = load_plan_runner()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path = write_complete_evidence_bundle(
+                root, synthetic_raw())
+            raw_path = root / "raw.json"
+            exact_runner = plan.load_exact_main_runner()
+
+            class InterleavingRunner:
+                accepted = None
+
+                def verified_campaign_bundle(
+                    self, path: Path, no_current_input_check: bool = False,
+                ):
+                    self.accepted = exact_runner.verified_campaign_bundle(
+                        path, no_current_input_check)
+                    path.write_text("{}\n", encoding="utf-8")
+                    raw_path.write_text("{}\n", encoding="utf-8")
+                    return self.accepted
+
+            interleaving = InterleavingRunner()
+            with mock.patch.object(
+                plan, "load_exact_main_runner", return_value=interleaving,
+            ):
+                document, scope = plan.verify_exact_manifest(manifest_path)
+            self.assertIsNotNone(interleaving.accepted)
+            self.assertEqual(document, interleaving.accepted[0])
+            plan.validate_evidence_scope(scope)
+            self.assertEqual(manifest_path.read_text(encoding="utf-8"), "{}\n")
+            self.assertEqual(raw_path.read_text(encoding="utf-8"), "{}\n")
 
     def test_legacy_v1_raw_fixture_remains_replayable(self) -> None:
         value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V1)
@@ -1681,6 +1808,8 @@ class MainCompareRunnerTests(unittest.TestCase):
             os.mkfifo(fifo, 0o600)
             with self.assertRaises(runner.EvidenceError):
                 runner.bounded_file_snapshot(fifo)
+            with self.assertRaises(runner.EvidenceError):
+                runner.bounded_file_contents_snapshot(fifo)
 
     def test_process_group_reap_never_uses_unbounded_wait(self) -> None:
         class NeverReaps:

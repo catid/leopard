@@ -9,6 +9,7 @@ import binascii
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -423,6 +424,9 @@ def _normalize_bound_paths(value: object, replacements: tuple[tuple[str, str], .
     require(replacements and all(isinstance(original, str) and original and
                                  isinstance(marker, str) and marker
                                  for original, marker in replacements) and
+            all(Path(original).is_absolute() and original != "/" and
+                os.path.normpath(original) == original
+                for original, _ in replacements) and
             len({original for original, _ in replacements}) == len(replacements) and
             len({marker for _, marker in replacements}) == len(replacements),
             "scope path replacements are invalid or ambiguous")
@@ -430,6 +434,30 @@ def _normalize_bound_paths(value: object, replacements: tuple[tuple[str, str], .
     # longest roots first prevents a broad source marker from swallowing the
     # more specific, role-distinct build identity.
     ordered = tuple(sorted(replacements, key=lambda item: len(item[0]), reverse=True))
+
+    token_prefix_delimiters = frozenset(" \t\r\n\"'`=(:,;[{")
+    token_suffix_delimiters = frozenset(" \t\r\n\"'`,:;)]}")
+
+    def replace_root_tokens(text: str, original: str, marker: str) -> str:
+        """Replace an absolute root only at a standalone path-token boundary."""
+        pieces: list[str] = []
+        cursor = 0
+        while True:
+            index = text.find(original, cursor)
+            if index < 0:
+                pieces.append(text[cursor:])
+                return "".join(pieces)
+            end = index + len(original)
+            before_ok = index == 0 or \
+                text[index - 1] in token_prefix_delimiters
+            after_ok = end == len(text) or text[end] == "/" or \
+                text[end] in token_suffix_delimiters
+            pieces.append(text[cursor:index])
+            if before_ok and after_ok:
+                pieces.append(marker)
+            else:
+                pieces.append(original)
+            cursor = end
 
     def visit(item: object) -> object:
         if isinstance(item, dict):
@@ -461,7 +489,7 @@ def _normalize_bound_paths(value: object, replacements: tuple[tuple[str, str], .
         if isinstance(item, str):
             result = item
             for original, marker in ordered:
-                result = result.replace(original, marker)
+                result = replace_root_tokens(result, original, marker)
             return result
         return item
 
@@ -823,7 +851,7 @@ def _parse_scope_ldd_output(value: str, label: str) -> list[dict[str, Any]]:
             require(not target_and_address.startswith("not found"),
                     f"{label} retains a missing dependency")
             target = target_and_address.split(" (", 1)[0]
-            require(target.startswith("/"),
+            require(target.startswith("/") and os.path.normpath(target) == target,
                     f"{label} retains an unresolved dependency")
             entries.append({
                 "soname": soname, "loader_path": target,
@@ -832,6 +860,8 @@ def _parse_scope_ldd_output(value: str, label: str) -> list[dict[str, Any]]:
             continue
         token = line.split(" (", 1)[0]
         if token.startswith("/"):
+            require(os.path.normpath(token) == token,
+                    f"{label} retains a non-canonical dynamic-loader path")
             entries.append({
                 "soname": Path(token).name, "loader_path": token,
                 "file_kind": "dynamic_loader",
@@ -847,7 +877,7 @@ def _parse_scope_ldd_output(value: str, label: str) -> list[dict[str, Any]]:
             any(entry.get("file_kind") == "shared_library"
                 for entry in entries) and
             sum(entry.get("virtual") is True for entry in entries) <= 1,
-            f"{label} is not a complete, unique dynamic-loader closure")
+            f"{label} is not an internally consistent, unique loader record")
     return sorted(entries, key=lambda item: item["soname"])
 
 
@@ -1213,28 +1243,15 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
 
 
 def verify_exact_manifest(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
-    runner = Path(__file__).resolve().parents[1] / "main_compare" / "run_abba.py"
-    command = [sys.executable, str(runner), "verify", "--manifest", str(path),
-               "--no-current-input-check"]
-    completed = subprocess.run(command, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, text=True)
-    require(completed.returncode == 0 and not completed.stderr,
-            f"exact-main verifier rejected {path}: {completed.stderr.strip()}")
-    document = load_json(path)
+    try:
+        document, raw, _ = load_exact_main_runner().verified_campaign_bundle(
+            path, no_current_input_check=True)
+    except Exception as error:
+        raise PlanError(f"exact-main verifier rejected {path}: {error}") from error
     require(isinstance(document, dict) and
             document.get("schema") == EXACT_MANIFEST_SCHEMA and
             document.get("valid") is True,
             f"exact-main manifest is not valid schema v5: {path}")
-    raw_record = document.get("raw")
-    require(isinstance(raw_record, dict) and
-            isinstance(raw_record.get("path"), str),
-            f"exact-main manifest raw identity is incomplete: {path}")
-    relative = Path(raw_record["path"])
-    require(not relative.is_absolute() and ".." not in relative.parts,
-            "exact-main raw path escapes its evidence directory")
-    raw_path = path.parent / relative
-    raw = load_json(raw_path)
-    require(isinstance(raw, dict), "exact-main raw bundle is not an object")
     return document, validate_evidence_scope(
         selection_scope_from_verified_bundle(document, raw))
 
@@ -2565,15 +2582,26 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
                 "scaling_min_freq": "1", "scaling_max_freq": "2",
                 "cpuinfo_min_freq": "1", "cpuinfo_max_freq": "2",
             },
-            "cache_hierarchy": [{
-                "index": 0, "level": "3", "type": "Unified", "size": "8M",
-                "coherency_line_size": "64", "number_of_sets": "1",
-                "ways_of_associativity": "1", "physical_line_partition": "1",
-                "shared_cpu_list": "0-7", "shared_cpu_map": "ff",
-                "allocation_policy": None, "write_policy": "WriteBack",
-            }],
-            "cache_index_inventory": ["index0"],
-            "cache_directory_inventory_text": fixture_text("index0\n"),
+            "cache_hierarchy": [
+                {
+                    "index": 0, "level": "1", "type": "Data", "size": "32K",
+                    "coherency_line_size": "64", "number_of_sets": "1",
+                    "ways_of_associativity": "1",
+                    "physical_line_partition": "1",
+                    "shared_cpu_list": "2,6", "shared_cpu_map": "44",
+                    "allocation_policy": None, "write_policy": "WriteBack",
+                },
+                {
+                    "index": 1, "level": "3", "type": "Unified", "size": "8M",
+                    "coherency_line_size": "64", "number_of_sets": "1",
+                    "ways_of_associativity": "1",
+                    "physical_line_partition": "1",
+                    "shared_cpu_list": "0-7", "shared_cpu_map": "ff",
+                    "allocation_policy": None, "write_policy": "WriteBack",
+                },
+            ],
+            "cache_index_inventory": ["index0", "index1"],
+            "cache_directory_inventory_text": fixture_text("index0\nindex1\n"),
             "numa_nodes": [0],
             "numa_node_inventory": ["node0"],
             "core_class": {"core_type": None, "cpu_capacity": None},
@@ -2775,6 +2803,13 @@ def fake_attestation_output(case: dict[str, Any], selected_path: str | None = No
 
 
 def self_test() -> None:
+    def retained_text(text: str) -> dict[str, Any]:
+        encoded = text.encode("utf-8")
+        return {
+            "encoding": "utf-8", "text": text, "size": len(encoded),
+            "sha256": hashlib.sha256(encoded).hexdigest(),
+        }
+
     exact_runner = load_exact_main_runner()
     require(tuple(exact_runner.BASELINE_LIBRARY_SOURCES) ==
                 BASELINE_LIBRARY_SOURCES and
@@ -2979,7 +3014,7 @@ def self_test() -> None:
         reject_scope_mutation(
             "uniform coherent translation-unit truncation",
             truncate_all_translation_unit_closures)
-        def truncate_all_runtime_closures(values) -> None:
+        def remove_all_dynamic_loader_records(values) -> None:
             for value in values:
                 for role in ("baseline", "candidate"):
                     closure = value["runtime_closures"][role]
@@ -2998,8 +3033,21 @@ def self_test() -> None:
                             text.encode("utf-8")).hexdigest(),
                     }
         reject_scope_mutation(
-            "uniform coherent runtime truncation",
-            truncate_all_runtime_closures)
+            "uniform missing dynamic-loader records",
+            remove_all_dynamic_loader_records)
+        coherently_rewritten_runtime_scopes = json.loads(json.dumps(scopes))
+        for value in coherently_rewritten_runtime_scopes:
+            for role in ("baseline", "candidate"):
+                closure = value["runtime_closures"][role]
+                closure["dependencies"] = [
+                    dependency for dependency in closure["dependencies"]
+                    if dependency["soname"] != "libm.so.6"]
+                text = "\n".join(
+                    line for line in closure["raw_ldd_output"]["text"].splitlines()
+                    if not line.startswith("libm.so.6 =>")) + "\n"
+                closure["raw_ldd_output"] = retained_text(text)
+        derive_survivors(
+            first, manifests, references, coherently_rewritten_runtime_scopes)
         def swap_all_runtime_file_records(values) -> None:
             for value in values:
                 for role in ("baseline", "candidate"):
@@ -3012,13 +3060,43 @@ def self_test() -> None:
         reject_scope_mutation(
             "uniform swapped runtime file records",
             swap_all_runtime_file_records)
+        def make_all_runtime_loader_paths_noncanonical(values) -> None:
+            for value in values:
+                for role in ("baseline", "candidate"):
+                    closure = value["runtime_closures"][role]
+                    libc = next(item for item in closure["dependencies"]
+                                if item["soname"] == "libc.so.6")
+                    libc["loader_path"] = "/lib/./libc.so.6"
+                    libc["file"]["path"] = libc["loader_path"]
+                    text = closure["raw_ldd_output"]["text"].replace(
+                        "/lib/libc.so.6", libc["loader_path"])
+                    encoded = text.encode("utf-8")
+                    closure["raw_ldd_output"] = {
+                        "encoding": "utf-8", "text": text,
+                        "size": len(encoded),
+                        "sha256": hashlib.sha256(encoded).hexdigest(),
+                    }
+        reject_scope_mutation(
+            "uniform noncanonical runtime loader paths",
+            make_all_runtime_loader_paths_noncanonical)
         def truncate_all_cache_records(values) -> None:
             for value in values:
                 for name in ("benchmark_cpu", "reserved_sibling"):
                     value["host"][name]["cache_hierarchy"].pop()
                     value["host"][name]["cache_index_inventory"].pop()
         reject_scope_mutation(
-            "uniform cache-record truncation", truncate_all_cache_records)
+            "uniform cache summary/listing mismatch", truncate_all_cache_records)
+        coherently_rewritten_cache_scopes = json.loads(json.dumps(scopes))
+        for value in coherently_rewritten_cache_scopes:
+            for name in ("benchmark_cpu", "reserved_sibling"):
+                record = value["host"][name]
+                record["cache_hierarchy"].pop()
+                record["cache_index_inventory"].pop()
+                record["cache_directory_inventory_text"] = retained_text(
+                    "".join(f"{entry}\n"
+                            for entry in record["cache_index_inventory"]))
+        derive_survivors(
+            first, manifests, references, coherently_rewritten_cache_scopes)
         def empty_all_numa_records(values) -> None:
             for value in values:
                 for name in ("benchmark_cpu", "reserved_sibling"):
@@ -3081,6 +3159,30 @@ def self_test() -> None:
         require(normalized_nested == {
             "paths": ["$BUILD/object.o", "$SOURCE/source.cpp"]},
             "scope path normalization did not prefer the longest role root")
+        normalized_collisions = _normalize_bound_paths({
+            "exact": "/tree",
+            "child": "/tree/child",
+            "siblings": [
+                "/tree-build/object.o", "/treehouse/object.o",
+                "/tree.build/object.o", "/tree!object.o", "/tree#object.o",
+                "/tree?object.o", "/other/tree/object.o",
+            ],
+            "text": ("'/tree/file' /tree-build/file /treehouse/file "
+                     "/tree.build/file /tree!file /tree#file /tree?file "
+                     "/other/tree/file root=/tree (/tree),/tree:/next"),
+        }, (("/tree", "$ROOT"),))
+        require(normalized_collisions == {
+            "exact": "$ROOT",
+            "child": "$ROOT/child",
+            "siblings": [
+                "/tree-build/object.o", "/treehouse/object.o",
+                "/tree.build/object.o", "/tree!object.o", "/tree#object.o",
+                "/tree?object.o", "/other/tree/object.o",
+            ],
+            "text": ("'$ROOT/file' /tree-build/file /treehouse/file "
+                     "/tree.build/file /tree!file /tree#file /tree?file "
+                     "/other/tree/file root=$ROOT ($ROOT),$ROOT:/next"),
+        }, "scope path normalization rewrote a textual sibling prefix")
         recipe_text = "/tree/build/ar qc /tree/source.cpp\n"
         normalized_recipe = _normalize_bound_paths({
             "archive_link_recipe": {

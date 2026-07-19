@@ -293,6 +293,70 @@ def sha256_file(path: Path, limit: int = MAX_IDENTITY_FILE_BYTES) -> str:
     return bounded_file_snapshot(path, limit)[1]
 
 
+def bounded_file_contents_snapshot(
+    path: Path, limit: int = MAX_IDENTITY_FILE_BYTES
+) -> tuple[os.stat_result, bytes]:
+    """Read one inode-bound, bounded snapshot and return its exact bytes."""
+    require(type(limit) is int and 0 <= limit <= MAX_IDENTITY_FILE_BYTES,
+            "file-content snapshot limit is invalid")
+    resolved = path.resolve(strict=True)
+    before = os.lstat(resolved)
+    require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and
+            0 <= before.st_size <= limit,
+            f"file-content snapshot is not a bounded single-link regular file: "
+            f"{resolved}")
+    descriptor = os.open(
+        resolved, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+        getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    try:
+        initial = os.fstat(descriptor)
+        path_metadata = os.lstat(resolved)
+        require(stat.S_ISREG(initial.st_mode) and initial.st_nlink == 1 and
+                (initial.st_dev, initial.st_ino) ==
+                (before.st_dev, before.st_ino) ==
+                (path_metadata.st_dev, path_metadata.st_ino) and
+                0 <= initial.st_size <= limit,
+                "file-content snapshot is not an inode-bound regular file: "
+                f"{resolved}")
+        blocks: list[bytes] = []
+        retained = 0
+        while retained < initial.st_size:
+            block = os.pread(
+                descriptor, min(1024 * 1024, initial.st_size - retained),
+                retained)
+            require(block, f"file-content snapshot was truncated: {resolved}")
+            blocks.append(block)
+            retained += len(block)
+        require(not os.pread(descriptor, 1, retained),
+                f"file-content snapshot grew while reading: {resolved}")
+        final = os.fstat(descriptor)
+        final_path = os.lstat(resolved)
+        require(retained == initial.st_size and final.st_nlink == 1 and
+                stat.S_ISREG(final_path.st_mode) and final_path.st_nlink == 1 and
+                (final.st_dev, final.st_ino) ==
+                (initial.st_dev, initial.st_ino) ==
+                (final_path.st_dev, final_path.st_ino) and
+                (final.st_size, final.st_mtime_ns, final.st_ctime_ns,
+                 final.st_dev, final.st_ino) ==
+                (initial.st_size, initial.st_mtime_ns, initial.st_ctime_ns,
+                 initial.st_dev, initial.st_ino),
+                f"file-content snapshot changed while reading: {resolved}")
+        return initial, b"".join(blocks)
+    finally:
+        os.close(descriptor)
+
+
+def json_file_snapshot(path: Path, label: str) -> tuple[dict[str, Any], bytes]:
+    """Parse JSON from exactly the bytes accepted by the bounded snapshot."""
+    _, data = bounded_file_contents_snapshot(path)
+    try:
+        value = json.loads(data.decode("utf-8", errors="strict"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise EvidenceError(f"{label} JSON is invalid: {error}") from error
+    require(isinstance(value, dict), f"{label} is not an object")
+    return value, data
+
+
 def signed(value: Mapping[str, Any]) -> dict[str, Any]:
     result = copy.deepcopy(dict(value))
     require("digest" not in result, "digest field already exists")
@@ -1666,7 +1730,8 @@ def parse_ldd_output_text(output: str, label: str) -> list[dict[str, Any]]:
             require(not target_and_address.startswith("not found"),
                     f"runtime dependency is missing: {line}")
             target = target_and_address.split(" (", 1)[0]
-            require(target.startswith("/"), f"unresolved runtime dependency: {line}")
+            require(target.startswith("/") and os.path.normpath(target) == target,
+                    f"unresolved or non-canonical runtime dependency: {line}")
             entries.append({
                 "soname": soname,
                 "loader_path": target,
@@ -1675,6 +1740,8 @@ def parse_ldd_output_text(output: str, label: str) -> list[dict[str, Any]]:
             continue
         token = line.split(" (", 1)[0]
         if token.startswith("/"):
+            require(os.path.normpath(token) == token,
+                    f"non-canonical dynamic-loader path: {line}")
             entries.append({
                 "soname": Path(token).name,
                 "loader_path": token,
@@ -4353,9 +4420,12 @@ def run_campaign(options: argparse.Namespace) -> int:
     return 0
 
 
-def verify_campaign(options: argparse.Namespace) -> int:
-    manifest_path = options.manifest.resolve(strict=True)
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+def verified_campaign_bundle(
+    manifest_path: Path, no_current_input_check: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Verify and return the exact manifest/raw byte snapshots consumed."""
+    manifest_path = manifest_path.resolve(strict=True)
+    manifest, _ = json_file_snapshot(manifest_path, "manifest")
     verify_signature(manifest, "manifest")
     manifest_schema = manifest.get("schema")
     require(isinstance(manifest_schema, str) and
@@ -4367,16 +4437,16 @@ def verify_campaign(options: argparse.Namespace) -> int:
     require(isinstance(raw_info, dict), "manifest has no raw bundle identity")
     raw_path = safe_evidence_path(output, raw_info.get("path"))
     require(raw_path.is_file(), "retained raw bundle is missing")
-    require(raw_info.get("size") == raw_path.stat().st_size and
-            raw_info.get("sha256") == sha256_file(raw_path),
+    raw, raw_bytes = json_file_snapshot(raw_path, "retained raw bundle")
+    require(raw_info.get("size") == len(raw_bytes) and
+            raw_info.get("sha256") == sha256_bytes(raw_bytes),
             "raw bundle file identity mismatch")
-    raw = json.loads(raw_path.read_text(encoding="utf-8"))
     expected_raw_schema = MANIFEST_TO_RAW_SCHEMA[manifest_schema]
-    require(isinstance(raw, dict) and raw.get("schema") == expected_raw_schema,
+    require(raw.get("schema") == expected_raw_schema,
             "manifest/raw schema versions do not match")
     analysis = validate_raw(
         raw, output, check_files=True,
-        check_current_inputs=not options.no_current_input_check)
+        check_current_inputs=not no_current_input_check)
     require(raw_info.get("payload_digest") == raw.get("digest"),
             "manifest/raw payload identity mismatch")
     names = ["campaign", "host", "reservation", "identities", "analysis"]
@@ -4398,6 +4468,13 @@ def verify_campaign(options: argparse.Namespace) -> int:
         require(manifest.get(name) == expected,
                 f"manifest {name} differs from retained raw bundle")
     require(manifest.get("analysis") == analysis, "manifest analysis was edited")
+    return manifest, raw, analysis
+
+
+def verify_campaign(options: argparse.Namespace) -> int:
+    manifest, _, _ = verified_campaign_bundle(
+        options.manifest, options.no_current_input_check)
+    manifest_schema = manifest["schema"]
     if manifest_schema == MANIFEST_SCHEMA_V1:
         print("legacy exact-main v1 bundle verified; it has no v2 CPU-isolation "
               "qualification")

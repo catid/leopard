@@ -191,19 +191,23 @@ candidate archive has its twelve production members plus the benchmark command;
 a coherent source/object/member/link truncation is rejected. Each source retains
 the bounded raw Git commit object, whose Git SHA-1 and named tree are recomputed
 offline. Each runtime closure retains the bounded raw `ldd` output, which is
-parsed independently to prove the complete summarized dependency set and exactly
-one dynamic loader rather than trusting a mutually truncated list. Every hashed
-dependency file retains the exact loader-declared path through which it was read,
-so swapping two otherwise valid shared-library records is rejected offline.
+parsed independently to prove exact raw/summary consistency, at least one shared
+library, and exactly one dynamic loader. Every hashed dependency file retains the
+exact canonical loader-declared path through which it was read, so swapping two
+otherwise valid shared-library records is rejected offline. This retained pair
+does not independently prove that an ordinary `ldd` line was never removed by a
+writer able to rewrite and re-sign both the raw output and its summary.
 
 Its host identity includes the exact sysfs online CPU/node list bytes, every
-enumerated cache index and cache record, an independently retained canonical
-listing of each CPU's sysfs cache directory, NUMA-node directory inventory and
-placement, shared-CPU domain, and heterogeneous-core class. Campaign, cell,
-CPU, reservation, and host count fields are bounded exact integers; JSON
-booleans are never accepted as integer values. Uniformly removing a field or
-record from both raw and manifest records therefore fails even with
-`--no-current-input-check`. Version-1 bundles remain
+retained cache index and cache record, a separately retained canonical listing
+of each CPU's sysfs cache directory, NUMA-node directory inventory and placement,
+shared-CPU domain, and heterogeneous-core class. The cache hierarchy, summary,
+and listing must agree three ways, but remain one internally signed evidence
+bundle rather than an independently authenticated snapshot of sysfs. Campaign,
+cell, CPU, reservation, and host count fields are bounded exact integers; JSON
+booleans are never accepted as integer values. Removing any schema-required
+field, or changing only one of the retained paired representations, fails even
+with `--no-current-input-check`. Version-1 bundles remain
 structurally replayable without acquiring later isolation semantics
 retroactively. A schema/path relabel that leaves the historical recipe bytes
 unchanged is rejected.
