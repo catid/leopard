@@ -28,6 +28,7 @@ from __future__ import print_function
 import argparse
 import datetime
 import errno
+import fcntl
 import hashlib
 import json
 import os
@@ -60,7 +61,7 @@ BOOT_ID = re.compile(
 REPORT_KEYS = {
     "accepted", "boot_id", "child", "child_returncode", "command",
     "command_identity", "command_sha256", "error", "events",
-    "finished_utc", "launch_cpus", "pid_namespace", "poll_ms",
+    "finished_utc", "global_lock", "launch_cpus", "pid_namespace", "poll_ms",
     "process_provenance", "received_signal", "records", "reserved_cpus",
     "schema", "started_utc", "state", "uid", "uncertainty",
 }
@@ -75,6 +76,10 @@ PROVENANCE_KEYS = {
 EVENT_KEYS = {"event", "pid", "tid", "value"}
 CHILD_KEYS = {"pid", "released", "session", "starttime_ticks"}
 PID_NAMESPACE_KEYS = {"device", "inode"}
+GLOBAL_LOCK_KEYS = {
+    "device", "directory_device", "directory_inode", "inode", "lock", "mode",
+    "path", "uid",
+}
 COMMAND_IDENTITY_KEYS = {"cwd", "executable", "script"}
 PATH_IDENTITY_KEYS = {"device", "inode", "mode", "path"}
 FILE_IDENTITY_KEYS = {
@@ -347,6 +352,84 @@ def fsync_directory(path):
         os.close(descriptor)
 
 
+class GlobalSupervisorLock:
+    """Serialize every same-UID run and recovery transaction."""
+
+    def __init__(self, uid=None, runtime_directory=None):
+        self.uid = os.getuid() if uid is None else exact_int(
+            uid, "global lock UID", 0, 2**31 - 1)
+        self.directory = Path(
+            "/run/user/{}".format(self.uid) if runtime_directory is None
+            else runtime_directory)
+        self.path = self.directory / "leopard2-affinity-supervisor.lock"
+        self.descriptor = None
+        self.identity = None
+
+    def __enter__(self):
+        directory = self.directory.resolve(strict=True)
+        metadata = directory.stat()
+        require(stat.S_ISDIR(metadata.st_mode) and metadata.st_uid == self.uid,
+                "global affinity-lock directory has unsafe ownership/type")
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(str(self.path), flags, 0o600)
+        try:
+            os.fchmod(descriptor, 0o600)
+            file_metadata = os.fstat(descriptor)
+            require(stat.S_ISREG(file_metadata.st_mode) and
+                    file_metadata.st_uid == self.uid and file_metadata.st_nlink == 1,
+                    "global affinity lock has unsafe ownership/type/link count")
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as error:
+                raise IsolationError(
+                    "another same-UID affinity supervisor is active") from error
+            current = os.stat(self.path)
+            require((current.st_dev, current.st_ino) ==
+                    (file_metadata.st_dev, file_metadata.st_ino),
+                    "global affinity lock path changed while acquiring")
+            os.fsync(descriptor)
+            fsync_directory(directory)
+            self.descriptor = descriptor
+            self.identity = {
+                "path": str(self.path.resolve()), "uid": self.uid,
+                "device": file_metadata.st_dev, "inode": file_metadata.st_ino,
+                "mode": file_metadata.st_mode & 0o7777,
+                "directory_device": metadata.st_dev,
+                "directory_inode": metadata.st_ino,
+                "lock": "exclusive_nonblocking_same_uid",
+            }
+            return self
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    def validate_current(self):
+        require(self.descriptor is not None and self.identity is not None,
+                "global affinity lock is not held")
+        metadata = os.fstat(self.descriptor)
+        current = os.stat(self.path)
+        require((metadata.st_dev, metadata.st_ino) ==
+                (self.identity["device"], self.identity["inode"]) ==
+                (current.st_dev, current.st_ino),
+                "global affinity lock identity changed")
+        try:
+            fcntl.flock(self.descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise IsolationError("global affinity lock was lost") from error
+        return dict(self.identity)
+
+    def __exit__(self, _exc_type, _exc, _traceback):
+        descriptor = self.descriptor
+        self.descriptor = None
+        if descriptor is not None:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+
+
 def atomic_json(path, value, exclusive=False):
     """Write canonical JSON and durably bind the directory entry.
 
@@ -613,6 +696,22 @@ def validate_file_identity(value, label):
             "{} hash is invalid".format(label))
 
 
+def validate_global_lock(value, uid, label="global affinity lock"):
+    require_exact_keys(value, GLOBAL_LOCK_KEYS, label)
+    exact_int(value["uid"], "{} UID".format(label), 0, 2**31 - 1)
+    require(value["uid"] == uid, "{} UID differs from report UID".format(label))
+    require(isinstance(value["path"], str) and value["path"].startswith("/"),
+            "{} path is not absolute".format(label))
+    for name in ("device", "inode", "mode", "directory_device",
+                 "directory_inode"):
+        exact_int(value[name], "{} {}".format(label, name), 0, 2**63 - 1)
+    require(value["lock"] == "exclusive_nonblocking_same_uid",
+            "{} protocol is unknown".format(label))
+    require(value["mode"] & 0o777 == 0o600,
+            "{} mode is not owner-only".format(label))
+    return value
+
+
 def validate_record(record, label="affinity record"):
     require_exact_keys(record, RECORD_KEYS, label)
     for name in ("pid", "tid"):
@@ -666,6 +765,7 @@ def validate_report(report, require_accepted=False):
     require(report["schema"] == REPORT_SCHEMA, "affinity report has wrong schema")
     require(report["state"] in REPORT_STATES, "affinity report state is unknown")
     exact_int(report["uid"], "report UID", 0, 2**31 - 1)
+    validate_global_lock(report["global_lock"], report["uid"])
     reserved = validate_cpu_list(report["reserved_cpus"], "report reserved CPUs")
     launch = validate_cpu_list(report["launch_cpus"], "report launch CPUs")
     require(set(reserved).issubset(launch) and set(launch).difference(reserved),
@@ -1049,7 +1149,8 @@ def terminate_process(backend, identity, grace_seconds=SIGNAL_GRACE_SECONDS,
 class AffinityTransaction:
     def __init__(self, backend, reserved_cpus, launch_cpus, report_path,
                  poll_ms=DEFAULT_POLL_MS, writer=atomic_json,
-                 host=None, sleep_function=time.sleep, launcher=None):
+                 host=None, sleep_function=time.sleep, launcher=None,
+                 global_lock=None):
         self.backend = backend
         if hasattr(self.backend, "validate_capabilities"):
             self.backend.validate_capabilities()
@@ -1065,6 +1166,12 @@ class AffinityTransaction:
         self.writer = writer
         self.sleep = sleep_function
         self.launcher = GatedLauncher() if launcher is None else launcher
+        require(global_lock is not None,
+                "affinity transaction requires the same-UID global lock")
+        self.global_lock = global_lock
+        lock_identity = global_lock.validate_current() if hasattr(
+            global_lock, "validate_current") else dict(global_lock)
+        validate_global_lock(lock_identity, backend.uid)
         identity = runtime_identity() if host is None else host
         require_exact_keys(identity, {"boot_id", "pid_namespace"}, "runtime identity")
         self.records = {}
@@ -1088,6 +1195,7 @@ class AffinityTransaction:
             "finished_utc": None,
             "boot_id": identity["boot_id"],
             "pid_namespace": dict(identity["pid_namespace"]),
+            "global_lock": lock_identity,
             "command": [],
             "command_sha256": None,
             "command_identity": None,
@@ -1104,6 +1212,10 @@ class AffinityTransaction:
         self._write(exclusive=True)
 
     def _write(self, exclusive=False):
+        if hasattr(self.global_lock, "validate_current"):
+            current_lock = self.global_lock.validate_current()
+            require(current_lock == self.report["global_lock"],
+                    "global affinity lock changed during transaction")
         self.report["records"] = [self.records[key] for key in self.record_order]
         self.report["process_provenance"] = [
             self.process_provenance[key] for key in self.provenance_order]
@@ -1621,7 +1733,7 @@ def report_host_matches(report, host=None):
 
 
 def recover_report(path, backend=None, writer=atomic_json, host=None,
-                   sleep_function=time.sleep):
+                   sleep_function=time.sleep, global_lock=None):
     path = Path(path)
     report = load_report(path)
     uid = exact_int(report["uid"], "report UID", 0, 2**31 - 1)
@@ -1630,6 +1742,13 @@ def recover_report(path, backend=None, writer=atomic_json, host=None,
     report_host_matches(report, host)
     backend = LinuxThreadBackend(uid=uid) if backend is None else backend
     require(backend.uid == uid, "recovery backend UID differs from report UID")
+    require(global_lock is not None,
+            "affinity recovery requires the same-UID global lock")
+    current_lock = global_lock.validate_current() if hasattr(
+        global_lock, "validate_current") else dict(global_lock)
+    validate_global_lock(current_lock, uid)
+    require(current_lock == report["global_lock"],
+            "recovery global lock differs from the journaled lock identity")
     failures = []
     write_failures = []
     report["state"] = "recovering"
@@ -1968,6 +2087,38 @@ FAKE_HOST = {
     "pid_namespace": {"device": 1, "inode": 2},
 }
 
+FAKE_LOCK_IDENTITY = {
+    "path": "/run/user/{}/leopard2-affinity-supervisor.lock".format(os.getuid()),
+    "uid": os.getuid(), "device": 10, "inode": 11, "mode": 0o600,
+    "directory_device": 12, "directory_inode": 13,
+    "lock": "exclusive_nonblocking_same_uid",
+}
+
+
+class FakeGlobalLock:
+    """Deterministic same-UID lock model; never takes an operating-system lock."""
+
+    held = False
+
+    def __init__(self, identity=None):
+        self.identity = dict(FAKE_LOCK_IDENTITY if identity is None else identity)
+        self.active = False
+
+    def __enter__(self):
+        if FakeGlobalLock.held:
+            raise IsolationError("another same-UID affinity supervisor is active")
+        FakeGlobalLock.held = True
+        self.active = True
+        return self
+
+    def validate_current(self):
+        require(self.active, "fake global affinity lock is not held")
+        return dict(self.identity)
+
+    def __exit__(self, _exc_type, _exc, _traceback):
+        self.active = False
+        FakeGlobalLock.held = False
+
 
 class FakeBackend:
     """Deterministic backend; it never calls a real affinity or signal syscall."""
@@ -2161,15 +2312,37 @@ class FakeLauncher:
 
 
 def make_fake_transaction(directory, backend, writer=atomic_json, launcher=None,
-                          sleep_function=lambda _seconds: None):
+                          sleep_function=lambda _seconds: None, global_lock=None):
+    if global_lock is None:
+        global_lock = FakeGlobalLock()
+        # Each fake transaction models a previously acquired coordinator lock;
+        # the overlap regression below exercises acquisition itself.
+        global_lock.active = True
     return AffinityTransaction(
         backend, (1, 3), (0, 1, 2, 3), Path(directory) / "report.json",
         poll_ms=1, writer=writer, host=FAKE_HOST,
-        sleep_function=sleep_function, launcher=launcher)
+        sleep_function=sleep_function, launcher=launcher,
+        global_lock=global_lock)
 
 
 def fake_command():
     return [sys.executable, str(Path(__file__).resolve()), "self-test-child"]
+
+
+def test_global_lock_serialization():
+    FakeGlobalLock.held = False
+    first = FakeGlobalLock()
+    second = FakeGlobalLock()
+    with first:
+        expect_exception(IsolationError, second.__enter__,
+                         "overlapping same-UID supervisor")
+        check(first.validate_current() == FAKE_LOCK_IDENTITY,
+              "held global lock identity changed")
+    with second:
+        check(second.validate_current() == FAKE_LOCK_IDENTITY,
+              "global lock was not reusable after release")
+    check(not FakeGlobalLock.held,
+          "fake global lock remained held after context exit")
 
 
 def test_exact_restore_and_newcomer():
@@ -2378,13 +2551,15 @@ def test_tid_reuse_and_recovery():
         expect_exception(
             IsolationError,
             lambda: recover_report(
-                transaction.report_path, backend=backend, host=wrong_host),
+                transaction.report_path, backend=backend, host=wrong_host,
+                global_lock=transaction.global_lock),
             "cross-boot recovery")
         check(backend.get_affinity(identity) == {0, 2},
               "cross-boot recovery mutated a journaled mask")
         check(recover_report(
             transaction.report_path, backend=backend, host=FAKE_HOST,
-            sleep_function=lambda _seconds: None) == 0,
+            sleep_function=lambda _seconds: None,
+            global_lock=transaction.global_lock) == 0,
               "failed restore was not retried by recovery")
         check(backend.get_affinity(identity) == {0, 1, 2, 3},
               "recovery did not restore the exact original mask")
@@ -2394,7 +2569,8 @@ def test_tid_reuse_and_recovery():
         atomic_json(transaction.report_path, malformed)
         expect_exception(IsolationError,
                          lambda: recover_report(
-                             transaction.report_path, backend=backend, host=FAKE_HOST),
+                             transaction.report_path, backend=backend, host=FAKE_HOST,
+                             global_lock=transaction.global_lock),
                          "unknown recovery status")
 
     with tempfile.TemporaryDirectory() as directory:
@@ -2408,7 +2584,8 @@ def test_tid_reuse_and_recovery():
             IsolationError,
             lambda: recover_report(
                 transaction.report_path, backend=backend, writer=failing_writer,
-                host=FAKE_HOST, sleep_function=lambda _seconds: None),
+                host=FAKE_HOST, sleep_function=lambda _seconds: None,
+                global_lock=transaction.global_lock),
             "pre-recovery journal write failure")
         check(backend.get_affinity(identity) == {0, 1, 2, 3},
               "pre-recovery write failure suppressed exact restore")
@@ -2430,7 +2607,8 @@ def test_recovery_kills_session_before_restore():
         transaction._write()
         check(recover_report(
             transaction.report_path, backend=backend, host=FAKE_HOST,
-            sleep_function=lambda _seconds: None) == 0,
+            sleep_function=lambda _seconds: None,
+            global_lock=transaction.global_lock) == 0,
               "recovery with a live child session failed")
         check(not backend.session_processes(900) and
               backend.get_affinity(identity) == {0, 1, 2, 3},
@@ -2453,10 +2631,12 @@ def test_binding():
         backend.add(1, 1, 1, 1, {0, 1, 2, 3}, ppid=0)
         report_path = root / "report.json"
         launcher = FakeLauncher(backend)
+        global_lock = FakeGlobalLock()
+        global_lock.active = True
         transaction = AffinityTransaction(
             backend, (1, 3), (0, 1, 2, 3), report_path, poll_ms=1,
             host=FAKE_HOST, sleep_function=lambda _seconds: None,
-            launcher=launcher)
+            launcher=launcher, global_lock=global_lock)
         artifact = str(Path(__file__).resolve())
         command = [
             sys.executable, artifact, "run",
@@ -2533,6 +2713,7 @@ def test_binding():
 
 def self_test():
     tests = (
+        test_global_lock_serialization,
         test_exact_restore_and_newcomer,
         test_nonuniform_and_unsafe_newcomer,
         test_write_failure_still_restores,
@@ -2587,7 +2768,8 @@ def main(arguments=None):
         if options.operation == "self-test":
             return self_test()
         if options.operation == "restore":
-            return recover_report(options.report)
+            with GlobalSupervisorLock() as global_lock:
+                return recover_report(options.report, global_lock=global_lock)
         if options.operation == "verify-report":
             load_report(options.report, require_accepted=True)
             print("Leopard2 affinity supervisor report verified")
@@ -2605,41 +2787,42 @@ def main(arguments=None):
         if child and child[0] == "--":
             child = child[1:]
         require(bool(child), "run requires a child command after --")
-        launch = sorted(os.sched_getaffinity(0))
-        transaction = AffinityTransaction(
-            LinuxThreadBackend(), parse_cpu_list(options.reserved_cpus), launch,
-            options.report, options.poll_ms)
-        previous_handlers = {}
-        for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-            previous_handlers[signum] = signal.getsignal(signum)
-            signal.signal(signum, lambda received, _frame, tx=transaction:
-                          tx.request_signal(received))
-        result_code = 1
-        late_mask = None
-        try:
-            result_code = transaction.run(child, options.taskset)
-        finally:
-            # Close the small interval between run()'s durability boundary and
-            # restoration of the caller's handlers.  A signal already handled
-            # in that interval still invalidates an otherwise accepted report.
-            late_mask = signal.pthread_sigmask(
-                signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+        with GlobalSupervisorLock() as global_lock:
+            launch = sorted(os.sched_getaffinity(0))
+            transaction = AffinityTransaction(
+                LinuxThreadBackend(), parse_cpu_list(options.reserved_cpus), launch,
+                options.report, options.poll_ms, global_lock=global_lock)
+            previous_handlers = {}
+            for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+                previous_handlers[signum] = signal.getsignal(signum)
+                signal.signal(signum, lambda received, _frame, tx=transaction:
+                              tx.request_signal(received))
+            result_code = 1
+            late_mask = None
             try:
-                transaction._capture_blocked_signals()
-                if transaction.received_signal is not None and \
-                        transaction.report["accepted"]:
-                    transaction.report["accepted"] = False
-                    transaction.report["state"] = "failed"
-                    transaction.report["finished_utc"] = utc_now()
-                    transaction.report["error"] = "received signal {}".format(
-                        transaction.received_signal)
-                    transaction._write()
-                    result_code = 128 + transaction.received_signal
+                result_code = transaction.run(child, options.taskset)
             finally:
-                for signum, handler in previous_handlers.items():
-                    signal.signal(signum, handler)
-                signal.pthread_sigmask(signal.SIG_SETMASK, late_mask)
-        return result_code
+                # Close the small interval between run()'s durability boundary and
+                # restoration of the caller's handlers.  A signal already handled
+                # in that interval still invalidates an otherwise accepted report.
+                late_mask = signal.pthread_sigmask(
+                    signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
+                try:
+                    transaction._capture_blocked_signals()
+                    if transaction.received_signal is not None and \
+                            transaction.report["accepted"]:
+                        transaction.report["accepted"] = False
+                        transaction.report["state"] = "failed"
+                        transaction.report["finished_utc"] = utc_now()
+                        transaction.report["error"] = "received signal {}".format(
+                            transaction.received_signal)
+                        transaction._write()
+                        result_code = 128 + transaction.received_signal
+                finally:
+                    for signum, handler in previous_handlers.items():
+                        signal.signal(signum, handler)
+                    signal.pthread_sigmask(signal.SIG_SETMASK, late_mask)
+            return result_code
     except (IsolationError, OSError, ValueError) as error:
         print("affinity supervisor error: {}".format(error), file=sys.stderr)
         return 1
