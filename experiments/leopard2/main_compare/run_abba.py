@@ -4437,10 +4437,14 @@ def run_campaign(options: argparse.Namespace) -> int:
 
 def verified_campaign_bundle(
     manifest_path: Path, no_current_input_check: bool = False,
-) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    """Verify and return the exact manifest/raw byte snapshots consumed."""
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Verify and return exact evidence plus the accepted manifest identity."""
     manifest_path = manifest_path.resolve(strict=True)
-    manifest, _ = json_file_snapshot(manifest_path, "manifest")
+    manifest, manifest_bytes = json_file_snapshot(manifest_path, "manifest")
+    manifest_snapshot = {
+        "size": len(manifest_bytes),
+        "sha256": sha256_bytes(manifest_bytes),
+    }
     verify_signature(manifest, "manifest")
     manifest_schema = manifest.get("schema")
     require(isinstance(manifest_schema, str) and
@@ -4483,11 +4487,11 @@ def verified_campaign_bundle(
         require(manifest.get(name) == expected,
                 f"manifest {name} differs from retained raw bundle")
     require(manifest.get("analysis") == analysis, "manifest analysis was edited")
-    return manifest, raw, analysis
+    return manifest, raw, analysis, manifest_snapshot
 
 
 def verify_campaign(options: argparse.Namespace) -> int:
-    manifest, _, _ = verified_campaign_bundle(
+    manifest, _, _, _ = verified_campaign_bundle(
         options.manifest, options.no_current_input_check)
     manifest_schema = manifest["schema"]
     if manifest_schema == MANIFEST_SCHEMA_V1:

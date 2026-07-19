@@ -995,7 +995,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 Path(directory), synthetic_raw())
             runner.verify_campaign(argparse.Namespace(
                 manifest=valid_manifest, no_current_input_check=True))
-            document, scope = plan.verify_exact_manifest(valid_manifest)
+            document, scope, _ = plan.verify_exact_manifest(valid_manifest)
             self.assertEqual(document["schema"], runner.MANIFEST_SCHEMA)
             self.assertEqual(
                 plan.validate_evidence_scope(scope)["schema"],
@@ -1183,7 +1183,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 Path(directory), value)
             self.assertEqual(runner.verify_campaign(argparse.Namespace(
                 manifest=manifest_path, no_current_input_check=True)), 0)
-            document, scope = plan.verify_exact_manifest(manifest_path)
+            document, scope, _ = plan.verify_exact_manifest(manifest_path)
             self.assertEqual(document["schema"], runner.MANIFEST_SCHEMA)
             plan.validate_evidence_scope(scope)
 
@@ -1207,7 +1207,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 Path(directory), value)
             self.assertEqual(runner.verify_campaign(argparse.Namespace(
                 manifest=manifest_path, no_current_input_check=True)), 0)
-            document, scope = plan.verify_exact_manifest(manifest_path)
+            document, scope, _ = plan.verify_exact_manifest(manifest_path)
             self.assertEqual(document["schema"], runner.MANIFEST_SCHEMA)
             plan.validate_evidence_scope(scope)
 
@@ -1238,12 +1238,64 @@ class MainCompareRunnerTests(unittest.TestCase):
             with mock.patch.object(
                 plan, "load_exact_main_runner", return_value=interleaving,
             ):
-                document, scope = plan.verify_exact_manifest(manifest_path)
+                document, scope, snapshot = plan.verify_exact_manifest(manifest_path)
             self.assertIsNotNone(interleaving.accepted)
             self.assertEqual(document, interleaving.accepted[0])
+            self.assertEqual(snapshot, interleaving.accepted[3])
             plan.validate_evidence_scope(scope)
             self.assertEqual(manifest_path.read_text(encoding="utf-8"), "{}\n")
             self.assertEqual(raw_path.read_text(encoding="utf-8"), "{}\n")
+
+    def test_survivor_selection_references_the_exact_verified_snapshot(
+        self,
+    ) -> None:
+        plan = load_plan_runner()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest_path = write_complete_evidence_bundle(
+                root, synthetic_raw())
+            exact_runner = plan.load_exact_main_runner()
+
+            class InterleavingRunner:
+                accepted = None
+
+                def verified_campaign_bundle(
+                    self, path: Path, no_current_input_check: bool = False,
+                ):
+                    self.accepted = exact_runner.verified_campaign_bundle(
+                        path, no_current_input_check)
+                    path.write_text("{}\n", encoding="utf-8")
+                    return self.accepted
+
+            interleaving = InterleavingRunner()
+            captured = {}
+
+            def capture_selection(plan_root, manifests, references, scopes):
+                captured["manifest"] = manifests[0]
+                captured["reference"] = references[0]
+                captured["scope"] = scopes[0]
+                return {"reference": references[0]}
+
+            with mock.patch.object(
+                    plan, "load_exact_main_runner", return_value=interleaving), \
+                 mock.patch.object(
+                    plan, "derive_survivors", side_effect=capture_selection):
+                plan.select_survivors(
+                    root, [manifest_path], root / "survivors.json")
+
+            self.assertIsNotNone(interleaving.accepted)
+            self.assertEqual(captured["manifest"], interleaving.accepted[0])
+            self.assertEqual(
+                {key: captured["reference"][key]
+                 for key in ("size", "sha256")},
+                interleaving.accepted[3])
+            self.assertEqual(
+                captured["reference"]["payload_digest"],
+                interleaving.accepted[0]["digest"])
+            self.assertNotEqual(
+                captured["reference"]["sha256"],
+                runner.sha256_file(manifest_path))
+            plan.validate_evidence_scope(captured["scope"])
 
     def test_legacy_v1_raw_fixture_remains_replayable(self) -> None:
         value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V1)

@@ -1258,18 +1258,26 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
     return scope
 
 
-def verify_exact_manifest(path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+def verify_exact_manifest(
+    path: Path,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     try:
-        document, raw, _ = load_exact_main_runner().verified_campaign_bundle(
-            path, no_current_input_check=True)
+        document, raw, _, snapshot = \
+            load_exact_main_runner().verified_campaign_bundle(
+                path, no_current_input_check=True)
     except Exception as error:
         raise PlanError(f"exact-main verifier rejected {path}: {error}") from error
     require(isinstance(document, dict) and
             document.get("schema") == EXACT_MANIFEST_SCHEMA and
             document.get("valid") is True,
             f"exact-main manifest is not valid schema v5: {path}")
-    return document, validate_evidence_scope(
-        selection_scope_from_verified_bundle(document, raw))
+    require(isinstance(snapshot, dict) and set(snapshot) == {"size", "sha256"} and
+            type(snapshot.get("size")) is int and snapshot["size"] > 0 and
+            isinstance(snapshot.get("sha256"), str) and
+            re.fullmatch(r"[0-9a-f]{64}", snapshot["sha256"]) is not None,
+            f"exact-main manifest snapshot identity is invalid: {path}")
+    return (document, validate_evidence_scope(
+        selection_scope_from_verified_bundle(document, raw)), snapshot)
 
 
 def manifest_cell(cell: object) -> dict[str, Any]:
@@ -1417,12 +1425,12 @@ def select_survivors(plan_root: Path, paths: list[Path], output: Path) -> dict[s
     references = []
     for path in paths:
         resolved = path.resolve(strict=True)
-        manifest, scope = verify_exact_manifest(resolved)
+        manifest, scope, snapshot = verify_exact_manifest(resolved)
         manifests.append(manifest)
         scopes.append(scope)
         references.append({
-            "path": str(resolved), "size": resolved.stat().st_size,
-            "sha256": file_sha256(resolved), "payload_digest": manifest["digest"],
+            "path": str(resolved), **snapshot,
+            "payload_digest": manifest["digest"],
         })
     result = derive_survivors(plan_root, manifests, references, scopes)
     write_json(output, result)
@@ -1451,11 +1459,11 @@ def validate_survivors(plan_root: Path, path: Path,
                 "path", "size", "sha256", "payload_digest",
             }, "survivor gate reference differs")
             manifest_path = Path(reference["path"])
-            require(manifest_path.is_file() and
-                    manifest_path.stat().st_size == reference["size"] and
-                    file_sha256(manifest_path) == reference["sha256"],
-                    "survivor gate manifest bytes changed")
-            manifest, scope = verify_exact_manifest(manifest_path)
+            manifest, scope, snapshot = verify_exact_manifest(manifest_path)
+            require(snapshot == {
+                        "size": reference["size"],
+                        "sha256": reference["sha256"],
+                    }, "survivor gate manifest bytes changed")
             require(manifest["digest"] == reference["payload_digest"],
                     "survivor gate payload changed")
             manifests.append(manifest)
