@@ -26,6 +26,7 @@ evidence.
 from __future__ import print_function
 
 import argparse
+import ctypes
 import datetime
 import errno
 import fcntl
@@ -44,7 +45,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 
-REPORT_SCHEMA = "leopard2-affinity-supervisor/v3"
+REPORT_SCHEMA = "leopard2-affinity-supervisor/v4"
 ACCEPTANCE_SCHEMA = "leopard2-affinity-acceptance/v1"
 BINDING_SCHEMA = "leopard2-affinity-main-binding/v1"
 MAIN_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v4"
@@ -60,11 +61,11 @@ BOOT_ID = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 REPORT_KEYS = {
-    "accepted", "boot_id", "child", "child_returncode", "command",
+    "accepted", "boot_id", "child", "child_processes", "child_returncode", "command",
     "command_identity", "command_sha256", "error", "events",
     "finished_utc", "global_lock", "launch_cpus", "pid_namespace", "poll_ms",
     "process_provenance", "received_signal", "records", "reserved_cpus",
-    "schema", "started_utc", "state", "uid", "uncertainty",
+    "schema", "started_utc", "state", "subreaper_pid", "uid", "uncertainty",
 }
 RECORD_KEYS = {
     "move_count", "move_status", "original_cpus", "pid", "ppid",
@@ -79,6 +80,10 @@ PROVENANCE_KEYS = {
 EVENT_KEYS = {"event", "pid", "tid", "value"}
 CHILD_KEYS = {
     "pid", "process_device", "process_inode", "released", "session",
+    "starttime_ticks",
+}
+CHILD_PROCESS_KEYS = {
+    "pid", "ppid", "process_device", "process_inode", "session",
     "starttime_ticks",
 }
 PID_NAMESPACE_KEYS = {"device", "inode"}
@@ -631,6 +636,23 @@ class LinuxThreadBackend:
         require(hasattr(signal, "pthread_sigmask") and hasattr(signal, "sigpending"),
                 "signal-race closure requires pthread_sigmask and sigpending")
 
+    @staticmethod
+    def enable_subreaper():
+        # Linux prctl(2): orphaned benchmark grandchildren are adopted by this
+        # supervisor instead of disappearing from the ancestry proof.
+        pr_set_child_subreaper = 36
+        pr_get_child_subreaper = 37
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.prctl(pr_set_child_subreaper, 1, 0, 0, 0) != 0:
+            error = ctypes.get_errno()
+            raise IsolationError("cannot enable child subreaper: {}".format(
+                os.strerror(error)))
+        enabled = ctypes.c_int(0)
+        if libc.prctl(pr_get_child_subreaper, ctypes.byref(enabled), 0, 0, 0) != 0 \
+                or enabled.value != 1:
+            raise IsolationError("kernel did not retain child-subreaper state")
+        return os.getpid()
+
     def _read_stat(self, path, label):
         try:
             return parse_proc_stat(path.read_text(encoding="ascii"), label)
@@ -829,9 +851,11 @@ class LinuxThreadBackend:
                 result.append(leader)
         return sorted(result, key=lambda item: (item.pid, item.starttime_ticks))
 
-    def child_scope_processes(self, child_record):
+    def child_scope_processes(self, child_record, retained=(), subreaper_pid=None):
         identities = self.list_threads(excluded_session=None)
-        keys = child_scope_process_keys(identities, child_record)
+        keys = child_scope_process_keys(
+            identities, child_record, retained=retained,
+            subreaper_pid=subreaper_pid)
         by_process = {}
         for identity in identities:
             if identity.process_key() in keys:
@@ -936,6 +960,16 @@ def validate_provenance(value, label="process provenance"):
     return value
 
 
+def validate_child_process(value, label="child process"):
+    require_exact_keys(value, CHILD_PROCESS_KEYS, label)
+    for name in ("pid", "session"):
+        exact_int(value[name], "{} {}".format(label, name), 1, 2**31 - 1)
+    exact_int(value["ppid"], "{} parent PID".format(label), 0, 2**31 - 1)
+    for name in ("starttime_ticks", "process_device", "process_inode"):
+        exact_int(value[name], "{} {}".format(label, name), 0, 2**63 - 1)
+    return value
+
+
 def validate_event(value, label="event"):
     require_exact_keys(value, EVENT_KEYS, label)
     require(value["event"] in EVENT_NAMES, "{} name is unknown".format(label))
@@ -1007,6 +1041,27 @@ def validate_report(report, require_accepted=False):
         exact_bool(child["released"], "child release flag")
         require(child["pid"] == child["session"],
                 "child is not its recorded session leader")
+    require(isinstance(report["child_processes"], list),
+            "report child-process identities are malformed")
+    child_processes = [
+        validate_child_process(item, "child process {}".format(index))
+        for index, item in enumerate(report["child_processes"])
+    ]
+    child_process_keys = [child_process_key(item) for item in child_processes]
+    require(len(child_process_keys) == len(set(child_process_keys)),
+            "report child-process identities are duplicated")
+    if child is None:
+        require(not child_processes,
+                "report has child-process identities without a child")
+    else:
+        require((child["pid"], child["starttime_ticks"],
+                 child["process_device"], child["process_inode"]) in
+                set(child_process_keys),
+                "report child root is absent from retained process identities")
+    require(report["subreaper_pid"] is None or
+            (type(report["subreaper_pid"]) is int and
+             1 <= report["subreaper_pid"] <= 2**31 - 1),
+            "report subreaper PID is invalid")
     require(report["child_returncode"] is None or
             (type(report["child_returncode"]) is int and
              -(2**31) <= report["child_returncode"] <= 2**31 - 1),
@@ -1237,7 +1292,24 @@ def child_record_from_identity(identity, released):
     }
 
 
-def child_scope_process_keys(identities, child_record):
+def child_process_record(identity):
+    return {
+        "pid": identity.pid,
+        "starttime_ticks": identity.process_starttime_ticks,
+        "process_device": identity.process_device,
+        "process_inode": identity.process_inode,
+        "session": identity.session,
+        "ppid": identity.ppid,
+    }
+
+
+def child_process_key(record):
+    return (record["pid"], record["starttime_ticks"],
+            record["process_device"], record["process_inode"])
+
+
+def child_scope_process_keys(identities, child_record, retained=(),
+                             subreaper_pid=None):
     """Return the recorded session plus descendants that created new sessions."""
     if child_record is None:
         return set()
@@ -1251,9 +1323,13 @@ def child_scope_process_keys(identities, child_record):
                 root.process_inode == child_record["process_inode"] and
                 root.session == child_record["session"],
                 "recorded child PID was reused while identifying descendants")
+    retained_keys = {child_process_key(item) for item in retained}
     selected_pids = {
         identity.pid for identity in by_pid.values()
-        if identity.session == child_record["session"]
+        if (identity.session == child_record["session"] or
+            identity.process_key() in retained_keys or
+            (subreaper_pid is not None and identity.ppid == subreaper_pid and
+             identity.process_starttime_ticks >= child_record["starttime_ticks"]))
     }
     # Retain the recorded root PID as an ancestry anchor even after its leader
     # has been reaped; a still-running direct child continues to expose ppid.
@@ -1276,21 +1352,25 @@ def child_scope_process_keys(identities, child_record):
 
 
 def wait_for_empty_child_scope(backend, child_record, deadline,
-                               sleep_function=time.sleep, reap_callback=None):
+                               sleep_function=time.sleep, reap_callback=None,
+                               retained=(), subreaper_pid=None):
     while time.monotonic() < deadline:
         if reap_callback is not None:
             reap_callback()
-        members = backend.child_scope_processes(child_record)
+        members = backend.child_scope_processes(
+            child_record, retained=retained, subreaper_pid=subreaper_pid)
         if not members:
             return []
         sleep_function(min(0.02, max(0.0, deadline - time.monotonic())))
-    return backend.child_scope_processes(child_record)
+    return backend.child_scope_processes(
+        child_record, retained=retained, subreaper_pid=subreaper_pid)
 
 
 def terminate_session(backend, child_record, initial_signal=signal.SIGTERM,
                       grace_seconds=SIGNAL_GRACE_SECONDS,
                       kill_grace_seconds=KILL_GRACE_SECONDS,
-                      sleep_function=time.sleep, reap_callback=None):
+                      sleep_function=time.sleep, reap_callback=None,
+                      retained=(), subreaper_pid=None):
     """Boundedly stop the child session and traceable cross-session descendants."""
     if child_record is None:
         return [], False
@@ -1305,7 +1385,8 @@ def terminate_session(backend, child_record, initial_signal=signal.SIGTERM,
                 live_leader.process_inode == child_record["process_inode"] and
                 live_leader.session == session_id,
                 "recorded child PID was reused or changed session before cleanup")
-    members = backend.child_scope_processes(child_record)
+    members = backend.child_scope_processes(
+        child_record, retained=retained, subreaper_pid=subreaper_pid)
     had_members = bool(members)
     members = sorted(members, key=lambda item: item.pid == child_record["pid"])
     for identity in members:
@@ -1318,7 +1399,7 @@ def terminate_session(backend, child_record, initial_signal=signal.SIGTERM,
                 "process identity changed while signaling child session") from error
     remaining = wait_for_empty_child_scope(
         backend, child_record, time.monotonic() + grace_seconds, sleep_function,
-        reap_callback)
+        reap_callback, retained, subreaper_pid)
     remaining = sorted(
         remaining, key=lambda item: item.pid == child_record["pid"])
     for identity in remaining:
@@ -1331,7 +1412,7 @@ def terminate_session(backend, child_record, initial_signal=signal.SIGTERM,
                 "process identity changed while killing child session") from error
     remaining = wait_for_empty_child_scope(
         backend, child_record, time.monotonic() + kill_grace_seconds, sleep_function,
-        reap_callback)
+        reap_callback, retained, subreaper_pid)
     if remaining:
         return ["child session {} retained {} process(es) after SIGKILL".format(
             session_id, len(remaining))], had_members
@@ -1400,6 +1481,9 @@ class AffinityTransaction:
         self.seen_keys = set()
         self.events = []
         self.child = None
+        self.child_processes = {}
+        self.child_process_order = []
+        self.subreaper_pid = None
         self.received_signal = None
         self.gate_descriptor = None
         self.initialized = False
@@ -1423,7 +1507,9 @@ class AffinityTransaction:
             "command_sha256": None,
             "command_identity": None,
             "child": None,
+            "child_processes": [],
             "child_returncode": None,
+            "subreaper_pid": None,
             "received_signal": None,
             "records": [],
             "process_provenance": [],
@@ -1433,6 +1519,49 @@ class AffinityTransaction:
             "error": None,
         }
         self._write(exclusive=True)
+
+    @classmethod
+    def recovery_view(cls, report, report_path, backend, writer, global_lock,
+                      sleep_function):
+        """Rehydrate journal state without creating or replacing the report."""
+        value = cls.__new__(cls)
+        value.backend = backend
+        value.reserved = set(report["reserved_cpus"])
+        value.launch = set(report["launch_cpus"])
+        value.report_path = Path(report_path)
+        value.poll_ms = report["poll_ms"]
+        value.writer = writer
+        value.seal_writer = atomic_json
+        value.sleep = sleep_function
+        value.launcher = None
+        value.global_lock = global_lock
+        value.records = {}
+        value.record_order = []
+        for record in report["records"]:
+            key = thread_from_record(record).key()
+            value.records[key] = record
+            value.record_order.append(key)
+        value.process_provenance = {}
+        value.provenance_order = []
+        for provenance in report["process_provenance"]:
+            key = (provenance["pid"], provenance["process_starttime_ticks"],
+                   provenance["process_device"], provenance["process_inode"])
+            value.process_provenance[key] = provenance
+            value.provenance_order.append(key)
+        value.seen_keys = set(value.record_order)
+        value.events = report["events"]
+        value.child = None
+        value.child_processes = {
+            child_process_key(item): item for item in report["child_processes"]}
+        value.child_process_order = [
+            child_process_key(item) for item in report["child_processes"]]
+        value.subreaper_pid = None
+        value.received_signal = report["received_signal"]
+        value.gate_descriptor = None
+        value.initialized = True
+        value.write_count = 0
+        value.report = report
+        return value
 
     def _invalidate_acceptance(self):
         """Make a previously sealed report unusable before changing its body."""
@@ -1473,6 +1602,8 @@ class AffinityTransaction:
         self.report["records"] = [self.records[key] for key in self.record_order]
         self.report["process_provenance"] = [
             self.process_provenance[key] for key in self.provenance_order]
+        self.report["child_processes"] = [
+            self.child_processes[key] for key in self.child_process_order]
         validate_report(self.report)
         self.writer(self.report_path, self.report, exclusive=exclusive)
         self.write_count += 1
@@ -1550,7 +1681,11 @@ class AffinityTransaction:
     def _snapshot(self, excluded_child=None):
         result = []
         identities = self.backend.list_threads(excluded_session=None)
-        excluded_processes = child_scope_process_keys(identities, excluded_child)
+        excluded_processes = child_scope_process_keys(
+            identities, excluded_child,
+            retained=[self.child_processes[key]
+                      for key in self.child_process_order],
+            subreaper_pid=self.subreaper_pid)
         for identity in identities:
             if identity.process_key() in excluded_processes:
                 continue
@@ -1761,11 +1896,36 @@ class AffinityTransaction:
                 "signal arrived before gated child release")
         child = child_record_from_identity(identity, False)
         self.report["child"] = child
+        process = child_process_record(identity)
+        key = child_process_key(process)
+        self.child_processes[key] = process
+        self.child_process_order.append(key)
         self.report["state"] = "launch_gated"
         # This durable write closes the SIGKILL launch window.  Until it
         # succeeds, the only path to child execution remains blocked by a pipe
         # whose writer dies with this supervisor.
         self._write()
+
+    def _observe_child_processes(self):
+        if self.report["child"] is None:
+            return 0
+        retained = [self.child_processes[key] for key in self.child_process_order]
+        members = self.backend.child_scope_processes(
+            self.report["child"], retained=retained,
+            subreaper_pid=self.subreaper_pid)
+        added = 0
+        for identity in members:
+            process = child_process_record(identity)
+            key = child_process_key(process)
+            if key in self.child_processes:
+                continue
+            self.child_processes[key] = process
+            self.child_process_order.append(key)
+            added += 1
+        if added:
+            self._event("child_descendants", value=added)
+            self._write()
+        return added
 
     def _mark_child_released(self):
         require(self.report["child"] is not None,
@@ -1802,7 +1962,7 @@ class AffinityTransaction:
         self._event("process_terminated", error.identity, "unsafe_newcomer")
         return []
 
-    def restore(self):
+    def restore(self, restored_status="restored"):
         failures = []
         for key in reversed(self.record_order):
             record = self.records[key]
@@ -1823,7 +1983,7 @@ class AffinityTransaction:
                 continue
             try:
                 self.backend.set_affinity(identity, set(record["original_cpus"]))
-                record["restore_status"] = "restored"
+                record["restore_status"] = restored_status
             except ThreadGone:
                 record["restore_status"] = "gone"
             except ThreadReused:
@@ -1840,6 +2000,91 @@ class AffinityTransaction:
             except IsolationError as error:
                 record["restore_status"] = "failed"
                 failures.append(str(error))
+        return failures
+
+    def _plan_late_restores(self):
+        """Journal restricted late arrivals before widening their exact masks."""
+        additions = 0
+        snapshot = self._snapshot()
+        for identity, affinity in snapshot:
+            key = identity.key()
+            record = self.records.get(key)
+            if record is not None:
+                original = set(record["original_cpus"])
+                restricted = set(record["restricted_cpus"])
+                if affinity == original:
+                    continue
+                if affinity == restricted:
+                    record["restore_status"] = "pending"
+                    additions += 1
+                    continue
+                self.report["uncertainty"] = True
+                record["restore_status"] = "uncertain"
+                raise IsolationError(
+                    "journaled thread {}/{} changed to an unprovable mask during "
+                    "restoration".format(identity.pid, identity.tid))
+
+            original, source, is_new_process = self._parent_original(identity)
+            if original is None:
+                if affinity.intersection(self.reserved):
+                    original = set(affinity)
+                    source = "observed"
+                    is_new_process = True
+                else:
+                    raise UnsafeNewcomer(
+                        identity,
+                        "late process {}/{} retained a restricted mask without "
+                        "exact creator provenance".format(identity.pid, identity.tid))
+            expected = original.difference(self.reserved)
+            if affinity == original:
+                if is_new_process:
+                    self._add_process_provenance(identity, original, source)
+                self.seen_keys.add(key)
+                continue
+            if (original.intersection(self.reserved) and affinity == expected and
+                    expected):
+                if is_new_process:
+                    self._add_process_provenance(identity, original, source)
+                record = self._record(
+                    identity, original, expected, "inherited",
+                    move_status="inherited_restricted")
+                self.records[key] = record
+                self.record_order.append(key)
+                self.seen_keys.add(key)
+                additions += 1
+                continue
+            raise UnsafeNewcomer(
+                identity,
+                "late thread {}/{} has neither its proven original nor inherited "
+                "restricted affinity".format(identity.pid, identity.tid))
+        return additions
+
+    def restore_reconciled(self, restored_status="restored"):
+        """Restore, then rescan until every restricted creator is quiescent."""
+        failures = self.restore(restored_status=restored_status)
+        stable = 0
+        for _ in range(MAX_STABILIZE_PASSES):
+            try:
+                additions = self._plan_late_restores()
+            except UnsafeNewcomer as error:
+                failures.extend(self._cleanup_unsafe_newcomer(error))
+                if not failures:
+                    failures.append(str(error))
+                stable = 0
+                continue
+            if additions:
+                # Exact originals and identities are durable before widening.
+                self.report["state"] = "restoring" if \
+                    restored_status == "restored" else "recovering"
+                self._write()
+                failures.extend(self.restore(restored_status=restored_status))
+                stable = 0
+            else:
+                stable += 1
+                if stable == 2:
+                    return failures
+            self.sleep(self.poll_ms / 1000.0)
+        failures.append("same-UID thread set did not stabilize during restoration")
         return failures
 
     def _finish_child_wait(self):
@@ -1873,21 +2118,31 @@ class AffinityTransaction:
         write_failures = []
         descendants_observed = False
         try:
+            if hasattr(self.backend, "enable_subreaper"):
+                self.subreaper_pid = self.backend.enable_subreaper()
+                self.report["subreaper_pid"] = self.subreaper_pid
             self.prepare_command(list(command))
             self.stabilize()
             self.child = self.launcher.launch(
                 taskset, list(command), self.launch, self.backend,
                 self._child_ready, self._authorize_child_release)
             self._mark_child_released()
+            self._observe_child_processes()
             while self.child.poll() is None:
                 if self.received_signal is not None:
                     break
+                self._observe_child_processes()
                 self.restrict_once(excluded_child=self.report["child"])
                 self.sleep(self.poll_ms / 1000.0)
             child_returncode = self.child.poll()
             if self.received_signal is None:
+                self._observe_child_processes()
                 self.restrict_once(excluded_child=self.report["child"])
-                members = self.backend.child_scope_processes(self.report["child"])
+                members = self.backend.child_scope_processes(
+                    self.report["child"],
+                    retained=[self.child_processes[key]
+                              for key in self.child_process_order],
+                    subreaper_pid=self.subreaper_pid)
                 if child_returncode is not None and members:
                     descendants_observed = True
                     self._event("child_descendants", value=len(members))
@@ -1912,7 +2167,10 @@ class AffinityTransaction:
                     failures, had_members = terminate_session(
                         self.backend, self.report["child"], initial_signal,
                         sleep_function=self.sleep,
-                        reap_callback=self.child.poll if self.child is not None else None)
+                        reap_callback=self.child.poll if self.child is not None else None,
+                        retained=[self.child_processes[key]
+                                  for key in self.child_process_order],
+                        subreaper_pid=self.subreaper_pid)
                     cleanup_failures.extend(failures)
                     if had_members:
                         self._event("child_session_cleanup", value=initial_signal)
@@ -1929,7 +2187,7 @@ class AffinityTransaction:
                 write_failures.append(str(error))
             if not cleanup_failures:
                 try:
-                    restore_failures = self.restore()
+                    restore_failures = self.restore_reconciled()
                 except BaseException as error:
                     restore_failures.append(str(error))
             else:
@@ -2064,40 +2322,17 @@ def recover_report(path, backend=None, writer=atomic_json, host=None,
     try:
         cleanup_failures, _ = terminate_session(
             backend, report["child"], signal.SIGTERM,
-            sleep_function=sleep_function)
+            sleep_function=sleep_function,
+            retained=report["child_processes"])
     except BaseException as error:
         cleanup_failures.append(str(error))
     failures.extend(cleanup_failures)
 
     if not cleanup_failures:
-        for record in reversed(report["records"]):
-            if record["restore_status"] not in {"pending", "failed"}:
-                continue
-            identity = thread_from_record(record)
-            try:
-                backend.current_identity(identity)
-            except ThreadGone:
-                record["restore_status"] = "gone"
-                continue
-            except ThreadReused:
-                record["restore_status"] = "reused"
-                report["uncertainty"] = True
-                failures.append(
-                    "TID {}/{} was reused before recovery".format(
-                        identity.pid, identity.tid))
-                continue
-            try:
-                backend.set_affinity(identity, set(record["original_cpus"]))
-                record["restore_status"] = "restored_after_recovery"
-            except ThreadGone:
-                record["restore_status"] = "gone"
-            except (ThreadReused, ThreadMutationUncertain) as error:
-                record["restore_status"] = "uncertain"
-                report["uncertainty"] = True
-                failures.append(str(error) or "TID reuse during recovery")
-            except IsolationError as error:
-                record["restore_status"] = "failed"
-                failures.append(str(error))
+        recovery = AffinityTransaction.recovery_view(
+            report, path, backend, writer, global_lock, sleep_function)
+        failures.extend(recovery.restore_reconciled(
+            restored_status="restored_after_recovery"))
     else:
         failures.append(
             "affinity restore withheld until child-session cleanup succeeds")
@@ -2429,6 +2664,11 @@ class FakeBackend:
         self.set_log = []
         self.signal_log = []
         self.operation_log = []
+        self.on_set = None
+
+    @staticmethod
+    def enable_subreaper():
+        return 500
 
     def add(self, pid, tid, start, session, cpus, ppid=1, process_start=None,
             task_device=101, task_inode=None, process_device=102,
@@ -2488,6 +2728,8 @@ class FakeBackend:
         self.threads[key][1] = set(cpus)
         self.set_log.append((identity.key(), tuple(sorted(cpus))))
         self.operation_log.append(("set", identity.pid, tuple(sorted(cpus))))
+        if self.on_set is not None:
+            self.on_set(identity, set(cpus))
         if key in self.reuse_after_set:
             self.reuse_after_set.remove(key)
             old = self.threads[key][0]
@@ -2510,9 +2752,11 @@ class FakeBackend:
                     seen.add(key)
         return sorted(result, key=lambda item: item.pid)
 
-    def child_scope_processes(self, child_record):
+    def child_scope_processes(self, child_record, retained=(), subreaper_pid=None):
         identities = self.list_threads()
-        keys = child_scope_process_keys(identities, child_record)
+        keys = child_scope_process_keys(
+            identities, child_record, retained=retained,
+            subreaper_pid=subreaper_pid)
         result = []
         seen = set()
         for identity in identities:
@@ -2557,13 +2801,15 @@ class PostInstallFailWriter:
 
 
 class FakeChild:
-    def __init__(self, backend, identity, descendant=False, stay_alive=False):
+    def __init__(self, backend, identity, descendant=False, stay_alive=False,
+                 reparent_on_exit=False):
         self.backend = backend
         self.identity = identity
         self.pid = identity.pid
         self.returncode = None
         self.descendant = descendant
         self.stay_alive = stay_alive
+        self.reparent_on_exit = reparent_on_exit
         self.poll_count = 0
 
     def poll(self):
@@ -2580,6 +2826,10 @@ class FakeChild:
             # the same session to exercise bounded cleanup and evidence failure.
             if self.descendant:
                 del self.backend.threads[(self.pid, self.pid)]
+                if self.reparent_on_exit and (901, 901) in self.backend.threads:
+                    adopted = self.backend.threads[(901, 901)][0]
+                    self.backend.threads[(901, 901)][0] = replace(
+                        adopted, ppid=500, session=901)
             else:
                 self.backend.remove_process(self.pid)
             self.returncode = 0
@@ -2602,6 +2852,7 @@ class FakeLauncher:
         self.stay_alive = stay_alive
         self.fail_before_release = fail_before_release
         self.cross_session = cross_session
+        self.reparent_on_exit = False
         self.launch_count = 0
         self.released = False
         self.before_release = None
@@ -2623,7 +2874,8 @@ class FakeLauncher:
             release_callback(None)
             self.released = True
             return FakeChild(
-                self.backend, leader, self.descendant, self.stay_alive)
+                self.backend, leader, self.descendant, self.stay_alive,
+                self.reparent_on_exit)
         except BaseException:
             self.backend.remove_process(900)
             self.backend.remove_process(901)
@@ -2696,6 +2948,63 @@ def test_exact_restore_and_newcomer():
               backend.get_affinity(second) == {0, 1, 2, 3} and
               backend.get_affinity(newcomer) == {0, 1, 2, 3},
               "exact inherited masks were not restored")
+
+
+def test_late_inherited_restore_reconciliation():
+    with tempfile.TemporaryDirectory() as directory:
+        backend = FakeBackend()
+        backend.add(10, 10, 100, 10, {0, 1, 2, 3}, ppid=1)
+        backend.add(10, 11, 101, 10, {0, 1, 2, 3}, ppid=1,
+                    process_start=100)
+        transaction = make_fake_transaction(directory, backend)
+        transaction.prepare_command(fake_command())
+        transaction.stabilize()
+        spawned = {"done": False}
+
+        def spawn_from_still_restricted_creator(identity, cpus):
+            if (not spawned["done"] and identity.tid == 11 and
+                    cpus == {0, 1, 2, 3}):
+                spawned["done"] = True
+                backend.add(10, 12, 102, 10, {0, 2}, ppid=1,
+                            process_start=100)
+
+        backend.on_set = spawn_from_still_restricted_creator
+        check(not transaction.restore_reconciled(),
+              "late inherited thread reconciliation reported a failure")
+        late = backend.threads[(10, 12)][0]
+        check(backend.get_affinity(late) == {0, 1, 2, 3} and
+              transaction.records[late.key()]["restore_status"] == "restored",
+              "late inherited thread was stranded on the restricted mask")
+        retained = load_report(transaction.report_path)
+        check(any(item["tid"] == 12 for item in retained["records"]),
+              "late inherited original was not durable before widening")
+
+    with tempfile.TemporaryDirectory() as directory:
+        backend = FakeBackend()
+        backend.add(20, 20, 200, 20, {0, 1, 2, 3}, ppid=1)
+        backend.add(20, 21, 201, 20, {0, 1, 2, 3}, ppid=1,
+                    process_start=200)
+        transaction = make_fake_transaction(directory, backend)
+        transaction.prepare_command(fake_command())
+        transaction.initialize_provenance()
+        spawned = {"done": False}
+
+        def spawn_during_recovery(identity, cpus):
+            if (not spawned["done"] and identity.tid == 21 and
+                    cpus == {0, 1, 2, 3}):
+                spawned["done"] = True
+                backend.add(20, 22, 202, 20, {0, 2}, ppid=1,
+                            process_start=200)
+
+        backend.on_set = spawn_during_recovery
+        check(recover_report(
+            transaction.report_path, backend=backend, host=FAKE_HOST,
+            sleep_function=lambda _seconds: None,
+            global_lock=transaction.global_lock) == 0,
+              "recovery did not reconcile a late inherited thread")
+        late = backend.threads[(20, 22)][0]
+        check(backend.get_affinity(late) == {0, 1, 2, 3},
+              "recovery stranded a late inherited thread")
 
 
 def test_nonuniform_and_unsafe_newcomer():
@@ -2826,6 +3135,20 @@ def test_gate_signal_and_descendants():
         check(not backend.session_processes(900) and
               any(item[1] == signal.SIGTERM for item in backend.signal_log),
               "child-session descendant was not boundedly cleaned")
+
+    with tempfile.TemporaryDirectory() as directory:
+        backend = FakeBackend()
+        backend.add(1, 1, 1, 1, {0, 1, 2, 3}, ppid=0)
+        launcher = FakeLauncher(backend, descendant=True, cross_session=True)
+        launcher.reparent_on_exit = True
+        transaction = make_fake_transaction(directory, backend, launcher=launcher)
+        check(transaction.run(fake_command()) == 1 and
+              (901, 901) not in backend.threads and
+              any(item[0] == 901 for item in backend.signal_log),
+              "retained cross-session orphan escaped cleanup after reparenting")
+        retained = load_report(transaction.report_path)
+        check(any(item["pid"] == 901 for item in retained["child_processes"]),
+              "cross-session descendant identity was not durably retained")
 
     with tempfile.TemporaryDirectory() as directory:
         backend = FakeBackend()
@@ -2986,17 +3309,27 @@ def test_recovery_kills_session_before_restore():
         transaction.prepare_command(fake_command())
         transaction.initialize_provenance()
         child = backend.add(900, 900, 9000, 900, {0, 1, 2, 3}, ppid=1)
+        descendant = backend.add(
+            901, 901, 9010, 901, {0, 1, 2, 3}, ppid=900)
         transaction.report["child"] = child_record_from_identity(child, True)
+        for member in (child, descendant):
+            process = child_process_record(member)
+            key = child_process_key(process)
+            transaction.child_processes[key] = process
+            transaction.child_process_order.append(key)
         transaction.report["state"] = "running"
         transaction._write()
+        backend.remove_process(900)
+        backend.threads[(901, 901)][0] = replace(
+            descendant, ppid=1, session=901)
         check(recover_report(
             transaction.report_path, backend=backend, host=FAKE_HOST,
             sleep_function=lambda _seconds: None,
             global_lock=transaction.global_lock) == 0,
               "recovery with a live child session failed")
-        check(not backend.session_processes(900) and
+        check((901, 901) not in backend.threads and
               backend.get_affinity(identity) == {0, 1, 2, 3},
-              "recovery restored masks before emptying child session")
+              "recovery restored masks before emptying retained descendants")
         signal_index = next(index for index, item in enumerate(backend.operation_log)
                             if item[0] == "signal")
         restore_index = next(
@@ -3099,6 +3432,7 @@ def self_test():
     tests = (
         test_global_lock_serialization,
         test_exact_restore_and_newcomer,
+        test_late_inherited_restore_reconciliation,
         test_nonuniform_and_unsafe_newcomer,
         test_write_failure_still_restores,
         test_acceptance_is_path_sealed_and_fail_closed,
