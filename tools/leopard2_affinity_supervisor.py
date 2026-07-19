@@ -45,6 +45,7 @@ from pathlib import Path
 
 
 REPORT_SCHEMA = "leopard2-affinity-supervisor/v2"
+ACCEPTANCE_SCHEMA = "leopard2-affinity-acceptance/v1"
 BINDING_SCHEMA = "leopard2-affinity-main-binding/v1"
 MAIN_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v4"
 MAIN_RAW_SCHEMA = "leopard2-main-compare-raw/v4"
@@ -79,6 +80,10 @@ PID_NAMESPACE_KEYS = {"device", "inode"}
 GLOBAL_LOCK_KEYS = {
     "device", "directory_device", "directory_inode", "inode", "lock", "mode",
     "path", "uid",
+}
+ACCEPTANCE_KEYS = {
+    "committed_utc", "digest", "report_path", "report_sha256", "report_size",
+    "schema",
 }
 COMMAND_IDENTITY_KEYS = {"cwd", "executable", "script"}
 PATH_IDENTITY_KEYS = {"device", "inode", "mode", "path"}
@@ -460,12 +465,115 @@ def atomic_json(path, value, exclusive=False):
             os.replace(temporary, str(path))
         installed = True
         fsync_directory(path.parent)
+    except BaseException as error:
+        if installed and exclusive:
+            # An exclusive evidence file is not usable unless its directory
+            # entry was durably committed.  Remove a possibly-installed file
+            # before returning the durability failure.
+            try:
+                os.unlink(path)
+                fsync_directory(path.parent)
+            except FileNotFoundError:
+                pass
+            except BaseException as cleanup_error:
+                raise IsolationError(
+                    "exclusive write failed and installed-file cleanup was "
+                    "not durable: {}; {}".format(error, cleanup_error)) from error
+        raise
     finally:
         if not installed:
             try:
                 os.unlink(temporary)
             except OSError:
                 pass
+
+
+def acceptance_path(report_path):
+    report_path = Path(report_path)
+    return report_path.with_name(report_path.name + ".accepted.json")
+
+
+def ambiguity_path(report_path):
+    report_path = Path(report_path)
+    return report_path.with_name(report_path.name + ".ambiguous")
+
+
+def durable_unlink(path):
+    path = Path(path)
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        return False
+    fsync_directory(path.parent)
+    return True
+
+
+def validate_acceptance(value, report_path, report_bytes):
+    value = verify_signed_json(value, "affinity acceptance seal")
+    require_exact_keys(value, ACCEPTANCE_KEYS, "affinity acceptance seal")
+    require(value["schema"] == ACCEPTANCE_SCHEMA,
+            "affinity acceptance seal has wrong schema")
+    validate_utc(value["committed_utc"], "affinity acceptance commit")
+    exact_int(value["report_size"], "acceptance report size", 0,
+              MAX_IDENTITY_BYTES)
+    require(isinstance(value["report_sha256"], str) and
+            HEX256.fullmatch(value["report_sha256"]) is not None,
+            "acceptance report hash is invalid")
+    canonical_report = str(Path(report_path).resolve(strict=True))
+    require(value["report_path"] == canonical_report and
+            value["report_size"] == len(report_bytes) and
+            value["report_sha256"] == sha256_bytes(report_bytes),
+            "affinity acceptance seal does not bind the report snapshot")
+    return value
+
+
+def accepted_report_snapshot(path):
+    """Return one sealed report snapshot or fail closed on ambiguity."""
+    path = Path(path).resolve(strict=True)
+    require(not ambiguity_path(path).exists(),
+            "affinity report has a durable ambiguity marker")
+    try:
+        report_bytes = path.read_bytes()
+        seal_bytes = acceptance_path(path).read_bytes()
+    except OSError as error:
+        raise IsolationError("accepted affinity evidence is incomplete") from error
+    require(len(report_bytes) <= MAX_IDENTITY_BYTES and
+            len(seal_bytes) <= MAX_IDENTITY_BYTES,
+            "accepted affinity evidence exceeds its size bound")
+    try:
+        report = validate_report(json.loads(report_bytes.decode("utf-8")))
+        seal = validate_acceptance(
+            json.loads(seal_bytes.decode("utf-8")), path, report_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise IsolationError("accepted affinity evidence is malformed") from error
+    require(report["accepted"] is True,
+            "affinity report body is not accepted")
+    return report, report_bytes, seal, seal_bytes
+
+
+def invalidate_acceptance_path(report_path, replace_function=os.replace,
+                               fsync_function=fsync_directory,
+                               unlink_function=durable_unlink):
+    """Atomically exchange the accepting name for a rejecting marker."""
+    report_path = Path(report_path)
+    seal = acceptance_path(report_path)
+    marker = ambiguity_path(report_path)
+    if not seal.exists():
+        return False
+    try:
+        replace_function(seal, marker)
+        fsync_function(report_path.parent)
+    except BaseException as error:
+        try:
+            unlink_function(seal)
+        except BaseException as unlink_error:
+            raise IsolationError(
+                "acceptance rename and unlink both failed: {}; {}".format(
+                    error, unlink_error)) from error
+        raise IsolationError(
+            "acceptance invalidation was visible but not durably confirmed: "
+            "{}".format(error)) from error
+    return True
 
 
 def parse_proc_stat(text, label):
@@ -900,7 +1008,9 @@ def validate_report(report, require_accepted=False):
                     for item in records),
                 "accepted report is not a complete clean transaction")
     if require_accepted:
-        require(report["accepted"] is True, "affinity report is not accepted")
+        raise IsolationError(
+            "accepted evidence is path-bound; use load_report(..., "
+            "require_accepted=True)")
     return report
 
 
@@ -1150,7 +1260,7 @@ class AffinityTransaction:
     def __init__(self, backend, reserved_cpus, launch_cpus, report_path,
                  poll_ms=DEFAULT_POLL_MS, writer=atomic_json,
                  host=None, sleep_function=time.sleep, launcher=None,
-                 global_lock=None):
+                 global_lock=None, seal_writer=atomic_json):
         self.backend = backend
         if hasattr(self.backend, "validate_capabilities"):
             self.backend.validate_capabilities()
@@ -1164,6 +1274,7 @@ class AffinityTransaction:
         self.report_path = Path(report_path)
         self.poll_ms = exact_int(poll_ms, "poll milliseconds", 1, 10000)
         self.writer = writer
+        self.seal_writer = seal_writer
         self.sleep = sleep_function
         self.launcher = GatedLauncher() if launcher is None else launcher
         require(global_lock is not None,
@@ -1184,6 +1295,9 @@ class AffinityTransaction:
         self.received_signal = None
         self.initialized = False
         self.write_count = 0
+        require(not acceptance_path(self.report_path).exists() and
+                not ambiguity_path(self.report_path).exists(),
+                "report acceptance/ambiguity sidecar already exists")
         self.report = {
             "schema": REPORT_SCHEMA,
             "state": "created",
@@ -1210,6 +1324,37 @@ class AffinityTransaction:
             "error": None,
         }
         self._write(exclusive=True)
+
+    def _invalidate_acceptance(self):
+        """Make a previously sealed report unusable before changing its body."""
+        invalidate_acceptance_path(self.report_path)
+
+    def _seal_acceptance(self):
+        require(self.report["accepted"] is True and
+                self.report["state"] == "complete",
+                "cannot seal an unaccepted affinity report")
+        require(not ambiguity_path(self.report_path).exists(),
+                "cannot seal an affinity report with ambiguous durability")
+        report_bytes = self.report_path.read_bytes()
+        require(report_bytes == canonical_bytes(self.report),
+                "retained report differs from the accepted in-memory snapshot")
+        payload = {
+            "schema": ACCEPTANCE_SCHEMA,
+            "committed_utc": utc_now(),
+            "report_path": str(self.report_path.resolve(strict=True)),
+            "report_size": len(report_bytes),
+            "report_sha256": sha256_bytes(report_bytes),
+        }
+        payload["digest"] = sha256_value(payload)
+        seal = acceptance_path(self.report_path)
+        try:
+            self.seal_writer(seal, payload, exclusive=True)
+            validate_acceptance(payload, self.report_path, report_bytes)
+        except BaseException:
+            # A writer may report a post-install fsync error.  Never let that
+            # possibly-installed seal make the body acceptable.
+            self._invalidate_acceptance()
+            raise
 
     def _write(self, exclusive=False):
         if hasattr(self.global_lock, "validate_current"):
@@ -1702,6 +1847,19 @@ class AffinityTransaction:
                     self._write()
                 except BaseException as error:
                     write_failures.append(str(error))
+            if self.report["accepted"]:
+                try:
+                    self._seal_acceptance()
+                except BaseException as error:
+                    write_failures.append(str(error))
+                    self.report["accepted"] = False
+                    self.report["state"] = "failed"
+                    self.report["finished_utc"] = utc_now()
+                    self.report["error"] = "acceptance seal failed: {}".format(error)
+                    try:
+                        self._write()
+                    except BaseException as rewrite_error:
+                        write_failures.append(str(rewrite_error))
             if old_signal_mask is not None:
                 signal.pthread_sigmask(signal.SIG_SETMASK, old_signal_mask)
         if write_failures or run_error is not None or cleanup_failures or restore_failures:
@@ -1720,8 +1878,9 @@ def load_json(path, label):
 
 
 def load_report(path, require_accepted=False):
-    return validate_report(
-        load_json(path, "affinity report"), require_accepted=require_accepted)
+    if require_accepted:
+        return accepted_report_snapshot(path)[0]
+    return validate_report(load_json(path, "affinity report"))
 
 
 def report_host_matches(report, host=None):
@@ -1751,6 +1910,10 @@ def recover_report(path, backend=None, writer=atomic_json, host=None,
             "recovery global lock differs from the journaled lock identity")
     failures = []
     write_failures = []
+    try:
+        invalidate_acceptance_path(path)
+    except BaseException as error:
+        write_failures.append("acceptance invalidation failed: {}".format(error))
     report["state"] = "recovering"
     report["accepted"] = False
     report["finished_utc"] = None
@@ -1894,7 +2057,9 @@ def resolve_command_path(value, cwd):
 
 
 def validate_main_manifest_binding(report, manifest_path):
-    validate_report(report, require_accepted=True)
+    validate_report(report)
+    require(report["accepted"] is True,
+            "main-comparison binding requires an accepted report snapshot")
     manifest_path = Path(manifest_path).resolve(strict=True)
     manifest_bytes = manifest_path.read_bytes()
     manifest = verify_signed_json(
@@ -1990,9 +2155,7 @@ def validate_main_manifest_binding(report, manifest_path):
 
 def binding_payload(report_path, manifest_path):
     report_path = Path(report_path).resolve(strict=True)
-    report_bytes = report_path.read_bytes()
-    report = validate_report(json.loads(report_bytes.decode("utf-8")),
-                             require_accepted=True)
+    report, report_bytes, _seal, _seal_bytes = accepted_report_snapshot(report_path)
     inputs = validate_main_manifest_binding(report, manifest_path)
     manifest_path = Path(manifest_path).resolve(strict=True)
     return {
@@ -2040,15 +2203,13 @@ def validate_binding(value, binding_path=None):
                 "binding {} file identity is invalid".format(label))
     report_path = Path(report_ref["path"]).resolve(strict=True)
     manifest_path = Path(manifest_ref["path"]).resolve(strict=True)
-    report_bytes = report_path.read_bytes()
+    report, report_bytes, _seal, _seal_bytes = accepted_report_snapshot(report_path)
     manifest_bytes = manifest_path.read_bytes()
     require(len(report_bytes) == report_ref["size"] and
             sha256_bytes(report_bytes) == report_ref["sha256"] and
             len(manifest_bytes) == manifest_ref["size"] and
             sha256_bytes(manifest_bytes) == manifest_ref["sha256"],
             "binding file identity changed")
-    report = validate_report(json.loads(report_bytes.decode("utf-8")),
-                             require_accepted=True)
     require(report["command_sha256"] == report_ref["command_sha256"],
             "binding command identity differs from accepted report")
     inputs = validate_main_manifest_binding(report, manifest_path)
@@ -2242,6 +2403,12 @@ class CountingWriter:
         atomic_json(path, value, exclusive=exclusive)
 
 
+class PostInstallFailWriter:
+    def __call__(self, path, value, exclusive=False):
+        atomic_json(path, value, exclusive=exclusive)
+        raise OSError("injected post-install durability failure")
+
+
 class FakeChild:
     def __init__(self, backend, identity, descendant=False, stay_alive=False):
         self.backend = backend
@@ -2312,7 +2479,8 @@ class FakeLauncher:
 
 
 def make_fake_transaction(directory, backend, writer=atomic_json, launcher=None,
-                          sleep_function=lambda _seconds: None, global_lock=None):
+                          sleep_function=lambda _seconds: None, global_lock=None,
+                          seal_writer=atomic_json):
     if global_lock is None:
         global_lock = FakeGlobalLock()
         # Each fake transaction models a previously acquired coordinator lock;
@@ -2322,7 +2490,7 @@ def make_fake_transaction(directory, backend, writer=atomic_json, launcher=None,
         backend, (1, 3), (0, 1, 2, 3), Path(directory) / "report.json",
         poll_ms=1, writer=writer, host=FAKE_HOST,
         sleep_function=sleep_function, launcher=launcher,
-        global_lock=global_lock)
+        global_lock=global_lock, seal_writer=seal_writer)
 
 
 def fake_command():
@@ -2423,6 +2591,48 @@ def test_write_failure_still_restores():
               "pre-restore write failure was not reported")
         check(backend.get_affinity(identity) == {0, 1, 2, 3},
               "pre-restore write failure suppressed mask restoration")
+
+
+def test_acceptance_is_path_sealed_and_fail_closed():
+    with tempfile.TemporaryDirectory() as directory:
+        backend = FakeBackend()
+        backend.add(1, 1, 1, 1, {0, 1, 2, 3}, ppid=0)
+        transaction = make_fake_transaction(
+            directory, backend, launcher=FakeLauncher(backend),
+            seal_writer=PostInstallFailWriter())
+        check(transaction.run(fake_command()) == 1,
+              "post-install seal failure did not fail the transaction")
+        expect_exception(
+            IsolationError,
+            lambda: load_report(transaction.report_path, require_accepted=True),
+            "post-install seal failure acceptance")
+        check(transaction.report["accepted"] is False,
+              "post-install seal failure left accepted in-memory state")
+
+    with tempfile.TemporaryDirectory() as directory:
+        backend = FakeBackend()
+        backend.add(1, 1, 1, 1, {0, 1, 2, 3}, ppid=0)
+        transaction = make_fake_transaction(
+            directory, backend, launcher=FakeLauncher(backend))
+        check(transaction.run(fake_command()) == 0 and
+              load_report(transaction.report_path, require_accepted=True)["accepted"],
+              "valid transaction did not create a usable acceptance seal")
+
+        def fail_fsync(_path):
+            raise OSError("injected late invalidation fsync failure")
+
+        expect_exception(
+            IsolationError,
+            lambda: invalidate_acceptance_path(
+                transaction.report_path, fsync_function=fail_fsync),
+            "late invalidation durability failure")
+        expect_exception(
+            IsolationError,
+            lambda: load_report(transaction.report_path, require_accepted=True),
+            "late invalidation ambiguity")
+        check(ambiguity_path(transaction.report_path).exists() and
+              not acceptance_path(transaction.report_path).exists(),
+              "late invalidation did not atomically prefer rejection")
 
 
 def test_gate_signal_and_descendants():
@@ -2717,6 +2927,7 @@ def self_test():
         test_exact_restore_and_newcomer,
         test_nonuniform_and_unsafe_newcomer,
         test_write_failure_still_restores,
+        test_acceptance_is_path_sealed_and_fail_closed,
         test_gate_signal_and_descendants,
         test_tid_reuse_and_recovery,
         test_recovery_kills_session_before_restore,
@@ -2811,6 +3022,7 @@ def main(arguments=None):
                     transaction._capture_blocked_signals()
                     if transaction.received_signal is not None and \
                             transaction.report["accepted"]:
+                        transaction._invalidate_acceptance()
                         transaction.report["accepted"] = False
                         transaction.report["state"] = "failed"
                         transaction.report["finished_utc"] = utc_now()
