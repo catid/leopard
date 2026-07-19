@@ -437,6 +437,8 @@ def _normalize_bound_paths(value: object, replacements: tuple[tuple[str, str], .
 
     token_prefix_delimiters = frozenset(" \t\r\n\"'`=(:,;[{")
     token_suffix_delimiters = frozenset(" \t\r\n\"'`,:;)]}")
+    cmake_external_object_suffix = re.compile(
+        r"CMakeFiles/[^/\s\"'`]+\.dir$")
 
     def replace_root_tokens(text: str, original: str, marker: str) -> str:
         """Replace an absolute root only at a standalone path-token boundary."""
@@ -448,13 +450,24 @@ def _normalize_bound_paths(value: object, replacements: tuple[tuple[str, str], .
                 pieces.append(text[cursor:])
                 return "".join(pieces)
             end = index + len(original)
+            prefix = text[:index]
+            cmake_match = cmake_external_object_suffix.search(prefix)
+            cmake_external_source = cmake_match is not None and (
+                cmake_match.start() == 0 or
+                prefix[cmake_match.start() - 1] == "/" or
+                prefix[cmake_match.start() - 1] in token_prefix_delimiters)
             before_ok = index == 0 or \
-                text[index - 1] in token_prefix_delimiters
+                text[index - 1] in token_prefix_delimiters or \
+                cmake_external_source
             after_ok = end == len(text) or text[end] == "/" or \
                 text[end] in token_suffix_delimiters
             pieces.append(text[cursor:index])
             if before_ok and after_ok:
-                pieces.append(marker)
+                # CMake encodes an absolute external source below
+                # CMakeFiles/<target>.dir by stripping no leading slash:
+                # target.dir/home/user/source.cpp.o.  Preserve a separator
+                # before the abstract root marker in that one typed context.
+                pieces.append(("/" if cmake_external_source else "") + marker)
             else:
                 pieces.append(original)
             cursor = end
@@ -3183,6 +3196,47 @@ def self_test() -> None:
                      "/tree.build/file /tree!file /tree#file /tree?file "
                      "/other/tree/file root=$ROOT ($ROOT),$ROOT:/next"),
         }, "scope path normalization rewrote a textual sibling prefix")
+
+        def normalize_cmake_external_object(
+            source_root: str, build_root: str,
+        ) -> dict[str, Any]:
+            object_path = (
+                f"{build_root}/CMakeFiles/leopard.dir"
+                f"{source_root}/LeopardFF8.cpp.o")
+            recipe_text = (
+                "ar qc libleopard.a CMakeFiles/leopard.dir"
+                f"{source_root}/LeopardFF8.cpp.o\n")
+            return _normalize_bound_paths({
+                "object_path": object_path,
+                "archive_link_recipe_content": retained_text(recipe_text),
+            }, ((source_root, "$SOURCE"), (build_root, "$BUILD")))
+
+        normalized_home_source = normalize_cmake_external_object(
+            "/home/a", "/opt/b")
+        normalized_opt_source = normalize_cmake_external_object(
+            "/opt/b", "/home/a")
+        expected_external_recipe = retained_text(
+            "ar qc libleopard.a CMakeFiles/leopard.dir/"
+            "$SOURCE/LeopardFF8.cpp.o\n")
+        expected_external_object = {
+            "archive_link_recipe_content": expected_external_recipe,
+            "object_path": (
+                "$BUILD/CMakeFiles/leopard.dir/"
+                "$SOURCE/LeopardFF8.cpp.o"),
+        }
+        require(normalized_home_source == expected_external_object and
+                normalized_opt_source == expected_external_object,
+                "CMake external-source object paths are not root-independent")
+        normalized_external_sibling = _normalize_bound_paths({
+            "object_path": (
+                "/opt/b/CMakeFiles/leopard.dir/"
+                "home/a-copy/LeopardFF8.cpp.o"),
+        }, (("/home/a", "$SOURCE"), ("/opt/b", "$BUILD")))
+        require(normalized_external_sibling == {
+            "object_path": (
+                "$BUILD/CMakeFiles/leopard.dir/"
+                "home/a-copy/LeopardFF8.cpp.o"),
+        }, "CMake external-source handling rewrote a sibling path prefix")
         recipe_text = "/tree/build/ar qc /tree/source.cpp\n"
         normalized_recipe = _normalize_bound_paths({
             "archive_link_recipe": {
