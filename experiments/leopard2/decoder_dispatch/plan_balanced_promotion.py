@@ -844,11 +844,25 @@ def _validate_scope_build(build: object, role: str) -> dict[str, Any]:
         token for token in executable_tokens
         if token.rsplit("/", 1)[-1] == archive_name
     ]
+    opaque_library_operands = [
+        token for token in executable_tokens
+        if "@" in token or token.startswith("-l") or ",-l" in token
+    ]
+    external_archives = [
+        token for token in executable_tokens
+        if token.endswith(".a") and token != archive_name
+    ]
+    allowed_system_roots = ("/lib/", "/lib64/", "/usr/lib/", "/usr/lib64/")
     require(executable_tokens and
             executable_tokens[0] == compiler_invocation["invocation"] and
             [token for token in executable_tokens if token.endswith(".o")] ==
                 [expected_benchmark_object] and
             same_name_archive_operands == [archive_name] and
+            not opaque_library_operands and
+            all(os.path.isabs(token) and os.path.normpath(token) == token and
+                token.rsplit("/", 1)[-1] == "libpthread.a" and
+                token.startswith(allowed_system_roots)
+                for token in external_archives) and
             outputs == [executable_name],
             f"{role} normalized executable recipe semantics differ")
     require(compiler["path"], f"{role} normalized compiler path is empty")
@@ -3056,6 +3070,24 @@ def self_test() -> None:
         reject_scope_mutation(
             "uniform same-basename foreign archive operands",
             redirect_all_declared_archives)
+        def add_all_foreign_archive_operands(values) -> None:
+            for value in values:
+                for role, archive_name in (
+                    ("baseline", "libleopard_main_exact.a"),
+                    ("candidate", "libleopard.a"),
+                ):
+                    build = value["builds"][role]
+                    text = build[
+                        "executable_link_recipe_content"]["text"].replace(
+                            f" {archive_name} ",
+                            f" {archive_name} /tmp/evil.a ", 1)
+                    retained = retained_text(text)
+                    build["executable_link_recipe_content"] = retained
+                    build["executable_link_recipe"]["size"] = retained["size"]
+                    build["executable_link_recipe"]["sha256"] = retained["sha256"]
+        reject_scope_mutation(
+            "uniform foreign archive operands",
+            add_all_foreign_archive_operands)
         def remove_all_dynamic_loader_records(values) -> None:
             for value in values:
                 for role in ("baseline", "candidate"):

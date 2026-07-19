@@ -1299,10 +1299,10 @@ def validate_effective_flags(tokens: Sequence[str], what: str) -> None:
     require(not rejected, f"{what} contains instrumentation/noncanonical flags: {rejected}")
 
 
-def validate_declared_archive_operand(
+def validate_declared_archive_operands(
     tokens: Sequence[str], archive_name: str, label: str,
 ) -> None:
-    """Require one canonical link operand for the declared project archive."""
+    """Require the declared archive and reject opaque/foreign static inputs."""
     require(isinstance(archive_name, str) and archive_name and
             Path(archive_name).name == archive_name,
             f"{label} declared archive name is not canonical")
@@ -1312,6 +1312,25 @@ def validate_declared_archive_operand(
     ]
     require(same_name_operands == [archive_name],
             f"{label} does not link its one canonical declared archive operand")
+    opaque_library_operands = [
+        token for token in tokens
+        if isinstance(token, str) and (
+            "@" in token or token.startswith("-l") or ",-l" in token)
+    ]
+    require(not opaque_library_operands,
+            f"{label} contains opaque library/response operands")
+    external_archives = [
+        token for token in tokens
+        if isinstance(token, str) and token.endswith(".a") and
+        token != archive_name
+    ]
+    allowed_system_roots = ("/lib/", "/lib64/", "/usr/lib/", "/usr/lib64/")
+    require(all(
+                Path(token).is_absolute() and os.path.normpath(token) == token and
+                Path(token).name == "libpthread.a" and
+                token.startswith(allowed_system_roots)
+                for token in external_archives),
+            f"{label} contains an undeclared static archive operand")
 
 
 def command_output_path(entry: Mapping[str, Any], tokens: Sequence[str]) -> Path:
@@ -1616,7 +1635,7 @@ def build_provenance(
     require(executable_link_tokens and
             Path(executable_link_tokens[0]).resolve(strict=True) == compiler,
             f"{implementation} link recipe uses a different compiler")
-    validate_declared_archive_operand(
+    validate_declared_archive_operands(
         executable_link_tokens, expected_archive_name,
         f"{implementation} benchmark link recipe")
     validate_effective_flags(
@@ -1992,7 +2011,7 @@ def validate_complete_executable_recipe(
     require(tokens and tokens[0] == compiler_invocation and
             not any(token.startswith("@") for token in tokens),
             f"{label} compiler or response-file semantics differ")
-    validate_declared_archive_operand(tokens, archive_name, label)
+    validate_declared_archive_operands(tokens, archive_name, label)
     objects = [token.replace("\\", "/") for token in tokens
                if token.endswith(".o")]
     require(objects == [benchmark_object],

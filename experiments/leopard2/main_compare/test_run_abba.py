@@ -1520,12 +1520,28 @@ class MainCompareRunnerTests(unittest.TestCase):
             "duplicate same-basename archive": canonical.replace(
                 " libleopard.a ",
                 " libleopard.a /tmp/libleopard.a ", 1),
+            "foreign differently-named archive": canonical.replace(
+                " libleopard.a ",
+                " libleopard.a /tmp/evil.a ", 1),
+            "opaque library switch": canonical.replace(
+                " libleopard.a ", " libleopard.a -levil ", 1),
+            "linker response file": canonical.replace(
+                " libleopard.a ",
+                " libleopard.a -Wl,@evil.rsp ", 1),
         }
         for label, recipe in mutations.items():
             with self.subTest(label=label):
                 value = synthetic_raw()
                 replace_current_executable_recipe_text(value, recipe)
                 self.assert_rejected(value)
+
+        with_system_support = canonical.replace(
+            " libleopard.a ",
+            " libleopard.a /usr/lib/x86_64-linux-gnu/libpthread.a ", 1)
+        value = synthetic_raw()
+        replace_current_executable_recipe_text(value, with_system_support)
+        runner.validate_raw(
+            resign(value), None, check_files=False, check_current_inputs=False)
 
     def test_coherent_failed_historical_recipe_relabel_is_rejected(self) -> None:
         historical = synthetic_failure(runner.RAW_SCHEMA_V2)
