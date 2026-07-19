@@ -1061,7 +1061,8 @@ class GatedLauncher:
         except OSError:
             pass
 
-    def launch(self, taskset, command, launch_cpus, backend, ready_callback):
+    def launch(self, taskset, command, launch_cpus, backend, ready_callback,
+               release_callback):
         gate_read, gate_write = os.pipe2(os.O_CLOEXEC)
         ready_read, ready_write = os.pipe2(os.O_CLOEXEC)
         pid = os.fork()
@@ -1098,7 +1099,10 @@ class GatedLauncher:
             # This callback must durably record PID/starttime/session.  If it
             # raises, closing gate_write gives the child EOF and it cannot exec.
             ready_callback(identity)
-            os.write(gate_write, b"G")
+            # The transaction owns the last signal check and the one-byte
+            # write.  Its signal handler closes this exact descriptor if a
+            # handled signal wins the race before write(2) commits the byte.
+            release_callback(gate_write)
             self._close(gate_write)
             gate_write = -1
             return child
@@ -1293,6 +1297,7 @@ class AffinityTransaction:
         self.events = []
         self.child = None
         self.received_signal = None
+        self.gate_descriptor = None
         self.initialized = False
         self.write_count = 0
         require(not acceptance_path(self.report_path).exists() and
@@ -1424,6 +1429,13 @@ class AffinityTransaction:
             self.received_signal = signum
             self.report["received_signal"] = signum
             self._event("signal", value=signum)
+        if self.gate_descriptor is not None:
+            descriptor = self.gate_descriptor
+            self.gate_descriptor = None
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
 
     def _snapshot(self, excluded_child=None):
         result = []
@@ -1657,6 +1669,24 @@ class AffinityTransaction:
         self.report["state"] = "running"
         self._write()
 
+    def _authorize_child_release(self, descriptor):
+        require(self.received_signal is None,
+                "signal arrived before gated child release")
+        self.gate_descriptor = descriptor
+        try:
+            # Recheck after publishing the descriptor to request_signal().  A
+            # Python signal handler that runs after this check but before the
+            # syscall closes the FD; a signal delivered during write(2) is
+            # linearized either before the byte (EBADF/EINTR) or after release.
+            require(self.received_signal is None,
+                    "signal arrived before gated child release")
+            if descriptor is not None:
+                written = os.write(descriptor, b"G")
+                require(written == 1, "gated child release write was incomplete")
+        finally:
+            if self.gate_descriptor == descriptor:
+                self.gate_descriptor = None
+
     def _cleanup_unsafe_newcomer(self, error):
         self._event("unsafe_newcomer", error.identity, str(error))
         failures = terminate_process(
@@ -1742,7 +1772,7 @@ class AffinityTransaction:
             self.stabilize()
             self.child = self.launcher.launch(
                 taskset, list(command), self.launch, self.backend,
-                self._child_ready)
+                self._child_ready, self._authorize_child_release)
             self._mark_child_released()
             while self.child.poll() is None:
                 if self.received_signal is not None:
@@ -2457,8 +2487,10 @@ class FakeLauncher:
         self.cross_session = cross_session
         self.launch_count = 0
         self.released = False
+        self.before_release = None
 
-    def launch(self, _taskset, _command, launch_cpus, _backend, ready_callback):
+    def launch(self, _taskset, _command, launch_cpus, _backend, ready_callback,
+               release_callback):
         self.launch_count += 1
         leader = self.backend.add(900, 900, 9000, 900, set(launch_cpus), ppid=1)
         if self.descendant:
@@ -2467,8 +2499,11 @@ class FakeLauncher:
                              ppid=900, process_start=9010)
         try:
             ready_callback(leader)
+            if self.before_release is not None:
+                self.before_release()
             if self.fail_before_release:
                 raise IsolationError("injected gate abort")
+            release_callback(None)
             self.released = True
             return FakeChild(
                 self.backend, leader, self.descendant, self.stay_alive)
@@ -2653,6 +2688,16 @@ def test_gate_signal_and_descendants():
         transaction = make_fake_transaction(directory, backend, launcher=launcher)
         check(transaction.run(fake_command()) == 1 and not launcher.released,
               "parent-side gate abort released child code")
+
+    with tempfile.TemporaryDirectory() as directory:
+        backend = FakeBackend()
+        backend.add(1, 1, 1, 1, {0, 1, 2, 3}, ppid=0)
+        launcher = FakeLauncher(backend)
+        transaction = make_fake_transaction(directory, backend, launcher=launcher)
+        launcher.before_release = lambda: transaction.request_signal(signal.SIGTERM)
+        check(transaction.run(fake_command()) == 1 and not launcher.released and
+              transaction.report["child"]["released"] is False,
+              "signal after durable-ready escaped the child release gate")
 
     with tempfile.TemporaryDirectory() as directory:
         backend = FakeBackend()
