@@ -247,6 +247,19 @@ up to `min(thread_count - 1, item_count - 1)` workers.  A later, larger batch
 can grow the pool to the additional parallelism it needs; started workers remain
 persistent and are reused.  A lazy start can return `LEO2_OUT_OF_MEMORY` and a
 failed pool remains failed deterministically.
+The calling thread has scheduler slot zero and persistent workers have stable,
+increasing slots.  For each call, the scheduler divides `[0, item_count)` into
+one contiguous range per current participant, assigning the first remainder
+ranges one extra item.  The ranges are deterministic, balanced to within one
+item, and cover each item exactly once.  A pool that previously grew larger than
+a later batch retains all of its workers; excess slots receive empty ranges.
+Every batch item already supplies disjoint caller-owned scratch, so this static
+assignment also makes the assigned participant the exclusive owner of that
+item's scratch until the item completes.  Dispatch itself allocates no memory
+after any required lazy pool growth.  The scheduling arithmetic, tests, and
+remaining topology boundary are recorded in
+`docs/leopard2_static_batch_scheduler.md`.
+
 One-time field/table initialization and immutable codec/decode-plan setup are
 deliberately serial even in an OpenMP build, so `leo_init`, context creation,
 GF16 normalization setup, and sparse or dense locator-plan construction do not
@@ -309,7 +322,8 @@ sharing that context are serialized at the scheduler, while calls using separate
 contexts may run independently.  Ordinary encode or plan-execute calls remain
 safe to invoke concurrently with distinct outputs and scratch.  Within a batch,
 the implementation reports the result from the lowest-index failing item
-deterministically; completion order is otherwise unspecified.
+deterministically.  Static assignment is deterministic, but completion order
+between participant ranges remains unspecified.
 
 API version 4 also provides an opt-in scalable alias preflight for large
 batches. Query caller-owned storage with
