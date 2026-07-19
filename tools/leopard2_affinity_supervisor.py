@@ -35,6 +35,7 @@ import json
 import os
 import re
 import select
+import secrets
 import shutil
 import signal
 import stat
@@ -45,11 +46,12 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 
-REPORT_SCHEMA = "leopard2-affinity-supervisor/v4"
+REPORT_SCHEMA = "leopard2-affinity-supervisor/v5"
 ACCEPTANCE_SCHEMA = "leopard2-affinity-acceptance/v1"
-BINDING_SCHEMA = "leopard2-affinity-main-binding/v1"
-MAIN_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v4"
-MAIN_RAW_SCHEMA = "leopard2-main-compare-raw/v4"
+BINDING_SCHEMA = "leopard2-affinity-main-binding/v2"
+MAIN_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v5"
+MAIN_RAW_SCHEMA = "leopard2-main-compare-raw/v5"
+MAIN_SUPERVISION_SCHEMA = "leopard2-main-supervision/v1"
 DEFAULT_POLL_MS = 25
 MAX_STABILIZE_PASSES = 64
 LAUNCH_READY_TIMEOUT_SECONDS = 10.0
@@ -62,7 +64,7 @@ BOOT_ID = re.compile(
 
 REPORT_KEYS = {
     "accepted", "boot_id", "child", "child_processes", "child_returncode", "command",
-    "command_identity", "command_sha256", "error", "events",
+    "command_identity", "command_sha256", "error", "events", "execution",
     "finished_utc", "global_lock", "launch_cpus", "pid_namespace", "poll_ms",
     "process_provenance", "received_signal", "records", "reserved_cpus",
     "schema", "started_utc", "state", "subreaper_pid", "uid", "uncertainty",
@@ -86,6 +88,10 @@ CHILD_PROCESS_KEYS = {
     "pid", "ppid", "process_device", "process_inode", "session",
     "starttime_ticks",
 }
+EXECUTION_KEYS = {
+    "child_finished_monotonic_ns", "child_ready_monotonic_ns", "nonce",
+}
+EXECUTION_NONCE_ENV = "LEO2_AFFINITY_EXECUTION_NONCE"
 PID_NAMESPACE_KEYS = {"device", "inode"}
 GLOBAL_LOCK_KEYS = {
     "device", "directory_device", "directory_inode", "inode", "lock", "mode",
@@ -518,6 +524,69 @@ def durable_unlink(path):
     return True
 
 
+def stable_file_snapshot(path, label, maximum=MAX_IDENTITY_BYTES,
+                         after_read=None):
+    """Read one inode-bound regular-file snapshot without validate/reopen races."""
+    path = Path(os.path.abspath(os.fspath(path)))
+    try:
+        path_before = os.lstat(path)
+    except OSError as error:
+        raise IsolationError("cannot inspect {}: {}".format(label, error)) from error
+    require(stat.S_ISREG(path_before.st_mode) and path_before.st_nlink == 1,
+            "{} path is not one singly-linked regular file".format(label))
+    flags = (os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+             getattr(os, "O_NONBLOCK", 0))
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = None
+    try:
+        descriptor = os.open(path, flags)
+        before = os.fstat(descriptor)
+        require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and
+                (before.st_dev, before.st_ino) ==
+                (path_before.st_dev, path_before.st_ino),
+                "{} is not one singly-linked regular file".format(label))
+        blocks = []
+        size = 0
+        while True:
+            block = os.read(descriptor, min(65536, maximum + 1 - size))
+            if not block:
+                break
+            blocks.append(block)
+            size += len(block)
+            require(size <= maximum, "{} exceeds its size bound".format(label))
+        if after_read is not None:
+            after_read(path)
+        after = os.fstat(descriptor)
+        current = os.lstat(path)
+        identity = (before.st_dev, before.st_ino, before.st_size,
+                    before.st_mtime_ns, before.st_ctime_ns)
+        require(identity == (after.st_dev, after.st_ino, after.st_size,
+                             after.st_mtime_ns, after.st_ctime_ns) and
+                (current.st_dev, current.st_ino) ==
+                (before.st_dev, before.st_ino) and
+                size == before.st_size,
+                "{} changed while it was read".format(label))
+        data = b"".join(blocks)
+        return path, data, {
+            "device": before.st_dev, "inode": before.st_ino,
+            "size": size, "sha256": sha256_bytes(data),
+        }
+    except OSError as error:
+        raise IsolationError("cannot snapshot {}: {}".format(label, error)) from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def stable_json_snapshot(path, label, maximum=MAX_IDENTITY_BYTES):
+    path, data, identity = stable_file_snapshot(path, label, maximum)
+    try:
+        return path, json.loads(data.decode("utf-8")), data, identity
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise IsolationError("{} is not canonical JSON".format(label)) from error
+
+
 def validate_acceptance(value, report_path, report_bytes):
     value = verify_signed_json(value, "affinity acceptance seal")
     require_exact_keys(value, ACCEPTANCE_KEYS, "affinity acceptance seal")
@@ -539,23 +608,24 @@ def validate_acceptance(value, report_path, report_bytes):
 
 def accepted_report_snapshot(path):
     """Return one sealed report snapshot or fail closed on ambiguity."""
-    path = Path(path).resolve(strict=True)
+    path = Path(os.path.abspath(os.fspath(path)))
     require(not ambiguity_path(path).exists(),
             "affinity report has a durable ambiguity marker")
     try:
-        report_bytes = path.read_bytes()
-        seal_bytes = acceptance_path(path).read_bytes()
-    except OSError as error:
+        path, report, report_bytes, _report_identity = stable_json_snapshot(
+            path, "affinity report")
+        _seal_path, seal, seal_bytes, _seal_identity = stable_json_snapshot(
+            acceptance_path(path), "affinity acceptance seal")
+    except IsolationError as error:
         raise IsolationError("accepted affinity evidence is incomplete") from error
     require(len(report_bytes) <= MAX_IDENTITY_BYTES and
             len(seal_bytes) <= MAX_IDENTITY_BYTES,
             "accepted affinity evidence exceeds its size bound")
     try:
-        report = validate_report(json.loads(report_bytes.decode("utf-8")))
-        seal = validate_acceptance(
-            json.loads(seal_bytes.decode("utf-8")), path, report_bytes)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise IsolationError("accepted affinity evidence is malformed") from error
+        report = validate_report(report)
+        seal = validate_acceptance(seal, path, report_bytes)
+    except IsolationError:
+        raise
     require(report["accepted"] is True,
             "affinity report body is not accepted")
     return report, report_bytes, seal, seal_bytes
@@ -888,6 +958,26 @@ class LinuxThreadBackend:
             if pidfd is not None:
                 os.close(pidfd)
 
+    def reap_adopted(self, identities, excluded_pid=None):
+        """Reap exact retained orphans without stealing the leader's status."""
+        reaped = 0
+        for identity in identities:
+            if identity.pid == excluded_pid:
+                continue
+            try:
+                current = self.process_identity(identity.pid)
+            except ThreadGone:
+                continue
+            if current is None or current.process_key() != identity.process_key():
+                continue
+            try:
+                waited, _status = os.waitpid(identity.pid, os.WNOHANG)
+            except (ChildProcessError, ProcessLookupError):
+                continue
+            if waited == identity.pid:
+                reaped += 1
+        return reaped
+
 
 def validate_path_identity(value, label):
     require_exact_keys(value, PATH_IDENTITY_KEYS, label)
@@ -970,6 +1060,23 @@ def validate_child_process(value, label="child process"):
     return value
 
 
+def validate_execution(value):
+    require_exact_keys(value, EXECUTION_KEYS, "supervised execution")
+    require(isinstance(value["nonce"], str) and
+            HEX256.fullmatch(value["nonce"]) is not None,
+            "supervised execution nonce is invalid")
+    ready = value["child_ready_monotonic_ns"]
+    finished = value["child_finished_monotonic_ns"]
+    require(ready is None or (type(ready) is int and 0 <= ready <= 2**63 - 1),
+            "child-ready monotonic timestamp is invalid")
+    require(finished is None or
+            (type(finished) is int and 0 <= finished <= 2**63 - 1),
+            "child-finished monotonic timestamp is invalid")
+    require(finished is None or (ready is not None and finished >= ready),
+            "child-finished timestamp predates child-ready")
+    return value
+
+
 def validate_event(value, label="event"):
     require_exact_keys(value, EVENT_KEYS, label)
     require(value["event"] in EVENT_NAMES, "{} name is unknown".format(label))
@@ -990,6 +1097,7 @@ def validate_report(report, require_accepted=False):
     require(report["state"] in REPORT_STATES, "affinity report state is unknown")
     exact_int(report["uid"], "report UID", 0, 2**31 - 1)
     validate_global_lock(report["global_lock"], report["uid"])
+    execution = validate_execution(report["execution"])
     reserved = validate_cpu_list(report["reserved_cpus"], "report reserved CPUs")
     launch = validate_cpu_list(report["launch_cpus"], "report launch CPUs")
     require(set(reserved).issubset(launch) and set(launch).difference(reserved),
@@ -1145,6 +1253,8 @@ def validate_report(report, require_accepted=False):
                 report["child_returncode"] == 0 and
                 report["received_signal"] is None and child is not None and
                 child["released"] is True and
+                execution["child_ready_monotonic_ns"] is not None and
+                execution["child_finished_monotonic_ns"] is not None and
                 all(item["restore_status"] in {
                     "restored", "restored_after_recovery", "gone"}
                     for item in records),
@@ -1204,7 +1314,7 @@ class GatedLauncher:
             pass
 
     def launch(self, taskset, command, launch_cpus, backend, ready_callback,
-               release_callback):
+               release_callback, execution_nonce):
         gate_read, gate_write = os.pipe2(os.O_CLOEXEC)
         ready_read, ready_write = os.pipe2(os.O_CLOEXEC)
         pid = os.fork()
@@ -1221,7 +1331,9 @@ class GatedLauncher:
                     os._exit(125)
                 argv = [str(taskset), "-c", format_cpu_list(sorted(launch_cpus)),
                         "--"] + list(command)
-                os.execv(str(taskset), argv)
+                environment = dict(os.environ)
+                environment[EXECUTION_NONCE_ENV] = execution_nonce
+                os.execve(str(taskset), argv, environment)
             except BaseException:
                 os._exit(126)
         self._close(gate_read)
@@ -1354,13 +1466,23 @@ def child_scope_process_keys(identities, child_record, retained=(),
 def wait_for_empty_child_scope(backend, child_record, deadline,
                                sleep_function=time.sleep, reap_callback=None,
                                retained=(), subreaper_pid=None):
+    empty_scans = 0
     while time.monotonic() < deadline:
         if reap_callback is not None:
             reap_callback()
         members = backend.child_scope_processes(
             child_record, retained=retained, subreaper_pid=subreaper_pid)
+        if hasattr(backend, "reap_adopted") and backend.reap_adopted(
+                members, excluded_pid=child_record["pid"]):
+            members = backend.child_scope_processes(
+                child_record, retained=retained,
+                subreaper_pid=subreaper_pid)
         if not members:
-            return []
+            empty_scans += 1
+            if empty_scans >= 2:
+                return []
+        else:
+            empty_scans = 0
         sleep_function(min(0.02, max(0.0, deadline - time.monotonic())))
     return backend.child_scope_processes(
         child_record, retained=retained, subreaper_pid=subreaper_pid)
@@ -1449,7 +1571,8 @@ class AffinityTransaction:
     def __init__(self, backend, reserved_cpus, launch_cpus, report_path,
                  poll_ms=DEFAULT_POLL_MS, writer=atomic_json,
                  host=None, sleep_function=time.sleep, launcher=None,
-                 global_lock=None, seal_writer=atomic_json):
+                 global_lock=None, seal_writer=atomic_json,
+                 nonce_factory=lambda: secrets.token_hex(32)):
         self.backend = backend
         if hasattr(self.backend, "validate_capabilities"):
             self.backend.validate_capabilities()
@@ -1472,6 +1595,9 @@ class AffinityTransaction:
         lock_identity = global_lock.validate_current() if hasattr(
             global_lock, "validate_current") else dict(global_lock)
         validate_global_lock(lock_identity, backend.uid)
+        nonce = nonce_factory()
+        require(isinstance(nonce, str) and HEX256.fullmatch(nonce) is not None,
+                "execution nonce source returned an invalid value")
         identity = runtime_identity() if host is None else host
         require_exact_keys(identity, {"boot_id", "pid_namespace"}, "runtime identity")
         self.records = {}
@@ -1514,6 +1640,11 @@ class AffinityTransaction:
             "records": [],
             "process_provenance": [],
             "events": self.events,
+            "execution": {
+                "nonce": nonce,
+                "child_ready_monotonic_ns": None,
+                "child_finished_monotonic_ns": None,
+            },
             "uncertainty": False,
             "accepted": False,
             "error": None,
@@ -1896,6 +2027,7 @@ class AffinityTransaction:
                 "signal arrived before gated child release")
         child = child_record_from_identity(identity, False)
         self.report["child"] = child
+        self.report["execution"]["child_ready_monotonic_ns"] = time.monotonic_ns()
         process = child_process_record(identity)
         key = child_process_key(process)
         self.child_processes[key] = process
@@ -2125,7 +2257,8 @@ class AffinityTransaction:
             self.stabilize()
             self.child = self.launcher.launch(
                 taskset, list(command), self.launch, self.backend,
-                self._child_ready, self._authorize_child_release)
+                self._child_ready, self._authorize_child_release,
+                self.report["execution"]["nonce"])
             self._mark_child_released()
             self._observe_child_processes()
             while self.child.poll() is None:
@@ -2178,6 +2311,9 @@ class AffinityTransaction:
                     cleanup_failures.append(str(error))
                 child_returncode = self._finish_child_wait()
             self.report["child_returncode"] = child_returncode
+            if self.report["execution"]["child_ready_monotonic_ns"] is not None:
+                self.report["execution"]["child_finished_monotonic_ns"] = \
+                    time.monotonic_ns()
             self.report["state"] = "restoring"
             try:
                 self._write()
@@ -2430,10 +2566,9 @@ def validate_main_manifest_binding(report, manifest_path):
     validate_report(report)
     require(report["accepted"] is True,
             "main-comparison binding requires an accepted report snapshot")
-    manifest_path = Path(manifest_path).resolve(strict=True)
-    manifest_bytes = manifest_path.read_bytes()
-    manifest = verify_signed_json(
-        json.loads(manifest_bytes.decode("utf-8")), "main-comparison manifest")
+    manifest_path, manifest, manifest_bytes, _manifest_identity = \
+        stable_json_snapshot(manifest_path, "main-comparison manifest")
+    manifest = verify_signed_json(manifest, "main-comparison manifest")
     require(manifest.get("schema") == MAIN_MANIFEST_SCHEMA and
             manifest.get("valid") is True,
             "main-comparison manifest is not valid current-schema evidence")
@@ -2442,12 +2577,12 @@ def validate_main_manifest_binding(report, manifest_path):
             set(raw_info) == {"path", "payload_digest", "sha256", "size"},
             "main-comparison manifest raw identity is malformed")
     raw_path = safe_relative(manifest_path.parent, raw_info["path"], "raw bundle")
-    raw_bytes = raw_path.read_bytes()
+    raw_path, raw, raw_bytes, _raw_identity = stable_json_snapshot(
+        raw_path, "main-comparison raw bundle")
     require(type(raw_info["size"]) is int and raw_info["size"] == len(raw_bytes) and
             raw_info["sha256"] == sha256_bytes(raw_bytes),
             "main-comparison raw file identity differs from its manifest")
-    raw = verify_signed_json(json.loads(raw_bytes.decode("utf-8")),
-                             "main-comparison raw bundle")
+    raw = verify_signed_json(raw, "main-comparison raw bundle")
     require(raw.get("schema") == MAIN_RAW_SCHEMA,
             "main-comparison raw bundle is not current-schema evidence")
     require(raw_info["payload_digest"] == raw.get("digest"),
@@ -2515,6 +2650,67 @@ def validate_main_manifest_binding(report, manifest_path):
     require(report["reserved_cpus"] == sorted({campaign["benchmark_cpu"],
                                                 campaign["reserved_sibling"]}),
             "supervisor reserved set differs from the benchmark pair")
+    supervision = raw.get("supervision")
+    supervision_keys = {
+        "campaign_sha256", "execution_nonce",
+        "isolation_after_monotonic_ns", "isolation_before_monotonic_ns",
+        "launch_cpus", "reservation_nonce", "reservation_sha256",
+        "reserved_cpus", "runner_finished_monotonic_ns", "runner_pid",
+        "runner_started_monotonic_ns", "schema",
+    }
+    require(isinstance(supervision, dict) and
+            set(supervision) == supervision_keys and
+            supervision.get("schema") == MAIN_SUPERVISION_SCHEMA,
+            "main-comparison supervision handshake is missing or malformed")
+    execution = report["execution"]
+    require(supervision.get("execution_nonce") == execution["nonce"],
+            "supervisor and main-comparison execution nonces differ")
+    for name in ("runner_pid", "runner_started_monotonic_ns",
+                 "runner_finished_monotonic_ns",
+                 "isolation_before_monotonic_ns",
+                 "isolation_after_monotonic_ns"):
+        exact_int(supervision.get(name), "supervision {}".format(name), 0,
+                  2**63 - 1)
+    require(supervision["runner_pid"] >= 1 and
+            supervision["runner_pid"] == report["child"]["pid"] and
+            execution["child_ready_monotonic_ns"] <=
+            supervision["runner_started_monotonic_ns"] <=
+            supervision["isolation_before_monotonic_ns"] <=
+            supervision["isolation_after_monotonic_ns"] <=
+            supervision["runner_finished_monotonic_ns"] <=
+            execution["child_finished_monotonic_ns"],
+            "supervisor interval does not enclose the retained runner campaign")
+    require(supervision.get("launch_cpus") == report["launch_cpus"] ==
+            campaign.get("allowed_cpu_set_at_launch"),
+            "supervisor launch set differs from the retained runner launch set")
+    require(supervision.get("reserved_cpus") == report["reserved_cpus"],
+            "supervision handshake uses another reserved CPU set")
+    require(supervision.get("campaign_sha256") ==
+            sha256_bytes(canonical_bytes(campaign)),
+            "supervision handshake does not bind the campaign payload")
+    reservation_payload = reservation.get("payload")
+    require(isinstance(reservation_payload, dict) and
+            supervision.get("reservation_sha256") == reservation.get("sha256") ==
+            sha256_bytes(canonical_bytes(reservation_payload)) and
+            supervision.get("reservation_nonce") == reservation_payload.get("nonce"),
+            "supervision handshake does not bind the held reservation payload")
+    reservation_path, reservation_bytes, _reservation_identity = \
+        stable_file_snapshot(reservation.get("path"), "CPU reservation")
+    require(str(reservation_path) == reservation.get("path") and
+            reservation_bytes == canonical_bytes(reservation_payload) and
+            sha256_bytes(reservation_bytes) == reservation.get("sha256"),
+            "retained reservation file differs from the supervised payload")
+    isolation = raw.get("isolation")
+    require(isinstance(isolation, dict) and
+            isinstance(isolation.get("before"), dict) and
+            isinstance(isolation.get("after"), dict) and
+            supervision["isolation_before_monotonic_ns"] ==
+            isolation["before"].get("monotonic_ns") and
+            supervision["isolation_after_monotonic_ns"] ==
+            isolation["after"].get("monotonic_ns"),
+            "supervision handshake differs from scheduler isolation interval")
+    require(manifest.get("supervision") == supervision,
+            "manifest supervision handshake differs from the raw bundle")
     return {
         "manifest_bytes": manifest_bytes,
         "manifest": manifest,
@@ -2545,7 +2741,8 @@ def binding_payload(report_path, manifest_path):
     }
 
 
-def validate_binding(value, binding_path=None):
+def validate_binding(value, binding_path=None, expected_manifest_path=None,
+                     expected_manifest_sha256=None):
     value = verify_signed_json(value, "affinity/main binding")
     require(set(value) == {"schema", "created_utc", "report", "manifest", "digest"} and
             value["schema"] == BINDING_SCHEMA,
@@ -2573,8 +2770,17 @@ def validate_binding(value, binding_path=None):
                 "binding {} file identity is invalid".format(label))
     report_path = Path(report_ref["path"]).resolve(strict=True)
     manifest_path = Path(manifest_ref["path"]).resolve(strict=True)
+    if expected_manifest_path is not None:
+        require(manifest_path == Path(expected_manifest_path).resolve(strict=True),
+                "affinity binding refers to another manifest path")
+    if expected_manifest_sha256 is not None:
+        require(isinstance(expected_manifest_sha256, str) and
+                HEX256.fullmatch(expected_manifest_sha256) is not None and
+                manifest_ref["sha256"] == expected_manifest_sha256,
+                "affinity binding refers to another manifest snapshot")
     report, report_bytes, _seal, _seal_bytes = accepted_report_snapshot(report_path)
-    manifest_bytes = manifest_path.read_bytes()
+    inputs = validate_main_manifest_binding(report, manifest_path)
+    manifest_bytes = inputs["manifest_bytes"]
     require(len(report_bytes) == report_ref["size"] and
             sha256_bytes(report_bytes) == report_ref["sha256"] and
             len(manifest_bytes) == manifest_ref["size"] and
@@ -2582,7 +2788,6 @@ def validate_binding(value, binding_path=None):
             "binding file identity changed")
     require(report["command_sha256"] == report_ref["command_sha256"],
             "binding command identity differs from accepted report")
-    inputs = validate_main_manifest_binding(report, manifest_path)
     require(inputs["manifest"]["schema"] == manifest_ref["schema"] and
             inputs["manifest"]["digest"] == manifest_ref["payload_digest"],
             "binding manifest semantics changed")
@@ -2598,7 +2803,9 @@ def create_binding(report_path, manifest_path, output_path):
     payload["digest"] = sha256_value(payload)
     validate_binding_structure_only(payload)
     atomic_json(output_path, payload, exclusive=True)
-    validate_binding(load_json(output_path, "affinity/main binding"), output_path)
+    _path, retained, _bytes, _identity = stable_json_snapshot(
+        output_path, "affinity/main binding")
+    validate_binding(retained, output_path)
     print(output_path)
     return 0
 
@@ -2858,7 +3065,10 @@ class FakeLauncher:
         self.before_release = None
 
     def launch(self, _taskset, _command, launch_cpus, _backend, ready_callback,
-               release_callback):
+               release_callback, execution_nonce):
+        require(isinstance(execution_nonce, str) and
+                HEX256.fullmatch(execution_nonce) is not None,
+                "fake launcher received an invalid execution nonce")
         self.launch_count += 1
         leader = self.backend.add(900, 900, 9000, 900, set(launch_cpus), ppid=1)
         if self.descendant:
@@ -2894,7 +3104,8 @@ def make_fake_transaction(directory, backend, writer=atomic_json, launcher=None,
         backend, (1, 3), (0, 1, 2, 3), Path(directory) / "report.json",
         poll_ms=1, writer=writer, host=FAKE_HOST,
         sleep_function=sleep_function, launcher=launcher,
-        global_lock=global_lock, seal_writer=seal_writer)
+        global_lock=global_lock, seal_writer=seal_writer,
+        nonce_factory=lambda: "ab" * 32)
 
 
 def fake_command():
@@ -2915,6 +3126,30 @@ def test_global_lock_serialization():
               "global lock was not reusable after release")
     check(not FakeGlobalLock.held,
           "fake global lock remained held after context exit")
+
+
+def test_inode_bound_evidence_snapshot():
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        target = root / "evidence.json"
+        replacement = root / "replacement.json"
+        atomic_json(target, {"value": "original"}, exclusive=True)
+        atomic_json(replacement, {"value": "replacement"}, exclusive=True)
+
+        def replace_after_read(_path):
+            os.replace(replacement, target)
+
+        expect_exception(
+            IsolationError,
+            lambda: stable_file_snapshot(
+                target, "racing evidence", after_read=replace_after_read),
+            "validate-then-reopen replacement")
+        fifo = root / "evidence.fifo"
+        os.mkfifo(fifo, 0o600)
+        expect_exception(
+            IsolationError,
+            lambda: stable_file_snapshot(fifo, "FIFO evidence"),
+            "non-regular evidence path")
 
 
 def test_exact_restore_and_newcomer():
@@ -3347,6 +3582,9 @@ def test_binding():
         backend = FakeBackend()
         backend.add(1, 1, 1, 1, {0, 1, 2, 3}, ppid=0)
         report_path = root / "report.json"
+        reservation_path = root / "reservation.json"
+        reservation_payload = {"nonce": "reservation-nonce"}
+        atomic_json(reservation_path, reservation_payload, exclusive=True)
         launcher = FakeLauncher(backend)
         global_lock = FakeGlobalLock()
         global_lock.active = True
@@ -3380,6 +3618,7 @@ def test_binding():
                 "benchmark_cpu": 1, "reserved_sibling": 3, "reuse": 8,
                 "iterations": 9, "warmup": 2, "timeout_seconds": 120.0,
                 "candidate_mode": "auto",
+                "allowed_cpu_set_at_launch": [0, 1, 2, 3],
             },
             "input_specification": {
                 "runner": script_identity["path"],
@@ -3399,7 +3638,32 @@ def test_binding():
                 "runner": {"path": script_identity["path"],
                            "sha256": script_identity["sha256"]},
             },
-            "reservation": {"path": str(root / "reservation.json")},
+            "reservation": {
+                "path": str(reservation_path),
+                "payload": reservation_payload,
+            },
+        }
+        raw_payload["reservation"]["sha256"] = sha256_bytes(canonical_bytes(
+            raw_payload["reservation"]["payload"]))
+        timestamp = transaction.report["execution"]["child_ready_monotonic_ns"]
+        raw_payload["isolation"] = {
+            "before": {"monotonic_ns": timestamp},
+            "after": {"monotonic_ns": timestamp},
+        }
+        raw_payload["supervision"] = {
+            "schema": MAIN_SUPERVISION_SCHEMA,
+            "execution_nonce": transaction.report["execution"]["nonce"],
+            "runner_pid": 900,
+            "runner_started_monotonic_ns": timestamp,
+            "runner_finished_monotonic_ns": timestamp,
+            "launch_cpus": [0, 1, 2, 3],
+            "reserved_cpus": [1, 3],
+            "campaign_sha256": sha256_bytes(canonical_bytes(
+                raw_payload["campaign"])),
+            "reservation_sha256": raw_payload["reservation"]["sha256"],
+            "reservation_nonce": "reservation-nonce",
+            "isolation_before_monotonic_ns": timestamp,
+            "isolation_after_monotonic_ns": timestamp,
         }
         raw_payload["digest"] = sha256_value(raw_payload)
         raw_path = evidence / "raw.json"
@@ -3407,6 +3671,7 @@ def test_binding():
         raw_bytes = raw_path.read_bytes()
         manifest_payload = {
             "schema": MAIN_MANIFEST_SCHEMA, "valid": True,
+            "supervision": raw_payload["supervision"],
             "raw": {
                 "path": "raw.json", "size": len(raw_bytes),
                 "sha256": sha256_bytes(raw_bytes),
@@ -3418,7 +3683,68 @@ def test_binding():
         atomic_json(manifest_path, manifest_payload, exclusive=True)
         binding_path = evidence / "affinity-binding.json"
         create_binding(report_path, manifest_path, binding_path)
-        validate_binding(load_json(binding_path, "test binding"), binding_path)
+        binding = load_json(binding_path, "test binding")
+        validate_binding(
+            binding, binding_path, manifest_path,
+            sha256_bytes(manifest_path.read_bytes()))
+        expect_exception(
+            IsolationError,
+            lambda: validate_binding(
+                binding, binding_path, manifest_path, "f" * 64),
+            "binding against another manifest snapshot")
+
+        def install_bundle(raw_value):
+            raw_value = json.loads(json.dumps(raw_value))
+            raw_value.pop("digest", None)
+            raw_value["digest"] = sha256_value(raw_value)
+            atomic_json(raw_path, raw_value)
+            raw_bytes_value = raw_path.read_bytes()
+            manifest_value = json.loads(json.dumps(manifest_payload))
+            manifest_value["supervision"] = raw_value["supervision"]
+            manifest_value["raw"] = {
+                "path": "raw.json", "size": len(raw_bytes_value),
+                "sha256": sha256_bytes(raw_bytes_value),
+                "payload_digest": raw_value["digest"],
+            }
+            manifest_value.pop("digest", None)
+            manifest_value["digest"] = sha256_value(manifest_value)
+            atomic_json(manifest_path, manifest_value)
+
+        mutations = []
+        changed_nonce = json.loads(json.dumps(raw_payload))
+        changed_nonce["supervision"]["execution_nonce"] = "cd" * 32
+        mutations.append(("execution nonce", changed_nonce))
+        changed_interval = json.loads(json.dumps(raw_payload))
+        changed_interval["supervision"]["runner_started_monotonic_ns"] = timestamp - 1
+        mutations.append(("execution interval", changed_interval))
+        changed_pid = json.loads(json.dumps(raw_payload))
+        changed_pid["supervision"]["runner_pid"] = 901
+        mutations.append(("runner PID", changed_pid))
+        changed_launch = json.loads(json.dumps(raw_payload))
+        changed_launch["supervision"]["launch_cpus"] = [0, 1, 2]
+        mutations.append(("launch CPU set", changed_launch))
+        changed_campaign = json.loads(json.dumps(raw_payload))
+        changed_campaign["campaign"]["reuse"] = 9
+        changed_campaign["supervision"]["campaign_sha256"] = sha256_bytes(
+            canonical_bytes(changed_campaign["campaign"]))
+        mutations.append(("campaign payload", changed_campaign))
+        changed_reservation = json.loads(json.dumps(raw_payload))
+        changed_reservation["reservation"]["payload"]["nonce"] = "other-reservation"
+        changed_reservation["reservation"]["sha256"] = sha256_bytes(canonical_bytes(
+            changed_reservation["reservation"]["payload"]))
+        changed_reservation["supervision"]["reservation_nonce"] = "other-reservation"
+        changed_reservation["supervision"]["reservation_sha256"] = \
+            changed_reservation["reservation"]["sha256"]
+        mutations.append(("reservation payload", changed_reservation))
+        for label, mutation in mutations:
+            install_bundle(mutation)
+            expect_exception(
+                IsolationError,
+                lambda path=manifest_path: validate_main_manifest_binding(
+                    transaction.report, path),
+                "changed {} binding".format(label))
+        install_bundle(raw_payload)
+
         changed = load_json(report_path, "test report")
         changed["command_sha256"] = "f" * 64
         atomic_json(report_path, changed)
@@ -3431,6 +3757,7 @@ def test_binding():
 def self_test():
     tests = (
         test_global_lock_serialization,
+        test_inode_bound_evidence_snapshot,
         test_exact_restore_and_newcomer,
         test_late_inherited_restore_reconciliation,
         test_nonuniform_and_unsafe_newcomer,
@@ -3476,6 +3803,8 @@ def parser():
     verify_binding_parser = commands.add_parser(
         "verify-binding", help="verify an affinity/main evidence binding")
     verify_binding_parser.add_argument("--binding", required=True, type=Path)
+    verify_binding_parser.add_argument("--manifest", type=Path)
+    verify_binding_parser.add_argument("--manifest-sha256")
     commands.add_parser(
         "self-test", help="run deterministic fake tests without changing affinity")
     return result
@@ -3496,8 +3825,14 @@ def main(arguments=None):
         if options.operation == "bind":
             return create_binding(options.report, options.manifest, options.output)
         if options.operation == "verify-binding":
-            validate_binding(load_json(options.binding, "affinity/main binding"),
-                             options.binding)
+            require((options.manifest is None) ==
+                    (options.manifest_sha256 is None),
+                    "manifest path and hash must be supplied together")
+            binding_path, binding, _bytes, _identity = stable_json_snapshot(
+                options.binding, "affinity/main binding")
+            validate_binding(
+                binding, binding_path, options.manifest,
+                options.manifest_sha256)
             print("Leopard2 affinity/main evidence binding verified")
             return 0
         if sys.platform != "linux" or not hasattr(os, "sched_getaffinity"):

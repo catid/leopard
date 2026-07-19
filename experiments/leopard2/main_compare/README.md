@@ -62,7 +62,7 @@ Release artifacts with the expected compile, object, archive, link, source,
 runtime-library, field/profile, and requested decoder-path identities. Each cell
 runs three independent
 `baseline,candidate,candidate,baseline` rounds on one pinned logical CPU while
-the sibling is reserved. Version-2 through version-4 evidence additionally hold
+the sibling is reserved. Version-2 through version-5 evidence additionally hold
 a pair-wide,
 per-user lock at
 `/run/user/UID/leopard2-cpu-leases/leopard2-cpu-pair-UID-A-B.lock`, derived
@@ -112,7 +112,7 @@ field-inflation, and larger-parent cases. Custom cells use
 `ID:K:R:BYTES:LOSSES:SEED` and must remain within the exact-main API's
 `R <= K` and 64-byte-size restrictions.
 
-Version 4 binds one explicit `--candidate-mode`: `auto`, `generic`,
+Versions 4 and 5 bind one explicit `--candidate-mode`: `auto`, `generic`,
 `materialized`, or `tiled` (the default is `auto`). The two forced workspace
 modes also force the specialized decoder. The runner verifies the exact child
 arguments and all four emitted force booleans, so evidence for one path cannot
@@ -146,24 +146,35 @@ mask follows from that uniform process or a still-identifiable uniform creator.
 A newcomer whose already-restricted mask has
 no such provenance invalidates the run and is boundedly terminated, rather
 than being left with a guessed or widened mask.
+Every run and recovery also holds one persistent same-UID lock under
+`/run/user/UID`; its exact inode is part of the journal. This prevents two
+cooperating supervisors from racing each other's original masks.
 
 The runner is launched through a fork/pipe gate. The child creates its new
 session but cannot execute `taskset` or benchmark code until its PID,
-start-time, session, command, boot ID, and PID-namespace identity are durable in
+start-time, procfs directory inodes, session, command, boot ID, and
+PID-namespace identity are durable in
 the report. Parent EOF aborts the gate, which closes the SIGKILL window before
 that journal entry. On every ordinary exit the supervisor boundedly signals,
 then SIGKILLs if necessary, every surviving process in the recorded child
-session and every still-traceable descendant that created another session
+session and every retained descendant that created another session
 before restoring any same-user mask. This lets the main runner use its own
 bounded per-invocation sessions without those timed children being mistaken for
 unrelated work. SIGINT, SIGTERM, and SIGHUP always
 invalidate evidence and use the same bounded cleanup.
+The supervisor is a Linux child subreaper and retains exact descendant
+identities, so a double-forked child remains a cleanup target after reparenting.
+Restoration and crash recovery rescan until two stable passes after creators
+have regained their original masks; a late thread cannot remain stranded on an
+inherited restricted mask after one final scan.
 The 25 ms monitor is read-only on an unchanged scan. It does not rewrite or
 fsync the journal for each poll, for ordinary child-process churn, or merely to
 retain audit-only provenance; it writes only when recovery-relevant state or an
 actual anomaly changes.
 
-The wrapper must finish with an accepted v2 report and the ordinary ABBA
+The wrapper must finish with an accepted v5 report and its separate
+`.accepted.json` commit seal. An `accepted: true` body without this
+hash-bound, directory-fsynced seal is not evidence. The ordinary ABBA
 manifest must independently pass its unchanged zero-sibling-jiffy verifier
 before timings are usable. If the supervisor itself is killed with SIGKILL,
 restore its journal before continuing:
@@ -184,7 +195,13 @@ explicit unrecoverable uncertainty and can never produce accepted evidence.
 After both files verify, create a canonical joint binding. It authenticates the
 accepted supervisor report hash and schema, the exact command identity, the
 main manifest and raw-bundle hashes, the runner source identity, CPU pair, all
-numeric campaign parameters, build/source paths, reservation, and output path:
+numeric campaign parameters, build/source paths, reservation, and output path.
+Version 5 additionally carries a fresh 256-bit nonce from the gated supervisor
+into the runner and binds the same runner PID, enclosing monotonic intervals,
+launch and reserved CPU sets, campaign hash, and held reservation payload. A
+compatible campaign from a different supervisor execution cannot be rebound.
+These same-execution guarantees are the version-2 joint-binding format; older
+bindings are not silently upgraded.
 
     python3 tools/leopard2_affinity_supervisor.py verify-report \
         --report /tmp/leopard2-vs-main-affinity.json
@@ -201,9 +218,9 @@ Verify while the exact build inputs still exist:
         --manifest /tmp/leopard2-vs-main/manifest.json \
         --affinity-binding /tmp/leopard2-vs-main/affinity-binding.json
 
-The current version-4 verifier recomputes the pair-lock identity, every per-field CPU
+The current version-5 verifier recomputes the pair-lock identity, every per-field CPU
 counter delta, the zero-non-idle-sibling decision, workload identities, and all
-statistics. Versions 3 and 4 also bind the canonical CMake target `leopard`, archive
+statistics. Versions 3 through 5 also bind the canonical CMake target `leopard`, archive
 `libleopard.a`, and `leopard.dir` dependency closure. It retains the exact,
 bounded UTF-8 archive link-recipe content, binds its byte length and SHA-256 to
 the recipe-file identity, and parses those bytes to require the declared
@@ -218,7 +235,7 @@ unchanged is rejected.
 
 Bundle digests are unkeyed integrity checks, not an independent authenticity
 anchor. They detect edits relative to the retained evidence, and the semantic
-recipe binding prevents relabeling old recipe bytes under versions 3 and 4. They
+recipe binding prevents relabeling old recipe bytes under versions 3 through 5. They
 cannot prevent a hostile writer from replacing every evidence byte and
 recomputing every internally consistent digest. Preserve evidence in an
 immutable or independently authenticated store, or add an external digital

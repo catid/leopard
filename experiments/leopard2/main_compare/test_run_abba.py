@@ -140,6 +140,8 @@ ISOLATION = runner.isolation_record(
     cpu_stat(0, user=100, idle=100), cpu_stat(0, user=110, idle=110),
     cpu_stat(1, user=100, idle=100), cpu_stat(1, user=100, idle=120),
 )
+SUPERVISION = runner.supervision_record(
+    "ab" * 32, 900, 2_100, CAMPAIGN, RESERVATION, ISOLATION)
 
 
 def summary(samples: list[float], setup: bool = False) -> dict:
@@ -216,7 +218,8 @@ def candidate_result(
         "force_generic_decode": flags["force_generic_decode"],
         "force_specialized_decode": flags["force_specialized_decode"],
     })
-    if raw_schema in (runner.RAW_SCHEMA_V3, runner.RAW_SCHEMA):
+    if raw_schema in (runner.RAW_SCHEMA_V3, runner.RAW_SCHEMA_V4,
+                      runner.RAW_SCHEMA):
         parameters.update({name: flags[name] for name in (
             "force_tiled_decode", "force_materialized_decode")})
     codec = summary([3.0, 3.1, 3.2], setup=True)
@@ -332,7 +335,7 @@ def synthetic_raw(
 ) -> dict:
     identity, specification = cmake_fixture_identity(raw_schema)
     campaign = copy.deepcopy(CAMPAIGN)
-    if raw_schema == runner.RAW_SCHEMA:
+    if raw_schema in (runner.RAW_SCHEMA_V4, runner.RAW_SCHEMA):
         campaign["candidate_mode"] = candidate_mode
     else:
         campaign.pop("candidate_mode", None)
@@ -371,7 +374,7 @@ def synthetic_raw(
                 "reservation_after": RESERVATION,
             })
     analysis = runner.analyze(invocations, campaign)
-    return runner.signed({
+    payload = {
         "schema": raw_schema,
         "created_utc": "2026-07-16T00:00:00Z",
         "validity_is_independent_of_speed": True,
@@ -385,7 +388,11 @@ def synthetic_raw(
         "identities_final": identity,
         "host_final": copy.deepcopy(HOST),
         "analysis": analysis,
-    })
+    }
+    if raw_schema == runner.RAW_SCHEMA:
+        payload["supervision"] = runner.supervision_record(
+            "ab" * 32, 900, 2_100, campaign, RESERVATION, ISOLATION)
+    return runner.signed(payload)
 
 
 def resign(value: dict) -> dict:
@@ -451,9 +458,10 @@ def synthetic_failure(raw_schema: str) -> dict:
     failure_schema = {
         runner.RAW_SCHEMA_V2: runner.FAILURE_SCHEMA_V2,
         runner.RAW_SCHEMA_V3: runner.FAILURE_SCHEMA_V3,
+        runner.RAW_SCHEMA_V4: runner.FAILURE_SCHEMA_V4,
         runner.RAW_SCHEMA: runner.FAILURE_SCHEMA,
     }[raw_schema]
-    return runner.signed({
+    payload = {
         "schema": failure_schema,
         "created_utc": "2026-07-16T00:00:00Z",
         "status": "failed",
@@ -470,7 +478,10 @@ def synthetic_failure(raw_schema: str) -> dict:
         "invocations": [],
         "retained_files": [],
         "traceback": "fixture traceback",
-    })
+    }
+    if raw_schema == runner.RAW_SCHEMA:
+        payload["supervision"] = copy.deepcopy(raw["supervision"])
+    return runner.signed(payload)
 
 
 class MainCompareRunnerTests(unittest.TestCase):
@@ -507,6 +518,34 @@ class MainCompareRunnerTests(unittest.TestCase):
         value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V3)
         runner.validate_raw(
             value, None, check_files=False, check_current_inputs=False)
+
+    def test_legacy_v4_raw_fixture_remains_replayable(self) -> None:
+        value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V4)
+        runner.validate_raw(
+            value, None, check_files=False, check_current_inputs=False)
+
+    def test_v5_supervision_semantics_are_bound(self) -> None:
+        value = synthetic_raw()
+        for name, replacement in (
+            ("execution_nonce", "bad"),
+            ("launch_cpus", [0, 1]),
+            ("reserved_cpus", [0, 2]),
+            ("campaign_sha256", "f" * 64),
+            ("reservation_sha256", "e" * 64),
+            ("runner_started_monotonic_ns", 1_001),
+            ("runner_finished_monotonic_ns", 1_999),
+        ):
+            edited = copy.deepcopy(value)
+            edited["supervision"][name] = replacement
+            self.assert_rejected(edited)
+        edited = copy.deepcopy(value)
+        edited["campaign"]["reuse"] += 1
+        self.assert_rejected(edited)
+        unsupervised = copy.deepcopy(value)
+        unsupervised["supervision"] = None
+        runner.validate_raw(
+            resign(unsupervised), None, check_files=False,
+            check_current_inputs=False)
 
     def test_candidate_modes_bind_flags_and_exact_argv(self) -> None:
         expected_arguments = {
@@ -951,6 +990,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 "host": value["host_initial"],
                 "isolation": value["isolation"],
                 "reservation": value["reservation"],
+                "supervision": value["supervision"],
                 "identities": value["identities_initial"],
                 "analysis": value["analysis"],
             })
@@ -1008,6 +1048,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 "reservation": copy.deepcopy(RESERVATION),
                 "pair_lease": copy.deepcopy(PAIR_LEASE),
                 "isolation": copy.deepcopy(ISOLATION),
+                "supervision": copy.deepcopy(value["supervision"]),
                 "input_specification": copy.deepcopy(SPECIFICATION),
                 "identities_initial": copy.deepcopy(invocation["identity_before"]),
                 "invocations": [invocation],
@@ -1041,6 +1082,7 @@ class MainCompareRunnerTests(unittest.TestCase):
             legacy = copy.deepcopy(failure)
             legacy["schema"] = runner.FAILURE_SCHEMA_V2
             legacy["campaign"].pop("candidate_mode", None)
+            legacy.pop("supervision", None)
             old_identity, old_specification = cmake_fixture_identity(
                 runner.RAW_SCHEMA_V2)
             legacy["input_specification"] = old_specification
@@ -1056,6 +1098,21 @@ class MainCompareRunnerTests(unittest.TestCase):
             os.mkfifo(fifo, 0o600)
             with self.assertRaises(runner.EvidenceError):
                 runner.bounded_file_snapshot(fifo)
+
+    def test_semantic_snapshot_rejects_path_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "manifest.json"
+            replacement = root / "replacement.json"
+            target.write_bytes(b'{"value":"original"}')
+            replacement.write_bytes(b'{"value":"replacement"}')
+
+            def replace_after_read(_path: Path) -> None:
+                os.replace(replacement, target)
+
+            with self.assertRaises(runner.EvidenceError):
+                runner.bounded_bytes_snapshot(
+                    target, "racing manifest", _after_read=replace_after_read)
 
     def test_process_group_reap_never_uses_unbounded_wait(self) -> None:
         class NeverReaps:
