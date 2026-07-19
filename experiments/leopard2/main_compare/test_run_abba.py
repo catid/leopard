@@ -229,6 +229,8 @@ ISOLATION = runner.isolation_record(
     cpu_stat(0, user=100, idle=100), cpu_stat(0, user=110, idle=110),
     cpu_stat(1, user=100, idle=100), cpu_stat(1, user=100, idle=120),
 )
+SUPERVISION = runner.supervision_record(
+    "ab" * 32, 900, 2_100, CAMPAIGN, RESERVATION, ISOLATION)
 
 
 def summary(samples: list[float], setup: bool = False) -> dict:
@@ -775,7 +777,7 @@ def synthetic_raw(
                 "reservation_after": RESERVATION,
             })
     analysis = runner.analyze(invocations, campaign)
-    return runner.signed({
+    payload = {
         "schema": raw_schema,
         "created_utc": "2026-07-16T00:00:00Z",
         "validity_is_independent_of_speed": True,
@@ -789,7 +791,11 @@ def synthetic_raw(
         "identities_final": identity,
         "host_final": copy.deepcopy(HOST),
         "analysis": analysis,
-    })
+    }
+    if raw_schema == runner.RAW_SCHEMA:
+        payload["supervision"] = runner.supervision_record(
+            "ab" * 32, 900, 2_100, campaign, RESERVATION, ISOLATION)
+    return runner.signed(payload)
 
 
 def resign(value: dict) -> dict:
@@ -827,7 +833,7 @@ def write_complete_evidence_bundle(
     value = resign(value)
     raw_path = root / "raw.json"
     runner.write_json_exclusive(raw_path, value)
-    manifest = runner.signed({
+    manifest_payload = {
         "schema": manifest_schema,
         "created_utc": "2026-07-16T00:00:00Z",
         "valid": True,
@@ -844,7 +850,10 @@ def write_complete_evidence_bundle(
         "reservation": value["reservation"],
         "identities": value["identities_initial"],
         "analysis": value["analysis"],
-    })
+    }
+    if manifest_schema == runner.MANIFEST_SCHEMA:
+        manifest_payload["supervision"] = value["supervision"]
+    manifest = runner.signed(manifest_payload)
     manifest_path = root / "manifest.json"
     runner.write_json_exclusive(manifest_path, manifest)
     return manifest_path
@@ -920,7 +929,7 @@ def synthetic_failure(raw_schema: str) -> dict:
         runner.RAW_SCHEMA_V4: runner.FAILURE_SCHEMA_V4,
         runner.RAW_SCHEMA: runner.FAILURE_SCHEMA,
     }[raw_schema]
-    return runner.signed({
+    payload = {
         "schema": failure_schema,
         "created_utc": "2026-07-16T00:00:00Z",
         "status": "failed",
@@ -937,7 +946,10 @@ def synthetic_failure(raw_schema: str) -> dict:
         "invocations": [],
         "retained_files": [],
         "traceback": "fixture traceback",
-    })
+    }
+    if raw_schema == runner.RAW_SCHEMA:
+        payload["supervision"] = copy.deepcopy(raw["supervision"])
+    return runner.signed(payload)
 
 
 class MainCompareRunnerTests(unittest.TestCase):
@@ -1390,6 +1402,29 @@ class MainCompareRunnerTests(unittest.TestCase):
                 runner.MANIFEST_SCHEMA_V4)
             self.assertEqual(runner.verify_campaign(argparse.Namespace(
                 manifest=manifest, no_current_input_check=True)), 0)
+
+    def test_v5_supervision_semantics_are_bound(self) -> None:
+        value = synthetic_raw()
+        for name, replacement in (
+            ("execution_nonce", "bad"),
+            ("launch_cpus", [0, 1]),
+            ("reserved_cpus", [0, 2]),
+            ("campaign_sha256", "f" * 64),
+            ("reservation_sha256", "e" * 64),
+            ("runner_started_monotonic_ns", 1_001),
+            ("runner_finished_monotonic_ns", 1_999),
+        ):
+            edited = copy.deepcopy(value)
+            edited["supervision"][name] = replacement
+            self.assert_rejected(edited)
+        edited = copy.deepcopy(value)
+        edited["campaign"]["reuse"] += 1
+        self.assert_rejected(edited)
+        unsupervised = copy.deepcopy(value)
+        unsupervised["supervision"] = None
+        runner.validate_raw(
+            resign(unsupervised), None, check_files=False,
+            check_current_inputs=False)
 
     def test_candidate_modes_bind_flags_and_exact_argv(self) -> None:
         expected_arguments = {
@@ -2326,6 +2361,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 "host": value["host_initial"],
                 "isolation": value["isolation"],
                 "reservation": value["reservation"],
+                "supervision": value["supervision"],
                 "identities": value["identities_initial"],
                 "analysis": value["analysis"],
             })
@@ -2383,6 +2419,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 "reservation": copy.deepcopy(RESERVATION),
                 "pair_lease": copy.deepcopy(PAIR_LEASE),
                 "isolation": copy.deepcopy(ISOLATION),
+                "supervision": copy.deepcopy(value["supervision"]),
                 "input_specification": copy.deepcopy(value["input_specification"]),
                 "identities_initial": copy.deepcopy(invocation["identity_before"]),
                 "invocations": [invocation],
@@ -2416,6 +2453,7 @@ class MainCompareRunnerTests(unittest.TestCase):
             legacy = copy.deepcopy(failure)
             legacy["schema"] = runner.FAILURE_SCHEMA_V2
             legacy["campaign"].pop("candidate_mode", None)
+            legacy.pop("supervision", None)
             old_identity, old_specification = cmake_fixture_identity(
                 runner.RAW_SCHEMA_V2)
             legacy["input_specification"] = old_specification

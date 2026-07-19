@@ -63,6 +63,8 @@ FAILURE_SCHEMA = "leopard2-main-compare-failure/v5"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
 ISOLATION_SCHEMA = "leopard2-main-compare-isolation/v1"
+SUPERVISION_SCHEMA = "leopard2-main-supervision/v1"
+SUPERVISION_NONCE_ENV = "LEO2_AFFINITY_EXECUTION_NONCE"
 
 # CMake target and archive identity is evidence, not an interchangeable build
 # detail.  Historical v1/v2 records predate the canonical target rename and
@@ -3467,6 +3469,77 @@ def validate_isolation(
         require(value["accepted"] is True,
                 "reserved SMT sibling performed non-idle work during the campaign")
     return value
+
+
+def supervision_record(
+    nonce: str,
+    runner_started_ns: int,
+    runner_finished_ns: int,
+    campaign: Mapping[str, Any],
+    reservation: Mapping[str, Any],
+    isolation: Mapping[str, Any],
+) -> dict[str, Any]:
+    require(HEX256.fullmatch(nonce) is not None,
+            "affinity execution nonce is not 256-bit lowercase hex")
+    require(type(runner_started_ns) is int and type(runner_finished_ns) is int and
+            0 <= runner_started_ns <= runner_finished_ns,
+            "runner supervision interval is invalid")
+    payload = reservation.get("payload")
+    require(isinstance(payload, dict), "supervision reservation payload is missing")
+    before = isolation.get("before")
+    after = isolation.get("after")
+    require(isinstance(before, dict) and isinstance(after, dict),
+            "supervision isolation interval is missing")
+    return {
+        "schema": SUPERVISION_SCHEMA,
+        "execution_nonce": nonce,
+        "runner_pid": os.getpid(),
+        "runner_started_monotonic_ns": runner_started_ns,
+        "runner_finished_monotonic_ns": runner_finished_ns,
+        "launch_cpus": list(campaign["allowed_cpu_set_at_launch"]),
+        "reserved_cpus": sorted((campaign["benchmark_cpu"],
+                                 campaign["reserved_sibling"])),
+        "campaign_sha256": sha256_bytes(canonical_bytes(campaign)),
+        "reservation_sha256": reservation["sha256"],
+        "reservation_nonce": payload["nonce"],
+        "isolation_before_monotonic_ns": before["monotonic_ns"],
+        "isolation_after_monotonic_ns": after["monotonic_ns"],
+    }
+
+
+def validate_supervision(
+    value: object,
+    campaign: Mapping[str, Any],
+    reservation: Mapping[str, Any],
+    isolation: Mapping[str, Any],
+) -> dict[str, Any]:
+    expected_keys = {
+        "campaign_sha256", "execution_nonce",
+        "isolation_after_monotonic_ns", "isolation_before_monotonic_ns",
+        "launch_cpus", "reservation_nonce", "reservation_sha256",
+        "reserved_cpus", "runner_finished_monotonic_ns", "runner_pid",
+        "runner_started_monotonic_ns", "schema",
+    }
+    require(isinstance(value, dict) and set(value) == expected_keys,
+            "supervision handshake has unexpected or missing fields")
+    require(value.get("schema") == SUPERVISION_SCHEMA and
+            isinstance(value.get("execution_nonce"), str) and
+            HEX256.fullmatch(value["execution_nonce"]) is not None and
+            type(value.get("runner_pid")) is int and value["runner_pid"] > 0,
+            "supervision handshake identity is invalid")
+    expected = supervision_record(
+        value["execution_nonce"], value["runner_started_monotonic_ns"],
+        value["runner_finished_monotonic_ns"], campaign, reservation, isolation)
+    expected["runner_pid"] = value["runner_pid"]
+    require(value == expected, "supervision handshake semantics were edited")
+    require(value["runner_started_monotonic_ns"] <=
+            value["isolation_before_monotonic_ns"] <=
+            value["isolation_after_monotonic_ns"] <=
+            value["runner_finished_monotonic_ns"],
+            "supervision interval does not enclose scheduler evidence")
+    return value
+
+
 def pair_lease_runtime_root(uid: int | None = None) -> Path:
     """Return the user-owned, root-anchored runtime directory shared by runners."""
     retained_uid = os.getuid() if uid is None else uid
@@ -4310,6 +4383,15 @@ def validate_raw(
     require(reservation["sha256"] ==
             sha256_bytes(canonical_bytes(reservation_payload)),
             "retained CPU reservation hash does not match its canonical payload")
+    if raw_schema == RAW_SCHEMA:
+        require("supervision" in raw,
+                "v5 raw bundle omits its supervision handshake field")
+        supervision = raw.get("supervision")
+        if supervision is not None:
+            validate_supervision(supervision, campaign, reservation, raw["isolation"])
+    else:
+        require("supervision" not in raw,
+                "historical raw bundle contains unversioned supervision data")
     if check_current_inputs:
         require(input_snapshot(input_spec, raw_schema) == initial,
                 "current executable/archive/source identity differs from retained evidence")
@@ -4539,13 +4621,16 @@ def validate_failure(
     value: object, output: Path, check_files: bool = True
 ) -> dict[str, Any]:
     failure = verify_signature(value, "failed campaign")
-    require(set(failure) == {
+    failure_schema = failure.get("schema")
+    expected_fields = {
         "campaign", "created_utc", "digest", "error", "error_type",
         "host_initial", "identities_initial", "input_specification",
         "invocations", "isolation", "pair_lease", "reservation",
-        "retained_files", "schema", "status", "traceback", "valid"},
+        "retained_files", "schema", "status", "traceback", "valid"}
+    if failure_schema == FAILURE_SCHEMA:
+        expected_fields.add("supervision")
+    require(set(failure) == expected_fields,
         "failed campaign has unexpected or missing fields")
-    failure_schema = failure.get("schema")
     require(isinstance(failure_schema, str) and
             failure_schema in FAILURE_TO_RAW_SCHEMA and
             failure.get("status") == "failed" and failure.get("valid") is False,
@@ -4612,7 +4697,13 @@ def validate_failure(
         payload = reservation["payload"]
         require(parse_reservation(canonical_bytes(payload), cpu, sibling) == payload and
                 reservation.get("sha256") == sha256_bytes(canonical_bytes(payload)),
-                "failed campaign reservation identity is invalid")
+            "failed campaign reservation identity is invalid")
+    supervision = failure.get("supervision")
+    if supervision is not None:
+        require(failure_schema == FAILURE_SCHEMA and reservation is not None and
+                isolation is not None and isinstance(campaign, dict),
+                "failed supervision handshake has no v5 context")
+        validate_supervision(supervision, campaign, reservation, isolation)
     invocations = failure.get("invocations")
     require(isinstance(invocations, list), "failed invocation prefix is not a list")
     cells_value = campaign.get("cells")
@@ -4718,6 +4809,11 @@ def validate_failure(
 
 
 def run_campaign(options: argparse.Namespace) -> int:
+    runner_started_monotonic_ns = time.monotonic_ns()
+    execution_nonce = os.environ.get(SUPERVISION_NONCE_ENV)
+    if execution_nonce is not None:
+        require(HEX256.fullmatch(execution_nonce) is not None,
+                "supervisor execution nonce is malformed")
     output = options.output.resolve()
     require(not output.exists(), f"output path already exists: {output}")
     output.mkdir(parents=True)
@@ -4774,6 +4870,7 @@ def run_campaign(options: argparse.Namespace) -> int:
     before_monotonic_ns: int | None = None
     before_cpu: dict[str, Any] | None = None
     before_sibling: dict[str, Any] | None = None
+    supervision: dict[str, Any] | None = None
     try:
         allowed_at_launch, housekeeping = validate_topology(
             options.cpu, options.reserved_sibling)
@@ -4821,6 +4918,10 @@ def run_campaign(options: argparse.Namespace) -> int:
             require(host_final == host_initial,
                     "host topology/frequency policy changed during campaign")
             analysis = analyze(invocations, campaign)
+            if execution_nonce is not None:
+                supervision = supervision_record(
+                    execution_nonce, runner_started_monotonic_ns,
+                    time.monotonic_ns(), campaign, reservation, isolation)
             raw = signed({
                 "schema": RAW_SCHEMA,
                 "created_utc": utc_now(),
@@ -4829,6 +4930,7 @@ def run_campaign(options: argparse.Namespace) -> int:
                 "host_initial": host_initial,
                 "isolation": isolation,
                 "reservation": reservation,
+                "supervision": supervision,
                 "input_specification": specification,
                 "identities_initial": initial,
                 "invocations": invocations,
@@ -4854,6 +4956,7 @@ def run_campaign(options: argparse.Namespace) -> int:
                 "host": host_initial,
                 "isolation": isolation,
                 "reservation": reservation,
+                "supervision": supervision,
                 "identities": initial,
                 "analysis": analysis,
             })
@@ -4869,6 +4972,7 @@ def run_campaign(options: argparse.Namespace) -> int:
             "campaign": campaign,
             "host_initial": host_initial,
             "reservation": reservation,
+            "supervision": supervision,
             "pair_lease": pair_lease,
             "isolation": isolation,
             "input_specification": specification,
@@ -4928,6 +5032,11 @@ def verified_campaign_bundle(
     else:
         require("isolation" not in manifest,
                 "legacy manifest contains unversioned isolation evidence")
+    if manifest_schema == MANIFEST_SCHEMA:
+        names.append("supervision")
+    else:
+        require("supervision" not in manifest,
+                "historical manifest contains unversioned supervision data")
     for name in names:
         if name == "identities":
             expected = raw["identities_initial"]
@@ -4943,33 +5052,23 @@ def verified_campaign_bundle(
 
 def verify_campaign(options: argparse.Namespace) -> int:
     manifest_path = options.manifest.resolve(strict=True)
-    manifest, _, _, _ = verified_campaign_bundle(
+    manifest, _, _, manifest_snapshot = verified_campaign_bundle(
         manifest_path, options.no_current_input_check)
     manifest_schema = manifest["schema"]
     affinity_binding = getattr(options, "affinity_binding", None)
     if affinity_binding is not None:
-        try:
-            affinity_binding = affinity_binding.resolve(strict=True)
-            binding = json.loads(affinity_binding.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise EvidenceError(
-                f"cannot read affinity binding: {error}") from error
+        affinity_binding = Path(os.path.abspath(os.fspath(affinity_binding)))
         supervisor = Path(__file__).resolve().parents[3] / \
             "tools/leopard2_affinity_supervisor.py"
         require(supervisor.is_file(), "affinity binding verifier is missing")
         completed = run_process_bounded(
             [sys.executable, str(supervisor), "verify-binding", "--binding",
-             str(affinity_binding)],
+             str(affinity_binding), "--manifest", str(manifest_path),
+             "--manifest-sha256", manifest_snapshot["sha256"]],
             timeout=30.0, max_stdout=1024 * 1024, max_stderr=1024 * 1024)
         require(completed.returncode == 0,
                 "affinity binding verification failed: {}".format(
                     completed.stderr.decode("utf-8", errors="replace")))
-        # The binding verifier authenticates its own retained manifest path.
-        # Require that it is this invocation's manifest as well.
-        require(isinstance(binding, dict) and
-                isinstance(binding.get("manifest"), dict) and
-                Path(binding["manifest"].get("path", "")).resolve() == manifest_path,
-                "affinity binding refers to another main-comparison manifest")
     if manifest_schema == MANIFEST_SCHEMA_V1:
         print("legacy exact-main v1 bundle verified; it has no v2 CPU-isolation "
               "qualification")
