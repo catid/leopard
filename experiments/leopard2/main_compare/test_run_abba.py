@@ -838,6 +838,16 @@ def replace_current_recipe_text(value: dict, text: str) -> None:
         invocation["identity_after"] = copy.deepcopy(value["identities_initial"])
 
 
+def replace_current_executable_recipe_text(value: dict, text: str) -> None:
+    content = runner.exact_text_content(
+        text, "mutated executable link recipe")
+    build = value["identities_initial"]["candidate_build"]
+    build["executable_link_recipe_content"] = content
+    build["executable_link_recipe"]["size"] = content["size"]
+    build["executable_link_recipe"]["sha256"] = content["sha256"]
+    synchronize_identity(value)
+
+
 def synthetic_failure(raw_schema: str) -> dict:
     raw = synthetic_raw(raw_schema=raw_schema)
     failure_schema = {
@@ -1446,6 +1456,24 @@ class MainCompareRunnerTests(unittest.TestCase):
             invocation["identity_after"] = copy.deepcopy(
                 value["identities_initial"])
         self.assert_rejected(value)
+
+    def test_executable_recipe_requires_the_declared_archive_operand(self) -> None:
+        canonical = complete_build_fixture("candidate")[
+            "executable_link_recipe_content"]["text"]
+        mutations = {
+            "absolute same-basename archive": canonical.replace(
+                " libleopard.a ", " /tmp/libleopard.a ", 1),
+            "sibling same-basename archive": canonical.replace(
+                " libleopard.a ", " ../foreign/libleopard.a ", 1),
+            "duplicate same-basename archive": canonical.replace(
+                " libleopard.a ",
+                " libleopard.a /tmp/libleopard.a ", 1),
+        }
+        for label, recipe in mutations.items():
+            with self.subTest(label=label):
+                value = synthetic_raw()
+                replace_current_executable_recipe_text(value, recipe)
+                self.assert_rejected(value)
 
     def test_coherent_failed_historical_recipe_relabel_is_rejected(self) -> None:
         historical = synthetic_failure(runner.RAW_SCHEMA_V2)

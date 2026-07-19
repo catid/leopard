@@ -1299,6 +1299,21 @@ def validate_effective_flags(tokens: Sequence[str], what: str) -> None:
     require(not rejected, f"{what} contains instrumentation/noncanonical flags: {rejected}")
 
 
+def validate_declared_archive_operand(
+    tokens: Sequence[str], archive_name: str, label: str,
+) -> None:
+    """Require one canonical link operand for the declared project archive."""
+    require(isinstance(archive_name, str) and archive_name and
+            Path(archive_name).name == archive_name,
+            f"{label} declared archive name is not canonical")
+    same_name_operands = [
+        token for token in tokens
+        if isinstance(token, str) and Path(token).name == archive_name
+    ]
+    require(same_name_operands == [archive_name],
+            f"{label} does not link its one canonical declared archive operand")
+
+
 def command_output_path(entry: Mapping[str, Any], tokens: Sequence[str]) -> Path:
     positions = [index for index, token in enumerate(tokens) if token == "-o"]
     require(len(positions) == 1 and positions[0] + 1 < len(tokens),
@@ -1595,14 +1610,15 @@ def build_provenance(
     except UnicodeDecodeError as error:
         raise EvidenceError(
             f"{implementation} archive recipe is not strict UTF-8") from error
-    require(expected_archive_name in executable_link,
-            f"{implementation} benchmark link recipe omits its declared archive")
     require(names["archive"] in archive_link,
             f"{implementation} archive recipe does not produce its declared archive")
     executable_link_tokens = shlex.split(executable_link)
     require(executable_link_tokens and
             Path(executable_link_tokens[0]).resolve(strict=True) == compiler,
             f"{implementation} link recipe uses a different compiler")
+    validate_declared_archive_operand(
+        executable_link_tokens, expected_archive_name,
+        f"{implementation} benchmark link recipe")
     validate_effective_flags(
         executable_link_tokens, f"{implementation} executable link recipe")
     semantics = validate_compile_commands(
@@ -1976,8 +1992,7 @@ def validate_complete_executable_recipe(
     require(tokens and tokens[0] == compiler_invocation and
             not any(token.startswith("@") for token in tokens),
             f"{label} compiler or response-file semantics differ")
-    require(any(Path(token).name == archive_name for token in tokens),
-            f"{label} omits its exact archive")
+    validate_declared_archive_operand(tokens, archive_name, label)
     objects = [token.replace("\\", "/") for token in tokens
                if token.endswith(".o")]
     require(objects == [benchmark_object],

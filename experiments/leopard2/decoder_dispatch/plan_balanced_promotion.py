@@ -840,12 +840,15 @@ def _validate_scope_build(build: object, role: str) -> dict[str, Any]:
     outputs = [executable_tokens[index + 1]
                for index, token in enumerate(executable_tokens[:-1])
                if token == "-o"]
+    same_name_archive_operands = [
+        token for token in executable_tokens
+        if token.rsplit("/", 1)[-1] == archive_name
+    ]
     require(executable_tokens and
             executable_tokens[0] == compiler_invocation["invocation"] and
             [token for token in executable_tokens if token.endswith(".o")] ==
                 [expected_benchmark_object] and
-            any(token.rsplit("/", 1)[-1] == archive_name
-                for token in executable_tokens) and
+            same_name_archive_operands == [archive_name] and
             outputs == [executable_name],
             f"{role} normalized executable recipe semantics differ")
     require(compiler["path"], f"{role} normalized compiler path is empty")
@@ -3027,6 +3030,24 @@ def self_test() -> None:
         reject_scope_mutation(
             "uniform coherent translation-unit truncation",
             truncate_all_translation_unit_closures)
+        def redirect_all_declared_archives(values) -> None:
+            for value in values:
+                for role, archive_name in (
+                    ("baseline", "libleopard_main_exact.a"),
+                    ("candidate", "libleopard.a"),
+                ):
+                    build = value["builds"][role]
+                    text = build[
+                        "executable_link_recipe_content"]["text"].replace(
+                            f" {archive_name} ",
+                            f" /tmp/{archive_name} ", 1)
+                    retained = retained_text(text)
+                    build["executable_link_recipe_content"] = retained
+                    build["executable_link_recipe"]["size"] = retained["size"]
+                    build["executable_link_recipe"]["sha256"] = retained["sha256"]
+        reject_scope_mutation(
+            "uniform same-basename foreign archive operands",
+            redirect_all_declared_archives)
         def remove_all_dynamic_loader_records(values) -> None:
             for value in values:
                 for role in ("baseline", "candidate"):
