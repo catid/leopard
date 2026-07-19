@@ -317,13 +317,16 @@ the native-NEON backend is fully represented by the same ops-table boundary;
 introspection continues to describe effective execution rather than a scalar
 tail or fallback implementation detail.
 
-Only one batch call at a time uses a given context pool.  Concurrent batch calls
-sharing that context are serialized at the scheduler, while calls using separate
-contexts may run independently.  Ordinary encode or plan-execute calls remain
-safe to invoke concurrently with distinct outputs and scratch.  Within a batch,
-the implementation reports the result from the lowest-index failing item
-deterministically.  Static assignment is deterministic, but completion order
-between participant ranges remains unspecified.
+Only one multi-item batch call at a time uses a given context pool.  Concurrent
+multi-item calls sharing that pool are serialized at the scheduler, while calls
+using separate pools may run independently.  Empty and single-item batches
+bypass the pool and may execute concurrently under the same distinct-output and
+scratch rules as ordinary encode or plan-execute calls.  A context configured
+with one thread has no pool, so its batch calls likewise use the ordinary
+caller-thread path.  Within a batch, the implementation reports the result from
+the lowest-index failing item deterministically.  Static assignment is
+deterministic, but completion order between participant ranges remains
+unspecified.
 
 API version 4 also provides an opt-in scalable alias preflight for large
 batches. Query caller-owned storage with

@@ -26,9 +26,11 @@ ranges when a later batch is smaller.
 This is a scheduling change only.  It does not change profile or field
 selection, codec bytes, shard tails, alias validation, error codes, the
 lowest-index failure rule, the caller's thread-count budget, or OpenMP's
-existing single-thread treatment inside pool participants.  Batch calls sharing
-one context remain serialized.  Separate contexts and ordinary one-shot calls
-remain concurrently usable under their documented buffer rules.
+existing single-thread treatment inside pool participants.  Multi-item calls
+that use one context pool remain serialized.  Empty and single-item batches
+bypass the pool and may execute concurrently under the ordinary distinct-buffer
+rules; a one-thread context has no pool.  Separate contexts and ordinary
+one-shot calls remain concurrently usable under their documented buffer rules.
 
 ## Current topology boundary
 
@@ -53,6 +55,13 @@ The following work remains separate and opt-in:
 No NUMA, affinity, huge-page, or topology-discovery behavior is enabled by this
 milestone.  Such behavior must be separately selectable and validated on each
 supported platform before production use.
+
+Static ranges remove shared queue contention but trade away dynamic balancing.
+No throughput improvement is claimed by this correctness milestone.  In
+particular, batches with heterogeneous `shard_bytes` can assign very different
+byte totals to equal-item ranges and may regress.  Performance promotion needs
+an isolated heterogeneous-size neighbor matrix or a deterministic policy guard
+that retains dynamic scheduling for that regime.
 
 ## Correctness evidence
 
