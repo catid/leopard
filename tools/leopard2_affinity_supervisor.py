@@ -40,11 +40,11 @@ import stat
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 
-REPORT_SCHEMA = "leopard2-affinity-supervisor/v2"
+REPORT_SCHEMA = "leopard2-affinity-supervisor/v3"
 ACCEPTANCE_SCHEMA = "leopard2-affinity-acceptance/v1"
 BINDING_SCHEMA = "leopard2-affinity-main-binding/v1"
 MAIN_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v4"
@@ -68,14 +68,19 @@ REPORT_KEYS = {
 }
 RECORD_KEYS = {
     "move_count", "move_status", "original_cpus", "pid", "ppid",
-    "process_starttime_ticks", "provenance", "restricted_cpus",
-    "restore_status", "session", "starttime_ticks", "tid", "uid",
+    "process_device", "process_inode", "process_starttime_ticks", "provenance",
+    "restricted_cpus", "restore_status", "session", "starttime_ticks",
+    "task_device", "task_inode", "tid", "uid",
 }
 PROVENANCE_KEYS = {
-    "original_cpus", "pid", "ppid", "process_starttime_ticks", "source",
+    "original_cpus", "pid", "ppid", "process_device", "process_inode",
+    "process_starttime_ticks", "source",
 }
 EVENT_KEYS = {"event", "pid", "tid", "value"}
-CHILD_KEYS = {"pid", "released", "session", "starttime_ticks"}
+CHILD_KEYS = {
+    "pid", "process_device", "process_inode", "released", "session",
+    "starttime_ticks",
+}
 PID_NAMESPACE_KEYS = {"device", "inode"}
 GLOBAL_LOCK_KEYS = {
     "device", "directory_device", "directory_inode", "inode", "lock", "mode",
@@ -598,12 +603,18 @@ class ThreadIdentity:
     session: int
     ppid: int
     process_starttime_ticks: int
+    task_device: int
+    task_inode: int
+    process_device: int
+    process_inode: int
 
     def key(self):
-        return (self.pid, self.tid, self.starttime_ticks)
+        return (self.pid, self.tid, self.starttime_ticks,
+                self.task_device, self.task_inode)
 
     def process_key(self):
-        return (self.pid, self.process_starttime_ticks)
+        return (self.pid, self.process_starttime_ticks,
+                self.process_device, self.process_inode)
 
 
 class LinuxThreadBackend:
@@ -628,26 +639,85 @@ class LinuxThreadBackend:
         except PermissionError as error:
             raise IsolationError("cannot inspect {}".format(label)) from error
 
-    def _identity(self, pid, tid):
-        task = self.proc_root / str(pid) / "task" / str(tid)
-        process = self.proc_root / str(pid)
+    @staticmethod
+    def _open_proc_directory(path, label):
+        flags = (getattr(os, "O_PATH", os.O_RDONLY) |
+                 getattr(os, "O_DIRECTORY", 0) |
+                 getattr(os, "O_CLOEXEC", 0))
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
         try:
-            owner = task.stat().st_uid
-            if owner != self.uid:
-                return None
+            descriptor = os.open(str(path), flags)
+            return descriptor, os.fstat(descriptor)
         except (FileNotFoundError, ProcessLookupError) as error:
             raise ThreadGone() from error
         except PermissionError as error:
-            raise IsolationError(
-                "cannot inspect same-UID thread {}/{}".format(pid, tid)) from error
-        ppid, session_id, starttime = self._read_stat(
-            task / "stat", "thread {}/{}".format(pid, tid))
-        process_ppid, process_session, process_starttime = self._read_stat(
-            process / "stat", "process {}".format(pid))
-        require(ppid == process_ppid and session_id == process_session,
-                "thread/process identity changed while inspecting {}/{}".format(pid, tid))
-        return ThreadIdentity(
-            pid, tid, starttime, owner, session_id, ppid, process_starttime)
+            raise IsolationError("cannot inspect {}".format(label)) from error
+
+    def _identity(self, pid, tid):
+        task = self.proc_root / str(pid) / "task" / str(tid)
+        process = self.proc_root / str(pid)
+        process_fd = None
+        task_fd = None
+        try:
+            process_fd, process_metadata = self._open_proc_directory(
+                process, "process {}".format(pid))
+            task_fd, task_metadata = self._open_proc_directory(
+                task, "thread {}/{}".format(pid, tid))
+            owner = task_metadata.st_uid
+            if owner != self.uid:
+                return None
+            require(process_metadata.st_uid == owner,
+                    "thread/process ownership differs for {}/{}".format(pid, tid))
+            ppid, session_id, starttime = self._read_stat(
+                task / "stat", "thread {}/{}".format(pid, tid))
+            process_ppid, process_session, process_starttime = self._read_stat(
+                process / "stat", "process {}".format(pid))
+            require(ppid == process_ppid and session_id == process_session,
+                    "thread/process identity changed while inspecting {}/{}".format(
+                        pid, tid))
+            current_task = task.stat()
+            current_process = process.stat()
+            require((current_task.st_dev, current_task.st_ino) ==
+                    (task_metadata.st_dev, task_metadata.st_ino) and
+                    (current_process.st_dev, current_process.st_ino) ==
+                    (process_metadata.st_dev, process_metadata.st_ino),
+                    "procfs identity changed while inspecting {}/{}".format(pid, tid))
+            return ThreadIdentity(
+                pid, tid, starttime, owner, session_id, ppid, process_starttime,
+                task_metadata.st_dev, task_metadata.st_ino,
+                process_metadata.st_dev, process_metadata.st_ino)
+        except (FileNotFoundError, ProcessLookupError) as error:
+            raise ThreadGone() from error
+        finally:
+            if task_fd is not None:
+                os.close(task_fd)
+            if process_fd is not None:
+                os.close(process_fd)
+
+    def _open_identity_guard(self, identity):
+        process_path = self.proc_root / str(identity.pid)
+        task_path = process_path / "task" / str(identity.tid)
+        process_fd = None
+        task_fd = None
+        try:
+            process_fd, process_metadata = self._open_proc_directory(
+                process_path, "process {}".format(identity.pid))
+            task_fd, task_metadata = self._open_proc_directory(
+                task_path, "thread {}/{}".format(identity.pid, identity.tid))
+            if ((process_metadata.st_dev, process_metadata.st_ino) !=
+                    (identity.process_device, identity.process_inode) or
+                    (task_metadata.st_dev, task_metadata.st_ino) !=
+                    (identity.task_device, identity.task_inode)):
+                raise ThreadReused()
+            self.current_identity(identity)
+            return process_fd, task_fd
+        except BaseException:
+            if task_fd is not None:
+                os.close(task_fd)
+            if process_fd is not None:
+                os.close(process_fd)
+            raise
 
     def list_threads(self, excluded_session=None):
         result = []
@@ -686,46 +756,58 @@ class LinuxThreadBackend:
         if current is None:
             raise ThreadReused()
         if (current.starttime_ticks != identity.starttime_ticks or
-                current.process_starttime_ticks != identity.process_starttime_ticks):
+                current.process_starttime_ticks != identity.process_starttime_ticks or
+                current.task_device != identity.task_device or
+                current.task_inode != identity.task_inode or
+                current.process_device != identity.process_device or
+                current.process_inode != identity.process_inode):
             raise ThreadReused()
         return current
 
     def get_affinity(self, identity):
-        self.current_identity(identity)
+        process_fd, task_fd = self._open_identity_guard(identity)
         try:
-            affinity = set(os.sched_getaffinity(identity.tid))
-        except ProcessLookupError as error:
-            raise ThreadGone() from error
-        except PermissionError as error:
-            raise IsolationError(
-                "cannot read affinity for same-UID thread {}/{}".format(
-                    identity.pid, identity.tid)) from error
-        try:
-            self.current_identity(identity)
-        except ThreadReused as error:
-            raise ThreadMutationUncertain(
-                "TID identity changed across sched_getaffinity for {}/{}".format(
-                    identity.pid, identity.tid)) from error
-        return affinity
+            try:
+                affinity = set(os.sched_getaffinity(identity.tid))
+            except ProcessLookupError as error:
+                raise ThreadGone() from error
+            except PermissionError as error:
+                raise IsolationError(
+                    "cannot read affinity for same-UID thread {}/{}".format(
+                        identity.pid, identity.tid)) from error
+            try:
+                self.current_identity(identity)
+            except ThreadReused as error:
+                raise ThreadMutationUncertain(
+                    "TID identity changed across sched_getaffinity for {}/{}".format(
+                        identity.pid, identity.tid)) from error
+            return affinity
+        finally:
+            os.close(task_fd)
+            os.close(process_fd)
 
     def set_affinity(self, identity, cpus):
-        self.current_identity(identity)
+        process_fd, task_fd = self._open_identity_guard(identity)
         try:
-            os.sched_setaffinity(identity.tid, set(cpus))
-        except ProcessLookupError as error:
-            raise ThreadGone() from error
-        except (PermissionError, OSError) as error:
-            if isinstance(error, OSError) and error.errno == errno.ESRCH:
+            try:
+                os.sched_setaffinity(identity.tid, set(cpus))
+            except ProcessLookupError as error:
                 raise ThreadGone() from error
-            raise IsolationError(
-                "cannot set affinity for same-UID thread {}/{}: {}".format(
-                    identity.pid, identity.tid, error)) from error
-        try:
-            self.current_identity(identity)
-        except ThreadReused as error:
-            raise ThreadMutationUncertain(
-                "TID identity changed after sched_setaffinity for {}/{}".format(
-                    identity.pid, identity.tid)) from error
+            except (PermissionError, OSError) as error:
+                if isinstance(error, OSError) and error.errno == errno.ESRCH:
+                    raise ThreadGone() from error
+                raise IsolationError(
+                    "cannot set affinity for same-UID thread {}/{}: {}".format(
+                        identity.pid, identity.tid, error)) from error
+            try:
+                self.current_identity(identity)
+            except ThreadReused as error:
+                raise ThreadMutationUncertain(
+                    "TID identity changed after sched_setaffinity for {}/{}".format(
+                        identity.pid, identity.tid)) from error
+        finally:
+            os.close(task_fd)
+            os.close(process_fd)
         actual = self.get_affinity(identity)
         if actual != set(cpus):
             raise IsolationError(
@@ -766,15 +848,14 @@ class LinuxThreadBackend:
 
     def signal_process(self, identity, signum):
         current = self.process_identity(identity.pid)
-        if current is None or current.process_starttime_ticks != \
-                identity.process_starttime_ticks:
+        if current is None or current.process_key() != identity.process_key():
             raise ThreadReused()
         self.validate_capabilities()
         pidfd = None
         try:
             pidfd = os.pidfd_open(identity.pid, 0)
             current = self.process_identity(identity.pid)
-            if current.process_starttime_ticks != identity.process_starttime_ticks:
+            if current.process_key() != identity.process_key():
                 raise ThreadReused()
             signal.pidfd_send_signal(pidfd, signum)
         except ProcessLookupError as error:
@@ -824,7 +905,8 @@ def validate_record(record, label="affinity record"):
     require_exact_keys(record, RECORD_KEYS, label)
     for name in ("pid", "tid"):
         exact_int(record[name], "{} {}".format(label, name), 1, 2**31 - 1)
-    for name in ("starttime_ticks", "process_starttime_ticks"):
+    for name in ("starttime_ticks", "process_starttime_ticks", "task_device",
+                 "task_inode", "process_device", "process_inode"):
         exact_int(record[name], "{} {}".format(label, name), 0, 2**63 - 1)
     exact_int(record["uid"], "{} UID".format(label), 0, 2**31 - 1)
     exact_int(record["session"], "{} session".format(label), 0, 2**31 - 1)
@@ -846,8 +928,8 @@ def validate_provenance(value, label="process provenance"):
     require_exact_keys(value, PROVENANCE_KEYS, label)
     exact_int(value["pid"], "{} PID".format(label), 1, 2**31 - 1)
     exact_int(value["ppid"], "{} parent PID".format(label), 0, 2**31 - 1)
-    exact_int(value["process_starttime_ticks"], "{} starttime".format(label),
-              0, 2**63 - 1)
+    for name in ("process_starttime_ticks", "process_device", "process_inode"):
+        exact_int(value[name], "{} {}".format(label, name), 0, 2**63 - 1)
     validate_cpu_list(value["original_cpus"], "{} CPUs".format(label))
     require(value["source"] in PROVENANCE_SOURCES,
             "{} source is unknown".format(label))
@@ -920,7 +1002,8 @@ def validate_report(report, require_accepted=False):
         require_exact_keys(child, CHILD_KEYS, "report child")
         for name in ("pid", "session"):
             exact_int(child[name], "child {}".format(name), 1, 2**31 - 1)
-        exact_int(child["starttime_ticks"], "child starttime", 0, 2**63 - 1)
+        for name in ("starttime_ticks", "process_device", "process_inode"):
+            exact_int(child[name], "child {}".format(name), 0, 2**63 - 1)
         exact_bool(child["released"], "child release flag")
         require(child["pid"] == child["session"],
                 "child is not its recorded session leader")
@@ -946,25 +1029,29 @@ def validate_report(report, require_accepted=False):
         if item["move_status"] == "moved":
             require(item["move_count"] >= 1,
                     "moved affinity record has no successful move")
-    record_keys = [(item["pid"], item["tid"], item["starttime_ticks"])
+    record_keys = [(item["pid"], item["tid"], item["starttime_ticks"],
+                    item["task_device"], item["task_inode"])
                    for item in records]
     require(len(record_keys) == len(set(record_keys)), "report records are duplicated")
     require(isinstance(report["process_provenance"], list),
             "report process provenance is malformed")
     provenance = [validate_provenance(item, "process provenance {}".format(index))
                   for index, item in enumerate(report["process_provenance"])]
-    process_keys = [(item["pid"], item["process_starttime_ticks"])
+    process_keys = [(item["pid"], item["process_starttime_ticks"],
+                     item["process_device"], item["process_inode"])
                     for item in provenance]
     require(len(process_keys) == len(set(process_keys)),
             "report process provenance is duplicated")
     provenance_by_key = {
-        (item["pid"], item["process_starttime_ticks"]): item
+        (item["pid"], item["process_starttime_ticks"],
+         item["process_device"], item["process_inode"]): item
         for item in provenance
     }
     for item in records:
         if item["provenance"] in {"baseline", "inherited"}:
             process = provenance_by_key.get(
-                (item["pid"], item["process_starttime_ticks"]))
+                (item["pid"], item["process_starttime_ticks"],
+                 item["process_device"], item["process_inode"]))
             require(process is not None and
                     process["original_cpus"] == item["original_cpus"],
                     "record original mask differs from proven process mask")
@@ -1134,7 +1221,20 @@ class GatedLauncher:
 def thread_from_record(record):
     return ThreadIdentity(
         record["pid"], record["tid"], record["starttime_ticks"], record["uid"],
-        record["session"], record["ppid"], record["process_starttime_ticks"])
+        record["session"], record["ppid"], record["process_starttime_ticks"],
+        record["task_device"], record["task_inode"],
+        record["process_device"], record["process_inode"])
+
+
+def child_record_from_identity(identity, released):
+    return {
+        "pid": identity.pid,
+        "starttime_ticks": identity.process_starttime_ticks,
+        "process_device": identity.process_device,
+        "process_inode": identity.process_inode,
+        "session": identity.session,
+        "released": bool(released),
+    }
 
 
 def child_scope_process_keys(identities, child_record):
@@ -1147,6 +1247,8 @@ def child_scope_process_keys(identities, child_record):
     root = by_pid.get(child_record["pid"])
     if root is not None:
         require(root.process_starttime_ticks == child_record["starttime_ticks"] and
+                root.process_device == child_record["process_device"] and
+                root.process_inode == child_record["process_inode"] and
                 root.session == child_record["session"],
                 "recorded child PID was reused while identifying descendants")
     selected_pids = {
@@ -1199,6 +1301,8 @@ def terminate_session(backend, child_record, initial_signal=signal.SIGTERM,
         live_leader = None
     if live_leader is not None:
         require(live_leader.process_starttime_ticks == child_record["starttime_ticks"] and
+                live_leader.process_device == child_record["process_device"] and
+                live_leader.process_inode == child_record["process_inode"] and
                 live_leader.session == session_id,
                 "recorded child PID was reused or changed session before cleanup")
     members = backend.child_scope_processes(child_record)
@@ -1254,7 +1358,7 @@ def terminate_process(backend, identity, grace_seconds=SIGNAL_GRACE_SECONDS,
                 return []
             if current is None:
                 return []
-            if current.process_starttime_ticks != identity.process_starttime_ticks:
+            if current.process_key() != identity.process_key():
                 return ["unsafe newcomer PID was reused during cleanup"]
             sleep_function(min(0.02, max(0.0, deadline - time.monotonic())))
     return ["unsafe newcomer process {} survived SIGKILL".format(identity.pid)]
@@ -1398,6 +1502,8 @@ class AffinityTransaction:
         return {
             "pid": identity.pid,
             "process_starttime_ticks": identity.process_starttime_ticks,
+            "process_device": identity.process_device,
+            "process_inode": identity.process_inode,
             "ppid": identity.ppid,
             "original_cpus": sorted(affinity),
             "source": source,
@@ -1413,6 +1519,10 @@ class AffinityTransaction:
             "session": identity.session,
             "ppid": identity.ppid,
             "process_starttime_ticks": identity.process_starttime_ticks,
+            "task_device": identity.task_device,
+            "task_inode": identity.task_inode,
+            "process_device": identity.process_device,
+            "process_inode": identity.process_inode,
             "original_cpus": sorted(original),
             "restricted_cpus": sorted(restricted),
             "provenance": provenance,
@@ -1649,12 +1759,7 @@ class AffinityTransaction:
     def _child_ready(self, identity):
         require(self.received_signal is None,
                 "signal arrived before gated child release")
-        child = {
-            "pid": identity.pid,
-            "starttime_ticks": identity.process_starttime_ticks,
-            "session": identity.session,
-            "released": False,
-        }
+        child = child_record_from_identity(identity, False)
         self.report["child"] = child
         self.report["state"] = "launch_gated"
         # This durable write closes the SIGKILL launch window.  Until it
@@ -2325,11 +2430,21 @@ class FakeBackend:
         self.signal_log = []
         self.operation_log = []
 
-    def add(self, pid, tid, start, session, cpus, ppid=1, process_start=None):
+    def add(self, pid, tid, start, session, cpus, ppid=1, process_start=None,
+            task_device=101, task_inode=None, process_device=102,
+            process_inode=None):
         if process_start is None:
             process_start = start if tid == pid else self._process_start(pid, start)
+        if task_inode is None:
+            task_inode = pid * 1000000000 + tid * 100000 + start
+        if process_inode is None:
+            existing = [value[0] for key, value in self.threads.items()
+                        if key[0] == pid]
+            process_inode = existing[0].process_inode if existing else \
+                pid * 1000000000 + process_start
         identity = ThreadIdentity(
-            pid, tid, start, self.uid, session, ppid, process_start)
+            pid, tid, start, self.uid, session, ppid, process_start,
+            task_device, task_inode, process_device, process_inode)
         self.threads[(pid, tid)] = [identity, set(cpus)]
         return identity
 
@@ -2355,8 +2470,8 @@ class FakeBackend:
         value = self.threads.get((identity.pid, identity.tid))
         if value is None:
             raise ThreadGone()
-        if (value[0].starttime_ticks != identity.starttime_ticks or
-                value[0].process_starttime_ticks != identity.process_starttime_ticks):
+        if value[0].key() != identity.key() or \
+                value[0].process_key() != identity.process_key():
             raise ThreadReused()
         return value[0]
 
@@ -2378,7 +2493,9 @@ class FakeBackend:
             old = self.threads[key][0]
             self.threads[key][0] = ThreadIdentity(
                 old.pid, old.tid, old.starttime_ticks + 100000, old.uid,
-                old.session, old.ppid, old.process_starttime_ticks + 100000)
+                old.session, old.ppid, old.process_starttime_ticks + 100000,
+                old.task_device, old.task_inode + 100000,
+                old.process_device, old.process_inode + 100000)
             raise ThreadMutationUncertain("injected post-syscall TID reuse")
 
     def session_processes(self, session_id):
@@ -2408,7 +2525,7 @@ class FakeBackend:
 
     def signal_process(self, identity, signum):
         current = self.process_identity(identity.pid)
-        if current.process_starttime_ticks != identity.process_starttime_ticks:
+        if current.process_key() != identity.process_key():
             raise ThreadReused()
         self.signal_log.append((identity.pid, int(signum)))
         self.operation_log.append(("signal", identity.pid, int(signum)))
@@ -2766,9 +2883,7 @@ def test_gate_signal_and_descendants():
     child = backend.add(700, 700, 7000, 700, {0, 1}, ppid=1)
     backend.stubborn.add(700)
     failures, had_members = terminate_session(
-        backend,
-        {"pid": child.pid, "starttime_ticks": child.process_starttime_ticks,
-         "session": child.session, "released": True},
+        backend, child_record_from_identity(child, True),
         grace_seconds=0.001, kill_grace_seconds=0.001,
         sleep_function=lambda _seconds: None)
     check(not failures and had_members and
@@ -2788,6 +2903,23 @@ def test_tid_reuse_and_recovery():
                          "post-syscall TID reuse")
         check(transaction.report["uncertainty"] is True,
               "post-syscall TID reuse did not mark uncertainty")
+
+    with tempfile.TemporaryDirectory() as directory:
+        backend = FakeBackend()
+        identity = backend.add(1, 1, 1, 1, {0, 1, 2, 3}, ppid=0)
+        transaction = make_fake_transaction(directory, backend)
+        transaction.prepare_command(fake_command())
+        transaction.initialize_provenance()
+        # Model PID/TID reuse inside the same clock tick.  Tick-only identity
+        # would accept this replacement; procfs directory inodes must not.
+        backend.threads[(1, 1)][0] = replace(
+            identity, task_inode=identity.task_inode + 1,
+            process_inode=identity.process_inode + 1)
+        failures = transaction.restore()
+        record = transaction.records[identity.key()]
+        check(failures and record["restore_status"] == "reused" and
+              transaction.report["uncertainty"] is True,
+              "same-tick procfs identity reuse was not rejected")
 
     with tempfile.TemporaryDirectory() as directory:
         backend = FakeBackend()
@@ -2854,10 +2986,7 @@ def test_recovery_kills_session_before_restore():
         transaction.prepare_command(fake_command())
         transaction.initialize_provenance()
         child = backend.add(900, 900, 9000, 900, {0, 1, 2, 3}, ppid=1)
-        transaction.report["child"] = {
-            "pid": child.pid, "starttime_ticks": child.process_starttime_ticks,
-            "session": child.session, "released": True,
-        }
+        transaction.report["child"] = child_record_from_identity(child, True)
         transaction.report["state"] = "running"
         transaction._write()
         check(recover_report(
