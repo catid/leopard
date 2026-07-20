@@ -193,8 +193,68 @@ void run_kernel_check(unsigned seed)
 
     uint8_t butterfly_x16[130];
     uint8_t butterfly_y16[130];
+    uint8_t original_x16[130];
+    uint8_t original_y16[130];
+    uint8_t accumulator_x16[130];
+    uint8_t accumulator_y16[130];
+    uint8_t expected_accumulator_x16[130];
+    uint8_t expected_accumulator_y16[130];
     std::memcpy(butterfly_x16, source16, sizeof(source16));
     std::memcpy(butterfly_y16, product16, sizeof(product16));
+    std::memcpy(original_x16, source16, sizeof(source16));
+    std::memcpy(original_y16, product16, sizeof(product16));
+    for (unsigned i = 0; i < sizeof(accumulator_x16); ++i)
+    {
+        accumulator_x16[i] = expected_accumulator_x16[i] =
+            static_cast<uint8_t>(i * 61U + seed * 23U);
+        accumulator_y16[i] = expected_accumulator_y16[i] =
+            static_cast<uint8_t>(i * 103U + seed * 31U);
+    }
+    for (unsigned tile = 0; tile < 2; ++tile)
+    {
+        const unsigned offset = tile * 64U;
+        for (unsigned lane = 0; lane < 32; ++lane)
+        {
+            uint16_t x_value = static_cast<uint16_t>(
+                source16[offset + lane] |
+                (static_cast<unsigned>(source16[offset + 32U + lane]) << 8));
+            uint16_t y_value = static_cast<uint16_t>(
+                product16[offset + lane] |
+                (static_cast<unsigned>(product16[offset + 32U + lane]) << 8));
+            y_value ^= x_value;
+            x_value ^= leopard::ff16::MultiplyLogElement(y_value, log16);
+            expected_accumulator_x16[offset + lane] ^=
+                static_cast<uint8_t>(x_value);
+            expected_accumulator_x16[offset + 32U + lane] ^=
+                static_cast<uint8_t>(x_value >> 8);
+            expected_accumulator_y16[offset + lane] ^=
+                static_cast<uint8_t>(y_value);
+            expected_accumulator_y16[offset + 32U + lane] ^=
+                static_cast<uint8_t>(y_value >> 8);
+        }
+    }
+    uint16_t tail_x = static_cast<uint16_t>(
+        source16[128] | (static_cast<unsigned>(source16[129]) << 8));
+    uint16_t tail_y = static_cast<uint16_t>(
+        product16[128] | (static_cast<unsigned>(product16[129]) << 8));
+    tail_y ^= tail_x;
+    tail_x ^= leopard::ff16::MultiplyLogElement(tail_y, log16);
+    expected_accumulator_x16[128] ^= static_cast<uint8_t>(tail_x);
+    expected_accumulator_x16[129] ^= static_cast<uint8_t>(tail_x >> 8);
+    expected_accumulator_y16[128] ^= static_cast<uint8_t>(tail_y);
+    expected_accumulator_y16[129] ^= static_cast<uint8_t>(tail_y >> 8);
+
+    ops.ff16_ifft_butterfly2_xor(
+        original_x16, original_y16, accumulator_x16, accumulator_y16,
+        log16, sizeof(original_x16));
+    require(std::memcmp(accumulator_x16, expected_accumulator_x16,
+                sizeof(accumulator_x16)) == 0 &&
+            std::memcmp(accumulator_y16, expected_accumulator_y16,
+                sizeof(accumulator_y16)) == 0,
+        "concurrent GF16 accumulating butterfly mismatch");
+    require(std::memcmp(original_x16, source16, sizeof(original_x16)) == 0 &&
+            std::memcmp(original_y16, product16, sizeof(original_y16)) == 0,
+        "concurrent GF16 accumulating butterfly modified an input");
     ops.ff16_ifft_butterfly2(
         butterfly_x16, butterfly_y16, log16, sizeof(butterfly_x16));
     ops.ff16_fft_butterfly2(
