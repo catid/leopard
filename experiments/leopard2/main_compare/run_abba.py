@@ -1599,7 +1599,11 @@ def validate_compile_entry_io(
         index += 1
     require(positional == [str(source)],
             f"compile command for {source} does not have one exact source operand")
-    output = (build / entry["output"]).resolve(strict=True)
+    # A targeted production build need not materialize objects for unrelated
+    # configured targets that still appear in compile_commands.json.  Retain
+    # fail-closed path containment for every entry, while leaving strict file
+    # existence and byte identity to the required provenance-TU loop below.
+    output = (build / entry["output"]).resolve(strict=False)
     require(output.is_relative_to(build),
             f"compile command output escapes build directory: {output}")
     return output

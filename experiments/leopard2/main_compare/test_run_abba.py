@@ -1989,6 +1989,79 @@ class MainCompareRunnerTests(unittest.TestCase):
                         path, role, specification, compiler,
                         compiler_invocation=str(compiler))
 
+    def test_unrelated_compile_output_may_be_absent_but_argv_stays_closed(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path, specification, compiler = compile_commands_fixture(
+                Path(directory), "candidate")
+            canonical = json.loads(path.read_text(encoding="utf-8"))
+            extra_index = next(
+                index for index, entry in enumerate(canonical)
+                if "/fixture-extra/extra-0.cpp" in entry["file"])
+            extra = canonical[extra_index]
+            output = Path(specification["candidate_build_dir"]) / extra["output"]
+            output.unlink()
+
+            proof = runner.validate_compile_commands(
+                path, "candidate", specification, compiler,
+                compiler_invocation=str(compiler))
+            self.assertEqual(
+                proof["entry_count"],
+                runner.CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT)
+            self.assertFalse(output.exists())
+
+            outside = Path(directory) / "outside"
+            outside.mkdir()
+            escape = Path(specification["candidate_build_dir"]) / "escape"
+            escape.symlink_to(outside, target_is_directory=True)
+            for label, mutation in (
+                ("response file", "response"),
+                ("compiler", "compiler"),
+                ("second source", "source"),
+                ("missing compile option", "compile"),
+                ("duplicate output option", "output"),
+                ("output path escape", "escape"),
+            ):
+                with self.subTest(unrelated_entry=label):
+                    entries = copy.deepcopy(canonical)
+                    entry = entries[extra_index]
+                    tokens = runner.compile_command_tokens(entry)
+                    entry.pop("command", None)
+                    entry["arguments"] = tokens
+                    if mutation == "response":
+                        tokens.append("@evil.rsp")
+                    elif mutation == "compiler":
+                        tokens[0] = "/tmp/unapproved-c++"
+                    elif mutation == "source":
+                        tokens.append(canonical[0]["file"])
+                    elif mutation == "compile":
+                        tokens.remove("-c")
+                    elif mutation == "output":
+                        tokens[1:1] = ["-o", extra["output"]]
+                    elif mutation == "escape":
+                        entry["output"] = "escape/evil.o"
+                        tokens[tokens.index("-o") + 1] = entry["output"]
+                    else:  # pragma: no cover - local table is exhaustive
+                        self.fail(f"unknown unrelated-entry mutation: {mutation}")
+                    path.write_text(json.dumps(entries), encoding="utf-8")
+                    with self.assertRaises(runner.EvidenceError):
+                        runner.validate_compile_commands(
+                            path, "candidate", specification, compiler,
+                            compiler_invocation=str(compiler))
+
+            path.write_text(json.dumps(canonical), encoding="utf-8")
+            required = next(
+                entry for entry in canonical
+                if entry["file"].endswith("/leopard.cpp"))
+            required_output = Path(
+                specification["candidate_build_dir"]) / required["output"]
+            required_output.unlink()
+            with self.assertRaises((OSError, runner.EvidenceError)):
+                runner.validate_compile_commands(
+                    path, "candidate", specification, compiler,
+                    compiler_invocation=str(compiler))
+
     def test_coherent_failed_historical_recipe_relabel_is_rejected(self) -> None:
         historical = synthetic_failure(runner.RAW_SCHEMA_V2)
         runner.validate_failure(historical, Path("/unused"), check_files=False)
