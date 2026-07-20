@@ -33,12 +33,19 @@ set(EXPERIMENT_SOURCE_FILES
 
 option(LEO2_BUILD_TESTS "Build Leopard2 correctness tests" ON)
 option(LEO2_BUILD_BENCHMARKS "Build Leopard benchmark programs" ON)
+option(LEO2_BUILD_ALLK_DIAGNOSTIC
+    "Build the source-attested all-K Leopard1 comparison benchmark" OFF)
 option(LEO2_BUILD_FUZZERS "Build Leopard2 libFuzzer targets" OFF)
 option(LEO2_ENABLE_CUDA "Build the optional Leopard2 CUDA backend" OFF)
 option(LEOPARD_ENABLE_GF8 "Include the GF(2^8) codec" ON)
 option(LEOPARD_ENABLE_GF16 "Include the GF(2^16) codec" ON)
 option(LEO2_PORTABLE_ISA_RELEASE_AUDIT
     "Require the strict x86-64 portable-ISA release audit" OFF)
+
+if(LEO2_BUILD_ALLK_DIAGNOSTIC AND NOT LEO2_BUILD_BENCHMARKS)
+    message(FATAL_ERROR
+        "LEO2_BUILD_ALLK_DIAGNOSTIC requires LEO2_BUILD_BENCHMARKS=ON")
+endif()
 
 if(NOT LEOPARD_ENABLE_GF8 AND NOT LEOPARD_ENABLE_GF16)
     message(FATAL_ERROR
@@ -480,6 +487,7 @@ if(LEO2_BUILD_BENCHMARKS)
             NO_LEO_HAS_FF16=1)
     endif()
     set(LEO2_LOCATOR_SOURCE_GIT_SHA "unknown")
+    set(LEO2_LOCATOR_SOURCE_GIT_TREE "unknown")
     set(LEO2_LOCATOR_SOURCE_DIRTY 1)
     find_program(LEO2_LOCATOR_GIT_EXECUTABLE NAMES git)
     if(LEO2_LOCATOR_GIT_EXECUTABLE)
@@ -491,6 +499,15 @@ if(LEO2_BUILD_BENCHMARKS)
             OUTPUT_STRIP_TRAILING_WHITESPACE)
         if(LEO2_LOCATOR_GIT_RESULT EQUAL 0)
             set(LEO2_LOCATOR_SOURCE_GIT_SHA ${LEO2_LOCATOR_GIT_OUTPUT})
+        endif()
+        execute_process(
+            COMMAND ${LEO2_LOCATOR_GIT_EXECUTABLE} rev-parse HEAD^{tree}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            RESULT_VARIABLE LEO2_LOCATOR_TREE_RESULT
+            OUTPUT_VARIABLE LEO2_LOCATOR_TREE_OUTPUT
+            OUTPUT_STRIP_TRAILING_WHITESPACE)
+        if(LEO2_LOCATOR_TREE_RESULT EQUAL 0)
+            set(LEO2_LOCATOR_SOURCE_GIT_TREE ${LEO2_LOCATOR_TREE_OUTPUT})
         endif()
         execute_process(
             COMMAND ${LEO2_LOCATOR_GIT_EXECUTABLE}
@@ -507,6 +524,16 @@ if(LEO2_BUILD_BENCHMARKS)
     target_compile_definitions(bench_leopard2_locator PRIVATE
         LEO2_LOCATOR_SOURCE_GIT_SHA="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
         LEO2_LOCATOR_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
+
+    if(LEO2_BUILD_ALLK_DIAGNOSTIC)
+        add_executable(bench_leopard2_allk bench/leopard2/benchmark.cpp)
+        target_compile_definitions(bench_leopard2_allk PRIVATE
+            LEO2_BENCHMARK_SOURCE_ATTESTATION=1
+            LEO2_BENCHMARK_SOURCE_COMMIT="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
+            LEO2_BENCHMARK_SOURCE_TREE="${LEO2_LOCATOR_SOURCE_GIT_TREE}"
+            LEO2_BENCHMARK_SOURCE_TRACKED_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
+        target_link_libraries(bench_leopard2_allk leopard)
+    endif()
 
     # The timed paths use ordinary internal transform entry points; untimed
     # closure also links the independent direct-generator oracle and exercises
@@ -1379,11 +1406,20 @@ if(LEO2_BUILD_TESTS)
                     $<TARGET_FILE:bench_leopard2_locator>)
             set_tests_properties(leopard2_locator_benchmark_smoke PROPERTIES
                 ENVIRONMENT "OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")
-            add_test(
-                NAME leopard2_benchmark_json_regression
-                COMMAND ${LEO2_PYTHON_EXECUTABLE}
-                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_benchmark_json_test.py
-                    $<TARGET_FILE:bench_leopard2>)
+            if(TARGET bench_leopard2_allk)
+                add_test(
+                    NAME leopard2_benchmark_json_regression
+                    COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_benchmark_json_test.py
+                        $<TARGET_FILE:bench_leopard2>
+                        $<TARGET_FILE:bench_leopard2_allk>)
+            else()
+                add_test(
+                    NAME leopard2_benchmark_json_regression
+                    COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_benchmark_json_test.py
+                        $<TARGET_FILE:bench_leopard2>)
+            endif()
             add_test(
                 NAME leopard2_pruned_transform_benchmark_smoke
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
@@ -1412,6 +1448,14 @@ if(LEO2_BUILD_TESTS)
         # both host-tool tests out of non-Linux CTest inventories; portable
         # codec and Python tests remain registered independently.
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            add_test(
+                NAME leopard2_allk_gap_identity_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_run_allk_gap.py)
+            add_test(
+                NAME leopard2_allk_gap_identity_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_run_allk_gap.py)
             add_test(
                 NAME leopard2_lab_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}

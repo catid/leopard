@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import ctypes
 import dataclasses
+import fcntl
 import hashlib
 import json
 import math
 import os
 from pathlib import Path
+import stat
 import statistics
 import subprocess
 import sys
@@ -25,13 +28,237 @@ from typing import Any, Mapping, Sequence
 
 
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
-CURRENT_COMMIT = "2fce390c9855b6c86b7e20fa86625db500757859"
 ORDER = ("main", "leopard2", "leopard2", "main")
 CHILD_ENV = {
     "LANG": "C", "LC_ALL": "C", "OMP_DYNAMIC": "FALSE",
     "OMP_NUM_THREADS": "1", "OMP_PROC_BIND": "TRUE",
     "OMP_PLACES": "cores", "PATH": "/usr/bin:/bin", "TZ": "UTC",
 }
+LINUX_F_ADD_SEALS = getattr(fcntl, "F_ADD_SEALS", 1033)
+LINUX_F_GET_SEALS = getattr(fcntl, "F_GET_SEALS", 1034)
+LINUX_F_SEAL_SEAL = getattr(fcntl, "F_SEAL_SEAL", 0x0001)
+LINUX_F_SEAL_SHRINK = getattr(fcntl, "F_SEAL_SHRINK", 0x0002)
+LINUX_F_SEAL_GROW = getattr(fcntl, "F_SEAL_GROW", 0x0004)
+LINUX_F_SEAL_WRITE = getattr(fcntl, "F_SEAL_WRITE", 0x0008)
+LINUX_MFD_CLOEXEC = getattr(os, "MFD_CLOEXEC", 0x0001)
+LINUX_MFD_ALLOW_SEALING = getattr(os, "MFD_ALLOW_SEALING", 0x0002)
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise RuntimeError(message)
+
+
+def linux_memfd_create(name: str) -> int:
+    flags = LINUX_MFD_CLOEXEC | LINUX_MFD_ALLOW_SEALING
+    if hasattr(os, "memfd_create"):
+        return os.memfd_create(name, flags)
+    libc = ctypes.CDLL(None, use_errno=True)
+    creator = getattr(libc, "memfd_create", None)
+    require(creator is not None,
+            "all-K executable snapshots require Linux memfd_create support")
+    creator.argtypes = (ctypes.c_char_p, ctypes.c_uint)
+    creator.restype = ctypes.c_int
+    descriptor = creator(name.encode("utf-8"), flags)
+    if descriptor < 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), name)
+    return descriptor
+
+
+def require_hex(value: str, label: str) -> str:
+    require(isinstance(value, str) and len(value) == 40 and
+            all(character in "0123456789abcdef" for character in value),
+            f"{label} must be exactly 40 lowercase hexadecimal characters")
+    return value
+
+
+def git_output(root: Path, *arguments: str) -> str:
+    completed = subprocess.run(
+        ["/usr/bin/git", "-C", str(root), *arguments],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env={
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin",
+        },
+        check=False)
+    require(completed.returncode == 0,
+            f"git {' '.join(arguments)} failed for {root}: "
+            f"{completed.stderr.strip()}")
+    return completed.stdout.strip()
+
+
+def git_identity(source_root: Path, requested_commit: str) -> dict[str, Any]:
+    root = source_root.resolve(strict=True)
+    require(root.is_dir(), f"current source root is not a directory: {root}")
+    requested = require_hex(requested_commit, "current source commit")
+    top = Path(git_output(root, "rev-parse", "--show-toplevel")).resolve(
+        strict=True)
+    require(top == root,
+            f"current source root is not the Git top level: {root} != {top}")
+    head = require_hex(git_output(root, "rev-parse", "HEAD"),
+                       "current source HEAD")
+    require(head == requested,
+            f"current source HEAD mismatch: requested {requested}, got {head}")
+    tree = require_hex(git_output(root, "rev-parse", "HEAD^{tree}"),
+                       "current source tree")
+    for flag in ("-v", "-f"):
+        index_records = [record for record in
+                         git_output(root, "ls-files", flag, "-z").split("\0")
+                         if record]
+        require(index_records and
+                all(record.startswith("H ") for record in index_records),
+                "current source index uses assume-unchanged, skip-worktree, "
+                "fsmonitor-valid, or another non-default flag")
+    status = git_output(root, "status", "--porcelain=v1",
+                        "--untracked-files=normal")
+    require(not status,
+            "current source has tracked or untracked modifications; "
+            "diagnostic identity requires a clean committed tree")
+    return {
+        "path": str(root), "head": head, "tree": tree,
+        "tracked_status": "clean",
+    }
+
+
+def file_identity(path: Path, label: str) -> dict[str, Any]:
+    resolved = path.resolve(strict=True)
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    descriptor = os.open(resolved, flags)
+    try:
+        before = os.fstat(descriptor)
+        require(stat.S_ISREG(before.st_mode), f"{label} is not a regular file")
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    stable_fields = ("st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns",
+                     "st_ctime_ns")
+    require(all(getattr(before, name) == getattr(after, name)
+                for name in stable_fields),
+            f"{label} changed while it was hashed")
+    path_status = resolved.stat()
+    require(all(getattr(after, name) == getattr(path_status, name)
+                for name in stable_fields),
+            f"{label} path changed while it was hashed")
+    require(os.access(resolved, os.X_OK), f"{label} is not executable")
+    return {
+        "path": str(resolved), "sha256": digest.hexdigest(),
+        "device": after.st_dev, "inode": after.st_ino,
+        "mode": after.st_mode, "size": after.st_size,
+        "mtime_ns": after.st_mtime_ns, "ctime_ns": after.st_ctime_ns,
+    }
+
+
+def sealed_snapshot_identity(descriptor: int, label: str) -> dict[str, Any]:
+    status = os.fstat(descriptor)
+    require(stat.S_ISREG(status.st_mode), f"{label} snapshot is not regular")
+    digest = hashlib.sha256()
+    offset = 0
+    while offset < status.st_size:
+        chunk = os.pread(descriptor, min(1024 * 1024, status.st_size - offset),
+                         offset)
+        require(bool(chunk), f"{label} snapshot ended before its recorded size")
+        digest.update(chunk)
+        offset += len(chunk)
+    seals = fcntl.fcntl(descriptor, LINUX_F_GET_SEALS)
+    required_seals = (LINUX_F_SEAL_SEAL | LINUX_F_SEAL_SHRINK |
+                      LINUX_F_SEAL_GROW | LINUX_F_SEAL_WRITE)
+    require(seals & required_seals == required_seals,
+            f"{label} snapshot is not immutably sealed")
+    return {
+        "kind": "linux-sealed-memfd-v1",
+        "sha256": digest.hexdigest(), "size": status.st_size,
+        "mode": status.st_mode, "seals": seals,
+    }
+
+
+def snapshot_executable(path: Path, label: str) \
+        -> tuple[dict[str, Any], int, dict[str, Any]]:
+    require(sys.platform.startswith("linux") and hasattr(os, "pread"),
+            "all-K executable snapshots require Linux sealed memfd support")
+    source_identity = file_identity(path, label)
+    source = os.open(source_identity["path"],
+                     os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+    snapshot = -1
+    try:
+        snapshot = linux_memfd_create(
+            "leopard2-allk-" + label.replace(" ", "-"))
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(source, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            view = memoryview(chunk)
+            while view:
+                written = os.write(snapshot, view)
+                require(written > 0, f"{label} snapshot write made no progress")
+                view = view[written:]
+        require(digest.hexdigest() == source_identity["sha256"],
+                f"{label} changed between identity capture and snapshot copy")
+        require(os.pread(snapshot, 4, 0) == b"\x7fELF",
+                f"{label} is not an ELF executable")
+        require(file_identity(Path(source_identity["path"]), label) ==
+                source_identity,
+                f"{label} changed while its executable snapshot was created")
+        os.fchmod(snapshot, 0o500)
+        required_seals = (LINUX_F_SEAL_SEAL | LINUX_F_SEAL_SHRINK |
+                          LINUX_F_SEAL_GROW | LINUX_F_SEAL_WRITE)
+        fcntl.fcntl(snapshot, LINUX_F_ADD_SEALS, required_seals)
+        snapshot_identity = sealed_snapshot_identity(snapshot, label)
+        require(snapshot_identity["sha256"] == source_identity["sha256"] and
+                snapshot_identity["size"] == source_identity["size"],
+                f"{label} sealed snapshot does not match its source identity")
+        return source_identity, snapshot, snapshot_identity
+    except BaseException:
+        if snapshot >= 0:
+            os.close(snapshot)
+        raise
+    finally:
+        os.close(source)
+
+
+def canonical_digest(value: Any) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def write_json_atomic(path: Path, value: Any, *, pretty: bool = False) -> None:
+    temporary = path.with_name(path.name + ".tmp")
+    if pretty:
+        encoded = json.dumps(value, indent=2, sort_keys=True) + "\n"
+    else:
+        encoded = json.dumps(value, sort_keys=True) + "\n"
+    temporary.parent.mkdir(parents=True, exist_ok=True)
+    temporary.write_text(encoded, encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def validate_manifest(document: Mapping[str, Any], contract: Mapping[str, Any],
+                      contract_digest: str,
+                      cells: Sequence["Cell"]) -> None:
+    require(set(document) == {
+        "schema", "run_contract", "run_contract_sha256", "cells", "completion"
+    }, "all-K manifest keys changed")
+    require(document.get("schema") == "leopard2-all-k-gap-manifest/v2",
+            "all-K manifest schema mismatch")
+    require(document.get("run_contract") == contract,
+            "existing all-K manifest run contract does not match this request")
+    require(document.get("run_contract_sha256") == contract_digest,
+            "existing all-K manifest contract digest mismatch")
+    require(canonical_digest(document.get("run_contract")) == contract_digest,
+            "existing all-K manifest contract bytes are internally inconsistent")
+    require(document.get("cells") == [dataclasses.asdict(cell) for cell in cells],
+            "existing all-K manifest cell matrix mismatch")
+    completion = document.get("completion")
+    require(completion is None or isinstance(completion, dict),
+            "all-K manifest completion must be null or an object")
 
 
 @dataclasses.dataclass(frozen=True)
@@ -105,7 +332,8 @@ def make_cells() -> list[Cell]:
     for k in range(1, 256):
         for redundancy_band, r in gf8_r_values(k):
             parent, _ = parent_for(k, r)
-            assert parent <= 256
+            require(parent <= 256,
+                    "GF8 all-K matrix generated an out-of-field parent")
             for shard_bytes in (4096, 65536):
                 for loss_band, losses in (("one-loss", 1), ("max-loss", r)):
                     if loss_band == "max-loss" and losses == 1:
@@ -118,7 +346,8 @@ def make_cells() -> list[Cell]:
     for k in GF16_K:
         for redundancy_band, r in gf16_r_values(k):
             parent, _ = parent_for(k, r)
-            assert 256 < parent <= 65536
+            require(256 < parent <= 65536,
+                    "GF16 representative matrix generated an invalid parent")
             for shard_bytes in (512, 4096):
                 for loss_band, losses in (("one-loss", 1), ("max-loss", r)):
                     if loss_band == "max-loss" and losses == 1:
@@ -129,7 +358,8 @@ def make_cells() -> list[Cell]:
                         "gf16-representative", k, r, shard_bytes, losses,
                         redundancy_band, loss_band, seed, 5,
                         16 if shard_bytes == 512 else 8, 1))
-    assert len({cell.identifier for cell in cells}) == len(cells)
+    require(len({cell.identifier for cell in cells}) == len(cells),
+            "all-K cell identifiers are not unique")
     return cells
 
 
@@ -154,7 +384,8 @@ def classify_paths(cell: Cell, result: Mapping[str, Any]) -> dict[str, Any]:
     backend = resolved["backend"]
     parent = int(resolved["parent_count"])
     padded = int(resolved["padded_side"])
-    assert profile == "legacy_high_v1"
+    require(profile == "legacy_high_v1",
+            "all-K current benchmark selected a non-legacy-high profile")
     if padded == 1:
         encode = "direct-xor-single-parity"
     else:
@@ -213,21 +444,31 @@ def command(role: str, executable: Path, cell: Cell, cpu: int,
     ]
     if role == "leopard2":
         common.extend(("--profile", "high", "--field", "auto",
-                       "--backend", "auto", "--retain-samples"))
+                       "--backend", "auto", "--retain-samples",
+                       "--attest-source"))
         if not with_current_legacy:
             common.append("--skip-legacy")
     common.extend(("--json", "-"))
     return common
 
 
-def run_one(command_value: Sequence[str], timeout: float) -> dict[str, Any]:
+def run_one(role: str, command_value: Sequence[str], timeout: float,
+            snapshot_descriptor: int,
+            snapshot_identity: Mapping[str, Any]) -> dict[str, Any]:
+    execution_command = list(command_value)
+    require(len(execution_command) >= 4 and
+            execution_command[0:2] == ["/usr/bin/taskset", "-c"],
+            "all-K execution command has an unexpected launcher shape")
+    execution_command[3] = f"/proc/self/fd/{snapshot_descriptor}"
     started = time.time_ns()
     completed = subprocess.run(
-        list(command_value), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        env=CHILD_ENV, timeout=timeout)
+        execution_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env=CHILD_ENV, timeout=timeout, pass_fds=(snapshot_descriptor,))
     finished = time.time_ns()
     record: dict[str, Any] = {
-        "command": list(command_value), "returncode": completed.returncode,
+        "role": role, "command": list(command_value),
+        "executable_snapshot_sha256": snapshot_identity["sha256"],
+        "returncode": completed.returncode,
         "duration_ns": finished - started,
         "stdout_sha256": hashlib.sha256(completed.stdout).hexdigest(),
         "stderr": completed.stderr.decode("utf-8", errors="replace"),
@@ -247,8 +488,98 @@ def metric(record: Mapping[str, Any], path: Sequence[str]) -> float:
 
 
 def geometric(values: Sequence[float]) -> float:
-    assert values and all(value > 0 and math.isfinite(value) for value in values)
+    require(bool(values) and
+            all(value > 0 and math.isfinite(value) for value in values),
+            "benchmark timing samples must be finite and positive")
     return math.exp(statistics.fmean(math.log(value) for value in values))
+
+
+def validate_invocation_identities(
+        invocations: Sequence[Mapping[str, Any]], main_commit: str,
+        current_source: Mapping[str, Any],
+        main_snapshot: Mapping[str, Any],
+        current_snapshot: Mapping[str, Any]) -> None:
+    require(len(invocations) == len(ORDER),
+            "a valid all-K cell must contain exactly four invocations")
+    require(tuple(record.get("role") for record in invocations) == ORDER,
+            "all-K invocation role order mismatch")
+    for index, record in enumerate(invocations):
+        require(record.get("returncode") == 0,
+                f"all-K invocation {index} did not exit successfully")
+        result = record.get("result")
+        require(isinstance(result, dict),
+                f"all-K invocation {index} has no JSON result")
+        build = result.get("build")
+        require(isinstance(build, dict),
+                f"all-K invocation {index} has no build identity")
+        if record["role"] == "main":
+            expected_snapshot = main_snapshot
+            require(build.get("main_source_commit") == main_commit,
+                    "exact-main benchmark embedded commit mismatch")
+        else:
+            expected_snapshot = current_snapshot
+            require(result.get("schema") == "leopard2-benchmark-v5",
+                    "Leopard2 benchmark source-attestation schema mismatch")
+            require(result.get("parameters", {}).get("attest_source") is True,
+                    "Leopard2 benchmark did not record source attestation")
+            require(build.get("source_commit") == current_source.get("head"),
+                    "Leopard2 benchmark embedded commit mismatch")
+            require(build.get("source_tree") == current_source.get("tree"),
+                    "Leopard2 benchmark embedded tree mismatch")
+            require(build.get("source_tracked_dirty") is False,
+                    "Leopard2 benchmark was built from a tracked-dirty tree")
+        require(record.get("executable_snapshot_sha256") ==
+                expected_snapshot.get("sha256"),
+                f"all-K invocation {index} executable snapshot mismatch")
+
+
+def validate_correctness(cell: Cell,
+                         invocations: Sequence[Mapping[str, Any]]) -> None:
+    expected_parameters = {
+        "K": cell.k, "R": cell.r, "shard_bytes": cell.shard_bytes,
+        "loss_count": cell.losses, "batch": 1, "reuse": cell.reuse,
+        "iterations": cell.iterations, "warmup": cell.warmup,
+        "thread_count": 1, "seed": cell.seed,
+    }
+    fingerprints: list[Mapping[str, Any]] = []
+    for index, record in enumerate(invocations):
+        result = record["result"]
+        parameters = result.get("parameters")
+        require(isinstance(parameters, dict),
+                f"all-K invocation {index} has no parameters")
+        for name, value in expected_parameters.items():
+            require(parameters.get(name) == value,
+                    f"all-K invocation {index} parameter {name} mismatch")
+        correctness = result.get("correctness")
+        require(isinstance(correctness, dict),
+                f"all-K invocation {index} has no correctness record")
+        if record["role"] == "main":
+            require(correctness.get("round_trip") is True,
+                    "exact-main benchmark round trip failed")
+        else:
+            require(correctness.get("leopard2_round_trip") is True,
+                    "Leopard2 benchmark round trip failed")
+        fingerprint = result.get("workload_digests")
+        expected_digest_keys = {
+            "algorithm", "original_data", "transmitted_parity",
+            "recovered_originals",
+        }
+        require(isinstance(fingerprint, dict) and
+                set(fingerprint) == expected_digest_keys,
+                f"all-K invocation {index} workload digest structure mismatch")
+        require(fingerprint["algorithm"] == "fnv1a64",
+                f"all-K invocation {index} workload digest algorithm mismatch")
+        for name in ("original_data", "transmitted_parity",
+                     "recovered_originals"):
+            value = fingerprint[name]
+            require(isinstance(value, str) and len(value) == 16 and
+                    all(character in "0123456789abcdef"
+                        for character in value),
+                    f"all-K invocation {index} workload digest {name} "
+                    "is not lowercase FNV-1a hex")
+        fingerprints.append(fingerprint)
+    require(all(fingerprint == fingerprints[0] for fingerprint in fingerprints),
+            "Leopard1 and Leopard2 workload digests differ")
 
 
 def gap_tags(cell: Cell, paths: Mapping[str, Any], encode_speedup: float,
@@ -280,24 +611,34 @@ def gap_tags(cell: Cell, paths: Mapping[str, Any], encode_speedup: float,
     return sorted(set(tags))
 
 
-def analyze_cell(cell: Cell, invocations: Sequence[Mapping[str, Any]], cpu: int) \
-        -> dict[str, Any]:
+def analyze_cell(cell: Cell, invocations: Sequence[Mapping[str, Any]], cpu: int,
+                 contract_digest: str, main_commit: str,
+                 current_source: Mapping[str, Any],
+                 main_snapshot: Mapping[str, Any],
+                 current_snapshot: Mapping[str, Any]) -> dict[str, Any]:
     failures = [record for record in invocations if record["returncode"] != 0]
     result: dict[str, Any] = {
-        "schema": "leopard2-all-k-gap-cell/v1", "cell": dataclasses.asdict(cell),
+        "schema": "leopard2-all-k-gap-cell/v2",
+        "run_contract_sha256": contract_digest,
+        "cell": dataclasses.asdict(cell),
         "cpu": cpu, "order": list(ORDER), "invocations": list(invocations),
         "valid": not failures, "diagnostic_not_promotion_evidence": True,
     }
     if failures:
         result["failures"] = failures
         return result
-    main = [record for record in invocations if
-            Path(record["command"][3]).name == "leopard_main_benchmark"]
-    current = [record for record in invocations if
-               Path(record["command"][3]).name == "bench_leopard2"]
-    assert len(main) == len(current) == 2
+    validate_invocation_identities(
+        invocations, main_commit, current_source,
+        main_snapshot, current_snapshot)
+    validate_correctness(cell, invocations)
+    main = [record for record in invocations if record["role"] == "main"]
+    current = [record for record in invocations if record["role"] == "leopard2"]
+    require(len(main) == len(current) == 2,
+            "all-K ABBA role cardinality mismatch")
     paths = classify_paths(cell, current[0]["result"])
-    assert all(classify_paths(cell, record["result"]) == paths for record in current)
+    require(all(classify_paths(cell, record["result"]) == paths
+                for record in current),
+            "Leopard2 selected-path identity changed within an all-K cell")
     main_encode = geometric([metric(record, ("metrics", "encode_execution",
         "median_us_per_batch_call")) for record in main])
     current_encode = geometric([metric(record, ("metrics", "encode_execution",
@@ -370,30 +711,94 @@ def analyze_cell(cell: Cell, invocations: Sequence[Mapping[str, Any]], cpu: int)
     return result
 
 
+def validate_cell_document(
+        document: Mapping[str, Any], cell: Cell, cpu: int,
+        contract_digest: str, main: Path, current: Path,
+        with_current_legacy: bool, main_commit: str,
+        current_source: Mapping[str, Any],
+        main_snapshot: Mapping[str, Any],
+        current_snapshot: Mapping[str, Any]) -> None:
+    require(document.get("schema") == "leopard2-all-k-gap-cell/v2",
+            f"stored cell {cell.identifier} schema mismatch")
+    require(document.get("run_contract_sha256") == contract_digest,
+            f"stored cell {cell.identifier} contract mismatch")
+    require(document.get("cell") == dataclasses.asdict(cell),
+            f"stored cell {cell.identifier} parameters mismatch")
+    require(document.get("cpu") == cpu,
+            f"stored cell {cell.identifier} CPU mismatch")
+    require(document.get("order") == list(ORDER),
+            f"stored cell {cell.identifier} order mismatch")
+    invocations = document.get("invocations")
+    require(isinstance(invocations, list) and 1 <= len(invocations) <= len(ORDER),
+            f"stored cell {cell.identifier} invocation count is invalid")
+    for slot, record in enumerate(invocations):
+        require(isinstance(record, dict),
+                f"stored cell {cell.identifier} invocation is not an object")
+        role = ORDER[slot]
+        executable = main if role == "main" else current
+        require(record.get("role") == role,
+                f"stored cell {cell.identifier} invocation role mismatch")
+        require(record.get("command") == command(
+            role, executable, cell, cpu, with_current_legacy),
+            f"stored cell {cell.identifier} command mismatch")
+    if document.get("valid") is True:
+        require(len(invocations) == len(ORDER),
+                f"stored valid cell {cell.identifier} is incomplete")
+        validate_invocation_identities(
+            invocations, main_commit, current_source,
+            main_snapshot, current_snapshot)
+        validate_correctness(cell, invocations)
+    else:
+        require(document.get("valid") is False,
+                f"stored cell {cell.identifier} valid flag is not Boolean")
+
+
 def run_cell(cell: Cell, index: int, cpus: Sequence[int], main: Path,
              current: Path, output: Path, timeout: float,
-             with_current_legacy: bool) -> dict[str, Any]:
+             with_current_legacy: bool, contract_digest: str,
+             main_commit: str,
+             current_source: Mapping[str, Any],
+             main_snapshot_descriptor: int,
+             main_snapshot: Mapping[str, Any],
+             current_snapshot_descriptor: int,
+             current_snapshot: Mapping[str, Any]) -> dict[str, Any]:
     path = output / "cells" / (cell.identifier + ".json")
-    if path.is_file():
-        return json.loads(path.read_text(encoding="utf-8"))
     cpu = cpus[index % len(cpus)]
+    if path.is_file():
+        stored = json.loads(path.read_text(encoding="utf-8"))
+        require(isinstance(stored, dict),
+                f"stored cell {cell.identifier} is not a JSON object")
+        validate_cell_document(
+            stored, cell, cpu, contract_digest, main, current,
+            with_current_legacy, main_commit, current_source,
+            main_snapshot, current_snapshot)
+        if stored["valid"] is True:
+            return stored
     invocations = []
     for role in ORDER:
         executable = main if role == "main" else current
+        snapshot_descriptor = (main_snapshot_descriptor if role == "main" else
+                               current_snapshot_descriptor)
+        snapshot_identity = (main_snapshot if role == "main" else
+                             current_snapshot)
+        logical_command = command(
+            role, executable, cell, cpu, with_current_legacy)
         try:
-            invocations.append(run_one(command(
-                role, executable, cell, cpu, with_current_legacy), timeout))
+            invocations.append(run_one(
+                role, logical_command, timeout,
+                snapshot_descriptor, snapshot_identity))
         except subprocess.TimeoutExpired as error:
             invocations.append({
-                "command": list(error.cmd), "returncode": -999,
+                "role": role, "command": logical_command,
+                "executable_snapshot_sha256": snapshot_identity["sha256"],
+                "returncode": -999,
                 "duration_ns": int(timeout * 1e9), "stderr": "timeout",
             })
             break
-    result = analyze_cell(cell, invocations, cpu)
-    temporary = path.with_suffix(".tmp")
-    temporary.parent.mkdir(parents=True, exist_ok=True)
-    temporary.write_text(json.dumps(result, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
+    result = analyze_cell(
+        cell, invocations, cpu, contract_digest, main_commit, current_source,
+        main_snapshot, current_snapshot)
+    write_json_atomic(path, result)
     return result
 
 
@@ -403,7 +808,7 @@ def summarize(results: Sequence[Mapping[str, Any]], metadata: Mapping[str, Any])
     failed = [result for result in results if result.get("valid") is not True]
     metrics = ("encode", "decode_first_use", "decode_at_reuse")
     summary: dict[str, Any] = {
-        "schema": "leopard2-all-k-gap-summary/v1", "metadata": dict(metadata),
+        "schema": "leopard2-all-k-gap-summary/v2", "metadata": dict(metadata),
         "cell_count": len(results), "valid_cell_count": len(valid),
         "failed_cell_count": len(failed),
         "diagnostic_not_promotion_evidence": True,
@@ -478,45 +883,83 @@ def summarize(results: Sequence[Mapping[str, Any]], metadata: Mapping[str, Any])
 def main(arguments: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--main", type=Path, required=True)
+    parser.add_argument("--main-commit", default=MAIN_COMMIT)
     parser.add_argument("--current", type=Path, required=True)
+    parser.add_argument("--current-source-root", type=Path, required=True)
+    parser.add_argument("--current-commit", required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--workers", type=int, default=min(30, os.cpu_count() or 1))
+    parser.add_argument("--workers", type=int, default=min(128, os.cpu_count() or 1))
     parser.add_argument("--timeout", type=float, default=120.0)
     parser.add_argument("--with-current-legacy", action="store_true",
                         help="also time the current tree's retained legacy API")
     options = parser.parse_args(arguments)
-    main_exe = options.main.resolve(strict=True)
-    current_exe = options.current.resolve(strict=True)
+    main_commit = require_hex(options.main_commit, "exact-main source commit")
+    current_commit = require_hex(options.current_commit,
+                                 "current source commit")
+    current_source_initial = git_identity(
+        options.current_source_root, current_commit)
+    (main_executable_initial, main_snapshot_descriptor,
+     main_snapshot_initial) = snapshot_executable(
+        options.main, "exact-main benchmark")
+    (current_executable_initial, current_snapshot_descriptor,
+     current_snapshot_initial) = snapshot_executable(
+        options.current, "Leopard2 benchmark")
+    main_exe = Path(main_executable_initial["path"])
+    current_exe = Path(current_executable_initial["path"])
     output = options.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     cpus = sorted(os.sched_getaffinity(0))
-    workers = min(options.workers, len(cpus), 30)
-    assert workers > 0
+    require(options.workers > 0, "workers must be positive")
+    require(options.timeout > 0 and math.isfinite(options.timeout),
+            "timeout must be finite and positive")
+    workers = min(options.workers, len(cpus), 128)
+    require(workers > 0, "the process has no allowed CPUs")
     cpus = cpus[:workers]
     cells = make_cells()
-    metadata = {
-        "main_commit": MAIN_COMMIT, "current_commit": CURRENT_COMMIT,
-        "main_executable": str(main_exe), "current_executable": str(current_exe),
-        "main_sha256": hashlib.sha256(main_exe.read_bytes()).hexdigest(),
-        "current_sha256": hashlib.sha256(current_exe.read_bytes()).hexdigest(),
+    contract = {
+        "schema": "leopard2-all-k-gap-contract/v2",
+        "main_commit": main_commit, "current_commit": current_commit,
+        "current_source_initial": current_source_initial,
+        "main_executable_initial": main_executable_initial,
+        "current_executable_initial": current_executable_initial,
+        "main_executable_snapshot": main_snapshot_initial,
+        "current_executable_snapshot": current_snapshot_initial,
         "allowed_cpus": sorted(os.sched_getaffinity(0)), "used_cpus": cpus,
         "workers": workers, "order": list(ORDER),
+        "timeout_seconds": options.timeout,
         "with_current_legacy": options.with_current_legacy,
         "matrix": {"gf8_K": [1, 255], "gf8_shard_bytes": [4096, 65536],
                    "gf16_K": list(GF16_K), "gf16_shard_bytes": [512, 4096]},
         "measurement_note": "all CPUs saturated; diagnostic crossover map, not isolated promotion evidence",
     }
-    (output / "manifest.json").write_text(
-        json.dumps({"metadata": metadata,
-                    "cells": [dataclasses.asdict(cell) for cell in cells]},
-                   sort_keys=True) + "\n", encoding="utf-8")
+    contract_digest = canonical_digest(contract)
+    manifest_path = output / "manifest.json"
+    manifest: dict[str, Any] = {
+        "schema": "leopard2-all-k-gap-manifest/v2",
+        "run_contract": contract,
+        "run_contract_sha256": contract_digest,
+        "cells": [dataclasses.asdict(cell) for cell in cells],
+        "completion": None,
+    }
+    if manifest_path.is_file():
+        existing_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        require(isinstance(existing_manifest, dict),
+                "existing all-K manifest is not a JSON object")
+        validate_manifest(existing_manifest, contract, contract_digest, cells)
+        manifest = existing_manifest
+    else:
+        write_json_atomic(manifest_path, manifest)
     results: list[Mapping[str, Any]] = [None] * len(cells)  # type: ignore[list-item]
     completed = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         future_map = {
             executor.submit(run_cell, cell, index, cpus, main_exe, current_exe,
                             output, options.timeout,
-                            options.with_current_legacy): index
+                            options.with_current_legacy, contract_digest,
+                            main_commit, current_source_initial,
+                            main_snapshot_descriptor, main_snapshot_initial,
+                            current_snapshot_descriptor,
+                            current_snapshot_initial): index
             for index, cell in enumerate(cells)
         }
         for future in concurrent.futures.as_completed(future_map):
@@ -525,19 +968,64 @@ def main(arguments: Sequence[str] | None = None) -> int:
             completed += 1
             if completed % 50 == 0 or completed == len(cells):
                 print(f"{completed}/{len(cells)} cells", flush=True)
-    with (output / "cells.jsonl").open("w", encoding="utf-8") as stream:
-        for result in results:
-            stream.write(json.dumps(result, sort_keys=True) + "\n")
+    current_source_final = git_identity(
+        options.current_source_root, current_commit)
+    main_executable_final = file_identity(main_exe, "exact-main benchmark")
+    current_executable_final = file_identity(
+        current_exe, "Leopard2 benchmark")
+    main_snapshot_final = sealed_snapshot_identity(
+        main_snapshot_descriptor, "exact-main benchmark")
+    current_snapshot_final = sealed_snapshot_identity(
+        current_snapshot_descriptor, "Leopard2 benchmark")
+    require(current_source_final == current_source_initial,
+            "current source identity changed during the all-K run")
+    require(main_executable_final == main_executable_initial,
+            "exact-main executable identity changed during the all-K run")
+    require(current_executable_final == current_executable_initial,
+            "Leopard2 executable identity changed during the all-K run")
+    require(main_snapshot_final == main_snapshot_initial,
+            "exact-main sealed executable snapshot changed")
+    require(current_snapshot_final == current_snapshot_initial,
+            "Leopard2 sealed executable snapshot changed")
+    completion = {
+        "current_source_final": current_source_final,
+        "main_executable_final": main_executable_final,
+        "current_executable_final": current_executable_final,
+        "main_executable_snapshot_final": main_snapshot_final,
+        "current_executable_snapshot_final": current_snapshot_final,
+    }
+    if manifest.get("completion") is not None:
+        require(manifest["completion"] == completion,
+                "existing all-K completion identity mismatch")
+    manifest["completion"] = completion
+    validate_manifest(manifest, contract, contract_digest, cells)
+    write_json_atomic(manifest_path, manifest)
+    cells_text = "".join(json.dumps(result, sort_keys=True) + "\n"
+                         for result in results)
+    cells_path = output / "cells.jsonl"
+    cells_temporary = cells_path.with_name(cells_path.name + ".tmp")
+    cells_temporary.write_text(cells_text, encoding="utf-8")
+    os.replace(cells_temporary, cells_path)
     gaps = [result for result in results if result.get("valid") is True and
             not all(result["significantly_beats_main_1_05"].values())]
-    with (output / "gap_cells.jsonl").open("w", encoding="utf-8") as stream:
-        for result in gaps:
-            stream.write(json.dumps(result, sort_keys=True) + "\n")
+    gap_text = "".join(json.dumps(result, sort_keys=True) + "\n"
+                       for result in gaps)
+    gap_path = output / "gap_cells.jsonl"
+    gap_temporary = gap_path.with_name(gap_path.name + ".tmp")
+    gap_temporary.write_text(gap_text, encoding="utf-8")
+    os.replace(gap_temporary, gap_path)
+    metadata = {
+        "run_contract": contract,
+        "run_contract_sha256": contract_digest,
+        "completion": completion,
+    }
     summary = summarize(results, metadata)
-    (output / "summary.json").write_text(
-        json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json_atomic(output / "summary.json", summary, pretty=True)
     print(output / "summary.json")
-    return 0 if not summary["failed_cell_count"] else 1
+    exit_code = 0 if not summary["failed_cell_count"] else 1
+    os.close(current_snapshot_descriptor)
+    os.close(main_snapshot_descriptor)
+    return exit_code
 
 
 if __name__ == "__main__":

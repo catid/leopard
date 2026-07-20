@@ -55,6 +55,41 @@ For a single JSON cell:
         --reuse 8 --iterations 9 --warmup 2 --threads 1 \
         --seed 1 --json -
 
+The broad, CPU-saturating `run_allk_gap.py` diagnostic is deliberately separate
+from the isolated promotion runner below. It requires the Leopard2 source root
+and requested commit explicitly. The source must be the clean Git top level at
+both ends of the run with no tracked modifications, every Leopard2 result must
+embed that exact commit and
+tree, every exact-main result must embed the requested baseline commit, and both
+executable byte/metadata identities must remain unchanged. Every child executes
+an immutable sealed snapshot captured into the run contract, so replacing an
+executable pathname during a campaign cannot mix binaries. Existing output can
+be resumed only when its complete run contract matches; stale cell files are
+rejected rather than mixed into a new result.
+
+Configure this default-off diagnostic explicitly and build its attested target:
+
+    JOBS="$(nproc)"
+    if [ "$JOBS" -gt 128 ]; then JOBS=128; fi
+
+    cmake -S . -B /tmp/leopard2-all-k \
+        -DCMAKE_BUILD_TYPE=Release -DLEO2_BUILD_TESTS=OFF \
+        -DLEO2_BUILD_BENCHMARKS=ON -DLEO2_BUILD_ALLK_DIAGNOSTIC=ON
+    cmake --build /tmp/leopard2-all-k -j "$JOBS" \
+        --target bench_leopard2_allk
+
+    python3 experiments/leopard2/main_compare/run_allk_gap.py \
+        --main /tmp/leopard-main-compare/leopard_main_benchmark \
+        --main-commit 6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198 \
+        --current /tmp/leopard2-all-k/bench_leopard2_allk \
+        --current-source-root "$PWD" \
+        --current-commit "$(git rev-parse HEAD)" \
+        --output /tmp/leopard2-all-k-gap --workers "$JOBS" \
+        --with-current-legacy
+
+This all-K run intentionally saturates the allowed CPUs and identifies regions
+for follow-up. Its output is not authoritative single-core performance evidence.
+
 ## Counterbalanced comparison
 
 `run_abba.py` supplies the other half of the comparison. It accepts only fresh

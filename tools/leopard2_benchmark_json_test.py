@@ -20,6 +20,7 @@ def run(
     executable: Path,
     external_evidence: bool,
     report_decode_path: bool = False,
+    attest_source: bool = False,
 ) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="leo2-benchmark-json-") as temporary:
         output = Path(temporary) / "result.json"
@@ -34,6 +35,8 @@ def run(
             command.extend(("--skip-legacy", "--retain-samples"))
         if report_decode_path:
             command.append("--report-decode-path")
+        if attest_source:
+            command.append("--attest-source")
         command.extend(("--json", str(output)))
         completed = subprocess.run(
             command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -50,12 +53,25 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         "schema", "build", "parameters", "resolved", "correctness",
         "memory", "metrics", "legacy"}
     if document["schema"] in {
-        "leopard2-benchmark-v2", "leopard2-benchmark-v3"
+        "leopard2-benchmark-v2", "leopard2-benchmark-v3",
+        "leopard2-benchmark-v5"
     }:
         expected_top.add("workload_digests")
     require(set(document) == expected_top, "top-level JSON keys changed")
-    require(set(document["build"]) == {
-        "compiler", "compiler_version", "cplusplus"}, "build keys changed")
+    expected_build = {"compiler", "compiler_version", "cplusplus"}
+    if document["schema"] == "leopard2-benchmark-v5":
+        expected_build.update({
+            "source_commit", "source_tree", "source_tracked_dirty"})
+    require(set(document["build"]) == expected_build, "build keys changed")
+    if document["schema"] == "leopard2-benchmark-v5":
+        for name in ("source_commit", "source_tree"):
+            value = document["build"][name]
+            require(value == "unknown" or
+                    (isinstance(value, str) and len(value) == 40 and
+                     all(character in "0123456789abcdef" for character in value)),
+                    f"benchmark {name} is not a lowercase Git identity")
+        require(isinstance(document["build"]["source_tracked_dirty"], bool),
+                "benchmark dirty state is not Boolean")
     expected_resolved = {
         "profile", "field", "backend", "thread_count", "parent_count",
         "padded_side"}
@@ -136,8 +152,10 @@ def validate_isal_comparison_contract(document: dict[str, Any]) -> None:
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        raise RuntimeError("usage: leopard2_benchmark_json_test.py BENCH_LEOPARD2")
+    if len(sys.argv) not in (2, 3):
+        raise RuntimeError(
+            "usage: leopard2_benchmark_json_test.py BENCH_LEOPARD2 "
+            "[BENCH_LEOPARD2_ALLK]")
     executable = Path(sys.argv[1]).resolve()
     default = run(executable, False)
     require(default["schema"] == "leopard2-benchmark-v1",
@@ -189,6 +207,39 @@ def main() -> int:
     require(external["correctness"]["legacy_comparison"] is None,
             "external-evidence mode claimed a legacy comparison")
     validate_isal_comparison_contract(external)
+
+    if len(sys.argv) == 3:
+        attested_executable = Path(sys.argv[2]).resolve()
+        attested_default = run(attested_executable, False)
+        require(attested_default["schema"] == "leopard2-benchmark-v1",
+                "attested target changed its default schema without opt-in")
+        validate_common(attested_default, False)
+        require(attested_default["build"] == default["build"],
+                "attested target exposed source identity without opt-in")
+
+        normal_rejection = subprocess.run(
+            [str(executable), "--attest-source"], stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, check=False)
+        require(normal_rejection.returncode != 0,
+                "normal benchmark accepted the diagnostic-only attestation flag")
+
+        mixed_schema_rejection = subprocess.run(
+            [str(attested_executable), "--attest-source",
+             "--report-decode-path"], stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, check=False)
+        require(mixed_schema_rejection.returncode != 0,
+                "source-attested benchmark accepted mixed JSON schema modes")
+
+        attested = run(attested_executable, True, attest_source=True)
+        require(attested["schema"] == "leopard2-benchmark-v5",
+                "source-attested benchmark schema changed")
+        validate_common(attested, True)
+        validate_workload_digests(attested)
+        require(set(attested["parameters"]) ==
+                (expected_external_parameters | {"attest_source"}),
+                "source-attested parameter structure changed")
+        require(attested["parameters"]["attest_source"] is True,
+                "source-attested benchmark did not record its opt-in")
 
     path_report = run(executable, True, True)
     require(path_report["schema"] == "leopard2-benchmark-v3",

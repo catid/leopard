@@ -29,6 +29,13 @@
 #include "leopard.h"
 #include "leopard2.h"
 #include "Leopard2Dispatch.h"
+#if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
+#if !defined(LEO2_BENCHMARK_SOURCE_COMMIT) || \
+    !defined(LEO2_BENCHMARK_SOURCE_TREE) || \
+    !defined(LEO2_BENCHMARK_SOURCE_TRACKED_DIRTY)
+#error "source-attested benchmark requires commit, tree, and dirty definitions"
+#endif
+#endif
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
 #include "LeopardFF8.h"
 #include "LeopardFF16.h"
@@ -101,6 +108,7 @@ struct Options
     bool skip_legacy;
     bool retain_samples;
     bool report_decode_path;
+    bool attest_source;
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
     enum HighEvaluatorMode
     {
@@ -132,6 +140,7 @@ struct Options
         , skip_legacy(false)
         , retain_samples(false)
         , report_decode_path(false)
+        , attest_source(false)
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         , high_evaluator_mode(HighEvaluatorUnset)
 #endif
@@ -389,6 +398,9 @@ static void Usage(std::ostream& output, const char* program)
         << "  --skip-legacy         Do not run the in-tree legacy comparison\n"
         << "  --retain-samples      Emit raw timing samples using benchmark schema v2\n"
         << "  --report-decode-path  Emit internal selected-path metadata using schema v3\n"
+#if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
+        << "  --attest-source       Embed committed source identity using schema v5\n"
+#endif
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         << "  --high-evaluator-mode NAME\n"
         << "                         Attribution-only: no-copy or copy-fallback\n"
@@ -428,6 +440,9 @@ static Options ParseOptions(int argc, char** argv)
         else if (argument == "--skip-legacy") options.skip_legacy = true;
         else if (argument == "--retain-samples") options.retain_samples = true;
         else if (argument == "--report-decode-path") options.report_decode_path = true;
+#if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
+        else if (argument == "--attest-source") options.attest_source = true;
+#endif
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         else if (argument == "--high-evaluator-mode")
         {
@@ -461,7 +476,13 @@ static Options ParseOptions(int argc, char** argv)
     if (options.force_generic_decode &&
         (options.force_tiled_decode || options.force_materialized_decode))
         Fail("--force-generic cannot select a specialized workspace kernel");
+#if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
+    if (options.attest_source && options.report_decode_path)
+        Fail("--attest-source and --report-decode-path use distinct JSON schemas");
+#endif
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
+    if (options.attest_source)
+        Fail("the attribution benchmark does not support --attest-source");
     if (options.high_evaluator_mode == Options::HighEvaluatorUnset)
         Fail("the attribution benchmark requires --high-evaluator-mode");
     if (options.profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
@@ -1069,12 +1090,13 @@ static int Run(const Options& options)
     }
 
     const bool extended_schema = options.skip_legacy || options.retain_samples ||
-        options.report_decode_path;
+        options.report_decode_path || options.attest_source;
     const unsigned schema_version =
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         4;
 #else
-        options.report_decode_path ? 3 : (extended_schema ? 2 : 1);
+        options.attest_source ? 5 :
+        (options.report_decode_path ? 3 : (extended_schema ? 2 : 1));
 #endif
     static const uint64_t kFnv1a64Offset = UINT64_C(14695981039346656037);
     uint64_t original_digest = kFnv1a64Offset;
@@ -1259,7 +1281,20 @@ static int Run(const Options& options)
          << "  \"build\": {\n"
          << "    \"compiler\": \"" << CompilerName() << "\",\n"
          << "    \"compiler_version\": \"" << JsonEscape(CompilerVersion()) << "\",\n"
-         << "    \"cplusplus\": " << __cplusplus << "\n"
+         << "    \"cplusplus\": " << __cplusplus;
+#if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
+    if (options.attest_source)
+    {
+        json << ",\n"
+             << "    \"source_commit\": \""
+             << LEO2_BENCHMARK_SOURCE_COMMIT << "\",\n"
+             << "    \"source_tree\": \""
+             << LEO2_BENCHMARK_SOURCE_TREE << "\",\n"
+             << "    \"source_tracked_dirty\": "
+             << (LEO2_BENCHMARK_SOURCE_TRACKED_DIRTY ? "true" : "false");
+    }
+#endif
+    json << "\n"
          << "  },\n"
          << "  \"parameters\": {\n"
          << "    \"K\": " << options.k << ",\n"
@@ -1287,6 +1322,8 @@ static int Run(const Options& options)
              << (options.retain_samples ? "true" : "false") << ",\n";
         if (options.report_decode_path)
             json << "    \"report_decode_path\": true,\n";
+        if (options.attest_source)
+            json << "    \"attest_source\": true,\n";
     }
     json << "    \"shard_bytes\": " << options.bytes << ",\n"
          << "    \"loss_count\": " << options.losses << ",\n"

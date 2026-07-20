@@ -618,6 +618,13 @@ class CMakeProductionGraph(object):
         "RESULT_VARIABLE", "LEO2_LOCATOR_GIT_RESULT",
         "OUTPUT_VARIABLE", "LEO2_LOCATOR_GIT_OUTPUT",
         "OUTPUT_STRIP_TRAILING_WHITESPACE")
+    _locator_git_tree = (
+        "COMMAND", "${LEO2_LOCATOR_GIT_EXECUTABLE}", "rev-parse",
+        "HEAD^{tree}",
+        "WORKING_DIRECTORY", "${CMAKE_CURRENT_SOURCE_DIR}",
+        "RESULT_VARIABLE", "LEO2_LOCATOR_TREE_RESULT",
+        "OUTPUT_VARIABLE", "LEO2_LOCATOR_TREE_OUTPUT",
+        "OUTPUT_STRIP_TRAILING_WHITESPACE")
     _locator_git_status = (
         "COMMAND", "${LEO2_LOCATOR_GIT_EXECUTABLE}", "status",
         "--porcelain", "--untracked-files=normal",
@@ -628,6 +635,7 @@ class CMakeProductionGraph(object):
     _required_locator_provenance_commands = Counter({
         ("find_program", _locator_git_find): 1,
         ("execute_process", _locator_git_revision): 1,
+        ("execute_process", _locator_git_tree): 1,
         ("execute_process", _locator_git_status): 1,
     })
     _sparse_sidecar_link_depends = (
@@ -677,6 +685,10 @@ class CMakeProductionGraph(object):
         ("option", (
             "LEO2_BUILD_BENCHMARKS", "Build Leopard benchmark programs",
             "ON")): 1,
+        ("option", (
+            "LEO2_BUILD_ALLK_DIAGNOSTIC",
+            "Build the source-attested all-K Leopard1 comparison benchmark",
+            "OFF")): 1,
         ("option", (
             "LEO2_BUILD_FUZZERS", "Build Leopard2 libFuzzer targets",
             "OFF")): 1,
@@ -742,6 +754,10 @@ class CMakeProductionGraph(object):
         ("trusted", ("option", (
             "LEO2_BUILD_BENCHMARKS", "Build Leopard benchmark programs",
             "ON"))),
+        ("trusted", ("option", (
+            "LEO2_BUILD_ALLK_DIAGNOSTIC",
+            "Build the source-attested all-K Leopard1 comparison benchmark",
+            "OFF"))),
         ("trusted", ("option", (
             "LEO2_BUILD_FUZZERS", "Build Leopard2 libFuzzer targets",
             "OFF"))),
@@ -867,6 +883,8 @@ class CMakeProductionGraph(object):
         ("locator-provenance", ("find_program", _locator_git_find)),
         ("locator-provenance", (
             "execute_process", _locator_git_revision)),
+        ("locator-provenance", (
+            "execute_process", _locator_git_tree)),
         ("locator-provenance", (
             "execute_process", _locator_git_status)),
         ("sparse-sidecar", (
@@ -1922,6 +1940,10 @@ class CMakeProductionGraph(object):
                     result_variable = "LEO2_LOCATOR_GIT_RESULT"
                     output_variable = "LEO2_LOCATOR_GIT_OUTPUT"
                     symbol = "locator-git-revision"
+                elif tuple(tokens) == self._locator_git_tree:
+                    result_variable = "LEO2_LOCATOR_TREE_RESULT"
+                    output_variable = "LEO2_LOCATOR_TREE_OUTPUT"
+                    symbol = "locator-git-tree"
                 else:
                     result_variable = "LEO2_LOCATOR_STATUS_RESULT"
                     output_variable = "LEO2_LOCATOR_STATUS_OUTPUT"
@@ -4558,6 +4580,12 @@ target_compile_options(alias_backend PRIVATE /arch:AVX2)
             RESULT_VARIABLE LEO2_LOCATOR_GIT_RESULT
             OUTPUT_VARIABLE LEO2_LOCATOR_GIT_OUTPUT
             OUTPUT_STRIP_TRAILING_WHITESPACE)"""
+        tree_command = """execute_process(
+            COMMAND ${LEO2_LOCATOR_GIT_EXECUTABLE} rev-parse HEAD^{tree}
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            RESULT_VARIABLE LEO2_LOCATOR_TREE_RESULT
+            OUTPUT_VARIABLE LEO2_LOCATOR_TREE_OUTPUT
+            OUTPUT_STRIP_TRAILING_WHITESPACE)"""
         status_command = """execute_process(
             COMMAND ${LEO2_LOCATOR_GIT_EXECUTABLE}
                 status --porcelain --untracked-files=normal
@@ -4565,7 +4593,7 @@ target_compile_options(alias_backend PRIVATE /arch:AVX2)
             RESULT_VARIABLE LEO2_LOCATOR_STATUS_RESULT
             OUTPUT_VARIABLE LEO2_LOCATOR_STATUS_OUTPUT
             OUTPUT_STRIP_TRAILING_WHITESPACE)"""
-        commands = (find_command, revision_command, status_command)
+        commands = (find_command, revision_command, tree_command, status_command)
         for command in commands:
             with self.subTest(required=command.split("(", 1)[0]):
                 self.assertEqual(1, self.cmake.count(command))
@@ -4593,6 +4621,11 @@ target_compile_options(alias_backend PRIVATE /arch:AVX2)
              "RESULT_VARIABLE LEO2_LOCATOR_GIT_RC"),
             ("OUTPUT_VARIABLE LEO2_LOCATOR_GIT_OUTPUT",
              "OUTPUT_VARIABLE LEO2_LOCATOR_GIT_SHA"),
+            ("rev-parse HEAD^{tree}", "rev-parse HEAD^{commit}"),
+            ("RESULT_VARIABLE LEO2_LOCATOR_TREE_RESULT",
+             "RESULT_VARIABLE LEO2_LOCATOR_TREE_RC"),
+            ("OUTPUT_VARIABLE LEO2_LOCATOR_TREE_OUTPUT",
+             "OUTPUT_VARIABLE LEO2_LOCATOR_TREE_SHA"),
             ("status --porcelain --untracked-files=normal",
              "status --porcelain --untracked-files=no"),
             ("RESULT_VARIABLE LEO2_LOCATOR_STATUS_RESULT",
@@ -4641,8 +4674,8 @@ target_compile_options(alias_backend PRIVATE /arch:AVX2)
 
         sentinel = "__LEO2_LOCATOR_PROVENANCE_SENTINEL__"
         reordered = self.cmake.replace(revision_command, sentinel, 1)
-        reordered = reordered.replace(status_command, revision_command, 1)
-        reordered = reordered.replace(sentinel, status_command, 1)
+        reordered = reordered.replace(tree_command, revision_command, 1)
+        reordered = reordered.replace(sentinel, tree_command, 1)
         self.assertNotEqual(reordered, self.cmake)
         with self.assertRaisesRegex(
                 ContractError, "security-sensitive CMake command order drift"):
@@ -5101,6 +5134,9 @@ endif()'''
             'option(LEO2_BUILD_TESTS "Build Leopard2 correctness tests" ON)',
             'option(LEO2_BUILD_BENCHMARKS "Build Leopard benchmark programs" '
             'ON)',
+            'option(LEO2_BUILD_ALLK_DIAGNOSTIC\n'
+            '    "Build the source-attested all-K Leopard1 comparison '
+            'benchmark" OFF)',
             'option(LEO2_BUILD_FUZZERS "Build Leopard2 libFuzzer targets" OFF)',
             'option(LEO2_ENABLE_CUDA "Build the optional Leopard2 CUDA backend" '
             'OFF)',
