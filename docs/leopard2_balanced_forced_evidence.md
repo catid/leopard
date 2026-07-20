@@ -42,15 +42,23 @@ Collection, offline verification, and normalized-scope validation share one
 fail-closed executable-link grammar. It accepts only known value-free CMake
 flags and the exact declared object, project archive, output, libgomp, and
 libpthread operands. The two external support files carry resolved byte
-identities that are re-resolved and rehashed from their lexical operands, match
-between baseline and candidate, and participate in executable freshness checks.
-One shared context-specific allowlist applies to retained CMake Release flags,
-compile commands, and executable recipes. Every flag spelling must be canonical
-and the final optimization must be `-O3`; long aliases, unknown optimization
-controls, sanitizer, profile, LTO, instrumentation, inline/vector disables, and
-coverage flags are rejected. Response files, forwarded linker controls, scripts, search paths or
-libraries, specs, alternate tool roots/loaders, plugins, and undeclared inputs
-fail closed.
+identities plus their complete lexical symlink chains. Each validation consumes
+an immutable private byte snapshot for hashing and format checks, then
+re-resolves the chain and directly compares descriptor, path, and mode identity
+before completing the link closure. The records must match between baseline and
+candidate and participate in executable freshness checks.
+
+Compile commands use a separate versioned proof with explicit baseline and
+candidate profiles. Each required translation unit retains its full ordered
+compiler argv, working directory, sole positional source, and exact CMake
+output. Definitions, includes, language, optimization, OpenMP, and ISA options
+must match that per-TU profile exactly, including order; later conflicting
+options cannot override it and there are no broad `-D`/`-I` exceptions. CMake
+Release flags and executable recipes use their own closed grammars. Long
+aliases, unknown optimization controls, sanitizer, profile, LTO,
+instrumentation, inline/vector disables, and coverage flags are rejected.
+Response files, forwarded linker controls, scripts, search paths or libraries,
+specs, alternate tool roots/loaders, plugins, and undeclared inputs fail closed.
 
 Those runtime and cache checks do not authenticate an external observation
 against a writer able to coherently replace and re-sign every input in the

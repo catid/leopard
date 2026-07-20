@@ -375,6 +375,69 @@ def complete_artifact(path: str, kind: str, character: str,
     }
 
 
+def compile_commands_fixture(root: Path, role: str) -> tuple[Path, dict, Path]:
+    """Materialize one canonical compile database without invoking a compiler."""
+    baseline_root = (root / "baseline-source").resolve()
+    candidate_root = (root / "candidate-source").resolve()
+    build = (root / f"{role}-build").resolve()
+    compiler = (root / "toolchain" / "c++").resolve()
+    for directory in (baseline_root, candidate_root, build, compiler.parent):
+        directory.mkdir(parents=True, exist_ok=True)
+    compiler.write_bytes(b"fixture compiler\n")
+    compiler.chmod(0o755)
+    specification = {
+        "baseline_source_root": str(baseline_root),
+        "candidate_source_root": str(candidate_root),
+        f"{role}_build_dir": str(build),
+    }
+    if role == "baseline":
+        sources = [baseline_root / name for name in runner.BASELINE_LIBRARY_SOURCES]
+        adapter = candidate_root / \
+            "experiments/leopard2/main_compare/legacy_main_benchmark.cpp"
+        sources.append(adapter)
+        extra_count = 0
+    else:
+        sources = [candidate_root / name for name in runner.CANDIDATE_LIBRARY_SOURCES]
+        sources.append(candidate_root / "bench/leopard2/benchmark.cpp")
+        extra_count = (runner.CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT -
+                       len(sources))
+    entries = []
+    for source in sources:
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("// fixture source\n", encoding="utf-8")
+        output = runner.expected_compile_output(role, source, specification)
+        output_path = build / output
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"fixture object\n")
+        arguments = runner.expected_compile_argv(
+            role, source, specification, str(compiler))
+        entry = {
+            "directory": str(build), "file": str(source), "output": output,
+        }
+        # Exercise both representations while retaining one exact token stream.
+        if len(entries) % 2:
+            entry["arguments"] = arguments
+        else:
+            entry["command"] = runner.shlex.join(arguments)
+        entries.append(entry)
+    for index in range(extra_count):
+        source = candidate_root / "fixture-extra" / f"extra-{index}.cpp"
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text("// unrelated configured target\n", encoding="utf-8")
+        output = f"CMakeFiles/fixture_extra_{index}.dir/extra-{index}.cpp.o"
+        output_path = build / output
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(b"fixture extra object\n")
+        entries.append({
+            "directory": str(build), "file": str(source), "output": output,
+            "arguments": [
+                str(compiler), "-O3", "-o", output, "-c", str(source)],
+        })
+    path = build / "compile_commands.json"
+    path.write_text(json.dumps(entries), encoding="utf-8")
+    return path, specification, compiler
+
+
 def complete_build_fixture(role: str) -> dict:
     baseline = role == "baseline"
     build_dir = SPECIFICATION[f"{role}_build_dir"]
@@ -402,7 +465,7 @@ def complete_build_fixture(role: str) -> dict:
         target_directory = runner.CANONICAL_CMAKE_IDENTITY["target_directory"]
         benchmark_source = source_root + "/bench/leopard2/benchmark.cpp"
         benchmark_object = (build_dir +
-            "/CMakeFiles/bench_leopard2.dir/benchmark.cpp.o")
+            "/CMakeFiles/bench_leopard2.dir/bench/leopard2/benchmark.cpp.o")
         cache = {
             "CMAKE_BUILD_TYPE": "Release",
             "CMAKE_CXX_COMPILER": "/usr/bin/compiler",
@@ -422,19 +485,13 @@ def complete_build_fixture(role: str) -> dict:
     library_pairs = []
     archive_objects = []
     for index, name in enumerate(library_names):
-        if not baseline and name in {
-                "Leopard2BackendSSSE3.cpp", "Leopard2BackendAVX2.cpp",
-                "Leopard2BackendAVX512.cpp"}:
-            backend = name.removeprefix("Leopard2Backend").removesuffix(
-                ".cpp").lower()
-            object_relative = (
-                f"CMakeFiles/leopard2_backend_{backend}.dir/{name}.o")
-        else:
-            object_relative = f"CMakeFiles/{target_directory}/{name}.o"
+        source_path = source_root + "/" + name
+        object_relative = runner.expected_compile_output(
+            role, Path(source_path), SPECIFICATION)
         archive_objects.append(object_relative)
         library_pairs.append({
             "source": complete_artifact(
-                source_root + "/" + name, "source_file",
+                source_path, "source_file",
                 format((index % 9) + 1, "x")),
             "object": complete_artifact(
                 build_dir + "/" + object_relative, "object_file",
@@ -470,21 +527,9 @@ def complete_build_fixture(role: str) -> dict:
     archive_recipe_path = (
         build_dir + f"/CMakeFiles/{target_directory}/link.txt")
     compiler_text = "fixture compiler 1.0\n"
-    external_link_inputs = [
-        {
-            "operand": "/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so",
-            "role": "openmp_runtime_shared",
-            "artifact": runner.artifact_identity(
-                Path("/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so"),
-                "shared_library"),
-        },
-        {
-            "operand": "/usr/lib/x86_64-linux-gnu/libpthread.a",
-            "role": "pthread_support_archive",
-            "artifact": runner.artifact_identity(
-                Path("/usr/lib/x86_64-linux-gnu/libpthread.a"), "archive"),
-        },
-    ]
+    external_link_inputs = runner.capture_external_link_inputs(
+        runner.shlex.split(executable_recipe_text),
+        f"fixture {role} executable recipe")
     validated_executable = complete_artifact(
         executable_path, "executable", "0" if baseline else "1")
     validated_executable["mtime_ns"] = 1 + max(
@@ -519,11 +564,23 @@ def complete_build_fixture(role: str) -> dict:
             archive_path, "archive", "2" if baseline else "3"),
         "validated_cache": cache,
         "validated_compile_commands": {
+            "schema": runner.COMPILE_COMMANDS_SCHEMA,
+            "implementation": role,
+            "profile": runner.compile_profile_for_implementation(role),
             "entry_count": entry_count,
             "required_sources": sorted(pair["source"]["path"] for pair in pairs),
             "validated_optimization": "-O3",
             "validated_openmp": True,
             "required_source_object_pairs": pairs,
+            "required_entries": sorted([{
+                "directory": build_dir,
+                "file": pair["source"]["path"],
+                "output": runner.expected_compile_output(
+                    role, Path(pair["source"]["path"]), SPECIFICATION),
+                "arguments": runner.expected_compile_argv(
+                    role, Path(pair["source"]["path"]), SPECIFICATION,
+                    "/usr/bin/compiler"),
+            } for pair in pairs], key=lambda entry: entry["file"]),
             "isa_policy": isa_policy,
         },
         "archive_link_recipe_content": archive_recipe_content,
@@ -1689,6 +1746,78 @@ class MainCompareRunnerTests(unittest.TestCase):
         synchronize_identity(value)
         self.assert_rejected(value)
 
+        for label, mutate in (
+            ("external file mode", lambda record:
+                record["artifact"].update({
+                    "mode": record["artifact"]["mode"] ^ 0o100})),
+            ("lexical link target", lambda record:
+                record["lexical_symlink_chain"][0].update({
+                    "target": "../../../x86_64-linux-gnu/libgomp.so.999"})),
+            ("lexical link mode", lambda record:
+                record["lexical_symlink_chain"][0].update({"mode": 0o700})),
+            ("truncated lexical link chain", lambda record:
+                record["lexical_symlink_chain"].pop()),
+        ):
+            with self.subTest(external_chain=label):
+                value = synthetic_raw()
+                record = value["identities_initial"]["candidate_build"][
+                    "validated_external_link_inputs"][0]
+                mutate(record)
+                synchronize_identity(value)
+                self.assert_rejected(value)
+
+        value = synthetic_raw()
+        pthread = value["identities_initial"]["candidate_build"][
+            "validated_external_link_inputs"][1]
+        pthread["lexical_symlink_chain"] = [{
+            "path": pthread["operand"], "target": "libpthread-evil.a",
+            "mode": 0o777,
+        }]
+        synchronize_identity(value)
+        self.assert_rejected(value)
+
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "external.bin"
+            operand = Path(directory) / "external-link"
+            old_bytes = b"0123456789abcdef"
+            new_bytes = b"fedcba9876543210"
+            target.write_bytes(old_bytes)
+            operand.symlink_to(target.name)
+            metadata, digest, snapshot, resolved, chain = \
+                runner.link_common.current_external_file_snapshot(
+                    operand, "immutable external fixture")
+            self.assertEqual(snapshot, old_bytes)
+            self.assertEqual(resolved, target)
+            self.assertEqual(chain[0]["path"], str(operand))
+            target.write_bytes(new_bytes)
+            os.utime(target, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+            _, new_digest, new_snapshot, _, _ = \
+                runner.link_common.current_external_file_snapshot(
+                    operand, "rewritten external fixture")
+            self.assertEqual(snapshot, old_bytes)
+            self.assertEqual(digest, hashlib.sha256(old_bytes).hexdigest())
+            self.assertEqual(new_snapshot, new_bytes)
+            self.assertNotEqual(new_digest, digest)
+
+            resolver = runner.link_common._resolve_external_lexical_path
+            calls = 0
+
+            def retarget_after_read(path: Path, label: str):
+                nonlocal calls
+                calls += 1
+                resolved_path, public, private = resolver(path, label)
+                if calls == 2:
+                    public = copy.deepcopy(public)
+                    public[0]["target"] = "retargeted-after-read"
+                return resolved_path, public, private
+
+            with mock.patch.object(
+                    runner.link_common, "_resolve_external_lexical_path",
+                    side_effect=retarget_after_read), \
+                 self.assertRaises(runner.link_common.EvidenceError):
+                runner.link_common.current_external_file_snapshot(
+                    operand, "retarget race fixture")
+
     def test_effective_release_and_executable_flags_fail_closed(self) -> None:
         for label, flags in (
             ("final optimization downgrade", "-O3 -O0"),
@@ -1735,6 +1864,130 @@ class MainCompareRunnerTests(unittest.TestCase):
                 value = synthetic_raw()
                 replace_current_executable_recipe_text(value, recipe)
                 self.assert_rejected(value)
+
+        # The producer-side compile database is independently hostile input.
+        # Exercise its complete argv grammar directly; these cases run under
+        # both ordinary Python and ``python -O`` with the rest of this suite.
+        for role in ("baseline", "candidate"):
+            with self.subTest(compile_profile=role), \
+                 tempfile.TemporaryDirectory() as directory:
+                path, specification, compiler = compile_commands_fixture(
+                    Path(directory), role)
+                proof = runner.validate_compile_commands(
+                    path, role, specification, compiler,
+                    compiler_invocation=str(compiler))
+                self.assertEqual(proof["schema"], runner.COMPILE_COMMANDS_SCHEMA)
+                self.assertEqual(
+                    proof["implementation"], role)
+                self.assertEqual(
+                    proof["profile"],
+                    runner.compile_profile_for_implementation(role))
+                self.assertEqual(
+                    len(proof["required_entries"]),
+                    len(proof["required_source_object_pairs"]))
+
+        compile_mutations = (
+            ("response file", "candidate", "/leopard.cpp", "response"),
+            ("second positional source", "candidate", "/leopard.cpp", "extra_source"),
+            ("stdin positional source", "candidate", "/leopard.cpp", "stdin_source"),
+            ("different positional source", "candidate", "/leopard.cpp", "wrong_source"),
+            ("missing positional source", "candidate", "/leopard.cpp", "missing_source"),
+            ("duplicate positional source", "candidate", "/leopard.cpp", "duplicate_source"),
+            ("wrong output operand", "candidate", "/leopard.cpp", "wrong_output"),
+            ("coherent wrong output metadata", "candidate", "/leopard.cpp", "coherent_output"),
+            ("duplicate output option", "candidate", "/leopard.cpp", "duplicate_output"),
+            ("missing compile option", "candidate", "/leopard.cpp", "missing_compile"),
+            ("duplicate compile option", "candidate", "/leopard.cpp", "duplicate_compile"),
+            ("extra definition", "candidate", "/leopard.cpp", "extra_definition"),
+            ("reordered definitions", "candidate", "/leopard.cpp", "reorder_definitions"),
+            ("extra include", "candidate", "/leopard.cpp", "extra_include"),
+            ("different include", "candidate", "/leopard.cpp", "different_include"),
+            ("last language option wins", "candidate", "/leopard.cpp", "language_last"),
+            ("last optimization option wins", "candidate", "/leopard.cpp", "optimization_last"),
+            ("last AVX2 option wins", "candidate", "/Leopard2BackendAVX2.cpp", "avx2_last"),
+            ("missing AVX2 isolation", "candidate", "/Leopard2BackendAVX2.cpp", "missing_avx2"),
+            ("last native ISA option wins", "baseline", "/leopard.cpp", "baseline_isa_last"),
+            ("compiler wrapper", "candidate", "/leopard.cpp", "compiler_wrapper"),
+            ("ambiguous argv representations", "candidate", "/leopard.cpp", "both_forms"),
+            ("unrelated target response file", "candidate", "/extra-0.cpp", "response"),
+        )
+        for label, role, suffix, mutation in compile_mutations:
+            with self.subTest(compiler_argv=label), \
+                 tempfile.TemporaryDirectory() as directory:
+                path, specification, compiler = compile_commands_fixture(
+                    Path(directory), role)
+                entries = json.loads(path.read_text(encoding="utf-8"))
+                entry = next(item for item in entries
+                             if item["file"].endswith(suffix))
+                tokens = runner.compile_command_tokens(entry)
+                entry.pop("command", None)
+                entry["arguments"] = tokens
+                output_index = tokens.index("-o")
+                compile_index = tokens.index("-c")
+                source_index = tokens.index(entry["file"])
+                other = next(item for item in entries
+                             if item["file"] != entry["file"])
+                if mutation == "response":
+                    tokens.insert(source_index, "@evil.rsp")
+                elif mutation == "extra_source":
+                    tokens.insert(source_index, other["file"])
+                elif mutation == "stdin_source":
+                    tokens.insert(source_index, "-")
+                elif mutation == "wrong_source":
+                    tokens[source_index] = other["file"]
+                elif mutation == "missing_source":
+                    tokens.pop(source_index)
+                elif mutation == "duplicate_source":
+                    tokens.append(entry["file"])
+                elif mutation == "wrong_output":
+                    tokens[output_index + 1] = other["output"]
+                elif mutation == "coherent_output":
+                    entry["output"] = other["output"]
+                    tokens[output_index + 1] = other["output"]
+                elif mutation == "duplicate_output":
+                    tokens[compile_index:compile_index] = [
+                        "-o", entry["output"]]
+                elif mutation == "missing_compile":
+                    tokens.pop(compile_index)
+                elif mutation == "duplicate_compile":
+                    tokens.insert(compile_index, "-c")
+                elif mutation == "extra_definition":
+                    tokens.insert(1, "-DEVIL=1")
+                elif mutation == "reorder_definitions":
+                    definitions = [index for index, token in enumerate(tokens)
+                                   if token.startswith("-D")]
+                    tokens[definitions[0]], tokens[definitions[1]] = \
+                        tokens[definitions[1]], tokens[definitions[0]]
+                elif mutation == "extra_include":
+                    include = next(index for index, token in enumerate(tokens)
+                                   if token.startswith("-I"))
+                    tokens.insert(include + 1, "-I/tmp/evil")
+                elif mutation == "different_include":
+                    include = next(index for index, token in enumerate(tokens)
+                                   if token.startswith("-I"))
+                    tokens[include] = "-I/tmp/evil"
+                elif mutation == "language_last":
+                    language = tokens.index("-std=gnu++11")
+                    tokens.insert(language + 1, "-std=gnu++20")
+                elif mutation == "optimization_last":
+                    tokens.insert(output_index, "-O0")
+                elif mutation == "avx2_last":
+                    tokens.insert(output_index, "-mno-avx2")
+                elif mutation == "missing_avx2":
+                    tokens.remove("-mavx2")
+                elif mutation == "baseline_isa_last":
+                    tokens.insert(output_index, "-march=x86-64")
+                elif mutation == "compiler_wrapper":
+                    tokens.insert(1, "--compiler-wrapper=/tmp/evil")
+                elif mutation == "both_forms":
+                    entry["command"] = runner.shlex.join(tokens)
+                else:  # pragma: no cover - table and implementation are local
+                    self.fail(f"unknown compiler mutation: {mutation}")
+                path.write_text(json.dumps(entries), encoding="utf-8")
+                with self.assertRaises(runner.EvidenceError):
+                    runner.validate_compile_commands(
+                        path, role, specification, compiler,
+                        compiler_invocation=str(compiler))
 
     def test_coherent_failed_historical_recipe_relabel_is_rejected(self) -> None:
         historical = synthetic_failure(runner.RAW_SCHEMA_V2)

@@ -167,6 +167,11 @@ CANDIDATE_LIBRARY_SOURCES = (
 )
 BASELINE_EXPECTED_COMPILE_COMMAND_COUNT = 5
 CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT = 20
+COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v2"
+BASELINE_COMPILE_PROFILE = \
+    "gnu-compatible-cxx11-native-x86_64-release/v1"
+CANDIDATE_COMPILE_PROFILE = \
+    "gnu-compatible-cxx11-runtime-dispatch-x86_64-release/v1"
 CHILD_REAP_TIMEOUT_SECONDS = 5.0
 PR_SET_CHILD_SUBREAPER = 36
 PR_GET_CHILD_SUBREAPER = 37
@@ -1276,15 +1281,25 @@ def parse_cmake_cache(path: Path) -> dict[str, str]:
 
 
 def compile_command_tokens(entry: Mapping[str, Any]) -> list[str]:
+    has_arguments = "arguments" in entry
+    has_command = "command" in entry
+    require(has_arguments != has_command,
+            "compile command must contain exactly one argv representation")
     arguments = entry.get("arguments")
-    if isinstance(arguments, list) and all(isinstance(item, str) for item in arguments):
+    if has_arguments:
+        require(isinstance(arguments, list) and arguments and
+                all(isinstance(item, str) and item for item in arguments),
+                "compile command arguments are invalid")
         return list(arguments)
     command = entry.get("command")
-    require(isinstance(command, str), "compile command has neither arguments nor command")
+    require(isinstance(command, str) and command,
+            "compile command text is invalid")
     try:
-        return shlex.split(command)
+        tokens = shlex.split(command, posix=True)
     except ValueError as error:
         raise EvidenceError(f"cannot parse compile command: {error}") from error
+    require(tokens and all(tokens), "compile command token stream is empty")
+    return tokens
 
 
 def validate_effective_flags(
@@ -1329,10 +1344,29 @@ def capture_external_link_inputs(
             continue
         role, kind = descriptor
         operand = _validate_external_link_operand_path(token, role, label)
+        try:
+            metadata, digest, snapshot, resolved, symlink_chain = \
+                link_common.current_external_file_snapshot(
+                    Path(operand), f"{label} {role}")
+        except (OSError, RuntimeError, link_common.EvidenceError) as error:
+            raise EvidenceError(
+                f"{label} cannot snapshot {role}: {error}") from error
+        require((kind == "archive" and snapshot.startswith(b"!<arch>\n")) or
+                (kind == "shared_library" and
+                 snapshot.startswith(b"\x7fELF")),
+                f"{label} {role} has the wrong file format")
         records.append({
             "operand": operand,
             "role": role,
-            "artifact": artifact_identity(Path(operand), kind),
+            "lexical_symlink_chain": symlink_chain,
+            "artifact": {
+                "path": str(resolved),
+                "kind": kind,
+                "size": metadata.st_size,
+                "mode": stat.S_IMODE(metadata.st_mode),
+                "mtime_ns": metadata.st_mtime_ns,
+                "sha256": digest,
+            },
         })
     require([record["role"] for record in records] ==
                 list(EXTERNAL_LINK_INPUT_ORDER),
@@ -1351,7 +1385,8 @@ def validate_external_link_inputs(
     for index, expected_role in enumerate(EXTERNAL_LINK_INPUT_ORDER):
         record = value[index]
         require(isinstance(record, dict) and set(record) == {
-                    "operand", "role", "artifact"} and
+                    "operand", "role", "artifact",
+                    "lexical_symlink_chain"} and
                 record.get("role") == expected_role,
                 f"{label} external-link identity {index} shape differs")
         operand = _validate_external_link_operand_path(
@@ -1432,16 +1467,142 @@ def _validate_historical_declared_archive_operands(
             f"{label} historical static archive closure differs")
 
 
-def command_output_path(entry: Mapping[str, Any], tokens: Sequence[str]) -> Path:
-    positions = [index for index, token in enumerate(tokens) if token == "-o"]
-    require(len(positions) == 1 and positions[0] + 1 < len(tokens),
-            "compile command does not have exactly one -o output")
-    directory = entry.get("directory")
-    require(isinstance(directory, str), "compile command has no working directory")
-    output = Path(tokens[positions[0] + 1])
-    if not output.is_absolute():
-        output = Path(directory) / output
-    return output.resolve(strict=True)
+def compile_profile_for_implementation(implementation: str) -> str:
+    require(implementation in {"baseline", "candidate"},
+            "compile profile implementation is invalid")
+    return (BASELINE_COMPILE_PROFILE if implementation == "baseline" else
+            CANDIDATE_COMPILE_PROFILE)
+
+
+def expected_compile_output(
+    implementation: str, source: Path, specification: Mapping[str, Any],
+) -> str:
+    """Return the one CMake object operand permitted for a required source."""
+    baseline_root = Path(specification["baseline_source_root"])
+    candidate_root = Path(specification["candidate_source_root"])
+    if implementation == "baseline":
+        adapter = candidate_root / \
+            "experiments/leopard2/main_compare/legacy_main_benchmark.cpp"
+        if source == adapter:
+            return ("CMakeFiles/leopard_main_benchmark.dir/"
+                    "legacy_main_benchmark.cpp.o")
+        require(source.is_relative_to(baseline_root),
+                "baseline compile source escapes exact-main root")
+        return ("CMakeFiles/leopard_main_exact.dir/" +
+                source.as_posix().removeprefix("/") + ".o")
+
+    require(implementation == "candidate" and
+            source.is_relative_to(candidate_root),
+            "candidate compile source escapes source root")
+    relative = source.relative_to(candidate_root).as_posix()
+    if relative == "bench/leopard2/benchmark.cpp":
+        return "CMakeFiles/bench_leopard2.dir/bench/leopard2/benchmark.cpp.o"
+    backend_targets = {
+        "Leopard2BackendSSSE3.cpp": "leopard2_backend_ssse3.dir",
+        "Leopard2BackendAVX2.cpp": "leopard2_backend_avx2.dir",
+        "Leopard2BackendAVX512.cpp": "leopard2_backend_avx512.dir",
+    }
+    target = backend_targets.get(relative, "leopard.dir")
+    return f"CMakeFiles/{target}/{relative}.o"
+
+
+def expected_compile_argv(
+    implementation: str, source: Path, specification: Mapping[str, Any],
+    compiler_invocation: str,
+) -> list[str]:
+    """Construct the complete ordered argv for one production translation unit."""
+    output = expected_compile_output(implementation, source, specification)
+    baseline_root = Path(specification["baseline_source_root"])
+    candidate_root = Path(specification["candidate_source_root"])
+    if implementation == "baseline":
+        adapter = candidate_root / \
+            "experiments/leopard2/main_compare/legacy_main_benchmark.cpp"
+        definitions = ([] if source != adapter else [
+            f'-DLEOPARD_MAIN_SOURCE_COMMIT="{MAIN_COMMIT}"',
+        ])
+        return [
+            compiler_invocation, *definitions, f"-I{baseline_root}",
+            "-g", "-O0", "-O3", "-std=gnu++11", "-march=native",
+            "-Wall", "-Wextra", "-fopenmp",
+            "-o", output, "-c", str(source),
+        ]
+
+    relative = source.relative_to(candidate_root).as_posix()
+    isolated_flags = {
+        "Leopard2BackendSSSE3.cpp": ["-mssse3", "-mno-avx"],
+        "Leopard2BackendAVX2.cpp": [
+            "-mavx2", "-mno-avx512f", "-falign-functions=64"],
+        "Leopard2BackendAVX512.cpp": [
+            "-mavx2", "-mavx512f", "-mavx512bw", "-mavx512vl",
+            "-mprefer-vector-width=256", "-falign-functions=64"],
+    }
+    if relative == "Leopard2BackendAVX512.cpp":
+        definitions = ["-DLEO2_HAVE_AVX2_BACKEND=1"]
+    elif relative in isolated_flags or relative == "bench/leopard2/benchmark.cpp":
+        definitions = []
+    else:
+        definitions = [
+            "-DLEO2_DISABLE_AVX2_CODEGEN=1",
+            "-DLEO2_DISABLE_SSSE3_CODEGEN=1",
+            "-DLEO2_HAVE_AVX2_BACKEND=1",
+            "-DLEO2_HAVE_AVX512_BACKEND=1",
+            "-DLEO2_HAVE_SSSE3_BACKEND=1",
+        ]
+    isa = isolated_flags.get(relative, [])
+    propagated_openmp = (
+        [] if relative in isolated_flags else ["-fopenmp"])
+    return [
+        compiler_invocation, *definitions, f"-I{candidate_root}",
+        "-Wall", "-Wextra", "-fopenmp", "-O3", "-DNDEBUG", "-O3",
+        "-std=gnu++11", *isa, *propagated_openmp,
+        "-o", output, "-c", str(source),
+    ]
+
+
+def validate_compile_entry_io(
+    entry: Mapping[str, Any], tokens: Sequence[str], source: Path,
+    build: Path, compiler: Path, compiler_invocation: str,
+) -> Path:
+    """Consume the compiler, output, and sole positional source operands."""
+    expected_keys = {"directory", "file", "output"} | (
+        {"arguments"} if "arguments" in entry else {"command"})
+    require(set(entry) == expected_keys and
+            entry.get("directory") == str(build) and
+            entry.get("file") == str(source) and
+            isinstance(entry.get("output"), str) and entry["output"] and
+            not Path(entry["output"]).is_absolute() and
+            Path(entry["output"]).as_posix() == entry["output"] and
+            ".." not in Path(entry["output"]).parts and
+            "\\" not in entry["output"] and "@" not in entry["output"],
+            f"compile command entry metadata differs for {source}")
+    require(tokens and tokens[0] == compiler_invocation and
+            Path(tokens[0]).resolve(strict=True) == compiler and
+            all(isinstance(token, str) and token and "@" not in token
+                for token in tokens),
+            f"compile command for {source} has a compiler or response-file operand")
+    output_positions = [
+        index for index, token in enumerate(tokens) if token == "-o"]
+    require(len(output_positions) == 1 and
+            output_positions[0] + 1 < len(tokens) and
+            tokens[output_positions[0] + 1] == entry["output"] and
+            tokens.count("-c") == 1,
+            f"compile command for {source} has invalid compile/output semantics")
+    positional: list[str] = []
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "-o":
+            index += 2
+            continue
+        if token == "-" or not token.startswith("-"):
+            positional.append(token)
+        index += 1
+    require(positional == [str(source)],
+            f"compile command for {source} does not have one exact source operand")
+    output = (build / entry["output"]).resolve(strict=True)
+    require(output.is_relative_to(build),
+            f"compile command output escapes build directory: {output}")
+    return output
 
 
 def validate_compile_commands(
@@ -1449,6 +1610,8 @@ def validate_compile_commands(
     implementation: str,
     specification: Mapping[str, Any],
     compiler: Path,
+    raw_schema: str = RAW_SCHEMA,
+    compiler_invocation: str | None = None,
 ) -> dict[str, Any]:
     try:
         entries = json.loads(path.read_text(encoding="utf-8"))
@@ -1456,16 +1619,22 @@ def validate_compile_commands(
         raise EvidenceError(f"invalid compile_commands.json: {error}") from error
     require(isinstance(entries, list) and entries,
             f"{implementation} compile_commands.json is empty")
-    by_source: dict[Path, tuple[list[str], Mapping[str, Any]]] = {}
+    build = Path(specification[f"{implementation}_build_dir"]).resolve(
+        strict=True)
+    if compiler_invocation is None:
+        compiler_invocation = str(compiler)
+    require(isinstance(compiler_invocation, str) and compiler_invocation,
+            f"{implementation} compiler invocation is invalid")
+    by_source: dict[Path, tuple[list[str], Mapping[str, Any], Path]] = {}
     for entry in entries:
         require(isinstance(entry, dict) and isinstance(entry.get("file"), str),
                 "compile command entry is malformed")
         source = Path(entry["file"]).resolve(strict=True)
         require(source not in by_source, f"duplicate compile command for {source}")
         tokens = compile_command_tokens(entry)
-        require(tokens and Path(tokens[0]).resolve(strict=True) == compiler,
-                f"compile command for {source} uses the wrong compiler")
-        by_source[source] = (tokens, entry)
+        output = validate_compile_entry_io(
+            entry, tokens, source, build, compiler, compiler_invocation)
+        by_source[source] = (tokens, entry, output)
 
     baseline_root = Path(specification["baseline_source_root"]).resolve(strict=True)
     candidate_root = Path(specification["candidate_source_root"]).resolve(strict=True)
@@ -1480,35 +1649,39 @@ def validate_compile_commands(
             candidate_root / "bench/leopard2/benchmark.cpp",
         }
     required = {path.resolve(strict=True) for path in required}
+    expected_entry_count = (
+        BASELINE_EXPECTED_COMPILE_COMMAND_COUNT
+        if implementation == "baseline" else
+        CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT)
+    if raw_schema == RAW_SCHEMA:
+        require(len(entries) == expected_entry_count,
+                f"{implementation} compile-command entry closure differs")
     missing = sorted(str(path) for path in required - set(by_source))
     require(not missing, f"{implementation} compile commands miss sources: {missing}")
     object_records: list[dict[str, Any]] = []
+    required_entries: list[dict[str, Any]] = []
     for source in required:
-        tokens, entry = by_source[source]
-        output = command_output_path(entry, tokens)
-        validate_effective_flags(
-            tokens, f"compile command for {source}", "compile")
-        require("-fopenmp" in tokens, f"{source} was not compiled with OpenMP")
-        if implementation == "baseline":
-            require("-march=native" in tokens,
-                    f"exact-main source {source} lacks -march=native")
+        tokens, entry, output = by_source[source]
+        if raw_schema == RAW_SCHEMA:
+            expected_tokens = expected_compile_argv(
+                implementation, source, specification, compiler_invocation)
+            require(tokens == expected_tokens and
+                    entry["output"] == expected_compile_output(
+                        implementation, source, specification),
+                    f"compile command for {source} differs from the exact "
+                    f"{compile_profile_for_implementation(implementation)} profile")
         else:
-            require(not any(token == "-march=native" or
-                            token.startswith("-DLEO2_ENABLE_TEST_HOOKS")
-                            for token in tokens),
-                    f"candidate production source {source} has native/test-hook flags")
-            if source.name not in {
-                    "Leopard2BackendAVX2.cpp", "Leopard2BackendAVX512.cpp",
-                    "Leopard2BackendSSSE3.cpp"}:
-                require("-mavx2" not in tokens and "-mssse3" not in tokens,
-                        f"candidate portable source {source} has an ISA-specific flag")
-            if source.name == "Leopard2BackendAVX512.cpp":
-                required_avx512_flags = {
-                    "-mavx2", "-mavx512f", "-mavx512bw", "-mavx512vl",
-                    "-mprefer-vector-width=256",
-                }
-                require(required_avx512_flags.issubset(tokens),
-                        "candidate AVX-512VL source lacks its exact ISA flags")
+            # Historical/private build schemas predate the exact ordered argv
+            # record.  Preserve replay without reintroducing broad -D/-I
+            # exceptions into the current production validator.
+            historical_flags = [
+                token for token in tokens
+                if not token.startswith(("-D", "-I"))]
+            validate_effective_flags(
+                historical_flags, f"historical compile command for {source}",
+                "compile")
+            require("-fopenmp" in tokens,
+                    f"historical {source} was not compiled with OpenMP")
         source_identity = artifact_identity(source, "source_file")
         object_identity = artifact_identity(output, "object_file")
         require(object_identity["mtime_ns"] >= source_identity["mtime_ns"],
@@ -1517,21 +1690,14 @@ def validate_compile_commands(
             "source": source_identity,
             "object": object_identity,
         })
-    if implementation == "baseline":
-        adapter = (candidate_root /
-                   "experiments/leopard2/main_compare/legacy_main_benchmark.cpp").resolve()
-        require(any(MAIN_COMMIT in token for token in by_source[adapter][0]),
-                "baseline adapter was not compiled with the exact-main commit attestation")
-    else:
-        avx2 = (candidate_root / "Leopard2BackendAVX2.cpp").resolve()
-        ssse3 = (candidate_root / "Leopard2BackendSSSE3.cpp").resolve()
-        require("-mavx2" in by_source[avx2][0] and
-                "-mno-avx512f" in by_source[avx2][0],
-                "candidate AVX2 backend lacks its canonical ISA isolation flags")
-        require("-mssse3" in by_source[ssse3][0] and
-                "-mno-avx" in by_source[ssse3][0],
-                "candidate SSSE3 backend lacks its canonical ISA isolation flags")
-    return {
+        if raw_schema == RAW_SCHEMA:
+            required_entries.append({
+                "directory": entry["directory"],
+                "file": entry["file"],
+                "output": entry["output"],
+                "arguments": list(tokens),
+            })
+    result = {
         "entry_count": len(entries),
         "required_sources": sorted(str(path) for path in required),
         "validated_optimization": "-O3",
@@ -1543,6 +1709,15 @@ def validate_compile_commands(
             "portable core with ISA flags only on SSSE3, AVX2, and "
             "AVX-512VL translation units"),
     }
+    if raw_schema == RAW_SCHEMA:
+        result.update({
+            "schema": COMPILE_COMMANDS_SCHEMA,
+            "implementation": implementation,
+            "profile": compile_profile_for_implementation(implementation),
+            "required_entries": sorted(
+                required_entries, key=lambda entry: entry["file"]),
+        })
+    return result
 
 
 def cmake_identity_for_raw_schema(raw_schema: str) -> Mapping[str, str]:
@@ -1748,7 +1923,8 @@ def build_provenance(
         executable_link_tokens, f"{implementation} executable link recipe",
         "link")
     semantics = validate_compile_commands(
-        commands_path, implementation, specification, compiler)
+        commands_path, implementation, specification, compiler, raw_schema,
+        cache["CMAKE_CXX_COMPILER"])
     records = semantics["required_source_object_pairs"]
     benchmark_suffix = (
         "/experiments/leopard2/main_compare/legacy_main_benchmark.cpp"
@@ -2177,6 +2353,7 @@ def validate_complete_build_identity(
         benchmark_suffix = \
             "/experiments/leopard2/main_compare/legacy_main_benchmark.cpp"
         isa_policy = "whole-build -march=native"
+        compile_profile = BASELINE_COMPILE_PROFILE
         library_sources = BASELINE_LIBRARY_SOURCES
         expected_entry_count = BASELINE_EXPECTED_COMPILE_COMMAND_COUNT
     else:
@@ -2199,6 +2376,7 @@ def validate_complete_build_identity(
         isa_policy = (
             "portable core with ISA flags only on SSSE3, AVX2, and "
             "AVX-512VL translation units")
+        compile_profile = CANDIDATE_COMPILE_PROFILE
         library_sources = CANDIDATE_LIBRARY_SOURCES
         expected_entry_count = CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT
 
@@ -2272,19 +2450,39 @@ def validate_complete_build_identity(
     compile_record = build.get("validated_compile_commands")
     require(isinstance(compile_record, dict) and set(compile_record) == {
                 "entry_count", "required_sources", "validated_optimization",
-                "validated_openmp", "required_source_object_pairs", "isa_policy"},
+                "validated_openmp", "required_source_object_pairs", "isa_policy",
+                "schema", "implementation", "profile", "required_entries"},
             f"{implementation} compile-command identity shape differs")
     pairs = compile_record.get("required_source_object_pairs")
     sources = compile_record.get("required_sources")
+    retained_entries = compile_record.get("required_entries")
     require(type(compile_record.get("entry_count")) is int and
             compile_record["entry_count"] == expected_entry_count and
+            compile_record.get("schema") == COMPILE_COMMANDS_SCHEMA and
+            compile_record.get("implementation") == implementation and
+            compile_record.get("profile") == compile_profile and
             compile_record.get("validated_optimization") == "-O3" and
             compile_record.get("validated_openmp") is True and
             compile_record.get("isa_policy") == isa_policy and
             isinstance(sources, list) and sources and
             sources == sorted(set(sources)) and
-            isinstance(pairs, list) and pairs,
+            isinstance(pairs, list) and pairs and
+            isinstance(retained_entries, list) and retained_entries and
+            len(retained_entries) == len(pairs),
             f"{implementation} compile-command identity is invalid")
+    entries_by_source: dict[str, dict[str, Any]] = {}
+    for index, entry in enumerate(retained_entries):
+        require(isinstance(entry, dict) and set(entry) == {
+                    "directory", "file", "output", "arguments"} and
+                isinstance(entry.get("directory"), str) and
+                isinstance(entry.get("file"), str) and
+                isinstance(entry.get("output"), str) and entry["output"] and
+                isinstance(entry.get("arguments"), list) and
+                all(isinstance(token, str) and token and "@" not in token
+                    for token in entry["arguments"]) and
+                entry["file"] not in entries_by_source,
+                f"{implementation} retained compile entry {index} differs")
+        entries_by_source[entry["file"]] = entry
     pair_sources: list[str] = []
     pair_objects: list[str] = []
     for index, pair in enumerate(pairs):
@@ -2296,6 +2494,22 @@ def validate_complete_build_identity(
             pair["object"], f"{implementation} object {index}", "object_file")
         require(Path(obj["path"]).is_relative_to(Path(build_dir)),
                 f"{implementation} object {index} escapes its build directory")
+        retained_entry = entries_by_source.get(source["path"])
+        require(retained_entry is not None,
+                f"{implementation} source {index} lacks its full compiler argv")
+        expected_output = expected_compile_output(
+            implementation, Path(source["path"]), specification)
+        expected_arguments = expected_compile_argv(
+            implementation, Path(source["path"]), specification,
+            cache["CMAKE_CXX_COMPILER"])
+        require(retained_entry == {
+                    "directory": build_dir,
+                    "file": source["path"],
+                    "output": expected_output,
+                    "arguments": expected_arguments,
+                } and
+                str(Path(build_dir) / expected_output) == obj["path"],
+                f"{implementation} source {index} compiler argv/output differs")
         pair_sources.append(source["path"])
         pair_objects.append(obj["path"])
     expected_sources = sorted([
@@ -2307,6 +2521,7 @@ def validate_complete_build_identity(
     require(pair_sources == expected_sources and
             pair_sources == sources and len(pair_sources) == len(set(pair_sources)) and
             len(pair_objects) == len(set(pair_objects)) and
+            set(entries_by_source) == set(pair_sources) and
             compile_record["entry_count"] >= len(pair_sources),
             f"{implementation} compile-command source/object closure differs")
     benchmark_pairs = [pair for pair in pairs

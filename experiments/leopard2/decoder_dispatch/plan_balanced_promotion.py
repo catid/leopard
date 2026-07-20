@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -97,6 +98,11 @@ CANDIDATE_LIBRARY_SOURCES = (
 )
 BASELINE_EXPECTED_COMPILE_COMMAND_COUNT = 5
 CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT = 20
+COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v2"
+BASELINE_COMPILE_PROFILE = \
+    "gnu-compatible-cxx11-native-x86_64-release/v1"
+CANDIDATE_COMPILE_PROFILE = \
+    "gnu-compatible-cxx11-runtime-dispatch-x86_64-release/v1"
 REQUIRED_CANDIDATE_CACHE = {
     "CMAKE_BUILD_TYPE": "Release",
     "ENABLE_OPENMP": "ON",
@@ -456,9 +462,11 @@ def _normalize_bound_paths(value: object, replacements: tuple[tuple[str, str], .
                 cmake_match.start() == 0 or
                 prefix[cmake_match.start() - 1] == "/" or
                 prefix[cmake_match.start() - 1] in token_prefix_delimiters)
+            fused_include = index >= 2 and text[index - 2:index] == "-I" and (
+                index == 2 or text[index - 3] in token_prefix_delimiters)
             before_ok = index == 0 or \
                 text[index - 1] in token_prefix_delimiters or \
-                cmake_external_source
+                cmake_external_source or fused_include
             after_ok = end == len(text) or text[end] == "/" or \
                 text[end] in token_suffix_delimiters
             pieces.append(text[cursor:index])
@@ -643,6 +651,79 @@ def _validate_scope_source(value: object, role: str) -> dict[str, Any]:
     return value
 
 
+def _normalized_compile_output(role: str, source: str) -> str:
+    baseline = role == "baseline"
+    if baseline:
+        if source == ("$CANDIDATE_SOURCE/experiments/leopard2/main_compare/"
+                      "legacy_main_benchmark.cpp"):
+            return ("CMakeFiles/leopard_main_benchmark.dir/"
+                    "legacy_main_benchmark.cpp.o")
+        require(source.startswith("$BASELINE_SOURCE/"),
+                "baseline normalized compiler source escapes its root")
+        relative = source[len("$BASELINE_SOURCE/"):]
+        return ("CMakeFiles/leopard_main_exact.dir/$BASELINE_SOURCE/" +
+                relative + ".o")
+    require(role == "candidate" and
+            source.startswith("$CANDIDATE_SOURCE/"),
+            "candidate normalized compiler source escapes its root")
+    relative = source[len("$CANDIDATE_SOURCE/"):]
+    if relative == "bench/leopard2/benchmark.cpp":
+        return "CMakeFiles/bench_leopard2.dir/bench/leopard2/benchmark.cpp.o"
+    backend_targets = {
+        "Leopard2BackendSSSE3.cpp": "leopard2_backend_ssse3.dir",
+        "Leopard2BackendAVX2.cpp": "leopard2_backend_avx2.dir",
+        "Leopard2BackendAVX512.cpp": "leopard2_backend_avx512.dir",
+    }
+    return f"CMakeFiles/{backend_targets.get(relative, 'leopard.dir')}/{relative}.o"
+
+
+def _normalized_compile_argv(
+    role: str, source: str, compiler_invocation: str,
+) -> list[str]:
+    output = _normalized_compile_output(role, source)
+    if role == "baseline":
+        adapter = ("$CANDIDATE_SOURCE/experiments/leopard2/main_compare/"
+                   "legacy_main_benchmark.cpp")
+        definitions = ([] if source != adapter else [
+            f'-DLEOPARD_MAIN_SOURCE_COMMIT="{EXACT_MAIN_COMMIT}"',
+        ])
+        return [
+            compiler_invocation, *definitions, "-I$BASELINE_SOURCE",
+            "-g", "-O0", "-O3", "-std=gnu++11", "-march=native",
+            "-Wall", "-Wextra", "-fopenmp",
+            "-o", output, "-c", source,
+        ]
+
+    relative = source[len("$CANDIDATE_SOURCE/"):]
+    isolated_flags = {
+        "Leopard2BackendSSSE3.cpp": ["-mssse3", "-mno-avx"],
+        "Leopard2BackendAVX2.cpp": [
+            "-mavx2", "-mno-avx512f", "-falign-functions=64"],
+        "Leopard2BackendAVX512.cpp": [
+            "-mavx2", "-mavx512f", "-mavx512bw", "-mavx512vl",
+            "-mprefer-vector-width=256", "-falign-functions=64"],
+    }
+    if relative == "Leopard2BackendAVX512.cpp":
+        definitions = ["-DLEO2_HAVE_AVX2_BACKEND=1"]
+    elif relative in isolated_flags or relative == "bench/leopard2/benchmark.cpp":
+        definitions = []
+    else:
+        definitions = [
+            "-DLEO2_DISABLE_AVX2_CODEGEN=1",
+            "-DLEO2_DISABLE_SSSE3_CODEGEN=1",
+            "-DLEO2_HAVE_AVX2_BACKEND=1",
+            "-DLEO2_HAVE_AVX512_BACKEND=1",
+            "-DLEO2_HAVE_SSSE3_BACKEND=1",
+        ]
+    return [
+        compiler_invocation, *definitions, "-I$CANDIDATE_SOURCE",
+        "-Wall", "-Wextra", "-fopenmp", "-O3", "-DNDEBUG", "-O3",
+        "-std=gnu++11", *isolated_flags.get(relative, []),
+        *([] if relative in isolated_flags else ["-fopenmp"]),
+        "-o", output, "-c", source,
+    ]
+
+
 def _validate_scope_build(build: object, role: str) -> dict[str, Any]:
     require(role in {"baseline", "candidate"} and isinstance(build, dict) and
             set(build) == {
@@ -668,6 +749,8 @@ def _validate_scope_build(build: object, role: str) -> dict[str, Any]:
     expected_entry_count = (
         BASELINE_EXPECTED_COMPILE_COMMAND_COUNT if baseline else
         CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT)
+    expected_compile_profile = (
+        BASELINE_COMPILE_PROFILE if baseline else CANDIDATE_COMPILE_PROFILE)
     metadata_paths = {
         "cmake_cache": f"{expected_root}/CMakeCache.txt",
         "compile_commands": f"{expected_root}/compile_commands.json",
@@ -739,9 +822,13 @@ def _validate_scope_build(build: object, role: str) -> dict[str, Any]:
     semantics = build.get("validated_compile_commands")
     require(isinstance(semantics, dict) and set(semantics) == {
                 "entry_count", "required_sources", "validated_optimization",
-                "validated_openmp", "required_source_object_pairs", "isa_policy"} and
+                "validated_openmp", "required_source_object_pairs", "isa_policy",
+                "schema", "implementation", "profile", "required_entries"} and
             type(semantics.get("entry_count")) is int and
             semantics["entry_count"] == expected_entry_count and
+            semantics.get("schema") == COMPILE_COMMANDS_SCHEMA and
+            semantics.get("implementation") == role and
+            semantics.get("profile") == expected_compile_profile and
             semantics.get("validated_optimization") == "-O3" and
             semantics.get("validated_openmp") is True and
             isinstance(semantics.get("isa_policy"), str) and
@@ -751,8 +838,24 @@ def _validate_scope_build(build: object, role: str) -> dict[str, Any]:
             len(semantics["required_sources"]) == len(set(
                 semantics["required_sources"])) and
             isinstance(semantics.get("required_source_object_pairs"), list) and
-            semantics["required_source_object_pairs"],
+            semantics["required_source_object_pairs"] and
+            isinstance(semantics.get("required_entries"), list) and
+            len(semantics["required_entries"]) ==
+                len(semantics["required_source_object_pairs"]),
             f"{role} normalized compile-command identity differs")
+    entries_by_source: dict[str, dict[str, Any]] = {}
+    for index, entry in enumerate(semantics["required_entries"]):
+        require(isinstance(entry, dict) and set(entry) == {
+                    "directory", "file", "output", "arguments"} and
+                entry.get("directory") == expected_root and
+                isinstance(entry.get("file"), str) and entry["file"] and
+                isinstance(entry.get("output"), str) and entry["output"] and
+                isinstance(entry.get("arguments"), list) and
+                all(isinstance(token, str) and token and "@" not in token
+                    for token in entry["arguments"]) and
+                entry["file"] not in entries_by_source,
+                f"{role} normalized compiler entry {index} differs")
+        entries_by_source[entry["file"]] = entry
     sources: list[str] = []
     objects: list[str] = []
     for index, pair in enumerate(semantics["required_source_object_pairs"]):
@@ -762,11 +865,24 @@ def _validate_scope_build(build: object, role: str) -> dict[str, Any]:
             pair["source"], f"{role} source {index}", "source_file")
         obj = _validate_scope_artifact(
             pair["object"], f"{role} object {index}", "object_file")
+        entry = entries_by_source.get(source["path"])
+        expected_output = _normalized_compile_output(role, source["path"])
+        require(entry == {
+                    "directory": expected_root,
+                    "file": source["path"],
+                    "output": expected_output,
+                    "arguments": _normalized_compile_argv(
+                        role, source["path"],
+                        compiler_invocation["invocation"]),
+                } and
+                obj["path"] == f"{expected_root}/{expected_output}",
+                f"{role} normalized compiler argv/output {index} differs")
         sources.append(source["path"])
         objects.append(obj["path"])
     require(sources == semantics["required_sources"] and
             len(sources) == len(set(sources)) and
             len(objects) == len(set(objects)) and
+            set(entries_by_source) == set(sources) and
             semantics["entry_count"] >= len(sources),
             f"{role} normalized compile source/object closure differs")
     benchmark_suffix = (
@@ -1869,8 +1985,13 @@ def canonical_candidate_build_identity(
         cache.get(key) == expected
         for key, expected in REQUIRED_CANDIDATE_CACHE.items()) and
             isinstance(semantics, dict) and
+            semantics.get("schema") == COMPILE_COMMANDS_SCHEMA and
+            semantics.get("implementation") == "candidate" and
+            semantics.get("profile") == CANDIDATE_COMPILE_PROFILE and
             semantics.get("validated_optimization") == "-O3" and
             semantics.get("validated_openmp") is True and
+            isinstance(semantics.get("required_entries"), list) and
+            semantics["required_entries"] and
             isinstance(provenance.get("archive_link_recipe_content"), dict),
             "canonical build provenance does not bind Release AUTO semantics")
     normalized = _normalize_bound_paths(
@@ -2234,9 +2355,19 @@ def derive_attestation_result(
             isinstance(canonical["provenance"].get(
                 "validated_compile_commands"), dict) and
             canonical["provenance"]["validated_compile_commands"].get(
+                "schema") == COMPILE_COMMANDS_SCHEMA and
+            canonical["provenance"]["validated_compile_commands"].get(
+                "implementation") == "candidate" and
+            canonical["provenance"]["validated_compile_commands"].get(
+                "profile") == CANDIDATE_COMPILE_PROFILE and
+            canonical["provenance"]["validated_compile_commands"].get(
                 "validated_optimization") == "-O3" and
             canonical["provenance"]["validated_compile_commands"].get(
                 "validated_openmp") is True and
+            isinstance(canonical["provenance"][
+                "validated_compile_commands"].get("required_entries"), list) and
+            canonical["provenance"]["validated_compile_commands"][
+                "required_entries"] and
             isinstance(canonical["provenance"].get(
                 "archive_link_recipe_content"), dict),
             "attestation benchmark build identity shape differs")
@@ -2447,13 +2578,20 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
         return {"path": path, "kind": kind, "sha256": character * 64,
                 "size": 1, "mode": mode}
 
-    def fixture_external_artifact(operand: str, kind: str) -> dict[str, Any]:
-        resolved = Path(operand).resolve(strict=True)
-        metadata = resolved.stat()
+    def fixture_external_record(
+        operand: str, role: str, kind: str,
+    ) -> dict[str, Any]:
+        metadata, digest, _, resolved, symlink_chain = \
+            common.current_external_file_snapshot(
+                Path(operand), f"fixture {role}")
         return {
-            "path": str(resolved), "kind": kind,
-            "sha256": common.sha256_file(resolved),
-            "size": metadata.st_size, "mode": metadata.st_mode & 0o7777,
+            "operand": operand, "role": role,
+            "lexical_symlink_chain": symlink_chain,
+            "artifact": {
+                "path": str(resolved), "kind": kind,
+                "sha256": digest, "size": metadata.st_size,
+                "mode": stat.S_IMODE(metadata.st_mode),
+            },
         }
 
     def fixture_text(text: str) -> dict[str, Any]:
@@ -2487,19 +2625,15 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
         archive_name = "libleopard_main_exact.a" if baseline else "libleopard.a"
         library_names = (
             BASELINE_LIBRARY_SOURCES if baseline else CANDIDATE_LIBRARY_SOURCES)
-        backend_targets = {
-            "Leopard2BackendSSSE3.cpp": "leopard2_backend_ssse3.dir",
-            "Leopard2BackendAVX2.cpp": "leopard2_backend_avx2.dir",
-            "Leopard2BackendAVX512.cpp": "leopard2_backend_avx512.dir",
-        }
         library_pairs = []
         for name in library_names:
-            object_target = backend_targets.get(name, target)
+            source_path = f"{source_root}/{name}"
+            object_relative = _normalized_compile_output(role, source_path)
             library_pairs.append({
                 "source": fixture_artifact(
-                    f"{source_root}/{name}", "source_file", character),
+                    source_path, "source_file", character),
                 "object": fixture_artifact(
-                    f"{root}/CMakeFiles/{object_target}/{name}.o",
+                    f"{root}/{object_relative}",
                     "object_file", character),
             })
         benchmark_source = fixture_artifact(
@@ -2507,10 +2641,10 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
              "legacy_main_benchmark.cpp" if baseline else
              "$CANDIDATE_SOURCE/bench/leopard2/benchmark.cpp"),
             "source_file", character)
-        benchmark_name = (
-            "legacy_main_benchmark.cpp.o" if baseline else "benchmark.cpp.o")
+        benchmark_relative = _normalized_compile_output(
+            role, benchmark_source["path"])
         benchmark_object = fixture_artifact(
-            f"{root}/CMakeFiles/{executable_name}.dir/{benchmark_name}",
+            f"{root}/{benchmark_relative}",
             "object_file", character)
         pairs = sorted([*library_pairs,
             {"source": benchmark_source, "object": benchmark_object},
@@ -2575,19 +2709,12 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
                            "resolved_path": "/usr/bin/ranlib"},
             },
             "validated_external_link_inputs": [
-                {
-                    "operand": "/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so",
-                    "role": "openmp_runtime_shared",
-                    "artifact": fixture_external_artifact(
-                        "/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so",
-                        "shared_library"),
-                },
-                {
-                    "operand": "/usr/lib/x86_64-linux-gnu/libpthread.a",
-                    "role": "pthread_support_archive",
-                    "artifact": fixture_external_artifact(
-                        "/usr/lib/x86_64-linux-gnu/libpthread.a", "archive"),
-                },
+                fixture_external_record(
+                    "/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so",
+                    "openmp_runtime_shared", "shared_library"),
+                fixture_external_record(
+                    "/usr/lib/x86_64-linux-gnu/libpthread.a",
+                    "pthread_support_archive", "archive"),
             ],
             "validated_archive": fixture_artifact(
                 f"{root}/{archive_name}", "archive", character),
@@ -2595,12 +2722,24 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
                 f"{root}/{executable_name}", "executable", character, 0o755),
             "validated_archive_members": members,
             "validated_compile_commands": {
+                "schema": COMPILE_COMMANDS_SCHEMA,
+                "implementation": role,
+                "profile": (BASELINE_COMPILE_PROFILE if baseline else
+                            CANDIDATE_COMPILE_PROFILE),
                 "entry_count": (
                     BASELINE_EXPECTED_COMPILE_COMMAND_COUNT if baseline else
                     CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT),
                 "required_sources": sorted(pair["source"]["path"] for pair in pairs),
                 "validated_optimization": "-O3", "validated_openmp": True,
                 "required_source_object_pairs": pairs,
+                "required_entries": sorted([{
+                    "directory": root,
+                    "file": pair["source"]["path"],
+                    "output": _normalized_compile_output(
+                        role, pair["source"]["path"]),
+                    "arguments": _normalized_compile_argv(
+                        role, pair["source"]["path"], "/usr/bin/compiler"),
+                } for pair in pairs], key=lambda entry: entry["file"]),
                 "isa_policy": (
                     "whole-build -march=native" if baseline else
                     "portable core with ISA flags only on SSSE3, AVX2, and "
@@ -3032,6 +3171,130 @@ def self_test() -> None:
                         "CMAKE_CXX_FLAGS_RELEASE": item})
                     for value in values
                     for role in ("baseline", "candidate")])
+        reject_scope_mutation(
+            "uniform mislabeled candidate compile profile",
+            lambda values: [
+                value["builds"]["candidate"][
+                    "validated_compile_commands"].update({
+                        "profile": BASELINE_COMPILE_PROFILE})
+                for value in values])
+        reject_scope_mutation(
+            "uniform mislabeled baseline compile implementation",
+            lambda values: [
+                value["builds"]["baseline"][
+                    "validated_compile_commands"].update({
+                        "implementation": "candidate"})
+                for value in values])
+        reject_scope_mutation(
+            "uniform obsolete compile-command schema",
+            lambda values: [
+                value["builds"][role][
+                    "validated_compile_commands"].update({
+                        "schema": "leopard2-main-compare-compile-commands/v1"})
+                for value in values for role in ("baseline", "candidate")])
+
+        def mutate_all_compiler_argv(
+            values, role: str, suffix: str, mutation: str,
+        ) -> None:
+            for value in values:
+                semantics = value["builds"][role]["validated_compile_commands"]
+                entry = next(item for item in semantics["required_entries"]
+                             if item["file"].endswith(suffix))
+                arguments = entry["arguments"]
+                source_index = arguments.index(entry["file"])
+                output_index = arguments.index("-o")
+                compile_index = arguments.index("-c")
+                other = next(item for item in semantics["required_entries"]
+                             if item["file"] != entry["file"])
+                if mutation == "response":
+                    arguments.insert(source_index, "@evil.rsp")
+                elif mutation == "extra_source":
+                    arguments.insert(source_index, other["file"])
+                elif mutation == "stdin_source":
+                    arguments.insert(source_index, "-")
+                elif mutation == "wrong_source":
+                    arguments[source_index] = other["file"]
+                elif mutation == "missing_source":
+                    arguments.pop(source_index)
+                elif mutation == "duplicate_source":
+                    arguments.append(entry["file"])
+                elif mutation == "wrong_output":
+                    arguments[output_index + 1] = other["output"]
+                elif mutation == "coherent_output":
+                    entry["output"] = other["output"]
+                    arguments[output_index + 1] = other["output"]
+                elif mutation == "duplicate_output":
+                    arguments[compile_index:compile_index] = [
+                        "-o", entry["output"]]
+                elif mutation == "missing_compile":
+                    arguments.pop(compile_index)
+                elif mutation == "duplicate_compile":
+                    arguments.insert(compile_index, "-c")
+                elif mutation == "extra_definition":
+                    arguments.insert(1, "-DEVIL=1")
+                elif mutation == "reorder_definitions":
+                    definitions = [
+                        index for index, token in enumerate(arguments)
+                        if token.startswith("-D")]
+                    arguments[definitions[0]], arguments[definitions[1]] = \
+                        arguments[definitions[1]], arguments[definitions[0]]
+                elif mutation == "extra_include":
+                    include = next(
+                        index for index, token in enumerate(arguments)
+                        if token.startswith("-I"))
+                    arguments.insert(include + 1, "-I/tmp/evil")
+                elif mutation == "different_include":
+                    include = next(
+                        index for index, token in enumerate(arguments)
+                        if token.startswith("-I"))
+                    arguments[include] = "-I/tmp/evil"
+                elif mutation == "language_last":
+                    arguments.insert(
+                        arguments.index("-std=gnu++11") + 1,
+                        "-std=gnu++20")
+                elif mutation == "optimization_last":
+                    arguments.insert(output_index, "-O0")
+                elif mutation == "avx2_last":
+                    arguments.insert(output_index, "-mno-avx2")
+                elif mutation == "missing_avx2":
+                    arguments.remove("-mavx2")
+                elif mutation == "baseline_isa_last":
+                    arguments.insert(output_index, "-march=x86-64")
+                elif mutation == "compiler_wrapper":
+                    arguments.insert(1, "--compiler-wrapper=/tmp/evil")
+                else:
+                    raise PlanError(
+                        f"unknown compiler self-test mutation: {mutation}")
+
+        for label, role, suffix, mutation in (
+            ("compiler response file", "candidate", "/leopard.cpp", "response"),
+            ("compiler second positional source", "candidate", "/leopard.cpp", "extra_source"),
+            ("compiler stdin positional source", "candidate", "/leopard.cpp", "stdin_source"),
+            ("compiler different positional source", "candidate", "/leopard.cpp", "wrong_source"),
+            ("compiler missing positional source", "candidate", "/leopard.cpp", "missing_source"),
+            ("compiler duplicate positional source", "candidate", "/leopard.cpp", "duplicate_source"),
+            ("compiler wrong output", "candidate", "/leopard.cpp", "wrong_output"),
+            ("compiler coherent wrong output", "candidate", "/leopard.cpp", "coherent_output"),
+            ("compiler duplicate output", "candidate", "/leopard.cpp", "duplicate_output"),
+            ("compiler missing compile option", "candidate", "/leopard.cpp", "missing_compile"),
+            ("compiler duplicate compile option", "candidate", "/leopard.cpp", "duplicate_compile"),
+            ("compiler extra definition", "candidate", "/leopard.cpp", "extra_definition"),
+            ("compiler reordered definitions", "candidate", "/leopard.cpp", "reorder_definitions"),
+            ("compiler extra include", "candidate", "/leopard.cpp", "extra_include"),
+            ("compiler different include", "candidate", "/leopard.cpp", "different_include"),
+            ("compiler last language option", "candidate", "/leopard.cpp", "language_last"),
+            ("compiler last optimization option", "candidate", "/leopard.cpp", "optimization_last"),
+            ("compiler last AVX2 option", "candidate", "/Leopard2BackendAVX2.cpp", "avx2_last"),
+            ("compiler missing AVX2 option", "candidate", "/Leopard2BackendAVX2.cpp", "missing_avx2"),
+            ("compiler last baseline ISA option", "baseline", "/leopard.cpp", "baseline_isa_last"),
+            ("compiler wrapper control", "candidate", "/leopard.cpp", "compiler_wrapper"),
+        ):
+            reject_scope_mutation(
+                "uniform " + label,
+                lambda values, item_role=role, item_suffix=suffix,
+                       item_mutation=mutation:
+                    mutate_all_compiler_argv(
+                        values, item_role, item_suffix, item_mutation))
         reject_scope_mutation("uniform incomplete sources", lambda values:
                               [value["sources"][role].pop("tree")
                                for value in values
@@ -3234,6 +3497,48 @@ def self_test() -> None:
                 value["builds"][role][
                     "validated_external_link_inputs"][1].update({
                         "role": "openmp_runtime_shared"})
+                for value in values for role in ("baseline", "candidate")])
+        reject_scope_mutation(
+            "uniform external file mode drift",
+            lambda values: [
+                value["builds"][role][
+                    "validated_external_link_inputs"][0]["artifact"].update({
+                        "mode": value["builds"][role][
+                            "validated_external_link_inputs"][0]["artifact"][
+                                "mode"] ^ 0o100})
+                for value in values for role in ("baseline", "candidate")])
+        reject_scope_mutation(
+            "uniform external lexical-link target drift",
+            lambda values: [
+                value["builds"][role][
+                    "validated_external_link_inputs"][0][
+                        "lexical_symlink_chain"][0].update({
+                            "target": "../../../x86_64-linux-gnu/"
+                                      "libgomp.so.999"})
+                for value in values for role in ("baseline", "candidate")])
+        reject_scope_mutation(
+            "uniform external lexical-link mode drift",
+            lambda values: [
+                value["builds"][role][
+                    "validated_external_link_inputs"][0][
+                        "lexical_symlink_chain"][0].update({"mode": 0o700})
+                for value in values for role in ("baseline", "candidate")])
+        reject_scope_mutation(
+            "uniform truncated external lexical-link chain",
+            lambda values: [
+                value["builds"][role][
+                    "validated_external_link_inputs"][0][
+                        "lexical_symlink_chain"].pop()
+                for value in values for role in ("baseline", "candidate")])
+        reject_scope_mutation(
+            "uniform fabricated pthread lexical-link chain",
+            lambda values: [
+                value["builds"][role][
+                    "validated_external_link_inputs"][1].update({
+                        "lexical_symlink_chain": [{
+                            "path": "/usr/lib/x86_64-linux-gnu/libpthread.a",
+                            "target": "libpthread-evil.a", "mode": 0o777,
+                        }]})
                 for value in values for role in ("baseline", "candidate")])
         for label, control in (
             ("recipe optimization downgrade", "-O0"),
@@ -3696,8 +4001,12 @@ def self_test() -> None:
         canonical_provenance = {
             "validated_cache": dict(REQUIRED_CANDIDATE_CACHE),
             "validated_compile_commands": {
+                "schema": COMPILE_COMMANDS_SCHEMA,
+                "implementation": "candidate",
+                "profile": CANDIDATE_COMPILE_PROFILE,
                 "validated_optimization": "-O3",
                 "validated_openmp": True,
+                "required_entries": [{"fixture": True}],
             },
             "archive_link_recipe_content": {"sha256": "6" * 64},
         }

@@ -111,9 +111,7 @@ def validate_effective_flags(
              [token for token in tokens if token.startswith("-")])
     unknown = [
         token for token in flags
-        if token not in allowed and not (
-            policy == "compile" and len(token) > 2 and
-            token.startswith(("-D", "-I")))
+        if token not in allowed
     ]
     require(not unknown,
             f"{label} contains noncanonical or ambiguous flags: {unknown}")
@@ -148,53 +146,139 @@ def validate_external_link_operand_path(
     return operand
 
 
-def current_external_file_identity(
+def _stat_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    """Return every mutable identity field used by an external snapshot."""
+    return (
+        metadata.st_mode, metadata.st_nlink, metadata.st_size,
+        metadata.st_mtime_ns, metadata.st_ctime_ns,
+        metadata.st_dev, metadata.st_ino,
+    )
+
+
+def _resolve_external_lexical_path(
     path: Path, label: str,
-) -> tuple[os.stat_result, str, bytes]:
-    """Read one bounded resolved regular file through an inode-bound handle."""
-    before = os.lstat(path)
+) -> tuple[Path, list[dict[str, Any]], tuple[tuple[object, ...], ...]]:
+    """Resolve and inventory every symlink traversed by an absolute operand.
+
+    ``Path.resolve`` returns only the terminal path, which is insufficient for
+    provenance: either the public ``libgomp.so`` link or a link named by one of
+    its targets can be retargeted without changing the terminal inode already
+    open by the validator.  This small realpath walk retains the complete
+    lexical chain and a private inode/mode snapshot used for the after-read
+    comparison.
+    """
+    require(path.is_absolute() and os.path.normpath(str(path)) == str(path),
+            f"{label} lexical path is not canonical")
+    pending = list(path.parts[1:])
+    resolved_parts: list[str] = []
+    public_chain: list[dict[str, Any]] = []
+    private_chain: list[tuple[object, ...]] = []
+    traversals = 0
+    while pending:
+        component = pending.pop(0)
+        if component in {"", "."}:
+            continue
+        if component == "..":
+            require(resolved_parts, f"{label} lexical path escapes root")
+            resolved_parts.pop()
+            continue
+        candidate = Path("/", *resolved_parts, component)
+        metadata = os.lstat(candidate)
+        if stat.S_ISLNK(metadata.st_mode):
+            traversals += 1
+            require(traversals <= 40 and metadata.st_nlink == 1,
+                    f"{label} lexical symlink chain is unsafe")
+            target = os.readlink(candidate)
+            require(target and "\x00" not in target,
+                    f"{label} lexical symlink target is invalid")
+            public_chain.append({
+                "path": str(candidate),
+                "target": target,
+                "mode": stat.S_IMODE(metadata.st_mode),
+            })
+            private_chain.append((
+                str(candidate), target, *_stat_identity(metadata)))
+            target_path = Path(target)
+            if target_path.is_absolute():
+                resolved_parts = []
+                target_components = list(target_path.parts[1:])
+            else:
+                target_components = list(target_path.parts)
+            pending = target_components + pending
+            continue
+        require(not pending or stat.S_ISDIR(metadata.st_mode),
+                f"{label} lexical parent is not a directory")
+        resolved_parts.append(component)
+    resolved = Path("/", *resolved_parts)
+    require(resolved.is_absolute(), f"{label} did not resolve absolutely")
+    return resolved, public_chain, tuple(private_chain)
+
+
+def current_external_file_snapshot(
+    path: Path, label: str,
+) -> tuple[os.stat_result, str, bytes, Path, list[dict[str, Any]]]:
+    """Return a private immutable snapshot bound to the full lexical chain.
+
+    The exact bytes are retained until all digest and file-format consumers
+    have finished.  Therefore an in-place rewrite after the descriptor read
+    cannot turn a stale digest into an accepted description of newly consumed
+    bytes; the closure consumes this immutable ``bytes`` value, then verifies
+    the lexical path and descriptor identity again.
+    """
+    resolved, chain_before, private_chain_before = \
+        _resolve_external_lexical_path(path, label)
+    before = os.lstat(resolved)
     require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and
             0 < before.st_size <= MAX_EXTERNAL_LINK_INPUT_BYTES,
             f"{label} is not a bounded single-link regular file")
     descriptor = os.open(
-        path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+        resolved, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
         getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     try:
         initial = os.fstat(descriptor)
-        path_initial = os.lstat(path)
+        path_initial = os.lstat(resolved)
         require(stat.S_ISREG(initial.st_mode) and initial.st_nlink == 1 and
                 (initial.st_dev, initial.st_ino) ==
                 (before.st_dev, before.st_ino) ==
                 (path_initial.st_dev, path_initial.st_ino) and
+                _stat_identity(initial) == _stat_identity(before) ==
+                _stat_identity(path_initial) and
                 0 < initial.st_size <= MAX_EXTERNAL_LINK_INPUT_BYTES,
                 f"{label} changed before its identity read")
-        digest = hashlib.sha256()
-        prefix = b""
+        blocks: list[bytes] = []
         retained = 0
         while True:
             block = os.read(descriptor, 1024 * 1024)
             if not block:
                 break
-            if not prefix:
-                prefix = block[:8]
-            digest.update(block)
+            blocks.append(block)
             retained += len(block)
             require(retained <= MAX_EXTERNAL_LINK_INPUT_BYTES,
                     f"{label} exceeds its identity bound")
+        snapshot = b"".join(blocks)
+        require(len(snapshot) == retained,
+                f"{label} immutable snapshot length differs")
         final = os.fstat(descriptor)
-        path_final = os.lstat(path)
+        resolved_after, chain_after, private_chain_after = \
+            _resolve_external_lexical_path(path, label)
+        path_final = os.lstat(resolved_after)
+        descriptor_final = os.fstat(descriptor)
         require(retained == initial.st_size and
                 stat.S_ISREG(final.st_mode) and final.st_nlink == 1 and
                 stat.S_ISREG(path_final.st_mode) and path_final.st_nlink == 1 and
+                resolved_after == resolved and
+                chain_after == chain_before and
+                private_chain_after == private_chain_before and
                 (final.st_dev, final.st_ino) ==
                 (initial.st_dev, initial.st_ino) ==
                 (path_final.st_dev, path_final.st_ino) and
-                (final.st_size, final.st_mtime_ns, final.st_ctime_ns) ==
-                (initial.st_size, initial.st_mtime_ns, initial.st_ctime_ns) ==
-                (path_final.st_size, path_final.st_mtime_ns,
-                 path_final.st_ctime_ns),
+                _stat_identity(final) == _stat_identity(initial) ==
+                _stat_identity(path_final) == _stat_identity(descriptor_final),
                 f"{label} changed during its identity read")
-        return initial, digest.hexdigest(), prefix
+        return (
+            initial, hashlib.sha256(snapshot).hexdigest(), snapshot,
+            resolved, chain_before,
+        )
     finally:
         os.close(descriptor)
 
@@ -210,7 +294,8 @@ def validate_external_link_input_shape(
     for index, expected_role in enumerate(EXTERNAL_LINK_INPUT_ORDER):
         record = value[index]
         require(isinstance(record, dict) and set(record) == {
-                    "operand", "role", "artifact"} and
+                    "operand", "role", "artifact",
+                    "lexical_symlink_chain"} and
                 record.get("role") == expected_role and
                 isinstance(record.get("artifact"), dict),
                 f"{label} external-link identity {index} shape differs")
@@ -225,10 +310,22 @@ def validate_external_link_input_shape(
                 isinstance(artifact.get("sha256"), str) and
                 re.fullmatch(r"[0-9a-f]{64}", artifact["sha256"]) is not None,
                 f"{label} external artifact identity {index} is incomplete")
+        chain = record.get("lexical_symlink_chain")
+        require(isinstance(chain, list) and
+                all(isinstance(link, dict) and set(link) == {
+                        "path", "target", "mode"} and
+                    isinstance(link.get("path"), str) and
+                    Path(link["path"]).is_absolute() and
+                    os.path.normpath(link["path"]) == link["path"] and
+                    isinstance(link.get("target"), str) and link["target"] and
+                    type(link.get("mode")) is int and
+                    0 <= link["mode"] <= 0o7777
+                    for link in chain),
+                f"{label} external lexical symlink chain {index} is invalid")
         try:
-            resolved = Path(operand).resolve(strict=True)
-            metadata, current_sha256, magic = current_external_file_identity(
-                resolved, f"{label} external operand {index}")
+            metadata, current_sha256, snapshot, resolved, current_chain = \
+                current_external_file_snapshot(
+                    Path(operand), f"{label} external operand {index}")
         except (OSError, RuntimeError) as error:
             raise EvidenceError(
                 f"{label} external operand {operand!r} does not resolve: {error}") \
@@ -237,17 +334,20 @@ def validate_external_link_input_shape(
                 0 < metadata.st_size <= MAX_EXTERNAL_LINK_INPUT_BYTES and
                 artifact["path"] == str(resolved) and
                 artifact["size"] == metadata.st_size and
-                artifact.get("mode") == (metadata.st_mode & 0o7777) and
+                artifact.get("mode") == stat.S_IMODE(metadata.st_mode) and
                 artifact["sha256"] == current_sha256 and
+                chain == current_chain and
                 ("mtime_ns" not in artifact or
                  artifact["mtime_ns"] == metadata.st_mtime_ns),
                 f"{label} external operand does not match its current resolved identity")
-        require((expected_kind == "archive" and magic == b"!<arch>\n") or
+        require((expected_kind == "archive" and
+                 snapshot.startswith(b"!<arch>\n")) or
                 (expected_kind == "shared_library" and
-                 magic.startswith(b"\x7fELF")),
+                 snapshot.startswith(b"\x7fELF")),
                 f"{label} external operand has the wrong file format")
         if expected_kind == "archive":
-            require(artifact["path"] == operand and artifact["size"] >= 8,
+            require(artifact["path"] == operand and artifact["size"] >= 8 and
+                    not chain,
                     f"{label} pthread operand does not bind its exact archive")
         else:
             require(re.fullmatch(
@@ -255,6 +355,8 @@ def validate_external_link_input_shape(
                         r"libgomp\.so(?:\.[0-9]+)+",
                         artifact["path"]) is not None,
                     f"{label} OpenMP operand resolves outside its runtime root")
+            require(chain and chain[0]["path"] == operand,
+                    f"{label} OpenMP operand does not bind its lexical symlink")
         require(
                 ((expected_kind == "archive" and
                   Path(artifact["path"]).name == "libpthread.a") or
@@ -289,9 +391,18 @@ def validate_executable_link_semantics(
             not Path(benchmark_object).is_absolute() and
             "\\" not in benchmark_object and "@" not in benchmark_object,
             f"{label} expected semantic closure is invalid")
-    external = validate_external_link_input_shape(external_link_inputs, label)
     validate_effective_flags(tokens, label, "link")
-    external_operands = [record["operand"] for record in external]
+    require(isinstance(external_link_inputs, list) and
+            len(external_link_inputs) == len(EXTERNAL_LINK_INPUT_ORDER),
+            f"{label} external-link grammar closure differs")
+    external_operands: list[str] = []
+    for index, expected_role in enumerate(EXTERNAL_LINK_INPUT_ORDER):
+        record = external_link_inputs[index]
+        require(isinstance(record, dict) and
+                record.get("role") == expected_role,
+                f"{label} external-link grammar role {index} differs")
+        external_operands.append(validate_external_link_operand_path(
+            record.get("operand"), expected_role, label))
     require(tokens[0] == compiler_invocation,
             f"{label} compiler invocation differs")
     seen_archive = 0
@@ -328,6 +439,12 @@ def validate_executable_link_semantics(
     require(seen_archive == 1 and seen_object == 1 and seen_output == 1 and
             seen_external == external_operands,
             f"{label} declared input/output closure differs")
+    # Snapshot the external operands only after every grammar token has been
+    # consumed.  File-format and digest checks use immutable byte snapshots,
+    # and the snapshot helper re-resolves the complete lexical chain after its
+    # read, so there is no later path-based consumer that could accept stale
+    # same-inode bytes based on timestamps alone.
+    validate_external_link_input_shape(external_link_inputs, label)
 
 
 def canonical_bytes(value: object) -> bytes:

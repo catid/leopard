@@ -189,13 +189,25 @@ offline verification. The executable link is consumed by a fail-closed grammar:
 only the canonical compiler, value-free build flags, one benchmark object, one
 project archive, one output, and the explicit GCC OpenMP and pthread operands
 are accepted. The resolved libgomp and libpthread files retain complete byte
-identities, are re-resolved and rehashed from their lexical operands, must be
-identical between baseline and candidate, and may not be newer than either
-executable. The retained CMake Release flags, compile commands, and executable
-recipe share a context-specific allowlist: every option spelling must be one of
-the canonical CMake/GCC forms and the final optimization is `-O3`. GCC/Clang
-long aliases, unknown optimization controls, sanitizer, profile, LTO,
-instrumentation, inline/vector disables, and coverage flags fail closed.
+identities and the complete lexical symlink chain. Verification reads each
+bounded file into a private immutable byte snapshot, consumes its digest and
+file-format checks from that snapshot, then re-resolves and directly compares
+the symlink, descriptor, mode, and terminal-path identities before closing the
+external-input closure. Baseline and candidate records must be identical, and
+the external inputs may not be newer than either executable.
+
+The compile-command proof has its own versioned schema and explicit baseline or
+candidate profile. For every required translation unit it retains the complete
+ordered compiler argv, working directory, source, and CMake output operand.
+There must be exactly one positional source, exactly one `-c`, and exactly one
+`-o`; the source and output must match both the compile-database entry and the
+producer-known object path. Definitions, includes, C++ language mode,
+optimization sequence, OpenMP flags, and per-TU ISA isolation flags must equal
+the profile in order. There is no catch-all `-D` or `-I` acceptance. The
+retained CMake Release flags and executable recipe remain context-specific
+closed grammars. GCC/Clang long aliases, unknown optimization controls,
+sanitizer, profile, LTO, instrumentation, inline/vector disables, coverage,
+and last-option overrides fail closed.
 Response files, linker forwarding, scripts, search/library
 controls, specs, alternate tool roots/loaders, plugins, and undeclared inputs
 are rejected. The producer-known translation-unit sets are exact: the
