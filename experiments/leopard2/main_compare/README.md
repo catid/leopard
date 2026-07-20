@@ -197,8 +197,12 @@ external-input closure. Baseline and candidate records must be identical, and
 the external inputs may not be newer than either executable.
 
 The compile-command proof has its own versioned schema and explicit baseline or
-candidate profile. For every required translation unit it retains the complete
-ordered compiler argv, working directory, source, and CMake output operand.
+candidate profile. Every configured compile-database entry must match its exact
+producer-known ordered argv, working directory, source, and CMake output
+operand. For every required translation unit the proof additionally retains
+that contract with the strict source/object byte identities. A target-only
+build may leave unrelated configured objects absent; only their existence is
+conditional, not their compile-command contract.
 There must be exactly one positional source, exactly one `-c`, and exactly one
 `-o`; the source and output must match both the compile-database entry and the
 producer-known object path. Definitions, includes, C++ language mode,
@@ -210,9 +214,10 @@ sanitizer, profile, LTO, instrumentation, inline/vector disables, coverage,
 and last-option overrides fail closed.
 Response files, linker forwarding, scripts, search/library
 controls, specs, alternate tool roots/loaders, plugins, and undeclared inputs
-are rejected. The producer-known translation-unit sets are exact: the
-baseline archive has its four codec members plus the adapter command and the
-candidate archive has its twelve production members plus the benchmark command;
+are rejected. The producer-known translation-unit sets are exact: all five
+baseline and all twenty candidate CMake entries are fixed, while the required
+candidate artifact closure has its twelve production members plus the benchmark
+command;
 a coherent source/object/member/link truncation is rejected. Each source retains
 the bounded raw Git commit object, whose Git SHA-1 and named tree are recomputed
 offline. Each runtime closure retains the bounded raw `ldd` output, which is

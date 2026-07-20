@@ -1953,7 +1953,7 @@ def load_exact_main_runner() -> Any:
 
 
 def canonical_candidate_build_identity(
-    source_root: Path, binary_relative: str
+    source_root: Path, candidate_commit: str, binary_relative: str
 ) -> dict[str, Any]:
     """Run the exact-main schema-v5 compile/archive/link semantic validator."""
     source_root = source_root.resolve(strict=True)
@@ -1969,6 +1969,7 @@ def canonical_candidate_build_identity(
         "candidate_executable": str(binary),
         "candidate_archive": str(archive),
         "candidate_source_root": str(source_root),
+        "candidate_commit": candidate_commit,
         # Candidate validation resolves this root but does not consume baseline
         # sources.  Supplying the same clean root avoids inventing a second tree.
         "baseline_source_root": str(source_root),
@@ -2291,7 +2292,7 @@ def attestation_identities(source_root: Path, candidate_commit: str,
         "artifact_closure": stable_build_identity(
             common.build_identity(source_root, binary_relative)),
         "canonical_production": canonical_candidate_build_identity(
-            source_root, binary_relative),
+            source_root, candidate_commit, binary_relative),
     }
     collector = stable_file_identity(
         common.file_identity(Path(__file__), source_root, "attestation collector"),

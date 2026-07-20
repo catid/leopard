@@ -165,8 +165,25 @@ CANDIDATE_LIBRARY_SOURCES = (
     "Leopard2BackendSSSE3.cpp", "Leopard2BackendAVX2.cpp",
     "Leopard2BackendAVX512.cpp",
 )
+CANDIDATE_NON_LIBRARY_COMPILE_TARGETS = {
+    "tests/benchmark.cpp": "bench_leopard.dir",
+    "bench/leopard2/benchmark.cpp": "bench_leopard2.dir",
+    "bench/leopard2/batch_preflight_benchmark.cpp":
+        "bench_leopard2_batch_preflight.dir",
+    "bench/leopard2/locator_benchmark.cpp": "bench_leopard2_locator.dir",
+    "bench/leopard2/sparse_encode_benchmark.cpp":
+        "leopard2_sparse_encode_benchmark_object.dir",
+    "tests/leopard2/direct_oracle.cpp":
+        "leopard2_sparse_encode_oracle_object.dir",
+    "experiments/leopard2/gf16_high_encode/attribution.cpp":
+        "bench_leopard2_gf16_high_attribution.dir",
+    "tests/experiments.cpp": "experiment_leopard.dir",
+}
+CANDIDATE_CONFIGURED_SOURCES = (
+    *CANDIDATE_LIBRARY_SOURCES, *CANDIDATE_NON_LIBRARY_COMPILE_TARGETS,
+)
 BASELINE_EXPECTED_COMPILE_COMMAND_COUNT = 5
-CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT = 20
+CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT = len(CANDIDATE_CONFIGURED_SOURCES)
 COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v2"
 BASELINE_COMPILE_PROFILE = \
     "gnu-compatible-cxx11-native-x86_64-release/v1"
@@ -1477,7 +1494,7 @@ def compile_profile_for_implementation(implementation: str) -> str:
 def expected_compile_output(
     implementation: str, source: Path, specification: Mapping[str, Any],
 ) -> str:
-    """Return the one CMake object operand permitted for a required source."""
+    """Return the one CMake object operand permitted for a configured source."""
     baseline_root = Path(specification["baseline_source_root"])
     candidate_root = Path(specification["candidate_source_root"])
     if implementation == "baseline":
@@ -1495,14 +1512,17 @@ def expected_compile_output(
             source.is_relative_to(candidate_root),
             "candidate compile source escapes source root")
     relative = source.relative_to(candidate_root).as_posix()
-    if relative == "bench/leopard2/benchmark.cpp":
-        return "CMakeFiles/bench_leopard2.dir/bench/leopard2/benchmark.cpp.o"
     backend_targets = {
         "Leopard2BackendSSSE3.cpp": "leopard2_backend_ssse3.dir",
         "Leopard2BackendAVX2.cpp": "leopard2_backend_avx2.dir",
         "Leopard2BackendAVX512.cpp": "leopard2_backend_avx512.dir",
     }
-    target = backend_targets.get(relative, "leopard.dir")
+    if relative in CANDIDATE_LIBRARY_SOURCES:
+        target = backend_targets.get(relative, "leopard.dir")
+    else:
+        target = CANDIDATE_NON_LIBRARY_COMPILE_TARGETS.get(relative)
+        require(target is not None,
+                f"candidate compile source is not configured: {source}")
     return f"CMakeFiles/{target}/{relative}.o"
 
 
@@ -1510,7 +1530,7 @@ def expected_compile_argv(
     implementation: str, source: Path, specification: Mapping[str, Any],
     compiler_invocation: str,
 ) -> list[str]:
-    """Construct the complete ordered argv for one production translation unit."""
+    """Construct the complete ordered argv for one configured translation unit."""
     output = expected_compile_output(implementation, source, specification)
     baseline_root = Path(specification["baseline_source_root"])
     candidate_root = Path(specification["candidate_source_root"])
@@ -1528,6 +1548,8 @@ def expected_compile_argv(
         ]
 
     relative = source.relative_to(candidate_root).as_posix()
+    require(relative in CANDIDATE_CONFIGURED_SOURCES,
+            f"candidate compile source is not configured: {source}")
     isolated_flags = {
         "Leopard2BackendSSSE3.cpp": ["-mssse3", "-mno-avx"],
         "Leopard2BackendAVX2.cpp": [
@@ -1536,11 +1558,49 @@ def expected_compile_argv(
             "-mavx2", "-mavx512f", "-mavx512bw", "-mavx512vl",
             "-mprefer-vector-width=256", "-falign-functions=64"],
     }
-    if relative == "Leopard2BackendAVX512.cpp":
-        definitions = ["-DLEO2_HAVE_AVX2_BACKEND=1"]
-    elif relative in isolated_flags or relative == "bench/leopard2/benchmark.cpp":
+    if relative == "bench/leopard2/locator_benchmark.cpp":
+        candidate_commit = specification.get("candidate_commit")
+        require(isinstance(candidate_commit, str) and
+                re.fullmatch(r"[0-9a-f]{40}", candidate_commit) is not None,
+                "candidate compile profile lacks its exact source commit")
+        definitions = [
+            "-DLEO2_LOCATOR_SOURCE_DIRTY=0",
+            f'-DLEO2_LOCATOR_SOURCE_GIT_SHA="{candidate_commit}"',
+        ]
+        includes = [f"-I{candidate_root}"]
+        propagated_openmp = ["-fopenmp"]
+    elif relative == "bench/leopard2/sparse_encode_benchmark.cpp":
+        candidate_commit = specification.get("candidate_commit")
+        require(isinstance(candidate_commit, str) and
+                re.fullmatch(r"[0-9a-f]{40}", candidate_commit) is not None,
+                "candidate compile profile lacks its exact source commit")
+        definitions = [
+            "-DLEO2_SPARSE_ENCODE_LIBRARY_TEST_HOOKS=0",
+            "-DLEO2_SPARSE_ENCODE_SOURCE_DIRTY=0",
+            f'-DLEO2_SPARSE_ENCODE_SOURCE_GIT_SHA="{candidate_commit}"',
+        ]
+        includes = [
+            f"-I{candidate_root}",
+            f"-I{candidate_root / 'tests/leopard2'}",
+        ]
+        propagated_openmp = []
+    elif relative == "tests/leopard2/direct_oracle.cpp":
         definitions = []
-    else:
+        includes = [f"-I{candidate_root / 'tests/leopard2'}"]
+        propagated_openmp = []
+    elif relative == "tests/experiments.cpp":
+        definitions = []
+        includes = []
+        propagated_openmp = []
+    elif relative == "Leopard2BackendAVX512.cpp":
+        definitions = ["-DLEO2_HAVE_AVX2_BACKEND=1"]
+        includes = [f"-I{candidate_root}"]
+        propagated_openmp = []
+    elif relative in isolated_flags:
+        definitions = []
+        includes = [f"-I{candidate_root}"]
+        propagated_openmp = []
+    elif relative in CANDIDATE_LIBRARY_SOURCES:
         definitions = [
             "-DLEO2_DISABLE_AVX2_CODEGEN=1",
             "-DLEO2_DISABLE_SSSE3_CODEGEN=1",
@@ -1548,11 +1608,15 @@ def expected_compile_argv(
             "-DLEO2_HAVE_AVX512_BACKEND=1",
             "-DLEO2_HAVE_SSSE3_BACKEND=1",
         ]
+        includes = [f"-I{candidate_root}"]
+        propagated_openmp = ["-fopenmp"]
+    else:
+        definitions = []
+        includes = [f"-I{candidate_root}"]
+        propagated_openmp = ["-fopenmp"]
     isa = isolated_flags.get(relative, [])
-    propagated_openmp = (
-        [] if relative in isolated_flags else ["-fopenmp"])
     return [
-        compiler_invocation, *definitions, f"-I{candidate_root}",
+        compiler_invocation, *definitions, *includes,
         "-Wall", "-Wextra", "-fopenmp", "-O3", "-DNDEBUG", "-O3",
         "-std=gnu++11", *isa, *propagated_openmp,
         "-o", output, "-c", str(source),
@@ -1658,15 +1722,15 @@ def validate_compile_commands(
         if implementation == "baseline" else
         CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT)
     if raw_schema == RAW_SCHEMA:
-        require(len(entries) == expected_entry_count,
+        configured = (required if implementation == "baseline" else {
+            candidate_root / name for name in CANDIDATE_CONFIGURED_SOURCES
+        })
+        configured = {source.resolve(strict=True) for source in configured}
+        require(len(entries) == expected_entry_count and
+                set(by_source) == configured,
                 f"{implementation} compile-command entry closure differs")
-    missing = sorted(str(path) for path in required - set(by_source))
-    require(not missing, f"{implementation} compile commands miss sources: {missing}")
-    object_records: list[dict[str, Any]] = []
-    required_entries: list[dict[str, Any]] = []
-    for source in required:
-        tokens, entry, output = by_source[source]
-        if raw_schema == RAW_SCHEMA:
+        for source in configured:
+            tokens, entry, _ = by_source[source]
             expected_tokens = expected_compile_argv(
                 implementation, source, specification, compiler_invocation)
             require(tokens == expected_tokens and
@@ -1674,7 +1738,13 @@ def validate_compile_commands(
                         implementation, source, specification),
                     f"compile command for {source} differs from the exact "
                     f"{compile_profile_for_implementation(implementation)} profile")
-        else:
+    missing = sorted(str(path) for path in required - set(by_source))
+    require(not missing, f"{implementation} compile commands miss sources: {missing}")
+    object_records: list[dict[str, Any]] = []
+    required_entries: list[dict[str, Any]] = []
+    for source in required:
+        tokens, entry, output = by_source[source]
+        if raw_schema != RAW_SCHEMA:
             # Historical/private build schemas predate the exact ordered argv
             # record.  Preserve replay without reintroducing broad -D/-I
             # exceptions into the current production validator.

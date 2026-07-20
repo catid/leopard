@@ -388,6 +388,7 @@ def compile_commands_fixture(root: Path, role: str) -> tuple[Path, dict, Path]:
     specification = {
         "baseline_source_root": str(baseline_root),
         "candidate_source_root": str(candidate_root),
+        "candidate_commit": CANDIDATE_COMMIT,
         f"{role}_build_dir": str(build),
     }
     if role == "baseline":
@@ -395,12 +396,10 @@ def compile_commands_fixture(root: Path, role: str) -> tuple[Path, dict, Path]:
         adapter = candidate_root / \
             "experiments/leopard2/main_compare/legacy_main_benchmark.cpp"
         sources.append(adapter)
-        extra_count = 0
     else:
-        sources = [candidate_root / name for name in runner.CANDIDATE_LIBRARY_SOURCES]
-        sources.append(candidate_root / "bench/leopard2/benchmark.cpp")
-        extra_count = (runner.CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT -
-                       len(sources))
+        sources = [
+            candidate_root / name for name in runner.CANDIDATE_CONFIGURED_SOURCES
+        ]
     entries = []
     for source in sources:
         source.parent.mkdir(parents=True, exist_ok=True)
@@ -420,19 +419,6 @@ def compile_commands_fixture(root: Path, role: str) -> tuple[Path, dict, Path]:
         else:
             entry["command"] = runner.shlex.join(arguments)
         entries.append(entry)
-    for index in range(extra_count):
-        source = candidate_root / "fixture-extra" / f"extra-{index}.cpp"
-        source.parent.mkdir(parents=True, exist_ok=True)
-        source.write_text("// unrelated configured target\n", encoding="utf-8")
-        output = f"CMakeFiles/fixture_extra_{index}.dir/extra-{index}.cpp.o"
-        output_path = build / output
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(b"fixture extra object\n")
-        entries.append({
-            "directory": str(build), "file": str(source), "output": output,
-            "arguments": [
-                str(compiler), "-O3", "-o", output, "-c", str(source)],
-        })
     path = build / "compile_commands.json"
     path.write_text(json.dumps(entries), encoding="utf-8")
     return path, specification, compiler
@@ -1909,7 +1895,8 @@ class MainCompareRunnerTests(unittest.TestCase):
             ("last native ISA option wins", "baseline", "/leopard.cpp", "baseline_isa_last"),
             ("compiler wrapper", "candidate", "/leopard.cpp", "compiler_wrapper"),
             ("ambiguous argv representations", "candidate", "/leopard.cpp", "both_forms"),
-            ("unrelated target response file", "candidate", "/extra-0.cpp", "response"),
+            ("unrelated target response file", "candidate",
+             "/tests/benchmark.cpp", "response"),
         )
         for label, role, suffix, mutation in compile_mutations:
             with self.subTest(compiler_argv=label), \
@@ -1998,7 +1985,7 @@ class MainCompareRunnerTests(unittest.TestCase):
             canonical = json.loads(path.read_text(encoding="utf-8"))
             extra_index = next(
                 index for index, entry in enumerate(canonical)
-                if "/fixture-extra/extra-0.cpp" in entry["file"])
+                if entry["file"].endswith("/tests/benchmark.cpp"))
             extra = canonical[extra_index]
             output = Path(specification["candidate_build_dir"]) / extra["output"]
             output.unlink()
@@ -2013,6 +2000,9 @@ class MainCompareRunnerTests(unittest.TestCase):
 
             outside = Path(directory) / "outside"
             outside.mkdir()
+            external_source = outside / "external.cpp"
+            external_source.write_text(
+                "// external substitute\n", encoding="utf-8")
             escape = Path(specification["candidate_build_dir"]) / "escape"
             escape.symlink_to(outside, target_is_directory=True)
             for label, mutation in (
@@ -2022,6 +2012,9 @@ class MainCompareRunnerTests(unittest.TestCase):
                 ("missing compile option", "compile"),
                 ("duplicate output option", "output"),
                 ("output path escape", "escape"),
+                ("extra definition", "definition"),
+                ("coherent external source", "coherent_source"),
+                ("coherent output", "coherent_output"),
             ):
                 with self.subTest(unrelated_entry=label):
                     entries = copy.deepcopy(canonical)
@@ -2041,6 +2034,16 @@ class MainCompareRunnerTests(unittest.TestCase):
                         tokens[1:1] = ["-o", extra["output"]]
                     elif mutation == "escape":
                         entry["output"] = "escape/evil.o"
+                        tokens[tokens.index("-o") + 1] = entry["output"]
+                    elif mutation == "definition":
+                        tokens.insert(1, "-DEVIL=1")
+                    elif mutation == "coherent_source":
+                        source_index = tokens.index(entry["file"])
+                        entry["file"] = str(external_source)
+                        tokens[source_index] = entry["file"]
+                    elif mutation == "coherent_output":
+                        entry["output"] = (
+                            "CMakeFiles/bench_leopard.dir/tests/substitute.cpp.o")
                         tokens[tokens.index("-o") + 1] = entry["output"]
                     else:  # pragma: no cover - local table is exhaustive
                         self.fail(f"unknown unrelated-entry mutation: {mutation}")
