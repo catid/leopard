@@ -127,12 +127,114 @@ void test_primitive_case(
         "overlapping read-only XOR sources were modified");
 }
 
+void test_coarse_primitive_case(
+    const leopard::backend::Ops& ops,
+    uint64_t byte_count,
+    uint32_t source_count,
+    bool sparse,
+    uint32_t salt)
+{
+    const size_t guard = 96;
+    const size_t size = static_cast<size_t>(byte_count) + guard * 2U + 64U;
+    const size_t output_offset = guard + (salt * 7U + source_count) % 31U;
+    const size_t initial_offset = guard + (salt * 11U + source_count) % 29U;
+    const size_t shared_offset = guard + (salt * 13U + source_count) % 27U;
+    const size_t other_offset = guard + (salt * 17U + source_count) % 25U;
+
+    Bytes output(size);
+    Bytes initial(size);
+    Bytes shared(size + 1U);
+    Bytes other(size);
+    fill(output, salt + 1U);
+    fill(initial, salt + 2U);
+    fill(shared, salt + 3U);
+    fill(other, salt + 4U);
+    const Bytes initial_before = initial;
+    const Bytes shared_before = shared;
+    const Bytes other_before = other;
+
+    std::vector<const void*> sources(source_count, NULL);
+    for (uint32_t i = 0; i < source_count; ++i)
+    {
+        if (sparse && ((i + salt) % 4U) == 0)
+            continue;
+        switch ((i + salt) % 7U)
+        {
+        case 0:
+            // The initial source may also appear in the reduction list.
+            sources[i] = &initial[initial_offset];
+            break;
+        case 1:
+        case 2:
+            // Exact read-only aliases exercise even/odd cancellation.
+            sources[i] = &shared[shared_offset];
+            break;
+        case 3:
+            // Partially overlapping read-only ranges are permitted.
+            sources[i] = &shared[shared_offset + 1U];
+            break;
+        default:
+            sources[i] = &other[other_offset];
+            break;
+        }
+    }
+
+    Bytes expected = output;
+    for (uint64_t byte = 0; byte < byte_count; ++byte)
+    {
+        uint8_t value = initial[initial_offset + static_cast<size_t>(byte)];
+        for (uint32_t source = 0; source < source_count; ++source)
+            if (sources[source])
+                value ^= static_cast<const uint8_t*>(
+                    sources[source])[static_cast<size_t>(byte)];
+        expected[output_offset + static_cast<size_t>(byte)] = value;
+    }
+
+    ops.xor_memory_sources(
+        &output[output_offset], &initial[initial_offset],
+        sources.empty() ? NULL : &sources[0], source_count, byte_count);
+    require(output == expected,
+        "coarse XOR value, source remainder, tail, or guard mismatch");
+    require(initial == initial_before && shared == shared_before &&
+            other == other_before,
+        "coarse XOR modified a read-only input");
+}
+
 void test_primitive(const leopard::backend::Ops& ops)
 {
     const std::vector<uint64_t> counts = byte_counts();
     for (size_t i = 0; i < counts.size(); ++i)
         test_primitive_case(ops, counts[i],
             static_cast<uint32_t>(i * 17U + ops.kind * 101U));
+
+    static const uint64_t coarse_byte_counts[] = {
+        0, 1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33,
+        63, 64, 65, 127, 128, 129, 255, 256, 257,
+        1023, 1024, 1025, 4097, 65537
+    };
+    static const uint32_t coarse_source_counts[] = {
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+        12, 13, 14, 15, 16, 17, 23, 31, 32, 33
+    };
+    for (size_t byte_i = 0;
+         byte_i < sizeof(coarse_byte_counts) / sizeof(coarse_byte_counts[0]);
+         ++byte_i)
+        for (size_t source_i = 0;
+             source_i < sizeof(coarse_source_counts) /
+                 sizeof(coarse_source_counts[0]);
+             ++source_i)
+            for (unsigned sparse = 0; sparse < 2; ++sparse)
+                test_coarse_primitive_case(ops,
+                    coarse_byte_counts[byte_i],
+                    coarse_source_counts[source_i], sparse != 0,
+                    static_cast<uint32_t>(
+                        byte_i * 977U + source_i * 131U +
+                        sparse * 17U + ops.kind * 1009U));
+
+    // Exercise many complete backend groups without making every large-tail
+    // case allocate a comparably large pointer list.
+    test_coarse_primitive_case(
+        ops, 257, 257, true, 0x243f6a88U + ops.kind);
 }
 
 void test_primitive_concurrency(const leopard::backend::Ops& ops)
@@ -152,6 +254,10 @@ void test_primitive_concurrency(const leopard::backend::Ops& ops)
                         (thread * 977U + round * 131U) % 8193U);
                     test_primitive_case(ops, count,
                         thread * 1009U + round * 37U);
+                    test_coarse_primitive_case(ops, count,
+                        (thread * 17U + round * 11U) % 41U,
+                        (thread + round) % 3U == 0,
+                        thread * 313U + round * 101U + ops.kind * 19U);
                 }
             }
             catch (...)
@@ -194,6 +300,7 @@ struct R1Fixture
     leo2_codec* codec;
     leo2_decode_plan* plan;
     uint32_t k;
+    uint32_t missing;
     size_t bytes;
     std::vector<Bytes> storage;
     std::vector<const void*> original;
@@ -202,16 +309,18 @@ struct R1Fixture
 
     R1Fixture(leo2_backend backend, uint32_t original_count,
         size_t shard_bytes, bool alias_inputs, leo2_field field,
-        leo2_shard_layout layout)
+        leo2_shard_layout layout, uint32_t missing_index = 0)
         : context(NULL)
         , codec(NULL)
         , plan(NULL)
         , k(original_count)
+        , missing(missing_index)
         , bytes(shard_bytes)
         , storage(original_count)
         , original(original_count, NULL)
         , recovery_storage(shard_bytes + 17U)
     {
+        require(missing < k, "R=1 missing index is out of range");
         leo2_context_options options;
         std::memset(&options, 0, sizeof(options));
         options.struct_size = sizeof(options);
@@ -260,9 +369,28 @@ struct R1Fixture
         require(std::memcmp(recovery[0], &expected[0], bytes) == 0,
             "R=1 encode differs from independent XOR");
 
+        if ((bytes & 63U) == 0)
+        {
+            const unsigned legacy_work_count =
+                leo_encode_work_count(k, 1);
+            require(legacy_work_count != 0,
+                "legacy R=1 work-count query failed");
+            std::vector<Bytes> legacy_storage(
+                legacy_work_count, Bytes(bytes, 0xa5));
+            std::vector<void*> legacy_work(legacy_work_count, NULL);
+            for (unsigned i = 0; i < legacy_work_count; ++i)
+                legacy_work[i] = &legacy_storage[i][0];
+            require(leo_encode(bytes, k, 1, legacy_work_count,
+                        &original[0], &legacy_work[0]) == Leopard_Success,
+                "legacy R=1 encode failed");
+            require(std::memcmp(
+                        recovery[0], legacy_work[0], bytes) == 0,
+                "R=1 encode differs from legacy Leopard wire bytes");
+        }
+
         std::vector<uint8_t> original_present(k, 1);
         const uint8_t recovery_present[1] = { 1 };
-        original_present[0] = 0;
+        original_present[missing] = 0;
         require_result(leo2_decode_plan_create(codec, &original_present[0],
             recovery_present, &plan), LEO2_SUCCESS, "R=1 plan create");
     }
@@ -287,19 +415,37 @@ void execute_and_check_decode(const R1Fixture& fixture)
         "R=1 decode scratch query");
     AlignedScratch scratch(scratch_bytes);
     std::vector<const void*> received = fixture.original;
-    received[0] = NULL;
+    received[fixture.missing] = NULL;
     Bytes restored_storage(fixture.bytes + 11U, 0xa5);
     std::vector<void*> restored(fixture.k, NULL);
-    restored[0] = &restored_storage[5];
+    restored[fixture.missing] = &restored_storage[5];
     require_result(leo2_decode_plan_execute(fixture.plan, fixture.bytes,
         &received[0], fixture.recovery, &restored[0], scratch.data(),
         scratch_bytes), LEO2_SUCCESS, "R=1 decode execute");
-    require(std::memcmp(restored[0], fixture.original[0], fixture.bytes) == 0,
+    require(std::memcmp(restored[fixture.missing],
+                fixture.original[fixture.missing], fixture.bytes) == 0,
         "R=1 decode restored the wrong original");
     for (size_t i = 0; i < 5; ++i)
         require(restored_storage[i] == 0xa5, "R=1 decode changed a prefix guard");
     for (size_t i = 5 + fixture.bytes; i < restored_storage.size(); ++i)
         require(restored_storage[i] == 0xa5, "R=1 decode changed a suffix guard");
+
+    std::fill(restored_storage.begin(), restored_storage.end(), 0x5a);
+    leo2_decode_batch_item item = {
+        fixture.bytes, &received[0], fixture.recovery, &restored[0],
+        scratch.data(), scratch_bytes
+    };
+    require_result(leo2_decode_plan_execute_batch(fixture.plan, &item, 1),
+        LEO2_SUCCESS, "R=1 single-item batch decode execute");
+    require(std::memcmp(restored[fixture.missing],
+                fixture.original[fixture.missing], fixture.bytes) == 0,
+        "R=1 single-item batch restored the wrong original");
+    for (size_t i = 0; i < 5; ++i)
+        require(restored_storage[i] == 0x5a,
+            "R=1 single-item batch changed a prefix guard");
+    for (size_t i = 5 + fixture.bytes; i < restored_storage.size(); ++i)
+        require(restored_storage[i] == 0x5a,
+            "R=1 single-item batch changed a suffix guard");
 }
 
 void test_public_r1_overlap_rejection(leo2_backend backend)
@@ -409,6 +555,22 @@ void test_public_r1(leo2_backend backend)
     R1Fixture gf16_boundary(backend, 256, 66, false, LEO2_FIELD_GF16,
         LEO2_SHARD_LAYOUT_NATIVE_V1);
     execute_and_check_decode(gf16_boundary);
+
+    // Exact legacy comparisons at the GF8 parent boundary and the first GF16
+    // R=1 parent supplement the independent XOR oracle above.
+    R1Fixture gf8_legacy_boundary(backend, 129, 64, false, LEO2_FIELD_GF8,
+        LEO2_SHARD_LAYOUT_NATIVE_V1);
+    execute_and_check_decode(gf8_legacy_boundary);
+    R1Fixture gf16_legacy_boundary(backend, 256, 64, false, LEO2_FIELD_GF16,
+        LEO2_SHARD_LAYOUT_NATIVE_V1);
+    execute_and_check_decode(gf16_legacy_boundary);
+
+    R1Fixture interior_missing(backend, 9, 1025, false, LEO2_FIELD_GF8,
+        LEO2_SHARD_LAYOUT_NATIVE_V1, 4);
+    execute_and_check_decode(interior_missing);
+    R1Fixture final_missing(backend, 9, 1025, false, LEO2_FIELD_GF8,
+        LEO2_SHARD_LAYOUT_NATIVE_V1, 8);
+    execute_and_check_decode(final_missing);
 
     test_public_r1_overlap_rejection(backend);
 
