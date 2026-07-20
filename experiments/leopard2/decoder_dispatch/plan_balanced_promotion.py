@@ -29,12 +29,16 @@ SURVIVOR_SCHEMA = "leopard2-balanced-promotion-survivors/v4"
 STAGE_SCHEMA = "leopard2-balanced-promotion-stage/v5"
 ATTESTATION_SCHEMA = "leopard2-balanced-auto-path-attestation/v5"
 ATTESTATION_RESULT_SCHEMA = "leopard2-balanced-auto-path-result/v4"
-EXACT_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v5"
+EXACT_MANIFEST_SCHEMA_V5 = "leopard2-main-compare-manifest/v5"
+EXACT_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v6"
+EXACT_MANIFEST_SCHEMAS = frozenset((
+    EXACT_MANIFEST_SCHEMA_V5, EXACT_MANIFEST_SCHEMA,
+))
 EXACT_MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 EXACT_MAIN_TREE = "b7c8830d96a978f6ec14fe747095f066e351ae72"
 # Exact commit payload used only by deterministic scope self-tests.  Retaining
 # the signed commit bytes makes the fixture exercise the same object-ID/tree
-# proof as real schema-v5 evidence rather than substituting a plausible hash.
+# proof as real complete-schema evidence rather than substituting a plausible hash.
 EXACT_MAIN_COMMIT_BASE64 = (
     "dHJlZSBiN2M4ODMwZDk2YTk3OGY2ZWMxNGZlNzQ3MDk1ZjA2NmUzNTFhZTcyCnBhcmVudCAy"
     "MmRkYzc4MDQ5OThkMzFjOGYxYTI2MTdlZTcyMGUwNjNiMWZhNmNkCnBhcmVudCAzNjQyN2Rk"
@@ -81,7 +85,12 @@ FORCED_ORDERS = (
 # cannot force.  A later schema can add them with their own forced matrices.
 CAMPAIGN_BACKENDS = ("scalar", "ssse3", "avx2")
 AUTO_BACKENDS = CAMPAIGN_BACKENDS
-EXACT_RAW_SCHEMA = "leopard2-main-compare-raw/v5"
+EXACT_RAW_SCHEMA_V5 = "leopard2-main-compare-raw/v5"
+EXACT_RAW_SCHEMA = "leopard2-main-compare-raw/v6"
+EXACT_RAW_SCHEMAS = frozenset((EXACT_RAW_SCHEMA_V5, EXACT_RAW_SCHEMA))
+CANONICAL_LDD_SCHEMA = "leopard2-main-compare-canonical-ldd/v1"
+CANONICAL_LDD_NORMALIZATION = "terminal-aslr-load-address/v1"
+CANONICAL_LDD_ADDRESS = "<ASLR_LOAD_ADDRESS>"
 MAX_GIT_COMMIT_BYTES = 1024 * 1024
 MAX_RETAINED_TEXT_BYTES = 1024 * 1024
 MAX_CPU_ID = 1_048_575
@@ -336,7 +345,7 @@ def generate_plan(root: Path) -> dict[str, Any]:
         },
         "workflow": {
             "select_command": (
-                "select verifies every schema-v5 exact-main gate manifest and "
+                "select verifies every complete-schema exact-main gate manifest and "
                 "derives an evidence-bound survivor set"),
             "refinement": (
                 "opposite outcomes separated by an unmeasured K emit exact "
@@ -992,37 +1001,51 @@ def _validate_scope_build(build: object, role: str) -> dict[str, Any]:
     return build
 
 
-def _parse_scope_ldd_output(value: str, label: str) -> list[dict[str, Any]]:
+def _parse_scope_ldd_output(
+    value: str, label: str, *, canonical: bool,
+) -> list[dict[str, Any]]:
+    address = (re.escape(CANONICAL_LDD_ADDRESS) if canonical else
+               r"0x[0-9A-Fa-f]+")
+    shared = re.compile(
+        rf"(?P<soname>[^\s=()]+)\s+=>\s+(?P<path>/\S+)\s+"
+        rf"\((?P<address>{address})\)")
+    direct = re.compile(
+        rf"(?P<path>/\S+)\s+\((?P<address>{address})\)")
+    virtual = re.compile(
+        rf"(?P<soname>linux-vdso\.so\.1)\s+"
+        rf"\((?P<address>{address})\)")
     entries: list[dict[str, Any]] = []
     for raw_line in value.splitlines():
         line = raw_line.strip()
         if not line:
             continue
-        if "=>" in line:
-            soname, target_and_address = (
-                part.strip() for part in line.split("=>", 1))
-            require(not target_and_address.startswith("not found"),
-                    f"{label} retains a missing dependency")
-            target = target_and_address.split(" (", 1)[0]
-            require(target.startswith("/") and os.path.normpath(target) == target,
-                    f"{label} retains an unresolved dependency")
+        match = shared.fullmatch(line)
+        if match is not None:
+            target = match.group("path")
+            require(os.path.normpath(target) == target,
+                    f"{label} retains a non-canonical dependency")
             entries.append({
-                "soname": soname, "loader_path": target,
+                "soname": match.group("soname"), "loader_path": target,
                 "file_kind": "shared_library",
             })
             continue
-        token = line.split(" (", 1)[0]
-        if token.startswith("/"):
-            require(os.path.normpath(token) == token,
+        if "=>" in line and "not found" in line:
+            raise PlanError(f"{label} retains a missing dependency")
+        match = direct.fullmatch(line)
+        if match is not None:
+            target = match.group("path")
+            require(os.path.normpath(target) == target,
                     f"{label} retains a non-canonical dynamic-loader path")
             entries.append({
-                "soname": Path(token).name, "loader_path": token,
+                "soname": Path(target).name, "loader_path": target,
                 "file_kind": "dynamic_loader",
             })
-        elif token == "linux-vdso.so.1":
-            entries.append({"soname": token, "virtual": True})
-        else:
-            raise PlanError(f"{label} contains unrecognized ldd output: {line}")
+            continue
+        match = virtual.fullmatch(line)
+        if match is not None:
+            entries.append({"soname": match.group("soname"), "virtual": True})
+            continue
+        raise PlanError(f"{label} contains unrecognized ldd output: {line}")
     require(entries and
             len({entry["soname"] for entry in entries}) == len(entries) and
             sum(entry.get("file_kind") == "dynamic_loader"
@@ -1031,19 +1054,49 @@ def _parse_scope_ldd_output(value: str, label: str) -> list[dict[str, Any]]:
                 for entry in entries) and
             sum(entry.get("virtual") is True for entry in entries) <= 1,
             f"{label} is not an internally consistent, unique loader record")
+    if canonical:
+        rendered = []
+        for entry in entries:
+            if entry.get("virtual") is True:
+                rendered.append(
+                    f"{entry['soname']} ({CANONICAL_LDD_ADDRESS})")
+            elif entry.get("file_kind") == "dynamic_loader":
+                rendered.append(
+                    f"{entry['loader_path']} ({CANONICAL_LDD_ADDRESS})")
+            else:
+                rendered.append(
+                    f"{entry['soname']} => {entry['loader_path']} "
+                    f"({CANONICAL_LDD_ADDRESS})")
+        require(value == "\n".join(rendered) + "\n",
+                f"{label} is not the exact canonical ldd rendering")
     return sorted(entries, key=lambda item: item["soname"])
 
 
 def _validate_runtime_closure(value: object, label: str) -> dict[str, Any]:
-    require(isinstance(value, dict) and set(value) == {
-                "executable", "dependencies", "raw_ldd_output"} and
+    require(isinstance(value, dict),
+            f"{label} normalized runtime closure is not an object")
+    canonical = "canonical_ldd_output" in value
+    output_key = "canonical_ldd_output" if canonical else "raw_ldd_output"
+    require(set(value) == {"executable", "dependencies", output_key} and
             isinstance(value.get("executable"), str) and value["executable"] and
             isinstance(value.get("dependencies"), list) and value["dependencies"],
             f"{label} normalized runtime closure shape differs")
-    raw = _validate_scope_text(
-        value.get("raw_ldd_output"), f"{label} normalized raw ldd output")
+    output = value.get(output_key)
+    if canonical:
+        require(isinstance(output, dict) and set(output) == {
+                    "schema", "normalization", "encoding", "size", "sha256", "text"} and
+                output.get("schema") == CANONICAL_LDD_SCHEMA and
+                output.get("normalization") == CANONICAL_LDD_NORMALIZATION,
+                f"{label} normalized canonical ldd-output contract differs")
+        retained = _validate_scope_text(
+            {key: output[key] for key in ("encoding", "size", "sha256", "text")},
+            f"{label} normalized canonical ldd output")
+    else:
+        retained = _validate_scope_text(
+            output, f"{label} normalized raw ldd output")
     parsed = _parse_scope_ldd_output(
-        raw["text"], f"{label} normalized raw ldd output")
+        retained["text"], f"{label} normalized ldd output",
+        canonical=canonical)
     sonames: list[str] = []
     loader_paths: list[str] = []
     file_paths: list[str] = []
@@ -1249,8 +1302,8 @@ def selection_scope_from_verified_bundle(
     manifest: dict[str, Any], raw: dict[str, Any]
 ) -> dict[str, Any]:
     """Derive the one environment in which every gate cell is meaningful."""
-    require(raw.get("schema") == EXACT_RAW_SCHEMA,
-            "exact-main raw bundle is not complete-identity schema v5")
+    require(raw.get("schema") in EXACT_RAW_SCHEMAS,
+            "exact-main raw bundle is not a supported complete-identity schema")
     identities = manifest.get("identities")
     host = manifest.get("host")
     require(isinstance(identities, dict) and isinstance(host, dict),
@@ -1408,9 +1461,9 @@ def verify_exact_manifest(
     except Exception as error:
         raise PlanError(f"exact-main verifier rejected {path}: {error}") from error
     require(isinstance(document, dict) and
-            document.get("schema") == EXACT_MANIFEST_SCHEMA and
+            document.get("schema") in EXACT_MANIFEST_SCHEMAS and
             document.get("valid") is True,
-            f"exact-main manifest is not valid schema v5: {path}")
+            f"exact-main manifest is not a supported complete schema: {path}")
     require(isinstance(snapshot, dict) and set(snapshot) == {"size", "sha256"} and
             type(snapshot.get("size")) is int and snapshot["size"] > 0 and
             isinstance(snapshot.get("sha256"), str) and
@@ -1955,7 +2008,7 @@ def load_exact_main_runner() -> Any:
 def canonical_candidate_build_identity(
     source_root: Path, candidate_commit: str, binary_relative: str
 ) -> dict[str, Any]:
-    """Run the exact-main schema-v5 compile/archive/link semantic validator."""
+    """Run the exact-main schema-v5+ compile/archive/link semantic validator."""
     source_root = source_root.resolve(strict=True)
     relative = Path(binary_relative)
     require(not relative.is_absolute() and ".." not in relative.parts,
@@ -2754,9 +2807,16 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
             "libc.so.6 => /lib/libc.so.6 (0x0000000000000000)\n"
             "libm.so.6 => /lib/libm.so.6 (0x0000000000000000)\n"
             "/lib/ld-linux-x86-64.so.2 (0x0000000000000000)\n")
+        canonical_text = re.sub(
+            r"0x[0-9A-Fa-f]+", CANONICAL_LDD_ADDRESS, raw_text)
+        canonical_record = fixture_text(canonical_text)
         return {
             "executable": executable,
-            "raw_ldd_output": fixture_text(raw_text),
+            "canonical_ldd_output": {
+                "schema": CANONICAL_LDD_SCHEMA,
+                "normalization": CANONICAL_LDD_NORMALIZATION,
+                **canonical_record,
+            },
             "dependencies": [
                 {
                     "soname": "ld-linux-x86-64.so.2",
@@ -3023,6 +3083,21 @@ def self_test() -> None:
             "encoding": "utf-8", "text": text, "size": len(encoded),
             "sha256": hashlib.sha256(encoded).hexdigest(),
         }
+
+    def runtime_text(closure: dict[str, Any]) -> str:
+        key = ("canonical_ldd_output" if "canonical_ldd_output" in closure else
+               "raw_ldd_output")
+        return closure[key]["text"]
+
+    def replace_runtime_text(closure: dict[str, Any], text: str) -> None:
+        if "canonical_ldd_output" in closure:
+            closure["canonical_ldd_output"] = {
+                "schema": CANONICAL_LDD_SCHEMA,
+                "normalization": CANONICAL_LDD_NORMALIZATION,
+                **retained_text(text),
+            }
+        else:
+            closure["raw_ldd_output"] = retained_text(text)
 
     exact_runner = load_exact_main_runner()
     require(tuple(exact_runner.BASELINE_LIBRARY_SOURCES) ==
@@ -3557,16 +3632,10 @@ def self_test() -> None:
                         item for item in closure["dependencies"]
                         if item["soname"] != "ld-linux-x86-64.so.2"]
                     text = "\n".join(
-                        line for line in
-                        closure["raw_ldd_output"]["text"].splitlines()
+                        line for line in runtime_text(closure).splitlines()
                         if not line.lstrip().startswith(
                             "/lib/ld-linux-x86-64.so.2")) + "\n"
-                    closure["raw_ldd_output"] = {
-                        "encoding": "utf-8", "text": text,
-                        "size": len(text.encode("utf-8")),
-                        "sha256": hashlib.sha256(
-                            text.encode("utf-8")).hexdigest(),
-                    }
+                    replace_runtime_text(closure, text)
         reject_scope_mutation(
             "uniform missing dynamic-loader records",
             remove_all_dynamic_loader_records)
@@ -3578,9 +3647,9 @@ def self_test() -> None:
                     dependency for dependency in closure["dependencies"]
                     if dependency["soname"] != "libm.so.6"]
                 text = "\n".join(
-                    line for line in closure["raw_ldd_output"]["text"].splitlines()
+                    line for line in runtime_text(closure).splitlines()
                     if not line.startswith("libm.so.6 =>")) + "\n"
-                closure["raw_ldd_output"] = retained_text(text)
+                replace_runtime_text(closure, text)
         derive_survivors(
             first, manifests, references, coherently_rewritten_runtime_scopes)
         def swap_all_runtime_file_records(values) -> None:
@@ -3603,14 +3672,9 @@ def self_test() -> None:
                                 if item["soname"] == "libc.so.6")
                     libc["loader_path"] = "/lib/./libc.so.6"
                     libc["file"]["path"] = libc["loader_path"]
-                    text = closure["raw_ldd_output"]["text"].replace(
+                    text = runtime_text(closure).replace(
                         "/lib/libc.so.6", libc["loader_path"])
-                    encoded = text.encode("utf-8")
-                    closure["raw_ldd_output"] = {
-                        "encoding": "utf-8", "text": text,
-                        "size": len(encoded),
-                        "sha256": hashlib.sha256(encoded).hexdigest(),
-                    }
+                    replace_runtime_text(closure, text)
         reject_scope_mutation(
             "uniform noncanonical runtime loader paths",
             make_all_runtime_loader_paths_noncanonical)

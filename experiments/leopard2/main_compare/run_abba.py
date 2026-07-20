@@ -48,23 +48,29 @@ RAW_SCHEMA_V1 = "leopard2-main-compare-raw/v1"
 RAW_SCHEMA_V2 = "leopard2-main-compare-raw/v2"
 RAW_SCHEMA_V3 = "leopard2-main-compare-raw/v3"
 RAW_SCHEMA_V4 = "leopard2-main-compare-raw/v4"
-RAW_SCHEMA = "leopard2-main-compare-raw/v5"
+RAW_SCHEMA_V5 = "leopard2-main-compare-raw/v5"
+RAW_SCHEMA = "leopard2-main-compare-raw/v6"
 HARDENED_HISTORICAL_BUILD_SCHEMA = \
     "leopard2-main-compare-build/hardened-historical-v1"
 MANIFEST_SCHEMA_V1 = "leopard2-main-compare-manifest/v1"
 MANIFEST_SCHEMA_V2 = "leopard2-main-compare-manifest/v2"
 MANIFEST_SCHEMA_V3 = "leopard2-main-compare-manifest/v3"
 MANIFEST_SCHEMA_V4 = "leopard2-main-compare-manifest/v4"
-MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v5"
+MANIFEST_SCHEMA_V5 = "leopard2-main-compare-manifest/v5"
+MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v6"
 FAILURE_SCHEMA_V2 = "leopard2-main-compare-failure/v2"
 FAILURE_SCHEMA_V3 = "leopard2-main-compare-failure/v3"
 FAILURE_SCHEMA_V4 = "leopard2-main-compare-failure/v4"
-FAILURE_SCHEMA = "leopard2-main-compare-failure/v5"
+FAILURE_SCHEMA_V5 = "leopard2-main-compare-failure/v5"
+FAILURE_SCHEMA = "leopard2-main-compare-failure/v6"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
 ISOLATION_SCHEMA = "leopard2-main-compare-isolation/v1"
 SUPERVISION_SCHEMA = "leopard2-main-supervision/v1"
 SUPERVISION_NONCE_ENV = "LEO2_AFFINITY_EXECUTION_NONCE"
+CANONICAL_LDD_SCHEMA = "leopard2-main-compare-canonical-ldd/v1"
+CANONICAL_LDD_NORMALIZATION = "terminal-aslr-load-address/v1"
+CANONICAL_LDD_ADDRESS = "<ASLR_LOAD_ADDRESS>"
 
 # CMake target and archive identity is evidence, not an interchangeable build
 # detail.  Historical v1/v2 records predate the canonical target rename and
@@ -86,6 +92,7 @@ RAW_TO_CMAKE_IDENTITY = {
     RAW_SCHEMA_V2: HISTORICAL_CMAKE_IDENTITY,
     RAW_SCHEMA_V3: CANONICAL_CMAKE_IDENTITY,
     RAW_SCHEMA_V4: CANONICAL_CMAKE_IDENTITY,
+    RAW_SCHEMA_V5: CANONICAL_CMAKE_IDENTITY,
     RAW_SCHEMA: CANONICAL_CMAKE_IDENTITY,
 }
 # This internal build-only schema lets another evidence family authenticate an
@@ -99,6 +106,7 @@ BUILD_SCHEMA_TO_CMAKE_IDENTITY = {
 HARDENED_BUILD_SCHEMAS = frozenset((
     RAW_SCHEMA_V3,
     RAW_SCHEMA_V4,
+    RAW_SCHEMA_V5,
     RAW_SCHEMA,
     HARDENED_HISTORICAL_BUILD_SCHEMA,
 ))
@@ -107,21 +115,25 @@ MANIFEST_TO_RAW_SCHEMA = {
     MANIFEST_SCHEMA_V2: RAW_SCHEMA_V2,
     MANIFEST_SCHEMA_V3: RAW_SCHEMA_V3,
     MANIFEST_SCHEMA_V4: RAW_SCHEMA_V4,
+    MANIFEST_SCHEMA_V5: RAW_SCHEMA_V5,
     MANIFEST_SCHEMA: RAW_SCHEMA,
 }
 FAILURE_TO_RAW_SCHEMA = {
     FAILURE_SCHEMA_V2: RAW_SCHEMA_V2,
     FAILURE_SCHEMA_V3: RAW_SCHEMA_V3,
     FAILURE_SCHEMA_V4: RAW_SCHEMA_V4,
+    FAILURE_SCHEMA_V5: RAW_SCHEMA_V5,
     FAILURE_SCHEMA: RAW_SCHEMA,
 }
-CANDIDATE_MODE_SCHEMAS = frozenset((RAW_SCHEMA_V4, RAW_SCHEMA))
+CANDIDATE_MODE_SCHEMAS = frozenset((RAW_SCHEMA_V4, RAW_SCHEMA_V5, RAW_SCHEMA))
 WORKSPACE_SELECTOR_SCHEMAS = frozenset((
-    RAW_SCHEMA_V3, RAW_SCHEMA_V4, RAW_SCHEMA,
+    RAW_SCHEMA_V3, RAW_SCHEMA_V4, RAW_SCHEMA_V5, RAW_SCHEMA,
 ))
 ISOLATION_SCHEMAS = frozenset((
-    RAW_SCHEMA_V2, RAW_SCHEMA_V3, RAW_SCHEMA_V4, RAW_SCHEMA,
+    RAW_SCHEMA_V2, RAW_SCHEMA_V3, RAW_SCHEMA_V4, RAW_SCHEMA_V5, RAW_SCHEMA,
 ))
+COMPLETE_EVIDENCE_SCHEMAS = frozenset((RAW_SCHEMA_V5, RAW_SCHEMA))
+SUPERVISION_SCHEMAS = COMPLETE_EVIDENCE_SCHEMAS
 CPU_STAT_FIELDS = (
     "user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal",
 )
@@ -1462,7 +1474,7 @@ def validate_executable_link_semantics(
 def _validate_historical_declared_archive_operands(
     tokens: Sequence[str], archive_name: str, label: str,
 ) -> None:
-    """Preserve replay of pre-v5 producers without broadening schema v5."""
+    """Preserve replay of pre-v5 producers without broadening complete schemas."""
     same_name_operands = [
         token for token in tokens
         if isinstance(token, str) and Path(token).name == archive_name
@@ -1723,7 +1735,7 @@ def validate_compile_commands(
         BASELINE_EXPECTED_COMPILE_COMMAND_COUNT
         if implementation == "baseline" else
         CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT)
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in COMPLETE_EVIDENCE_SCHEMAS:
         configured = (required if implementation == "baseline" else {
             candidate_root / name for name in CANDIDATE_CONFIGURED_SOURCES
         })
@@ -1746,7 +1758,7 @@ def validate_compile_commands(
     required_entries: list[dict[str, Any]] = []
     for source in required:
         tokens, entry, output = by_source[source]
-        if raw_schema != RAW_SCHEMA:
+        if raw_schema not in COMPLETE_EVIDENCE_SCHEMAS:
             # Historical/private build schemas predate the exact ordered argv
             # record.  Preserve replay without reintroducing broad -D/-I
             # exceptions into the current production validator.
@@ -1766,7 +1778,7 @@ def validate_compile_commands(
             "source": source_identity,
             "object": object_identity,
         })
-        if raw_schema == RAW_SCHEMA:
+        if raw_schema in COMPLETE_EVIDENCE_SCHEMAS:
             required_entries.append({
                 "directory": entry["directory"],
                 "file": entry["file"],
@@ -1785,7 +1797,7 @@ def validate_compile_commands(
             "portable core with ISA flags only on SSSE3, AVX2, and "
             "AVX-512VL translation units"),
     }
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in COMPLETE_EVIDENCE_SCHEMAS:
         result.update({
             "schema": COMPILE_COMMANDS_SCHEMA,
             "implementation": implementation,
@@ -1987,7 +1999,7 @@ def build_provenance(
             Path(executable_link_tokens[0]).resolve(strict=True) == compiler,
             f"{implementation} link recipe uses a different compiler")
     external_link_inputs: list[dict[str, Any]] = []
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in COMPLETE_EVIDENCE_SCHEMAS:
         external_link_inputs = capture_external_link_inputs(
             executable_link_tokens,
             f"{implementation} benchmark link recipe")
@@ -2037,7 +2049,7 @@ def build_provenance(
             f"{implementation} archive object closure differs from compile commands")
     require(executable_recipe_objects == expected_executable_objects,
             f"{implementation} executable object closure differs from compile commands")
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in COMPLETE_EVIDENCE_SCHEMAS:
         validate_executable_link_semantics(
             executable_link_tokens,
             compiler_invocation=cache["CMAKE_CXX_COMPILER"],
@@ -2056,7 +2068,7 @@ def build_provenance(
             all(executable_identity["mtime_ns"] >= record["object"]["mtime_ns"]
                 for record in benchmark_records),
             f"{implementation} executable predates its link inputs")
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in COMPLETE_EVIDENCE_SCHEMAS:
         require(all(
                     executable_identity["mtime_ns"] >=
                         record["artifact"]["mtime_ns"]
@@ -2110,7 +2122,7 @@ def build_provenance(
             "ranlib": {"invocation": cache["CMAKE_RANLIB"],
                        "resolved_path": str(ranlib)},
         }
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in COMPLETE_EVIDENCE_SCHEMAS:
         executable_content = exact_text_content(
             executable_link, f"{implementation} executable link recipe")
         require(executable_content["size"] ==
@@ -2127,41 +2139,56 @@ def build_provenance(
     return result
 
 
-def parse_ldd_output_text(output: str, label: str) -> list[dict[str, Any]]:
+def _parse_ldd_output_lines(
+    output: str, label: str, *, canonical: bool,
+) -> list[dict[str, Any]]:
     require(isinstance(output, str) and output and
             len(output.encode("utf-8")) <= MAX_LINK_RECIPE_BYTES,
-            f"{label} raw ldd output is outside the retained byte bound")
+            f"{label} ldd output is outside the retained byte bound")
+    address = (re.escape(CANONICAL_LDD_ADDRESS) if canonical else
+               r"0x[0-9A-Fa-f]+")
+    shared = re.compile(
+        rf"(?P<soname>[^\s=()]+)\s+=>\s+(?P<path>/\S+)\s+"
+        rf"\((?P<address>{address})\)")
+    direct = re.compile(
+        rf"(?P<path>/\S+)\s+\((?P<address>{address})\)")
+    virtual = re.compile(
+        rf"(?P<soname>linux-vdso\.so\.1)\s+"
+        rf"\((?P<address>{address})\)")
     entries: list[dict[str, Any]] = []
     for raw_line in output.splitlines():
         line = raw_line.strip()
         if not line:
             continue
-        if "=>" in line:
-            soname, target_and_address = (part.strip() for part in line.split("=>", 1))
-            require(not target_and_address.startswith("not found"),
-                    f"runtime dependency is missing: {line}")
-            target = target_and_address.split(" (", 1)[0]
-            require(target.startswith("/") and os.path.normpath(target) == target,
-                    f"unresolved or non-canonical runtime dependency: {line}")
+        match = shared.fullmatch(line)
+        if match is not None:
+            target = match.group("path")
+            require(os.path.normpath(target) == target,
+                    f"non-canonical runtime dependency: {line}")
             entries.append({
-                "soname": soname,
+                "soname": match.group("soname"),
                 "loader_path": target,
                 "file_kind": "shared_library",
             })
             continue
-        token = line.split(" (", 1)[0]
-        if token.startswith("/"):
-            require(os.path.normpath(token) == token,
+        if "=>" in line and "not found" in line:
+            raise EvidenceError(f"runtime dependency is missing: {line}")
+        match = direct.fullmatch(line)
+        if match is not None:
+            target = match.group("path")
+            require(os.path.normpath(target) == target,
                     f"non-canonical dynamic-loader path: {line}")
             entries.append({
-                "soname": Path(token).name,
-                "loader_path": token,
+                "soname": Path(target).name,
+                "loader_path": target,
                 "file_kind": "dynamic_loader",
             })
-        elif token == "linux-vdso.so.1":
-            entries.append({"soname": token, "virtual": True})
-        else:
-            raise EvidenceError(f"unrecognized ldd output: {line}")
+            continue
+        match = virtual.fullmatch(line)
+        if match is not None:
+            entries.append({"soname": match.group("soname"), "virtual": True})
+            continue
+        raise EvidenceError(f"unrecognized ldd output: {line}")
     require(entries, f"{label} contains no runtime closure")
     require(len({entry["soname"] for entry in entries}) == len(entries),
             f"duplicate runtime dependency in {label}")
@@ -2171,11 +2198,52 @@ def parse_ldd_output_text(output: str, label: str) -> list[dict[str, Any]]:
             f"{label} contains no shared-library dependency")
     require(sum(entry.get("virtual") is True for entry in entries) <= 1,
             f"{label} contains duplicate virtual loader records")
+    return entries
+
+
+def _render_canonical_ldd_output(entries: Sequence[Mapping[str, Any]]) -> str:
+    lines: list[str] = []
+    for entry in entries:
+        if entry.get("virtual") is True:
+            lines.append(f"{entry['soname']} ({CANONICAL_LDD_ADDRESS})")
+        elif entry.get("file_kind") == "dynamic_loader":
+            lines.append(f"{entry['loader_path']} ({CANONICAL_LDD_ADDRESS})")
+        else:
+            lines.append(
+                f"{entry['soname']} => {entry['loader_path']} "
+                f"({CANONICAL_LDD_ADDRESS})")
+    return "\n".join(lines) + "\n"
+
+
+def parse_ldd_output_text(output: str, label: str) -> list[dict[str, Any]]:
+    """Strictly parse one real ldd transcript, including every load address."""
+    entries = _parse_ldd_output_lines(output, label, canonical=False)
+    return sorted(entries, key=lambda item: item["soname"])
+
+
+def canonical_ldd_output(output: str, label: str) -> dict[str, Any]:
+    """Retain all loader semantics while removing only ASLR-variant addresses."""
+    entries = _parse_ldd_output_lines(output, label, canonical=False)
+    text = _render_canonical_ldd_output(entries)
+    identity = exact_text_content(text, f"canonical {label}")
+    return {
+        "schema": CANONICAL_LDD_SCHEMA,
+        "normalization": CANONICAL_LDD_NORMALIZATION,
+        **identity,
+    }
+
+
+def parse_canonical_ldd_output_text(
+    output: str, label: str,
+) -> list[dict[str, Any]]:
+    entries = _parse_ldd_output_lines(output, label, canonical=True)
+    require(output == _render_canonical_ldd_output(entries),
+            f"{label} is not the exact canonical ldd rendering")
     return sorted(entries, key=lambda item: item["soname"])
 
 
 def runtime_closure(
-    ldd: Path, executable: Path, include_raw_output: bool = False,
+    ldd: Path, executable: Path, retained_output_schema: str | None = None,
 ) -> dict[str, Any]:
     ldd = ldd.resolve(strict=True)
     executable = executable.resolve(strict=True)
@@ -2206,9 +2274,15 @@ def runtime_closure(
         "executable": str(executable),
         "dependencies": entries,
     }
-    if include_raw_output:
+    if retained_output_schema == RAW_SCHEMA_V5:
         result["raw_ldd_output"] = exact_text_content(
             output, f"ldd output for {executable}")
+    elif retained_output_schema == RAW_SCHEMA:
+        result["canonical_ldd_output"] = canonical_ldd_output(
+            output, f"ldd output for {executable}")
+    else:
+        require(retained_output_schema is None,
+                "unsupported retained ldd-output schema")
     return result
 
 
@@ -2238,24 +2312,51 @@ def input_snapshot(
         "candidate_build": candidate_build,
         "baseline_runtime_closure": runtime_closure(
             ldd, Path(specification["baseline_executable"]),
-            include_raw_output=raw_schema == RAW_SCHEMA),
+            retained_output_schema=(raw_schema if raw_schema in
+                                    COMPLETE_EVIDENCE_SCHEMAS else None)),
         "candidate_runtime_closure": runtime_closure(
             ldd, Path(specification["candidate_executable"]),
-            include_raw_output=raw_schema == RAW_SCHEMA),
+            retained_output_schema=(raw_schema if raw_schema in
+                                    COMPLETE_EVIDENCE_SCHEMAS else None)),
         "baseline_source": git_identity(
             Path(specification["baseline_source_root"]), MAIN_COMMIT, True,
-            include_commit_object=raw_schema == RAW_SCHEMA),
+            include_commit_object=raw_schema in COMPLETE_EVIDENCE_SCHEMAS),
         "candidate_source": git_identity(
             Path(specification["candidate_source_root"]),
             str(specification["candidate_commit"]), False,
-            include_commit_object=raw_schema == RAW_SCHEMA),
+            include_commit_object=raw_schema in COMPLETE_EVIDENCE_SCHEMAS),
     }
+
+
+def input_snapshots_equal(
+    current: object, retained: object, raw_schema: str,
+) -> bool:
+    """Compare inputs while honoring the declared historical transcript schema."""
+    if raw_schema != RAW_SCHEMA_V5:
+        return current == retained
+    require(isinstance(current, dict) and isinstance(retained, dict),
+            "schema-v5 input snapshots are not objects")
+
+    def normalized(snapshot: dict[str, Any]) -> dict[str, Any]:
+        result = copy.deepcopy(snapshot)
+        for role in ("baseline", "candidate"):
+            closure = result.get(f"{role}_runtime_closure")
+            require(isinstance(closure, dict),
+                    f"schema-v5 {role} runtime closure is missing")
+            raw = validate_complete_text_identity(
+                closure.pop("raw_ldd_output", None),
+                f"schema-v5 {role} raw ldd output")
+            closure["canonical_ldd_output"] = canonical_ldd_output(
+                raw["text"], f"schema-v5 {role} raw ldd output")
+        return result
+
+    return normalized(current) == normalized(retained)
 
 
 def validate_complete_artifact_identity(
     value: object, label: str, expected_kind: str | None = None,
 ) -> dict[str, Any]:
-    """Validate the complete, portable file identity retained by schema v5."""
+    """Validate the complete, portable file identity retained since schema v5."""
     require(isinstance(value, dict) and set(value) == {
                 "path", "kind", "size", "mode", "mtime_ns", "sha256"},
             f"{label} file identity shape differs")
@@ -2285,6 +2386,23 @@ def validate_complete_text_identity(value: object, label: str) -> dict[str, Any]
     return value
 
 
+def validate_canonical_ldd_output(
+    value: object, label: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    require(isinstance(value, dict) and set(value) == {
+                "schema", "normalization", "encoding", "size", "sha256", "text"},
+            f"{label} canonical ldd-output shape differs")
+    require(value.get("schema") == CANONICAL_LDD_SCHEMA and
+            value.get("normalization") == CANONICAL_LDD_NORMALIZATION,
+            f"{label} canonical ldd-output contract differs")
+    retained = validate_complete_text_identity(
+        {key: value[key] for key in ("encoding", "size", "sha256", "text")},
+        f"{label} canonical ldd output")
+    parsed = parse_canonical_ldd_output_text(
+        retained["text"], f"{label} retained canonical ldd output")
+    return value, parsed
+
+
 def validate_complete_git_identity(
     value: object, label: str, expected_path: str, expected_head: str,
     *, require_detached: bool,
@@ -2311,18 +2429,27 @@ def validate_complete_git_identity(
 
 
 def validate_complete_runtime_closure(
-    value: object, label: str, expected_executable: str,
+    value: object, label: str, expected_executable: str, raw_schema: str,
 ) -> dict[str, Any]:
+    output_key = (
+        "raw_ldd_output" if raw_schema == RAW_SCHEMA_V5 else
+        "canonical_ldd_output" if raw_schema == RAW_SCHEMA else None)
+    require(output_key is not None,
+            f"{label} runtime closure uses an unsupported evidence schema")
     require(isinstance(value, dict) and set(value) == {
-                "executable", "dependencies", "raw_ldd_output"} and
+                "executable", "dependencies", output_key} and
             value.get("executable") == expected_executable and
             isinstance(value.get("dependencies"), list) and
             value["dependencies"],
             f"{label} runtime closure shape differs")
-    raw_output = validate_complete_text_identity(
-        value.get("raw_ldd_output"), f"{label} raw ldd output")
-    parsed = parse_ldd_output_text(
-        raw_output["text"], f"{label} retained raw ldd output")
+    if raw_schema == RAW_SCHEMA_V5:
+        raw_output = validate_complete_text_identity(
+            value.get(output_key), f"{label} raw ldd output")
+        parsed = parse_ldd_output_text(
+            raw_output["text"], f"{label} retained raw ldd output")
+    else:
+        _, parsed = validate_canonical_ldd_output(
+            value.get(output_key), label)
     sonames: list[str] = []
     loader_paths: list[str] = []
     file_paths: list[str] = []
@@ -2366,7 +2493,7 @@ def validate_complete_runtime_closure(
                 "file_kind": dependency["file"]["kind"],
             })
     require(normalized_dependencies == parsed,
-            f"{label} dependency summary differs from retained raw ldd output")
+            f"{label} dependency summary differs from retained ldd output")
     return value
 
 
@@ -2669,14 +2796,16 @@ def validate_complete_build_identity(
 
 
 def validate_complete_input_snapshot(
-    specification: Mapping[str, Any], snapshot: object,
+    specification: Mapping[str, Any], snapshot: object, raw_schema: str = RAW_SCHEMA,
 ) -> dict[str, Any]:
+    require(raw_schema in COMPLETE_EVIDENCE_SCHEMAS,
+            "complete input snapshot uses an unsupported schema")
     require(isinstance(snapshot, dict) and set(snapshot) == {
                 "runner", "taskset", "ldd", "baseline_executable",
                 "candidate_executable", "baseline_archive", "candidate_archive",
                 "baseline_build", "candidate_build", "baseline_runtime_closure",
                 "candidate_runtime_closure", "baseline_source", "candidate_source"},
-            "schema-v5 input identity shape differs")
+            "complete input identity shape differs")
     for name, kind in (("runner", "file"), ("taskset", "executable"),
                        ("ldd", "executable")):
         record = validate_complete_artifact_identity(
@@ -2698,7 +2827,7 @@ def validate_complete_input_snapshot(
                 f"{role} top-level/build output identity differs")
         validate_complete_runtime_closure(
             snapshot.get(f"{role}_runtime_closure"), role,
-            executable["path"])
+            executable["path"], raw_schema)
     validate_complete_git_identity(
         snapshot.get("baseline_source"), "baseline",
         specification["baseline_source_root"], MAIN_COMMIT,
@@ -4184,12 +4313,12 @@ def validate_host_record(
     value: object, cpu: int, sibling: int, allowed: Sequence[int], raw_schema: str,
 ) -> None:
     require(isinstance(value, dict), "host identity is not an object")
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in COMPLETE_EVIDENCE_SCHEMAS:
         require(set(value) == {
                     "system", "allowed_cpu_set_at_launch", "online_cpu_set",
                     "online_cpu_list_text", "online_node_list_text",
                     "benchmark_cpu", "reserved_sibling", "turbo_and_pstate"},
-                "schema-v5 host identity shape differs")
+                "complete host identity shape differs")
         system = value.get("system")
         require(isinstance(system, dict) and set(system) == {
                     "system", "node", "release", "version", "machine",
@@ -4198,7 +4327,7 @@ def validate_host_record(
                     for name in ("system", "node", "release", "version",
                                  "machine", "python")) and
                 type(system.get("page_size")) is int and system["page_size"] > 0,
-                "schema-v5 host system identity differs")
+                "complete host system identity differs")
         launch = value.get("allowed_cpu_set_at_launch")
         online = value.get("online_cpu_set")
         require(isinstance(launch, list) and launch == list(allowed) and
@@ -4210,7 +4339,7 @@ def validate_host_record(
                 1 <= len(online) <= MAX_CPU_LIST_ENTRIES and
                 all(type(item) is int and 0 <= item <= MAX_CPU_ID
                     for item in online),
-                "schema-v5 host CPU-set identity differs")
+                "complete host CPU-set identity differs")
         online_cpu_text = validate_complete_text_identity(
             value.get("online_cpu_list_text"), "host online CPU list")
         online_node_text = validate_complete_text_identity(
@@ -4218,7 +4347,7 @@ def validate_host_record(
         online_nodes = parse_cpu_list(online_node_text["text"])
         require(parse_cpu_list(online_cpu_text["text"]) == set(online) and
                 online_nodes,
-                "schema-v5 host online CPU/node summaries differ from sysfs text")
+                "complete host online CPU/node summaries differ from sysfs text")
         benchmark_record = validate_complete_cpu_policy_record(
             value.get("benchmark_cpu"), "benchmark_cpu", cpu, sibling)
         sibling_record = validate_complete_cpu_policy_record(
@@ -4238,7 +4367,7 @@ def validate_host_record(
         require(isinstance(turbo, dict) and set(turbo) == turbo_paths and
                 all(item is None or isinstance(item, str)
                     for item in turbo.values()),
-                "schema-v5 host turbo/pstate identity differs")
+                "complete host turbo/pstate identity differs")
     require(value.get("allowed_cpu_set_at_launch") == list(allowed),
             "host identity has the wrong launch affinity")
     online = value.get("online_cpu_set")
@@ -4364,8 +4493,8 @@ def validate_raw(
     require(re.fullmatch(r"[0-9a-f]{40}", input_spec["candidate_commit"]) is not None,
             "candidate commit is not a full lowercase SHA-1")
     require(initial == final, "input identities changed during the campaign")
-    if raw_schema == RAW_SCHEMA:
-        validate_complete_input_snapshot(input_spec, initial)
+    if raw_schema in COMPLETE_EVIDENCE_SCHEMAS:
+        validate_complete_input_snapshot(input_spec, initial, raw_schema)
     validate_candidate_cmake_identity(input_spec, initial, raw_schema)
     reservation = raw.get("reservation")
     require(isinstance(reservation, dict) and
@@ -4383,9 +4512,9 @@ def validate_raw(
     require(reservation["sha256"] ==
             sha256_bytes(canonical_bytes(reservation_payload)),
             "retained CPU reservation hash does not match its canonical payload")
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in SUPERVISION_SCHEMAS:
         require("supervision" in raw,
-                "v5 raw bundle omits its supervision handshake field")
+                "complete raw bundle omits its supervision handshake field")
         supervision = raw.get("supervision")
         if supervision is not None:
             validate_supervision(supervision, campaign, reservation, raw["isolation"])
@@ -4393,7 +4522,8 @@ def validate_raw(
         require("supervision" not in raw,
                 "historical raw bundle contains unversioned supervision data")
     if check_current_inputs:
-        require(input_snapshot(input_spec, raw_schema) == initial,
+        require(input_snapshots_equal(
+                    input_snapshot(input_spec, raw_schema), initial, raw_schema),
                 "current executable/archive/source identity differs from retained evidence")
         validate_reservation_current(reservation)
     invocations = raw.get("invocations")
@@ -4627,7 +4757,7 @@ def validate_failure(
         "host_initial", "identities_initial", "input_specification",
         "invocations", "isolation", "pair_lease", "reservation",
         "retained_files", "schema", "status", "traceback", "valid"}
-    if failure_schema == FAILURE_SCHEMA:
+    if failure_schema in (FAILURE_SCHEMA_V5, FAILURE_SCHEMA):
         expected_fields.add("supervision")
     require(set(failure) == expected_fields,
         "failed campaign has unexpected or missing fields")
@@ -4700,9 +4830,10 @@ def validate_failure(
             "failed campaign reservation identity is invalid")
     supervision = failure.get("supervision")
     if supervision is not None:
-        require(failure_schema == FAILURE_SCHEMA and reservation is not None and
+        require(failure_schema in (FAILURE_SCHEMA_V5, FAILURE_SCHEMA) and
+                reservation is not None and
                 isolation is not None and isinstance(campaign, dict),
-                "failed supervision handshake has no v5 context")
+                "failed supervision handshake has no complete-schema context")
         validate_supervision(supervision, campaign, reservation, isolation)
     invocations = failure.get("invocations")
     require(isinstance(invocations, list), "failed invocation prefix is not a list")
@@ -4728,8 +4859,8 @@ def validate_failure(
     if isinstance(initial, dict):
         require(isinstance(specification, dict),
                 "failed campaign identity lacks input specification")
-        if raw_schema == RAW_SCHEMA:
-            validate_complete_input_snapshot(specification, initial)
+        if raw_schema in COMPLETE_EVIDENCE_SCHEMAS:
+            validate_complete_input_snapshot(specification, initial, raw_schema)
         validate_candidate_cmake_identity(
             specification, initial, raw_schema)
     if invocations:
@@ -5026,13 +5157,13 @@ def verified_campaign_bundle(
     names = ["campaign", "host", "reservation", "identities", "analysis"]
     if manifest_schema in (
         MANIFEST_SCHEMA_V2, MANIFEST_SCHEMA_V3, MANIFEST_SCHEMA_V4,
-        MANIFEST_SCHEMA
+        MANIFEST_SCHEMA_V5, MANIFEST_SCHEMA
     ):
         names.append("isolation")
     else:
         require("isolation" not in manifest,
                 "legacy manifest contains unversioned isolation evidence")
-    if manifest_schema == MANIFEST_SCHEMA:
+    if manifest_schema in (MANIFEST_SCHEMA_V5, MANIFEST_SCHEMA):
         names.append("supervision")
     else:
         require("supervision" not in manifest,

@@ -56,8 +56,14 @@ from pathlib import Path
 REPORT_SCHEMA = "leopard2-affinity-supervisor/v8"
 ACCEPTANCE_SCHEMA = "leopard2-affinity-acceptance/v1"
 BINDING_SCHEMA = "leopard2-affinity-main-binding/v2"
-MAIN_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v5"
-MAIN_RAW_SCHEMA = "leopard2-main-compare-raw/v5"
+MAIN_MANIFEST_SCHEMA_V5 = "leopard2-main-compare-manifest/v5"
+MAIN_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v6"
+MAIN_RAW_SCHEMA_V5 = "leopard2-main-compare-raw/v5"
+MAIN_RAW_SCHEMA = "leopard2-main-compare-raw/v6"
+MAIN_MANIFEST_TO_RAW_SCHEMA = {
+    MAIN_MANIFEST_SCHEMA_V5: MAIN_RAW_SCHEMA_V5,
+    MAIN_MANIFEST_SCHEMA: MAIN_RAW_SCHEMA,
+}
 MAIN_SUPERVISION_SCHEMA = "leopard2-main-supervision/v1"
 DEFAULT_POLL_MS = 25
 MAX_STABILIZE_PASSES = 64
@@ -3420,9 +3426,9 @@ def validate_main_manifest_binding(report, manifest_path):
     manifest_path, manifest, manifest_bytes, _manifest_identity = \
         stable_json_snapshot(manifest_path, "main-comparison manifest")
     manifest = verify_signed_json(manifest, "main-comparison manifest")
-    require(manifest.get("schema") == MAIN_MANIFEST_SCHEMA and
+    require(manifest.get("schema") in MAIN_MANIFEST_TO_RAW_SCHEMA and
             manifest.get("valid") is True,
-            "main-comparison manifest is not valid current-schema evidence")
+            "main-comparison manifest is not valid complete-schema evidence")
     raw_info = manifest.get("raw")
     require(isinstance(raw_info, dict) and
             set(raw_info) == {"path", "payload_digest", "sha256", "size"},
@@ -3434,8 +3440,9 @@ def validate_main_manifest_binding(report, manifest_path):
             raw_info["sha256"] == sha256_bytes(raw_bytes),
             "main-comparison raw file identity differs from its manifest")
     raw = verify_signed_json(raw, "main-comparison raw bundle")
-    require(raw.get("schema") == MAIN_RAW_SCHEMA,
-            "main-comparison raw bundle is not current-schema evidence")
+    require(raw.get("schema") ==
+                MAIN_MANIFEST_TO_RAW_SCHEMA[manifest["schema"]],
+            "main-comparison manifest/raw schema versions do not match")
     require(raw_info["payload_digest"] == raw.get("digest"),
             "main-comparison payload digest differs from its manifest")
 

@@ -583,16 +583,16 @@ def complete_build_fixture(role: str) -> dict:
     }
 
 
-def complete_runtime_fixture(executable: str, character: str) -> dict:
+def complete_runtime_fixture(
+    executable: str, character: str, raw_schema: str,
+) -> dict:
     raw = (
         "linux-vdso.so.1 (0x00000000)\n"
         "libc.so.6 => /lib/libc.so.6 (0x00000000)\n"
         "libm.so.6 => /lib/libm.so.6 (0x00000000)\n"
         "/lib64/ld-linux-x86-64.so.2 (0x00000000)\n")
-    return {
+    result = {
         "executable": executable,
-        "raw_ldd_output": runner.exact_text_content(
-            raw, "fixture raw ldd output"),
         "dependencies": [
             {
                 "soname": "ld-linux-x86-64.so.2",
@@ -618,6 +618,33 @@ def complete_runtime_fixture(executable: str, character: str) -> dict:
             {"soname": "linux-vdso.so.1", "virtual": True},
         ],
     }
+    if raw_schema == runner.RAW_SCHEMA_V5:
+        result["raw_ldd_output"] = runner.exact_text_content(
+            raw, "fixture raw ldd output")
+    elif raw_schema == runner.RAW_SCHEMA:
+        result["canonical_ldd_output"] = runner.canonical_ldd_output(
+            raw, "fixture raw ldd output")
+    else:
+        raise ValueError("complete runtime fixture requires schema v5 or v6")
+    return result
+
+
+def retained_ldd_text(closure: dict) -> str:
+    key = ("canonical_ldd_output" if "canonical_ldd_output" in closure else
+           "raw_ldd_output")
+    return closure[key]["text"]
+
+
+def replace_retained_ldd_text(closure: dict, text: str, label: str) -> None:
+    if "canonical_ldd_output" in closure:
+        identity = runner.exact_text_content(text, label)
+        closure["canonical_ldd_output"] = {
+            "schema": runner.CANONICAL_LDD_SCHEMA,
+            "normalization": runner.CANONICAL_LDD_NORMALIZATION,
+            **identity,
+        }
+    else:
+        closure["raw_ldd_output"] = runner.exact_text_content(text, label)
 
 
 def complete_source_fixture(role: str) -> dict:
@@ -638,7 +665,7 @@ def complete_source_fixture(role: str) -> dict:
 
 
 def cmake_fixture_identity(raw_schema: str) -> tuple[dict, dict]:
-    if raw_schema == runner.RAW_SCHEMA:
+    if raw_schema in runner.COMPLETE_EVIDENCE_SCHEMAS:
         baseline_build = complete_build_fixture("baseline")
         candidate_build = complete_build_fixture("candidate")
         baseline_executable = baseline_build["validated_executable"]
@@ -663,9 +690,9 @@ def cmake_fixture_identity(raw_schema: str) -> tuple[dict, dict]:
             "baseline_build": baseline_build,
             "candidate_build": candidate_build,
             "baseline_runtime_closure": complete_runtime_fixture(
-                baseline_executable["path"], "4"),
+                baseline_executable["path"], "4", raw_schema),
             "candidate_runtime_closure": complete_runtime_fixture(
-                candidate_executable["path"], "5"),
+                candidate_executable["path"], "5", raw_schema),
             "baseline_source": complete_source_fixture("baseline"),
             "candidate_source": complete_source_fixture("candidate"),
         }
@@ -792,7 +819,7 @@ def synthetic_raw(
         "host_final": copy.deepcopy(HOST),
         "analysis": analysis,
     }
-    if raw_schema == runner.RAW_SCHEMA:
+    if raw_schema in runner.SUPERVISION_SCHEMAS:
         payload["supervision"] = runner.supervision_record(
             "ab" * 32, 900, 2_100, campaign, RESERVATION, ISOLATION)
     return runner.signed(payload)
@@ -851,7 +878,7 @@ def write_complete_evidence_bundle(
         "identities": value["identities_initial"],
         "analysis": value["analysis"],
     }
-    if manifest_schema == runner.MANIFEST_SCHEMA:
+    if manifest_schema in (runner.MANIFEST_SCHEMA_V5, runner.MANIFEST_SCHEMA):
         manifest_payload["supervision"] = value["supervision"]
     manifest = runner.signed(manifest_payload)
     manifest_path = root / "manifest.json"
@@ -927,6 +954,7 @@ def synthetic_failure(raw_schema: str) -> dict:
         runner.RAW_SCHEMA_V2: runner.FAILURE_SCHEMA_V2,
         runner.RAW_SCHEMA_V3: runner.FAILURE_SCHEMA_V3,
         runner.RAW_SCHEMA_V4: runner.FAILURE_SCHEMA_V4,
+        runner.RAW_SCHEMA_V5: runner.FAILURE_SCHEMA_V5,
         runner.RAW_SCHEMA: runner.FAILURE_SCHEMA,
     }[raw_schema]
     payload = {
@@ -947,7 +975,7 @@ def synthetic_failure(raw_schema: str) -> dict:
         "retained_files": [],
         "traceback": "fixture traceback",
     }
-    if raw_schema == runner.RAW_SCHEMA:
+    if raw_schema in runner.SUPERVISION_SCHEMAS:
         payload["supervision"] = copy.deepcopy(raw["supervision"])
     return runner.signed(payload)
 
@@ -1061,7 +1089,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 with self.assertRaises(runner.EvidenceError):
                     runner.validate_cell(runner.Cell(**values))
 
-    def test_uniformly_incomplete_v5_identities_fail_offline_verify_and_promotion(
+    def test_uniformly_incomplete_complete_identities_fail_offline_verify_and_promotion(
         self,
     ) -> None:
         plan = load_plan_runner()
@@ -1159,10 +1187,10 @@ class MainCompareRunnerTests(unittest.TestCase):
                 closure["dependencies"] = [item for item in closure["dependencies"]
                     if item["soname"] != "ld-linux-x86-64.so.2"]
                 text = "\n".join(line for line in
-                    closure["raw_ldd_output"]["text"].splitlines()
+                    retained_ldd_text(closure).splitlines()
                     if not line.startswith("/lib64/ld-linux")) + "\n"
-                closure["raw_ldd_output"] = runner.exact_text_content(
-                    text, f"truncated {role} ldd output")
+                replace_retained_ldd_text(
+                    closure, text, f"truncated {role} ldd output")
             synchronize_identity(value)
 
         def swapped_runtime_file_records(value: dict) -> None:
@@ -1183,10 +1211,10 @@ class MainCompareRunnerTests(unittest.TestCase):
                             if item["soname"] == "libc.so.6")
                 libc["loader_path"] = "/lib/./libc.so.6"
                 libc["file"]["path"] = libc["loader_path"]
-                text = closure["raw_ldd_output"]["text"].replace(
+                text = retained_ldd_text(closure).replace(
                     "/lib/libc.so.6", libc["loader_path"])
-                closure["raw_ldd_output"] = runner.exact_text_content(
-                    text, f"noncanonical {role} ldd output")
+                replace_retained_ldd_text(
+                    closure, text, f"noncanonical {role} ldd output")
             synchronize_identity(value)
 
         def truncated_cache_inventory(value: dict) -> None:
@@ -1249,10 +1277,10 @@ class MainCompareRunnerTests(unittest.TestCase):
                 dependency for dependency in closure["dependencies"]
                 if dependency["soname"] != "libm.so.6"]
             text = "\n".join(
-                line for line in closure["raw_ldd_output"]["text"].splitlines()
+                line for line in retained_ldd_text(closure).splitlines()
                 if not line.startswith("libm.so.6 =>")) + "\n"
-            closure["raw_ldd_output"] = runner.exact_text_content(
-                text, f"coherently rewritten {role} ldd output")
+            replace_retained_ldd_text(
+                closure, text, f"coherently rewritten {role} ldd output")
         synchronize_identity(value)
         with tempfile.TemporaryDirectory() as directory:
             manifest_path = write_complete_evidence_bundle(
@@ -1403,7 +1431,125 @@ class MainCompareRunnerTests(unittest.TestCase):
             self.assertEqual(runner.verify_campaign(argparse.Namespace(
                 manifest=manifest, no_current_input_check=True)), 0)
 
-    def test_v5_supervision_semantics_are_bound(self) -> None:
+    def test_legacy_v5_raw_and_manifest_fixtures_remain_replayable(self) -> None:
+        plan = load_plan_runner()
+        value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V5)
+        runner.validate_raw(
+            value, None, check_files=False, check_current_inputs=False)
+        with tempfile.TemporaryDirectory() as directory:
+            manifest = write_complete_evidence_bundle(
+                Path(directory), value, runner.MANIFEST_SCHEMA_V5)
+            self.assertEqual(runner.verify_campaign(argparse.Namespace(
+                manifest=manifest, no_current_input_check=True)), 0)
+            document, scope, _ = plan.verify_exact_manifest(manifest)
+            self.assertEqual(document["schema"], runner.MANIFEST_SCHEMA_V5)
+            plan.validate_evidence_scope(scope)
+
+    def test_legacy_v5_current_input_comparison_ignores_only_addresses(self) -> None:
+        retained = synthetic_raw(
+            raw_schema=runner.RAW_SCHEMA_V5)["identities_initial"]
+        current = copy.deepcopy(retained)
+        for role in ("baseline", "candidate"):
+            closure = current[f"{role}_runtime_closure"]
+            text = closure["raw_ldd_output"]["text"].replace(
+                "0x00000000", "0xabcdef12")
+            closure["raw_ldd_output"] = runner.exact_text_content(
+                text, f"changed-address {role} raw ldd output")
+        self.assertNotEqual(current, retained)
+        self.assertTrue(runner.input_snapshots_equal(
+            current, retained, runner.RAW_SCHEMA_V5))
+
+        changed_path = copy.deepcopy(current)
+        closure = changed_path["candidate_runtime_closure"]
+        text = closure["raw_ldd_output"]["text"].replace(
+            "/lib/libc.so.6", "/lib/libc-forged.so.6")
+        closure["raw_ldd_output"] = runner.exact_text_content(
+            text, "changed-path raw ldd output")
+        self.assertFalse(runner.input_snapshots_equal(
+            changed_path, retained, runner.RAW_SCHEMA_V5))
+
+    @unittest.skipUnless(
+        sys.platform.startswith("linux") and Path("/usr/bin/ldd").is_file() and
+        Path("/usr/bin/env").is_file(), "requires Linux /usr/bin/ldd and env")
+    def test_unmocked_same_binary_runtime_snapshots_are_aslr_stable(self) -> None:
+        executable = Path("/usr/bin/env")
+        first = runner.runtime_closure(
+            Path("/usr/bin/ldd"), executable, runner.RAW_SCHEMA)
+        second = runner.runtime_closure(
+            Path("/usr/bin/ldd"), executable, runner.RAW_SCHEMA)
+        self.assertEqual(first, second)
+        self.assertIn("canonical_ldd_output", first)
+        self.assertNotIn("raw_ldd_output", first)
+        transcript = first["canonical_ldd_output"]
+        self.assertEqual(transcript["schema"], runner.CANONICAL_LDD_SCHEMA)
+        self.assertIn(runner.CANONICAL_LDD_ADDRESS, transcript["text"])
+        runner.validate_complete_runtime_closure(
+            first, "unmocked /usr/bin/env", str(executable.resolve()),
+            runner.RAW_SCHEMA)
+
+    def test_canonical_ldd_normalization_changes_only_terminal_addresses(
+        self,
+    ) -> None:
+        first = (
+            "linux-vdso.so.1 (0x1)\n"
+            "libc.so.6 => /lib/libc.so.6 (0x2)\n"
+            "/lib64/ld-linux-x86-64.so.2 (0x3)\n")
+        second = first.replace("0x1", "0x111111").replace(
+            "0x2", "0x222222").replace("0x3", "0x333333")
+        self.assertEqual(
+            runner.canonical_ldd_output(first, "first"),
+            runner.canonical_ldd_output(second, "second"))
+        changed_path = second.replace("/lib/libc.so.6", "/lib/libc-alt.so.6")
+        self.assertNotEqual(
+            runner.canonical_ldd_output(first, "first"),
+            runner.canonical_ldd_output(changed_path, "changed path"))
+        for label, malformed in {
+            "missing address": first.replace(" (0x2)", "", 1),
+            "address-to-path": first.replace("0x2", "0x2/forged", 1),
+            "suffix after address": first.replace("(0x2)", "(0x2) /forged", 1),
+        }.items():
+            with self.subTest(label=label), self.assertRaises(runner.EvidenceError):
+                runner.canonical_ldd_output(malformed, label)
+
+    def test_canonical_ldd_transcript_and_summary_attacks_fail_closed(self) -> None:
+        def reject(mutate) -> None:
+            value = synthetic_raw()
+            closure = value["identities_initial"]["candidate_runtime_closure"]
+            mutate(closure)
+            synchronize_identity(value)
+            self.assert_rejected(value)
+
+        def edit_text(closure: dict, transform) -> None:
+            replace_retained_ldd_text(
+                closure, transform(retained_ldd_text(closure)),
+                "adversarial canonical ldd output")
+
+        mutations = {
+            "library-line-removal": lambda closure: edit_text(
+                closure, lambda text: "\n".join(
+                    line for line in text.splitlines()
+                    if not line.startswith("libm.so.6 =>")) + "\n"),
+            "loader-line-removal": lambda closure: edit_text(
+                closure, lambda text: "\n".join(
+                    line for line in text.splitlines()
+                    if not line.startswith("/lib64/ld-linux")) + "\n"),
+            "soname-relabel": lambda closure: edit_text(
+                closure, lambda text: text.replace("libc.so.6 =>", "libx.so.6 =>")),
+            "path-relabel": lambda closure: edit_text(
+                closure, lambda text: text.replace(
+                    "/lib/libc.so.6", "/lib/libc-forged.so.6")),
+            "address-marker-removal": lambda closure: edit_text(
+                closure, lambda text: text.replace(
+                    f" ({runner.CANONICAL_LDD_ADDRESS})", "", 1)),
+            "summary-removal": lambda closure: closure["dependencies"].pop(1),
+            "normalization-relabel": lambda closure: closure[
+                "canonical_ldd_output"].update({"normalization": "anything/v2"}),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label=label):
+                reject(mutate)
+
+    def test_complete_schema_supervision_semantics_are_bound(self) -> None:
         value = synthetic_raw()
         for name, replacement in (
             ("execution_nonce", "bad"),
@@ -1525,6 +1671,14 @@ class MainCompareRunnerTests(unittest.TestCase):
 
         value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V2)
         value["schema"] = runner.RAW_SCHEMA
+        self.assert_rejected(value)
+
+        value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V5)
+        value["schema"] = runner.RAW_SCHEMA
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
+        value["schema"] = runner.RAW_SCHEMA_V5
         self.assert_rejected(value)
 
     def test_private_hardened_historical_build_schema_is_not_evidence(self) -> None:
@@ -2323,7 +2477,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 runner.validate_raw(
                     value, root, check_files=True, check_current_inputs=False)
 
-    def test_v5_manifest_binds_complete_identity_and_replays_portably(self) -> None:
+    def test_v6_manifest_binds_complete_identity_and_replays_portably(self) -> None:
         value = synthetic_raw()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

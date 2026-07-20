@@ -275,7 +275,7 @@ def compose(options: argparse.Namespace) -> int:
         SUPPORT.verify_signature(manifest, f"exact-main {workspace} manifest")
         require(manifest.get("valid") is True and
                 manifest.get("schema") == SUPPORT.MANIFEST_SCHEMA,
-                f"exact-main {workspace} manifest must use current v4 evidence")
+                f"exact-main {workspace} manifest must use current v6 evidence")
         exact_manifests[workspace] = manifest
         exact_raws[workspace] = load_raw(
             path, manifest, f"exact-main {workspace} manifest")

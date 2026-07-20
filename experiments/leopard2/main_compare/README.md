@@ -97,7 +97,7 @@ Release artifacts with the expected compile, object, archive, link, source,
 runtime-library, field/profile, and requested decoder-path identities. Each cell
 runs three independent
 `baseline,candidate,candidate,baseline` rounds on one pinned logical CPU while
-the sibling is reserved. Version-2 through version-5 evidence additionally hold
+the sibling is reserved. Version-2 through version-6 evidence additionally hold
 a pair-wide,
 per-user lock at
 `/run/user/UID/leopard2-cpu-leases/leopard2-cpu-pair-UID-A-B.lock`, derived
@@ -147,7 +147,7 @@ field-inflation, and larger-parent cases. Custom cells use
 `ID:K:R:BYTES:LOSSES:SEED` and must remain within the exact-main API's
 `R <= K` and 64-byte-size restrictions.
 
-Versions 4 and 5 bind one explicit `--candidate-mode`: `auto`, `generic`,
+Versions 4 through 6 bind one explicit `--candidate-mode`: `auto`, `generic`,
 `materialized`, or `tiled` (the default is `auto`). The two forced workspace
 modes also force the specialized decoder. The runner verifies the exact child
 arguments and all four emitted force booleans, so evidence for one path cannot
@@ -294,7 +294,7 @@ After both files verify, create a canonical joint binding. It authenticates the
 accepted supervisor report hash and schema, the exact command identity, the
 main manifest and raw-bundle hashes, the runner source identity, CPU pair, all
 numeric campaign parameters, build/source paths, reservation, and output path.
-Version 5 additionally carries a fresh 256-bit nonce from the gated supervisor
+Versions 5 and 6 additionally carry a fresh 256-bit nonce from the gated supervisor
 into the runner and binds the same runner PID, enclosing monotonic intervals,
 launch and reserved CPU sets, campaign hash, and held reservation payload. A
 compatible campaign from a different supervisor execution cannot be rebound.
@@ -316,9 +316,9 @@ Verify while the exact build inputs still exist:
         --manifest /tmp/leopard2-vs-main/manifest.json \
         --affinity-binding /tmp/leopard2-vs-main/affinity-binding.json
 
-The current version-5 verifier recomputes the pair-lock identity, every per-field CPU
+The current version-6 verifier recomputes the pair-lock identity, every per-field CPU
 counter delta, the zero-non-idle-sibling decision, workload identities, and all
-statistics. Versions 3 through 5 also bind the canonical CMake target `leopard`, archive
+statistics. Versions 3 through 6 also bind the canonical CMake target `leopard`, archive
 `libleopard.a`, and `leopard.dir` dependency closure. It retains the exact,
 bounded UTF-8 archive link-recipe content, binds its byte length and SHA-256 to
 the recipe-file identity, and parses those bytes to require the declared
@@ -326,7 +326,7 @@ archive, ordinary target directory, and matching `ranlib` command. Retained
 version-2 bundles replay with their original `libleopard`/`liblibleopard.a`
 identity, record shape, and isolation semantics. Version-3 bundles replay as
 AUTO-only evidence without retroactively acquiring the decoder-mode field;
-version-4 bundles retain their original hardened archive closure. Version 5
+version-4 bundles retain their original hardened archive closure. Versions 5 and 6
 additionally requires exact source, compiler, CMake, compile/object, archive,
 member, executable-link, output, tool, and runtime-dependency record shapes in
 offline verification. The executable link is consumed by a fail-closed grammar:
@@ -364,13 +364,21 @@ candidate artifact closure has its twelve production members plus the benchmark
 command;
 a coherent source/object/member/link truncation is rejected. Each source retains
 the bounded raw Git commit object, whose Git SHA-1 and named tree are recomputed
-offline. Each runtime closure retains the bounded raw `ldd` output, which is
-parsed independently to prove exact raw/summary consistency, at least one shared
-library, and exactly one dynamic loader. Every hashed dependency file retains the
+offline. Version 5 retains the bounded raw `ldd` output for historical replay.
+Version 6 strictly parses every complete `ldd` line and retains a bounded,
+versioned canonical transcript that replaces only each terminal ASLR load
+address with the literal `<ASLR_LOAD_ADDRESS>` token. SONAMEs, resolved paths,
+line kinds, and line order remain intact, so immediate snapshots of unchanged
+binaries are stable while a missing address, path corruption, line removal, or
+raw/summary relabel fails closed. The transcript and dependency summary must
+agree, include at least one shared library, and identify exactly one dynamic
+loader. Every hashed dependency file retains the
 exact canonical loader-declared path through which it was read, so swapping two
 otherwise valid shared-library records is rejected offline. This retained pair
 does not independently prove that an ordinary `ldd` line was never removed by a
-writer able to rewrite and re-sign both the raw output and its summary.
+writer able to coherently rewrite and re-sign both the canonical output and its
+summary; current-input verification detects such a change against the live
+closure.
 
 Its host identity includes the exact sysfs online CPU/node list bytes, every
 retained cache index and cache record, a separately retained canonical listing
@@ -388,7 +396,7 @@ unchanged is rejected.
 
 Bundle digests are unkeyed integrity checks, not an independent authenticity
 anchor. They detect edits relative to the retained evidence, and the semantic
-recipe binding prevents relabeling old recipe bytes under versions 3 through 5. They
+recipe binding prevents relabeling old recipe bytes under versions 3 through 6. They
 cannot prevent a hostile writer from replacing every evidence byte and
 recomputing every internally consistent digest. Preserve evidence in an
 immutable or independently authenticated store, or add an external digital
