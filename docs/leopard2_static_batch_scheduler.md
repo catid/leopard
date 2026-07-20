@@ -1,10 +1,12 @@
 # Leopard2 static batch scheduler
 
-The production context pool assigns regular encode and decode batch items with
-deterministic static ranges instead of a shared atomic fetch-add queue.  The
-calling thread is participant zero.  Persistent workers keep the increasing
-participant slots assigned when they are created.  For `Q` items and `W`
-current participants, participant `i` receives
+The candidate context pool assigns regular encode and decode batch items with
+deterministic static ranges instead of a shared atomic fetch-add queue.  A batch
+is regular only when every item has the same `shard_bytes` and, for encode, the
+same requested parity mask.  A difference in either cost signal keeps the
+mature dynamic queue.  The calling thread is participant zero.  Persistent
+workers keep the increasing participant slots assigned when they are created.
+For `Q` regular items and `W` current participants, participant `i` receives
 
     base = Q / W
     remainder = Q % W
@@ -47,8 +49,8 @@ The following work remains separate and opt-in:
 - associate stable worker slots with caller-selected CPUs or NUMA nodes;
 - first-touch caller- or library-owned per-worker scratch on its selected node;
 - partition stripes by NUMA node and measure cross-node reads and writes;
-- account for heterogeneous item sizes, for which equal item counts can be
-  imbalanced even though ordinary fixed-size stripe batches are regular; and
+- refine the conservative heterogeneous-work model if measured output-mask or
+  codec-specific weights justify more static regions; and
 - define safe fork, context-destruction, and affinity-restoration behavior for
   any future placement layer.
 
@@ -57,11 +59,11 @@ milestone.  Such behavior must be separately selectable and validated on each
 supported platform before production use.
 
 Static ranges remove shared queue contention but trade away dynamic balancing.
-No throughput improvement is claimed by this correctness milestone.  In
-particular, batches with heterogeneous `shard_bytes` can assign very different
-byte totals to equal-item ranges and may regress.  Performance promotion needs
-an isolated heterogeneous-size neighbor matrix or a deterministic policy guard
-that retains dynamic scheduling for that regime.
+No throughput improvement is claimed by this correctness milestone.  The
+production guard therefore selects them only for the exact uniform byte/mask
+case.  Heterogeneous byte sizes and mixed encode output masks retain dynamic
+fetch-add scheduling.  A broader static cost model still requires isolated
+neighbor evidence before promotion.
 
 ## Correctness evidence
 
@@ -72,5 +74,24 @@ invalid range queries, lazy worker growth, batches both smaller and larger than
 the persistent worker set, actual exact-once item execution and worker-slot
 ownership, functional parity, concurrent calls sharing a context, and
 an application-owned nested thread group, plus deterministic lowest-index
-failures.  The batch-aliasing test warms a multi-thread context and verifies
+failures.  Sorted, reverse-sorted, alternating, single-heavy and mixed-parity
+batches verify that heterogeneous work selects the dynamic exact-once fallback.
+The batch-aliasing test warms a multi-thread context and verifies
 that repeated scalable encode/decode execution makes no allocations.
+
+## Promotion status
+
+This series remains isolated and is not selected by the integrated production
+branch.  A directional 30-thread screen on the development host rejected a
+blanket uniform-work promotion.  For GF8 high `(K,R)=(240,16)`, 1 KiB shards
+and a batch of 64, static encode took about 19 percent longer while decode was
+neutral.  At 64-byte shards and a batch of 256, static encode again took about
+24 percent longer, while decode improved by about 11 percent.  A small
+low/balanced/GF16 matrix likewise showed path-dependent wins and regressions.
+
+Those measurements are diagnostic, not promotion-grade evidence.  They show
+that equal byte counts do not imply equal effective CPU cost on an unpinned,
+SMT-capable host.  Before integration, either a narrower deterministic
+codec/path/cost gate must pass isolated neighboring ABBA cells, or the dynamic
+queue must remain the default and static assignment must be recorded as a
+rejected experiment.

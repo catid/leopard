@@ -62,6 +62,8 @@ int leo2_test_static_batch_task_range(
 size_t leo2_test_context_last_batch_task_count(const leo2_context* context);
 uint32_t leo2_test_context_last_batch_participant_count(
     const leo2_context* context);
+int leo2_test_context_last_batch_static_schedule(
+    const leo2_context* context);
 int leo2_test_context_last_batch_item_execution(
     const leo2_context* context,
     size_t index,
@@ -1722,7 +1724,9 @@ void require_last_static_schedule(
     require(leo2_test_context_last_batch_participant_count(context) ==
             participant_count,
         "pool did not use the expected static participant count");
-    counts->scheduler_checks += 2;
+    require(leo2_test_context_last_batch_static_schedule(context) == 1,
+        "homogeneous batch did not select static scheduling");
+    counts->scheduler_checks += 3;
     require_static_schedule(task_count, participant_count, counts);
     for (uint32_t participant = 0; participant < participant_count;
          ++participant)
@@ -1755,6 +1759,32 @@ void require_last_static_schedule(
             invalid_participant == 0x87654321u,
         "out-of-range execution trace query modified outputs");
     ++counts->scheduler_checks;
+}
+
+void require_last_dynamic_schedule(
+    leo2_context* context,
+    size_t task_count,
+    Counts* counts)
+{
+    require(leo2_test_context_last_batch_task_count(context) == task_count,
+        "pool did not record the expected dynamic task count");
+    require(leo2_test_context_last_batch_static_schedule(context) == 0,
+        "heterogeneous batch incorrectly selected static scheduling");
+    counts->scheduler_checks += 2;
+    for (size_t item = 0; item < task_count; ++item)
+    {
+        uint32_t execution_count = 0;
+        uint32_t execution_participant = UINT32_MAX;
+        require(leo2_test_context_last_batch_item_execution(context,
+                    item, &execution_count, &execution_participant) != 0,
+            "dynamic scheduler did not trace an executed item");
+        require(execution_count == 1,
+            "dynamic scheduler did not execute an item exactly once");
+        require(execution_participant <
+                leo2_test_context_last_batch_participant_count(context),
+            "dynamic scheduler recorded an invalid participant");
+        counts->scheduler_checks += 3;
+    }
 }
 
 void test_static_batch_partition_math(Counts* counts)
@@ -1996,6 +2026,161 @@ void test_incremental_lazy_thread_growth(Counts* counts)
         "decode batch changed the persistent worker set");
     require_last_static_schedule(context.context, 4, 8, counts);
     counts->scheduler_checks += 6;
+}
+
+void test_heterogeneous_batch_schedule_guard(
+    leo2_context* context,
+    Counts* counts)
+{
+    const BatchFixture fixture(context, 1024);
+    const std::vector<std::vector<size_t> > patterns = {
+        { 64, 128, 256, 512, 768, 896, 960, 1024 },
+        { 1024, 960, 896, 768, 512, 256, 128, 64 },
+        { 64, 1024, 64, 1024, 64, 1024, 64, 1024 },
+        { 64, 64, 64, 64, 64, 64, 64, 1024 },
+        { 64, 1024, 64, 1024, 64, 1024, 64, 1024,
+          64, 1024, 64, 1024, 64, 1024, 64, 1024 }
+    };
+
+    for (size_t pattern = 0; pattern < patterns.size(); ++pattern)
+    {
+        const std::vector<size_t>& sizes = patterns[pattern];
+        std::vector<Shards> output(sizes.size());
+        std::vector<std::vector<void*> > output_pointers(sizes.size());
+        std::vector<std::unique_ptr<AlignedBuffer> > scratch(sizes.size());
+        std::vector<leo2_encode_batch_item> items(sizes.size());
+        for (size_t item = 0; item < sizes.size(); ++item)
+        {
+            output[item] = Shards(2, Bytes(sizes[item], 0xa5));
+            output_pointers[item] = mutable_pointers(output[item]);
+            size_t required = 0;
+            require_result(leo2_encode_scratch_size(
+                fixture.codec, sizes[item], &required), LEO2_SUCCESS,
+                "heterogeneous encode scratch query");
+            scratch[item].reset(new AlignedBuffer(required));
+            items[item].shard_bytes = sizes[item];
+            items[item].original = &fixture.original_pointers[0];
+            items[item].recovery = &output_pointers[item][0];
+            items[item].scratch = scratch[item]->data();
+            items[item].scratch_bytes = scratch[item]->size();
+        }
+        if (pattern + 1 == patterns.size())
+        {
+            size_t preflight_bytes = 0;
+            require_result(leo2_encode_batch_preflight_scratch_size(
+                fixture.codec, items.size(), &preflight_bytes), LEO2_SUCCESS,
+                "heterogeneous scalable encode preflight query");
+            AlignedBuffer preflight(preflight_bytes);
+            require_result(leo2_encode_batch_with_preflight_scratch(
+                fixture.codec, &items[0], items.size(), preflight.data(),
+                preflight.size()), LEO2_SUCCESS,
+                "heterogeneous scalable encode batch");
+        }
+        else
+        {
+            require_result(leo2_encode_batch(
+                fixture.codec, &items[0], items.size()), LEO2_SUCCESS,
+                "heterogeneous encode batch");
+        }
+        require_last_dynamic_schedule(context, items.size(), counts);
+        for (size_t item = 0; item < sizes.size(); ++item)
+            for (size_t recovery = 0; recovery < 2; ++recovery)
+                require(std::equal(output[item][recovery].begin(),
+                            output[item][recovery].end(),
+                            fixture.recovery[recovery].begin()),
+                    "heterogeneous encode parity mismatch");
+
+        const void* original[3] = {
+            NULL, fixture.original_pointers[1], fixture.original_pointers[2]
+        };
+        const void* recovery[2] = { &fixture.recovery[0][0], NULL };
+        std::vector<Bytes> restored(sizes.size());
+        std::vector<std::vector<void*> > restored_pointers(sizes.size());
+        std::vector<std::unique_ptr<AlignedBuffer> > decode_scratch(
+            sizes.size());
+        std::vector<leo2_decode_batch_item> decode_items(sizes.size());
+        for (size_t item = 0; item < sizes.size(); ++item)
+        {
+            restored[item] = Bytes(sizes[item], 0xcc);
+            restored_pointers[item] = std::vector<void*>(3, NULL);
+            restored_pointers[item][0] = &restored[item][0];
+            size_t required = 0;
+            require_result(leo2_decode_plan_scratch_size(
+                fixture.plan, sizes[item], &required), LEO2_SUCCESS,
+                "heterogeneous decode scratch query");
+            decode_scratch[item].reset(new AlignedBuffer(required));
+            decode_items[item].shard_bytes = sizes[item];
+            decode_items[item].original = original;
+            decode_items[item].recovery = recovery;
+            decode_items[item].restored_original =
+                &restored_pointers[item][0];
+            decode_items[item].scratch = decode_scratch[item]->data();
+            decode_items[item].scratch_bytes = decode_scratch[item]->size();
+        }
+        if (pattern + 1 == patterns.size())
+        {
+            size_t preflight_bytes = 0;
+            require_result(leo2_decode_plan_batch_preflight_scratch_size(
+                fixture.plan, decode_items.size(), &preflight_bytes),
+                LEO2_SUCCESS,
+                "heterogeneous scalable decode preflight query");
+            AlignedBuffer preflight(preflight_bytes);
+            require_result(
+                leo2_decode_plan_execute_batch_with_preflight_scratch(
+                    fixture.plan, &decode_items[0], decode_items.size(),
+                    preflight.data(), preflight.size()), LEO2_SUCCESS,
+                "heterogeneous scalable decode batch");
+        }
+        else
+        {
+            require_result(leo2_decode_plan_execute_batch(
+                fixture.plan, &decode_items[0], decode_items.size()),
+                LEO2_SUCCESS, "heterogeneous decode batch");
+        }
+        require_last_dynamic_schedule(context, decode_items.size(), counts);
+        for (size_t item = 0; item < sizes.size(); ++item)
+            require(std::equal(restored[item].begin(), restored[item].end(),
+                        fixture.original[0].begin()),
+                "heterogeneous decode restored wrong bytes");
+    }
+
+    /* Equal byte counts can still have unequal encode work when callers ask
+       for different parity subsets. */
+    static const size_t kMaskItems = 8;
+    std::vector<Shards> output(kMaskItems, Shards(2, Bytes(256, 0xa5)));
+    std::vector<std::vector<void*> > output_pointers(kMaskItems);
+    std::vector<std::unique_ptr<AlignedBuffer> > scratch(kMaskItems);
+    std::vector<leo2_encode_batch_item> items(kMaskItems);
+    size_t required = 0;
+    require_result(leo2_encode_scratch_size(
+        fixture.codec, 256, &required), LEO2_SUCCESS,
+        "mixed-mask encode scratch query");
+    for (size_t item = 0; item < kMaskItems; ++item)
+    {
+        output_pointers[item] = mutable_pointers(output[item]);
+        if ((item & 1u) != 0)
+            output_pointers[item][1] = NULL;
+        scratch[item].reset(new AlignedBuffer(required));
+        items[item].shard_bytes = 256;
+        items[item].original = &fixture.original_pointers[0];
+        items[item].recovery = &output_pointers[item][0];
+        items[item].scratch = scratch[item]->data();
+        items[item].scratch_bytes = scratch[item]->size();
+    }
+    require_result(leo2_encode_batch(
+        fixture.codec, &items[0], items.size()), LEO2_SUCCESS,
+        "mixed-mask encode batch");
+    require_last_dynamic_schedule(context, items.size(), counts);
+    for (size_t item = 0; item < kMaskItems; ++item)
+    {
+        require(std::equal(output[item][0].begin(), output[item][0].end(),
+                    fixture.recovery[0].begin()),
+            "mixed-mask first parity mismatch");
+        if ((item & 1u) == 0)
+            require(std::equal(output[item][1].begin(), output[item][1].end(),
+                        fixture.recovery[1].begin()),
+                "mixed-mask second parity mismatch");
+    }
 }
 
 void test_deterministic_batch_failures(leo2_context* context, Counts* counts)
@@ -2470,6 +2655,7 @@ int main()
         test_concurrent_shared_context_batches(context.context, &counts);
         test_nested_application_thread_batches(context.context, &counts);
         test_incremental_lazy_thread_growth(&counts);
+        test_heterogeneous_batch_schedule_guard(context.context, &counts);
         test_lazy_thread_start_failure(&counts);
         test_deterministic_batch_failures(context.context, &counts);
         test_legacy_negative_contract(&counts);

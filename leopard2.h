@@ -135,11 +135,14 @@ typedef enum leo2_backend {
     the calling thread participates.  Workers are started lazily by the first
     batch containing more than one item, grown only when a larger batch needs
     more parallelism, then reused without recreating existing workers.  For
-    each call, the caller and every started worker receive one deterministic,
-    contiguous range of batch items.  Ranges cover the batch exactly once and
-    differ in length by at most one.  Because every item supplies independent
-    scratch, its assigned participant owns that scratch for the complete item
-    execution.  The scheduler does not change thread affinity.
+    each regular call whose items have equal byte cost (and, for encode, the
+    same requested parity mask), the caller and every started worker receive
+    one deterministic, contiguous range of batch items.  Ranges cover the
+    batch exactly once and differ in length by at most one.  Heterogeneous
+    calls retain dynamic queue scheduling to avoid static load imbalance.
+    Because every item supplies independent scratch, one participant owns that
+    scratch for the complete item execution.  The scheduler does not change
+    thread affinity.
     A zero value uses the process's allowed CPU count where the platform exposes
     it, capped at 128; explicit nonzero values retain their requested budget.
     backend selects an immutable execution table for this context.  AUTO uses

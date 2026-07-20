@@ -248,11 +248,15 @@ can grow the pool to the additional parallelism it needs; started workers remain
 persistent and are reused.  A lazy start can return `LEO2_OUT_OF_MEMORY` and a
 failed pool remains failed deterministically.
 The calling thread has scheduler slot zero and persistent workers have stable,
-increasing slots.  For each call, the scheduler divides `[0, item_count)` into
-one contiguous range per current participant, assigning the first remainder
-ranges one extra item.  The ranges are deterministic, balanced to within one
-item, and cover each item exactly once.  A pool that previously grew larger than
-a later batch retains all of its workers; excess slots receive empty ranges.
+increasing slots.  When every item has the same `shard_bytes` and every encode
+item requests the same parity mask, the scheduler divides `[0, item_count)`
+into one contiguous range per current participant, assigning the first
+remainder ranges one extra item.  The ranges are deterministic, balanced to
+within one item, and cover each item exactly once.  A pool that previously grew
+larger than a later batch retains all of its workers; excess slots receive
+empty ranges.  If byte counts or encode output masks differ, the pool retains
+the mature atomic work queue so a large item is not stranded behind one static
+range while other workers become idle.
 Every batch item already supplies disjoint caller-owned scratch, so this static
 assignment also makes the assigned participant the exclusive owner of that
 item's scratch until the item completes.  Dispatch itself allocates no memory
@@ -325,8 +329,8 @@ scratch rules as ordinary encode or plan-execute calls.  A context configured
 with one thread has no pool, so its batch calls likewise use the ordinary
 caller-thread path.  Within a batch, the implementation reports the result from
 the lowest-index failing item deterministically.  Static assignment is
-deterministic, but completion order between participant ranges remains
-unspecified.
+deterministic.  Dynamic assignment and completion order between participants
+remain unspecified.
 
 API version 4 also provides an opt-in scalable alias preflight for large
 batches. Query caller-owned storage with

@@ -267,6 +267,7 @@ static const size_t kTestBatchScheduleTraceItems = 256;
 
 typedef leo2_result (*BatchTaskFunction)(void* context, size_t index);
 typedef leo2_result (*BatchPreflightFunction)(void* context);
+typedef bool (*BatchStaticScheduleFunction)(void* context);
 
 struct BatchTaskRange
 {
@@ -389,12 +390,15 @@ public:
         , function_(NULL)
         , function_context_(NULL)
         , task_count_(0)
+        , next_task_(0)
         , participant_count_(0)
+        , static_schedule_(false)
         , failure_(0)
         , completed_workers_(0)
 #ifdef LEO2_ENABLE_TEST_HOOKS
         , test_last_task_count_(0)
         , test_last_participant_count_(0)
+        , test_last_static_schedule_(false)
 #endif
     {
 #ifdef LEO2_ENABLE_TEST_HOOKS
@@ -431,6 +435,12 @@ public:
         return test_last_participant_count_;
     }
 
+    bool TestLastStaticSchedule()
+    {
+        std::lock_guard<std::mutex> lock(run_mutex_);
+        return test_last_static_schedule_;
+    }
+
     bool TestLastItemExecution(
         size_t index,
         uint32_t& count,
@@ -452,7 +462,8 @@ public:
         size_t task_count,
         BatchTaskFunction function,
         void* function_context,
-        BatchPreflightFunction preflight)
+        BatchPreflightFunction preflight,
+        BatchStaticScheduleFunction static_schedule)
     {
         if (task_count == 0)
             return LEO2_SUCCESS;
@@ -479,18 +490,23 @@ public:
         }
         if (!EnsureStarted(task_count))
             return LEO2_OUT_OF_MEMORY;
+        const bool use_static_schedule = static_schedule &&
+            static_schedule(function_context);
         {
             std::lock_guard<std::mutex> lock(mutex_);
             function_ = function;
             function_context_ = function_context;
             task_count_ = task_count;
+            next_task_.store(0, std::memory_order_relaxed);
             participant_count_ = workers_.size() + 1;
+            static_schedule_ = use_static_schedule;
             failure_.store(PackFailure(task_count, LEO2_SUCCESS), std::memory_order_relaxed);
             completed_workers_ = 0;
 #ifdef LEO2_ENABLE_TEST_HOOKS
             test_last_task_count_ = task_count_;
             test_last_participant_count_ =
                 static_cast<uint32_t>(participant_count_);
+            test_last_static_schedule_ = static_schedule_;
             const size_t trace_count = std::min(
                 task_count_, kTestBatchScheduleTraceItems);
             for (size_t i = 0; i < trace_count; ++i)
@@ -592,25 +608,44 @@ private:
 
     void ExecuteTasks(size_t participant_index)
     {
-        const BatchTaskRange range = StaticBatchTaskRange(
-            task_count_, participant_count_, participant_index);
-        /* Each item owns its caller-provided scratch.  A stable, disjoint
-           range therefore gives this participant exclusive ownership of all
-           per-item scratch that it touches for the duration of the batch. */
-        for (size_t index = range.begin; index < range.end; ++index)
+        if (static_schedule_)
         {
-#ifdef LEO2_ENABLE_TEST_HOOKS
-            if (index < kTestBatchScheduleTraceItems)
-            {
-                test_execution_participants_[index].store(
-                    static_cast<uint32_t>(participant_index),
-                    std::memory_order_relaxed);
-                test_execution_counts_[index].fetch_add(
-                    1, std::memory_order_relaxed);
-            }
-#endif
-            RecordFailure(index, function_(function_context_, index));
+            const BatchTaskRange range = StaticBatchTaskRange(
+                task_count_, participant_count_, participant_index);
+            /* Each item owns its caller-provided scratch.  A stable, disjoint
+               range therefore gives this participant exclusive ownership of
+               all per-item scratch that it touches for the duration of a
+               homogeneous batch. */
+            for (size_t index = range.begin; index < range.end; ++index)
+                ExecuteTask(index, participant_index);
+            return;
         }
+
+        for (;;)
+        {
+            const size_t index = next_task_.fetch_add(
+                1, std::memory_order_relaxed);
+            if (index >= task_count_)
+                return;
+            ExecuteTask(index, participant_index);
+        }
+    }
+
+    void ExecuteTask(size_t index, size_t participant_index)
+    {
+#ifdef LEO2_ENABLE_TEST_HOOKS
+        if (index < kTestBatchScheduleTraceItems)
+        {
+            test_execution_participants_[index].store(
+                static_cast<uint32_t>(participant_index),
+                std::memory_order_relaxed);
+            test_execution_counts_[index].fetch_add(
+                1, std::memory_order_relaxed);
+        }
+#else
+        (void)participant_index;
+#endif
+        RecordFailure(index, function_(function_context_, index));
     }
 
     void Worker(size_t participant_index, uint64_t seen_generation)
@@ -664,12 +699,15 @@ private:
     BatchTaskFunction function_;
     void* function_context_;
     size_t task_count_;
+    std::atomic<size_t> next_task_;
     size_t participant_count_;
+    bool static_schedule_;
     std::atomic<uint64_t> failure_;
     size_t completed_workers_;
 #ifdef LEO2_ENABLE_TEST_HOOKS
     size_t test_last_task_count_;
     uint32_t test_last_participant_count_;
+    bool test_last_static_schedule_;
     std::atomic<uint32_t>
         test_execution_counts_[kTestBatchScheduleTraceItems];
     std::atomic<uint32_t>
@@ -4119,6 +4157,46 @@ static leo2_result RunEncodeBatchItem(void* context, size_t index)
         true);
 }
 
+static bool EncodeBatchHasUniformWork(
+    const EncodeBatchTaskContext& batch)
+{
+    const size_t item_count =
+        batch.item_bytes / sizeof(*batch.items);
+    if (item_count < 2)
+        return true;
+
+    const uint64_t shard_bytes = batch.items[0].shard_bytes;
+    for (size_t item = 1; item < item_count; ++item)
+        if (batch.items[item].shard_bytes != shard_bytes)
+            return false;
+
+    /* A null recovery entry requests no work for that coordinate.  Equal byte
+       lengths alone are therefore not enough to make encode items regular. */
+    for (uint32_t recovery = 0;
+         recovery < batch.codec->recovery_count; ++recovery)
+    {
+        const bool requested = batch.items[0].recovery[recovery] != NULL;
+        for (size_t item = 1; item < item_count; ++item)
+            if ((batch.items[item].recovery[recovery] != NULL) != requested)
+                return false;
+    }
+    return true;
+}
+
+static bool StaticEncodeBatchSchedule(void* context)
+{
+    const EncodeBatchTaskContext* batch =
+        static_cast<const EncodeBatchTaskContext*>(context);
+    return EncodeBatchHasUniformWork(*batch);
+}
+
+static bool StaticScalableEncodeBatchSchedule(void* context)
+{
+    const ScalableEncodeBatchPreflightContext* scalable =
+        static_cast<const ScalableEncodeBatchPreflightContext*>(context);
+    return EncodeBatchHasUniformWork(scalable->batch);
+}
+
 struct DecodeBatchTaskContext
 {
     const leo2_decode_plan* plan;
@@ -4171,6 +4249,34 @@ static leo2_result RunDecodeBatchItem(void* context, size_t index)
         batch->plan, item.shard_bytes, item.original, item.recovery,
         item.restored_original, item.scratch, item.scratch_bytes,
         batch->multi_item_batch, NULL, 0, true);
+}
+
+static bool DecodeBatchHasUniformWork(
+    const DecodeBatchTaskContext& batch)
+{
+    const size_t item_count =
+        batch.item_bytes / sizeof(*batch.items);
+    if (item_count < 2)
+        return true;
+    const uint64_t shard_bytes = batch.items[0].shard_bytes;
+    for (size_t item = 1; item < item_count; ++item)
+        if (batch.items[item].shard_bytes != shard_bytes)
+            return false;
+    return true;
+}
+
+static bool StaticDecodeBatchSchedule(void* context)
+{
+    const DecodeBatchTaskContext* batch =
+        static_cast<const DecodeBatchTaskContext*>(context);
+    return DecodeBatchHasUniformWork(*batch);
+}
+
+static bool StaticScalableDecodeBatchSchedule(void* context)
+{
+    const ScalableDecodeBatchPreflightContext* scalable =
+        static_cast<const ScalableDecodeBatchPreflightContext*>(context);
+    return DecodeBatchHasUniformWork(scalable->batch);
 }
 
 } // namespace
@@ -4465,6 +4571,13 @@ LEO2_EXPORT uint32_t leo2_test_context_last_batch_participant_count(
     return context && context->pool
         ? context->pool->TestLastParticipantCount()
         : 0;
+}
+
+LEO2_EXPORT int leo2_test_context_last_batch_static_schedule(
+    const leo2_context* context)
+{
+    return context && context->pool &&
+        context->pool->TestLastStaticSchedule() ? 1 : 0;
 }
 
 LEO2_EXPORT int leo2_test_context_last_batch_item_execution(
@@ -5169,7 +5282,8 @@ static leo2_result EncodeBatchCompatibilityInternal(
     };
     if (codec->context->pool)
         return codec->context->pool->Run(item_count,
-            RunEncodeBatchItem, &batch, PreflightEncodeBatchTask);
+            RunEncodeBatchItem, &batch, PreflightEncodeBatchTask,
+            StaticEncodeBatchSchedule);
     if (item_count != 0)
     {
         const leo2_result result = PreflightEncodeBatchTask(&batch);
@@ -5232,7 +5346,8 @@ LEO2_EXPORT leo2_result leo2_encode_batch_with_preflight_scratch(
     if (codec->context->pool)
         return codec->context->pool->Run(item_count,
             RunScalableEncodeBatchItem, &scalable,
-            PreflightEncodeBatchScalableTask);
+            PreflightEncodeBatchScalableTask,
+            StaticScalableEncodeBatchSchedule);
     const leo2_result preflight =
         PreflightEncodeBatchScalableTask(&scalable);
     if (preflight != LEO2_SUCCESS)
@@ -5724,7 +5839,8 @@ static leo2_result DecodeBatchCompatibilityInternal(
     };
     if (plan->codec->context->pool)
         return plan->codec->context->pool->Run(item_count,
-            RunDecodeBatchItem, &batch, PreflightDecodeBatchTask);
+            RunDecodeBatchItem, &batch, PreflightDecodeBatchTask,
+            StaticDecodeBatchSchedule);
     const leo2_result preflight = PreflightDecodeBatchTask(&batch);
     if (preflight != LEO2_SUCCESS)
         return preflight;
@@ -5787,7 +5903,8 @@ leo2_decode_plan_execute_batch_with_preflight_scratch(
     if (plan->codec->context->pool)
         return plan->codec->context->pool->Run(item_count,
             RunScalableDecodeBatchItem, &scalable,
-            PreflightDecodeBatchScalableTask);
+            PreflightDecodeBatchScalableTask,
+            StaticScalableDecodeBatchSchedule);
     const leo2_result preflight =
         PreflightDecodeBatchScalableTask(&scalable);
     if (preflight != LEO2_SUCCESS)
