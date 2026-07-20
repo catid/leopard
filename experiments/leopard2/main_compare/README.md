@@ -154,12 +154,25 @@ The runner is launched through a fork/pipe gate. The child creates its new
 session but cannot execute benchmark code until its PID,
 start-time, procfs directory inodes, session, command, boot ID, and
 PID-namespace identity are durable in
-the report. The executable, optional Python script, and working directory are
-held by descriptors from the identity snapshot; execution uses those captured
-inodes, so a pathname replacement cannot select different code. The child
+the report. The executable and optional Python script are copied into
+write-sealed memfds whose identities, seals, sizes, and hashes are bound in the
+v7 report; the working directory is held by descriptor. Execution uses those
+immutable content snapshots, so neither pathname replacement nor same-inode
+overwrite can select different code. A small fixed Python bootstrap preserves
+the original script's `__file__`, `sys.argv`, and `sys.path[0]`. The child
+also verifies each live snapshot identity and seal set immediately before
+`execve`. The supervisor requests Linux `F_SEAL_EXEC` and tests it when the
+kernel supports that seal; an atomic `EINVAL` fallback retains all mandatory
+write/grow/shrink/seal protections, with executable mode rechecked at the
+launch boundary. Python-script mode requires a directly executable ELF
+interpreter snapshot, so a shebang cannot redirect the bootstrap through an
+uncaptured interpreter. The gated child
 establishes and verifies launch affinity directly rather than executing an
 unbound `taskset` pathname. Parent EOF aborts the gate, which closes the SIGKILL
-window before that journal entry. Inherited Python SIGINT, SIGTERM, and SIGHUP
+window before that journal entry. Before writing the gate byte, the supervisor
+durably changes the child flag to mean "release may have occurred"; crash
+recovery must therefore reject the scope even if the supervisor dies before it
+observes release completion. Inherited Python SIGINT, SIGTERM, and SIGHUP
 handlers are replaced by default child dispositions while those signals are
 blocked, before the gate can wait or release. On every ordinary exit the
 supervisor boundedly signals,
@@ -176,7 +189,7 @@ identities, so a double-forked child remains a cleanup target after reparenting.
 Restoration performs the full bounded rescan budget after any mutation and
 repairs late threads it observes. This is deliberately not certified as globally
 complete: `clone(2)` can copy a restricted mask and publish its task after any
-finite last `/proc` scan. Consequently a v6 report is authoritative only when
+finite last `/proc` scan. Consequently a v7 report is authoritative only when
 all surrounding same-UID work was already outside the reserved CPUs and no
 non-supervisor mask was changed. The bounded exception is the supervisor's own
 single main thread: the implementation controls its sole fork point and creates
@@ -191,9 +204,14 @@ fsync the journal for each poll, for ordinary child-process churn, or merely to
 retain audit-only provenance; it writes only when recovery-relevant state or an
 actual anomaly changes.
 
-The wrapper must finish with an accepted v6 report and its separate
+The wrapper must finish with an accepted v7 report and its separate
 `.accepted.json` commit seal. An `accepted: true` body without this
-hash-bound, directory-fsynced seal is not evidence. The ordinary ABBA
+hash-bound, directory-fsynced seal is not evidence. The
+wrapper restores the caller's signal handlers and exact entry mask before
+installing the seal, then reads the exact report/seal pair back. Once that
+read-back commits acceptance, a later coordinator-lock teardown error resolves
+to the committed result rather than returning failure beside usable evidence.
+The ordinary ABBA
 manifest must independently pass its unchanged zero-sibling-jiffy verifier
 before timings are usable. If the supervisor itself is killed with SIGKILL,
 restore its journal before continuing:
