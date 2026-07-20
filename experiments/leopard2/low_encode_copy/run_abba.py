@@ -690,7 +690,7 @@ def validate_support_contract() -> dict[str, Any]:
     require(SUPPORT.RESERVATION_SCHEMA == RESERVATION_SCHEMA,
             "support reservation schema changed")
     require(SUPPORT.RAW_SCHEMA_V2 == RAW_TO_SUPPORT_SCHEMA[RAW_SCHEMA_V3] and
-            SUPPORT.RAW_SCHEMA == RAW_TO_SUPPORT_SCHEMA[RAW_SCHEMA_V4] and
+            SUPPORT.RAW_SCHEMA_V3 == RAW_TO_SUPPORT_SCHEMA[RAW_SCHEMA_V4] and
             SUPPORT.HARDENED_HISTORICAL_BUILD_SCHEMA ==
             RAW_TO_SUPPORT_SCHEMA[RAW_SCHEMA_V5],
             "support CMake identity schema mapping changed")
