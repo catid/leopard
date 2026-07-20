@@ -107,7 +107,8 @@ def validate_effective_flags(
             f"{label} flag stream is invalid")
     allowed = EFFECTIVE_FLAG_ALLOWLISTS.get(policy)
     require(allowed is not None, f"{label} effective-flag policy is unknown")
-    flags = [token for token in tokens if token.startswith("-")]
+    flags = (list(tokens) if policy == "release" else
+             [token for token in tokens if token.startswith("-")])
     unknown = [
         token for token in flags
         if token not in allowed and not (
@@ -189,7 +190,9 @@ def current_external_file_identity(
                 (initial.st_dev, initial.st_ino) ==
                 (path_final.st_dev, path_final.st_ino) and
                 (final.st_size, final.st_mtime_ns, final.st_ctime_ns) ==
-                (initial.st_size, initial.st_mtime_ns, initial.st_ctime_ns),
+                (initial.st_size, initial.st_mtime_ns, initial.st_ctime_ns) ==
+                (path_final.st_size, path_final.st_mtime_ns,
+                 path_final.st_ctime_ns),
                 f"{label} changed during its identity read")
         return initial, digest.hexdigest(), prefix
     finally:

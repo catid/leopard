@@ -3023,6 +3023,7 @@ def self_test() -> None:
             ("long profile alias", "-O3 --profile"),
             ("inline disable", "-O3 -fno-inline"),
             ("GCC pass disable", "-O3 -fdisable-tree-vect"),
+            ("Release response file", "-O3 @evil.rsp"),
         ):
             reject_scope_mutation(
                 f"uniform CMake {label}",

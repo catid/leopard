@@ -1709,6 +1709,7 @@ class MainCompareRunnerTests(unittest.TestCase):
             ("long profile alias", "-O3 --profile"),
             ("inline disable", "-O3 -fno-inline"),
             ("GCC pass disable", "-O3 -fdisable-tree-vect"),
+            ("Release response file", "-O3 @evil.rsp"),
         ):
             with self.subTest(label=label):
                 value = synthetic_raw()
