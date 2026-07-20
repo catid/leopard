@@ -52,6 +52,9 @@ static std::atomic<uint64_t> TestFFTDIT4FusedCalls(0);
 static std::atomic<uint64_t> TestFFTDIT4SplitCalls(0);
 static std::atomic<uint64_t> TestLowFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestLowFFTButterfly4OutCalls(0);
+static std::atomic<uint64_t> TestLowDirectOutputBlocks(0);
+static std::atomic<uint64_t> TestLowDirectFFTButterfly2OutCalls(0);
+static std::atomic<uint64_t> TestLowDirectFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighIFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighInputCopyShards(0);
 static std::atomic<uint64_t> TestHighOutputBlocks(0);
@@ -1994,7 +1997,8 @@ enum SourceEvaluationCallsite
 
 // Out-of-place first FFT layer(s) for reusable coefficient evaluation.  This
 // keeps the coefficient block immutable while the backend combines the old
-// copy with the first transform pass.
+// copy with the first transform pass.  A complete dense low-encode block may
+// also write its final layer directly to caller output.
 static void FFT_DIT_FromCoefficients(
     const backend::Ops& ops,
     const uint64_t bytes,
@@ -2003,10 +2007,12 @@ static void FFT_DIT_FromCoefficients(
     const unsigned m_truncated,
     const unsigned m,
     const ffe_t* skewLUT,
+    void* const* final_outputs,
     SourceEvaluationCallsite callsite)
 {
     (void)callsite;
     LEO_DEBUG_ASSERT(m >= 2);
+    LEO_DEBUG_ASSERT(!final_outputs || m_truncated == m);
 #if defined(LEO2_ENABLE_TEST_HOOKS)
     if (callsite == SourceEvaluationHighDecode)
         TestHighMatureOutputBlocks.fetch_add(
@@ -2033,7 +2039,8 @@ LEO_OPENMP_PARALLEL_FOR
 #endif
         ops.ff16_fft_butterfly2_out(
             coefficients[0], coefficients[1],
-            evaluation_work[0], evaluation_work[1],
+            final_outputs ? final_outputs[0] : evaluation_work[0],
+            final_outputs ? final_outputs[1] : evaluation_work[1],
             skewLUT[1], bytes);
         return;
     }
@@ -2043,6 +2050,48 @@ LEO_OPENMP_PARALLEL_FOR
     const ffe_t log_m02 = skewLUT[first_dist * 2];
     const ffe_t log_m23 = skewLUT[first_dist * 3];
     const bool use_fused_four_way = UseFusedButterfly4(ops, bytes);
+    if (final_outputs && m == 4)
+    {
+        if (use_fused_four_way)
+        {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            (callsite == SourceEvaluationLowEncode
+                ? TestLowFFTButterfly4OutCalls
+                : TestHighFFTButterfly4OutCalls).fetch_add(
+                    1, std::memory_order_relaxed);
+#endif
+            ops.ff16_fft_butterfly4_out(
+                coefficients[0], coefficients[1], coefficients[2],
+                coefficients[3], final_outputs[0], final_outputs[1],
+                final_outputs[2], final_outputs[3], log_m01, log_m23,
+                log_m02, bytes);
+        }
+        else
+        {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            (callsite == SourceEvaluationLowEncode
+                ? TestLowFFTButterfly2OutCalls
+                : TestHighFFTButterfly2OutCalls).fetch_add(
+                    2, std::memory_order_relaxed);
+            if (callsite == SourceEvaluationLowEncode)
+                TestLowDirectFFTButterfly2OutCalls.fetch_add(
+                    2, std::memory_order_relaxed);
+#endif
+            ops.ff16_fft_butterfly2_out(
+                coefficients[0], coefficients[2], evaluation_work[0],
+                evaluation_work[2], log_m02, bytes);
+            ops.ff16_fft_butterfly2_out(
+                coefficients[1], coefficients[3], evaluation_work[1],
+                evaluation_work[3], log_m02, bytes);
+            ops.ff16_fft_butterfly2_out(
+                evaluation_work[0], evaluation_work[1], final_outputs[0],
+                final_outputs[1], log_m01, bytes);
+            ops.ff16_fft_butterfly2_out(
+                evaluation_work[2], evaluation_work[3], final_outputs[2],
+                final_outputs[3], log_m23, bytes);
+        }
+        return;
+    }
 LEO_OPENMP_PARALLEL_FOR
     for (int i = 0; i < (int)first_dist; ++i)
     {
@@ -2104,6 +2153,18 @@ LEO_OPENMP_PARALLEL_FOR
     unsigned dist = first_dist >> 2;
     for (; dist != 0; dist4 = dist, dist >>= 2)
     {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        if (final_outputs && dist == 1 &&
+            callsite == SourceEvaluationLowEncode)
+        {
+            if (use_fused_four_way)
+                TestLowDirectFFTButterfly4OutCalls.fetch_add(
+                    m / 4, std::memory_order_relaxed);
+            else
+                TestLowDirectFFTButterfly2OutCalls.fetch_add(
+                    m / 2, std::memory_order_relaxed);
+        }
+#endif
 LEO_OPENMP_PARALLEL_FOR
         for (int r = 0; r < (int)m_truncated; r += dist4)
         {
@@ -2111,19 +2172,69 @@ LEO_OPENMP_PARALLEL_FOR
             const ffe_t remaining_log_m01 = skewLUT[i_end];
             const ffe_t remaining_log_m02 = skewLUT[i_end + dist];
             const ffe_t remaining_log_m23 = skewLUT[i_end + dist * 2];
-            FFT_DIT4_Range(
-                ops, bytes, evaluation_work + r, dist,
-                remaining_log_m01, remaining_log_m23,
-                remaining_log_m02);
+            if (final_outputs && dist == 1)
+            {
+                if (use_fused_four_way)
+                    ops.ff16_fft_butterfly4_out(
+                        evaluation_work[r], evaluation_work[r + 1],
+                        evaluation_work[r + 2], evaluation_work[r + 3],
+                        final_outputs[r], final_outputs[r + 1],
+                        final_outputs[r + 2], final_outputs[r + 3],
+                        remaining_log_m01, remaining_log_m23,
+                        remaining_log_m02, bytes);
+                else
+                {
+                    if (remaining_log_m02 == kModulus)
+                    {
+                        xor_mem(ops, evaluation_work[r + 2],
+                            evaluation_work[r], bytes);
+                        xor_mem(ops, evaluation_work[r + 3],
+                            evaluation_work[r + 1], bytes);
+                    }
+                    else
+                    {
+                        FFT_DIT2(ops, evaluation_work[r],
+                            evaluation_work[r + 2], remaining_log_m02,
+                            bytes);
+                        FFT_DIT2(ops, evaluation_work[r + 1],
+                            evaluation_work[r + 3], remaining_log_m02,
+                            bytes);
+                    }
+                    ops.ff16_fft_butterfly2_out(
+                        evaluation_work[r], evaluation_work[r + 1],
+                        final_outputs[r], final_outputs[r + 1],
+                        remaining_log_m01, bytes);
+                    ops.ff16_fft_butterfly2_out(
+                        evaluation_work[r + 2], evaluation_work[r + 3],
+                        final_outputs[r + 2], final_outputs[r + 3],
+                        remaining_log_m23, bytes);
+                }
+            }
+            else
+                FFT_DIT4_Range(
+                    ops, bytes, evaluation_work + r, dist,
+                    remaining_log_m01, remaining_log_m23,
+                    remaining_log_m02);
         }
+        if (final_outputs && dist == 1)
+            return;
     }
     if (dist4 == 2)
     {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        if (final_outputs && callsite == SourceEvaluationLowEncode)
+            TestLowDirectFFTButterfly2OutCalls.fetch_add(
+                m / 2, std::memory_order_relaxed);
+#endif
 LEO_OPENMP_PARALLEL_FOR
         for (int r = 0; r < (int)m_truncated; r += 2)
         {
             const ffe_t log_m = skewLUT[r + 1];
-            if (log_m == kModulus)
+            if (final_outputs)
+                ops.ff16_fft_butterfly2_out(
+                    evaluation_work[r], evaluation_work[r + 1],
+                    final_outputs[r], final_outputs[r + 1], log_m, bytes);
+            else if (log_m == kModulus)
                 xor_mem(ops, evaluation_work[r + 1], evaluation_work[r], bytes);
             else
                 FFT_DIT2(ops, evaluation_work[r], evaluation_work[r + 1],
@@ -2322,7 +2433,12 @@ void ReedSolomonEncodeLow(
         TestRecordSparseEncodeBlock(
             p, requested_count, requested_outputs, sparse_plans, block);
 #endif
-        if (sparse_plans && block < sparse_plans->block_count)
+        const bool use_sparse =
+            sparse_plans && block < sparse_plans->block_count;
+        bool direct_output = !use_sparse && requested_count == p;
+        for (unsigned i = 0; direct_output && i < p; ++i)
+            direct_output = recovery[recovery_offset + i] != NULL;
+        if (use_sparse)
         {
             const bool executed =
                 leopard2_internal::ExecuteSparseForwardPlanFromSources(
@@ -2345,9 +2461,18 @@ void ReedSolomonEncodeLow(
                 requested_count,
                 p,
                 FFTSkewStorage + p + recovery_offset,
+                direct_output ? recovery + recovery_offset : NULL,
                 SourceEvaluationLowEncode);
         }
 
+        if (direct_output)
+        {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            TestLowDirectOutputBlocks.fetch_add(
+                1, std::memory_order_relaxed);
+#endif
+            continue;
+        }
 LEO_OPENMP_PARALLEL_FOR
         for (int i = 0; i < (int)requested_count; ++i)
         {
@@ -3115,6 +3240,9 @@ void TestOnlyResetLowEncodeCounts()
 {
     TestLowFFTButterfly2OutCalls.store(0, std::memory_order_relaxed);
     TestLowFFTButterfly4OutCalls.store(0, std::memory_order_relaxed);
+    TestLowDirectOutputBlocks.store(0, std::memory_order_relaxed);
+    TestLowDirectFFTButterfly2OutCalls.store(0, std::memory_order_relaxed);
+    TestLowDirectFFTButterfly4OutCalls.store(0, std::memory_order_relaxed);
 }
 
 
@@ -3125,6 +3253,12 @@ TestOnlyLowEncodeCounts TestOnlyGetLowEncodeCounts()
         TestLowFFTButterfly2OutCalls.load(std::memory_order_relaxed);
     result.fft_butterfly4_out_of_place =
         TestLowFFTButterfly4OutCalls.load(std::memory_order_relaxed);
+    result.direct_output_blocks =
+        TestLowDirectOutputBlocks.load(std::memory_order_relaxed);
+    result.direct_output_butterfly2_out_of_place =
+        TestLowDirectFFTButterfly2OutCalls.load(std::memory_order_relaxed);
+    result.direct_output_butterfly4_out_of_place =
+        TestLowDirectFFTButterfly4OutCalls.load(std::memory_order_relaxed);
     return result;
 }
 
@@ -3930,7 +4064,7 @@ LEO_OPENMP_PARALLEL_FOR
 #endif
         FFT_DIT_FromCoefficients(
             ops, buffer_bytes, work, work + offset, requested_count, t,
-            FFTSkewStorage + offset, SourceEvaluationHighDecode);
+            FFTSkewStorage + offset, NULL, SourceEvaluationHighDecode);
 LEO_OPENMP_PARALLEL_FOR
         for (int i = 0; i < (int)requested_count; ++i)
         {
@@ -4162,7 +4296,7 @@ LEO_OPENMP_PARALLEL_FOR
             FFT_DIT_FromCoefficients(
                 ops, buffer_bytes, work, work + offset,
                 descriptor.requested_prefix, t,
-                FFTSkewStorage + offset, SourceEvaluationHighDecode);
+                FFTSkewStorage + offset, NULL, SourceEvaluationHighDecode);
 LEO_OPENMP_PARALLEL_FOR
         for (int i = (int)descriptor.requested_begin;
              i < (int)descriptor.requested_end;
@@ -4429,7 +4563,7 @@ LEO_OPENMP_PARALLEL_FOR
             FFT_DIT_FromCoefficients(
                 ops, buffer_bytes, accumulator, tile,
                 descriptor.requested_prefix, t,
-                FFTSkewStorage + offset, SourceEvaluationHighDecode);
+                FFTSkewStorage + offset, NULL, SourceEvaluationHighDecode);
 LEO_OPENMP_PARALLEL_FOR
         for (int i = (int)descriptor.requested_begin;
              i < (int)descriptor.requested_end;

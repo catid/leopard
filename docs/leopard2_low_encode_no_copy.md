@@ -32,11 +32,20 @@ the existing `UseFusedButterfly4` thresholds: 64 transform bytes on every
 backend, 128 only on AVX2, and the split schedule otherwise.  This avoids
 reintroducing the all-size GF16 fusion that prior isolated evidence rejected.
 
+Complete dense parity blocks now also execute their final forward layer
+out-of-place into the caller's disjoint parity buffers.  This removes the
+following scratch-to-output copy without changing the intermediate transform.
+Sparse blocks and a partial final parity block retain scratch evaluation plus
+scatter because not every final butterfly has a complete destination set.
+For a ragged shard tail the direct destination is the existing fixed 64-byte
+parity staging slot; the required compact public-tail gather remains.
+
 This changes memory traffic and arithmetic scheduling only.  It does not change
 the low-v1 field, active-parent basis, coordinate order, shortening,
-puncturing, requested-output semantics, or parity bytes.  The public parity
-scatter remains a distinct copy because caller outputs may be sparse and are
-not required to have workspace layout.
+puncturing, requested-output semantics, or parity bytes.  Public validation
+already proves that every non-null parity destination is disjoint from inputs,
+other outputs, scratch, and protected pointer metadata.  The direct final
+layer therefore satisfies the backend's stricter out-of-place alias contract.
 
 ## Correctness and instrumentation
 
@@ -48,21 +57,24 @@ the independent direct systematic generator oracle for P = 1, P = 2, P = 8,
 R > P, sparse requested outputs, partial final parity blocks, and
 non-vector-aligned byte counts.
 
-Test-only counters report the out-of-place two- and four-way calls made by the
-selected context.  Direct and explicit-context tests require the expected
-qualified or split dispatch, while the operation-count self-test independently
-checks both field implementations for the former whole-P `memcpy` loop.  Its
-mutation check reintroduces that loop and must be rejected.  The deterministic
-operation-count model charges no separate coefficient-copy vectors only after
-that structural guard passes.
+Test-only counters report the first-layer and direct-final two- and four-way
+calls made by the selected context, plus the number of dense blocks written
+directly.  Direct and explicit-context tests require the expected qualified or
+split dispatch.  Dense GF8/GF16 cases compare every output against the direct
+systematic generator oracle and prove the expected full-block route for both
+aligned and ragged passes.  The operation-count self-test independently checks
+both field implementations for the former whole-P `memcpy` loop.  Its mutation
+check reintroduces that loop and must be rejected.
 
 ## Performance status
 
-The eliminated logical traffic is exact: 2 * Q * P * B bytes across the old
-read and write copy pass.  End-to-end promotion still depends on isolated,
-paired measurements across shard sizes and backends; timings gathered while
-other project workers are active are diagnostic only.  This change does not
-reduce the current 2P encode scratch geometry, which is a separate tiling and
+The coefficient-copy traffic eliminated by the original change is exact:
+2 * Q * P * B bytes across the old read and write pass.  The direct-final path
+additionally removes one P * B read and one P * B write for every complete
+dense parity block.  End-to-end promotion still depends on isolated, paired
+measurements across shard sizes and backends; timings gathered while other
+project workers are active are diagnostic only.  This change does not reduce
+the current 2P encode scratch geometry, which is a separate tiling and
 workspace problem.
 
 The current-HEAD port was checked on 2026-07-18 against its untouched

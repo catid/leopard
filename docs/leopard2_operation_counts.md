@@ -244,10 +244,11 @@ The self-test fixes two useful schedule checks:
   forward transforms = 384 radix-2 butterfly equivalents.  Its immutable
   coefficient block is read directly by each parity block's out-of-place first
   FFT layer, so the model charges no separate 8-shard coefficient copy per
-  block.  A source-level mutation guard rejects the former whole-P copy loop
-  before that zero-copy model is accepted.  The remaining 256 logical copies
-  are the 8 systematic inputs staged for interpolation and the 248 requested
-  parity outputs scattered to caller buffers.
+  block.  Every parity block is complete and dense, so its final FFT layer
+  writes the caller outputs directly and the model charges no parity scatter.
+  A source-level mutation guard rejects the former whole-P copy loop before
+  that zero-copy model is accepted.  The remaining 8 logical copies are the
+  systematic inputs staged for interpolation.
 - GF8 high K=240, R=16 decode with original 0 missing: on qualified SSSE3,
   AVX2, and explicit AVX512 backends, the incomplete parity and first-message
   blocks retain their two exact-pruned T=16 staging workspaces.  The remaining

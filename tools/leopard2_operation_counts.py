@@ -1596,6 +1596,7 @@ def model_low_encode(
         ifft_prefix_butterflies(padded, k), _transform_layers(padded)
     )
     active_blocks = 0
+    direct_output_blocks = 0
     block_prefixes: List[int] = []
     for offset in range(0, r, padded):
         block_mask = {index - offset for index in requested
@@ -1612,13 +1613,21 @@ def model_low_encode(
         schedule.add_transform(
             fft_prefix_butterflies(padded, prefix), _transform_layers(padded)
         )
-        schedule.copies += len(block_mask)
+        # A complete dense parity block executes its final forward layer
+        # out-of-place into the disjoint caller destinations.  Sparse and
+        # partial blocks retain scratch evaluation plus the public scatter.
+        if len(block_mask) == padded:
+            direct_output_blocks += 1
+        else:
+            schedule.copies += len(block_mask)
     if partial:
         schedule.copies += k + len(requested)
     schedule.details.update({
         "active_parity_blocks": active_blocks,
+        "direct_output_blocks": direct_output_blocks,
         "parity_block_prefixes": block_prefixes,
         "out_of_place_first_fft_layer": True,
+        "out_of_place_final_fft_layer_for_dense_blocks": True,
     })
     return schedule
 
@@ -2634,7 +2643,9 @@ def run_self_test(verbose: bool = True) -> None:
     low = model_low_encode(8, 248, 8, 1024, set(range(248)))
     assert low.butterflies == 384
     assert low.details["active_parity_blocks"] == 31
-    checks += 2
+    assert low.details["direct_output_blocks"] == 31
+    assert low.copies == 8
+    checks += 4
 
     low_decode = model_low_decode(8, 248, 256, 8, 1024, {0, 1})
     assert low_decode.fused_multiply_add_vectors == 248

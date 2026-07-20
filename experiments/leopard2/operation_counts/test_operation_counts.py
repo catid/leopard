@@ -85,7 +85,8 @@ class OperationCountTests(unittest.TestCase):
         low = COUNTS.model_low_encode(8, 248, 8, 1024, set(range(248)))
         self.assertEqual(low.butterflies, 384)
         self.assertEqual(low.details["active_parity_blocks"], 31)
-        self.assertEqual(low.copies, 8 + 248)
+        self.assertEqual(low.copies, 8)
+        self.assertEqual(low.details["direct_output_blocks"], 31)
         self.assertTrue(low.details["out_of_place_first_fft_layer"])
 
         high_decode = COUNTS.model_high_decode(

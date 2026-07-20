@@ -53,6 +53,9 @@ static std::atomic<uint64_t> TestIFFTDIT4XorCalls(0);
 static std::atomic<uint64_t> TestFFTDIT4Calls(0);
 static std::atomic<uint64_t> TestLowFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestLowFFTButterfly4OutCalls(0);
+static std::atomic<uint64_t> TestLowDirectOutputBlocks(0);
+static std::atomic<uint64_t> TestLowDirectFFTButterfly2OutCalls(0);
+static std::atomic<uint64_t> TestLowDirectFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighIFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighInputCopyShards(0);
 static std::atomic<uint64_t> TestHighOutputBlocks(0);
@@ -2128,7 +2131,8 @@ enum SourceEvaluationCallsite
 // Out-of-place first FFT layer(s) for evaluation from reusable coefficients.
 // The coefficient pointers remain read-only across every parity or message
 // coset.  The backend combines the former copy pass with the first butterfly
-// pass, after which the remaining layers operate in-place on evaluation_work.
+// pass.  Remaining layers operate in-place on evaluation_work, except that a
+// complete dense low-encode block may write its final layer to caller output.
 static void FFT_DIT_FromCoefficients(
     const backend::Ops& ops,
     const uint64_t bytes,
@@ -2137,10 +2141,12 @@ static void FFT_DIT_FromCoefficients(
     const unsigned m_truncated,
     const unsigned m,
     const ffe_t* skewLUT,
+    void* const* final_outputs,
     SourceEvaluationCallsite callsite)
 {
     (void)callsite;
     LEO_DEBUG_ASSERT(m >= 2);
+    LEO_DEBUG_ASSERT(!final_outputs || m_truncated == m);
 #if defined(LEO2_ENABLE_TEST_HOOKS)
     if (callsite == SourceEvaluationHighDecode)
         TestHighMatureOutputBlocks.fetch_add(
@@ -2166,7 +2172,8 @@ static void FFT_DIT_FromCoefficients(
 #endif
         ops.ff8_fft_butterfly2_out(
             coefficients[0], coefficients[1],
-            evaluation_work[0], evaluation_work[1],
+            final_outputs ? final_outputs[0] : evaluation_work[0],
+            final_outputs ? final_outputs[1] : evaluation_work[1],
             skewLUT[1], bytes);
         return;
     }
@@ -2183,38 +2190,67 @@ static void FFT_DIT_FromCoefficients(
             : TestHighFFTButterfly4OutCalls).fetch_add(
                 1, std::memory_order_relaxed);
 #endif
+        void* const* const output = final_outputs && m == 4
+            ? final_outputs + i : evaluation_work + i;
         ops.ff8_fft_butterfly4_out(
             coefficients[i], coefficients[i + first_dist],
             coefficients[i + first_dist * 2],
             coefficients[i + first_dist * 3],
-            evaluation_work[i], evaluation_work[i + first_dist],
-            evaluation_work[i + first_dist * 2],
-            evaluation_work[i + first_dist * 3],
+            output[0], output[first_dist],
+            output[first_dist * 2], output[first_dist * 3],
             log_m01, log_m23, log_m02, bytes);
     }
+    if (final_outputs && m == 4)
+        return;
 
     unsigned dist4 = first_dist;
     unsigned dist = first_dist >> 2;
     for (; dist != 0; dist4 = dist, dist >>= 2)
     {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        if (final_outputs && dist == 1 &&
+            callsite == SourceEvaluationLowEncode)
+            TestLowDirectFFTButterfly4OutCalls.fetch_add(
+                m / 4, std::memory_order_relaxed);
+#endif
         for (unsigned r = 0; r < m_truncated; r += dist4)
         {
             const unsigned i_end = r + dist;
             const ffe_t remaining_log_m01 = skewLUT[i_end];
             const ffe_t remaining_log_m02 = skewLUT[i_end + dist];
             const ffe_t remaining_log_m23 = skewLUT[i_end + dist * 2];
-            FFT_DIT4_Range(
-                ops, bytes, evaluation_work + r, dist,
-                remaining_log_m01, remaining_log_m23,
-                remaining_log_m02);
+            if (final_outputs && dist == 1)
+                ops.ff8_fft_butterfly4_out(
+                    evaluation_work[r], evaluation_work[r + 1],
+                    evaluation_work[r + 2], evaluation_work[r + 3],
+                    final_outputs[r], final_outputs[r + 1],
+                    final_outputs[r + 2], final_outputs[r + 3],
+                    remaining_log_m01, remaining_log_m23,
+                    remaining_log_m02, bytes);
+            else
+                FFT_DIT4_Range(
+                    ops, bytes, evaluation_work + r, dist,
+                    remaining_log_m01, remaining_log_m23,
+                    remaining_log_m02);
         }
+        if (final_outputs && dist == 1)
+            return;
     }
     if (dist4 == 2)
     {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        if (final_outputs && callsite == SourceEvaluationLowEncode)
+            TestLowDirectFFTButterfly2OutCalls.fetch_add(
+                m / 2, std::memory_order_relaxed);
+#endif
         for (unsigned r = 0; r < m_truncated; r += 2)
         {
             const ffe_t log_m = skewLUT[r + 1];
-            if (log_m == kModulus)
+            if (final_outputs)
+                ops.ff8_fft_butterfly2_out(
+                    evaluation_work[r], evaluation_work[r + 1],
+                    final_outputs[r], final_outputs[r + 1], log_m, bytes);
+            else if (log_m == kModulus)
                 xor_mem(ops, evaluation_work[r + 1], evaluation_work[r], bytes);
             else
                 FFT_DIT2(ops, evaluation_work[r], evaluation_work[r + 1],
@@ -2410,7 +2446,12 @@ void ReedSolomonEncodeLow(
         TestRecordSparseEncodeBlock(
             p, requested_count, requested_outputs, sparse_plans, block);
 #endif
-        if (sparse_plans && block < sparse_plans->block_count)
+        const bool use_sparse =
+            sparse_plans && block < sparse_plans->block_count;
+        bool direct_output = !use_sparse && requested_count == p;
+        for (unsigned i = 0; direct_output && i < p; ++i)
+            direct_output = recovery[recovery_offset + i] != NULL;
+        if (use_sparse)
         {
             const bool executed =
                 leopard2_internal::ExecuteSparseForwardPlanFromSources(
@@ -2433,9 +2474,18 @@ void ReedSolomonEncodeLow(
                 requested_count,
                 p,
                 FFTSkewStorage + p + recovery_offset,
+                direct_output ? recovery + recovery_offset : NULL,
                 SourceEvaluationLowEncode);
         }
 
+        if (direct_output)
+        {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            TestLowDirectOutputBlocks.fetch_add(
+                1, std::memory_order_relaxed);
+#endif
+            continue;
+        }
         for (unsigned i = 0; i < requested_count; ++i)
         {
             void* const output = recovery[recovery_offset + i];
@@ -3133,6 +3183,9 @@ void TestOnlyResetLowEncodeCounts()
 {
     TestLowFFTButterfly2OutCalls.store(0, std::memory_order_relaxed);
     TestLowFFTButterfly4OutCalls.store(0, std::memory_order_relaxed);
+    TestLowDirectOutputBlocks.store(0, std::memory_order_relaxed);
+    TestLowDirectFFTButterfly2OutCalls.store(0, std::memory_order_relaxed);
+    TestLowDirectFFTButterfly4OutCalls.store(0, std::memory_order_relaxed);
 }
 
 
@@ -3143,6 +3196,12 @@ TestOnlyLowEncodeCounts TestOnlyGetLowEncodeCounts()
         TestLowFFTButterfly2OutCalls.load(std::memory_order_relaxed);
     result.fft_butterfly4_out_of_place =
         TestLowFFTButterfly4OutCalls.load(std::memory_order_relaxed);
+    result.direct_output_blocks =
+        TestLowDirectOutputBlocks.load(std::memory_order_relaxed);
+    result.direct_output_butterfly2_out_of_place =
+        TestLowDirectFFTButterfly2OutCalls.load(std::memory_order_relaxed);
+    result.direct_output_butterfly4_out_of_place =
+        TestLowDirectFFTButterfly4OutCalls.load(std::memory_order_relaxed);
     return result;
 }
 
@@ -3965,7 +4024,7 @@ void ReedSolomonDecodeHighPrepared(
 #endif
         FFT_DIT_FromCoefficients(
             ops, buffer_bytes, work, work + offset, requested_count, t,
-            FFTSkewStorage + offset, SourceEvaluationHighDecode);
+            FFTSkewStorage + offset, NULL, SourceEvaluationHighDecode);
         for (unsigned i = 0; i < requested_count; ++i)
         {
             const unsigned coordinate = offset + i;
@@ -4189,7 +4248,7 @@ void ReedSolomonDecodeHighPrunedPlanned(
             FFT_DIT_FromCoefficients(
                 ops, buffer_bytes, work, work + offset,
                 descriptor.requested_prefix, t,
-                FFTSkewStorage + offset, SourceEvaluationHighDecode);
+                FFTSkewStorage + offset, NULL, SourceEvaluationHighDecode);
         }
         for (uint32_t i = descriptor.requested_begin;
              i < descriptor.requested_end;
@@ -4444,7 +4503,7 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
             FFT_DIT_FromCoefficients(
                 ops, buffer_bytes, accumulator, tile,
                 descriptor.requested_prefix, t,
-                FFTSkewStorage + offset, SourceEvaluationHighDecode);
+                FFTSkewStorage + offset, NULL, SourceEvaluationHighDecode);
         for (uint32_t i = descriptor.requested_begin;
              i < descriptor.requested_end;
              ++i)

@@ -573,10 +573,16 @@ void test_low_transform_no_coefficient_copy(
     const Case cases[] = {
         { LEO2_FIELD_GF8, 1, 5, 65 },
         { LEO2_FIELD_GF8, 2, 5, 65 },
+        { LEO2_FIELD_GF8, 3, 8, 64 },
         { LEO2_FIELD_GF8, 5, 19, 129 },
+        { LEO2_FIELD_GF8, 9, 32, 64 },
+        { LEO2_FIELD_GF8, 17, 64, 64 },
         { LEO2_FIELD_GF16, 1, 5, 66 },
         { LEO2_FIELD_GF16, 2, 5, 66 },
-        { LEO2_FIELD_GF16, 5, 19, 130 }
+        { LEO2_FIELD_GF16, 3, 8, 1024 },
+        { LEO2_FIELD_GF16, 5, 19, 130 },
+        { LEO2_FIELD_GF16, 9, 32, 1024 },
+        { LEO2_FIELD_GF16, 17, 64, 1024 }
     };
     for (unsigned case_i = 0;
          case_i < sizeof(cases) / sizeof(cases[0]); ++case_i)
@@ -682,6 +688,30 @@ void test_low_transform_no_coefficient_copy(
                             nonempty_blocks * fused_passes * (p / 4),
                     "GF16 out-of-place first-layer call count mismatch");
             }
+        }
+
+        if (p >= 2)
+        {
+            std::vector<uint8_t> dense_requested(c.r, 1);
+            if (c.field == LEO2_FIELD_GF8)
+                leopard::ff8::TestOnlyResetLowEncodeCounts();
+            else
+                leopard::ff16::TestOnlyResetLowEncodeCounts();
+            const EncodeResult dense = encode(owner->codec,
+                LEO2_TEST_ENCODE_AUTO, original, dense_requested);
+            require_result(dense.result, "dense low transform encode");
+            compare_requested(dense.recovery, expected, dense_requested, 0xa5,
+                "dense low direct-output/oracle", counts);
+
+            const uint64_t expected_direct_blocks =
+                (c.r / p) * transform_passes;
+            const uint64_t actual_direct_blocks = c.field == LEO2_FIELD_GF8
+                ? leopard::ff8::TestOnlyGetLowEncodeCounts()
+                    .direct_output_blocks
+                : leopard::ff16::TestOnlyGetLowEncodeCounts()
+                    .direct_output_blocks;
+            require(actual_direct_blocks == expected_direct_blocks,
+                "dense low direct-output block count mismatch");
         }
         ++counts->no_copy_checks;
         delete owner;

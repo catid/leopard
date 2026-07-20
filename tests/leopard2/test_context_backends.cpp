@@ -840,9 +840,11 @@ void require_low_encode_no_copy(
                 counts.fft_butterfly4_out_of_place != 0,
             operation + " did not enter an out-of-place first layer");
         require(trace.ff8_fft_two_out_calls() ==
-                    counts.fft_butterfly2_out_of_place &&
+                    counts.fft_butterfly2_out_of_place +
+                        counts.direct_output_butterfly2_out_of_place &&
                 trace.ff8_fft_four_out_calls() ==
-                    counts.fft_butterfly4_out_of_place,
+                    counts.fft_butterfly4_out_of_place +
+                        counts.direct_output_butterfly4_out_of_place,
             operation + " bypassed the context out-of-place ops table");
     }
     else
@@ -853,9 +855,11 @@ void require_low_encode_no_copy(
                 counts.fft_butterfly4_out_of_place != 0,
             operation + " did not enter an out-of-place first layer");
         require(trace.ff16_fft_two_out_calls() ==
-                    counts.fft_butterfly2_out_of_place &&
+                    counts.fft_butterfly2_out_of_place +
+                        counts.direct_output_butterfly2_out_of_place &&
                 trace.ff16_fft_four_out_calls() ==
-                    counts.fft_butterfly4_out_of_place,
+                    counts.fft_butterfly4_out_of_place +
+                        counts.direct_output_butterfly4_out_of_place,
             operation + " bypassed the context out-of-place ops table");
 
         const size_t prefix_bytes = public_bytes & ~size_t(63U);
