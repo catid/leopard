@@ -40,6 +40,14 @@ RECORD_KEYS = {
 }
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
+HOOK_ARCHIVE_DEFINITIONS = frozenset({
+    "LEO2_DISABLE_AVX2_CODEGEN=1",
+    "LEO2_DISABLE_SSSE3_CODEGEN=1",
+    "LEO2_ENABLE_TEST_HOOKS=1",
+    "LEO2_HAVE_AVX2_BACKEND=1",
+    "LEO2_HAVE_AVX512_BACKEND=1",
+    "LEO2_HAVE_SSSE3_BACKEND=1",
+})
 
 
 def load_module(name: str, path: Path) -> ModuleType:
@@ -280,6 +288,42 @@ def diagnostic_specifications(
     return specifications
 
 
+def validate_diagnostic_compile_flags(
+    tokens: Sequence[str], label: str, source_root: Path, output: Path,
+    required_definitions: set[str],
+) -> None:
+    """Validate the experiment-specific preprocessor/include closure.
+
+    The shared exact-main validator deliberately rejects arbitrary ``-D`` and
+    ``-I`` options.  This diagnostic build has a small, source-attested set of
+    private hook definitions and one source-root include, so validate those
+    exactly before applying the shared compiler-flag policy to the remainder.
+    """
+    private_definitions = [
+        token[2:] for token in tokens
+        if token.startswith("-D") and token != "-DNDEBUG"
+    ]
+    expected_definitions = set(required_definitions)
+    if output.parent.name == "leopard_test_hooks.dir":
+        expected_definitions = set(HOOK_ARCHIVE_DEFINITIONS)
+    elif output.parent.name == "leopard2_backend_avx512_test_hooks.dir":
+        expected_definitions.add("LEO2_HAVE_AVX2_BACKEND=1")
+    require(len(private_definitions) == len(set(private_definitions)) and
+            set(private_definitions) == expected_definitions,
+            f"{label} private definitions differ")
+
+    include_flags = [token for token in tokens if token.startswith("-I")]
+    require(include_flags == [f"-I{source_root}"],
+            f"{label} include path differs")
+    shared_tokens = [
+        "-fopenmp" if token == "-fopenmp=libomp" else token
+        for token in tokens
+        if not (token.startswith("-D") and token != "-DNDEBUG") and
+           not token.startswith("-I") and token != "-Werror"
+    ]
+    SUPPORT.validate_effective_flags(shared_tokens, label, "compile")
+
+
 def diagnostic_compile_closure(
     source_root: Path, build: Path, commands_path: Path, compiler: Path,
     compiler_invocation: str, compiler_identity: Mapping[str, Any],
@@ -308,7 +352,12 @@ def diagnostic_compile_closure(
         if candidate.resolve() not in expected_outputs:
             continue
         tokens = SUPPORT.compile_command_tokens(entry)
-        output = SUPPORT.command_output_path(entry, tokens)
+        source_value = entry.get("file")
+        require(isinstance(source_value, str),
+                "diagnostic compile entry has no source")
+        output = SUPPORT.validate_compile_entry_io(
+            entry, tokens, Path(source_value).resolve(strict=True), build,
+            compiler, compiler_invocation)
         require(output not in selected,
                 f"duplicate diagnostic compile action for {output}")
         selected[output] = (entry, tokens)
@@ -332,7 +381,9 @@ def diagnostic_compile_closure(
                     expected_source and
                 not any(token.startswith("@") for token in tokens),
                 f"diagnostic compile action source/compiler differs for {output}")
-        SUPPORT.validate_effective_flags(tokens, f"diagnostic compile action {output}")
+        validate_diagnostic_compile_flags(
+            tokens, f"diagnostic compile action {output}", source_root,
+            output, definitions)
         require("-fopenmp" in tokens or "-fopenmp=libomp" in tokens,
                 f"diagnostic compile action lacks OpenMP: {output}")
         define_tokens = {token[2:] for token in tokens if token.startswith("-D")}
@@ -676,7 +727,8 @@ def build_identity(source_root: Path, binary: Path, hook_archive: Path) -> dict[
     link_lines = [line for line in link_text.splitlines() if line.strip()]
     require(len(link_lines) == 1, "diagnostic benchmark has multiple link commands")
     tokens = shlex.split(link_lines[0])
-    SUPPORT.validate_effective_flags(tokens, "diagnostic executable link recipe")
+    SUPPORT.validate_effective_flags(
+        tokens, "diagnostic executable link recipe", "link")
     link_closure = validate_executable_link_inputs(
         tokens, build, source_root, compiler, compiler_invocation,
         compiler_identity, binary, benchmark_object, hook_archive)
@@ -912,7 +964,9 @@ def validate_compile_snapshot(
                 cxx_driver_path(canonical_absolute_path(
                     tokens[0], "compile compiler invocation")),
                 "retained compile action source/output/compiler changed")
-        SUPPORT.validate_effective_flags(tokens, f"retained compile action {output}")
+        validate_diagnostic_compile_flags(
+            tokens, f"retained compile action {output}", source_root,
+            output, definitions)
         require("-fopenmp" in tokens or "-fopenmp=libomp" in tokens,
                 "retained compile action lost OpenMP")
         define_tokens = {token[2:] for token in tokens if token.startswith("-D")}
@@ -1061,7 +1115,8 @@ def validate_link_snapshot(
             lexical_path(tokens[output_index + 1], build) == binary_path and
             closure.get("output_path") == str(binary_path),
             "retained executable compiler/output closure changed")
-    SUPPORT.validate_effective_flags(tokens, "retained executable link recipe")
+    SUPPORT.validate_effective_flags(
+        tokens, "retained executable link recipe", "link")
     explicit_tokens: list[str] = []
     for index, token in enumerate(tokens[1:], start=1):
         if index in (output_index, output_index + 1):
@@ -1564,7 +1619,8 @@ def validate_campaign_environment(
                 for item in allowed) and
             cpu in allowed and sibling in allowed,
             "host launch affinity record is invalid")
-    SUPPORT.validate_host_record(host_initial, cpu, sibling, allowed)
+    SUPPORT.validate_host_record(
+        host_initial, cpu, sibling, allowed, RAW_SCHEMA)
     isolation = validate_campaign_isolation(raw.get("isolation"), campaign)
     pair_lease = raw.get("pair_lease")
     SUPPORT.validate_pair_lease_identity(pair_lease, cpu, sibling)
@@ -1972,8 +2028,14 @@ def synthetic_snapshot_identity() -> dict[str, Any]:
     compile_records: list[dict[str, Any]] = []
     compile_entries: list[dict[str, Any]] = []
     for source, output, definitions in specifications:
+        compile_definitions = set(definitions)
+        if output.parent.name == "leopard_test_hooks.dir":
+            compile_definitions = set(HOOK_ARCHIVE_DEFINITIONS)
+        elif output.parent.name == "leopard2_backend_avx512_test_hooks.dir":
+            compile_definitions.add("LEO2_HAVE_AVX2_BACKEND=1")
         tokens = [compiler_invocation, "-O3", "-DNDEBUG", "-fopenmp",
-                  *["-D" + item for item in sorted(definitions)],
+                  *["-D" + item for item in sorted(compile_definitions)],
+                  f"-I{source_root}",
                   "-c", str(source), "-o", str(output)]
         compile_records.append({
             "source": artifact(source, "source_file", mtime_ns=1),

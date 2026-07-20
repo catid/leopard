@@ -2748,7 +2748,8 @@ def validate_raw(
     allowed = campaign["allowed_cpu_set_at_launch"]
     require(raw.get("host_initial") == raw.get("host_final"),
             "host policy/topology changed during campaign")
-    SUPPORT.validate_host_record(raw.get("host_initial"), cpu, sibling, allowed)
+    SUPPORT.validate_host_record(
+        raw.get("host_initial"), cpu, sibling, allowed, raw_schema)
     isolation = SUPPORT.validate_isolation(raw.get("isolation"), cpu, sibling)
     reservation = validate_reservation_identity(raw.get("reservation"), cpu, sibling)
     specification = validate_input_specification(
@@ -2893,7 +2894,8 @@ def validate_failure(
         require(host is not None, "failure topology phase lacks host identity")
     if host is not None:
         SUPPORT.validate_host_record(
-            host, cpu, sibling, campaign["allowed_cpu_set_at_launch"])
+            host, cpu, sibling, campaign["allowed_cpu_set_at_launch"],
+            FAILURE_TO_RAW_SCHEMA[failure_schema])
     pair_lease = failure.get("pair_lease")
     if "locks_acquired" in completed:
         require(pair_lease is not None, "failure lock phase lacks pair lease")
