@@ -38,6 +38,7 @@ import errno
 import fcntl
 import hashlib
 import json
+import mmap
 import os
 import re
 import select
@@ -52,7 +53,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 
-REPORT_SCHEMA = "leopard2-affinity-supervisor/v7"
+REPORT_SCHEMA = "leopard2-affinity-supervisor/v8"
 ACCEPTANCE_SCHEMA = "leopard2-affinity-acceptance/v1"
 BINDING_SCHEMA = "leopard2-affinity-main-binding/v2"
 MAIN_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v5"
@@ -64,18 +65,35 @@ LAUNCH_READY_TIMEOUT_SECONDS = 10.0
 SIGNAL_GRACE_SECONDS = 2.0
 KILL_GRACE_SECONDS = 2.0
 MAX_IDENTITY_BYTES = 64 * 1024 * 1024
-IMMUTABLE_SNAPSHOT_PROTOCOL = "linux-sealed-memfd/v1"
+IMMUTABLE_SNAPSHOT_PROTOCOL = "linux-sealed-memfd/v2"
 IMMUTABLE_SNAPSHOT_KEYS = {
     "device", "inode", "mode", "protocol", "seals", "sha256", "size",
 }
+# Linux UAPI values are stable, but CPython exposes these names only when its
+# build headers did.  Standalone Python 3.13 builds in particular can run on a
+# sealing-capable kernel without exporting any of them.  Keep capability checks
+# at the syscall boundary instead of crashing while importing this module.
+F_SETLEASE_LINUX = getattr(fcntl, "F_SETLEASE", 1024)
+F_GETLEASE_LINUX = getattr(fcntl, "F_GETLEASE", 1025)
+F_ADD_SEALS_LINUX = getattr(fcntl, "F_ADD_SEALS", 1033)
+F_GET_SEALS_LINUX = getattr(fcntl, "F_GET_SEALS", 1034)
+F_SETOWN_LINUX = getattr(fcntl, "F_SETOWN", 8)
+F_RDLCK_LINUX = getattr(fcntl, "F_RDLCK", 0)
+F_UNLCK_LINUX = getattr(fcntl, "F_UNLCK", 2)
+F_SEAL_SEAL_LINUX = getattr(fcntl, "F_SEAL_SEAL", 0x0001)
+F_SEAL_SHRINK_LINUX = getattr(fcntl, "F_SEAL_SHRINK", 0x0002)
+F_SEAL_GROW_LINUX = getattr(fcntl, "F_SEAL_GROW", 0x0004)
+F_SEAL_WRITE_LINUX = getattr(fcntl, "F_SEAL_WRITE", 0x0008)
 MEMFD_SEALS = (
-    fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK |
-    fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE)
+    F_SEAL_SEAL_LINUX | F_SEAL_SHRINK_LINUX |
+    F_SEAL_GROW_LINUX | F_SEAL_WRITE_LINUX)
 # F_SEAL_EXEC entered the Linux UAPI after the Python versions on some
 # supported hosts.  Request its stable ABI bit and fall back only when the
 # running kernel atomically rejects it as unknown.  Content write seals remain
 # mandatory on every host; the report records which policy the kernel retained.
 F_SEAL_EXEC_LINUX = getattr(fcntl, "F_SEAL_EXEC", 0x0020)
+MFD_CLOEXEC_LINUX = getattr(os, "MFD_CLOEXEC", 0x0001)
+MFD_ALLOW_SEALING_LINUX = getattr(os, "MFD_ALLOW_SEALING", 0x0002)
 PYTHON_SNAPSHOT_BOOTSTRAP = (
     "import os,sys\n"
     "_a=sys.argv[1];_p=os.path.abspath(_a);_f=sys.argv[2]"
@@ -137,12 +155,15 @@ ACCEPTANCE_KEYS = {
     "committed_utc", "digest", "report_path", "report_sha256", "report_size",
     "schema",
 }
-COMMAND_IDENTITY_KEYS = {"cwd", "executable", "script"}
+COMMAND_IDENTITY_KEYS = {"cwd", "executable", "mode", "script"}
 PATH_IDENTITY_KEYS = {"device", "inode", "mode", "path"}
 FILE_IDENTITY_KEYS = {
-    "argument", "device", "inode", "mode", "path", "sha256", "size",
-    "snapshot",
+    "argument", "device", "gid", "inode", "mode", "path", "sha256", "size",
+    "snapshot", "source_guard", "uid",
 }
+COMMAND_MODES = {"elf", "python-direct-script"}
+SOURCE_GUARDS = {"linux-read-lease", "same-uid-write-inaccessible"}
+PYTHON_EXECUTABLE = re.compile(r"pythonw?(?:[0-9]+(?:\.[0-9]+)*)?")
 
 REPORT_STATES = {
     "created", "prepared", "moving", "isolated", "launch_gated", "running",
@@ -312,17 +333,199 @@ def format_cpu_list(values):
     return ",".join(ranges)
 
 
+def linux_memfd_create(name, flags):
+    """Call memfd_create even when the running CPython omitted its wrapper."""
+    if hasattr(os, "memfd_create"):
+        return os.memfd_create(name, flags)
+    require(sys.platform == "linux",
+            "immutable command snapshots require Linux memfd_create")
+    libc = ctypes.CDLL(None, use_errno=True)
+    try:
+        function = libc.memfd_create
+    except AttributeError as error:
+        raise IsolationError(
+            "immutable command snapshots require Linux memfd_create") from error
+    function.argtypes = (ctypes.c_char_p, ctypes.c_uint)
+    function.restype = ctypes.c_int
+    descriptor = function(name.encode("ascii"), flags)
+    if descriptor < 0:
+        number = ctypes.get_errno()
+        raise OSError(number, os.strerror(number))
+    return descriptor
+
+
+def source_may_be_written_by_same_uid(descriptor, metadata):
+    """Conservatively identify inputs needing an enforceable read lease."""
+    current_uids = {os.getuid()}
+    if hasattr(os, "geteuid"):
+        current_uids.add(os.geteuid())
+    if metadata.st_uid in current_uids or metadata.st_mode & 0o022:
+        return True
+    descriptor_path = "/proc/self/fd/{}".format(descriptor)
+    if not os.path.exists(descriptor_path):
+        return True
+    try:
+        if os.access(descriptor_path, os.W_OK, effective_ids=True):
+            return True
+    except TypeError:  # pragma: no cover - older Python without effective_ids
+        if os.access(descriptor_path, os.W_OK):
+            return True
+    # An ACL may make the inode writable even when the traditional mode does
+    # not.  A nonempty ACL is conservatively treated as mutable; if it cannot be
+    # inspected, authoritative capture also requires a lease and will fail if
+    # the current UID is not allowed to take one.
+    if not hasattr(os, "getxattr"):
+        return True
+    try:
+        return bool(os.getxattr(descriptor, "system.posix_acl_access"))
+    except OSError as error:
+        if error.errno in {errno.ENODATA, errno.ENOTSUP,
+                           getattr(errno, "EOPNOTSUPP", errno.ENOTSUP)}:
+            return False
+        return True
+
+
+class StableSourceGuard:
+    """Hold a process-wide-observable Linux read lease around mutable input.
+
+    Metadata timestamps do not advance for every write through an already-dirty
+    MAP_SHARED page.  A read lease is the enforceable boundary: acquisition is
+    rejected while another writable descriptor/mapping exists, and later write
+    opens request a lease break.  The supervisor is deliberately single-threaded
+    so blocking SIGIO here observes every break request without another thread
+    consuming it.
+    """
+
+    def __init__(self, descriptor, path, metadata,
+                 fcntl_function=fcntl.fcntl,
+                 mask_function=signal.pthread_sigmask,
+                 pending_function=signal.sigpending,
+                 wait_function=signal.sigwait):
+        self.descriptor = descriptor
+        self.path = Path(path)
+        self.metadata = metadata
+        self.fcntl = fcntl_function
+        self.mask = mask_function
+        self.pending = pending_function
+        self.wait = wait_function
+        self.old_mask = None
+        self.leased = False
+        self.preexisting_sigio = False
+        self.policy = "same-uid-write-inaccessible"
+
+    @staticmethod
+    def _single_threaded():
+        try:
+            return sum(1 for entry in Path("/proc/self/task").iterdir()
+                       if entry.name.isdigit()) == 1
+        except OSError as error:
+            raise IsolationError(
+                "cannot prove single-threaded source-lease ownership") from error
+
+    def _sigio_pending(self):
+        return signal.SIGIO in self.pending()
+
+    def __enter__(self):
+        if not source_may_be_written_by_same_uid(
+                self.descriptor, self.metadata):
+            return self
+        require(sys.platform == "linux" and hasattr(signal, "SIGIO") and
+                hasattr(signal, "pthread_sigmask") and
+                hasattr(signal, "sigpending") and hasattr(signal, "sigwait"),
+                "same-UID-mutable command snapshots require Linux file leases")
+        require(self._single_threaded(),
+                "same-UID-mutable command snapshots require one supervisor thread")
+        self.old_mask = self.mask(signal.SIG_BLOCK, {signal.SIGIO})
+        self.preexisting_sigio = self._sigio_pending()
+        try:
+            require(not self.preexisting_sigio,
+                    "SIGIO was already pending before source-lease acquisition")
+            self.fcntl(self.descriptor, F_SETOWN_LINUX, os.getpid())
+            try:
+                self.fcntl(
+                    self.descriptor, F_SETLEASE_LINUX, F_RDLCK_LINUX)
+            except OSError as error:
+                raise IsolationError(
+                    "cannot lease same-UID-mutable command source {}: {}".format(
+                        self.path, error)) from error
+            self.leased = True
+            self.policy = "linux-read-lease"
+            self.validate()
+            return self
+        except BaseException as error:
+            try:
+                self._release()
+            except BaseException as cleanup_error:
+                raise IsolationError(
+                    "source-lease acquisition and cleanup failed: {}; {}".format(
+                        error, cleanup_error)) from error
+            raise
+
+    def validate(self):
+        if not self.leased:
+            return
+        try:
+            retained = self.fcntl(self.descriptor, F_GETLEASE_LINUX)
+            pending = self._sigio_pending()
+        except OSError as error:
+            raise IsolationError(
+                "cannot validate immutable source read lease") from error
+        require(retained == F_RDLCK_LINUX and not pending,
+                "same-UID writer requested or broke immutable source lease")
+
+    def _release(self):
+        failures = []
+        if self.leased:
+            try:
+                if self.fcntl(self.descriptor, F_GETLEASE_LINUX) != F_RDLCK_LINUX:
+                    failures.append("immutable source read lease was lost")
+            except BaseException as error:
+                failures.append("cannot inspect source lease: {}".format(error))
+            try:
+                self.fcntl(self.descriptor, F_SETLEASE_LINUX, F_UNLCK_LINUX)
+            except BaseException as error:
+                failures.append("cannot release source lease: {}".format(error))
+            self.leased = False
+        if self.old_mask is not None:
+            try:
+                if not self.preexisting_sigio and self._sigio_pending():
+                    received = self.wait({signal.SIGIO})
+                    if received == signal.SIGIO:
+                        failures.append(
+                            "same-UID writer requested immutable source lease break")
+            except BaseException as error:
+                failures.append("cannot drain source-lease signal: {}".format(error))
+            try:
+                self.mask(signal.SIG_SETMASK, self.old_mask)
+            except BaseException as error:
+                failures.append("cannot restore source-lease signal mask: {}".format(error))
+            self.old_mask = None
+        if failures:
+            raise IsolationError("; ".join(failures))
+
+    def __exit__(self, exc_type, exc, _traceback):
+        try:
+            self._release()
+        except BaseException as cleanup_error:
+            if exc is not None:
+                raise IsolationError(
+                    "source snapshot and lease cleanup failed: {}; {}".format(
+                        exc, cleanup_error)) from exc
+            raise
+        return False
+
+
 def seal_immutable_snapshot(descriptor, fcntl_function=fcntl.fcntl):
     """Install mandatory content seals and F_SEAL_EXEC when supported."""
     desired = MEMFD_SEALS | F_SEAL_EXEC_LINUX
     try:
-        fcntl_function(descriptor, fcntl.F_ADD_SEALS, desired)
+        fcntl_function(descriptor, F_ADD_SEALS_LINUX, desired)
     except OSError as error:
-        retained = fcntl_function(descriptor, fcntl.F_GET_SEALS)
+        retained = fcntl_function(descriptor, F_GET_SEALS_LINUX)
         require(error.errno == errno.EINVAL and retained == 0,
                 "kernel rejected immutable command snapshot seals")
-        fcntl_function(descriptor, fcntl.F_ADD_SEALS, MEMFD_SEALS)
-    seals = fcntl_function(descriptor, fcntl.F_GET_SEALS)
+        fcntl_function(descriptor, F_ADD_SEALS_LINUX, MEMFD_SEALS)
+    seals = fcntl_function(descriptor, F_GET_SEALS_LINUX)
     require(seals & MEMFD_SEALS == MEMFD_SEALS,
             "kernel did not retain immutable command snapshot write seals")
     return seals
@@ -334,12 +537,7 @@ def open_bounded_file_identity(argument, before_seal=None):
             "file argument is invalid")
     require(before_seal is None or callable(before_seal),
             "immutable snapshot pre-seal hook is invalid")
-    require(hasattr(os, "memfd_create") and
-            all(hasattr(os, name) for name in (
-                "MFD_CLOEXEC", "MFD_ALLOW_SEALING")) and
-            all(hasattr(fcntl, name) for name in (
-                "F_ADD_SEALS", "F_GET_SEALS", "F_SEAL_SEAL",
-                "F_SEAL_SHRINK", "F_SEAL_GROW", "F_SEAL_WRITE")),
+    require(sys.platform == "linux",
             "immutable command snapshots require Linux memfd sealing")
     path = Path(argument).resolve(strict=True)
     source = os.open(
@@ -347,78 +545,102 @@ def open_bounded_file_identity(argument, before_seal=None):
         getattr(os, "O_NONBLOCK", 0))
     snapshot = None
     try:
-        before = os.fstat(source)
-        require(stat.S_ISREG(before.st_mode) and 0 <= before.st_size <= MAX_IDENTITY_BYTES,
+        initial = os.fstat(source)
+        require(stat.S_ISREG(initial.st_mode) and
+                0 <= initial.st_size <= MAX_IDENTITY_BYTES,
                 "identity file is not a bounded regular file: {}".format(path))
-        snapshot = os.memfd_create(
-            "leopard2-command-snapshot",
-            os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
-        digest = hashlib.sha256()
-        retained = 0
-        while True:
-            block = os.read(source, min(
-                1024 * 1024, MAX_IDENTITY_BYTES + 1 - retained))
-            if not block:
-                break
-            retained += len(block)
-            require(retained <= MAX_IDENTITY_BYTES,
-                    "identity file is too large: {}".format(path))
-            digest.update(block)
-            offset = 0
-            while offset < len(block):
-                written = os.write(snapshot, block[offset:])
-                require(written > 0, "immutable command snapshot write stalled")
-                offset += written
-        after = os.fstat(source)
-        current = os.stat(path)
-        require((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns,
-                 before.st_ctime_ns) ==
-                (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns,
-                 after.st_ctime_ns) and
-                (before.st_dev, before.st_ino) == (current.st_dev, current.st_ino),
-                "identity file changed while hashing: {}".format(path))
-        os.fchmod(snapshot, before.st_mode & 0o777)
-        os.lseek(snapshot, 0, os.SEEK_SET)
-        if before_seal is not None:
-            before_seal(snapshot)
-        seals = seal_immutable_snapshot(snapshot)
-        snapshot_metadata = os.fstat(snapshot)
-        require(stat.S_ISREG(snapshot_metadata.st_mode) and
-                snapshot_metadata.st_size == retained,
-                "immutable command snapshot identity is invalid")
-        content_hash = digest.hexdigest()
-        sealed_digest = hashlib.sha256()
-        sealed_size = 0
-        while sealed_size < snapshot_metadata.st_size:
-            block = os.pread(
-                snapshot, min(1024 * 1024,
-                              snapshot_metadata.st_size - sealed_size),
-                sealed_size)
-            require(block,
-                    "immutable command snapshot read stalled after sealing")
-            sealed_digest.update(block)
-            sealed_size += len(block)
-        require(sealed_size == retained and
-                sealed_digest.hexdigest() == content_hash,
-                "immutable command snapshot differs from hashed source content")
-        identity = {
-            "argument": argument,
-            "path": str(path),
-            "device": before.st_dev,
-            "inode": before.st_ino,
-            "mode": before.st_mode & 0o7777,
-            "size": before.st_size,
-            "sha256": content_hash,
-            "snapshot": {
-                "protocol": IMMUTABLE_SNAPSHOT_PROTOCOL,
-                "device": snapshot_metadata.st_dev,
-                "inode": snapshot_metadata.st_ino,
-                "mode": snapshot_metadata.st_mode & 0o7777,
-                "size": snapshot_metadata.st_size,
+        with StableSourceGuard(source, path, initial) as source_guard:
+            # Define the hashed identity only after the lease is held.  A writer
+            # that completed before acquisition is ordinary prior state; one
+            # still capable of changing the inode makes acquisition fail closed.
+            before = os.fstat(source)
+            require(stat.S_ISREG(before.st_mode) and
+                    0 <= before.st_size <= MAX_IDENTITY_BYTES,
+                    "identity file is not a bounded regular file: {}".format(path))
+            require((initial.st_dev, initial.st_ino, initial.st_uid,
+                     initial.st_gid, initial.st_mode, initial.st_size,
+                     initial.st_mtime_ns, initial.st_ctime_ns) ==
+                    (before.st_dev, before.st_ino, before.st_uid,
+                     before.st_gid, before.st_mode, before.st_size,
+                     before.st_mtime_ns, before.st_ctime_ns),
+                    "identity file changed before its source guard: {}".format(path))
+            snapshot = linux_memfd_create(
+                "leopard2-command-snapshot",
+                MFD_CLOEXEC_LINUX | MFD_ALLOW_SEALING_LINUX)
+            digest = hashlib.sha256()
+            retained = 0
+            while True:
+                block = os.read(source, min(
+                    1024 * 1024, MAX_IDENTITY_BYTES + 1 - retained))
+                if not block:
+                    break
+                retained += len(block)
+                require(retained <= MAX_IDENTITY_BYTES,
+                        "identity file is too large: {}".format(path))
+                digest.update(block)
+                offset = 0
+                while offset < len(block):
+                    written = os.write(snapshot, block[offset:])
+                    require(written > 0, "immutable command snapshot write stalled")
+                    offset += written
+            after = os.fstat(source)
+            current = os.stat(path)
+            require((before.st_dev, before.st_ino, before.st_uid,
+                     before.st_gid, before.st_mode, before.st_size,
+                     before.st_mtime_ns, before.st_ctime_ns) ==
+                    (after.st_dev, after.st_ino, after.st_uid,
+                     after.st_gid, after.st_mode, after.st_size,
+                     after.st_mtime_ns, after.st_ctime_ns) and
+                    (before.st_dev, before.st_ino) ==
+                    (current.st_dev, current.st_ino),
+                    "identity file changed while hashing: {}".format(path))
+            source_guard.validate()
+            os.fchmod(snapshot, before.st_mode & 0o777)
+            os.lseek(snapshot, 0, os.SEEK_SET)
+            if before_seal is not None:
+                before_seal(snapshot)
+            seals = seal_immutable_snapshot(snapshot)
+            snapshot_metadata = os.fstat(snapshot)
+            require(stat.S_ISREG(snapshot_metadata.st_mode) and
+                    snapshot_metadata.st_size == retained,
+                    "immutable command snapshot identity is invalid")
+            content_hash = digest.hexdigest()
+            sealed_digest = hashlib.sha256()
+            sealed_size = 0
+            while sealed_size < snapshot_metadata.st_size:
+                block = os.pread(
+                    snapshot, min(1024 * 1024,
+                                  snapshot_metadata.st_size - sealed_size),
+                    sealed_size)
+                require(block,
+                        "immutable command snapshot read stalled after sealing")
+                sealed_digest.update(block)
+                sealed_size += len(block)
+            require(sealed_size == retained and
+                    sealed_digest.hexdigest() == content_hash,
+                    "immutable command snapshot differs from hashed source content")
+            source_guard.validate()
+            identity = {
+                "argument": argument,
+                "path": str(path),
+                "device": before.st_dev,
+                "inode": before.st_ino,
+                "uid": before.st_uid,
+                "gid": before.st_gid,
+                "mode": before.st_mode & 0o7777,
+                "size": before.st_size,
                 "sha256": content_hash,
-                "seals": seals,
-            },
-        }
+                "source_guard": source_guard.policy,
+                "snapshot": {
+                    "protocol": IMMUTABLE_SNAPSHOT_PROTOCOL,
+                    "device": snapshot_metadata.st_dev,
+                    "inode": snapshot_metadata.st_ino,
+                    "mode": snapshot_metadata.st_mode & 0o7777,
+                    "size": snapshot_metadata.st_size,
+                    "sha256": content_hash,
+                    "seals": seals,
+                },
+            }
         os.close(source)
         source = None
         return snapshot, identity
@@ -435,6 +657,27 @@ def bounded_file_identity(argument):
     descriptor, identity = open_bounded_file_identity(argument)
     os.close(descriptor)
     return identity
+
+
+def supported_command_mode(command, executable_path):
+    """Return the only supported immutable execution grammar.
+
+    Native commands execute one captured ELF image.  Python source execution is
+    deliberately narrower: the source must be argv[1], without interpreter
+    switches before it, so both interpreter and script receive exact snapshots.
+    Without that direct script, a later ``.py`` argument is rejected rather than
+    silently treated as mutable code.  Arguments after a captured direct script
+    remain application data.  Known Python interpreter names likewise cannot use
+    ``-m``/``-c`` or option-prefixed script forms in authoritative mode.
+    """
+    if len(command) > 1 and command[1].endswith(".py"):
+        return "python-direct-script"
+    require(not any(value.endswith(".py") for value in command[1:]),
+            "Python source must be the direct argv[1] command without switches")
+    executable_name = Path(executable_path).name
+    require(PYTHON_EXECUTABLE.fullmatch(executable_name) is None,
+            "Python interpreter execution requires one direct .py script")
+    return "elf"
 
 
 class PinnedCommand:
@@ -488,17 +731,14 @@ class PinnedCommand:
             executable["argument"] = executable_argument
             require(executable["mode"] & 0o111,
                     "child executable has no execute permission bit")
+            require(os.pread(descriptor, 4, 0) == b"\x7fELF",
+                    "authoritative child executable is not an ELF image")
             os.set_inheritable(descriptor, True)
 
             script = None
-            if len(self.command) >= 2 and self.command[1].endswith(".py"):
-                # The fixed -c bootstrap is an argv contract with a Python
-                # interpreter.  A shebang executable would instead dispatch to
-                # an uncaptured interpreter and treat those arguments as shell
-                # input, so this authoritative mode accepts only a directly
-                # executable ELF image.
-                require(os.pread(descriptor, 4, 0) == b"\x7fELF",
-                        "Python script execution requires an ELF interpreter")
+            command_mode = supported_command_mode(
+                self.command, executable["path"])
+            if command_mode == "python-direct-script":
                 descriptor, script = open_bounded_file_identity(self.command[1])
                 self.script_descriptor = descriptor
                 self.descriptors.append(descriptor)
@@ -506,6 +746,7 @@ class PinnedCommand:
             self.identity = {
                 "cwd": cwd_identity,
                 "executable": executable,
+                "mode": command_mode,
                 "script": script,
             }
         except BaseException:
@@ -527,7 +768,7 @@ class PinnedCommand:
                 "{} immutable snapshot is closed or not inheritable".format(label))
         metadata = os.fstat(descriptor)
         snapshot = identity["snapshot"]
-        seals = fcntl.fcntl(descriptor, fcntl.F_GET_SEALS)
+        seals = fcntl.fcntl(descriptor, F_GET_SEALS_LINUX)
         require(stat.S_ISREG(metadata.st_mode) and
                 (metadata.st_dev, metadata.st_ino,
                  metadata.st_mode & 0o7777, metadata.st_size, seals) ==
@@ -1209,8 +1450,10 @@ def validate_file_identity(value, label):
     require(all(isinstance(value[name], str) and value[name]
                 for name in ("argument", "path")),
             "{} paths are invalid".format(label))
-    for name in ("device", "inode", "mode", "size"):
+    for name in ("device", "inode", "uid", "gid", "mode", "size"):
         exact_int(value[name], "{} {}".format(label, name), 0, 2**63 - 1)
+    require(value["source_guard"] in SOURCE_GUARDS,
+            "{} source guard is unknown".format(label))
     require(isinstance(value["sha256"], str) and
             HEX256.fullmatch(value["sha256"]) is not None,
             "{} hash is invalid".format(label))
@@ -1375,11 +1618,21 @@ def validate_report(report, require_accepted=False):
         validate_file_identity(identity["executable"], "command executable")
         require(identity["executable"]["argument"] == report["command"][0],
                 "command executable identity has another argument")
-        if identity["script"] is not None:
+        require(identity["mode"] in COMMAND_MODES,
+                "command execution mode is unknown")
+        expected_mode = supported_command_mode(
+            report["command"], identity["executable"]["path"])
+        require(identity["mode"] == expected_mode,
+                "command identity mode differs from its argument grammar")
+        if identity["mode"] == "python-direct-script":
+            require(identity["script"] is not None,
+                    "direct Python command has no script snapshot")
             validate_file_identity(identity["script"], "command script")
-            require(len(report["command"]) >= 2 and
-                    identity["script"]["argument"] == report["command"][1],
+            require(identity["script"]["argument"] == report["command"][1],
                     "command script identity has another argument")
+        else:
+            require(identity["script"] is None,
+                    "native ELF command unexpectedly has a script snapshot")
     else:
         require(report["command_sha256"] is None and
                 report["command_identity"] is None,
@@ -2674,11 +2927,74 @@ class AffinityTransaction:
                       signal_finalizer):
         """Clean up under a restorable mask, then commit acceptance last."""
         old_signal_mask = None
+        signal_failures = []
+        signal_finalizer_attempted = False
+
+        def append_unique(target, message):
+            if message not in target:
+                target.append(message)
+
+        def record_signal_failure(stage, error):
+            append_unique(
+                signal_failures, "{} failed: {}".format(stage, error))
+
+        def capture_blocked_signals(stage):
+            before = len(signal_failures)
+            try:
+                self._capture_blocked_signals()
+            except BaseException as error:
+                record_signal_failure(stage, error)
+            return len(signal_failures) != before
+
+        def terminal_errors():
+            errors = []
+            if run_error is not None:
+                errors.append(str(run_error))
+            errors.extend(cleanup_failures)
+            errors.extend(restore_failures)
+            errors.extend(write_failures)
+            errors.extend(signal_failures)
+            if child_returncode not in (None, 0):
+                errors.append("child returned {}".format(child_returncode))
+            if self.received_signal is not None:
+                errors.append("received signal {}".format(self.received_signal))
+            if descendants_observed:
+                errors.append("child-session descendants required forced cleanup")
+            # Repeated signal and journal recovery attempts must not duplicate a
+            # durable diagnosis or make its ordering nondeterministic.
+            return list(dict.fromkeys(errors))
+
+        def set_terminal_report():
+            errors = terminal_errors()
+            self.report["error"] = "; ".join(errors) if errors else None
+            self.report["accepted"] = (
+                not errors and not self.report["uncertainty"] and
+                child_returncode == 0 and self.received_signal is None)
+            self.report["state"] = (
+                "complete" if self.report["accepted"] else "failed")
+            self.report["finished_utc"] = utc_now()
+
+        def write_terminal_report():
+            set_terminal_report()
+            try:
+                self._write()
+                return True
+            except BaseException as error:
+                append_unique(
+                    write_failures,
+                    "terminal journal write failed: {}".format(error))
+                set_terminal_report()
+                return False
+
         try:
             if hasattr(signal, "pthread_sigmask"):
-                old_signal_mask = signal.pthread_sigmask(
-                    signal.SIG_BLOCK, set(GATED_SIGNALS))
-                self._capture_blocked_signals()
+                try:
+                    old_signal_mask = signal.pthread_sigmask(
+                        signal.SIG_BLOCK, set(GATED_SIGNALS))
+                except BaseException as error:
+                    record_signal_failure(
+                        "initial gated-signal blocking", error)
+            capture_blocked_signals("initial pending-signal capture")
 
             # No affinity is restored while a process in the benchmark session
             # remains alive.  Recovery uses the same ordering.
@@ -2694,10 +3010,15 @@ class AffinityTransaction:
                         subreaper_pid=self.subreaper_pid)
                     cleanup_failures.extend(failures)
                     if had_members:
-                        self._event("child_session_cleanup", value=initial_signal)
+                        self._event(
+                            "child_session_cleanup", value=int(initial_signal))
                 except BaseException as error:
                     cleanup_failures.append(str(error))
-                child_returncode = self._finish_child_wait()
+                try:
+                    child_returncode = self._finish_child_wait()
+                except BaseException as error:
+                    cleanup_failures.append(
+                        "child wait during cleanup failed: {}".format(error))
             self.report["child_returncode"] = child_returncode
             if self.report["execution"]["child_ready_monotonic_ns"] is not None:
                 self.report["execution"]["child_finished_monotonic_ns"] = \
@@ -2718,34 +3039,8 @@ class AffinityTransaction:
                 restore_failures.append(
                     "affinity restore withheld until child-session cleanup succeeds")
 
-            errors = []
-            if run_error is not None:
-                errors.append(str(run_error))
-            errors.extend(cleanup_failures)
-            errors.extend(restore_failures)
-            errors.extend(write_failures)
-            if child_returncode not in (None, 0):
-                errors.append("child returned {}".format(child_returncode))
-            if self.received_signal is not None:
-                errors.append("received signal {}".format(self.received_signal))
-            if descendants_observed:
-                errors.append("child-session descendants required forced cleanup")
-            self._capture_blocked_signals()
-            if self.received_signal is not None and not any(
-                    item.startswith("received signal ") for item in errors):
-                errors.append("received signal {}".format(self.received_signal))
-            self.report["error"] = "; ".join(errors) if errors else None
-            self.report["accepted"] = (
-                not errors and not self.report["uncertainty"] and
-                child_returncode == 0 and self.received_signal is None)
-            self.report["state"] = "complete" if self.report["accepted"] else "failed"
-            self.report["finished_utc"] = utc_now()
-            try:
-                self._write()
-            except BaseException as error:
-                write_failures.append(str(error))
-                self.report["accepted"] = False
-                self.report["state"] = "failed"
+            capture_blocked_signals("pre-terminal pending-signal capture")
+            terminal_write_succeeded = write_terminal_report()
 
             # A signal arriving during the durable final write is pending while
             # blocked.  Observe it and rewrite a failed report before defining
@@ -2753,77 +3048,75 @@ class AffinityTransaction:
             # occur after this durability boundary, not during the benchmark
             # transaction.
             previous_signal = self.received_signal
-            self._capture_blocked_signals()
-            if self.received_signal is not None and previous_signal is None:
-                self.report["accepted"] = False
-                self.report["state"] = "failed"
-                self.report["finished_utc"] = utc_now()
-                signal_error = "received signal {}".format(self.received_signal)
-                self.report["error"] = signal_error if self.report["error"] is None else \
-                    self.report["error"] + "; " + signal_error
-                try:
-                    self._write()
-                except BaseException as error:
-                    write_failures.append(str(error))
+            capture_changed = capture_blocked_signals(
+                "post-terminal pending-signal capture")
+            if (self.received_signal is not None and previous_signal is None) or \
+                    capture_changed or not terminal_write_succeeded:
+                write_terminal_report()
 
             # This is the signal-observation boundary for the supervised
             # transaction.  The benchmark child is gone and best-effort
             # restoration plus the final pending-signal rewrite are complete.
             self.signal_boundary_closed = True
             if self.pinned_command is not None:
-                self.pinned_command.close()
-                self.pinned_command = None
+                try:
+                    self.pinned_command.close()
+                finally:
+                    self.pinned_command = None
 
             # Restore caller handlers while signals remain blocked, then restore
             # the exact entry mask ourselves.  A callback failure cannot strand
             # the mask because the unconditional finally below retries it.  No
             # acceptance seal is attempted until both operations succeed.
-            signal_failures = []
             if signal_finalizer is not None:
+                signal_finalizer_attempted = True
                 try:
                     signal_finalizer()
                 except BaseException as error:
-                    signal_failures.append(str(error))
+                    record_signal_failure(
+                        "signal-handler finalization", error)
             if old_signal_mask is not None:
                 try:
                     signal.pthread_sigmask(signal.SIG_SETMASK, old_signal_mask)
                     old_signal_mask = None
                 except BaseException as error:
-                    signal_failures.append(str(error))
+                    record_signal_failure(
+                        "entry signal-mask restoration", error)
             if signal_failures:
-                message = "signal-state finalization failed: {}".format(
-                    "; ".join(signal_failures))
-                write_failures.append(message)
-                self.report["accepted"] = False
-                self.report["state"] = "failed"
-                self.report["finished_utc"] = utc_now()
-                self.report["error"] = message if self.report["error"] is None else \
-                    self.report["error"] + "; " + message
-                try:
-                    self._write()
-                except BaseException as rewrite_error:
-                    write_failures.append(str(rewrite_error))
+                write_terminal_report()
 
             if self.report["accepted"]:
                 try:
                     self._seal_acceptance()
                 except BaseException as error:
-                    write_failures.append(str(error))
-                    self.report["accepted"] = False
-                    self.report["state"] = "failed"
-                    self.report["finished_utc"] = utc_now()
-                    self.report["error"] = "acceptance seal failed: {}".format(error)
-                    try:
-                        self._write()
-                    except BaseException as rewrite_error:
-                        write_failures.append(str(rewrite_error))
+                    append_unique(
+                        write_failures,
+                        "acceptance seal failed: {}".format(error))
+                    write_terminal_report()
+            for failure in signal_failures:
+                append_unique(write_failures, failure)
             return child_returncode
         finally:
-            # Any unexpected pre-commit cleanup exception still restores the
-            # exact entry mask.  On a successful acceptance path the mask was
-            # already restored and this branch performs no post-commit syscall.
+            # Descriptor and caller signal state are independent resources.  No
+            # failure in signal inspection or journal finalization can strand one
+            # merely because cleanup of the other failed.
+            if self.pinned_command is not None:
+                try:
+                    self.pinned_command.close()
+                finally:
+                    self.pinned_command = None
+            if signal_finalizer is not None and not signal_finalizer_attempted:
+                try:
+                    signal_finalizer()
+                except BaseException:
+                    pass
             if old_signal_mask is not None:
-                signal.pthread_sigmask(signal.SIG_SETMASK, old_signal_mask)
+                try:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, old_signal_mask)
+                except BaseException:
+                    # main() independently retries the exact entry state.  This
+                    # fallback preserves any earlier exception for its caller.
+                    pass
 
     def run(self, command, signal_finalizer=None):
         if not command:
@@ -3651,9 +3944,9 @@ def test_inode_bound_evidence_snapshot():
     fake_seals = {"value": 0, "rejected_exec": False}
 
     def old_kernel_fcntl(_descriptor, operation, argument=None):
-        if operation == fcntl.F_GET_SEALS:
+        if operation == F_GET_SEALS_LINUX:
             return fake_seals["value"]
-        check(operation == fcntl.F_ADD_SEALS,
+        check(operation == F_ADD_SEALS_LINUX,
               "snapshot seal fallback used another fcntl operation")
         if argument & F_SEAL_EXEC_LINUX:
             fake_seals["rejected_exec"] = True
@@ -3703,6 +3996,51 @@ def test_inode_bound_evidence_snapshot():
             lambda: open_bounded_file_identity(
                 str(command), before_seal=tamper_before_seal),
             "pre-seal immutable snapshot overwrite")
+
+        # A dirty MAP_SHARED page can be modified again without advancing the
+        # inode timestamps inspected around read(2).  Retain only the writable
+        # mapping (not its original descriptor) and prove that the read lease
+        # rejects capture before any such source can be certified.
+        shared = root / "shared-source"
+        shared.write_bytes(b"original dirty page")
+        shared.chmod(0o755)
+        writer = os.open(str(shared), os.O_RDWR)
+        mapping = mmap.mmap(writer, 0, access=mmap.ACCESS_WRITE)
+        os.close(writer)
+        try:
+            mapping[0:1] = b"O"
+            expect_exception(
+                IsolationError,
+                lambda: open_bounded_file_identity(str(shared)),
+                "same-UID writable MAP_SHARED command source")
+        finally:
+            mapping.close()
+
+        break_request = {"observed": False}
+
+        def request_write_while_leased(_snapshot_descriptor):
+            try:
+                descriptor = os.open(
+                    str(shared), os.O_WRONLY | getattr(os, "O_NONBLOCK", 0))
+            except OSError as error:
+                break_request["observed"] = error.errno == errno.EAGAIN
+                return
+            os.close(descriptor)
+
+        expect_exception(
+            IsolationError,
+            lambda: open_bounded_file_identity(
+                str(shared), before_seal=request_write_while_leased),
+            "same-UID source lease-break request")
+        check(break_request["observed"],
+              "same-UID write-open did not request the immutable source lease")
+
+        descriptor, guarded_identity = open_bounded_file_identity(str(shared))
+        try:
+            check(guarded_identity["source_guard"] == "linux-read-lease",
+                  "same-UID-mutable source was captured without a read lease")
+        finally:
+            os.close(descriptor)
 
 
 def test_exact_restore_and_newcomer():
@@ -3879,30 +4217,51 @@ def test_write_failure_still_restores():
 def test_acceptance_is_path_sealed_and_fail_closed():
     with tempfile.TemporaryDirectory() as directory:
         backend = FakeBackend()
-        backend.add(1, 1, 1, 1, {0, 2}, ppid=0)
+        victim = backend.add(1, 1, 1, 1, {0, 1, 2, 3}, ppid=0)
+        launcher = FakeLauncher(backend, stay_alive=True)
         transaction = make_fake_transaction(
-            directory, backend, launcher=FakeLauncher(backend))
+            directory, backend, launcher=launcher)
         entry_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+        immutable_descriptors = []
+
+        def fail_after_child_release(*_arguments, **_keywords):
+            raise IsolationError("injected running supervisor failure")
+
+        def arm_running_failure():
+            immutable_descriptors.extend(transaction.pinned_command.descriptors)
+            transaction.restrict_once = fail_after_child_release
+
+        def descriptor_is_closed(descriptor):
+            try:
+                os.fstat(descriptor)
+            except OSError as error:
+                return error.errno == errno.EBADF
+            return False
+
+        launcher.before_release = arm_running_failure
 
         capture_calls = {"count": 0}
 
         def fail_during_blocked_cleanup():
             capture_calls["count"] += 1
-            if capture_calls["count"] == 3:
-                raise OSError("injected pre-finalizer cleanup failure")
+            if capture_calls["count"] == 1:
+                raise OSError("injected initial pending-signal failure")
 
         transaction._capture_blocked_signals = fail_during_blocked_cleanup
-        expect_exception(
-            OSError,
-            lambda: transaction.run(fake_command()),
-            "blocked cleanup signal-mask guard")
-        check(capture_calls["count"] == 3 and
+        result = transaction.run(fake_command())
+        retained = load_report(transaction.report_path)
+        check(result == 1 and capture_calls["count"] == 3 and
+              backend.get_affinity(victim) == {0, 1, 2, 3} and
+              not backend.child_scope_processes(transaction.report["child"]) and
+              (900, signal.SIGTERM) in backend.signal_log and
+              transaction.pinned_command is None and
+              immutable_descriptors and
+              all(descriptor_is_closed(item) for item in immutable_descriptors) and
+              retained["state"] == "failed" and
+              "initial pending-signal capture failed" in retained["error"] and
               signal.pthread_sigmask(signal.SIG_BLOCK, set()) == entry_mask and
               not acceptance_path(transaction.report_path).exists(),
-              "unexpected cleanup failure stranded the blocked signal mask")
-        if transaction.pinned_command is not None:
-            transaction.pinned_command.close()
-            transaction.pinned_command = None
+              "initial signal-capture failure skipped fail-closed cleanup")
 
     with tempfile.TemporaryDirectory() as directory:
         backend = FakeBackend()
@@ -4350,13 +4709,24 @@ def test_descriptor_pinned_exec_and_child_signal_defaults():
         shebang.chmod(0o755)
         expect_exception(
             IsolationError,
-            lambda: PinnedCommand([str(shebang), str(script)]),
-            "shebang executable in Python snapshot mode")
+            lambda: PinnedCommand([str(shebang), str(root / "output.json")]),
+            "direct shebang interpreter bypass")
+        expect_exception(
+            IsolationError,
+            lambda: PinnedCommand([
+                str(executable), "-O", str(script), "argument"]),
+            "option-prefixed mutable Python script bypass")
 
         pinned = PinnedCommand([str(executable), str(script), "argument"])
         try:
             original_identity = json.loads(json.dumps(pinned.identity))
             original_command_hash = sha256_value(pinned.command)
+            check(original_identity["mode"] == "python-direct-script" and
+                  original_identity["executable"]["source_guard"] ==
+                  "linux-read-lease" and
+                  original_identity["script"]["source_guard"] ==
+                  "linux-read-lease",
+                  "direct Python identity omitted its interpreter/script guards")
             for descriptor, label in (
                     (pinned.executable_descriptor, "executable"),
                     (pinned.script_descriptor, "script")):
@@ -4508,13 +4878,19 @@ def test_descriptor_pinned_exec_and_child_signal_defaults():
             actual_script.write_text(
                 "raise SystemExit('replacement script executed')\n",
                 encoding="utf-8")
+            child_environment = dict(os.environ)
+            # Relocatable standalone Python builds may infer their stdlib only
+            # from argv[0].  This fixture deliberately gives the copied image a
+            # temporary argv[0], so bind its already-running installation root
+            # explicitly; the immutable executable/script assertion is unchanged.
+            child_environment["PYTHONHOME"] = sys.base_prefix
             child_pid = os.fork()
             if child_pid == 0:  # pragma: no cover - parent verifies output
                 try:
                     actual.validate_snapshot_descriptors()
                     os.execve(
                         actual.executable_path(), actual.execution_argv(),
-                        dict(os.environ))
+                        child_environment)
                 except BaseException:
                     os._exit(126)
             child = ForkedChild(child_pid, None)
@@ -4742,6 +5118,15 @@ def test_binding():
         ]
         check(transaction.run(command) == 0 and transaction.report["accepted"] is True,
               "binding fixture transaction was not accepted")
+        option_prefixed = json.loads(json.dumps(transaction.report))
+        option_prefixed["command"] = [
+            option_prefixed["command"][0], "-O",
+        ] + option_prefixed["command"][1:]
+        option_prefixed["command_sha256"] = sha256_value(
+            option_prefixed["command"])
+        expect_exception(
+            IsolationError, lambda: validate_report(option_prefixed),
+            "report with option-prefixed unsnapshotted Python script")
         script_identity = transaction.report["command_identity"]["script"]
         raw_payload = {
             "schema": MAIN_RAW_SCHEMA,
