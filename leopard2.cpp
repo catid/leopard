@@ -2683,12 +2683,15 @@ static bool CodecMayUseAutoAVX512Encode(const leo2_codec* codec)
         !codec->context->auto_avx512_encode_host ||
         codec->context->backend != LEO2_BACKEND_AVX2 ||
         codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
-        codec->field != LEO2_FIELD_GF16)
+        codec->field != LEO2_FIELD_GF16 ||
+        codec->original_count < 8 ||
+        codec->recovery_count > 4096 ||
+        codec->parent_count < 16)
         return false;
 
     // T=1 uses the direct copy/XOR path and never reaches this transform
-    // selector.  Every larger GF16 high-rate parent shape was positive in the
-    // retained Zen 5 screen, from K=8 through K=60000 and N=16 through 65536.
+    // selector.  The remaining bounds exactly match the retained Zen 5
+    // calibration screen: K >= 8, R <= 4096, and N >= 16.
     return codec->padded_side >= 2;
 }
 
@@ -2703,14 +2706,15 @@ static bool UseAutoAVX512Encode(
         codec->context->ops != codec->context->baseline_ops ||
         requested_recovery_count != codec->recovery_count ||
         requested_recovery_prefix != codec->recovery_count ||
-        (buffer_bytes & (kScratchAlignment - 1U)) != 0)
+        (buffer_bytes & (kScratchAlignment - 1U)) != 0 ||
+        buffer_bytes > 4U * 1024U * 1024U)
         return false;
 
     // The AVX-512VL translation unit deliberately retains 256-bit data
     // operations and uses the expanded register file.  Counterbalanced
     // screens across both cache complexes were positive at every complete
-    // tile from 64 B through 4 MiB.  Ragged tails retain AVX2 until they have
-    // equally broad evidence.
+    // tile from 64 B through 4 MiB inclusive.  Larger shards and ragged tails
+    // retain AVX2 until they have equally broad evidence.
     return buffer_bytes >= kScratchAlignment;
 }
 

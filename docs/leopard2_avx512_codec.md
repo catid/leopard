@@ -11,14 +11,16 @@ of these conditions hold:
 
 - the processor vendor/family/model is AMD family 1Ah, model 44h, matching the
   Ryzen 9 9950X3D calibration host;
-- the code uses the legacy-high GF16 profile with `T >= 2`;
+- the code uses the legacy-high GF16 profile with `K >= 8`, `N >= 16`, and
+  `2 <= R <= 4096`;
 - every transmitted parity output is requested; and
-- the positive shard length is an exact multiple of the 64-byte transform
-  tile.
+- the shard length is an exact multiple of the 64-byte transform tile from
+  64 bytes through 4 MiB inclusive.
 
 Unknown processors, unavailable ISA state, failed optional allocation or KAT,
-partial parity output, ragged tails, explicit backend requests, and forced
-lower-backend diagnostic builds retain their exact baseline table.  The
+partial parity output, counts or shard sizes outside those closed bounds,
+ragged tails, explicit backend requests, and forced lower-backend diagnostic
+builds retain their exact baseline table.  The
 choice changes neither field arithmetic nor parity bytes.  It also performs no
 hot-path allocation: optional table qualification happens at codec setup and
 the byte-heavy call passes one selected immutable operation table through all

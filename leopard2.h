@@ -147,12 +147,13 @@ typedef enum leo2_backend {
     offline-calibrated region on a recognized CPU model, AUTO may use another
     startup-qualified immutable table for one operation; unknown models retain
     the baseline.  This changes neither code identity nor wire bytes.
-    Explicit backend requests never widen.  A non-default
-    table is allocated and known-answer-tested on its first explicit context
-    request.  Results are cached: unavailable
-    ISAs return LEO2_UNSUPPORTED, allocation failure returns
-    LEO2_OUT_OF_MEMORY, and known-answer-test failure returns
-    LEO2_INTERNAL_ERROR.
+    Explicit backend requests never widen.  A table beyond the process
+    baseline is allocated and known-answer-tested on its first explicit
+    context request or first eligible AUTO codec setup.  Results are cached.
+    For an explicit request, an unavailable ISA returns LEO2_UNSUPPORTED,
+    allocation failure returns LEO2_OUT_OF_MEMORY, and a known-answer-test
+    failure returns LEO2_INTERNAL_ERROR.  Optional AUTO qualification failure
+    retains the reported baseline instead of failing codec creation.
     Independent contexts may select different tables concurrently without
     changing the wire profile or process-global legacy leo_* selection.  NEON
     remains an exact request for the existing active ARM path.  Leopard2 caches

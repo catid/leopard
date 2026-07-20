@@ -284,7 +284,11 @@ legacy-high encode regions, but did not justify selecting it universally.
 An AUTO codec may therefore widen one full-output transform encode to a
 startup-qualified immutable AVX-512 table only on the calibrated AMD family
 1Ah/model 44h host class and in a deterministic offline-calibrated region.
-Unknown CPU models retain AVX2.  Explicit backend requests never widen, and a
+That region is legacy-high GF16 with `K >= 8`, `N >= 16`,
+`2 <= R <= 4096`, all parity outputs requested, and a shard length that is an
+exact 64-byte multiple from 64 bytes through 4 MiB inclusive.  Unknown CPU
+models and cells outside those bounds retain AVX2.  Explicit backend requests
+never widen, and a
 failed or unavailable optional qualification retains the baseline.  The
 reported context backend remains the baseline because the kernel choice is a
 property of the codec, byte length, and requested outputs rather than a new

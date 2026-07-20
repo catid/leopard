@@ -12,10 +12,13 @@ The default CMake build is portable for the target platform; it does not add
 `-march=native`.  On x86-64, baseline code stays at the platform's SSE2 floor,
 while SSSE3, AVX2, and AVX-512VL kernels are compiled in
 separate translation units and selected only after runtime CPU and
-operating-system checks.  `AUTO` remains on the established AVX2 path when it
-is available; AVX-512VL is an opt-in production backend because isolated
-complete-codec evidence found a large-parent win but did not justify a
-universal default.  A normal
+operating-system checks.  An `AUTO` context reports the established AVX2
+baseline when it is available.  On the offline-calibrated AMD family
+1Ah/model 44h host class, a legacy-high GF16 codec may use the qualified
+AVX-512VL table for a full-output encode only when `K >= 8`, `N >= 16`,
+`2 <= R <= 4096`, and the shard length is a multiple of 64 bytes from 64 bytes
+through 4 MiB inclusive.  All other AUTO operations retain the context
+baseline; explicit backend requests retain their exact table.  A normal
 distributable build therefore needs no host-CPU option:
 
 ```sh
@@ -31,8 +34,9 @@ file and keep its baseline compatible with every deployment CPU.  The
 backend during testing; accepted values are `auto`, `scalar`, `ssse3`, `avx2`,
 and `avx512`.  Lower forced variants cap explicit contexts at the selected
 backend, while `avx512` retains access to qualified lower tables.  This setting
-is not a portability target or a wire-format choice, and `auto` continues to
-prefer AVX2 rather than AVX-512VL.
+is not a portability target or a wire-format choice.  `auto` continues to
+report AVX2 as its context baseline even when one bounded encode operation is
+eligible for the model-scoped AVX-512VL policy above.
 When its POSIX shell and disassembly tools are available, the normal test build
 registers `leopard2_portable_isa` to audit the x86-64 archive and any available
 build metadata.  Missing audit tools remain non-fatal for ordinary developer,

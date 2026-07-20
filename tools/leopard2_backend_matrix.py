@@ -30,6 +30,7 @@ COMPARE_TESTS = (
     "field_options",
     "direct_oracle",
     "backend_ops",
+    "auto_encode_backend",
     "context_backends",
     "r1_xor",
     "legacy_golden",
@@ -84,6 +85,7 @@ AVX512_BACKEND_FAILURE_TESTS = (
     "leopard2_backend_failure_avx512_ff8_allocation",
     "leopard2_backend_failure_avx512_ff16_allocation",
     "leopard2_backend_failure_avx512_kat",
+    "leopard2_backend_auto_avx512_kat_fallback",
 )
 BACKEND_FAILURE_TESTS = (
     BASE_BACKEND_FAILURE_TESTS + AVX512_BACKEND_FAILURE_TESTS
@@ -123,6 +125,7 @@ EXPECTED_COMPILE_SOURCE_COUNTS = {
     "tests/leopard2/test_active_lch.cpp": 1,
     "tests/leopard2/test_api.cpp": 1,
     "tests/leopard2/test_arbitrary_counts_acceptance.cpp": 1,
+    "tests/leopard2/test_auto_encode_backend.cpp": 1,
     "tests/leopard2/test_backend_failures.cpp": 1,
     "tests/leopard2/test_backend_ops.cpp": 1,
     "tests/leopard2/test_batch_aliasing.cpp": 1,
@@ -180,6 +183,7 @@ SOURCE_FILES = (
     "leopard2.h",
     "tests/leopard2/allocation_audit_config.h",
     "tests/leopard2/test_legacy_golden.cpp",
+    "tests/leopard2/test_auto_encode_backend.cpp",
     "tests/leopard2/test_backend_failures.cpp",
     "tests/leopard2/test_backend_ops.cpp",
     "tests/leopard2/test_context_backends.cpp",
@@ -808,6 +812,7 @@ def run_variant(context, variant, index):
         "leopard2_field_options_test",
         "leopard2_direct_oracle_test",
         "leopard2_backend_ops_test", "leopard2_backend_failures_test",
+        "leopard2_auto_encode_backend_test",
         "leopard2_context_backends_test",
         "leopard2_r1_xor_test",
         "leopard2_legacy_golden_test", "leopard2_api_test",
@@ -850,6 +855,7 @@ def run_variant(context, variant, index):
         "field_options": ("leopard2_field_options_test", []),
         "direct_oracle": ("leopard2_direct_oracle_test", []),
         "backend_ops": ("leopard2_backend_ops_test", []),
+        "auto_encode_backend": ("leopard2_auto_encode_backend_test", []),
         "context_backends": ("leopard2_context_backends_test", []),
         "r1_xor": ("leopard2_r1_xor_test", []),
         "legacy_golden": ("leopard2_legacy_golden_test", []),
@@ -935,7 +941,8 @@ def run_variant(context, variant, index):
 
     failure_command = [
         context["ctest"], "--test-dir", build, "-C", "Release",
-        "-R", "^leopard2_backend_failure_", "--output-on-failure",
+        "-R", "^leopard2_backend_(failure_|auto_avx512_kat_fallback$)",
+        "--output-on-failure",
     ]
     failure_command = pinned_command(
         failure_command, context["taskset"], pin_cpu

@@ -96,11 +96,16 @@ private:
 class Codec
 {
 public:
-    Codec(leo2_context* context, uint32_t k, uint32_t r)
+    Codec(
+        leo2_context* context,
+        uint32_t k,
+        uint32_t r,
+        leo2_profile profile = LEO2_PROFILE_LEGACY_HIGH_V1,
+        leo2_field field = LEO2_FIELD_GF16)
         : value_(NULL)
     {
         require_result(leo2_codec_create(context, k, r,
-            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, NULL, &value_),
+            profile, field, NULL, &value_),
             LEO2_SUCCESS, "codec create");
     }
 
@@ -207,6 +212,18 @@ void require_sparse_matches_full(
         require(sparse[i] == full[i], "sparse parity differs from full parity");
 }
 
+void require_explicit_backend(Context& context, leo2_backend expected)
+{
+    if (context.result() != LEO2_SUCCESS)
+        return;
+    require(leo2_context_backend(context.get()) == expected,
+        "explicit context reported the wrong backend");
+    Codec codec(context.get(), 1000, 200);
+    require(selected_backend(codec.get(), 4U * 1024U * 1024U + 64U,
+                200, 200) == expected,
+        "explicit backend was changed by the AUTO calibration bounds");
+}
+
 void test_selection_and_bytes(
     Context& automatic, Context& avx2, Context& avx512)
 {
@@ -217,9 +234,15 @@ void test_selection_and_bytes(
     require(selected_backend(auto_codec.get(), 32, 200, 200) ==
             LEO2_BACKEND_AVX2,
         "AUTO widened a partial transform tile");
+    require(selected_backend(auto_codec.get(), 63, 200, 200) ==
+            LEO2_BACKEND_AVX2,
+        "AUTO widened immediately below the minimum shard length");
     require(selected_backend(auto_codec.get(), 64, 200, 200) ==
             LEO2_BACKEND_AVX512,
         "AUTO did not widen at the complete-tile boundary");
+    require(selected_backend(auto_codec.get(), 65, 200, 200) ==
+            LEO2_BACKEND_AVX2,
+        "AUTO widened an immediate ragged-tail boundary");
     require(selected_backend(auto_codec.get(), 4098, 200, 200) ==
             LEO2_BACKEND_AVX2,
         "AUTO widened an uncalibrated tail");
@@ -227,6 +250,10 @@ void test_selection_and_bytes(
                 200, 200) ==
             LEO2_BACKEND_AVX512,
         "AUTO did not widen a calibrated large complete tile");
+    require(selected_backend(auto_codec.get(),
+                4U * 1024U * 1024U + 64U, 200, 200) ==
+            LEO2_BACKEND_AVX2,
+        "AUTO widened immediately above the calibrated shard-length range");
     require(selected_backend(auto_codec.get(), 4096, 199, 200) ==
             LEO2_BACKEND_AVX2,
         "AUTO widened a partial-output encode");
@@ -236,6 +263,10 @@ void test_selection_and_bytes(
     require(selected_backend(avx512_codec.get(), 4032, 200, 200) ==
             LEO2_BACKEND_AVX512,
         "explicit AVX512 did not remain exact");
+    require(selected_backend(avx512_codec.get(),
+                4U * 1024U * 1024U + 64U, 200, 200) ==
+            LEO2_BACKEND_AVX512,
+        "explicit AVX512 was constrained by AUTO-only byte bounds");
 
     Codec large(automatic.get(), 4096, 512);
     require(selected_backend(large.get(), 4032, 512, 512) ==
@@ -248,18 +279,54 @@ void test_selection_and_bytes(
             LEO2_BACKEND_AVX512,
         "large AUTO did not widen a neighboring complete tile");
 
-    Codec tiny(automatic.get(), 8, 8);
-    require(selected_backend(tiny.get(), 64, 8, 8) ==
+    Codec minimum_shape(automatic.get(), 8, 2);
+    require(leo2_codec_parent_count(minimum_shape.get()) == 16,
+        "minimum calibrated parent changed");
+    require(selected_backend(minimum_shape.get(), 64, 2, 2) ==
             LEO2_BACKEND_AVX512,
-        "tiny GF16 high transform did not widen");
+        "minimum K/N transform shape did not widen");
+    Codec below_k(automatic.get(), 7, 2);
+    require(leo2_codec_parent_count(below_k.get()) == 16,
+        "below-K parent does not isolate the K boundary");
+    require(selected_backend(below_k.get(), 64, 2, 2) ==
+            LEO2_BACKEND_AVX2,
+        "AUTO widened immediately below K=8");
+    Codec below_parent(automatic.get(), 7, 1);
+    require(leo2_codec_parent_count(below_parent.get()) == 8,
+        "immediate lower parent is not N=8");
+    require(selected_backend(below_parent.get(), 64, 1, 1) ==
+            LEO2_BACKEND_AVX2,
+        "AUTO widened below N=16");
+    Codec direct_xor(automatic.get(), 8, 1);
+    require(leo2_codec_parent_count(direct_xor.get()) == 16,
+        "R=1 boundary did not retain N=16");
+    require(selected_backend(direct_xor.get(), 4096, 1, 1) ==
+            LEO2_BACKEND_AVX2,
+        "T=1 direct codec unnecessarily qualified transform widening");
+
+    Codec maximum_r(automatic.get(), 8, 4096);
+    require(selected_backend(maximum_r.get(), 64, 4096, 4096) ==
+            LEO2_BACKEND_AVX512,
+        "AUTO did not widen at R=4096");
+    Codec above_r(automatic.get(), 8, 4097);
+    require(selected_backend(above_r.get(), 64, 4097, 4097) ==
+            LEO2_BACKEND_AVX2,
+        "AUTO widened immediately above R=4096");
+
+    Codec low_profile(automatic.get(), 8, 8, LEO2_PROFILE_LOW_V1);
+    require(selected_backend(low_profile.get(), 64, 8, 8) ==
+            LEO2_BACKEND_AVX2,
+        "AUTO widened a non-legacy-high profile");
+    Codec gf8(automatic.get(), 8, 2,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    require(selected_backend(gf8.get(), 64, 2, 2) ==
+            LEO2_BACKEND_AVX2,
+        "AUTO widened a non-GF16 codec");
+
     Codec maximum_parent(automatic.get(), 60000, 1024);
     require(selected_backend(maximum_parent.get(), 1024, 1024, 1024) ==
             LEO2_BACKEND_AVX512,
         "maximum-parent GF16 high transform did not widen");
-    Codec direct_xor(automatic.get(), 129, 1);
-    require(selected_backend(direct_xor.get(), 4096, 1, 1) ==
-            LEO2_BACKEND_AVX2,
-        "T=1 direct codec unnecessarily qualified transform widening");
 
     const Shards original = make_original(1000, 4096);
     const Shards automatic_parity = encode(
@@ -306,8 +373,15 @@ int main()
         require(leo_init() == Leopard_Success, "Leopard initialization");
         Context automatic(LEO2_BACKEND_AUTO);
         require_result(automatic.result(), LEO2_SUCCESS, "AUTO context");
+        Context scalar(LEO2_BACKEND_SCALAR);
+        Context ssse3(LEO2_BACKEND_SSSE3);
         Context avx2(LEO2_BACKEND_AVX2);
         Context avx512(LEO2_BACKEND_AVX512);
+
+        require_explicit_backend(scalar, LEO2_BACKEND_SCALAR);
+        require_explicit_backend(ssse3, LEO2_BACKEND_SSSE3);
+        require_explicit_backend(avx2, LEO2_BACKEND_AVX2);
+        require_explicit_backend(avx512, LEO2_BACKEND_AVX512);
 
         if (leopard::backend::IsCalibratedAutoAVX512EncodeHost() &&
             leo2_context_backend(automatic.get()) == LEO2_BACKEND_AVX2 &&

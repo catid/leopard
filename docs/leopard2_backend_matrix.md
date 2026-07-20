@@ -4,11 +4,13 @@
 `auto`, `scalar`, `ssse3`, `avx2`, and `avx512`. The default is `auto`. In that mode the
 project builds baseline control flow at the x86-64 SSE2 floor and adds named
 SSSE3, AVX2, and AVX-512VL object members compiled with target-local ISA flags
-when the compiler supports them. Startup
-CPUID/XCR0 probing selects one immutable private ops table only after its
-GF8/GF16/XOR known-answer tests pass. A forced variant caps both `AUTO` and
-explicit context selection at that backend; `avx512` may still qualify lower
-tables. It never changes the field, coordinate profile, or wire bytes.
+when the compiler supports them. Startup CPUID/XCR0 probing selects the
+immutable context-baseline table only after its GF8/GF16/XOR known-answer tests
+pass. A forced variant caps both `AUTO` and explicit context selection at that
+backend; `avx512` may still qualify lower tables. In an ordinary `auto` build,
+an eligible codec may additionally qualify one immutable operation table as
+described below. Neither choice changes the field, coordinate profile, or wire
+bytes.
 
 The forced variants apply to the x86 library and independently built fuzzer
 copy. `scalar` selects table-backed scalar fixed multiplication and portable
@@ -17,8 +19,12 @@ kernels. `avx2` additionally requires AVX, OSXSAVE, XMM/YMM XCR0 state, and the
 AVX2 CPUID bit before selecting 256-bit fixed multiplication and Common XOR.
 `avx512` requires AVX2 plus AVX-512F/BW/VL and OS-enabled opmask/ZMM state. It
 selects the explicit AVX-512VL table, whose current data path remains 256 bits
-wide while using the expanded register file. `AUTO` deliberately remains
-AVX2 on a qualifying host.
+wide while using the expanded register file. `AUTO` reports AVX2 as the
+context baseline on a qualifying x86 host. On AMD family 1Ah/model 44h only,
+a legacy-high GF16 codec may select the qualified AVX-512VL operation table for
+a full-output encode when `K >= 8`, `N >= 16`, `2 <= R <= 4096`, and the shard
+length is an exact 64-byte multiple from 64 bytes through 4 MiB inclusive.
+Unknown CPU models and all cells outside those fixed bounds retain AVX2.
 All baseline FF/control objects have legacy whole-TU optional code generation
 disabled.
 
@@ -47,7 +53,8 @@ isolated build per variant.
 It builds and runs the startup-KAT/synthetic-feature/concurrency gate, frozen
 legacy golden vectors, the public API suite, a
 fixed-seed random smoke suite, the independent production-constant and bare-LCH
-differential, and the direct-generator transform differential. Every variant
+differential, the direct-generator transform differential, and the AUTO encode
+selector's positive/negative calibration boundaries. Every variant
 runs the static per-member portable-ISA archive gate. The matrix also
 compares the reusable decode-plan schedule differential, allocation, and
 concurrency test across all executable backends. The `auto` build
@@ -57,6 +64,8 @@ that runtime backend introspection reports the requested scalar, SSSE3, or
 AVX2 backend; the AVX-512 variant is checked the same way when available.
 Lower forced builds also assert that an explicit AVX-512 context is rejected,
 so matching output alone cannot conceal a failed force or qualification cap.
+The failure matrix verifies that an optional AVX-512 KAT failure during
+eligible AUTO codec setup falls back to AVX2 without changing codec creation.
 If CMake did not register or execute the portable-ISA gate (for example because
 `objdump` or a POSIX `sh` is unavailable), the matrix fails with an actionable
 reason; it does not accept CTest's zero exit status for an empty selection.
