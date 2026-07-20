@@ -6,7 +6,7 @@ kernel work or another UID, and it never replaces the benchmark runner's
 independent ``/proc/stat`` zero-sibling-jiffy acceptance gate.
 
 ``run`` is a durable affinity transaction.  It records exact original masks,
-removes the reserved CPUs from same-UID threads, launches one descriptor-pinned
+removes the reserved CPUs from same-UID threads, launches one immutable-content
 command through a fork/pipe gate, monitors safe newcomers, terminates every
 observed surviving child, and makes a bounded best-effort exact-mask restore.
 The child cannot execute until its PID/start-time/session identity is durable.
@@ -52,7 +52,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 
-REPORT_SCHEMA = "leopard2-affinity-supervisor/v6"
+REPORT_SCHEMA = "leopard2-affinity-supervisor/v7"
 ACCEPTANCE_SCHEMA = "leopard2-affinity-acceptance/v1"
 BINDING_SCHEMA = "leopard2-affinity-main-binding/v2"
 MAIN_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v5"
@@ -64,6 +64,27 @@ LAUNCH_READY_TIMEOUT_SECONDS = 10.0
 SIGNAL_GRACE_SECONDS = 2.0
 KILL_GRACE_SECONDS = 2.0
 MAX_IDENTITY_BYTES = 64 * 1024 * 1024
+IMMUTABLE_SNAPSHOT_PROTOCOL = "linux-sealed-memfd/v1"
+IMMUTABLE_SNAPSHOT_KEYS = {
+    "device", "inode", "mode", "protocol", "seals", "sha256", "size",
+}
+MEMFD_SEALS = (
+    fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK |
+    fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE)
+# F_SEAL_EXEC entered the Linux UAPI after the Python versions on some
+# supported hosts.  Request its stable ABI bit and fall back only when the
+# running kernel atomically rejects it as unknown.  Content write seals remain
+# mandatory on every host; the report records which policy the kernel retained.
+F_SEAL_EXEC_LINUX = getattr(fcntl, "F_SEAL_EXEC", 0x0020)
+PYTHON_SNAPSHOT_BOOTSTRAP = (
+    "import os,sys\n"
+    "_a=sys.argv[1];_p=os.path.abspath(_a);_f=sys.argv[2]"
+    ";sys.argv=[_a]+sys.argv[3:]\n"
+    "sys.path[0]=os.path.dirname(_p)\n"
+    "_g=globals();_g.update({'__file__':_p,'__package__':None,"
+    "'__cached__':None,'__spec__':None})\n"
+    "with open(_f,'rb') as _i:_c=compile(_i.read(),_p,'exec')\n"
+    "exec(_c,_g,_g)\n")
 MUTATED_RESTORE_UNPROVABLE = (
     "authoritative completion is unavailable after affinity mutation: finite "
     "procfs scans cannot exclude an in-flight clone publishing with the "
@@ -120,6 +141,7 @@ COMMAND_IDENTITY_KEYS = {"cwd", "executable", "script"}
 PATH_IDENTITY_KEYS = {"device", "inode", "mode", "path"}
 FILE_IDENTITY_KEYS = {
     "argument", "device", "inode", "mode", "path", "sha256", "size",
+    "snapshot",
 }
 
 REPORT_STATES = {
@@ -290,30 +312,64 @@ def format_cpu_list(values):
     return ",".join(ranges)
 
 
-def open_bounded_file_identity(argument):
-    """Open and hash one exact regular-file inode for later descriptor exec."""
+def seal_immutable_snapshot(descriptor, fcntl_function=fcntl.fcntl):
+    """Install mandatory content seals and F_SEAL_EXEC when supported."""
+    desired = MEMFD_SEALS | F_SEAL_EXEC_LINUX
+    try:
+        fcntl_function(descriptor, fcntl.F_ADD_SEALS, desired)
+    except OSError as error:
+        retained = fcntl_function(descriptor, fcntl.F_GET_SEALS)
+        require(error.errno == errno.EINVAL and retained == 0,
+                "kernel rejected immutable command snapshot seals")
+        fcntl_function(descriptor, fcntl.F_ADD_SEALS, MEMFD_SEALS)
+    seals = fcntl_function(descriptor, fcntl.F_GET_SEALS)
+    require(seals & MEMFD_SEALS == MEMFD_SEALS,
+            "kernel did not retain immutable command snapshot write seals")
+    return seals
+
+
+def open_bounded_file_identity(argument, before_seal=None):
+    """Copy one stable file into a write-sealed executable/readable memfd."""
     require(isinstance(argument, str) and argument and "\x00" not in argument,
             "file argument is invalid")
+    require(before_seal is None or callable(before_seal),
+            "immutable snapshot pre-seal hook is invalid")
+    require(hasattr(os, "memfd_create") and
+            all(hasattr(os, name) for name in (
+                "MFD_CLOEXEC", "MFD_ALLOW_SEALING")) and
+            all(hasattr(fcntl, name) for name in (
+                "F_ADD_SEALS", "F_GET_SEALS", "F_SEAL_SEAL",
+                "F_SEAL_SHRINK", "F_SEAL_GROW", "F_SEAL_WRITE")),
+            "immutable command snapshots require Linux memfd sealing")
     path = Path(argument).resolve(strict=True)
-    descriptor = os.open(
+    source = os.open(
         str(path), os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
         getattr(os, "O_NONBLOCK", 0))
+    snapshot = None
     try:
-        before = os.fstat(descriptor)
+        before = os.fstat(source)
         require(stat.S_ISREG(before.st_mode) and 0 <= before.st_size <= MAX_IDENTITY_BYTES,
                 "identity file is not a bounded regular file: {}".format(path))
+        snapshot = os.memfd_create(
+            "leopard2-command-snapshot",
+            os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
         digest = hashlib.sha256()
         retained = 0
         while True:
-            block = os.read(descriptor, min(1024 * 1024,
-                                             MAX_IDENTITY_BYTES + 1 - retained))
+            block = os.read(source, min(
+                1024 * 1024, MAX_IDENTITY_BYTES + 1 - retained))
             if not block:
                 break
             retained += len(block)
             require(retained <= MAX_IDENTITY_BYTES,
                     "identity file is too large: {}".format(path))
             digest.update(block)
-        after = os.fstat(descriptor)
+            offset = 0
+            while offset < len(block):
+                written = os.write(snapshot, block[offset:])
+                require(written > 0, "immutable command snapshot write stalled")
+                offset += written
+        after = os.fstat(source)
         current = os.stat(path)
         require((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns,
                  before.st_ctime_ns) ==
@@ -321,6 +377,30 @@ def open_bounded_file_identity(argument):
                  after.st_ctime_ns) and
                 (before.st_dev, before.st_ino) == (current.st_dev, current.st_ino),
                 "identity file changed while hashing: {}".format(path))
+        os.fchmod(snapshot, before.st_mode & 0o777)
+        os.lseek(snapshot, 0, os.SEEK_SET)
+        if before_seal is not None:
+            before_seal(snapshot)
+        seals = seal_immutable_snapshot(snapshot)
+        snapshot_metadata = os.fstat(snapshot)
+        require(stat.S_ISREG(snapshot_metadata.st_mode) and
+                snapshot_metadata.st_size == retained,
+                "immutable command snapshot identity is invalid")
+        content_hash = digest.hexdigest()
+        sealed_digest = hashlib.sha256()
+        sealed_size = 0
+        while sealed_size < snapshot_metadata.st_size:
+            block = os.pread(
+                snapshot, min(1024 * 1024,
+                              snapshot_metadata.st_size - sealed_size),
+                sealed_size)
+            require(block,
+                    "immutable command snapshot read stalled after sealing")
+            sealed_digest.update(block)
+            sealed_size += len(block)
+        require(sealed_size == retained and
+                sealed_digest.hexdigest() == content_hash,
+                "immutable command snapshot differs from hashed source content")
         identity = {
             "argument": argument,
             "path": str(path),
@@ -328,12 +408,27 @@ def open_bounded_file_identity(argument):
             "inode": before.st_ino,
             "mode": before.st_mode & 0o7777,
             "size": before.st_size,
-            "sha256": digest.hexdigest(),
+            "sha256": content_hash,
+            "snapshot": {
+                "protocol": IMMUTABLE_SNAPSHOT_PROTOCOL,
+                "device": snapshot_metadata.st_dev,
+                "inode": snapshot_metadata.st_ino,
+                "mode": snapshot_metadata.st_mode & 0o7777,
+                "size": snapshot_metadata.st_size,
+                "sha256": content_hash,
+                "seals": seals,
+            },
         }
-        return descriptor, identity
+        os.close(source)
+        source = None
+        return snapshot, identity
     except BaseException:
-        os.close(descriptor)
+        if snapshot is not None:
+            os.close(snapshot)
         raise
+    finally:
+        if source is not None:
+            os.close(source)
 
 
 def bounded_file_identity(argument):
@@ -343,12 +438,13 @@ def bounded_file_identity(argument):
 
 
 class PinnedCommand:
-    """Descriptor-bound command/cwd snapshot used by the gated child.
+    """Immutable command-content and descriptor-bound cwd launch snapshot.
 
     The report keeps the user's original argv and path identities.  Execution
-    uses ``/proc/self/fd`` names for the already-hashed executable and optional
-    Python script, so replacing either pathname after preparation cannot select
-    different code.  The child also fchdir()s to the captured directory inode.
+    uses ``/proc/self/fd`` names for write-sealed copies of the already-hashed
+    executable and optional Python script, so replacing a pathname or changing
+    its inode's bytes after preparation cannot select different code.  The
+    child also fchdir()s to the captured directory inode.
     """
 
     def __init__(self, command):
@@ -396,6 +492,13 @@ class PinnedCommand:
 
             script = None
             if len(self.command) >= 2 and self.command[1].endswith(".py"):
+                # The fixed -c bootstrap is an argv contract with a Python
+                # interpreter.  A shebang executable would instead dispatch to
+                # an uncaptured interpreter and treat those arguments as shell
+                # input, so this authoritative mode accepts only a directly
+                # executable ELF image.
+                require(os.pread(descriptor, 4, 0) == b"\x7fELF",
+                        "Python script execution requires an ELF interpreter")
                 descriptor, script = open_bounded_file_identity(self.command[1])
                 self.script_descriptor = descriptor
                 self.descriptors.append(descriptor)
@@ -418,11 +521,38 @@ class PinnedCommand:
                 "pinned executable is closed")
         return self._proc_fd(self.executable_descriptor)
 
-    def execution_argv(self):
-        result = list(self.command)
+    @staticmethod
+    def _validate_snapshot_descriptor(descriptor, identity, label):
+        require(descriptor is not None and os.get_inheritable(descriptor),
+                "{} immutable snapshot is closed or not inheritable".format(label))
+        metadata = os.fstat(descriptor)
+        snapshot = identity["snapshot"]
+        seals = fcntl.fcntl(descriptor, fcntl.F_GET_SEALS)
+        require(stat.S_ISREG(metadata.st_mode) and
+                (metadata.st_dev, metadata.st_ino,
+                 metadata.st_mode & 0o7777, metadata.st_size, seals) ==
+                (snapshot["device"], snapshot["inode"], snapshot["mode"],
+                 snapshot["size"], snapshot["seals"]) and
+                seals & MEMFD_SEALS == MEMFD_SEALS,
+                "{} immutable snapshot identity changed before exec".format(label))
+
+    def validate_snapshot_descriptors(self):
+        self._validate_snapshot_descriptor(
+            self.executable_descriptor, self.identity["executable"],
+            "executable")
         if self.script_descriptor is not None:
-            result[1] = self._proc_fd(self.script_descriptor)
-        return result
+            self._validate_snapshot_descriptor(
+                self.script_descriptor, self.identity["script"], "script")
+
+    def execution_argv(self):
+        if self.script_descriptor is None:
+            return list(self.command)
+        # Execute immutable script bytes while preserving ordinary direct-script
+        # __file__, sys.argv, and sys.path[0] semantics for the application.
+        return [
+            self.command[0], "-c", PYTHON_SNAPSHOT_BOOTSTRAP,
+            self.command[1], self._proc_fd(self.script_descriptor),
+        ] + self.command[2:]
 
     def close(self):
         for descriptor in reversed(getattr(self, "descriptors", [])):
@@ -1084,6 +1214,21 @@ def validate_file_identity(value, label):
     require(isinstance(value["sha256"], str) and
             HEX256.fullmatch(value["sha256"]) is not None,
             "{} hash is invalid".format(label))
+    snapshot = require_exact_keys(
+        value["snapshot"], IMMUTABLE_SNAPSHOT_KEYS,
+        "{} immutable snapshot".format(label))
+    require(snapshot["protocol"] == IMMUTABLE_SNAPSHOT_PROTOCOL,
+            "{} immutable snapshot protocol is unknown".format(label))
+    for name in ("device", "inode", "mode", "size", "seals"):
+        exact_int(snapshot[name], "{} snapshot {}".format(label, name),
+                  0, 2**63 - 1)
+    require(snapshot["size"] == value["size"] and
+            snapshot["sha256"] == value["sha256"] and
+            snapshot["mode"] == value["mode"] & 0o777 and
+            snapshot["seals"] & MEMFD_SEALS == MEMFD_SEALS and
+            isinstance(snapshot["sha256"], str) and
+            HEX256.fullmatch(snapshot["sha256"]) is not None,
+            "{} immutable snapshot does not bind source content".format(label))
 
 
 def validate_global_lock(value, uid, label="global affinity lock"):
@@ -1415,6 +1560,7 @@ def execute_pinned_command(pinned, launch_cpus, execution_nonce,
     require(isinstance(execution_nonce, str) and
             HEX256.fullmatch(execution_nonce) is not None,
             "execution nonce is invalid")
+    pinned.validate_snapshot_descriptors()
     require(pinned.cwd_descriptor is not None,
             "pinned working directory is closed")
     fchdir_function(pinned.cwd_descriptor)
@@ -1434,6 +1580,53 @@ def reset_gated_child_signals(old_mask, signal_function=signal.signal,
     for signum in GATED_SIGNALS:
         signal_function(signum, signal.SIG_DFL)
     mask_function(signal.SIG_SETMASK, old_mask)
+
+
+def restore_signal_handlers(previous_handlers, signal_function=signal.signal):
+    """Best-effort restore every captured handler; retry transient failures."""
+    pending = list(previous_handlers.items())
+    last_errors = []
+    for _attempt in range(2):
+        failed = []
+        last_errors = []
+        for signum, handler in pending:
+            try:
+                signal_function(signum, handler)
+            except BaseException as error:
+                failed.append((signum, handler))
+                last_errors.append("{}: {}".format(int(signum), error))
+        pending = failed
+        if not pending:
+            return
+    raise IsolationError("cannot restore signal handlers: {}".format(
+        "; ".join(last_errors)))
+
+
+def restore_signal_state(previous_handlers, entry_mask,
+                         signal_function=signal.signal,
+                         mask_function=signal.pthread_sigmask):
+    """Restore all handlers and the independently captured entry mask."""
+    failures = []
+    try:
+        mask_function(signal.SIG_BLOCK, set(GATED_SIGNALS))
+    except BaseException as error:
+        failures.append("signal blocking failed: {}".format(error))
+    try:
+        restore_signal_handlers(previous_handlers, signal_function)
+    except BaseException as error:
+        failures.append(str(error))
+    restored = False
+    for _attempt in range(2):
+        try:
+            mask_function(signal.SIG_SETMASK, entry_mask)
+            restored = True
+            break
+        except BaseException as error:
+            mask_error = error
+    if not restored:
+        failures.append("signal mask restoration failed: {}".format(mask_error))
+    if failures:
+        raise IsolationError("; ".join(failures))
 
 
 class GatedLauncher:
@@ -1880,9 +2073,20 @@ class AffinityTransaction:
         }
         payload["digest"] = sha256_value(payload)
         seal = acceptance_path(self.report_path)
+
+        def require_exact_readback():
+            retained, retained_bytes, retained_seal, retained_seal_bytes = \
+                accepted_report_snapshot(self.report_path)
+            require(retained_bytes == report_bytes and
+                    retained == self.report and
+                    retained_seal == payload and
+                    retained_seal_bytes == canonical_bytes(payload),
+                    "read-back acceptance differs from committing snapshot")
+
         try:
             self.seal_writer(seal, payload, exclusive=True)
             validate_acceptance(payload, self.report_path, report_bytes)
+            require_exact_readback()
         except BaseException as commit_error:
             # A writer may report a post-install fsync error.  Never let that
             # possibly-installed seal disagree with the returned result.  If
@@ -1895,11 +2099,7 @@ class AffinityTransaction:
                 self._invalidate_acceptance()
             except BaseException as invalidation_error:
                 try:
-                    retained, retained_bytes, _seal, _seal_bytes = \
-                        accepted_report_snapshot(self.report_path)
-                    require(retained_bytes == report_bytes and
-                            retained == self.report,
-                            "read-back acceptance differs from committing snapshot")
+                    require_exact_readback()
                     return
                 except BaseException as readback_error:
                     raise IsolationError(
@@ -1922,6 +2122,14 @@ class AffinityTransaction:
         validate_report(self.report)
         self.writer(self.report_path, self.report, exclusive=exclusive)
         self.write_count += 1
+
+    def _require_exact_journal_readback(self, label):
+        _path, retained, retained_bytes, _identity = stable_json_snapshot(
+            self.report_path, label)
+        validate_report(retained)
+        require(retained == self.report and
+                retained_bytes == canonical_bytes(self.report),
+                "{} differs from the committing snapshot".format(label))
 
     def _event(self, name, identity=None, value=None):
         event = {
@@ -2255,11 +2463,25 @@ class AffinityTransaction:
     def _mark_child_released(self):
         require(self.report["child"] is not None,
                 "cannot release an unrecorded child")
+        require(self.report["child"]["released"] is True and
+                self.report["state"] == "running",
+                "child release was not conservatively journaled")
+
+    def _authorize_child_release(self, descriptor, write_function=os.write):
+        require(self.received_signal is None,
+                "signal arrived before gated child release")
+        require(self.report["child"] is not None and
+                self.report["child"]["released"] is False,
+                "gated child release state is invalid")
+        # This Boolean means "release may have occurred", not merely that the
+        # parent observed the byte write.  Commit the conservative state before
+        # making execution possible.  A crash after this fsync but before the
+        # gate byte therefore forces released-child recovery rejection; a crash
+        # before it leaves the child blocked on a pipe whose writer disappears.
         self.report["child"]["released"] = True
         self.report["state"] = "running"
         self._write()
-
-    def _authorize_child_release(self, descriptor):
+        self._require_exact_journal_readback("child release journal")
         require(self.received_signal is None,
                 "signal arrived before gated child release")
         self.gate_descriptor = descriptor
@@ -2271,7 +2493,7 @@ class AffinityTransaction:
             require(self.received_signal is None,
                     "signal arrived before gated child release")
             if descriptor is not None:
-                written = os.write(descriptor, b"G")
+                written = write_function(descriptor, b"G")
                 require(written == 1, "gated child release write was incomplete")
         finally:
             if self.gate_descriptor == descriptor:
@@ -2447,7 +2669,163 @@ class AffinityTransaction:
             if signum in signal.sigpending():
                 self.request_signal(signum)
 
-    def run(self, command):
+    def _finalize_run(self, child_returncode, run_error, cleanup_failures,
+                      restore_failures, write_failures, descendants_observed,
+                      signal_finalizer):
+        """Clean up under a restorable mask, then commit acceptance last."""
+        old_signal_mask = None
+        try:
+            if hasattr(signal, "pthread_sigmask"):
+                old_signal_mask = signal.pthread_sigmask(
+                    signal.SIG_BLOCK, set(GATED_SIGNALS))
+                self._capture_blocked_signals()
+
+            # No affinity is restored while a process in the benchmark session
+            # remains alive.  Recovery uses the same ordering.
+            if self.report["child"] is not None:
+                initial_signal = self.received_signal or signal.SIGTERM
+                try:
+                    failures, had_members = terminate_session(
+                        self.backend, self.report["child"], initial_signal,
+                        sleep_function=self.sleep,
+                        reap_callback=self.child.poll if self.child is not None else None,
+                        retained=[self.child_processes[key]
+                                  for key in self.child_process_order],
+                        subreaper_pid=self.subreaper_pid)
+                    cleanup_failures.extend(failures)
+                    if had_members:
+                        self._event("child_session_cleanup", value=initial_signal)
+                except BaseException as error:
+                    cleanup_failures.append(str(error))
+                child_returncode = self._finish_child_wait()
+            self.report["child_returncode"] = child_returncode
+            if self.report["execution"]["child_ready_monotonic_ns"] is not None:
+                self.report["execution"]["child_finished_monotonic_ns"] = \
+                    time.monotonic_ns()
+            self.report["state"] = "restoring"
+            try:
+                self._write()
+            except BaseException as error:
+                # A pre-restore journal write failure is evidence failure, but
+                # it must never suppress the independently attempted restore.
+                write_failures.append(str(error))
+            if not cleanup_failures:
+                try:
+                    restore_failures.extend(self.restore_reconciled())
+                except BaseException as error:
+                    restore_failures.append(str(error))
+            else:
+                restore_failures.append(
+                    "affinity restore withheld until child-session cleanup succeeds")
+
+            errors = []
+            if run_error is not None:
+                errors.append(str(run_error))
+            errors.extend(cleanup_failures)
+            errors.extend(restore_failures)
+            errors.extend(write_failures)
+            if child_returncode not in (None, 0):
+                errors.append("child returned {}".format(child_returncode))
+            if self.received_signal is not None:
+                errors.append("received signal {}".format(self.received_signal))
+            if descendants_observed:
+                errors.append("child-session descendants required forced cleanup")
+            self._capture_blocked_signals()
+            if self.received_signal is not None and not any(
+                    item.startswith("received signal ") for item in errors):
+                errors.append("received signal {}".format(self.received_signal))
+            self.report["error"] = "; ".join(errors) if errors else None
+            self.report["accepted"] = (
+                not errors and not self.report["uncertainty"] and
+                child_returncode == 0 and self.received_signal is None)
+            self.report["state"] = "complete" if self.report["accepted"] else "failed"
+            self.report["finished_utc"] = utc_now()
+            try:
+                self._write()
+            except BaseException as error:
+                write_failures.append(str(error))
+                self.report["accepted"] = False
+                self.report["state"] = "failed"
+
+            # A signal arriving during the durable final write is pending while
+            # blocked.  Observe it and rewrite a failed report before defining
+            # the transaction as complete.  Signals delivered after unblocking
+            # occur after this durability boundary, not during the benchmark
+            # transaction.
+            previous_signal = self.received_signal
+            self._capture_blocked_signals()
+            if self.received_signal is not None and previous_signal is None:
+                self.report["accepted"] = False
+                self.report["state"] = "failed"
+                self.report["finished_utc"] = utc_now()
+                signal_error = "received signal {}".format(self.received_signal)
+                self.report["error"] = signal_error if self.report["error"] is None else \
+                    self.report["error"] + "; " + signal_error
+                try:
+                    self._write()
+                except BaseException as error:
+                    write_failures.append(str(error))
+
+            # This is the signal-observation boundary for the supervised
+            # transaction.  The benchmark child is gone and best-effort
+            # restoration plus the final pending-signal rewrite are complete.
+            self.signal_boundary_closed = True
+            if self.pinned_command is not None:
+                self.pinned_command.close()
+                self.pinned_command = None
+
+            # Restore caller handlers while signals remain blocked, then restore
+            # the exact entry mask ourselves.  A callback failure cannot strand
+            # the mask because the unconditional finally below retries it.  No
+            # acceptance seal is attempted until both operations succeed.
+            signal_failures = []
+            if signal_finalizer is not None:
+                try:
+                    signal_finalizer()
+                except BaseException as error:
+                    signal_failures.append(str(error))
+            if old_signal_mask is not None:
+                try:
+                    signal.pthread_sigmask(signal.SIG_SETMASK, old_signal_mask)
+                    old_signal_mask = None
+                except BaseException as error:
+                    signal_failures.append(str(error))
+            if signal_failures:
+                message = "signal-state finalization failed: {}".format(
+                    "; ".join(signal_failures))
+                write_failures.append(message)
+                self.report["accepted"] = False
+                self.report["state"] = "failed"
+                self.report["finished_utc"] = utc_now()
+                self.report["error"] = message if self.report["error"] is None else \
+                    self.report["error"] + "; " + message
+                try:
+                    self._write()
+                except BaseException as rewrite_error:
+                    write_failures.append(str(rewrite_error))
+
+            if self.report["accepted"]:
+                try:
+                    self._seal_acceptance()
+                except BaseException as error:
+                    write_failures.append(str(error))
+                    self.report["accepted"] = False
+                    self.report["state"] = "failed"
+                    self.report["finished_utc"] = utc_now()
+                    self.report["error"] = "acceptance seal failed: {}".format(error)
+                    try:
+                        self._write()
+                    except BaseException as rewrite_error:
+                        write_failures.append(str(rewrite_error))
+            return child_returncode
+        finally:
+            # Any unexpected pre-commit cleanup exception still restores the
+            # exact entry mask.  On a successful acceptance path the mask was
+            # already restored and this branch performs no post-commit syscall.
+            if old_signal_mask is not None:
+                signal.pthread_sigmask(signal.SIG_SETMASK, old_signal_mask)
+
+    def run(self, command, signal_finalizer=None):
         if not command:
             raise IsolationError("no child command was provided")
         child_returncode = None
@@ -2496,118 +2874,10 @@ class AffinityTransaction:
         except BaseException as error:
             run_error = error
         finally:
-            old_signal_mask = None
-            if hasattr(signal, "pthread_sigmask"):
-                old_signal_mask = signal.pthread_sigmask(
-                    signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
-                self._capture_blocked_signals()
-            # No affinity is restored while a process in the benchmark session
-            # remains alive.  Recovery uses the same ordering.
-            if self.report["child"] is not None:
-                initial_signal = self.received_signal or signal.SIGTERM
-                try:
-                    failures, had_members = terminate_session(
-                        self.backend, self.report["child"], initial_signal,
-                        sleep_function=self.sleep,
-                        reap_callback=self.child.poll if self.child is not None else None,
-                        retained=[self.child_processes[key]
-                                  for key in self.child_process_order],
-                        subreaper_pid=self.subreaper_pid)
-                    cleanup_failures.extend(failures)
-                    if had_members:
-                        self._event("child_session_cleanup", value=initial_signal)
-                except BaseException as error:
-                    cleanup_failures.append(str(error))
-                child_returncode = self._finish_child_wait()
-            self.report["child_returncode"] = child_returncode
-            if self.report["execution"]["child_ready_monotonic_ns"] is not None:
-                self.report["execution"]["child_finished_monotonic_ns"] = \
-                    time.monotonic_ns()
-            self.report["state"] = "restoring"
-            try:
-                self._write()
-            except BaseException as error:
-                # A pre-restore journal write failure is evidence failure, but
-                # it must never suppress the independently attempted restore.
-                write_failures.append(str(error))
-            if not cleanup_failures:
-                try:
-                    restore_failures = self.restore_reconciled()
-                except BaseException as error:
-                    restore_failures.append(str(error))
-            else:
-                restore_failures.append(
-                    "affinity restore withheld until child-session cleanup succeeds")
-            errors = []
-            if run_error is not None:
-                errors.append(str(run_error))
-            errors.extend(cleanup_failures)
-            errors.extend(restore_failures)
-            errors.extend(write_failures)
-            if child_returncode not in (None, 0):
-                errors.append("child returned {}".format(child_returncode))
-            if self.received_signal is not None:
-                errors.append("received signal {}".format(self.received_signal))
-            if descendants_observed:
-                errors.append("child-session descendants required forced cleanup")
-            self._capture_blocked_signals()
-            if self.received_signal is not None and not any(
-                    item.startswith("received signal ") for item in errors):
-                errors.append("received signal {}".format(self.received_signal))
-            self.report["error"] = "; ".join(errors) if errors else None
-            self.report["accepted"] = (
-                not errors and not self.report["uncertainty"] and
-                child_returncode == 0 and self.received_signal is None)
-            self.report["state"] = "complete" if self.report["accepted"] else "failed"
-            self.report["finished_utc"] = utc_now()
-            try:
-                self._write()
-            except BaseException as error:
-                write_failures.append(str(error))
-                self.report["accepted"] = False
-                self.report["state"] = "failed"
-            # A signal arriving during the durable final write is pending while
-            # blocked.  Observe it and rewrite a failed report before defining
-            # the transaction as complete.  Signals delivered after unblocking
-            # occur after this durability boundary, not during the benchmark
-            # transaction.
-            previous_signal = self.received_signal
-            self._capture_blocked_signals()
-            if self.received_signal is not None and previous_signal is None:
-                self.report["accepted"] = False
-                self.report["state"] = "failed"
-                self.report["finished_utc"] = utc_now()
-                signal_error = "received signal {}".format(self.received_signal)
-                self.report["error"] = signal_error if self.report["error"] is None else \
-                    self.report["error"] + "; " + signal_error
-                try:
-                    self._write()
-                except BaseException as error:
-                    write_failures.append(str(error))
-            # This is the signal-observation boundary for the supervised
-            # transaction.  The benchmark child is gone, best-effort restoration
-            # and the final pending-signal rewrite are complete, and signals stay
-            # blocked until after the acceptance commit.  A later signal belongs
-            # to the caller, not to the already-finished benchmark evidence.
-            self.signal_boundary_closed = True
-            if self.report["accepted"]:
-                try:
-                    self._seal_acceptance()
-                except BaseException as error:
-                    write_failures.append(str(error))
-                    self.report["accepted"] = False
-                    self.report["state"] = "failed"
-                    self.report["finished_utc"] = utc_now()
-                    self.report["error"] = "acceptance seal failed: {}".format(error)
-                    try:
-                        self._write()
-                    except BaseException as rewrite_error:
-                        write_failures.append(str(rewrite_error))
-            if old_signal_mask is not None:
-                signal.pthread_sigmask(signal.SIG_SETMASK, old_signal_mask)
-            if self.pinned_command is not None:
-                self.pinned_command.close()
-                self.pinned_command = None
+            child_returncode = self._finalize_run(
+                child_returncode, run_error, cleanup_failures,
+                restore_failures, write_failures, descendants_observed,
+                signal_finalizer)
         if write_failures or run_error is not None or cleanup_failures or restore_failures:
             return 1
         if self.received_signal is not None:
@@ -2627,6 +2897,20 @@ def load_report(path, require_accepted=False):
     if require_accepted:
         return accepted_report_snapshot(path)[0]
     return validate_report(load_json(path, "affinity report"))
+
+
+def transaction_acceptance_is_committed(transaction, result_code):
+    """Resolve a post-commit caller error by exact durable read-back."""
+    if not isinstance(transaction, AffinityTransaction) or result_code != 0:
+        return False
+    try:
+        retained, retained_bytes, _seal, _seal_bytes = \
+            accepted_report_snapshot(transaction.report_path)
+    except BaseException:
+        return False
+    return (transaction.report["accepted"] is True and
+            retained == transaction.report and
+            retained_bytes == canonical_bytes(transaction.report))
 
 
 def report_host_matches(report, host=None):
@@ -3364,6 +3648,23 @@ def test_global_lock_serialization():
 
 
 def test_inode_bound_evidence_snapshot():
+    fake_seals = {"value": 0, "rejected_exec": False}
+
+    def old_kernel_fcntl(_descriptor, operation, argument=None):
+        if operation == fcntl.F_GET_SEALS:
+            return fake_seals["value"]
+        check(operation == fcntl.F_ADD_SEALS,
+              "snapshot seal fallback used another fcntl operation")
+        if argument & F_SEAL_EXEC_LINUX:
+            fake_seals["rejected_exec"] = True
+            raise OSError(errno.EINVAL, "unsupported F_SEAL_EXEC")
+        fake_seals["value"] = argument
+        return 0
+
+    check(seal_immutable_snapshot(7, old_kernel_fcntl) == MEMFD_SEALS and
+          fake_seals["rejected_exec"],
+          "old-kernel snapshot seal policy did not preserve mandatory seals")
+
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         target = root / "evidence.json"
@@ -3385,6 +3686,23 @@ def test_inode_bound_evidence_snapshot():
             IsolationError,
             lambda: stable_file_snapshot(fifo, "FIFO evidence"),
             "non-regular evidence path")
+
+        command = root / "command"
+        command.write_bytes(b"original immutable bytes")
+        command.chmod(0o755)
+
+        def tamper_before_seal(descriptor):
+            duplicate = os.dup(descriptor)
+            try:
+                os.pwrite(duplicate, b"X", 0)
+            finally:
+                os.close(duplicate)
+
+        expect_exception(
+            IsolationError,
+            lambda: open_bounded_file_identity(
+                str(command), before_seal=tamper_before_seal),
+            "pre-seal immutable snapshot overwrite")
 
 
 def test_exact_restore_and_newcomer():
@@ -3561,6 +3879,82 @@ def test_write_failure_still_restores():
 def test_acceptance_is_path_sealed_and_fail_closed():
     with tempfile.TemporaryDirectory() as directory:
         backend = FakeBackend()
+        backend.add(1, 1, 1, 1, {0, 2}, ppid=0)
+        transaction = make_fake_transaction(
+            directory, backend, launcher=FakeLauncher(backend))
+        entry_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+
+        capture_calls = {"count": 0}
+
+        def fail_during_blocked_cleanup():
+            capture_calls["count"] += 1
+            if capture_calls["count"] == 3:
+                raise OSError("injected pre-finalizer cleanup failure")
+
+        transaction._capture_blocked_signals = fail_during_blocked_cleanup
+        expect_exception(
+            OSError,
+            lambda: transaction.run(fake_command()),
+            "blocked cleanup signal-mask guard")
+        check(capture_calls["count"] == 3 and
+              signal.pthread_sigmask(signal.SIG_BLOCK, set()) == entry_mask and
+              not acceptance_path(transaction.report_path).exists(),
+              "unexpected cleanup failure stranded the blocked signal mask")
+        if transaction.pinned_command is not None:
+            transaction.pinned_command.close()
+            transaction.pinned_command = None
+
+    with tempfile.TemporaryDirectory() as directory:
+        backend = FakeBackend()
+        backend.add(1, 1, 1, 1, {0, 2}, ppid=0)
+        seal_calls = []
+
+        def recording_seal_writer(path, value, exclusive=False):
+            seal_calls.append((Path(path), value["schema"]))
+            atomic_json(path, value, exclusive=exclusive)
+
+        transaction = make_fake_transaction(
+            directory, backend, launcher=FakeLauncher(backend),
+            seal_writer=recording_seal_writer)
+
+        entry_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
+
+        def fail_before_signal_unmask():
+            raise OSError("injected post-restore signal-mask failure")
+
+        check(transaction.run(
+            fake_command(), signal_finalizer=fail_before_signal_unmask) == 1 and
+            transaction.report["accepted"] is False and
+            not seal_calls and
+            signal.pthread_sigmask(signal.SIG_BLOCK, set()) == entry_mask and
+            not acceptance_path(transaction.report_path).exists(),
+            "signal-state failure crossed the acceptance commit boundary")
+        expect_exception(
+            IsolationError,
+            lambda: load_report(transaction.report_path, require_accepted=True),
+            "signal-finalization failure acceptance")
+
+    for label, seal_writer in (
+            ("no-op", lambda _path, _value, exclusive=False: None),
+            ("corrupt", lambda path, _value, exclusive=False: atomic_json(
+                path, {"corrupt": True}, exclusive=exclusive))):
+        with tempfile.TemporaryDirectory() as directory:
+            backend = FakeBackend()
+            backend.add(1, 1, 1, 1, {0, 2}, ppid=0)
+            transaction = make_fake_transaction(
+                directory, backend, launcher=FakeLauncher(backend),
+                seal_writer=seal_writer)
+            check(transaction.run(fake_command()) == 1 and
+                  transaction.report["accepted"] is False,
+                  "{} acceptance writer bypassed read-back".format(label))
+            expect_exception(
+                IsolationError,
+                lambda path=transaction.report_path: load_report(
+                    path, require_accepted=True),
+                "{} acceptance writer verification".format(label))
+
+    with tempfile.TemporaryDirectory() as directory:
+        backend = FakeBackend()
         supervisor = backend.add(500, 500, 5000, 500,
                                  {0, 1, 2, 3}, ppid=1)
         backend.add(1, 1, 1, 1, {0, 2}, ppid=0)
@@ -3574,6 +3968,24 @@ def test_acceptance_is_path_sealed_and_fail_closed():
               load_report(transaction.report_path,
                           require_accepted=True)["accepted"] is True,
               "single-threaded supervisor self-mutation was not bounded")
+
+        class FaultingLockExit:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                raise OSError("injected post-commit lock teardown failure")
+
+        lock_error = None
+        try:
+            with FaultingLockExit():
+                committed_result = 0
+        except OSError as error:
+            lock_error = error
+        check(lock_error is not None and
+              transaction_acceptance_is_committed(
+                  transaction, committed_result),
+              "post-commit lock failure overrode exact accepted read-back")
 
     with tempfile.TemporaryDirectory() as directory:
         backend = FakeBackend()
@@ -3662,6 +4074,36 @@ def test_gate_signal_and_descendants():
 
     with tempfile.TemporaryDirectory() as directory:
         backend = FakeBackend()
+        backend.add(1, 1, 1, 1, {0, 2}, ppid=0)
+        launcher = FakeLauncher(backend)
+        writer = CountingWriter(fail_state_once="running")
+        transaction = make_fake_transaction(
+            directory, backend, writer=writer, launcher=launcher)
+        check(transaction.run(fake_command()) == 1 and writer.failed and
+              not launcher.released and
+              transaction.report["child"]["released"] is True and
+              not acceptance_path(transaction.report_path).exists(),
+              "failed release-state journal write reached the child gate")
+
+    with tempfile.TemporaryDirectory() as directory:
+        backend = FakeBackend()
+        backend.add(1, 1, 1, 1, {0, 2}, ppid=0)
+        launcher = FakeLauncher(backend)
+
+        def drop_running_journal(path, value, exclusive=False):
+            if value.get("state") != "running":
+                atomic_json(path, value, exclusive=exclusive)
+
+        transaction = make_fake_transaction(
+            directory, backend, writer=drop_running_journal,
+            launcher=launcher)
+        check(transaction.run(fake_command()) == 1 and
+              not launcher.released and
+              not acceptance_path(transaction.report_path).exists(),
+              "nominal no-op release journal writer reached the child gate")
+
+    with tempfile.TemporaryDirectory() as directory:
+        backend = FakeBackend()
         backend.add(1, 1, 1, 1, {0, 1, 2, 3}, ppid=0)
         launcher = FakeLauncher(backend, fail_before_release=True)
         transaction = make_fake_transaction(directory, backend, launcher=launcher)
@@ -3677,6 +4119,70 @@ def test_gate_signal_and_descendants():
         check(transaction.run(fake_command()) == 1 and not launcher.released and
               transaction.report["child"]["released"] is False,
               "signal after durable-ready escaped the child release gate")
+
+    # Reproduce the old crash window exactly: write the gate byte successfully,
+    # then report an ambiguous syscall failure before control can return to the
+    # launcher.  The conservative release state must already be durable, forcing
+    # recovery to reject an unobserved double-fork.
+    with tempfile.TemporaryDirectory() as directory:
+        backend = FakeBackend()
+        backend.add(1, 1, 1, 1, {0, 2}, ppid=0)
+        transaction = make_fake_transaction(directory, backend)
+        transaction.subreaper_pid = 500
+        transaction.report["subreaper_pid"] = 500
+        transaction._write()
+        transaction.prepare_command(fake_command())
+        transaction.stabilize()
+        child = backend.add(900, 900, 9000, 900,
+                            {0, 1, 2, 3}, ppid=1)
+        transaction._child_ready(child)
+        gate_read, gate_write = os.pipe()
+
+        class SimulatedSupervisorCrash(BaseException):
+            pass
+
+        def committed_gate_write_then_crash(descriptor, payload):
+            check(os.write(descriptor, payload) == 1,
+                  "fake gate write did not commit one byte")
+            raise SimulatedSupervisorCrash(
+                "crash after committed gate write")
+
+        try:
+            expect_exception(
+                SimulatedSupervisorCrash,
+                lambda: transaction._authorize_child_release(
+                    gate_write,
+                    write_function=committed_gate_write_then_crash),
+                "committed ambiguous gate write")
+            os.close(gate_write)
+            gate_write = None
+            check(os.read(gate_read, 2) == b"G",
+                  "ambiguous gate write did not release child code")
+        finally:
+            os.close(gate_read)
+            if gate_write is not None:
+                os.close(gate_write)
+        retained_before_crash = load_report(transaction.report_path)
+        check(retained_before_crash["child"]["released"] is True and
+              retained_before_crash["state"] == "running",
+              "release-may-have-occurred state was not durable before gate")
+        if transaction.pinned_command is not None:
+            transaction.pinned_command.close()
+            transaction.pinned_command = None
+        backend.remove_process(900)
+        backend.add(901, 901, 9010, 901, {0, 1, 2, 3}, ppid=999)
+        expect_exception(
+            IsolationError,
+            lambda: recover_report(
+                transaction.report_path, backend=backend, host=FAKE_HOST,
+                sleep_function=lambda _seconds: None,
+                global_lock=transaction.global_lock),
+            "ambiguous post-gate crash recovery")
+        retained_after_recovery = load_report(transaction.report_path)
+        check((901, 901) in backend.threads and not backend.signal_log and
+              retained_after_recovery["state"] == "recovery_failed" and
+              CRASH_SCOPE_UNPROVABLE in retained_after_recovery["error"],
+              "post-gate crash hid an unjournaled cross-session orphan")
 
     with tempfile.TemporaryDirectory() as directory:
         backend = FakeBackend()
@@ -3793,24 +4299,100 @@ def test_descriptor_pinned_exec_and_child_signal_defaults():
           ["handler", "handler", "handler", "mask"],
           "gated child unblocked before replacing copied signal handlers")
 
+    original_handlers = {signum: "original-{}".format(int(signum))
+                         for signum in GATED_SIGNALS}
+    current_handlers = {signum: "temporary" for signum in GATED_SIGNALS}
+    current_mask = {signal.SIGUSR1}
+    handler_attempts = {}
+    mask_attempts = {"restore": 0}
+
+    def flaky_restore_signal(signum, disposition):
+        handler_attempts[signum] = handler_attempts.get(signum, 0) + 1
+        if signum == signal.SIGTERM and handler_attempts[signum] == 1:
+            raise OSError("injected transient handler restore failure")
+        current_handlers[signum] = disposition
+
+    def flaky_restore_mask(how, mask):
+        nonlocal current_mask
+        previous = set(current_mask)
+        if how == signal.SIG_BLOCK:
+            current_mask.update(mask)
+        elif how == signal.SIG_SETMASK:
+            mask_attempts["restore"] += 1
+            if mask_attempts["restore"] == 1:
+                raise OSError("injected transient mask restore failure")
+            current_mask = set(mask)
+        return previous
+
+    restore_signal_state(
+        original_handlers, {signal.SIGUSR1},
+        signal_function=flaky_restore_signal,
+        mask_function=flaky_restore_mask)
+    check(current_handlers == original_handlers and
+          current_mask == {signal.SIGUSR1} and
+          handler_attempts[signal.SIGTERM] == 2 and
+          mask_attempts["restore"] == 2,
+          "signal cleanup did not retry and restore exact caller state")
+
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         executable = root / "command"
         script = root / "runner.py"
-        executable.write_bytes(b"#!/bin/sh\nexit 0\n")
-        executable.chmod(0o755)
-        script.write_bytes(b"print('original')\n")
+        original_executable_path = Path(sys.executable).resolve(strict=True)
+        original_executable = original_executable_path.read_bytes()
+        original_script = b"print('original')\n"
+        executable.write_bytes(original_executable)
+        executable.chmod(original_executable_path.stat().st_mode & 0o777)
+        script.write_bytes(original_script)
+
+        shebang = root / "shebang-python"
+        shebang.write_bytes(b"#!/bin/sh\nexit 0\n")
+        shebang.chmod(0o755)
+        expect_exception(
+            IsolationError,
+            lambda: PinnedCommand([str(shebang), str(script)]),
+            "shebang executable in Python snapshot mode")
+
         pinned = PinnedCommand([str(executable), str(script), "argument"])
         try:
             original_identity = json.loads(json.dumps(pinned.identity))
             original_command_hash = sha256_value(pinned.command)
-            saved_executable = root / "command.original"
-            saved_script = root / "runner.original.py"
-            os.replace(executable, saved_executable)
-            os.replace(script, saved_script)
-            executable.write_bytes(b"#!/bin/sh\nexit 99\n")
-            executable.chmod(0o755)
+            for descriptor, label in (
+                    (pinned.executable_descriptor, "executable"),
+                    (pinned.script_descriptor, "script")):
+                try:
+                    os.pwrite(descriptor, b"X", 0)
+                except OSError as error:
+                    check(error.errno == errno.EPERM,
+                          "{} snapshot rejected writes unexpectedly".format(label))
+                else:
+                    raise SelfTestError(
+                        "{} snapshot remained writable after sealing".format(label))
+                identity = pinned.identity[label]
+                if identity["snapshot"]["seals"] & F_SEAL_EXEC_LINUX:
+                    try:
+                        os.fchmod(
+                            descriptor,
+                            identity["snapshot"]["mode"] ^ 0o100)
+                    except OSError as error:
+                        check(error.errno == errno.EPERM,
+                              "{} F_SEAL_EXEC failed unexpectedly".format(label))
+                    else:
+                        raise SelfTestError(
+                            "{} snapshot execute mode remained mutable".format(label))
+            # Overwrite each source in place, preserving device/inode.  An
+            # original-inode descriptor would now read replacement bytes; only
+            # a sealed content copy remains immutable.
+            executable.write_bytes(b"X" * len(original_executable))
+            executable.chmod(original_executable_path.stat().st_mode & 0o777)
             script.write_bytes(b"print('replacement')\n")
+            check((executable.stat().st_dev, executable.stat().st_ino) ==
+                  (original_identity["executable"]["device"],
+                   original_identity["executable"]["inode"]) and
+                  (script.stat().st_dev, script.stat().st_ino) ==
+                  (original_identity["script"]["device"],
+                   original_identity["script"]["inode"]),
+                  "same-inode overwrite fixture replaced a pathname")
             captured = {}
 
             class CapturedExec(Exception):
@@ -3831,7 +4413,15 @@ def test_descriptor_pinned_exec_and_child_signal_defaults():
                 captured["exec_path"] = path
                 captured["argv"] = list(argv)
                 captured["executable_bytes"] = Path(path).read_bytes()
-                captured["script_bytes"] = Path(argv[1]).read_bytes()
+                captured["script_bytes"] = Path(argv[4]).read_bytes()
+                executable_metadata = os.stat(path)
+                script_metadata = os.stat(argv[4])
+                captured["executable_snapshot"] = (
+                    executable_metadata.st_dev, executable_metadata.st_ino,
+                    executable_metadata.st_size)
+                captured["script_snapshot"] = (
+                    script_metadata.st_dev, script_metadata.st_ino,
+                    script_metadata.st_size)
                 captured["nonce"] = environment.get(EXECUTION_NONCE_ENV)
                 raise CapturedExec()
 
@@ -3845,23 +4435,33 @@ def test_descriptor_pinned_exec_and_child_signal_defaults():
                     execve_function=fake_execve, environment={}),
                 "descriptor-pinned execution capture")
 
-            # Model replacement code restoring the original pathname before
-            # final evidence inspection.  Path-only pre/post hashing would miss
-            # this attack; the captured descriptors never selected replacement.
-            executable.unlink()
-            script.unlink()
-            os.replace(saved_executable, executable)
-            os.replace(saved_script, script)
+            # Model replacement code restoring the original bytes before final
+            # evidence inspection.  Pre/post path or inode hashing would miss
+            # the executed interval; sealed snapshots do not.
+            executable.write_bytes(original_executable)
+            script.write_bytes(original_script)
             final_executable = bounded_file_identity(str(executable))
             final_script = bounded_file_identity(str(script))
-            check(captured["executable_bytes"] == b"#!/bin/sh\nexit 0\n" and
-                  captured["script_bytes"] == b"print('original')\n" and
-                  captured["argv"] == [str(executable),
-                                        pinned._proc_fd(
-                                            pinned.script_descriptor),
-                                        "argument"] and
+            check(captured["executable_bytes"] == original_executable and
+                  captured["script_bytes"] == original_script and
+                  captured["argv"] == [
+                      str(executable), "-c", PYTHON_SNAPSHOT_BOOTSTRAP,
+                      str(script), pinned._proc_fd(pinned.script_descriptor),
+                      "argument"] and
                   captured["exec_path"] == pinned._proc_fd(
                       pinned.executable_descriptor) and
+                  captured["executable_snapshot"] == (
+                      original_identity["executable"]["snapshot"]["device"],
+                      original_identity["executable"]["snapshot"]["inode"],
+                      len(original_executable)) and
+                  captured["script_snapshot"] == (
+                      original_identity["script"]["snapshot"]["device"],
+                      original_identity["script"]["snapshot"]["inode"],
+                      len(original_script)) and
+                  original_identity["executable"]["snapshot"]["seals"] &
+                  MEMFD_SEALS == MEMFD_SEALS and
+                  original_identity["script"]["snapshot"]["seals"] &
+                  MEMFD_SEALS == MEMFD_SEALS and
                   captured["cwd"] == (
                       original_identity["cwd"]["device"],
                       original_identity["cwd"]["inode"]) and
@@ -3878,9 +4478,64 @@ def test_descriptor_pinned_exec_and_child_signal_defaults():
                   (original_identity["script"]["device"],
                    original_identity["script"]["inode"],
                    original_identity["script"]["sha256"]),
-                  "pathname replacement selected unpinned command code")
+                  "same-inode overwrite changed immutable command execution")
         finally:
             pinned.close()
+
+        # Exercise kernel ELF dispatch and Python's real __main__ module, not
+        # only the mocked execve boundary above.  Both source inodes are changed
+        # in place after preparation; the child must still run the sealed bytes.
+        actual_executable = root / "actual-python"
+        actual_script = root / "actual.py"
+        actual_output = root / "actual.json"
+        actual_executable.write_bytes(original_executable)
+        actual_executable.chmod(original_executable_path.stat().st_mode & 0o777)
+        actual_script.write_text(
+            "MARKER='immutable-original'\n"
+            "import __main__,json,os,sys\n"
+            "with open(sys.argv[1],'w',encoding='utf-8') as out:\n"
+            " json.dump({'same_main':__main__.__dict__ is globals(),"
+            "'main_marker':getattr(__main__,'MARKER',None),"
+            "'file':__file__,'argv':sys.argv,'path0':sys.path[0]},out)\n",
+            encoding="utf-8")
+        actual = PinnedCommand([
+            str(actual_executable), str(actual_script), str(actual_output),
+            "argument"])
+        try:
+            actual_executable.write_bytes(b"X" * len(original_executable))
+            actual_executable.chmod(
+                original_executable_path.stat().st_mode & 0o777)
+            actual_script.write_text(
+                "raise SystemExit('replacement script executed')\n",
+                encoding="utf-8")
+            child_pid = os.fork()
+            if child_pid == 0:  # pragma: no cover - parent verifies output
+                try:
+                    actual.validate_snapshot_descriptors()
+                    os.execve(
+                        actual.executable_path(), actual.execution_argv(),
+                        dict(os.environ))
+                except BaseException:
+                    os._exit(126)
+            child = ForkedChild(child_pid, None)
+            try:
+                returncode = child.wait(5.0)
+            except TimeoutError:
+                os.kill(child_pid, signal.SIGKILL)
+                child.wait(5.0)
+                raise SelfTestError("immutable snapshot exec timed out")
+            payload = load_json(actual_output, "immutable snapshot exec output") \
+                if actual_output.exists() else None
+            check(returncode == 0 and payload == {
+                "same_main": True,
+                "main_marker": "immutable-original",
+                "file": str(actual_script),
+                "argv": [str(actual_script), str(actual_output), "argument"],
+                "path0": str(root),
+            }, "real exec selected changed executable/script bytes or broke "
+               "direct Python semantics")
+        finally:
+            actual.close()
 
 
 def test_tid_reuse_and_recovery():
@@ -4288,6 +4943,8 @@ def parser():
 
 def main(arguments=None):
     options = parser().parse_args(arguments)
+    transaction = None
+    result_code = None
     try:
         if options.operation == "self-test":
             return self_test()
@@ -4323,42 +4980,58 @@ def main(arguments=None):
                 LinuxThreadBackend(), parse_cpu_list(options.reserved_cpus), launch,
                 options.report, options.poll_ms, global_lock=global_lock)
             previous_handlers = {}
-            for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-                previous_handlers[signum] = signal.getsignal(signum)
-
-                def supervised_signal(received, frame, tx=transaction,
-                                      previous=previous_handlers[signum]):
-                    if tx.request_signal(received):
-                        return
-                    # The transaction's explicit signal boundary has closed.
-                    # Preserve the caller's disposition instead of swallowing a
-                    # post-transaction signal in the temporary handler.
-                    if previous == signal.SIG_IGN:
-                        return
-                    if previous == signal.SIG_DFL:
-                        signal.signal(received, signal.SIG_DFL)
-                        os.kill(os.getpid(), received)
-                        return
-                    previous(received, frame)
-
-                signal.signal(signum, supervised_signal)
-            result_code = 1
-            late_mask = None
+            signal_handlers_restored = False
+            entry_signal_mask = signal.pthread_sigmask(signal.SIG_BLOCK, set())
             try:
-                result_code = transaction.run(child)
+                # Keep every gated signal blocked while capturing and installing
+                # all handlers, so a partial installation fault can be rolled
+                # back to the independently saved caller state.
+                signal.pthread_sigmask(signal.SIG_BLOCK, set(GATED_SIGNALS))
+                for signum in GATED_SIGNALS:
+                    previous_handlers[signum] = signal.getsignal(signum)
+                for signum in GATED_SIGNALS:
+                    previous = previous_handlers[signum]
+
+                    def supervised_signal(received, frame, tx=transaction,
+                                          prior=previous):
+                        if tx.request_signal(received):
+                            return
+                        # The transaction's explicit signal boundary has closed.
+                        # Preserve the caller's disposition instead of swallowing
+                        # a post-transaction signal in the temporary handler.
+                        if prior == signal.SIG_IGN:
+                            return
+                        if prior == signal.SIG_DFL:
+                            signal.signal(received, signal.SIG_DFL)
+                            os.kill(os.getpid(), received)
+                            return
+                        prior(received, frame)
+
+                    signal.signal(signum, supervised_signal)
+                signal.pthread_sigmask(signal.SIG_SETMASK, entry_signal_mask)
+
+                def finalize_signal_handlers():
+                    nonlocal signal_handlers_restored
+                    restore_signal_handlers(previous_handlers)
+                    signal_handlers_restored = True
+
+                result_code = transaction.run(
+                    child, signal_finalizer=finalize_signal_handlers)
             finally:
-                # Block while restoring the caller's dispositions.  Signals after
-                # run()'s explicit boundary are delivered under those original
-                # dispositions, never folded back into committed evidence.
-                late_mask = signal.pthread_sigmask(
-                    signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
-                try:
-                    for signum, handler in previous_handlers.items():
-                        signal.signal(signum, handler)
-                finally:
-                    signal.pthread_sigmask(signal.SIG_SETMASK, late_mask)
+                if not (signal_handlers_restored and result_code == 0 and
+                        transaction.report["accepted"] is True):
+                    # No seal can exist unless run() restored every handler and
+                    # the exact entry mask.  Failed/unexpected paths retry both
+                    # from the independently saved entry state.
+                    restore_signal_state(
+                        previous_handlers, entry_signal_mask)
             return result_code
     except (IsolationError, OSError, ValueError) as error:
+        # The acceptance seal is the transaction's commit point.  If a later
+        # lock-release syscall reports failure, an exact valid read-back wins so
+        # the caller never receives failure beside usable accepted evidence.
+        if transaction_acceptance_is_committed(transaction, result_code):
+            return result_code
         print("affinity supervisor error: {}".format(error), file=sys.stderr)
         return 1
 
