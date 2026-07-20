@@ -458,7 +458,9 @@ def complete_build_fixture(role: str) -> dict:
     executable_recipe_text = (
         f"/usr/bin/compiler -O3 -fopenmp {archive_name} "
         f"{Path(benchmark_object).relative_to(Path(build_dir)).as_posix()} "
-        f"-o {executable_name}\n")
+        f"-o {executable_name} "
+        "/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so "
+        "/usr/lib/x86_64-linux-gnu/libpthread.a\n")
     executable_recipe_content = runner.exact_text_content(
         executable_recipe_text, f"fixture {role} executable recipe")
     archive_path = build_dir + "/" + archive_name
@@ -512,8 +514,23 @@ def complete_build_fixture(role: str) -> dict:
             "archiver": {"invocation": "/usr/bin/ar",
                          "resolved_path": "/usr/bin/ar"},
             "ranlib": {"invocation": "/usr/bin/ranlib",
-                       "resolved_path": "/usr/bin/ranlib"},
+                           "resolved_path": "/usr/bin/ranlib"},
         },
+        "validated_external_link_inputs": [
+            {
+                "operand": "/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so",
+                "role": "openmp_runtime_shared",
+                "artifact": complete_artifact(
+                    "/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so",
+                    "shared_library", "4"),
+            },
+            {
+                "operand": "/usr/lib/x86_64-linux-gnu/libpthread.a",
+                "role": "pthread_support_archive",
+                "artifact": complete_artifact(
+                    "/usr/lib/x86_64-linux-gnu/libpthread.a", "archive", "5"),
+            },
+        ],
     }
 
 
@@ -1528,6 +1545,45 @@ class MainCompareRunnerTests(unittest.TestCase):
             "linker response file": canonical.replace(
                 " libleopard.a ",
                 " libleopard.a -Wl,@evil.rsp ", 1),
+            "driver response file": canonical.replace(
+                " libleopard.a ", " libleopard.a @evil.rsp ", 1),
+            "fused linker script": canonical.replace(
+                " libleopard.a ",
+                " libleopard.a -Wl,--script=/tmp/evil.ld ", 1),
+            "comma linker script": canonical.replace(
+                " libleopard.a ",
+                " libleopard.a -Wl,-T,/tmp/evil.ld ", 1),
+            "fused library search": canonical.replace(
+                " libleopard.a ",
+                " libleopard.a -Wl,-L,/tmp,-levil ", 1),
+            "compiler specs": canonical.replace(
+                " libleopard.a ",
+                " libleopard.a -specs=/tmp/evil.specs ", 1),
+            "alternate tool root": canonical.replace(
+                " libleopard.a ", " libleopard.a -B/tmp/toolchain ", 1),
+            "compiler plugin": canonical.replace(
+                " libleopard.a ",
+                " libleopard.a -fplugin=/tmp/evil.so ", 1),
+            "linker plugin": canonical.replace(
+                " libleopard.a ",
+                " libleopard.a -Wl,--plugin,/tmp/evil.so ", 1),
+            "alternate linker": canonical.replace(
+                " libleopard.a ",
+                " libleopard.a -fuse-ld=/tmp/evil-ld ", 1),
+            "xlinker control": canonical.replace(
+                " libleopard.a ",
+                " libleopard.a -Xlinker /tmp/evil.ld ", 1),
+            "undeclared shared input": canonical.replace(
+                " libleopard.a ",
+                " libleopard.a /tmp/libevil.so ", 1),
+            "duplicate OpenMP runtime": canonical.replace(
+                " /usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so ",
+                " /usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so "
+                "/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so ", 1),
+            "duplicate pthread archive": canonical.replace(
+                " /usr/lib/x86_64-linux-gnu/libpthread.a",
+                " /usr/lib/x86_64-linux-gnu/libpthread.a "
+                "/usr/lib/x86_64-linux-gnu/libpthread.a", 1),
         }
         for label, recipe in mutations.items():
             with self.subTest(label=label):
@@ -1535,13 +1591,53 @@ class MainCompareRunnerTests(unittest.TestCase):
                 replace_current_executable_recipe_text(value, recipe)
                 self.assert_rejected(value)
 
-        with_system_support = canonical.replace(
-            " libleopard.a ",
-            " libleopard.a /usr/lib/x86_64-linux-gnu/libpthread.a ", 1)
         value = synthetic_raw()
-        replace_current_executable_recipe_text(value, with_system_support)
         runner.validate_raw(
             resign(value), None, check_files=False, check_current_inputs=False)
+
+    def test_external_link_inputs_bind_paths_roles_and_bytes(self) -> None:
+        canonical = complete_build_fixture("candidate")[
+            "executable_link_recipe_content"]["text"]
+
+        for label, replacement in (
+            ("temporary pthread root", "/tmp/libpthread.a"),
+            ("alternate system pthread root",
+             "/usr/lib/aarch64-linux-gnu/libpthread.a"),
+        ):
+            with self.subTest(label=label):
+                value = synthetic_raw()
+                build = value["identities_initial"]["candidate_build"]
+                pthread = build["validated_external_link_inputs"][1]
+                pthread["operand"] = replacement
+                pthread["artifact"]["path"] = replacement
+                replace_current_executable_recipe_text(
+                    value, canonical.replace(
+                        "/usr/lib/x86_64-linux-gnu/libpthread.a",
+                        replacement, 1))
+                self.assert_rejected(value)
+
+        value = synthetic_raw()
+        value["invocations"][0]["identity_before"] = copy.deepcopy(
+            value["identities_initial"])
+        value["invocations"][0]["identity_before"]["candidate_build"][
+            "validated_external_link_inputs"][1]["artifact"]["sha256"] = "e" * 64
+        # The recipe still names the same lexical archive, but one retained
+        # identity copy no longer agrees with the signed campaign snapshots.
+        self.assert_rejected(value)
+
+        for mutation in ("missing", "duplicate", "swapped"):
+            with self.subTest(mutation=mutation):
+                value = synthetic_raw()
+                records = value["identities_initial"]["candidate_build"][
+                    "validated_external_link_inputs"]
+                if mutation == "missing":
+                    records.pop()
+                elif mutation == "duplicate":
+                    records.append(copy.deepcopy(records[-1]))
+                else:
+                    records.reverse()
+                synchronize_identity(value)
+                self.assert_rejected(value)
 
     def test_coherent_failed_historical_recipe_relabel_is_rejected(self) -> None:
         historical = synthetic_failure(runner.RAW_SCHEMA_V2)

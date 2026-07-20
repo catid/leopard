@@ -653,7 +653,8 @@ def _validate_scope_build(build: object, role: str) -> dict[str, Any]:
                 "validated_archive", "validated_cache",
                 "validated_compile_commands", "archive_link_recipe_content",
                 "executable_link_recipe_content",
-                "archive_link_tool_invocations", "compiler_invocation"},
+                "archive_link_tool_invocations", "compiler_invocation",
+                "validated_external_link_inputs"},
             f"{role} normalized build identity shape differs")
     expected_root = "$BASELINE_BUILD" if role == "baseline" else "$CANDIDATE_BUILD"
     require(build.get("build_dir") == expected_root,
@@ -833,38 +834,31 @@ def _validate_scope_build(build: object, role: str) -> dict[str, Any]:
             archive_commands[0][3:] == expected_archive_objects and
             archive_commands[1] == [tools["ranlib"]["invocation"], archive_name],
             f"{role} normalized archive recipe semantics differ")
-    executable_tokens = shlex.split(
-        executable_text["text"], posix=True)
+    executable_tokens = shlex.split(executable_text["text"], posix=True)
     expected_benchmark_object = benchmark_pairs[0]["object"]["path"][
         len(expected_root) + 1:]
-    outputs = [executable_tokens[index + 1]
-               for index, token in enumerate(executable_tokens[:-1])
-               if token == "-o"]
-    same_name_archive_operands = [
-        token for token in executable_tokens
-        if token.rsplit("/", 1)[-1] == archive_name
-    ]
-    opaque_library_operands = [
-        token for token in executable_tokens
-        if "@" in token or token.startswith("-l") or ",-l" in token
-    ]
-    external_archives = [
-        token for token in executable_tokens
-        if token.endswith(".a") and token != archive_name
-    ]
-    allowed_system_roots = ("/lib/", "/lib64/", "/usr/lib/", "/usr/lib64/")
-    require(executable_tokens and
-            executable_tokens[0] == compiler_invocation["invocation"] and
-            [token for token in executable_tokens if token.endswith(".o")] ==
-                [expected_benchmark_object] and
-            same_name_archive_operands == [archive_name] and
-            not opaque_library_operands and
-            all(os.path.isabs(token) and os.path.normpath(token) == token and
-                token.rsplit("/", 1)[-1] == "libpthread.a" and
-                token.startswith(allowed_system_roots)
-                for token in external_archives) and
-            outputs == [executable_name],
-            f"{role} normalized executable recipe semantics differ")
+    external_link_inputs = build.get("validated_external_link_inputs")
+    require(isinstance(external_link_inputs, list),
+            f"{role} normalized external-link identity is absent")
+    for index, record in enumerate(external_link_inputs):
+        require(isinstance(record, dict) and
+                isinstance(record.get("artifact"), dict),
+                f"{role} normalized external-link identity {index} differs")
+        _validate_scope_artifact(
+            record["artifact"],
+            f"{role} normalized external-link artifact {index}")
+    try:
+        common.validate_executable_link_semantics(
+            executable_tokens,
+            compiler_invocation=compiler_invocation["invocation"],
+            archive_name=archive_name, executable_name=executable_name,
+            benchmark_object=expected_benchmark_object,
+            external_link_inputs=external_link_inputs,
+            label=f"{role} normalized executable link recipe")
+    except common.EvidenceError as error:
+        raise PlanError(
+            f"{role} normalized executable recipe semantics differ: {error}") \
+            from error
     require(compiler["path"], f"{role} normalized compiler path is empty")
     return build
 
@@ -2515,7 +2509,9 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
             f"/usr/bin/ranlib {archive_name}\n")
         executable_text = fixture_text(
             f"/usr/bin/compiler -O3 {archive_name} {benchmark_relative} "
-            f"-o {executable_name}\n")
+            f"-o {executable_name} "
+            "/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so "
+            "/usr/lib/x86_64-linux-gnu/libpthread.a\n")
         archive_recipe = fixture_artifact(
             f"{root}/CMakeFiles/{target}/link.txt", "build_metadata", character)
         archive_recipe.update({
@@ -2553,6 +2549,22 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
                 "ranlib": {"invocation": "/usr/bin/ranlib",
                            "resolved_path": "/usr/bin/ranlib"},
             },
+            "validated_external_link_inputs": [
+                {
+                    "operand": "/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so",
+                    "role": "openmp_runtime_shared",
+                    "artifact": fixture_artifact(
+                        "/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so",
+                        "shared_library", "4"),
+                },
+                {
+                    "operand": "/usr/lib/x86_64-linux-gnu/libpthread.a",
+                    "role": "pthread_support_archive",
+                    "artifact": fixture_artifact(
+                        "/usr/lib/x86_64-linux-gnu/libpthread.a",
+                        "archive", "5"),
+                },
+            ],
             "validated_archive": fixture_artifact(
                 f"{root}/{archive_name}", "archive", character),
             "validated_executable": fixture_artifact(
@@ -3088,6 +3100,58 @@ def self_test() -> None:
         reject_scope_mutation(
             "uniform foreign archive operands",
             add_all_foreign_archive_operands)
+        def add_all_link_controls(values, control: str) -> None:
+            for value in values:
+                for role, archive_name in (
+                    ("baseline", "libleopard_main_exact.a"),
+                    ("candidate", "libleopard.a"),
+                ):
+                    build = value["builds"][role]
+                    text = build[
+                        "executable_link_recipe_content"]["text"].replace(
+                            f" {archive_name} ",
+                            f" {archive_name} {control} ", 1)
+                    retained = retained_text(text)
+                    build["executable_link_recipe_content"] = retained
+                    build["executable_link_recipe"]["size"] = retained["size"]
+                    build["executable_link_recipe"]["sha256"] = retained["sha256"]
+        for label, control in (
+            ("fused linker script", "-Wl,--script=/tmp/evil.ld"),
+            ("fused search/library", "-Wl,-L,/tmp,-levil"),
+            ("driver response", "@evil.rsp"),
+            ("compiler specs", "-specs=/tmp/evil.specs"),
+            ("alternate tool root", "-B/tmp/toolchain"),
+            ("compiler plugin", "-fplugin=/tmp/evil.so"),
+            ("linker plugin", "-Wl,--plugin,/tmp/evil.so"),
+            ("alternate linker", "-fuse-ld=/tmp/evil-ld"),
+        ):
+            reject_scope_mutation(
+                f"uniform {label}",
+                lambda values, item=control:
+                    add_all_link_controls(values, item))
+        def redirect_all_pthread_inputs(values) -> None:
+            old = "/usr/lib/x86_64-linux-gnu/libpthread.a"
+            new = "/tmp/libpthread.a"
+            for value in values:
+                for role in ("baseline", "candidate"):
+                    build = value["builds"][role]
+                    record = build["validated_external_link_inputs"][1]
+                    record["operand"] = new
+                    record["artifact"]["path"] = new
+                    text = build[
+                        "executable_link_recipe_content"]["text"].replace(
+                            old, new, 1)
+                    retained = retained_text(text)
+                    build["executable_link_recipe_content"] = retained
+                    build["executable_link_recipe"]["size"] = retained["size"]
+                    build["executable_link_recipe"]["sha256"] = retained["sha256"]
+        reject_scope_mutation(
+            "uniform alternate pthread root", redirect_all_pthread_inputs)
+        reject_scope_mutation(
+            "uniform missing external static identity",
+            lambda values: [
+                value["builds"][role]["validated_external_link_inputs"].pop()
+                for value in values for role in ("baseline", "candidate")])
         def remove_all_dynamic_loader_records(values) -> None:
             for value in values:
                 for role in ("baseline", "candidate"):

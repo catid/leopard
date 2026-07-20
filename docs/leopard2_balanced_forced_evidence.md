@@ -38,6 +38,14 @@ their retained inventories and online-list bytes. Runtime file records retain
 and must equal their canonical raw loader paths. Cache hierarchy, summary, and
 canonical directory-listing records must agree three ways.
 
+Collection, offline verification, and normalized-scope validation share one
+fail-closed executable-link grammar. It accepts only known value-free CMake
+flags and the exact declared object, project archive, output, libgomp, and
+libpthread operands. The two external support files carry resolved byte
+identities. Response files, forwarded linker controls, scripts, search paths or
+libraries, specs, alternate tool roots/loaders, plugins, and undeclared inputs
+fail closed.
+
 Those runtime and cache checks do not authenticate an external observation
 against a writer able to coherently replace and re-sign every input in the
 unkeyed bundle. In particular, coherently deleting an ordinary shared-library

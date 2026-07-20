@@ -37,6 +37,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+_DECODER_DISPATCH_DIR = Path(__file__).resolve().parents[1] / "decoder_dispatch"
+if str(_DECODER_DISPATCH_DIR) not in sys.path:
+    sys.path.insert(0, str(_DECODER_DISPATCH_DIR))
+import balanced_evidence_common as link_common
+
 
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 RAW_SCHEMA_V1 = "leopard2-main-compare-raw/v1"
@@ -1299,38 +1304,140 @@ def validate_effective_flags(tokens: Sequence[str], what: str) -> None:
     require(not rejected, f"{what} contains instrumentation/noncanonical flags: {rejected}")
 
 
-def validate_declared_archive_operands(
+EXTERNAL_LINK_INPUT_ROLES = link_common.EXTERNAL_LINK_INPUT_ROLES
+EXTERNAL_LINK_INPUT_ORDER = link_common.EXTERNAL_LINK_INPUT_ORDER
+
+
+def _validate_external_link_operand_path(
+    operand: object, role: str, label: str,
+) -> str:
+    try:
+        return link_common.validate_external_link_operand_path(
+            operand, role, label)
+    except link_common.EvidenceError as error:
+        raise EvidenceError(str(error)) from error
+
+
+def capture_external_link_inputs(
+    tokens: Sequence[str], label: str,
+) -> list[dict[str, Any]]:
+    """Snapshot every accepted non-project file operand before execution.
+
+    CMake's GCC OpenMP target emits an explicit libgomp shared-library operand
+    and an explicit (often empty) libpthread archive.  Their lexical operands
+    are part of the recipe while their resolved regular-file bytes are the
+    durable identity.  No other external file input is inferred or accepted.
+    """
+    records: list[dict[str, Any]] = []
+    for token in tokens:
+        if not isinstance(token, str):
+            continue
+        descriptor = EXTERNAL_LINK_INPUT_ROLES.get(Path(token).name)
+        if descriptor is None:
+            continue
+        role, kind = descriptor
+        operand = _validate_external_link_operand_path(token, role, label)
+        records.append({
+            "operand": operand,
+            "role": role,
+            "artifact": artifact_identity(Path(operand), kind),
+        })
+    require([record["role"] for record in records] ==
+                list(EXTERNAL_LINK_INPUT_ORDER),
+            f"{label} external OpenMP/pthread input closure differs")
+    return records
+
+
+def validate_external_link_inputs(
+    value: object, label: str, *, normalized: bool = False,
+) -> list[dict[str, Any]]:
+    """Validate the retained exact identities of accepted external inputs."""
+    require(isinstance(value, list) and len(value) ==
+                len(EXTERNAL_LINK_INPUT_ORDER),
+            f"{label} external-link identity closure differs")
+    records: list[dict[str, Any]] = []
+    for index, expected_role in enumerate(EXTERNAL_LINK_INPUT_ORDER):
+        record = value[index]
+        require(isinstance(record, dict) and set(record) == {
+                    "operand", "role", "artifact"} and
+                record.get("role") == expected_role,
+                f"{label} external-link identity {index} shape differs")
+        operand = _validate_external_link_operand_path(
+            record.get("operand"), expected_role, label)
+        _, expected_kind = EXTERNAL_LINK_INPUT_ROLES[Path(operand).name]
+        artifact = record.get("artifact")
+        if normalized:
+            require(isinstance(artifact, dict) and set(artifact) == {
+                        "path", "kind", "size", "mode", "sha256"} and
+                    artifact.get("kind") == expected_kind and
+                    isinstance(artifact.get("path"), str) and
+                    Path(artifact["path"]).is_absolute() and
+                    type(artifact.get("size")) is int and artifact["size"] >= 0 and
+                    type(artifact.get("mode")) is int and
+                    0 <= artifact["mode"] <= 0o7777 and
+                    isinstance(artifact.get("sha256"), str) and
+                    HEX256.fullmatch(artifact["sha256"]) is not None,
+                    f"{label} normalized external artifact {index} is invalid")
+        else:
+            artifact = validate_complete_artifact_identity(
+                artifact, f"{label} external artifact {index}", expected_kind)
+        records.append(record)
+    try:
+        link_common.validate_external_link_input_shape(records, label)
+    except link_common.EvidenceError as error:
+        raise EvidenceError(str(error)) from error
+    return records
+
+
+def validate_executable_link_semantics(
+    tokens: Sequence[str], *, compiler_invocation: str, archive_name: str,
+    executable_name: str, benchmark_object: str,
+    external_link_inputs: object, label: str,
+    normalized_external_inputs: bool = False,
+) -> None:
+    """Validate one executable-link command with a fail-closed grammar.
+
+    Every token is consumed by one exact production.  This avoids the former
+    suffix blacklist, under which fused -Wl controls and many compiler-driver
+    inputs were invisible to the archive/object closure checks.
+    """
+    external = validate_external_link_inputs(
+        external_link_inputs, label, normalized=normalized_external_inputs)
+    try:
+        link_common.validate_executable_link_semantics(
+            tokens, compiler_invocation=compiler_invocation,
+            archive_name=archive_name, executable_name=executable_name,
+            benchmark_object=benchmark_object,
+            external_link_inputs=external, label=label)
+    except link_common.EvidenceError as error:
+        raise EvidenceError(str(error)) from error
+
+
+def _validate_historical_declared_archive_operands(
     tokens: Sequence[str], archive_name: str, label: str,
 ) -> None:
-    """Require the declared archive and reject opaque/foreign static inputs."""
-    require(isinstance(archive_name, str) and archive_name and
-            Path(archive_name).name == archive_name,
-            f"{label} declared archive name is not canonical")
+    """Preserve replay of pre-v5 producers without broadening schema v5."""
     same_name_operands = [
         token for token in tokens
         if isinstance(token, str) and Path(token).name == archive_name
     ]
-    require(same_name_operands == [archive_name],
-            f"{label} does not link its one canonical declared archive operand")
-    opaque_library_operands = [
-        token for token in tokens
-        if isinstance(token, str) and (
-            "@" in token or token.startswith("-l") or ",-l" in token)
-    ]
-    require(not opaque_library_operands,
-            f"{label} contains opaque library/response operands")
+    require(same_name_operands == [archive_name] and
+            not any(isinstance(token, str) and
+                    ("@" in token or token.startswith("-l") or ",-l" in token)
+                    for token in tokens),
+            f"{label} historical archive/library closure differs")
     external_archives = [
         token for token in tokens
         if isinstance(token, str) and token.endswith(".a") and
         token != archive_name
     ]
     allowed_system_roots = ("/lib/", "/lib64/", "/usr/lib/", "/usr/lib64/")
-    require(all(
-                Path(token).is_absolute() and os.path.normpath(token) == token and
+    require(all(Path(token).is_absolute() and
+                os.path.normpath(token) == token and
                 Path(token).name == "libpthread.a" and
                 token.startswith(allowed_system_roots)
                 for token in external_archives),
-            f"{label} contains an undeclared static archive operand")
+            f"{label} historical static archive closure differs")
 
 
 def command_output_path(entry: Mapping[str, Any], tokens: Sequence[str]) -> Path:
@@ -1635,9 +1742,15 @@ def build_provenance(
     require(executable_link_tokens and
             Path(executable_link_tokens[0]).resolve(strict=True) == compiler,
             f"{implementation} link recipe uses a different compiler")
-    validate_declared_archive_operands(
-        executable_link_tokens, expected_archive_name,
-        f"{implementation} benchmark link recipe")
+    external_link_inputs: list[dict[str, Any]] = []
+    if raw_schema == RAW_SCHEMA:
+        external_link_inputs = capture_external_link_inputs(
+            executable_link_tokens,
+            f"{implementation} benchmark link recipe")
+    else:
+        _validate_historical_declared_archive_operands(
+            executable_link_tokens, expected_archive_name,
+            f"{implementation} benchmark link recipe")
     validate_effective_flags(
         executable_link_tokens, f"{implementation} executable link recipe")
     semantics = validate_compile_commands(
@@ -1678,6 +1791,16 @@ def build_provenance(
             f"{implementation} archive object closure differs from compile commands")
     require(executable_recipe_objects == expected_executable_objects,
             f"{implementation} executable object closure differs from compile commands")
+    if raw_schema == RAW_SCHEMA:
+        validate_executable_link_semantics(
+            executable_link_tokens,
+            compiler_invocation=cache["CMAKE_CXX_COMPILER"],
+            archive_name=expected_archive_name,
+            executable_name=names["executable"],
+            benchmark_object=Path(expected_executable_objects[0]).relative_to(
+                build).as_posix(),
+            external_link_inputs=external_link_inputs,
+            label=f"{implementation} benchmark link recipe")
     archive_identity = artifact_identity(expected_archive, "archive")
     executable_identity = artifact_identity(expected_executable, "executable")
     require(all(archive_identity["mtime_ns"] >= record["object"]["mtime_ns"]
@@ -1748,6 +1871,7 @@ def build_provenance(
             "invocation": cache["CMAKE_CXX_COMPILER"],
             "resolved_path": str(compiler),
         }
+        result["validated_external_link_inputs"] = external_link_inputs
     return result
 
 
@@ -1997,6 +2121,7 @@ def validate_complete_runtime_closure(
 def validate_complete_executable_recipe(
     content: object, identity: object, compiler_invocation: str,
     archive_name: str, executable_name: str, benchmark_object: str, label: str,
+    external_link_inputs: object,
 ) -> None:
     retained = validate_complete_text_identity(content, label)
     recipe = validate_complete_artifact_identity(
@@ -2008,18 +2133,11 @@ def validate_complete_executable_recipe(
         tokens = shlex.split(retained["text"], posix=True)
     except ValueError as error:
         raise EvidenceError(f"cannot parse {label}: {error}") from error
-    require(tokens and tokens[0] == compiler_invocation and
-            not any(token.startswith("@") for token in tokens),
-            f"{label} compiler or response-file semantics differ")
-    validate_declared_archive_operands(tokens, archive_name, label)
-    objects = [token.replace("\\", "/") for token in tokens
-               if token.endswith(".o")]
-    require(objects == [benchmark_object],
-            f"{label} benchmark object closure differs")
-    outputs = [tokens[index + 1] for index, token in enumerate(tokens[:-1])
-               if token == "-o"]
-    require(len(outputs) == 1 and Path(outputs[0]).name == executable_name,
-            f"{label} output differs from its exact executable")
+    validate_executable_link_semantics(
+        tokens, compiler_invocation=compiler_invocation,
+        archive_name=archive_name, executable_name=executable_name,
+        benchmark_object=benchmark_object,
+        external_link_inputs=external_link_inputs, label=label)
 
 
 def validate_complete_build_identity(
@@ -2036,7 +2154,8 @@ def validate_complete_build_identity(
                 "validated_archive", "validated_cache",
                 "validated_compile_commands", "archive_link_recipe_content",
                 "executable_link_recipe_content",
-                "archive_link_tool_invocations", "compiler_invocation"},
+                "archive_link_tool_invocations", "compiler_invocation",
+                "validated_external_link_inputs"},
             f"{implementation} build identity shape differs")
     build_dir = build.get("build_dir")
     require(isinstance(build_dir, str) and Path(build_dir).is_absolute() and
@@ -2233,7 +2352,8 @@ def validate_complete_build_identity(
         archive_name, executable_name,
         Path(benchmark_pairs[0]["object"]["path"]).relative_to(
             Path(build_dir)).as_posix(),
-        f"{implementation} executable link recipe")
+        f"{implementation} executable link recipe",
+        build.get("validated_external_link_inputs"))
     return build
 
 

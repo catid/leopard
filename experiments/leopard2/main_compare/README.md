@@ -185,7 +185,13 @@ AUTO-only evidence without retroactively acquiring the decoder-mode field;
 version-4 bundles retain their original hardened archive closure. Version 5
 additionally requires exact source, compiler, CMake, compile/object, archive,
 member, executable-link, output, tool, and runtime-dependency record shapes in
-offline verification. The producer-known translation-unit sets are exact: the
+offline verification. The executable link is consumed by a fail-closed grammar:
+only the canonical compiler, value-free build flags, one benchmark object, one
+project archive, one output, and the explicit GCC OpenMP and pthread operands
+are accepted. The resolved libgomp and libpthread files retain complete byte
+identities. Response files, linker forwarding, scripts, search/library
+controls, specs, alternate tool roots/loaders, plugins, and undeclared inputs
+are rejected. The producer-known translation-unit sets are exact: the
 baseline archive has its four codec members plus the adapter command and the
 candidate archive has its twelve production members plus the benchmark command;
 a coherent source/object/member/link truncation is rejected. Each source retains

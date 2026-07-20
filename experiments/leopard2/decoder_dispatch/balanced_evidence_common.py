@@ -13,7 +13,7 @@ import re
 import stat
 import subprocess
 import sys
-from typing import Any
+from typing import Any, Sequence
 
 
 MATRIX_SCHEMA = "leopard2-balanced-forced-matrix/v1"
@@ -60,6 +60,17 @@ RUNNER_RELATIVE = "experiments/leopard2/decoder_dispatch/run_balanced_abba.py"
 ANALYZER_RELATIVE = "experiments/leopard2/decoder_dispatch/analyze_balanced.py"
 COMMON_RELATIVE = "experiments/leopard2/decoder_dispatch/balanced_evidence_common.py"
 LEASE_RELATIVE = "tools/leopard2_jerasure_compare.py"
+EXECUTABLE_LINK_VALUE_FREE_FLAGS = frozenset({
+    "-Wall", "-Wextra", "-Wpedantic", "-fopenmp", "-g", "-DNDEBUG",
+    "-O0", "-O1", "-O2", "-O3", "-Os", "-Oz",
+})
+EXTERNAL_LINK_INPUT_ROLES = {
+    "libgomp.so": ("openmp_runtime_shared", "shared_library"),
+    "libpthread.a": ("pthread_support_archive", "archive"),
+}
+EXTERNAL_LINK_INPUT_ORDER = (
+    "openmp_runtime_shared", "pthread_support_archive",
+)
 
 
 class EvidenceError(ValueError):
@@ -69,6 +80,127 @@ class EvidenceError(ValueError):
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise EvidenceError(message)
+
+
+def validate_external_link_operand_path(
+    operand: object, role: str, label: str,
+) -> str:
+    """Accept only the two canonical explicit GCC OpenMP support inputs."""
+    require(isinstance(operand, str) and operand and
+            Path(operand).is_absolute() and
+            os.path.normpath(operand) == operand and
+            not any(character.isspace() for character in operand) and
+            "@" not in operand and "\\" not in operand,
+            f"{label} {role} operand path is not canonical")
+    if role == "openmp_runtime_shared":
+        require(re.fullmatch(
+                    r"/usr/lib/gcc/x86_64-linux-gnu/"
+                    r"[0-9]+(?:\.[0-9]+)*/libgomp\.so",
+                    operand) is not None,
+                f"{label} OpenMP runtime is outside the canonical GCC root")
+    elif role == "pthread_support_archive":
+        require(re.fullmatch(
+                    r"/(?:usr/)?lib(?:64|/x86_64-linux-gnu)/libpthread\.a",
+                    operand) is not None,
+                f"{label} pthread archive is outside a canonical system root")
+    else:
+        raise EvidenceError(f"{label} external-link role is unknown: {role!r}")
+    return operand
+
+
+def validate_external_link_input_shape(
+    value: object, label: str,
+) -> list[dict[str, Any]]:
+    """Bind grammar operands to one ordered identity record per input."""
+    require(isinstance(value, list) and
+            len(value) == len(EXTERNAL_LINK_INPUT_ORDER),
+            f"{label} external-link identity closure differs")
+    records: list[dict[str, Any]] = []
+    for index, expected_role in enumerate(EXTERNAL_LINK_INPUT_ORDER):
+        record = value[index]
+        require(isinstance(record, dict) and set(record) == {
+                    "operand", "role", "artifact"} and
+                record.get("role") == expected_role and
+                isinstance(record.get("artifact"), dict),
+                f"{label} external-link identity {index} shape differs")
+        operand = validate_external_link_operand_path(
+            record.get("operand"), expected_role, label)
+        _, expected_kind = EXTERNAL_LINK_INPUT_ROLES[Path(operand).name]
+        artifact = record["artifact"]
+        require(artifact.get("kind") == expected_kind and
+                isinstance(artifact.get("path"), str) and
+                Path(artifact["path"]).is_absolute() and
+                ((expected_kind == "archive" and
+                  Path(artifact["path"]).name == "libpthread.a") or
+                 (expected_kind == "shared_library" and
+                  re.fullmatch(r"libgomp\.so(?:\.[0-9]+)*",
+                               Path(artifact["path"]).name) is not None)),
+                f"{label} external operand resolves to a different library")
+        records.append(record)
+    operands = [record["operand"] for record in records]
+    resolved = [record["artifact"]["path"] for record in records]
+    require(len(operands) == len(set(operands)) and
+            len(resolved) == len(set(resolved)),
+            f"{label} external-link inputs are duplicated or aliased")
+    return records
+
+
+def validate_executable_link_semantics(
+    tokens: Sequence[str], *, compiler_invocation: str, archive_name: str,
+    executable_name: str, benchmark_object: str,
+    external_link_inputs: object, label: str,
+) -> None:
+    """Consume every executable-link token with one fail-closed production."""
+    require(isinstance(tokens, Sequence) and
+            not isinstance(tokens, (str, bytes)) and tokens and
+            all(isinstance(token, str) and token for token in tokens),
+            f"{label} token stream is invalid")
+    require(isinstance(compiler_invocation, str) and compiler_invocation and
+            isinstance(archive_name, str) and Path(archive_name).name == archive_name and
+            isinstance(executable_name, str) and
+            Path(executable_name).name == executable_name and
+            isinstance(benchmark_object, str) and benchmark_object.endswith(".o") and
+            not Path(benchmark_object).is_absolute() and
+            "\\" not in benchmark_object and "@" not in benchmark_object,
+            f"{label} expected semantic closure is invalid")
+    external = validate_external_link_input_shape(external_link_inputs, label)
+    external_operands = [record["operand"] for record in external]
+    require(tokens[0] == compiler_invocation,
+            f"{label} compiler invocation differs")
+    seen_archive = 0
+    seen_object = 0
+    seen_output = 0
+    seen_external: list[str] = []
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token in EXECUTABLE_LINK_VALUE_FREE_FLAGS:
+            index += 1
+            continue
+        if token == "-o":
+            require(index + 1 < len(tokens) and
+                    tokens[index + 1] == executable_name,
+                    f"{label} output operand differs")
+            seen_output += 1
+            index += 2
+            continue
+        if token == archive_name:
+            seen_archive += 1
+            index += 1
+            continue
+        if token == benchmark_object:
+            seen_object += 1
+            index += 1
+            continue
+        if token in external_operands:
+            seen_external.append(token)
+            index += 1
+            continue
+        raise EvidenceError(
+            f"{label} contains an unrecognized or controlling token: {token!r}")
+    require(seen_archive == 1 and seen_object == 1 and seen_output == 1 and
+            seen_external == external_operands,
+            f"{label} declared input/output closure differs")
 
 
 def canonical_bytes(value: object) -> bytes:
