@@ -53,8 +53,8 @@ Backend startup known-answer tests cover the two- and four-way primitives with
 read-only source checks, guard bytes, unaligned addresses, zero lengths, vector
 tails, zero-skew sentinels, and the GF16 full-tile and compact-tail layouts.
 The public low-encode differential tests compare GF8 and GF16 results against
-the independent direct systematic generator oracle for P = 1, P = 2, P = 8,
-R > P, sparse requested outputs, partial final parity blocks, and
+the independent direct systematic generator oracle for P = 1, 2, 4, 8, 16,
+and 32, R > P, sparse requested outputs, partial final parity blocks, and
 non-vector-aligned byte counts.
 
 Test-only counters report the first-layer and direct-final two- and four-way
@@ -77,13 +77,15 @@ project workers are active are diagnostic only.  This change does not reduce
 the current 2P encode scratch geometry, which is a separate tiling and
 workspace problem.
 
-The current-HEAD port was checked on 2026-07-18 against its untouched
-2fce390c control.  Both GCC 13.3 Release builds were pinned to logical CPU 14
-of an AMD Ryzen 9 9950X3D with OMP_NUM_THREADS=1.  Each value below is the
-pooled median of 18 retained A/B/B/A samples, with four encode calls per
-sample.  Other project workers were active, so these are directional
-diagnostics rather than the authoritative Leopard-main comparison.  Every
-candidate codeword had the same transmitted-parity digest as its control.
+The predecessor coefficient-copy-only port was checked on 2026-07-18 against
+its untouched 2fce390c control.  These measurements predate the direct-final
+output addition described above and therefore are not promotion evidence for
+that addition.  Both GCC 13.3 Release builds were pinned to logical CPU 14 of
+an AMD Ryzen 9 9950X3D with OMP_NUM_THREADS=1.  Each value below is the pooled
+median of 18 retained A/B/B/A samples, with four encode calls per sample.
+Other project workers were active, so these are directional diagnostics rather
+than the authoritative Leopard-main comparison.  Every candidate codeword had
+the same transmitted-parity digest as its control.
 
 | K,R | Profile/field | Shard bytes | Control us | Candidate us | Speedup |
 | --- | --- | ---: | ---: | ---: | ---: |
