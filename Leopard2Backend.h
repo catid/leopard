@@ -151,8 +151,9 @@ typedef void (*Butterfly4)(
 // { i, i + distance, i + 2*distance, i + 3*distance }.  Keeping this loop in
 // the ISA-specific translation unit reduces one indirect Ops dispatch per
 // butterfly to one dispatch per group while preserving per-context backend
-// selection.  prefer_fused records the established GF16 size policy; GF8
-// backends retain their existing internal size policy.
+// selection.  prefer_fused records a caller-selected, measured whole-stage
+// policy.  When false, each backend retains its mature per-butterfly size
+// policy.
 typedef void (*Butterfly4Range)(
     void* const* work,
     unsigned distance,

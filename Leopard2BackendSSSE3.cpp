@@ -1505,7 +1505,17 @@ static void SSSE3FF8FFTButterfly4Range(
     uint16_t log01, uint16_t log23, uint16_t log02,
     uint64_t byte_count, bool prefer_fused)
 {
-    (void)prefer_fused;
+    if (prefer_fused)
+    {
+        for (unsigned i = 0; i < distance; ++i)
+        {
+            SSSE3FF8FFTButterfly4Fused(
+                work[i], work[i + distance],
+                work[i + distance * 2U], work[i + distance * 3U],
+                log01, log23, log02, byte_count);
+        }
+        return;
+    }
     for (unsigned i = 0; i < distance; ++i)
     {
         SSSE3FF8FFTButterfly4(

@@ -323,6 +323,7 @@ struct TestOnlyHighEncodeCounts
 {
     uint64_t ifft_butterfly4_out_of_place;
     uint64_t input_copy_shards;
+    uint64_t forward_fused_calls;
 };
 struct TestOnlySparseEncodeCounts
 {

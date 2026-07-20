@@ -58,6 +58,7 @@ static std::atomic<uint64_t> TestLowDirectFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestLowDirectFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighIFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighInputCopyShards(0);
+static std::atomic<uint64_t> TestHighForwardFusedCalls(0);
 static std::atomic<uint64_t> TestHighOutputBlocks(0);
 static std::atomic<uint64_t> TestHighFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestHighFFTButterfly4OutCalls(0);
@@ -2048,9 +2049,10 @@ static void FFT_DIT4_Range(
     unsigned dist,
     const ffe_t log_m01,
     const ffe_t log_m23,
-    const ffe_t log_m02)
+    const ffe_t log_m02,
+    bool prefer_fused = false)
 {
-    if (dist == 1)
+    if (dist == 1 && !prefer_fused)
     {
         FFT_DIT4(ops, bytes, work, dist,
             log_m01, log_m23, log_m02);
@@ -2069,7 +2071,7 @@ static void FFT_DIT4_Range(
     TestFFTDIT4Calls.fetch_add(dist, std::memory_order_relaxed);
 #endif
     ops.ff8_fft_butterfly4_range(
-        work, dist, log_m01, log_m23, log_m02, bytes, true);
+        work, dist, log_m01, log_m23, log_m02, bytes, prefer_fused);
 }
 
 
@@ -2080,7 +2082,8 @@ static void FFT_DIT(
     void** work,
     const unsigned m_truncated,
     const unsigned m,
-    const ffe_t* skewLUT)
+    const ffe_t* skewLUT,
+    bool prefer_fused = false)
 {
     // Decimation in time: Unroll 2 layers at a time
     unsigned dist4 = m, dist = m >> 2;
@@ -2096,7 +2099,7 @@ static void FFT_DIT(
 
             FFT_DIT4_Range(
                 ops, bytes, work + r, dist,
-                log_m01, log_m23, log_m02);
+                log_m01, log_m23, log_m02, prefer_fused);
         }
     }
 
@@ -2353,13 +2356,21 @@ skip_body:
     }
     else
     {
+        const bool prefer_fused_forward =
+            ops.kind == LEO2_BACKEND_AVX2 && m == 128 &&
+            buffer_bytes > 1024;
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        if (prefer_fused_forward)
+            TestHighForwardFusedCalls.fetch_add(1, std::memory_order_relaxed);
+#endif
         FFT_DIT(
             ops,
             buffer_bytes,
             work,
             recovery_count,
             m,
-            FFTSkewStorage);
+            FFTSkewStorage,
+            prefer_fused_forward);
     }
 }
 
@@ -3210,6 +3221,7 @@ void TestOnlyResetHighEncodeCounts()
 {
     TestHighIFFTButterfly4OutCalls.store(0, std::memory_order_relaxed);
     TestHighInputCopyShards.store(0, std::memory_order_relaxed);
+    TestHighForwardFusedCalls.store(0, std::memory_order_relaxed);
 }
 
 
@@ -3220,6 +3232,8 @@ TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts()
         TestHighIFFTButterfly4OutCalls.load(std::memory_order_relaxed);
     result.input_copy_shards =
         TestHighInputCopyShards.load(std::memory_order_relaxed);
+    result.forward_fused_calls =
+        TestHighForwardFusedCalls.load(std::memory_order_relaxed);
     return result;
 }
 

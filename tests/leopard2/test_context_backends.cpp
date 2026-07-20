@@ -2043,6 +2043,68 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
     }
 }
 
+void test_gf8_high_forward_fusion_policy(
+    const std::vector<ContextEntry>& contexts)
+{
+    const CodecCase cases[] = {
+        // T=128 uses the mature per-butterfly policy at the exact 1-KiB
+        // boundary.  The ragged case executes one 4096-byte aligned pass and
+        // one padded tail, so exactly one pass selects whole-stage fusion.
+        { 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 1024 },
+        { 127, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 4097 },
+        // Neighboring high-rate T=64 and low-rate P=64 transforms retain the
+        // established policy even above 1 KiB.
+        { 190, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 4096 },
+        { 64, 192, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, 4096 }
+    };
+    std::vector<Shards> references(
+        sizeof(cases) / sizeof(cases[0]));
+    for (size_t context_i = 0; context_i < contexts.size(); ++context_i)
+    {
+        if (leo2_context_backend(contexts[context_i].context) ==
+                LEO2_BACKEND_NEON)
+            continue;
+        TraceOpsGuard trace(contexts[context_i]);
+        for (size_t case_i = 0;
+             case_i < sizeof(cases) / sizeof(cases[0]); ++case_i)
+        {
+            const CodecCase& test_case = cases[case_i];
+            const Shards originals = make_originals(test_case,
+                static_cast<uint32_t>(0x85a308d3U + case_i * 149U));
+            leo2_codec* codec = NULL;
+            trace.reset();
+            const Shards recovery = encode_case(
+                contexts[context_i].context, test_case, originals, &codec);
+            if (references[case_i].empty())
+                references[case_i] = recovery;
+            else
+                require(recovery == references[case_i],
+                    "GF8 forward-fusion policy changed parity");
+
+            const leopard::ff8::TestOnlyHighEncodeCounts counts =
+                leopard::ff8::TestOnlyGetHighEncodeCounts();
+            const size_t alignment = leo2_scratch_alignment();
+            const size_t aligned_prefix =
+                test_case.bytes - test_case.bytes % alignment;
+            const bool expect_fused_forward =
+                test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+                transform_side(test_case) == 128 &&
+                leo2_context_backend(contexts[context_i].context) ==
+                    LEO2_BACKEND_AVX2 &&
+                aligned_prefix > 1024;
+            require(counts.forward_fused_calls ==
+                    (expect_fused_forward ? 1U : 0U),
+                "GF8 high encode selected the wrong forward fusion policy: "
+                "backend=" + std::to_string(static_cast<unsigned>(
+                    leo2_context_backend(contexts[context_i].context))) +
+                " K=" + std::to_string(test_case.k) +
+                " R=" + std::to_string(test_case.r) +
+                " bytes=" + std::to_string(test_case.bytes));
+            leo2_codec_destroy(codec);
+        }
+    }
+}
+
 void test_public_codecs(const std::vector<ContextEntry>& contexts)
 {
     const CodecCase cases[] = {
@@ -2396,6 +2458,7 @@ int main()
         require(!contexts.empty(), "no executable contexts");
         test_process_default_immutable(process_default);
         test_traced_context_dispatch(contexts);
+        test_gf8_high_forward_fusion_policy(contexts);
         test_weighted_locator_boundary_dispatch(contexts);
         test_public_codecs(contexts);
         test_sparse_encode_contexts(contexts);
