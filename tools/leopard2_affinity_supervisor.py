@@ -6,14 +6,20 @@ kernel work or another UID, and it never replaces the benchmark runner's
 independent ``/proc/stat`` zero-sibling-jiffy acceptance gate.
 
 ``run`` is a durable affinity transaction.  It records exact original masks,
-removes the reserved CPUs from same-UID threads, launches one command through a
-fork/pipe gate, monitors safe newcomers, terminates every surviving process in
-the child's session, and restores exact masks.  The child cannot execute the
-command until its PID/start-time/session identity is durable in the journal.
+removes the reserved CPUs from same-UID threads, launches one descriptor-pinned
+command through a fork/pipe gate, monitors safe newcomers, terminates every
+observed surviving child, and makes a bounded best-effort exact-mask restore.
+The child cannot execute until its PID/start-time/session identity is durable.
+Because Linux offers no unprivileged persistent containment here, a run that
+actually changes another mask is never accepted as authoritative evidence: an
+in-flight clone can publish a copied restricted mask after any finite scan.
 
 ``restore`` is the crash-recovery operation.  It first proves that the journal
-belongs to this boot and PID namespace, then kills and verifies the recorded
-child session before retrying pending or failed affinity restores.
+belongs to this boot and PID namespace, then cleans known child identities and
+retries pending or failed affinity restores.  If a released child or affinity
+mutation existed, recovery remains explicitly failed: after the original
+subreaper crashes, an unobserved cross-session orphan cannot be rediscovered
+reliably without persistent cgroup-style containment.
 
 The remaining Linux limitation is explicit: sched_getaffinity(2) and
 sched_setaffinity(2) address a numeric TID.  Identity checks immediately before
@@ -46,7 +52,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 
-REPORT_SCHEMA = "leopard2-affinity-supervisor/v5"
+REPORT_SCHEMA = "leopard2-affinity-supervisor/v6"
 ACCEPTANCE_SCHEMA = "leopard2-affinity-acceptance/v1"
 BINDING_SCHEMA = "leopard2-affinity-main-binding/v2"
 MAIN_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v5"
@@ -58,9 +64,18 @@ LAUNCH_READY_TIMEOUT_SECONDS = 10.0
 SIGNAL_GRACE_SECONDS = 2.0
 KILL_GRACE_SECONDS = 2.0
 MAX_IDENTITY_BYTES = 64 * 1024 * 1024
+MUTATED_RESTORE_UNPROVABLE = (
+    "authoritative completion is unavailable after affinity mutation: finite "
+    "procfs scans cannot exclude an in-flight clone publishing with the "
+    "restricted mask; persistent task containment is required")
+CRASH_SCOPE_UNPROVABLE = (
+    "crash recovery cannot prove released-child scope empty: an unjournaled "
+    "descendant may have changed sessions before the subreaper exited; "
+    "persistent task containment is required")
 HEX256 = re.compile(r"[0-9a-f]{64}")
 BOOT_ID = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+GATED_SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
 
 REPORT_KEYS = {
     "accepted", "boot_id", "child", "child_processes", "child_returncode", "command",
@@ -275,11 +290,14 @@ def format_cpu_list(values):
     return ",".join(ranges)
 
 
-def bounded_file_identity(argument):
+def open_bounded_file_identity(argument):
+    """Open and hash one exact regular-file inode for later descriptor exec."""
     require(isinstance(argument, str) and argument and "\x00" not in argument,
             "file argument is invalid")
     path = Path(argument).resolve(strict=True)
-    descriptor = os.open(str(path), os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+    descriptor = os.open(
+        str(path), os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+        getattr(os, "O_NONBLOCK", 0))
     try:
         before = os.fstat(descriptor)
         require(stat.S_ISREG(before.st_mode) and 0 <= before.st_size <= MAX_IDENTITY_BYTES,
@@ -303,7 +321,7 @@ def bounded_file_identity(argument):
                  after.st_ctime_ns) and
                 (before.st_dev, before.st_ino) == (current.st_dev, current.st_ino),
                 "identity file changed while hashing: {}".format(path))
-        return {
+        identity = {
             "argument": argument,
             "path": str(path),
             "device": before.st_dev,
@@ -312,44 +330,113 @@ def bounded_file_identity(argument):
             "size": before.st_size,
             "sha256": digest.hexdigest(),
         }
-    finally:
+        return descriptor, identity
+    except BaseException:
         os.close(descriptor)
+        raise
 
 
-def directory_identity(path):
-    path = Path(path).resolve(strict=True)
-    metadata = path.stat()
-    require(stat.S_ISDIR(metadata.st_mode), "working directory is not a directory")
-    return {
-        "path": str(path), "device": metadata.st_dev, "inode": metadata.st_ino,
-        "mode": metadata.st_mode & 0o7777,
-    }
+def bounded_file_identity(argument):
+    descriptor, identity = open_bounded_file_identity(argument)
+    os.close(descriptor)
+    return identity
 
 
-def command_identity(command):
-    require(isinstance(command, list) and command and
-            all(isinstance(item, str) and item and "\x00" not in item
-                for item in command), "child command is malformed")
-    executable_argument = command[0]
-    executable_path = executable_argument
-    if os.sep not in executable_argument:
-        executable_path = shutil.which(executable_argument)
-        require(executable_path is not None,
-                "child executable is not present on PATH")
-    executable = bounded_file_identity(executable_path)
-    executable["argument"] = executable_argument
-    require(os.access(executable["path"], os.X_OK),
-            "child executable is not executable")
-    script = None
-    if len(command) >= 2 and command[1].endswith(".py"):
-        script = bounded_file_identity(command[1])
-    return {
-        "cwd": directory_identity(Path.cwd()),
-        "executable": executable,
-        "script": script,
-    }
+class PinnedCommand:
+    """Descriptor-bound command/cwd snapshot used by the gated child.
 
+    The report keeps the user's original argv and path identities.  Execution
+    uses ``/proc/self/fd`` names for the already-hashed executable and optional
+    Python script, so replacing either pathname after preparation cannot select
+    different code.  The child also fchdir()s to the captured directory inode.
+    """
 
+    def __init__(self, command):
+        require(isinstance(command, list) and command and
+                all(isinstance(item, str) and item and "\x00" not in item
+                    for item in command), "child command is malformed")
+        self.command = list(command)
+        self.descriptors = []
+        self.cwd_descriptor = None
+        self.executable_descriptor = None
+        self.script_descriptor = None
+        try:
+            cwd = Path.cwd().resolve(strict=True)
+            cwd_flags = (os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) |
+                         getattr(os, "O_CLOEXEC", 0))
+            if hasattr(os, "O_NOFOLLOW"):
+                cwd_flags |= os.O_NOFOLLOW
+            self.cwd_descriptor = os.open(str(cwd), cwd_flags)
+            self.descriptors.append(self.cwd_descriptor)
+            cwd_metadata = os.fstat(self.cwd_descriptor)
+            current_cwd = cwd.stat()
+            require(stat.S_ISDIR(cwd_metadata.st_mode) and
+                    (cwd_metadata.st_dev, cwd_metadata.st_ino) ==
+                    (current_cwd.st_dev, current_cwd.st_ino),
+                    "working directory changed while it was captured")
+            cwd_identity = {
+                "path": str(cwd), "device": cwd_metadata.st_dev,
+                "inode": cwd_metadata.st_ino,
+                "mode": cwd_metadata.st_mode & 0o7777,
+            }
+
+            executable_argument = self.command[0]
+            executable_path = executable_argument
+            if os.sep not in executable_argument:
+                executable_path = shutil.which(executable_argument)
+                require(executable_path is not None,
+                        "child executable is not present on PATH")
+            descriptor, executable = open_bounded_file_identity(executable_path)
+            self.executable_descriptor = descriptor
+            self.descriptors.append(descriptor)
+            executable["argument"] = executable_argument
+            require(executable["mode"] & 0o111,
+                    "child executable has no execute permission bit")
+            os.set_inheritable(descriptor, True)
+
+            script = None
+            if len(self.command) >= 2 and self.command[1].endswith(".py"):
+                descriptor, script = open_bounded_file_identity(self.command[1])
+                self.script_descriptor = descriptor
+                self.descriptors.append(descriptor)
+                os.set_inheritable(descriptor, True)
+            self.identity = {
+                "cwd": cwd_identity,
+                "executable": executable,
+                "script": script,
+            }
+        except BaseException:
+            self.close()
+            raise
+
+    @staticmethod
+    def _proc_fd(descriptor):
+        return "/proc/self/fd/{}".format(descriptor)
+
+    def executable_path(self):
+        require(self.executable_descriptor is not None,
+                "pinned executable is closed")
+        return self._proc_fd(self.executable_descriptor)
+
+    def execution_argv(self):
+        result = list(self.command)
+        if self.script_descriptor is not None:
+            result[1] = self._proc_fd(self.script_descriptor)
+        return result
+
+    def close(self):
+        for descriptor in reversed(getattr(self, "descriptors", [])):
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        self.descriptors = []
+        self.cwd_descriptor = None
+        self.executable_descriptor = None
+        self.script_descriptor = None
+
+    def __del__(self):  # pragma: no cover - deterministic paths call close()
+        self.close()
 def runtime_identity(proc_root=Path("/proc")):
     proc_root = Path(proc_root)
     try:
@@ -1091,6 +1178,19 @@ def validate_event(value, label="event"):
     return value
 
 
+def uncontained_mutation_records(records, subreaper_pid):
+    """Return mutations whose creator is not the supervisor's sole main thread."""
+    records = list(records)
+    self_records = [
+        item for item in records
+        if subreaper_pid is not None and item["pid"] == subreaper_pid and
+        item["tid"] == subreaper_pid
+    ]
+    if len(self_records) > 1:
+        return records
+    return [item for item in records if item not in self_records]
+
+
 def validate_report(report, require_accepted=False):
     require_exact_keys(report, REPORT_KEYS, "affinity report")
     require(report["schema"] == REPORT_SCHEMA, "affinity report has wrong schema")
@@ -1250,6 +1350,9 @@ def validate_report(report, require_accepted=False):
     if report["accepted"]:
         require(report["state"] == "complete" and report["finished_utc"] is not None and
                 report["error"] is None and not report["uncertainty"] and
+                report["subreaper_pid"] is not None and
+                not uncontained_mutation_records(
+                    records, report["subreaper_pid"]) and
                 report["child_returncode"] == 0 and
                 report["received_signal"] is None and child is not None and
                 child["released"] is True and
@@ -1300,6 +1403,39 @@ class ForkedChild:
         return self.returncode
 
 
+def execute_pinned_command(pinned, launch_cpus, execution_nonce,
+                           fchdir_function=os.fchdir,
+                           set_affinity_function=os.sched_setaffinity,
+                           get_affinity_function=os.sched_getaffinity,
+                           execve_function=os.execve, environment=None):
+    """Enter the captured cwd/affinity and exec only captured code in a child."""
+    require(isinstance(pinned, PinnedCommand),
+            "gated execution requires a pinned command")
+    launch_cpus = set(validate_cpu_list(sorted(launch_cpus), "launch CPUs"))
+    require(isinstance(execution_nonce, str) and
+            HEX256.fullmatch(execution_nonce) is not None,
+            "execution nonce is invalid")
+    require(pinned.cwd_descriptor is not None,
+            "pinned working directory is closed")
+    fchdir_function(pinned.cwd_descriptor)
+    set_affinity_function(0, launch_cpus)
+    require(set(get_affinity_function(0)) == launch_cpus,
+            "gated child did not retain its exact launch affinity")
+    child_environment = dict(os.environ if environment is None else environment)
+    child_environment[EXECUTION_NONCE_ENV] = execution_nonce
+    execve_function(
+        pinned.executable_path(), pinned.execution_argv(), child_environment)
+    raise IsolationError("execve unexpectedly returned")
+
+
+def reset_gated_child_signals(old_mask, signal_function=signal.signal,
+                              mask_function=signal.pthread_sigmask):
+    """Install terminating child dispositions before unblocking launch signals."""
+    for signum in GATED_SIGNALS:
+        signal_function(signum, signal.SIG_DFL)
+    mask_function(signal.SIG_SETMASK, old_mask)
+
+
 class GatedLauncher:
     """Fork a new session whose command is blocked on a parent-owned pipe."""
 
@@ -1313,15 +1449,40 @@ class GatedLauncher:
         except OSError:
             pass
 
-    def launch(self, taskset, command, launch_cpus, backend, ready_callback,
+    def launch(self, command, launch_cpus, backend, ready_callback,
                release_callback, execution_nonce):
+        require(isinstance(command, PinnedCommand),
+                "gated launcher received an unpinned command")
         gate_read, gate_write = os.pipe2(os.O_CLOEXEC)
         ready_read, ready_write = os.pipe2(os.O_CLOEXEC)
-        pid = os.fork()
+        blocked = set(GATED_SIGNALS)
+        old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, blocked)
+        if set(old_mask).intersection(blocked):
+            signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+            self._close(gate_read)
+            self._close(gate_write)
+            self._close(ready_read)
+            self._close(ready_write)
+            raise IsolationError(
+                "authoritative child launch requires INT/TERM/HUP unblocked")
+        try:
+            pid = os.fork()
+        except BaseException:
+            signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+            self._close(gate_read)
+            self._close(gate_write)
+            self._close(ready_read)
+            self._close(ready_write)
+            raise
         if pid == 0:  # pragma: no cover - behavior is asserted by the parent
             try:
                 self._close(gate_write)
                 self._close(ready_read)
+                # Fork inherits the supervisor's Python handlers.  Reset them
+                # while blocked, then restore the original unblocked mask.  A
+                # signal sent to the gated child therefore terminates it; it
+                # cannot run a copied Python handler and restart gate_read.
+                reset_gated_child_signals(old_mask)
                 os.setsid()
                 os.write(ready_write, b"R")
                 self._close(ready_write)
@@ -1329,13 +1490,10 @@ class GatedLauncher:
                 self._close(gate_read)
                 if token != b"G":
                     os._exit(125)
-                argv = [str(taskset), "-c", format_cpu_list(sorted(launch_cpus)),
-                        "--"] + list(command)
-                environment = dict(os.environ)
-                environment[EXECUTION_NONCE_ENV] = execution_nonce
-                os.execve(str(taskset), argv, environment)
+                execute_pinned_command(command, launch_cpus, execution_nonce)
             except BaseException:
                 os._exit(126)
+        signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
         self._close(gate_read)
         self._close(ready_write)
         child = None
@@ -1607,10 +1765,12 @@ class AffinityTransaction:
         self.seen_keys = set()
         self.events = []
         self.child = None
+        self.pinned_command = None
         self.child_processes = {}
         self.child_process_order = []
         self.subreaper_pid = None
         self.received_signal = None
+        self.signal_boundary_closed = False
         self.gate_descriptor = None
         self.initialized = False
         self.write_count = 0
@@ -1682,12 +1842,16 @@ class AffinityTransaction:
         value.seen_keys = set(value.record_order)
         value.events = report["events"]
         value.child = None
+        value.pinned_command = None
         value.child_processes = {
             child_process_key(item): item for item in report["child_processes"]}
         value.child_process_order = [
             child_process_key(item) for item in report["child_processes"]]
-        value.subreaper_pid = None
+        # Retain the original supervisor PID only to classify its single main
+        # thread record.  Recovery never claims to be that process's subreaper.
+        value.subreaper_pid = report["subreaper_pid"]
         value.received_signal = report["received_signal"]
+        value.signal_boundary_closed = True
         value.gate_descriptor = None
         value.initialized = True
         value.write_count = 0
@@ -1719,10 +1883,30 @@ class AffinityTransaction:
         try:
             self.seal_writer(seal, payload, exclusive=True)
             validate_acceptance(payload, self.report_path, report_bytes)
-        except BaseException:
+        except BaseException as commit_error:
             # A writer may report a post-install fsync error.  Never let that
-            # possibly-installed seal make the body acceptable.
-            self._invalidate_acceptance()
+            # possibly-installed seal disagree with the returned result.  If
+            # durable rejection succeeds, propagate the commit error.  If
+            # rejection itself is ambiguous, read back the exact path-bound
+            # pair: a fully valid pair defines a committed success; every other
+            # state remains rejected and raises.  Thus no caller-visible failure
+            # can coexist with evidence that verify-report accepts.
+            try:
+                self._invalidate_acceptance()
+            except BaseException as invalidation_error:
+                try:
+                    retained, retained_bytes, _seal, _seal_bytes = \
+                        accepted_report_snapshot(self.report_path)
+                    require(retained_bytes == report_bytes and
+                            retained == self.report,
+                            "read-back acceptance differs from committing snapshot")
+                    return
+                except BaseException as readback_error:
+                    raise IsolationError(
+                        "acceptance commit, invalidation, and read-back failed: "
+                        "{}; {}; {}".format(
+                            commit_error, invalidation_error, readback_error)) \
+                        from commit_error
             raise
 
     def _write(self, exclusive=False):
@@ -1752,12 +1936,18 @@ class AffinityTransaction:
     def prepare_command(self, command):
         require(not self.report["command"], "child command was already prepared")
         command = list(command)
-        identity = command_identity(command)
-        self.report["command"] = command
-        self.report["command_sha256"] = sha256_value(command)
-        self.report["command_identity"] = identity
-        self.report["state"] = "prepared"
-        self._write()
+        pinned = PinnedCommand(command)
+        try:
+            self.report["command"] = command
+            self.report["command_sha256"] = sha256_value(command)
+            self.report["command_identity"] = json.loads(json.dumps(
+                pinned.identity))
+            self.report["state"] = "prepared"
+            self._write()
+            self.pinned_command = pinned
+        except BaseException:
+            pinned.close()
+            raise
 
     @staticmethod
     def _provenance(identity, affinity, source):
@@ -1794,6 +1984,8 @@ class AffinityTransaction:
         }
 
     def request_signal(self, signum):
+        if self.signal_boundary_closed:
+            return False
         if isinstance(signum, signal.Signals):
             signum = int(signum)
         signum = exact_int(signum, "signal", 1, 255)
@@ -1808,6 +2000,7 @@ class AffinityTransaction:
                 os.close(descriptor)
             except OSError:
                 pass
+        return True
 
     def _snapshot(self, excluded_child=None):
         result = []
@@ -2192,7 +2385,16 @@ class AffinityTransaction:
         return additions
 
     def restore_reconciled(self, restored_status="restored"):
-        """Restore, then rescan until every restricted creator is quiescent."""
+        """Restore and perform bounded best-effort late-arrival reconciliation.
+
+        For an outside creator whose mask was changed, no finite scan count is
+        a proof of complete restoration: clone may have captured a restricted
+        mask before widening and publish after the final scan.  The supervisor's
+        own single main thread is the one bounded exception: this implementation
+        controls its fork point and creates no other thread.  Keep scanning for
+        the full bound after any outside mutation, then return an explicit
+        containment failure.
+        """
         failures = self.restore(restored_status=restored_status)
         stable = 0
         for _ in range(MAX_STABILIZE_PASSES):
@@ -2213,10 +2415,18 @@ class AffinityTransaction:
                 stable = 0
             else:
                 stable += 1
-                if stable == 2:
+                if stable == 2 and not uncontained_mutation_records(
+                        self.records.values(), self.subreaper_pid):
                     return failures
             self.sleep(self.poll_ms / 1000.0)
-        failures.append("same-UID thread set did not stabilize during restoration")
+        if uncontained_mutation_records(
+                self.records.values(), self.subreaper_pid):
+            self.report["uncertainty"] = True
+            if MUTATED_RESTORE_UNPROVABLE not in failures:
+                failures.append(MUTATED_RESTORE_UNPROVABLE)
+        else:
+            failures.append(
+                "same-UID thread set did not stabilize during restoration")
         return failures
 
     def _finish_child_wait(self):
@@ -2237,12 +2447,9 @@ class AffinityTransaction:
             if signum in signal.sigpending():
                 self.request_signal(signum)
 
-    def run(self, command, taskset_path=Path("/usr/bin/taskset")):
+    def run(self, command):
         if not command:
             raise IsolationError("no child command was provided")
-        taskset = Path(taskset_path).resolve(strict=True)
-        require(taskset == Path("/usr/bin/taskset").resolve(strict=True),
-                "authoritative isolation requires /usr/bin/taskset")
         child_returncode = None
         run_error = None
         cleanup_failures = []
@@ -2255,8 +2462,10 @@ class AffinityTransaction:
                 self.report["subreaper_pid"] = self.subreaper_pid
             self.prepare_command(list(command))
             self.stabilize()
+            require(self.pinned_command is not None,
+                    "prepared command descriptors are unavailable")
             self.child = self.launcher.launch(
-                taskset, list(command), self.launch, self.backend,
+                self.pinned_command, self.launch, self.backend,
                 self._child_ready, self._authorize_child_release,
                 self.report["execution"]["nonce"])
             self._mark_child_released()
@@ -2329,7 +2538,6 @@ class AffinityTransaction:
             else:
                 restore_failures.append(
                     "affinity restore withheld until child-session cleanup succeeds")
-
             errors = []
             if run_error is not None:
                 errors.append(str(run_error))
@@ -2376,6 +2584,12 @@ class AffinityTransaction:
                     self._write()
                 except BaseException as error:
                     write_failures.append(str(error))
+            # This is the signal-observation boundary for the supervised
+            # transaction.  The benchmark child is gone, best-effort restoration
+            # and the final pending-signal rewrite are complete, and signals stay
+            # blocked until after the acceptance commit.  A later signal belongs
+            # to the caller, not to the already-finished benchmark evidence.
+            self.signal_boundary_closed = True
             if self.report["accepted"]:
                 try:
                     self._seal_acceptance()
@@ -2391,6 +2605,9 @@ class AffinityTransaction:
                         write_failures.append(str(rewrite_error))
             if old_signal_mask is not None:
                 signal.pthread_sigmask(signal.SIG_SETMASK, old_signal_mask)
+            if self.pinned_command is not None:
+                self.pinned_command.close()
+                self.pinned_command = None
         if write_failures or run_error is not None or cleanup_failures or restore_failures:
             return 1
         if self.received_signal is not None:
@@ -2473,6 +2690,20 @@ def recover_report(path, backend=None, writer=atomic_json, host=None,
         failures.append(
             "affinity restore withheld until child-session cleanup succeeds")
 
+    # A replacement supervisor is not the original subreaper.  Once the gate
+    # was released, a double-forked descendant may have changed sessions and
+    # been reparented elsewhere before its identity reached the journal.  Known
+    # identities are still cleaned and masks are restored best-effort, but a
+    # successful recovery claim would be unsound without persistent containment.
+    if report["child"] is not None and report["child"]["released"]:
+        report["uncertainty"] = True
+        failures.append(CRASH_SCOPE_UNPROVABLE)
+    if uncontained_mutation_records(
+            report["records"], report["subreaper_pid"]):
+        report["uncertainty"] = True
+        if MUTATED_RESTORE_UNPROVABLE not in failures:
+            failures.append(MUTATED_RESTORE_UNPROVABLE)
+
     unresolved = [
         "{}/{}:{}".format(item["pid"], item["tid"], item["restore_status"])
         for item in report["records"]
@@ -2480,8 +2711,8 @@ def recover_report(path, backend=None, writer=atomic_json, host=None,
     ]
     if unresolved:
         failures.append("unresolved affinity records: {}".format(",".join(unresolved)))
-    if report["uncertainty"] and not unresolved:
-        failures.append("journal retains an unrecoverable TID-reuse uncertainty")
+    if report["uncertainty"] and not unresolved and not failures:
+        failures.append("journal retains an unrecoverable uncertainty")
 
     failures.extend(write_failures)
     report["state"] = "recovered" if not failures else "recovery_failed"
@@ -2872,6 +3103,7 @@ class FakeBackend:
         self.signal_log = []
         self.operation_log = []
         self.on_set = None
+        self.on_list = None
 
     @staticmethod
     def enable_subreaper():
@@ -2904,8 +3136,11 @@ class FakeBackend:
             del self.threads[key]
 
     def list_threads(self, excluded_session=None):
-        return [value[0] for _, value in sorted(self.threads.items())
-                if value[0].session != excluded_session]
+        result = [value[0] for _, value in sorted(self.threads.items())
+                  if value[0].session != excluded_session]
+        if self.on_list is not None:
+            self.on_list(list(result))
+        return result
 
     def process_identity(self, pid):
         value = self.threads.get((pid, pid))
@@ -3064,7 +3299,7 @@ class FakeLauncher:
         self.released = False
         self.before_release = None
 
-    def launch(self, _taskset, _command, launch_cpus, _backend, ready_callback,
+    def launch(self, _command, launch_cpus, _backend, ready_callback,
                release_callback, execution_nonce):
         require(isinstance(execution_nonce, str) and
                 HEX256.fullmatch(execution_nonce) is not None,
@@ -3204,8 +3439,10 @@ def test_late_inherited_restore_reconciliation():
                             process_start=100)
 
         backend.on_set = spawn_from_still_restricted_creator
-        check(not transaction.restore_reconciled(),
-              "late inherited thread reconciliation reported a failure")
+        failures = transaction.restore_reconciled()
+        check(failures == [MUTATED_RESTORE_UNPROVABLE] and
+              transaction.report["uncertainty"] is True,
+              "finite restoration scan was certified without containment")
         late = backend.threads[(10, 12)][0]
         check(backend.get_affinity(late) == {0, 1, 2, 3} and
               transaction.records[late.key()]["restore_status"] == "restored",
@@ -3232,14 +3469,46 @@ def test_late_inherited_restore_reconciliation():
                             process_start=200)
 
         backend.on_set = spawn_during_recovery
-        check(recover_report(
-            transaction.report_path, backend=backend, host=FAKE_HOST,
-            sleep_function=lambda _seconds: None,
-            global_lock=transaction.global_lock) == 0,
-              "recovery did not reconcile a late inherited thread")
+        expect_exception(
+            IsolationError,
+            lambda: recover_report(
+                transaction.report_path, backend=backend, host=FAKE_HOST,
+                sleep_function=lambda _seconds: None,
+                global_lock=transaction.global_lock),
+            "uncontained recovery completion")
         late = backend.threads[(20, 22)][0]
         check(backend.get_affinity(late) == {0, 1, 2, 3},
               "recovery stranded a late inherited thread")
+
+    # Reproduce publication after the historical second/final empty scan.  The
+    # new bounded cleanup keeps scanning and repairs this concrete late thread,
+    # but still rejects the unprovable global completion claim because another
+    # clone could publish after any finite last scan.
+    with tempfile.TemporaryDirectory() as directory:
+        backend = FakeBackend()
+        backend.add(30, 30, 300, 30, {0, 1, 2, 3}, ppid=1)
+        backend.add(30, 31, 301, 30, {0, 1, 2, 3}, ppid=1,
+                    process_start=300)
+        transaction = make_fake_transaction(directory, backend)
+        transaction.prepare_command(fake_command())
+        transaction.stabilize()
+        scans = {"count": 0, "published": False}
+
+        def publish_after_second_snapshot(_snapshot):
+            scans["count"] += 1
+            if scans["count"] == 2:
+                scans["published"] = True
+                backend.add(30, 32, 302, 30, {0, 2}, ppid=1,
+                            process_start=300)
+
+        backend.on_list = publish_after_second_snapshot
+        failures = transaction.restore_reconciled()
+        late = backend.threads[(30, 32)][0]
+        check(scans["published"] and scans["count"] == MAX_STABILIZE_PASSES and
+              failures == [MUTATED_RESTORE_UNPROVABLE] and
+              backend.get_affinity(late) == {0, 1, 2, 3} and
+              late.key() in transaction.records,
+              "post-final-scan thread publication was accepted or left unrepaired")
 
 
 def test_nonuniform_and_unsafe_newcomer():
@@ -3292,7 +3561,36 @@ def test_write_failure_still_restores():
 def test_acceptance_is_path_sealed_and_fail_closed():
     with tempfile.TemporaryDirectory() as directory:
         backend = FakeBackend()
-        backend.add(1, 1, 1, 1, {0, 1, 2, 3}, ppid=0)
+        supervisor = backend.add(500, 500, 5000, 500,
+                                 {0, 1, 2, 3}, ppid=1)
+        backend.add(1, 1, 1, 1, {0, 2}, ppid=0)
+        transaction = make_fake_transaction(
+            directory, backend, launcher=FakeLauncher(backend))
+        check(transaction.run(fake_command()) == 0 and
+              backend.get_affinity(supervisor) == {0, 1, 2, 3} and
+              transaction.report["accepted"] is True and
+              [(item["pid"], item["tid"]) for item in
+               transaction.report["records"]] == [(500, 500)] and
+              load_report(transaction.report_path,
+                          require_accepted=True)["accepted"] is True,
+              "single-threaded supervisor self-mutation was not bounded")
+
+    with tempfile.TemporaryDirectory() as directory:
+        backend = FakeBackend()
+        identity = backend.add(1, 1, 1, 1, {0, 1, 2, 3}, ppid=0)
+        transaction = make_fake_transaction(
+            directory, backend, launcher=FakeLauncher(backend))
+        check(transaction.run(fake_command()) == 1 and
+              backend.get_affinity(identity) == {0, 1, 2, 3} and
+              transaction.report["accepted"] is False and
+              transaction.report["uncertainty"] is True and
+              MUTATED_RESTORE_UNPROVABLE in transaction.report["error"] and
+              not acceptance_path(transaction.report_path).exists(),
+              "uncontained affinity mutation produced authoritative evidence")
+
+    with tempfile.TemporaryDirectory() as directory:
+        backend = FakeBackend()
+        backend.add(1, 1, 1, 1, {0, 2}, ppid=0)
         transaction = make_fake_transaction(
             directory, backend, launcher=FakeLauncher(backend),
             seal_writer=PostInstallFailWriter())
@@ -3307,7 +3605,7 @@ def test_acceptance_is_path_sealed_and_fail_closed():
 
     with tempfile.TemporaryDirectory() as directory:
         backend = FakeBackend()
-        backend.add(1, 1, 1, 1, {0, 1, 2, 3}, ppid=0)
+        backend.add(1, 1, 1, 1, {0, 2}, ppid=0)
         transaction = make_fake_transaction(
             directory, backend, launcher=FakeLauncher(backend))
         check(transaction.run(fake_command()) == 0 and
@@ -3329,6 +3627,26 @@ def test_acceptance_is_path_sealed_and_fail_closed():
         check(ambiguity_path(transaction.report_path).exists() and
               not acceptance_path(transaction.report_path).exists(),
               "late invalidation did not atomically prefer rejection")
+
+    with tempfile.TemporaryDirectory() as directory:
+        backend = FakeBackend()
+        backend.add(1, 1, 1, 1, {0, 2}, ppid=0)
+        body_writer = CountingWriter(fail_state_once="failed")
+        transaction = make_fake_transaction(
+            directory, backend, writer=body_writer,
+            launcher=FakeLauncher(backend),
+            seal_writer=PostInstallFailWriter())
+
+        def fail_revoke():
+            raise OSError("injected acceptance revocation failure")
+
+        transaction._invalidate_acceptance = fail_revoke
+        check(transaction.run(fake_command()) == 0 and
+              transaction.report["accepted"] is True and
+              body_writer.failed is False and
+              load_report(transaction.report_path,
+                          require_accepted=True)["accepted"] is True,
+              "valid installed seal survived a failed return/body rewrite")
 
 
 def test_gate_signal_and_descendants():
@@ -3396,7 +3714,7 @@ def test_gate_signal_and_descendants():
 
     with tempfile.TemporaryDirectory() as directory:
         backend = FakeBackend()
-        backend.add(1, 1, 1, 1, {0, 1, 2, 3}, ppid=0)
+        backend.add(1, 1, 1, 1, {0, 2}, ppid=0)
         launcher = FakeLauncher(backend, stay_alive=True)
         holder = {}
 
@@ -3418,7 +3736,7 @@ def test_gate_signal_and_descendants():
 
     with tempfile.TemporaryDirectory() as directory:
         backend = FakeBackend()
-        backend.add(1, 1, 1, 1, {0, 1, 2, 3}, ppid=0)
+        backend.add(1, 1, 1, 1, {0, 2}, ppid=0)
         launcher = FakeLauncher(
             backend, descendant=True, stay_alive=True, cross_session=True)
         holder = {}
@@ -3447,6 +3765,122 @@ def test_gate_signal_and_descendants():
     check(not failures and had_members and
           backend.signal_log == [(700, signal.SIGTERM), (700, signal.SIGKILL)],
           "bounded signal grace did not escalate stubborn child to SIGKILL")
+
+
+def test_descriptor_pinned_exec_and_child_signal_defaults():
+    operations = []
+    handlers = {signum: "copied-python-handler" for signum in GATED_SIGNALS}
+    outcome = {"terminated": False, "executed": False}
+
+    def fake_signal(signum, disposition):
+        handlers[signum] = disposition
+        operations.append(("handler", int(signum), disposition))
+
+    def fake_mask(how, mask):
+        operations.append(("mask", how, frozenset(mask)))
+        # Model a SIGTERM delivered while the child was blocked in gate_read.
+        # Unblocking with a copied Python handler would return to the read and
+        # later execute; SIG_DFL terminates before any release is possible.
+        if handlers[signal.SIGTERM] == signal.SIG_DFL:
+            outcome["terminated"] = True
+        else:
+            outcome["executed"] = True
+
+    reset_gated_child_signals(
+        set(), signal_function=fake_signal, mask_function=fake_mask)
+    check(outcome == {"terminated": True, "executed": False} and
+          [item[0] for item in operations] ==
+          ["handler", "handler", "handler", "mask"],
+          "gated child unblocked before replacing copied signal handlers")
+
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        executable = root / "command"
+        script = root / "runner.py"
+        executable.write_bytes(b"#!/bin/sh\nexit 0\n")
+        executable.chmod(0o755)
+        script.write_bytes(b"print('original')\n")
+        pinned = PinnedCommand([str(executable), str(script), "argument"])
+        try:
+            original_identity = json.loads(json.dumps(pinned.identity))
+            original_command_hash = sha256_value(pinned.command)
+            saved_executable = root / "command.original"
+            saved_script = root / "runner.original.py"
+            os.replace(executable, saved_executable)
+            os.replace(script, saved_script)
+            executable.write_bytes(b"#!/bin/sh\nexit 99\n")
+            executable.chmod(0o755)
+            script.write_bytes(b"print('replacement')\n")
+            captured = {}
+
+            class CapturedExec(Exception):
+                pass
+
+            def fake_fchdir(descriptor):
+                metadata = os.fstat(descriptor)
+                captured["cwd"] = (metadata.st_dev, metadata.st_ino)
+
+            def fake_set_affinity(pid, cpus):
+                captured["set_affinity"] = (pid, set(cpus))
+
+            def fake_get_affinity(pid):
+                check(pid == 0, "pinned exec queried another PID")
+                return {0, 1, 2, 3}
+
+            def fake_execve(path, argv, environment):
+                captured["exec_path"] = path
+                captured["argv"] = list(argv)
+                captured["executable_bytes"] = Path(path).read_bytes()
+                captured["script_bytes"] = Path(argv[1]).read_bytes()
+                captured["nonce"] = environment.get(EXECUTION_NONCE_ENV)
+                raise CapturedExec()
+
+            expect_exception(
+                CapturedExec,
+                lambda: execute_pinned_command(
+                    pinned, {0, 1, 2, 3}, "cd" * 32,
+                    fchdir_function=fake_fchdir,
+                    set_affinity_function=fake_set_affinity,
+                    get_affinity_function=fake_get_affinity,
+                    execve_function=fake_execve, environment={}),
+                "descriptor-pinned execution capture")
+
+            # Model replacement code restoring the original pathname before
+            # final evidence inspection.  Path-only pre/post hashing would miss
+            # this attack; the captured descriptors never selected replacement.
+            executable.unlink()
+            script.unlink()
+            os.replace(saved_executable, executable)
+            os.replace(saved_script, script)
+            final_executable = bounded_file_identity(str(executable))
+            final_script = bounded_file_identity(str(script))
+            check(captured["executable_bytes"] == b"#!/bin/sh\nexit 0\n" and
+                  captured["script_bytes"] == b"print('original')\n" and
+                  captured["argv"] == [str(executable),
+                                        pinned._proc_fd(
+                                            pinned.script_descriptor),
+                                        "argument"] and
+                  captured["exec_path"] == pinned._proc_fd(
+                      pinned.executable_descriptor) and
+                  captured["cwd"] == (
+                      original_identity["cwd"]["device"],
+                      original_identity["cwd"]["inode"]) and
+                  captured["set_affinity"] == (0, {0, 1, 2, 3}) and
+                  captured["nonce"] == "cd" * 32 and
+                  original_command_hash == sha256_value(pinned.command) and
+                  (final_executable["device"], final_executable["inode"],
+                   final_executable["sha256"]) ==
+                  (original_identity["executable"]["device"],
+                   original_identity["executable"]["inode"],
+                   original_identity["executable"]["sha256"]) and
+                  (final_script["device"], final_script["inode"],
+                   final_script["sha256"]) ==
+                  (original_identity["script"]["device"],
+                   original_identity["script"]["inode"],
+                   original_identity["script"]["sha256"]),
+                  "pathname replacement selected unpinned command code")
+        finally:
+            pinned.close()
 
 
 def test_tid_reuse_and_recovery():
@@ -3501,13 +3935,15 @@ def test_tid_reuse_and_recovery():
             "cross-boot recovery")
         check(backend.get_affinity(identity) == {0, 2},
               "cross-boot recovery mutated a journaled mask")
-        check(recover_report(
-            transaction.report_path, backend=backend, host=FAKE_HOST,
-            sleep_function=lambda _seconds: None,
-            global_lock=transaction.global_lock) == 0,
-              "failed restore was not retried by recovery")
+        expect_exception(
+            IsolationError,
+            lambda: recover_report(
+                transaction.report_path, backend=backend, host=FAKE_HOST,
+                sleep_function=lambda _seconds: None,
+                global_lock=transaction.global_lock),
+            "uncontained recovery completion")
         check(backend.get_affinity(identity) == {0, 1, 2, 3},
-              "recovery did not restore the exact original mask")
+              "best-effort recovery did not restore the exact original mask")
 
         malformed = load_json(transaction.report_path, "test report")
         malformed["records"][0]["restore_status"] = "mystery"
@@ -3557,11 +3993,13 @@ def test_recovery_kills_session_before_restore():
         backend.remove_process(900)
         backend.threads[(901, 901)][0] = replace(
             descendant, ppid=1, session=901)
-        check(recover_report(
-            transaction.report_path, backend=backend, host=FAKE_HOST,
-            sleep_function=lambda _seconds: None,
-            global_lock=transaction.global_lock) == 0,
-              "recovery with a live child session failed")
+        expect_exception(
+            IsolationError,
+            lambda: recover_report(
+                transaction.report_path, backend=backend, host=FAKE_HOST,
+                sleep_function=lambda _seconds: None,
+                global_lock=transaction.global_lock),
+            "released-child crash recovery completion")
         check((901, 901) not in backend.threads and
               backend.get_affinity(identity) == {0, 1, 2, 3},
               "recovery restored masks before emptying retained descendants")
@@ -3573,6 +4011,42 @@ def test_recovery_kills_session_before_restore():
         check(signal_index < restore_index,
               "recovery ordering did not include child cleanup")
 
+    # Reproduce a crash before the original subreaper observed a double-forked
+    # child.  Once it has changed session and reparented outside the replacement
+    # supervisor, PID/session/ancestry scans cannot rediscover it.  Recovery may
+    # repair known masks, but must return failure instead of claiming the scope
+    # was emptied.
+    with tempfile.TemporaryDirectory() as directory:
+        backend = FakeBackend()
+        identity = backend.add(1, 1, 1, 1, {0, 1, 2, 3}, ppid=0)
+        transaction = make_fake_transaction(directory, backend)
+        transaction.prepare_command(fake_command())
+        transaction.initialize_provenance()
+        child = backend.add(900, 900, 9000, 900, {0, 1, 2, 3}, ppid=1)
+        transaction.report["child"] = child_record_from_identity(child, True)
+        process = child_process_record(child)
+        key = child_process_key(process)
+        transaction.child_processes[key] = process
+        transaction.child_process_order.append(key)
+        transaction.report["state"] = "running"
+        transaction._write()
+        backend.remove_process(900)
+        backend.add(901, 901, 9010, 901, {0, 1, 2, 3}, ppid=1)
+        expect_exception(
+            IsolationError,
+            lambda: recover_report(
+                transaction.report_path, backend=backend, host=FAKE_HOST,
+                sleep_function=lambda _seconds: None,
+                global_lock=transaction.global_lock),
+            "unobserved cross-session orphan recovery")
+        retained = load_report(transaction.report_path)
+        check((901, 901) in backend.threads and not backend.signal_log and
+              backend.get_affinity(identity) == {0, 1, 2, 3} and
+              retained["state"] == "recovery_failed" and
+              retained["uncertainty"] is True and
+              CRASH_SCOPE_UNPROVABLE in retained["error"],
+              "crash-unobserved orphan was hidden by successful recovery")
+
 
 def test_binding():
     with tempfile.TemporaryDirectory() as directory:
@@ -3580,7 +4054,9 @@ def test_binding():
         evidence = root / "evidence"
         evidence.mkdir()
         backend = FakeBackend()
-        backend.add(1, 1, 1, 1, {0, 1, 2, 3}, ppid=0)
+        # Authoritative v6 evidence is accepted only when the surrounding work
+        # was already outside the reserved pair and no mask needed mutation.
+        backend.add(1, 1, 1, 1, {0, 2}, ppid=0)
         report_path = root / "report.json"
         reservation_path = root / "reservation.json"
         reservation_payload = {"nonce": "reservation-nonce"}
@@ -3764,6 +4240,7 @@ def self_test():
         test_write_failure_still_restores,
         test_acceptance_is_path_sealed_and_fail_closed,
         test_gate_signal_and_descendants,
+        test_descriptor_pinned_exec_and_child_signal_defaults,
         test_tid_reuse_and_recovery,
         test_recovery_kills_session_before_restore,
         test_binding,
@@ -3787,7 +4264,6 @@ def parser():
     run.add_argument("--reserved-cpus", required=True,
                      help="logical CPU list, normally one SMT pair")
     run.add_argument("--poll-ms", type=int, default=DEFAULT_POLL_MS)
-    run.add_argument("--taskset", type=Path, default=Path("/usr/bin/taskset"))
     run.add_argument("child", nargs=argparse.REMAINDER)
     restore = commands.add_parser(
         "restore", help="restore a journal left by an unclean exit")
@@ -3849,33 +4325,37 @@ def main(arguments=None):
             previous_handlers = {}
             for signum in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
                 previous_handlers[signum] = signal.getsignal(signum)
-                signal.signal(signum, lambda received, _frame, tx=transaction:
-                              tx.request_signal(received))
+
+                def supervised_signal(received, frame, tx=transaction,
+                                      previous=previous_handlers[signum]):
+                    if tx.request_signal(received):
+                        return
+                    # The transaction's explicit signal boundary has closed.
+                    # Preserve the caller's disposition instead of swallowing a
+                    # post-transaction signal in the temporary handler.
+                    if previous == signal.SIG_IGN:
+                        return
+                    if previous == signal.SIG_DFL:
+                        signal.signal(received, signal.SIG_DFL)
+                        os.kill(os.getpid(), received)
+                        return
+                    previous(received, frame)
+
+                signal.signal(signum, supervised_signal)
             result_code = 1
             late_mask = None
             try:
-                result_code = transaction.run(child, options.taskset)
+                result_code = transaction.run(child)
             finally:
-                # Close the small interval between run()'s durability boundary and
-                # restoration of the caller's handlers.  A signal already handled
-                # in that interval still invalidates an otherwise accepted report.
+                # Block while restoring the caller's dispositions.  Signals after
+                # run()'s explicit boundary are delivered under those original
+                # dispositions, never folded back into committed evidence.
                 late_mask = signal.pthread_sigmask(
                     signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM, signal.SIGHUP})
                 try:
-                    transaction._capture_blocked_signals()
-                    if transaction.received_signal is not None and \
-                            transaction.report["accepted"]:
-                        transaction._invalidate_acceptance()
-                        transaction.report["accepted"] = False
-                        transaction.report["state"] = "failed"
-                        transaction.report["finished_utc"] = utc_now()
-                        transaction.report["error"] = "received signal {}".format(
-                            transaction.received_signal)
-                        transaction._write()
-                        result_code = 128 + transaction.received_signal
-                finally:
                     for signum, handler in previous_handlers.items():
                         signal.signal(signum, handler)
+                finally:
                     signal.pthread_sigmask(signal.SIG_SETMASK, late_mask)
             return result_code
     except (IsolationError, OSError, ValueError) as error:

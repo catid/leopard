@@ -186,28 +186,47 @@ Every run and recovery also holds one persistent same-UID lock under
 cooperating supervisors from racing each other's original masks.
 
 The runner is launched through a fork/pipe gate. The child creates its new
-session but cannot execute `taskset` or benchmark code until its PID,
+session but cannot execute benchmark code until its PID,
 start-time, procfs directory inodes, session, command, boot ID, and
 PID-namespace identity are durable in
-the report. Parent EOF aborts the gate, which closes the SIGKILL window before
-that journal entry. On every ordinary exit the supervisor boundedly signals,
+the report. The executable, optional Python script, and working directory are
+held by descriptors from the identity snapshot; execution uses those captured
+inodes, so a pathname replacement cannot select different code. The child
+establishes and verifies launch affinity directly rather than executing an
+unbound `taskset` pathname. Parent EOF aborts the gate, which closes the SIGKILL
+window before that journal entry. Inherited Python SIGINT, SIGTERM, and SIGHUP
+handlers are replaced by default child dispositions while those signals are
+blocked, before the gate can wait or release. On every ordinary exit the
+supervisor boundedly signals,
 then SIGKILLs if necessary, every surviving process in the recorded child
 session and every retained descendant that created another session
 before restoring any same-user mask. This lets the main runner use its own
 bounded per-invocation sessions without those timed children being mistaken for
-unrelated work. SIGINT, SIGTERM, and SIGHUP always
-invalidate evidence and use the same bounded cleanup.
+unrelated work. SIGINT, SIGTERM, and SIGHUP observed before the explicit
+post-cleanup signal boundary invalidate evidence and use the same bounded
+cleanup. Signals after that boundary retain the caller's original disposition;
+they cannot retroactively alter an already-finished benchmark transaction.
 The supervisor is a Linux child subreaper and retains exact descendant
 identities, so a double-forked child remains a cleanup target after reparenting.
-Restoration and crash recovery rescan until two stable passes after creators
-have regained their original masks; a late thread cannot remain stranded on an
-inherited restricted mask after one final scan.
+Restoration performs the full bounded rescan budget after any mutation and
+repairs late threads it observes. This is deliberately not certified as globally
+complete: `clone(2)` can copy a restricted mask and publish its task after any
+finite last `/proc` scan. Consequently a v6 report is authoritative only when
+all surrounding same-UID work was already outside the reserved CPUs and no
+non-supervisor mask was changed. The bounded exception is the supervisor's own
+single main thread: the implementation controls its sole fork point and creates
+no other thread. A run that changes any outside mask finishes as failed evidence
+after best-effort restoration. Likewise, crash recovery of a
+released child remains failed even after known identities are cleaned, because
+the replacement process is no longer the original subreaper and cannot exclude
+an unjournaled cross-session orphan. A future cgroup-backed containment mode can
+lift these restrictions when it can prove persistent membership.
 The 25 ms monitor is read-only on an unchanged scan. It does not rewrite or
 fsync the journal for each poll, for ordinary child-process churn, or merely to
 retain audit-only provenance; it writes only when recovery-relevant state or an
 actual anomaly changes.
 
-The wrapper must finish with an accepted v5 report and its separate
+The wrapper must finish with an accepted v6 report and its separate
 `.accepted.json` commit seal. An `accepted: true` body without this
 hash-bound, directory-fsynced seal is not evidence. The ordinary ABBA
 manifest must independently pass its unchanged zero-sibling-jiffy verifier
