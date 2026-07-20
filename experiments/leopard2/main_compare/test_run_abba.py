@@ -470,6 +470,25 @@ def complete_build_fixture(role: str) -> dict:
     archive_recipe_path = (
         build_dir + f"/CMakeFiles/{target_directory}/link.txt")
     compiler_text = "fixture compiler 1.0\n"
+    external_link_inputs = [
+        {
+            "operand": "/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so",
+            "role": "openmp_runtime_shared",
+            "artifact": runner.artifact_identity(
+                Path("/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so"),
+                "shared_library"),
+        },
+        {
+            "operand": "/usr/lib/x86_64-linux-gnu/libpthread.a",
+            "role": "pthread_support_archive",
+            "artifact": runner.artifact_identity(
+                Path("/usr/lib/x86_64-linux-gnu/libpthread.a"), "archive"),
+        },
+    ]
+    validated_executable = complete_artifact(
+        executable_path, "executable", "0" if baseline else "1")
+    validated_executable["mtime_ns"] = 1 + max(
+        record["artifact"]["mtime_ns"] for record in external_link_inputs)
     return {
         "build_dir": build_dir,
         "cmake_cache": complete_artifact(
@@ -495,8 +514,7 @@ def complete_build_fixture(role: str) -> dict:
         "ranlib": complete_artifact("/usr/bin/ranlib", "ranlib", "f"),
         "validated_archive_members": [Path(name).name + ".o"
                                        for name in library_names],
-        "validated_executable": complete_artifact(
-            executable_path, "executable", "0" if baseline else "1"),
+        "validated_executable": validated_executable,
         "validated_archive": complete_artifact(
             archive_path, "archive", "2" if baseline else "3"),
         "validated_cache": cache,
@@ -516,25 +534,7 @@ def complete_build_fixture(role: str) -> dict:
             "ranlib": {"invocation": "/usr/bin/ranlib",
                            "resolved_path": "/usr/bin/ranlib"},
         },
-        "validated_external_link_inputs": [
-            {
-                "operand": "/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so",
-                "role": "openmp_runtime_shared",
-                "artifact": complete_artifact(
-                    "/usr/lib/x86_64-linux-gnu/libgomp.so.1.0.0",
-                    "shared_library", "4"),
-            },
-            {
-                "operand": "/usr/lib/x86_64-linux-gnu/libpthread.a",
-                "role": "pthread_support_archive",
-                "artifact": {
-                    **complete_artifact(
-                        "/usr/lib/x86_64-linux-gnu/libpthread.a",
-                        "archive", "5"),
-                    "size": 8,
-                },
-            },
-        ],
+        "validated_external_link_inputs": external_link_inputs,
     }
 
 
@@ -1675,6 +1675,14 @@ class MainCompareRunnerTests(unittest.TestCase):
         self.assert_rejected(value)
 
         value = synthetic_raw()
+        for role in ("baseline_build", "candidate_build"):
+            value["identities_initial"][role][
+                "validated_external_link_inputs"][0]["artifact"]["path"] = \
+                "/usr/lib/x86_64-linux-gnu/libgomp.so.999.999"
+        synchronize_identity(value)
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
         candidate = value["identities_initial"]["candidate_build"]
         candidate["validated_external_link_inputs"][1]["artifact"][
             "mtime_ns"] = candidate["validated_executable"]["mtime_ns"] + 1
@@ -1694,6 +1702,13 @@ class MainCompareRunnerTests(unittest.TestCase):
             ("vector disable after optimization",
              "-O3 -fno-tree-vectorize"),
             ("coverage after optimization", "-O3 --coverage"),
+            ("long optimize alias", "-O3 --optimize=0"),
+            ("long sanitizer alias", "-O3 --sanitize=address"),
+            ("long instrumentation alias", "-O3 --instrument-functions"),
+            ("long LTO alias", "-O3 --lto"),
+            ("long profile alias", "-O3 --profile"),
+            ("inline disable", "-O3 -fno-inline"),
+            ("GCC pass disable", "-O3 -fdisable-tree-vect"),
         ):
             with self.subTest(label=label):
                 value = synthetic_raw()
@@ -1710,6 +1725,10 @@ class MainCompareRunnerTests(unittest.TestCase):
                 " -O3 ", " -O3 -O0 ", 1)),
             ("recipe sanitizer", canonical.replace(
                 " -O3 ", " -O3 -fsanitize=address ", 1)),
+            ("recipe long optimize alias", canonical.replace(
+                " -O3 ", " -O3 --optimize=0 ", 1)),
+            ("recipe inline disable", canonical.replace(
+                " -O3 ", " -O3 -fno-inline ", 1)),
         ):
             with self.subTest(label=label):
                 value = synthetic_raw()

@@ -1287,9 +1287,11 @@ def compile_command_tokens(entry: Mapping[str, Any]) -> list[str]:
         raise EvidenceError(f"cannot parse compile command: {error}") from error
 
 
-def validate_effective_flags(tokens: Sequence[str], what: str) -> None:
+def validate_effective_flags(
+    tokens: Sequence[str], what: str, policy: str,
+) -> None:
     try:
-        link_common.validate_effective_flags(tokens, what)
+        link_common.validate_effective_flags(tokens, what, policy)
     except link_common.EvidenceError as error:
         raise EvidenceError(str(error)) from error
 
@@ -1484,7 +1486,8 @@ def validate_compile_commands(
     for source in required:
         tokens, entry = by_source[source]
         output = command_output_path(entry, tokens)
-        validate_effective_flags(tokens, f"compile command for {source}")
+        validate_effective_flags(
+            tokens, f"compile command for {source}", "compile")
         require("-fopenmp" in tokens, f"{source} was not compiled with OpenMP")
         if implementation == "baseline":
             require("-march=native" in tokens,
@@ -1689,7 +1692,7 @@ def build_provenance(
             f"{implementation} build is not CMake Release")
     validate_effective_flags(
         shlex.split(cache.get("CMAKE_CXX_FLAGS_RELEASE", "")),
-        f"{implementation} CMake Release flags")
+        f"{implementation} CMake Release flags", "release")
     compiler = Path(cache.get("CMAKE_CXX_COMPILER", "")).resolve(strict=True)
     candidate_root = Path(specification["candidate_source_root"]).resolve(strict=True)
     baseline_root = Path(specification["baseline_source_root"]).resolve(strict=True)
@@ -1742,7 +1745,8 @@ def build_provenance(
             executable_link_tokens, expected_archive_name,
             f"{implementation} benchmark link recipe")
     validate_effective_flags(
-        executable_link_tokens, f"{implementation} executable link recipe")
+        executable_link_tokens, f"{implementation} executable link recipe",
+        "link")
     semantics = validate_compile_commands(
         commands_path, implementation, specification, compiler)
     records = semantics["required_source_object_pairs"]
@@ -2255,7 +2259,8 @@ def validate_complete_build_identity(
         raise EvidenceError(
             f"cannot parse {implementation} CMake Release flags: {error}") from error
     validate_effective_flags(
-        cache_flags, f"{implementation} retained CMake Release flags")
+        cache_flags, f"{implementation} retained CMake Release flags",
+        "release")
     compiler_invocation = build.get("compiler_invocation")
     require(isinstance(compiler_invocation, dict) and
             set(compiler_invocation) == {"invocation", "resolved_path"} and

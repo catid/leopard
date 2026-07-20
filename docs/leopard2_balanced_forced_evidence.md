@@ -42,11 +42,13 @@ Collection, offline verification, and normalized-scope validation share one
 fail-closed executable-link grammar. It accepts only known value-free CMake
 flags and the exact declared object, project archive, output, libgomp, and
 libpthread operands. The two external support files carry resolved byte
-identities, match between baseline and candidate, and participate in executable
-freshness checks. One shared effective-flag validator applies to retained CMake
-Release flags and executable recipes: the final optimization must be `-O3`,
-with sanitizer, profile, LTO, instrumentation, vector-disable, and coverage
-flags rejected. Response files, forwarded linker controls, scripts, search paths or
+identities that are re-resolved and rehashed from their lexical operands, match
+between baseline and candidate, and participate in executable freshness checks.
+One shared context-specific allowlist applies to retained CMake Release flags,
+compile commands, and executable recipes. Every flag spelling must be canonical
+and the final optimization must be `-O3`; long aliases, unknown optimization
+controls, sanitizer, profile, LTO, instrumentation, inline/vector disables, and
+coverage flags are rejected. Response files, forwarded linker controls, scripts, search paths or
 libraries, specs, alternate tool roots/loaders, plugins, and undeclared inputs
 fail closed.
 

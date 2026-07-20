@@ -725,7 +725,8 @@ def _validate_scope_build(build: object, role: str) -> dict[str, Any]:
             from error
     try:
         common.validate_effective_flags(
-            release_flags, f"{role} normalized CMake Release flags")
+            release_flags, f"{role} normalized CMake Release flags",
+            "release")
     except common.EvidenceError as error:
         raise PlanError(str(error)) from error
     compiler_invocation = build.get("compiler_invocation")
@@ -2446,6 +2447,15 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
         return {"path": path, "kind": kind, "sha256": character * 64,
                 "size": 1, "mode": mode}
 
+    def fixture_external_artifact(operand: str, kind: str) -> dict[str, Any]:
+        resolved = Path(operand).resolve(strict=True)
+        metadata = resolved.stat()
+        return {
+            "path": str(resolved), "kind": kind,
+            "sha256": common.sha256_file(resolved),
+            "size": metadata.st_size, "mode": metadata.st_mode & 0o7777,
+        }
+
     def fixture_text(text: str) -> dict[str, Any]:
         encoded = text.encode("utf-8")
         return {"encoding": "utf-8", "text": text, "size": len(encoded),
@@ -2568,19 +2578,15 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
                 {
                     "operand": "/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so",
                     "role": "openmp_runtime_shared",
-                    "artifact": fixture_artifact(
-                        "/usr/lib/x86_64-linux-gnu/libgomp.so.1.0.0",
-                        "shared_library", "4"),
+                    "artifact": fixture_external_artifact(
+                        "/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so",
+                        "shared_library"),
                 },
                 {
                     "operand": "/usr/lib/x86_64-linux-gnu/libpthread.a",
                     "role": "pthread_support_archive",
-                    "artifact": {
-                        **fixture_artifact(
-                            "/usr/lib/x86_64-linux-gnu/libpthread.a",
-                            "archive", "5"),
-                        "size": 8,
-                    },
+                    "artifact": fixture_external_artifact(
+                        "/usr/lib/x86_64-linux-gnu/libpthread.a", "archive"),
                 },
             ],
             "validated_archive": fixture_artifact(
@@ -3010,6 +3016,13 @@ def self_test() -> None:
             ("vector disable after optimization",
              "-O3 -fno-tree-vectorize"),
             ("coverage after optimization", "-O3 --coverage"),
+            ("long optimize alias", "-O3 --optimize=0"),
+            ("long sanitizer alias", "-O3 --sanitize=address"),
+            ("long instrumentation alias", "-O3 --instrument-functions"),
+            ("long LTO alias", "-O3 --lto"),
+            ("long profile alias", "-O3 --profile"),
+            ("inline disable", "-O3 -fno-inline"),
+            ("GCC pass disable", "-O3 -fdisable-tree-vect"),
         ):
             reject_scope_mutation(
                 f"uniform CMake {label}",
@@ -3205,6 +3218,14 @@ def self_test() -> None:
                 value["builds"][role][
                     "validated_external_link_inputs"][1]["artifact"].update({
                         "path": "/tmp/libpthread.a"})
+                for value in values for role in ("baseline", "candidate")])
+        reject_scope_mutation(
+            "uniform nonexistent versioned OpenMP target",
+            lambda values: [
+                value["builds"][role][
+                    "validated_external_link_inputs"][0]["artifact"].update({
+                        "path": "/usr/lib/x86_64-linux-gnu/"
+                                "libgomp.so.999.999"})
                 for value in values for role in ("baseline", "candidate")])
         reject_scope_mutation(
             "uniform differing external roles",
