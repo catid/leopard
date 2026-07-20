@@ -71,6 +71,17 @@ EXTERNAL_LINK_INPUT_ROLES = {
 EXTERNAL_LINK_INPUT_ORDER = (
     "openmp_runtime_shared", "pthread_support_archive",
 )
+EFFECTIVE_OPTIMIZATION = re.compile(r"-O(?:0|1|2|3|g|s|z|fast)")
+FORBIDDEN_BUILD_FLAG_PREFIXES = (
+    "-fsanitize", "-fno-sanitize",
+    "-fprofile", "-fno-profile",
+    "-flto", "-fno-lto",
+    "-finstrument", "-fno-instrument",
+    "-fno-tree-vectorize", "-fno-vectorize", "-fno-slp-vectorize",
+    "--coverage", "-coverage", "-fcoverage", "-fno-coverage",
+    "-ftest-coverage",
+)
+FORBIDDEN_BUILD_FLAGS = frozenset({"-pg"})
 
 
 class EvidenceError(ValueError):
@@ -80,6 +91,26 @@ class EvidenceError(ValueError):
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise EvidenceError(message)
+
+
+def validate_effective_flags(tokens: Sequence[str], label: str) -> None:
+    """Require final -O3 and reject instrumentation/profile semantics."""
+    require(isinstance(tokens, Sequence) and
+            not isinstance(tokens, (str, bytes)) and
+            all(isinstance(token, str) for token in tokens),
+            f"{label} flag stream is invalid")
+    optimizations = [
+        token for token in tokens if EFFECTIVE_OPTIMIZATION.fullmatch(token)
+    ]
+    require(optimizations and optimizations[-1] == "-O3",
+            f"{label} final optimization flag is not -O3: {optimizations}")
+    rejected = [
+        token for token in tokens
+        if token in FORBIDDEN_BUILD_FLAGS or
+        token.startswith(FORBIDDEN_BUILD_FLAG_PREFIXES)
+    ]
+    require(not rejected,
+            f"{label} contains instrumentation/noncanonical flags: {rejected}")
 
 
 def validate_external_link_operand_path(
@@ -130,10 +161,24 @@ def validate_external_link_input_shape(
         require(artifact.get("kind") == expected_kind and
                 isinstance(artifact.get("path"), str) and
                 Path(artifact["path"]).is_absolute() and
+                type(artifact.get("size")) is int and artifact["size"] > 0 and
+                isinstance(artifact.get("sha256"), str) and
+                re.fullmatch(r"[0-9a-f]{64}", artifact["sha256"]) is not None,
+                f"{label} external artifact identity {index} is incomplete")
+        if expected_kind == "archive":
+            require(artifact["path"] == operand and artifact["size"] >= 8,
+                    f"{label} pthread operand does not bind its exact archive")
+        else:
+            require(re.fullmatch(
+                        r"/(?:usr/)?lib(?:64|/x86_64-linux-gnu)/"
+                        r"libgomp\.so(?:\.[0-9]+)+",
+                        artifact["path"]) is not None,
+                    f"{label} OpenMP operand resolves outside its runtime root")
+        require(
                 ((expected_kind == "archive" and
                   Path(artifact["path"]).name == "libpthread.a") or
                  (expected_kind == "shared_library" and
-                  re.fullmatch(r"libgomp\.so(?:\.[0-9]+)*",
+                  re.fullmatch(r"libgomp\.so(?:\.[0-9]+)+",
                                Path(artifact["path"]).name) is not None)),
                 f"{label} external operand resolves to a different library")
         records.append(record)
@@ -164,6 +209,7 @@ def validate_executable_link_semantics(
             "\\" not in benchmark_object and "@" not in benchmark_object,
             f"{label} expected semantic closure is invalid")
     external = validate_external_link_input_shape(external_link_inputs, label)
+    validate_effective_flags(tokens, label)
     external_operands = [record["operand"] for record in external]
     require(tokens[0] == compiler_invocation,
             f"{label} compiler invocation differs")

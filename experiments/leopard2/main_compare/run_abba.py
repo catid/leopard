@@ -1288,23 +1288,10 @@ def compile_command_tokens(entry: Mapping[str, Any]) -> list[str]:
 
 
 def validate_effective_flags(tokens: Sequence[str], what: str) -> None:
-    optimizations = [
-        token for token in tokens
-        if re.fullmatch(r"-O(?:0|1|2|3|g|s|z|fast)", token) is not None
-    ]
-    require(optimizations and optimizations[-1] == "-O3",
-            f"{what} last optimization flag is not -O3: {optimizations}")
-    forbidden_prefixes = (
-        "-fsanitize", "-fno-sanitize", "-fprofile", "-flto", "-fno-lto",
-        "-finstrument-functions", "-fno-tree-vectorize", "-fno-vectorize",
-        "-fno-slp-vectorize", "--coverage",
-    )
-    forbidden_exact = {"-pg", "-coverage"}
-    rejected = [
-        token for token in tokens
-        if token in forbidden_exact or token.startswith(forbidden_prefixes)
-    ]
-    require(not rejected, f"{what} contains instrumentation/noncanonical flags: {rejected}")
+    try:
+        link_common.validate_effective_flags(tokens, what)
+    except link_common.EvidenceError as error:
+        raise EvidenceError(str(error)) from error
 
 
 EXTERNAL_LINK_INPUT_ROLES = link_common.EXTERNAL_LINK_INPUT_ROLES
@@ -1813,6 +1800,12 @@ def build_provenance(
             all(executable_identity["mtime_ns"] >= record["object"]["mtime_ns"]
                 for record in benchmark_records),
             f"{implementation} executable predates its link inputs")
+    if raw_schema == RAW_SCHEMA:
+        require(all(
+                    executable_identity["mtime_ns"] >=
+                        record["artifact"]["mtime_ns"]
+                    for record in external_link_inputs),
+                f"{implementation} executable predates an external link input")
     ar = Path(cache.get("CMAKE_AR", "")).resolve(strict=True)
     ranlib = Path(cache.get("CMAKE_RANLIB", "")).resolve(strict=True)
     members = run_checked((str(ar), "t", str(expected_archive)),
@@ -2233,6 +2226,12 @@ def validate_complete_build_identity(
     require(executable["path"] == str(Path(build_dir) / executable_name) and
             archive["path"] == str(Path(build_dir) / archive_name),
             f"{implementation} validated output paths differ")
+    external_link_inputs = validate_external_link_inputs(
+        build.get("validated_external_link_inputs"),
+        f"{implementation} executable link recipe")
+    require(all(executable["mtime_ns"] >= record["artifact"]["mtime_ns"]
+                for record in external_link_inputs),
+            f"{implementation} executable predates an external link input")
 
     version = build.get("compiler_version_stdout")
     require(isinstance(version, dict) and set(version) == {"sha256", "text"} and
@@ -2247,10 +2246,16 @@ def validate_complete_build_identity(
             isinstance(cache.get("CMAKE_CXX_COMPILER"), str) and
             cache["CMAKE_CXX_COMPILER"] and
             isinstance(cache.get("CMAKE_CXX_FLAGS_RELEASE"), str) and
-            "-O3" in shlex.split(cache["CMAKE_CXX_FLAGS_RELEASE"]) and
             all(cache.get(name) == expected for name, expected in
                 required_cache.items() if expected is not None),
             f"{implementation} validated CMake cache semantics differ")
+    try:
+        cache_flags = shlex.split(cache["CMAKE_CXX_FLAGS_RELEASE"], posix=True)
+    except ValueError as error:
+        raise EvidenceError(
+            f"cannot parse {implementation} CMake Release flags: {error}") from error
+    validate_effective_flags(
+        cache_flags, f"{implementation} retained CMake Release flags")
     compiler_invocation = build.get("compiler_invocation")
     require(isinstance(compiler_invocation, dict) and
             set(compiler_invocation) == {"invocation", "resolved_path"} and
@@ -2330,6 +2335,13 @@ def validate_complete_build_identity(
             Path(build_dir)).as_posix()
     require(set(members) == set(objects_by_member),
             f"{implementation} archive members differ from compile closure")
+    require(all(archive["mtime_ns"] >= pair["object"]["mtime_ns"]
+                for pair in archive_pairs),
+            f"{implementation} archive predates one of its retained objects")
+    require(executable["mtime_ns"] >= archive["mtime_ns"] and
+            all(executable["mtime_ns"] >= pair["object"]["mtime_ns"]
+                for pair in benchmark_pairs),
+            f"{implementation} executable predates a retained project input")
 
     tools = build.get("archive_link_tool_invocations")
     require(isinstance(tools, dict) and set(tools) == {"archiver", "ranlib"},
@@ -2356,7 +2368,7 @@ def validate_complete_build_identity(
         Path(benchmark_pairs[0]["object"]["path"]).relative_to(
             Path(build_dir)).as_posix(),
         f"{implementation} executable link recipe",
-        build.get("validated_external_link_inputs"))
+        external_link_inputs)
     return build
 
 
@@ -2404,6 +2416,9 @@ def validate_complete_input_snapshot(
             snapshot["baseline_build"]["compiler_version_stdout"] ==
                 snapshot["candidate_build"]["compiler_version_stdout"],
             "baseline and candidate compiler identities differ")
+    require(snapshot["baseline_build"]["validated_external_link_inputs"] ==
+                snapshot["candidate_build"]["validated_external_link_inputs"],
+            "baseline and candidate external link-input identities differ")
     return snapshot
 
 

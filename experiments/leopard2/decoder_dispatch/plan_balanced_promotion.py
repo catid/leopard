@@ -716,6 +716,18 @@ def _validate_scope_build(build: object, role: str) -> dict[str, Any]:
             all(cache.get(key) == expected
                 for key, expected in required_cache.items()),
             f"{role} validated CMake cache differs")
+    try:
+        release_flags = shlex.split(
+            cache["CMAKE_CXX_FLAGS_RELEASE"], posix=True)
+    except ValueError as error:
+        raise PlanError(
+            f"cannot parse {role} normalized CMake Release flags: {error}") \
+            from error
+    try:
+        common.validate_effective_flags(
+            release_flags, f"{role} normalized CMake Release flags")
+    except common.EvidenceError as error:
+        raise PlanError(str(error)) from error
     compiler_invocation = build.get("compiler_invocation")
     require(isinstance(compiler_invocation, dict) and
             set(compiler_invocation) == {"invocation", "resolved_path"} and
@@ -1231,6 +1243,9 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
             builds["baseline"]["compiler_version_stdout"] ==
                 builds["candidate"]["compiler_version_stdout"],
             "gate evidence baseline/candidate compiler identity differs")
+    require(builds["baseline"]["validated_external_link_inputs"] ==
+                builds["candidate"]["validated_external_link_inputs"],
+            "gate evidence baseline/candidate external link inputs differ")
     require(isinstance(artifacts, dict) and set(artifacts) == {
         "baseline_archive", "baseline_executable",
         "candidate_archive", "candidate_executable",
@@ -2554,15 +2569,18 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
                     "operand": "/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so",
                     "role": "openmp_runtime_shared",
                     "artifact": fixture_artifact(
-                        "/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so",
+                        "/usr/lib/x86_64-linux-gnu/libgomp.so.1.0.0",
                         "shared_library", "4"),
                 },
                 {
                     "operand": "/usr/lib/x86_64-linux-gnu/libpthread.a",
                     "role": "pthread_support_archive",
-                    "artifact": fixture_artifact(
-                        "/usr/lib/x86_64-linux-gnu/libpthread.a",
-                        "archive", "5"),
+                    "artifact": {
+                        **fixture_artifact(
+                            "/usr/lib/x86_64-linux-gnu/libpthread.a",
+                            "archive", "5"),
+                        "size": 8,
+                    },
                 },
             ],
             "validated_archive": fixture_artifact(
@@ -2980,6 +2998,24 @@ def self_test() -> None:
                                   "validated_cache"].update({
                                       "LEO2_BACKEND_VARIANT": "scalar"})
                                for value in values])
+        for label, flags in (
+            ("final optimization downgrade", "-O3 -O0"),
+            ("sanitizer after optimization", "-O3 -fsanitize=address"),
+            ("profile after optimization", "-O3 -fprofile-generate"),
+            ("LTO after optimization", "-O3 -flto"),
+            ("instrumentation after optimization",
+             "-O3 -finstrument-functions"),
+            ("vector disable after optimization",
+             "-O3 -fno-tree-vectorize"),
+            ("coverage after optimization", "-O3 --coverage"),
+        ):
+            reject_scope_mutation(
+                f"uniform CMake {label}",
+                lambda values, item=flags: [
+                    value["builds"][role]["validated_cache"].update({
+                        "CMAKE_CXX_FLAGS_RELEASE": item})
+                    for value in values
+                    for role in ("baseline", "candidate")])
         reject_scope_mutation("uniform incomplete sources", lambda values:
                               [value["sources"][role].pop("tree")
                                for value in values
@@ -3154,6 +3190,35 @@ def self_test() -> None:
             lambda values: [
                 value["builds"][role]["validated_external_link_inputs"].pop()
                 for value in values for role in ("baseline", "candidate")])
+        reject_scope_mutation(
+            "candidate external identity differs from baseline",
+            lambda values: [
+                value["builds"]["candidate"][
+                    "validated_external_link_inputs"][1]["artifact"].update({
+                        "sha256": "e" * 64})
+                for value in values])
+        reject_scope_mutation(
+            "uniform external resolved path escape",
+            lambda values: [
+                value["builds"][role][
+                    "validated_external_link_inputs"][1]["artifact"].update({
+                        "path": "/tmp/libpthread.a"})
+                for value in values for role in ("baseline", "candidate")])
+        reject_scope_mutation(
+            "uniform differing external roles",
+            lambda values: [
+                value["builds"][role][
+                    "validated_external_link_inputs"][1].update({
+                        "role": "openmp_runtime_shared"})
+                for value in values for role in ("baseline", "candidate")])
+        for label, control in (
+            ("recipe optimization downgrade", "-O0"),
+            ("recipe sanitizer", "-fsanitize=address"),
+        ):
+            reject_scope_mutation(
+                f"uniform {label}",
+                lambda values, item=control:
+                    add_all_link_controls(values, item))
         def remove_all_dynamic_loader_records(values) -> None:
             for value in values:
                 for role in ("baseline", "candidate"):

@@ -189,7 +189,11 @@ offline verification. The executable link is consumed by a fail-closed grammar:
 only the canonical compiler, value-free build flags, one benchmark object, one
 project archive, one output, and the explicit GCC OpenMP and pthread operands
 are accepted. The resolved libgomp and libpthread files retain complete byte
-identities. Response files, linker forwarding, scripts, search/library
+identities, must be identical between baseline and candidate, and may not be
+newer than either executable. The retained CMake Release flags and executable
+recipe share the same effective-flag validator: the final optimization is
+`-O3`, and sanitizer, profile, LTO, instrumentation, vector-disable, and
+coverage flags are forbidden. Response files, linker forwarding, scripts, search/library
 controls, specs, alternate tool roots/loaders, plugins, and undeclared inputs
 are rejected. The producer-known translation-unit sets are exact: the
 baseline archive has its four codec members plus the adapter command and the

@@ -521,14 +521,18 @@ def complete_build_fixture(role: str) -> dict:
                 "operand": "/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so",
                 "role": "openmp_runtime_shared",
                 "artifact": complete_artifact(
-                    "/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so",
+                    "/usr/lib/x86_64-linux-gnu/libgomp.so.1.0.0",
                     "shared_library", "4"),
             },
             {
                 "operand": "/usr/lib/x86_64-linux-gnu/libpthread.a",
                 "role": "pthread_support_archive",
-                "artifact": complete_artifact(
-                    "/usr/lib/x86_64-linux-gnu/libpthread.a", "archive", "5"),
+                "artifact": {
+                    **complete_artifact(
+                        "/usr/lib/x86_64-linux-gnu/libpthread.a",
+                        "archive", "5"),
+                    "size": 8,
+                },
             },
         ],
     }
@@ -1640,6 +1644,74 @@ class MainCompareRunnerTests(unittest.TestCase):
                 else:
                     records.reverse()
                 synchronize_identity(value)
+                self.assert_rejected(value)
+
+        for label, mutate in (
+            ("foreign resolved pthread path", lambda record:
+                record["artifact"].update({"path": "/tmp/libpthread.a"})),
+            ("foreign resolved OpenMP root", lambda record:
+                record["artifact"].update({
+                    "path": "/usr/lib/aarch64-linux-gnu/libgomp.so.1.0.0"})),
+            ("wrong external role", lambda record:
+                record.update({"role": "openmp_runtime_shared"})),
+            ("truncated pthread archive identity", lambda record:
+                record["artifact"].update({"size": 1})),
+            ("malformed pthread archive digest", lambda record:
+                record["artifact"].update({"sha256": "0" * 63})),
+        ):
+            with self.subTest(label=label):
+                value = synthetic_raw()
+                records = value["identities_initial"]["candidate_build"][
+                    "validated_external_link_inputs"]
+                mutate(records[0] if "OpenMP" in label else records[1])
+                synchronize_identity(value)
+                self.assert_rejected(value)
+
+        value = synthetic_raw()
+        candidate = value["identities_initial"]["candidate_build"]
+        candidate["validated_external_link_inputs"][1]["artifact"][
+            "sha256"] = "e" * 64
+        synchronize_identity(value)
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
+        candidate = value["identities_initial"]["candidate_build"]
+        candidate["validated_external_link_inputs"][1]["artifact"][
+            "mtime_ns"] = candidate["validated_executable"]["mtime_ns"] + 1
+        synchronize_identity(value)
+        self.assert_rejected(value)
+
+    def test_effective_release_and_executable_flags_fail_closed(self) -> None:
+        for label, flags in (
+            ("final optimization downgrade", "-O3 -O0"),
+            ("sanitizer after optimization", "-O3 -fsanitize=address"),
+            ("profile after optimization", "-O3 -fprofile-generate"),
+            ("LTO after optimization", "-O3 -flto"),
+            ("instrumentation after optimization",
+             "-O3 -finstrument-functions"),
+            ("vector disable after optimization",
+             "-O3 -fno-tree-vectorize"),
+            ("coverage after optimization", "-O3 --coverage"),
+        ):
+            with self.subTest(label=label):
+                value = synthetic_raw()
+                value["identities_initial"]["candidate_build"][
+                    "validated_cache"]["CMAKE_CXX_FLAGS_RELEASE"] = flags
+                synchronize_identity(value)
+                self.assert_rejected(value)
+
+        canonical = complete_build_fixture("candidate")[
+            "executable_link_recipe_content"]["text"]
+        for label, recipe in (
+            ("recipe -O0", canonical.replace(" -O3 ", " -O0 ", 1)),
+            ("recipe trailing -O0", canonical.replace(
+                " -O3 ", " -O3 -O0 ", 1)),
+            ("recipe sanitizer", canonical.replace(
+                " -O3 ", " -O3 -fsanitize=address ", 1)),
+        ):
+            with self.subTest(label=label):
+                value = synthetic_raw()
+                replace_current_executable_recipe_text(value, recipe)
                 self.assert_rejected(value)
 
     def test_coherent_failed_historical_recipe_relabel_is_rejected(self) -> None:
