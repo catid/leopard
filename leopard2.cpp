@@ -277,6 +277,8 @@ static std::atomic<unsigned> g_test_thread_start_fault_consumptions(0);
 static std::atomic<uint64_t> g_test_generic_direct_reveal_shards(0);
 static std::atomic<uint64_t> g_test_low_direct_reveal_shards(0);
 static std::atomic<uint64_t> g_test_low_scratch_reveal_shards(0);
+static std::atomic<uint64_t> g_test_high_direct_reveal_shards(0);
+static std::atomic<uint64_t> g_test_high_scratch_reveal_shards(0);
 
 static bool TestConsumeThreadStartFault()
 {
@@ -4423,6 +4425,22 @@ LEO2_EXPORT uint64_t leo2_test_low_scratch_reveal_shards(void)
 {
     return g_test_low_scratch_reveal_shards.load(std::memory_order_acquire);
 }
+
+LEO2_EXPORT void leo2_test_reset_high_reveal_counts(void)
+{
+    g_test_high_direct_reveal_shards.store(0, std::memory_order_release);
+    g_test_high_scratch_reveal_shards.store(0, std::memory_order_release);
+}
+
+LEO2_EXPORT uint64_t leo2_test_high_direct_reveal_shards(void)
+{
+    return g_test_high_direct_reveal_shards.load(std::memory_order_acquire);
+}
+
+LEO2_EXPORT uint64_t leo2_test_high_scratch_reveal_shards(void)
+{
+    return g_test_high_scratch_reveal_shards.load(std::memory_order_acquire);
+}
 #endif
 
 LEO2_EXPORT leo2_result leo2_codec_create(
@@ -5575,9 +5593,38 @@ static leo2_result DecodePlanExecuteInternal(
         !(fuse_generic_reveal_scatter || fuse_low_reveal_scatter);
     const bool use_tiled = geometry.selection.path ==
         leopard2_internal::kDecodePathTiled;
+    const bool fuse_high_reveal_scatter = !use_generic && use_tiled &&
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        geometry.aligned_prefix_bytes != 0;
+    void** const high_requested_output =
+        work + static_cast<size_t>(codec->padded_side) * 2;
 
     if (geometry.aligned_prefix_bytes != 0)
     {
+        if (fuse_high_reveal_scatter)
+        {
+            /*
+                Algorithm 5's tiled evaluator already writes each requested
+                result through a caller-supplied pointer.  Complete kernel
+                tiles have the public byte layout, and validation has proved
+                that every restored output is disjoint from all received
+                shards, scratch, metadata, and other outputs.  Point the
+                evaluator at those final destinations so its fixed multiply
+                also performs the public scatter instead of writing a retained
+                scratch shard that GatherTransformDecodePass immediately
+                copies again.
+            */
+            for (size_t i = 0; i < plan->missing_originals.size(); ++i)
+            {
+                const uint32_t original_index = plan->missing_originals[i];
+                high_requested_output[i] =
+                    static_cast<uint8_t*>(restored_original[original_index]);
+            }
+#ifdef LEO2_ENABLE_TEST_HOOKS
+            g_test_high_direct_reveal_shards.fetch_add(
+                plan->missing_originals.size(), std::memory_order_relaxed);
+#endif
+        }
         PopulateDecodeCoordinates(
             plan, original, recovery, 0, geometry.aligned_prefix_bytes,
             NULL, coordinate_data);
@@ -5586,13 +5633,34 @@ static leo2_result DecodePlanExecuteInternal(
         ExecuteTransformDecodePass(
             plan, geometry.aligned_prefix_bytes, coordinate_input, work,
             use_generic, use_tiled, reveal_aligned_outputs_in_place);
-        GatherTransformDecodePass(
-            plan, restored_original, 0, geometry.aligned_prefix_bytes,
-            work, use_generic, use_tiled, reveal_aligned_outputs_in_place);
+        if (!fuse_high_reveal_scatter)
+            GatherTransformDecodePass(
+                plan, restored_original, 0, geometry.aligned_prefix_bytes,
+                work, use_generic, use_tiled, reveal_aligned_outputs_in_place);
     }
 
     if (geometry.tail_bytes != 0)
     {
+        if (fuse_high_reveal_scatter)
+        {
+            /* The compact tail still needs its retained kernel-layout shards. */
+            const size_t high_output_begin =
+                static_cast<size_t>(codec->padded_side) * 2;
+            for (size_t i = 0; i < plan->missing_originals.size(); ++i)
+            {
+                const size_t slot = high_output_begin + i;
+                high_requested_output[i] =
+                    work_storage + slot * geometry.work_slot_bytes;
+            }
+        }
+#ifdef LEO2_ENABLE_TEST_HOOKS
+        if (!use_generic && use_tiled &&
+            codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
+        {
+            g_test_high_scratch_reveal_shards.fetch_add(
+                plan->missing_originals.size(), std::memory_order_relaxed);
+        }
+#endif
         PopulateDecodeCoordinates(
             plan, original, recovery, geometry.aligned_prefix_bytes,
             geometry.tail_bytes, staging_slots, coordinate_data);

@@ -1094,6 +1094,87 @@ void test_low_reveal_fusion(leo2_context* context)
     }
 }
 
+void run_high_reveal_fusion_case(
+    leo2_context* context,
+    leo2_field field,
+    size_t bytes,
+    unsigned missing_count)
+{
+    const unsigned k = 64;
+    const unsigned r = 16;
+    leo2_codec* codec = make_flagged_codec(context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, field,
+        LEO2_CODEC_FORCE_SPECIALIZED_DECODE |
+            LEO2_CODEC_FORCE_TILED_DECODE);
+    const Shards source = make_originals(k, bytes,
+        UINT64_C(0x62af134900000000) + bytes + field + missing_count);
+    const Shards parity = encode_new(codec, source, bytes);
+    std::vector<uint8_t> original_present(k, 1);
+    std::vector<uint8_t> recovery_present(r, 1);
+    std::vector<const void*> original_input = const_pointers(source);
+    const std::vector<const void*> recovery_input = const_pointers(parity);
+    for (unsigned i = 0; i < missing_count; ++i)
+    {
+        original_present[i] = 0;
+        original_input[i] = NULL;
+    }
+
+    leo2_decode_plan* plan = NULL;
+    require_result(leo2_decode_plan_create(codec, &original_present[0],
+        &recovery_present[0], &plan), "high reveal plan create");
+    size_t scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(plan, bytes, &scratch_bytes),
+        "high reveal scratch query");
+    AlignedBuffer scratch(scratch_bytes);
+    Shards restored(k, std::vector<uint8_t>(bytes + 1, 0));
+    std::vector<void*> output(k, NULL);
+    for (unsigned i = 0; i < missing_count; ++i)
+        output[i] = &restored[i][1];
+
+    leo2_test_reset_high_reveal_counts();
+    require_result(leo2_decode_plan_execute(plan, bytes, &original_input[0],
+        &recovery_input[0], &output[0], scratch.data, scratch.bytes),
+        "high reveal decode execute");
+    for (unsigned i = 0; i < missing_count; ++i)
+        require(memcmp(&restored[i][1], &source[i][0], bytes) == 0,
+            "high reveal decode output mismatch");
+
+    const size_t aligned_prefix = bytes & ~static_cast<size_t>(63u);
+    const uint64_t expected_direct =
+        aligned_prefix != 0 ? missing_count : 0;
+    const uint64_t expected_scratch =
+        (bytes & 63u) != 0 ? missing_count : 0;
+    require(leo2_test_high_direct_reveal_shards() == expected_direct,
+        "high direct reveal counter disagrees with complete-tile policy");
+    require(leo2_test_high_scratch_reveal_shards() == expected_scratch,
+        "high scratch reveal counter disagrees with tail policy");
+
+    leo2_decode_plan_destroy(plan);
+    leo2_codec_destroy(codec);
+}
+
+void test_high_reveal_fusion(leo2_context* context)
+{
+    const unsigned losses[] = { 1, 16 };
+    for (size_t loss = 0; loss < sizeof(losses) / sizeof(losses[0]); ++loss)
+    {
+        run_high_reveal_fusion_case(
+            context, LEO2_FIELD_GF8, 17, losses[loss]);
+        run_high_reveal_fusion_case(
+            context, LEO2_FIELD_GF8, 64, losses[loss]);
+        run_high_reveal_fusion_case(
+            context, LEO2_FIELD_GF8, 65, losses[loss]);
+#ifdef LEO_HAS_FF16
+        run_high_reveal_fusion_case(
+            context, LEO2_FIELD_GF16, 34, losses[loss]);
+        run_high_reveal_fusion_case(
+            context, LEO2_FIELD_GF16, 64, losses[loss]);
+        run_high_reveal_fusion_case(
+            context, LEO2_FIELD_GF16, 66, losses[loss]);
+#endif
+    }
+}
+
 void test_tiled_materialized_execution(leo2_context* context)
 {
     const unsigned k = 224;
@@ -1854,6 +1935,7 @@ int main()
         test_tiled_materialized_execution(context);
         test_available_avx512_batch_dispatch();
         test_low_reveal_fusion(context);
+        test_high_reveal_fusion(context);
         test_batch_materialized_capacity(context);
 
         test_profile_metadata(context);

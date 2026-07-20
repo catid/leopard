@@ -38,6 +38,29 @@ This is an execution-only change.  Field representation, active-parent basis,
 coordinate order, locator values, reveal factors, parity bytes, requested
 originals, and the legacy-high-v1 wire profile do not change.
 
+## Tiled output reveal/scatter
+
+The tiled Algorithm 5 evaluator accepts one destination pointer for every
+requested original.  For a complete 64-byte kernel pass, public validation has
+already proved that those destinations are disjoint from every received shard,
+scratch, metadata range, and other output.  The evaluator now points directly
+at the caller destinations for that pass, so its fixed inverse-locator multiply
+also performs the final scatter.  The former route wrote each revealed shard to
+a retained scratch slot and immediately copied it to the same caller output;
+the direct route removes one full-shard scratch write and one full-shard scratch
+read per requested original.
+
+A ragged final pass retains the scratch destination and established gather.  In
+particular, a compact GF16 tail is not laid out like its padded 64-byte kernel
+tile and cannot be written directly.  When a shard has both an aligned prefix
+and a tail, the output pointers are restored to the retained scratch slots
+before the tail transform begins.  Materialized Algorithm 5 is unchanged.
+
+Test-only direct/scratch counters cover GF8 and GF16, one and maximum loss,
+unaligned caller destinations, a tail-only shard, an aligned shard, and a split
+aligned-plus-tail shard.  The candidate has no wire or arithmetic change; its
+performance promotion still requires the project's isolated end-to-end gate.
+
 ## Receive-boundary fusion
 
 Algorithm 5's first block reduction consumes received coordinate rows before
