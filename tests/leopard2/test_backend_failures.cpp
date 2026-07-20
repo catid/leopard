@@ -4,6 +4,7 @@
 */
 
 #include "Leopard2Backend.h"
+#include "Leopard2Direct.h"
 #include "leopard.h"
 #include "leopard2.h"
 
@@ -250,12 +251,101 @@ void run_failure_case(leo2_backend backend, const char* stage)
         static_cast<unsigned long long>(failed.ff8_bytes + failed.ff16_bytes));
 }
 
+void run_auto_avx512_fallback_case()
+{
+    using namespace leopard::backend;
+    if (!IsCalibratedAutoAVX512EncodeHost() ||
+        TestDefaultBackendForHost() != LEO2_BACKEND_AVX2 ||
+        !TestBackendCanQualifyForHost(LEO2_BACKEND_AVX512))
+    {
+        std::printf("AUTO AVX-512 fallback skipped: host is not calibrated\n");
+        return;
+    }
+
+    TestBackendState initial;
+    require(TestGetBackendState(LEO2_BACKEND_AVX512, &initial),
+        "AVX-512 backend state is unavailable");
+    require(!initial.qualified,
+        "AVX-512 unexpectedly qualified before fallback injection");
+    TestSetSetupFault(TestSetupFaultAVX512KAT);
+
+    leo2_context_options context_options;
+    std::memset(&context_options, 0, sizeof(context_options));
+    context_options.struct_size = sizeof(context_options);
+    context_options.backend = LEO2_BACKEND_AUTO;
+    context_options.thread_count = 1;
+    leo2_context* context = NULL;
+    require(leo2_context_create(&context_options, &context) == LEO2_SUCCESS &&
+            context && leo2_context_backend(context) == LEO2_BACKEND_AVX2,
+        "AUTO baseline context creation failed");
+
+    leo2_codec* codec = NULL;
+    require(leo2_codec_create(context, 8, 8,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, NULL, &codec) ==
+            LEO2_SUCCESS && codec,
+        "optional AVX-512 KAT failure escaped codec setup");
+    require(!TestSetupFaultPending() && TestSetupFaultConsumptions() == 1,
+        "optional AVX-512 KAT fault consumption is wrong");
+    leo2_backend selected = LEO2_BACKEND_AUTO;
+    require(leo2_test_codec_transform_encode_backend(
+            codec, 64, 8, 8, &selected) == LEO2_SUCCESS &&
+            selected == LEO2_BACKEND_AVX2,
+        "AUTO did not retain AVX2 after optional AVX-512 KAT failure");
+
+    std::vector<std::vector<uint8_t> > original(
+        8, std::vector<uint8_t>(64));
+    std::vector<std::vector<uint8_t> > recovery(
+        8, std::vector<uint8_t>(64));
+    std::vector<const void*> original_ptrs(8);
+    std::vector<void*> recovery_ptrs(8);
+    for (unsigned shard = 0; shard < 8; ++shard)
+    {
+        for (unsigned i = 0; i < 64; ++i)
+            original[shard][i] = static_cast<uint8_t>(
+                shard * 37U + i * 19U);
+        original_ptrs[shard] = original[shard].data();
+        recovery_ptrs[shard] = recovery[shard].data();
+    }
+    size_t scratch_bytes = 0;
+    require(leo2_encode_scratch_size(codec, 64, &scratch_bytes) ==
+            LEO2_SUCCESS && scratch_bytes != 0,
+        "fallback scratch query failed");
+    std::vector<uint8_t> scratch_storage(
+        scratch_bytes + leo2_scratch_alignment());
+    const uintptr_t unaligned = reinterpret_cast<uintptr_t>(
+        scratch_storage.data());
+    const uintptr_t aligned = (unaligned + leo2_scratch_alignment() - 1U) &
+        ~(static_cast<uintptr_t>(leo2_scratch_alignment()) - 1U);
+    require(leo2_encode(codec, 64, original_ptrs.data(),
+            recovery_ptrs.data(), reinterpret_cast<void*>(aligned),
+            scratch_bytes) == LEO2_SUCCESS,
+        "AVX2 fallback encode failed");
+
+    leo2_codec* second = NULL;
+    require(leo2_codec_create(context, 16, 16,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, NULL, &second) ==
+            LEO2_SUCCESS && second,
+        "cached optional failure changed later codec setup");
+    require(TestSetupFaultConsumptions() == 1,
+        "cached optional failure retried AVX-512 qualification");
+    leo2_codec_destroy(second);
+    leo2_codec_destroy(codec);
+    leo2_context_destroy(context);
+    std::printf("AUTO AVX-512 KAT fallback passed\n");
+}
+
 } // namespace
 
 int main(int argc, char** argv)
 {
     try
     {
+        if (argc == 2 &&
+            std::strcmp(argv[1], "auto-avx512-kat-fallback") == 0)
+        {
+            run_auto_avx512_fallback_case();
+            return 0;
+        }
         require(argc == 3,
             "usage: leopard2_backend_failures_test BACKEND STAGE");
         run_failure_case(parse_backend(argv[1]), argv[2]);

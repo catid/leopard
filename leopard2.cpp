@@ -68,6 +68,9 @@ struct leo2_context
 {
     leo2_backend backend;
     const leopard::backend::Ops* ops;
+    const leopard::backend::Ops* baseline_ops;
+    bool auto_requested;
+    bool auto_avx512_encode_host;
     uint32_t thread_count;
     leo2_thread_pool* pool;
 };
@@ -135,6 +138,7 @@ leo2_test_core_leak_sanitizer_canary()
 struct leo2_codec
 {
     leo2_context* context;
+    const leopard::backend::Ops* auto_avx512_encode_ops;
     uint32_t original_count;
     uint32_t recovery_count;
     uint32_t parent_count;
@@ -2598,6 +2602,7 @@ static bool PrepareSparseEncodePlans(
 
 static void ExecuteTransformEncodePass(
     const leo2_codec* codec,
+    const leopard::backend::Ops& ops,
     size_t buffer_bytes,
     uint32_t requested_recovery_count,
     uint32_t requested_recovery_prefix,
@@ -2606,7 +2611,6 @@ static void ExecuteTransformEncodePass(
     void** work,
     const leopard2_internal::SparseForwardPlanBatchView* sparse_plans)
 {
-    const leopard::backend::Ops& ops = *codec->context->ops;
     if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
     {
         if (codec->padded_side == 1)
@@ -2670,6 +2674,56 @@ static void ExecuteTransformEncodePass(
 #else
         return;
 #endif
+}
+
+static bool CodecMayUseAutoAVX512Encode(const leo2_codec* codec)
+{
+    if (!codec || !codec->context ||
+        !codec->context->auto_requested ||
+        !codec->context->auto_avx512_encode_host ||
+        codec->context->backend != LEO2_BACKEND_AVX2 ||
+        codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->field != LEO2_FIELD_GF16)
+        return false;
+
+    // T=1 uses the direct copy/XOR path and never reaches this transform
+    // selector.  Every larger GF16 high-rate parent shape was positive in the
+    // retained Zen 5 screen, from K=8 through K=60000 and N=16 through 65536.
+    return codec->padded_side >= 2;
+}
+
+static bool UseAutoAVX512Encode(
+    const leo2_codec* codec,
+    size_t buffer_bytes,
+    uint32_t requested_recovery_count,
+    uint32_t requested_recovery_prefix)
+{
+    if (!CodecMayUseAutoAVX512Encode(codec) ||
+        !codec->auto_avx512_encode_ops ||
+        codec->context->ops != codec->context->baseline_ops ||
+        requested_recovery_count != codec->recovery_count ||
+        requested_recovery_prefix != codec->recovery_count ||
+        (buffer_bytes & (kScratchAlignment - 1U)) != 0)
+        return false;
+
+    // The AVX-512VL translation unit deliberately retains 256-bit data
+    // operations and uses the expanded register file.  Counterbalanced
+    // screens across both cache complexes were positive at every complete
+    // tile from 64 B through 4 MiB.  Ragged tails retain AVX2 until they have
+    // equally broad evidence.
+    return buffer_bytes >= kScratchAlignment;
+}
+
+static const leopard::backend::Ops& SelectTransformEncodeOps(
+    const leo2_codec* codec,
+    size_t buffer_bytes,
+    uint32_t requested_recovery_count,
+    uint32_t requested_recovery_prefix)
+{
+    if (UseAutoAVX512Encode(codec, buffer_bytes,
+            requested_recovery_count, requested_recovery_prefix))
+        return *codec->auto_avx512_encode_ops;
+    return *codec->context->ops;
 }
 
 static bool UseCoarseR1Xor(
@@ -4283,6 +4337,10 @@ LEO2_EXPORT leo2_result leo2_context_create(
         return LEO2_OUT_OF_MEMORY;
     context->backend = effective_backend;
     context->ops = ops;
+    context->baseline_ops = ops;
+    context->auto_requested = requested == LEO2_BACKEND_AUTO;
+    context->auto_avx512_encode_host = context->auto_requested &&
+        leopard::backend::IsCalibratedAutoAVX512EncodeHost();
     context->thread_count = threads;
     context->pool = NULL;
     if (threads > 1)
@@ -4481,6 +4539,7 @@ LEO2_EXPORT leo2_result leo2_codec_create(
     if (!codec)
         return LEO2_OUT_OF_MEMORY;
     codec->context = context;
+    codec->auto_avx512_encode_ops = NULL;
     codec->original_count = original_count;
     codec->recovery_count = recovery_count;
     codec->parent_count = parent;
@@ -4612,6 +4671,14 @@ LEO2_EXPORT leo2_result leo2_codec_create(
         delete codec;
         return LEO2_OUT_OF_MEMORY;
     }
+    if (CodecMayUseAutoAVX512Encode(codec))
+    {
+        // Qualification is setup-only, serialized, cached, and includes the
+        // complete backend known-answer test.  AUTO safely retains its
+        // baseline table when AVX-512 is absent or fails qualification.
+        codec->auto_avx512_encode_ops =
+            leopard::backend::GetQualifiedOps(LEO2_BACKEND_AVX512);
+    }
     *codec_out = codec;
     return LEO2_SUCCESS;
 }
@@ -4696,6 +4763,28 @@ LEO2_EXPORT leo2_result leo2_test_codec_encode_path(
         return result;
     *direct_out = ShouldUseDirectEncode(
         codec, shard_bytes, requested_recovery_count) ? 1 : 0;
+    return LEO2_SUCCESS;
+}
+
+LEO2_EXPORT leo2_result leo2_test_codec_transform_encode_backend(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    uint32_t requested_recovery_count,
+    uint32_t requested_recovery_prefix,
+    leo2_backend* backend_out)
+{
+    if (!IsRepresentableOutput(backend_out))
+        return LEO2_INVALID_ARGUMENT;
+    *backend_out = LEO2_BACKEND_AUTO;
+    if (!codec || shard_bytes == 0 ||
+        shard_bytes > static_cast<uint64_t>(SIZE_MAX) ||
+        requested_recovery_count > codec->recovery_count ||
+        requested_recovery_prefix > codec->recovery_count ||
+        requested_recovery_count > requested_recovery_prefix)
+        return LEO2_INVALID_ARGUMENT;
+    *backend_out = SelectTransformEncodeOps(codec,
+        static_cast<size_t>(shard_bytes), requested_recovery_count,
+        requested_recovery_prefix).kind;
     return LEO2_SUCCESS;
 }
 #endif
@@ -4872,6 +4961,13 @@ static leo2_result EncodeInternal(
             original, recovery);
     }
 
+    // Choose once for the complete call so aligned and ragged passes cannot
+    // observe different arithmetic tables.  The choice is deterministic and
+    // depends only on immutable codec state, output shape, and shard length.
+    const leopard::backend::Ops& transform_ops = SelectTransformEncodeOps(
+        codec, static_cast<size_t>(shard_bytes), requested_recovery_count,
+        requested_recovery_prefix);
+
     uint8_t* const base = static_cast<uint8_t*>(scratch);
     void** const pointers = reinterpret_cast<void**>(
         base + geometry.layout.pointer_offset);
@@ -4913,7 +5009,7 @@ static leo2_result EncodeInternal(
                 parity[i] = recovery[i];
         }
         ExecuteTransformEncodePass(
-            codec, geometry.aligned_prefix_bytes,
+            codec, transform_ops, geometry.aligned_prefix_bytes,
             requested_recovery_count, requested_recovery_prefix,
             original, parity, work,
             &sparse_plans);
@@ -4937,7 +5033,7 @@ static leo2_result EncodeInternal(
         const void* const* const padded_original =
             const_cast<const void* const*>(pointers);
         ExecuteTransformEncodePass(
-            codec, kScratchAlignment, requested_recovery_count,
+            codec, transform_ops, kScratchAlignment, requested_recovery_count,
             requested_recovery_prefix,
             padded_original, parity, work, &sparse_plans);
 

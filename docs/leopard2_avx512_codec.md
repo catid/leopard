@@ -1,5 +1,47 @@
 # Leopard2 AVX-512BW/VBMI codec experiment
 
+## 2026-07 model-scoped AUTO encode candidate
+
+The current candidate adds the deterministic per-codec policy that the
+full-operation experiment below could not express.  An `AUTO` context still
+reports and retains its startup-qualified AVX2 baseline.  A legacy-high GF16
+codec may additionally qualify the immutable AVX-512VL operation table during
+codec setup and select it once for a complete transform encode call when all
+of these conditions hold:
+
+- the processor vendor/family/model is AMD family 1Ah, model 44h, matching the
+  Ryzen 9 9950X3D calibration host;
+- the code uses the legacy-high GF16 profile with `T >= 2`;
+- every transmitted parity output is requested; and
+- the positive shard length is an exact multiple of the 64-byte transform
+  tile.
+
+Unknown processors, unavailable ISA state, failed optional allocation or KAT,
+partial parity output, ragged tails, explicit backend requests, and forced
+lower-backend diagnostic builds retain their exact baseline table.  The
+choice changes neither field arithmetic nor parity bytes.  It also performs no
+hot-path allocation: optional table qualification happens at codec setup and
+the byte-heavy call passes one selected immutable operation table through all
+aligned and tail stages.
+
+The same-binary screen compared explicit AVX2 and explicit AVX-512VL tables on
+both cache complexes before enabling this policy.  It covered legacy-high GF16
+parents from `K=8,R=8` through `K=60000,R=1024`, shard sizes from 64 bytes
+through 4 MiB, redundancy boundaries `R=8,50,64,128,129,200,256,257,512,1000,
+1024,4096`, and maximum parent size 65,536.  Every retained parity digest was
+identical.  Zero-sibling-work cells reduced encode time by 4.3% to 24.7%; the
+large representative regions were generally 9% to 19% faster than AVX2.
+These screens are directional selector evidence, not a substitute for the
+fresh exact-main ABBA/source-closure replay required before root integration.
+
+GCC and Clang warning-clean builds pass the selector, CPU classifier, fallback
+injection, and parity-equivalence tests.  Clang ASan+UBSan passes all 84 tests,
+and a no-OpenMP Clang TSan build passes concurrent initialization, context
+backend selection, shared-codec AUTO encode, and encode concurrency.  Forced
+scalar, SSSE3, AVX2, and AVX-512 build variants each retain their exact backend
+contract.  An independent source review and fresh exact-main timing gate remain
+mandatory before this candidate is promoted.
+
 ## 2026-07 full-operation register-file follow-up
 
 The earlier full-codec candidate below changed only the fused radix-four
@@ -16,9 +58,11 @@ table in `Leopard2BackendAVX512.cpp` with AVX2 plus AVX-512F/BW/VL and
 the additional ISA contract is used for registers YMM16 through YMM31.  Runtime
 qualification requires the corresponding CPUID bits and XCR0 state.  The
 candidate shares the immutable AVX2 GF8/GF16 nibble tables, so it does not add
-a second roughly 8 MiB GF16 table.  `AUTO` remains AVX2 and the candidate must
-be selected explicitly.  The isolated evidence below supports it in a
-large-parent region, but not as a universal default.
+a second roughly 8 MiB GF16 table.  At this checkpoint, `AUTO` remained AVX2
+and the candidate had to be selected explicitly.  The isolated evidence below
+supports it in a large-parent region; the later model-scoped policy above uses
+broader same-binary screens instead of making it a universal cross-CPU
+default.
 
 The backend startup KAT, explicit-context concurrency tests, odd-byte GF16,
 R=1, direct-encode, pruned-transform, decode-schedule, failure-injection, and
@@ -59,15 +103,16 @@ evidence-runner commit was
 The expanded-register implementation therefore closes the primary
 K=1000/R=200 encode deficit and meets the project's 5% lower-confidence-bound
 rule at K=4096/R=512.  It does not meet that rule at K=1000/R=200, and the
-32 KiB neighbor is statistically tied.  Because backend selection currently
-belongs to an immutable context rather than a per-codec size dispatcher,
-promoting AVX-512VL in `AUTO` would also select it outside the proven region.
-The evidence supports promoting the explicit backend as an opt-in production
-choice, but not changing `AUTO` from AVX2.  The backend adds a 49,728-byte
+32 KiB neighbor is statistically tied.  At this checkpoint backend selection
+belonged to an immutable context rather than a per-codec size dispatcher, so
+promoting AVX-512VL in `AUTO` would also have selected it outside the proven
+region.  The evidence supported the explicit backend as an opt-in production
+choice and motivated the later deterministic codec-scoped policy above.  The
+backend adds a 49,728-byte
 archive member in the measured GCC release build and no duplicate arithmetic
 table; this is acceptable for a full operation table that shares the reviewed
-AVX2 algorithm source.  A future context/backend-policy refactor may use a
-deterministic large-parent threshold after broader CPU coverage.
+AVX2 algorithm source.  Other CPU models still require their own calibrated
+region before AUTO may select this table.
 
 The ignored research cache retains two deliberately rejected combined runs.
 The CPU 15/31 run accumulated four non-idle sibling jiffies, and an attempted

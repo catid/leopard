@@ -1017,6 +1017,9 @@ if(LEO2_BUILD_TESTS)
             COMMAND leopard2_backend_failures_test avx512 ff16-allocation)
         add_test(NAME leopard2_backend_failure_avx512_kat
             COMMAND leopard2_backend_failures_test avx512 kat)
+        add_test(NAME leopard2_backend_auto_avx512_kat_fallback
+            COMMAND leopard2_backend_failures_test
+                auto-avx512-kat-fallback)
     endif()
     set_tests_properties(
         leopard2_backend_failure_scalar_ff8_allocation
@@ -1034,6 +1037,7 @@ if(LEO2_BUILD_TESTS)
             leopard2_backend_failure_avx512_ff8_allocation
             leopard2_backend_failure_avx512_ff16_allocation
             leopard2_backend_failure_avx512_kat
+            leopard2_backend_auto_avx512_kat_fallback
             PROPERTIES ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
     endif()
 
@@ -1046,6 +1050,16 @@ if(LEO2_BUILD_TESTS)
         COMMAND leopard2_context_backends_test)
     set_tests_properties(leopard2_context_backends PROPERTIES
         ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=4")
+
+    add_executable(leopard2_auto_encode_backend_test
+        tests/leopard2/test_auto_encode_backend.cpp)
+    target_compile_definitions(leopard2_auto_encode_backend_test PRIVATE
+        LEO2_ENABLE_TEST_HOOKS=1)
+    target_link_libraries(leopard2_auto_encode_backend_test leopard_test_hooks)
+    add_test(NAME leopard2_auto_encode_backend
+        COMMAND leopard2_auto_encode_backend_test)
+    set_tests_properties(leopard2_auto_encode_backend PROPERTIES
+        ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
     add_executable(leopard2_r1_xor_test
         tests/leopard2/test_r1_xor.cpp)

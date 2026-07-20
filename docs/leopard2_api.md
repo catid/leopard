@@ -264,9 +264,10 @@ exceeds the current affinity budget; a larger count returns
 `leo2_context_thread_count` reports the effective value.  This option controls
 parallelism across batch items, not the wire profile or the result bytes.
 
-The context `backend` option selects an immutable execution table.  `AUTO` uses
-the production-default table that passed the startup capability checks and
-known-answer tests.  In one ordinary production x86 binary, explicit `SCALAR`,
+An explicit context `backend` option selects one immutable execution table.
+`AUTO` reports the production-default table that passed the startup capability
+checks and known-answer tests as its immutable baseline.  In one ordinary
+production x86 binary, explicit `SCALAR`,
 `SSSE3`, `AVX2`, and `AVX512` requests select that table when it
 was compiled and supported by the
 host.  Lower tables are allocated and known-answer-tested once, on the first
@@ -277,9 +278,17 @@ returns `LEO2_OUT_OF_MEMORY`, and a known-answer-test failure returns
 `LEO2_INTERNAL_ERROR`.  A context never changes the process-default table
 used by the legacy `leo_*` API, and independent contexts selecting different
 tables can execute concurrently.
-`AUTO` deliberately remains AVX2 on qualifying x86 hosts.  Isolated
-complete-codec evidence supports AVX-512VL for a bounded large-parent region,
-but did not justify selecting it universally; see
+`AUTO` deliberately reports AVX2 as its baseline on qualifying x86 hosts.
+Isolated complete-codec evidence supports AVX-512VL for bounded GF16
+legacy-high encode regions, but did not justify selecting it universally.
+An AUTO codec may therefore widen one full-output transform encode to a
+startup-qualified immutable AVX-512 table only on the calibrated AMD family
+1Ah/model 44h host class and in a deterministic offline-calibrated region.
+Unknown CPU models retain AVX2.  Explicit backend requests never widen, and a
+failed or unavailable optional qualification retains the baseline.  The
+reported context backend remains the baseline because the kernel choice is a
+property of the codec, byte length, and requested outputs rather than a new
+context or wire identity.  See
 `docs/leopard2_avx512_codec.md`.  The explicit AVX-512 request
 requires AVX2 plus AVX-512F/BW/VL and operating-system support for opmask and
 ZMM state; its current kernels retain 256-bit data operations and use the
@@ -294,10 +303,11 @@ AVX2 retain `AUTO` compatibility but reject explicit table requests, because
 their inline kernels can bypass an exact lower-table selection.  The default
 CMake build uses isolated ISA objects and supports the explicit x86 choices.
 
-Byte-heavy calls pass the context's immutable table explicitly through every
-transform and OpenMP worker; selection is not recovered from mutable global or
-thread-local state.  Context-pool workers likewise receive it with each batch
-item, so independent contexts cannot contaminate one another.  On ARM, explicit `NEON`
+Byte-heavy calls select their immutable table once and pass it explicitly
+through every transform and OpenMP worker; selection is not recovered from
+mutable global or thread-local state.  Context-pool workers likewise receive
+it with each batch item, so independent contexts cannot contaminate one
+another.  On ARM, explicit `NEON`
 remains an exact request for the existing native-NEON or SSE2NEON transform
 path.  Selecting a lower scalar table on an active NEON path is rejected until
 the native-NEON backend is fully represented by the same ops-table boundary;

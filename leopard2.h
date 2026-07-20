@@ -137,12 +137,17 @@ typedef enum leo2_backend {
     more parallelism, then reused without recreating existing workers.
     A zero value uses the process's allowed CPU count where the platform exposes
     it, capped at 128; explicit nonzero values retain their requested budget.
-    backend selects an immutable execution table for this context.  AUTO uses
-    the production-default startup-qualified runtime backend.  On production
+    An explicit backend selects one immutable execution table for this context.
+    AUTO uses the production-default startup-qualified runtime backend as its
+    reported baseline.  On production
     x86 builds, SCALAR, SSSE3, AVX2, and AVX512 may explicitly
-    select any compiled, host-qualified table.  AUTO deliberately remains AVX2
-    because AVX512 whole-codec evidence supports only a bounded large-parent
-    region rather than a universal default.  A non-default
+    select any compiled, host-qualified table.  AUTO deliberately reports AVX2
+    as its baseline because AVX512 whole-codec evidence supports only bounded
+    encode regions rather than a universal default.  Within such a fixed,
+    offline-calibrated region on a recognized CPU model, AUTO may use another
+    startup-qualified immutable table for one operation; unknown models retain
+    the baseline.  This changes neither code identity nor wire bytes.
+    Explicit backend requests never widen.  A non-default
     table is allocated and known-answer-tested on its first explicit context
     request.  Results are cached: unavailable
     ISAs return LEO2_UNSUPPORTED, allocation failure returns
@@ -224,7 +229,12 @@ LEO2_EXPORT leo2_result leo2_context_create(
     const leo2_context_options* options,
     leo2_context** context_out);
 LEO2_EXPORT void leo2_context_destroy(leo2_context* context);
-/* Null context introspection returns AUTO or zero. */
+/*
+    Null context introspection returns AUTO or zero.  For an AUTO context,
+    leo2_context_backend returns its immutable baseline; deterministic
+    per-codec kernel widening described above is intentionally not represented
+    as a different context or wire backend.
+*/
 LEO2_EXPORT leo2_backend leo2_context_backend(const leo2_context* context);
 LEO2_EXPORT uint32_t leo2_context_thread_count(const leo2_context* context);
 

@@ -74,6 +74,43 @@ void test_feature_classifier()
         "complete AVX-512 classification");
 }
 
+void test_processor_classifier()
+{
+    static const uint32_t amd_ebx = 0x68747541U;
+    static const uint32_t amd_edx = 0x69746e65U;
+    static const uint32_t amd_ecx = 0x444d4163U;
+    const uint32_t family_1a_model_44 =
+        (0xfU << 8) | (0xbU << 20) | (4U << 4) | (4U << 16);
+    const leopard::backend::X86ProcessorIdentity zen5 =
+        leopard::backend::ClassifyX86Processor(
+            amd_ebx, amd_edx, amd_ecx, family_1a_model_44);
+    require(zen5.authentic_amd && zen5.family == 0x1aU &&
+            zen5.model == 0x44U,
+        "AMD extended family/model classification");
+    require(leopard::backend::IsCalibratedAutoAVX512EncodeProcessor(zen5),
+        "calibrated AMD processor classification");
+
+    const leopard::backend::X86ProcessorIdentity wrong_vendor =
+        leopard::backend::ClassifyX86Processor(
+            amd_ebx ^ 1U, amd_edx, amd_ecx, family_1a_model_44);
+    require(!wrong_vendor.authentic_amd &&
+            wrong_vendor.family == 0x1aU && wrong_vendor.model == 0x44U,
+        "vendor classification contaminated family/model");
+    require(!leopard::backend::IsCalibratedAutoAVX512EncodeProcessor(
+                wrong_vendor),
+        "non-AMD processor entered the calibrated selector");
+
+    const uint32_t family_6_model_9e =
+        (6U << 8) | (0xeU << 4) | (9U << 16);
+    const leopard::backend::X86ProcessorIdentity family6 =
+        leopard::backend::ClassifyX86Processor(
+            0, 0, 0, family_6_model_9e);
+    require(family6.family == 6U && family6.model == 0x9eU,
+        "family-six extended model classification");
+    require(!leopard::backend::IsCalibratedAutoAVX512EncodeProcessor(family6),
+        "uncalibrated family/model entered the calibrated selector");
+}
+
 void run_kernel_check(unsigned seed)
 {
     const leopard::backend::Ops& ops = leopard::backend::GetOps();
@@ -402,6 +439,7 @@ int main()
     try
     {
         test_feature_classifier();
+        test_processor_classifier();
         require(leo_init() == Leopard_Success, "Leopard initialization");
         require(leopard::backend::StartupSelfTestPassed(),
             "backend startup known-answer tests");

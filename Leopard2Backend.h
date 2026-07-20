@@ -289,6 +289,23 @@ struct X86Features
     bool avx512;
 };
 
+struct X86ProcessorIdentity
+{
+    bool authentic_amd;
+    uint16_t family;
+    uint16_t model;
+};
+
+X86ProcessorIdentity ClassifyX86Processor(
+    uint32_t vendor_ebx,
+    uint32_t vendor_edx,
+    uint32_t vendor_ecx,
+    uint32_t leaf1_eax);
+X86ProcessorIdentity DetectX86Processor();
+bool IsCalibratedAutoAVX512EncodeProcessor(
+    const X86ProcessorIdentity& identity);
+bool IsCalibratedAutoAVX512EncodeHost();
+
 // Pure feature classifier used by both the runtime probe and synthetic tests.
 X86Features ClassifyX86Features(
     uint32_t maximum_basic_leaf,

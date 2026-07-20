@@ -19,6 +19,33 @@ static const uint32_t kAVX512F = 0x00010000U;
 static const uint32_t kAVX512BW = 0x40000000U;
 static const uint32_t kAVX512VL = 0x80000000U;
 
+X86ProcessorIdentity ClassifyX86Processor(
+    uint32_t vendor_ebx,
+    uint32_t vendor_edx,
+    uint32_t vendor_ecx,
+    uint32_t leaf1_eax)
+{
+    static const uint32_t kAuthenticAMDEbx = 0x68747541U;
+    static const uint32_t kAuthenticAMDEdx = 0x69746e65U;
+    static const uint32_t kAuthenticAMDEcx = 0x444d4163U;
+    X86ProcessorIdentity identity = { false, 0, 0 };
+    identity.authentic_amd =
+        vendor_ebx == kAuthenticAMDEbx &&
+        vendor_edx == kAuthenticAMDEdx &&
+        vendor_ecx == kAuthenticAMDEcx;
+
+    const uint32_t base_family = (leaf1_eax >> 8) & 0xfU;
+    const uint32_t extended_family = (leaf1_eax >> 20) & 0xffU;
+    const uint32_t base_model = (leaf1_eax >> 4) & 0xfU;
+    const uint32_t extended_model = (leaf1_eax >> 16) & 0xfU;
+    identity.family = static_cast<uint16_t>(base_family == 0xfU
+        ? base_family + extended_family : base_family);
+    identity.model = static_cast<uint16_t>(
+        base_family == 0x6U || base_family == 0xfU
+            ? base_model + (extended_model << 4) : base_model);
+    return identity;
+}
+
 X86Features ClassifyX86Features(
     uint32_t maximum_basic_leaf,
     uint32_t leaf1_ecx,
@@ -136,6 +163,29 @@ X86Features DetectX86Features()
         maximum_basic_leaf, leaf1_ecx, leaf7_ebx, xcr0);
 }
 
+X86ProcessorIdentity DetectX86Processor()
+{
+    if (!CPUIDSupported())
+    {
+        X86ProcessorIdentity identity = { false, 0, 0 };
+        return identity;
+    }
+    uint32_t registers[4] = {};
+    ReadCPUID(0, registers);
+    const uint32_t maximum_basic_leaf = registers[0];
+    const uint32_t vendor_ebx = registers[1];
+    const uint32_t vendor_ecx = registers[2];
+    const uint32_t vendor_edx = registers[3];
+    uint32_t leaf1_eax = 0;
+    if (maximum_basic_leaf >= 1)
+    {
+        ReadCPUID(1, registers);
+        leaf1_eax = registers[0];
+    }
+    return ClassifyX86Processor(
+        vendor_ebx, vendor_edx, vendor_ecx, leaf1_eax);
+}
+
 #else
 
 X86Features DetectX86Features()
@@ -144,6 +194,26 @@ X86Features DetectX86Features()
     return features;
 }
 
+X86ProcessorIdentity DetectX86Processor()
+{
+    X86ProcessorIdentity identity = { false, 0, 0 };
+    return identity;
+}
+
 #endif
+
+bool IsCalibratedAutoAVX512EncodeProcessor(
+    const X86ProcessorIdentity& identity)
+{
+    // Family 1Ah, model 44h is the Zen 5 Granite Ridge class on which the
+    // complete-codec table was calibrated across both cache complexes.
+    return identity.authentic_amd && identity.family == 0x1aU &&
+        identity.model == 0x44U;
+}
+
+bool IsCalibratedAutoAVX512EncodeHost()
+{
+    return IsCalibratedAutoAVX512EncodeProcessor(DetectX86Processor());
+}
 
 }} // namespace leopard::backend
