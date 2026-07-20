@@ -2371,6 +2371,23 @@ class MainCompareRunnerTests(unittest.TestCase):
                 manifest=manifest_path, no_current_input_check=True)
             self.assertEqual(runner.verify_campaign(options), 0)
 
+            options.affinity_binding = root / "affinity-binding.json"
+            completed = subprocess.CompletedProcess(
+                [], 0, stdout=b"verified\n", stderr=b"")
+            with mock.patch.object(
+                    runner, "run_process_bounded",
+                    return_value=completed) as bounded:
+                self.assertEqual(runner.verify_campaign(options), 0)
+            verifier_argv = bounded.call_args.args[0]
+            supervisor = MODULE_PATH.resolve().parents[3] / \
+                "tools/leopard2_affinity_supervisor.py"
+            self.assertEqual(
+                verifier_argv[:4],
+                [sys.executable, "-I", "-S", str(supervisor)])
+            self.assertEqual(
+                verifier_argv[4:7],
+                ["verify-binding", "--binding", str(options.affinity_binding)])
+
             options.affinity_binding = root / "missing-affinity-binding.json"
             with self.assertRaises(runner.EvidenceError):
                 runner.verify_campaign(options)

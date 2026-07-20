@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -I -S
 """Reversibly keep same-user work off an authoritative benchmark CPU pair.
 
 This Linux-only helper is deliberately outside the codec.  It cannot exclude
@@ -98,7 +98,7 @@ PYTHON_SNAPSHOT_BOOTSTRAP = (
     "import os,sys\n"
     "_a=sys.argv[1];_p=os.path.abspath(_a);_f=sys.argv[2]"
     ";sys.argv=[_a]+sys.argv[3:]\n"
-    "sys.path[0]=os.path.dirname(_p)\n"
+    "sys.path.insert(0,os.path.dirname(_p))\n"
     "_g=globals();_g.update({'__file__':_p,'__package__':None,"
     "'__cached__':None,'__spec__':None})\n"
     "with open(_f,'rb') as _i:_c=compile(_i.read(),_p,'exec')\n"
@@ -143,9 +143,24 @@ CHILD_PROCESS_KEYS = {
     "starttime_ticks",
 }
 EXECUTION_KEYS = {
-    "child_finished_monotonic_ns", "child_ready_monotonic_ns", "nonce",
+    "child_finished_monotonic_ns", "child_ready_monotonic_ns", "environment",
+    "nonce",
 }
 EXECUTION_NONCE_ENV = "LEO2_AFFINITY_EXECUTION_NONCE"
+# Keep the supervised runner itself under the same explicit environment that
+# run_abba.py records and gives every timed child.  Starting from this allowlist
+# (rather than deleting a few known variables from os.environ) also excludes
+# dynamic-loader injection and future interpreter-specific startup hooks.
+STRICT_BENCHMARK_ENVIRONMENT = {
+    "LANG": "C",
+    "LC_ALL": "C",
+    "OMP_DYNAMIC": "FALSE",
+    "OMP_NUM_THREADS": "1",
+    "OMP_PLACES": "cores",
+    "OMP_PROC_BIND": "TRUE",
+    "PATH": "/usr/bin:/bin",
+    "TZ": "UTC",
+}
 PID_NAMESPACE_KEYS = {"device", "inode"}
 GLOBAL_LOCK_KEYS = {
     "device", "directory_device", "directory_inode", "inode", "lock", "mode",
@@ -788,10 +803,12 @@ class PinnedCommand:
     def execution_argv(self):
         if self.script_descriptor is None:
             return list(self.command)
-        # Execute immutable script bytes while preserving ordinary direct-script
-        # __file__, sys.argv, and sys.path[0] semantics for the application.
+        # Isolated/no-site startup prevents PYTHONPATH, PYTHONHOME, user-site,
+        # and sitecustomize code from running before the immutable bootstrap.
+        # The bootstrap then restores ordinary direct-script __file__, sys.argv,
+        # and sys.path[0] semantics for the application.
         return [
-            self.command[0], "-c", PYTHON_SNAPSHOT_BOOTSTRAP,
+            self.command[0], "-I", "-S", "-c", PYTHON_SNAPSHOT_BOOTSTRAP,
             self.command[1], self._proc_fd(self.script_descriptor),
         ] + self.command[2:]
 
@@ -1540,6 +1557,9 @@ def validate_execution(value):
     require(isinstance(value["nonce"], str) and
             HEX256.fullmatch(value["nonce"]) is not None,
             "supervised execution nonce is invalid")
+    require(value["environment"] == STRICT_BENCHMARK_ENVIRONMENT,
+            "supervised execution environment is not the strict benchmark "
+            "environment")
     ready = value["child_ready_monotonic_ns"]
     finished = value["child_finished_monotonic_ns"]
     require(ready is None or (type(ready) is int and 0 <= ready <= 2**63 - 1),
@@ -1801,6 +1821,31 @@ class ForkedChild:
         return self.returncode
 
 
+def strict_execution_environment(execution_nonce, environment=None):
+    """Return the one environment allowed at the supervised exec boundary."""
+    require(isinstance(execution_nonce, str) and
+            HEX256.fullmatch(execution_nonce) is not None,
+            "execution nonce is invalid")
+    expected = dict(STRICT_BENCHMARK_ENVIRONMENT)
+    if environment is not None:
+        require(isinstance(environment, dict) and
+                all(isinstance(name, str) and isinstance(value, str)
+                    for name, value in environment.items()) and
+                environment == expected,
+                "supervised child environment differs from the strict benchmark "
+                "environment")
+    expected[EXECUTION_NONCE_ENV] = execution_nonce
+    return expected
+
+
+def require_isolated_python_startup(flags=None):
+    """Reject evidence operations after ambient Python startup was possible."""
+    flags = sys.flags if flags is None else flags
+    require(getattr(flags, "isolated", 0) == 1 and
+            getattr(flags, "no_site", 0) == 1,
+            "affinity evidence operations require Python -I -S startup")
+
+
 def execute_pinned_command(pinned, launch_cpus, execution_nonce,
                            fchdir_function=os.fchdir,
                            set_affinity_function=os.sched_setaffinity,
@@ -1810,9 +1855,8 @@ def execute_pinned_command(pinned, launch_cpus, execution_nonce,
     require(isinstance(pinned, PinnedCommand),
             "gated execution requires a pinned command")
     launch_cpus = set(validate_cpu_list(sorted(launch_cpus), "launch CPUs"))
-    require(isinstance(execution_nonce, str) and
-            HEX256.fullmatch(execution_nonce) is not None,
-            "execution nonce is invalid")
+    child_environment = strict_execution_environment(
+        execution_nonce, environment)
     pinned.validate_snapshot_descriptors()
     require(pinned.cwd_descriptor is not None,
             "pinned working directory is closed")
@@ -1820,8 +1864,6 @@ def execute_pinned_command(pinned, launch_cpus, execution_nonce,
     set_affinity_function(0, launch_cpus)
     require(set(get_affinity_function(0)) == launch_cpus,
             "gated child did not retain its exact launch affinity")
-    child_environment = dict(os.environ if environment is None else environment)
-    child_environment[EXECUTION_NONCE_ENV] = execution_nonce
     execve_function(
         pinned.executable_path(), pinned.execution_argv(), child_environment)
     raise IsolationError("execve unexpectedly returned")
@@ -2248,6 +2290,7 @@ class AffinityTransaction:
             "events": self.events,
             "execution": {
                 "nonce": nonce,
+                "environment": dict(STRICT_BENCHMARK_ENVIRONMENT),
                 "child_ready_monotonic_ns": None,
                 "child_finished_monotonic_ns": None,
             },
@@ -3409,6 +3452,11 @@ def validate_main_manifest_binding(report, manifest_path):
     require(isinstance(specification, dict) and isinstance(identities, dict) and
             isinstance(campaign, dict) and isinstance(reservation, dict),
             "main-comparison binding inputs are incomplete")
+    require(campaign.get("child_environment") ==
+            report["execution"]["environment"] ==
+            STRICT_BENCHMARK_ENVIRONMENT,
+            "main-comparison and supervisor environments differ from the "
+            "strict benchmark contract")
     runner_identity = identities.get("runner")
     require(isinstance(runner_identity, dict) and
             specification.get("runner") == identity["script"]["path"] and
@@ -3941,6 +3989,23 @@ def test_global_lock_serialization():
 
 
 def test_inode_bound_evidence_snapshot():
+    native_memfd_create = getattr(os, "memfd_create", None)
+    fallback_descriptor = None
+    try:
+        if native_memfd_create is not None:
+            delattr(os, "memfd_create")
+        fallback_descriptor = linux_memfd_create(
+            "leopard2-missing-python-wrapper-test",
+            MFD_CLOEXEC_LINUX | MFD_ALLOW_SEALING_LINUX)
+        fallback_seals = seal_immutable_snapshot(fallback_descriptor)
+        check(fallback_seals & MEMFD_SEALS == MEMFD_SEALS,
+              "libc memfd fallback did not retain mandatory seals")
+    finally:
+        if fallback_descriptor is not None:
+            os.close(fallback_descriptor)
+        if native_memfd_create is not None:
+            os.memfd_create = native_memfd_create
+
     fake_seals = {"value": 0, "rejected_exec": False}
 
     def old_kernel_fcntl(_descriptor, operation, argument=None):
@@ -4783,9 +4848,9 @@ def test_descriptor_pinned_exec_and_child_signal_defaults():
                 captured["exec_path"] = path
                 captured["argv"] = list(argv)
                 captured["executable_bytes"] = Path(path).read_bytes()
-                captured["script_bytes"] = Path(argv[4]).read_bytes()
+                captured["script_bytes"] = Path(argv[6]).read_bytes()
                 executable_metadata = os.stat(path)
-                script_metadata = os.stat(argv[4])
+                script_metadata = os.stat(argv[6])
                 captured["executable_snapshot"] = (
                     executable_metadata.st_dev, executable_metadata.st_ino,
                     executable_metadata.st_size)
@@ -4793,6 +4858,7 @@ def test_descriptor_pinned_exec_and_child_signal_defaults():
                     script_metadata.st_dev, script_metadata.st_ino,
                     script_metadata.st_size)
                 captured["nonce"] = environment.get(EXECUTION_NONCE_ENV)
+                captured["environment"] = dict(environment)
                 raise CapturedExec()
 
             expect_exception(
@@ -4802,7 +4868,8 @@ def test_descriptor_pinned_exec_and_child_signal_defaults():
                     fchdir_function=fake_fchdir,
                     set_affinity_function=fake_set_affinity,
                     get_affinity_function=fake_get_affinity,
-                    execve_function=fake_execve, environment={}),
+                    execve_function=fake_execve,
+                    environment=dict(STRICT_BENCHMARK_ENVIRONMENT)),
                 "descriptor-pinned execution capture")
 
             # Model replacement code restoring the original bytes before final
@@ -4815,7 +4882,8 @@ def test_descriptor_pinned_exec_and_child_signal_defaults():
             check(captured["executable_bytes"] == original_executable and
                   captured["script_bytes"] == original_script and
                   captured["argv"] == [
-                      str(executable), "-c", PYTHON_SNAPSHOT_BOOTSTRAP,
+                      str(executable), "-I", "-S", "-c",
+                      PYTHON_SNAPSHOT_BOOTSTRAP,
                       str(script), pinned._proc_fd(pinned.script_descriptor),
                       "argument"] and
                   captured["exec_path"] == pinned._proc_fd(
@@ -4837,6 +4905,10 @@ def test_descriptor_pinned_exec_and_child_signal_defaults():
                       original_identity["cwd"]["inode"]) and
                   captured["set_affinity"] == (0, {0, 1, 2, 3}) and
                   captured["nonce"] == "cd" * 32 and
+                  captured["environment"] == {
+                      **STRICT_BENCHMARK_ENVIRONMENT,
+                      EXECUTION_NONCE_ENV: "cd" * 32,
+                  } and
                   original_command_hash == sha256_value(pinned.command) and
                   (final_executable["device"], final_executable["inode"],
                    final_executable["sha256"]) ==
@@ -4852,38 +4924,75 @@ def test_descriptor_pinned_exec_and_child_signal_defaults():
         finally:
             pinned.close()
 
+        strict_environment = strict_execution_environment("ef" * 32)
+        check(strict_environment == {
+                  **STRICT_BENCHMARK_ENVIRONMENT,
+                  EXECUTION_NONCE_ENV: "ef" * 32,
+              }, "strict supervised environment changed")
+        for variable in (
+                "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP",
+                "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT"):
+            hostile = dict(STRICT_BENCHMARK_ENVIRONMENT)
+            hostile[variable] = str(root)
+            expect_exception(
+                IsolationError,
+                lambda value=hostile: strict_execution_environment(
+                    "ef" * 32, value),
+                "{} supervised environment injection".format(variable))
+        incomplete = dict(STRICT_BENCHMARK_ENVIRONMENT)
+        incomplete.pop("PATH")
+        expect_exception(
+            IsolationError,
+            lambda: strict_execution_environment("ef" * 32, incomplete),
+            "incomplete supervised environment")
+        safe_flags = type("SafePythonFlags", (), {
+            "isolated": 1, "no_site": 1})()
+        unsafe_flags = type("UnsafePythonFlags", (), {
+            "isolated": 0, "no_site": 0})()
+        require_isolated_python_startup(safe_flags)
+        expect_exception(
+            IsolationError,
+            lambda: require_isolated_python_startup(unsafe_flags),
+            "ambient supervisor Python startup")
+
         # Exercise kernel ELF dispatch and Python's real __main__ module, not
-        # only the mocked execve boundary above.  Both source inodes are changed
-        # in place after preparation; the child must still run the sealed bytes.
-        actual_executable = root / "actual-python"
+        # only the mocked execve boundary above.  The source script is changed
+        # in place after preparation; the child must still run its sealed bytes.
+        # A hostile startup module is supplied through PYTHONPATH to prove that
+        # isolated/no-site startup runs no uncaptured Python before bootstrap.
         actual_script = root / "actual.py"
         actual_output = root / "actual.json"
-        actual_executable.write_bytes(original_executable)
-        actual_executable.chmod(original_executable_path.stat().st_mode & 0o777)
+        injection_root = root / "startup-injection"
+        injection_root.mkdir()
+        injection_marker = root / "startup-injection-ran"
+        (injection_root / "sitecustomize.py").write_text(
+            "import os\n"
+            "with open(os.environ['INJECTION_MARKER'],'w') as out:\n"
+            " out.write('uncaptured startup executed')\n",
+            encoding="utf-8")
         actual_script.write_text(
             "MARKER='immutable-original'\n"
             "import __main__,json,os,sys\n"
             "with open(sys.argv[1],'w',encoding='utf-8') as out:\n"
             " json.dump({'same_main':__main__.__dict__ is globals(),"
             "'main_marker':getattr(__main__,'MARKER',None),"
-            "'file':__file__,'argv':sys.argv,'path0':sys.path[0]},out)\n",
+            "'file':__file__,'argv':sys.argv,'path0':sys.path[0],"
+            "'isolated':sys.flags.isolated,'no_site':sys.flags.no_site},out)\n",
             encoding="utf-8")
         actual = PinnedCommand([
-            str(actual_executable), str(actual_script), str(actual_output),
+            sys.executable, str(actual_script), str(actual_output),
             "argument"])
         try:
-            actual_executable.write_bytes(b"X" * len(original_executable))
-            actual_executable.chmod(
-                original_executable_path.stat().st_mode & 0o777)
             actual_script.write_text(
                 "raise SystemExit('replacement script executed')\n",
                 encoding="utf-8")
-            child_environment = dict(os.environ)
-            # Relocatable standalone Python builds may infer their stdlib only
-            # from argv[0].  This fixture deliberately gives the copied image a
-            # temporary argv[0], so bind its already-running installation root
-            # explicitly; the immutable executable/script assertion is unchanged.
-            child_environment["PYTHONHOME"] = sys.base_prefix
+            # Deliberately bypass strict_execution_environment() here so the
+            # interpreter flags independently defend against Python startup
+            # variables even if a future exec-boundary check regresses.
+            child_environment = dict(STRICT_BENCHMARK_ENVIRONMENT)
+            child_environment[EXECUTION_NONCE_ENV] = "ef" * 32
+            child_environment["PYTHONPATH"] = str(injection_root)
+            child_environment["INJECTION_MARKER"] = str(injection_marker)
             child_pid = os.fork()
             if child_pid == 0:  # pragma: no cover - parent verifies output
                 try:
@@ -4908,8 +5017,11 @@ def test_descriptor_pinned_exec_and_child_signal_defaults():
                 "file": str(actual_script),
                 "argv": [str(actual_script), str(actual_output), "argument"],
                 "path0": str(root),
-            }, "real exec selected changed executable/script bytes or broke "
-               "direct Python semantics")
+                "isolated": 1,
+                "no_site": 1,
+            } and not injection_marker.exists(),
+                  "real exec selected changed script/startup bytes or broke "
+                  "isolated direct Python semantics")
         finally:
             actual.close()
 
@@ -5085,7 +5197,7 @@ def test_binding():
         evidence = root / "evidence"
         evidence.mkdir()
         backend = FakeBackend()
-        # Authoritative v6 evidence is accepted only when the surrounding work
+        # Authoritative v8 evidence is accepted only when the surrounding work
         # was already outside the reserved pair and no mask needed mutation.
         backend.add(1, 1, 1, 1, {0, 2}, ppid=0)
         report_path = root / "report.json"
@@ -5118,6 +5230,12 @@ def test_binding():
         ]
         check(transaction.run(command) == 0 and transaction.report["accepted"] is True,
               "binding fixture transaction was not accepted")
+        injected_environment = json.loads(json.dumps(transaction.report))
+        injected_environment["execution"]["environment"]["PYTHONPATH"] = \
+            str(root)
+        expect_exception(
+            IsolationError, lambda: validate_report(injected_environment),
+            "report with an injected supervised environment")
         option_prefixed = json.loads(json.dumps(transaction.report))
         option_prefixed["command"] = [
             option_prefixed["command"][0], "-O",
@@ -5135,6 +5253,7 @@ def test_binding():
                 "iterations": 9, "warmup": 2, "timeout_seconds": 120.0,
                 "candidate_mode": "auto",
                 "allowed_cpu_set_at_launch": [0, 1, 2, 3],
+                "child_environment": dict(STRICT_BENCHMARK_ENVIRONMENT),
             },
             "input_specification": {
                 "runner": script_identity["path"],
@@ -5244,6 +5363,12 @@ def test_binding():
         changed_campaign["supervision"]["campaign_sha256"] = sha256_bytes(
             canonical_bytes(changed_campaign["campaign"]))
         mutations.append(("campaign payload", changed_campaign))
+        changed_environment = json.loads(json.dumps(raw_payload))
+        changed_environment["campaign"]["child_environment"]["LD_PRELOAD"] = \
+            str(root / "injected.so")
+        changed_environment["supervision"]["campaign_sha256"] = sha256_bytes(
+            canonical_bytes(changed_environment["campaign"]))
+        mutations.append(("campaign child environment", changed_environment))
         changed_reservation = json.loads(json.dumps(raw_payload))
         changed_reservation["reservation"]["payload"]["nonce"] = "other-reservation"
         changed_reservation["reservation"]["sha256"] = sha256_bytes(canonical_bytes(
@@ -5333,6 +5458,7 @@ def main(arguments=None):
     try:
         if options.operation == "self-test":
             return self_test()
+        require_isolated_python_startup()
         if options.operation == "restore":
             with GlobalSupervisorLock() as global_lock:
                 return recover_report(options.report, global_lock=global_lock)

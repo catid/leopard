@@ -5062,7 +5062,8 @@ def verify_campaign(options: argparse.Namespace) -> int:
             "tools/leopard2_affinity_supervisor.py"
         require(supervisor.is_file(), "affinity binding verifier is missing")
         completed = run_process_bounded(
-            [sys.executable, str(supervisor), "verify-binding", "--binding",
+            [sys.executable, "-I", "-S", str(supervisor),
+             "verify-binding", "--binding",
              str(affinity_binding), "--manifest", str(manifest_path),
              "--manifest-sha256", manifest_snapshot["sha256"]],
             timeout=30.0, max_stdout=1024 * 1024, max_stderr=1024 * 1024)

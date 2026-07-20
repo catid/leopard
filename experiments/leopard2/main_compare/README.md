@@ -153,7 +153,7 @@ modes also force the specialized decoder. The runner verifies the exact child
 arguments and all four emitted force booleans, so evidence for one path cannot
 be relabeled as another.
 
-    taskset -c 0-31 python3 \
+    taskset -c 0-31 python3 -I -S \
         tools/leopard2_affinity_supervisor.py run \
         --report /tmp/leopard2-vs-main-affinity.json \
         --reserved-cpus 15,31 -- \
@@ -185,6 +185,10 @@ Every run and recovery also holds one persistent same-UID lock under
 `/run/user/UID`; its exact inode is part of the journal. This prevents two
 cooperating supervisors from racing each other's original masks.
 
+Launch the supervisor itself with `python3 -I -S` as shown above. Every evidence
+operation fails closed without those flags, preventing ambient Python startup
+hooks from running before the supervisor can establish its own invariants.
+
 The runner is launched through a fork/pipe gate. The child creates its new
 session but cannot execute benchmark code until its PID,
 start-time, procfs directory inodes, session, command, boot ID, and
@@ -200,8 +204,17 @@ a later write-open lease-break request is observed through blocked `SIGIO` and
 also invalidates capture. Sources independently proven inaccessible to same-UID
 writers record that distinct guard policy. This closes dirty-page mutations for
 which inode timestamps need not change. A small fixed Python bootstrap preserves
-the original script's `__file__`, `sys.argv`, and `sys.path[0]`. The child
-also verifies each live snapshot identity and seal set immediately before
+the original script's `__file__`, `sys.argv`, and `sys.path[0]`. Python starts
+with `-I -S`, so ambient `PYTHONPATH`, `PYTHONHOME`, user-site, and
+`sitecustomize` code cannot run before that bootstrap. The exec boundary does
+not inherit the supervisor's environment. It constructs the exact environment
+recorded by the main-comparison runner (`LANG=C`, `LC_ALL=C`,
+`OMP_DYNAMIC=FALSE`, `OMP_NUM_THREADS=1`, `OMP_PLACES=cores`,
+`OMP_PROC_BIND=TRUE`, `PATH=/usr/bin:/bin`, and `TZ=UTC`) and adds only the
+report-bound execution nonce. Consequently ambient Python hooks and dynamic
+loader variables such as `LD_PRELOAD`, `LD_LIBRARY_PATH`, and `LD_AUDIT` cannot
+inject unrecorded code. The v8 report binds this strict base environment. The
+child also verifies each live snapshot identity and seal set immediately before
 `execve`. The supervisor requests Linux `F_SEAL_EXEC` and tests it when the
 kernel supports that seal; an atomic `EINVAL` fallback retains all mandatory
 write/grow/shrink/seal protections, with executable mode rechecked at the
@@ -264,7 +277,7 @@ manifest must independently pass its unchanged zero-sibling-jiffy verifier
 before timings are usable. If the supervisor itself is killed with SIGKILL,
 restore its journal before continuing:
 
-    python3 tools/leopard2_affinity_supervisor.py restore \
+    python3 -I -S tools/leopard2_affinity_supervisor.py restore \
         --report /tmp/leopard2-vs-main-affinity.json
 
 Recovery is deliberately limited to the same kernel boot and PID namespace.
@@ -288,13 +301,13 @@ compatible campaign from a different supervisor execution cannot be rebound.
 These same-execution guarantees are the version-2 joint-binding format; older
 bindings are not silently upgraded.
 
-    python3 tools/leopard2_affinity_supervisor.py verify-report \
+    python3 -I -S tools/leopard2_affinity_supervisor.py verify-report \
         --report /tmp/leopard2-vs-main-affinity.json
-    python3 tools/leopard2_affinity_supervisor.py bind \
+    python3 -I -S tools/leopard2_affinity_supervisor.py bind \
         --report /tmp/leopard2-vs-main-affinity.json \
         --manifest /tmp/leopard2-vs-main/manifest.json \
         --output /tmp/leopard2-vs-main/affinity-binding.json
-    python3 tools/leopard2_affinity_supervisor.py verify-binding \
+    python3 -I -S tools/leopard2_affinity_supervisor.py verify-binding \
         --binding /tmp/leopard2-vs-main/affinity-binding.json
 
 Verify while the exact build inputs still exist:
