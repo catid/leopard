@@ -1570,6 +1570,9 @@ class MainCompareRunnerTests(unittest.TestCase):
             "alternate linker": canonical.replace(
                 " libleopard.a ",
                 " libleopard.a -fuse-ld=/tmp/evil-ld ", 1),
+            "alternate runtime loader": canonical.replace(
+                " libleopard.a ",
+                " libleopard.a -Wl,--dynamic-linker,/tmp/evil-ld.so ", 1),
             "xlinker control": canonical.replace(
                 " libleopard.a ",
                 " libleopard.a -Xlinker /tmp/evil.ld ", 1),

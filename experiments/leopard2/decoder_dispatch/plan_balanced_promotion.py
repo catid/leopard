@@ -3124,6 +3124,8 @@ def self_test() -> None:
             ("compiler plugin", "-fplugin=/tmp/evil.so"),
             ("linker plugin", "-Wl,--plugin,/tmp/evil.so"),
             ("alternate linker", "-fuse-ld=/tmp/evil-ld"),
+            ("alternate runtime loader",
+             "-Wl,--dynamic-linker,/tmp/evil-ld.so"),
         ):
             reject_scope_mutation(
                 f"uniform {label}",

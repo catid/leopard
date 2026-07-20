@@ -1249,6 +1249,9 @@ def artifact_identity(path: Path, kind: str) -> dict[str, Any]:
         require(os.access(path, os.X_OK), f"benchmark is not executable: {path}")
     if kind == "archive":
         require(prefix == b"!<arch>\n", f"not an ar archive: {path}")
+    if kind == "shared_library":
+        require(prefix.startswith(b"\x7fELF"),
+                f"not an ELF shared library: {path}")
     return {
         "path": str(path),
         "kind": kind,
