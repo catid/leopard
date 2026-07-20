@@ -3000,6 +3000,8 @@ def self_test() -> None:
                                for value in values])
         for label, flags in (
             ("final optimization downgrade", "-O3 -O0"),
+            ("bare optimization downgrade", "-O3 -O"),
+            ("unknown optimization spelling", "-O4 -O3"),
             ("sanitizer after optimization", "-O3 -fsanitize=address"),
             ("profile after optimization", "-O3 -fprofile-generate"),
             ("LTO after optimization", "-O3 -flto"),

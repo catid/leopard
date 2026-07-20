@@ -71,17 +71,22 @@ EXTERNAL_LINK_INPUT_ROLES = {
 EXTERNAL_LINK_INPUT_ORDER = (
     "openmp_runtime_shared", "pthread_support_archive",
 )
-EFFECTIVE_OPTIMIZATION = re.compile(r"-O(?:0|1|2|3|g|s|z|fast)")
+KNOWN_OPTIMIZATION_FLAGS = frozenset({
+    "-O", "-O0", "-O1", "-O2", "-O3", "-Og", "-Os", "-Oz", "-Ofast",
+})
 FORBIDDEN_BUILD_FLAG_PREFIXES = (
     "-fsanitize", "-fno-sanitize",
-    "-fprofile", "-fno-profile",
-    "-flto", "-fno-lto",
-    "-finstrument", "-fno-instrument",
-    "-fno-tree-vectorize", "-fno-vectorize", "-fno-slp-vectorize",
+    "-fprofile", "-fno-profile", "-fauto-profile", "-fno-auto-profile",
+    "-fcs-profile", "-fno-cs-profile",
+    "-fbranch-probabilities", "-fno-branch-probabilities",
+    "-flto", "-fno-lto", "-foffload-lto",
+    "-finstrument", "-fno-instrument", "-fpatchable-function-entry",
+    "-fno-tree-vectorize", "-fno-tree-loop-vectorize",
+    "-fno-tree-slp-vectorize", "-fno-vectorize", "-fno-slp-vectorize",
     "--coverage", "-coverage", "-fcoverage", "-fno-coverage",
     "-ftest-coverage",
 )
-FORBIDDEN_BUILD_FLAGS = frozenset({"-pg"})
+FORBIDDEN_BUILD_FLAGS = frozenset({"-p", "-pg"})
 
 
 class EvidenceError(ValueError):
@@ -99,9 +104,12 @@ def validate_effective_flags(tokens: Sequence[str], label: str) -> None:
             not isinstance(tokens, (str, bytes)) and
             all(isinstance(token, str) for token in tokens),
             f"{label} flag stream is invalid")
-    optimizations = [
-        token for token in tokens if EFFECTIVE_OPTIMIZATION.fullmatch(token)
+    optimizations = [token for token in tokens if token.startswith("-O")]
+    unknown_optimizations = [
+        token for token in optimizations if token not in KNOWN_OPTIMIZATION_FLAGS
     ]
+    require(not unknown_optimizations,
+            f"{label} contains unknown optimization flags: {unknown_optimizations}")
     require(optimizations and optimizations[-1] == "-O3",
             f"{label} final optimization flag is not -O3: {optimizations}")
     rejected = [

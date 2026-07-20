@@ -1684,6 +1684,8 @@ class MainCompareRunnerTests(unittest.TestCase):
     def test_effective_release_and_executable_flags_fail_closed(self) -> None:
         for label, flags in (
             ("final optimization downgrade", "-O3 -O0"),
+            ("bare optimization downgrade", "-O3 -O"),
+            ("unknown optimization spelling", "-O4 -O3"),
             ("sanitizer after optimization", "-O3 -fsanitize=address"),
             ("profile after optimization", "-O3 -fprofile-generate"),
             ("LTO after optimization", "-O3 -flto"),
