@@ -1,0 +1,141 @@
+{
+  "schema": "leopard2-gf8-t8-direct-input-negative/v1",
+  "date_utc": "2026-07-21",
+  "bead": "leopard-79h.38.5.8",
+  "hypothesis": "Extending the qualified AVX2 direct-input high encoder from T=2/T=4 to T=8 would remove enough traversal and dispatch overhead to beat the retained T=8 path.",
+  "candidate": {
+    "source_base_commit": "656f1bcdb86d2b6c8200243f6fab17c131e8a155",
+    "source_disposition": "reverted_not_retained",
+    "implementation": "Extended ff8_high_encode_small to side 8. The first message block used two out-of-place radix-4 inverse butterflies followed by the distance-4 inverse layer in the accumulator. Later complete blocks used direct radix-4 input butterflies into the upper eight scratch rows and accumulated the final inverse layer directly. A partial final block alone used copy/zero staging. The final T=8 parity transform remained inside the AVX2 backend callback. Sparse or holey output schedules remained excluded.",
+    "executable_sha256": "363a71bf1a8f61f79f651c90c82adddf1889266c9930e4a460d65738826f8380",
+    "archive_sha256": "bab5f2c7d62a4c86e7181bebf4b32e89c50ee3fe3c4655160c37468987261ad1"
+  },
+  "control": {
+    "source_commit": "656f1bcdb86d2b6c8200243f6fab17c131e8a155",
+    "source_state": "clean detached worktree",
+    "executable_sha256": "a4e3ae4c401e2b28a3d8af2820988edc9cd7bdc54e23992731cd366bffe9be0c",
+    "archive_sha256": "10e0e5e8a10358394a556588aa6f002cfcaf51f9136b61f8dec4fb5cae77818a"
+  },
+  "build": {
+    "compiler": "gcc 13.3.0",
+    "type": "Release",
+    "backend": "avx2",
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "production_compile_flags_match": true,
+    "cuda": false,
+    "fuzzers": false
+  },
+  "correctness": {
+    "workload_and_output_digests_match_in_all_measurements": true,
+    "release_focused_tests_passed": [
+      "leopard2_api",
+      "leopard2_auto_encode_backend",
+      "leopard2_backend_ops",
+      "leopard2_context_backends",
+      "leopard2_direct_encode",
+      "leopard2_encode_concurrency",
+      "leopard2_legacy_golden",
+      "leopard2_portable_isa",
+      "leopard2_portable_isa_registration",
+      "leopard2_transform_differential"
+    ],
+    "coverage": [
+      "backend startup KAT with zero-skew sentinels and guards",
+      "direct systematic generator oracle",
+      "legacy parity bytes",
+      "R=7 puncturing and parity prefixes",
+      "holey output exclusion",
+      "unaligned buffers and a one-byte public tail",
+      "unsupported source/output alias rejection",
+      "immutable-codec concurrent execution",
+      "scalar, SSSE3, AVX2, and AVX-512 differential output"
+    ],
+    "asan_ubsan": "not_run_after_early_performance_kill_and_full_source_revert",
+    "broad_fuzzing": "not_run_by_optimization-focused_scope"
+  },
+  "measurement": {
+    "classification": "same-source_unpinned_directional_only",
+    "authoritative": false,
+    "pinning": "none",
+    "confidence_interval": "none",
+    "order": [
+      "control0",
+      "candidate0",
+      "candidate1",
+      "control1"
+    ],
+    "reuse": 16,
+    "iterations_per_child": 9,
+    "warmup_per_child": 2,
+    "exact_leopard_main_run": "skipped_after_same-source_kill_criterion",
+    "two_kib_run": "skipped_after_the_4_KiB_candidate_was_clearly_negative; the production threshold also retained the existing path below 4 KiB"
+  },
+  "cells": [
+    {
+      "id": "k64-r8-4k",
+      "K": 64,
+      "R": 8,
+      "shard_bytes": 4096,
+      "seed": 4301,
+      "original_digest": "10f31a3080b31039",
+      "parity_digest": "8e2dee932ce69a51",
+      "recovered_digest": "4496168d5391d622",
+      "candidate_medians_us": [10.058250, 10.763250],
+      "control_medians_us": [9.303812, 8.857563],
+      "control_time_over_candidate_time": 0.872478354,
+      "candidate_time_regression_percent": 14.6160,
+      "raw_json_sha256": {
+        "candidate0": "30b0a7a486cf75f07f882f5ac8b87b52124a6d421da828d9b79fc2f34903fcb9",
+        "candidate1": "71ff530fb23548a9682c0ff4bdf020e654bc2f584b0c4b52543471f0e0094209",
+        "control0": "b952cde12954e6931951ee769925bdec133ec16a106d3b257a4c862b702cdd1d",
+        "control1": "dbb929c9532081204500392aad4445100e7b3eb9423544d93389587f61a8ae57"
+      }
+    },
+    {
+      "id": "k64-r8-64k",
+      "K": 64,
+      "R": 8,
+      "shard_bytes": 65536,
+      "seed": 4302,
+      "original_digest": "025d93e59f6771d5",
+      "parity_digest": "7695046ee251b7d5",
+      "recovered_digest": "922b181bc86267c9",
+      "candidate_medians_us": [133.698937, 129.641375],
+      "control_medians_us": [128.241375, 126.283875],
+      "control_time_over_candidate_time": 0.966612131,
+      "candidate_time_regression_percent": 3.4541,
+      "raw_json_sha256": {
+        "candidate0": "57cccfb8a86f9e9f0630a7b51b28b6529853dc83233dc727cd3abf6cc0983c83",
+        "candidate1": "3dab006eca16b5007d9fe9c2a0ab25ada1942b67a731d8a83b1aac5b18b5d202",
+        "control0": "ebd5d1deb6f2c68389ea6fe3f728ed7c6f35e918a3df15f44466e51ff43a08f3",
+        "control1": "ba307c25b19a2c3c005b7a50144c10f2d13bd4d2942d3b6a53923fd141661848"
+      }
+    },
+    {
+      "id": "k240-r8-64k",
+      "K": 240,
+      "R": 8,
+      "shard_bytes": 65536,
+      "seed": 4303,
+      "original_digest": "ff0352c7dc1c8184",
+      "parity_digest": "29ff845d49685648",
+      "recovered_digest": "a20e89720b5c2dc2",
+      "candidate_medians_us": [440.595375, 448.368562],
+      "control_medians_us": [432.515938, 445.741688],
+      "control_time_over_candidate_time": 0.987882155,
+      "candidate_time_regression_percent": 1.2266,
+      "raw_json_sha256": {
+        "candidate0": "e174d461a7e9c35ea08a824f3cde99860c5d3b710d61c931f44a68044a39aac6",
+        "candidate1": "4ce03608fccf708b61e90e84514238da5baf7b6beee1f3da5f18e748ddca054a",
+        "control0": "ecbd584d3fb3c9a9d21cd23a3469949e0b64dde8fd5d9787b5a49ae279b1c758",
+        "control1": "fe136ae71b5f482ebd01c1a81582082ec8c1cd2de8f8c2623d4ab5a00817e4cb"
+      }
+    }
+  ],
+  "decision": {
+    "promoted": false,
+    "reason": "No measured cell improved. The K=64 cells regressed materially and the K=240 cell also trended slower. This fails both the 5 percent improvement requirement and the neighboring-regression limit before an authoritative exact-main campaign would be justified.",
+    "production_changes_retained": false
+  }
+}
