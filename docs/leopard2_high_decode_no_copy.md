@@ -63,8 +63,9 @@ Test-only direct/scratch counters, including a separate materialized-direct
 counter, cover GF8 and GF16, forced tiled and materialized execution, AUTO's
 calibrated materialized route, one and maximum loss, unaligned caller
 destinations, a tail-only shard, an aligned shard, and a split
-aligned-plus-tail shard.  The candidate has no wire or arithmetic change; its
-performance promotion still requires the project's isolated end-to-end gate.
+aligned-plus-tail shard.  This has no wire or arithmetic change.  The isolated
+same-source gate below promoted the materialized extension; tiled execution is
+an unchanged-path negative control.
 
 ## Receive-boundary fusion
 
@@ -200,10 +201,10 @@ Complete tiled and materialized Algorithm 5 passes now call the out-of-place
 fixed multiplier once with the final public destination.  The public gather is
 therefore omitted for their aligned prefixes.  It remains mandatory for every
 ragged tail, where it converts compact GF16 layout when needed and preserves the
-documented public alias behavior.  The materialized extension is a correctness-
-qualified candidate until same-source directional timing and the isolated
-promotion gate establish that the removed traffic improves the calibrated AUTO
-region.
+documented public alias behavior.  The materialized extension is promoted for
+all complete kernel passes: it reuses the existing out-of-place fixed
+multiplier, adds no dispatcher condition, and is neutral outside materialized
+execution.
 
 ## Correctness and structural evidence
 
@@ -241,7 +242,47 @@ ASan/UBSan tests.  The sanitizer matrix excludes only the portable-ISA binary
 scanner because sanitizer instrumentation itself inserts `lahf`; its normal
 Release instance passed.
 
+The materialized reveal extension additionally passed the full 95-test Release
+suite and all 83 applicable Clang 18 ASan/UBSan tests.  Focused API, high
+acceptance, plan-schedule, legacy-pruned, stage, operation-count, and scratch
+cross-check gates passed in both builds.  The API matrix forces tiled and
+materialized execution and also exercises AUTO, GF8/GF16, one and maximum loss,
+unaligned destinations, scattered missing coordinates, and 64-byte boundaries.
+
 ## Isolated timing evidence
+
+The materialized reveal change at `1000e66` was compared with its exact clean
+parent `ea66663` using separate source trees and Release builds.  CPU 9 of the
+Ryzen 9 9950X3D host was pinned and sibling 25 was excluded and monitored.
+Across two campaigns, all 216 invocations passed source/tree/binary/archive,
+workload, selected-path, output-correctness, affinity, and counter attestation;
+the sibling accumulated zero non-idle jiffies.  Each cell used three ABBA
+rounds, eleven retained samples per launch, sixteen plan executions per sample,
+and three warmups.  Ratios are control time divided by candidate time with
+round-level 95% t intervals:
+
+| Field and workload | Mode (resolved path) | Ratio |
+| --- | --- | ---: |
+| GF8 K=240, R=16, loss=1, 4 KiB | materialized | 1.011 [0.988, 1.036] |
+| GF8 K=224, R=32, loss=32, 64 KiB | materialized | 1.096 [1.091, 1.101] |
+| GF8 K=224, R=32, loss=32, 4,097 B | materialized | 1.087 [1.067, 1.107] |
+| GF16 K=1000, R=200, loss=200, 4,098 B | materialized | 1.055 [1.048, 1.061] |
+| GF8 K=224, R=32, loss=8, 32 KiB | AUTO (materialized) | 1.034 [1.032, 1.036] |
+| GF8 K=224, R=32, loss=8, 32,769 B | AUTO (materialized) | 1.029 [1.028, 1.030] |
+
+Every forced-tiled negative control was neutral: its point estimate was between
+0.9952 and 1.0000 in the first campaign and between 0.9994 and 0.9999 in the
+AUTO campaign, with every interval spanning one.  AUTO also stayed tiled in
+the first campaign's non-target cells, as required.  The maximum-loss
+materialized targets improve 5.5--9.6%, and the calibrated production AUTO
+target improves 2.9--3.4%.  The implementation is a small reuse of mature
+arithmetic and adds no policy or neighboring-path cost, so the strong
+materialized results and neutral controls justify promotion despite the AUTO
+cells being below the default 5% threshold individually.  The compact tracked
+summary is
+`experiments/leopard2/high_decode_copy/results/materialized_reveal_summary.json`;
+it binds the exact commits, trees, binaries, archives, campaign manifests, and
+all retained ratios.
 
 The source-boundary measurements below predate the complete evaluator-copy
 attribution gate.  The production implementation now also ships a private,

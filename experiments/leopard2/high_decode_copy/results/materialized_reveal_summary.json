@@ -1,0 +1,77 @@
+{
+  "schema": "leopard2-alg5-materialized-reveal-summary/v1",
+  "status": "promoted_aligned_materialized_reveal",
+  "scope": "directional exact-parent comparison; compact tails retain scratch reveal and gather",
+  "source_identity": {
+    "control": {
+      "commit": "ea66663c1a396b2743cb0f5992508508d490b7f0",
+      "tree": "ff6e0928254b1662f2b45395a85e4c3065c1144e",
+      "binary_sha256": "be41e123df450cde382f70b449d7f65b0538064b4a9ac9af991fe5f99e96bb77",
+      "archive_sha256": "240c1278f881a7b4ffb141ae41c1ae6d5292407b3c367bd74af8627ecdc4f91f",
+      "cmake_cache_sha256": "a329c8ef8257da5b88652bbe74d1596daacfa4df819acc02547c56f35d0df5d0"
+    },
+    "candidate": {
+      "commit": "1000e6688da66bd3591eac7901f7e0a5bdb17533",
+      "tree": "c01997e56a568935275559d927b16ef92480eafe",
+      "binary_sha256": "21d051666581dab4ac88852ede445c32f62249609c25d3c715f023dd8671fddf",
+      "archive_sha256": "b28f66fd90aac8a4b1d9706377ed78d0c9325bd8c7e5c02d721d6ce20739218e",
+      "cmake_cache_sha256": "4d8e5b09b00f52163b68b228c489c4a534797ea7105e995fa7a1ea86fc31a371"
+    }
+  },
+  "method": {
+    "host": "AMD Ryzen 9 9950X3D",
+    "compiler": "GCC 13.3",
+    "backend": "AVX2",
+    "cpu": 9,
+    "reserved_smt_sibling": 25,
+    "rounds": 3,
+    "order": "ABBA",
+    "retained_samples_per_launch": 11,
+    "warmups_per_launch": 3,
+    "plan_reuse_per_sample": 16,
+    "threads": 1,
+    "accepted_invocations": 216,
+    "rejected_invocations": 0,
+    "maximum_sibling_nonidle_jiffies": 0,
+    "ratio_definition": "control_time / candidate_time",
+    "interval": "round-level two-sided 95% t interval, df=2"
+  },
+  "campaigns": [
+    {
+      "name": "broad",
+      "manifest_session_path": "/tmp/leopard2-alg5-materialized-reveal-1000e66-v1/manifest.json",
+      "manifest_file_sha256": "dc675c8756a05e4d15a0e97cc32183cc62d1d7a44bb284468d6a5284524b96ce",
+      "manifest_content_sha256": "6ceec509e5c96fac36cc3297766137f705c6836bcacc37476d83a0ed3f5bc695",
+      "runner_sha256": "0e67b0b0d7281b9b2f9ffca461739ecd81cc5317b1d7b825ef3052fd703cd4ea",
+      "accepted_invocations": 144
+    },
+    {
+      "name": "auto_materialized",
+      "manifest_session_path": "/tmp/leopard2-alg5-materialized-reveal-auto-1000e66-v2/manifest.json",
+      "manifest_file_sha256": "215f54cc67ac64a0bda875dce382751066065d6a84f04bf7795b0c01f8afe528",
+      "manifest_content_sha256": "2c914515c2b70b0b9ec8501497f6dcf76342d86984458b20ec6fa0bacb808122",
+      "runner_sha256": "97d4314c35c279c882178cf4e097cc051d43f239a02679e562b262cf4dae58d0",
+      "accepted_invocations": 72
+    }
+  ],
+  "results": [
+    {"cell":"gf8-high-one-4k","K":240,"R":16,"loss":1,"bytes":4096,"field":"gf8","mode":"auto","selected_path":"tiled","ratio":1.0036008599736954,"ci95_low":0.9447330251042515,"ci95_high":1.066136844352186},
+    {"cell":"gf8-high-one-4k","K":240,"R":16,"loss":1,"bytes":4096,"field":"gf8","mode":"materialized","selected_path":"materialized","ratio":1.0114518224754279,"ci95_low":0.9875703047533084,"ci95_high":1.0359108452986694},
+    {"cell":"gf8-high-one-4k","K":240,"R":16,"loss":1,"bytes":4096,"field":"gf8","mode":"tiled","selected_path":"tiled","ratio":0.995240710032402,"ci95_low":0.9448746727885717,"ci95_high":1.0482914818560685},
+    {"cell":"gf8-high-max-64k","K":224,"R":32,"loss":32,"bytes":65536,"field":"gf8","mode":"auto","selected_path":"tiled","ratio":0.980694760359761,"ci95_low":0.8982261319238282,"ci95_high":1.0707350619349927},
+    {"cell":"gf8-high-max-64k","K":224,"R":32,"loss":32,"bytes":65536,"field":"gf8","mode":"materialized","selected_path":"materialized","ratio":1.0957027128375771,"ci95_low":1.090840633194855,"ci95_high":1.1005864636738107},
+    {"cell":"gf8-high-max-64k","K":224,"R":32,"loss":32,"bytes":65536,"field":"gf8","mode":"tiled","selected_path":"tiled","ratio":0.999998389746413,"ci95_low":0.99549034898358,"ci95_high":1.0045268450030078},
+    {"cell":"gf8-high-tail-max","K":224,"R":32,"loss":32,"bytes":4097,"field":"gf8","mode":"auto","selected_path":"tiled","ratio":0.9989385643411504,"ci95_low":0.9798548562235949,"ci95_high":1.018393947827974},
+    {"cell":"gf8-high-tail-max","K":224,"R":32,"loss":32,"bytes":4097,"field":"gf8","mode":"materialized","selected_path":"materialized","ratio":1.0866191293776697,"ci95_low":1.0665336810500812,"ci95_high":1.107082836021604},
+    {"cell":"gf8-high-tail-max","K":224,"R":32,"loss":32,"bytes":4097,"field":"gf8","mode":"tiled","selected_path":"tiled","ratio":0.9995005672583565,"ci95_low":0.9801649186971987,"ci95_high":1.0192176488805724},
+    {"cell":"gf16-high-max-tail","K":1000,"R":200,"loss":200,"bytes":4098,"field":"gf16","mode":"auto","selected_path":"tiled","ratio":1.0087564604031172,"ci95_low":0.9951267450914812,"ci95_high":1.0225728545879644},
+    {"cell":"gf16-high-max-tail","K":1000,"R":200,"loss":200,"bytes":4098,"field":"gf16","mode":"materialized","selected_path":"materialized","ratio":1.054702458705571,"ci95_low":1.0483513201092083,"ci95_high":1.0610920738705198},
+    {"cell":"gf16-high-max-tail","K":1000,"R":200,"loss":200,"bytes":4098,"field":"gf16","mode":"tiled","selected_path":"tiled","ratio":0.9996911990698415,"ci95_low":0.994832899793991,"ci95_high":1.004573224010433},
+    {"cell":"gf8-auto-materialized-32k","K":224,"R":32,"loss":8,"bytes":32768,"field":"gf8","mode":"auto","selected_path":"materialized","ratio":1.0342200096161427,"ci95_low":1.0321677254068766,"ci95_high":1.0362763744320502},
+    {"cell":"gf8-auto-materialized-32k","K":224,"R":32,"loss":8,"bytes":32768,"field":"gf8","mode":"materialized","selected_path":"materialized","ratio":1.0505196791941172,"ci95_low":0.9779383760299565,"ci95_high":1.1284878714487683},
+    {"cell":"gf8-auto-materialized-32k","K":224,"R":32,"loss":8,"bytes":32768,"field":"gf8","mode":"tiled","selected_path":"tiled","ratio":0.9993625942205802,"ci95_low":0.9922844595443181,"ci95_high":1.0064912184414616},
+    {"cell":"gf8-auto-materialized-32k-tail","K":224,"R":32,"loss":8,"bytes":32769,"field":"gf8","mode":"auto","selected_path":"materialized","ratio":1.028997564322519,"ci95_low":1.0284619882748436,"ci95_high":1.029533419273748},
+    {"cell":"gf8-auto-materialized-32k-tail","K":224,"R":32,"loss":8,"bytes":32769,"field":"gf8","mode":"materialized","selected_path":"materialized","ratio":1.0306599797779494,"ci95_low":1.0246479095151033,"ci95_high":1.0367073255617911},
+    {"cell":"gf8-auto-materialized-32k-tail","K":224,"R":32,"loss":8,"bytes":32769,"field":"gf8","mode":"tiled","selected_path":"tiled","ratio":0.9999103449116968,"ci95_low":0.9959096077778421,"ci95_high":1.0039271536824643}
+  ]
+}
