@@ -78,12 +78,12 @@ forbidden_mnemonics='^(addsubp[ds]|haddp[ds]|hsubp[ds]|lddqu|movddup|movshdup|mo
 # kernel starts using another AVX/AVX2 mnemonic, reviewers must add that
 # mnemonic after checking its architectural feature contract.  A broad `v*'
 # exemption would silently admit instructions whose CPUID bits are not probed.
-allowed_avx2_vex_mnemonics='^(vbroadcastf128|vbroadcasti128|vinserti128|vmovd|vmovdqa|vmovdqu|vmovq|vmovups|vpand|vpbroadcastb|vpbroadcastq|vpinsrb|vpshufb|vpsrlq|vpunpckldq|vpunpcklqdq|vpunpcklwd|vpxor|vxorps|vzeroupper)$'
+allowed_avx2_vex_mnemonics='^(vbroadcastf128|vbroadcasti128|vextracti128|vinserti128|vmovd|vmovdqa|vmovdqu|vmovq|vmovups|vpand|vpbroadcastb|vpbroadcastq|vpextrq|vpinsrb|vpshufb|vpsrlq|vpunpckldq|vpunpcklqdq|vpunpcklwd|vpxor|vxorps|vzeroupper)$'
 
 # The AVX-512 candidate is separately gated on F/BW/VL and complete OS ZMM
 # state.  It deliberately retains 256-bit data width and uses EVEX only to
 # access the expanded vector register file.  Keep the allowlist exact.
-allowed_avx512vl_mnemonics='^(vbroadcasti32x4|vmovdqa32|vmovdqa64|vmovdqu8|vmovdqu64|vpandq|vpinsrq|vpshufb|vpsrlq|vpternlogd|vpternlogq|vpxord|vpxorq)$'
+allowed_avx512vl_mnemonics='^(valignq|vbroadcasti32x4|vextracti64x2|vmovdqa32|vmovdqa64|vmovdqu8|vmovdqu64|vpandq|vpinsrq|vpshufb|vpsrlq|vpternlogd|vpternlogq|vpxord|vpxorq)$'
 
 # Reject target-raising options in Make, Ninja, or compilation-database
 # metadata.  -mno-* and the x86-64 SSE2 baseline remain allowed.  All -march
@@ -752,6 +752,9 @@ run_negative_controls()
     expect_archive_rejected bad_ssse3 'pshufb %xmm0, %xmm0'
     expect_archive_rejected bad_sse41 'pminud %xmm0, %xmm0'
     expect_archive_rejected bad_avx2 'vpaddd %ymm0, %ymm0, %ymm0'
+    expect_archive_rejected bad_vextracti128 \
+        'vextracti128 $1, %ymm0, %xmm0'
+    expect_archive_rejected bad_vpextrq 'vpextrq $1, %xmm0, %rax'
 
     expect_classified_archive_accepted good_probe \
         'Leopard2CpuFeatures.cpp.o' 'xgetbv'
@@ -762,6 +765,12 @@ run_negative_controls()
     expect_classified_archive_accepted good_avx512vl \
         'Leopard2BackendAVX512.cpp.o' \
         'vpternlogq $0, %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_accepted good_avx512vl_align \
+        'Leopard2BackendAVX512.cpp.o' \
+        'valignq $1, %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_accepted good_avx512vl_extract \
+        'Leopard2BackendAVX512.cpp.o' \
+        'vextracti64x2 $1, %ymm0, %xmm0'
     # Sanitizer instrumentation can materialize an integer argument with the
     # VEX-encoded AVX vmovd form.  AVX is already required by the runtime
     # probe, so admit this exact move while retaining the fail-closed v* list.
@@ -772,6 +781,20 @@ run_negative_controls()
     # established together with OS-managed YMM state by the AVX2 probe.
     expect_classified_archive_accepted good_avx_broadcast \
         'Leopard2BackendAVX2.cpp.o' 'vbroadcastf128 (%rax), %ymm0'
+    # GCC can use these AVX/AVX2 extraction forms while scalarizing a local
+    # pointer vector at -O2.  The AVX2 runtime probe already establishes their
+    # architectural and OS-state requirements.  Keep them class-scoped so a
+    # baseline or SSSE3 object still fails closed.
+    expect_classified_archive_accepted good_avx2_extract_lane \
+        'Leopard2BackendAVX2.cpp.o' \
+        'vextracti128 $1, %ymm0, %xmm0'
+    expect_classified_archive_accepted good_avx_extract_qword \
+        'Leopard2BackendAVX2.cpp.o' 'vpextrq $1, %xmm0, %rax'
+    expect_classified_archive_rejected ssse3_leaks_vextracti128 \
+        'Leopard2BackendSSSE3.cpp.o' \
+        'vextracti128 $1, %ymm0, %xmm0'
+    expect_classified_archive_rejected ssse3_leaks_vpextrq \
+        'Leopard2BackendSSSE3.cpp.o' 'vpextrq $1, %xmm0, %rax'
     expect_classified_archive_rejected avx2_leaks_fma \
         'Leopard2BackendAVX2.cpp.o' \
         'vfmadd132ps %ymm0, %ymm0, %ymm0'
@@ -780,6 +803,12 @@ run_negative_controls()
     expect_classified_archive_rejected avx2_leaks_evex \
         'Leopard2BackendAVX2.cpp.o' \
         'vpternlogd $0, %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected avx2_leaks_avx512_align \
+        'Leopard2BackendAVX2.cpp.o' \
+        'valignq $1, %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected avx2_leaks_avx512_extract \
+        'Leopard2BackendAVX2.cpp.o' \
+        'vextracti64x2 $1, %ymm0, %xmm0'
     expect_classified_archive_rejected probe_leaks_avx2 \
         'Leopard2CpuFeatures.cpp.o' 'vpaddd %ymm0, %ymm0, %ymm0'
     expect_classified_archive_rejected ssse3_leaks_avx2 \
