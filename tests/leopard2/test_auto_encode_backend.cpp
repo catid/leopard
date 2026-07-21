@@ -503,8 +503,8 @@ void test_selection_and_bytes(
     Codec gf8_punctured(automatic.get(), 16, 15,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
     require(selected_backend(gf8_below_side.get(), 4096, 8, 8) ==
-            LEO2_BACKEND_AVX512,
-        "balanced GF8 AUTO did not widen qualified T=8");
+            LEO2_BACKEND_AVX2,
+        "balanced GF8 AUTO widened rejected T=8");
     require(selected_backend(gf8_above_side.get(), 4096, 128, 128) ==
             LEO2_BACKEND_AVX2,
         "balanced GF8 AUTO widened T=128");
@@ -546,12 +546,9 @@ void test_selection_and_bytes(
 
         const uint32_t side = current.r <= 8 ? 8U :
             (current.r <= 16 ? 16U : (current.r <= 32 ? 32U : 64U));
-        const bool promoted_shape =
-            (side == 8 && current.k == 8 &&
-                (current.r == 8 || current.r == 7)) ||
-            (side == 64 &&
+        const bool qualified_shape = side == 64 &&
                 (current.k == 64 || current.k == 63) &&
-                (current.r == 64 || current.r == 63));
+                (current.r == 64 || current.r == 63);
 
         // AUTO widens only the exact aligned cells that passed the isolated
         // crossover gate.  Explicit AVX-512 exercises every neighboring
@@ -560,8 +557,10 @@ void test_selection_and_bytes(
              byte_i < sizeof(coarse_bytes) / sizeof(coarse_bytes[0]); ++byte_i)
         {
             const size_t bytes = coarse_bytes[byte_i];
-            const leo2_backend expected_auto = promoted_shape &&
-                    (bytes & 63U) == 0
+            const bool qualified_bytes = current.r == 64 ||
+                bytes == 64U * 1024U;
+            const leo2_backend expected_auto = qualified_shape &&
+                    qualified_bytes && (bytes & 63U) == 0
                 ? LEO2_BACKEND_AVX512 : LEO2_BACKEND_AVX2;
             require(selected_backend(automatic_codec.get(), bytes,
                         current.r, current.r) == expected_auto,

@@ -2995,20 +2995,14 @@ static bool CodecMayUseAutoAVX512Encode(const leo2_codec* codec)
         return false;
 
     const uint32_t side = codec->padded_side;
-    if (side == 8)
-    {
-        // The quiet T=8 screen qualified the exact message block with either
-        // all eight parity rows or the first seven transmitted rows.  Its
-        // shortened-message neighbors remain on AVX2.
-        return codec->original_count == side &&
-            (codec->recovery_count == side ||
-             codec->recovery_count + 1U == side);
-    }
     if (side == 64)
     {
-        // The quiet T=64 screen qualified all four combinations of an exact
-        // or one-coordinate-shortened message block and an exact or
-        // one-coordinate-punctured parity block.
+        // The same-source AVX2 gate qualified all four combinations of an
+        // exact or one-coordinate-shortened message block and an exact or
+        // one-coordinate-punctured parity block.  UseAutoAVX512Encode applies
+        // the stricter exact-Leopard-main byte gate to comparable R <= K
+        // neighbors.  The K=63,R=64 shortened shape has no legal Leopard1
+        // comparison because its recovery count exceeds its original count.
         return (codec->original_count == side ||
                 codec->original_count + 1U == side) &&
             (codec->recovery_count == side ||
@@ -3040,9 +3034,15 @@ static bool UseAutoAVX512Encode(
     {
         // The whole-transform AVX-512VL calibration screen is positive in
         // this cache-resident interval.  T=16 needs 4 KiB to clear the
-        // promotion threshold; T=8, T=32, and T=64 clear it at 2 KiB.  Above
-        // the upper bound the backends converge as shard traffic becomes the
-        // bottleneck.
+        // promotion threshold; T=32 and the previously qualified exact T=64
+        // shape clear it at 2 KiB.  A one-row-punctured T=64 code clears the
+        // exact-main threshold only at 64 KiB.  The shortened K=63,R=64 shape
+        // has no legal Leopard1 counterpart and retains the positive
+        // same-source AVX2 interval.  Above the upper bound the backends
+        // converge as shard traffic becomes the bottleneck.
+        if (codec->padded_side == 64 &&
+            codec->recovery_count + 1U == codec->padded_side)
+            return buffer_bytes == 64U * 1024U;
         const size_t minimum_bytes = codec->padded_side == 16
             ? 4U * 1024U : 2U * 1024U;
         return buffer_bytes >= minimum_bytes &&
